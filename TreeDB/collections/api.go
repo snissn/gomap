@@ -859,7 +859,7 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 		return nil, err
 	}
 	if len(rootIDs) != len(plan.rootNames) {
-		return nil, errors.New("collections: ordered root publish returned unexpected root count")
+		return nil, unexpectedOrderedRootCountError(newMeta.Name, len(plan.rootNames), len(rootIDs))
 	}
 	c.meta = newMeta
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, plan.rootNames, rootIDs)
@@ -1296,7 +1296,7 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 		return err
 	}
 	if len(rootIDs) != 1 {
-		return errors.New("collections: ordered root publish returned unexpected root count")
+		return unexpectedOrderedRootCountError(meta.Name, 1, len(rootIDs))
 	}
 	nextCatalog := cloneCatalogWithRootUpdates(domain.catalog, meta, []string{rootName}, rootIDs)
 	domain.loaded = true
@@ -2217,7 +2217,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) e
 		return err
 	}
 	if len(rootIDs) != len(rootNames) {
-		return errors.New("collections: ordered root publish returned unexpected root count")
+		return unexpectedOrderedRootCountError(meta.Name, len(rootNames), len(rootIDs))
 	}
 	nextCatalog := cloneCatalogWithRootUpdates(domain.catalog, meta, rootNames, rootIDs)
 	oldRuns := domain.rootRuns
@@ -2340,7 +2340,7 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 		return nil, err
 	}
 	if len(rootIDs) != 1 {
-		return nil, errors.New("collections: ordered root publish returned unexpected root count")
+		return nil, unexpectedOrderedRootCountError(c.meta.Name, 1, len(rootIDs))
 	}
 	c.rememberCatalogAtSystemRoot(newSystemRoot, cloneCatalogWithRootUpdates(catalog, c.meta, []string{rootName}, rootIDs))
 	return resultID, nil
@@ -2596,7 +2596,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		return nil, err
 	}
 	if len(rootIDs) != len(plan.runs) {
-		return nil, errors.New("collections: ordered root publish returned unexpected root count")
+		return nil, unexpectedOrderedRootCountError(meta.Name, len(plan.runs), len(rootIDs))
 	}
 	nextCatalog := cloneCatalogWithRootUpdates(currentCatalog, meta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
@@ -2853,7 +2853,7 @@ func (c *Collection) insertBatchNoIndex(
 		return nil, err
 	}
 	if len(rootIDs) != 1 {
-		return nil, errors.New("collections: ordered root publish returned unexpected root count")
+		return nil, unexpectedOrderedRootCountError(c.meta.Name, 1, len(rootIDs))
 	}
 	stats.Runs = 1
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, []string{rootName}, rootIDs)
@@ -3022,7 +3022,7 @@ func (c *Collection) deleteDocumentOnce(documentID []byte) (bool, error) {
 		return false, err
 	}
 	if len(rootIDs) != len(rootNames) {
-		return false, errors.New("collections: ordered root publish returned unexpected root count")
+		return false, unexpectedOrderedRootCountError(c.meta.Name, len(rootNames), len(rootIDs))
 	}
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
@@ -3345,7 +3345,10 @@ func (combiner *collectionUpdateCombiner) enqueue(req collectionUpdateCombineReq
 	if combiner == nil {
 		return false
 	}
-	if req.done == nil || cap(req.done) == 0 {
+	if validateCollectionUpdateCombineRequest(req) != nil {
+		return false
+	}
+	if req.done == nil || cap(req.done) == 0 || len(req.done) > 0 {
 		return false
 	}
 	combiner.mu.RLock()
@@ -3560,8 +3563,27 @@ func collectionUpdateCombineSameCollection(batch []collectionUpdateCombineReques
 }
 
 func runUpdateCombineDirect(req collectionUpdateCombineRequest) collectionUpdateCombineResult {
+	if err := validateCollectionUpdateCombineRequest(req); err != nil {
+		return collectionUpdateCombineResult{err: err}
+	}
 	matched, modified, err := req.collection.updateDirect(req.documentID, recoverCollectionUpdateCallback(req.update))
 	return collectionUpdateCombineResult{matched: matched, modified: modified, err: err}
+}
+
+func validateCollectionUpdateCombineRequest(req collectionUpdateCombineRequest) error {
+	if req.collection == nil {
+		return errCollectionNil
+	}
+	if req.collection.db == nil {
+		return errCollectionDBNil
+	}
+	if len(req.documentID) == 0 {
+		return errors.New("collections: document id cannot be empty")
+	}
+	if req.update == nil {
+		return errors.New("collections: update function is nil")
+	}
+	return nil
 }
 
 func collectionUpdatePanicError(where string, recovered any) error {
@@ -3620,10 +3642,7 @@ func completeUpdateCombineRequest(req collectionUpdateCombineRequest, result col
 	if req.done == nil {
 		return
 	}
-	select {
-	case req.done <- result:
-	default:
-	}
+	req.done <- result
 }
 
 func collectionUpdateCombineHasDuplicateIDs(batch []collectionUpdateCombineRequest) bool {
@@ -3919,7 +3938,7 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		return false, false, err
 	}
 	if len(rootIDs) != len(rootNames) {
-		return false, false, errors.New("collections: ordered root publish returned unexpected root count")
+		return false, false, unexpectedOrderedRootCountError(c.meta.Name, len(rootNames), len(rootIDs))
 	}
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
@@ -4496,7 +4515,7 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]Upda
 		return nil, err
 	}
 	if len(rootIDs) != len(plan.rootNames) {
-		return nil, fmt.Errorf("collections: UpdateBatch collection %q ordered root publish returned unexpected root count expected=%d actual=%d", plan.meta.Name, len(plan.rootNames), len(rootIDs))
+		return nil, unexpectedOrderedRootCountError(plan.meta.Name, len(plan.rootNames), len(rootIDs))
 	}
 	nextCatalog := cloneCatalogWithRootUpdates(plan.catalog, plan.meta, plan.rootNames, rootIDs)
 	c.meta = plan.meta
@@ -4656,7 +4675,7 @@ func updateBatchChangesSecondaryUniqueIndex(runtimes []indexRuntime, updates []p
 		}
 		indexName := runtime.def.name
 		for _, update := range updates {
-			if !encodedIndexValueSetsEqual(update.oldState[indexName], update.newState[indexName]) {
+			if !normalizedEncodedIndexValuesEqual(update.oldState[indexName], update.newState[indexName]) {
 				return true
 			}
 		}
@@ -4664,26 +4683,12 @@ func updateBatchChangesSecondaryUniqueIndex(runtimes []indexRuntime, updates []p
 	return false
 }
 
-func encodedIndexValueSetsEqual(left, right [][]byte) bool {
+func normalizedEncodedIndexValuesEqual(left, right [][]byte) bool {
 	if len(left) != len(right) {
 		return false
 	}
-	if len(left) == 0 {
-		return true
-	}
-	if len(left) == 1 {
-		return bytes.Equal(left[0], right[0])
-	}
-	leftSorted := append([][]byte(nil), left...)
-	rightSorted := append([][]byte(nil), right...)
-	sort.Slice(leftSorted, func(i, j int) bool {
-		return bytes.Compare(leftSorted[i], leftSorted[j]) < 0
-	})
-	sort.Slice(rightSorted, func(i, j int) bool {
-		return bytes.Compare(rightSorted[i], rightSorted[j]) < 0
-	})
-	for i := range leftSorted {
-		if !bytes.Equal(leftSorted[i], rightSorted[i]) {
+	for i := range left {
+		if !bytes.Equal(left[i], right[i]) {
 			return false
 		}
 	}
@@ -4733,12 +4738,10 @@ func batchUniqueReplacementOwners(runtimes []indexRuntime, updates []preparedBat
 }
 
 func documentIndexStateContainsValue(values [][]byte, target []byte) bool {
-	for _, value := range values {
-		if bytes.Equal(value, target) {
-			return true
-		}
-	}
-	return false
+	i := sort.Search(len(values), func(i int) bool {
+		return bytes.Compare(values[i], target) >= 0
+	})
+	return i < len(values) && bytes.Equal(values[i], target)
 }
 
 func (s batchUniqueReplacementSet) allows(indexName string, encoded, documentID []byte) bool {
@@ -5113,7 +5116,7 @@ func documentIndexStatesEqual(left, right documentIndexState) bool {
 
 func (c *Collection) buildRootDescriptorSystemIterator(rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 	if len(rootIDs) != len(rootNames) {
-		return nil, errors.New("collections: ordered root publish returned unexpected root count")
+		return nil, unexpectedOrderedRootCountError(c.meta.Name, len(rootNames), len(rootIDs))
 	}
 	current := c.db.AcquireSnapshot()
 	if current == nil {
@@ -5139,6 +5142,13 @@ func (c *Collection) buildRootDescriptorSystemIterator(rootNames []string, baseR
 	return buildSystemTargetIterator(current, updates)
 }
 
+func unexpectedOrderedRootCountError(collectionName string, expected, actual int) error {
+	if collectionName != "" {
+		return fmt.Errorf("collections: ordered root publish returned unexpected root count collection=%q expected=%d actual=%d", collectionName, expected, actual)
+	}
+	return fmt.Errorf("collections: ordered root publish returned unexpected root count expected=%d actual=%d", expected, actual)
+}
+
 func (c *Collection) buildRootDescriptorSystemDeltaIterator(expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 	if c == nil || c.db == nil {
 		return nil, backenddb.ErrClosed
@@ -5148,7 +5158,7 @@ func (c *Collection) buildRootDescriptorSystemDeltaIterator(expectedCommitSeq, e
 
 func (c *Collection) buildRootDescriptorSystemDeltaIteratorForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 	if len(rootIDs) != len(rootNames) {
-		return nil, fmt.Errorf("collections: ordered root publish returned unexpected root count for %q: expected %d, got %d", meta.Name, len(rootNames), len(rootIDs))
+		return nil, unexpectedOrderedRootCountError(meta.Name, len(rootNames), len(rootIDs))
 	}
 	if err := c.validateRootDescriptorSystemDeltaForMeta(meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs); err != nil {
 		return nil, err
@@ -5233,7 +5243,7 @@ func (c *Collection) buildSchemaAndRootDescriptorSystemIterator(
 	rootIDs []uint64,
 ) (iterator.UnsafeIterator, error) {
 	if len(rootIDs) != len(rootNames) {
-		return nil, errors.New("collections: ordered root publish returned unexpected root count")
+		return nil, unexpectedOrderedRootCountError(newMeta.Name, len(rootNames), len(rootIDs))
 	}
 	current := c.db.AcquireSnapshot()
 	if current == nil {

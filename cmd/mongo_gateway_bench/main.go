@@ -2116,9 +2116,6 @@ func benchmarkUpdatedCityIndex(i int, documentOrdinal int, documentCount int, cy
 }
 
 func benchmarkUpdatedCityValue(index int) string {
-	if len(benchmarkUpdatedCities) == 0 {
-		return ""
-	}
 	if index < 0 {
 		index = 0
 	}
@@ -2129,9 +2126,6 @@ func benchmarkUpdatedCityValue(index int) string {
 func buildBenchmarkUpdatedCityValues() []string {
 	// Keep a long prime-sized cycle so indexed-update stress runs usually change
 	// the secondary key on repeated visits without formatting strings in the hot path.
-	if len(benchmarkUpdatedCities) == 0 {
-		return nil
-	}
 	values := make([]string, benchmarkUpdatedCityValueCount)
 	for i, generation := 0, 0; i < len(values); generation++ {
 		suffix := strconv.Itoa(generation)
