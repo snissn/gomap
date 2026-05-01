@@ -752,8 +752,8 @@ func TestRunMongoUpdateBatchBatchesNonUniqueFieldWithSecondaryUniqueIndex(t *tes
 	before := db.State()
 
 	matched, modified, batched, err := runMongoUpdateBatch(col, []mongoUpdateItem{
-		{index: 0, key: id1, updateDoc: mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "sea"}}}})},
-		{index: 1, key: id2, updateDoc: mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "sfo"}}}})},
+		{index: 0, key: id1, updateDoc: mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "sea"}}}}), setFields: map[string]struct{}{"city": {}}, setFieldsOK: true},
+		{index: 1, key: id2, updateDoc: mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "sfo"}}}}), setFields: map[string]struct{}{"city": {}}, setFieldsOK: true},
 	})
 	if err != nil {
 		t.Fatalf("runMongoUpdateBatch: %v", err)
@@ -1175,6 +1175,53 @@ func TestServerUpdateCoalescedSkipsCoalescerForSecondaryUniqueIndex(t *testing.T
 	server.updateMu.Unlock()
 	if cached {
 		t.Fatal("secondary unique update created a coalescer")
+	}
+}
+
+func TestServerUpdateCoalescedSkipsCoalescerForUnrecognizedUpdateShape(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.UpdateCoalescingMaxDelay = 5 * time.Second
+	server.UpdateCoalescingMaxBatch = 2
+	assertOK(t, serveCommand(t, server, 2280, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(1)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	col, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	update, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "score", Value: int32(1)}}}}},
+	}))
+	if err != nil {
+		t.Fatalf("parse update: %v", err)
+	}
+	if update.setFieldsOK {
+		t.Fatal("test update unexpectedly parsed as $set")
+	}
+	matched, modified, err := server.runMongoUpdateCoalesced("app.users", col, update)
+	if err == nil {
+		t.Fatal("runMongoUpdateCoalesced succeeded for unsupported $inc update")
+	}
+	if matched || modified {
+		t.Fatalf("matched=%v modified=%v want false,false", matched, modified)
+	}
+	server.updateMu.Lock()
+	_, cached := server.updateCoalescers["app.users"]
+	server.updateMu.Unlock()
+	if cached {
+		t.Fatal("unrecognized update shape created a coalescer")
 	}
 }
 

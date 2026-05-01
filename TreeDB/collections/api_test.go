@@ -4509,27 +4509,20 @@ func incrementJSONCount(current []byte) ([]byte, bool, error) {
 }
 
 func setJSONEmail(email string) func([]byte) ([]byte, bool, error) {
-	return func(current []byte) ([]byte, bool, error) {
-		var doc map[string]any
-		if err := json.Unmarshal(current, &doc); err != nil {
-			return nil, false, err
-		}
-		doc["email"] = email
-		next, err := json.Marshal(doc)
-		if err != nil {
-			return nil, false, err
-		}
-		return next, true, nil
-	}
+	return setJSONField("email", email)
 }
 
 func setJSONCity(city string) func([]byte) ([]byte, bool, error) {
+	return setJSONField("city", city)
+}
+
+func setJSONField(field string, value any) func([]byte) ([]byte, bool, error) {
 	return func(current []byte) ([]byte, bool, error) {
 		var doc map[string]any
 		if err := json.Unmarshal(current, &doc); err != nil {
 			return nil, false, err
 		}
-		doc["city"] = city
+		doc[field] = value
 		next, err := json.Marshal(doc)
 		if err != nil {
 			return nil, false, err

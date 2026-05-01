@@ -365,6 +365,9 @@ func runMongoUpdateBatch(col *collections.Collection, updates []mongoUpdateItem)
 }
 
 func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpdateItem) ([]collections.UpdateBatchResult, bool, error) {
+	if !mongoUpdateItemsCanUseBatch(col, updates) {
+		return nil, false, nil
+	}
 	materializer, err := storedDocumentMaterializerForCollection(col)
 	if err != nil {
 		return nil, false, err
@@ -441,7 +444,7 @@ type mongoUpdateCoalescerResult struct {
 }
 
 func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
-	if mongoUpdateTouchesSecondaryUniqueIndex(col, update) {
+	if !mongoUpdateCanUseBatch(col, update) {
 		return runMongoUpdateOne(col, update)
 	}
 	coalescer := s.mongoUpdateCoalescer(name)
@@ -727,7 +730,7 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 	if len(batch) == 1 ||
 		mongoUpdateCoalescerHasDuplicateKeys(batch) ||
 		!mongoUpdateCoalescerUsesSingleCollection(batch) ||
-		mongoUpdateBatchTouchesSecondaryUniqueIndex(batch) {
+		!mongoUpdateCoalescerBatchCanUseBatch(batch) {
 		runMongoUpdateCoalescerSequential(batch)
 		return
 	}
@@ -822,6 +825,19 @@ func mongoUpdateCoalescerUsesSingleCollection(batch []mongoUpdateCoalescerReques
 	return true
 }
 
+func mongoUpdateCoalescerBatchCanUseBatch(batch []mongoUpdateCoalescerRequest) bool {
+	if len(batch) == 0 || batch[0].col == nil {
+		return false
+	}
+	meta := batch[0].col.Meta()
+	for _, req := range batch {
+		if !mongoUpdateCanUseBatchMeta(meta, req.item) {
+			return false
+		}
+	}
+	return true
+}
+
 func runMongoUpdateCoalescerSequential(batch []mongoUpdateCoalescerRequest) {
 	for _, req := range batch {
 		matched, modified, err := runMongoUpdateOne(req.col, req.item)
@@ -829,34 +845,36 @@ func runMongoUpdateCoalescerSequential(batch []mongoUpdateCoalescerRequest) {
 	}
 }
 
-func mongoUpdateBatchTouchesSecondaryUniqueIndex(batch []mongoUpdateCoalescerRequest) bool {
-	if len(batch) == 0 || batch[0].col == nil {
-		return false
-	}
-	meta := batch[0].col.Meta()
-	for _, req := range batch {
-		if mongoUpdateTouchesSecondaryUniqueIndexMeta(meta, req.item) {
-			return true
-		}
-	}
-	return false
-}
-
-func mongoUpdateTouchesSecondaryUniqueIndex(col *collections.Collection, update mongoUpdateItem) bool {
+func mongoUpdateItemsCanUseBatch(col *collections.Collection, updates []mongoUpdateItem) bool {
 	if col == nil {
 		return false
 	}
-	return mongoUpdateTouchesSecondaryUniqueIndexMeta(col.Meta(), update)
+	meta := col.Meta()
+	for _, update := range updates {
+		if !mongoUpdateCanUseBatchMeta(meta, update) {
+			return false
+		}
+	}
+	return true
 }
 
-func mongoUpdateTouchesSecondaryUniqueIndexMeta(meta collections.CollectionMeta, update mongoUpdateItem) bool {
-	if !update.setFieldsOK {
-		for _, idx := range meta.Indexes {
-			if idx.Unique {
-				return true
-			}
-		}
+func mongoUpdateCanUseBatch(col *collections.Collection, update mongoUpdateItem) bool {
+	if col == nil {
 		return false
+	}
+	return mongoUpdateCanUseBatchMeta(col.Meta(), update)
+}
+
+func mongoUpdateCanUseBatchMeta(meta collections.CollectionMeta, update mongoUpdateItem) bool {
+	if !update.setFieldsOK {
+		return false
+	}
+	return !mongoUpdateSetFieldsTouchSecondaryUniqueIndexMeta(meta, update)
+}
+
+func mongoUpdateSetFieldsTouchSecondaryUniqueIndexMeta(meta collections.CollectionMeta, update mongoUpdateItem) bool {
+	if !update.setFieldsOK {
+		return true
 	}
 	for _, idx := range meta.Indexes {
 		if !idx.Unique {
@@ -882,7 +900,7 @@ func mongoSetUpdateFields(updateDoc wire.Document) (map[string]struct{}, bool) {
 	if !ok {
 		return nil, false
 	}
-	_, order, err := parseSetDocument(setDoc)
+	order, err := parseSetFieldNames(setDoc)
 	if err != nil {
 		return nil, false
 	}
@@ -2036,37 +2054,66 @@ func parseSetDocument(doc bson.Raw) (map[string]bson.RawValue, []string, error) 
 	if err != nil {
 		return nil, nil, err
 	}
+	order, err := parseSetFieldNamesFromElements(elements)
+	if err != nil {
+		return nil, nil, err
+	}
 	sets := make(map[string]bson.RawValue, len(elements))
-	order := make([]string, 0, len(elements))
-	seen := make(map[string]struct{}, len(elements))
 	for _, elem := range elements {
 		key, err := elem.KeyErr()
 		if err != nil {
 			return nil, nil, err
 		}
-		if key == "" {
-			return nil, nil, errors.New("Mongo gateway $set field name cannot be empty")
-		}
-		if key == "_id" {
-			return nil, nil, errors.New("Mongo gateway update cannot modify _id")
-		}
-		if strings.Contains(key, ".") {
-			return nil, nil, errors.New("Mongo gateway $set currently supports top-level fields only")
-		}
-		if strings.HasPrefix(key, "$") {
-			return nil, nil, errors.New("Mongo gateway $set field names cannot start with $")
-		}
 		value := elem.Value()
 		if err := validateSupportedValue(key, value); err != nil {
 			return nil, nil, err
+		}
+		sets[key] = value
+	}
+	return sets, order, nil
+}
+
+func parseSetFieldNames(doc bson.Raw) ([]string, error) {
+	elements, err := doc.Elements()
+	if err != nil {
+		return nil, err
+	}
+	return parseSetFieldNamesFromElements(elements)
+}
+
+func parseSetFieldNamesFromElements(elements []bson.RawElement) ([]string, error) {
+	order := make([]string, 0, len(elements))
+	seen := make(map[string]struct{}, len(elements))
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return nil, err
+		}
+		if err := validateSetFieldName(key); err != nil {
+			return nil, err
 		}
 		if _, ok := seen[key]; !ok {
 			order = append(order, key)
 			seen[key] = struct{}{}
 		}
-		sets[key] = value
 	}
-	return sets, order, nil
+	return order, nil
+}
+
+func validateSetFieldName(key string) error {
+	if key == "" {
+		return errors.New("Mongo gateway $set field name cannot be empty")
+	}
+	if key == "_id" {
+		return errors.New("Mongo gateway update cannot modify _id")
+	}
+	if strings.Contains(key, ".") {
+		return errors.New("Mongo gateway $set currently supports top-level fields only")
+	}
+	if strings.HasPrefix(key, "$") {
+		return errors.New("Mongo gateway $set field names cannot start with $")
+	}
+	return nil
 }
 
 func encodePrimaryKey(value bson.RawValue) ([]byte, error) {

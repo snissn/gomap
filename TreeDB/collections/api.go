@@ -4386,18 +4386,19 @@ func encodedIndexValueSetsEqual(left, right [][]byte) bool {
 	if len(left) == 0 {
 		return true
 	}
-	used := make([]bool, len(right))
-	for _, leftValue := range left {
-		found := false
-		for i, rightValue := range right {
-			if used[i] || !bytes.Equal(leftValue, rightValue) {
-				continue
-			}
-			used[i] = true
-			found = true
-			break
-		}
-		if !found {
+	if len(left) == 1 {
+		return bytes.Equal(left[0], right[0])
+	}
+	leftSorted := append([][]byte(nil), left...)
+	rightSorted := append([][]byte(nil), right...)
+	sort.Slice(leftSorted, func(i, j int) bool {
+		return bytes.Compare(leftSorted[i], leftSorted[j]) < 0
+	})
+	sort.Slice(rightSorted, func(i, j int) bool {
+		return bytes.Compare(rightSorted[i], rightSorted[j]) < 0
+	})
+	for i := range leftSorted {
+		if !bytes.Equal(leftSorted[i], rightSorted[i]) {
 			return false
 		}
 	}
