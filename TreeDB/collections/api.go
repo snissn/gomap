@@ -3493,15 +3493,13 @@ type collectionUpdateCombineResult struct {
 
 var collectionUpdateCombineBatchPool = sync.Pool{
 	New: func() any {
-		batch := make([]collectionUpdateCombineRequest, 0, defaultCollectionUpdateCombineMaxBatch)
-		return &batch
+		return make([]collectionUpdateCombineRequest, 0, defaultCollectionUpdateCombineMaxBatch)
 	},
 }
 
 var collectionUpdateBatchItemPool = sync.Pool{
 	New: func() any {
-		items := make([]UpdateBatchItem, defaultCollectionUpdateCombineMaxBatch)
-		return &items
+		return make([]UpdateBatchItem, 0, defaultCollectionUpdateCombineMaxBatch)
 	},
 }
 
@@ -3510,9 +3508,7 @@ func acquireCollectionUpdateCombineBatch(capHint int) []collectionUpdateCombineR
 		capHint = 1
 	}
 	if v := collectionUpdateCombineBatchPool.Get(); v != nil {
-		if ptr, ok := v.(*[]collectionUpdateCombineRequest); ok && ptr != nil {
-			batch := *ptr
-			*ptr = nil
+		if batch, ok := v.([]collectionUpdateCombineRequest); ok {
 			if cap(batch) >= capHint {
 				return batch[:0]
 			}
@@ -3529,7 +3525,7 @@ func releaseCollectionUpdateCombineBatch(batch []collectionUpdateCombineRequest)
 		batch[i] = collectionUpdateCombineRequest{}
 	}
 	batch = batch[:0]
-	collectionUpdateCombineBatchPool.Put(&batch)
+	collectionUpdateCombineBatchPool.Put(batch)
 }
 
 func acquireCollectionUpdateBatchItems(n int) []UpdateBatchItem {
@@ -3537,9 +3533,7 @@ func acquireCollectionUpdateBatchItems(n int) []UpdateBatchItem {
 		return nil
 	}
 	if v := collectionUpdateBatchItemPool.Get(); v != nil {
-		if ptr, ok := v.(*[]UpdateBatchItem); ok && ptr != nil {
-			items := *ptr
-			*ptr = nil
+		if items, ok := v.([]UpdateBatchItem); ok {
 			if cap(items) >= n {
 				return items[:n]
 			}
@@ -3556,7 +3550,7 @@ func releaseCollectionUpdateBatchItems(items []UpdateBatchItem) {
 		items[i] = UpdateBatchItem{}
 	}
 	items = items[:0]
-	collectionUpdateBatchItemPool.Put(&items)
+	collectionUpdateBatchItemPool.Put(items)
 }
 
 func (c *Collection) updateCombiner() *collectionUpdateCombiner {

@@ -127,20 +127,20 @@ type benchmarkResult struct {
 }
 
 type phaseResult struct {
-	Name                    string             `json:"name"`
-	Operations              int                `json:"operations"`
-	DriverCalls             int                `json:"driver_calls"`
-	EffectiveProducers      int                `json:"effective_producers,omitempty"`
-	DurationMillis          float64            `json:"duration_ms"`
-	OpsPerSecond            float64            `json:"ops_per_sec"`
-	SampledOpsPerSecond     float64            `json:"sampled_ops_per_sec,omitempty"`
-	SampledNsPerOp          float64            `json:"sampled_ns_per_op,omitempty"`
-	DriverAggregateMillis   float64            `json:"driver_aggregate_duration_ms,omitempty"`
-	DriverMeanLatencyMicros float64            `json:"driver_mean_latency_us,omitempty"`
-	LatencyMicros           latencySummary     `json:"latency_micros"`
-	ProducerResults         []producerResult   `json:"producer_results,omitempty"`
-	TreeDBStatsDelta        map[string]float64 `json:"treedb_stats_delta,omitempty"`
-	TreeDBStatsAfter        map[string]string  `json:"treedb_stats_after,omitempty"`
+	Name                    string            `json:"name"`
+	Operations              int               `json:"operations"`
+	DriverCalls             int               `json:"driver_calls"`
+	EffectiveProducers      int               `json:"effective_producers,omitempty"`
+	DurationMillis          float64           `json:"duration_ms"`
+	OpsPerSecond            float64           `json:"ops_per_sec"`
+	SampledOpsPerSecond     float64           `json:"sampled_ops_per_sec,omitempty"`
+	SampledNsPerOp          float64           `json:"sampled_ns_per_op,omitempty"`
+	DriverAggregateMillis   float64           `json:"driver_aggregate_duration_ms,omitempty"`
+	DriverMeanLatencyMicros float64           `json:"driver_mean_latency_us,omitempty"`
+	LatencyMicros           latencySummary    `json:"latency_micros"`
+	ProducerResults         []producerResult  `json:"producer_results,omitempty"`
+	TreeDBStatsDelta        map[string]int64  `json:"treedb_stats_delta,omitempty"`
+	TreeDBStatsAfter        map[string]string `json:"treedb_stats_after,omitempty"`
 }
 
 type producerResult struct {
@@ -2689,26 +2689,26 @@ func selectedTreeDBStats(stats map[string]string) map[string]string {
 	return out
 }
 
-func treeDBStatDeltas(before, after map[string]string) map[string]float64 {
+func treeDBStatDeltas(before, after map[string]string) map[string]int64 {
 	if len(after) == 0 {
 		return nil
 	}
-	out := make(map[string]float64)
+	out := make(map[string]int64)
 	for key, afterValue := range after {
 		if !isTreeDBDeltaStatKey(key) {
 			continue
 		}
-		afterFloat, ok := parseTreeDBFloatStat(afterValue)
+		afterInt, ok := parseTreeDBIntStat(afterValue)
 		if !ok {
 			continue
 		}
-		beforeFloat := 0.0
+		beforeInt := int64(0)
 		if beforeValue, exists := before[key]; exists {
-			if parsed, ok := parseTreeDBFloatStat(beforeValue); ok {
-				beforeFloat = parsed
+			if parsed, ok := parseTreeDBIntStat(beforeValue); ok {
+				beforeInt = parsed
 			}
 		}
-		delta := afterFloat - beforeFloat
+		delta := afterInt - beforeInt
 		if delta != 0 {
 			out[key] = delta
 		}
@@ -2719,11 +2719,11 @@ func treeDBStatDeltas(before, after map[string]string) map[string]float64 {
 	return out
 }
 
-func parseTreeDBFloatStat(value string) (float64, bool) {
+func parseTreeDBIntStat(value string) (int64, bool) {
 	if value == "" {
 		return 0, false
 	}
-	parsed, err := strconv.ParseFloat(value, 64)
+	parsed, err := strconv.ParseInt(value, 10, 64)
 	return parsed, err == nil
 }
 
@@ -2772,7 +2772,7 @@ func writeTreeDBStats(out io.Writer, label string, stats map[string]string) {
 	}
 }
 
-func writeTreeDBStatDeltas(out io.Writer, label string, stats map[string]float64) {
+func writeTreeDBStatDeltas(out io.Writer, label string, stats map[string]int64) {
 	if len(stats) == 0 {
 		return
 	}
@@ -2783,7 +2783,7 @@ func writeTreeDBStatDeltas(out io.Writer, label string, stats map[string]float64
 	sort.Strings(keys)
 	fmt.Fprintf(out, "%s", label)
 	for _, key := range keys {
-		fmt.Fprintf(out, " %s.delta=%.0f", key, stats[key])
+		fmt.Fprintf(out, " %s.delta=%d", key, stats[key])
 	}
 	fmt.Fprintln(out)
 }

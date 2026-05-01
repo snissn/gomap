@@ -864,8 +864,10 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	}
 	fFlags := frameHeader[1]
 
-	decodeTemplatePayload := func(val []byte) ([]byte, bool, error) {
-		return decodeTemplatePayloadTo(val, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
+	decodeTemplatePayload := func(val []byte) ([]byte, bool, bool, error) {
+		templateEncoded := f.templateLookup != nil && templ.IsEncodedPayload(val)
+		decoded, usedDst, err := decodeTemplatePayloadTo(val, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
+		return decoded, usedDst, templateEncoded, err
 	}
 
 	subIndex := int(page.ValuePtrSubIndex(ptr))
@@ -884,12 +886,12 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 			if err != nil {
 				return nil, false, err, true
 			}
-			val, decoded, err := decodeTemplatePayload(val)
+			val, templateUsedDst, templateDecoded, err := decodeTemplatePayload(val)
 			if err != nil {
 				return nil, false, err, true
 			}
-			if decoded {
-				return val, false, nil, true
+			if templateDecoded {
+				return val, templateUsedDst, nil, true
 			}
 			return val, usedDst, nil, true
 		}
@@ -927,11 +929,11 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		if srcStart < 0 || srcEnd < srcStart || srcEnd > len(payload) {
 			return nil, false, ErrCorrupt, true
 		}
-		val, _, err := decodeTemplatePayload(payload[srcStart:srcEnd])
+		val, templateUsedDst, _, err := decodeTemplatePayload(payload[srcStart:srcEnd])
 		if err != nil {
 			return nil, false, err, true
 		}
-		return val, false, nil, true
+		return val, templateUsedDst, nil, true
 	}
 
 	if len(payload) < prefixLen {
@@ -954,14 +956,12 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	// dst is used iff it was provided with enough capacity to hold rawLen.
 	usedDst := dst != nil && cap(dst) >= int(rawLen)
 
-	val, decoded, err := decodeTemplatePayload(raw[valStart:valEnd])
+	val, templateUsedDst, templateDecoded, err := decodeTemplatePayload(raw[valStart:valEnd])
 	if err != nil {
 		return nil, false, err, true
 	}
-	// Template decoding allocates new bytes; the returned slice is no longer
-	// backed by dst even if we decoded into it.
-	if decoded {
-		usedDst = false
+	if templateDecoded {
+		usedDst = templateUsedDst
 	}
 	return val, usedDst, nil, true
 }
