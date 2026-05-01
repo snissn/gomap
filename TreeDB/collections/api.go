@@ -392,14 +392,14 @@ func (m *CollectionManager) stopUpdateCombiners() {
 	if m == nil {
 		return
 	}
-	m.domainMu.Lock()
+	m.domainMu.RLock()
 	domains := make([]*collectionWriteDomain, 0, len(m.domains))
 	for _, domain := range m.domains {
 		if domain != nil {
 			domains = append(domains, domain)
 		}
 	}
-	m.domainMu.Unlock()
+	m.domainMu.RUnlock()
 	for _, domain := range domains {
 		domain.stopUpdateCombiner()
 	}
@@ -3229,7 +3229,9 @@ func (combiner *collectionUpdateCombiner) closeRequests() bool {
 		return false
 	}
 	combiner.stopped = true
-	close(combiner.requests)
+	if combiner.requests != nil {
+		close(combiner.requests)
+	}
 	return true
 }
 

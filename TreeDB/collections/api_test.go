@@ -3043,6 +3043,16 @@ func TestCompleteUpdateCombineRequestDoesNotBlockWhenDoneIsFull(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateCombinerCloseRequestsAllowsNilRequests(t *testing.T) {
+	combiner := &collectionUpdateCombiner{}
+	if !combiner.closeRequests() {
+		t.Fatal("closeRequests returned false for fresh combiner")
+	}
+	if !combiner.isStopped() {
+		t.Fatal("closeRequests did not mark combiner stopped")
+	}
+}
+
 func TestCollectionUpdateCombinerDuplicateIDsPreserveOrder(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
