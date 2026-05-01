@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -35,6 +36,8 @@ const (
 	// well-amortized InsertBatch calls on the immediate publish path. Smaller
 	// batches use the indexed write-domain memtable path by default.
 	DefaultIndexedWriteMemtableDirectBatchDocuments = DefaultIndexedWriteMemtableMaxDocuments / 4
+	defaultCollectionUpdateCombineMaxBatch          = 256
+	collectionUpdateCombineIdleTTL                  = 30 * time.Second
 )
 
 var (
@@ -50,6 +53,7 @@ var (
 	errCollectionDBNil                    = errors.New("collections: db is nil")
 	errCollectionNotFound                 = ErrCollectionNotFound
 	errUpdateBatchHasSecondaryUniqueIndex = errors.New("collections: update batch has secondary unique index")
+	errUpdateCombinerStopped              = errors.New("collections: update combiner stopped before DB update completed; callback may have been invoked")
 )
 
 // UpdateBatchItem describes one document update in a batch. DocumentID must be
@@ -151,6 +155,7 @@ func persistIndexStateForDocumentFormat(format DocumentFormat) bool {
 type CollectionManager struct {
 	db              *backenddb.DB
 	closeUnregister func()
+	closing         atomic.Bool
 	domainMu        sync.RWMutex
 	domains         map[string]*collectionWriteDomain
 }
@@ -360,32 +365,65 @@ type collectionWriteDomain struct {
 	// mutationMu serializes root descriptor publishes for handles opened
 	// through the same manager so optimistic retries do not starve under
 	// sustained collection write contention.
-	mutationMu       sync.Mutex
-	mu               sync.RWMutex
-	loaded           bool
-	meta             CollectionMeta
-	catalog          *collectionCatalog
-	baseCommitSeq    uint64
-	baseSystemRoot   uint64
-	primaryRoot      uint64
-	storagePolicy    backenddb.OrderedRootStoragePolicy
-	table            memtable.Table
-	rootRuns         map[string][]memtable.Table
-	rootPolicies     map[string]backenddb.OrderedRootStoragePolicy
-	rootBaseIDs      map[string]uint64
-	primaryIDIndex   *bufferedUniqueValueIndex
-	uniqueValueRuns  map[string][]memtable.Table
-	uniqueValueIndex map[string]*bufferedUniqueValueIndex
-	count            int
-	bufferedBytes    int64
+	mutationMu        sync.Mutex
+	mu                sync.RWMutex
+	updateCombineMu   sync.Mutex
+	updateCombiner    *collectionUpdateCombiner
+	updateDraining    *collectionUpdateCombiner
+	updateCombineDone bool
+	updateCombineTTL  time.Duration
+	closingWrites     atomic.Bool
+	loaded            bool
+	meta              CollectionMeta
+	catalog           *collectionCatalog
+	baseCommitSeq     uint64
+	baseSystemRoot    uint64
+	primaryRoot       uint64
+	storagePolicy     backenddb.OrderedRootStoragePolicy
+	table             memtable.Table
+	rootRuns          map[string][]memtable.Table
+	rootPolicies      map[string]backenddb.OrderedRootStoragePolicy
+	rootBaseIDs       map[string]uint64
+	primaryIDIndex    *bufferedUniqueValueIndex
+	uniqueValueRuns   map[string][]memtable.Table
+	uniqueValueIndex  map[string]*bufferedUniqueValueIndex
+	count             int
+	bufferedBytes     int64
 }
 
 func NewCollectionManager(database *backenddb.DB) *CollectionManager {
 	manager := &CollectionManager{db: database}
 	if database != nil {
-		manager.closeUnregister = database.RegisterCloseHook(manager.FlushAll)
+		manager.closeUnregister = database.RegisterCloseHook(manager.closeForBackend)
 	}
 	return manager
+}
+
+func (m *CollectionManager) closeForBackend() error {
+	m.closing.Store(true)
+	m.stopUpdateCombiners()
+	return m.FlushAll()
+}
+
+func (m *CollectionManager) isClosing() bool {
+	return m.closing.Load() || m.db == nil || m.db.IsClosing()
+}
+
+func (m *CollectionManager) stopUpdateCombiners() {
+	if m == nil {
+		return
+	}
+	m.domainMu.RLock()
+	domains := make([]*collectionWriteDomain, 0, len(m.domains))
+	for _, domain := range m.domains {
+		if domain != nil {
+			domains = append(domains, domain)
+		}
+	}
+	m.domainMu.RUnlock()
+	for _, domain := range domains {
+		domain.stopUpdateCombiner()
+	}
 }
 
 // LastInsertStats returns phase timings and counters from the most recent
@@ -419,8 +457,14 @@ func (m *CollectionManager) writeDomainForCollection(name string) *collectionWri
 	if m == nil {
 		return nil
 	}
+	if m.closing.Load() {
+		return nil
+	}
 	m.domainMu.Lock()
 	defer m.domainMu.Unlock()
+	if m.closing.Load() {
+		return nil
+	}
 	if m.domains == nil {
 		m.domains = make(map[string]*collectionWriteDomain)
 	}
@@ -434,6 +478,9 @@ func (m *CollectionManager) writeDomainForCollection(name string) *collectionWri
 
 func (m *CollectionManager) existingWriteDomainForCollection(name string) *collectionWriteDomain {
 	if m == nil {
+		return nil
+	}
+	if m.closing.Load() {
 		return nil
 	}
 	m.domainMu.RLock()
@@ -495,6 +542,9 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 	}
 	if m.db == nil {
 		return nil, errCollectionDBNil
+	}
+	if m.isClosing() {
+		return nil, backenddb.ErrClosed
 	}
 	if meta == nil {
 		return nil, errors.New("collections: nil collection metadata")
@@ -558,7 +608,7 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 	if m.db == nil {
 		return nil, errCollectionDBNil
 	}
-	if m.db.IsClosing() {
+	if m.isClosing() {
 		return nil, backenddb.ErrClosed
 	}
 	if err := ValidateCollectionName(name); err != nil {
@@ -587,13 +637,16 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 		writeDomain: m.writeDomainForCollection(catalog.meta.Name),
 		meta:        copyCollectionMeta(catalog.meta),
 	}
+	if collection.writeDomain == nil {
+		return nil, backenddb.ErrClosed
+	}
 	collection.rememberCatalog(snap, catalog)
 	collection.noteWriteDomainCatalog(snapshotSystemRoot(snap), catalog)
 	return collection, nil
 }
 
 func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Collection, bool) {
-	if m == nil || m.db == nil {
+	if m == nil || m.isClosing() {
 		return nil, false
 	}
 	state := m.db.State()
@@ -2293,6 +2346,9 @@ func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool)
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return nil, err
+	}
 
 	return retryInsertBatchMutation(func() ([][]byte, error) {
 		return c.insertBatchOnce(ids, documents, trustedValidBSON)
@@ -2791,6 +2847,9 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 	if c.db == nil {
 		return false, errCollectionDBNil
 	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return false, err
+	}
 	if len(documentID) == 0 {
 		return false, errors.New("collections: document id cannot be empty")
 	}
@@ -2953,19 +3012,42 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 
 // Update applies update to the latest document value and retries if another
 // collection write changes the root before this update publishes.
+//
+// Callback panics are recovered and returned as errors in both direct and
+// combined execution. When the collection write domain combines concurrent
+// updates, update may run on an internal combiner goroutine. The callback must
+// not rely on caller goroutine behavior such as recover, runtime.Goexit, or
+// testing.T.Fatal.
 func (c *Collection) Update(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
+	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
+		return false, false, err
+	}
+	if combiner := c.updateCombiner(); combiner != nil {
+		return combiner.update(c, documentID, update)
+	}
+	return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
+}
+
+func validateCollectionUpdateInput(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) error {
 	if c == nil {
-		return false, false, errCollectionNil
+		return errCollectionNil
 	}
 	if c.db == nil {
-		return false, false, errCollectionDBNil
+		return errCollectionDBNil
+	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return err
 	}
 	if len(documentID) == 0 {
-		return false, false, errors.New("collections: document id cannot be empty")
+		return errors.New("collections: document id cannot be empty")
 	}
 	if update == nil {
-		return false, false, errors.New("collections: update function is nil")
+		return errors.New("collections: update function is nil")
 	}
+	return nil
+}
+
+func (c *Collection) updateDirect(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
 	unlockMutation := c.lockMutation()
 	defer unlockMutation()
 	if err := c.flushBufferedWrites(); err != nil {
@@ -3010,6 +3092,9 @@ func (c *Collection) updateBatch(items []UpdateBatchItem, requireNoSecondaryUniq
 	if c.db == nil {
 		return nil, false, errCollectionDBNil
 	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return nil, false, err
+	}
 	if len(items) == 0 {
 		return nil, true, nil
 	}
@@ -3039,6 +3124,19 @@ func (c *Collection) updateBatch(items []UpdateBatchItem, requireNoSecondaryUniq
 	return nil, false, collectionMutationRetryExhausted(lastErr)
 }
 
+func (c *Collection) ensureWriteDomainOpen() error {
+	if c == nil || c.db == nil {
+		return nil
+	}
+	if c.db.IsClosing() {
+		return backenddb.ErrClosed
+	}
+	if c.writeDomain != nil && c.writeDomain.closingWrites.Load() {
+		return backenddb.ErrClosed
+	}
+	return nil
+}
+
 func validateUpdateBatchItems(items []UpdateBatchItem) error {
 	seen := make(map[string]struct{}, len(items))
 	for i, item := range items {
@@ -3062,6 +3160,474 @@ func updateBatchItemError(index int, err error) error {
 		return nil
 	}
 	return &UpdateBatchItemError{Index: index, Err: err}
+}
+
+type collectionUpdateCombiner struct {
+	maxBatch int
+	idleTTL  time.Duration
+	requests chan collectionUpdateCombineRequest
+	done     chan struct{}
+	domain   *collectionWriteDomain
+	running  atomic.Bool
+	mu       sync.RWMutex
+	stopped  bool
+}
+
+type collectionUpdateCombineRequest struct {
+	collection   *Collection
+	documentID   []byte
+	documentHash uint64
+	update       func(current []byte) (replacement []byte, changed bool, err error)
+	done         chan collectionUpdateCombineResult
+}
+
+type collectionUpdateCombineResult struct {
+	matched  bool
+	modified bool
+	err      error
+}
+
+func (c *Collection) updateCombiner() *collectionUpdateCombiner {
+	if c == nil || c.db == nil || c.db.IsClosing() || c.writeDomain == nil {
+		return nil
+	}
+	domain := c.writeDomain
+	if domain.closingWrites.Load() {
+		return nil
+	}
+	for {
+		domain.updateCombineMu.Lock()
+		if domain.updateCombineDone {
+			domain.updateCombineMu.Unlock()
+			return nil
+		}
+		if draining := domain.updateDraining; draining != nil {
+			domain.updateCombineMu.Unlock()
+			draining.waitDone()
+			continue
+		}
+		if domain.updateCombiner != nil {
+			combiner := domain.updateCombiner
+			if !combiner.isStopped() {
+				domain.updateCombineMu.Unlock()
+				return combiner
+			}
+			if domain.updateCombiner == combiner {
+				domain.updateCombiner = nil
+			}
+			domain.updateCombineMu.Unlock()
+			continue
+		}
+		combiner := &collectionUpdateCombiner{
+			maxBatch: defaultCollectionUpdateCombineMaxBatch,
+			idleTTL:  domain.updateCombineIdleTTL(),
+			requests: make(chan collectionUpdateCombineRequest, defaultCollectionUpdateCombineMaxBatch*4),
+			done:     make(chan struct{}),
+			domain:   domain,
+		}
+		domain.updateCombiner = combiner
+		domain.updateCombineMu.Unlock()
+		go combiner.run()
+		return combiner
+	}
+}
+
+func (domain *collectionWriteDomain) stopUpdateCombiner() {
+	if domain == nil {
+		return
+	}
+	domain.closingWrites.Store(true)
+	domain.updateCombineMu.Lock()
+	combiner := domain.updateCombiner
+	draining := domain.updateDraining
+	domain.updateCombiner = nil
+	domain.updateDraining = nil
+	domain.updateCombineDone = true
+	domain.updateCombineMu.Unlock()
+	if combiner != nil {
+		combiner.stop()
+	}
+	if draining != nil && draining != combiner {
+		draining.waitDone()
+	}
+}
+
+func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
+	if combiner == nil || combiner.maxBatch <= 1 {
+		if err := c.ensureWriteDomainOpen(); err != nil {
+			return false, false, err
+		}
+		return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
+	}
+	done := make(chan collectionUpdateCombineResult, 1)
+	clonedDocumentID := bytes.Clone(documentID)
+	req := collectionUpdateCombineRequest{
+		collection:   c,
+		documentID:   clonedDocumentID,
+		documentHash: xxhash.Sum64(clonedDocumentID),
+		update:       update,
+		done:         done,
+	}
+	if !combiner.enqueue(req) {
+		// Combining is a best-effort throughput optimization. Saturated or stopped
+		// combiners fall back to the direct path so updates still make progress.
+		if combiner.isStopped() {
+			combiner.waitDone()
+		}
+		if err := c.ensureWriteDomainOpen(); err != nil {
+			return false, false, err
+		}
+		return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
+	}
+	result := combiner.waitForUpdateResult(done)
+	return result.matched, result.modified, result.err
+}
+
+func (combiner *collectionUpdateCombiner) waitForUpdateResult(done chan collectionUpdateCombineResult) collectionUpdateCombineResult {
+	select {
+	case result := <-done:
+		return result
+	default:
+	}
+	if combiner == nil || combiner.done == nil {
+		return <-done
+	}
+	select {
+	case result := <-done:
+		return result
+	case <-combiner.done:
+		select {
+		case result := <-done:
+			return result
+		default:
+			return collectionUpdateCombineResult{err: errUpdateCombinerStopped}
+		}
+	}
+}
+
+func (combiner *collectionUpdateCombiner) enqueue(req collectionUpdateCombineRequest) bool {
+	if combiner == nil {
+		return false
+	}
+	if validateCollectionUpdateCombineRequest(req) != nil {
+		return false
+	}
+	if req.done == nil || cap(req.done) == 0 || len(req.done) > 0 {
+		return false
+	}
+	combiner.mu.RLock()
+	defer combiner.mu.RUnlock()
+	if combiner.stopped {
+		return false
+	}
+	select {
+	case combiner.requests <- req:
+		return true
+	default:
+		return false
+	}
+}
+
+func (combiner *collectionUpdateCombiner) stop() {
+	if combiner == nil {
+		return
+	}
+	_ = combiner.closeRequests()
+	combiner.waitDone()
+}
+
+func (combiner *collectionUpdateCombiner) waitDone() {
+	if combiner == nil || combiner.done == nil {
+		return
+	}
+	<-combiner.done
+}
+
+func (combiner *collectionUpdateCombiner) closeRequests() bool {
+	combiner.mu.Lock()
+	defer combiner.mu.Unlock()
+	if combiner.stopped {
+		return false
+	}
+	combiner.stopped = true
+	if combiner.requests != nil {
+		close(combiner.requests)
+	}
+	return true
+}
+
+func (combiner *collectionUpdateCombiner) isStopped() bool {
+	combiner.mu.RLock()
+	defer combiner.mu.RUnlock()
+	return combiner.stopped
+}
+
+func (combiner *collectionUpdateCombiner) run() {
+	defer func() {
+		_ = combiner.closeRequests()
+		if combiner.done != nil {
+			close(combiner.done)
+		}
+	}()
+	if combiner.idleTTL <= 0 {
+		for first := range combiner.requests {
+			combiner.runBatchStartingWith(first)
+		}
+		return
+	}
+	idle := time.NewTimer(combiner.idleTTL)
+	defer idle.Stop()
+	for {
+		select {
+		case first, ok := <-combiner.requests:
+			if !ok {
+				return
+			}
+			stopAndDrainTimer(idle)
+			combiner.runBatchStartingWith(first)
+			idle.Reset(combiner.idleTTL)
+		case <-idle.C:
+			if combiner.retireIdle() {
+				return
+			}
+			idle.Reset(combiner.idleTTL)
+		}
+	}
+}
+
+func stopAndDrainTimer(timer *time.Timer) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+}
+
+func (combiner *collectionUpdateCombiner) retireIdle() bool {
+	if combiner == nil {
+		return false
+	}
+	stopped := false
+	if combiner.domain != nil {
+		combiner.domain.updateCombineMu.Lock()
+		if combiner.domain.updateCombiner == combiner {
+			stopped = combiner.closeRequests()
+			if stopped {
+				combiner.domain.updateCombiner = nil
+				combiner.domain.updateDraining = combiner
+			}
+		}
+		combiner.domain.updateCombineMu.Unlock()
+	} else {
+		stopped = combiner.closeRequests()
+	}
+	if !stopped {
+		return false
+	}
+	for req := range combiner.requests {
+		completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+	}
+	if combiner.domain != nil {
+		combiner.domain.updateCombineMu.Lock()
+		if combiner.domain.updateDraining == combiner {
+			combiner.domain.updateDraining = nil
+		}
+		combiner.domain.updateCombineMu.Unlock()
+	}
+	return true
+}
+
+func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionUpdateCombineRequest) {
+	batchCap := combiner.maxBatch
+	if batchCap < 1 {
+		batchCap = 1
+	}
+	batch := make([]collectionUpdateCombineRequest, 0, batchCap)
+	batch = append(batch, first)
+	for len(batch) < batchCap {
+		select {
+		case req, ok := <-combiner.requests:
+			if !ok {
+				combiner.runBatch(batch)
+				return
+			}
+			batch = append(batch, req)
+		default:
+			combiner.runBatch(batch)
+			return
+		}
+	}
+	combiner.runBatch(batch)
+}
+
+func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombineRequest) {
+	combiner.running.Store(true)
+	defer combiner.running.Store(false)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			completeUpdateCombineBatchWithError(batch, collectionUpdatePanicError("combiner", recovered))
+		}
+	}()
+	if len(batch) == 1 || collectionUpdateCombineHasDuplicateIDs(batch) || !collectionUpdateCombineSameCollection(batch) {
+		for _, req := range batch {
+			completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+		}
+		return
+	}
+	items := make([]UpdateBatchItem, len(batch))
+	for i, req := range batch {
+		items[i] = UpdateBatchItem{
+			DocumentID: req.documentID,
+			Update:     recoverCollectionUpdateCallback(req.update),
+		}
+	}
+	results, batched, err := batch[0].collection.UpdateBatchIfNoSecondaryUniqueIndexes(items)
+	if !batched && err == nil {
+		for _, req := range batch {
+			completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+		}
+		return
+	}
+	if err != nil {
+		if completeUpdateCombineBatchWithItemFallback(batch, err) {
+			return
+		}
+		completeUpdateCombineBatchWithError(batch, err)
+		return
+	}
+	if len(results) != len(batch) {
+		completeUpdateCombineBatchWithError(batch, fmt.Errorf("collections: update combiner result count %d for batch size %d", len(results), len(batch)))
+		return
+	}
+	for i, req := range batch {
+		result := results[i]
+		completeUpdateCombineRequest(req, collectionUpdateCombineResult{matched: result.Matched, modified: result.Modified})
+	}
+}
+
+func collectionUpdateCombineSameCollection(batch []collectionUpdateCombineRequest) bool {
+	if len(batch) == 0 {
+		return true
+	}
+	first := batch[0].collection
+	var firstDomain *collectionWriteDomain
+	if first != nil {
+		firstDomain = first.writeDomain
+	}
+	for _, req := range batch[1:] {
+		if req.collection == first {
+			continue
+		}
+		if req.collection == nil || firstDomain == nil || req.collection.writeDomain != firstDomain {
+			return false
+		}
+	}
+	return true
+}
+
+func runUpdateCombineDirect(req collectionUpdateCombineRequest) collectionUpdateCombineResult {
+	if err := validateCollectionUpdateCombineRequest(req); err != nil {
+		return collectionUpdateCombineResult{err: err}
+	}
+	matched, modified, err := req.collection.updateDirect(req.documentID, recoverCollectionUpdateCallback(req.update))
+	return collectionUpdateCombineResult{matched: matched, modified: modified, err: err}
+}
+
+func validateCollectionUpdateCombineRequest(req collectionUpdateCombineRequest) error {
+	if req.collection == nil {
+		return errCollectionNil
+	}
+	if req.collection.db == nil {
+		return errCollectionDBNil
+	}
+	if len(req.documentID) == 0 {
+		return errors.New("collections: document id cannot be empty")
+	}
+	if req.update == nil {
+		return errors.New("collections: update function is nil")
+	}
+	return nil
+}
+
+func collectionUpdatePanicError(where string, recovered any) error {
+	return fmt.Errorf("collections: update %s panic (%T): %v", where, recovered, recovered)
+}
+
+func recoverCollectionUpdateCallback(update func(current []byte) (replacement []byte, changed bool, err error)) func(current []byte) (replacement []byte, changed bool, err error) {
+	return func(current []byte) (replacement []byte, changed bool, err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				replacement = nil
+				changed = false
+				err = collectionUpdatePanicError("callback", recovered)
+			}
+		}()
+		return update(current)
+	}
+}
+
+func (domain *collectionWriteDomain) updateCombineIdleTTL() time.Duration {
+	if domain != nil && domain.updateCombineTTL > 0 {
+		return domain.updateCombineTTL
+	}
+	return collectionUpdateCombineIdleTTL
+}
+
+func completeUpdateCombineBatchWithError(batch []collectionUpdateCombineRequest, err error) {
+	for _, req := range batch {
+		completeUpdateCombineRequest(req, collectionUpdateCombineResult{err: err})
+	}
+}
+
+func completeUpdateCombineBatchWithItemFallback(batch []collectionUpdateCombineRequest, err error) bool {
+	var itemErr *UpdateBatchItemError
+	if !errors.As(err, &itemErr) {
+		return false
+	}
+	if itemErr.Index < 0 || itemErr.Index >= len(batch) {
+		return false
+	}
+	for i, req := range batch {
+		if i == itemErr.Index {
+			reqErr := itemErr.Err
+			if reqErr == nil {
+				reqErr = err
+			}
+			completeUpdateCombineRequest(req, collectionUpdateCombineResult{err: reqErr})
+			continue
+		}
+		completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+	}
+	return true
+}
+
+func completeUpdateCombineRequest(req collectionUpdateCombineRequest, result collectionUpdateCombineResult) {
+	if req.done == nil {
+		return
+	}
+	req.done <- result
+}
+
+func collectionUpdateCombineHasDuplicateIDs(batch []collectionUpdateCombineRequest) bool {
+	if len(batch) < 2 {
+		return false
+	}
+	seen := make(map[uint64][][]byte, len(batch))
+	for _, req := range batch {
+		hash := req.documentHash
+		if hash == 0 && len(req.documentID) > 0 {
+			hash = xxhash.Sum64(req.documentID)
+		}
+		candidates := seen[hash]
+		for _, candidate := range candidates {
+			if bytes.Equal(candidate, req.documentID) {
+				return true
+			}
+		}
+		seen[hash] = append(candidates, req.documentID)
+	}
+	return false
 }
 
 func cloneUpdateBatchItems(items []UpdateBatchItem) []UpdateBatchItem {
