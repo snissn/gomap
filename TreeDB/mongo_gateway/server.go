@@ -102,7 +102,6 @@ func (s *Server) closeUpdateCoalescers() {
 	if s == nil {
 		return
 	}
-	s.closed.Store(true)
 	s.updateMu.Lock()
 	coalescers := s.updateCoalescers
 	s.updateCoalescers = nil
