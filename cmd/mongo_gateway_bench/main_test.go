@@ -257,6 +257,11 @@ func TestParseConfigValidation(t *testing.T) {
 	cfg, err := parseConfig([]string{
 		"-target", "mongo",
 		"-documents", "10",
+		"-batch-size", "5",
+		"-insert-producers", "4",
+		"-mongo-max-pool-size", "32",
+		"-mongo-min-pool-size", "8",
+		"-mongo-max-connecting", "16",
 		"-secondary-indexes", "1",
 		"-format", "json",
 		"-concurrent-readers", "4",
@@ -269,6 +274,8 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 	if cfg.Target != "mongo" || cfg.Documents != 10 || cfg.SecondaryIndexes != 1 || cfg.Format != "json" ||
 		cfg.ClientMode != clientModeDriver ||
+		cfg.BatchSize != 5 || cfg.InsertProducers != 4 ||
+		cfg.MongoMaxPoolSize != 32 || cfg.MongoMinPoolSize != 8 || cfg.MongoMaxConnecting != 16 ||
 		cfg.ConcurrentReaders != 4 || cfg.ConcurrentReads != 20 || cfg.ConcurrentWriters != 2 || cfg.ConcurrentWrites != 10 {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
@@ -331,6 +338,12 @@ func TestParseConfigValidation(t *testing.T) {
 	if _, err := parseConfig([]string{"-concurrent-reads", "1"}); err == nil {
 		t.Fatal("concurrent-reads without concurrent-readers accepted")
 	}
+	if _, err := parseConfig([]string{"-insert-producers", "0"}); err == nil {
+		t.Fatal("zero insert-producers accepted")
+	}
+	if _, err := parseConfig([]string{"-mongo-max-pool-size", "-1"}); err == nil {
+		t.Fatal("negative mongo-max-pool-size accepted")
+	}
 }
 
 func TestRawInsertCommandBuildsBSONCommand(t *testing.T) {
@@ -391,6 +404,9 @@ func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
 	}
 	if cfg.TreeDBMaintenance != treeDBMaintenanceFull {
 		t.Fatalf("TreeDBMaintenance=%q want %q", cfg.TreeDBMaintenance, treeDBMaintenanceFull)
+	}
+	if cfg.InsertProducers != 1 {
+		t.Fatalf("InsertProducers=%d want 1", cfg.InsertProducers)
 	}
 }
 
@@ -618,12 +634,63 @@ func TestRunConcurrentOperationsReturnsFirstError(t *testing.T) {
 	}
 }
 
+func TestMakeLoadBatchesSplitsDocumentRange(t *testing.T) {
+	batches := makeLoadBatches(10, 4)
+	want := []loadBatch{{start: 0, end: 4}, {start: 4, end: 8}, {start: 8, end: 10}}
+	if len(batches) != len(want) {
+		t.Fatalf("len(batches)=%d want %d: %+v", len(batches), len(want), batches)
+	}
+	for i := range want {
+		if batches[i] != want[i] {
+			t.Fatalf("batch %d=%+v want %+v", i, batches[i], want[i])
+		}
+	}
+}
+
+func TestMeasureLoadPhaseReportsProducerResults(t *testing.T) {
+	cfg := config{Documents: 12, BatchSize: 2, InsertProducers: 3}
+	seen := make([]atomic.Int64, cfg.Documents)
+	phase, err := measureLoadPhase(context.Background(), cfg, func(producer, start, end int) error {
+		if producer < 0 || producer >= cfg.InsertProducers {
+			return os.ErrInvalid
+		}
+		for i := start; i < end; i++ {
+			seen[i].Add(1)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("measureLoadPhase: %v", err)
+	}
+	if phase.Name != "load_insert_many" || phase.Operations != cfg.Documents || phase.DriverCalls != 6 {
+		t.Fatalf("unexpected phase summary: %+v", phase)
+	}
+	if len(phase.ProducerResults) != cfg.InsertProducers {
+		t.Fatalf("producer results=%d want %d: %+v", len(phase.ProducerResults), cfg.InsertProducers, phase.ProducerResults)
+	}
+	var producerOps, producerCalls int
+	for _, producer := range phase.ProducerResults {
+		producerOps += producer.Operations
+		producerCalls += producer.DriverCalls
+	}
+	if producerOps != cfg.Documents || producerCalls != phase.DriverCalls {
+		t.Fatalf("producer totals ops/calls=%d/%d want %d/%d", producerOps, producerCalls, cfg.Documents, phase.DriverCalls)
+	}
+	for doc := range seen {
+		if got := seen[doc].Load(); got != 1 {
+			t.Fatalf("doc %d seen %d times, want once", doc, got)
+		}
+	}
+}
+
 func TestWriteResultSupportsGenericWriter(t *testing.T) {
 	result := &benchmarkResult{
 		Target:           "treedb",
 		Database:         "bench",
 		Collection:       "docs",
 		Documents:        1,
+		BatchSize:        1,
+		InsertProducers:  2,
 		SecondaryIndexes: 1,
 		Phases: []phaseResult{{
 			Name:           "load_insert_many",
@@ -631,6 +698,13 @@ func TestWriteResultSupportsGenericWriter(t *testing.T) {
 			DriverCalls:    1,
 			DurationMillis: 1,
 			OpsPerSecond:   1000,
+			ProducerResults: []producerResult{{
+				Producer:       0,
+				Operations:     1,
+				DriverCalls:    1,
+				DurationMillis: 1,
+				OpsPerSecond:   1000,
+			}},
 		}},
 	}
 	var out bytes.Buffer
@@ -639,6 +713,9 @@ func TestWriteResultSupportsGenericWriter(t *testing.T) {
 	}
 	if !bytes.Contains(out.Bytes(), []byte("target=treedb")) {
 		t.Fatalf("text output missing target: %q", out.String())
+	}
+	if !bytes.Contains(out.Bytes(), []byte("insert_producers=2")) || !bytes.Contains(out.Bytes(), []byte("producer=0")) {
+		t.Fatalf("text output missing producer metadata: %q", out.String())
 	}
 }
 
