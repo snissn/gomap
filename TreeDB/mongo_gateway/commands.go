@@ -377,7 +377,7 @@ func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpda
 func applyMongoUpdateToStoredDocument(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, update mongoUpdateItem, stored []byte) ([]byte, bool, error) {
 	raw, err := storedDocumentToBSON(col, materializer, stored)
 	if err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("updates[%d]: %w", update.index, err)
 	}
 	updated, changed, err := applySetUpdate(raw, update.updateDoc)
 	if err != nil {
@@ -656,12 +656,12 @@ func mongoUpdateCoalescerUsesSingleCollection(batch []mongoUpdateCoalescerReques
 	if len(batch) == 0 {
 		return true
 	}
-	name := batch[0].col.Name()
-	if name == "" {
+	col := batch[0].col
+	if col == nil {
 		return false
 	}
 	for _, req := range batch[1:] {
-		if req.col == nil || req.col.Name() != name {
+		if !col.SameCachedCatalog(req.col) {
 			return false
 		}
 	}
