@@ -2352,6 +2352,153 @@ func TestOpenCollectionUsesWriteDomainCatalogCache(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBatchUpdatesMultipleDocuments(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"name":"ada","count":0}`), []byte(`{"name":"grace","count":0}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	before := d.State()
+	results, err := col.UpdateBatch([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: incrementJSONCount},
+		{DocumentID: []byte("u2"), Update: incrementJSONCount},
+		{DocumentID: []byte("missing"), Update: incrementJSONCount},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("results=%d want 3", len(results))
+	}
+	if !results[0].Matched || !results[0].Modified || !results[1].Matched || !results[1].Modified {
+		t.Fatalf("unexpected matched/modified results: %+v", results)
+	}
+	if results[2].Matched || results[2].Modified {
+		t.Fatalf("missing document result matched/modified: %+v", results[2])
+	}
+	after := d.State()
+	if after.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("CommitSeq after batch=%d want %d", after.CommitSeq, before.CommitSeq+1)
+	}
+	for _, id := range []string{"u1", "u2"} {
+		got, err := col.Get([]byte(id))
+		if err != nil {
+			t.Fatalf("get %s: %v", id, err)
+		}
+		if !bytes.Contains(got, []byte(`"count":1`)) {
+			t.Fatalf("%s document=%s want count 1", id, got)
+		}
+	}
+}
+
+func TestCollectionUpdateBatchRejectsDuplicateIDs(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	_, err = (&Collection{db: d}).UpdateBatch([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: incrementJSONCount},
+		{DocumentID: []byte("u1"), Update: incrementJSONCount},
+	})
+	if !errors.Is(err, ErrDuplicateDocumentID) {
+		t.Fatalf("UpdateBatch err=%v want ErrDuplicateDocumentID", err)
+	}
+}
+
+func TestCollectionUpdateBatchRejectsUniqueConflictsWithinBatch(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.CreateIndex(IndexDefinition{Name: "email", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"email":"a@example.com"}`), []byte(`{"email":"b@example.com"}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	_, err = col.UpdateBatch([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONEmail("same@example.com")},
+		{DocumentID: []byte("u2"), Update: setJSONEmail("same@example.com")},
+	})
+	if !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("UpdateBatch err=%v want ErrUniqueIndexConflict", err)
+	}
+}
+
+func incrementJSONCount(current []byte) ([]byte, bool, error) {
+	var doc map[string]any
+	if err := json.Unmarshal(current, &doc); err != nil {
+		return nil, false, err
+	}
+	count, _ := int64ValueForTest(doc["count"])
+	doc["count"] = count + 1
+	next, err := json.Marshal(doc)
+	if err != nil {
+		return nil, false, err
+	}
+	return next, true, nil
+}
+
+func setJSONEmail(email string) func([]byte) ([]byte, bool, error) {
+	return func(current []byte) ([]byte, bool, error) {
+		var doc map[string]any
+		if err := json.Unmarshal(current, &doc); err != nil {
+			return nil, false, err
+		}
+		doc["email"] = email
+		next, err := json.Marshal(doc)
+		if err != nil {
+			return nil, false, err
+		}
+		return next, true, nil
+	}
+}
+
+func int64ValueForTest(value any) (int64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return int64(v), true
+	case int64:
+		return v, true
+	case int:
+		return int64(v), true
+	default:
+		return 0, false
+	}
+}
+
 func TestCollectionSingleInsertMatchesSingleItemBatch(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
