@@ -337,7 +337,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	fs.BoolVar(&cfg.BufferedIndexedWrites, "buffered-indexed-writes", cfg.BufferedIndexedWrites, "use native collection-local memtables for indexed InsertBatch writes; set false for immediate-publish baseline comparisons")
 	fs.IntVar(&cfg.BufferedIndexedWriteMaxDocs, "buffered-indexed-write-max-docs", cfg.BufferedIndexedWriteMaxDocs, "flush indexed write buffers after this many staged documents; 0 uses the collection default")
 	fs.Int64Var(&cfg.BufferedIndexedWriteMaxBytes, "buffered-indexed-write-max-bytes", 0, "flush indexed write buffers after this many staged root-run bytes; 0 means Flush/Close only")
-	fs.IntVar(&cfg.BufferedIndexedWriteMaxRuns, "buffered-indexed-write-max-root-runs", cfg.BufferedIndexedWriteMaxRuns, "flush indexed write buffers after this many staged root-local mutation runs; 0 uses the collection default")
+	fs.IntVar(&cfg.BufferedIndexedWriteMaxRuns, "buffered-indexed-write-max-root-runs", cfg.BufferedIndexedWriteMaxRuns, "flush indexed write buffers after this many staged root-local mutation runs; 0 disables this trigger")
 	fs.StringVar(&profile, "profile", string(cfg.Profile), "TreeDB profile: fast, wal_on_fast, durable, or bench")
 	fs.BoolVar(&cfg.DataOuterLeavesInValueLog, "data-outer-leaves-in-vlog", cfg.DataOuterLeavesInValueLog, "store collection primary/index-state outer leaves through the value log")
 	fs.BoolVar(&cfg.IndexOuterLeavesInValueLog, "index-outer-leaves-in-vlog", cfg.IndexOuterLeavesInValueLog, "store secondary-index outer leaves through the value log")
