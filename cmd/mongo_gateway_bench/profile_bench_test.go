@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -470,6 +471,18 @@ func profileBenchApplySetUpdate(doc bson.Raw, update bson.Raw) (bson.Raw, bool, 
 		if err != nil {
 			return nil, false, err
 		}
+		if key == "" {
+			return nil, false, errors.New("profile benchmark $set field name cannot be empty")
+		}
+		if key == "_id" {
+			return nil, false, errors.New("profile benchmark update cannot modify _id")
+		}
+		if strings.Contains(key, ".") {
+			return nil, false, errors.New("profile benchmark $set currently supports top-level fields only")
+		}
+		if strings.HasPrefix(key, "$") {
+			return nil, false, errors.New("profile benchmark $set field names cannot start with $")
+		}
 		if _, exists := sets[key]; !exists {
 			setOrder = append(setOrder, key)
 		}
@@ -510,6 +523,33 @@ func profileBenchApplySetUpdate(doc bson.Raw, update bson.Raw) (bson.Raw, bool, 
 		return nil, false, err
 	}
 	return bson.Raw(raw), changed, nil
+}
+
+func TestProfileBenchApplySetUpdateRejectsGatewayInvalidSetFields(t *testing.T) {
+	docRaw, err := bson.Marshal(bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}})
+	if err != nil {
+		t.Fatalf("marshal doc: %v", err)
+	}
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{name: "empty", key: ""},
+		{name: "id", key: "_id"},
+		{name: "dotted", key: "profile.name"},
+		{name: "dollar", key: "$name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			updateRaw, err := bson.Marshal(bson.D{{Key: "$set", Value: bson.D{{Key: tt.key, Value: "grace"}}}})
+			if err != nil {
+				t.Fatalf("marshal update: %v", err)
+			}
+			if _, _, err := profileBenchApplySetUpdate(bson.Raw(docRaw), bson.Raw(updateRaw)); err == nil {
+				t.Fatalf("profileBenchApplySetUpdate accepted key %q", tt.key)
+			}
+		})
+	}
 }
 
 type profileBenchReadWriter struct {
