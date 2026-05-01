@@ -1124,6 +1124,19 @@ func TestCollectionUpdateBatchErrorIndexUsesTypedError(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBatchErrorForRequestUsesCommandIndex(t *testing.T) {
+	err := collectionUpdateBatchErrorForRequest(&collections.UpdateBatchItemError{
+		Index: 2,
+		Err:   errors.New("bad replacement"),
+	}, 0)
+	if err == nil || strings.Contains(err.Error(), "update batch index") {
+		t.Fatalf("request err=%v should not expose coalesced batch index", err)
+	}
+	if !strings.Contains(err.Error(), "updates[0]") || !strings.Contains(err.Error(), "bad replacement") {
+		t.Fatalf("request err=%v want command update index", err)
+	}
+}
+
 func TestMongoUpdateCoalescerUsesSingleCollection(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -1211,6 +1224,40 @@ func TestMongoUpdateCoalescerRejectsEnqueueAfterStop(t *testing.T) {
 	coalescer.stop()
 	if coalescer.enqueue(mongoUpdateCoalescerRequest{done: make(chan mongoUpdateCoalescerResult, 1)}) {
 		t.Fatal("stopped coalescer accepted enqueue")
+	}
+}
+
+func TestMongoUpdateCoalescerCloseDoesNotBlockBehindFullQueue(t *testing.T) {
+	coalescer := &mongoUpdateCoalescer{
+		requests:  make(chan mongoUpdateCoalescerRequest, 1),
+		stoppedCh: make(chan struct{}),
+	}
+	coalescer.requests <- mongoUpdateCoalescerRequest{done: make(chan mongoUpdateCoalescerResult, 1)}
+	enqueueDone := make(chan bool, 1)
+	go func() {
+		enqueueDone <- coalescer.enqueue(mongoUpdateCoalescerRequest{done: make(chan mongoUpdateCoalescerResult, 1)})
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	closed := make(chan bool, 1)
+	go func() {
+		closed <- coalescer.closeRequests()
+	}()
+	select {
+	case ok := <-closed:
+		if !ok {
+			t.Fatal("closeRequests reported false")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("closeRequests blocked behind a full enqueue")
+	}
+	select {
+	case ok := <-enqueueDone:
+		if ok {
+			t.Fatal("enqueue succeeded after close")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("enqueue did not observe close")
 	}
 }
 
