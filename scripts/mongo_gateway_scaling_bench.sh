@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "$ROOT"
 
 TMP_BASE="${TMPDIR:-/tmp}"
@@ -32,7 +32,7 @@ MONGO_MAX_CONNECTING="${MONGO_MAX_CONNECTING:-16}"
 PREBUILD_DOCUMENTS="${PREBUILD_DOCUMENTS:-true}"
 INCLUDE_MONGO="${INCLUDE_MONGO:-0}"
 MONGO_URI="${MONGO_URI:-mongodb://127.0.0.1:27017}"
-DATABASE_PREFIX="${DATABASE_PREFIX:-mongo_gateway_scaling}"
+DATABASE_PREFIX="${DATABASE_PREFIX:-}"
 COLLECTION="${COLLECTION:-docs}"
 TIMEOUT="${TIMEOUT:-60m}"
 TITLE="${TITLE:-Mongo Gateway Reader/Writer Scaling}"
@@ -57,6 +57,7 @@ Options:
   --concurrent-reads N   Total reads per reader-scaling cell. Default: 80000.
   --include-mongo        Also run each cell against an external MongoDB URI.
   --mongo-uri URI        MongoDB URI for --include-mongo. Default: mongodb://127.0.0.1:27017.
+  --database-prefix NAME MongoDB database prefix. Default: mongo_gateway_scaling_<run_id>.
   --treedb-format NAME   TreeDB document format. Default: bson.
   --client-mode NAME     TreeDB client mode. Default: driver-command-raw.
   --profile NAME         TreeDB profile. Default: wal_on_fast.
@@ -67,9 +68,9 @@ Options:
 
 Environment overrides use the uppercase variable names shown in the script:
 OUT_DIR, DOCS, INDEXES, BATCH_SIZE, INSERT_PRODUCERS, WRITERS_LIST,
-READERS_LIST, CONCURRENT_WRITES, CONCURRENT_READS, INCLUDE_MONGO (0/1, true/false, or yes/no), MONGO_URI,
+READERS_LIST, CONCURRENT_WRITES, CONCURRENT_READS, INCLUDE_MONGO (0/1, true/false, or yes/no), MONGO_URI, DATABASE_PREFIX,
 TREEDB_DOCUMENT_FORMAT, TREEDB_CLIENT_MODE, TREEDB_PROFILE,
-TREEDB_MAINTENANCE, TIMEOUT, TITLE, and related storage/pool settings.
+TREEDB_MAINTENANCE, GOWORK, TIMEOUT, TITLE, and related storage/pool settings.
 EOF
 }
 
@@ -157,6 +158,11 @@ while [[ $# -gt 0 ]]; do
     --mongo-uri)
       require_option_value "$1" "${2-}"
       MONGO_URI="$2"
+      shift 2
+      ;;
+    --database-prefix)
+      require_option_value "$1" "${2-}"
+      DATABASE_PREFIX="$2"
       shift 2
       ;;
     --treedb-format)
@@ -254,6 +260,10 @@ if [[ -d "$OUT_DIR" ]] && [[ -n "$(find "$OUT_DIR" -mindepth 1 -maxdepth 1 -prin
 fi
 mkdir -p "$OUT_DIR"
 OUT_DIR=$(cd "$OUT_DIR" && pwd -P)
+RUN_ID=$(printf '%s' "$(basename "$OUT_DIR")" | tr -c '[:alnum:]_.-' '_')
+if [[ -z "$DATABASE_PREFIX" ]]; then
+  DATABASE_PREFIX="mongo_gateway_scaling_${RUN_ID}"
+fi
 RAW_DIR="$OUT_DIR/raw"
 BIN_DIR="$OUT_DIR/bin"
 MATRIX="$OUT_DIR/matrix.tsv"
@@ -280,8 +290,9 @@ mkdir -p "$RAW_DIR" "$TREE_DIR" "$BIN_DIR"
 
 BENCH_BIN="$BIN_DIR/mongo_gateway_bench"
 REPORT_BIN="$BIN_DIR/mongo_gateway_compare_report"
-GOWORK=off go build -o "$BENCH_BIN" ./cmd/mongo_gateway_bench
-GOWORK=off go build -o "$REPORT_BIN" ./cmd/mongo_gateway_compare_report
+GO_WORK_MODE="${GOWORK:-off}"
+GOWORK="$GO_WORK_MODE" go build -o "$BENCH_BIN" ./cmd/mongo_gateway_bench
+GOWORK="$GO_WORK_MODE" go build -o "$REPORT_BIN" ./cmd/mongo_gateway_compare_report
 
 safe_label() {
   printf '%s' "$1" | tr -c '[:alnum:]_.-' '_'
@@ -429,12 +440,14 @@ cat >"$README" <<EOF
 - TreeDB maintenance: \`$TREEDB_MAINTENANCE\`
 - include MongoDB: \`$INCLUDE_MONGO\`
 - MongoDB URI: \`$MONGO_URI\`
+- MongoDB database prefix: \`$DATABASE_PREFIX\`
+- GOWORK: \`$GO_WORK_MODE\`
 - timeout: \`$TIMEOUT\`
 
 Regenerate the report:
 
 \`\`\`sh
-GOWORK=off go run ./cmd/mongo_gateway_compare_report \\
+GOWORK=$GO_WORK_MODE go run ./cmd/mongo_gateway_compare_report \\
   -matrix "$MATRIX" \\
   -report "$REPORT" \\
   -summary "$SUMMARY" \\
