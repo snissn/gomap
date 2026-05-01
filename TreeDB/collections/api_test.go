@@ -2302,9 +2302,131 @@ func TestBufferedPrimaryIDArenaCapAvoidsOverflow(t *testing.T) {
 	if got := bufferedPrimaryIDArenaCap(2); got != 32 {
 		t.Fatalf("small arena cap=%d want 32", got)
 	}
-	maxInt := int(^uint(0) >> 1)
-	if got := bufferedPrimaryIDArenaCap(maxInt/16 + 1); got != 0 {
+	if got := bufferedPrimaryIDArenaCap(maxCollectionInt/16 + 1); got != 0 {
 		t.Fatalf("overflow arena cap=%d want 0", got)
+	}
+}
+
+func TestShouldFlushBufferedIndexedWritesAfterAddingBoundaries(t *testing.T) {
+	opts := CollectionOptions{
+		BufferedIndexedWriteMaxDocuments: 10,
+		BufferedIndexedWriteMaxBytes:     100,
+	}
+	cases := []struct {
+		name       string
+		domain     *collectionWriteDomain
+		addedCount int
+		addedBytes int64
+		want       bool
+	}{
+		{
+			name:       "nil domain",
+			addedCount: 1,
+			addedBytes: 1,
+		},
+		{
+			name:       "zero added count ignores bytes",
+			domain:     &collectionWriteDomain{bufferedBytes: 99},
+			addedBytes: 1,
+		},
+		{
+			name:       "just below document limit",
+			domain:     &collectionWriteDomain{count: 8},
+			addedCount: 1,
+		},
+		{
+			name:       "exactly at document limit",
+			domain:     &collectionWriteDomain{count: 9},
+			addedCount: 1,
+			want:       true,
+		},
+		{
+			name:       "above document limit",
+			domain:     &collectionWriteDomain{count: 9},
+			addedCount: 2,
+			want:       true,
+		},
+		{
+			name:       "count overflow clamps to flush",
+			domain:     &collectionWriteDomain{count: maxCollectionInt},
+			addedCount: 1,
+			want:       true,
+		},
+		{
+			name:       "byte overflow clamps to flush",
+			domain:     &collectionWriteDomain{count: 1, bufferedBytes: int64(^uint64(0) >> 1)},
+			addedCount: 1,
+			addedBytes: 1,
+			want:       true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shouldFlushBufferedIndexedWritesAfterAdding(tc.domain, opts, tc.addedCount, tc.addedBytes)
+			if got != tc.want {
+				t.Fatalf("shouldFlushBufferedIndexedWritesAfterAdding()=%v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
+	catalog := &collectionCatalog{
+		meta:  CollectionMeta{Name: "users"},
+		roots: map[string]uint64{collectionPrimaryRootName("users"): 42},
+	}
+	domain := &collectionWriteDomain{
+		loaded:         true,
+		meta:           catalog.meta,
+		catalog:        catalog,
+		baseCommitSeq:  7,
+		baseSystemRoot: 11,
+		primaryRoot:    42,
+		count:          3,
+		bufferedBytes:  99,
+		rootRuns: map[string][]memtable.Table{
+			collectionPrimaryRootName("users"): nil,
+		},
+		rootPolicies: map[string]backenddb.OrderedRootStoragePolicy{
+			collectionPrimaryRootName("users"): backenddb.OrderedRootStorageDefault,
+		},
+		rootBaseIDs: map[string]uint64{
+			collectionPrimaryRootName("users"): 42,
+		},
+		uniqueValueRuns: map[string][]memtable.Table{
+			collectionSecondaryRootName("users", "email"): nil,
+		},
+	}
+	checkpoint := checkpointBufferedIndexedDomain(domain)
+
+	domain.loaded = false
+	domain.meta = CollectionMeta{Name: "other"}
+	domain.catalog = &collectionCatalog{meta: CollectionMeta{Name: "other"}}
+	domain.baseCommitSeq = 100
+	domain.baseSystemRoot = 200
+	domain.primaryRoot = 300
+	domain.count = 400
+	domain.bufferedBytes = 500
+	domain.rootRuns = map[string][]memtable.Table{collectionPrimaryRootName("other"): nil}
+	domain.rootPolicies = nil
+	domain.rootBaseIDs = nil
+	domain.uniqueValueRuns = nil
+
+	rollbackBufferedIndexedDomain(domain, checkpoint)
+	if !domain.loaded || domain.meta.Name != "users" || domain.catalog != catalog {
+		t.Fatalf("metadata after rollback loaded=%v meta=%+v catalog=%p want users/%p", domain.loaded, domain.meta, domain.catalog, catalog)
+	}
+	if domain.baseCommitSeq != 7 || domain.baseSystemRoot != 11 || domain.primaryRoot != 42 {
+		t.Fatalf("roots after rollback commit=%d system=%d primary=%d", domain.baseCommitSeq, domain.baseSystemRoot, domain.primaryRoot)
+	}
+	if domain.count != 3 || domain.bufferedBytes != 99 {
+		t.Fatalf("counters after rollback count=%d bytes=%d", domain.count, domain.bufferedBytes)
+	}
+	if _, ok := domain.rootRuns[collectionPrimaryRootName("users")]; !ok {
+		t.Fatalf("rootRuns=%v missing users primary root", domain.rootRuns)
+	}
+	if _, ok := domain.uniqueValueRuns[collectionSecondaryRootName("users", "email")]; !ok {
+		t.Fatalf("uniqueValueRuns=%v missing users email root", domain.uniqueValueRuns)
 	}
 }
 
@@ -3278,8 +3400,8 @@ func TestCollectionUpdateCombinerBatchesWhenSecondaryUniqueValuesAreUnchanged(t 
 		}
 	}
 	after := d.State()
-	if after.CommitSeq != before.CommitSeq+1 {
-		t.Fatalf("combined unique-schema batch advanced commit seq by %d, want 1", after.CommitSeq-before.CommitSeq)
+	if after.CommitSeq != before.CommitSeq {
+		t.Fatalf("combined unique-schema batch advanced commit seq by %d, want 0", after.CommitSeq-before.CommitSeq)
 	}
 	seaIDs, err := col.FindByIndex("city", "sea")
 	if err != nil {
@@ -3287,6 +3409,13 @@ func TestCollectionUpdateCombinerBatchesWhenSecondaryUniqueValuesAreUnchanged(t 
 	}
 	if len(seaIDs) != 1 || !bytes.Equal(seaIDs[0], []byte("u1")) {
 		t.Fatalf("sea ids=%q want [u1]", seaIDs)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush combined unique-schema batch: %v", err)
+	}
+	flushed := d.State()
+	if flushed.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("flushed combined unique-schema batch advanced commit seq by %d, want 1", flushed.CommitSeq-before.CommitSeq)
 	}
 }
 
@@ -4210,8 +4339,8 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesBatchesNonUniqueUpd
 		t.Fatalf("results=%+v want two modified rows", results)
 	}
 	after := d.State()
-	if after.CommitSeq != before.CommitSeq+1 {
-		t.Fatalf("batch advanced commit seq by %d, want 1", after.CommitSeq-before.CommitSeq)
+	if after.CommitSeq != before.CommitSeq {
+		t.Fatalf("buffered batch advanced commit seq by %d, want 0", after.CommitSeq-before.CommitSeq)
 	}
 	seaIDs, err := col.FindByIndex("city", "sea")
 	if err != nil {
@@ -4220,12 +4349,33 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesBatchesNonUniqueUpd
 	if len(seaIDs) != 1 || !bytes.Equal(seaIDs[0], []byte("u1")) {
 		t.Fatalf("sea ids=%q want [u1]", seaIDs)
 	}
+	hnlIDs, err := col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find hnl city: %v", err)
+	}
+	if len(hnlIDs) != 0 {
+		t.Fatalf("hnl ids=%q want none after buffered city update", hnlIDs)
+	}
 	emailIDs, err := col.FindByIndex("email", "a@example.com")
 	if err != nil {
 		t.Fatalf("find email: %v", err)
 	}
 	if len(emailIDs) != 1 || !bytes.Equal(emailIDs[0], []byte("u1")) {
 		t.Fatalf("email ids=%q want [u1]", emailIDs)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered update batch: %v", err)
+	}
+	flushed := d.State()
+	if flushed.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("flush advanced commit seq by %d, want 1", flushed.CommitSeq-before.CommitSeq)
+	}
+	seaIDs, err = col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find sea city after flush: %v", err)
+	}
+	if len(seaIDs) != 1 || !bytes.Equal(seaIDs[0], []byte("u1")) {
+		t.Fatalf("flushed sea ids=%q want [u1]", seaIDs)
 	}
 }
 

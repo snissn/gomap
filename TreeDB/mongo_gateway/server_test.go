@@ -794,8 +794,8 @@ func TestRunMongoUpdateBatchBatchesNonUniqueFieldWithSecondaryUniqueIndex(t *tes
 		t.Fatalf("matched=%d modified=%d batched=%v want 2,2,true", matched, modified, batched)
 	}
 	after := db.State()
-	if after.CommitSeq != before.CommitSeq+1 {
-		t.Fatalf("batch advanced commit seq by %d, want 1", after.CommitSeq-before.CommitSeq)
+	if after.CommitSeq != before.CommitSeq {
+		t.Fatalf("buffered batch advanced commit seq by %d, want 0", after.CommitSeq-before.CommitSeq)
 	}
 	ids, err := col.FindByIndex("city_1", "sea")
 	if err != nil {
@@ -803,6 +803,27 @@ func TestRunMongoUpdateBatchBatchesNonUniqueFieldWithSecondaryUniqueIndex(t *tes
 	}
 	if len(ids) != 1 || !bytes.Equal(ids[0], id1) {
 		t.Fatalf("sea ids=%q want [%q]", ids, id1)
+	}
+	ids, err = col.FindByIndex("city_1", "hnl")
+	if err != nil {
+		t.Fatalf("find city hnl: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("hnl ids=%q want none after buffered updates", ids)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered mongo update batch: %v", err)
+	}
+	flushed := db.State()
+	if flushed.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("flushed batch advanced commit seq by %d, want 1", flushed.CommitSeq-before.CommitSeq)
+	}
+	ids, err = col.FindByIndex("city_1", "sfo")
+	if err != nil {
+		t.Fatalf("find city sfo after flush: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], id2) {
+		t.Fatalf("flushed sfo ids=%q want [%q]", ids, id2)
 	}
 }
 
