@@ -3073,7 +3073,7 @@ func (domain *collectionWriteDomain) stopUpdateCombiner() {
 
 func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
 	if combiner == nil || combiner.maxBatch <= 1 {
-		return c.updateDirect(documentID, update)
+		return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
 	}
 	done := make(chan collectionUpdateCombineResult, 1)
 	req := collectionUpdateCombineRequest{

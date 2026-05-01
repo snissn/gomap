@@ -2890,6 +2890,36 @@ func TestCollectionUpdateDirectRecoversCallbackPanic(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateCombinerDisabledRecoversCallbackPanic(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"score":0}`)}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	matched, modified, err := (&collectionUpdateCombiner{maxBatch: 1}).update(col, []byte("u1"), func([]byte) ([]byte, bool, error) {
+		panic("bad callback")
+	})
+	if err == nil || !strings.Contains(err.Error(), "bad callback") {
+		t.Fatalf("update err=%v want recovered panic", err)
+	}
+	if matched || modified {
+		t.Fatalf("matched=%v modified=%v want false,false", matched, modified)
+	}
+}
+
 func TestCollectionUpdateCombinerDuplicateIDsPreserveOrder(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
