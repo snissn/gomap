@@ -174,7 +174,8 @@ func loadComparisons(matrixPath string, allowIncomplete bool) ([]cellComparison,
 	}
 	matrixDir := filepath.Dir(matrixPath)
 	type groupedCell struct {
-		mongo          *runRecord
+		mongos         map[string]*runRecord
+		mongoKeys      []string
 		trees          map[string]*runRecord
 		treeConfigKeys []string
 	}
@@ -208,7 +209,10 @@ func loadComparisons(matrixPath string, allowIncomplete bool) ([]cellComparison,
 		key := baseCellKey{Documents: row.Documents, SecondaryIndexes: row.SecondaryIndexes}
 		cell := byCell[key]
 		if cell == nil {
-			cell = &groupedCell{trees: make(map[string]*runRecord)}
+			cell = &groupedCell{
+				mongos: make(map[string]*runRecord),
+				trees:  make(map[string]*runRecord),
+			}
 			byCell[key] = cell
 		}
 		switch row.Target {
@@ -219,21 +223,27 @@ func loadComparisons(matrixPath string, allowIncomplete bool) ([]cellComparison,
 			cell.trees[record.Row.Config] = record
 			cell.treeConfigKeys = append(cell.treeConfigKeys, record.Row.Config)
 		case "mongo":
-			if cell.mongo != nil {
-				return nil, fmt.Errorf("duplicate mongo row for documents=%d secondary_indexes=%d", key.Documents, key.SecondaryIndexes)
+			if cell.mongos[record.Row.Config] != nil {
+				return nil, fmt.Errorf("duplicate mongo row for documents=%d secondary_indexes=%d config=%q", key.Documents, key.SecondaryIndexes, record.Row.Config)
 			}
-			cell.mongo = record
+			cell.mongos[record.Row.Config] = record
+			cell.mongoKeys = append(cell.mongoKeys, record.Row.Config)
 		default:
 			return nil, fmt.Errorf("unknown target %q in matrix", row.Target)
 		}
 	}
 	cells := make([]cellComparison, 0, len(byCell))
 	for key, cell := range byCell {
-		if len(cell.trees) == 0 || (cell.mongo == nil && !allowIncomplete) {
+		if len(cell.trees) == 0 || (len(cell.mongos) == 0 && !allowIncomplete) {
 			return nil, fmt.Errorf("incomplete comparison cell documents=%d secondary_indexes=%d", key.Documents, key.SecondaryIndexes)
 		}
 		sort.Strings(cell.treeConfigKeys)
+		sort.Strings(cell.mongoKeys)
 		for _, config := range cell.treeConfigKeys {
+			mongo, err := matchingMongoRecord(key, config, cell.mongos, allowIncomplete)
+			if err != nil {
+				return nil, err
+			}
 			cells = append(cells, cellComparison{
 				Key: cellKey{
 					Documents:        key.Documents,
@@ -241,7 +251,7 @@ func loadComparisons(matrixPath string, allowIncomplete bool) ([]cellComparison,
 					TreeDBConfig:     config,
 				},
 				TreeDB: cell.trees[config],
-				Mongo:  cell.mongo,
+				Mongo:  mongo,
 			})
 		}
 	}
@@ -255,6 +265,52 @@ func loadComparisons(matrixPath string, allowIncomplete bool) ([]cellComparison,
 		return cells[i].Key.TreeDBConfig < cells[j].Key.TreeDBConfig
 	})
 	return cells, nil
+}
+
+func matchingMongoRecord(key baseCellKey, treeConfig string, mongos map[string]*runRecord, allowIncomplete bool) (*runRecord, error) {
+	if len(mongos) == 0 {
+		if allowIncomplete {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("missing mongo row for documents=%d secondary_indexes=%d config=%q", key.Documents, key.SecondaryIndexes, treeConfig)
+	}
+	if len(mongos) == 1 {
+		for _, record := range mongos {
+			return record, nil
+		}
+	}
+	if record := mongos[treeConfig]; record != nil {
+		return record, nil
+	}
+	treeScenario := scalingScenarioSuffix(treeConfig)
+	if treeScenario != "" {
+		var matched *runRecord
+		for mongoConfig, record := range mongos {
+			if scalingScenarioSuffix(mongoConfig) != treeScenario {
+				continue
+			}
+			if matched != nil {
+				return nil, fmt.Errorf("ambiguous mongo rows for documents=%d secondary_indexes=%d config=%q", key.Documents, key.SecondaryIndexes, treeConfig)
+			}
+			matched = record
+		}
+		if matched != nil {
+			return matched, nil
+		}
+	}
+	if allowIncomplete {
+		return nil, nil
+	}
+	return nil, fmt.Errorf("missing mongo row for documents=%d secondary_indexes=%d config=%q", key.Documents, key.SecondaryIndexes, treeConfig)
+}
+
+func scalingScenarioSuffix(config string) string {
+	for _, marker := range []string{"_writers_", "_readers_"} {
+		if idx := strings.LastIndex(config, marker); idx >= 0 {
+			return config[idx+1:]
+		}
+	}
+	return ""
 }
 
 func runConfig(row matrixRow, result benchmarkResult) string {
@@ -424,15 +480,22 @@ func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) str
 	b.WriteString("## Raw Inputs\n\n")
 	b.WriteString("| docs | indexes | config | target | raw json |\n")
 	b.WriteString("| ---: | ---: | --- | --- | --- |\n")
-	seenMongoRaw := make(map[baseCellKey]struct{})
+	type mongoRawKey struct {
+		baseCellKey
+		Config string
+	}
+	seenMongoRaw := make(map[mongoRawKey]struct{})
 	for _, cell := range cells {
 		fmt.Fprintf(&b, "| %d | %d | `%s` | treedb | `%s` |\n", cell.Key.Documents, cell.Key.SecondaryIndexes, cell.Key.TreeDBConfig, cell.TreeDB.DisplayRawPath)
-		mongoKey := baseCellKey{Documents: cell.Key.Documents, SecondaryIndexes: cell.Key.SecondaryIndexes}
 		if cell.Mongo != nil {
+			mongoKey := mongoRawKey{
+				baseCellKey: baseCellKey{Documents: cell.Key.Documents, SecondaryIndexes: cell.Key.SecondaryIndexes},
+				Config:      cell.Mongo.Row.Config,
+			}
 			if _, ok := seenMongoRaw[mongoKey]; ok {
 				continue
 			}
-			fmt.Fprintf(&b, "| %d | %d | `mongo` | mongo | `%s` |\n", cell.Key.Documents, cell.Key.SecondaryIndexes, cell.Mongo.DisplayRawPath)
+			fmt.Fprintf(&b, "| %d | %d | `%s` | mongo | `%s` |\n", cell.Key.Documents, cell.Key.SecondaryIndexes, cell.Mongo.Row.Config, cell.Mongo.DisplayRawPath)
 			seenMongoRaw[mongoKey] = struct{}{}
 		}
 	}
