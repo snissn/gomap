@@ -86,6 +86,7 @@ type insertBatchPlan struct {
 	runs               []collectionRootRun
 	uniqueProbeRuns    []collectionUniqueProbeRun
 	allUniqueProbeRuns []collectionUniqueProbeRun
+	uniqueProbeRunsSet bool
 	templateRecords    []templateV1Record
 	stats              insertBatchPlanStats
 }
@@ -245,6 +246,7 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 		primaryKeys:        primaryKeys,
 		uniqueProbeRuns:    uniqueProbeRuns,
 		allUniqueProbeRuns: allUniqueProbeRuns,
+		uniqueProbeRunsSet: true,
 		templateRecords:    templateRecords,
 		stats:              insertBatchPlanStats{CollectionInsertStats: stats},
 	}
@@ -341,10 +343,17 @@ func (plan *insertBatchPlan) checkPersistedConflicts(snap *backenddb.Snapshot, c
 	if catalog == nil {
 		return errors.New("collections: insert conflict check missing catalog")
 	}
+	if len(plan.primaryKeys) != len(plan.resultIDs) {
+		return fmt.Errorf("collections: insert conflict check missing primary keys: got %d, want %d", len(plan.primaryKeys), len(plan.resultIDs))
+	}
+	uniqueRootIDs := uniqueIndexRootIDs(catalog)
+	if len(plan.resultIDs) > 0 && len(uniqueRootIDs) > 0 && !plan.uniqueProbeRunsSet {
+		return errors.New("collections: insert conflict check missing unique probe runs")
+	}
 	preflight := insertBatchPreflight{
 		snapshot:           snap,
 		primaryRootID:      catalog.rootID(collectionPrimaryRootName(catalog.meta.Name)),
-		uniqueIndexRootIDs: uniqueIndexRootIDs(catalog),
+		uniqueIndexRootIDs: uniqueRootIDs,
 	}
 	if err := preflight.checkDocumentConflictKeys(plan.primaryKeys); err != nil {
 		return err

@@ -137,16 +137,24 @@ func (r *profileRecorder) Close() {
 	r.profilingRatesActive = false
 }
 
-func (r *profileRecorder) RunPhase(name string, run func() (phaseResult, error)) (phaseResult, error) {
+func (r *profileRecorder) RunPhase(name string, run func() (phaseResult, error)) (result phaseResult, err error) {
 	r.phaseMu.Lock()
 	defer r.phaseMu.Unlock()
 	phase, startErr := r.startPhase(name)
 	if startErr != nil {
 		return phaseResult{}, startErr
 	}
-	result, runErr := run()
-	stopErr := phase.stop(runErr)
-	return result, errors.Join(runErr, stopErr)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			stopErr := phase.stop(fmt.Errorf("panic: %v", recovered))
+			if stopErr != nil {
+				err = errors.Join(err, stopErr)
+			}
+			panic(recovered)
+		}
+		err = errors.Join(err, phase.stop(err))
+	}()
+	return run()
 }
 
 func (r *profileRecorder) WriteResult(result *benchmarkResult) error {
@@ -208,6 +216,7 @@ func (r *profileRecorder) startPhase(name string) (*activeProfilePhase, error) {
 	phase.artifact.CPUProfile = filepath.Base(cpuPath)
 	if err := pprof.StartCPUProfile(cpuFile); err != nil {
 		_ = cpuFile.Close()
+		_ = os.Remove(cpuPath)
 		return nil, err
 	}
 	phase.cpuActive = true
@@ -222,6 +231,10 @@ func (r *profileRecorder) startPhase(name string) (*activeProfilePhase, error) {
 		phase.traceFile = traceFile
 		phase.artifact.Trace = filepath.Base(tracePath)
 		if err := trace.Start(traceFile); err != nil {
+			_ = traceFile.Close()
+			_ = os.Remove(tracePath)
+			phase.traceFile = nil
+			phase.artifact.Trace = ""
 			stopErr := phase.stop(err)
 			return nil, errors.Join(err, stopErr)
 		}

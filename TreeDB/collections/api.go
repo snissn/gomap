@@ -59,7 +59,9 @@ var (
 // UpdateBatchItem describes one document update in a batch. DocumentID must be
 // non-empty and unique within the batch. Update receives the current stored
 // document bytes and returns the replacement document bytes in the same format
-// expected by Update.
+// expected by Update. If Update returns changed=true, replacement must be a
+// complete valid stored document for the collection format; returning
+// replacement=nil, changed=false is the supported no-op form.
 type UpdateBatchItem struct {
 	DocumentID []byte
 	Update     func(current []byte) (replacement []byte, changed bool, err error)
