@@ -656,6 +656,59 @@ func TestServerUpdateBatchTemplateV1UpdatesDistinctIDs(t *testing.T) {
 	}
 }
 
+func TestRunMongoUpdateBatchDeclinesFreshSecondaryUniqueIndex(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	mgr := collections.NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{
+		Name: "app.users",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	stale, err := mgr.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open stale collection: %v", err)
+	}
+	id1, err := encodePrimaryKey(mustRawValue(t, "u1"))
+	if err != nil {
+		t.Fatalf("encode u1: %v", err)
+	}
+	id2, err := encodePrimaryKey(mustRawValue(t, "u2"))
+	if err != nil {
+		t.Fatalf("encode u2: %v", err)
+	}
+	doc1 := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "a@example.com"}})
+	doc2 := mustDocument(t, bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "b@example.com"}})
+	if _, err := stale.InsertBatchValidatedBSON([][]byte{id1, id2}, [][]byte{doc1, doc2}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	fresh, err := mgr.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open fresh collection: %v", err)
+	}
+	if _, err := fresh.CreateIndex(collections.IndexDefinition{Name: "email_1", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+
+	matched, modified, batched, err := runMongoUpdateBatch(stale, []mongoUpdateItem{
+		{index: 0, key: id1, updateDoc: mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "c@example.com"}}}})},
+		{index: 1, key: id2, updateDoc: mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "a@example.com"}}}})},
+	})
+	if err != nil {
+		t.Fatalf("runMongoUpdateBatch: %v", err)
+	}
+	if batched || matched != 0 || modified != 0 {
+		t.Fatalf("matched=%d modified=%d batched=%v want declined", matched, modified, batched)
+	}
+}
+
 func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterParseError(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
