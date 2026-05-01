@@ -92,6 +92,138 @@ func TestReportRejectsIncompleteCell(t *testing.T) {
 	}
 }
 
+func TestReportRejectsDuplicateTreeDBRows(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb_a.json"), `{
+  "target": "treedb",
+  "documents": 10,
+  "secondary_indexes": 0,
+  "phases": [],
+  "treedb_disk_after_checkpoint": {"total_bytes": 100}
+}`)
+	writeFile(t, filepath.Join(dir, "treedb_b.json"), `{
+  "target": "treedb",
+  "documents": 10,
+  "secondary_indexes": 0,
+  "phases": [],
+  "treedb_disk_after_checkpoint": {"total_bytes": 120}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_writers_1\t10\t0\ttreedb_a.json\t100\n"+
+		"treedb\ttreedb_bson_writers_1\t10\t0\ttreedb_b.json\t120\n")
+
+	err := run([]string{
+		"-matrix", matrixPath,
+		"-report", filepath.Join(dir, "report.md"),
+		"-allow-incomplete",
+	})
+	if err == nil || !strings.Contains(err.Error(), `duplicate treedb row`) {
+		t.Fatalf("expected duplicate treedb row error, got %v", err)
+	}
+}
+
+func TestReportAllowsIncompleteTreeDBOnlyCell(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb.json"), `{
+  "target": "treedb",
+  "documents": 10,
+  "secondary_indexes": 0,
+  "phases": [{"name": "concurrent_id_update_set_w4", "operations": 40, "ops_per_sec": 4000, "sampled_ops_per_sec": 5000, "sampled_ns_per_op": 200, "latency_micros": {"p50": 1, "p95": 2, "p99": 3}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 100}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	reportPath := filepath.Join(dir, "report.md")
+	summaryPath := filepath.Join(dir, "summary.tsv")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_writers_4\t10\t0\ttreedb.json\t100\n")
+
+	if err := run([]string{
+		"-matrix", matrixPath,
+		"-report", reportPath,
+		"-summary", summaryPath,
+		"-allow-incomplete",
+	}); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	report := readFile(t, reportPath)
+	for _, want := range []string{
+		"- targets: `treedb`",
+		"No MongoDB baseline rows were present",
+		"`treedb_bson_writers_4`",
+		"`concurrent_id_update_set_w4`",
+		"| 4000 | 5000 |",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q\n%s", want, report)
+		}
+	}
+	if strings.Contains(report, "No phase in this matrix had MongoDB ahead on ops/sec.") {
+		t.Fatalf("TreeDB-only report should not mention MongoDB lead fallback:\n%s", report)
+	}
+	summary := readFile(t, summaryPath)
+	if !strings.Contains(summary, "concurrent_id_update_set_w4\t4000.000000\t5000.000000\t200.000000\t\t\t\t\t") {
+		t.Fatalf("summary missing TreeDB-only row:\n%s", summary)
+	}
+}
+
+func TestReportAllowsMixedIncompleteCells(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb_complete.json"), `{
+  "target": "treedb",
+  "documents": 10,
+  "secondary_indexes": 0,
+  "phases": [{"name": "load_insert_many", "operations": 10, "ops_per_sec": 1000, "sampled_ops_per_sec": 1100, "sampled_ns_per_op": 900, "latency_micros": {"p95": 2}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 100}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo_complete.json"), `{
+  "target": "mongo",
+  "documents": 10,
+  "secondary_indexes": 0,
+  "phases": [{"name": "load_insert_many", "operations": 10, "ops_per_sec": 500, "sampled_ops_per_sec": 550, "sampled_ns_per_op": 1800, "latency_micros": {"p95": 4}}],
+  "mongodb_stats_final": {"dataSize": 200, "totalSize": 300}
+}`)
+	writeFile(t, filepath.Join(dir, "treedb_only.json"), `{
+  "target": "treedb",
+  "documents": 20,
+  "secondary_indexes": 1,
+  "phases": [{"name": "concurrent_id_find_one_r2", "operations": 20, "ops_per_sec": 2000, "sampled_ops_per_sec": 2200, "sampled_ns_per_op": 450, "latency_micros": {"p95": 3}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 400}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	reportPath := filepath.Join(dir, "report.md")
+	summaryPath := filepath.Join(dir, "summary.tsv")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_complete\t10\t0\ttreedb_complete.json\t100\n"+
+		"mongo\tmongo\t10\t0\tmongo_complete.json\t300\n"+
+		"treedb\ttreedb_only\t20\t1\ttreedb_only.json\t400\n")
+
+	if err := run([]string{
+		"-matrix", matrixPath,
+		"-report", reportPath,
+		"-summary", summaryPath,
+		"-allow-incomplete",
+	}); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	report := readFile(t, reportPath)
+	for _, want := range []string{
+		"| 10 | 0 | `treedb_complete` | `load_insert_many` | 1000 | 1100 | 500 | 550 | 2.00x | 2.00x | 2.00 | 4.00 |",
+		"| 20 | 1 | `treedb_only` | `concurrent_id_find_one_r2` | 2000 | 2200 | n/a | n/a | n/a | n/a | 3.00 | n/a |",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q\n%s", want, report)
+		}
+	}
+	summary := readFile(t, summaryPath)
+	if !strings.Contains(summary, "load_insert_many\t1000.000000\t1100.000000\t900.000000\t500.000000\t550.000000\t1800.000000\t2.000000\t2.000000") {
+		t.Fatalf("summary missing complete comparison:\n%s", summary)
+	}
+	if !strings.Contains(summary, "concurrent_id_find_one_r2\t2000.000000\t2200.000000\t450.000000\t\t\t\t\t") {
+		t.Fatalf("summary missing incomplete comparison:\n%s", summary)
+	}
+}
+
 func TestReportSupportsMultipleTreeDBConfigsPerMongoCell(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "treedb_json.json"), `{
@@ -140,6 +272,349 @@ func TestReportSupportsMultipleTreeDBConfigsPerMongoCell(t *testing.T) {
 	}
 	if got := strings.Count(report, "| 100 | 2 | `mongo` | mongo | `mongo.json` |"); got != 1 {
 		t.Fatalf("mongo raw input rows=%d want 1\n%s", got, report)
+	}
+}
+
+func TestReportSupportsScalingMongoConfigsPerScenario(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb_w1.json"), `{
+  "target": "treedb",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "concurrent_id_update_set_w1", "operations": 100, "ops_per_sec": 1000, "latency_micros": {"p95": 10}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 2000}
+}`)
+	writeFile(t, filepath.Join(dir, "treedb_w2.json"), `{
+  "target": "treedb",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "concurrent_id_update_set_w2", "operations": 100, "ops_per_sec": 1500, "latency_micros": {"p95": 20}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 2200}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo_w1.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "concurrent_id_update_set_w1", "operations": 100, "ops_per_sec": 500, "latency_micros": {"p95": 30}}],
+  "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4000}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo_w2.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "concurrent_id_update_set_w2", "operations": 100, "ops_per_sec": 750, "latency_micros": {"p95": 40}}],
+  "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4100}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	reportPath := filepath.Join(dir, "report.md")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_driver-command-raw_writers_1\t100\t2\ttreedb_w1.json\t2000\n"+
+		"mongo\tmongo_writers_1\t100\t2\tmongo_w1.json\t4000\n"+
+		"treedb\ttreedb_bson_driver-command-raw_writers_2\t100\t2\ttreedb_w2.json\t2200\n"+
+		"mongo\tmongo_writers_2\t100\t2\tmongo_w2.json\t4100\n")
+
+	if err := run([]string{"-matrix", matrixPath, "-report", reportPath}); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	report := readFile(t, reportPath)
+	for _, want := range []string{
+		"| 100 | 2 | `treedb_bson_driver-command-raw_writers_1` | `concurrent_id_update_set_w1` | 1000 | n/a | 500 | n/a | 2.00x | n/a | 10.0 | 30.0 |",
+		"| 100 | 2 | `treedb_bson_driver-command-raw_writers_2` | `concurrent_id_update_set_w2` | 1500 | n/a | 750 | n/a | 2.00x | n/a | 20.0 | 40.0 |",
+		"| 100 | 2 | `mongo_writers_1` | mongo | `mongo_w1.json` |",
+		"| 100 | 2 | `mongo_writers_2` | mongo | `mongo_w2.json` |",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q\n%s", want, report)
+		}
+	}
+}
+
+func TestReportRejectsLoneMismatchedMongoScenario(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb_w1.json"), `{
+  "target": "treedb",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "concurrent_id_update_set_w1", "operations": 100, "ops_per_sec": 1000, "latency_micros": {}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 2000}
+}`)
+	writeFile(t, filepath.Join(dir, "treedb_w2.json"), `{
+  "target": "treedb",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "concurrent_id_update_set_w2", "operations": 100, "ops_per_sec": 1500, "latency_micros": {}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 2200}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo_w1.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "concurrent_id_update_set_w1", "operations": 100, "ops_per_sec": 500, "latency_micros": {}}],
+  "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4000}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_driver-command-raw_writers_1\t100\t2\ttreedb_w1.json\t2000\n"+
+		"treedb\ttreedb_bson_driver-command-raw_writers_2\t100\t2\ttreedb_w2.json\t2200\n"+
+		"mongo\tmongo_writers_1\t100\t2\tmongo_w1.json\t4000\n")
+
+	err := run([]string{
+		"-matrix", matrixPath,
+		"-report", filepath.Join(dir, "report.md"),
+	})
+	if err == nil ||
+		!strings.Contains(err.Error(), `config="treedb_bson_driver-command-raw_writers_2"`) ||
+		!strings.Contains(err.Error(), `tree_scenario="writers_2"`) ||
+		!strings.Contains(err.Error(), `available_mongo_configs=[mongo_writers_1]`) {
+		t.Fatalf("err=%v want missing writers_2 mongo scenario with context", err)
+	}
+}
+
+func TestReportAllowIncompleteStillRejectsMismatchedMongoScenario(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb_w1.json"), `{
+  "target": "treedb",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "concurrent_id_update_set_w1", "operations": 100, "ops_per_sec": 1000, "latency_micros": {}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 2000}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "insert", "operations": 100, "ops_per_sec": 500, "latency_micros": {}}],
+  "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4000}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_driver-command-raw_writers_1\t100\t2\ttreedb_w1.json\t2000\n"+
+		"mongo\tmongo\t100\t2\tmongo.json\t4000\n")
+
+	err := run([]string{
+		"-matrix", matrixPath,
+		"-report", filepath.Join(dir, "report.md"),
+		"-allow-incomplete",
+	})
+	if err == nil ||
+		!strings.Contains(err.Error(), `config="treedb_bson_driver-command-raw_writers_1"`) ||
+		!strings.Contains(err.Error(), `tree_scenario="writers_1"`) ||
+		!strings.Contains(err.Error(), `available_mongo_configs=[mongo]`) {
+		t.Fatalf("err=%v want mismatched mongo scenario despite allow-incomplete with context", err)
+	}
+}
+
+func TestMatchingMongoRecordNoScalingMarkerErrorSaysSo(t *testing.T) {
+	index := mongoScenarioIndex{
+		exact: map[string]*runRecord{
+			"mongo_writers_1": {Row: matrixRow{Config: "mongo_writers_1"}},
+		},
+		bySuffix: map[string][]*runRecord{
+			"writers_1": {{Row: matrixRow{Config: "mongo_writers_1"}}},
+		},
+		suffixConfig: map[string][]string{
+			"writers_1": {"mongo_writers_1"},
+		},
+	}
+	_, err := matchingMongoRecord(baseCellKey{Documents: 100, SecondaryIndexes: 2}, "treedb_without_marker", index, false)
+	if err == nil ||
+		!strings.Contains(err.Error(), `config="treedb_without_marker"`) ||
+		!strings.Contains(err.Error(), `tree_scenario="no scaling marker present"`) {
+		t.Fatalf("err=%v want explicit no scaling marker context", err)
+	}
+}
+
+func TestScalingScenarioSuffixRequiresTerminalCount(t *testing.T) {
+	for _, tc := range []struct {
+		config string
+		want   string
+		valid  bool
+		marker bool
+	}{
+		{config: "treedb_writers_4", want: "writers_4", valid: true, marker: true},
+		{config: "treedb_readers_16", want: "readers_16", valid: true, marker: true},
+		{config: "treedb_writers_4_readers_16", want: "readers_16", valid: true, marker: true},
+		{config: "treedb_readers_16_writers_4", want: "writers_4", valid: true, marker: true},
+		{config: "treedb_writers_4_extra", want: "", valid: false, marker: true},
+		{config: "treedb_writers_", want: "", valid: false, marker: true},
+		{config: "treedb_without_marker", want: "", valid: true, marker: false},
+	} {
+		if got := scalingScenarioSuffix(tc.config); got != tc.want {
+			t.Fatalf("scalingScenarioSuffix(%q)=%q want %q", tc.config, got, tc.want)
+		}
+		got := parseScalingScenario(tc.config)
+		if got.valid != tc.valid || got.hasMarker != tc.marker {
+			t.Fatalf("parseScalingScenario(%q)=%+v want valid=%v marker=%v", tc.config, got, tc.valid, tc.marker)
+		}
+	}
+}
+
+func TestReportRejectsInvalidScalingScenarioWithUnsuffixedMongo(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb.json"), `{
+  "target": "treedb",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "insert", "operations": 100, "ops_per_sec": 1000, "latency_micros": {}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 2000}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "insert", "operations": 100, "ops_per_sec": 500, "latency_micros": {}}],
+  "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4000}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_driver-command-raw_writers_1_extra\t100\t2\ttreedb.json\t2000\n"+
+		"mongo\tmongo\t100\t2\tmongo.json\t4000\n")
+
+	err := run([]string{
+		"-matrix", matrixPath,
+		"-report", filepath.Join(dir, "report.md"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid scaling scenario suffix") {
+		t.Fatalf("err=%v want invalid scaling scenario suffix", err)
+	}
+}
+
+func TestReportRejectsInvalidScalingScenarioMongoConfig(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb.json"), `{
+  "target": "treedb",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "insert", "operations": 100, "ops_per_sec": 1000, "latency_micros": {}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 2000}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "insert", "operations": 100, "ops_per_sec": 500, "latency_micros": {}}],
+  "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4000}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_driver-command-raw_writers_1\t100\t2\ttreedb.json\t2000\n"+
+		"mongo\tmongo_writers_bad\t100\t2\tmongo.json\t4000\n")
+
+	err := run([]string{
+		"-matrix", matrixPath,
+		"-report", filepath.Join(dir, "report.md"),
+	})
+	if err == nil ||
+		!strings.Contains(err.Error(), "invalid scaling scenario suffix") ||
+		!strings.Contains(err.Error(), `mongo config="mongo_writers_bad"`) {
+		t.Fatalf("err=%v want invalid mongo scaling scenario suffix", err)
+	}
+}
+
+func TestReportRejectsLoneMongoScenarioForUnsuffixedTreeConfig(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb.json"), `{
+  "target": "treedb",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "insert", "operations": 100, "ops_per_sec": 1000, "latency_micros": {}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 2000}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo_w1.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "concurrent_id_update_set_w1", "operations": 100, "ops_per_sec": 500, "latency_micros": {}}],
+  "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4000}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_driver-command-raw\t100\t2\ttreedb.json\t2000\n"+
+		"mongo\tmongo_writers_1\t100\t2\tmongo_w1.json\t4000\n")
+
+	err := run([]string{
+		"-matrix", matrixPath,
+		"-report", filepath.Join(dir, "report.md"),
+	})
+	if err == nil || !strings.Contains(err.Error(), `config="treedb_bson_driver-command-raw"`) {
+		t.Fatalf("err=%v want missing unsuffixed mongo baseline", err)
+	}
+}
+
+func TestReportMatchesUnsuffixedTreeConfigWithMixedMongoRows(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb.json"), `{
+  "target": "treedb",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "insert", "operations": 100, "ops_per_sec": 1000, "latency_micros": {}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 2000}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "insert", "operations": 100, "ops_per_sec": 500, "latency_micros": {}}],
+  "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4000}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo_w1.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "concurrent_id_update_set_w1", "operations": 100, "ops_per_sec": 600, "latency_micros": {}}],
+  "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4100}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	reportPath := filepath.Join(dir, "report.md")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_driver-command-raw\t100\t2\ttreedb.json\t2000\n"+
+		"mongo\tmongo\t100\t2\tmongo.json\t4000\n"+
+		"mongo\tmongo_writers_1\t100\t2\tmongo_w1.json\t4100\n")
+
+	if err := run([]string{"-matrix", matrixPath, "-report", reportPath}); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	report := readFile(t, reportPath)
+	if !strings.Contains(report, "| 100 | 2 | `treedb_bson_driver-command-raw` | `insert` | 1000 | n/a | 500 | n/a | 2.00x | n/a |") {
+		t.Fatalf("report missing unsuffixed comparison\n%s", report)
+	}
+}
+
+func TestReportRejectsAmbiguousScalingMongoConfigsPerScenario(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb_w1.json"), `{
+  "target": "treedb",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "concurrent_id_update_set_w1", "operations": 100, "ops_per_sec": 1000, "latency_micros": {}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 2000}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo_w1_a.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "concurrent_id_update_set_w1", "operations": 100, "ops_per_sec": 500, "latency_micros": {}}],
+  "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4000}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo_w1_b.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "concurrent_id_update_set_w1", "operations": 100, "ops_per_sec": 550, "latency_micros": {}}],
+  "mongodb_stats_final": {"dataSize": 3100, "totalSize": 4100}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_driver-command-raw_writers_1\t100\t2\ttreedb_w1.json\t2000\n"+
+		"mongo\tmongo_a_writers_1\t100\t2\tmongo_w1_a.json\t4000\n"+
+		"mongo\tmongo_b_writers_1\t100\t2\tmongo_w1_b.json\t4100\n")
+
+	err := run([]string{
+		"-matrix", matrixPath,
+		"-report", filepath.Join(dir, "report.md"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "ambiguous mongo rows") {
+		t.Fatalf("err=%v want ambiguous mongo rows", err)
 	}
 }
 
