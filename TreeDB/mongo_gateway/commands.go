@@ -525,20 +525,31 @@ func (c *mongoUpdateCoalescer) enqueue(req mongoUpdateCoalescerRequest) bool {
 	if c == nil {
 		return false
 	}
-	c.mu.RLock()
-	if c.stopped {
+	for {
+		c.enqueueMu.Lock()
+		c.mu.RLock()
+		if c.stopped || c.requests == nil {
+			c.mu.RUnlock()
+			c.enqueueMu.Unlock()
+			return false
+		}
+		requests := c.requests
+		stoppedCh := c.stoppedCh
+		select {
+		case requests <- req:
+			c.mu.RUnlock()
+			c.enqueueMu.Unlock()
+			return true
+		default:
+		}
 		c.mu.RUnlock()
-		return false
-	}
-	requests := c.requests
-	stoppedCh := c.stoppedCh
-	select {
-	case requests <- req:
-		c.mu.RUnlock()
-		return true
-	case <-stoppedCh:
-		c.mu.RUnlock()
-		return false
+		c.enqueueMu.Unlock()
+
+		select {
+		case <-stoppedCh:
+			return false
+		case <-time.After(time.Millisecond):
+		}
 	}
 }
 
@@ -729,7 +740,7 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 	if err != nil {
 		if index, ok := collectionUpdateBatchErrorIndex(err); ok && index >= 0 && index < len(batch) {
 			completeMongoUpdateCoalescerBatchExcept(batch, index)
-			batch[index].done <- mongoUpdateCoalescerResult{err: err}
+			batch[index].done <- mongoUpdateCoalescerResult{err: collectionUpdateBatchErrorForRequest(err, batch[index].item.index)}
 			return
 		}
 		completeMongoUpdateCoalescerBatch(batch, mongoUpdateCoalescerResult{err: err})
@@ -770,6 +781,14 @@ func collectionUpdateBatchErrorIndex(err error) (int, bool) {
 		return itemErr.Index, true
 	}
 	return 0, false
+}
+
+func collectionUpdateBatchErrorForRequest(err error, updateIndex int) error {
+	var itemErr *collections.UpdateBatchItemError
+	if errors.As(err, &itemErr) {
+		return mongoUpdateErrorWithIndex(updateIndex, itemErr.Err)
+	}
+	return err
 }
 
 func mongoUpdateCoalescerHasDuplicateKeys(batch []mongoUpdateCoalescerRequest) bool {
