@@ -1089,12 +1089,12 @@ func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWrite
 	if len(domain.rootBaseIDs) > 0 {
 		for rootName, baseRootID := range domain.rootBaseIDs {
 			if rootID := catalog.rootID(rootName); rootID != baseRootID {
-				return nil, fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, domain.meta.Name)
+				return nil, fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
 			}
 		}
 	} else {
 		if rootID := catalog.rootID(primaryRootName); rootID != domain.primaryRoot {
-			return nil, fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, domain.meta.Name)
+			return nil, fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, primaryRootName)
 		}
 	}
 	options, err := collectionPlannerOptions(catalog.meta)
@@ -2553,7 +2553,12 @@ func (c *Collection) validateInsertBatchPlanLocked(meta CollectionMeta, rootName
 		return nil, nil, fmt.Errorf("collections: concurrent schema modification detected for %q", meta.Name)
 	}
 	for _, rootName := range rootNames {
-		if got, want := catalog.rootID(rootName), baseRootIDs[rootName]; got != want {
+		want, ok := baseRootIDs[rootName]
+		if !ok {
+			_ = current.Close()
+			return nil, nil, fmt.Errorf("collections: insert plan missing base root id for %q", rootName)
+		}
+		if got := catalog.rootID(rootName); got != want {
 			_ = current.Close()
 			return nil, nil, fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
 		}

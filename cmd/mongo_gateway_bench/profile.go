@@ -29,6 +29,7 @@ type profileRecorder struct {
 	resultPath           string
 	manifestPath         string
 	mu                   sync.Mutex
+	phaseMu              sync.Mutex
 	seenNames            map[string]int
 	artifacts            []profilePhaseArtifact
 	profilingRatesActive bool
@@ -137,6 +138,8 @@ func (r *profileRecorder) Close() {
 }
 
 func (r *profileRecorder) RunPhase(name string, run func() (phaseResult, error)) (phaseResult, error) {
+	r.phaseMu.Lock()
+	defer r.phaseMu.Unlock()
 	phase, startErr := r.startPhase(name)
 	if startErr != nil {
 		return phaseResult{}, startErr

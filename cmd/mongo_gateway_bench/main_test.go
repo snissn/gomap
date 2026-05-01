@@ -473,6 +473,9 @@ func TestParseConfigProfileOptions(t *testing.T) {
 	if _, err := parseConfig([]string{"-profile-trace"}); err == nil {
 		t.Fatal("profile-trace without profile-dir accepted")
 	}
+	if _, err := parseConfig([]string{"-profile-heap-gc"}); err == nil {
+		t.Fatal("profile-heap-gc without profile-dir accepted")
+	}
 	if _, err := parseConfig([]string{"-profile-block-rate", "-1"}); err == nil {
 		t.Fatal("negative profile-block-rate accepted")
 	}
