@@ -1966,6 +1966,48 @@ func TestBufferedRootRunsIteratorSingleRunIncludesTombstones(t *testing.T) {
 	}
 }
 
+func TestBufferedRootRunsIteratorMultiRunIncludesNewestTombstone(t *testing.T) {
+	older := newCollectionRunTable(2)
+	setCollectionRunValue(older, []byte("a"), []byte("older"))
+	setCollectionRunValue(older, []byte("b"), []byte("older"))
+	older.Freeze()
+
+	newer := newCollectionRunTable(2)
+	newer.DeleteSteal([]byte("a"))
+	setCollectionRunValue(newer, []byte("c"), []byte("newer"))
+	newer.Freeze()
+
+	it := newBufferedRootRunsIteratorWithDeleted([]memtable.Table{older, newer}, nil, nil, true)
+	defer func() { _ = it.Close() }()
+	if !it.Valid() {
+		t.Fatal("iterator invalid, want tombstone key a")
+	}
+	if got := it.UnsafeKey(); !bytes.Equal(got, []byte("a")) || !it.IsDeleted() {
+		t.Fatalf("first key=%q deleted=%v want newest tombstone a", got, it.IsDeleted())
+	}
+	it.Next()
+	if !it.Valid() {
+		t.Fatal("iterator missing live key b")
+	}
+	if got := it.UnsafeKey(); !bytes.Equal(got, []byte("b")) || it.IsDeleted() {
+		t.Fatalf("second key=%q deleted=%v want live b", got, it.IsDeleted())
+	}
+	it.Next()
+	if !it.Valid() {
+		t.Fatal("iterator missing live key c")
+	}
+	if got := it.UnsafeKey(); !bytes.Equal(got, []byte("c")) || it.IsDeleted() {
+		t.Fatalf("third key=%q deleted=%v want live c", got, it.IsDeleted())
+	}
+	it.Next()
+	if it.Valid() {
+		t.Fatalf("iterator has extra key %q", it.UnsafeKey())
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+}
+
 func TestCollectMergedCollectionIndexIDsSkipsPersistedTombstones(t *testing.T) {
 	encoded, err := encodeIndexScalar("hnl")
 	if err != nil {
