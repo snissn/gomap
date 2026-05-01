@@ -200,6 +200,36 @@ type fixtureSummary struct {
 	IndexOuterLeavesInValueLog bool              `json:"index_outer_leaves_in_value_log"`
 }
 
+type mongoGatewaySummary struct {
+	Target                     string                 `json:"target"`
+	TreeDBDir                  string                 `json:"treedb_dir,omitempty"`
+	Documents                  int                    `json:"documents"`
+	BatchSize                  int                    `json:"batch_size"`
+	SecondaryIndexes           int                    `json:"secondary_indexes"`
+	ClientMode                 string                 `json:"client_mode"`
+	TreeDBProfile              string                 `json:"treedb_profile,omitempty"`
+	TreeDBDocumentFormat       string                 `json:"treedb_document_format,omitempty"`
+	TreeDBMaintenanceMode      string                 `json:"treedb_maintenance_mode,omitempty"`
+	Phases                     []mongoGatewayPhase    `json:"phases"`
+	TreeDBDiskAfterLoad        *mongoGatewayDiskUsage `json:"treedb_disk_after_load,omitempty"`
+	TreeDBDiskAfterCheckpoint  *mongoGatewayDiskUsage `json:"treedb_disk_after_checkpoint,omitempty"`
+	TreeDBDiskAfterMaintenance *mongoGatewayDiskUsage `json:"treedb_disk_after_maintenance,omitempty"`
+	TreeDBStatsFinal           map[string]string      `json:"treedb_stats_final,omitempty"`
+}
+
+type mongoGatewayPhase struct {
+	Name           string  `json:"name"`
+	Operations     int     `json:"operations"`
+	OpsPerSecond   float64 `json:"ops_per_sec"`
+	SampledNsPerOp float64 `json:"sampled_ns_per_op,omitempty"`
+	DurationMillis float64 `json:"duration_ms,omitempty"`
+}
+
+type mongoGatewayDiskUsage struct {
+	TotalBytes int64            `json:"total_bytes"`
+	Paths      map[string]int64 `json:"paths,omitempty"`
+}
+
 type timing struct {
 	Seconds   float64 `json:"seconds"`
 	SecPerOp  float64 `json:"sec_per_op,omitempty"`
@@ -435,7 +465,11 @@ func run(cfg config) error {
 			}
 		}
 	}
-	if !cfg.IncludeMongo {
+	if cfg.IncludeMongo {
+		if err := runMongoGatewayShape(cfg, run, logDir); err != nil {
+			return err
+		}
+	} else {
 		run.Deferred = append(run.Deferred, deferredWorkload{
 			Name:   "mongo_gateway_smoke",
 			Issue:  "#1141",
@@ -704,6 +738,170 @@ func runCollectionShape(cfg config, run *smokeRun, logDir, format string, indexe
 	}
 	run.Results = append(run.Results, row)
 	return nil
+}
+
+func runMongoGatewayShape(cfg config, run *smokeRun, logDir string) error {
+	format := preferredMongoFormat(cfg.formats)
+	indexes := preferredMongoIndexCount(cfg.indexes)
+	name := fmt.Sprintf("mongo_gateway_%s_%d_indexes", sanitizeName(format), indexes)
+	baseDir := cfg.OutDir
+	if resolved, err := filepath.EvalSymlinks(cfg.OutDir); err == nil {
+		baseDir = resolved
+	}
+	dir := filepath.Join(baseDir, name)
+	docs := cfg.CollectionDocs
+	reads := min(100, docs)
+	rangeReads := min(20, docs)
+	updates := min(50, docs)
+	args := []string{
+		"run", "./cmd/mongo_gateway_bench",
+		"-target", "treedb",
+		"-treedb-dir", dir,
+		"-keep-treedb-dir",
+		"-documents", strconv.Itoa(docs),
+		"-batch-size", strconv.Itoa(cfg.BatchSize),
+		"-reads", strconv.Itoa(reads),
+		"-range-reads", strconv.Itoa(rangeReads),
+		"-updates", strconv.Itoa(updates),
+		"-secondary-indexes", strconv.Itoa(indexes),
+		"-treedb-profile", cfg.Profile,
+		"-treedb-document-format", format,
+		"-treedb-maintenance", "checkpoint",
+		"-format", "json",
+	}
+	rec, stdout, err := runLoggedCommand(name, "go", args, cfg.RepoRoot, cfg.childEnv(), filepath.Join(logDir, name+".log"))
+	run.Commands = append(run.Commands, rec)
+	if err != nil {
+		return err
+	}
+	artifact := filepath.Join(cfg.OutDir, name+"_summary.json")
+	if err := os.WriteFile(artifact, []byte(stdout), 0o644); err != nil {
+		return err
+	}
+	var summary mongoGatewaySummary
+	if err := json.Unmarshal([]byte(stdout), &summary); err != nil {
+		return fmt.Errorf("parse %s JSON: %w", name, err)
+	}
+	row := mongoGatewayResultRow(cfg, summary, artifact)
+	run.Results = append(run.Results, row)
+	return nil
+}
+
+func mongoGatewayResultRow(cfg config, summary mongoGatewaySummary, artifact string) resultRow {
+	load := mongoGatewayPhaseByName(summary.Phases, "load_insert_many")
+	disk := firstMongoDisk(summary.TreeDBDiskAfterCheckpoint, summary.TreeDBDiskAfterLoad, summary.TreeDBDiskAfterMaintenance)
+	var totalPtr *uint64
+	var components map[string]uint64
+	if disk != nil && disk.TotalBytes >= 0 {
+		total := uint64(disk.TotalBytes)
+		totalPtr = &total
+		components = mongoDiskComponentBytes(disk)
+	} else if summary.TreeDBDir != "" {
+		components, _ = collectComponentBytes(summary.TreeDBDir)
+		if components != nil {
+			var total uint64
+			for _, bytes := range components {
+				total += bytes
+			}
+			totalPtr = &total
+		}
+	}
+	format := summary.TreeDBDocumentFormat
+	if format == "" {
+		format = preferredMongoFormat(cfg.formats)
+	}
+	indexes := summary.SecondaryIndexes
+	if indexes == 0 {
+		indexes = preferredMongoIndexCount(cfg.indexes)
+	}
+	return resultRow{
+		ConfigName:       fmt.Sprintf("treedb_mongo_gateway_%s_%d_indexes", sanitizeName(format), indexes),
+		WorkloadName:     "mongo_gateway_insert",
+		Engine:           "treedb",
+		Shape:            "mongo",
+		Format:           format,
+		IndexCount:       indexes,
+		DocumentCount:    summary.Documents,
+		ItemCount:        summary.Documents,
+		BatchSize:        summary.BatchSize,
+		Phase:            "post_insert",
+		MeasurementKind:  "benchmark_timed",
+		BenchmarkTimed:   true,
+		DocsPerSec:       ptrFloat(load.OpsPerSecond),
+		OpsPerSec:        ptrFloat(load.OpsPerSecond),
+		NsPerItem:        ptrFloat(load.SampledNsPerOp),
+		TotalBytes:       totalPtr,
+		BytesPerItem:     bytesPerFromPtr(totalPtr, summary.Documents),
+		ComponentBytes:   components,
+		Budgets:          cfg.budgets(),
+		PressureClaimed:  true,
+		Mmap:             extractMmapStats(summary.TreeDBStatsFinal),
+		Cache:            extractCacheStats(summary.TreeDBStatsFinal),
+		StatsAvailable:   sortedKeys(summary.TreeDBStatsFinal),
+		SourceArtifact:   artifact,
+		MeasurementNotes: "mongo_gateway_bench in-process TreeDB gateway smoke; maintenance=checkpoint, not full compaction",
+	}
+}
+
+func mongoGatewayPhaseByName(phases []mongoGatewayPhase, name string) mongoGatewayPhase {
+	for _, phase := range phases {
+		if phase.Name == name {
+			return phase
+		}
+	}
+	return mongoGatewayPhase{Name: name}
+}
+
+func firstMongoDisk(disks ...*mongoGatewayDiskUsage) *mongoGatewayDiskUsage {
+	for _, disk := range disks {
+		if disk != nil {
+			return disk
+		}
+	}
+	return nil
+}
+
+func mongoDiskComponentBytes(disk *mongoGatewayDiskUsage) map[string]uint64 {
+	if disk == nil || len(disk.Paths) == 0 {
+		return nil
+	}
+	out := make(map[string]uint64)
+	for path, bytes := range disk.Paths {
+		if bytes >= 0 {
+			out[path] = uint64(bytes)
+		}
+	}
+	return out
+}
+
+func preferredMongoFormat(formats []string) string {
+	for _, format := range formats {
+		if format == "bson" {
+			return format
+		}
+	}
+	for _, format := range formats {
+		if format == "template-v1" {
+			return format
+		}
+	}
+	if len(formats) > 0 {
+		return formats[0]
+	}
+	return "bson"
+}
+
+func preferredMongoIndexCount(indexes []int) int {
+	out := 0
+	for _, indexCount := range indexes {
+		if indexCount > out {
+			out = indexCount
+		}
+	}
+	if out > 2 {
+		return 2
+	}
+	return out
 }
 
 func (cfg config) childEnv() map[string]string {
@@ -1376,6 +1574,13 @@ func bytesPer(total uint64, count int) *float64 {
 	}
 	v := float64(total) / float64(count)
 	return &v
+}
+
+func bytesPerFromPtr(total *uint64, count int) *float64 {
+	if total == nil {
+		return nil
+	}
+	return bytesPer(*total, count)
 }
 
 func nsPerItem(t timing) *float64 {

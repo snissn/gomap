@@ -92,6 +92,56 @@ func TestRenderMarkdownAndJSONPreserveShapeLabels(t *testing.T) {
 	}
 }
 
+func TestMongoGatewayResultRowLabelsOptInWorkload(t *testing.T) {
+	cfg := testConfig()
+	summary := mongoGatewaySummary{
+		Target:               "treedb",
+		TreeDBDir:            "/tmp/treedb-mongo",
+		Documents:            100,
+		BatchSize:            25,
+		SecondaryIndexes:     2,
+		TreeDBDocumentFormat: "bson",
+		Phases: []mongoGatewayPhase{{
+			Name:           "load_insert_many",
+			Operations:     100,
+			OpsPerSecond:   5000,
+			SampledNsPerOp: 200000,
+		}},
+		TreeDBDiskAfterCheckpoint: &mongoGatewayDiskUsage{
+			TotalBytes: 6400,
+			Paths: map[string]int64{
+				"format.json": 64,
+				"index.db":    1024,
+			},
+		},
+		TreeDBStatsFinal: map[string]string{
+			"treedb.vlog.mmap_read.hits":            "3",
+			"treedb.vlog.mmap_read.fallback_readat": "1",
+		},
+	}
+	row := mongoGatewayResultRow(cfg, summary, "/tmp/mongo.json")
+	if row.Shape != "mongo" || row.Engine != "treedb" {
+		t.Fatalf("row shape/engine = %s/%s, want mongo/treedb", row.Shape, row.Engine)
+	}
+	if row.ConfigName != "treedb_mongo_gateway_bson_2_indexes" {
+		t.Fatalf("config name = %s", row.ConfigName)
+	}
+	if row.TotalBytes == nil || *row.TotalBytes != 6400 {
+		t.Fatalf("total bytes = %v", row.TotalBytes)
+	}
+	if row.BytesPerItem == nil || *row.BytesPerItem != 64 {
+		t.Fatalf("bytes per item = %v", row.BytesPerItem)
+	}
+	if row.Mmap == nil || row.Mmap.Hits != 3 || row.Mmap.FallbackReadAt != 1 {
+		t.Fatalf("mmap stats = %#v", row.Mmap)
+	}
+	run := smokeRunWithRows([]resultRow{row})
+	checks := validateSmokeRun(&run)
+	if hasErrors(checks) {
+		t.Fatalf("mongo row should pass guardrail errors, got %#v", checks)
+	}
+}
+
 func TestPrepareRunDirRequiresSentinelAndExplicitReuse(t *testing.T) {
 	nonSmoke := t.TempDir()
 	if err := os.WriteFile(filepath.Join(nonSmoke, "unrelated.txt"), []byte("x"), 0o644); err != nil {
@@ -119,6 +169,20 @@ func TestCommandLinePreservesWrapperDisplayString(t *testing.T) {
 	got := commandLine()
 	if len(got) != 1 || got[0] != raw {
 		t.Fatalf("commandLine=%q, want single preserved display string %q", got, raw)
+	}
+}
+
+func testConfig() config {
+	return config{
+		FormatsCSV:             "template-v1,bson,json",
+		IndexesCSV:             "0,1,2",
+		formats:                []string{"template-v1", "bson", "json"},
+		indexes:                []int{0, 1, 2},
+		BatchSize:              10,
+		CollectionDocs:         100,
+		CacheBudgetBytes:       32 << 10,
+		RetiredMmapBudgetBytes: 32 << 10,
+		MaxDeadMappings:        2,
 	}
 }
 
