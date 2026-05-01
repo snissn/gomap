@@ -2523,6 +2523,92 @@ func TestCollectionUpdateBatchAllowsUniqueHandoff(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBatchTemplateV1MaterializesUpdatedDocuments(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatTemplateV1,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			mustTemplateV1Document(t, []string{"name", "city", "score"}, []any{"ada", "hnl", int64(0)}),
+			mustTemplateV1Document(t, []string{"name", "city", "score"}, []any{"grace", "hnl", int64(0)}),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	setScore := func(score int64, city string) func([]byte) ([]byte, bool, error) {
+		return func([]byte) ([]byte, bool, error) {
+			next, err := EncodeTemplateV1DocumentJSON([]byte(fmt.Sprintf(`{"name":"updated","city":%q,"score":%d}`, city, score)))
+			if err != nil {
+				return nil, false, err
+			}
+			return next, true, nil
+		}
+	}
+	results, err := col.UpdateBatch([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setScore(11, "sea")},
+		{DocumentID: []byte("u2"), Update: setScore(12, "sfo")},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+	if len(results) != 2 || !results[0].Modified || !results[1].Modified {
+		t.Fatalf("results=%+v want both modified", results)
+	}
+	for _, tc := range []struct {
+		id    []byte
+		score int64
+		city  string
+	}{
+		{id: []byte("u1"), score: 11, city: "sea"},
+		{id: []byte("u2"), score: 12, city: "sfo"},
+	} {
+		stored, err := col.Get(tc.id)
+		if err != nil {
+			t.Fatalf("get %s: %v", tc.id, err)
+		}
+		jsonDoc, err := col.StoredDocumentJSON(stored)
+		if err != nil {
+			t.Fatalf("materialize %s: %v", tc.id, err)
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(jsonDoc, &doc); err != nil {
+			t.Fatalf("unmarshal %s: %v", tc.id, err)
+		}
+		if got, _ := int64ValueForTest(doc["score"]); got != tc.score {
+			t.Fatalf("%s score=%d want %d", tc.id, got, tc.score)
+		}
+		if got, _ := doc["city"].(string); got != tc.city {
+			t.Fatalf("%s city=%q want %q", tc.id, got, tc.city)
+		}
+	}
+	ids, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find city index: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("city index ids=%q want [u1]", ids)
+	}
+}
+
 func incrementJSONCount(current []byte) ([]byte, bool, error) {
 	var doc map[string]any
 	if err := json.Unmarshal(current, &doc); err != nil {

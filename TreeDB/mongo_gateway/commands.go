@@ -199,6 +199,11 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 	for i, update := range updates {
 		item, err := parseMongoUpdateItem(i, update)
 		if err != nil {
+			if len(parsed) > 0 {
+				if _, _, runErr := runMongoUpdatesSequential(col, parsed); runErr != nil {
+					return mongoUpdateWriteCommandError(runErr)
+				}
+			}
 			return mongoUpdateParseCommandError(err)
 		}
 		keyString := string(item.key)
@@ -215,11 +220,7 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 		matched, modified, err = runMongoUpdatesSequential(col, parsed)
 	}
 	if err != nil {
-		code, codeName := commandCodeBadValue, "BadValue"
-		if collections.IsDuplicateKeyError(err) {
-			code, codeName = commandCodeDuplicateKey, "DuplicateKey"
-		}
-		return commandError(code, codeName, err.Error())
+		return mongoUpdateWriteCommandError(err)
 	}
 	return marshalUpdateResponse(matched, modified)
 }
@@ -276,6 +277,14 @@ func mongoUpdateParseCommandError(err error) (wire.Document, error) {
 		return commandError(parseErr.code, parseErr.codeName, parseErr.message)
 	}
 	return commandError(commandCodeBadValue, "BadValue", err.Error())
+}
+
+func mongoUpdateWriteCommandError(err error) (wire.Document, error) {
+	code, codeName := commandCodeBadValue, "BadValue"
+	if collections.IsDuplicateKeyError(err) {
+		code, codeName = commandCodeDuplicateKey, "DuplicateKey"
+	}
+	return commandError(code, codeName, err.Error())
 }
 
 func runMongoUpdatesSequential(col *collections.Collection, updates []mongoUpdateItem) (int32, int32, error) {
