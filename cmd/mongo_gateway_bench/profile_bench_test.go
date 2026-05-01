@@ -410,7 +410,7 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	started := time.Now()
 	err = runConcurrentOperations(context.Background(), writers, b.N, func(op int) error {
 		id := []byte(benchmarkID((op * 37) % documentCount))
-		updateRaw := updateDocs[op&(len(updateDocs)-1)]
+		updateRaw := updateDocs[op%len(updateDocs)]
 		matched, _, err := collection.Update(id, func(stored []byte) ([]byte, bool, error) {
 			raw := bson.Raw(stored)
 			if err := raw.Validate(); err != nil {
@@ -500,7 +500,7 @@ func profileBenchApplySetUpdate(doc bson.Raw, update bson.Raw) (bson.Raw, bool, 
 	}
 	out := make(bson.D, 0, len(elements)+len(sets))
 	used := make(map[string]struct{}, len(sets))
-	changed := false
+	changed := true
 	for _, elem := range elements {
 		key, err := elem.KeyErr()
 		if err != nil {
@@ -508,9 +508,6 @@ func profileBenchApplySetUpdate(doc bson.Raw, update bson.Raw) (bson.Raw, bool, 
 		}
 		value := elem.Value()
 		if replacement, ok := sets[key]; ok {
-			if !replacement.Equal(value) {
-				changed = true
-			}
 			value = replacement
 			used[key] = struct{}{}
 		}
@@ -521,13 +518,57 @@ func profileBenchApplySetUpdate(doc bson.Raw, update bson.Raw) (bson.Raw, bool, 
 			continue
 		}
 		out = append(out, bson.E{Key: key, Value: sets[key]})
-		changed = true
 	}
 	raw, err := bson.Marshal(out)
 	if err != nil {
 		return nil, false, err
 	}
 	return bson.Raw(raw), changed, nil
+}
+
+func TestProfileBenchApplySetUpdateHappyPath(t *testing.T) {
+	docRaw, err := bson.Marshal(bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "name", Value: "ada"},
+		{Key: "count", Value: int32(1)},
+	})
+	if err != nil {
+		t.Fatalf("marshal doc: %v", err)
+	}
+	updateRaw, err := bson.Marshal(bson.D{{Key: "$set", Value: bson.D{
+		{Key: "name", Value: "grace"},
+		{Key: "city", Value: "hnl"},
+		{Key: "count", Value: int32(1)},
+	}}})
+	if err != nil {
+		t.Fatalf("marshal update: %v", err)
+	}
+	updated, changed, err := profileBenchApplySetUpdate(bson.Raw(docRaw), bson.Raw(updateRaw))
+	if err != nil {
+		t.Fatalf("apply update: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed=false want true for non-empty $set")
+	}
+	if got, ok := updated.Lookup("_id").StringValueOK(); !ok || got != "u1" {
+		t.Fatalf("_id=%q ok=%v want u1", got, ok)
+	}
+	if got, ok := updated.Lookup("name").StringValueOK(); !ok || got != "grace" {
+		t.Fatalf("name=%q ok=%v want grace", got, ok)
+	}
+	if got, ok := updated.Lookup("city").StringValueOK(); !ok || got != "hnl" {
+		t.Fatalf("city=%q ok=%v want hnl", got, ok)
+	}
+	if got, ok := updated.Lookup("count").Int32OK(); !ok || got != 1 {
+		t.Fatalf("count=%d ok=%v want 1", got, ok)
+	}
+	_, changed, err = profileBenchApplySetUpdate(updated, bson.Raw(updateRaw))
+	if err != nil {
+		t.Fatalf("reapply update: %v", err)
+	}
+	if !changed {
+		t.Fatal("reapply changed=false want true so benchmark exercises write path")
+	}
 }
 
 func TestProfileBenchApplySetUpdateRejectsGatewayInvalidSetFields(t *testing.T) {
