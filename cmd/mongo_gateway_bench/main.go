@@ -1010,6 +1010,9 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	} else {
 		result.MongoURI = redactMongoURI(cfg.MongoURI)
 	}
+	if cfg.UpdateIndexedField {
+		prewarmBenchmarkUpdatedCities()
+	}
 
 	if err := createIndexes(ctx, coll, cfg.SecondaryIndexes); err != nil {
 		return nil, err
@@ -1121,9 +1124,6 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	}
 	result.Phases = append(result.Phases, rangePhase)
 
-	if cfg.UpdateIndexedField {
-		prewarmBenchmarkUpdatedCities()
-	}
 	updatePhase, err := measureProfiledPhase(profiler, "id_update_set", cfg.Updates, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.Updates; i++ {
 			documentOrdinal := (i * 31) % cfg.Documents
@@ -1966,10 +1966,11 @@ func mongoDBStats(ctx context.Context, db *mongo.Database) (map[string]any, erro
 }
 
 var (
-	benchmarkCities                = [...]string{"hnl", "sfo", "nyc", "lon", "sin", "ber", "tyo", "syd"}
-	benchmarkUpdatedCities         = [...]string{"ams", "cdg", "mad", "mex", "gru", "yyz", "icn", "akl"}
-	benchmarkUpdatedCityValues     []string
-	benchmarkUpdatedCityValuesOnce sync.Once
+	benchmarkCities                 = [...]string{"hnl", "sfo", "nyc", "lon", "sin", "ber", "tyo", "syd"}
+	benchmarkUpdatedCities          = [...]string{"ams", "cdg", "mad", "mex", "gru", "yyz", "icn", "akl"}
+	benchmarkUpdatedCityValues      []string
+	benchmarkUpdatedCityValuesOnce  sync.Once
+	benchmarkUpdatedCityValuesReady atomic.Bool
 )
 
 const benchmarkUpdatedCityValueCount = 65521
@@ -2022,7 +2023,11 @@ func benchmarkCity(i int) string {
 }
 
 func benchmarkUpdatedCity(i int, documentOrdinal int, documentCount int) string {
-	cycle := len(benchmarkUpdatedCityValues)
+	if !benchmarkUpdatedCityValuesReady.Load() {
+		prewarmBenchmarkUpdatedCities()
+	}
+	values := benchmarkUpdatedCityValues
+	cycle := len(values)
 	if cycle == 0 {
 		return ""
 	}
@@ -2033,7 +2038,7 @@ func benchmarkUpdatedCity(i int, documentOrdinal int, documentCount int) string 
 			index = (index + 1) % cycle
 		}
 	}
-	return benchmarkUpdatedCityValues[index]
+	return values[index]
 }
 
 func benchmarkUpdatedCityIndex(i int, documentOrdinal int, documentCount int, cycle int) int {
@@ -2053,16 +2058,17 @@ func benchmarkUpdatedCityIndex(i int, documentOrdinal int, documentCount int, cy
 func prewarmBenchmarkUpdatedCities() {
 	benchmarkUpdatedCityValuesOnce.Do(func() {
 		benchmarkUpdatedCityValues = buildBenchmarkUpdatedCityValues()
+		benchmarkUpdatedCityValuesReady.Store(true)
 	})
 }
 
 func buildBenchmarkUpdatedCityValues() []string {
 	// Keep a long prime-sized cycle so indexed-update stress runs usually change
 	// the secondary key on repeated visits without formatting strings in the hot path.
-	values := make([]string, benchmarkUpdatedCityValueCount)
 	if len(benchmarkUpdatedCities) == 0 {
-		return values
+		return nil
 	}
+	values := make([]string, benchmarkUpdatedCityValueCount)
 	for i, generation := 0, 0; i < len(values); generation++ {
 		suffix := strconv.Itoa(generation)
 		for _, city := range benchmarkUpdatedCities {
