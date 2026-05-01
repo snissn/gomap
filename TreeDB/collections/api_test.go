@@ -2479,6 +2479,50 @@ func TestCollectionUpdateBatchRejectsUniqueConflictsWithinBatch(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBatchAllowsUniqueHandoff(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.CreateIndex(IndexDefinition{Name: "email", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"email":"a@example.com"}`), []byte(`{"email":"b@example.com"}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	results, err := col.UpdateBatch([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONEmail("c@example.com")},
+		{DocumentID: []byte("u2"), Update: setJSONEmail("a@example.com")},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+	if len(results) != 2 || !results[0].Modified || !results[1].Modified {
+		t.Fatalf("results=%+v want both modified", results)
+	}
+	got, err := col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get u2: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`"email":"a@example.com"`)) {
+		t.Fatalf("u2 document=%s want handed-off email", got)
+	}
+}
+
 func incrementJSONCount(current []byte) ([]byte, bool, error) {
 	var doc map[string]any
 	if err := json.Unmarshal(current, &doc); err != nil {
