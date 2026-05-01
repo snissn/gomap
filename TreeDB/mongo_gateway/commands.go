@@ -2054,19 +2054,24 @@ func parseSetDocument(doc bson.Raw) (map[string]bson.RawValue, []string, error) 
 	if err != nil {
 		return nil, nil, err
 	}
-	order, err := parseSetFieldNamesFromElements(elements)
-	if err != nil {
-		return nil, nil, err
-	}
+	order := make([]string, 0, len(elements))
+	seen := make(map[string]struct{}, len(elements))
 	sets := make(map[string]bson.RawValue, len(elements))
 	for _, elem := range elements {
 		key, err := elem.KeyErr()
 		if err != nil {
 			return nil, nil, err
 		}
+		if err := validateSetFieldName(key); err != nil {
+			return nil, nil, err
+		}
 		value := elem.Value()
 		if err := validateSupportedValue(key, value); err != nil {
 			return nil, nil, err
+		}
+		if _, ok := seen[key]; !ok {
+			order = append(order, key)
+			seen[key] = struct{}{}
 		}
 		sets[key] = value
 	}

@@ -3098,7 +3098,8 @@ func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchIt
 // secondary unique index value changes in the planning snapshot. This lets the
 // write combiner batch updates that touch non-unique fields on schemas that
 // also have unique indexes, while preserving per-document fallback semantics
-// for unique value mutations.
+// for unique value mutations. When batched=false and err=nil, the returned
+// results are zero-valued with len(items).
 func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexChanges(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
 	return c.updateBatch(items, updateBatchModeNoSecondaryUniqueIndexChanges)
 }
