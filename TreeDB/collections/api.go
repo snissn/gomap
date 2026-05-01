@@ -5517,7 +5517,9 @@ func collectMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIter
 		}
 		switch {
 		case !bufferedOK:
-			appendID(persistedID)
+			if !persistedIt.IsDeleted() {
+				appendID(persistedID)
+			}
 			persistedIt.Next()
 		case !persistedOK:
 			if !bufferedIt.IsDeleted() {
@@ -5532,7 +5534,9 @@ func collectMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIter
 				}
 				bufferedIt.Next()
 			} else if cmp > 0 {
-				appendID(persistedID)
+				if !persistedIt.IsDeleted() {
+					appendID(persistedID)
+				}
 				persistedIt.Next()
 			} else {
 				if !bufferedIt.IsDeleted() {
