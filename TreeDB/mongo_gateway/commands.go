@@ -478,8 +478,12 @@ func (c *mongoUpdateCoalescer) enqueue(req mongoUpdateCoalescerRequest) bool {
 	if c.stopped {
 		return false
 	}
-	c.requests <- req
-	return true
+	select {
+	case c.requests <- req:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *mongoUpdateCoalescer) stop() {
@@ -506,14 +510,16 @@ func (c *mongoUpdateCoalescer) retireIdle() bool {
 	}
 	stopped := false
 	if c.server != nil {
+		shouldStop := false
 		c.server.updateMu.Lock()
 		if c.server.updateCoalescers != nil && c.server.updateCoalescers[c.name] == c {
-			stopped = c.closeRequests()
-			if stopped {
-				delete(c.server.updateCoalescers, c.name)
-			}
+			delete(c.server.updateCoalescers, c.name)
+			shouldStop = true
 		}
 		c.server.updateMu.Unlock()
+		if shouldStop {
+			stopped = c.closeRequests()
+		}
 	} else {
 		stopped = c.closeRequests()
 	}
@@ -570,8 +576,10 @@ func (c *mongoUpdateCoalescer) run() {
 			c.runBatchStartingWith(first)
 			resetIdle()
 		case <-idle:
-			c.retireIdle()
-			return
+			if c.retireIdle() {
+				return
+			}
+			resetIdle()
 		}
 	}
 }

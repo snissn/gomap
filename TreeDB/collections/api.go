@@ -1123,12 +1123,12 @@ func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWrite
 	if len(domain.rootBaseIDs) > 0 {
 		for rootName, baseRootID := range domain.rootBaseIDs {
 			if rootID := catalog.rootID(rootName); rootID != baseRootID {
-				return nil, fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
+				return nil, fmt.Errorf("collections: %w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
 			}
 		}
 	} else {
 		if rootID := catalog.rootID(primaryRootName); rootID != domain.primaryRoot {
-			return nil, fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, primaryRootName)
+			return nil, fmt.Errorf("collections: %w: concurrent root modification detected for %q", ErrConcurrentMutation, primaryRootName)
 		}
 	}
 	options, err := collectionPlannerOptions(catalog.meta)
@@ -1230,7 +1230,7 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 		return fmt.Errorf("collections: concurrent schema modification detected for %q", meta.Name)
 	}
 	if got := pinnedCatalog.rootID(rootName); got != baseRoot {
-		return fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, meta.Name)
+		return fmt.Errorf("collections: %w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
 	}
 	baseSystemRoot := snapshotSystemRoot(pin)
 	baseCommitSeq := snapshotCommitSeq(pin)
