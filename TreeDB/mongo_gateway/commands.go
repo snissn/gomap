@@ -444,7 +444,7 @@ func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collectio
 	}
 	done := make(chan mongoUpdateCoalescerResult, 1)
 	if !coalescer.enqueue(mongoUpdateCoalescerRequest{col: col, item: update, done: done}) {
-		return false, false, errors.New("mongo gateway update coalescer stopped before enqueue")
+		return runMongoUpdateOne(col, update)
 	}
 	result := coalescer.waitForUpdateResult(done)
 	return result.matched, result.modified, result.err
