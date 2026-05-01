@@ -1706,9 +1706,11 @@ func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, res
 			if err := runTreeDBMaintenanceStack(ctx, target, result); err != nil {
 				return err
 			}
-			if target.db != nil {
-				result.TreeDBStatsFinal = selectedTreeDBStats(target.db.Stats())
+			stats, err := collectTreeDBStatsFromDir(cfg, target)
+			if err != nil {
+				return err
 			}
+			result.TreeDBStatsFinal = stats
 			return nil
 		}
 		return nil
@@ -1785,6 +1787,31 @@ func runTreeDBMaintenanceStack(ctx context.Context, target *benchTarget, result 
 		return err
 	}
 	return nil
+}
+
+func collectTreeDBStatsFromDir(cfg config, target *benchTarget) (map[string]string, error) {
+	if target == nil {
+		return nil, nil
+	}
+	if target.db != nil {
+		return selectedTreeDBStats(target.db.Stats()), nil
+	}
+	if target.treedbDir == "" {
+		return nil, nil
+	}
+	opts := treedb.OptionsFor(cfg.TreeDBProfile, target.treedbDir)
+	opts.IndexOuterLeavesInValueLog = true
+	opts.IndexInternalBaseDelta = false
+	open := treedb.OpenBackend
+	if opts.IndexOuterLeavesInValueLog {
+		open = treedb.OpenBackendWithCachedLeafLog
+	}
+	db, cleanup, err := open(opts)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = cleanup() }()
+	return selectedTreeDBStats(db.Stats()), nil
 }
 
 func appendTreeDBMaintenanceStep(ctx context.Context, target *benchTarget, result *benchmarkResult, name string, run func() (map[string]int64, string, error)) error {
@@ -2493,9 +2520,7 @@ func writeTreeDBStats(out io.Writer, label string, stats map[string]string) {
 	}
 	keys := make([]string, 0, len(stats))
 	for key := range stats {
-		if isSelectedTreeDBStatKey(key) {
-			keys = append(keys, key)
-		}
+		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	wroteAny := false
