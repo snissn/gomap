@@ -5379,6 +5379,9 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	return collectMergedCollectionIndexIDs(bufferedIt, persistedIt, prefix, maxResults)
 }
 
+// bufferedIndexTableLocked materializes the buffered overlay for one secondary
+// index prefix while domain.mu is held. The returned pooled table is owned by
+// the caller and must be released with resetCollectionRunTable.
 func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, indexName string, prefix []byte, maxResults int) (memtable.Table, error) {
 	if domain == nil {
 		return nil, nil
