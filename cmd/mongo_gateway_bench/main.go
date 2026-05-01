@@ -2434,16 +2434,18 @@ var selectedTreeDBExactStatKeys = [...]string{
 	"treedb.commit_seq",
 }
 
+var selectedTreeDBExactStatKeySet = map[string]struct{}{
+	"treedb.commit_seq": {},
+}
+
 var selectedTreeDBStatPrefixes = [...]string{
 	"treedb.publish.ordered_root_delta_group.",
 	"treedb.publish.watermark.",
 }
 
 func isSelectedTreeDBStatKey(key string) bool {
-	for _, exact := range selectedTreeDBExactStatKeys {
-		if key == exact {
-			return true
-		}
+	if _, ok := selectedTreeDBExactStatKeySet[key]; ok {
+		return true
 	}
 	for _, prefix := range selectedTreeDBStatPrefixes {
 		if strings.HasPrefix(key, prefix) {
