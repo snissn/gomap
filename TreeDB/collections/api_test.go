@@ -1940,6 +1940,34 @@ func TestBufferedRootRunsIteratorSingleRunHidesTombstones(t *testing.T) {
 	}
 }
 
+func TestCollectMergedCollectionIndexIDsSkipsPersistedTombstones(t *testing.T) {
+	encoded, err := encodeIndexScalar("hnl")
+	if err != nil {
+		t.Fatalf("encode city: %v", err)
+	}
+	_, prefix, err := appendIndexValuePrefixSlice(nil, encoded)
+	if err != nil {
+		t.Fatalf("index prefix: %v", err)
+	}
+	key, err := indexEntryKey(encoded, []byte("u1"))
+	if err != nil {
+		t.Fatalf("index key: %v", err)
+	}
+	table := newCollectionRunTable(1)
+	table.DeleteSteal(key)
+	table.Freeze()
+	it := table.NewIterator(prefix, prefixEnd(prefix))
+	defer func() { _ = it.Close() }()
+
+	ids, truncated, err := collectMergedCollectionIndexIDs(nil, it, prefix, 1)
+	if err != nil {
+		t.Fatalf("collect merged ids: %v", err)
+	}
+	if truncated || len(ids) != 0 {
+		t.Fatalf("ids=%q truncated=%v want empty/false", ids, truncated)
+	}
+}
+
 func TestCollectionFindByIndexValueLimitMaxIntDoesNotOverflow(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
