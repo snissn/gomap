@@ -810,14 +810,21 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	holdStart := time.Now()
 	wait := holdStart.Sub(lockStart)
 	rootsObserved := 0
-	defer func() {
+	finished := false
+	finishPublish := func() {
+		if finished {
+			return
+		}
+		finished = true
 		hold := time.Since(holdStart)
 		db.writeMu.Unlock()
 		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, err)
-	}()
+	}
 
 	if db.readOnly {
-		return 0, nil, ErrReadOnly
+		err = ErrReadOnly
+		finishPublish()
+		return 0, nil, err
 	}
 
 	db.mu.RLock()
@@ -830,6 +837,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	rootIDs = make([]uint64, len(ordered))
 	orderedConsumed := make([]bool, len(ordered))
 	defer closeUnconsumedOrderedRootDeltaPublishIterators(ordered, orderedConsumed)
+	defer finishPublish()
 	var retired []uint64
 	var merged adaptive.Metrics
 	for idx := range ordered {
@@ -875,17 +883,15 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 		}
 		vlogRefDelta = nil
 	}
-	defer func() {
-		if vlogRefDelta != nil {
-			releaseValueLogRefDelta(vlogRefDelta)
-		}
-	}()
-
 	db.mu.RLock()
 	curUserRoot := db.meta.UserRootPageID
 	curSystemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+			vlogRefDelta = nil
+		}
 		return 0, nil, errors.New("concurrent modification detected during ordered root group publish")
 	}
 
@@ -893,6 +899,10 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 		vlogRefDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
 	}
 	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil); err != nil {
+		if vlogRefDelta != nil {
+			releaseValueLogRefDelta(vlogRefDelta)
+			vlogRefDelta = nil
+		}
 		return 0, nil, err
 	}
 	vlogRefDelta = nil
@@ -930,14 +940,21 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 	holdStart := time.Now()
 	wait := holdStart.Sub(lockStart)
 	rootsObserved := 0
-	defer func() {
+	finished := false
+	finishPublish := func() {
+		if finished {
+			return
+		}
+		finished = true
 		hold := time.Since(holdStart)
 		db.writeMu.Unlock()
 		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, err)
-	}()
+	}
 
 	if db.readOnly {
-		return 0, nil, ErrReadOnly
+		err = ErrReadOnly
+		finishPublish()
+		return 0, nil, err
 	}
 
 	db.mu.RLock()
@@ -945,7 +962,8 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 	baseSystemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 	if preflight != nil {
-		if err := preflight(); err != nil {
+		if err = preflight(); err != nil {
+			finishPublish()
 			return 0, nil, err
 		}
 	}
@@ -954,6 +972,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 	rootIDs = make([]uint64, len(ordered))
 	orderedConsumed := make([]bool, len(ordered))
 	defer closeUnconsumedOrderedRootDeltaPublishIterators(ordered, orderedConsumed)
+	defer finishPublish()
 	var retired []uint64
 	var merged adaptive.Metrics
 	for idx := range ordered {
