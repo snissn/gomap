@@ -2426,6 +2426,58 @@ func TestCollectionCachedCatalogUsesCommitSeq(t *testing.T) {
 	}
 }
 
+func TestCollectionValidateInsertBatchPlanLockedClassifiesRaces(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"ada"}`)}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, "users")
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	rootName := collectionPrimaryRootName("users")
+	plan := &insertBatchPlan{
+		primaryKeys: [][]byte{[]byte("u2")},
+		runs:        []collectionRootRun{{name: rootName}},
+	}
+	rootNames, baseRootIDs := insertBatchPlanRootNamesAndBaseIDs(plan, catalog)
+	staleRootIDs := map[string]uint64{rootName: baseRootIDs[rootName] + 1}
+	if current, _, err := col.validateInsertBatchPlanLocked(catalog.meta, rootNames, staleRootIDs, plan); current != nil || !errors.Is(err, ErrConcurrentMutation) {
+		if current != nil {
+			_ = current.Close()
+		}
+		t.Fatalf("root mismatch current=%v err=%v want ErrConcurrentMutation", current, err)
+	}
+
+	schemaMeta := catalog.meta
+	schemaMeta.Options.AllowArrayValuesInIndex = !schemaMeta.Options.AllowArrayValuesInIndex
+	if current, _, err := col.validateInsertBatchPlanLocked(schemaMeta, rootNames, baseRootIDs, plan); current != nil || err == nil || errors.Is(err, ErrConcurrentMutation) {
+		if current != nil {
+			_ = current.Close()
+		}
+		t.Fatalf("schema mismatch current=%v err=%v want non-retryable schema error", current, err)
+	}
+}
+
 func TestOpenCollectionUsesWriteDomainCatalogCache(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

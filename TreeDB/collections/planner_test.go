@@ -456,6 +456,9 @@ func TestInsertBatchPlanner_BuildsUniqueProbePrefixesOnlyForPersistedRoots(t *te
 	if got, want := len(plan.uniqueProbeRuns), 1; got != want {
 		t.Fatalf("unique probe runs=%d want %d", got, want)
 	}
+	if got, want := len(plan.allUniqueProbeRuns), 2; got != want {
+		t.Fatalf("all unique probe runs=%d want %d", got, want)
+	}
 	if got, want := plan.uniqueProbeRuns[0].indexName, "email"; got != want {
 		t.Fatalf("unique probe index=%q want %q", got, want)
 	}
@@ -466,6 +469,29 @@ func TestInsertBatchPlanner_BuildsUniqueProbePrefixesOnlyForPersistedRoots(t *te
 		if bytes.Contains(prefix, []byte("u1")) || bytes.Contains(prefix, []byte("u2")) {
 			t.Fatalf("unique probe prefix contains a document id: %q", prefix)
 		}
+	}
+	if got, want := probe.hasPrefixesCalls, 1; got != want {
+		t.Fatalf("HasPrefixesAtRoot calls=%d want %d", got, want)
+	}
+	if got, want := probe.lastHasPrefixesRootID, uint64(77); got != want {
+		t.Fatalf("HasPrefixesAtRoot root=%d want %d", got, want)
+	}
+}
+
+func TestInsertBatchPreflightCheckUniqueConflictsSkipsMissingRoots(t *testing.T) {
+	probe := &recordingRootSnapshotProbe{}
+	preflight := insertBatchPreflight{
+		snapshot: probe,
+		uniqueIndexRootIDs: map[string]uint64{
+			"email": 77,
+		},
+	}
+	err := preflight.checkUniqueConflicts([]collectionUniqueProbeRun{
+		{indexName: "username", prefixes: [][]byte{[]byte("ada")}},
+		{indexName: "email", prefixes: [][]byte{[]byte("ada@example.com")}},
+	})
+	if err != nil {
+		t.Fatalf("check unique conflicts: %v", err)
 	}
 	if got, want := probe.hasPrefixesCalls, 1; got != want {
 		t.Fatalf("HasPrefixesAtRoot calls=%d want %d", got, want)
