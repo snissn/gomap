@@ -68,6 +68,11 @@ type config struct {
 	TreeDBIndexRootStorage      collections.RootStoragePolicy
 	TreeDBMaintenance           string
 	PrebuildDocuments           bool
+	ProfileDir                  string
+	ProfileBlockRate            int
+	ProfileMutexFraction        int
+	ProfileTrace                bool
+	ProfileHeapGC               bool
 	Timeout                     time.Duration
 	Format                      string
 }
@@ -106,6 +111,9 @@ type benchmarkResult struct {
 	MongoDBStatsFinal           map[string]any      `json:"mongodb_stats_final,omitempty"`
 	MongoPoolStatsAfterLoad     *mongoPoolSnapshot  `json:"mongo_pool_stats_after_load,omitempty"`
 	MongoPoolStatsFinal         *mongoPoolSnapshot  `json:"mongo_pool_stats_final,omitempty"`
+	ProfileDir                  string              `json:"profile_dir,omitempty"`
+	ProfileManifest             string              `json:"profile_manifest,omitempty"`
+	ProfileResult               string              `json:"profile_result,omitempty"`
 }
 
 type phaseResult struct {
@@ -351,9 +359,33 @@ func run(parent context.Context, args []string) error {
 		_ = closeBenchTarget(cleanupCtx, target)
 	}()
 
-	result, err := runBenchmark(ctx, cfg, target)
+	profiler, err := newProfileRecorder(cfg)
 	if err != nil {
 		return err
+	}
+	if profiler != nil {
+		defer profiler.Close()
+	}
+
+	result, err := runBenchmark(ctx, cfg, target, profiler)
+	if err != nil {
+		if profiler != nil {
+			if manifestErr := profiler.WriteManifest(nil, err); manifestErr != nil {
+				return errors.Join(err, manifestErr)
+			}
+		}
+		return err
+	}
+	if profiler != nil {
+		result.ProfileDir = profiler.Dir()
+		result.ProfileManifest = profileManifestFile
+		result.ProfileResult = profileResultFile
+		if err := profiler.WriteResult(result); err != nil {
+			return err
+		}
+		if err := profiler.WriteManifest(result, nil); err != nil {
+			return err
+		}
 	}
 	return writeResult(os.Stdout, cfg.Format, result)
 }
@@ -368,6 +400,8 @@ func parseConfig(args []string) (config, error) {
 		TreeDBMaintenance:           treeDBMaintenanceFull,
 		ClientMode:                  clientModeDriver,
 		InsertProducers:             1,
+		ProfileBlockRate:            1,
+		ProfileMutexFraction:        5,
 	}
 	fs := flag.NewFlagSet("mongo_gateway_bench", flag.ContinueOnError)
 	var flagOutput bytes.Buffer
@@ -409,6 +443,11 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&treeDBIndexRootStorage, "treedb-index-root-storage", treeDBIndexRootStorage, "TreeDB secondary index root storage for -target treedb: default, fast, or compressed")
 	fs.StringVar(&cfg.TreeDBMaintenance, "treedb-maintenance", cfg.TreeDBMaintenance, "TreeDB final disk maintenance for -target treedb: full, checkpoint, or none")
 	fs.BoolVar(&cfg.PrebuildDocuments, "prebuild-documents", false, "prebuild benchmark documents before the timed load phase")
+	fs.StringVar(&cfg.ProfileDir, "profile-dir", "", "write per-phase pprof artifacts and a profile_manifest.json into an empty directory")
+	fs.IntVar(&cfg.ProfileBlockRate, "profile-block-rate", cfg.ProfileBlockRate, "runtime block profile rate when -profile-dir is set; 0 disables block profiling")
+	fs.IntVar(&cfg.ProfileMutexFraction, "profile-mutex-fraction", cfg.ProfileMutexFraction, "runtime mutex profile sampling fraction when -profile-dir is set; 0 disables mutex profiling")
+	fs.BoolVar(&cfg.ProfileTrace, "profile-trace", false, "also write per-phase runtime trace.out files when -profile-dir is set")
+	fs.BoolVar(&cfg.ProfileHeapGC, "profile-heap-gc", false, "force runtime.GC before each heap profile snapshot when -profile-dir is set")
 	fs.DurationVar(&cfg.Timeout, "timeout", 10*time.Minute, "overall benchmark timeout")
 	fs.StringVar(&cfg.Format, "format", "text", "output format: text or json")
 	if err := fs.Parse(args); err != nil {
@@ -461,6 +500,18 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.Timeout < 0 {
 		return config{}, errors.New("timeout cannot be negative")
+	}
+	if cfg.ProfileBlockRate < 0 {
+		return config{}, errors.New("profile-block-rate cannot be negative")
+	}
+	if cfg.ProfileMutexFraction < 0 {
+		return config{}, errors.New("profile-mutex-fraction cannot be negative")
+	}
+	if cfg.ProfileTrace && strings.TrimSpace(cfg.ProfileDir) == "" {
+		return config{}, errors.New("profile-trace requires -profile-dir")
+	}
+	if cfg.ProfileHeapGC && strings.TrimSpace(cfg.ProfileDir) == "" {
+		return config{}, errors.New("profile-heap-gc requires -profile-dir")
 	}
 	if cfg.SecondaryIndexes < 0 || cfg.SecondaryIndexes > 2 {
 		return config{}, errors.New("secondary-indexes must be 0, 1, or 2")
@@ -910,7 +961,7 @@ func serveLoop(ctx context.Context, ln net.Listener, server *mongogateway.Server
 	}
 }
 
-func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchmarkResult, error) {
+func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder) (*benchmarkResult, error) {
 	db := target.client.Database(cfg.Database)
 	coll := db.Collection(cfg.Collection)
 	result := &benchmarkResult{
@@ -966,7 +1017,9 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 	if target.poolStats != nil {
 		target.poolStats.Reset()
 	}
-	loadPhase, err := runLoadPhase(ctx, cfg, target, coll, prebuilt, prebuiltRaw)
+	loadPhase, err := runProfiledPhase(profiler, "load_insert_many", func() (phaseResult, error) {
+		return runLoadPhase(ctx, cfg, target, coll, prebuilt, prebuiltRaw)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -978,7 +1031,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 		return nil, err
 	}
 
-	idPhase, err := measurePhase("id_find_one", cfg.Reads, func(sample func(time.Duration)) error {
+	idPhase, err := measureProfiledPhase(profiler, "id_find_one", cfg.Reads, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.Reads; i++ {
 			id := benchmarkID(i % cfg.Documents)
 			var out bson.M
@@ -1000,7 +1053,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 	result.Phases = append(result.Phases, idPhase)
 
 	if runEmailFindPhase(cfg) {
-		emailPhase, err := measurePhase("email_find_one", cfg.Reads, func(sample func(time.Duration)) error {
+		emailPhase, err := measureProfiledPhase(profiler, "email_find_one", cfg.Reads, func(sample func(time.Duration)) error {
 			for i := 0; i < cfg.Reads; i++ {
 				email := benchmarkEmail((i * 17) % cfg.Documents)
 				var out bson.M
@@ -1022,7 +1075,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 		result.Phases = append(result.Phases, emailPhase)
 	}
 
-	rangePhase, err := measurePhase("age_range_limit_10", cfg.RangeReads, func(sample func(time.Duration)) error {
+	rangePhase, err := measureProfiledPhase(profiler, "age_range_limit_10", cfg.RangeReads, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.RangeReads; i++ {
 			minAge := int64(20 + (i % 40))
 			begin := time.Now()
@@ -1053,7 +1106,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 	}
 	result.Phases = append(result.Phases, rangePhase)
 
-	updatePhase, err := measurePhase("id_update_set", cfg.Updates, func(sample func(time.Duration)) error {
+	updatePhase, err := measureProfiledPhase(profiler, "id_update_set", cfg.Updates, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.Updates; i++ {
 			id := benchmarkID((i * 31) % cfg.Documents)
 			begin := time.Now()
@@ -1077,7 +1130,8 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 	result.Phases = append(result.Phases, updatePhase)
 
 	if cfg.ConcurrentReaders > 0 && cfg.ConcurrentReads > 0 {
-		concurrentReadPhase, err := measurePhase(fmt.Sprintf("concurrent_id_find_one_r%d", cfg.ConcurrentReaders), cfg.ConcurrentReads, func(sample func(time.Duration)) error {
+		phaseName := fmt.Sprintf("concurrent_id_find_one_r%d", cfg.ConcurrentReaders)
+		concurrentReadPhase, err := measureProfiledPhase(profiler, phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
 			return runConcurrentOperations(ctx, cfg.ConcurrentReaders, cfg.ConcurrentReads, func(op int) error {
 				id := benchmarkID((op * 17) % cfg.Documents)
 				var out bson.M
@@ -1100,7 +1154,8 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 	}
 
 	if cfg.ConcurrentWriters > 0 && cfg.ConcurrentWrites > 0 {
-		concurrentWritePhase, err := measurePhase(fmt.Sprintf("concurrent_id_update_set_w%d", cfg.ConcurrentWriters), cfg.ConcurrentWrites, func(sample func(time.Duration)) error {
+		phaseName := fmt.Sprintf("concurrent_id_update_set_w%d", cfg.ConcurrentWriters)
+		concurrentWritePhase, err := measureProfiledPhase(profiler, phaseName, cfg.ConcurrentWrites, func(sample func(time.Duration)) error {
 			return runConcurrentOperations(ctx, cfg.ConcurrentWriters, cfg.ConcurrentWrites, func(op int) error {
 				id := benchmarkID((op * 37) % cfg.Documents)
 				begin := time.Now()
@@ -1125,7 +1180,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 	}
 
 	if cfg.Deletes > 0 {
-		deletePhase, err := measurePhase("id_delete_one", cfg.Deletes, func(sample func(time.Duration)) error {
+		deletePhase, err := measureProfiledPhase(profiler, "id_delete_one", cfg.Deletes, func(sample func(time.Duration)) error {
 			for i := 0; i < cfg.Deletes; i++ {
 				id := benchmarkID(cfg.Documents - 1 - i)
 				begin := time.Now()
@@ -1153,6 +1208,19 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 		result.MongoPoolStatsFinal = target.poolStats.Snapshot()
 	}
 	return result, nil
+}
+
+func measureProfiledPhase(profiler *profileRecorder, name string, operations int, run func(func(time.Duration)) error) (phaseResult, error) {
+	return runProfiledPhase(profiler, name, func() (phaseResult, error) {
+		return measurePhase(name, operations, run)
+	})
+}
+
+func runProfiledPhase(profiler *profileRecorder, name string, run func() (phaseResult, error)) (phaseResult, error) {
+	if profiler == nil {
+		return run()
+	}
+	return profiler.RunPhase(name, run)
 }
 
 func runEmailFindPhase(cfg config) bool {
@@ -2215,6 +2283,10 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		}
 		if result.MongoURI != "" {
 			fmt.Fprintf(out, "mongo_uri=%s\n", result.MongoURI)
+		}
+		if result.ProfileDir != "" {
+			fmt.Fprintf(out, "profile_dir=%s profile_manifest=%s profile_result=%s\n",
+				result.ProfileDir, result.ProfileManifest, result.ProfileResult)
 		}
 		for _, phase := range result.Phases {
 			fmt.Fprintf(out, "%-22s ops=%d calls=%d", phase.Name, phase.Operations, phase.DriverCalls)

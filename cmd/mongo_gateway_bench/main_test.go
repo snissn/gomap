@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -443,6 +445,343 @@ func TestParseConfigAcceptsTreeDBBSONDocumentFormat(t *testing.T) {
 	}
 }
 
+func TestParseConfigProfileOptions(t *testing.T) {
+	cfg, err := parseConfig([]string{
+		"-profile-dir", "/tmp/mongo-gateway-bench-profiles",
+		"-profile-block-rate", "7",
+		"-profile-mutex-fraction", "11",
+		"-profile-trace",
+		"-profile-heap-gc",
+	})
+	if err != nil {
+		t.Fatalf("parse profile options: %v", err)
+	}
+	if cfg.ProfileDir != "/tmp/mongo-gateway-bench-profiles" {
+		t.Fatalf("ProfileDir=%q", cfg.ProfileDir)
+	}
+	if cfg.ProfileBlockRate != 7 {
+		t.Fatalf("ProfileBlockRate=%d want 7", cfg.ProfileBlockRate)
+	}
+	if cfg.ProfileMutexFraction != 11 {
+		t.Fatalf("ProfileMutexFraction=%d want 11", cfg.ProfileMutexFraction)
+	}
+	if !cfg.ProfileTrace {
+		t.Fatal("ProfileTrace=false want true")
+	}
+	if !cfg.ProfileHeapGC {
+		t.Fatal("ProfileHeapGC=false want true")
+	}
+	if _, err := parseConfig([]string{"-profile-trace"}); err == nil {
+		t.Fatal("profile-trace without profile-dir accepted")
+	}
+	if _, err := parseConfig([]string{"-profile-heap-gc"}); err == nil {
+		t.Fatal("profile-heap-gc without profile-dir accepted")
+	}
+	if _, err := parseConfig([]string{"-profile-block-rate", "-1"}); err == nil {
+		t.Fatal("negative profile-block-rate accepted")
+	}
+	if _, err := parseConfig([]string{"-profile-mutex-fraction", "-1"}); err == nil {
+		t.Fatal("negative profile-mutex-fraction accepted")
+	}
+}
+
+func TestProfileRecorderWritesPhaseArtifactsAndManifest(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := parseConfig([]string{
+		"-profile-dir", dir,
+		"-profile-block-rate", "1",
+		"-profile-mutex-fraction", "1",
+	})
+	if err != nil {
+		t.Fatalf("parse profile config: %v", err)
+	}
+	recorder, err := newProfileRecorder(cfg)
+	if err != nil {
+		t.Fatalf("newProfileRecorder: %v", err)
+	}
+	defer recorder.Close()
+
+	phase, err := recorder.RunPhase("unit phase", func() (phaseResult, error) {
+		var sink uint64
+		deadline := time.Now().Add(25 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			sink++
+		}
+		runtime.KeepAlive(sink)
+		return summarizePhase("unit phase", 1, 1, time.Millisecond, []time.Duration{time.Millisecond}), nil
+	})
+	if err != nil {
+		t.Fatalf("RunPhase: %v", err)
+	}
+	result := &benchmarkResult{
+		Target:        "treedb",
+		Database:      "db",
+		Collection:    "docs",
+		Documents:     1,
+		BatchSize:     1,
+		Phases:        []phaseResult{phase},
+		ProfileDir:    recorder.Dir(),
+		ProfileResult: profileResultFile,
+	}
+	if err := recorder.WriteResult(result); err != nil {
+		t.Fatalf("WriteResult: %v", err)
+	}
+	if err := recorder.WriteManifest(result, nil); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	for _, name := range []string{
+		"unit_phase.cpu.pprof",
+		"unit_phase.heap.pprof",
+		"unit_phase.allocs.pprof",
+		"unit_phase.block.pprof",
+		"unit_phase.mutex.pprof",
+		"unit_phase.goroutine.pprof",
+		profileManifestFile,
+		profileResultFile,
+	} {
+		path := filepath.Join(dir, name)
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat %s: %v", name, err)
+		}
+		if info.Size() == 0 {
+			t.Fatalf("%s is empty", name)
+		}
+		if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+			t.Fatalf("%s permissions=%#o want 0600", name, info.Mode().Perm())
+		}
+	}
+}
+
+func TestProfileRecorderWritesTraceArtifactAndManifest(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := parseConfig([]string{
+		"-profile-dir", dir,
+		"-profile-trace",
+	})
+	if err != nil {
+		t.Fatalf("parse profile config: %v", err)
+	}
+	recorder, err := newProfileRecorder(cfg)
+	if err != nil {
+		t.Fatalf("newProfileRecorder: %v", err)
+	}
+	defer recorder.Close()
+
+	if _, err := recorder.RunPhase("trace phase", func() (phaseResult, error) {
+		time.Sleep(time.Millisecond)
+		return summarizePhase("trace phase", 1, 1, time.Millisecond, []time.Duration{time.Millisecond}), nil
+	}); err != nil {
+		t.Fatalf("RunPhase: %v", err)
+	}
+	if err := recorder.WriteManifest(nil, nil); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	traceName := "trace_phase.trace.out"
+	info, err := os.Stat(filepath.Join(dir, traceName))
+	if err != nil {
+		t.Fatalf("stat trace artifact: %v", err)
+	}
+	if info.Size() == 0 {
+		t.Fatal("trace artifact is empty")
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, profileManifestFile))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var manifest profileManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("unmarshal manifest: %v", err)
+	}
+	if len(manifest.Artifacts) != 1 {
+		t.Fatalf("manifest artifacts=%d want 1", len(manifest.Artifacts))
+	}
+	if manifest.Artifacts[0].Trace != traceName {
+		t.Fatalf("manifest trace=%q want %q", manifest.Artifacts[0].Trace, traceName)
+	}
+}
+
+func TestSanitizeProfileNameAvoidsHiddenArtifacts(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want string
+	}{
+		{name: ".", want: "phase"},
+		{name: ".hidden", want: "hidden"},
+		{name: "..phase", want: "phase"},
+		{name: "load.insert", want: "load.insert"},
+	} {
+		if got := sanitizeProfileName(tc.name); got != tc.want {
+			t.Fatalf("sanitizeProfileName(%q)=%q want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestNewProfileRecorderTightensProfileDirPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("profile directory chmod is not enforced on windows")
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("chmod setup dir: %v", err)
+	}
+	cfg, err := parseConfig([]string{"-profile-dir", dir})
+	if err != nil {
+		t.Fatalf("parse profile config: %v", err)
+	}
+	recorder, err := newProfileRecorder(cfg)
+	if err != nil {
+		t.Fatalf("newProfileRecorder: %v", err)
+	}
+	defer recorder.Close()
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat profile dir: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("profile dir permissions=%#o want 0700", got)
+	}
+}
+
+func TestNewProfileRecorderRejectsNonEmptyProfileDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "stale.cpu.pprof"), []byte("old"), 0o600); err != nil {
+		t.Fatalf("write stale artifact: %v", err)
+	}
+	cfg, err := parseConfig([]string{"-profile-dir", dir})
+	if err != nil {
+		t.Fatalf("parse profile config: %v", err)
+	}
+	recorder, err := newProfileRecorder(cfg)
+	if err == nil {
+		recorder.Close()
+		t.Fatal("newProfileRecorder accepted non-empty profile dir")
+	}
+	if !strings.Contains(err.Error(), "must be empty") {
+		t.Fatalf("newProfileRecorder err=%v want empty-dir error", err)
+	}
+}
+
+func TestCreateProfileFileRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.pprof")
+	if err := os.WriteFile(target, []byte("target"), 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	link := filepath.Join(dir, "link.pprof")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	file, err := createProfileFile(link)
+	if err == nil {
+		_ = file.Close()
+		t.Fatal("createProfileFile accepted symlink")
+	}
+}
+
+func TestCreateProfileFileRejectsExistingRegularFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "existing.pprof")
+	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+		t.Fatalf("write existing file: %v", err)
+	}
+	file, err := createProfileFile(path)
+	if err == nil {
+		_ = file.Close()
+		t.Fatal("createProfileFile accepted existing regular file")
+	}
+}
+
+func TestProfileRecorderManifestRecordsProfileStopError(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := parseConfig([]string{"-profile-dir", dir})
+	if err != nil {
+		t.Fatalf("parse profile config: %v", err)
+	}
+	recorder, err := newProfileRecorder(cfg)
+	if err != nil {
+		t.Fatalf("newProfileRecorder: %v", err)
+	}
+	defer recorder.Close()
+
+	if _, err := recorder.RunPhase("unit phase", func() (phaseResult, error) {
+		if err := os.Mkdir(filepath.Join(dir, "unit_phase.heap.pprof"), 0o700); err != nil {
+			return phaseResult{}, err
+		}
+		return summarizePhase("unit phase", 1, 1, time.Millisecond, []time.Duration{time.Millisecond}), nil
+	}); err == nil {
+		t.Fatal("RunPhase succeeded despite profile artifact write failure")
+	}
+	if err := recorder.WriteManifest(nil, nil); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, profileManifestFile))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var manifest profileManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("unmarshal manifest: %v", err)
+	}
+	if len(manifest.Artifacts) != 1 {
+		t.Fatalf("manifest artifacts=%d want 1", len(manifest.Artifacts))
+	}
+	if manifest.Artifacts[0].Error == "" {
+		t.Fatal("manifest artifact error is empty")
+	}
+	if !strings.Contains(manifest.Artifacts[0].Error, "unit_phase.heap.pprof") {
+		t.Fatalf("manifest artifact error=%q want heap path context", manifest.Artifacts[0].Error)
+	}
+}
+
+func TestProfileRecorderSkipsDisabledBlockAndMutexProfiles(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := parseConfig([]string{
+		"-profile-dir", dir,
+		"-profile-block-rate", "0",
+		"-profile-mutex-fraction", "0",
+	})
+	if err != nil {
+		t.Fatalf("parse profile config: %v", err)
+	}
+	recorder, err := newProfileRecorder(cfg)
+	if err != nil {
+		t.Fatalf("newProfileRecorder: %v", err)
+	}
+	defer recorder.Close()
+
+	if _, err := recorder.RunPhase("unit phase", func() (phaseResult, error) {
+		return summarizePhase("unit phase", 1, 1, time.Millisecond, []time.Duration{time.Millisecond}), nil
+	}); err != nil {
+		t.Fatalf("RunPhase: %v", err)
+	}
+	if err := recorder.WriteManifest(nil, nil); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	for _, name := range []string{
+		"unit_phase.cpu.pprof",
+		"unit_phase.heap.pprof",
+		"unit_phase.allocs.pprof",
+		"unit_phase.goroutine.pprof",
+		profileManifestFile,
+	} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("stat %s: %v", name, err)
+		}
+	}
+	for _, name := range []string{
+		"unit_phase.block.pprof",
+		"unit_phase.mutex.pprof",
+	} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("stat %s err=%v want not-exist", name, err)
+		}
+	}
+}
+
 func TestTreeDBProfileSmokeFastAndWALOnFast(t *testing.T) {
 	if testing.Short() {
 		t.Skip("profile smoke benchmark skipped in short mode")
@@ -539,7 +878,7 @@ func runTreeDBProfileSmoke(t *testing.T, profile treedb.Profile) float64 {
 			t.Errorf("cleanup %s: %v", profile, err)
 		}
 	}()
-	result, err := runBenchmark(context.Background(), cfg, target)
+	result, err := runBenchmark(context.Background(), cfg, target, nil)
 	if err != nil {
 		t.Fatalf("run benchmark for %s: %v", profile, err)
 	}
@@ -586,7 +925,7 @@ func runTreeDBClientModeSmoke(t *testing.T, clientMode string) float64 {
 			t.Errorf("cleanup client mode %s: %v", clientMode, err)
 		}
 	}()
-	result, err := runBenchmark(context.Background(), cfg, target)
+	result, err := runBenchmark(context.Background(), cfg, target, nil)
 	if err != nil {
 		t.Fatalf("run benchmark for client mode %s: %v", clientMode, err)
 	}
