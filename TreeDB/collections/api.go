@@ -3927,6 +3927,10 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondary
 	}
 	defer plan.close()
 	if len(plan.deltaTables) == 0 {
+		if plan.snap != nil {
+			_ = plan.snap.Close()
+			plan.snap = nil
+		}
 		if err := c.withMutationLock(func() error {
 			if err := c.flushBufferedWrites(); err != nil {
 				return err
@@ -4778,6 +4782,9 @@ func (c *Collection) buildRootDescriptorSystemIterator(rootNames []string, baseR
 }
 
 func (c *Collection) buildRootDescriptorSystemDeltaIterator(expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	if c == nil || c.db == nil {
+		return nil, backenddb.ErrClosed
+	}
 	return c.buildRootDescriptorSystemDeltaIteratorForMeta(c.meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs, rootIDs)
 }
 
@@ -4796,6 +4803,9 @@ func (c *Collection) buildRootDescriptorSystemDeltaIteratorForMeta(meta Collecti
 }
 
 func (c *Collection) validateRootDescriptorSystemDelta(expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64) error {
+	if c == nil || c.db == nil {
+		return backenddb.ErrClosed
+	}
 	return c.validateRootDescriptorSystemDeltaForMeta(c.meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs)
 }
 
