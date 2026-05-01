@@ -392,14 +392,14 @@ func (m *CollectionManager) stopUpdateCombiners() {
 	if m == nil {
 		return
 	}
-	m.domainMu.Lock()
+	m.domainMu.RLock()
 	domains := make([]*collectionWriteDomain, 0, len(m.domains))
 	for _, domain := range m.domains {
 		if domain != nil {
 			domains = append(domains, domain)
 		}
 	}
-	m.domainMu.Unlock()
+	m.domainMu.RUnlock()
 	for _, domain := range domains {
 		domain.stopUpdateCombiner()
 	}
@@ -1061,6 +1061,17 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 	if snap == nil {
 		return nil, collectionOptions{}, false, backenddb.ErrClosed
 	}
+	baseSystemRoot := snapshotSystemRoot(snap)
+	baseCommitSeq := snapshotCommitSeq(snap)
+	if catalog := cachedWriteDomainCatalogForStateLocked(domain, baseSystemRoot, baseCommitSeq); catalog != nil {
+		c.rememberCatalog(snap, catalog)
+		_ = snap.Close()
+		options, err := collectionPlannerOptions(catalog.meta)
+		if err != nil {
+			return nil, collectionOptions{}, false, err
+		}
+		return catalog, options, len(catalog.meta.Indexes) > 0, nil
+	}
 	name := c.meta.Name
 	if domain.meta.Name != "" {
 		name = domain.meta.Name
@@ -1074,8 +1085,6 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 		_ = snap.Close()
 		return nil, collectionOptions{}, false, errCollectionNotFound
 	}
-	baseSystemRoot := snapshotSystemRoot(snap)
-	baseCommitSeq := snapshotCommitSeq(snap)
 	c.rememberCatalog(snap, catalog)
 	_ = snap.Close()
 
@@ -2478,7 +2487,15 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 			mutationLocked = true
 		}
 		c.meta = meta
-		pin, currentCatalog, err := c.validateInsertBatchPlanAfterPlanningLocked(plannedWithMutationLocked, snap, catalog, meta, rootNames, baseRootIDs, plan)
+		validation := insertBatchValidationContext{
+			snap:        snap,
+			catalog:     catalog,
+			meta:        meta,
+			rootNames:   rootNames,
+			baseRootIDs: baseRootIDs,
+			plan:        plan,
+		}
+		pin, currentCatalog, err := c.validateInsertBatchPlanAfterPlanningLocked(plannedWithMutationLocked, validation)
 		if err != nil {
 			resetCollectionRunTables(plan.runs)
 			return nil, err
@@ -2500,7 +2517,15 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		mutationLocked = true
 	}
 	c.meta = meta
-	pin, currentCatalog, err := c.validateInsertBatchPlanAfterPlanningLocked(plannedWithMutationLocked, snap, catalog, meta, rootNames, baseRootIDs, plan)
+	validation := insertBatchValidationContext{
+		snap:        snap,
+		catalog:     catalog,
+		meta:        meta,
+		rootNames:   rootNames,
+		baseRootIDs: baseRootIDs,
+		plan:        plan,
+	}
+	pin, currentCatalog, err := c.validateInsertBatchPlanAfterPlanningLocked(plannedWithMutationLocked, validation)
 	if err != nil {
 		resetCollectionRunTables(plan.runs)
 		return nil, err
@@ -2572,23 +2597,32 @@ func insertBatchPlanRootNamesAndBaseIDs(plan *insertBatchPlan, catalog *collecti
 	return rootNames, baseRootIDs
 }
 
-func (c *Collection) validateInsertBatchPlanAfterPlanningLocked(plannedWithMutationLocked bool, snap *backenddb.Snapshot, catalog *collectionCatalog, meta CollectionMeta, rootNames []string, baseRootIDs map[string]uint64, plan *insertBatchPlan) (*backenddb.Snapshot, *collectionCatalog, error) {
+type insertBatchValidationContext struct {
+	snap        *backenddb.Snapshot
+	catalog     *collectionCatalog
+	meta        CollectionMeta
+	rootNames   []string
+	baseRootIDs map[string]uint64
+	plan        *insertBatchPlan
+}
+
+func (c *Collection) validateInsertBatchPlanAfterPlanningLocked(plannedWithMutationLocked bool, validation insertBatchValidationContext) (*backenddb.Snapshot, *collectionCatalog, error) {
 	if plannedWithMutationLocked {
-		if err := c.validateInsertBatchPlanWithSnapshotLocked(snap, catalog, meta, rootNames, baseRootIDs, plan); err != nil {
-			_ = snap.Close()
+		if err := c.validateInsertBatchPlanWithSnapshotLocked(validation); err != nil {
+			_ = validation.snap.Close()
 			return nil, nil, err
 		}
-		return snap, catalog, nil
+		return validation.snap, validation.catalog, nil
 	}
-	current, currentCatalog, err := c.validateInsertBatchPlanLocked(meta, rootNames, baseRootIDs, plan)
-	_ = snap.Close()
+	current, currentCatalog, err := c.validateInsertBatchPlanLocked(validation)
+	_ = validation.snap.Close()
 	if err != nil {
 		return nil, nil, err
 	}
 	return current, currentCatalog, nil
 }
 
-func (c *Collection) validateInsertBatchPlanLocked(meta CollectionMeta, rootNames []string, baseRootIDs map[string]uint64, plan *insertBatchPlan) (*backenddb.Snapshot, *collectionCatalog, error) {
+func (c *Collection) validateInsertBatchPlanLocked(validation insertBatchValidationContext) (*backenddb.Snapshot, *collectionCatalog, error) {
 	if c == nil || c.db == nil {
 		return nil, nil, backenddb.ErrClosed
 	}
@@ -2596,7 +2630,7 @@ func (c *Collection) validateInsertBatchPlanLocked(meta CollectionMeta, rootName
 	if current == nil {
 		return nil, nil, backenddb.ErrClosed
 	}
-	catalog, err := loadCollectionCatalog(current, meta.Name)
+	catalog, err := loadCollectionCatalog(current, validation.meta.Name)
 	if err != nil {
 		_ = current.Close()
 		return nil, nil, err
@@ -2605,33 +2639,35 @@ func (c *Collection) validateInsertBatchPlanLocked(meta CollectionMeta, rootName
 		_ = current.Close()
 		return nil, nil, errCollectionNotFound
 	}
-	if err := c.validateInsertBatchPlanWithSnapshotLocked(current, catalog, meta, rootNames, baseRootIDs, plan); err != nil {
+	validation.snap = current
+	validation.catalog = catalog
+	if err := c.validateInsertBatchPlanWithSnapshotLocked(validation); err != nil {
 		_ = current.Close()
 		return nil, nil, err
 	}
 	return current, catalog, nil
 }
 
-func (c *Collection) validateInsertBatchPlanWithSnapshotLocked(snap *backenddb.Snapshot, catalog *collectionCatalog, meta CollectionMeta, rootNames []string, baseRootIDs map[string]uint64, plan *insertBatchPlan) error {
-	if c == nil || c.db == nil || snap == nil {
+func (c *Collection) validateInsertBatchPlanWithSnapshotLocked(validation insertBatchValidationContext) error {
+	if c == nil || c.db == nil || validation.snap == nil {
 		return backenddb.ErrClosed
 	}
-	if catalog == nil {
+	if validation.catalog == nil {
 		return errCollectionNotFound
 	}
-	if !sameCollectionMeta(catalog.meta, meta) {
-		return fmt.Errorf("collections: concurrent schema modification detected for %q", meta.Name)
+	if !sameCollectionMeta(validation.catalog.meta, validation.meta) {
+		return fmt.Errorf("collections: concurrent schema modification detected for %q", validation.meta.Name)
 	}
-	for _, rootName := range rootNames {
-		want, ok := baseRootIDs[rootName]
+	for _, rootName := range validation.rootNames {
+		want, ok := validation.baseRootIDs[rootName]
 		if !ok {
-			return fmt.Errorf("collections: insert plan missing base root id for %q", rootName)
+			return fmt.Errorf("collections: insert plan missing base root id for collection %q root %q", validation.meta.Name, rootName)
 		}
-		if got := catalog.rootID(rootName); got != want {
-			return errConcurrentRootModification(meta.Name, rootName)
+		if got := validation.catalog.rootID(rootName); got != want {
+			return errConcurrentRootModification(validation.meta.Name, rootName)
 		}
 	}
-	return plan.checkPersistedConflicts(snap, catalog)
+	return validation.plan.checkPersistedConflicts(validation.snap, validation.catalog)
 }
 
 func collectionOptionsWithTrustedBSONDocuments(opts collectionOptions, trusted bool) (collectionOptions, error) {
@@ -3188,7 +3224,9 @@ func (combiner *collectionUpdateCombiner) closeRequests() bool {
 		return false
 	}
 	combiner.stopped = true
-	close(combiner.requests)
+	if combiner.requests != nil {
+		close(combiner.requests)
+	}
 	return true
 }
 
@@ -3826,6 +3864,10 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, requireNoSeco
 		if !changedOne {
 			continue
 		}
+		if len(document) == 0 {
+			_ = snap.Close()
+			return nil, fmt.Errorf("collections: update batch index %d: changed replacement document cannot be empty", i)
+		}
 		if err := validateBSONReplacementPreservesID(entry.Value, document, plannerOptions); err != nil {
 			_ = snap.Close()
 			return nil, fmt.Errorf("collections: update batch index %d: %w", i, err)
@@ -3856,10 +3898,16 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, requireNoSeco
 		}, nil
 	}
 
+	for i, document := range changedDocuments {
+		if _, _, _, err := prepareInsertDocuments([][]byte{document}, plannerOptions); err != nil {
+			_ = snap.Close()
+			return nil, fmt.Errorf("collections: update batch index %d: %w", changed[i].itemIndex, err)
+		}
+	}
 	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments(changedDocuments, plannerOptions)
 	if err != nil {
 		_ = snap.Close()
-		return nil, err
+		return nil, fmt.Errorf("collections: update batch replacement prepare: %w", err)
 	}
 	if len(preparedDocuments) != len(changed) {
 		_ = snap.Close()
