@@ -360,7 +360,9 @@ By default, profiling mode enables block profiling at rate `1` and mutex
 profiling at fraction `5`. Use `-profile-block-rate 0` or
 `-profile-mutex-fraction 0` to disable either profile. Runtime traces are larger
 and are off by default; add `-profile-trace` when scheduler-level detail is
-needed.
+needed. Heap profiles are captured without forcing a garbage collection by
+default so measured phases keep their normal heap state; add `-profile-heap-gc`
+when you specifically want post-GC heap snapshots.
 
 For insert-scaling investigations, run the same command repeatedly with
 `-insert-producers 1`, `2`, `4`, `8`, and `16` while keeping `-documents`,
