@@ -3816,7 +3816,9 @@ func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionU
 		batchCap = 1
 	}
 	batch := acquireCollectionUpdateCombineBatch(batchCap)
-	defer releaseCollectionUpdateCombineBatch(batch)
+	defer func() {
+		releaseCollectionUpdateCombineBatch(batch)
+	}()
 	batch = append(batch, first)
 	for len(batch) < batchCap {
 		select {
