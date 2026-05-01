@@ -830,8 +830,12 @@ func runMongoUpdateCoalescerSequential(batch []mongoUpdateCoalescerRequest) {
 }
 
 func mongoUpdateBatchTouchesSecondaryUniqueIndex(batch []mongoUpdateCoalescerRequest) bool {
+	if len(batch) == 0 || batch[0].col == nil {
+		return false
+	}
+	meta := batch[0].col.Meta()
 	for _, req := range batch {
-		if mongoUpdateTouchesSecondaryUniqueIndex(req.col, req.item) {
+		if mongoUpdateTouchesSecondaryUniqueIndexMeta(meta, req.item) {
 			return true
 		}
 	}
@@ -842,35 +846,27 @@ func mongoUpdateTouchesSecondaryUniqueIndex(col *collections.Collection, update 
 	if col == nil {
 		return false
 	}
-	uniqueFields := collectionSecondaryUniqueIndexFields(col)
-	if len(uniqueFields) == 0 {
+	return mongoUpdateTouchesSecondaryUniqueIndexMeta(col.Meta(), update)
+}
+
+func mongoUpdateTouchesSecondaryUniqueIndexMeta(meta collections.CollectionMeta, update mongoUpdateItem) bool {
+	if !update.setFieldsOK {
+		for _, idx := range meta.Indexes {
+			if idx.Unique {
+				return true
+			}
+		}
 		return false
 	}
-	if !update.setFieldsOK {
-		return true
-	}
-	for field := range update.setFields {
-		if _, unique := uniqueFields[field]; unique {
+	for _, idx := range meta.Indexes {
+		if !idx.Unique {
+			continue
+		}
+		if _, ok := update.setFields[idx.Field]; ok {
 			return true
 		}
 	}
 	return false
-}
-
-func collectionSecondaryUniqueIndexFields(col *collections.Collection) map[string]struct{} {
-	if col == nil {
-		return nil
-	}
-	out := make(map[string]struct{})
-	for _, idx := range col.Meta().Indexes {
-		if idx.Unique {
-			out[idx.Field] = struct{}{}
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 func mongoSetUpdateFields(updateDoc wire.Document) (map[string]struct{}, bool) {

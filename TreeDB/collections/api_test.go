@@ -3979,6 +3979,20 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesDeclinesUniqueUpdat
 	}
 }
 
+func TestEncodedIndexValueSetsEqualIgnoresOrder(t *testing.T) {
+	left := [][]byte{[]byte("s:b"), []byte("s:a")}
+	right := [][]byte{[]byte("s:a"), []byte("s:b")}
+	if !encodedIndexValueSetsEqual(left, right) {
+		t.Fatalf("encodedIndexValueSetsEqual(%q, %q)=false want true", left, right)
+	}
+	if encodedIndexValueSetsEqual(left, [][]byte{[]byte("s:a"), []byte("s:c")}) {
+		t.Fatal("encodedIndexValueSetsEqual matched different value sets")
+	}
+	if encodedIndexValueSetsEqual([][]byte{[]byte("s:a"), []byte("s:a")}, [][]byte{[]byte("s:a"), []byte("s:b")}) {
+		t.Fatal("encodedIndexValueSetsEqual ignored duplicate cardinality")
+	}
+}
+
 func TestCollectionUpdateBatchClonesAliasedReplacements(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

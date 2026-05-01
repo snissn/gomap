@@ -4383,8 +4383,21 @@ func encodedIndexValueSetsEqual(left, right [][]byte) bool {
 	if len(left) != len(right) {
 		return false
 	}
-	for i := range left {
-		if !bytes.Equal(left[i], right[i]) {
+	if len(left) == 0 {
+		return true
+	}
+	used := make([]bool, len(right))
+	for _, leftValue := range left {
+		found := false
+		for i, rightValue := range right {
+			if used[i] || !bytes.Equal(leftValue, rightValue) {
+				continue
+			}
+			used[i] = true
+			found = true
+			break
+		}
+		if !found {
 			return false
 		}
 	}
