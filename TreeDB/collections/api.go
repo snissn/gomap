@@ -5510,7 +5510,7 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	if err != nil {
 		return nil, false, err
 	}
-	bufferedTable, err := bufferedIndexTableLocked(domain, catalog.meta.Name, indexName, prefix)
+	bufferedTable, err := bufferedIndexTableLocked(domain, catalog.meta.Name, indexName, prefix, maxResults)
 	if err != nil {
 		return nil, false, err
 	}
@@ -5541,7 +5541,7 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	return collectMergedCollectionIndexIDs(bufferedIt, persistedIt, prefix, maxResults)
 }
 
-func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, indexName string, prefix []byte) (memtable.Table, error) {
+func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, indexName string, prefix []byte, maxResults int) (memtable.Table, error) {
 	if domain == nil {
 		return nil, nil
 	}
@@ -5556,6 +5556,11 @@ func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, ind
 		return nil, nil
 	}
 	table := newCollectionRunTable(0)
+	liveLimit := 0
+	if maxResults > 0 && maxResults < int(^uint(0)>>1) {
+		liveLimit = maxResults + 1
+	}
+	liveCount := 0
 	it := newBufferedRootRunsIteratorWithDeleted(runs, prefix, prefixEnd(prefix), true)
 	defer func() { _ = it.Close() }()
 	for it.Valid() {
@@ -5567,6 +5572,10 @@ func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, ind
 			table.DeleteSteal(bytes.Clone(key))
 		} else {
 			setCollectionRunValue(table, bytes.Clone(key), nil)
+			liveCount++
+			if liveLimit > 0 && liveCount >= liveLimit {
+				break
+			}
 		}
 		it.Next()
 	}

@@ -1917,6 +1917,49 @@ func TestCollectionIndexedWriteMemtablesFindLimitFiltersOnlyBufferedTombstone(t 
 	}
 }
 
+func TestBufferedIndexTableLockedLimitsLiveMaterialization(t *testing.T) {
+	encoded, err := encodeIndexScalar("hnl")
+	if err != nil {
+		t.Fatalf("encode city: %v", err)
+	}
+	_, prefix, err := appendIndexValuePrefixSlice(nil, encoded)
+	if err != nil {
+		t.Fatalf("index prefix: %v", err)
+	}
+	table := newCollectionRunTable(4)
+	for _, id := range [][]byte{[]byte("u0"), []byte("u1"), []byte("u2"), []byte("u3")} {
+		key, err := indexEntryKey(encoded, id)
+		if err != nil {
+			t.Fatalf("index key %q: %v", id, err)
+		}
+		if bytes.Equal(id, []byte("u0")) {
+			table.DeleteSteal(key)
+		} else {
+			setCollectionRunValue(table, key, nil)
+		}
+	}
+	table.Freeze()
+	domain := &collectionWriteDomain{
+		count: 4,
+		meta:  CollectionMeta{Name: "users"},
+		rootRuns: map[string][]memtable.Table{
+			collectionSecondaryRootName("users", "city"): {table},
+		},
+	}
+
+	buffered, err := bufferedIndexTableLocked(domain, "users", "city", prefix, 1)
+	if err != nil {
+		t.Fatalf("buffered index table: %v", err)
+	}
+	defer resetCollectionRunTable(buffered)
+	if buffered == nil {
+		t.Fatal("buffered index table nil")
+	}
+	if got := buffered.Len(); got != 3 {
+		t.Fatalf("buffered table len=%d want tombstone plus two live rows", got)
+	}
+}
+
 func TestBufferedRootRunsIteratorSingleRunHidesTombstones(t *testing.T) {
 	table := newCollectionRunTable(2)
 	table.DeleteSteal([]byte("a"))
