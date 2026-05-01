@@ -11,7 +11,7 @@ func Selected(stats map[string]string) map[string]string {
 	}
 	out := make(map[string]string)
 	for key, value := range stats {
-		if IsSelectedKey(key) {
+		if isSelectedKey(key) {
 			out[key] = value
 		}
 	}
@@ -21,7 +21,7 @@ func Selected(stats map[string]string) map[string]string {
 	return out
 }
 
-func IsSelectedKey(key string) bool {
+func isSelectedKey(key string) bool {
 	switch {
 	case key == "treedb.commit_seq":
 		return true

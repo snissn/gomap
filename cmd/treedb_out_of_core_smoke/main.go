@@ -1317,10 +1317,10 @@ func validateSmokeRun(run *smokeRun) []guardrailCheck {
 	}
 	for _, row := range run.Results {
 		subject := row.ConfigName + "/" + row.WorkloadName
-		if strings.TrimSpace(row.Shape) == "" {
+		shape := strings.TrimSpace(row.Shape)
+		if shape == "" {
 			checks = append(checks, guardrailCheck{Severity: "error", Code: "missing_shape_label", Subject: subject, Message: "result row is missing raw/collection/Mongo shape label"})
-		}
-		if row.Shape != "raw" && row.Shape != "collection" && row.Shape != "mongo" {
+		} else if shape != "raw" && shape != "collection" && shape != "mongo" {
 			checks = append(checks, guardrailCheck{Severity: "error", Code: "invalid_shape_label", Subject: subject, Message: fmt.Sprintf("result row has unsupported shape label %q", row.Shape)})
 		}
 		if row.ItemCount <= 0 {
@@ -1336,7 +1336,7 @@ func validateSmokeRun(run *smokeRun) []guardrailCheck {
 				budget := maxInt64(row.Budgets.CacheBudgetBytes, row.Budgets.RetiredMmapBudgetBytes)
 				if budget <= 0 {
 					checks = append(checks, guardrailCheck{Severity: "error", Code: "missing_budget", Subject: subject, Message: "pressure/out-of-core guardrail row is missing configured budget bytes"})
-				} else if *row.TotalBytes <= uint64(budget*2) {
+				} else if datasetDoesNotExceedDoubleBudget(*row.TotalBytes, budget) {
 					checks = append(checks, guardrailCheck{Severity: "warning", Code: "dataset_not_larger_than_budget", Subject: subject, Message: fmt.Sprintf("dataset bytes %d do not exceed the largest configured budget %d by more than 2x", *row.TotalBytes, budget)})
 				}
 			}
@@ -1358,6 +1358,15 @@ func validateSmokeRun(run *smokeRun) []guardrailCheck {
 		checks = append(checks, guardrailCheck{Severity: "pass", Code: "ok", Message: "all out-of-core smoke guardrails passed"})
 	}
 	return checks
+}
+
+func datasetDoesNotExceedDoubleBudget(total uint64, budget int64) bool {
+	if budget <= 0 {
+		return false
+	}
+	// budget is positive int64, so doubling after conversion cannot overflow
+	// uint64: 2*math.MaxInt64 == math.MaxUint64-1.
+	return total <= uint64(budget)*2
 }
 
 func mixesRawAndCollectionWithoutLabels(rows []resultRow) bool {
