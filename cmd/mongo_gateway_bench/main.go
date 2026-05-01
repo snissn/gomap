@@ -35,6 +35,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
+const defaultMongoDriverMaxPoolSize = 100
+
 type config struct {
 	Target                      string
 	MongoURI                    string
@@ -438,8 +440,12 @@ func parseConfig(args []string) (config, error) {
 	if cfg.MongoMaxPoolSize < 0 || cfg.MongoMinPoolSize < 0 || cfg.MongoMaxConnecting < 0 {
 		return config{}, errors.New("MongoDB pool option values cannot be negative")
 	}
-	if cfg.MongoMaxPoolSize > 0 && cfg.MongoMinPoolSize > cfg.MongoMaxPoolSize {
-		return config{}, errors.New("mongo-min-pool-size cannot exceed mongo-max-pool-size")
+	mongoMaxPoolSize := cfg.MongoMaxPoolSize
+	if mongoMaxPoolSize == 0 {
+		mongoMaxPoolSize = defaultMongoDriverMaxPoolSize
+	}
+	if cfg.MongoMinPoolSize > mongoMaxPoolSize {
+		return config{}, fmt.Errorf("mongo-min-pool-size cannot exceed mongo-max-pool-size (%d when unset)", defaultMongoDriverMaxPoolSize)
 	}
 	if cfg.Reads < 0 || cfg.RangeReads < 0 || cfg.Updates < 0 || cfg.Deletes < 0 || cfg.ConcurrentReads < 0 || cfg.ConcurrentWrites < 0 {
 		return config{}, errors.New("operation counts cannot be negative")

@@ -361,6 +361,12 @@ func TestParseConfigValidation(t *testing.T) {
 	if _, err := parseConfig([]string{"-mongo-max-pool-size", "4", "-mongo-min-pool-size", "8"}); err == nil {
 		t.Fatal("mongo-min-pool-size greater than mongo-max-pool-size accepted")
 	}
+	if _, err := parseConfig([]string{"-mongo-min-pool-size", "101"}); err == nil {
+		t.Fatal("mongo-min-pool-size greater than default mongo-max-pool-size accepted")
+	}
+	if _, err := parseConfig([]string{"-mongo-min-pool-size", "100"}); err != nil {
+		t.Fatalf("mongo-min-pool-size equal to default mongo-max-pool-size rejected: %v", err)
+	}
 }
 
 func TestRawInsertCommandBuildsBSONCommand(t *testing.T) {
