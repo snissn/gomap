@@ -473,17 +473,18 @@ func phaseMap(phases []phaseResult) map[string]phaseResult {
 
 func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) string {
 	var b strings.Builder
+	hasMongo := hasMongoCells(cells)
 	fmt.Fprintf(&b, "# %s\n\n", cfg.Title)
 	fmt.Fprintf(&b, "- generated_at: `%s`\n", generatedAt.Format(time.RFC3339))
 	fmt.Fprintf(&b, "- matrix: `%s`\n", cfg.MatrixPath)
 	fmt.Fprintf(&b, "- comparison cells: `%d`\n", len(cells))
-	if hasMongoCells(cells) {
+	if hasMongo {
 		fmt.Fprintf(&b, "- targets: `treedb`, `mongo`\n\n")
 	} else {
 		fmt.Fprintf(&b, "- targets: `treedb`\n\n")
 	}
 	b.WriteString("## Highlights\n\n")
-	for _, line := range highlightLines(cells) {
+	for _, line := range highlightLines(cells, hasMongo) {
 		fmt.Fprintf(&b, "- %s\n", line)
 	}
 	b.WriteString("\n")
@@ -533,7 +534,7 @@ func hasMongoCells(cells []cellComparison) bool {
 	return false
 }
 
-func highlightLines(cells []cellComparison) []string {
+func highlightLines(cells []cellComparison, hasMongo bool) []string {
 	var lines []string
 	phaseComparisons := allPhaseComparisons(cells)
 	var bestTreeDB *phaseComparison
@@ -561,7 +562,7 @@ func highlightLines(cells []cellComparison) []string {
 			formatRatio(bestTreeDB.Ratio),
 		))
 	} else {
-		if hasMongoCells(cells) {
+		if hasMongo {
 			lines = append(lines, "No phase in this matrix had TreeDB ahead on ops/sec.")
 		} else {
 			lines = append(lines, "No MongoDB baseline rows were present; ops/sec tables are TreeDB-only.")
@@ -577,7 +578,7 @@ func highlightLines(cells []cellComparison) []string {
 			formatNumber(bestMongo.MongoPhase.OpsPerSecond),
 			formatRatio(bestMongo.Ratio),
 		))
-	} else if hasMongoCells(cells) {
+	} else if hasMongo {
 		lines = append(lines, "No phase in this matrix had MongoDB ahead on ops/sec.")
 	}
 	if cell := largestDiskCell(cells); cell != nil {
@@ -601,8 +602,8 @@ func highlightLines(cells []cellComparison) []string {
 				formatOptionalBytesPerDoc(treePhysical, cell.Key.Documents),
 			))
 		} else {
-			mongoData, _ := mongoDataBytes(cell.Mongo.Result)
-			mongoTotal, _ := mongoDBStatsTotalBytes(cell.Mongo.Result)
+			mongoData, mongoDataOK := mongoDataBytes(cell.Mongo.Result)
+			mongoTotal, mongoTotalOK := mongoDBStatsTotalBytes(cell.Mongo.Result)
 			mongoPhysical := cell.Mongo.Row.PhysicalBytes
 			lines = append(lines, fmt.Sprintf("Largest cell disk: at %d docs / %d indexes / `%s`, %s, TreeDB physical du was %s, MongoDB dbStats dataSize was %s, MongoDB dbStats totalSize was %s, and MongoDB physical du was %s (%s/doc).",
 				cell.Key.Documents,
@@ -610,8 +611,8 @@ func highlightLines(cells []cellComparison) []string {
 				cell.Key.TreeDBConfig,
 				treeSnapshotClause,
 				formatOptionalBytes(treePhysical),
-				formatBytes(mongoData),
-				formatBytes(mongoTotal),
+				formatMeasuredBytes(mongoDataOK, mongoData),
+				formatMeasuredBytes(mongoTotalOK, mongoTotal),
 				formatOptionalBytes(mongoPhysical),
 				formatOptionalBytesPerDoc(mongoPhysical, cell.Key.Documents),
 			))
@@ -644,10 +645,9 @@ func cellDiskScore(cell cellComparison) int64 {
 		}
 	}
 	if cell.Mongo != nil {
-		mongoTotal, _ := mongoDBStatsTotalBytes(cell.Mongo.Result)
 		if cell.Mongo.Row.PhysicalBytes > 0 {
 			score += cell.Mongo.Row.PhysicalBytes
-		} else {
+		} else if mongoTotal, ok := mongoDBStatsTotalBytes(cell.Mongo.Result); ok {
 			score += mongoTotal
 		}
 	}
@@ -663,9 +663,10 @@ func renderDiskTable(b *strings.Builder, cells []cellComparison) {
 		treePhysical := cell.TreeDB.Row.PhysicalBytes
 		hasMongo := cell.Mongo != nil
 		var mongoData, mongoTotal, mongoPhysical int64
+		var mongoDataOK, mongoTotalOK bool
 		if hasMongo {
-			mongoData, _ = mongoDataBytes(cell.Mongo.Result)
-			mongoTotal, _ = mongoDBStatsTotalBytes(cell.Mongo.Result)
+			mongoData, mongoDataOK = mongoDataBytes(cell.Mongo.Result)
+			mongoTotal, mongoTotalOK = mongoDBStatsTotalBytes(cell.Mongo.Result)
 			mongoPhysical = cell.Mongo.Row.PhysicalBytes
 		}
 		fmt.Fprintf(b, "| %d | %d | `%s` | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
@@ -677,11 +678,11 @@ func renderDiskTable(b *strings.Builder, cells []cellComparison) {
 			formatMeasuredBytesPerDoc(treeOK, treeBytes, cell.Key.Documents),
 			formatOptionalBytes(treePhysical),
 			formatOptionalBytesPerDoc(treePhysical, cell.Key.Documents),
-			formatMeasuredBytes(hasMongo, mongoData),
-			formatMeasuredBytes(hasMongo, mongoTotal),
+			formatMeasuredBytes(mongoDataOK, mongoData),
+			formatMeasuredBytes(mongoTotalOK, mongoTotal),
 			formatOptionalBytes(mongoPhysical),
 			formatOptionalBytesPerDoc(mongoPhysical, cell.Key.Documents),
-			formatMeasuredRatio(treeOK && hasMongo, treeBytes, mongoTotal),
+			formatMeasuredRatio(treeOK && mongoTotalOK, treeBytes, mongoTotal),
 			formatRatio(safeRatio(float64(treePhysical), float64(mongoPhysical))),
 		)
 	}
@@ -800,9 +801,10 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 		treePhysical := cell.TreeDB.Row.PhysicalBytes
 		hasMongo := cell.Mongo != nil
 		var mongoData, mongoTotal, mongoPhysical int64
+		var mongoDataOK, mongoTotalOK bool
 		if hasMongo {
-			mongoData, _ = mongoDataBytes(cell.Mongo.Result)
-			mongoTotal, _ = mongoDBStatsTotalBytes(cell.Mongo.Result)
+			mongoData, mongoDataOK = mongoDataBytes(cell.Mongo.Result)
+			mongoTotal, mongoTotalOK = mongoDBStatsTotalBytes(cell.Mongo.Result)
 			mongoPhysical = cell.Mongo.Row.PhysicalBytes
 		}
 		sampledRatio := safeRatio(cmp.TreeDBPhase.SampledOpsPerSecond, cmp.MongoPhase.SampledOpsPerSecond)
@@ -828,10 +830,10 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 			treeSnapshot,
 			formatRawInt(treeOK, treeBytes),
 			strconv.FormatInt(treePhysical, 10),
-			formatRawInt(hasMongo, mongoData),
-			formatRawInt(hasMongo, mongoTotal),
+			formatRawInt(mongoDataOK, mongoData),
+			formatRawInt(mongoTotalOK, mongoTotal),
 			formatRawInt(hasMongo, mongoPhysical),
-			formatRawMeasuredRatio(treeOK && hasMongo, treeBytes, mongoTotal),
+			formatRawMeasuredRatio(treeOK && mongoTotalOK, treeBytes, mongoTotal),
 			formatRawRatio(safeRatio(float64(treePhysical), float64(mongoPhysical))),
 		}
 		if err := writer.Write(row); err != nil {

@@ -1795,6 +1795,7 @@ func appendTreeDBMaintenanceStep(ctx context.Context, target *benchTarget, resul
 		if err := target.db.Checkpoint(); err != nil {
 			return fmt.Errorf("checkpoint after %s: %w", name, err)
 		}
+		result.TreeDBStatsFinal = selectedTreeDBStats(target.db.Stats())
 	}
 	snapshot, err := collectDiskSnapshot(target.treedbDir)
 	if err != nil {
@@ -2438,35 +2439,46 @@ func writeDiskSnapshot(out io.Writer, label string, snapshot *diskSnapshot) {
 	fmt.Fprintln(out)
 }
 
-var selectedTreeDBStatKeys = [...]string{
+var selectedTreeDBExactStatKeys = [...]string{
 	"treedb.commit_seq",
-	"treedb.publish.ordered_root_delta_group.calls_total",
-	"treedb.publish.ordered_root_delta_group.errors_total",
-	"treedb.publish.ordered_root_delta_group.roots_total",
-	"treedb.publish.ordered_root_delta_group.avg_roots_per_call",
-	"treedb.publish.ordered_root_delta_group.write_lock_wait_ns_total",
-	"treedb.publish.ordered_root_delta_group.write_lock_hold_ns_total",
-	"treedb.publish.ordered_root_delta_group.write_lock_wait_share_pct",
-	"treedb.publish.ordered_root_delta_group.latency_p99_ms",
-	"treedb.publish.ordered_root_delta_group.latency_max_ms",
-	"treedb.publish.watermark.lock_delay_share_pct",
-	"treedb.publish.watermark.latency_p99_ms",
+}
+
+var selectedTreeDBStatPrefixes = [...]string{
+	"treedb.publish.ordered_root_delta_group.",
+	"treedb.publish.watermark.",
 }
 
 var warnMissingTreeDBStatKeysOnce sync.Once
+
+func isSelectedTreeDBStatKey(key string) bool {
+	for _, exact := range selectedTreeDBExactStatKeys {
+		if key == exact {
+			return true
+		}
+	}
+	for _, prefix := range selectedTreeDBStatPrefixes {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
+}
 
 func selectedTreeDBStats(stats map[string]string) map[string]string {
 	if len(stats) == 0 {
 		return nil
 	}
-	out := make(map[string]string, len(selectedTreeDBStatKeys))
+	out := make(map[string]string)
 	missing := make([]string, 0)
-	for _, key := range selectedTreeDBStatKeys {
-		if value, ok := stats[key]; ok {
+	for key, value := range stats {
+		if isSelectedTreeDBStatKey(key) {
 			out[key] = value
-			continue
 		}
-		missing = append(missing, key)
+	}
+	for _, key := range selectedTreeDBExactStatKeys {
+		if _, ok := stats[key]; !ok {
+			missing = append(missing, key)
+		}
 	}
 	if len(missing) > 0 {
 		warnMissingTreeDBStatKeysOnce.Do(func() {
@@ -2483,8 +2495,15 @@ func writeTreeDBStats(out io.Writer, label string, stats map[string]string) {
 	if len(stats) == 0 {
 		return
 	}
+	keys := make([]string, 0, len(stats))
+	for key := range stats {
+		if isSelectedTreeDBStatKey(key) {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
 	wroteAny := false
-	for _, key := range selectedTreeDBStatKeys {
+	for _, key := range keys {
 		if value, ok := stats[key]; ok {
 			if !wroteAny {
 				fmt.Fprintf(out, "%s", label)

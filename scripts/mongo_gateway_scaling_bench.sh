@@ -306,7 +306,14 @@ run_bench() {
   local concurrent_writes=$7
   shift 7
 
-  local bench_args=(
+  if [[ "$PREBUILD_DOCUMENTS" == "true" ]]; then
+    set -- -prebuild-documents "$@"
+  fi
+  if [[ "$UPDATE_INDEXED_FIELD" == "true" ]]; then
+    set -- -update-indexed-field "$@"
+  fi
+
+  "$BENCH_BIN" \
     -target "$target" \
     -database "$database" \
     -collection "$COLLECTION" \
@@ -326,17 +333,8 @@ run_bench() {
     -concurrent-writes "$concurrent_writes" \
     -secondary-indexes "$INDEXES" \
     -timeout "$TIMEOUT" \
-    -format json
-  )
-  if [[ "$PREBUILD_DOCUMENTS" == "true" ]]; then
-    bench_args+=(-prebuild-documents)
-  fi
-  if [[ "$UPDATE_INDEXED_FIELD" == "true" ]]; then
-    bench_args+=(-update-indexed-field)
-  fi
-  bench_args+=("$@")
-
-  "$BENCH_BIN" "${bench_args[@]}" >"$raw_json"
+    -format json \
+    "$@" >"$raw_json"
 }
 
 printf "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n" >"$MATRIX"
@@ -395,17 +393,25 @@ for readers in $READERS_LIST; do
   run_cell "readers_${readers}" "$readers" "$CONCURRENT_READS" 0 0
 done
 
-report_args=()
+report_extra=""
 if [[ "$INCLUDE_MONGO" != "1" ]]; then
-  report_args=(-allow-incomplete)
+  report_extra="-allow-incomplete"
 fi
 
-"$REPORT_BIN" \
-  -matrix "$MATRIX" \
-  -report "$REPORT" \
-  -summary "$SUMMARY" \
-  -title "$TITLE" \
-  "${report_args[@]}"
+if [[ -n "$report_extra" ]]; then
+  "$REPORT_BIN" \
+    -matrix "$MATRIX" \
+    -report "$REPORT" \
+    -summary "$SUMMARY" \
+    -title "$TITLE" \
+    "$report_extra"
+else
+  "$REPORT_BIN" \
+    -matrix "$MATRIX" \
+    -report "$REPORT" \
+    -summary "$SUMMARY" \
+    -title "$TITLE"
+fi
 
 cat >"$README" <<EOF
 # Mongo Gateway Scaling Bundle
@@ -441,7 +447,7 @@ GOWORK=off go run ./cmd/mongo_gateway_compare_report \\
   -report "$REPORT" \\
   -summary "$SUMMARY" \\
   -title "$TITLE" \\
-  ${report_args[*]}
+  $report_extra
 \`\`\`
 EOF
 

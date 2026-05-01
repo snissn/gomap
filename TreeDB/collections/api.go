@@ -38,6 +38,7 @@ const (
 	DefaultIndexedWriteMemtableDirectBatchDocuments = DefaultIndexedWriteMemtableMaxDocuments / 4
 	defaultCollectionUpdateCombineMaxBatch          = 256
 	collectionUpdateCombineIdleTTL                  = 30 * time.Second
+	collectionUpdateCombinerStopTimeout             = 5 * time.Second
 )
 
 var (
@@ -2977,10 +2978,11 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 // Update applies update to the latest document value and retries if another
 // collection write changes the root before this update publishes.
 //
-// When the collection write domain combines concurrent updates, update may run
-// on an internal combiner goroutine. The callback must not rely on caller
-// goroutine behavior such as recover, runtime.Goexit, or testing.T.Fatal.
-// Callback panics are recovered and returned as errors.
+// Callback panics are recovered and returned as errors in both direct and
+// combined execution. When the collection write domain combines concurrent
+// updates, update may run on an internal combiner goroutine. The callback must
+// not rely on caller goroutine behavior such as recover, runtime.Goexit, or
+// testing.T.Fatal.
 func (c *Collection) Update(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
 	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
 		return false, false, err
@@ -3244,7 +3246,12 @@ func (combiner *collectionUpdateCombiner) stop() {
 	}
 	_ = combiner.closeRequests()
 	if combiner.done != nil {
-		<-combiner.done
+		timer := time.NewTimer(collectionUpdateCombinerStopTimeout)
+		defer timer.Stop()
+		select {
+		case <-combiner.done:
+		case <-timer.C:
+		}
 	}
 }
 
@@ -4691,6 +4698,11 @@ func (c *Collection) validateRootDescriptorSystemDeltaForMeta(meta CollectionMet
 	if c == nil || c.db == nil {
 		return backenddb.ErrClosed
 	}
+	for _, rootName := range rootNames {
+		if _, ok := baseRootIDs[rootName]; !ok {
+			return fmt.Errorf("collections: missing base root for collection %q root %q", meta.Name, rootName)
+		}
+	}
 	currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
 	if currentSystemRoot != expectedSystemRoot || currentCommitSeq != expectedCommitSeq {
 		current := c.db.AcquireSnapshot()
@@ -4709,10 +4721,7 @@ func (c *Collection) validateRootDescriptorSystemDeltaForMeta(meta CollectionMet
 			return fmt.Errorf("collections: concurrent schema modification detected for %q", meta.Name)
 		}
 		for _, rootName := range rootNames {
-			want, ok := baseRootIDs[rootName]
-			if !ok {
-				return fmt.Errorf("collections: missing base root for collection %q root %q", meta.Name, rootName)
-			}
+			want := baseRootIDs[rootName]
 			if got := catalog.rootID(rootName); got != want {
 				return errConcurrentRootModification(meta.Name, rootName)
 			}
