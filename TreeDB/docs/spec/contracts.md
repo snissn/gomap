@@ -144,6 +144,12 @@ Collection root physical policy is explicit per root:
   compressed mode,
 - benchmark artifacts must label the storage-policy cell being measured.
 
+Secondary indexes are typed. Every index definition must declare one of
+`string`, `bool`, `int64`, or `double`; missing or unknown value types are
+schema errors. Ordered secondary keys store the typed value component followed by
+the document ID, so old untyped secondary-index metadata and key layouts are
+intentionally incompatible with this format.
+
 Native collection writes must publish primary, index-state, secondary, and root
 descriptor updates through grouped ordered-root publish primitives. They must not
 route the steady-state runtime path through oracle selectors, detached replay,

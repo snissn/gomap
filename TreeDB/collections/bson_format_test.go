@@ -23,9 +23,9 @@ func TestCollectionBSONFormatStoresNativeBSONAndIndexes(t *testing.T) {
 			DocumentFormat: DocumentFormatBSON,
 		},
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
-			{Name: "age", Field: "age"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+			{Name: "age", Field: "age", ValueType: IndexValueInt64},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -155,8 +155,8 @@ func TestInsertBatchPlannerBSONSkipsIndexStateRun(t *testing.T) {
 	planner := insertBatchPlanner{
 		collection: "users",
 		indexes: []indexDefinition{
-			{name: "email", field: "email", unique: true},
-			{name: "city", field: "city"},
+			{name: "email", field: "email", valueType: IndexValueString, unique: true},
+			{name: "city", field: "city", valueType: IndexValueString},
 		},
 		options: collectionOptions{documentFormat: DocumentFormatBSON},
 	}
@@ -184,10 +184,10 @@ func TestInsertBatchPlannerBSONSkipsIndexStateRun(t *testing.T) {
 
 func TestOrderedIndexStateForDocumentBSONHandlesScalarsAndArrays(t *testing.T) {
 	runtimes := []indexRuntime{
-		{def: indexDefinition{name: "email", field: "email"}, path: []string{"email"}},
-		{def: indexDefinition{name: "age", field: "age"}, path: []string{"age"}},
-		{def: indexDefinition{name: "tag", field: "tags", multiKey: true}, path: []string{"tags"}},
-		{def: indexDefinition{name: "deleted_at", field: "deleted_at"}, path: []string{"deleted_at"}},
+		{def: indexDefinition{name: "email", field: "email", valueType: IndexValueString}, path: []string{"email"}},
+		{def: indexDefinition{name: "age", field: "age", valueType: IndexValueInt64}, path: []string{"age"}},
+		{def: indexDefinition{name: "tag", field: "tags", valueType: IndexValueString, multiKey: true}, path: []string{"tags"}},
+		{def: indexDefinition{name: "deleted_at", field: "deleted_at", valueType: IndexValueString}, path: []string{"deleted_at"}},
 	}
 	doc := mustBSONCollectionDocument(t, bson.D{
 		{Key: "email", Value: "ada@example.com"},
@@ -200,9 +200,12 @@ func TestOrderedIndexStateForDocumentBSONHandlesScalarsAndArrays(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ordered BSON index state: %v", err)
 	}
-	requireOrderedIndexValues(t, state, 0, "s:ada@example.com")
-	requireOrderedIndexValues(t, state, 1, "n:37")
-	requireOrderedIndexValues(t, state, 2, "s:a", "s:b")
+	requireOrderedIndexValues(t, state, 0, mustEncodeTestIndexScalar(t, IndexValueString, "ada@example.com"))
+	requireOrderedIndexValues(t, state, 1, mustEncodeTestIndexScalar(t, IndexValueInt64, int64(37)))
+	requireOrderedIndexValues(t, state, 2,
+		mustEncodeTestIndexScalar(t, IndexValueString, "a"),
+		mustEncodeTestIndexScalar(t, IndexValueString, "b"),
+	)
 	requireOrderedIndexValues(t, state, 3)
 }
 
@@ -219,7 +222,7 @@ func TestCollectionBSONUniqueIndexSkipsNullValues(t *testing.T) {
 		Options: CollectionOptions{
 			DocumentFormat: DocumentFormatBSON,
 		},
-		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -238,14 +241,14 @@ func TestCollectionBSONUniqueIndexSkipsNullValues(t *testing.T) {
 	}
 }
 
-func requireOrderedIndexValues(tb testing.TB, state orderedDocumentIndexState, runtimeIdx int, want ...string) {
+func requireOrderedIndexValues(tb testing.TB, state orderedDocumentIndexState, runtimeIdx int, want ...[]byte) {
 	tb.Helper()
 	got := state.valuesAt(runtimeIdx)
 	if len(got) != len(want) {
 		tb.Fatalf("runtime %d values=%q want %q", runtimeIdx, got, want)
 	}
 	for i := range want {
-		if string(got[i]) != want[i] {
+		if !bytes.Equal(got[i], want[i]) {
 			tb.Fatalf("runtime %d value %d=%q want %q", runtimeIdx, i, got[i], want[i])
 		}
 	}

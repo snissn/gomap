@@ -277,19 +277,25 @@ func TestServerOfficialGoDriverIndexMetadata(t *testing.T) {
 
 	opCtx, opCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer opCancel()
-	coll := client.Database("app").Collection("users")
-	indexName, err := coll.Indexes().CreateOne(opCtx, mongo.IndexModel{
-		Keys:    bson.D{{Key: "email", Value: int32(1)}},
-		Options: options.Index().SetName("email_1").SetUnique(true),
-	})
-	if err != nil {
+	mongoDB := client.Database("app")
+	coll := mongoDB.Collection("users")
+	if err := mongoDB.RunCommand(opCtx, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+			{Key: "treedbValueType", Value: "string"},
+			{Key: "unique", Value: true},
+		}}},
+	}).Err(); err != nil {
 		t.Fatalf("driver create index: %v", err)
 	}
+	indexName := "email_1"
 	if indexName != "email_1" {
 		t.Fatalf("created index name=%q want email_1", indexName)
 	}
 
-	names, err := client.Database("app").ListCollectionNames(opCtx, bson.D{})
+	names, err := mongoDB.ListCollectionNames(opCtx, bson.D{})
 	if err != nil {
 		t.Fatalf("driver list collection names: %v", err)
 	}
@@ -381,11 +387,16 @@ func TestServerOfficialGoDriverFindPlanner(t *testing.T) {
 
 	opCtx, opCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer opCancel()
-	coll := client.Database("app").Collection("users")
-	if _, err := coll.Indexes().CreateOne(opCtx, mongo.IndexModel{
-		Keys:    bson.D{{Key: "city", Value: int32(1)}},
-		Options: options.Index().SetName("city_1"),
-	}); err != nil {
+	mongoDB := client.Database("app")
+	coll := mongoDB.Collection("users")
+	if err := mongoDB.RunCommand(opCtx, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+			{Key: "name", Value: "city_1"},
+			{Key: "treedbValueType", Value: "string"},
+		}}},
+	}).Err(); err != nil {
 		t.Fatalf("driver create city index: %v", err)
 	}
 	docs := []any{

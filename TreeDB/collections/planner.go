@@ -22,7 +22,7 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-const documentIndexStateVersion = 1
+const documentIndexStateVersion = 2
 
 const (
 	// Most benchmarked scalar index values are short strings ("city-00",
@@ -64,6 +64,7 @@ type collectionOptions struct {
 type indexDefinition struct {
 	name          string
 	field         string
+	valueType     IndexValueType
 	unique        bool
 	multiKey      bool
 	storagePolicy backenddb.OrderedRootStoragePolicy
@@ -99,11 +100,12 @@ type insertBatchPlanStats struct {
 }
 
 type collectionRootRun struct {
-	name          string
-	kind          collectionRootKind
-	indexName     string
-	table         memtable.Table
-	storagePolicy backenddb.OrderedRootStoragePolicy
+	name           string
+	kind           collectionRootKind
+	indexName      string
+	indexValueType IndexValueType
+	table          memtable.Table
+	storagePolicy  backenddb.OrderedRootStoragePolicy
 }
 
 type collectionUniqueProbeRun struct {
@@ -437,6 +439,11 @@ func (p insertBatchPlanner) indexRuntimes() ([]indexRuntime, error) {
 		if idx.field == "" {
 			return nil, fmt.Errorf("collections: index %q field cannot be empty", idx.name)
 		}
+		valueType, err := normalizeIndexValueType(idx.valueType)
+		if err != nil {
+			return nil, fmt.Errorf("collections: index %q value_type: %w", idx.name, err)
+		}
+		idx.valueType = valueType
 		if _, exists := seen[idx.name]; exists {
 			return nil, fmt.Errorf("collections: duplicate index %q", idx.name)
 		}
@@ -517,7 +524,7 @@ func buildUniqueProbeRuns(candidates []uniqueProbeCandidate) ([]collectionUnique
 func estimateUniqueProbePrefixBytes(candidates []uniqueProbeCandidate) int {
 	total := 0
 	for _, candidate := range candidates {
-		add := 2 + len(candidate.encodedValue)
+		add := len(candidate.encodedValue)
 		if add > indexEncodeArenaMaxInitialBytes-total {
 			return indexEncodeArenaMaxInitialBytes
 		}
@@ -740,11 +747,12 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 			}
 			table.Freeze()
 			plan.runs = append(plan.runs, collectionRootRun{
-				name:          p.collection + "/index/" + runtime.def.name,
-				kind:          collectionRootSecondary,
-				indexName:     runtime.def.name,
-				table:         table,
-				storagePolicy: runtime.def.storagePolicy,
+				name:           p.collection + "/index/" + runtime.def.name,
+				kind:           collectionRootSecondary,
+				indexName:      runtime.def.name,
+				indexValueType: runtime.def.valueType,
+				table:          table,
+				storagePolicy:  runtime.def.storagePolicy,
 			})
 			runStats.Build = time.Since(runStart)
 			plan.stats.SecondaryRuns = append(plan.stats.SecondaryRuns, runStats)
@@ -758,11 +766,12 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 			return err
 		} else if ok {
 			plan.runs = append(plan.runs, collectionRootRun{
-				name:          p.collection + "/index/" + runtime.def.name,
-				kind:          collectionRootSecondary,
-				indexName:     runtime.def.name,
-				table:         table,
-				storagePolicy: runtime.def.storagePolicy,
+				name:           p.collection + "/index/" + runtime.def.name,
+				kind:           collectionRootSecondary,
+				indexName:      runtime.def.name,
+				indexValueType: runtime.def.valueType,
+				table:          table,
+				storagePolicy:  runtime.def.storagePolicy,
 			})
 			runStats.Build = time.Since(runStart)
 			plan.stats.SecondaryRuns = append(plan.stats.SecondaryRuns, runStats)
@@ -799,11 +808,12 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 		}
 		table.Freeze()
 		plan.runs = append(plan.runs, collectionRootRun{
-			name:          p.collection + "/index/" + runtime.def.name,
-			kind:          collectionRootSecondary,
-			indexName:     runtime.def.name,
-			table:         table,
-			storagePolicy: runtime.def.storagePolicy,
+			name:           p.collection + "/index/" + runtime.def.name,
+			kind:           collectionRootSecondary,
+			indexName:      runtime.def.name,
+			indexValueType: runtime.def.valueType,
+			table:          table,
+			storagePolicy:  runtime.def.storagePolicy,
 		})
 		runStats.Build = time.Since(runStart)
 		plan.stats.SecondaryRuns = append(plan.stats.SecondaryRuns, runStats)
@@ -901,7 +911,7 @@ func secondaryEntryOrderStats(items []insertBatchItem, runtimeIdx int, documentI
 			lastValue = encoded
 			lastDocumentID = items[idx].id
 			entryCount++
-			keyBytes += 2 + len(encoded) + len(items[idx].id)
+			keyBytes += len(encoded) + len(items[idx].id)
 		}
 	}
 	return entryCount, keyBytes, alreadySorted, nil
@@ -1046,7 +1056,7 @@ func orderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRunt
 			case 1:
 				var next []byte
 				var err error
-				encoder.buf, next, err = appendIndexScalar(encoder.buf, arr[0])
+				encoder.buf, next, err = appendIndexScalar(encoder.buf, runtime.def.valueType, arr[0])
 				if err != nil {
 					return nil, err
 				}
@@ -1057,7 +1067,7 @@ func orderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRunt
 			for _, scalar := range arr {
 				var next []byte
 				var err error
-				encoder.buf, next, err = appendIndexScalar(encoder.buf, scalar)
+				encoder.buf, next, err = appendIndexScalar(encoder.buf, runtime.def.valueType, scalar)
 				if err != nil {
 					return nil, err
 				}
@@ -1072,7 +1082,7 @@ func orderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRunt
 
 		var next []byte
 		var err error
-		encoder.buf, next, err = appendIndexScalar(encoder.buf, value)
+		encoder.buf, next, err = appendIndexScalar(encoder.buf, runtime.def.valueType, value)
 		if err != nil {
 			return nil, err
 		}
@@ -1148,7 +1158,7 @@ func runtimeRootFieldEqual(runtime indexRuntime, key []byte) bool {
 	return string(key) == runtime.path[0]
 }
 
-func appendJSONParserArrayIndexValues(value []byte, encoder *indexEncodeArena) ([][]byte, error) {
+func appendJSONParserArrayIndexValues(value []byte, valueType IndexValueType, encoder *indexEncodeArena) ([][]byte, error) {
 	var values [][]byte
 	var first []byte
 	count := 0
@@ -1162,7 +1172,7 @@ func appendJSONParserArrayIndexValues(value []byte, encoder *indexEncodeArena) (
 			return
 		}
 		var next []byte
-		encoder.buf, next, encodeErr = appendJSONParserIndexScalar(encoder.buf, elem, dataType)
+		encoder.buf, next, encodeErr = appendJSONParserIndexScalar(encoder.buf, valueType, elem, dataType)
 		if encodeErr != nil {
 			return
 		}
@@ -1201,7 +1211,7 @@ func appendJSONParserIndexValueToState(state orderedDocumentIndexState, runtimeI
 		if !runtime.def.multiKey && !opts.allowArrayValuesInIndex {
 			return errors.New("collections: array value not allowed for index")
 		}
-		encoded, err := appendJSONParserArrayIndexValues(value.raw, encoder)
+		encoded, err := appendJSONParserArrayIndexValues(value.raw, runtime.def.valueType, encoder)
 		if err != nil {
 			return err
 		}
@@ -1214,7 +1224,7 @@ func appendJSONParserIndexValueToState(state orderedDocumentIndexState, runtimeI
 	default:
 		var next []byte
 		var err error
-		encoder.buf, next, err = appendJSONParserIndexScalar(encoder.buf, value.raw, value.valueType)
+		encoder.buf, next, err = appendJSONParserIndexScalar(encoder.buf, runtime.def.valueType, value.raw, value.valueType)
 		if err != nil {
 			return err
 		}
@@ -1223,61 +1233,54 @@ func appendJSONParserIndexValueToState(state orderedDocumentIndexState, runtimeI
 	}
 }
 
-func appendJSONParserIndexScalar(dst []byte, raw []byte, valueType jsonparser.ValueType) ([]byte, []byte, error) {
+func appendJSONParserIndexScalar(dst []byte, indexValueType IndexValueType, raw []byte, valueType jsonparser.ValueType) ([]byte, []byte, error) {
 	start := len(dst)
-	switch valueType {
-	case jsonparser.String:
-		dst = append(dst, "s:"...)
+	switch indexValueType {
+	case IndexValueString:
+		if valueType != jsonparser.String {
+			return dst, nil, fmt.Errorf("collections: indexed JSON value for type %q must be string, got %s", indexValueType, valueType)
+		}
 		if bytes.IndexByte(raw, '\\') == -1 {
-			dst = append(dst, raw...)
+			dst = appendIndexStringComponent(dst, raw)
 			break
 		}
-		unescaped, err := jsonparser.Unescape(raw, dst[len(dst):cap(dst)])
+		unescaped, err := jsonparser.Unescape(raw, nil)
 		if err != nil {
 			return dst, nil, err
 		}
-		if cap(dst)-len(dst) >= len(raw) {
-			dst = dst[:len(dst)+len(unescaped)]
-		} else {
-			dst = append(dst, unescaped...)
+		dst = appendIndexStringComponent(dst, unescaped)
+	case IndexValueBool:
+		if valueType != jsonparser.Boolean {
+			return dst, nil, fmt.Errorf("collections: indexed JSON value for type %q must be bool, got %s", indexValueType, valueType)
 		}
-	case jsonparser.Boolean:
 		if len(raw) == 4 && raw[0] == 't' && raw[1] == 'r' && raw[2] == 'u' && raw[3] == 'e' {
-			dst = append(dst, "b:1"...)
+			dst = appendIndexBoolComponent(dst, true)
 		} else if len(raw) == 5 && raw[0] == 'f' && raw[1] == 'a' && raw[2] == 'l' && raw[3] == 's' && raw[4] == 'e' {
-			dst = append(dst, "b:0"...)
+			dst = appendIndexBoolComponent(dst, false)
 		} else {
 			return dst, nil, fmt.Errorf("collections: unsupported indexed JSON boolean %q", raw)
 		}
-	case jsonparser.Number:
-		return appendJSONNumberIndexScalar(dst, string(raw))
-	case jsonparser.Null:
-		dst = append(dst, "z:"...)
-	default:
-		return dst, nil, fmt.Errorf("collections: unsupported indexed JSON value type %s", valueType)
-	}
-	return dst, dst[start:len(dst):len(dst)], nil
-}
-
-func appendJSONNumberIndexScalar(dst []byte, raw string) ([]byte, []byte, error) {
-	start := len(dst)
-	if jsonNumberLooksInteger(raw) {
-		num, err := strconv.ParseInt(raw, 10, 64)
-		if err == nil {
-			dst = append(dst, "n:"...)
-			dst = strconv.AppendInt(dst, num, 10)
-			return dst, dst[start:len(dst):len(dst)], nil
+	case IndexValueInt64:
+		if valueType != jsonparser.Number {
+			return dst, nil, fmt.Errorf("collections: indexed JSON value for type %q must be number, got %s", indexValueType, valueType)
 		}
-	}
-	num, err := strconv.ParseFloat(raw, 64)
-	if err != nil || math.IsInf(num, 0) {
+		v, err := parseJSONInt64IndexValue(string(raw))
 		if err != nil {
-			return dst, nil, fmt.Errorf("collections: unsupported indexed JSON number %q: %w", raw, err)
+			return dst, nil, err
 		}
-		return dst, nil, fmt.Errorf("collections: unsupported indexed JSON number %q", raw)
+		dst = appendIndexInt64Component(dst, v)
+	case IndexValueDouble:
+		if valueType != jsonparser.Number {
+			return dst, nil, fmt.Errorf("collections: indexed JSON value for type %q must be number, got %s", indexValueType, valueType)
+		}
+		v, err := parseJSONDoubleIndexValue(string(raw))
+		if err != nil {
+			return dst, nil, err
+		}
+		dst = appendIndexDoubleComponent(dst, v)
+	default:
+		return dst, nil, fmt.Errorf("collections: unsupported index value type %q", indexValueType)
 	}
-	dst = append(dst, "n:"...)
-	dst = strconv.AppendFloat(dst, num, 'g', -1, 64)
 	return dst, dst[start:len(dst):len(dst)], nil
 }
 
@@ -1627,44 +1630,172 @@ func extractIndexPathValue(document any, path []string) (any, bool) {
 	return current, true
 }
 
-func encodeIndexScalar(value any) ([]byte, error) {
-	_, encoded, err := appendIndexScalar(nil, value)
+func encodeIndexScalar(valueType IndexValueType, value any) ([]byte, error) {
+	_, encoded, err := appendIndexScalar(nil, valueType, value)
 	return encoded, err
 }
 
-func appendIndexScalar(dst []byte, value any) ([]byte, []byte, error) {
+func appendIndexScalar(dst []byte, valueType IndexValueType, value any) ([]byte, []byte, error) {
 	start := len(dst)
-	switch v := value.(type) {
-	case string:
-		dst = append(dst, "s:"...)
-		dst = append(dst, v...)
-	case bool:
-		if v {
-			dst = append(dst, "b:1"...)
-		} else {
-			dst = append(dst, "b:0"...)
+	switch valueType {
+	case IndexValueString:
+		v, ok := value.(string)
+		if !ok {
+			return dst, nil, fmt.Errorf("collections: indexed value for type %q must be string, got %T", valueType, value)
 		}
-	case int32:
-		dst = append(dst, "n:"...)
-		dst = strconv.AppendInt(dst, int64(v), 10)
-	case int64:
-		dst = append(dst, "n:"...)
-		dst = strconv.AppendInt(dst, v, 10)
-	case float64:
-		dst = append(dst, "n:"...)
-		dst = strconv.AppendFloat(dst, v, 'g', -1, 64)
-	case json.Number:
-		return appendJSONNumberIndexScalar(dst, v.String())
-	case nil:
-		dst = append(dst, "z:"...)
+		dst = appendIndexStringComponent(dst, []byte(v))
+	case IndexValueBool:
+		v, ok := value.(bool)
+		if !ok {
+			return dst, nil, fmt.Errorf("collections: indexed value for type %q must be bool, got %T", valueType, value)
+		}
+		dst = appendIndexBoolComponent(dst, v)
+	case IndexValueInt64:
+		v, err := indexInt64Value(value)
+		if err != nil {
+			return dst, nil, err
+		}
+		dst = appendIndexInt64Component(dst, v)
+	case IndexValueDouble:
+		v, err := indexDoubleValue(value)
+		if err != nil {
+			return dst, nil, err
+		}
+		dst = appendIndexDoubleComponent(dst, v)
 	default:
-		return dst, nil, fmt.Errorf("collections: unsupported indexed value type %T", value)
+		return dst, nil, fmt.Errorf("collections: unsupported index value type %q", valueType)
 	}
 	return dst, dst[start:len(dst):len(dst)], nil
 }
 
+func appendIndexStringComponent(dst []byte, value []byte) []byte {
+	for _, c := range value {
+		if c == 0x00 {
+			dst = append(dst, 0x00, 0xff)
+			continue
+		}
+		dst = append(dst, c)
+	}
+	return append(dst, 0x00, 0x00)
+}
+
+func appendIndexBoolComponent(dst []byte, value bool) []byte {
+	if value {
+		return append(dst, 0x01)
+	}
+	return append(dst, 0x00)
+}
+
+func appendIndexInt64Component(dst []byte, value int64) []byte {
+	return binary.BigEndian.AppendUint64(dst, uint64(value)^0x8000000000000000)
+}
+
+func appendIndexDoubleComponent(dst []byte, value float64) []byte {
+	switch {
+	case math.IsNaN(value):
+		return append(dst, 0x00)
+	case math.IsInf(value, -1):
+		return append(dst, 0x01)
+	case math.IsInf(value, 1):
+		return append(dst, 0x03)
+	default:
+		if value == 0 {
+			value = 0
+		}
+		dst = append(dst, 0x02)
+		return binary.BigEndian.AppendUint64(dst, sortableFloat64Bits(value))
+	}
+}
+
+func sortableFloat64Bits(value float64) uint64 {
+	bits := math.Float64bits(value)
+	if bits&(1<<63) != 0 {
+		return ^bits
+	}
+	return bits ^ (1 << 63)
+}
+
+func indexInt64Value(value any) (int64, error) {
+	switch v := value.(type) {
+	case int32:
+		return int64(v), nil
+	case int64:
+		return v, nil
+	case json.Number:
+		return parseJSONInt64IndexValue(v.String())
+	default:
+		return 0, fmt.Errorf("collections: indexed value for type %q must be int64-compatible, got %T", IndexValueInt64, value)
+	}
+}
+
+func parseJSONInt64IndexValue(raw string) (int64, error) {
+	if !jsonNumberLooksInteger(raw) {
+		return 0, fmt.Errorf("collections: indexed JSON number %q is not an int64", raw)
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("collections: unsupported indexed JSON int64 %q: %w", raw, err)
+	}
+	return v, nil
+}
+
+func indexDoubleValue(value any) (float64, error) {
+	switch v := value.(type) {
+	case float64:
+		return v, nil
+	case int32:
+		return float64(v), nil
+	case int64:
+		return int64IndexValueAsExactFloat64(v)
+	case json.Number:
+		return parseJSONDoubleIndexValue(v.String())
+	default:
+		return 0, fmt.Errorf("collections: indexed value for type %q must be double-compatible, got %T", IndexValueDouble, value)
+	}
+}
+
+func int64IndexValueAsExactFloat64(value int64) (float64, error) {
+	out := float64(value)
+	roundTrip, err := exactFloat64AsInt64(out)
+	if err != nil || roundTrip != value {
+		return 0, fmt.Errorf("collections: indexed int64 %d cannot be represented exactly as double", value)
+	}
+	return out, nil
+}
+
+func exactFloat64AsInt64(value float64) (int64, error) {
+	const int64UpperBoundAsFloat64 = 9223372036854775808.0
+	if math.IsNaN(value) || math.IsInf(value, 0) || math.Trunc(value) != value ||
+		value < -int64UpperBoundAsFloat64 || value >= int64UpperBoundAsFloat64 {
+		return 0, fmt.Errorf("collections: indexed number %v is not an int64", value)
+	}
+	out := int64(value)
+	if float64(out) != value {
+		return 0, fmt.Errorf("collections: indexed number %v is not exactly representable as int64", value)
+	}
+	return out, nil
+}
+
+func parseJSONDoubleIndexValue(raw string) (float64, error) {
+	if jsonNumberLooksInteger(raw) {
+		value, err := parseJSONInt64IndexValue(raw)
+		if err != nil {
+			return 0, err
+		}
+		return int64IndexValueAsExactFloat64(value)
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || math.IsInf(value, 0) {
+		if err != nil {
+			return 0, fmt.Errorf("collections: unsupported indexed JSON double %q: %w", raw, err)
+		}
+		return 0, fmt.Errorf("collections: unsupported indexed JSON double %q", raw)
+	}
+	return value, nil
+}
+
 func indexEntryKey(encodedValue, documentID []byte) ([]byte, error) {
-	key := make([]byte, 0, 2+len(encodedValue)+len(documentID))
+	key := make([]byte, 0, len(encodedValue)+len(documentID))
 	key, out, err := appendIndexEntryKey(key, encodedValue, documentID)
 	if err != nil {
 		return nil, err
@@ -1674,26 +1805,17 @@ func indexEntryKey(encodedValue, documentID []byte) ([]byte, error) {
 
 func appendIndexEntryKey(dst, encodedValue, documentID []byte) ([]byte, []byte, error) {
 	start := len(dst)
-	dst, err := appendIndexValuePrefix(dst, encodedValue)
-	if err != nil {
-		return dst, nil, err
-	}
+	dst = append(dst, encodedValue...)
 	dst = append(dst, documentID...)
 	return dst, dst[start:len(dst):len(dst)], nil
 }
 
 func indexValuePrefix(encodedValue []byte) ([]byte, error) {
-	_, prefix, err := appendIndexValuePrefixSlice(make([]byte, 0, 2+len(encodedValue)), encodedValue)
+	_, prefix, err := appendIndexValuePrefixSlice(make([]byte, 0, len(encodedValue)), encodedValue)
 	return prefix, err
 }
 
 func compareIndexValuePrefixEncoded(a, b []byte) int {
-	if len(a) < len(b) {
-		return -1
-	}
-	if len(a) > len(b) {
-		return 1
-	}
 	return bytes.Compare(a, b)
 }
 
@@ -1708,7 +1830,6 @@ func appendIndexValuePrefix(out []byte, encodedValue []byte) ([]byte, error) {
 	if len(encodedValue) > 65535 {
 		return nil, errors.New("collections: index key too large")
 	}
-	out = binary.BigEndian.AppendUint16(out, uint16(len(encodedValue)))
 	out = append(out, encodedValue...)
 	return out, nil
 }
@@ -1720,6 +1841,70 @@ func appendIndexValuePrefixSlice(dst []byte, encodedValue []byte) ([]byte, []byt
 		return next, nil, err
 	}
 	return next, next[start:len(next):len(next)], nil
+}
+
+func indexKeyDocumentID(valueType IndexValueType, key []byte) ([]byte, error) {
+	n, err := indexComponentLength(valueType, key)
+	if err != nil {
+		return nil, err
+	}
+	if len(key) == n {
+		return nil, errors.New("collections: malformed secondary index key: missing document id")
+	}
+	return key[n:], nil
+}
+
+func indexComponentLength(valueType IndexValueType, key []byte) (int, error) {
+	switch valueType {
+	case IndexValueString:
+		for i := 0; i < len(key); i++ {
+			if key[i] != 0x00 {
+				continue
+			}
+			if i+1 >= len(key) {
+				return 0, errors.New("collections: malformed string index component")
+			}
+			switch key[i+1] {
+			case 0x00:
+				return i + 2, nil
+			case 0xff:
+				i++
+			default:
+				return 0, errors.New("collections: malformed string index component escape")
+			}
+		}
+		return 0, errors.New("collections: unterminated string index component")
+	case IndexValueBool:
+		if len(key) < 1 {
+			return 0, errors.New("collections: malformed bool index component")
+		}
+		if key[0] != 0x00 && key[0] != 0x01 {
+			return 0, errors.New("collections: malformed bool index component")
+		}
+		return 1, nil
+	case IndexValueInt64:
+		if len(key) < 8 {
+			return 0, errors.New("collections: malformed int64 index component")
+		}
+		return 8, nil
+	case IndexValueDouble:
+		if len(key) < 1 {
+			return 0, errors.New("collections: malformed double index component")
+		}
+		switch key[0] {
+		case 0x00, 0x01, 0x03:
+			return 1, nil
+		case 0x02:
+			if len(key) < 9 {
+				return 0, errors.New("collections: malformed finite double index component")
+			}
+			return 9, nil
+		default:
+			return 0, errors.New("collections: malformed double index component")
+		}
+	default:
+		return 0, fmt.Errorf("collections: unsupported index value type %q", valueType)
+	}
 }
 
 func prefixEnd(prefix []byte) []byte {

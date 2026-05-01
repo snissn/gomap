@@ -96,8 +96,8 @@ func TestCollectionInsertBatchBridge_RoundTripWithSecondaryIndexes(t *testing.T)
 	meta, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	})
 	if err != nil {
@@ -192,8 +192,8 @@ func TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexe
 			IndexStateStoragePolicy: RootStorageCompressed,
 		},
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true, StoragePolicy: RootStorageCompressed},
-			{Name: "city", Field: "city", StoragePolicy: RootStorageCompressed},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true, StoragePolicy: RootStorageCompressed},
+			{Name: "city", Field: "city", ValueType: IndexValueString, StoragePolicy: RootStorageCompressed},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -266,8 +266,8 @@ func TestCollectionValueLogGC_RoundTripWithCompressedSecondaryIndexes(t *testing
 			IndexStateStoragePolicy: RootStorageCompressed,
 		},
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true, StoragePolicy: RootStorageCompressed},
-			{Name: "city", Field: "city", StoragePolicy: RootStorageCompressed},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true, StoragePolicy: RootStorageCompressed},
+			{Name: "city", Field: "city", ValueType: IndexValueString, StoragePolicy: RootStorageCompressed},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -347,8 +347,8 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 			IndexStateStoragePolicy: RootStorageCompressed,
 		},
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true, StoragePolicy: RootStorageCompressed},
-			{Name: "city", Field: "city", StoragePolicy: RootStorageCompressed},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true, StoragePolicy: RootStorageCompressed},
+			{Name: "city", Field: "city", ValueType: IndexValueString, StoragePolicy: RootStorageCompressed},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -435,7 +435,7 @@ func TestCollectionManagerListCollections(t *testing.T) {
 	}
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "orders",
-		Indexes: []IndexDefinition{{Name: "user_id", Field: "user_id"}},
+		Indexes: []IndexDefinition{{Name: "user_id", Field: "user_id", ValueType: IndexValueString}},
 	}); err != nil {
 		t.Fatalf("create orders: %v", err)
 	}
@@ -466,8 +466,8 @@ func TestCollectionInsertBatchStatsExposeIndexRunShape(t *testing.T) {
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -914,8 +914,8 @@ func TestCollectionInsertBatchBridge_IndexedReturnedIDsAreOwned(t *testing.T) {
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -1242,8 +1242,8 @@ func TestCollectionIndexedWriteMemtablesReadUniqueAndFlush(t *testing.T) {
 			BufferedIndexedWrites: true,
 		},
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -1358,7 +1358,7 @@ func TestCollectionIndexedWriteMemtablesReadFlushedDocumentWithBufferedRuns(t *t
 		Options: CollectionOptions{
 			BufferedIndexedWrites: true,
 		},
-		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -1406,7 +1406,7 @@ func TestCollectionIndexedWriteMemtablesDefaultForIndexedSchemas(t *testing.T) {
 	mgr := NewCollectionManager(d)
 	meta, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "users",
-		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	})
 	if err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -1483,7 +1483,7 @@ func TestCollectionIndexedWriteMemtablesPreserveDocumentDefaultWithRootRunLimit(
 		Options: CollectionOptions{
 			BufferedIndexedWriteMaxRootRuns: 8,
 		},
-		Indexes: []IndexDefinition{{Name: "email", Field: "email"}},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
 	})
 	if err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -1509,7 +1509,7 @@ func TestCollectionIndexedWriteMemtablesCanDisableRootRunLimitWithDocumentLimit(
 			BufferedIndexedWriteMaxDocuments: DefaultIndexedWriteMemtableMaxDocuments,
 			BufferedIndexedWriteMaxRootRuns:  0,
 		},
-		Indexes: []IndexDefinition{{Name: "email", Field: "email"}},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
 	})
 	if err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -1553,7 +1553,7 @@ func TestCollectionIndexedWriteMemtablesCanBeDisabled(t *testing.T) {
 		Options: CollectionOptions{
 			DisableIndexedWriteMemtables: true,
 		},
-		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	})
 	if err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -1597,7 +1597,7 @@ func TestCollectionIndexedWriteMemtablesBypassDefaultLargeBatches(t *testing.T) 
 			BufferedIndexedWrites:            true,
 			BufferedIndexedWriteMaxDocuments: DefaultIndexedWriteMemtableMaxDocuments,
 		},
-		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}
 	if !col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableDirectBatchDocuments-1) {
 		t.Fatal("default indexed memtable path bypassed a below-threshold batch")
@@ -1738,7 +1738,7 @@ func TestCollectionIndexedWriteMemtablesReadAfterDomainTableAllocated(t *testing
 		Options: CollectionOptions{
 			BufferedIndexedWrites: true,
 		},
-		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -1791,7 +1791,7 @@ func TestCollectionIndexedWriteMemtablesFindLimitExactBufferedCount(t *testing.T
 		Options: CollectionOptions{
 			BufferedIndexedWrites: true,
 		},
-		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -1843,7 +1843,7 @@ func TestCollectionIndexedWriteMemtablesFindLimitMergesBufferedAndPersistedOrder
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "users",
-		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -1894,7 +1894,7 @@ func TestCollectionIndexedWriteMemtablesFindSkipsBufferedSecondaryTombstone(t *t
 		Options: CollectionOptions{
 			BufferedIndexedWrites: true,
 		},
-		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -1912,7 +1912,7 @@ func TestCollectionIndexedWriteMemtablesFindSkipsBufferedSecondaryTombstone(t *t
 		t.Fatalf("flush persisted rows: %v", err)
 	}
 
-	oldEncoded, err := encodeIndexScalar("hnl")
+	oldEncoded, err := encodeIndexScalar(IndexValueString, "hnl")
 	if err != nil {
 		t.Fatalf("encode old city: %v", err)
 	}
@@ -1920,7 +1920,7 @@ func TestCollectionIndexedWriteMemtablesFindSkipsBufferedSecondaryTombstone(t *t
 	if err != nil {
 		t.Fatalf("old index key: %v", err)
 	}
-	newEncoded, err := encodeIndexScalar("sea")
+	newEncoded, err := encodeIndexScalar(IndexValueString, "sea")
 	if err != nil {
 		t.Fatalf("encode new city: %v", err)
 	}
@@ -1976,7 +1976,7 @@ func TestCollectionIndexedWriteMemtablesFindLimitFiltersOnlyBufferedTombstone(t 
 		Options: CollectionOptions{
 			BufferedIndexedWrites: true,
 		},
-		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -1994,7 +1994,7 @@ func TestCollectionIndexedWriteMemtablesFindLimitFiltersOnlyBufferedTombstone(t 
 		t.Fatalf("flush persisted row: %v", err)
 	}
 
-	encoded, err := encodeIndexScalar("hnl")
+	encoded, err := encodeIndexScalar(IndexValueString, "hnl")
 	if err != nil {
 		t.Fatalf("encode city: %v", err)
 	}
@@ -2024,7 +2024,7 @@ func TestCollectionIndexedWriteMemtablesFindLimitFiltersOnlyBufferedTombstone(t 
 }
 
 func TestBufferedIndexTableLockedLimitsLiveMaterialization(t *testing.T) {
-	encoded, err := encodeIndexScalar("hnl")
+	encoded, err := encodeIndexScalar(IndexValueString, "hnl")
 	if err != nil {
 		t.Fatalf("encode city: %v", err)
 	}
@@ -2067,7 +2067,7 @@ func TestBufferedIndexTableLockedLimitsLiveMaterialization(t *testing.T) {
 }
 
 func TestBufferedIndexTableLockedUsesUniqueValueIndexForMisses(t *testing.T) {
-	hnlEncoded, err := encodeIndexScalar("hnl@example.com")
+	hnlEncoded, err := encodeIndexScalar(IndexValueString, "hnl@example.com")
 	if err != nil {
 		t.Fatalf("encode hnl email: %v", err)
 	}
@@ -2075,7 +2075,7 @@ func TestBufferedIndexTableLockedUsesUniqueValueIndexForMisses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hnl prefix: %v", err)
 	}
-	seaEncoded, err := encodeIndexScalar("sea@example.com")
+	seaEncoded, err := encodeIndexScalar(IndexValueString, "sea@example.com")
 	if err != nil {
 		t.Fatalf("encode sea email: %v", err)
 	}
@@ -2218,7 +2218,7 @@ func TestBufferedRootRunsIteratorMultiRunIncludesNewestTombstone(t *testing.T) {
 }
 
 func TestCollectMergedCollectionIndexIDsSkipsPersistedTombstones(t *testing.T) {
-	encoded, err := encodeIndexScalar("hnl")
+	encoded, err := encodeIndexScalar(IndexValueString, "hnl")
 	if err != nil {
 		t.Fatalf("encode city: %v", err)
 	}
@@ -2254,7 +2254,7 @@ func TestCollectionFindByIndexValueLimitMaxIntDoesNotOverflow(t *testing.T) {
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "users",
-		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -2290,7 +2290,7 @@ func TestCollectionIndexedWriteMemtablesRejectPersistedUniqueConflict(t *testing
 		Options: CollectionOptions{
 			BufferedIndexedWrites: true,
 		},
-		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -2337,8 +2337,8 @@ func TestCollectionIndexedWriteMemtablesAutoFlushMaxDocuments(t *testing.T) {
 			BufferedIndexedWriteMaxDocuments: 2,
 		},
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -2416,7 +2416,7 @@ func TestCollectionIndexedWriteMemtablesAutoFlushMaxBytes(t *testing.T) {
 			BufferedIndexedWrites:        true,
 			BufferedIndexedWriteMaxBytes: 1,
 		},
-		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -2477,7 +2477,7 @@ func TestCollectionIndexedWriteMemtablesAutoFlushMaxRootRuns(t *testing.T) {
 			BufferedIndexedWrites:           true,
 			BufferedIndexedWriteMaxRootRuns: 2,
 		},
-		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -2761,7 +2761,7 @@ func TestCollectionIndexedWriteMemtablesCloseFlushes(t *testing.T) {
 		Options: CollectionOptions{
 			BufferedIndexedWrites: true,
 		},
-		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -2887,7 +2887,7 @@ func TestCollectionSingleInsertBufferedNoIndexRejectsConcurrentSchemaChange(t *t
 	if err != nil {
 		t.Fatalf("open indexer: %v", err)
 	}
-	if _, err := indexer.CreateIndex(IndexDefinition{Name: "email", Field: "email", Unique: true}); err != nil {
+	if _, err := indexer.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}); err != nil {
 		t.Fatalf("create index: %v", err)
 	}
 
@@ -2977,7 +2977,7 @@ func TestRootDescriptorDeltaRejectsConcurrentSchemaChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open indexer: %v", err)
 	}
-	if _, err := indexer.CreateIndex(IndexDefinition{Name: "email", Field: "email"}); err != nil {
+	if _, err := indexer.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString}); err != nil {
 		t.Fatalf("create index: %v", err)
 	}
 
@@ -3031,7 +3031,7 @@ func TestCreateIndexSystemIteratorRejectsConcurrentPrimaryRootChange(t *testing.
 		t.Fatal("missing catalog")
 	}
 	baseMeta := catalog.meta
-	newMeta, normalizedDef, err := addIndexToCollectionMeta(baseMeta, IndexDefinition{Name: "email", Field: "email"})
+	newMeta, normalizedDef, err := addIndexToCollectionMeta(baseMeta, IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString})
 	if err != nil {
 		t.Fatalf("add index metadata: %v", err)
 	}
@@ -3083,7 +3083,7 @@ func TestCollectionInsertBatchBridge_ReopenUsesPersistedRootDescriptors(t *testi
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "users",
-		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -3294,7 +3294,7 @@ func TestCollectionLockAndValidateInsertBatchPlanAllowsDisjointRootDrift(t *test
 		Options: CollectionOptions{
 			DisableIndexedWriteMemtables: true,
 		},
-		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -3578,7 +3578,7 @@ func TestCollectionUpdateBatchRejectsUniqueConflictsWithinBatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open collection: %v", err)
 	}
-	if _, err := col.CreateIndex(IndexDefinition{Name: "email", Field: "email", Unique: true}); err != nil {
+	if _, err := col.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}); err != nil {
 		t.Fatalf("create index: %v", err)
 	}
 	if _, err := col.InsertBatch(
@@ -3669,8 +3669,8 @@ func TestCollectionUpdateCombinerBatchesWhenSecondaryUniqueValuesAreUnchanged(t 
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -4529,7 +4529,7 @@ func TestCollectionUpdateBatchAllowsUniqueHandoff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open collection: %v", err)
 	}
-	if _, err := col.CreateIndex(IndexDefinition{Name: "email", Field: "email", Unique: true}); err != nil {
+	if _, err := col.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}); err != nil {
 		t.Fatalf("create index: %v", err)
 	}
 	if _, err := col.InsertBatch(
@@ -4583,7 +4583,7 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexesDeclinesFreshUniqueCatal
 	if err != nil {
 		t.Fatalf("open fresh collection: %v", err)
 	}
-	if _, err := fresh.CreateIndex(IndexDefinition{Name: "email", Field: "email", Unique: true}); err != nil {
+	if _, err := fresh.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}); err != nil {
 		t.Fatalf("create index: %v", err)
 	}
 
@@ -4620,8 +4620,8 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesBatchesNonUniqueUpd
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -4709,8 +4709,8 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesAppendsToBufferedUp
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -4787,8 +4787,8 @@ func newBufferedUsersUpdateCollection(t *testing.T) (*backenddb.DB, *Collection)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -4908,8 +4908,8 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReadsBufferedAfterR
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -4993,8 +4993,8 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesFlushesUnreadableBu
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create users collection: %v", err)
@@ -5053,8 +5053,8 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReadsBufferedInsert
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -5123,7 +5123,7 @@ func TestCollectionUpdateBatchBuildsPrimaryRunIndexForBufferedPlanning(t *testin
 			BufferedIndexedWrites: true,
 		},
 		Indexes: []IndexDefinition{
-			{Name: "city", Field: "city"},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -5195,7 +5195,7 @@ func TestSnapshotUpdateBatchBufferedReadCachesEmptyPrimaryRunIndex(t *testing.T)
 		Options: CollectionOptions{
 			BufferedIndexedWrites: true,
 		},
-		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}
 	domain := &collectionWriteDomain{
 		loaded:         true,
@@ -5244,8 +5244,8 @@ func TestCollectionUpdateBatchMaintainsBufferedUniqueValueIndex(t *testing.T) {
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -5277,7 +5277,7 @@ func TestCollectionUpdateBatchMaintainsBufferedUniqueValueIndex(t *testing.T) {
 		t.Fatal("update batch was not buffered")
 	}
 
-	encoded, err := encodeIndexScalar("a@example.com")
+	encoded, err := encodeIndexScalar(IndexValueString, "a@example.com")
 	if err != nil {
 		t.Fatalf("encode email: %v", err)
 	}
@@ -5311,7 +5311,7 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesDeclinesUniqueUpdat
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "users",
-		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -5590,7 +5590,7 @@ func TestCollectionUpdateBatchFlushesBufferedIndexedWritesBeforePublish(t *testi
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "users",
-		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -5803,7 +5803,7 @@ func TestCollectionUpdateBatchTemplateV1MaterializesUpdatedDocuments(t *testing.
 		Options: CollectionOptions{
 			DocumentFormat: DocumentFormatTemplateV1,
 		},
-		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -5982,8 +5982,8 @@ func TestCollectionSingleInsertMatchesSingleItemBatch(t *testing.T) {
 	}{
 		{name: "no_index"},
 		{name: "indexed", indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -6063,7 +6063,7 @@ func TestCollectionSingleInsertRejectsUniqueConflictAtomically(t *testing.T) {
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "users",
-		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -6102,7 +6102,7 @@ func TestCollectionSingleDocumentReopenUsesPersistedRootDescriptors(t *testing.T
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "users",
-		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -6173,8 +6173,8 @@ func TestCollectionInsertBatchBridge_AppendsWithoutDroppingExistingRoots(t *test
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -6241,7 +6241,7 @@ func TestCollectionCreateIndexBackfill_BuildsSecondaryAndIndexState(t *testing.T
 		t.Fatalf("insert batch: %v", err)
 	}
 
-	meta, err := col.CreateIndex(IndexDefinition{Name: "city", Field: "city"})
+	meta, err := col.CreateIndex(IndexDefinition{Name: "city", Field: "city", ValueType: IndexValueString})
 	if err != nil {
 		t.Fatalf("create index: %v", err)
 	}
@@ -6303,8 +6303,8 @@ func TestCollectionDropIndexUpdatesSchema(t *testing.T) {
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -6351,7 +6351,7 @@ func TestCollectionDropIndexUpdatesSchema(t *testing.T) {
 	if _, err := reopened.Insert([]byte("u2"), []byte(`{"email":"grace@example.com","city":"sfo"}`)); err != nil {
 		t.Fatalf("insert while city index dropped: %v", err)
 	}
-	if _, err := reopened.CreateIndex(IndexDefinition{Name: "city", Field: "city"}); err != nil {
+	if _, err := reopened.CreateIndex(IndexDefinition{Name: "city", Field: "city", ValueType: IndexValueString}); err != nil {
 		t.Fatalf("recreate city index: %v", err)
 	}
 	if ids, err := reopened.FindByIndex("city", "hnl"); err != nil {
@@ -6395,7 +6395,7 @@ func TestCollectionScanDocumentsAndFindByIndexValue(t *testing.T) {
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "users",
-		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -6463,6 +6463,30 @@ func TestCollectionScanDocumentsAndFindByIndexValue(t *testing.T) {
 	}
 }
 
+func TestCollectionIndexValueTypeIsRequired(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	_, err = mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "value_type is required") {
+		t.Fatalf("missing value type err=%v want value_type is required", err)
+	}
+	_, err = mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueType("dynamic")}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported value_type") {
+		t.Fatalf("unknown value type err=%v want unsupported value_type", err)
+	}
+}
+
 func TestCollectionFindByIndexValueMatchesLargeJSONInteger(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -6473,7 +6497,7 @@ func TestCollectionFindByIndexValueMatchesLargeJSONInteger(t *testing.T) {
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "users",
-		Indexes: []IndexDefinition{{Name: "big", Field: "big"}},
+		Indexes: []IndexDefinition{{Name: "big", Field: "big", ValueType: IndexValueInt64}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -6493,6 +6517,129 @@ func TestCollectionFindByIndexValueMatchesLargeJSONInteger(t *testing.T) {
 	}
 }
 
+func TestCollectionFindByIndexRangeTypedInt64(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "score", Field: "score", ValueType: IndexValueInt64}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2"), []byte("u3"), []byte("u4")},
+		[][]byte{
+			[]byte(`{"score":-10}`),
+			[]byte(`{"score":0}`),
+			[]byte(`{"score":2}`),
+			[]byte(`{"score":10}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	ids, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(0), Inclusive: true},
+		Upper: IndexRangeBound{Value: int64(10), Inclusive: false},
+	})
+	if err != nil {
+		t.Fatalf("find range: %v", err)
+	}
+	if truncated || len(ids) != 2 || !bytes.Equal(ids[0], []byte("u2")) || !bytes.Equal(ids[1], []byte("u3")) {
+		t.Fatalf("ids=%q truncated=%v want u2,u3 false", ids, truncated)
+	}
+
+	ids, truncated, err = col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(0), Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+		Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("find limited range: %v", err)
+	}
+	if !truncated || len(ids) != 1 || !bytes.Equal(ids[0], []byte("u2")) {
+		t.Fatalf("limited ids=%q truncated=%v want u2 true", ids, truncated)
+	}
+	if _, _, err := col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: "0", Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+	}); err == nil || !strings.Contains(err.Error(), "int64-compatible") {
+		t.Fatalf("wrong-type range err=%v want int64-compatible", err)
+	}
+}
+
+func TestCollectionFindByIndexRangeSkipsBufferedTombstone(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "score", Field: "score", ValueType: IndexValueInt64}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"score":5}`), []byte(`{"score":5}`)},
+	); err != nil {
+		t.Fatalf("insert persisted rows: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush persisted rows: %v", err)
+	}
+
+	encoded, err := encodeIndexScalar(IndexValueInt64, int64(5))
+	if err != nil {
+		t.Fatalf("encode score: %v", err)
+	}
+	key, err := indexEntryKey(encoded, []byte("u1"))
+	if err != nil {
+		t.Fatalf("index key: %v", err)
+	}
+	table := newCollectionRunTable(1)
+	table.DeleteSteal(key)
+	table.Freeze()
+	domain := col.writeDomain
+	domain.mu.Lock()
+	domain.count = 1
+	domain.meta = col.Meta()
+	domain.rootRuns = map[string][]memtable.Table{
+		collectionSecondaryRootName("users", "score"): {table},
+	}
+	domain.mu.Unlock()
+
+	ids, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(5), Inclusive: true},
+		Upper: IndexRangeBound{Value: int64(5), Inclusive: true},
+	})
+	if err != nil {
+		t.Fatalf("find range: %v", err)
+	}
+	if truncated || len(ids) != 1 || !bytes.Equal(ids[0], []byte("u2")) {
+		t.Fatalf("ids=%q truncated=%v want u2 false", ids, truncated)
+	}
+}
+
 func TestCollectionCreateIndexBackfill_EmptyCollectionUpdatesSchema(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -6508,7 +6655,7 @@ func TestCollectionCreateIndexBackfill_EmptyCollectionUpdatesSchema(t *testing.T
 	if err != nil {
 		t.Fatalf("open collection: %v", err)
 	}
-	if _, err := col.CreateIndex(IndexDefinition{Name: "city", Field: "city"}); err != nil {
+	if _, err := col.CreateIndex(IndexDefinition{Name: "city", Field: "city", ValueType: IndexValueString}); err != nil {
 		t.Fatalf("create index on empty collection: %v", err)
 	}
 	if _, ok := findIndex(col.Meta().Indexes, "city"); !ok {
@@ -6536,7 +6683,7 @@ func TestCollectionCreateIndexBackfill_PreservesExistingIndexState(t *testing.T)
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "users",
-		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -6553,7 +6700,7 @@ func TestCollectionCreateIndexBackfill_PreservesExistingIndexState(t *testing.T)
 	); err != nil {
 		t.Fatalf("insert batch: %v", err)
 	}
-	if _, err := col.CreateIndex(IndexDefinition{Name: "city", Field: "city"}); err != nil {
+	if _, err := col.CreateIndex(IndexDefinition{Name: "city", Field: "city", ValueType: IndexValueString}); err != nil {
 		t.Fatalf("create city index: %v", err)
 	}
 	if err := col.Delete([]byte("u1")); err != nil {
@@ -6596,7 +6743,7 @@ func TestCollectionCreateIndexBackfill_ReopenUsesPersistedSchemaAndRoots(t *test
 	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
 		t.Fatalf("insert u1: %v", err)
 	}
-	if _, err := col.CreateIndex(IndexDefinition{Name: "email", Field: "email", Unique: true}); err != nil {
+	if _, err := col.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}); err != nil {
 		t.Fatalf("create unique index: %v", err)
 	}
 	if err := d.Close(); err != nil {
@@ -6649,7 +6796,7 @@ func TestCollectionCreateIndexBackfill_RejectsUniqueConflictAtomically(t *testin
 		t.Fatalf("insert duplicate documents before unique index: %v", err)
 	}
 
-	_, err = col.CreateIndex(IndexDefinition{Name: "email", Field: "email", Unique: true})
+	_, err = col.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true})
 	if err == nil || !strings.Contains(err.Error(), "unique index") {
 		t.Fatalf("create unique index err=%v want unique index conflict", err)
 	}
@@ -6675,7 +6822,7 @@ func TestCollectionReplaceRejectsUniqueConflictAtomically(t *testing.T) {
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "users",
-		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -6854,8 +7001,8 @@ func TestCollectionUpdateConcurrentIndexedNoRetryExhaustion(t *testing.T) {
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -7038,8 +7185,8 @@ func TestCollectionUpdateSkipsIndexRootsWhenIndexedValuesUnchanged(t *testing.T)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -7165,7 +7312,7 @@ func TestCollectionInsertBatchBridge_RejectsPersistedUniqueConflictAtomically(t 
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "users",
-		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -7282,8 +7429,8 @@ func TestCollectionDeleteBridge_RemovesPrimaryAndSecondaryEntries(t *testing.T) 
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -7364,7 +7511,7 @@ func TestCollectionDeleteBridge_AllowsUniqueValueReuse(t *testing.T) {
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "users",
-		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -7399,7 +7546,7 @@ func TestCollectionDeleteBridge_ReopenUsesDeletedRootDescriptors(t *testing.T) {
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "users",
-		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}

@@ -359,8 +359,8 @@ func TestServerBSONDefaultStoresNativeBSONAndUpdatesIndexes(t *testing.T) {
 	assertOK(t, serveCommand(t, server, 2261, bson.D{
 		{Key: "createIndexes", Value: "users"},
 		{Key: "indexes", Value: bson.A{
-			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "unique", Value: true}},
-			bson.D{{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}}, {Key: "name", Value: "city_1"}},
+			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"}, {Key: "unique", Value: true}},
+			bson.D{{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}}, {Key: "name", Value: "city_1"}, {Key: "treedbValueType", Value: "string"}},
 		}},
 		{Key: "$db", Value: "app"},
 	}))
@@ -693,7 +693,7 @@ func TestRunMongoUpdateBatchDeclinesFreshSecondaryUniqueIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open fresh collection: %v", err)
 	}
-	if _, err := fresh.CreateIndex(collections.IndexDefinition{Name: "email_1", Field: "email", Unique: true}); err != nil {
+	if _, err := fresh.CreateIndex(collections.IndexDefinition{Name: "email_1", Field: "email", ValueType: collections.IndexValueString, Unique: true}); err != nil {
 		t.Fatalf("create index: %v", err)
 	}
 
@@ -744,8 +744,8 @@ func TestRunMongoUpdateBatchBatchesNonUniqueFieldWithSecondaryUniqueIndex(t *tes
 			DocumentFormat: collections.DocumentFormatBSON,
 		},
 		Indexes: []collections.IndexDefinition{
-			{Name: "email_1", Field: "email", Unique: true},
-			{Name: "city_1", Field: "city"},
+			{Name: "email_1", Field: "email", ValueType: collections.IndexValueString, Unique: true},
+			{Name: "city_1", Field: "city", ValueType: collections.IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -923,7 +923,7 @@ func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterWriteError(t *testin
 	assertOK(t, serveCommand(t, server, 22597, bson.D{
 		{Key: "createIndexes", Value: "users"},
 		{Key: "indexes", Value: bson.A{
-			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "unique", Value: true}},
+			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"}, {Key: "unique", Value: true}},
 		}},
 		{Key: "$db", Value: "app"},
 	}))
@@ -1129,7 +1129,7 @@ func TestMongoUpdateCoalescerUniqueIndexFallsBackToOrderedSingles(t *testing.T) 
 	assertOK(t, serveCommand(t, server, 2266, bson.D{
 		{Key: "createIndexes", Value: "users"},
 		{Key: "indexes", Value: bson.A{
-			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "unique", Value: true}},
+			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"}, {Key: "unique", Value: true}},
 		}},
 		{Key: "$db", Value: "app"},
 	}))
@@ -1194,7 +1194,7 @@ func TestServerUpdateCoalescedSkipsCoalescerForSecondaryUniqueIndex(t *testing.T
 	assertOK(t, serveCommand(t, server, 2270, bson.D{
 		{Key: "createIndexes", Value: "users"},
 		{Key: "indexes", Value: bson.A{
-			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "unique", Value: true}},
+			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"}, {Key: "unique", Value: true}},
 		}},
 		{Key: "$db", Value: "app"},
 	}))
@@ -1337,7 +1337,7 @@ func TestMongoUpdateCoalescerUsesSingleCollection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open users for schema change: %v", err)
 	}
-	if _, err := schemaCol.CreateIndex(collections.IndexDefinition{Name: "email", Field: "email"}); err != nil {
+	if _, err := schemaCol.CreateIndex(collections.IndexDefinition{Name: "email", Field: "email", ValueType: collections.IndexValueString}); err != nil {
 		t.Fatalf("create index: %v", err)
 	}
 	usersAfterSchemaChange, err := manager.OpenCollection("app.users")
@@ -1616,7 +1616,7 @@ func TestServerUpdateWithUniqueIndexKeepsAcquireBeforeReleaseOrdered(t *testing.
 	assertOK(t, serveCommand(t, server, 22601, bson.D{
 		{Key: "createIndexes", Value: "users"},
 		{Key: "indexes", Value: bson.A{
-			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "unique", Value: true}},
+			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"}, {Key: "unique", Value: true}},
 		}},
 		{Key: "$db", Value: "app"},
 	}))
@@ -1729,7 +1729,7 @@ func TestServerIndexMetadataCommands(t *testing.T) {
 		{Key: "createIndexes", Value: "users"},
 		{Key: "indexes", Value: bson.A{bson.D{
 			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
-			{Key: "name", Value: "email_1"},
+			{Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"},
 			{Key: "unique", Value: true},
 		}}},
 		{Key: "$db", Value: "app"},
@@ -1742,7 +1742,7 @@ func TestServerIndexMetadataCommands(t *testing.T) {
 		{Key: "createIndexes", Value: "users"},
 		{Key: "indexes", Value: bson.A{bson.D{
 			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
-			{Key: "name", Value: "email_1"},
+			{Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"},
 			{Key: "unique", Value: true},
 		}}},
 		{Key: "$db", Value: "app"},
@@ -1821,6 +1821,20 @@ func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
 	})
 	assertCommandError(t, emptyName, "BadValue")
 
+	missingValueType := serveCommand(t, server, 2331, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, missingValueType, "BadValue")
+	errmsg, ok := bson.Raw(missingValueType).Lookup("errmsg").StringValueOK()
+	if !ok || !strings.Contains(errmsg, "treedbValueType") {
+		t.Fatalf("missing value type errmsg=%q ok=%v want treedbValueType", errmsg, ok)
+	}
+
 	invalidListCollectionsDB := serveCommand(t, server, 234, bson.D{
 		{Key: "listCollections", Value: int32(1)},
 		{Key: "$db", Value: "bad/name"},
@@ -1839,7 +1853,7 @@ func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
 		{Key: "createIndexes", Value: "dupes"},
 		{Key: "indexes", Value: bson.A{bson.D{
 			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
-			{Key: "name", Value: "email_1"},
+			{Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"},
 			{Key: "unique", Value: true},
 		}}},
 		{Key: "$db", Value: "app"},
@@ -1850,7 +1864,7 @@ func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
 		{Key: "createIndexes", Value: "users"},
 		{Key: "indexes", Value: bson.A{bson.D{
 			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
-			{Key: "name", Value: "city_1"},
+			{Key: "name", Value: "city_1"}, {Key: "treedbValueType", Value: "string"},
 		}}},
 		{Key: "$db", Value: "app"},
 	}))
@@ -1858,7 +1872,7 @@ func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
 		{Key: "createIndexes", Value: "users"},
 		{Key: "indexes", Value: bson.A{bson.D{
 			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
-			{Key: "name", Value: "email_1"},
+			{Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"},
 		}}},
 		{Key: "$db", Value: "app"},
 	}))
@@ -1901,7 +1915,7 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 		{Key: "createIndexes", Value: "users"},
 		{Key: "indexes", Value: bson.A{bson.D{
 			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
-			{Key: "name", Value: "city_1"},
+			{Key: "name", Value: "city_1"}, {Key: "treedbValueType", Value: "string"},
 		}}},
 		{Key: "$db", Value: "app"},
 	}))
@@ -2586,7 +2600,7 @@ func TestServerFindNullEqualityMatchesMissingWithIndex(t *testing.T) {
 		{Key: "createIndexes", Value: "users"},
 		{Key: "indexes", Value: bson.A{bson.D{
 			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
-			{Key: "name", Value: "city_1"},
+			{Key: "name", Value: "city_1"}, {Key: "treedbValueType", Value: "string"},
 		}}},
 		{Key: "$db", Value: "app"},
 	}))
@@ -2745,7 +2759,7 @@ func TestServerFindCapsIndexedCandidates(t *testing.T) {
 		{Key: "createIndexes", Value: "users"},
 		{Key: "indexes", Value: bson.A{bson.D{
 			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
-			{Key: "name", Value: "city_1"},
+			{Key: "name", Value: "city_1"}, {Key: "treedbValueType", Value: "string"},
 		}}},
 		{Key: "$db", Value: "app"},
 	}))
@@ -2848,8 +2862,8 @@ func TestServerFindChoosesNarrowestIndexedPredicate(t *testing.T) {
 	assertOK(t, serveCommand(t, server, 254, bson.D{
 		{Key: "createIndexes", Value: "users"},
 		{Key: "indexes", Value: bson.A{
-			bson.D{{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}}, {Key: "name", Value: "city_1"}},
-			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}},
+			bson.D{{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}}, {Key: "name", Value: "city_1"}, {Key: "treedbValueType", Value: "string"}},
+			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"}},
 		}},
 		{Key: "$db", Value: "app"},
 	}))
@@ -2887,7 +2901,7 @@ func TestServerFindChoosesIndexedPredicateBeforeOversizedPrimaryCandidates(t *te
 		{Key: "createIndexes", Value: "users"},
 		{Key: "indexes", Value: bson.A{bson.D{
 			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
-			{Key: "name", Value: "email_1"},
+			{Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"},
 		}}},
 		{Key: "$db", Value: "app"},
 	}))
@@ -3198,7 +3212,7 @@ func TestServerAppliesDefaultCollectionAndIndexOptions(t *testing.T) {
 		{Key: "createIndexes", Value: "indexed"},
 		{Key: "indexes", Value: bson.A{bson.D{
 			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
-			{Key: "name", Value: "email_1"},
+			{Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"},
 			{Key: "unique", Value: true},
 		}}},
 		{Key: "$db", Value: "app"},

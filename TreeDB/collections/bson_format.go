@@ -2,7 +2,6 @@ package collections
 
 import (
 	"fmt"
-	"math"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -41,7 +40,7 @@ func bsonOrderedIndexStateForDocumentWithArena(document []byte, runtimes []index
 		for _, value := range values {
 			var next []byte
 			var ok bool
-			encoder.buf, next, ok, err = appendBSONIndexScalar(encoder.buf, value)
+			encoder.buf, next, ok, err = appendBSONIndexScalar(encoder.buf, runtime.def.valueType, value)
 			if err != nil {
 				return nil, err
 			}
@@ -119,46 +118,70 @@ func bsonLeafIndexValues(value bson.RawValue) ([]bson.RawValue, bool, bool, erro
 	return values, true, true, nil
 }
 
-func appendBSONIndexScalar(dst []byte, value bson.RawValue) ([]byte, []byte, bool, error) {
-	switch value.Type {
-	case bson.TypeString:
+func appendBSONIndexScalar(dst []byte, valueType IndexValueType, value bson.RawValue) ([]byte, []byte, bool, error) {
+	if value.Type == bson.TypeNull {
+		return dst, nil, false, nil
+	}
+	start := len(dst)
+	switch valueType {
+	case IndexValueString:
 		out, ok := value.StringValueOK()
 		if !ok {
-			return dst, nil, false, fmt.Errorf("collections: invalid indexed BSON string")
+			return dst, nil, false, fmt.Errorf("collections: indexed BSON value for type %q must be string, got %s", valueType, value.Type)
 		}
-		dst, encoded, err := appendIndexScalar(dst, out)
-		return dst, encoded, true, err
-	case bson.TypeBoolean:
+		dst = appendIndexStringComponent(dst, []byte(out))
+	case IndexValueBool:
 		out, ok := value.BooleanOK()
 		if !ok {
-			return dst, nil, false, fmt.Errorf("collections: invalid indexed BSON boolean")
+			return dst, nil, false, fmt.Errorf("collections: indexed BSON value for type %q must be bool, got %s", valueType, value.Type)
 		}
-		dst, encoded, err := appendIndexScalar(dst, out)
-		return dst, encoded, true, err
-	case bson.TypeDouble:
-		out, ok := value.DoubleOK()
-		if !ok || math.IsNaN(out) || math.IsInf(out, 0) {
-			return dst, nil, false, fmt.Errorf("collections: unsupported indexed BSON double")
+		dst = appendIndexBoolComponent(dst, out)
+	case IndexValueInt64:
+		switch value.Type {
+		case bson.TypeInt32:
+			out, ok := value.Int32OK()
+			if !ok {
+				return dst, nil, false, fmt.Errorf("collections: invalid indexed BSON int32")
+			}
+			dst = appendIndexInt64Component(dst, int64(out))
+		case bson.TypeInt64:
+			out, ok := value.Int64OK()
+			if !ok {
+				return dst, nil, false, fmt.Errorf("collections: invalid indexed BSON int64")
+			}
+			dst = appendIndexInt64Component(dst, out)
+		default:
+			return dst, nil, false, fmt.Errorf("collections: indexed BSON value for type %q must be int32/int64, got %s", valueType, value.Type)
 		}
-		dst, encoded, err := appendIndexScalar(dst, out)
-		return dst, encoded, true, err
-	case bson.TypeInt32:
-		out, ok := value.Int32OK()
-		if !ok {
-			return dst, nil, false, fmt.Errorf("collections: invalid indexed BSON int32")
+	case IndexValueDouble:
+		switch value.Type {
+		case bson.TypeDouble:
+			out, ok := value.DoubleOK()
+			if !ok {
+				return dst, nil, false, fmt.Errorf("collections: invalid indexed BSON double")
+			}
+			dst = appendIndexDoubleComponent(dst, out)
+		case bson.TypeInt32:
+			out, ok := value.Int32OK()
+			if !ok {
+				return dst, nil, false, fmt.Errorf("collections: invalid indexed BSON int32")
+			}
+			dst = appendIndexDoubleComponent(dst, float64(out))
+		case bson.TypeInt64:
+			out, ok := value.Int64OK()
+			if !ok {
+				return dst, nil, false, fmt.Errorf("collections: invalid indexed BSON int64")
+			}
+			doubleValue, err := int64IndexValueAsExactFloat64(out)
+			if err != nil {
+				return dst, nil, false, err
+			}
+			dst = appendIndexDoubleComponent(dst, doubleValue)
+		default:
+			return dst, nil, false, fmt.Errorf("collections: indexed BSON value for type %q must be double/int32/int64, got %s", valueType, value.Type)
 		}
-		dst, encoded, err := appendIndexScalar(dst, out)
-		return dst, encoded, true, err
-	case bson.TypeInt64:
-		out, ok := value.Int64OK()
-		if !ok {
-			return dst, nil, false, fmt.Errorf("collections: invalid indexed BSON int64")
-		}
-		dst, encoded, err := appendIndexScalar(dst, out)
-		return dst, encoded, true, err
-	case bson.TypeNull:
-		return dst, nil, false, nil
 	default:
-		return dst, nil, false, fmt.Errorf("collections: unsupported indexed BSON value type %s", value.Type)
+		return dst, nil, false, fmt.Errorf("collections: unsupported index value type %q", valueType)
 	}
+	return dst, dst[start:len(dst):len(dst)], true, nil
 }

@@ -1001,21 +1001,15 @@ func appendTemplateV1RootFieldIndexValues(state orderedDocumentIndexState, field
 	case templateV1KindNull:
 		return nil
 	case templateV1KindFalse:
-		return appendTemplateV1ScalarIndexValueToRootStates(state, field, firstRuntimeIdx, runtimes, encoder, "b:0")
+		return appendTemplateV1RawIndexValueToRootStates(state, field, firstRuntimeIdx, runtimes, raw[valueStart:*pos], opts, encoder)
 	case templateV1KindTrue:
-		return appendTemplateV1ScalarIndexValueToRootStates(state, field, firstRuntimeIdx, runtimes, encoder, "b:1")
+		return appendTemplateV1RawIndexValueToRootStates(state, field, firstRuntimeIdx, runtimes, raw[valueStart:*pos], opts, encoder)
 	case templateV1KindFloat64:
 		if len(raw)-*pos < 8 {
 			return errors.New("collections: malformed template-v1 number")
 		}
-		v := math.Float64frombits(binary.BigEndian.Uint64(raw[*pos:]))
 		*pos += 8
-		start := len(encoder.buf)
-		encoder.buf = append(encoder.buf, "n:"...)
-		encoder.buf = strconv.AppendFloat(encoder.buf, v, 'g', -1, 64)
-		next := encoder.buf[start:len(encoder.buf):len(encoder.buf)]
-		appendTemplateV1EncodedIndexValueToRootStates(state, field, firstRuntimeIdx, runtimes, encoder, next)
-		return nil
+		return appendTemplateV1RawIndexValueToRootStates(state, field, firstRuntimeIdx, runtimes, raw[valueStart:*pos], opts, encoder)
 	case templateV1KindString:
 		n, err := readTemplateV1Uvarint(raw, pos)
 		if err != nil {
@@ -1025,13 +1019,8 @@ func appendTemplateV1RootFieldIndexValues(state orderedDocumentIndexState, field
 			return errors.New("collections: malformed template-v1 string")
 		}
 		valueEnd := *pos + int(n)
-		start := len(encoder.buf)
-		encoder.buf = append(encoder.buf, "s:"...)
-		encoder.buf = append(encoder.buf, raw[*pos:valueEnd]...)
 		*pos = valueEnd
-		next := encoder.buf[start:len(encoder.buf):len(encoder.buf)]
-		appendTemplateV1EncodedIndexValueToRootStates(state, field, firstRuntimeIdx, runtimes, encoder, next)
-		return nil
+		return appendTemplateV1RawIndexValueToRootStates(state, field, firstRuntimeIdx, runtimes, raw[valueStart:*pos], opts, encoder)
 	default:
 		*pos = valueStart
 		if err := skipTemplateV1Value(raw, pos, opts.templateResolver); err != nil {
@@ -1051,21 +1040,16 @@ func appendTemplateV1RootFieldIndexValues(state orderedDocumentIndexState, field
 	}
 }
 
-func appendTemplateV1ScalarIndexValueToRootStates(state orderedDocumentIndexState, field string, firstRuntimeIdx int, runtimes []indexRuntime, encoder *indexEncodeArena, encoded string) error {
-	start := len(encoder.buf)
-	encoder.buf = append(encoder.buf, encoded...)
-	next := encoder.buf[start:len(encoder.buf):len(encoder.buf)]
-	appendTemplateV1EncodedIndexValueToRootStates(state, field, firstRuntimeIdx, runtimes, encoder, next)
-	return nil
-}
-
-func appendTemplateV1EncodedIndexValueToRootStates(state orderedDocumentIndexState, field string, firstRuntimeIdx int, runtimes []indexRuntime, encoder *indexEncodeArena, encoded []byte) {
-	state[firstRuntimeIdx] = encoder.appendSingleValueRef(encoded)
-	for runtimeIdx := firstRuntimeIdx + 1; runtimeIdx < len(runtimes); runtimeIdx++ {
-		if runtimes[runtimeIdx].path[0] == field {
-			state[runtimeIdx] = encoder.appendSingleValueRef(encoded)
+func appendTemplateV1RawIndexValueToRootStates(state orderedDocumentIndexState, field string, firstRuntimeIdx int, runtimes []indexRuntime, raw []byte, opts collectionOptions, encoder *indexEncodeArena) error {
+	for runtimeIdx := firstRuntimeIdx; runtimeIdx < len(runtimes); runtimeIdx++ {
+		if runtimeIdx != firstRuntimeIdx && runtimes[runtimeIdx].path[0] != field {
+			continue
+		}
+		if err := appendTemplateV1IndexValueToState(state, runtimeIdx, runtimes[runtimeIdx], raw, opts, encoder); err != nil {
+			return err
 		}
 	}
+	return nil
 }
 
 func appendTemplateV1IndexValueToState(state orderedDocumentIndexState, runtimeIdx int, runtime indexRuntime, value []byte, opts collectionOptions, encoder *indexEncodeArena) error {
@@ -1076,7 +1060,7 @@ func appendTemplateV1IndexValueToState(state orderedDocumentIndexState, runtimeI
 		if !runtime.def.multiKey && !opts.allowArrayValuesInIndex {
 			return errors.New("collections: array value not allowed for index")
 		}
-		encoded, err := templateV1AppendArrayIndexValues(value, encoder)
+		encoded, err := templateV1AppendArrayIndexValues(value, runtime.def.valueType, encoder)
 		if err != nil {
 			return err
 		}
@@ -1089,7 +1073,7 @@ func appendTemplateV1IndexValueToState(state orderedDocumentIndexState, runtimeI
 	}
 	var next []byte
 	var err error
-	encoder.buf, next, err = appendTemplateV1IndexScalar(encoder.buf, value)
+	encoder.buf, next, err = appendTemplateV1IndexScalar(encoder.buf, runtime.def.valueType, value)
 	if err != nil {
 		return err
 	}
@@ -1158,7 +1142,7 @@ func templateV1ObjectValue(raw []byte) (templateV1ObjectRef, error) {
 	return templateV1ObjectRef{templateID: id, values: raw[pos:]}, nil
 }
 
-func templateV1AppendArrayIndexValues(raw []byte, encoder *indexEncodeArena) ([][]byte, error) {
+func templateV1AppendArrayIndexValues(raw []byte, valueType IndexValueType, encoder *indexEncodeArena) ([][]byte, error) {
 	pos := 1
 	count, err := readTemplateV1Uvarint(raw, &pos)
 	if err != nil {
@@ -1177,7 +1161,7 @@ func templateV1AppendArrayIndexValues(raw []byte, encoder *indexEncodeArena) ([]
 			return nil, err
 		}
 		var next []byte
-		encoder.buf, next, err = appendTemplateV1IndexScalar(encoder.buf, raw[start:pos])
+		encoder.buf, next, err = appendTemplateV1IndexScalar(encoder.buf, valueType, raw[start:pos])
 		if err != nil {
 			return nil, err
 		}
@@ -1189,26 +1173,16 @@ func templateV1AppendArrayIndexValues(raw []byte, encoder *indexEncodeArena) ([]
 	return values, nil
 }
 
-func appendTemplateV1IndexScalar(dst []byte, raw []byte) ([]byte, []byte, error) {
+func appendTemplateV1IndexScalar(dst []byte, valueType IndexValueType, raw []byte) ([]byte, []byte, error) {
 	if len(raw) == 0 {
 		return dst, nil, errors.New("collections: empty template-v1 value")
 	}
 	start := len(dst)
-	switch raw[0] {
-	case templateV1KindNull:
-		dst = append(dst, "z:"...)
-	case templateV1KindFalse:
-		dst = append(dst, "b:0"...)
-	case templateV1KindTrue:
-		dst = append(dst, "b:1"...)
-	case templateV1KindFloat64:
-		if len(raw) != 1+8 {
-			return dst, nil, errors.New("collections: malformed template-v1 number")
+	switch valueType {
+	case IndexValueString:
+		if raw[0] != templateV1KindString {
+			return dst, nil, fmt.Errorf("collections: indexed template-v1 value for type %q must be string, got kind %d", valueType, raw[0])
 		}
-		v := math.Float64frombits(binary.BigEndian.Uint64(raw[1:]))
-		dst = append(dst, "n:"...)
-		dst = strconv.AppendFloat(dst, v, 'g', -1, 64)
-	case templateV1KindString:
 		pos := 1
 		n, err := readTemplateV1Uvarint(raw, &pos)
 		if err != nil {
@@ -1217,10 +1191,38 @@ func appendTemplateV1IndexScalar(dst []byte, raw []byte) ([]byte, []byte, error)
 		if n > uint64(len(raw)-pos) || int(n) != len(raw)-pos {
 			return dst, nil, errors.New("collections: malformed template-v1 string")
 		}
-		dst = append(dst, "s:"...)
-		dst = append(dst, raw[pos:]...)
+		dst = appendIndexStringComponent(dst, raw[pos:])
+	case IndexValueBool:
+		switch raw[0] {
+		case templateV1KindFalse:
+			dst = appendIndexBoolComponent(dst, false)
+		case templateV1KindTrue:
+			dst = appendIndexBoolComponent(dst, true)
+		default:
+			return dst, nil, fmt.Errorf("collections: indexed template-v1 value for type %q must be bool, got kind %d", valueType, raw[0])
+		}
+	case IndexValueInt64:
+		if raw[0] != templateV1KindFloat64 {
+			return dst, nil, fmt.Errorf("collections: indexed template-v1 value for type %q must be number, got kind %d", valueType, raw[0])
+		}
+		if len(raw) != 1+8 {
+			return dst, nil, errors.New("collections: malformed template-v1 number")
+		}
+		i, err := exactFloat64AsInt64(math.Float64frombits(binary.BigEndian.Uint64(raw[1:])))
+		if err != nil {
+			return dst, nil, err
+		}
+		dst = appendIndexInt64Component(dst, i)
+	case IndexValueDouble:
+		if raw[0] != templateV1KindFloat64 {
+			return dst, nil, fmt.Errorf("collections: indexed template-v1 value for type %q must be number, got kind %d", valueType, raw[0])
+		}
+		if len(raw) != 1+8 {
+			return dst, nil, errors.New("collections: malformed template-v1 number")
+		}
+		dst = appendIndexDoubleComponent(dst, math.Float64frombits(binary.BigEndian.Uint64(raw[1:])))
 	default:
-		return dst, nil, fmt.Errorf("collections: unsupported indexed template-v1 value kind %d", raw[0])
+		return dst, nil, fmt.Errorf("collections: unsupported index value type %q", valueType)
 	}
 	return dst, dst[start:len(dst):len(dst)], nil
 }

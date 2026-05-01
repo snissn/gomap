@@ -1010,7 +1010,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	} else {
 		result.MongoURI = redactMongoURI(cfg.MongoURI)
 	}
-	if err := createIndexes(ctx, coll, cfg.SecondaryIndexes); err != nil {
+	if err := createIndexes(ctx, db, coll, cfg.SecondaryIndexes, cfg.Target == "treedb"); err != nil {
 		return nil, err
 	}
 	var updatedCityValues []string
@@ -1273,7 +1273,32 @@ func runEmailFindPhase(cfg config) bool {
 	return cfg.Reads > 0 && cfg.SecondaryIndexes >= 1
 }
 
-func createIndexes(ctx context.Context, coll *mongo.Collection, secondaryIndexes int) error {
+func createIndexes(ctx context.Context, db *mongo.Database, coll *mongo.Collection, secondaryIndexes int, treedbTarget bool) error {
+	if treedbTarget {
+		indexDocs := make(bson.A, 0, secondaryIndexes)
+		if secondaryIndexes >= 1 {
+			indexDocs = append(indexDocs, bson.D{
+				{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+				{Key: "name", Value: "email_1"},
+				{Key: "unique", Value: true},
+				{Key: "treedbValueType", Value: string(collections.IndexValueString)},
+			})
+		}
+		if secondaryIndexes >= 2 {
+			indexDocs = append(indexDocs, bson.D{
+				{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+				{Key: "name", Value: "city_1"},
+				{Key: "treedbValueType", Value: string(collections.IndexValueString)},
+			})
+		}
+		if len(indexDocs) == 0 {
+			return nil
+		}
+		return db.RunCommand(ctx, bson.D{
+			{Key: "createIndexes", Value: coll.Name()},
+			{Key: "indexes", Value: indexDocs},
+		}).Err()
+	}
 	if secondaryIndexes >= 1 {
 		if _, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
 			Keys:    bson.D{{Key: "email", Value: int32(1)}},

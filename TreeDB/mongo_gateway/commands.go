@@ -1923,10 +1923,24 @@ func parseCreateIndexDefinition(doc wire.Document) (collections.IndexDefinition,
 	if err != nil {
 		return collections.IndexDefinition{}, err
 	}
+	valueTypeRaw, valueTypePresent, err := optionalStringFieldWithPresence(doc, "treedbValueType")
+	if err != nil {
+		return collections.IndexDefinition{}, err
+	}
+	if !valueTypePresent {
+		return collections.IndexDefinition{}, errors.New("Mongo gateway createIndexes requires treedbValueType")
+	}
+	valueType := collections.IndexValueType(valueTypeRaw)
+	switch valueType {
+	case collections.IndexValueString, collections.IndexValueBool, collections.IndexValueInt64, collections.IndexValueDouble:
+	default:
+		return collections.IndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes unsupported treedbValueType %q", valueTypeRaw)
+	}
 	return collections.IndexDefinition{
-		Name:   name,
-		Field:  field,
-		Unique: unique,
+		Name:      name,
+		Field:     field,
+		ValueType: valueType,
+		Unique:    unique,
 	}, nil
 }
 
@@ -2011,6 +2025,7 @@ func findIndexDefinition(indexes []collections.IndexDefinition, name string) (co
 func sameIndexDefinition(left, right collections.IndexDefinition) bool {
 	return left.Name == right.Name &&
 		left.Field == right.Field &&
+		left.ValueType == right.ValueType &&
 		left.Unique == right.Unique &&
 		left.MultiKey == right.MultiKey &&
 		left.StoragePolicy == right.StoragePolicy
