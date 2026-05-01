@@ -216,6 +216,9 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 	var matched, modified int32
 	if len(parsed) > 1 && !hasDuplicateKey {
 		matched, modified, err = runMongoUpdateBatch(col, parsed)
+		if err != nil {
+			matched, modified, err = runMongoUpdatesSequential(col, parsed)
+		}
 	} else {
 		matched, modified, err = runMongoUpdatesSequential(col, parsed)
 	}

@@ -2765,16 +2765,39 @@ func validateUpdateBatchItems(items []UpdateBatchItem) error {
 	seen := make(map[string]struct{}, len(items))
 	for i, item := range items {
 		if len(item.DocumentID) == 0 {
-			return errors.New("collections: document id cannot be empty")
+			return fmt.Errorf("collections: document id cannot be empty at index %d", i)
 		}
 		if item.Update == nil {
-			return errors.New("collections: update function is nil")
+			return fmt.Errorf("collections: update function is nil at index %d", i)
 		}
 		key := string(item.DocumentID)
 		if _, ok := seen[key]; ok {
 			return fmt.Errorf("%w at index %d", ErrDuplicateDocumentID, i)
 		}
 		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+func validateBSONReplacementPreservesID(current, replacement []byte, opts collectionOptions) error {
+	if normalizedDocumentFormat(opts.documentFormat) != DocumentFormatBSON {
+		return nil
+	}
+	currentRaw := bson.Raw(current)
+	if err := currentRaw.Validate(); err != nil {
+		return fmt.Errorf("collections: current BSON document: %w", err)
+	}
+	replacementRaw := bson.Raw(replacement)
+	if err := replacementRaw.Validate(); err != nil {
+		return fmt.Errorf("collections: replacement BSON document: %w", err)
+	}
+	currentID := currentRaw.Lookup("_id")
+	replacementID := replacementRaw.Lookup("_id")
+	if currentID.IsZero() && replacementID.IsZero() {
+		return nil
+	}
+	if currentID.IsZero() || replacementID.IsZero() || !currentID.Equal(replacementID) {
+		return errors.New("collections: update replacement cannot modify _id")
 	}
 	return nil
 }
@@ -3086,6 +3109,10 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 			_ = snap.Close()
 			return nil, err
 		}
+		if err := validateBSONReplacementPreservesID(entry.Value, document, plannerOptions); err != nil {
+			_ = snap.Close()
+			return nil, err
+		}
 		if !changedOne {
 			continue
 		}
@@ -3101,7 +3128,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 			}
 		}
 		changed = append(changed, prepared)
-		changedDocuments = append(changedDocuments, document)
+		changedDocuments = append(changedDocuments, bytes.Clone(document))
 	}
 	if len(changed) == 0 {
 		_ = snap.Close()

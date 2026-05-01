@@ -564,14 +564,14 @@ func TestServerUpdateBatchesDistinctIDs(t *testing.T) {
 	assertInt32(t, updateResponse, "n", 2)
 	assertInt32(t, updateResponse, "nModified", 2)
 
-	for _, tc := range []struct {
+	for i, tc := range []struct {
 		id    string
 		score int32
 	}{
 		{id: "u1", score: 1},
 		{id: "u2", score: 2},
 	} {
-		findResponse := serveCommand(t, server, 2259, bson.D{
+		findResponse := serveCommand(t, server, int32(2259+i), bson.D{
 			{Key: "find", Value: "users"},
 			{Key: "filter", Value: bson.D{{Key: "_id", Value: tc.id}}},
 			{Key: "$db", Value: "app"},
@@ -626,7 +626,7 @@ func TestServerUpdateBatchTemplateV1UpdatesDistinctIDs(t *testing.T) {
 	assertInt32(t, updateResponse, "n", 2)
 	assertInt32(t, updateResponse, "nModified", 2)
 
-	for _, tc := range []struct {
+	for i, tc := range []struct {
 		id    string
 		score int32
 		city  string
@@ -634,7 +634,7 @@ func TestServerUpdateBatchTemplateV1UpdatesDistinctIDs(t *testing.T) {
 		{id: "u1", score: 11, city: "hnl"},
 		{id: "u2", score: 12, city: "sea"},
 	} {
-		findResponse := serveCommand(t, server, 22593, bson.D{
+		findResponse := serveCommand(t, server, int32(22593+i), bson.D{
 			{Key: "find", Value: "users"},
 			{Key: "filter", Value: bson.D{{Key: "_id", Value: tc.id}}},
 			{Key: "$db", Value: "app"},
@@ -701,6 +701,65 @@ func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterParseError(t *testin
 	gotScore, ok := firstBatch[0].Lookup("score").Int32OK()
 	if !ok || gotScore != 1 {
 		t.Fatalf("u1 score=%d ok=%v want 1", gotScore, ok)
+	}
+}
+
+func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterWriteError(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	assertOK(t, serveCommand(t, server, 22597, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "unique", Value: true}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 22598, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "a@example.com"}, {Key: "city", Value: "hnl"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "b@example.com"}, {Key: "city", Value: "hnl"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	updateResponse := serveCommand(t, server, 22599, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{
+			bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "sea"}}}}},
+			},
+			bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "a@example.com"}}}}},
+			},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, updateResponse, "DuplicateKey")
+
+	findResponse := serveCommand(t, server, 22600, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch := cursorFirstBatch(t, findResponse)
+	if len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	gotCity, ok := firstBatch[0].Lookup("city").StringValueOK()
+	if !ok || gotCity != "sea" {
+		t.Fatalf("u1 city=%q ok=%v want sea", gotCity, ok)
 	}
 }
 
