@@ -2364,9 +2364,7 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 			result.Target, result.ClientMode, result.Database, result.Collection, result.Documents, result.BatchSize,
 			result.InsertProducers, result.MongoMaxPoolSize, result.MongoMinPoolSize, result.MongoMaxConnecting, result.SecondaryIndexes,
 			result.ConcurrentReaders, result.ConcurrentReads, result.ConcurrentWriters, result.ConcurrentWrites)
-		if result.UpdateIndexedField {
-			fmt.Fprintln(out, "update_indexed_field=true")
-		}
+		fmt.Fprintf(out, "update_indexed_field=%t\n", result.UpdateIndexedField)
 		if result.TreeDBDir != "" {
 			fmt.Fprintf(out, "treedb_dir=%s\n", result.TreeDBDir)
 		}

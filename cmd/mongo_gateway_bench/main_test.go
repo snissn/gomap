@@ -1301,13 +1301,17 @@ func TestWriteResultKeepsTextHeaderStableForIndexedUpdateKnob(t *testing.T) {
 	if strings.Contains(firstLine, "update_indexed_field") {
 		t.Fatalf("text header should not include update_indexed_field by default: %q", firstLine)
 	}
+	lines := strings.Split(out.String(), "\n")
+	if len(lines) < 2 || lines[1] != "update_indexed_field=false" {
+		t.Fatalf("text output missing separate update_indexed_field=false line: %q", out.String())
+	}
 
 	out.Reset()
 	result.UpdateIndexedField = true
 	if err := writeResult(&out, "text", result); err != nil {
 		t.Fatalf("writeResult true: %v", err)
 	}
-	lines := strings.Split(out.String(), "\n")
+	lines = strings.Split(out.String(), "\n")
 	if len(lines) < 2 || lines[1] != "update_indexed_field=true" {
 		t.Fatalf("text output missing separate update_indexed_field line: %q", out.String())
 	}
