@@ -2942,10 +2942,10 @@ func validateUpdateBatchItems(items []UpdateBatchItem) error {
 	seen := make(map[string]struct{}, len(items))
 	for i, item := range items {
 		if len(item.DocumentID) == 0 {
-			return errors.New("collections: document id cannot be empty")
+			return fmt.Errorf("collections: document id cannot be empty at index %d", i)
 		}
 		if item.Update == nil {
-			return errors.New("collections: update function is nil")
+			return fmt.Errorf("collections: update function is nil at index %d", i)
 		}
 		key := string(item.DocumentID)
 		if _, ok := seen[key]; ok {
@@ -3057,21 +3057,20 @@ func (combiner *collectionUpdateCombiner) stop() {
 	if combiner == nil {
 		return
 	}
-	if combiner.markStopped() {
-		close(combiner.requests)
-	}
+	_ = combiner.closeRequests()
 	if combiner.done != nil {
 		<-combiner.done
 	}
 }
 
-func (combiner *collectionUpdateCombiner) markStopped() bool {
+func (combiner *collectionUpdateCombiner) closeRequests() bool {
 	combiner.mu.Lock()
 	defer combiner.mu.Unlock()
 	if combiner.stopped {
 		return false
 	}
 	combiner.stopped = true
+	close(combiner.requests)
 	return true
 }
 
@@ -3118,17 +3117,22 @@ func (combiner *collectionUpdateCombiner) retireIdle() bool {
 	if combiner == nil {
 		return false
 	}
+	stopped := false
 	if combiner.domain != nil {
 		combiner.domain.updateCombineMu.Lock()
 		if combiner.domain.updateCombiner == combiner {
-			combiner.domain.updateCombiner = nil
+			stopped = combiner.closeRequests()
+			if stopped {
+				combiner.domain.updateCombiner = nil
+			}
 		}
 		combiner.domain.updateCombineMu.Unlock()
+	} else {
+		stopped = combiner.closeRequests()
 	}
-	if !combiner.markStopped() {
+	if !stopped {
 		return false
 	}
-	close(combiner.requests)
 	for req := range combiner.requests {
 		completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
 	}
@@ -3237,6 +3241,29 @@ func collectionUpdateCombineHasDuplicateIDs(batch []collectionUpdateCombineReque
 		}
 	}
 	return false
+}
+
+func validateBSONReplacementPreservesID(current, replacement []byte, opts collectionOptions) error {
+	if normalizedDocumentFormat(opts.documentFormat) != DocumentFormatBSON {
+		return nil
+	}
+	currentRaw := bson.Raw(current)
+	if err := currentRaw.Validate(); err != nil {
+		return fmt.Errorf("collections: current BSON document: %w", err)
+	}
+	replacementRaw := bson.Raw(replacement)
+	if err := replacementRaw.Validate(); err != nil {
+		return fmt.Errorf("collections: replacement BSON document: %w", err)
+	}
+	currentID := currentRaw.Lookup("_id")
+	replacementID := replacementRaw.Lookup("_id")
+	if currentID.IsZero() && replacementID.IsZero() {
+		return nil
+	}
+	if currentID.IsZero() || replacementID.IsZero() || !currentID.Equal(replacementID) {
+		return errors.New("collections: update replacement cannot modify _id")
+	}
+	return nil
 }
 
 func waitBeforeCollectionMutationRetry(attempt int) {
@@ -3546,6 +3573,10 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 			_ = snap.Close()
 			return nil, err
 		}
+		if err := validateBSONReplacementPreservesID(entry.Value, document, plannerOptions); err != nil {
+			_ = snap.Close()
+			return nil, err
+		}
 		if !changedOne {
 			continue
 		}
@@ -3561,7 +3592,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 			}
 		}
 		changed = append(changed, prepared)
-		changedDocuments = append(changedDocuments, document)
+		changedDocuments = append(changedDocuments, bytes.Clone(document))
 	}
 	if len(changed) == 0 {
 		_ = snap.Close()
