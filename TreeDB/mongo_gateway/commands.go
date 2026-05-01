@@ -397,19 +397,17 @@ func applyMongoUpdateToStoredDocument(col *collections.Collection, materializer 
 }
 
 type mongoUpdateCoalescer struct {
-	maxDelay       time.Duration
-	maxBatch       int
-	idleTTL        time.Duration
-	requests       chan mongoUpdateCoalescerRequest
-	stoppedCh      chan struct{}
-	done           chan struct{}
-	server         *Server
-	name           string
-	mu             sync.RWMutex
-	stopped        bool
-	enqueueMu      sync.Mutex
-	activeEnqueues int
-	enqueueCond    *sync.Cond
+	maxDelay  time.Duration
+	maxBatch  int
+	idleTTL   time.Duration
+	requests  chan mongoUpdateCoalescerRequest
+	stoppedCh chan struct{}
+	done      chan struct{}
+	server    *Server
+	name      string
+	mu        sync.RWMutex
+	stopped   bool
+	enqueueMu sync.Mutex
 }
 
 type mongoUpdateCoalescerRequest struct {
@@ -493,7 +491,6 @@ func (s *Server) mongoUpdateCoalescer(name string) *mongoUpdateCoalescer {
 		server:    s,
 		name:      name,
 	}
-	coalescer.enqueueCond = sync.NewCond(&coalescer.enqueueMu)
 	s.updateCoalescers[name] = coalescer
 	go coalescer.run()
 	return coalescer
@@ -511,35 +508,20 @@ func (c *mongoUpdateCoalescer) enqueue(req mongoUpdateCoalescerRequest) bool {
 		return false
 	}
 	c.enqueueMu.Lock()
+	defer c.enqueueMu.Unlock()
 	c.mu.RLock()
 	stopped := c.stopped
 	requests := c.requests
-	stoppedCh := c.stoppedCh
 	c.mu.RUnlock()
 	if stopped {
-		c.enqueueMu.Unlock()
 		return false
 	}
-	c.activeEnqueues++
-	c.enqueueMu.Unlock()
-	defer c.finishEnqueue()
 	select {
 	case requests <- req:
 		return true
-	case <-stoppedCh:
-		return false
 	default:
 		return false
 	}
-}
-
-func (c *mongoUpdateCoalescer) finishEnqueue() {
-	c.enqueueMu.Lock()
-	c.activeEnqueues--
-	if c.enqueueCond != nil {
-		c.enqueueCond.Broadcast()
-	}
-	c.enqueueMu.Unlock()
 }
 
 func (c *mongoUpdateCoalescer) stop() {
@@ -555,9 +537,6 @@ func (c *mongoUpdateCoalescer) stop() {
 func (c *mongoUpdateCoalescer) closeRequests() bool {
 	c.enqueueMu.Lock()
 	defer c.enqueueMu.Unlock()
-	if c.enqueueCond == nil {
-		c.enqueueCond = sync.NewCond(&c.enqueueMu)
-	}
 	c.mu.Lock()
 	if c.stopped {
 		c.mu.Unlock()
@@ -569,10 +548,6 @@ func (c *mongoUpdateCoalescer) closeRequests() bool {
 	c.stopped = true
 	close(c.stoppedCh)
 	c.mu.Unlock()
-
-	for c.activeEnqueues > 0 {
-		c.enqueueCond.Wait()
-	}
 	return true
 }
 

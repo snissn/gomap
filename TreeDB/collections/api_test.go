@@ -3734,6 +3734,46 @@ func int64ValueForTest(value any) (int64, bool) {
 	}
 }
 
+func TestNoIndexInsertAfterRawCommitDoesNotReenterWriteDomainLock(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		_ = d.Close()
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := d.Set([]byte("raw/unrelated"), []byte("value")); err != nil {
+		_ = d.Close()
+		t.Fatalf("raw set: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := col.Insert([]byte("u1"), []byte(`{"name":"ada"}`))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			_ = d.Close()
+			t.Fatalf("insert: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("insert blocked while refreshing write-domain catalog after raw commit")
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+}
+
 func TestCollectionSingleInsertMatchesSingleItemBatch(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
