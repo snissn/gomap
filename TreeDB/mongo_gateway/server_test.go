@@ -750,10 +750,21 @@ func TestRunMongoUpdateBatchBatchesNonUniqueFieldWithSecondaryUniqueIndex(t *tes
 		t.Fatalf("flush insert buffer: %v", err)
 	}
 	before := db.State()
+	buildUpdateItem := func(index int, id string, update bson.D) mongoUpdateItem {
+		t.Helper()
+		item, err := parseMongoUpdateItem(index, mustDocument(t, bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
+			{Key: "u", Value: update},
+		}))
+		if err != nil {
+			t.Fatalf("parse update item: %v", err)
+		}
+		return item
+	}
 
 	matched, modified, batched, err := runMongoUpdateBatch(col, []mongoUpdateItem{
-		{index: 0, key: id1, updateDoc: mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "sea"}}}}), setFields: map[string]struct{}{"city": {}}, setFieldsOK: true},
-		{index: 1, key: id2, updateDoc: mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "sfo"}}}}), setFields: map[string]struct{}{"city": {}}, setFieldsOK: true},
+		buildUpdateItem(0, "u1", bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "sea"}}}}),
+		buildUpdateItem(1, "u2", bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "sfo"}}}}),
 	})
 	if err != nil {
 		t.Fatalf("runMongoUpdateBatch: %v", err)
