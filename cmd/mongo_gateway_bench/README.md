@@ -315,6 +315,57 @@ The package test `TestTreeDBProfileSmokeFastAndWALOnFast` runs a small write-onl
 TreeDB gateway smoke against both `fast` and `wal_on_fast` to catch large
 profile regressions without making the smoke a replacement for the full matrix.
 
+## Phase Pprof Artifacts
+
+Use `-profile-dir` when a full benchmark run exposes a scaling wall and the
+next step is to inspect the TreeDB or gateway hot path. The command writes one
+CPU profile per measured phase, plus heap, allocs, block, mutex, and goroutine
+profiles captured after each phase. It also writes `profile_manifest.json` and
+`benchmark_result.json` into the same directory so the profile files can be tied
+back to the exact benchmark config and phase throughput.
+
+```sh
+OUT=$(mktemp -d /tmp/gomap_mongo_gateway_pprof_XXXXXX)
+GOWORK=off go run ./cmd/mongo_gateway_bench \
+  -target treedb \
+  -client-mode driver-command-raw \
+  -treedb-document-format bson \
+  -documents 1000000 \
+  -batch-size 5000 \
+  -insert-producers 8 \
+  -reads 0 \
+  -range-reads 0 \
+  -updates 0 \
+  -concurrent-writers 8 \
+  -concurrent-writes 80000 \
+  -secondary-indexes 2 \
+  -prebuild-documents \
+  -treedb-maintenance none \
+  -profile-dir "$OUT" \
+  -format json
+```
+
+Useful first-pass commands:
+
+```sh
+GOWORK=off go build -o ./bin/mongo_gateway_bench ./cmd/mongo_gateway_bench
+go tool pprof -top -cum ./bin/mongo_gateway_bench "$OUT/load_insert_many.cpu.pprof"
+go tool pprof -top -cum ./bin/mongo_gateway_bench "$OUT/concurrent_id_update_set_w8.cpu.pprof"
+go tool pprof -top -cum ./bin/mongo_gateway_bench "$OUT/concurrent_id_update_set_w8.mutex.pprof"
+```
+
+By default, profiling mode enables block profiling at rate `1` and mutex
+profiling at fraction `5`. Use `-profile-block-rate 0` or
+`-profile-mutex-fraction 0` to disable either profile. Runtime traces are larger
+and are off by default; add `-profile-trace` when scheduler-level detail is
+needed.
+
+For insert-scaling investigations, run the same command repeatedly with
+`-insert-producers 1`, `2`, `4`, `8`, and `16` while keeping `-documents`,
+`-batch-size`, `-client-mode`, and document format constant. For write-contention
+investigations, keep the load shape fixed and vary `-concurrent-writers` /
+`-concurrent-writes`.
+
 ## Gateway Profiling Benchmarks
 
 The package also includes benchmark-only entry points for isolating Mongo
@@ -325,7 +376,7 @@ OUT=$(mktemp -d /tmp/gomap_mongo_gateway_profile_XXXXXX)
 MONGO_GATEWAY_PROFILE_BENCH_BATCH_SIZE=10000 \
 GOWORK=off go test ./cmd/mongo_gateway_bench \
   -run '^$' \
-  -bench '^(BenchmarkTreeDBGatewayLoadBSONIndexes2|BenchmarkTreeDBGatewayLoadGeneratedIDBSONIndexes2|BenchmarkTreeDBGatewayLoadObjectIDBSONIndexes2|BenchmarkTreeDBGatewayLoadUnackBSONIndexes2|BenchmarkTreeDBGatewayRunCommandLoadBSONIndexes2|BenchmarkTreeDBGatewayRunRawCommandLoadBSONIndexes2|BenchmarkTreeDBGatewayRawWireLoadBSONIndexes2|BenchmarkTreeDBGatewayRawWireTCPLoadBSONIndexes2|BenchmarkDirectCollectionLoadBSONIndexes2|BenchmarkClientBSONBatchEncode)$' \
+  -bench '^(BenchmarkTreeDBGatewayLoadBSONIndexes2|BenchmarkTreeDBGatewayLoadGeneratedIDBSONIndexes2|BenchmarkTreeDBGatewayLoadObjectIDBSONIndexes2|BenchmarkTreeDBGatewayLoadUnackBSONIndexes2|BenchmarkTreeDBGatewayRunCommandLoadBSONIndexes2|BenchmarkTreeDBGatewayRunRawCommandLoadBSONIndexes2|BenchmarkTreeDBGatewayRawWireLoadBSONIndexes2|BenchmarkTreeDBGatewayRawWireTCPLoadBSONIndexes2|BenchmarkDirectCollectionLoadBSONIndexes2|BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2|BenchmarkClientBSONBatchEncode)$' \
   -benchtime 2000000x \
   -count 1 \
   -timeout 0 \
@@ -365,8 +416,17 @@ The benchmark shapes are intentionally different:
   and connection-serving cost from the official driver's CRUD-helper cost.
 - `BenchmarkDirectCollectionLoadBSONIndexes2` inserts the same BSON document
   shape through the collection API without the Mongo gateway.
+- `BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2` preloads a BSON
+  collection, then runs concurrent `_id` updates through `Collection.Update`
+  without the Mongo gateway. This is useful when comparing gateway update
+  profiles with the storage/update path directly.
 - `BenchmarkClientBSONBatchEncode` measures client-side BSON document encoding
   alone.
+
+The benchmark-only helpers accept these optional environment variables:
+`MONGO_GATEWAY_PROFILE_BENCH_BATCH_SIZE`,
+`MONGO_GATEWAY_PROFILE_BENCH_UPDATE_DOCUMENTS`, and
+`MONGO_GATEWAY_PROFILE_BENCH_WRITERS`.
 
 Use the official-driver row for user-visible Mongo compatibility throughput, the
 driver-command rows to quantify the driver's CRUD-helper overhead, the raw-wire
