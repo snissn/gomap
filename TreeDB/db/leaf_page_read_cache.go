@@ -26,8 +26,22 @@ func init() {
 }
 
 type leafPageReadCacheEntry struct {
-	key  page.LeafLogPtr
+	key  leafPageReadCacheKey
 	data []byte
+}
+
+type leafPageReadCacheKey struct {
+	fileID   uint32
+	offset   uint64
+	subIndex uint16
+}
+
+func newLeafPageReadCacheKey(ptr page.LeafLogPtr) leafPageReadCacheKey {
+	return leafPageReadCacheKey{
+		fileID:   ptr.FileID,
+		offset:   ptr.Offset,
+		subIndex: ptr.SubIndex,
+	}
 }
 
 type leafPageReadCacheSlot struct {
@@ -67,14 +81,15 @@ func (c *leafPageReadCache) store(ptr page.LeafLogPtr, leafPage []byte) {
 	}
 	data := make([]byte, page.PageSize)
 	copy(data, leafPage)
-	entry := &leafPageReadCacheEntry{key: ptr, data: data}
-	slot := &c.slots[c.slotIndex(ptr)]
+	key := newLeafPageReadCacheKey(ptr)
+	entry := &leafPageReadCacheEntry{key: key, data: data}
+	slot := &c.slots[c.slotIndex(key)]
 	prev := slot.entry.Swap(entry)
 	c.stores.Add(1)
 	switch {
 	case prev == nil:
 		c.entries.Add(1)
-	case prev.key != ptr:
+	case prev.key != key:
 		c.evictions.Add(1)
 	}
 }
@@ -83,8 +98,9 @@ func (c *leafPageReadCache) get(ptr page.LeafLogPtr) ([]byte, bool) {
 	if c == nil || len(c.slots) == 0 {
 		return nil, false
 	}
-	entry := c.slots[c.slotIndex(ptr)].entry.Load()
-	if entry == nil || entry.key != ptr {
+	key := newLeafPageReadCacheKey(ptr)
+	entry := c.slots[c.slotIndex(key)].entry.Load()
+	if entry == nil || entry.key != key {
 		c.misses.Add(1)
 		return nil, false
 	}
@@ -108,12 +124,11 @@ func (c *leafPageReadCache) stats() leafPageReadCacheStats {
 	}
 }
 
-func (c *leafPageReadCache) slotIndex(ptr page.LeafLogPtr) uint64 {
-	h := uint64(ptr.FileID)
-	h ^= ptr.Offset + 0x9e3779b97f4a7c15 + (h << 6) + (h >> 2)
-	h ^= uint64(ptr.RecordLengthHint) + 0x9e3779b97f4a7c15 + (h << 6) + (h >> 2)
-	h ^= uint64(ptr.SubIndex) + 0x9e3779b97f4a7c15 + (h << 6) + (h >> 2)
-	return h % uint64(len(c.slots))
+func (c *leafPageReadCache) slotIndex(key leafPageReadCacheKey) int {
+	h := uint64(key.fileID)
+	h ^= key.offset + 0x9e3779b97f4a7c15 + (h << 6) + (h >> 2)
+	h ^= uint64(key.subIndex) + 0x9e3779b97f4a7c15 + (h << 6) + (h >> 2)
+	return int(h % uint64(len(c.slots)))
 }
 
 type cachedLeafPageReader struct {

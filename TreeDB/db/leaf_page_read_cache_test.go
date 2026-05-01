@@ -39,6 +39,8 @@ func (f *leafPageCacheTestFallback) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) 
 func TestCachedLeafPageReaderHitAvoidsFallback(t *testing.T) {
 	cache := newLeafPageReadCache(8)
 	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+	readPtr := ptr
+	readPtr.RecordLengthHint = 0
 	leaf := bytes.Repeat([]byte{0x42}, page.PageSize)
 	cache.store(ptr, leaf)
 
@@ -46,7 +48,7 @@ func TestCachedLeafPageReaderHitAvoidsFallback(t *testing.T) {
 	reader := newCachedLeafPageReader(cache, fallback)
 
 	dst := make([]byte, 0, page.PageSize)
-	got, usedDst, err := reader.ReadUnsafeTo(ptr.ValuePtr(), dst)
+	got, usedDst, err := reader.ReadUnsafeTo(readPtr.ValuePtr(), dst)
 	if err != nil {
 		t.Fatalf("ReadUnsafeTo: %v", err)
 	}

@@ -22,6 +22,9 @@ type LeafPageLog interface {
 }
 
 type LeafPageBatchLog interface {
+	// AppendLeafPages appends every leaf page and returns one pointer per input
+	// page in the same order. Callers use that positional relationship for
+	// cache population and per-page record-length metadata.
 	AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error)
 }
 
@@ -90,6 +93,8 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPages(leafPages [][]byte) (
 			lastRecordLen = provider.LastLeafPageRecordLength()
 		}
 		for i, ptr := range ptrs {
+			// LeafPageBatchLog guarantees returned pointers are positional:
+			// ptrs[i] references leafPages[i].
 			l.db.storeLeafPageReadCache(ptr, leafPages[i])
 			recordLen := ptr.RecordLengthHint
 			if recordLen == 0 {
