@@ -69,6 +69,27 @@ type UpdateBatchResult struct {
 	Modified bool
 }
 
+// UpdateBatchItemError wraps an error produced while preparing or applying one
+// item in an UpdateBatch call.
+type UpdateBatchItemError struct {
+	Index int
+	Err   error
+}
+
+func (e *UpdateBatchItemError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("collections: update batch index %d: %v", e.Index, e.Err)
+}
+
+func (e *UpdateBatchItemError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
 func IsDuplicateKeyError(err error) bool {
 	return errors.Is(err, ErrDocumentExists) ||
 		errors.Is(err, ErrDuplicateDocumentID) ||
@@ -2843,6 +2864,13 @@ func validateUpdateBatchItems(items []UpdateBatchItem) error {
 	return nil
 }
 
+func updateBatchItemError(index int, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &UpdateBatchItemError{Index: index, Err: err}
+}
+
 func cloneUpdateBatchItems(items []UpdateBatchItem) []UpdateBatchItem {
 	out := make([]UpdateBatchItem, len(items))
 	for i, item := range items {
@@ -3178,24 +3206,24 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondary
 		}
 		if err != nil {
 			_ = snap.Close()
-			return nil, fmt.Errorf("collections: update batch index %d: %w", i, err)
+			return nil, updateBatchItemError(i, err)
 		}
 		results[i].Matched = true
 		document, changedOne, err := item.Update(bytes.Clone(entry.Value))
 		if err != nil {
 			_ = snap.Close()
-			return nil, fmt.Errorf("collections: update batch index %d: %w", i, err)
+			return nil, updateBatchItemError(i, err)
 		}
 		if !changedOne {
 			continue
 		}
 		if len(document) == 0 {
 			_ = snap.Close()
-			return nil, fmt.Errorf("collections: update batch index %d: changed replacement document cannot be empty", i)
+			return nil, updateBatchItemError(i, errors.New("changed replacement document cannot be empty"))
 		}
 		if err := validateBSONReplacementPreservesID(entry.Value, document, plannerOptions); err != nil {
 			_ = snap.Close()
-			return nil, fmt.Errorf("collections: update batch index %d: %w", i, err)
+			return nil, updateBatchItemError(i, err)
 		}
 		prepared := preparedBatchUpdate{
 			itemIndex:  i,
@@ -3205,7 +3233,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondary
 			prepared.oldState, err = loadDeleteIndexState(snap, catalog, item.DocumentID, entry.Value, runtimes, plannerOptions)
 			if err != nil {
 				_ = snap.Close()
-				return nil, fmt.Errorf("collections: update batch index %d: %w", i, err)
+				return nil, updateBatchItemError(i, err)
 			}
 		}
 		changed = append(changed, prepared)
@@ -3219,7 +3247,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondary
 	for i, document := range changedDocuments {
 		if _, _, _, err := prepareInsertDocuments([][]byte{document}, plannerOptions); err != nil {
 			_ = snap.Close()
-			return nil, fmt.Errorf("collections: update batch index %d: %w", changed[i].itemIndex, err)
+			return nil, updateBatchItemError(changed[i].itemIndex, err)
 		}
 	}
 	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments(changedDocuments, plannerOptions)
@@ -3240,7 +3268,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondary
 			changed[i].newState, err = indexStateForDocument(changed[i].document, runtimes, plannerOptions)
 			if err != nil {
 				_ = snap.Close()
-				return nil, fmt.Errorf("collections: update batch index %d: %w", changed[i].itemIndex, err)
+				return nil, updateBatchItemError(changed[i].itemIndex, err)
 			}
 			changed[i].indexStateChanged = !documentIndexStatesEqual(changed[i].oldState, changed[i].newState)
 		}
@@ -3250,7 +3278,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondary
 		if changed[i].indexStateChanged {
 			if err := rejectReplaceUniqueConflicts(snap, catalog, runtimes, changed[i].newState, changed[i].documentID, batchReplacements); err != nil {
 				_ = snap.Close()
-				return nil, fmt.Errorf("collections: update batch index %d: %w", changed[i].itemIndex, err)
+				return nil, updateBatchItemError(changed[i].itemIndex, err)
 			}
 		}
 	}

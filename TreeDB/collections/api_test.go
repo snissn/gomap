@@ -2519,6 +2519,10 @@ func TestCollectionUpdateBatchRejectsEmptyChangedReplacementWithIndex(t *testing
 	if err == nil || !strings.Contains(err.Error(), "update batch index 1") || !strings.Contains(err.Error(), "cannot be empty") {
 		t.Fatalf("UpdateBatch err=%v want index 1 empty replacement", err)
 	}
+	var itemErr *UpdateBatchItemError
+	if !errors.As(err, &itemErr) || itemErr.Index != 1 {
+		t.Fatalf("UpdateBatch err=%v want typed item index 1", err)
+	}
 }
 
 func TestCollectionUpdateBatchRejectsUniqueConflictsWithinBatch(t *testing.T) {
