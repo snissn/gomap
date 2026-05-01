@@ -19,8 +19,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-var collectionUpdateCombineIdleTTLTestMu sync.Mutex
-
 func TestCollectionErrorsAreClassifiable(t *testing.T) {
 	if !errors.Is(ErrCollectionNotFound, ErrCollectionNotFound) {
 		t.Fatal("ErrCollectionNotFound should be errors.Is-compatible")
@@ -2848,6 +2846,38 @@ func TestCollectionUpdateCombinerRunBatchRecoversCallbackPanic(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateDirectRecoversCallbackPanic(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"score":0}`)}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	directCol := *col
+	directCol.writeDomain = nil
+	matched, modified, err := directCol.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+		panic("bad callback")
+	})
+	if err == nil || !strings.Contains(err.Error(), "bad callback") {
+		t.Fatalf("Update err=%v want recovered panic", err)
+	}
+	if matched || modified {
+		t.Fatalf("matched=%v modified=%v want false,false", matched, modified)
+	}
+}
+
 func TestCollectionUpdateCombinerDuplicateIDsPreserveOrder(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -2897,12 +2927,6 @@ func TestCollectionUpdateCombinerDuplicateIDsPreserveOrder(t *testing.T) {
 }
 
 func TestCollectionUpdateCombinerEvictsWhenIdle(t *testing.T) {
-	collectionUpdateCombineIdleTTLTestMu.Lock()
-	defer collectionUpdateCombineIdleTTLTestMu.Unlock()
-	oldTTL := collectionUpdateCombineIdleTTL
-	collectionUpdateCombineIdleTTL = time.Millisecond
-	defer func() { collectionUpdateCombineIdleTTL = oldTTL }()
-
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -2917,24 +2941,27 @@ func TestCollectionUpdateCombinerEvictsWhenIdle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open collection: %v", err)
 	}
+	col.writeDomain.updateCombineMu.Lock()
+	col.writeDomain.updateCombineTTL = time.Millisecond
+	col.writeDomain.updateCombineMu.Unlock()
 	combiner := col.updateCombiner()
 	if combiner == nil {
 		t.Fatal("expected update combiner")
 	}
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		col.writeDomain.updateCombineMu.Lock()
-		stillCached := col.writeDomain.updateCombiner == combiner
-		col.writeDomain.updateCombineMu.Unlock()
-		combiner.mu.RLock()
-		stopped := combiner.stopped
-		combiner.mu.RUnlock()
-		if !stillCached && stopped {
-			return
-		}
-		time.Sleep(time.Millisecond)
+	select {
+	case <-combiner.done:
+	case <-time.After(time.Second):
+		t.Fatal("combiner was not evicted after idle timeout")
 	}
-	t.Fatal("combiner was not evicted after idle timeout")
+	col.writeDomain.updateCombineMu.Lock()
+	stillCached := col.writeDomain.updateCombiner == combiner
+	col.writeDomain.updateCombineMu.Unlock()
+	combiner.mu.RLock()
+	stopped := combiner.stopped
+	combiner.mu.RUnlock()
+	if stillCached || !stopped {
+		t.Fatalf("stillCached=%v stopped=%v want false,true", stillCached, stopped)
+	}
 }
 
 func TestCollectionManagerCloseStopsUpdateCombiners(t *testing.T) {

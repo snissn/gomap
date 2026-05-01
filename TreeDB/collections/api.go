@@ -349,6 +349,7 @@ type collectionWriteDomain struct {
 	updateCombineMu   sync.Mutex
 	updateCombiner    *collectionUpdateCombiner
 	updateCombineDone bool
+	updateCombineTTL  time.Duration
 	loaded            bool
 	meta              CollectionMeta
 	catalog           *collectionCatalog
@@ -2871,7 +2872,7 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	if combiner := c.updateCombiner(); combiner != nil {
 		return combiner.update(c, documentID, update)
 	}
-	return c.updateDirect(documentID, update)
+	return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
 }
 
 func validateCollectionUpdateInput(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) error {
@@ -3013,7 +3014,7 @@ func (c *Collection) updateCombiner() *collectionUpdateCombiner {
 		}
 		combiner := &collectionUpdateCombiner{
 			maxBatch: defaultCollectionUpdateCombineMaxBatch,
-			idleTTL:  collectionUpdateCombineIdleTTL,
+			idleTTL:  domain.updateCombineIdleTTL(),
 			requests: make(chan collectionUpdateCombineRequest, defaultCollectionUpdateCombineMaxBatch*4),
 			done:     make(chan struct{}),
 			domain:   domain,
@@ -3051,7 +3052,7 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 		done:       done,
 	}
 	if !combiner.enqueue(req) {
-		return c.updateDirect(documentID, update)
+		return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
 	}
 	result := <-done
 	return result.matched, result.modified, result.err
@@ -3207,7 +3208,7 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 	for i, req := range batch {
 		items[i] = UpdateBatchItem{
 			DocumentID: req.documentID,
-			Update:     recoverUpdateCombineCallback(req.update),
+			Update:     recoverCollectionUpdateCallback(req.update),
 		}
 	}
 	results, err := batch[0].collection.UpdateBatch(items)
@@ -3228,21 +3229,28 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 }
 
 func runUpdateCombineDirect(req collectionUpdateCombineRequest) collectionUpdateCombineResult {
-	matched, modified, err := req.collection.updateDirect(req.documentID, recoverUpdateCombineCallback(req.update))
+	matched, modified, err := req.collection.updateDirect(req.documentID, recoverCollectionUpdateCallback(req.update))
 	return collectionUpdateCombineResult{matched: matched, modified: modified, err: err}
 }
 
-func recoverUpdateCombineCallback(update func(current []byte) (replacement []byte, changed bool, err error)) func(current []byte) (replacement []byte, changed bool, err error) {
+func recoverCollectionUpdateCallback(update func(current []byte) (replacement []byte, changed bool, err error)) func(current []byte) (replacement []byte, changed bool, err error) {
 	return func(current []byte) (replacement []byte, changed bool, err error) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				replacement = nil
 				changed = false
-				err = fmt.Errorf("collections: update combiner callback panic (%T): %v\n%s", recovered, recovered, debug.Stack())
+				err = fmt.Errorf("collections: update callback panic (%T): %v\n%s", recovered, recovered, debug.Stack())
 			}
 		}()
 		return update(current)
 	}
+}
+
+func (domain *collectionWriteDomain) updateCombineIdleTTL() time.Duration {
+	if domain != nil && domain.updateCombineTTL > 0 {
+		return domain.updateCombineTTL
+	}
+	return collectionUpdateCombineIdleTTL
 }
 
 func completeUpdateCombineBatchWithError(batch []collectionUpdateCombineRequest, err error) {
@@ -3252,13 +3260,10 @@ func completeUpdateCombineBatchWithError(batch []collectionUpdateCombineRequest,
 }
 
 func completeUpdateCombineRequest(req collectionUpdateCombineRequest, result collectionUpdateCombineResult) {
-	if req.done == nil || cap(req.done) == 0 {
+	if req.done == nil {
 		return
 	}
-	select {
-	case req.done <- result:
-	default:
-	}
+	req.done <- result
 }
 
 func collectionUpdateCombineHasDuplicateIDs(batch []collectionUpdateCombineRequest) bool {
