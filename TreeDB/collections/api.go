@@ -1030,12 +1030,12 @@ func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWrite
 	if len(domain.rootBaseIDs) > 0 {
 		for rootName, baseRootID := range domain.rootBaseIDs {
 			if rootID := catalog.rootID(rootName); rootID != baseRootID {
-				return nil, fmt.Errorf("collections: concurrent root modification detected for %q", domain.meta.Name)
+				return nil, fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, domain.meta.Name)
 			}
 		}
 	} else {
 		if rootID := catalog.rootID(primaryRootName); rootID != domain.primaryRoot {
-			return nil, fmt.Errorf("collections: concurrent root modification detected for %q", domain.meta.Name)
+			return nil, fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, domain.meta.Name)
 		}
 	}
 	options, err := collectionPlannerOptions(catalog.meta)
@@ -1137,7 +1137,7 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 		return fmt.Errorf("collections: concurrent schema modification detected for %q", meta.Name)
 	}
 	if got := pinnedCatalog.rootID(rootName); got != baseRoot {
-		return fmt.Errorf("collections: concurrent root modification detected for %q", meta.Name)
+		return fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, meta.Name)
 	}
 	baseSystemRoot := snapshotSystemRoot(pin)
 	baseCommitSeq := snapshotCommitSeq(pin)
@@ -2021,7 +2021,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) e
 	}
 	for rootName, baseRoot := range domain.rootBaseIDs {
 		if got := pinnedCatalog.rootID(rootName); got != baseRoot {
-			return fmt.Errorf("collections: concurrent root modification detected for %q", rootName)
+			return fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
 		}
 	}
 
@@ -2216,8 +2216,31 @@ func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool)
 	if c.db == nil {
 		return nil, errors.New("collections: db is nil")
 	}
+
+	var lastErr error
+	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
+		resultIDs, err := c.insertBatchOnce(ids, documents, trustedValidBSON)
+		if errors.Is(err, ErrConcurrentMutation) {
+			lastErr = err
+			waitBeforeCollectionMutationRetry(attempt)
+			continue
+		}
+		return resultIDs, err
+	}
+	return nil, collectionMutationRetryExhausted(lastErr)
+}
+
+func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON bool) ([][]byte, error) {
 	unlockMutation := c.lockMutation()
-	defer unlockMutation()
+	mutationLocked := true
+	unlockIfLocked := func() {
+		if mutationLocked {
+			unlockMutation()
+			mutationLocked = false
+		}
+	}
+	defer unlockIfLocked()
+
 	if len(documents) == 0 {
 		c.setLastInsertStats(CollectionInsertStats{
 			Documents: 0,
@@ -2242,8 +2265,9 @@ func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool)
 		_ = snap.Close()
 		return nil, errCollectionNotFound
 	}
-	c.meta = catalog.meta
-	plannerOptions, err := collectionPlannerOptions(c.meta)
+	meta := catalog.meta
+	c.meta = meta
+	plannerOptions, err := collectionPlannerOptions(meta)
 	if err != nil {
 		_ = snap.Close()
 		return nil, err
@@ -2254,8 +2278,8 @@ func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool)
 		return nil, err
 	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
-	indexedMemtablesEnabled := c.shouldBufferIndexedInserts(c.meta)
-	bufferIndexedInserts := c.shouldBufferIndexedInsertBatch(c.meta, len(documents))
+	indexedMemtablesEnabled := c.shouldBufferIndexedInserts(meta)
+	bufferIndexedInserts := c.shouldBufferIndexedInsertBatch(meta, len(documents))
 	if indexedMemtablesEnabled && !bufferIndexedInserts {
 		_ = snap.Close()
 		if err := c.flushBufferedWrites(); err != nil {
@@ -2274,8 +2298,9 @@ func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool)
 			_ = snap.Close()
 			return nil, errCollectionNotFound
 		}
-		c.meta = catalog.meta
-		plannerOptions, err = collectionPlannerOptions(c.meta)
+		meta = catalog.meta
+		c.meta = meta
+		plannerOptions, err = collectionPlannerOptions(meta)
 		if err != nil {
 			_ = snap.Close()
 			return nil, err
@@ -2286,36 +2311,37 @@ func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool)
 			return nil, err
 		}
 		plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
-		indexedMemtablesEnabled = c.shouldBufferIndexedInserts(c.meta)
-		bufferIndexedInserts = c.shouldBufferIndexedInsertBatch(c.meta, len(documents))
+		indexedMemtablesEnabled = c.shouldBufferIndexedInserts(meta)
+		bufferIndexedInserts = c.shouldBufferIndexedInsertBatch(meta, len(documents))
 	}
 	if bufferIndexedInserts {
-		plannerOptions = collectionOptionsWithBufferedTemplateV1Resolver(plannerOptions, c.writeDomain, c.meta.Name)
+		plannerOptions = collectionOptionsWithBufferedTemplateV1Resolver(plannerOptions, c.writeDomain, meta.Name)
 	}
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
 
-	if len(c.meta.Indexes) == 0 && plannerOptions.documentFormat == DocumentFormatJSON {
+	if len(meta.Indexes) == 0 && plannerOptions.documentFormat == DocumentFormatJSON {
 		return c.insertBatchNoIndex(catalog, snap, baseCommitSeq, baseSystemRoot, plannerOptions, ids, documents)
 	}
 
+	unlockForPlanning := plannerOptions.documentFormat != DocumentFormatTemplateV1
+	if unlockForPlanning {
+		unlockIfLocked()
+	}
+
 	planner := insertBatchPlanner{
-		collection:     c.meta.Name,
-		primaryRoot:    collectionPrimaryRootName(c.meta.Name),
-		templateRoot:   collectionTemplateRootName(c.meta.Name),
-		indexStateRoot: collectionIndexStateRootName(c.meta.Name),
-		indexes:        plannerIndexes(c.meta.Indexes),
+		collection:     meta.Name,
+		primaryRoot:    collectionPrimaryRootName(meta.Name),
+		templateRoot:   collectionTemplateRootName(meta.Name),
+		indexStateRoot: collectionIndexStateRootName(meta.Name),
+		indexes:        plannerIndexes(meta.Indexes),
 		options:        plannerOptions,
 	}
 	if bufferIndexedInserts {
 		planner.buildPrimaryVal = clonePrimaryDocument
 		planner.cloneTemplateRunValues = true
 	}
-	plan, err := planner.planInsertBatchWithPreflight(ids, documents, insertBatchPreflight{
-		snapshot:           snap,
-		primaryRootID:      catalog.rootID(collectionPrimaryRootName(c.meta.Name)),
-		uniqueIndexRootIDs: uniqueIndexRootIDs(catalog),
-	})
+	plan, err := planner.planInsertBatch(ids, documents)
 	if err != nil {
 		_ = snap.Close()
 		return nil, err
@@ -2331,6 +2357,8 @@ func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool)
 		return plan.resultIDs, nil
 	}
 
+	rootNames, baseRootIDs := insertBatchPlanRootNamesAndBaseIDs(plan, catalog)
+
 	if bufferIndexedInserts {
 		resultIDs, err := cloneBatchDocumentIDs(plan.resultIDs)
 		if err != nil {
@@ -2338,8 +2366,19 @@ func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool)
 			resetCollectionRunTables(plan.runs)
 			return nil, err
 		}
-		bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(catalog, baseCommitSeq, baseSystemRoot, plan)
+		if !mutationLocked {
+			unlockMutation = c.lockMutation()
+			mutationLocked = true
+		}
+		c.meta = meta
+		pin, currentCatalog, err := c.validateInsertBatchPlanLocked(meta, rootNames, baseRootIDs, plan)
 		_ = snap.Close()
+		if err != nil {
+			resetCollectionRunTables(plan.runs)
+			return nil, err
+		}
+		bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, snapshotCommitSeq(pin), snapshotSystemRoot(pin), plan)
+		_ = pin.Close()
 		if err != nil {
 			resetCollectionRunTables(plan.runs)
 			return nil, err
@@ -2349,13 +2388,22 @@ func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool)
 		return resultIDs, nil
 	}
 
-	baseRootIDs := make(map[string]uint64, len(plan.runs))
-	for _, run := range plan.runs {
-		baseRootIDs[run.name] = catalog.rootID(run.name)
+	if !mutationLocked {
+		unlockMutation = c.lockMutation()
+		mutationLocked = true
 	}
+	c.meta = meta
+	pin, currentCatalog, err := c.validateInsertBatchPlanLocked(meta, rootNames, baseRootIDs, plan)
+	_ = snap.Close()
+	if err != nil {
+		resetCollectionRunTables(plan.runs)
+		return nil, err
+	}
+	baseCommitSeq = snapshotCommitSeq(pin)
+	baseSystemRoot = snapshotSystemRoot(pin)
 	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
 	// base roots before stale-root validation rejects concurrent modifications.
-	defer func() { _ = snap.Close() }()
+	defer func() { _ = pin.Close() }()
 
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(plan.runs))
 	iterators := make([]iterator.UnsafeIterator, 0, len(plan.runs))
@@ -2375,10 +2423,6 @@ func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool)
 		})
 	}
 
-	rootNames := make([]string, len(plan.runs))
-	for i, run := range plan.runs {
-		rootNames[i] = run.name
-	}
 	publishStart := time.Now()
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
@@ -2390,11 +2434,60 @@ func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool)
 	if len(rootIDs) != len(plan.runs) {
 		return nil, errors.New("collections: ordered root publish returned unexpected root count")
 	}
-	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
+	nextCatalog := cloneCatalogWithRootUpdates(currentCatalog, meta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	c.setLastInsertStats(plan.stats.CollectionInsertStats)
 	return plan.resultIDs, nil
+}
+
+func insertBatchPlanRootNamesAndBaseIDs(plan *insertBatchPlan, catalog *collectionCatalog) ([]string, map[string]uint64) {
+	if plan == nil {
+		return nil, nil
+	}
+	rootNames := make([]string, len(plan.runs))
+	baseRootIDs := make(map[string]uint64, len(plan.runs))
+	for i, run := range plan.runs {
+		rootNames[i] = run.name
+		if catalog != nil {
+			baseRootIDs[run.name] = catalog.rootID(run.name)
+		}
+	}
+	return rootNames, baseRootIDs
+}
+
+func (c *Collection) validateInsertBatchPlanLocked(meta CollectionMeta, rootNames []string, baseRootIDs map[string]uint64, plan *insertBatchPlan) (*backenddb.Snapshot, *collectionCatalog, error) {
+	if c == nil || c.db == nil {
+		return nil, nil, backenddb.ErrClosed
+	}
+	current := c.db.AcquireSnapshot()
+	if current == nil {
+		return nil, nil, backenddb.ErrClosed
+	}
+	catalog, err := loadCollectionCatalog(current, meta.Name)
+	if err != nil {
+		_ = current.Close()
+		return nil, nil, err
+	}
+	if catalog == nil {
+		_ = current.Close()
+		return nil, nil, errCollectionNotFound
+	}
+	if !sameCollectionMeta(catalog.meta, meta) {
+		_ = current.Close()
+		return nil, nil, fmt.Errorf("collections: concurrent schema modification detected for %q", meta.Name)
+	}
+	for _, rootName := range rootNames {
+		if got, want := catalog.rootID(rootName), baseRootIDs[rootName]; got != want {
+			_ = current.Close()
+			return nil, nil, fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
+		}
+	}
+	if err := plan.checkPersistedConflicts(current, catalog); err != nil {
+		_ = current.Close()
+		return nil, nil, err
+	}
+	return current, catalog, nil
 }
 
 func collectionOptionsWithTrustedBSONDocuments(opts collectionOptions, trusted bool) (collectionOptions, error) {
