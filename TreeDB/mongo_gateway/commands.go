@@ -68,9 +68,15 @@ func (s *Server) insertResponse(command wire.Document, sequences []wire.Document
 			if err != nil {
 				return commandError(commandCodeBadValue, "BadValue", err.Error())
 			}
+			format = actualFormat
 		}
 	}
-	if _, err := col.InsertBatch(ids, stored); err != nil {
+	if format == collections.DocumentFormatBSON {
+		_, err = col.InsertBatchValidatedBSON(ids, stored)
+	} else {
+		_, err = col.InsertBatch(ids, stored)
+	}
+	if err != nil {
 		code, codeName := commandCodeBadValue, "BadValue"
 		if collections.IsDuplicateKeyError(err) {
 			code, codeName = commandCodeDuplicateKey, "DuplicateKey"
@@ -84,15 +90,15 @@ func (s *Server) insertResponse(command wire.Document, sequences []wire.Document
 }
 
 func prepareInsertDocuments(documents []wire.Document, format collections.DocumentFormat) ([][]byte, [][]byte, error) {
-	ids := make([][]byte, 0, len(documents))
-	stored := make([][]byte, 0, len(documents))
-	for _, doc := range documents {
+	ids := make([][]byte, len(documents))
+	stored := make([][]byte, len(documents))
+	for i, doc := range documents {
 		key, encoded, err := prepareInsertDocument(doc, format)
 		if err != nil {
 			return nil, nil, err
 		}
-		ids = append(ids, key)
-		stored = append(stored, encoded)
+		ids[i] = key
+		stored[i] = encoded
 	}
 	return ids, stored, nil
 }
@@ -1024,7 +1030,7 @@ func commandDocuments(doc wire.Document, sequences []wire.DocumentSequence, key 
 		if sequenceDocs != nil {
 			return nil, fmt.Errorf("Mongo command contains multiple %q document sequences", key)
 		}
-		sequenceDocs = append([]wire.Document(nil), seq.Documents...)
+		sequenceDocs = seq.Documents
 	}
 	arrayValue := bson.Raw(doc).Lookup(key)
 	if sequenceDocs != nil {
@@ -1079,16 +1085,12 @@ func validateMongoDatabaseName(db string) error {
 }
 
 // prepareInsertDocument converts one wire BSON document into the collection's
-// configured storage format.
+// configured storage format. Callers pass documents parsed from validated wire
+// messages or produced by gateway update materialization.
 func prepareInsertDocument(doc wire.Document, format collections.DocumentFormat) ([]byte, []byte, error) {
-	if err := wire.ValidateDocument(doc); err != nil {
-		return nil, nil, err
-	}
 	raw := bson.Raw(doc)
-	if err := validateSupportedDocument(raw); err != nil {
-		return nil, nil, err
-	}
-	if raw.Lookup("_id").IsZero() {
+	id := raw.Lookup("_id")
+	if id.IsZero() {
 		var decoded bson.D
 		if err := bson.Unmarshal(raw, &decoded); err != nil {
 			return nil, nil, err
@@ -1099,13 +1101,17 @@ func prepareInsertDocument(doc wire.Document, format collections.DocumentFormat)
 			return nil, nil, err
 		}
 		raw = bson.Raw(encoded)
+		id = raw.Lookup("_id")
 	}
-	key, err := encodePrimaryKey(raw.Lookup("_id"))
+	key, err := encodePrimaryKey(id)
 	if err != nil {
 		return nil, nil, err
 	}
 	if format == collections.DocumentFormatBSON {
-		return key, bytes.Clone(raw), nil
+		return key, raw, nil
+	}
+	if err := validateSupportedDocument(raw); err != nil {
+		return nil, nil, err
 	}
 	stored, err := bson.MarshalExtJSON(raw, true, false)
 	if err != nil {

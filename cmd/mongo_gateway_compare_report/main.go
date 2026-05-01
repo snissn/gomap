@@ -40,6 +40,7 @@ type benchmarkResult struct {
 	Collection                 string         `json:"collection"`
 	Documents                  int            `json:"documents"`
 	SecondaryIndexes           int            `json:"secondary_indexes"`
+	ClientMode                 string         `json:"client_mode,omitempty"`
 	TreeDBDocumentFormat       string         `json:"treedb_document_format,omitempty"`
 	Phases                     []phaseResult  `json:"phases"`
 	TreeDBDiskAfterLoad        *diskSnapshot  `json:"treedb_disk_after_load,omitempty"`
@@ -50,12 +51,16 @@ type benchmarkResult struct {
 }
 
 type phaseResult struct {
-	Name           string         `json:"name"`
-	Operations     int            `json:"operations"`
-	DriverCalls    int            `json:"driver_calls"`
-	DurationMillis float64        `json:"duration_ms"`
-	OpsPerSecond   float64        `json:"ops_per_sec"`
-	LatencyMicros  latencySummary `json:"latency_micros"`
+	Name                    string         `json:"name"`
+	Operations              int            `json:"operations"`
+	DriverCalls             int            `json:"driver_calls"`
+	DurationMillis          float64        `json:"duration_ms"`
+	OpsPerSecond            float64        `json:"ops_per_sec"`
+	SampledOpsPerSecond     float64        `json:"sampled_ops_per_sec,omitempty"`
+	SampledNsPerOp          float64        `json:"sampled_ns_per_op,omitempty"`
+	DriverAggregateMillis   float64        `json:"driver_aggregate_duration_ms,omitempty"`
+	DriverMeanLatencyMicros float64        `json:"driver_mean_latency_us,omitempty"`
+	LatencyMicros           latencySummary `json:"latency_micros"`
 }
 
 type latencySummary struct {
@@ -255,10 +260,17 @@ func runConfig(row matrixRow, result benchmarkResult) string {
 		return row.Config
 	}
 	if row.Target == "mongo" {
+		if result.ClientMode != "" && result.ClientMode != "driver" {
+			return "mongo_" + normalizeConfigName(result.ClientMode)
+		}
 		return "mongo"
 	}
 	if result.TreeDBDocumentFormat != "" {
-		return "treedb_" + normalizeConfigName(result.TreeDBDocumentFormat)
+		config := "treedb_" + normalizeConfigName(result.TreeDBDocumentFormat)
+		if result.ClientMode != "" && result.ClientMode != "driver" {
+			config += "_" + normalizeConfigName(result.ClientMode)
+		}
+		return config
 	}
 	return "treedb"
 }
@@ -422,7 +434,7 @@ func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) str
 	b.WriteString("- MongoDB `dbStats.dataSize` is uncompressed logical document size, not disk usage.\n")
 	b.WriteString("- MongoDB `dbStats.totalSize` is reported separately because it can diverge sharply from the isolated data-directory `du` measurement on small WiredTiger workloads.\n")
 	b.WriteString("- MongoDB physical bytes are the preferred local disk comparison when the matrix runner has an isolated data directory, such as Docker mode.\n")
-	b.WriteString("- Ops/sec values are produced by the shared MongoDB Go driver workload in `cmd/mongo_gateway_bench`.\n")
+	b.WriteString("- Wall ops/sec values include the full benchmark phase loop. Sampled ops/sec values isolate the timed driver/gateway call inside each phase and are useful when prebuilt fixtures are enabled.\n")
 	return b.String()
 }
 
@@ -563,17 +575,21 @@ func renderDiskTable(b *strings.Builder, cells []cellComparison) {
 
 func renderOpsTable(b *strings.Builder, cells []cellComparison) {
 	b.WriteString("## Ops/Sec Summary\n\n")
-	b.WriteString("| docs | indexes | TreeDB config | phase | TreeDB ops/sec | MongoDB ops/sec | TreeDB / MongoDB | TreeDB p95 us | MongoDB p95 us |\n")
-	b.WriteString("| ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: |\n")
+	b.WriteString("| docs | indexes | TreeDB config | phase | TreeDB wall ops/sec | TreeDB sampled ops/sec | MongoDB wall ops/sec | MongoDB sampled ops/sec | TreeDB / MongoDB wall | TreeDB / MongoDB sampled | TreeDB p95 us | MongoDB p95 us |\n")
+	b.WriteString("| ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, cmp := range allPhaseComparisons(cells) {
-		fmt.Fprintf(b, "| %d | %d | `%s` | `%s` | %s | %s | %s | %s | %s |\n",
+		sampledRatio := safeRatio(cmp.TreeDBPhase.SampledOpsPerSecond, cmp.MongoPhase.SampledOpsPerSecond)
+		fmt.Fprintf(b, "| %d | %d | `%s` | `%s` | %s | %s | %s | %s | %s | %s | %s | %s |\n",
 			cmp.Cell.Documents,
 			cmp.Cell.SecondaryIndexes,
 			cmp.Cell.TreeDBConfig,
 			cmp.Name,
 			formatPhaseOps(cmp.HasTreeDB, cmp.TreeDBPhase.OpsPerSecond),
+			formatPhaseOps(cmp.HasTreeDB && cmp.TreeDBPhase.SampledOpsPerSecond > 0, cmp.TreeDBPhase.SampledOpsPerSecond),
 			formatPhaseOps(cmp.HasMongo, cmp.MongoPhase.OpsPerSecond),
+			formatPhaseOps(cmp.HasMongo && cmp.MongoPhase.SampledOpsPerSecond > 0, cmp.MongoPhase.SampledOpsPerSecond),
 			formatRatio(cmp.Ratio),
+			formatRatio(sampledRatio),
 			formatPhaseLatency(cmp.HasTreeDB, cmp.TreeDBPhase.LatencyMicros.P95),
 			formatPhaseLatency(cmp.HasMongo, cmp.MongoPhase.LatencyMicros.P95),
 		)
@@ -633,8 +649,13 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 		"treedb_config",
 		"phase",
 		"treedb_ops_sec",
+		"treedb_sampled_ops_sec",
+		"treedb_sampled_ns_per_op",
 		"mongo_ops_sec",
+		"mongo_sampled_ops_sec",
+		"mongo_sampled_ns_per_op",
 		"treedb_to_mongo_ops_ratio",
+		"treedb_to_mongo_sampled_ops_ratio",
 		"treedb_p50_us",
 		"mongo_p50_us",
 		"treedb_p95_us",
@@ -659,14 +680,20 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 		treePhysical := cell.TreeDB.Row.PhysicalBytes
 		mongoData, _ := mongoDataBytes(cell.Mongo.Result)
 		mongoTotal, _ := mongoDBStatsTotalBytes(cell.Mongo.Result)
+		sampledRatio := safeRatio(cmp.TreeDBPhase.SampledOpsPerSecond, cmp.MongoPhase.SampledOpsPerSecond)
 		row := []string{
 			strconv.Itoa(cmp.Cell.Documents),
 			strconv.Itoa(cmp.Cell.SecondaryIndexes),
 			cmp.Cell.TreeDBConfig,
 			cmp.Name,
 			formatRawFloat(cmp.HasTreeDB, cmp.TreeDBPhase.OpsPerSecond),
+			formatRawFloat(cmp.HasTreeDB && cmp.TreeDBPhase.SampledOpsPerSecond > 0, cmp.TreeDBPhase.SampledOpsPerSecond),
+			formatRawFloat(cmp.HasTreeDB && cmp.TreeDBPhase.SampledNsPerOp > 0, cmp.TreeDBPhase.SampledNsPerOp),
 			formatRawFloat(cmp.HasMongo, cmp.MongoPhase.OpsPerSecond),
+			formatRawFloat(cmp.HasMongo && cmp.MongoPhase.SampledOpsPerSecond > 0, cmp.MongoPhase.SampledOpsPerSecond),
+			formatRawFloat(cmp.HasMongo && cmp.MongoPhase.SampledNsPerOp > 0, cmp.MongoPhase.SampledNsPerOp),
 			formatRawRatio(cmp.Ratio),
+			formatRawRatio(sampledRatio),
 			formatRawFloat(cmp.HasTreeDB, cmp.TreeDBPhase.LatencyMicros.P50),
 			formatRawFloat(cmp.HasMongo, cmp.MongoPhase.LatencyMicros.P50),
 			formatRawFloat(cmp.HasTreeDB, cmp.TreeDBPhase.LatencyMicros.P95),

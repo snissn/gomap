@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -125,6 +126,28 @@ func TestCollectionBSONFormatRejectsInvalidBSON(t *testing.T) {
 	}
 	if _, err := col.InsertBatch([][]byte{[]byte("bad")}, [][]byte{[]byte{1, 2, 3}}); err == nil {
 		t.Fatal("insert invalid BSON err=nil want error")
+	}
+}
+
+func TestInsertBatchValidatedBSONRequiresBSONCollection(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	doc := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}})
+	_, err = col.InsertBatchValidatedBSON([][]byte{[]byte("u1")}, [][]byte{doc})
+	if err == nil || !strings.Contains(err.Error(), "trusted BSON insert requires BSON document format") {
+		t.Fatalf("InsertBatchValidatedBSON err=%v want BSON format error", err)
 	}
 }
 

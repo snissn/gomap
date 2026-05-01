@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,9 +25,13 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	mongogateway "github.com/snissn/gomap/TreeDB/mongo_gateway"
+	"github.com/snissn/gomap/TreeDB/mongo_gateway/fastclient"
+	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
+	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
 type config struct {
@@ -48,6 +53,7 @@ type config struct {
 	ConcurrentWriters           int
 	ConcurrentWrites            int
 	SecondaryIndexes            int
+	ClientMode                  string
 	TreeDBProfile               treedb.Profile
 	TreeDBDocumentFormat        collections.DocumentFormat
 	TreeDBDataRootStorage       collections.RootStoragePolicy
@@ -67,6 +73,7 @@ type benchmarkResult struct {
 	Collection                  string              `json:"collection"`
 	Documents                   int                 `json:"documents"`
 	SecondaryIndexes            int                 `json:"secondary_indexes"`
+	ClientMode                  string              `json:"client_mode"`
 	ConcurrentReaders           int                 `json:"concurrent_readers,omitempty"`
 	ConcurrentReads             int                 `json:"concurrent_reads,omitempty"`
 	ConcurrentWriters           int                 `json:"concurrent_writers,omitempty"`
@@ -93,6 +100,8 @@ type phaseResult struct {
 	DriverCalls             int            `json:"driver_calls"`
 	DurationMillis          float64        `json:"duration_ms"`
 	OpsPerSecond            float64        `json:"ops_per_sec"`
+	SampledOpsPerSecond     float64        `json:"sampled_ops_per_sec,omitempty"`
+	SampledNsPerOp          float64        `json:"sampled_ns_per_op,omitempty"`
 	DriverAggregateMillis   float64        `json:"driver_aggregate_duration_ms,omitempty"`
 	DriverMeanLatencyMicros float64        `json:"driver_mean_latency_us,omitempty"`
 	LatencyMicros           latencySummary `json:"latency_micros"`
@@ -121,6 +130,8 @@ type benchTarget struct {
 	client          *mongo.Client
 	db              *backenddb.DB
 	collections     *collections.CollectionManager
+	server          *mongogateway.Server
+	mongoAddr       string
 	treedbDir       string
 	removeTreeDBDir bool
 	cleanup         func(context.Context) error
@@ -130,6 +141,13 @@ const (
 	treeDBMaintenanceNone       = "none"
 	treeDBMaintenanceCheckpoint = "checkpoint"
 	treeDBMaintenanceFull       = "full"
+
+	clientModeDriver           = "driver"
+	clientModeDriverCommand    = "driver-command"
+	clientModeDriverCommandRaw = "driver-command-raw"
+	clientModeDriverUnack      = "driver-unack"
+	clientModeRawWire          = "raw-wire"
+	clientModeRawWireTCP       = "raw-wire-tcp"
 )
 
 func main() {
@@ -180,6 +198,7 @@ func parseConfig(args []string) (config, error) {
 		TreeDBIndexStateRootStorage: collections.RootStorageCompressed,
 		TreeDBIndexRootStorage:      collections.RootStorageCompressed,
 		TreeDBMaintenance:           treeDBMaintenanceFull,
+		ClientMode:                  clientModeDriver,
 	}
 	fs := flag.NewFlagSet("mongo_gateway_bench", flag.ContinueOnError)
 	var flagOutput bytes.Buffer
@@ -209,6 +228,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.ConcurrentWriters, "concurrent-writers", 0, "writer goroutines for the concurrent _id update phase; 0 disables the phase")
 	fs.IntVar(&cfg.ConcurrentWrites, "concurrent-writes", 0, "total update operations for the concurrent write phase")
 	fs.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 2, "secondary indexes to create: 0, 1=email, 2=both single-field indexes: email and city")
+	fs.StringVar(&cfg.ClientMode, "client-mode", cfg.ClientMode, "benchmark client path: driver, driver-command, driver-command-raw, driver-unack, raw-wire, or raw-wire-tcp; raw-wire modes are TreeDB-only and bypass the MongoDB Go driver for the insert load phase")
 	fs.StringVar(&treeDBProfile, "treedb-profile", treeDBProfile, "TreeDB profile for -target treedb: fast, wal_on_fast, durable, or bench")
 	fs.StringVar(&treeDBDocumentFormat, "treedb-document-format", treeDBDocumentFormat, "TreeDB collection document format for -target treedb: json, template-v1, or bson")
 	fs.StringVar(&treeDBDataRootStorage, "treedb-data-root-storage", treeDBDataRootStorage, "TreeDB collection data root storage for -target treedb: default, fast, or compressed")
@@ -226,6 +246,14 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.Target != "treedb" && cfg.Target != "mongo" {
 		return config{}, fmt.Errorf("unknown target %q", cfg.Target)
+	}
+	clientMode, err := parseClientMode(cfg.ClientMode)
+	if err != nil {
+		return config{}, err
+	}
+	cfg.ClientMode = clientMode
+	if cfg.Target != "treedb" && isRawWireClientMode(cfg.ClientMode) {
+		return config{}, fmt.Errorf("client-mode %q is only supported with -target treedb", cfg.ClientMode)
 	}
 	if cfg.Documents <= 0 {
 		return config{}, errors.New("documents must be > 0")
@@ -344,6 +372,29 @@ func parseTreeDBMaintenance(raw string) (string, error) {
 	}
 }
 
+func parseClientMode(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", clientModeDriver:
+		return clientModeDriver, nil
+	case clientModeDriverCommand:
+		return clientModeDriverCommand, nil
+	case clientModeDriverCommandRaw:
+		return clientModeDriverCommandRaw, nil
+	case clientModeDriverUnack:
+		return clientModeDriverUnack, nil
+	case clientModeRawWire:
+		return clientModeRawWire, nil
+	case clientModeRawWireTCP:
+		return clientModeRawWireTCP, nil
+	default:
+		return "", fmt.Errorf("unknown client-mode %q", raw)
+	}
+}
+
+func isRawWireClientMode(mode string) bool {
+	return mode == clientModeRawWire || mode == clientModeRawWireTCP
+}
+
 func openTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 	switch cfg.Target {
 	case "treedb":
@@ -452,6 +503,8 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		client:          client,
 		db:              db,
 		collections:     manager,
+		server:          server,
+		mongoAddr:       ln.Addr().String(),
 		treedbDir:       dir,
 		removeTreeDBDir: removeDir,
 		cleanup:         cleanup,
@@ -478,6 +531,7 @@ func closeBenchTargetKeepDir(ctx context.Context, target *benchTarget) error {
 	target.client = nil
 	target.db = nil
 	target.collections = nil
+	target.server = nil
 	return err
 }
 
@@ -660,6 +714,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 		Collection:        cfg.Collection,
 		Documents:         cfg.Documents,
 		SecondaryIndexes:  cfg.SecondaryIndexes,
+		ClientMode:        cfg.ClientMode,
 		ConcurrentReaders: cfg.ConcurrentReaders,
 		ConcurrentReads:   cfg.ConcurrentReads,
 		ConcurrentWriters: cfg.ConcurrentWriters,
@@ -684,35 +739,21 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 		return nil, err
 	}
 	var prebuilt []bson.D
+	var prebuiltRaw []bson.Raw
 	if cfg.PrebuildDocuments {
 		prebuilt = make([]bson.D, cfg.Documents)
+		prebuiltRaw = make([]bson.Raw, cfg.Documents)
 		for i := range prebuilt {
-			prebuilt[i] = benchmarkDocument(i)
+			doc := benchmarkDocument(i)
+			raw, err := bson.Marshal(doc)
+			if err != nil {
+				return nil, fmt.Errorf("prebuild document %d: %w", i, err)
+			}
+			prebuilt[i] = doc
+			prebuiltRaw[i] = bson.Raw(raw)
 		}
 	}
-	loadPhase, err := measurePhase("load_insert_many", cfg.Documents, func(sample func(time.Duration)) error {
-		for start := 0; start < cfg.Documents; start += cfg.BatchSize {
-			end := start + cfg.BatchSize
-			if end > cfg.Documents {
-				end = cfg.Documents
-			}
-			docs := make([]any, 0, end-start)
-			for i := start; i < end; i++ {
-				if prebuilt != nil {
-					docs = append(docs, prebuilt[i])
-				} else {
-					docs = append(docs, benchmarkDocument(i))
-				}
-			}
-			begin := time.Now()
-			_, err := coll.InsertMany(ctx, docs)
-			sample(time.Since(begin))
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	loadPhase, err := runLoadPhase(ctx, cfg, target, coll, prebuilt, prebuiltRaw)
 	if err != nil {
 		return nil, err
 	}
@@ -915,6 +956,398 @@ func createIndexes(ctx context.Context, coll *mongo.Collection, secondaryIndexes
 		}); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func runLoadPhase(ctx context.Context, cfg config, target *benchTarget, coll *mongo.Collection, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
+	if cfg.Target == "treedb" && cfg.ClientMode == clientModeRawWire {
+		return runTreeDBRawWireLoadPhase(cfg, target, prebuilt, prebuiltRaw)
+	}
+	if cfg.Target == "treedb" && cfg.ClientMode == clientModeRawWireTCP {
+		return runTreeDBRawWireTCPLoadPhase(cfg, target, prebuilt, prebuiltRaw)
+	}
+	if cfg.ClientMode == clientModeDriverCommand {
+		return runDriverCommandLoadPhase(ctx, cfg, target.client.Database(cfg.Database), prebuilt, prebuiltRaw)
+	}
+	if cfg.ClientMode == clientModeDriverCommandRaw {
+		return runDriverCommandRawLoadPhase(ctx, cfg, target.client.Database(cfg.Database), prebuilt, prebuiltRaw)
+	}
+	if cfg.ClientMode == clientModeDriverUnack {
+		return runDriverUnackLoadPhase(ctx, cfg, target.client.Database(cfg.Database), prebuilt)
+	}
+	return runDriverLoadPhase(ctx, cfg, coll, prebuilt)
+}
+
+func runDriverLoadPhase(ctx context.Context, cfg config, coll *mongo.Collection, prebuilt []bson.D) (phaseResult, error) {
+	return measurePhase("load_insert_many", cfg.Documents, func(sample func(time.Duration)) error {
+		for start := 0; start < cfg.Documents; start += cfg.BatchSize {
+			end := start + cfg.BatchSize
+			if end > cfg.Documents {
+				end = cfg.Documents
+			}
+			docs := make([]any, 0, end-start)
+			for i := start; i < end; i++ {
+				if prebuilt != nil {
+					docs = append(docs, prebuilt[i])
+				} else {
+					docs = append(docs, benchmarkDocument(i))
+				}
+			}
+			begin := time.Now()
+			_, err := coll.InsertMany(ctx, docs)
+			sample(time.Since(begin))
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func runDriverCommandLoadPhase(ctx context.Context, cfg config, db *mongo.Database, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
+	return measurePhase("load_insert_many", cfg.Documents, func(sample func(time.Duration)) error {
+		for start := 0; start < cfg.Documents; start += cfg.BatchSize {
+			end := start + cfg.BatchSize
+			if end > cfg.Documents {
+				end = cfg.Documents
+			}
+			docs := make(bson.A, 0, end-start)
+			for i := start; i < end; i++ {
+				if prebuiltRaw != nil {
+					docs = append(docs, prebuiltRaw[i])
+				} else if prebuilt != nil {
+					docs = append(docs, prebuilt[i])
+				} else {
+					docs = append(docs, benchmarkDocument(i))
+				}
+			}
+			begin := time.Now()
+			err := db.RunCommand(ctx, bson.D{
+				{Key: "insert", Value: cfg.Collection},
+				{Key: "documents", Value: docs},
+				{Key: "ordered", Value: true},
+			}).Err()
+			sample(time.Since(begin))
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func runDriverCommandRawLoadPhase(ctx context.Context, cfg config, db *mongo.Database, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
+	return measurePhase("load_insert_many", cfg.Documents, func(sample func(time.Duration)) error {
+		for start := 0; start < cfg.Documents; start += cfg.BatchSize {
+			end := start + cfg.BatchSize
+			if end > cfg.Documents {
+				end = cfg.Documents
+			}
+			command, err := rawInsertCommand(cfg.Collection, start, end, prebuilt, prebuiltRaw)
+			if err != nil {
+				return err
+			}
+			begin := time.Now()
+			err = db.RunCommand(ctx, command).Err()
+			sample(time.Since(begin))
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func rawInsertCommand(collection string, start, end int, prebuilt []bson.D, prebuiltRaw []bson.Raw) (bson.Raw, error) {
+	arrIdx, arr := bsoncore.AppendArrayStart(nil)
+	for i := start; i < end; i++ {
+		var raw bson.Raw
+		if prebuiltRaw != nil {
+			raw = prebuiltRaw[i]
+		} else {
+			var doc bson.D
+			if prebuilt != nil {
+				doc = prebuilt[i]
+			} else {
+				doc = benchmarkDocument(i)
+			}
+			var err error
+			raw, err = bson.Marshal(doc)
+			if err != nil {
+				return nil, err
+			}
+		}
+		arr = bsoncore.AppendDocumentElement(arr, strconv.Itoa(i-start), raw)
+	}
+	arr, err := bsoncore.AppendArrayEnd(arr, arrIdx)
+	if err != nil {
+		return nil, err
+	}
+	docIdx, doc := bsoncore.AppendDocumentStart(nil)
+	doc = bsoncore.AppendStringElement(doc, "insert", collection)
+	doc = bsoncore.AppendArrayElement(doc, "documents", arr)
+	doc = bsoncore.AppendBooleanElement(doc, "ordered", true)
+	doc, err = bsoncore.AppendDocumentEnd(doc, docIdx)
+	if err != nil {
+		return nil, err
+	}
+	return bson.Raw(doc), nil
+}
+
+func runDriverUnackLoadPhase(ctx context.Context, cfg config, db *mongo.Database, prebuilt []bson.D) (phaseResult, error) {
+	unackColl := db.Collection(cfg.Collection, options.Collection().SetWriteConcern(writeconcern.Unacknowledged()))
+	ackColl := db.Collection(cfg.Collection)
+	return measurePhase("load_insert_many", cfg.Documents, func(sample func(time.Duration)) error {
+		for start := 0; start < cfg.Documents; start += cfg.BatchSize {
+			end := start + cfg.BatchSize
+			if end > cfg.Documents {
+				end = cfg.Documents
+			}
+			docs := make([]any, 0, end-start)
+			for i := start; i < end; i++ {
+				if prebuilt != nil {
+					docs = append(docs, prebuilt[i])
+				} else {
+					docs = append(docs, benchmarkDocument(i))
+				}
+			}
+			begin := time.Now()
+			_, err := unackColl.InsertMany(ctx, docs)
+			sample(time.Since(begin))
+			if err != nil {
+				return err
+			}
+		}
+		return waitForLoadVisible(ctx, cfg, ackColl)
+	})
+}
+
+func waitForLoadVisible(ctx context.Context, cfg config, coll *mongo.Collection) error {
+	if cfg.Documents <= 0 {
+		return nil
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	id := benchmarkID(cfg.Documents - 1)
+	ticker := time.NewTicker(2 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var out bson.M
+		err := coll.FindOne(waitCtx, bson.D{{Key: "_id", Value: id}}).Decode(&out)
+		if err == nil {
+			if out["_id"] != id {
+				return fmt.Errorf("post-unack visibility lookup returned _id=%v want %s", out["_id"], id)
+			}
+			return nil
+		}
+		if !errors.Is(err, mongo.ErrNoDocuments) {
+			return err
+		}
+		select {
+		case <-waitCtx.Done():
+			return fmt.Errorf("wait for unacknowledged load visibility: %w", waitCtx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func runTreeDBRawWireLoadPhase(cfg config, target *benchTarget, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
+	if target == nil || target.server == nil {
+		return phaseResult{}, errors.New("raw-wire client mode requires an in-process TreeDB gateway server")
+	}
+	commandRaw, err := bson.Marshal(bson.D{
+		{Key: "insert", Value: cfg.Collection},
+		{Key: "ordered", Value: true},
+		{Key: "$db", Value: cfg.Database},
+	})
+	if err != nil {
+		return phaseResult{}, err
+	}
+	commandDoc := wire.Document(commandRaw)
+	var requestID int32
+	return measurePhase("load_insert_many", cfg.Documents, func(sample func(time.Duration)) error {
+		for start := 0; start < cfg.Documents; start += cfg.BatchSize {
+			end := start + cfg.BatchSize
+			if end > cfg.Documents {
+				end = cfg.Documents
+			}
+			docs := make([]wire.Document, end-start)
+			for i := start; i < end; i++ {
+				if prebuiltRaw != nil {
+					docs[i-start] = wire.Document(prebuiltRaw[i])
+					continue
+				}
+				var doc bson.D
+				if prebuilt != nil {
+					doc = prebuilt[i]
+				} else {
+					doc = benchmarkDocument(i)
+				}
+				raw, err := bson.Marshal(doc)
+				if err != nil {
+					return err
+				}
+				docs[i-start] = wire.Document(raw)
+			}
+			requestID++
+			begin := time.Now()
+			err := serveRawWireInsert(target.server, requestID, commandDoc, docs)
+			sample(time.Since(begin))
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func runTreeDBRawWireTCPLoadPhase(cfg config, target *benchTarget, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
+	if target == nil || target.mongoAddr == "" {
+		return phaseResult{}, errors.New("raw-wire-tcp client mode requires a TreeDB gateway listener")
+	}
+	client, err := fastclient.Connect(context.Background(), target.mongoAddr)
+	if err != nil {
+		return phaseResult{}, err
+	}
+	defer func() { _ = client.Close() }()
+	return measurePhase("load_insert_many", cfg.Documents, func(sample func(time.Duration)) error {
+		for start := 0; start < cfg.Documents; start += cfg.BatchSize {
+			end := start + cfg.BatchSize
+			if end > cfg.Documents {
+				end = cfg.Documents
+			}
+			docs, err := rawBSONDocuments(start, end, prebuilt, prebuiltRaw)
+			if err != nil {
+				return err
+			}
+			begin := time.Now()
+			_, err = client.InsertManyRawBSON(context.Background(), cfg.Database, cfg.Collection, docs)
+			sample(time.Since(begin))
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func rawWireDocuments(start, end int, prebuilt []bson.D, prebuiltRaw []bson.Raw) ([]wire.Document, error) {
+	rawDocs, err := rawBSONDocuments(start, end, prebuilt, prebuiltRaw)
+	if err != nil {
+		return nil, err
+	}
+	docs := make([]wire.Document, end-start)
+	for i := range rawDocs {
+		docs[i] = wire.Document(rawDocs[i])
+	}
+	return docs, nil
+}
+
+func rawBSONDocuments(start, end int, prebuilt []bson.D, prebuiltRaw []bson.Raw) ([]bson.Raw, error) {
+	docs := make([]bson.Raw, end-start)
+	for i := start; i < end; i++ {
+		if prebuiltRaw != nil {
+			docs[i-start] = prebuiltRaw[i]
+			continue
+		}
+		var doc bson.D
+		if prebuilt != nil {
+			doc = prebuilt[i]
+		} else {
+			doc = benchmarkDocument(i)
+		}
+		raw, err := bson.Marshal(doc)
+		if err != nil {
+			return nil, err
+		}
+		docs[i-start] = raw
+	}
+	return docs, nil
+}
+
+func serveRawWireInsert(server *mongogateway.Server, requestID int32, commandDoc wire.Document, docs []wire.Document) error {
+	msg, err := wire.AppendMsgMessageWithSequences(nil, requestID, 0, 0, commandDoc, []wire.DocumentSequence{{
+		Identifier: "documents",
+		Documents:  docs,
+	}})
+	if err != nil {
+		return err
+	}
+	rw := inMemoryReadWriter{r: bytes.NewReader(msg)}
+	if err := server.ServeOneWithOwner(&rw, 1); err != nil {
+		return err
+	}
+	return assertRawWireInsertOK(rw.w.Bytes(), len(docs))
+}
+
+func serveRawWireTCPInsert(conn net.Conn, requestID int32, commandDoc wire.Document, docs []wire.Document) error {
+	msg, err := wire.AppendMsgMessageWithSequences(nil, requestID, 0, 0, commandDoc, []wire.DocumentSequence{{
+		Identifier: "documents",
+		Documents:  docs,
+	}})
+	if err != nil {
+		return err
+	}
+	if err := writeFull(conn, msg); err != nil {
+		return err
+	}
+	header, body, err := wire.ReadMessage(conn, 0)
+	if err != nil {
+		return err
+	}
+	return assertRawWireInsertMessageOK(header, body, len(docs))
+}
+
+func writeFull(w io.Writer, buf []byte) error {
+	for len(buf) > 0 {
+		n, err := w.Write(buf)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		buf = buf[n:]
+	}
+	return nil
+}
+
+type inMemoryReadWriter struct {
+	r *bytes.Reader
+	w bytes.Buffer
+}
+
+func (rw *inMemoryReadWriter) Read(p []byte) (int, error) {
+	return rw.r.Read(p)
+}
+
+func (rw *inMemoryReadWriter) Write(p []byte) (int, error) {
+	return rw.w.Write(p)
+}
+
+func assertRawWireInsertOK(response []byte, wantN int) error {
+	header, body, err := wire.ReadMessage(bytes.NewReader(response), 0)
+	if err != nil {
+		return err
+	}
+	return assertRawWireInsertMessageOK(header, body, wantN)
+}
+
+func assertRawWireInsertMessageOK(header wire.Header, body []byte, wantN int) error {
+	if header.OpCode != wire.OpMsg {
+		return fmt.Errorf("raw-wire insert response opcode=%d want %d", header.OpCode, wire.OpMsg)
+	}
+	msg, err := wire.ParseMsg(body)
+	if err != nil {
+		return err
+	}
+	raw := bson.Raw(msg.Body)
+	if ok, okType := raw.Lookup("ok").DoubleOK(); !okType || ok != 1.0 {
+		return fmt.Errorf("raw-wire insert response ok=%v okType=%v", ok, okType)
+	}
+	if n, ok := raw.Lookup("n").Int32OK(); !ok || int(n) != wantN {
+		return fmt.Errorf("raw-wire insert response n=%v ok=%v want %d", n, ok, wantN)
 	}
 	return nil
 }
@@ -1290,6 +1723,8 @@ func summarizePhase(name string, operations, driverCalls int, duration time.Dura
 	}
 	if driverCalls > 0 && driverDuration > 0 {
 		result.DriverMeanLatencyMicros = float64(driverDuration.Microseconds()) / float64(driverCalls)
+		result.SampledOpsPerSecond = float64(operations) / driverDuration.Seconds()
+		result.SampledNsPerOp = float64(driverDuration.Nanoseconds()) / float64(operations)
 	}
 	return result
 }
@@ -1369,8 +1804,8 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(result)
 	case "text":
-		fmt.Fprintf(out, "target=%s database=%s collection=%s documents=%d secondary_indexes=%d concurrent_readers=%d concurrent_reads=%d concurrent_writers=%d concurrent_writes=%d\n",
-			result.Target, result.Database, result.Collection, result.Documents, result.SecondaryIndexes,
+		fmt.Fprintf(out, "target=%s client_mode=%s database=%s collection=%s documents=%d secondary_indexes=%d concurrent_readers=%d concurrent_reads=%d concurrent_writers=%d concurrent_writes=%d\n",
+			result.Target, result.ClientMode, result.Database, result.Collection, result.Documents, result.SecondaryIndexes,
 			result.ConcurrentReaders, result.ConcurrentReads, result.ConcurrentWriters, result.ConcurrentWrites)
 		if result.TreeDBDir != "" {
 			fmt.Fprintf(out, "treedb_dir=%s\n", result.TreeDBDir)
@@ -1384,9 +1819,9 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 			fmt.Fprintf(out, "mongo_uri=%s\n", result.MongoURI)
 		}
 		for _, phase := range result.Phases {
-			fmt.Fprintf(out, "%-22s ops=%d calls=%d duration_ms=%.1f ops_sec=%.1f driver_aggregate_ms=%.1f driver_mean_us=%.0f p50_us=%.0f p95_us=%.0f p99_us=%.0f\n",
+			fmt.Fprintf(out, "%-22s ops=%d calls=%d duration_ms=%.1f ops_sec=%.1f sampled_ops_sec=%.1f sampled_ns_op=%.1f driver_aggregate_ms=%.1f driver_mean_us=%.0f p50_us=%.0f p95_us=%.0f p99_us=%.0f\n",
 				phase.Name, phase.Operations, phase.DriverCalls, phase.DurationMillis, phase.OpsPerSecond,
-				phase.DriverAggregateMillis, phase.DriverMeanLatencyMicros,
+				phase.SampledOpsPerSecond, phase.SampledNsPerOp, phase.DriverAggregateMillis, phase.DriverMeanLatencyMicros,
 				phase.LatencyMicros.P50, phase.LatencyMicros.P95, phase.LatencyMicros.P99)
 		}
 		if result.TreeDBDiskAfterLoad != nil {

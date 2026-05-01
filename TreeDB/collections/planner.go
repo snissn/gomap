@@ -55,6 +55,7 @@ const (
 type collectionOptions struct {
 	allowArrayValuesInIndex bool
 	documentFormat          DocumentFormat
+	trustedBSONDocuments    bool
 	templateResolver        templateV1Resolver
 	dataStoragePolicy       backenddb.OrderedRootStoragePolicy
 	indexStateStoragePolicy backenddb.OrderedRootStoragePolicy

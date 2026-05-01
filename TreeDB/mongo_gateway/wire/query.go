@@ -37,7 +37,7 @@ func ParseQuery(body []byte) (Query, error) {
 	if err != nil {
 		return Query{}, err
 	}
-	if err := ValidateDocument(q.Query); err != nil {
+	if err := validateParsedDocument(q.Query); err != nil {
 		return Query{}, err
 	}
 	if len(rem) == 0 {
@@ -47,7 +47,7 @@ func ParseQuery(body []byte) (Query, error) {
 	if err != nil {
 		return Query{}, err
 	}
-	if err := ValidateDocument(q.ReturnFieldsSelector); err != nil {
+	if err := validateParsedDocument(q.ReturnFieldsSelector); err != nil {
 		return Query{}, err
 	}
 	if len(rem) != 0 {

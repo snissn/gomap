@@ -51,7 +51,7 @@ func ParseMsg(body []byte) (Msg, error) {
 			if err != nil {
 				return Msg{}, err
 			}
-			if err := ValidateDocument(doc); err != nil {
+			if err := validateParsedDocument(doc); err != nil {
 				return Msg{}, err
 			}
 			msg.Body = doc
@@ -99,7 +99,7 @@ func AppendMsgBodyWithSequences(dst []byte, flags MsgFlag, doc Document, sequenc
 		dst = appendInt32(dst, 0)
 		dst = appendCString(dst, seq.Identifier)
 		for _, doc := range seq.Documents {
-			if err := ValidateDocument(doc); err != nil {
+			if err := validateParsedDocument(doc); err != nil {
 				return nil, err
 			}
 			dst = append(dst, doc...)
@@ -114,11 +114,24 @@ func AppendMsgMessage(dst []byte, requestID, responseTo int32, flags MsgFlag, do
 }
 
 func AppendMsgMessageWithSequences(dst []byte, requestID, responseTo int32, flags MsgFlag, doc Document, sequences []DocumentSequence) ([]byte, error) {
-	body, err := AppendMsgBodyWithSequences(nil, flags, doc, sequences)
+	base := len(dst)
+	dst = appendInt32(dst, 0)
+	dst = appendInt32(dst, requestID)
+	dst = appendInt32(dst, responseTo)
+	dst = appendInt32(dst, int32(OpMsg))
+	dst, err := AppendMsgBodyWithSequences(dst, flags, doc, sequences)
 	if err != nil {
-		return nil, err
+		return dst[:base], err
 	}
-	return AppendMessage(dst, requestID, responseTo, OpMsg, body)
+	messageLength := len(dst) - base
+	if int64(messageLength) > maxInt32 {
+		return nil, fmt.Errorf("%w: length=%d exceeds int32 max", ErrMessageTooLarge, messageLength)
+	}
+	if messageLength > DefaultMaxMessageLength {
+		return nil, fmt.Errorf("%w: length=%d max=%d", ErrMessageTooLarge, messageLength, DefaultMaxMessageLength)
+	}
+	binary.LittleEndian.PutUint32(dst[base:base+4], uint32(messageLength))
+	return dst, nil
 }
 
 func readDocumentSequence(src []byte) (DocumentSequence, []byte, error) {
@@ -140,19 +153,39 @@ func readDocumentSequence(src []byte) (DocumentSequence, []byte, error) {
 	if identifier == "" {
 		return DocumentSequence{}, nil, fmt.Errorf("%w: OP_MSG document sequence identifier cannot be empty", ErrMalformed)
 	}
-	seq := DocumentSequence{Identifier: identifier}
+	capacity, err := countDocumentSequenceDocuments(rem)
+	if err != nil {
+		return DocumentSequence{}, nil, err
+	}
+	seq := DocumentSequence{
+		Identifier: identifier,
+		Documents:  make([]Document, 0, capacity),
+	}
 	for len(rem) > 0 {
 		doc, next, err := readDocument(rem)
 		if err != nil {
 			return DocumentSequence{}, nil, err
 		}
-		if err := ValidateDocument(doc); err != nil {
+		if err := validateParsedDocument(doc); err != nil {
 			return DocumentSequence{}, nil, err
 		}
 		seq.Documents = append(seq.Documents, doc)
 		rem = next
 	}
 	return seq, src[size:], nil
+}
+
+func countDocumentSequenceDocuments(src []byte) (int, error) {
+	var count int
+	for len(src) > 0 {
+		_, next, err := readDocument(src)
+		if err != nil {
+			return 0, err
+		}
+		count++
+		src = next
+	}
+	return count, nil
 }
 
 func validateMsgFlags(flags MsgFlag) error {
@@ -162,9 +195,6 @@ func validateMsgFlags(flags MsgFlag) error {
 	}
 	if flags&MsgFlagChecksumPresent != 0 {
 		return fmt.Errorf("%w: OP_MSG checksum", ErrUnsupported)
-	}
-	if flags&MsgFlagMoreToCome != 0 {
-		return fmt.Errorf("%w: OP_MSG moreToCome", ErrUnsupported)
 	}
 	return nil
 }

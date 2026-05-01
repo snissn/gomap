@@ -2142,6 +2142,18 @@ func (c *Collection) insertOneViaBatch(id, document []byte) ([]byte, error) {
 }
 
 func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
+	return c.insertBatch(ids, documents, false)
+}
+
+// InsertBatchValidatedBSON inserts native BSON documents that the caller has
+// already validated. It is intended for wire-protocol gateways that validate
+// BSON while parsing the request and need to avoid a duplicate full-document
+// validation pass on the insert hot path.
+func (c *Collection) InsertBatchValidatedBSON(ids, documents [][]byte) ([][]byte, error) {
+	return c.insertBatch(ids, documents, true)
+}
+
+func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool) ([][]byte, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -2180,6 +2192,11 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 		_ = snap.Close()
 		return nil, err
 	}
+	plannerOptions, err = collectionOptionsWithTrustedBSONDocuments(plannerOptions, trustedValidBSON)
+	if err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 	indexedMemtablesEnabled := c.shouldBufferIndexedInserts(c.meta)
 	bufferIndexedInserts := c.shouldBufferIndexedInsertBatch(c.meta, len(documents))
@@ -2203,6 +2220,11 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 		}
 		c.meta = catalog.meta
 		plannerOptions, err = collectionPlannerOptions(c.meta)
+		if err != nil {
+			_ = snap.Close()
+			return nil, err
+		}
+		plannerOptions, err = collectionOptionsWithTrustedBSONDocuments(plannerOptions, trustedValidBSON)
 		if err != nil {
 			_ = snap.Close()
 			return nil, err
@@ -2317,6 +2339,17 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	c.setLastInsertStats(plan.stats.CollectionInsertStats)
 	return plan.resultIDs, nil
+}
+
+func collectionOptionsWithTrustedBSONDocuments(opts collectionOptions, trusted bool) (collectionOptions, error) {
+	if !trusted {
+		return opts, nil
+	}
+	if normalizedDocumentFormat(opts.documentFormat) != DocumentFormatBSON {
+		return collectionOptions{}, errors.New("collections: trusted BSON insert requires BSON document format")
+	}
+	opts.trustedBSONDocuments = true
+	return opts, nil
 }
 
 func (c *Collection) insertBatchNoIndex(

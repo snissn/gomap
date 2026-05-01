@@ -120,6 +120,10 @@ func ValidateDocument(doc Document) error {
 	if len(parsed) != len(doc) || len(rem) != 0 {
 		return fmt.Errorf("%w: trailing bytes after document", ErrMalformed)
 	}
+	return validateParsedDocument(doc)
+}
+
+func validateParsedDocument(doc Document) error {
 	if err := doc.Validate(); err != nil {
 		return fmt.Errorf("%w: invalid BSON document: %v", ErrMalformed, err)
 	}
@@ -130,6 +134,13 @@ func CommandName(doc Document) (string, error) {
 	if err := ValidateDocument(doc); err != nil {
 		return "", err
 	}
+	return CommandNameFromValidatedDocument(doc)
+}
+
+// CommandNameFromValidatedDocument extracts the command name from a document
+// that has already passed ValidateDocument, such as a ParseMsg or ParseQuery
+// result.
+func CommandNameFromValidatedDocument(doc Document) (string, error) {
 	elem, err := doc.IndexErr(0)
 	if err != nil {
 		return "", err

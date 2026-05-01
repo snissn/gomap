@@ -439,6 +439,29 @@ func TestServerBSONDefaultStoresNativeBSONAndUpdatesIndexes(t *testing.T) {
 	}
 }
 
+func TestPrepareInsertDocumentBSONAllowsNativeUnindexedTypes(t *testing.T) {
+	doc := mustDocument(t, bson.D{
+		{Key: "_id", Value: "native"},
+		{Key: "payload", Value: bson.Binary{Subtype: 0x00, Data: []byte{1, 2, 3}}},
+	})
+	_, stored, err := prepareInsertDocument(doc, collections.DocumentFormatBSON)
+	if err != nil {
+		t.Fatalf("prepare BSON insert document: %v", err)
+	}
+	if err := bson.Raw(stored).Validate(); err != nil {
+		t.Fatalf("stored BSON invalid: %v", err)
+	}
+	subtype, payload := bson.Raw(stored).Lookup("payload").Binary()
+	if subtype != 0x00 || !bytes.Equal(payload, []byte{1, 2, 3}) {
+		t.Fatalf("payload subtype/data=%#x/%v", subtype, payload)
+	}
+
+	_, _, err = prepareInsertDocument(doc, collections.DocumentFormatJSON)
+	if err == nil || !strings.Contains(err.Error(), "unsupported BSON type binary") {
+		t.Fatalf("prepare JSON err=%v want unsupported binary", err)
+	}
+}
+
 func TestServerUpdateTemplateV1RefreshesMaterializerBetweenStatements(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

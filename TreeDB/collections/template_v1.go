@@ -117,6 +117,9 @@ func prepareInsertDocuments(documents [][]byte, opts collectionOptions) ([][]byt
 	case DocumentFormatJSON:
 		return documents, nil, nil, nil
 	case DocumentFormatBSON:
+		if opts.trustedBSONDocuments {
+			return documents, nil, nil, nil
+		}
 		return prepareBSONInsertDocuments(documents)
 	case DocumentFormatTemplateV1:
 		return prepareTemplateV1InsertDocuments(documents, opts.templateResolver)

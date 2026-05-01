@@ -225,15 +225,18 @@ func TestParseMsgRejectsChecksumPresent(t *testing.T) {
 	}
 }
 
-func TestParseMsgRejectsMoreToComeUntilSupported(t *testing.T) {
+func TestParseMsgAllowsMoreToCome(t *testing.T) {
 	commandDoc := mustDocument(t, bson.D{{Key: "ping", Value: int32(1)}})
 	body := appendInt32(nil, int32(MsgFlagMoreToCome))
 	body = append(body, MsgSectionBody)
 	body = append(body, commandDoc...)
 
-	_, err := ParseMsg(body)
-	if !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("ParseMsg err=%v want ErrUnsupported", err)
+	msg, err := ParseMsg(body)
+	if err != nil {
+		t.Fatalf("ParseMsg: %v", err)
+	}
+	if msg.Flags != MsgFlagMoreToCome {
+		t.Fatalf("flags=%#x want %#x", msg.Flags, MsgFlagMoreToCome)
 	}
 }
 
