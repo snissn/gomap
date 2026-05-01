@@ -14,6 +14,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/event"
 )
 
 func TestSummarizeLatencyNearestRank(t *testing.T) {
@@ -647,6 +648,15 @@ func TestMakeLoadBatchesSplitsDocumentRange(t *testing.T) {
 	}
 }
 
+func TestEffectiveLoadProducersCapsAtBatchCount(t *testing.T) {
+	if got := effectiveLoadProducers(10, 4, 8); got != 3 {
+		t.Fatalf("effectiveLoadProducers=%d want 3", got)
+	}
+	if got := effectiveLoadProducers(10, 4, 2); got != 2 {
+		t.Fatalf("effectiveLoadProducers=%d want 2", got)
+	}
+}
+
 func TestMeasureLoadPhaseReportsProducerResults(t *testing.T) {
 	cfg := config{Documents: 12, BatchSize: 2, InsertProducers: 3}
 	seen := make([]atomic.Int64, cfg.Documents)
@@ -665,6 +675,9 @@ func TestMeasureLoadPhaseReportsProducerResults(t *testing.T) {
 	if phase.Name != "load_insert_many" || phase.Operations != cfg.Documents || phase.DriverCalls != 6 {
 		t.Fatalf("unexpected phase summary: %+v", phase)
 	}
+	if phase.EffectiveProducers != cfg.InsertProducers {
+		t.Fatalf("EffectiveProducers=%d want %d", phase.EffectiveProducers, cfg.InsertProducers)
+	}
 	if len(phase.ProducerResults) != cfg.InsertProducers {
 		t.Fatalf("producer results=%d want %d: %+v", len(phase.ProducerResults), cfg.InsertProducers, phase.ProducerResults)
 	}
@@ -680,6 +693,47 @@ func TestMeasureLoadPhaseReportsProducerResults(t *testing.T) {
 		if got := seen[doc].Load(); got != 1 {
 			t.Fatalf("doc %d seen %d times, want once", doc, got)
 		}
+	}
+}
+
+func TestMeasureLoadPhaseErrorReportsCompletedOperations(t *testing.T) {
+	sentinel := errors.New("load failed")
+	cfg := config{Documents: 6, BatchSize: 2, InsertProducers: 1}
+	phase, err := measureLoadPhase(context.Background(), cfg, func(producer, start, end int) error {
+		if start >= 2 {
+			return sentinel
+		}
+		return nil
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("err=%v want sentinel", err)
+	}
+	if phase.Operations != 2 {
+		t.Fatalf("Operations=%d want completed operations 2", phase.Operations)
+	}
+	if phase.DriverCalls != 2 {
+		t.Fatalf("DriverCalls=%d want 2", phase.DriverCalls)
+	}
+}
+
+func TestMongoPoolStatsCapsCheckoutSamples(t *testing.T) {
+	stats := newMongoPoolStats()
+	total := maxMongoPoolCheckoutDurationSamples + 3
+	for i := 0; i < total; i++ {
+		stats.record(&event.PoolEvent{Type: event.ConnectionCheckedOut, Duration: time.Microsecond})
+	}
+	snapshot := stats.Snapshot()
+	if snapshot.ConnectionCheckedOut != int64(total) {
+		t.Fatalf("ConnectionCheckedOut=%d want %d", snapshot.ConnectionCheckedOut, total)
+	}
+	if snapshot.CheckoutSamples != int64(maxMongoPoolCheckoutDurationSamples) {
+		t.Fatalf("CheckoutSamples=%d want %d", snapshot.CheckoutSamples, maxMongoPoolCheckoutDurationSamples)
+	}
+	if snapshot.CheckoutSamplesDropped != 3 {
+		t.Fatalf("CheckoutSamplesDropped=%d want 3", snapshot.CheckoutSamplesDropped)
+	}
+	if snapshot.CheckoutMeanLatencyMicros != 1 {
+		t.Fatalf("CheckoutMeanLatencyMicros=%f want 1", snapshot.CheckoutMeanLatencyMicros)
 	}
 }
 

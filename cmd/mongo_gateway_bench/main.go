@@ -110,6 +110,7 @@ type phaseResult struct {
 	Name                    string           `json:"name"`
 	Operations              int              `json:"operations"`
 	DriverCalls             int              `json:"driver_calls"`
+	EffectiveProducers      int              `json:"effective_producers,omitempty"`
 	DurationMillis          float64          `json:"duration_ms"`
 	OpsPerSecond            float64          `json:"ops_per_sec"`
 	SampledOpsPerSecond     float64          `json:"sampled_ops_per_sec,omitempty"`
@@ -140,6 +141,8 @@ type mongoPoolSnapshot struct {
 	ConnectionCheckedOut      int64          `json:"connection_checked_out,omitempty"`
 	ConnectionCheckOutFailed  int64          `json:"connection_check_out_failed,omitempty"`
 	ConnectionPoolCleared     int64          `json:"connection_pool_cleared,omitempty"`
+	CheckoutSamples           int64          `json:"checkout_samples,omitempty"`
+	CheckoutSamplesDropped    int64          `json:"checkout_samples_dropped,omitempty"`
 	CheckoutAggregateMillis   float64        `json:"checkout_aggregate_duration_ms,omitempty"`
 	CheckoutMeanLatencyMicros float64        `json:"checkout_mean_latency_us,omitempty"`
 	CheckoutLatencyMicros     latencySummary `json:"checkout_latency_micros,omitempty"`
@@ -185,10 +188,15 @@ type mongoPoolStats struct {
 	connectionCheckedOut      atomic.Int64
 	connectionCheckOutFailed  atomic.Int64
 	connectionPoolCleared     atomic.Int64
+	checkoutDurationNanos     atomic.Int64
+	checkoutDurationCount     atomic.Int64
+	checkoutSamplesDropped    atomic.Int64
 
 	mu                sync.Mutex
 	checkoutDurations []time.Duration
 }
+
+const maxMongoPoolCheckoutDurationSamples = 8192
 
 func newMongoPoolStats() *mongoPoolStats {
 	return &mongoPoolStats{}
@@ -217,6 +225,9 @@ func (s *mongoPoolStats) Reset() {
 	s.connectionCheckedOut.Store(0)
 	s.connectionCheckOutFailed.Store(0)
 	s.connectionPoolCleared.Store(0)
+	s.checkoutDurationNanos.Store(0)
+	s.checkoutDurationCount.Store(0)
+	s.checkoutSamplesDropped.Store(0)
 	s.mu.Lock()
 	s.checkoutDurations = nil
 	s.mu.Unlock()
@@ -229,10 +240,8 @@ func (s *mongoPoolStats) Snapshot() *mongoPoolSnapshot {
 	s.mu.Lock()
 	durations := append([]time.Duration(nil), s.checkoutDurations...)
 	s.mu.Unlock()
-	var aggregate time.Duration
-	for _, duration := range durations {
-		aggregate += duration
-	}
+	aggregate := time.Duration(s.checkoutDurationNanos.Load())
+	durationCount := s.checkoutDurationCount.Load()
 	snapshot := &mongoPoolSnapshot{
 		ConnectionCreated:         s.connectionCreated.Load(),
 		ConnectionReady:           s.connectionReady.Load(),
@@ -242,11 +251,13 @@ func (s *mongoPoolStats) Snapshot() *mongoPoolSnapshot {
 		ConnectionCheckedOut:      s.connectionCheckedOut.Load(),
 		ConnectionCheckOutFailed:  s.connectionCheckOutFailed.Load(),
 		ConnectionPoolCleared:     s.connectionPoolCleared.Load(),
+		CheckoutSamples:           int64(len(durations)),
+		CheckoutSamplesDropped:    s.checkoutSamplesDropped.Load(),
 		CheckoutAggregateMillis:   float64(aggregate.Microseconds()) / 1000.0,
 		CheckoutLatencyMicros:     summarizeLatency(durations),
 	}
-	if len(durations) > 0 {
-		snapshot.CheckoutMeanLatencyMicros = float64(aggregate.Microseconds()) / float64(len(durations))
+	if durationCount > 0 {
+		snapshot.CheckoutMeanLatencyMicros = float64(aggregate.Microseconds()) / float64(durationCount)
 	}
 	return snapshot
 }
@@ -281,8 +292,14 @@ func (s *mongoPoolStats) recordCheckoutDuration(duration time.Duration) {
 	if duration <= 0 {
 		return
 	}
+	s.checkoutDurationNanos.Add(duration.Nanoseconds())
+	s.checkoutDurationCount.Add(1)
 	s.mu.Lock()
-	s.checkoutDurations = append(s.checkoutDurations, duration)
+	if len(s.checkoutDurations) < maxMongoPoolCheckoutDurationSamples {
+		s.checkoutDurations = append(s.checkoutDurations, duration)
+	} else {
+		s.checkoutSamplesDropped.Add(1)
+	}
 	s.mu.Unlock()
 }
 
@@ -1342,7 +1359,8 @@ func runTreeDBRawWireTCPLoadPhase(ctx context.Context, cfg config, target *bench
 	if target == nil || target.mongoAddr == "" {
 		return phaseResult{}, errors.New("raw-wire-tcp client mode requires a TreeDB gateway listener")
 	}
-	clients := make([]*fastclient.Client, cfg.InsertProducers)
+	producers := effectiveLoadProducers(cfg.Documents, cfg.BatchSize, cfg.InsertProducers)
+	clients := make([]*fastclient.Client, producers)
 	for i := range clients {
 		client, err := fastclient.Connect(ctx, target.mongoAddr)
 		if err != nil {
@@ -1800,18 +1818,23 @@ func makeLoadBatches(documents, batchSize int) []loadBatch {
 	return batches
 }
 
+func effectiveLoadProducers(documents, batchSize, requested int) int {
+	if requested <= 0 {
+		requested = 1
+	}
+	if documents <= 0 || batchSize <= 0 {
+		return requested
+	}
+	batches := (documents + batchSize - 1) / batchSize
+	if batches > 0 && requested > batches {
+		return batches
+	}
+	return requested
+}
+
 func measureLoadPhase(ctx context.Context, cfg config, runBatch func(producer, start, end int) error, after ...func() error) (phaseResult, error) {
 	batches := makeLoadBatches(cfg.Documents, cfg.BatchSize)
-	producers := cfg.InsertProducers
-	if producers <= 0 {
-		producers = 1
-	}
-	if len(batches) > 0 && producers > len(batches) {
-		producers = len(batches)
-	}
-	if producers <= 0 {
-		producers = 1
-	}
+	producers := effectiveLoadProducers(cfg.Documents, cfg.BatchSize, cfg.InsertProducers)
 
 	samples := make([]time.Duration, 0, len(batches))
 	producerSamples := make([][]time.Duration, producers)
@@ -1850,7 +1873,14 @@ func measureLoadPhase(ctx context.Context, cfg config, runBatch func(producer, s
 		}
 	}
 	duration := time.Since(started)
-	result := summarizePhase("load_insert_many", cfg.Documents, len(samples), duration, samples)
+	completedOperations := 0
+	for _, operations := range producerOperations {
+		completedOperations += operations
+	}
+	result := summarizePhase("load_insert_many", completedOperations, len(samples), duration, samples)
+	if producers != 1 || cfg.InsertProducers != producers {
+		result.EffectiveProducers = producers
+	}
 	if cfg.InsertProducers > 1 {
 		result.ProducerResults = make([]producerResult, 0, producers)
 		for producer := 0; producer < producers; producer++ {
@@ -1917,7 +1947,11 @@ func runLoadBatches(
 				started := time.Now()
 				err := runBatch(producer, batch.start, batch.end)
 				elapsed := time.Since(started)
-				recordBatch(producer, batch.end-batch.start, elapsed)
+				operations := batch.end - batch.start
+				if err != nil {
+					operations = 0
+				}
+				recordBatch(producer, operations, elapsed)
 				if err != nil {
 					recordErr(err)
 					return
@@ -2132,8 +2166,12 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 			fmt.Fprintf(out, "mongo_uri=%s\n", result.MongoURI)
 		}
 		for _, phase := range result.Phases {
-			fmt.Fprintf(out, "%-22s ops=%d calls=%d duration_ms=%.1f ops_sec=%.1f sampled_ops_sec=%.1f sampled_ns_op=%.1f driver_aggregate_ms=%.1f driver_mean_us=%.0f p50_us=%.0f p95_us=%.0f p99_us=%.0f\n",
-				phase.Name, phase.Operations, phase.DriverCalls, phase.DurationMillis, phase.OpsPerSecond,
+			fmt.Fprintf(out, "%-22s ops=%d calls=%d", phase.Name, phase.Operations, phase.DriverCalls)
+			if phase.EffectiveProducers > 0 {
+				fmt.Fprintf(out, " effective_producers=%d", phase.EffectiveProducers)
+			}
+			fmt.Fprintf(out, " duration_ms=%.1f ops_sec=%.1f sampled_ops_sec=%.1f sampled_ns_op=%.1f driver_aggregate_ms=%.1f driver_mean_us=%.0f p50_us=%.0f p95_us=%.0f p99_us=%.0f\n",
+				phase.DurationMillis, phase.OpsPerSecond,
 				phase.SampledOpsPerSecond, phase.SampledNsPerOp, phase.DriverAggregateMillis, phase.DriverMeanLatencyMicros,
 				phase.LatencyMicros.P50, phase.LatencyMicros.P95, phase.LatencyMicros.P99)
 			for _, producer := range phase.ProducerResults {
@@ -2220,7 +2258,7 @@ func writeMongoPoolStats(out io.Writer, label string, stats *mongoPoolSnapshot) 
 	if stats == nil {
 		return
 	}
-	fmt.Fprintf(out, "%s created=%d ready=%d closed=%d checkout_started=%d checked_out=%d checked_in=%d checkout_failed=%d pool_cleared=%d checkout_aggregate_ms=%.1f checkout_mean_us=%.0f checkout_p50_us=%.0f checkout_p95_us=%.0f checkout_p99_us=%.0f\n",
+	fmt.Fprintf(out, "%s created=%d ready=%d closed=%d checkout_started=%d checked_out=%d checked_in=%d checkout_failed=%d pool_cleared=%d checkout_samples=%d checkout_samples_dropped=%d checkout_aggregate_ms=%.1f checkout_mean_us=%.0f checkout_p50_us=%.0f checkout_p95_us=%.0f checkout_p99_us=%.0f\n",
 		label,
 		stats.ConnectionCreated,
 		stats.ConnectionReady,
@@ -2230,6 +2268,8 @@ func writeMongoPoolStats(out io.Writer, label string, stats *mongoPoolSnapshot) 
 		stats.ConnectionCheckedIn,
 		stats.ConnectionCheckOutFailed,
 		stats.ConnectionPoolCleared,
+		stats.CheckoutSamples,
+		stats.CheckoutSamplesDropped,
 		stats.CheckoutAggregateMillis,
 		stats.CheckoutMeanLatencyMicros,
 		stats.CheckoutLatencyMicros.P50,
