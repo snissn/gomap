@@ -656,6 +656,59 @@ func TestServerUpdateBatchTemplateV1UpdatesDistinctIDs(t *testing.T) {
 	}
 }
 
+func TestRunMongoUpdateBatchDeclinesFreshSecondaryUniqueIndex(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	mgr := collections.NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{
+		Name: "app.users",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	stale, err := mgr.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open stale collection: %v", err)
+	}
+	id1, err := encodePrimaryKey(mustRawValue(t, "u1"))
+	if err != nil {
+		t.Fatalf("encode u1: %v", err)
+	}
+	id2, err := encodePrimaryKey(mustRawValue(t, "u2"))
+	if err != nil {
+		t.Fatalf("encode u2: %v", err)
+	}
+	doc1 := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "a@example.com"}})
+	doc2 := mustDocument(t, bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "b@example.com"}})
+	if _, err := stale.InsertBatchValidatedBSON([][]byte{id1, id2}, [][]byte{doc1, doc2}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	fresh, err := mgr.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open fresh collection: %v", err)
+	}
+	if _, err := fresh.CreateIndex(collections.IndexDefinition{Name: "email_1", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+
+	matched, modified, batched, err := runMongoUpdateBatch(stale, []mongoUpdateItem{
+		{index: 0, key: id1, updateDoc: mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "c@example.com"}}}})},
+		{index: 1, key: id2, updateDoc: mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "a@example.com"}}}})},
+	})
+	if err != nil {
+		t.Fatalf("runMongoUpdateBatch: %v", err)
+	}
+	if batched || matched != 0 || modified != 0 {
+		t.Fatalf("matched=%d modified=%d batched=%v want declined", matched, modified, batched)
+	}
+}
+
 func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterParseError(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -1150,6 +1203,65 @@ func TestServerUpdateCoalescerEvictsWhenIdle(t *testing.T) {
 		}
 		<-ticker.C
 	}
+}
+
+func TestMongoUpdateCoalescerRetireIdleStopsBeforeUncache(t *testing.T) {
+	server := NewServer()
+	coalescer := server.mongoUpdateCoalescer("app.users")
+	if coalescer == nil {
+		t.Fatal("expected coalescer")
+	}
+	coalescer.enqueueMu.Lock()
+	retired := make(chan bool, 1)
+	go func() {
+		retired <- coalescer.retireIdle()
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		if !server.updateMu.TryLock() {
+			break
+		}
+		server.updateMu.Unlock()
+		if time.Now().After(deadline) {
+			coalescer.enqueueMu.Unlock()
+			t.Fatal("retireIdle did not hold server update lock while stopping")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	replacement := make(chan *mongoUpdateCoalescer, 1)
+	go func() {
+		replacement <- server.mongoUpdateCoalescer("app.users")
+	}()
+	select {
+	case got := <-replacement:
+		coalescer.enqueueMu.Unlock()
+		if got != coalescer {
+			t.Fatal("created replacement coalescer before old coalescer stopped")
+		}
+		t.Fatal("returned old coalescer while idle retirement was stopping it")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	coalescer.enqueueMu.Unlock()
+	select {
+	case ok := <-retired:
+		if !ok {
+			t.Fatal("retireIdle reported false")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("retireIdle did not finish")
+	}
+	select {
+	case got := <-replacement:
+		if got == nil || got == coalescer {
+			t.Fatalf("replacement=%p old=%p want new coalescer", got, coalescer)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("replacement coalescer was not created after idle retirement")
+	}
+	_ = server.Close()
 }
 
 func TestServerUpdateWithUniqueIndexKeepsAcquireBeforeReleaseOrdered(t *testing.T) {
