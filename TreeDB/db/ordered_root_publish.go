@@ -918,8 +918,8 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 
 	lockStart := time.Now()
 	db.writeMu.Lock()
-	wait := time.Since(lockStart)
 	holdStart := time.Now()
+	wait := holdStart.Sub(lockStart)
 	rootsObserved := 0
 	defer func() {
 		hold := time.Since(holdStart)
