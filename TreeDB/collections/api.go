@@ -3456,7 +3456,7 @@ func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionU
 	}
 	batch := make([]collectionUpdateCombineRequest, 0, batchCap)
 	batch = append(batch, first)
-	for len(batch) < combiner.maxBatch {
+	for len(batch) < batchCap {
 		select {
 		case req, ok := <-combiner.requests:
 			if !ok {
