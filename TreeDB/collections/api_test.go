@@ -2481,7 +2481,13 @@ func TestCollectionValidateInsertBatchPlanLockedClassifiesRaces(t *testing.T) {
 	}
 	rootNames, baseRootIDs := insertBatchPlanRootNamesAndBaseIDs(plan, catalog)
 	staleRootIDs := map[string]uint64{rootName: baseRootIDs[rootName] + 1}
-	if current, _, err := col.validateInsertBatchPlanLocked(catalog.meta, rootNames, staleRootIDs, plan); current != nil || !errors.Is(err, ErrConcurrentMutation) {
+	validation := insertBatchValidationContext{
+		meta:        catalog.meta,
+		rootNames:   rootNames,
+		baseRootIDs: staleRootIDs,
+		plan:        plan,
+	}
+	if current, _, err := col.validateInsertBatchPlanLocked(validation); current != nil || !errors.Is(err, ErrConcurrentMutation) {
 		if current != nil {
 			_ = current.Close()
 		}
@@ -2489,7 +2495,8 @@ func TestCollectionValidateInsertBatchPlanLockedClassifiesRaces(t *testing.T) {
 	} else if !strings.Contains(err.Error(), `collection="users"`) || !strings.Contains(err.Error(), `root="users/primary"`) {
 		t.Fatalf("root mismatch err=%v missing collection/root context", err)
 	}
-	if current, _, err := col.validateInsertBatchPlanLocked(catalog.meta, rootNames, map[string]uint64{}, plan); current != nil || err == nil || errors.Is(err, ErrConcurrentMutation) || !strings.Contains(err.Error(), "missing base root id") {
+	validation.baseRootIDs = map[string]uint64{}
+	if current, _, err := col.validateInsertBatchPlanLocked(validation); current != nil || err == nil || errors.Is(err, ErrConcurrentMutation) || !strings.Contains(err.Error(), `collection "users" root "users/primary"`) {
 		if current != nil {
 			_ = current.Close()
 		}
@@ -2498,7 +2505,9 @@ func TestCollectionValidateInsertBatchPlanLockedClassifiesRaces(t *testing.T) {
 
 	schemaMeta := catalog.meta
 	schemaMeta.Options.AllowArrayValuesInIndex = !schemaMeta.Options.AllowArrayValuesInIndex
-	if current, _, err := col.validateInsertBatchPlanLocked(schemaMeta, rootNames, baseRootIDs, plan); current != nil || err == nil || errors.Is(err, ErrConcurrentMutation) {
+	validation.meta = schemaMeta
+	validation.baseRootIDs = baseRootIDs
+	if current, _, err := col.validateInsertBatchPlanLocked(validation); current != nil || err == nil || errors.Is(err, ErrConcurrentMutation) {
 		if current != nil {
 			_ = current.Close()
 		}
@@ -2662,6 +2671,39 @@ func TestCollectionUpdateBatchValidationErrorsIncludeIndex(t *testing.T) {
 	_, err = (&Collection{}).UpdateBatch([]UpdateBatchItem{{DocumentID: []byte("u1"), Update: incrementJSONCount}})
 	if !errors.Is(err, errCollectionDBNil) {
 		t.Fatalf("nil db err=%v want errCollectionDBNil", err)
+	}
+}
+
+func TestCollectionUpdateBatchRejectsEmptyChangedReplacementWithIndex(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"count":0}`), []byte(`{"count":0}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	_, err = col.UpdateBatch([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: incrementJSONCount},
+		{DocumentID: []byte("u2"), Update: func([]byte) ([]byte, bool, error) {
+			return nil, true, nil
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "update batch index 1") || !strings.Contains(err.Error(), "cannot be empty") {
+		t.Fatalf("UpdateBatch err=%v want index 1 empty replacement", err)
 	}
 }
 
@@ -2998,6 +3040,16 @@ func TestCompleteUpdateCombineRequestDoesNotBlockWhenDoneIsFull(t *testing.T) {
 	got := <-done
 	if got != original {
 		t.Fatalf("done result=%+v want original %+v", got, original)
+	}
+}
+
+func TestCollectionUpdateCombinerCloseRequestsAllowsNilRequests(t *testing.T) {
+	combiner := &collectionUpdateCombiner{}
+	if !combiner.closeRequests() {
+		t.Fatal("closeRequests returned false for fresh combiner")
+	}
+	if !combiner.isStopped() {
+		t.Fatal("closeRequests did not mark combiner stopped")
 	}
 }
 
@@ -3683,6 +3735,12 @@ func TestNoIndexInsertAfterRawCommitDoesNotReenterWriteDomainLock(t *testing.T) 
 			t.Fatalf("insert: %v", err)
 		}
 	case <-timer.C:
+		_ = d.Close()
+		select {
+		case err := <-done:
+			t.Fatalf("insert unblocked after timeout with err=%v", err)
+		case <-time.After(time.Second):
+		}
 		t.Fatal("insert blocked while refreshing write-domain catalog after raw commit")
 	}
 }

@@ -31,10 +31,56 @@ const (
 	// Keep update payloads bounded so the benchmark stresses collection update
 	// concurrency instead of BSON allocation variety.
 	profileBenchUpdateDocPoolSize = 4096
-	// Scramble sequential operation numbers across the preloaded ID set while
-	// still using a deterministic, cache-friendly access pattern.
-	profileBenchUpdateIDScrambleMultiplier = 37
+	// Preferred deterministic stride for scrambling sequential operation
+	// numbers across the preloaded ID set.
+	profileBenchPreferredUpdateIDStride = 37
 )
+
+func profileBenchUpdateIDStride(documentCount int) int {
+	if documentCount <= 1 {
+		return 1
+	}
+	stride := profileBenchPreferredUpdateIDStride
+	if stride >= documentCount {
+		stride %= documentCount
+	}
+	if stride <= 0 {
+		stride = 1
+	}
+	for profileBenchGCD(stride, documentCount) != 1 {
+		stride++
+		if stride >= documentCount {
+			stride = 1
+		}
+	}
+	return stride
+}
+
+func profileBenchGCD(a, b int) int {
+	if a < 0 {
+		a = -a
+	}
+	if b < 0 {
+		b = -b
+	}
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
+}
+
+func TestProfileBenchUpdateIDStrideCoversDocumentSet(t *testing.T) {
+	for _, documentCount := range []int{1, 2, 37, 74, 1000} {
+		stride := profileBenchUpdateIDStride(documentCount)
+		seen := make(map[int]struct{}, documentCount)
+		for op := 0; op < documentCount; op++ {
+			seen[(op*stride)%documentCount] = struct{}{}
+		}
+		if len(seen) != documentCount {
+			t.Fatalf("documentCount=%d stride=%d covered=%d", documentCount, stride, len(seen))
+		}
+	}
+}
 
 func BenchmarkTreeDBGatewayLoadBSONIndexes2(b *testing.B) {
 	benchmarkTreeDBGatewayLoad(b, collections.DocumentFormatBSON, 2, false)
@@ -416,13 +462,14 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	for i := range ids {
 		ids[i] = []byte(benchmarkID(i))
 	}
+	idStride := profileBenchUpdateIDStride(documentCount)
 
 	writers := profileBenchConcurrentWriters(b)
 	b.ReportAllocs()
 	b.ResetTimer()
 	started := time.Now()
 	err = runConcurrentOperations(context.Background(), writers, b.N, func(op int) error {
-		id := ids[(op*profileBenchUpdateIDScrambleMultiplier)%documentCount]
+		id := ids[(op*idStride)%documentCount]
 		updateRaw := updateDocs[op%len(updateDocs)]
 		matched, _, err := collection.Update(id, func(stored []byte) ([]byte, bool, error) {
 			raw := bson.Raw(stored)

@@ -242,7 +242,6 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 type mongoUpdateItem struct {
 	index     int
 	key       []byte
-	keyString string
 	updateDoc wire.Document
 }
 
@@ -283,7 +282,7 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	if err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 	}
-	return mongoUpdateItem{index: index, key: key, keyString: string(key), updateDoc: updateDoc}, nil
+	return mongoUpdateItem{index: index, key: key, updateDoc: updateDoc}, nil
 }
 
 func mongoUpdateParseCommandError(err error) (wire.Document, error) {
@@ -445,7 +444,7 @@ func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collectio
 	}
 	done := make(chan mongoUpdateCoalescerResult, 1)
 	if !coalescer.enqueue(mongoUpdateCoalescerRequest{col: col, item: update, done: done}) {
-		return runMongoUpdateOne(col, update)
+		return false, false, errors.New("mongo gateway update coalescer stopped before enqueue")
 	}
 	result := coalescer.waitForUpdateResult(done)
 	return result.matched, result.modified, result.err
@@ -523,19 +522,19 @@ func (c *mongoUpdateCoalescer) enqueue(req mongoUpdateCoalescerRequest) bool {
 	if c == nil {
 		return false
 	}
-	c.enqueueMu.Lock()
-	defer c.enqueueMu.Unlock()
 	c.mu.RLock()
-	stopped := c.stopped
-	requests := c.requests
-	c.mu.RUnlock()
-	if stopped {
+	if c.stopped {
+		c.mu.RUnlock()
 		return false
 	}
+	requests := c.requests
+	stoppedCh := c.stoppedCh
 	select {
 	case requests <- req:
+		c.mu.RUnlock()
 		return true
-	default:
+	case <-stoppedCh:
+		c.mu.RUnlock()
 		return false
 	}
 }
@@ -720,8 +719,21 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 		updates[i] = req.item
 	}
 	results, batched, err := runMongoUpdateBatchResults(batch[0].col, updates)
-	if err != nil || !batched || len(results) != len(batch) {
+	if !batched {
 		runMongoUpdateCoalescerSequential(batch)
+		return
+	}
+	if err != nil {
+		if index, ok := collectionUpdateBatchErrorIndex(err); ok && index >= 0 && index < len(batch) {
+			completeMongoUpdateCoalescerBatchExcept(batch, index)
+			batch[index].done <- mongoUpdateCoalescerResult{err: err}
+			return
+		}
+		completeMongoUpdateCoalescerBatch(batch, mongoUpdateCoalescerResult{err: err})
+		return
+	}
+	if len(results) != len(batch) {
+		completeMongoUpdateCoalescerBatch(batch, mongoUpdateCoalescerResult{err: fmt.Errorf("mongo gateway update coalescer batch results=%d want %d", len(results), len(batch))})
 		return
 	}
 	for i, req := range batch {
@@ -730,13 +742,37 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 	}
 }
 
+func completeMongoUpdateCoalescerBatch(batch []mongoUpdateCoalescerRequest, result mongoUpdateCoalescerResult) {
+	for _, req := range batch {
+		req.done <- result
+	}
+}
+
+func completeMongoUpdateCoalescerBatchExcept(batch []mongoUpdateCoalescerRequest, skip int) {
+	for i, req := range batch {
+		if i == skip {
+			continue
+		}
+		matched, modified, err := runMongoUpdateOne(req.col, req.item)
+		req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
+	}
+}
+
+func collectionUpdateBatchErrorIndex(err error) (int, bool) {
+	if err == nil {
+		return 0, false
+	}
+	var index int
+	if _, scanErr := fmt.Sscanf(err.Error(), "collections: update batch index %d:", &index); scanErr != nil {
+		return 0, false
+	}
+	return index, true
+}
+
 func mongoUpdateCoalescerHasDuplicateKeys(batch []mongoUpdateCoalescerRequest) bool {
 	seen := make(map[string]struct{}, len(batch))
 	for _, req := range batch {
-		key := req.item.keyString
-		if key == "" {
-			key = string(req.item.key)
-		}
+		key := string(req.item.key)
 		if _, ok := seen[key]; ok {
 			return true
 		}

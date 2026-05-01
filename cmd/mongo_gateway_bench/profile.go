@@ -155,17 +155,23 @@ func (r *profileRecorder) RunPhase(name string, run func() (phaseResult, error))
 	if startErr != nil {
 		return phaseResult{}, startErr
 	}
+	var ended time.Time
 	defer func() {
+		if ended.IsZero() {
+			ended = time.Now()
+		}
 		if recovered := recover(); recovered != nil {
-			stopErr := phase.stop(fmt.Errorf("panic: %v", recovered))
+			stopErr := phase.stop(fmt.Errorf("panic: %v", recovered), ended)
 			if stopErr != nil {
 				err = errors.Join(err, stopErr)
 			}
 			panic(recovered)
 		}
-		err = errors.Join(err, phase.stop(err))
+		err = errors.Join(err, phase.stop(err, ended))
 	}()
-	return run()
+	result, err = run()
+	ended = time.Now()
+	return result, err
 }
 
 func (r *profileRecorder) WriteResult(result *benchmarkResult) error {
@@ -262,9 +268,12 @@ func (r *profileRecorder) nextPrefix(name string) string {
 	return fmt.Sprintf("%s_%d", base, count+1)
 }
 
-func (p *activeProfilePhase) stop(runErr error) error {
+func (p *activeProfilePhase) stop(runErr error, ended time.Time) error {
 	if p == nil {
 		return nil
+	}
+	if ended.IsZero() {
+		ended = time.Now()
 	}
 	if p.traceOn {
 		trace.Stop()
@@ -283,7 +292,7 @@ func (p *activeProfilePhase) stop(runErr error) error {
 		errs = append(errs, p.cpuFile.Close())
 		p.cpuFile = nil
 	}
-	p.artifact.DurationMillis = float64(time.Since(p.started).Nanoseconds()) / 1e6
+	p.artifact.DurationMillis = float64(ended.Sub(p.started).Nanoseconds()) / 1e6
 	errs = append(errs, p.writeRuntimeProfiles()...)
 	stopErr := errors.Join(errs...)
 	if runErr != nil {
@@ -400,7 +409,7 @@ func createProfileFile(path string) (*os.File, error) {
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
-	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	return os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 }
 
 func ensureProfileDir(path string) error {
