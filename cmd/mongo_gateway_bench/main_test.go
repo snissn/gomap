@@ -443,6 +443,99 @@ func TestParseConfigAcceptsTreeDBBSONDocumentFormat(t *testing.T) {
 	}
 }
 
+func TestParseConfigProfileOptions(t *testing.T) {
+	cfg, err := parseConfig([]string{
+		"-profile-dir", "/tmp/mongo-gateway-bench-profiles",
+		"-profile-block-rate", "7",
+		"-profile-mutex-fraction", "11",
+		"-profile-trace",
+	})
+	if err != nil {
+		t.Fatalf("parse profile options: %v", err)
+	}
+	if cfg.ProfileDir != "/tmp/mongo-gateway-bench-profiles" {
+		t.Fatalf("ProfileDir=%q", cfg.ProfileDir)
+	}
+	if cfg.ProfileBlockRate != 7 {
+		t.Fatalf("ProfileBlockRate=%d want 7", cfg.ProfileBlockRate)
+	}
+	if cfg.ProfileMutexFraction != 11 {
+		t.Fatalf("ProfileMutexFraction=%d want 11", cfg.ProfileMutexFraction)
+	}
+	if !cfg.ProfileTrace {
+		t.Fatal("ProfileTrace=false want true")
+	}
+	if _, err := parseConfig([]string{"-profile-trace"}); err == nil {
+		t.Fatal("profile-trace without profile-dir accepted")
+	}
+	if _, err := parseConfig([]string{"-profile-block-rate", "-1"}); err == nil {
+		t.Fatal("negative profile-block-rate accepted")
+	}
+	if _, err := parseConfig([]string{"-profile-mutex-fraction", "-1"}); err == nil {
+		t.Fatal("negative profile-mutex-fraction accepted")
+	}
+}
+
+func TestProfileRecorderWritesPhaseArtifactsAndManifest(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := parseConfig([]string{
+		"-profile-dir", dir,
+		"-profile-block-rate", "1",
+		"-profile-mutex-fraction", "1",
+	})
+	if err != nil {
+		t.Fatalf("parse profile config: %v", err)
+	}
+	recorder, err := newProfileRecorder(cfg)
+	if err != nil {
+		t.Fatalf("newProfileRecorder: %v", err)
+	}
+	defer recorder.Close()
+
+	phase, err := recorder.RunPhase("unit phase", func() (phaseResult, error) {
+		return summarizePhase("unit phase", 1, 1, time.Millisecond, []time.Duration{time.Millisecond}), nil
+	})
+	if err != nil {
+		t.Fatalf("RunPhase: %v", err)
+	}
+	result := &benchmarkResult{
+		Target:        "treedb",
+		Database:      "db",
+		Collection:    "docs",
+		Documents:     1,
+		BatchSize:     1,
+		Phases:        []phaseResult{phase},
+		ProfileDir:    recorder.Dir(),
+		ProfileResult: recorder.ResultPath(),
+	}
+	if err := recorder.WriteResult(result); err != nil {
+		t.Fatalf("WriteResult: %v", err)
+	}
+	if err := recorder.WriteManifest(result, nil); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	for _, name := range []string{
+		"unit_phase.cpu.pprof",
+		"unit_phase.heap.pprof",
+		"unit_phase.allocs.pprof",
+		"unit_phase.block.pprof",
+		"unit_phase.mutex.pprof",
+		"unit_phase.goroutine.pprof",
+		profileManifestFile,
+		profileResultFile,
+	} {
+		path := filepath.Join(dir, name)
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat %s: %v", name, err)
+		}
+		if info.Size() == 0 {
+			t.Fatalf("%s is empty", name)
+		}
+	}
+}
+
 func TestTreeDBProfileSmokeFastAndWALOnFast(t *testing.T) {
 	if testing.Short() {
 		t.Skip("profile smoke benchmark skipped in short mode")
@@ -539,7 +632,7 @@ func runTreeDBProfileSmoke(t *testing.T, profile treedb.Profile) float64 {
 			t.Errorf("cleanup %s: %v", profile, err)
 		}
 	}()
-	result, err := runBenchmark(context.Background(), cfg, target)
+	result, err := runBenchmark(context.Background(), cfg, target, nil)
 	if err != nil {
 		t.Fatalf("run benchmark for %s: %v", profile, err)
 	}
@@ -586,7 +679,7 @@ func runTreeDBClientModeSmoke(t *testing.T, clientMode string) float64 {
 			t.Errorf("cleanup client mode %s: %v", clientMode, err)
 		}
 	}()
-	result, err := runBenchmark(context.Background(), cfg, target)
+	result, err := runBenchmark(context.Background(), cfg, target, nil)
 	if err != nil {
 		t.Fatalf("run benchmark for client mode %s: %v", clientMode, err)
 	}

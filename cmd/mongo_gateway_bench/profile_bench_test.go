@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -18,6 +19,11 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
+)
+
+var (
+	errUpdatedPrimaryKey      = errors.New("profile benchmark update changed _id")
+	errProfileBenchUpdateMiss = errors.New("profile benchmark update missed document")
 )
 
 func BenchmarkTreeDBGatewayLoadBSONIndexes2(b *testing.B) {
@@ -311,6 +317,201 @@ func BenchmarkDirectCollectionLoadBSONIndexes2(b *testing.B) {
 	reportDocsPerSecond(b, b.N, timedElapsed)
 }
 
+func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
+	dir := filepath.Join(b.TempDir(), "treedb")
+	opts := treedb.OptionsFor(treedb.ProfileWALOnFast, dir)
+	opts.IndexOuterLeavesInValueLog = true
+	opts.IndexInternalBaseDelta = false
+	backend, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		b.Fatalf("open backend: %v", err)
+	}
+	defer func() {
+		if err := cleanup(); err != nil {
+			b.Fatalf("close backend: %v", err)
+		}
+	}()
+	manager := collections.NewCollectionManager(backend)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{
+		Name: "bench.docs",
+		Options: collections.CollectionOptions{
+			DocumentFormat:          collections.DocumentFormatBSON,
+			DataRootStoragePolicy:   collections.RootStorageCompressed,
+			IndexStateStoragePolicy: collections.RootStorageCompressed,
+		},
+	}); err != nil {
+		b.Fatalf("create collection: %v", err)
+	}
+	collection, err := manager.OpenCollection("bench.docs")
+	if err != nil {
+		b.Fatalf("open collection: %v", err)
+	}
+	if _, err := collection.CreateIndex(collections.IndexDefinition{
+		Name:          "email_1",
+		Field:         "email",
+		Unique:        true,
+		StoragePolicy: collections.RootStorageCompressed,
+	}); err != nil {
+		b.Fatalf("create email index: %v", err)
+	}
+	if _, err := collection.CreateIndex(collections.IndexDefinition{
+		Name:          "city_1",
+		Field:         "city",
+		StoragePolicy: collections.RootStorageCompressed,
+	}); err != nil {
+		b.Fatalf("create city index: %v", err)
+	}
+
+	documentCount := profileBenchUpdateDocumentCount(b)
+	batchSize := profileBenchBatchSize(b)
+	for inserted := 0; inserted < documentCount; {
+		count := batchSize
+		if remaining := documentCount - inserted; remaining < count {
+			count = remaining
+		}
+		ids := make([][]byte, count)
+		docs := make([][]byte, count)
+		for i := 0; i < count; i++ {
+			docNum := inserted + i
+			ids[i] = []byte(benchmarkID(docNum))
+			raw, err := bson.Marshal(benchmarkDocument(docNum))
+			if err != nil {
+				b.Fatalf("marshal BSON document: %v", err)
+			}
+			docs[i] = raw
+		}
+		if _, err := collection.InsertBatchValidatedBSON(ids, docs); err != nil {
+			b.Fatalf("insert preload batch: %v", err)
+		}
+		inserted += count
+	}
+	if err := manager.FlushAll(); err != nil {
+		b.Fatalf("flush preload: %v", err)
+	}
+	if err := backend.Checkpoint(); err != nil {
+		b.Fatalf("checkpoint preload: %v", err)
+	}
+
+	writers := profileBenchConcurrentWriters(b)
+	b.ReportAllocs()
+	b.ResetTimer()
+	started := time.Now()
+	err = runConcurrentOperations(context.Background(), writers, b.N, func(op int) error {
+		id := []byte(benchmarkID((op * 37) % documentCount))
+		updateRaw, err := bson.Marshal(bson.D{{Key: "$set", Value: bson.D{
+			{Key: "concurrent_updated", Value: true},
+			{Key: "concurrent_update_seq", Value: int64(op)},
+		}}})
+		if err != nil {
+			return err
+		}
+		matched, _, err := collection.Update(id, func(stored []byte) ([]byte, bool, error) {
+			raw := bson.Raw(stored)
+			if err := raw.Validate(); err != nil {
+				return nil, false, err
+			}
+			originalID := raw.Lookup("_id")
+			updated, changed, err := profileBenchApplySetUpdate(raw, bson.Raw(updateRaw))
+			if err != nil {
+				return nil, false, err
+			}
+			if !updated.Lookup("_id").Equal(originalID) {
+				return nil, false, errUpdatedPrimaryKey
+			}
+			return []byte(updated), changed, nil
+		})
+		if err != nil {
+			return err
+		}
+		if !matched {
+			return errProfileBenchUpdateMiss
+		}
+		return nil
+	})
+	timedElapsed := time.Since(started)
+	b.StopTimer()
+	if err != nil {
+		b.Fatalf("run concurrent updates: %v", err)
+	}
+	b.ReportMetric(float64(writers), "writers")
+	reportDocsPerSecond(b, b.N, timedElapsed)
+}
+
+func profileBenchApplySetUpdate(doc bson.Raw, update bson.Raw) (bson.Raw, bool, error) {
+	updateElements, err := update.Elements()
+	if err != nil {
+		return nil, false, err
+	}
+	if len(updateElements) != 1 {
+		return nil, false, errors.New("profile benchmark update supports exactly one $set operator")
+	}
+	operator, err := updateElements[0].KeyErr()
+	if err != nil {
+		return nil, false, err
+	}
+	if operator != "$set" {
+		return nil, false, errors.New("profile benchmark update supports $set only")
+	}
+	setDoc, ok := updateElements[0].Value().DocumentOK()
+	if !ok {
+		return nil, false, errors.New("profile benchmark $set value must be a document")
+	}
+	setElements, err := setDoc.Elements()
+	if err != nil {
+		return nil, false, err
+	}
+	if len(setElements) == 0 {
+		return doc, false, nil
+	}
+	sets := make(map[string]bson.RawValue, len(setElements))
+	setOrder := make([]string, 0, len(setElements))
+	for _, elem := range setElements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return nil, false, err
+		}
+		if _, exists := sets[key]; !exists {
+			setOrder = append(setOrder, key)
+		}
+		sets[key] = elem.Value()
+	}
+
+	elements, err := doc.Elements()
+	if err != nil {
+		return nil, false, err
+	}
+	out := make(bson.D, 0, len(elements)+len(sets))
+	used := make(map[string]struct{}, len(sets))
+	changed := false
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return nil, false, err
+		}
+		value := elem.Value()
+		if replacement, ok := sets[key]; ok {
+			if !replacement.Equal(value) {
+				changed = true
+			}
+			value = replacement
+			used[key] = struct{}{}
+		}
+		out = append(out, bson.E{Key: key, Value: value})
+	}
+	for _, key := range setOrder {
+		if _, ok := used[key]; ok {
+			continue
+		}
+		out = append(out, bson.E{Key: key, Value: sets[key]})
+		changed = true
+	}
+	raw, err := bson.Marshal(out)
+	if err != nil {
+		return nil, false, err
+	}
+	return bson.Raw(raw), changed, nil
+}
+
 type profileBenchReadWriter struct {
 	r *bytes.Reader
 	w bytes.Buffer
@@ -572,15 +773,26 @@ func benchmarkTreeDBGatewayRunRawCommandLoad(b *testing.B, format collections.Do
 }
 
 func profileBenchBatchSize(tb testing.TB) int {
+	return profileBenchPositiveEnvInt(tb, "MONGO_GATEWAY_PROFILE_BENCH_BATCH_SIZE", 10000)
+}
+
+func profileBenchUpdateDocumentCount(tb testing.TB) int {
+	return profileBenchPositiveEnvInt(tb, "MONGO_GATEWAY_PROFILE_BENCH_UPDATE_DOCUMENTS", 100000)
+}
+
+func profileBenchConcurrentWriters(tb testing.TB) int {
+	return profileBenchPositiveEnvInt(tb, "MONGO_GATEWAY_PROFILE_BENCH_WRITERS", 8)
+}
+
+func profileBenchPositiveEnvInt(tb testing.TB, name string, defaultValue int) int {
 	tb.Helper()
-	const defaultBatchSize = 10000
-	raw := os.Getenv("MONGO_GATEWAY_PROFILE_BENCH_BATCH_SIZE")
+	raw := os.Getenv(name)
 	if raw == "" {
-		return defaultBatchSize
+		return defaultValue
 	}
 	value, err := strconv.Atoi(raw)
 	if err != nil || value <= 0 {
-		tb.Fatalf("invalid MONGO_GATEWAY_PROFILE_BENCH_BATCH_SIZE=%q", raw)
+		tb.Fatalf("invalid %s=%q", name, raw)
 	}
 	return value
 }
