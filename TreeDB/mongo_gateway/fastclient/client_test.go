@@ -10,6 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	mongogateway "github.com/snissn/gomap/TreeDB/mongo_gateway"
+	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -57,6 +58,11 @@ func TestClientInsertManyRawBSON(t *testing.T) {
 		t.Fatalf("connect fast client: %v", err)
 	}
 	defer func() { _ = client.Close() }()
+
+	badRaw := append(append(bson.Raw(nil), mustBSON(t, bson.D{{Key: "_id", Value: "bad-trailing-bytes"}})...), 0)
+	if _, err := client.InsertManyRawBSON(ctx, "app", "users", []bson.Raw{badRaw}); !errors.Is(err, wire.ErrMalformed) {
+		t.Fatalf("InsertManyRawBSON malformed err=%v want ErrMalformed", err)
+	}
 
 	rawDocs := []bson.Raw{
 		mustBSON(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}}),
