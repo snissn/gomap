@@ -302,7 +302,22 @@ func matchingMongoRecord(key baseCellKey, treeConfig string, mongos map[string]*
 
 func scalingScenarioSuffix(config string) string {
 	for _, marker := range []string{"_writers_", "_readers_"} {
-		if idx := strings.LastIndex(config, marker); idx >= 0 {
+		idx := strings.LastIndex(config, marker)
+		if idx < 0 {
+			continue
+		}
+		count := config[idx+len(marker):]
+		if count == "" {
+			continue
+		}
+		valid := true
+		for i := 0; i < len(count); i++ {
+			if count[i] < '0' || count[i] > '9' {
+				valid = false
+				break
+			}
+		}
+		if valid {
 			return config[idx+1:]
 		}
 	}
@@ -559,7 +574,7 @@ func highlightLines(cells []cellComparison) []string {
 			formatNumber(bestMongo.MongoPhase.OpsPerSecond),
 			formatRatio(bestMongo.Ratio),
 		))
-	} else {
+	} else if hasMongoCells(cells) {
 		lines = append(lines, "No phase in this matrix had MongoDB ahead on ops/sec.")
 	}
 	if cell := largestDiskCell(cells); cell != nil {
