@@ -52,6 +52,7 @@ type Server struct {
 	lastCursorReap   time.Time
 	updateMu         sync.Mutex
 	updateCoalescers map[string]*mongoUpdateCoalescer
+	closed           bool
 }
 
 type serverCursor struct {
@@ -71,6 +72,31 @@ func NewServer() *Server {
 	}
 	s.nextResponseID.Store(0)
 	return s
+}
+
+func (s *Server) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.closeUpdateCoalescers()
+	s.cursorMu.Lock()
+	s.cursors = nil
+	s.cursorMu.Unlock()
+	return nil
+}
+
+func (s *Server) closeUpdateCoalescers() {
+	if s == nil {
+		return
+	}
+	s.updateMu.Lock()
+	coalescers := s.updateCoalescers
+	s.updateCoalescers = nil
+	s.closed = true
+	s.updateMu.Unlock()
+	for _, coalescer := range coalescers {
+		coalescer.stop()
+	}
 }
 
 func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {

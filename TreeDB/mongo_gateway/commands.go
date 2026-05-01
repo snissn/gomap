@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -387,6 +388,8 @@ type mongoUpdateCoalescer struct {
 	maxDelay time.Duration
 	maxBatch int
 	requests chan mongoUpdateCoalescerRequest
+	mu       sync.RWMutex
+	stopped  bool
 }
 
 type mongoUpdateCoalescerRequest struct {
@@ -407,7 +410,9 @@ func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collectio
 		return runMongoUpdateOne(col, update)
 	}
 	done := make(chan mongoUpdateCoalescerResult, 1)
-	coalescer.requests <- mongoUpdateCoalescerRequest{col: col, item: update, done: done}
+	if !coalescer.enqueue(mongoUpdateCoalescerRequest{col: col, item: update, done: done}) {
+		return runMongoUpdateOne(col, update)
+	}
 	result := <-done
 	return result.matched, result.modified, result.err
 }
@@ -423,6 +428,9 @@ func (s *Server) mongoUpdateCoalescer(name string) *mongoUpdateCoalescer {
 	maxDelay := s.UpdateCoalescingMaxDelay
 	s.updateMu.Lock()
 	defer s.updateMu.Unlock()
+	if s.closed {
+		return nil
+	}
 	if s.updateCoalescers == nil {
 		s.updateCoalescers = make(map[string]*mongoUpdateCoalescer)
 	}
@@ -439,6 +447,36 @@ func (s *Server) mongoUpdateCoalescer(name string) *mongoUpdateCoalescer {
 	return coalescer
 }
 
+func (c *mongoUpdateCoalescer) enqueue(req mongoUpdateCoalescerRequest) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.stopped {
+		return false
+	}
+	select {
+	case c.requests <- req:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *mongoUpdateCoalescer) stop() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.stopped {
+		return
+	}
+	c.stopped = true
+	close(c.requests)
+}
+
 func (c *mongoUpdateCoalescer) run() {
 	for first := range c.requests {
 		batch := []mongoUpdateCoalescerRequest{first}
@@ -447,7 +485,10 @@ func (c *mongoUpdateCoalescer) run() {
 		collect:
 			for len(batch) < c.maxBatch {
 				select {
-				case req := <-c.requests:
+				case req, ok := <-c.requests:
+					if !ok {
+						break collect
+					}
 					batch = append(batch, req)
 				case <-timer.C:
 					break collect
@@ -462,7 +503,10 @@ func (c *mongoUpdateCoalescer) run() {
 		}
 		for len(batch) < c.maxBatch {
 			select {
-			case req := <-c.requests:
+			case req, ok := <-c.requests:
+				if !ok {
+					goto drained
+				}
 				batch = append(batch, req)
 			default:
 				goto drained
