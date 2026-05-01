@@ -286,12 +286,12 @@ case "$UPDATE_INDEXED_FIELD" in
 esac
 INCLUDE_MONGO=$(normalize_bool_01 INCLUDE_MONGO "$INCLUDE_MONGO")
 
-if [[ -d "$OUT_DIR" ]] && [[ -n "$(find "$OUT_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+mkdir -p "$OUT_DIR"
+OUT_DIR=$(cd "$OUT_DIR" && pwd -P)
+if [[ -n "$(find "$OUT_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
   echo "output directory must be empty: $OUT_DIR" >&2
   exit 2
 fi
-mkdir -p "$OUT_DIR"
-OUT_DIR=$(cd "$OUT_DIR" && pwd -P)
 RUN_ID=$(printf '%s' "$(basename "$OUT_DIR")" | tr -c '[:alnum:]_.-' '_')
 if [[ -z "$DATABASE_PREFIX" ]]; then
   DATABASE_PREFIX="mongo_gateway_scaling_${RUN_ID}"
