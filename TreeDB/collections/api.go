@@ -3040,7 +3040,8 @@ func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, 
 // UpdateBatchIfNoSecondaryUniqueIndexes applies UpdateBatch only when the
 // collection has no secondary unique indexes in the mutation-locked catalog.
 // It reports batched=false without applying updates if a unique secondary index
-// is present so callers can preserve ordered per-document update semantics.
+// is present so callers can preserve ordered per-document update semantics. When
+// batched=false and err=nil, the returned results are zero-valued with len(items).
 func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
 	return c.updateBatch(items, true)
 }
@@ -3069,7 +3070,7 @@ func (c *Collection) updateBatch(items []UpdateBatchItem, requireNoSecondaryUniq
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
 		results, err := c.updateBatchOnce(items, requireNoSecondaryUniqueIndexes)
 		if errors.Is(err, errUpdateBatchHasSecondaryUniqueIndex) {
-			return nil, false, nil
+			return make([]UpdateBatchResult, len(items)), false, nil
 		}
 		if errors.Is(err, ErrConcurrentMutation) {
 			lastErr = err
@@ -3382,9 +3383,7 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 	}
 	results, err := batch[0].collection.UpdateBatch(items)
 	if err != nil {
-		for _, req := range batch {
-			completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
-		}
+		completeUpdateCombineBatchWithError(batch, err)
 		return
 	}
 	if len(results) != len(batch) {
@@ -3837,14 +3836,14 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondary
 		return results, nil
 	}
 
-	for i, document := range changedDocuments {
-		if _, _, _, err := prepareInsertDocuments([][]byte{document}, plannerOptions); err != nil {
-			_ = snap.Close()
-			return nil, updateBatchItemError(changed[i].itemIndex, err)
-		}
-	}
 	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments(changedDocuments, plannerOptions)
 	if err != nil {
+		for i, document := range changedDocuments {
+			if _, _, _, itemErr := prepareInsertDocuments([][]byte{document}, plannerOptions); itemErr != nil {
+				_ = snap.Close()
+				return nil, updateBatchItemError(changed[i].itemIndex, itemErr)
+			}
+		}
 		_ = snap.Close()
 		return nil, fmt.Errorf("collections: update batch replacement prepare: %w", err)
 	}

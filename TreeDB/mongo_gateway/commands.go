@@ -224,7 +224,7 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 		if modifiedOne {
 			modified = 1
 		}
-	} else if len(parsed) > 1 && !hasDuplicateKey && !collectionHasSecondaryUniqueIndexes(col) {
+	} else if len(parsed) > 1 && !hasDuplicateKey {
 		var batched bool
 		matched, modified, batched, err = runMongoUpdateBatch(col, parsed)
 		if err != nil || !batched {
