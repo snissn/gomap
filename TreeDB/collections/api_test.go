@@ -2700,6 +2700,61 @@ func TestCollectionUpdateCombinerRunBatchIsolatesItemErrors(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateCombinerRunBatchRecoversCallbackPanic(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"score":0}`), []byte(`{"score":0}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	combiner := &collectionUpdateCombiner{maxBatch: 8}
+	requests := []collectionUpdateCombineRequest{
+		{
+			collection: col,
+			documentID: []byte("u1"),
+			update: func([]byte) ([]byte, bool, error) {
+				panic("bad callback")
+			},
+			done: make(chan collectionUpdateCombineResult, 1),
+		},
+		{
+			collection: col,
+			documentID: []byte("u2"),
+			update: func([]byte) ([]byte, bool, error) {
+				return []byte(`{"score":2}`), true, nil
+			},
+			done: make(chan collectionUpdateCombineResult, 1),
+		},
+	}
+	combiner.runBatch(requests)
+	first := <-requests[0].done
+	if first.err == nil || !strings.Contains(first.err.Error(), "bad callback") {
+		t.Fatalf("first err=%v want recovered panic", first.err)
+	}
+	second := <-requests[1].done
+	if second.err != nil {
+		t.Fatalf("second err: %v", second.err)
+	}
+	if !second.matched || !second.modified {
+		t.Fatalf("second matched=%v modified=%v", second.matched, second.modified)
+	}
+}
+
 func TestCollectionManagerCloseStopsUpdateCombiners(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -2729,6 +2784,45 @@ func TestCollectionManagerCloseStopsUpdateCombiners(t *testing.T) {
 	}
 	if got := col.updateCombiner(); got != nil {
 		t.Fatal("closed manager created a new combiner")
+	}
+}
+
+func TestCollectionManagerCloseForBackendPreventsCombinerRecreationBeforeDBClosing(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	combiner := col.updateCombiner()
+	if combiner == nil {
+		t.Fatal("expected update combiner")
+	}
+	if err := mgr.closeForBackend(); err != nil {
+		t.Fatalf("closeForBackend: %v", err)
+	}
+	if d.IsClosing() {
+		t.Fatal("backend DB is closing; test must cover pre-closing close-hook window")
+	}
+	combiner.mu.RLock()
+	stopped := combiner.stopped
+	combiner.mu.RUnlock()
+	if !stopped {
+		t.Fatal("combiner was not stopped")
+	}
+	if got := col.updateCombiner(); got != nil {
+		t.Fatal("close hook window recreated update combiner")
+	}
+	if _, err := mgr.OpenCollection("users"); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("OpenCollection during manager close err=%v want ErrClosed", err)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -127,6 +128,7 @@ func persistIndexStateForDocumentFormat(format DocumentFormat) bool {
 type CollectionManager struct {
 	db              *backenddb.DB
 	closeUnregister func()
+	closing         atomic.Bool
 	domainMu        sync.Mutex
 	domains         map[string]*collectionWriteDomain
 }
@@ -334,26 +336,27 @@ type collectionWriteDomain struct {
 	// mutationMu serializes root descriptor publishes for handles opened
 	// through the same manager so optimistic retries do not starve under
 	// sustained collection write contention.
-	mutationMu       sync.Mutex
-	mu               sync.RWMutex
-	updateCombineMu  sync.Mutex
-	updateCombiner   *collectionUpdateCombiner
-	loaded           bool
-	meta             CollectionMeta
-	catalog          *collectionCatalog
-	baseCommitSeq    uint64
-	baseSystemRoot   uint64
-	primaryRoot      uint64
-	storagePolicy    backenddb.OrderedRootStoragePolicy
-	table            memtable.Table
-	rootRuns         map[string][]memtable.Table
-	rootPolicies     map[string]backenddb.OrderedRootStoragePolicy
-	rootBaseIDs      map[string]uint64
-	primaryIDIndex   *bufferedUniqueValueIndex
-	uniqueValueRuns  map[string][]memtable.Table
-	uniqueValueIndex map[string]*bufferedUniqueValueIndex
-	count            int
-	bufferedBytes    int64
+	mutationMu        sync.Mutex
+	mu                sync.RWMutex
+	updateCombineMu   sync.Mutex
+	updateCombiner    *collectionUpdateCombiner
+	updateCombineDone bool
+	loaded            bool
+	meta              CollectionMeta
+	catalog           *collectionCatalog
+	baseCommitSeq     uint64
+	baseSystemRoot    uint64
+	primaryRoot       uint64
+	storagePolicy     backenddb.OrderedRootStoragePolicy
+	table             memtable.Table
+	rootRuns          map[string][]memtable.Table
+	rootPolicies      map[string]backenddb.OrderedRootStoragePolicy
+	rootBaseIDs       map[string]uint64
+	primaryIDIndex    *bufferedUniqueValueIndex
+	uniqueValueRuns   map[string][]memtable.Table
+	uniqueValueIndex  map[string]*bufferedUniqueValueIndex
+	count             int
+	bufferedBytes     int64
 }
 
 func NewCollectionManager(database *backenddb.DB) *CollectionManager {
@@ -365,9 +368,14 @@ func NewCollectionManager(database *backenddb.DB) *CollectionManager {
 }
 
 func (m *CollectionManager) closeForBackend() error {
+	m.closing.Store(true)
 	err := m.FlushAll()
 	m.stopUpdateCombiners()
 	return err
+}
+
+func (m *CollectionManager) isClosing() bool {
+	return m == nil || m.closing.Load() || m.db == nil || m.db.IsClosing()
 }
 
 func (m *CollectionManager) stopUpdateCombiners() {
@@ -418,8 +426,14 @@ func (m *CollectionManager) writeDomainForCollection(name string) *collectionWri
 	if m == nil {
 		return nil
 	}
+	if m.closing.Load() {
+		return nil
+	}
 	m.domainMu.Lock()
 	defer m.domainMu.Unlock()
+	if m.closing.Load() {
+		return nil
+	}
 	if m.domains == nil {
 		m.domains = make(map[string]*collectionWriteDomain)
 	}
@@ -433,6 +447,9 @@ func (m *CollectionManager) writeDomainForCollection(name string) *collectionWri
 
 func (m *CollectionManager) existingWriteDomainForCollection(name string) *collectionWriteDomain {
 	if m == nil {
+		return nil
+	}
+	if m.closing.Load() {
 		return nil
 	}
 	m.domainMu.Lock()
@@ -494,6 +511,9 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 	}
 	if m.db == nil {
 		return nil, errors.New("collections: db is nil")
+	}
+	if m.isClosing() {
+		return nil, backenddb.ErrClosed
 	}
 	if meta == nil {
 		return nil, errors.New("collections: nil collection metadata")
@@ -560,7 +580,7 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 	if err := ValidateCollectionName(name); err != nil {
 		return nil, err
 	}
-	if m.db.IsClosing() {
+	if m.isClosing() {
 		return nil, backenddb.ErrClosed
 	}
 	if collection, ok := m.openCollectionFromWriteDomainCache(name); ok {
@@ -583,13 +603,16 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 		writeDomain: m.writeDomainForCollection(catalog.meta.Name),
 		meta:        catalog.meta,
 	}
+	if collection.writeDomain == nil {
+		return nil, backenddb.ErrClosed
+	}
 	collection.rememberCatalog(snap, catalog)
 	collection.noteWriteDomainCatalog(snapshotSystemRoot(snap), catalog)
 	return collection, nil
 }
 
 func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Collection, bool) {
-	if m == nil || m.db == nil {
+	if m == nil || m.db == nil || m.isClosing() {
 		return nil, false
 	}
 	state := m.db.State()
@@ -2953,6 +2976,9 @@ func (c *Collection) updateCombiner() *collectionUpdateCombiner {
 	domain := c.writeDomain
 	domain.updateCombineMu.Lock()
 	defer domain.updateCombineMu.Unlock()
+	if domain.updateCombineDone {
+		return nil
+	}
 	if domain.updateCombiner != nil {
 		return domain.updateCombiner
 	}
@@ -2972,6 +2998,7 @@ func (domain *collectionWriteDomain) stopUpdateCombiner() {
 	domain.updateCombineMu.Lock()
 	combiner := domain.updateCombiner
 	domain.updateCombiner = nil
+	domain.updateCombineDone = true
 	domain.updateCombineMu.Unlock()
 	if combiner != nil {
 		combiner.stop()
@@ -3046,10 +3073,14 @@ func (combiner *collectionUpdateCombiner) run() {
 }
 
 func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombineRequest) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			completeUpdateCombineBatchWithError(batch, fmt.Errorf("collections: update combiner panic: %v", recovered))
+		}
+	}()
 	if len(batch) == 1 || collectionUpdateCombineHasDuplicateIDs(batch) {
 		for _, req := range batch {
-			matched, modified, err := req.collection.updateDirect(req.documentID, req.update)
-			req.done <- collectionUpdateCombineResult{matched: matched, modified: modified, err: err}
+			completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
 		}
 		return
 	}
@@ -3057,31 +3088,68 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 	for i, req := range batch {
 		items[i] = UpdateBatchItem{
 			DocumentID: req.documentID,
-			Update:     req.update,
+			Update:     recoverUpdateCombineCallback(req.update),
 		}
 	}
 	results, err := batch[0].collection.UpdateBatch(items)
 	if err != nil {
 		for _, req := range batch {
-			matched, modified, err := req.collection.updateDirect(req.documentID, req.update)
-			req.done <- collectionUpdateCombineResult{matched: matched, modified: modified, err: err}
+			completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
 		}
 		return
 	}
 	for i, req := range batch {
 		result := results[i]
-		req.done <- collectionUpdateCombineResult{matched: result.Matched, modified: result.Modified}
+		completeUpdateCombineRequest(req, collectionUpdateCombineResult{matched: result.Matched, modified: result.Modified})
+	}
+}
+
+func runUpdateCombineDirect(req collectionUpdateCombineRequest) collectionUpdateCombineResult {
+	matched, modified, err := req.collection.updateDirect(req.documentID, recoverUpdateCombineCallback(req.update))
+	return collectionUpdateCombineResult{matched: matched, modified: modified, err: err}
+}
+
+func recoverUpdateCombineCallback(update func(current []byte) (replacement []byte, changed bool, err error)) func(current []byte) (replacement []byte, changed bool, err error) {
+	return func(current []byte) (replacement []byte, changed bool, err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				replacement = nil
+				changed = false
+				err = fmt.Errorf("collections: update combiner callback panic: %v", recovered)
+			}
+		}()
+		return update(current)
+	}
+}
+
+func completeUpdateCombineBatchWithError(batch []collectionUpdateCombineRequest, err error) {
+	for _, req := range batch {
+		completeUpdateCombineRequest(req, collectionUpdateCombineResult{err: err})
+	}
+}
+
+func completeUpdateCombineRequest(req collectionUpdateCombineRequest, result collectionUpdateCombineResult) {
+	select {
+	case req.done <- result:
+	default:
 	}
 }
 
 func collectionUpdateCombineHasDuplicateIDs(batch []collectionUpdateCombineRequest) bool {
-	seen := make(map[string]struct{}, len(batch))
-	for _, req := range batch {
-		key := string(req.documentID)
-		if _, ok := seen[key]; ok {
+	if len(batch) < 2 {
+		return false
+	}
+	order := make([]int, len(batch))
+	for i := range order {
+		order[i] = i
+	}
+	sort.Slice(order, func(i, j int) bool {
+		return bytes.Compare(batch[order[i]].documentID, batch[order[j]].documentID) < 0
+	})
+	for i := 1; i < len(order); i++ {
+		if bytes.Equal(batch[order[i-1]].documentID, batch[order[i]].documentID) {
 			return true
 		}
-		seen[key] = struct{}{}
 	}
 	return false
 }
