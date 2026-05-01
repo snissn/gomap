@@ -5380,6 +5380,10 @@ func collectMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIter
 	capHint := 1
 	if limit > 0 {
 		capHint = limit
+		const maxInitialCap = 1024
+		if capHint > maxInitialCap {
+			capHint = maxInitialCap
+		}
 	}
 	out := make([][]byte, 0, capHint)
 	appendID := func(id []byte) {
