@@ -368,24 +368,22 @@ for readers in $READERS_LIST; do
   run_cell "readers_${readers}" "$readers" "$CONCURRENT_READS" 0 0
 done
 
-report_extra=""
+report_extra=()
 if [[ "$INCLUDE_MONGO" != "1" ]]; then
-  report_extra="-allow-incomplete"
+  report_extra=(-allow-incomplete)
 fi
 
-if [[ -n "$report_extra" ]]; then
-  "$REPORT_BIN" \
-    -matrix "$MATRIX" \
-    -report "$REPORT" \
-    -summary "$SUMMARY" \
-    -title "$TITLE" \
-    "$report_extra"
-else
-  "$REPORT_BIN" \
-    -matrix "$MATRIX" \
-    -report "$REPORT" \
-    -summary "$SUMMARY" \
-    -title "$TITLE"
+"$REPORT_BIN" \
+  -matrix "$MATRIX" \
+  -report "$REPORT" \
+  -summary "$SUMMARY" \
+  -title "$TITLE" \
+  "${report_extra[@]}"
+
+report_extra_text=""
+if (( ${#report_extra[@]} > 0 )); then
+  report_extra_text=" \\
+  ${report_extra[*]}"
 fi
 
 cat >"$README" <<EOF
@@ -420,8 +418,7 @@ GOWORK=off go run ./cmd/mongo_gateway_compare_report \\
   -matrix "$MATRIX" \\
   -report "$REPORT" \\
   -summary "$SUMMARY" \\
-  -title "$TITLE" \\
-  $report_extra
+  -title "$TITLE"$report_extra_text
 \`\`\`
 EOF
 

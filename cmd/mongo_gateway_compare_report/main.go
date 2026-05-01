@@ -325,26 +325,31 @@ type scalingScenario struct {
 }
 
 func parseScalingScenario(config string) scalingScenario {
+	selectedIdx := -1
+	selectedMarker := ""
 	for _, marker := range []string{"_writers_", "_readers_"} {
 		idx := strings.LastIndex(config, marker)
-		if idx < 0 {
-			continue
+		if idx > selectedIdx {
+			selectedIdx = idx
+			selectedMarker = marker
 		}
-		scenario := scalingScenario{hasMarker: true}
-		count := config[idx+len(marker):]
-		if count == "" {
-			return scenario
-		}
-		for i := 0; i < len(count); i++ {
-			if count[i] < '0' || count[i] > '9' {
-				return scenario
-			}
-		}
-		scenario.valid = true
-		scenario.suffix = config[idx+1:]
+	}
+	if selectedIdx < 0 {
+		return scalingScenario{valid: true}
+	}
+	scenario := scalingScenario{hasMarker: true}
+	count := config[selectedIdx+len(selectedMarker):]
+	if count == "" {
 		return scenario
 	}
-	return scalingScenario{valid: true}
+	for i := 0; i < len(count); i++ {
+		if count[i] < '0' || count[i] > '9' {
+			return scenario
+		}
+	}
+	scenario.valid = true
+	scenario.suffix = config[selectedIdx+1:]
+	return scenario
 }
 
 func runConfig(row matrixRow, result benchmarkResult) string {

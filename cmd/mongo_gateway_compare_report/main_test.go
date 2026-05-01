@@ -413,6 +413,8 @@ func TestScalingScenarioSuffixRequiresTerminalCount(t *testing.T) {
 	}{
 		{config: "treedb_writers_4", want: "writers_4", valid: true, marker: true},
 		{config: "treedb_readers_16", want: "readers_16", valid: true, marker: true},
+		{config: "treedb_writers_4_readers_16", want: "readers_16", valid: true, marker: true},
+		{config: "treedb_readers_16_writers_4", want: "writers_4", valid: true, marker: true},
 		{config: "treedb_writers_4_extra", want: "", valid: false, marker: true},
 		{config: "treedb_writers_", want: "", valid: false, marker: true},
 		{config: "treedb_without_marker", want: "", valid: true, marker: false},
