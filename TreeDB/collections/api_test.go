@@ -47,6 +47,28 @@ func TestCollectionGetNilDBReturnsError(t *testing.T) {
 	}
 }
 
+func TestCollectionManagerOpenCollectionCacheRejectsClosedDB(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.OpenCollection("users"); err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	if _, err := mgr.OpenCollection("users"); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("OpenCollection after close err=%v want ErrClosed", err)
+	}
+}
+
 func TestCollectionInsertBatchBridge_RoundTripWithSecondaryIndexes(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -2512,6 +2534,145 @@ func TestCollectionUpdateCombinerRunBatchPublishesDistinctIDsOnce(t *testing.T) 
 	after := d.State()
 	if after.CommitSeq != before.CommitSeq+1 {
 		t.Fatalf("combined batch advanced commit seq by %d, want 1", after.CommitSeq-before.CommitSeq)
+	}
+}
+
+func TestCollectionUpdateCombinerRunBatchIsolatesItemErrors(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"score":0}`), []byte(`{"score":0}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	itemErr := errors.New("bad update")
+	combiner := &collectionUpdateCombiner{maxBatch: 8}
+	requests := []collectionUpdateCombineRequest{
+		{
+			collection: col,
+			documentID: []byte("u1"),
+			update: func([]byte) ([]byte, bool, error) {
+				return nil, false, itemErr
+			},
+			done: make(chan collectionUpdateCombineResult, 1),
+		},
+		{
+			collection: col,
+			documentID: []byte("u2"),
+			update: func([]byte) ([]byte, bool, error) {
+				return []byte(`{"score":2}`), true, nil
+			},
+			done: make(chan collectionUpdateCombineResult, 1),
+		},
+	}
+	combiner.runBatch(requests)
+	first := <-requests[0].done
+	if !errors.Is(first.err, itemErr) {
+		t.Fatalf("first err=%v want itemErr", first.err)
+	}
+	second := <-requests[1].done
+	if second.err != nil {
+		t.Fatalf("second err: %v", second.err)
+	}
+	if !second.matched || !second.modified {
+		t.Fatalf("second matched=%v modified=%v", second.matched, second.modified)
+	}
+	got, err := col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get u2: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`"score":2`)) {
+		t.Fatalf("u2 document=%s want score 2", got)
+	}
+}
+
+func TestCollectionManagerCloseStopsUpdateCombiners(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	combiner := col.updateCombiner()
+	if combiner == nil {
+		t.Fatal("expected update combiner")
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	combiner.mu.RLock()
+	stopped := combiner.stopped
+	combiner.mu.RUnlock()
+	if !stopped {
+		t.Fatal("combiner was not stopped")
+	}
+	if got := col.updateCombiner(); got != nil {
+		t.Fatal("closed manager created a new combiner")
+	}
+}
+
+func TestCollectionUpdateBatchAllowsUniqueHandoff(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.CreateIndex(IndexDefinition{Name: "email", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"email":"a@example.com"}`), []byte(`{"email":"b@example.com"}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	results, err := col.UpdateBatch([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONEmail("c@example.com")},
+		{DocumentID: []byte("u2"), Update: setJSONEmail("a@example.com")},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+	if len(results) != 2 || !results[0].Modified || !results[1].Modified {
+		t.Fatalf("results=%+v want both modified", results)
+	}
+	got, err := col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get u2: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`"email":"a@example.com"`)) {
+		t.Fatalf("u2 document=%s want handed-off email", got)
 	}
 }
 
