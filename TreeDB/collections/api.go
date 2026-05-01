@@ -2919,11 +2919,6 @@ func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, 
 	if err := validateUpdateBatchItems(items); err != nil {
 		return nil, err
 	}
-	unlockMutation := c.lockMutation()
-	defer unlockMutation()
-	if err := c.flushBufferedWrites(); err != nil {
-		return nil, err
-	}
 
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
@@ -3516,7 +3511,58 @@ type preparedBatchUpdate struct {
 	indexStateChanged bool
 }
 
+type updateBatchPlan struct {
+	results        []UpdateBatchResult
+	meta           CollectionMeta
+	catalog        *collectionCatalog
+	snap           *backenddb.Snapshot
+	baseUserRoot   uint64
+	baseSystemRoot uint64
+	baseCommitSeq  uint64
+	rootNames      []string
+	baseRootIDs    map[string]uint64
+	policies       []backenddb.OrderedRootStoragePolicy
+	deltaTables    []memtable.Table
+}
+
+func (plan *updateBatchPlan) close() {
+	if plan == nil {
+		return
+	}
+	if plan.snap != nil {
+		_ = plan.snap.Close()
+		plan.snap = nil
+	}
+	resetCollectionTables(plan.deltaTables)
+	plan.deltaTables = nil
+}
+
 func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResult, error) {
+	unlockMutation := c.lockMutation()
+	if err := c.flushBufferedWrites(); err != nil {
+		unlockMutation()
+		return nil, err
+	}
+	unlockMutation()
+
+	plan, err := c.buildUpdateBatchPlan(items)
+	if err != nil {
+		return nil, err
+	}
+	if plan == nil || len(plan.deltaTables) == 0 {
+		if plan != nil {
+			defer plan.close()
+			return plan.results, nil
+		}
+		return nil, nil
+	}
+
+	unlockMutation = c.lockMutation()
+	defer unlockMutation()
+	return c.publishUpdateBatchPlanLocked(plan)
+}
+
+func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem) (*updateBatchPlan, error) {
 	results := make([]UpdateBatchResult, len(items))
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
@@ -3531,8 +3577,8 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 		_ = snap.Close()
 		return nil, errCollectionNotFound
 	}
-	c.meta = catalog.meta
-	plannerOptions, err := collectionPlannerOptions(c.meta)
+	meta := catalog.meta
+	plannerOptions, err := collectionPlannerOptions(meta)
 	if err != nil {
 		_ = snap.Close()
 		return nil, err
@@ -3542,14 +3588,14 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
 
-	primaryRoot := catalog.rootID(collectionPrimaryRootName(c.meta.Name))
+	primaryRoot := catalog.rootID(collectionPrimaryRootName(meta.Name))
 	if primaryRoot == 0 {
 		_ = snap.Close()
-		return results, nil
+		return &updateBatchPlan{results: results, meta: meta, catalog: catalog}, nil
 	}
 	runtimes, err := (insertBatchPlanner{
-		collection: c.meta.Name,
-		indexes:    plannerIndexes(c.meta.Indexes),
+		collection: meta.Name,
+		indexes:    plannerIndexes(meta.Indexes),
 	}).indexRuntimes()
 	if err != nil {
 		_ = snap.Close()
@@ -3596,7 +3642,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 	}
 	if len(changed) == 0 {
 		_ = snap.Close()
-		return results, nil
+		return &updateBatchPlan{results: results, meta: meta, catalog: catalog}, nil
 	}
 
 	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments(changedDocuments, plannerOptions)
@@ -3642,11 +3688,12 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 	deltaTables := make([]memtable.Table, 0, 2+len(runtimes))
 	var stateTable memtable.Table
 	secondaryTables := make(map[string]memtable.Table, len(runtimes))
-	var iterators []iterator.UnsafeIterator
+	success := false
 	defer func() {
-		for _, it := range iterators {
-			_ = it.Close()
+		if success {
+			return
 		}
+		_ = snap.Close()
 		resetCollectionTables(deltaTables)
 		resetCollectionRunTable(stateTable)
 		for _, table := range secondaryTables {
@@ -3657,12 +3704,11 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 	if len(templateRecords) > 0 {
 		templatePlan := &insertBatchPlan{}
 		if err := (insertBatchPlanner{
-			collection:             c.meta.Name,
-			templateRoot:           collectionTemplateRootName(c.meta.Name),
+			collection:             meta.Name,
+			templateRoot:           collectionTemplateRootName(meta.Name),
 			options:                plannerOptions,
 			cloneTemplateRunValues: true,
 		}).emitTemplateRun(templatePlan, templateRecords); err != nil {
-			_ = snap.Close()
 			return nil, err
 		}
 		for _, run := range templatePlan.runs {
@@ -3673,7 +3719,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 		}
 	}
 
-	primaryRootName := collectionPrimaryRootName(c.meta.Name)
+	primaryRootName := collectionPrimaryRootName(meta.Name)
 	rootNames = append(rootNames, primaryRootName)
 	baseRootIDs[primaryRootName] = primaryRoot
 	policies = append(policies, plannerOptions.dataStoragePolicy)
@@ -3706,7 +3752,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 				}
 			}
 			for _, runtime := range runtimes {
-				rootName := collectionSecondaryRootName(c.meta.Name, runtime.def.name)
+				rootName := collectionSecondaryRootName(meta.Name, runtime.def.name)
 				table := secondaryTables[rootName]
 				if table == nil {
 					table = newCollectionRunTable(0)
@@ -3732,7 +3778,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 		}
 		if stateTable != nil && stateTable.Len() > 0 {
 			stateTable.Freeze()
-			stateRootName := collectionIndexStateRootName(c.meta.Name)
+			stateRootName := collectionIndexStateRootName(meta.Name)
 			rootNames = append(rootNames, stateRootName)
 			baseRootIDs[stateRootName] = catalog.rootID(stateRootName)
 			policies = append(policies, plannerOptions.indexStateStoragePolicy)
@@ -3740,7 +3786,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 			stateTable = nil
 		}
 		for _, runtime := range runtimes {
-			rootName := collectionSecondaryRootName(c.meta.Name, runtime.def.name)
+			rootName := collectionSecondaryRootName(meta.Name, runtime.def.name)
 			table := secondaryTables[rootName]
 			if table == nil || table.Len() == 0 {
 				continue
@@ -3754,34 +3800,68 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 		}
 	}
 
-	defer func() { _ = snap.Close() }()
-	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
-	iterators = make([]iterator.UnsafeIterator, 0, len(rootNames))
-	for i, rootName := range rootNames {
-		iter := deltaTables[i].NewIterator(nil, nil)
+	resetCollectionRunTable(stateTable)
+	for _, table := range secondaryTables {
+		resetCollectionRunTable(table)
+	}
+	success = true
+	return &updateBatchPlan{
+		results:        results,
+		meta:           meta,
+		catalog:        catalog,
+		snap:           snap,
+		baseUserRoot:   baseUserRoot,
+		baseSystemRoot: baseSystemRoot,
+		baseCommitSeq:  baseCommitSeq,
+		rootNames:      rootNames,
+		baseRootIDs:    baseRootIDs,
+		policies:       policies,
+		deltaTables:    deltaTables,
+	}, nil
+}
+
+func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]UpdateBatchResult, error) {
+	if plan == nil {
+		return nil, nil
+	}
+	defer plan.close()
+	if len(plan.deltaTables) == 0 {
+		return plan.results, nil
+	}
+
+	c.meta = plan.meta
+	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(plan.rootNames))
+	iterators := make([]iterator.UnsafeIterator, 0, len(plan.rootNames))
+	defer func() {
+		for _, it := range iterators {
+			_ = it.Close()
+		}
+	}()
+	for i, rootName := range plan.rootNames {
+		iter := plan.deltaTables[i].NewIterator(nil, nil)
 		iterators = append(iterators, iter)
 		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
-			BaseRoot:      baseRootIDs[rootName],
+			BaseRoot:      plan.baseRootIDs[rootName],
 			Iter:          iter,
-			StoragePolicy: policies[i],
+			StoragePolicy: plan.policies[i],
 		})
 	}
 	preflight := func() error {
-		return c.validateMutationRootDescriptors(baseUserRoot, baseSystemRoot, baseCommitSeq)
+		return c.validateMutationRootDescriptors(plan.baseUserRoot, plan.baseSystemRoot, plan.baseCommitSeq)
 	}
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-		return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+		return c.buildRootDescriptorSystemDeltaIterator(plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs, rootIDs)
 	})
 	if err != nil {
 		return nil, err
 	}
-	if len(rootIDs) != len(rootNames) {
+	if len(rootIDs) != len(plan.rootNames) {
 		return nil, errors.New("collections: ordered root publish returned unexpected root count")
 	}
-	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
+	nextCatalog := cloneCatalogWithRootUpdates(plan.catalog, plan.meta, plan.rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
-	return results, nil
+	return plan.results, nil
 }
 
 func rejectBatchUniqueConflicts(runtimes []indexRuntime, updates []preparedBatchUpdate) error {

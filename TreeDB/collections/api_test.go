@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -3126,6 +3127,89 @@ func TestCollectionUpdateBatchClonesAliasedReplacements(t *testing.T) {
 		{id: []byte("u2"), score: `"score":2`},
 	} {
 		got, err := col.Get(tc.id)
+		if err != nil {
+			t.Fatalf("get %s: %v", tc.id, err)
+		}
+		if !bytes.Contains(got, []byte(tc.score)) {
+			t.Fatalf("%s document=%s want %s", tc.id, got, tc.score)
+		}
+	}
+}
+
+func TestCollectionUpdateBatchReplansAfterConcurrentCollectionMutation(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	left, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open left collection: %v", err)
+	}
+	right, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open right collection: %v", err)
+	}
+	if _, err := left.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"score":0}`), []byte(`{"score":0}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	ready := make(chan struct{})
+	rightDone := make(chan error, 1)
+	go func() {
+		<-ready
+		_, err := right.UpdateBatch([]UpdateBatchItem{{
+			DocumentID: []byte("u2"),
+			Update: func([]byte) ([]byte, bool, error) {
+				return []byte(`{"score":2}`), true, nil
+			},
+		}})
+		rightDone <- err
+	}()
+
+	var callbackCalls atomic.Int32
+	results, err := left.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func([]byte) ([]byte, bool, error) {
+			if callbackCalls.Add(1) == 1 {
+				close(ready)
+				select {
+				case err := <-rightDone:
+					if err != nil {
+						return nil, false, err
+					}
+				case <-time.After(2 * time.Second):
+					return nil, false, errors.New("timed out waiting for concurrent update")
+				}
+			}
+			return []byte(`{"score":1}`), true, nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("left UpdateBatch: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("results=%+v want matched modified", results)
+	}
+	if got := callbackCalls.Load(); got < 2 {
+		t.Fatalf("callbackCalls=%d want retry after concurrent collection mutation", got)
+	}
+	for _, tc := range []struct {
+		id    []byte
+		score string
+	}{
+		{id: []byte("u1"), score: `"score":1`},
+		{id: []byte("u2"), score: `"score":2`},
+	} {
+		got, err := left.Get(tc.id)
 		if err != nil {
 			t.Fatalf("get %s: %v", tc.id, err)
 		}
