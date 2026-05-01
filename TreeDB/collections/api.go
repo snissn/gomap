@@ -2993,7 +2993,7 @@ func cachedWriteDomainCatalogForState(domain *collectionWriteDomain, systemRoot,
 	if !domain.loaded || domain.catalog == nil || domain.baseSystemRoot != systemRoot || domain.baseCommitSeq != commitSeq {
 		return nil
 	}
-	return domain.catalog.copy()
+	return domain.catalog
 }
 
 func snapshotSystemRoot(snap *backenddb.Snapshot) uint64 {
@@ -3117,7 +3117,11 @@ func cloneCatalogWithRootUpdates(base *collectionCatalog, meta CollectionMeta, r
 			roots[name] = rootIDs[i]
 		}
 	}
-	return (&collectionCatalog{meta: meta, roots: roots}).copy()
+	metaCopy := meta
+	if copied := meta.copy(); copied != nil {
+		metaCopy = *copied
+	}
+	return &collectionCatalog{meta: metaCopy, roots: roots}
 }
 
 func buildDeleteRootDeltaTable(deleteKeys [][]byte) memtable.Table {
@@ -4022,7 +4026,7 @@ func loadCollectionCatalog(snap *backenddb.Snapshot, name string) (*collectionCa
 		}
 		roots[rootName] = rootID
 	}
-	return (&collectionCatalog{meta: meta, roots: roots}).copy(), nil
+	return &collectionCatalog{meta: meta, roots: roots}, nil
 }
 
 func (c *collectionCatalog) rootID(rootName string) uint64 {
