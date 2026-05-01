@@ -1939,7 +1939,7 @@ func newBufferedRootRunsIterator(runs []memtable.Table, start, end []byte) itera
 }
 
 func newBufferedRootRunsIteratorWithDeleted(runs []memtable.Table, start, end []byte, includeDeleted bool) iterator.UnsafeIterator {
-	if len(runs) == 1 && includeDeleted {
+	if len(runs) == 1 && includeDeleted && runs[0] != nil {
 		return runs[0].NewIterator(start, end)
 	}
 	it := &bufferedRootRunsIterator{
@@ -5486,7 +5486,7 @@ func bufferedIndexRunsLocked(domain *collectionWriteDomain, collectionName, inde
 	if domain.meta.Name != "" {
 		collectionName = domain.meta.Name
 	}
-	return domain.rootRuns[collectionSecondaryRootName(collectionName, indexName)]
+	return append([]memtable.Table(nil), domain.rootRuns[collectionSecondaryRootName(collectionName, indexName)]...)
 }
 
 func collectMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, prefix []byte, maxResults int) ([][]byte, bool, error) {
@@ -5494,7 +5494,7 @@ func collectMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIter
 	if maxResults > 0 && maxResults < int(^uint(0)>>1) {
 		limit = maxResults + 1
 	}
-	capHint := 1
+	capHint := 16
 	if limit > 0 {
 		capHint = limit
 		const maxInitialCap = 1024

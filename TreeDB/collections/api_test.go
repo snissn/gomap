@@ -1940,6 +1940,32 @@ func TestBufferedRootRunsIteratorSingleRunHidesTombstones(t *testing.T) {
 	}
 }
 
+func TestBufferedRootRunsIteratorSingleRunIncludesTombstones(t *testing.T) {
+	table := newCollectionRunTable(2)
+	table.DeleteSteal([]byte("a"))
+	setCollectionRunValue(table, []byte("b"), []byte("value"))
+	table.Freeze()
+
+	it := newBufferedRootRunsIteratorWithDeleted([]memtable.Table{table}, nil, nil, true)
+	defer func() { _ = it.Close() }()
+	if !it.Valid() {
+		t.Fatal("iterator invalid, want tombstone key a")
+	}
+	if got := it.UnsafeKey(); !bytes.Equal(got, []byte("a")) || !it.IsDeleted() {
+		t.Fatalf("first key=%q deleted=%v want tombstone a", got, it.IsDeleted())
+	}
+	it.Next()
+	if !it.Valid() {
+		t.Fatal("iterator missing live key b")
+	}
+	if got := it.UnsafeKey(); !bytes.Equal(got, []byte("b")) || it.IsDeleted() {
+		t.Fatalf("second key=%q deleted=%v want live b", got, it.IsDeleted())
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+}
+
 func TestCollectMergedCollectionIndexIDsSkipsPersistedTombstones(t *testing.T) {
 	encoded, err := encodeIndexScalar("hnl")
 	if err != nil {
