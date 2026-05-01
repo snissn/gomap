@@ -2601,12 +2601,13 @@ func insertBatchPlanRootNamesAndBaseIDs(plan *insertBatchPlan, catalog *collecti
 }
 
 type insertBatchValidationContext struct {
-	snap        *backenddb.Snapshot
-	catalog     *collectionCatalog
-	meta        CollectionMeta
-	rootNames   []string
-	baseRootIDs map[string]uint64
-	plan        *insertBatchPlan
+	snap           *backenddb.Snapshot
+	catalog        *collectionCatalog
+	meta           CollectionMeta
+	rootNames      []string
+	baseRootIDs    map[string]uint64
+	plan           *insertBatchPlan
+	allowRootDrift bool
 }
 
 func (c *Collection) lockAndValidateInsertBatchPlan(
@@ -2626,18 +2627,31 @@ func (c *Collection) lockAndValidateInsertBatchPlan(
 	}
 	c.meta = meta
 	validation := insertBatchValidationContext{
-		snap:        snap,
-		catalog:     catalog,
-		meta:        meta,
-		rootNames:   rootNames,
-		baseRootIDs: baseRootIDs,
-		plan:        plan,
+		snap:           snap,
+		catalog:        catalog,
+		meta:           meta,
+		rootNames:      rootNames,
+		baseRootIDs:    baseRootIDs,
+		plan:           plan,
+		allowRootDrift: !plannedWithMutationLocked,
 	}
 	pin, currentCatalog, err := c.validateInsertBatchPlanAfterPlanningLocked(plannedWithMutationLocked, validation)
 	if err != nil {
 		return nil, nil, 0, 0, err
 	}
+	if !plannedWithMutationLocked {
+		updateInsertBatchBaseRootIDs(rootNames, baseRootIDs, currentCatalog)
+	}
 	return pin, currentCatalog, snapshotCommitSeq(pin), snapshotSystemRoot(pin), nil
+}
+
+func updateInsertBatchBaseRootIDs(rootNames []string, baseRootIDs map[string]uint64, catalog *collectionCatalog) {
+	if catalog == nil || baseRootIDs == nil {
+		return
+	}
+	for _, rootName := range rootNames {
+		baseRootIDs[rootName] = catalog.rootID(rootName)
+	}
 }
 
 func (c *Collection) validateInsertBatchPlanAfterPlanningLocked(plannedWithMutationLocked bool, validation insertBatchValidationContext) (*backenddb.Snapshot, *collectionCatalog, error) {
@@ -2699,7 +2713,7 @@ func (c *Collection) validateInsertBatchPlanWithSnapshotLocked(validation insert
 		if !ok {
 			return fmt.Errorf("collections: insert plan missing base root id collection=%q root=%q", validation.meta.Name, rootName)
 		}
-		if got := validation.catalog.rootID(rootName); got != want {
+		if got := validation.catalog.rootID(rootName); got != want && !validation.allowRootDrift {
 			return errConcurrentRootModification(validation.meta.Name, rootName)
 		}
 	}
