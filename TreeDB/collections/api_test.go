@@ -3456,14 +3456,21 @@ func TestCollectionUpdateCombinerWaitsForIdleDrain(t *testing.T) {
 	col.writeDomain.updateDraining = draining
 	col.writeDomain.updateCombineMu.Unlock()
 
+	started := make(chan struct{})
 	gotCh := make(chan *collectionUpdateCombiner, 1)
 	go func() {
+		close(started)
 		gotCh <- col.updateCombiner()
 	}()
 	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("updateCombiner goroutine did not start")
+	}
+	select {
 	case got := <-gotCh:
 		t.Fatalf("updateCombiner returned %v before idle drain completed", got)
-	case <-time.After(25 * time.Millisecond):
+	default:
 	}
 
 	col.writeDomain.updateCombineMu.Lock()
