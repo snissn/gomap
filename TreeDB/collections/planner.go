@@ -81,14 +81,16 @@ type insertBatchPlanner struct {
 }
 
 type insertBatchPlan struct {
-	resultIDs               [][]byte
-	primaryKeys             [][]byte
-	runs                    []collectionRootRun
-	uniqueProbeRuns         []collectionUniqueProbeRun
-	allUniqueProbeRuns      []collectionUniqueProbeRun
-	allUniqueProbeRunsBuilt bool
-	templateRecords         []templateV1Record
-	stats                   insertBatchPlanStats
+	resultIDs                  [][]byte
+	primaryKeys                [][]byte
+	runs                       []collectionRootRun
+	uniqueProbeCandidates      []uniqueProbeCandidate
+	uniqueProbeCandidatesBuilt bool
+	uniqueProbeRuns            []collectionUniqueProbeRun
+	allUniqueProbeRuns         []collectionUniqueProbeRun
+	allUniqueProbeRunsBuilt    bool
+	templateRecords            []templateV1Record
+	stats                      insertBatchPlanStats
 }
 
 type insertBatchPlanStats struct {
@@ -231,24 +233,32 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	if err := rejectDuplicateUniqueProbeCandidates(uniqueProbes); err != nil {
 		return nil, err
 	}
-	allUniqueProbeRuns, err := buildUniqueProbeRunsFromSorted(uniqueProbes, nil)
-	if err != nil {
-		return nil, err
-	}
-	uniqueProbeRuns := uniqueProbeRunsForPreflight(allUniqueProbeRuns, preflight)
-	if err := preflight.checkUniqueConflicts(uniqueProbeRuns); err != nil {
-		return nil, err
+	var uniqueProbeRuns []collectionUniqueProbeRun
+	var allUniqueProbeRuns []collectionUniqueProbeRun
+	allUniqueProbeRunsBuilt := false
+	if preflight.snapshot != nil && len(preflight.uniqueIndexRootIDs) > 0 {
+		allUniqueProbeRuns, err = buildUniqueProbeRunsFromSorted(uniqueProbes, nil)
+		if err != nil {
+			return nil, err
+		}
+		allUniqueProbeRunsBuilt = true
+		uniqueProbeRuns = uniqueProbeRunsForPreflight(allUniqueProbeRuns, preflight)
+		if err := preflight.checkUniqueConflicts(uniqueProbeRuns); err != nil {
+			return nil, err
+		}
 	}
 	stats.UniqueIndexPreflight = time.Since(phaseStart)
 
 	plan := &insertBatchPlan{
-		resultIDs:               resultIDs,
-		primaryKeys:             primaryKeys,
-		uniqueProbeRuns:         uniqueProbeRuns,
-		allUniqueProbeRuns:      allUniqueProbeRuns,
-		allUniqueProbeRunsBuilt: true,
-		templateRecords:         templateRecords,
-		stats:                   insertBatchPlanStats{CollectionInsertStats: stats},
+		resultIDs:                  resultIDs,
+		primaryKeys:                primaryKeys,
+		uniqueProbeCandidates:      uniqueProbes,
+		uniqueProbeCandidatesBuilt: true,
+		uniqueProbeRuns:            uniqueProbeRuns,
+		allUniqueProbeRuns:         allUniqueProbeRuns,
+		allUniqueProbeRunsBuilt:    allUniqueProbeRunsBuilt,
+		templateRecords:            templateRecords,
+		stats:                      insertBatchPlanStats{CollectionInsertStats: stats},
 	}
 	if len(templateRecords) > 0 {
 		phaseStart = time.Now()
@@ -348,7 +358,17 @@ func (plan *insertBatchPlan) checkPersistedConflicts(snap *backenddb.Snapshot, c
 	}
 	uniqueRootIDs := uniqueIndexRootIDs(catalog)
 	if len(plan.resultIDs) > 0 && len(uniqueRootIDs) > 0 && !plan.allUniqueProbeRunsBuilt {
-		return errors.New("collections: insert conflict check missing unique probe runs")
+		if !plan.uniqueProbeCandidatesBuilt {
+			return errors.New("collections: insert conflict check missing unique probe runs")
+		}
+		runs, err := buildUniqueProbeRunsFromSorted(plan.uniqueProbeCandidates, func(indexName string) bool {
+			return uniqueRootIDs[indexName] != 0
+		})
+		if err != nil {
+			return err
+		}
+		plan.allUniqueProbeRuns = runs
+		plan.allUniqueProbeRunsBuilt = true
 	}
 	preflight := insertBatchPreflight{
 		snapshot:           snap,

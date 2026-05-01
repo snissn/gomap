@@ -683,6 +683,18 @@ func TestCreateProfileFileRejectsSymlink(t *testing.T) {
 	}
 }
 
+func TestCreateProfileFileRejectsExistingRegularFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "existing.pprof")
+	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+		t.Fatalf("write existing file: %v", err)
+	}
+	file, err := createProfileFile(path)
+	if err == nil {
+		_ = file.Close()
+		t.Fatal("createProfileFile accepted existing regular file")
+	}
+}
+
 func TestProfileRecorderManifestRecordsProfileStopError(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := parseConfig([]string{"-profile-dir", dir})
