@@ -44,16 +44,16 @@ func TestCollectionGetNilDBReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "db is nil") {
+	if !errors.Is(err, errCollectionDBNil) {
 		t.Fatalf("Get nil db error=%v", err)
 	}
 }
 
-func TestCollectionManagerOpenCollectionNilDBReturnsConfigurationError(t *testing.T) {
+func TestCollectionManagerOpenCollectionNilDBReturnsErrCollectionDBNil(t *testing.T) {
 	mgr := NewCollectionManager(nil)
 	_, err := mgr.OpenCollection("users")
-	if err == nil || !strings.Contains(err.Error(), "db is nil") {
-		t.Fatalf("OpenCollection nil db err=%v want db is nil", err)
+	if !errors.Is(err, errCollectionDBNil) {
+		t.Fatalf("OpenCollection nil db err=%v want errCollectionDBNil", err)
 	}
 }
 
@@ -76,6 +76,9 @@ func TestCollectionManagerOpenCollectionCacheRejectsClosedDB(t *testing.T) {
 
 	if _, err := mgr.OpenCollection("users"); !errors.Is(err, backenddb.ErrClosed) {
 		t.Fatalf("OpenCollection after close err=%v want ErrClosed", err)
+	}
+	if _, err := mgr.OpenCollection(""); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("OpenCollection invalid name after close err=%v want ErrClosed", err)
 	}
 }
 
@@ -2457,6 +2460,7 @@ func TestCollectionValidateInsertBatchPlanLockedClassifiesRaces(t *testing.T) {
 	}
 	rootName := collectionPrimaryRootName("users")
 	plan := &insertBatchPlan{
+		resultIDs:   [][]byte{[]byte("u2")},
 		primaryKeys: [][]byte{[]byte("u2")},
 		runs:        []collectionRootRun{{name: rootName}},
 	}
@@ -2467,6 +2471,12 @@ func TestCollectionValidateInsertBatchPlanLockedClassifiesRaces(t *testing.T) {
 			_ = current.Close()
 		}
 		t.Fatalf("root mismatch current=%v err=%v want ErrConcurrentMutation", current, err)
+	}
+	if current, _, err := col.validateInsertBatchPlanLocked(catalog.meta, rootNames, map[string]uint64{}, plan); current != nil || err == nil || errors.Is(err, ErrConcurrentMutation) || !strings.Contains(err.Error(), "missing base root id") {
+		if current != nil {
+			_ = current.Close()
+		}
+		t.Fatalf("missing base root current=%v err=%v want non-retryable missing base root error", current, err)
 	}
 
 	schemaMeta := catalog.meta
@@ -2479,7 +2489,7 @@ func TestCollectionValidateInsertBatchPlanLockedClassifiesRaces(t *testing.T) {
 	}
 }
 
-func TestOpenCollectionUsesWriteDomainCatalogCache(t *testing.T) {
+func TestOpenCollectionWriteDomainCatalogCacheUsesCommitSeq(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -2500,9 +2510,17 @@ func TestOpenCollectionUsesWriteDomainCatalogCache(t *testing.T) {
 
 	state := d.State()
 	domain := mgr.existingWriteDomainForCollection("users")
-	cached := cachedWriteDomainCatalogForSystemRoot(domain, state.SystemRootPageID)
+	cached := cachedWriteDomainCatalogForState(domain, state.SystemRootPageID, state.CommitSeq)
 	if cached == nil {
 		t.Fatal("expected populated write-domain catalog cache")
+	}
+	cachedRoot := cached.rootID(collectionPrimaryRootName("users"))
+	cached.roots[collectionPrimaryRootName("users")] = ^uint64(0)
+	if cachedAgain := cachedWriteDomainCatalogForState(domain, state.SystemRootPageID, state.CommitSeq); cachedAgain == nil || cachedAgain.rootID(collectionPrimaryRootName("users")) != cachedRoot {
+		t.Fatalf("write-domain catalog cache exposed mutable roots: got=%v want root %d", cachedAgain, cachedRoot)
+	}
+	if stale := cachedWriteDomainCatalogForState(domain, state.SystemRootPageID, state.CommitSeq+1); stale != nil {
+		t.Fatal("write-domain catalog cache ignored commit sequence")
 	}
 	if err := d.Set([]byte("raw/unrelated"), []byte("value")); err != nil {
 		t.Fatalf("raw set: %v", err)
@@ -2528,8 +2546,11 @@ func TestOpenCollectionUsesWriteDomainCatalogCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("catalogForSnapshot: %v", err)
 	}
-	if reopenedCatalog != cached {
-		t.Fatalf("OpenCollection did not reuse write-domain catalog cache")
+	if got := reopenedCatalog.rootID(collectionPrimaryRootName("users")); got == ^uint64(0) {
+		t.Fatalf("OpenCollection reused mutated write-domain catalog roots: %d", got)
+	}
+	if fresh := cachedWriteDomainCatalogForState(domain, rawState.SystemRootPageID, rawState.CommitSeq); fresh == nil || fresh.rootID(collectionPrimaryRootName("users")) != reopenedCatalog.rootID(collectionPrimaryRootName("users")) {
+		t.Fatal("OpenCollection did not refresh write-domain catalog cache for new commit sequence")
 	}
 	if got, err := reopened.Get([]byte("u1")); err != nil || !bytes.Equal(got, []byte(`{"name":"ada"}`)) {
 		t.Fatalf("reopened get got=%q err=%v", got, err)
@@ -2621,6 +2642,10 @@ func TestCollectionUpdateBatchValidationErrorsIncludeIndex(t *testing.T) {
 	_, err = (&Collection{db: d}).UpdateBatch([]UpdateBatchItem{{DocumentID: []byte("u1")}})
 	if err == nil || !strings.Contains(err.Error(), "index 0") {
 		t.Fatalf("nil update err=%v want index 0", err)
+	}
+	_, err = (&Collection{}).UpdateBatch([]UpdateBatchItem{{DocumentID: []byte("u1"), Update: incrementJSONCount}})
+	if !errors.Is(err, errCollectionDBNil) {
+		t.Fatalf("nil db err=%v want errCollectionDBNil", err)
 	}
 }
 
@@ -2834,6 +2859,69 @@ func TestCollectionUpdateCombinerRunBatchRecoversCallbackPanic(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateDirectRecoversCallbackPanic(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"score":0}`)}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	directCol := *col
+	directCol.writeDomain = nil
+	matched, modified, err := directCol.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+		panic("bad callback")
+	})
+	if err == nil || !strings.Contains(err.Error(), "bad callback") {
+		t.Fatalf("Update err=%v want recovered panic", err)
+	}
+	if matched || modified {
+		t.Fatalf("matched=%v modified=%v want false,false", matched, modified)
+	}
+}
+
+func TestCollectionUpdateCombinerMaxBatchOneRecoversCallbackPanic(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"score":0}`)}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	combiner := &collectionUpdateCombiner{maxBatch: 1}
+	matched, modified, err := combiner.update(col, []byte("u1"), func([]byte) ([]byte, bool, error) {
+		panic("bad callback")
+	})
+	if err == nil || !strings.Contains(err.Error(), "bad callback") {
+		t.Fatalf("Update err=%v want recovered panic", err)
+	}
+	if matched || modified {
+		t.Fatalf("matched=%v modified=%v want false,false", matched, modified)
+	}
+}
+
 func TestCollectionUpdateCombinerDuplicateIDsPreserveOrder(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -2883,10 +2971,6 @@ func TestCollectionUpdateCombinerDuplicateIDsPreserveOrder(t *testing.T) {
 }
 
 func TestCollectionUpdateCombinerEvictsWhenIdle(t *testing.T) {
-	oldTTL := collectionUpdateCombineIdleTTL
-	collectionUpdateCombineIdleTTL = time.Millisecond
-	defer func() { collectionUpdateCombineIdleTTL = oldTTL }()
-
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -2901,24 +2985,27 @@ func TestCollectionUpdateCombinerEvictsWhenIdle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open collection: %v", err)
 	}
+	col.writeDomain.updateCombineMu.Lock()
+	col.writeDomain.updateCombineTTL = time.Millisecond
+	col.writeDomain.updateCombineMu.Unlock()
 	combiner := col.updateCombiner()
 	if combiner == nil {
 		t.Fatal("expected update combiner")
 	}
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		col.writeDomain.updateCombineMu.Lock()
-		stillCached := col.writeDomain.updateCombiner == combiner
-		col.writeDomain.updateCombineMu.Unlock()
-		combiner.mu.RLock()
-		stopped := combiner.stopped
-		combiner.mu.RUnlock()
-		if !stillCached && stopped {
-			return
-		}
-		time.Sleep(time.Millisecond)
+	select {
+	case <-combiner.done:
+	case <-time.After(time.Second):
+		t.Fatal("combiner was not evicted after idle timeout")
 	}
-	t.Fatal("combiner was not evicted after idle timeout")
+	col.writeDomain.updateCombineMu.Lock()
+	stillCached := col.writeDomain.updateCombiner == combiner
+	col.writeDomain.updateCombineMu.Unlock()
+	combiner.mu.RLock()
+	stopped := combiner.stopped
+	combiner.mu.RUnlock()
+	if stillCached || !stopped {
+		t.Fatalf("stillCached=%v stopped=%v want false,true", stillCached, stopped)
+	}
 }
 
 func TestCollectionManagerCloseStopsUpdateCombiners(t *testing.T) {
@@ -3227,6 +3314,54 @@ func TestCollectionUpdateBatchReplansAfterConcurrentCollectionMutation(t *testin
 	}
 }
 
+func TestCollectionUpdateBatchClonesDocumentIDs(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"score":0}`), []byte(`{"score":0}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	id := []byte("u1")
+	if _, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: id,
+		Update: func([]byte) ([]byte, bool, error) {
+			id[1] = '2'
+			return []byte(`{"score":1}`), true, nil
+		},
+	}}); err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+	gotU1, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1: %v", err)
+	}
+	if !bytes.Contains(gotU1, []byte(`"score":1`)) {
+		t.Fatalf("u1 document=%s want score 1", gotU1)
+	}
+	gotU2, err := col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get u2: %v", err)
+	}
+	if !bytes.Contains(gotU2, []byte(`"score":0`)) {
+		t.Fatalf("u2 document=%s want score 0", gotU2)
+	}
+}
+
 func TestCollectionUpdateBatchFlushesBufferedIndexedWritesBeforePublish(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -3323,8 +3458,53 @@ func TestCollectionUpdateBatchBSONRejectsIDMutation(t *testing.T) {
 			return replacement, true, nil
 		}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "cannot modify _id") {
-		t.Fatalf("UpdateBatch err=%v want _id mutation error", err)
+	if err == nil || !strings.Contains(err.Error(), "index 0") || !strings.Contains(err.Error(), "cannot modify _id") {
+		t.Fatalf("UpdateBatch err=%v want indexed _id mutation error", err)
+	}
+}
+
+func TestCollectionUpdateBatchBSONAllowsNoopNilReplacement(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	doc := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(0)}})
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{doc}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	results, err := col.UpdateBatch([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: func([]byte) ([]byte, bool, error) {
+			return nil, false, nil
+		}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBatch noop: %v", err)
+	}
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("results len=%d want %d", got, want)
+	}
+	if !results[0].Matched || results[0].Modified {
+		t.Fatalf("result=%+v want matched noop", results[0])
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !bytes.Equal(got, doc) {
+		t.Fatalf("document changed got=%v want=%v", bson.Raw(got), bson.Raw(doc))
 	}
 }
 

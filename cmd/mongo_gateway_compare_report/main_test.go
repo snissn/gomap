@@ -131,6 +131,63 @@ func TestReportAllowsIncompleteTreeDBOnlyCell(t *testing.T) {
 	}
 }
 
+func TestReportAllowsMixedIncompleteCells(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb_complete.json"), `{
+  "target": "treedb",
+  "documents": 10,
+  "secondary_indexes": 0,
+  "phases": [{"name": "load_insert_many", "operations": 10, "ops_per_sec": 1000, "sampled_ops_per_sec": 1100, "sampled_ns_per_op": 900, "latency_micros": {"p95": 2}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 100}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo_complete.json"), `{
+  "target": "mongo",
+  "documents": 10,
+  "secondary_indexes": 0,
+  "phases": [{"name": "load_insert_many", "operations": 10, "ops_per_sec": 500, "sampled_ops_per_sec": 550, "sampled_ns_per_op": 1800, "latency_micros": {"p95": 4}}],
+  "mongodb_stats_final": {"dataSize": 200, "totalSize": 300}
+}`)
+	writeFile(t, filepath.Join(dir, "treedb_only.json"), `{
+  "target": "treedb",
+  "documents": 20,
+  "secondary_indexes": 1,
+  "phases": [{"name": "concurrent_id_find_one_r2", "operations": 20, "ops_per_sec": 2000, "sampled_ops_per_sec": 2200, "sampled_ns_per_op": 450, "latency_micros": {"p95": 3}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 400}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	reportPath := filepath.Join(dir, "report.md")
+	summaryPath := filepath.Join(dir, "summary.tsv")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_complete\t10\t0\ttreedb_complete.json\t100\n"+
+		"mongo\tmongo\t10\t0\tmongo_complete.json\t300\n"+
+		"treedb\ttreedb_only\t20\t1\ttreedb_only.json\t400\n")
+
+	if err := run([]string{
+		"-matrix", matrixPath,
+		"-report", reportPath,
+		"-summary", summaryPath,
+		"-allow-incomplete",
+	}); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	report := readFile(t, reportPath)
+	for _, want := range []string{
+		"| 10 | 0 | `treedb_complete` | `load_insert_many` | 1000 | 1100 | 500 | 550 | 2.00x | 2.00x | 2.00 | 4.00 |",
+		"| 20 | 1 | `treedb_only` | `concurrent_id_find_one_r2` | 2000 | 2200 | n/a | n/a | n/a | n/a | 3.00 | n/a |",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q\n%s", want, report)
+		}
+	}
+	summary := readFile(t, summaryPath)
+	if !strings.Contains(summary, "load_insert_many\t1000.000000\t1100.000000\t900.000000\t500.000000\t550.000000\t1800.000000\t2.000000\t2.000000") {
+		t.Fatalf("summary missing complete comparison:\n%s", summary)
+	}
+	if !strings.Contains(summary, "concurrent_id_find_one_r2\t2000.000000\t2200.000000\t450.000000\t\t\t\t\t") {
+		t.Fatalf("summary missing incomplete comparison:\n%s", summary)
+	}
+}
+
 func TestReportSupportsMultipleTreeDBConfigsPerMongoCell(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "treedb_json.json"), `{

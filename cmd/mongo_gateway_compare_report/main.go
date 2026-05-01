@@ -700,7 +700,7 @@ func allPhaseComparisons(cells []cellComparison) []phaseComparison {
 	var out []phaseComparison
 	for _, cell := range cells {
 		var mongoPhases []phaseResult
-		var mongoPhaseMap map[string]phaseResult
+		mongoPhaseMap := map[string]phaseResult{}
 		if cell.Mongo != nil {
 			mongoPhases = cell.Mongo.Result.Phases
 			mongoPhaseMap = cell.Mongo.PhaseMap

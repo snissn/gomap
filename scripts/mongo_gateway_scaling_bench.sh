@@ -171,17 +171,18 @@ is_positive_int() {
   [[ "$1" =~ ^[0-9]+$ ]] && [[ "$1" -gt 0 ]]
 }
 
-for value_name in DOCS BATCH_SIZE INSERT_PRODUCERS CONCURRENT_WRITES CONCURRENT_READS MONGO_MAX_POOL_SIZE MONGO_MIN_POOL_SIZE MONGO_MAX_CONNECTING; do
+for value_name in DOCS BATCH_SIZE INSERT_PRODUCERS CONCURRENT_WRITES CONCURRENT_READS; do
   value=${!value_name}
-  if ! is_positive_int "$value" && [[ "$value_name" != MONGO_MIN_POOL_SIZE && "$value_name" != MONGO_MAX_POOL_SIZE && "$value_name" != MONGO_MAX_CONNECTING ]]; then
+  if ! is_positive_int "$value"; then
     echo "invalid $value_name=$value (want positive integer)" >&2
     exit 2
   fi
-  if [[ "$value_name" == MONGO_MIN_POOL_SIZE || "$value_name" == MONGO_MAX_POOL_SIZE || "$value_name" == MONGO_MAX_CONNECTING ]]; then
-    if ! is_nonnegative_int "$value"; then
-      echo "invalid $value_name=$value (want non-negative integer)" >&2
-      exit 2
-    fi
+done
+for value_name in MONGO_MAX_POOL_SIZE MONGO_MIN_POOL_SIZE MONGO_MAX_CONNECTING; do
+  value=${!value_name}
+  if ! is_nonnegative_int "$value"; then
+    echo "invalid $value_name=$value (want non-negative integer)" >&2
+    exit 2
   fi
 done
 for value_name in INDEXES READS RANGE_READS UPDATES DELETES; do
@@ -250,16 +251,7 @@ run_bench() {
   local concurrent_writes=$7
   shift 7
 
-  local prebuild_args=()
-  if [[ "$PREBUILD_DOCUMENTS" == "true" ]]; then
-    prebuild_args=(-prebuild-documents)
-  fi
-  local indexed_update_args=()
-  if [[ "$UPDATE_INDEXED_FIELD" == "true" ]]; then
-    indexed_update_args=(-update-indexed-field)
-  fi
-
-  "$BENCH_BIN" \
+  local bench_args=(
     -target "$target" \
     -database "$database" \
     -collection "$COLLECTION" \
@@ -279,10 +271,17 @@ run_bench() {
     -concurrent-writes "$concurrent_writes" \
     -secondary-indexes "$INDEXES" \
     -timeout "$TIMEOUT" \
-    -format json \
-    "${prebuild_args[@]}" \
-    "${indexed_update_args[@]}" \
-    "$@" >"$raw_json"
+    -format json
+  )
+  if [[ "$PREBUILD_DOCUMENTS" == "true" ]]; then
+    bench_args+=(-prebuild-documents)
+  fi
+  if [[ "$UPDATE_INDEXED_FIELD" == "true" ]]; then
+    bench_args+=(-update-indexed-field)
+  fi
+  bench_args+=("$@")
+
+  "$BENCH_BIN" "${bench_args[@]}" >"$raw_json"
 }
 
 printf "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n" >"$MATRIX"

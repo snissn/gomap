@@ -96,7 +96,7 @@ type benchmarkResult struct {
 	ConcurrentReads             int                 `json:"concurrent_reads,omitempty"`
 	ConcurrentWriters           int                 `json:"concurrent_writers,omitempty"`
 	ConcurrentWrites            int                 `json:"concurrent_writes,omitempty"`
-	UpdateIndexedField          bool                `json:"update_indexed_field,omitempty"`
+	UpdateIndexedField          bool                `json:"update_indexed_field"`
 	TreeDBProfile               string              `json:"treedb_profile,omitempty"`
 	TreeDBDocumentFormat        string              `json:"treedb_document_format,omitempty"`
 	TreeDBDataRootStorage       string              `json:"treedb_data_root_storage,omitempty"`
@@ -514,6 +514,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.ProfileTrace && strings.TrimSpace(cfg.ProfileDir) == "" {
 		return config{}, errors.New("profile-trace requires -profile-dir")
+	}
+	if cfg.ProfileHeapGC && strings.TrimSpace(cfg.ProfileDir) == "" {
+		return config{}, errors.New("profile-heap-gc requires -profile-dir")
 	}
 	if cfg.SecondaryIndexes < 0 || cfg.SecondaryIndexes > 2 {
 		return config{}, errors.New("secondary-indexes must be 0, 1, or 2")
@@ -1656,6 +1659,11 @@ func collectAfterLoadStats(ctx context.Context, cfg config, target *benchTarget,
 func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, result *benchmarkResult) error {
 	if cfg.Target == "treedb" {
 		if cfg.TreeDBMaintenance == treeDBMaintenanceNone {
+			if target.collections != nil {
+				if err := target.collections.FlushAll(); err != nil {
+					return err
+				}
+			}
 			if target.db != nil {
 				result.TreeDBStatsFinal = target.db.Stats()
 			}
@@ -1890,6 +1898,11 @@ func mongoDBStats(ctx context.Context, db *mongo.Database) (map[string]any, erro
 	return stats, nil
 }
 
+var (
+	benchmarkCities        = [...]string{"hnl", "sfo", "nyc", "lon", "sin", "ber", "tyo", "syd"}
+	benchmarkUpdatedCities = [...]string{"ams", "cdg", "mad", "mex", "gru", "yyz", "icn", "akl"}
+)
+
 func benchmarkDocument(i int) bson.D {
 	city := benchmarkCity(i)
 	return bson.D{
@@ -1933,13 +1946,11 @@ func benchmarkEmail(i int) string {
 }
 
 func benchmarkCity(i int) string {
-	cities := [...]string{"hnl", "sfo", "nyc", "lon", "sin", "ber", "tyo", "syd"}
-	return cities[i%len(cities)]
+	return benchmarkCities[i%len(benchmarkCities)]
 }
 
 func benchmarkUpdatedCity(i int) string {
-	cities := [...]string{"ams", "cdg", "mad", "mex", "gru", "yyz", "icn", "akl"}
-	return cities[i%len(cities)]
+	return benchmarkUpdatedCities[i%len(benchmarkUpdatedCities)]
 }
 
 func int64Value(value any) (int64, bool) {

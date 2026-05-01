@@ -475,6 +475,9 @@ func TestParseConfigProfileOptions(t *testing.T) {
 	if _, err := parseConfig([]string{"-profile-trace"}); err == nil {
 		t.Fatal("profile-trace without profile-dir accepted")
 	}
+	if _, err := parseConfig([]string{"-profile-heap-gc"}); err == nil {
+		t.Fatal("profile-heap-gc without profile-dir accepted")
+	}
 	if _, err := parseConfig([]string{"-profile-block-rate", "-1"}); err == nil {
 		t.Fatal("negative profile-block-rate accepted")
 	}
@@ -500,6 +503,12 @@ func TestProfileRecorderWritesPhaseArtifactsAndManifest(t *testing.T) {
 	defer recorder.Close()
 
 	phase, err := recorder.RunPhase("unit phase", func() (phaseResult, error) {
+		var sink uint64
+		deadline := time.Now().Add(25 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			sink++
+		}
+		runtime.KeepAlive(sink)
 		return summarizePhase("unit phase", 1, 1, time.Millisecond, []time.Duration{time.Millisecond}), nil
 	})
 	if err != nil {
@@ -1021,7 +1030,10 @@ func TestBenchmarkSetUpdateCanExerciseIndexedField(t *testing.T) {
 		t.Fatalf("marshal update: %v", err)
 	}
 	doc := bson.Raw(raw)
-	set := doc.Lookup("$set").Document()
+	set, ok := doc.Lookup("$set").DocumentOK()
+	if !ok {
+		t.Fatalf("$set missing or not a document: %v", doc.Lookup("$set").Type)
+	}
 	if got, ok := set.Lookup("concurrent_update_seq").Int64OK(); !ok || got != 3 {
 		t.Fatalf("concurrent_update_seq=%d ok=%t want 3", got, ok)
 	}
