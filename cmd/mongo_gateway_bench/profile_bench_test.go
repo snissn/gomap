@@ -504,7 +504,8 @@ func profileBenchApplySetUpdate(doc bson.Raw, update bson.Raw) (bson.Raw, bool, 
 	}
 	out := make(bson.D, 0, len(elements)+len(sets))
 	used := make(map[string]struct{}, len(sets))
-	changed := true
+	// Force the benchmark down the write/index update path for any non-empty $set.
+	forceWrite := true
 	for _, elem := range elements {
 		key, err := elem.KeyErr()
 		if err != nil {
@@ -527,7 +528,7 @@ func profileBenchApplySetUpdate(doc bson.Raw, update bson.Raw) (bson.Raw, bool, 
 	if err != nil {
 		return nil, false, err
 	}
-	return bson.Raw(raw), changed, nil
+	return bson.Raw(raw), forceWrite, nil
 }
 
 func TestProfileBenchApplySetUpdateHappyPath(t *testing.T) {

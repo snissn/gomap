@@ -224,7 +224,7 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 		if modifiedOne {
 			modified = 1
 		}
-	} else if len(parsed) > 1 && !hasDuplicateKey {
+	} else if len(parsed) > 1 && !hasDuplicateKey && !collectionHasSecondaryUniqueIndexes(col) {
 		matched, modified, err = runMongoUpdateBatch(col, parsed)
 		if err != nil {
 			matched, modified, err = runMongoUpdatesSequential(col, parsed)
@@ -388,7 +388,7 @@ func applyMongoUpdateToStoredDocument(col *collections.Collection, materializer 
 		return nil, false, fmt.Errorf("updates[%d]: %w", update.index, err)
 	}
 	if !bytes.Equal(updatedKey, update.key) {
-		return nil, false, errors.New("Mongo gateway update cannot modify _id")
+		return nil, false, fmt.Errorf("updates[%d]: Mongo gateway update cannot modify _id", update.index)
 	}
 	if !changed {
 		return nil, false, nil
@@ -615,11 +615,14 @@ drained:
 }
 
 func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
-	if len(batch) == 1 || mongoUpdateCoalescerHasDuplicateKeys(batch) {
-		for _, req := range batch {
-			matched, modified, err := runMongoUpdateOne(req.col, req.item)
-			req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
-		}
+	if len(batch) == 0 {
+		return
+	}
+	if len(batch) == 1 ||
+		mongoUpdateCoalescerHasDuplicateKeys(batch) ||
+		!mongoUpdateCoalescerUsesSingleCollection(batch) ||
+		collectionHasSecondaryUniqueIndexes(batch[0].col) {
+		runMongoUpdateCoalescerSequential(batch)
 		return
 	}
 	updates := make([]mongoUpdateItem, len(batch))
@@ -628,10 +631,7 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 	}
 	results, err := runMongoUpdateBatchResults(batch[0].col, updates)
 	if err != nil || len(results) != len(batch) {
-		for _, req := range batch {
-			matched, modified, err := runMongoUpdateOne(req.col, req.item)
-			req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
-		}
+		runMongoUpdateCoalescerSequential(batch)
 		return
 	}
 	for i, req := range batch {
@@ -648,6 +648,41 @@ func mongoUpdateCoalescerHasDuplicateKeys(batch []mongoUpdateCoalescerRequest) b
 			return true
 		}
 		seen[key] = struct{}{}
+	}
+	return false
+}
+
+func mongoUpdateCoalescerUsesSingleCollection(batch []mongoUpdateCoalescerRequest) bool {
+	if len(batch) == 0 {
+		return true
+	}
+	name := batch[0].col.Name()
+	if name == "" {
+		return false
+	}
+	for _, req := range batch[1:] {
+		if req.col == nil || req.col.Name() != name {
+			return false
+		}
+	}
+	return true
+}
+
+func runMongoUpdateCoalescerSequential(batch []mongoUpdateCoalescerRequest) {
+	for _, req := range batch {
+		matched, modified, err := runMongoUpdateOne(req.col, req.item)
+		req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
+	}
+}
+
+func collectionHasSecondaryUniqueIndexes(col *collections.Collection) bool {
+	if col == nil {
+		return false
+	}
+	for _, idx := range col.Meta().Indexes {
+		if idx.Unique {
+			return true
+		}
 	}
 	return false
 }
