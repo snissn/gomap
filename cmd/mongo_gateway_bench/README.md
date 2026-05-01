@@ -190,6 +190,8 @@ The bundle contains:
 - `summary.tsv`: machine-readable per-phase comparison rows.
 - `matrix.tsv`: target/config/document/index/raw-json/physical-byte index.
 - `raw/*.json`: unmodified `mongo_gateway_bench -format json` output.
+- `profiles/`: per-phase TreeDB pprof artifacts when `--profile-treedb` is
+  used.
 - `treedb_data/` and, in Docker mode, `mongodb_data/`: final data directories
   for post-run inspection.
 
@@ -212,6 +214,11 @@ Useful overrides:
 - `TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack raw-wire-tcp raw-wire"`
 - `READS=50000`, `RANGE_READS=5000`, `UPDATES=5000`
 - `DELETES=1000`
+- `RANGE_INDEX=true` or `--range-index` to create `age_1` and report
+  `age_range_indexed_limit_10` instead of scan fallback.
+- `PROFILE_TREEDB=true` or `--profile-treedb` to pass `-profile-dir` for every
+  TreeDB cell and retain per-phase profiles under the bundle's `profiles/`
+  directory.
 - `CONCURRENT_READERS=16`, `CONCURRENT_READS=50000`
 - `CONCURRENT_WRITERS=8`, `CONCURRENT_WRITES=10000`
 - `BATCH_SIZE=1000`
@@ -227,6 +234,7 @@ BATCH_SIZE=5000 scripts/mongo_gateway_compare.sh \
   --indexes "2" \
   --reads 50000 \
   --range-reads 5000 \
+  --range-index \
   --updates 5000 \
   --concurrent-readers 16 \
   --concurrent-reads 50000 \

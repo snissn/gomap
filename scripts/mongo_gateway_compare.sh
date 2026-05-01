@@ -15,6 +15,8 @@ MONGO_MAX_POOL_SIZE="${MONGO_MAX_POOL_SIZE:-0}"
 MONGO_MIN_POOL_SIZE="${MONGO_MIN_POOL_SIZE:-0}"
 MONGO_MAX_CONNECTING="${MONGO_MAX_CONNECTING:-0}"
 PREBUILD_DOCUMENTS="${PREBUILD_DOCUMENTS:-false}"
+RANGE_INDEX="${RANGE_INDEX:-false}"
+PROFILE_TREEDB="${PROFILE_TREEDB:-false}"
 READS="${READS:-}"
 READS_DIVISOR="${READS_DIVISOR:-1}"
 RANGE_READS="${RANGE_READS:-}"
@@ -68,6 +70,8 @@ Options:
   --mongo-max-connecting N
                         MongoDB Go driver maxConnecting. Default: 0, use driver default.
   --prebuild-documents  Prebuild documents before timed load phases.
+  --range-index         Create age_1 for the range-read phase.
+  --profile-treedb      Capture per-phase TreeDB pprof artifacts in profiles/.
   --concurrent-readers N
                         Reader goroutines for the concurrent _id read phase.
   --concurrent-reads COUNT
@@ -97,6 +101,7 @@ Options:
 Environment overrides:
   OUT_DIR, DOCS_LIST, INDEXES_LIST, BATCH_SIZE, INSERT_PRODUCERS,
   MONGO_MAX_POOL_SIZE, MONGO_MIN_POOL_SIZE, MONGO_MAX_CONNECTING, PREBUILD_DOCUMENTS,
+  RANGE_INDEX, PROFILE_TREEDB,
   READS, READS_DIVISOR,
   RANGE_READS, UPDATES, DELETES, RANGE_READS_DIVISOR, UPDATES_DIVISOR,
   CONCURRENT_READERS, CONCURRENT_READS, CONCURRENT_READS_DIVISOR,
@@ -157,6 +162,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --prebuild-documents)
       PREBUILD_DOCUMENTS=true
+      shift
+      ;;
+    --range-index)
+      RANGE_INDEX=true
+      shift
+      ;;
+    --profile-treedb)
+      PROFILE_TREEDB=true
       shift
       ;;
     --concurrent-readers)
@@ -242,6 +255,7 @@ BIN_DIR="$OUT_DIR/bin"
 MATRIX="$OUT_DIR/matrix.tsv"
 REPORT="$OUT_DIR/report.md"
 SUMMARY="$OUT_DIR/summary.tsv"
+PROFILE_DIR="$OUT_DIR/profiles"
 STDOUT_LOG="$OUT_DIR/harness_stdout.log"
 README="$OUT_DIR/README.md"
 
@@ -406,6 +420,10 @@ run_target() {
   if [[ "$PREBUILD_DOCUMENTS" == "true" ]]; then
     prebuild_args=(-prebuild-documents)
   fi
+  local range_index_args=()
+  if [[ "$RANGE_INDEX" == "true" ]]; then
+    range_index_args=(-range-index)
+  fi
 
   "$BENCH_BIN" \
     -target "$target" \
@@ -429,6 +447,7 @@ run_target() {
     -timeout "$TIMEOUT" \
     -format json \
     "${prebuild_args[@]}" \
+    "${range_index_args[@]}" \
     "$@" >"$raw_json"
 }
 
@@ -463,6 +482,14 @@ if [[ "$PREBUILD_DOCUMENTS" != "true" && "$PREBUILD_DOCUMENTS" != "false" ]]; th
   echo "invalid PREBUILD_DOCUMENTS=$PREBUILD_DOCUMENTS (want true or false)" >&2
   exit 2
 fi
+if [[ "$RANGE_INDEX" != "true" && "$RANGE_INDEX" != "false" ]]; then
+  echo "invalid RANGE_INDEX=$RANGE_INDEX (want true or false)" >&2
+  exit 2
+fi
+if [[ "$PROFILE_TREEDB" != "true" && "$PROFILE_TREEDB" != "false" ]]; then
+  echo "invalid PROFILE_TREEDB=$PROFILE_TREEDB (want true or false)" >&2
+  exit 2
+fi
 if [[ "$CONCURRENT_READERS" -eq 0 && -n "$CONCURRENT_READS" && "$CONCURRENT_READS" != "0" ]]; then
   echo "CONCURRENT_READERS must be > 0 when CONCURRENT_READS is set" >&2
   exit 2
@@ -480,6 +507,8 @@ fi
   echo "insert producers: $INSERT_PRODUCERS"
   echo "mongo pool options: maxPoolSize=$MONGO_MAX_POOL_SIZE minPoolSize=$MONGO_MIN_POOL_SIZE maxConnecting=$MONGO_MAX_CONNECTING"
   echo "prebuild documents: $PREBUILD_DOCUMENTS"
+  echo "range index: $RANGE_INDEX"
+  echo "profile TreeDB: $PROFILE_TREEDB"
   echo "reads: ${READS:-documents / $READS_DIVISOR}"
   echo "range reads: ${RANGE_READS:-documents / $RANGE_READS_DIVISOR}"
   echo "updates: ${UPDATES:-documents / $UPDATES_DIVISOR}"
@@ -538,7 +567,11 @@ for docs in $DOCS_LIST; do
     fi
     cell="docs_${docs}_idx_${indexes}"
     database="${DATABASE_PREFIX}_${cell}"
-    mongo_raw_rel="raw/mongo_${cell}.json"
+    mongo_config="mongo"
+    if [[ "$RANGE_INDEX" == "true" ]]; then
+      mongo_config="mongo_range_index"
+    fi
+    mongo_raw_rel="raw/${mongo_config}_${cell}.json"
     mongo_raw="$OUT_DIR/$mongo_raw_rel"
     mongo_data="$MONGO_DIR/$cell"
 
@@ -547,9 +580,19 @@ for docs in $DOCS_LIST; do
         format_label=$(safe_label "${tree_format//-/_}")
         client_label=$(safe_label "${tree_client_mode//-/_}")
         tree_config="treedb_${format_label}_${client_label}"
+        if [[ "$RANGE_INDEX" == "true" ]]; then
+          tree_config="${tree_config}_range_index"
+        fi
         tree_raw_rel="raw/${tree_config}_${cell}.json"
         tree_raw="$OUT_DIR/$tree_raw_rel"
         tree_data="$TREE_DIR/${tree_config}_${cell}"
+        tree_profile_args=()
+        if [[ "$PROFILE_TREEDB" == "true" ]]; then
+          tree_profile_dir="$PROFILE_DIR/${tree_config}_${cell}"
+          rm -rf "$tree_profile_dir"
+          mkdir -p "$tree_profile_dir"
+          tree_profile_args=(-profile-dir "$tree_profile_dir")
+        fi
 
         echo
         echo "==> $cell TreeDB ($tree_format, client=$tree_client_mode)"
@@ -563,7 +606,8 @@ for docs in $DOCS_LIST; do
           -treedb-data-root-storage "$TREEDB_DATA_ROOT_STORAGE" \
           -treedb-index-state-root-storage "$TREEDB_INDEX_STATE_ROOT_STORAGE" \
           -treedb-index-root-storage "$TREEDB_INDEX_ROOT_STORAGE" \
-          -treedb-maintenance "$TREEDB_MAINTENANCE"
+          -treedb-maintenance "$TREEDB_MAINTENANCE" \
+          "${tree_profile_args[@]}"
         tree_physical=$(du_bytes "$tree_data")
         printf "treedb\t%s\t%s\t%s\t%s\t%s\n" "$tree_config" "$docs" "$indexes" "$tree_raw_rel" "$tree_physical" >>"$MATRIX"
       done
@@ -590,7 +634,7 @@ for docs in $DOCS_LIST; do
     else
       mongo_physical=0
     fi
-    printf "mongo\tmongo\t%s\t%s\t%s\t%s\n" "$docs" "$indexes" "$mongo_raw_rel" "$mongo_physical" >>"$MATRIX"
+    printf "mongo\t%s\t%s\t%s\t%s\t%s\n" "$mongo_config" "$docs" "$indexes" "$mongo_raw_rel" "$mongo_physical" >>"$MATRIX"
   done
 done
 
@@ -616,6 +660,9 @@ cat >"$README" <<EOF
 - insert producers: \`$INSERT_PRODUCERS\`
 - MongoDB Go driver pool options: \`maxPoolSize=$MONGO_MAX_POOL_SIZE minPoolSize=$MONGO_MIN_POOL_SIZE maxConnecting=$MONGO_MAX_CONNECTING\`
 - prebuild documents: \`$PREBUILD_DOCUMENTS\`
+- range index: \`$RANGE_INDEX\`
+- TreeDB pprof profiles: \`$PROFILE_TREEDB\`
+- profile directory: \`$PROFILE_DIR\`
 - reads: \`${READS:-documents / $READS_DIVISOR}\`
 - range reads: \`${RANGE_READS:-documents / $RANGE_READS_DIVISOR}\`
 - updates: \`${UPDATES:-documents / $UPDATES_DIVISOR}\`

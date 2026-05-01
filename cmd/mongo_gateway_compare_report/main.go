@@ -41,9 +41,13 @@ type benchmarkResult struct {
 	Collection                 string         `json:"collection"`
 	Documents                  int            `json:"documents"`
 	SecondaryIndexes           int            `json:"secondary_indexes"`
+	RangeIndex                 bool           `json:"range_index"`
 	ClientMode                 string         `json:"client_mode,omitempty"`
 	TreeDBDocumentFormat       string         `json:"treedb_document_format,omitempty"`
 	Phases                     []phaseResult  `json:"phases"`
+	ProfileDir                 string         `json:"profile_dir,omitempty"`
+	ProfileManifest            string         `json:"profile_manifest,omitempty"`
+	ProfileResult              string         `json:"profile_result,omitempty"`
 	TreeDBDiskAfterLoad        *diskSnapshot  `json:"treedb_disk_after_load,omitempty"`
 	TreeDBDiskAfterCheckpoint  *diskSnapshot  `json:"treedb_disk_after_checkpoint,omitempty"`
 	TreeDBDiskAfterMaintenance *diskSnapshot  `json:"treedb_disk_after_maintenance,omitempty"`
@@ -103,6 +107,7 @@ type cellComparison struct {
 type phaseComparison struct {
 	Cell        cellKey
 	Name        string
+	RangeIndex  bool
 	TreeDBPhase phaseResult
 	MongoPhase  phaseResult
 	HasTreeDB   bool
@@ -540,15 +545,16 @@ func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) str
 	renderOpsTable(&b, cells)
 	b.WriteString("\n")
 	b.WriteString("## Raw Inputs\n\n")
-	b.WriteString("| docs | indexes | config | target | raw json |\n")
-	b.WriteString("| ---: | ---: | --- | --- | --- |\n")
+	b.WriteString("| docs | indexes | range index | config | target | raw json | profile dir |\n")
+	b.WriteString("| ---: | ---: | --- | --- | --- | --- | --- |\n")
 	type mongoRawKey struct {
 		baseCellKey
 		Config string
 	}
 	seenMongoRaw := make(map[mongoRawKey]struct{})
 	for _, cell := range cells {
-		fmt.Fprintf(&b, "| %d | %d | `%s` | treedb | `%s` |\n", cell.Key.Documents, cell.Key.SecondaryIndexes, cell.Key.TreeDBConfig, cell.TreeDB.DisplayRawPath)
+		fmt.Fprintf(&b, "| %d | %d | %t | `%s` | treedb | `%s` | %s |\n",
+			cell.Key.Documents, cell.Key.SecondaryIndexes, cell.TreeDB.Result.RangeIndex, cell.Key.TreeDBConfig, cell.TreeDB.DisplayRawPath, formatOptionalCode(cell.TreeDB.Result.ProfileDir))
 		if cell.Mongo != nil {
 			mongoKey := mongoRawKey{
 				baseCellKey: baseCellKey{Documents: cell.Key.Documents, SecondaryIndexes: cell.Key.SecondaryIndexes},
@@ -557,7 +563,8 @@ func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) str
 			if _, ok := seenMongoRaw[mongoKey]; ok {
 				continue
 			}
-			fmt.Fprintf(&b, "| %d | %d | `%s` | mongo | `%s` |\n", cell.Key.Documents, cell.Key.SecondaryIndexes, cell.Mongo.Row.Config, cell.Mongo.DisplayRawPath)
+			fmt.Fprintf(&b, "| %d | %d | %t | `%s` | mongo | `%s` | %s |\n",
+				cell.Key.Documents, cell.Key.SecondaryIndexes, cell.Mongo.Result.RangeIndex, cell.Mongo.Row.Config, cell.Mongo.DisplayRawPath, formatOptionalCode(cell.Mongo.Result.ProfileDir))
 			seenMongoRaw[mongoKey] = struct{}{}
 		}
 	}
@@ -569,6 +576,7 @@ func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) str
 	b.WriteString("- MongoDB `dbStats.totalSize` is reported separately because it can diverge sharply from the isolated data-directory `du` measurement on small WiredTiger workloads.\n")
 	b.WriteString("- MongoDB physical bytes are the preferred local disk comparison when the matrix runner has an isolated data directory, such as Docker mode.\n")
 	b.WriteString("- Wall ops/sec values include the full benchmark phase loop. Sampled ops/sec values isolate the timed driver/gateway call inside each phase and are useful when prebuilt fixtures are enabled.\n")
+	b.WriteString("- Range-query benchmark rows use explicit phase names: `age_range_indexed_limit_10` means `-range-index` created `age_1`; `age_range_scan_limit_10` means bounded scan fallback.\n")
 	return b.String()
 }
 
@@ -704,8 +712,8 @@ func cellDiskScore(cell cellComparison) int64 {
 
 func renderDiskTable(b *strings.Builder, cells []cellComparison) {
 	b.WriteString("## Disk Summary\n\n")
-	b.WriteString("| docs | indexes | TreeDB config | TreeDB snapshot | TreeDB bytes | TreeDB bytes/doc | TreeDB physical du | TreeDB physical bytes/doc | MongoDB dbStats dataSize | MongoDB dbStats totalSize | MongoDB physical du | MongoDB physical bytes/doc | TreeDB / MongoDB dbStats totalSize | TreeDB / MongoDB physical |\n")
-	b.WriteString("| ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	b.WriteString("| docs | indexes | range index | TreeDB config | TreeDB snapshot | TreeDB bytes | TreeDB bytes/doc | TreeDB physical du | TreeDB physical bytes/doc | MongoDB dbStats dataSize | MongoDB dbStats totalSize | MongoDB physical du | MongoDB physical bytes/doc | TreeDB / MongoDB dbStats totalSize | TreeDB / MongoDB physical |\n")
+	b.WriteString("| ---: | ---: | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, cell := range cells {
 		treeBytes, treeSnapshot, treeOK := treeDBBytesSnapshot(cell.TreeDB.Result)
 		treePhysical := cell.TreeDB.Row.PhysicalBytes
@@ -717,9 +725,10 @@ func renderDiskTable(b *strings.Builder, cells []cellComparison) {
 			mongoTotal, mongoTotalOK = mongoDBStatsTotalBytes(cell.Mongo.Result)
 			mongoPhysical = cell.Mongo.Row.PhysicalBytes
 		}
-		fmt.Fprintf(b, "| %d | %d | `%s` | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
+		fmt.Fprintf(b, "| %d | %d | %t | `%s` | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
 			cell.Key.Documents,
 			cell.Key.SecondaryIndexes,
+			cell.TreeDB.Result.RangeIndex,
 			cell.Key.TreeDBConfig,
 			treeSnapshot,
 			formatMeasuredBytes(treeOK, treeBytes),
@@ -738,13 +747,15 @@ func renderDiskTable(b *strings.Builder, cells []cellComparison) {
 
 func renderOpsTable(b *strings.Builder, cells []cellComparison) {
 	b.WriteString("## Ops/Sec Summary\n\n")
-	b.WriteString("| docs | indexes | TreeDB config | phase | TreeDB wall ops/sec | TreeDB sampled ops/sec | MongoDB wall ops/sec | MongoDB sampled ops/sec | TreeDB / MongoDB wall | TreeDB / MongoDB sampled | TreeDB p95 us | MongoDB p95 us |\n")
-	b.WriteString("| ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	b.WriteString("| docs | indexes | range index | range mode | TreeDB config | phase | TreeDB wall ops/sec | TreeDB sampled ops/sec | MongoDB wall ops/sec | MongoDB sampled ops/sec | TreeDB / MongoDB wall | TreeDB / MongoDB sampled | TreeDB p95 us | MongoDB p95 us |\n")
+	b.WriteString("| ---: | ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, cmp := range allPhaseComparisons(cells) {
 		sampledRatio := safeRatio(cmp.TreeDBPhase.SampledOpsPerSecond, cmp.MongoPhase.SampledOpsPerSecond)
-		fmt.Fprintf(b, "| %d | %d | `%s` | `%s` | %s | %s | %s | %s | %s | %s | %s | %s |\n",
+		fmt.Fprintf(b, "| %d | %d | %t | %s | `%s` | `%s` | %s | %s | %s | %s | %s | %s | %s | %s |\n",
 			cmp.Cell.Documents,
 			cmp.Cell.SecondaryIndexes,
+			cmp.TreeDBRangeIndex(),
+			formatRangeMode(cmp.Name),
 			cmp.Cell.TreeDBConfig,
 			cmp.Name,
 			formatPhaseOps(cmp.HasTreeDB, cmp.TreeDBPhase.OpsPerSecond),
@@ -775,6 +786,7 @@ func allPhaseComparisons(cells []cellComparison) []phaseComparison {
 			out = append(out, phaseComparison{
 				Cell:        cell.Key,
 				Name:        name,
+				RangeIndex:  cell.TreeDB.Result.RangeIndex,
 				TreeDBPhase: treePhase,
 				MongoPhase:  mongoPhase,
 				HasTreeDB:   hasTree,
@@ -804,6 +816,36 @@ func phaseNames(treePhases, mongoPhases []phaseResult) []string {
 	return names
 }
 
+func (cmp phaseComparison) TreeDBRangeIndex() bool {
+	return cmp.RangeIndex
+}
+
+func rangeMode(name string) string {
+	switch name {
+	case "age_range_indexed_limit_10":
+		return "indexed"
+	case "age_range_scan_limit_10", "age_range_limit_10":
+		return "scan"
+	default:
+		return ""
+	}
+}
+
+func formatRangeMode(name string) string {
+	mode := rangeMode(name)
+	if mode == "" {
+		return "n/a"
+	}
+	return "`" + mode + "`"
+}
+
+func formatOptionalCode(raw string) string {
+	if raw == "" {
+		return "n/a"
+	}
+	return "`" + raw + "`"
+}
+
 func writeSummaryTSV(path string, cells []cellComparison) error {
 	f, err := os.Create(path)
 	if err != nil {
@@ -815,6 +857,8 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 	header := []string{
 		"documents",
 		"secondary_indexes",
+		"range_index",
+		"range_mode",
 		"treedb_config",
 		"phase",
 		"treedb_ops_sec",
@@ -859,6 +903,8 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 		row := []string{
 			strconv.Itoa(cmp.Cell.Documents),
 			strconv.Itoa(cmp.Cell.SecondaryIndexes),
+			strconv.FormatBool(cmp.TreeDBRangeIndex()),
+			rangeMode(cmp.Name),
 			cmp.Cell.TreeDBConfig,
 			cmp.Name,
 			formatRawFloat(cmp.HasTreeDB, cmp.TreeDBPhase.OpsPerSecond),
