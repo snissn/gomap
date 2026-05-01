@@ -29,6 +29,8 @@ const (
 	defaultUpdateCoalescingIdleTTL = 30 * time.Second
 )
 
+var errServerClosed = errors.New("mongo gateway server is closed")
+
 type Server struct {
 	MaxMessageLength       int32
 	MaxFindScanDocuments   int
@@ -36,8 +38,8 @@ type Server struct {
 	MaxOpenCursors         int
 	CursorIdleTimeout      time.Duration
 	// UpdateCoalescingMaxDelay waits for additional same-collection update
-	// commands before publishing a batch. Zero batches only already-queued work;
-	// negative disables coalescing.
+	// commands before publishing a batch. Zero means only coalesce already-queued
+	// work; negative disables coalescing.
 	UpdateCoalescingMaxDelay time.Duration
 	// UpdateCoalescingMaxBatch caps one coalesced same-collection update publish.
 	UpdateCoalescingMaxBatch int
@@ -56,7 +58,7 @@ type Server struct {
 	lastCursorReap   time.Time
 	updateMu         sync.Mutex
 	updateCoalescers map[string]*mongoUpdateCoalescer
-	closed           bool
+	closed           atomic.Bool
 }
 
 type serverCursor struct {
@@ -94,18 +96,28 @@ func (s *Server) closeUpdateCoalescers() {
 	if s == nil {
 		return
 	}
+	s.closed.Store(true)
 	s.updateMu.Lock()
 	coalescers := s.updateCoalescers
 	s.updateCoalescers = nil
-	s.closed = true
 	s.updateMu.Unlock()
 	for _, coalescer := range coalescers {
 		coalescer.stop()
 	}
 }
 
+func (s *Server) isClosed() bool {
+	if s == nil {
+		return true
+	}
+	return s.closed.Load()
+}
+
 func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 	defer conn.Close()
+	if s.isClosed() {
+		return errServerClosed
+	}
 	owner := s.nextConnectionID.Add(1)
 	defer s.killCursorsForOwner(owner)
 
@@ -149,6 +161,9 @@ func (s *Server) ServeOne(rw io.ReadWriter) error {
 }
 
 func (s *Server) ServeOneWithOwner(rw io.ReadWriter, cursorOwner int64) error {
+	if s.isClosed() {
+		return errServerClosed
+	}
 	h, body, err := wire.ReadMessage(rw, s.maxMessageLength())
 	if err != nil {
 		return err
@@ -164,6 +179,9 @@ func (s *Server) ServeOneWithOwner(rw io.ReadWriter, cursorOwner int64) error {
 }
 
 func (s *Server) handleMessage(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
+	if s.isClosed() {
+		return nil, errServerClosed
+	}
 	s.reapExpiredCursors()
 	switch h.OpCode {
 	case wire.OpQuery:
