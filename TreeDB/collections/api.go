@@ -35,6 +35,7 @@ const (
 	// well-amortized InsertBatch calls on the immediate publish path. Smaller
 	// batches use the indexed write-domain memtable path by default.
 	DefaultIndexedWriteMemtableDirectBatchDocuments = DefaultIndexedWriteMemtableMaxDocuments / 4
+	defaultCollectionUpdateCombineMaxBatch          = 256
 )
 
 var (
@@ -335,6 +336,8 @@ type collectionWriteDomain struct {
 	// sustained collection write contention.
 	mutationMu       sync.Mutex
 	mu               sync.RWMutex
+	updateCombineMu  sync.Mutex
+	updateCombiner   *collectionUpdateCombiner
 	loaded           bool
 	meta             CollectionMeta
 	catalog          *collectionCatalog
@@ -2778,18 +2781,32 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 // Update applies update to the latest document value and retries if another
 // collection write changes the root before this update publishes.
 func (c *Collection) Update(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
+	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
+		return false, false, err
+	}
+	if combiner := c.updateCombiner(); combiner != nil {
+		return combiner.update(c, documentID, update)
+	}
+	return c.updateDirect(documentID, update)
+}
+
+func validateCollectionUpdateInput(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) error {
 	if c == nil {
-		return false, false, errCollectionNil
+		return errCollectionNil
 	}
 	if c.db == nil {
-		return false, false, errors.New("collections: db is nil")
+		return errors.New("collections: db is nil")
 	}
 	if len(documentID) == 0 {
-		return false, false, errors.New("collections: document id cannot be empty")
+		return errors.New("collections: document id cannot be empty")
 	}
 	if update == nil {
-		return false, false, errors.New("collections: update function is nil")
+		return errors.New("collections: update function is nil")
 	}
+	return nil
+}
+
+func (c *Collection) updateDirect(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
 	unlockMutation := c.lockMutation()
 	defer unlockMutation()
 	if err := c.flushBufferedWrites(); err != nil {
@@ -2861,6 +2878,119 @@ func validateUpdateBatchItems(items []UpdateBatchItem) error {
 		seen[key] = struct{}{}
 	}
 	return nil
+}
+
+type collectionUpdateCombiner struct {
+	maxBatch int
+	requests chan collectionUpdateCombineRequest
+}
+
+type collectionUpdateCombineRequest struct {
+	collection *Collection
+	documentID []byte
+	update     func(current []byte) (replacement []byte, changed bool, err error)
+	done       chan collectionUpdateCombineResult
+}
+
+type collectionUpdateCombineResult struct {
+	matched  bool
+	modified bool
+	err      error
+}
+
+func (c *Collection) updateCombiner() *collectionUpdateCombiner {
+	if c == nil || c.writeDomain == nil {
+		return nil
+	}
+	domain := c.writeDomain
+	domain.updateCombineMu.Lock()
+	defer domain.updateCombineMu.Unlock()
+	if domain.updateCombiner != nil {
+		return domain.updateCombiner
+	}
+	combiner := &collectionUpdateCombiner{
+		maxBatch: defaultCollectionUpdateCombineMaxBatch,
+		requests: make(chan collectionUpdateCombineRequest, defaultCollectionUpdateCombineMaxBatch*4),
+	}
+	domain.updateCombiner = combiner
+	go combiner.run()
+	return combiner
+}
+
+func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
+	if combiner == nil || combiner.maxBatch <= 1 {
+		return c.updateDirect(documentID, update)
+	}
+	done := make(chan collectionUpdateCombineResult, 1)
+	req := collectionUpdateCombineRequest{
+		collection: c,
+		documentID: bytes.Clone(documentID),
+		update:     update,
+		done:       done,
+	}
+	select {
+	case combiner.requests <- req:
+	default:
+		return c.updateDirect(documentID, update)
+	}
+	result := <-done
+	return result.matched, result.modified, result.err
+}
+
+func (combiner *collectionUpdateCombiner) run() {
+	for first := range combiner.requests {
+		batch := []collectionUpdateCombineRequest{first}
+		for len(batch) < combiner.maxBatch {
+			select {
+			case req := <-combiner.requests:
+				batch = append(batch, req)
+			default:
+				goto drained
+			}
+		}
+	drained:
+		combiner.runBatch(batch)
+	}
+}
+
+func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombineRequest) {
+	if len(batch) == 1 || collectionUpdateCombineHasDuplicateIDs(batch) {
+		for _, req := range batch {
+			matched, modified, err := req.collection.updateDirect(req.documentID, req.update)
+			req.done <- collectionUpdateCombineResult{matched: matched, modified: modified, err: err}
+		}
+		return
+	}
+	items := make([]UpdateBatchItem, len(batch))
+	for i, req := range batch {
+		items[i] = UpdateBatchItem{
+			DocumentID: req.documentID,
+			Update:     req.update,
+		}
+	}
+	results, err := batch[0].collection.UpdateBatch(items)
+	if err != nil {
+		for _, req := range batch {
+			req.done <- collectionUpdateCombineResult{err: err}
+		}
+		return
+	}
+	for i, req := range batch {
+		result := results[i]
+		req.done <- collectionUpdateCombineResult{matched: result.Matched, modified: result.Modified}
+	}
+}
+
+func collectionUpdateCombineHasDuplicateIDs(batch []collectionUpdateCombineRequest) bool {
+	seen := make(map[string]struct{}, len(batch))
+	for _, req := range batch {
+		key := string(req.documentID)
+		if _, ok := seen[key]; ok {
+			return true
+		}
+		seen[key] = struct{}{}
+	}
+	return false
 }
 
 func waitBeforeCollectionMutationRetry(attempt int) {

@@ -2457,6 +2457,64 @@ func TestCollectionUpdateBatchRejectsUniqueConflictsWithinBatch(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateCombinerRunBatchPublishesDistinctIDsOnce(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"score":0}`), []byte(`{"score":0}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	before := d.State()
+	combiner := &collectionUpdateCombiner{maxBatch: 8}
+	requests := []collectionUpdateCombineRequest{
+		{
+			collection: col,
+			documentID: []byte("u1"),
+			update: func([]byte) ([]byte, bool, error) {
+				return []byte(`{"score":1}`), true, nil
+			},
+			done: make(chan collectionUpdateCombineResult, 1),
+		},
+		{
+			collection: col,
+			documentID: []byte("u2"),
+			update: func([]byte) ([]byte, bool, error) {
+				return []byte(`{"score":2}`), true, nil
+			},
+			done: make(chan collectionUpdateCombineResult, 1),
+		},
+	}
+	combiner.runBatch(requests)
+	for i, req := range requests {
+		result := <-req.done
+		if result.err != nil {
+			t.Fatalf("request %d err: %v", i, result.err)
+		}
+		if !result.matched || !result.modified {
+			t.Fatalf("request %d matched=%v modified=%v", i, result.matched, result.modified)
+		}
+	}
+	after := d.State()
+	if after.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("combined batch advanced commit seq by %d, want 1", after.CommitSeq-before.CommitSeq)
+	}
+}
+
 func incrementJSONCount(current []byte) ([]byte, bool, error) {
 	var doc map[string]any
 	if err := json.Unmarshal(current, &doc); err != nil {
