@@ -57,6 +57,39 @@ func TestAppendMessageRejectsLargeBody(t *testing.T) {
 	}
 }
 
+func TestAppendMsgMessageWithSequencesRollsBackOnLargeMessage(t *testing.T) {
+	prefix := []byte("prefix")
+	dst := make([]byte, len(prefix), DefaultMaxMessageLength+1024)
+	copy(dst, prefix)
+	commandDoc := mustDocument(t, bson.D{{Key: "insert", Value: "docs"}})
+	hugeDoc := mustDocument(t, bson.D{{Key: "payload", Value: bson.Binary{Data: make([]byte, DefaultMaxMessageLength)}}})
+
+	got, err := AppendMsgMessageWithSequences(dst, 1, 0, 0, commandDoc, []DocumentSequence{{
+		Identifier: "documents",
+		Documents:  []Document{hugeDoc},
+	}})
+	if !errors.Is(err, ErrMessageTooLarge) {
+		t.Fatalf("AppendMsgMessageWithSequences err=%v want ErrMessageTooLarge", err)
+	}
+	if !bytes.Equal(got, prefix) {
+		t.Fatalf("rollback dst=%q want %q", got, prefix)
+	}
+}
+
+func TestAppendMsgMessageWithSequencesRejectsTrailingBytesInSequenceDocument(t *testing.T) {
+	commandDoc := mustDocument(t, bson.D{{Key: "insert", Value: "docs"}})
+	doc := mustDocument(t, bson.D{{Key: "_id", Value: "a"}})
+	doc = append(append(Document(nil), doc...), 0)
+
+	_, err := AppendMsgMessageWithSequences(nil, 1, 0, 0, commandDoc, []DocumentSequence{{
+		Identifier: "documents",
+		Documents:  []Document{doc},
+	}})
+	if !errors.Is(err, ErrMalformed) {
+		t.Fatalf("AppendMsgMessageWithSequences err=%v want ErrMalformed", err)
+	}
+}
+
 func TestQueryHandshakeReplyRoundTrip(t *testing.T) {
 	queryDoc := mustDocument(t, bson.D{
 		{Key: "isMaster", Value: int32(1)},
@@ -225,15 +258,18 @@ func TestParseMsgRejectsChecksumPresent(t *testing.T) {
 	}
 }
 
-func TestParseMsgRejectsMoreToComeUntilSupported(t *testing.T) {
+func TestParseMsgAllowsMoreToCome(t *testing.T) {
 	commandDoc := mustDocument(t, bson.D{{Key: "ping", Value: int32(1)}})
 	body := appendInt32(nil, int32(MsgFlagMoreToCome))
 	body = append(body, MsgSectionBody)
 	body = append(body, commandDoc...)
 
-	_, err := ParseMsg(body)
-	if !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("ParseMsg err=%v want ErrUnsupported", err)
+	msg, err := ParseMsg(body)
+	if err != nil {
+		t.Fatalf("ParseMsg: %v", err)
+	}
+	if msg.Flags != MsgFlagMoreToCome {
+		t.Fatalf("flags=%#x want %#x", msg.Flags, MsgFlagMoreToCome)
 	}
 }
 

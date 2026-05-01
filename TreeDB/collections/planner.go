@@ -55,6 +55,7 @@ const (
 type collectionOptions struct {
 	allowArrayValuesInIndex bool
 	documentFormat          DocumentFormat
+	trustedBSONDocuments    bool
 	templateResolver        templateV1Resolver
 	dataStoragePolicy       backenddb.OrderedRootStoragePolicy
 	indexStateStoragePolicy backenddb.OrderedRootStoragePolicy
@@ -925,6 +926,8 @@ func orderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRunt
 	}
 	switch normalizedDocumentFormat(opts.documentFormat) {
 	case DocumentFormatJSON:
+	case DocumentFormatBSON:
+		return bsonOrderedIndexStateForDocumentWithArena(document, runtimes, opts, encoder)
 	case DocumentFormatTemplateV1:
 		return templateV1OrderedIndexStateForDocumentWithArena(document, runtimes, opts, encoder)
 	default:

@@ -15,6 +15,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 const (
@@ -123,6 +124,8 @@ func benchmarkCollectionDocumentFormat(tb testing.TB) collections.DocumentFormat
 	switch strings.ToLower(raw) {
 	case "", "json":
 		return collections.DocumentFormatJSON
+	case string(collections.DocumentFormatBSON):
+		return collections.DocumentFormatBSON
 	case string(collections.DocumentFormatTemplateV1):
 		return collections.DocumentFormatTemplateV1
 	default:
@@ -671,6 +674,31 @@ func benchmarkTemplateDocument(tb testing.TB, encoder *collections.TemplateV1Enc
 	return doc
 }
 
+func benchmarkBSONDocument(tb testing.TB, n int, indexed bool) []byte {
+	tb.Helper()
+	var doc bson.D
+	if indexed {
+		doc = bson.D{
+			{Key: "name", Value: fmt.Sprintf("user-%09d", n)},
+			{Key: "email", Value: fmt.Sprintf("user-%09d@example.com", n)},
+			{Key: "city", Value: fmt.Sprintf("city-%02d", n%collectionBenchCities)},
+			{Key: "pad", Value: collectionBenchIndexedPad},
+		}
+	} else {
+		doc = bson.D{
+			{Key: "name", Value: "ada"},
+			{Key: "city", Value: "hnl"},
+			{Key: "email", Value: "ada@example.com"},
+			{Key: "pad", Value: "0123456789012345678901234567890123456789"},
+		}
+	}
+	raw, err := bson.Marshal(doc)
+	if err != nil {
+		tb.Fatalf("encode BSON benchmark document: %v", err)
+	}
+	return raw
+}
+
 func benchmarkDocumentBatch(tb testing.TB, start, count int, indexed bool) ([][]byte, [][]byte) {
 	tb.Helper()
 	documentFormat := benchmarkCollectionDocumentFormat(tb)
@@ -682,6 +710,8 @@ func benchmarkDocumentBatch(tb testing.TB, start, count int, indexed bool) ([][]
 		ids[i] = benchmarkDocumentID(docNum)
 		if documentFormat == collections.DocumentFormatTemplateV1 {
 			docs[i] = benchmarkTemplateDocument(tb, &templateEncoder, docNum, indexed)
+		} else if documentFormat == collections.DocumentFormatBSON {
+			docs[i] = benchmarkBSONDocument(tb, docNum, indexed)
 		} else if indexed {
 			docs[i] = benchmarkIndexedDocument(docNum)
 		} else {

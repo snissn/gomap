@@ -468,6 +468,8 @@ func benchmarkCollectionMixedReadWrite(b *testing.B, secondaryRead bool) {
 						return
 					}
 					docs[i] = doc
+				} else if documentFormat == collections.DocumentFormatBSON {
+					docs[i] = benchmarkBSONDocument(b, docNum, true)
 				} else {
 					docs[i] = benchmarkIndexedDocument(docNum)
 				}

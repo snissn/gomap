@@ -22,7 +22,7 @@ func TestReportFromMatrix(t *testing.T) {
   "documents": 100,
   "secondary_indexes": 1,
   "phases": [
-    {"name": "load_insert_many", "operations": 100, "driver_calls": 1, "duration_ms": 10, "ops_per_sec": 10000, "latency_micros": {"p50": 10, "p95": 20, "p99": 30}},
+    {"name": "load_insert_many", "operations": 100, "driver_calls": 1, "duration_ms": 10, "ops_per_sec": 10000, "sampled_ops_per_sec": 12500, "sampled_ns_per_op": 80, "latency_micros": {"p50": 10, "p95": 20, "p99": 30}},
     {"name": "id_find_one", "operations": 100, "driver_calls": 100, "duration_ms": 5, "ops_per_sec": 20000, "latency_micros": {"p50": 5, "p95": 8, "p99": 10}}
   ],
   "treedb_disk_after_checkpoint": {"total_bytes": 1000}
@@ -34,7 +34,7 @@ func TestReportFromMatrix(t *testing.T) {
   "documents": 100,
   "secondary_indexes": 1,
   "phases": [
-    {"name": "load_insert_many", "operations": 100, "driver_calls": 1, "duration_ms": 20, "ops_per_sec": 5000, "latency_micros": {"p50": 20, "p95": 40, "p99": 50}},
+    {"name": "load_insert_many", "operations": 100, "driver_calls": 1, "duration_ms": 20, "ops_per_sec": 5000, "sampled_ops_per_sec": 6250, "sampled_ns_per_op": 160, "latency_micros": {"p50": 20, "p95": 40, "p99": 50}},
     {"name": "id_find_one", "operations": 100, "driver_calls": 100, "duration_ms": 4, "ops_per_sec": 25000, "latency_micros": {"p50": 4, "p95": 7, "p99": 9}}
   ],
   "mongodb_stats_final": {"dataSize": 1300, "storageSize": 1200, "indexSize": 300, "totalSize": 1500}
@@ -56,8 +56,8 @@ func TestReportFromMatrix(t *testing.T) {
 		"# Mongo Gateway Benchmark Comparison",
 		"Largest TreeDB ops/sec lead: `load_insert_many`",
 		"Largest MongoDB ops/sec lead: `id_find_one`",
-		"| 100 | 1 | `load_insert_many` | 10000 | 5000 | 2.00x | 20.0 | 40.0 |",
-		"| 100 | 1 | checkpoint | 1000 B | 10.0 B | 2.00 KiB | 20.5 B | 1.27 KiB | 1.46 KiB | 4.00 KiB | 41.0 B | 0.67x | 0.50x |",
+		"| 100 | 1 | `treedb` | `load_insert_many` | 10000 | 12500 | 5000 | 6250 | 2.00x | 2.00x | 20.0 | 40.0 |",
+		"| 100 | 1 | `treedb` | checkpoint | 1000 B | 10.0 B | 2.00 KiB | 20.5 B | 1.27 KiB | 1.46 KiB | 4.00 KiB | 41.0 B | 0.67x | 0.50x |",
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q\n%s", want, report)
@@ -65,7 +65,7 @@ func TestReportFromMatrix(t *testing.T) {
 	}
 
 	summary := readFile(t, summaryPath)
-	if !strings.Contains(summary, "load_insert_many\t10000.000000\t5000.000000\t2.000000") {
+	if !strings.Contains(summary, "load_insert_many\t10000.000000\t12500.000000\t80.000000\t5000.000000\t6250.000000\t160.000000\t2.000000\t2.000000") {
 		t.Fatalf("summary missing load ratio:\n%s", summary)
 	}
 }
@@ -89,6 +89,57 @@ func TestReportRejectsIncompleteCell(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "incomplete comparison cell") {
 		t.Fatalf("expected incomplete cell error, got %v", err)
+	}
+}
+
+func TestReportSupportsMultipleTreeDBConfigsPerMongoCell(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb_json.json"), `{
+  "target": "treedb",
+  "treedb_document_format": "json",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "load_insert_many", "operations": 100, "ops_per_sec": 1000, "latency_micros": {}}],
+  "treedb_disk_after_maintenance": {"total_bytes": 2000}
+}`)
+	writeFile(t, filepath.Join(dir, "treedb_bson.json"), `{
+  "target": "treedb",
+  "treedb_document_format": "bson",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "load_insert_many", "operations": 100, "ops_per_sec": 2000, "latency_micros": {}}],
+  "treedb_disk_after_maintenance": {"total_bytes": 1500}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "load_insert_many", "operations": 100, "ops_per_sec": 500, "latency_micros": {}}],
+  "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4000}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	reportPath := filepath.Join(dir, "report.md")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_json\t100\t2\ttreedb_json.json\t2000\n"+
+		"treedb\ttreedb_bson\t100\t2\ttreedb_bson.json\t1500\n"+
+		"mongo\tmongo\t100\t2\tmongo.json\t5000\n")
+
+	if err := run([]string{"-matrix", matrixPath, "-report", reportPath}); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	report := readFile(t, reportPath)
+	for _, want := range []string{
+		"comparison cells: `2`",
+		"| 100 | 2 | `treedb_bson` | maintenance | 1.46 KiB",
+		"| 100 | 2 | `treedb_json` | maintenance | 1.95 KiB",
+		"| 100 | 2 | `mongo` | mongo | `mongo.json` |",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q\n%s", want, report)
+		}
+	}
+	if got := strings.Count(report, "| 100 | 2 | `mongo` | mongo | `mongo.json` |"); got != 1 {
+		t.Fatalf("mongo raw input rows=%d want 1\n%s", got, report)
 	}
 }
 
@@ -172,7 +223,7 @@ func TestMissingTreeDBDiskSnapshotRendersNA(t *testing.T) {
 
 	var table strings.Builder
 	renderDiskTable(&table, cells)
-	row := "| 100 | 1 | n/a | n/a | n/a | n/a | n/a | 1.27 KiB | 1.46 KiB | n/a | n/a | n/a | n/a |"
+	row := "| 100 | 1 | `` | n/a | n/a | n/a | n/a | n/a | 1.27 KiB | 1.46 KiB | n/a | n/a | n/a | n/a |"
 	if !strings.Contains(table.String(), row) {
 		t.Fatalf("disk table missing n/a row %q:\n%s", row, table.String())
 	}

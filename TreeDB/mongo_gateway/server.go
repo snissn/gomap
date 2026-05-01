@@ -112,6 +112,9 @@ func (s *Server) ServeOneWithOwner(rw io.ReadWriter, cursorOwner int64) error {
 	if err != nil {
 		return err
 	}
+	if response == nil {
+		return nil
+	}
 	return writeFull(rw, response)
 }
 
@@ -134,7 +137,7 @@ func (s *Server) handleQuery(h wire.Header, body []byte, cursorOwner int64) ([]b
 	if err != nil {
 		return nil, err
 	}
-	name, err := wire.CommandName(q.Query)
+	name, err := wire.CommandNameFromValidatedDocument(q.Query)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +154,7 @@ func (s *Server) handleMsg(h wire.Header, body []byte, cursorOwner int64) ([]byt
 	if err != nil {
 		return nil, err
 	}
-	name, err := wire.CommandName(msg.Body)
+	name, err := wire.CommandNameFromValidatedDocument(msg.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -159,6 +162,9 @@ func (s *Server) handleMsg(h wire.Header, body []byte, cursorOwner int64) ([]byt
 	response, err := s.commandResponse(name, msg.Body, msg.Sequences, cursorOwner)
 	if err != nil {
 		return nil, err
+	}
+	if msg.Flags&wire.MsgFlagMoreToCome != 0 {
+		return nil, nil
 	}
 	return wire.AppendMsgMessage(nil, s.nextID(), h.RequestID, 0, response)
 }

@@ -40,6 +40,33 @@ are reproducible. Obvious unsafe reset targets such as root, the current
 checkout, the temp directory itself, a home directory, or an immediate child of
 a home directory are rejected.
 
+The default `-client-mode driver` uses the official MongoDB Go driver
+`Collection.InsertMany` path for the load phase and all later phases.
+`-client-mode driver-command` still uses the official driver but sends the load
+phase as a raw `insert` command through `Database.RunCommand`, avoiding the
+driver's `InsertMany` `_id` discovery and `InsertedIDs` bookkeeping. It is useful
+for isolating driver CRUD-helper overhead and works against both TreeDB and
+MongoDB targets. `-client-mode driver-command-raw` also uses `RunCommand`, but
+passes a prebuilt raw BSON insert command to reduce driver-side command encoding
+when `-prebuild-documents` is enabled. `-client-mode driver-unack` uses official-driver
+`InsertMany` with unacknowledged write concern; its sampled load metric is
+client enqueue cost, while the phase waits for the final inserted `_id` to
+become visible before reporting wall ops/sec. `-client-mode raw-wire` is
+TreeDB-only and calls the in-process gateway directly with raw OP_MSG document
+sequences. `-client-mode raw-wire-tcp` sends the same raw OP_MSG traffic over
+the gateway's loopback listener, isolating TreeDB gateway network/wire-server
+cost from Mongo Go driver cost. Raw-wire modes use raw OP_MSG
+document sequences for the insert load phase while keeping setup and later
+read/update phases on the driver. Use raw-wire mode to estimate the
+gateway/server ceiling without the driver's per-document marshal and `_id`
+discovery overhead; use driver mode for user-visible Mongo compatibility
+throughput.
+
+When `-prebuild-documents` is enabled, the harness builds both structured BSON
+documents and raw BSON bytes before the measured workload. `driver-command` and
+`raw-wire` reuse the raw bytes during the load phase so their insert-call timing
+does not include fixture BSON marshaling.
+
 The TreeDB benchmark target defaults are intended to match the optimized
 collection benchmark profile:
 
@@ -49,6 +76,7 @@ collection benchmark profile:
 - `-treedb-index-state-root-storage compressed`
 - `-treedb-index-root-storage compressed`
 - `-treedb-maintenance full`
+- `-client-mode driver`
 
 The TreeDB target always opens with outer leaves in the leaf value log and the
 cached leaf-log backend, so collection and secondary-index roots exercise the
@@ -59,6 +87,10 @@ vacuum. The final vacuum closes the benchmark gateway before rewriting
 `index.db`, matching the documented compacted-state maintenance command. Use
 `-treedb-maintenance checkpoint` to reproduce the older checkpoint-only disk
 metric, or `none` to skip final TreeDB disk reporting.
+
+`-treedb-document-format` accepts `json`, `template-v1`, and `bson`. BSON mode
+stores Mongo wire documents as native BSON collection records, avoiding the
+canonical Extended JSON bridge used by the JSON/template-v1 gateway paths.
 
 ## MongoDB Target
 
@@ -90,6 +122,21 @@ harness builds `mongo_gateway_bench`, runs matching TreeDB and MongoDB cells,
 writes raw JSON for every target, records physical `du` bytes where available,
 and generates a Markdown report plus TSV summary.
 
+To compare every TreeDB document format in one bundle:
+
+```sh
+TREEDB_DOCUMENT_FORMATS="json template-v1 bson" scripts/mongo_gateway_compare.sh
+```
+
+To include the raw-wire TreeDB insert load path and the driver command path
+beside the normal MongoDB Go driver `InsertMany` path:
+
+```sh
+TREEDB_DOCUMENT_FORMATS="bson" \
+TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack raw-wire-tcp raw-wire" \
+scripts/mongo_gateway_compare.sh
+```
+
 ```sh
 scripts/mongo_gateway_compare.sh \
   --out /tmp/gomap_mongo_gateway_compare \
@@ -117,7 +164,7 @@ The bundle contains:
 - `report.md`: reviewable Markdown with highlights, disk bytes/doc, ops/sec
   ratios, and raw input paths.
 - `summary.tsv`: machine-readable per-phase comparison rows.
-- `matrix.tsv`: target/document/index/raw-json/physical-byte index.
+- `matrix.tsv`: target/config/document/index/raw-json/physical-byte index.
 - `raw/*.json`: unmodified `mongo_gateway_bench -format json` output.
 - `treedb_data/` and, in Docker mode, `mongodb_data/`: final data directories
   for post-run inspection.
@@ -138,6 +185,7 @@ Useful overrides:
 
 - `DOCS_LIST="1000 10000 100000"`
 - `INDEXES_LIST="0 1 2"`
+- `TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack raw-wire-tcp raw-wire"`
 - `READS=50000`, `RANGE_READS=5000`, `UPDATES=5000`
 - `DELETES=1000`
 - `CONCURRENT_READERS=16`, `CONCURRENT_READS=50000`
@@ -203,7 +251,12 @@ done
 
 The initial workload phases are:
 
-- `load_insert_many`: batched document inserts.
+- `load_insert_many`: batched document inserts. The exact client call depends
+  on `client_mode`: `InsertMany` for `driver`, `RunCommand({insert,
+  documents})` for `driver-command`, `RunCommand` with a prebuilt raw BSON
+  command for `driver-command-raw`, unacknowledged `InsertMany` plus a post-load
+  visibility wait for `driver-unack`, and raw OP_MSG document sequences for
+  `raw-wire`/`raw-wire-tcp`.
 - `id_find_one`: point lookup by `_id`.
 - `email_find_one`: point lookup by the `email` field; emitted only when the
   email secondary index is part of the cell.
@@ -216,14 +269,80 @@ The initial workload phases are:
   goroutines.
 - `id_delete_one`: optional deletes; disabled unless `-deletes` is non-zero.
 
-Latency samples are per MongoDB driver call. Insert ops/sec is normalized by
-document count, while insert latency percentiles are per `InsertMany` call.
-Range-query samples include cursor materialization with `cursor.All`.
+Latency samples are per MongoDB driver/gateway call. `ops_sec` is normalized by
+document count over the whole phase loop; `sampled_ops_sec` and
+`sampled_ns_per_op` are derived from the aggregate sampled call duration. Prefer
+sampled values when investigating gateway/client overhead with prebuilt
+fixtures, and wall `ops_sec` when measuring the full benchmark loop. Insert
+latency percentiles are per batch call. Range-query samples include cursor
+materialization with `cursor.All`.
 Use `-timeout 0` to run without an overall benchmark deadline.
 
 The package test `TestTreeDBProfileSmokeFastAndWALOnFast` runs a small write-only
 TreeDB gateway smoke against both `fast` and `wal_on_fast` to catch large
 profile regressions without making the smoke a replacement for the full matrix.
+
+## Gateway Profiling Benchmarks
+
+The package also includes benchmark-only entry points for isolating Mongo
+gateway overhead from the underlying collection insert path:
+
+```sh
+OUT=$(mktemp -d /tmp/gomap_mongo_gateway_profile_XXXXXX)
+MONGO_GATEWAY_PROFILE_BENCH_BATCH_SIZE=10000 \
+GOWORK=off go test ./cmd/mongo_gateway_bench \
+  -run '^$' \
+  -bench '^(BenchmarkTreeDBGatewayLoadBSONIndexes2|BenchmarkTreeDBGatewayLoadGeneratedIDBSONIndexes2|BenchmarkTreeDBGatewayLoadObjectIDBSONIndexes2|BenchmarkTreeDBGatewayLoadUnackBSONIndexes2|BenchmarkTreeDBGatewayRunCommandLoadBSONIndexes2|BenchmarkTreeDBGatewayRunRawCommandLoadBSONIndexes2|BenchmarkTreeDBGatewayRawWireLoadBSONIndexes2|BenchmarkTreeDBGatewayRawWireTCPLoadBSONIndexes2|BenchmarkDirectCollectionLoadBSONIndexes2|BenchmarkClientBSONBatchEncode)$' \
+  -benchtime 2000000x \
+  -count 1 \
+  -timeout 0 \
+  -benchmem \
+  -cpuprofile "$OUT/cpu.pprof" \
+  -memprofile "$OUT/mem.pprof"
+```
+
+The benchmark shapes are intentionally different:
+
+- `BenchmarkTreeDBGatewayLoadBSONIndexes2` uses the official MongoDB Go driver
+  against the in-process TreeDB gateway.
+- `BenchmarkTreeDBGatewayLoadGeneratedIDBSONIndexes2` uses the same official
+  driver path with documents that omit `_id`, forcing the driver to generate
+  ObjectIDs and avoiding its expensive explicit-`_id` decode path. This is a
+  diagnostic for workloads that do not require caller-supplied primary keys.
+- `BenchmarkTreeDBGatewayLoadObjectIDBSONIndexes2` uses explicit ObjectID
+  primary keys. If this remains close to the explicit string `_id` benchmark,
+  the cost is the driver's explicit-`_id` bookkeeping rather than string `_id`
+  encoding.
+- `BenchmarkTreeDBGatewayLoadUnackBSONIndexes2` uses official-driver
+  `InsertMany` with unacknowledged writes. It measures client enqueue cost, not
+  completed durable load throughput, and is only a diagnostic for response-path
+  overhead.
+- `BenchmarkTreeDBGatewayRunCommandLoadBSONIndexes2` uses the official MongoDB
+  Go driver `RunCommand` insert path against the in-process TreeDB gateway,
+  bypassing `InsertMany` `_id` extraction while still using the driver transport.
+- `BenchmarkTreeDBGatewayRunRawCommandLoadBSONIndexes2` sends a prebuilt raw
+  BSON insert command through official-driver `RunCommand`, minimizing driver
+  command encoding while preserving official-driver transport.
+- `BenchmarkTreeDBGatewayRawWireLoadBSONIndexes2` sends raw OP_MSG insert
+  document sequences to the gateway, bypassing the Go driver's document
+  marshal and `_id` discovery work while still exercising gateway wire parsing
+  and command handling.
+- `BenchmarkTreeDBGatewayRawWireTCPLoadBSONIndexes2` sends the same raw OP_MSG
+  insert document sequences over the gateway's TCP listener, isolating network
+  and connection-serving cost from the official driver's CRUD-helper cost.
+- `BenchmarkDirectCollectionLoadBSONIndexes2` inserts the same BSON document
+  shape through the collection API without the Mongo gateway.
+- `BenchmarkClientBSONBatchEncode` measures client-side BSON document encoding
+  alone.
+
+Use the official-driver row for user-visible Mongo compatibility throughput, the
+driver-command rows to quantify the driver's CRUD-helper overhead, the raw-wire
+rows to estimate the gateway/server ceiling, and the direct collection row to
+estimate the storage-engine ceiling for the same document shape. For
+acknowledged high-throughput ingest through the public MongoDB Go driver,
+`driver-command-raw` is the fastest current path because it keeps the official
+driver transport while bypassing `InsertMany`'s explicit-`_id` discovery and
+`InsertedIDs` bookkeeping.
 
 ## Interpreting Results
 

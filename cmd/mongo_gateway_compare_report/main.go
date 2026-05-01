@@ -25,6 +25,7 @@ type config struct {
 
 type matrixRow struct {
 	Target           string
+	Config           string
 	Documents        int
 	SecondaryIndexes int
 	RawJSON          string
@@ -39,6 +40,8 @@ type benchmarkResult struct {
 	Collection                 string         `json:"collection"`
 	Documents                  int            `json:"documents"`
 	SecondaryIndexes           int            `json:"secondary_indexes"`
+	ClientMode                 string         `json:"client_mode,omitempty"`
+	TreeDBDocumentFormat       string         `json:"treedb_document_format,omitempty"`
 	Phases                     []phaseResult  `json:"phases"`
 	TreeDBDiskAfterLoad        *diskSnapshot  `json:"treedb_disk_after_load,omitempty"`
 	TreeDBDiskAfterCheckpoint  *diskSnapshot  `json:"treedb_disk_after_checkpoint,omitempty"`
@@ -48,12 +51,16 @@ type benchmarkResult struct {
 }
 
 type phaseResult struct {
-	Name           string         `json:"name"`
-	Operations     int            `json:"operations"`
-	DriverCalls    int            `json:"driver_calls"`
-	DurationMillis float64        `json:"duration_ms"`
-	OpsPerSecond   float64        `json:"ops_per_sec"`
-	LatencyMicros  latencySummary `json:"latency_micros"`
+	Name                    string         `json:"name"`
+	Operations              int            `json:"operations"`
+	DriverCalls             int            `json:"driver_calls"`
+	DurationMillis          float64        `json:"duration_ms"`
+	OpsPerSecond            float64        `json:"ops_per_sec"`
+	SampledOpsPerSecond     float64        `json:"sampled_ops_per_sec,omitempty"`
+	SampledNsPerOp          float64        `json:"sampled_ns_per_op,omitempty"`
+	DriverAggregateMillis   float64        `json:"driver_aggregate_duration_ms,omitempty"`
+	DriverMeanLatencyMicros float64        `json:"driver_mean_latency_us,omitempty"`
+	LatencyMicros           latencySummary `json:"latency_micros"`
 }
 
 type latencySummary struct {
@@ -76,6 +83,12 @@ type runRecord struct {
 }
 
 type cellKey struct {
+	Documents        int
+	SecondaryIndexes int
+	TreeDBConfig     string
+}
+
+type baseCellKey struct {
 	Documents        int
 	SecondaryIndexes int
 }
@@ -158,7 +171,12 @@ func loadComparisons(matrixPath string) ([]cellComparison, error) {
 		return nil, err
 	}
 	matrixDir := filepath.Dir(matrixPath)
-	byCell := make(map[cellKey]*cellComparison)
+	type groupedCell struct {
+		mongo          *runRecord
+		trees          map[string]*runRecord
+		treeConfigKeys []string
+	}
+	byCell := make(map[baseCellKey]*groupedCell)
 	for _, row := range rows {
 		rawPath := row.RawJSON
 		if !filepath.IsAbs(rawPath) {
@@ -184,41 +202,86 @@ func loadComparisons(matrixPath string) ([]cellComparison, error) {
 			DisplayRawPath: row.RawJSON,
 			PhaseMap:       phaseMap(result.Phases),
 		}
-		key := cellKey{Documents: row.Documents, SecondaryIndexes: row.SecondaryIndexes}
+		record.Row.Config = runConfig(row, result)
+		key := baseCellKey{Documents: row.Documents, SecondaryIndexes: row.SecondaryIndexes}
 		cell := byCell[key]
 		if cell == nil {
-			cell = &cellComparison{Key: key}
+			cell = &groupedCell{trees: make(map[string]*runRecord)}
 			byCell[key] = cell
 		}
 		switch row.Target {
 		case "treedb":
-			if cell.TreeDB != nil {
-				return nil, fmt.Errorf("duplicate treedb row for documents=%d secondary_indexes=%d", key.Documents, key.SecondaryIndexes)
+			if cell.trees[record.Row.Config] != nil {
+				return nil, fmt.Errorf("duplicate treedb row for documents=%d secondary_indexes=%d config=%q", key.Documents, key.SecondaryIndexes, record.Row.Config)
 			}
-			cell.TreeDB = record
+			cell.trees[record.Row.Config] = record
+			cell.treeConfigKeys = append(cell.treeConfigKeys, record.Row.Config)
 		case "mongo":
-			if cell.Mongo != nil {
+			if cell.mongo != nil {
 				return nil, fmt.Errorf("duplicate mongo row for documents=%d secondary_indexes=%d", key.Documents, key.SecondaryIndexes)
 			}
-			cell.Mongo = record
+			cell.mongo = record
 		default:
 			return nil, fmt.Errorf("unknown target %q in matrix", row.Target)
 		}
 	}
 	cells := make([]cellComparison, 0, len(byCell))
-	for _, cell := range byCell {
-		if cell.TreeDB == nil || cell.Mongo == nil {
-			return nil, fmt.Errorf("incomplete comparison cell documents=%d secondary_indexes=%d", cell.Key.Documents, cell.Key.SecondaryIndexes)
+	for key, cell := range byCell {
+		if len(cell.trees) == 0 || cell.mongo == nil {
+			return nil, fmt.Errorf("incomplete comparison cell documents=%d secondary_indexes=%d", key.Documents, key.SecondaryIndexes)
 		}
-		cells = append(cells, *cell)
+		sort.Strings(cell.treeConfigKeys)
+		for _, config := range cell.treeConfigKeys {
+			cells = append(cells, cellComparison{
+				Key: cellKey{
+					Documents:        key.Documents,
+					SecondaryIndexes: key.SecondaryIndexes,
+					TreeDBConfig:     config,
+				},
+				TreeDB: cell.trees[config],
+				Mongo:  cell.mongo,
+			})
+		}
 	}
 	sort.Slice(cells, func(i, j int) bool {
 		if cells[i].Key.Documents != cells[j].Key.Documents {
 			return cells[i].Key.Documents < cells[j].Key.Documents
 		}
-		return cells[i].Key.SecondaryIndexes < cells[j].Key.SecondaryIndexes
+		if cells[i].Key.SecondaryIndexes != cells[j].Key.SecondaryIndexes {
+			return cells[i].Key.SecondaryIndexes < cells[j].Key.SecondaryIndexes
+		}
+		return cells[i].Key.TreeDBConfig < cells[j].Key.TreeDBConfig
 	})
 	return cells, nil
+}
+
+func runConfig(row matrixRow, result benchmarkResult) string {
+	if row.Config != "" {
+		return row.Config
+	}
+	if row.Target == "mongo" {
+		if result.ClientMode != "" && result.ClientMode != "driver" {
+			return "mongo_" + normalizeConfigName(result.ClientMode)
+		}
+		return "mongo"
+	}
+	if result.TreeDBDocumentFormat != "" {
+		config := "treedb_" + normalizeConfigName(result.TreeDBDocumentFormat)
+		if result.ClientMode != "" && result.ClientMode != "driver" {
+			config += "_" + normalizeConfigName(result.ClientMode)
+		}
+		return config
+	}
+	return "treedb"
+}
+
+func normalizeConfigName(raw string) string {
+	name := strings.ToLower(strings.TrimSpace(raw))
+	name = strings.ReplaceAll(name, "-", "_")
+	if name == "" {
+		return "default"
+	}
+	return name
 }
 
 func readMatrix(path string) ([]matrixRow, error) {
@@ -290,6 +353,7 @@ func parseMatrixRow(columns map[string]int, record []string) (matrixRow, error) 
 	}
 	row := matrixRow{
 		Target:           field("target"),
+		Config:           optionalField(columns, record, "config"),
 		Documents:        documents,
 		SecondaryIndexes: indexes,
 		RawJSON:          field("raw_json"),
@@ -302,6 +366,14 @@ func parseMatrixRow(columns map[string]int, record []string) (matrixRow, error) 
 		return matrixRow{}, errors.New("raw_json is required")
 	}
 	return row, nil
+}
+
+func optionalField(columns map[string]int, record []string, name string) string {
+	idx, ok := columns[name]
+	if !ok || idx >= len(record) {
+		return ""
+	}
+	return strings.TrimSpace(record[idx])
 }
 
 func readBenchmarkResult(path string) (benchmarkResult, error) {
@@ -344,11 +416,16 @@ func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) str
 	renderOpsTable(&b, cells)
 	b.WriteString("\n")
 	b.WriteString("## Raw Inputs\n\n")
-	b.WriteString("| docs | indexes | target | raw json |\n")
-	b.WriteString("| ---: | ---: | --- | --- |\n")
+	b.WriteString("| docs | indexes | config | target | raw json |\n")
+	b.WriteString("| ---: | ---: | --- | --- | --- |\n")
+	seenMongoRaw := make(map[baseCellKey]struct{})
 	for _, cell := range cells {
-		fmt.Fprintf(&b, "| %d | %d | treedb | `%s` |\n", cell.Key.Documents, cell.Key.SecondaryIndexes, cell.TreeDB.DisplayRawPath)
-		fmt.Fprintf(&b, "| %d | %d | mongo | `%s` |\n", cell.Key.Documents, cell.Key.SecondaryIndexes, cell.Mongo.DisplayRawPath)
+		fmt.Fprintf(&b, "| %d | %d | `%s` | treedb | `%s` |\n", cell.Key.Documents, cell.Key.SecondaryIndexes, cell.Key.TreeDBConfig, cell.TreeDB.DisplayRawPath)
+		mongoKey := baseCellKey{Documents: cell.Key.Documents, SecondaryIndexes: cell.Key.SecondaryIndexes}
+		if _, ok := seenMongoRaw[mongoKey]; !ok {
+			fmt.Fprintf(&b, "| %d | %d | `mongo` | mongo | `%s` |\n", cell.Key.Documents, cell.Key.SecondaryIndexes, cell.Mongo.DisplayRawPath)
+			seenMongoRaw[mongoKey] = struct{}{}
+		}
 	}
 	b.WriteString("\n")
 	b.WriteString("## Notes\n\n")
@@ -357,7 +434,7 @@ func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) str
 	b.WriteString("- MongoDB `dbStats.dataSize` is uncompressed logical document size, not disk usage.\n")
 	b.WriteString("- MongoDB `dbStats.totalSize` is reported separately because it can diverge sharply from the isolated data-directory `du` measurement on small WiredTiger workloads.\n")
 	b.WriteString("- MongoDB physical bytes are the preferred local disk comparison when the matrix runner has an isolated data directory, such as Docker mode.\n")
-	b.WriteString("- Ops/sec values are produced by the shared MongoDB Go driver workload in `cmd/mongo_gateway_bench`.\n")
+	b.WriteString("- Wall ops/sec values include the full benchmark phase loop. Sampled ops/sec values isolate the timed driver/gateway call inside each phase and are useful when prebuilt fixtures are enabled.\n")
 	return b.String()
 }
 
@@ -379,10 +456,11 @@ func highlightLines(cells []cellComparison) []string {
 		}
 	}
 	if bestTreeDB != nil {
-		lines = append(lines, fmt.Sprintf("Largest TreeDB ops/sec lead: `%s` at %d docs / %d indexes, %s ops/sec vs %s ops/sec (%s TreeDB / MongoDB).",
+		lines = append(lines, fmt.Sprintf("Largest TreeDB ops/sec lead: `%s` at %d docs / %d indexes / `%s`, %s ops/sec vs %s ops/sec (%s TreeDB / MongoDB).",
 			bestTreeDB.Name,
 			bestTreeDB.Cell.Documents,
 			bestTreeDB.Cell.SecondaryIndexes,
+			bestTreeDB.Cell.TreeDBConfig,
 			formatNumber(bestTreeDB.TreeDBPhase.OpsPerSecond),
 			formatNumber(bestTreeDB.MongoPhase.OpsPerSecond),
 			formatRatio(bestTreeDB.Ratio),
@@ -391,10 +469,11 @@ func highlightLines(cells []cellComparison) []string {
 		lines = append(lines, "No phase in this matrix had TreeDB ahead on ops/sec.")
 	}
 	if bestMongo != nil {
-		lines = append(lines, fmt.Sprintf("Largest MongoDB ops/sec lead: `%s` at %d docs / %d indexes, %s ops/sec vs %s ops/sec (%s TreeDB / MongoDB).",
+		lines = append(lines, fmt.Sprintf("Largest MongoDB ops/sec lead: `%s` at %d docs / %d indexes / `%s`, %s ops/sec vs %s ops/sec (%s TreeDB / MongoDB).",
 			bestMongo.Name,
 			bestMongo.Cell.Documents,
 			bestMongo.Cell.SecondaryIndexes,
+			bestMongo.Cell.TreeDBConfig,
 			formatNumber(bestMongo.TreeDBPhase.OpsPerSecond),
 			formatNumber(bestMongo.MongoPhase.OpsPerSecond),
 			formatRatio(bestMongo.Ratio),
@@ -416,9 +495,10 @@ func highlightLines(cells []cellComparison) []string {
 				formatBytesPerDoc(treeBytes, cell.Key.Documents),
 			)
 		}
-		lines = append(lines, fmt.Sprintf("Largest cell disk: at %d docs / %d indexes, %s, TreeDB physical du was %s, MongoDB dbStats dataSize was %s, MongoDB dbStats totalSize was %s, and MongoDB physical du was %s (%s/doc).",
+		lines = append(lines, fmt.Sprintf("Largest cell disk: at %d docs / %d indexes / `%s`, %s, TreeDB physical du was %s, MongoDB dbStats dataSize was %s, MongoDB dbStats totalSize was %s, and MongoDB physical du was %s (%s/doc).",
 			cell.Key.Documents,
 			cell.Key.SecondaryIndexes,
+			cell.Key.TreeDBConfig,
 			treeSnapshotClause,
 			formatOptionalBytes(treePhysical),
 			formatBytes(mongoData),
@@ -466,17 +546,18 @@ func cellDiskScore(cell cellComparison) int64 {
 
 func renderDiskTable(b *strings.Builder, cells []cellComparison) {
 	b.WriteString("## Disk Summary\n\n")
-	b.WriteString("| docs | indexes | TreeDB snapshot | TreeDB bytes | TreeDB bytes/doc | TreeDB physical du | TreeDB physical bytes/doc | MongoDB dbStats dataSize | MongoDB dbStats totalSize | MongoDB physical du | MongoDB physical bytes/doc | TreeDB / MongoDB dbStats totalSize | TreeDB / MongoDB physical |\n")
-	b.WriteString("| ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	b.WriteString("| docs | indexes | TreeDB config | TreeDB snapshot | TreeDB bytes | TreeDB bytes/doc | TreeDB physical du | TreeDB physical bytes/doc | MongoDB dbStats dataSize | MongoDB dbStats totalSize | MongoDB physical du | MongoDB physical bytes/doc | TreeDB / MongoDB dbStats totalSize | TreeDB / MongoDB physical |\n")
+	b.WriteString("| ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, cell := range cells {
 		treeBytes, treeSnapshot, treeOK := treeDBBytesSnapshot(cell.TreeDB.Result)
 		treePhysical := cell.TreeDB.Row.PhysicalBytes
 		mongoData, _ := mongoDataBytes(cell.Mongo.Result)
 		mongoTotal, _ := mongoDBStatsTotalBytes(cell.Mongo.Result)
 		mongoPhysical := cell.Mongo.Row.PhysicalBytes
-		fmt.Fprintf(b, "| %d | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
+		fmt.Fprintf(b, "| %d | %d | `%s` | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
 			cell.Key.Documents,
 			cell.Key.SecondaryIndexes,
+			cell.Key.TreeDBConfig,
 			treeSnapshot,
 			formatMeasuredBytes(treeOK, treeBytes),
 			formatMeasuredBytesPerDoc(treeOK, treeBytes, cell.Key.Documents),
@@ -494,16 +575,21 @@ func renderDiskTable(b *strings.Builder, cells []cellComparison) {
 
 func renderOpsTable(b *strings.Builder, cells []cellComparison) {
 	b.WriteString("## Ops/Sec Summary\n\n")
-	b.WriteString("| docs | indexes | phase | TreeDB ops/sec | MongoDB ops/sec | TreeDB / MongoDB | TreeDB p95 us | MongoDB p95 us |\n")
-	b.WriteString("| ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |\n")
+	b.WriteString("| docs | indexes | TreeDB config | phase | TreeDB wall ops/sec | TreeDB sampled ops/sec | MongoDB wall ops/sec | MongoDB sampled ops/sec | TreeDB / MongoDB wall | TreeDB / MongoDB sampled | TreeDB p95 us | MongoDB p95 us |\n")
+	b.WriteString("| ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, cmp := range allPhaseComparisons(cells) {
-		fmt.Fprintf(b, "| %d | %d | `%s` | %s | %s | %s | %s | %s |\n",
+		sampledRatio := safeRatio(cmp.TreeDBPhase.SampledOpsPerSecond, cmp.MongoPhase.SampledOpsPerSecond)
+		fmt.Fprintf(b, "| %d | %d | `%s` | `%s` | %s | %s | %s | %s | %s | %s | %s | %s |\n",
 			cmp.Cell.Documents,
 			cmp.Cell.SecondaryIndexes,
+			cmp.Cell.TreeDBConfig,
 			cmp.Name,
 			formatPhaseOps(cmp.HasTreeDB, cmp.TreeDBPhase.OpsPerSecond),
+			formatPhaseOps(cmp.HasTreeDB && cmp.TreeDBPhase.SampledOpsPerSecond > 0, cmp.TreeDBPhase.SampledOpsPerSecond),
 			formatPhaseOps(cmp.HasMongo, cmp.MongoPhase.OpsPerSecond),
+			formatPhaseOps(cmp.HasMongo && cmp.MongoPhase.SampledOpsPerSecond > 0, cmp.MongoPhase.SampledOpsPerSecond),
 			formatRatio(cmp.Ratio),
+			formatRatio(sampledRatio),
 			formatPhaseLatency(cmp.HasTreeDB, cmp.TreeDBPhase.LatencyMicros.P95),
 			formatPhaseLatency(cmp.HasMongo, cmp.MongoPhase.LatencyMicros.P95),
 		)
@@ -560,10 +646,16 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 	header := []string{
 		"documents",
 		"secondary_indexes",
+		"treedb_config",
 		"phase",
 		"treedb_ops_sec",
+		"treedb_sampled_ops_sec",
+		"treedb_sampled_ns_per_op",
 		"mongo_ops_sec",
+		"mongo_sampled_ops_sec",
+		"mongo_sampled_ns_per_op",
 		"treedb_to_mongo_ops_ratio",
+		"treedb_to_mongo_sampled_ops_ratio",
 		"treedb_p50_us",
 		"mongo_p50_us",
 		"treedb_p95_us",
@@ -588,13 +680,20 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 		treePhysical := cell.TreeDB.Row.PhysicalBytes
 		mongoData, _ := mongoDataBytes(cell.Mongo.Result)
 		mongoTotal, _ := mongoDBStatsTotalBytes(cell.Mongo.Result)
+		sampledRatio := safeRatio(cmp.TreeDBPhase.SampledOpsPerSecond, cmp.MongoPhase.SampledOpsPerSecond)
 		row := []string{
 			strconv.Itoa(cmp.Cell.Documents),
 			strconv.Itoa(cmp.Cell.SecondaryIndexes),
+			cmp.Cell.TreeDBConfig,
 			cmp.Name,
 			formatRawFloat(cmp.HasTreeDB, cmp.TreeDBPhase.OpsPerSecond),
+			formatRawFloat(cmp.HasTreeDB && cmp.TreeDBPhase.SampledOpsPerSecond > 0, cmp.TreeDBPhase.SampledOpsPerSecond),
+			formatRawFloat(cmp.HasTreeDB && cmp.TreeDBPhase.SampledNsPerOp > 0, cmp.TreeDBPhase.SampledNsPerOp),
 			formatRawFloat(cmp.HasMongo, cmp.MongoPhase.OpsPerSecond),
+			formatRawFloat(cmp.HasMongo && cmp.MongoPhase.SampledOpsPerSecond > 0, cmp.MongoPhase.SampledOpsPerSecond),
+			formatRawFloat(cmp.HasMongo && cmp.MongoPhase.SampledNsPerOp > 0, cmp.MongoPhase.SampledNsPerOp),
 			formatRawRatio(cmp.Ratio),
+			formatRawRatio(sampledRatio),
 			formatRawFloat(cmp.HasTreeDB, cmp.TreeDBPhase.LatencyMicros.P50),
 			formatRawFloat(cmp.HasMongo, cmp.MongoPhase.LatencyMicros.P50),
 			formatRawFloat(cmp.HasTreeDB, cmp.TreeDBPhase.LatencyMicros.P95),

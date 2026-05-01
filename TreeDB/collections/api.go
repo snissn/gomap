@@ -21,6 +21,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 const (
@@ -99,7 +100,12 @@ func persistIndexStateForOptions(opts collectionOptions) bool {
 }
 
 func persistIndexStateForDocumentFormat(format DocumentFormat) bool {
-	return normalizedDocumentFormat(format) != DocumentFormatTemplateV1
+	switch normalizedDocumentFormat(format) {
+	case DocumentFormatTemplateV1, DocumentFormatBSON:
+		return false
+	default:
+		return true
+	}
 }
 
 type CollectionManager struct {
@@ -139,6 +145,15 @@ func (m *StoredDocumentJSONMaterializer) Close() error {
 	return closeFn()
 }
 
+// DocumentFormat returns the collection storage format this materializer was
+// created for.
+func (m *StoredDocumentJSONMaterializer) DocumentFormat() DocumentFormat {
+	if m == nil {
+		return DocumentFormatDefault
+	}
+	return m.documentFormat
+}
+
 // StoredDocumentJSON materializes one stored collection document as JSON bytes.
 func (m *StoredDocumentJSONMaterializer) StoredDocumentJSON(document []byte) ([]byte, error) {
 	if m == nil {
@@ -147,6 +162,12 @@ func (m *StoredDocumentJSONMaterializer) StoredDocumentJSON(document []byte) ([]
 	switch m.documentFormat {
 	case DocumentFormatJSON:
 		return bytes.Clone(document), nil
+	case DocumentFormatBSON:
+		raw := bson.Raw(document)
+		if err := raw.Validate(); err != nil {
+			return nil, fmt.Errorf("collections: BSON stored document: %w", err)
+		}
+		return bson.MarshalExtJSON(raw, true, false)
 	case DocumentFormatTemplateV1:
 		return templateV1StoredDocumentJSON(document, m.templateResolver)
 	default:
@@ -210,6 +231,7 @@ type DocumentFormat string
 const (
 	DocumentFormatDefault    DocumentFormat = ""
 	DocumentFormatJSON       DocumentFormat = "json"
+	DocumentFormatBSON       DocumentFormat = "bson"
 	DocumentFormatTemplateV1 DocumentFormat = "template-v1"
 )
 
@@ -2120,6 +2142,18 @@ func (c *Collection) insertOneViaBatch(id, document []byte) ([]byte, error) {
 }
 
 func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
+	return c.insertBatch(ids, documents, false)
+}
+
+// InsertBatchValidatedBSON inserts native BSON documents that the caller has
+// already validated. It is intended for wire-protocol gateways that validate
+// BSON while parsing the request and need to avoid a duplicate full-document
+// validation pass on the insert hot path.
+func (c *Collection) InsertBatchValidatedBSON(ids, documents [][]byte) ([][]byte, error) {
+	return c.insertBatch(ids, documents, true)
+}
+
+func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool) ([][]byte, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -2158,6 +2192,11 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 		_ = snap.Close()
 		return nil, err
 	}
+	plannerOptions, err = collectionOptionsWithTrustedBSONDocuments(plannerOptions, trustedValidBSON)
+	if err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 	indexedMemtablesEnabled := c.shouldBufferIndexedInserts(c.meta)
 	bufferIndexedInserts := c.shouldBufferIndexedInsertBatch(c.meta, len(documents))
@@ -2181,6 +2220,11 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 		}
 		c.meta = catalog.meta
 		plannerOptions, err = collectionPlannerOptions(c.meta)
+		if err != nil {
+			_ = snap.Close()
+			return nil, err
+		}
+		plannerOptions, err = collectionOptionsWithTrustedBSONDocuments(plannerOptions, trustedValidBSON)
 		if err != nil {
 			_ = snap.Close()
 			return nil, err
@@ -2295,6 +2339,17 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	c.setLastInsertStats(plan.stats.CollectionInsertStats)
 	return plan.resultIDs, nil
+}
+
+func collectionOptionsWithTrustedBSONDocuments(opts collectionOptions, trusted bool) (collectionOptions, error) {
+	if !trusted {
+		return opts, nil
+	}
+	if normalizedDocumentFormat(opts.documentFormat) != DocumentFormatBSON {
+		return collectionOptions{}, errors.New("collections: trusted BSON insert requires BSON document format")
+	}
+	opts.trustedBSONDocuments = true
+	return opts, nil
 }
 
 func (c *Collection) insertBatchNoIndex(
@@ -3449,7 +3504,7 @@ func (c *Collection) NewStoredDocumentJSONMaterializer() (*StoredDocumentJSONMat
 		return nil, err
 	}
 	switch documentFormat {
-	case DocumentFormatJSON:
+	case DocumentFormatJSON, DocumentFormatBSON:
 		return &StoredDocumentJSONMaterializer{documentFormat: documentFormat}, nil
 	case DocumentFormatTemplateV1:
 		snap := c.db.AcquireSnapshot()
@@ -3487,9 +3542,10 @@ func (c *Collection) NewStoredDocumentJSONMaterializer() (*StoredDocumentJSONMat
 }
 
 // StoredDocumentJSON materializes one stored collection document as JSON bytes.
-// JSON-format collections return an owned copy of document. Template-v1
-// collections resolve the document's template from the collection template root
-// and any buffered template runs.
+// JSON-format collections return an owned copy of document. BSON-format
+// collections return canonical Extended JSON. Template-v1 collections resolve
+// the document's template from the collection template root and any buffered
+// template runs.
 func (c *Collection) StoredDocumentJSON(document []byte) ([]byte, error) {
 	materializer, err := c.NewStoredDocumentJSONMaterializer()
 	if err != nil {

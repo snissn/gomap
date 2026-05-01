@@ -3,6 +3,7 @@ package mongogateway
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"math"
@@ -337,6 +338,127 @@ func TestServerUpdateTemplateV1DefaultAddsFields(t *testing.T) {
 	}
 	if _, err := col.StoredDocumentJSON(stored); err != nil {
 		t.Fatalf("materialize stored doc: %v", err)
+	}
+}
+
+func TestServerBSONDefaultStoresNativeBSONAndUpdatesIndexes(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	id := bson.NewObjectID()
+	assertOK(t, serveCommand(t, server, 2261, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "unique", Value: true}},
+			bson.D{{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}}, {Key: "name", Value: "city_1"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 2262, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{
+			{Key: "_id", Value: id},
+			{Key: "email", Value: "ada@example.com"},
+			{Key: "city", Value: "hnl"},
+			{Key: "age", Value: int64(37)},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	col, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	key, _, err := prepareInsertDocument(mustDocument(t, bson.D{{Key: "_id", Value: id}}), collections.DocumentFormatBSON)
+	if err != nil {
+		t.Fatalf("encode id key: %v", err)
+	}
+	stored, err := col.Get(key)
+	if err != nil {
+		t.Fatalf("get stored BSON: %v", err)
+	}
+	if err := bson.Raw(stored).Validate(); err != nil {
+		t.Fatalf("stored native BSON failed validation: %v", err)
+	}
+	if json.Valid(stored) {
+		t.Fatalf("stored BSON is also valid JSON: %q", stored[:min(len(stored), 32)])
+	}
+	if got, ok := bson.Raw(stored).Lookup("email").StringValueOK(); !ok || got != "ada@example.com" {
+		t.Fatalf("stored email=%q ok=%v want ada@example.com", got, ok)
+	}
+	emailIDs, err := col.FindByIndexValue("email_1", "ada@example.com")
+	if err != nil {
+		t.Fatalf("find email index: %v", err)
+	}
+	if len(emailIDs) != 1 || !bytes.Equal(emailIDs[0], key) {
+		t.Fatalf("email ids=%q want %q", emailIDs, key)
+	}
+
+	assertOK(t, serveCommand(t, server, 2263, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{
+				{Key: "city", Value: "sea"},
+				{Key: "active", Value: true},
+			}}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	findResponse := serveCommand(t, server, 2264, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "city", Value: "sea"}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch := cursorFirstBatch(t, findResponse)
+	if len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	assertBool(t, firstBatch[0], "active", true)
+	cityIDs, err := col.FindByIndexValue("city_1", "sea")
+	if err != nil {
+		t.Fatalf("find updated city index: %v", err)
+	}
+	if len(cityIDs) != 1 || !bytes.Equal(cityIDs[0], key) {
+		t.Fatalf("city ids=%q want %q", cityIDs, key)
+	}
+	oldCityIDs, err := col.FindByIndexValue("city_1", "hnl")
+	if err != nil {
+		t.Fatalf("find old city index: %v", err)
+	}
+	if len(oldCityIDs) != 0 {
+		t.Fatalf("old city ids=%q want none", oldCityIDs)
+	}
+}
+
+func TestPrepareInsertDocumentBSONAllowsNativeUnindexedTypes(t *testing.T) {
+	doc := mustDocument(t, bson.D{
+		{Key: "_id", Value: "native"},
+		{Key: "payload", Value: bson.Binary{Subtype: 0x00, Data: []byte{1, 2, 3}}},
+	})
+	_, stored, err := prepareInsertDocument(doc, collections.DocumentFormatBSON)
+	if err != nil {
+		t.Fatalf("prepare BSON insert document: %v", err)
+	}
+	if err := bson.Raw(stored).Validate(); err != nil {
+		t.Fatalf("stored BSON invalid: %v", err)
+	}
+	subtype, payload := bson.Raw(stored).Lookup("payload").Binary()
+	if subtype != 0x00 || !bytes.Equal(payload, []byte{1, 2, 3}) {
+		t.Fatalf("payload subtype/data=%#x/%v", subtype, payload)
+	}
+
+	_, _, err = prepareInsertDocument(doc, collections.DocumentFormatJSON)
+	if err == nil || !strings.Contains(err.Error(), "unsupported BSON type binary") {
+		t.Fatalf("prepare JSON err=%v want unsupported binary", err)
 	}
 }
 

@@ -40,7 +40,7 @@ func ParseReply(body []byte) (Reply, error) {
 		if err != nil {
 			return Reply{}, err
 		}
-		if err := ValidateDocument(doc); err != nil {
+		if err := validateParsedDocument(doc); err != nil {
 			return Reply{}, err
 		}
 		r.Documents = append(r.Documents, doc)

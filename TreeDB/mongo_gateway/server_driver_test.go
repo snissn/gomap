@@ -12,6 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 )
 
 func TestServerOfficialGoDriverBasicCRUD(t *testing.T) {
@@ -134,6 +135,98 @@ func TestServerOfficialGoDriverBasicCRUD(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("serve loop did not stop")
+	}
+}
+
+func TestServerOfficialGoDriverUnacknowledgedInsertMany(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	serveErr := make(chan error, 1)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				if errors.Is(err, net.ErrClosed) || ctx.Err() != nil {
+					serveErr <- nil
+					return
+				}
+				serveErr <- err
+				return
+			}
+			go func() {
+				_ = server.ServeConn(ctx, conn)
+			}()
+		}
+	}()
+
+	client, err := mongo.Connect(options.Client().
+		ApplyURI("mongodb://" + ln.Addr().String()).
+		SetDirect(true).
+		SetServerSelectionTimeout(time.Second))
+	if err != nil {
+		t.Fatalf("mongo connect: %v", err)
+	}
+	defer func() { _ = client.Disconnect(context.Background()) }()
+
+	opCtx, opCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer opCancel()
+	if err := client.Ping(opCtx, nil); err != nil {
+		t.Fatalf("driver ping: %v", err)
+	}
+
+	ackColl := client.Database("app").Collection("users")
+	unackColl := client.Database("app").Collection("users", options.Collection().SetWriteConcern(writeconcern.Unacknowledged()))
+	result, err := unackColl.InsertMany(opCtx, []any{
+		bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}},
+		bson.D{{Key: "_id", Value: "u2"}, {Key: "name", Value: "grace"}},
+	})
+	if err != nil {
+		t.Fatalf("unacknowledged insert many: %v", err)
+	}
+	if result.Acknowledged {
+		t.Fatal("unacknowledged insert reported Acknowledged=true")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var got bson.M
+		err = ackColl.FindOne(opCtx, bson.D{{Key: "_id", Value: "u2"}}).Decode(&got)
+		if err == nil {
+			if got["name"] != "grace" {
+				t.Fatalf("decoded name=%v want grace", got["name"])
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("find after unacknowledged insert: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cancel()
+	_ = ln.Close()
+	select {
+	case err := <-serveErr:
+		if err != nil {
+			t.Fatalf("serve err: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not stop")
 	}
 }
 

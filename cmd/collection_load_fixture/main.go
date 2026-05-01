@@ -22,6 +22,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 const (
@@ -328,7 +329,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	fs.IntVar(&cfg.Docs, "docs", cfg.Docs, "number of documents to insert")
 	fs.IntVar(&cfg.BatchSize, "batch-size", cfg.BatchSize, "documents per InsertBatch call")
 	fs.StringVar(&cfg.Collection, "collection", cfg.Collection, "collection name")
-	fs.StringVar(&documentFormat, "format", string(cfg.DocumentFormat), "document format: json or template-v1")
+	fs.StringVar(&documentFormat, "format", string(cfg.DocumentFormat), "document format: json, template-v1, or bson")
 	fs.IntVar(&cfg.IndexCount, "indexes", cfg.IndexCount, "secondary index count for the benchmark shape: 0, 1, 2, or 3")
 	fs.BoolVar(&cfg.BufferedIndexedWrites, "buffered-indexed-writes", cfg.BufferedIndexedWrites, "use native collection-local memtables for indexed InsertBatch writes; set false for immediate-publish baseline comparisons")
 	fs.IntVar(&cfg.BufferedIndexedWriteMaxDocs, "buffered-indexed-write-max-docs", cfg.BufferedIndexedWriteMaxDocs, "flush indexed write buffers after this many staged documents; 0 uses the collection default")
@@ -434,10 +435,12 @@ func parseDocumentFormat(raw string) (collections.DocumentFormat, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "json":
 		return collections.DocumentFormatJSON, nil
+	case string(collections.DocumentFormatBSON):
+		return collections.DocumentFormatBSON, nil
 	case string(collections.DocumentFormatTemplateV1):
 		return collections.DocumentFormatTemplateV1, nil
 	case "":
-		return "", fmt.Errorf("-format cannot be empty; use json or template-v1")
+		return "", fmt.Errorf("-format cannot be empty; use json, template-v1, or bson")
 	default:
 		return "", fmt.Errorf("unsupported -format %q", raw)
 	}
@@ -830,7 +833,19 @@ func document(format collections.DocumentFormat, encoder *collections.TemplateV1
 			},
 		)
 	}
+	if format == collections.DocumentFormatBSON {
+		return indexedBSONDocument(n)
+	}
 	return indexedJSONDocument(n), nil
+}
+
+func indexedBSONDocument(n int) ([]byte, error) {
+	return bson.Marshal(bson.D{
+		{Key: "name", Value: fmt.Sprintf("user-%09d", n)},
+		{Key: "email", Value: fmt.Sprintf("user-%09d@example.com", n)},
+		{Key: "city", Value: fmt.Sprintf("city-%02d", n%collectionFixtureCities)},
+		{Key: "pad", Value: collectionFixturePad},
+	})
 }
 
 func documentID(n int) []byte {
@@ -1377,6 +1392,9 @@ func reopenVerifyReadOnly(cfg config) bool {
 func expectedStoredDocument(format collections.DocumentFormat, n int) ([]byte, error) {
 	if format == collections.DocumentFormatJSON {
 		return indexedJSONDocument(n), nil
+	}
+	if format == collections.DocumentFormatBSON {
+		return indexedBSONDocument(n)
 	}
 	doc, err := document(format, &collections.TemplateV1Encoder{}, n)
 	if err != nil {

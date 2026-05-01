@@ -57,6 +57,16 @@ func TestParseConfigRejectsExplicitEmptyFormat(t *testing.T) {
 	}
 }
 
+func TestParseConfigAcceptsBSONFormat(t *testing.T) {
+	cfg, err := parseConfig([]string{"-format", "bson"}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse BSON format: %v", err)
+	}
+	if cfg.DocumentFormat != collections.DocumentFormatBSON {
+		t.Fatalf("document format=%q want bson", cfg.DocumentFormat)
+	}
+}
+
 func TestParseConfigRejectsInvalidIndexVacuumMode(t *testing.T) {
 	if _, err := parseConfig([]string{"-index-vacuum", "sometimes"}, io.Discard); err == nil {
 		t.Fatal("expected invalid -index-vacuum to fail")

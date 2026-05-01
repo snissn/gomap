@@ -12,6 +12,8 @@ import (
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/collections"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestSummarizeLatencyNearestRank(t *testing.T) {
@@ -266,8 +268,53 @@ func TestParseConfigValidation(t *testing.T) {
 		t.Fatalf("parse valid config: %v", err)
 	}
 	if cfg.Target != "mongo" || cfg.Documents != 10 || cfg.SecondaryIndexes != 1 || cfg.Format != "json" ||
+		cfg.ClientMode != clientModeDriver ||
 		cfg.ConcurrentReaders != 4 || cfg.ConcurrentReads != 20 || cfg.ConcurrentWriters != 2 || cfg.ConcurrentWrites != 10 {
 		t.Fatalf("unexpected config: %+v", cfg)
+	}
+	rawWireCfg, err := parseConfig([]string{"-target", "treedb", "-client-mode", "raw-wire"})
+	if err != nil {
+		t.Fatalf("parse raw-wire config: %v", err)
+	}
+	if rawWireCfg.ClientMode != clientModeRawWire {
+		t.Fatalf("ClientMode=%q want %q", rawWireCfg.ClientMode, clientModeRawWire)
+	}
+	rawWireTCPCfg, err := parseConfig([]string{"-target", "treedb", "-client-mode", "raw-wire-tcp"})
+	if err != nil {
+		t.Fatalf("parse raw-wire-tcp config: %v", err)
+	}
+	if rawWireTCPCfg.ClientMode != clientModeRawWireTCP {
+		t.Fatalf("ClientMode=%q want %q", rawWireTCPCfg.ClientMode, clientModeRawWireTCP)
+	}
+	commandCfg, err := parseConfig([]string{"-target", "mongo", "-client-mode", "driver-command"})
+	if err != nil {
+		t.Fatalf("parse driver-command config: %v", err)
+	}
+	if commandCfg.ClientMode != clientModeDriverCommand {
+		t.Fatalf("ClientMode=%q want %q", commandCfg.ClientMode, clientModeDriverCommand)
+	}
+	commandRawCfg, err := parseConfig([]string{"-target", "mongo", "-client-mode", "driver-command-raw"})
+	if err != nil {
+		t.Fatalf("parse driver-command-raw config: %v", err)
+	}
+	if commandRawCfg.ClientMode != clientModeDriverCommandRaw {
+		t.Fatalf("ClientMode=%q want %q", commandRawCfg.ClientMode, clientModeDriverCommandRaw)
+	}
+	unackCfg, err := parseConfig([]string{"-target", "mongo", "-client-mode", "driver-unack"})
+	if err != nil {
+		t.Fatalf("parse driver-unack config: %v", err)
+	}
+	if unackCfg.ClientMode != clientModeDriverUnack {
+		t.Fatalf("ClientMode=%q want %q", unackCfg.ClientMode, clientModeDriverUnack)
+	}
+	if _, err := parseConfig([]string{"-client-mode", "bad"}); err == nil {
+		t.Fatal("bad client-mode accepted")
+	}
+	if _, err := parseConfig([]string{"-target", "mongo", "-client-mode", "raw-wire"}); err == nil {
+		t.Fatal("raw-wire client-mode accepted for mongo target")
+	}
+	if _, err := parseConfig([]string{"-target", "mongo", "-client-mode", "raw-wire-tcp"}); err == nil {
+		t.Fatal("raw-wire-tcp client-mode accepted for mongo target")
 	}
 	if _, err := parseConfig([]string{"-timeout", "0"}); err != nil {
 		t.Fatalf("timeout 0 should disable deadline: %v", err)
@@ -284,6 +331,42 @@ func TestParseConfigValidation(t *testing.T) {
 	if _, err := parseConfig([]string{"-concurrent-reads", "1"}); err == nil {
 		t.Fatal("concurrent-reads without concurrent-readers accepted")
 	}
+}
+
+func TestRawInsertCommandBuildsBSONCommand(t *testing.T) {
+	docs := []bson.Raw{
+		mustTestBSON(t, bson.D{{Key: "_id", Value: "a"}, {Key: "email", Value: "a@example.test"}}),
+		mustTestBSON(t, bson.D{{Key: "_id", Value: "b"}, {Key: "email", Value: "b@example.test"}}),
+	}
+	command, err := rawInsertCommand("docs", 0, len(docs), nil, docs)
+	if err != nil {
+		t.Fatalf("rawInsertCommand: %v", err)
+	}
+	var out struct {
+		Insert    string     `bson:"insert"`
+		Documents []bson.Raw `bson:"documents"`
+		Ordered   bool       `bson:"ordered"`
+	}
+	if err := bson.Unmarshal(command, &out); err != nil {
+		t.Fatalf("unmarshal command: %v", err)
+	}
+	if out.Insert != "docs" || !out.Ordered || len(out.Documents) != len(docs) {
+		t.Fatalf("unexpected command: %+v", out)
+	}
+	for i := range docs {
+		if !bytes.Equal(out.Documents[i], docs[i]) {
+			t.Fatalf("document %d mismatch: got %v want %v", i, out.Documents[i], docs[i])
+		}
+	}
+}
+
+func mustTestBSON(t *testing.T, doc bson.D) bson.Raw {
+	t.Helper()
+	raw, err := bson.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal test BSON: %v", err)
+	}
+	return raw
 }
 
 func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
@@ -311,6 +394,16 @@ func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
 	}
 }
 
+func TestParseConfigAcceptsTreeDBBSONDocumentFormat(t *testing.T) {
+	cfg, err := parseConfig([]string{"-treedb-document-format", "bson"})
+	if err != nil {
+		t.Fatalf("parse BSON document format: %v", err)
+	}
+	if got := string(cfg.TreeDBDocumentFormat); got != "bson" {
+		t.Fatalf("TreeDBDocumentFormat=%q want bson", got)
+	}
+}
+
 func TestTreeDBProfileSmokeFastAndWALOnFast(t *testing.T) {
 	if testing.Short() {
 		t.Skip("profile smoke benchmark skipped in short mode")
@@ -324,6 +417,57 @@ func TestTreeDBProfileSmokeFastAndWALOnFast(t *testing.T) {
 	t.Logf("fast load_insert_many ops/sec=%.1f wal_on_fast ops/sec=%.1f max ratio=%.2fx", fast, walOnFast, ratio)
 	if ratio > 4.0 {
 		t.Fatalf("fast and wal_on_fast write smoke diverged by %.2fx; fast=%.1f wal_on_fast=%.1f", ratio, fast, walOnFast)
+	}
+}
+
+func TestTreeDBClientModeSmoke(t *testing.T) {
+	if testing.Short() {
+		t.Skip("client mode smoke benchmark skipped in short mode")
+	}
+	for _, mode := range []string{clientModeDriver, clientModeDriverCommand, clientModeDriverCommandRaw, clientModeDriverUnack, clientModeRawWire, clientModeRawWireTCP} {
+		t.Run(mode, func(t *testing.T) {
+			opsPerSecond := runTreeDBClientModeSmoke(t, mode)
+			t.Logf("%s load_insert_many ops/sec=%.1f", mode, opsPerSecond)
+		})
+	}
+}
+
+func TestTreeDBRawWireLoadPhaseHonorsCanceledContext(t *testing.T) {
+	for _, mode := range []string{clientModeRawWire, clientModeRawWireTCP} {
+		t.Run(mode, func(t *testing.T) {
+			cfg, err := parseConfig([]string{
+				"-target", "treedb",
+				"-client-mode", mode,
+				"-documents", "10",
+				"-batch-size", "5",
+				"-reads", "0",
+				"-range-reads", "0",
+				"-updates", "0",
+				"-secondary-indexes", "0",
+				"-treedb-maintenance", treeDBMaintenanceNone,
+				"-timeout", "0",
+			})
+			if err != nil {
+				t.Fatalf("parse raw-wire config: %v", err)
+			}
+			target, err := openTarget(context.Background(), cfg)
+			if err != nil {
+				t.Fatalf("open target: %v", err)
+			}
+			defer func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := closeBenchTarget(cleanupCtx, target); err != nil {
+					t.Errorf("cleanup: %v", err)
+				}
+			}()
+			canceledCtx, cancel := context.WithCancel(context.Background())
+			cancel()
+			_, err = runLoadPhase(canceledCtx, cfg, target, nil, nil, nil)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("runLoadPhase err=%v want context.Canceled", err)
+			}
+		})
 	}
 }
 
@@ -369,6 +513,59 @@ func runTreeDBProfileSmoke(t *testing.T, profile treedb.Profile) float64 {
 		}
 	}
 	t.Fatalf("%s load_insert_many phase missing: %+v", profile, result.Phases)
+	return 0
+}
+
+func runTreeDBClientModeSmoke(t *testing.T, clientMode string) float64 {
+	t.Helper()
+	cfg, err := parseConfig([]string{
+		"-target", "treedb",
+		"-client-mode", clientMode,
+		"-documents", "300",
+		"-batch-size", "100",
+		"-reads", "0",
+		"-range-reads", "0",
+		"-updates", "0",
+		"-secondary-indexes", "2",
+		"-treedb-document-format", string(collections.DocumentFormatBSON),
+		"-treedb-maintenance", treeDBMaintenanceNone,
+		"-prebuild-documents",
+		"-timeout", "0",
+		"-format", "json",
+	})
+	if err != nil {
+		t.Fatalf("parse smoke config: %v", err)
+	}
+	target, err := openTarget(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("open target for client mode %s: %v", clientMode, err)
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := closeBenchTarget(cleanupCtx, target); err != nil {
+			t.Errorf("cleanup client mode %s: %v", clientMode, err)
+		}
+	}()
+	result, err := runBenchmark(context.Background(), cfg, target)
+	if err != nil {
+		t.Fatalf("run benchmark for client mode %s: %v", clientMode, err)
+	}
+	if result.ClientMode != clientMode {
+		t.Fatalf("result client mode=%q want %q", result.ClientMode, clientMode)
+	}
+	for _, phase := range result.Phases {
+		if phase.Name == "load_insert_many" {
+			if phase.OpsPerSecond <= 0 {
+				t.Fatalf("%s load_insert_many ops/sec=%f", clientMode, phase.OpsPerSecond)
+			}
+			if phase.SampledOpsPerSecond <= 0 || phase.SampledNsPerOp <= 0 {
+				t.Fatalf("%s sampled load metrics missing: %+v", clientMode, phase)
+			}
+			return phase.OpsPerSecond
+		}
+	}
+	t.Fatalf("%s load_insert_many phase missing: %+v", clientMode, result.Phases)
 	return 0
 }
 

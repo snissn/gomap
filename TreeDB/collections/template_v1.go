@@ -95,6 +95,8 @@ func normalizeDocumentFormat(format DocumentFormat) (DocumentFormat, error) {
 	switch DocumentFormat(strings.ToLower(strings.TrimSpace(string(format)))) {
 	case DocumentFormatDefault, DocumentFormatJSON:
 		return DocumentFormatJSON, nil
+	case DocumentFormatBSON:
+		return DocumentFormatBSON, nil
 	case DocumentFormatTemplateV1:
 		return DocumentFormatTemplateV1, nil
 	default:
@@ -114,6 +116,11 @@ func prepareInsertDocuments(documents [][]byte, opts collectionOptions) ([][]byt
 	switch normalizedDocumentFormat(opts.documentFormat) {
 	case DocumentFormatJSON:
 		return documents, nil, nil, nil
+	case DocumentFormatBSON:
+		if opts.trustedBSONDocuments {
+			return documents, nil, nil, nil
+		}
+		return prepareBSONInsertDocuments(documents)
 	case DocumentFormatTemplateV1:
 		return prepareTemplateV1InsertDocuments(documents, opts.templateResolver)
 	default:
