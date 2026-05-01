@@ -241,6 +241,7 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 type mongoUpdateItem struct {
 	index     int
 	key       []byte
+	keyString string
 	updateDoc wire.Document
 }
 
@@ -281,7 +282,7 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	if err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 	}
-	return mongoUpdateItem{index: index, key: key, updateDoc: updateDoc}, nil
+	return mongoUpdateItem{index: index, key: key, keyString: string(key), updateDoc: updateDoc}, nil
 }
 
 func mongoUpdateParseCommandError(err error) (wire.Document, error) {
@@ -306,7 +307,7 @@ func runMongoUpdatesSequential(col *collections.Collection, updates []mongoUpdat
 	for _, update := range updates {
 		matchedOne, modifiedOne, err := runMongoUpdateOne(col, update)
 		if err != nil {
-			return 0, 0, err
+			return 0, 0, mongoUpdateErrorWithIndex(update.index, err)
 		}
 		if matchedOne {
 			matched++
@@ -316,6 +317,17 @@ func runMongoUpdatesSequential(col *collections.Collection, updates []mongoUpdat
 		}
 	}
 	return matched, modified, nil
+}
+
+func mongoUpdateErrorWithIndex(index int, err error) error {
+	if err == nil {
+		return nil
+	}
+	prefix := fmt.Sprintf("updates[%d]:", index)
+	if strings.HasPrefix(err.Error(), prefix) {
+		return err
+	}
+	return fmt.Errorf("updates[%d]: %w", index, err)
 }
 
 func runMongoUpdateOne(col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
@@ -547,6 +559,7 @@ func (c *mongoUpdateCoalescer) closeRequests() bool {
 	}
 	c.stopped = true
 	close(c.stoppedCh)
+	close(c.requests)
 	c.mu.Unlock()
 	return true
 }
@@ -597,14 +610,9 @@ func (c *mongoUpdateCoalescer) markStopped() {
 }
 
 func (c *mongoUpdateCoalescer) drainRequestsDirect() {
-	for {
-		select {
-		case req := <-c.requests:
-			matched, modified, err := runMongoUpdateOne(req.col, req.item)
-			req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
-		default:
-			return
-		}
+	for req := range c.requests {
+		matched, modified, err := runMongoUpdateOne(req.col, req.item)
+		req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
 	}
 }
 
@@ -636,7 +644,10 @@ func (c *mongoUpdateCoalescer) run() {
 	}
 	for {
 		select {
-		case first := <-c.requests:
+		case first, ok := <-c.requests:
+			if !ok {
+				return
+			}
 			c.runBatchStartingWith(first)
 			resetIdle()
 		case <-idle:
@@ -658,7 +669,10 @@ func (c *mongoUpdateCoalescer) runBatchStartingWith(first mongoUpdateCoalescerRe
 	collect:
 		for len(batch) < c.maxBatch {
 			select {
-			case req := <-c.requests:
+			case req, ok := <-c.requests:
+				if !ok {
+					break collect
+				}
 				batch = append(batch, req)
 			case <-timer.C:
 				break collect
@@ -675,7 +689,10 @@ func (c *mongoUpdateCoalescer) runBatchStartingWith(first mongoUpdateCoalescerRe
 	}
 	for len(batch) < c.maxBatch {
 		select {
-		case req := <-c.requests:
+		case req, ok := <-c.requests:
+			if !ok {
+				goto drained
+			}
 			batch = append(batch, req)
 		case <-c.stoppedCh:
 			goto drained
@@ -716,7 +733,10 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 func mongoUpdateCoalescerHasDuplicateKeys(batch []mongoUpdateCoalescerRequest) bool {
 	seen := make(map[string]struct{}, len(batch))
 	for _, req := range batch {
-		key := string(req.item.key)
+		key := req.item.keyString
+		if key == "" {
+			key = string(req.item.key)
+		}
 		if _, ok := seen[key]; ok {
 			return true
 		}
