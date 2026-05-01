@@ -1484,7 +1484,7 @@ func shouldFlushBufferedIndexedWritesAfterAdding(domain *collectionWriteDomain, 
 	if domain == nil || addedCount <= 0 {
 		return false
 	}
-	nextCount := domain.count + addedCount
+	nextCount := saturatingAddNonNegativeInt(domain.count, addedCount)
 	if opts.BufferedIndexedWriteMaxDocuments > 0 && nextCount >= opts.BufferedIndexedWriteMaxDocuments {
 		return true
 	}
@@ -1493,6 +1493,16 @@ func shouldFlushBufferedIndexedWritesAfterAdding(domain *collectionWriteDomain, 
 		return true
 	}
 	return false
+}
+
+func saturatingAddNonNegativeInt(total, n int) int {
+	if n <= 0 {
+		return total
+	}
+	if total > maxCollectionInt-n {
+		return maxCollectionInt
+	}
+	return total + n
 }
 
 func bufferedIndexedAutoFlushEnabled(opts CollectionOptions) bool {
@@ -4471,10 +4481,10 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	if domain.rootRuns == nil {
 		domain.rootRuns = make(map[string][]memtable.Table, len(plan.rootNames))
 	}
-	autoFlushEnabled := shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, stagedBytes)
+	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, stagedBytes)
 	var checkpoint bufferedIndexedCheckpoint
 	collectionMetaCheckpoint := c.meta
-	if autoFlushEnabled {
+	if shouldAutoFlushAfterAdding {
 		checkpoint = checkpointBufferedIndexedDomain(domain)
 	}
 	for i, rootName := range plan.rootNames {
@@ -4504,7 +4514,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	c.meta = plan.meta
 	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
 		if err := c.flushBufferedIndexedLocked(domain); err != nil {
-			if autoFlushEnabled {
+			if shouldAutoFlushAfterAdding {
 				rollbackBufferedIndexedDomain(domain, checkpoint)
 				c.meta = collectionMetaCheckpoint
 			}
