@@ -2658,7 +2658,9 @@ func updateInsertBatchBaseRootIDs(rootNames []string, baseRootIDs map[string]uin
 func (c *Collection) validateInsertBatchPlanAfterPlanningLocked(plannedWithMutationLocked bool, validation insertBatchValidationContext) (*backenddb.Snapshot, *collectionCatalog, error) {
 	if plannedWithMutationLocked {
 		if err := c.validateInsertBatchPlanWithSnapshotLocked(validation); err != nil {
-			_ = validation.snap.Close()
+			if validation.snap != nil {
+				_ = validation.snap.Close()
+			}
 			return nil, nil, err
 		}
 		return validation.snap, validation.catalog, nil
