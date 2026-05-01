@@ -557,6 +557,11 @@ func openBenchmarkBackend(b *testing.B, dir string) (*backenddb.DB, func() error
 }
 
 func openBenchmarkCollection(b *testing.B, name string, indexes ...collections.IndexDefinition) (*backenddb.DB, *collections.Collection) {
+	backend, _, collection := openBenchmarkCollectionWithManager(b, name, indexes...)
+	return backend, collection
+}
+
+func openBenchmarkCollectionWithManager(b *testing.B, name string, indexes ...collections.IndexDefinition) (*backenddb.DB, *collections.CollectionManager, *collections.Collection) {
 	b.Helper()
 
 	backend, cleanup := openBenchmarkBackend(b, b.TempDir())
@@ -572,6 +577,7 @@ func openBenchmarkCollection(b *testing.B, name string, indexes ...collections.I
 	bufferedIndexedWrites := benchmarkBoolEnv(b, "TREEDB_COLLECTION_BUFFERED_INDEXED_WRITES", true) && len(indexes) > 0
 	bufferedIndexedWriteMaxDocuments := benchmarkIntEnv(b, "TREEDB_COLLECTION_BUFFERED_INDEXED_WRITE_MAX_DOCUMENTS", 0)
 	bufferedIndexedWriteMaxBytes := benchmarkInt64Env(b, "TREEDB_COLLECTION_BUFFERED_INDEXED_WRITE_MAX_BYTES", 0)
+	indexes = append([]collections.IndexDefinition(nil), indexes...)
 	for i := range indexes {
 		indexes[i].StoragePolicy = benchmarkRootStoragePolicy(indexOuter)
 	}
@@ -594,7 +600,7 @@ func openBenchmarkCollection(b *testing.B, name string, indexes ...collections.I
 	if err != nil {
 		b.Fatalf("open collection: %v", err)
 	}
-	return backend, collection
+	return backend, manager, collection
 }
 
 func benchmarkSyncBoundary(b *testing.B, backend *backenddb.DB) {

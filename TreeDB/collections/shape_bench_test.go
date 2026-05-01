@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
-	backenddb "github.com/snissn/gomap/TreeDB/db"
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 const (
@@ -21,48 +19,6 @@ const (
 type collectionMixedScaleCase struct {
 	readers int
 	writers int
-}
-
-func openBenchmarkCollectionWithManager(b *testing.B, name string, indexes ...collections.IndexDefinition) (*backenddb.DB, *collections.CollectionManager, *collections.Collection) {
-	b.Helper()
-
-	backend, cleanup := openBenchmarkBackend(b, b.TempDir())
-	b.Cleanup(func() {
-		if err := cleanup(); err != nil {
-			b.Errorf("close backend: %v", err)
-		}
-	})
-
-	manager := collections.NewCollectionManager(backend)
-	dataOuter, indexOuter := benchmarkCollectionStoragePolicy(b)
-	documentFormat := benchmarkCollectionDocumentFormat(b)
-	bufferedIndexedWrites := benchmarkBoolEnv(b, "TREEDB_COLLECTION_BUFFERED_INDEXED_WRITES", true) && len(indexes) > 0
-	bufferedIndexedWriteMaxDocuments := benchmarkIntEnv(b, "TREEDB_COLLECTION_BUFFERED_INDEXED_WRITE_MAX_DOCUMENTS", 0)
-	bufferedIndexedWriteMaxBytes := benchmarkInt64Env(b, "TREEDB_COLLECTION_BUFFERED_INDEXED_WRITE_MAX_BYTES", 0)
-	indexes = append([]collections.IndexDefinition(nil), indexes...)
-	for i := range indexes {
-		indexes[i].StoragePolicy = benchmarkRootStoragePolicy(indexOuter)
-	}
-	if _, err := manager.CreateCollection(&collections.CollectionMeta{
-		Name: name,
-		Options: collections.CollectionOptions{
-			DocumentFormat:                   documentFormat,
-			DataRootStoragePolicy:            benchmarkRootStoragePolicy(dataOuter),
-			IndexStateStoragePolicy:          benchmarkRootStoragePolicy(dataOuter),
-			DisableIndexedWriteMemtables:     !bufferedIndexedWrites && len(indexes) > 0,
-			BufferedIndexedWrites:            bufferedIndexedWrites,
-			BufferedIndexedWriteMaxDocuments: bufferedIndexedWriteMaxDocuments,
-			BufferedIndexedWriteMaxBytes:     bufferedIndexedWriteMaxBytes,
-		},
-		Indexes: indexes,
-	}); err != nil {
-		b.Fatalf("create collection: %v", err)
-	}
-	collection, err := manager.OpenCollection(name)
-	if err != nil {
-		b.Fatalf("open collection: %v", err)
-	}
-	return backend, manager, collection
 }
 
 func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collections.CollectionInsertStats) {
@@ -675,16 +631,7 @@ func benchmarkCollectionMixedReadWriteScaling(b *testing.B, readers, writers int
 				}
 				docs[i] = doc
 			case collections.DocumentFormatBSON:
-				raw, err := bson.Marshal(bson.D{
-					{Key: "name", Value: fmt.Sprintf("user-%09d", docNum)},
-					{Key: "email", Value: fmt.Sprintf("user-%09d@example.com", docNum)},
-					{Key: "city", Value: fmt.Sprintf("city-%02d", docNum%collectionBenchCities)},
-					{Key: "pad", Value: collectionBenchIndexedPad},
-				})
-				if err != nil {
-					return nil, nil, err
-				}
-				docs[i] = raw
+				docs[i] = benchmarkBSONDocument(b, docNum, true)
 			default:
 				docs[i] = benchmarkIndexedDocument(docNum)
 			}
@@ -721,18 +668,9 @@ func benchmarkCollectionMixedReadWriteScaling(b *testing.B, readers, writers int
 		}()
 	}
 
-	readerStride := max(1, runtime.GOMAXPROCS(0))
-	b.ReportAllocs()
-	b.ReportMetric(float64(readers), "readers")
-	b.ReportMetric(float64(writers), "writers")
-	b.ReportMetric(float64(seedDocs), "seed_docs")
-	b.ReportMetric(float64(writeBatchSize), "writer_docs/batch")
-	b.ResetTimer()
-	start := time.Now()
-	close(startCh)
-
 	readBase := b.N / readers
 	readRemainder := b.N % readers
+	readerStride := max(1, runtime.GOMAXPROCS(0))
 	for readerID := 0; readerID < readers; readerID++ {
 		readerID := readerID
 		readOps := readBase
@@ -743,6 +681,7 @@ func benchmarkCollectionMixedReadWriteScaling(b *testing.B, readers, writers int
 		readerWG.Add(1)
 		go func() {
 			defer readerWG.Done()
+			<-startCh
 			if secondaryRead {
 				i := (readerID * max(1, seedDocs/readers)) % seedDocs
 				for op := 0; op < readOps; op++ {
@@ -772,6 +711,15 @@ func benchmarkCollectionMixedReadWriteScaling(b *testing.B, readers, writers int
 		}()
 	}
 
+	b.ReportAllocs()
+	b.ReportMetric(float64(readers), "readers")
+	b.ReportMetric(float64(writers), "writers")
+	b.ReportMetric(float64(seedDocs), "seed_docs")
+	b.ReportMetric(float64(writeBatchSize), "writer_docs/batch")
+	b.ResetTimer()
+	start := time.Now()
+	close(startCh)
+
 	readerWG.Wait()
 	readerElapsed := time.Since(start)
 	b.StopTimer()
@@ -779,11 +727,6 @@ func benchmarkCollectionMixedReadWriteScaling(b *testing.B, readers, writers int
 	writerWG.Wait()
 	writerElapsed := time.Since(start)
 	flushStart := time.Now()
-	for _, writerCollection := range writerCollections {
-		if err := writerCollection.Flush(); err != nil {
-			b.Fatalf("flush mixed scaling writer: %v", err)
-		}
-	}
 	if err := manager.FlushAll(); err != nil {
 		b.Fatalf("flush mixed scaling manager: %v", err)
 	}
