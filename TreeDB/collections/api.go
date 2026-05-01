@@ -3165,6 +3165,10 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondary
 		if !changedOne {
 			continue
 		}
+		if len(document) == 0 {
+			_ = snap.Close()
+			return nil, fmt.Errorf("collections: update batch index %d: changed replacement document cannot be empty", i)
+		}
 		if err := validateBSONReplacementPreservesID(entry.Value, document, plannerOptions); err != nil {
 			_ = snap.Close()
 			return nil, fmt.Errorf("collections: update batch index %d: %w", i, err)
@@ -3188,10 +3192,16 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondary
 		return results, nil
 	}
 
+	for i, document := range changedDocuments {
+		if _, _, _, err := prepareInsertDocuments([][]byte{document}, plannerOptions); err != nil {
+			_ = snap.Close()
+			return nil, fmt.Errorf("collections: update batch index %d: %w", changed[i].itemIndex, err)
+		}
+	}
 	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments(changedDocuments, plannerOptions)
 	if err != nil {
 		_ = snap.Close()
-		return nil, err
+		return nil, fmt.Errorf("collections: update batch replacement prepare: %w", err)
 	}
 	if len(preparedDocuments) != len(changed) {
 		_ = snap.Close()
