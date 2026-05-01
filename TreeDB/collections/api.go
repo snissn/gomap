@@ -1893,6 +1893,46 @@ func getBufferedRunEntry(runs []memtable.Table, key []byte) ([]byte, page.ValueP
 	return nil, page.ValuePtr{}, 0, false
 }
 
+func cloneCollectionRunTables(runs []memtable.Table) ([]memtable.Table, error) {
+	if len(runs) == 0 {
+		return nil, nil
+	}
+	out := make([]memtable.Table, 0, len(runs))
+	for _, run := range runs {
+		if run == nil {
+			out = append(out, nil)
+			continue
+		}
+		cloned, err := cloneCollectionRunTable(run)
+		if err != nil {
+			resetCollectionTables(out)
+			return nil, err
+		}
+		out = append(out, cloned)
+	}
+	return out, nil
+}
+
+func cloneCollectionRunTable(run memtable.Table) (memtable.Table, error) {
+	if run == nil {
+		return nil, nil
+	}
+	table := newCollectionRunTable(max(0, run.Len()))
+	it := run.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	for it.Valid() {
+		value, ptr, flags := it.UnsafeEntry()
+		table.SetEntrySteal(bytes.Clone(it.UnsafeKey()), bytes.Clone(value), ptr, flags)
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		resetCollectionRunTable(table)
+		return nil, err
+	}
+	table.Freeze()
+	return table, nil
+}
+
 type bufferedRootRunHeapItem struct {
 	idx      int
 	priority int
@@ -4007,8 +4047,14 @@ type updateBatchPlan struct {
 
 type updateBatchBufferedRead struct {
 	enabled         bool
-	primaryRuns     []memtable.Table
+	primaryEntries  map[string]updateBatchBufferedEntry
 	writeGeneration uint64
+}
+
+type updateBatchBufferedEntry struct {
+	value []byte
+	flags byte
+	found bool
 }
 
 type updateBatchCurrentDocument struct {
@@ -4214,11 +4260,11 @@ func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta 
 
 func readUpdateBatchCurrentDocument(snap *backenddb.Snapshot, primaryRoot uint64, documentID []byte, buffered updateBatchBufferedRead) (updateBatchCurrentDocument, error) {
 	if buffered.enabled {
-		if value, _, flags, found := getBufferedRunEntry(buffered.primaryRuns, documentID); found {
-			if flags&node.FlagTombstone != 0 {
+		if entry := buffered.primaryEntries[string(documentID)]; entry.found {
+			if entry.flags&node.FlagTombstone != 0 {
 				return updateBatchCurrentDocument{buffered: true}, nil
 			}
-			return updateBatchCurrentDocument{value: value, buffered: true, found: true}, nil
+			return updateBatchCurrentDocument{value: entry.value, buffered: true, found: true}, nil
 		}
 	}
 	if primaryRoot == 0 {
@@ -4268,20 +4314,42 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
 	var bufferedRead updateBatchBufferedRead
+	var bufferedTemplateRuns []memtable.Table
+	defer resetCollectionTables(bufferedTemplateRuns)
 	bufferedReadBlocked := false
 	if domain := c.writeDomain; useBufferedRead && domain != nil && mode != updateBatchModeAny {
 		domain.mu.RLock()
 		if updateBatchCanReadBufferedDomainLocked(domain, meta, baseSystemRoot) {
+			primaryRuns := domain.rootRuns[collectionPrimaryRootName(meta.Name)]
+			primaryEntries := make(map[string]updateBatchBufferedEntry, len(items))
+			for _, item := range items {
+				if value, _, flags, found := getBufferedRunEntry(primaryRuns, item.DocumentID); found {
+					primaryEntries[string(item.DocumentID)] = updateBatchBufferedEntry{
+						value: bytes.Clone(value),
+						flags: flags,
+						found: true,
+					}
+				}
+			}
+			if normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatTemplateV1 {
+				bufferedTemplateRuns, err = cloneCollectionRunTables(domain.rootRuns[collectionTemplateRootName(meta.Name)])
+			}
 			bufferedRead = updateBatchBufferedRead{
 				enabled:         true,
-				primaryRuns:     append([]memtable.Table(nil), domain.rootRuns[collectionPrimaryRootName(meta.Name)]...),
+				primaryEntries:  primaryEntries,
 				writeGeneration: domain.writeGeneration,
 			}
-			plannerOptions = collectionOptionsWithBufferedTemplateV1Resolver(plannerOptions, domain, meta.Name)
 		} else if domain.count > 0 && len(domain.rootRuns) > 0 {
 			bufferedReadBlocked = true
 		}
 		domain.mu.RUnlock()
+		if err != nil {
+			_ = snap.Close()
+			return nil, err
+		}
+		if len(bufferedTemplateRuns) > 0 {
+			plannerOptions = collectionOptionsWithBufferedTemplateV1RunsResolver(plannerOptions, bufferedTemplateRuns)
+		}
 	}
 
 	primaryRoot := catalog.rootID(collectionPrimaryRootName(meta.Name))

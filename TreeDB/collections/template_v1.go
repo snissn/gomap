@@ -151,6 +151,13 @@ func collectionOptionsWithBufferedTemplateV1Resolver(opts collectionOptions, dom
 	if len(runs) == 0 {
 		return opts
 	}
+	return collectionOptionsWithBufferedTemplateV1RunsResolver(opts, runs)
+}
+
+func collectionOptionsWithBufferedTemplateV1RunsResolver(opts collectionOptions, runs []memtable.Table) collectionOptions {
+	if normalizedDocumentFormat(opts.documentFormat) != DocumentFormatTemplateV1 || len(runs) == 0 {
+		return opts
+	}
 	opts.templateResolver = &templateV1BufferedRunsResolver{
 		runs:     runs,
 		fallback: opts.templateResolver,

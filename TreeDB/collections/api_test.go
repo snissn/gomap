@@ -19,6 +19,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/node"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -2304,6 +2305,24 @@ func TestBufferedPrimaryIDArenaCapAvoidsOverflow(t *testing.T) {
 	}
 	if got := bufferedPrimaryIDArenaCap(maxCollectionInt/16 + 1); got != 0 {
 		t.Fatalf("overflow arena cap=%d want 0", got)
+	}
+}
+
+func TestCloneCollectionRunTablesSurvivesSourceReset(t *testing.T) {
+	table := newCollectionRunTable(1)
+	setCollectionRunValue(table, []byte("k"), []byte("value"))
+	table.Freeze()
+
+	cloned, err := cloneCollectionRunTables([]memtable.Table{table})
+	if err != nil {
+		t.Fatalf("clone tables: %v", err)
+	}
+	defer resetCollectionTables(cloned)
+	resetCollectionRunTable(table)
+
+	value, _, flags, found := cloned[0].GetEntry([]byte("k"))
+	if !found || flags&node.FlagTombstone != 0 || !bytes.Equal(value, []byte("value")) {
+		t.Fatalf("cloned entry found=%v flags=%d value=%q want live value", found, flags, value)
 	}
 }
 
