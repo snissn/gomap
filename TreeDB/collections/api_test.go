@@ -47,7 +47,7 @@ func TestCollectionGetNilDBReturnsError(t *testing.T) {
 	}
 }
 
-func TestCollectionManagerOpenCollectionNilDBReturnsConfigurationError(t *testing.T) {
+func TestCollectionManagerOpenCollectionNilDBReturnsErrCollectionDBNil(t *testing.T) {
 	mgr := NewCollectionManager(nil)
 	_, err := mgr.OpenCollection("users")
 	if !errors.Is(err, errCollectionDBNil) {
