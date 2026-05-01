@@ -4376,6 +4376,66 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReadsBufferedAfterR
 	}
 }
 
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesFlushesUnreadableBufferedInsert(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create users collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open users collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"a@example.com","city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert buffered document: %v", err)
+	}
+	beforeSchemaChange := d.State()
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "audit"}); err != nil {
+		t.Fatalf("create audit collection: %v", err)
+	}
+	afterSchemaChange := d.State()
+	if afterSchemaChange.SystemRootPageID == beforeSchemaChange.SystemRootPageID {
+		t.Fatalf("schema change did not advance system root: before=%d after=%d", beforeSchemaChange.SystemRootPageID, afterSchemaChange.SystemRootPageID)
+	}
+	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sea")},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	}
+	if !batched {
+		t.Fatalf("batched=%v results=%+v want batched", batched, results)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("results=%+v want one modified row from flushed buffered insert", results)
+	}
+	afterUpdate := d.State()
+	if afterUpdate.CommitSeq == afterSchemaChange.CommitSeq {
+		t.Fatalf("unreadable buffered insert was not flushed before update: commit seq stayed %d", afterUpdate.CommitSeq)
+	}
+	seaIDs, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find sea city: %v", err)
+	}
+	if len(seaIDs) != 1 || !bytes.Equal(seaIDs[0], []byte("u1")) {
+		t.Fatalf("sea ids=%q want [u1]", seaIDs)
+	}
+}
+
 func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReadsBufferedInsert(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

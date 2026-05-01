@@ -3969,6 +3969,7 @@ type updateBatchPlan struct {
 	deltaTables                 []memtable.Table
 	canBufferIndexedUpdateBatch bool
 	bufferedBase                bool
+	bufferedReadBlocked         bool
 }
 
 type updateBatchBufferedRead struct {
@@ -4008,6 +4009,14 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 					return nil
 				}
 				if len(plan.deltaTables) == 0 {
+					if plan.bufferedReadBlocked && useBufferedRead {
+						plan.close()
+						if err := c.flushBufferedWrites(); err != nil {
+							return err
+						}
+						useBufferedRead = false
+						continue
+					}
 					if err := c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs); err != nil {
 						plan.close()
 						return err
@@ -4188,6 +4197,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
 	var bufferedRead updateBatchBufferedRead
+	bufferedReadBlocked := false
 	if domain := c.writeDomain; useBufferedRead && domain != nil && mode != updateBatchModeAny {
 		domain.mu.RLock()
 		if updateBatchCanReadBufferedDomainLocked(domain, meta, baseSystemRoot) {
@@ -4196,6 +4206,8 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 				primaryRuns: append([]memtable.Table(nil), domain.rootRuns[collectionPrimaryRootName(meta.Name)]...),
 			}
 			plannerOptions = collectionOptionsWithBufferedTemplateV1Resolver(plannerOptions, domain, meta.Name)
+		} else if domain.count > 0 && len(domain.rootRuns) > 0 {
+			bufferedReadBlocked = true
 		}
 		domain.mu.RUnlock()
 	}
@@ -4204,15 +4216,16 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	if primaryRoot == 0 && !bufferedRead.enabled {
 		primaryRootName := collectionPrimaryRootName(meta.Name)
 		return &updateBatchPlan{
-			results:        results,
-			meta:           meta,
-			catalog:        catalog,
-			snap:           snap,
-			baseUserRoot:   baseUserRoot,
-			baseSystemRoot: baseSystemRoot,
-			baseCommitSeq:  baseCommitSeq,
-			rootNames:      []string{primaryRootName},
-			baseRootIDs:    map[string]uint64{primaryRootName: primaryRoot},
+			results:             results,
+			meta:                meta,
+			catalog:             catalog,
+			snap:                snap,
+			baseUserRoot:        baseUserRoot,
+			baseSystemRoot:      baseSystemRoot,
+			baseCommitSeq:       baseCommitSeq,
+			rootNames:           []string{primaryRootName},
+			baseRootIDs:         map[string]uint64{primaryRootName: primaryRoot},
+			bufferedReadBlocked: bufferedReadBlocked,
 		}, nil
 	}
 	runtimes, err := (insertBatchPlanner{
@@ -4273,15 +4286,16 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	if len(changed) == 0 {
 		primaryRootName := collectionPrimaryRootName(meta.Name)
 		return &updateBatchPlan{
-			results:        results,
-			meta:           meta,
-			catalog:        catalog,
-			snap:           snap,
-			baseUserRoot:   baseUserRoot,
-			baseSystemRoot: baseSystemRoot,
-			baseCommitSeq:  baseCommitSeq,
-			rootNames:      []string{primaryRootName},
-			baseRootIDs:    map[string]uint64{primaryRootName: primaryRoot},
+			results:             results,
+			meta:                meta,
+			catalog:             catalog,
+			snap:                snap,
+			baseUserRoot:        baseUserRoot,
+			baseSystemRoot:      baseSystemRoot,
+			baseCommitSeq:       baseCommitSeq,
+			rootNames:           []string{primaryRootName},
+			baseRootIDs:         map[string]uint64{primaryRootName: primaryRoot},
+			bufferedReadBlocked: bufferedReadBlocked,
 		}, nil
 	}
 
@@ -4469,6 +4483,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		baseRootIDs:                 baseRootIDs,
 		canBufferIndexedUpdateBatch: canBufferIndexedUpdateBatch,
 		bufferedBase:                bufferedRead.enabled,
+		bufferedReadBlocked:         bufferedReadBlocked,
 		policies:                    policies,
 		deltaTables:                 deltaTables,
 	}, nil
