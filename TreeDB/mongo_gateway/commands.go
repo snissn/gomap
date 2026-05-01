@@ -574,16 +574,12 @@ func (c *mongoUpdateCoalescer) retireIdle() bool {
 	}
 	stopped := false
 	if c.server != nil {
-		shouldStop := false
 		c.server.updateMu.Lock()
 		if c.server.updateCoalescers != nil && c.server.updateCoalescers[c.name] == c {
+			stopped = c.closeRequests()
 			delete(c.server.updateCoalescers, c.name)
-			shouldStop = true
 		}
 		c.server.updateMu.Unlock()
-		if shouldStop {
-			stopped = c.closeRequests()
-		}
 	} else {
 		stopped = c.closeRequests()
 	}
