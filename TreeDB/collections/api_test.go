@@ -1511,6 +1511,18 @@ func TestCollectionInsertPlanningKeepsLockForIndexedMemtableBypass(t *testing.T)
 			wantUnlock:              false,
 		},
 		{
+			name:           "bson-no-indexed-memtables",
+			documentFormat: DocumentFormatBSON,
+			wantUnlock:     true,
+		},
+		{
+			name:                    "bson-direct-indexed-memtable-bypass",
+			documentFormat:          DocumentFormatBSON,
+			indexedMemtablesEnabled: true,
+			bufferIndexedInserts:    false,
+			wantUnlock:              false,
+		},
+		{
 			name:           "template-v1",
 			documentFormat: DocumentFormatTemplateV1,
 			wantUnlock:     false,

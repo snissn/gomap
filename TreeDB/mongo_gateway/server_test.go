@@ -1205,6 +1205,65 @@ func TestServerUpdateCoalescerEvictsWhenIdle(t *testing.T) {
 	}
 }
 
+func TestMongoUpdateCoalescerRetireIdleStopsBeforeUncache(t *testing.T) {
+	server := NewServer()
+	coalescer := server.mongoUpdateCoalescer("app.users")
+	if coalescer == nil {
+		t.Fatal("expected coalescer")
+	}
+	coalescer.enqueueMu.Lock()
+	retired := make(chan bool, 1)
+	go func() {
+		retired <- coalescer.retireIdle()
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		if !server.updateMu.TryLock() {
+			break
+		}
+		server.updateMu.Unlock()
+		if time.Now().After(deadline) {
+			coalescer.enqueueMu.Unlock()
+			t.Fatal("retireIdle did not hold server update lock while stopping")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	replacement := make(chan *mongoUpdateCoalescer, 1)
+	go func() {
+		replacement <- server.mongoUpdateCoalescer("app.users")
+	}()
+	select {
+	case got := <-replacement:
+		coalescer.enqueueMu.Unlock()
+		if got != coalescer {
+			t.Fatal("created replacement coalescer before old coalescer stopped")
+		}
+		t.Fatal("returned old coalescer while idle retirement was stopping it")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	coalescer.enqueueMu.Unlock()
+	select {
+	case ok := <-retired:
+		if !ok {
+			t.Fatal("retireIdle reported false")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("retireIdle did not finish")
+	}
+	select {
+	case got := <-replacement:
+		if got == nil || got == coalescer {
+			t.Fatalf("replacement=%p old=%p want new coalescer", got, coalescer)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("replacement coalescer was not created after idle retirement")
+	}
+	_ = server.Close()
+}
+
 func TestServerUpdateWithUniqueIndexKeepsAcquireBeforeReleaseOrdered(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
