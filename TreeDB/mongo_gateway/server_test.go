@@ -1998,6 +1998,31 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 		t.Fatalf("indexed age range matched name=%q ok=%v want grace", got, ok)
 	}
 
+	doubleInt64EqualityFind := serveCommand(t, server, 234011, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "age", Value: 37.0}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, doubleInt64EqualityFind)
+	firstBatch = cursorFirstBatch(t, doubleInt64EqualityFind)
+	if len(firstBatch) != 1 {
+		t.Fatalf("indexed int64 equality via double firstBatch len=%d want 1", len(firstBatch))
+	}
+	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "ada" {
+		t.Fatalf("indexed int64 equality via double matched name=%q ok=%v want ada", got, ok)
+	}
+
+	fractionalDoubleInt64EqualityFind := serveCommand(t, server, 234012, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "age", Value: 37.5}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, fractionalDoubleInt64EqualityFind)
+	firstBatch = cursorFirstBatch(t, fractionalDoubleInt64EqualityFind)
+	if len(firstBatch) != 0 {
+		t.Fatalf("fractional double int64 equality firstBatch len=%d want 0", len(firstBatch))
+	}
+
 	stringRangeFind := serveCommand(t, server, 23402, bson.D{
 		{Key: "find", Value: "users"},
 		{Key: "filter", Value: bson.D{{Key: "city", Value: bson.D{{Key: "$gte", Value: "s"}, {Key: "$lt", Value: "t"}}}}},
@@ -3163,6 +3188,8 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 		{Key: "finite", Value: 1.5},
 		{Key: "decimal", Value: decimal},
 		{Key: "large_int", Value: int64(9007199254740993)},
+		{Key: "double_int", Value: 37.0},
+		{Key: "double_fraction", Value: 37.5},
 	}))
 	nanValue := raw.Lookup("nan")
 	posInf := raw.Lookup("pos_inf")
@@ -3170,6 +3197,8 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 	finite := raw.Lookup("finite")
 	decimalValue := raw.Lookup("decimal")
 	largeInt := raw.Lookup("large_int")
+	doubleInt := raw.Lookup("double_int")
+	doubleFraction := raw.Lookup("double_fraction")
 
 	if rawValuesEqual(nanValue, finite) {
 		t.Fatal("NaN compared equal to finite number")
@@ -3189,6 +3218,16 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 	scalar, ok := indexScalarForBSONValue(largeInt, collections.IndexValueInt64)
 	if !ok || scalar != int64(9007199254740993) {
 		t.Fatalf("large int scalar=%v ok=%v want int64", scalar, ok)
+	}
+	scalar, ok = indexScalarForBSONValue(doubleInt, collections.IndexValueInt64)
+	if !ok || scalar != int64(37) {
+		t.Fatalf("double int scalar=%v ok=%v want int64(37)", scalar, ok)
+	}
+	if scalar, ok = indexScalarForBSONValue(doubleFraction, collections.IndexValueInt64); ok {
+		t.Fatalf("fractional double int64 scalar=%v ok=%v want not indexable", scalar, ok)
+	}
+	if scalar, ok = indexScalarForBSONValue(posInf, collections.IndexValueInt64); ok {
+		t.Fatalf("+Inf int64 scalar=%v ok=%v want not indexable", scalar, ok)
 	}
 }
 

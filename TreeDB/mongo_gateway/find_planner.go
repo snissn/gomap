@@ -1790,6 +1790,16 @@ func indexScalarForBSONValue(value bson.RawValue, valueType collections.IndexVal
 		case bson.TypeInt64:
 			out, ok := value.Int64OK()
 			return out, ok
+		case bson.TypeDouble:
+			out, ok := value.DoubleOK()
+			if !ok {
+				return nil, false
+			}
+			intValue, ok := exactInt64FromFloat64(out)
+			if !ok {
+				return nil, false
+			}
+			return intValue, true
 		default:
 			return nil, false
 		}
@@ -1816,6 +1826,18 @@ func indexScalarForBSONValue(value bson.RawValue, valueType collections.IndexVal
 	default:
 		return nil, false
 	}
+}
+
+func exactInt64FromFloat64(value float64) (int64, bool) {
+	const minInt64AsFloat64 = -9223372036854775808.0
+	const maxInt64PlusOneAsFloat64 = 9223372036854775808.0
+	if math.IsNaN(value) || math.IsInf(value, 0) || math.Trunc(value) != value {
+		return 0, false
+	}
+	if value < minInt64AsFloat64 || value >= maxInt64PlusOneAsFloat64 {
+		return 0, false
+	}
+	return int64(value), true
 }
 
 func int64CanRepresentAsExactFloat64(value int64) bool {
