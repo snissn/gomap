@@ -1470,6 +1470,53 @@ func TestCollectionIndexedWriteMemtablesBypassDefaultLargeBatches(t *testing.T) 
 	}
 }
 
+func TestCollectionInsertPlanningKeepsLockForIndexedMemtableBypass(t *testing.T) {
+	tests := []struct {
+		name                    string
+		documentFormat          DocumentFormat
+		indexedMemtablesEnabled bool
+		bufferIndexedInserts    bool
+		wantUnlock              bool
+	}{
+		{
+			name:           "json-no-indexed-memtables",
+			documentFormat: DocumentFormatJSON,
+			wantUnlock:     true,
+		},
+		{
+			name:                    "json-buffered-indexed-memtables",
+			documentFormat:          DocumentFormatJSON,
+			indexedMemtablesEnabled: true,
+			bufferIndexedInserts:    true,
+			wantUnlock:              true,
+		},
+		{
+			name:                    "json-direct-indexed-memtable-bypass",
+			documentFormat:          DocumentFormatJSON,
+			indexedMemtablesEnabled: true,
+			bufferIndexedInserts:    false,
+			wantUnlock:              false,
+		},
+		{
+			name:           "template-v1",
+			documentFormat: DocumentFormatTemplateV1,
+			wantUnlock:     false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldUnlockInsertPlanning(
+				collectionOptions{documentFormat: tt.documentFormat},
+				tt.indexedMemtablesEnabled,
+				tt.bufferIndexedInserts,
+			)
+			if got != tt.wantUnlock {
+				t.Fatalf("shouldUnlockInsertPlanning()=%v want %v", got, tt.wantUnlock)
+			}
+		})
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesReadAfterDomainTableAllocated(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
