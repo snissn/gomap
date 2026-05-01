@@ -335,8 +335,14 @@ func sortedDocumentIDKeys(items []insertBatchItem, order []int, presortedIDs [][
 }
 
 func (plan *insertBatchPlan) checkPersistedConflicts(snap *backenddb.Snapshot, catalog *collectionCatalog) error {
-	if plan == nil || snap == nil || catalog == nil {
-		return nil
+	if plan == nil {
+		return errors.New("collections: insert conflict check missing plan")
+	}
+	if snap == nil {
+		return errors.New("collections: insert conflict check missing snapshot")
+	}
+	if catalog == nil {
+		return errors.New("collections: insert conflict check missing catalog")
 	}
 	preflight := insertBatchPreflight{
 		snapshot:           snap,
