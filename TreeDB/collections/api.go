@@ -3922,18 +3922,18 @@ type preparedBatchUpdate struct {
 }
 
 type updateBatchPlan struct {
-	results        []UpdateBatchResult
-	meta           CollectionMeta
-	catalog        *collectionCatalog
-	snap           *backenddb.Snapshot
-	baseUserRoot   uint64
-	baseSystemRoot uint64
-	baseCommitSeq  uint64
-	rootNames      []string
-	baseRootIDs    map[string]uint64
-	policies       []backenddb.OrderedRootStoragePolicy
-	deltaTables    []memtable.Table
-	bufferSafe     bool
+	results                     []UpdateBatchResult
+	meta                        CollectionMeta
+	catalog                     *collectionCatalog
+	snap                        *backenddb.Snapshot
+	baseUserRoot                uint64
+	baseSystemRoot              uint64
+	baseCommitSeq               uint64
+	rootNames                   []string
+	baseRootIDs                 map[string]uint64
+	policies                    []backenddb.OrderedRootStoragePolicy
+	deltaTables                 []memtable.Table
+	canBufferIndexedUpdateBatch bool
 }
 
 func (plan *updateBatchPlan) close() {
@@ -4025,7 +4025,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		_ = snap.Close()
 		return nil, errUpdateBatchHasSecondaryUniqueIndex
 	}
-	bufferSafe := len(meta.Indexes) > 0 &&
+	canBufferIndexedUpdateBatch := len(meta.Indexes) > 0 &&
 		(!collectionMetaHasSecondaryUniqueIndex(meta) ||
 			mode == updateBatchModeNoSecondaryUniqueIndexes ||
 			mode == updateBatchModeNoSecondaryUniqueIndexChanges)
@@ -4293,18 +4293,18 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	}
 	success = true
 	return &updateBatchPlan{
-		results:        results,
-		meta:           meta,
-		catalog:        catalog,
-		snap:           snap,
-		baseUserRoot:   baseUserRoot,
-		baseSystemRoot: baseSystemRoot,
-		baseCommitSeq:  baseCommitSeq,
-		rootNames:      rootNames,
-		baseRootIDs:    baseRootIDs,
-		bufferSafe:     bufferSafe,
-		policies:       policies,
-		deltaTables:    deltaTables,
+		results:                     results,
+		meta:                        meta,
+		catalog:                     catalog,
+		snap:                        snap,
+		baseUserRoot:                baseUserRoot,
+		baseSystemRoot:              baseSystemRoot,
+		baseCommitSeq:               baseCommitSeq,
+		rootNames:                   rootNames,
+		baseRootIDs:                 baseRootIDs,
+		canBufferIndexedUpdateBatch: canBufferIndexedUpdateBatch,
+		policies:                    policies,
+		deltaTables:                 deltaTables,
 	}, nil
 }
 
@@ -4362,7 +4362,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	if c == nil || plan == nil || len(plan.deltaTables) == 0 {
 		return false, nil
 	}
-	if c.writeDomain == nil || !plan.bufferSafe || !plan.meta.Options.BufferedIndexedWrites || len(plan.meta.Indexes) == 0 {
+	if c.writeDomain == nil || !plan.canBufferIndexedUpdateBatch || !plan.meta.Options.BufferedIndexedWrites || len(plan.meta.Indexes) == 0 {
 		return false, nil
 	}
 	if len(plan.rootNames) != len(plan.deltaTables) || len(plan.rootNames) != len(plan.policies) {
@@ -4380,12 +4380,14 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		}
 	}
 	if !hasDeltaTable {
-		return false, errors.New("collections: UpdateBatch modified rows without delta tables")
+		return false, fmt.Errorf("collections: UpdateBatch collection %q modified rows without delta tables modified=%d roots=%d deltas=%d policies=%d", plan.meta.Name, modifiedCount, len(plan.rootNames), len(plan.deltaTables), len(plan.policies))
 	}
 	domain := c.writeDomain
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
 	if domain.count != 0 {
+		// The caller retries from the normal pre-plan flush path so a plan built
+		// before a concurrent buffered write is not published against stale roots.
 		return false, ErrConcurrentMutation
 	}
 	if err := c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs); err != nil {
@@ -4402,6 +4404,11 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	}
 	if domain.rootRuns == nil {
 		domain.rootRuns = make(map[string][]memtable.Table, len(plan.rootNames))
+	}
+	autoFlushEnabled := bufferedIndexedAutoFlushEnabled(plan.meta.Options)
+	var checkpoint bufferedIndexedCheckpoint
+	if autoFlushEnabled {
+		checkpoint = checkpointBufferedIndexedDomain(domain)
 	}
 	var stagedBytes int64
 	for i, rootName := range plan.rootNames {
@@ -4435,6 +4442,9 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	c.meta = plan.meta
 	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
 		if err := c.flushBufferedIndexedLocked(domain); err != nil {
+			if autoFlushEnabled {
+				rollbackBufferedIndexedDomain(domain, checkpoint)
+			}
 			return false, err
 		}
 	}
