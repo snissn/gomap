@@ -240,9 +240,11 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 }
 
 type mongoUpdateItem struct {
-	index     int
-	key       []byte
-	updateDoc wire.Document
+	index       int
+	key         []byte
+	updateDoc   wire.Document
+	setFields   map[string]struct{}
+	setFieldsOK bool
 }
 
 type mongoUpdateParseError struct {
@@ -282,7 +284,8 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	if err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 	}
-	return mongoUpdateItem{index: index, key: key, updateDoc: updateDoc}, nil
+	setFields, setFieldsOK := mongoSetUpdateFields(updateDoc)
+	return mongoUpdateItem{index: index, key: key, updateDoc: updateDoc, setFields: setFields, setFieldsOK: setFieldsOK}, nil
 }
 
 func mongoUpdateParseCommandError(err error) (wire.Document, error) {
@@ -362,6 +365,9 @@ func runMongoUpdateBatch(col *collections.Collection, updates []mongoUpdateItem)
 }
 
 func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpdateItem) ([]collections.UpdateBatchResult, bool, error) {
+	if !mongoUpdateItemsCanUseBatch(col, updates) {
+		return make([]collections.UpdateBatchResult, len(updates)), false, nil
+	}
 	materializer, err := storedDocumentMaterializerForCollection(col)
 	if err != nil {
 		return nil, false, err
@@ -379,9 +385,12 @@ func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpda
 			},
 		}
 	}
-	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexes(items)
+	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges(items)
 	if !batched {
-		return nil, false, err
+		if results == nil {
+			results = make([]collections.UpdateBatchResult, len(updates))
+		}
+		return results, false, err
 	}
 	if err != nil {
 		return nil, true, err
@@ -438,7 +447,7 @@ type mongoUpdateCoalescerResult struct {
 }
 
 func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
-	if collectionHasSecondaryUniqueIndexes(col) {
+	if !mongoUpdateCanUseBatch(col, update) {
 		return runMongoUpdateOne(col, update)
 	}
 	coalescer := s.mongoUpdateCoalescer(name)
@@ -724,7 +733,7 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 	if len(batch) == 1 ||
 		mongoUpdateCoalescerHasDuplicateKeys(batch) ||
 		!mongoUpdateCoalescerUsesSingleCollection(batch) ||
-		collectionHasSecondaryUniqueIndexes(batch[0].col) {
+		!mongoUpdateCoalescerBatchCanUseBatch(batch) {
 		runMongoUpdateCoalescerSequential(batch)
 		return
 	}
@@ -819,6 +828,19 @@ func mongoUpdateCoalescerUsesSingleCollection(batch []mongoUpdateCoalescerReques
 	return true
 }
 
+func mongoUpdateCoalescerBatchCanUseBatch(batch []mongoUpdateCoalescerRequest) bool {
+	if len(batch) == 0 || batch[0].col == nil {
+		return false
+	}
+	meta := batch[0].col.Meta()
+	for _, req := range batch {
+		if !mongoUpdateCanUseBatchMeta(meta, req.item) {
+			return false
+		}
+	}
+	return true
+}
+
 func runMongoUpdateCoalescerSequential(batch []mongoUpdateCoalescerRequest) {
 	for _, req := range batch {
 		matched, modified, err := runMongoUpdateOne(req.col, req.item)
@@ -826,16 +848,70 @@ func runMongoUpdateCoalescerSequential(batch []mongoUpdateCoalescerRequest) {
 	}
 }
 
-func collectionHasSecondaryUniqueIndexes(col *collections.Collection) bool {
+func mongoUpdateItemsCanUseBatch(col *collections.Collection, updates []mongoUpdateItem) bool {
 	if col == nil {
 		return false
 	}
-	for _, idx := range col.Meta().Indexes {
-		if idx.Unique {
+	meta := col.Meta()
+	for _, update := range updates {
+		if !mongoUpdateCanUseBatchMeta(meta, update) {
+			return false
+		}
+	}
+	return true
+}
+
+func mongoUpdateCanUseBatch(col *collections.Collection, update mongoUpdateItem) bool {
+	if col == nil {
+		return false
+	}
+	return mongoUpdateCanUseBatchMeta(col.Meta(), update)
+}
+
+func mongoUpdateCanUseBatchMeta(meta collections.CollectionMeta, update mongoUpdateItem) bool {
+	if !update.setFieldsOK {
+		return false
+	}
+	return !mongoUpdateSetFieldsTouchSecondaryUniqueIndexMeta(meta, update)
+}
+
+func mongoUpdateSetFieldsTouchSecondaryUniqueIndexMeta(meta collections.CollectionMeta, update mongoUpdateItem) bool {
+	if !update.setFieldsOK {
+		return true
+	}
+	for _, idx := range meta.Indexes {
+		if !idx.Unique {
+			continue
+		}
+		if _, ok := update.setFields[idx.Field]; ok {
 			return true
 		}
 	}
 	return false
+}
+
+func mongoSetUpdateFields(updateDoc wire.Document) (map[string]struct{}, bool) {
+	updateElements, err := bson.Raw(updateDoc).Elements()
+	if err != nil || len(updateElements) != 1 {
+		return nil, false
+	}
+	operator, err := updateElements[0].KeyErr()
+	if err != nil || operator != "$set" {
+		return nil, false
+	}
+	setDoc, ok := updateElements[0].Value().DocumentOK()
+	if !ok {
+		return nil, false
+	}
+	order, err := parseSetFieldNames(setDoc)
+	if err != nil {
+		return nil, false
+	}
+	out := make(map[string]struct{}, len(order))
+	for _, field := range order {
+		out[field] = struct{}{}
+	}
+	return out, true
 }
 
 func (s *Server) deleteResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
@@ -1981,25 +2057,16 @@ func parseSetDocument(doc bson.Raw) (map[string]bson.RawValue, []string, error) 
 	if err != nil {
 		return nil, nil, err
 	}
-	sets := make(map[string]bson.RawValue, len(elements))
 	order := make([]string, 0, len(elements))
 	seen := make(map[string]struct{}, len(elements))
+	sets := make(map[string]bson.RawValue, len(elements))
 	for _, elem := range elements {
 		key, err := elem.KeyErr()
 		if err != nil {
 			return nil, nil, err
 		}
-		if key == "" {
-			return nil, nil, errors.New("Mongo gateway $set field name cannot be empty")
-		}
-		if key == "_id" {
-			return nil, nil, errors.New("Mongo gateway update cannot modify _id")
-		}
-		if strings.Contains(key, ".") {
-			return nil, nil, errors.New("Mongo gateway $set currently supports top-level fields only")
-		}
-		if strings.HasPrefix(key, "$") {
-			return nil, nil, errors.New("Mongo gateway $set field names cannot start with $")
+		if err := validateSetFieldName(key); err != nil {
+			return nil, nil, err
 		}
 		value := elem.Value()
 		if err := validateSupportedValue(key, value); err != nil {
@@ -2012,6 +2079,49 @@ func parseSetDocument(doc bson.Raw) (map[string]bson.RawValue, []string, error) 
 		sets[key] = value
 	}
 	return sets, order, nil
+}
+
+func parseSetFieldNames(doc bson.Raw) ([]string, error) {
+	elements, err := doc.Elements()
+	if err != nil {
+		return nil, err
+	}
+	return parseSetFieldNamesFromElements(elements)
+}
+
+func parseSetFieldNamesFromElements(elements []bson.RawElement) ([]string, error) {
+	order := make([]string, 0, len(elements))
+	seen := make(map[string]struct{}, len(elements))
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return nil, err
+		}
+		if err := validateSetFieldName(key); err != nil {
+			return nil, err
+		}
+		if _, ok := seen[key]; !ok {
+			order = append(order, key)
+			seen[key] = struct{}{}
+		}
+	}
+	return order, nil
+}
+
+func validateSetFieldName(key string) error {
+	if key == "" {
+		return errors.New("Mongo gateway $set field name cannot be empty")
+	}
+	if key == "_id" {
+		return errors.New("Mongo gateway update cannot modify _id")
+	}
+	if strings.Contains(key, ".") {
+		return errors.New("Mongo gateway $set currently supports top-level fields only")
+	}
+	if strings.HasPrefix(key, "$") {
+		return errors.New("Mongo gateway $set field names cannot start with $")
+	}
+	return nil
 }
 
 func encodePrimaryKey(value bson.RawValue) ([]byte, error) {

@@ -709,6 +709,103 @@ func TestRunMongoUpdateBatchDeclinesFreshSecondaryUniqueIndex(t *testing.T) {
 	}
 }
 
+func TestRunMongoUpdateBatchResultsDeclineReturnsZeroResults(t *testing.T) {
+	results, batched, err := runMongoUpdateBatchResults(nil, []mongoUpdateItem{
+		{index: 0, key: []byte("u1")},
+		{index: 1, key: []byte("u2")},
+	})
+	if err != nil {
+		t.Fatalf("runMongoUpdateBatchResults: %v", err)
+	}
+	if batched {
+		t.Fatal("runMongoUpdateBatchResults batched with nil collection")
+	}
+	if len(results) != 2 {
+		t.Fatalf("results len=%d want 2", len(results))
+	}
+	for i, result := range results {
+		if result.Matched || result.Modified {
+			t.Fatalf("result[%d]=%+v want zero value", i, result)
+		}
+	}
+}
+
+func TestRunMongoUpdateBatchBatchesNonUniqueFieldWithSecondaryUniqueIndex(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	mgr := collections.NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{
+		Name: "app.users",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatBSON,
+		},
+		Indexes: []collections.IndexDefinition{
+			{Name: "email_1", Field: "email", Unique: true},
+			{Name: "city_1", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	id1, err := encodePrimaryKey(mustRawValue(t, "u1"))
+	if err != nil {
+		t.Fatalf("encode u1: %v", err)
+	}
+	id2, err := encodePrimaryKey(mustRawValue(t, "u2"))
+	if err != nil {
+		t.Fatalf("encode u2: %v", err)
+	}
+	doc1 := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "a@example.com"}, {Key: "city", Value: "hnl"}})
+	doc2 := mustDocument(t, bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "b@example.com"}, {Key: "city", Value: "hnl"}})
+	if _, err := col.InsertBatchValidatedBSON([][]byte{id1, id2}, [][]byte{doc1, doc2}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+	before := db.State()
+	buildUpdateItem := func(index int, id string, update bson.D) mongoUpdateItem {
+		t.Helper()
+		item, err := parseMongoUpdateItem(index, mustDocument(t, bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
+			{Key: "u", Value: update},
+		}))
+		if err != nil {
+			t.Fatalf("parse update item: %v", err)
+		}
+		return item
+	}
+
+	matched, modified, batched, err := runMongoUpdateBatch(col, []mongoUpdateItem{
+		buildUpdateItem(0, "u1", bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "sea"}}}}),
+		buildUpdateItem(1, "u2", bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "sfo"}}}}),
+	})
+	if err != nil {
+		t.Fatalf("runMongoUpdateBatch: %v", err)
+	}
+	if !batched || matched != 2 || modified != 2 {
+		t.Fatalf("matched=%d modified=%d batched=%v want 2,2,true", matched, modified, batched)
+	}
+	after := db.State()
+	if after.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("batch advanced commit seq by %d, want 1", after.CommitSeq-before.CommitSeq)
+	}
+	ids, err := col.FindByIndex("city_1", "sea")
+	if err != nil {
+		t.Fatalf("find city sea: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], id1) {
+		t.Fatalf("sea ids=%q want [%q]", ids, id1)
+	}
+}
+
 func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterParseError(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -1110,6 +1207,53 @@ func TestServerUpdateCoalescedSkipsCoalescerForSecondaryUniqueIndex(t *testing.T
 	server.updateMu.Unlock()
 	if cached {
 		t.Fatal("secondary unique update created a coalescer")
+	}
+}
+
+func TestServerUpdateCoalescedSkipsCoalescerForUnrecognizedUpdateShape(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.UpdateCoalescingMaxDelay = 5 * time.Second
+	server.UpdateCoalescingMaxBatch = 2
+	assertOK(t, serveCommand(t, server, 2280, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(1)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	col, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	update, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "score", Value: int32(1)}}}}},
+	}))
+	if err != nil {
+		t.Fatalf("parse update: %v", err)
+	}
+	if update.setFieldsOK {
+		t.Fatal("test update unexpectedly parsed as $set")
+	}
+	matched, modified, err := server.runMongoUpdateCoalesced("app.users", col, update)
+	if err == nil {
+		t.Fatal("runMongoUpdateCoalesced succeeded for unsupported $inc update")
+	}
+	if matched || modified {
+		t.Fatalf("matched=%v modified=%v want false,false", matched, modified)
+	}
+	server.updateMu.Lock()
+	_, cached := server.updateCoalescers["app.users"]
+	server.updateMu.Unlock()
+	if cached {
+		t.Fatal("unrecognized update shape created a coalescer")
 	}
 }
 
