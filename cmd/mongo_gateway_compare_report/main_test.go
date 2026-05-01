@@ -150,7 +150,9 @@ func TestReportAllowsIncompleteTreeDBOnlyCell(t *testing.T) {
 	for _, want := range []string{
 		"- targets: `treedb`",
 		"No MongoDB baseline rows were present",
-		"| 10 | 0 | `treedb_bson_writers_4` | `concurrent_id_update_set_w4` | 4000 | 5000 | n/a | n/a | n/a | n/a | 2.00 | n/a |",
+		"`treedb_bson_writers_4`",
+		"`concurrent_id_update_set_w4`",
+		"| 4000 | 5000 |",
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q\n%s", want, report)
@@ -406,16 +408,52 @@ func TestScalingScenarioSuffixRequiresTerminalCount(t *testing.T) {
 	for _, tc := range []struct {
 		config string
 		want   string
+		valid  bool
+		marker bool
 	}{
-		{config: "treedb_writers_4", want: "writers_4"},
-		{config: "treedb_readers_16", want: "readers_16"},
-		{config: "treedb_writers_4_extra", want: ""},
-		{config: "treedb_writers_", want: ""},
-		{config: "treedb_without_marker", want: ""},
+		{config: "treedb_writers_4", want: "writers_4", valid: true, marker: true},
+		{config: "treedb_readers_16", want: "readers_16", valid: true, marker: true},
+		{config: "treedb_writers_4_extra", want: "", valid: false, marker: true},
+		{config: "treedb_writers_", want: "", valid: false, marker: true},
+		{config: "treedb_without_marker", want: "", valid: true, marker: false},
 	} {
 		if got := scalingScenarioSuffix(tc.config); got != tc.want {
 			t.Fatalf("scalingScenarioSuffix(%q)=%q want %q", tc.config, got, tc.want)
 		}
+		got := parseScalingScenario(tc.config)
+		if got.valid != tc.valid || got.hasMarker != tc.marker {
+			t.Fatalf("parseScalingScenario(%q)=%+v want valid=%v marker=%v", tc.config, got, tc.valid, tc.marker)
+		}
+	}
+}
+
+func TestReportRejectsInvalidScalingScenarioWithUnsuffixedMongo(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb.json"), `{
+  "target": "treedb",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "insert", "operations": 100, "ops_per_sec": 1000, "latency_micros": {}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 2000}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "insert", "operations": 100, "ops_per_sec": 500, "latency_micros": {}}],
+  "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4000}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_driver-command-raw_writers_1_extra\t100\t2\ttreedb.json\t2000\n"+
+		"mongo\tmongo\t100\t2\tmongo.json\t4000\n")
+
+	err := run([]string{
+		"-matrix", matrixPath,
+		"-report", filepath.Join(dir, "report.md"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid scaling scenario suffix") {
+		t.Fatalf("err=%v want invalid scaling scenario suffix", err)
 	}
 }
 
