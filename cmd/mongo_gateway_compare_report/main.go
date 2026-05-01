@@ -154,7 +154,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.ReportPath, "report", "", "Markdown report output path")
 	fs.StringVar(&cfg.SummaryPath, "summary", "", "optional TSV summary output path")
 	fs.StringVar(&cfg.Title, "title", "Mongo Gateway Benchmark Comparison", "report title")
-	fs.BoolVar(&cfg.AllowIncomplete, "allow-incomplete", false, "allow TreeDB-only or MongoDB-missing matrix cells")
+	fs.BoolVar(&cfg.AllowIncomplete, "allow-incomplete", false, "allow cells with no MongoDB baseline rows; still requires scenario-matching MongoDB baselines when MongoDB rows are present")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -236,7 +236,10 @@ func loadComparisons(matrixPath string, allowIncomplete bool) ([]cellComparison,
 			return nil, fmt.Errorf("incomplete comparison cell documents=%d secondary_indexes=%d", key.Documents, key.SecondaryIndexes)
 		}
 		sort.Strings(cell.treeConfigKeys)
-		mongoIndex := buildMongoScenarioIndex(cell.mongos)
+		mongoIndex, err := buildMongoScenarioIndex(cell.mongos)
+		if err != nil {
+			return nil, err
+		}
 		for _, config := range cell.treeConfigKeys {
 			mongo, err := matchingMongoRecord(key, config, mongoIndex, allowIncomplete)
 			if err != nil {
@@ -271,7 +274,7 @@ type mongoScenarioIndex struct {
 	suffixConfig map[string][]string
 }
 
-func buildMongoScenarioIndex(mongos map[string]*runRecord) mongoScenarioIndex {
+func buildMongoScenarioIndex(mongos map[string]*runRecord) (mongoScenarioIndex, error) {
 	index := mongoScenarioIndex{
 		exact:        mongos,
 		bySuffix:     make(map[string][]*runRecord, len(mongos)),
@@ -280,7 +283,7 @@ func buildMongoScenarioIndex(mongos map[string]*runRecord) mongoScenarioIndex {
 	for config, record := range mongos {
 		scenario := parseScalingScenario(config)
 		if scenario.hasMarker && !scenario.valid {
-			continue
+			return mongoScenarioIndex{}, fmt.Errorf("invalid scaling scenario suffix for mongo config=%q", config)
 		}
 		index.bySuffix[scenario.suffix] = append(index.bySuffix[scenario.suffix], record)
 		index.suffixConfig[scenario.suffix] = append(index.suffixConfig[scenario.suffix], config)
@@ -288,7 +291,7 @@ func buildMongoScenarioIndex(mongos map[string]*runRecord) mongoScenarioIndex {
 	for suffix := range index.suffixConfig {
 		sort.Strings(index.suffixConfig[suffix])
 	}
-	return index
+	return index, nil
 }
 
 func matchingMongoRecord(key baseCellKey, treeConfig string, mongoIndex mongoScenarioIndex, allowIncomplete bool) (*runRecord, error) {
