@@ -1116,11 +1116,10 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	updatePhase, err := measureProfiledPhase(profiler, "id_update_set", cfg.Updates, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.Updates; i++ {
 			id := benchmarkID((i * 31) % cfg.Documents)
+			filter := bson.D{{Key: "_id", Value: id}}
+			update := benchmarkSetUpdate(i, false, cfg.UpdateIndexedField)
 			begin := time.Now()
-			res, err := coll.UpdateOne(ctx,
-				bson.D{{Key: "_id", Value: id}},
-				benchmarkSetUpdate(i, false, cfg.UpdateIndexedField),
-			)
+			res, err := coll.UpdateOne(ctx, filter, update)
 			sample(time.Since(begin))
 			if err != nil {
 				return err
@@ -1165,11 +1164,10 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		concurrentWritePhase, err := measureProfiledPhase(profiler, phaseName, cfg.ConcurrentWrites, func(sample func(time.Duration)) error {
 			return runConcurrentOperations(ctx, cfg.ConcurrentWriters, cfg.ConcurrentWrites, func(op int) error {
 				id := benchmarkID((op * 37) % cfg.Documents)
+				filter := bson.D{{Key: "_id", Value: id}}
+				update := benchmarkSetUpdate(op, true, cfg.UpdateIndexedField)
 				begin := time.Now()
-				res, err := coll.UpdateOne(ctx,
-					bson.D{{Key: "_id", Value: id}},
-					benchmarkSetUpdate(op, true, cfg.UpdateIndexedField),
-				)
+				res, err := coll.UpdateOne(ctx, filter, update)
 				sample(time.Since(begin))
 				if err != nil {
 					return err
@@ -1927,15 +1925,17 @@ func benchmarkDocument(i int) bson.D {
 }
 
 func benchmarkSetUpdate(i int, concurrentPhase bool, updateIndexedField bool) bson.D {
-	set := bson.D{
-		{Key: "updated", Value: true},
-		{Key: "update_seq", Value: int64(i)},
-	}
+	set := make(bson.D, 0, 3)
 	if concurrentPhase {
-		set = bson.D{
-			{Key: "concurrent_updated", Value: true},
-			{Key: "concurrent_update_seq", Value: int64(i)},
-		}
+		set = append(set,
+			bson.E{Key: "concurrent_updated", Value: true},
+			bson.E{Key: "concurrent_update_seq", Value: int64(i)},
+		)
+	} else {
+		set = append(set,
+			bson.E{Key: "updated", Value: true},
+			bson.E{Key: "update_seq", Value: int64(i)},
+		)
 	}
 	if updateIndexedField {
 		set = append(set, bson.E{Key: "city", Value: benchmarkUpdatedCity(i)})
