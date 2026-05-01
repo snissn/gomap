@@ -1999,7 +1999,7 @@ func TestBufferedIndexTableLockedLimitsLiveMaterialization(t *testing.T) {
 		},
 	}
 
-	buffered, err := bufferedIndexTableLocked(domain, "users", "city", prefix, 1)
+	buffered, err := bufferedIndexTableLocked(domain, "users", "city", false, prefix, 1)
 	if err != nil {
 		t.Fatalf("buffered index table: %v", err)
 	}
@@ -2009,6 +2009,66 @@ func TestBufferedIndexTableLockedLimitsLiveMaterialization(t *testing.T) {
 	}
 	if got := buffered.Len(); got != 3 {
 		t.Fatalf("buffered table len=%d want tombstone plus two live rows", got)
+	}
+}
+
+func TestBufferedIndexTableLockedUsesUniqueValueIndexForMisses(t *testing.T) {
+	hnlEncoded, err := encodeIndexScalar("hnl@example.com")
+	if err != nil {
+		t.Fatalf("encode hnl email: %v", err)
+	}
+	_, hnlPrefix, err := appendIndexValuePrefixSlice(nil, hnlEncoded)
+	if err != nil {
+		t.Fatalf("hnl prefix: %v", err)
+	}
+	seaEncoded, err := encodeIndexScalar("sea@example.com")
+	if err != nil {
+		t.Fatalf("encode sea email: %v", err)
+	}
+	_, seaPrefix, err := appendIndexValuePrefixSlice(nil, seaEncoded)
+	if err != nil {
+		t.Fatalf("sea prefix: %v", err)
+	}
+	key, err := indexEntryKey(seaEncoded, []byte("u2"))
+	if err != nil {
+		t.Fatalf("sea index key: %v", err)
+	}
+	table := newCollectionRunTable(1)
+	setCollectionRunValue(table, key, nil)
+	table.Freeze()
+	defer resetCollectionRunTable(table)
+
+	pending := newBufferedUniqueValueIndex(1)
+	pending.add(seaPrefix)
+	domain := &collectionWriteDomain{
+		count: 1,
+		meta:  CollectionMeta{Name: "users"},
+		rootRuns: map[string][]memtable.Table{
+			collectionSecondaryRootName("users", "email"): {table},
+		},
+		uniqueValueIndex: map[string]*bufferedUniqueValueIndex{
+			"email": pending,
+		},
+	}
+
+	missing, err := bufferedIndexTableLocked(domain, "users", "email", true, hnlPrefix, 0)
+	if err != nil {
+		t.Fatalf("buffered unique miss: %v", err)
+	}
+	if missing != nil {
+		defer resetCollectionRunTable(missing)
+		t.Fatalf("buffered unique miss table len=%d want nil", missing.Len())
+	}
+	buffered, err := bufferedIndexTableLocked(domain, "users", "email", true, seaPrefix, 0)
+	if err != nil {
+		t.Fatalf("buffered unique hit: %v", err)
+	}
+	if buffered == nil {
+		t.Fatal("buffered unique hit table nil")
+	}
+	defer resetCollectionRunTable(buffered)
+	if got := buffered.Len(); got != 1 {
+		t.Fatalf("buffered unique hit len=%d want 1", got)
 	}
 }
 

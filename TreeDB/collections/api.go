@@ -6018,7 +6018,7 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	if err != nil {
 		return nil, false, err
 	}
-	bufferedTable, err := bufferedIndexTableLocked(domain, catalog.meta.Name, indexName, prefix, maxResults)
+	bufferedTable, err := bufferedIndexTableLocked(domain, catalog.meta.Name, indexName, idx.Unique, prefix, maxResults)
 	if err != nil {
 		return nil, false, err
 	}
@@ -6052,7 +6052,7 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 // bufferedIndexTableLocked materializes buffered entries for one secondary
 // index prefix while domain.mu is held. The returned pooled table is owned by
 // the caller and must be released with resetCollectionRunTable.
-func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, indexName string, prefix []byte, maxResults int) (memtable.Table, error) {
+func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, indexName string, unique bool, prefix []byte, maxResults int) (memtable.Table, error) {
 	if domain == nil {
 		return nil, nil
 	}
@@ -6065,6 +6065,12 @@ func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, ind
 	runs := domain.rootRuns[collectionSecondaryRootName(collectionName, indexName)]
 	if len(runs) == 0 {
 		return nil, nil
+	}
+	if unique {
+		pending := domain.uniqueValueIndex[indexName]
+		if pending != nil && !pending.contains(prefix) {
+			return nil, nil
+		}
 	}
 	table := newCollectionRunTable(0)
 	liveLimit := collectionLimitedResultSentinel(maxResults)
