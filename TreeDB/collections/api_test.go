@@ -4972,6 +4972,92 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReadsBufferedInsert
 	}
 }
 
+func TestCollectionUpdateBatchBuildsPrimaryRunIndexForBufferedPlanning(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl","score":0}`)},
+	); err != nil {
+		t.Fatalf("insert document: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush document: %v", err)
+	}
+
+	first, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONField("score", 1)},
+	})
+	if err != nil {
+		t.Fatalf("first UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	}
+	if !batched || len(first) != 1 || !first[0].Matched || !first[0].Modified {
+		t.Fatalf("first results=%+v batched=%v want one modified row", first, batched)
+	}
+	col.writeDomain.mu.RLock()
+	beforeIndex := col.writeDomain.primaryRunIndex
+	col.writeDomain.mu.RUnlock()
+	if beforeIndex != nil {
+		t.Fatal("primary run index was built before buffered read planning")
+	}
+
+	sawBufferedUpdate := false
+	second, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			var doc map[string]any
+			if err := json.Unmarshal(current, &doc); err != nil {
+				return nil, false, err
+			}
+			if score, ok := int64ValueForTest(doc["score"]); !ok || score != 1 {
+				return nil, false, fmt.Errorf("score=%v want buffered score 1 in %s", doc["score"], current)
+			}
+			sawBufferedUpdate = true
+			doc["score"] = 2
+			next, err := json.Marshal(doc)
+			if err != nil {
+				return nil, false, err
+			}
+			return next, true, nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("second UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	}
+	if !batched || len(second) != 1 || !second[0].Matched || !second[0].Modified {
+		t.Fatalf("second results=%+v batched=%v want one modified row", second, batched)
+	}
+	if !sawBufferedUpdate {
+		t.Fatal("second update did not read the buffered first update")
+	}
+	col.writeDomain.mu.RLock()
+	afterIndex := col.writeDomain.primaryRunIndex
+	col.writeDomain.mu.RUnlock()
+	if afterIndex == nil {
+		t.Fatal("primary run index was not built for buffered update planning")
+	}
+}
+
 func TestCollectionUpdateBatchMaintainsBufferedUniqueValueIndex(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
