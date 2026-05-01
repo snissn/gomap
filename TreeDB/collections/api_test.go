@@ -2520,6 +2520,9 @@ func TestCollectionUpdateBatchRejectsUniqueConflictsWithinBatch(t *testing.T) {
 	if !errors.Is(err, ErrUniqueIndexConflict) {
 		t.Fatalf("UpdateBatch err=%v want ErrUniqueIndexConflict", err)
 	}
+	if !strings.Contains(err.Error(), "batch indexes 0 and 1") {
+		t.Fatalf("UpdateBatch err=%v missing conflicting batch indexes", err)
+	}
 }
 
 func TestCollectionUpdateBatchAllowsUniqueHandoff(t *testing.T) {

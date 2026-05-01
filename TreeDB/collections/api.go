@@ -3136,7 +3136,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 		}
 		prepared := preparedBatchUpdate{
 			itemIndex:  i,
-			documentID: bytes.Clone(item.DocumentID),
+			documentID: item.DocumentID,
 		}
 		if len(runtimes) > 0 {
 			prepared.oldState, err = loadDeleteIndexState(snap, catalog, item.DocumentID, entry.Value, runtimes, plannerOptions)
@@ -3339,18 +3339,23 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 }
 
 func rejectBatchUniqueConflicts(runtimes []indexRuntime, updates []preparedBatchUpdate) error {
+	type seenUniqueValue struct {
+		documentID []byte
+		itemIndex  int
+	}
+
 	for _, runtime := range runtimes {
 		if !runtime.def.unique {
 			continue
 		}
-		seen := make(map[string][]byte)
+		seen := make(map[string]seenUniqueValue)
 		for _, update := range updates {
 			for _, encoded := range update.newState[runtime.def.name] {
 				key := string(encoded)
-				if previous, ok := seen[key]; ok && !bytes.Equal(previous, update.documentID) {
-					return fmt.Errorf("%w %q", ErrUniqueIndexConflict, runtime.def.name)
+				if previous, ok := seen[key]; ok && !bytes.Equal(previous.documentID, update.documentID) {
+					return fmt.Errorf("%w %q: batch indexes %d and %d document ids %q and %q", ErrUniqueIndexConflict, runtime.def.name, previous.itemIndex, update.itemIndex, previous.documentID, update.documentID)
 				}
-				seen[key] = update.documentID
+				seen[key] = seenUniqueValue{documentID: update.documentID, itemIndex: update.itemIndex}
 			}
 		}
 	}

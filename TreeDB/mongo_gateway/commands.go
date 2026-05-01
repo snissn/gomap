@@ -333,7 +333,7 @@ func runMongoUpdateBatch(col *collections.Collection, updates []mongoUpdateItem)
 	for i, update := range updates {
 		update := update
 		items[i] = collections.UpdateBatchItem{
-			DocumentID: bytes.Clone(update.key),
+			DocumentID: update.key,
 			Update: func(stored []byte) ([]byte, bool, error) {
 				return applyMongoUpdateToStoredDocument(col, materializer, update, stored)
 			},
