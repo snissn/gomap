@@ -966,6 +966,17 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 	if snap == nil {
 		return nil, collectionOptions{}, false, backenddb.ErrClosed
 	}
+	baseSystemRoot := snapshotSystemRoot(snap)
+	baseCommitSeq := snapshotCommitSeq(snap)
+	if catalog := cachedWriteDomainCatalogForStateLocked(domain, baseSystemRoot, baseCommitSeq); catalog != nil {
+		c.rememberCatalog(snap, catalog)
+		_ = snap.Close()
+		options, err := collectionPlannerOptions(catalog.meta)
+		if err != nil {
+			return nil, collectionOptions{}, false, err
+		}
+		return catalog, options, len(catalog.meta.Indexes) > 0, nil
+	}
 	name := c.meta.Name
 	if domain.meta.Name != "" {
 		name = domain.meta.Name
@@ -979,8 +990,6 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 		_ = snap.Close()
 		return nil, collectionOptions{}, false, errCollectionNotFound
 	}
-	baseSystemRoot := snapshotSystemRoot(snap)
-	baseCommitSeq := snapshotCommitSeq(snap)
 	c.rememberCatalog(snap, catalog)
 	_ = snap.Close()
 
