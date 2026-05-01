@@ -24,6 +24,9 @@ func TestValidateSmokeRunRequiresShapeLabel(t *testing.T) {
 	if !hasCheck(checks, "error", "missing_shape_label") {
 		t.Fatalf("expected missing_shape_label error, got %#v", checks)
 	}
+	if hasCheck(checks, "error", "invalid_shape_label") {
+		t.Fatalf("empty shape should not also report invalid_shape_label: %#v", checks)
+	}
 }
 
 func TestValidateSmokeRunRequiresItemCountForBytesPerItem(t *testing.T) {
@@ -52,6 +55,17 @@ func TestValidateSmokeRunWarnsWhenDatasetDoesNotExceedBudget(t *testing.T) {
 	checks := validateSmokeRun(&run)
 	if !hasCheck(checks, "warning", "dataset_not_larger_than_budget") {
 		t.Fatalf("expected dataset_not_larger_than_budget warning, got %#v", checks)
+	}
+}
+
+func TestValidateSmokeRunLargeBudgetComparisonDoesNotOverflow(t *testing.T) {
+	row := validRow("treedb_raw", "raw", 100, 1)
+	row.Budgets.CacheBudgetBytes = 1 << 62
+	row.Budgets.RetiredMmapBudgetBytes = 1
+	run := smokeRunWithRows([]resultRow{row})
+	checks := validateSmokeRun(&run)
+	if !hasCheck(checks, "warning", "dataset_not_larger_than_budget") {
+		t.Fatalf("expected dataset_not_larger_than_budget warning for huge budget, got %#v", checks)
 	}
 }
 
