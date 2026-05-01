@@ -125,6 +125,9 @@ func TestReportAllowsIncompleteTreeDBOnlyCell(t *testing.T) {
 			t.Fatalf("report missing %q\n%s", want, report)
 		}
 	}
+	if strings.Contains(report, "No phase in this matrix had MongoDB ahead on ops/sec.") {
+		t.Fatalf("TreeDB-only report should not mention MongoDB lead fallback:\n%s", report)
+	}
 	summary := readFile(t, summaryPath)
 	if !strings.Contains(summary, "concurrent_id_update_set_w4\t4000.000000\t5000.000000\t200.000000\t\t\t\t\t") {
 		t.Fatalf("summary missing TreeDB-only row:\n%s", summary)
@@ -359,6 +362,23 @@ func TestReportAllowIncompleteStillRejectsMismatchedMongoScenario(t *testing.T) 
 	})
 	if err == nil || !strings.Contains(err.Error(), `config="treedb_bson_driver-command-raw_writers_1"`) {
 		t.Fatalf("err=%v want mismatched mongo scenario despite allow-incomplete", err)
+	}
+}
+
+func TestScalingScenarioSuffixRequiresTerminalCount(t *testing.T) {
+	for _, tc := range []struct {
+		config string
+		want   string
+	}{
+		{config: "treedb_writers_4", want: "writers_4"},
+		{config: "treedb_readers_16", want: "readers_16"},
+		{config: "treedb_writers_4_extra", want: ""},
+		{config: "treedb_writers_", want: ""},
+		{config: "treedb_without_marker", want: ""},
+	} {
+		if got := scalingScenarioSuffix(tc.config); got != tc.want {
+			t.Fatalf("scalingScenarioSuffix(%q)=%q want %q", tc.config, got, tc.want)
+		}
 	}
 }
 
