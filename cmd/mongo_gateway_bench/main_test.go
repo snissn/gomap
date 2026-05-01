@@ -473,6 +473,9 @@ func TestParseConfigProfileOptions(t *testing.T) {
 	if _, err := parseConfig([]string{"-profile-trace"}); err == nil {
 		t.Fatal("profile-trace without profile-dir accepted")
 	}
+	if _, err := parseConfig([]string{"-profile-heap-gc"}); err == nil {
+		t.Fatal("profile-heap-gc without profile-dir accepted")
+	}
 	if _, err := parseConfig([]string{"-profile-block-rate", "-1"}); err == nil {
 		t.Fatal("negative profile-block-rate accepted")
 	}
@@ -498,6 +501,12 @@ func TestProfileRecorderWritesPhaseArtifactsAndManifest(t *testing.T) {
 	defer recorder.Close()
 
 	phase, err := recorder.RunPhase("unit phase", func() (phaseResult, error) {
+		var sink uint64
+		deadline := time.Now().Add(25 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			sink++
+		}
+		runtime.KeepAlive(sink)
 		return summarizePhase("unit phase", 1, 1, time.Millisecond, []time.Duration{time.Millisecond}), nil
 	})
 	if err != nil {

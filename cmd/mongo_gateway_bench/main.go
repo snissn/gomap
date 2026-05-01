@@ -512,6 +512,9 @@ func parseConfig(args []string) (config, error) {
 	if cfg.ProfileTrace && strings.TrimSpace(cfg.ProfileDir) == "" {
 		return config{}, errors.New("profile-trace requires -profile-dir")
 	}
+	if cfg.ProfileHeapGC && strings.TrimSpace(cfg.ProfileDir) == "" {
+		return config{}, errors.New("profile-heap-gc requires -profile-dir")
+	}
 	if cfg.SecondaryIndexes < 0 || cfg.SecondaryIndexes > 2 {
 		return config{}, errors.New("secondary-indexes must be 0, 1, or 2")
 	}

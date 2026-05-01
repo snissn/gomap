@@ -690,6 +690,10 @@ func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterParseError(t *testin
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, updateResponse, "BadValue")
+	errmsg, ok := bson.Raw(updateResponse).Lookup("errmsg").StringValueOK()
+	if !ok || !strings.Contains(errmsg, "updates[1]") {
+		t.Fatalf("errmsg=%q ok=%v want updates[1]", errmsg, ok)
+	}
 
 	findResponse := serveCommand(t, server, 22596, bson.D{
 		{Key: "find", Value: "users"},
@@ -703,6 +707,33 @@ func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterParseError(t *testin
 	gotScore, ok := firstBatch[0].Lookup("score").Int32OK()
 	if !ok || gotScore != 1 {
 		t.Fatalf("u1 score=%d ok=%v want 1", gotScore, ok)
+	}
+}
+
+func TestParseMongoUpdateItemUnsupportedFlagsIncludeIndex(t *testing.T) {
+	tests := []struct {
+		name string
+		flag bson.E
+		want string
+	}{
+		{name: "multi", flag: bson.E{Key: "multi", Value: true}, want: "updateOne only"},
+		{name: "upsert", flag: bson.E{Key: "upsert", Value: true}, want: "does not support upsert"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := mustDocument(t, bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+				tt.flag,
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "score", Value: int32(1)}}}}},
+			})
+			_, err := parseMongoUpdateItem(3, doc)
+			if err == nil {
+				t.Fatal("parseMongoUpdateItem accepted unsupported flag")
+			}
+			if !strings.Contains(err.Error(), "updates[3]") || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err=%v want index and %q", err, tt.want)
+			}
+		})
 	}
 }
 
@@ -777,7 +808,7 @@ func TestServerUpdateCoalescesConcurrentDistinctIDs(t *testing.T) {
 	server.DefaultCollectionOptions = collections.CollectionOptions{
 		DocumentFormat: collections.DocumentFormatBSON,
 	}
-	server.UpdateCoalescingMaxDelay = 20 * time.Millisecond
+	server.UpdateCoalescingMaxDelay = 200 * time.Millisecond
 	server.UpdateCoalescingMaxBatch = 2
 	assertOK(t, serveCommand(t, server, 2260, bson.D{
 		{Key: "insert", Value: "users"},
@@ -838,7 +869,7 @@ func TestServerUpdateCoalescedBatchIsolatesItemErrors(t *testing.T) {
 	server.DefaultCollectionOptions = collections.CollectionOptions{
 		DocumentFormat: collections.DocumentFormatBSON,
 	}
-	server.UpdateCoalescingMaxDelay = 20 * time.Millisecond
+	server.UpdateCoalescingMaxDelay = 200 * time.Millisecond
 	server.UpdateCoalescingMaxBatch = 2
 	assertOK(t, serveCommand(t, server, 2262, bson.D{
 		{Key: "insert", Value: "users"},
@@ -912,6 +943,119 @@ func TestServerUpdateCoalescedBatchIsolatesItemErrors(t *testing.T) {
 	}
 }
 
+func TestMongoUpdateCoalescerUniqueIndexFallsBackToOrderedSingles(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	assertOK(t, serveCommand(t, server, 2266, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "unique", Value: true}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 2267, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "a@example.com"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "b@example.com"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	col, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	acquire, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "a@example.com"}}}}},
+	}))
+	if err != nil {
+		t.Fatalf("parse acquire: %v", err)
+	}
+	release, err := parseMongoUpdateItem(1, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "c@example.com"}}}}},
+	}))
+	if err != nil {
+		t.Fatalf("parse release: %v", err)
+	}
+
+	doneAcquire := make(chan mongoUpdateCoalescerResult, 1)
+	doneRelease := make(chan mongoUpdateCoalescerResult, 1)
+	(&mongoUpdateCoalescer{}).runBatch([]mongoUpdateCoalescerRequest{
+		{col: col, item: acquire, done: doneAcquire},
+		{col: col, item: release, done: doneRelease},
+	})
+	acquireResult := <-doneAcquire
+	releaseResult := <-doneRelease
+	if !collections.IsDuplicateKeyError(acquireResult.err) {
+		t.Fatalf("acquire err=%v want duplicate key", acquireResult.err)
+	}
+	if releaseResult.err != nil {
+		t.Fatalf("release err=%v", releaseResult.err)
+	}
+	if !releaseResult.matched || !releaseResult.modified {
+		t.Fatalf("release matched=%v modified=%v want true,true", releaseResult.matched, releaseResult.modified)
+	}
+}
+
+func TestMongoUpdateCoalescerUsesSingleCollection(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: "app.users"}); err != nil {
+		t.Fatalf("create users: %v", err)
+	}
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: "app.posts"}); err != nil {
+		t.Fatalf("create posts: %v", err)
+	}
+	usersA, err := manager.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open users A: %v", err)
+	}
+	usersB, err := manager.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open users B: %v", err)
+	}
+	posts, err := manager.OpenCollection("app.posts")
+	if err != nil {
+		t.Fatalf("open posts: %v", err)
+	}
+	if !mongoUpdateCoalescerUsesSingleCollection([]mongoUpdateCoalescerRequest{{col: usersA}, {col: usersB}}) {
+		t.Fatal("same collection reported as mixed")
+	}
+	if mongoUpdateCoalescerUsesSingleCollection([]mongoUpdateCoalescerRequest{{col: usersA}, {col: posts}}) {
+		t.Fatal("mixed collections reported as single collection")
+	}
+	schemaCol, err := manager.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open users for schema change: %v", err)
+	}
+	if _, err := schemaCol.CreateIndex(collections.IndexDefinition{Name: "email", Field: "email"}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	usersAfterSchemaChange, err := manager.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open users after schema change: %v", err)
+	}
+	if mongoUpdateCoalescerUsesSingleCollection([]mongoUpdateCoalescerRequest{{col: usersA}, {col: usersAfterSchemaChange}}) {
+		t.Fatal("different collection catalog states reported as single collection")
+	}
+}
+
 func TestServerCloseStopsUpdateCoalescers(t *testing.T) {
 	server := NewServer()
 	coalescer := server.mongoUpdateCoalescer("app.users")
@@ -945,8 +1089,10 @@ func TestServerUpdateCoalescerEvictsWhenIdle(t *testing.T) {
 	if coalescer == nil {
 		t.Fatal("expected coalescer")
 	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
 	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
+	for {
 		server.updateMu.Lock()
 		_, stillCached := server.updateCoalescers["app.users"]
 		server.updateMu.Unlock()
@@ -956,9 +1102,78 @@ func TestServerUpdateCoalescerEvictsWhenIdle(t *testing.T) {
 		if !stillCached && stopped {
 			return
 		}
-		time.Sleep(time.Millisecond)
+		if time.Now().After(deadline) {
+			t.Fatal("coalescer was not evicted after idle timeout")
+		}
+		<-ticker.C
 	}
-	t.Fatal("coalescer was not evicted after idle timeout")
+}
+
+func TestServerUpdateWithUniqueIndexKeepsAcquireBeforeReleaseOrdered(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	assertOK(t, serveCommand(t, server, 22601, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "unique", Value: true}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 22602, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "a@example.com"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "b@example.com"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	updateResponse := serveCommand(t, server, 22603, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{
+			bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "a@example.com"}}}}},
+			},
+			bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "c@example.com"}}}}},
+			},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, updateResponse, "DuplicateKey")
+
+	for i, tc := range []struct {
+		id    string
+		email string
+	}{
+		{id: "u1", email: "a@example.com"},
+		{id: "u2", email: "b@example.com"},
+	} {
+		findResponse := serveCommand(t, server, int32(22604+i), bson.D{
+			{Key: "find", Value: "users"},
+			{Key: "filter", Value: bson.D{{Key: "_id", Value: tc.id}}},
+			{Key: "$db", Value: "app"},
+		})
+		firstBatch := cursorFirstBatch(t, findResponse)
+		if len(firstBatch) != 1 {
+			t.Fatalf("%s firstBatch len=%d want 1", tc.id, len(firstBatch))
+		}
+		gotEmail, ok := firstBatch[0].Lookup("email").StringValueOK()
+		if !ok || gotEmail != tc.email {
+			t.Fatalf("%s email=%q ok=%v want %q", tc.id, gotEmail, ok, tc.email)
+		}
+	}
 }
 
 func TestServerUpdateRejectsIDMutation(t *testing.T) {
@@ -992,6 +1207,10 @@ func TestServerUpdateRejectsIDMutation(t *testing.T) {
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, updateResponse, "BadValue")
+	errmsg, ok := bson.Raw(updateResponse).Lookup("errmsg").StringValueOK()
+	if !ok || !strings.Contains(errmsg, "updates[0]") {
+		t.Fatalf("errmsg=%q ok=%v want updates[0]", errmsg, ok)
+	}
 }
 
 func TestServerIndexMetadataCommands(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -51,13 +52,16 @@ var (
 
 	errCollectionManagerNil = errors.New("collections: collection manager is nil")
 	errCollectionNil        = errors.New("collections: collection is nil")
+	errCollectionDBNil      = errors.New("collections: db is nil")
 	errCollectionNotFound   = ErrCollectionNotFound
 )
 
 // UpdateBatchItem describes one document update in a batch. DocumentID must be
 // non-empty and unique within the batch. Update receives the current stored
 // document bytes and returns the replacement document bytes in the same format
-// expected by Update.
+// expected by Update. If Update returns changed=true, replacement must be a
+// complete valid stored document for the collection format; returning
+// replacement=nil, changed=false is the supported no-op form.
 type UpdateBatchItem struct {
 	DocumentID []byte
 	Update     func(current []byte) (replacement []byte, changed bool, err error)
@@ -131,7 +135,7 @@ type CollectionManager struct {
 	db              *backenddb.DB
 	closeUnregister func()
 	closing         atomic.Bool
-	domainMu        sync.Mutex
+	domainMu        sync.RWMutex
 	domains         map[string]*collectionWriteDomain
 }
 
@@ -303,6 +307,8 @@ type collectionMetaDisk struct {
 }
 
 type collectionCatalog struct {
+	// collectionCatalog is immutable once cached or published. Root updates must
+	// create a replacement catalog via cloneCatalogWithRootUpdates.
 	meta  CollectionMeta
 	roots map[string]uint64
 }
@@ -343,6 +349,7 @@ type collectionWriteDomain struct {
 	updateCombineMu   sync.Mutex
 	updateCombiner    *collectionUpdateCombiner
 	updateCombineDone bool
+	updateCombineTTL  time.Duration
 	loaded            bool
 	meta              CollectionMeta
 	catalog           *collectionCatalog
@@ -453,8 +460,8 @@ func (m *CollectionManager) existingWriteDomainForCollection(name string) *colle
 	if m.closing.Load() {
 		return nil
 	}
-	m.domainMu.Lock()
-	defer m.domainMu.Unlock()
+	m.domainMu.RLock()
+	defer m.domainMu.RUnlock()
 	if m.domains == nil {
 		return nil
 	}
@@ -468,14 +475,14 @@ func (m *CollectionManager) FlushAll() error {
 	if m == nil || m.db == nil {
 		return nil
 	}
-	m.domainMu.Lock()
+	m.domainMu.RLock()
 	domains := make([]*collectionWriteDomain, 0, len(m.domains))
 	for _, domain := range m.domains {
 		if domain != nil {
 			domains = append(domains, domain)
 		}
 	}
-	m.domainMu.Unlock()
+	m.domainMu.RUnlock()
 
 	var errs []error
 	for _, domain := range domains {
@@ -511,7 +518,7 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 		return nil, errCollectionManagerNil
 	}
 	if m.db == nil {
-		return nil, errors.New("collections: db is nil")
+		return nil, errCollectionDBNil
 	}
 	if m.isClosing() {
 		return nil, backenddb.ErrClosed
@@ -576,13 +583,13 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 		return nil, errCollectionManagerNil
 	}
 	if m.db == nil {
-		return nil, errors.New("collections: db is nil")
-	}
-	if err := ValidateCollectionName(name); err != nil {
-		return nil, err
+		return nil, errCollectionDBNil
 	}
 	if m.isClosing() {
 		return nil, backenddb.ErrClosed
+	}
+	if err := ValidateCollectionName(name); err != nil {
+		return nil, err
 	}
 	if collection, ok := m.openCollectionFromWriteDomainCache(name); ok {
 		if m.db.IsClosing() {
@@ -605,7 +612,7 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 	collection := &Collection{
 		db:          m.db,
 		writeDomain: m.writeDomainForCollection(catalog.meta.Name),
-		meta:        catalog.meta,
+		meta:        *catalog.meta.copy(),
 	}
 	if collection.writeDomain == nil {
 		return nil, backenddb.ErrClosed
@@ -627,19 +634,22 @@ func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Co
 	if domain == nil {
 		return nil, false
 	}
-	catalog := cachedWriteDomainCatalogForSystemRoot(domain, state.SystemRootPageID)
+	catalog := cachedWriteDomainCatalogForState(domain, state.SystemRootPageID, state.CommitSeq)
 	if catalog == nil {
+		return nil, false
+	}
+	currentState := m.db.State()
+	if currentState == nil ||
+		currentState.SystemRootPageID != state.SystemRootPageID ||
+		currentState.CommitSeq != state.CommitSeq {
 		return nil, false
 	}
 	collection := &Collection{
 		db:          m.db,
 		writeDomain: domain,
-		meta:        catalog.meta,
+		meta:        *catalog.meta.copy(),
 	}
 	collection.rememberCatalogAtSystemRoot(state.SystemRootPageID, catalog)
-	if m.db.IsClosing() {
-		return nil, false
-	}
 	return collection, true
 }
 
@@ -648,7 +658,7 @@ func (m *CollectionManager) ListCollections() ([]CollectionMeta, error) {
 		return nil, errCollectionManagerNil
 	}
 	if m.db == nil {
-		return nil, errors.New("collections: db is nil")
+		return nil, errCollectionDBNil
 	}
 	snap := m.db.AcquireSnapshot()
 	if snap == nil {
@@ -706,12 +716,36 @@ func (c *Collection) Meta() CollectionMeta {
 	return *c.meta.copy()
 }
 
+// SameCachedCatalog reports whether both handles were opened against the same
+// collection catalog state.
+func (c *Collection) SameCachedCatalog(other *Collection) bool {
+	if c == nil || other == nil {
+		return false
+	}
+	cName, cSystemRoot, cCommitSeq := c.cachedCatalogIdentity()
+	otherName, otherSystemRoot, otherCommitSeq := other.cachedCatalogIdentity()
+	return cName != "" &&
+		cName == otherName &&
+		cSystemRoot != 0 &&
+		cSystemRoot == otherSystemRoot &&
+		cCommitSeq == otherCommitSeq
+}
+
+func (c *Collection) cachedCatalogIdentity() (name string, systemRoot, commitSeq uint64) {
+	if c == nil {
+		return "", 0, 0
+	}
+	c.catalogMu.RLock()
+	defer c.catalogMu.RUnlock()
+	return c.meta.Name, c.catalogSystemRoot, c.catalogCommitSeq
+}
+
 func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
 	if c.db == nil {
-		return nil, errors.New("collections: db is nil")
+		return nil, errCollectionDBNil
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation()
@@ -832,7 +866,7 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 		return nil, errCollectionNil
 	}
 	if c.db == nil {
-		return nil, errors.New("collections: db is nil")
+		return nil, errCollectionDBNil
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation()
@@ -917,7 +951,7 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 		return nil, errCollectionNil
 	}
 	if c.db == nil {
-		return nil, errors.New("collections: db is nil")
+		return nil, errCollectionDBNil
 	}
 	if len(c.meta.Indexes) == 0 {
 		return c.insertOneNoIndexBuffered(id, document)
@@ -940,7 +974,7 @@ func (c *Collection) Flush() error {
 		return errCollectionNil
 	}
 	if c.db == nil {
-		return errors.New("collections: db is nil")
+		return errCollectionDBNil
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation()
@@ -1055,7 +1089,7 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 
 func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWriteDomain, currentCommitSeq, currentSystemRoot uint64) (*collectionCatalog, error) {
 	if c == nil || c.db == nil {
-		return nil, errors.New("collections: db is nil")
+		return nil, errCollectionDBNil
 	}
 	if domain == nil {
 		return nil, errors.New("collections: missing write domain")
@@ -1089,12 +1123,12 @@ func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWrite
 	if len(domain.rootBaseIDs) > 0 {
 		for rootName, baseRootID := range domain.rootBaseIDs {
 			if rootID := catalog.rootID(rootName); rootID != baseRootID {
-				return nil, fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, domain.meta.Name)
+				return nil, fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
 			}
 		}
 	} else {
 		if rootID := catalog.rootID(primaryRootName); rootID != domain.primaryRoot {
-			return nil, fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, domain.meta.Name)
+			return nil, fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, primaryRootName)
 		}
 	}
 	options, err := collectionPlannerOptions(catalog.meta)
@@ -2273,7 +2307,7 @@ func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool)
 		return nil, errCollectionNil
 	}
 	if c.db == nil {
-		return nil, errors.New("collections: db is nil")
+		return nil, errCollectionDBNil
 	}
 
 	return retryInsertBatchMutation(func() ([][]byte, error) {
@@ -2553,7 +2587,12 @@ func (c *Collection) validateInsertBatchPlanLocked(meta CollectionMeta, rootName
 		return nil, nil, fmt.Errorf("collections: concurrent schema modification detected for %q", meta.Name)
 	}
 	for _, rootName := range rootNames {
-		if got, want := catalog.rootID(rootName), baseRootIDs[rootName]; got != want {
+		want, ok := baseRootIDs[rootName]
+		if !ok {
+			_ = current.Close()
+			return nil, nil, fmt.Errorf("collections: insert plan missing base root id for %q", rootName)
+		}
+		if got := catalog.rootID(rootName); got != want {
 			_ = current.Close()
 			return nil, nil, fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
 		}
@@ -2688,7 +2727,7 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 		return false, errCollectionNil
 	}
 	if c.db == nil {
-		return false, errors.New("collections: db is nil")
+		return false, errCollectionDBNil
 	}
 	if len(documentID) == 0 {
 		return false, errors.New("collections: document id cannot be empty")
@@ -2863,7 +2902,7 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	if combiner := c.updateCombiner(); combiner != nil {
 		return combiner.update(c, documentID, update)
 	}
-	return c.updateDirect(documentID, update)
+	return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
 }
 
 func validateCollectionUpdateInput(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) error {
@@ -2871,7 +2910,7 @@ func validateCollectionUpdateInput(c *Collection, documentID []byte, update func
 		return errCollectionNil
 	}
 	if c.db == nil {
-		return errors.New("collections: db is nil")
+		return errCollectionDBNil
 	}
 	if len(documentID) == 0 {
 		return errors.New("collections: document id cannot be empty")
@@ -2911,7 +2950,7 @@ func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, 
 		return nil, errCollectionNil
 	}
 	if c.db == nil {
-		return nil, errors.New("collections: db is nil")
+		return nil, errCollectionDBNil
 	}
 	if len(items) == 0 {
 		return nil, nil
@@ -2919,6 +2958,7 @@ func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, 
 	if err := validateUpdateBatchItems(items); err != nil {
 		return nil, err
 	}
+	items = cloneUpdateBatchItems(items)
 	unlockMutation := c.lockMutation()
 	defer unlockMutation()
 	if err := c.flushBufferedWrites(); err != nil {
@@ -2984,24 +3024,37 @@ func (c *Collection) updateCombiner() *collectionUpdateCombiner {
 		return nil
 	}
 	domain := c.writeDomain
-	domain.updateCombineMu.Lock()
-	defer domain.updateCombineMu.Unlock()
-	if domain.updateCombineDone {
-		return nil
+	for {
+		domain.updateCombineMu.Lock()
+		if domain.updateCombineDone {
+			domain.updateCombineMu.Unlock()
+			return nil
+		}
+		if domain.updateCombiner != nil {
+			combiner := domain.updateCombiner
+			done := combiner.done
+			if !combiner.isStopped() {
+				domain.updateCombineMu.Unlock()
+				return combiner
+			}
+			domain.updateCombineMu.Unlock()
+			if done != nil {
+				<-done
+			}
+			continue
+		}
+		combiner := &collectionUpdateCombiner{
+			maxBatch: defaultCollectionUpdateCombineMaxBatch,
+			idleTTL:  domain.updateCombineIdleTTL(),
+			requests: make(chan collectionUpdateCombineRequest, defaultCollectionUpdateCombineMaxBatch*4),
+			done:     make(chan struct{}),
+			domain:   domain,
+		}
+		domain.updateCombiner = combiner
+		domain.updateCombineMu.Unlock()
+		go combiner.run()
+		return combiner
 	}
-	if domain.updateCombiner != nil {
-		return domain.updateCombiner
-	}
-	combiner := &collectionUpdateCombiner{
-		maxBatch: defaultCollectionUpdateCombineMaxBatch,
-		idleTTL:  collectionUpdateCombineIdleTTL,
-		requests: make(chan collectionUpdateCombineRequest, defaultCollectionUpdateCombineMaxBatch*4),
-		done:     make(chan struct{}),
-		domain:   domain,
-	}
-	domain.updateCombiner = combiner
-	go combiner.run()
-	return combiner
 }
 
 func (domain *collectionWriteDomain) stopUpdateCombiner() {
@@ -3020,7 +3073,7 @@ func (domain *collectionWriteDomain) stopUpdateCombiner() {
 
 func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
 	if combiner == nil || combiner.maxBatch <= 1 {
-		return c.updateDirect(documentID, update)
+		return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
 	}
 	done := make(chan collectionUpdateCombineResult, 1)
 	req := collectionUpdateCombineRequest{
@@ -3030,7 +3083,7 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 		done:       done,
 	}
 	if !combiner.enqueue(req) {
-		return c.updateDirect(documentID, update)
+		return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
 	}
 	result := <-done
 	return result.matched, result.modified, result.err
@@ -3038,6 +3091,9 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 
 func (combiner *collectionUpdateCombiner) enqueue(req collectionUpdateCombineRequest) bool {
 	if combiner == nil {
+		return false
+	}
+	if req.done == nil || cap(req.done) == 0 {
 		return false
 	}
 	combiner.mu.RLock()
@@ -3072,6 +3128,12 @@ func (combiner *collectionUpdateCombiner) closeRequests() bool {
 	combiner.stopped = true
 	close(combiner.requests)
 	return true
+}
+
+func (combiner *collectionUpdateCombiner) isStopped() bool {
+	combiner.mu.RLock()
+	defer combiner.mu.RUnlock()
+	return combiner.stopped
 }
 
 func (combiner *collectionUpdateCombiner) run() {
@@ -3122,9 +3184,6 @@ func (combiner *collectionUpdateCombiner) retireIdle() bool {
 		combiner.domain.updateCombineMu.Lock()
 		if combiner.domain.updateCombiner == combiner {
 			stopped = combiner.closeRequests()
-			if stopped {
-				combiner.domain.updateCombiner = nil
-			}
 		}
 		combiner.domain.updateCombineMu.Unlock()
 	} else {
@@ -3135,6 +3194,13 @@ func (combiner *collectionUpdateCombiner) retireIdle() bool {
 	}
 	for req := range combiner.requests {
 		completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+	}
+	if combiner.domain != nil {
+		combiner.domain.updateCombineMu.Lock()
+		if combiner.domain.updateCombiner == combiner {
+			combiner.domain.updateCombiner = nil
+		}
+		combiner.domain.updateCombineMu.Unlock()
 	}
 	return true
 }
@@ -3160,7 +3226,7 @@ func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionU
 func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombineRequest) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			completeUpdateCombineBatchWithError(batch, fmt.Errorf("collections: update combiner panic: %v", recovered))
+			completeUpdateCombineBatchWithError(batch, fmt.Errorf("collections: update combiner panic (%T): %v\n%s", recovered, recovered, debug.Stack()))
 		}
 	}()
 	if len(batch) == 1 || collectionUpdateCombineHasDuplicateIDs(batch) {
@@ -3173,7 +3239,7 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 	for i, req := range batch {
 		items[i] = UpdateBatchItem{
 			DocumentID: req.documentID,
-			Update:     recoverUpdateCombineCallback(req.update),
+			Update:     recoverCollectionUpdateCallback(req.update),
 		}
 	}
 	results, err := batch[0].collection.UpdateBatch(items)
@@ -3194,21 +3260,28 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 }
 
 func runUpdateCombineDirect(req collectionUpdateCombineRequest) collectionUpdateCombineResult {
-	matched, modified, err := req.collection.updateDirect(req.documentID, recoverUpdateCombineCallback(req.update))
+	matched, modified, err := req.collection.updateDirect(req.documentID, recoverCollectionUpdateCallback(req.update))
 	return collectionUpdateCombineResult{matched: matched, modified: modified, err: err}
 }
 
-func recoverUpdateCombineCallback(update func(current []byte) (replacement []byte, changed bool, err error)) func(current []byte) (replacement []byte, changed bool, err error) {
+func recoverCollectionUpdateCallback(update func(current []byte) (replacement []byte, changed bool, err error)) func(current []byte) (replacement []byte, changed bool, err error) {
 	return func(current []byte) (replacement []byte, changed bool, err error) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				replacement = nil
 				changed = false
-				err = fmt.Errorf("collections: update combiner callback panic: %v", recovered)
+				err = fmt.Errorf("collections: update callback panic (%T): %v\n%s", recovered, recovered, debug.Stack())
 			}
 		}()
 		return update(current)
 	}
+}
+
+func (domain *collectionWriteDomain) updateCombineIdleTTL() time.Duration {
+	if domain != nil && domain.updateCombineTTL > 0 {
+		return domain.updateCombineTTL
+	}
+	return collectionUpdateCombineIdleTTL
 }
 
 func completeUpdateCombineBatchWithError(batch []collectionUpdateCombineRequest, err error) {
@@ -3218,29 +3291,34 @@ func completeUpdateCombineBatchWithError(batch []collectionUpdateCombineRequest,
 }
 
 func completeUpdateCombineRequest(req collectionUpdateCombineRequest, result collectionUpdateCombineResult) {
-	select {
-	case req.done <- result:
-	default:
+	if req.done == nil {
+		return
 	}
+	req.done <- result
 }
 
 func collectionUpdateCombineHasDuplicateIDs(batch []collectionUpdateCombineRequest) bool {
 	if len(batch) < 2 {
 		return false
 	}
-	order := make([]int, len(batch))
-	for i := range order {
-		order[i] = i
-	}
-	sort.Slice(order, func(i, j int) bool {
-		return bytes.Compare(batch[order[i]].documentID, batch[order[j]].documentID) < 0
-	})
-	for i := 1; i < len(order); i++ {
-		if bytes.Equal(batch[order[i-1]].documentID, batch[order[i]].documentID) {
+	seen := make(map[string]struct{}, len(batch))
+	for _, req := range batch {
+		key := string(req.documentID)
+		if _, ok := seen[key]; ok {
 			return true
 		}
+		seen[key] = struct{}{}
 	}
 	return false
+}
+
+func cloneUpdateBatchItems(items []UpdateBatchItem) []UpdateBatchItem {
+	out := make([]UpdateBatchItem, len(items))
+	for i, item := range items {
+		out[i] = item
+		out[i].DocumentID = bytes.Clone(item.DocumentID)
+	}
+	return out
 }
 
 func validateBSONReplacementPreservesID(current, replacement []byte, opts collectionOptions) error {
@@ -3565,20 +3643,20 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 		}
 		if err != nil {
 			_ = snap.Close()
-			return nil, err
+			return nil, fmt.Errorf("collections: update batch index %d: %w", i, err)
 		}
 		results[i].Matched = true
 		document, changedOne, err := item.Update(bytes.Clone(entry.Value))
 		if err != nil {
 			_ = snap.Close()
-			return nil, err
-		}
-		if err := validateBSONReplacementPreservesID(entry.Value, document, plannerOptions); err != nil {
-			_ = snap.Close()
-			return nil, err
+			return nil, fmt.Errorf("collections: update batch index %d: %w", i, err)
 		}
 		if !changedOne {
 			continue
+		}
+		if err := validateBSONReplacementPreservesID(entry.Value, document, plannerOptions); err != nil {
+			_ = snap.Close()
+			return nil, fmt.Errorf("collections: update batch index %d: %w", i, err)
 		}
 		prepared := preparedBatchUpdate{
 			itemIndex:  i,
@@ -3588,7 +3666,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 			prepared.oldState, err = loadDeleteIndexState(snap, catalog, item.DocumentID, entry.Value, runtimes, plannerOptions)
 			if err != nil {
 				_ = snap.Close()
-				return nil, err
+				return nil, fmt.Errorf("collections: update batch index %d: %w", i, err)
 			}
 		}
 		changed = append(changed, prepared)
@@ -3617,7 +3695,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 			changed[i].newState, err = indexStateForDocument(changed[i].document, runtimes, plannerOptions)
 			if err != nil {
 				_ = snap.Close()
-				return nil, err
+				return nil, fmt.Errorf("collections: update batch index %d: %w", changed[i].itemIndex, err)
 			}
 			changed[i].indexStateChanged = !documentIndexStatesEqual(changed[i].oldState, changed[i].newState)
 		}
@@ -3627,7 +3705,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 		if changed[i].indexStateChanged {
 			if err := rejectReplaceUniqueConflicts(snap, catalog, runtimes, changed[i].newState, changed[i].documentID, batchReplacements); err != nil {
 				_ = snap.Close()
-				return nil, err
+				return nil, fmt.Errorf("collections: update batch index %d: %w", changed[i].itemIndex, err)
 			}
 		}
 	}
@@ -3884,7 +3962,7 @@ func (c *Collection) catalogForSnapshot(snap *backenddb.Snapshot) (*collectionCa
 	}
 	c.catalogMu.RUnlock()
 
-	if cached := cachedWriteDomainCatalogForSystemRoot(c.writeDomain, systemRoot); cached != nil {
+	if cached := cachedWriteDomainCatalogForState(c.writeDomain, systemRoot, commitSeq); cached != nil {
 		c.rememberCatalog(snap, cached)
 		return cached, nil
 	}
@@ -3897,16 +3975,16 @@ func (c *Collection) catalogForSnapshot(snap *backenddb.Snapshot) (*collectionCa
 	return catalog, nil
 }
 
-func cachedWriteDomainCatalogForSystemRoot(domain *collectionWriteDomain, systemRoot uint64) *collectionCatalog {
+func cachedWriteDomainCatalogForState(domain *collectionWriteDomain, systemRoot, commitSeq uint64) *collectionCatalog {
 	if domain == nil || systemRoot == 0 {
 		return nil
 	}
 	domain.mu.RLock()
 	defer domain.mu.RUnlock()
-	if !domain.loaded || domain.catalog == nil || domain.baseSystemRoot != systemRoot {
+	if !domain.loaded || domain.catalog == nil || domain.baseSystemRoot != systemRoot || domain.baseCommitSeq != commitSeq {
 		return nil
 	}
-	return domain.catalog
+	return domain.catalog.copy()
 }
 
 func snapshotSystemRoot(snap *backenddb.Snapshot) uint64 {
@@ -3969,7 +4047,7 @@ func (c *Collection) rememberCatalog(snap *backenddb.Snapshot, catalog *collecti
 	c.catalogMu.Lock()
 	c.catalogCommitSeq = commitSeq
 	c.catalogSystemRoot = systemRoot
-	c.catalog = catalog
+	c.catalog = catalog.copy()
 	c.catalogMu.Unlock()
 }
 
@@ -3981,7 +4059,7 @@ func (c *Collection) rememberCatalogAtSystemRoot(systemRoot uint64, catalog *col
 	c.catalogMu.Lock()
 	c.catalogCommitSeq = commitSeq
 	c.catalogSystemRoot = systemRoot
-	c.catalog = catalog
+	c.catalog = catalog.copy()
 	c.catalogMu.Unlock()
 }
 
@@ -4001,8 +4079,8 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 		return
 	}
 	domain.loaded = true
-	domain.meta = catalog.meta
-	domain.catalog = catalog
+	domain.meta = *catalog.meta.copy()
+	domain.catalog = catalog.copy()
 	domain.baseCommitSeq = c.commitSeqForSystemRoot(systemRoot)
 	domain.baseSystemRoot = systemRoot
 	domain.primaryRoot = catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
@@ -4030,10 +4108,7 @@ func cloneCatalogWithRootUpdates(base *collectionCatalog, meta CollectionMeta, r
 			roots[name] = rootIDs[i]
 		}
 	}
-	return &collectionCatalog{
-		meta:  meta,
-		roots: roots,
-	}
+	return (&collectionCatalog{meta: meta, roots: roots}).copy()
 }
 
 func buildDeleteRootDeltaTable(deleteKeys [][]byte) memtable.Table {
@@ -4484,7 +4559,7 @@ func (c *Collection) NewStoredDocumentJSONMaterializer() (*StoredDocumentJSONMat
 		return nil, errCollectionNil
 	}
 	if c.db == nil {
-		return nil, errors.New("collections: db is nil")
+		return nil, errCollectionDBNil
 	}
 	documentFormat, err := normalizeDocumentFormat(c.meta.Options.DocumentFormat)
 	if err != nil {
@@ -4551,7 +4626,7 @@ func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error
 		return dst[:0], false, errCollectionNil
 	}
 	if c.db == nil {
-		return dst[:0], false, errors.New("collections: db is nil")
+		return dst[:0], false, errCollectionDBNil
 	}
 	if len(documentID) == 0 {
 		return dst[:0], false, errors.New("collections: document id cannot be empty")
@@ -4849,7 +4924,7 @@ func (c *Collection) ScanDocumentsFunc(maxDocuments int, fn func(DocumentRecord)
 		return false, errCollectionNil
 	}
 	if c.db == nil {
-		return false, errors.New("collections: db is nil")
+		return false, errCollectionDBNil
 	}
 	if maxDocuments <= 0 {
 		return false, errors.New("collections: max documents must be positive")
@@ -4939,7 +5014,7 @@ func loadCollectionCatalog(snap *backenddb.Snapshot, name string) (*collectionCa
 		}
 		roots[rootName] = rootID
 	}
-	return &collectionCatalog{meta: meta, roots: roots}, nil
+	return (&collectionCatalog{meta: meta, roots: roots}).copy(), nil
 }
 
 func (c *collectionCatalog) rootID(rootName string) uint64 {
@@ -4947,6 +5022,20 @@ func (c *collectionCatalog) rootID(rootName string) uint64 {
 		return 0
 	}
 	return c.roots[rootName]
+}
+
+func (c *collectionCatalog) copy() *collectionCatalog {
+	if c == nil {
+		return nil
+	}
+	roots := make(map[string]uint64, len(c.roots))
+	for name, rootID := range c.roots {
+		roots[name] = rootID
+	}
+	return &collectionCatalog{
+		meta:  *c.meta.copy(),
+		roots: roots,
+	}
 }
 
 func getSystemValue(snap *backenddb.Snapshot, key string) ([]byte, bool, error) {
