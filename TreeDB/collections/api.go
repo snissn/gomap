@@ -1939,7 +1939,7 @@ func newBufferedRootRunsIterator(runs []memtable.Table, start, end []byte) itera
 }
 
 func newBufferedRootRunsIteratorWithDeleted(runs []memtable.Table, start, end []byte, includeDeleted bool) iterator.UnsafeIterator {
-	if len(runs) == 1 {
+	if len(runs) == 1 && includeDeleted {
 		return runs[0].NewIterator(start, end)
 	}
 	it := &bufferedRootRunsIterator{
@@ -5434,196 +5434,120 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	if err != nil {
 		return nil, false, err
 	}
-	buffered, err := c.bufferedIndexOverlayLocked(domain, catalog.meta.Name, indexName, prefix)
-	if err != nil {
-		return nil, false, err
-	}
-	if domainLocked {
-		domain.mu.RUnlock()
-		domainLocked = false
+	bufferedRuns := bufferedIndexRunsLocked(domain, catalog.meta.Name, indexName)
+	var bufferedIt iterator.UnsafeIterator
+	if len(bufferedRuns) > 0 {
+		bufferedIt = newBufferedRootRunsIteratorWithDeleted(bufferedRuns, prefix, prefixEnd(prefix), true)
+		defer func() { _ = bufferedIt.Close() }()
 	}
 	rootID := catalog.rootID(collectionSecondaryRootName(catalog.meta.Name, idx.Name))
-	if rootID == 0 {
-		out, truncated := mergeCollectionIndexIDResults(buffered.liveIDs, nil, buffered.deletedIDs, maxResults, buffered.truncated, false)
-		return out, truncated, nil
+	var persistedIt iterator.UnsafeIterator
+	if rootID != 0 {
+		it, err := snap.IteratorAtRoot(rootID, prefix, prefixEnd(prefix))
+		if err != nil && !errors.Is(err, tree.ErrKeyNotFound) {
+			return nil, false, err
+		}
+		if err == nil {
+			persistedIt = it
+			defer func() { _ = persistedIt.Close() }()
+		}
 	}
-	collectLimit := collectionIndexReadCollectLimit(maxResults)
-	if collectLimit > 0 && len(buffered.deletedIDs) > 0 {
-		collectLimit = saturatingIndexCollectLimit(maxResults, len(buffered.deletedIDs))
-	}
-	it, err := snap.IteratorAtRoot(rootID, prefix, prefixEnd(prefix))
-	if errors.Is(err, tree.ErrKeyNotFound) {
-		out, truncated := mergeCollectionIndexIDResults(buffered.liveIDs, nil, buffered.deletedIDs, maxResults, buffered.truncated, false)
-		return out, truncated, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	defer func() { _ = it.Close() }()
-	persistedIDs, persistedTruncated, err := collectCollectionIndexIDsFromIterator(it, prefix, collectLimit)
-	if err != nil {
-		return nil, false, err
-	}
-	out, truncated := mergeCollectionIndexIDResults(buffered.liveIDs, persistedIDs, buffered.deletedIDs, maxResults, buffered.truncated, persistedTruncated)
-	return out, truncated, nil
+	return collectMergedCollectionIndexIDs(bufferedIt, persistedIt, prefix, maxResults)
 }
 
-func collectionIndexReadCollectLimit(maxResults int) int {
-	if maxResults <= 0 {
-		return 0
-	}
-	if maxResults == int(^uint(0)>>1) {
-		return 0
-	}
-	return maxResults + 1
-}
-
-func saturatingIndexCollectLimit(maxResults, deletedIDs int) int {
-	if maxResults <= 0 || maxResults == int(^uint(0)>>1) {
-		return 0
-	}
-	maxInt := int(^uint(0) >> 1)
-	if deletedIDs >= maxInt-maxResults {
-		return 0
-	}
-	limit := maxResults + deletedIDs
-	if limit == maxInt {
-		return 0
-	}
-	return limit + 1
-}
-
-type collectionIndexIDOverlay struct {
-	liveIDs    [][]byte
-	deletedIDs [][]byte
-	truncated  bool
-}
-
-func (c *Collection) bufferedIndexOverlayLocked(domain *collectionWriteDomain, collectionName, indexName string, prefix []byte) (collectionIndexIDOverlay, error) {
-	if c == nil || domain == nil {
-		return collectionIndexIDOverlay{}, nil
+func bufferedIndexRunsLocked(domain *collectionWriteDomain, collectionName, indexName string) []memtable.Table {
+	if domain == nil {
+		return nil
 	}
 	if domain.count == 0 || len(domain.rootRuns) == 0 {
-		return collectionIndexIDOverlay{}, nil
+		return nil
 	}
 	if domain.meta.Name != "" {
 		collectionName = domain.meta.Name
 	}
-	runs := domain.rootRuns[collectionSecondaryRootName(collectionName, indexName)]
-	if len(runs) == 0 {
-		return collectionIndexIDOverlay{}, nil
-	}
-	it := newBufferedRootRunsIteratorWithDeleted(runs, prefix, prefixEnd(prefix), true)
-	defer func() { _ = it.Close() }()
-	liveIDs, deletedIDs, err := collectCollectionIndexIDOverlayFromIterator(it, prefix)
-	return collectionIndexIDOverlay{liveIDs: liveIDs, deletedIDs: deletedIDs}, err
+	return domain.rootRuns[collectionSecondaryRootName(collectionName, indexName)]
 }
 
-func collectCollectionIndexIDsFromIterator(it iterator.UnsafeIterator, prefix []byte, limit int) ([][]byte, bool, error) {
-	if it == nil {
-		return nil, false, nil
+func collectMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, prefix []byte, maxResults int) ([][]byte, bool, error) {
+	limit := 0
+	if maxResults > 0 && maxResults < int(^uint(0)>>1) {
+		limit = maxResults + 1
 	}
-	out := make([][]byte, 0, 1)
-	truncated := false
-	for it.Valid() {
-		key := it.UnsafeKey()
-		if !bytes.HasPrefix(key, prefix) {
-			break
-		}
-		if !it.IsDeleted() {
-			if limit > 0 && len(out) >= limit {
-				truncated = true
-				break
-			}
-			out = append(out, bytes.Clone(key[len(prefix):]))
-		}
-		it.Next()
+	capHint := 1
+	if limit > 0 {
+		capHint = limit
 	}
-	if err := it.Error(); err != nil {
-		return nil, false, err
-	}
-	return out, truncated, nil
-}
-
-func collectCollectionIndexIDOverlayFromIterator(it iterator.UnsafeIterator, prefix []byte) ([][]byte, [][]byte, error) {
-	if it == nil {
-		return nil, nil, nil
-	}
-	liveIDs := make([][]byte, 0, 1)
-	var deletedIDs [][]byte
-	for it.Valid() {
-		key := it.UnsafeKey()
-		if !bytes.HasPrefix(key, prefix) {
-			break
-		}
-		id := bytes.Clone(key[len(prefix):])
-		if it.IsDeleted() {
-			deletedIDs = append(deletedIDs, id)
-		} else {
-			liveIDs = append(liveIDs, id)
-		}
-		it.Next()
-	}
-	if err := it.Error(); err != nil {
-		return nil, nil, err
-	}
-	return liveIDs, deletedIDs, nil
-}
-
-func mergeCollectionIndexIDResults(bufferedIDs, persistedIDs, deletedIDs [][]byte, maxResults int, bufferedTruncated, persistedTruncated bool) ([][]byte, bool) {
-	total := len(bufferedIDs) + len(persistedIDs)
-	limit := collectionIndexReadCollectLimit(maxResults)
-	if limit > 0 && total > limit {
-		total = limit
-	}
-	out := make([][]byte, 0, total)
-	truncated := bufferedTruncated || persistedTruncated
-	i, j := 0, 0
+	out := make([][]byte, 0, capHint)
 	appendID := func(id []byte) {
 		if len(out) > 0 && bytes.Equal(out[len(out)-1], id) {
 			return
 		}
-		out = append(out, id)
+		out = append(out, bytes.Clone(id))
 	}
-	for (i < len(bufferedIDs) || j < len(persistedIDs)) && (limit == 0 || len(out) < limit) {
+	for limit == 0 || len(out) < limit {
+		bufferedID, bufferedOK := collectionIndexIteratorID(bufferedIt, prefix)
+		persistedID, persistedOK := collectionIndexIteratorID(persistedIt, prefix)
+		if !bufferedOK && !persistedOK {
+			break
+		}
 		switch {
-		case i >= len(bufferedIDs):
-			if !collectionIndexIDDeleted(deletedIDs, persistedIDs[j]) {
-				appendID(persistedIDs[j])
+		case !bufferedOK:
+			appendID(persistedID)
+			persistedIt.Next()
+		case !persistedOK:
+			if !bufferedIt.IsDeleted() {
+				appendID(bufferedID)
 			}
-			j++
-		case j >= len(persistedIDs):
-			appendID(bufferedIDs[i])
-			i++
+			bufferedIt.Next()
 		default:
-			cmp := bytes.Compare(bufferedIDs[i], persistedIDs[j])
+			cmp := bytes.Compare(bufferedID, persistedID)
 			if cmp < 0 {
-				appendID(bufferedIDs[i])
-				i++
-			} else if cmp > 0 {
-				if !collectionIndexIDDeleted(deletedIDs, persistedIDs[j]) {
-					appendID(persistedIDs[j])
+				if !bufferedIt.IsDeleted() {
+					appendID(bufferedID)
 				}
-				j++
+				bufferedIt.Next()
+			} else if cmp > 0 {
+				appendID(persistedID)
+				persistedIt.Next()
 			} else {
-				appendID(bufferedIDs[i])
-				i++
-				j++
+				if !bufferedIt.IsDeleted() {
+					appendID(bufferedID)
+				}
+				bufferedIt.Next()
+				persistedIt.Next()
 			}
 		}
 	}
+	if err := collectionIndexIteratorError(bufferedIt); err != nil {
+		return nil, false, err
+	}
+	if err := collectionIndexIteratorError(persistedIt); err != nil {
+		return nil, false, err
+	}
+	truncated := false
 	if maxResults > 0 && len(out) > maxResults {
 		out = out[:maxResults]
 		truncated = true
 	}
-	return out, truncated
+	return out, truncated, nil
 }
 
-func collectionIndexIDDeleted(deletedIDs [][]byte, id []byte) bool {
-	i := sort.Search(len(deletedIDs), func(i int) bool {
-		return bytes.Compare(deletedIDs[i], id) >= 0
-	})
-	return i < len(deletedIDs) && bytes.Equal(deletedIDs[i], id)
+func collectionIndexIteratorID(it iterator.UnsafeIterator, prefix []byte) ([]byte, bool) {
+	if it == nil || !it.Valid() {
+		return nil, false
+	}
+	key := it.UnsafeKey()
+	if !bytes.HasPrefix(key, prefix) {
+		return nil, false
+	}
+	return key[len(prefix):], true
+}
+
+func collectionIndexIteratorError(it iterator.UnsafeIterator) error {
+	if it == nil {
+		return nil
+	}
+	return it.Error()
 }
 
 // ScanDocuments flushes buffered writes before acquiring a snapshot, then scans
