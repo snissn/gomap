@@ -2467,6 +2467,12 @@ func TestCollectionValidateInsertBatchPlanLockedClassifiesRaces(t *testing.T) {
 		}
 		t.Fatalf("root mismatch current=%v err=%v want ErrConcurrentMutation", current, err)
 	}
+	if current, _, err := col.validateInsertBatchPlanLocked(catalog.meta, rootNames, map[string]uint64{}, plan); current != nil || err == nil || errors.Is(err, ErrConcurrentMutation) || !strings.Contains(err.Error(), "missing base root id") {
+		if current != nil {
+			_ = current.Close()
+		}
+		t.Fatalf("missing base root current=%v err=%v want non-retryable missing base root error", current, err)
+	}
 
 	schemaMeta := catalog.meta
 	schemaMeta.Options.AllowArrayValuesInIndex = !schemaMeta.Options.AllowArrayValuesInIndex
