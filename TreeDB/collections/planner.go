@@ -135,6 +135,7 @@ type orderedDocumentIndexState [][][]byte
 
 type indexEncodeArena struct {
 	buf       []byte
+	scratch   []byte
 	states    [][][]byte
 	valueRefs [][]byte
 }
@@ -1172,7 +1173,7 @@ func appendJSONParserArrayIndexValues(value []byte, valueType IndexValueType, en
 			return
 		}
 		var next []byte
-		encoder.buf, next, encodeErr = appendJSONParserIndexScalar(encoder.buf, valueType, elem, dataType)
+		next, encodeErr = encoder.appendJSONParserIndexScalar(valueType, elem, dataType)
 		if encodeErr != nil {
 			return
 		}
@@ -1224,7 +1225,7 @@ func appendJSONParserIndexValueToState(state orderedDocumentIndexState, runtimeI
 	default:
 		var next []byte
 		var err error
-		encoder.buf, next, err = appendJSONParserIndexScalar(encoder.buf, runtime.def.valueType, value.raw, value.valueType)
+		next, err = encoder.appendJSONParserIndexScalar(runtime.def.valueType, value.raw, value.valueType)
 		if err != nil {
 			return err
 		}
@@ -1233,55 +1234,58 @@ func appendJSONParserIndexValueToState(state orderedDocumentIndexState, runtimeI
 	}
 }
 
-func appendJSONParserIndexScalar(dst []byte, indexValueType IndexValueType, raw []byte, valueType jsonparser.ValueType) ([]byte, []byte, error) {
+func (a *indexEncodeArena) appendJSONParserIndexScalar(indexValueType IndexValueType, raw []byte, valueType jsonparser.ValueType) ([]byte, error) {
+	dst := a.buf
 	start := len(dst)
 	switch indexValueType {
 	case IndexValueString:
 		if valueType != jsonparser.String {
-			return dst, nil, fmt.Errorf("collections: indexed JSON value for type %q must be string, got %s", indexValueType, valueType)
+			return nil, fmt.Errorf("collections: indexed JSON value for type %q must be string, got %s", indexValueType, valueType)
 		}
 		if bytes.IndexByte(raw, '\\') == -1 {
 			dst = appendIndexStringComponent(dst, raw)
 			break
 		}
-		unescaped, err := jsonparser.Unescape(raw, nil)
+		unescaped, err := jsonparser.Unescape(raw, a.scratch[:0])
 		if err != nil {
-			return dst, nil, err
+			return nil, err
 		}
+		a.scratch = unescaped[:0]
 		dst = appendIndexStringComponent(dst, unescaped)
 	case IndexValueBool:
 		if valueType != jsonparser.Boolean {
-			return dst, nil, fmt.Errorf("collections: indexed JSON value for type %q must be bool, got %s", indexValueType, valueType)
+			return nil, fmt.Errorf("collections: indexed JSON value for type %q must be bool, got %s", indexValueType, valueType)
 		}
 		if len(raw) == 4 && raw[0] == 't' && raw[1] == 'r' && raw[2] == 'u' && raw[3] == 'e' {
 			dst = appendIndexBoolComponent(dst, true)
 		} else if len(raw) == 5 && raw[0] == 'f' && raw[1] == 'a' && raw[2] == 'l' && raw[3] == 's' && raw[4] == 'e' {
 			dst = appendIndexBoolComponent(dst, false)
 		} else {
-			return dst, nil, fmt.Errorf("collections: unsupported indexed JSON boolean %q", raw)
+			return nil, fmt.Errorf("collections: unsupported indexed JSON boolean %q", raw)
 		}
 	case IndexValueInt64:
 		if valueType != jsonparser.Number {
-			return dst, nil, fmt.Errorf("collections: indexed JSON value for type %q must be number, got %s", indexValueType, valueType)
+			return nil, fmt.Errorf("collections: indexed JSON value for type %q must be number, got %s", indexValueType, valueType)
 		}
 		v, err := parseJSONInt64IndexValue(string(raw))
 		if err != nil {
-			return dst, nil, err
+			return nil, err
 		}
 		dst = appendIndexInt64Component(dst, v)
 	case IndexValueDouble:
 		if valueType != jsonparser.Number {
-			return dst, nil, fmt.Errorf("collections: indexed JSON value for type %q must be number, got %s", indexValueType, valueType)
+			return nil, fmt.Errorf("collections: indexed JSON value for type %q must be number, got %s", indexValueType, valueType)
 		}
 		v, err := parseJSONDoubleIndexValue(string(raw))
 		if err != nil {
-			return dst, nil, err
+			return nil, err
 		}
 		dst = appendIndexDoubleComponent(dst, v)
 	default:
-		return dst, nil, fmt.Errorf("collections: unsupported index value type %q", indexValueType)
+		return nil, fmt.Errorf("collections: unsupported index value type %q", indexValueType)
 	}
-	return dst, dst[start:len(dst):len(dst)], nil
+	a.buf = dst
+	return dst[start:len(dst):len(dst)], nil
 }
 
 func jsonNumberLooksInteger(raw string) bool {

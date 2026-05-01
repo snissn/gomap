@@ -290,10 +290,6 @@ func TestServerOfficialGoDriverIndexMetadata(t *testing.T) {
 	}).Err(); err != nil {
 		t.Fatalf("driver create index: %v", err)
 	}
-	indexName := "email_1"
-	if indexName != "email_1" {
-		t.Fatalf("created index name=%q want email_1", indexName)
-	}
 
 	names, err := mongoDB.ListCollectionNames(opCtx, bson.D{})
 	if err != nil {

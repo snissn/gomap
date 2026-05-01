@@ -1001,8 +1001,9 @@ func BenchmarkCollectionCreateIndexBackfillExistingDocs(b *testing.B) {
 		b.StartTimer()
 
 		if _, err := collection.CreateIndex(collections.IndexDefinition{
-			Name:  "email_idx",
-			Field: "email", ValueType: collections.IndexValueString,
+			Name:          "email_idx",
+			Field:         "email",
+			ValueType:     collections.IndexValueString,
 			Unique:        true,
 			StoragePolicy: benchmarkRootStoragePolicy(indexOuter),
 		}); err != nil {
