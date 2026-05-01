@@ -4371,11 +4371,21 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	if modifiedCount == 0 {
 		return false, nil
 	}
+	hasDeltaTable := false
+	for _, table := range plan.deltaTables {
+		if table != nil && table.Len() > 0 {
+			hasDeltaTable = true
+			break
+		}
+	}
+	if !hasDeltaTable {
+		return false, errors.New("collections: UpdateBatch modified rows without delta tables")
+	}
 	domain := c.writeDomain
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
 	if domain.count != 0 {
-		return false, nil
+		return false, ErrConcurrentMutation
 	}
 	if err := c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs); err != nil {
 		return false, err
