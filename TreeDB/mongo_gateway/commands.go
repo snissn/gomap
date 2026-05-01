@@ -656,12 +656,12 @@ func mongoUpdateCoalescerUsesSingleCollection(batch []mongoUpdateCoalescerReques
 	if len(batch) == 0 {
 		return true
 	}
-	name := batch[0].col.Name()
-	if name == "" {
+	col := batch[0].col
+	if col == nil {
 		return false
 	}
 	for _, req := range batch[1:] {
-		if req.col == nil || req.col.Name() != name {
+		if !col.SameCachedCatalog(req.col) {
 			return false
 		}
 	}

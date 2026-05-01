@@ -1040,6 +1040,20 @@ func TestMongoUpdateCoalescerUsesSingleCollection(t *testing.T) {
 	if mongoUpdateCoalescerUsesSingleCollection([]mongoUpdateCoalescerRequest{{col: usersA}, {col: posts}}) {
 		t.Fatal("mixed collections reported as single collection")
 	}
+	schemaCol, err := manager.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open users for schema change: %v", err)
+	}
+	if _, err := schemaCol.CreateIndex(collections.IndexDefinition{Name: "email", Field: "email"}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	usersAfterSchemaChange, err := manager.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open users after schema change: %v", err)
+	}
+	if mongoUpdateCoalescerUsesSingleCollection([]mongoUpdateCoalescerRequest{{col: usersA}, {col: usersAfterSchemaChange}}) {
+		t.Fatal("different collection catalog states reported as single collection")
+	}
 }
 
 func TestServerCloseStopsUpdateCoalescers(t *testing.T) {
