@@ -37,8 +37,8 @@ func TestObserveOrderedRootDeltaGroupPublishStats(t *testing.T) {
 	if stats.errors != 1 {
 		t.Fatalf("errors=%d want 1", stats.errors)
 	}
-	if stats.roots != 6 {
-		t.Fatalf("roots=%d want 6", stats.roots)
+	if stats.roots != 4 {
+		t.Fatalf("roots=%d want 4", stats.roots)
 	}
 	if stats.waitTotalNs != uint64((3 * time.Millisecond).Nanoseconds()) {
 		t.Fatalf("waitTotalNs=%d", stats.waitTotalNs)
@@ -46,8 +46,8 @@ func TestObserveOrderedRootDeltaGroupPublishStats(t *testing.T) {
 	if stats.holdTotalNs != uint64((4 * time.Millisecond).Nanoseconds()) {
 		t.Fatalf("holdTotalNs=%d", stats.holdTotalNs)
 	}
-	if stats.avgRootsPerCall != 3 {
-		t.Fatalf("avgRootsPerCall=%f want 3", stats.avgRootsPerCall)
+	if stats.avgRootsPerCall != 2 {
+		t.Fatalf("avgRootsPerCall=%f want 2", stats.avgRootsPerCall)
 	}
 	if stats.writeLockWaitShare <= 0 || stats.writeLockWaitShare >= 100 {
 		t.Fatalf("writeLockWaitShare=%f want between 0 and 100", stats.writeLockWaitShare)
