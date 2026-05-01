@@ -2878,21 +2878,28 @@ func TestNoIndexInsertAfterRawCommitDoesNotReenterWriteDomainLock(t *testing.T) 
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	defer func() { _ = d.Close() }()
 
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
-		_ = d.Close()
 		t.Fatalf("create collection: %v", err)
 	}
 	col, err := mgr.OpenCollection("users")
 	if err != nil {
-		_ = d.Close()
 		t.Fatalf("open collection: %v", err)
 	}
 	if err := d.Set([]byte("raw/unrelated"), []byte("value")); err != nil {
-		_ = d.Close()
 		t.Fatalf("raw set: %v", err)
 	}
+
+	timeout := 5 * time.Second
+	if deadline, ok := t.Deadline(); ok {
+		if remaining := time.Until(deadline) / 2; remaining > 0 && remaining < timeout {
+			timeout = remaining
+		}
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 
 	done := make(chan error, 1)
 	go func() {
@@ -2902,14 +2909,10 @@ func TestNoIndexInsertAfterRawCommitDoesNotReenterWriteDomainLock(t *testing.T) 
 	select {
 	case err := <-done:
 		if err != nil {
-			_ = d.Close()
 			t.Fatalf("insert: %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-timer.C:
 		t.Fatal("insert blocked while refreshing write-domain catalog after raw commit")
-	}
-	if err := d.Close(); err != nil {
-		t.Fatalf("close db: %v", err)
 	}
 }
 
