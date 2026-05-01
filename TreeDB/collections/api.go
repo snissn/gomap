@@ -5455,10 +5455,20 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	if err != nil {
 		return nil, false, err
 	}
-	bufferedRuns := bufferedIndexRunsLocked(domain, catalog.meta.Name, indexName)
+	bufferedTable, err := bufferedIndexTableLocked(domain, catalog.meta.Name, indexName, prefix)
+	if err != nil {
+		return nil, false, err
+	}
+	if domainLocked {
+		domain.mu.RUnlock()
+		domainLocked = false
+	}
+	if bufferedTable != nil {
+		defer resetCollectionRunTable(bufferedTable)
+	}
 	var bufferedIt iterator.UnsafeIterator
-	if len(bufferedRuns) > 0 {
-		bufferedIt = newBufferedRootRunsIteratorWithDeleted(bufferedRuns, prefix, prefixEnd(prefix), true)
+	if bufferedTable != nil {
+		bufferedIt = bufferedTable.NewIterator(prefix, prefixEnd(prefix))
 		defer func() { _ = bufferedIt.Close() }()
 	}
 	rootID := catalog.rootID(collectionSecondaryRootName(catalog.meta.Name, idx.Name))
@@ -5476,17 +5486,45 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	return collectMergedCollectionIndexIDs(bufferedIt, persistedIt, prefix, maxResults)
 }
 
-func bufferedIndexRunsLocked(domain *collectionWriteDomain, collectionName, indexName string) []memtable.Table {
+func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, indexName string, prefix []byte) (memtable.Table, error) {
 	if domain == nil {
-		return nil
+		return nil, nil
 	}
 	if domain.count == 0 || len(domain.rootRuns) == 0 {
-		return nil
+		return nil, nil
 	}
 	if domain.meta.Name != "" {
 		collectionName = domain.meta.Name
 	}
-	return append([]memtable.Table(nil), domain.rootRuns[collectionSecondaryRootName(collectionName, indexName)]...)
+	runs := domain.rootRuns[collectionSecondaryRootName(collectionName, indexName)]
+	if len(runs) == 0 {
+		return nil, nil
+	}
+	table := newCollectionRunTable(0)
+	it := newBufferedRootRunsIteratorWithDeleted(runs, prefix, prefixEnd(prefix), true)
+	defer func() { _ = it.Close() }()
+	for it.Valid() {
+		key := it.UnsafeKey()
+		if !bytes.HasPrefix(key, prefix) {
+			break
+		}
+		if it.IsDeleted() {
+			table.DeleteSteal(bytes.Clone(key))
+		} else {
+			setCollectionRunValue(table, bytes.Clone(key), nil)
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		resetCollectionRunTable(table)
+		return nil, err
+	}
+	if table.Len() == 0 {
+		resetCollectionRunTable(table)
+		return nil, nil
+	}
+	table.Freeze()
+	return table, nil
 }
 
 func collectMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, prefix []byte, maxResults int) ([][]byte, bool, error) {
