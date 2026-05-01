@@ -193,8 +193,8 @@ func (db *DB) orderedRootDeltaGroupPublishStats() orderedRootDeltaGroupPublishSt
 	if calls > 0 {
 		stats.avgRootsPerCall = float64(roots) / float64(calls)
 	}
-	if denom := waitNs + holdNs; denom > 0 {
-		stats.writeLockWaitShare = 100 * float64(waitNs) / float64(denom)
+	if denom := float64(waitNs) + float64(holdNs); denom > 0 {
+		stats.writeLockWaitShare = 100 * float64(waitNs) / denom
 	}
 	if calls == 0 {
 		return stats

@@ -920,10 +920,11 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 	db.writeMu.Lock()
 	wait := time.Since(lockStart)
 	holdStart := time.Now()
+	rootsObserved := 0
 	defer func() {
 		hold := time.Since(holdStart)
 		db.writeMu.Unlock()
-		db.observeOrderedRootDeltaGroupPublish(wait, hold, len(ordered), err)
+		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, err)
 	}()
 
 	if db.readOnly {
@@ -939,6 +940,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 			return 0, nil, err
 		}
 	}
+	rootsObserved = len(ordered)
 
 	systemOpts := systemRootOrderedPublishOptions(db)
 	rootIDs = make([]uint64, len(ordered))
