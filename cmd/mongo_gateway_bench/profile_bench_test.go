@@ -418,18 +418,15 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 		updateRaw := updateDocs[op%len(updateDocs)]
 		matched, _, err := collection.Update(id, func(stored []byte) ([]byte, bool, error) {
 			raw := bson.Raw(stored)
-			if err := raw.Validate(); err != nil {
-				return nil, false, err
-			}
 			originalID := raw.Lookup("_id")
-			updated, changed, err := profileBenchApplySetUpdate(raw, updateRaw)
+			updated, shouldWrite, err := profileBenchApplySetUpdate(raw, updateRaw)
 			if err != nil {
 				return nil, false, err
 			}
 			if !updated.Lookup("_id").Equal(originalID) {
 				return nil, false, errUpdatedPrimaryKey
 			}
-			return []byte(updated), changed, nil
+			return []byte(updated), shouldWrite, nil
 		})
 		if err != nil {
 			return err
