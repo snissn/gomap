@@ -2830,6 +2830,9 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexesDeclinesFreshUniqueCatal
 	if batched {
 		t.Fatalf("batched=%v results=%+v want declined", batched, results)
 	}
+	if len(results) != 2 || results[0].Matched || results[0].Modified || results[1].Matched || results[1].Modified {
+		t.Fatalf("declined results=%+v want two zero-valued results", results)
+	}
 	got, err := stale.Get([]byte("u1"))
 	if err != nil {
 		t.Fatalf("get u1: %v", err)
