@@ -1146,8 +1146,8 @@ func TestBenchmarkSetUpdateCanExerciseIndexedField(t *testing.T) {
 	if got, ok := set.Lookup("concurrent_update_seq").Int64OK(); !ok || got != 3 {
 		t.Fatalf("concurrent_update_seq=%d ok=%t want 3", got, ok)
 	}
-	if city, ok := set.Lookup("city").StringValueOK(); !ok || city == "" || city == benchmarkCity(3) {
-		t.Fatalf("city=%q ok=%t want non-empty updated city", city, ok)
+	if city, ok := set.Lookup("city").StringValueOK(); !ok || city != benchmarkUpdatedCity(3) {
+		t.Fatalf("city=%q ok=%t want %q", city, ok, benchmarkUpdatedCity(3))
 	}
 }
 

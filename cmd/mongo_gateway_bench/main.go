@@ -1917,7 +1917,7 @@ func benchmarkDocument(i int) bson.D {
 	}
 }
 
-func benchmarkSetUpdate(i int, concurrent bool, indexedField bool) bson.D {
+func benchmarkSetUpdate(i int, concurrent bool, updateIndexedField bool) bson.D {
 	set := bson.D{
 		{Key: "updated", Value: true},
 		{Key: "update_seq", Value: int64(i)},
@@ -1928,7 +1928,7 @@ func benchmarkSetUpdate(i int, concurrent bool, indexedField bool) bson.D {
 			{Key: "concurrent_update_seq", Value: int64(i)},
 		}
 	}
-	if indexedField {
+	if updateIndexedField {
 		set = append(set, bson.E{Key: "city", Value: benchmarkUpdatedCity(i)})
 	}
 	return bson.D{{Key: "$set", Value: set}}
