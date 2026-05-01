@@ -536,6 +536,52 @@ func TestProfileRecorderWritesPhaseArtifactsAndManifest(t *testing.T) {
 	}
 }
 
+func TestProfileRecorderSkipsDisabledBlockAndMutexProfiles(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := parseConfig([]string{
+		"-profile-dir", dir,
+		"-profile-block-rate", "0",
+		"-profile-mutex-fraction", "0",
+	})
+	if err != nil {
+		t.Fatalf("parse profile config: %v", err)
+	}
+	recorder, err := newProfileRecorder(cfg)
+	if err != nil {
+		t.Fatalf("newProfileRecorder: %v", err)
+	}
+	defer recorder.Close()
+
+	if _, err := recorder.RunPhase("unit phase", func() (phaseResult, error) {
+		return summarizePhase("unit phase", 1, 1, time.Millisecond, []time.Duration{time.Millisecond}), nil
+	}); err != nil {
+		t.Fatalf("RunPhase: %v", err)
+	}
+	if err := recorder.WriteManifest(nil, nil); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	for _, name := range []string{
+		"unit_phase.cpu.pprof",
+		"unit_phase.heap.pprof",
+		"unit_phase.allocs.pprof",
+		"unit_phase.goroutine.pprof",
+		profileManifestFile,
+	} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("stat %s: %v", name, err)
+		}
+	}
+	for _, name := range []string{
+		"unit_phase.block.pprof",
+		"unit_phase.mutex.pprof",
+	} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("stat %s err=%v want not-exist", name, err)
+		}
+	}
+}
+
 func TestTreeDBProfileSmokeFastAndWALOnFast(t *testing.T) {
 	if testing.Short() {
 		t.Skip("profile smoke benchmark skipped in short mode")

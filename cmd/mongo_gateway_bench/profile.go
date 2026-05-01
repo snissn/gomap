@@ -273,15 +273,22 @@ func (p *activeProfilePhase) writeRuntimeProfiles() []error {
 	profiles := []struct {
 		name string
 		set  func(string)
+		want bool
 	}{
-		{name: "heap", set: func(path string) { p.artifact.HeapProfile = path }},
-		{name: "allocs", set: func(path string) { p.artifact.AllocsProfile = path }},
-		{name: "block", set: func(path string) { p.artifact.BlockProfile = path }},
-		{name: "mutex", set: func(path string) { p.artifact.MutexProfile = path }},
-		{name: "goroutine", set: func(path string) { p.artifact.GoroutineDump = path }},
+		{name: "heap", set: func(path string) { p.artifact.HeapProfile = path }, want: true},
+		{name: "allocs", set: func(path string) { p.artifact.AllocsProfile = path }, want: true},
+		{name: "block", set: func(path string) { p.artifact.BlockProfile = path }, want: p.recorder.blockRate > 0},
+		{name: "mutex", set: func(path string) { p.artifact.MutexProfile = path }, want: p.recorder.mutexFraction > 0},
+		{name: "goroutine", set: func(path string) { p.artifact.GoroutineDump = path }, want: true},
 	}
 	var errs []error
 	for _, profile := range profiles {
+		if !profile.want {
+			continue
+		}
+		if profile.name == "heap" {
+			runtime.GC()
+		}
 		outPath := filepath.Join(p.recorder.dir, p.artifact.Prefix+"."+profile.name+".pprof")
 		if err := writeRuntimeProfile(profile.name, outPath); err != nil {
 			errs = append(errs, err)
