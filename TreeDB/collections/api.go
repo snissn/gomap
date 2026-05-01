@@ -546,7 +546,7 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 	collection := &Collection{
 		db:          m.db,
 		writeDomain: m.writeDomainForCollection(catalog.meta.Name),
-		meta:        *catalog.meta.copy(),
+		meta:        copyCollectionMeta(catalog.meta),
 	}
 	collection.rememberCatalog(snap, catalog)
 	collection.noteWriteDomainCatalog(snapshotSystemRoot(snap), catalog)
@@ -578,7 +578,7 @@ func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Co
 	collection := &Collection{
 		db:          m.db,
 		writeDomain: domain,
-		meta:        *catalog.meta.copy(),
+		meta:        copyCollectionMeta(catalog.meta),
 	}
 	collection.rememberCatalogAtSystemRoot(state.SystemRootPageID, catalog)
 	return collection, true
@@ -2963,6 +2963,14 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 }
 
 func (c *Collection) catalogForSnapshot(snap *backenddb.Snapshot) (*collectionCatalog, error) {
+	return c.catalogForSnapshotWithWriteDomainLockState(snap, false)
+}
+
+func (c *Collection) catalogForSnapshotWithWriteDomainLocked(snap *backenddb.Snapshot) (*collectionCatalog, error) {
+	return c.catalogForSnapshotWithWriteDomainLockState(snap, true)
+}
+
+func (c *Collection) catalogForSnapshotWithWriteDomainLockState(snap *backenddb.Snapshot, writeDomainLocked bool) (*collectionCatalog, error) {
 	if snap == nil {
 		return nil, backenddb.ErrClosed
 	}
@@ -2976,7 +2984,13 @@ func (c *Collection) catalogForSnapshot(snap *backenddb.Snapshot) (*collectionCa
 	}
 	c.catalogMu.RUnlock()
 
-	if cached := cachedWriteDomainCatalogForState(c.writeDomain, systemRoot, commitSeq); cached != nil {
+	var cached *collectionCatalog
+	if writeDomainLocked {
+		cached = cachedWriteDomainCatalogForStateLocked(c.writeDomain, systemRoot, commitSeq)
+	} else {
+		cached = cachedWriteDomainCatalogForState(c.writeDomain, systemRoot, commitSeq)
+	}
+	if cached != nil {
 		c.rememberCatalog(snap, cached)
 		return cached, nil
 	}
@@ -2995,11 +3009,18 @@ func cachedWriteDomainCatalogForState(domain *collectionWriteDomain, systemRoot,
 	}
 	domain.mu.RLock()
 	defer domain.mu.RUnlock()
+	return cachedWriteDomainCatalogForStateLocked(domain, systemRoot, commitSeq)
+}
+
+func cachedWriteDomainCatalogForStateLocked(domain *collectionWriteDomain, systemRoot, commitSeq uint64) *collectionCatalog {
+	if domain == nil || systemRoot == 0 {
+		return nil
+	}
 	if !domain.loaded || domain.catalog == nil || domain.baseSystemRoot != systemRoot || domain.baseCommitSeq != commitSeq {
 		return nil
 	}
-	// The write domain owns this catalog. Callers may read it directly, but must
-	// copy before retaining it in another cache.
+	// Collection catalogs are immutable after publication, so callers may retain
+	// and share this pointer across handle-local caches.
 	return domain.catalog
 }
 
@@ -3063,7 +3084,7 @@ func (c *Collection) rememberCatalog(snap *backenddb.Snapshot, catalog *collecti
 	c.catalogMu.Lock()
 	c.catalogCommitSeq = commitSeq
 	c.catalogSystemRoot = systemRoot
-	c.catalog = catalog.copy()
+	c.catalog = catalog
 	c.catalogMu.Unlock()
 }
 
@@ -3075,7 +3096,7 @@ func (c *Collection) rememberCatalogAtSystemRoot(systemRoot uint64, catalog *col
 	c.catalogMu.Lock()
 	c.catalogCommitSeq = commitSeq
 	c.catalogSystemRoot = systemRoot
-	c.catalog = catalog.copy()
+	c.catalog = catalog
 	c.catalogMu.Unlock()
 }
 
@@ -3095,8 +3116,8 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 		return
 	}
 	domain.loaded = true
-	domain.meta = *catalog.meta.copy()
-	domain.catalog = catalog.copy()
+	domain.meta = copyCollectionMeta(catalog.meta)
+	domain.catalog = catalog
 	domain.baseCommitSeq = c.commitSeqForSystemRoot(systemRoot)
 	domain.baseSystemRoot = systemRoot
 	domain.primaryRoot = catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
@@ -3124,11 +3145,7 @@ func cloneCatalogWithRootUpdates(base *collectionCatalog, meta CollectionMeta, r
 			roots[name] = rootIDs[i]
 		}
 	}
-	metaCopy := meta
-	if copied := meta.copy(); copied != nil {
-		metaCopy = *copied
-	}
-	return &collectionCatalog{meta: metaCopy, roots: roots}
+	return &collectionCatalog{meta: copyCollectionMeta(meta), roots: roots}
 }
 
 func buildDeleteRootDeltaTable(deleteKeys [][]byte) memtable.Table {
@@ -3763,7 +3780,7 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 		return nil, false, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
-	catalog, err := c.catalogForSnapshot(snap)
+	catalog, err := c.catalogForSnapshotWithWriteDomainLocked(snap)
 	if err != nil {
 		return nil, false, err
 	}
@@ -4052,7 +4069,7 @@ func (c *collectionCatalog) copy() *collectionCatalog {
 		roots[name] = rootID
 	}
 	return &collectionCatalog{
-		meta:  *c.meta.copy(),
+		meta:  copyCollectionMeta(c.meta),
 		roots: roots,
 	}
 }
@@ -4332,6 +4349,13 @@ func (m CollectionMeta) copy() *CollectionMeta {
 		Options: m.Options,
 		Indexes: append([]IndexDefinition(nil), m.Indexes...),
 	}
+}
+
+func copyCollectionMeta(meta CollectionMeta) CollectionMeta {
+	if copied := meta.copy(); copied != nil {
+		return *copied
+	}
+	return meta
 }
 
 func sameCollectionMeta(a, b CollectionMeta) bool {
