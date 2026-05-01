@@ -601,7 +601,7 @@ func TestServerUpdateCoalescesConcurrentDistinctIDs(t *testing.T) {
 		DocumentFormat: collections.DocumentFormatBSON,
 	}
 	server.UpdateCoalescingMaxDelay = 20 * time.Millisecond
-	server.UpdateCoalescingMaxBatch = 8
+	server.UpdateCoalescingMaxBatch = 2
 	assertOK(t, serveCommand(t, server, 2260, bson.D{
 		{Key: "insert", Value: "users"},
 		{Key: "documents", Value: bson.A{
@@ -658,7 +658,7 @@ func TestServerUpdateCoalescedBatchIsolatesItemErrors(t *testing.T) {
 		DocumentFormat: collections.DocumentFormatBSON,
 	}
 	server.UpdateCoalescingMaxDelay = 20 * time.Millisecond
-	server.UpdateCoalescingMaxBatch = 8
+	server.UpdateCoalescingMaxBatch = 2
 	assertOK(t, serveCommand(t, server, 2262, bson.D{
 		{Key: "insert", Value: "users"},
 		{Key: "documents", Value: bson.A{
@@ -723,6 +723,26 @@ func TestServerUpdateCoalescedBatchIsolatesItemErrors(t *testing.T) {
 	gotScore, ok := firstBatch[0].Lookup("score").Int32OK()
 	if !ok || gotScore != 12 {
 		t.Fatalf("u2 score=%d ok=%v want 12", gotScore, ok)
+	}
+}
+
+func TestServerCloseStopsUpdateCoalescers(t *testing.T) {
+	server := NewServer()
+	coalescer := server.mongoUpdateCoalescer("app.users")
+	if coalescer == nil {
+		t.Fatal("expected coalescer")
+	}
+	if err := server.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	coalescer.mu.RLock()
+	stopped := coalescer.stopped
+	coalescer.mu.RUnlock()
+	if !stopped {
+		t.Fatal("coalescer was not stopped")
+	}
+	if got := server.mongoUpdateCoalescer("app.users"); got != nil {
+		t.Fatal("closed server created a new coalescer")
 	}
 }
 
