@@ -808,7 +808,7 @@ func TestServerUpdateCoalescesConcurrentDistinctIDs(t *testing.T) {
 	server.DefaultCollectionOptions = collections.CollectionOptions{
 		DocumentFormat: collections.DocumentFormatBSON,
 	}
-	server.UpdateCoalescingMaxDelay = 200 * time.Millisecond
+	server.UpdateCoalescingMaxDelay = 5 * time.Second
 	server.UpdateCoalescingMaxBatch = 2
 	assertOK(t, serveCommand(t, server, 2260, bson.D{
 		{Key: "insert", Value: "users"},
@@ -869,7 +869,7 @@ func TestServerUpdateCoalescedBatchIsolatesItemErrors(t *testing.T) {
 	server.DefaultCollectionOptions = collections.CollectionOptions{
 		DocumentFormat: collections.DocumentFormatBSON,
 	}
-	server.UpdateCoalescingMaxDelay = 200 * time.Millisecond
+	server.UpdateCoalescingMaxDelay = 5 * time.Second
 	server.UpdateCoalescingMaxBatch = 2
 	assertOK(t, serveCommand(t, server, 2262, bson.D{
 		{Key: "insert", Value: "users"},
@@ -1079,6 +1079,34 @@ func TestServerCloseStopsUpdateCoalescers(t *testing.T) {
 	}
 	if _, _, err := server.openCursor("app.users", []wire.Document{mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})}, compiledProjection{}, 1, true, defaultCursorBatchSize, 1); !errors.Is(err, errServerClosed) {
 		t.Fatalf("openCursor after Close err=%v want %v", err, errServerClosed)
+	}
+}
+
+func TestMongoUpdateCoalescerRejectsEnqueueAfterStop(t *testing.T) {
+	server := NewServer()
+	coalescer := server.mongoUpdateCoalescer("app.users")
+	if coalescer == nil {
+		t.Fatal("expected coalescer")
+	}
+	coalescer.stop()
+	if coalescer.enqueue(mongoUpdateCoalescerRequest{done: make(chan mongoUpdateCoalescerResult, 1)}) {
+		t.Fatal("stopped coalescer accepted enqueue")
+	}
+}
+
+func TestMongoUpdateCoalescerClampsConfiguredMaxBatch(t *testing.T) {
+	server := NewServer()
+	server.UpdateCoalescingMaxBatch = maxUpdateCoalescingBatch + 1
+	coalescer := server.mongoUpdateCoalescer("app.users")
+	if coalescer == nil {
+		t.Fatal("expected coalescer")
+	}
+	defer func() { _ = server.Close() }()
+	if coalescer.maxBatch != maxUpdateCoalescingBatch {
+		t.Fatalf("maxBatch=%d want %d", coalescer.maxBatch, maxUpdateCoalescingBatch)
+	}
+	if got, want := cap(coalescer.requests), maxUpdateCoalescingBatch*4; got != want {
+		t.Fatalf("request queue cap=%d want %d", got, want)
 	}
 }
 

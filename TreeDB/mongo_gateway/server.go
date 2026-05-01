@@ -26,6 +26,7 @@ const (
 	defaultCursorReapInterval      = time.Second
 	defaultUpdateCoalescingDelay   = 0
 	defaultUpdateCoalescingBatch   = 256
+	maxUpdateCoalescingBatch       = 4096
 	defaultUpdateCoalescingIdleTTL = 30 * time.Second
 )
 
@@ -42,6 +43,7 @@ type Server struct {
 	// work; negative disables coalescing.
 	UpdateCoalescingMaxDelay time.Duration
 	// UpdateCoalescingMaxBatch caps one coalesced same-collection update publish.
+	// Values above maxUpdateCoalescingBatch are clamped.
 	UpdateCoalescingMaxBatch int
 	// UpdateCoalescingIdleTTL removes an idle per-collection coalescer after this
 	// duration. Zero uses the default; negative disables idle removal.
