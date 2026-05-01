@@ -308,15 +308,19 @@ func matchingMongoRecord(key baseCellKey, treeConfig string, mongoIndex mongoSce
 	if treeScenario.hasMarker && !treeScenario.valid {
 		return nil, fmt.Errorf("invalid scaling scenario suffix for documents=%d secondary_indexes=%d config=%q available_mongo_configs=%v", key.Documents, key.SecondaryIndexes, treeConfig, sortedRunRecordKeys(mongoIndex.exact))
 	}
+	treeScenarioLabel := treeScenario.suffix
+	if !treeScenario.hasMarker {
+		treeScenarioLabel = "no scaling marker present"
+	}
 	matches := mongoIndex.bySuffix[treeScenario.suffix]
 	candidates := mongoIndex.suffixConfig[treeScenario.suffix]
 	if len(candidates) > 1 {
-		return nil, fmt.Errorf("ambiguous mongo rows for documents=%d secondary_indexes=%d config=%q tree_scenario=%q candidates=%v available_mongo_configs=%v", key.Documents, key.SecondaryIndexes, treeConfig, treeScenario.suffix, candidates, sortedRunRecordKeys(mongoIndex.exact))
+		return nil, fmt.Errorf("ambiguous mongo rows for documents=%d secondary_indexes=%d config=%q tree_scenario=%q candidates=%v available_mongo_configs=%v", key.Documents, key.SecondaryIndexes, treeConfig, treeScenarioLabel, candidates, sortedRunRecordKeys(mongoIndex.exact))
 	}
 	if len(matches) == 1 {
 		return matches[0], nil
 	}
-	return nil, fmt.Errorf("missing mongo row for documents=%d secondary_indexes=%d config=%q tree_scenario=%q available_mongo_configs=%v", key.Documents, key.SecondaryIndexes, treeConfig, treeScenario.suffix, sortedRunRecordKeys(mongoIndex.exact))
+	return nil, fmt.Errorf("missing mongo row for documents=%d secondary_indexes=%d config=%q tree_scenario=%q available_mongo_configs=%v", key.Documents, key.SecondaryIndexes, treeConfig, treeScenarioLabel, sortedRunRecordKeys(mongoIndex.exact))
 }
 
 func sortedRunRecordKeys(records map[string]*runRecord) []string {

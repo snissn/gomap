@@ -404,6 +404,26 @@ func TestReportAllowIncompleteStillRejectsMismatchedMongoScenario(t *testing.T) 
 	}
 }
 
+func TestMatchingMongoRecordNoScalingMarkerErrorSaysSo(t *testing.T) {
+	index := mongoScenarioIndex{
+		exact: map[string]*runRecord{
+			"mongo_writers_1": {Row: matrixRow{Config: "mongo_writers_1"}},
+		},
+		bySuffix: map[string][]*runRecord{
+			"writers_1": {{Row: matrixRow{Config: "mongo_writers_1"}}},
+		},
+		suffixConfig: map[string][]string{
+			"writers_1": {"mongo_writers_1"},
+		},
+	}
+	_, err := matchingMongoRecord(baseCellKey{Documents: 100, SecondaryIndexes: 2}, "treedb_without_marker", index, false)
+	if err == nil ||
+		!strings.Contains(err.Error(), `config="treedb_without_marker"`) ||
+		!strings.Contains(err.Error(), `tree_scenario="no scaling marker present"`) {
+		t.Fatalf("err=%v want explicit no scaling marker context", err)
+	}
+}
+
 func TestScalingScenarioSuffixRequiresTerminalCount(t *testing.T) {
 	for _, tc := range []struct {
 		config string
