@@ -4698,6 +4698,11 @@ func (c *Collection) validateRootDescriptorSystemDeltaForMeta(meta CollectionMet
 	if c == nil || c.db == nil {
 		return backenddb.ErrClosed
 	}
+	for _, rootName := range rootNames {
+		if _, ok := baseRootIDs[rootName]; !ok {
+			return fmt.Errorf("collections: missing base root for collection %q root %q", meta.Name, rootName)
+		}
+	}
 	currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
 	if currentSystemRoot != expectedSystemRoot || currentCommitSeq != expectedCommitSeq {
 		current := c.db.AcquireSnapshot()
@@ -4716,10 +4721,7 @@ func (c *Collection) validateRootDescriptorSystemDeltaForMeta(meta CollectionMet
 			return fmt.Errorf("collections: concurrent schema modification detected for %q", meta.Name)
 		}
 		for _, rootName := range rootNames {
-			want, ok := baseRootIDs[rootName]
-			if !ok {
-				return fmt.Errorf("collections: missing base root for collection %q root %q", meta.Name, rootName)
-			}
+			want := baseRootIDs[rootName]
 			if got := catalog.rootID(rootName); got != want {
 				return errConcurrentRootModification(meta.Name, rootName)
 			}
