@@ -686,6 +686,30 @@ func (c *Collection) Meta() CollectionMeta {
 	return *c.meta.copy()
 }
 
+// SameCachedCatalog reports whether both handles were opened against the same
+// collection catalog state.
+func (c *Collection) SameCachedCatalog(other *Collection) bool {
+	if c == nil || other == nil {
+		return false
+	}
+	cName, cSystemRoot, cCommitSeq := c.cachedCatalogIdentity()
+	otherName, otherSystemRoot, otherCommitSeq := other.cachedCatalogIdentity()
+	return cName != "" &&
+		cName == otherName &&
+		cSystemRoot != 0 &&
+		cSystemRoot == otherSystemRoot &&
+		cCommitSeq == otherCommitSeq
+}
+
+func (c *Collection) cachedCatalogIdentity() (name string, systemRoot, commitSeq uint64) {
+	if c == nil {
+		return "", 0, 0
+	}
+	c.catalogMu.RLock()
+	defer c.catalogMu.RUnlock()
+	return c.meta.Name, c.catalogSystemRoot, c.catalogCommitSeq
+}
+
 func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 	if c == nil {
 		return nil, errCollectionNil

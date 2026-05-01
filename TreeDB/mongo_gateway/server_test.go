@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -845,6 +847,593 @@ func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterWriteError(t *testin
 	if !ok || gotCity != "sea" {
 		t.Fatalf("u1 city=%q ok=%v want sea", gotCity, ok)
 	}
+}
+
+func TestServerUpdateCoalescesConcurrentDistinctIDs(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	server.UpdateCoalescingMaxDelay = 5 * time.Second
+	server.UpdateCoalescingMaxBatch = 2
+	assertOK(t, serveCommand(t, server, 2260, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(0)}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "score", Value: int32(0)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	before := db.State()
+	start := make(chan struct{})
+	responses := make(chan commandResult, 2)
+	var wg sync.WaitGroup
+	for i, id := range []string{"u1", "u2"} {
+		i, id := i, id
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			doc, err := serveCommandResult(server, int32(2261+i), bson.D{
+				{Key: "update", Value: "users"},
+				{Key: "updates", Value: bson.A{bson.D{
+					{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
+					{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "score", Value: int32(10 + i)}}}}},
+				}}},
+				{Key: "$db", Value: "app"},
+			})
+			responses <- commandResult{doc: doc, err: err}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(responses)
+	for response := range responses {
+		if response.err != nil {
+			t.Fatalf("ServeOneWithOwner: %v", response.err)
+		}
+		assertOK(t, response.doc)
+		assertInt32(t, response.doc, "n", 1)
+		assertInt32(t, response.doc, "nModified", 1)
+	}
+	after := db.State()
+	if after.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("coalesced updates advanced commit seq by %d, want 1", after.CommitSeq-before.CommitSeq)
+	}
+}
+
+func TestServerUpdateCoalescedBatchIsolatesItemErrors(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	server.UpdateCoalescingMaxDelay = 5 * time.Second
+	server.UpdateCoalescingMaxBatch = 2
+	assertOK(t, serveCommand(t, server, 2262, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(0)}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "score", Value: int32(0)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	type updateResponse struct {
+		name string
+		doc  wire.Document
+		err  error
+	}
+	start := make(chan struct{})
+	responses := make(chan updateResponse, 2)
+	var wg sync.WaitGroup
+	for i, tc := range []struct {
+		name string
+		id   string
+		set  bson.D
+	}{
+		{name: "invalid", id: "u1", set: bson.D{{Key: "_id", Value: "moved"}}},
+		{name: "valid", id: "u2", set: bson.D{{Key: "score", Value: int32(12)}}},
+	} {
+		i, tc := i, tc
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			doc, err := serveCommandResult(server, int32(2263+i), bson.D{
+				{Key: "update", Value: "users"},
+				{Key: "updates", Value: bson.A{bson.D{
+					{Key: "q", Value: bson.D{{Key: "_id", Value: tc.id}}},
+					{Key: "u", Value: bson.D{{Key: "$set", Value: tc.set}}},
+				}}},
+				{Key: "$db", Value: "app"},
+			})
+			responses <- updateResponse{name: tc.name, doc: doc, err: err}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(responses)
+
+	got := make(map[string]wire.Document, 2)
+	for response := range responses {
+		if response.err != nil {
+			t.Fatalf("%s ServeOneWithOwner: %v", response.name, response.err)
+		}
+		got[response.name] = response.doc
+	}
+	assertCommandError(t, got["invalid"], "BadValue")
+	assertOK(t, got["valid"])
+	assertInt32(t, got["valid"], "n", 1)
+	assertInt32(t, got["valid"], "nModified", 1)
+
+	findResponse := serveCommand(t, server, 2265, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u2"}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch := cursorFirstBatch(t, findResponse)
+	if len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	gotScore, ok := firstBatch[0].Lookup("score").Int32OK()
+	if !ok || gotScore != 12 {
+		t.Fatalf("u2 score=%d ok=%v want 12", gotScore, ok)
+	}
+}
+
+func TestMongoUpdateCoalescerUniqueIndexFallsBackToOrderedSingles(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	assertOK(t, serveCommand(t, server, 2266, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "unique", Value: true}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 2267, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "a@example.com"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "b@example.com"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	col, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	acquire, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "a@example.com"}}}}},
+	}))
+	if err != nil {
+		t.Fatalf("parse acquire: %v", err)
+	}
+	release, err := parseMongoUpdateItem(1, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "c@example.com"}}}}},
+	}))
+	if err != nil {
+		t.Fatalf("parse release: %v", err)
+	}
+
+	doneAcquire := make(chan mongoUpdateCoalescerResult, 1)
+	doneRelease := make(chan mongoUpdateCoalescerResult, 1)
+	(&mongoUpdateCoalescer{}).runBatch([]mongoUpdateCoalescerRequest{
+		{col: col, item: acquire, done: doneAcquire},
+		{col: col, item: release, done: doneRelease},
+	})
+	acquireResult := <-doneAcquire
+	releaseResult := <-doneRelease
+	if !collections.IsDuplicateKeyError(acquireResult.err) {
+		t.Fatalf("acquire err=%v want duplicate key", acquireResult.err)
+	}
+	if releaseResult.err != nil {
+		t.Fatalf("release err=%v", releaseResult.err)
+	}
+	if !releaseResult.matched || !releaseResult.modified {
+		t.Fatalf("release matched=%v modified=%v want true,true", releaseResult.matched, releaseResult.modified)
+	}
+}
+
+func TestServerUpdateCoalescedSkipsCoalescerForSecondaryUniqueIndex(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.UpdateCoalescingMaxDelay = 5 * time.Second
+	server.UpdateCoalescingMaxBatch = 2
+	assertOK(t, serveCommand(t, server, 2270, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "unique", Value: true}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 2271, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "a@example.com"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	col, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	update, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "b@example.com"}}}}},
+	}))
+	if err != nil {
+		t.Fatalf("parse update: %v", err)
+	}
+	matched, modified, err := server.runMongoUpdateCoalesced("app.users", col, update)
+	if err != nil {
+		t.Fatalf("runMongoUpdateCoalesced: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("matched=%v modified=%v want true,true", matched, modified)
+	}
+	server.updateMu.Lock()
+	_, cached := server.updateCoalescers["app.users"]
+	server.updateMu.Unlock()
+	if cached {
+		t.Fatal("secondary unique update created a coalescer")
+	}
+}
+
+func TestCollectionUpdateBatchErrorIndexUsesTypedError(t *testing.T) {
+	err := fmt.Errorf("wrap: %w", &collections.UpdateBatchItemError{
+		Index: 3,
+		Err:   errors.New("bad replacement"),
+	})
+	index, ok := collectionUpdateBatchErrorIndex(err)
+	if !ok || index != 3 {
+		t.Fatalf("index=%d ok=%v want 3,true", index, ok)
+	}
+}
+
+func TestCollectionUpdateBatchErrorForRequestUsesCommandIndex(t *testing.T) {
+	err := collectionUpdateBatchErrorForRequest(&collections.UpdateBatchItemError{
+		Index: 2,
+		Err:   errors.New("bad replacement"),
+	}, 0)
+	if err == nil || strings.Contains(err.Error(), "update batch index") {
+		t.Fatalf("request err=%v should not expose coalesced batch index", err)
+	}
+	if !strings.Contains(err.Error(), "updates[0]") || !strings.Contains(err.Error(), "bad replacement") {
+		t.Fatalf("request err=%v want command update index", err)
+	}
+}
+
+func TestMongoUpdateCoalescerUsesSingleCollection(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: "app.users"}); err != nil {
+		t.Fatalf("create users: %v", err)
+	}
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: "app.posts"}); err != nil {
+		t.Fatalf("create posts: %v", err)
+	}
+	usersA, err := manager.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open users A: %v", err)
+	}
+	usersB, err := manager.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open users B: %v", err)
+	}
+	posts, err := manager.OpenCollection("app.posts")
+	if err != nil {
+		t.Fatalf("open posts: %v", err)
+	}
+	if !mongoUpdateCoalescerUsesSingleCollection([]mongoUpdateCoalescerRequest{{col: usersA}, {col: usersB}}) {
+		t.Fatal("same collection reported as mixed")
+	}
+	if mongoUpdateCoalescerUsesSingleCollection([]mongoUpdateCoalescerRequest{{col: usersA}, {col: posts}}) {
+		t.Fatal("mixed collections reported as single collection")
+	}
+	schemaCol, err := manager.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open users for schema change: %v", err)
+	}
+	if _, err := schemaCol.CreateIndex(collections.IndexDefinition{Name: "email", Field: "email"}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	usersAfterSchemaChange, err := manager.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open users after schema change: %v", err)
+	}
+	if mongoUpdateCoalescerUsesSingleCollection([]mongoUpdateCoalescerRequest{{col: usersA}, {col: usersAfterSchemaChange}}) {
+		t.Fatal("different collection catalog states reported as single collection")
+	}
+}
+
+func TestServerCloseStopsUpdateCoalescers(t *testing.T) {
+	server := NewServer()
+	coalescer := server.mongoUpdateCoalescer("app.users")
+	if coalescer == nil {
+		t.Fatal("expected coalescer")
+	}
+	if err := server.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	coalescer.mu.RLock()
+	stopped := coalescer.stopped
+	coalescer.mu.RUnlock()
+	if !stopped {
+		t.Fatal("coalescer was not stopped")
+	}
+	select {
+	case <-coalescer.done:
+	default:
+		t.Fatal("Close returned before coalescer worker exited")
+	}
+	if got := server.mongoUpdateCoalescer("app.users"); got != nil {
+		t.Fatal("closed server created a new coalescer")
+	}
+	if err := server.ServeOne(&readWriter{r: bytes.NewReader(nil)}); !errors.Is(err, errServerClosed) {
+		t.Fatalf("ServeOne after Close err=%v want %v", err, errServerClosed)
+	}
+	if _, _, err := server.openCursor("app.users", []wire.Document{mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})}, compiledProjection{}, 1, true, defaultCursorBatchSize, 1); !errors.Is(err, errServerClosed) {
+		t.Fatalf("openCursor after Close err=%v want %v", err, errServerClosed)
+	}
+}
+
+func TestMongoUpdateCoalescerRejectsEnqueueAfterStop(t *testing.T) {
+	server := NewServer()
+	coalescer := server.mongoUpdateCoalescer("app.users")
+	if coalescer == nil {
+		t.Fatal("expected coalescer")
+	}
+	coalescer.stop()
+	if coalescer.enqueue(mongoUpdateCoalescerRequest{done: make(chan mongoUpdateCoalescerResult, 1)}) {
+		t.Fatal("stopped coalescer accepted enqueue")
+	}
+}
+
+func TestMongoUpdateCoalescerCloseDoesNotBlockBehindFullQueue(t *testing.T) {
+	coalescer := &mongoUpdateCoalescer{
+		requests:  make(chan mongoUpdateCoalescerRequest, 1),
+		stoppedCh: make(chan struct{}),
+	}
+	coalescer.requests <- mongoUpdateCoalescerRequest{done: make(chan mongoUpdateCoalescerResult, 1)}
+	enqueueDone := make(chan bool, 1)
+	go func() {
+		enqueueDone <- coalescer.enqueue(mongoUpdateCoalescerRequest{done: make(chan mongoUpdateCoalescerResult, 1)})
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	closed := make(chan bool, 1)
+	go func() {
+		closed <- coalescer.closeRequests()
+	}()
+	select {
+	case ok := <-closed:
+		if !ok {
+			t.Fatal("closeRequests reported false")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("closeRequests blocked behind a full enqueue")
+	}
+	select {
+	case ok := <-enqueueDone:
+		if ok {
+			t.Fatal("enqueue succeeded after close")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("enqueue did not observe close")
+	}
+}
+
+func TestServerUpdateCoalescedFallsBackWhenCoalescerStopsBeforeEnqueue(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	server.UpdateCoalescingMaxDelay = 5 * time.Second
+	server.UpdateCoalescingMaxBatch = 2
+	assertOK(t, serveCommand(t, server, 2280, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(0)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	coalescer := server.mongoUpdateCoalescer("app.users")
+	if coalescer == nil {
+		t.Fatal("expected coalescer")
+	}
+	coalescer.stop()
+
+	col, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	update, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "score", Value: int32(7)}}}}},
+	}))
+	if err != nil {
+		t.Fatalf("parse update: %v", err)
+	}
+
+	matched, modified, err := server.runMongoUpdateCoalesced("app.users", col, update)
+	if err != nil {
+		t.Fatalf("runMongoUpdateCoalesced: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("matched=%v modified=%v want true,true", matched, modified)
+	}
+
+	findResponse := serveCommand(t, server, 2281, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch := cursorFirstBatch(t, findResponse)
+	if len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	gotScore, ok := firstBatch[0].Lookup("score").Int32OK()
+	if !ok || gotScore != 7 {
+		t.Fatalf("u1 score=%d ok=%v want 7", gotScore, ok)
+	}
+}
+
+func TestMongoUpdateCoalescerWaitReturnsWhenWorkerStops(t *testing.T) {
+	coalescer := &mongoUpdateCoalescer{done: make(chan struct{})}
+	done := make(chan mongoUpdateCoalescerResult, 1)
+	close(coalescer.done)
+	result := coalescer.waitForUpdateResult(done)
+	if result.err == nil || !strings.Contains(result.err.Error(), "stopped before completing request") {
+		t.Fatalf("result err=%v want stopped error", result.err)
+	}
+}
+
+func TestMongoUpdateCoalescerClampsConfiguredMaxBatch(t *testing.T) {
+	server := NewServer()
+	server.UpdateCoalescingMaxBatch = maxUpdateCoalescingBatch + 1
+	coalescer := server.mongoUpdateCoalescer("app.users")
+	if coalescer == nil {
+		t.Fatal("expected coalescer")
+	}
+	defer func() { _ = server.Close() }()
+	if coalescer.maxBatch != maxUpdateCoalescingBatch {
+		t.Fatalf("maxBatch=%d want %d", coalescer.maxBatch, maxUpdateCoalescingBatch)
+	}
+	if got, want := cap(coalescer.requests), maxUpdateCoalescingBatch*4; got != want {
+		t.Fatalf("request queue cap=%d want %d", got, want)
+	}
+}
+
+func TestServerUpdateCoalescerEvictsWhenIdle(t *testing.T) {
+	server := NewServer()
+	server.UpdateCoalescingIdleTTL = time.Millisecond
+	coalescer := server.mongoUpdateCoalescer("app.users")
+	if coalescer == nil {
+		t.Fatal("expected coalescer")
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.Now().Add(time.Second)
+	for {
+		server.updateMu.Lock()
+		_, stillCached := server.updateCoalescers["app.users"]
+		server.updateMu.Unlock()
+		coalescer.mu.RLock()
+		stopped := coalescer.stopped
+		coalescer.mu.RUnlock()
+		if !stillCached && stopped {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("coalescer was not evicted after idle timeout")
+		}
+		<-ticker.C
+	}
+}
+
+func TestMongoUpdateCoalescerRetireIdleStopsBeforeUncache(t *testing.T) {
+	server := NewServer()
+	coalescer := server.mongoUpdateCoalescer("app.users")
+	if coalescer == nil {
+		t.Fatal("expected coalescer")
+	}
+	coalescer.enqueueMu.Lock()
+	retired := make(chan bool, 1)
+	go func() {
+		retired <- coalescer.retireIdle()
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		if !server.updateMu.TryLock() {
+			break
+		}
+		server.updateMu.Unlock()
+		if time.Now().After(deadline) {
+			coalescer.enqueueMu.Unlock()
+			t.Fatal("retireIdle did not hold server update lock while stopping")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	replacement := make(chan *mongoUpdateCoalescer, 1)
+	go func() {
+		replacement <- server.mongoUpdateCoalescer("app.users")
+	}()
+	select {
+	case got := <-replacement:
+		coalescer.enqueueMu.Unlock()
+		if got != coalescer {
+			t.Fatal("created replacement coalescer before old coalescer stopped")
+		}
+		t.Fatal("returned old coalescer while idle retirement was stopping it")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	coalescer.enqueueMu.Unlock()
+	select {
+	case ok := <-retired:
+		if !ok {
+			t.Fatal("retireIdle reported false")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("retireIdle did not finish")
+	}
+	select {
+	case got := <-replacement:
+		if got == nil || got == coalescer {
+			t.Fatalf("replacement=%p old=%p want new coalescer", got, coalescer)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("replacement coalescer was not created after idle retirement")
+	}
+	_ = server.Close()
 }
 
 func TestServerUpdateWithUniqueIndexKeepsAcquireBeforeReleaseOrdered(t *testing.T) {
@@ -2543,6 +3132,46 @@ func TestServeConnCancellationInterruptsRead(t *testing.T) {
 	}
 }
 
+func TestServerCloseInterruptsServeConnRead(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+
+	server := NewServer()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ServeConn(context.Background(), serverConn)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		server.connMu.Lock()
+		registered := len(server.conns) == 1
+		server.connMu.Unlock()
+		if registered {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	server.connMu.Lock()
+	registered := len(server.conns) == 1
+	server.connMu.Unlock()
+	if !registered {
+		t.Fatal("ServeConn did not register connection")
+	}
+
+	if err := server.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, errServerClosed) {
+			t.Fatalf("ServeConn err=%v want %v", err, errServerClosed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ServeConn did not return after server close")
+	}
+}
+
 func TestServerMaxMessageLengthClampsToWireLimit(t *testing.T) {
 	server := &Server{MaxMessageLength: wire.DefaultMaxMessageLength + 1}
 	if got := server.maxMessageLength(); got != wire.DefaultMaxMessageLength {
@@ -2568,18 +3197,35 @@ func mustRawValue(tb testing.TB, value any) bson.RawValue {
 	return bson.RawValue{Type: valueType, Value: raw}
 }
 
+type commandResult struct {
+	doc wire.Document
+	err error
+}
+
 func serveCommand(tb testing.TB, server *Server, requestID int32, doc bson.D) wire.Document {
 	tb.Helper()
-	commandDoc := mustDocument(tb, doc)
+	response, err := serveCommandResult(server, requestID, doc)
+	if err != nil {
+		tb.Fatalf("serve command: %v", err)
+	}
+	return response
+}
+
+func serveCommandResult(server *Server, requestID int32, doc bson.D) (wire.Document, error) {
+	raw, err := bson.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("marshal BSON document: %w", err)
+	}
+	commandDoc := wire.Document(raw)
 	req, err := wire.AppendMsgMessage(nil, requestID, 0, 0, commandDoc)
 	if err != nil {
-		tb.Fatalf("AppendMsgMessage: %v", err)
+		return nil, fmt.Errorf("AppendMsgMessage: %w", err)
 	}
 	rw := &readWriter{r: bytes.NewReader(req)}
 	if err := server.ServeOneWithOwner(rw, 1); err != nil {
-		tb.Fatalf("ServeOneWithOwner: %v", err)
+		return nil, fmt.Errorf("ServeOneWithOwner: %w", err)
 	}
-	return readMsgResponse(tb, rw.w.Bytes(), requestID)
+	return readMsgResponseResult(rw.w.Bytes(), requestID)
 }
 
 func assertOK(tb testing.TB, doc wire.Document) {
@@ -2604,18 +3250,26 @@ func assertBool(tb testing.TB, doc wire.Document, key string, want bool) {
 
 func readMsgResponse(tb testing.TB, response []byte, responseTo int32) wire.Document {
 	tb.Helper()
+	doc, err := readMsgResponseResult(response, responseTo)
+	if err != nil {
+		tb.Fatalf("read msg response: %v", err)
+	}
+	return doc
+}
+
+func readMsgResponseResult(response []byte, responseTo int32) (wire.Document, error) {
 	h, body, err := wire.ReadMessage(bytes.NewReader(response), 0)
 	if err != nil {
-		tb.Fatalf("ReadMessage response: %v", err)
+		return nil, fmt.Errorf("ReadMessage response: %w", err)
 	}
 	if h.OpCode != wire.OpMsg || h.ResponseTo != responseTo {
-		tb.Fatalf("response header=%+v want OP_MSG responseTo=%d", h, responseTo)
+		return nil, fmt.Errorf("response header=%+v want OP_MSG responseTo=%d", h, responseTo)
 	}
 	msg, err := wire.ParseMsg(body)
 	if err != nil {
-		tb.Fatalf("ParseMsg response: %v", err)
+		return nil, fmt.Errorf("ParseMsg response: %w", err)
 	}
-	return msg.Body
+	return msg.Body, nil
 }
 
 func cursorFirstBatch(tb testing.TB, doc wire.Document) []bson.Raw {

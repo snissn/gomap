@@ -16,22 +16,38 @@ import (
 )
 
 const (
-	defaultMaxBSONObjectSize      = 16 * 1024 * 1024
-	defaultMaxWriteBatchSize      = 100_000
-	defaultMaxFindScanDocuments   = 10_000
-	defaultMaxCursorRetainedBytes = 64 * 1024 * 1024
-	defaultMaxOpenCursors         = 1_024
-	defaultCursorBatchSize        = 101
-	defaultCursorIdleTimeout      = 10 * time.Minute
-	defaultCursorReapInterval     = time.Second
+	defaultMaxBSONObjectSize       = 16 * 1024 * 1024
+	defaultMaxWriteBatchSize       = 100_000
+	defaultMaxFindScanDocuments    = 10_000
+	defaultMaxCursorRetainedBytes  = 64 * 1024 * 1024
+	defaultMaxOpenCursors          = 1_024
+	defaultCursorBatchSize         = 101
+	defaultCursorIdleTimeout       = 10 * time.Minute
+	defaultCursorReapInterval      = time.Second
+	defaultUpdateCoalescingDelay   = 0
+	defaultUpdateCoalescingBatch   = 256
+	maxUpdateCoalescingBatch       = 4096
+	defaultUpdateCoalescingIdleTTL = 30 * time.Second
 )
 
+var errServerClosed = errors.New("mongo gateway server is closed")
+
 type Server struct {
-	MaxMessageLength          int32
-	MaxFindScanDocuments      int
-	MaxCursorRetainedBytes    int
-	MaxOpenCursors            int
-	CursorIdleTimeout         time.Duration
+	MaxMessageLength       int32
+	MaxFindScanDocuments   int
+	MaxCursorRetainedBytes int
+	MaxOpenCursors         int
+	CursorIdleTimeout      time.Duration
+	// UpdateCoalescingMaxDelay waits for additional same-collection update
+	// commands before publishing a batch. Zero means only coalesce already-queued
+	// work; negative disables coalescing.
+	UpdateCoalescingMaxDelay time.Duration
+	// UpdateCoalescingMaxBatch caps one coalesced same-collection update publish.
+	// Values above maxUpdateCoalescingBatch are clamped.
+	UpdateCoalescingMaxBatch int
+	// UpdateCoalescingIdleTTL removes an idle per-collection coalescer after this
+	// duration. Zero uses the default; negative disables idle removal.
+	UpdateCoalescingIdleTTL   time.Duration
 	Collections               *collections.CollectionManager
 	DefaultCollectionOptions  collections.CollectionOptions
 	DefaultIndexStoragePolicy collections.RootStoragePolicy
@@ -39,9 +55,14 @@ type Server struct {
 	nextResponseID   atomic.Int32
 	nextConnectionID atomic.Int64
 	nextCursorID     atomic.Int64
+	connMu           sync.Mutex
+	conns            map[net.Conn]struct{}
 	cursorMu         sync.Mutex
 	cursors          map[int64]*serverCursor
 	lastCursorReap   time.Time
+	updateMu         sync.Mutex
+	updateCoalescers map[string]*mongoUpdateCoalescer
+	closed           atomic.Bool
 }
 
 type serverCursor struct {
@@ -54,12 +75,98 @@ type serverCursor struct {
 }
 
 func NewServer() *Server {
-	s := &Server{MaxMessageLength: wire.DefaultMaxMessageLength}
+	s := &Server{
+		MaxMessageLength:         wire.DefaultMaxMessageLength,
+		UpdateCoalescingMaxDelay: defaultUpdateCoalescingDelay,
+		UpdateCoalescingMaxBatch: defaultUpdateCoalescingBatch,
+		UpdateCoalescingIdleTTL:  defaultUpdateCoalescingIdleTTL,
+	}
 	s.nextResponseID.Store(0)
 	return s
 }
 
+func (s *Server) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.closed.Store(true)
+	s.closeActiveConns()
+	s.closeUpdateCoalescers()
+	s.cursorMu.Lock()
+	s.cursors = nil
+	s.cursorMu.Unlock()
+	return nil
+}
+
+func (s *Server) closeUpdateCoalescers() {
+	if s == nil {
+		return
+	}
+	s.updateMu.Lock()
+	coalescers := s.updateCoalescers
+	s.updateCoalescers = nil
+	s.updateMu.Unlock()
+	for _, coalescer := range coalescers {
+		coalescer.stop()
+	}
+}
+
+func (s *Server) registerConn(conn net.Conn) bool {
+	if s == nil || conn == nil {
+		return false
+	}
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if s.closed.Load() {
+		return false
+	}
+	if s.conns == nil {
+		s.conns = make(map[net.Conn]struct{})
+	}
+	s.conns[conn] = struct{}{}
+	return true
+}
+
+func (s *Server) unregisterConn(conn net.Conn) {
+	if s == nil || conn == nil {
+		return
+	}
+	s.connMu.Lock()
+	delete(s.conns, conn)
+	s.connMu.Unlock()
+}
+
+func (s *Server) closeActiveConns() {
+	if s == nil {
+		return
+	}
+	s.connMu.Lock()
+	conns := make([]net.Conn, 0, len(s.conns))
+	for conn := range s.conns {
+		conns = append(conns, conn)
+	}
+	s.conns = nil
+	s.connMu.Unlock()
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
+}
+
+func (s *Server) isClosed() bool {
+	if s == nil {
+		return true
+	}
+	return s.closed.Load()
+}
+
 func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
+	if !s.registerConn(conn) {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		return errServerClosed
+	}
+	defer s.unregisterConn(conn)
 	defer conn.Close()
 	owner := s.nextConnectionID.Add(1)
 	defer s.killCursorsForOwner(owner)
@@ -104,8 +211,14 @@ func (s *Server) ServeOne(rw io.ReadWriter) error {
 }
 
 func (s *Server) ServeOneWithOwner(rw io.ReadWriter, cursorOwner int64) error {
+	if s.isClosed() {
+		return errServerClosed
+	}
 	h, body, err := wire.ReadMessage(rw, s.maxMessageLength())
 	if err != nil {
+		if s.isClosed() {
+			return errServerClosed
+		}
 		return err
 	}
 	response, err := s.handleMessage(h, body, cursorOwner)
@@ -119,6 +232,9 @@ func (s *Server) ServeOneWithOwner(rw io.ReadWriter, cursorOwner int64) error {
 }
 
 func (s *Server) handleMessage(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
+	if s.isClosed() {
+		return nil, errServerClosed
+	}
 	s.reapExpiredCursors()
 	switch h.OpCode {
 	case wire.OpQuery:
