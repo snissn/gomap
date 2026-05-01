@@ -1577,6 +1577,9 @@ func TestCollectionInsertRetryExhaustionWrapsLastConcurrentMutation(t *testing.T
 	if !strings.Contains(err.Error(), lastErr.Error()) {
 		t.Fatalf("retryInsertBatchMutation err=%q want last error %q", err, lastErr)
 	}
+	if got := strings.Count(err.Error(), ErrConcurrentMutation.Error()); got != 1 {
+		t.Fatalf("retryInsertBatchMutation err=%q contains ErrConcurrentMutation text %d times, want 1", err, got)
+	}
 	if attempts != maxCollectionMutationRetries {
 		t.Fatalf("attempts=%d want %d", attempts, maxCollectionMutationRetries)
 	}
@@ -2470,6 +2473,8 @@ func TestCollectionValidateInsertBatchPlanLockedClassifiesRaces(t *testing.T) {
 			_ = current.Close()
 		}
 		t.Fatalf("root mismatch current=%v err=%v want ErrConcurrentMutation", current, err)
+	} else if !strings.Contains(err.Error(), `collection="users"`) || !strings.Contains(err.Error(), `root="users/primary"`) {
+		t.Fatalf("root mismatch err=%v missing collection/root context", err)
 	}
 	if current, _, err := col.validateInsertBatchPlanLocked(catalog.meta, rootNames, map[string]uint64{}, plan); current != nil || err == nil || errors.Is(err, ErrConcurrentMutation) || !strings.Contains(err.Error(), "missing base root id") {
 		if current != nil {
