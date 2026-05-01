@@ -3436,7 +3436,8 @@ func (combiner *collectionUpdateCombiner) retireIdle() bool {
 }
 
 func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionUpdateCombineRequest) {
-	batch := []collectionUpdateCombineRequest{first}
+	batch := make([]collectionUpdateCombineRequest, 0, combiner.maxBatch)
+	batch = append(batch, first)
 	for len(batch) < combiner.maxBatch {
 		select {
 		case req, ok := <-combiner.requests:
