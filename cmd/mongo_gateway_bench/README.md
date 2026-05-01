@@ -76,11 +76,13 @@ goroutines. The effective producer count is capped at the number of insert
 batches so small runs do not open unused clients. Official-driver modes share one
 `mongo.Client`, so
 `-mongo-max-pool-size`, `-mongo-min-pool-size`, and `-mongo-max-connecting`
-control the driver pool used by those producers. `raw-wire-tcp` opens one
-fastclient connection per effective producer, and `raw-wire` uses one in-process
-wire owner per effective producer. JSON output includes `effective_producers`
-and `producer_results` for the load phase plus `mongo_pool_stats_after_load` and
-`mongo_pool_stats_final` when the official driver pool is involved.
+control the driver pool used by those producers. When `-mongo-max-pool-size` is
+left unset, validation treats the driver default max pool size as 100 for
+`-mongo-min-pool-size` checks. `raw-wire-tcp` opens one fastclient connection per
+effective producer, and `raw-wire` uses one in-process wire owner per effective
+producer. JSON output includes `effective_producers` and `producer_results` for
+the load phase plus `mongo_pool_stats_after_load` and `mongo_pool_stats_final`
+when the official driver pool is involved.
 
 The TreeDB benchmark target defaults are intended to match the optimized
 collection benchmark profile:

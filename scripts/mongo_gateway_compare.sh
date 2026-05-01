@@ -451,6 +451,14 @@ for value_name in DELETES CONCURRENT_READERS CONCURRENT_WRITERS MONGO_MAX_POOL_S
     exit 2
   fi
 done
+effective_mongo_max_pool_size="$MONGO_MAX_POOL_SIZE"
+if [[ "$effective_mongo_max_pool_size" -eq 0 ]]; then
+  effective_mongo_max_pool_size=100
+fi
+if [[ "$MONGO_MIN_POOL_SIZE" -gt "$effective_mongo_max_pool_size" ]]; then
+  echo "invalid MONGO_MIN_POOL_SIZE=$MONGO_MIN_POOL_SIZE (must be <= effective maxPoolSize $effective_mongo_max_pool_size)" >&2
+  exit 2
+fi
 if [[ "$PREBUILD_DOCUMENTS" != "true" && "$PREBUILD_DOCUMENTS" != "false" ]]; then
   echo "invalid PREBUILD_DOCUMENTS=$PREBUILD_DOCUMENTS (want true or false)" >&2
   exit 2
