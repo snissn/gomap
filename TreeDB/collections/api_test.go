@@ -19,6 +19,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+var collectionUpdateCombineIdleTTLTestMu sync.Mutex
+
 func TestCollectionErrorsAreClassifiable(t *testing.T) {
 	if !errors.Is(ErrCollectionNotFound, ErrCollectionNotFound) {
 		t.Fatal("ErrCollectionNotFound should be errors.Is-compatible")
@@ -2894,6 +2896,8 @@ func TestCollectionUpdateCombinerDuplicateIDsPreserveOrder(t *testing.T) {
 }
 
 func TestCollectionUpdateCombinerEvictsWhenIdle(t *testing.T) {
+	collectionUpdateCombineIdleTTLTestMu.Lock()
+	defer collectionUpdateCombineIdleTTLTestMu.Unlock()
 	oldTTL := collectionUpdateCombineIdleTTL
 	collectionUpdateCombineIdleTTL = time.Millisecond
 	defer func() { collectionUpdateCombineIdleTTL = oldTTL }()

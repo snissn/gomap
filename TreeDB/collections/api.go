@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -2989,24 +2990,37 @@ func (c *Collection) updateCombiner() *collectionUpdateCombiner {
 		return nil
 	}
 	domain := c.writeDomain
-	domain.updateCombineMu.Lock()
-	defer domain.updateCombineMu.Unlock()
-	if domain.updateCombineDone {
-		return nil
+	for {
+		domain.updateCombineMu.Lock()
+		if domain.updateCombineDone {
+			domain.updateCombineMu.Unlock()
+			return nil
+		}
+		if domain.updateCombiner != nil {
+			combiner := domain.updateCombiner
+			done := combiner.done
+			if !combiner.isStopped() {
+				domain.updateCombineMu.Unlock()
+				return combiner
+			}
+			domain.updateCombineMu.Unlock()
+			if done != nil {
+				<-done
+			}
+			continue
+		}
+		combiner := &collectionUpdateCombiner{
+			maxBatch: defaultCollectionUpdateCombineMaxBatch,
+			idleTTL:  collectionUpdateCombineIdleTTL,
+			requests: make(chan collectionUpdateCombineRequest, defaultCollectionUpdateCombineMaxBatch*4),
+			done:     make(chan struct{}),
+			domain:   domain,
+		}
+		domain.updateCombiner = combiner
+		domain.updateCombineMu.Unlock()
+		go combiner.run()
+		return combiner
 	}
-	if domain.updateCombiner != nil {
-		return domain.updateCombiner
-	}
-	combiner := &collectionUpdateCombiner{
-		maxBatch: defaultCollectionUpdateCombineMaxBatch,
-		idleTTL:  collectionUpdateCombineIdleTTL,
-		requests: make(chan collectionUpdateCombineRequest, defaultCollectionUpdateCombineMaxBatch*4),
-		done:     make(chan struct{}),
-		domain:   domain,
-	}
-	domain.updateCombiner = combiner
-	go combiner.run()
-	return combiner
 }
 
 func (domain *collectionWriteDomain) stopUpdateCombiner() {
@@ -3045,6 +3059,9 @@ func (combiner *collectionUpdateCombiner) enqueue(req collectionUpdateCombineReq
 	if combiner == nil {
 		return false
 	}
+	if req.done == nil || cap(req.done) == 0 {
+		return false
+	}
 	combiner.mu.RLock()
 	defer combiner.mu.RUnlock()
 	if combiner.stopped {
@@ -3077,6 +3094,12 @@ func (combiner *collectionUpdateCombiner) closeRequests() bool {
 	combiner.stopped = true
 	close(combiner.requests)
 	return true
+}
+
+func (combiner *collectionUpdateCombiner) isStopped() bool {
+	combiner.mu.RLock()
+	defer combiner.mu.RUnlock()
+	return combiner.stopped
 }
 
 func (combiner *collectionUpdateCombiner) run() {
@@ -3127,9 +3150,6 @@ func (combiner *collectionUpdateCombiner) retireIdle() bool {
 		combiner.domain.updateCombineMu.Lock()
 		if combiner.domain.updateCombiner == combiner {
 			stopped = combiner.closeRequests()
-			if stopped {
-				combiner.domain.updateCombiner = nil
-			}
 		}
 		combiner.domain.updateCombineMu.Unlock()
 	} else {
@@ -3140,6 +3160,13 @@ func (combiner *collectionUpdateCombiner) retireIdle() bool {
 	}
 	for req := range combiner.requests {
 		completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+	}
+	if combiner.domain != nil {
+		combiner.domain.updateCombineMu.Lock()
+		if combiner.domain.updateCombiner == combiner {
+			combiner.domain.updateCombiner = nil
+		}
+		combiner.domain.updateCombineMu.Unlock()
 	}
 	return true
 }
@@ -3165,7 +3192,7 @@ func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionU
 func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombineRequest) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			completeUpdateCombineBatchWithError(batch, fmt.Errorf("collections: update combiner panic: %v", recovered))
+			completeUpdateCombineBatchWithError(batch, fmt.Errorf("collections: update combiner panic (%T): %v\n%s", recovered, recovered, debug.Stack()))
 		}
 	}()
 	if len(batch) == 1 || collectionUpdateCombineHasDuplicateIDs(batch) {
@@ -3209,7 +3236,7 @@ func recoverUpdateCombineCallback(update func(current []byte) (replacement []byt
 			if recovered := recover(); recovered != nil {
 				replacement = nil
 				changed = false
-				err = fmt.Errorf("collections: update combiner callback panic: %v", recovered)
+				err = fmt.Errorf("collections: update combiner callback panic (%T): %v\n%s", recovered, recovered, debug.Stack())
 			}
 		}()
 		return update(current)
@@ -3223,6 +3250,9 @@ func completeUpdateCombineBatchWithError(batch []collectionUpdateCombineRequest,
 }
 
 func completeUpdateCombineRequest(req collectionUpdateCombineRequest, result collectionUpdateCombineResult) {
+	if req.done == nil || cap(req.done) == 0 {
+		return
+	}
 	select {
 	case req.done <- result:
 	default:
@@ -3233,17 +3263,13 @@ func collectionUpdateCombineHasDuplicateIDs(batch []collectionUpdateCombineReque
 	if len(batch) < 2 {
 		return false
 	}
-	order := make([]int, len(batch))
-	for i := range order {
-		order[i] = i
-	}
-	sort.Slice(order, func(i, j int) bool {
-		return bytes.Compare(batch[order[i]].documentID, batch[order[j]].documentID) < 0
-	})
-	for i := 1; i < len(order); i++ {
-		if bytes.Equal(batch[order[i-1]].documentID, batch[order[i]].documentID) {
+	seen := make(map[string]struct{}, len(batch))
+	for _, req := range batch {
+		key := string(req.documentID)
+		if _, ok := seen[key]; ok {
 			return true
 		}
+		seen[key] = struct{}{}
 	}
 	return false
 }
