@@ -1784,6 +1784,7 @@ func collectTreeDBStatsFromDir(cfg config, target *benchTarget) (map[string]stri
 		return nil, nil
 	}
 	opts := treedb.OptionsFor(cfg.TreeDBProfile, target.treedbDir)
+	opts.ReadOnly = true
 	db, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
 	if err != nil {
 		return nil, err
@@ -2434,8 +2435,14 @@ var selectedTreeDBExactStatKeys = [...]string{
 	"treedb.commit_seq",
 }
 
-var selectedTreeDBExactStatKeySet = map[string]struct{}{
-	"treedb.commit_seq": {},
+var selectedTreeDBExactStatKeySet = newSelectedTreeDBExactStatKeySet(selectedTreeDBExactStatKeys[:])
+
+func newSelectedTreeDBExactStatKeySet(keys []string) map[string]struct{} {
+	keySet := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		keySet[key] = struct{}{}
+	}
+	return keySet
 }
 
 var selectedTreeDBStatPrefixes = [...]string{
