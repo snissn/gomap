@@ -1655,6 +1655,11 @@ func collectAfterLoadStats(ctx context.Context, cfg config, target *benchTarget,
 func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, result *benchmarkResult) error {
 	if cfg.Target == "treedb" {
 		if cfg.TreeDBMaintenance == treeDBMaintenanceNone {
+			if target.collections != nil {
+				if err := target.collections.FlushAll(); err != nil {
+					return err
+				}
+			}
 			if target.db != nil {
 				result.TreeDBStatsFinal = target.db.Stats()
 			}
