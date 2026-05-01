@@ -153,15 +153,7 @@ func BenchmarkTreeDBGatewayRawWireLoadBSONIndexes2(b *testing.B) {
 
 func BenchmarkTreeDBGatewayRawWireTCPLoadBSONIndexes2(b *testing.B) {
 	ctx := context.Background()
-	dir, err := os.MkdirTemp("/private/tmp", "mongo-gateway-profile-bench-*")
-	if err != nil {
-		b.Fatalf("create temp dir: %v", err)
-	}
-	defer func() {
-		if err := os.RemoveAll(dir); err != nil {
-			b.Fatalf("remove temp dir: %v", err)
-		}
-	}()
+	dir := b.TempDir()
 	cfg := config{
 		Target:                      "treedb",
 		TreeDBDir:                   dir,
@@ -361,15 +353,7 @@ func benchmarkTreeDBGatewayLoad(b *testing.B, format collections.DocumentFormat,
 
 func benchmarkTreeDBGatewayLoadWithDocument(b *testing.B, format collections.DocumentFormat, secondaryIndexes int, rawDocs bool, document func(int) bson.D, collectionOptions ...options.Lister[options.CollectionOptions]) {
 	ctx := context.Background()
-	dir, err := os.MkdirTemp("/private/tmp", "mongo-gateway-profile-bench-*")
-	if err != nil {
-		b.Fatalf("create temp dir: %v", err)
-	}
-	defer func() {
-		if err := os.RemoveAll(dir); err != nil {
-			b.Fatalf("remove temp dir: %v", err)
-		}
-	}()
+	dir := b.TempDir()
 	cfg := config{
 		Target:                      "treedb",
 		TreeDBDir:                   dir,
@@ -455,15 +439,7 @@ func benchmarkObjectID(i int) bson.ObjectID {
 
 func benchmarkTreeDBGatewayRunCommandLoad(b *testing.B, format collections.DocumentFormat, secondaryIndexes int) {
 	ctx := context.Background()
-	dir, err := os.MkdirTemp("/private/tmp", "mongo-gateway-profile-bench-*")
-	if err != nil {
-		b.Fatalf("create temp dir: %v", err)
-	}
-	defer func() {
-		if err := os.RemoveAll(dir); err != nil {
-			b.Fatalf("remove temp dir: %v", err)
-		}
-	}()
+	dir := b.TempDir()
 	cfg := config{
 		Target:                      "treedb",
 		TreeDBDir:                   dir,
@@ -528,15 +504,7 @@ func benchmarkTreeDBGatewayRunCommandLoad(b *testing.B, format collections.Docum
 
 func benchmarkTreeDBGatewayRunRawCommandLoad(b *testing.B, format collections.DocumentFormat, secondaryIndexes int) {
 	ctx := context.Background()
-	dir, err := os.MkdirTemp("/private/tmp", "mongo-gateway-profile-bench-*")
-	if err != nil {
-		b.Fatalf("create temp dir: %v", err)
-	}
-	defer func() {
-		if err := os.RemoveAll(dir); err != nil {
-			b.Fatalf("remove temp dir: %v", err)
-		}
-	}()
+	dir := b.TempDir()
 	cfg := config{
 		Target:                      "treedb",
 		TreeDBDir:                   dir,

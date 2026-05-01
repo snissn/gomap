@@ -65,9 +65,6 @@ func (c *Client) InsertManyRawBSON(ctx context.Context, database, collection str
 	}
 	seqDocs := make([]wire.Document, len(docs))
 	for i := range docs {
-		if err := wire.ValidateDocument(docs[i]); err != nil {
-			return 0, fmt.Errorf("documents[%d]: %w", i, err)
-		}
 		seqDocs[i] = wire.Document(docs[i])
 	}
 	msg, err := wire.AppendMsgMessageWithSequences(nil, c.nextRequestID.Add(1), 0, 0, wire.Document(commandDoc), []wire.DocumentSequence{{

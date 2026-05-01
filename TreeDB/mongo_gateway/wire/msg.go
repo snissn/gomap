@@ -125,10 +125,10 @@ func AppendMsgMessageWithSequences(dst []byte, requestID, responseTo int32, flag
 	}
 	messageLength := len(dst) - base
 	if int64(messageLength) > maxInt32 {
-		return nil, fmt.Errorf("%w: length=%d exceeds int32 max", ErrMessageTooLarge, messageLength)
+		return dst[:base], fmt.Errorf("%w: length=%d exceeds int32 max", ErrMessageTooLarge, messageLength)
 	}
 	if messageLength > DefaultMaxMessageLength {
-		return nil, fmt.Errorf("%w: length=%d max=%d", ErrMessageTooLarge, messageLength, DefaultMaxMessageLength)
+		return dst[:base], fmt.Errorf("%w: length=%d max=%d", ErrMessageTooLarge, messageLength, DefaultMaxMessageLength)
 	}
 	binary.LittleEndian.PutUint32(dst[base:base+4], uint32(messageLength))
 	return dst, nil

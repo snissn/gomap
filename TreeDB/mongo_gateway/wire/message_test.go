@@ -57,6 +57,25 @@ func TestAppendMessageRejectsLargeBody(t *testing.T) {
 	}
 }
 
+func TestAppendMsgMessageWithSequencesRollsBackOnLargeMessage(t *testing.T) {
+	prefix := []byte("prefix")
+	dst := make([]byte, len(prefix), DefaultMaxMessageLength+1024)
+	copy(dst, prefix)
+	commandDoc := mustDocument(t, bson.D{{Key: "insert", Value: "docs"}})
+	hugeDoc := mustDocument(t, bson.D{{Key: "payload", Value: bson.Binary{Data: make([]byte, DefaultMaxMessageLength)}}})
+
+	got, err := AppendMsgMessageWithSequences(dst, 1, 0, 0, commandDoc, []DocumentSequence{{
+		Identifier: "documents",
+		Documents:  []Document{hugeDoc},
+	}})
+	if !errors.Is(err, ErrMessageTooLarge) {
+		t.Fatalf("AppendMsgMessageWithSequences err=%v want ErrMessageTooLarge", err)
+	}
+	if !bytes.Equal(got, prefix) {
+		t.Fatalf("rollback dst=%q want %q", got, prefix)
+	}
+}
+
 func TestQueryHandshakeReplyRoundTrip(t *testing.T) {
 	queryDoc := mustDocument(t, bson.D{
 		{Key: "isMaster", Value: int32(1)},
