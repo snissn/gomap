@@ -836,6 +836,9 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	systemOpts := systemRootOrderedPublishOptions(db)
 	rootIDs = make([]uint64, len(ordered))
 	orderedConsumed := make([]bool, len(ordered))
+	// finishPublish intentionally runs before iterator cleanup: caller-provided
+	// iterator Close paths can do arbitrary cleanup and should not extend the
+	// write-lock hold time reported for the publish itself.
 	defer closeUnconsumedOrderedRootDeltaPublishIterators(ordered, orderedConsumed)
 	defer finishPublish()
 	var retired []uint64
