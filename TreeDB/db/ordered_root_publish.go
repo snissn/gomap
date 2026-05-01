@@ -958,10 +958,13 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 		db.writeMu.Unlock()
 		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, err)
 	}
+	rootIDs = make([]uint64, len(ordered))
+	orderedConsumed := make([]bool, len(ordered))
+	defer closeUnconsumedOrderedRootDeltaPublishIterators(ordered, orderedConsumed)
+	defer finishPublish()
 
 	if db.readOnly {
 		err = ErrReadOnly
-		finishPublish()
 		return 0, nil, err
 	}
 
@@ -971,16 +974,11 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 	db.mu.RUnlock()
 	if preflight != nil {
 		if err = preflight(); err != nil {
-			finishPublish()
 			return 0, nil, err
 		}
 	}
 
 	systemOpts := systemRootOrderedPublishOptions(db)
-	rootIDs = make([]uint64, len(ordered))
-	orderedConsumed := make([]bool, len(ordered))
-	defer closeUnconsumedOrderedRootDeltaPublishIterators(ordered, orderedConsumed)
-	defer finishPublish()
 	var retired []uint64
 	var merged adaptive.Metrics
 	for idx := range ordered {
