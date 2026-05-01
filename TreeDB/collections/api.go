@@ -1590,7 +1590,13 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.rootBaseIDs = checkpoint.rootBaseIDs
 	domain.primaryIDIndex = rebuildBufferedPrimaryIDIndex(checkpoint.meta.Name, checkpoint.rootRuns)
 	if checkpoint.primaryRunIndexActive {
-		domain.primaryRunIndex = rebuildBufferedPrimaryRunIndex(checkpoint.meta.Name, checkpoint.rootRuns)
+		index, err := rebuildBufferedPrimaryRunIndex(checkpoint.meta.Name, checkpoint.rootRuns)
+		if err != nil {
+			index = nil
+		} else if index == nil {
+			index = newBufferedPrimaryRunIndex(0)
+		}
+		domain.primaryRunIndex = index
 	} else {
 		domain.primaryRunIndex = nil
 	}
@@ -1908,24 +1914,24 @@ func bufferedPrimaryIDArenaCap(entries int) int {
 	return entries * bytesPerKeyEstimate
 }
 
-func rebuildBufferedPrimaryRunIndex(collectionName string, runs map[string][]memtable.Table) *bufferedPrimaryRunIndex {
+func rebuildBufferedPrimaryRunIndex(collectionName string, runs map[string][]memtable.Table) (*bufferedPrimaryRunIndex, error) {
 	if collectionName == "" || len(runs) == 0 {
-		return nil
+		return nil, nil
 	}
 	tables := runs[collectionPrimaryRootName(collectionName)]
 	if len(tables) == 0 {
-		return nil
+		return nil, nil
 	}
 	index := newBufferedPrimaryRunIndex(0)
 	for _, table := range tables {
 		if err := addBufferedPrimaryRunIndexEntries(index, table); err != nil {
-			return nil
+			return nil, err
 		}
 	}
 	if len(index.values) == 0 {
-		return nil
+		return nil, nil
 	}
-	return index
+	return index, nil
 }
 
 func rebuildBufferedPrimaryIDIndex(collectionName string, runs map[string][]memtable.Table) *bufferedUniqueValueIndex {
@@ -4404,7 +4410,8 @@ func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta 
 	if !sameCollectionMeta(domain.meta, meta) {
 		return false
 	}
-	if len(domain.rootRuns[collectionPrimaryRootName(meta.Name)]) == 0 {
+	collectionName := bufferedDomainCollectionName(domain, meta.Name)
+	if collectionName == "" || len(domain.rootRuns[collectionPrimaryRootName(collectionName)]) == 0 {
 		return false
 	}
 	return meta.Options.BufferedIndexedWrites && len(meta.Indexes) > 0
@@ -4486,6 +4493,93 @@ func snapshotUpdateBatchBufferedPrimaryEntries(runs []memtable.Table, items []Up
 	return entries, nil
 }
 
+func snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(index *bufferedPrimaryRunIndex, items []UpdateBatchItem) ([]updateBatchBufferedEntry, error) {
+	entries := make([]updateBatchBufferedEntry, len(items))
+	if index == nil || len(items) == 0 {
+		return entries, nil
+	}
+	for i, item := range items {
+		table, ok := index.lookup(item.DocumentID)
+		if !ok || table == nil {
+			continue
+		}
+		value, _, flags, found := table.GetEntry(item.DocumentID)
+		if !found {
+			continue
+		}
+		entries[i] = updateBatchBufferedEntry{
+			value: bytes.Clone(value),
+			flags: flags,
+			found: true,
+		}
+	}
+	return entries, nil
+}
+
+func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64, items []UpdateBatchItem, documentFormat DocumentFormat) (updateBatchBufferedRead, []memtable.Table, bool, error) {
+	if domain == nil {
+		return updateBatchBufferedRead{}, nil, false, nil
+	}
+	domain.mu.RLock()
+	read, templateRuns, blocked, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, baseSystemRoot, items, documentFormat, true)
+	domain.mu.RUnlock()
+	if err != nil || !needPrimaryRunIndex {
+		return read, templateRuns, blocked, err
+	}
+
+	domain.mu.Lock()
+	defer domain.mu.Unlock()
+	bufferedCollectionName := bufferedDomainCollectionName(domain, meta.Name)
+	if updateBatchCanReadBufferedDomainLocked(domain, meta, baseSystemRoot) && domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, bufferedCollectionName) {
+		index, err := rebuildBufferedPrimaryRunIndex(bufferedCollectionName, domain.rootRuns)
+		if err != nil {
+			return updateBatchBufferedRead{}, nil, false, err
+		}
+		if index == nil {
+			index = newBufferedPrimaryRunIndex(0)
+		}
+		domain.primaryRunIndex = index
+	}
+	read, templateRuns, blocked, _, err = snapshotUpdateBatchBufferedReadLocked(domain, meta, baseSystemRoot, items, documentFormat, false)
+	return read, templateRuns, blocked, err
+}
+
+func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64, items []UpdateBatchItem, documentFormat DocumentFormat, allowPrimaryRunIndexBuild bool) (updateBatchBufferedRead, []memtable.Table, bool, bool, error) {
+	if updateBatchCanReadBufferedDomainLocked(domain, meta, baseSystemRoot) {
+		bufferedCollectionName := bufferedDomainCollectionName(domain, meta.Name)
+		if allowPrimaryRunIndexBuild && domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, bufferedCollectionName) {
+			return updateBatchBufferedRead{}, nil, false, true, nil
+		}
+		primaryRuns := domain.rootRuns[collectionPrimaryRootName(bufferedCollectionName)]
+		var primaryEntries []updateBatchBufferedEntry
+		var err error
+		if domain.primaryRunIndex != nil {
+			primaryEntries, err = snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(domain.primaryRunIndex, items)
+		} else {
+			primaryEntries, err = snapshotUpdateBatchBufferedPrimaryEntries(primaryRuns, items)
+		}
+		if err != nil {
+			return updateBatchBufferedRead{}, nil, false, false, err
+		}
+		var templateRuns []memtable.Table
+		if normalizedDocumentFormat(documentFormat) == DocumentFormatTemplateV1 {
+			templateRuns, err = cloneCollectionRunTables(domain.rootRuns[collectionTemplateRootName(bufferedCollectionName)])
+			if err != nil {
+				return updateBatchBufferedRead{}, nil, false, false, err
+			}
+		}
+		return updateBatchBufferedRead{
+			enabled:         true,
+			primaryEntries:  primaryEntries,
+			writeGeneration: domain.writeGeneration,
+		}, templateRuns, false, false, nil
+	}
+	if domain.count > 0 && len(domain.rootRuns) > 0 {
+		return updateBatchBufferedRead{}, nil, true, false, nil
+	}
+	return updateBatchBufferedRead{}, nil, false, false, nil
+}
+
 func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBatchMode, useBufferedRead bool) (*updateBatchPlan, error) {
 	results := make([]UpdateBatchResult, len(items))
 	snap := c.db.AcquireSnapshot()
@@ -4524,23 +4618,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	defer func() { resetCollectionTables(bufferedTemplateRuns) }()
 	bufferedReadBlocked := false
 	if domain := c.writeDomain; useBufferedRead && domain != nil && mode != updateBatchModeAny {
-		domain.mu.RLock()
-		if updateBatchCanReadBufferedDomainLocked(domain, meta, baseSystemRoot) {
-			primaryRuns := domain.rootRuns[collectionPrimaryRootName(meta.Name)]
-			var primaryEntries []updateBatchBufferedEntry
-			primaryEntries, err = snapshotUpdateBatchBufferedPrimaryEntries(primaryRuns, items)
-			if err == nil && normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatTemplateV1 {
-				bufferedTemplateRuns, err = cloneCollectionRunTables(domain.rootRuns[collectionTemplateRootName(meta.Name)])
-			}
-			bufferedRead = updateBatchBufferedRead{
-				enabled:         true,
-				primaryEntries:  primaryEntries,
-				writeGeneration: domain.writeGeneration,
-			}
-		} else if domain.count > 0 && len(domain.rootRuns) > 0 {
-			bufferedReadBlocked = true
-		}
-		domain.mu.RUnlock()
+		bufferedRead, bufferedTemplateRuns, bufferedReadBlocked, err = snapshotUpdateBatchBufferedRead(domain, meta, baseSystemRoot, items, plannerOptions.documentFormat)
 		if err != nil {
 			_ = snap.Close()
 			return nil, err
@@ -5961,7 +6039,11 @@ func (c *Collection) getBufferedDocumentIntoWithPrimaryRunIndex(documentID []byt
 	}
 	if domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, c.meta.Name) {
 		collectionName := bufferedDomainCollectionName(domain, c.meta.Name)
-		if index := rebuildBufferedPrimaryRunIndex(collectionName, domain.rootRuns); index != nil {
+		index, err := rebuildBufferedPrimaryRunIndex(collectionName, domain.rootRuns)
+		if err == nil {
+			if index == nil {
+				index = newBufferedPrimaryRunIndex(0)
+			}
 			domain.primaryRunIndex = index
 		}
 	}
