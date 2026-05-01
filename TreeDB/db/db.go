@@ -170,6 +170,15 @@ type DB struct {
 	publishWatermarkLatencyMaxNs   atomic.Uint64
 	publishWatermarkLatencyBuckets [publishWatermarkLatencyBucketCount]atomic.Uint64
 
+	// Ordered-root delta groups are the collection multi-root publish hot path.
+	orderedRootDeltaGroupCalls          atomic.Uint64
+	orderedRootDeltaGroupErrors         atomic.Uint64
+	orderedRootDeltaGroupRoots          atomic.Uint64
+	orderedRootDeltaGroupWaitTotalNs    atomic.Uint64
+	orderedRootDeltaGroupHoldTotalNs    atomic.Uint64
+	orderedRootDeltaGroupLatencyMaxNs   atomic.Uint64
+	orderedRootDeltaGroupLatencyBuckets [publishWatermarkLatencyBucketCount]atomic.Uint64
+
 	// R4 warm-publish counters. Warm native apply is used for bounded deltas;
 	// larger or ineligible deltas record an explicit rebuild fallback selection.
 	systemRootWarmPublishAttempts         atomic.Uint64

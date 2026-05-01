@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -698,6 +699,16 @@ func (db *DB) Stats() map[string]string {
 	// Backend DB path currently doesn't track queue drift; emit a stable default
 	// for suite compatibility and fail-closed checks that require key presence.
 	stats["treedb.publish.watermark.lag_drift_bytes_per_sec"] = "0.000"
+	orderedDeltaStats := db.orderedRootDeltaGroupPublishStats()
+	stats["treedb.publish.ordered_root_delta_group.calls_total"] = fmt.Sprintf("%d", orderedDeltaStats.calls)
+	stats["treedb.publish.ordered_root_delta_group.errors_total"] = fmt.Sprintf("%d", orderedDeltaStats.errors)
+	stats["treedb.publish.ordered_root_delta_group.roots_total"] = fmt.Sprintf("%d", orderedDeltaStats.roots)
+	stats["treedb.publish.ordered_root_delta_group.avg_roots_per_call"] = fmt.Sprintf("%.3f", orderedDeltaStats.avgRootsPerCall)
+	stats["treedb.publish.ordered_root_delta_group.write_lock_wait_ns_total"] = fmt.Sprintf("%d", orderedDeltaStats.waitTotalNs)
+	stats["treedb.publish.ordered_root_delta_group.write_lock_hold_ns_total"] = fmt.Sprintf("%d", orderedDeltaStats.holdTotalNs)
+	stats["treedb.publish.ordered_root_delta_group.write_lock_wait_share_pct"] = fmt.Sprintf("%.3f", orderedDeltaStats.writeLockWaitShare)
+	stats["treedb.publish.ordered_root_delta_group.latency_p99_ms"] = fmt.Sprintf("%.3f", float64(orderedDeltaStats.latencyP99)/float64(time.Millisecond))
+	stats["treedb.publish.ordered_root_delta_group.latency_max_ms"] = fmt.Sprintf("%.3f", float64(orderedDeltaStats.latencyMax)/float64(time.Millisecond))
 	warmPublishStats := db.systemRootPublishStatsSnapshot()
 	stats["treedb.publish.system_root.warm_attempts"] = fmt.Sprintf("%d", warmPublishStats.warmAttempts)
 	stats["treedb.publish.system_root.warm_native_apply_attempts"] = fmt.Sprintf("%d", warmPublishStats.warmNativeApplyAttempts)

@@ -122,3 +122,90 @@ func (db *DB) publishWatermarkStats() (lockDelaySharePct float64, latencyP99Ms f
 	latencyP99Ms = float64(p99) / float64(time.Millisecond)
 	return lockDelaySharePct, latencyP99Ms
 }
+
+type orderedRootDeltaGroupPublishStats struct {
+	calls              uint64
+	errors             uint64
+	roots              uint64
+	waitTotalNs        uint64
+	holdTotalNs        uint64
+	latencyP99         time.Duration
+	latencyMax         time.Duration
+	writeLockWaitShare float64
+	avgRootsPerCall    float64
+}
+
+func (db *DB) observeOrderedRootDeltaGroupPublish(wait, hold time.Duration, roots int, err error) {
+	if db == nil {
+		return
+	}
+	if wait < 0 {
+		wait = 0
+	}
+	if hold < 0 {
+		hold = 0
+	}
+	latency := wait + hold
+	if latency < 0 {
+		latency = 0
+	}
+	if roots < 0 {
+		roots = 0
+	}
+
+	waitNs := uint64(wait.Nanoseconds())
+	holdNs := uint64(hold.Nanoseconds())
+	latNs := uint64(latency.Nanoseconds())
+
+	db.orderedRootDeltaGroupCalls.Add(1)
+	if err != nil {
+		db.orderedRootDeltaGroupErrors.Add(1)
+	}
+	db.orderedRootDeltaGroupRoots.Add(uint64(roots))
+	db.orderedRootDeltaGroupWaitTotalNs.Add(waitNs)
+	db.orderedRootDeltaGroupHoldTotalNs.Add(holdNs)
+	for {
+		cur := db.orderedRootDeltaGroupLatencyMaxNs.Load()
+		if latNs <= cur || db.orderedRootDeltaGroupLatencyMaxNs.CompareAndSwap(cur, latNs) {
+			break
+		}
+	}
+	bucket := publishWatermarkLatencyBucketIndex(latency)
+	db.orderedRootDeltaGroupLatencyBuckets[bucket].Add(1)
+}
+
+func (db *DB) orderedRootDeltaGroupPublishStats() orderedRootDeltaGroupPublishStats {
+	if db == nil {
+		return orderedRootDeltaGroupPublishStats{}
+	}
+	calls := db.orderedRootDeltaGroupCalls.Load()
+	waitNs := db.orderedRootDeltaGroupWaitTotalNs.Load()
+	holdNs := db.orderedRootDeltaGroupHoldTotalNs.Load()
+	roots := db.orderedRootDeltaGroupRoots.Load()
+	stats := orderedRootDeltaGroupPublishStats{
+		calls:       calls,
+		errors:      db.orderedRootDeltaGroupErrors.Load(),
+		roots:       roots,
+		waitTotalNs: waitNs,
+		holdTotalNs: holdNs,
+		latencyMax:  time.Duration(db.orderedRootDeltaGroupLatencyMaxNs.Load()),
+	}
+	if calls > 0 {
+		stats.avgRootsPerCall = float64(roots) / float64(calls)
+	}
+	if denom := waitNs + holdNs; denom > 0 {
+		stats.writeLockWaitShare = 100 * float64(waitNs) / float64(denom)
+	}
+	if calls == 0 {
+		return stats
+	}
+	var buckets [publishWatermarkLatencyBucketCount]uint64
+	for i := range buckets {
+		buckets[i] = db.orderedRootDeltaGroupLatencyBuckets[i].Load()
+	}
+	stats.latencyP99 = estimatePublishWatermarkPercentile(buckets, calls, 0.99)
+	if stats.latencyP99 <= 0 && stats.latencyMax > 0 {
+		stats.latencyP99 = stats.latencyMax
+	}
+	return stats
+}

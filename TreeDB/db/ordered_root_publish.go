@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"errors"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -904,7 +905,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ord
 	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, preflight, buildSystemDeltaIter)
 }
 
-func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
+func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
 	if buildSystemDeltaIter == nil {
 		return 0, nil, errors.New("nil ordered root group system delta builder")
 	}
@@ -915,8 +916,15 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 		return 0, nil, ErrClosed
 	}
 
+	lockStart := time.Now()
 	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
+	wait := time.Since(lockStart)
+	holdStart := time.Now()
+	defer func() {
+		hold := time.Since(holdStart)
+		db.writeMu.Unlock()
+		db.observeOrderedRootDeltaGroupPublish(wait, hold, len(ordered), err)
+	}()
 
 	if db.readOnly {
 		return 0, nil, ErrReadOnly
@@ -933,7 +941,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 	}
 
 	systemOpts := systemRootOrderedPublishOptions(db)
-	rootIDs := make([]uint64, len(ordered))
+	rootIDs = make([]uint64, len(ordered))
 	orderedConsumed := make([]bool, len(ordered))
 	defer closeUnconsumedOrderedRootDeltaPublishIterators(ordered, orderedConsumed)
 	var retired []uint64
@@ -964,7 +972,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 	if err != nil {
 		return 0, nil, err
 	}
-	newSystemRoot := rootID
+	newSystemRoot = rootID
 	retired = append(retired, rootRetired...)
 	mergeOrderedRootPublishMetrics(&merged, metrics)
 

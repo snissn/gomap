@@ -106,6 +106,8 @@ type benchmarkResult struct {
 	TreeDBDiskAfterLoad         *diskSnapshot       `json:"treedb_disk_after_load,omitempty"`
 	TreeDBDiskAfterCheckpoint   *diskSnapshot       `json:"treedb_disk_after_checkpoint,omitempty"`
 	TreeDBDiskAfterMaintenance  *diskSnapshot       `json:"treedb_disk_after_maintenance,omitempty"`
+	TreeDBStatsAfterLoad        map[string]string   `json:"treedb_stats_after_load,omitempty"`
+	TreeDBStatsFinal            map[string]string   `json:"treedb_stats_final,omitempty"`
 	TreeDBMaintenance           []maintenanceResult `json:"treedb_maintenance,omitempty"`
 	MongoDBStatsAfterLoad       map[string]any      `json:"mongodb_stats_after_load,omitempty"`
 	MongoDBStatsFinal           map[string]any      `json:"mongodb_stats_final,omitempty"`
@@ -1634,6 +1636,9 @@ func collectAfterLoadStats(ctx context.Context, cfg config, target *benchTarget,
 			return err
 		}
 		result.TreeDBDiskAfterLoad = &snapshot
+		if target.db != nil {
+			result.TreeDBStatsAfterLoad = target.db.Stats()
+		}
 		return nil
 	}
 	stats, err := mongoDBStats(ctx, target.client.Database(cfg.Database))
@@ -1647,6 +1652,9 @@ func collectAfterLoadStats(ctx context.Context, cfg config, target *benchTarget,
 func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, result *benchmarkResult) error {
 	if cfg.Target == "treedb" {
 		if cfg.TreeDBMaintenance == treeDBMaintenanceNone {
+			if target.db != nil {
+				result.TreeDBStatsFinal = target.db.Stats()
+			}
 			return nil
 		}
 		if target.collections != nil {
@@ -1665,7 +1673,16 @@ func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, res
 		}
 		result.TreeDBDiskAfterCheckpoint = &snapshot
 		if cfg.TreeDBMaintenance == treeDBMaintenanceFull {
-			return runTreeDBMaintenanceStack(ctx, target, result)
+			if err := runTreeDBMaintenanceStack(ctx, target, result); err != nil {
+				return err
+			}
+			if target.db != nil {
+				result.TreeDBStatsFinal = target.db.Stats()
+			}
+			return nil
+		}
+		if target.db != nil {
+			result.TreeDBStatsFinal = target.db.Stats()
 		}
 		return nil
 	}
@@ -2307,6 +2324,9 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		if result.TreeDBDiskAfterLoad != nil {
 			writeDiskSnapshot(out, "treedb_after_load", result.TreeDBDiskAfterLoad)
 		}
+		if result.TreeDBStatsAfterLoad != nil {
+			writeTreeDBStats(out, "treedb_stats_after_load", result.TreeDBStatsAfterLoad)
+		}
 		if result.TreeDBDiskAfterCheckpoint != nil {
 			writeDiskSnapshot(out, "treedb_after_checkpoint", result.TreeDBDiskAfterCheckpoint)
 		}
@@ -2315,6 +2335,9 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		}
 		if result.TreeDBDiskAfterMaintenance != nil {
 			writeDiskSnapshot(out, "treedb_after_maintenance", result.TreeDBDiskAfterMaintenance)
+		}
+		if result.TreeDBStatsFinal != nil {
+			writeTreeDBStats(out, "treedb_stats_final", result.TreeDBStatsFinal)
 		}
 		if result.MongoDBStatsAfterLoad != nil {
 			writeMongoStats(out, "mongodb_after_load", result.MongoDBStatsAfterLoad)
@@ -2340,6 +2363,29 @@ func writeDiskSnapshot(out io.Writer, label string, snapshot *diskSnapshot) {
 	sort.Strings(names)
 	for _, name := range names {
 		fmt.Fprintf(out, " %s=%d", name, snapshot.Paths[name])
+	}
+	fmt.Fprintln(out)
+}
+
+func writeTreeDBStats(out io.Writer, label string, stats map[string]string) {
+	if len(stats) == 0 {
+		return
+	}
+	keys := []string{
+		"treedb.commit_seq",
+		"treedb.publish.ordered_root_delta_group.calls_total",
+		"treedb.publish.ordered_root_delta_group.roots_total",
+		"treedb.publish.ordered_root_delta_group.avg_roots_per_call",
+		"treedb.publish.ordered_root_delta_group.write_lock_wait_share_pct",
+		"treedb.publish.ordered_root_delta_group.latency_p99_ms",
+		"treedb.publish.watermark.lock_delay_share_pct",
+		"treedb.publish.watermark.latency_p99_ms",
+	}
+	fmt.Fprintf(out, "%s", label)
+	for _, key := range keys {
+		if value, ok := stats[key]; ok {
+			fmt.Fprintf(out, " %s=%s", key, value)
+		}
 	}
 	fmt.Fprintln(out)
 }
