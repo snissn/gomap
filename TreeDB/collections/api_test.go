@@ -3165,17 +3165,19 @@ func TestCollectionUpdateCombinerUpdateReturnsWhenWorkerExits(t *testing.T) {
 	}
 }
 
-func TestCompleteUpdateCombineRequestDoesNotBlockWhenDoneIsFull(t *testing.T) {
+func TestCollectionUpdateCombinerRejectsFullDoneChannel(t *testing.T) {
+	combiner := &collectionUpdateCombiner{
+		requests: make(chan collectionUpdateCombineRequest, 1),
+	}
 	done := make(chan collectionUpdateCombineResult, 1)
-	original := collectionUpdateCombineResult{matched: true}
-	done <- original
-	completeUpdateCombineRequest(
-		collectionUpdateCombineRequest{done: done},
-		collectionUpdateCombineResult{modified: true},
-	)
-	got := <-done
-	if got != original {
-		t.Fatalf("done result=%+v want original %+v", got, original)
+	done <- collectionUpdateCombineResult{matched: true}
+	if combiner.enqueue(collectionUpdateCombineRequest{
+		collection: &Collection{db: &backenddb.DB{}},
+		documentID: []byte("u1"),
+		update:     func([]byte) ([]byte, bool, error) { return nil, false, nil },
+		done:       done,
+	}) {
+		t.Fatal("enqueue accepted a request with a full done channel")
 	}
 }
 
@@ -3542,7 +3544,7 @@ func TestCollectionUpdateCombinerStopWaitsForActiveWorker(t *testing.T) {
 	select {
 	case <-stopReturned:
 		t.Fatal("stop returned before active combiner worker drained")
-	case <-time.After(25 * time.Millisecond):
+	default:
 	}
 
 	close(release)

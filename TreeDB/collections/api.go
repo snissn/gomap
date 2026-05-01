@@ -3309,7 +3309,10 @@ func (combiner *collectionUpdateCombiner) enqueue(req collectionUpdateCombineReq
 	if combiner == nil {
 		return false
 	}
-	if req.done == nil || cap(req.done) == 0 {
+	if validateCollectionUpdateCombineRequest(req) != nil {
+		return false
+	}
+	if req.done == nil || cap(req.done) == 0 || len(req.done) > 0 {
 		return false
 	}
 	combiner.mu.RLock()
@@ -3524,8 +3527,27 @@ func collectionUpdateCombineSameCollection(batch []collectionUpdateCombineReques
 }
 
 func runUpdateCombineDirect(req collectionUpdateCombineRequest) collectionUpdateCombineResult {
+	if err := validateCollectionUpdateCombineRequest(req); err != nil {
+		return collectionUpdateCombineResult{err: err}
+	}
 	matched, modified, err := req.collection.updateDirect(req.documentID, recoverCollectionUpdateCallback(req.update))
 	return collectionUpdateCombineResult{matched: matched, modified: modified, err: err}
+}
+
+func validateCollectionUpdateCombineRequest(req collectionUpdateCombineRequest) error {
+	if req.collection == nil {
+		return errCollectionNil
+	}
+	if req.collection.db == nil {
+		return errCollectionDBNil
+	}
+	if len(req.documentID) == 0 {
+		return errors.New("collections: document id cannot be empty")
+	}
+	if req.update == nil {
+		return errors.New("collections: update function is nil")
+	}
+	return nil
 }
 
 func collectionUpdatePanicError(where string, recovered any) error {
@@ -3584,10 +3606,7 @@ func completeUpdateCombineRequest(req collectionUpdateCombineRequest, result col
 	if req.done == nil {
 		return
 	}
-	select {
-	case req.done <- result:
-	default:
-	}
+	req.done <- result
 }
 
 func collectionUpdateCombineHasDuplicateIDs(batch []collectionUpdateCombineRequest) bool {
