@@ -2327,7 +2327,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		return c.insertBatchNoIndex(catalog, snap, baseCommitSeq, baseSystemRoot, plannerOptions, ids, documents)
 	}
 
-	unlockForPlanning := plannerOptions.documentFormat != DocumentFormatTemplateV1
+	unlockForPlanning := shouldUnlockInsertPlanning(plannerOptions, indexedMemtablesEnabled, bufferIndexedInserts)
 	if unlockForPlanning {
 		unlockIfLocked()
 	}
@@ -2442,6 +2442,16 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	c.setLastInsertStats(plan.stats.CollectionInsertStats)
 	return plan.resultIDs, nil
+}
+
+func shouldUnlockInsertPlanning(opts collectionOptions, indexedMemtablesEnabled, bufferIndexedInserts bool) bool {
+	if opts.documentFormat == DocumentFormatTemplateV1 {
+		return false
+	}
+	if indexedMemtablesEnabled && !bufferIndexedInserts {
+		return false
+	}
+	return true
 }
 
 func insertBatchPlanRootNamesAndBaseIDs(plan *insertBatchPlan, catalog *collectionCatalog) ([]string, map[string]uint64) {
