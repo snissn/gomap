@@ -403,8 +403,9 @@ storage, `driver-command-raw`, prebuilt BSON documents, and no final maintenance
 so the measured phases focus on concurrency. Add
 `--include-mongo --mongo-uri mongodb://127.0.0.1:27017` to run matching cells
 against an existing MongoDB server. The bundle contains `report.md`,
-`summary.tsv`, `matrix.tsv`, raw JSON, and kept TreeDB data directories for
-profile follow-up.
+`summary.tsv`, `matrix.tsv`, raw JSON, and a README that records the kept
+TreeDB data path for profile follow-up. Depending on where `--out` is placed,
+that kept TreeDB data directory may be outside the bundle directory.
 
 ## Gateway Profiling Benchmarks
 

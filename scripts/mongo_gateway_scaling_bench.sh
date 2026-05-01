@@ -85,16 +85,18 @@ require_option_value() {
 
 normalize_bool_01() {
   local name=$1
-  local value=$2
+  local raw=$2
+  local value
+  value=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')
   case "$value" in
-    1|true|TRUE|yes|YES)
+    1|true|yes)
       printf '1'
       ;;
-    0|false|FALSE|no|NO)
+    0|false|no)
       printf '0'
       ;;
     *)
-      echo "$name must be 0/1, true/false, or yes/no; got: $value" >&2
+      echo "$name must be 0/1, true/false, or yes/no; got: $raw" >&2
       usage >&2
       exit 2
       ;;
@@ -262,10 +264,10 @@ README="$OUT_DIR/README.md"
 path_is_within() {
   local child=${1%/}
   local parent=${2%/}
-  case "$child/" in
-    "$parent"/*) return 0 ;;
-    *) return 1 ;;
-  esac
+  if [[ "$child/" == "$parent/"* ]]; then
+    return 0
+  fi
+  return 1
 }
 
 if path_is_within "$OUT_DIR" "$ROOT"; then
