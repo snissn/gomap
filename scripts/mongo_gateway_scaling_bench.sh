@@ -108,6 +108,17 @@ normalize_bool_01() {
   esac
 }
 
+bool_01_text() {
+  case "$1" in
+    1)
+      printf 'true'
+      ;;
+    *)
+      printf 'false'
+      ;;
+  esac
+}
+
 safe_label() {
   printf '%s' "$1" | tr -c '[:alnum:]_-' '_'
 }
@@ -284,6 +295,7 @@ case "$UPDATE_INDEXED_FIELD" in
   0)
     ;;
 esac
+UPDATE_INDEXED_FIELD_TEXT=$(bool_01_text "$UPDATE_INDEXED_FIELD")
 INCLUDE_MONGO=$(normalize_bool_01 INCLUDE_MONGO "$INCLUDE_MONGO")
 
 mkdir -p "$OUT_DIR"
@@ -398,7 +410,7 @@ printf "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n
 
 echo "running Mongo gateway scaling matrix into: $OUT_DIR"
 echo "docs=$DOCS indexes=$INDEXES batch_size=$BATCH_SIZE insert_producers=$INSERT_PRODUCERS"
-echo "writers=$WRITERS_LIST readers=$READERS_LIST include_mongo=$INCLUDE_MONGO update_indexed_field=$UPDATE_INDEXED_FIELD"
+echo "writers=$WRITERS_LIST readers=$READERS_LIST include_mongo=$INCLUDE_MONGO update_indexed_field=$UPDATE_INDEXED_FIELD_TEXT"
 
 run_cell() {
   local scenario=$1
@@ -490,7 +502,7 @@ cat >"$README" <<EOF
 - TreeDB document format: \`$TREEDB_DOCUMENT_FORMAT\`
 - TreeDB client mode: \`$TREEDB_CLIENT_MODE\`
 - TreeDB maintenance: \`$TREEDB_MAINTENANCE\`
-- update indexed field: \`$UPDATE_INDEXED_FIELD\`
+- update indexed field: \`$UPDATE_INDEXED_FIELD_TEXT\`
 - include MongoDB: \`$INCLUDE_MONGO\`
 - MongoDB URI: \`$MONGO_URI\`
 - MongoDB database prefix: \`$DATABASE_PREFIX\`
