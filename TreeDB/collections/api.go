@@ -584,6 +584,9 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 		return nil, backenddb.ErrClosed
 	}
 	if collection, ok := m.openCollectionFromWriteDomainCache(name); ok {
+		if m.db.IsClosing() {
+			return nil, backenddb.ErrClosed
+		}
 		return collection, nil
 	}
 	snap := m.db.AcquireSnapshot()
@@ -633,6 +636,9 @@ func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Co
 		meta:        catalog.meta,
 	}
 	collection.rememberCatalogAtSystemRoot(state.SystemRootPageID, catalog)
+	if m.db.IsClosing() {
+		return nil, false
+	}
 	return collection, true
 }
 

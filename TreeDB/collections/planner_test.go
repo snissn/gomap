@@ -475,6 +475,41 @@ func TestInsertBatchPlanner_BuildsUniqueProbePrefixesOnlyForPersistedRoots(t *te
 	}
 }
 
+func TestInsertBatchPlanCheckPersistedConflictsRejectsMissingInputs(t *testing.T) {
+	tests := []struct {
+		name    string
+		plan    *insertBatchPlan
+		catalog *collectionCatalog
+		want    string
+	}{
+		{name: "plan", want: "missing plan"},
+		{name: "snapshot", plan: &insertBatchPlan{}, catalog: &collectionCatalog{meta: CollectionMeta{Name: "users"}}, want: "missing snapshot"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.plan.checkPersistedConflicts(nil, tt.catalog)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("checkPersistedConflicts err=%v want %q", err, tt.want)
+			}
+		})
+	}
+
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	err = (&insertBatchPlan{}).checkPersistedConflicts(snap, nil)
+	if err == nil || !strings.Contains(err.Error(), "missing catalog") {
+		t.Fatalf("checkPersistedConflicts err=%v want missing catalog", err)
+	}
+}
+
 func TestInsertBatchPlanner_FailFastDuplicatesBeforePayloadConstruction(t *testing.T) {
 	builds := 0
 	planner := insertBatchPlanner{
