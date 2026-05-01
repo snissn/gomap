@@ -2890,7 +2890,7 @@ func TestCollectionUpdateDirectRecoversCallbackPanic(t *testing.T) {
 	}
 }
 
-func TestCollectionUpdateCombinerDisabledRecoversCallbackPanic(t *testing.T) {
+func TestCollectionUpdateCombinerMaxBatchOneRecoversCallbackPanic(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -2909,11 +2909,12 @@ func TestCollectionUpdateCombinerDisabledRecoversCallbackPanic(t *testing.T) {
 		t.Fatalf("insert batch: %v", err)
 	}
 
-	matched, modified, err := (&collectionUpdateCombiner{maxBatch: 1}).update(col, []byte("u1"), func([]byte) ([]byte, bool, error) {
+	combiner := &collectionUpdateCombiner{maxBatch: 1}
+	matched, modified, err := combiner.update(col, []byte("u1"), func([]byte) ([]byte, bool, error) {
 		panic("bad callback")
 	})
 	if err == nil || !strings.Contains(err.Error(), "bad callback") {
-		t.Fatalf("update err=%v want recovered panic", err)
+		t.Fatalf("Update err=%v want recovered panic", err)
 	}
 	if matched || modified {
 		t.Fatalf("matched=%v modified=%v want false,false", matched, modified)
