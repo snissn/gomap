@@ -293,6 +293,44 @@ func TestReportSupportsScalingMongoConfigsPerScenario(t *testing.T) {
 	}
 }
 
+func TestReportRejectsLoneMismatchedMongoScenario(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb_w1.json"), `{
+  "target": "treedb",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "concurrent_id_update_set_w1", "operations": 100, "ops_per_sec": 1000, "latency_micros": {}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 2000}
+}`)
+	writeFile(t, filepath.Join(dir, "treedb_w2.json"), `{
+  "target": "treedb",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "concurrent_id_update_set_w2", "operations": 100, "ops_per_sec": 1500, "latency_micros": {}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 2200}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo_w1.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "concurrent_id_update_set_w1", "operations": 100, "ops_per_sec": 500, "latency_micros": {}}],
+  "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4000}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_driver-command-raw_writers_1\t100\t2\ttreedb_w1.json\t2000\n"+
+		"treedb\ttreedb_bson_driver-command-raw_writers_2\t100\t2\ttreedb_w2.json\t2200\n"+
+		"mongo\tmongo_writers_1\t100\t2\tmongo_w1.json\t4000\n")
+
+	err := run([]string{
+		"-matrix", matrixPath,
+		"-report", filepath.Join(dir, "report.md"),
+	})
+	if err == nil || !strings.Contains(err.Error(), `config="treedb_bson_driver-command-raw_writers_2"`) {
+		t.Fatalf("err=%v want missing writers_2 mongo scenario", err)
+	}
+}
+
 func TestLargestDiskCellUsesDiskMetrics(t *testing.T) {
 	cells := []cellComparison{
 		{

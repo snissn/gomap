@@ -274,15 +274,22 @@ func matchingMongoRecord(key baseCellKey, treeConfig string, mongos map[string]*
 		}
 		return nil, fmt.Errorf("missing mongo row for documents=%d secondary_indexes=%d config=%q", key.Documents, key.SecondaryIndexes, treeConfig)
 	}
-	if len(mongos) == 1 {
-		for _, record := range mongos {
-			return record, nil
-		}
-	}
 	if record := mongos[treeConfig]; record != nil {
 		return record, nil
 	}
 	treeScenario := scalingScenarioSuffix(treeConfig)
+	if len(mongos) == 1 {
+		for mongoConfig, record := range mongos {
+			mongoScenario := scalingScenarioSuffix(mongoConfig)
+			if treeScenario == "" || mongoScenario == "" || treeScenario == mongoScenario {
+				return record, nil
+			}
+		}
+		if allowIncomplete {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("missing mongo row for documents=%d secondary_indexes=%d config=%q", key.Documents, key.SecondaryIndexes, treeConfig)
+	}
 	if treeScenario != "" {
 		var matched *runRecord
 		for mongoConfig, record := range mongos {
