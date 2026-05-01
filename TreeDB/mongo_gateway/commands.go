@@ -240,9 +240,11 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 }
 
 type mongoUpdateItem struct {
-	index     int
-	key       []byte
-	updateDoc wire.Document
+	index       int
+	key         []byte
+	updateDoc   wire.Document
+	setFields   map[string]struct{}
+	setFieldsOK bool
 }
 
 type mongoUpdateParseError struct {
@@ -282,7 +284,8 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	if err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 	}
-	return mongoUpdateItem{index: index, key: key, updateDoc: updateDoc}, nil
+	setFields, setFieldsOK := mongoSetUpdateFields(updateDoc)
+	return mongoUpdateItem{index: index, key: key, updateDoc: updateDoc, setFields: setFields, setFieldsOK: setFieldsOK}, nil
 }
 
 func mongoUpdateParseCommandError(err error) (wire.Document, error) {
@@ -379,7 +382,7 @@ func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpda
 			},
 		}
 	}
-	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexes(items)
+	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges(items)
 	if !batched {
 		return nil, false, err
 	}
@@ -438,7 +441,7 @@ type mongoUpdateCoalescerResult struct {
 }
 
 func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
-	if collectionHasSecondaryUniqueIndexes(col) {
+	if mongoUpdateTouchesSecondaryUniqueIndex(col, update) {
 		return runMongoUpdateOne(col, update)
 	}
 	coalescer := s.mongoUpdateCoalescer(name)
@@ -724,7 +727,7 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 	if len(batch) == 1 ||
 		mongoUpdateCoalescerHasDuplicateKeys(batch) ||
 		!mongoUpdateCoalescerUsesSingleCollection(batch) ||
-		collectionHasSecondaryUniqueIndexes(batch[0].col) {
+		mongoUpdateBatchTouchesSecondaryUniqueIndex(batch) {
 		runMongoUpdateCoalescerSequential(batch)
 		return
 	}
@@ -826,16 +829,72 @@ func runMongoUpdateCoalescerSequential(batch []mongoUpdateCoalescerRequest) {
 	}
 }
 
-func collectionHasSecondaryUniqueIndexes(col *collections.Collection) bool {
-	if col == nil {
-		return false
-	}
-	for _, idx := range col.Meta().Indexes {
-		if idx.Unique {
+func mongoUpdateBatchTouchesSecondaryUniqueIndex(batch []mongoUpdateCoalescerRequest) bool {
+	for _, req := range batch {
+		if mongoUpdateTouchesSecondaryUniqueIndex(req.col, req.item) {
 			return true
 		}
 	}
 	return false
+}
+
+func mongoUpdateTouchesSecondaryUniqueIndex(col *collections.Collection, update mongoUpdateItem) bool {
+	if col == nil {
+		return false
+	}
+	uniqueFields := collectionSecondaryUniqueIndexFields(col)
+	if len(uniqueFields) == 0 {
+		return false
+	}
+	if !update.setFieldsOK {
+		return true
+	}
+	for field := range update.setFields {
+		if _, unique := uniqueFields[field]; unique {
+			return true
+		}
+	}
+	return false
+}
+
+func collectionSecondaryUniqueIndexFields(col *collections.Collection) map[string]struct{} {
+	if col == nil {
+		return nil
+	}
+	out := make(map[string]struct{})
+	for _, idx := range col.Meta().Indexes {
+		if idx.Unique {
+			out[idx.Field] = struct{}{}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func mongoSetUpdateFields(updateDoc wire.Document) (map[string]struct{}, bool) {
+	updateElements, err := bson.Raw(updateDoc).Elements()
+	if err != nil || len(updateElements) != 1 {
+		return nil, false
+	}
+	operator, err := updateElements[0].KeyErr()
+	if err != nil || operator != "$set" {
+		return nil, false
+	}
+	setDoc, ok := updateElements[0].Value().DocumentOK()
+	if !ok {
+		return nil, false
+	}
+	_, order, err := parseSetDocument(setDoc)
+	if err != nil {
+		return nil, false
+	}
+	out := make(map[string]struct{}, len(order))
+	for _, field := range order {
+		out[field] = struct{}{}
+	}
+	return out, true
 }
 
 func (s *Server) deleteResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {

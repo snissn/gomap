@@ -709,6 +709,71 @@ func TestRunMongoUpdateBatchDeclinesFreshSecondaryUniqueIndex(t *testing.T) {
 	}
 }
 
+func TestRunMongoUpdateBatchBatchesNonUniqueFieldWithSecondaryUniqueIndex(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	mgr := collections.NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{
+		Name: "app.users",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatBSON,
+		},
+		Indexes: []collections.IndexDefinition{
+			{Name: "email_1", Field: "email", Unique: true},
+			{Name: "city_1", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	id1, err := encodePrimaryKey(mustRawValue(t, "u1"))
+	if err != nil {
+		t.Fatalf("encode u1: %v", err)
+	}
+	id2, err := encodePrimaryKey(mustRawValue(t, "u2"))
+	if err != nil {
+		t.Fatalf("encode u2: %v", err)
+	}
+	doc1 := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "a@example.com"}, {Key: "city", Value: "hnl"}})
+	doc2 := mustDocument(t, bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "b@example.com"}, {Key: "city", Value: "hnl"}})
+	if _, err := col.InsertBatchValidatedBSON([][]byte{id1, id2}, [][]byte{doc1, doc2}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+	before := db.State()
+
+	matched, modified, batched, err := runMongoUpdateBatch(col, []mongoUpdateItem{
+		{index: 0, key: id1, updateDoc: mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "sea"}}}})},
+		{index: 1, key: id2, updateDoc: mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "sfo"}}}})},
+	})
+	if err != nil {
+		t.Fatalf("runMongoUpdateBatch: %v", err)
+	}
+	if !batched || matched != 2 || modified != 2 {
+		t.Fatalf("matched=%d modified=%d batched=%v want 2,2,true", matched, modified, batched)
+	}
+	after := db.State()
+	if after.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("batch advanced commit seq by %d, want 1", after.CommitSeq-before.CommitSeq)
+	}
+	ids, err := col.FindByIndex("city_1", "sea")
+	if err != nil {
+		t.Fatalf("find city sea: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], id1) {
+		t.Fatalf("sea ids=%q want [%q]", ids, id1)
+	}
+}
+
 func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterParseError(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
