@@ -59,6 +59,7 @@ type config struct {
 	ConcurrentReads             int
 	ConcurrentWriters           int
 	ConcurrentWrites            int
+	UpdateIndexedField          bool
 	SecondaryIndexes            int
 	ClientMode                  string
 	TreeDBProfile               treedb.Profile
@@ -95,6 +96,7 @@ type benchmarkResult struct {
 	ConcurrentReads             int                 `json:"concurrent_reads,omitempty"`
 	ConcurrentWriters           int                 `json:"concurrent_writers,omitempty"`
 	ConcurrentWrites            int                 `json:"concurrent_writes,omitempty"`
+	UpdateIndexedField          bool                `json:"update_indexed_field,omitempty"`
 	TreeDBProfile               string              `json:"treedb_profile,omitempty"`
 	TreeDBDocumentFormat        string              `json:"treedb_document_format,omitempty"`
 	TreeDBDataRootStorage       string              `json:"treedb_data_root_storage,omitempty"`
@@ -436,6 +438,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.ConcurrentReads, "concurrent-reads", 0, "total _id read operations for the concurrent read phase")
 	fs.IntVar(&cfg.ConcurrentWriters, "concurrent-writers", 0, "writer goroutines for the concurrent _id update phase; 0 disables the phase")
 	fs.IntVar(&cfg.ConcurrentWrites, "concurrent-writes", 0, "total update operations for the concurrent write phase")
+	fs.BoolVar(&cfg.UpdateIndexedField, "update-indexed-field", false, "include the city field in update phases so secondary-index maintenance is exercised when the city index exists")
 	fs.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 2, "secondary indexes to create: 0, 1=email, 2=both single-field indexes: email and city")
 	fs.StringVar(&cfg.ClientMode, "client-mode", cfg.ClientMode, "benchmark client path: driver, driver-command, driver-command-raw, driver-unack, raw-wire, or raw-wire-tcp; raw-wire modes are TreeDB-only and bypass the MongoDB Go driver for the insert load phase")
 	fs.StringVar(&treeDBProfile, "treedb-profile", treeDBProfile, "TreeDB profile for -target treedb: fast, wal_on_fast, durable, or bench")
@@ -979,6 +982,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		ConcurrentReads:    cfg.ConcurrentReads,
 		ConcurrentWriters:  cfg.ConcurrentWriters,
 		ConcurrentWrites:   cfg.ConcurrentWrites,
+		UpdateIndexedField: cfg.UpdateIndexedField,
 		PrebuildDocuments:  cfg.PrebuildDocuments,
 	}
 	if cfg.Target == "treedb" {
@@ -1111,7 +1115,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 			begin := time.Now()
 			res, err := coll.UpdateOne(ctx,
 				bson.D{{Key: "_id", Value: id}},
-				bson.D{{Key: "$set", Value: bson.D{{Key: "updated", Value: true}, {Key: "update_seq", Value: int64(i)}}}},
+				benchmarkSetUpdate(i, false, cfg.UpdateIndexedField),
 			)
 			sample(time.Since(begin))
 			if err != nil {
@@ -1160,7 +1164,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 				begin := time.Now()
 				res, err := coll.UpdateOne(ctx,
 					bson.D{{Key: "_id", Value: id}},
-					bson.D{{Key: "$set", Value: bson.D{{Key: "concurrent_updated", Value: true}, {Key: "concurrent_update_seq", Value: int64(op)}}}},
+					benchmarkSetUpdate(op, true, cfg.UpdateIndexedField),
 				)
 				sample(time.Since(begin))
 				if err != nil {
@@ -1903,6 +1907,23 @@ func benchmarkDocument(i int) bson.D {
 	}
 }
 
+func benchmarkSetUpdate(i int, concurrent bool, indexedField bool) bson.D {
+	set := bson.D{
+		{Key: "updated", Value: true},
+		{Key: "update_seq", Value: int64(i)},
+	}
+	if concurrent {
+		set = bson.D{
+			{Key: "concurrent_updated", Value: true},
+			{Key: "concurrent_update_seq", Value: int64(i)},
+		}
+	}
+	if indexedField {
+		set = append(set, bson.E{Key: "city", Value: benchmarkUpdatedCity(i)})
+	}
+	return bson.D{{Key: "$set", Value: set}}
+}
+
 func benchmarkID(i int) string {
 	return fmt.Sprintf("doc-%012d", i)
 }
@@ -1913,6 +1934,11 @@ func benchmarkEmail(i int) string {
 
 func benchmarkCity(i int) string {
 	cities := [...]string{"hnl", "sfo", "nyc", "lon", "sin", "ber", "tyo", "syd"}
+	return cities[i%len(cities)]
+}
+
+func benchmarkUpdatedCity(i int) string {
+	cities := [...]string{"ams", "cdg", "mad", "mex", "gru", "yyz", "icn", "akl"}
 	return cities[i%len(cities)]
 }
 
@@ -2283,10 +2309,10 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(result)
 	case "text":
-		fmt.Fprintf(out, "target=%s client_mode=%s database=%s collection=%s documents=%d batch_size=%d insert_producers=%d mongo_max_pool_size=%d mongo_min_pool_size=%d mongo_max_connecting=%d secondary_indexes=%d concurrent_readers=%d concurrent_reads=%d concurrent_writers=%d concurrent_writes=%d\n",
+		fmt.Fprintf(out, "target=%s client_mode=%s database=%s collection=%s documents=%d batch_size=%d insert_producers=%d mongo_max_pool_size=%d mongo_min_pool_size=%d mongo_max_connecting=%d secondary_indexes=%d concurrent_readers=%d concurrent_reads=%d concurrent_writers=%d concurrent_writes=%d update_indexed_field=%t\n",
 			result.Target, result.ClientMode, result.Database, result.Collection, result.Documents, result.BatchSize,
 			result.InsertProducers, result.MongoMaxPoolSize, result.MongoMinPoolSize, result.MongoMaxConnecting, result.SecondaryIndexes,
-			result.ConcurrentReaders, result.ConcurrentReads, result.ConcurrentWriters, result.ConcurrentWrites)
+			result.ConcurrentReaders, result.ConcurrentReads, result.ConcurrentWriters, result.ConcurrentWrites, result.UpdateIndexedField)
 		if result.TreeDBDir != "" {
 			fmt.Fprintf(out, "treedb_dir=%s\n", result.TreeDBDir)
 		}

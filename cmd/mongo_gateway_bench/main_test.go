@@ -283,6 +283,7 @@ func TestParseConfigValidation(t *testing.T) {
 		"-concurrent-reads", "20",
 		"-concurrent-writers", "2",
 		"-concurrent-writes", "10",
+		"-update-indexed-field",
 	})
 	if err != nil {
 		t.Fatalf("parse valid config: %v", err)
@@ -291,7 +292,8 @@ func TestParseConfigValidation(t *testing.T) {
 		cfg.ClientMode != clientModeDriver ||
 		cfg.BatchSize != 5 || cfg.InsertProducers != 4 ||
 		cfg.MongoMaxPoolSize != 32 || cfg.MongoMinPoolSize != 8 || cfg.MongoMaxConnecting != 16 ||
-		cfg.ConcurrentReaders != 4 || cfg.ConcurrentReads != 20 || cfg.ConcurrentWriters != 2 || cfg.ConcurrentWrites != 10 {
+		cfg.ConcurrentReaders != 4 || cfg.ConcurrentReads != 20 || cfg.ConcurrentWriters != 2 || cfg.ConcurrentWrites != 10 ||
+		!cfg.UpdateIndexedField {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 	rawWireCfg, err := parseConfig([]string{"-target", "treedb", "-client-mode", "raw-wire"})
@@ -1009,6 +1011,22 @@ func TestWriteResultSupportsGenericWriter(t *testing.T) {
 	}
 	if !bytes.Contains(out.Bytes(), []byte("insert_producers=2")) || !bytes.Contains(out.Bytes(), []byte("producer=0")) {
 		t.Fatalf("text output missing producer metadata: %q", out.String())
+	}
+}
+
+func TestBenchmarkSetUpdateCanExerciseIndexedField(t *testing.T) {
+	update := benchmarkSetUpdate(3, true, true)
+	raw, err := bson.Marshal(update)
+	if err != nil {
+		t.Fatalf("marshal update: %v", err)
+	}
+	doc := bson.Raw(raw)
+	set := doc.Lookup("$set").Document()
+	if got, ok := set.Lookup("concurrent_update_seq").Int64OK(); !ok || got != 3 {
+		t.Fatalf("concurrent_update_seq=%d ok=%t want 3", got, ok)
+	}
+	if city, ok := set.Lookup("city").StringValueOK(); !ok || city == "" || city == benchmarkCity(3) {
+		t.Fatalf("city=%q ok=%t want non-empty updated city", city, ok)
 	}
 }
 

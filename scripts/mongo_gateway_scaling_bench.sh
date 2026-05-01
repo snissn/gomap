@@ -19,6 +19,7 @@ READS="${READS:-0}"
 RANGE_READS="${RANGE_READS:-0}"
 UPDATES="${UPDATES:-0}"
 DELETES="${DELETES:-0}"
+UPDATE_INDEXED_FIELD="${UPDATE_INDEXED_FIELD:-false}"
 TREEDB_PROFILE="${TREEDB_PROFILE:-wal_on_fast}"
 TREEDB_DOCUMENT_FORMAT="${TREEDB_DOCUMENT_FORMAT:-bson}"
 TREEDB_CLIENT_MODE="${TREEDB_CLIENT_MODE:-driver-command-raw}"
@@ -61,6 +62,8 @@ Options:
   --client-mode NAME     TreeDB client mode. Default: driver-command-raw.
   --profile NAME         TreeDB profile. Default: wal_on_fast.
   --maintenance MODE     TreeDB maintenance mode. Default: none.
+  --update-indexed-field Include the city field in update phases to exercise
+                         secondary-index maintenance when the city index exists.
   --timeout DURATION     Per-cell timeout. Default: 60m.
   --title TITLE          Report title.
   --help                 Show this help.
@@ -69,7 +72,8 @@ Environment overrides use the uppercase variable names shown in the script:
 OUT_DIR, DOCS, INDEXES, BATCH_SIZE, INSERT_PRODUCERS, WRITERS_LIST,
 READERS_LIST, CONCURRENT_WRITES, CONCURRENT_READS, INCLUDE_MONGO, MONGO_URI,
 TREEDB_DOCUMENT_FORMAT, TREEDB_CLIENT_MODE, TREEDB_PROFILE,
-TREEDB_MAINTENANCE, TIMEOUT, TITLE, and related storage/pool settings.
+TREEDB_MAINTENANCE, UPDATE_INDEXED_FIELD, TIMEOUT, TITLE, and related
+storage/pool settings.
 EOF
 }
 
@@ -135,6 +139,10 @@ while [[ $# -gt 0 ]]; do
       TREEDB_MAINTENANCE="$2"
       shift 2
       ;;
+    --update-indexed-field)
+      UPDATE_INDEXED_FIELD=true
+      shift
+      ;;
     --timeout)
       TIMEOUT="$2"
       shift 2
@@ -199,6 +207,10 @@ if [[ "$PREBUILD_DOCUMENTS" != "true" && "$PREBUILD_DOCUMENTS" != "false" ]]; th
   echo "invalid PREBUILD_DOCUMENTS=$PREBUILD_DOCUMENTS (want true or false)" >&2
   exit 2
 fi
+if [[ "$UPDATE_INDEXED_FIELD" != "true" && "$UPDATE_INDEXED_FIELD" != "false" ]]; then
+  echo "invalid UPDATE_INDEXED_FIELD=$UPDATE_INDEXED_FIELD (want true or false)" >&2
+  exit 2
+fi
 
 mkdir -p "$OUT_DIR"
 OUT_DIR=$(cd "$OUT_DIR" && pwd -P)
@@ -242,6 +254,10 @@ run_bench() {
   if [[ "$PREBUILD_DOCUMENTS" == "true" ]]; then
     prebuild_args=(-prebuild-documents)
   fi
+  local indexed_update_args=()
+  if [[ "$UPDATE_INDEXED_FIELD" == "true" ]]; then
+    indexed_update_args=(-update-indexed-field)
+  fi
 
   "$BENCH_BIN" \
     -target "$target" \
@@ -265,6 +281,7 @@ run_bench() {
     -timeout "$TIMEOUT" \
     -format json \
     "${prebuild_args[@]}" \
+    "${indexed_update_args[@]}" \
     "$@" >"$raw_json"
 }
 
@@ -272,7 +289,7 @@ printf "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n
 
 echo "running Mongo gateway scaling matrix into: $OUT_DIR"
 echo "docs=$DOCS indexes=$INDEXES batch_size=$BATCH_SIZE insert_producers=$INSERT_PRODUCERS"
-echo "writers=$WRITERS_LIST readers=$READERS_LIST include_mongo=$INCLUDE_MONGO"
+echo "writers=$WRITERS_LIST readers=$READERS_LIST include_mongo=$INCLUDE_MONGO update_indexed_field=$UPDATE_INDEXED_FIELD"
 
 run_cell() {
   local scenario=$1
@@ -357,6 +374,7 @@ cat >"$README" <<EOF
 - TreeDB document format: \`$TREEDB_DOCUMENT_FORMAT\`
 - TreeDB client mode: \`$TREEDB_CLIENT_MODE\`
 - TreeDB maintenance: \`$TREEDB_MAINTENANCE\`
+- update indexed field: \`$UPDATE_INDEXED_FIELD\`
 - include MongoDB: \`$INCLUDE_MONGO\`
 - MongoDB URI: \`$MONGO_URI\`
 - timeout: \`$TIMEOUT\`

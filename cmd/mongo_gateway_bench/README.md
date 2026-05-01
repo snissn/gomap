@@ -295,6 +295,10 @@ The initial workload phases are:
   goroutines.
 - `id_delete_one`: optional deletes; disabled unless `-deletes` is non-zero.
 
+Update phases change only non-indexed fields by default. Add
+`-update-indexed-field` when `city_1` exists to also change the indexed `city`
+field and exercise secondary-index maintenance in the update path.
+
 Latency samples are per MongoDB driver/gateway call. `ops_sec` is normalized by
 document count over the whole phase loop; `sampled_ops_sec` and
 `sampled_ns_per_op` are derived from the aggregate sampled call duration. Prefer
@@ -397,6 +401,8 @@ so the measured phases focus on concurrency. Add `--include-mongo --mongo-uri
 mongodb://127.0.0.1:27017` to run matching cells against an existing MongoDB
 server. The bundle contains `report.md`, `summary.tsv`, `matrix.tsv`, raw JSON,
 and kept TreeDB data directories for profile follow-up.
+Add `--update-indexed-field` to make writer-scaling cells update `city` and
+therefore measure secondary-index update/publish work.
 
 ## Gateway Profiling Benchmarks
 
