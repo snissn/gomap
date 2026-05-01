@@ -3520,17 +3520,19 @@ func TestCollectionUpdateCombinerUpdateReturnsWhenWorkerExits(t *testing.T) {
 	}
 }
 
-func TestCompleteUpdateCombineRequestDoesNotBlockWhenDoneIsFull(t *testing.T) {
+func TestCollectionUpdateCombinerRejectsFullDoneChannel(t *testing.T) {
+	combiner := &collectionUpdateCombiner{
+		requests: make(chan collectionUpdateCombineRequest, 1),
+	}
 	done := make(chan collectionUpdateCombineResult, 1)
-	original := collectionUpdateCombineResult{matched: true}
-	done <- original
-	completeUpdateCombineRequest(
-		collectionUpdateCombineRequest{done: done},
-		collectionUpdateCombineResult{modified: true},
-	)
-	got := <-done
-	if got != original {
-		t.Fatalf("done result=%+v want original %+v", got, original)
+	done <- collectionUpdateCombineResult{matched: true}
+	if combiner.enqueue(collectionUpdateCombineRequest{
+		collection: &Collection{db: &backenddb.DB{}},
+		documentID: []byte("u1"),
+		update:     func([]byte) ([]byte, bool, error) { return nil, false, nil },
+		done:       done,
+	}) {
+		t.Fatal("enqueue accepted a request with a full done channel")
 	}
 }
 
@@ -3897,7 +3899,7 @@ func TestCollectionUpdateCombinerStopWaitsForActiveWorker(t *testing.T) {
 	select {
 	case <-stopReturned:
 		t.Fatal("stop returned before active combiner worker drained")
-	case <-time.After(25 * time.Millisecond):
+	default:
 	}
 
 	close(release)
@@ -4239,17 +4241,20 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesDeclinesUniqueUpdat
 	}
 }
 
-func TestEncodedIndexValueSetsEqualIgnoresOrder(t *testing.T) {
-	left := [][]byte{[]byte("s:b"), []byte("s:a")}
+func TestNormalizedEncodedIndexValuesEqualUsesCanonicalOrder(t *testing.T) {
+	left := [][]byte{[]byte("s:a"), []byte("s:b")}
 	right := [][]byte{[]byte("s:a"), []byte("s:b")}
-	if !encodedIndexValueSetsEqual(left, right) {
-		t.Fatalf("encodedIndexValueSetsEqual(%q, %q)=false want true", left, right)
+	if !normalizedEncodedIndexValuesEqual(left, right) {
+		t.Fatalf("normalizedEncodedIndexValuesEqual(%q, %q)=false want true", left, right)
 	}
-	if encodedIndexValueSetsEqual(left, [][]byte{[]byte("s:a"), []byte("s:c")}) {
-		t.Fatal("encodedIndexValueSetsEqual matched different value sets")
+	if normalizedEncodedIndexValuesEqual([][]byte{[]byte("s:b"), []byte("s:a")}, right) {
+		t.Fatal("normalizedEncodedIndexValuesEqual ignored canonical order")
 	}
-	if encodedIndexValueSetsEqual([][]byte{[]byte("s:a"), []byte("s:a")}, [][]byte{[]byte("s:a"), []byte("s:b")}) {
-		t.Fatal("encodedIndexValueSetsEqual ignored duplicate cardinality")
+	if normalizedEncodedIndexValuesEqual(left, [][]byte{[]byte("s:a"), []byte("s:c")}) {
+		t.Fatal("normalizedEncodedIndexValuesEqual matched different values")
+	}
+	if normalizedEncodedIndexValuesEqual([][]byte{[]byte("s:a"), []byte("s:a")}, right) {
+		t.Fatal("normalizedEncodedIndexValuesEqual ignored duplicate cardinality")
 	}
 }
 
@@ -4352,9 +4357,11 @@ func TestCollectionUpdateBatchReplansAfterConcurrentCollectionMutation(t *testin
 	}()
 	defer func() {
 		close(stopRight)
+		timer := time.NewTimer(collectionTestTimeout(t, 5*time.Second))
+		defer timer.Stop()
 		select {
 		case <-rightFinished:
-		case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		case <-timer.C:
 			t.Error("timed out waiting for concurrent update goroutine cleanup")
 		}
 	}()

@@ -700,6 +700,10 @@ func (db *DB) Stats() map[string]string {
 	// for suite compatibility and fail-closed checks that require key presence.
 	stats["treedb.publish.watermark.lag_drift_bytes_per_sec"] = "0.000"
 	orderedDeltaStats := db.orderedRootDeltaGroupPublishStats()
+	// Ordered-root delta group stats cover calls that entered the DB write
+	// lock, including failed calls. roots_total counts successfully published
+	// non-system roots, avg_roots_per_call divides by calls_total, and the
+	// latency fields include both write-lock wait time and lock hold time.
 	stats["treedb.publish.ordered_root_delta_group.calls_total"] = fmt.Sprintf("%d", orderedDeltaStats.calls)
 	stats["treedb.publish.ordered_root_delta_group.errors_total"] = fmt.Sprintf("%d", orderedDeltaStats.errors)
 	stats["treedb.publish.ordered_root_delta_group.roots_total"] = fmt.Sprintf("%d", orderedDeltaStats.roots)
