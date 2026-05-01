@@ -47,6 +47,7 @@ var (
 
 	errCollectionManagerNil = errors.New("collections: collection manager is nil")
 	errCollectionNil        = errors.New("collections: collection is nil")
+	errCollectionDBNil      = errors.New("collections: db is nil")
 	errCollectionNotFound   = ErrCollectionNotFound
 )
 
@@ -111,7 +112,7 @@ func persistIndexStateForDocumentFormat(format DocumentFormat) bool {
 type CollectionManager struct {
 	db              *backenddb.DB
 	closeUnregister func()
-	domainMu        sync.Mutex
+	domainMu        sync.RWMutex
 	domains         map[string]*collectionWriteDomain
 }
 
@@ -283,6 +284,8 @@ type collectionMetaDisk struct {
 }
 
 type collectionCatalog struct {
+	// collectionCatalog is immutable once cached or published. Root updates must
+	// create a replacement catalog via cloneCatalogWithRootUpdates.
 	meta  CollectionMeta
 	roots map[string]uint64
 }
@@ -394,8 +397,8 @@ func (m *CollectionManager) existingWriteDomainForCollection(name string) *colle
 	if m == nil {
 		return nil
 	}
-	m.domainMu.Lock()
-	defer m.domainMu.Unlock()
+	m.domainMu.RLock()
+	defer m.domainMu.RUnlock()
 	if m.domains == nil {
 		return nil
 	}
@@ -409,14 +412,14 @@ func (m *CollectionManager) FlushAll() error {
 	if m == nil || m.db == nil {
 		return nil
 	}
-	m.domainMu.Lock()
+	m.domainMu.RLock()
 	domains := make([]*collectionWriteDomain, 0, len(m.domains))
 	for _, domain := range m.domains {
 		if domain != nil {
 			domains = append(domains, domain)
 		}
 	}
-	m.domainMu.Unlock()
+	m.domainMu.RUnlock()
 
 	var errs []error
 	for _, domain := range domains {
@@ -452,7 +455,7 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 		return nil, errCollectionManagerNil
 	}
 	if m.db == nil {
-		return nil, errors.New("collections: db is nil")
+		return nil, errCollectionDBNil
 	}
 	if meta == nil {
 		return nil, errors.New("collections: nil collection metadata")
@@ -514,7 +517,7 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 		return nil, errCollectionManagerNil
 	}
 	if m.db == nil {
-		return nil, errors.New("collections: db is nil")
+		return nil, errCollectionDBNil
 	}
 	if err := ValidateCollectionName(name); err != nil {
 		return nil, err
@@ -562,7 +565,7 @@ func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Co
 	if domain == nil {
 		return nil, false
 	}
-	catalog := cachedWriteDomainCatalogForSystemRoot(domain, state.SystemRootPageID)
+	catalog := cachedWriteDomainCatalogForState(domain, state.SystemRootPageID, state.CommitSeq)
 	if catalog == nil {
 		return nil, false
 	}
@@ -572,9 +575,6 @@ func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Co
 		meta:        catalog.meta,
 	}
 	collection.rememberCatalogAtSystemRoot(state.SystemRootPageID, catalog)
-	if m.db.IsClosing() {
-		return nil, false
-	}
 	return collection, true
 }
 
@@ -583,7 +583,7 @@ func (m *CollectionManager) ListCollections() ([]CollectionMeta, error) {
 		return nil, errCollectionManagerNil
 	}
 	if m.db == nil {
-		return nil, errors.New("collections: db is nil")
+		return nil, errCollectionDBNil
 	}
 	snap := m.db.AcquireSnapshot()
 	if snap == nil {
@@ -646,7 +646,7 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 		return nil, errCollectionNil
 	}
 	if c.db == nil {
-		return nil, errors.New("collections: db is nil")
+		return nil, errCollectionDBNil
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation()
@@ -767,7 +767,7 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 		return nil, errCollectionNil
 	}
 	if c.db == nil {
-		return nil, errors.New("collections: db is nil")
+		return nil, errCollectionDBNil
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation()
@@ -852,7 +852,7 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 		return nil, errCollectionNil
 	}
 	if c.db == nil {
-		return nil, errors.New("collections: db is nil")
+		return nil, errCollectionDBNil
 	}
 	if len(c.meta.Indexes) == 0 {
 		return c.insertOneNoIndexBuffered(id, document)
@@ -875,7 +875,7 @@ func (c *Collection) Flush() error {
 		return errCollectionNil
 	}
 	if c.db == nil {
-		return errors.New("collections: db is nil")
+		return errCollectionDBNil
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation()
@@ -990,7 +990,7 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 
 func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWriteDomain, currentCommitSeq, currentSystemRoot uint64) (*collectionCatalog, error) {
 	if c == nil || c.db == nil {
-		return nil, errors.New("collections: db is nil")
+		return nil, errCollectionDBNil
 	}
 	if domain == nil {
 		return nil, errors.New("collections: missing write domain")
@@ -2208,7 +2208,7 @@ func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool)
 		return nil, errCollectionNil
 	}
 	if c.db == nil {
-		return nil, errors.New("collections: db is nil")
+		return nil, errCollectionDBNil
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation()
@@ -2514,7 +2514,7 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 		return false, errCollectionNil
 	}
 	if c.db == nil {
-		return false, errors.New("collections: db is nil")
+		return false, errCollectionDBNil
 	}
 	if len(documentID) == 0 {
 		return false, errors.New("collections: document id cannot be empty")
@@ -2683,7 +2683,7 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 		return false, false, errCollectionNil
 	}
 	if c.db == nil {
-		return false, false, errors.New("collections: db is nil")
+		return false, false, errCollectionDBNil
 	}
 	if len(documentID) == 0 {
 		return false, false, errors.New("collections: document id cannot be empty")
@@ -2965,7 +2965,7 @@ func (c *Collection) catalogForSnapshot(snap *backenddb.Snapshot) (*collectionCa
 	}
 	c.catalogMu.RUnlock()
 
-	if cached := cachedWriteDomainCatalogForSystemRoot(c.writeDomain, systemRoot); cached != nil {
+	if cached := cachedWriteDomainCatalogForState(c.writeDomain, systemRoot, commitSeq); cached != nil {
 		c.rememberCatalog(snap, cached)
 		return cached, nil
 	}
@@ -2978,13 +2978,13 @@ func (c *Collection) catalogForSnapshot(snap *backenddb.Snapshot) (*collectionCa
 	return catalog, nil
 }
 
-func cachedWriteDomainCatalogForSystemRoot(domain *collectionWriteDomain, systemRoot uint64) *collectionCatalog {
+func cachedWriteDomainCatalogForState(domain *collectionWriteDomain, systemRoot, commitSeq uint64) *collectionCatalog {
 	if domain == nil || systemRoot == 0 {
 		return nil
 	}
 	domain.mu.RLock()
 	defer domain.mu.RUnlock()
-	if !domain.loaded || domain.catalog == nil || domain.baseSystemRoot != systemRoot {
+	if !domain.loaded || domain.catalog == nil || domain.baseSystemRoot != systemRoot || domain.baseCommitSeq != commitSeq {
 		return nil
 	}
 	return domain.catalog
@@ -3564,7 +3564,7 @@ func (c *Collection) NewStoredDocumentJSONMaterializer() (*StoredDocumentJSONMat
 		return nil, errCollectionNil
 	}
 	if c.db == nil {
-		return nil, errors.New("collections: db is nil")
+		return nil, errCollectionDBNil
 	}
 	documentFormat, err := normalizeDocumentFormat(c.meta.Options.DocumentFormat)
 	if err != nil {
@@ -3631,7 +3631,7 @@ func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error
 		return dst[:0], false, errCollectionNil
 	}
 	if c.db == nil {
-		return dst[:0], false, errors.New("collections: db is nil")
+		return dst[:0], false, errCollectionDBNil
 	}
 	if len(documentID) == 0 {
 		return dst[:0], false, errors.New("collections: document id cannot be empty")
@@ -3929,7 +3929,7 @@ func (c *Collection) ScanDocumentsFunc(maxDocuments int, fn func(DocumentRecord)
 		return false, errCollectionNil
 	}
 	if c.db == nil {
-		return false, errors.New("collections: db is nil")
+		return false, errCollectionDBNil
 	}
 	if maxDocuments <= 0 {
 		return false, errors.New("collections: max documents must be positive")

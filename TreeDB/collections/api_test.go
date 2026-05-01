@@ -42,7 +42,7 @@ func TestCollectionGetNilDBReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "db is nil") {
+	if !errors.Is(err, errCollectionDBNil) {
 		t.Fatalf("Get nil db error=%v", err)
 	}
 }
@@ -50,8 +50,8 @@ func TestCollectionGetNilDBReturnsError(t *testing.T) {
 func TestCollectionManagerOpenCollectionNilDBReturnsConfigurationError(t *testing.T) {
 	mgr := NewCollectionManager(nil)
 	_, err := mgr.OpenCollection("users")
-	if err == nil || !strings.Contains(err.Error(), "db is nil") {
-		t.Fatalf("OpenCollection nil db err=%v want db is nil", err)
+	if !errors.Is(err, errCollectionDBNil) {
+		t.Fatalf("OpenCollection nil db err=%v want errCollectionDBNil", err)
 	}
 }
 
@@ -2325,7 +2325,7 @@ func TestCollectionCachedCatalogUsesCommitSeq(t *testing.T) {
 	}
 }
 
-func TestOpenCollectionUsesWriteDomainCatalogCache(t *testing.T) {
+func TestOpenCollectionWriteDomainCatalogCacheUsesCommitSeq(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -2346,9 +2346,12 @@ func TestOpenCollectionUsesWriteDomainCatalogCache(t *testing.T) {
 
 	state := d.State()
 	domain := mgr.existingWriteDomainForCollection("users")
-	cached := cachedWriteDomainCatalogForSystemRoot(domain, state.SystemRootPageID)
+	cached := cachedWriteDomainCatalogForState(domain, state.SystemRootPageID, state.CommitSeq)
 	if cached == nil {
 		t.Fatal("expected populated write-domain catalog cache")
+	}
+	if stale := cachedWriteDomainCatalogForState(domain, state.SystemRootPageID, state.CommitSeq+1); stale != nil {
+		t.Fatal("write-domain catalog cache ignored commit sequence")
 	}
 	if err := d.Set([]byte("raw/unrelated"), []byte("value")); err != nil {
 		t.Fatalf("raw set: %v", err)
@@ -2374,8 +2377,11 @@ func TestOpenCollectionUsesWriteDomainCatalogCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("catalogForSnapshot: %v", err)
 	}
-	if reopenedCatalog != cached {
-		t.Fatalf("OpenCollection did not reuse write-domain catalog cache")
+	if reopenedCatalog == cached {
+		t.Fatal("OpenCollection reused stale write-domain catalog cache after commit sequence changed")
+	}
+	if fresh := cachedWriteDomainCatalogForState(domain, rawState.SystemRootPageID, rawState.CommitSeq); fresh != reopenedCatalog {
+		t.Fatal("OpenCollection did not refresh write-domain catalog cache for new commit sequence")
 	}
 	if got, err := reopened.Get([]byte("u1")); err != nil || !bytes.Equal(got, []byte(`{"name":"ada"}`)) {
 		t.Fatalf("reopened get got=%q err=%v", got, err)
