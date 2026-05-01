@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -87,6 +89,36 @@ func TestRenderMarkdownAndJSONPreserveShapeLabels(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"shape":"raw"`) || !strings.Contains(string(data), `"shape":"collection"`) {
 		t.Fatalf("json did not preserve shape labels: %s", data)
+	}
+}
+
+func TestPrepareRunDirRequiresSentinelAndExplicitReuse(t *testing.T) {
+	nonSmoke := t.TempDir()
+	if err := os.WriteFile(filepath.Join(nonSmoke, "unrelated.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareRunDir(nonSmoke, true); err == nil {
+		t.Fatalf("expected non-smoke non-empty dir to be rejected")
+	}
+
+	smokeDir := t.TempDir()
+	if err := prepareRunDir(smokeDir, false); err != nil {
+		t.Fatalf("prepare empty smoke dir: %v", err)
+	}
+	if err := prepareRunDir(smokeDir, false); err == nil {
+		t.Fatalf("expected existing smoke dir to require -allow-existing-run-dir")
+	}
+	if err := prepareRunDir(smokeDir, true); err != nil {
+		t.Fatalf("allow existing smoke dir: %v", err)
+	}
+}
+
+func TestCommandLinePreservesWrapperDisplayString(t *testing.T) {
+	raw := `./scripts/bench_out_of_core_smoke.sh -out-dir /tmp/has\ space`
+	t.Setenv(envCommandLine, raw)
+	got := commandLine()
+	if len(got) != 1 || got[0] != raw {
+		t.Fatalf("commandLine=%q, want single preserved display string %q", got, raw)
 	}
 }
 

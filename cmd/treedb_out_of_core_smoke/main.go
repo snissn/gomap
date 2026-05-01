@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"io/fs"
 	"math"
 	"os"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/cmd/internal/treedbstats"
 )
 
 const schemaVersion = "treedb-out-of-core-smoke/v1"
@@ -221,6 +221,9 @@ type fileSummary struct {
 func main() {
 	cfg, err := parseConfig(os.Args[1:])
 	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
 		fmt.Fprintf(os.Stderr, "treedb-out-of-core-smoke: %v\n", err)
 		os.Exit(2)
 	}
@@ -274,7 +277,6 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.internalRawWorker, "internal-raw-worker", false, "internal raw TreeDB worker mode")
 	fs.StringVar(&cfg.rawDir, "raw-dir", "", "internal raw worker DB directory")
 	fs.StringVar(&cfg.rawJSONPath, "raw-json", "", "internal raw worker JSON output path")
-	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
@@ -477,9 +479,12 @@ func prepareRunDir(dir string, allowExisting bool) error {
 		return errors.New("refusing to use filesystem root as run dir")
 	}
 	entries, err := os.ReadDir(dir)
-	if err == nil && len(entries) > 0 && !allowExisting {
+	if err == nil && len(entries) > 0 {
 		if _, statErr := os.Stat(filepath.Join(dir, runDirSentinel)); statErr != nil {
-			return fmt.Errorf("%s is not an empty out-of-core smoke run dir; use -allow-existing-run-dir to append", dir)
+			return fmt.Errorf("%s is non-empty and is not an out-of-core smoke run dir", dir)
+		}
+		if !allowExisting {
+			return fmt.Errorf("%s is an existing out-of-core smoke run dir; use -allow-existing-run-dir to append", dir)
 		}
 	}
 	if err != nil && !os.IsNotExist(err) {
@@ -535,6 +540,7 @@ func runRawShape(cfg config, run *smokeRun, logDir string) error {
 	write := summary.Timings["batch_write"]
 	read := summary.Timings["random_read_parallel"]
 	overwrite := summary.Timings["overwrite"]
+	postOverwriteRead := summary.Timings["post_overwrite_random_read_parallel"]
 	run.Results = append(run.Results,
 		resultRow{
 			ConfigName:      "treedb_raw",
@@ -595,6 +601,29 @@ func runRawShape(cfg config, run *smokeRun, logDir string) error {
 			BenchmarkTimed:  true,
 			OpsPerSec:       ptrFloat(overwrite.OpsPerSec),
 			NsPerItem:       nsPerItem(overwrite),
+			TotalBytes:      &total,
+			BytesPerItem:    bytesPerItem,
+			ComponentBytes:  components,
+			Budgets:         cfg.budgets(),
+			PressureClaimed: true,
+			Mmap:            extractMmapStats(summary.TreeDBStatsFinal),
+			Cache:           extractCacheStats(summary.TreeDBStatsFinal),
+			StatsAvailable:  sortedKeys(summary.TreeDBStatsFinal),
+			SourceArtifact:  jsonPath,
+		},
+		resultRow{
+			ConfigName:      "treedb_raw",
+			WorkloadName:    "raw_post_overwrite_random_read_parallel",
+			Engine:          "treedb",
+			Shape:           "raw",
+			KeyCount:        summary.Keys,
+			ItemCount:       summary.Keys,
+			BatchSize:       summary.BatchSize,
+			Phase:           "post_overwrite_read",
+			MeasurementKind: "benchmark_timed",
+			BenchmarkTimed:  true,
+			OpsPerSec:       ptrFloat(postOverwriteRead.OpsPerSec),
+			NsPerItem:       nsPerItem(postOverwriteRead),
 			TotalBytes:      &total,
 			BytesPerItem:    bytesPerItem,
 			ComponentBytes:  components,
@@ -715,8 +744,13 @@ func runLoggedCommand(name, bin string, args []string, workDir string, env map[s
 	log.Write(stdout.Bytes())
 	log.WriteString("\n# stderr\n")
 	log.Write(stderr.Bytes())
-	if writeErr := os.WriteFile(logPath, log.Bytes(), 0o644); writeErr != nil && err == nil {
-		err = writeErr
+	if writeErr := os.WriteFile(logPath, log.Bytes(), 0o644); writeErr != nil {
+		writeErr = fmt.Errorf("write command log %s: %w", logPath, writeErr)
+		if err != nil {
+			err = errors.Join(err, writeErr)
+		} else {
+			err = writeErr
+		}
 	}
 	rec := commandRecord{
 		Name:     name,
@@ -795,7 +829,7 @@ func runRawWorker(cfg config) error {
 	}
 	timings["post_overwrite_random_read_parallel"] = elapsedTiming(time.Since(start), cfg.RawKeys)
 
-	stats := selectedTreeDBStats(db.Stats())
+	stats := treedbstats.Selected(db.Stats())
 	if err := db.Close(); err != nil {
 		return err
 	}
@@ -1006,47 +1040,6 @@ func collectComponentBytes(root string) (map[string]uint64, error) {
 	return out, err
 }
 
-func selectedTreeDBStats(stats map[string]string) map[string]string {
-	if len(stats) == 0 {
-		return nil
-	}
-	out := make(map[string]string)
-	for key, value := range stats {
-		if isSelectedTreeDBStatKey(key) {
-			out[key] = value
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func isSelectedTreeDBStatKey(key string) bool {
-	switch {
-	case key == "treedb.commit_seq":
-		return true
-	case strings.HasPrefix(key, "treedb.cache.vlog_mmap."):
-		return true
-	case strings.HasPrefix(key, "treedb.vlog.mmap"):
-		return true
-	case strings.HasPrefix(key, "treedb.cache.vlog_zombie."):
-		return true
-	case strings.HasPrefix(key, "treedb.process.memory.vlog_zombie"):
-		return true
-	case strings.HasPrefix(key, "treedb.vlog.outer_leaf_block_cache."):
-		return true
-	case strings.HasPrefix(key, "treedb.process.read_path.outer_leaf."):
-		return true
-	case strings.HasPrefix(key, "treedb.cache.vlog_generation."):
-		return true
-	case strings.HasPrefix(key, "treedb.cache.vlog_retained_prune."):
-		return true
-	default:
-		return false
-	}
-}
-
 func extractMmapStats(stats map[string]string) *mmapStats {
 	if len(stats) == 0 {
 		return nil
@@ -1188,7 +1181,7 @@ func renderMarkdown(run *smokeRun) string {
 	errorsCount, warningsCount := countChecks(run.Checks)
 	sb.WriteString(fmt.Sprintf("- Results: %d rows across raw TreeDB and collection smoke shapes.\n", len(run.Results)))
 	sb.WriteString(fmt.Sprintf("- Guardrails: %d errors, %d warnings.\n", errorsCount, warningsCount))
-	sb.WriteString("- This is a CI-sized budget-pressure smoke, not a true large-than-RAM benchmark. It intentionally uses tiny configured budgets to exercise bounded behavior before #1135/#1136 changes.\n\n")
+	sb.WriteString("- This is a CI-sized budget-pressure smoke, not a true larger-than-RAM benchmark. It intentionally uses tiny configured budgets to exercise bounded behavior before #1135/#1136 changes.\n\n")
 
 	sb.WriteString("## Benchmark Configuration\n\n")
 	sb.WriteString("| Field | Value |\n| --- | --- |\n")
@@ -1344,7 +1337,7 @@ func statFloat(stats map[string]string, keys ...string) (float64, bool) {
 
 func commandLine() []string {
 	if raw := strings.TrimSpace(os.Getenv(envCommandLine)); raw != "" {
-		return strings.Fields(raw)
+		return []string{raw}
 	}
 	return append([]string(nil), os.Args...)
 }
