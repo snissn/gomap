@@ -72,6 +72,7 @@ type config struct {
 	ProfileBlockRate            int
 	ProfileMutexFraction        int
 	ProfileTrace                bool
+	ProfileHeapGC               bool
 	Timeout                     time.Duration
 	Format                      string
 }
@@ -369,14 +370,16 @@ func run(parent context.Context, args []string) error {
 	result, err := runBenchmark(ctx, cfg, target, profiler)
 	if err != nil {
 		if profiler != nil {
-			_ = profiler.WriteManifest(nil, err)
+			if manifestErr := profiler.WriteManifest(nil, err); manifestErr != nil {
+				return errors.Join(err, manifestErr)
+			}
 		}
 		return err
 	}
 	if profiler != nil {
 		result.ProfileDir = profiler.Dir()
-		result.ProfileManifest = profiler.ManifestPath()
-		result.ProfileResult = profiler.ResultPath()
+		result.ProfileManifest = profileManifestFile
+		result.ProfileResult = profileResultFile
 		if err := profiler.WriteResult(result); err != nil {
 			return err
 		}
@@ -444,6 +447,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.ProfileBlockRate, "profile-block-rate", cfg.ProfileBlockRate, "runtime block profile rate when -profile-dir is set; 0 disables block profiling")
 	fs.IntVar(&cfg.ProfileMutexFraction, "profile-mutex-fraction", cfg.ProfileMutexFraction, "runtime mutex profile sampling fraction when -profile-dir is set; 0 disables mutex profiling")
 	fs.BoolVar(&cfg.ProfileTrace, "profile-trace", false, "also write per-phase runtime trace.out files when -profile-dir is set")
+	fs.BoolVar(&cfg.ProfileHeapGC, "profile-heap-gc", false, "force runtime.GC before each heap profile snapshot when -profile-dir is set")
 	fs.DurationVar(&cfg.Timeout, "timeout", 10*time.Minute, "overall benchmark timeout")
 	fs.StringVar(&cfg.Format, "format", "text", "output format: text or json")
 	if err := fs.Parse(args); err != nil {

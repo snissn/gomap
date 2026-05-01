@@ -226,6 +226,9 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 		}
 	} else if len(parsed) > 1 && !hasDuplicateKey {
 		matched, modified, err = runMongoUpdateBatch(col, parsed)
+		if err != nil {
+			matched, modified, err = runMongoUpdatesSequential(col, parsed)
+		}
 	} else {
 		matched, modified, err = runMongoUpdatesSequential(col, parsed)
 	}
@@ -487,19 +490,17 @@ func (c *mongoUpdateCoalescer) stop() {
 	if c == nil {
 		return
 	}
-	if !c.markStopped() {
-		return
-	}
-	close(c.requests)
+	_ = c.closeRequests()
 }
 
-func (c *mongoUpdateCoalescer) markStopped() bool {
+func (c *mongoUpdateCoalescer) closeRequests() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.stopped {
 		return false
 	}
 	c.stopped = true
+	close(c.requests)
 	return true
 }
 
@@ -507,17 +508,22 @@ func (c *mongoUpdateCoalescer) retireIdle() bool {
 	if c == nil {
 		return false
 	}
+	stopped := false
 	if c.server != nil {
 		c.server.updateMu.Lock()
 		if c.server.updateCoalescers != nil && c.server.updateCoalescers[c.name] == c {
-			delete(c.server.updateCoalescers, c.name)
+			stopped = c.closeRequests()
+			if stopped {
+				delete(c.server.updateCoalescers, c.name)
+			}
 		}
 		c.server.updateMu.Unlock()
+	} else {
+		stopped = c.closeRequests()
 	}
-	if !c.markStopped() {
+	if !stopped {
 		return false
 	}
-	close(c.requests)
 	for req := range c.requests {
 		matched, modified, err := runMongoUpdateOne(req.col, req.item)
 		req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
@@ -611,7 +617,7 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 		updates[i] = req.item
 	}
 	results, err := runMongoUpdateBatchResults(batch[0].col, updates)
-	if err != nil {
+	if err != nil || len(results) != len(batch) {
 		for _, req := range batch {
 			matched, modified, err := runMongoUpdateOne(req.col, req.item)
 			req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}

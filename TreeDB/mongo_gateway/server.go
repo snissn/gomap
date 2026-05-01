@@ -53,6 +53,8 @@ type Server struct {
 	nextResponseID   atomic.Int32
 	nextConnectionID atomic.Int64
 	nextCursorID     atomic.Int64
+	connMu           sync.Mutex
+	conns            map[net.Conn]struct{}
 	cursorMu         sync.Mutex
 	cursors          map[int64]*serverCursor
 	lastCursorReap   time.Time
@@ -85,6 +87,8 @@ func (s *Server) Close() error {
 	if s == nil {
 		return nil
 	}
+	s.closed.Store(true)
+	s.closeActiveConns()
 	s.closeUpdateCoalescers()
 	s.cursorMu.Lock()
 	s.cursors = nil
@@ -106,6 +110,47 @@ func (s *Server) closeUpdateCoalescers() {
 	}
 }
 
+func (s *Server) registerConn(conn net.Conn) bool {
+	if s == nil || conn == nil {
+		return false
+	}
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if s.closed.Load() {
+		return false
+	}
+	if s.conns == nil {
+		s.conns = make(map[net.Conn]struct{})
+	}
+	s.conns[conn] = struct{}{}
+	return true
+}
+
+func (s *Server) unregisterConn(conn net.Conn) {
+	if s == nil || conn == nil {
+		return
+	}
+	s.connMu.Lock()
+	delete(s.conns, conn)
+	s.connMu.Unlock()
+}
+
+func (s *Server) closeActiveConns() {
+	if s == nil {
+		return
+	}
+	s.connMu.Lock()
+	conns := make([]net.Conn, 0, len(s.conns))
+	for conn := range s.conns {
+		conns = append(conns, conn)
+	}
+	s.conns = nil
+	s.connMu.Unlock()
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
+}
+
 func (s *Server) isClosed() bool {
 	if s == nil {
 		return true
@@ -114,10 +159,14 @@ func (s *Server) isClosed() bool {
 }
 
 func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
-	defer conn.Close()
-	if s.isClosed() {
+	if !s.registerConn(conn) {
+		if conn != nil {
+			_ = conn.Close()
+		}
 		return errServerClosed
 	}
+	defer s.unregisterConn(conn)
+	defer conn.Close()
 	owner := s.nextConnectionID.Add(1)
 	defer s.killCursorsForOwner(owner)
 
@@ -166,6 +215,9 @@ func (s *Server) ServeOneWithOwner(rw io.ReadWriter, cursorOwner int64) error {
 	}
 	h, body, err := wire.ReadMessage(rw, s.maxMessageLength())
 	if err != nil {
+		if s.isClosed() {
+			return errServerClosed
+		}
 		return err
 	}
 	response, err := s.handleMessage(h, body, cursorOwner)

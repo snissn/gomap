@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net"
@@ -565,14 +566,14 @@ func TestServerUpdateBatchesDistinctIDs(t *testing.T) {
 	assertInt32(t, updateResponse, "n", 2)
 	assertInt32(t, updateResponse, "nModified", 2)
 
-	for _, tc := range []struct {
+	for i, tc := range []struct {
 		id    string
 		score int32
 	}{
 		{id: "u1", score: 1},
 		{id: "u2", score: 2},
 	} {
-		findResponse := serveCommand(t, server, 2259, bson.D{
+		findResponse := serveCommand(t, server, int32(2259+i), bson.D{
 			{Key: "find", Value: "users"},
 			{Key: "filter", Value: bson.D{{Key: "_id", Value: tc.id}}},
 			{Key: "$db", Value: "app"},
@@ -627,7 +628,7 @@ func TestServerUpdateBatchTemplateV1UpdatesDistinctIDs(t *testing.T) {
 	assertInt32(t, updateResponse, "n", 2)
 	assertInt32(t, updateResponse, "nModified", 2)
 
-	for _, tc := range []struct {
+	for i, tc := range []struct {
 		id    string
 		score int32
 		city  string
@@ -635,7 +636,7 @@ func TestServerUpdateBatchTemplateV1UpdatesDistinctIDs(t *testing.T) {
 		{id: "u1", score: 11, city: "hnl"},
 		{id: "u2", score: 12, city: "sea"},
 	} {
-		findResponse := serveCommand(t, server, 22593, bson.D{
+		findResponse := serveCommand(t, server, int32(22593+i), bson.D{
 			{Key: "find", Value: "users"},
 			{Key: "filter", Value: bson.D{{Key: "_id", Value: tc.id}}},
 			{Key: "$db", Value: "app"},
@@ -705,6 +706,65 @@ func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterParseError(t *testin
 	}
 }
 
+func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterWriteError(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	assertOK(t, serveCommand(t, server, 22597, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "unique", Value: true}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 22598, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "a@example.com"}, {Key: "city", Value: "hnl"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "b@example.com"}, {Key: "city", Value: "hnl"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	updateResponse := serveCommand(t, server, 22599, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{
+			bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "sea"}}}}},
+			},
+			bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "a@example.com"}}}}},
+			},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, updateResponse, "DuplicateKey")
+
+	findResponse := serveCommand(t, server, 22600, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch := cursorFirstBatch(t, findResponse)
+	if len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	gotCity, ok := firstBatch[0].Lookup("city").StringValueOK()
+	if !ok || gotCity != "sea" {
+		t.Fatalf("u1 city=%q ok=%v want sea", gotCity, ok)
+	}
+}
+
 func TestServerUpdateCoalescesConcurrentDistinctIDs(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -730,7 +790,7 @@ func TestServerUpdateCoalescesConcurrentDistinctIDs(t *testing.T) {
 
 	before := db.State()
 	start := make(chan struct{})
-	responses := make(chan wire.Document, 2)
+	responses := make(chan commandResult, 2)
 	var wg sync.WaitGroup
 	for i, id := range []string{"u1", "u2"} {
 		i, id := i, id
@@ -738,7 +798,7 @@ func TestServerUpdateCoalescesConcurrentDistinctIDs(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			responses <- serveCommand(t, server, int32(2261+i), bson.D{
+			doc, err := serveCommandResult(server, int32(2261+i), bson.D{
 				{Key: "update", Value: "users"},
 				{Key: "updates", Value: bson.A{bson.D{
 					{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
@@ -746,15 +806,19 @@ func TestServerUpdateCoalescesConcurrentDistinctIDs(t *testing.T) {
 				}}},
 				{Key: "$db", Value: "app"},
 			})
+			responses <- commandResult{doc: doc, err: err}
 		}()
 	}
 	close(start)
 	wg.Wait()
 	close(responses)
 	for response := range responses {
-		assertOK(t, response)
-		assertInt32(t, response, "n", 1)
-		assertInt32(t, response, "nModified", 1)
+		if response.err != nil {
+			t.Fatalf("ServeOneWithOwner: %v", response.err)
+		}
+		assertOK(t, response.doc)
+		assertInt32(t, response.doc, "n", 1)
+		assertInt32(t, response.doc, "nModified", 1)
 	}
 	after := db.State()
 	if after.CommitSeq != before.CommitSeq+1 {
@@ -788,6 +852,7 @@ func TestServerUpdateCoalescedBatchIsolatesItemErrors(t *testing.T) {
 	type updateResponse struct {
 		name string
 		doc  wire.Document
+		err  error
 	}
 	start := make(chan struct{})
 	responses := make(chan updateResponse, 2)
@@ -805,14 +870,15 @@ func TestServerUpdateCoalescedBatchIsolatesItemErrors(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			responses <- updateResponse{name: tc.name, doc: serveCommand(t, server, int32(2263+i), bson.D{
+			doc, err := serveCommandResult(server, int32(2263+i), bson.D{
 				{Key: "update", Value: "users"},
 				{Key: "updates", Value: bson.A{bson.D{
 					{Key: "q", Value: bson.D{{Key: "_id", Value: tc.id}}},
 					{Key: "u", Value: bson.D{{Key: "$set", Value: tc.set}}},
 				}}},
 				{Key: "$db", Value: "app"},
-			})}
+			})
+			responses <- updateResponse{name: tc.name, doc: doc, err: err}
 		}()
 	}
 	close(start)
@@ -821,6 +887,9 @@ func TestServerUpdateCoalescedBatchIsolatesItemErrors(t *testing.T) {
 
 	got := make(map[string]wire.Document, 2)
 	for response := range responses {
+		if response.err != nil {
+			t.Fatalf("%s ServeOneWithOwner: %v", response.name, response.err)
+		}
 		got[response.name] = response.doc
 	}
 	assertCommandError(t, got["invalid"], "BadValue")
@@ -2506,6 +2575,46 @@ func TestServeConnCancellationInterruptsRead(t *testing.T) {
 	}
 }
 
+func TestServerCloseInterruptsServeConnRead(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+
+	server := NewServer()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ServeConn(context.Background(), serverConn)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		server.connMu.Lock()
+		registered := len(server.conns) == 1
+		server.connMu.Unlock()
+		if registered {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	server.connMu.Lock()
+	registered := len(server.conns) == 1
+	server.connMu.Unlock()
+	if !registered {
+		t.Fatal("ServeConn did not register connection")
+	}
+
+	if err := server.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, errServerClosed) {
+			t.Fatalf("ServeConn err=%v want %v", err, errServerClosed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ServeConn did not return after server close")
+	}
+}
+
 func TestServerMaxMessageLengthClampsToWireLimit(t *testing.T) {
 	server := &Server{MaxMessageLength: wire.DefaultMaxMessageLength + 1}
 	if got := server.maxMessageLength(); got != wire.DefaultMaxMessageLength {
@@ -2531,18 +2640,35 @@ func mustRawValue(tb testing.TB, value any) bson.RawValue {
 	return bson.RawValue{Type: valueType, Value: raw}
 }
 
+type commandResult struct {
+	doc wire.Document
+	err error
+}
+
 func serveCommand(tb testing.TB, server *Server, requestID int32, doc bson.D) wire.Document {
 	tb.Helper()
-	commandDoc := mustDocument(tb, doc)
+	response, err := serveCommandResult(server, requestID, doc)
+	if err != nil {
+		tb.Fatalf("serve command: %v", err)
+	}
+	return response
+}
+
+func serveCommandResult(server *Server, requestID int32, doc bson.D) (wire.Document, error) {
+	raw, err := bson.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("marshal BSON document: %w", err)
+	}
+	commandDoc := wire.Document(raw)
 	req, err := wire.AppendMsgMessage(nil, requestID, 0, 0, commandDoc)
 	if err != nil {
-		tb.Fatalf("AppendMsgMessage: %v", err)
+		return nil, fmt.Errorf("AppendMsgMessage: %w", err)
 	}
 	rw := &readWriter{r: bytes.NewReader(req)}
 	if err := server.ServeOneWithOwner(rw, 1); err != nil {
-		tb.Fatalf("ServeOneWithOwner: %v", err)
+		return nil, fmt.Errorf("ServeOneWithOwner: %w", err)
 	}
-	return readMsgResponse(tb, rw.w.Bytes(), requestID)
+	return readMsgResponseResult(rw.w.Bytes(), requestID)
 }
 
 func assertOK(tb testing.TB, doc wire.Document) {
@@ -2567,18 +2693,26 @@ func assertBool(tb testing.TB, doc wire.Document, key string, want bool) {
 
 func readMsgResponse(tb testing.TB, response []byte, responseTo int32) wire.Document {
 	tb.Helper()
+	doc, err := readMsgResponseResult(response, responseTo)
+	if err != nil {
+		tb.Fatalf("read msg response: %v", err)
+	}
+	return doc
+}
+
+func readMsgResponseResult(response []byte, responseTo int32) (wire.Document, error) {
 	h, body, err := wire.ReadMessage(bytes.NewReader(response), 0)
 	if err != nil {
-		tb.Fatalf("ReadMessage response: %v", err)
+		return nil, fmt.Errorf("ReadMessage response: %w", err)
 	}
 	if h.OpCode != wire.OpMsg || h.ResponseTo != responseTo {
-		tb.Fatalf("response header=%+v want OP_MSG responseTo=%d", h, responseTo)
+		return nil, fmt.Errorf("response header=%+v want OP_MSG responseTo=%d", h, responseTo)
 	}
 	msg, err := wire.ParseMsg(body)
 	if err != nil {
-		tb.Fatalf("ParseMsg response: %v", err)
+		return nil, fmt.Errorf("ParseMsg response: %w", err)
 	}
-	return msg.Body
+	return msg.Body, nil
 }
 
 func cursorFirstBatch(tb testing.TB, doc wire.Document) []bson.Raw {
