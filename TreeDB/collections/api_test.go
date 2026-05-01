@@ -1517,6 +1517,59 @@ func TestCollectionInsertPlanningKeepsLockForIndexedMemtableBypass(t *testing.T)
 	}
 }
 
+func TestCollectionInsertRetryRetriesWrappedConcurrentMutation(t *testing.T) {
+	attempts := 0
+	result, err := retryInsertBatchMutation(func() ([][]byte, error) {
+		attempts++
+		if attempts < 3 {
+			return nil, fmt.Errorf("wrapped attempt %d: %w", attempts, ErrConcurrentMutation)
+		}
+		return [][]byte{[]byte("u1")}, nil
+	})
+	if err != nil {
+		t.Fatalf("retryInsertBatchMutation err=%v want nil", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts=%d want 3", attempts)
+	}
+	if len(result) != 1 || !bytes.Equal(result[0], []byte("u1")) {
+		t.Fatalf("result=%q want [u1]", result)
+	}
+}
+
+func TestCollectionInsertRetryReturnsNonRetryableImmediately(t *testing.T) {
+	attempts := 0
+	wantErr := errors.New("boom")
+	_, err := retryInsertBatchMutation(func() ([][]byte, error) {
+		attempts++
+		return nil, wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("retryInsertBatchMutation err=%v want %v", err, wantErr)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts=%d want 1", attempts)
+	}
+}
+
+func TestCollectionInsertRetryExhaustionWrapsLastConcurrentMutation(t *testing.T) {
+	attempts := 0
+	lastErr := fmt.Errorf("last stale root: %w", ErrConcurrentMutation)
+	_, err := retryInsertBatchMutation(func() ([][]byte, error) {
+		attempts++
+		return nil, lastErr
+	})
+	if !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("retryInsertBatchMutation err=%v want ErrConcurrentMutation", err)
+	}
+	if !strings.Contains(err.Error(), lastErr.Error()) {
+		t.Fatalf("retryInsertBatchMutation err=%q want last error %q", err, lastErr)
+	}
+	if attempts != maxCollectionMutationRetries {
+		t.Fatalf("attempts=%d want %d", attempts, maxCollectionMutationRetries)
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesReadAfterDomainTableAllocated(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

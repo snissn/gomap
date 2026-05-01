@@ -2246,9 +2246,15 @@ func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool)
 		return nil, errors.New("collections: db is nil")
 	}
 
+	return retryInsertBatchMutation(func() ([][]byte, error) {
+		return c.insertBatchOnce(ids, documents, trustedValidBSON)
+	})
+}
+
+func retryInsertBatchMutation(run func() ([][]byte, error)) ([][]byte, error) {
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
-		resultIDs, err := c.insertBatchOnce(ids, documents, trustedValidBSON)
+		resultIDs, err := run()
 		if errors.Is(err, ErrConcurrentMutation) {
 			lastErr = err
 			waitBeforeCollectionMutationRetry(attempt)
