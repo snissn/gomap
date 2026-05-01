@@ -2456,6 +2456,7 @@ func TestCollectionValidateInsertBatchPlanLockedClassifiesRaces(t *testing.T) {
 	}
 	rootName := collectionPrimaryRootName("users")
 	plan := &insertBatchPlan{
+		resultIDs:   [][]byte{[]byte("u2")},
 		primaryKeys: [][]byte{[]byte("u2")},
 		runs:        []collectionRootRun{{name: rootName}},
 	}
