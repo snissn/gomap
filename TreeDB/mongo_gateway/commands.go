@@ -214,7 +214,7 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 		parsed = append(parsed, item)
 	}
 	var matched, modified int32
-	if len(parsed) > 1 && !hasDuplicateKey {
+	if len(parsed) > 1 && !hasDuplicateKey && !collectionHasSecondaryUniqueIndexes(col) {
 		matched, modified, err = runMongoUpdateBatch(col, parsed)
 		if err != nil {
 			matched, modified, err = runMongoUpdatesSequential(col, parsed)
@@ -370,12 +370,24 @@ func applyMongoUpdateToStoredDocument(col *collections.Collection, materializer 
 		return nil, false, fmt.Errorf("updates[%d]: %w", update.index, err)
 	}
 	if !bytes.Equal(updatedKey, update.key) {
-		return nil, false, errors.New("Mongo gateway update cannot modify _id")
+		return nil, false, fmt.Errorf("updates[%d]: Mongo gateway update cannot modify _id", update.index)
 	}
 	if !changed {
 		return nil, false, nil
 	}
 	return encoded, true, nil
+}
+
+func collectionHasSecondaryUniqueIndexes(col *collections.Collection) bool {
+	if col == nil {
+		return false
+	}
+	for _, idx := range col.Meta().Indexes {
+		if idx.Unique {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) deleteResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
