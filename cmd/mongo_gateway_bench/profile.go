@@ -48,18 +48,18 @@ type profileManifest struct {
 }
 
 type profilePhaseArtifact struct {
-	Phase          string  `json:"phase"`
-	Prefix         string  `json:"prefix"`
-	StartedAt      string  `json:"started_at"`
-	DurationMillis float64 `json:"duration_ms"`
-	CPUProfile     string  `json:"cpu_profile,omitempty"`
-	HeapProfile    string  `json:"heap_profile,omitempty"`
-	AllocsProfile  string  `json:"allocs_profile,omitempty"`
-	BlockProfile   string  `json:"block_profile,omitempty"`
-	MutexProfile   string  `json:"mutex_profile,omitempty"`
-	GoroutineDump  string  `json:"goroutine_dump,omitempty"`
-	Trace          string  `json:"trace,omitempty"`
-	Error          string  `json:"error,omitempty"`
+	Phase            string  `json:"phase"`
+	Prefix           string  `json:"prefix"`
+	StartedAt        string  `json:"started_at"`
+	DurationMillis   float64 `json:"duration_ms"`
+	CPUProfile       string  `json:"cpu_profile,omitempty"`
+	HeapProfile      string  `json:"heap_profile,omitempty"`
+	AllocsProfile    string  `json:"allocs_profile,omitempty"`
+	BlockProfile     string  `json:"block_profile,omitempty"`
+	MutexProfile     string  `json:"mutex_profile,omitempty"`
+	GoroutineProfile string  `json:"goroutine_profile,omitempty"`
+	Trace            string  `json:"trace,omitempty"`
+	Error            string  `json:"error,omitempty"`
 }
 
 type activeProfilePhase struct {
@@ -213,14 +213,14 @@ func (r *profileRecorder) startPhase(name string) (*activeProfilePhase, error) {
 		tracePath := filepath.Join(r.dir, prefix+".trace.out")
 		traceFile, err := createProfileFile(tracePath)
 		if err != nil {
-			phase.stop(err)
-			return nil, err
+			stopErr := phase.stop(err)
+			return nil, errors.Join(err, stopErr)
 		}
 		phase.traceFile = traceFile
 		phase.artifact.Trace = filepath.Base(tracePath)
 		if err := trace.Start(traceFile); err != nil {
-			phase.stop(err)
-			return nil, err
+			stopErr := phase.stop(err)
+			return nil, errors.Join(err, stopErr)
 		}
 		phase.traceOn = true
 	}
@@ -281,7 +281,7 @@ func (p *activeProfilePhase) writeRuntimeProfiles() []error {
 		{name: "allocs", set: func(path string) { p.artifact.AllocsProfile = path }, want: true},
 		{name: "block", set: func(path string) { p.artifact.BlockProfile = path }, want: p.recorder.blockRate > 0},
 		{name: "mutex", set: func(path string) { p.artifact.MutexProfile = path }, want: p.recorder.mutexFraction > 0},
-		{name: "goroutine", set: func(path string) { p.artifact.GoroutineDump = path }, want: true},
+		{name: "goroutine", set: func(path string) { p.artifact.GoroutineProfile = path }, want: true},
 	}
 	var errs []error
 	for _, profile := range profiles {
