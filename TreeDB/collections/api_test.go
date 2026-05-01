@@ -2755,6 +2755,93 @@ func TestCollectionUpdateCombinerRunBatchRecoversCallbackPanic(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateCombinerDuplicateIDsPreserveOrder(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"score":0}`)}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	setScore := func(score int32) func([]byte) ([]byte, bool, error) {
+		return func([]byte) ([]byte, bool, error) {
+			return []byte(fmt.Sprintf(`{"score":%d}`, score)), true, nil
+		}
+	}
+	combiner := &collectionUpdateCombiner{maxBatch: 8}
+	requests := []collectionUpdateCombineRequest{
+		{collection: col, documentID: []byte("u1"), update: setScore(1), done: make(chan collectionUpdateCombineResult, 1)},
+		{collection: col, documentID: []byte("u1"), update: setScore(2), done: make(chan collectionUpdateCombineResult, 1)},
+	}
+	combiner.runBatch(requests)
+	for i, req := range requests {
+		result := <-req.done
+		if result.err != nil {
+			t.Fatalf("request %d err: %v", i, result.err)
+		}
+		if !result.matched || !result.modified {
+			t.Fatalf("request %d matched=%v modified=%v", i, result.matched, result.modified)
+		}
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`"score":2`)) {
+		t.Fatalf("u1 document=%s want final score 2", got)
+	}
+}
+
+func TestCollectionUpdateCombinerEvictsWhenIdle(t *testing.T) {
+	oldTTL := collectionUpdateCombineIdleTTL
+	collectionUpdateCombineIdleTTL = time.Millisecond
+	defer func() { collectionUpdateCombineIdleTTL = oldTTL }()
+
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	combiner := col.updateCombiner()
+	if combiner == nil {
+		t.Fatal("expected update combiner")
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		col.writeDomain.updateCombineMu.Lock()
+		stillCached := col.writeDomain.updateCombiner == combiner
+		col.writeDomain.updateCombineMu.Unlock()
+		combiner.mu.RLock()
+		stopped := combiner.stopped
+		combiner.mu.RUnlock()
+		if !stillCached && stopped {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("combiner was not evicted after idle timeout")
+}
+
 func TestCollectionManagerCloseStopsUpdateCombiners(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -2823,6 +2910,55 @@ func TestCollectionManagerCloseForBackendPreventsCombinerRecreationBeforeDBClosi
 	}
 	if _, err := mgr.OpenCollection("users"); !errors.Is(err, backenddb.ErrClosed) {
 		t.Fatalf("OpenCollection during manager close err=%v want ErrClosed", err)
+	}
+}
+
+func TestCollectionManagerCloseForBackendDrainsCombinerBeforeFlush(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"score":0}`)}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	combiner := col.updateCombiner()
+	if combiner == nil {
+		t.Fatal("expected update combiner")
+	}
+	done := make(chan collectionUpdateCombineResult, 1)
+	if !combiner.enqueue(collectionUpdateCombineRequest{
+		collection: col,
+		documentID: []byte("u1"),
+		update: func([]byte) ([]byte, bool, error) {
+			return []byte(`{"score":9}`), true, nil
+		},
+		done: done,
+	}) {
+		t.Fatal("enqueue update")
+	}
+	if err := mgr.closeForBackend(); err != nil {
+		t.Fatalf("closeForBackend: %v", err)
+	}
+	result := <-done
+	if result.err != nil || !result.matched || !result.modified {
+		t.Fatalf("combined result=%+v want matched modified nil err", result)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`"score":9`)) {
+		t.Fatalf("u1 document=%s want score 9", got)
 	}
 }
 

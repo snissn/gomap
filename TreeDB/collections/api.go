@@ -39,6 +39,8 @@ const (
 	defaultCollectionUpdateCombineMaxBatch          = 256
 )
 
+var collectionUpdateCombineIdleTTL = 30 * time.Second
+
 var (
 	ErrCollectionNotFound  = errors.New("collections: collection not found")
 	ErrDocumentExists      = errors.New("collections: document already exists")
@@ -369,9 +371,8 @@ func NewCollectionManager(database *backenddb.DB) *CollectionManager {
 
 func (m *CollectionManager) closeForBackend() error {
 	m.closing.Store(true)
-	err := m.FlushAll()
 	m.stopUpdateCombiners()
-	return err
+	return m.FlushAll()
 }
 
 func (m *CollectionManager) isClosing() bool {
@@ -2957,7 +2958,10 @@ func validateUpdateBatchItems(items []UpdateBatchItem) error {
 
 type collectionUpdateCombiner struct {
 	maxBatch int
+	idleTTL  time.Duration
 	requests chan collectionUpdateCombineRequest
+	done     chan struct{}
+	domain   *collectionWriteDomain
 	mu       sync.RWMutex
 	stopped  bool
 }
@@ -2990,7 +2994,10 @@ func (c *Collection) updateCombiner() *collectionUpdateCombiner {
 	}
 	combiner := &collectionUpdateCombiner{
 		maxBatch: defaultCollectionUpdateCombineMaxBatch,
+		idleTTL:  collectionUpdateCombineIdleTTL,
 		requests: make(chan collectionUpdateCombineRequest, defaultCollectionUpdateCombineMaxBatch*4),
+		done:     make(chan struct{}),
+		domain:   domain,
 	}
 	domain.updateCombiner = combiner
 	go combiner.run()
@@ -3050,32 +3057,100 @@ func (combiner *collectionUpdateCombiner) stop() {
 	if combiner == nil {
 		return
 	}
+	if combiner.markStopped() {
+		close(combiner.requests)
+	}
+	if combiner.done != nil {
+		<-combiner.done
+	}
+}
+
+func (combiner *collectionUpdateCombiner) markStopped() bool {
 	combiner.mu.Lock()
 	defer combiner.mu.Unlock()
 	if combiner.stopped {
-		return
+		return false
 	}
 	combiner.stopped = true
-	close(combiner.requests)
+	return true
 }
 
 func (combiner *collectionUpdateCombiner) run() {
-	for first := range combiner.requests {
-		batch := []collectionUpdateCombineRequest{first}
-		for len(batch) < combiner.maxBatch {
-			select {
-			case req, ok := <-combiner.requests:
-				if !ok {
-					goto drained
-				}
-				batch = append(batch, req)
-			default:
-				goto drained
-			}
-		}
-	drained:
-		combiner.runBatch(batch)
+	if combiner.done != nil {
+		defer close(combiner.done)
 	}
+	if combiner.idleTTL <= 0 {
+		for first := range combiner.requests {
+			combiner.runBatchStartingWith(first)
+		}
+		return
+	}
+	idle := time.NewTimer(combiner.idleTTL)
+	defer idle.Stop()
+	for {
+		select {
+		case first, ok := <-combiner.requests:
+			if !ok {
+				return
+			}
+			stopAndDrainTimer(idle)
+			combiner.runBatchStartingWith(first)
+			idle.Reset(combiner.idleTTL)
+		case <-idle.C:
+			if combiner.retireIdle() {
+				return
+			}
+			idle.Reset(combiner.idleTTL)
+		}
+	}
+}
+
+func stopAndDrainTimer(timer *time.Timer) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+}
+
+func (combiner *collectionUpdateCombiner) retireIdle() bool {
+	if combiner == nil {
+		return false
+	}
+	if combiner.domain != nil {
+		combiner.domain.updateCombineMu.Lock()
+		if combiner.domain.updateCombiner == combiner {
+			combiner.domain.updateCombiner = nil
+		}
+		combiner.domain.updateCombineMu.Unlock()
+	}
+	if !combiner.markStopped() {
+		return false
+	}
+	close(combiner.requests)
+	for req := range combiner.requests {
+		completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+	}
+	return true
+}
+
+func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionUpdateCombineRequest) {
+	batch := []collectionUpdateCombineRequest{first}
+	for len(batch) < combiner.maxBatch {
+		select {
+		case req, ok := <-combiner.requests:
+			if !ok {
+				combiner.runBatch(batch)
+				return
+			}
+			batch = append(batch, req)
+		default:
+			combiner.runBatch(batch)
+			return
+		}
+	}
+	combiner.runBatch(batch)
 }
 
 func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombineRequest) {
@@ -3102,6 +3177,10 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 		for _, req := range batch {
 			completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
 		}
+		return
+	}
+	if len(results) != len(batch) {
+		completeUpdateCombineBatchWithError(batch, fmt.Errorf("collections: update combiner result count %d for batch size %d", len(results), len(batch)))
 		return
 	}
 	for i, req := range batch {
