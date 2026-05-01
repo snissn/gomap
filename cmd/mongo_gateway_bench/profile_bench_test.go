@@ -27,6 +27,15 @@ var (
 	errProfileBenchUpdateMiss = errors.New("profile benchmark update missed document")
 )
 
+const (
+	// Keep update payloads bounded so the benchmark stresses collection update
+	// concurrency instead of BSON allocation variety.
+	profileBenchUpdateDocPoolSize = 4096
+	// Scramble sequential operation numbers across the preloaded ID set while
+	// still using a deterministic, cache-friendly access pattern.
+	profileBenchUpdateIDScrambleMultiplier = 37
+)
+
 func BenchmarkTreeDBGatewayLoadBSONIndexes2(b *testing.B) {
 	benchmarkTreeDBGatewayLoad(b, collections.DocumentFormatBSON, 2, false)
 }
@@ -392,8 +401,7 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	if err := backend.Checkpoint(); err != nil {
 		b.Fatalf("checkpoint preload: %v", err)
 	}
-	const updateDocPoolSize = 4096
-	updateDocs := make([]bson.Raw, updateDocPoolSize)
+	updateDocs := make([]bson.Raw, profileBenchUpdateDocPoolSize)
 	for i := range updateDocs {
 		updateRaw, err := bson.Marshal(bson.D{{Key: "$set", Value: bson.D{
 			{Key: "concurrent_updated", Value: true},
@@ -414,7 +422,7 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	b.ResetTimer()
 	started := time.Now()
 	err = runConcurrentOperations(context.Background(), writers, b.N, func(op int) error {
-		id := ids[(op*37)%documentCount]
+		id := ids[(op*profileBenchUpdateIDScrambleMultiplier)%documentCount]
 		updateRaw := updateDocs[op%len(updateDocs)]
 		matched, _, err := collection.Update(id, func(stored []byte) ([]byte, bool, error) {
 			raw := bson.Raw(stored)

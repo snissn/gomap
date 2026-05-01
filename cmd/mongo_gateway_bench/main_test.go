@@ -645,6 +645,25 @@ func TestNewProfileRecorderTightensProfileDirPermissions(t *testing.T) {
 	}
 }
 
+func TestNewProfileRecorderRejectsNonEmptyProfileDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "stale.cpu.pprof"), []byte("old"), 0o600); err != nil {
+		t.Fatalf("write stale artifact: %v", err)
+	}
+	cfg, err := parseConfig([]string{"-profile-dir", dir})
+	if err != nil {
+		t.Fatalf("parse profile config: %v", err)
+	}
+	recorder, err := newProfileRecorder(cfg)
+	if err == nil {
+		recorder.Close()
+		t.Fatal("newProfileRecorder accepted non-empty profile dir")
+	}
+	if !strings.Contains(err.Error(), "must be empty") {
+		t.Fatalf("newProfileRecorder err=%v want empty-dir error", err)
+	}
+}
+
 func TestCreateProfileFileRejectsSymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.pprof")
@@ -659,6 +678,49 @@ func TestCreateProfileFileRejectsSymlink(t *testing.T) {
 	if err == nil {
 		_ = file.Close()
 		t.Fatal("createProfileFile accepted symlink")
+	}
+}
+
+func TestProfileRecorderManifestRecordsProfileStopError(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := parseConfig([]string{"-profile-dir", dir})
+	if err != nil {
+		t.Fatalf("parse profile config: %v", err)
+	}
+	recorder, err := newProfileRecorder(cfg)
+	if err != nil {
+		t.Fatalf("newProfileRecorder: %v", err)
+	}
+	defer recorder.Close()
+
+	if _, err := recorder.RunPhase("unit phase", func() (phaseResult, error) {
+		if err := os.Mkdir(filepath.Join(dir, "unit_phase.heap.pprof"), 0o700); err != nil {
+			return phaseResult{}, err
+		}
+		return summarizePhase("unit phase", 1, 1, time.Millisecond, []time.Duration{time.Millisecond}), nil
+	}); err == nil {
+		t.Fatal("RunPhase succeeded despite profile artifact write failure")
+	}
+	if err := recorder.WriteManifest(nil, nil); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, profileManifestFile))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var manifest profileManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("unmarshal manifest: %v", err)
+	}
+	if len(manifest.Artifacts) != 1 {
+		t.Fatalf("manifest artifacts=%d want 1", len(manifest.Artifacts))
+	}
+	if manifest.Artifacts[0].Error == "" {
+		t.Fatal("manifest artifact error is empty")
+	}
+	if !strings.Contains(manifest.Artifacts[0].Error, "unit_phase.heap.pprof") {
+		t.Fatalf("manifest artifact error=%q want heap path context", manifest.Artifacts[0].Error)
 	}
 }
 
