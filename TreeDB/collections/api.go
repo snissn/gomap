@@ -1590,7 +1590,13 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.rootBaseIDs = checkpoint.rootBaseIDs
 	domain.primaryIDIndex = rebuildBufferedPrimaryIDIndex(checkpoint.meta.Name, checkpoint.rootRuns)
 	if checkpoint.primaryRunIndexActive {
-		domain.primaryRunIndex = rebuildBufferedPrimaryRunIndex(checkpoint.meta.Name, checkpoint.rootRuns)
+		index, err := rebuildBufferedPrimaryRunIndex(checkpoint.meta.Name, checkpoint.rootRuns)
+		if err != nil {
+			index = nil
+		} else if index == nil {
+			index = newBufferedPrimaryRunIndex(0)
+		}
+		domain.primaryRunIndex = index
 	} else {
 		domain.primaryRunIndex = nil
 	}
@@ -1908,24 +1914,24 @@ func bufferedPrimaryIDArenaCap(entries int) int {
 	return entries * bytesPerKeyEstimate
 }
 
-func rebuildBufferedPrimaryRunIndex(collectionName string, runs map[string][]memtable.Table) *bufferedPrimaryRunIndex {
+func rebuildBufferedPrimaryRunIndex(collectionName string, runs map[string][]memtable.Table) (*bufferedPrimaryRunIndex, error) {
 	if collectionName == "" || len(runs) == 0 {
-		return nil
+		return nil, nil
 	}
 	tables := runs[collectionPrimaryRootName(collectionName)]
 	if len(tables) == 0 {
-		return nil
+		return nil, nil
 	}
 	index := newBufferedPrimaryRunIndex(0)
 	for _, table := range tables {
 		if err := addBufferedPrimaryRunIndexEntries(index, table); err != nil {
-			return nil
+			return nil, err
 		}
 	}
 	if len(index.values) == 0 {
-		return nil
+		return nil, nil
 	}
-	return index
+	return index, nil
 }
 
 func rebuildBufferedPrimaryIDIndex(collectionName string, runs map[string][]memtable.Table) *bufferedUniqueValueIndex {
@@ -4404,7 +4410,8 @@ func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta 
 	if !sameCollectionMeta(domain.meta, meta) {
 		return false
 	}
-	if len(domain.rootRuns[collectionPrimaryRootName(meta.Name)]) == 0 {
+	collectionName := bufferedDomainCollectionName(domain, meta.Name)
+	if collectionName == "" || len(domain.rootRuns[collectionPrimaryRootName(collectionName)]) == 0 {
 		return false
 	}
 	return meta.Options.BufferedIndexedWrites && len(meta.Indexes) > 0
@@ -4522,10 +4529,16 @@ func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta Collect
 
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
-	if updateBatchCanReadBufferedDomainLocked(domain, meta, baseSystemRoot) && domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, meta.Name) {
-		if index := rebuildBufferedPrimaryRunIndex(meta.Name, domain.rootRuns); index != nil {
-			domain.primaryRunIndex = index
+	bufferedCollectionName := bufferedDomainCollectionName(domain, meta.Name)
+	if updateBatchCanReadBufferedDomainLocked(domain, meta, baseSystemRoot) && domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, bufferedCollectionName) {
+		index, err := rebuildBufferedPrimaryRunIndex(bufferedCollectionName, domain.rootRuns)
+		if err != nil {
+			return updateBatchBufferedRead{}, nil, false, err
 		}
+		if index == nil {
+			index = newBufferedPrimaryRunIndex(0)
+		}
+		domain.primaryRunIndex = index
 	}
 	read, templateRuns, blocked, _, err = snapshotUpdateBatchBufferedReadLocked(domain, meta, baseSystemRoot, items, documentFormat, false)
 	return read, templateRuns, blocked, err
@@ -4533,10 +4546,11 @@ func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta Collect
 
 func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64, items []UpdateBatchItem, documentFormat DocumentFormat, allowPrimaryRunIndexBuild bool) (updateBatchBufferedRead, []memtable.Table, bool, bool, error) {
 	if updateBatchCanReadBufferedDomainLocked(domain, meta, baseSystemRoot) {
-		if allowPrimaryRunIndexBuild && domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, meta.Name) {
+		bufferedCollectionName := bufferedDomainCollectionName(domain, meta.Name)
+		if allowPrimaryRunIndexBuild && domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, bufferedCollectionName) {
 			return updateBatchBufferedRead{}, nil, false, true, nil
 		}
-		primaryRuns := domain.rootRuns[collectionPrimaryRootName(meta.Name)]
+		primaryRuns := domain.rootRuns[collectionPrimaryRootName(bufferedCollectionName)]
 		var primaryEntries []updateBatchBufferedEntry
 		var err error
 		if domain.primaryRunIndex != nil {
@@ -4549,7 +4563,7 @@ func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta C
 		}
 		var templateRuns []memtable.Table
 		if normalizedDocumentFormat(documentFormat) == DocumentFormatTemplateV1 {
-			templateRuns, err = cloneCollectionRunTables(domain.rootRuns[collectionTemplateRootName(meta.Name)])
+			templateRuns, err = cloneCollectionRunTables(domain.rootRuns[collectionTemplateRootName(bufferedCollectionName)])
 			if err != nil {
 				return updateBatchBufferedRead{}, nil, false, false, err
 			}
@@ -6025,7 +6039,11 @@ func (c *Collection) getBufferedDocumentIntoWithPrimaryRunIndex(documentID []byt
 	}
 	if domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, c.meta.Name) {
 		collectionName := bufferedDomainCollectionName(domain, c.meta.Name)
-		if index := rebuildBufferedPrimaryRunIndex(collectionName, domain.rootRuns); index != nil {
+		index, err := rebuildBufferedPrimaryRunIndex(collectionName, domain.rootRuns)
+		if err == nil {
+			if index == nil {
+				index = newBufferedPrimaryRunIndex(0)
+			}
 			domain.primaryRunIndex = index
 		}
 	}

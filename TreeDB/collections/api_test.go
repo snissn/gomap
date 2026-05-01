@@ -5014,10 +5014,7 @@ func TestCollectionUpdateBatchBuildsPrimaryRunIndexForBufferedPlanning(t *testin
 	if !batched || len(first) != 1 || !first[0].Matched || !first[0].Modified {
 		t.Fatalf("first results=%+v batched=%v want one modified row", first, batched)
 	}
-	col.writeDomain.mu.RLock()
-	beforeIndex := col.writeDomain.primaryRunIndex
-	col.writeDomain.mu.RUnlock()
-	if beforeIndex != nil {
+	if collectionHasBufferedPrimaryRunIndexForTest(t, col) {
 		t.Fatal("primary run index was built before buffered read planning")
 	}
 
@@ -5050,12 +5047,53 @@ func TestCollectionUpdateBatchBuildsPrimaryRunIndexForBufferedPlanning(t *testin
 	if !sawBufferedUpdate {
 		t.Fatal("second update did not read the buffered first update")
 	}
-	col.writeDomain.mu.RLock()
-	afterIndex := col.writeDomain.primaryRunIndex
-	col.writeDomain.mu.RUnlock()
-	if afterIndex == nil {
+	if !collectionHasBufferedPrimaryRunIndexForTest(t, col) {
 		t.Fatal("primary run index was not built for buffered update planning")
 	}
+}
+
+func TestSnapshotUpdateBatchBufferedReadCachesEmptyPrimaryRunIndex(t *testing.T) {
+	meta := CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}
+	domain := &collectionWriteDomain{
+		loaded:         true,
+		meta:           meta,
+		catalog:        &collectionCatalog{meta: meta},
+		baseSystemRoot: 7,
+		count:          1,
+		rootRuns: map[string][]memtable.Table{
+			collectionPrimaryRootName("users"): {newCollectionRunTable(0)},
+		},
+	}
+
+	read, _, blocked, err := snapshotUpdateBatchBufferedRead(domain, meta, 7, []UpdateBatchItem{{DocumentID: []byte("missing")}}, DocumentFormatJSON)
+	if err != nil {
+		t.Fatalf("snapshotUpdateBatchBufferedRead: %v", err)
+	}
+	if blocked {
+		t.Fatal("buffered read reported blocked")
+	}
+	if !read.enabled {
+		t.Fatal("buffered read was not enabled")
+	}
+	domain.mu.RLock()
+	built := domain.primaryRunIndex != nil
+	domain.mu.RUnlock()
+	if !built {
+		t.Fatal("empty primary run index was not cached")
+	}
+}
+
+func collectionHasBufferedPrimaryRunIndexForTest(t *testing.T, col *Collection) bool {
+	t.Helper()
+	col.writeDomain.mu.RLock()
+	defer col.writeDomain.mu.RUnlock()
+	return col.writeDomain.primaryRunIndex != nil
 }
 
 func TestCollectionUpdateBatchMaintainsBufferedUniqueValueIndex(t *testing.T) {
