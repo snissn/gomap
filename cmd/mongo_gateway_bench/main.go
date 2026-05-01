@@ -1010,8 +1010,9 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	} else {
 		result.MongoURI = redactMongoURI(cfg.MongoURI)
 	}
+	var updatedCityValues []string
 	if cfg.UpdateIndexedField {
-		prewarmBenchmarkUpdatedCities()
+		updatedCityValues = benchmarkUpdatedCityValuesForUpdate()
 	}
 
 	if err := createIndexes(ctx, coll, cfg.SecondaryIndexes); err != nil {
@@ -1129,7 +1130,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 			documentOrdinal := (i * 31) % cfg.Documents
 			id := benchmarkID(documentOrdinal)
 			filter := bson.D{{Key: "_id", Value: id}}
-			update := benchmarkSetUpdate(i, documentOrdinal, cfg.Documents, false, cfg.UpdateIndexedField)
+			update := benchmarkSetUpdate(i, documentOrdinal, cfg.Documents, false, cfg.UpdateIndexedField, updatedCityValues)
 			// Sample the driver/gateway/DB call; request construction is outside
 			// the update latency window and documented in the README.
 			begin := time.Now()
@@ -1180,7 +1181,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 				documentOrdinal := (op * 37) % cfg.Documents
 				id := benchmarkID(documentOrdinal)
 				filter := bson.D{{Key: "_id", Value: id}}
-				update := benchmarkSetUpdate(op, documentOrdinal, cfg.Documents, true, cfg.UpdateIndexedField)
+				update := benchmarkSetUpdate(op, documentOrdinal, cfg.Documents, true, cfg.UpdateIndexedField, updatedCityValues)
 				// Sample the driver/gateway/DB call; request construction is outside
 				// the update latency window and documented in the README.
 				begin := time.Now()
@@ -1992,7 +1993,7 @@ func benchmarkDocument(i int) bson.D {
 	}
 }
 
-func benchmarkSetUpdate(i int, documentOrdinal int, documentCount int, concurrentPhase bool, updateIndexedField bool) bson.D {
+func benchmarkSetUpdate(i int, documentOrdinal int, documentCount int, concurrentPhase bool, updateIndexedField bool, updatedCityValues []string) bson.D {
 	set := make(bson.D, 0, 3)
 	updatedKey := "updated"
 	updateSeqKey := "update_seq"
@@ -2005,7 +2006,10 @@ func benchmarkSetUpdate(i int, documentOrdinal int, documentCount int, concurren
 		bson.E{Key: updateSeqKey, Value: int64(i)},
 	)
 	if updateIndexedField {
-		set = append(set, bson.E{Key: "city", Value: benchmarkUpdatedCity(i, documentOrdinal, documentCount)})
+		if len(updatedCityValues) == 0 {
+			updatedCityValues = benchmarkUpdatedCityValuesForUpdate()
+		}
+		set = append(set, bson.E{Key: "city", Value: benchmarkUpdatedCityFromValues(updatedCityValues, i, documentOrdinal, documentCount)})
 	}
 	return bson.D{{Key: "$set", Value: set}}
 }
@@ -2023,10 +2027,10 @@ func benchmarkCity(i int) string {
 }
 
 func benchmarkUpdatedCity(i int, documentOrdinal int, documentCount int) string {
-	if !benchmarkUpdatedCityValuesReady.Load() {
-		prewarmBenchmarkUpdatedCities()
-	}
-	values := benchmarkUpdatedCityValues
+	return benchmarkUpdatedCityFromValues(benchmarkUpdatedCityValuesForUpdate(), i, documentOrdinal, documentCount)
+}
+
+func benchmarkUpdatedCityFromValues(values []string, i int, documentOrdinal int, documentCount int) string {
 	cycle := len(values)
 	if cycle == 0 {
 		return ""
@@ -2034,11 +2038,23 @@ func benchmarkUpdatedCity(i int, documentOrdinal int, documentCount int) string 
 	index := benchmarkUpdatedCityIndex(i, documentOrdinal, documentCount, cycle)
 	if documentCount > 0 && i >= documentCount {
 		previousIndex := benchmarkUpdatedCityIndex(i-documentCount, documentOrdinal, documentCount, cycle)
-		if index == previousIndex {
-			index = (index + 1) % cycle
-		}
+		index = avoidBenchmarkUpdatedCityRepeat(index, previousIndex, cycle)
 	}
 	return values[index]
+}
+
+func benchmarkUpdatedCityValuesForUpdate() []string {
+	if !benchmarkUpdatedCityValuesReady.Load() {
+		prewarmBenchmarkUpdatedCities()
+	}
+	return benchmarkUpdatedCityValues
+}
+
+func avoidBenchmarkUpdatedCityRepeat(index, previousIndex, cycle int) int {
+	if cycle > 1 && index == previousIndex {
+		return (index + 1) % cycle
+	}
+	return index
 }
 
 func benchmarkUpdatedCityIndex(i int, documentOrdinal int, documentCount int, cycle int) int {

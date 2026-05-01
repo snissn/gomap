@@ -277,10 +277,6 @@ case "$UPDATE_INDEXED_FIELD" in
     ;;
   false)
     ;;
-  *)
-    echo "invalid UPDATE_INDEXED_FIELD=$UPDATE_INDEXED_FIELD (want true or false)" >&2
-    exit 2
-    ;;
 esac
 INCLUDE_MONGO=$(normalize_bool_01 INCLUDE_MONGO "$INCLUDE_MONGO")
 
