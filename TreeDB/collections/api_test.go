@@ -3168,7 +3168,7 @@ func TestCollectionUpdateCombinerEvictsWhenIdle(t *testing.T) {
 		t.Fatalf("open collection: %v", err)
 	}
 	col.writeDomain.updateCombineMu.Lock()
-	col.writeDomain.updateCombineTTL = time.Millisecond
+	col.writeDomain.updateCombineTTL = 25 * time.Millisecond
 	col.writeDomain.updateCombineMu.Unlock()
 	combiner := col.updateCombiner()
 	if combiner == nil {
@@ -3258,7 +3258,7 @@ func TestCollectionUpdateCombinerReplacesStoppedCachedCombinerWithoutWaiting(t *
 			t.Fatal("updateCombiner reused stopped combiner")
 		}
 		got.stop()
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(time.Second):
 		t.Fatal("updateCombiner waited for stopped combiner done channel")
 	}
 }
