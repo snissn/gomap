@@ -599,7 +599,7 @@ func TestMissingTreeDBDiskSnapshotRendersNA(t *testing.T) {
 		},
 	}}
 
-	lines := strings.Join(highlightLines(cells), "\n")
+	lines := strings.Join(highlightLines(cells, true), "\n")
 	if !strings.Contains(lines, "TreeDB disk snapshot was n/a") || strings.Contains(lines, "used 0 B") {
 		t.Fatalf("highlight rendered missing TreeDB disk snapshot incorrectly:\n%s", lines)
 	}

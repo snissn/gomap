@@ -284,9 +284,8 @@ run_bench() {
   local concurrent_writes=$7
   shift 7
 
-  local prebuild_args=()
   if [[ "$PREBUILD_DOCUMENTS" == "true" ]]; then
-    prebuild_args=(-prebuild-documents)
+    set -- -prebuild-documents "$@"
   fi
 
   "$BENCH_BIN" \
@@ -310,7 +309,6 @@ run_bench() {
     -secondary-indexes "$INDEXES" \
     -timeout "$TIMEOUT" \
     -format json \
-    "${prebuild_args[@]}" \
     "$@" >"$raw_json"
 }
 
@@ -370,17 +368,25 @@ for readers in $READERS_LIST; do
   run_cell "readers_${readers}" "$readers" "$CONCURRENT_READS" 0 0
 done
 
-report_args=()
+report_extra=""
 if [[ "$INCLUDE_MONGO" != "1" ]]; then
-  report_args=(-allow-incomplete)
+  report_extra="-allow-incomplete"
 fi
 
-"$REPORT_BIN" \
-  -matrix "$MATRIX" \
-  -report "$REPORT" \
-  -summary "$SUMMARY" \
-  -title "$TITLE" \
-  "${report_args[@]}"
+if [[ -n "$report_extra" ]]; then
+  "$REPORT_BIN" \
+    -matrix "$MATRIX" \
+    -report "$REPORT" \
+    -summary "$SUMMARY" \
+    -title "$TITLE" \
+    "$report_extra"
+else
+  "$REPORT_BIN" \
+    -matrix "$MATRIX" \
+    -report "$REPORT" \
+    -summary "$SUMMARY" \
+    -title "$TITLE"
+fi
 
 cat >"$README" <<EOF
 # Mongo Gateway Scaling Bundle
@@ -415,7 +421,7 @@ GOWORK=off go run ./cmd/mongo_gateway_compare_report \\
   -report "$REPORT" \\
   -summary "$SUMMARY" \\
   -title "$TITLE" \\
-  ${report_args[*]}
+  $report_extra
 \`\`\`
 EOF
 
