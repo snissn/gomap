@@ -353,6 +353,129 @@ func TestIndexRangeScanBoundsDoubleNaN(t *testing.T) {
 	}
 }
 
+func TestIndexRangeScanBoundsTypedScalars(t *testing.T) {
+	encoded := func(valueType IndexValueType, value any) []byte {
+		t.Helper()
+		return mustEncodeTestIndexScalar(t, valueType, value)
+	}
+	prefixAfter := func(valueType IndexValueType, value any) []byte {
+		t.Helper()
+		out := prefixEnd(encoded(valueType, value))
+		if out == nil {
+			t.Fatalf("prefixEnd returned nil for %s %v", valueType, value)
+		}
+		return out
+	}
+	tests := []struct {
+		name      string
+		valueType IndexValueType
+		opts      IndexRangeOptions
+		wantStart []byte
+		wantEnd   []byte
+		wantEmpty bool
+	}{
+		{
+			name:      "string lower inclusive",
+			valueType: IndexValueString,
+			opts: IndexRangeOptions{
+				Lower: IndexRangeBound{Value: "m", Inclusive: true},
+				Upper: IndexRangeBound{Unbounded: true},
+			},
+			wantStart: encoded(IndexValueString, "m"),
+		},
+		{
+			name:      "string lower exclusive",
+			valueType: IndexValueString,
+			opts: IndexRangeOptions{
+				Lower: IndexRangeBound{Value: "m", Inclusive: false},
+				Upper: IndexRangeBound{Unbounded: true},
+			},
+			wantStart: prefixAfter(IndexValueString, "m"),
+		},
+		{
+			name:      "string upper inclusive",
+			valueType: IndexValueString,
+			opts: IndexRangeOptions{
+				Lower: IndexRangeBound{Unbounded: true},
+				Upper: IndexRangeBound{Value: "m", Inclusive: true},
+			},
+			wantEnd: prefixAfter(IndexValueString, "m"),
+		},
+		{
+			name:      "string upper exclusive",
+			valueType: IndexValueString,
+			opts: IndexRangeOptions{
+				Lower: IndexRangeBound{Unbounded: true},
+				Upper: IndexRangeBound{Value: "m", Inclusive: false},
+			},
+			wantEnd: encoded(IndexValueString, "m"),
+		},
+		{
+			name:      "bool closed",
+			valueType: IndexValueBool,
+			opts: IndexRangeOptions{
+				Lower: IndexRangeBound{Value: false, Inclusive: true},
+				Upper: IndexRangeBound{Value: true, Inclusive: true},
+			},
+			wantStart: encoded(IndexValueBool, false),
+			wantEnd:   prefixAfter(IndexValueBool, true),
+		},
+		{
+			name:      "int64 equality",
+			valueType: IndexValueInt64,
+			opts: IndexRangeOptions{
+				Lower: IndexRangeBound{Value: int64(10), Inclusive: true},
+				Upper: IndexRangeBound{Value: int64(10), Inclusive: true},
+			},
+			wantStart: encoded(IndexValueInt64, int64(10)),
+			wantEnd:   prefixAfter(IndexValueInt64, int64(10)),
+		},
+		{
+			name:      "int64 empty half-open equality",
+			valueType: IndexValueInt64,
+			opts: IndexRangeOptions{
+				Lower: IndexRangeBound{Value: int64(10), Inclusive: true},
+				Upper: IndexRangeBound{Value: int64(10), Inclusive: false},
+			},
+			wantEmpty: true,
+		},
+		{
+			name:      "double infinities",
+			valueType: IndexValueDouble,
+			opts: IndexRangeOptions{
+				Lower: IndexRangeBound{Value: math.Inf(-1), Inclusive: true},
+				Upper: IndexRangeBound{Value: math.Inf(1), Inclusive: true},
+			},
+			wantStart: encoded(IndexValueDouble, math.Inf(-1)),
+			wantEnd:   prefixAfter(IndexValueDouble, math.Inf(1)),
+		},
+		{
+			name:      "double negative zero exclusive",
+			valueType: IndexValueDouble,
+			opts: IndexRangeOptions{
+				Lower: IndexRangeBound{Value: math.Copysign(0, -1), Inclusive: false},
+				Upper: IndexRangeBound{Value: float64(1), Inclusive: false},
+			},
+			wantStart: prefixAfter(IndexValueDouble, float64(0)),
+			wantEnd:   encoded(IndexValueDouble, float64(1)),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			start, end, empty, err := indexRangeScanBounds(tc.valueType, tc.opts)
+			if err != nil {
+				t.Fatalf("indexRangeScanBounds: %v", err)
+			}
+			if empty != tc.wantEmpty {
+				t.Fatalf("empty=%v want %v start=%x end=%x", empty, tc.wantEmpty, start, end)
+			}
+			if !bytes.Equal(start, tc.wantStart) || !bytes.Equal(end, tc.wantEnd) {
+				t.Fatalf("bounds start=%x end=%x want start=%x end=%x", start, end, tc.wantStart, tc.wantEnd)
+			}
+		})
+	}
+}
+
 func requireEncodedIndexOrder(t *testing.T, valueType IndexValueType, values ...any) {
 	t.Helper()
 	var prev []byte

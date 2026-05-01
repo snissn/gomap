@@ -3176,6 +3176,48 @@ func TestServerFindRangePredicatesUseTypeBrackets(t *testing.T) {
 	assertBatchIDs(t, cursorFirstBatch(t, rangeFind), []string{"num"})
 }
 
+func TestServerFindIndexedRangeSkipsNullMissingAndWrongTypePredicates(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.MaxFindScanDocuments = 1
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 265, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}},
+			{Key: "name", Value: "age_1"}, {Key: "treedbValueType", Value: "int64"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 266, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "num"}, {Key: "age", Value: int64(10)}},
+			bson.D{{Key: "_id", Value: "null"}, {Key: "age", Value: nil}},
+			bson.D{{Key: "_id", Value: "missing"}, {Key: "name", Value: "no age"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	rangeFind := serveCommand(t, server, 267, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int32(5)}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, rangeFind), []string{"num"})
+
+	wrongTypeRangeFind := serveCommand(t, server, 268, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: "5"}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, wrongTypeRangeFind), nil)
+}
+
 func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 	decimal, err := bson.ParseDecimal128("1.50")
 	if err != nil {

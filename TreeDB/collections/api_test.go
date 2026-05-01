@@ -6690,11 +6690,132 @@ func TestCollectionFindByIndexRangeTypedInt64(t *testing.T) {
 	if !truncated || len(ids) != 1 || !bytes.Equal(ids[0], []byte("u2")) {
 		t.Fatalf("limited ids=%q truncated=%v want u2 true", ids, truncated)
 	}
+	ids, truncated, err = col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Unbounded: true},
+		Upper: IndexRangeBound{Value: int64(0), Inclusive: false},
+	})
+	if err != nil {
+		t.Fatalf("find upper-only range: %v", err)
+	}
+	if truncated || len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("upper-only ids=%q truncated=%v want u1 false", ids, truncated)
+	}
+	ids, truncated, err = col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(10), Inclusive: true},
+		Upper: IndexRangeBound{Value: int64(10), Inclusive: true},
+	})
+	if err != nil {
+		t.Fatalf("find equality range: %v", err)
+	}
+	if truncated || len(ids) != 1 || !bytes.Equal(ids[0], []byte("u4")) {
+		t.Fatalf("equality ids=%q truncated=%v want u4 false", ids, truncated)
+	}
+	ids, truncated, err = col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(10), Inclusive: true},
+		Upper: IndexRangeBound{Value: int64(10), Inclusive: false},
+	})
+	if err != nil {
+		t.Fatalf("find empty half-open range: %v", err)
+	}
+	if truncated || len(ids) != 0 {
+		t.Fatalf("empty half-open ids=%q truncated=%v want none false", ids, truncated)
+	}
+	if _, _, err := col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Unbounded: true},
+		Upper: IndexRangeBound{Unbounded: true},
+		Desc:  true,
+	}); err == nil || !strings.Contains(err.Error(), "descending index range scans are not supported") {
+		t.Fatalf("descending range err=%v want unsupported descending", err)
+	}
 	if _, _, err := col.FindByIndexRange("score", IndexRangeOptions{
 		Lower: IndexRangeBound{Value: "0", Inclusive: true},
 		Upper: IndexRangeBound{Unbounded: true},
 	}); err == nil || !strings.Contains(err.Error(), "int64-compatible") {
 		t.Fatalf("wrong-type range err=%v want int64-compatible", err)
+	}
+}
+
+func TestCollectionFindByIndexRangeMergesBufferedUpdates(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "score", Field: "score", ValueType: IndexValueInt64}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2"), []byte("u3")},
+		[][]byte{
+			[]byte(`{"score":5}`),
+			[]byte(`{"score":6}`),
+			[]byte(`{"score":9}`),
+		},
+	); err != nil {
+		t.Fatalf("insert persisted rows: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush persisted rows: %v", err)
+	}
+	before := d.State()
+	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONField("score", int64(7))},
+		{DocumentID: []byte("u2"), Update: setJSONField("score", int64(8))},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	}
+	if !batched {
+		t.Fatalf("batched=%v results=%+v want buffered update batch", batched, results)
+	}
+	if after := d.State(); after.CommitSeq != before.CommitSeq {
+		t.Fatalf("buffered update advanced commit seq by %d, want 0", after.CommitSeq-before.CommitSeq)
+	}
+
+	ids, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(5), Inclusive: true},
+		Upper: IndexRangeBound{Value: int64(6), Inclusive: true},
+	})
+	if err != nil {
+		t.Fatalf("find old score range: %v", err)
+	}
+	if truncated || len(ids) != 0 {
+		t.Fatalf("old score ids=%q truncated=%v want none false", ids, truncated)
+	}
+	ids, truncated, err = col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(7), Inclusive: true},
+		Upper: IndexRangeBound{Value: int64(9), Inclusive: false},
+	})
+	if err != nil {
+		t.Fatalf("find buffered score range: %v", err)
+	}
+	if truncated || len(ids) != 2 || !bytes.Equal(ids[0], []byte("u1")) || !bytes.Equal(ids[1], []byte("u2")) {
+		t.Fatalf("buffered score ids=%q truncated=%v want u1,u2 false", ids, truncated)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered updates: %v", err)
+	}
+	ids, truncated, err = col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(7), Inclusive: true},
+		Upper: IndexRangeBound{Value: int64(9), Inclusive: false},
+	})
+	if err != nil {
+		t.Fatalf("find flushed score range: %v", err)
+	}
+	if truncated || len(ids) != 2 || !bytes.Equal(ids[0], []byte("u1")) || !bytes.Equal(ids[1], []byte("u2")) {
+		t.Fatalf("flushed score ids=%q truncated=%v want u1,u2 false", ids, truncated)
 	}
 }
 
@@ -6890,6 +7011,63 @@ func TestCollectionCreateIndexBackfill_ReopenUsesPersistedSchemaAndRoots(t *test
 	if _, err := reopenedCol.Insert([]byte("u2"), []byte(`{"email":"ada@example.com"}`)); err == nil || !strings.Contains(err.Error(), "unique index") {
 		t.Fatalf("duplicate insert err=%v want unique index conflict", err)
 	}
+}
+
+func TestCollectionCreateIndexBackfill_RangeMatchesPersistedIndexAfterReopen(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2"), []byte("u3")},
+		[][]byte{
+			[]byte(`{"score":5}`),
+			[]byte(`{"score":7}`),
+			[]byte(`{"score":9}`),
+		},
+	); err != nil {
+		t.Fatalf("insert before index backfill: %v", err)
+	}
+	if _, err := col.CreateIndex(IndexDefinition{Name: "score", Field: "score", ValueType: IndexValueInt64}); err != nil {
+		t.Fatalf("create score index: %v", err)
+	}
+	assertScoreRange := func(label string, c *Collection) {
+		t.Helper()
+		ids, truncated, err := c.FindByIndexRange("score", IndexRangeOptions{
+			Lower: IndexRangeBound{Value: int64(6), Inclusive: true},
+			Upper: IndexRangeBound{Value: int64(9), Inclusive: false},
+		})
+		if err != nil {
+			t.Fatalf("%s find range: %v", label, err)
+		}
+		if truncated || len(ids) != 1 || !bytes.Equal(ids[0], []byte("u2")) {
+			t.Fatalf("%s ids=%q truncated=%v want u2 false", label, ids, truncated)
+		}
+	}
+	assertScoreRange("backfilled", col)
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	assertScoreRange("reopened", reopenedCol)
 }
 
 func TestCollectionCreateIndexBackfill_RejectsUniqueConflictAtomically(t *testing.T) {
