@@ -1152,6 +1152,69 @@ func TestMongoUpdateCoalescerRejectsEnqueueAfterStop(t *testing.T) {
 	}
 }
 
+func TestServerUpdateCoalescedFallsBackWhenCoalescerStopsBeforeEnqueue(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	server.UpdateCoalescingMaxDelay = 5 * time.Second
+	server.UpdateCoalescingMaxBatch = 2
+	assertOK(t, serveCommand(t, server, 2280, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(0)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	coalescer := server.mongoUpdateCoalescer("app.users")
+	if coalescer == nil {
+		t.Fatal("expected coalescer")
+	}
+	coalescer.stop()
+
+	col, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	update, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "score", Value: int32(7)}}}}},
+	}))
+	if err != nil {
+		t.Fatalf("parse update: %v", err)
+	}
+
+	matched, modified, err := server.runMongoUpdateCoalesced("app.users", col, update)
+	if err != nil {
+		t.Fatalf("runMongoUpdateCoalesced: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("matched=%v modified=%v want true,true", matched, modified)
+	}
+
+	findResponse := serveCommand(t, server, 2281, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch := cursorFirstBatch(t, findResponse)
+	if len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	gotScore, ok := firstBatch[0].Lookup("score").Int32OK()
+	if !ok || gotScore != 7 {
+		t.Fatalf("u1 score=%d ok=%v want 7", gotScore, ok)
+	}
+}
+
 func TestMongoUpdateCoalescerWaitReturnsWhenWorkerStops(t *testing.T) {
 	coalescer := &mongoUpdateCoalescer{done: make(chan struct{})}
 	done := make(chan mongoUpdateCoalescerResult, 1)
