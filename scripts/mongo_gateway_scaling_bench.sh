@@ -67,7 +67,7 @@ Options:
 
 Environment overrides use the uppercase variable names shown in the script:
 OUT_DIR, DOCS, INDEXES, BATCH_SIZE, INSERT_PRODUCERS, WRITERS_LIST,
-READERS_LIST, CONCURRENT_WRITES, CONCURRENT_READS, INCLUDE_MONGO (0/1 or true/false), MONGO_URI,
+READERS_LIST, CONCURRENT_WRITES, CONCURRENT_READS, INCLUDE_MONGO (0/1, true/false, or yes/no), MONGO_URI,
 TREEDB_DOCUMENT_FORMAT, TREEDB_CLIENT_MODE, TREEDB_PROFILE,
 TREEDB_MAINTENANCE, TIMEOUT, TITLE, and related storage/pool settings.
 EOF
@@ -94,7 +94,7 @@ normalize_bool_01() {
       printf '0'
       ;;
     *)
-      echo "$name must be 0/1 or true/false; got: $value" >&2
+      echo "$name must be 0/1, true/false, or yes/no; got: $value" >&2
       usage >&2
       exit 2
       ;;
@@ -249,12 +249,26 @@ INCLUDE_MONGO=$(normalize_bool_01 INCLUDE_MONGO "$INCLUDE_MONGO")
 mkdir -p "$OUT_DIR"
 OUT_DIR=$(cd "$OUT_DIR" && pwd -P)
 RAW_DIR="$OUT_DIR/raw"
-TREE_DIR="$OUT_DIR/treedb_data"
 BIN_DIR="$OUT_DIR/bin"
 MATRIX="$OUT_DIR/matrix.tsv"
 REPORT="$OUT_DIR/report.md"
 SUMMARY="$OUT_DIR/summary.tsv"
 README="$OUT_DIR/README.md"
+
+path_is_within() {
+  local child=${1%/}
+  local parent=${2%/}
+  case "$child/" in
+    "$parent"/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+if path_is_within "$OUT_DIR" "$ROOT"; then
+  TREE_DIR=$(mktemp -d "$TMP_BASE/gomap_mongo_gateway_scaling_treedb_XXXXXX")
+else
+  TREE_DIR="$OUT_DIR/treedb_data"
+fi
 
 mkdir -p "$RAW_DIR" "$TREE_DIR" "$BIN_DIR"
 
