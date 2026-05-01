@@ -669,12 +669,13 @@ func documentsForPrimaryPredicate(col *collections.Collection, materializer *col
 func documentsForIndexedPredicate(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, pred findPredicate, idx collections.IndexDefinition, maxDocuments int) ([]wire.Document, error) {
 	out := make([]wire.Document, 0)
 	seen := make(map[string]struct{})
+	candidateLimit := candidateLimitWithOverflowSlot(maxDocuments)
 	for _, value := range pred.values {
 		scalar, ok := indexScalarForBSONValue(value, idx.ValueType)
 		if !ok {
 			continue
 		}
-		ids, _, err := col.FindByIndexValueLimit(idx.Name, scalar, maxDocuments+1)
+		ids, _, err := col.FindByIndexValueLimit(idx.Name, scalar, candidateLimit)
 		if err != nil {
 			return nil, err
 		}
@@ -704,6 +705,14 @@ func documentsForIndexedPredicate(col *collections.Collection, materializer *col
 }
 
 func documentsForIndexedFieldPredicates(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan, idx collections.IndexDefinition, maxDocuments int) ([]wire.Document, bool, error) {
+	var best []wire.Document
+	bestSet := false
+	consider := func(docs []wire.Document) {
+		if !bestSet || len(docs) < len(best) {
+			best = docs
+			bestSet = true
+		}
+	}
 	for _, pred := range plan.predicates {
 		if pred.field != idx.Field || (pred.op != findPredicateEq && pred.op != findPredicateIn) {
 			continue
@@ -712,21 +721,32 @@ func documentsForIndexedFieldPredicates(col *collections.Collection, materialize
 			continue
 		}
 		docs, err := documentsForIndexedPredicate(col, materializer, pred, idx, maxDocuments)
-		return docs, true, err
+		if err != nil {
+			return nil, false, err
+		}
+		consider(docs)
 	}
 	opts, ok, empty, err := indexRangeOptionsForPredicates(plan.predicates, idx)
 	if err != nil || !ok {
+		if bestSet {
+			return best, true, err
+		}
 		return nil, false, err
 	}
 	if empty {
-		return nil, true, nil
+		consider(nil)
+		return best, true, nil
 	}
-	candidateLimit := maxDocuments + 1
+	candidateLimit := candidateLimitWithOverflowSlot(maxDocuments)
 	if limit, ok := indexedRangeCandidateLimit(plan, idx, maxDocuments); ok {
 		candidateLimit = limit
 	}
 	docs, err := documentsForIndexedRange(col, materializer, idx, opts, candidateLimit, maxDocuments)
-	return docs, true, err
+	if err != nil {
+		return nil, false, err
+	}
+	consider(docs)
+	return best, bestSet, nil
 }
 
 func indexedRangeCandidateLimit(plan findPlan, idx collections.IndexDefinition, maxDocuments int) (int, bool) {
@@ -741,14 +761,26 @@ func indexedRangeCandidateLimit(plan findPlan, idx collections.IndexDefinition, 
 			return 0, false
 		}
 	}
-	limit := int(plan.skip) + int(plan.limit)
+	limit := int64(plan.skip) + int64(plan.limit)
 	if limit <= 0 {
 		return 0, false
 	}
-	if limit > maxDocuments+1 {
-		return maxDocuments + 1, true
+	maxCandidateLimit := candidateLimitWithOverflowSlot(maxDocuments)
+	if limit > int64(maxCandidateLimit) {
+		return maxCandidateLimit, true
 	}
-	return limit, true
+	return int(limit), true
+}
+
+func candidateLimitWithOverflowSlot(maxDocuments int) int {
+	if maxDocuments <= 0 {
+		return 0
+	}
+	maxInt := int(^uint(0) >> 1)
+	if maxDocuments >= maxInt {
+		return maxInt
+	}
+	return maxDocuments + 1
 }
 
 type indexRangeCandidateBound struct {
@@ -935,7 +967,7 @@ func compareFloat64IndexValues(left, right float64) int {
 
 func documentsForIndexedRange(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, idx collections.IndexDefinition, opts collections.IndexRangeOptions, candidateLimit, maxDocuments int) ([]wire.Document, error) {
 	if candidateLimit <= 0 {
-		candidateLimit = maxDocuments + 1
+		candidateLimit = candidateLimitWithOverflowSlot(maxDocuments)
 	}
 	opts.Limit = candidateLimit
 	ids, _, err := col.FindByIndexRange(idx.Name, opts)

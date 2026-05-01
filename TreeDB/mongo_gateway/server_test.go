@@ -2975,6 +2975,44 @@ func TestServerFindChoosesNarrowestIndexedPredicate(t *testing.T) {
 	assertBatchIDs(t, cursorFirstBatch(t, findResponse), []string{"u2"})
 }
 
+func TestServerFindChoosesNarrowestSameFieldIndexedPredicate(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.MaxFindScanDocuments = 1
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 253, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "city", Value: "hnl"}},
+			bson.D{{Key: "_id", Value: "u3"}, {Key: "city", Value: "sfo"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 254, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+			{Key: "name", Value: "city_1"}, {Key: "treedbValueType", Value: "string"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	findResponse := serveCommand(t, server, 255, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "$and", Value: bson.A{
+			bson.D{{Key: "city", Value: bson.D{{Key: "$in", Value: bson.A{"hnl", "sfo"}}}}},
+			bson.D{{Key: "city", Value: "sfo"}},
+		}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, findResponse), []string{"u3"})
+}
+
 func TestServerFindChoosesIndexedPredicateBeforeOversizedPrimaryCandidates(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -3261,6 +3299,26 @@ func TestIndexedRangeCandidateLimitOnlyForPureSameFieldRange(t *testing.T) {
 	}, idx, 100)
 	if ok {
 		t.Fatal("other-field sort range candidate should not use page limit")
+	}
+
+	const maxInt32 = int32(1<<31 - 1)
+	limit, ok = indexedRangeCandidateLimit(findPlan{
+		predicates: []findPredicate{
+			{field: "age", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, int64(40))}},
+		},
+		skip:  maxInt32,
+		limit: maxInt32,
+	}, idx, 100)
+	if !ok || limit != 101 {
+		t.Fatalf("overflow-prone range candidate limit=%d ok=%v want 101,true", limit, ok)
+	}
+
+	maxInt := int(^uint(0) >> 1)
+	if got := candidateLimitWithOverflowSlot(maxInt); got != maxInt {
+		t.Fatalf("candidateLimitWithOverflowSlot(maxInt)=%d want %d", got, maxInt)
+	}
+	if got := candidateLimitWithOverflowSlot(100); got != 101 {
+		t.Fatalf("candidateLimitWithOverflowSlot(100)=%d want 101", got)
 	}
 }
 
