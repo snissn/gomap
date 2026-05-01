@@ -1473,6 +1473,21 @@ func shouldFlushBufferedIndexedWrites(domain *collectionWriteDomain, opts Collec
 	return false
 }
 
+func shouldFlushBufferedIndexedWritesAfter(domain *collectionWriteDomain, opts CollectionOptions, addedCount int, addedBytes int64) bool {
+	if domain == nil || addedCount <= 0 {
+		return false
+	}
+	nextCount := domain.count + addedCount
+	if opts.BufferedIndexedWriteMaxDocuments > 0 && nextCount >= opts.BufferedIndexedWriteMaxDocuments {
+		return true
+	}
+	nextBytes := saturatingAddNonNegativeInt64(domain.bufferedBytes, addedBytes)
+	if opts.BufferedIndexedWriteMaxBytes > 0 && nextBytes >= opts.BufferedIndexedWriteMaxBytes {
+		return true
+	}
+	return false
+}
+
 func bufferedIndexedAutoFlushEnabled(opts CollectionOptions) bool {
 	return opts.BufferedIndexedWriteMaxDocuments > 0 || opts.BufferedIndexedWriteMaxBytes > 0
 }
@@ -4393,6 +4408,21 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	if err := c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs); err != nil {
 		return false, err
 	}
+	var stagedBytes int64
+	for i, rootName := range plan.rootNames {
+		baseRoot, ok := plan.baseRootIDs[rootName]
+		if !ok {
+			return false, fmt.Errorf("collections: UpdateBatch collection %q plan missing base root for %q", plan.meta.Name, rootName)
+		}
+		table := plan.deltaTables[i]
+		if table == nil || table.Len() == 0 {
+			continue
+		}
+		if len(domain.rootRuns[rootName]) > 0 && domain.rootBaseIDs[rootName] != baseRoot {
+			return false, errConcurrentRootModification(plan.meta.Name, rootName)
+		}
+		stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, table.Size())
+	}
 	if plan.catalog != nil {
 		c.initializeWriteDomainFromCatalogLocked(domain, plan.catalog, plan.baseCommitSeq, plan.baseSystemRoot)
 	}
@@ -4405,17 +4435,13 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	if domain.rootRuns == nil {
 		domain.rootRuns = make(map[string][]memtable.Table, len(plan.rootNames))
 	}
-	autoFlushEnabled := bufferedIndexedAutoFlushEnabled(plan.meta.Options)
+	autoFlushEnabled := shouldFlushBufferedIndexedWritesAfter(domain, plan.meta.Options, modifiedCount, stagedBytes)
 	var checkpoint bufferedIndexedCheckpoint
 	if autoFlushEnabled {
 		checkpoint = checkpointBufferedIndexedDomain(domain)
 	}
-	var stagedBytes int64
 	for i, rootName := range plan.rootNames {
-		baseRoot, ok := plan.baseRootIDs[rootName]
-		if !ok {
-			return false, fmt.Errorf("collections: UpdateBatch collection %q plan missing base root for %q", plan.meta.Name, rootName)
-		}
+		baseRoot := plan.baseRootIDs[rootName]
 		table := plan.deltaTables[i]
 		if table == nil || table.Len() == 0 {
 			continue
@@ -4425,7 +4451,6 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		}
 		domain.rootPolicies[rootName] = plan.policies[i]
 		domain.rootRuns[rootName] = append(domain.rootRuns[rootName], table)
-		stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, table.Size())
 		plan.deltaTables[i] = nil
 	}
 	plan.deltaTables = nil
