@@ -83,7 +83,7 @@ func newProfileRecorder(cfg config) (*profileRecorder, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(abs, 0o700); err != nil {
+	if err := ensureProfileDir(abs); err != nil {
 		return nil, err
 	}
 	recorder := &profileRecorder{
@@ -236,17 +236,13 @@ func (r *profileRecorder) startPhase(name string) (*activeProfilePhase, error) {
 		tracePath := filepath.Join(r.dir, prefix+".trace.out")
 		traceFile, err := createProfileFile(tracePath)
 		if err != nil {
-			stopErr := phase.stop(err)
+			stopErr := phase.cleanupSetup()
 			return nil, errors.Join(err, stopErr)
 		}
 		phase.traceFile = traceFile
 		phase.artifact.Trace = filepath.Base(tracePath)
 		if err := trace.Start(traceFile); err != nil {
-			_ = traceFile.Close()
-			_ = os.Remove(tracePath)
-			phase.traceFile = nil
-			phase.artifact.Trace = ""
-			stopErr := phase.stop(err)
+			stopErr := phase.cleanupSetup()
 			return nil, errors.Join(err, stopErr)
 		}
 		phase.traceOn = true
@@ -295,6 +291,40 @@ func (p *activeProfilePhase) stop(runErr error) error {
 	p.recorder.mu.Lock()
 	p.recorder.artifacts = append(p.recorder.artifacts, p.artifact)
 	p.recorder.mu.Unlock()
+	return errors.Join(errs...)
+}
+
+func (p *activeProfilePhase) cleanupSetup() error {
+	if p == nil {
+		return nil
+	}
+	if p.traceOn {
+		trace.Stop()
+		p.traceOn = false
+	}
+	if p.cpuActive {
+		pprof.StopCPUProfile()
+		p.cpuActive = false
+	}
+	var errs []error
+	if p.traceFile != nil {
+		errs = append(errs, p.traceFile.Close())
+		p.traceFile = nil
+	}
+	if p.cpuFile != nil {
+		errs = append(errs, p.cpuFile.Close())
+		p.cpuFile = nil
+	}
+	for _, name := range []string{p.artifact.Trace, p.artifact.CPUProfile} {
+		if name == "" || p.recorder == nil {
+			continue
+		}
+		if err := os.Remove(filepath.Join(p.recorder.dir, name)); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, err)
+		}
+	}
+	p.artifact.Trace = ""
+	p.artifact.CPUProfile = ""
 	return errors.Join(errs...)
 }
 
@@ -357,7 +387,29 @@ func writeProfileJSONFile(path string, value any) (err error) {
 }
 
 func createProfileFile(path string) (*os.File, error) {
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("profile artifact path %q is a symlink", path)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("profile artifact path %q is not a regular file", path)
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
 	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+}
+
+func ensureProfileDir(path string) error {
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(path, 0o700); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func sanitizeProfileName(name string) string {
@@ -376,7 +428,7 @@ func sanitizeProfileName(name string) string {
 			lastUnderscore = true
 		}
 	}
-	out := strings.Trim(builder.String(), "_")
+	out := strings.TrimLeft(strings.Trim(builder.String(), "_"), ".")
 	if out == "" {
 		return "phase"
 	}
