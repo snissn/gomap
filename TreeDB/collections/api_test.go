@@ -2806,7 +2806,7 @@ func TestCollectionUpdateCombinerRunBatchPublishesDistinctIDsOnce(t *testing.T) 
 	}
 }
 
-func TestCollectionUpdateCombinerRunBatchIsolatesItemErrors(t *testing.T) {
+func TestCollectionUpdateCombinerRunBatchDoesNotReplayCallbacksAfterBatchError(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -2830,12 +2830,15 @@ func TestCollectionUpdateCombinerRunBatchIsolatesItemErrors(t *testing.T) {
 
 	itemErr := errors.New("bad update")
 	combiner := &collectionUpdateCombiner{maxBatch: 8}
+	firstCalls := 0
+	secondCalls := 0
 	requests := []collectionUpdateCombineRequest{
 		{
 			collection: col,
 			documentID: []byte("u1"),
 			update: func([]byte) ([]byte, bool, error) {
-				return nil, false, itemErr
+				firstCalls++
+				return []byte(`{"score":1}`), true, nil
 			},
 			done: make(chan collectionUpdateCombineResult, 1),
 		},
@@ -2843,7 +2846,8 @@ func TestCollectionUpdateCombinerRunBatchIsolatesItemErrors(t *testing.T) {
 			collection: col,
 			documentID: []byte("u2"),
 			update: func([]byte) ([]byte, bool, error) {
-				return []byte(`{"score":2}`), true, nil
+				secondCalls++
+				return nil, false, itemErr
 			},
 			done: make(chan collectionUpdateCombineResult, 1),
 		},
@@ -2851,21 +2855,21 @@ func TestCollectionUpdateCombinerRunBatchIsolatesItemErrors(t *testing.T) {
 	combiner.runBatch(requests)
 	first := <-requests[0].done
 	if !errors.Is(first.err, itemErr) {
-		t.Fatalf("first err=%v want itemErr", first.err)
+		t.Fatalf("first err=%v want shared itemErr", first.err)
 	}
 	second := <-requests[1].done
-	if second.err != nil {
-		t.Fatalf("second err: %v", second.err)
+	if !errors.Is(second.err, itemErr) {
+		t.Fatalf("second err=%v want itemErr", second.err)
 	}
-	if !second.matched || !second.modified {
-		t.Fatalf("second matched=%v modified=%v", second.matched, second.modified)
+	if firstCalls != 1 || secondCalls != 1 {
+		t.Fatalf("callback calls first=%d second=%d want 1,1", firstCalls, secondCalls)
 	}
-	got, err := col.Get([]byte("u2"))
+	got, err := col.Get([]byte("u1"))
 	if err != nil {
-		t.Fatalf("get u2: %v", err)
+		t.Fatalf("get u1: %v", err)
 	}
-	if !bytes.Contains(got, []byte(`"score":2`)) {
-		t.Fatalf("u2 document=%s want score 2", got)
+	if !bytes.Contains(got, []byte(`"score":0`)) {
+		t.Fatalf("u1 document=%s want unchanged score", got)
 	}
 }
 
@@ -2892,6 +2896,7 @@ func TestCollectionUpdateCombinerRunBatchRecoversCallbackPanic(t *testing.T) {
 	}
 
 	combiner := &collectionUpdateCombiner{maxBatch: 8}
+	secondCalls := 0
 	requests := []collectionUpdateCombineRequest{
 		{
 			collection: col,
@@ -2905,6 +2910,7 @@ func TestCollectionUpdateCombinerRunBatchRecoversCallbackPanic(t *testing.T) {
 			collection: col,
 			documentID: []byte("u2"),
 			update: func([]byte) ([]byte, bool, error) {
+				secondCalls++
 				return []byte(`{"score":2}`), true, nil
 			},
 			done: make(chan collectionUpdateCombineResult, 1),
@@ -2917,11 +2923,12 @@ func TestCollectionUpdateCombinerRunBatchRecoversCallbackPanic(t *testing.T) {
 	}
 	assertNoStackTraceInError(t, first.err)
 	second := <-requests[1].done
-	if second.err != nil {
-		t.Fatalf("second err: %v", second.err)
+	if second.err == nil || !strings.Contains(second.err.Error(), "bad callback") {
+		t.Fatalf("second err=%v want shared recovered panic", second.err)
 	}
-	if !second.matched || !second.modified {
-		t.Fatalf("second matched=%v modified=%v", second.matched, second.modified)
+	assertNoStackTraceInError(t, second.err)
+	if secondCalls != 0 {
+		t.Fatalf("second callback calls=%d want 0", secondCalls)
 	}
 }
 

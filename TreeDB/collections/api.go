@@ -3383,9 +3383,7 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 	}
 	results, err := batch[0].collection.UpdateBatch(items)
 	if err != nil {
-		for _, req := range batch {
-			completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
-		}
+		completeUpdateCombineBatchWithError(batch, err)
 		return
 	}
 	if len(results) != len(batch) {
