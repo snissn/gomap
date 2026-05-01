@@ -828,7 +828,6 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 
 	systemOpts := systemRootOrderedPublishOptions(db)
 	rootIDs = make([]uint64, len(ordered))
-	rootsObserved = len(ordered)
 	orderedConsumed := make([]bool, len(ordered))
 	defer closeUnconsumedOrderedRootDeltaPublishIterators(ordered, orderedConsumed)
 	var retired []uint64
@@ -844,6 +843,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 			return 0, nil, err
 		}
 		rootIDs[idx] = rootID
+		rootsObserved++
 		retired = append(retired, rootRetired...)
 		mergeOrderedRootPublishMetrics(&merged, metrics)
 	}
@@ -949,7 +949,6 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 			return 0, nil, err
 		}
 	}
-	rootsObserved = len(ordered)
 
 	systemOpts := systemRootOrderedPublishOptions(db)
 	rootIDs = make([]uint64, len(ordered))
@@ -968,6 +967,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 			return 0, nil, err
 		}
 		rootIDs[idx] = rootID
+		rootsObserved++
 		retired = append(retired, rootRetired...)
 		mergeOrderedRootPublishMetrics(&merged, metrics)
 	}
