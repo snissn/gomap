@@ -3698,6 +3698,17 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondary
 		unlockMutation()
 		return nil, err
 	}
+	if requireNoSecondaryUniqueIndexes {
+		hasUnique, err := c.hasSecondaryUniqueIndexLocked()
+		if err != nil {
+			unlockMutation()
+			return nil, err
+		}
+		if hasUnique {
+			unlockMutation()
+			return nil, errUpdateBatchHasSecondaryUniqueIndex
+		}
+	}
 	unlockMutation()
 
 	plan, err := c.buildUpdateBatchPlan(items, requireNoSecondaryUniqueIndexes)
@@ -3709,6 +3720,14 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondary
 	}
 	defer plan.close()
 	if len(plan.deltaTables) == 0 {
+		unlockMutation = c.lockMutation()
+		defer unlockMutation()
+		if err := c.flushBufferedWrites(); err != nil {
+			return nil, err
+		}
+		if err := c.validateMutationRootDescriptors(plan.baseUserRoot, plan.baseSystemRoot, plan.baseCommitSeq); err != nil {
+			return nil, err
+		}
 		return plan.results, nil
 	}
 
@@ -3718,6 +3737,22 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondary
 		return nil, err
 	}
 	return c.publishUpdateBatchPlanLocked(plan)
+}
+
+func (c *Collection) hasSecondaryUniqueIndexLocked() (bool, error) {
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return false, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return false, err
+	}
+	if catalog == nil {
+		return false, errCollectionNotFound
+	}
+	return collectionMetaHasSecondaryUniqueIndex(catalog.meta), nil
 }
 
 func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, requireNoSecondaryUniqueIndexes bool) (*updateBatchPlan, error) {
