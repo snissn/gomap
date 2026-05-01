@@ -2,7 +2,7 @@ package db
 
 import "time"
 
-const maxDurationNs = uint64(1<<63 - 1)
+const maxTimeDurationNs = uint64(1<<63 - 1)
 
 var publishWatermarkLatencyBucketUpperBounds = [...]time.Duration{
 	50 * time.Microsecond,
@@ -66,8 +66,8 @@ func estimatePublishWatermarkPercentile(buckets [publishWatermarkLatencyBucketCo
 }
 
 func durationFromUint64Ns(ns uint64) time.Duration {
-	if ns > maxDurationNs {
-		return time.Duration(maxDurationNs)
+	if ns > maxTimeDurationNs {
+		return time.Duration(maxTimeDurationNs)
 	}
 	return time.Duration(ns)
 }
@@ -161,8 +161,8 @@ func (db *DB) observeOrderedRootDeltaGroupPublish(wait, hold time.Duration, root
 	waitNs := uint64(wait.Nanoseconds())
 	holdNs := uint64(hold.Nanoseconds())
 	latNs := waitNs + holdNs
-	if waitNs > maxDurationNs-holdNs {
-		latNs = maxDurationNs
+	if waitNs > maxTimeDurationNs-holdNs {
+		latNs = maxTimeDurationNs
 	}
 	latency := durationFromUint64Ns(latNs)
 
