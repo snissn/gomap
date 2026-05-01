@@ -746,6 +746,29 @@ func TestServerCloseStopsUpdateCoalescers(t *testing.T) {
 	}
 }
 
+func TestServerUpdateCoalescerEvictsWhenIdle(t *testing.T) {
+	server := NewServer()
+	server.UpdateCoalescingIdleTTL = time.Millisecond
+	coalescer := server.mongoUpdateCoalescer("app.users")
+	if coalescer == nil {
+		t.Fatal("expected coalescer")
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		server.updateMu.Lock()
+		_, stillCached := server.updateCoalescers["app.users"]
+		server.updateMu.Unlock()
+		coalescer.mu.RLock()
+		stopped := coalescer.stopped
+		coalescer.mu.RUnlock()
+		if !stillCached && stopped {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("coalescer was not evicted after idle timeout")
+}
+
 func TestServerUpdateRejectsIDMutation(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

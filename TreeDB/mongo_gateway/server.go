@@ -16,16 +16,17 @@ import (
 )
 
 const (
-	defaultMaxBSONObjectSize      = 16 * 1024 * 1024
-	defaultMaxWriteBatchSize      = 100_000
-	defaultMaxFindScanDocuments   = 10_000
-	defaultMaxCursorRetainedBytes = 64 * 1024 * 1024
-	defaultMaxOpenCursors         = 1_024
-	defaultCursorBatchSize        = 101
-	defaultCursorIdleTimeout      = 10 * time.Minute
-	defaultCursorReapInterval     = time.Second
-	defaultUpdateCoalescingDelay  = 0
-	defaultUpdateCoalescingBatch  = 256
+	defaultMaxBSONObjectSize       = 16 * 1024 * 1024
+	defaultMaxWriteBatchSize       = 100_000
+	defaultMaxFindScanDocuments    = 10_000
+	defaultMaxCursorRetainedBytes  = 64 * 1024 * 1024
+	defaultMaxOpenCursors          = 1_024
+	defaultCursorBatchSize         = 101
+	defaultCursorIdleTimeout       = 10 * time.Minute
+	defaultCursorReapInterval      = time.Second
+	defaultUpdateCoalescingDelay   = 0
+	defaultUpdateCoalescingBatch   = 256
+	defaultUpdateCoalescingIdleTTL = 30 * time.Second
 )
 
 type Server struct {
@@ -39,7 +40,10 @@ type Server struct {
 	// negative disables coalescing.
 	UpdateCoalescingMaxDelay time.Duration
 	// UpdateCoalescingMaxBatch caps one coalesced same-collection update publish.
-	UpdateCoalescingMaxBatch  int
+	UpdateCoalescingMaxBatch int
+	// UpdateCoalescingIdleTTL removes an idle per-collection coalescer after this
+	// duration. Zero uses the default; negative disables idle removal.
+	UpdateCoalescingIdleTTL   time.Duration
 	Collections               *collections.CollectionManager
 	DefaultCollectionOptions  collections.CollectionOptions
 	DefaultIndexStoragePolicy collections.RootStoragePolicy
@@ -69,6 +73,7 @@ func NewServer() *Server {
 		MaxMessageLength:         wire.DefaultMaxMessageLength,
 		UpdateCoalescingMaxDelay: defaultUpdateCoalescingDelay,
 		UpdateCoalescingMaxBatch: defaultUpdateCoalescingBatch,
+		UpdateCoalescingIdleTTL:  defaultUpdateCoalescingIdleTTL,
 	}
 	s.nextResponseID.Store(0)
 	return s
