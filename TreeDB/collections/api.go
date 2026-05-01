@@ -4391,7 +4391,7 @@ func updateBatchChangesSecondaryUniqueIndex(runtimes []indexRuntime, updates []p
 		}
 		indexName := runtime.def.name
 		for _, update := range updates {
-			if !encodedIndexValueSetsEqual(update.oldState[indexName], update.newState[indexName]) {
+			if !normalizedEncodedIndexValuesEqual(update.oldState[indexName], update.newState[indexName]) {
 				return true
 			}
 		}
@@ -4399,26 +4399,12 @@ func updateBatchChangesSecondaryUniqueIndex(runtimes []indexRuntime, updates []p
 	return false
 }
 
-func encodedIndexValueSetsEqual(left, right [][]byte) bool {
+func normalizedEncodedIndexValuesEqual(left, right [][]byte) bool {
 	if len(left) != len(right) {
 		return false
 	}
-	if len(left) == 0 {
-		return true
-	}
-	if len(left) == 1 {
-		return bytes.Equal(left[0], right[0])
-	}
-	leftSorted := append([][]byte(nil), left...)
-	rightSorted := append([][]byte(nil), right...)
-	sort.Slice(leftSorted, func(i, j int) bool {
-		return bytes.Compare(leftSorted[i], leftSorted[j]) < 0
-	})
-	sort.Slice(rightSorted, func(i, j int) bool {
-		return bytes.Compare(rightSorted[i], rightSorted[j]) < 0
-	})
-	for i := range leftSorted {
-		if !bytes.Equal(leftSorted[i], rightSorted[i]) {
+	for i := range left {
+		if !bytes.Equal(left[i], right[i]) {
 			return false
 		}
 	}
@@ -4468,12 +4454,10 @@ func batchUniqueReplacementOwners(runtimes []indexRuntime, updates []preparedBat
 }
 
 func documentIndexStateContainsValue(values [][]byte, target []byte) bool {
-	for _, value := range values {
-		if bytes.Equal(value, target) {
-			return true
-		}
-	}
-	return false
+	i := sort.Search(len(values), func(i int) bool {
+		return bytes.Compare(values[i], target) >= 0
+	})
+	return i < len(values) && bytes.Equal(values[i], target)
 }
 
 func (s batchUniqueReplacementSet) allows(indexName string, encoded, documentID []byte) bool {

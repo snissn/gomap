@@ -709,6 +709,27 @@ func TestRunMongoUpdateBatchDeclinesFreshSecondaryUniqueIndex(t *testing.T) {
 	}
 }
 
+func TestRunMongoUpdateBatchResultsDeclineReturnsZeroResults(t *testing.T) {
+	results, batched, err := runMongoUpdateBatchResults(nil, []mongoUpdateItem{
+		{index: 0, key: []byte("u1")},
+		{index: 1, key: []byte("u2")},
+	})
+	if err != nil {
+		t.Fatalf("runMongoUpdateBatchResults: %v", err)
+	}
+	if batched {
+		t.Fatal("runMongoUpdateBatchResults batched with nil collection")
+	}
+	if len(results) != 2 {
+		t.Fatalf("results len=%d want 2", len(results))
+	}
+	for i, result := range results {
+		if result.Matched || result.Modified {
+			t.Fatalf("result[%d]=%+v want zero value", i, result)
+		}
+	}
+}
+
 func TestRunMongoUpdateBatchBatchesNonUniqueFieldWithSecondaryUniqueIndex(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

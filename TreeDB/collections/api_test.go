@@ -3980,17 +3980,20 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesDeclinesUniqueUpdat
 	}
 }
 
-func TestEncodedIndexValueSetsEqualIgnoresOrder(t *testing.T) {
-	left := [][]byte{[]byte("s:b"), []byte("s:a")}
+func TestNormalizedEncodedIndexValuesEqualUsesCanonicalOrder(t *testing.T) {
+	left := [][]byte{[]byte("s:a"), []byte("s:b")}
 	right := [][]byte{[]byte("s:a"), []byte("s:b")}
-	if !encodedIndexValueSetsEqual(left, right) {
-		t.Fatalf("encodedIndexValueSetsEqual(%q, %q)=false want true", left, right)
+	if !normalizedEncodedIndexValuesEqual(left, right) {
+		t.Fatalf("normalizedEncodedIndexValuesEqual(%q, %q)=false want true", left, right)
 	}
-	if encodedIndexValueSetsEqual(left, [][]byte{[]byte("s:a"), []byte("s:c")}) {
-		t.Fatal("encodedIndexValueSetsEqual matched different value sets")
+	if normalizedEncodedIndexValuesEqual([][]byte{[]byte("s:b"), []byte("s:a")}, right) {
+		t.Fatal("normalizedEncodedIndexValuesEqual ignored canonical order")
 	}
-	if encodedIndexValueSetsEqual([][]byte{[]byte("s:a"), []byte("s:a")}, [][]byte{[]byte("s:a"), []byte("s:b")}) {
-		t.Fatal("encodedIndexValueSetsEqual ignored duplicate cardinality")
+	if normalizedEncodedIndexValuesEqual(left, [][]byte{[]byte("s:a"), []byte("s:c")}) {
+		t.Fatal("normalizedEncodedIndexValuesEqual matched different values")
+	}
+	if normalizedEncodedIndexValuesEqual([][]byte{[]byte("s:a"), []byte("s:a")}, right) {
+		t.Fatal("normalizedEncodedIndexValuesEqual ignored duplicate cardinality")
 	}
 }
 

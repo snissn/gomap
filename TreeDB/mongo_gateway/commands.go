@@ -366,7 +366,7 @@ func runMongoUpdateBatch(col *collections.Collection, updates []mongoUpdateItem)
 
 func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpdateItem) ([]collections.UpdateBatchResult, bool, error) {
 	if !mongoUpdateItemsCanUseBatch(col, updates) {
-		return nil, false, nil
+		return make([]collections.UpdateBatchResult, len(updates)), false, nil
 	}
 	materializer, err := storedDocumentMaterializerForCollection(col)
 	if err != nil {
@@ -387,7 +387,10 @@ func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpda
 	}
 	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges(items)
 	if !batched {
-		return nil, false, err
+		if results == nil {
+			results = make([]collections.UpdateBatchResult, len(updates))
+		}
+		return results, false, err
 	}
 	if err != nil {
 		return nil, true, err
