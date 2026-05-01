@@ -28,11 +28,14 @@ import (
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/fastclient"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/event"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
+
+const defaultMongoDriverMaxPoolSize = 100
 
 type config struct {
 	Target                      string
@@ -44,6 +47,10 @@ type config struct {
 	Collection                  string
 	Documents                   int
 	BatchSize                   int
+	InsertProducers             int
+	MongoMaxPoolSize            int
+	MongoMinPoolSize            int
+	MongoMaxConnecting          int
 	Reads                       int
 	RangeReads                  int
 	Updates                     int
@@ -72,6 +79,11 @@ type benchmarkResult struct {
 	Database                    string              `json:"database"`
 	Collection                  string              `json:"collection"`
 	Documents                   int                 `json:"documents"`
+	BatchSize                   int                 `json:"batch_size"`
+	InsertProducers             int                 `json:"insert_producers"`
+	MongoMaxPoolSize            int                 `json:"mongo_max_pool_size,omitempty"`
+	MongoMinPoolSize            int                 `json:"mongo_min_pool_size,omitempty"`
+	MongoMaxConnecting          int                 `json:"mongo_max_connecting,omitempty"`
 	SecondaryIndexes            int                 `json:"secondary_indexes"`
 	ClientMode                  string              `json:"client_mode"`
 	ConcurrentReaders           int                 `json:"concurrent_readers,omitempty"`
@@ -92,19 +104,50 @@ type benchmarkResult struct {
 	TreeDBMaintenance           []maintenanceResult `json:"treedb_maintenance,omitempty"`
 	MongoDBStatsAfterLoad       map[string]any      `json:"mongodb_stats_after_load,omitempty"`
 	MongoDBStatsFinal           map[string]any      `json:"mongodb_stats_final,omitempty"`
+	MongoPoolStatsAfterLoad     *mongoPoolSnapshot  `json:"mongo_pool_stats_after_load,omitempty"`
+	MongoPoolStatsFinal         *mongoPoolSnapshot  `json:"mongo_pool_stats_final,omitempty"`
 }
 
 type phaseResult struct {
-	Name                    string         `json:"name"`
+	Name                    string           `json:"name"`
+	Operations              int              `json:"operations"`
+	DriverCalls             int              `json:"driver_calls"`
+	EffectiveProducers      int              `json:"effective_producers,omitempty"`
+	DurationMillis          float64          `json:"duration_ms"`
+	OpsPerSecond            float64          `json:"ops_per_sec"`
+	SampledOpsPerSecond     float64          `json:"sampled_ops_per_sec,omitempty"`
+	SampledNsPerOp          float64          `json:"sampled_ns_per_op,omitempty"`
+	DriverAggregateMillis   float64          `json:"driver_aggregate_duration_ms,omitempty"`
+	DriverMeanLatencyMicros float64          `json:"driver_mean_latency_us,omitempty"`
+	LatencyMicros           latencySummary   `json:"latency_micros"`
+	ProducerResults         []producerResult `json:"producer_results,omitempty"`
+}
+
+type producerResult struct {
+	Producer                int            `json:"producer"`
 	Operations              int            `json:"operations"`
 	DriverCalls             int            `json:"driver_calls"`
 	DurationMillis          float64        `json:"duration_ms"`
 	OpsPerSecond            float64        `json:"ops_per_sec"`
-	SampledOpsPerSecond     float64        `json:"sampled_ops_per_sec,omitempty"`
-	SampledNsPerOp          float64        `json:"sampled_ns_per_op,omitempty"`
 	DriverAggregateMillis   float64        `json:"driver_aggregate_duration_ms,omitempty"`
 	DriverMeanLatencyMicros float64        `json:"driver_mean_latency_us,omitempty"`
 	LatencyMicros           latencySummary `json:"latency_micros"`
+}
+
+type mongoPoolSnapshot struct {
+	ConnectionCreated         int64          `json:"connection_created,omitempty"`
+	ConnectionReady           int64          `json:"connection_ready,omitempty"`
+	ConnectionClosed          int64          `json:"connection_closed,omitempty"`
+	ConnectionCheckedIn       int64          `json:"connection_checked_in,omitempty"`
+	ConnectionCheckOutStarted int64          `json:"connection_check_out_started,omitempty"`
+	ConnectionCheckedOut      int64          `json:"connection_checked_out,omitempty"`
+	ConnectionCheckOutFailed  int64          `json:"connection_check_out_failed,omitempty"`
+	ConnectionPoolCleared     int64          `json:"connection_pool_cleared,omitempty"`
+	CheckoutSamples           int64          `json:"checkout_samples,omitempty"`
+	CheckoutSamplesDropped    int64          `json:"checkout_samples_dropped,omitempty"`
+	CheckoutAggregateMillis   float64        `json:"checkout_aggregate_duration_ms,omitempty"`
+	CheckoutMeanLatencyMicros float64        `json:"checkout_mean_latency_us,omitempty"`
+	CheckoutLatencyMicros     latencySummary `json:"checkout_latency_micros,omitempty"`
 }
 
 type maintenanceResult struct {
@@ -134,7 +177,132 @@ type benchTarget struct {
 	mongoAddr       string
 	treedbDir       string
 	removeTreeDBDir bool
+	poolStats       *mongoPoolStats
 	cleanup         func(context.Context) error
+}
+
+type mongoPoolStats struct {
+	connectionCreated         atomic.Int64
+	connectionReady           atomic.Int64
+	connectionClosed          atomic.Int64
+	connectionCheckedIn       atomic.Int64
+	connectionCheckOutStarted atomic.Int64
+	connectionCheckedOut      atomic.Int64
+	connectionCheckOutFailed  atomic.Int64
+	connectionPoolCleared     atomic.Int64
+	checkoutDurationNanos     atomic.Int64
+	checkoutDurationCount     atomic.Int64
+	checkoutSamplesDropped    atomic.Int64
+
+	mu                sync.Mutex
+	checkoutDurations []time.Duration
+}
+
+const maxMongoPoolCheckoutDurationSamples = 8192
+
+func newMongoPoolStats() *mongoPoolStats {
+	return &mongoPoolStats{}
+}
+
+func (s *mongoPoolStats) Monitor() *event.PoolMonitor {
+	if s == nil {
+		return nil
+	}
+	return &event.PoolMonitor{
+		Event: func(evt *event.PoolEvent) {
+			s.record(evt)
+		},
+	}
+}
+
+func (s *mongoPoolStats) Reset() {
+	if s == nil {
+		return
+	}
+	s.connectionCreated.Store(0)
+	s.connectionReady.Store(0)
+	s.connectionClosed.Store(0)
+	s.connectionCheckedIn.Store(0)
+	s.connectionCheckOutStarted.Store(0)
+	s.connectionCheckedOut.Store(0)
+	s.connectionCheckOutFailed.Store(0)
+	s.connectionPoolCleared.Store(0)
+	s.checkoutDurationNanos.Store(0)
+	s.checkoutDurationCount.Store(0)
+	s.checkoutSamplesDropped.Store(0)
+	s.mu.Lock()
+	s.checkoutDurations = nil
+	s.mu.Unlock()
+}
+
+func (s *mongoPoolStats) Snapshot() *mongoPoolSnapshot {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	durations := append([]time.Duration(nil), s.checkoutDurations...)
+	s.mu.Unlock()
+	aggregate := time.Duration(s.checkoutDurationNanos.Load())
+	durationCount := s.checkoutDurationCount.Load()
+	snapshot := &mongoPoolSnapshot{
+		ConnectionCreated:         s.connectionCreated.Load(),
+		ConnectionReady:           s.connectionReady.Load(),
+		ConnectionClosed:          s.connectionClosed.Load(),
+		ConnectionCheckedIn:       s.connectionCheckedIn.Load(),
+		ConnectionCheckOutStarted: s.connectionCheckOutStarted.Load(),
+		ConnectionCheckedOut:      s.connectionCheckedOut.Load(),
+		ConnectionCheckOutFailed:  s.connectionCheckOutFailed.Load(),
+		ConnectionPoolCleared:     s.connectionPoolCleared.Load(),
+		CheckoutSamples:           int64(len(durations)),
+		CheckoutSamplesDropped:    s.checkoutSamplesDropped.Load(),
+		CheckoutAggregateMillis:   float64(aggregate.Microseconds()) / 1000.0,
+		CheckoutLatencyMicros:     summarizeLatency(durations),
+	}
+	if durationCount > 0 {
+		snapshot.CheckoutMeanLatencyMicros = float64(aggregate.Microseconds()) / float64(durationCount)
+	}
+	return snapshot
+}
+
+func (s *mongoPoolStats) record(evt *event.PoolEvent) {
+	if s == nil || evt == nil {
+		return
+	}
+	switch evt.Type {
+	case event.ConnectionCreated:
+		s.connectionCreated.Add(1)
+	case event.ConnectionReady:
+		s.connectionReady.Add(1)
+	case event.ConnectionClosed:
+		s.connectionClosed.Add(1)
+	case event.ConnectionCheckedIn:
+		s.connectionCheckedIn.Add(1)
+	case event.ConnectionCheckOutStarted:
+		s.connectionCheckOutStarted.Add(1)
+	case event.ConnectionCheckedOut:
+		s.connectionCheckedOut.Add(1)
+		s.recordCheckoutDuration(evt.Duration)
+	case event.ConnectionCheckOutFailed:
+		s.connectionCheckOutFailed.Add(1)
+		s.recordCheckoutDuration(evt.Duration)
+	case event.ConnectionPoolCleared:
+		s.connectionPoolCleared.Add(1)
+	}
+}
+
+func (s *mongoPoolStats) recordCheckoutDuration(duration time.Duration) {
+	if duration <= 0 {
+		return
+	}
+	s.checkoutDurationNanos.Add(duration.Nanoseconds())
+	s.checkoutDurationCount.Add(1)
+	s.mu.Lock()
+	if len(s.checkoutDurations) < maxMongoPoolCheckoutDurationSamples {
+		s.checkoutDurations = append(s.checkoutDurations, duration)
+	} else {
+		s.checkoutSamplesDropped.Add(1)
+	}
+	s.mu.Unlock()
 }
 
 const (
@@ -199,6 +367,7 @@ func parseConfig(args []string) (config, error) {
 		TreeDBIndexRootStorage:      collections.RootStorageCompressed,
 		TreeDBMaintenance:           treeDBMaintenanceFull,
 		ClientMode:                  clientModeDriver,
+		InsertProducers:             1,
 	}
 	fs := flag.NewFlagSet("mongo_gateway_bench", flag.ContinueOnError)
 	var flagOutput bytes.Buffer
@@ -219,6 +388,10 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.Collection, "collection", "docs", "collection name")
 	fs.IntVar(&cfg.Documents, "documents", 1000, "documents to insert")
 	fs.IntVar(&cfg.BatchSize, "batch-size", 500, "InsertMany batch size")
+	fs.IntVar(&cfg.InsertProducers, "insert-producers", cfg.InsertProducers, "producer goroutines for the insert load phase")
+	fs.IntVar(&cfg.MongoMaxPoolSize, "mongo-max-pool-size", 0, "MongoDB Go driver maxPoolSize; 0 leaves the driver default")
+	fs.IntVar(&cfg.MongoMinPoolSize, "mongo-min-pool-size", 0, "MongoDB Go driver minPoolSize; 0 leaves the driver default")
+	fs.IntVar(&cfg.MongoMaxConnecting, "mongo-max-connecting", 0, "MongoDB Go driver maxConnecting; 0 leaves the driver default")
 	fs.IntVar(&cfg.Reads, "reads", 1000, "point reads by _id and by email")
 	fs.IntVar(&cfg.RangeReads, "range-reads", 100, "range reads with limit")
 	fs.IntVar(&cfg.Updates, "updates", 100, "$set updates by _id")
@@ -260,6 +433,19 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.BatchSize <= 0 {
 		return config{}, errors.New("batch-size must be > 0")
+	}
+	if cfg.InsertProducers <= 0 {
+		return config{}, errors.New("insert-producers must be > 0")
+	}
+	if cfg.MongoMaxPoolSize < 0 || cfg.MongoMinPoolSize < 0 || cfg.MongoMaxConnecting < 0 {
+		return config{}, errors.New("MongoDB pool option values cannot be negative")
+	}
+	mongoMaxPoolSize := cfg.MongoMaxPoolSize
+	if mongoMaxPoolSize == 0 {
+		mongoMaxPoolSize = defaultMongoDriverMaxPoolSize
+	}
+	if cfg.MongoMinPoolSize > mongoMaxPoolSize {
+		return config{}, fmt.Errorf("mongo-min-pool-size cannot exceed mongo-max-pool-size (%d when unset)", defaultMongoDriverMaxPoolSize)
 	}
 	if cfg.Reads < 0 || cfg.RangeReads < 0 || cfg.Updates < 0 || cfg.Deletes < 0 || cfg.ConcurrentReads < 0 || cfg.ConcurrentWrites < 0 {
 		return config{}, errors.New("operation counts cannot be negative")
@@ -460,10 +646,9 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 	serveErr := make(chan error, 1)
 	go serveLoop(serveCtx, ln, server, serveErr)
 
-	client, err := mongo.Connect(options.Client().
-		ApplyURI("mongodb://" + ln.Addr().String()).
-		SetDirect(true).
-		SetServerSelectionTimeout(5 * time.Second))
+	poolStats := newMongoPoolStats()
+	clientOpts := mongoClientOptions("mongodb://"+ln.Addr().String(), cfg, poolStats).SetDirect(true)
+	client, err := mongo.Connect(clientOpts)
 	if err != nil {
 		cancelServe()
 		_ = ln.Close()
@@ -507,6 +692,7 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		mongoAddr:       ln.Addr().String(),
 		treedbDir:       dir,
 		removeTreeDBDir: removeDir,
+		poolStats:       poolStats,
 		cleanup:         cleanup,
 	}, nil
 }
@@ -650,9 +836,8 @@ func unsafeResetPathMode(mode os.FileMode) bool {
 }
 
 func openMongoTarget(ctx context.Context, cfg config) (*benchTarget, error) {
-	client, err := mongo.Connect(options.Client().
-		ApplyURI(cfg.MongoURI).
-		SetServerSelectionTimeout(5 * time.Second))
+	poolStats := newMongoPoolStats()
+	client, err := mongo.Connect(mongoClientOptions(cfg.MongoURI, cfg, poolStats))
 	if err != nil {
 		return nil, err
 	}
@@ -667,11 +852,31 @@ func openMongoTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		}
 	}
 	return &benchTarget{
-		client: client,
+		client:    client,
+		poolStats: poolStats,
 		cleanup: func(cleanupCtx context.Context) error {
 			return client.Disconnect(cleanupCtx)
 		},
 	}, nil
+}
+
+func mongoClientOptions(uri string, cfg config, poolStats *mongoPoolStats) *options.ClientOptions {
+	opts := options.Client().
+		ApplyURI(uri).
+		SetServerSelectionTimeout(5 * time.Second)
+	if cfg.MongoMaxPoolSize > 0 {
+		opts.SetMaxPoolSize(uint64(cfg.MongoMaxPoolSize))
+	}
+	if cfg.MongoMinPoolSize > 0 {
+		opts.SetMinPoolSize(uint64(cfg.MongoMinPoolSize))
+	}
+	if cfg.MongoMaxConnecting > 0 {
+		opts.SetMaxConnecting(uint64(cfg.MongoMaxConnecting))
+	}
+	if poolStats != nil {
+		opts.SetPoolMonitor(poolStats.Monitor())
+	}
+	return opts
 }
 
 func redactMongoURI(rawURI string) string {
@@ -709,17 +914,22 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 	db := target.client.Database(cfg.Database)
 	coll := db.Collection(cfg.Collection)
 	result := &benchmarkResult{
-		Target:            cfg.Target,
-		Database:          cfg.Database,
-		Collection:        cfg.Collection,
-		Documents:         cfg.Documents,
-		SecondaryIndexes:  cfg.SecondaryIndexes,
-		ClientMode:        cfg.ClientMode,
-		ConcurrentReaders: cfg.ConcurrentReaders,
-		ConcurrentReads:   cfg.ConcurrentReads,
-		ConcurrentWriters: cfg.ConcurrentWriters,
-		ConcurrentWrites:  cfg.ConcurrentWrites,
-		PrebuildDocuments: cfg.PrebuildDocuments,
+		Target:             cfg.Target,
+		Database:           cfg.Database,
+		Collection:         cfg.Collection,
+		Documents:          cfg.Documents,
+		BatchSize:          cfg.BatchSize,
+		InsertProducers:    cfg.InsertProducers,
+		MongoMaxPoolSize:   cfg.MongoMaxPoolSize,
+		MongoMinPoolSize:   cfg.MongoMinPoolSize,
+		MongoMaxConnecting: cfg.MongoMaxConnecting,
+		SecondaryIndexes:   cfg.SecondaryIndexes,
+		ClientMode:         cfg.ClientMode,
+		ConcurrentReaders:  cfg.ConcurrentReaders,
+		ConcurrentReads:    cfg.ConcurrentReads,
+		ConcurrentWriters:  cfg.ConcurrentWriters,
+		ConcurrentWrites:   cfg.ConcurrentWrites,
+		PrebuildDocuments:  cfg.PrebuildDocuments,
 	}
 	if cfg.Target == "treedb" {
 		if cfg.TreeDBDir != "" || cfg.KeepTreeDBDir {
@@ -753,11 +963,17 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 			prebuiltRaw[i] = bson.Raw(raw)
 		}
 	}
+	if target.poolStats != nil {
+		target.poolStats.Reset()
+	}
 	loadPhase, err := runLoadPhase(ctx, cfg, target, coll, prebuilt, prebuiltRaw)
 	if err != nil {
 		return nil, err
 	}
 	result.Phases = append(result.Phases, loadPhase)
+	if target.poolStats != nil {
+		result.MongoPoolStatsAfterLoad = target.poolStats.Snapshot()
+	}
 	if err := collectAfterLoadStats(ctx, cfg, target, result); err != nil {
 		return nil, err
 	}
@@ -933,6 +1149,9 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget) (*benchm
 	if err := collectFinalStats(ctx, cfg, target, result); err != nil {
 		return nil, err
 	}
+	if target.poolStats != nil {
+		result.MongoPoolStatsFinal = target.poolStats.Snapshot()
+	}
 	return result, nil
 }
 
@@ -980,82 +1199,47 @@ func runLoadPhase(ctx context.Context, cfg config, target *benchTarget, coll *mo
 }
 
 func runDriverLoadPhase(ctx context.Context, cfg config, coll *mongo.Collection, prebuilt []bson.D) (phaseResult, error) {
-	return measurePhase("load_insert_many", cfg.Documents, func(sample func(time.Duration)) error {
-		for start := 0; start < cfg.Documents; start += cfg.BatchSize {
-			end := start + cfg.BatchSize
-			if end > cfg.Documents {
-				end = cfg.Documents
-			}
-			docs := make([]any, 0, end-start)
-			for i := start; i < end; i++ {
-				if prebuilt != nil {
-					docs = append(docs, prebuilt[i])
-				} else {
-					docs = append(docs, benchmarkDocument(i))
-				}
-			}
-			begin := time.Now()
-			_, err := coll.InsertMany(ctx, docs)
-			sample(time.Since(begin))
-			if err != nil {
-				return err
+	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
+		docs := make([]any, 0, end-start)
+		for i := start; i < end; i++ {
+			if prebuilt != nil {
+				docs = append(docs, prebuilt[i])
+			} else {
+				docs = append(docs, benchmarkDocument(i))
 			}
 		}
-		return nil
+		_, err := coll.InsertMany(batchCtx, docs)
+		return err
 	})
 }
 
 func runDriverCommandLoadPhase(ctx context.Context, cfg config, db *mongo.Database, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
-	return measurePhase("load_insert_many", cfg.Documents, func(sample func(time.Duration)) error {
-		for start := 0; start < cfg.Documents; start += cfg.BatchSize {
-			end := start + cfg.BatchSize
-			if end > cfg.Documents {
-				end = cfg.Documents
-			}
-			docs := make(bson.A, 0, end-start)
-			for i := start; i < end; i++ {
-				if prebuiltRaw != nil {
-					docs = append(docs, prebuiltRaw[i])
-				} else if prebuilt != nil {
-					docs = append(docs, prebuilt[i])
-				} else {
-					docs = append(docs, benchmarkDocument(i))
-				}
-			}
-			begin := time.Now()
-			err := db.RunCommand(ctx, bson.D{
-				{Key: "insert", Value: cfg.Collection},
-				{Key: "documents", Value: docs},
-				{Key: "ordered", Value: true},
-			}).Err()
-			sample(time.Since(begin))
-			if err != nil {
-				return err
+	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
+		docs := make(bson.A, 0, end-start)
+		for i := start; i < end; i++ {
+			if prebuiltRaw != nil {
+				docs = append(docs, prebuiltRaw[i])
+			} else if prebuilt != nil {
+				docs = append(docs, prebuilt[i])
+			} else {
+				docs = append(docs, benchmarkDocument(i))
 			}
 		}
-		return nil
+		return db.RunCommand(batchCtx, bson.D{
+			{Key: "insert", Value: cfg.Collection},
+			{Key: "documents", Value: docs},
+			{Key: "ordered", Value: true},
+		}).Err()
 	})
 }
 
 func runDriverCommandRawLoadPhase(ctx context.Context, cfg config, db *mongo.Database, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
-	return measurePhase("load_insert_many", cfg.Documents, func(sample func(time.Duration)) error {
-		for start := 0; start < cfg.Documents; start += cfg.BatchSize {
-			end := start + cfg.BatchSize
-			if end > cfg.Documents {
-				end = cfg.Documents
-			}
-			command, err := rawInsertCommand(cfg.Collection, start, end, prebuilt, prebuiltRaw)
-			if err != nil {
-				return err
-			}
-			begin := time.Now()
-			err = db.RunCommand(ctx, command).Err()
-			sample(time.Since(begin))
-			if err != nil {
-				return err
-			}
+	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
+		command, err := rawInsertCommand(cfg.Collection, start, end, prebuilt, prebuiltRaw)
+		if err != nil {
+			return err
 		}
-		return nil
+		return db.RunCommand(batchCtx, command).Err()
 	})
 }
 
@@ -1098,27 +1282,18 @@ func rawInsertCommand(collection string, start, end int, prebuilt []bson.D, preb
 func runDriverUnackLoadPhase(ctx context.Context, cfg config, db *mongo.Database, prebuilt []bson.D) (phaseResult, error) {
 	unackColl := db.Collection(cfg.Collection, options.Collection().SetWriteConcern(writeconcern.Unacknowledged()))
 	ackColl := db.Collection(cfg.Collection)
-	return measurePhase("load_insert_many", cfg.Documents, func(sample func(time.Duration)) error {
-		for start := 0; start < cfg.Documents; start += cfg.BatchSize {
-			end := start + cfg.BatchSize
-			if end > cfg.Documents {
-				end = cfg.Documents
-			}
-			docs := make([]any, 0, end-start)
-			for i := start; i < end; i++ {
-				if prebuilt != nil {
-					docs = append(docs, prebuilt[i])
-				} else {
-					docs = append(docs, benchmarkDocument(i))
-				}
-			}
-			begin := time.Now()
-			_, err := unackColl.InsertMany(ctx, docs)
-			sample(time.Since(begin))
-			if err != nil {
-				return err
+	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
+		docs := make([]any, 0, end-start)
+		for i := start; i < end; i++ {
+			if prebuilt != nil {
+				docs = append(docs, prebuilt[i])
+			} else {
+				docs = append(docs, benchmarkDocument(i))
 			}
 		}
+		_, err := unackColl.InsertMany(batchCtx, docs)
+		return err
+	}, func() error {
 		return waitForLoadVisible(ctx, cfg, ackColl)
 	})
 }
@@ -1127,29 +1302,66 @@ func waitForLoadVisible(ctx context.Context, cfg config, coll *mongo.Collection)
 	if cfg.Documents <= 0 {
 		return nil
 	}
+	ids := loadVisibilitySentinelIDs(cfg.Documents, cfg.BatchSize)
+	if len(ids) == 0 {
+		return nil
+	}
 	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	id := benchmarkID(cfg.Documents - 1)
+	visible := make([]bool, len(ids))
+	remaining := len(ids)
+	cursor := 0
 	ticker := time.NewTicker(2 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		var out bson.M
-		err := coll.FindOne(waitCtx, bson.D{{Key: "_id", Value: id}}).Decode(&out)
-		if err == nil {
-			if out["_id"] != id {
-				return fmt.Errorf("post-unack visibility lookup returned _id=%v want %s", out["_id"], id)
-			}
-			return nil
+		checks := remaining
+		if checks > maxUnackVisibilityChecksPerPoll {
+			checks = maxUnackVisibilityChecksPerPoll
 		}
-		if !errors.Is(err, mongo.ErrNoDocuments) {
-			return err
+		for checked, scanned := 0, 0; checked < checks && scanned < len(ids); scanned++ {
+			i := cursor
+			cursor = (cursor + 1) % len(ids)
+			if visible[i] {
+				continue
+			}
+			checked++
+			id := ids[i]
+			var out bson.M
+			err := coll.FindOne(waitCtx, bson.D{{Key: "_id", Value: id}}).Decode(&out)
+			if err == nil {
+				if out["_id"] != id {
+					return fmt.Errorf("post-unack visibility lookup returned _id=%v want %s", out["_id"], id)
+				}
+				visible[i] = true
+				remaining--
+				continue
+			}
+			if !errors.Is(err, mongo.ErrNoDocuments) {
+				return err
+			}
+		}
+		if remaining == 0 {
+			return nil
 		}
 		select {
 		case <-waitCtx.Done():
-			return fmt.Errorf("wait for unacknowledged load visibility: %w", waitCtx.Err())
+			return fmt.Errorf("wait for unacknowledged load visibility: %d batch sentinel ids still missing: %w", remaining, waitCtx.Err())
 		case <-ticker.C:
 		}
 	}
+}
+
+const maxUnackVisibilityChecksPerPoll = 128
+
+func loadVisibilitySentinelIDs(documents, batchSize int) []string {
+	batches := makeLoadBatches(documents, batchSize)
+	ids := make([]string, 0, len(batches))
+	for _, batch := range batches {
+		if batch.end > batch.start {
+			ids = append(ids, benchmarkID(batch.end-1))
+		}
+	}
+	return ids
 }
 
 func runTreeDBRawWireLoadPhase(ctx context.Context, cfg config, target *benchTarget, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
@@ -1165,46 +1377,30 @@ func runTreeDBRawWireLoadPhase(ctx context.Context, cfg config, target *benchTar
 		return phaseResult{}, err
 	}
 	commandDoc := wire.Document(commandRaw)
-	var requestID int32
-	return measurePhase("load_insert_many", cfg.Documents, func(sample func(time.Duration)) error {
-		for start := 0; start < cfg.Documents; start += cfg.BatchSize {
-			if err := ctx.Err(); err != nil {
-				return err
+	var requestID atomic.Int32
+	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
+		if err := batchCtx.Err(); err != nil {
+			return err
+		}
+		docs := make([]wire.Document, end-start)
+		for i := start; i < end; i++ {
+			if prebuiltRaw != nil {
+				docs[i-start] = wire.Document(prebuiltRaw[i])
+				continue
 			}
-			end := start + cfg.BatchSize
-			if end > cfg.Documents {
-				end = cfg.Documents
+			var doc bson.D
+			if prebuilt != nil {
+				doc = prebuilt[i]
+			} else {
+				doc = benchmarkDocument(i)
 			}
-			docs := make([]wire.Document, end-start)
-			for i := start; i < end; i++ {
-				if prebuiltRaw != nil {
-					docs[i-start] = wire.Document(prebuiltRaw[i])
-					continue
-				}
-				var doc bson.D
-				if prebuilt != nil {
-					doc = prebuilt[i]
-				} else {
-					doc = benchmarkDocument(i)
-				}
-				raw, err := bson.Marshal(doc)
-				if err != nil {
-					return err
-				}
-				docs[i-start] = wire.Document(raw)
-			}
-			requestID++
-			begin := time.Now()
-			err := serveRawWireInsert(target.server, requestID, commandDoc, docs)
-			sample(time.Since(begin))
+			raw, err := bson.Marshal(doc)
 			if err != nil {
 				return err
 			}
-			if err := ctx.Err(); err != nil {
-				return err
-			}
+			docs[i-start] = wire.Document(raw)
 		}
-		return nil
+		return serveRawWireInsert(target.server, requestID.Add(1), int64(producer+1), commandDoc, docs)
 	})
 }
 
@@ -1212,32 +1408,32 @@ func runTreeDBRawWireTCPLoadPhase(ctx context.Context, cfg config, target *bench
 	if target == nil || target.mongoAddr == "" {
 		return phaseResult{}, errors.New("raw-wire-tcp client mode requires a TreeDB gateway listener")
 	}
-	client, err := fastclient.Connect(ctx, target.mongoAddr)
-	if err != nil {
-		return phaseResult{}, err
-	}
-	defer func() { _ = client.Close() }()
-	return measurePhase("load_insert_many", cfg.Documents, func(sample func(time.Duration)) error {
-		for start := 0; start < cfg.Documents; start += cfg.BatchSize {
-			if err := ctx.Err(); err != nil {
-				return err
+	producers := effectiveLoadProducers(cfg.Documents, cfg.BatchSize, cfg.InsertProducers)
+	clients := make([]*fastclient.Client, producers)
+	for i := range clients {
+		client, err := fastclient.Connect(ctx, target.mongoAddr)
+		if err != nil {
+			for _, existing := range clients {
+				if existing != nil {
+					_ = existing.Close()
+				}
 			}
-			end := start + cfg.BatchSize
-			if end > cfg.Documents {
-				end = cfg.Documents
-			}
-			docs, err := rawBSONDocuments(start, end, prebuilt, prebuiltRaw)
-			if err != nil {
-				return err
-			}
-			begin := time.Now()
-			_, err = client.InsertManyRawBSON(ctx, cfg.Database, cfg.Collection, docs)
-			sample(time.Since(begin))
-			if err != nil {
-				return err
-			}
+			return phaseResult{}, err
 		}
-		return nil
+		clients[i] = client
+	}
+	defer func() {
+		for _, client := range clients {
+			_ = client.Close()
+		}
+	}()
+	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
+		docs, err := rawBSONDocuments(start, end, prebuilt, prebuiltRaw)
+		if err != nil {
+			return err
+		}
+		_, err = clients[producer].InsertManyRawBSON(batchCtx, cfg.Database, cfg.Collection, docs)
+		return err
 	})
 }
 
@@ -1275,7 +1471,7 @@ func rawBSONDocuments(start, end int, prebuilt []bson.D, prebuiltRaw []bson.Raw)
 	return docs, nil
 }
 
-func serveRawWireInsert(server *mongogateway.Server, requestID int32, commandDoc wire.Document, docs []wire.Document) error {
+func serveRawWireInsert(server *mongogateway.Server, requestID int32, cursorOwner int64, commandDoc wire.Document, docs []wire.Document) error {
 	msg, err := wire.AppendMsgMessageWithSequences(nil, requestID, 0, 0, commandDoc, []wire.DocumentSequence{{
 		Identifier: "documents",
 		Documents:  docs,
@@ -1284,7 +1480,7 @@ func serveRawWireInsert(server *mongogateway.Server, requestID int32, commandDoc
 		return err
 	}
 	rw := inMemoryReadWriter{r: bytes.NewReader(msg)}
-	if err := server.ServeOneWithOwner(&rw, 1); err != nil {
+	if err := server.ServeOneWithOwner(&rw, cursorOwner); err != nil {
 		return err
 	}
 	return assertRawWireInsertOK(rw.w.Bytes(), len(docs))
@@ -1651,6 +1847,174 @@ func int64Value(value any) (int64, bool) {
 	}
 }
 
+type loadBatch struct {
+	start int
+	end   int
+}
+
+func makeLoadBatches(documents, batchSize int) []loadBatch {
+	if documents <= 0 || batchSize <= 0 {
+		return nil
+	}
+	batches := make([]loadBatch, 0, (documents+batchSize-1)/batchSize)
+	for start := 0; start < documents; start += batchSize {
+		end := start + batchSize
+		if end > documents {
+			end = documents
+		}
+		batches = append(batches, loadBatch{start: start, end: end})
+	}
+	return batches
+}
+
+func effectiveLoadProducers(documents, batchSize, requested int) int {
+	if requested <= 0 {
+		requested = 1
+	}
+	if documents <= 0 || batchSize <= 0 {
+		return requested
+	}
+	batches := (documents + batchSize - 1) / batchSize
+	if batches > 0 && requested > batches {
+		return batches
+	}
+	return requested
+}
+
+func measureLoadPhase(ctx context.Context, cfg config, runBatch func(context.Context, int, int, int) error, after ...func() error) (phaseResult, error) {
+	batches := makeLoadBatches(cfg.Documents, cfg.BatchSize)
+	producers := effectiveLoadProducers(cfg.Documents, cfg.BatchSize, cfg.InsertProducers)
+
+	samples := make([]time.Duration, 0, len(batches))
+	producerSamples := make([][]time.Duration, producers)
+	producerOperations := make([]int, producers)
+	producerDurations := make([]time.Duration, producers)
+	var samplesMu sync.Mutex
+	recordBatch := func(producer, operations int, duration time.Duration) {
+		samplesMu.Lock()
+		samples = append(samples, duration)
+		if producer >= 0 && producer < producers {
+			producerOperations[producer] += operations
+			producerSamples[producer] = append(producerSamples[producer], duration)
+		}
+		samplesMu.Unlock()
+	}
+	recordProducerDuration := func(producer int, duration time.Duration) {
+		if producer < 0 || producer >= producers {
+			return
+		}
+		samplesMu.Lock()
+		producerDurations[producer] = duration
+		samplesMu.Unlock()
+	}
+
+	started := time.Now()
+	err := runLoadBatches(ctx, batches, producers, runBatch, recordBatch, recordProducerDuration)
+	if err == nil {
+		for _, hook := range after {
+			if hook == nil {
+				continue
+			}
+			if hookErr := hook(); hookErr != nil {
+				err = hookErr
+				break
+			}
+		}
+	}
+	duration := time.Since(started)
+	completedOperations := 0
+	for _, operations := range producerOperations {
+		completedOperations += operations
+	}
+	result := summarizePhase("load_insert_many", completedOperations, len(samples), duration, samples)
+	if producers != 1 || cfg.InsertProducers != producers {
+		result.EffectiveProducers = producers
+	}
+	if cfg.InsertProducers > 1 {
+		result.ProducerResults = make([]producerResult, 0, producers)
+		for producer := 0; producer < producers; producer++ {
+			result.ProducerResults = append(result.ProducerResults, summarizeProducerResult(
+				producer,
+				producerOperations[producer],
+				len(producerSamples[producer]),
+				producerDurations[producer],
+				producerSamples[producer],
+			))
+		}
+	}
+	return result, err
+}
+
+func runLoadBatches(
+	ctx context.Context,
+	batches []loadBatch,
+	producers int,
+	runBatch func(context.Context, int, int, int) error,
+	recordBatch func(producer, operations int, duration time.Duration),
+	recordProducerDuration func(producer int, duration time.Duration),
+) error {
+	if len(batches) == 0 {
+		return nil
+	}
+	if producers <= 0 {
+		producers = 1
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	var errOnce sync.Once
+	var firstErr error
+	recordErr := func(err error) {
+		if err == nil {
+			return
+		}
+		errOnce.Do(func() {
+			firstErr = err
+			cancel()
+		})
+	}
+
+	for producer := 0; producer < producers; producer++ {
+		wg.Add(1)
+		go func(producer int) {
+			defer wg.Done()
+			producerStart := time.Now()
+			defer func() {
+				recordProducerDuration(producer, time.Since(producerStart))
+			}()
+			for {
+				if err := runCtx.Err(); err != nil {
+					return
+				}
+				batchIndex := int(next.Add(1) - 1)
+				if batchIndex >= len(batches) {
+					return
+				}
+				batch := batches[batchIndex]
+				started := time.Now()
+				err := runBatch(runCtx, producer, batch.start, batch.end)
+				elapsed := time.Since(started)
+				operations := batch.end - batch.start
+				if err != nil {
+					operations = 0
+				}
+				recordBatch(producer, operations, elapsed)
+				if err != nil {
+					recordErr(err)
+					return
+				}
+			}
+		}(producer)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return firstErr
+	}
+	return ctx.Err()
+}
+
 func measurePhase(name string, operations int, run func(sample func(time.Duration)) error) (phaseResult, error) {
 	samples := make([]time.Duration, 0)
 	var samplesMu sync.Mutex
@@ -1732,8 +2096,32 @@ func summarizePhase(name string, operations, driverCalls int, duration time.Dura
 	}
 	if driverCalls > 0 && driverDuration > 0 {
 		result.DriverMeanLatencyMicros = float64(driverDuration.Microseconds()) / float64(driverCalls)
-		result.SampledOpsPerSecond = float64(operations) / driverDuration.Seconds()
-		result.SampledNsPerOp = float64(driverDuration.Nanoseconds()) / float64(operations)
+		if operations > 0 {
+			result.SampledOpsPerSecond = float64(operations) / driverDuration.Seconds()
+			result.SampledNsPerOp = float64(driverDuration.Nanoseconds()) / float64(operations)
+		}
+	}
+	return result
+}
+
+func summarizeProducerResult(producer, operations, driverCalls int, duration time.Duration, samples []time.Duration) producerResult {
+	var driverDuration time.Duration
+	for _, sample := range samples {
+		driverDuration += sample
+	}
+	result := producerResult{
+		Producer:              producer,
+		Operations:            operations,
+		DriverCalls:           driverCalls,
+		DurationMillis:        float64(duration.Microseconds()) / 1000.0,
+		DriverAggregateMillis: float64(driverDuration.Microseconds()) / 1000.0,
+		LatencyMicros:         summarizeLatency(samples),
+	}
+	if duration > 0 {
+		result.OpsPerSecond = float64(operations) / duration.Seconds()
+	}
+	if driverCalls > 0 && driverDuration > 0 {
+		result.DriverMeanLatencyMicros = float64(driverDuration.Microseconds()) / float64(driverCalls)
 	}
 	return result
 }
@@ -1813,8 +2201,9 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(result)
 	case "text":
-		fmt.Fprintf(out, "target=%s client_mode=%s database=%s collection=%s documents=%d secondary_indexes=%d concurrent_readers=%d concurrent_reads=%d concurrent_writers=%d concurrent_writes=%d\n",
-			result.Target, result.ClientMode, result.Database, result.Collection, result.Documents, result.SecondaryIndexes,
+		fmt.Fprintf(out, "target=%s client_mode=%s database=%s collection=%s documents=%d batch_size=%d insert_producers=%d mongo_max_pool_size=%d mongo_min_pool_size=%d mongo_max_connecting=%d secondary_indexes=%d concurrent_readers=%d concurrent_reads=%d concurrent_writers=%d concurrent_writes=%d\n",
+			result.Target, result.ClientMode, result.Database, result.Collection, result.Documents, result.BatchSize,
+			result.InsertProducers, result.MongoMaxPoolSize, result.MongoMinPoolSize, result.MongoMaxConnecting, result.SecondaryIndexes,
 			result.ConcurrentReaders, result.ConcurrentReads, result.ConcurrentWriters, result.ConcurrentWrites)
 		if result.TreeDBDir != "" {
 			fmt.Fprintf(out, "treedb_dir=%s\n", result.TreeDBDir)
@@ -1828,10 +2217,23 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 			fmt.Fprintf(out, "mongo_uri=%s\n", result.MongoURI)
 		}
 		for _, phase := range result.Phases {
-			fmt.Fprintf(out, "%-22s ops=%d calls=%d duration_ms=%.1f ops_sec=%.1f sampled_ops_sec=%.1f sampled_ns_op=%.1f driver_aggregate_ms=%.1f driver_mean_us=%.0f p50_us=%.0f p95_us=%.0f p99_us=%.0f\n",
-				phase.Name, phase.Operations, phase.DriverCalls, phase.DurationMillis, phase.OpsPerSecond,
+			fmt.Fprintf(out, "%-22s ops=%d calls=%d", phase.Name, phase.Operations, phase.DriverCalls)
+			if phase.EffectiveProducers > 0 {
+				fmt.Fprintf(out, " effective_producers=%d", phase.EffectiveProducers)
+			}
+			fmt.Fprintf(out, " duration_ms=%.1f ops_sec=%.1f sampled_ops_sec=%.1f sampled_ns_op=%.1f driver_aggregate_ms=%.1f driver_mean_us=%.0f p50_us=%.0f p95_us=%.0f p99_us=%.0f\n",
+				phase.DurationMillis, phase.OpsPerSecond,
 				phase.SampledOpsPerSecond, phase.SampledNsPerOp, phase.DriverAggregateMillis, phase.DriverMeanLatencyMicros,
 				phase.LatencyMicros.P50, phase.LatencyMicros.P95, phase.LatencyMicros.P99)
+			for _, producer := range phase.ProducerResults {
+				fmt.Fprintf(out, "  producer=%d ops=%d calls=%d duration_ms=%.1f ops_sec=%.1f driver_aggregate_ms=%.1f driver_mean_us=%.0f p50_us=%.0f p95_us=%.0f p99_us=%.0f\n",
+					producer.Producer, producer.Operations, producer.DriverCalls, producer.DurationMillis, producer.OpsPerSecond,
+					producer.DriverAggregateMillis, producer.DriverMeanLatencyMicros,
+					producer.LatencyMicros.P50, producer.LatencyMicros.P95, producer.LatencyMicros.P99)
+			}
+		}
+		if result.MongoPoolStatsAfterLoad != nil {
+			writeMongoPoolStats(out, "mongo_pool_after_load", result.MongoPoolStatsAfterLoad)
 		}
 		if result.TreeDBDiskAfterLoad != nil {
 			writeDiskSnapshot(out, "treedb_after_load", result.TreeDBDiskAfterLoad)
@@ -1850,6 +2252,9 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		}
 		if result.MongoDBStatsFinal != nil {
 			writeMongoStats(out, "mongodb_final", result.MongoDBStatsFinal)
+		}
+		if result.MongoPoolStatsFinal != nil {
+			writeMongoPoolStats(out, "mongo_pool_final", result.MongoPoolStatsFinal)
 		}
 		return nil
 	default:
@@ -1898,4 +2303,28 @@ func writeMongoStats(out io.Writer, label string, stats map[string]any) {
 		}
 	}
 	fmt.Fprintln(out)
+}
+
+func writeMongoPoolStats(out io.Writer, label string, stats *mongoPoolSnapshot) {
+	if stats == nil {
+		return
+	}
+	fmt.Fprintf(out, "%s created=%d ready=%d closed=%d checkout_started=%d checked_out=%d checked_in=%d checkout_failed=%d pool_cleared=%d checkout_samples=%d checkout_samples_dropped=%d checkout_aggregate_ms=%.1f checkout_mean_us=%.0f checkout_p50_us=%.0f checkout_p95_us=%.0f checkout_p99_us=%.0f\n",
+		label,
+		stats.ConnectionCreated,
+		stats.ConnectionReady,
+		stats.ConnectionClosed,
+		stats.ConnectionCheckOutStarted,
+		stats.ConnectionCheckedOut,
+		stats.ConnectionCheckedIn,
+		stats.ConnectionCheckOutFailed,
+		stats.ConnectionPoolCleared,
+		stats.CheckoutSamples,
+		stats.CheckoutSamplesDropped,
+		stats.CheckoutAggregateMillis,
+		stats.CheckoutMeanLatencyMicros,
+		stats.CheckoutLatencyMicros.P50,
+		stats.CheckoutLatencyMicros.P95,
+		stats.CheckoutLatencyMicros.P99,
+	)
 }

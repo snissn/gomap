@@ -19,6 +19,10 @@ GOWORK=off go run ./cmd/mongo_gateway_bench \
   -treedb-dir /tmp/treedb-mongo-bench \
   -keep-treedb-dir \
   -documents 10000 \
+  -batch-size 1000 \
+  -insert-producers 4 \
+  -mongo-max-pool-size 32 \
+  -mongo-max-connecting 8 \
   -reads 10000 \
   -range-reads 1000 \
   -updates 1000 \
@@ -67,6 +71,19 @@ documents and raw BSON bytes before the measured workload. `driver-command` and
 `raw-wire` reuse the raw bytes during the load phase so their insert-call timing
 does not include fixture BSON marshaling.
 
+Use `-insert-producers N` to split the insert load phase across producer
+goroutines. The effective producer count is capped at the number of insert
+batches so small runs do not open unused clients. Official-driver modes share one
+`mongo.Client`, so
+`-mongo-max-pool-size`, `-mongo-min-pool-size`, and `-mongo-max-connecting`
+control the driver pool used by those producers. When `-mongo-max-pool-size` is
+left unset, validation treats the driver default max pool size as 100 for
+`-mongo-min-pool-size` checks. `raw-wire-tcp` opens one fastclient connection per
+effective producer, and `raw-wire` uses one in-process wire owner per effective
+producer. JSON output includes `effective_producers` and `producer_results` for
+the load phase plus `mongo_pool_stats_after_load` and `mongo_pool_stats_final`
+when the official driver pool is involved.
+
 The TreeDB benchmark target defaults are intended to match the optimized
 collection benchmark profile:
 
@@ -99,6 +116,10 @@ GOWORK=off go run ./cmd/mongo_gateway_bench \
   -target mongo \
   -mongo-uri mongodb://127.0.0.1:27017 \
   -documents 10000 \
+  -batch-size 1000 \
+  -insert-producers 4 \
+  -mongo-max-pool-size 32 \
+  -mongo-max-connecting 8 \
   -reads 10000 \
   -range-reads 1000 \
   -updates 1000 \
@@ -146,6 +167,9 @@ scripts/mongo_gateway_compare.sh \
   --concurrent-reads 10000 \
   --concurrent-writers 4 \
   --concurrent-writes 1000 \
+  --insert-producers 4 \
+  --mongo-max-pool-size 32 \
+  --mongo-max-connecting 8 \
   --mongo-mode docker
 ```
 
@@ -256,7 +280,9 @@ The initial workload phases are:
   documents})` for `driver-command`, `RunCommand` with a prebuilt raw BSON
   command for `driver-command-raw`, unacknowledged `InsertMany` plus a post-load
   visibility wait for `driver-unack`, and raw OP_MSG document sequences for
-  `raw-wire`/`raw-wire-tcp`.
+  `raw-wire`/`raw-wire-tcp`. When `-insert-producers` is greater than 1, this
+  phase reports aggregate wall-clock throughput and per-producer call latency in
+  `producer_results`.
 - `id_find_one`: point lookup by `_id`.
 - `email_find_one`: point lookup by the `email` field; emitted only when the
   email secondary index is part of the cell.
@@ -276,6 +302,15 @@ sampled values when investigating gateway/client overhead with prebuilt
 fixtures, and wall `ops_sec` when measuring the full benchmark loop. Insert
 latency percentiles are per batch call. Range-query samples include cursor
 materialization with `cursor.All`.
+
+`mongo_pool_stats_after_load` is reset immediately before the insert load phase,
+so its checkout counters describe the measured insert phase rather than setup or
+index creation. `mongo_pool_stats_final` is cumulative from the load phase
+through the later read/update/delete phases. Pool checkout latency percentiles are
+computed from a bounded sample to keep high-concurrency benchmark overhead
+predictable; checkout counts and aggregate checkout duration still cover every
+recorded checkout event.
+
 Use `-timeout 0` to run without an overall benchmark deadline.
 
 The package test `TestTreeDBProfileSmokeFastAndWALOnFast` runs a small write-only

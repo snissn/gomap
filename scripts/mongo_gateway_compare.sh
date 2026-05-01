@@ -10,6 +10,10 @@ OUT_DIR="${OUT_DIR:-$(mktemp -d "$TMP_BASE/gomap_mongo_gateway_compare_XXXXXX")}
 DOCS_LIST="${DOCS_LIST:-1000 10000}"
 INDEXES_LIST="${INDEXES_LIST:-0 2}"
 BATCH_SIZE="${BATCH_SIZE:-500}"
+INSERT_PRODUCERS="${INSERT_PRODUCERS:-1}"
+MONGO_MAX_POOL_SIZE="${MONGO_MAX_POOL_SIZE:-0}"
+MONGO_MIN_POOL_SIZE="${MONGO_MIN_POOL_SIZE:-0}"
+MONGO_MAX_CONNECTING="${MONGO_MAX_CONNECTING:-0}"
 PREBUILD_DOCUMENTS="${PREBUILD_DOCUMENTS:-false}"
 READS="${READS:-}"
 READS_DIVISOR="${READS_DIVISOR:-1}"
@@ -56,6 +60,13 @@ Options:
   --range-reads COUNT   Range reads per target/cell. Default: documents / 10.
   --updates COUNT       Updates per target/cell. Default: documents / 10.
   --deletes COUNT       Deletes per target/cell. Default: 0.
+  --insert-producers N  Producer goroutines for the insert load phase. Default: 1.
+  --mongo-max-pool-size N
+                        MongoDB Go driver maxPoolSize. Default: 0, use driver default.
+  --mongo-min-pool-size N
+                        MongoDB Go driver minPoolSize. Default: 0, use driver default.
+  --mongo-max-connecting N
+                        MongoDB Go driver maxConnecting. Default: 0, use driver default.
   --prebuild-documents  Prebuild documents before timed load phases.
   --concurrent-readers N
                         Reader goroutines for the concurrent _id read phase.
@@ -84,7 +95,8 @@ Options:
   --help                Show this help.
 
 Environment overrides:
-  OUT_DIR, DOCS_LIST, INDEXES_LIST, BATCH_SIZE, PREBUILD_DOCUMENTS,
+  OUT_DIR, DOCS_LIST, INDEXES_LIST, BATCH_SIZE, INSERT_PRODUCERS,
+  MONGO_MAX_POOL_SIZE, MONGO_MIN_POOL_SIZE, MONGO_MAX_CONNECTING, PREBUILD_DOCUMENTS,
   READS, READS_DIVISOR,
   RANGE_READS, UPDATES, DELETES, RANGE_READS_DIVISOR, UPDATES_DIVISOR,
   CONCURRENT_READERS, CONCURRENT_READS, CONCURRENT_READS_DIVISOR,
@@ -125,6 +137,22 @@ while [[ $# -gt 0 ]]; do
       ;;
     --deletes)
       DELETES="$2"
+      shift 2
+      ;;
+    --insert-producers)
+      INSERT_PRODUCERS="$2"
+      shift 2
+      ;;
+    --mongo-max-pool-size)
+      MONGO_MAX_POOL_SIZE="$2"
+      shift 2
+      ;;
+    --mongo-min-pool-size)
+      MONGO_MIN_POOL_SIZE="$2"
+      shift 2
+      ;;
+    --mongo-max-connecting)
+      MONGO_MAX_CONNECTING="$2"
       shift 2
       ;;
     --prebuild-documents)
@@ -385,6 +413,10 @@ run_target() {
     -collection "$COLLECTION" \
     -documents "$docs" \
     -batch-size "$BATCH_SIZE" \
+    -insert-producers "$INSERT_PRODUCERS" \
+    -mongo-max-pool-size "$MONGO_MAX_POOL_SIZE" \
+    -mongo-min-pool-size "$MONGO_MIN_POOL_SIZE" \
+    -mongo-max-connecting "$MONGO_MAX_CONNECTING" \
     -reads "$reads" \
     -range-reads "$range_reads" \
     -updates "$updates" \
@@ -408,13 +440,25 @@ if [[ "$MONGO_MODE" == "docker" ]] && ! command -v docker >/dev/null 2>&1; then
   echo "MONGO_MODE=docker requires docker; use --mongo-mode external --mongo-uri URI to use an existing server" >&2
   exit 2
 fi
-for value_name in DELETES CONCURRENT_READERS CONCURRENT_WRITERS; do
+if ! is_positive_int "$INSERT_PRODUCERS"; then
+  echo "invalid INSERT_PRODUCERS=$INSERT_PRODUCERS (want positive integer)" >&2
+  exit 2
+fi
+for value_name in DELETES CONCURRENT_READERS CONCURRENT_WRITERS MONGO_MAX_POOL_SIZE MONGO_MIN_POOL_SIZE MONGO_MAX_CONNECTING; do
   value=${!value_name}
   if ! is_nonnegative_int "$value"; then
     echo "invalid $value_name=$value (want non-negative integer)" >&2
     exit 2
   fi
 done
+effective_mongo_max_pool_size="$MONGO_MAX_POOL_SIZE"
+if [[ "$effective_mongo_max_pool_size" -eq 0 ]]; then
+  effective_mongo_max_pool_size=100
+fi
+if [[ "$MONGO_MIN_POOL_SIZE" -gt "$effective_mongo_max_pool_size" ]]; then
+  echo "invalid MONGO_MIN_POOL_SIZE=$MONGO_MIN_POOL_SIZE (must be <= effective maxPoolSize $effective_mongo_max_pool_size)" >&2
+  exit 2
+fi
 if [[ "$PREBUILD_DOCUMENTS" != "true" && "$PREBUILD_DOCUMENTS" != "false" ]]; then
   echo "invalid PREBUILD_DOCUMENTS=$PREBUILD_DOCUMENTS (want true or false)" >&2
   exit 2
@@ -433,6 +477,8 @@ fi
   echo "docs list: $DOCS_LIST"
   echo "secondary-index list: $INDEXES_LIST"
   echo "batch size: $BATCH_SIZE"
+  echo "insert producers: $INSERT_PRODUCERS"
+  echo "mongo pool options: maxPoolSize=$MONGO_MAX_POOL_SIZE minPoolSize=$MONGO_MIN_POOL_SIZE maxConnecting=$MONGO_MAX_CONNECTING"
   echo "prebuild documents: $PREBUILD_DOCUMENTS"
   echo "reads: ${READS:-documents / $READS_DIVISOR}"
   echo "range reads: ${RANGE_READS:-documents / $RANGE_READS_DIVISOR}"
@@ -567,6 +613,8 @@ cat >"$README" <<EOF
 - docs list: \`$DOCS_LIST\`
 - secondary-index list: \`$INDEXES_LIST\`
 - batch size: \`$BATCH_SIZE\`
+- insert producers: \`$INSERT_PRODUCERS\`
+- MongoDB Go driver pool options: \`maxPoolSize=$MONGO_MAX_POOL_SIZE minPoolSize=$MONGO_MIN_POOL_SIZE maxConnecting=$MONGO_MAX_CONNECTING\`
 - prebuild documents: \`$PREBUILD_DOCUMENTS\`
 - reads: \`${READS:-documents / $READS_DIVISOR}\`
 - range reads: \`${RANGE_READS:-documents / $RANGE_READS_DIVISOR}\`

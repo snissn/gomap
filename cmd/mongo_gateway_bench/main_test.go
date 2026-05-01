@@ -14,6 +14,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/event"
 )
 
 func TestSummarizeLatencyNearestRank(t *testing.T) {
@@ -32,6 +33,19 @@ func TestSummarizeLatencyNearestRank(t *testing.T) {
 	}
 	if summary.P99 != 50 {
 		t.Fatalf("p99=%v want 50", summary.P99)
+	}
+}
+
+func TestSummarizePhaseZeroOperationsWithSamples(t *testing.T) {
+	phase := summarizePhase("load_insert_many", 0, 1, time.Millisecond, []time.Duration{time.Millisecond})
+	if phase.DriverMeanLatencyMicros == 0 {
+		t.Fatal("driver mean latency should still be reported for sampled driver calls")
+	}
+	if phase.SampledOpsPerSecond != 0 {
+		t.Fatalf("sampled ops/sec=%v want 0 for zero completed operations", phase.SampledOpsPerSecond)
+	}
+	if phase.SampledNsPerOp != 0 {
+		t.Fatalf("sampled ns/op=%v want 0 for zero completed operations", phase.SampledNsPerOp)
 	}
 }
 
@@ -257,6 +271,11 @@ func TestParseConfigValidation(t *testing.T) {
 	cfg, err := parseConfig([]string{
 		"-target", "mongo",
 		"-documents", "10",
+		"-batch-size", "5",
+		"-insert-producers", "4",
+		"-mongo-max-pool-size", "32",
+		"-mongo-min-pool-size", "8",
+		"-mongo-max-connecting", "16",
 		"-secondary-indexes", "1",
 		"-format", "json",
 		"-concurrent-readers", "4",
@@ -269,6 +288,8 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 	if cfg.Target != "mongo" || cfg.Documents != 10 || cfg.SecondaryIndexes != 1 || cfg.Format != "json" ||
 		cfg.ClientMode != clientModeDriver ||
+		cfg.BatchSize != 5 || cfg.InsertProducers != 4 ||
+		cfg.MongoMaxPoolSize != 32 || cfg.MongoMinPoolSize != 8 || cfg.MongoMaxConnecting != 16 ||
 		cfg.ConcurrentReaders != 4 || cfg.ConcurrentReads != 20 || cfg.ConcurrentWriters != 2 || cfg.ConcurrentWrites != 10 {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
@@ -331,6 +352,21 @@ func TestParseConfigValidation(t *testing.T) {
 	if _, err := parseConfig([]string{"-concurrent-reads", "1"}); err == nil {
 		t.Fatal("concurrent-reads without concurrent-readers accepted")
 	}
+	if _, err := parseConfig([]string{"-insert-producers", "0"}); err == nil {
+		t.Fatal("zero insert-producers accepted")
+	}
+	if _, err := parseConfig([]string{"-mongo-max-pool-size", "-1"}); err == nil {
+		t.Fatal("negative mongo-max-pool-size accepted")
+	}
+	if _, err := parseConfig([]string{"-mongo-max-pool-size", "4", "-mongo-min-pool-size", "8"}); err == nil {
+		t.Fatal("mongo-min-pool-size greater than mongo-max-pool-size accepted")
+	}
+	if _, err := parseConfig([]string{"-mongo-min-pool-size", "101"}); err == nil {
+		t.Fatal("mongo-min-pool-size greater than default mongo-max-pool-size accepted")
+	}
+	if _, err := parseConfig([]string{"-mongo-min-pool-size", "100"}); err != nil {
+		t.Fatalf("mongo-min-pool-size equal to default mongo-max-pool-size rejected: %v", err)
+	}
 }
 
 func TestRawInsertCommandBuildsBSONCommand(t *testing.T) {
@@ -391,6 +427,9 @@ func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
 	}
 	if cfg.TreeDBMaintenance != treeDBMaintenanceFull {
 		t.Fatalf("TreeDBMaintenance=%q want %q", cfg.TreeDBMaintenance, treeDBMaintenanceFull)
+	}
+	if cfg.InsertProducers != 1 {
+		t.Fatalf("InsertProducers=%d want 1", cfg.InsertProducers)
 	}
 }
 
@@ -618,12 +657,186 @@ func TestRunConcurrentOperationsReturnsFirstError(t *testing.T) {
 	}
 }
 
+func TestMakeLoadBatchesSplitsDocumentRange(t *testing.T) {
+	batches := makeLoadBatches(10, 4)
+	want := []loadBatch{{start: 0, end: 4}, {start: 4, end: 8}, {start: 8, end: 10}}
+	if len(batches) != len(want) {
+		t.Fatalf("len(batches)=%d want %d: %+v", len(batches), len(want), batches)
+	}
+	for i := range want {
+		if batches[i] != want[i] {
+			t.Fatalf("batch %d=%+v want %+v", i, batches[i], want[i])
+		}
+	}
+}
+
+func TestEffectiveLoadProducersCapsAtBatchCount(t *testing.T) {
+	if got := effectiveLoadProducers(10, 4, 8); got != 3 {
+		t.Fatalf("effectiveLoadProducers=%d want 3", got)
+	}
+	if got := effectiveLoadProducers(10, 4, 2); got != 2 {
+		t.Fatalf("effectiveLoadProducers=%d want 2", got)
+	}
+}
+
+func TestLoadVisibilitySentinelIDsUseBatchBoundaries(t *testing.T) {
+	got := loadVisibilitySentinelIDs(10, 4)
+	want := []string{benchmarkID(3), benchmarkID(7), benchmarkID(9)}
+	if len(got) != len(want) {
+		t.Fatalf("len(sentinels)=%d want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("sentinel %d=%q want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestMeasureLoadPhaseReportsProducerResults(t *testing.T) {
+	cfg := config{Documents: 12, BatchSize: 2, InsertProducers: 3}
+	seen := make([]atomic.Int64, cfg.Documents)
+	phase, err := measureLoadPhase(context.Background(), cfg, func(ctx context.Context, producer, start, end int) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if producer < 0 || producer >= cfg.InsertProducers {
+			return os.ErrInvalid
+		}
+		for i := start; i < end; i++ {
+			seen[i].Add(1)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("measureLoadPhase: %v", err)
+	}
+	if phase.Name != "load_insert_many" || phase.Operations != cfg.Documents || phase.DriverCalls != 6 {
+		t.Fatalf("unexpected phase summary: %+v", phase)
+	}
+	if phase.EffectiveProducers != cfg.InsertProducers {
+		t.Fatalf("EffectiveProducers=%d want %d", phase.EffectiveProducers, cfg.InsertProducers)
+	}
+	if len(phase.ProducerResults) != cfg.InsertProducers {
+		t.Fatalf("producer results=%d want %d: %+v", len(phase.ProducerResults), cfg.InsertProducers, phase.ProducerResults)
+	}
+	var producerOps, producerCalls int
+	for _, producer := range phase.ProducerResults {
+		producerOps += producer.Operations
+		producerCalls += producer.DriverCalls
+	}
+	if producerOps != cfg.Documents || producerCalls != phase.DriverCalls {
+		t.Fatalf("producer totals ops/calls=%d/%d want %d/%d", producerOps, producerCalls, cfg.Documents, phase.DriverCalls)
+	}
+	for doc := range seen {
+		if got := seen[doc].Load(); got != 1 {
+			t.Fatalf("doc %d seen %d times, want once", doc, got)
+		}
+	}
+}
+
+func TestMeasureLoadPhaseErrorReportsCompletedOperations(t *testing.T) {
+	sentinel := errors.New("load failed")
+	cfg := config{Documents: 6, BatchSize: 2, InsertProducers: 1}
+	phase, err := measureLoadPhase(context.Background(), cfg, func(ctx context.Context, producer, start, end int) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if start >= 2 {
+			return sentinel
+		}
+		return nil
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("err=%v want sentinel", err)
+	}
+	if phase.Operations != 2 {
+		t.Fatalf("Operations=%d want completed operations 2", phase.Operations)
+	}
+	if phase.DriverCalls != 2 {
+		t.Fatalf("DriverCalls=%d want 2", phase.DriverCalls)
+	}
+}
+
+func TestRunLoadBatchesCancelsInFlightBatchContext(t *testing.T) {
+	sentinel := errors.New("load failed")
+	releaseFailure := make(chan struct{})
+	started := make(chan int, 2)
+	done := make(chan error, 1)
+	go func() {
+		done <- runLoadBatches(
+			context.Background(),
+			[]loadBatch{{start: 0, end: 1}, {start: 1, end: 2}},
+			2,
+			func(ctx context.Context, producer, start, end int) error {
+				started <- start
+				if start == 0 {
+					<-releaseFailure
+					return sentinel
+				}
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(2 * time.Second):
+					return errors.New("in-flight batch context was not canceled")
+				}
+			},
+			func(producer, operations int, duration time.Duration) {},
+			func(producer int, duration time.Duration) {},
+		)
+	}()
+	seen := map[int]bool{}
+	for len(seen) < 2 {
+		select {
+		case start := <-started:
+			seen[start] = true
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for both batches to start; seen=%v", seen)
+		}
+	}
+	close(releaseFailure)
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for runLoadBatches to return after failure")
+	}
+	if err == nil {
+		t.Fatal("runLoadBatches returned nil before failure released")
+	}
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("err=%v want sentinel", err)
+	}
+}
+
+func TestMongoPoolStatsCapsCheckoutSamples(t *testing.T) {
+	stats := newMongoPoolStats()
+	total := maxMongoPoolCheckoutDurationSamples + 3
+	for i := 0; i < total; i++ {
+		stats.record(&event.PoolEvent{Type: event.ConnectionCheckedOut, Duration: time.Microsecond})
+	}
+	snapshot := stats.Snapshot()
+	if snapshot.ConnectionCheckedOut != int64(total) {
+		t.Fatalf("ConnectionCheckedOut=%d want %d", snapshot.ConnectionCheckedOut, total)
+	}
+	if snapshot.CheckoutSamples != int64(maxMongoPoolCheckoutDurationSamples) {
+		t.Fatalf("CheckoutSamples=%d want %d", snapshot.CheckoutSamples, maxMongoPoolCheckoutDurationSamples)
+	}
+	if snapshot.CheckoutSamplesDropped != 3 {
+		t.Fatalf("CheckoutSamplesDropped=%d want 3", snapshot.CheckoutSamplesDropped)
+	}
+	if snapshot.CheckoutMeanLatencyMicros != 1 {
+		t.Fatalf("CheckoutMeanLatencyMicros=%f want 1", snapshot.CheckoutMeanLatencyMicros)
+	}
+}
+
 func TestWriteResultSupportsGenericWriter(t *testing.T) {
 	result := &benchmarkResult{
 		Target:           "treedb",
 		Database:         "bench",
 		Collection:       "docs",
 		Documents:        1,
+		BatchSize:        1,
+		InsertProducers:  2,
 		SecondaryIndexes: 1,
 		Phases: []phaseResult{{
 			Name:           "load_insert_many",
@@ -631,6 +844,13 @@ func TestWriteResultSupportsGenericWriter(t *testing.T) {
 			DriverCalls:    1,
 			DurationMillis: 1,
 			OpsPerSecond:   1000,
+			ProducerResults: []producerResult{{
+				Producer:       0,
+				Operations:     1,
+				DriverCalls:    1,
+				DurationMillis: 1,
+				OpsPerSecond:   1000,
+			}},
 		}},
 	}
 	var out bytes.Buffer
@@ -639,6 +859,9 @@ func TestWriteResultSupportsGenericWriter(t *testing.T) {
 	}
 	if !bytes.Contains(out.Bytes(), []byte("target=treedb")) {
 		t.Fatalf("text output missing target: %q", out.String())
+	}
+	if !bytes.Contains(out.Bytes(), []byte("insert_producers=2")) || !bytes.Contains(out.Bytes(), []byte("producer=0")) {
+		t.Fatalf("text output missing producer metadata: %q", out.String())
 	}
 }
 
