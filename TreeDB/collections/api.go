@@ -3023,6 +3023,9 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	if combiner := c.updateCombiner(); combiner != nil {
 		return combiner.update(c, documentID, update)
 	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return false, false, err
+	}
 	return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
 }
 
@@ -3237,6 +3240,9 @@ func (domain *collectionWriteDomain) stopUpdateCombiner() {
 
 func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
 	if combiner == nil || combiner.maxBatch <= 1 {
+		if err := c.ensureWriteDomainOpen(); err != nil {
+			return false, false, err
+		}
 		return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
 	}
 	done := make(chan collectionUpdateCombineResult, 1)
@@ -3251,6 +3257,9 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 	if !combiner.enqueue(req) {
 		// Combining is a best-effort throughput optimization. Saturated or stopped
 		// combiners fall back to the direct path so updates still make progress.
+		if err := c.ensureWriteDomainOpen(); err != nil {
+			return false, false, err
+		}
 		return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
 	}
 	result := combiner.waitForUpdateResult(done)
