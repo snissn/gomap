@@ -37,9 +37,8 @@ const (
 	// batches use the indexed write-domain memtable path by default.
 	DefaultIndexedWriteMemtableDirectBatchDocuments = DefaultIndexedWriteMemtableMaxDocuments / 4
 	defaultCollectionUpdateCombineMaxBatch          = 256
+	collectionUpdateCombineIdleTTL                  = 30 * time.Second
 )
-
-var collectionUpdateCombineIdleTTL = 30 * time.Second
 
 var (
 	ErrCollectionNotFound  = errors.New("collections: collection not found")
@@ -405,7 +404,7 @@ func (m *CollectionManager) closeForBackend() error {
 }
 
 func (m *CollectionManager) isClosing() bool {
-	return m == nil || m.closing.Load() || m.db == nil || m.db.IsClosing()
+	return m.closing.Load() || m.db == nil || m.db.IsClosing()
 }
 
 func (m *CollectionManager) stopUpdateCombiners() {
@@ -645,7 +644,7 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 }
 
 func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Collection, bool) {
-	if m.isClosing() {
+	if m == nil || m.isClosing() {
 		return nil, false
 	}
 	state := m.db.State()
@@ -2681,7 +2680,7 @@ func (c *Collection) validateInsertBatchPlanWithSnapshotLocked(validation insert
 	for _, rootName := range validation.rootNames {
 		want, ok := validation.baseRootIDs[rootName]
 		if !ok {
-			return fmt.Errorf("collections: insert plan missing base root id for collection %q root %q", validation.meta.Name, rootName)
+			return fmt.Errorf("collections: insert plan missing base root id collection=%q root=%q", validation.meta.Name, rootName)
 		}
 		if got := validation.catalog.rootID(rootName); got != want {
 			return errConcurrentRootModification(validation.meta.Name, rootName)
@@ -3038,9 +3037,9 @@ func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, 
 }
 
 // UpdateBatchIfNoSecondaryUniqueIndexes applies UpdateBatch only when the
-// collection has no secondary unique indexes in the mutation-locked catalog.
-// It reports batched=false without applying updates if a unique secondary index
-// is present so callers can preserve ordered per-document update semantics. When
+// collection has no secondary unique indexes in the planning snapshot. It
+// reports batched=false without applying updates if a unique secondary index is
+// present so callers can preserve ordered per-document update semantics. When
 // batched=false and err=nil, the returned results are zero-valued with len(items).
 func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
 	return c.updateBatch(items, true)
@@ -3113,11 +3112,11 @@ type collectionUpdateCombiner struct {
 }
 
 type collectionUpdateCombineRequest struct {
-	collection  *Collection
-	documentID  []byte
-	documentKey string
-	update      func(current []byte) (replacement []byte, changed bool, err error)
-	done        chan collectionUpdateCombineResult
+	collection   *Collection
+	documentID   []byte
+	documentHash uint64
+	update       func(current []byte) (replacement []byte, changed bool, err error)
+	done         chan collectionUpdateCombineResult
 }
 
 type collectionUpdateCombineResult struct {
@@ -3182,12 +3181,13 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 		return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
 	}
 	done := make(chan collectionUpdateCombineResult, 1)
+	clonedDocumentID := bytes.Clone(documentID)
 	req := collectionUpdateCombineRequest{
-		collection:  c,
-		documentID:  bytes.Clone(documentID),
-		documentKey: string(documentID),
-		update:      update,
-		done:        done,
+		collection:   c,
+		documentID:   clonedDocumentID,
+		documentHash: xxhash.Sum64(clonedDocumentID),
+		update:       update,
+		done:         done,
 	}
 	if !combiner.enqueue(req) {
 		return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
@@ -3376,8 +3376,17 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 			Update:     recoverCollectionUpdateCallback(req.update),
 		}
 	}
-	results, err := batch[0].collection.UpdateBatch(items)
+	results, batched, err := batch[0].collection.UpdateBatchIfNoSecondaryUniqueIndexes(items)
+	if !batched && err == nil {
+		for _, req := range batch {
+			completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+		}
+		return
+	}
 	if err != nil {
+		if completeUpdateCombineBatchWithItemFallback(batch, err) {
+			return
+		}
 		completeUpdateCombineBatchWithError(batch, err)
 		return
 	}
@@ -3426,6 +3435,28 @@ func completeUpdateCombineBatchWithError(batch []collectionUpdateCombineRequest,
 	}
 }
 
+func completeUpdateCombineBatchWithItemFallback(batch []collectionUpdateCombineRequest, err error) bool {
+	var itemErr *UpdateBatchItemError
+	if !errors.As(err, &itemErr) {
+		return false
+	}
+	if itemErr.Index < 0 || itemErr.Index >= len(batch) {
+		return false
+	}
+	for i, req := range batch {
+		if i == itemErr.Index {
+			reqErr := itemErr.Err
+			if reqErr == nil {
+				reqErr = err
+			}
+			completeUpdateCombineRequest(req, collectionUpdateCombineResult{err: reqErr})
+			continue
+		}
+		completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+	}
+	return true
+}
+
 func completeUpdateCombineRequest(req collectionUpdateCombineRequest, result collectionUpdateCombineResult) {
 	if req.done == nil {
 		return
@@ -3440,16 +3471,19 @@ func collectionUpdateCombineHasDuplicateIDs(batch []collectionUpdateCombineReque
 	if len(batch) < 2 {
 		return false
 	}
-	seen := make(map[string]struct{}, len(batch))
+	seen := make(map[uint64][][]byte, len(batch))
 	for _, req := range batch {
-		key := req.documentKey
-		if key == "" {
-			key = string(req.documentID)
+		hash := req.documentHash
+		if hash == 0 && len(req.documentID) > 0 {
+			hash = xxhash.Sum64(req.documentID)
 		}
-		if _, ok := seen[key]; ok {
-			return true
+		candidates := seen[hash]
+		for _, candidate := range candidates {
+			if bytes.Equal(candidate, req.documentID) {
+				return true
+			}
 		}
-		seen[key] = struct{}{}
+		seen[hash] = append(candidates, req.documentID)
 	}
 	return false
 }
@@ -3487,6 +3521,9 @@ func validateBSONReplacementPreservesID(current, replacement []byte, opts collec
 }
 
 func waitBeforeCollectionMutationRetry(attempt int) {
+	if attempt+1 >= maxCollectionMutationRetries {
+		return
+	}
 	if attempt < 4 {
 		runtime.Gosched()
 		return
@@ -3767,22 +3804,10 @@ func (plan *updateBatchPlan) close() {
 }
 
 func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondaryUniqueIndexes bool) ([]UpdateBatchResult, error) {
-	hasUnique := false
 	if err := c.withMutationLock(func() error {
-		if err := c.flushBufferedWrites(); err != nil {
-			return err
-		}
-		if !requireNoSecondaryUniqueIndexes {
-			return nil
-		}
-		var err error
-		hasUnique, err = c.hasSecondaryUniqueIndexLocked()
-		return err
+		return c.flushBufferedWrites()
 	}); err != nil {
 		return nil, err
-	}
-	if hasUnique {
-		return nil, errUpdateBatchHasSecondaryUniqueIndex
 	}
 
 	plan, err := c.buildUpdateBatchPlan(items, requireNoSecondaryUniqueIndexes)
@@ -3798,6 +3823,8 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondary
 			if err := c.flushBufferedWrites(); err != nil {
 				return err
 			}
+			// validateMutationRootDescriptors does not consult c.meta; refresh
+			// the handle metadata only after the planned root snapshot is still current.
 			if err := c.validateMutationRootDescriptors(plan.baseUserRoot, plan.baseSystemRoot, plan.baseCommitSeq); err != nil {
 				return err
 			}
@@ -3825,22 +3852,6 @@ func (c *Collection) withMutationLock(fn func() error) error {
 	unlockMutation := c.lockMutation()
 	defer unlockMutation()
 	return fn()
-}
-
-func (c *Collection) hasSecondaryUniqueIndexLocked() (bool, error) {
-	snap := c.db.AcquireSnapshot()
-	if snap == nil {
-		return false, backenddb.ErrClosed
-	}
-	defer func() { _ = snap.Close() }()
-	catalog, err := c.catalogForSnapshot(snap)
-	if err != nil {
-		return false, err
-	}
-	if catalog == nil {
-		return false, errCollectionNotFound
-	}
-	return collectionMetaHasSecondaryUniqueIndex(catalog.meta), nil
 }
 
 func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, requireNoSecondaryUniqueIndexes bool) (*updateBatchPlan, error) {

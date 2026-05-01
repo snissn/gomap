@@ -2,7 +2,7 @@ package db
 
 import "time"
 
-const maxDurationNanos = uint64(1<<63 - 1)
+const maxDurationNs = uint64(1<<63 - 1)
 
 var publishWatermarkLatencyBucketUpperBounds = [...]time.Duration{
 	50 * time.Microsecond,
@@ -65,9 +65,9 @@ func estimatePublishWatermarkPercentile(buckets [publishWatermarkLatencyBucketCo
 	return publishWatermarkLatencyBucketUpperBounds[len(publishWatermarkLatencyBucketUpperBounds)-1] + time.Nanosecond
 }
 
-func durationFromUint64Nanos(ns uint64) time.Duration {
-	if ns > maxDurationNanos {
-		return time.Duration(maxDurationNanos)
+func durationFromUint64Ns(ns uint64) time.Duration {
+	if ns > maxDurationNs {
+		return time.Duration(maxDurationNs)
 	}
 	return time.Duration(ns)
 }
@@ -125,7 +125,7 @@ func (db *DB) publishWatermarkStats() (lockDelaySharePct float64, latencyP99Ms f
 	p99 := estimatePublishWatermarkPercentile(buckets, samples, 0.99)
 	if p99 <= 0 {
 		if maxNs := db.publishWatermarkLatencyMaxNs.Load(); maxNs > 0 {
-			p99 = durationFromUint64Nanos(maxNs)
+			p99 = durationFromUint64Ns(maxNs)
 		}
 	}
 	latencyP99Ms = float64(p99) / float64(time.Millisecond)
@@ -161,10 +161,10 @@ func (db *DB) observeOrderedRootDeltaGroupPublish(wait, hold time.Duration, root
 	waitNs := uint64(wait.Nanoseconds())
 	holdNs := uint64(hold.Nanoseconds())
 	latNs := waitNs + holdNs
-	if waitNs > maxDurationNanos-holdNs {
-		latNs = maxDurationNanos
+	if waitNs > maxDurationNs-holdNs {
+		latNs = maxDurationNs
 	}
-	latency := durationFromUint64Nanos(latNs)
+	latency := durationFromUint64Ns(latNs)
 
 	db.orderedRootDeltaGroupCalls.Add(1)
 	if err != nil {
@@ -197,7 +197,7 @@ func (db *DB) orderedRootDeltaGroupPublishStats() orderedRootDeltaGroupPublishSt
 		roots:       roots,
 		waitTotalNs: waitNs,
 		holdTotalNs: holdNs,
-		latencyMax:  durationFromUint64Nanos(db.orderedRootDeltaGroupLatencyMaxNs.Load()),
+		latencyMax:  durationFromUint64Ns(db.orderedRootDeltaGroupLatencyMaxNs.Load()),
 	}
 	if calls > 0 {
 		stats.avgRootsPerCall = float64(roots) / float64(calls)

@@ -2396,15 +2396,25 @@ var selectedTreeDBStatKeys = [...]string{
 	"treedb.publish.watermark.latency_p99_ms",
 }
 
+var warnMissingTreeDBStatKeysOnce sync.Once
+
 func selectedTreeDBStats(stats map[string]string) map[string]string {
 	if len(stats) == 0 {
 		return nil
 	}
 	out := make(map[string]string, len(selectedTreeDBStatKeys))
+	missing := make([]string, 0)
 	for _, key := range selectedTreeDBStatKeys {
 		if value, ok := stats[key]; ok {
 			out[key] = value
+			continue
 		}
+		missing = append(missing, key)
+	}
+	if len(missing) > 0 {
+		warnMissingTreeDBStatKeysOnce.Do(func() {
+			fmt.Fprintf(os.Stderr, "warning: benchmark expected TreeDB stats missing from DB.Stats(): %s\n", strings.Join(missing, ", "))
+		})
 	}
 	if len(out) == 0 {
 		return nil
