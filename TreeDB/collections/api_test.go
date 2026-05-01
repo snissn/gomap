@@ -2569,6 +2569,7 @@ func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
 	domain.rootRuns = map[string][]memtable.Table{collectionPrimaryRootName("other"): nil}
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
+	domain.primaryRunIndex = newBufferedPrimaryRunIndex(1)
 	domain.uniqueValueRuns = nil
 
 	rollbackBufferedIndexedDomain(domain, checkpoint)
@@ -2584,8 +2585,30 @@ func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
 	if _, ok := domain.rootRuns[collectionPrimaryRootName("users")]; !ok {
 		t.Fatalf("rootRuns=%v missing users primary root", domain.rootRuns)
 	}
+	if domain.primaryRunIndex != nil {
+		t.Fatal("rollback rebuilt lazy primary run index that was absent at checkpoint")
+	}
 	if _, ok := domain.uniqueValueRuns[collectionSecondaryRootName("users", "email")]; !ok {
 		t.Fatalf("uniqueValueRuns=%v missing users email root", domain.uniqueValueRuns)
+	}
+}
+
+func TestHasBufferedPrimaryRootRunsIgnoresSecondaryOnlyRuns(t *testing.T) {
+	domain := &collectionWriteDomain{
+		meta: CollectionMeta{Name: "users"},
+		rootRuns: map[string][]memtable.Table{
+			collectionSecondaryRootName("users", "email"): {newCollectionRunTable(0)},
+		},
+	}
+	if hasBufferedPrimaryRootRuns(domain, "users") {
+		t.Fatal("secondary-only buffered runs reported primary runs")
+	}
+	domain.rootRuns[collectionPrimaryRootName("users")] = []memtable.Table{newCollectionRunTable(0)}
+	if !hasBufferedPrimaryRootRuns(domain, "users") {
+		t.Fatal("primary buffered run not detected")
+	}
+	for _, tables := range domain.rootRuns {
+		resetCollectionTables(tables)
 	}
 }
 

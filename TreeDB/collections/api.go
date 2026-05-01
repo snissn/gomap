@@ -357,19 +357,20 @@ type noIndexBatchEntry struct {
 }
 
 type bufferedIndexedCheckpoint struct {
-	loaded          bool
-	meta            CollectionMeta
-	catalog         *collectionCatalog
-	baseCommitSeq   uint64
-	baseSystemRoot  uint64
-	primaryRoot     uint64
-	count           int
-	bufferedBytes   int64
-	writeGeneration uint64
-	rootRuns        map[string][]memtable.Table
-	rootPolicies    map[string]backenddb.OrderedRootStoragePolicy
-	rootBaseIDs     map[string]uint64
-	uniqueValueRuns map[string][]memtable.Table
+	loaded                bool
+	meta                  CollectionMeta
+	catalog               *collectionCatalog
+	baseCommitSeq         uint64
+	baseSystemRoot        uint64
+	primaryRoot           uint64
+	count                 int
+	bufferedBytes         int64
+	writeGeneration       uint64
+	rootRuns              map[string][]memtable.Table
+	rootPolicies          map[string]backenddb.OrderedRootStoragePolicy
+	rootBaseIDs           map[string]uint64
+	primaryRunIndexActive bool
+	uniqueValueRuns       map[string][]memtable.Table
 }
 
 type bufferedUniqueValueIndex struct {
@@ -1552,19 +1553,20 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		return bufferedIndexedCheckpoint{}
 	}
 	return bufferedIndexedCheckpoint{
-		loaded:          domain.loaded,
-		meta:            domain.meta,
-		catalog:         domain.catalog,
-		baseCommitSeq:   domain.baseCommitSeq,
-		baseSystemRoot:  domain.baseSystemRoot,
-		primaryRoot:     domain.primaryRoot,
-		count:           domain.count,
-		bufferedBytes:   domain.bufferedBytes,
-		writeGeneration: domain.writeGeneration,
-		rootRuns:        cloneTableRunMap(domain.rootRuns),
-		rootPolicies:    cloneRootPolicyMap(domain.rootPolicies),
-		rootBaseIDs:     cloneUint64Map(domain.rootBaseIDs),
-		uniqueValueRuns: cloneTableRunMap(domain.uniqueValueRuns),
+		loaded:                domain.loaded,
+		meta:                  domain.meta,
+		catalog:               domain.catalog,
+		baseCommitSeq:         domain.baseCommitSeq,
+		baseSystemRoot:        domain.baseSystemRoot,
+		primaryRoot:           domain.primaryRoot,
+		count:                 domain.count,
+		bufferedBytes:         domain.bufferedBytes,
+		writeGeneration:       domain.writeGeneration,
+		rootRuns:              cloneTableRunMap(domain.rootRuns),
+		rootPolicies:          cloneRootPolicyMap(domain.rootPolicies),
+		rootBaseIDs:           cloneUint64Map(domain.rootBaseIDs),
+		primaryRunIndexActive: domain.primaryRunIndex != nil,
+		uniqueValueRuns:       cloneTableRunMap(domain.uniqueValueRuns),
 	}
 }
 
@@ -1587,7 +1589,11 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.rootPolicies = checkpoint.rootPolicies
 	domain.rootBaseIDs = checkpoint.rootBaseIDs
 	domain.primaryIDIndex = rebuildBufferedPrimaryIDIndex(checkpoint.meta.Name, checkpoint.rootRuns)
-	domain.primaryRunIndex = rebuildBufferedPrimaryRunIndex(checkpoint.meta.Name, checkpoint.rootRuns)
+	if checkpoint.primaryRunIndexActive {
+		domain.primaryRunIndex = rebuildBufferedPrimaryRunIndex(checkpoint.meta.Name, checkpoint.rootRuns)
+	} else {
+		domain.primaryRunIndex = nil
+	}
 	domain.uniqueValueRuns = checkpoint.uniqueValueRuns
 	domain.uniqueValueIndex = rebuildBufferedUniqueValueIndexes(checkpoint.uniqueValueRuns)
 }
@@ -5887,7 +5893,7 @@ func (c *Collection) getBufferedDocumentInto(documentID []byte, dst []byte) ([]b
 		domain.mu.RUnlock()
 		return nil, false, false
 	}
-	if len(domain.rootRuns) > 0 && domain.primaryRunIndex == nil {
+	if domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, c.meta.Name) {
 		domain.mu.RUnlock()
 		return c.getBufferedDocumentIntoWithPrimaryRunIndex(documentID, dst)
 	}
@@ -5903,16 +5909,31 @@ func (c *Collection) getBufferedDocumentIntoWithPrimaryRunIndex(documentID []byt
 	if domain.count == 0 {
 		return nil, false, false
 	}
-	if len(domain.rootRuns) > 0 && domain.primaryRunIndex == nil {
-		collectionName := domain.meta.Name
-		if collectionName == "" {
-			collectionName = c.meta.Name
-		}
+	if domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, c.meta.Name) {
+		collectionName := bufferedDomainCollectionName(domain, c.meta.Name)
 		if index := rebuildBufferedPrimaryRunIndex(collectionName, domain.rootRuns); index != nil {
 			domain.primaryRunIndex = index
 		}
 	}
 	return c.getBufferedDocumentIntoLocked(domain, documentID, dst)
+}
+
+func bufferedDomainCollectionName(domain *collectionWriteDomain, fallback string) string {
+	if domain != nil && domain.meta.Name != "" {
+		return domain.meta.Name
+	}
+	return fallback
+}
+
+func hasBufferedPrimaryRootRuns(domain *collectionWriteDomain, fallbackCollectionName string) bool {
+	if domain == nil || len(domain.rootRuns) == 0 {
+		return false
+	}
+	collectionName := bufferedDomainCollectionName(domain, fallbackCollectionName)
+	if collectionName == "" {
+		return false
+	}
+	return len(domain.rootRuns[collectionPrimaryRootName(collectionName)]) > 0
 }
 
 func (c *Collection) getBufferedDocumentIntoLocked(domain *collectionWriteDomain, documentID []byte, dst []byte) ([]byte, bool, bool) {
