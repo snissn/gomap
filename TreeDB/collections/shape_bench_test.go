@@ -9,12 +9,61 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 const (
 	defaultCollectionMixedSeedDocs       = 4096
 	defaultCollectionMixedWriteBatchSize = 128
 )
+
+type collectionMixedScaleCase struct {
+	readers int
+	writers int
+}
+
+func openBenchmarkCollectionWithManager(b *testing.B, name string, indexes ...collections.IndexDefinition) (*backenddb.DB, *collections.CollectionManager, *collections.Collection) {
+	b.Helper()
+
+	backend, cleanup := openBenchmarkBackend(b, b.TempDir())
+	b.Cleanup(func() {
+		if err := cleanup(); err != nil {
+			b.Errorf("close backend: %v", err)
+		}
+	})
+
+	manager := collections.NewCollectionManager(backend)
+	dataOuter, indexOuter := benchmarkCollectionStoragePolicy(b)
+	documentFormat := benchmarkCollectionDocumentFormat(b)
+	bufferedIndexedWrites := benchmarkBoolEnv(b, "TREEDB_COLLECTION_BUFFERED_INDEXED_WRITES", true) && len(indexes) > 0
+	bufferedIndexedWriteMaxDocuments := benchmarkIntEnv(b, "TREEDB_COLLECTION_BUFFERED_INDEXED_WRITE_MAX_DOCUMENTS", 0)
+	bufferedIndexedWriteMaxBytes := benchmarkInt64Env(b, "TREEDB_COLLECTION_BUFFERED_INDEXED_WRITE_MAX_BYTES", 0)
+	indexes = append([]collections.IndexDefinition(nil), indexes...)
+	for i := range indexes {
+		indexes[i].StoragePolicy = benchmarkRootStoragePolicy(indexOuter)
+	}
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{
+		Name: name,
+		Options: collections.CollectionOptions{
+			DocumentFormat:                   documentFormat,
+			DataRootStoragePolicy:            benchmarkRootStoragePolicy(dataOuter),
+			IndexStateStoragePolicy:          benchmarkRootStoragePolicy(dataOuter),
+			DisableIndexedWriteMemtables:     !bufferedIndexedWrites && len(indexes) > 0,
+			BufferedIndexedWrites:            bufferedIndexedWrites,
+			BufferedIndexedWriteMaxDocuments: bufferedIndexedWriteMaxDocuments,
+			BufferedIndexedWriteMaxBytes:     bufferedIndexedWriteMaxBytes,
+		},
+		Indexes: indexes,
+	}); err != nil {
+		b.Fatalf("create collection: %v", err)
+	}
+	collection, err := manager.OpenCollection(name)
+	if err != nil {
+		b.Fatalf("open collection: %v", err)
+	}
+	return backend, manager, collection
+}
 
 func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collections.CollectionInsertStats) {
 	dst.Documents += src.Documents
@@ -408,6 +457,9 @@ func benchmarkCollectionMixedReadWrite(b *testing.B, secondaryRead bool) {
 		seedDocs = defaultCollectionMixedSeedDocs
 	}
 	ids := seedBenchmarkCollection(b, seedCollection, 0, seedDocs, true)
+	if err := seedCollection.Flush(); err != nil {
+		b.Fatalf("flush mixed seed collection: %v", err)
+	}
 	benchmarkSyncBoundary(b, backend)
 
 	manager := collections.NewCollectionManager(backend)
@@ -546,4 +598,232 @@ func BenchmarkCollectionMixedReadWritePrimary(b *testing.B) {
 
 func BenchmarkCollectionMixedReadWriteSecondaryUnique(b *testing.B) {
 	benchmarkCollectionMixedReadWrite(b, true)
+}
+
+func benchmarkCollectionMixedReadWriteScaling(b *testing.B, readers, writers int, secondaryRead bool) {
+	if readers <= 0 {
+		readers = 1
+	}
+	if writers <= 0 {
+		writers = 1
+	}
+	indexes := collectionShapeIndexes(2)
+	collectionName := fmt.Sprintf("bench_shape_mixed_scaling_r%d_w%d", readers, writers)
+	backend, manager, seedCollection := openBenchmarkCollectionWithManager(b, collectionName, indexes...)
+	seedDocs := benchmarkIntEnv(b, "TREEDB_COLLECTION_MIXED_SEED_DOCS", defaultCollectionMixedSeedDocs)
+	if seedDocs <= 0 {
+		seedDocs = defaultCollectionMixedSeedDocs
+	}
+	ids := seedBenchmarkCollection(b, seedCollection, 0, seedDocs, true)
+	if err := seedCollection.Flush(); err != nil {
+		b.Fatalf("flush mixed scaling seed collection: %v", err)
+	}
+	benchmarkSyncBoundary(b, backend)
+
+	readerCollections := make([]*collections.Collection, readers)
+	for i := range readerCollections {
+		var err error
+		readerCollections[i], err = manager.OpenCollection(collectionName)
+		if err != nil {
+			b.Fatalf("open mixed scaling reader collection: %v", err)
+		}
+	}
+	writerCollections := make([]*collections.Collection, writers)
+	for i := range writerCollections {
+		var err error
+		writerCollections[i], err = manager.OpenCollection(collectionName)
+		if err != nil {
+			b.Fatalf("open mixed scaling writer collection: %v", err)
+		}
+	}
+
+	writeBatchSize := benchmarkIntEnv(b, "TREEDB_COLLECTION_MIXED_WRITE_BATCH_SIZE", defaultCollectionMixedWriteBatchSize)
+	if writeBatchSize <= 0 {
+		writeBatchSize = defaultCollectionMixedWriteBatchSize
+	}
+	if maxBatch := benchmarkBatchSize(b); writeBatchSize > maxBatch {
+		writeBatchSize = maxBatch
+	}
+
+	var stop atomic.Bool
+	var writerDocs atomic.Uint64
+	errCh := make(chan error, readers+writers)
+	startCh := make(chan struct{})
+	var readerWG sync.WaitGroup
+	var writerWG sync.WaitGroup
+	documentFormat := benchmarkCollectionDocumentFormat(b)
+
+	writeDocumentBatch := func(start, count int, encoder *collections.TemplateV1Encoder) ([][]byte, [][]byte, error) {
+		ids := make([][]byte, count)
+		docs := make([][]byte, count)
+		for i := 0; i < count; i++ {
+			docNum := start + i
+			ids[i] = benchmarkDocumentID(docNum)
+			switch documentFormat {
+			case collections.DocumentFormatTemplateV1:
+				doc, err := encoder.EncodeDocument(
+					[]string{"name", "email", "city", "pad"},
+					[]any{
+						fmt.Sprintf("user-%09d", docNum),
+						fmt.Sprintf("user-%09d@example.com", docNum),
+						fmt.Sprintf("city-%02d", docNum%collectionBenchCities),
+						collectionBenchIndexedPad,
+					},
+				)
+				if err != nil {
+					return nil, nil, err
+				}
+				docs[i] = doc
+			case collections.DocumentFormatBSON:
+				raw, err := bson.Marshal(bson.D{
+					{Key: "name", Value: fmt.Sprintf("user-%09d", docNum)},
+					{Key: "email", Value: fmt.Sprintf("user-%09d@example.com", docNum)},
+					{Key: "city", Value: fmt.Sprintf("city-%02d", docNum%collectionBenchCities)},
+					{Key: "pad", Value: collectionBenchIndexedPad},
+				})
+				if err != nil {
+					return nil, nil, err
+				}
+				docs[i] = raw
+			default:
+				docs[i] = benchmarkIndexedDocument(docNum)
+			}
+		}
+		return ids, docs, nil
+	}
+
+	for writerID := 0; writerID < writers; writerID++ {
+		writerID := writerID
+		writerCollection := writerCollections[writerID]
+		writerWG.Add(1)
+		go func() {
+			defer writerWG.Done()
+			<-startCh
+			var templateEncoder collections.TemplateV1Encoder
+			for next := 1_000_000 + writerID*100_000_000; !stop.Load(); next += writeBatchSize {
+				ids, docs, err := writeDocumentBatch(next, writeBatchSize, &templateEncoder)
+				if err != nil {
+					select {
+					case errCh <- err:
+					default:
+					}
+					return
+				}
+				if _, err := writerCollection.InsertBatch(ids, docs); err != nil {
+					select {
+					case errCh <- err:
+					default:
+					}
+					return
+				}
+				writerDocs.Add(uint64(writeBatchSize))
+			}
+		}()
+	}
+
+	readerStride := max(1, runtime.GOMAXPROCS(0))
+	b.ReportAllocs()
+	b.ReportMetric(float64(readers), "readers")
+	b.ReportMetric(float64(writers), "writers")
+	b.ReportMetric(float64(seedDocs), "seed_docs")
+	b.ReportMetric(float64(writeBatchSize), "writer_docs/batch")
+	b.ResetTimer()
+	start := time.Now()
+	close(startCh)
+
+	readBase := b.N / readers
+	readRemainder := b.N % readers
+	for readerID := 0; readerID < readers; readerID++ {
+		readerID := readerID
+		readOps := readBase
+		if readerID < readRemainder {
+			readOps++
+		}
+		readerCollection := readerCollections[readerID]
+		readerWG.Add(1)
+		go func() {
+			defer readerWG.Done()
+			if secondaryRead {
+				i := (readerID * max(1, seedDocs/readers)) % seedDocs
+				for op := 0; op < readOps; op++ {
+					email := fmt.Sprintf("user-%09d@example.com", i%seedDocs)
+					if _, err := readerCollection.FindByIndex("email_idx", email); err != nil {
+						select {
+						case errCh <- err:
+						default:
+						}
+						return
+					}
+					i += readerStride
+				}
+				return
+			}
+			i := (readerID * max(1, len(ids)/readers)) % len(ids)
+			for op := 0; op < readOps; op++ {
+				if _, err := readerCollection.Get(ids[i%len(ids)]); err != nil {
+					select {
+					case errCh <- err:
+					default:
+					}
+					return
+				}
+				i += readerStride
+			}
+		}()
+	}
+
+	readerWG.Wait()
+	readerElapsed := time.Since(start)
+	b.StopTimer()
+	stop.Store(true)
+	writerWG.Wait()
+	writerElapsed := time.Since(start)
+	flushStart := time.Now()
+	for _, writerCollection := range writerCollections {
+		if err := writerCollection.Flush(); err != nil {
+			b.Fatalf("flush mixed scaling writer: %v", err)
+		}
+	}
+	if err := manager.FlushAll(); err != nil {
+		b.Fatalf("flush mixed scaling manager: %v", err)
+	}
+	flushElapsed := time.Since(flushStart)
+	select {
+	case err := <-errCh:
+		b.Fatalf("mixed scaling benchmark: %v", err)
+	default:
+	}
+	if readerElapsed > 0 {
+		b.ReportMetric(float64(b.N)/readerElapsed.Seconds(), "reader_ops/sec")
+	}
+	if writerElapsed > 0 {
+		b.ReportMetric(float64(writerDocs.Load())/writerElapsed.Seconds(), "writer_docs/sec")
+	}
+	if docs := writerDocs.Load(); docs > 0 && flushElapsed > 0 {
+		b.ReportMetric(float64(flushElapsed.Nanoseconds())/float64(docs), "writer_flush_ns/doc")
+	}
+}
+
+func BenchmarkCollectionMixedReadWriteScalingPrimary(b *testing.B) {
+	for _, tc := range []collectionMixedScaleCase{
+		{readers: 1, writers: 1},
+		{readers: 4, writers: 1},
+		{readers: 8, writers: 2},
+	} {
+		b.Run(fmt.Sprintf("readers_%d/writers_%d", tc.readers, tc.writers), func(b *testing.B) {
+			benchmarkCollectionMixedReadWriteScaling(b, tc.readers, tc.writers, false)
+		})
+	}
+}
+
+func BenchmarkCollectionMixedReadWriteScalingSecondaryUnique(b *testing.B) {
+	for _, tc := range []collectionMixedScaleCase{
+		{readers: 1, writers: 1},
+		{readers: 4, writers: 1},
+		{readers: 8, writers: 2},
+	} {
+		b.Run(fmt.Sprintf("readers_%d/writers_%d", tc.readers, tc.writers), func(b *testing.B) {
+			benchmarkCollectionMixedReadWriteScaling(b, tc.readers, tc.writers, true)
+		})
+	}
 }
