@@ -962,10 +962,10 @@ func createIndexes(ctx context.Context, coll *mongo.Collection, secondaryIndexes
 
 func runLoadPhase(ctx context.Context, cfg config, target *benchTarget, coll *mongo.Collection, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
 	if cfg.Target == "treedb" && cfg.ClientMode == clientModeRawWire {
-		return runTreeDBRawWireLoadPhase(cfg, target, prebuilt, prebuiltRaw)
+		return runTreeDBRawWireLoadPhase(ctx, cfg, target, prebuilt, prebuiltRaw)
 	}
 	if cfg.Target == "treedb" && cfg.ClientMode == clientModeRawWireTCP {
-		return runTreeDBRawWireTCPLoadPhase(cfg, target, prebuilt, prebuiltRaw)
+		return runTreeDBRawWireTCPLoadPhase(ctx, cfg, target, prebuilt, prebuiltRaw)
 	}
 	if cfg.ClientMode == clientModeDriverCommand {
 		return runDriverCommandLoadPhase(ctx, cfg, target.client.Database(cfg.Database), prebuilt, prebuiltRaw)
@@ -1152,7 +1152,7 @@ func waitForLoadVisible(ctx context.Context, cfg config, coll *mongo.Collection)
 	}
 }
 
-func runTreeDBRawWireLoadPhase(cfg config, target *benchTarget, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
+func runTreeDBRawWireLoadPhase(ctx context.Context, cfg config, target *benchTarget, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
 	if target == nil || target.server == nil {
 		return phaseResult{}, errors.New("raw-wire client mode requires an in-process TreeDB gateway server")
 	}
@@ -1168,6 +1168,9 @@ func runTreeDBRawWireLoadPhase(cfg config, target *benchTarget, prebuilt []bson.
 	var requestID int32
 	return measurePhase("load_insert_many", cfg.Documents, func(sample func(time.Duration)) error {
 		for start := 0; start < cfg.Documents; start += cfg.BatchSize {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			end := start + cfg.BatchSize
 			if end > cfg.Documents {
 				end = cfg.Documents
@@ -1197,22 +1200,28 @@ func runTreeDBRawWireLoadPhase(cfg config, target *benchTarget, prebuilt []bson.
 			if err != nil {
 				return err
 			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
 }
 
-func runTreeDBRawWireTCPLoadPhase(cfg config, target *benchTarget, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
+func runTreeDBRawWireTCPLoadPhase(ctx context.Context, cfg config, target *benchTarget, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
 	if target == nil || target.mongoAddr == "" {
 		return phaseResult{}, errors.New("raw-wire-tcp client mode requires a TreeDB gateway listener")
 	}
-	client, err := fastclient.Connect(context.Background(), target.mongoAddr)
+	client, err := fastclient.Connect(ctx, target.mongoAddr)
 	if err != nil {
 		return phaseResult{}, err
 	}
 	defer func() { _ = client.Close() }()
 	return measurePhase("load_insert_many", cfg.Documents, func(sample func(time.Duration)) error {
 		for start := 0; start < cfg.Documents; start += cfg.BatchSize {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			end := start + cfg.BatchSize
 			if end > cfg.Documents {
 				end = cfg.Documents
@@ -1222,7 +1231,7 @@ func runTreeDBRawWireTCPLoadPhase(cfg config, target *benchTarget, prebuilt []bs
 				return err
 			}
 			begin := time.Now()
-			_, err = client.InsertManyRawBSON(context.Background(), cfg.Database, cfg.Collection, docs)
+			_, err = client.InsertManyRawBSON(ctx, cfg.Database, cfg.Collection, docs)
 			sample(time.Since(begin))
 			if err != nil {
 				return err

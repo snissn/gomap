@@ -432,6 +432,45 @@ func TestTreeDBClientModeSmoke(t *testing.T) {
 	}
 }
 
+func TestTreeDBRawWireLoadPhaseHonorsCanceledContext(t *testing.T) {
+	for _, mode := range []string{clientModeRawWire, clientModeRawWireTCP} {
+		t.Run(mode, func(t *testing.T) {
+			cfg, err := parseConfig([]string{
+				"-target", "treedb",
+				"-client-mode", mode,
+				"-documents", "10",
+				"-batch-size", "5",
+				"-reads", "0",
+				"-range-reads", "0",
+				"-updates", "0",
+				"-secondary-indexes", "0",
+				"-treedb-maintenance", treeDBMaintenanceNone,
+				"-timeout", "0",
+			})
+			if err != nil {
+				t.Fatalf("parse raw-wire config: %v", err)
+			}
+			target, err := openTarget(context.Background(), cfg)
+			if err != nil {
+				t.Fatalf("open target: %v", err)
+			}
+			defer func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := closeBenchTarget(cleanupCtx, target); err != nil {
+					t.Errorf("cleanup: %v", err)
+				}
+			}()
+			canceledCtx, cancel := context.WithCancel(context.Background())
+			cancel()
+			_, err = runLoadPhase(canceledCtx, cfg, target, nil, nil, nil)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("runLoadPhase err=%v want context.Canceled", err)
+			}
+		})
+	}
+}
+
 func runTreeDBProfileSmoke(t *testing.T, profile treedb.Profile) float64 {
 	t.Helper()
 	cfg, err := parseConfig([]string{
