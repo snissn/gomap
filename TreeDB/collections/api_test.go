@@ -3175,18 +3175,26 @@ func TestCollectionUpdateBatchReplansAfterConcurrentCollectionMutation(t *testin
 		rightDone <- err
 	}()
 
+	concurrentUpdateWait := 10 * time.Second
+	if deadline, ok := t.Deadline(); ok {
+		if remaining := time.Until(deadline) - 500*time.Millisecond; remaining > 0 && remaining < concurrentUpdateWait {
+			concurrentUpdateWait = remaining
+		}
+	}
 	var callbackCalls atomic.Int32
 	results, err := left.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
 			if callbackCalls.Add(1) == 1 {
 				close(ready)
+				timer := time.NewTimer(concurrentUpdateWait)
+				defer timer.Stop()
 				select {
 				case err := <-rightDone:
 					if err != nil {
 						return nil, false, err
 					}
-				case <-time.After(2 * time.Second):
+				case <-timer.C:
 					return nil, false, errors.New("timed out waiting for concurrent update")
 				}
 			}
@@ -3217,6 +3225,74 @@ func TestCollectionUpdateBatchReplansAfterConcurrentCollectionMutation(t *testin
 			t.Fatalf("%s document=%s want %s", tc.id, got, tc.score)
 		}
 	}
+}
+
+func TestCollectionUpdateBatchFlushesBufferedIndexedWritesBeforePublish(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	left, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open left collection: %v", err)
+	}
+	right, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open right collection: %v", err)
+	}
+	if _, err := left.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl","score":0}`)},
+	); err != nil {
+		t.Fatalf("insert u1: %v", err)
+	}
+	if err := mgr.FlushAll(); err != nil {
+		t.Fatalf("flush initial indexed write: %v", err)
+	}
+
+	var staged atomic.Bool
+	results, err := left.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func([]byte) ([]byte, bool, error) {
+			if staged.CompareAndSwap(false, true) {
+				if _, err := right.InsertBatch(
+					[][]byte{[]byte("u2")},
+					[][]byte{[]byte(`{"city":"sfo","score":2}`)},
+				); err != nil {
+					return nil, false, err
+				}
+			}
+			return []byte(`{"city":"sea","score":1}`), true, nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("results=%+v want matched modified", results)
+	}
+	if err := mgr.FlushAll(); err != nil {
+		t.Fatalf("FlushAll after update with staged indexed write: %v", err)
+	}
+	seaIDs, err := left.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find sea: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, seaIDs, []byte("u1"))
+	sfoIDs, err := left.FindByIndex("city", "sfo")
+	if err != nil {
+		t.Fatalf("find sfo: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, sfoIDs, []byte("u2"))
 }
 
 func TestCollectionUpdateBatchBSONRejectsIDMutation(t *testing.T) {
