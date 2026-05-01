@@ -4064,7 +4064,7 @@ func (c *Collection) shouldPlanUpdateBatchWithBufferedWrites(mode updateBatchMod
 	return domain.count > 0 && len(domain.rootRuns) > 0
 }
 
-func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta CollectionMeta, baseCommitSeq, baseSystemRoot uint64) bool {
+func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64) bool {
 	if domain == nil || domain.count == 0 || len(domain.rootRuns) == 0 {
 		return false
 	}
@@ -4141,7 +4141,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	var bufferedRead updateBatchBufferedRead
 	if domain := c.writeDomain; useBufferedRead && domain != nil && mode != updateBatchModeAny {
 		domain.mu.RLock()
-		if updateBatchCanReadBufferedDomainLocked(domain, meta, baseCommitSeq, baseSystemRoot) {
+		if updateBatchCanReadBufferedDomainLocked(domain, meta, baseSystemRoot) {
 			bufferedRead = updateBatchBufferedRead{
 				enabled:     true,
 				primaryRuns: append([]memtable.Table(nil), domain.rootRuns[collectionPrimaryRootName(meta.Name)]...),
@@ -4503,7 +4503,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
 	if domain.count != 0 {
-		if !plan.bufferedBase || !updateBatchCanReadBufferedDomainLocked(domain, plan.meta, plan.baseCommitSeq, plan.baseSystemRoot) {
+		if !plan.bufferedBase || !updateBatchCanReadBufferedDomainLocked(domain, plan.meta, plan.baseSystemRoot) {
 			// The caller retries from the normal pre-plan flush path so a plan built
 			// before a concurrent buffered write is not published against stale roots.
 			return false, ErrConcurrentMutation

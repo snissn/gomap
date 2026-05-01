@@ -4293,6 +4293,9 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReadsBufferedAfterR
 	if rawState.SystemRootPageID != before.SystemRootPageID {
 		t.Fatalf("raw write changed system root from %d to %d", before.SystemRootPageID, rawState.SystemRootPageID)
 	}
+	if rawState.CommitSeq == before.CommitSeq {
+		t.Fatalf("raw write did not advance commit seq: before=%d after=%d", before.CommitSeq, rawState.CommitSeq)
+	}
 	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
 		{DocumentID: []byte("u1"), Update: setJSONCity("sfo")},
 	}); err != nil {
