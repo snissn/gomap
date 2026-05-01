@@ -252,14 +252,20 @@ if [[ "$PREBUILD_DOCUMENTS" != "true" && "$PREBUILD_DOCUMENTS" != "false" ]]; th
   echo "invalid PREBUILD_DOCUMENTS=$PREBUILD_DOCUMENTS (want true or false)" >&2
   exit 2
 fi
-if [[ "$UPDATE_INDEXED_FIELD" != "true" && "$UPDATE_INDEXED_FIELD" != "false" ]]; then
-  echo "invalid UPDATE_INDEXED_FIELD=$UPDATE_INDEXED_FIELD (want true or false)" >&2
-  exit 2
-fi
-if [[ "$UPDATE_INDEXED_FIELD" == "true" && "$INDEXES" != "2" ]]; then
-  echo "UPDATE_INDEXED_FIELD=true requires INDEXES=2 so the city index exists" >&2
-  exit 2
-fi
+case "$UPDATE_INDEXED_FIELD" in
+  true)
+    if [[ "$INDEXES" != "2" ]]; then
+      echo "UPDATE_INDEXED_FIELD=true requires INDEXES=2 so the city index exists" >&2
+      exit 2
+    fi
+    ;;
+  false)
+    ;;
+  *)
+    echo "invalid UPDATE_INDEXED_FIELD=$UPDATE_INDEXED_FIELD (want true or false)" >&2
+    exit 2
+    ;;
+esac
 INCLUDE_MONGO=$(normalize_bool_01 INCLUDE_MONGO "$INCLUDE_MONGO")
 
 mkdir -p "$OUT_DIR"
