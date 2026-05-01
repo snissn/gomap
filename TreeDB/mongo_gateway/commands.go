@@ -724,6 +724,11 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 		return
 	}
 	if err != nil {
+		if index, ok := collectionUpdateBatchErrorIndex(err); ok && index >= 0 && index < len(batch) {
+			completeMongoUpdateCoalescerBatchExcept(batch, index)
+			batch[index].done <- mongoUpdateCoalescerResult{err: err}
+			return
+		}
 		completeMongoUpdateCoalescerBatch(batch, mongoUpdateCoalescerResult{err: err})
 		return
 	}
@@ -741,6 +746,27 @@ func completeMongoUpdateCoalescerBatch(batch []mongoUpdateCoalescerRequest, resu
 	for _, req := range batch {
 		req.done <- result
 	}
+}
+
+func completeMongoUpdateCoalescerBatchExcept(batch []mongoUpdateCoalescerRequest, skip int) {
+	for i, req := range batch {
+		if i == skip {
+			continue
+		}
+		matched, modified, err := runMongoUpdateOne(req.col, req.item)
+		req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
+	}
+}
+
+func collectionUpdateBatchErrorIndex(err error) (int, bool) {
+	if err == nil {
+		return 0, false
+	}
+	var index int
+	if _, scanErr := fmt.Sscanf(err.Error(), "collections: update batch index %d:", &index); scanErr != nil {
+		return 0, false
+	}
+	return index, true
 }
 
 func mongoUpdateCoalescerHasDuplicateKeys(batch []mongoUpdateCoalescerRequest) bool {
