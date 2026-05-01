@@ -106,6 +106,9 @@ type benchmarkResult struct {
 	TreeDBDiskAfterLoad         *diskSnapshot       `json:"treedb_disk_after_load,omitempty"`
 	TreeDBDiskAfterCheckpoint   *diskSnapshot       `json:"treedb_disk_after_checkpoint,omitempty"`
 	TreeDBDiskAfterMaintenance  *diskSnapshot       `json:"treedb_disk_after_maintenance,omitempty"`
+	TreeDBStatsAfterLoad        map[string]string   `json:"treedb_stats_after_load,omitempty"`
+	TreeDBStatsAfterCheckpoint  map[string]string   `json:"treedb_stats_after_checkpoint,omitempty"`
+	TreeDBStatsFinal            map[string]string   `json:"treedb_stats_final,omitempty"`
 	TreeDBMaintenance           []maintenanceResult `json:"treedb_maintenance,omitempty"`
 	MongoDBStatsAfterLoad       map[string]any      `json:"mongodb_stats_after_load,omitempty"`
 	MongoDBStatsFinal           map[string]any      `json:"mongodb_stats_final,omitempty"`
@@ -1637,6 +1640,9 @@ func collectAfterLoadStats(ctx context.Context, cfg config, target *benchTarget,
 			return err
 		}
 		result.TreeDBDiskAfterLoad = &snapshot
+		if target.db != nil {
+			result.TreeDBStatsAfterLoad = selectedTreeDBStats(target.db.Stats())
+		}
 		return nil
 	}
 	stats, err := mongoDBStats(ctx, target.client.Database(cfg.Database))
@@ -1650,6 +1656,14 @@ func collectAfterLoadStats(ctx context.Context, cfg config, target *benchTarget,
 func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, result *benchmarkResult) error {
 	if cfg.Target == "treedb" {
 		if cfg.TreeDBMaintenance == treeDBMaintenanceNone {
+			if target.collections != nil {
+				if err := target.collections.FlushAll(); err != nil {
+					return err
+				}
+			}
+			if target.db != nil {
+				result.TreeDBStatsFinal = selectedTreeDBStats(target.db.Stats())
+			}
 			return nil
 		}
 		if target.collections != nil {
@@ -1667,8 +1681,21 @@ func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, res
 			return err
 		}
 		result.TreeDBDiskAfterCheckpoint = &snapshot
+		if target.db != nil {
+			stats := selectedTreeDBStats(target.db.Stats())
+			result.TreeDBStatsAfterCheckpoint = stats
+			result.TreeDBStatsFinal = stats
+		}
 		if cfg.TreeDBMaintenance == treeDBMaintenanceFull {
-			return runTreeDBMaintenanceStack(ctx, target, result)
+			if err := runTreeDBMaintenanceStack(ctx, target, result); err != nil {
+				return err
+			}
+			stats, err := collectTreeDBStatsFromDir(cfg, target)
+			if err != nil {
+				return err
+			}
+			result.TreeDBStatsFinal = mergeTreeDBPersistentStats(result.TreeDBStatsFinal, stats)
+			return nil
 		}
 		return nil
 	}
@@ -1746,6 +1773,53 @@ func runTreeDBMaintenanceStack(ctx context.Context, target *benchTarget, result 
 	return nil
 }
 
+func collectTreeDBStatsFromDir(cfg config, target *benchTarget) (map[string]string, error) {
+	if target == nil {
+		return nil, nil
+	}
+	if target.db != nil {
+		return selectedTreeDBStats(target.db.Stats()), nil
+	}
+	if target.treedbDir == "" {
+		return nil, nil
+	}
+	opts := treedb.OptionsFor(cfg.TreeDBProfile, target.treedbDir)
+	opts.ReadOnly = true
+	db, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = cleanup() }()
+	return selectedTreeDBStats(db.Stats()), nil
+}
+
+func mergeTreeDBPersistentStats(base, refreshed map[string]string) map[string]string {
+	if len(base) == 0 {
+		return cloneStringMap(refreshed)
+	}
+	merged := cloneStringMap(base)
+	if len(refreshed) == 0 {
+		return merged
+	}
+	for _, key := range selectedTreeDBExactStatKeys {
+		if value, ok := refreshed[key]; ok {
+			merged[key] = value
+		}
+	}
+	return merged
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
 func appendTreeDBMaintenanceStep(ctx context.Context, target *benchTarget, result *benchmarkResult, name string, run func() (map[string]int64, string, error)) error {
 	start := time.Now()
 	metrics, skipped, err := run()
@@ -1757,6 +1831,7 @@ func appendTreeDBMaintenanceStep(ctx context.Context, target *benchTarget, resul
 		if err := target.db.Checkpoint(); err != nil {
 			return fmt.Errorf("checkpoint after %s: %w", name, err)
 		}
+		result.TreeDBStatsFinal = selectedTreeDBStats(target.db.Stats())
 	}
 	snapshot, err := collectDiskSnapshot(target.treedbDir)
 	if err != nil {
@@ -2310,14 +2385,23 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		if result.TreeDBDiskAfterLoad != nil {
 			writeDiskSnapshot(out, "treedb_after_load", result.TreeDBDiskAfterLoad)
 		}
+		if result.TreeDBStatsAfterLoad != nil {
+			writeTreeDBStats(out, "treedb_stats_after_load", result.TreeDBStatsAfterLoad)
+		}
 		if result.TreeDBDiskAfterCheckpoint != nil {
 			writeDiskSnapshot(out, "treedb_after_checkpoint", result.TreeDBDiskAfterCheckpoint)
+		}
+		if result.TreeDBStatsAfterCheckpoint != nil {
+			writeTreeDBStats(out, "treedb_stats_after_checkpoint", result.TreeDBStatsAfterCheckpoint)
 		}
 		for _, step := range result.TreeDBMaintenance {
 			writeMaintenanceResult(out, step)
 		}
 		if result.TreeDBDiskAfterMaintenance != nil {
 			writeDiskSnapshot(out, "treedb_after_maintenance", result.TreeDBDiskAfterMaintenance)
+		}
+		if result.TreeDBStatsFinal != nil {
+			writeTreeDBStats(out, "treedb_stats_final", result.TreeDBStatsFinal)
 		}
 		if result.MongoDBStatsAfterLoad != nil {
 			writeMongoStats(out, "mongodb_after_load", result.MongoDBStatsAfterLoad)
@@ -2345,6 +2429,77 @@ func writeDiskSnapshot(out io.Writer, label string, snapshot *diskSnapshot) {
 		fmt.Fprintf(out, " %s=%d", name, snapshot.Paths[name])
 	}
 	fmt.Fprintln(out)
+}
+
+var selectedTreeDBExactStatKeys = [...]string{
+	"treedb.commit_seq",
+}
+
+var selectedTreeDBExactStatKeySet = newSelectedTreeDBExactStatKeySet(selectedTreeDBExactStatKeys[:])
+
+func newSelectedTreeDBExactStatKeySet(keys []string) map[string]struct{} {
+	keySet := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		keySet[key] = struct{}{}
+	}
+	return keySet
+}
+
+var selectedTreeDBStatPrefixes = [...]string{
+	"treedb.publish.ordered_root_delta_group.",
+	"treedb.publish.watermark.",
+}
+
+func isSelectedTreeDBStatKey(key string) bool {
+	if _, ok := selectedTreeDBExactStatKeySet[key]; ok {
+		return true
+	}
+	for _, prefix := range selectedTreeDBStatPrefixes {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func selectedTreeDBStats(stats map[string]string) map[string]string {
+	if len(stats) == 0 {
+		return nil
+	}
+	out := make(map[string]string)
+	for key, value := range stats {
+		if isSelectedTreeDBStatKey(key) {
+			out[key] = value
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func writeTreeDBStats(out io.Writer, label string, stats map[string]string) {
+	if len(stats) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(stats))
+	for key := range stats {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	wroteAny := false
+	for _, key := range keys {
+		if value, ok := stats[key]; ok {
+			if !wroteAny {
+				fmt.Fprintf(out, "%s", label)
+				wroteAny = true
+			}
+			fmt.Fprintf(out, " %s=%s", key, value)
+		}
+	}
+	if wroteAny {
+		fmt.Fprintln(out)
+	}
 }
 
 func writeMaintenanceResult(out io.Writer, step maintenanceResult) {

@@ -24,3 +24,55 @@ func TestEstimatePublishWatermarkPercentile_NonOverflow(t *testing.T) {
 		t.Fatalf("expected first bucket bound, got %v", got)
 	}
 }
+
+func TestObserveOrderedRootDeltaGroupPublishStats(t *testing.T) {
+	db := &DB{}
+	db.observeOrderedRootDeltaGroupPublish(2*time.Millisecond, 3*time.Millisecond, 4, nil)
+	db.observeOrderedRootDeltaGroupPublish(time.Millisecond, time.Millisecond, 2, errTestFinalizeCommitFailpoint)
+
+	stats := db.orderedRootDeltaGroupPublishStats()
+	if stats.calls != 2 {
+		t.Fatalf("calls=%d want 2", stats.calls)
+	}
+	if stats.errors != 1 {
+		t.Fatalf("errors=%d want 1", stats.errors)
+	}
+	if stats.roots != 4 {
+		t.Fatalf("roots=%d want 4", stats.roots)
+	}
+	if stats.waitTotalNs != uint64((3 * time.Millisecond).Nanoseconds()) {
+		t.Fatalf("waitTotalNs=%d", stats.waitTotalNs)
+	}
+	if stats.holdTotalNs != uint64((4 * time.Millisecond).Nanoseconds()) {
+		t.Fatalf("holdTotalNs=%d", stats.holdTotalNs)
+	}
+	if stats.avgRootsPerCall != 2 {
+		t.Fatalf("avgRootsPerCall=%f want 2", stats.avgRootsPerCall)
+	}
+	if stats.writeLockWaitShare <= 0 || stats.writeLockWaitShare >= 100 {
+		t.Fatalf("writeLockWaitShare=%f want between 0 and 100", stats.writeLockWaitShare)
+	}
+	if stats.latencyP99 <= 0 {
+		t.Fatalf("latencyP99=%v want >0", stats.latencyP99)
+	}
+}
+
+func TestOrderedRootDeltaGroupPublishStatsUsesBucketSnapshotForPercentile(t *testing.T) {
+	db := &DB{}
+	db.orderedRootDeltaGroupCalls.Store(100)
+	db.orderedRootDeltaGroupLatencyMaxNs.Store(uint64(time.Millisecond))
+	db.orderedRootDeltaGroupLatencyBuckets[0].Store(1)
+
+	stats := db.orderedRootDeltaGroupPublishStats()
+	if stats.latencyP99 != 50*time.Microsecond {
+		t.Fatalf("latencyP99=%v want first bucket bound", stats.latencyP99)
+	}
+}
+
+func TestDurationFromUint64NsClampsOverflow(t *testing.T) {
+	for _, ns := range []uint64{maxTimeDurationNs + 1, ^uint64(0)} {
+		if got := durationFromUint64Ns(ns); got != time.Duration(maxTimeDurationNs) {
+			t.Fatalf("durationFromUint64Ns(%d)=%v want %v", ns, got, time.Duration(maxTimeDurationNs))
+		}
+	}
+}
