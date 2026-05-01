@@ -1924,12 +1924,12 @@ func benchmarkDocument(i int) bson.D {
 	}
 }
 
-func benchmarkSetUpdate(i int, concurrent bool, updateIndexedField bool) bson.D {
+func benchmarkSetUpdate(i int, concurrentPhase bool, updateIndexedField bool) bson.D {
 	set := bson.D{
 		{Key: "updated", Value: true},
 		{Key: "update_seq", Value: int64(i)},
 	}
-	if concurrent {
+	if concurrentPhase {
 		set = bson.D{
 			{Key: "concurrent_updated", Value: true},
 			{Key: "concurrent_update_seq", Value: int64(i)},
@@ -1954,7 +1954,7 @@ func benchmarkCity(i int) string {
 }
 
 func benchmarkUpdatedCity(i int) string {
-	return benchmarkUpdatedCities[i%len(benchmarkUpdatedCities)]
+	return fmt.Sprintf("%s-%06d", benchmarkUpdatedCities[i%len(benchmarkUpdatedCities)], i/len(benchmarkUpdatedCities))
 }
 
 func int64Value(value any) (int64, bool) {

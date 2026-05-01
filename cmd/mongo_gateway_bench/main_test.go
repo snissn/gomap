@@ -1133,21 +1133,45 @@ func TestWriteResultSupportsGenericWriter(t *testing.T) {
 }
 
 func TestBenchmarkSetUpdateCanExerciseIndexedField(t *testing.T) {
-	update := benchmarkSetUpdate(3, true, true)
-	raw, err := bson.Marshal(update)
-	if err != nil {
-		t.Fatalf("marshal update: %v", err)
+	updateSet := func(update bson.D) bson.Raw {
+		t.Helper()
+		raw, err := bson.Marshal(update)
+		if err != nil {
+			t.Fatalf("marshal update: %v", err)
+		}
+		doc := bson.Raw(raw)
+		set, ok := doc.Lookup("$set").DocumentOK()
+		if !ok {
+			t.Fatalf("$set missing or not a document: %v", doc.Lookup("$set").Type)
+		}
+		return set
 	}
-	doc := bson.Raw(raw)
-	set, ok := doc.Lookup("$set").DocumentOK()
-	if !ok {
-		t.Fatalf("$set missing or not a document: %v", doc.Lookup("$set").Type)
-	}
+
+	set := updateSet(benchmarkSetUpdate(3, true, true))
 	if got, ok := set.Lookup("concurrent_update_seq").Int64OK(); !ok || got != 3 {
 		t.Fatalf("concurrent_update_seq=%d ok=%t want 3", got, ok)
 	}
 	if city, ok := set.Lookup("city").StringValueOK(); !ok || city != benchmarkUpdatedCity(3) {
 		t.Fatalf("city=%q ok=%t want %q", city, ok, benchmarkUpdatedCity(3))
+	}
+
+	set = updateSet(benchmarkSetUpdate(4, true, false))
+	if _, ok := set.Lookup("city").StringValueOK(); ok {
+		t.Fatalf("city present when updateIndexedField=false: %v", set.Lookup("city"))
+	}
+
+	set = updateSet(benchmarkSetUpdate(5, false, true))
+	if got, ok := set.Lookup("update_seq").Int64OK(); !ok || got != 5 {
+		t.Fatalf("update_seq=%d ok=%t want 5", got, ok)
+	}
+	if _, ok := set.Lookup("concurrent_update_seq").Int64OK(); ok {
+		t.Fatalf("concurrent_update_seq present in non-concurrent update: %v", set.Lookup("concurrent_update_seq"))
+	}
+	if city, ok := set.Lookup("city").StringValueOK(); !ok || city != benchmarkUpdatedCity(5) {
+		t.Fatalf("city=%q ok=%t want %q", city, ok, benchmarkUpdatedCity(5))
+	}
+	if first, repeated := benchmarkUpdatedCity(0), benchmarkUpdatedCity(len(benchmarkUpdatedCities)); first == repeated {
+		t.Fatalf("benchmarkUpdatedCity repeated value %q for later update", first)
 	}
 }
 
