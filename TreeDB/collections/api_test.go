@@ -2569,6 +2569,54 @@ func TestCollectionUpdateBatchAllowsUniqueHandoff(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexesDeclinesFreshUniqueCatalog(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	stale, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open stale collection: %v", err)
+	}
+	if _, err := stale.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"email":"a@example.com"}`), []byte(`{"email":"b@example.com"}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	fresh, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open fresh collection: %v", err)
+	}
+	if _, err := fresh.CreateIndex(IndexDefinition{Name: "email", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+
+	results, batched, err := stale.UpdateBatchIfNoSecondaryUniqueIndexes([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONEmail("c@example.com")},
+		{DocumentID: []byte("u2"), Update: setJSONEmail("a@example.com")},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexes: %v", err)
+	}
+	if batched {
+		t.Fatalf("batched=%v results=%+v want declined", batched, results)
+	}
+	got, err := stale.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`"email":"a@example.com"`)) {
+		t.Fatalf("u1 document=%s want unchanged email", got)
+	}
+}
+
 func TestCollectionUpdateBatchClonesAliasedReplacements(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

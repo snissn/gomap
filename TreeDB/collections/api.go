@@ -45,10 +45,11 @@ var (
 	ErrUniqueIndexConflict = errors.New("collections: unique index conflict")
 	ErrConcurrentMutation  = errors.New("collections: concurrent mutation")
 
-	errCollectionManagerNil = errors.New("collections: collection manager is nil")
-	errCollectionNil        = errors.New("collections: collection is nil")
-	errCollectionDBNil      = errors.New("collections: db is nil")
-	errCollectionNotFound   = ErrCollectionNotFound
+	errCollectionManagerNil               = errors.New("collections: collection manager is nil")
+	errCollectionNil                      = errors.New("collections: collection is nil")
+	errCollectionDBNil                    = errors.New("collections: db is nil")
+	errCollectionNotFound                 = ErrCollectionNotFound
+	errUpdateBatchHasSecondaryUniqueIndex = errors.New("collections: update batch has secondary unique index")
 )
 
 // UpdateBatchItem describes one document update in a batch. DocumentID must be
@@ -2743,36 +2744,52 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 // rejected so callers that require same-document ordering can fall back to
 // sequential Update calls.
 func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, error) {
+	results, _, err := c.updateBatch(items, false)
+	return results, err
+}
+
+// UpdateBatchIfNoSecondaryUniqueIndexes applies UpdateBatch only when the
+// collection has no secondary unique indexes in the mutation-locked catalog.
+// It reports batched=false without applying updates if a unique secondary index
+// is present so callers can preserve ordered per-document update semantics.
+func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
+	return c.updateBatch(items, true)
+}
+
+func (c *Collection) updateBatch(items []UpdateBatchItem, requireNoSecondaryUniqueIndexes bool) ([]UpdateBatchResult, bool, error) {
 	if c == nil {
-		return nil, errCollectionNil
+		return nil, false, errCollectionNil
 	}
 	if c.db == nil {
-		return nil, errCollectionDBNil
+		return nil, false, errCollectionDBNil
 	}
 	if len(items) == 0 {
-		return nil, nil
+		return nil, true, nil
 	}
 	if err := validateUpdateBatchItems(items); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	items = cloneUpdateBatchItems(items)
 	unlockMutation := c.lockMutation()
 	defer unlockMutation()
 	if err := c.flushBufferedWrites(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
-		results, err := c.updateBatchOnce(items)
+		results, err := c.updateBatchOnce(items, requireNoSecondaryUniqueIndexes)
+		if errors.Is(err, errUpdateBatchHasSecondaryUniqueIndex) {
+			return nil, false, nil
+		}
 		if errors.Is(err, ErrConcurrentMutation) {
 			lastErr = err
 			waitBeforeCollectionMutationRetry(attempt)
 			continue
 		}
-		return results, err
+		return results, true, err
 	}
-	return nil, collectionMutationRetryExhausted(lastErr)
+	return nil, false, collectionMutationRetryExhausted(lastErr)
 }
 
 func validateUpdateBatchItems(items []UpdateBatchItem) error {
@@ -3075,7 +3092,7 @@ type preparedBatchUpdate struct {
 	indexStateChanged bool
 }
 
-func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResult, error) {
+func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondaryUniqueIndexes bool) ([]UpdateBatchResult, error) {
 	results := make([]UpdateBatchResult, len(items))
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
@@ -3091,6 +3108,10 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 		return nil, errCollectionNotFound
 	}
 	c.meta = catalog.meta
+	if requireNoSecondaryUniqueIndexes && collectionMetaHasSecondaryUniqueIndex(c.meta) {
+		_ = snap.Close()
+		return nil, errUpdateBatchHasSecondaryUniqueIndex
+	}
 	plannerOptions, err := collectionPlannerOptions(c.meta)
 	if err != nil {
 		_ = snap.Close()
@@ -4841,6 +4862,15 @@ func sameCollectionMeta(a, b CollectionMeta) bool {
 		return false
 	}
 	return reflect.DeepEqual(na, nb)
+}
+
+func collectionMetaHasSecondaryUniqueIndex(meta CollectionMeta) bool {
+	for _, idx := range meta.Indexes {
+		if idx.Unique {
+			return true
+		}
+	}
+	return false
 }
 
 func addIndexToCollectionMeta(meta CollectionMeta, def IndexDefinition) (CollectionMeta, IndexDefinition, error) {
