@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -113,6 +114,51 @@ func TestCollectDiskSnapshotEmptyLeavesPathsNil(t *testing.T) {
 	}
 	if snapshot.TotalBytes != 0 || snapshot.Paths != nil {
 		t.Fatalf("empty snapshot=%+v want zero total and nil paths", snapshot)
+	}
+}
+
+func TestIsSelectedTreeDBStatKey(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+		want bool
+	}{
+		{name: "exact commit seq", key: "treedb.commit_seq", want: true},
+		{name: "ordered root prefix", key: "treedb.publish.ordered_root_delta_group.calls_total", want: true},
+		{name: "watermark prefix", key: "treedb.publish.watermark.latency_p99_ms", want: true},
+		{name: "non match", key: "treedb.vlog.reads_total", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isSelectedTreeDBStatKey(tt.key); got != tt.want {
+				t.Fatalf("isSelectedTreeDBStatKey(%q)=%v want %v", tt.key, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSelectedTreeDBStats(t *testing.T) {
+	if got := selectedTreeDBStats(nil); got != nil {
+		t.Fatalf("nil stats selected=%v want nil", got)
+	}
+	if got := selectedTreeDBStats(map[string]string{"treedb.vlog.reads_total": "7"}); got != nil {
+		t.Fatalf("unselected stats=%v want nil", got)
+	}
+	got := selectedTreeDBStats(map[string]string{
+		"treedb.commit_seq": "11",
+		"treedb.publish.ordered_root_delta_group.calls_total":    "3",
+		"treedb.publish.ordered_root_delta_group.latency_p99_ms": "1.5",
+		"treedb.publish.watermark.latency_p99_ms":                "2.5",
+		"treedb.vlog.reads_total":                                "7",
+	})
+	want := map[string]string{
+		"treedb.commit_seq": "11",
+		"treedb.publish.ordered_root_delta_group.calls_total":    "3",
+		"treedb.publish.ordered_root_delta_group.latency_p99_ms": "1.5",
+		"treedb.publish.watermark.latency_p99_ms":                "2.5",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("selected stats=%v want %v", got, want)
 	}
 }
 
