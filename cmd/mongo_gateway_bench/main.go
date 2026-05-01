@@ -1695,9 +1695,6 @@ func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, res
 			}
 			return nil
 		}
-		if target.db != nil {
-			result.TreeDBStatsFinal = selectedTreeDBStats(target.db.Stats())
-		}
 		return nil
 	}
 	stats, err := mongoDBStats(ctx, target.client.Database(cfg.Database))
@@ -2384,7 +2381,7 @@ func writeDiskSnapshot(out io.Writer, label string, snapshot *diskSnapshot) {
 	fmt.Fprintln(out)
 }
 
-var selectedTreeDBStatKeys = []string{
+var selectedTreeDBStatKeys = [...]string{
 	"treedb.commit_seq",
 	"treedb.publish.ordered_root_delta_group.calls_total",
 	"treedb.publish.ordered_root_delta_group.errors_total",
