@@ -275,6 +275,7 @@ MATRIX="$OUT_DIR/matrix.tsv"
 REPORT="$OUT_DIR/report.md"
 SUMMARY="$OUT_DIR/summary.tsv"
 README="$OUT_DIR/README.md"
+TREE_METADATA="$OUT_DIR/treedb-location.txt"
 
 path_is_within() {
   local child=${1%/}
@@ -285,11 +286,29 @@ path_is_within() {
   return 1
 }
 
+TREE_DIR_IS_TEMP=false
 if path_is_within "$OUT_DIR" "$ROOT"; then
   TREE_DIR=$(mktemp -d "$TMP_BASE/gomap_mongo_gateway_scaling_treedb_XXXXXX")
+  TREE_DIR_IS_TEMP=true
 else
   TREE_DIR="$OUT_DIR/treedb_data"
 fi
+
+cat >"$TREE_METADATA" <<EOF
+TreeDB directory: $TREE_DIR
+This file is written early so the TreeDB path can be recovered if the script exits before bundle documentation is generated.
+EOF
+
+report_treedb_location_on_exit() {
+  local status=$1
+  if [[ "$status" -ne 0 && "$TREE_DIR_IS_TEMP" == "true" ]]; then
+    echo "mongo_gateway_scaling_bench.sh exited before completion." >&2
+    echo "TreeDB data directory: $TREE_DIR" >&2
+    echo "Recorded in: $TREE_METADATA" >&2
+  fi
+}
+
+trap 'report_treedb_location_on_exit "$?"' EXIT
 
 mkdir -p "$RAW_DIR" "$TREE_DIR" "$BIN_DIR"
 
@@ -427,6 +446,7 @@ cat >"$README" <<EOF
 - matrix TSV: \`$MATRIX\`
 - raw JSON directory: \`$RAW_DIR\`
 - TreeDB data directory: \`$TREE_DIR\`
+- TreeDB location metadata: \`$TREE_METADATA\`
 - docs: \`$DOCS\`
 - secondary indexes: \`$INDEXES\`
 - batch size: \`$BATCH_SIZE\`
