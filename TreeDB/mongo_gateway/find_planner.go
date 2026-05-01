@@ -678,9 +678,9 @@ func documentsForIndexedPredicate(col *collections.Collection, materializer *col
 	out := make([]wire.Document, 0)
 	seen := make(map[string]struct{})
 	for _, value := range pred.values {
-		scalar, ok := indexScalarForBSONValue(value)
+		scalar, ok := indexScalarForBSONValue(value, idx.ValueType)
 		if !ok {
-			return nil, fmt.Errorf("Mongo gateway find value cannot be represented in index %q", idx.Name)
+			continue
 		}
 		ids, _, err := col.FindByIndexValueLimit(idx.Name, scalar, maxDocuments+1)
 		if err != nil {
@@ -1481,29 +1481,64 @@ func bsonTypeSortRank(t bson.Type) int {
 	}
 }
 
-func indexScalarForBSONValue(value bson.RawValue) (any, bool) {
-	switch value.Type {
-	case bson.TypeString:
-		out, ok := value.StringValueOK()
-		return out, ok
-	case bson.TypeBoolean:
-		out, ok := value.BooleanOK()
-		return out, ok
-	case bson.TypeNull:
-		return nil, true
-	case bson.TypeDouble:
-		out, ok := value.DoubleOK()
-		if ok && (math.IsNaN(out) || math.IsInf(out, 0)) {
+func indexScalarForBSONValue(value bson.RawValue, valueType collections.IndexValueType) (any, bool) {
+	switch valueType {
+	case collections.IndexValueString:
+		if value.Type != bson.TypeString {
 			return nil, false
 		}
+		out, ok := value.StringValueOK()
 		return out, ok
-	case bson.TypeInt32:
-		out, ok := value.Int32OK()
+	case collections.IndexValueBool:
+		if value.Type != bson.TypeBoolean {
+			return nil, false
+		}
+		out, ok := value.BooleanOK()
 		return out, ok
-	case bson.TypeInt64:
-		out, ok := value.Int64OK()
-		return out, ok
+	case collections.IndexValueInt64:
+		switch value.Type {
+		case bson.TypeInt32:
+			out, ok := value.Int32OK()
+			if !ok {
+				return nil, false
+			}
+			return out, true
+		case bson.TypeInt64:
+			out, ok := value.Int64OK()
+			return out, ok
+		default:
+			return nil, false
+		}
+	case collections.IndexValueDouble:
+		switch value.Type {
+		case bson.TypeDouble:
+			out, ok := value.DoubleOK()
+			return out, ok
+		case bson.TypeInt32:
+			out, ok := value.Int32OK()
+			if !ok {
+				return nil, false
+			}
+			return out, true
+		case bson.TypeInt64:
+			out, ok := value.Int64OK()
+			if !ok || !int64CanRepresentAsExactFloat64(out) {
+				return nil, false
+			}
+			return out, true
+		default:
+			return nil, false
+		}
 	default:
 		return nil, false
 	}
+}
+
+func int64CanRepresentAsExactFloat64(value int64) bool {
+	const int64UpperBoundAsFloat64 = 9223372036854775808.0
+	out := float64(value)
+	if out < -int64UpperBoundAsFloat64 || out >= int64UpperBoundAsFloat64 {
+		return false
+	}
+	return int64(out) == value
 }

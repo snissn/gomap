@@ -1968,6 +1968,17 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 		t.Fatalf("projected document unexpectedly includes age: %v", firstBatch[0])
 	}
 
+	wrongTypeIndexedFind := serveCommand(t, server, 2341, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "city", Value: int32(5)}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, wrongTypeIndexedFind)
+	firstBatch = cursorFirstBatch(t, wrongTypeIndexedFind)
+	if len(firstBatch) != 0 {
+		t.Fatalf("wrong-type indexed firstBatch len=%d want 0", len(firstBatch))
+	}
+
 	inFind := serveCommand(t, server, 235, bson.D{
 		{Key: "find", Value: "users"},
 		{Key: "filter", Value: bson.D{{Key: "_id", Value: bson.D{{Key: "$in", Value: bson.A{id3, id1}}}}}},
@@ -2085,7 +2096,10 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 		{Key: "filter", Value: bson.D{{Key: "city", Value: bson.D{{Key: "nested", Value: "hnl"}}}}},
 		{Key: "$db", Value: "app"},
 	})
-	assertCommandError(t, nonIndexableValue, "BadValue")
+	assertOK(t, nonIndexableValue)
+	if batch := cursorFirstBatch(t, nonIndexableValue); len(batch) != 0 {
+		t.Fatalf("non-indexable value firstBatch len=%d want 0", len(batch))
+	}
 }
 
 func TestServerFindGetMoreAndKillCursors(t *testing.T) {
@@ -3064,7 +3078,7 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 	if cmp := compareRawValues(decimalValue, finite); cmp != 0 {
 		t.Fatalf("Decimal128 vs double cmp=%d want 0", cmp)
 	}
-	scalar, ok := indexScalarForBSONValue(largeInt)
+	scalar, ok := indexScalarForBSONValue(largeInt, collections.IndexValueInt64)
 	if !ok || scalar != int64(9007199254740993) {
 		t.Fatalf("large int scalar=%v ok=%v want int64", scalar, ok)
 	}
