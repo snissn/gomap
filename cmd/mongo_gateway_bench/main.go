@@ -1641,7 +1641,7 @@ func collectAfterLoadStats(ctx context.Context, cfg config, target *benchTarget,
 		}
 		result.TreeDBDiskAfterLoad = &snapshot
 		if target.db != nil {
-			result.TreeDBStatsAfterLoad = target.db.Stats()
+			result.TreeDBStatsAfterLoad = selectedTreeDBStats(target.db.Stats())
 		}
 		return nil
 	}
@@ -1662,7 +1662,7 @@ func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, res
 				}
 			}
 			if target.db != nil {
-				result.TreeDBStatsFinal = target.db.Stats()
+				result.TreeDBStatsFinal = selectedTreeDBStats(target.db.Stats())
 			}
 			return nil
 		}
@@ -1682,19 +1682,21 @@ func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, res
 		}
 		result.TreeDBDiskAfterCheckpoint = &snapshot
 		if target.db != nil {
-			result.TreeDBStatsAfterCheckpoint = target.db.Stats()
+			stats := selectedTreeDBStats(target.db.Stats())
+			result.TreeDBStatsAfterCheckpoint = stats
+			result.TreeDBStatsFinal = stats
 		}
 		if cfg.TreeDBMaintenance == treeDBMaintenanceFull {
 			if err := runTreeDBMaintenanceStack(ctx, target, result); err != nil {
 				return err
 			}
 			if target.db != nil {
-				result.TreeDBStatsFinal = target.db.Stats()
+				result.TreeDBStatsFinal = selectedTreeDBStats(target.db.Stats())
 			}
 			return nil
 		}
 		if target.db != nil {
-			result.TreeDBStatsFinal = target.db.Stats()
+			result.TreeDBStatsFinal = selectedTreeDBStats(target.db.Stats())
 		}
 		return nil
 	}
@@ -2382,26 +2384,43 @@ func writeDiskSnapshot(out io.Writer, label string, snapshot *diskSnapshot) {
 	fmt.Fprintln(out)
 }
 
+var selectedTreeDBStatKeys = []string{
+	"treedb.commit_seq",
+	"treedb.publish.ordered_root_delta_group.calls_total",
+	"treedb.publish.ordered_root_delta_group.errors_total",
+	"treedb.publish.ordered_root_delta_group.roots_total",
+	"treedb.publish.ordered_root_delta_group.avg_roots_per_call",
+	"treedb.publish.ordered_root_delta_group.write_lock_wait_ns_total",
+	"treedb.publish.ordered_root_delta_group.write_lock_hold_ns_total",
+	"treedb.publish.ordered_root_delta_group.write_lock_wait_share_pct",
+	"treedb.publish.ordered_root_delta_group.latency_p99_ms",
+	"treedb.publish.ordered_root_delta_group.latency_max_ms",
+	"treedb.publish.watermark.lock_delay_share_pct",
+	"treedb.publish.watermark.latency_p99_ms",
+}
+
+func selectedTreeDBStats(stats map[string]string) map[string]string {
+	if len(stats) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(selectedTreeDBStatKeys))
+	for _, key := range selectedTreeDBStatKeys {
+		if value, ok := stats[key]; ok {
+			out[key] = value
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func writeTreeDBStats(out io.Writer, label string, stats map[string]string) {
 	if len(stats) == 0 {
 		return
 	}
-	keys := []string{
-		"treedb.commit_seq",
-		"treedb.publish.ordered_root_delta_group.calls_total",
-		"treedb.publish.ordered_root_delta_group.errors_total",
-		"treedb.publish.ordered_root_delta_group.roots_total",
-		"treedb.publish.ordered_root_delta_group.avg_roots_per_call",
-		"treedb.publish.ordered_root_delta_group.write_lock_wait_ns_total",
-		"treedb.publish.ordered_root_delta_group.write_lock_hold_ns_total",
-		"treedb.publish.ordered_root_delta_group.write_lock_wait_share_pct",
-		"treedb.publish.ordered_root_delta_group.latency_p99_ms",
-		"treedb.publish.ordered_root_delta_group.latency_max_ms",
-		"treedb.publish.watermark.lock_delay_share_pct",
-		"treedb.publish.watermark.latency_p99_ms",
-	}
 	wroteAny := false
-	for _, key := range keys {
+	for _, key := range selectedTreeDBStatKeys {
 		if value, ok := stats[key]; ok {
 			if !wroteAny {
 				fmt.Fprintf(out, "%s", label)
