@@ -31,6 +31,9 @@ func TestParseConfigDefaultsToInspectableTwoIndexTemplateFixture(t *testing.T) {
 	if cfg.BufferedIndexedWriteMaxDocs != collections.DefaultIndexedWriteMemtableMaxDocuments {
 		t.Fatalf("buffered indexed max docs=%d want %d", cfg.BufferedIndexedWriteMaxDocs, collections.DefaultIndexedWriteMemtableMaxDocuments)
 	}
+	if cfg.BufferedIndexedWriteMaxRuns != collections.DefaultIndexedWriteMemtableMaxRootRuns {
+		t.Fatalf("buffered indexed max root runs=%d want %d", cfg.BufferedIndexedWriteMaxRuns, collections.DefaultIndexedWriteMemtableMaxRootRuns)
+	}
 	if !cfg.DataOuterLeavesInValueLog {
 		t.Fatal("expected data outer leaves in value log by default")
 	}
@@ -166,6 +169,7 @@ func TestRunFixtureReportsBufferedIndexedWritesOnlyWhenIndexesUseThem(t *testing
 		"-buffered-indexed-writes",
 		"-buffered-indexed-write-max-docs", "16",
 		"-buffered-indexed-write-max-bytes", "1024",
+		"-buffered-indexed-write-max-root-runs", "8",
 		"-reopen-verify=false",
 		"-progress=false",
 	}, io.Discard)
@@ -179,8 +183,9 @@ func TestRunFixtureReportsBufferedIndexedWritesOnlyWhenIndexesUseThem(t *testing
 	if noIndexSummary.BufferedIndexedWrites {
 		t.Fatal("no-index summary reported buffered indexed writes enabled")
 	}
-	if noIndexSummary.BufferedIndexedWriteMaxDocs != 0 || noIndexSummary.BufferedIndexedWriteMaxBytes != 0 {
-		t.Fatalf("no-index buffered limits docs=%d bytes=%d want both zero", noIndexSummary.BufferedIndexedWriteMaxDocs, noIndexSummary.BufferedIndexedWriteMaxBytes)
+	if noIndexSummary.BufferedIndexedWriteMaxDocs != 0 || noIndexSummary.BufferedIndexedWriteMaxBytes != 0 || noIndexSummary.BufferedIndexedWriteMaxRuns != 0 {
+		t.Fatalf("no-index buffered limits docs=%d bytes=%d rootRuns=%d want zero",
+			noIndexSummary.BufferedIndexedWriteMaxDocs, noIndexSummary.BufferedIndexedWriteMaxBytes, noIndexSummary.BufferedIndexedWriteMaxRuns)
 	}
 
 	indexedDir := filepath.Join(t.TempDir(), "indexed")
@@ -192,6 +197,7 @@ func TestRunFixtureReportsBufferedIndexedWritesOnlyWhenIndexesUseThem(t *testing
 		"-buffered-indexed-writes",
 		"-buffered-indexed-write-max-docs", "16",
 		"-buffered-indexed-write-max-bytes", "1024",
+		"-buffered-indexed-write-max-root-runs", "8",
 		"-progress=false",
 	}, io.Discard)
 	if err != nil {
@@ -204,8 +210,9 @@ func TestRunFixtureReportsBufferedIndexedWritesOnlyWhenIndexesUseThem(t *testing
 	if !indexedSummary.BufferedIndexedWrites {
 		t.Fatal("indexed summary reported buffered indexed writes disabled")
 	}
-	if indexedSummary.BufferedIndexedWriteMaxDocs != 16 || indexedSummary.BufferedIndexedWriteMaxBytes != 1024 {
-		t.Fatalf("indexed buffered limits docs=%d bytes=%d want 16/1024", indexedSummary.BufferedIndexedWriteMaxDocs, indexedSummary.BufferedIndexedWriteMaxBytes)
+	if indexedSummary.BufferedIndexedWriteMaxDocs != 16 || indexedSummary.BufferedIndexedWriteMaxBytes != 1024 || indexedSummary.BufferedIndexedWriteMaxRuns != 8 {
+		t.Fatalf("indexed buffered limits docs=%d bytes=%d rootRuns=%d want 16/1024/8",
+			indexedSummary.BufferedIndexedWriteMaxDocs, indexedSummary.BufferedIndexedWriteMaxBytes, indexedSummary.BufferedIndexedWriteMaxRuns)
 	}
 
 	disabledDir := filepath.Join(t.TempDir(), "disabled")

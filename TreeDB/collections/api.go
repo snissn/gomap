@@ -33,6 +33,10 @@ const (
 	// DefaultIndexedWriteMemtableMaxDocuments bounds the native indexed
 	// collection write-domain before it auto-flushes to persistent roots.
 	DefaultIndexedWriteMemtableMaxDocuments = 64000
+	// DefaultIndexedWriteMemtableMaxRootRuns bounds accumulated root-local
+	// mutation runs so many small indexed update batches do not create an
+	// expensive pending-run chain before the document threshold is reached.
+	DefaultIndexedWriteMemtableMaxRootRuns = 256
 	// DefaultIndexedWriteMemtableDirectBatchDocuments keeps large, already
 	// well-amortized InsertBatch calls on the immediate publish path. Smaller
 	// batches use the indexed write-domain memtable path by default.
@@ -314,6 +318,10 @@ type CollectionOptions struct {
 	// root-run payload estimate reaches this many bytes. Zero leaves flushing to
 	// explicit Flush/Close calls.
 	BufferedIndexedWriteMaxBytes int64 `json:"buffered_indexed_write_max_bytes,omitempty"`
+	// BufferedIndexedWriteMaxRootRuns flushes indexed write buffers once this
+	// many root-local mutation runs are pending. Zero disables the run-count
+	// trigger unless defaulted during metadata normalization.
+	BufferedIndexedWriteMaxRootRuns int `json:"buffered_indexed_write_max_root_runs,omitempty"`
 }
 
 type IndexDefinition struct {
@@ -371,6 +379,7 @@ type bufferedIndexedCheckpoint struct {
 	rootBaseIDs           map[string]uint64
 	primaryRunIndexActive bool
 	uniqueValueRuns       map[string][]memtable.Table
+	rootRunCount          int
 }
 
 type bufferedUniqueValueIndex struct {
@@ -421,6 +430,7 @@ type collectionWriteDomain struct {
 	uniqueValueIndex map[string]*bufferedUniqueValueIndex
 	count            int
 	bufferedBytes    int64
+	rootRunCount     int
 	writeGeneration  uint64
 }
 
@@ -1427,6 +1437,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		}
 		domain.rootPolicies[run.name] = run.storagePolicy
 		domain.rootRuns[run.name] = append(domain.rootRuns[run.name], run.table)
+		domain.rootRunCount = saturatingAddNonNegativeInt(domain.rootRunCount, 1)
 		stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, run.table.Size())
 		if run.kind == collectionRootPrimary {
 			if domain.primaryIDIndex == nil {
@@ -1488,6 +1499,7 @@ func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWr
 	domain.rootRuns = nil
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
+	domain.rootRunCount = 0
 	domain.primaryIDIndex = nil
 	domain.primaryRunIndex = nil
 	domain.uniqueValueRuns = nil
@@ -1505,10 +1517,13 @@ func shouldFlushBufferedIndexedWrites(domain *collectionWriteDomain, opts Collec
 	if opts.BufferedIndexedWriteMaxBytes > 0 && domain.bufferedBytes >= opts.BufferedIndexedWriteMaxBytes {
 		return true
 	}
+	if opts.BufferedIndexedWriteMaxRootRuns > 0 && bufferedIndexedRootRunCount(domain) >= opts.BufferedIndexedWriteMaxRootRuns {
+		return true
+	}
 	return false
 }
 
-func shouldFlushBufferedIndexedWritesAfterAdding(domain *collectionWriteDomain, opts CollectionOptions, addedCount int, addedBytes int64) bool {
+func shouldFlushBufferedIndexedWritesAfterAdding(domain *collectionWriteDomain, opts CollectionOptions, addedCount int, addedBytes int64, addedRootRuns int) bool {
 	if domain == nil || addedCount <= 0 {
 		return false
 	}
@@ -1520,7 +1535,25 @@ func shouldFlushBufferedIndexedWritesAfterAdding(domain *collectionWriteDomain, 
 	if opts.BufferedIndexedWriteMaxBytes > 0 && nextBytes >= opts.BufferedIndexedWriteMaxBytes {
 		return true
 	}
+	nextRootRuns := saturatingAddNonNegativeInt(bufferedIndexedRootRunCount(domain), addedRootRuns)
+	if opts.BufferedIndexedWriteMaxRootRuns > 0 && nextRootRuns >= opts.BufferedIndexedWriteMaxRootRuns {
+		return true
+	}
 	return false
+}
+
+func bufferedIndexedRootRunCount(domain *collectionWriteDomain) int {
+	if domain == nil {
+		return 0
+	}
+	if domain.rootRunCount > 0 || len(domain.rootRuns) == 0 {
+		return domain.rootRunCount
+	}
+	total := 0
+	for _, runs := range domain.rootRuns {
+		total = saturatingAddNonNegativeInt(total, len(runs))
+	}
+	return total
 }
 
 func saturatingAddNonNegativeInt(total, n int) int {
@@ -1534,7 +1567,7 @@ func saturatingAddNonNegativeInt(total, n int) int {
 }
 
 func bufferedIndexedAutoFlushEnabled(opts CollectionOptions) bool {
-	return opts.BufferedIndexedWriteMaxDocuments > 0 || opts.BufferedIndexedWriteMaxBytes > 0
+	return opts.BufferedIndexedWriteMaxDocuments > 0 || opts.BufferedIndexedWriteMaxBytes > 0 || opts.BufferedIndexedWriteMaxRootRuns > 0
 }
 
 func saturatingAddNonNegativeInt64(total, n int64) int64 {
@@ -1567,6 +1600,7 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		rootBaseIDs:           cloneUint64Map(domain.rootBaseIDs),
 		primaryRunIndexActive: domain.primaryRunIndex != nil,
 		uniqueValueRuns:       cloneTableRunMap(domain.uniqueValueRuns),
+		rootRunCount:          domain.rootRunCount,
 	}
 }
 
@@ -1588,6 +1622,7 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.rootRuns = checkpoint.rootRuns
 	domain.rootPolicies = checkpoint.rootPolicies
 	domain.rootBaseIDs = checkpoint.rootBaseIDs
+	domain.rootRunCount = checkpoint.rootRunCount
 	domain.primaryIDIndex = rebuildBufferedPrimaryIDIndex(checkpoint.meta.Name, checkpoint.rootRuns)
 	if checkpoint.primaryRunIndexActive {
 		domain.primaryRunIndex = rebuildBufferedPrimaryRunIndex(checkpoint.meta.Name, checkpoint.rootRuns)
@@ -2453,6 +2488,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) e
 	domain.rootRuns = nil
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
+	domain.rootRunCount = 0
 	domain.primaryIDIndex = nil
 	domain.primaryRunIndex = nil
 	oldUniqueValueRuns := domain.uniqueValueRuns
@@ -4986,6 +5022,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		return false, err
 	}
 	var stagedBytes int64
+	stagedRootRuns := 0
 	for i, rootName := range plan.rootNames {
 		baseRoot, ok := plan.baseRootIDs[rootName]
 		if !ok {
@@ -4999,6 +5036,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 			return false, errConcurrentRootModification(plan.meta.Name, rootName)
 		}
 		stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, table.Size())
+		stagedRootRuns++
 	}
 	if domain.count == 0 && plan.catalog != nil {
 		c.initializeWriteDomainFromCatalogLocked(domain, plan.catalog, plan.baseCommitSeq, plan.baseSystemRoot)
@@ -5013,7 +5051,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		domain.rootRuns = make(map[string][]memtable.Table, len(plan.rootNames))
 	}
 	uniqueSecondaryRoots := uniqueCollectionSecondaryRootNames(plan.meta)
-	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, stagedBytes)
+	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, stagedBytes, stagedRootRuns)
 	if !shouldAutoFlushAfterAdding && len(uniqueSecondaryRoots) > 0 && bufferedIndexedAutoFlushEnabled(plan.meta.Options) {
 		for i, rootName := range plan.rootNames {
 			if _, ok := uniqueSecondaryRoots[rootName]; !ok {
@@ -5078,6 +5116,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		}
 		domain.rootPolicies[rootName] = plan.policies[i]
 		domain.rootRuns[rootName] = append(domain.rootRuns[rootName], table)
+		domain.rootRunCount = saturatingAddNonNegativeInt(domain.rootRunCount, 1)
 		plan.deltaTables[i] = nil
 	}
 	plan.deltaTables = nil
@@ -5397,6 +5436,7 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 	domain.rootRuns = nil
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
+	domain.rootRunCount = 0
 	domain.primaryIDIndex = nil
 	domain.primaryRunIndex = nil
 	domain.uniqueValueRuns = nil
@@ -6698,6 +6738,9 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 	if meta.Options.BufferedIndexedWriteMaxBytes < 0 {
 		return CollectionMeta{}, errors.New("collections: buffered indexed write max bytes cannot be negative")
 	}
+	if meta.Options.BufferedIndexedWriteMaxRootRuns < 0 {
+		return CollectionMeta{}, errors.New("collections: buffered indexed write max root runs cannot be negative")
+	}
 	documentFormat, err := normalizeDocumentFormat(meta.Options.DocumentFormat)
 	if err != nil {
 		return CollectionMeta{}, err
@@ -6732,10 +6775,12 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		meta.Options.BufferedIndexedWrites = false
 		meta.Options.BufferedIndexedWriteMaxDocuments = 0
 		meta.Options.BufferedIndexedWriteMaxBytes = 0
+		meta.Options.BufferedIndexedWriteMaxRootRuns = 0
 	} else {
 		meta.Options.BufferedIndexedWrites = true
-		if meta.Options.BufferedIndexedWriteMaxDocuments == 0 && meta.Options.BufferedIndexedWriteMaxBytes == 0 {
+		if meta.Options.BufferedIndexedWriteMaxDocuments == 0 && meta.Options.BufferedIndexedWriteMaxBytes == 0 && meta.Options.BufferedIndexedWriteMaxRootRuns == 0 {
 			meta.Options.BufferedIndexedWriteMaxDocuments = DefaultIndexedWriteMemtableMaxDocuments
+			meta.Options.BufferedIndexedWriteMaxRootRuns = DefaultIndexedWriteMemtableMaxRootRuns
 		}
 	}
 	return meta, nil

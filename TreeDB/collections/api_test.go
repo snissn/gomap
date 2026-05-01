@@ -1420,6 +1420,9 @@ func TestCollectionIndexedWriteMemtablesDefaultForIndexedSchemas(t *testing.T) {
 	if got := meta.Options.BufferedIndexedWriteMaxBytes; got != 0 {
 		t.Fatalf("default max bytes=%d want 0", got)
 	}
+	if got := meta.Options.BufferedIndexedWriteMaxRootRuns; got != DefaultIndexedWriteMemtableMaxRootRuns {
+		t.Fatalf("default max root runs=%d want %d", got, DefaultIndexedWriteMemtableMaxRootRuns)
+	}
 
 	col, err := mgr.OpenCollection("users")
 	if err != nil {
@@ -1481,9 +1484,9 @@ func TestCollectionIndexedWriteMemtablesDefaultSkipsNoIndexSchemas(t *testing.T)
 	if meta.Options.BufferedIndexedWrites {
 		t.Fatal("no-index collection enabled indexed write memtables")
 	}
-	if meta.Options.BufferedIndexedWriteMaxDocuments != 0 || meta.Options.BufferedIndexedWriteMaxBytes != 0 {
-		t.Fatalf("no-index buffered limits docs=%d bytes=%d want zero",
-			meta.Options.BufferedIndexedWriteMaxDocuments, meta.Options.BufferedIndexedWriteMaxBytes)
+	if meta.Options.BufferedIndexedWriteMaxDocuments != 0 || meta.Options.BufferedIndexedWriteMaxBytes != 0 || meta.Options.BufferedIndexedWriteMaxRootRuns != 0 {
+		t.Fatalf("no-index buffered limits docs=%d bytes=%d rootRuns=%d want zero",
+			meta.Options.BufferedIndexedWriteMaxDocuments, meta.Options.BufferedIndexedWriteMaxBytes, meta.Options.BufferedIndexedWriteMaxRootRuns)
 	}
 }
 
@@ -1507,9 +1510,9 @@ func TestCollectionIndexedWriteMemtablesCanBeDisabled(t *testing.T) {
 	if meta.Options.BufferedIndexedWrites {
 		t.Fatal("disabled indexed write memtables reported enabled")
 	}
-	if meta.Options.BufferedIndexedWriteMaxDocuments != 0 || meta.Options.BufferedIndexedWriteMaxBytes != 0 {
-		t.Fatalf("disabled buffered limits docs=%d bytes=%d want zero",
-			meta.Options.BufferedIndexedWriteMaxDocuments, meta.Options.BufferedIndexedWriteMaxBytes)
+	if meta.Options.BufferedIndexedWriteMaxDocuments != 0 || meta.Options.BufferedIndexedWriteMaxBytes != 0 || meta.Options.BufferedIndexedWriteMaxRootRuns != 0 {
+		t.Fatalf("disabled buffered limits docs=%d bytes=%d rootRuns=%d want zero",
+			meta.Options.BufferedIndexedWriteMaxDocuments, meta.Options.BufferedIndexedWriteMaxBytes, meta.Options.BufferedIndexedWriteMaxRootRuns)
 	}
 	col, err := mgr.OpenCollection("users")
 	if err != nil {
@@ -2410,6 +2413,67 @@ func TestCollectionIndexedWriteMemtablesAutoFlushMaxBytes(t *testing.T) {
 	}
 }
 
+func TestCollectionIndexedWriteMemtablesAutoFlushMaxRootRuns(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:           true,
+			BufferedIndexedWriteMaxRootRuns: 2,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot after root-run threshold flush")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog after root-run threshold flush: %v", err)
+	}
+	if got := catalog.rootID(collectionPrimaryRootName("users")); got == 0 {
+		t.Fatal("primary root was not persisted after root-run threshold flush")
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	ids, err := reopenedCol.FindByIndex("email", "ada@example.com")
+	if err != nil {
+		t.Fatalf("find email after root-run threshold flush: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("email ids=%q want [u1]", ids)
+	}
+}
+
 func TestBufferedPrimaryIDArenaCapAvoidsOverflow(t *testing.T) {
 	if got := bufferedPrimaryIDArenaCap(2); got != 32 {
 		t.Fatalf("small arena cap=%d want 32", got)
@@ -2468,13 +2532,15 @@ func TestShouldFlushBufferedIndexedWritesAfterAddingBoundaries(t *testing.T) {
 	opts := CollectionOptions{
 		BufferedIndexedWriteMaxDocuments: 10,
 		BufferedIndexedWriteMaxBytes:     100,
+		BufferedIndexedWriteMaxRootRuns:  5,
 	}
 	cases := []struct {
-		name       string
-		domain     *collectionWriteDomain
-		addedCount int
-		addedBytes int64
-		want       bool
+		name          string
+		domain        *collectionWriteDomain
+		addedCount    int
+		addedBytes    int64
+		addedRootRuns int
+		want          bool
 	}{
 		{
 			name:       "nil domain",
@@ -2516,10 +2582,30 @@ func TestShouldFlushBufferedIndexedWritesAfterAddingBoundaries(t *testing.T) {
 			addedBytes: 1,
 			want:       true,
 		},
+		{
+			name:          "just below root run limit",
+			domain:        &collectionWriteDomain{count: 1, rootRuns: map[string][]memtable.Table{"a": make([]memtable.Table, 3)}},
+			addedCount:    1,
+			addedRootRuns: 1,
+		},
+		{
+			name:          "exactly at root run limit",
+			domain:        &collectionWriteDomain{count: 1, rootRuns: map[string][]memtable.Table{"a": make([]memtable.Table, 4)}},
+			addedCount:    1,
+			addedRootRuns: 1,
+			want:          true,
+		},
+		{
+			name:          "root run overflow clamps to flush",
+			domain:        &collectionWriteDomain{count: 1},
+			addedCount:    1,
+			addedRootRuns: maxCollectionInt,
+			want:          true,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := shouldFlushBufferedIndexedWritesAfterAdding(tc.domain, opts, tc.addedCount, tc.addedBytes)
+			got := shouldFlushBufferedIndexedWritesAfterAdding(tc.domain, opts, tc.addedCount, tc.addedBytes, tc.addedRootRuns)
 			if got != tc.want {
 				t.Fatalf("shouldFlushBufferedIndexedWritesAfterAdding()=%v want %v", got, tc.want)
 			}
