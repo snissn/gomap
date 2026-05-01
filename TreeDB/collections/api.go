@@ -4015,63 +4015,67 @@ func (plan *updateBatchPlan) close() {
 
 func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, error) {
 	if c.shouldPlanUpdateBatchWithBufferedWrites(mode) {
-		var results []UpdateBatchResult
-		err := c.withMutationLock(func() error {
-			useBufferedRead := true
-			for {
-				plan, err := c.buildUpdateBatchPlan(items, mode, useBufferedRead)
-				if err != nil {
-					return err
-				}
-				if plan == nil {
-					return nil
-				}
+		useBufferedRead := true
+		for {
+			plan, err := c.buildUpdateBatchPlan(items, mode, useBufferedRead)
+			if err != nil {
+				return nil, err
+			}
+			if plan == nil {
+				return nil, nil
+			}
+			var results []UpdateBatchResult
+			replan := false
+			err = c.withMutationLock(func() error {
 				if len(plan.deltaTables) == 0 {
 					if plan.bufferedReadBlocked && useBufferedRead {
-						plan.close()
 						if err := c.flushBufferedWrites(); err != nil {
 							return err
 						}
 						useBufferedRead = false
-						continue
+						replan = true
+						return nil
 					}
 					if err := c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs); err != nil {
-						plan.close()
 						return err
 					}
 					c.meta = plan.meta
 					results = plan.results
-					plan.close()
 					return nil
 				}
 				buffered, bufferErr := c.bufferUpdateBatchPlanLocked(plan)
 				if bufferErr != nil {
-					plan.close()
 					if errors.Is(bufferErr, ErrConcurrentMutation) && useBufferedRead {
 						if err := c.flushBufferedWrites(); err != nil {
 							return err
 						}
 						useBufferedRead = false
-						continue
+						replan = true
+						return nil
 					}
 					return bufferErr
 				}
 				if buffered {
+					c.meta = plan.meta
 					results = plan.results
-					plan.close()
 					return nil
 				}
 				if err := c.flushBufferedWrites(); err != nil {
-					plan.close()
 					return err
 				}
 				var publishErr error
 				results, publishErr = c.publishUpdateBatchPlanLocked(plan)
-				plan.close()
 				return publishErr
+			})
+			plan.close()
+			if err != nil {
+				return nil, err
 			}
-		})
-		return results, err
+			if replan {
+				continue
+			}
+			return results, nil
+		}
 	}
 
 	if err := c.withMutationLock(func() error {
@@ -5692,7 +5696,7 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	return collectMergedCollectionIndexIDs(bufferedIt, persistedIt, prefix, maxResults)
 }
 
-// bufferedIndexTableLocked materializes the buffered overlay for one secondary
+// bufferedIndexTableLocked materializes buffered entries for one secondary
 // index prefix while domain.mu is held. The returned pooled table is owned by
 // the caller and must be released with resetCollectionRunTable.
 func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, indexName string, prefix []byte, maxResults int) (memtable.Table, error) {
