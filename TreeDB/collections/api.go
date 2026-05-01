@@ -6796,8 +6796,10 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		meta.Options.BufferedIndexedWriteMaxRootRuns = 0
 	} else {
 		meta.Options.BufferedIndexedWrites = true
-		if meta.Options.BufferedIndexedWriteMaxDocuments == 0 && meta.Options.BufferedIndexedWriteMaxBytes == 0 && meta.Options.BufferedIndexedWriteMaxRootRuns == 0 {
+		if meta.Options.BufferedIndexedWriteMaxDocuments == 0 {
 			meta.Options.BufferedIndexedWriteMaxDocuments = DefaultIndexedWriteMemtableMaxDocuments
+		}
+		if meta.Options.BufferedIndexedWriteMaxBytes == 0 && meta.Options.BufferedIndexedWriteMaxRootRuns == 0 {
 			meta.Options.BufferedIndexedWriteMaxRootRuns = DefaultIndexedWriteMemtableMaxRootRuns
 		}
 	}
