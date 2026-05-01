@@ -1071,6 +1071,14 @@ func appendTemplateV1IndexValueToState(state orderedDocumentIndexState, runtimeI
 		}
 		return nil
 	}
+	if nextBuf, next, ok, err := appendTemplateV1ExtendedJSONIndexScalar(encoder.buf, runtime.def.valueType, value, opts.templateResolver); ok || err != nil {
+		if err != nil {
+			return err
+		}
+		encoder.buf = nextBuf
+		state[runtimeIdx] = encoder.appendSingleValueRef(next)
+		return nil
+	}
 	var next []byte
 	var err error
 	encoder.buf, next, err = appendTemplateV1IndexScalar(encoder.buf, runtime.def.valueType, value)
@@ -1171,6 +1179,82 @@ func templateV1AppendArrayIndexValues(raw []byte, valueType IndexValueType, enco
 		return nil, errors.New("collections: trailing template-v1 array bytes")
 	}
 	return values, nil
+}
+
+func appendTemplateV1ExtendedJSONIndexScalar(dst []byte, valueType IndexValueType, raw []byte, resolver templateV1Resolver) ([]byte, []byte, bool, error) {
+	field, value, ok, err := templateV1ExtendedJSONNumberString(raw, resolver)
+	if err != nil || !ok {
+		return dst, nil, ok, err
+	}
+	start := len(dst)
+	switch valueType {
+	case IndexValueInt64:
+		switch field {
+		case "$numberInt", "$numberLong":
+			v, err := parseJSONInt64IndexValue(value)
+			if err != nil {
+				return dst, nil, true, err
+			}
+			dst = appendIndexInt64Component(dst, v)
+		default:
+			return dst, nil, true, fmt.Errorf("collections: indexed extended JSON value for type %q must be $numberInt or $numberLong, got %s", valueType, field)
+		}
+	case IndexValueDouble:
+		switch field {
+		case "$numberInt", "$numberLong", "$numberDouble":
+			v, err := parseJSONDoubleIndexValue(value)
+			if err != nil {
+				return dst, nil, true, err
+			}
+			dst = appendIndexDoubleComponent(dst, v)
+		default:
+			return dst, nil, true, fmt.Errorf("collections: indexed extended JSON value for type %q must be numeric, got %s", valueType, field)
+		}
+	default:
+		return dst, nil, false, nil
+	}
+	return dst, dst[start:len(dst):len(dst)], true, nil
+}
+
+func templateV1ExtendedJSONNumberString(raw []byte, resolver templateV1Resolver) (string, string, bool, error) {
+	if len(raw) == 0 || raw[0] != templateV1KindObject {
+		return "", "", false, nil
+	}
+	obj, err := templateV1ObjectValue(raw)
+	if err != nil {
+		return "", "", false, err
+	}
+	tpl, err := resolver.lookupTemplateV1(obj.templateID)
+	if err != nil {
+		return "", "", false, err
+	}
+	if len(tpl.fields) != 1 || !isExtendedJSONNumberField(tpl.fields[0]) {
+		return "", "", false, nil
+	}
+	value, found, err := templateV1ObjectFieldValue(obj, tpl.fields[0], resolver)
+	if err != nil || !found {
+		return "", "", found, err
+	}
+	text, ok, err := templateV1StringValue(value)
+	if err != nil || !ok {
+		return "", "", true, err
+	}
+	return tpl.fields[0], text, true, nil
+}
+
+func templateV1StringValue(raw []byte) (string, bool, error) {
+	if len(raw) == 0 || raw[0] != templateV1KindString {
+		return "", false, errors.New("collections: extended JSON numeric wrapper must contain a string")
+	}
+	pos := 1
+	n, err := readTemplateV1Uvarint(raw, &pos)
+	if err != nil {
+		return "", false, err
+	}
+	if n > uint64(len(raw)-pos) || int(n) != len(raw)-pos {
+		return "", false, errors.New("collections: malformed template-v1 string")
+	}
+	return string(raw[pos:]), true, nil
 }
 
 func appendTemplateV1IndexScalar(dst []byte, valueType IndexValueType, raw []byte) ([]byte, []byte, error) {

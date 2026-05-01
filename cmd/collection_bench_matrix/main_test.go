@@ -136,6 +136,8 @@ func TestDefaultBenchmarkPatternsCoverStrictSummary(t *testing.T) {
 		"BenchmarkCollectionShapeReadPrimaryIntoParallel",
 		"BenchmarkCollectionMixedReadWriteScalingPrimary",
 		"BenchmarkCollectionMixedReadWriteScalingSecondaryUnique",
+		"BenchmarkSecondaryLookupRangeString",
+		"BenchmarkSecondaryLookupRangeStringScanFallback",
 	} {
 		if !treePattern.MatchString(name) {
 			t.Fatalf("default tree pattern does not match strict benchmark %q", name)
@@ -146,6 +148,8 @@ func TestDefaultBenchmarkPatternsCoverStrictSummary(t *testing.T) {
 	for _, name := range []string{
 		"BenchmarkSQLiteInsertBatchWithSecondaryIndexes",
 		"BenchmarkSQLiteInsertBatchCheckpointWithSecondaryIndexes",
+		"BenchmarkSQLiteShapeSecondaryRangeJSON",
+		"BenchmarkSQLiteShapeSecondaryRangeNativeColumns",
 	} {
 		if !sqlitePattern.MatchString(name) {
 			t.Fatalf("default sqlite pattern does not match strict benchmark %q", name)

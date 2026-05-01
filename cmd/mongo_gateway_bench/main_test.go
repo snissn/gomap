@@ -332,6 +332,7 @@ func TestParseConfigValidation(t *testing.T) {
 		"-concurrent-writers", "2",
 		"-concurrent-writes", "10",
 		"-update-indexed-field",
+		"-range-index",
 	})
 	if err != nil {
 		t.Fatalf("parse valid config: %v", err)
@@ -341,7 +342,7 @@ func TestParseConfigValidation(t *testing.T) {
 		cfg.BatchSize != 5 || cfg.InsertProducers != 4 ||
 		cfg.MongoMaxPoolSize != 32 || cfg.MongoMinPoolSize != 8 || cfg.MongoMaxConnecting != 16 ||
 		cfg.ConcurrentReaders != 4 || cfg.ConcurrentReads != 20 || cfg.ConcurrentWriters != 2 || cfg.ConcurrentWrites != 10 ||
-		!cfg.UpdateIndexedField {
+		!cfg.UpdateIndexedField || !cfg.RangeIndex {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 	rawWireCfg, err := parseConfig([]string{"-target", "treedb", "-client-mode", "raw-wire"})
@@ -1443,6 +1444,15 @@ func TestWriteResultIncludesRedactedMongoURI(t *testing.T) {
 	}
 }
 
+func TestRangePhaseNameDistinguishesScanAndIndexedRuns(t *testing.T) {
+	if got := rangePhaseName(config{}); got != "age_range_scan_limit_10" {
+		t.Fatalf("default range phase name=%q want scan", got)
+	}
+	if got := rangePhaseName(config{RangeIndex: true}); got != "age_range_indexed_limit_10" {
+		t.Fatalf("indexed range phase name=%q want indexed", got)
+	}
+}
+
 func TestWriteResultKeepsTextHeaderStableForIndexedUpdateKnob(t *testing.T) {
 	result := &benchmarkResult{
 		Target:          "treedb",
@@ -1465,14 +1475,21 @@ func TestWriteResultKeepsTextHeaderStableForIndexedUpdateKnob(t *testing.T) {
 	if len(lines) < 2 || lines[1] != "update_indexed_field=false" {
 		t.Fatalf("text output missing separate update_indexed_field=false line: %q", out.String())
 	}
+	if len(lines) < 3 || lines[2] != "range_index=false" {
+		t.Fatalf("text output missing separate range_index=false line: %q", out.String())
+	}
 
 	out.Reset()
 	result.UpdateIndexedField = true
+	result.RangeIndex = true
 	if err := writeResult(&out, "text", result); err != nil {
 		t.Fatalf("writeResult true: %v", err)
 	}
 	lines = strings.Split(out.String(), "\n")
 	if len(lines) < 2 || lines[1] != "update_indexed_field=true" {
 		t.Fatalf("text output missing separate update_indexed_field line: %q", out.String())
+	}
+	if len(lines) < 3 || lines[2] != "range_index=true" {
+		t.Fatalf("text output missing separate range_index line: %q", out.String())
 	}
 }

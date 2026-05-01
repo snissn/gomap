@@ -6565,6 +6565,79 @@ func TestCollectionFindByIndexValueMatchesLargeJSONInteger(t *testing.T) {
 	}
 }
 
+func TestCollectionIndexesCanonicalExtendedJSONNumbers(t *testing.T) {
+	cases := []struct {
+		name   string
+		format DocumentFormat
+		encode func([]byte) ([]byte, error)
+	}{
+		{
+			name:   "json",
+			format: DocumentFormatJSON,
+			encode: func(doc []byte) ([]byte, error) {
+				return doc, nil
+			},
+		},
+		{
+			name:   "template-v1",
+			format: DocumentFormatTemplateV1,
+			encode: EncodeTemplateV1DocumentJSON,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatalf("open db: %v", err)
+			}
+			defer func() { _ = d.Close() }()
+
+			mgr := NewCollectionManager(d)
+			if _, err := mgr.CreateCollection(&CollectionMeta{
+				Name: "users",
+				Options: CollectionOptions{
+					DocumentFormat: tc.format,
+				},
+				Indexes: []IndexDefinition{
+					{Name: "age", Field: "age", ValueType: IndexValueInt64},
+					{Name: "score", Field: "score", ValueType: IndexValueDouble},
+				},
+			}); err != nil {
+				t.Fatalf("create collection: %v", err)
+			}
+			col, err := mgr.OpenCollection("users")
+			if err != nil {
+				t.Fatalf("open collection: %v", err)
+			}
+			doc, err := tc.encode([]byte(`{"age":{"$numberLong":"42"},"score":{"$numberDouble":"2.5"}}`))
+			if err != nil {
+				t.Fatalf("encode document: %v", err)
+			}
+			if _, err := col.Insert([]byte("u1"), doc); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
+
+			ageIDs, err := col.FindByIndexValue("age", int64(42))
+			if err != nil {
+				t.Fatalf("find age: %v", err)
+			}
+			if len(ageIDs) != 1 || !bytes.Equal(ageIDs[0], []byte("u1")) {
+				t.Fatalf("age ids=%q want u1", ageIDs)
+			}
+			scoreIDs, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
+				Lower: IndexRangeBound{Value: 2.0, Inclusive: false},
+				Upper: IndexRangeBound{Value: 3.0, Inclusive: true},
+			})
+			if err != nil {
+				t.Fatalf("find score range: %v", err)
+			}
+			if truncated || len(scoreIDs) != 1 || !bytes.Equal(scoreIDs[0], []byte("u1")) {
+				t.Fatalf("score ids=%q truncated=%v want u1 false", scoreIDs, truncated)
+			}
+		})
+	}
+}
+
 func TestCollectionFindByIndexRangeTypedInt64(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

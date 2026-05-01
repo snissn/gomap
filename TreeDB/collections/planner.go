@@ -1236,6 +1236,9 @@ func appendJSONParserIndexValueToState(state orderedDocumentIndexState, runtimeI
 }
 
 func (a *indexEncodeArena) appendJSONParserIndexScalar(indexValueType IndexValueType, raw []byte, valueType jsonparser.ValueType) ([]byte, error) {
+	if encoded, ok, err := a.appendJSONParserExtendedJSONIndexScalar(indexValueType, raw, valueType); ok || err != nil {
+		return encoded, err
+	}
 	dst := a.buf
 	start := len(dst)
 	switch indexValueType {
@@ -1287,6 +1290,89 @@ func (a *indexEncodeArena) appendJSONParserIndexScalar(indexValueType IndexValue
 	}
 	a.buf = dst
 	return dst[start:len(dst):len(dst)], nil
+}
+
+func (a *indexEncodeArena) appendJSONParserExtendedJSONIndexScalar(indexValueType IndexValueType, raw []byte, valueType jsonparser.ValueType) ([]byte, bool, error) {
+	if valueType != jsonparser.Object {
+		return nil, false, nil
+	}
+	field, value, ok, err := a.jsonParserExtendedJSONNumberString(raw)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	dst := a.buf
+	start := len(dst)
+	switch indexValueType {
+	case IndexValueInt64:
+		switch field {
+		case "$numberInt", "$numberLong":
+			v, err := parseJSONInt64IndexValue(value)
+			if err != nil {
+				return nil, true, err
+			}
+			dst = appendIndexInt64Component(dst, v)
+		default:
+			return nil, true, fmt.Errorf("collections: indexed extended JSON value for type %q must be $numberInt or $numberLong, got %s", indexValueType, field)
+		}
+	case IndexValueDouble:
+		switch field {
+		case "$numberInt", "$numberLong", "$numberDouble":
+			v, err := parseJSONDoubleIndexValue(value)
+			if err != nil {
+				return nil, true, err
+			}
+			dst = appendIndexDoubleComponent(dst, v)
+		default:
+			return nil, true, fmt.Errorf("collections: indexed extended JSON value for type %q must be numeric, got %s", indexValueType, field)
+		}
+	default:
+		return nil, false, nil
+	}
+	a.buf = dst
+	return dst[start:len(dst):len(dst)], true, nil
+}
+
+func (a *indexEncodeArena) jsonParserExtendedJSONNumberString(raw []byte) (string, string, bool, error) {
+	count := 0
+	var field string
+	var value []byte
+	var valueType jsonparser.ValueType
+	err := jsonparser.ObjectEach(raw, func(key, rawValue []byte, dataType jsonparser.ValueType, _ int) error {
+		count++
+		if count == 1 {
+			field = string(key)
+			value = rawValue
+			valueType = dataType
+		}
+		return nil
+	})
+	if err != nil {
+		return "", "", false, err
+	}
+	if count != 1 || !isExtendedJSONNumberField(field) {
+		return "", "", false, nil
+	}
+	if valueType != jsonparser.String {
+		return "", "", true, fmt.Errorf("collections: extended JSON numeric wrapper %s must contain a string", field)
+	}
+	if bytes.IndexByte(value, '\\') >= 0 {
+		unescaped, err := jsonparser.Unescape(value, a.scratch[:0])
+		if err != nil {
+			return "", "", true, err
+		}
+		a.scratch = unescaped[:0]
+		return field, string(unescaped), true, nil
+	}
+	return field, string(value), true, nil
+}
+
+func isExtendedJSONNumberField(field string) bool {
+	switch field {
+	case "$numberInt", "$numberLong", "$numberDouble":
+		return true
+	default:
+		return false
+	}
 }
 
 func jsonNumberLooksInteger(raw string) bool {

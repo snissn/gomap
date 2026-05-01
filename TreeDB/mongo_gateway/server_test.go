@@ -1924,12 +1924,23 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 
 	server := NewServer()
 	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatTemplateV1}
 	assertOK(t, serveCommand(t, server, 232, bson.D{
 		{Key: "createIndexes", Value: "users"},
-		{Key: "indexes", Value: bson.A{bson.D{
-			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
-			{Key: "name", Value: "city_1"}, {Key: "treedbValueType", Value: "string"},
-		}}},
+		{Key: "indexes", Value: bson.A{
+			bson.D{
+				{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+				{Key: "name", Value: "city_1"}, {Key: "treedbValueType", Value: "string"},
+			},
+			bson.D{
+				{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}},
+				{Key: "name", Value: "age_1"}, {Key: "treedbValueType", Value: "int64"},
+			},
+			bson.D{
+				{Key: "key", Value: bson.D{{Key: "score", Value: int32(1)}}},
+				{Key: "name", Value: "score_1"}, {Key: "treedbValueType", Value: "double"},
+			},
+		}},
 		{Key: "$db", Value: "app"},
 	}))
 	id1 := bson.NewObjectID()
@@ -1938,9 +1949,9 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 	assertOK(t, serveCommand(t, server, 233, bson.D{
 		{Key: "insert", Value: "users"},
 		{Key: "documents", Value: bson.A{
-			bson.D{{Key: "_id", Value: id1}, {Key: "name", Value: "ada"}, {Key: "city", Value: "hnl"}, {Key: "age", Value: int64(37)}},
-			bson.D{{Key: "_id", Value: id2}, {Key: "name", Value: "grace"}, {Key: "city", Value: "hnl"}, {Key: "age", Value: int64(42)}},
-			bson.D{{Key: "_id", Value: id3}, {Key: "name", Value: "katherine"}, {Key: "city", Value: "sfo"}, {Key: "age", Value: int64(36)}},
+			bson.D{{Key: "_id", Value: id1}, {Key: "name", Value: "ada"}, {Key: "city", Value: "hnl"}, {Key: "age", Value: int64(37)}, {Key: "score", Value: 1.25}},
+			bson.D{{Key: "_id", Value: id2}, {Key: "name", Value: "grace"}, {Key: "city", Value: "hnl"}, {Key: "age", Value: int64(42)}, {Key: "score", Value: 2.5}},
+			bson.D{{Key: "_id", Value: id3}, {Key: "name", Value: "katherine"}, {Key: "city", Value: "sfo"}, {Key: "age", Value: int64(36)}, {Key: "score", Value: 3.75}},
 		}},
 		{Key: "$db", Value: "app"},
 	}))
@@ -1967,6 +1978,65 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 	if !firstBatch[0].Lookup("age").IsZero() {
 		t.Fatalf("projected document unexpectedly includes age: %v", firstBatch[0])
 	}
+
+	oldMaxFindScanDocuments := server.MaxFindScanDocuments
+	server.MaxFindScanDocuments = 1
+	ageRangeFind := serveCommand(t, server, 23401, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "$and", Value: bson.A{
+			bson.D{{Key: "age", Value: bson.D{{Key: "$gt", Value: int64(37)}}}},
+			bson.D{{Key: "age", Value: bson.D{{Key: "$lt", Value: int64(43)}}}},
+		}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, ageRangeFind)
+	firstBatch = cursorFirstBatch(t, ageRangeFind)
+	if len(firstBatch) != 1 {
+		t.Fatalf("indexed age range firstBatch len=%d want 1", len(firstBatch))
+	}
+	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "grace" {
+		t.Fatalf("indexed age range matched name=%q ok=%v want grace", got, ok)
+	}
+
+	stringRangeFind := serveCommand(t, server, 23402, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "city", Value: bson.D{{Key: "$gte", Value: "s"}, {Key: "$lt", Value: "t"}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, stringRangeFind)
+	firstBatch = cursorFirstBatch(t, stringRangeFind)
+	if len(firstBatch) != 1 {
+		t.Fatalf("indexed string range firstBatch len=%d want 1", len(firstBatch))
+	}
+	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "katherine" {
+		t.Fatalf("indexed string range matched name=%q ok=%v want katherine", got, ok)
+	}
+
+	doubleRangeFind := serveCommand(t, server, 23403, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "score", Value: bson.D{{Key: "$gt", Value: 2.0}, {Key: "$lte", Value: 3.0}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, doubleRangeFind)
+	firstBatch = cursorFirstBatch(t, doubleRangeFind)
+	if len(firstBatch) != 1 {
+		t.Fatalf("indexed double range firstBatch len=%d want 1", len(firstBatch))
+	}
+	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "grace" {
+		t.Fatalf("indexed double range matched name=%q ok=%v want grace", got, ok)
+	}
+
+	wrongTypeIndexedRange := serveCommand(t, server, 23404, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: "40"}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, wrongTypeIndexedRange)
+	firstBatch = cursorFirstBatch(t, wrongTypeIndexedRange)
+	if len(firstBatch) != 0 {
+		t.Fatalf("wrong-type indexed range firstBatch len=%d want 0", len(firstBatch))
+	}
+	server.MaxFindScanDocuments = oldMaxFindScanDocuments
 
 	wrongTypeIndexedFind := serveCommand(t, server, 2341, bson.D{
 		{Key: "find", Value: "users"},
@@ -3081,6 +3151,116 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 	scalar, ok := indexScalarForBSONValue(largeInt, collections.IndexValueInt64)
 	if !ok || scalar != int64(9007199254740993) {
 		t.Fatalf("large int scalar=%v ok=%v want int64", scalar, ok)
+	}
+}
+
+func TestIndexRangeOptionsForPredicatesCombinesTypedBounds(t *testing.T) {
+	idx := collections.IndexDefinition{Name: "age_1", Field: "age", ValueType: collections.IndexValueInt64}
+	opts, ok, empty, err := indexRangeOptionsForPredicates([]findPredicate{
+		{field: "age", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, int32(10))}},
+		{field: "age", op: findPredicateGT, values: []bson.RawValue{mustRawValue(t, int64(10))}},
+		{field: "age", op: findPredicateLT, values: []bson.RawValue{mustRawValue(t, int64(30))}},
+		{field: "age", op: findPredicateLTE, values: []bson.RawValue{mustRawValue(t, int64(20))}},
+	}, idx)
+	if err != nil {
+		t.Fatalf("range options: %v", err)
+	}
+	if !ok || empty {
+		t.Fatalf("range options ok=%v empty=%v want true/false", ok, empty)
+	}
+	if opts.Lower.Value != int64(10) || opts.Lower.Inclusive || opts.Lower.Unbounded {
+		t.Fatalf("lower bound=%+v want exclusive int64(10)", opts.Lower)
+	}
+	if opts.Upper.Value != int64(20) || !opts.Upper.Inclusive || opts.Upper.Unbounded {
+		t.Fatalf("upper bound=%+v want inclusive int64(20)", opts.Upper)
+	}
+
+	_, ok, empty, err = indexRangeOptionsForPredicates([]findPredicate{
+		{field: "age", op: findPredicateGT, values: []bson.RawValue{mustRawValue(t, int64(10))}},
+		{field: "age", op: findPredicateLTE, values: []bson.RawValue{mustRawValue(t, int64(10))}},
+	}, idx)
+	if err != nil {
+		t.Fatalf("contradictory range options: %v", err)
+	}
+	if !ok || !empty {
+		t.Fatalf("contradictory range ok=%v empty=%v want true/true", ok, empty)
+	}
+
+	_, ok, empty, err = indexRangeOptionsForPredicates([]findPredicate{
+		{field: "age", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, "40")}},
+	}, idx)
+	if err != nil {
+		t.Fatalf("wrong-type range options: %v", err)
+	}
+	if !ok || !empty {
+		t.Fatalf("wrong-type range ok=%v empty=%v want true/true", ok, empty)
+	}
+}
+
+func TestIndexRangeOptionsForPredicatesHandlesDoubleBounds(t *testing.T) {
+	idx := collections.IndexDefinition{Name: "score_1", Field: "score", ValueType: collections.IndexValueDouble}
+	opts, ok, empty, err := indexRangeOptionsForPredicates([]findPredicate{
+		{field: "score", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, int64(4))}},
+		{field: "score", op: findPredicateLT, values: []bson.RawValue{mustRawValue(t, 5.5)}},
+	}, idx)
+	if err != nil {
+		t.Fatalf("double range options: %v", err)
+	}
+	if !ok || empty {
+		t.Fatalf("double range ok=%v empty=%v want true/false", ok, empty)
+	}
+	if opts.Lower.Value != float64(4) || !opts.Lower.Inclusive || opts.Lower.Unbounded {
+		t.Fatalf("double lower bound=%+v want inclusive float64(4)", opts.Lower)
+	}
+	if opts.Upper.Value != float64(5.5) || opts.Upper.Inclusive || opts.Upper.Unbounded {
+		t.Fatalf("double upper bound=%+v want exclusive float64(5.5)", opts.Upper)
+	}
+
+	_, ok, empty, err = indexRangeOptionsForPredicates([]findPredicate{
+		{field: "score", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, math.NaN())}},
+	}, idx)
+	if err != nil {
+		t.Fatalf("NaN double range options: %v", err)
+	}
+	if !ok || !empty {
+		t.Fatalf("NaN double range ok=%v empty=%v want true/true", ok, empty)
+	}
+}
+
+func TestIndexedRangeCandidateLimitOnlyForPureSameFieldRange(t *testing.T) {
+	idx := collections.IndexDefinition{Name: "age_1", Field: "age", ValueType: collections.IndexValueInt64}
+	limit, ok := indexedRangeCandidateLimit(findPlan{
+		predicates: []findPredicate{
+			{field: "age", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, int64(40))}},
+			{field: "age", op: findPredicateLT, values: []bson.RawValue{mustRawValue(t, int64(50))}},
+		},
+		skip:  3,
+		limit: 10,
+	}, idx, 100)
+	if !ok || limit != 13 {
+		t.Fatalf("pure range candidate limit=%d ok=%v want 13,true", limit, ok)
+	}
+
+	_, ok = indexedRangeCandidateLimit(findPlan{
+		predicates: []findPredicate{
+			{field: "age", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, int64(40))}},
+			{field: "city", op: findPredicateEq, values: []bson.RawValue{mustRawValue(t, "hnl")}},
+		},
+		limit: 10,
+	}, idx, 100)
+	if ok {
+		t.Fatal("mixed predicate range candidate should not use page limit")
+	}
+
+	_, ok = indexedRangeCandidateLimit(findPlan{
+		predicates: []findPredicate{
+			{field: "age", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, int64(40))}},
+		},
+		sort:  findSort{field: "name"},
+		limit: 10,
+	}, idx, 100)
+	if ok {
+		t.Fatal("other-field sort range candidate should not use page limit")
 	}
 }
 

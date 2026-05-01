@@ -825,6 +825,76 @@ func benchmarkSQLiteShapeSecondaryLookupNativeColumns(b *testing.B, unique bool)
 	}
 }
 
+func benchmarkSQLiteShapeSecondaryRangeJSON(b *testing.B) {
+	db := openBenchmarkSQLiteJSONShapeDB(b, "bench_shape_secondary_range_json", 2)
+	seedBenchmarkSQLiteJSON(b, db, collectionBenchSeedDocs)
+	checkpointSQLiteWAL(b, db)
+	stmt, err := db.Prepare(`SELECT id FROM documents WHERE city >= ? AND city <= ?`)
+	if err != nil {
+		b.Fatalf("sqlite prepare secondary JSON range: %v", err)
+	}
+	defer stmt.Close()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		city := benchmarkSQLiteCity(i)
+		rows, err := stmt.Query(city, city)
+		if err != nil {
+			b.Fatalf("sqlite secondary JSON range: %v", err)
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				b.Fatalf("sqlite secondary JSON range scan: %v", err)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			b.Fatalf("sqlite secondary JSON range rows: %v", err)
+		}
+		if err := rows.Close(); err != nil {
+			b.Fatalf("sqlite secondary JSON range close: %v", err)
+		}
+	}
+}
+
+func benchmarkSQLiteShapeSecondaryRangeNativeColumns(b *testing.B) {
+	db := openBenchmarkSQLiteNativeColumnsShapeDB(b, "bench_shape_secondary_range_native", 2)
+	seedBenchmarkSQLiteNativeColumns(b, db, collectionBenchSeedDocs)
+	checkpointSQLiteWAL(b, db)
+	stmt, err := db.Prepare(`SELECT id FROM documents WHERE city >= ? AND city <= ?`)
+	if err != nil {
+		b.Fatalf("sqlite prepare secondary native range: %v", err)
+	}
+	defer stmt.Close()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		city := benchmarkSQLiteCity(i)
+		rows, err := stmt.Query(city, city)
+		if err != nil {
+			b.Fatalf("sqlite secondary native range: %v", err)
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				b.Fatalf("sqlite secondary native range scan: %v", err)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			b.Fatalf("sqlite secondary native range rows: %v", err)
+		}
+		if err := rows.Close(); err != nil {
+			b.Fatalf("sqlite secondary native range close: %v", err)
+		}
+	}
+}
+
 func BenchmarkSQLiteShapeSecondaryLookupJSON(b *testing.B) {
 	b.Run("unique", func(b *testing.B) {
 		benchmarkSQLiteShapeSecondaryLookupJSON(b, true)
@@ -841,4 +911,12 @@ func BenchmarkSQLiteShapeSecondaryLookupNativeColumns(b *testing.B) {
 	b.Run("non_unique", func(b *testing.B) {
 		benchmarkSQLiteShapeSecondaryLookupNativeColumns(b, false)
 	})
+}
+
+func BenchmarkSQLiteShapeSecondaryRangeJSON(b *testing.B) {
+	benchmarkSQLiteShapeSecondaryRangeJSON(b)
+}
+
+func BenchmarkSQLiteShapeSecondaryRangeNativeColumns(b *testing.B) {
+	benchmarkSQLiteShapeSecondaryRangeNativeColumns(b)
 }

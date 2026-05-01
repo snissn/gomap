@@ -286,8 +286,9 @@ The initial workload phases are:
 - `id_find_one`: point lookup by `_id`.
 - `email_find_one`: point lookup by the `email` field; emitted only when the
   email secondary index is part of the cell.
-- `age_range_limit_10`: bounded range query with `limit: 10`; operations count
-  range queries, not returned documents.
+- `age_range_scan_limit_10` / `age_range_indexed_limit_10`: bounded range query
+  with `limit: 10`; operations count range queries, not returned documents. The
+  indexed variant is emitted when `-range-index` creates `age_1`.
 - `id_update_set`: `$set` update by `_id`.
 - `concurrent_id_find_one_rN`: total `_id` point reads split across `N`
   goroutines.
@@ -299,6 +300,9 @@ Update phases change only non-indexed fields by default.
 `-update-indexed-field` requires `-secondary-indexes=2` so the city index exists
 and the indexed `city` field changes, exercising secondary-index maintenance in
 the update path.
+`-range-index` creates an additional `age_1` index so the age range-read phase
+materially exercises indexed range planning instead of the bounded scan
+fallback.
 
 Latency samples are per MongoDB driver/gateway call. Update phases build the
 filter and update document before starting the sampled timer, so update samples
@@ -489,9 +493,10 @@ driver transport while bypassing `InsertMany`'s explicit-`_id` discovery and
 
 ## Interpreting Results
 
-`-secondary-indexes 2` creates `email_1` and `city_1`; the age range phase is
-currently a bounded scan in the gateway and is included to make that cost
-visible.
+`-secondary-indexes 2` creates `email_1` and `city_1`. The age range phase is a
+bounded scan unless `-range-index` is set; benchmark output names the phase
+`age_range_scan_limit_10` or `age_range_indexed_limit_10` so reports can
+separate fallback cost from indexed range-search cost.
 
 For TreeDB, prefer `treedb_disk_after_maintenance.total_bytes` when present, and
 use `treedb_disk_after_checkpoint.total_bytes` for checkpoint-only runs. The

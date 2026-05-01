@@ -246,7 +246,7 @@ func BenchmarkTreeDBGatewayRawWireTCPLoadBSONIndexes2(b *testing.B) {
 	}()
 	db := target.client.Database(cfg.Database)
 	coll := db.Collection(cfg.Collection)
-	if err := createIndexes(ctx, db, coll, cfg.SecondaryIndexes, true); err != nil {
+	if err := createIndexes(ctx, db, coll, cfg.SecondaryIndexes, cfg.RangeIndex, true); err != nil {
 		b.Fatalf("create indexes: %v", err)
 	}
 	commandDoc := mustProfileBenchDocument(b, bson.D{
@@ -734,7 +734,7 @@ func benchmarkTreeDBGatewayLoadWithDocument(b *testing.B, format collections.Doc
 	}()
 	db := target.client.Database(cfg.Database)
 	coll := db.Collection(cfg.Collection, collectionOptions...)
-	if err := createIndexes(ctx, db, coll, secondaryIndexes, true); err != nil {
+	if err := createIndexes(ctx, db, coll, secondaryIndexes, false, true); err != nil {
 		b.Fatalf("create indexes: %v", err)
 	}
 
@@ -821,7 +821,7 @@ func benchmarkTreeDBGatewayRunCommandLoad(b *testing.B, format collections.Docum
 	}()
 	db := target.client.Database(cfg.Database)
 	coll := db.Collection(cfg.Collection)
-	if err := createIndexes(ctx, db, coll, secondaryIndexes, true); err != nil {
+	if err := createIndexes(ctx, db, coll, secondaryIndexes, false, true); err != nil {
 		b.Fatalf("create indexes: %v", err)
 	}
 
@@ -886,7 +886,7 @@ func benchmarkTreeDBGatewayRunRawCommandLoad(b *testing.B, format collections.Do
 	}()
 	db := target.client.Database(cfg.Database)
 	coll := db.Collection(cfg.Collection)
-	if err := createIndexes(ctx, db, coll, secondaryIndexes, true); err != nil {
+	if err := createIndexes(ctx, db, coll, secondaryIndexes, false, true); err != nil {
 		b.Fatalf("create indexes: %v", err)
 	}
 
