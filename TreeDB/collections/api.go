@@ -3932,10 +3932,6 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondary
 	}
 	defer plan.close()
 	if len(plan.deltaTables) == 0 {
-		if plan.snap != nil {
-			_ = plan.snap.Close()
-			plan.snap = nil
-		}
 		if err := c.withMutationLock(func() error {
 			if err := c.flushBufferedWrites(); err != nil {
 				return err
