@@ -1007,7 +1007,11 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 	if snap == nil {
 		return nil, collectionOptions{}, false, backenddb.ErrClosed
 	}
-	catalog, err := c.catalogForSnapshot(snap)
+	name := c.meta.Name
+	if domain.meta.Name != "" {
+		name = domain.meta.Name
+	}
+	catalog, err := loadCollectionCatalog(snap, name)
 	if err != nil {
 		_ = snap.Close()
 		return nil, collectionOptions{}, false, err
@@ -1018,6 +1022,7 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 	}
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
+	c.rememberCatalog(snap, catalog)
 	_ = snap.Close()
 
 	options, err := collectionPlannerOptions(catalog.meta)
