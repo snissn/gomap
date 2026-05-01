@@ -588,6 +588,123 @@ func TestServerUpdateBatchesDistinctIDs(t *testing.T) {
 	}
 }
 
+func TestServerUpdateBatchTemplateV1UpdatesDistinctIDs(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatTemplateV1,
+	}
+	assertOK(t, serveCommand(t, server, 22591, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}, {Key: "score", Value: int32(0)}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "name", Value: "grace"}, {Key: "score", Value: int32(0)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	updateResponse := serveCommand(t, server, 22592, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{
+			bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "score", Value: int32(11)}, {Key: "city", Value: "hnl"}}}}},
+			},
+			bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "score", Value: int32(12)}, {Key: "city", Value: "sea"}}}}},
+			},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, updateResponse)
+	assertInt32(t, updateResponse, "n", 2)
+	assertInt32(t, updateResponse, "nModified", 2)
+
+	for _, tc := range []struct {
+		id    string
+		score int32
+		city  string
+	}{
+		{id: "u1", score: 11, city: "hnl"},
+		{id: "u2", score: 12, city: "sea"},
+	} {
+		findResponse := serveCommand(t, server, 22593, bson.D{
+			{Key: "find", Value: "users"},
+			{Key: "filter", Value: bson.D{{Key: "_id", Value: tc.id}}},
+			{Key: "$db", Value: "app"},
+		})
+		firstBatch := cursorFirstBatch(t, findResponse)
+		if len(firstBatch) != 1 {
+			t.Fatalf("%s firstBatch len=%d want 1", tc.id, len(firstBatch))
+		}
+		gotScore, ok := firstBatch[0].Lookup("score").Int32OK()
+		if !ok || gotScore != tc.score {
+			t.Fatalf("%s score=%d ok=%v want %d", tc.id, gotScore, ok, tc.score)
+		}
+		gotCity, ok := firstBatch[0].Lookup("city").StringValueOK()
+		if !ok || gotCity != tc.city {
+			t.Fatalf("%s city=%q ok=%v want %q", tc.id, gotCity, ok, tc.city)
+		}
+	}
+}
+
+func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterParseError(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 22594, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(0)}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "score", Value: int32(0)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	updateResponse := serveCommand(t, server, 22595, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{
+			bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "score", Value: int32(1)}}}}},
+			},
+			bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}},
+				{Key: "multi", Value: true},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "score", Value: int32(2)}}}}},
+			},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, updateResponse, "BadValue")
+
+	findResponse := serveCommand(t, server, 22596, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch := cursorFirstBatch(t, findResponse)
+	if len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	gotScore, ok := firstBatch[0].Lookup("score").Int32OK()
+	if !ok || gotScore != 1 {
+		t.Fatalf("u1 score=%d ok=%v want 1", gotScore, ok)
+	}
+}
+
 func TestServerUpdateCoalescesConcurrentDistinctIDs(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
