@@ -361,7 +361,7 @@ func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpda
 	for i, update := range updates {
 		update := update
 		items[i] = collections.UpdateBatchItem{
-			DocumentID: bytes.Clone(update.key),
+			DocumentID: update.key,
 			Update: func(stored []byte) ([]byte, bool, error) {
 				return applyMongoUpdateToStoredDocument(col, materializer, update, stored)
 			},
@@ -397,14 +397,18 @@ func applyMongoUpdateToStoredDocument(col *collections.Collection, materializer 
 }
 
 type mongoUpdateCoalescer struct {
-	maxDelay time.Duration
-	maxBatch int
-	idleTTL  time.Duration
-	requests chan mongoUpdateCoalescerRequest
-	server   *Server
-	name     string
-	mu       sync.RWMutex
-	stopped  bool
+	maxDelay       time.Duration
+	maxBatch       int
+	idleTTL        time.Duration
+	requests       chan mongoUpdateCoalescerRequest
+	stoppedCh      chan struct{}
+	server         *Server
+	name           string
+	mu             sync.RWMutex
+	stopped        bool
+	enqueueMu      sync.Mutex
+	activeEnqueues int
+	enqueueCond    *sync.Cond
 }
 
 type mongoUpdateCoalescerRequest struct {
@@ -436,7 +440,7 @@ func (s *Server) mongoUpdateCoalescer(name string) *mongoUpdateCoalescer {
 	if s == nil || s.UpdateCoalescingMaxBatch <= 1 || s.UpdateCoalescingMaxDelay < 0 {
 		return nil
 	}
-	maxBatch := s.UpdateCoalescingMaxBatch
+	maxBatch := clampUpdateCoalescingMaxBatch(s.UpdateCoalescingMaxBatch)
 	if maxBatch <= 1 {
 		return nil
 	}
@@ -457,29 +461,61 @@ func (s *Server) mongoUpdateCoalescer(name string) *mongoUpdateCoalescer {
 		return coalescer
 	}
 	coalescer := &mongoUpdateCoalescer{
-		maxDelay: maxDelay,
-		maxBatch: maxBatch,
-		idleTTL:  idleTTL,
-		requests: make(chan mongoUpdateCoalescerRequest, maxBatch*4),
-		server:   s,
-		name:     name,
+		maxDelay:  maxDelay,
+		maxBatch:  maxBatch,
+		idleTTL:   idleTTL,
+		requests:  make(chan mongoUpdateCoalescerRequest, maxBatch*4),
+		stoppedCh: make(chan struct{}),
+		server:    s,
+		name:      name,
 	}
+	coalescer.enqueueCond = sync.NewCond(&coalescer.enqueueMu)
 	s.updateCoalescers[name] = coalescer
 	go coalescer.run()
 	return coalescer
+}
+
+func clampUpdateCoalescingMaxBatch(maxBatch int) int {
+	if maxBatch > maxUpdateCoalescingBatch {
+		return maxUpdateCoalescingBatch
+	}
+	return maxBatch
 }
 
 func (c *mongoUpdateCoalescer) enqueue(req mongoUpdateCoalescerRequest) bool {
 	if c == nil {
 		return false
 	}
+	c.enqueueMu.Lock()
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if c.stopped {
+	stopped := c.stopped
+	requests := c.requests
+	stoppedCh := c.stoppedCh
+	c.mu.RUnlock()
+	if stopped {
+		c.enqueueMu.Unlock()
 		return false
 	}
-	c.requests <- req
-	return true
+	c.activeEnqueues++
+	c.enqueueMu.Unlock()
+	defer c.finishEnqueue()
+	select {
+	case requests <- req:
+		return true
+	case <-stoppedCh:
+		return false
+	default:
+		return false
+	}
+}
+
+func (c *mongoUpdateCoalescer) finishEnqueue() {
+	c.enqueueMu.Lock()
+	c.activeEnqueues--
+	if c.enqueueCond != nil {
+		c.enqueueCond.Broadcast()
+	}
+	c.enqueueMu.Unlock()
 }
 
 func (c *mongoUpdateCoalescer) stop() {
@@ -490,13 +526,26 @@ func (c *mongoUpdateCoalescer) stop() {
 }
 
 func (c *mongoUpdateCoalescer) closeRequests() bool {
+	c.enqueueMu.Lock()
+	defer c.enqueueMu.Unlock()
+	if c.enqueueCond == nil {
+		c.enqueueCond = sync.NewCond(&c.enqueueMu)
+	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.stopped {
+		c.mu.Unlock()
 		return false
 	}
+	if c.stoppedCh == nil {
+		c.stoppedCh = make(chan struct{})
+	}
 	c.stopped = true
-	close(c.requests)
+	close(c.stoppedCh)
+	c.mu.Unlock()
+
+	for c.activeEnqueues > 0 {
+		c.enqueueCond.Wait()
+	}
 	return true
 }
 
@@ -506,14 +555,16 @@ func (c *mongoUpdateCoalescer) retireIdle() bool {
 	}
 	stopped := false
 	if c.server != nil {
+		shouldStop := false
 		c.server.updateMu.Lock()
 		if c.server.updateCoalescers != nil && c.server.updateCoalescers[c.name] == c {
-			stopped = c.closeRequests()
-			if stopped {
-				delete(c.server.updateCoalescers, c.name)
-			}
+			delete(c.server.updateCoalescers, c.name)
+			shouldStop = true
 		}
 		c.server.updateMu.Unlock()
+		if shouldStop {
+			stopped = c.closeRequests()
+		}
 	} else {
 		stopped = c.closeRequests()
 	}
@@ -535,9 +586,14 @@ func (c *mongoUpdateCoalescer) isStopped() bool {
 }
 
 func (c *mongoUpdateCoalescer) drainRequestsDirect() {
-	for req := range c.requests {
-		matched, modified, err := runMongoUpdateOne(req.col, req.item)
-		req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
+	for {
+		select {
+		case req := <-c.requests:
+			matched, modified, err := runMongoUpdateOne(req.col, req.item)
+			req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
+		default:
+			return
+		}
 	}
 }
 
@@ -563,14 +619,16 @@ func (c *mongoUpdateCoalescer) run() {
 	}
 	for {
 		select {
-		case first, ok := <-c.requests:
-			if !ok {
-				return
-			}
+		case first := <-c.requests:
 			c.runBatchStartingWith(first)
 			resetIdle()
 		case <-idle:
-			c.retireIdle()
+			if c.retireIdle() {
+				return
+			}
+			resetIdle()
+		case <-c.stoppedCh:
+			c.drainRequestsDirect()
 			return
 		}
 	}
@@ -583,12 +641,11 @@ func (c *mongoUpdateCoalescer) runBatchStartingWith(first mongoUpdateCoalescerRe
 	collect:
 		for len(batch) < c.maxBatch {
 			select {
-			case req, ok := <-c.requests:
-				if !ok {
-					break collect
-				}
+			case req := <-c.requests:
 				batch = append(batch, req)
 			case <-timer.C:
+				break collect
+			case <-c.stoppedCh:
 				break collect
 			}
 		}
@@ -601,11 +658,10 @@ func (c *mongoUpdateCoalescer) runBatchStartingWith(first mongoUpdateCoalescerRe
 	}
 	for len(batch) < c.maxBatch {
 		select {
-		case req, ok := <-c.requests:
-			if !ok {
-				goto drained
-			}
+		case req := <-c.requests:
 			batch = append(batch, req)
+		case <-c.stoppedCh:
+			goto drained
 		default:
 			goto drained
 		}
