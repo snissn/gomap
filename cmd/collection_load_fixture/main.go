@@ -22,6 +22,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/cmd/internal/treedbstats"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -588,7 +589,7 @@ func runFixture(cfg config) (loadSummary, error) {
 	if err != nil {
 		return loadSummary{}, err
 	}
-	finalStats := selectedTreeDBStats(backend.Stats())
+	finalStats := treedbstats.Selected(backend.Stats())
 	wallElapsed := time.Since(wallStart)
 
 	if !closed {
@@ -671,47 +672,6 @@ func runFixture(cfg config) (loadSummary, error) {
 		GOOS:                          runtime.GOOS,
 		GOARCH:                        runtime.GOARCH,
 	}, nil
-}
-
-func selectedTreeDBStats(stats map[string]string) map[string]string {
-	if len(stats) == 0 {
-		return nil
-	}
-	out := make(map[string]string)
-	for key, value := range stats {
-		if isSelectedTreeDBStatKey(key) {
-			out[key] = value
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func isSelectedTreeDBStatKey(key string) bool {
-	switch {
-	case key == "treedb.commit_seq":
-		return true
-	case strings.HasPrefix(key, "treedb.cache.vlog_mmap."):
-		return true
-	case strings.HasPrefix(key, "treedb.vlog.mmap"):
-		return true
-	case strings.HasPrefix(key, "treedb.cache.vlog_zombie."):
-		return true
-	case strings.HasPrefix(key, "treedb.process.memory.vlog_zombie"):
-		return true
-	case strings.HasPrefix(key, "treedb.vlog.outer_leaf_block_cache."):
-		return true
-	case strings.HasPrefix(key, "treedb.process.read_path.outer_leaf."):
-		return true
-	case strings.HasPrefix(key, "treedb.cache.vlog_generation."):
-		return true
-	case strings.HasPrefix(key, "treedb.cache.vlog_retained_prune."):
-		return true
-	default:
-		return false
-	}
 }
 
 func prepareFixtureDir(cfg config) (string, bool, error) {

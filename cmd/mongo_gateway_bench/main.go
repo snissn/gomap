@@ -28,6 +28,7 @@ import (
 	mongogateway "github.com/snissn/gomap/TreeDB/mongo_gateway"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/fastclient"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
+	"github.com/snissn/gomap/cmd/internal/treedbstats"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/event"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -2599,55 +2600,8 @@ var selectedTreeDBExactStatKeys = [...]string{
 	"treedb.commit_seq",
 }
 
-var selectedTreeDBExactStatKeySet = newSelectedTreeDBExactStatKeySet(selectedTreeDBExactStatKeys[:])
-
-func newSelectedTreeDBExactStatKeySet(keys []string) map[string]struct{} {
-	keySet := make(map[string]struct{}, len(keys))
-	for _, key := range keys {
-		keySet[key] = struct{}{}
-	}
-	return keySet
-}
-
-var selectedTreeDBStatPrefixes = [...]string{
-	"treedb.publish.ordered_root_delta_group.",
-	"treedb.publish.watermark.",
-	"treedb.cache.vlog_mmap.",
-	"treedb.vlog.mmap",
-	"treedb.cache.vlog_zombie.",
-	"treedb.process.memory.vlog_zombie",
-	"treedb.vlog.outer_leaf_block_cache.",
-	"treedb.process.read_path.outer_leaf.",
-	"treedb.cache.vlog_generation.",
-	"treedb.cache.vlog_retained_prune.",
-}
-
-func isSelectedTreeDBStatKey(key string) bool {
-	if _, ok := selectedTreeDBExactStatKeySet[key]; ok {
-		return true
-	}
-	for _, prefix := range selectedTreeDBStatPrefixes {
-		if strings.HasPrefix(key, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
 func selectedTreeDBStats(stats map[string]string) map[string]string {
-	if len(stats) == 0 {
-		return nil
-	}
-	out := make(map[string]string)
-	for key, value := range stats {
-		if isSelectedTreeDBStatKey(key) {
-			out[key] = value
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
+	return treedbstats.Selected(stats)
 }
 
 func writeTreeDBStats(out io.Writer, label string, stats map[string]string) {

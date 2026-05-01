@@ -60,8 +60,10 @@ The default run includes:
 - selected mmap/cache stats from TreeDB
 
 Mongo gateway coverage is intentionally deferred to #1141 by default because it
-mixes client, protocol, gateway, BSON conversion, and storage costs. Use
-`-include-mongo` only after that path has a focused implementation.
+mixes client, protocol, gateway, BSON conversion, and storage costs. Passing
+`-include-mongo` adds one tiny in-process TreeDB Mongo-gateway smoke row labeled
+with `shape=mongo`; keep it opt-in unless the run is explicitly checking gateway
+behavior.
 
 ## Guardrails
 

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"io/fs"
 	"math"
 	"os"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/cmd/internal/treedbstats"
 )
 
 const schemaVersion = "treedb-out-of-core-smoke/v1"
@@ -200,6 +200,36 @@ type fixtureSummary struct {
 	IndexOuterLeavesInValueLog bool              `json:"index_outer_leaves_in_value_log"`
 }
 
+type mongoGatewaySummary struct {
+	Target                     string                 `json:"target"`
+	TreeDBDir                  string                 `json:"treedb_dir,omitempty"`
+	Documents                  int                    `json:"documents"`
+	BatchSize                  int                    `json:"batch_size"`
+	SecondaryIndexes           int                    `json:"secondary_indexes"`
+	ClientMode                 string                 `json:"client_mode"`
+	TreeDBProfile              string                 `json:"treedb_profile,omitempty"`
+	TreeDBDocumentFormat       string                 `json:"treedb_document_format,omitempty"`
+	TreeDBMaintenanceMode      string                 `json:"treedb_maintenance_mode,omitempty"`
+	Phases                     []mongoGatewayPhase    `json:"phases"`
+	TreeDBDiskAfterLoad        *mongoGatewayDiskUsage `json:"treedb_disk_after_load,omitempty"`
+	TreeDBDiskAfterCheckpoint  *mongoGatewayDiskUsage `json:"treedb_disk_after_checkpoint,omitempty"`
+	TreeDBDiskAfterMaintenance *mongoGatewayDiskUsage `json:"treedb_disk_after_maintenance,omitempty"`
+	TreeDBStatsFinal           map[string]string      `json:"treedb_stats_final,omitempty"`
+}
+
+type mongoGatewayPhase struct {
+	Name           string  `json:"name"`
+	Operations     int     `json:"operations"`
+	OpsPerSecond   float64 `json:"ops_per_sec"`
+	SampledNsPerOp float64 `json:"sampled_ns_per_op,omitempty"`
+	DurationMillis float64 `json:"duration_ms,omitempty"`
+}
+
+type mongoGatewayDiskUsage struct {
+	TotalBytes int64            `json:"total_bytes"`
+	Paths      map[string]int64 `json:"paths,omitempty"`
+}
+
 type timing struct {
 	Seconds   float64 `json:"seconds"`
 	SecPerOp  float64 `json:"sec_per_op,omitempty"`
@@ -221,6 +251,9 @@ type fileSummary struct {
 func main() {
 	cfg, err := parseConfig(os.Args[1:])
 	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
 		fmt.Fprintf(os.Stderr, "treedb-out-of-core-smoke: %v\n", err)
 		os.Exit(2)
 	}
@@ -274,7 +307,6 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.internalRawWorker, "internal-raw-worker", false, "internal raw TreeDB worker mode")
 	fs.StringVar(&cfg.rawDir, "raw-dir", "", "internal raw worker DB directory")
 	fs.StringVar(&cfg.rawJSONPath, "raw-json", "", "internal raw worker JSON output path")
-	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
@@ -433,7 +465,11 @@ func run(cfg config) error {
 			}
 		}
 	}
-	if !cfg.IncludeMongo {
+	if cfg.IncludeMongo {
+		if err := runMongoGatewayShape(cfg, run, logDir); err != nil {
+			return err
+		}
+	} else {
 		run.Deferred = append(run.Deferred, deferredWorkload{
 			Name:   "mongo_gateway_smoke",
 			Issue:  "#1141",
@@ -477,9 +513,12 @@ func prepareRunDir(dir string, allowExisting bool) error {
 		return errors.New("refusing to use filesystem root as run dir")
 	}
 	entries, err := os.ReadDir(dir)
-	if err == nil && len(entries) > 0 && !allowExisting {
+	if err == nil && len(entries) > 0 {
 		if _, statErr := os.Stat(filepath.Join(dir, runDirSentinel)); statErr != nil {
-			return fmt.Errorf("%s is not an empty out-of-core smoke run dir; use -allow-existing-run-dir to append", dir)
+			return fmt.Errorf("%s is non-empty and is not an out-of-core smoke run dir", dir)
+		}
+		if !allowExisting {
+			return fmt.Errorf("%s is an existing out-of-core smoke run dir; use -allow-existing-run-dir to append", dir)
 		}
 	}
 	if err != nil && !os.IsNotExist(err) {
@@ -535,6 +574,7 @@ func runRawShape(cfg config, run *smokeRun, logDir string) error {
 	write := summary.Timings["batch_write"]
 	read := summary.Timings["random_read_parallel"]
 	overwrite := summary.Timings["overwrite"]
+	postOverwriteRead := summary.Timings["post_overwrite_random_read_parallel"]
 	run.Results = append(run.Results,
 		resultRow{
 			ConfigName:      "treedb_raw",
@@ -595,6 +635,29 @@ func runRawShape(cfg config, run *smokeRun, logDir string) error {
 			BenchmarkTimed:  true,
 			OpsPerSec:       ptrFloat(overwrite.OpsPerSec),
 			NsPerItem:       nsPerItem(overwrite),
+			TotalBytes:      &total,
+			BytesPerItem:    bytesPerItem,
+			ComponentBytes:  components,
+			Budgets:         cfg.budgets(),
+			PressureClaimed: true,
+			Mmap:            extractMmapStats(summary.TreeDBStatsFinal),
+			Cache:           extractCacheStats(summary.TreeDBStatsFinal),
+			StatsAvailable:  sortedKeys(summary.TreeDBStatsFinal),
+			SourceArtifact:  jsonPath,
+		},
+		resultRow{
+			ConfigName:      "treedb_raw",
+			WorkloadName:    "raw_post_overwrite_random_read_parallel",
+			Engine:          "treedb",
+			Shape:           "raw",
+			KeyCount:        summary.Keys,
+			ItemCount:       summary.Keys,
+			BatchSize:       summary.BatchSize,
+			Phase:           "post_overwrite_read",
+			MeasurementKind: "benchmark_timed",
+			BenchmarkTimed:  true,
+			OpsPerSec:       ptrFloat(postOverwriteRead.OpsPerSec),
+			NsPerItem:       nsPerItem(postOverwriteRead),
 			TotalBytes:      &total,
 			BytesPerItem:    bytesPerItem,
 			ComponentBytes:  components,
@@ -677,6 +740,170 @@ func runCollectionShape(cfg config, run *smokeRun, logDir, format string, indexe
 	return nil
 }
 
+func runMongoGatewayShape(cfg config, run *smokeRun, logDir string) error {
+	format := preferredMongoFormat(cfg.formats)
+	indexes := preferredMongoIndexCount(cfg.indexes)
+	name := fmt.Sprintf("mongo_gateway_%s_%d_indexes", sanitizeName(format), indexes)
+	baseDir := cfg.OutDir
+	if resolved, err := filepath.EvalSymlinks(cfg.OutDir); err == nil {
+		baseDir = resolved
+	}
+	dir := filepath.Join(baseDir, name)
+	docs := cfg.CollectionDocs
+	reads := min(100, docs)
+	rangeReads := min(20, docs)
+	updates := min(50, docs)
+	args := []string{
+		"run", "./cmd/mongo_gateway_bench",
+		"-target", "treedb",
+		"-treedb-dir", dir,
+		"-keep-treedb-dir",
+		"-documents", strconv.Itoa(docs),
+		"-batch-size", strconv.Itoa(cfg.BatchSize),
+		"-reads", strconv.Itoa(reads),
+		"-range-reads", strconv.Itoa(rangeReads),
+		"-updates", strconv.Itoa(updates),
+		"-secondary-indexes", strconv.Itoa(indexes),
+		"-treedb-profile", cfg.Profile,
+		"-treedb-document-format", format,
+		"-treedb-maintenance", "checkpoint",
+		"-format", "json",
+	}
+	rec, stdout, err := runLoggedCommand(name, "go", args, cfg.RepoRoot, cfg.childEnv(), filepath.Join(logDir, name+".log"))
+	run.Commands = append(run.Commands, rec)
+	if err != nil {
+		return err
+	}
+	artifact := filepath.Join(cfg.OutDir, name+"_summary.json")
+	if err := os.WriteFile(artifact, []byte(stdout), 0o644); err != nil {
+		return err
+	}
+	var summary mongoGatewaySummary
+	if err := json.Unmarshal([]byte(stdout), &summary); err != nil {
+		return fmt.Errorf("parse %s JSON: %w", name, err)
+	}
+	row := mongoGatewayResultRow(cfg, summary, artifact)
+	run.Results = append(run.Results, row)
+	return nil
+}
+
+func mongoGatewayResultRow(cfg config, summary mongoGatewaySummary, artifact string) resultRow {
+	load := mongoGatewayPhaseByName(summary.Phases, "load_insert_many")
+	disk := firstMongoDisk(summary.TreeDBDiskAfterCheckpoint, summary.TreeDBDiskAfterLoad, summary.TreeDBDiskAfterMaintenance)
+	var totalPtr *uint64
+	var components map[string]uint64
+	if disk != nil && disk.TotalBytes >= 0 {
+		total := uint64(disk.TotalBytes)
+		totalPtr = &total
+		components = mongoDiskComponentBytes(disk)
+	} else if summary.TreeDBDir != "" {
+		components, _ = collectComponentBytes(summary.TreeDBDir)
+		if components != nil {
+			var total uint64
+			for _, bytes := range components {
+				total += bytes
+			}
+			totalPtr = &total
+		}
+	}
+	format := summary.TreeDBDocumentFormat
+	if format == "" {
+		format = preferredMongoFormat(cfg.formats)
+	}
+	indexes := summary.SecondaryIndexes
+	if indexes == 0 {
+		indexes = preferredMongoIndexCount(cfg.indexes)
+	}
+	return resultRow{
+		ConfigName:       fmt.Sprintf("treedb_mongo_gateway_%s_%d_indexes", sanitizeName(format), indexes),
+		WorkloadName:     "mongo_gateway_insert",
+		Engine:           "treedb",
+		Shape:            "mongo",
+		Format:           format,
+		IndexCount:       indexes,
+		DocumentCount:    summary.Documents,
+		ItemCount:        summary.Documents,
+		BatchSize:        summary.BatchSize,
+		Phase:            "post_insert",
+		MeasurementKind:  "benchmark_timed",
+		BenchmarkTimed:   true,
+		DocsPerSec:       ptrFloat(load.OpsPerSecond),
+		OpsPerSec:        ptrFloat(load.OpsPerSecond),
+		NsPerItem:        ptrFloat(load.SampledNsPerOp),
+		TotalBytes:       totalPtr,
+		BytesPerItem:     bytesPerFromPtr(totalPtr, summary.Documents),
+		ComponentBytes:   components,
+		Budgets:          cfg.budgets(),
+		PressureClaimed:  true,
+		Mmap:             extractMmapStats(summary.TreeDBStatsFinal),
+		Cache:            extractCacheStats(summary.TreeDBStatsFinal),
+		StatsAvailable:   sortedKeys(summary.TreeDBStatsFinal),
+		SourceArtifact:   artifact,
+		MeasurementNotes: "mongo_gateway_bench in-process TreeDB gateway smoke; maintenance=checkpoint, not full compaction",
+	}
+}
+
+func mongoGatewayPhaseByName(phases []mongoGatewayPhase, name string) mongoGatewayPhase {
+	for _, phase := range phases {
+		if phase.Name == name {
+			return phase
+		}
+	}
+	return mongoGatewayPhase{Name: name}
+}
+
+func firstMongoDisk(disks ...*mongoGatewayDiskUsage) *mongoGatewayDiskUsage {
+	for _, disk := range disks {
+		if disk != nil {
+			return disk
+		}
+	}
+	return nil
+}
+
+func mongoDiskComponentBytes(disk *mongoGatewayDiskUsage) map[string]uint64 {
+	if disk == nil || len(disk.Paths) == 0 {
+		return nil
+	}
+	out := make(map[string]uint64)
+	for path, bytes := range disk.Paths {
+		if bytes >= 0 {
+			out[path] = uint64(bytes)
+		}
+	}
+	return out
+}
+
+func preferredMongoFormat(formats []string) string {
+	for _, format := range formats {
+		if format == "bson" {
+			return format
+		}
+	}
+	for _, format := range formats {
+		if format == "template-v1" {
+			return format
+		}
+	}
+	if len(formats) > 0 {
+		return formats[0]
+	}
+	return "bson"
+}
+
+func preferredMongoIndexCount(indexes []int) int {
+	out := 0
+	for _, indexCount := range indexes {
+		if indexCount > out {
+			out = indexCount
+		}
+	}
+	if out > 2 {
+		return 2
+	}
+	return out
+}
+
 func (cfg config) childEnv() map[string]string {
 	return map[string]string{
 		"TREEDB_VLOG_MAX_DEAD_MAPPINGS":     strconv.Itoa(cfg.MaxDeadMappings),
@@ -715,8 +942,13 @@ func runLoggedCommand(name, bin string, args []string, workDir string, env map[s
 	log.Write(stdout.Bytes())
 	log.WriteString("\n# stderr\n")
 	log.Write(stderr.Bytes())
-	if writeErr := os.WriteFile(logPath, log.Bytes(), 0o644); writeErr != nil && err == nil {
-		err = writeErr
+	if writeErr := os.WriteFile(logPath, log.Bytes(), 0o644); writeErr != nil {
+		writeErr = fmt.Errorf("write command log %s: %w", logPath, writeErr)
+		if err != nil {
+			err = errors.Join(err, writeErr)
+		} else {
+			err = writeErr
+		}
 	}
 	rec := commandRecord{
 		Name:     name,
@@ -795,7 +1027,7 @@ func runRawWorker(cfg config) error {
 	}
 	timings["post_overwrite_random_read_parallel"] = elapsedTiming(time.Since(start), cfg.RawKeys)
 
-	stats := selectedTreeDBStats(db.Stats())
+	stats := treedbstats.Selected(db.Stats())
 	if err := db.Close(); err != nil {
 		return err
 	}
@@ -1006,47 +1238,6 @@ func collectComponentBytes(root string) (map[string]uint64, error) {
 	return out, err
 }
 
-func selectedTreeDBStats(stats map[string]string) map[string]string {
-	if len(stats) == 0 {
-		return nil
-	}
-	out := make(map[string]string)
-	for key, value := range stats {
-		if isSelectedTreeDBStatKey(key) {
-			out[key] = value
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func isSelectedTreeDBStatKey(key string) bool {
-	switch {
-	case key == "treedb.commit_seq":
-		return true
-	case strings.HasPrefix(key, "treedb.cache.vlog_mmap."):
-		return true
-	case strings.HasPrefix(key, "treedb.vlog.mmap"):
-		return true
-	case strings.HasPrefix(key, "treedb.cache.vlog_zombie."):
-		return true
-	case strings.HasPrefix(key, "treedb.process.memory.vlog_zombie"):
-		return true
-	case strings.HasPrefix(key, "treedb.vlog.outer_leaf_block_cache."):
-		return true
-	case strings.HasPrefix(key, "treedb.process.read_path.outer_leaf."):
-		return true
-	case strings.HasPrefix(key, "treedb.cache.vlog_generation."):
-		return true
-	case strings.HasPrefix(key, "treedb.cache.vlog_retained_prune."):
-		return true
-	default:
-		return false
-	}
-}
-
 func extractMmapStats(stats map[string]string) *mmapStats {
 	if len(stats) == 0 {
 		return nil
@@ -1188,7 +1379,7 @@ func renderMarkdown(run *smokeRun) string {
 	errorsCount, warningsCount := countChecks(run.Checks)
 	sb.WriteString(fmt.Sprintf("- Results: %d rows across raw TreeDB and collection smoke shapes.\n", len(run.Results)))
 	sb.WriteString(fmt.Sprintf("- Guardrails: %d errors, %d warnings.\n", errorsCount, warningsCount))
-	sb.WriteString("- This is a CI-sized budget-pressure smoke, not a true large-than-RAM benchmark. It intentionally uses tiny configured budgets to exercise bounded behavior before #1135/#1136 changes.\n\n")
+	sb.WriteString("- This is a CI-sized budget-pressure smoke, not a true larger-than-RAM benchmark. It intentionally uses tiny configured budgets to exercise bounded behavior before #1135/#1136 changes.\n\n")
 
 	sb.WriteString("## Benchmark Configuration\n\n")
 	sb.WriteString("| Field | Value |\n| --- | --- |\n")
@@ -1344,7 +1535,7 @@ func statFloat(stats map[string]string, keys ...string) (float64, bool) {
 
 func commandLine() []string {
 	if raw := strings.TrimSpace(os.Getenv(envCommandLine)); raw != "" {
-		return strings.Fields(raw)
+		return []string{raw}
 	}
 	return append([]string(nil), os.Args...)
 }
@@ -1383,6 +1574,13 @@ func bytesPer(total uint64, count int) *float64 {
 	}
 	v := float64(total) / float64(count)
 	return &v
+}
+
+func bytesPerFromPtr(total *uint64, count int) *float64 {
+	if total == nil {
+		return nil
+	}
+	return bytesPer(*total, count)
 }
 
 func nsPerItem(t timing) *float64 {
