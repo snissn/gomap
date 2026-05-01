@@ -402,6 +402,7 @@ type mongoUpdateCoalescer struct {
 	idleTTL        time.Duration
 	requests       chan mongoUpdateCoalescerRequest
 	stoppedCh      chan struct{}
+	done           chan struct{}
 	server         *Server
 	name           string
 	mu             sync.RWMutex
@@ -432,8 +433,30 @@ func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collectio
 	if !coalescer.enqueue(mongoUpdateCoalescerRequest{col: col, item: update, done: done}) {
 		return runMongoUpdateOne(col, update)
 	}
-	result := <-done
+	result := coalescer.waitForUpdateResult(done)
 	return result.matched, result.modified, result.err
+}
+
+func (c *mongoUpdateCoalescer) waitForUpdateResult(done chan mongoUpdateCoalescerResult) mongoUpdateCoalescerResult {
+	select {
+	case result := <-done:
+		return result
+	default:
+	}
+	if c == nil || c.done == nil {
+		return <-done
+	}
+	select {
+	case result := <-done:
+		return result
+	case <-c.done:
+		select {
+		case result := <-done:
+			return result
+		default:
+			return mongoUpdateCoalescerResult{err: errors.New("mongo gateway update coalescer stopped before completing request")}
+		}
+	}
 }
 
 func (s *Server) mongoUpdateCoalescer(name string) *mongoUpdateCoalescer {
@@ -466,6 +489,7 @@ func (s *Server) mongoUpdateCoalescer(name string) *mongoUpdateCoalescer {
 		idleTTL:   idleTTL,
 		requests:  make(chan mongoUpdateCoalescerRequest, maxBatch*4),
 		stoppedCh: make(chan struct{}),
+		done:      make(chan struct{}),
 		server:    s,
 		name:      name,
 	}
@@ -523,6 +547,9 @@ func (c *mongoUpdateCoalescer) stop() {
 		return
 	}
 	_ = c.closeRequests()
+	if c.done != nil {
+		<-c.done
+	}
 }
 
 func (c *mongoUpdateCoalescer) closeRequests() bool {
@@ -585,6 +612,15 @@ func (c *mongoUpdateCoalescer) isStopped() bool {
 	return c.stopped
 }
 
+func (c *mongoUpdateCoalescer) markStopped() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.stopped = true
+	c.mu.Unlock()
+}
+
 func (c *mongoUpdateCoalescer) drainRequestsDirect() {
 	for {
 		select {
@@ -598,6 +634,12 @@ func (c *mongoUpdateCoalescer) drainRequestsDirect() {
 }
 
 func (c *mongoUpdateCoalescer) run() {
+	defer func() {
+		c.markStopped()
+		if c.done != nil {
+			close(c.done)
+		}
+	}()
 	var idle <-chan time.Time
 	var timer *time.Timer
 	if c.idleTTL > 0 {
