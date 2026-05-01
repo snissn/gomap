@@ -106,6 +106,45 @@ func TestClientInsertManyRawBSON(t *testing.T) {
 	}
 }
 
+func TestClientInsertManyRawBSONCancellationWithoutDeadlineInterruptsRead(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer func() { _ = serverConn.Close() }()
+	client := New(clientConn)
+	defer func() { _ = client.Close() }()
+
+	rawDocs := []bson.Raw{mustBSON(t, bson.D{{Key: "_id", Value: "u1"}})}
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := client.InsertManyRawBSON(ctx, "app", "users", rawDocs)
+		errCh <- err
+	}()
+
+	readDone := make(chan error, 1)
+	go func() {
+		_, _, err := wire.ReadMessage(serverConn, 0)
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatalf("server read request: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not receive request")
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("InsertManyRawBSON err=%v want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("InsertManyRawBSON did not return after cancellation")
+	}
+}
+
 func mustBSON(t *testing.T, doc bson.D) bson.Raw {
 	t.Helper()
 	raw, err := bson.Marshal(doc)

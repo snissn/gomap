@@ -65,9 +65,6 @@ func (c *Client) InsertManyRawBSON(ctx context.Context, database, collection str
 	}
 	seqDocs := make([]wire.Document, len(docs))
 	for i := range docs {
-		if err := wire.ValidateDocument(docs[i]); err != nil {
-			return 0, fmt.Errorf("documents[%d]: %w", i, err)
-		}
 		seqDocs[i] = wire.Document(docs[i])
 	}
 	msg, err := wire.AppendMsgMessageWithSequences(nil, c.nextRequestID.Add(1), 0, 0, wire.Document(commandDoc), []wire.DocumentSequence{{
@@ -91,16 +88,47 @@ func (c *Client) roundTripInsert(ctx context.Context, msg []byte, wantN int) (in
 		if err := c.conn.SetDeadline(deadline); err != nil {
 			return 0, err
 		}
-		defer func() { _ = c.conn.SetDeadline(time.Time{}) }()
 	}
+	stopCancelWatch := c.watchContextCancelLocked(ctx)
+	defer func() {
+		stopCancelWatch()
+		_ = c.conn.SetDeadline(time.Time{})
+	}()
 	if err := writeFull(c.conn, msg); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return 0, ctxErr
+		}
 		return 0, err
 	}
 	header, body, err := wire.ReadMessage(c.conn, c.maxMessageLen)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return 0, ctxErr
+		}
 		return 0, err
 	}
 	return parseInsertResponse(header, body, wantN)
+}
+
+func (c *Client) watchContextCancelLocked(ctx context.Context) func() {
+	done := ctx.Done()
+	if done == nil {
+		return func() {}
+	}
+	stop := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		select {
+		case <-done:
+			_ = c.conn.SetDeadline(time.Now())
+		case <-stop:
+		}
+	}()
+	return func() {
+		close(stop)
+		<-stopped
+	}
 }
 
 func parseInsertResponse(header wire.Header, body []byte, wantN int) (int, error) {

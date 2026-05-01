@@ -76,6 +76,20 @@ func TestAppendMsgMessageWithSequencesRollsBackOnLargeMessage(t *testing.T) {
 	}
 }
 
+func TestAppendMsgMessageWithSequencesRejectsTrailingBytesInSequenceDocument(t *testing.T) {
+	commandDoc := mustDocument(t, bson.D{{Key: "insert", Value: "docs"}})
+	doc := mustDocument(t, bson.D{{Key: "_id", Value: "a"}})
+	doc = append(append(Document(nil), doc...), 0)
+
+	_, err := AppendMsgMessageWithSequences(nil, 1, 0, 0, commandDoc, []DocumentSequence{{
+		Identifier: "documents",
+		Documents:  []Document{doc},
+	}})
+	if !errors.Is(err, ErrMalformed) {
+		t.Fatalf("AppendMsgMessageWithSequences err=%v want ErrMalformed", err)
+	}
+}
+
 func TestQueryHandshakeReplyRoundTrip(t *testing.T) {
 	queryDoc := mustDocument(t, bson.D{
 		{Key: "isMaster", Value: int32(1)},

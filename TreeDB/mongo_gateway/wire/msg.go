@@ -99,7 +99,7 @@ func AppendMsgBodyWithSequences(dst []byte, flags MsgFlag, doc Document, sequenc
 		dst = appendInt32(dst, 0)
 		dst = appendCString(dst, seq.Identifier)
 		for _, doc := range seq.Documents {
-			if err := validateParsedDocument(doc); err != nil {
+			if err := ValidateDocument(doc); err != nil {
 				return nil, err
 			}
 			dst = append(dst, doc...)
@@ -153,13 +153,9 @@ func readDocumentSequence(src []byte) (DocumentSequence, []byte, error) {
 	if identifier == "" {
 		return DocumentSequence{}, nil, fmt.Errorf("%w: OP_MSG document sequence identifier cannot be empty", ErrMalformed)
 	}
-	capacity, err := countDocumentSequenceDocuments(rem)
-	if err != nil {
-		return DocumentSequence{}, nil, err
-	}
 	seq := DocumentSequence{
 		Identifier: identifier,
-		Documents:  make([]Document, 0, capacity),
+		Documents:  make([]Document, 0),
 	}
 	for len(rem) > 0 {
 		doc, next, err := readDocument(rem)
@@ -173,19 +169,6 @@ func readDocumentSequence(src []byte) (DocumentSequence, []byte, error) {
 		rem = next
 	}
 	return seq, src[size:], nil
-}
-
-func countDocumentSequenceDocuments(src []byte) (int, error) {
-	var count int
-	for len(src) > 0 {
-		_, next, err := readDocument(src)
-		if err != nil {
-			return 0, err
-		}
-		count++
-		src = next
-	}
-	return count, nil
 }
 
 func validateMsgFlags(flags MsgFlag) error {
