@@ -2400,10 +2400,14 @@ func writeTreeDBStats(out io.Writer, label string, stats map[string]string) {
 	keys := []string{
 		"treedb.commit_seq",
 		"treedb.publish.ordered_root_delta_group.calls_total",
+		"treedb.publish.ordered_root_delta_group.errors_total",
 		"treedb.publish.ordered_root_delta_group.roots_total",
 		"treedb.publish.ordered_root_delta_group.avg_roots_per_call",
+		"treedb.publish.ordered_root_delta_group.write_lock_wait_ns_total",
+		"treedb.publish.ordered_root_delta_group.write_lock_hold_ns_total",
 		"treedb.publish.ordered_root_delta_group.write_lock_wait_share_pct",
 		"treedb.publish.ordered_root_delta_group.latency_p99_ms",
+		"treedb.publish.ordered_root_delta_group.latency_max_ms",
 		"treedb.publish.watermark.lock_delay_share_pct",
 		"treedb.publish.watermark.latency_p99_ms",
 	}

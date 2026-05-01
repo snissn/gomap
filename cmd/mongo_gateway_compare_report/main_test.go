@@ -182,6 +182,60 @@ func TestReportSupportsMultipleTreeDBConfigsPerMongoCell(t *testing.T) {
 	}
 }
 
+func TestReportSupportsScalingMongoConfigsPerScenario(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb_w1.json"), `{
+  "target": "treedb",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "concurrent_id_update_set_w1", "operations": 100, "ops_per_sec": 1000, "latency_micros": {"p95": 10}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 2000}
+}`)
+	writeFile(t, filepath.Join(dir, "treedb_w2.json"), `{
+  "target": "treedb",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "concurrent_id_update_set_w2", "operations": 100, "ops_per_sec": 1500, "latency_micros": {"p95": 20}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 2200}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo_w1.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "concurrent_id_update_set_w1", "operations": 100, "ops_per_sec": 500, "latency_micros": {"p95": 30}}],
+  "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4000}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo_w2.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "concurrent_id_update_set_w2", "operations": 100, "ops_per_sec": 750, "latency_micros": {"p95": 40}}],
+  "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4100}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	reportPath := filepath.Join(dir, "report.md")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_driver-command-raw_writers_1\t100\t2\ttreedb_w1.json\t2000\n"+
+		"mongo\tmongo_writers_1\t100\t2\tmongo_w1.json\t4000\n"+
+		"treedb\ttreedb_bson_driver-command-raw_writers_2\t100\t2\ttreedb_w2.json\t2200\n"+
+		"mongo\tmongo_writers_2\t100\t2\tmongo_w2.json\t4100\n")
+
+	if err := run([]string{"-matrix", matrixPath, "-report", reportPath}); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	report := readFile(t, reportPath)
+	for _, want := range []string{
+		"| 100 | 2 | `treedb_bson_driver-command-raw_writers_1` | `concurrent_id_update_set_w1` | 1000 | n/a | 500 | n/a | 2.00x | n/a | 10.0 | 30.0 |",
+		"| 100 | 2 | `treedb_bson_driver-command-raw_writers_2` | `concurrent_id_update_set_w2` | 1500 | n/a | 750 | n/a | 2.00x | n/a | 20.0 | 40.0 |",
+		"| 100 | 2 | `mongo_writers_1` | mongo | `mongo_w1.json` |",
+		"| 100 | 2 | `mongo_writers_2` | mongo | `mongo_w2.json` |",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q\n%s", want, report)
+		}
+	}
+}
+
 func TestLargestDiskCellUsesDiskMetrics(t *testing.T) {
 	cells := []cellComparison{
 		{

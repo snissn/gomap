@@ -3549,16 +3549,19 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 	if err != nil {
 		return nil, err
 	}
-	if plan == nil || len(plan.deltaTables) == 0 {
-		if plan != nil {
-			defer plan.close()
-			return plan.results, nil
-		}
+	if plan == nil {
 		return nil, nil
+	}
+	defer plan.close()
+	if len(plan.deltaTables) == 0 {
+		return plan.results, nil
 	}
 
 	unlockMutation = c.lockMutation()
 	defer unlockMutation()
+	if err := c.flushBufferedWrites(); err != nil {
+		return nil, err
+	}
 	return c.publishUpdateBatchPlanLocked(plan)
 }
 
@@ -3824,7 +3827,6 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]Upda
 	if plan == nil {
 		return nil, nil
 	}
-	defer plan.close()
 	if len(plan.deltaTables) == 0 {
 		return plan.results, nil
 	}
