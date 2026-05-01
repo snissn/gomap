@@ -443,7 +443,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.ConcurrentReads, "concurrent-reads", 0, "total _id read operations for the concurrent read phase")
 	fs.IntVar(&cfg.ConcurrentWriters, "concurrent-writers", 0, "writer goroutines for the concurrent _id update phase; 0 disables the phase")
 	fs.IntVar(&cfg.ConcurrentWrites, "concurrent-writes", 0, "total update operations for the concurrent write phase")
-	fs.BoolVar(&cfg.UpdateIndexedField, "update-indexed-field", false, "include the city field in update phases so secondary-index maintenance is exercised when the city index exists")
+	fs.BoolVar(&cfg.UpdateIndexedField, "update-indexed-field", false, "include the city field in update phases; requires -secondary-indexes=2 so the city index exists")
 	fs.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 2, "secondary indexes to create: 0, 1=email, 2=both single-field indexes: email and city")
 	fs.StringVar(&cfg.ClientMode, "client-mode", cfg.ClientMode, "benchmark client path: driver, driver-command, driver-command-raw, driver-unack, raw-wire, or raw-wire-tcp; raw-wire modes are TreeDB-only and bypass the MongoDB Go driver for the insert load phase")
 	fs.StringVar(&treeDBProfile, "treedb-profile", treeDBProfile, "TreeDB profile for -target treedb: fast, wal_on_fast, durable, or bench")
@@ -1125,6 +1125,8 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 			id := benchmarkID((i * 31) % cfg.Documents)
 			filter := bson.D{{Key: "_id", Value: id}}
 			update := benchmarkSetUpdate(i, false, cfg.UpdateIndexedField)
+			// Sample the driver/gateway/DB call; request construction is outside
+			// the update latency window and documented in the README.
 			begin := time.Now()
 			res, err := coll.UpdateOne(ctx, filter, update)
 			sample(time.Since(begin))
@@ -1173,6 +1175,8 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 				id := benchmarkID((op * 37) % cfg.Documents)
 				filter := bson.D{{Key: "_id", Value: id}}
 				update := benchmarkSetUpdate(op, true, cfg.UpdateIndexedField)
+				// Sample the driver/gateway/DB call; request construction is outside
+				// the update latency window and documented in the README.
 				begin := time.Now()
 				res, err := coll.UpdateOne(ctx, filter, update)
 				sample(time.Since(begin))
@@ -1931,17 +1935,16 @@ func benchmarkDocument(i int) bson.D {
 
 func benchmarkSetUpdate(i int, concurrentPhase bool, updateIndexedField bool) bson.D {
 	set := make(bson.D, 0, 3)
+	updatedKey := "updated"
+	updateSeqKey := "update_seq"
 	if concurrentPhase {
-		set = append(set,
-			bson.E{Key: "concurrent_updated", Value: true},
-			bson.E{Key: "concurrent_update_seq", Value: int64(i)},
-		)
-	} else {
-		set = append(set,
-			bson.E{Key: "updated", Value: true},
-			bson.E{Key: "update_seq", Value: int64(i)},
-		)
+		updatedKey = "concurrent_updated"
+		updateSeqKey = "concurrent_update_seq"
 	}
+	set = append(set,
+		bson.E{Key: updatedKey, Value: true},
+		bson.E{Key: updateSeqKey, Value: int64(i)},
+	)
 	if updateIndexedField {
 		set = append(set, bson.E{Key: "city", Value: benchmarkUpdatedCity(i)})
 	}
@@ -1965,6 +1968,8 @@ func benchmarkUpdatedCity(i int) string {
 }
 
 func buildBenchmarkUpdatedCityValues() []string {
+	// Keep a long precomputed cycle so indexed-update stress runs usually change
+	// the secondary key on repeated visits without formatting strings in the hot path.
 	const generations = 8192
 	values := make([]string, 0, len(benchmarkUpdatedCities)*generations)
 	for generation := 0; generation < generations; generation++ {
