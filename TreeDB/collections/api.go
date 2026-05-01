@@ -2681,7 +2681,7 @@ func (c *Collection) validateInsertBatchPlanWithSnapshotLocked(validation insert
 	for _, rootName := range validation.rootNames {
 		want, ok := validation.baseRootIDs[rootName]
 		if !ok {
-			return fmt.Errorf("collections: insert plan missing base root id for collection %q root %q", validation.meta.Name, rootName)
+			return fmt.Errorf("collections: insert plan missing base root id collection=%q root=%q", validation.meta.Name, rootName)
 		}
 		if got := validation.catalog.rootID(rootName); got != want {
 			return errConcurrentRootModification(validation.meta.Name, rootName)
@@ -3492,6 +3492,9 @@ func validateBSONReplacementPreservesID(current, replacement []byte, opts collec
 }
 
 func waitBeforeCollectionMutationRetry(attempt int) {
+	if attempt+1 >= maxCollectionMutationRetries {
+		return
+	}
 	if attempt < 4 {
 		runtime.Gosched()
 		return

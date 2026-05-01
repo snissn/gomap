@@ -2496,7 +2496,7 @@ func TestCollectionValidateInsertBatchPlanLockedClassifiesRaces(t *testing.T) {
 		t.Fatalf("root mismatch err=%v missing collection/root context", err)
 	}
 	validation.baseRootIDs = map[string]uint64{}
-	if current, _, err := col.validateInsertBatchPlanLocked(validation); current != nil || err == nil || errors.Is(err, ErrConcurrentMutation) || !strings.Contains(err.Error(), `collection "users" root "users/primary"`) {
+	if current, _, err := col.validateInsertBatchPlanLocked(validation); current != nil || err == nil || errors.Is(err, ErrConcurrentMutation) || !strings.Contains(err.Error(), `collection="users"`) || !strings.Contains(err.Error(), `root="users/primary"`) {
 		if current != nil {
 			_ = current.Close()
 		}
