@@ -1958,6 +1958,19 @@ func uniqueCollectionIndexNames(meta CollectionMeta) map[string]struct{} {
 	return uniqueIndexes
 }
 
+func uniqueCollectionSecondaryRootNames(meta CollectionMeta) map[string]string {
+	var uniqueRoots map[string]string
+	for _, idx := range meta.Indexes {
+		if idx.Unique {
+			if uniqueRoots == nil {
+				uniqueRoots = make(map[string]string, len(meta.Indexes))
+			}
+			uniqueRoots[collectionSecondaryRootName(meta.Name, idx.Name)] = idx.Name
+		}
+	}
+	return uniqueRoots
+}
+
 func rejectBufferedUniqueIndexConflicts(indexName string, pendingIndex *bufferedUniqueValueIndex, batchIndex memtable.Table) error {
 	it := batchIndex.NewIterator(nil, nil)
 	defer func() { _ = it.Close() }()
@@ -4935,7 +4948,20 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	if domain.rootRuns == nil {
 		domain.rootRuns = make(map[string][]memtable.Table, len(plan.rootNames))
 	}
+	uniqueSecondaryRoots := uniqueCollectionSecondaryRootNames(plan.meta)
 	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, stagedBytes)
+	if !shouldAutoFlushAfterAdding && len(uniqueSecondaryRoots) > 0 && bufferedIndexedAutoFlushEnabled(plan.meta.Options) {
+		for i, rootName := range plan.rootNames {
+			if _, ok := uniqueSecondaryRoots[rootName]; !ok {
+				continue
+			}
+			table := plan.deltaTables[i]
+			if table != nil && table.Len() > 0 {
+				shouldAutoFlushAfterAdding = true
+				break
+			}
+		}
+	}
 	var checkpoint bufferedIndexedCheckpoint
 	collectionMetaCheckpoint := c.meta
 	if shouldAutoFlushAfterAdding {
@@ -4961,6 +4987,30 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 				}
 				return false, err
 			}
+		}
+		if indexName, ok := uniqueSecondaryRoots[rootName]; ok {
+			uniqueValueTable, uniquePrefixes, err := bufferedUniqueIndexValueRun(table)
+			if err != nil {
+				if shouldAutoFlushAfterAdding {
+					rollbackBufferedIndexedDomain(domain, checkpoint)
+					c.meta = collectionMetaCheckpoint
+				}
+				return false, err
+			}
+			if domain.uniqueValueRuns == nil {
+				domain.uniqueValueRuns = make(map[string][]memtable.Table)
+			}
+			if domain.uniqueValueIndex == nil {
+				domain.uniqueValueIndex = make(map[string]*bufferedUniqueValueIndex)
+			}
+			domain.uniqueValueRuns[indexName] = append(domain.uniqueValueRuns[indexName], uniqueValueTable)
+			index := domain.uniqueValueIndex[indexName]
+			if index == nil {
+				index = newBufferedUniqueValueIndex(max(1, len(uniquePrefixes)))
+				domain.uniqueValueIndex[indexName] = index
+			}
+			index.addAll(uniquePrefixes)
+			stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, uniqueValueTable.Size())
 		}
 		domain.rootPolicies[rootName] = plan.policies[i]
 		domain.rootRuns[rootName] = append(domain.rootRuns[rootName], table)
@@ -6039,7 +6089,7 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	if err != nil {
 		return nil, false, err
 	}
-	bufferedTable, err := bufferedIndexTableLocked(domain, catalog.meta.Name, indexName, prefix, maxResults)
+	bufferedTable, err := bufferedIndexTableLocked(domain, catalog.meta.Name, indexName, idx.Unique, prefix, maxResults)
 	if err != nil {
 		return nil, false, err
 	}
@@ -6073,7 +6123,7 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 // bufferedIndexTableLocked materializes buffered entries for one secondary
 // index prefix while domain.mu is held. The returned pooled table is owned by
 // the caller and must be released with resetCollectionRunTable.
-func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, indexName string, prefix []byte, maxResults int) (memtable.Table, error) {
+func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, indexName string, unique bool, prefix []byte, maxResults int) (memtable.Table, error) {
 	if domain == nil {
 		return nil, nil
 	}
@@ -6086,6 +6136,12 @@ func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, ind
 	runs := domain.rootRuns[collectionSecondaryRootName(collectionName, indexName)]
 	if len(runs) == 0 {
 		return nil, nil
+	}
+	if unique {
+		pending := domain.uniqueValueIndex[indexName]
+		if pending != nil && !pending.contains(prefix) {
+			return nil, nil
+		}
 	}
 	table := newCollectionRunTable(0)
 	liveLimit := collectionLimitedResultSentinel(maxResults)

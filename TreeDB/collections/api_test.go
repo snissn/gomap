@@ -1999,7 +1999,7 @@ func TestBufferedIndexTableLockedLimitsLiveMaterialization(t *testing.T) {
 		},
 	}
 
-	buffered, err := bufferedIndexTableLocked(domain, "users", "city", prefix, 1)
+	buffered, err := bufferedIndexTableLocked(domain, "users", "city", false, prefix, 1)
 	if err != nil {
 		t.Fatalf("buffered index table: %v", err)
 	}
@@ -2009,6 +2009,66 @@ func TestBufferedIndexTableLockedLimitsLiveMaterialization(t *testing.T) {
 	}
 	if got := buffered.Len(); got != 3 {
 		t.Fatalf("buffered table len=%d want tombstone plus two live rows", got)
+	}
+}
+
+func TestBufferedIndexTableLockedUsesUniqueValueIndexForMisses(t *testing.T) {
+	hnlEncoded, err := encodeIndexScalar("hnl@example.com")
+	if err != nil {
+		t.Fatalf("encode hnl email: %v", err)
+	}
+	_, hnlPrefix, err := appendIndexValuePrefixSlice(nil, hnlEncoded)
+	if err != nil {
+		t.Fatalf("hnl prefix: %v", err)
+	}
+	seaEncoded, err := encodeIndexScalar("sea@example.com")
+	if err != nil {
+		t.Fatalf("encode sea email: %v", err)
+	}
+	_, seaPrefix, err := appendIndexValuePrefixSlice(nil, seaEncoded)
+	if err != nil {
+		t.Fatalf("sea prefix: %v", err)
+	}
+	key, err := indexEntryKey(seaEncoded, []byte("u2"))
+	if err != nil {
+		t.Fatalf("sea index key: %v", err)
+	}
+	table := newCollectionRunTable(1)
+	setCollectionRunValue(table, key, nil)
+	table.Freeze()
+	defer resetCollectionRunTable(table)
+
+	pending := newBufferedUniqueValueIndex(1)
+	pending.add(seaPrefix)
+	domain := &collectionWriteDomain{
+		count: 1,
+		meta:  CollectionMeta{Name: "users"},
+		rootRuns: map[string][]memtable.Table{
+			collectionSecondaryRootName("users", "email"): {table},
+		},
+		uniqueValueIndex: map[string]*bufferedUniqueValueIndex{
+			"email": pending,
+		},
+	}
+
+	missing, err := bufferedIndexTableLocked(domain, "users", "email", true, hnlPrefix, 0)
+	if err != nil {
+		t.Fatalf("buffered unique miss: %v", err)
+	}
+	if missing != nil {
+		defer resetCollectionRunTable(missing)
+		t.Fatalf("buffered unique miss table len=%d want nil", missing.Len())
+	}
+	buffered, err := bufferedIndexTableLocked(domain, "users", "email", true, seaPrefix, 0)
+	if err != nil {
+		t.Fatalf("buffered unique hit: %v", err)
+	}
+	if buffered == nil {
+		t.Fatal("buffered unique hit table nil")
+	}
+	defer resetCollectionRunTable(buffered)
+	if got := buffered.Len(); got != 1 {
+		t.Fatalf("buffered unique hit len=%d want 1", got)
 	}
 }
 
@@ -4909,6 +4969,74 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReadsBufferedInsert
 	flushed := d.State()
 	if flushed.CommitSeq != before.CommitSeq+1 {
 		t.Fatalf("flush advanced commit seq by %d, want 1", flushed.CommitSeq-before.CommitSeq)
+	}
+}
+
+func TestCollectionUpdateBatchMaintainsBufferedUniqueValueIndex(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"a@example.com","city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert flushed document: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush document: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{[]byte(`{"email":"b@example.com","city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert buffered document: %v", err)
+	}
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sea")},
+	}); err != nil {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatal("update batch was not buffered")
+	}
+
+	encoded, err := encodeIndexScalar("a@example.com")
+	if err != nil {
+		t.Fatalf("encode email: %v", err)
+	}
+	_, prefix, err := appendIndexValuePrefixSlice(nil, encoded)
+	if err != nil {
+		t.Fatalf("email prefix: %v", err)
+	}
+	col.writeDomain.mu.RLock()
+	pending := col.writeDomain.uniqueValueIndex["email"]
+	contains := pending != nil && pending.contains(prefix)
+	col.writeDomain.mu.RUnlock()
+	if !contains {
+		t.Fatal("buffered update did not add unchanged unique email to pending unique-value index")
+	}
+	ids, err := col.FindByIndex("email", "a@example.com")
+	if err != nil {
+		t.Fatalf("find buffered updated email: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("email ids=%q want [u1]", ids)
 	}
 }
 
