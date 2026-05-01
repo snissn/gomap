@@ -37,9 +37,8 @@ const (
 	// batches use the indexed write-domain memtable path by default.
 	DefaultIndexedWriteMemtableDirectBatchDocuments = DefaultIndexedWriteMemtableMaxDocuments / 4
 	defaultCollectionUpdateCombineMaxBatch          = 256
+	collectionUpdateCombineIdleTTL                  = 30 * time.Second
 )
-
-var collectionUpdateCombineIdleTTL = 30 * time.Second
 
 var (
 	ErrCollectionNotFound  = errors.New("collections: collection not found")
@@ -405,7 +404,7 @@ func (m *CollectionManager) closeForBackend() error {
 }
 
 func (m *CollectionManager) isClosing() bool {
-	return m == nil || m.closing.Load() || m.db == nil || m.db.IsClosing()
+	return m.closing.Load() || m.db == nil || m.db.IsClosing()
 }
 
 func (m *CollectionManager) stopUpdateCombiners() {
@@ -645,7 +644,7 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 }
 
 func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Collection, bool) {
-	if m.isClosing() {
+	if m == nil || m.isClosing() {
 		return nil, false
 	}
 	state := m.db.State()
@@ -3118,11 +3117,11 @@ type collectionUpdateCombiner struct {
 }
 
 type collectionUpdateCombineRequest struct {
-	collection  *Collection
-	documentID  []byte
-	documentKey string
-	update      func(current []byte) (replacement []byte, changed bool, err error)
-	done        chan collectionUpdateCombineResult
+	collection   *Collection
+	documentID   []byte
+	documentHash uint64
+	update       func(current []byte) (replacement []byte, changed bool, err error)
+	done         chan collectionUpdateCombineResult
 }
 
 type collectionUpdateCombineResult struct {
@@ -3187,12 +3186,13 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 		return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
 	}
 	done := make(chan collectionUpdateCombineResult, 1)
+	clonedDocumentID := bytes.Clone(documentID)
 	req := collectionUpdateCombineRequest{
-		collection:  c,
-		documentID:  bytes.Clone(documentID),
-		documentKey: string(documentID),
-		update:      update,
-		done:        done,
+		collection:   c,
+		documentID:   clonedDocumentID,
+		documentHash: xxhash.Sum64(clonedDocumentID),
+		update:       update,
+		done:         done,
 	}
 	if !combiner.enqueue(req) {
 		return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
@@ -3445,16 +3445,19 @@ func collectionUpdateCombineHasDuplicateIDs(batch []collectionUpdateCombineReque
 	if len(batch) < 2 {
 		return false
 	}
-	seen := make(map[string]struct{}, len(batch))
+	seen := make(map[uint64][][]byte, len(batch))
 	for _, req := range batch {
-		key := req.documentKey
-		if key == "" {
-			key = string(req.documentID)
+		hash := req.documentHash
+		if hash == 0 && len(req.documentID) > 0 {
+			hash = xxhash.Sum64(req.documentID)
 		}
-		if _, ok := seen[key]; ok {
-			return true
+		candidates := seen[hash]
+		for _, candidate := range candidates {
+			if bytes.Equal(candidate, req.documentID) {
+				return true
+			}
 		}
-		seen[key] = struct{}{}
+		seen[hash] = append(candidates, req.documentID)
 	}
 	return false
 }
