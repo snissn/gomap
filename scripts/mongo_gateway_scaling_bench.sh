@@ -105,7 +105,16 @@ normalize_bool_01() {
 }
 
 safe_label() {
-  printf '%s' "$1" | tr -c '[:alnum:]_.-' '_'
+  printf '%s' "$1" | tr -c '[:alnum:]_-' '_'
+}
+
+mongo_database_prefix_label() {
+  local value
+  value=$(safe_label "$1")
+  if [[ -z "$value" ]]; then
+    value="mongo_gateway_scaling"
+  fi
+  printf '%.48s' "$value"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -268,7 +277,7 @@ RUN_ID=$(safe_label "$(basename "$OUT_DIR")")
 if [[ -z "$DATABASE_PREFIX" ]]; then
   DATABASE_PREFIX="mongo_gateway_scaling_${RUN_ID}"
 fi
-DATABASE_PREFIX=$(safe_label "$DATABASE_PREFIX")
+DATABASE_PREFIX=$(mongo_database_prefix_label "$DATABASE_PREFIX")
 RAW_DIR="$OUT_DIR/raw"
 BIN_DIR="$OUT_DIR/bin"
 MATRIX="$OUT_DIR/matrix.tsv"
