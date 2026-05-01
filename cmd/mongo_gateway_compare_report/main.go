@@ -282,9 +282,6 @@ func matchingMongoRecord(key baseCellKey, treeConfig string, mongos map[string]*
 				return record, nil
 			}
 		}
-		if allowIncomplete {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("missing mongo row for documents=%d secondary_indexes=%d config=%q", key.Documents, key.SecondaryIndexes, treeConfig)
 	}
 	var matched *runRecord
@@ -299,9 +296,6 @@ func matchingMongoRecord(key baseCellKey, treeConfig string, mongos map[string]*
 	}
 	if matched != nil {
 		return matched, nil
-	}
-	if allowIncomplete {
-		return nil, nil
 	}
 	return nil, fmt.Errorf("missing mongo row for documents=%d secondary_indexes=%d config=%q", key.Documents, key.SecondaryIndexes, treeConfig)
 }
