@@ -534,6 +534,9 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 	if err := ValidateCollectionName(name); err != nil {
 		return nil, err
 	}
+	if m.db.IsClosing() {
+		return nil, backenddb.ErrClosed
+	}
 	if collection, ok := m.openCollectionFromWriteDomainCache(name); ok {
 		return collection, nil
 	}
@@ -2876,7 +2879,7 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		}
 		indexStateChanged = !documentIndexStatesEqual(oldState, newState)
 		if indexStateChanged {
-			if err := rejectReplaceUniqueConflicts(snap, catalog, runtimes, newState, documentID); err != nil {
+			if err := rejectReplaceUniqueConflicts(snap, catalog, runtimes, newState, documentID, nil); err != nil {
 				_ = snap.Close()
 				return false, false, err
 			}
@@ -3120,11 +3123,14 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 				return nil, err
 			}
 			changed[i].indexStateChanged = !documentIndexStatesEqual(changed[i].oldState, changed[i].newState)
-			if changed[i].indexStateChanged {
-				if err := rejectReplaceUniqueConflicts(snap, catalog, runtimes, changed[i].newState, changed[i].documentID); err != nil {
-					_ = snap.Close()
-					return nil, err
-				}
+		}
+	}
+	batchReplacements := batchUniqueReplacementOwners(runtimes, changed)
+	for i := range changed {
+		if changed[i].indexStateChanged {
+			if err := rejectReplaceUniqueConflicts(snap, catalog, runtimes, changed[i].newState, changed[i].documentID, batchReplacements); err != nil {
+				_ = snap.Close()
+				return nil, err
 			}
 		}
 	}
@@ -3137,6 +3143,19 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 	baseRootIDs := make(map[string]uint64, 2+len(runtimes))
 	policies := make([]backenddb.OrderedRootStoragePolicy, 0, 2+len(runtimes))
 	deltaTables := make([]memtable.Table, 0, 2+len(runtimes))
+	var stateTable memtable.Table
+	secondaryTables := make(map[string]memtable.Table, len(runtimes))
+	var iterators []iterator.UnsafeIterator
+	defer func() {
+		for _, it := range iterators {
+			_ = it.Close()
+		}
+		resetCollectionTables(deltaTables)
+		resetCollectionRunTable(stateTable)
+		for _, table := range secondaryTables {
+			resetCollectionRunTable(table)
+		}
+	}()
 
 	if len(templateRecords) > 0 {
 		templatePlan := &insertBatchPlan{}
@@ -3170,11 +3189,9 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 	deltaTables = append(deltaTables, primaryTable)
 
 	if len(runtimes) > 0 {
-		var stateTable memtable.Table
 		if persistIndexStateForOptions(plannerOptions) {
 			stateTable = newCollectionRunTable(len(changed))
 		}
-		secondaryTables := make(map[string]memtable.Table, len(runtimes))
 		for _, item := range changed {
 			if !item.indexStateChanged {
 				continue
@@ -3183,7 +3200,6 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 				rawState, err := encodeDocumentIndexState(item.newState)
 				if err != nil {
 					_ = snap.Close()
-					resetCollectionTables(append(deltaTables, stateTable))
 					return nil, err
 				}
 				if len(item.newState) == 0 {
@@ -3202,7 +3218,6 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 				deleteKeys, err := secondaryDeleteKeysForDocument(runtime, item.oldState, item.documentID)
 				if err != nil {
 					_ = snap.Close()
-					resetCollectionTables(append(deltaTables, table))
 					return nil, err
 				}
 				for _, key := range deleteKeys {
@@ -3212,7 +3227,6 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 					key, err := indexEntryKey(encoded, item.documentID)
 					if err != nil {
 						_ = snap.Close()
-						resetCollectionTables(append(deltaTables, table))
 						return nil, err
 					}
 					table.SetSteal(key, nil)
@@ -3226,6 +3240,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 			baseRootIDs[stateRootName] = catalog.rootID(stateRootName)
 			policies = append(policies, plannerOptions.indexStateStoragePolicy)
 			deltaTables = append(deltaTables, stateTable)
+			stateTable = nil
 		}
 		for _, runtime := range runtimes {
 			rootName := collectionSecondaryRootName(c.meta.Name, runtime.def.name)
@@ -3238,18 +3253,13 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 			baseRootIDs[rootName] = catalog.rootID(rootName)
 			policies = append(policies, runtime.def.storagePolicy)
 			deltaTables = append(deltaTables, table)
+			delete(secondaryTables, rootName)
 		}
 	}
 
 	defer func() { _ = snap.Close() }()
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
-	iterators := make([]iterator.UnsafeIterator, 0, len(rootNames))
-	defer func() {
-		for _, it := range iterators {
-			_ = it.Close()
-		}
-		resetCollectionTables(deltaTables)
-	}()
+	iterators = make([]iterator.UnsafeIterator, 0, len(rootNames))
 	for i, rootName := range rootNames {
 		iter := deltaTables[i].NewIterator(nil, nil)
 		iterators = append(iterators, iter)
@@ -3294,6 +3304,73 @@ func rejectBatchUniqueConflicts(runtimes []indexRuntime, updates []preparedBatch
 		}
 	}
 	return nil
+}
+
+type batchUniqueReplacementSet map[string]map[string]map[string]struct{}
+
+func batchUniqueReplacementOwners(runtimes []indexRuntime, updates []preparedBatchUpdate) batchUniqueReplacementSet {
+	if len(runtimes) == 0 || len(updates) == 0 {
+		return nil
+	}
+	out := make(batchUniqueReplacementSet)
+	for _, runtime := range runtimes {
+		if !runtime.def.unique {
+			continue
+		}
+		indexName := runtime.def.name
+		for _, update := range updates {
+			oldValues := update.oldState[indexName]
+			if len(oldValues) == 0 {
+				continue
+			}
+			newValues := update.newState[indexName]
+			for _, oldValue := range oldValues {
+				if documentIndexStateContainsValue(newValues, oldValue) {
+					continue
+				}
+				byValue := out[indexName]
+				if byValue == nil {
+					byValue = make(map[string]map[string]struct{})
+					out[indexName] = byValue
+				}
+				owners := byValue[string(oldValue)]
+				if owners == nil {
+					owners = make(map[string]struct{})
+					byValue[string(oldValue)] = owners
+				}
+				owners[string(update.documentID)] = struct{}{}
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func documentIndexStateContainsValue(values [][]byte, target []byte) bool {
+	for _, value := range values {
+		if bytes.Equal(value, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s batchUniqueReplacementSet) allows(indexName string, encoded, documentID []byte) bool {
+	if len(s) == 0 {
+		return false
+	}
+	byValue := s[indexName]
+	if len(byValue) == 0 {
+		return false
+	}
+	owners := byValue[string(encoded)]
+	if len(owners) == 0 {
+		return false
+	}
+	_, ok := owners[string(documentID)]
+	return ok
 }
 
 func (c *Collection) catalogForSnapshot(snap *backenddb.Snapshot) (*collectionCatalog, error) {
@@ -3831,7 +3908,7 @@ func secondaryDeleteKeysForDocument(runtime indexRuntime, state documentIndexSta
 	return out, nil
 }
 
-func rejectReplaceUniqueConflicts(snap *backenddb.Snapshot, catalog *collectionCatalog, runtimes []indexRuntime, state documentIndexState, documentID []byte) error {
+func rejectReplaceUniqueConflicts(snap *backenddb.Snapshot, catalog *collectionCatalog, runtimes []indexRuntime, state documentIndexState, documentID []byte, batchReplacements batchUniqueReplacementSet) error {
 	if snap == nil || catalog == nil {
 		return nil
 	}
@@ -3861,7 +3938,8 @@ func rejectReplaceUniqueConflicts(snap *backenddb.Snapshot, catalog *collectionC
 				if !bytes.HasPrefix(key, prefix) {
 					break
 				}
-				if !it.IsDeleted() && !bytes.Equal(key[len(prefix):], documentID) {
+				ownerID := key[len(prefix):]
+				if !it.IsDeleted() && !bytes.Equal(ownerID, documentID) && !batchReplacements.allows(runtime.def.name, encoded, ownerID) {
 					conflict = true
 					break
 				}
