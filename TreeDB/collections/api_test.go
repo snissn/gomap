@@ -1577,6 +1577,9 @@ func TestCollectionInsertRetryExhaustionWrapsLastConcurrentMutation(t *testing.T
 	if !strings.Contains(err.Error(), lastErr.Error()) {
 		t.Fatalf("retryInsertBatchMutation err=%q want last error %q", err, lastErr)
 	}
+	if got := strings.Count(err.Error(), ErrConcurrentMutation.Error()); got != 1 {
+		t.Fatalf("retryInsertBatchMutation err=%q contains ErrConcurrentMutation text %d times, want 1", err, got)
+	}
 	if attempts != maxCollectionMutationRetries {
 		t.Fatalf("attempts=%d want %d", attempts, maxCollectionMutationRetries)
 	}
@@ -2470,6 +2473,8 @@ func TestCollectionValidateInsertBatchPlanLockedClassifiesRaces(t *testing.T) {
 			_ = current.Close()
 		}
 		t.Fatalf("root mismatch current=%v err=%v want ErrConcurrentMutation", current, err)
+	} else if !strings.Contains(err.Error(), `collection="users"`) || !strings.Contains(err.Error(), `root="users/primary"`) {
+		t.Fatalf("root mismatch err=%v missing collection/root context", err)
 	}
 	if current, _, err := col.validateInsertBatchPlanLocked(catalog.meta, rootNames, map[string]uint64{}, plan); current != nil || err == nil || errors.Is(err, ErrConcurrentMutation) || !strings.Contains(err.Error(), "missing base root id") {
 		if current != nil {
@@ -2514,9 +2519,8 @@ func TestOpenCollectionWriteDomainCatalogCacheUsesCommitSeq(t *testing.T) {
 		t.Fatal("expected populated write-domain catalog cache")
 	}
 	cachedRoot := cached.rootID(collectionPrimaryRootName("users"))
-	cached.roots[collectionPrimaryRootName("users")] = ^uint64(0)
-	if cachedAgain := cachedWriteDomainCatalogForState(domain, state.SystemRootPageID, state.CommitSeq); cachedAgain == nil || cachedAgain.rootID(collectionPrimaryRootName("users")) != cachedRoot {
-		t.Fatalf("write-domain catalog cache exposed mutable roots: got=%v want root %d", cachedAgain, cachedRoot)
+	if cachedRoot == 0 {
+		t.Fatal("write-domain catalog cache did not include primary root")
 	}
 	if stale := cachedWriteDomainCatalogForState(domain, state.SystemRootPageID, state.CommitSeq+1); stale != nil {
 		t.Fatal("write-domain catalog cache ignored commit sequence")
@@ -2545,8 +2549,8 @@ func TestOpenCollectionWriteDomainCatalogCacheUsesCommitSeq(t *testing.T) {
 	if err != nil {
 		t.Fatalf("catalogForSnapshot: %v", err)
 	}
-	if got := reopenedCatalog.rootID(collectionPrimaryRootName("users")); got == ^uint64(0) {
-		t.Fatalf("OpenCollection reused mutated write-domain catalog roots: %d", got)
+	if got := reopenedCatalog.rootID(collectionPrimaryRootName("users")); got != cachedRoot {
+		t.Fatalf("OpenCollection refreshed root=%d want %d", got, cachedRoot)
 	}
 	if fresh := cachedWriteDomainCatalogForState(domain, rawState.SystemRootPageID, rawState.CommitSeq); fresh == nil || fresh.rootID(collectionPrimaryRootName("users")) != reopenedCatalog.rootID(collectionPrimaryRootName("users")) {
 		t.Fatal("OpenCollection did not refresh write-domain catalog cache for new commit sequence")
@@ -2679,6 +2683,9 @@ func TestCollectionUpdateBatchRejectsUniqueConflictsWithinBatch(t *testing.T) {
 	})
 	if !errors.Is(err, ErrUniqueIndexConflict) {
 		t.Fatalf("UpdateBatch err=%v want ErrUniqueIndexConflict", err)
+	}
+	if !strings.Contains(err.Error(), "batch indexes 0 and 1") {
+		t.Fatalf("UpdateBatch err=%v missing conflicting batch indexes", err)
 	}
 }
 

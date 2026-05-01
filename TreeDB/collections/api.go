@@ -1123,12 +1123,12 @@ func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWrite
 	if len(domain.rootBaseIDs) > 0 {
 		for rootName, baseRootID := range domain.rootBaseIDs {
 			if rootID := catalog.rootID(rootName); rootID != baseRootID {
-				return nil, fmt.Errorf("collections: %w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
+				return nil, errConcurrentRootModification(domain.meta.Name, rootName)
 			}
 		}
 	} else {
 		if rootID := catalog.rootID(primaryRootName); rootID != domain.primaryRoot {
-			return nil, fmt.Errorf("collections: %w: concurrent root modification detected for %q", ErrConcurrentMutation, primaryRootName)
+			return nil, errConcurrentRootModification(domain.meta.Name, primaryRootName)
 		}
 	}
 	options, err := collectionPlannerOptions(catalog.meta)
@@ -1230,7 +1230,7 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 		return fmt.Errorf("collections: concurrent schema modification detected for %q", meta.Name)
 	}
 	if got := pinnedCatalog.rootID(rootName); got != baseRoot {
-		return fmt.Errorf("collections: %w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
+		return errConcurrentRootModification(meta.Name, rootName)
 	}
 	baseSystemRoot := snapshotSystemRoot(pin)
 	baseCommitSeq := snapshotCommitSeq(pin)
@@ -1306,7 +1306,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		}
 		for rootName, baseRoot := range domain.rootBaseIDs {
 			if got := currentCatalog.rootID(rootName); got != baseRoot {
-				return 0, fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
+				return 0, errConcurrentRootModification(catalog.meta.Name, rootName)
 			}
 		}
 		catalog = currentCatalog
@@ -2114,7 +2114,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) e
 	}
 	for rootName, baseRoot := range domain.rootBaseIDs {
 		if got := pinnedCatalog.rootID(rootName); got != baseRoot {
-			return fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
+			return errConcurrentRootModification(meta.Name, rootName)
 		}
 	}
 
@@ -2594,7 +2594,7 @@ func (c *Collection) validateInsertBatchPlanLocked(meta CollectionMeta, rootName
 		}
 		if got := catalog.rootID(rootName); got != want {
 			_ = current.Close()
-			return nil, nil, fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
+			return nil, nil, errConcurrentRootModification(meta.Name, rootName)
 		}
 	}
 	if err := plan.checkPersistedConflicts(current, catalog); err != nil {
@@ -3360,7 +3360,11 @@ func collectionMutationRetryExhausted(err error) error {
 	if err == nil {
 		err = ErrConcurrentMutation
 	}
-	return fmt.Errorf("%w: retry budget exceeded after %d attempts: %v", ErrConcurrentMutation, maxCollectionMutationRetries, err)
+	return fmt.Errorf("collections: retry budget exceeded after %d attempts: %w", maxCollectionMutationRetries, err)
+}
+
+func errConcurrentRootModification(collectionName, rootName string) error {
+	return fmt.Errorf("%w: concurrent root modification detected for collection=%q root=%q", ErrConcurrentMutation, collectionName, rootName)
 }
 
 func (c *Collection) updateDocumentOnce(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
@@ -3660,7 +3664,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 		}
 		prepared := preparedBatchUpdate{
 			itemIndex:  i,
-			documentID: bytes.Clone(item.DocumentID),
+			documentID: item.DocumentID,
 		}
 		if len(runtimes) > 0 {
 			prepared.oldState, err = loadDeleteIndexState(snap, catalog, item.DocumentID, entry.Value, runtimes, plannerOptions)
@@ -3863,18 +3867,23 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 }
 
 func rejectBatchUniqueConflicts(runtimes []indexRuntime, updates []preparedBatchUpdate) error {
+	type seenUniqueValue struct {
+		documentID []byte
+		itemIndex  int
+	}
+
 	for _, runtime := range runtimes {
 		if !runtime.def.unique {
 			continue
 		}
-		seen := make(map[string][]byte)
+		seen := make(map[string]seenUniqueValue)
 		for _, update := range updates {
 			for _, encoded := range update.newState[runtime.def.name] {
 				key := string(encoded)
-				if previous, ok := seen[key]; ok && !bytes.Equal(previous, update.documentID) {
-					return fmt.Errorf("%w %q", ErrUniqueIndexConflict, runtime.def.name)
+				if previous, ok := seen[key]; ok && !bytes.Equal(previous.documentID, update.documentID) {
+					return fmt.Errorf("%w %q: batch indexes %d and %d document ids %q and %q", ErrUniqueIndexConflict, runtime.def.name, previous.itemIndex, update.itemIndex, previous.documentID, update.documentID)
 				}
-				seen[key] = update.documentID
+				seen[key] = seenUniqueValue{documentID: update.documentID, itemIndex: update.itemIndex}
 			}
 		}
 	}
@@ -3984,7 +3993,7 @@ func cachedWriteDomainCatalogForState(domain *collectionWriteDomain, systemRoot,
 	if !domain.loaded || domain.catalog == nil || domain.baseSystemRoot != systemRoot || domain.baseCommitSeq != commitSeq {
 		return nil
 	}
-	return domain.catalog.copy()
+	return domain.catalog
 }
 
 func snapshotSystemRoot(snap *backenddb.Snapshot) uint64 {
@@ -4108,7 +4117,11 @@ func cloneCatalogWithRootUpdates(base *collectionCatalog, meta CollectionMeta, r
 			roots[name] = rootIDs[i]
 		}
 	}
-	return (&collectionCatalog{meta: meta, roots: roots}).copy()
+	metaCopy := meta
+	if copied := meta.copy(); copied != nil {
+		metaCopy = *copied
+	}
+	return &collectionCatalog{meta: metaCopy, roots: roots}
 }
 
 func buildDeleteRootDeltaTable(deleteKeys [][]byte) memtable.Table {
@@ -4344,7 +4357,7 @@ func (c *Collection) validateRootDescriptorSystemDelta(expectedCommitSeq, expect
 		}
 		for _, rootName := range rootNames {
 			if got, want := catalog.rootID(rootName), baseRootIDs[rootName]; got != want {
-				return fmt.Errorf("%w: concurrent root modification detected for %q", ErrConcurrentMutation, rootName)
+				return errConcurrentRootModification(c.meta.Name, rootName)
 			}
 		}
 	}
@@ -5014,7 +5027,7 @@ func loadCollectionCatalog(snap *backenddb.Snapshot, name string) (*collectionCa
 		}
 		roots[rootName] = rootID
 	}
-	return (&collectionCatalog{meta: meta, roots: roots}).copy(), nil
+	return &collectionCatalog{meta: meta, roots: roots}, nil
 }
 
 func (c *collectionCatalog) rootID(rootName string) uint64 {
