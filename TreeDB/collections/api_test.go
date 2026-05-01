@@ -2265,6 +2265,66 @@ func TestBufferedPrimaryIDArenaCapAvoidsOverflow(t *testing.T) {
 	}
 }
 
+func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
+	catalog := &collectionCatalog{
+		meta:  CollectionMeta{Name: "users"},
+		roots: map[string]uint64{collectionPrimaryRootName("users"): 42},
+	}
+	domain := &collectionWriteDomain{
+		loaded:         true,
+		meta:           catalog.meta,
+		catalog:        catalog,
+		baseCommitSeq:  7,
+		baseSystemRoot: 11,
+		primaryRoot:    42,
+		count:          3,
+		bufferedBytes:  99,
+		rootRuns: map[string][]memtable.Table{
+			collectionPrimaryRootName("users"): nil,
+		},
+		rootPolicies: map[string]backenddb.OrderedRootStoragePolicy{
+			collectionPrimaryRootName("users"): backenddb.OrderedRootStorageDefault,
+		},
+		rootBaseIDs: map[string]uint64{
+			collectionPrimaryRootName("users"): 42,
+		},
+		uniqueValueRuns: map[string][]memtable.Table{
+			collectionSecondaryRootName("users", "email"): nil,
+		},
+	}
+	checkpoint := checkpointBufferedIndexedDomain(domain)
+
+	domain.loaded = false
+	domain.meta = CollectionMeta{Name: "other"}
+	domain.catalog = &collectionCatalog{meta: CollectionMeta{Name: "other"}}
+	domain.baseCommitSeq = 100
+	domain.baseSystemRoot = 200
+	domain.primaryRoot = 300
+	domain.count = 400
+	domain.bufferedBytes = 500
+	domain.rootRuns = map[string][]memtable.Table{collectionPrimaryRootName("other"): nil}
+	domain.rootPolicies = nil
+	domain.rootBaseIDs = nil
+	domain.uniqueValueRuns = nil
+
+	rollbackBufferedIndexedDomain(domain, checkpoint)
+	if !domain.loaded || domain.meta.Name != "users" || domain.catalog != catalog {
+		t.Fatalf("metadata after rollback loaded=%v meta=%+v catalog=%p want users/%p", domain.loaded, domain.meta, domain.catalog, catalog)
+	}
+	if domain.baseCommitSeq != 7 || domain.baseSystemRoot != 11 || domain.primaryRoot != 42 {
+		t.Fatalf("roots after rollback commit=%d system=%d primary=%d", domain.baseCommitSeq, domain.baseSystemRoot, domain.primaryRoot)
+	}
+	if domain.count != 3 || domain.bufferedBytes != 99 {
+		t.Fatalf("counters after rollback count=%d bytes=%d", domain.count, domain.bufferedBytes)
+	}
+	if _, ok := domain.rootRuns[collectionPrimaryRootName("users")]; !ok {
+		t.Fatalf("rootRuns=%v missing users primary root", domain.rootRuns)
+	}
+	if _, ok := domain.uniqueValueRuns[collectionSecondaryRootName("users", "email")]; !ok {
+		t.Fatalf("uniqueValueRuns=%v missing users email root", domain.uniqueValueRuns)
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesCloseFlushes(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})
