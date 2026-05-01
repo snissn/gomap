@@ -2989,10 +2989,10 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 // Update applies update to the latest document value and retries if another
 // collection write changes the root before this update publishes.
 //
-// When the collection write domain combines concurrent updates, update may run
-// on an internal combiner goroutine. The callback must not rely on caller
-// goroutine behavior such as recover, runtime.Goexit, or testing.T.Fatal.
-// Callback panics are recovered and returned as errors.
+// Callback panics are recovered and returned as errors. When the collection
+// write domain combines concurrent updates, update may run on an internal
+// combiner goroutine; the callback must not rely on caller goroutine behavior
+// such as recover, runtime.Goexit, or testing.T.Fatal.
 func (c *Collection) Update(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
 	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
 		return false, false, err
@@ -3124,6 +3124,7 @@ type collectionUpdateCombiner struct {
 	requests chan collectionUpdateCombineRequest
 	done     chan struct{}
 	domain   *collectionWriteDomain
+	running  atomic.Bool
 	mu       sync.RWMutex
 	stopped  bool
 }
@@ -3259,7 +3260,13 @@ func (combiner *collectionUpdateCombiner) stop() {
 	if combiner == nil {
 		return
 	}
-	_ = combiner.closeRequests()
+	closed := combiner.closeRequests()
+	if !closed {
+		return
+	}
+	if combiner.running.Load() {
+		return
+	}
 	if combiner.done != nil {
 		<-combiner.done
 	}
@@ -3375,6 +3382,8 @@ func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionU
 }
 
 func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombineRequest) {
+	combiner.running.Store(true)
+	defer combiner.running.Store(false)
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			completeUpdateCombineBatchWithError(batch, collectionUpdatePanicError("combiner", recovered))

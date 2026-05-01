@@ -3168,7 +3168,7 @@ func TestCollectionUpdateCombinerEvictsWhenIdle(t *testing.T) {
 		t.Fatalf("open collection: %v", err)
 	}
 	col.writeDomain.updateCombineMu.Lock()
-	col.writeDomain.updateCombineTTL = time.Millisecond
+	col.writeDomain.updateCombineTTL = 25 * time.Millisecond
 	col.writeDomain.updateCombineMu.Unlock()
 	combiner := col.updateCombiner()
 	if combiner == nil {
@@ -3258,8 +3258,83 @@ func TestCollectionUpdateCombinerReplacesStoppedCachedCombinerWithoutWaiting(t *
 			t.Fatal("updateCombiner reused stopped combiner")
 		}
 		got.stop()
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(time.Second):
 		t.Fatal("updateCombiner waited for stopped combiner done channel")
+	}
+}
+
+func TestCollectionUpdateCombinerStopDoesNotWaitForActiveWorker(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"score":0}`)}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	combiner := &collectionUpdateCombiner{
+		maxBatch: 8,
+		requests: make(chan collectionUpdateCombineRequest, 4),
+		done:     make(chan struct{}),
+	}
+	go combiner.run()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	resultCh := make(chan collectionUpdateCombineResult, 1)
+	if !combiner.enqueue(collectionUpdateCombineRequest{
+		collection: col,
+		documentID: []byte("u1"),
+		update: func([]byte) ([]byte, bool, error) {
+			close(started)
+			<-release
+			return []byte(`{"score":5}`), true, nil
+		},
+		done: resultCh,
+	}) {
+		t.Fatal("enqueue update")
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("combiner worker did not start update")
+	}
+
+	stopReturned := make(chan struct{})
+	go func() {
+		combiner.stop()
+		close(stopReturned)
+	}()
+	select {
+	case <-stopReturned:
+	case <-time.After(time.Second):
+		t.Fatal("stop waited for active combiner worker")
+	}
+
+	close(release)
+	var result collectionUpdateCombineResult
+	select {
+	case result = <-resultCh:
+	case <-time.After(time.Second):
+		t.Fatal("active update did not complete after release")
+	}
+	if result.err != nil || !result.matched || !result.modified {
+		t.Fatalf("combined result=%+v want matched modified nil err", result)
+	}
+	select {
+	case <-combiner.done:
+	case <-time.After(time.Second):
+		t.Fatal("combiner worker did not exit after active update completed")
 	}
 }
 
