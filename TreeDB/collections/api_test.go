@@ -2705,6 +2705,10 @@ func TestCollectionUpdateBatchRejectsEmptyChangedReplacementWithIndex(t *testing
 	if err == nil || !strings.Contains(err.Error(), "update batch index 1") || !strings.Contains(err.Error(), "cannot be empty") {
 		t.Fatalf("UpdateBatch err=%v want index 1 empty replacement", err)
 	}
+	var itemErr *UpdateBatchItemError
+	if !errors.As(err, &itemErr) || itemErr.Index != 1 {
+		t.Fatalf("UpdateBatch err=%v want typed item index 1", err)
+	}
 }
 
 func TestCollectionUpdateBatchRejectsUniqueConflictsWithinBatch(t *testing.T) {
@@ -2911,6 +2915,7 @@ func TestCollectionUpdateCombinerRunBatchRecoversCallbackPanic(t *testing.T) {
 	if first.err == nil || !strings.Contains(first.err.Error(), "bad callback") {
 		t.Fatalf("first err=%v want recovered panic", first.err)
 	}
+	assertNoStackTraceInError(t, first.err)
 	second := <-requests[1].done
 	if second.err != nil {
 		t.Fatalf("second err: %v", second.err)
@@ -2947,6 +2952,7 @@ func TestCollectionUpdateDirectRecoversCallbackPanic(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "bad callback") {
 		t.Fatalf("Update err=%v want recovered panic", err)
 	}
+	assertNoStackTraceInError(t, err)
 	if matched || modified {
 		t.Fatalf("matched=%v modified=%v want false,false", matched, modified)
 	}
@@ -2978,8 +2984,27 @@ func TestCollectionUpdateCombinerMaxBatchOneRecoversCallbackPanic(t *testing.T) 
 	if err == nil || !strings.Contains(err.Error(), "bad callback") {
 		t.Fatalf("Update err=%v want recovered panic", err)
 	}
+	assertNoStackTraceInError(t, err)
 	if matched || modified {
 		t.Fatalf("matched=%v modified=%v want false,false", matched, modified)
+	}
+}
+
+func TestCollectionUpdatePanicErrorOmitsStackTrace(t *testing.T) {
+	err := collectionUpdatePanicError("combiner", "bad callback")
+	if err == nil || !strings.Contains(err.Error(), "bad callback") {
+		t.Fatalf("panic err=%v want recovered panic", err)
+	}
+	assertNoStackTraceInError(t, err)
+}
+
+func assertNoStackTraceInError(tb testing.TB, err error) {
+	tb.Helper()
+	if err == nil {
+		tb.Fatal("expected error")
+	}
+	if strings.Contains(err.Error(), "\n") || strings.Contains(err.Error(), ".go:") {
+		tb.Fatalf("error contains stack trace: %q", err.Error())
 	}
 }
 
