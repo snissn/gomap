@@ -154,17 +154,17 @@ func (db *DB) observeOrderedRootDeltaGroupPublish(wait, hold time.Duration, root
 	if hold < 0 {
 		hold = 0
 	}
-	latency := wait + hold
-	if latency < 0 {
-		latency = 0
-	}
 	if roots < 0 {
 		roots = 0
 	}
 
 	waitNs := uint64(wait.Nanoseconds())
 	holdNs := uint64(hold.Nanoseconds())
-	latNs := uint64(latency.Nanoseconds())
+	latNs := waitNs + holdNs
+	if waitNs > maxDurationNanos-holdNs {
+		latNs = maxDurationNanos
+	}
+	latency := durationFromUint64Nanos(latNs)
 
 	db.orderedRootDeltaGroupCalls.Add(1)
 	if err != nil {
