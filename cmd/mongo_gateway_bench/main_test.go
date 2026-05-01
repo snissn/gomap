@@ -657,6 +657,19 @@ func TestEffectiveLoadProducersCapsAtBatchCount(t *testing.T) {
 	}
 }
 
+func TestLoadVisibilitySentinelIDsUseBatchBoundaries(t *testing.T) {
+	got := loadVisibilitySentinelIDs(10, 4)
+	want := []string{benchmarkID(3), benchmarkID(7), benchmarkID(9)}
+	if len(got) != len(want) {
+		t.Fatalf("len(sentinels)=%d want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("sentinel %d=%q want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestMeasureLoadPhaseReportsProducerResults(t *testing.T) {
 	cfg := config{Documents: 12, BatchSize: 2, InsertProducers: 3}
 	seen := make([]atomic.Int64, cfg.Documents)

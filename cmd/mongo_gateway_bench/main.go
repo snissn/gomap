@@ -1293,29 +1293,55 @@ func waitForLoadVisible(ctx context.Context, cfg config, coll *mongo.Collection)
 	if cfg.Documents <= 0 {
 		return nil
 	}
+	ids := loadVisibilitySentinelIDs(cfg.Documents, cfg.BatchSize)
+	if len(ids) == 0 {
+		return nil
+	}
 	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	id := benchmarkID(cfg.Documents - 1)
+	visible := make([]bool, len(ids))
+	remaining := len(ids)
 	ticker := time.NewTicker(2 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		var out bson.M
-		err := coll.FindOne(waitCtx, bson.D{{Key: "_id", Value: id}}).Decode(&out)
-		if err == nil {
-			if out["_id"] != id {
-				return fmt.Errorf("post-unack visibility lookup returned _id=%v want %s", out["_id"], id)
+		for i, id := range ids {
+			if visible[i] {
+				continue
 			}
-			return nil
+			var out bson.M
+			err := coll.FindOne(waitCtx, bson.D{{Key: "_id", Value: id}}).Decode(&out)
+			if err == nil {
+				if out["_id"] != id {
+					return fmt.Errorf("post-unack visibility lookup returned _id=%v want %s", out["_id"], id)
+				}
+				visible[i] = true
+				remaining--
+				continue
+			}
+			if !errors.Is(err, mongo.ErrNoDocuments) {
+				return err
+			}
 		}
-		if !errors.Is(err, mongo.ErrNoDocuments) {
-			return err
+		if remaining == 0 {
+			return nil
 		}
 		select {
 		case <-waitCtx.Done():
-			return fmt.Errorf("wait for unacknowledged load visibility: %w", waitCtx.Err())
+			return fmt.Errorf("wait for unacknowledged load visibility: %d batch sentinel ids still missing: %w", remaining, waitCtx.Err())
 		case <-ticker.C:
 		}
 	}
+}
+
+func loadVisibilitySentinelIDs(documents, batchSize int) []string {
+	batches := makeLoadBatches(documents, batchSize)
+	ids := make([]string, 0, len(batches))
+	for _, batch := range batches {
+		if batch.end > batch.start {
+			ids = append(ids, benchmarkID(batch.end-1))
+		}
+	}
+	return ids
 }
 
 func runTreeDBRawWireLoadPhase(ctx context.Context, cfg config, target *benchTarget, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
