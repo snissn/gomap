@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -324,21 +325,23 @@ func TestParseConfigValidation(t *testing.T) {
 		"-mongo-max-pool-size", "32",
 		"-mongo-min-pool-size", "8",
 		"-mongo-max-connecting", "16",
-		"-secondary-indexes", "1",
+		"-secondary-indexes", "2",
 		"-format", "json",
 		"-concurrent-readers", "4",
 		"-concurrent-reads", "20",
 		"-concurrent-writers", "2",
 		"-concurrent-writes", "10",
+		"-update-indexed-field",
 	})
 	if err != nil {
 		t.Fatalf("parse valid config: %v", err)
 	}
-	if cfg.Target != "mongo" || cfg.Documents != 10 || cfg.SecondaryIndexes != 1 || cfg.Format != "json" ||
+	if cfg.Target != "mongo" || cfg.Documents != 10 || cfg.SecondaryIndexes != 2 || cfg.Format != "json" ||
 		cfg.ClientMode != clientModeDriver ||
 		cfg.BatchSize != 5 || cfg.InsertProducers != 4 ||
 		cfg.MongoMaxPoolSize != 32 || cfg.MongoMinPoolSize != 8 || cfg.MongoMaxConnecting != 16 ||
-		cfg.ConcurrentReaders != 4 || cfg.ConcurrentReads != 20 || cfg.ConcurrentWriters != 2 || cfg.ConcurrentWrites != 10 {
+		cfg.ConcurrentReaders != 4 || cfg.ConcurrentReads != 20 || cfg.ConcurrentWriters != 2 || cfg.ConcurrentWrites != 10 ||
+		!cfg.UpdateIndexedField {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 	rawWireCfg, err := parseConfig([]string{"-target", "treedb", "-client-mode", "raw-wire"})
@@ -375,6 +378,13 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 	if unackCfg.ClientMode != clientModeDriverUnack {
 		t.Fatalf("ClientMode=%q want %q", unackCfg.ClientMode, clientModeDriverUnack)
+	}
+	oneIndexCfg, err := parseConfig([]string{"-secondary-indexes", "1"})
+	if err != nil {
+		t.Fatalf("parse secondary-indexes=1 config: %v", err)
+	}
+	if oneIndexCfg.SecondaryIndexes != 1 {
+		t.Fatalf("SecondaryIndexes=%d want 1", oneIndexCfg.SecondaryIndexes)
 	}
 	if _, err := parseConfig([]string{"-client-mode", "bad"}); err == nil {
 		t.Fatal("bad client-mode accepted")
@@ -414,6 +424,9 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 	if _, err := parseConfig([]string{"-mongo-min-pool-size", "100"}); err != nil {
 		t.Fatalf("mongo-min-pool-size equal to default mongo-max-pool-size rejected: %v", err)
+	}
+	if _, err := parseConfig([]string{"-secondary-indexes", "1", "-update-indexed-field"}); err == nil {
+		t.Fatal("update-indexed-field accepted without city index")
 	}
 }
 
@@ -1250,6 +1263,122 @@ func TestWriteResultSupportsGenericWriter(t *testing.T) {
 	}
 }
 
+func TestBenchmarkSetUpdateCanExerciseIndexedField(t *testing.T) {
+	updatedCityValues := buildBenchmarkUpdatedCityValues()
+
+	updateSet := func(update bson.D) bson.Raw {
+		t.Helper()
+		raw, err := bson.Marshal(update)
+		if err != nil {
+			t.Fatalf("marshal update: %v", err)
+		}
+		doc := bson.Raw(raw)
+		set, ok := doc.Lookup("$set").DocumentOK()
+		if !ok {
+			t.Fatalf("$set missing or not a document: %v", doc.Lookup("$set").Type)
+		}
+		return set
+	}
+
+	set := updateSet(benchmarkSetUpdate(benchmarkSetUpdateParams{
+		Operation:          3,
+		DocumentOrdinal:    7,
+		DocumentCount:      100,
+		ConcurrentPhase:    true,
+		UpdateIndexedField: true,
+		UpdatedCityValues:  updatedCityValues,
+	}))
+	if got, ok := set.Lookup("concurrent_update_seq").Int64OK(); !ok || got != 3 {
+		t.Fatalf("concurrent_update_seq=%d ok=%t want 3", got, ok)
+	}
+	if city, ok := set.Lookup("city").StringValueOK(); !ok || city != benchmarkUpdatedCity(3, 7, 100) {
+		t.Fatalf("city=%q ok=%t want %q", city, ok, benchmarkUpdatedCity(3, 7, 100))
+	}
+
+	set = updateSet(benchmarkSetUpdate(benchmarkSetUpdateParams{
+		Operation:       4,
+		DocumentOrdinal: 7,
+		DocumentCount:   100,
+		ConcurrentPhase: true,
+	}))
+	if _, ok := set.Lookup("city").StringValueOK(); ok {
+		t.Fatalf("city present when updateIndexedField=false: %v", set.Lookup("city"))
+	}
+
+	set = updateSet(benchmarkSetUpdate(benchmarkSetUpdateParams{
+		Operation:          5,
+		DocumentOrdinal:    11,
+		DocumentCount:      100,
+		UpdateIndexedField: true,
+		UpdatedCityValues:  updatedCityValues,
+	}))
+	if got, ok := set.Lookup("update_seq").Int64OK(); !ok || got != 5 {
+		t.Fatalf("update_seq=%d ok=%t want 5", got, ok)
+	}
+	if _, ok := set.Lookup("concurrent_update_seq").Int64OK(); ok {
+		t.Fatalf("concurrent_update_seq present in non-concurrent update: %v", set.Lookup("concurrent_update_seq"))
+	}
+	if city, ok := set.Lookup("city").StringValueOK(); !ok || city != benchmarkUpdatedCity(5, 11, 100) {
+		t.Fatalf("city=%q ok=%t want %q", city, ok, benchmarkUpdatedCity(5, 11, 100))
+	}
+	set = updateSet(benchmarkSetUpdate(benchmarkSetUpdateParams{
+		Operation:          6,
+		DocumentOrdinal:    12,
+		DocumentCount:      100,
+		UpdateIndexedField: true,
+		UpdatedCityValues:  []string{},
+	}))
+	if city, ok := set.Lookup("city").StringValueOK(); !ok || city != "" {
+		t.Fatalf("city=%q ok=%t want explicit empty value list to stay empty", city, ok)
+	}
+	if got := len(updatedCityValues); got != benchmarkUpdatedCityValueCount {
+		t.Fatalf("updatedCityValues len=%d want %d", got, benchmarkUpdatedCityValueCount)
+	}
+	if first, revisited := benchmarkUpdatedCity(13, 42, benchmarkUpdatedCityValueCount), benchmarkUpdatedCity(13+benchmarkUpdatedCityValueCount, 42, benchmarkUpdatedCityValueCount); first == revisited {
+		t.Fatalf("benchmarkUpdatedCity repeated value %q when revisiting same document after full value cycle", first)
+	}
+	if got := avoidBenchmarkUpdatedCityRepeat(3, 3, len(updatedCityValues)); got == 3 {
+		t.Fatalf("avoidBenchmarkUpdatedCityRepeat did not advance colliding index")
+	}
+	const documents = 65520
+	for op := 0; op < 1024; op++ {
+		documentOrdinal := benchmarkDocumentOrdinal(op, 31, documents)
+		if first, revisited := benchmarkUpdatedCity(op, documentOrdinal, documents), benchmarkUpdatedCity(op+documents, documentOrdinal, documents); first == revisited {
+			t.Fatalf("benchmarkUpdatedCity repeated value %q when revisiting document %d at op+documents for op=%d documents=%d", first, documentOrdinal, op, documents)
+		}
+	}
+}
+
+func TestBenchmarkDocumentOrdinalAvoidsIntOverflow(t *testing.T) {
+	const documents = 100000
+	op := int(^uint(0) >> 1)
+	got := benchmarkDocumentOrdinal(op, 37, documents)
+	want := int((uint64(op) * 37) % documents)
+	if got != want {
+		t.Fatalf("ordinal=%d want %d", got, want)
+	}
+	if got < 0 || got >= documents {
+		t.Fatalf("ordinal=%d out of range [0,%d)", got, documents)
+	}
+}
+
+func TestBenchmarkUpdatedCityIndexAvoidsIntOverflow(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	cycle := 65521
+	got := benchmarkUpdatedCityIndex(maxInt, maxInt-1, maxInt-2, cycle)
+	seed := (uint64(maxInt)+1)*0x9e3779b185ebca87 ^
+		bits.RotateLeft64((uint64(maxInt-1)+1)*0xc2b2ae3d27d4eb4f, 17) ^
+		bits.RotateLeft64((uint64(maxInt-2)+1)*0x165667b19e3779f9, 31)
+	seed += 0x9e3779b97f4a7c15
+	seed = (seed ^ (seed >> 30)) * 0xbf58476d1ce4e5b9
+	seed = (seed ^ (seed >> 27)) * 0x94d049bb133111eb
+	seed ^= seed >> 31
+	want := int(seed % uint64(cycle))
+	if got != want {
+		t.Fatalf("updated city index=%d want %d", got, want)
+	}
+}
+
 func TestMergeTreeDBPersistentStatsPreservesProcessCounters(t *testing.T) {
 	base := map[string]string{
 		"treedb.commit_seq": "10",
@@ -1311,5 +1440,39 @@ func TestWriteResultIncludesRedactedMongoURI(t *testing.T) {
 	}
 	if !bytes.Contains(out.Bytes(), []byte("mongo_uri=mongodb://user@127.0.0.1:27017")) {
 		t.Fatalf("text output missing mongo_uri: %q", out.String())
+	}
+}
+
+func TestWriteResultKeepsTextHeaderStableForIndexedUpdateKnob(t *testing.T) {
+	result := &benchmarkResult{
+		Target:          "treedb",
+		Database:        "bench",
+		Collection:      "docs",
+		Documents:       1,
+		BatchSize:       1,
+		ClientMode:      "driver-command-raw",
+		ConcurrentReads: 2,
+	}
+	var out bytes.Buffer
+	if err := writeResult(&out, "text", result); err != nil {
+		t.Fatalf("writeResult false: %v", err)
+	}
+	firstLine := strings.SplitN(out.String(), "\n", 2)[0]
+	if strings.Contains(firstLine, "update_indexed_field") {
+		t.Fatalf("text header should not include update_indexed_field by default: %q", firstLine)
+	}
+	lines := strings.Split(out.String(), "\n")
+	if len(lines) < 2 || lines[1] != "update_indexed_field=false" {
+		t.Fatalf("text output missing separate update_indexed_field=false line: %q", out.String())
+	}
+
+	out.Reset()
+	result.UpdateIndexedField = true
+	if err := writeResult(&out, "text", result); err != nil {
+		t.Fatalf("writeResult true: %v", err)
+	}
+	lines = strings.Split(out.String(), "\n")
+	if len(lines) < 2 || lines[1] != "update_indexed_field=true" {
+		t.Fatalf("text output missing separate update_indexed_field line: %q", out.String())
 	}
 }

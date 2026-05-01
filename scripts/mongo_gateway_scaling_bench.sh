@@ -19,6 +19,7 @@ READS="${READS:-0}"
 RANGE_READS="${RANGE_READS:-0}"
 UPDATES="${UPDATES:-0}"
 DELETES="${DELETES:-0}"
+UPDATE_INDEXED_FIELD="${UPDATE_INDEXED_FIELD:-false}"
 TREEDB_PROFILE="${TREEDB_PROFILE:-wal_on_fast}"
 TREEDB_DOCUMENT_FORMAT="${TREEDB_DOCUMENT_FORMAT:-bson}"
 TREEDB_CLIENT_MODE="${TREEDB_CLIENT_MODE:-driver-command-raw}"
@@ -62,6 +63,8 @@ Options:
   --client-mode NAME     TreeDB client mode. Default: driver-command-raw.
   --profile NAME         TreeDB profile. Default: wal_on_fast.
   --maintenance MODE     TreeDB maintenance mode. Default: none.
+  --update-indexed-field Include the city field in update phases to exercise
+                         secondary-index maintenance; requires INDEXES=2.
   --timeout DURATION     Per-cell timeout. Default: 60m.
   --title TITLE          Report title.
   --help                 Show this help.
@@ -70,7 +73,8 @@ Environment overrides use the uppercase variable names shown in the script:
 OUT_DIR, DOCS, INDEXES, BATCH_SIZE, INSERT_PRODUCERS, WRITERS_LIST,
 READERS_LIST, CONCURRENT_WRITES, CONCURRENT_READS, INCLUDE_MONGO (0/1, true/false, or yes/no), MONGO_URI, DATABASE_PREFIX,
 TREEDB_DOCUMENT_FORMAT, TREEDB_CLIENT_MODE, TREEDB_PROFILE,
-TREEDB_MAINTENANCE, GOWORK, TIMEOUT, TITLE, and related storage/pool settings.
+TREEDB_MAINTENANCE, UPDATE_INDEXED_FIELD (0/1, true/false, or yes/no), GOWORK, TIMEOUT, TITLE,
+and related storage/pool settings.
 EOF
 }
 
@@ -100,6 +104,17 @@ normalize_bool_01() {
       echo "$name must be 0/1, true/false, or yes/no; got: $raw" >&2
       usage >&2
       exit 2
+      ;;
+  esac
+}
+
+bool_01_text() {
+  case "$1" in
+    1)
+      printf 'true'
+      ;;
+    *)
+      printf 'false'
       ;;
   esac
 }
@@ -198,6 +213,10 @@ while [[ $# -gt 0 ]]; do
       TREEDB_MAINTENANCE="$2"
       shift 2
       ;;
+    --update-indexed-field)
+      UPDATE_INDEXED_FIELD=true
+      shift
+      ;;
     --timeout)
       require_option_value "$1" "${2-}"
       TIMEOUT="$2"
@@ -265,6 +284,18 @@ if [[ "$PREBUILD_DOCUMENTS" != "true" && "$PREBUILD_DOCUMENTS" != "false" ]]; th
   echo "invalid PREBUILD_DOCUMENTS=$PREBUILD_DOCUMENTS (want true or false)" >&2
   exit 2
 fi
+UPDATE_INDEXED_FIELD=$(normalize_bool_01 UPDATE_INDEXED_FIELD "$UPDATE_INDEXED_FIELD")
+case "$UPDATE_INDEXED_FIELD" in
+  1)
+    if (( 10#$INDEXES != 2 )); then
+      echo "UPDATE_INDEXED_FIELD=1 requires INDEXES=2 so the city index exists" >&2
+      exit 2
+    fi
+    ;;
+  0)
+    ;;
+esac
+UPDATE_INDEXED_FIELD_TEXT=$(bool_01_text "$UPDATE_INDEXED_FIELD")
 INCLUDE_MONGO=$(normalize_bool_01 INCLUDE_MONGO "$INCLUDE_MONGO")
 
 mkdir -p "$OUT_DIR"
@@ -347,6 +378,9 @@ run_bench() {
   if [[ "$PREBUILD_DOCUMENTS" == "true" ]]; then
     set -- -prebuild-documents "$@"
   fi
+  if [[ "$UPDATE_INDEXED_FIELD" == "1" ]]; then
+    set -- -update-indexed-field "$@"
+  fi
 
   "$BENCH_BIN" \
     -target "$target" \
@@ -376,7 +410,7 @@ printf "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n
 
 echo "running Mongo gateway scaling matrix into: $OUT_DIR"
 echo "docs=$DOCS indexes=$INDEXES batch_size=$BATCH_SIZE insert_producers=$INSERT_PRODUCERS"
-echo "writers=$WRITERS_LIST readers=$READERS_LIST include_mongo=$INCLUDE_MONGO"
+echo "writers=$WRITERS_LIST readers=$READERS_LIST include_mongo=$INCLUDE_MONGO update_indexed_field=$UPDATE_INDEXED_FIELD_TEXT"
 
 run_cell() {
   local scenario=$1
@@ -468,6 +502,7 @@ cat >"$README" <<EOF
 - TreeDB document format: \`$TREEDB_DOCUMENT_FORMAT\`
 - TreeDB client mode: \`$TREEDB_CLIENT_MODE\`
 - TreeDB maintenance: \`$TREEDB_MAINTENANCE\`
+- update indexed field: \`$UPDATE_INDEXED_FIELD_TEXT\`
 - include MongoDB: \`$INCLUDE_MONGO\`
 - MongoDB URI: \`$MONGO_URI\`
 - MongoDB database prefix: \`$DATABASE_PREFIX\`

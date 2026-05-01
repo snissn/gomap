@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"math"
+	"math/bits"
 	"net"
 	"net/url"
 	"os"
@@ -59,6 +60,7 @@ type config struct {
 	ConcurrentReads             int
 	ConcurrentWriters           int
 	ConcurrentWrites            int
+	UpdateIndexedField          bool
 	SecondaryIndexes            int
 	ClientMode                  string
 	TreeDBProfile               treedb.Profile
@@ -78,23 +80,28 @@ type config struct {
 }
 
 type benchmarkResult struct {
-	Target                      string              `json:"target"`
-	MongoURI                    string              `json:"mongo_uri,omitempty"`
-	TreeDBDir                   string              `json:"treedb_dir,omitempty"`
-	Database                    string              `json:"database"`
-	Collection                  string              `json:"collection"`
-	Documents                   int                 `json:"documents"`
-	BatchSize                   int                 `json:"batch_size"`
-	InsertProducers             int                 `json:"insert_producers"`
-	MongoMaxPoolSize            int                 `json:"mongo_max_pool_size,omitempty"`
-	MongoMinPoolSize            int                 `json:"mongo_min_pool_size,omitempty"`
-	MongoMaxConnecting          int                 `json:"mongo_max_connecting,omitempty"`
-	SecondaryIndexes            int                 `json:"secondary_indexes"`
-	ClientMode                  string              `json:"client_mode"`
-	ConcurrentReaders           int                 `json:"concurrent_readers,omitempty"`
-	ConcurrentReads             int                 `json:"concurrent_reads,omitempty"`
-	ConcurrentWriters           int                 `json:"concurrent_writers,omitempty"`
-	ConcurrentWrites            int                 `json:"concurrent_writes,omitempty"`
+	Target             string `json:"target"`
+	MongoURI           string `json:"mongo_uri,omitempty"`
+	TreeDBDir          string `json:"treedb_dir,omitempty"`
+	Database           string `json:"database"`
+	Collection         string `json:"collection"`
+	Documents          int    `json:"documents"`
+	BatchSize          int    `json:"batch_size"`
+	InsertProducers    int    `json:"insert_producers"`
+	MongoMaxPoolSize   int    `json:"mongo_max_pool_size,omitempty"`
+	MongoMinPoolSize   int    `json:"mongo_min_pool_size,omitempty"`
+	MongoMaxConnecting int    `json:"mongo_max_connecting,omitempty"`
+	SecondaryIndexes   int    `json:"secondary_indexes"`
+	ClientMode         string `json:"client_mode"`
+	ConcurrentReaders  int    `json:"concurrent_readers,omitempty"`
+	ConcurrentReads    int    `json:"concurrent_reads,omitempty"`
+	ConcurrentWriters  int    `json:"concurrent_writers,omitempty"`
+	ConcurrentWrites   int    `json:"concurrent_writes,omitempty"`
+
+	// Always emit this knob in JSON so benchmark artifacts distinguish default
+	// false runs from older runs that predate indexed-field update coverage.
+	UpdateIndexedField bool `json:"update_indexed_field"`
+
 	TreeDBProfile               string              `json:"treedb_profile,omitempty"`
 	TreeDBDocumentFormat        string              `json:"treedb_document_format,omitempty"`
 	TreeDBDataRootStorage       string              `json:"treedb_data_root_storage,omitempty"`
@@ -437,6 +444,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.ConcurrentReads, "concurrent-reads", 0, "total _id read operations for the concurrent read phase")
 	fs.IntVar(&cfg.ConcurrentWriters, "concurrent-writers", 0, "writer goroutines for the concurrent _id update phase; 0 disables the phase")
 	fs.IntVar(&cfg.ConcurrentWrites, "concurrent-writes", 0, "total update operations for the concurrent write phase")
+	fs.BoolVar(&cfg.UpdateIndexedField, "update-indexed-field", false, "include the city field in update phases; requires -secondary-indexes=2 so the city index exists")
 	fs.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 2, "secondary indexes to create: 0, 1=email, 2=both single-field indexes: email and city")
 	fs.StringVar(&cfg.ClientMode, "client-mode", cfg.ClientMode, "benchmark client path: driver, driver-command, driver-command-raw, driver-unack, raw-wire, or raw-wire-tcp; raw-wire modes are TreeDB-only and bypass the MongoDB Go driver for the insert load phase")
 	fs.StringVar(&treeDBProfile, "treedb-profile", treeDBProfile, "TreeDB profile for -target treedb: fast, wal_on_fast, durable, or bench")
@@ -518,6 +526,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.SecondaryIndexes < 0 || cfg.SecondaryIndexes > 2 {
 		return config{}, errors.New("secondary-indexes must be 0, 1, or 2")
+	}
+	if cfg.UpdateIndexedField && cfg.SecondaryIndexes < 2 {
+		return config{}, errors.New("update-indexed-field requires secondary-indexes=2 so the city index exists")
 	}
 	if cfg.Format != "text" && cfg.Format != "json" {
 		return config{}, fmt.Errorf("unknown format %q", cfg.Format)
@@ -983,6 +994,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		ConcurrentReads:    cfg.ConcurrentReads,
 		ConcurrentWriters:  cfg.ConcurrentWriters,
 		ConcurrentWrites:   cfg.ConcurrentWrites,
+		UpdateIndexedField: cfg.UpdateIndexedField,
 		PrebuildDocuments:  cfg.PrebuildDocuments,
 	}
 	if cfg.Target == "treedb" {
@@ -998,9 +1010,18 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	} else {
 		result.MongoURI = redactMongoURI(cfg.MongoURI)
 	}
-
 	if err := createIndexes(ctx, coll, cfg.SecondaryIndexes); err != nil {
 		return nil, err
+	}
+	var updatedCityValues []string
+	updatedCityValuesForUpdate := func() []string {
+		if !cfg.UpdateIndexedField {
+			return nil
+		}
+		if updatedCityValues == nil {
+			updatedCityValues = buildBenchmarkUpdatedCityValues()
+		}
+		return updatedCityValues
 	}
 	var prebuilt []bson.D
 	var prebuiltRaw []bson.Raw
@@ -1109,14 +1130,26 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	}
 	result.Phases = append(result.Phases, rangePhase)
 
+	var updateCityValues []string
+	if cfg.Updates > 0 {
+		updateCityValues = updatedCityValuesForUpdate()
+	}
 	updatePhase, err := measureProfiledPhase(profiler, "id_update_set", cfg.Updates, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.Updates; i++ {
-			id := benchmarkID((i * 31) % cfg.Documents)
+			documentOrdinal := benchmarkDocumentOrdinal(i, 31, cfg.Documents)
+			id := benchmarkID(documentOrdinal)
+			filter := bson.D{{Key: "_id", Value: id}}
+			update := benchmarkSetUpdate(benchmarkSetUpdateParams{
+				Operation:          i,
+				DocumentOrdinal:    documentOrdinal,
+				DocumentCount:      cfg.Documents,
+				UpdateIndexedField: cfg.UpdateIndexedField,
+				UpdatedCityValues:  updateCityValues,
+			})
+			// Sample the driver/gateway/DB call; request construction is outside
+			// the update latency window and documented in the README.
 			begin := time.Now()
-			res, err := coll.UpdateOne(ctx,
-				bson.D{{Key: "_id", Value: id}},
-				bson.D{{Key: "$set", Value: bson.D{{Key: "updated", Value: true}, {Key: "update_seq", Value: int64(i)}}}},
-			)
+			res, err := coll.UpdateOne(ctx, filter, update)
 			sample(time.Since(begin))
 			if err != nil {
 				return err
@@ -1136,7 +1169,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		phaseName := fmt.Sprintf("concurrent_id_find_one_r%d", cfg.ConcurrentReaders)
 		concurrentReadPhase, err := measureProfiledPhase(profiler, phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
 			return runConcurrentOperations(ctx, cfg.ConcurrentReaders, cfg.ConcurrentReads, func(op int) error {
-				id := benchmarkID((op * 17) % cfg.Documents)
+				id := benchmarkID(benchmarkDocumentOrdinal(op, 17, cfg.Documents))
 				var out bson.M
 				begin := time.Now()
 				err := coll.FindOne(ctx, bson.D{{Key: "_id", Value: id}}).Decode(&out)
@@ -1158,14 +1191,24 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 
 	if cfg.ConcurrentWriters > 0 && cfg.ConcurrentWrites > 0 {
 		phaseName := fmt.Sprintf("concurrent_id_update_set_w%d", cfg.ConcurrentWriters)
+		concurrentUpdateCityValues := updatedCityValuesForUpdate()
 		concurrentWritePhase, err := measureProfiledPhase(profiler, phaseName, cfg.ConcurrentWrites, func(sample func(time.Duration)) error {
 			return runConcurrentOperations(ctx, cfg.ConcurrentWriters, cfg.ConcurrentWrites, func(op int) error {
-				id := benchmarkID((op * 37) % cfg.Documents)
+				documentOrdinal := benchmarkDocumentOrdinal(op, 37, cfg.Documents)
+				id := benchmarkID(documentOrdinal)
+				filter := bson.D{{Key: "_id", Value: id}}
+				update := benchmarkSetUpdate(benchmarkSetUpdateParams{
+					Operation:          op,
+					DocumentOrdinal:    documentOrdinal,
+					DocumentCount:      cfg.Documents,
+					ConcurrentPhase:    true,
+					UpdateIndexedField: cfg.UpdateIndexedField,
+					UpdatedCityValues:  concurrentUpdateCityValues,
+				})
+				// Sample the driver/gateway/DB call; request construction is outside
+				// the update latency window and documented in the README.
 				begin := time.Now()
-				res, err := coll.UpdateOne(ctx,
-					bson.D{{Key: "_id", Value: id}},
-					bson.D{{Key: "$set", Value: bson.D{{Key: "concurrent_updated", Value: true}, {Key: "concurrent_update_seq", Value: int64(op)}}}},
-				)
+				res, err := coll.UpdateOne(ctx, filter, update)
 				sample(time.Since(begin))
 				if err != nil {
 					return err
@@ -1947,6 +1990,13 @@ func mongoDBStats(ctx context.Context, db *mongo.Database) (map[string]any, erro
 	return stats, nil
 }
 
+var (
+	benchmarkCities        = [...]string{"hnl", "sfo", "nyc", "lon", "sin", "ber", "tyo", "syd"}
+	benchmarkUpdatedCities = [...]string{"ams", "cdg", "mad", "mex", "gru", "yyz", "icn", "akl"}
+)
+
+const benchmarkUpdatedCityValueCount = 65521
+
 func benchmarkDocument(i int) bson.D {
 	city := benchmarkCity(i)
 	return bson.D{
@@ -1964,6 +2014,49 @@ func benchmarkDocument(i int) bson.D {
 	}
 }
 
+type benchmarkSetUpdateParams struct {
+	Operation          int
+	DocumentOrdinal    int
+	DocumentCount      int
+	ConcurrentPhase    bool
+	UpdateIndexedField bool
+	UpdatedCityValues  []string
+}
+
+func benchmarkSetUpdate(params benchmarkSetUpdateParams) bson.D {
+	set := make(bson.D, 0, 3)
+	updatedKey := "updated"
+	updateSeqKey := "update_seq"
+	if params.ConcurrentPhase {
+		updatedKey = "concurrent_updated"
+		updateSeqKey = "concurrent_update_seq"
+	}
+	set = append(set,
+		bson.E{Key: updatedKey, Value: true},
+		bson.E{Key: updateSeqKey, Value: int64(params.Operation)},
+	)
+	if params.UpdateIndexedField {
+		updatedCityValues := params.UpdatedCityValues
+		if updatedCityValues != nil {
+			city := ""
+			if len(updatedCityValues) > 0 {
+				city = benchmarkUpdatedCityFromValues(updatedCityValues, params.Operation, params.DocumentOrdinal, params.DocumentCount)
+			}
+			set = append(set, bson.E{Key: "city", Value: city})
+		} else {
+			set = append(set, bson.E{Key: "city", Value: benchmarkUpdatedCity(params.Operation, params.DocumentOrdinal, params.DocumentCount)})
+		}
+	}
+	return bson.D{{Key: "$set", Value: set}}
+}
+
+func benchmarkDocumentOrdinal(operation int, stride uint64, documentCount int) int {
+	if documentCount <= 0 {
+		return 0
+	}
+	return int((uint64(operation) * stride) % uint64(documentCount))
+}
+
 func benchmarkID(i int) string {
 	return fmt.Sprintf("doc-%012d", i)
 }
@@ -1973,8 +2066,78 @@ func benchmarkEmail(i int) string {
 }
 
 func benchmarkCity(i int) string {
-	cities := [...]string{"hnl", "sfo", "nyc", "lon", "sin", "ber", "tyo", "syd"}
-	return cities[i%len(cities)]
+	return benchmarkCities[i%len(benchmarkCities)]
+}
+
+func benchmarkUpdatedCity(i int, documentOrdinal int, documentCount int) string {
+	cycle := benchmarkUpdatedCityValueCount
+	index := benchmarkUpdatedCityIndex(i, documentOrdinal, documentCount, cycle)
+	if documentCount > 0 && i >= documentCount {
+		previousIndex := benchmarkUpdatedCityIndex(i-documentCount, documentOrdinal, documentCount, cycle)
+		index = avoidBenchmarkUpdatedCityRepeat(index, previousIndex, cycle)
+	}
+	return benchmarkUpdatedCityValue(index)
+}
+
+func benchmarkUpdatedCityFromValues(values []string, i int, documentOrdinal int, documentCount int) string {
+	cycle := len(values)
+	if cycle == 0 {
+		return ""
+	}
+	index := benchmarkUpdatedCityIndex(i, documentOrdinal, documentCount, cycle)
+	if documentCount > 0 && i >= documentCount {
+		previousIndex := benchmarkUpdatedCityIndex(i-documentCount, documentOrdinal, documentCount, cycle)
+		index = avoidBenchmarkUpdatedCityRepeat(index, previousIndex, cycle)
+	}
+	return values[index]
+}
+
+func avoidBenchmarkUpdatedCityRepeat(index, previousIndex, cycle int) int {
+	if cycle > 1 && index == previousIndex {
+		return (index + 1) % cycle
+	}
+	return index
+}
+
+func benchmarkUpdatedCityIndex(i int, documentOrdinal int, documentCount int, cycle int) int {
+	if cycle <= 0 {
+		return 0
+	}
+	// SplitMix64-style finalization gives the indexed-update workload a stable,
+	// well-distributed city cycle without relying on math/rand or risking int overflow.
+	seed := (uint64(i)+1)*0x9e3779b185ebca87 ^
+		bits.RotateLeft64((uint64(documentOrdinal)+1)*0xc2b2ae3d27d4eb4f, 17) ^
+		bits.RotateLeft64((uint64(documentCount)+1)*0x165667b19e3779f9, 31)
+	seed += 0x9e3779b97f4a7c15
+	seed = (seed ^ (seed >> 30)) * 0xbf58476d1ce4e5b9
+	seed = (seed ^ (seed >> 27)) * 0x94d049bb133111eb
+	seed ^= seed >> 31
+	return int(seed % uint64(cycle))
+}
+
+func benchmarkUpdatedCityValue(index int) string {
+	if index < 0 {
+		index = 0
+	}
+	city := benchmarkUpdatedCities[index%len(benchmarkUpdatedCities)]
+	return city + "-" + strconv.Itoa(index/len(benchmarkUpdatedCities))
+}
+
+func buildBenchmarkUpdatedCityValues() []string {
+	// Keep a long prime-sized cycle so indexed-update stress runs usually change
+	// the secondary key on repeated visits without formatting strings in the hot path.
+	values := make([]string, benchmarkUpdatedCityValueCount)
+	for i, generation := 0, 0; i < len(values); generation++ {
+		suffix := strconv.Itoa(generation)
+		for _, city := range benchmarkUpdatedCities {
+			if i >= len(values) {
+				break
+			}
+			values[i] = city + "-" + suffix
+			i++
+		}
+	}
+	return values
 }
 
 func int64Value(value any) (int64, bool) {
@@ -2348,6 +2511,7 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 			result.Target, result.ClientMode, result.Database, result.Collection, result.Documents, result.BatchSize,
 			result.InsertProducers, result.MongoMaxPoolSize, result.MongoMinPoolSize, result.MongoMaxConnecting, result.SecondaryIndexes,
 			result.ConcurrentReaders, result.ConcurrentReads, result.ConcurrentWriters, result.ConcurrentWrites)
+		fmt.Fprintf(out, "update_indexed_field=%t\n", result.UpdateIndexedField)
 		if result.TreeDBDir != "" {
 			fmt.Fprintf(out, "treedb_dir=%s\n", result.TreeDBDir)
 		}
