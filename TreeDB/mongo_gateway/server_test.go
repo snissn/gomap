@@ -1082,6 +1082,34 @@ func TestServerCloseStopsUpdateCoalescers(t *testing.T) {
 	}
 }
 
+func TestMongoUpdateCoalescerRejectsEnqueueAfterStop(t *testing.T) {
+	server := NewServer()
+	coalescer := server.mongoUpdateCoalescer("app.users")
+	if coalescer == nil {
+		t.Fatal("expected coalescer")
+	}
+	coalescer.stop()
+	if coalescer.enqueue(mongoUpdateCoalescerRequest{done: make(chan mongoUpdateCoalescerResult, 1)}) {
+		t.Fatal("stopped coalescer accepted enqueue")
+	}
+}
+
+func TestMongoUpdateCoalescerClampsConfiguredMaxBatch(t *testing.T) {
+	server := NewServer()
+	server.UpdateCoalescingMaxBatch = maxUpdateCoalescingBatch + 1
+	coalescer := server.mongoUpdateCoalescer("app.users")
+	if coalescer == nil {
+		t.Fatal("expected coalescer")
+	}
+	defer func() { _ = server.Close() }()
+	if coalescer.maxBatch != maxUpdateCoalescingBatch {
+		t.Fatalf("maxBatch=%d want %d", coalescer.maxBatch, maxUpdateCoalescingBatch)
+	}
+	if got, want := cap(coalescer.requests), maxUpdateCoalescingBatch*4; got != want {
+		t.Fatalf("request queue cap=%d want %d", got, want)
+	}
+}
+
 func TestServerUpdateCoalescerEvictsWhenIdle(t *testing.T) {
 	server := NewServer()
 	server.UpdateCoalescingIdleTTL = time.Millisecond
