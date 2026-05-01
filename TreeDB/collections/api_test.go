@@ -2480,7 +2480,13 @@ func TestCollectionValidateInsertBatchPlanLockedClassifiesRaces(t *testing.T) {
 	}
 	rootNames, baseRootIDs := insertBatchPlanRootNamesAndBaseIDs(plan, catalog)
 	staleRootIDs := map[string]uint64{rootName: baseRootIDs[rootName] + 1}
-	if current, _, err := col.validateInsertBatchPlanLocked(catalog.meta, rootNames, staleRootIDs, plan); current != nil || !errors.Is(err, ErrConcurrentMutation) {
+	validation := insertBatchValidationContext{
+		meta:        catalog.meta,
+		rootNames:   rootNames,
+		baseRootIDs: staleRootIDs,
+		plan:        plan,
+	}
+	if current, _, err := col.validateInsertBatchPlanLocked(validation); current != nil || !errors.Is(err, ErrConcurrentMutation) {
 		if current != nil {
 			_ = current.Close()
 		}
@@ -2488,7 +2494,8 @@ func TestCollectionValidateInsertBatchPlanLockedClassifiesRaces(t *testing.T) {
 	} else if !strings.Contains(err.Error(), `collection="users"`) || !strings.Contains(err.Error(), `root="users/primary"`) {
 		t.Fatalf("root mismatch err=%v missing collection/root context", err)
 	}
-	if current, _, err := col.validateInsertBatchPlanLocked(catalog.meta, rootNames, map[string]uint64{}, plan); current != nil || err == nil || errors.Is(err, ErrConcurrentMutation) || !strings.Contains(err.Error(), "missing base root id") {
+	validation.baseRootIDs = map[string]uint64{}
+	if current, _, err := col.validateInsertBatchPlanLocked(validation); current != nil || err == nil || errors.Is(err, ErrConcurrentMutation) || !strings.Contains(err.Error(), `collection "users" root "users/primary"`) {
 		if current != nil {
 			_ = current.Close()
 		}
@@ -2497,7 +2504,9 @@ func TestCollectionValidateInsertBatchPlanLockedClassifiesRaces(t *testing.T) {
 
 	schemaMeta := catalog.meta
 	schemaMeta.Options.AllowArrayValuesInIndex = !schemaMeta.Options.AllowArrayValuesInIndex
-	if current, _, err := col.validateInsertBatchPlanLocked(schemaMeta, rootNames, baseRootIDs, plan); current != nil || err == nil || errors.Is(err, ErrConcurrentMutation) {
+	validation.meta = schemaMeta
+	validation.baseRootIDs = baseRootIDs
+	if current, _, err := col.validateInsertBatchPlanLocked(validation); current != nil || err == nil || errors.Is(err, ErrConcurrentMutation) {
 		if current != nil {
 			_ = current.Close()
 		}
