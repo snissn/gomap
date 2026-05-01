@@ -1912,10 +1912,13 @@ func mongoDBStats(ctx context.Context, db *mongo.Database) (map[string]any, erro
 }
 
 var (
-	benchmarkCities            = [...]string{"hnl", "sfo", "nyc", "lon", "sin", "ber", "tyo", "syd"}
-	benchmarkUpdatedCities     = [...]string{"ams", "cdg", "mad", "mex", "gru", "yyz", "icn", "akl"}
-	benchmarkUpdatedCityValues = buildBenchmarkUpdatedCityValues()
+	benchmarkCities                = [...]string{"hnl", "sfo", "nyc", "lon", "sin", "ber", "tyo", "syd"}
+	benchmarkUpdatedCities         = [...]string{"ams", "cdg", "mad", "mex", "gru", "yyz", "icn", "akl"}
+	benchmarkUpdatedCityValues     []string
+	benchmarkUpdatedCityValuesOnce sync.Once
 )
+
+const benchmarkUpdatedCityValueCount = 65521
 
 func benchmarkDocument(i int) bson.D {
 	city := benchmarkCity(i)
@@ -1965,19 +1968,20 @@ func benchmarkCity(i int) string {
 }
 
 func benchmarkUpdatedCity(i int) string {
+	benchmarkUpdatedCityValuesOnce.Do(func() {
+		benchmarkUpdatedCityValues = buildBenchmarkUpdatedCityValues()
+	})
 	return benchmarkUpdatedCityValues[i%len(benchmarkUpdatedCityValues)]
 }
 
 func buildBenchmarkUpdatedCityValues() []string {
-	// Keep a long precomputed cycle so indexed-update stress runs usually change
+	// Keep a long prime-sized cycle so indexed-update stress runs usually change
 	// the secondary key on repeated visits without formatting strings in the hot path.
-	const generations = 8192
-	values := make([]string, 0, len(benchmarkUpdatedCities)*generations)
-	for generation := 0; generation < generations; generation++ {
+	values := make([]string, benchmarkUpdatedCityValueCount)
+	for i := range values {
+		generation := i / len(benchmarkUpdatedCities)
 		suffix := strconv.Itoa(generation)
-		for _, city := range benchmarkUpdatedCities {
-			values = append(values, city+"-"+suffix)
-		}
+		values[i] = benchmarkUpdatedCities[i%len(benchmarkUpdatedCities)] + "-" + suffix
 	}
 	return values
 }

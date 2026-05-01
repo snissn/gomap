@@ -72,7 +72,7 @@ Environment overrides use the uppercase variable names shown in the script:
 OUT_DIR, DOCS, INDEXES, BATCH_SIZE, INSERT_PRODUCERS, WRITERS_LIST,
 READERS_LIST, CONCURRENT_WRITES, CONCURRENT_READS, INCLUDE_MONGO (0/1 or true/false), MONGO_URI,
 TREEDB_DOCUMENT_FORMAT, TREEDB_CLIENT_MODE, TREEDB_PROFILE,
-TREEDB_MAINTENANCE, UPDATE_INDEXED_FIELD, TIMEOUT, TITLE, and related
+TREEDB_MAINTENANCE, UPDATE_INDEXED_FIELD (0/1 or true/false), TIMEOUT, TITLE, and related
   storage/pool settings.
 EOF
 }
@@ -96,6 +96,24 @@ normalize_bool_01() {
       ;;
     0|false|FALSE|no|NO)
       printf '0'
+      ;;
+    *)
+      echo "$name must be 0/1 or true/false; got: $value" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+}
+
+normalize_bool_word() {
+  local name=$1
+  local value=$2
+  case "$value" in
+    1|true|TRUE|yes|YES)
+      printf 'true'
+      ;;
+    0|false|FALSE|no|NO)
+      printf 'false'
       ;;
     *)
       echo "$name must be 0/1 or true/false; got: $value" >&2
@@ -252,6 +270,7 @@ if [[ "$PREBUILD_DOCUMENTS" != "true" && "$PREBUILD_DOCUMENTS" != "false" ]]; th
   echo "invalid PREBUILD_DOCUMENTS=$PREBUILD_DOCUMENTS (want true or false)" >&2
   exit 2
 fi
+UPDATE_INDEXED_FIELD=$(normalize_bool_word UPDATE_INDEXED_FIELD "$UPDATE_INDEXED_FIELD")
 case "$UPDATE_INDEXED_FIELD" in
   true)
     if [[ "$INDEXES" != "2" ]]; then

@@ -332,6 +332,13 @@ func TestParseConfigValidation(t *testing.T) {
 	if unackCfg.ClientMode != clientModeDriverUnack {
 		t.Fatalf("ClientMode=%q want %q", unackCfg.ClientMode, clientModeDriverUnack)
 	}
+	oneIndexCfg, err := parseConfig([]string{"-secondary-indexes", "1"})
+	if err != nil {
+		t.Fatalf("parse secondary-indexes=1 config: %v", err)
+	}
+	if oneIndexCfg.SecondaryIndexes != 1 {
+		t.Fatalf("SecondaryIndexes=%d want 1", oneIndexCfg.SecondaryIndexes)
+	}
 	if _, err := parseConfig([]string{"-client-mode", "bad"}); err == nil {
 		t.Fatal("bad client-mode accepted")
 	}
@@ -1250,8 +1257,11 @@ func TestBenchmarkSetUpdateCanExerciseIndexedField(t *testing.T) {
 	if first, repeated := benchmarkUpdatedCity(0), benchmarkUpdatedCity(len(benchmarkUpdatedCities)); first == repeated {
 		t.Fatalf("benchmarkUpdatedCity repeated value %q for later update", first)
 	}
-	if first, wrapped := benchmarkUpdatedCity(0), benchmarkUpdatedCity(len(benchmarkUpdatedCityValues)); first != wrapped {
-		t.Fatalf("benchmarkUpdatedCity wrap=%q want %q", wrapped, first)
+	if got := len(benchmarkUpdatedCityValues); got != benchmarkUpdatedCityValueCount {
+		t.Fatalf("benchmarkUpdatedCityValues len=%d want %d", got, benchmarkUpdatedCityValueCount)
+	}
+	if first, aligned := benchmarkUpdatedCity(0), benchmarkUpdatedCity(65536); first == aligned {
+		t.Fatalf("benchmarkUpdatedCity repeated value %q at common 65536 revisit stride", first)
 	}
 }
 
