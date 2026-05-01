@@ -3997,10 +3997,14 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]Upda
 		}
 	}()
 	for i, rootName := range plan.rootNames {
+		baseRoot, ok := plan.baseRootIDs[rootName]
+		if !ok {
+			return nil, fmt.Errorf("collections: update batch plan missing base root for %q", rootName)
+		}
 		iter := plan.deltaTables[i].NewIterator(nil, nil)
 		iterators = append(iterators, iter)
 		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
-			BaseRoot:      plan.baseRootIDs[rootName],
+			BaseRoot:      baseRoot,
 			Iter:          iter,
 			StoragePolicy: plan.policies[i],
 		})
@@ -4009,7 +4013,7 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]Upda
 		return c.validateMutationRootDescriptors(plan.baseUserRoot, plan.baseSystemRoot, plan.baseCommitSeq)
 	}
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-		return c.buildRootDescriptorSystemDeltaIterator(plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs, rootIDs)
+		return c.buildRootDescriptorSystemDeltaIteratorForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs, rootIDs)
 	})
 	if err != nil {
 		return nil, err
@@ -4481,10 +4485,14 @@ func (c *Collection) buildRootDescriptorSystemIterator(rootNames []string, baseR
 }
 
 func (c *Collection) buildRootDescriptorSystemDeltaIterator(expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	return c.buildRootDescriptorSystemDeltaIteratorForMeta(c.meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs, rootIDs)
+}
+
+func (c *Collection) buildRootDescriptorSystemDeltaIteratorForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 	if len(rootIDs) != len(rootNames) {
 		return nil, errors.New("collections: ordered root publish returned unexpected root count")
 	}
-	if err := c.validateRootDescriptorSystemDelta(expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs); err != nil {
+	if err := c.validateRootDescriptorSystemDeltaForMeta(meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs); err != nil {
 		return nil, err
 	}
 	updates := make(map[string][]byte, len(rootNames))
@@ -4495,29 +4503,38 @@ func (c *Collection) buildRootDescriptorSystemDeltaIterator(expectedCommitSeq, e
 }
 
 func (c *Collection) validateRootDescriptorSystemDelta(expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64) error {
-	currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(nil)
-	if c != nil {
-		currentCommitSeq, currentSystemRoot = dbCommitSeqAndSystemRoot(c.db)
+	return c.validateRootDescriptorSystemDeltaForMeta(c.meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs)
+}
+
+func (c *Collection) validateRootDescriptorSystemDeltaForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64) error {
+	if c == nil || c.db == nil {
+		return backenddb.ErrClosed
 	}
+	currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(nil)
+	currentCommitSeq, currentSystemRoot = dbCommitSeqAndSystemRoot(c.db)
 	if currentSystemRoot != expectedSystemRoot || currentCommitSeq != expectedCommitSeq {
 		current := c.db.AcquireSnapshot()
 		if current == nil {
 			return backenddb.ErrClosed
 		}
 		defer func() { _ = current.Close() }()
-		catalog, err := loadCollectionCatalog(current, c.meta.Name)
+		catalog, err := loadCollectionCatalog(current, meta.Name)
 		if err != nil {
 			return err
 		}
 		if catalog == nil {
 			return errCollectionNotFound
 		}
-		if !sameCollectionMeta(catalog.meta, c.meta) {
-			return fmt.Errorf("collections: concurrent schema modification detected for %q", c.meta.Name)
+		if !sameCollectionMeta(catalog.meta, meta) {
+			return fmt.Errorf("collections: concurrent schema modification detected for %q", meta.Name)
 		}
 		for _, rootName := range rootNames {
-			if got, want := catalog.rootID(rootName), baseRootIDs[rootName]; got != want {
-				return errConcurrentRootModification(c.meta.Name, rootName)
+			want, ok := baseRootIDs[rootName]
+			if !ok {
+				return fmt.Errorf("collections: missing base root for %q", rootName)
+			}
+			if got := catalog.rootID(rootName); got != want {
+				return errConcurrentRootModification(meta.Name, rootName)
 			}
 		}
 	}
