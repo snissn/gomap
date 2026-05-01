@@ -1127,10 +1127,16 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 
 	updatePhase, err := measureProfiledPhase(profiler, "id_update_set", cfg.Updates, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.Updates; i++ {
-			documentOrdinal := (i * 31) % cfg.Documents
+			documentOrdinal := benchmarkDocumentOrdinal(i, 31, cfg.Documents)
 			id := benchmarkID(documentOrdinal)
 			filter := bson.D{{Key: "_id", Value: id}}
-			update := benchmarkSetUpdate(i, documentOrdinal, cfg.Documents, false, cfg.UpdateIndexedField, updatedCityValues)
+			update := benchmarkSetUpdate(benchmarkSetUpdateParams{
+				Operation:          i,
+				DocumentOrdinal:    documentOrdinal,
+				DocumentCount:      cfg.Documents,
+				UpdateIndexedField: cfg.UpdateIndexedField,
+				UpdatedCityValues:  updatedCityValues,
+			})
 			// Sample the driver/gateway/DB call; request construction is outside
 			// the update latency window and documented in the README.
 			begin := time.Now()
@@ -1154,7 +1160,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		phaseName := fmt.Sprintf("concurrent_id_find_one_r%d", cfg.ConcurrentReaders)
 		concurrentReadPhase, err := measureProfiledPhase(profiler, phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
 			return runConcurrentOperations(ctx, cfg.ConcurrentReaders, cfg.ConcurrentReads, func(op int) error {
-				id := benchmarkID((op * 17) % cfg.Documents)
+				id := benchmarkID(benchmarkDocumentOrdinal(op, 17, cfg.Documents))
 				var out bson.M
 				begin := time.Now()
 				err := coll.FindOne(ctx, bson.D{{Key: "_id", Value: id}}).Decode(&out)
@@ -1178,10 +1184,17 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		phaseName := fmt.Sprintf("concurrent_id_update_set_w%d", cfg.ConcurrentWriters)
 		concurrentWritePhase, err := measureProfiledPhase(profiler, phaseName, cfg.ConcurrentWrites, func(sample func(time.Duration)) error {
 			return runConcurrentOperations(ctx, cfg.ConcurrentWriters, cfg.ConcurrentWrites, func(op int) error {
-				documentOrdinal := (op * 37) % cfg.Documents
+				documentOrdinal := benchmarkDocumentOrdinal(op, 37, cfg.Documents)
 				id := benchmarkID(documentOrdinal)
 				filter := bson.D{{Key: "_id", Value: id}}
-				update := benchmarkSetUpdate(op, documentOrdinal, cfg.Documents, true, cfg.UpdateIndexedField, updatedCityValues)
+				update := benchmarkSetUpdate(benchmarkSetUpdateParams{
+					Operation:          op,
+					DocumentOrdinal:    documentOrdinal,
+					DocumentCount:      cfg.Documents,
+					ConcurrentPhase:    true,
+					UpdateIndexedField: cfg.UpdateIndexedField,
+					UpdatedCityValues:  updatedCityValues,
+				})
 				// Sample the driver/gateway/DB call; request construction is outside
 				// the update latency window and documented in the README.
 				begin := time.Now()
@@ -1993,25 +2006,42 @@ func benchmarkDocument(i int) bson.D {
 	}
 }
 
-func benchmarkSetUpdate(i int, documentOrdinal int, documentCount int, concurrentPhase bool, updateIndexedField bool, updatedCityValues []string) bson.D {
+type benchmarkSetUpdateParams struct {
+	Operation          int
+	DocumentOrdinal    int
+	DocumentCount      int
+	ConcurrentPhase    bool
+	UpdateIndexedField bool
+	UpdatedCityValues  []string
+}
+
+func benchmarkSetUpdate(params benchmarkSetUpdateParams) bson.D {
 	set := make(bson.D, 0, 3)
 	updatedKey := "updated"
 	updateSeqKey := "update_seq"
-	if concurrentPhase {
+	if params.ConcurrentPhase {
 		updatedKey = "concurrent_updated"
 		updateSeqKey = "concurrent_update_seq"
 	}
 	set = append(set,
 		bson.E{Key: updatedKey, Value: true},
-		bson.E{Key: updateSeqKey, Value: int64(i)},
+		bson.E{Key: updateSeqKey, Value: int64(params.Operation)},
 	)
-	if updateIndexedField {
+	if params.UpdateIndexedField {
+		updatedCityValues := params.UpdatedCityValues
 		if len(updatedCityValues) == 0 {
 			updatedCityValues = benchmarkUpdatedCityValuesForUpdate()
 		}
-		set = append(set, bson.E{Key: "city", Value: benchmarkUpdatedCityFromValues(updatedCityValues, i, documentOrdinal, documentCount)})
+		set = append(set, bson.E{Key: "city", Value: benchmarkUpdatedCityFromValues(updatedCityValues, params.Operation, params.DocumentOrdinal, params.DocumentCount)})
 	}
 	return bson.D{{Key: "$set", Value: set}}
+}
+
+func benchmarkDocumentOrdinal(operation int, stride uint64, documentCount int) int {
+	if documentCount <= 0 {
+		return 0
+	}
+	return int((uint64(operation) * stride) % uint64(documentCount))
 }
 
 func benchmarkID(i int) string {

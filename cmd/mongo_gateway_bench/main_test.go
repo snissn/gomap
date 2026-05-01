@@ -1234,7 +1234,14 @@ func TestBenchmarkSetUpdateCanExerciseIndexedField(t *testing.T) {
 		return set
 	}
 
-	set := updateSet(benchmarkSetUpdate(3, 7, 100, true, true, updatedCityValues))
+	set := updateSet(benchmarkSetUpdate(benchmarkSetUpdateParams{
+		Operation:          3,
+		DocumentOrdinal:    7,
+		DocumentCount:      100,
+		ConcurrentPhase:    true,
+		UpdateIndexedField: true,
+		UpdatedCityValues:  updatedCityValues,
+	}))
 	if got, ok := set.Lookup("concurrent_update_seq").Int64OK(); !ok || got != 3 {
 		t.Fatalf("concurrent_update_seq=%d ok=%t want 3", got, ok)
 	}
@@ -1242,12 +1249,23 @@ func TestBenchmarkSetUpdateCanExerciseIndexedField(t *testing.T) {
 		t.Fatalf("city=%q ok=%t want %q", city, ok, benchmarkUpdatedCity(3, 7, 100))
 	}
 
-	set = updateSet(benchmarkSetUpdate(4, 7, 100, true, false, nil))
+	set = updateSet(benchmarkSetUpdate(benchmarkSetUpdateParams{
+		Operation:       4,
+		DocumentOrdinal: 7,
+		DocumentCount:   100,
+		ConcurrentPhase: true,
+	}))
 	if _, ok := set.Lookup("city").StringValueOK(); ok {
 		t.Fatalf("city present when updateIndexedField=false: %v", set.Lookup("city"))
 	}
 
-	set = updateSet(benchmarkSetUpdate(5, 11, 100, false, true, updatedCityValues))
+	set = updateSet(benchmarkSetUpdate(benchmarkSetUpdateParams{
+		Operation:          5,
+		DocumentOrdinal:    11,
+		DocumentCount:      100,
+		UpdateIndexedField: true,
+		UpdatedCityValues:  updatedCityValues,
+	}))
 	if got, ok := set.Lookup("update_seq").Int64OK(); !ok || got != 5 {
 		t.Fatalf("update_seq=%d ok=%t want 5", got, ok)
 	}
@@ -1268,10 +1286,23 @@ func TestBenchmarkSetUpdateCanExerciseIndexedField(t *testing.T) {
 	}
 	const documents = 65520
 	for op := 0; op < 1024; op++ {
-		documentOrdinal := (op * 31) % documents
+		documentOrdinal := benchmarkDocumentOrdinal(op, 31, documents)
 		if first, revisited := benchmarkUpdatedCity(op, documentOrdinal, documents), benchmarkUpdatedCity(op+documents, documentOrdinal, documents); first == revisited {
 			t.Fatalf("benchmarkUpdatedCity repeated value %q when revisiting document %d at op+documents for op=%d documents=%d", first, documentOrdinal, op, documents)
 		}
+	}
+}
+
+func TestBenchmarkDocumentOrdinalAvoidsIntOverflow(t *testing.T) {
+	const documents = 100000
+	op := int(^uint(0) >> 1)
+	got := benchmarkDocumentOrdinal(op, 37, documents)
+	want := int((uint64(op) * 37) % documents)
+	if got != want {
+		t.Fatalf("ordinal=%d want %d", got, want)
+	}
+	if got < 0 || got >= documents {
+		t.Fatalf("ordinal=%d out of range [0,%d)", got, documents)
 	}
 }
 
