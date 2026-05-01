@@ -1298,6 +1298,29 @@ func TestMergeTreeDBPersistentStatsPreservesProcessCounters(t *testing.T) {
 	if got["treedb.publish.watermark.latency_p99_ms"] != "1.250" {
 		t.Fatalf("latency_p99_ms=%q want in-memory counter preserved", got["treedb.publish.watermark.latency_p99_ms"])
 	}
+	got["treedb.commit_seq"] = "mutated"
+	if base["treedb.commit_seq"] != "10" {
+		t.Fatalf("base map was aliased: %v", base)
+	}
+	if refreshed["treedb.commit_seq"] != "12" {
+		t.Fatalf("refreshed map was aliased: %v", refreshed)
+	}
+}
+
+func TestMergeTreeDBPersistentStatsClonesFastPaths(t *testing.T) {
+	base := map[string]string{"treedb.publish.ordered_root_delta_group.calls_total": "7"}
+	got := mergeTreeDBPersistentStats(base, nil)
+	got["treedb.publish.ordered_root_delta_group.calls_total"] = "mutated"
+	if base["treedb.publish.ordered_root_delta_group.calls_total"] != "7" {
+		t.Fatalf("base-only merge aliased input: %v", base)
+	}
+
+	refreshed := map[string]string{"treedb.commit_seq": "12"}
+	got = mergeTreeDBPersistentStats(nil, refreshed)
+	got["treedb.commit_seq"] = "mutated"
+	if refreshed["treedb.commit_seq"] != "12" {
+		t.Fatalf("refreshed-only merge aliased input: %v", refreshed)
+	}
 }
 
 func TestWriteResultIncludesRedactedMongoURI(t *testing.T) {

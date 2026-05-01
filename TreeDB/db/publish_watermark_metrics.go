@@ -169,8 +169,9 @@ func (db *DB) observeOrderedRootDeltaGroupPublish(wait, hold time.Duration, root
 	db.orderedRootDeltaGroupCalls.Add(1)
 	if err != nil {
 		db.orderedRootDeltaGroupErrors.Add(1)
+	} else {
+		db.orderedRootDeltaGroupRoots.Add(uint64(roots))
 	}
-	db.orderedRootDeltaGroupRoots.Add(uint64(roots))
 	db.orderedRootDeltaGroupWaitTotalNs.Add(waitNs)
 	db.orderedRootDeltaGroupHoldTotalNs.Add(holdNs)
 	for {
