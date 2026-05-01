@@ -134,6 +134,8 @@ func TestDefaultBenchmarkPatternsCoverStrictSummary(t *testing.T) {
 		"BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes",
 		"BenchmarkCollectionShapeReadPrimaryInto",
 		"BenchmarkCollectionShapeReadPrimaryIntoParallel",
+		"BenchmarkCollectionMixedReadWriteScalingPrimary",
+		"BenchmarkCollectionMixedReadWriteScalingSecondaryUnique",
 	} {
 		if !treePattern.MatchString(name) {
 			t.Fatalf("default tree pattern does not match strict benchmark %q", name)
