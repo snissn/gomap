@@ -52,8 +52,8 @@ Options:
   --indexes N            Secondary index count. Default: 2.
   --batch-size N         Insert batch size. Default: 10000.
   --insert-producers N   Insert load producers. Default: 8.
-  --writers LIST         Space-separated concurrent writer counts. Default: "1 2 4 8 16".
-  --readers LIST         Space-separated concurrent reader counts. Default: "1 2 4 8 16".
+  --writers LIST         Quoted space-separated concurrent writer counts (for example: "1 2 4"). Default: "1 2 4 8 16".
+  --readers LIST         Quoted space-separated concurrent reader counts (for example: "1 2 4"). Default: "1 2 4 8 16".
   --concurrent-writes N  Total updates per writer-scaling cell. Default: 80000.
   --concurrent-reads N   Total reads per reader-scaling cell. Default: 80000.
   --include-mongo        Also run each cell against an external MongoDB URI.

@@ -109,6 +109,7 @@ type benchmarkResult struct {
 	TreeDBDiskAfterCheckpoint   *diskSnapshot       `json:"treedb_disk_after_checkpoint,omitempty"`
 	TreeDBDiskAfterMaintenance  *diskSnapshot       `json:"treedb_disk_after_maintenance,omitempty"`
 	TreeDBStatsAfterLoad        map[string]string   `json:"treedb_stats_after_load,omitempty"`
+	TreeDBStatsAfterCheckpoint  map[string]string   `json:"treedb_stats_after_checkpoint,omitempty"`
 	TreeDBStatsFinal            map[string]string   `json:"treedb_stats_final,omitempty"`
 	TreeDBMaintenance           []maintenanceResult `json:"treedb_maintenance,omitempty"`
 	MongoDBStatsAfterLoad       map[string]any      `json:"mongodb_stats_after_load,omitempty"`
@@ -1685,13 +1686,19 @@ func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, res
 		}
 		result.TreeDBDiskAfterCheckpoint = &snapshot
 		if target.db != nil {
-			result.TreeDBStatsFinal = target.db.Stats()
+			result.TreeDBStatsAfterCheckpoint = target.db.Stats()
 		}
 		if cfg.TreeDBMaintenance == treeDBMaintenanceFull {
 			if err := runTreeDBMaintenanceStack(ctx, target, result); err != nil {
 				return err
 			}
+			if target.db != nil {
+				result.TreeDBStatsFinal = target.db.Stats()
+			}
 			return nil
+		}
+		if target.db != nil {
+			result.TreeDBStatsFinal = target.db.Stats()
 		}
 		return nil
 	}
@@ -2363,6 +2370,9 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		}
 		if result.TreeDBDiskAfterCheckpoint != nil {
 			writeDiskSnapshot(out, "treedb_after_checkpoint", result.TreeDBDiskAfterCheckpoint)
+		}
+		if result.TreeDBStatsAfterCheckpoint != nil {
+			writeTreeDBStats(out, "treedb_stats_after_checkpoint", result.TreeDBStatsAfterCheckpoint)
 		}
 		for _, step := range result.TreeDBMaintenance {
 			writeMaintenanceResult(out, step)
