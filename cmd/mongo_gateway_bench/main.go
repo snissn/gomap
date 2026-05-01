@@ -1193,7 +1193,7 @@ func runLoadPhase(ctx context.Context, cfg config, target *benchTarget, coll *mo
 }
 
 func runDriverLoadPhase(ctx context.Context, cfg config, coll *mongo.Collection, prebuilt []bson.D) (phaseResult, error) {
-	return measureLoadPhase(ctx, cfg, func(producer, start, end int) error {
+	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
 		docs := make([]any, 0, end-start)
 		for i := start; i < end; i++ {
 			if prebuilt != nil {
@@ -1202,13 +1202,13 @@ func runDriverLoadPhase(ctx context.Context, cfg config, coll *mongo.Collection,
 				docs = append(docs, benchmarkDocument(i))
 			}
 		}
-		_, err := coll.InsertMany(ctx, docs)
+		_, err := coll.InsertMany(batchCtx, docs)
 		return err
 	})
 }
 
 func runDriverCommandLoadPhase(ctx context.Context, cfg config, db *mongo.Database, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
-	return measureLoadPhase(ctx, cfg, func(producer, start, end int) error {
+	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
 		docs := make(bson.A, 0, end-start)
 		for i := start; i < end; i++ {
 			if prebuiltRaw != nil {
@@ -1219,7 +1219,7 @@ func runDriverCommandLoadPhase(ctx context.Context, cfg config, db *mongo.Databa
 				docs = append(docs, benchmarkDocument(i))
 			}
 		}
-		return db.RunCommand(ctx, bson.D{
+		return db.RunCommand(batchCtx, bson.D{
 			{Key: "insert", Value: cfg.Collection},
 			{Key: "documents", Value: docs},
 			{Key: "ordered", Value: true},
@@ -1228,12 +1228,12 @@ func runDriverCommandLoadPhase(ctx context.Context, cfg config, db *mongo.Databa
 }
 
 func runDriverCommandRawLoadPhase(ctx context.Context, cfg config, db *mongo.Database, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
-	return measureLoadPhase(ctx, cfg, func(producer, start, end int) error {
+	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
 		command, err := rawInsertCommand(cfg.Collection, start, end, prebuilt, prebuiltRaw)
 		if err != nil {
 			return err
 		}
-		return db.RunCommand(ctx, command).Err()
+		return db.RunCommand(batchCtx, command).Err()
 	})
 }
 
@@ -1276,7 +1276,7 @@ func rawInsertCommand(collection string, start, end int, prebuilt []bson.D, preb
 func runDriverUnackLoadPhase(ctx context.Context, cfg config, db *mongo.Database, prebuilt []bson.D) (phaseResult, error) {
 	unackColl := db.Collection(cfg.Collection, options.Collection().SetWriteConcern(writeconcern.Unacknowledged()))
 	ackColl := db.Collection(cfg.Collection)
-	return measureLoadPhase(ctx, cfg, func(producer, start, end int) error {
+	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
 		docs := make([]any, 0, end-start)
 		for i := start; i < end; i++ {
 			if prebuilt != nil {
@@ -1285,7 +1285,7 @@ func runDriverUnackLoadPhase(ctx context.Context, cfg config, db *mongo.Database
 				docs = append(docs, benchmarkDocument(i))
 			}
 		}
-		_, err := unackColl.InsertMany(ctx, docs)
+		_, err := unackColl.InsertMany(batchCtx, docs)
 		return err
 	}, func() error {
 		return waitForLoadVisible(ctx, cfg, ackColl)
@@ -1372,7 +1372,10 @@ func runTreeDBRawWireLoadPhase(ctx context.Context, cfg config, target *benchTar
 	}
 	commandDoc := wire.Document(commandRaw)
 	var requestID atomic.Int32
-	return measureLoadPhase(ctx, cfg, func(producer, start, end int) error {
+	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
+		if err := batchCtx.Err(); err != nil {
+			return err
+		}
 		docs := make([]wire.Document, end-start)
 		for i := start; i < end; i++ {
 			if prebuiltRaw != nil {
@@ -1418,12 +1421,12 @@ func runTreeDBRawWireTCPLoadPhase(ctx context.Context, cfg config, target *bench
 			_ = client.Close()
 		}
 	}()
-	return measureLoadPhase(ctx, cfg, func(producer, start, end int) error {
+	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
 		docs, err := rawBSONDocuments(start, end, prebuilt, prebuiltRaw)
 		if err != nil {
 			return err
 		}
-		_, err = clients[producer].InsertManyRawBSON(ctx, cfg.Database, cfg.Collection, docs)
+		_, err = clients[producer].InsertManyRawBSON(batchCtx, cfg.Database, cfg.Collection, docs)
 		return err
 	})
 }
@@ -1872,7 +1875,7 @@ func effectiveLoadProducers(documents, batchSize, requested int) int {
 	return requested
 }
 
-func measureLoadPhase(ctx context.Context, cfg config, runBatch func(producer, start, end int) error, after ...func() error) (phaseResult, error) {
+func measureLoadPhase(ctx context.Context, cfg config, runBatch func(context.Context, int, int, int) error, after ...func() error) (phaseResult, error) {
 	batches := makeLoadBatches(cfg.Documents, cfg.BatchSize)
 	producers := effectiveLoadProducers(cfg.Documents, cfg.BatchSize, cfg.InsertProducers)
 
@@ -1940,7 +1943,7 @@ func runLoadBatches(
 	ctx context.Context,
 	batches []loadBatch,
 	producers int,
-	runBatch func(producer, start, end int) error,
+	runBatch func(context.Context, int, int, int) error,
 	recordBatch func(producer, operations int, duration time.Duration),
 	recordProducerDuration func(producer int, duration time.Duration),
 ) error {
@@ -1985,7 +1988,7 @@ func runLoadBatches(
 				}
 				batch := batches[batchIndex]
 				started := time.Now()
-				err := runBatch(producer, batch.start, batch.end)
+				err := runBatch(runCtx, producer, batch.start, batch.end)
 				elapsed := time.Since(started)
 				operations := batch.end - batch.start
 				if err != nil {

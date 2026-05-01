@@ -689,7 +689,10 @@ func TestLoadVisibilitySentinelIDsUseBatchBoundaries(t *testing.T) {
 func TestMeasureLoadPhaseReportsProducerResults(t *testing.T) {
 	cfg := config{Documents: 12, BatchSize: 2, InsertProducers: 3}
 	seen := make([]atomic.Int64, cfg.Documents)
-	phase, err := measureLoadPhase(context.Background(), cfg, func(producer, start, end int) error {
+	phase, err := measureLoadPhase(context.Background(), cfg, func(ctx context.Context, producer, start, end int) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if producer < 0 || producer >= cfg.InsertProducers {
 			return os.ErrInvalid
 		}
@@ -728,7 +731,10 @@ func TestMeasureLoadPhaseReportsProducerResults(t *testing.T) {
 func TestMeasureLoadPhaseErrorReportsCompletedOperations(t *testing.T) {
 	sentinel := errors.New("load failed")
 	cfg := config{Documents: 6, BatchSize: 2, InsertProducers: 1}
-	phase, err := measureLoadPhase(context.Background(), cfg, func(producer, start, end int) error {
+	phase, err := measureLoadPhase(context.Background(), cfg, func(ctx context.Context, producer, start, end int) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if start >= 2 {
 			return sentinel
 		}
@@ -742,6 +748,57 @@ func TestMeasureLoadPhaseErrorReportsCompletedOperations(t *testing.T) {
 	}
 	if phase.DriverCalls != 2 {
 		t.Fatalf("DriverCalls=%d want 2", phase.DriverCalls)
+	}
+}
+
+func TestRunLoadBatchesCancelsInFlightBatchContext(t *testing.T) {
+	sentinel := errors.New("load failed")
+	releaseFailure := make(chan struct{})
+	started := make(chan int, 2)
+	done := make(chan error, 1)
+	go func() {
+		done <- runLoadBatches(
+			context.Background(),
+			[]loadBatch{{start: 0, end: 1}, {start: 1, end: 2}},
+			2,
+			func(ctx context.Context, producer, start, end int) error {
+				started <- start
+				if start == 0 {
+					<-releaseFailure
+					return sentinel
+				}
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(2 * time.Second):
+					return errors.New("in-flight batch context was not canceled")
+				}
+			},
+			func(producer, operations int, duration time.Duration) {},
+			func(producer int, duration time.Duration) {},
+		)
+	}()
+	seen := map[int]bool{}
+	for len(seen) < 2 {
+		select {
+		case start := <-started:
+			seen[start] = true
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for both batches to start; seen=%v", seen)
+		}
+	}
+	close(releaseFailure)
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for runLoadBatches to return after failure")
+	}
+	if err == nil {
+		t.Fatal("runLoadBatches returned nil before failure released")
+	}
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("err=%v want sentinel", err)
 	}
 }
 
