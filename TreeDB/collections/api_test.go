@@ -17,6 +17,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -1772,6 +1773,309 @@ func TestCollectionIndexedWriteMemtablesFindLimitMergesBufferedAndPersistedOrder
 	}
 	if len(ids) != 2 || !bytes.Equal(ids[0], []byte("u0")) || !bytes.Equal(ids[1], []byte("u1")) {
 		t.Fatalf("merged ids=%q want [u0 u1]", ids)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesFindSkipsBufferedSecondaryTombstone(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"city":"hnl"}`), []byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert persisted rows: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush persisted rows: %v", err)
+	}
+
+	oldEncoded, err := encodeIndexScalar("hnl")
+	if err != nil {
+		t.Fatalf("encode old city: %v", err)
+	}
+	oldKey, err := indexEntryKey(oldEncoded, []byte("u1"))
+	if err != nil {
+		t.Fatalf("old index key: %v", err)
+	}
+	newEncoded, err := encodeIndexScalar("sea")
+	if err != nil {
+		t.Fatalf("encode new city: %v", err)
+	}
+	newKey, err := indexEntryKey(newEncoded, []byte("u1"))
+	if err != nil {
+		t.Fatalf("new index key: %v", err)
+	}
+	table := newCollectionRunTable(2)
+	table.DeleteSteal(oldKey)
+	setCollectionRunValue(table, newKey, nil)
+	table.Freeze()
+	domain := col.writeDomain
+	domain.mu.Lock()
+	domain.count = 1
+	domain.meta = col.Meta()
+	domain.rootRuns = map[string][]memtable.Table{
+		collectionSecondaryRootName("users", "city"): {table},
+	}
+	domain.mu.Unlock()
+
+	ids, err := col.FindByIndexValue("city", "hnl")
+	if err != nil {
+		t.Fatalf("find old city: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u2")) {
+		t.Fatalf("old city ids=%q want [u2]", ids)
+	}
+	ids, truncated, err := col.FindByIndexValueLimit("city", "hnl", 1)
+	if err != nil {
+		t.Fatalf("find old city limited: %v", err)
+	}
+	if truncated || len(ids) != 1 || !bytes.Equal(ids[0], []byte("u2")) {
+		t.Fatalf("limited old city ids=%q truncated=%v want [u2]/false", ids, truncated)
+	}
+	ids, err = col.FindByIndexValue("city", "sea")
+	if err != nil {
+		t.Fatalf("find new city: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("new city ids=%q want [u1]", ids)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesFindLimitFiltersOnlyBufferedTombstone(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert persisted row: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush persisted row: %v", err)
+	}
+
+	encoded, err := encodeIndexScalar("hnl")
+	if err != nil {
+		t.Fatalf("encode city: %v", err)
+	}
+	key, err := indexEntryKey(encoded, []byte("u1"))
+	if err != nil {
+		t.Fatalf("index key: %v", err)
+	}
+	table := newCollectionRunTable(1)
+	table.DeleteSteal(key)
+	table.Freeze()
+	domain := col.writeDomain
+	domain.mu.Lock()
+	domain.count = 1
+	domain.meta = col.Meta()
+	domain.rootRuns = map[string][]memtable.Table{
+		collectionSecondaryRootName("users", "city"): {table},
+	}
+	domain.mu.Unlock()
+
+	ids, truncated, err := col.FindByIndexValueLimit("city", "hnl", 1)
+	if err != nil {
+		t.Fatalf("find limited city: %v", err)
+	}
+	if truncated || len(ids) != 0 {
+		t.Fatalf("limited ids=%q truncated=%v want empty/false", ids, truncated)
+	}
+}
+
+func TestBufferedIndexTableLockedLimitsLiveMaterialization(t *testing.T) {
+	encoded, err := encodeIndexScalar("hnl")
+	if err != nil {
+		t.Fatalf("encode city: %v", err)
+	}
+	_, prefix, err := appendIndexValuePrefixSlice(nil, encoded)
+	if err != nil {
+		t.Fatalf("index prefix: %v", err)
+	}
+	table := newCollectionRunTable(4)
+	for _, id := range [][]byte{[]byte("u0"), []byte("u1"), []byte("u2"), []byte("u3")} {
+		key, err := indexEntryKey(encoded, id)
+		if err != nil {
+			t.Fatalf("index key %q: %v", id, err)
+		}
+		if bytes.Equal(id, []byte("u0")) {
+			table.DeleteSteal(key)
+		} else {
+			setCollectionRunValue(table, key, nil)
+		}
+	}
+	table.Freeze()
+	domain := &collectionWriteDomain{
+		count: 4,
+		meta:  CollectionMeta{Name: "users"},
+		rootRuns: map[string][]memtable.Table{
+			collectionSecondaryRootName("users", "city"): {table},
+		},
+	}
+
+	buffered, err := bufferedIndexTableLocked(domain, "users", "city", prefix, 1)
+	if err != nil {
+		t.Fatalf("buffered index table: %v", err)
+	}
+	defer resetCollectionRunTable(buffered)
+	if buffered == nil {
+		t.Fatal("buffered index table nil")
+	}
+	if got := buffered.Len(); got != 3 {
+		t.Fatalf("buffered table len=%d want tombstone plus two live rows", got)
+	}
+}
+
+func TestBufferedRootRunsIteratorSingleRunHidesTombstones(t *testing.T) {
+	table := newCollectionRunTable(2)
+	table.DeleteSteal([]byte("a"))
+	setCollectionRunValue(table, []byte("b"), []byte("value"))
+	table.Freeze()
+
+	it := newBufferedRootRunsIterator([]memtable.Table{table}, nil, nil)
+	defer func() { _ = it.Close() }()
+	if !it.Valid() {
+		t.Fatal("iterator invalid, want live key b")
+	}
+	if got := it.UnsafeKey(); !bytes.Equal(got, []byte("b")) {
+		t.Fatalf("first key=%q want b", got)
+	}
+	it.Next()
+	if it.Valid() {
+		t.Fatalf("iterator has extra key %q", it.UnsafeKey())
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+}
+
+func TestBufferedRootRunsIteratorSingleRunIncludesTombstones(t *testing.T) {
+	table := newCollectionRunTable(2)
+	table.DeleteSteal([]byte("a"))
+	setCollectionRunValue(table, []byte("b"), []byte("value"))
+	table.Freeze()
+
+	it := newBufferedRootRunsIteratorWithDeleted([]memtable.Table{table}, nil, nil, true)
+	defer func() { _ = it.Close() }()
+	if !it.Valid() {
+		t.Fatal("iterator invalid, want tombstone key a")
+	}
+	if got := it.UnsafeKey(); !bytes.Equal(got, []byte("a")) || !it.IsDeleted() {
+		t.Fatalf("first key=%q deleted=%v want tombstone a", got, it.IsDeleted())
+	}
+	it.Next()
+	if !it.Valid() {
+		t.Fatal("iterator missing live key b")
+	}
+	if got := it.UnsafeKey(); !bytes.Equal(got, []byte("b")) || it.IsDeleted() {
+		t.Fatalf("second key=%q deleted=%v want live b", got, it.IsDeleted())
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+}
+
+func TestBufferedRootRunsIteratorMultiRunIncludesNewestTombstone(t *testing.T) {
+	older := newCollectionRunTable(2)
+	setCollectionRunValue(older, []byte("a"), []byte("older"))
+	setCollectionRunValue(older, []byte("b"), []byte("older"))
+	older.Freeze()
+
+	newer := newCollectionRunTable(2)
+	newer.DeleteSteal([]byte("a"))
+	setCollectionRunValue(newer, []byte("c"), []byte("newer"))
+	newer.Freeze()
+
+	it := newBufferedRootRunsIteratorWithDeleted([]memtable.Table{older, newer}, nil, nil, true)
+	defer func() { _ = it.Close() }()
+	if !it.Valid() {
+		t.Fatal("iterator invalid, want tombstone key a")
+	}
+	if got := it.UnsafeKey(); !bytes.Equal(got, []byte("a")) || !it.IsDeleted() {
+		t.Fatalf("first key=%q deleted=%v want newest tombstone a", got, it.IsDeleted())
+	}
+	it.Next()
+	if !it.Valid() {
+		t.Fatal("iterator missing live key b")
+	}
+	if got := it.UnsafeKey(); !bytes.Equal(got, []byte("b")) || it.IsDeleted() {
+		t.Fatalf("second key=%q deleted=%v want live b", got, it.IsDeleted())
+	}
+	it.Next()
+	if !it.Valid() {
+		t.Fatal("iterator missing live key c")
+	}
+	if got := it.UnsafeKey(); !bytes.Equal(got, []byte("c")) || it.IsDeleted() {
+		t.Fatalf("third key=%q deleted=%v want live c", got, it.IsDeleted())
+	}
+	it.Next()
+	if it.Valid() {
+		t.Fatalf("iterator has extra key %q", it.UnsafeKey())
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+}
+
+func TestCollectMergedCollectionIndexIDsSkipsPersistedTombstones(t *testing.T) {
+	encoded, err := encodeIndexScalar("hnl")
+	if err != nil {
+		t.Fatalf("encode city: %v", err)
+	}
+	_, prefix, err := appendIndexValuePrefixSlice(nil, encoded)
+	if err != nil {
+		t.Fatalf("index prefix: %v", err)
+	}
+	key, err := indexEntryKey(encoded, []byte("u1"))
+	if err != nil {
+		t.Fatalf("index key: %v", err)
+	}
+	table := newCollectionRunTable(1)
+	table.DeleteSteal(key)
+	table.Freeze()
+	it := table.NewIterator(prefix, prefixEnd(prefix))
+	defer func() { _ = it.Close() }()
+
+	ids, truncated, err := collectMergedCollectionIndexIDs(nil, it, prefix, 1)
+	if err != nil {
+		t.Fatalf("collect merged ids: %v", err)
+	}
+	if truncated || len(ids) != 0 {
+		t.Fatalf("ids=%q truncated=%v want empty/false", ids, truncated)
 	}
 }
 

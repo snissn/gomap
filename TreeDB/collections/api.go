@@ -28,6 +28,7 @@ import (
 const (
 	collectionMetaVersion        = 1
 	maxCollectionMutationRetries = 64
+	maxCollectionInt             = int(^uint(0) >> 1)
 
 	// DefaultIndexedWriteMemtableMaxDocuments bounds the native indexed
 	// collection write-domain before it auto-flushes to persistent roots.
@@ -1735,8 +1736,7 @@ func bufferedPrimaryIDArenaCap(entries int) int {
 		return 0
 	}
 	const bytesPerKeyEstimate = 16
-	maxInt := int(^uint(0) >> 1)
-	if entries > maxInt/bytesPerKeyEstimate {
+	if entries > maxCollectionInt/bytesPerKeyEstimate {
 		return 0
 	}
 	return entries * bytesPerKeyEstimate
@@ -1793,9 +1793,8 @@ func rejectBufferedUniqueIndexConflicts(indexName string, pendingIndex *buffered
 
 func bufferedUniqueIndexValueRun(batchIndex memtable.Table) (memtable.Table, [][]byte, error) {
 	table := newCollectionRunTable(max(0, batchIndex.Len()))
-	maxInt := int(^uint(0) >> 1)
 	arenaCap := batchIndex.Size()
-	if arenaCap < 0 || arenaCap > int64(maxInt) {
+	if arenaCap < 0 || arenaCap > int64(maxCollectionInt) {
 		arenaCap = 0
 	}
 	arena := make([]byte, 0, int(arenaCap))
@@ -1922,25 +1921,31 @@ func (h *bufferedRootRunHeap) down(i0, n int) bool {
 }
 
 type bufferedRootRunsIterator struct {
-	iters    []iterator.UnsafeIterator
-	heap     bufferedRootRunHeap
-	cur      bufferedRootRunHeapItem
-	hasCur   bool
-	valid    bool
-	start    []byte
-	end      []byte
-	closed   bool
-	firstErr error
+	iters          []iterator.UnsafeIterator
+	heap           bufferedRootRunHeap
+	cur            bufferedRootRunHeapItem
+	hasCur         bool
+	valid          bool
+	includeDeleted bool
+	start          []byte
+	end            []byte
+	closed         bool
+	firstErr       error
 }
 
 func newBufferedRootRunsIterator(runs []memtable.Table, start, end []byte) iterator.UnsafeIterator {
-	if len(runs) == 1 {
+	return newBufferedRootRunsIteratorWithDeleted(runs, start, end, false)
+}
+
+func newBufferedRootRunsIteratorWithDeleted(runs []memtable.Table, start, end []byte, includeDeleted bool) iterator.UnsafeIterator {
+	if len(runs) == 1 && includeDeleted && runs[0] != nil {
 		return runs[0].NewIterator(start, end)
 	}
 	it := &bufferedRootRunsIterator{
-		iters: make([]iterator.UnsafeIterator, 0, len(runs)),
-		start: start,
-		end:   end,
+		iters:          make([]iterator.UnsafeIterator, 0, len(runs)),
+		includeDeleted: includeDeleted,
+		start:          start,
+		end:            end,
 	}
 	for i, run := range runs {
 		if run == nil {
@@ -2105,7 +2110,7 @@ func (it *bufferedRootRunsIterator) advance() {
 			shadowed := it.heap.pop()
 			it.advanceItem(shadowed)
 		}
-		if it.iters[top.idx].IsDeleted() {
+		if !it.includeDeleted && it.iters[top.idx].IsDeleted() {
 			it.advanceItem(top)
 			continue
 		}
@@ -5342,8 +5347,7 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	if err != nil {
 		return nil, false, err
 	}
-	collectLimit := collectionIndexReadCollectLimit(maxResults)
-	bufferedIDs, bufferedTruncated, err := c.bufferedIndexIDsLocked(domain, catalog.meta.Name, indexName, prefix, collectLimit)
+	bufferedTable, err := bufferedIndexTableLocked(domain, catalog.meta.Name, indexName, prefix, maxResults)
 	if err != nil {
 		return nil, false, err
 	}
@@ -5351,131 +5355,171 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 		domain.mu.RUnlock()
 		domainLocked = false
 	}
-	// Buffered indexed writes currently stage inserts only. Primary conflict
-	// checks reject IDs that already exist in pending or persisted roots, so
-	// buffered secondary IDs cannot duplicate persisted secondary IDs. If update
-	// or delete staging is added here, this merge must account for pending
-	// tombstones before returning persisted rows.
+	if bufferedTable != nil {
+		defer resetCollectionRunTable(bufferedTable)
+	}
+	var bufferedIt iterator.UnsafeIterator
+	if bufferedTable != nil {
+		bufferedIt = bufferedTable.NewIterator(prefix, prefixEnd(prefix))
+		defer func() { _ = bufferedIt.Close() }()
+	}
 	rootID := catalog.rootID(collectionSecondaryRootName(catalog.meta.Name, idx.Name))
-	if rootID == 0 {
-		out, truncated := mergeCollectionIndexIDResults(bufferedIDs, nil, maxResults, bufferedTruncated, false)
-		return out, truncated, nil
+	var persistedIt iterator.UnsafeIterator
+	if rootID != 0 {
+		it, err := snap.IteratorAtRoot(rootID, prefix, prefixEnd(prefix))
+		if err != nil && !errors.Is(err, tree.ErrKeyNotFound) {
+			return nil, false, err
+		}
+		if err == nil {
+			persistedIt = it
+			defer func() { _ = persistedIt.Close() }()
+		}
 	}
-	it, err := snap.IteratorAtRoot(rootID, prefix, prefixEnd(prefix))
-	if errors.Is(err, tree.ErrKeyNotFound) {
-		out, truncated := mergeCollectionIndexIDResults(bufferedIDs, nil, maxResults, bufferedTruncated, false)
-		return out, truncated, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	defer func() { _ = it.Close() }()
-	persistedIDs, persistedTruncated, err := collectCollectionIndexIDsFromIterator(it, prefix, collectLimit)
-	if err != nil {
-		return nil, false, err
-	}
-	out, truncated := mergeCollectionIndexIDResults(bufferedIDs, persistedIDs, maxResults, bufferedTruncated, persistedTruncated)
-	return out, truncated, nil
+	return collectMergedCollectionIndexIDs(bufferedIt, persistedIt, prefix, maxResults)
 }
 
-func collectionIndexReadCollectLimit(maxResults int) int {
-	if maxResults <= 0 {
-		return 0
-	}
-	if maxResults == int(^uint(0)>>1) {
-		return 0
-	}
-	return maxResults + 1
-}
-
-func (c *Collection) bufferedIndexIDsLocked(domain *collectionWriteDomain, collectionName, indexName string, prefix []byte, limit int) ([][]byte, bool, error) {
-	if c == nil || domain == nil {
-		return nil, false, nil
+// bufferedIndexTableLocked materializes buffered entries for one secondary
+// index prefix while domain.mu is held. The returned pooled table is owned by
+// the caller and must be released with resetCollectionRunTable.
+func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, indexName string, prefix []byte, maxResults int) (memtable.Table, error) {
+	if domain == nil {
+		return nil, nil
 	}
 	if domain.count == 0 || len(domain.rootRuns) == 0 {
-		return nil, false, nil
+		return nil, nil
 	}
 	if domain.meta.Name != "" {
 		collectionName = domain.meta.Name
 	}
 	runs := domain.rootRuns[collectionSecondaryRootName(collectionName, indexName)]
 	if len(runs) == 0 {
-		return nil, false, nil
+		return nil, nil
 	}
-	it := newBufferedRootRunsIterator(runs, prefix, prefixEnd(prefix))
+	table := newCollectionRunTable(0)
+	liveLimit := collectionLimitedResultSentinel(maxResults)
+	liveCount := 0
+	it := newBufferedRootRunsIteratorWithDeleted(runs, prefix, prefixEnd(prefix), true)
 	defer func() { _ = it.Close() }()
-	return collectCollectionIndexIDsFromIterator(it, prefix, limit)
-}
-
-func collectCollectionIndexIDsFromIterator(it iterator.UnsafeIterator, prefix []byte, limit int) ([][]byte, bool, error) {
-	if it == nil {
-		return nil, false, nil
-	}
-	out := make([][]byte, 0, 1)
-	truncated := false
 	for it.Valid() {
 		key := it.UnsafeKey()
 		if !bytes.HasPrefix(key, prefix) {
 			break
 		}
-		if !it.IsDeleted() {
-			if limit > 0 && len(out) >= limit {
-				truncated = true
+		if it.IsDeleted() {
+			table.DeleteSteal(bytes.Clone(key))
+		} else {
+			setCollectionRunValue(table, bytes.Clone(key), nil)
+			liveCount++
+			if liveLimit > 0 && liveCount >= liveLimit {
 				break
 			}
-			out = append(out, bytes.Clone(key[len(prefix):]))
 		}
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
-		return nil, false, err
+		resetCollectionRunTable(table)
+		return nil, err
 	}
-	return out, truncated, nil
+	if table.Len() == 0 {
+		resetCollectionRunTable(table)
+		return nil, nil
+	}
+	table.Freeze()
+	return table, nil
 }
 
-func mergeCollectionIndexIDResults(bufferedIDs, persistedIDs [][]byte, maxResults int, bufferedTruncated, persistedTruncated bool) ([][]byte, bool) {
-	total := len(bufferedIDs) + len(persistedIDs)
-	limit := collectionIndexReadCollectLimit(maxResults)
-	if limit > 0 && total > limit {
-		total = limit
+func collectMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, prefix []byte, maxResults int) ([][]byte, bool, error) {
+	limit := collectionLimitedResultSentinel(maxResults)
+	capHint := 16
+	if limit > 0 {
+		capHint = limit
+		const maxInitialCap = 1024
+		if capHint > maxInitialCap {
+			capHint = maxInitialCap
+		}
 	}
-	out := make([][]byte, 0, total)
-	truncated := bufferedTruncated || persistedTruncated
-	i, j := 0, 0
+	out := make([][]byte, 0, capHint)
 	appendID := func(id []byte) {
 		if len(out) > 0 && bytes.Equal(out[len(out)-1], id) {
 			return
 		}
-		out = append(out, id)
+		out = append(out, bytes.Clone(id))
 	}
-	for (i < len(bufferedIDs) || j < len(persistedIDs)) && (limit == 0 || len(out) < limit) {
+	for limit == 0 || len(out) < limit {
+		bufferedID, bufferedOK := collectionIndexIteratorID(bufferedIt, prefix)
+		persistedID, persistedOK := collectionIndexIteratorID(persistedIt, prefix)
+		if !bufferedOK && !persistedOK {
+			break
+		}
 		switch {
-		case i >= len(bufferedIDs):
-			appendID(persistedIDs[j])
-			j++
-		case j >= len(persistedIDs):
-			appendID(bufferedIDs[i])
-			i++
+		case !bufferedOK:
+			if !persistedIt.IsDeleted() {
+				appendID(persistedID)
+			}
+			persistedIt.Next()
+		case !persistedOK:
+			if !bufferedIt.IsDeleted() {
+				appendID(bufferedID)
+			}
+			bufferedIt.Next()
 		default:
-			cmp := bytes.Compare(bufferedIDs[i], persistedIDs[j])
+			cmp := bytes.Compare(bufferedID, persistedID)
 			if cmp < 0 {
-				appendID(bufferedIDs[i])
-				i++
+				if !bufferedIt.IsDeleted() {
+					appendID(bufferedID)
+				}
+				bufferedIt.Next()
 			} else if cmp > 0 {
-				appendID(persistedIDs[j])
-				j++
+				if !persistedIt.IsDeleted() {
+					appendID(persistedID)
+				}
+				persistedIt.Next()
 			} else {
-				appendID(bufferedIDs[i])
-				i++
-				j++
+				if !bufferedIt.IsDeleted() {
+					appendID(bufferedID)
+				}
+				bufferedIt.Next()
+				persistedIt.Next()
 			}
 		}
 	}
+	if err := collectionIndexIteratorError(bufferedIt); err != nil {
+		return nil, false, err
+	}
+	if err := collectionIndexIteratorError(persistedIt); err != nil {
+		return nil, false, err
+	}
+	truncated := false
 	if maxResults > 0 && len(out) > maxResults {
 		out = out[:maxResults]
 		truncated = true
 	}
-	return out, truncated
+	return out, truncated, nil
+}
+
+func collectionLimitedResultSentinel(maxResults int) int {
+	if maxResults <= 0 || maxResults >= maxCollectionInt {
+		return 0
+	}
+	return maxResults + 1
+}
+
+func collectionIndexIteratorID(it iterator.UnsafeIterator, prefix []byte) ([]byte, bool) {
+	if it == nil || !it.Valid() {
+		return nil, false
+	}
+	key := it.UnsafeKey()
+	if !bytes.HasPrefix(key, prefix) {
+		return nil, false
+	}
+	return key[len(prefix):], true
+}
+
+func collectionIndexIteratorError(it iterator.UnsafeIterator) error {
+	if it == nil {
+		return nil
+	}
+	return it.Error()
 }
 
 // ScanDocuments flushes buffered writes before acquiring a snapshot, then scans
