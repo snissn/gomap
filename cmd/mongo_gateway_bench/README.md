@@ -330,6 +330,11 @@ profiles captured after each phase. It also writes `profile_manifest.json` and
 `benchmark_result.json` into the same directory so the profile files can be tied
 back to the exact benchmark config and phase throughput.
 
+CPU profiles are phase-scoped. Heap, allocs, block, mutex, and goroutine
+profiles are runtime snapshots captured at phase end; block, mutex, and allocs
+profiles are cumulative within the benchmark process rather than reset between
+phases.
+
 ```sh
 OUT=$(mktemp -d /tmp/gomap_mongo_gateway_pprof_XXXXXX)
 GOWORK=off go run ./cmd/mongo_gateway_bench \

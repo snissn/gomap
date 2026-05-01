@@ -568,9 +568,9 @@ func TestInsertBatchPlanCheckPersistedConflictsRejectsIncompleteDerivedInputs(t 
 	}
 
 	err = (&insertBatchPlan{
-		resultIDs:          [][]byte{[]byte("u1")},
-		primaryKeys:        [][]byte{[]byte("u1")},
-		uniqueProbeRunsSet: true,
+		resultIDs:               [][]byte{[]byte("u1")},
+		primaryKeys:             [][]byte{[]byte("u1")},
+		allUniqueProbeRunsBuilt: true,
 	}).checkPersistedConflicts(snap, catalog)
 	if err != nil {
 		t.Fatalf("checkPersistedConflicts with built empty probes: %v", err)
