@@ -6199,13 +6199,22 @@ func (c *Collection) FindByIndexRange(indexName string, opts IndexRangeOptions) 
 	if opts.Limit > 0 && opts.Limit < capHint {
 		capHint = opts.Limit
 	}
-	out := make([][]byte, 0, capHint)
-	truncated, err := c.ScanIndexRange(indexName, opts, func(id []byte) (bool, error) {
+	var out [][]byte
+	truncated, found, err := c.scanIndexRange(indexName, opts, func(id []byte) (bool, error) {
+		if out == nil {
+			out = make([][]byte, 0, capHint)
+		}
 		out = append(out, id)
 		return true, nil
 	})
 	if err != nil {
 		return nil, false, err
+	}
+	if !found {
+		return nil, false, nil
+	}
+	if out == nil {
+		out = make([][]byte, 0)
 	}
 	return out, truncated, nil
 }
@@ -6214,7 +6223,8 @@ func (c *Collection) ScanIndexRange(indexName string, opts IndexRangeOptions, fn
 	if fn == nil {
 		return false, errors.New("collections: nil index range callback")
 	}
-	return c.scanIndexRange(indexName, opts, fn)
+	truncated, _, err := c.scanIndexRange(indexName, opts, fn)
+	return truncated, err
 }
 
 func (c *Collection) findByIndexValue(indexName string, value any, maxResults int) ([][]byte, bool, error) {
@@ -6228,21 +6238,21 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	})
 }
 
-func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn func(id []byte) (bool, error)) (bool, error) {
+func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn func(id []byte) (bool, error)) (bool, bool, error) {
 	if c == nil {
-		return false, errCollectionNil
+		return false, false, errCollectionNil
 	}
 	if err := ValidateIndexName(indexName); err != nil {
-		return false, err
+		return false, false, err
 	}
 	if opts.Limit < 0 {
-		return false, errors.New("collections: index range limit cannot be negative")
+		return false, false, errors.New("collections: index range limit cannot be negative")
 	}
 	if opts.Desc {
-		return false, errors.New("collections: descending index range scans are not supported")
+		return false, false, errors.New("collections: descending index range scans are not supported")
 	}
 	if err := c.flushBufferedNoIndex(); err != nil {
-		return false, err
+		return false, false, err
 	}
 	domain := c.writeDomain
 	domainLocked := false
@@ -6257,30 +6267,30 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
-		return false, backenddb.ErrClosed
+		return false, false, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
 	catalog, err := c.catalogForSnapshotWithWriteDomainLocked(snap)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if catalog == nil {
-		return false, errCollectionNotFound
+		return false, false, errCollectionNotFound
 	}
 	idx, ok := findIndex(catalog.meta.Indexes, indexName)
 	if !ok {
-		return false, nil
+		return false, false, nil
 	}
 	start, end, empty, err := indexRangeScanBounds(idx.ValueType, opts)
 	if err != nil {
-		return false, err
+		return false, true, err
 	}
 	if empty {
-		return false, nil
+		return false, true, nil
 	}
 	bufferedTable, err := bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
 	if err != nil {
-		return false, err
+		return false, true, err
 	}
 	if domainLocked {
 		domain.mu.RUnlock()
@@ -6299,14 +6309,15 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 	if rootID != 0 {
 		it, err := snap.IteratorAtRoot(rootID, start, end)
 		if err != nil && !errors.Is(err, tree.ErrKeyNotFound) {
-			return false, err
+			return false, true, err
 		}
 		if err == nil {
 			persistedIt = it
 			defer func() { _ = persistedIt.Close() }()
 		}
 	}
-	return scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, opts.Limit, fn)
+	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, opts.Limit, fn)
+	return truncated, true, err
 }
 
 // bufferedIndexTableLocked materializes buffered entries for one secondary

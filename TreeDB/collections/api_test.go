@@ -6487,6 +6487,54 @@ func TestCollectionIndexValueTypeIsRequired(t *testing.T) {
 	}
 }
 
+func TestCollectionFindByMissingIndexReturnsNil(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"city":"hnl"}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	ids, err := col.FindByIndexValue("missing", "hnl")
+	if err != nil {
+		t.Fatalf("find by missing index: %v", err)
+	}
+	if ids != nil {
+		t.Fatalf("missing index ids=%q want nil", ids)
+	}
+	ids, truncated, err := col.FindByIndexValueLimit("missing", "hnl", 1)
+	if err != nil {
+		t.Fatalf("find by missing index limit: %v", err)
+	}
+	if ids != nil || truncated {
+		t.Fatalf("missing index limit ids=%q truncated=%v want nil/false", ids, truncated)
+	}
+	ids, truncated, err = col.FindByIndexRange("missing", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: "hnl", Inclusive: true},
+		Upper: IndexRangeBound{Value: "hnl", Inclusive: true},
+	})
+	if err != nil {
+		t.Fatalf("find missing index range: %v", err)
+	}
+	if ids != nil || truncated {
+		t.Fatalf("missing index range ids=%q truncated=%v want nil/false", ids, truncated)
+	}
+}
+
 func TestCollectionFindByIndexValueMatchesLargeJSONInteger(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

@@ -2004,6 +2004,7 @@ func mongoIndexDocuments(meta collections.CollectionMeta) bson.A {
 			{Key: "v", Value: int32(2)},
 			{Key: "key", Value: bson.D{{Key: idx.Field, Value: int32(1)}}},
 			{Key: "name", Value: idx.Name},
+			{Key: "treedbValueType", Value: string(idx.ValueType)},
 		}
 		if idx.Unique {
 			doc = append(doc, bson.E{Key: "unique", Value: true})

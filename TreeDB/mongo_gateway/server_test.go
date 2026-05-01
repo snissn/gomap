@@ -1774,7 +1774,20 @@ func TestServerIndexMetadataCommands(t *testing.T) {
 	}
 	assertIndexName(t, indexBatch[0], "_id_")
 	assertIndexName(t, indexBatch[1], "email_1")
+	valueType, valueTypeOK := indexBatch[1].Lookup("treedbValueType").StringValueOK()
+	if !valueTypeOK || valueType != "string" {
+		t.Fatalf("listIndexes treedbValueType=%q ok=%v want string", valueType, valueTypeOK)
+	}
 	assertBool(t, wire.Document(indexBatch[1]), "unique", true)
+
+	replayResponse := serveCommand(t, server, 2291, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{indexBatch[1]}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, replayResponse)
+	assertInt32(t, replayResponse, "numIndexesBefore", 2)
+	assertInt32(t, replayResponse, "numIndexesAfter", 2)
 
 	dropResponse := serveCommand(t, server, 230, bson.D{
 		{Key: "dropIndexes", Value: "users"},
