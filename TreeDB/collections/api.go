@@ -378,6 +378,17 @@ type bufferedUniqueValueIndex struct {
 	arenas     [][]byte
 }
 
+type bufferedPrimaryRunIndex struct {
+	values     map[uint64]bufferedPrimaryRunRef
+	collisions map[uint64][]bufferedPrimaryRunRef
+	arenas     [][]byte
+}
+
+type bufferedPrimaryRunRef struct {
+	key   []byte
+	table memtable.Table
+}
+
 type collectionWriteDomain struct {
 	// mutationMu serializes root descriptor publishes for handles opened
 	// through the same manager so optimistic retries do not starve under
@@ -402,11 +413,14 @@ type collectionWriteDomain struct {
 	rootPolicies      map[string]backenddb.OrderedRootStoragePolicy
 	rootBaseIDs       map[string]uint64
 	primaryIDIndex    *bufferedUniqueValueIndex
-	uniqueValueRuns   map[string][]memtable.Table
-	uniqueValueIndex  map[string]*bufferedUniqueValueIndex
-	count             int
-	bufferedBytes     int64
-	writeGeneration   uint64
+	// Built lazily by readers so write-only indexed buffering does not pay for
+	// an auxiliary lookup structure it never uses.
+	primaryRunIndex  *bufferedPrimaryRunIndex
+	uniqueValueRuns  map[string][]memtable.Table
+	uniqueValueIndex map[string]*bufferedUniqueValueIndex
+	count            int
+	bufferedBytes    int64
+	writeGeneration  uint64
 }
 
 func NewCollectionManager(database *backenddb.DB) *CollectionManager {
@@ -1423,6 +1437,15 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 				}
 				return 0, err
 			}
+			if domain.primaryRunIndex != nil {
+				if err := addBufferedPrimaryRunIndexEntries(domain.primaryRunIndex, run.table); err != nil {
+					domain.primaryRunIndex = nil
+					if autoFlushEnabled {
+						rollbackBufferedIndexedDomain(domain, checkpoint)
+					}
+					return 0, err
+				}
+			}
 		}
 		if uniqueValueTable != nil {
 			domain.uniqueValueRuns[run.indexName] = append(domain.uniqueValueRuns[run.indexName], uniqueValueTable)
@@ -1465,6 +1488,7 @@ func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWr
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
 	domain.primaryIDIndex = nil
+	domain.primaryRunIndex = nil
 	domain.uniqueValueRuns = nil
 	domain.uniqueValueIndex = nil
 	domain.bufferedBytes = 0
@@ -1563,6 +1587,7 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.rootPolicies = checkpoint.rootPolicies
 	domain.rootBaseIDs = checkpoint.rootBaseIDs
 	domain.primaryIDIndex = rebuildBufferedPrimaryIDIndex(checkpoint.meta.Name, checkpoint.rootRuns)
+	domain.primaryRunIndex = rebuildBufferedPrimaryRunIndex(checkpoint.meta.Name, checkpoint.rootRuns)
 	domain.uniqueValueRuns = checkpoint.uniqueValueRuns
 	domain.uniqueValueIndex = rebuildBufferedUniqueValueIndexes(checkpoint.uniqueValueRuns)
 }
@@ -1779,6 +1804,93 @@ func addBufferedPrimaryIDs(index *bufferedUniqueValueIndex, batchPrimary memtabl
 	return nil
 }
 
+func newBufferedPrimaryRunIndex(capacity int) *bufferedPrimaryRunIndex {
+	if capacity < 0 {
+		capacity = 0
+	}
+	return &bufferedPrimaryRunIndex{values: make(map[uint64]bufferedPrimaryRunRef, capacity)}
+}
+
+func (index *bufferedPrimaryRunIndex) addRef(hash uint64, ref bufferedPrimaryRunRef) {
+	if index == nil || ref.table == nil {
+		return
+	}
+	if existing, ok := index.values[hash]; !ok {
+		index.values[hash] = ref
+		return
+	} else if bytes.Equal(existing.key, ref.key) {
+		index.values[hash] = ref
+		return
+	}
+	collisions := index.collisions
+	if collisions == nil {
+		collisions = make(map[uint64][]bufferedPrimaryRunRef)
+		index.collisions = collisions
+	}
+	bucket := collisions[hash]
+	for i := len(bucket) - 1; i >= 0; i-- {
+		if bytes.Equal(bucket[i].key, ref.key) {
+			bucket[i] = ref
+			collisions[hash] = bucket
+			return
+		}
+	}
+	collisions[hash] = append(bucket, ref)
+}
+
+func (index *bufferedPrimaryRunIndex) lookup(key []byte) (memtable.Table, bool) {
+	if index == nil {
+		return nil, false
+	}
+	hash := xxhash.Sum64(key)
+	if ref, ok := index.values[hash]; ok && bytes.Equal(ref.key, key) {
+		return ref.table, true
+	}
+	for _, ref := range index.collisions[hash] {
+		if bytes.Equal(ref.key, key) {
+			return ref.table, true
+		}
+	}
+	return nil, false
+}
+
+func addBufferedPrimaryRunIndexEntries(index *bufferedPrimaryRunIndex, batchPrimary memtable.Table) error {
+	if index == nil || batchPrimary == nil {
+		return nil
+	}
+	stableKeys := false
+	if stable, ok := batchPrimary.(memtable.StableUnsafeIteratorTable); ok {
+		stableKeys = stable.StableUnsafeIteratorSlices()
+	}
+	arena := make([]byte, 0, bufferedPrimaryIDArenaCap(batchPrimary.Len()))
+	refs := make([]bufferedPrimaryRunRef, 0, batchPrimary.Len())
+	hashes := make([]uint64, 0, batchPrimary.Len())
+	it := batchPrimary.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	for it.Valid() {
+		key := it.UnsafeKey()
+		refKey := key
+		if !stableKeys {
+			start := len(arena)
+			arena = append(arena, key...)
+			refKey = arena[start:len(arena)]
+		}
+		hashes = append(hashes, xxhash.Sum64(key))
+		refs = append(refs, bufferedPrimaryRunRef{key: refKey, table: batchPrimary})
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return err
+	}
+	for i, ref := range refs {
+		index.addRef(hashes[i], ref)
+	}
+	if len(arena) > 0 {
+		index.arenas = append(index.arenas, arena)
+	}
+	return nil
+}
+
 func bufferedPrimaryIDArenaCap(entries int) int {
 	if entries <= 0 {
 		return 0
@@ -1788,6 +1900,26 @@ func bufferedPrimaryIDArenaCap(entries int) int {
 		return 0
 	}
 	return entries * bytesPerKeyEstimate
+}
+
+func rebuildBufferedPrimaryRunIndex(collectionName string, runs map[string][]memtable.Table) *bufferedPrimaryRunIndex {
+	if collectionName == "" || len(runs) == 0 {
+		return nil
+	}
+	tables := runs[collectionPrimaryRootName(collectionName)]
+	if len(tables) == 0 {
+		return nil
+	}
+	index := newBufferedPrimaryRunIndex(0)
+	for _, table := range tables {
+		if err := addBufferedPrimaryRunIndexEntries(index, table); err != nil {
+			return nil
+		}
+	}
+	if len(index.values) == 0 {
+		return nil
+	}
+	return index
 }
 
 func rebuildBufferedPrimaryIDIndex(collectionName string, runs map[string][]memtable.Table) *bufferedUniqueValueIndex {
@@ -2303,6 +2435,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) e
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
 	domain.primaryIDIndex = nil
+	domain.primaryRunIndex = nil
 	oldUniqueValueRuns := domain.uniqueValueRuns
 	domain.uniqueValueRuns = nil
 	domain.uniqueValueIndex = nil
@@ -4813,6 +4946,16 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		} else if domain.rootBaseIDs[rootName] != baseRoot {
 			return false, errConcurrentRootModification(plan.meta.Name, rootName)
 		}
+		if rootName == collectionPrimaryRootName(plan.meta.Name) && domain.primaryRunIndex != nil {
+			if err := addBufferedPrimaryRunIndexEntries(domain.primaryRunIndex, table); err != nil {
+				domain.primaryRunIndex = nil
+				if shouldAutoFlushAfterAdding {
+					rollbackBufferedIndexedDomain(domain, checkpoint)
+					c.meta = collectionMetaCheckpoint
+				}
+				return false, err
+			}
+		}
 		domain.rootPolicies[rootName] = plan.policies[i]
 		domain.rootRuns[rootName] = append(domain.rootRuns[rootName], table)
 		plan.deltaTables[i] = nil
@@ -5135,6 +5278,7 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
 	domain.primaryIDIndex = nil
+	domain.primaryRunIndex = nil
 	domain.uniqueValueRuns = nil
 	domain.uniqueValueIndex = nil
 	if domain.table == nil {
@@ -5739,17 +5883,54 @@ func (c *Collection) getBufferedDocumentInto(documentID []byte, dst []byte) ([]b
 	}
 	domain := c.writeDomain
 	domain.mu.RLock()
-	defer domain.mu.RUnlock()
+	if domain.count == 0 {
+		domain.mu.RUnlock()
+		return nil, false, false
+	}
+	if len(domain.rootRuns) > 0 && domain.primaryRunIndex == nil {
+		domain.mu.RUnlock()
+		return c.getBufferedDocumentIntoWithPrimaryRunIndex(documentID, dst)
+	}
+	value, buffered, found := c.getBufferedDocumentIntoLocked(domain, documentID, dst)
+	domain.mu.RUnlock()
+	return value, buffered, found
+}
+
+func (c *Collection) getBufferedDocumentIntoWithPrimaryRunIndex(documentID []byte, dst []byte) ([]byte, bool, bool) {
+	domain := c.writeDomain
+	domain.mu.Lock()
+	defer domain.mu.Unlock()
 	if domain.count == 0 {
 		return nil, false, false
 	}
+	if len(domain.rootRuns) > 0 && domain.primaryRunIndex == nil {
+		collectionName := domain.meta.Name
+		if collectionName == "" {
+			collectionName = c.meta.Name
+		}
+		if index := rebuildBufferedPrimaryRunIndex(collectionName, domain.rootRuns); index != nil {
+			domain.primaryRunIndex = index
+		}
+	}
+	return c.getBufferedDocumentIntoLocked(domain, documentID, dst)
+}
+
+func (c *Collection) getBufferedDocumentIntoLocked(domain *collectionWriteDomain, documentID []byte, dst []byte) ([]byte, bool, bool) {
 	table := domain.table
 	if len(domain.rootRuns) > 0 {
 		name := collectionPrimaryRootName(c.meta.Name)
 		if domain.meta.Name != "" {
 			name = collectionPrimaryRootName(domain.meta.Name)
 		}
-		if value, _, flags, found := getBufferedRunEntry(domain.rootRuns[name], documentID); found {
+		var value []byte
+		var flags byte
+		found := false
+		if table, ok := domain.primaryRunIndex.lookup(documentID); ok {
+			value, _, flags, found = table.GetEntry(documentID)
+		} else if domain.primaryRunIndex == nil {
+			value, _, flags, found = getBufferedRunEntry(domain.rootRuns[name], documentID)
+		}
+		if found {
 			if flags&node.FlagTombstone != 0 {
 				return dst[:0], true, false
 			}

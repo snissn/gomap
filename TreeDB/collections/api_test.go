@@ -1346,6 +1346,57 @@ func TestCollectionIndexedWriteMemtablesReadUniqueAndFlush(t *testing.T) {
 	}
 }
 
+func TestCollectionIndexedWriteMemtablesReadFlushedDocumentWithBufferedRuns(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert flushed document: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush document: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{[]byte(`{"city":"sea"}`)},
+	); err != nil {
+		t.Fatalf("insert buffered document: %v", err)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get flushed document with buffered runs: %v", err)
+	}
+	if want := []byte(`{"city":"hnl"}`); !bytes.Equal(got, want) {
+		t.Fatalf("flushed document=%q want %q", got, want)
+	}
+	got, err = col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get buffered document: %v", err)
+	}
+	if want := []byte(`{"city":"sea"}`); !bytes.Equal(got, want) {
+		t.Fatalf("buffered document=%q want %q", got, want)
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesDefaultForIndexedSchemas(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -2323,6 +2374,33 @@ func TestCloneCollectionRunTablesSurvivesSourceReset(t *testing.T) {
 	value, _, flags, found := cloned[0].GetEntry([]byte("k"))
 	if !found || flags&node.FlagTombstone != 0 || !bytes.Equal(value, []byte("value")) {
 		t.Fatalf("cloned entry found=%v flags=%d value=%q want live value", found, flags, value)
+	}
+}
+
+func TestBufferedPrimaryRunIndexFindsNewestTable(t *testing.T) {
+	older := newCollectionRunTable(1)
+	setCollectionRunValue(older, []byte("u1"), []byte("older"))
+	older.Freeze()
+	newer := newCollectionRunTable(1)
+	setCollectionRunValue(newer, []byte("u1"), []byte("newer"))
+	newer.Freeze()
+	defer resetCollectionRunTable(older)
+	defer resetCollectionRunTable(newer)
+
+	index := newBufferedPrimaryRunIndex(0)
+	if err := addBufferedPrimaryRunIndexEntries(index, older); err != nil {
+		t.Fatalf("add older table: %v", err)
+	}
+	if err := addBufferedPrimaryRunIndexEntries(index, newer); err != nil {
+		t.Fatalf("add newer table: %v", err)
+	}
+	table, ok := index.lookup([]byte("u1"))
+	if !ok {
+		t.Fatal("lookup u1 missing")
+	}
+	value, _, flags, found := table.GetEntry([]byte("u1"))
+	if !found || flags&node.FlagTombstone != 0 || !bytes.Equal(value, []byte("newer")) {
+		t.Fatalf("lookup found=%v flags=%d value=%q want newer live value", found, flags, value)
 	}
 }
 
