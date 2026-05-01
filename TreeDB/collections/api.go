@@ -390,6 +390,18 @@ func (m *CollectionManager) writeDomainForCollection(name string) *collectionWri
 	return domain
 }
 
+func (m *CollectionManager) existingWriteDomainForCollection(name string) *collectionWriteDomain {
+	if m == nil {
+		return nil
+	}
+	m.domainMu.Lock()
+	defer m.domainMu.Unlock()
+	if m.domains == nil {
+		return nil
+	}
+	return m.domains[name]
+}
+
 // FlushAll publishes buffered writes for every collection opened through this
 // manager. The backend DB also calls this as a close hook while write APIs are
 // still available.
@@ -507,6 +519,9 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 	if err := ValidateCollectionName(name); err != nil {
 		return nil, err
 	}
+	if collection, ok := m.openCollectionFromWriteDomainCache(name); ok {
+		return collection, nil
+	}
 	snap := m.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
@@ -525,7 +540,33 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 		meta:        catalog.meta,
 	}
 	collection.rememberCatalog(snap, catalog)
+	collection.noteWriteDomainCatalog(snapshotSystemRoot(snap), catalog)
 	return collection, nil
+}
+
+func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Collection, bool) {
+	if m == nil || m.db == nil {
+		return nil, false
+	}
+	state := m.db.State()
+	if state == nil || state.SystemRootPageID == 0 {
+		return nil, false
+	}
+	domain := m.existingWriteDomainForCollection(name)
+	if domain == nil {
+		return nil, false
+	}
+	catalog := cachedWriteDomainCatalogForSystemRoot(domain, state.SystemRootPageID)
+	if catalog == nil {
+		return nil, false
+	}
+	collection := &Collection{
+		db:          m.db,
+		writeDomain: domain,
+		meta:        catalog.meta,
+	}
+	collection.rememberCatalogAtSystemRoot(state.SystemRootPageID, catalog)
+	return collection, true
 }
 
 func (m *CollectionManager) ListCollections() ([]CollectionMeta, error) {
@@ -2915,12 +2956,29 @@ func (c *Collection) catalogForSnapshot(snap *backenddb.Snapshot) (*collectionCa
 	}
 	c.catalogMu.RUnlock()
 
+	if cached := cachedWriteDomainCatalogForSystemRoot(c.writeDomain, systemRoot); cached != nil {
+		c.rememberCatalog(snap, cached)
+		return cached, nil
+	}
+
 	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
 	if err != nil {
 		return nil, err
 	}
 	c.rememberCatalog(snap, catalog)
 	return catalog, nil
+}
+
+func cachedWriteDomainCatalogForSystemRoot(domain *collectionWriteDomain, systemRoot uint64) *collectionCatalog {
+	if domain == nil || systemRoot == 0 {
+		return nil
+	}
+	domain.mu.RLock()
+	defer domain.mu.RUnlock()
+	if !domain.loaded || domain.catalog == nil || domain.baseSystemRoot != systemRoot {
+		return nil
+	}
+	return domain.catalog
 }
 
 func snapshotSystemRoot(snap *backenddb.Snapshot) uint64 {

@@ -2295,6 +2295,63 @@ func TestCollectionCachedCatalogUsesCommitSeq(t *testing.T) {
 	}
 }
 
+func TestOpenCollectionUsesWriteDomainCatalogCache(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"ada"}`)}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	state := d.State()
+	domain := mgr.existingWriteDomainForCollection("users")
+	cached := cachedWriteDomainCatalogForSystemRoot(domain, state.SystemRootPageID)
+	if cached == nil {
+		t.Fatal("expected populated write-domain catalog cache")
+	}
+	if err := d.Set([]byte("raw/unrelated"), []byte("value")); err != nil {
+		t.Fatalf("raw set: %v", err)
+	}
+	rawState := d.State()
+	if rawState.SystemRootPageID != state.SystemRootPageID {
+		t.Fatalf("raw write changed system root from %d to %d", state.SystemRootPageID, rawState.SystemRootPageID)
+	}
+	if rawState.CommitSeq == state.CommitSeq {
+		t.Fatalf("raw write did not advance commit seq: before=%d after=%d", state.CommitSeq, rawState.CommitSeq)
+	}
+
+	reopened, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("reopen collection: %v", err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	reopenedCatalog, err := reopened.catalogForSnapshot(snap)
+	if err != nil {
+		t.Fatalf("catalogForSnapshot: %v", err)
+	}
+	if reopenedCatalog != cached {
+		t.Fatalf("OpenCollection did not reuse write-domain catalog cache")
+	}
+	if got, err := reopened.Get([]byte("u1")); err != nil || !bytes.Equal(got, []byte(`{"name":"ada"}`)) {
+		t.Fatalf("reopened get got=%q err=%v", got, err)
+	}
+}
+
 func TestCollectionSingleInsertMatchesSingleItemBatch(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
