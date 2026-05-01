@@ -4951,7 +4951,16 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	uniqueSecondaryRoots := uniqueCollectionSecondaryRootNames(plan.meta)
 	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, stagedBytes)
 	if !shouldAutoFlushAfterAdding && len(uniqueSecondaryRoots) > 0 && bufferedIndexedAutoFlushEnabled(plan.meta.Options) {
-		shouldAutoFlushAfterAdding = true
+		for i, rootName := range plan.rootNames {
+			if _, ok := uniqueSecondaryRoots[rootName]; !ok {
+				continue
+			}
+			table := plan.deltaTables[i]
+			if table != nil && table.Len() > 0 {
+				shouldAutoFlushAfterAdding = true
+				break
+			}
+		}
 	}
 	var checkpoint bufferedIndexedCheckpoint
 	collectionMetaCheckpoint := c.meta
