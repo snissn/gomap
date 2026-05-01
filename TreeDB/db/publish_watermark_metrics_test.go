@@ -56,3 +56,15 @@ func TestObserveOrderedRootDeltaGroupPublishStats(t *testing.T) {
 		t.Fatalf("latencyP99=%v want >0", stats.latencyP99)
 	}
 }
+
+func TestOrderedRootDeltaGroupPublishStatsUsesBucketSnapshotForPercentile(t *testing.T) {
+	db := &DB{}
+	db.orderedRootDeltaGroupCalls.Store(100)
+	db.orderedRootDeltaGroupLatencyMaxNs.Store(uint64(time.Millisecond))
+	db.orderedRootDeltaGroupLatencyBuckets[0].Store(1)
+
+	stats := db.orderedRootDeltaGroupPublishStats()
+	if stats.latencyP99 != 50*time.Microsecond {
+		t.Fatalf("latencyP99=%v want first bucket bound", stats.latencyP99)
+	}
+}
