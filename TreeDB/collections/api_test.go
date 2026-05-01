@@ -3520,6 +3520,19 @@ func TestCollectionUpdateCombinerStopWaitsForActiveWorker(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("stop goroutine did not start")
 	}
+	for {
+		combiner.mu.RLock()
+		stopped := combiner.stopped
+		combiner.mu.RUnlock()
+		if stopped {
+			break
+		}
+		select {
+		case <-stopReturned:
+			t.Fatal("stop returned before marking combiner stopped")
+		case <-time.After(time.Millisecond):
+		}
+	}
 	select {
 	case <-stopReturned:
 		t.Fatal("stop returned before active combiner worker drained")
