@@ -200,10 +200,15 @@ func (db *DB) orderedRootDeltaGroupPublishStats() orderedRootDeltaGroupPublishSt
 		return stats
 	}
 	var buckets [publishWatermarkLatencyBucketCount]uint64
+	var bucketSamples uint64
 	for i := range buckets {
 		buckets[i] = db.orderedRootDeltaGroupLatencyBuckets[i].Load()
+		bucketSamples += buckets[i]
 	}
-	stats.latencyP99 = estimatePublishWatermarkPercentile(buckets, calls, 0.99)
+	if bucketSamples == 0 {
+		return stats
+	}
+	stats.latencyP99 = estimatePublishWatermarkPercentile(buckets, bucketSamples, 0.99)
 	if stats.latencyP99 <= 0 && stats.latencyMax > 0 {
 		stats.latencyP99 = stats.latencyMax
 	}
