@@ -54,7 +54,7 @@ var (
 	errCollectionNil         = errors.New("collections: collection is nil")
 	errCollectionDBNil       = errors.New("collections: db is nil")
 	errCollectionNotFound    = ErrCollectionNotFound
-	errUpdateCombinerStopped = errors.New("collections: update combiner stopped before completing request")
+	errUpdateCombinerStopped = errors.New("collections: update combiner stopped before completing request; request was not completed and caller may retry")
 )
 
 // UpdateBatchItem describes one document update in a batch. DocumentID must be
@@ -72,7 +72,6 @@ type UpdateBatchItem struct {
 type UpdateBatchResult struct {
 	Matched  bool
 	Modified bool
-	Err      error
 }
 
 func IsDuplicateKeyError(err error) bool {
@@ -3191,18 +3190,9 @@ func (combiner *collectionUpdateCombiner) isStopped() bool {
 	return combiner.stopped
 }
 
-func (combiner *collectionUpdateCombiner) markStopped() {
-	if combiner == nil {
-		return
-	}
-	combiner.mu.Lock()
-	combiner.stopped = true
-	combiner.mu.Unlock()
-}
-
 func (combiner *collectionUpdateCombiner) run() {
 	defer func() {
-		combiner.markStopped()
+		_ = combiner.closeRequests()
 		if combiner.done != nil {
 			close(combiner.done)
 		}
@@ -3322,15 +3312,8 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 	}
 	for i, req := range batch {
 		result := results[i]
-		completeUpdateCombineRequest(req, updateCombineResultFromBatchResult(result))
+		completeUpdateCombineRequest(req, collectionUpdateCombineResult{matched: result.Matched, modified: result.Modified})
 	}
-}
-
-func updateCombineResultFromBatchResult(result UpdateBatchResult) collectionUpdateCombineResult {
-	if result.Err != nil {
-		return collectionUpdateCombineResult{err: result.Err}
-	}
-	return collectionUpdateCombineResult{matched: result.Matched, modified: result.Modified}
 }
 
 func runUpdateCombineDirect(req collectionUpdateCombineRequest) collectionUpdateCombineResult {
@@ -3368,7 +3351,10 @@ func completeUpdateCombineRequest(req collectionUpdateCombineRequest, result col
 	if req.done == nil {
 		return
 	}
-	req.done <- result
+	select {
+	case req.done <- result:
+	default:
+	}
 }
 
 func collectionUpdateCombineHasDuplicateIDs(batch []collectionUpdateCombineRequest) bool {
