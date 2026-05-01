@@ -2488,6 +2488,39 @@ func TestCollectionUpdateBatchValidationErrorsIncludeIndex(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBatchRejectsEmptyChangedReplacementWithIndex(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"count":0}`), []byte(`{"count":0}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	_, err = col.UpdateBatch([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: incrementJSONCount},
+		{DocumentID: []byte("u2"), Update: func([]byte) ([]byte, bool, error) {
+			return nil, true, nil
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "update batch index 1") || !strings.Contains(err.Error(), "cannot be empty") {
+		t.Fatalf("UpdateBatch err=%v want index 1 empty replacement", err)
+	}
+}
+
 func TestCollectionUpdateBatchRejectsUniqueConflictsWithinBatch(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -2960,6 +2993,12 @@ func TestNoIndexInsertAfterRawCommitDoesNotReenterWriteDomainLock(t *testing.T) 
 			t.Fatalf("insert: %v", err)
 		}
 	case <-timer.C:
+		_ = d.Close()
+		select {
+		case err := <-done:
+			t.Fatalf("insert unblocked after timeout with err=%v", err)
+		case <-time.After(time.Second):
+		}
 		t.Fatal("insert blocked while refreshing write-domain catalog after raw commit")
 	}
 }

@@ -1008,6 +1008,17 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 	if snap == nil {
 		return nil, collectionOptions{}, false, backenddb.ErrClosed
 	}
+	baseSystemRoot := snapshotSystemRoot(snap)
+	baseCommitSeq := snapshotCommitSeq(snap)
+	if catalog := cachedWriteDomainCatalogForStateLocked(domain, baseSystemRoot, baseCommitSeq); catalog != nil {
+		c.rememberCatalog(snap, catalog)
+		_ = snap.Close()
+		options, err := collectionPlannerOptions(catalog.meta)
+		if err != nil {
+			return nil, collectionOptions{}, false, err
+		}
+		return catalog, options, len(catalog.meta.Indexes) > 0, nil
+	}
 	name := c.meta.Name
 	if domain.meta.Name != "" {
 		name = domain.meta.Name
@@ -1021,8 +1032,6 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 		_ = snap.Close()
 		return nil, collectionOptions{}, false, errCollectionNotFound
 	}
-	baseSystemRoot := snapshotSystemRoot(snap)
-	baseCommitSeq := snapshotCommitSeq(snap)
 	c.rememberCatalog(snap, catalog)
 	_ = snap.Close()
 
@@ -3180,6 +3189,10 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondary
 		if !changedOne {
 			continue
 		}
+		if len(document) == 0 {
+			_ = snap.Close()
+			return nil, fmt.Errorf("collections: update batch index %d: changed replacement document cannot be empty", i)
+		}
 		if err := validateBSONReplacementPreservesID(entry.Value, document, plannerOptions); err != nil {
 			_ = snap.Close()
 			return nil, fmt.Errorf("collections: update batch index %d: %w", i, err)
@@ -3203,10 +3216,16 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondary
 		return results, nil
 	}
 
+	for i, document := range changedDocuments {
+		if _, _, _, err := prepareInsertDocuments([][]byte{document}, plannerOptions); err != nil {
+			_ = snap.Close()
+			return nil, fmt.Errorf("collections: update batch index %d: %w", changed[i].itemIndex, err)
+		}
+	}
 	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments(changedDocuments, plannerOptions)
 	if err != nil {
 		_ = snap.Close()
-		return nil, err
+		return nil, fmt.Errorf("collections: update batch replacement prepare: %w", err)
 	}
 	if len(preparedDocuments) != len(changed) {
 		_ = snap.Close()
