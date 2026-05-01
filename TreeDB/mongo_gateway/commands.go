@@ -488,7 +488,8 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 	results, err := runMongoUpdateBatchResults(batch[0].col, updates)
 	if err != nil {
 		for _, req := range batch {
-			req.done <- mongoUpdateCoalescerResult{err: err}
+			matched, modified, err := runMongoUpdateOne(req.col, req.item)
+			req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
 		}
 		return
 	}

@@ -645,6 +645,87 @@ func TestServerUpdateCoalescesConcurrentDistinctIDs(t *testing.T) {
 	}
 }
 
+func TestServerUpdateCoalescedBatchIsolatesItemErrors(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	server.UpdateCoalescingMaxDelay = 20 * time.Millisecond
+	server.UpdateCoalescingMaxBatch = 8
+	assertOK(t, serveCommand(t, server, 2262, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(0)}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "score", Value: int32(0)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	type updateResponse struct {
+		name string
+		doc  wire.Document
+	}
+	start := make(chan struct{})
+	responses := make(chan updateResponse, 2)
+	var wg sync.WaitGroup
+	for i, tc := range []struct {
+		name string
+		id   string
+		set  bson.D
+	}{
+		{name: "invalid", id: "u1", set: bson.D{{Key: "_id", Value: "moved"}}},
+		{name: "valid", id: "u2", set: bson.D{{Key: "score", Value: int32(12)}}},
+	} {
+		i, tc := i, tc
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			responses <- updateResponse{name: tc.name, doc: serveCommand(t, server, int32(2263+i), bson.D{
+				{Key: "update", Value: "users"},
+				{Key: "updates", Value: bson.A{bson.D{
+					{Key: "q", Value: bson.D{{Key: "_id", Value: tc.id}}},
+					{Key: "u", Value: bson.D{{Key: "$set", Value: tc.set}}},
+				}}},
+				{Key: "$db", Value: "app"},
+			})}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(responses)
+
+	got := make(map[string]wire.Document, 2)
+	for response := range responses {
+		got[response.name] = response.doc
+	}
+	assertCommandError(t, got["invalid"], "BadValue")
+	assertOK(t, got["valid"])
+	assertInt32(t, got["valid"], "n", 1)
+	assertInt32(t, got["valid"], "nModified", 1)
+
+	findResponse := serveCommand(t, server, 2265, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u2"}}},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch := cursorFirstBatch(t, findResponse)
+	if len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	gotScore, ok := firstBatch[0].Lookup("score").Int32OK()
+	if !ok || gotScore != 12 {
+		t.Fatalf("u2 score=%d ok=%v want 12", gotScore, ok)
+	}
+}
+
 func TestServerUpdateRejectsIDMutation(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
