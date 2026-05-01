@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -550,6 +551,114 @@ func TestProfileRecorderWritesPhaseArtifactsAndManifest(t *testing.T) {
 		if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 			t.Fatalf("%s permissions=%#o want 0600", name, info.Mode().Perm())
 		}
+	}
+}
+
+func TestProfileRecorderWritesTraceArtifactAndManifest(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := parseConfig([]string{
+		"-profile-dir", dir,
+		"-profile-trace",
+	})
+	if err != nil {
+		t.Fatalf("parse profile config: %v", err)
+	}
+	recorder, err := newProfileRecorder(cfg)
+	if err != nil {
+		t.Fatalf("newProfileRecorder: %v", err)
+	}
+	defer recorder.Close()
+
+	if _, err := recorder.RunPhase("trace phase", func() (phaseResult, error) {
+		time.Sleep(time.Millisecond)
+		return summarizePhase("trace phase", 1, 1, time.Millisecond, []time.Duration{time.Millisecond}), nil
+	}); err != nil {
+		t.Fatalf("RunPhase: %v", err)
+	}
+	if err := recorder.WriteManifest(nil, nil); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	traceName := "trace_phase.trace.out"
+	info, err := os.Stat(filepath.Join(dir, traceName))
+	if err != nil {
+		t.Fatalf("stat trace artifact: %v", err)
+	}
+	if info.Size() == 0 {
+		t.Fatal("trace artifact is empty")
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, profileManifestFile))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var manifest profileManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("unmarshal manifest: %v", err)
+	}
+	if len(manifest.Artifacts) != 1 {
+		t.Fatalf("manifest artifacts=%d want 1", len(manifest.Artifacts))
+	}
+	if manifest.Artifacts[0].Trace != traceName {
+		t.Fatalf("manifest trace=%q want %q", manifest.Artifacts[0].Trace, traceName)
+	}
+}
+
+func TestSanitizeProfileNameAvoidsHiddenArtifacts(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want string
+	}{
+		{name: ".", want: "phase"},
+		{name: ".hidden", want: "hidden"},
+		{name: "..phase", want: "phase"},
+		{name: "load.insert", want: "load.insert"},
+	} {
+		if got := sanitizeProfileName(tc.name); got != tc.want {
+			t.Fatalf("sanitizeProfileName(%q)=%q want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestNewProfileRecorderTightensProfileDirPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("profile directory chmod is not enforced on windows")
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("chmod setup dir: %v", err)
+	}
+	cfg, err := parseConfig([]string{"-profile-dir", dir})
+	if err != nil {
+		t.Fatalf("parse profile config: %v", err)
+	}
+	recorder, err := newProfileRecorder(cfg)
+	if err != nil {
+		t.Fatalf("newProfileRecorder: %v", err)
+	}
+	defer recorder.Close()
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat profile dir: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("profile dir permissions=%#o want 0700", got)
+	}
+}
+
+func TestCreateProfileFileRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.pprof")
+	if err := os.WriteFile(target, []byte("target"), 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	link := filepath.Join(dir, "link.pprof")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	file, err := createProfileFile(link)
+	if err == nil {
+		_ = file.Close()
+		t.Fatal("createProfileFile accepted symlink")
 	}
 }
 
