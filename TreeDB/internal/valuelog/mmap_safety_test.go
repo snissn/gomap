@@ -9,6 +9,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/snissn/gomap/TreeDB/page"
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
@@ -265,5 +266,64 @@ func TestCurrentWritableMmapTargetMapsAheadWithinLeafSegment(t *testing.T) {
 	}
 	if fallbacks := f.mmapReadFallbackReadAt.Load(); fallbacks != 0 {
 		t.Fatalf("mapped-ahead current leaf should avoid ReadAt fallback, got=%d", fallbacks)
+	}
+}
+
+func TestCurrentWritableMmapTargetDoesNotReadPastFileSize(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	prevCurrent := enableCurrentWritableMmap
+	prevLeaf := enableCurrentLeafWritableMmap
+	enableCurrentWritableMmap = false
+	enableCurrentLeafWritableMmap = true
+	withCurrentWritableMmapTargetBytes(t, 64<<10)
+	defer func() {
+		enableCurrentWritableMmap = prevCurrent
+		enableCurrentLeafWritableMmap = prevLeaf
+	}()
+
+	dir := t.TempDir()
+	fileID := mustEncodeFileID(t, ReservedLeafLogLaneID, 1)
+	path := filepath.Join(dir, "value-l255-000001.log")
+	w, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	ptr, err := w.Append(0, nil, 1, bytes.Repeat([]byte("a"), 1024))
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	f, err := openFile(path, fileID, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile: %v", err)
+	}
+	f.currentWritable.Store(true)
+	defer func() { _ = f.Close() }()
+
+	if _, err := f.ReadUnsafe(ptr, false); err != nil {
+		t.Fatalf("ReadUnsafe valid ptr: %v", err)
+	}
+	data, _ := f.mmapData.Load().([]byte)
+	if gotLen := len(data); gotLen < 64<<10 {
+		t.Fatalf("mapped length=%d, want at least target", gotLen)
+	}
+
+	pastEOF := page.ValuePtr{
+		FileID: fileID,
+		Offset: uint64(len(data) / 2),
+		Length: 1024,
+	}
+	if _, err := f.ReadUnsafe(pastEOF, false); err == nil {
+		t.Fatalf("ReadUnsafe past EOF unexpectedly succeeded")
+	}
+	if fallbacks := f.mmapReadFallbackReadAt.Load(); fallbacks == 0 {
+		t.Fatalf("past-EOF mapped-ahead read should fall back instead of reading mmap bytes")
 	}
 }

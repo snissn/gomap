@@ -400,6 +400,30 @@ func (f *File) tryRefreshMmapRange(start, end int64) ([]byte, bool) {
 	return data, true
 }
 
+func (f *File) ensureMmapRangeReadable(data []byte, start, end int64) ([]byte, bool) {
+	if f == nil || start < 0 || end < start {
+		return nil, false
+	}
+	if data == nil || end > int64(len(data)) {
+		return f.tryRefreshMmapRange(start, end)
+	}
+	if known := f.fileSize.Load(); known >= end {
+		return data, true
+	}
+	info, err := f.File.Stat()
+	if err != nil {
+		return nil, false
+	}
+	currentSize := info.Size()
+	if currentSize > 0 {
+		f.fileSize.Store(currentSize)
+	}
+	if currentSize < end {
+		return nil, false
+	}
+	return data, true
+}
+
 func (f *File) remapToFileSizePersistentOnly() {
 	f.remapToFileSizeWithPolicy(true)
 }
@@ -448,6 +472,12 @@ func (f *File) remapToFileSizeWithPolicy(requirePersistent bool) {
 	if f.currentWritablePersistentMmapEnabled() {
 		mapSize = currentWritableMmapTargetSize(currentSize)
 	}
+	if mapSize <= 0 || mapSize > int64(int(mapSize)) {
+		return
+	}
+	if runtime.GOARCH == "386" && mapSize > int64(^uint32(0)) {
+		return
+	}
 	if data != nil && int64(len(data)) >= mapSize {
 		return
 	}
@@ -490,13 +520,11 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 		return nil, ErrCorrupt, true
 	}
 	start := int64(ptr.Offset - 4)
-	if start < 0 || start+HeaderSize > int64(len(data)) {
+	if refreshed, ok := f.ensureMmapRangeReadable(data, start, start+HeaderSize); ok {
+		data = refreshed
+	} else {
 		f.mmapReadMissOutOfRange.Add(1)
-		if refreshed, ok := f.tryRefreshMmapRange(start, start+HeaderSize); ok {
-			data = refreshed
-		} else {
-			return nil, nil, false
-		}
+		return nil, nil, false
 	}
 
 	header := data[start : start+HeaderSize]
@@ -516,14 +544,12 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 	}
 
 	end := start + HeaderSize + int64(valueLen)
-	if end > int64(len(data)) {
+	if refreshed, ok := f.ensureMmapRangeReadable(data, start, end); ok {
+		data = refreshed
+		header = data[start : start+HeaderSize]
+	} else {
 		f.mmapReadMissOutOfRange.Add(1)
-		if refreshed, ok := f.tryRefreshMmapRange(start, end); ok {
-			data = refreshed
-			header = data[start : start+HeaderSize]
-		} else {
-			return nil, nil, false
-		}
+		return nil, nil, false
 	}
 
 	payload := data[start+HeaderSize : end]
@@ -800,13 +826,11 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		return nil, false, ErrCorrupt, true
 	}
 	start := int64(ptr.Offset - 4)
-	if start < 0 || start+HeaderSize > int64(len(data)) {
+	if refreshed, ok := f.ensureMmapRangeReadable(data, start, start+HeaderSize); ok {
+		data = refreshed
+	} else {
 		f.mmapReadMissOutOfRange.Add(1)
-		if refreshed, ok := f.tryRefreshMmapRange(start, start+HeaderSize); ok {
-			data = refreshed
-		} else {
-			return nil, false, nil, false
-		}
+		return nil, false, nil, false
 	}
 
 	header := data[start : start+HeaderSize]
@@ -826,14 +850,12 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	}
 
 	end := start + HeaderSize + int64(valueLen)
-	if end > int64(len(data)) {
+	if refreshed, ok := f.ensureMmapRangeReadable(data, start, end); ok {
+		data = refreshed
+		header = data[start : start+HeaderSize]
+	} else {
 		f.mmapReadMissOutOfRange.Add(1)
-		if refreshed, ok := f.tryRefreshMmapRange(start, end); ok {
-			data = refreshed
-			header = data[start : start+HeaderSize]
-		} else {
-			return nil, false, nil, false
-		}
+		return nil, false, nil, false
 	}
 
 	payload := data[start+HeaderSize : end]
@@ -996,13 +1018,11 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		return nil, ErrCorrupt, true
 	}
 	start := int64(ptr.Offset - 4)
-	if start < 0 || start+HeaderSize > int64(len(data)) {
+	if refreshed, ok := f.ensureMmapRangeReadable(data, start, start+HeaderSize); ok {
+		data = refreshed
+	} else {
 		f.mmapReadMissOutOfRange.Add(1)
-		if refreshed, ok := f.tryRefreshMmapRange(start, start+HeaderSize); ok {
-			data = refreshed
-		} else {
-			return nil, nil, false
-		}
+		return nil, nil, false
 	}
 
 	header := data[start : start+HeaderSize]
@@ -1022,14 +1042,12 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	}
 
 	end := start + HeaderSize + int64(valueLen)
-	if end > int64(len(data)) {
+	if refreshed, ok := f.ensureMmapRangeReadable(data, start, end); ok {
+		data = refreshed
+		header = data[start : start+HeaderSize]
+	} else {
 		f.mmapReadMissOutOfRange.Add(1)
-		if refreshed, ok := f.tryRefreshMmapRange(start, end); ok {
-			data = refreshed
-			header = data[start : start+HeaderSize]
-		} else {
-			return nil, nil, false
-		}
+		return nil, nil, false
 	}
 
 	payload := data[start+HeaderSize : end]
