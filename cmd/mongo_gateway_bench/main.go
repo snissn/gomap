@@ -1712,7 +1712,7 @@ func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, res
 			if err != nil {
 				return err
 			}
-			result.TreeDBStatsFinal = stats
+			result.TreeDBStatsFinal = mergeTreeDBPersistentStats(result.TreeDBStatsFinal, stats)
 			return nil
 		}
 		return nil
@@ -1814,6 +1814,25 @@ func collectTreeDBStatsFromDir(cfg config, target *benchTarget) (map[string]stri
 	}
 	defer func() { _ = cleanup() }()
 	return selectedTreeDBStats(db.Stats()), nil
+}
+
+func mergeTreeDBPersistentStats(base, refreshed map[string]string) map[string]string {
+	if len(base) == 0 {
+		return refreshed
+	}
+	if len(refreshed) == 0 {
+		return base
+	}
+	merged := make(map[string]string, len(base)+len(selectedTreeDBExactStatKeys))
+	for key, value := range base {
+		merged[key] = value
+	}
+	for _, key := range selectedTreeDBExactStatKeys {
+		if value, ok := refreshed[key]; ok {
+			merged[key] = value
+		}
+	}
+	return merged
 }
 
 func appendTreeDBMaintenanceStep(ctx context.Context, target *benchTarget, result *benchmarkResult, name string, run func() (map[string]int64, string, error)) error {

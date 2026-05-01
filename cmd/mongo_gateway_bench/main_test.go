@@ -1268,6 +1268,29 @@ func TestBenchmarkSetUpdateCanExerciseIndexedField(t *testing.T) {
 	}
 }
 
+func TestMergeTreeDBPersistentStatsPreservesProcessCounters(t *testing.T) {
+	base := map[string]string{
+		"treedb.commit_seq": "10",
+		"treedb.publish.ordered_root_delta_group.calls_total": "7",
+		"treedb.publish.watermark.latency_p99_ms":             "1.250",
+	}
+	refreshed := map[string]string{
+		"treedb.commit_seq": "12",
+		"treedb.publish.ordered_root_delta_group.calls_total": "0",
+		"treedb.publish.watermark.latency_p99_ms":             "0.000",
+	}
+	got := mergeTreeDBPersistentStats(base, refreshed)
+	if got["treedb.commit_seq"] != "12" {
+		t.Fatalf("commit_seq=%q want refreshed value", got["treedb.commit_seq"])
+	}
+	if got["treedb.publish.ordered_root_delta_group.calls_total"] != "7" {
+		t.Fatalf("calls_total=%q want in-memory counter preserved", got["treedb.publish.ordered_root_delta_group.calls_total"])
+	}
+	if got["treedb.publish.watermark.latency_p99_ms"] != "1.250" {
+		t.Fatalf("latency_p99_ms=%q want in-memory counter preserved", got["treedb.publish.watermark.latency_p99_ms"])
+	}
+}
+
 func TestWriteResultIncludesRedactedMongoURI(t *testing.T) {
 	result := &benchmarkResult{
 		Target:           "mongo",
