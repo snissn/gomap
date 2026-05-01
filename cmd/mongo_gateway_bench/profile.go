@@ -136,12 +136,16 @@ func (r *profileRecorder) Close() {
 	}
 	// Block and mutex profiling knobs are process-global. The runtime exposes
 	// the previous mutex fraction but not the previous block profile rate, so
-	// Close restores only the setting it can restore without guessing.
+	// Close restores mutex sampling and disables block profiling if this
+	// recorder enabled it.
 	if r.mutexProfileActive {
 		runtime.SetMutexProfileFraction(r.previousMutexFraction)
 		r.mutexProfileActive = false
 	}
-	r.blockProfileActive = false
+	if r.blockProfileActive {
+		runtime.SetBlockProfileRate(0)
+		r.blockProfileActive = false
+	}
 }
 
 func (r *profileRecorder) RunPhase(name string, run func() (phaseResult, error)) (result phaseResult, err error) {
