@@ -370,6 +370,7 @@ type collectionWriteDomain struct {
 	mu                sync.RWMutex
 	updateCombineMu   sync.Mutex
 	updateCombiner    *collectionUpdateCombiner
+	updateDraining    *collectionUpdateCombiner
 	updateCombineDone bool
 	updateCombineTTL  time.Duration
 	closingWrites     atomic.Bool
@@ -3202,6 +3203,11 @@ func (c *Collection) updateCombiner() *collectionUpdateCombiner {
 			domain.updateCombineMu.Unlock()
 			return nil
 		}
+		if draining := domain.updateDraining; draining != nil {
+			domain.updateCombineMu.Unlock()
+			draining.waitDone()
+			continue
+		}
 		if domain.updateCombiner != nil {
 			combiner := domain.updateCombiner
 			if !combiner.isStopped() {
@@ -3235,11 +3241,16 @@ func (domain *collectionWriteDomain) stopUpdateCombiner() {
 	domain.closingWrites.Store(true)
 	domain.updateCombineMu.Lock()
 	combiner := domain.updateCombiner
+	draining := domain.updateDraining
 	domain.updateCombiner = nil
+	domain.updateDraining = nil
 	domain.updateCombineDone = true
 	domain.updateCombineMu.Unlock()
 	if combiner != nil {
 		combiner.stop()
+	}
+	if draining != nil && draining != combiner {
+		draining.waitDone()
 	}
 }
 
@@ -3262,6 +3273,9 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 	if !combiner.enqueue(req) {
 		// Combining is a best-effort throughput optimization. Saturated or stopped
 		// combiners fall back to the direct path so updates still make progress.
+		if combiner.isStopped() {
+			combiner.waitDone()
+		}
 		if err := c.ensureWriteDomainOpen(); err != nil {
 			return false, false, err
 		}
@@ -3334,6 +3348,13 @@ func (combiner *collectionUpdateCombiner) stop() {
 	}
 }
 
+func (combiner *collectionUpdateCombiner) waitDone() {
+	if combiner == nil || combiner.done == nil {
+		return
+	}
+	<-combiner.done
+}
+
 func (combiner *collectionUpdateCombiner) closeRequests() bool {
 	combiner.mu.Lock()
 	defer combiner.mu.Unlock()
@@ -3404,6 +3425,10 @@ func (combiner *collectionUpdateCombiner) retireIdle() bool {
 		combiner.domain.updateCombineMu.Lock()
 		if combiner.domain.updateCombiner == combiner {
 			stopped = combiner.closeRequests()
+			if stopped {
+				combiner.domain.updateCombiner = nil
+				combiner.domain.updateDraining = combiner
+			}
 		}
 		combiner.domain.updateCombineMu.Unlock()
 	} else {
@@ -3417,8 +3442,8 @@ func (combiner *collectionUpdateCombiner) retireIdle() bool {
 	}
 	if combiner.domain != nil {
 		combiner.domain.updateCombineMu.Lock()
-		if combiner.domain.updateCombiner == combiner {
-			combiner.domain.updateCombiner = nil
+		if combiner.domain.updateDraining == combiner {
+			combiner.domain.updateDraining = nil
 		}
 		combiner.domain.updateCombineMu.Unlock()
 	}

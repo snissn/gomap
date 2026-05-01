@@ -3341,6 +3341,53 @@ func TestCollectionUpdateCombinerReplacesStoppedCachedCombinerWithoutWaiting(t *
 	}
 }
 
+func TestCollectionUpdateCombinerWaitsForIdleDrain(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	draining := &collectionUpdateCombiner{done: make(chan struct{})}
+	col.writeDomain.updateCombineMu.Lock()
+	col.writeDomain.updateDraining = draining
+	col.writeDomain.updateCombineMu.Unlock()
+
+	gotCh := make(chan *collectionUpdateCombiner, 1)
+	go func() {
+		gotCh <- col.updateCombiner()
+	}()
+	select {
+	case got := <-gotCh:
+		t.Fatalf("updateCombiner returned %v before idle drain completed", got)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	col.writeDomain.updateCombineMu.Lock()
+	col.writeDomain.updateDraining = nil
+	col.writeDomain.updateCombineMu.Unlock()
+	close(draining.done)
+
+	select {
+	case got := <-gotCh:
+		if got == nil || got == draining {
+			t.Fatalf("updateCombiner returned %v after idle drain", got)
+		}
+		got.stop()
+	case <-time.After(time.Second):
+		t.Fatal("updateCombiner did not resume after idle drain completed")
+	}
+}
+
 func TestCollectionUpdateCombinerStopDoesNotWaitForActiveWorker(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
