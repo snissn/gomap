@@ -1824,7 +1824,7 @@ func TestCollectionIndexedWriteMemtablesFindSkipsBufferedSecondaryTombstone(t *t
 	}
 	table := newCollectionRunTable(2)
 	table.DeleteSteal(oldKey)
-	table.SetSteal(newKey, nil)
+	setCollectionRunValue(table, newKey, nil)
 	table.Freeze()
 	domain := col.writeDomain
 	domain.mu.Lock()
@@ -2302,9 +2302,71 @@ func TestBufferedPrimaryIDArenaCapAvoidsOverflow(t *testing.T) {
 	if got := bufferedPrimaryIDArenaCap(2); got != 32 {
 		t.Fatalf("small arena cap=%d want 32", got)
 	}
-	maxInt := int(^uint(0) >> 1)
-	if got := bufferedPrimaryIDArenaCap(maxInt/16 + 1); got != 0 {
+	if got := bufferedPrimaryIDArenaCap(maxCollectionInt/16 + 1); got != 0 {
 		t.Fatalf("overflow arena cap=%d want 0", got)
+	}
+}
+
+func TestShouldFlushBufferedIndexedWritesAfterAddingBoundaries(t *testing.T) {
+	opts := CollectionOptions{
+		BufferedIndexedWriteMaxDocuments: 10,
+		BufferedIndexedWriteMaxBytes:     100,
+	}
+	cases := []struct {
+		name       string
+		domain     *collectionWriteDomain
+		addedCount int
+		addedBytes int64
+		want       bool
+	}{
+		{
+			name:       "nil domain",
+			addedCount: 1,
+			addedBytes: 1,
+		},
+		{
+			name:       "zero added count ignores bytes",
+			domain:     &collectionWriteDomain{bufferedBytes: 99},
+			addedBytes: 1,
+		},
+		{
+			name:       "just below document limit",
+			domain:     &collectionWriteDomain{count: 8},
+			addedCount: 1,
+		},
+		{
+			name:       "exactly at document limit",
+			domain:     &collectionWriteDomain{count: 9},
+			addedCount: 1,
+			want:       true,
+		},
+		{
+			name:       "above document limit",
+			domain:     &collectionWriteDomain{count: 9},
+			addedCount: 2,
+			want:       true,
+		},
+		{
+			name:       "count overflow clamps to flush",
+			domain:     &collectionWriteDomain{count: maxCollectionInt},
+			addedCount: 1,
+			want:       true,
+		},
+		{
+			name:       "byte overflow clamps to flush",
+			domain:     &collectionWriteDomain{count: 1, bufferedBytes: int64(^uint64(0) >> 1)},
+			addedCount: 1,
+			addedBytes: 1,
+			want:       true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shouldFlushBufferedIndexedWritesAfterAdding(tc.domain, opts, tc.addedCount, tc.addedBytes)
+			if got != tc.want {
+				t.Fatalf("shouldFlushBufferedIndexedWritesAfterAdding()=%v want %v", got, tc.want)
+			}
+		})
 	}
 }
 

@@ -28,6 +28,7 @@ import (
 const (
 	collectionMetaVersion        = 1
 	maxCollectionMutationRetries = 64
+	maxCollectionInt             = int(^uint(0) >> 1)
 
 	// DefaultIndexedWriteMemtableMaxDocuments bounds the native indexed
 	// collection write-domain before it auto-flushes to persistent roots.
@@ -1483,7 +1484,7 @@ func shouldFlushBufferedIndexedWritesAfterAdding(domain *collectionWriteDomain, 
 	if domain == nil || addedCount <= 0 {
 		return false
 	}
-	nextCount := domain.count + addedCount
+	nextCount := saturatingAddNonNegativeInt(domain.count, addedCount)
 	if opts.BufferedIndexedWriteMaxDocuments > 0 && nextCount >= opts.BufferedIndexedWriteMaxDocuments {
 		return true
 	}
@@ -1492,6 +1493,16 @@ func shouldFlushBufferedIndexedWritesAfterAdding(domain *collectionWriteDomain, 
 		return true
 	}
 	return false
+}
+
+func saturatingAddNonNegativeInt(total, n int) int {
+	if n <= 0 {
+		return total
+	}
+	if total > maxCollectionInt-n {
+		return maxCollectionInt
+	}
+	return total + n
 }
 
 func bufferedIndexedAutoFlushEnabled(opts CollectionOptions) bool {
@@ -1768,8 +1779,7 @@ func bufferedPrimaryIDArenaCap(entries int) int {
 		return 0
 	}
 	const bytesPerKeyEstimate = 16
-	maxInt := int(^uint(0) >> 1)
-	if entries > maxInt/bytesPerKeyEstimate {
+	if entries > maxCollectionInt/bytesPerKeyEstimate {
 		return 0
 	}
 	return entries * bytesPerKeyEstimate
@@ -1826,9 +1836,8 @@ func rejectBufferedUniqueIndexConflicts(indexName string, pendingIndex *buffered
 
 func bufferedUniqueIndexValueRun(batchIndex memtable.Table) (memtable.Table, [][]byte, error) {
 	table := newCollectionRunTable(max(0, batchIndex.Len()))
-	maxInt := int(^uint(0) >> 1)
 	arenaCap := batchIndex.Size()
-	if arenaCap < 0 || arenaCap > int64(maxInt) {
+	if arenaCap < 0 || arenaCap > int64(maxCollectionInt) {
 		arenaCap = 0
 	}
 	arena := make([]byte, 0, int(arenaCap))
@@ -4625,10 +4634,10 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	if domain.rootRuns == nil {
 		domain.rootRuns = make(map[string][]memtable.Table, len(plan.rootNames))
 	}
-	autoFlushEnabled := shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, stagedBytes)
+	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, stagedBytes)
 	var checkpoint bufferedIndexedCheckpoint
 	collectionMetaCheckpoint := c.meta
-	if autoFlushEnabled {
+	if shouldAutoFlushAfterAdding {
 		checkpoint = checkpointBufferedIndexedDomain(domain)
 	}
 	for i, rootName := range plan.rootNames {
@@ -4660,7 +4669,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	c.meta = plan.meta
 	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
 		if err := c.flushBufferedIndexedLocked(domain); err != nil {
-			if autoFlushEnabled {
+			if shouldAutoFlushAfterAdding {
 				rollbackBufferedIndexedDomain(domain, checkpoint)
 				c.meta = collectionMetaCheckpoint
 			}
@@ -5714,10 +5723,7 @@ func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, ind
 		return nil, nil
 	}
 	table := newCollectionRunTable(0)
-	liveLimit := 0
-	if maxResults > 0 && maxResults < int(^uint(0)>>1) {
-		liveLimit = maxResults + 1
-	}
+	liveLimit := collectionLimitedResultSentinel(maxResults)
 	liveCount := 0
 	it := newBufferedRootRunsIteratorWithDeleted(runs, prefix, prefixEnd(prefix), true)
 	defer func() { _ = it.Close() }()
@@ -5750,10 +5756,7 @@ func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, ind
 }
 
 func collectMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, prefix []byte, maxResults int) ([][]byte, bool, error) {
-	limit := 0
-	if maxResults > 0 && maxResults < int(^uint(0)>>1) {
-		limit = maxResults + 1
-	}
+	limit := collectionLimitedResultSentinel(maxResults)
 	capHint := 16
 	if limit > 0 {
 		capHint = limit
@@ -5819,6 +5822,13 @@ func collectMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIter
 		truncated = true
 	}
 	return out, truncated, nil
+}
+
+func collectionLimitedResultSentinel(maxResults int) int {
+	if maxResults <= 0 || maxResults >= maxCollectionInt {
+		return 0
+	}
+	return maxResults + 1
 }
 
 func collectionIndexIteratorID(it iterator.UnsafeIterator, prefix []byte) ([]byte, bool) {
