@@ -1991,11 +1991,10 @@ func mongoDBStats(ctx context.Context, db *mongo.Database) (map[string]any, erro
 }
 
 var (
-	benchmarkCities                 = [...]string{"hnl", "sfo", "nyc", "lon", "sin", "ber", "tyo", "syd"}
-	benchmarkUpdatedCities          = [...]string{"ams", "cdg", "mad", "mex", "gru", "yyz", "icn", "akl"}
-	benchmarkUpdatedCityValues      []string
-	benchmarkUpdatedCityValuesOnce  sync.Once
-	benchmarkUpdatedCityValuesReady atomic.Bool
+	benchmarkCities                = [...]string{"hnl", "sfo", "nyc", "lon", "sin", "ber", "tyo", "syd"}
+	benchmarkUpdatedCities         = [...]string{"ams", "cdg", "mad", "mex", "gru", "yyz", "icn", "akl"}
+	benchmarkUpdatedCityValues     []string
+	benchmarkUpdatedCityValuesOnce sync.Once
 )
 
 const benchmarkUpdatedCityValueCount = 65521
@@ -2040,7 +2039,7 @@ func benchmarkSetUpdate(params benchmarkSetUpdateParams) bson.D {
 	)
 	if params.UpdateIndexedField {
 		updatedCityValues := params.UpdatedCityValues
-		if len(updatedCityValues) == 0 {
+		if updatedCityValues == nil {
 			updatedCityValues = benchmarkUpdatedCityValuesForUpdate()
 		}
 		set = append(set, bson.E{Key: "city", Value: benchmarkUpdatedCityFromValues(updatedCityValues, params.Operation, params.DocumentOrdinal, params.DocumentCount)})
@@ -2085,9 +2084,7 @@ func benchmarkUpdatedCityFromValues(values []string, i int, documentOrdinal int,
 }
 
 func benchmarkUpdatedCityValuesForUpdate() []string {
-	if !benchmarkUpdatedCityValuesReady.Load() {
-		prewarmBenchmarkUpdatedCities()
-	}
+	prewarmBenchmarkUpdatedCities()
 	return benchmarkUpdatedCityValues
 }
 
@@ -2115,7 +2112,6 @@ func benchmarkUpdatedCityIndex(i int, documentOrdinal int, documentCount int, cy
 func prewarmBenchmarkUpdatedCities() {
 	benchmarkUpdatedCityValuesOnce.Do(func() {
 		benchmarkUpdatedCityValues = buildBenchmarkUpdatedCityValues()
-		benchmarkUpdatedCityValuesReady.Store(true)
 	})
 }
 
