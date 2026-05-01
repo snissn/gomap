@@ -359,7 +359,7 @@ func runMongoUpdateBatch(col *collections.Collection, updates []mongoUpdateItem)
 func applyMongoUpdateToStoredDocument(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, update mongoUpdateItem, stored []byte) ([]byte, bool, error) {
 	raw, err := storedDocumentToBSON(col, materializer, stored)
 	if err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("updates[%d]: %w", update.index, err)
 	}
 	updated, changed, err := applySetUpdate(raw, update.updateDoc)
 	if err != nil {

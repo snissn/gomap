@@ -2483,6 +2483,10 @@ func TestCollectionUpdateBatchValidationErrorsIncludeIndex(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "index 0") {
 		t.Fatalf("nil update err=%v want index 0", err)
 	}
+	_, err = (&Collection{}).UpdateBatch([]UpdateBatchItem{{DocumentID: []byte("u1"), Update: incrementJSONCount}})
+	if !errors.Is(err, errCollectionDBNil) {
+		t.Fatalf("nil db err=%v want errCollectionDBNil", err)
+	}
 }
 
 func TestCollectionUpdateBatchRejectsUniqueConflictsWithinBatch(t *testing.T) {
@@ -2614,6 +2618,53 @@ func TestCollectionUpdateBatchClonesAliasedReplacements(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBatchClonesDocumentIDs(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"score":0}`), []byte(`{"score":0}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	id := []byte("u1")
+	if _, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: id,
+		Update: func([]byte) ([]byte, bool, error) {
+			id[1] = '2'
+			return []byte(`{"score":1}`), true, nil
+		},
+	}}); err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+	gotU1, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1: %v", err)
+	}
+	if !bytes.Contains(gotU1, []byte(`"score":1`)) {
+		t.Fatalf("u1 document=%s want score 1", gotU1)
+	}
+	gotU2, err := col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get u2: %v", err)
+	}
+	if !bytes.Contains(gotU2, []byte(`"score":0`)) {
+		t.Fatalf("u2 document=%s want score 0", gotU2)
+	}
+}
+
 func TestCollectionUpdateBatchBSONRejectsIDMutation(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -2642,8 +2693,8 @@ func TestCollectionUpdateBatchBSONRejectsIDMutation(t *testing.T) {
 			return replacement, true, nil
 		}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "cannot modify _id") {
-		t.Fatalf("UpdateBatch err=%v want _id mutation error", err)
+	if err == nil || !strings.Contains(err.Error(), "index 0") || !strings.Contains(err.Error(), "cannot modify _id") {
+		t.Fatalf("UpdateBatch err=%v want indexed _id mutation error", err)
 	}
 }
 
