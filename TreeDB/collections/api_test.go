@@ -4458,12 +4458,13 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesAppendsToBufferedUp
 	}
 }
 
-func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleBufferedPlan(t *testing.T) {
+func newBufferedUsersUpdateCollection(t *testing.T) (*backenddb.DB, *Collection) {
+	t.Helper()
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer func() { _ = d.Close() }()
+	t.Cleanup(func() { _ = d.Close() })
 
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
@@ -4488,6 +4489,11 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleBuffere
 	if err := col.Flush(); err != nil {
 		t.Fatalf("flush insert buffer: %v", err)
 	}
+	return d, col
+}
+
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleBufferedPlan(t *testing.T) {
+	_, col := newBufferedUsersUpdateCollection(t)
 	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
 		{DocumentID: []byte("u1"), Update: setJSONCity("sea")},
 	}); err != nil {
@@ -4505,6 +4511,9 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleBuffere
 	defer plan.close()
 	if !plan.bufferedBase || plan.bufferedReadGeneration == 0 {
 		t.Fatalf("plan bufferedBase=%v generation=%d want buffered read", plan.bufferedBase, plan.bufferedReadGeneration)
+	}
+	if !col.bufferedUpdateBatchPlanStillCurrent(plan) {
+		t.Fatalf("fresh buffered plan was unexpectedly stale")
 	}
 
 	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
@@ -4524,6 +4533,50 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleBuffere
 	})
 	if !errors.Is(err, ErrConcurrentMutation) {
 		t.Fatalf("buffer stale plan err=%v want ErrConcurrentMutation", err)
+	}
+}
+
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleZeroDeltaPlan(t *testing.T) {
+	_, col := newBufferedUsersUpdateCollection(t)
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sea")},
+	}); err != nil {
+		t.Fatalf("first UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("first batch was declined")
+	}
+
+	plan, err := col.buildUpdateBatchPlan([]UpdateBatchItem{
+		{
+			DocumentID: []byte("u1"),
+			Update: func(current []byte) ([]byte, bool, error) {
+				if !bytes.Contains(current, []byte(`"city":"sea"`)) {
+					return nil, false, fmt.Errorf("current document %s did not include buffered city", current)
+				}
+				return current, false, nil
+			},
+		},
+	}, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+	if err != nil {
+		t.Fatalf("build stale zero-delta plan: %v", err)
+	}
+	defer plan.close()
+	if len(plan.deltaTables) != 0 || !plan.bufferedBase || plan.bufferedReadGeneration == 0 {
+		t.Fatalf("plan deltas=%d bufferedBase=%v generation=%d want zero-delta buffered read", len(plan.deltaTables), plan.bufferedBase, plan.bufferedReadGeneration)
+	}
+	if !col.bufferedUpdateBatchPlanStillCurrent(plan) {
+		t.Fatalf("fresh zero-delta plan was unexpectedly stale")
+	}
+
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("oak")},
+	}); err != nil {
+		t.Fatalf("second UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("second batch was declined")
+	}
+	if col.bufferedUpdateBatchPlanStillCurrent(plan) {
+		t.Fatalf("stale zero-delta plan still appeared current")
 	}
 }
 

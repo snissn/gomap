@@ -4052,6 +4052,17 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 						replan = true
 						return nil
 					}
+					if plan.bufferedBase && !c.bufferedUpdateBatchPlanStillCurrent(plan) {
+						if useBufferedRead {
+							if err := c.flushBufferedWrites(); err != nil {
+								return err
+							}
+							useBufferedRead = false
+							replan = true
+							return nil
+						}
+						return ErrConcurrentMutation
+					}
 					if err := c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs); err != nil {
 						return err
 					}
@@ -4078,6 +4089,11 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 				}
 				if err := c.flushBufferedWrites(); err != nil {
 					return err
+				}
+				if useBufferedRead {
+					useBufferedRead = false
+					replan = true
+					return nil
 				}
 				var publishErr error
 				results, publishErr = c.publishUpdateBatchPlanLocked(plan)
@@ -4142,6 +4158,23 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 		return publishErr
 	})
 	return results, err
+}
+
+func (c *Collection) bufferedUpdateBatchPlanStillCurrent(plan *updateBatchPlan) bool {
+	if plan == nil || !plan.bufferedBase {
+		return true
+	}
+	domain := c.writeDomain
+	if domain == nil {
+		return false
+	}
+	domain.mu.RLock()
+	defer domain.mu.RUnlock()
+	if domain.count == 0 {
+		return false
+	}
+	return updateBatchCanReadBufferedDomainLocked(domain, plan.meta, plan.baseSystemRoot) &&
+		plan.bufferedReadGeneration == domain.writeGeneration
 }
 
 func (c *Collection) withMutationLock(fn func() error) error {
@@ -4326,16 +4359,18 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	if len(changed) == 0 {
 		primaryRootName := collectionPrimaryRootName(meta.Name)
 		return &updateBatchPlan{
-			results:             results,
-			meta:                meta,
-			catalog:             catalog,
-			snap:                snap,
-			baseUserRoot:        baseUserRoot,
-			baseSystemRoot:      baseSystemRoot,
-			baseCommitSeq:       baseCommitSeq,
-			rootNames:           []string{primaryRootName},
-			baseRootIDs:         map[string]uint64{primaryRootName: primaryRoot},
-			bufferedReadBlocked: bufferedReadBlocked,
+			results:                results,
+			meta:                   meta,
+			catalog:                catalog,
+			snap:                   snap,
+			baseUserRoot:           baseUserRoot,
+			baseSystemRoot:         baseSystemRoot,
+			baseCommitSeq:          baseCommitSeq,
+			rootNames:              []string{primaryRootName},
+			baseRootIDs:            map[string]uint64{primaryRootName: primaryRoot},
+			bufferedBase:           bufferedRead.enabled,
+			bufferedReadGeneration: bufferedRead.writeGeneration,
+			bufferedReadBlocked:    bufferedReadBlocked,
 		}, nil
 	}
 
