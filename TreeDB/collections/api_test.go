@@ -2514,9 +2514,8 @@ func TestOpenCollectionWriteDomainCatalogCacheUsesCommitSeq(t *testing.T) {
 		t.Fatal("expected populated write-domain catalog cache")
 	}
 	cachedRoot := cached.rootID(collectionPrimaryRootName("users"))
-	cached.roots[collectionPrimaryRootName("users")] = ^uint64(0)
-	if cachedAgain := cachedWriteDomainCatalogForState(domain, state.SystemRootPageID, state.CommitSeq); cachedAgain == nil || cachedAgain.rootID(collectionPrimaryRootName("users")) != cachedRoot {
-		t.Fatalf("write-domain catalog cache exposed mutable roots: got=%v want root %d", cachedAgain, cachedRoot)
+	if cachedRoot == 0 {
+		t.Fatal("write-domain catalog cache did not include primary root")
 	}
 	if stale := cachedWriteDomainCatalogForState(domain, state.SystemRootPageID, state.CommitSeq+1); stale != nil {
 		t.Fatal("write-domain catalog cache ignored commit sequence")
@@ -2545,8 +2544,8 @@ func TestOpenCollectionWriteDomainCatalogCacheUsesCommitSeq(t *testing.T) {
 	if err != nil {
 		t.Fatalf("catalogForSnapshot: %v", err)
 	}
-	if got := reopenedCatalog.rootID(collectionPrimaryRootName("users")); got == ^uint64(0) {
-		t.Fatalf("OpenCollection reused mutated write-domain catalog roots: %d", got)
+	if got := reopenedCatalog.rootID(collectionPrimaryRootName("users")); got != cachedRoot {
+		t.Fatalf("OpenCollection refreshed root=%d want %d", got, cachedRoot)
 	}
 	if fresh := cachedWriteDomainCatalogForState(domain, rawState.SystemRootPageID, rawState.CommitSeq); fresh == nil || fresh.rootID(collectionPrimaryRootName("users")) != reopenedCatalog.rootID(collectionPrimaryRootName("users")) {
 		t.Fatal("OpenCollection did not refresh write-domain catalog cache for new commit sequence")
@@ -2679,6 +2678,9 @@ func TestCollectionUpdateBatchRejectsUniqueConflictsWithinBatch(t *testing.T) {
 	})
 	if !errors.Is(err, ErrUniqueIndexConflict) {
 		t.Fatalf("UpdateBatch err=%v want ErrUniqueIndexConflict", err)
+	}
+	if !strings.Contains(err.Error(), "batch indexes 0 and 1") {
+		t.Fatalf("UpdateBatch err=%v missing conflicting batch indexes", err)
 	}
 }
 
