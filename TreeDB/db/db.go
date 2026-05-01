@@ -63,6 +63,7 @@ type DB struct {
 	snapshotAcquireRO              [snapshotAcquireShardCount]atomic.Int32
 	valueLogRefTracker             *valueLogRefTracker
 	leafPageLog                    LeafPageLog
+	leafPageReadCache              *leafPageReadCache
 	leafGenerationManifest         *leafGenerationManifest
 	leafGenerationPendingMu        sync.Mutex
 	leafGenerationPendingFileIDs   []uint32
@@ -1320,7 +1321,8 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen.zipper.SetIndexPackedValuePtr(opts.IndexPackedValuePtr)
 	gen.zipper.SetIndexInternalBaseDelta(opts.IndexInternalBaseDelta)
 	gen.zipper.SetOuterLeavesInValueLog(opts.IndexOuterLeavesInValueLog)
-	gen.zipper.SetLeafPageReader(vm)
+	db.leafPageReadCache = newLeafPageReadCache(LeafPageReadCacheEntries)
+	gen.zipper.SetLeafPageReader(newCachedLeafPageReader(db.leafPageReadCache, vm))
 	gen.zipper.SetAdaptiveLeafEncoding(opts.IndexAdaptiveLeafEncoding)
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 

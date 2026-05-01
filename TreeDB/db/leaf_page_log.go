@@ -49,6 +49,7 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPage(leafPage []byte) (page
 		return page.LeafLogPtr{}, err
 	}
 	if l.db != nil {
+		l.db.storeLeafPageReadCache(ptr, leafPage)
 		if provider, ok := l.inner.(leafPageLogRecordLengthProvider); ok {
 			l.db.noteLeafGenerationRecordLengthRaw(ptr.FileID, ptr.Offset, provider.LastLeafPageRecordLength())
 		}
@@ -85,7 +86,10 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPages(leafPages [][]byte) (
 		if provider, ok := l.inner.(leafPageLogRecordLengthProvider); ok {
 			lastRecordLen = provider.LastLeafPageRecordLength()
 		}
-		for _, ptr := range ptrs {
+		for i, ptr := range ptrs {
+			if i < len(leafPages) {
+				l.db.storeLeafPageReadCache(ptr, leafPages[i])
+			}
 			recordLen := ptr.RecordLengthHint
 			if recordLen == 0 {
 				recordLen = lastRecordLen

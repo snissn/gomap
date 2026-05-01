@@ -224,6 +224,24 @@ Useful stats:
 - `treedb.vlog.mmap_read.fallback_readat`
 - `treedb.vlog.mmap_read.miss_dead_mapping_cap`
 
+### Outer-leaf read cache
+
+When outer leaf pages are stored in `leaf_vlog`, TreeDB keeps a bounded
+process-local cache of recently appended decoded leaf pages. This avoids
+rereading freshly written leaves from mmap or `ReadAt` during follow-up publish,
+update, and maintenance work.
+
+- `TREEDB_LEAF_PAGE_CACHE_ENTRIES` sets the direct-mapped cache slot count.
+  The default is 4096 entries, or about 16 MiB of leaf-page payloads. Set to `0`
+  to disable the cache.
+
+Useful stats:
+- `treedb.process.read_path.outer_leaf.cache.hits`
+- `treedb.process.read_path.outer_leaf.cache.misses`
+- `treedb.process.read_path.outer_leaf.cache.stores`
+- `treedb.process.read_path.outer_leaf.cache.evictions`
+- `treedb.process.read_path.outer_leaf.cache.bytes`
+
 ### Leaf key compression (`Options.LeafPrefixCompression`)
 
 TreeDB can compress keys stored in **leaf pages** using a front-coding scheme
