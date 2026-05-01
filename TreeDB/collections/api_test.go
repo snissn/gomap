@@ -16,6 +16,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestCollectionErrorsAreClassifiable(t *testing.T) {
@@ -44,6 +45,14 @@ func TestCollectionGetNilDBReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "db is nil") {
 		t.Fatalf("Get nil db error=%v", err)
+	}
+}
+
+func TestCollectionManagerOpenCollectionNilDBReturnsConfigurationError(t *testing.T) {
+	mgr := NewCollectionManager(nil)
+	_, err := mgr.OpenCollection("users")
+	if err == nil || !strings.Contains(err.Error(), "db is nil") {
+		t.Fatalf("OpenCollection nil db err=%v want db is nil", err)
 	}
 }
 
@@ -2545,6 +2554,23 @@ func TestCollectionUpdateBatchRejectsDuplicateIDs(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBatchValidationErrorsIncludeIndex(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	_, err = (&Collection{db: d}).UpdateBatch([]UpdateBatchItem{{Update: incrementJSONCount}})
+	if err == nil || !strings.Contains(err.Error(), "index 0") {
+		t.Fatalf("empty id err=%v want index 0", err)
+	}
+	_, err = (&Collection{db: d}).UpdateBatch([]UpdateBatchItem{{DocumentID: []byte("u1")}})
+	if err == nil || !strings.Contains(err.Error(), "index 0") {
+		t.Fatalf("nil update err=%v want index 0", err)
+	}
+}
+
 func TestCollectionUpdateBatchRejectsUniqueConflictsWithinBatch(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -2620,6 +2646,90 @@ func TestCollectionUpdateBatchAllowsUniqueHandoff(t *testing.T) {
 	}
 	if !bytes.Contains(got, []byte(`"email":"a@example.com"`)) {
 		t.Fatalf("u2 document=%s want handed-off email", got)
+	}
+}
+
+func TestCollectionUpdateBatchClonesAliasedReplacements(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"score":0}`), []byte(`{"score":0}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	scratch := make([]byte, 0, 32)
+	setScore := func(score int) func([]byte) ([]byte, bool, error) {
+		return func([]byte) ([]byte, bool, error) {
+			scratch = append(scratch[:0], fmt.Sprintf(`{"score":%d}`, score)...)
+			return scratch, true, nil
+		}
+	}
+	if _, err := col.UpdateBatch([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setScore(1)},
+		{DocumentID: []byte("u2"), Update: setScore(2)},
+	}); err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+	for _, tc := range []struct {
+		id    []byte
+		score string
+	}{
+		{id: []byte("u1"), score: `"score":1`},
+		{id: []byte("u2"), score: `"score":2`},
+	} {
+		got, err := col.Get(tc.id)
+		if err != nil {
+			t.Fatalf("get %s: %v", tc.id, err)
+		}
+		if !bytes.Contains(got, []byte(tc.score)) {
+			t.Fatalf("%s document=%s want %s", tc.id, got, tc.score)
+		}
+	}
+}
+
+func TestCollectionUpdateBatchBSONRejectsIDMutation(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	doc := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(0)}})
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{doc}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	replacement := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u2"}, {Key: "score", Value: int32(1)}})
+	_, err = col.UpdateBatch([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: func([]byte) ([]byte, bool, error) {
+			return replacement, true, nil
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot modify _id") {
+		t.Fatalf("UpdateBatch err=%v want _id mutation error", err)
 	}
 }
 

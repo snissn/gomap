@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -449,6 +450,7 @@ func TestParseConfigProfileOptions(t *testing.T) {
 		"-profile-block-rate", "7",
 		"-profile-mutex-fraction", "11",
 		"-profile-trace",
+		"-profile-heap-gc",
 	})
 	if err != nil {
 		t.Fatalf("parse profile options: %v", err)
@@ -464,6 +466,9 @@ func TestParseConfigProfileOptions(t *testing.T) {
 	}
 	if !cfg.ProfileTrace {
 		t.Fatal("ProfileTrace=false want true")
+	}
+	if !cfg.ProfileHeapGC {
+		t.Fatal("ProfileHeapGC=false want true")
 	}
 	if _, err := parseConfig([]string{"-profile-trace"}); err == nil {
 		t.Fatal("profile-trace without profile-dir accepted")
@@ -506,7 +511,7 @@ func TestProfileRecorderWritesPhaseArtifactsAndManifest(t *testing.T) {
 		BatchSize:     1,
 		Phases:        []phaseResult{phase},
 		ProfileDir:    recorder.Dir(),
-		ProfileResult: recorder.ResultPath(),
+		ProfileResult: profileResultFile,
 	}
 	if err := recorder.WriteResult(result); err != nil {
 		t.Fatalf("WriteResult: %v", err)
@@ -532,6 +537,9 @@ func TestProfileRecorderWritesPhaseArtifactsAndManifest(t *testing.T) {
 		}
 		if info.Size() == 0 {
 			t.Fatalf("%s is empty", name)
+		}
+		if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+			t.Fatalf("%s permissions=%#o want 0600", name, info.Mode().Perm())
 		}
 	}
 }

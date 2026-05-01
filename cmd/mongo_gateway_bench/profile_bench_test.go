@@ -392,6 +392,17 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	if err := backend.Checkpoint(); err != nil {
 		b.Fatalf("checkpoint preload: %v", err)
 	}
+	updateDocs := make([]bson.Raw, 4096)
+	for i := range updateDocs {
+		updateRaw, err := bson.Marshal(bson.D{{Key: "$set", Value: bson.D{
+			{Key: "concurrent_updated", Value: true},
+			{Key: "concurrent_update_seq", Value: int64(i)},
+		}}})
+		if err != nil {
+			b.Fatalf("marshal update document: %v", err)
+		}
+		updateDocs[i] = bson.Raw(updateRaw)
+	}
 
 	writers := profileBenchConcurrentWriters(b)
 	b.ReportAllocs()
@@ -399,20 +410,14 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	started := time.Now()
 	err = runConcurrentOperations(context.Background(), writers, b.N, func(op int) error {
 		id := []byte(benchmarkID((op * 37) % documentCount))
-		updateRaw, err := bson.Marshal(bson.D{{Key: "$set", Value: bson.D{
-			{Key: "concurrent_updated", Value: true},
-			{Key: "concurrent_update_seq", Value: int64(op)},
-		}}})
-		if err != nil {
-			return err
-		}
+		updateRaw := updateDocs[op&(len(updateDocs)-1)]
 		matched, _, err := collection.Update(id, func(stored []byte) ([]byte, bool, error) {
 			raw := bson.Raw(stored)
 			if err := raw.Validate(); err != nil {
 				return nil, false, err
 			}
 			originalID := raw.Lookup("_id")
-			updated, changed, err := profileBenchApplySetUpdate(raw, bson.Raw(updateRaw))
+			updated, changed, err := profileBenchApplySetUpdate(raw, updateRaw)
 			if err != nil {
 				return nil, false, err
 			}

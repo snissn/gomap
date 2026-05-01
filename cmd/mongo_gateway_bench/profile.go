@@ -24,6 +24,7 @@ type profileRecorder struct {
 	blockRate            int
 	mutexFraction        int
 	traceEnabled         bool
+	heapGC               bool
 	createdAt            time.Time
 	resultPath           string
 	manifestPath         string
@@ -87,6 +88,7 @@ func newProfileRecorder(cfg config) (*profileRecorder, error) {
 		blockRate:     cfg.ProfileBlockRate,
 		mutexFraction: cfg.ProfileMutexFraction,
 		traceEnabled:  cfg.ProfileTrace,
+		heapGC:        cfg.ProfileHeapGC,
 		createdAt:     time.Now(),
 		resultPath:    filepath.Join(abs, profileResultFile),
 		manifestPath:  filepath.Join(abs, profileManifestFile),
@@ -195,7 +197,7 @@ func (r *profileRecorder) startPhase(name string) (*activeProfilePhase, error) {
 	}
 
 	cpuPath := filepath.Join(r.dir, prefix+".cpu.pprof")
-	cpuFile, err := os.Create(cpuPath)
+	cpuFile, err := createProfileFile(cpuPath)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +211,7 @@ func (r *profileRecorder) startPhase(name string) (*activeProfilePhase, error) {
 
 	if r.traceEnabled {
 		tracePath := filepath.Join(r.dir, prefix+".trace.out")
-		traceFile, err := os.Create(tracePath)
+		traceFile, err := createProfileFile(tracePath)
 		if err != nil {
 			phase.stop(err)
 			return nil, err
@@ -286,7 +288,7 @@ func (p *activeProfilePhase) writeRuntimeProfiles() []error {
 		if !profile.want {
 			continue
 		}
-		if profile.name == "heap" {
+		if profile.name == "heap" && p.recorder.heapGC {
 			runtime.GC()
 		}
 		outPath := filepath.Join(p.recorder.dir, p.artifact.Prefix+"."+profile.name+".pprof")
@@ -304,7 +306,7 @@ func writeRuntimeProfile(name, path string) error {
 	if profile == nil {
 		return fmt.Errorf("runtime profile %q is unavailable", name)
 	}
-	file, err := os.Create(path)
+	file, err := createProfileFile(path)
 	if err != nil {
 		return err
 	}
@@ -313,7 +315,7 @@ func writeRuntimeProfile(name, path string) error {
 }
 
 func writeProfileJSONFile(path string, value any) error {
-	file, err := os.Create(path)
+	file, err := createProfileFile(path)
 	if err != nil {
 		return err
 	}
@@ -321,6 +323,10 @@ func writeProfileJSONFile(path string, value any) error {
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(value)
+}
+
+func createProfileFile(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 }
 
 func sanitizeProfileName(name string) string {
