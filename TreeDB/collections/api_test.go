@@ -1512,6 +1512,18 @@ func TestCollectionInsertPlanningKeepsLockForIndexedMemtableBypass(t *testing.T)
 			wantUnlock:              false,
 		},
 		{
+			name:           "bson-no-indexed-memtables",
+			documentFormat: DocumentFormatBSON,
+			wantUnlock:     true,
+		},
+		{
+			name:                    "bson-direct-indexed-memtable-bypass",
+			documentFormat:          DocumentFormatBSON,
+			indexedMemtablesEnabled: true,
+			bufferIndexedInserts:    false,
+			wantUnlock:              false,
+		},
+		{
 			name:           "template-v1",
 			documentFormat: DocumentFormatTemplateV1,
 			wantUnlock:     false,
@@ -3281,6 +3293,54 @@ func TestCollectionUpdateBatchAllowsUniqueHandoff(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexesDeclinesFreshUniqueCatalog(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	stale, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open stale collection: %v", err)
+	}
+	if _, err := stale.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"email":"a@example.com"}`), []byte(`{"email":"b@example.com"}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	fresh, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open fresh collection: %v", err)
+	}
+	if _, err := fresh.CreateIndex(IndexDefinition{Name: "email", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+
+	results, batched, err := stale.UpdateBatchIfNoSecondaryUniqueIndexes([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONEmail("c@example.com")},
+		{DocumentID: []byte("u2"), Update: setJSONEmail("a@example.com")},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexes: %v", err)
+	}
+	if batched {
+		t.Fatalf("batched=%v results=%+v want declined", batched, results)
+	}
+	got, err := stale.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`"email":"a@example.com"`)) {
+		t.Fatalf("u1 document=%s want unchanged email", got)
+	}
+}
+
 func TestCollectionUpdateBatchClonesAliasedReplacements(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -3757,21 +3817,28 @@ func TestNoIndexInsertAfterRawCommitDoesNotReenterWriteDomainLock(t *testing.T) 
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	defer func() { _ = d.Close() }()
 
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
-		_ = d.Close()
 		t.Fatalf("create collection: %v", err)
 	}
 	col, err := mgr.OpenCollection("users")
 	if err != nil {
-		_ = d.Close()
 		t.Fatalf("open collection: %v", err)
 	}
 	if err := d.Set([]byte("raw/unrelated"), []byte("value")); err != nil {
-		_ = d.Close()
 		t.Fatalf("raw set: %v", err)
 	}
+
+	timeout := 5 * time.Second
+	if deadline, ok := t.Deadline(); ok {
+		if remaining := time.Until(deadline) / 2; remaining > 0 && remaining < timeout {
+			timeout = remaining
+		}
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 
 	done := make(chan error, 1)
 	go func() {
@@ -3781,14 +3848,10 @@ func TestNoIndexInsertAfterRawCommitDoesNotReenterWriteDomainLock(t *testing.T) 
 	select {
 	case err := <-done:
 		if err != nil {
-			_ = d.Close()
 			t.Fatalf("insert: %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-timer.C:
 		t.Fatal("insert blocked while refreshing write-domain catalog after raw commit")
-	}
-	if err := d.Close(); err != nil {
-		t.Fatalf("close db: %v", err)
 	}
 }
 

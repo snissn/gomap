@@ -329,6 +329,8 @@ CPU profile per measured phase, plus heap, allocs, block, mutex, and goroutine
 profiles captured after each phase. It also writes `profile_manifest.json` and
 `benchmark_result.json` into the same directory so the profile files can be tied
 back to the exact benchmark config and phase throughput.
+The profile directory must be empty at startup; use a fresh `mktemp -d`
+directory for each run so stale artifacts cannot be mixed into a new capture.
 
 CPU profiles are phase-scoped. Heap, allocs, block, mutex, and goroutine
 profiles are runtime snapshots captured at phase end; block, mutex, and allocs

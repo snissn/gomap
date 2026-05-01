@@ -284,14 +284,17 @@ func (p *activeProfilePhase) stop(runErr error) error {
 		p.cpuFile = nil
 	}
 	p.artifact.DurationMillis = float64(time.Since(p.started).Nanoseconds()) / 1e6
+	errs = append(errs, p.writeRuntimeProfiles()...)
+	stopErr := errors.Join(errs...)
 	if runErr != nil {
 		p.artifact.Error = runErr.Error()
+	} else if stopErr != nil {
+		p.artifact.Error = stopErr.Error()
 	}
-	errs = append(errs, p.writeRuntimeProfiles()...)
 	p.recorder.mu.Lock()
 	p.recorder.artifacts = append(p.recorder.artifacts, p.artifact)
 	p.recorder.mu.Unlock()
-	return errors.Join(errs...)
+	return stopErr
 }
 
 func (p *activeProfilePhase) cleanupSetup() error {
@@ -408,6 +411,13 @@ func ensureProfileDir(path string) error {
 		if err := os.Chmod(path, 0o700); err != nil {
 			return err
 		}
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return err
+	}
+	if len(entries) != 0 {
+		return fmt.Errorf("profile directory %q must be empty", path)
 	}
 	return nil
 }
