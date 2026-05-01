@@ -90,3 +90,42 @@ func (l *cachingLeafPageLog) CurrentValueLogSegment() (string, uint32, bool) {
 	}
 	return path, fileID, true
 }
+
+func (l *cachingLeafPageLog) RawWriteStats() valuelog.RawWriteStats {
+	writer := l.currentWriter()
+	if writer == nil {
+		return valuelog.RawWriteStats{}
+	}
+	snapper, ok := writer.(interface {
+		RawWriteStats() valuelog.RawWriteStats
+	})
+	if !ok {
+		return valuelog.RawWriteStats{}
+	}
+	return snapper.RawWriteStats()
+}
+
+func (l *cachingLeafPageLog) RawWritevStats() valuelog.RawWritevStats {
+	writer := l.currentWriter()
+	if writer == nil {
+		return valuelog.RawWritevStats{}
+	}
+	snapper, ok := writer.(interface {
+		RawWritevStats() valuelog.RawWritevStats
+	})
+	if !ok {
+		return valuelog.RawWritevStats{}
+	}
+	return snapper.RawWritevStats()
+}
+
+func (l *cachingLeafPageLog) currentWriter() valueWriter {
+	if l == nil || l.lane == nil {
+		return nil
+	}
+	lane := l.lane
+	lane.vlogMu.Lock()
+	writer := lane.vlog
+	lane.vlogMu.Unlock()
+	return writer
+}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -119,6 +120,32 @@ func (l *leafPageLogWithRecordLengthHints) CurrentValueLogSegment() (path string
 		return "", 0, false
 	}
 	return provider.CurrentValueLogSegment()
+}
+
+func (l *leafPageLogWithRecordLengthHints) RawWriteStats() valuelog.RawWriteStats {
+	if l == nil || l.inner == nil {
+		return valuelog.RawWriteStats{}
+	}
+	provider, ok := l.inner.(interface {
+		RawWriteStats() valuelog.RawWriteStats
+	})
+	if !ok {
+		return valuelog.RawWriteStats{}
+	}
+	return provider.RawWriteStats()
+}
+
+func (l *leafPageLogWithRecordLengthHints) RawWritevStats() valuelog.RawWritevStats {
+	if l == nil || l.inner == nil {
+		return valuelog.RawWritevStats{}
+	}
+	provider, ok := l.inner.(interface {
+		RawWritevStats() valuelog.RawWritevStats
+	})
+	if !ok {
+		return valuelog.RawWritevStats{}
+	}
+	return provider.RawWritevStats()
 }
 
 func (db *DB) currentLeafPageLogSegment() (path string, fileID uint32, ok bool) {

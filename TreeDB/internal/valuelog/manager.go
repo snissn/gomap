@@ -513,7 +513,7 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 		}
 	}
 	f.mmapReadFallbackReadAt.Add(1)
-	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+	return readAtWithDictAllowed(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, f.allowsCompactLeafPayload())
 }
 
 func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
@@ -549,7 +549,7 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 			}
 		}
 		f.mmapReadFallbackReadAt.Add(1)
-		return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+		return readAtWithDictAllowed(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, f.allowsCompactLeafPayload())
 	}
 	// Avoid per-read Stat/lock churn once we have exhausted the dead-mapping
 	// budget: remapToFileSize won't be able to grow the mapping safely again.
@@ -571,7 +571,7 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 		f.mmapReadMissDeadMappingCap.Add(1)
 	}
 	f.mmapReadFallbackReadAt.Add(1)
-	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+	return readAtWithDictAllowed(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, f.allowsCompactLeafPayload())
 }
 
 // ReadUnsafeTo is like ReadUnsafe, but it may return a slice backed by dst
@@ -631,7 +631,7 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 				return val, usedDst, nil
 			}
 		}
-		return ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
+		return readAtWithDictToAllowed(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst, f.allowsCompactLeafPayload())
 	}
 	// Avoid per-read Stat/lock churn once we have exhausted the dead-mapping
 	// budget: remapToFileSize won't be able to grow the mapping safely again.
@@ -671,7 +671,7 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 			return val, usedDst, nil
 		}
 	}
-	return ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
+	return readAtWithDictToAllowed(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst, f.allowsCompactLeafPayload())
 }
 
 // readGroupedCompressedFromFileTo handles grouped+compressed reads on the
@@ -806,18 +806,18 @@ func (f *File) readGroupedCompressedFromFileTo(ptr page.ValuePtr, dst []byte) ([
 	}
 	val := raw[valStart:valEnd]
 	if f.templateLookup != nil && templ.IsEncodedPayload(val) {
-		encoded := append([]byte(nil), val...)
 		cachedRaw := f.groupedFrameCacheStore(start, false, k, offsets, raw, pooledRaw)
+		decoded, usedDst, err := decodeTemplatePayloadTo(val, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
+		if err != nil {
+			if pooledRaw && !cachedRaw {
+				f.releaseDecodeScratch(raw)
+			}
+			return nil, false, err, true
+		}
 		if pooledRaw && !cachedRaw {
 			f.releaseDecodeScratch(raw)
 		}
-		decoded, err := templ.DecodePayloadAppend(nil, encoded, func(id uint64) (templ.TemplateDef, error) {
-			return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
-		}, f.templateDecodeOpts)
-		if err != nil {
-			return nil, false, err, true
-		}
-		return decoded, false, nil, true
+		return decoded, usedDst, nil, true
 	}
 
 	if dst != nil && cap(dst) >= len(val) {
@@ -982,7 +982,7 @@ func (f *File) appendDecodedRecordTo(ptr page.ValuePtr, verifyCRC bool, dst []by
 	if oldLen <= cap(dst) {
 		tail = dst[oldLen:cap(dst)]
 	}
-	val, usedDst, err := ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, tail[:0])
+	val, usedDst, err := readAtWithDictToAllowed(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, tail[:0], f.allowsCompactLeafPayload())
 	if err != nil {
 		return nil, err
 	}

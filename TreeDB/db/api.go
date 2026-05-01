@@ -693,6 +693,39 @@ func (db *DB) Stats() map[string]string {
 			stats["treedb.vlog.template_def_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(hits)/float64(total))
 		}
 	}
+	if db.leafPageLog != nil {
+		if snapper, ok := db.leafPageLog.(interface {
+			RawWriteStats() valuelog.RawWriteStats
+		}); ok {
+			snap := snapper.RawWriteStats()
+			stats["treedb.leaf_vlog_write.syscalls"] = fmt.Sprintf("%d", snap.Syscalls)
+			stats["treedb.leaf_vlog_write.bytes"] = fmt.Sprintf("%d", snap.Bytes)
+			stats["treedb.leaf_vlog_write.calls"] = fmt.Sprintf("%d", snap.Calls)
+			if snap.Syscalls > 0 {
+				stats["treedb.leaf_vlog_write.bytes_per_syscall"] = fmt.Sprintf("%.1f", float64(snap.Bytes)/float64(snap.Syscalls))
+			}
+			if snap.Calls > 0 {
+				stats["treedb.leaf_vlog_write.syscalls_per_call"] = fmt.Sprintf("%.2f", float64(snap.Syscalls)/float64(snap.Calls))
+			}
+		}
+		if snapper, ok := db.leafPageLog.(interface {
+			RawWritevStats() valuelog.RawWritevStats
+		}); ok {
+			snap := snapper.RawWritevStats()
+			stats["treedb.leaf_vlog_writev.syscalls"] = fmt.Sprintf("%d", snap.Syscalls)
+			stats["treedb.leaf_vlog_writev.bytes"] = fmt.Sprintf("%d", snap.Bytes)
+			stats["treedb.leaf_vlog_writev.iovecs"] = fmt.Sprintf("%d", snap.Iovecs)
+			stats["treedb.leaf_vlog_writev.flushes"] = fmt.Sprintf("%d", snap.Flushes)
+			if snap.Syscalls > 0 {
+				stats["treedb.leaf_vlog_writev.bytes_per_syscall"] = fmt.Sprintf("%.1f", float64(snap.Bytes)/float64(snap.Syscalls))
+				stats["treedb.leaf_vlog_writev.iovecs_per_syscall"] = fmt.Sprintf("%.2f", float64(snap.Iovecs)/float64(snap.Syscalls))
+			}
+			if snap.Flushes > 0 {
+				stats["treedb.leaf_vlog_writev.bytes_per_flush"] = fmt.Sprintf("%.1f", float64(snap.Bytes)/float64(snap.Flushes))
+				stats["treedb.leaf_vlog_writev.syscalls_per_flush"] = fmt.Sprintf("%.2f", float64(snap.Syscalls)/float64(snap.Flushes))
+			}
+		}
+	}
 	watermarkLockDelaySharePct, watermarkLatencyP99Ms := db.publishWatermarkStats()
 	stats["treedb.publish.watermark.lock_delay_share_pct"] = fmt.Sprintf("%.3f", watermarkLockDelaySharePct)
 	stats["treedb.publish.watermark.latency_p99_ms"] = fmt.Sprintf("%.3f", watermarkLatencyP99Ms)

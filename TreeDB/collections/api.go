@@ -3491,6 +3491,74 @@ type collectionUpdateCombineResult struct {
 	err      error
 }
 
+var collectionUpdateCombineBatchPool = sync.Pool{
+	New: func() any {
+		batch := make([]collectionUpdateCombineRequest, 0, defaultCollectionUpdateCombineMaxBatch)
+		return &batch
+	},
+}
+
+var collectionUpdateBatchItemPool = sync.Pool{
+	New: func() any {
+		items := make([]UpdateBatchItem, defaultCollectionUpdateCombineMaxBatch)
+		return &items
+	},
+}
+
+func acquireCollectionUpdateCombineBatch(capHint int) []collectionUpdateCombineRequest {
+	if capHint <= 0 {
+		capHint = 1
+	}
+	if v := collectionUpdateCombineBatchPool.Get(); v != nil {
+		if ptr, ok := v.(*[]collectionUpdateCombineRequest); ok && ptr != nil {
+			batch := *ptr
+			*ptr = nil
+			if cap(batch) >= capHint {
+				return batch[:0]
+			}
+		}
+	}
+	return make([]collectionUpdateCombineRequest, 0, capHint)
+}
+
+func releaseCollectionUpdateCombineBatch(batch []collectionUpdateCombineRequest) {
+	if cap(batch) == 0 {
+		return
+	}
+	for i := range batch {
+		batch[i] = collectionUpdateCombineRequest{}
+	}
+	batch = batch[:0]
+	collectionUpdateCombineBatchPool.Put(&batch)
+}
+
+func acquireCollectionUpdateBatchItems(n int) []UpdateBatchItem {
+	if n <= 0 {
+		return nil
+	}
+	if v := collectionUpdateBatchItemPool.Get(); v != nil {
+		if ptr, ok := v.(*[]UpdateBatchItem); ok && ptr != nil {
+			items := *ptr
+			*ptr = nil
+			if cap(items) >= n {
+				return items[:n]
+			}
+		}
+	}
+	return make([]UpdateBatchItem, n)
+}
+
+func releaseCollectionUpdateBatchItems(items []UpdateBatchItem) {
+	if cap(items) == 0 {
+		return
+	}
+	for i := range items {
+		items[i] = UpdateBatchItem{}
+	}
+	items = items[:0]
+	collectionUpdateBatchItemPool.Put(&items)
+}
+
 func (c *Collection) updateCombiner() *collectionUpdateCombiner {
 	if c == nil || c.db == nil || c.db.IsClosing() || c.writeDomain == nil {
 		return nil
@@ -3747,7 +3815,8 @@ func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionU
 	if batchCap < 1 {
 		batchCap = 1
 	}
-	batch := make([]collectionUpdateCombineRequest, 0, batchCap)
+	batch := acquireCollectionUpdateCombineBatch(batchCap)
+	defer releaseCollectionUpdateCombineBatch(batch)
 	batch = append(batch, first)
 	for len(batch) < batchCap {
 		select {
@@ -3779,7 +3848,8 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 		}
 		return
 	}
-	items := make([]UpdateBatchItem, len(batch))
+	items := acquireCollectionUpdateBatchItems(len(batch))
+	defer releaseCollectionUpdateBatchItems(items)
 	for i, req := range batch {
 		items[i] = UpdateBatchItem{
 			DocumentID: req.documentID,

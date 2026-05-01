@@ -1132,6 +1132,87 @@ func TestMeasureLoadPhaseReportsProducerResults(t *testing.T) {
 	}
 }
 
+func TestSelectedTreeDBStatsIncludesIOHygieneCounters(t *testing.T) {
+	stats := map[string]string{
+		"treedb.commit_seq":                                    "7",
+		"treedb.cache.vlog_mmap.read.hits":                     "11",
+		"treedb.cache.vlog_mmap.read.fallback_readat":          "3",
+		"treedb.cache.vlog_mmap.read.hit_ratio":                "0.785714",
+		"treedb.cache.vlog_writev.syscalls":                    "5",
+		"treedb.cache.vlog_writev.bytes_per_syscall":           "4096.0",
+		"treedb.cache.vlog_io.bytes_per_syscall":               "2048.0",
+		"treedb.cache.vlog_decode_buffer_grow.foo.calls_total": "13",
+		"treedb.leaf_vlog_write.syscalls":                      "29",
+		"treedb.leaf_vlog_writev.bytes_per_syscall":            "8192.0",
+		"treedb.vlog.mmap_read.miss_no_mapping":                "17",
+		"treedb.process.memory.peak_vlog_mmap_active_bytes":    "19",
+		"treedb.publish.ordered_root_delta_group.calls":        "23",
+		"treedb.unrelated":                                     "ignored",
+	}
+	got := selectedTreeDBStats(stats)
+	for _, key := range []string{
+		"treedb.commit_seq",
+		"treedb.cache.vlog_mmap.read.hits",
+		"treedb.cache.vlog_mmap.read.fallback_readat",
+		"treedb.cache.vlog_mmap.read.hit_ratio",
+		"treedb.cache.vlog_writev.syscalls",
+		"treedb.cache.vlog_writev.bytes_per_syscall",
+		"treedb.cache.vlog_io.bytes_per_syscall",
+		"treedb.cache.vlog_decode_buffer_grow.foo.calls_total",
+		"treedb.leaf_vlog_write.syscalls",
+		"treedb.leaf_vlog_writev.bytes_per_syscall",
+		"treedb.vlog.mmap_read.miss_no_mapping",
+		"treedb.process.memory.peak_vlog_mmap_active_bytes",
+		"treedb.publish.ordered_root_delta_group.calls",
+	} {
+		if got[key] != stats[key] {
+			t.Fatalf("selectedTreeDBStats[%q]=%q want %q; got=%v", key, got[key], stats[key], got)
+		}
+	}
+	if _, ok := got["treedb.unrelated"]; ok {
+		t.Fatalf("selectedTreeDBStats included unrelated key: %v", got)
+	}
+}
+
+func TestTreeDBStatDeltasReportCounterDeltasOnly(t *testing.T) {
+	before := map[string]string{
+		"treedb.cache.vlog_mmap.read.hits":                       "10",
+		"treedb.cache.vlog_mmap.read.fallback_readat":            "2",
+		"treedb.cache.vlog_mmap.read.hit_ratio":                  "0.833333",
+		"treedb.cache.vlog_writev.bytes_per_syscall":             "4096.0",
+		"treedb.publish.watermark.lock_delay_share_pct":          "1.0",
+		"treedb.publish.ordered_root_delta_group.latency_max_ms": "5.0",
+		"treedb.process.memory.vlog_mmap_active_bytes":           "8192",
+	}
+	after := map[string]string{
+		"treedb.cache.vlog_mmap.read.hits":                       "18",
+		"treedb.cache.vlog_mmap.read.fallback_readat":            "5",
+		"treedb.cache.vlog_mmap.read.hit_ratio":                  "0.782609",
+		"treedb.cache.vlog_writev.bytes_per_syscall":             "6144.0",
+		"treedb.publish.watermark.lock_delay_share_pct":          "2.0",
+		"treedb.publish.ordered_root_delta_group.latency_max_ms": "7.0",
+		"treedb.process.memory.vlog_mmap_active_bytes":           "16384",
+	}
+	got := treeDBStatDeltas(before, after)
+	if got["treedb.cache.vlog_mmap.read.hits"] != 8 {
+		t.Fatalf("hits delta=%v want 8; got=%v", got["treedb.cache.vlog_mmap.read.hits"], got)
+	}
+	if got["treedb.cache.vlog_mmap.read.fallback_readat"] != 3 {
+		t.Fatalf("fallback delta=%v want 3; got=%v", got["treedb.cache.vlog_mmap.read.fallback_readat"], got)
+	}
+	for _, key := range []string{
+		"treedb.cache.vlog_mmap.read.hit_ratio",
+		"treedb.cache.vlog_writev.bytes_per_syscall",
+		"treedb.publish.watermark.lock_delay_share_pct",
+		"treedb.publish.ordered_root_delta_group.latency_max_ms",
+		"treedb.process.memory.vlog_mmap_active_bytes",
+	} {
+		if _, ok := got[key]; ok {
+			t.Fatalf("treeDBStatDeltas included non-counter key %q: %v", key, got)
+		}
+	}
+}
+
 func TestMeasureLoadPhaseErrorReportsCompletedOperations(t *testing.T) {
 	sentinel := errors.New("load failed")
 	cfg := config{Documents: 6, BatchSize: 2, InsertProducers: 1}

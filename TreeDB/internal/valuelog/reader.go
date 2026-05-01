@@ -184,6 +184,7 @@ type Reader struct {
 	templateLookup     TemplateLookup
 	templateDecodeOpts templ.DecodeOptions
 	templateDefCache   *templateDefCache
+	compactLeafAllowed bool
 	pending            []frameEntry
 	pendingIndex       int
 	headerScratch      [HeaderSize]byte
@@ -215,12 +216,13 @@ func NewReaderWithBufferSize(path string, fileID uint32, bufferSize int) (*Reade
 		return nil, err
 	}
 	return &Reader{
-		f:            f,
-		closeFn:      f.Close,
-		r:            bufio.NewReaderSize(f, bufferSize),
-		fileID:       fileID,
-		verifies:     true,
-		decodeValues: true,
+		f:                  f,
+		closeFn:            f.Close,
+		r:                  bufio.NewReaderSize(f, bufferSize),
+		fileID:             fileID,
+		verifies:           true,
+		decodeValues:       true,
+		compactLeafAllowed: allowsCompactLeafLogPayload(fileID, path),
 	}, nil
 }
 
@@ -236,11 +238,12 @@ func NewReaderFromFileWithBufferSize(f *os.File, fileID uint32, bufferSize int) 
 	}
 	sr := io.NewSectionReader(f, 0, 1<<63-1)
 	return &Reader{
-		f:            f,
-		r:            bufio.NewReaderSize(sr, bufferSize),
-		fileID:       fileID,
-		verifies:     true,
-		decodeValues: true,
+		f:                  f,
+		r:                  bufio.NewReaderSize(sr, bufferSize),
+		fileID:             fileID,
+		verifies:           true,
+		decodeValues:       true,
+		compactLeafAllowed: allowsCompactLeafLogPayload(fileID, f.Name()),
 	}
 }
 
@@ -267,6 +270,13 @@ func (r *Reader) SetTemplateLookup(lookup TemplateLookup, opts templ.DecodeOptio
 	r.templateLookup = lookup
 	r.templateDecodeOpts = opts
 	r.templateDefCache = newTemplateDefCache(opts.DefCacheSize)
+}
+
+func (r *Reader) maybeDecodeLeafLogPayloadTo(payload, dst []byte) ([]byte, bool, bool, error) {
+	if r == nil {
+		return payload, false, false, nil
+	}
+	return maybeDecodeLeafLogPayloadToAllowed(r.compactLeafAllowed, payload, dst)
 }
 
 func (r *Reader) ReadNext() (uint64, []byte, page.ValuePtr, error) {
@@ -321,7 +331,7 @@ func (r *Reader) ReadNext() (uint64, []byte, page.ValuePtr, error) {
 		if r.fileID == 0 {
 			return rid, payload, ptr, nil
 		}
-		payload, _, _, err := maybeDecodeLeafLogPayloadTo(r.fileID, r.f.Name(), payload, nil)
+		payload, _, _, err := r.maybeDecodeLeafLogPayloadTo(payload, nil)
 		if err != nil {
 			return 0, nil, page.ValuePtr{}, err
 		}
@@ -387,7 +397,7 @@ func (r *Reader) ReadNext() (uint64, []byte, page.ValuePtr, error) {
 				}
 				val = decoded
 			}
-			val, _, _, err = maybeDecodeLeafLogPayloadTo(r.fileID, r.f.Name(), val, nil)
+			val, _, _, err = r.maybeDecodeLeafLogPayloadTo(val, nil)
 			if err != nil {
 				return 0, nil, page.ValuePtr{}, err
 			}
@@ -725,6 +735,14 @@ func ReadAtTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 }
 
 func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup, templateLookup TemplateLookup, templateCache *templateDefCache, templateOpts templ.DecodeOptions) ([]byte, error) {
+	compactLeafAllowed := false
+	if f != nil {
+		compactLeafAllowed = allowsCompactLeafLogPayload(ptr.FileID, f.Name())
+	}
+	return readAtWithDictAllowed(f, ptr, verifyCRC, dictLookup, templateLookup, templateCache, templateOpts, compactLeafAllowed)
+}
+
+func readAtWithDictAllowed(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup, templateLookup TemplateLookup, templateCache *templateDefCache, templateOpts templ.DecodeOptions, compactLeafAllowed bool) ([]byte, error) {
 	if f == nil {
 		return nil, errors.New("valuelog: nil file")
 	}
@@ -843,13 +861,13 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 				if err != nil {
 					return nil, err
 				}
-				decoded, _, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), decoded, nil)
+				decoded, _, _, err = maybeDecodeLeafLogPayloadToAllowed(compactLeafAllowed, decoded, nil)
 				if err != nil {
 					return nil, err
 				}
 				return decoded, nil
 			}
-			val, _, _, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), val, nil)
+			val, _, _, err := maybeDecodeLeafLogPayloadToAllowed(compactLeafAllowed, val, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -871,7 +889,7 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 	if err != nil {
 		return nil, err
 	}
-	val, _, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), val, nil)
+	val, _, _, err = maybeDecodeLeafLogPayloadToAllowed(compactLeafAllowed, val, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -883,6 +901,14 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 // The returned slice may alias dst when usedDst is true. The returned bytes are
 // immutable from the caller perspective.
 func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup, templateLookup TemplateLookup, templateCache *templateDefCache, templateOpts templ.DecodeOptions, dst []byte) ([]byte, bool, error) {
+	compactLeafAllowed := false
+	if f != nil {
+		compactLeafAllowed = allowsCompactLeafLogPayload(ptr.FileID, f.Name())
+	}
+	return readAtWithDictToAllowed(f, ptr, verifyCRC, dictLookup, templateLookup, templateCache, templateOpts, dst, compactLeafAllowed)
+}
+
+func readAtWithDictToAllowed(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup, templateLookup TemplateLookup, templateCache *templateDefCache, templateOpts templ.DecodeOptions, dst []byte, compactLeafAllowed bool) ([]byte, bool, error) {
 	if f == nil {
 		return nil, false, errors.New("valuelog: nil file")
 	}
@@ -1010,13 +1036,13 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 				if err != nil {
 					return nil, false, err
 				}
-				decoded, _, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), decoded, nil)
+				decoded, _, _, err = maybeDecodeLeafLogPayloadToAllowed(compactLeafAllowed, decoded, nil)
 				if err != nil {
 					return nil, false, err
 				}
 				return decoded, false, nil
 			}
-			val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), val, dst)
+			val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadToAllowed(compactLeafAllowed, val, dst)
 			if err != nil {
 				return nil, false, err
 			}
@@ -1054,13 +1080,13 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 			if err != nil {
 				return nil, false, err
 			}
-			decoded, _, _, err = maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), decoded, nil)
+			decoded, _, _, err = maybeDecodeLeafLogPayloadToAllowed(compactLeafAllowed, decoded, nil)
 			if err != nil {
 				return nil, false, err
 			}
 			return decoded, false, nil
 		}
-		payload, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), payload, dst)
+		payload, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadToAllowed(compactLeafAllowed, payload, dst)
 		if err != nil {
 			return nil, false, err
 		}
@@ -1088,7 +1114,7 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 		putDecodeScratch(payloadScratch)
 		return nil, false, err
 	}
-	val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), val, dst)
+	val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadToAllowed(compactLeafAllowed, val, dst)
 	if err != nil {
 		putDecodeScratch(payloadScratch)
 		return nil, false, err
@@ -1243,14 +1269,14 @@ func decodeRecordTo(header *[HeaderSize]byte, payload []byte, ptr page.ValuePtr,
 		if page.ValuePtrIsGrouped(ptr) {
 			return nil, false, ErrCorrupt
 		}
-		if templateLookup != nil && templ.IsEncodedPayload(payload) {
-			decoded, err := templ.DecodePayloadAppend(nil, payload, func(id uint64) (templ.TemplateDef, error) {
-				return resolveTemplateDef(id, templateLookup, templateCache)
-			}, templateOpts)
+		if templateLookup != nil {
+			decoded, usedDst, err := decodeTemplatePayloadTo(payload, templateLookup, templateCache, templateOpts, dst)
 			if err != nil {
 				return nil, false, err
 			}
-			return decoded, false, nil
+			if usedDst || templ.IsEncodedPayload(payload) {
+				return decoded, usedDst, nil
+			}
 		}
 		return payload, false, nil
 	}
@@ -1292,13 +1318,11 @@ func decodeRecordTo(header *[HeaderSize]byte, payload []byte, ptr page.ValuePtr,
 				}
 				val := raw
 				if templateLookup != nil && templ.IsEncodedPayload(val) {
-					decoded, err := templ.DecodePayloadAppend(nil, val, func(id uint64) (templ.TemplateDef, error) {
-						return resolveTemplateDef(id, templateLookup, templateCache)
-					}, templateOpts)
+					decoded, usedTemplateDst, err := decodeTemplatePayloadTo(val, templateLookup, templateCache, templateOpts, dst)
 					if err != nil {
 						return nil, false, err
 					}
-					return decoded, false, nil
+					return decoded, usedTemplateDst, nil
 				}
 				return val, true, nil
 			}
@@ -1317,13 +1341,11 @@ func decodeRecordTo(header *[HeaderSize]byte, payload []byte, ptr page.ValuePtr,
 			copy(val, raw[start:end])
 			putDecodeScratch(raw)
 			if templateLookup != nil && templ.IsEncodedPayload(val) {
-				decoded, err := templ.DecodePayloadAppend(nil, val, func(id uint64) (templ.TemplateDef, error) {
-					return resolveTemplateDef(id, templateLookup, templateCache)
-				}, templateOpts)
+				decoded, usedTemplateDst, err := decodeTemplatePayloadTo(val, templateLookup, templateCache, templateOpts, dst)
 				if err != nil {
 					return nil, false, err
 				}
-				return decoded, false, nil
+				return decoded, usedTemplateDst, nil
 			}
 			return val, true, nil
 		}
@@ -1344,13 +1366,11 @@ func decodeRecordTo(header *[HeaderSize]byte, payload []byte, ptr page.ValuePtr,
 		copy(val, raw[start:end])
 		putDecodeScratch(raw)
 		if templateLookup != nil && templ.IsEncodedPayload(val) {
-			decoded, err := templ.DecodePayloadAppend(nil, val, func(id uint64) (templ.TemplateDef, error) {
-				return resolveTemplateDef(id, templateLookup, templateCache)
-			}, templateOpts)
+			decoded, usedTemplateDst, err := decodeTemplatePayloadTo(val, templateLookup, templateCache, templateOpts, dst)
 			if err != nil {
 				return nil, false, err
 			}
-			return decoded, false, nil
+			return decoded, usedTemplateDst, nil
 		}
 		return val, false, nil
 	}
@@ -1365,13 +1385,12 @@ func decodeRecordTo(header *[HeaderSize]byte, payload []byte, ptr page.ValuePtr,
 	val := raw[start:end]
 	usedDst := false
 	if templateLookup != nil && templ.IsEncodedPayload(val) {
-		decoded, err := templ.DecodePayloadAppend(nil, val, func(id uint64) (templ.TemplateDef, error) {
-			return resolveTemplateDef(id, templateLookup, templateCache)
-		}, templateOpts)
+		decoded, usedTemplateDst, err := decodeTemplatePayloadTo(val, templateLookup, templateCache, templateOpts, dst)
 		if err != nil {
 			return nil, false, err
 		}
 		val = decoded
+		usedDst = usedTemplateDst
 	} else if dst != nil && cap(dst) >= outLen {
 		// Uncompressed path: copy into dst to allow callers to avoid retaining a
 		// large frame payload allocation.

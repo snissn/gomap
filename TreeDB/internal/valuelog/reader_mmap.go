@@ -25,6 +25,24 @@ func appendDecodedTemplatePayload(dst, payload []byte, lookup TemplateLookup, ca
 	}, opts)
 }
 
+func decodeTemplatePayloadTo(payload []byte, lookup TemplateLookup, cache *templateDefCache, opts templ.DecodeOptions, dst []byte) ([]byte, bool, error) {
+	if lookup == nil || !templ.IsEncodedPayload(payload) {
+		return payload, false, nil
+	}
+	// Avoid decoding into dst when the encoded payload itself aliases dst.
+	// Template decode is append-style and may overwrite dst as it reads.
+	if dst != nil && sliceAliasesBytes(dst, payload) {
+		dst = nil
+	}
+	decoded, err := templ.DecodePayloadAppend(dst[:0], payload, func(id uint64) (templ.TemplateDef, error) {
+		return resolveTemplateDef(id, lookup, cache)
+	}, opts)
+	if err != nil {
+		return nil, false, err
+	}
+	return decoded, dst != nil && sliceAliasesBytes(dst, decoded), nil
+}
+
 // readViaMmapViewPrefixCacheEnabled controls whether unsafe mmap-view reads
 // consult/publish the shared per-file grouped prefix cache.
 //
@@ -818,14 +836,14 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 
 	// Non-grouped record: the payload is the value.
 	if flags&recordFlagGrouped == 0 {
-		if f.templateLookup != nil && templ.IsEncodedPayload(payload) {
-			decoded, err := templ.DecodePayloadAppend(nil, payload, func(id uint64) (templ.TemplateDef, error) {
-				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
-			}, f.templateDecodeOpts)
+		if f.templateLookup != nil {
+			decoded, usedDst, err := decodeTemplatePayloadTo(payload, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
 			if err != nil {
 				return nil, false, err, true
 			}
-			return decoded, false, nil, true
+			if usedDst || templ.IsEncodedPayload(payload) {
+				return decoded, usedDst, nil, true
+			}
 		}
 		return payload, false, nil, true
 	}
@@ -847,16 +865,7 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	fFlags := frameHeader[1]
 
 	decodeTemplatePayload := func(val []byte) ([]byte, bool, error) {
-		if f.templateLookup == nil || !templ.IsEncodedPayload(val) {
-			return val, false, nil
-		}
-		decoded, err := templ.DecodePayloadAppend(nil, val, func(id uint64) (templ.TemplateDef, error) {
-			return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
-		}, f.templateDecodeOpts)
-		if err != nil {
-			return nil, false, err
-		}
-		return decoded, true, nil
+		return decodeTemplatePayloadTo(val, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
 	}
 
 	subIndex := int(page.ValuePtrSubIndex(ptr))

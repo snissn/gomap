@@ -501,6 +501,15 @@ sizes, not allocated physical disk usage including block allocation, sparse-file
 effects, filesystem compression, or metadata. Capture `du` separately when
 physical on-disk usage is the comparison target.
 
+TreeDB JSON output also includes per-phase `treedb_stats_delta` and
+`treedb_stats_after` fields for selected storage counters. Use these when
+checking I/O hygiene regressions: `treedb.*vlog_mmap*.fallback_readat` should
+stay low in mmap-eligible workloads, `*.hits`/`*.hit_ratio` show mmap use,
+`*.miss_*` identifies why a phase left the mmap path, and
+`treedb.cache.vlog_write*` / `treedb.cache.vlog_writev*` show write syscall
+batching. The text format prints the same per-phase counter deltas as
+`treedb_phase_stats`.
+
 For MongoDB, compare `mongodb_stats_final.storageSize`,
 `mongodb_stats_final.indexSize`, and `mongodb_stats_final.totalSize`. If the
 MongoDB server is local, also capture a filesystem `du` of the database path for
