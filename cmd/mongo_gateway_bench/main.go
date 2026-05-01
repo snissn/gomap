@@ -369,7 +369,9 @@ func run(parent context.Context, args []string) error {
 	result, err := runBenchmark(ctx, cfg, target, profiler)
 	if err != nil {
 		if profiler != nil {
-			_ = profiler.WriteManifest(nil, err)
+			if manifestErr := profiler.WriteManifest(nil, err); manifestErr != nil {
+				return errors.Join(err, manifestErr)
+			}
 		}
 		return err
 	}
