@@ -1062,6 +1062,68 @@ func TestMongoUpdateCoalescerUniqueIndexFallsBackToOrderedSingles(t *testing.T) 
 	}
 }
 
+func TestServerUpdateCoalescedSkipsCoalescerForSecondaryUniqueIndex(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.UpdateCoalescingMaxDelay = 5 * time.Second
+	server.UpdateCoalescingMaxBatch = 2
+	assertOK(t, serveCommand(t, server, 2270, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "unique", Value: true}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 2271, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "a@example.com"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	col, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	update, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "b@example.com"}}}}},
+	}))
+	if err != nil {
+		t.Fatalf("parse update: %v", err)
+	}
+	matched, modified, err := server.runMongoUpdateCoalesced("app.users", col, update)
+	if err != nil {
+		t.Fatalf("runMongoUpdateCoalesced: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("matched=%v modified=%v want true,true", matched, modified)
+	}
+	server.updateMu.Lock()
+	_, cached := server.updateCoalescers["app.users"]
+	server.updateMu.Unlock()
+	if cached {
+		t.Fatal("secondary unique update created a coalescer")
+	}
+}
+
+func TestCollectionUpdateBatchErrorIndexUsesTypedError(t *testing.T) {
+	err := fmt.Errorf("wrap: %w", &collections.UpdateBatchItemError{
+		Index: 3,
+		Err:   errors.New("bad replacement"),
+	})
+	index, ok := collectionUpdateBatchErrorIndex(err)
+	if !ok || index != 3 {
+		t.Fatalf("index=%d ok=%v want 3,true", index, ok)
+	}
+}
+
 func TestMongoUpdateCoalescerUsesSingleCollection(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
