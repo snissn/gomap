@@ -1784,13 +1784,7 @@ func collectTreeDBStatsFromDir(cfg config, target *benchTarget) (map[string]stri
 		return nil, nil
 	}
 	opts := treedb.OptionsFor(cfg.TreeDBProfile, target.treedbDir)
-	opts.IndexOuterLeavesInValueLog = true
-	opts.IndexInternalBaseDelta = false
-	open := treedb.OpenBackend
-	if opts.IndexOuterLeavesInValueLog {
-		open = treedb.OpenBackendWithCachedLeafLog
-	}
-	db, cleanup, err := open(opts)
+	db, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -1800,14 +1794,11 @@ func collectTreeDBStatsFromDir(cfg config, target *benchTarget) (map[string]stri
 
 func mergeTreeDBPersistentStats(base, refreshed map[string]string) map[string]string {
 	if len(base) == 0 {
-		return refreshed
+		return cloneStringMap(refreshed)
 	}
+	merged := cloneStringMap(base)
 	if len(refreshed) == 0 {
-		return base
-	}
-	merged := make(map[string]string, len(base)+len(selectedTreeDBExactStatKeys))
-	for key, value := range base {
-		merged[key] = value
+		return merged
 	}
 	for _, key := range selectedTreeDBExactStatKeys {
 		if value, ok := refreshed[key]; ok {
@@ -1815,6 +1806,17 @@ func mergeTreeDBPersistentStats(base, refreshed map[string]string) map[string]st
 		}
 	}
 	return merged
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func appendTreeDBMaintenanceStep(ctx context.Context, target *benchTarget, result *benchmarkResult, name string, run func() (map[string]int64, string, error)) error {

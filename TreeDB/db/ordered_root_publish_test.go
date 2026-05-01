@@ -790,6 +790,42 @@ func TestPublishOrderedRootDeltaGroupPreflightFailureDoesNotCountRoots(t *testin
 	}
 }
 
+func TestPublishOrderedRootDeltaGroupSystemBuilderFailureDoesNotCountRoots(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "root/a", "va").NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root: %v", err)
+	}
+	delta := mustFrozenSystemMemtable(t, "root/b", "vb")
+	wantErr := errors.New("system builder failed")
+	_, _, err = db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]OrderedRootDeltaPublishInput{{
+		BaseRoot: baseRoot,
+		Iter:     delta.NewIterator(nil, nil),
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return nil, wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err=%v want %v", err, wantErr)
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.publish.ordered_root_delta_group.calls_total"]; got != "1" {
+		t.Fatalf("calls stat=%q want 1", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.errors_total"]; got != "1" {
+		t.Fatalf("errors stat=%q want 1", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.roots_total"]; got != "0" {
+		t.Fatalf("roots stat=%q want 0", got)
+	}
+}
+
 func TestPublishOrderedRootDeltaGroupWithSystemBuilder_AppliesDeletes(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
