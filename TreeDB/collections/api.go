@@ -50,10 +50,11 @@ var (
 	ErrUniqueIndexConflict = errors.New("collections: unique index conflict")
 	ErrConcurrentMutation  = errors.New("collections: concurrent mutation")
 
-	errCollectionManagerNil = errors.New("collections: collection manager is nil")
-	errCollectionNil        = errors.New("collections: collection is nil")
-	errCollectionDBNil      = errors.New("collections: db is nil")
-	errCollectionNotFound   = ErrCollectionNotFound
+	errCollectionManagerNil  = errors.New("collections: collection manager is nil")
+	errCollectionNil         = errors.New("collections: collection is nil")
+	errCollectionDBNil       = errors.New("collections: db is nil")
+	errCollectionNotFound    = ErrCollectionNotFound
+	errUpdateCombinerStopped = errors.New("collections: update combiner stopped before completing request")
 )
 
 // UpdateBatchItem describes one document update in a batch. DocumentID must be
@@ -3085,8 +3086,30 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 	if !combiner.enqueue(req) {
 		return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
 	}
-	result := <-done
+	result := combiner.waitForUpdateResult(done)
 	return result.matched, result.modified, result.err
+}
+
+func (combiner *collectionUpdateCombiner) waitForUpdateResult(done chan collectionUpdateCombineResult) collectionUpdateCombineResult {
+	select {
+	case result := <-done:
+		return result
+	default:
+	}
+	if combiner == nil || combiner.done == nil {
+		return <-done
+	}
+	select {
+	case result := <-done:
+		return result
+	case <-combiner.done:
+		select {
+		case result := <-done:
+			return result
+		default:
+			return collectionUpdateCombineResult{err: errUpdateCombinerStopped}
+		}
+	}
 }
 
 func (combiner *collectionUpdateCombiner) enqueue(req collectionUpdateCombineRequest) bool {
@@ -3136,10 +3159,22 @@ func (combiner *collectionUpdateCombiner) isStopped() bool {
 	return combiner.stopped
 }
 
-func (combiner *collectionUpdateCombiner) run() {
-	if combiner.done != nil {
-		defer close(combiner.done)
+func (combiner *collectionUpdateCombiner) markStopped() {
+	if combiner == nil {
+		return
 	}
+	combiner.mu.Lock()
+	combiner.stopped = true
+	combiner.mu.Unlock()
+}
+
+func (combiner *collectionUpdateCombiner) run() {
+	defer func() {
+		combiner.markStopped()
+		if combiner.done != nil {
+			close(combiner.done)
+		}
+	}()
 	if combiner.idleTTL <= 0 {
 		for first := range combiner.requests {
 			combiner.runBatchStartingWith(first)

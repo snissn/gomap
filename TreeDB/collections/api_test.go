@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -2936,6 +2937,44 @@ func TestCollectionUpdateCombinerMaxBatchOneRecoversCallbackPanic(t *testing.T) 
 	}
 	if matched || modified {
 		t.Fatalf("matched=%v modified=%v want false,false", matched, modified)
+	}
+}
+
+func TestCollectionUpdateCombinerUpdateReturnsWhenWorkerExits(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"score":0}`)}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	combiner := col.updateCombiner()
+	if combiner == nil {
+		t.Fatal("expected update combiner")
+	}
+	matched, modified, err := combiner.update(col, []byte("u1"), func([]byte) ([]byte, bool, error) {
+		runtime.Goexit()
+		return nil, false, nil
+	})
+	if !errors.Is(err, errUpdateCombinerStopped) {
+		t.Fatalf("update err=%v want errUpdateCombinerStopped", err)
+	}
+	if matched || modified {
+		t.Fatalf("matched=%v modified=%v want false,false", matched, modified)
+	}
+	if !combiner.isStopped() {
+		t.Fatal("worker exit did not mark combiner stopped")
 	}
 }
 
