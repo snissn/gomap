@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -781,6 +782,26 @@ func collectionMaintenanceTestContext(t *testing.T) (context.Context, context.Ca
 		}
 	}
 	return context.WithTimeout(context.Background(), timeout)
+}
+
+const collectionTestDeadlineBuffer = 500 * time.Millisecond
+
+func collectionTestTimeout(t *testing.T, fallback time.Duration) time.Duration {
+	t.Helper()
+	if deadline, ok := t.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return time.Nanosecond
+		}
+		if remaining <= collectionTestDeadlineBuffer {
+			return remaining
+		}
+		remaining -= collectionTestDeadlineBuffer
+		if remaining > 0 && remaining < fallback {
+			return remaining
+		}
+	}
+	return fallback
 }
 
 func collectionMaintenanceCloseOnce(cleanup func() error) func() error {
@@ -3814,6 +3835,114 @@ func TestCollectionUpdateBatchClonesAliasedReplacements(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBatchReplansAfterConcurrentCollectionMutation(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	left, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open left collection: %v", err)
+	}
+	right, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open right collection: %v", err)
+	}
+	if _, err := left.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"score":0}`), []byte(`{"score":0}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	ready := make(chan struct{})
+	stopRight := make(chan struct{})
+	var readyOnce sync.Once
+	rightDone := make(chan error, 1)
+	rightFinished := make(chan struct{})
+	go func() {
+		defer close(rightFinished)
+		select {
+		case <-ready:
+		case <-stopRight:
+			return
+		}
+		_, err := right.UpdateBatch([]UpdateBatchItem{{
+			DocumentID: []byte("u2"),
+			Update: func([]byte) ([]byte, bool, error) {
+				return []byte(`{"score":2}`), true, nil
+			},
+		}})
+		rightDone <- err
+	}()
+	defer func() {
+		close(stopRight)
+		timer := time.NewTimer(collectionTestTimeout(t, 5*time.Second))
+		defer timer.Stop()
+		select {
+		case <-rightFinished:
+		case <-timer.C:
+			t.Error("timed out waiting for concurrent update goroutine cleanup")
+		}
+	}()
+
+	concurrentUpdateWait := collectionTestTimeout(t, 10*time.Second)
+	var callbackCalls atomic.Int32
+	results, err := left.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func([]byte) ([]byte, bool, error) {
+			if callbackCalls.Add(1) == 1 {
+				readyOnce.Do(func() { close(ready) })
+				timer := time.NewTimer(concurrentUpdateWait)
+				defer timer.Stop()
+				select {
+				case err := <-rightDone:
+					if err != nil {
+						return nil, false, err
+					}
+				case <-timer.C:
+					return nil, false, errors.New("timed out waiting for concurrent update")
+				}
+			}
+			return []byte(`{"score":1}`), true, nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("left UpdateBatch: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("results=%+v want matched modified", results)
+	}
+	if got := callbackCalls.Load(); got < 2 {
+		t.Fatalf("callbackCalls=%d want retry after concurrent collection mutation", got)
+	}
+	for _, tc := range []struct {
+		id    []byte
+		score float64
+	}{
+		{id: []byte("u1"), score: 1},
+		{id: []byte("u2"), score: 2},
+	} {
+		got, err := left.Get(tc.id)
+		if err != nil {
+			t.Fatalf("get %s: %v", tc.id, err)
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(got, &doc); err != nil {
+			t.Fatalf("parse %s document=%s: %v", tc.id, got, err)
+		}
+		if gotScore, ok := doc["score"].(float64); !ok || gotScore != tc.score {
+			t.Fatalf("%s score=%v want %v document=%s", tc.id, doc["score"], tc.score, got)
+		}
+	}
+}
+
 func TestCollectionUpdateBatchClonesDocumentIDs(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -3835,6 +3964,7 @@ func TestCollectionUpdateBatchClonesDocumentIDs(t *testing.T) {
 	); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
+
 	id := []byte("u1")
 	if _, err := col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: id,
@@ -3858,6 +3988,138 @@ func TestCollectionUpdateBatchClonesDocumentIDs(t *testing.T) {
 	}
 	if !bytes.Contains(gotU2, []byte(`"score":0`)) {
 		t.Fatalf("u2 document=%s want score 0", gotU2)
+	}
+}
+
+func TestCollectionUpdateBatchFlushesBufferedIndexedWritesBeforePublish(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	left, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open left collection: %v", err)
+	}
+	right, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open right collection: %v", err)
+	}
+	if _, err := left.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl","score":0}`)},
+	); err != nil {
+		t.Fatalf("insert u1: %v", err)
+	}
+	if err := mgr.FlushAll(); err != nil {
+		t.Fatalf("flush initial indexed write: %v", err)
+	}
+
+	var staged atomic.Bool
+	results, err := left.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func([]byte) ([]byte, bool, error) {
+			if staged.CompareAndSwap(false, true) {
+				if _, err := right.InsertBatch(
+					[][]byte{[]byte("u2")},
+					[][]byte{[]byte(`{"city":"sfo","score":2}`)},
+				); err != nil {
+					return nil, false, err
+				}
+			}
+			return []byte(`{"city":"sea","score":1}`), true, nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("results=%+v want matched modified", results)
+	}
+	if err := mgr.FlushAll(); err != nil {
+		t.Fatalf("FlushAll after update with staged indexed write: %v", err)
+	}
+	seaIDs, err := left.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find sea: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, seaIDs, []byte("u1"))
+	sfoIDs, err := left.FindByIndex("city", "sfo")
+	if err != nil {
+		t.Fatalf("find sfo: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, sfoIDs, []byte("u2"))
+}
+
+func TestCollectionUpdateBatchNoOpAllowsOtherCollectionRootDrift(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create users collection: %v", err)
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "teams"}); err != nil {
+		t.Fatalf("create teams collection: %v", err)
+	}
+	users, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open users collection: %v", err)
+	}
+	teams, err := mgr.OpenCollection("teams")
+	if err != nil {
+		t.Fatalf("open teams collection: %v", err)
+	}
+	if _, err := users.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl","score":0}`)},
+	); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	var callbackCalls atomic.Int32
+	results, err := users.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			call := callbackCalls.Add(1)
+			if _, err := teams.InsertBatch(
+				[][]byte{[]byte(fmt.Sprintf("team-%d", call))},
+				[][]byte{[]byte(fmt.Sprintf(`{"name":"team-%d"}`, call))},
+			); err != nil {
+				return nil, false, err
+			}
+			return current, false, nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || results[0].Modified {
+		t.Fatalf("results=%+v want matched and not modified", results)
+	}
+	if got := callbackCalls.Load(); got != 1 {
+		t.Fatalf("callback calls=%d want 1", got)
+	}
+}
+
+func TestCollectionRootDescriptorDeltaWrappersRejectNilReceiver(t *testing.T) {
+	var col *Collection
+	if _, err := col.buildRootDescriptorSystemDeltaIterator(0, 0, nil, nil, nil); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("buildRootDescriptorSystemDeltaIterator err=%v want ErrClosed", err)
+	}
+	if err := col.validateRootDescriptorSystemDelta(0, 0, nil, nil); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("validateRootDescriptorSystemDelta err=%v want ErrClosed", err)
 	}
 }
 
