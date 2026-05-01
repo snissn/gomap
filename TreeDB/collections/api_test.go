@@ -1346,6 +1346,57 @@ func TestCollectionIndexedWriteMemtablesReadUniqueAndFlush(t *testing.T) {
 	}
 }
 
+func TestCollectionIndexedWriteMemtablesReadFlushedDocumentWithBufferedRuns(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert flushed document: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush document: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{[]byte(`{"city":"sea"}`)},
+	); err != nil {
+		t.Fatalf("insert buffered document: %v", err)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get flushed document with buffered runs: %v", err)
+	}
+	if want := []byte(`{"city":"hnl"}`); !bytes.Equal(got, want) {
+		t.Fatalf("flushed document=%q want %q", got, want)
+	}
+	got, err = col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get buffered document: %v", err)
+	}
+	if want := []byte(`{"city":"sea"}`); !bytes.Equal(got, want) {
+		t.Fatalf("buffered document=%q want %q", got, want)
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesDefaultForIndexedSchemas(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -2326,6 +2377,33 @@ func TestCloneCollectionRunTablesSurvivesSourceReset(t *testing.T) {
 	}
 }
 
+func TestBufferedPrimaryRunIndexFindsNewestTable(t *testing.T) {
+	older := newCollectionRunTable(1)
+	setCollectionRunValue(older, []byte("u1"), []byte("older"))
+	older.Freeze()
+	newer := newCollectionRunTable(1)
+	setCollectionRunValue(newer, []byte("u1"), []byte("newer"))
+	newer.Freeze()
+	defer resetCollectionRunTable(older)
+	defer resetCollectionRunTable(newer)
+
+	index := newBufferedPrimaryRunIndex(0)
+	if err := addBufferedPrimaryRunIndexEntries(index, older); err != nil {
+		t.Fatalf("add older table: %v", err)
+	}
+	if err := addBufferedPrimaryRunIndexEntries(index, newer); err != nil {
+		t.Fatalf("add newer table: %v", err)
+	}
+	table, ok := index.lookup([]byte("u1"))
+	if !ok {
+		t.Fatal("lookup u1 missing")
+	}
+	value, _, flags, found := table.GetEntry([]byte("u1"))
+	if !found || flags&node.FlagTombstone != 0 || !bytes.Equal(value, []byte("newer")) {
+		t.Fatalf("lookup found=%v flags=%d value=%q want newer live value", found, flags, value)
+	}
+}
+
 func TestShouldFlushBufferedIndexedWritesAfterAddingBoundaries(t *testing.T) {
 	opts := CollectionOptions{
 		BufferedIndexedWriteMaxDocuments: 10,
@@ -2431,6 +2509,7 @@ func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
 	domain.rootRuns = map[string][]memtable.Table{collectionPrimaryRootName("other"): nil}
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
+	domain.primaryRunIndex = newBufferedPrimaryRunIndex(1)
 	domain.uniqueValueRuns = nil
 
 	rollbackBufferedIndexedDomain(domain, checkpoint)
@@ -2446,8 +2525,30 @@ func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
 	if _, ok := domain.rootRuns[collectionPrimaryRootName("users")]; !ok {
 		t.Fatalf("rootRuns=%v missing users primary root", domain.rootRuns)
 	}
+	if domain.primaryRunIndex != nil {
+		t.Fatal("rollback rebuilt lazy primary run index that was absent at checkpoint")
+	}
 	if _, ok := domain.uniqueValueRuns[collectionSecondaryRootName("users", "email")]; !ok {
 		t.Fatalf("uniqueValueRuns=%v missing users email root", domain.uniqueValueRuns)
+	}
+}
+
+func TestHasBufferedPrimaryRootRunsIgnoresSecondaryOnlyRuns(t *testing.T) {
+	domain := &collectionWriteDomain{
+		meta: CollectionMeta{Name: "users"},
+		rootRuns: map[string][]memtable.Table{
+			collectionSecondaryRootName("users", "email"): {newCollectionRunTable(0)},
+		},
+	}
+	if hasBufferedPrimaryRootRuns(domain, "users") {
+		t.Fatal("secondary-only buffered runs reported primary runs")
+	}
+	domain.rootRuns[collectionPrimaryRootName("users")] = []memtable.Table{newCollectionRunTable(0)}
+	if !hasBufferedPrimaryRootRuns(domain, "users") {
+		t.Fatal("primary buffered run not detected")
+	}
+	for _, tables := range domain.rootRuns {
+		resetCollectionTables(tables)
 	}
 }
 
