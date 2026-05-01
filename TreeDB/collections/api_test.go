@@ -19,6 +19,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/node"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -2307,6 +2308,24 @@ func TestBufferedPrimaryIDArenaCapAvoidsOverflow(t *testing.T) {
 	}
 }
 
+func TestCloneCollectionRunTablesSurvivesSourceReset(t *testing.T) {
+	table := newCollectionRunTable(1)
+	setCollectionRunValue(table, []byte("k"), []byte("value"))
+	table.Freeze()
+
+	cloned, err := cloneCollectionRunTables([]memtable.Table{table})
+	if err != nil {
+		t.Fatalf("clone tables: %v", err)
+	}
+	defer resetCollectionTables(cloned)
+	resetCollectionRunTable(table)
+
+	value, _, flags, found := cloned[0].GetEntry([]byte("k"))
+	if !found || flags&node.FlagTombstone != 0 || !bytes.Equal(value, []byte("value")) {
+		t.Fatalf("cloned entry found=%v flags=%d value=%q want live value", found, flags, value)
+	}
+}
+
 func TestShouldFlushBufferedIndexedWritesAfterAddingBoundaries(t *testing.T) {
 	opts := CollectionOptions{
 		BufferedIndexedWriteMaxDocuments: 10,
@@ -2376,14 +2395,15 @@ func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
 		roots: map[string]uint64{collectionPrimaryRootName("users"): 42},
 	}
 	domain := &collectionWriteDomain{
-		loaded:         true,
-		meta:           catalog.meta,
-		catalog:        catalog,
-		baseCommitSeq:  7,
-		baseSystemRoot: 11,
-		primaryRoot:    42,
-		count:          3,
-		bufferedBytes:  99,
+		loaded:          true,
+		meta:            catalog.meta,
+		catalog:         catalog,
+		baseCommitSeq:   7,
+		baseSystemRoot:  11,
+		primaryRoot:     42,
+		count:           3,
+		bufferedBytes:   99,
+		writeGeneration: 12,
 		rootRuns: map[string][]memtable.Table{
 			collectionPrimaryRootName("users"): nil,
 		},
@@ -2407,6 +2427,7 @@ func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
 	domain.primaryRoot = 300
 	domain.count = 400
 	domain.bufferedBytes = 500
+	domain.writeGeneration = 600
 	domain.rootRuns = map[string][]memtable.Table{collectionPrimaryRootName("other"): nil}
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
@@ -2419,8 +2440,8 @@ func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
 	if domain.baseCommitSeq != 7 || domain.baseSystemRoot != 11 || domain.primaryRoot != 42 {
 		t.Fatalf("roots after rollback commit=%d system=%d primary=%d", domain.baseCommitSeq, domain.baseSystemRoot, domain.primaryRoot)
 	}
-	if domain.count != 3 || domain.bufferedBytes != 99 {
-		t.Fatalf("counters after rollback count=%d bytes=%d", domain.count, domain.bufferedBytes)
+	if domain.count != 3 || domain.bufferedBytes != 99 || domain.writeGeneration != 12 {
+		t.Fatalf("counters after rollback count=%d bytes=%d generation=%d", domain.count, domain.bufferedBytes, domain.writeGeneration)
 	}
 	if _, ok := domain.rootRuns[collectionPrimaryRootName("users")]; !ok {
 		t.Fatalf("rootRuns=%v missing users primary root", domain.rootRuns)
@@ -4376,6 +4397,417 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesBatchesNonUniqueUpd
 	}
 	if len(seaIDs) != 1 || !bytes.Equal(seaIDs[0], []byte("u1")) {
 		t.Fatalf("flushed sea ids=%q want [u1]", seaIDs)
+	}
+}
+
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesAppendsToBufferedUpdates(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"a@example.com","city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+	before := d.State()
+
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sea")},
+	}); err != nil {
+		t.Fatalf("first UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("first batch was declined")
+	}
+	afterFirst := d.State()
+	if afterFirst.CommitSeq != before.CommitSeq {
+		t.Fatalf("first buffered batch advanced commit seq by %d, want 0", afterFirst.CommitSeq-before.CommitSeq)
+	}
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sfo")},
+	}); err != nil {
+		t.Fatalf("second UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("second batch was declined")
+	}
+	afterSecond := d.State()
+	if afterSecond.CommitSeq != before.CommitSeq {
+		t.Fatalf("second buffered batch advanced commit seq by %d, want 0", afterSecond.CommitSeq-before.CommitSeq)
+	}
+	seaIDs, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find sea city: %v", err)
+	}
+	if len(seaIDs) != 0 {
+		t.Fatalf("sea ids=%q want none after second buffered update", seaIDs)
+	}
+	sfoIDs, err := col.FindByIndex("city", "sfo")
+	if err != nil {
+		t.Fatalf("find sfo city: %v", err)
+	}
+	if len(sfoIDs) != 1 || !bytes.Equal(sfoIDs[0], []byte("u1")) {
+		t.Fatalf("sfo ids=%q want [u1]", sfoIDs)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered update batches: %v", err)
+	}
+	flushed := d.State()
+	if flushed.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("flush advanced commit seq by %d, want 1", flushed.CommitSeq-before.CommitSeq)
+	}
+}
+
+func newBufferedUsersUpdateCollection(t *testing.T) (*backenddb.DB, *Collection) {
+	t.Helper()
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"a@example.com","city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+	return d, col
+}
+
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleBufferedPlan(t *testing.T) {
+	_, col := newBufferedUsersUpdateCollection(t)
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sea")},
+	}); err != nil {
+		t.Fatalf("first UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("first batch was declined")
+	}
+
+	plan, err := col.buildUpdateBatchPlan([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sfo")},
+	}, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+	if err != nil {
+		t.Fatalf("build stale plan: %v", err)
+	}
+	defer plan.close()
+	if !plan.bufferedBase || plan.bufferedReadGeneration == 0 {
+		t.Fatalf("plan bufferedBase=%v generation=%d want buffered read", plan.bufferedBase, plan.bufferedReadGeneration)
+	}
+	if !col.bufferedUpdateBatchPlanStillCurrent(plan) {
+		t.Fatalf("fresh buffered plan was unexpectedly stale")
+	}
+
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("oak")},
+	}); err != nil {
+		t.Fatalf("second UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("second batch was declined")
+	}
+
+	err = col.withMutationLock(func() error {
+		buffered, err := col.bufferUpdateBatchPlanLocked(plan)
+		if buffered {
+			t.Fatalf("stale plan buffered successfully")
+		}
+		return err
+	})
+	if !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("buffer stale plan err=%v want ErrConcurrentMutation", err)
+	}
+}
+
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleZeroDeltaPlan(t *testing.T) {
+	_, col := newBufferedUsersUpdateCollection(t)
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sea")},
+	}); err != nil {
+		t.Fatalf("first UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("first batch was declined")
+	}
+
+	plan, err := col.buildUpdateBatchPlan([]UpdateBatchItem{
+		{
+			DocumentID: []byte("u1"),
+			Update: func(current []byte) ([]byte, bool, error) {
+				if !bytes.Contains(current, []byte(`"city":"sea"`)) {
+					return nil, false, fmt.Errorf("current document %s did not include buffered city", current)
+				}
+				return current, false, nil
+			},
+		},
+	}, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+	if err != nil {
+		t.Fatalf("build stale zero-delta plan: %v", err)
+	}
+	defer plan.close()
+	if len(plan.deltaTables) != 0 || !plan.bufferedBase || plan.bufferedReadGeneration == 0 {
+		t.Fatalf("plan deltas=%d bufferedBase=%v generation=%d want zero-delta buffered read", len(plan.deltaTables), plan.bufferedBase, plan.bufferedReadGeneration)
+	}
+	if !col.bufferedUpdateBatchPlanStillCurrent(plan) {
+		t.Fatalf("fresh zero-delta plan was unexpectedly stale")
+	}
+
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("oak")},
+	}); err != nil {
+		t.Fatalf("second UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("second batch was declined")
+	}
+	if col.bufferedUpdateBatchPlanStillCurrent(plan) {
+		t.Fatalf("stale zero-delta plan still appeared current")
+	}
+}
+
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReadsBufferedAfterRawCommit(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"a@example.com","city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+	before := d.State()
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sea")},
+	}); err != nil {
+		t.Fatalf("first UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("first batch was declined")
+	}
+	if err := d.Set([]byte("raw/unrelated"), []byte("value")); err != nil {
+		t.Fatalf("raw set: %v", err)
+	}
+	rawState := d.State()
+	if rawState.SystemRootPageID != before.SystemRootPageID {
+		t.Fatalf("raw write changed system root from %d to %d", before.SystemRootPageID, rawState.SystemRootPageID)
+	}
+	if rawState.CommitSeq == before.CommitSeq {
+		t.Fatalf("raw write did not advance commit seq: before=%d after=%d", before.CommitSeq, rawState.CommitSeq)
+	}
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sfo")},
+	}); err != nil {
+		t.Fatalf("second UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("second batch was declined")
+	}
+	afterSecondState := d.State()
+	if afterSecondState.CommitSeq != rawState.CommitSeq {
+		t.Fatalf("second buffered update advanced commit seq: raw=%d after=%d", rawState.CommitSeq, afterSecondState.CommitSeq)
+	}
+	if afterSecondState.SystemRootPageID != rawState.SystemRootPageID {
+		t.Fatalf("second buffered update changed system root from %d to %d", rawState.SystemRootPageID, afterSecondState.SystemRootPageID)
+	}
+	seaIDs, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find sea city: %v", err)
+	}
+	if len(seaIDs) != 0 {
+		t.Fatalf("sea ids=%q want none after raw commit plus second buffered update", seaIDs)
+	}
+	sfoIDs, err := col.FindByIndex("city", "sfo")
+	if err != nil {
+		t.Fatalf("find sfo city: %v", err)
+	}
+	if len(sfoIDs) != 1 || !bytes.Equal(sfoIDs[0], []byte("u1")) {
+		t.Fatalf("sfo ids=%q want [u1]", sfoIDs)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered updates: %v", err)
+	}
+	flushedState := d.State()
+	if flushedState.CommitSeq != afterSecondState.CommitSeq+1 {
+		t.Fatalf("flush commit seq=%d want %d", flushedState.CommitSeq, afterSecondState.CommitSeq+1)
+	}
+}
+
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesFlushesUnreadableBufferedInsert(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create users collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open users collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"a@example.com","city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert buffered document: %v", err)
+	}
+	beforeSchemaChange := d.State()
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "audit"}); err != nil {
+		t.Fatalf("create audit collection: %v", err)
+	}
+	afterSchemaChange := d.State()
+	if afterSchemaChange.SystemRootPageID == beforeSchemaChange.SystemRootPageID {
+		t.Fatalf("schema change did not advance system root: before=%d after=%d", beforeSchemaChange.SystemRootPageID, afterSchemaChange.SystemRootPageID)
+	}
+	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sea")},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	}
+	if !batched {
+		t.Fatalf("batched=%v results=%+v want batched", batched, results)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("results=%+v want one modified row from flushed buffered insert", results)
+	}
+	afterUpdate := d.State()
+	if afterUpdate.CommitSeq == afterSchemaChange.CommitSeq {
+		t.Fatalf("unreadable buffered insert was not flushed before update: commit seq stayed %d", afterUpdate.CommitSeq)
+	}
+	seaIDs, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find sea city: %v", err)
+	}
+	if len(seaIDs) != 1 || !bytes.Equal(seaIDs[0], []byte("u1")) {
+		t.Fatalf("sea ids=%q want [u1]", seaIDs)
+	}
+}
+
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReadsBufferedInsert(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	before := d.State()
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"a@example.com","city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert buffered document: %v", err)
+	}
+	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sea")},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	}
+	if !batched {
+		t.Fatalf("batched=%v results=%+v want batched", batched, results)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("results=%+v want one modified row", results)
+	}
+	after := d.State()
+	if after.CommitSeq != before.CommitSeq {
+		t.Fatalf("buffered insert+update advanced commit seq by %d, want 0", after.CommitSeq-before.CommitSeq)
+	}
+	hnlIDs, err := col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find hnl city: %v", err)
+	}
+	if len(hnlIDs) != 0 {
+		t.Fatalf("hnl ids=%q want none after buffered insert+update", hnlIDs)
+	}
+	seaIDs, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find sea city: %v", err)
+	}
+	if len(seaIDs) != 1 || !bytes.Equal(seaIDs[0], []byte("u1")) {
+		t.Fatalf("sea ids=%q want [u1]", seaIDs)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered insert+update: %v", err)
+	}
+	flushed := d.State()
+	if flushed.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("flush advanced commit seq by %d, want 1", flushed.CommitSeq-before.CommitSeq)
 	}
 }
 

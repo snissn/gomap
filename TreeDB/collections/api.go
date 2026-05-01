@@ -365,6 +365,7 @@ type bufferedIndexedCheckpoint struct {
 	primaryRoot     uint64
 	count           int
 	bufferedBytes   int64
+	writeGeneration uint64
 	rootRuns        map[string][]memtable.Table
 	rootPolicies    map[string]backenddb.OrderedRootStoragePolicy
 	rootBaseIDs     map[string]uint64
@@ -405,6 +406,7 @@ type collectionWriteDomain struct {
 	uniqueValueIndex  map[string]*bufferedUniqueValueIndex
 	count             int
 	bufferedBytes     int64
+	writeGeneration   uint64
 }
 
 func NewCollectionManager(database *backenddb.DB) *CollectionManager {
@@ -1439,6 +1441,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	domain.primaryRoot = catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
 	domain.count += len(plan.resultIDs)
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedBytes)
+	domain.writeGeneration++
 	c.meta = catalog.meta
 	if shouldFlushBufferedIndexedWrites(domain, catalog.meta.Options) {
 		flushStart := time.Now()
@@ -1533,6 +1536,7 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		primaryRoot:     domain.primaryRoot,
 		count:           domain.count,
 		bufferedBytes:   domain.bufferedBytes,
+		writeGeneration: domain.writeGeneration,
 		rootRuns:        cloneTableRunMap(domain.rootRuns),
 		rootPolicies:    cloneRootPolicyMap(domain.rootPolicies),
 		rootBaseIDs:     cloneUint64Map(domain.rootBaseIDs),
@@ -1554,6 +1558,7 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.primaryRoot = checkpoint.primaryRoot
 	domain.count = checkpoint.count
 	domain.bufferedBytes = checkpoint.bufferedBytes
+	domain.writeGeneration = checkpoint.writeGeneration
 	domain.rootRuns = checkpoint.rootRuns
 	domain.rootPolicies = checkpoint.rootPolicies
 	domain.rootBaseIDs = checkpoint.rootBaseIDs
@@ -1886,6 +1891,46 @@ func getBufferedRunEntry(runs []memtable.Table, key []byte) ([]byte, page.ValueP
 		}
 	}
 	return nil, page.ValuePtr{}, 0, false
+}
+
+func cloneCollectionRunTables(runs []memtable.Table) ([]memtable.Table, error) {
+	if len(runs) == 0 {
+		return nil, nil
+	}
+	out := make([]memtable.Table, 0, len(runs))
+	for _, run := range runs {
+		if run == nil {
+			out = append(out, nil)
+			continue
+		}
+		cloned, err := cloneCollectionRunTable(run)
+		if err != nil {
+			resetCollectionTables(out)
+			return nil, err
+		}
+		out = append(out, cloned)
+	}
+	return out, nil
+}
+
+func cloneCollectionRunTable(run memtable.Table) (memtable.Table, error) {
+	if run == nil {
+		return nil, nil
+	}
+	table := newCollectionRunTable(max(0, run.Len()))
+	it := run.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	for it.Valid() {
+		value, ptr, flags := it.UnsafeEntry()
+		table.SetEntrySteal(bytes.Clone(it.UnsafeKey()), bytes.Clone(value), ptr, flags)
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		resetCollectionRunTable(table)
+		return nil, err
+	}
+	table.Freeze()
+	return table, nil
 }
 
 type bufferedRootRunHeapItem struct {
@@ -3995,6 +4040,27 @@ type updateBatchPlan struct {
 	policies                    []backenddb.OrderedRootStoragePolicy
 	deltaTables                 []memtable.Table
 	canBufferIndexedUpdateBatch bool
+	bufferedBase                bool
+	bufferedReadGeneration      uint64
+	bufferedReadBlocked         bool
+}
+
+type updateBatchBufferedRead struct {
+	enabled         bool
+	primaryEntries  []updateBatchBufferedEntry
+	writeGeneration uint64
+}
+
+type updateBatchBufferedEntry struct {
+	value []byte
+	flags byte
+	found bool
+}
+
+type updateBatchCurrentDocument struct {
+	value    []byte
+	buffered bool
+	found    bool
 }
 
 func (plan *updateBatchPlan) close() {
@@ -4010,13 +4076,93 @@ func (plan *updateBatchPlan) close() {
 }
 
 func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, error) {
+	if c.shouldPlanUpdateBatchWithBufferedWrites(mode) {
+		useBufferedRead := true
+		for {
+			plan, err := c.buildUpdateBatchPlan(items, mode, useBufferedRead)
+			if err != nil {
+				return nil, err
+			}
+			if plan == nil {
+				return nil, nil
+			}
+			var results []UpdateBatchResult
+			replan := false
+			err = c.withMutationLock(func() error {
+				if len(plan.deltaTables) == 0 {
+					if plan.bufferedReadBlocked && useBufferedRead {
+						if err := c.flushBufferedWrites(); err != nil {
+							return err
+						}
+						useBufferedRead = false
+						replan = true
+						return nil
+					}
+					if plan.bufferedBase && !c.bufferedUpdateBatchPlanStillCurrent(plan) {
+						if useBufferedRead {
+							if err := c.flushBufferedWrites(); err != nil {
+								return err
+							}
+							useBufferedRead = false
+							replan = true
+							return nil
+						}
+						return ErrConcurrentMutation
+					}
+					if err := c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs); err != nil {
+						return err
+					}
+					c.meta = plan.meta
+					results = plan.results
+					return nil
+				}
+				buffered, bufferErr := c.bufferUpdateBatchPlanLocked(plan)
+				if bufferErr != nil {
+					if errors.Is(bufferErr, ErrConcurrentMutation) && useBufferedRead {
+						if err := c.flushBufferedWrites(); err != nil {
+							return err
+						}
+						useBufferedRead = false
+						replan = true
+						return nil
+					}
+					return bufferErr
+				}
+				if buffered {
+					c.meta = plan.meta
+					results = plan.results
+					return nil
+				}
+				if err := c.flushBufferedWrites(); err != nil {
+					return err
+				}
+				if useBufferedRead {
+					useBufferedRead = false
+					replan = true
+					return nil
+				}
+				var publishErr error
+				results, publishErr = c.publishUpdateBatchPlanLocked(plan)
+				return publishErr
+			})
+			plan.close()
+			if err != nil {
+				return nil, err
+			}
+			if replan {
+				continue
+			}
+			return results, nil
+		}
+	}
+
 	if err := c.withMutationLock(func() error {
 		return c.flushBufferedWrites()
 	}); err != nil {
 		return nil, err
 	}
 
-	plan, err := c.buildUpdateBatchPlan(items, mode)
+	plan, err := c.buildUpdateBatchPlan(items, mode, false)
 	if err != nil {
 		return nil, err
 	}
@@ -4060,13 +4206,135 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 	return results, err
 }
 
+func (c *Collection) bufferedUpdateBatchPlanStillCurrent(plan *updateBatchPlan) bool {
+	if plan == nil || !plan.bufferedBase {
+		return true
+	}
+	domain := c.writeDomain
+	if domain == nil {
+		return false
+	}
+	domain.mu.RLock()
+	defer domain.mu.RUnlock()
+	if domain.count == 0 {
+		return false
+	}
+	return updateBatchCanReadBufferedDomainLocked(domain, plan.meta, plan.baseSystemRoot) &&
+		plan.bufferedReadGeneration == domain.writeGeneration
+}
+
 func (c *Collection) withMutationLock(fn func() error) error {
 	unlockMutation := c.lockMutation()
 	defer unlockMutation()
 	return fn()
 }
 
-func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBatchMode) (*updateBatchPlan, error) {
+func (c *Collection) shouldPlanUpdateBatchWithBufferedWrites(mode updateBatchMode) bool {
+	if c == nil || c.writeDomain == nil || mode == updateBatchModeAny {
+		return false
+	}
+	domain := c.writeDomain
+	domain.mu.RLock()
+	defer domain.mu.RUnlock()
+	return domain.count > 0 && len(domain.rootRuns) > 0
+}
+
+func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64) bool {
+	if domain == nil || domain.count == 0 || len(domain.rootRuns) == 0 {
+		return false
+	}
+	if !domain.loaded || domain.catalog == nil {
+		return false
+	}
+	if domain.baseSystemRoot != baseSystemRoot {
+		return false
+	}
+	if !sameCollectionMeta(domain.meta, meta) {
+		return false
+	}
+	if len(domain.rootRuns[collectionPrimaryRootName(meta.Name)]) == 0 {
+		return false
+	}
+	return meta.Options.BufferedIndexedWrites && len(meta.Indexes) > 0
+}
+
+func readUpdateBatchCurrentDocument(snap *backenddb.Snapshot, primaryRoot uint64, itemIndex int, documentID []byte, buffered updateBatchBufferedRead) (updateBatchCurrentDocument, error) {
+	if buffered.enabled {
+		if itemIndex >= 0 && itemIndex < len(buffered.primaryEntries) {
+			entry := buffered.primaryEntries[itemIndex]
+			if entry.found {
+				if entry.flags&node.FlagTombstone != 0 {
+					return updateBatchCurrentDocument{buffered: true}, nil
+				}
+				return updateBatchCurrentDocument{value: entry.value, buffered: true, found: true}, nil
+			}
+		}
+	}
+	if primaryRoot == 0 {
+		return updateBatchCurrentDocument{}, nil
+	}
+	entry, err := snap.GetEntryAtRoot(primaryRoot, documentID)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return updateBatchCurrentDocument{}, nil
+	}
+	if err != nil {
+		return updateBatchCurrentDocument{}, err
+	}
+	return updateBatchCurrentDocument{value: entry.Value, found: true}, nil
+}
+
+const updateBatchBufferedPrimaryDirectProbeLimit = 1024
+
+func snapshotUpdateBatchBufferedPrimaryEntries(runs []memtable.Table, items []UpdateBatchItem) ([]updateBatchBufferedEntry, error) {
+	entries := make([]updateBatchBufferedEntry, len(items))
+	if len(runs) == 0 || len(items) == 0 {
+		return entries, nil
+	}
+	if len(runs) <= 1 || len(runs)*len(items) <= updateBatchBufferedPrimaryDirectProbeLimit {
+		for i, item := range items {
+			if value, _, flags, found := getBufferedRunEntry(runs, item.DocumentID); found {
+				entries[i] = updateBatchBufferedEntry{
+					value: bytes.Clone(value),
+					flags: flags,
+					found: true,
+				}
+			}
+		}
+		return entries, nil
+	}
+	targets := make(map[string]int, len(items))
+	for i, item := range items {
+		targets[string(item.DocumentID)] = i
+	}
+	for i := len(runs) - 1; i >= 0 && len(targets) > 0; i-- {
+		run := runs[i]
+		if run == nil {
+			continue
+		}
+		it := run.NewIterator(nil, nil)
+		for it.Valid() && len(targets) > 0 {
+			key := string(it.UnsafeKey())
+			if itemIndex, ok := targets[key]; ok && !entries[itemIndex].found {
+				value, _, flags := it.UnsafeEntry()
+				entries[itemIndex] = updateBatchBufferedEntry{
+					value: bytes.Clone(value),
+					flags: flags,
+					found: true,
+				}
+				delete(targets, key)
+			}
+			it.Next()
+		}
+		if err := it.Error(); err != nil {
+			_ = it.Close()
+			return nil, err
+		}
+		_ = it.Close()
+	}
+	return entries, nil
+}
+
+func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBatchMode, useBufferedRead bool) (*updateBatchPlan, error) {
 	results := make([]UpdateBatchResult, len(items))
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
@@ -4099,20 +4367,52 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	baseUserRoot := snapshotUserRoot(snap)
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
+	var bufferedRead updateBatchBufferedRead
+	var bufferedTemplateRuns []memtable.Table
+	defer func() { resetCollectionTables(bufferedTemplateRuns) }()
+	bufferedReadBlocked := false
+	if domain := c.writeDomain; useBufferedRead && domain != nil && mode != updateBatchModeAny {
+		domain.mu.RLock()
+		if updateBatchCanReadBufferedDomainLocked(domain, meta, baseSystemRoot) {
+			primaryRuns := domain.rootRuns[collectionPrimaryRootName(meta.Name)]
+			var primaryEntries []updateBatchBufferedEntry
+			primaryEntries, err = snapshotUpdateBatchBufferedPrimaryEntries(primaryRuns, items)
+			if err == nil && normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatTemplateV1 {
+				bufferedTemplateRuns, err = cloneCollectionRunTables(domain.rootRuns[collectionTemplateRootName(meta.Name)])
+			}
+			bufferedRead = updateBatchBufferedRead{
+				enabled:         true,
+				primaryEntries:  primaryEntries,
+				writeGeneration: domain.writeGeneration,
+			}
+		} else if domain.count > 0 && len(domain.rootRuns) > 0 {
+			bufferedReadBlocked = true
+		}
+		domain.mu.RUnlock()
+		if err != nil {
+			_ = snap.Close()
+			return nil, err
+		}
+		if len(bufferedTemplateRuns) > 0 {
+			plannerOptions = collectionOptionsWithBufferedTemplateV1RunsResolver(plannerOptions, bufferedTemplateRuns)
+		}
+	}
 
 	primaryRoot := catalog.rootID(collectionPrimaryRootName(meta.Name))
-	if primaryRoot == 0 {
+	if primaryRoot == 0 && !bufferedRead.enabled {
 		primaryRootName := collectionPrimaryRootName(meta.Name)
 		return &updateBatchPlan{
-			results:        results,
-			meta:           meta,
-			catalog:        catalog,
-			snap:           snap,
-			baseUserRoot:   baseUserRoot,
-			baseSystemRoot: baseSystemRoot,
-			baseCommitSeq:  baseCommitSeq,
-			rootNames:      []string{primaryRootName},
-			baseRootIDs:    map[string]uint64{primaryRootName: primaryRoot},
+			results:                results,
+			meta:                   meta,
+			catalog:                catalog,
+			snap:                   snap,
+			baseUserRoot:           baseUserRoot,
+			baseSystemRoot:         baseSystemRoot,
+			baseCommitSeq:          baseCommitSeq,
+			rootNames:              []string{primaryRootName},
+			baseRootIDs:            map[string]uint64{primaryRootName: primaryRoot},
+			bufferedReadGeneration: bufferedRead.writeGeneration,
+			bufferedReadBlocked:    bufferedReadBlocked,
 		}, nil
 	}
 	runtimes, err := (insertBatchPlanner{
@@ -4127,16 +4427,16 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	changed := make([]preparedBatchUpdate, 0, len(items))
 	changedDocuments := make([][]byte, 0, len(items))
 	for i, item := range items {
-		entry, err := snap.GetEntryAtRoot(primaryRoot, item.DocumentID)
-		if errors.Is(err, tree.ErrKeyNotFound) {
-			continue
-		}
+		current, err := readUpdateBatchCurrentDocument(snap, primaryRoot, i, item.DocumentID, bufferedRead)
 		if err != nil {
 			_ = snap.Close()
 			return nil, updateBatchItemError(i, err)
 		}
+		if !current.found {
+			continue
+		}
 		results[i].Matched = true
-		document, changedOne, err := item.Update(bytes.Clone(entry.Value))
+		document, changedOne, err := item.Update(bytes.Clone(current.value))
 		if err != nil {
 			_ = snap.Close()
 			return nil, updateBatchItemError(i, err)
@@ -4148,7 +4448,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			_ = snap.Close()
 			return nil, updateBatchItemError(i, errors.New("changed replacement document cannot be empty"))
 		}
-		if err := validateBSONReplacementPreservesID(entry.Value, document, plannerOptions); err != nil {
+		if err := validateBSONReplacementPreservesID(current.value, document, plannerOptions); err != nil {
 			_ = snap.Close()
 			return nil, updateBatchItemError(i, err)
 		}
@@ -4157,7 +4457,11 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			documentID: item.DocumentID,
 		}
 		if len(runtimes) > 0 {
-			prepared.oldState, err = loadDeleteIndexState(snap, catalog, item.DocumentID, entry.Value, runtimes, plannerOptions)
+			if current.buffered {
+				prepared.oldState, err = indexStateForDocument(current.value, runtimes, plannerOptions)
+			} else {
+				prepared.oldState, err = loadDeleteIndexState(snap, catalog, item.DocumentID, current.value, runtimes, plannerOptions)
+			}
 			if err != nil {
 				_ = snap.Close()
 				return nil, updateBatchItemError(i, err)
@@ -4169,15 +4473,18 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	if len(changed) == 0 {
 		primaryRootName := collectionPrimaryRootName(meta.Name)
 		return &updateBatchPlan{
-			results:        results,
-			meta:           meta,
-			catalog:        catalog,
-			snap:           snap,
-			baseUserRoot:   baseUserRoot,
-			baseSystemRoot: baseSystemRoot,
-			baseCommitSeq:  baseCommitSeq,
-			rootNames:      []string{primaryRootName},
-			baseRootIDs:    map[string]uint64{primaryRootName: primaryRoot},
+			results:                results,
+			meta:                   meta,
+			catalog:                catalog,
+			snap:                   snap,
+			baseUserRoot:           baseUserRoot,
+			baseSystemRoot:         baseSystemRoot,
+			baseCommitSeq:          baseCommitSeq,
+			rootNames:              []string{primaryRootName},
+			baseRootIDs:            map[string]uint64{primaryRootName: primaryRoot},
+			bufferedBase:           bufferedRead.enabled,
+			bufferedReadGeneration: bufferedRead.writeGeneration,
+			bufferedReadBlocked:    bufferedReadBlocked,
 		}, nil
 	}
 
@@ -4364,6 +4671,9 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		rootNames:                   rootNames,
 		baseRootIDs:                 baseRootIDs,
 		canBufferIndexedUpdateBatch: canBufferIndexedUpdateBatch,
+		bufferedBase:                bufferedRead.enabled,
+		bufferedReadGeneration:      bufferedRead.writeGeneration,
+		bufferedReadBlocked:         bufferedReadBlocked,
 		policies:                    policies,
 		deltaTables:                 deltaTables,
 	}, nil
@@ -4447,9 +4757,14 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
 	if domain.count != 0 {
-		// The caller retries from the normal pre-plan flush path so a plan built
-		// before a concurrent buffered write is not published against stale roots.
-		return false, ErrConcurrentMutation
+		if !plan.bufferedBase || !updateBatchCanReadBufferedDomainLocked(domain, plan.meta, plan.baseSystemRoot) {
+			// The caller retries from the normal pre-plan flush path so a plan built
+			// before a concurrent buffered write is not published against stale roots.
+			return false, ErrConcurrentMutation
+		}
+		if plan.bufferedReadGeneration != domain.writeGeneration {
+			return false, ErrConcurrentMutation
+		}
 	}
 	if err := c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs); err != nil {
 		return false, err
@@ -4469,7 +4784,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		}
 		stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, table.Size())
 	}
-	if plan.catalog != nil {
+	if domain.count == 0 && plan.catalog != nil {
 		c.initializeWriteDomainFromCatalogLocked(domain, plan.catalog, plan.baseCommitSeq, plan.baseSystemRoot)
 	}
 	if domain.rootPolicies == nil {
@@ -4495,6 +4810,8 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		}
 		if len(domain.rootRuns[rootName]) == 0 {
 			domain.rootBaseIDs[rootName] = baseRoot
+		} else if domain.rootBaseIDs[rootName] != baseRoot {
+			return false, errConcurrentRootModification(plan.meta.Name, rootName)
 		}
 		domain.rootPolicies[rootName] = plan.policies[i]
 		domain.rootRuns[rootName] = append(domain.rootRuns[rootName], table)
@@ -4511,6 +4828,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	}
 	domain.count += modifiedCount
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedBytes)
+	domain.writeGeneration++
 	c.meta = plan.meta
 	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
 		if err := c.flushBufferedIndexedLocked(domain); err != nil {
