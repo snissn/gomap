@@ -2921,6 +2921,27 @@ func TestCollectionUpdateCombinerMaxBatchOneRecoversCallbackPanic(t *testing.T) 
 	}
 }
 
+func TestCollectionUpdateCombinerUpdateReturnsWhenCombinerStops(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	combiner := &collectionUpdateCombiner{
+		maxBatch: 8,
+		requests: make(chan collectionUpdateCombineRequest, 1),
+		done:     done,
+	}
+
+	matched, modified, err := combiner.update(&Collection{}, []byte("u1"), func([]byte) ([]byte, bool, error) {
+		t.Fatal("update callback should not run after combiner stop")
+		return nil, false, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "stopped before completing request") {
+		t.Fatalf("err=%v want stopped error", err)
+	}
+	if matched || modified {
+		t.Fatalf("matched=%v modified=%v want false,false", matched, modified)
+	}
+}
+
 func TestCollectionUpdateCombinerDuplicateIDsPreserveOrder(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

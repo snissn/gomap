@@ -3085,7 +3085,16 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 	if !combiner.enqueue(req) {
 		return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
 	}
-	result := <-done
+	var result collectionUpdateCombineResult
+	select {
+	case result = <-done:
+	case <-combiner.done:
+		select {
+		case result = <-done:
+		default:
+			return false, false, errors.New("collections: update combiner stopped before completing request")
+		}
+	}
 	return result.matched, result.modified, result.err
 }
 
