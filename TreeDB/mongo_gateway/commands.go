@@ -224,7 +224,7 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 		if modifiedOne {
 			modified = 1
 		}
-	} else if len(parsed) > 1 && !hasDuplicateKey {
+	} else if len(parsed) > 1 && !hasDuplicateKey && !collectionHasSecondaryUniqueIndexes(col) {
 		matched, modified, err = runMongoUpdateBatch(col, parsed)
 		if err != nil {
 			matched, modified, err = runMongoUpdatesSequential(col, parsed)
@@ -270,12 +270,12 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	if multi, err := optionalBoolField(update, "multi"); err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 	} else if multi {
-		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: "Mongo gateway update currently supports updateOne only"}
+		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update currently supports updateOne only", index)}
 	}
 	if upsert, err := optionalBoolField(update, "upsert"); err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 	} else if upsert {
-		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: "Mongo gateway update currently does not support upsert"}
+		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update currently does not support upsert", index)}
 	}
 	updateDoc, err := requiredDocumentField(update, "u")
 	if err != nil {
@@ -377,7 +377,7 @@ func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpda
 func applyMongoUpdateToStoredDocument(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, update mongoUpdateItem, stored []byte) ([]byte, bool, error) {
 	raw, err := storedDocumentToBSON(col, materializer, stored)
 	if err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("updates[%d]: %w", update.index, err)
 	}
 	updated, changed, err := applySetUpdate(raw, update.updateDoc)
 	if err != nil {
@@ -388,7 +388,7 @@ func applyMongoUpdateToStoredDocument(col *collections.Collection, materializer 
 		return nil, false, fmt.Errorf("updates[%d]: %w", update.index, err)
 	}
 	if !bytes.Equal(updatedKey, update.key) {
-		return nil, false, errors.New("Mongo gateway update cannot modify _id")
+		return nil, false, fmt.Errorf("updates[%d]: Mongo gateway update cannot modify _id", update.index)
 	}
 	if !changed {
 		return nil, false, nil
@@ -478,12 +478,8 @@ func (c *mongoUpdateCoalescer) enqueue(req mongoUpdateCoalescerRequest) bool {
 	if c.stopped {
 		return false
 	}
-	select {
-	case c.requests <- req:
-		return true
-	default:
-		return false
-	}
+	c.requests <- req
+	return true
 }
 
 func (c *mongoUpdateCoalescer) stop() {
@@ -522,13 +518,27 @@ func (c *mongoUpdateCoalescer) retireIdle() bool {
 		stopped = c.closeRequests()
 	}
 	if !stopped {
+		if c.isStopped() {
+			c.drainRequestsDirect()
+			return true
+		}
 		return false
 	}
+	c.drainRequestsDirect()
+	return true
+}
+
+func (c *mongoUpdateCoalescer) isStopped() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.stopped
+}
+
+func (c *mongoUpdateCoalescer) drainRequestsDirect() {
 	for req := range c.requests {
 		matched, modified, err := runMongoUpdateOne(req.col, req.item)
 		req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
 	}
-	return true
 }
 
 func (c *mongoUpdateCoalescer) run() {
@@ -605,11 +615,14 @@ drained:
 }
 
 func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
-	if len(batch) == 1 || mongoUpdateCoalescerHasDuplicateKeys(batch) {
-		for _, req := range batch {
-			matched, modified, err := runMongoUpdateOne(req.col, req.item)
-			req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
-		}
+	if len(batch) == 0 {
+		return
+	}
+	if len(batch) == 1 ||
+		mongoUpdateCoalescerHasDuplicateKeys(batch) ||
+		!mongoUpdateCoalescerUsesSingleCollection(batch) ||
+		collectionHasSecondaryUniqueIndexes(batch[0].col) {
+		runMongoUpdateCoalescerSequential(batch)
 		return
 	}
 	updates := make([]mongoUpdateItem, len(batch))
@@ -618,10 +631,7 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 	}
 	results, err := runMongoUpdateBatchResults(batch[0].col, updates)
 	if err != nil || len(results) != len(batch) {
-		for _, req := range batch {
-			matched, modified, err := runMongoUpdateOne(req.col, req.item)
-			req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
-		}
+		runMongoUpdateCoalescerSequential(batch)
 		return
 	}
 	for i, req := range batch {
@@ -638,6 +648,41 @@ func mongoUpdateCoalescerHasDuplicateKeys(batch []mongoUpdateCoalescerRequest) b
 			return true
 		}
 		seen[key] = struct{}{}
+	}
+	return false
+}
+
+func mongoUpdateCoalescerUsesSingleCollection(batch []mongoUpdateCoalescerRequest) bool {
+	if len(batch) == 0 {
+		return true
+	}
+	col := batch[0].col
+	if col == nil {
+		return false
+	}
+	for _, req := range batch[1:] {
+		if !col.SameCachedCatalog(req.col) {
+			return false
+		}
+	}
+	return true
+}
+
+func runMongoUpdateCoalescerSequential(batch []mongoUpdateCoalescerRequest) {
+	for _, req := range batch {
+		matched, modified, err := runMongoUpdateOne(req.col, req.item)
+		req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
+	}
+}
+
+func collectionHasSecondaryUniqueIndexes(col *collections.Collection) bool {
+	if col == nil {
+		return false
+	}
+	for _, idx := range col.Meta().Indexes {
+		if idx.Unique {
+			return true
+		}
 	}
 	return false
 }

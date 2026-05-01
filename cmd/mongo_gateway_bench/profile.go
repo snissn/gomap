@@ -20,18 +20,21 @@ const (
 )
 
 type profileRecorder struct {
-	dir                  string
-	blockRate            int
-	mutexFraction        int
-	traceEnabled         bool
-	heapGC               bool
-	createdAt            time.Time
-	resultPath           string
-	manifestPath         string
-	mu                   sync.Mutex
-	seenNames            map[string]int
-	artifacts            []profilePhaseArtifact
-	profilingRatesActive bool
+	dir                   string
+	blockRate             int
+	mutexFraction         int
+	traceEnabled          bool
+	heapGC                bool
+	createdAt             time.Time
+	resultPath            string
+	manifestPath          string
+	mu                    sync.Mutex
+	phaseMu               sync.Mutex
+	seenNames             map[string]int
+	artifacts             []profilePhaseArtifact
+	blockProfileActive    bool
+	mutexProfileActive    bool
+	previousMutexFraction int
 }
 
 type profileManifest struct {
@@ -48,18 +51,18 @@ type profileManifest struct {
 }
 
 type profilePhaseArtifact struct {
-	Phase          string  `json:"phase"`
-	Prefix         string  `json:"prefix"`
-	StartedAt      string  `json:"started_at"`
-	DurationMillis float64 `json:"duration_ms"`
-	CPUProfile     string  `json:"cpu_profile,omitempty"`
-	HeapProfile    string  `json:"heap_profile,omitempty"`
-	AllocsProfile  string  `json:"allocs_profile,omitempty"`
-	BlockProfile   string  `json:"block_profile,omitempty"`
-	MutexProfile   string  `json:"mutex_profile,omitempty"`
-	GoroutineDump  string  `json:"goroutine_dump,omitempty"`
-	Trace          string  `json:"trace,omitempty"`
-	Error          string  `json:"error,omitempty"`
+	Phase            string  `json:"phase"`
+	Prefix           string  `json:"prefix"`
+	StartedAt        string  `json:"started_at"`
+	DurationMillis   float64 `json:"duration_ms"`
+	CPUProfile       string  `json:"cpu_profile,omitempty"`
+	HeapProfile      string  `json:"heap_profile,omitempty"`
+	AllocsProfile    string  `json:"allocs_profile,omitempty"`
+	BlockProfile     string  `json:"block_profile,omitempty"`
+	MutexProfile     string  `json:"mutex_profile,omitempty"`
+	GoroutineProfile string  `json:"goroutine_profile,omitempty"`
+	Trace            string  `json:"trace,omitempty"`
+	Error            string  `json:"error,omitempty"`
 }
 
 type activeProfilePhase struct {
@@ -97,11 +100,11 @@ func newProfileRecorder(cfg config) (*profileRecorder, error) {
 	}
 	if recorder.blockRate > 0 {
 		runtime.SetBlockProfileRate(recorder.blockRate)
-		recorder.profilingRatesActive = true
+		recorder.blockProfileActive = true
 	}
 	if recorder.mutexFraction > 0 {
-		runtime.SetMutexProfileFraction(recorder.mutexFraction)
-		recorder.profilingRatesActive = true
+		recorder.previousMutexFraction = runtime.SetMutexProfileFraction(recorder.mutexFraction)
+		recorder.mutexProfileActive = true
 	}
 	return recorder, nil
 }
@@ -128,22 +131,37 @@ func (r *profileRecorder) ResultPath() string {
 }
 
 func (r *profileRecorder) Close() {
-	if r == nil || !r.profilingRatesActive {
+	if r == nil {
 		return
 	}
-	runtime.SetBlockProfileRate(0)
-	runtime.SetMutexProfileFraction(0)
-	r.profilingRatesActive = false
+	// Block and mutex profiling knobs are process-global. The runtime exposes
+	// the previous mutex fraction but not the previous block profile rate, so
+	// Close restores only the setting it can restore without guessing.
+	if r.mutexProfileActive {
+		runtime.SetMutexProfileFraction(r.previousMutexFraction)
+		r.mutexProfileActive = false
+	}
+	r.blockProfileActive = false
 }
 
-func (r *profileRecorder) RunPhase(name string, run func() (phaseResult, error)) (phaseResult, error) {
+func (r *profileRecorder) RunPhase(name string, run func() (phaseResult, error)) (result phaseResult, err error) {
+	r.phaseMu.Lock()
+	defer r.phaseMu.Unlock()
 	phase, startErr := r.startPhase(name)
 	if startErr != nil {
 		return phaseResult{}, startErr
 	}
-	result, runErr := run()
-	stopErr := phase.stop(runErr)
-	return result, errors.Join(runErr, stopErr)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			stopErr := phase.stop(fmt.Errorf("panic: %v", recovered))
+			if stopErr != nil {
+				err = errors.Join(err, stopErr)
+			}
+			panic(recovered)
+		}
+		err = errors.Join(err, phase.stop(err))
+	}()
+	return run()
 }
 
 func (r *profileRecorder) WriteResult(result *benchmarkResult) error {
@@ -205,6 +223,7 @@ func (r *profileRecorder) startPhase(name string) (*activeProfilePhase, error) {
 	phase.artifact.CPUProfile = filepath.Base(cpuPath)
 	if err := pprof.StartCPUProfile(cpuFile); err != nil {
 		_ = cpuFile.Close()
+		_ = os.Remove(cpuPath)
 		return nil, err
 	}
 	phase.cpuActive = true
@@ -213,14 +232,18 @@ func (r *profileRecorder) startPhase(name string) (*activeProfilePhase, error) {
 		tracePath := filepath.Join(r.dir, prefix+".trace.out")
 		traceFile, err := createProfileFile(tracePath)
 		if err != nil {
-			phase.stop(err)
-			return nil, err
+			stopErr := phase.stop(err)
+			return nil, errors.Join(err, stopErr)
 		}
 		phase.traceFile = traceFile
 		phase.artifact.Trace = filepath.Base(tracePath)
 		if err := trace.Start(traceFile); err != nil {
-			phase.stop(err)
-			return nil, err
+			_ = traceFile.Close()
+			_ = os.Remove(tracePath)
+			phase.traceFile = nil
+			phase.artifact.Trace = ""
+			stopErr := phase.stop(err)
+			return nil, errors.Join(err, stopErr)
 		}
 		phase.traceOn = true
 	}
@@ -281,7 +304,7 @@ func (p *activeProfilePhase) writeRuntimeProfiles() []error {
 		{name: "allocs", set: func(path string) { p.artifact.AllocsProfile = path }, want: true},
 		{name: "block", set: func(path string) { p.artifact.BlockProfile = path }, want: p.recorder.blockRate > 0},
 		{name: "mutex", set: func(path string) { p.artifact.MutexProfile = path }, want: p.recorder.mutexFraction > 0},
-		{name: "goroutine", set: func(path string) { p.artifact.GoroutineDump = path }, want: true},
+		{name: "goroutine", set: func(path string) { p.artifact.GoroutineProfile = path }, want: true},
 	}
 	var errs []error
 	for _, profile := range profiles {
@@ -301,7 +324,7 @@ func (p *activeProfilePhase) writeRuntimeProfiles() []error {
 	return errs
 }
 
-func writeRuntimeProfile(name, path string) error {
+func writeRuntimeProfile(name, path string) (err error) {
 	profile := pprof.Lookup(name)
 	if profile == nil {
 		return fmt.Errorf("runtime profile %q is unavailable", name)
@@ -310,16 +333,20 @@ func writeRuntimeProfile(name, path string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		err = errors.Join(err, file.Close())
+	}()
 	return profile.WriteTo(file, 0)
 }
 
-func writeProfileJSONFile(path string, value any) error {
+func writeProfileJSONFile(path string, value any) (err error) {
 	file, err := createProfileFile(path)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		err = errors.Join(err, file.Close())
+	}()
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(value)

@@ -536,6 +536,47 @@ func TestInsertBatchPlanCheckPersistedConflictsRejectsMissingInputs(t *testing.T
 	}
 }
 
+func TestInsertBatchPlanCheckPersistedConflictsRejectsIncompleteDerivedInputs(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+
+	catalog := &collectionCatalog{
+		meta:  CollectionMeta{Name: "users"},
+		roots: map[string]uint64{},
+	}
+	err = (&insertBatchPlan{resultIDs: [][]byte{[]byte("u1")}}).checkPersistedConflicts(snap, catalog)
+	if err == nil || !strings.Contains(err.Error(), "missing primary keys") {
+		t.Fatalf("checkPersistedConflicts err=%v want missing primary keys", err)
+	}
+
+	catalog.meta.Indexes = []IndexDefinition{{Name: "email", Field: "email", Unique: true}}
+	catalog.roots[collectionSecondaryRootName("users", "email")] = 2
+	err = (&insertBatchPlan{
+		resultIDs:   [][]byte{[]byte("u1")},
+		primaryKeys: [][]byte{[]byte("u1")},
+	}).checkPersistedConflicts(snap, catalog)
+	if err == nil || !strings.Contains(err.Error(), "missing unique probe runs") {
+		t.Fatalf("checkPersistedConflicts err=%v want missing unique probe runs", err)
+	}
+
+	err = (&insertBatchPlan{
+		resultIDs:          [][]byte{[]byte("u1")},
+		primaryKeys:        [][]byte{[]byte("u1")},
+		uniqueProbeRunsSet: true,
+	}).checkPersistedConflicts(snap, catalog)
+	if err != nil {
+		t.Fatalf("checkPersistedConflicts with built empty probes: %v", err)
+	}
+}
+
 func TestInsertBatchPlanner_FailFastDuplicatesBeforePayloadConstruction(t *testing.T) {
 	builds := 0
 	planner := insertBatchPlanner{
