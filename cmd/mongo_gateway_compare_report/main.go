@@ -281,7 +281,7 @@ func matchingMongoRecord(key baseCellKey, treeConfig string, mongos map[string]*
 	if len(mongos) == 1 {
 		for mongoConfig, record := range mongos {
 			mongoScenario := scalingScenarioSuffix(mongoConfig)
-			if treeScenario == "" || mongoScenario == "" || treeScenario == mongoScenario {
+			if treeScenario == mongoScenario {
 				return record, nil
 			}
 		}
