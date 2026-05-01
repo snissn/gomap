@@ -438,6 +438,9 @@ type mongoUpdateCoalescerResult struct {
 }
 
 func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
+	if collectionHasSecondaryUniqueIndexes(col) {
+		return runMongoUpdateOne(col, update)
+	}
 	coalescer := s.mongoUpdateCoalescer(name)
 	if coalescer == nil {
 		return runMongoUpdateOne(col, update)
@@ -762,11 +765,11 @@ func collectionUpdateBatchErrorIndex(err error) (int, bool) {
 	if err == nil {
 		return 0, false
 	}
-	var index int
-	if _, scanErr := fmt.Sscanf(err.Error(), "collections: update batch index %d:", &index); scanErr != nil {
-		return 0, false
+	var itemErr *collections.UpdateBatchItemError
+	if errors.As(err, &itemErr) {
+		return itemErr.Index, true
 	}
-	return index, true
+	return 0, false
 }
 
 func mongoUpdateCoalescerHasDuplicateKeys(batch []mongoUpdateCoalescerRequest) bool {

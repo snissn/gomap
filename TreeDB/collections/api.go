@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
-	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -73,6 +72,27 @@ type UpdateBatchItem struct {
 type UpdateBatchResult struct {
 	Matched  bool
 	Modified bool
+}
+
+// UpdateBatchItemError wraps an error produced while preparing or applying one
+// item in an UpdateBatch call.
+type UpdateBatchItemError struct {
+	Index int
+	Err   error
+}
+
+func (e *UpdateBatchItemError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("collections: update batch index %d: %v", e.Index, e.Err)
+}
+
+func (e *UpdateBatchItemError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
 }
 
 func IsDuplicateKeyError(err error) bool {
@@ -625,7 +645,7 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 }
 
 func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Collection, bool) {
-	if m == nil || m.db == nil || m.isClosing() {
+	if m.isClosing() {
 		return nil, false
 	}
 	state := m.db.State()
@@ -2961,6 +2981,7 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 // When the collection write domain combines concurrent updates, update may run
 // on an internal combiner goroutine. The callback must not rely on caller
 // goroutine behavior such as recover, runtime.Goexit, or testing.T.Fatal.
+// Callback panics are recovered and returned as errors.
 func (c *Collection) Update(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
 	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
 		return false, false, err
@@ -3073,6 +3094,13 @@ func validateUpdateBatchItems(items []UpdateBatchItem) error {
 	return nil
 }
 
+func updateBatchItemError(index int, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &UpdateBatchItemError{Index: index, Err: err}
+}
+
 type collectionUpdateCombiner struct {
 	maxBatch int
 	idleTTL  time.Duration
@@ -3084,10 +3112,11 @@ type collectionUpdateCombiner struct {
 }
 
 type collectionUpdateCombineRequest struct {
-	collection *Collection
-	documentID []byte
-	update     func(current []byte) (replacement []byte, changed bool, err error)
-	done       chan collectionUpdateCombineResult
+	collection  *Collection
+	documentID  []byte
+	documentKey string
+	update      func(current []byte) (replacement []byte, changed bool, err error)
+	done        chan collectionUpdateCombineResult
 }
 
 type collectionUpdateCombineResult struct {
@@ -3153,10 +3182,11 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 	}
 	done := make(chan collectionUpdateCombineResult, 1)
 	req := collectionUpdateCombineRequest{
-		collection: c,
-		documentID: bytes.Clone(documentID),
-		update:     update,
-		done:       done,
+		collection:  c,
+		documentID:  bytes.Clone(documentID),
+		documentKey: string(documentID),
+		update:      update,
+		done:        done,
 	}
 	if !combiner.enqueue(req) {
 		return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
@@ -3329,7 +3359,7 @@ func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionU
 func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombineRequest) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			completeUpdateCombineBatchWithError(batch, fmt.Errorf("collections: update combiner panic (%T): %v\n%s", recovered, recovered, debug.Stack()))
+			completeUpdateCombineBatchWithError(batch, collectionUpdatePanicError("combiner", recovered))
 		}
 	}()
 	if len(batch) == 1 || collectionUpdateCombineHasDuplicateIDs(batch) {
@@ -3367,13 +3397,17 @@ func runUpdateCombineDirect(req collectionUpdateCombineRequest) collectionUpdate
 	return collectionUpdateCombineResult{matched: matched, modified: modified, err: err}
 }
 
+func collectionUpdatePanicError(where string, recovered any) error {
+	return fmt.Errorf("collections: update %s panic (%T): %v", where, recovered, recovered)
+}
+
 func recoverCollectionUpdateCallback(update func(current []byte) (replacement []byte, changed bool, err error)) func(current []byte) (replacement []byte, changed bool, err error) {
 	return func(current []byte) (replacement []byte, changed bool, err error) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				replacement = nil
 				changed = false
-				err = fmt.Errorf("collections: update callback panic (%T): %v\n%s", recovered, recovered, debug.Stack())
+				err = collectionUpdatePanicError("callback", recovered)
 			}
 		}()
 		return update(current)
@@ -3409,7 +3443,10 @@ func collectionUpdateCombineHasDuplicateIDs(batch []collectionUpdateCombineReque
 	}
 	seen := make(map[string]struct{}, len(batch))
 	for _, req := range batch {
-		key := string(req.documentID)
+		key := req.documentKey
+		if key == "" {
+			key = string(req.documentID)
+		}
 		if _, ok := seen[key]; ok {
 			return true
 		}
@@ -3867,24 +3904,24 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, requireNoSeco
 		}
 		if err != nil {
 			_ = snap.Close()
-			return nil, fmt.Errorf("collections: update batch index %d: %w", i, err)
+			return nil, updateBatchItemError(i, err)
 		}
 		results[i].Matched = true
 		document, changedOne, err := item.Update(bytes.Clone(entry.Value))
 		if err != nil {
 			_ = snap.Close()
-			return nil, fmt.Errorf("collections: update batch index %d: %w", i, err)
+			return nil, updateBatchItemError(i, err)
 		}
 		if !changedOne {
 			continue
 		}
 		if len(document) == 0 {
 			_ = snap.Close()
-			return nil, fmt.Errorf("collections: update batch index %d: changed replacement document cannot be empty", i)
+			return nil, updateBatchItemError(i, errors.New("changed replacement document cannot be empty"))
 		}
 		if err := validateBSONReplacementPreservesID(entry.Value, document, plannerOptions); err != nil {
 			_ = snap.Close()
-			return nil, fmt.Errorf("collections: update batch index %d: %w", i, err)
+			return nil, updateBatchItemError(i, err)
 		}
 		prepared := preparedBatchUpdate{
 			itemIndex:  i,
@@ -3894,7 +3931,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, requireNoSeco
 			prepared.oldState, err = loadDeleteIndexState(snap, catalog, item.DocumentID, entry.Value, runtimes, plannerOptions)
 			if err != nil {
 				_ = snap.Close()
-				return nil, fmt.Errorf("collections: update batch index %d: %w", i, err)
+				return nil, updateBatchItemError(i, err)
 			}
 		}
 		changed = append(changed, prepared)
@@ -3915,7 +3952,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, requireNoSeco
 	for i, document := range changedDocuments {
 		if _, _, _, err := prepareInsertDocuments([][]byte{document}, plannerOptions); err != nil {
 			_ = snap.Close()
-			return nil, fmt.Errorf("collections: update batch index %d: %w", changed[i].itemIndex, err)
+			return nil, updateBatchItemError(changed[i].itemIndex, err)
 		}
 	}
 	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments(changedDocuments, plannerOptions)
@@ -3936,7 +3973,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, requireNoSeco
 			changed[i].newState, err = indexStateForDocument(changed[i].document, runtimes, plannerOptions)
 			if err != nil {
 				_ = snap.Close()
-				return nil, fmt.Errorf("collections: update batch index %d: %w", changed[i].itemIndex, err)
+				return nil, updateBatchItemError(changed[i].itemIndex, err)
 			}
 			changed[i].indexStateChanged = !documentIndexStatesEqual(changed[i].oldState, changed[i].newState)
 		}
@@ -3946,7 +3983,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, requireNoSeco
 		if changed[i].indexStateChanged {
 			if err := rejectReplaceUniqueConflicts(snap, catalog, runtimes, changed[i].newState, changed[i].documentID, batchReplacements); err != nil {
 				_ = snap.Close()
-				return nil, fmt.Errorf("collections: update batch index %d: %w", changed[i].itemIndex, err)
+				return nil, updateBatchItemError(changed[i].itemIndex, err)
 			}
 		}
 	}

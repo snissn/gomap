@@ -235,13 +235,14 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	}
 	var uniqueProbeRuns []collectionUniqueProbeRun
 	var allUniqueProbeRuns []collectionUniqueProbeRun
-	allUniqueProbeRunsBuilt := false
-	if preflight.snapshot != nil && len(preflight.uniqueIndexRootIDs) > 0 {
+	allUniqueProbeRunsBuilt := true
+	if len(uniqueProbes) > 0 {
 		allUniqueProbeRuns, err = buildUniqueProbeRunsFromSorted(uniqueProbes, nil)
 		if err != nil {
 			return nil, err
 		}
-		allUniqueProbeRunsBuilt = true
+	}
+	if preflight.snapshot != nil && len(preflight.uniqueIndexRootIDs) > 0 {
 		uniqueProbeRuns = uniqueProbeRunsForPreflight(allUniqueProbeRuns, preflight)
 		if err := preflight.checkUniqueConflicts(uniqueProbeRuns); err != nil {
 			return nil, err
@@ -359,7 +360,7 @@ func (plan *insertBatchPlan) checkPersistedConflicts(snap *backenddb.Snapshot, c
 	uniqueRootIDs := uniqueIndexRootIDs(catalog)
 	if len(plan.resultIDs) > 0 && len(uniqueRootIDs) > 0 && !plan.allUniqueProbeRunsBuilt {
 		if !plan.uniqueProbeCandidatesBuilt {
-			return errors.New("collections: insert conflict check missing unique probe runs")
+			return errors.New("collections: insert conflict check missing unique probe candidates")
 		}
 		runs, err := buildUniqueProbeRunsFromSorted(plan.uniqueProbeCandidates, func(indexName string) bool {
 			return uniqueRootIDs[indexName] != 0

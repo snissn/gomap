@@ -476,6 +476,25 @@ func TestInsertBatchPlanner_BuildsUniqueProbePrefixesOnlyForPersistedRoots(t *te
 	if got, want := probe.lastHasPrefixesRootID, uint64(77); got != want {
 		t.Fatalf("HasPrefixesAtRoot root=%d want %d", got, want)
 	}
+
+	noRootProbe := &recordingRootSnapshotProbe{}
+	planWithoutPersistedRoots, err := planner.planInsertBatchWithPreflight(
+		[][]byte{[]byte("u3")},
+		[][]byte{[]byte(`{"email":"katherine@example.com","username":"katherine"}`)},
+		insertBatchPreflight{snapshot: noRootProbe},
+	)
+	if err != nil {
+		t.Fatalf("plan insert batch without persisted roots: %v", err)
+	}
+	if !planWithoutPersistedRoots.allUniqueProbeRunsBuilt {
+		t.Fatal("all unique probe runs were not built")
+	}
+	if got, want := len(planWithoutPersistedRoots.allUniqueProbeRuns), 2; got != want {
+		t.Fatalf("all unique probe runs without persisted roots=%d want %d", got, want)
+	}
+	if noRootProbe.hasPrefixesCalls != 0 {
+		t.Fatalf("HasPrefixesAtRoot calls without persisted roots=%d want 0", noRootProbe.hasPrefixesCalls)
+	}
 }
 
 func TestInsertBatchPreflightCheckUniqueConflictsSkipsMissingRoots(t *testing.T) {
@@ -563,8 +582,8 @@ func TestInsertBatchPlanCheckPersistedConflictsRejectsIncompleteDerivedInputs(t 
 		resultIDs:   [][]byte{[]byte("u1")},
 		primaryKeys: [][]byte{[]byte("u1")},
 	}).checkPersistedConflicts(snap, catalog)
-	if err == nil || !strings.Contains(err.Error(), "missing unique probe runs") {
-		t.Fatalf("checkPersistedConflicts err=%v want missing unique probe runs", err)
+	if err == nil || !strings.Contains(err.Error(), "missing unique probe candidates") {
+		t.Fatalf("checkPersistedConflicts err=%v want missing unique probe candidates", err)
 	}
 
 	err = (&insertBatchPlan{
