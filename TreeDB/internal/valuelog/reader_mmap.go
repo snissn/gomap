@@ -380,15 +380,6 @@ func (f *File) tryRefreshMmapRange(start, end int64) ([]byte, bool) {
 	if f == nil || start < 0 || end < start {
 		return nil, false
 	}
-	if cur, _ := f.mmapData.Load().([]byte); cur != nil {
-		curLen := int64(len(cur))
-		if known := f.fileSize.Load(); known > 0 && known <= curLen {
-			// Out-of-range on an existing mapping implies our cached file-size hint
-			// may be stale. Nudge it above the current mapping length so
-			// remapToFileSize does a real stat/refresh instead of returning early.
-			f.fileSize.Store(curLen + 1)
-		}
-	}
 	// Perform a synchronous refresh on out-of-range misses so stale mappings
 	// do not repeatedly fall back to ReadAt. This is especially important for
 	// safe read paths, which do not re-enter tryEnableSealedLazyMmap.
@@ -407,7 +398,7 @@ func (f *File) ensureMmapRangeReadable(data []byte, start, end int64) ([]byte, b
 	if data == nil || end > int64(len(data)) {
 		return f.tryRefreshMmapRange(start, end)
 	}
-	if known := f.fileSize.Load(); known >= end {
+	if known := f.fileSize.Load(); known >= end && known <= int64(len(data)) {
 		return data, true
 	}
 	info, err := f.File.Stat()
