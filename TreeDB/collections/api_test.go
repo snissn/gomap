@@ -47,6 +47,14 @@ func TestCollectionGetNilDBReturnsError(t *testing.T) {
 	}
 }
 
+func TestCollectionManagerOpenCollectionNilDBReturnsConfigurationError(t *testing.T) {
+	mgr := NewCollectionManager(nil)
+	_, err := mgr.OpenCollection("users")
+	if err == nil || !strings.Contains(err.Error(), "db is nil") {
+		t.Fatalf("OpenCollection nil db err=%v want db is nil", err)
+	}
+}
+
 func TestCollectionManagerOpenCollectionCacheRejectsClosedDB(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
