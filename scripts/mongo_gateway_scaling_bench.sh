@@ -104,6 +104,10 @@ normalize_bool_01() {
   esac
 }
 
+safe_label() {
+  printf '%s' "$1" | tr -c '[:alnum:]_.-' '_'
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --out)
@@ -260,10 +264,11 @@ if [[ -n "$(find "$OUT_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
   echo "output directory must be empty: $OUT_DIR" >&2
   exit 2
 fi
-RUN_ID=$(printf '%s' "$(basename "$OUT_DIR")" | tr -c '[:alnum:]_.-' '_')
+RUN_ID=$(safe_label "$(basename "$OUT_DIR")")
 if [[ -z "$DATABASE_PREFIX" ]]; then
   DATABASE_PREFIX="mongo_gateway_scaling_${RUN_ID}"
 fi
+DATABASE_PREFIX=$(safe_label "$DATABASE_PREFIX")
 RAW_DIR="$OUT_DIR/raw"
 BIN_DIR="$OUT_DIR/bin"
 MATRIX="$OUT_DIR/matrix.tsv"
@@ -293,10 +298,6 @@ REPORT_BIN="$BIN_DIR/mongo_gateway_compare_report"
 GO_WORK_MODE="${GOWORK:-off}"
 GOWORK="$GO_WORK_MODE" go build -o "$BENCH_BIN" ./cmd/mongo_gateway_bench
 GOWORK="$GO_WORK_MODE" go build -o "$REPORT_BIN" ./cmd/mongo_gateway_compare_report
-
-safe_label() {
-  printf '%s' "$1" | tr -c '[:alnum:]_.-' '_'
-}
 
 du_bytes() {
   local dir=$1
