@@ -4005,6 +4005,9 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]Upda
 	if len(plan.deltaTables) == 0 {
 		return plan.results, nil
 	}
+	if len(plan.rootNames) != len(plan.deltaTables) || len(plan.rootNames) != len(plan.policies) {
+		return nil, fmt.Errorf("collections: UpdateBatch collection %q invalid plan lengths roots=%d deltas=%d policies=%d", plan.meta.Name, len(plan.rootNames), len(plan.deltaTables), len(plan.policies))
+	}
 
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(plan.rootNames))
 	iterators := make([]iterator.UnsafeIterator, 0, len(plan.rootNames))
@@ -4016,7 +4019,7 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]Upda
 	for i, rootName := range plan.rootNames {
 		baseRoot, ok := plan.baseRootIDs[rootName]
 		if !ok {
-			return nil, fmt.Errorf("collections: update batch plan missing base root for %q", rootName)
+			return nil, fmt.Errorf("collections: UpdateBatch collection %q plan missing base root for %q", plan.meta.Name, rootName)
 		}
 		iter := plan.deltaTables[i].NewIterator(nil, nil)
 		iterators = append(iterators, iter)
@@ -4544,8 +4547,7 @@ func (c *Collection) validateRootDescriptorSystemDeltaForMeta(meta CollectionMet
 	if c == nil || c.db == nil {
 		return backenddb.ErrClosed
 	}
-	currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(nil)
-	currentCommitSeq, currentSystemRoot = dbCommitSeqAndSystemRoot(c.db)
+	currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
 	if currentSystemRoot != expectedSystemRoot || currentCommitSeq != expectedCommitSeq {
 		current := c.db.AcquireSnapshot()
 		if current == nil {
