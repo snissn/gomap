@@ -320,7 +320,9 @@ type CollectionOptions struct {
 	BufferedIndexedWriteMaxBytes int64 `json:"buffered_indexed_write_max_bytes,omitempty"`
 	// BufferedIndexedWriteMaxRootRuns flushes indexed write buffers once this
 	// many root-local mutation runs are pending. Zero disables the run-count
-	// trigger unless defaulted during metadata normalization.
+	// trigger when another flush limit is explicitly configured; when all
+	// indexed buffer limits are zero, metadata normalization installs native
+	// defaults.
 	BufferedIndexedWriteMaxRootRuns int `json:"buffered_indexed_write_max_root_runs,omitempty"`
 }
 
@@ -6796,10 +6798,11 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		meta.Options.BufferedIndexedWriteMaxRootRuns = 0
 	} else {
 		meta.Options.BufferedIndexedWrites = true
-		if meta.Options.BufferedIndexedWriteMaxDocuments == 0 {
+		useNativeDocumentDefault := meta.Options.BufferedIndexedWriteMaxDocuments == 0
+		if useNativeDocumentDefault {
 			meta.Options.BufferedIndexedWriteMaxDocuments = DefaultIndexedWriteMemtableMaxDocuments
 		}
-		if meta.Options.BufferedIndexedWriteMaxBytes == 0 && meta.Options.BufferedIndexedWriteMaxRootRuns == 0 {
+		if useNativeDocumentDefault && meta.Options.BufferedIndexedWriteMaxBytes == 0 && meta.Options.BufferedIndexedWriteMaxRootRuns == 0 {
 			meta.Options.BufferedIndexedWriteMaxRootRuns = DefaultIndexedWriteMemtableMaxRootRuns
 		}
 	}

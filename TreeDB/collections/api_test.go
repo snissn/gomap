@@ -1496,6 +1496,32 @@ func TestCollectionIndexedWriteMemtablesPreserveDocumentDefaultWithRootRunLimit(
 	}
 }
 
+func TestCollectionIndexedWriteMemtablesCanDisableRootRunLimitWithDocumentLimit(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	meta, err := NewCollectionManager(d).CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWriteMaxDocuments: DefaultIndexedWriteMemtableMaxDocuments,
+			BufferedIndexedWriteMaxRootRuns:  0,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email"}},
+	})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if got := meta.Options.BufferedIndexedWriteMaxDocuments; got != DefaultIndexedWriteMemtableMaxDocuments {
+		t.Fatalf("max documents=%d want default %d", got, DefaultIndexedWriteMemtableMaxDocuments)
+	}
+	if got := meta.Options.BufferedIndexedWriteMaxRootRuns; got != 0 {
+		t.Fatalf("max root runs=%d want disabled", got)
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesDefaultSkipsNoIndexSchemas(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
