@@ -725,7 +725,7 @@ func TestPublishOrderedRootDeltaGroupWithSystemBuilder_ReportsPublishStats(t *te
 		t.Fatalf("publish base root: %v", err)
 	}
 	delta := mustFrozenSystemMemtable(t, "root/b", "vb")
-	if _, _, err := db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]OrderedRootDeltaPublishInput{{
+	if _, _, err := db.PublishOrderedRootDeltaGroupWithSystemBuilder([]OrderedRootDeltaPublishInput{{
 		BaseRoot: baseRoot,
 		Iter:     delta.NewIterator(nil, nil),
 	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {

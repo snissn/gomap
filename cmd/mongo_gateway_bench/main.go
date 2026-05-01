@@ -2459,8 +2459,6 @@ var selectedTreeDBStatPrefixes = [...]string{
 	"treedb.publish.watermark.",
 }
 
-var warnMissingTreeDBStatKeysOnce sync.Once
-
 func isSelectedTreeDBStatKey(key string) bool {
 	for _, exact := range selectedTreeDBExactStatKeys {
 		if key == exact {
@@ -2480,21 +2478,10 @@ func selectedTreeDBStats(stats map[string]string) map[string]string {
 		return nil
 	}
 	out := make(map[string]string)
-	missing := make([]string, 0)
 	for key, value := range stats {
 		if isSelectedTreeDBStatKey(key) {
 			out[key] = value
 		}
-	}
-	for _, key := range selectedTreeDBExactStatKeys {
-		if _, ok := stats[key]; !ok {
-			missing = append(missing, key)
-		}
-	}
-	if len(missing) > 0 {
-		warnMissingTreeDBStatKeysOnce.Do(func() {
-			fmt.Fprintf(os.Stderr, "warning: benchmark expected TreeDB stats missing from DB.Stats(): %s\n", strings.Join(missing, ", "))
-		})
 	}
 	if len(out) == 0 {
 		return nil

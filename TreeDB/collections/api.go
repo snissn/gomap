@@ -3023,6 +3023,9 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	if combiner := c.updateCombiner(); combiner != nil {
 		return combiner.update(c, documentID, update)
 	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return false, false, err
+	}
 	return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
 }
 
@@ -3237,6 +3240,9 @@ func (domain *collectionWriteDomain) stopUpdateCombiner() {
 
 func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
 	if combiner == nil || combiner.maxBatch <= 1 {
+		if err := c.ensureWriteDomainOpen(); err != nil {
+			return false, false, err
+		}
 		return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
 	}
 	done := make(chan collectionUpdateCombineResult, 1)
@@ -3251,6 +3257,9 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 	if !combiner.enqueue(req) {
 		// Combining is a best-effort throughput optimization. Saturated or stopped
 		// combiners fall back to the direct path so updates still make progress.
+		if err := c.ensureWriteDomainOpen(); err != nil {
+			return false, false, err
+		}
 		return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
 	}
 	result := combiner.waitForUpdateResult(done)
@@ -3897,9 +3906,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondary
 			if err := c.flushBufferedWrites(); err != nil {
 				return err
 			}
-			// validateMutationRootDescriptors does not consult c.meta; refresh
-			// the handle metadata only after the planned root snapshot is still current.
-			if err := c.validateMutationRootDescriptors(plan.baseUserRoot, plan.baseSystemRoot, plan.baseCommitSeq); err != nil {
+			if err := c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs); err != nil {
 				return err
 			}
 			c.meta = plan.meta
@@ -3960,6 +3967,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, requireNoSeco
 
 	primaryRoot := catalog.rootID(collectionPrimaryRootName(meta.Name))
 	if primaryRoot == 0 {
+		primaryRootName := collectionPrimaryRootName(meta.Name)
 		return &updateBatchPlan{
 			results:        results,
 			meta:           meta,
@@ -3968,6 +3976,8 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, requireNoSeco
 			baseUserRoot:   baseUserRoot,
 			baseSystemRoot: baseSystemRoot,
 			baseCommitSeq:  baseCommitSeq,
+			rootNames:      []string{primaryRootName},
+			baseRootIDs:    map[string]uint64{primaryRootName: primaryRoot},
 		}, nil
 	}
 	runtimes, err := (insertBatchPlanner{
@@ -4022,6 +4032,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, requireNoSeco
 		changedDocuments = append(changedDocuments, bytes.Clone(document))
 	}
 	if len(changed) == 0 {
+		primaryRootName := collectionPrimaryRootName(meta.Name)
 		return &updateBatchPlan{
 			results:        results,
 			meta:           meta,
@@ -4030,6 +4041,8 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, requireNoSeco
 			baseUserRoot:   baseUserRoot,
 			baseSystemRoot: baseSystemRoot,
 			baseCommitSeq:  baseCommitSeq,
+			rootNames:      []string{primaryRootName},
+			baseRootIDs:    map[string]uint64{primaryRootName: primaryRoot},
 		}, nil
 	}
 
