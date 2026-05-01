@@ -4071,7 +4071,7 @@ func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta 
 	if !domain.loaded || domain.catalog == nil {
 		return false
 	}
-	if domain.baseCommitSeq != baseCommitSeq || domain.baseSystemRoot != baseSystemRoot {
+	if domain.baseSystemRoot != baseSystemRoot {
 		return false
 	}
 	if !sameCollectionMeta(domain.meta, meta) {

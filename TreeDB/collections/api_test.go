@@ -4194,6 +4194,74 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesAppendsToBufferedUp
 	}
 }
 
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReadsBufferedAfterRawCommit(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"a@example.com","city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+	before := d.State()
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sea")},
+	}); err != nil {
+		t.Fatalf("first UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("first batch was declined")
+	}
+	if err := d.Set([]byte("raw/unrelated"), []byte("value")); err != nil {
+		t.Fatalf("raw set: %v", err)
+	}
+	rawState := d.State()
+	if rawState.SystemRootPageID != before.SystemRootPageID {
+		t.Fatalf("raw write changed system root from %d to %d", before.SystemRootPageID, rawState.SystemRootPageID)
+	}
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sfo")},
+	}); err != nil {
+		t.Fatalf("second UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("second batch was declined")
+	}
+	seaIDs, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find sea city: %v", err)
+	}
+	if len(seaIDs) != 0 {
+		t.Fatalf("sea ids=%q want none after raw commit plus second buffered update", seaIDs)
+	}
+	sfoIDs, err := col.FindByIndex("city", "sfo")
+	if err != nil {
+		t.Fatalf("find sfo city: %v", err)
+	}
+	if len(sfoIDs) != 1 || !bytes.Equal(sfoIDs[0], []byte("u1")) {
+		t.Fatalf("sfo ids=%q want [u1]", sfoIDs)
+	}
+}
+
 func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReadsBufferedInsert(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
