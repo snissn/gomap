@@ -81,15 +81,16 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPages(leafPages [][]byte) (
 			ptrs[i] = ptr
 		}
 	}
+	if len(ptrs) != len(leafPages) {
+		return nil, fmt.Errorf("leaf page batch log returned %d ptrs for %d leaf pages", len(ptrs), len(leafPages))
+	}
 	if l.db != nil {
 		lastRecordLen := uint32(0)
 		if provider, ok := l.inner.(leafPageLogRecordLengthProvider); ok {
 			lastRecordLen = provider.LastLeafPageRecordLength()
 		}
 		for i, ptr := range ptrs {
-			if i < len(leafPages) {
-				l.db.storeLeafPageReadCache(ptr, leafPages[i])
-			}
+			l.db.storeLeafPageReadCache(ptr, leafPages[i])
 			recordLen := ptr.RecordLengthHint
 			if recordLen == 0 {
 				recordLen = lastRecordLen

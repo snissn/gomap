@@ -1322,11 +1322,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen.zipper.SetIndexInternalBaseDelta(opts.IndexInternalBaseDelta)
 	gen.zipper.SetOuterLeavesInValueLog(opts.IndexOuterLeavesInValueLog)
 	db.leafPageReadCache = newLeafPageReadCache(LeafPageReadCacheEntries)
-	if db.leafPageReadCache != nil {
-		gen.zipper.SetLeafPageReader(newCachedLeafPageReader(db.leafPageReadCache, vm))
-	} else {
-		gen.zipper.SetLeafPageReader(vm)
-	}
+	gen.zipper.SetLeafPageReader(db.leafPageReader(vm))
 	gen.zipper.SetAdaptiveLeafEncoding(opts.IndexAdaptiveLeafEncoding)
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 

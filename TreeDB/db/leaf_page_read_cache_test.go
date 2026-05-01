@@ -133,3 +133,40 @@ func TestLeafPageLogStoresReadCache(t *testing.T) {
 		t.Fatalf("cache should own a copy, got first byte=%x", got[0])
 	}
 }
+
+type leafPageCacheMismatchBatchLog struct{}
+
+func (l *leafPageCacheMismatchBatchLog) AppendLeafPage([]byte) (page.LeafLogPtr, error) {
+	return page.LeafLogPtr{}, nil
+}
+
+func (l *leafPageCacheMismatchBatchLog) AppendLeafPages([][]byte) ([]page.LeafLogPtr, error) {
+	return []page.LeafLogPtr{{FileID: 11, Offset: 256, RecordLengthHint: 4096}}, nil
+}
+
+func (l *leafPageCacheMismatchBatchLog) Flush() error { return nil }
+func (l *leafPageCacheMismatchBatchLog) Sync() error  { return nil }
+
+func TestLeafPageLogRejectsBatchPtrCountMismatch(t *testing.T) {
+	db := &DB{leafPageReadCache: newLeafPageReadCache(8)}
+	log := &leafPageLogWithRecordLengthHints{db: db, inner: &leafPageCacheMismatchBatchLog{}}
+	leafPages := [][]byte{
+		bytes.Repeat([]byte{0x01}, page.PageSize),
+		bytes.Repeat([]byte{0x02}, page.PageSize),
+	}
+
+	if _, err := log.AppendLeafPages(leafPages); err == nil {
+		t.Fatalf("expected batch ptr count mismatch error")
+	}
+	if stats := db.leafPageReadCache.stats(); stats.Stores != 0 {
+		t.Fatalf("cache stores=%d, want 0 after rejected batch", stats.Stores)
+	}
+}
+
+func TestLeafPageReadCacheNilStatsAreStableZeros(t *testing.T) {
+	var cache *leafPageReadCache
+	stats := cache.stats()
+	if stats != (leafPageReadCacheStats{}) {
+		t.Fatalf("nil cache stats=%+v, want zero values", stats)
+	}
+}

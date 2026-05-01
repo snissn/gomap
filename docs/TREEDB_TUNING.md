@@ -240,6 +240,8 @@ Useful stats:
 - `treedb.process.read_path.outer_leaf.cache.misses`
 - `treedb.process.read_path.outer_leaf.cache.stores`
 - `treedb.process.read_path.outer_leaf.cache.evictions`
+- `treedb.process.read_path.outer_leaf.cache.entries`
+- `treedb.process.read_path.outer_leaf.cache.capacity`
 - `treedb.process.read_path.outer_leaf.cache.bytes`
 
 ### Leaf key compression (`Options.LeafPrefixCompression`)

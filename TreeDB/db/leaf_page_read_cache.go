@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
 const (
@@ -126,6 +127,13 @@ func newCachedLeafPageReader(cache *leafPageReadCache, fallback interface {
 	ReadUnsafe(ptr page.ValuePtr) ([]byte, error)
 }) *cachedLeafPageReader {
 	return &cachedLeafPageReader{cache: cache, fallback: fallback}
+}
+
+func (db *DB) leafPageReader(fallback zipper.LeafPageReader) zipper.LeafPageReader {
+	if db != nil && db.leafPageReadCache != nil {
+		return newCachedLeafPageReader(db.leafPageReadCache, fallback)
+	}
+	return fallback
 }
 
 func (r *cachedLeafPageReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
