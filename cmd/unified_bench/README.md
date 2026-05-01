@@ -1,6 +1,6 @@
 # unified_bench
 
-Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger, and LevelDB.
+Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger, LevelDB, Wildcat, and other registered adapters.
 
 ## Run
 
@@ -63,7 +63,7 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
   - `durable` (strict durability)
   - `fast` (max throughput; TreeDB mirrors `treedb.ProfileFast`, including Celestia-aligned auto/snappy/balanced value-log compression; unsafe)
   - `wal_on_fast` (TreeDB mirrors `treedb.ProfileWALOnFast`, including the same compression defaults with WAL on; unsafe)
-- `-dbs` (`all` or CSV): `hashdb,btree,treedb,badger,leveldb`
+- `-dbs` (`all` or CSV): `hashdb,btree,treedb,badger,leveldb,wildcat`
 - `-test` (`all` or CSV): see list above
 - `-keys` number of keys (default 100000)
 - `-keycounts` comma-separated key counts to sweep over (overrides `-keys`)
@@ -79,6 +79,8 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - `-range-span` number of keys per range (default 100)
 - `-leveldb-block-compression` LevelDB: block compression mode (`default|on|off|both`)
 - `-leveldb-block-size` LevelDB: table block size in bytes (default 4096)
+- `-wildcat-sync` Wildcat: sync option (`none|partial|full`; `durable` profile sets `full`)
+- `-wildcat-write-buffer-mb` Wildcat: write buffer size in MiB (default 64)
 
 ### TreeDB Main Knobs
 

@@ -45,6 +45,9 @@ func init() {
 
 		// BuntDB (sync policy 0 = Never)
 		setIntIfUnset("buntdb-sync", 0, isSet, buntdbSyncPolicy)
+
+		// Wildcat
+		setStringIfUnset("wildcat-sync", "none", isSet, wildcatSyncMode)
 	}
 
 	applyWALOnFast := func(isSet map[string]bool) {
@@ -60,6 +63,7 @@ func init() {
 		setBoolIfUnset("pebble-nosync", true, isSet, pebbleNoSync)
 		setBoolIfUnset("pogreb-nosync", true, isSet, pogrebNoSync)
 		setIntIfUnset("buntdb-sync", 0, isSet, buntdbSyncPolicy)
+		setStringIfUnset("wildcat-sync", "none", isSet, wildcatSyncMode)
 	}
 
 	profiles = map[string]Profile{
@@ -101,6 +105,9 @@ func init() {
 
 				// BuntDB (sync policy 2 = Always)
 				setIntIfUnset("buntdb-sync", 2, isSet, buntdbSyncPolicy)
+
+				// Wildcat
+				setStringIfUnset("wildcat-sync", "full", isSet, wildcatSyncMode)
 			},
 		},
 		"balanced": {
