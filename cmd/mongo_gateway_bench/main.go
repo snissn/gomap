@@ -96,9 +96,11 @@ type benchmarkResult struct {
 	ConcurrentReads    int    `json:"concurrent_reads,omitempty"`
 	ConcurrentWriters  int    `json:"concurrent_writers,omitempty"`
 	ConcurrentWrites   int    `json:"concurrent_writes,omitempty"`
+
 	// Always emit this knob so benchmark artifacts distinguish default false
 	// runs from older runs that predate indexed-field update coverage.
-	UpdateIndexedField          bool                `json:"update_indexed_field"`
+	UpdateIndexedField bool `json:"update_indexed_field"`
+
 	TreeDBProfile               string              `json:"treedb_profile,omitempty"`
 	TreeDBDocumentFormat        string              `json:"treedb_document_format,omitempty"`
 	TreeDBDataRootStorage       string              `json:"treedb_data_root_storage,omitempty"`
@@ -525,7 +527,7 @@ func parseConfig(args []string) (config, error) {
 		return config{}, errors.New("secondary-indexes must be 0, 1, or 2")
 	}
 	if cfg.UpdateIndexedField && cfg.SecondaryIndexes < 2 {
-		return config{}, errors.New("update-indexed-field requires secondary-indexes=2 so city_1 exists")
+		return config{}, errors.New("update-indexed-field requires secondary-indexes=2 so the city index exists")
 	}
 	if cfg.Format != "text" && cfg.Format != "json" {
 		return config{}, fmt.Errorf("unknown format %q", cfg.Format)
