@@ -98,7 +98,7 @@ normalize_bool_01() {
       printf '0'
       ;;
     *)
-      echo "$name must be 0/1 or true/false; got: $value" >&2
+      echo "$name must be 0/1, true/false, or yes/no; got: $value" >&2
       usage >&2
       exit 2
       ;;
@@ -108,17 +108,12 @@ normalize_bool_01() {
 normalize_bool_word() {
   local name=$1
   local value=$2
-  case "$value" in
-    1|true|TRUE|yes|YES)
+  case "$(normalize_bool_01 "$name" "$value")" in
+    1)
       printf 'true'
       ;;
-    0|false|FALSE|no|NO)
+    0)
       printf 'false'
-      ;;
-    *)
-      echo "$name must be 0/1 or true/false; got: $value" >&2
-      usage >&2
-      exit 2
       ;;
   esac
 }

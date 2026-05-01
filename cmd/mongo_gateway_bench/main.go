@@ -97,8 +97,8 @@ type benchmarkResult struct {
 	ConcurrentWriters  int    `json:"concurrent_writers,omitempty"`
 	ConcurrentWrites   int    `json:"concurrent_writes,omitempty"`
 
-	// Always emit this knob so benchmark artifacts distinguish default false
-	// runs from older runs that predate indexed-field update coverage.
+	// Always emit this knob in JSON so benchmark artifacts distinguish default
+	// false runs from older runs that predate indexed-field update coverage.
 	UpdateIndexedField bool `json:"update_indexed_field"`
 
 	TreeDBProfile               string              `json:"treedb_profile,omitempty"`
@@ -1120,6 +1120,9 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	}
 	result.Phases = append(result.Phases, rangePhase)
 
+	if cfg.UpdateIndexedField {
+		prewarmBenchmarkUpdatedCities()
+	}
 	updatePhase, err := measureProfiledPhase(profiler, "id_update_set", cfg.Updates, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.Updates; i++ {
 			id := benchmarkID((i * 31) % cfg.Documents)
@@ -1968,10 +1971,14 @@ func benchmarkCity(i int) string {
 }
 
 func benchmarkUpdatedCity(i int) string {
+	prewarmBenchmarkUpdatedCities()
+	return benchmarkUpdatedCityValues[i%len(benchmarkUpdatedCityValues)]
+}
+
+func prewarmBenchmarkUpdatedCities() {
 	benchmarkUpdatedCityValuesOnce.Do(func() {
 		benchmarkUpdatedCityValues = buildBenchmarkUpdatedCityValues()
 	})
-	return benchmarkUpdatedCityValues[i%len(benchmarkUpdatedCityValues)]
 }
 
 func buildBenchmarkUpdatedCityValues() []string {
