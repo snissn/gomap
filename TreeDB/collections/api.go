@@ -4047,7 +4047,7 @@ type updateBatchPlan struct {
 
 type updateBatchBufferedRead struct {
 	enabled         bool
-	primaryEntries  map[string]updateBatchBufferedEntry
+	primaryEntries  []updateBatchBufferedEntry
 	writeGeneration uint64
 }
 
@@ -4258,13 +4258,16 @@ func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta 
 	return meta.Options.BufferedIndexedWrites && len(meta.Indexes) > 0
 }
 
-func readUpdateBatchCurrentDocument(snap *backenddb.Snapshot, primaryRoot uint64, documentID []byte, buffered updateBatchBufferedRead) (updateBatchCurrentDocument, error) {
+func readUpdateBatchCurrentDocument(snap *backenddb.Snapshot, primaryRoot uint64, itemIndex int, documentID []byte, buffered updateBatchBufferedRead) (updateBatchCurrentDocument, error) {
 	if buffered.enabled {
-		if entry := buffered.primaryEntries[string(documentID)]; entry.found {
-			if entry.flags&node.FlagTombstone != 0 {
-				return updateBatchCurrentDocument{buffered: true}, nil
+		if itemIndex >= 0 && itemIndex < len(buffered.primaryEntries) {
+			entry := buffered.primaryEntries[itemIndex]
+			if entry.found {
+				if entry.flags&node.FlagTombstone != 0 {
+					return updateBatchCurrentDocument{buffered: true}, nil
+				}
+				return updateBatchCurrentDocument{value: entry.value, buffered: true, found: true}, nil
 			}
-			return updateBatchCurrentDocument{value: entry.value, buffered: true, found: true}, nil
 		}
 	}
 	if primaryRoot == 0 {
@@ -4278,6 +4281,57 @@ func readUpdateBatchCurrentDocument(snap *backenddb.Snapshot, primaryRoot uint64
 		return updateBatchCurrentDocument{}, err
 	}
 	return updateBatchCurrentDocument{value: entry.Value, found: true}, nil
+}
+
+const updateBatchBufferedPrimaryDirectProbeLimit = 1024
+
+func snapshotUpdateBatchBufferedPrimaryEntries(runs []memtable.Table, items []UpdateBatchItem) ([]updateBatchBufferedEntry, error) {
+	entries := make([]updateBatchBufferedEntry, len(items))
+	if len(runs) == 0 || len(items) == 0 {
+		return entries, nil
+	}
+	if len(runs) <= 1 || len(runs)*len(items) <= updateBatchBufferedPrimaryDirectProbeLimit {
+		for i, item := range items {
+			if value, _, flags, found := getBufferedRunEntry(runs, item.DocumentID); found {
+				entries[i] = updateBatchBufferedEntry{
+					value: bytes.Clone(value),
+					flags: flags,
+					found: true,
+				}
+			}
+		}
+		return entries, nil
+	}
+	targets := make(map[string]int, len(items))
+	for i, item := range items {
+		targets[string(item.DocumentID)] = i
+	}
+	for i := len(runs) - 1; i >= 0 && len(targets) > 0; i-- {
+		run := runs[i]
+		if run == nil {
+			continue
+		}
+		it := run.NewIterator(nil, nil)
+		for it.Valid() && len(targets) > 0 {
+			key := string(it.UnsafeKey())
+			if itemIndex, ok := targets[key]; ok && !entries[itemIndex].found {
+				value, _, flags := it.UnsafeEntry()
+				entries[itemIndex] = updateBatchBufferedEntry{
+					value: bytes.Clone(value),
+					flags: flags,
+					found: true,
+				}
+				delete(targets, key)
+			}
+			it.Next()
+		}
+		if err := it.Error(); err != nil {
+			_ = it.Close()
+			return nil, err
+		}
+		_ = it.Close()
+	}
+	return entries, nil
 }
 
 func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBatchMode, useBufferedRead bool) (*updateBatchPlan, error) {
@@ -4315,23 +4369,15 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	baseCommitSeq := snapshotCommitSeq(snap)
 	var bufferedRead updateBatchBufferedRead
 	var bufferedTemplateRuns []memtable.Table
-	defer resetCollectionTables(bufferedTemplateRuns)
+	defer func() { resetCollectionTables(bufferedTemplateRuns) }()
 	bufferedReadBlocked := false
 	if domain := c.writeDomain; useBufferedRead && domain != nil && mode != updateBatchModeAny {
 		domain.mu.RLock()
 		if updateBatchCanReadBufferedDomainLocked(domain, meta, baseSystemRoot) {
 			primaryRuns := domain.rootRuns[collectionPrimaryRootName(meta.Name)]
-			primaryEntries := make(map[string]updateBatchBufferedEntry, len(items))
-			for _, item := range items {
-				if value, _, flags, found := getBufferedRunEntry(primaryRuns, item.DocumentID); found {
-					primaryEntries[string(item.DocumentID)] = updateBatchBufferedEntry{
-						value: bytes.Clone(value),
-						flags: flags,
-						found: true,
-					}
-				}
-			}
-			if normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatTemplateV1 {
+			var primaryEntries []updateBatchBufferedEntry
+			primaryEntries, err = snapshotUpdateBatchBufferedPrimaryEntries(primaryRuns, items)
+			if err == nil && normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatTemplateV1 {
 				bufferedTemplateRuns, err = cloneCollectionRunTables(domain.rootRuns[collectionTemplateRootName(meta.Name)])
 			}
 			bufferedRead = updateBatchBufferedRead{
@@ -4381,7 +4427,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	changed := make([]preparedBatchUpdate, 0, len(items))
 	changedDocuments := make([][]byte, 0, len(items))
 	for i, item := range items {
-		current, err := readUpdateBatchCurrentDocument(snap, primaryRoot, item.DocumentID, bufferedRead)
+		current, err := readUpdateBatchCurrentDocument(snap, primaryRoot, i, item.DocumentID, bufferedRead)
 		if err != nil {
 			_ = snap.Close()
 			return nil, updateBatchItemError(i, err)
