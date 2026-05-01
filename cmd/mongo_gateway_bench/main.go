@@ -1019,7 +1019,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 			return nil
 		}
 		if updatedCityValues == nil {
-			updatedCityValues = benchmarkUpdatedCityValuesForUpdate()
+			updatedCityValues = buildBenchmarkUpdatedCityValues()
 		}
 		return updatedCityValues
 	}
@@ -1991,10 +1991,8 @@ func mongoDBStats(ctx context.Context, db *mongo.Database) (map[string]any, erro
 }
 
 var (
-	benchmarkCities                = [...]string{"hnl", "sfo", "nyc", "lon", "sin", "ber", "tyo", "syd"}
-	benchmarkUpdatedCities         = [...]string{"ams", "cdg", "mad", "mex", "gru", "yyz", "icn", "akl"}
-	benchmarkUpdatedCityValues     []string
-	benchmarkUpdatedCityValuesOnce sync.Once
+	benchmarkCities        = [...]string{"hnl", "sfo", "nyc", "lon", "sin", "ber", "tyo", "syd"}
+	benchmarkUpdatedCities = [...]string{"ams", "cdg", "mad", "mex", "gru", "yyz", "icn", "akl"}
 )
 
 const benchmarkUpdatedCityValueCount = 65521
@@ -2039,10 +2037,15 @@ func benchmarkSetUpdate(params benchmarkSetUpdateParams) bson.D {
 	)
 	if params.UpdateIndexedField {
 		updatedCityValues := params.UpdatedCityValues
-		if updatedCityValues == nil {
-			updatedCityValues = benchmarkUpdatedCityValuesForUpdate()
+		if updatedCityValues != nil {
+			city := ""
+			if len(updatedCityValues) > 0 {
+				city = benchmarkUpdatedCityFromValues(updatedCityValues, params.Operation, params.DocumentOrdinal, params.DocumentCount)
+			}
+			set = append(set, bson.E{Key: "city", Value: city})
+		} else {
+			set = append(set, bson.E{Key: "city", Value: benchmarkUpdatedCity(params.Operation, params.DocumentOrdinal, params.DocumentCount)})
 		}
-		set = append(set, bson.E{Key: "city", Value: benchmarkUpdatedCityFromValues(updatedCityValues, params.Operation, params.DocumentOrdinal, params.DocumentCount)})
 	}
 	return bson.D{{Key: "$set", Value: set}}
 }
@@ -2067,7 +2070,13 @@ func benchmarkCity(i int) string {
 }
 
 func benchmarkUpdatedCity(i int, documentOrdinal int, documentCount int) string {
-	return benchmarkUpdatedCityFromValues(benchmarkUpdatedCityValuesForUpdate(), i, documentOrdinal, documentCount)
+	cycle := benchmarkUpdatedCityValueCount
+	index := benchmarkUpdatedCityIndex(i, documentOrdinal, documentCount, cycle)
+	if documentCount > 0 && i >= documentCount {
+		previousIndex := benchmarkUpdatedCityIndex(i-documentCount, documentOrdinal, documentCount, cycle)
+		index = avoidBenchmarkUpdatedCityRepeat(index, previousIndex, cycle)
+	}
+	return benchmarkUpdatedCityValue(index)
 }
 
 func benchmarkUpdatedCityFromValues(values []string, i int, documentOrdinal int, documentCount int) string {
@@ -2083,11 +2092,6 @@ func benchmarkUpdatedCityFromValues(values []string, i int, documentOrdinal int,
 	return values[index]
 }
 
-func benchmarkUpdatedCityValuesForUpdate() []string {
-	prewarmBenchmarkUpdatedCities()
-	return benchmarkUpdatedCityValues
-}
-
 func avoidBenchmarkUpdatedCityRepeat(index, previousIndex, cycle int) int {
 	if cycle > 1 && index == previousIndex {
 		return (index + 1) % cycle
@@ -2099,6 +2103,8 @@ func benchmarkUpdatedCityIndex(i int, documentOrdinal int, documentCount int, cy
 	if cycle <= 0 {
 		return 0
 	}
+	// SplitMix64-style finalization gives the indexed-update workload a stable,
+	// well-distributed city cycle without relying on math/rand or risking int overflow.
 	seed := (uint64(i)+1)*0x9e3779b185ebca87 ^
 		bits.RotateLeft64((uint64(documentOrdinal)+1)*0xc2b2ae3d27d4eb4f, 17) ^
 		bits.RotateLeft64((uint64(documentCount)+1)*0x165667b19e3779f9, 31)
@@ -2109,10 +2115,15 @@ func benchmarkUpdatedCityIndex(i int, documentOrdinal int, documentCount int, cy
 	return int(seed % uint64(cycle))
 }
 
-func prewarmBenchmarkUpdatedCities() {
-	benchmarkUpdatedCityValuesOnce.Do(func() {
-		benchmarkUpdatedCityValues = buildBenchmarkUpdatedCityValues()
-	})
+func benchmarkUpdatedCityValue(index int) string {
+	if len(benchmarkUpdatedCities) == 0 {
+		return ""
+	}
+	if index < 0 {
+		index = 0
+	}
+	city := benchmarkUpdatedCities[index%len(benchmarkUpdatedCities)]
+	return city + "-" + strconv.Itoa(index/len(benchmarkUpdatedCities))
 }
 
 func buildBenchmarkUpdatedCityValues() []string {

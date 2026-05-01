@@ -1218,8 +1218,7 @@ func TestWriteResultSupportsGenericWriter(t *testing.T) {
 }
 
 func TestBenchmarkSetUpdateCanExerciseIndexedField(t *testing.T) {
-	prewarmBenchmarkUpdatedCities()
-	updatedCityValues := benchmarkUpdatedCityValuesForUpdate()
+	updatedCityValues := buildBenchmarkUpdatedCityValues()
 
 	updateSet := func(update bson.D) bson.Raw {
 		t.Helper()
@@ -1286,8 +1285,8 @@ func TestBenchmarkSetUpdateCanExerciseIndexedField(t *testing.T) {
 	if city, ok := set.Lookup("city").StringValueOK(); !ok || city != "" {
 		t.Fatalf("city=%q ok=%t want explicit empty value list to stay empty", city, ok)
 	}
-	if got := len(benchmarkUpdatedCityValues); got != benchmarkUpdatedCityValueCount {
-		t.Fatalf("benchmarkUpdatedCityValues len=%d want %d", got, benchmarkUpdatedCityValueCount)
+	if got := len(updatedCityValues); got != benchmarkUpdatedCityValueCount {
+		t.Fatalf("updatedCityValues len=%d want %d", got, benchmarkUpdatedCityValueCount)
 	}
 	if first, revisited := benchmarkUpdatedCity(13, 42, benchmarkUpdatedCityValueCount), benchmarkUpdatedCity(13+benchmarkUpdatedCityValueCount, 42, benchmarkUpdatedCityValueCount); first == revisited {
 		t.Fatalf("benchmarkUpdatedCity repeated value %q when revisiting same document after full value cycle", first)

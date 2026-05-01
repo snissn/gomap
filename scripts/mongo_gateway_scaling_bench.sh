@@ -267,7 +267,7 @@ fi
 UPDATE_INDEXED_FIELD=$(normalize_bool_01 UPDATE_INDEXED_FIELD "$UPDATE_INDEXED_FIELD")
 case "$UPDATE_INDEXED_FIELD" in
   1)
-    if [[ "$INDEXES" != "2" ]]; then
+    if (( 10#$INDEXES != 2 )); then
       echo "UPDATE_INDEXED_FIELD=1 requires INDEXES=2 so the city index exists" >&2
       exit 2
     fi
