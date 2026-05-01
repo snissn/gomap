@@ -46,7 +46,7 @@ counts, writes raw mongo_gateway_bench JSON for every cell, and generates the
 standard mongo_gateway_compare_report Markdown/TSV output.
 
 Options:
-  --out DIR              Output directory. Default: mktemp under $TMPDIR or /tmp.
+  --out DIR              Output directory; if it exists, it must be empty. Default: mktemp under $TMPDIR or /tmp.
   --docs N               Document count. Default: 100000.
   --indexes N            Secondary index count. Default: 2.
   --batch-size N         Insert batch size. Default: 10000.
@@ -246,6 +246,10 @@ if [[ "$PREBUILD_DOCUMENTS" != "true" && "$PREBUILD_DOCUMENTS" != "false" ]]; th
 fi
 INCLUDE_MONGO=$(normalize_bool_01 INCLUDE_MONGO "$INCLUDE_MONGO")
 
+if [[ -d "$OUT_DIR" ]] && [[ -n "$(find "$OUT_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+  echo "output directory must be empty: $OUT_DIR" >&2
+  exit 2
+fi
 mkdir -p "$OUT_DIR"
 OUT_DIR=$(cd "$OUT_DIR" && pwd -P)
 RAW_DIR="$OUT_DIR/raw"
