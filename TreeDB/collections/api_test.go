@@ -3238,6 +3238,71 @@ func TestCollectionUpdateCombinerDuplicateIDsPreserveOrder(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateCombinerMixedCollectionsFallbackDirect(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "left"}); err != nil {
+		t.Fatalf("create left: %v", err)
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "right"}); err != nil {
+		t.Fatalf("create right: %v", err)
+	}
+	left, err := mgr.OpenCollection("left")
+	if err != nil {
+		t.Fatalf("open left: %v", err)
+	}
+	right, err := mgr.OpenCollection("right")
+	if err != nil {
+		t.Fatalf("open right: %v", err)
+	}
+	if _, err := left.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"score":0}`)}); err != nil {
+		t.Fatalf("insert left: %v", err)
+	}
+	if _, err := right.InsertBatch([][]byte{[]byte("u2")}, [][]byte{[]byte(`{"score":0}`)}); err != nil {
+		t.Fatalf("insert right: %v", err)
+	}
+
+	setScore := func(score int32) func([]byte) ([]byte, bool, error) {
+		return func([]byte) ([]byte, bool, error) {
+			return []byte(fmt.Sprintf(`{"score":%d}`, score)), true, nil
+		}
+	}
+	combiner := &collectionUpdateCombiner{maxBatch: 8}
+	requests := []collectionUpdateCombineRequest{
+		{collection: left, documentID: []byte("u1"), update: setScore(1), done: make(chan collectionUpdateCombineResult, 1)},
+		{collection: right, documentID: []byte("u2"), update: setScore(2), done: make(chan collectionUpdateCombineResult, 1)},
+	}
+	combiner.runBatch(requests)
+	for i, req := range requests {
+		result := <-req.done
+		if result.err != nil {
+			t.Fatalf("request %d err: %v", i, result.err)
+		}
+		if !result.matched || !result.modified {
+			t.Fatalf("request %d matched=%v modified=%v want true,true", i, result.matched, result.modified)
+		}
+	}
+	got, err := left.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get left u1: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`"score":1`)) {
+		t.Fatalf("left document=%s want score 1", got)
+	}
+	got, err = right.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get right u2: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`"score":2`)) {
+		t.Fatalf("right document=%s want score 2", got)
+	}
+}
+
 func TestCollectionUpdateCombinerEvictsWhenIdle(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -3396,7 +3461,7 @@ func TestCollectionUpdateCombinerWaitsForIdleDrain(t *testing.T) {
 	}
 }
 
-func TestCollectionUpdateCombinerStopDoesNotWaitForActiveWorker(t *testing.T) {
+func TestCollectionUpdateCombinerStopWaitsForActiveWorker(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -3450,11 +3515,16 @@ func TestCollectionUpdateCombinerStopDoesNotWaitForActiveWorker(t *testing.T) {
 	}()
 	select {
 	case <-stopReturned:
-	case <-time.After(time.Second):
-		t.Fatal("stop waited for active combiner worker")
+		t.Fatal("stop returned before active combiner worker drained")
+	case <-time.After(25 * time.Millisecond):
 	}
 
 	close(release)
+	select {
+	case <-stopReturned:
+	case <-time.After(time.Second):
+		t.Fatal("stop did not return after active combiner worker drained")
+	}
 	var result collectionUpdateCombineResult
 	select {
 	case result = <-resultCh:
