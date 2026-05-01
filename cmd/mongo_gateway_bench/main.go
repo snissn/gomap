@@ -512,6 +512,9 @@ func parseConfig(args []string) (config, error) {
 	if cfg.ProfileTrace && strings.TrimSpace(cfg.ProfileDir) == "" {
 		return config{}, errors.New("profile-trace requires -profile-dir")
 	}
+	if cfg.ProfileHeapGC && strings.TrimSpace(cfg.ProfileDir) == "" {
+		return config{}, errors.New("profile-heap-gc requires -profile-dir")
+	}
 	if cfg.SecondaryIndexes < 0 || cfg.SecondaryIndexes > 2 {
 		return config{}, errors.New("secondary-indexes must be 0, 1, or 2")
 	}
@@ -1652,6 +1655,11 @@ func collectAfterLoadStats(ctx context.Context, cfg config, target *benchTarget,
 func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, result *benchmarkResult) error {
 	if cfg.Target == "treedb" {
 		if cfg.TreeDBMaintenance == treeDBMaintenanceNone {
+			if target.collections != nil {
+				if err := target.collections.FlushAll(); err != nil {
+					return err
+				}
+			}
 			if target.db != nil {
 				result.TreeDBStatsFinal = target.db.Stats()
 			}
