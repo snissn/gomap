@@ -3359,9 +3359,15 @@ func TestCollectionUpdateBatchReplansAfterConcurrentCollectionMutation(t *testin
 	}
 
 	ready := make(chan struct{})
+	stopRight := make(chan struct{})
+	var readyOnce sync.Once
 	rightDone := make(chan error, 1)
 	go func() {
-		<-ready
+		select {
+		case <-ready:
+		case <-stopRight:
+			return
+		}
 		_, err := right.UpdateBatch([]UpdateBatchItem{{
 			DocumentID: []byte("u2"),
 			Update: func([]byte) ([]byte, bool, error) {
@@ -3370,6 +3376,7 @@ func TestCollectionUpdateBatchReplansAfterConcurrentCollectionMutation(t *testin
 		}})
 		rightDone <- err
 	}()
+	defer close(stopRight)
 
 	concurrentUpdateWait := 10 * time.Second
 	if deadline, ok := t.Deadline(); ok {
@@ -3382,7 +3389,7 @@ func TestCollectionUpdateBatchReplansAfterConcurrentCollectionMutation(t *testin
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
 			if callbackCalls.Add(1) == 1 {
-				close(ready)
+				readyOnce.Do(func() { close(ready) })
 				timer := time.NewTimer(concurrentUpdateWait)
 				defer timer.Stop()
 				select {
