@@ -1010,13 +1010,18 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	} else {
 		result.MongoURI = redactMongoURI(cfg.MongoURI)
 	}
-	var updatedCityValues []string
-	if cfg.UpdateIndexedField {
-		updatedCityValues = benchmarkUpdatedCityValuesForUpdate()
-	}
-
 	if err := createIndexes(ctx, coll, cfg.SecondaryIndexes); err != nil {
 		return nil, err
+	}
+	var updatedCityValues []string
+	updatedCityValuesForUpdate := func() []string {
+		if !cfg.UpdateIndexedField {
+			return nil
+		}
+		if updatedCityValues == nil {
+			updatedCityValues = benchmarkUpdatedCityValuesForUpdate()
+		}
+		return updatedCityValues
 	}
 	var prebuilt []bson.D
 	var prebuiltRaw []bson.Raw
@@ -1125,6 +1130,10 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	}
 	result.Phases = append(result.Phases, rangePhase)
 
+	var updateCityValues []string
+	if cfg.Updates > 0 {
+		updateCityValues = updatedCityValuesForUpdate()
+	}
 	updatePhase, err := measureProfiledPhase(profiler, "id_update_set", cfg.Updates, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.Updates; i++ {
 			documentOrdinal := benchmarkDocumentOrdinal(i, 31, cfg.Documents)
@@ -1135,7 +1144,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 				DocumentOrdinal:    documentOrdinal,
 				DocumentCount:      cfg.Documents,
 				UpdateIndexedField: cfg.UpdateIndexedField,
-				UpdatedCityValues:  updatedCityValues,
+				UpdatedCityValues:  updateCityValues,
 			})
 			// Sample the driver/gateway/DB call; request construction is outside
 			// the update latency window and documented in the README.
@@ -1182,6 +1191,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 
 	if cfg.ConcurrentWriters > 0 && cfg.ConcurrentWrites > 0 {
 		phaseName := fmt.Sprintf("concurrent_id_update_set_w%d", cfg.ConcurrentWriters)
+		concurrentUpdateCityValues := updatedCityValuesForUpdate()
 		concurrentWritePhase, err := measureProfiledPhase(profiler, phaseName, cfg.ConcurrentWrites, func(sample func(time.Duration)) error {
 			return runConcurrentOperations(ctx, cfg.ConcurrentWriters, cfg.ConcurrentWrites, func(op int) error {
 				documentOrdinal := benchmarkDocumentOrdinal(op, 37, cfg.Documents)
@@ -1193,7 +1203,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 					DocumentCount:      cfg.Documents,
 					ConcurrentPhase:    true,
 					UpdateIndexedField: cfg.UpdateIndexedField,
-					UpdatedCityValues:  updatedCityValues,
+					UpdatedCityValues:  concurrentUpdateCityValues,
 				})
 				// Sample the driver/gateway/DB call; request construction is outside
 				// the update latency window and documented in the README.
@@ -2092,9 +2102,9 @@ func benchmarkUpdatedCityIndex(i int, documentOrdinal int, documentCount int, cy
 	if cycle <= 0 {
 		return 0
 	}
-	seed := uint64(i+1)*0x9e3779b185ebca87 ^
-		bits.RotateLeft64(uint64(documentOrdinal+1)*0xc2b2ae3d27d4eb4f, 17) ^
-		bits.RotateLeft64(uint64(documentCount+1)*0x165667b19e3779f9, 31)
+	seed := (uint64(i)+1)*0x9e3779b185ebca87 ^
+		bits.RotateLeft64((uint64(documentOrdinal)+1)*0xc2b2ae3d27d4eb4f, 17) ^
+		bits.RotateLeft64((uint64(documentCount)+1)*0x165667b19e3779f9, 31)
 	seed += 0x9e3779b97f4a7c15
 	seed = (seed ^ (seed >> 30)) * 0xbf58476d1ce4e5b9
 	seed = (seed ^ (seed >> 27)) * 0x94d049bb133111eb
