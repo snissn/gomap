@@ -36,6 +36,19 @@ func TestSummarizeLatencyNearestRank(t *testing.T) {
 	}
 }
 
+func TestSummarizePhaseZeroOperationsWithSamples(t *testing.T) {
+	phase := summarizePhase("load_insert_many", 0, 1, time.Millisecond, []time.Duration{time.Millisecond})
+	if phase.DriverMeanLatencyMicros == 0 {
+		t.Fatal("driver mean latency should still be reported for sampled driver calls")
+	}
+	if phase.SampledOpsPerSecond != 0 {
+		t.Fatalf("sampled ops/sec=%v want 0 for zero completed operations", phase.SampledOpsPerSecond)
+	}
+	if phase.SampledNsPerOp != 0 {
+		t.Fatalf("sampled ns/op=%v want 0 for zero completed operations", phase.SampledNsPerOp)
+	}
+}
+
 func TestCollectDiskSnapshotBreakdown(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "index.db"), []byte("1234"), 0o600); err != nil {
@@ -344,6 +357,9 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 	if _, err := parseConfig([]string{"-mongo-max-pool-size", "-1"}); err == nil {
 		t.Fatal("negative mongo-max-pool-size accepted")
+	}
+	if _, err := parseConfig([]string{"-mongo-max-pool-size", "4", "-mongo-min-pool-size", "8"}); err == nil {
+		t.Fatal("mongo-min-pool-size greater than mongo-max-pool-size accepted")
 	}
 }
 

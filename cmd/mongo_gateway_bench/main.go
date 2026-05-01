@@ -438,6 +438,9 @@ func parseConfig(args []string) (config, error) {
 	if cfg.MongoMaxPoolSize < 0 || cfg.MongoMinPoolSize < 0 || cfg.MongoMaxConnecting < 0 {
 		return config{}, errors.New("MongoDB pool option values cannot be negative")
 	}
+	if cfg.MongoMaxPoolSize > 0 && cfg.MongoMinPoolSize > cfg.MongoMaxPoolSize {
+		return config{}, errors.New("mongo-min-pool-size cannot exceed mongo-max-pool-size")
+	}
 	if cfg.Reads < 0 || cfg.RangeReads < 0 || cfg.Updates < 0 || cfg.Deletes < 0 || cfg.ConcurrentReads < 0 || cfg.ConcurrentWrites < 0 {
 		return config{}, errors.New("operation counts cannot be negative")
 	}
@@ -1301,13 +1304,22 @@ func waitForLoadVisible(ctx context.Context, cfg config, coll *mongo.Collection)
 	defer cancel()
 	visible := make([]bool, len(ids))
 	remaining := len(ids)
+	cursor := 0
 	ticker := time.NewTicker(2 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		for i, id := range ids {
+		checks := remaining
+		if checks > maxUnackVisibilityChecksPerPoll {
+			checks = maxUnackVisibilityChecksPerPoll
+		}
+		for checked, scanned := 0, 0; checked < checks && scanned < len(ids); scanned++ {
+			i := cursor
+			cursor = (cursor + 1) % len(ids)
 			if visible[i] {
 				continue
 			}
+			checked++
+			id := ids[i]
 			var out bson.M
 			err := coll.FindOne(waitCtx, bson.D{{Key: "_id", Value: id}}).Decode(&out)
 			if err == nil {
@@ -1332,6 +1344,8 @@ func waitForLoadVisible(ctx context.Context, cfg config, coll *mongo.Collection)
 		}
 	}
 }
+
+const maxUnackVisibilityChecksPerPoll = 128
 
 func loadVisibilitySentinelIDs(documents, batchSize int) []string {
 	batches := makeLoadBatches(documents, batchSize)
@@ -2073,8 +2087,10 @@ func summarizePhase(name string, operations, driverCalls int, duration time.Dura
 	}
 	if driverCalls > 0 && driverDuration > 0 {
 		result.DriverMeanLatencyMicros = float64(driverDuration.Microseconds()) / float64(driverCalls)
-		result.SampledOpsPerSecond = float64(operations) / driverDuration.Seconds()
-		result.SampledNsPerOp = float64(driverDuration.Nanoseconds()) / float64(operations)
+		if operations > 0 {
+			result.SampledOpsPerSecond = float64(operations) / driverDuration.Seconds()
+			result.SampledNsPerOp = float64(driverDuration.Nanoseconds()) / float64(operations)
+		}
 	}
 	return result
 }
