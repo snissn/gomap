@@ -435,7 +435,7 @@ func (s *Server) mongoUpdateCoalescer(name string) *mongoUpdateCoalescer {
 	}
 	s.updateMu.Lock()
 	defer s.updateMu.Unlock()
-	if s.closed {
+	if s.closed.Load() {
 		return nil
 	}
 	if s.updateCoalescers == nil {
@@ -961,6 +961,9 @@ func marshalCursorResponseWithID(ns string, cursorID int64, batchKey string, bat
 }
 
 func (s *Server) openCursor(ns string, docs []wire.Document, projection compiledProjection, batchSize int, explicitBatchSize bool, defaultBatchSize int, owner int64) (int64, bson.A, error) {
+	if s.isClosed() {
+		return 0, nil, errServerClosed
+	}
 	batchSize, err := normalizeBatchSize(batchSize, explicitBatchSize, defaultBatchSize)
 	if err != nil {
 		return 0, nil, err
@@ -984,6 +987,9 @@ func (s *Server) openCursor(ns string, docs []wire.Document, projection compiled
 	now := time.Now()
 	s.cursorMu.Lock()
 	defer s.cursorMu.Unlock()
+	if s.isClosed() {
+		return 0, nil, errServerClosed
+	}
 	s.reapExpiredCursorsLocked(now)
 	if s.cursors == nil {
 		s.cursors = make(map[int64]*serverCursor)

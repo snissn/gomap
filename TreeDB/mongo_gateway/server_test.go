@@ -744,6 +744,12 @@ func TestServerCloseStopsUpdateCoalescers(t *testing.T) {
 	if got := server.mongoUpdateCoalescer("app.users"); got != nil {
 		t.Fatal("closed server created a new coalescer")
 	}
+	if err := server.ServeOne(&readWriter{r: bytes.NewReader(nil)}); !errors.Is(err, errServerClosed) {
+		t.Fatalf("ServeOne after Close err=%v want %v", err, errServerClosed)
+	}
+	if _, _, err := server.openCursor("app.users", []wire.Document{mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})}, compiledProjection{}, 1, true, defaultCursorBatchSize, 1); !errors.Is(err, errServerClosed) {
+		t.Fatalf("openCursor after Close err=%v want %v", err, errServerClosed)
+	}
 }
 
 func TestServerUpdateCoalescerEvictsWhenIdle(t *testing.T) {
