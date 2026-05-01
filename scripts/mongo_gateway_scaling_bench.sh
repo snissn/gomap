@@ -108,19 +108,6 @@ normalize_bool_01() {
   esac
 }
 
-normalize_bool_word() {
-  local name=$1
-  local value=$2
-  case "$(normalize_bool_01 "$name" "$value")" in
-    1)
-      printf 'true'
-      ;;
-    0)
-      printf 'false'
-      ;;
-  esac
-}
-
 safe_label() {
   printf '%s' "$1" | tr -c '[:alnum:]_.-' '_'
 }
@@ -277,15 +264,15 @@ if [[ "$PREBUILD_DOCUMENTS" != "true" && "$PREBUILD_DOCUMENTS" != "false" ]]; th
   echo "invalid PREBUILD_DOCUMENTS=$PREBUILD_DOCUMENTS (want true or false)" >&2
   exit 2
 fi
-UPDATE_INDEXED_FIELD=$(normalize_bool_word UPDATE_INDEXED_FIELD "$UPDATE_INDEXED_FIELD")
+UPDATE_INDEXED_FIELD=$(normalize_bool_01 UPDATE_INDEXED_FIELD "$UPDATE_INDEXED_FIELD")
 case "$UPDATE_INDEXED_FIELD" in
-  true)
+  1)
     if [[ "$INDEXES" != "2" ]]; then
-      echo "UPDATE_INDEXED_FIELD=true requires INDEXES=2 so the city index exists" >&2
+      echo "UPDATE_INDEXED_FIELD=1 requires INDEXES=2 so the city index exists" >&2
       exit 2
     fi
     ;;
-  false)
+  0)
     ;;
 esac
 INCLUDE_MONGO=$(normalize_bool_01 INCLUDE_MONGO "$INCLUDE_MONGO")
@@ -370,7 +357,7 @@ run_bench() {
   if [[ "$PREBUILD_DOCUMENTS" == "true" ]]; then
     set -- -prebuild-documents "$@"
   fi
-  if [[ "$UPDATE_INDEXED_FIELD" == "true" ]]; then
+  if [[ "$UPDATE_INDEXED_FIELD" == "1" ]]; then
     set -- -update-indexed-field "$@"
   fi
 

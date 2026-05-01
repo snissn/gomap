@@ -1276,6 +1276,16 @@ func TestBenchmarkSetUpdateCanExerciseIndexedField(t *testing.T) {
 	if city, ok := set.Lookup("city").StringValueOK(); !ok || city != benchmarkUpdatedCity(5, 11, 100) {
 		t.Fatalf("city=%q ok=%t want %q", city, ok, benchmarkUpdatedCity(5, 11, 100))
 	}
+	set = updateSet(benchmarkSetUpdate(benchmarkSetUpdateParams{
+		Operation:          6,
+		DocumentOrdinal:    12,
+		DocumentCount:      100,
+		UpdateIndexedField: true,
+		UpdatedCityValues:  []string{},
+	}))
+	if city, ok := set.Lookup("city").StringValueOK(); !ok || city != "" {
+		t.Fatalf("city=%q ok=%t want explicit empty value list to stay empty", city, ok)
+	}
 	if got := len(benchmarkUpdatedCityValues); got != benchmarkUpdatedCityValueCount {
 		t.Fatalf("benchmarkUpdatedCityValues len=%d want %d", got, benchmarkUpdatedCityValueCount)
 	}
