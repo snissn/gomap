@@ -2182,7 +2182,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) e
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
 	iterators := make([]iterator.UnsafeIterator, 0, len(rootNames))
 	for _, rootName := range rootNames {
-		iter := newBufferedRootRunsIterator(domain.rootRuns[rootName], nil, nil)
+		iter := newBufferedRootRunsIteratorWithDeleted(domain.rootRuns[rootName], nil, nil, true)
 		iterators = append(iterators, iter)
 		baseRoot := domain.rootBaseIDs[rootName]
 		baseRootIDs[rootName] = baseRoot
@@ -3932,6 +3932,7 @@ type updateBatchPlan struct {
 	baseRootIDs    map[string]uint64
 	policies       []backenddb.OrderedRootStoragePolicy
 	deltaTables    []memtable.Table
+	bufferSafe     bool
 }
 
 func (plan *updateBatchPlan) close() {
@@ -3979,10 +3980,18 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 
 	var results []UpdateBatchResult
 	err = c.withMutationLock(func() error {
+		buffered, bufferErr := c.bufferUpdateBatchPlanLocked(plan)
+		if bufferErr != nil {
+			return bufferErr
+		}
+		if buffered {
+			results = plan.results
+			return nil
+		}
+		var publishErr error
 		if err := c.flushBufferedWrites(); err != nil {
 			return err
 		}
-		var publishErr error
 		results, publishErr = c.publishUpdateBatchPlanLocked(plan)
 		return publishErr
 	})
@@ -4015,6 +4024,10 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		_ = snap.Close()
 		return nil, errUpdateBatchHasSecondaryUniqueIndex
 	}
+	bufferSafe := len(meta.Indexes) > 0 &&
+		(!collectionMetaHasSecondaryUniqueIndex(meta) ||
+			mode == updateBatchModeNoSecondaryUniqueIndexes ||
+			mode == updateBatchModeNoSecondaryUniqueIndexChanges)
 	plannerOptions, err := collectionPlannerOptions(meta)
 	if err != nil {
 		_ = snap.Close()
@@ -4288,6 +4301,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		baseCommitSeq:  baseCommitSeq,
 		rootNames:      rootNames,
 		baseRootIDs:    baseRootIDs,
+		bufferSafe:     bufferSafe,
 		policies:       policies,
 		deltaTables:    deltaTables,
 	}, nil
@@ -4341,6 +4355,89 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]Upda
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	return plan.results, nil
+}
+
+func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, error) {
+	if c == nil || plan == nil || len(plan.deltaTables) == 0 {
+		return false, nil
+	}
+	if c.writeDomain == nil || !plan.bufferSafe || !plan.meta.Options.BufferedIndexedWrites || len(plan.meta.Indexes) == 0 {
+		return false, nil
+	}
+	if len(plan.rootNames) != len(plan.deltaTables) || len(plan.rootNames) != len(plan.policies) {
+		return false, fmt.Errorf("collections: UpdateBatch collection %q invalid plan lengths roots=%d deltas=%d policies=%d", plan.meta.Name, len(plan.rootNames), len(plan.deltaTables), len(plan.policies))
+	}
+	modifiedCount := updateBatchModifiedCount(plan.results)
+	if modifiedCount == 0 {
+		return false, nil
+	}
+	domain := c.writeDomain
+	domain.mu.Lock()
+	defer domain.mu.Unlock()
+	if domain.count != 0 {
+		return false, nil
+	}
+	if err := c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs); err != nil {
+		return false, err
+	}
+	if plan.catalog != nil {
+		c.initializeWriteDomainFromCatalogLocked(domain, plan.catalog, plan.baseCommitSeq, plan.baseSystemRoot)
+	}
+	if domain.rootPolicies == nil {
+		domain.rootPolicies = make(map[string]backenddb.OrderedRootStoragePolicy, len(plan.rootNames))
+	}
+	if domain.rootBaseIDs == nil {
+		domain.rootBaseIDs = make(map[string]uint64, len(plan.rootNames))
+	}
+	if domain.rootRuns == nil {
+		domain.rootRuns = make(map[string][]memtable.Table, len(plan.rootNames))
+	}
+	var stagedBytes int64
+	for i, rootName := range plan.rootNames {
+		baseRoot, ok := plan.baseRootIDs[rootName]
+		if !ok {
+			return false, fmt.Errorf("collections: UpdateBatch collection %q plan missing base root for %q", plan.meta.Name, rootName)
+		}
+		table := plan.deltaTables[i]
+		if table == nil || table.Len() == 0 {
+			continue
+		}
+		if len(domain.rootRuns[rootName]) == 0 {
+			domain.rootBaseIDs[rootName] = baseRoot
+		}
+		domain.rootPolicies[rootName] = plan.policies[i]
+		domain.rootRuns[rootName] = append(domain.rootRuns[rootName], table)
+		stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, table.Size())
+		plan.deltaTables[i] = nil
+	}
+	plan.deltaTables = nil
+	domain.loaded = true
+	domain.meta = plan.meta
+	domain.catalog = plan.catalog
+	domain.baseCommitSeq = plan.baseCommitSeq
+	domain.baseSystemRoot = plan.baseSystemRoot
+	if plan.catalog != nil {
+		domain.primaryRoot = plan.catalog.rootID(collectionPrimaryRootName(plan.meta.Name))
+	}
+	domain.count += modifiedCount
+	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedBytes)
+	c.meta = plan.meta
+	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
+		if err := c.flushBufferedIndexedLocked(domain); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+func updateBatchModifiedCount(results []UpdateBatchResult) int {
+	count := 0
+	for _, result := range results {
+		if result.Modified {
+			count++
+		}
+	}
+	return count
 }
 
 func rejectBatchUniqueConflicts(runtimes []indexRuntime, updates []preparedBatchUpdate) error {

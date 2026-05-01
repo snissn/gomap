@@ -3057,8 +3057,8 @@ func TestCollectionUpdateCombinerBatchesWhenSecondaryUniqueValuesAreUnchanged(t 
 		}
 	}
 	after := d.State()
-	if after.CommitSeq != before.CommitSeq+1 {
-		t.Fatalf("combined unique-schema batch advanced commit seq by %d, want 1", after.CommitSeq-before.CommitSeq)
+	if after.CommitSeq != before.CommitSeq {
+		t.Fatalf("combined unique-schema batch advanced commit seq by %d, want 0", after.CommitSeq-before.CommitSeq)
 	}
 	seaIDs, err := col.FindByIndex("city", "sea")
 	if err != nil {
@@ -3066,6 +3066,13 @@ func TestCollectionUpdateCombinerBatchesWhenSecondaryUniqueValuesAreUnchanged(t 
 	}
 	if len(seaIDs) != 1 || !bytes.Equal(seaIDs[0], []byte("u1")) {
 		t.Fatalf("sea ids=%q want [u1]", seaIDs)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush combined unique-schema batch: %v", err)
+	}
+	flushed := d.State()
+	if flushed.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("flushed combined unique-schema batch advanced commit seq by %d, want 1", flushed.CommitSeq-before.CommitSeq)
 	}
 }
 
@@ -3988,8 +3995,8 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesBatchesNonUniqueUpd
 		t.Fatalf("results=%+v want two modified rows", results)
 	}
 	after := d.State()
-	if after.CommitSeq != before.CommitSeq+1 {
-		t.Fatalf("batch advanced commit seq by %d, want 1", after.CommitSeq-before.CommitSeq)
+	if after.CommitSeq != before.CommitSeq {
+		t.Fatalf("buffered batch advanced commit seq by %d, want 0", after.CommitSeq-before.CommitSeq)
 	}
 	seaIDs, err := col.FindByIndex("city", "sea")
 	if err != nil {
@@ -3998,12 +4005,33 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesBatchesNonUniqueUpd
 	if len(seaIDs) != 1 || !bytes.Equal(seaIDs[0], []byte("u1")) {
 		t.Fatalf("sea ids=%q want [u1]", seaIDs)
 	}
+	hnlIDs, err := col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find hnl city: %v", err)
+	}
+	if len(hnlIDs) != 0 {
+		t.Fatalf("hnl ids=%q want none after buffered city update", hnlIDs)
+	}
 	emailIDs, err := col.FindByIndex("email", "a@example.com")
 	if err != nil {
 		t.Fatalf("find email: %v", err)
 	}
 	if len(emailIDs) != 1 || !bytes.Equal(emailIDs[0], []byte("u1")) {
 		t.Fatalf("email ids=%q want [u1]", emailIDs)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered update batch: %v", err)
+	}
+	flushed := d.State()
+	if flushed.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("flush advanced commit seq by %d, want 1", flushed.CommitSeq-before.CommitSeq)
+	}
+	seaIDs, err = col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find sea city after flush: %v", err)
+	}
+	if len(seaIDs) != 1 || !bytes.Equal(seaIDs[0], []byte("u1")) {
+		t.Fatalf("flushed sea ids=%q want [u1]", seaIDs)
 	}
 }
 
