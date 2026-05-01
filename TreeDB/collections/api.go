@@ -3731,23 +3731,23 @@ func (plan *updateBatchPlan) close() {
 }
 
 func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondaryUniqueIndexes bool) ([]UpdateBatchResult, error) {
-	unlockMutation := c.lockMutation()
-	if err := c.flushBufferedWrites(); err != nil {
-		unlockMutation()
+	hasUnique := false
+	if err := c.withMutationLock(func() error {
+		if err := c.flushBufferedWrites(); err != nil {
+			return err
+		}
+		if !requireNoSecondaryUniqueIndexes {
+			return nil
+		}
+		var err error
+		hasUnique, err = c.hasSecondaryUniqueIndexLocked()
+		return err
+	}); err != nil {
 		return nil, err
 	}
-	if requireNoSecondaryUniqueIndexes {
-		hasUnique, err := c.hasSecondaryUniqueIndexLocked()
-		if err != nil {
-			unlockMutation()
-			return nil, err
-		}
-		if hasUnique {
-			unlockMutation()
-			return nil, errUpdateBatchHasSecondaryUniqueIndex
-		}
+	if hasUnique {
+		return nil, errUpdateBatchHasSecondaryUniqueIndex
 	}
-	unlockMutation()
 
 	plan, err := c.buildUpdateBatchPlan(items, requireNoSecondaryUniqueIndexes)
 	if err != nil {
@@ -3758,23 +3758,37 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondary
 	}
 	defer plan.close()
 	if len(plan.deltaTables) == 0 {
-		unlockMutation = c.lockMutation()
-		defer unlockMutation()
-		if err := c.flushBufferedWrites(); err != nil {
-			return nil, err
-		}
-		if err := c.validateMutationRootDescriptors(plan.baseUserRoot, plan.baseSystemRoot, plan.baseCommitSeq); err != nil {
+		if err := c.withMutationLock(func() error {
+			if err := c.flushBufferedWrites(); err != nil {
+				return err
+			}
+			if err := c.validateMutationRootDescriptors(plan.baseUserRoot, plan.baseSystemRoot, plan.baseCommitSeq); err != nil {
+				return err
+			}
+			c.meta = plan.meta
+			return nil
+		}); err != nil {
 			return nil, err
 		}
 		return plan.results, nil
 	}
 
-	unlockMutation = c.lockMutation()
+	var results []UpdateBatchResult
+	err = c.withMutationLock(func() error {
+		if err := c.flushBufferedWrites(); err != nil {
+			return err
+		}
+		var publishErr error
+		results, publishErr = c.publishUpdateBatchPlanLocked(plan)
+		return publishErr
+	})
+	return results, err
+}
+
+func (c *Collection) withMutationLock(fn func() error) error {
+	unlockMutation := c.lockMutation()
 	defer unlockMutation()
-	if err := c.flushBufferedWrites(); err != nil {
-		return nil, err
-	}
-	return c.publishUpdateBatchPlanLocked(plan)
+	return fn()
 }
 
 func (c *Collection) hasSecondaryUniqueIndexLocked() (bool, error) {
@@ -4122,7 +4136,7 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]Upda
 		return nil, err
 	}
 	if len(rootIDs) != len(plan.rootNames) {
-		return nil, errors.New("collections: ordered root publish returned unexpected root count")
+		return nil, fmt.Errorf("collections: UpdateBatch collection %q ordered root publish returned unexpected root count expected=%d actual=%d", plan.meta.Name, len(plan.rootNames), len(rootIDs))
 	}
 	nextCatalog := cloneCatalogWithRootUpdates(plan.catalog, plan.meta, plan.rootNames, rootIDs)
 	c.meta = plan.meta
@@ -4650,7 +4664,7 @@ func (c *Collection) validateRootDescriptorSystemDeltaForMeta(meta CollectionMet
 		for _, rootName := range rootNames {
 			want, ok := baseRootIDs[rootName]
 			if !ok {
-				return fmt.Errorf("collections: missing base root for %q", rootName)
+				return fmt.Errorf("collections: missing base root for collection %q root %q", meta.Name, rootName)
 			}
 			if got := catalog.rootID(rootName); got != want {
 				return errConcurrentRootModification(meta.Name, rootName)
