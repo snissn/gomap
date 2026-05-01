@@ -296,7 +296,7 @@ func runMongoUpdatesSequential(col *collections.Collection, updates []mongoUpdat
 	for _, update := range updates {
 		matchedOne, modifiedOne, err := runMongoUpdateOne(col, update)
 		if err != nil {
-			return 0, 0, err
+			return 0, 0, mongoUpdateErrorWithIndex(update.index, err)
 		}
 		if matchedOne {
 			matched++
@@ -306,6 +306,17 @@ func runMongoUpdatesSequential(col *collections.Collection, updates []mongoUpdat
 		}
 	}
 	return matched, modified, nil
+}
+
+func mongoUpdateErrorWithIndex(index int, err error) error {
+	if err == nil {
+		return nil
+	}
+	prefix := fmt.Sprintf("updates[%d]:", index)
+	if strings.HasPrefix(err.Error(), prefix) {
+		return err
+	}
+	return fmt.Errorf("updates[%d]: %w", index, err)
 }
 
 func runMongoUpdateOne(col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
