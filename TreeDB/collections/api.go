@@ -1958,6 +1958,19 @@ func uniqueCollectionIndexNames(meta CollectionMeta) map[string]struct{} {
 	return uniqueIndexes
 }
 
+func uniqueCollectionSecondaryRootNames(meta CollectionMeta) map[string]string {
+	var uniqueRoots map[string]string
+	for _, idx := range meta.Indexes {
+		if idx.Unique {
+			if uniqueRoots == nil {
+				uniqueRoots = make(map[string]string, len(meta.Indexes))
+			}
+			uniqueRoots[collectionSecondaryRootName(meta.Name, idx.Name)] = idx.Name
+		}
+	}
+	return uniqueRoots
+}
+
 func rejectBufferedUniqueIndexConflicts(indexName string, pendingIndex *bufferedUniqueValueIndex, batchIndex memtable.Table) error {
 	it := batchIndex.NewIterator(nil, nil)
 	defer func() { _ = it.Close() }()
@@ -4935,7 +4948,11 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	if domain.rootRuns == nil {
 		domain.rootRuns = make(map[string][]memtable.Table, len(plan.rootNames))
 	}
+	uniqueSecondaryRoots := uniqueCollectionSecondaryRootNames(plan.meta)
 	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, stagedBytes)
+	if !shouldAutoFlushAfterAdding && len(uniqueSecondaryRoots) > 0 && bufferedIndexedAutoFlushEnabled(plan.meta.Options) {
+		shouldAutoFlushAfterAdding = true
+	}
 	var checkpoint bufferedIndexedCheckpoint
 	collectionMetaCheckpoint := c.meta
 	if shouldAutoFlushAfterAdding {
@@ -4961,6 +4978,30 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 				}
 				return false, err
 			}
+		}
+		if indexName, ok := uniqueSecondaryRoots[rootName]; ok {
+			uniqueValueTable, uniquePrefixes, err := bufferedUniqueIndexValueRun(table)
+			if err != nil {
+				if shouldAutoFlushAfterAdding {
+					rollbackBufferedIndexedDomain(domain, checkpoint)
+					c.meta = collectionMetaCheckpoint
+				}
+				return false, err
+			}
+			if domain.uniqueValueRuns == nil {
+				domain.uniqueValueRuns = make(map[string][]memtable.Table)
+			}
+			if domain.uniqueValueIndex == nil {
+				domain.uniqueValueIndex = make(map[string]*bufferedUniqueValueIndex)
+			}
+			domain.uniqueValueRuns[indexName] = append(domain.uniqueValueRuns[indexName], uniqueValueTable)
+			index := domain.uniqueValueIndex[indexName]
+			if index == nil {
+				index = newBufferedUniqueValueIndex(max(1, len(uniquePrefixes)))
+				domain.uniqueValueIndex[indexName] = index
+			}
+			index.addAll(uniquePrefixes)
+			stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, uniqueValueTable.Size())
 		}
 		domain.rootPolicies[rootName] = plan.policies[i]
 		domain.rootRuns[rootName] = append(domain.rootRuns[rootName], table)

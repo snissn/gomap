@@ -4972,6 +4972,74 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReadsBufferedInsert
 	}
 }
 
+func TestCollectionUpdateBatchMaintainsBufferedUniqueValueIndex(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"a@example.com","city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert flushed document: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush document: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{[]byte(`{"email":"b@example.com","city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert buffered document: %v", err)
+	}
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sea")},
+	}); err != nil {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatal("update batch was not buffered")
+	}
+
+	encoded, err := encodeIndexScalar("a@example.com")
+	if err != nil {
+		t.Fatalf("encode email: %v", err)
+	}
+	_, prefix, err := appendIndexValuePrefixSlice(nil, encoded)
+	if err != nil {
+		t.Fatalf("email prefix: %v", err)
+	}
+	col.writeDomain.mu.RLock()
+	pending := col.writeDomain.uniqueValueIndex["email"]
+	contains := pending != nil && pending.contains(prefix)
+	col.writeDomain.mu.RUnlock()
+	if !contains {
+		t.Fatal("buffered update did not add unchanged unique email to pending unique-value index")
+	}
+	ids, err := col.FindByIndex("email", "a@example.com")
+	if err != nil {
+		t.Fatalf("find buffered updated email: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("email ids=%q want [u1]", ids)
+	}
+}
+
 func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesDeclinesUniqueUpdates(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
