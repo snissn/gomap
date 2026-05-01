@@ -3431,7 +3431,12 @@ func (combiner *collectionUpdateCombiner) retireIdle() bool {
 }
 
 func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionUpdateCombineRequest) {
-	batch := []collectionUpdateCombineRequest{first}
+	batchCap := combiner.maxBatch
+	if batchCap < 1 {
+		batchCap = 1
+	}
+	batch := make([]collectionUpdateCombineRequest, 0, batchCap)
+	batch = append(batch, first)
 	for len(batch) < combiner.maxBatch {
 		select {
 		case req, ok := <-combiner.requests:
@@ -4791,7 +4796,7 @@ func (c *Collection) buildRootDescriptorSystemDeltaIterator(expectedCommitSeq, e
 
 func (c *Collection) buildRootDescriptorSystemDeltaIteratorForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 	if len(rootIDs) != len(rootNames) {
-		return nil, errors.New("collections: ordered root publish returned unexpected root count")
+		return nil, fmt.Errorf("collections: ordered root publish returned unexpected root count for %q: expected %d, got %d", meta.Name, len(rootNames), len(rootIDs))
 	}
 	if err := c.validateRootDescriptorSystemDeltaForMeta(meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs); err != nil {
 		return nil, err

@@ -784,6 +784,8 @@ func collectionMaintenanceTestContext(t *testing.T) (context.Context, context.Ca
 	return context.WithTimeout(context.Background(), timeout)
 }
 
+const collectionTestDeadlineBuffer = 500 * time.Millisecond
+
 func collectionTestTimeout(t *testing.T, fallback time.Duration) time.Duration {
 	t.Helper()
 	if deadline, ok := t.Deadline(); ok {
@@ -791,10 +793,10 @@ func collectionTestTimeout(t *testing.T, fallback time.Duration) time.Duration {
 		if remaining <= 0 {
 			return time.Nanosecond
 		}
-		if remaining <= 500*time.Millisecond {
+		if remaining <= collectionTestDeadlineBuffer {
 			return remaining
 		}
-		remaining -= 500 * time.Millisecond
+		remaining -= collectionTestDeadlineBuffer
 		if remaining > 0 && remaining < fallback {
 			return remaining
 		}
@@ -3528,10 +3530,30 @@ func TestCollectionUpdateCombinerStopWaitsForActiveWorker(t *testing.T) {
 	}
 
 	stopReturned := make(chan struct{})
+	stopStarted := make(chan struct{})
 	go func() {
+		close(stopStarted)
 		combiner.stop()
 		close(stopReturned)
 	}()
+	select {
+	case <-stopStarted:
+	case <-time.After(time.Second):
+		t.Fatal("stop goroutine did not start")
+	}
+	for {
+		combiner.mu.RLock()
+		stopped := combiner.stopped
+		combiner.mu.RUnlock()
+		if stopped {
+			break
+		}
+		select {
+		case <-stopReturned:
+			t.Fatal("stop returned before marking combiner stopped")
+		case <-time.After(time.Millisecond):
+		}
+	}
 	select {
 	case <-stopReturned:
 		t.Fatal("stop returned before active combiner worker drained")
@@ -3996,23 +4018,11 @@ func TestCollectionUpdateBatchFlushesBufferedIndexedWritesBeforePublish(t *testi
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
 			if staged.CompareAndSwap(false, true) {
-				insertDone := make(chan error, 1)
-				go func() {
-					_, err := right.InsertBatch(
-						[][]byte{[]byte("u2")},
-						[][]byte{[]byte(`{"city":"sfo","score":2}`)},
-					)
-					insertDone <- err
-				}()
-				timer := time.NewTimer(collectionTestTimeout(t, 5*time.Second))
-				defer timer.Stop()
-				select {
-				case err := <-insertDone:
-					if err != nil {
-						return nil, false, err
-					}
-				case <-timer.C:
-					return nil, false, errors.New("timed out waiting for right.InsertBatch to complete")
+				if _, err := right.InsertBatch(
+					[][]byte{[]byte("u2")},
+					[][]byte{[]byte(`{"city":"sfo","score":2}`)},
+				); err != nil {
+					return nil, false, err
 				}
 			}
 			return []byte(`{"city":"sea","score":1}`), true, nil
