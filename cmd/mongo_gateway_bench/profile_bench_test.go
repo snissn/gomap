@@ -392,7 +392,8 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	if err := backend.Checkpoint(); err != nil {
 		b.Fatalf("checkpoint preload: %v", err)
 	}
-	updateDocs := make([]bson.Raw, 4096)
+	const updateDocPoolSize = 4096
+	updateDocs := make([]bson.Raw, updateDocPoolSize)
 	for i := range updateDocs {
 		updateRaw, err := bson.Marshal(bson.D{{Key: "$set", Value: bson.D{
 			{Key: "concurrent_updated", Value: true},
