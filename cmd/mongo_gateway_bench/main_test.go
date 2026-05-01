@@ -1231,37 +1231,40 @@ func TestBenchmarkSetUpdateCanExerciseIndexedField(t *testing.T) {
 		return set
 	}
 
-	set := updateSet(benchmarkSetUpdate(3, true, true))
+	set := updateSet(benchmarkSetUpdate(3, 7, true, true))
 	if got, ok := set.Lookup("concurrent_update_seq").Int64OK(); !ok || got != 3 {
 		t.Fatalf("concurrent_update_seq=%d ok=%t want 3", got, ok)
 	}
-	if city, ok := set.Lookup("city").StringValueOK(); !ok || city != benchmarkUpdatedCity(3) {
-		t.Fatalf("city=%q ok=%t want %q", city, ok, benchmarkUpdatedCity(3))
+	if city, ok := set.Lookup("city").StringValueOK(); !ok || city != benchmarkUpdatedCity(3, 7) {
+		t.Fatalf("city=%q ok=%t want %q", city, ok, benchmarkUpdatedCity(3, 7))
 	}
 
-	set = updateSet(benchmarkSetUpdate(4, true, false))
+	set = updateSet(benchmarkSetUpdate(4, 7, true, false))
 	if _, ok := set.Lookup("city").StringValueOK(); ok {
 		t.Fatalf("city present when updateIndexedField=false: %v", set.Lookup("city"))
 	}
 
-	set = updateSet(benchmarkSetUpdate(5, false, true))
+	set = updateSet(benchmarkSetUpdate(5, 11, false, true))
 	if got, ok := set.Lookup("update_seq").Int64OK(); !ok || got != 5 {
 		t.Fatalf("update_seq=%d ok=%t want 5", got, ok)
 	}
 	if _, ok := set.Lookup("concurrent_update_seq").Int64OK(); ok {
 		t.Fatalf("concurrent_update_seq present in non-concurrent update: %v", set.Lookup("concurrent_update_seq"))
 	}
-	if city, ok := set.Lookup("city").StringValueOK(); !ok || city != benchmarkUpdatedCity(5) {
-		t.Fatalf("city=%q ok=%t want %q", city, ok, benchmarkUpdatedCity(5))
+	if city, ok := set.Lookup("city").StringValueOK(); !ok || city != benchmarkUpdatedCity(5, 11) {
+		t.Fatalf("city=%q ok=%t want %q", city, ok, benchmarkUpdatedCity(5, 11))
 	}
-	if first, repeated := benchmarkUpdatedCity(0), benchmarkUpdatedCity(len(benchmarkUpdatedCities)); first == repeated {
+	if first, repeated := benchmarkUpdatedCity(0, 0), benchmarkUpdatedCity(len(benchmarkUpdatedCities), 0); first == repeated {
 		t.Fatalf("benchmarkUpdatedCity repeated value %q for later update", first)
 	}
 	if got := len(benchmarkUpdatedCityValues); got != benchmarkUpdatedCityValueCount {
 		t.Fatalf("benchmarkUpdatedCityValues len=%d want %d", got, benchmarkUpdatedCityValueCount)
 	}
-	if first, aligned := benchmarkUpdatedCity(0), benchmarkUpdatedCity(65536); first == aligned {
+	if first, aligned := benchmarkUpdatedCity(0, 0), benchmarkUpdatedCity(65536, 0); first == aligned {
 		t.Fatalf("benchmarkUpdatedCity repeated value %q at common 65536 revisit stride", first)
+	}
+	if first, revisited := benchmarkUpdatedCity(13, 42), benchmarkUpdatedCity(13+benchmarkUpdatedCityValueCount, 42); first == revisited {
+		t.Fatalf("benchmarkUpdatedCity repeated value %q when revisiting same document after full value cycle", first)
 	}
 }
 

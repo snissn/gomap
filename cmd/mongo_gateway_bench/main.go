@@ -1125,9 +1125,10 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	}
 	updatePhase, err := measureProfiledPhase(profiler, "id_update_set", cfg.Updates, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.Updates; i++ {
-			id := benchmarkID((i * 31) % cfg.Documents)
+			documentOrdinal := (i * 31) % cfg.Documents
+			id := benchmarkID(documentOrdinal)
 			filter := bson.D{{Key: "_id", Value: id}}
-			update := benchmarkSetUpdate(i, false, cfg.UpdateIndexedField)
+			update := benchmarkSetUpdate(i, documentOrdinal, false, cfg.UpdateIndexedField)
 			// Sample the driver/gateway/DB call; request construction is outside
 			// the update latency window and documented in the README.
 			begin := time.Now()
@@ -1175,9 +1176,10 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		phaseName := fmt.Sprintf("concurrent_id_update_set_w%d", cfg.ConcurrentWriters)
 		concurrentWritePhase, err := measureProfiledPhase(profiler, phaseName, cfg.ConcurrentWrites, func(sample func(time.Duration)) error {
 			return runConcurrentOperations(ctx, cfg.ConcurrentWriters, cfg.ConcurrentWrites, func(op int) error {
-				id := benchmarkID((op * 37) % cfg.Documents)
+				documentOrdinal := (op * 37) % cfg.Documents
+				id := benchmarkID(documentOrdinal)
 				filter := bson.D{{Key: "_id", Value: id}}
-				update := benchmarkSetUpdate(op, true, cfg.UpdateIndexedField)
+				update := benchmarkSetUpdate(op, documentOrdinal, true, cfg.UpdateIndexedField)
 				// Sample the driver/gateway/DB call; request construction is outside
 				// the update latency window and documented in the README.
 				begin := time.Now()
@@ -1967,7 +1969,7 @@ func benchmarkDocument(i int) bson.D {
 	}
 }
 
-func benchmarkSetUpdate(i int, concurrentPhase bool, updateIndexedField bool) bson.D {
+func benchmarkSetUpdate(i int, documentOrdinal int, concurrentPhase bool, updateIndexedField bool) bson.D {
 	set := make(bson.D, 0, 3)
 	updatedKey := "updated"
 	updateSeqKey := "update_seq"
@@ -1980,7 +1982,7 @@ func benchmarkSetUpdate(i int, concurrentPhase bool, updateIndexedField bool) bs
 		bson.E{Key: updateSeqKey, Value: int64(i)},
 	)
 	if updateIndexedField {
-		set = append(set, bson.E{Key: "city", Value: benchmarkUpdatedCity(i)})
+		set = append(set, bson.E{Key: "city", Value: benchmarkUpdatedCity(i, documentOrdinal)})
 	}
 	return bson.D{{Key: "$set", Value: set}}
 }
@@ -1997,9 +1999,14 @@ func benchmarkCity(i int) string {
 	return benchmarkCities[i%len(benchmarkCities)]
 }
 
-func benchmarkUpdatedCity(i int) string {
+func benchmarkUpdatedCity(i int, documentOrdinal int) string {
 	prewarmBenchmarkUpdatedCities()
-	return benchmarkUpdatedCityValues[i%len(benchmarkUpdatedCityValues)]
+	cycle := len(benchmarkUpdatedCityValues)
+	if cycle == 0 {
+		return ""
+	}
+	index := (i%cycle + i/cycle + documentOrdinal) % cycle
+	return benchmarkUpdatedCityValues[index]
 }
 
 func prewarmBenchmarkUpdatedCities() {
