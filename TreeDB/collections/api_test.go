@@ -2960,6 +2960,12 @@ func TestNoIndexInsertAfterRawCommitDoesNotReenterWriteDomainLock(t *testing.T) 
 			t.Fatalf("insert: %v", err)
 		}
 	case <-timer.C:
+		_ = d.Close()
+		select {
+		case err := <-done:
+			t.Fatalf("insert unblocked after timeout with err=%v", err)
+		case <-time.After(time.Second):
+		}
 		t.Fatal("insert blocked while refreshing write-domain catalog after raw commit")
 	}
 }
