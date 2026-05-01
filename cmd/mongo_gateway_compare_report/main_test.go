@@ -459,6 +459,38 @@ func TestReportRejectsInvalidScalingScenarioWithUnsuffixedMongo(t *testing.T) {
 	}
 }
 
+func TestReportRejectsInvalidScalingScenarioMongoConfig(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb.json"), `{
+  "target": "treedb",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "insert", "operations": 100, "ops_per_sec": 1000, "latency_micros": {}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 2000}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "insert", "operations": 100, "ops_per_sec": 500, "latency_micros": {}}],
+  "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4000}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_driver-command-raw_writers_1\t100\t2\ttreedb.json\t2000\n"+
+		"mongo\tmongo_writers_bad\t100\t2\tmongo.json\t4000\n")
+
+	err := run([]string{
+		"-matrix", matrixPath,
+		"-report", filepath.Join(dir, "report.md"),
+	})
+	if err == nil ||
+		!strings.Contains(err.Error(), "invalid scaling scenario suffix") ||
+		!strings.Contains(err.Error(), `mongo config="mongo_writers_bad"`) {
+		t.Fatalf("err=%v want invalid mongo scaling scenario suffix", err)
+	}
+}
+
 func TestReportRejectsLoneMongoScenarioForUnsuffixedTreeConfig(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "treedb.json"), `{
