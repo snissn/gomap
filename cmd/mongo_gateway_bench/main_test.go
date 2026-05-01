@@ -1250,6 +1250,9 @@ func TestBenchmarkSetUpdateCanExerciseIndexedField(t *testing.T) {
 	if first, repeated := benchmarkUpdatedCity(0), benchmarkUpdatedCity(len(benchmarkUpdatedCities)); first == repeated {
 		t.Fatalf("benchmarkUpdatedCity repeated value %q for later update", first)
 	}
+	if first, wrapped := benchmarkUpdatedCity(0), benchmarkUpdatedCity(len(benchmarkUpdatedCityValues)); first != wrapped {
+		t.Fatalf("benchmarkUpdatedCity wrap=%q want %q", wrapped, first)
+	}
 }
 
 func TestWriteResultIncludesRedactedMongoURI(t *testing.T) {
@@ -1267,5 +1270,35 @@ func TestWriteResultIncludesRedactedMongoURI(t *testing.T) {
 	}
 	if !bytes.Contains(out.Bytes(), []byte("mongo_uri=mongodb://user@127.0.0.1:27017")) {
 		t.Fatalf("text output missing mongo_uri: %q", out.String())
+	}
+}
+
+func TestWriteResultKeepsTextHeaderStableForIndexedUpdateKnob(t *testing.T) {
+	result := &benchmarkResult{
+		Target:          "treedb",
+		Database:        "bench",
+		Collection:      "docs",
+		Documents:       1,
+		BatchSize:       1,
+		ClientMode:      "driver-command-raw",
+		ConcurrentReads: 2,
+	}
+	var out bytes.Buffer
+	if err := writeResult(&out, "text", result); err != nil {
+		t.Fatalf("writeResult false: %v", err)
+	}
+	firstLine := strings.SplitN(out.String(), "\n", 2)[0]
+	if strings.Contains(firstLine, "update_indexed_field") {
+		t.Fatalf("text header should not include update_indexed_field by default: %q", firstLine)
+	}
+
+	out.Reset()
+	result.UpdateIndexedField = true
+	if err := writeResult(&out, "text", result); err != nil {
+		t.Fatalf("writeResult true: %v", err)
+	}
+	lines := strings.Split(out.String(), "\n")
+	if len(lines) < 2 || lines[1] != "update_indexed_field=true" {
+		t.Fatalf("text output missing separate update_indexed_field line: %q", out.String())
 	}
 }

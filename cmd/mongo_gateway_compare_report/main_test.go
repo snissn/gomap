@@ -92,6 +92,37 @@ func TestReportRejectsIncompleteCell(t *testing.T) {
 	}
 }
 
+func TestReportRejectsDuplicateTreeDBRows(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb_a.json"), `{
+  "target": "treedb",
+  "documents": 10,
+  "secondary_indexes": 0,
+  "phases": [],
+  "treedb_disk_after_checkpoint": {"total_bytes": 100}
+}`)
+	writeFile(t, filepath.Join(dir, "treedb_b.json"), `{
+  "target": "treedb",
+  "documents": 10,
+  "secondary_indexes": 0,
+  "phases": [],
+  "treedb_disk_after_checkpoint": {"total_bytes": 120}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_writers_1\t10\t0\ttreedb_a.json\t100\n"+
+		"treedb\ttreedb_bson_writers_1\t10\t0\ttreedb_b.json\t120\n")
+
+	err := run([]string{
+		"-matrix", matrixPath,
+		"-report", filepath.Join(dir, "report.md"),
+		"-allow-incomplete",
+	})
+	if err == nil || !strings.Contains(err.Error(), `duplicate treedb row`) {
+		t.Fatalf("expected duplicate treedb row error, got %v", err)
+	}
+}
+
 func TestReportAllowsIncompleteTreeDBOnlyCell(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "treedb.json"), `{
@@ -329,8 +360,11 @@ func TestReportRejectsLoneMismatchedMongoScenario(t *testing.T) {
 		"-matrix", matrixPath,
 		"-report", filepath.Join(dir, "report.md"),
 	})
-	if err == nil || !strings.Contains(err.Error(), `config="treedb_bson_driver-command-raw_writers_2"`) {
-		t.Fatalf("err=%v want missing writers_2 mongo scenario", err)
+	if err == nil ||
+		!strings.Contains(err.Error(), `config="treedb_bson_driver-command-raw_writers_2"`) ||
+		!strings.Contains(err.Error(), `tree_scenario="writers_2"`) ||
+		!strings.Contains(err.Error(), `available_mongo_configs=[mongo_writers_1]`) {
+		t.Fatalf("err=%v want missing writers_2 mongo scenario with context", err)
 	}
 }
 
@@ -360,8 +394,11 @@ func TestReportAllowIncompleteStillRejectsMismatchedMongoScenario(t *testing.T) 
 		"-report", filepath.Join(dir, "report.md"),
 		"-allow-incomplete",
 	})
-	if err == nil || !strings.Contains(err.Error(), `config="treedb_bson_driver-command-raw_writers_1"`) {
-		t.Fatalf("err=%v want mismatched mongo scenario despite allow-incomplete", err)
+	if err == nil ||
+		!strings.Contains(err.Error(), `config="treedb_bson_driver-command-raw_writers_1"`) ||
+		!strings.Contains(err.Error(), `tree_scenario="writers_1"`) ||
+		!strings.Contains(err.Error(), `available_mongo_configs=[mongo]`) {
+		t.Fatalf("err=%v want mismatched mongo scenario despite allow-incomplete with context", err)
 	}
 }
 

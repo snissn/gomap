@@ -2497,7 +2497,7 @@ func TestCollectionValidateInsertBatchPlanLockedClassifiesRaces(t *testing.T) {
 		t.Fatalf("root mismatch err=%v missing collection/root context", err)
 	}
 	validation.baseRootIDs = map[string]uint64{}
-	if current, _, err := col.validateInsertBatchPlanLocked(validation); current != nil || err == nil || errors.Is(err, ErrConcurrentMutation) || !strings.Contains(err.Error(), `collection "users" root "users/primary"`) {
+	if current, _, err := col.validateInsertBatchPlanLocked(validation); current != nil || err == nil || errors.Is(err, ErrConcurrentMutation) || !strings.Contains(err.Error(), `collection="users"`) || !strings.Contains(err.Error(), `root="users/primary"`) {
 		if current != nil {
 			_ = current.Close()
 		}
@@ -2807,7 +2807,7 @@ func TestCollectionUpdateCombinerRunBatchPublishesDistinctIDsOnce(t *testing.T) 
 	}
 }
 
-func TestCollectionUpdateCombinerRunBatchDoesNotReplayCallbacksAfterBatchError(t *testing.T) {
+func TestCollectionUpdateCombinerRunBatchPreservesIndependentItemErrorOutcomes(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -2855,22 +2855,32 @@ func TestCollectionUpdateCombinerRunBatchDoesNotReplayCallbacksAfterBatchError(t
 	}
 	combiner.runBatch(requests)
 	first := <-requests[0].done
-	if !errors.Is(first.err, itemErr) {
-		t.Fatalf("first err=%v want shared itemErr", first.err)
+	if first.err != nil {
+		t.Fatalf("first err=%v want nil", first.err)
+	}
+	if !first.matched || !first.modified {
+		t.Fatalf("first matched=%v modified=%v want true,true", first.matched, first.modified)
 	}
 	second := <-requests[1].done
 	if !errors.Is(second.err, itemErr) {
 		t.Fatalf("second err=%v want itemErr", second.err)
 	}
-	if firstCalls != 1 || secondCalls != 1 {
-		t.Fatalf("callback calls first=%d second=%d want 1,1", firstCalls, secondCalls)
+	if firstCalls == 0 || secondCalls != 1 {
+		t.Fatalf("callback calls first=%d second=%d want first called and second called once", firstCalls, secondCalls)
 	}
 	got, err := col.Get([]byte("u1"))
 	if err != nil {
 		t.Fatalf("get u1: %v", err)
 	}
+	if !bytes.Contains(got, []byte(`"score":1`)) {
+		t.Fatalf("u1 document=%s want updated score", got)
+	}
+	got, err = col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get u2: %v", err)
+	}
 	if !bytes.Contains(got, []byte(`"score":0`)) {
-		t.Fatalf("u1 document=%s want unchanged score", got)
+		t.Fatalf("u2 document=%s want unchanged score", got)
 	}
 }
 
@@ -2924,12 +2934,21 @@ func TestCollectionUpdateCombinerRunBatchRecoversCallbackPanic(t *testing.T) {
 	}
 	assertNoStackTraceInError(t, first.err)
 	second := <-requests[1].done
-	if second.err == nil || !strings.Contains(second.err.Error(), "bad callback") {
-		t.Fatalf("second err=%v want shared recovered panic", second.err)
+	if second.err != nil {
+		t.Fatalf("second err=%v want nil", second.err)
 	}
-	assertNoStackTraceInError(t, second.err)
-	if secondCalls != 0 {
-		t.Fatalf("second callback calls=%d want 0", secondCalls)
+	if !second.matched || !second.modified {
+		t.Fatalf("second matched=%v modified=%v want true,true", second.matched, second.modified)
+	}
+	if secondCalls != 1 {
+		t.Fatalf("second callback calls=%d want 1", secondCalls)
+	}
+	got, err := col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get u2: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`"score":2`)) {
+		t.Fatalf("u2 document=%s want updated score", got)
 	}
 }
 
@@ -3509,7 +3528,9 @@ func TestCollectionUpdateBatchReplansAfterConcurrentCollectionMutation(t *testin
 	stopRight := make(chan struct{})
 	var readyOnce sync.Once
 	rightDone := make(chan error, 1)
+	rightFinished := make(chan struct{})
 	go func() {
+		defer close(rightFinished)
 		select {
 		case <-ready:
 		case <-stopRight:
@@ -3523,7 +3544,14 @@ func TestCollectionUpdateBatchReplansAfterConcurrentCollectionMutation(t *testin
 		}})
 		rightDone <- err
 	}()
-	defer close(stopRight)
+	defer func() {
+		close(stopRight)
+		select {
+		case <-rightFinished:
+		case <-time.After(time.Second):
+			t.Log("timed out waiting for concurrent update goroutine cleanup")
+		}
+	}()
 
 	concurrentUpdateWait := 10 * time.Second
 	if deadline, ok := t.Deadline(); ok {
@@ -3562,17 +3590,21 @@ func TestCollectionUpdateBatchReplansAfterConcurrentCollectionMutation(t *testin
 	}
 	for _, tc := range []struct {
 		id    []byte
-		score string
+		score float64
 	}{
-		{id: []byte("u1"), score: `"score":1`},
-		{id: []byte("u2"), score: `"score":2`},
+		{id: []byte("u1"), score: 1},
+		{id: []byte("u2"), score: 2},
 	} {
 		got, err := left.Get(tc.id)
 		if err != nil {
 			t.Fatalf("get %s: %v", tc.id, err)
 		}
-		if !bytes.Contains(got, []byte(tc.score)) {
-			t.Fatalf("%s document=%s want %s", tc.id, got, tc.score)
+		var doc map[string]any
+		if err := json.Unmarshal(got, &doc); err != nil {
+			t.Fatalf("parse %s document=%s: %v", tc.id, got, err)
+		}
+		if gotScore, ok := doc["score"].(float64); !ok || gotScore != tc.score {
+			t.Fatalf("%s score=%v want %v document=%s", tc.id, doc["score"], tc.score, got)
 		}
 	}
 }

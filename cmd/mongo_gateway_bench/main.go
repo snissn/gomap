@@ -1905,8 +1905,9 @@ func mongoDBStats(ctx context.Context, db *mongo.Database) (map[string]any, erro
 }
 
 var (
-	benchmarkCities        = [...]string{"hnl", "sfo", "nyc", "lon", "sin", "ber", "tyo", "syd"}
-	benchmarkUpdatedCities = [...]string{"ams", "cdg", "mad", "mex", "gru", "yyz", "icn", "akl"}
+	benchmarkCities            = [...]string{"hnl", "sfo", "nyc", "lon", "sin", "ber", "tyo", "syd"}
+	benchmarkUpdatedCities     = [...]string{"ams", "cdg", "mad", "mex", "gru", "yyz", "icn", "akl"}
+	benchmarkUpdatedCityValues = buildBenchmarkUpdatedCityValues()
 )
 
 func benchmarkDocument(i int) bson.D {
@@ -1958,7 +1959,19 @@ func benchmarkCity(i int) string {
 }
 
 func benchmarkUpdatedCity(i int) string {
-	return fmt.Sprintf("%s-%06d", benchmarkUpdatedCities[i%len(benchmarkUpdatedCities)], i/len(benchmarkUpdatedCities))
+	return benchmarkUpdatedCityValues[i%len(benchmarkUpdatedCityValues)]
+}
+
+func buildBenchmarkUpdatedCityValues() []string {
+	const generations = 8192
+	values := make([]string, 0, len(benchmarkUpdatedCities)*generations)
+	for generation := 0; generation < generations; generation++ {
+		suffix := strconv.Itoa(generation)
+		for _, city := range benchmarkUpdatedCities {
+			values = append(values, city+"-"+suffix)
+		}
+	}
+	return values
 }
 
 func int64Value(value any) (int64, bool) {
@@ -2328,10 +2341,13 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(result)
 	case "text":
-		fmt.Fprintf(out, "target=%s client_mode=%s database=%s collection=%s documents=%d batch_size=%d insert_producers=%d mongo_max_pool_size=%d mongo_min_pool_size=%d mongo_max_connecting=%d secondary_indexes=%d concurrent_readers=%d concurrent_reads=%d concurrent_writers=%d concurrent_writes=%d update_indexed_field=%t\n",
+		fmt.Fprintf(out, "target=%s client_mode=%s database=%s collection=%s documents=%d batch_size=%d insert_producers=%d mongo_max_pool_size=%d mongo_min_pool_size=%d mongo_max_connecting=%d secondary_indexes=%d concurrent_readers=%d concurrent_reads=%d concurrent_writers=%d concurrent_writes=%d\n",
 			result.Target, result.ClientMode, result.Database, result.Collection, result.Documents, result.BatchSize,
 			result.InsertProducers, result.MongoMaxPoolSize, result.MongoMinPoolSize, result.MongoMaxConnecting, result.SecondaryIndexes,
-			result.ConcurrentReaders, result.ConcurrentReads, result.ConcurrentWriters, result.ConcurrentWrites, result.UpdateIndexedField)
+			result.ConcurrentReaders, result.ConcurrentReads, result.ConcurrentWriters, result.ConcurrentWrites)
+		if result.UpdateIndexedField {
+			fmt.Fprintln(out, "update_indexed_field=true")
+		}
 		if result.TreeDBDir != "" {
 			fmt.Fprintf(out, "treedb_dir=%s\n", result.TreeDBDir)
 		}
@@ -2430,15 +2446,25 @@ var selectedTreeDBStatKeys = [...]string{
 	"treedb.publish.watermark.latency_p99_ms",
 }
 
+var warnMissingTreeDBStatKeysOnce sync.Once
+
 func selectedTreeDBStats(stats map[string]string) map[string]string {
 	if len(stats) == 0 {
 		return nil
 	}
 	out := make(map[string]string, len(selectedTreeDBStatKeys))
+	missing := make([]string, 0)
 	for _, key := range selectedTreeDBStatKeys {
 		if value, ok := stats[key]; ok {
 			out[key] = value
+			continue
 		}
+		missing = append(missing, key)
+	}
+	if len(missing) > 0 {
+		warnMissingTreeDBStatKeysOnce.Do(func() {
+			fmt.Fprintf(os.Stderr, "warning: benchmark expected TreeDB stats missing from DB.Stats(): %s\n", strings.Join(missing, ", "))
+		})
 	}
 	if len(out) == 0 {
 		return nil

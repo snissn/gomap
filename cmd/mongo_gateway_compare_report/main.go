@@ -275,29 +275,32 @@ func matchingMongoRecord(key baseCellKey, treeConfig string, mongos map[string]*
 		return record, nil
 	}
 	treeScenario := scalingScenarioSuffix(treeConfig)
-	if len(mongos) == 1 {
-		for mongoConfig, record := range mongos {
-			mongoScenario := scalingScenarioSuffix(mongoConfig)
-			if treeScenario == mongoScenario {
-				return record, nil
-			}
-		}
-		return nil, fmt.Errorf("missing mongo row for documents=%d secondary_indexes=%d config=%q", key.Documents, key.SecondaryIndexes, treeConfig)
-	}
 	var matched *runRecord
+	var candidates []string
 	for mongoConfig, record := range mongos {
 		if scalingScenarioSuffix(mongoConfig) != treeScenario {
 			continue
 		}
-		if matched != nil {
-			return nil, fmt.Errorf("ambiguous mongo rows for documents=%d secondary_indexes=%d config=%q", key.Documents, key.SecondaryIndexes, treeConfig)
-		}
 		matched = record
+		candidates = append(candidates, mongoConfig)
+	}
+	sort.Strings(candidates)
+	if len(candidates) > 1 {
+		return nil, fmt.Errorf("ambiguous mongo rows for documents=%d secondary_indexes=%d config=%q tree_scenario=%q candidates=%v available_mongo_configs=%v", key.Documents, key.SecondaryIndexes, treeConfig, treeScenario, candidates, sortedRunRecordKeys(mongos))
 	}
 	if matched != nil {
 		return matched, nil
 	}
-	return nil, fmt.Errorf("missing mongo row for documents=%d secondary_indexes=%d config=%q", key.Documents, key.SecondaryIndexes, treeConfig)
+	return nil, fmt.Errorf("missing mongo row for documents=%d secondary_indexes=%d config=%q tree_scenario=%q available_mongo_configs=%v", key.Documents, key.SecondaryIndexes, treeConfig, treeScenario, sortedRunRecordKeys(mongos))
+}
+
+func sortedRunRecordKeys(records map[string]*runRecord) []string {
+	keys := make([]string, 0, len(records))
+	for key := range records {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func scalingScenarioSuffix(config string) string {

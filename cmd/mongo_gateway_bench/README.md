@@ -296,8 +296,9 @@ The initial workload phases are:
 - `id_delete_one`: optional deletes; disabled unless `-deletes` is non-zero.
 
 Update phases change only non-indexed fields by default. Add
-`-update-indexed-field` when `city_1` exists to also change the indexed `city`
-field and exercise secondary-index maintenance in the update path.
+`-update-indexed-field` with `-secondary-indexes=2` so `city_1` exists and the
+indexed `city` field changes, exercising secondary-index maintenance in the
+update path.
 
 Latency samples are per MongoDB driver/gateway call. Update phases build the
 filter and update document before starting the sampled timer, so update samples
