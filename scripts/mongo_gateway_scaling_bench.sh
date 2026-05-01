@@ -77,41 +77,60 @@ storage/pool settings.
 EOF
 }
 
+require_option_value() {
+  local opt=$1
+  local value=${2-}
+  if [[ -z "$value" || "$value" == --* ]]; then
+    echo "missing value for $opt" >&2
+    usage >&2
+    exit 2
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --out)
+      require_option_value "$1" "${2-}"
       OUT_DIR="$2"
       shift 2
       ;;
     --docs)
+      require_option_value "$1" "${2-}"
       DOCS="$2"
       shift 2
       ;;
     --indexes)
+      require_option_value "$1" "${2-}"
       INDEXES="$2"
       shift 2
       ;;
     --batch-size)
+      require_option_value "$1" "${2-}"
       BATCH_SIZE="$2"
       shift 2
       ;;
     --insert-producers)
+      require_option_value "$1" "${2-}"
       INSERT_PRODUCERS="$2"
       shift 2
       ;;
     --writers)
+      require_option_value "$1" "${2-}"
       WRITERS_LIST="$2"
       shift 2
       ;;
     --readers)
+      require_option_value "$1" "${2-}"
       READERS_LIST="$2"
       shift 2
       ;;
     --concurrent-writes)
+      require_option_value "$1" "${2-}"
       CONCURRENT_WRITES="$2"
       shift 2
       ;;
     --concurrent-reads)
+      require_option_value "$1" "${2-}"
       CONCURRENT_READS="$2"
       shift 2
       ;;
@@ -120,22 +139,27 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --mongo-uri)
+      require_option_value "$1" "${2-}"
       MONGO_URI="$2"
       shift 2
       ;;
     --treedb-format)
+      require_option_value "$1" "${2-}"
       TREEDB_DOCUMENT_FORMAT="$2"
       shift 2
       ;;
     --client-mode)
+      require_option_value "$1" "${2-}"
       TREEDB_CLIENT_MODE="$2"
       shift 2
       ;;
     --profile)
+      require_option_value "$1" "${2-}"
       TREEDB_PROFILE="$2"
       shift 2
       ;;
     --maintenance)
+      require_option_value "$1" "${2-}"
       TREEDB_MAINTENANCE="$2"
       shift 2
       ;;
@@ -144,10 +168,12 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --timeout)
+      require_option_value "$1" "${2-}"
       TIMEOUT="$2"
       shift 2
       ;;
     --title)
+      require_option_value "$1" "${2-}"
       TITLE="$2"
       shift 2
       ;;

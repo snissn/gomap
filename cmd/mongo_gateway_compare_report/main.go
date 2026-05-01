@@ -175,7 +175,6 @@ func loadComparisons(matrixPath string, allowIncomplete bool) ([]cellComparison,
 	matrixDir := filepath.Dir(matrixPath)
 	type groupedCell struct {
 		mongos         map[string]*runRecord
-		mongoKeys      []string
 		trees          map[string]*runRecord
 		treeConfigKeys []string
 	}
@@ -227,7 +226,6 @@ func loadComparisons(matrixPath string, allowIncomplete bool) ([]cellComparison,
 				return nil, fmt.Errorf("duplicate mongo row for documents=%d secondary_indexes=%d config=%q", key.Documents, key.SecondaryIndexes, record.Row.Config)
 			}
 			cell.mongos[record.Row.Config] = record
-			cell.mongoKeys = append(cell.mongoKeys, record.Row.Config)
 		default:
 			return nil, fmt.Errorf("unknown target %q in matrix", row.Target)
 		}
@@ -238,7 +236,6 @@ func loadComparisons(matrixPath string, allowIncomplete bool) ([]cellComparison,
 			return nil, fmt.Errorf("incomplete comparison cell documents=%d secondary_indexes=%d", key.Documents, key.SecondaryIndexes)
 		}
 		sort.Strings(cell.treeConfigKeys)
-		sort.Strings(cell.mongoKeys)
 		for _, config := range cell.treeConfigKeys {
 			mongo, err := matchingMongoRecord(key, config, cell.mongos, allowIncomplete)
 			if err != nil {
@@ -290,20 +287,18 @@ func matchingMongoRecord(key baseCellKey, treeConfig string, mongos map[string]*
 		}
 		return nil, fmt.Errorf("missing mongo row for documents=%d secondary_indexes=%d config=%q", key.Documents, key.SecondaryIndexes, treeConfig)
 	}
-	if treeScenario != "" {
-		var matched *runRecord
-		for mongoConfig, record := range mongos {
-			if scalingScenarioSuffix(mongoConfig) != treeScenario {
-				continue
-			}
-			if matched != nil {
-				return nil, fmt.Errorf("ambiguous mongo rows for documents=%d secondary_indexes=%d config=%q", key.Documents, key.SecondaryIndexes, treeConfig)
-			}
-			matched = record
+	var matched *runRecord
+	for mongoConfig, record := range mongos {
+		if scalingScenarioSuffix(mongoConfig) != treeScenario {
+			continue
 		}
 		if matched != nil {
-			return matched, nil
+			return nil, fmt.Errorf("ambiguous mongo rows for documents=%d secondary_indexes=%d config=%q", key.Documents, key.SecondaryIndexes, treeConfig)
 		}
+		matched = record
+	}
+	if matched != nil {
+		return matched, nil
 	}
 	if allowIncomplete {
 		return nil, nil
