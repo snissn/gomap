@@ -3109,12 +3109,12 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem) ([]UpdateBatchResu
 			_ = snap.Close()
 			return nil, err
 		}
+		if !changedOne {
+			continue
+		}
 		if err := validateBSONReplacementPreservesID(entry.Value, document, plannerOptions); err != nil {
 			_ = snap.Close()
 			return nil, err
-		}
-		if !changedOne {
-			continue
 		}
 		prepared := preparedBatchUpdate{
 			itemIndex:  i,

@@ -2639,6 +2639,51 @@ func TestCollectionUpdateBatchBSONRejectsIDMutation(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBatchBSONAllowsNoopNilReplacement(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	doc := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(0)}})
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{doc}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	results, err := col.UpdateBatch([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: func([]byte) ([]byte, bool, error) {
+			return nil, false, nil
+		}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBatch noop: %v", err)
+	}
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("results len=%d want %d", got, want)
+	}
+	if !results[0].Matched || results[0].Modified {
+		t.Fatalf("result=%+v want matched noop", results[0])
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !bytes.Equal(got, doc) {
+		t.Fatalf("document changed got=%v want=%v", bson.Raw(got), bson.Raw(doc))
+	}
+}
+
 func TestCollectionUpdateBatchTemplateV1MaterializesUpdatedDocuments(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

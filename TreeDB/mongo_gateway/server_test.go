@@ -688,6 +688,10 @@ func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterParseError(t *testin
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, updateResponse, "BadValue")
+	errmsg, ok := bson.Raw(updateResponse).Lookup("errmsg").StringValueOK()
+	if !ok || !strings.Contains(errmsg, "updates[1]") {
+		t.Fatalf("errmsg=%q ok=%v want updates[1]", errmsg, ok)
+	}
 
 	findResponse := serveCommand(t, server, 22596, bson.D{
 		{Key: "find", Value: "users"},
@@ -701,6 +705,33 @@ func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterParseError(t *testin
 	gotScore, ok := firstBatch[0].Lookup("score").Int32OK()
 	if !ok || gotScore != 1 {
 		t.Fatalf("u1 score=%d ok=%v want 1", gotScore, ok)
+	}
+}
+
+func TestParseMongoUpdateItemUnsupportedFlagsIncludeIndex(t *testing.T) {
+	tests := []struct {
+		name string
+		flag bson.E
+		want string
+	}{
+		{name: "multi", flag: bson.E{Key: "multi", Value: true}, want: "updateOne only"},
+		{name: "upsert", flag: bson.E{Key: "upsert", Value: true}, want: "does not support upsert"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc := mustDocument(t, bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+				tt.flag,
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "score", Value: int32(1)}}}}},
+			})
+			_, err := parseMongoUpdateItem(3, doc)
+			if err == nil {
+				t.Fatal("parseMongoUpdateItem accepted unsupported flag")
+			}
+			if !strings.Contains(err.Error(), "updates[3]") || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err=%v want index and %q", err, tt.want)
+			}
+		})
 	}
 }
 

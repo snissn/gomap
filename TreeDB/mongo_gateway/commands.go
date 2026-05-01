@@ -260,12 +260,12 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	if multi, err := optionalBoolField(update, "multi"); err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 	} else if multi {
-		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: "Mongo gateway update currently supports updateOne only"}
+		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update currently supports updateOne only", index)}
 	}
 	if upsert, err := optionalBoolField(update, "upsert"); err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 	} else if upsert {
-		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: "Mongo gateway update currently does not support upsert"}
+		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update currently does not support upsert", index)}
 	}
 	updateDoc, err := requiredDocumentField(update, "u")
 	if err != nil {
