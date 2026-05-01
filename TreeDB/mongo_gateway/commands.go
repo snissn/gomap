@@ -186,8 +186,6 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
 
-	var matched int32
-	var modified int32
 	col, err := s.Collections.OpenCollection(name)
 	if err != nil {
 		if errors.Is(err, collections.ErrCollectionNotFound) {
@@ -195,70 +193,111 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 		}
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
+	parsed := make([]mongoUpdateItem, 0, len(updates))
+	seenKeys := make(map[string]struct{}, len(updates))
+	hasDuplicateKey := false
 	for i, update := range updates {
-		filter, err := requiredDocumentField(update, "q")
+		item, err := parseMongoUpdateItem(i, update)
 		if err != nil {
-			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("updates[%d]: %v", i, err))
+			if len(parsed) > 0 {
+				if _, _, runErr := runMongoUpdatesSequential(col, parsed); runErr != nil {
+					return mongoUpdateWriteCommandError(runErr)
+				}
+			}
+			return mongoUpdateParseCommandError(err)
 		}
-		id, err := idEqualityFilterValue(filter, "update")
-		if err != nil {
-			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: %v", i, err))
+		keyString := string(item.key)
+		if _, ok := seenKeys[keyString]; ok {
+			hasDuplicateKey = true
 		}
-		key, err := encodePrimaryKey(id)
-		if err != nil {
-			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: %v", i, err))
+		seenKeys[keyString] = struct{}{}
+		parsed = append(parsed, item)
+	}
+	var matched, modified int32
+	if len(parsed) > 1 && !hasDuplicateKey {
+		var batched bool
+		matched, modified, batched, err = runMongoUpdateBatch(col, parsed)
+		if err != nil || !batched {
+			matched, modified, err = runMongoUpdatesSequential(col, parsed)
 		}
-		if multi, err := optionalBoolField(update, "multi"); err != nil {
-			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("updates[%d]: %v", i, err))
-		} else if multi {
-			return commandError(commandCodeBadValue, "BadValue", "Mongo gateway update currently supports updateOne only")
-		}
-		if upsert, err := optionalBoolField(update, "upsert"); err != nil {
-			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("updates[%d]: %v", i, err))
-		} else if upsert {
-			return commandError(commandCodeBadValue, "BadValue", "Mongo gateway update currently does not support upsert")
-		}
-		updateDoc, err := requiredDocumentField(update, "u")
-		if err != nil {
-			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("updates[%d]: %v", i, err))
-		}
+	} else {
+		matched, modified, err = runMongoUpdatesSequential(col, parsed)
+	}
+	if err != nil {
+		return mongoUpdateWriteCommandError(err)
+	}
+	return marshalUpdateResponse(matched, modified)
+}
 
-		materializer, err := storedDocumentMaterializerForCollection(col)
+type mongoUpdateItem struct {
+	index     int
+	key       []byte
+	updateDoc wire.Document
+}
+
+type mongoUpdateParseError struct {
+	code     int32
+	codeName string
+	message  string
+}
+
+func (e mongoUpdateParseError) Error() string {
+	return e.message
+}
+
+func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, error) {
+	filter, err := requiredDocumentField(update, "q")
+	if err != nil {
+		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+	}
+	id, err := idEqualityFilterValue(filter, "update")
+	if err != nil {
+		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+	}
+	key, err := encodePrimaryKey(id)
+	if err != nil {
+		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+	}
+	if multi, err := optionalBoolField(update, "multi"); err != nil {
+		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+	} else if multi {
+		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update currently supports updateOne only", index)}
+	}
+	if upsert, err := optionalBoolField(update, "upsert"); err != nil {
+		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+	} else if upsert {
+		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeBadValue, codeName: "BadValue", message: fmt.Sprintf("updates[%d]: Mongo gateway update currently does not support upsert", index)}
+	}
+	updateDoc, err := requiredDocumentField(update, "u")
+	if err != nil {
+		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
+	}
+	return mongoUpdateItem{index: index, key: key, updateDoc: updateDoc}, nil
+}
+
+func mongoUpdateParseCommandError(err error) (wire.Document, error) {
+	var parseErr mongoUpdateParseError
+	if errors.As(err, &parseErr) {
+		return commandError(parseErr.code, parseErr.codeName, parseErr.message)
+	}
+	return commandError(commandCodeBadValue, "BadValue", err.Error())
+}
+
+func mongoUpdateWriteCommandError(err error) (wire.Document, error) {
+	code, codeName := commandCodeBadValue, "BadValue"
+	if collections.IsDuplicateKeyError(err) {
+		code, codeName = commandCodeDuplicateKey, "DuplicateKey"
+	}
+	return commandError(code, codeName, err.Error())
+}
+
+func runMongoUpdatesSequential(col *collections.Collection, updates []mongoUpdateItem) (int32, int32, error) {
+	var matched int32
+	var modified int32
+	for _, update := range updates {
+		matchedOne, modifiedOne, err := runMongoUpdateOne(col, update)
 		if err != nil {
-			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: %v", i, err))
-		}
-		matchedOne, modifiedOne, err := func() (bool, bool, error) {
-			if materializer != nil {
-				defer func() { _ = materializer.Close() }()
-			}
-			return col.Update(key, func(stored []byte) ([]byte, bool, error) {
-				raw, err := storedDocumentToBSON(col, materializer, stored)
-				if err != nil {
-					return nil, false, err
-				}
-				updated, changed, err := applySetUpdate(raw, updateDoc)
-				if err != nil {
-					return nil, false, fmt.Errorf("updates[%d]: %w", i, err)
-				}
-				updatedKey, encoded, err := prepareInsertDocument(updated, col.Meta().Options.DocumentFormat)
-				if err != nil {
-					return nil, false, fmt.Errorf("updates[%d]: %w", i, err)
-				}
-				if !bytes.Equal(updatedKey, key) {
-					return nil, false, errors.New("Mongo gateway update cannot modify _id")
-				}
-				if !changed {
-					return nil, false, nil
-				}
-				return encoded, true, nil
-			})
-		}()
-		if err != nil {
-			code, codeName := commandCodeBadValue, "BadValue"
-			if collections.IsDuplicateKeyError(err) {
-				code, codeName = commandCodeDuplicateKey, "DuplicateKey"
-			}
-			return commandError(code, codeName, err.Error())
+			return 0, 0, mongoUpdateErrorWithIndex(update.index, err)
 		}
 		if matchedOne {
 			matched++
@@ -267,7 +306,103 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 			modified++
 		}
 	}
-	return marshalUpdateResponse(matched, modified)
+	return matched, modified, nil
+}
+
+func mongoUpdateErrorWithIndex(index int, err error) error {
+	if err == nil {
+		return nil
+	}
+	prefix := fmt.Sprintf("updates[%d]:", index)
+	if strings.HasPrefix(err.Error(), prefix) {
+		return err
+	}
+	return fmt.Errorf("updates[%d]: %w", index, err)
+}
+
+func runMongoUpdateOne(col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
+	materializer, err := storedDocumentMaterializerForCollection(col)
+	if err != nil {
+		return false, false, fmt.Errorf("updates[%d]: %w", update.index, err)
+	}
+	if materializer != nil {
+		defer func() { _ = materializer.Close() }()
+	}
+	return col.Update(update.key, func(stored []byte) ([]byte, bool, error) {
+		return applyMongoUpdateToStoredDocument(col, materializer, update, stored)
+	})
+}
+
+func runMongoUpdateBatch(col *collections.Collection, updates []mongoUpdateItem) (int32, int32, bool, error) {
+	materializer, err := storedDocumentMaterializerForCollection(col)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if materializer != nil {
+		defer func() { _ = materializer.Close() }()
+	}
+	items := make([]collections.UpdateBatchItem, len(updates))
+	for i, update := range updates {
+		update := update
+		items[i] = collections.UpdateBatchItem{
+			DocumentID: update.key,
+			Update: func(stored []byte) ([]byte, bool, error) {
+				return applyMongoUpdateToStoredDocument(col, materializer, update, stored)
+			},
+		}
+	}
+	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexes(items)
+	if !batched {
+		return 0, 0, false, err
+	}
+	if err != nil {
+		return 0, 0, true, err
+	}
+	var matched int32
+	var modified int32
+	for _, result := range results {
+		if result.Matched {
+			matched++
+		}
+		if result.Modified {
+			modified++
+		}
+	}
+	return matched, modified, true, nil
+}
+
+func applyMongoUpdateToStoredDocument(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, update mongoUpdateItem, stored []byte) ([]byte, bool, error) {
+	raw, err := storedDocumentToBSON(col, materializer, stored)
+	if err != nil {
+		return nil, false, fmt.Errorf("updates[%d]: %w", update.index, err)
+	}
+	updated, changed, err := applySetUpdate(raw, update.updateDoc)
+	if err != nil {
+		return nil, false, fmt.Errorf("updates[%d]: %w", update.index, err)
+	}
+	updatedKey, encoded, err := prepareInsertDocument(updated, col.Meta().Options.DocumentFormat)
+	if err != nil {
+		return nil, false, fmt.Errorf("updates[%d]: %w", update.index, err)
+	}
+	if !bytes.Equal(updatedKey, update.key) {
+		return nil, false, fmt.Errorf("updates[%d]: Mongo gateway update cannot modify _id", update.index)
+	}
+	if !changed {
+		return nil, false, nil
+	}
+	return encoded, true, nil
+}
+
+func collectionHasSecondaryUniqueIndexes(col *collections.Collection) bool {
+	if col == nil {
+		return false
+	}
+	for _, idx := range col.Meta().Indexes {
+		if idx.Unique {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) deleteResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {

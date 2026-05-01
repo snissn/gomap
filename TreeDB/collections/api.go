@@ -45,11 +45,50 @@ var (
 	ErrUniqueIndexConflict = errors.New("collections: unique index conflict")
 	ErrConcurrentMutation  = errors.New("collections: concurrent mutation")
 
-	errCollectionManagerNil = errors.New("collections: collection manager is nil")
-	errCollectionNil        = errors.New("collections: collection is nil")
-	errCollectionDBNil      = errors.New("collections: db is nil")
-	errCollectionNotFound   = ErrCollectionNotFound
+	errCollectionManagerNil               = errors.New("collections: collection manager is nil")
+	errCollectionNil                      = errors.New("collections: collection is nil")
+	errCollectionDBNil                    = errors.New("collections: db is nil")
+	errCollectionNotFound                 = ErrCollectionNotFound
+	errUpdateBatchHasSecondaryUniqueIndex = errors.New("collections: update batch has secondary unique index")
 )
+
+// UpdateBatchItem describes one document update in a batch. DocumentID must be
+// non-empty and unique within the batch. Update receives the current stored
+// document bytes and returns the replacement document bytes in the same format
+// expected by Update. If Update returns changed=true, replacement must be a
+// complete valid stored document for the collection format; returning
+// replacement=nil, changed=false is the supported no-op form.
+type UpdateBatchItem struct {
+	DocumentID []byte
+	Update     func(current []byte) (replacement []byte, changed bool, err error)
+}
+
+// UpdateBatchResult reports the outcome for one UpdateBatch item.
+type UpdateBatchResult struct {
+	Matched  bool
+	Modified bool
+}
+
+// UpdateBatchItemError wraps an error produced while preparing or applying one
+// item in an UpdateBatch call.
+type UpdateBatchItemError struct {
+	Index int
+	Err   error
+}
+
+func (e *UpdateBatchItemError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("collections: update batch index %d: %v", e.Index, e.Err)
+}
+
+func (e *UpdateBatchItemError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
 
 func IsDuplicateKeyError(err error) bool {
 	return errors.Is(err, ErrDocumentExists) ||
@@ -2730,6 +2769,117 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	return false, false, collectionMutationRetryExhausted(lastErr)
 }
 
+// UpdateBatch applies a unique set of document updates under one collection
+// mutation. Missing documents report Matched=false. Duplicate document IDs are
+// rejected so callers that require same-document ordering can fall back to
+// sequential Update calls.
+func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, error) {
+	results, _, err := c.updateBatch(items, false)
+	return results, err
+}
+
+// UpdateBatchIfNoSecondaryUniqueIndexes applies UpdateBatch only when the
+// collection has no secondary unique indexes in the mutation-locked catalog.
+// It reports batched=false without applying updates if a unique secondary index
+// is present so callers can preserve ordered per-document update semantics. When
+// batched=false and err=nil, the returned results are zero-valued with len(items).
+func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
+	return c.updateBatch(items, true)
+}
+
+func (c *Collection) updateBatch(items []UpdateBatchItem, requireNoSecondaryUniqueIndexes bool) ([]UpdateBatchResult, bool, error) {
+	if c == nil {
+		return nil, false, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, false, errCollectionDBNil
+	}
+	if len(items) == 0 {
+		return nil, true, nil
+	}
+	if err := validateUpdateBatchItems(items); err != nil {
+		return nil, false, err
+	}
+	items = cloneUpdateBatchItems(items)
+	unlockMutation := c.lockMutation()
+	defer unlockMutation()
+	if err := c.flushBufferedWrites(); err != nil {
+		return nil, false, err
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
+		results, err := c.updateBatchOnce(items, requireNoSecondaryUniqueIndexes)
+		if errors.Is(err, errUpdateBatchHasSecondaryUniqueIndex) {
+			return make([]UpdateBatchResult, len(items)), false, nil
+		}
+		if errors.Is(err, ErrConcurrentMutation) {
+			lastErr = err
+			waitBeforeCollectionMutationRetry(attempt)
+			continue
+		}
+		return results, true, err
+	}
+	return nil, false, collectionMutationRetryExhausted(lastErr)
+}
+
+func validateUpdateBatchItems(items []UpdateBatchItem) error {
+	seen := make(map[string]struct{}, len(items))
+	for i, item := range items {
+		if len(item.DocumentID) == 0 {
+			return fmt.Errorf("collections: document id cannot be empty at index %d", i)
+		}
+		if item.Update == nil {
+			return fmt.Errorf("collections: update function is nil at index %d", i)
+		}
+		key := string(item.DocumentID)
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("%w at index %d", ErrDuplicateDocumentID, i)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+func updateBatchItemError(index int, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &UpdateBatchItemError{Index: index, Err: err}
+}
+
+func cloneUpdateBatchItems(items []UpdateBatchItem) []UpdateBatchItem {
+	out := make([]UpdateBatchItem, len(items))
+	for i, item := range items {
+		out[i] = item
+		out[i].DocumentID = bytes.Clone(item.DocumentID)
+	}
+	return out
+}
+
+func validateBSONReplacementPreservesID(current, replacement []byte, opts collectionOptions) error {
+	if normalizedDocumentFormat(opts.documentFormat) != DocumentFormatBSON {
+		return nil
+	}
+	currentRaw := bson.Raw(current)
+	if err := currentRaw.Validate(); err != nil {
+		return fmt.Errorf("collections: current BSON document: %w", err)
+	}
+	replacementRaw := bson.Raw(replacement)
+	if err := replacementRaw.Validate(); err != nil {
+		return fmt.Errorf("collections: replacement BSON document: %w", err)
+	}
+	currentID := currentRaw.Lookup("_id")
+	replacementID := replacementRaw.Lookup("_id")
+	if currentID.IsZero() && replacementID.IsZero() {
+		return nil
+	}
+	if currentID.IsZero() || replacementID.IsZero() || !currentID.Equal(replacementID) {
+		return errors.New("collections: update replacement cannot modify _id")
+	}
+	return nil
+}
+
 func waitBeforeCollectionMutationRetry(attempt int) {
 	if attempt < 4 {
 		runtime.Gosched()
@@ -2836,7 +2986,7 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		}
 		indexStateChanged = !documentIndexStatesEqual(oldState, newState)
 		if indexStateChanged {
-			if err := rejectReplaceUniqueConflicts(snap, catalog, runtimes, newState, documentID); err != nil {
+			if err := rejectReplaceUniqueConflicts(snap, catalog, runtimes, newState, documentID, nil); err != nil {
 				_ = snap.Close()
 				return false, false, err
 			}
@@ -2969,6 +3119,388 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	return true, true, nil
+}
+
+type preparedBatchUpdate struct {
+	itemIndex         int
+	documentID        []byte
+	document          []byte
+	oldState          documentIndexState
+	newState          documentIndexState
+	indexStateChanged bool
+}
+
+func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondaryUniqueIndexes bool) ([]UpdateBatchResult, error) {
+	results := make([]UpdateBatchResult, len(items))
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	if catalog == nil {
+		_ = snap.Close()
+		return nil, errCollectionNotFound
+	}
+	c.meta = catalog.meta
+	if requireNoSecondaryUniqueIndexes && collectionMetaHasSecondaryUniqueIndex(c.meta) {
+		_ = snap.Close()
+		return nil, errUpdateBatchHasSecondaryUniqueIndex
+	}
+	plannerOptions, err := collectionPlannerOptions(c.meta)
+	if err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
+	baseUserRoot := snapshotUserRoot(snap)
+	baseSystemRoot := snapshotSystemRoot(snap)
+	baseCommitSeq := snapshotCommitSeq(snap)
+
+	primaryRoot := catalog.rootID(collectionPrimaryRootName(c.meta.Name))
+	if primaryRoot == 0 {
+		_ = snap.Close()
+		return results, nil
+	}
+	runtimes, err := (insertBatchPlanner{
+		collection: c.meta.Name,
+		indexes:    plannerIndexes(c.meta.Indexes),
+	}).indexRuntimes()
+	if err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+
+	changed := make([]preparedBatchUpdate, 0, len(items))
+	changedDocuments := make([][]byte, 0, len(items))
+	for i, item := range items {
+		entry, err := snap.GetEntryAtRoot(primaryRoot, item.DocumentID)
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			continue
+		}
+		if err != nil {
+			_ = snap.Close()
+			return nil, updateBatchItemError(i, err)
+		}
+		results[i].Matched = true
+		document, changedOne, err := item.Update(bytes.Clone(entry.Value))
+		if err != nil {
+			_ = snap.Close()
+			return nil, updateBatchItemError(i, err)
+		}
+		if !changedOne {
+			continue
+		}
+		if len(document) == 0 {
+			_ = snap.Close()
+			return nil, updateBatchItemError(i, errors.New("changed replacement document cannot be empty"))
+		}
+		if err := validateBSONReplacementPreservesID(entry.Value, document, plannerOptions); err != nil {
+			_ = snap.Close()
+			return nil, updateBatchItemError(i, err)
+		}
+		prepared := preparedBatchUpdate{
+			itemIndex:  i,
+			documentID: item.DocumentID,
+		}
+		if len(runtimes) > 0 {
+			prepared.oldState, err = loadDeleteIndexState(snap, catalog, item.DocumentID, entry.Value, runtimes, plannerOptions)
+			if err != nil {
+				_ = snap.Close()
+				return nil, updateBatchItemError(i, err)
+			}
+		}
+		changed = append(changed, prepared)
+		changedDocuments = append(changedDocuments, bytes.Clone(document))
+	}
+	if len(changed) == 0 {
+		_ = snap.Close()
+		return results, nil
+	}
+
+	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments(changedDocuments, plannerOptions)
+	if err != nil {
+		for i, document := range changedDocuments {
+			if _, _, _, itemErr := prepareInsertDocuments([][]byte{document}, plannerOptions); itemErr != nil {
+				_ = snap.Close()
+				return nil, updateBatchItemError(changed[i].itemIndex, itemErr)
+			}
+		}
+		_ = snap.Close()
+		return nil, fmt.Errorf("collections: update batch replacement prepare: %w", err)
+	}
+	if len(preparedDocuments) != len(changed) {
+		_ = snap.Close()
+		return nil, errors.New("collections: update batch prepared unexpected document count")
+	}
+	if templateResolver != nil {
+		plannerOptions.templateResolver = templateResolver
+	}
+	for i := range changed {
+		changed[i].document = preparedDocuments[i]
+		if len(runtimes) > 0 {
+			changed[i].newState, err = indexStateForDocument(changed[i].document, runtimes, plannerOptions)
+			if err != nil {
+				_ = snap.Close()
+				return nil, updateBatchItemError(changed[i].itemIndex, err)
+			}
+			changed[i].indexStateChanged = !documentIndexStatesEqual(changed[i].oldState, changed[i].newState)
+		}
+	}
+	batchReplacements := batchUniqueReplacementOwners(runtimes, changed)
+	for i := range changed {
+		if changed[i].indexStateChanged {
+			if err := rejectReplaceUniqueConflicts(snap, catalog, runtimes, changed[i].newState, changed[i].documentID, batchReplacements); err != nil {
+				_ = snap.Close()
+				return nil, updateBatchItemError(changed[i].itemIndex, err)
+			}
+		}
+	}
+	if err := rejectBatchUniqueConflicts(runtimes, changed); err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+
+	rootNames := make([]string, 0, 2+len(runtimes))
+	baseRootIDs := make(map[string]uint64, 2+len(runtimes))
+	policies := make([]backenddb.OrderedRootStoragePolicy, 0, 2+len(runtimes))
+	deltaTables := make([]memtable.Table, 0, 2+len(runtimes))
+	var stateTable memtable.Table
+	secondaryTables := make(map[string]memtable.Table, len(runtimes))
+	var iterators []iterator.UnsafeIterator
+	defer func() {
+		for _, it := range iterators {
+			_ = it.Close()
+		}
+		resetCollectionTables(deltaTables)
+		resetCollectionRunTable(stateTable)
+		for _, table := range secondaryTables {
+			resetCollectionRunTable(table)
+		}
+	}()
+
+	if len(templateRecords) > 0 {
+		templatePlan := &insertBatchPlan{}
+		if err := (insertBatchPlanner{
+			collection:             c.meta.Name,
+			templateRoot:           collectionTemplateRootName(c.meta.Name),
+			options:                plannerOptions,
+			cloneTemplateRunValues: true,
+		}).emitTemplateRun(templatePlan, templateRecords); err != nil {
+			_ = snap.Close()
+			return nil, err
+		}
+		for _, run := range templatePlan.runs {
+			rootNames = append(rootNames, run.name)
+			baseRootIDs[run.name] = catalog.rootID(run.name)
+			policies = append(policies, run.storagePolicy)
+			deltaTables = append(deltaTables, run.table)
+		}
+	}
+
+	primaryRootName := collectionPrimaryRootName(c.meta.Name)
+	rootNames = append(rootNames, primaryRootName)
+	baseRootIDs[primaryRootName] = primaryRoot
+	policies = append(policies, plannerOptions.dataStoragePolicy)
+	primaryTable := newCollectionRunTable(len(changed))
+	for _, item := range changed {
+		setCollectionRunValue(primaryTable, bytes.Clone(item.documentID), item.document)
+		results[item.itemIndex].Modified = true
+	}
+	primaryTable.Freeze()
+	deltaTables = append(deltaTables, primaryTable)
+
+	if len(runtimes) > 0 {
+		if persistIndexStateForOptions(plannerOptions) {
+			stateTable = newCollectionRunTable(len(changed))
+		}
+		for _, item := range changed {
+			if !item.indexStateChanged {
+				continue
+			}
+			if stateTable != nil {
+				rawState, err := encodeDocumentIndexState(item.newState)
+				if err != nil {
+					_ = snap.Close()
+					return nil, err
+				}
+				if len(item.newState) == 0 {
+					stateTable.DeleteSteal(bytes.Clone(item.documentID))
+				} else {
+					stateTable.SetSteal(bytes.Clone(item.documentID), rawState)
+				}
+			}
+			for _, runtime := range runtimes {
+				rootName := collectionSecondaryRootName(c.meta.Name, runtime.def.name)
+				table := secondaryTables[rootName]
+				if table == nil {
+					table = newCollectionRunTable(0)
+					secondaryTables[rootName] = table
+				}
+				deleteKeys, err := secondaryDeleteKeysForDocument(runtime, item.oldState, item.documentID)
+				if err != nil {
+					_ = snap.Close()
+					return nil, err
+				}
+				for _, key := range deleteKeys {
+					table.DeleteSteal(bytes.Clone(key))
+				}
+				for _, encoded := range item.newState[runtime.def.name] {
+					key, err := indexEntryKey(encoded, item.documentID)
+					if err != nil {
+						_ = snap.Close()
+						return nil, err
+					}
+					table.SetSteal(key, nil)
+				}
+			}
+		}
+		if stateTable != nil && stateTable.Len() > 0 {
+			stateTable.Freeze()
+			stateRootName := collectionIndexStateRootName(c.meta.Name)
+			rootNames = append(rootNames, stateRootName)
+			baseRootIDs[stateRootName] = catalog.rootID(stateRootName)
+			policies = append(policies, plannerOptions.indexStateStoragePolicy)
+			deltaTables = append(deltaTables, stateTable)
+			stateTable = nil
+		}
+		for _, runtime := range runtimes {
+			rootName := collectionSecondaryRootName(c.meta.Name, runtime.def.name)
+			table := secondaryTables[rootName]
+			if table == nil || table.Len() == 0 {
+				continue
+			}
+			table.Freeze()
+			rootNames = append(rootNames, rootName)
+			baseRootIDs[rootName] = catalog.rootID(rootName)
+			policies = append(policies, runtime.def.storagePolicy)
+			deltaTables = append(deltaTables, table)
+			delete(secondaryTables, rootName)
+		}
+	}
+
+	defer func() { _ = snap.Close() }()
+	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
+	iterators = make([]iterator.UnsafeIterator, 0, len(rootNames))
+	for i, rootName := range rootNames {
+		iter := deltaTables[i].NewIterator(nil, nil)
+		iterators = append(iterators, iter)
+		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
+			BaseRoot:      baseRootIDs[rootName],
+			Iter:          iter,
+			StoragePolicy: policies[i],
+		})
+	}
+	preflight := func() error {
+		return c.validateMutationRootDescriptors(baseUserRoot, baseSystemRoot, baseCommitSeq)
+	}
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(rootIDs) != len(rootNames) {
+		return nil, errors.New("collections: ordered root publish returned unexpected root count")
+	}
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
+	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	return results, nil
+}
+
+func rejectBatchUniqueConflicts(runtimes []indexRuntime, updates []preparedBatchUpdate) error {
+	type seenUniqueValue struct {
+		documentID []byte
+		itemIndex  int
+	}
+
+	for _, runtime := range runtimes {
+		if !runtime.def.unique {
+			continue
+		}
+		seen := make(map[string]seenUniqueValue)
+		for _, update := range updates {
+			for _, encoded := range update.newState[runtime.def.name] {
+				key := string(encoded)
+				if previous, ok := seen[key]; ok && !bytes.Equal(previous.documentID, update.documentID) {
+					return fmt.Errorf("%w %q: batch indexes %d and %d document ids %q and %q", ErrUniqueIndexConflict, runtime.def.name, previous.itemIndex, update.itemIndex, previous.documentID, update.documentID)
+				}
+				seen[key] = seenUniqueValue{documentID: update.documentID, itemIndex: update.itemIndex}
+			}
+		}
+	}
+	return nil
+}
+
+type batchUniqueReplacementSet map[string]map[string]map[string]struct{}
+
+func batchUniqueReplacementOwners(runtimes []indexRuntime, updates []preparedBatchUpdate) batchUniqueReplacementSet {
+	if len(runtimes) == 0 || len(updates) == 0 {
+		return nil
+	}
+	out := make(batchUniqueReplacementSet)
+	for _, runtime := range runtimes {
+		if !runtime.def.unique {
+			continue
+		}
+		indexName := runtime.def.name
+		for _, update := range updates {
+			oldValues := update.oldState[indexName]
+			if len(oldValues) == 0 {
+				continue
+			}
+			newValues := update.newState[indexName]
+			for _, oldValue := range oldValues {
+				if documentIndexStateContainsValue(newValues, oldValue) {
+					continue
+				}
+				byValue := out[indexName]
+				if byValue == nil {
+					byValue = make(map[string]map[string]struct{})
+					out[indexName] = byValue
+				}
+				owners := byValue[string(oldValue)]
+				if owners == nil {
+					owners = make(map[string]struct{})
+					byValue[string(oldValue)] = owners
+				}
+				owners[string(update.documentID)] = struct{}{}
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func documentIndexStateContainsValue(values [][]byte, target []byte) bool {
+	for _, value := range values {
+		if bytes.Equal(value, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s batchUniqueReplacementSet) allows(indexName string, encoded, documentID []byte) bool {
+	if len(s) == 0 {
+		return false
+	}
+	byValue := s[indexName]
+	if len(byValue) == 0 {
+		return false
+	}
+	owners := byValue[string(encoded)]
+	if len(owners) == 0 {
+		return false
+	}
+	_, ok := owners[string(documentID)]
+	return ok
 }
 
 func (c *Collection) catalogForSnapshot(snap *backenddb.Snapshot) (*collectionCatalog, error) {
@@ -3526,7 +4058,7 @@ func secondaryDeleteKeysForDocument(runtime indexRuntime, state documentIndexSta
 	return out, nil
 }
 
-func rejectReplaceUniqueConflicts(snap *backenddb.Snapshot, catalog *collectionCatalog, runtimes []indexRuntime, state documentIndexState, documentID []byte) error {
+func rejectReplaceUniqueConflicts(snap *backenddb.Snapshot, catalog *collectionCatalog, runtimes []indexRuntime, state documentIndexState, documentID []byte, batchReplacements batchUniqueReplacementSet) error {
 	if snap == nil || catalog == nil {
 		return nil
 	}
@@ -3556,7 +4088,8 @@ func rejectReplaceUniqueConflicts(snap *backenddb.Snapshot, catalog *collectionC
 				if !bytes.HasPrefix(key, prefix) {
 					break
 				}
-				if !it.IsDeleted() && !bytes.Equal(key[len(prefix):], documentID) {
+				ownerID := key[len(prefix):]
+				if !it.IsDeleted() && !bytes.Equal(ownerID, documentID) && !batchReplacements.allows(runtime.def.name, encoded, ownerID) {
 					conflict = true
 					break
 				}
@@ -4377,6 +4910,15 @@ func sameCollectionMeta(a, b CollectionMeta) bool {
 		return false
 	}
 	return reflect.DeepEqual(na, nb)
+}
+
+func collectionMetaHasSecondaryUniqueIndex(meta CollectionMeta) bool {
+	for _, idx := range meta.Indexes {
+		if idx.Unique {
+			return true
+		}
+	}
+	return false
 }
 
 func addIndexToCollectionMeta(meta CollectionMeta, def IndexDefinition) (CollectionMeta, IndexDefinition, error) {
