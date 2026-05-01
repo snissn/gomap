@@ -524,7 +524,7 @@ func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) str
 		fmt.Fprintf(&b, "- targets: `treedb`\n\n")
 	}
 	b.WriteString("## Highlights\n\n")
-	for _, line := range highlightLines(cells, hasMongo) {
+	for _, line := range highlightLines(cells) {
 		fmt.Fprintf(&b, "- %s\n", line)
 	}
 	b.WriteString("\n")
@@ -574,8 +574,9 @@ func hasMongoCells(cells []cellComparison) bool {
 	return false
 }
 
-func highlightLines(cells []cellComparison, hasMongo bool) []string {
+func highlightLines(cells []cellComparison) []string {
 	var lines []string
+	hasMongo := hasMongoCells(cells)
 	phaseComparisons := allPhaseComparisons(cells)
 	var bestTreeDB *phaseComparison
 	var bestMongo *phaseComparison
