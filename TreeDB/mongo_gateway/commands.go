@@ -478,12 +478,8 @@ func (c *mongoUpdateCoalescer) enqueue(req mongoUpdateCoalescerRequest) bool {
 	if c.stopped {
 		return false
 	}
-	select {
-	case c.requests <- req:
-		return true
-	default:
-		return false
-	}
+	c.requests <- req
+	return true
 }
 
 func (c *mongoUpdateCoalescer) stop() {
@@ -522,13 +518,27 @@ func (c *mongoUpdateCoalescer) retireIdle() bool {
 		stopped = c.closeRequests()
 	}
 	if !stopped {
+		if c.isStopped() {
+			c.drainRequestsDirect()
+			return true
+		}
 		return false
 	}
+	c.drainRequestsDirect()
+	return true
+}
+
+func (c *mongoUpdateCoalescer) isStopped() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.stopped
+}
+
+func (c *mongoUpdateCoalescer) drainRequestsDirect() {
 	for req := range c.requests {
 		matched, modified, err := runMongoUpdateOne(req.col, req.item)
 		req.done <- mongoUpdateCoalescerResult{matched: matched, modified: modified, err: err}
 	}
-	return true
 }
 
 func (c *mongoUpdateCoalescer) run() {

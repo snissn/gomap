@@ -403,13 +403,17 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 		}
 		updateDocs[i] = bson.Raw(updateRaw)
 	}
+	ids := make([][]byte, documentCount)
+	for i := range ids {
+		ids[i] = []byte(benchmarkID(i))
+	}
 
 	writers := profileBenchConcurrentWriters(b)
 	b.ReportAllocs()
 	b.ResetTimer()
 	started := time.Now()
 	err = runConcurrentOperations(context.Background(), writers, b.N, func(op int) error {
-		id := []byte(benchmarkID((op * 37) % documentCount))
+		id := ids[(op*37)%documentCount]
 		updateRaw := updateDocs[op%len(updateDocs)]
 		matched, _, err := collection.Update(id, func(stored []byte) ([]byte, bool, error) {
 			raw := bson.Raw(stored)

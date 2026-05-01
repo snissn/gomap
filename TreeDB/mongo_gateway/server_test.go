@@ -808,7 +808,7 @@ func TestServerUpdateCoalescesConcurrentDistinctIDs(t *testing.T) {
 	server.DefaultCollectionOptions = collections.CollectionOptions{
 		DocumentFormat: collections.DocumentFormatBSON,
 	}
-	server.UpdateCoalescingMaxDelay = 20 * time.Millisecond
+	server.UpdateCoalescingMaxDelay = 200 * time.Millisecond
 	server.UpdateCoalescingMaxBatch = 2
 	assertOK(t, serveCommand(t, server, 2260, bson.D{
 		{Key: "insert", Value: "users"},
@@ -869,7 +869,7 @@ func TestServerUpdateCoalescedBatchIsolatesItemErrors(t *testing.T) {
 	server.DefaultCollectionOptions = collections.CollectionOptions{
 		DocumentFormat: collections.DocumentFormatBSON,
 	}
-	server.UpdateCoalescingMaxDelay = 20 * time.Millisecond
+	server.UpdateCoalescingMaxDelay = 200 * time.Millisecond
 	server.UpdateCoalescingMaxBatch = 2
 	assertOK(t, serveCommand(t, server, 2262, bson.D{
 		{Key: "insert", Value: "users"},
