@@ -1219,6 +1219,17 @@ func TestServerUpdateWithUniqueIndexKeepsAcquireBeforeReleaseOrdered(t *testing.
 	}
 }
 
+func TestMongoUpdateErrorWithIndexAddsMissingContext(t *testing.T) {
+	err := mongoUpdateErrorWithIndex(3, errors.New("write failed"))
+	if err == nil || !strings.Contains(err.Error(), "updates[3]: write failed") {
+		t.Fatalf("err=%v want indexed context", err)
+	}
+	alreadyIndexed := errors.New("updates[3]: bad bson")
+	if got := mongoUpdateErrorWithIndex(3, alreadyIndexed); got != alreadyIndexed {
+		t.Fatalf("already indexed err changed: %v", got)
+	}
+}
+
 func TestServerUpdateRejectsIDMutation(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

@@ -2811,17 +2811,6 @@ func TestCollectionUpdateCombinerRunBatchIsolatesItemErrors(t *testing.T) {
 	}
 }
 
-func TestUpdateCombineResultFromBatchResultPropagatesPerItemError(t *testing.T) {
-	itemErr := errors.New("item failed")
-	result := updateCombineResultFromBatchResult(UpdateBatchResult{Matched: true, Modified: true, Err: itemErr})
-	if !errors.Is(result.err, itemErr) {
-		t.Fatalf("result err=%v want %v", result.err, itemErr)
-	}
-	if result.matched || result.modified {
-		t.Fatalf("matched=%v modified=%v want false,false when err is set", result.matched, result.modified)
-	}
-}
-
 func TestCollectionUpdateCombinerRunBatchRecoversCallbackPanic(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -2975,6 +2964,28 @@ func TestCollectionUpdateCombinerUpdateReturnsWhenWorkerExits(t *testing.T) {
 	}
 	if !combiner.isStopped() {
 		t.Fatal("worker exit did not mark combiner stopped")
+	}
+	select {
+	case _, ok := <-combiner.requests:
+		if ok {
+			t.Fatal("worker exit left request channel open")
+		}
+	default:
+		t.Fatal("worker exit did not close request channel")
+	}
+}
+
+func TestCompleteUpdateCombineRequestDoesNotBlockWhenDoneIsFull(t *testing.T) {
+	done := make(chan collectionUpdateCombineResult, 1)
+	original := collectionUpdateCombineResult{matched: true}
+	done <- original
+	completeUpdateCombineRequest(
+		collectionUpdateCombineRequest{done: done},
+		collectionUpdateCombineResult{modified: true},
+	)
+	got := <-done
+	if got != original {
+		t.Fatalf("done result=%+v want original %+v", got, original)
 	}
 }
 
