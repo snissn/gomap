@@ -3979,36 +3979,51 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 	if c.shouldPlanUpdateBatchWithBufferedWrites(mode) {
 		var results []UpdateBatchResult
 		err := c.withMutationLock(func() error {
-			plan, err := c.buildUpdateBatchPlan(items, mode, true)
-			if err != nil {
-				return err
-			}
-			if plan == nil {
-				return nil
-			}
-			defer plan.close()
-			if len(plan.deltaTables) == 0 {
-				if err := c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs); err != nil {
+			useBufferedRead := true
+			for {
+				plan, err := c.buildUpdateBatchPlan(items, mode, useBufferedRead)
+				if err != nil {
 					return err
 				}
-				c.meta = plan.meta
-				results = plan.results
-				return nil
+				if plan == nil {
+					return nil
+				}
+				if len(plan.deltaTables) == 0 {
+					if err := c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs); err != nil {
+						plan.close()
+						return err
+					}
+					c.meta = plan.meta
+					results = plan.results
+					plan.close()
+					return nil
+				}
+				buffered, bufferErr := c.bufferUpdateBatchPlanLocked(plan)
+				if bufferErr != nil {
+					plan.close()
+					if errors.Is(bufferErr, ErrConcurrentMutation) && useBufferedRead {
+						if err := c.flushBufferedWrites(); err != nil {
+							return err
+						}
+						useBufferedRead = false
+						continue
+					}
+					return bufferErr
+				}
+				if buffered {
+					results = plan.results
+					plan.close()
+					return nil
+				}
+				if err := c.flushBufferedWrites(); err != nil {
+					plan.close()
+					return err
+				}
+				var publishErr error
+				results, publishErr = c.publishUpdateBatchPlanLocked(plan)
+				plan.close()
+				return publishErr
 			}
-			buffered, bufferErr := c.bufferUpdateBatchPlanLocked(plan)
-			if bufferErr != nil {
-				return bufferErr
-			}
-			if buffered {
-				results = plan.results
-				return nil
-			}
-			if err := c.flushBufferedWrites(); err != nil {
-				return err
-			}
-			var publishErr error
-			results, publishErr = c.publishUpdateBatchPlanLocked(plan)
-			return publishErr
 		})
 		return results, err
 	}

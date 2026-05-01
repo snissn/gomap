@@ -4344,6 +4344,13 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReadsBufferedAfterR
 	} else if !batched {
 		t.Fatalf("second batch was declined")
 	}
+	afterSecondState := d.State()
+	if afterSecondState.CommitSeq != rawState.CommitSeq {
+		t.Fatalf("second buffered update advanced commit seq: raw=%d after=%d", rawState.CommitSeq, afterSecondState.CommitSeq)
+	}
+	if afterSecondState.SystemRootPageID != rawState.SystemRootPageID {
+		t.Fatalf("second buffered update changed system root from %d to %d", rawState.SystemRootPageID, afterSecondState.SystemRootPageID)
+	}
 	seaIDs, err := col.FindByIndex("city", "sea")
 	if err != nil {
 		t.Fatalf("find sea city: %v", err)
@@ -4357,6 +4364,13 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReadsBufferedAfterR
 	}
 	if len(sfoIDs) != 1 || !bytes.Equal(sfoIDs[0], []byte("u1")) {
 		t.Fatalf("sfo ids=%q want [u1]", sfoIDs)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered updates: %v", err)
+	}
+	flushedState := d.State()
+	if flushedState.CommitSeq != afterSecondState.CommitSeq+1 {
+		t.Fatalf("flush commit seq=%d want %d", flushedState.CommitSeq, afterSecondState.CommitSeq+1)
 	}
 }
 
