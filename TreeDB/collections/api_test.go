@@ -3372,6 +3372,17 @@ func TestCollectionManagerCloseForBackendPreventsCombinerRecreationBeforeDBClosi
 	if got := col.updateCombiner(); got != nil {
 		t.Fatal("close hook window recreated update combiner")
 	}
+	if _, _, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+		return []byte(`{"score":1}`), true, nil
+	}); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("Update after manager close err=%v want ErrClosed", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"score":1}`)}); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("InsertBatch after manager close err=%v want ErrClosed", err)
+	}
+	if _, err := col.DeleteDocument([]byte("u1")); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("DeleteDocument after manager close err=%v want ErrClosed", err)
+	}
 	if _, err := mgr.OpenCollection("users"); !errors.Is(err, backenddb.ErrClosed) {
 		t.Fatalf("OpenCollection during manager close err=%v want ErrClosed", err)
 	}

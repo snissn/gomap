@@ -54,7 +54,7 @@ var (
 	errCollectionDBNil                    = errors.New("collections: db is nil")
 	errCollectionNotFound                 = ErrCollectionNotFound
 	errUpdateBatchHasSecondaryUniqueIndex = errors.New("collections: update batch has secondary unique index")
-	errUpdateCombinerStopped              = errors.New("collections: update combiner stopped before completing request; request was not completed and caller may retry")
+	errUpdateCombinerStopped              = errors.New("collections: update combiner stopped before DB update completed; callback may have been invoked")
 )
 
 // UpdateBatchItem describes one document update in a batch. DocumentID must be
@@ -372,6 +372,7 @@ type collectionWriteDomain struct {
 	updateCombiner    *collectionUpdateCombiner
 	updateCombineDone bool
 	updateCombineTTL  time.Duration
+	closingWrites     atomic.Bool
 	loaded            bool
 	meta              CollectionMeta
 	catalog           *collectionCatalog
@@ -2345,6 +2346,9 @@ func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool)
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return nil, err
+	}
 
 	return retryInsertBatchMutation(func() ([][]byte, error) {
 		return c.insertBatchOnce(ids, documents, trustedValidBSON)
@@ -2827,6 +2831,9 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 	if c.db == nil {
 		return false, errCollectionDBNil
 	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return false, err
+	}
 	if len(documentID) == 0 {
 		return false, errors.New("collections: document id cannot be empty")
 	}
@@ -3012,6 +3019,9 @@ func validateCollectionUpdateInput(c *Collection, documentID []byte, update func
 	if c.db == nil {
 		return errCollectionDBNil
 	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return err
+	}
 	if len(documentID) == 0 {
 		return errors.New("collections: document id cannot be empty")
 	}
@@ -3066,6 +3076,9 @@ func (c *Collection) updateBatch(items []UpdateBatchItem, requireNoSecondaryUniq
 	if c.db == nil {
 		return nil, false, errCollectionDBNil
 	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return nil, false, err
+	}
 	if len(items) == 0 {
 		return nil, true, nil
 	}
@@ -3093,6 +3106,19 @@ func (c *Collection) updateBatch(items []UpdateBatchItem, requireNoSecondaryUniq
 		return results, true, err
 	}
 	return nil, false, collectionMutationRetryExhausted(lastErr)
+}
+
+func (c *Collection) ensureWriteDomainOpen() error {
+	if c == nil || c.db == nil {
+		return nil
+	}
+	if c.db.IsClosing() {
+		return backenddb.ErrClosed
+	}
+	if c.writeDomain != nil && c.writeDomain.closingWrites.Load() {
+		return backenddb.ErrClosed
+	}
+	return nil
 }
 
 func validateUpdateBatchItems(items []UpdateBatchItem) error {
@@ -3150,6 +3176,9 @@ func (c *Collection) updateCombiner() *collectionUpdateCombiner {
 		return nil
 	}
 	domain := c.writeDomain
+	if domain.closingWrites.Load() {
+		return nil
+	}
 	for {
 		domain.updateCombineMu.Lock()
 		if domain.updateCombineDone {
@@ -3186,6 +3215,7 @@ func (domain *collectionWriteDomain) stopUpdateCombiner() {
 	if domain == nil {
 		return
 	}
+	domain.closingWrites.Store(true)
 	domain.updateCombineMu.Lock()
 	combiner := domain.updateCombiner
 	domain.updateCombiner = nil
@@ -3210,6 +3240,8 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 		done:         done,
 	}
 	if !combiner.enqueue(req) {
+		// Combining is a best-effort throughput optimization. Saturated or stopped
+		// combiners fall back to the direct path so updates still make progress.
 		return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
 	}
 	result := combiner.waitForUpdateResult(done)
