@@ -794,7 +794,7 @@ func (db *DB) PublishOrderedRootGroupWithSystemBuilder(ordered []OrderedRootPubl
 // PublishOrderedRootDeltaGroupWithSystemBuilder applies root-local mutation
 // streams to non-system roots, then builds and commits a system-root iterator
 // that can persist the produced root IDs in the same backend commit.
-func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRootDeltaPublishInput, buildSystemIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
+func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRootDeltaPublishInput, buildSystemIter OrderedRootGroupSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
 	if buildSystemIter == nil {
 		return 0, nil, errors.New("nil ordered root group system builder")
 	}
@@ -805,8 +805,16 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 		return 0, nil, ErrClosed
 	}
 
+	lockStart := time.Now()
 	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
+	holdStart := time.Now()
+	wait := holdStart.Sub(lockStart)
+	rootsObserved := 0
+	defer func() {
+		hold := time.Since(holdStart)
+		db.writeMu.Unlock()
+		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, err)
+	}()
 
 	if db.readOnly {
 		return 0, nil, ErrReadOnly
@@ -819,7 +827,8 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	db.mu.RUnlock()
 
 	systemOpts := systemRootOrderedPublishOptions(db)
-	rootIDs := make([]uint64, len(ordered))
+	rootIDs = make([]uint64, len(ordered))
+	rootsObserved = len(ordered)
 	orderedConsumed := make([]bool, len(ordered))
 	defer closeUnconsumedOrderedRootDeltaPublishIterators(ordered, orderedConsumed)
 	var retired []uint64
@@ -850,7 +859,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	if err != nil {
 		return 0, nil, err
 	}
-	newSystemRoot := rootID
+	newSystemRoot = rootID
 	retired = append(retired, rootRetired...)
 	mergeOrderedRootPublishMetrics(&merged, metrics)
 	vlogRefDelta := refDelta

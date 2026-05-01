@@ -784,6 +784,17 @@ func collectionMaintenanceTestContext(t *testing.T) (context.Context, context.Ca
 	return context.WithTimeout(context.Background(), timeout)
 }
 
+func collectionTestTimeout(t *testing.T, fallback time.Duration) time.Duration {
+	t.Helper()
+	if deadline, ok := t.Deadline(); ok {
+		remaining := time.Until(deadline) - 500*time.Millisecond
+		if remaining > 0 && remaining < fallback {
+			return remaining
+		}
+	}
+	return fallback
+}
+
 func collectionMaintenanceCloseOnce(cleanup func() error) func() error {
 	var once sync.Once
 	var closeErr error
@@ -3712,17 +3723,12 @@ func TestCollectionUpdateBatchReplansAfterConcurrentCollectionMutation(t *testin
 		close(stopRight)
 		select {
 		case <-rightFinished:
-		case <-time.After(time.Second):
+		case <-time.After(collectionTestTimeout(t, 5*time.Second)):
 			t.Error("timed out waiting for concurrent update goroutine cleanup")
 		}
 	}()
 
-	concurrentUpdateWait := 10 * time.Second
-	if deadline, ok := t.Deadline(); ok {
-		if remaining := time.Until(deadline) - 500*time.Millisecond; remaining > 0 && remaining < concurrentUpdateWait {
-			concurrentUpdateWait = remaining
-		}
-	}
+	concurrentUpdateWait := collectionTestTimeout(t, 10*time.Second)
 	var callbackCalls atomic.Int32
 	results, err := left.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
@@ -3858,11 +3864,23 @@ func TestCollectionUpdateBatchFlushesBufferedIndexedWritesBeforePublish(t *testi
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
 			if staged.CompareAndSwap(false, true) {
-				if _, err := right.InsertBatch(
-					[][]byte{[]byte("u2")},
-					[][]byte{[]byte(`{"city":"sfo","score":2}`)},
-				); err != nil {
-					return nil, false, err
+				insertDone := make(chan error, 1)
+				go func() {
+					_, err := right.InsertBatch(
+						[][]byte{[]byte("u2")},
+						[][]byte{[]byte(`{"city":"sfo","score":2}`)},
+					)
+					insertDone <- err
+				}()
+				timer := time.NewTimer(collectionTestTimeout(t, 5*time.Second))
+				defer timer.Stop()
+				select {
+				case err := <-insertDone:
+					if err != nil {
+						return nil, false, err
+					}
+				case <-timer.C:
+					return nil, false, errors.New("timed out waiting for right.InsertBatch to complete")
 				}
 			}
 			return []byte(`{"city":"sea","score":1}`), true, nil
@@ -3887,6 +3905,60 @@ func TestCollectionUpdateBatchFlushesBufferedIndexedWritesBeforePublish(t *testi
 		t.Fatalf("find sfo: %v", err)
 	}
 	collectionMaintenanceRequireUnorderedIDs(t, sfoIDs, []byte("u2"))
+}
+
+func TestCollectionUpdateBatchNoOpAllowsOtherCollectionRootDrift(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create users collection: %v", err)
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "teams"}); err != nil {
+		t.Fatalf("create teams collection: %v", err)
+	}
+	users, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open users collection: %v", err)
+	}
+	teams, err := mgr.OpenCollection("teams")
+	if err != nil {
+		t.Fatalf("open teams collection: %v", err)
+	}
+	if _, err := users.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl","score":0}`)},
+	); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	var callbackCalls atomic.Int32
+	results, err := users.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			call := callbackCalls.Add(1)
+			if _, err := teams.InsertBatch(
+				[][]byte{[]byte(fmt.Sprintf("team-%d", call))},
+				[][]byte{[]byte(fmt.Sprintf(`{"name":"team-%d"}`, call))},
+			); err != nil {
+				return nil, false, err
+			}
+			return current, false, nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || results[0].Modified {
+		t.Fatalf("results=%+v want matched and not modified", results)
+	}
+	if got := callbackCalls.Load(); got != 1 {
+		t.Fatalf("callback calls=%d want 1", got)
+	}
 }
 
 func TestCollectionUpdateBatchBSONRejectsIDMutation(t *testing.T) {
