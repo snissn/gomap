@@ -1071,6 +1071,11 @@ func TestServerCloseStopsUpdateCoalescers(t *testing.T) {
 	if !stopped {
 		t.Fatal("coalescer was not stopped")
 	}
+	select {
+	case <-coalescer.done:
+	default:
+		t.Fatal("Close returned before coalescer worker exited")
+	}
 	if got := server.mongoUpdateCoalescer("app.users"); got != nil {
 		t.Fatal("closed server created a new coalescer")
 	}
@@ -1091,6 +1096,16 @@ func TestMongoUpdateCoalescerRejectsEnqueueAfterStop(t *testing.T) {
 	coalescer.stop()
 	if coalescer.enqueue(mongoUpdateCoalescerRequest{done: make(chan mongoUpdateCoalescerResult, 1)}) {
 		t.Fatal("stopped coalescer accepted enqueue")
+	}
+}
+
+func TestMongoUpdateCoalescerWaitReturnsWhenWorkerStops(t *testing.T) {
+	coalescer := &mongoUpdateCoalescer{done: make(chan struct{})}
+	done := make(chan mongoUpdateCoalescerResult, 1)
+	close(coalescer.done)
+	result := coalescer.waitForUpdateResult(done)
+	if result.err == nil || !strings.Contains(result.err.Error(), "stopped before completing request") {
+		t.Fatalf("result err=%v want stopped error", result.err)
 	}
 }
 
