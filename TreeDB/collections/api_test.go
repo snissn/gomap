@@ -47,6 +47,28 @@ func TestCollectionGetNilDBReturnsError(t *testing.T) {
 	}
 }
 
+func TestCollectionManagerOpenCollectionCacheRejectsClosedDB(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.OpenCollection("users"); err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	if _, err := mgr.OpenCollection("users"); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("OpenCollection after close err=%v want ErrClosed", err)
+	}
+}
+
 func TestCollectionInsertBatchBridge_RoundTripWithSecondaryIndexes(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

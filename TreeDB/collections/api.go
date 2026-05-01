@@ -534,6 +534,9 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 	if err := ValidateCollectionName(name); err != nil {
 		return nil, err
 	}
+	if m.db.IsClosing() {
+		return nil, backenddb.ErrClosed
+	}
 	if collection, ok := m.openCollectionFromWriteDomainCache(name); ok {
 		return collection, nil
 	}
