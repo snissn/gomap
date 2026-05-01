@@ -68,3 +68,11 @@ func TestOrderedRootDeltaGroupPublishStatsUsesBucketSnapshotForPercentile(t *tes
 		t.Fatalf("latencyP99=%v want first bucket bound", stats.latencyP99)
 	}
 }
+
+func TestDurationFromUint64NsClampsOverflow(t *testing.T) {
+	for _, ns := range []uint64{maxTimeDurationNs + 1, ^uint64(0)} {
+		if got := durationFromUint64Ns(ns); got != time.Duration(maxTimeDurationNs) {
+			t.Fatalf("durationFromUint64Ns(%d)=%v want %v", ns, got, time.Duration(maxTimeDurationNs))
+		}
+	}
+}
