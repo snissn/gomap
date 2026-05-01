@@ -2251,6 +2251,10 @@ func (db *DB) State() *DBState {
 	return db.state.Load()
 }
 
+func (db *DB) IsClosing() bool {
+	return db == nil || db.closing.Load()
+}
+
 func (db *DB) publishSnapshotView(idx *indexGen, state *DBState, vm *valuelog.Manager) {
 	if db == nil {
 		return
