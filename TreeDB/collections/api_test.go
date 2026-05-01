@@ -3528,7 +3528,9 @@ func TestCollectionUpdateBatchReplansAfterConcurrentCollectionMutation(t *testin
 	stopRight := make(chan struct{})
 	var readyOnce sync.Once
 	rightDone := make(chan error, 1)
+	rightFinished := make(chan struct{})
 	go func() {
+		defer close(rightFinished)
 		select {
 		case <-ready:
 		case <-stopRight:
@@ -3542,7 +3544,14 @@ func TestCollectionUpdateBatchReplansAfterConcurrentCollectionMutation(t *testin
 		}})
 		rightDone <- err
 	}()
-	defer close(stopRight)
+	defer func() {
+		close(stopRight)
+		select {
+		case <-rightFinished:
+		case <-time.After(time.Second):
+			t.Log("timed out waiting for concurrent update goroutine cleanup")
+		}
+	}()
 
 	concurrentUpdateWait := 10 * time.Second
 	if deadline, ok := t.Deadline(); ok {
@@ -3581,17 +3590,21 @@ func TestCollectionUpdateBatchReplansAfterConcurrentCollectionMutation(t *testin
 	}
 	for _, tc := range []struct {
 		id    []byte
-		score string
+		score float64
 	}{
-		{id: []byte("u1"), score: `"score":1`},
-		{id: []byte("u2"), score: `"score":2`},
+		{id: []byte("u1"), score: 1},
+		{id: []byte("u2"), score: 2},
 	} {
 		got, err := left.Get(tc.id)
 		if err != nil {
 			t.Fatalf("get %s: %v", tc.id, err)
 		}
-		if !bytes.Contains(got, []byte(tc.score)) {
-			t.Fatalf("%s document=%s want %s", tc.id, got, tc.score)
+		var doc map[string]any
+		if err := json.Unmarshal(got, &doc); err != nil {
+			t.Fatalf("parse %s document=%s: %v", tc.id, got, err)
+		}
+		if gotScore, ok := doc["score"].(float64); !ok || gotScore != tc.score {
+			t.Fatalf("%s score=%v want %v document=%s", tc.id, doc["score"], tc.score, got)
 		}
 	}
 }

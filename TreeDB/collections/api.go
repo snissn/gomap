@@ -3037,9 +3037,9 @@ func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, 
 }
 
 // UpdateBatchIfNoSecondaryUniqueIndexes applies UpdateBatch only when the
-// collection has no secondary unique indexes in the mutation-locked catalog.
-// It reports batched=false without applying updates if a unique secondary index
-// is present so callers can preserve ordered per-document update semantics. When
+// collection has no secondary unique indexes in the planning snapshot. It
+// reports batched=false without applying updates if a unique secondary index is
+// present so callers can preserve ordered per-document update semantics. When
 // batched=false and err=nil, the returned results are zero-valued with len(items).
 func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
 	return c.updateBatch(items, true)
@@ -3804,22 +3804,10 @@ func (plan *updateBatchPlan) close() {
 }
 
 func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondaryUniqueIndexes bool) ([]UpdateBatchResult, error) {
-	hasUnique := false
 	if err := c.withMutationLock(func() error {
-		if err := c.flushBufferedWrites(); err != nil {
-			return err
-		}
-		if !requireNoSecondaryUniqueIndexes {
-			return nil
-		}
-		var err error
-		hasUnique, err = c.hasSecondaryUniqueIndexLocked()
-		return err
+		return c.flushBufferedWrites()
 	}); err != nil {
 		return nil, err
-	}
-	if hasUnique {
-		return nil, errUpdateBatchHasSecondaryUniqueIndex
 	}
 
 	plan, err := c.buildUpdateBatchPlan(items, requireNoSecondaryUniqueIndexes)
@@ -3835,6 +3823,8 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, requireNoSecondary
 			if err := c.flushBufferedWrites(); err != nil {
 				return err
 			}
+			// validateMutationRootDescriptors does not consult c.meta; refresh
+			// the handle metadata only after the planned root snapshot is still current.
 			if err := c.validateMutationRootDescriptors(plan.baseUserRoot, plan.baseSystemRoot, plan.baseCommitSeq); err != nil {
 				return err
 			}
@@ -3862,22 +3852,6 @@ func (c *Collection) withMutationLock(fn func() error) error {
 	unlockMutation := c.lockMutation()
 	defer unlockMutation()
 	return fn()
-}
-
-func (c *Collection) hasSecondaryUniqueIndexLocked() (bool, error) {
-	snap := c.db.AcquireSnapshot()
-	if snap == nil {
-		return false, backenddb.ErrClosed
-	}
-	defer func() { _ = snap.Close() }()
-	catalog, err := c.catalogForSnapshot(snap)
-	if err != nil {
-		return false, err
-	}
-	if catalog == nil {
-		return false, errCollectionNotFound
-	}
-	return collectionMetaHasSecondaryUniqueIndex(catalog.meta), nil
 }
 
 func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, requireNoSecondaryUniqueIndexes bool) (*updateBatchPlan, error) {
