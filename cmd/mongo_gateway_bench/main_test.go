@@ -1217,6 +1217,8 @@ func TestWriteResultSupportsGenericWriter(t *testing.T) {
 }
 
 func TestBenchmarkSetUpdateCanExerciseIndexedField(t *testing.T) {
+	prewarmBenchmarkUpdatedCities()
+
 	updateSet := func(update bson.D) bson.Raw {
 		t.Helper()
 		raw, err := bson.Marshal(update)

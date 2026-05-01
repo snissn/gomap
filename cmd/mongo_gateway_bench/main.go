@@ -2020,7 +2020,6 @@ func benchmarkCity(i int) string {
 }
 
 func benchmarkUpdatedCity(i int, documentOrdinal int, documentCount int) string {
-	prewarmBenchmarkUpdatedCities()
 	cycle := len(benchmarkUpdatedCityValues)
 	if cycle == 0 {
 		return ""
@@ -2059,10 +2058,18 @@ func buildBenchmarkUpdatedCityValues() []string {
 	// Keep a long prime-sized cycle so indexed-update stress runs usually change
 	// the secondary key on repeated visits without formatting strings in the hot path.
 	values := make([]string, benchmarkUpdatedCityValueCount)
-	for i := range values {
-		generation := i / len(benchmarkUpdatedCities)
+	if len(benchmarkUpdatedCities) == 0 {
+		return values
+	}
+	for i, generation := 0, 0; i < len(values); generation++ {
 		suffix := strconv.Itoa(generation)
-		values[i] = benchmarkUpdatedCities[i%len(benchmarkUpdatedCities)] + "-" + suffix
+		for _, city := range benchmarkUpdatedCities {
+			if i >= len(values) {
+				break
+			}
+			values[i] = city + "-" + suffix
+			i++
+		}
 	}
 	return values
 }
