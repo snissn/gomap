@@ -3883,9 +3883,11 @@ func TestCollectionUpdateBatchReplansAfterConcurrentCollectionMutation(t *testin
 	}()
 	defer func() {
 		close(stopRight)
+		timer := time.NewTimer(collectionTestTimeout(t, 5*time.Second))
+		defer timer.Stop()
 		select {
 		case <-rightFinished:
-		case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		case <-timer.C:
 			t.Error("timed out waiting for concurrent update goroutine cleanup")
 		}
 	}()
