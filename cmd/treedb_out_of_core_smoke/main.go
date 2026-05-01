@@ -171,16 +171,17 @@ type deferredWorkload struct {
 }
 
 type rawWorkerSummary struct {
-	GeneratedAt       string            `json:"generated_at"`
-	Dir               string            `json:"dir"`
-	Keys              int               `json:"keys"`
-	BatchSize         int               `json:"batch_size"`
-	ValueSize         int               `json:"value_size"`
-	Profile           string            `json:"profile"`
-	LeafSegmentTarget int64             `json:"leaf_segment_target_bytes"`
-	Timings           map[string]timing `json:"timings"`
-	DiskUsageFinal    diskUsage         `json:"disk_usage_final"`
-	TreeDBStatsFinal  map[string]string `json:"treedb_stats_final,omitempty"`
+	GeneratedAt       string               `json:"generated_at"`
+	Dir               string               `json:"dir"`
+	Keys              int                  `json:"keys"`
+	BatchSize         int                  `json:"batch_size"`
+	ValueSize         int                  `json:"value_size"`
+	Profile           string               `json:"profile"`
+	LeafSegmentTarget int64                `json:"leaf_segment_target_bytes"`
+	Timings           map[string]timing    `json:"timings"`
+	DiskUsageFinal    diskUsage            `json:"disk_usage_final"`
+	DiskUsageByPhase  map[string]diskUsage `json:"disk_usage_by_phase,omitempty"`
+	TreeDBStatsFinal  map[string]string    `json:"treedb_stats_final,omitempty"`
 }
 
 type fixtureSummary struct {
@@ -568,9 +569,14 @@ func runRawShape(cfg config, run *smokeRun, logDir string) error {
 	if err := readJSON(jsonPath, &summary); err != nil {
 		return err
 	}
-	components, _ := collectComponentBytes(summary.Dir)
-	total := summary.DiskUsageFinal.TotalBytes
-	bytesPerItem := bytesPer(total, summary.Keys)
+	postInsertUsage := rawDiskUsageForPhase(summary, "post_insert")
+	postOverwriteUsage := rawDiskUsageForPhase(summary, "post_overwrite")
+	postInsertTotal := postInsertUsage.TotalBytes
+	postOverwriteTotal := postOverwriteUsage.TotalBytes
+	postInsertBytesPerItem := bytesPer(postInsertTotal, summary.Keys)
+	postOverwriteBytesPerItem := bytesPer(postOverwriteTotal, summary.Keys)
+	postInsertComponents := componentBytesFromDiskUsage(postInsertUsage)
+	postOverwriteComponents := componentBytesFromDiskUsage(postOverwriteUsage)
 	write := summary.Timings["batch_write"]
 	read := summary.Timings["random_read_parallel"]
 	overwrite := summary.Timings["overwrite"]
@@ -589,9 +595,9 @@ func runRawShape(cfg config, run *smokeRun, logDir string) error {
 			BenchmarkTimed:  true,
 			OpsPerSec:       ptrFloat(write.OpsPerSec),
 			NsPerItem:       nsPerItem(write),
-			TotalBytes:      &total,
-			BytesPerItem:    bytesPerItem,
-			ComponentBytes:  components,
+			TotalBytes:      &postInsertTotal,
+			BytesPerItem:    postInsertBytesPerItem,
+			ComponentBytes:  postInsertComponents,
 			Budgets:         cfg.budgets(),
 			PressureClaimed: true,
 			Mmap:            extractMmapStats(summary.TreeDBStatsFinal),
@@ -612,9 +618,9 @@ func runRawShape(cfg config, run *smokeRun, logDir string) error {
 			BenchmarkTimed:  true,
 			OpsPerSec:       ptrFloat(read.OpsPerSec),
 			NsPerItem:       nsPerItem(read),
-			TotalBytes:      &total,
-			BytesPerItem:    bytesPerItem,
-			ComponentBytes:  components,
+			TotalBytes:      &postInsertTotal,
+			BytesPerItem:    postInsertBytesPerItem,
+			ComponentBytes:  postInsertComponents,
 			Budgets:         cfg.budgets(),
 			PressureClaimed: true,
 			Mmap:            extractMmapStats(summary.TreeDBStatsFinal),
@@ -635,9 +641,9 @@ func runRawShape(cfg config, run *smokeRun, logDir string) error {
 			BenchmarkTimed:  true,
 			OpsPerSec:       ptrFloat(overwrite.OpsPerSec),
 			NsPerItem:       nsPerItem(overwrite),
-			TotalBytes:      &total,
-			BytesPerItem:    bytesPerItem,
-			ComponentBytes:  components,
+			TotalBytes:      &postOverwriteTotal,
+			BytesPerItem:    postOverwriteBytesPerItem,
+			ComponentBytes:  postOverwriteComponents,
 			Budgets:         cfg.budgets(),
 			PressureClaimed: true,
 			Mmap:            extractMmapStats(summary.TreeDBStatsFinal),
@@ -658,9 +664,9 @@ func runRawShape(cfg config, run *smokeRun, logDir string) error {
 			BenchmarkTimed:  true,
 			OpsPerSec:       ptrFloat(postOverwriteRead.OpsPerSec),
 			NsPerItem:       nsPerItem(postOverwriteRead),
-			TotalBytes:      &total,
-			BytesPerItem:    bytesPerItem,
-			ComponentBytes:  components,
+			TotalBytes:      &postOverwriteTotal,
+			BytesPerItem:    postOverwriteBytesPerItem,
+			ComponentBytes:  postOverwriteComponents,
 			Budgets:         cfg.budgets(),
 			PressureClaimed: true,
 			Mmap:            extractMmapStats(summary.TreeDBStatsFinal),
@@ -670,6 +676,26 @@ func runRawShape(cfg config, run *smokeRun, logDir string) error {
 		},
 	)
 	return nil
+}
+
+func rawDiskUsageForPhase(summary rawWorkerSummary, phase string) diskUsage {
+	if summary.DiskUsageByPhase != nil {
+		if usage, ok := summary.DiskUsageByPhase[phase]; ok {
+			return usage
+		}
+	}
+	return summary.DiskUsageFinal
+}
+
+func componentBytesFromDiskUsage(usage diskUsage) map[string]uint64 {
+	if len(usage.TopFiles) == 0 {
+		return nil
+	}
+	out := make(map[string]uint64, len(usage.TopFiles))
+	for _, file := range usage.TopFiles {
+		out[file.Path] = file.Bytes
+	}
+	return out
 }
 
 func runCollectionShape(cfg config, run *smokeRun, logDir, format string, indexes int) error {
@@ -1001,6 +1027,11 @@ func runRawWorker(cfg config) error {
 		return err
 	}
 	timings["batch_write"] = elapsedTiming(time.Since(start), cfg.RawKeys)
+	usageAfterInsert, err := directoryUsage(cfg.rawDir, cfg.RawKeys)
+	if err != nil {
+		_ = db.Close()
+		return err
+	}
 
 	start = time.Now()
 	if err := rawParallelRead(db, cfg.RawKeys, cfg.ValueSize, 0, cfg.ReadWorkers); err != nil {
@@ -1019,6 +1050,11 @@ func runRawWorker(cfg config) error {
 		return err
 	}
 	timings["overwrite"] = elapsedTiming(time.Since(start), cfg.RawKeys)
+	usageAfterOverwrite, err := directoryUsage(cfg.rawDir, cfg.RawKeys)
+	if err != nil {
+		_ = db.Close()
+		return err
+	}
 
 	start = time.Now()
 	if err := rawParallelRead(db, cfg.RawKeys, cfg.ValueSize, 1, cfg.ReadWorkers); err != nil {
@@ -1031,7 +1067,7 @@ func runRawWorker(cfg config) error {
 	if err := db.Close(); err != nil {
 		return err
 	}
-	usage, err := directoryUsage(cfg.rawDir, cfg.RawKeys)
+	usageFinal, err := directoryUsage(cfg.rawDir, cfg.RawKeys)
 	if err != nil {
 		return err
 	}
@@ -1044,8 +1080,12 @@ func runRawWorker(cfg config) error {
 		Profile:           cfg.Profile,
 		LeafSegmentTarget: cfg.LeafSegmentTargetBytes,
 		Timings:           timings,
-		DiskUsageFinal:    usage,
-		TreeDBStatsFinal:  stats,
+		DiskUsageFinal:    usageFinal,
+		DiskUsageByPhase: map[string]diskUsage{
+			"post_insert":    usageAfterInsert,
+			"post_overwrite": usageAfterOverwrite,
+		},
+		TreeDBStatsFinal: stats,
 	}
 	if err := writeJSON(cfg.rawJSONPath, summary); err != nil {
 		return err
@@ -1432,17 +1472,17 @@ func renderMarkdown(run *smokeRun) string {
 	sb.WriteString("\n")
 
 	sb.WriteString("## Component Bytes\n\n")
-	sb.WriteString("| Config | Shape | Component | Bytes |\n| --- | --- | --- | ---: |\n")
+	sb.WriteString("| Config | Shape | Phase | Component | Bytes |\n| --- | --- | --- | --- | ---: |\n")
 	seenComponents := make(map[string]struct{})
 	for _, row := range run.Results {
-		seenKey := row.ConfigName + "\x00" + row.Shape + "\x00" + row.SourceArtifact
+		seenKey := row.ConfigName + "\x00" + row.Shape + "\x00" + row.Phase + "\x00" + row.SourceArtifact
 		if _, ok := seenComponents[seenKey]; ok {
 			continue
 		}
 		seenComponents[seenKey] = struct{}{}
 		keys := sortedComponentKeys(row.ComponentBytes)
 		for _, key := range keys {
-			sb.WriteString(fmt.Sprintf("| `%s` | `%s` | `%s` | %d |\n", row.ConfigName, row.Shape, key, row.ComponentBytes[key]))
+			sb.WriteString(fmt.Sprintf("| `%s` | `%s` | `%s` | `%s` | %d |\n", row.ConfigName, row.Shape, row.Phase, key, row.ComponentBytes[key]))
 		}
 	}
 	sb.WriteString("\n")

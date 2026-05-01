@@ -320,6 +320,10 @@ func TestCurrentWritableMmapTargetDoesNotReadPastFileSize(t *testing.T) {
 		Offset: uint64(len(data) / 2),
 		Length: 1024,
 	}
+	// Simulate a stale/inflated file-size hint. Current-writable mappings may
+	// be larger than the actual file; even with a bad hint, reads must re-stat
+	// before slicing mapped-ahead bytes.
+	f.fileSize.Store(int64(len(data) + 1))
 	if _, err := f.ReadUnsafe(pastEOF, false); err == nil {
 		t.Fatalf("ReadUnsafe past EOF unexpectedly succeeded")
 	}
