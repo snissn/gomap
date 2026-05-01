@@ -1858,6 +1858,88 @@ func TestCollectionIndexedWriteMemtablesFindSkipsBufferedSecondaryTombstone(t *t
 	}
 }
 
+func TestCollectionIndexedWriteMemtablesFindLimitFiltersOnlyBufferedTombstone(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert persisted row: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush persisted row: %v", err)
+	}
+
+	encoded, err := encodeIndexScalar("hnl")
+	if err != nil {
+		t.Fatalf("encode city: %v", err)
+	}
+	key, err := indexEntryKey(encoded, []byte("u1"))
+	if err != nil {
+		t.Fatalf("index key: %v", err)
+	}
+	table := newCollectionRunTable(1)
+	table.DeleteSteal(key)
+	table.Freeze()
+	domain := col.writeDomain
+	domain.mu.Lock()
+	domain.count = 1
+	domain.meta = col.Meta()
+	domain.rootRuns = map[string][]memtable.Table{
+		collectionSecondaryRootName("users", "city"): {table},
+	}
+	domain.mu.Unlock()
+
+	ids, truncated, err := col.FindByIndexValueLimit("city", "hnl", 1)
+	if err != nil {
+		t.Fatalf("find limited city: %v", err)
+	}
+	if truncated || len(ids) != 0 {
+		t.Fatalf("limited ids=%q truncated=%v want empty/false", ids, truncated)
+	}
+}
+
+func TestBufferedRootRunsIteratorSingleRunHidesTombstones(t *testing.T) {
+	table := newCollectionRunTable(2)
+	table.DeleteSteal([]byte("a"))
+	setCollectionRunValue(table, []byte("b"), []byte("value"))
+	table.Freeze()
+
+	it := newBufferedRootRunsIterator([]memtable.Table{table}, nil, nil)
+	defer func() { _ = it.Close() }()
+	if !it.Valid() {
+		t.Fatal("iterator invalid, want live key b")
+	}
+	if got := it.UnsafeKey(); !bytes.Equal(got, []byte("b")) {
+		t.Fatalf("first key=%q want b", got)
+	}
+	it.Next()
+	if it.Valid() {
+		t.Fatalf("iterator has extra key %q", it.UnsafeKey())
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+}
+
 func TestCollectionFindByIndexValueLimitMaxIntDoesNotOverflow(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
