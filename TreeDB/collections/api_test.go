@@ -787,7 +787,14 @@ func collectionMaintenanceTestContext(t *testing.T) (context.Context, context.Ca
 func collectionTestTimeout(t *testing.T, fallback time.Duration) time.Duration {
 	t.Helper()
 	if deadline, ok := t.Deadline(); ok {
-		remaining := time.Until(deadline) - 500*time.Millisecond
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return time.Nanosecond
+		}
+		if remaining <= 500*time.Millisecond {
+			return remaining
+		}
+		remaining -= 500 * time.Millisecond
 		if remaining > 0 && remaining < fallback {
 			return remaining
 		}
@@ -4005,6 +4012,16 @@ func TestCollectionUpdateBatchNoOpAllowsOtherCollectionRootDrift(t *testing.T) {
 	}
 	if got := callbackCalls.Load(); got != 1 {
 		t.Fatalf("callback calls=%d want 1", got)
+	}
+}
+
+func TestCollectionRootDescriptorDeltaWrappersRejectNilReceiver(t *testing.T) {
+	var col *Collection
+	if _, err := col.buildRootDescriptorSystemDeltaIterator(0, 0, nil, nil, nil); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("buildRootDescriptorSystemDeltaIterator err=%v want ErrClosed", err)
+	}
+	if err := col.validateRootDescriptorSystemDelta(0, 0, nil, nil); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("validateRootDescriptorSystemDelta err=%v want ErrClosed", err)
 	}
 }
 
