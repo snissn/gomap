@@ -119,9 +119,9 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	if got := profileBenchBufferedIndexedWriteMaxDocuments(t); got != 123 {
 		t.Fatalf("buffered max docs=%d want 123", got)
 	}
-	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_BYTES", "456")
-	if got := profileBenchBufferedIndexedWriteMaxBytes(t); got != 456 {
-		t.Fatalf("buffered max bytes=%d want 456", got)
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_BYTES", "1099511627776")
+	if got := profileBenchBufferedIndexedWriteMaxBytes(t); got != 1099511627776 {
+		t.Fatalf("buffered max bytes=%d want 1099511627776", got)
 	}
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_ROOT_RUNS", "789")
 	if got := profileBenchBufferedIndexedWriteMaxRootRuns(t); got != 789 {
@@ -285,7 +285,7 @@ func BenchmarkTreeDBGatewayRawWireLoadBSONIndexes2(b *testing.B) {
 	}
 	timedElapsed += time.Since(flushStart)
 	b.StopTimer()
-	reportProfileBenchBufferedIndexedAsyncFlush(b, collection.Meta().Options)
+	reportProfileBenchBufferedIndexedWriteOptions(b, collection.Meta().Options)
 	reportDocsPerSecond(b, b.N, timedElapsed)
 }
 
@@ -447,7 +447,7 @@ func BenchmarkDirectCollectionLoadBSONIndexes2(b *testing.B) {
 	if err := backend.Checkpoint(); err != nil {
 		b.Fatalf("checkpoint backend: %v", err)
 	}
-	reportProfileBenchBufferedIndexedAsyncFlush(b, collection.Meta().Options)
+	reportProfileBenchBufferedIndexedWriteOptions(b, collection.Meta().Options)
 	reportDocsPerSecond(b, b.N, timedElapsed)
 }
 
@@ -577,7 +577,7 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 		b.Fatalf("run concurrent updates: %v", err)
 	}
 	b.ReportMetric(float64(writers), "writers")
-	reportProfileBenchBufferedIndexedAsyncFlush(b, collection.Meta().Options)
+	reportProfileBenchBufferedIndexedWriteOptions(b, collection.Meta().Options)
 	reportCollectionManagerUpdateStats(b, deltaCollectionManagerUpdateStats(manager.StatsSnapshot(), statsBefore), b.N)
 	backendStatsAfter := backend.Stats()
 	reportProfileBenchOrderedRootPublishStats(b, backendStatsAfter, backendStatsBefore, b.N)
@@ -1453,8 +1453,8 @@ func profileBenchBufferedIndexedWriteMaxDocuments(tb testing.TB) int {
 	return profileBenchNonNegativeEnvInt(tb, "MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_DOCUMENTS", 0)
 }
 
-func profileBenchBufferedIndexedWriteMaxBytes(tb testing.TB) int {
-	return profileBenchNonNegativeEnvInt(tb, "MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_BYTES", 0)
+func profileBenchBufferedIndexedWriteMaxBytes(tb testing.TB) int64 {
+	return profileBenchNonNegativeEnvInt64(tb, "MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_BYTES", 0)
 }
 
 func profileBenchBufferedIndexedWriteMaxRootRuns(tb testing.TB) int {
@@ -1468,7 +1468,7 @@ func profileBenchCollectionOptions(tb testing.TB, format collections.DocumentFor
 		DataRootStoragePolicy:                   collections.RootStorageCompressed,
 		IndexStateStoragePolicy:                 collections.RootStorageCompressed,
 		BufferedIndexedWriteMaxDocuments:        profileBenchBufferedIndexedWriteMaxDocuments(tb),
-		BufferedIndexedWriteMaxBytes:            int64(profileBenchBufferedIndexedWriteMaxBytes(tb)),
+		BufferedIndexedWriteMaxBytes:            profileBenchBufferedIndexedWriteMaxBytes(tb),
 		BufferedIndexedWriteMaxRootRuns:         profileBenchBufferedIndexedWriteMaxRootRuns(tb),
 		BufferedIndexedAsyncFlush:               profileBenchBufferedIndexedAsyncFlush(tb),
 		BufferedIndexedAsyncFlushMaxQueuedUnits: profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(tb),
@@ -1514,7 +1514,20 @@ func profileBenchNonNegativeEnvInt(tb testing.TB, name string, defaultValue int)
 	return value
 }
 
-func reportProfileBenchBufferedIndexedAsyncFlush(b *testing.B, opts collections.CollectionOptions) {
+func profileBenchNonNegativeEnvInt64(tb testing.TB, name string, defaultValue int64) int64 {
+	tb.Helper()
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return defaultValue
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value < 0 {
+		tb.Fatalf("invalid %s=%q", name, raw)
+	}
+	return value
+}
+
+func reportProfileBenchBufferedIndexedWriteOptions(b *testing.B, opts collections.CollectionOptions) {
 	b.Helper()
 	if opts.BufferedIndexedWriteMaxDocuments > 0 {
 		b.ReportMetric(float64(opts.BufferedIndexedWriteMaxDocuments), "buffered_max_docs")
