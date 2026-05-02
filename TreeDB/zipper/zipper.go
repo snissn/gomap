@@ -1708,7 +1708,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	}
 
 	target := builder
-	appendInternal := func(key []byte, childRef page.ChildRef, first bool) error {
+	appendInternalMaybeCopied := func(sourceIndex uint16, key []byte, childRef page.ChildRef, first bool, copySourceLeafLog bool) error {
 		pageCount := z.pager.PageCount()
 		if childRef.Kind == page.ChildRefPage && childRef.Page >= pageCount {
 			return fmt.Errorf("zipper: detected OOB child ID %d (page_count=%d)", childRef.Page, pageCount)
@@ -1724,6 +1724,11 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		}
 		if z.internalSoftFull(target, entrySize) {
 			err = node.ErrNodeFull
+		} else if copySourceLeafLog && childRef.Kind == page.ChildRefLeafLog && oldNode.InternalLeafLogRefsEnabled() {
+			err = target.AddInternalLeafLogChildFromNode(oldNode, sourceIndex)
+			if err == nil {
+				recordZipperInternalChildRef(metrics, childRef)
+			}
 		} else {
 			err = target.AddInternalChildRef(key, childRef)
 			if err == nil {
@@ -1738,6 +1743,12 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			return nil
 		}
 		return err
+	}
+	appendInternal := func(key []byte, childRef page.ChildRef, first bool) error {
+		return appendInternalMaybeCopied(0, key, childRef, first, false)
+	}
+	appendExistingInternal := func(sourceIndex uint16, key []byte, childRef page.ChildRef, first bool) error {
+		return appendInternalMaybeCopied(sourceIndex, key, childRef, first, true)
 	}
 
 	// Fast path: most benchmarked writes are non-maintenance and below the
@@ -1798,8 +1809,14 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 				}
 			}
 
-			if err := appendInternal(lowKey, newChildRef, firstEntry); err != nil {
-				return page.ChildRef{}, nil, err
+			if len(childOps) == 0 {
+				if err := appendExistingInternal(i, lowKey, newChildRef, firstEntry); err != nil {
+					return page.ChildRef{}, nil, err
+				}
+			} else {
+				if err := appendInternal(lowKey, newChildRef, firstEntry); err != nil {
+					return page.ChildRef{}, nil, err
+				}
 			}
 			firstEntry = false
 			for _, s := range childSplits {
@@ -1968,8 +1985,14 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		firstEntry := true
 		for i := range children {
 			child := &children[i]
-			if err := appendInternal(child.key, child.newChild, firstEntry); err != nil {
-				return page.ChildRef{}, nil, err
+			if len(child.ops) == 0 {
+				if err := appendExistingInternal(uint16(i), child.key, child.newChild, firstEntry); err != nil {
+					return page.ChildRef{}, nil, err
+				}
+			} else {
+				if err := appendInternal(child.key, child.newChild, firstEntry); err != nil {
+					return page.ChildRef{}, nil, err
+				}
 			}
 			firstEntry = false
 			for _, s := range child.splits {
