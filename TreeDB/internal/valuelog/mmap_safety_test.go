@@ -23,11 +23,9 @@ func ptrInMapping(view, mapping []byte) bool {
 	return vp >= mp && vp < end
 }
 
-// TestMmapSafety_ZeroCopy_Remap verifies that holding a zero-copy view of an
-// older mmap remains safe even after the File remaps due to growth.
-//
-// Without retaining dead mappings, this test would crash with SIGSEGV.
-func TestMmapSafety_ZeroCopy_Remap(t *testing.T) {
+// TestMmapSafety_ReadUnsafeOwnedAcrossRemap verifies that ReadUnsafe callers do
+// not receive a slice tied to an mmap that can later be retired.
+func TestMmapSafety_ReadUnsafeOwnedAcrossRemap(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")
 	}
@@ -68,8 +66,8 @@ func TestMmapSafety_ZeroCopy_Remap(t *testing.T) {
 		t.Fatalf("view1 mismatch")
 	}
 	oldMap, _ := f.mmapData.Load().([]byte)
-	if !ptrInMapping(view1, oldMap) {
-		t.Fatalf("expected view1 to reference mmap (zero-copy)")
+	if ptrInMapping(view1, oldMap) {
+		t.Fatalf("expected ReadUnsafe to return owned bytes, not mmap backing")
 	}
 
 	// Grow the file enough to force a remap on the next read.
@@ -95,13 +93,90 @@ func TestMmapSafety_ZeroCopy_Remap(t *testing.T) {
 	if string(view2) != "v2" {
 		t.Fatalf("view2 mismatch")
 	}
-	if len(f.deadMappings) == 0 {
-		t.Fatalf("expected at least one dead mapping after remap")
+	if len(f.deadMappings) != 0 {
+		t.Fatalf("expected retired mapping to be reclaimed after ReadUnsafe returns, got=%d", len(f.deadMappings))
 	}
 
 	// Access view1 again (should not crash).
 	if !bytes.Equal(view1, val1) {
 		t.Fatalf("view1 corrupted after remap")
+	}
+}
+
+func TestMmapSafety_RetiredMappingsReclaimedAfterReaderEpoch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	old := enableCurrentWritableMmap
+	enableCurrentWritableMmap = true
+	defer func() { enableCurrentWritableMmap = old }()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-l0-000001.log")
+	fileID := uint32(123)
+
+	w, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	val1 := bytes.Repeat([]byte("v1"), 1024)
+	ptr1, err := w.Append(0, nil, 1, val1)
+	if err != nil {
+		t.Fatalf("Append 1: %v", err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush 1: %v", err)
+	}
+
+	f, err := openFile(path, fileID, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if _, err := f.ReadUnsafe(ptr1, false); err != nil {
+		t.Fatalf("ReadUnsafe 1: %v", err)
+	}
+	oldMap, _ := f.mmapData.Load().([]byte)
+	if len(oldMap) == 0 {
+		t.Fatalf("expected initial mmap")
+	}
+
+	f.beginMmapRead()
+	blob := bytes.Repeat([]byte("X"), 1024*1024)
+	for i := 0; i < 10; i++ {
+		if _, err := w.Append(0, nil, uint64(2+i), blob); err != nil {
+			t.Fatalf("Append grow %d: %v", i, err)
+		}
+	}
+	val2 := []byte("v2")
+	ptr2, err := w.Append(0, nil, 999, val2)
+	if err != nil {
+		t.Fatalf("Append 2: %v", err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush 2: %v", err)
+	}
+	if got := oldMap[0]; got == 0xff {
+		t.Fatalf("impossible old-map sentinel: %x", got)
+	}
+
+	if _, err := f.ReadUnsafe(ptr2, false); err != nil {
+		f.endMmapRead()
+		t.Fatalf("ReadUnsafe 2: %v", err)
+	}
+	if dead := f.deadMappingsCount.Load(); dead == 0 {
+		f.endMmapRead()
+		t.Fatalf("expected retired mapping to remain while reader epoch is active")
+	}
+	f.endMmapRead()
+	if dead := f.deadMappingsCount.Load(); dead != 0 {
+		t.Fatalf("expected retired mapping to be reclaimed after reader epoch drains, got=%d", dead)
+	}
+	if bytes := f.deadMappedBytes.Load(); bytes != 0 {
+		t.Fatalf("expected retired mapping bytes to be reclaimed, got=%d", bytes)
 	}
 }
 

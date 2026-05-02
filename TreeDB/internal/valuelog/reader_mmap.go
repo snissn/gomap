@@ -37,8 +37,9 @@ const readViaMmapViewPrefixCacheEnabled = false
 // vm.max_map_count. Unless explicitly configured, the effective cap can grow
 // with mapped size up to maxAdaptiveDeadMappings. Set <= 0 to disable the cap.
 //
-// Each remap retains the previous mapping until the file is closed to avoid
-// use-after-unmap with concurrent readers.
+// Each remap retires the previous mapping and keeps it alive until active mmap
+// readers drain, avoiding use-after-unmap without retaining stale mappings for
+// the lifetime of the file.
 var MaxDeadMappings = defaultMaxDeadMappings
 
 const (
@@ -180,6 +181,51 @@ func effectiveMaxDeadMappings(mappedLen int) int {
 func deadMappingsCapExhausted(deadMappingsCount uint64, mappedLen int) bool {
 	maxMappings := effectiveMaxDeadMappings(mappedLen)
 	return maxMappings > 0 && deadMappingsCount >= uint64(maxMappings)
+}
+
+func (f *File) beginMmapRead() {
+	if f != nil {
+		f.mmapActiveReaders.Add(1)
+	}
+}
+
+func (f *File) endMmapRead() {
+	if f == nil {
+		return
+	}
+	if active := f.mmapActiveReaders.Add(-1); active == 0 {
+		f.reclaimDeadMappings()
+	}
+}
+
+func (f *File) reclaimDeadMappings() {
+	if f == nil || f.mmapActiveReaders.Load() != 0 {
+		return
+	}
+	f.remapMu.Lock()
+	defer f.remapMu.Unlock()
+	f.reclaimDeadMappingsLocked()
+}
+
+func (f *File) reclaimDeadMappingsLocked() {
+	if f == nil || f.mmapActiveReaders.Load() != 0 || len(f.deadMappings) == 0 {
+		return
+	}
+	for _, b := range f.deadMappings {
+		_ = munmap(b)
+	}
+	f.deadMappings = nil
+	f.deadMappingsCount.Store(0)
+	f.deadMappedBytes.Store(0)
+}
+
+func cloneValueLogBytes(src []byte) []byte {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make([]byte, len(src))
+	copy(dst, src)
+	return dst
 }
 
 func (f *File) usesPersistentMmap() bool {
@@ -355,6 +401,7 @@ func (f *File) retirePersistentMmapToDeadLocked() bool {
 	f.deadMappingsCount.Add(1)
 	f.deadMappedBytes.Add(uint64(len(data)))
 	f.mmapData.Store([]byte(nil))
+	f.reclaimDeadMappingsLocked()
 	return true
 }
 
@@ -443,6 +490,7 @@ func (f *File) remapToFileSizeWithPolicy(requirePersistent bool) {
 	// If we have already hit the dead-mapping cap, we cannot remap again without
 	// risking use-after-unmap for callers holding unsafe mmap views. Avoid the
 	// per-call Stat allocation when reads keep missing the current mapping.
+	f.reclaimDeadMappingsLocked()
 	data, _ := f.mmapData.Load().([]byte)
 	if data != nil && deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
 		return
@@ -488,6 +536,7 @@ func (f *File) remapToFileSizeWithPolicy(requirePersistent bool) {
 	}
 	f.mmapData.Store(b)
 	f.remapCount.Add(1)
+	f.reclaimDeadMappingsLocked()
 }
 
 func (f *File) readViaMmap(ptr page.ValuePtr, verifyCRC bool) ([]byte, error, bool) {
@@ -872,6 +921,11 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 			}
 			return decoded, false, nil, true
 		}
+		if cap(dst) >= len(payload) {
+			out := dst[:len(payload)]
+			copy(out, payload)
+			return out, true, nil, true
+		}
 		return payload, false, nil, true
 	}
 
@@ -963,7 +1017,16 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		if srcStart < 0 || srcEnd < srcStart || srcEnd > len(payload) {
 			return nil, false, ErrCorrupt, true
 		}
-		val, _, err := decodeTemplatePayload(payload[srcStart:srcEnd])
+		src := payload[srcStart:srcEnd]
+		if f.templateLookup == nil || !templ.IsEncodedPayload(src) {
+			if cap(dst) >= len(src) {
+				out := dst[:len(src)]
+				copy(out, src)
+				return out, true, nil, true
+			}
+			return src, false, nil, true
+		}
+		val, _, err := decodeTemplatePayload(src)
 		if err != nil {
 			return nil, false, err, true
 		}

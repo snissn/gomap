@@ -96,6 +96,7 @@ type File struct {
 	remapMu        sync.Mutex
 	remapRequested atomic.Bool
 
+	mmapActiveReaders      atomic.Int64
 	deadMappings           [][]byte
 	deadMappedBytes        atomic.Uint64
 	remapCount             atomic.Uint64
@@ -484,7 +485,10 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	if err := f.ensureCurrentWritableReadable(); err != nil {
 		return nil, err
 	}
-	if val, err, ok := f.readViaMmap(ptr, verifyCRC); ok {
+	f.beginMmapRead()
+	val, err, ok := f.readViaMmap(ptr, verifyCRC)
+	f.endMmapRead()
+	if ok {
 		f.mmapReadHits.Add(1)
 		if err != nil {
 			return nil, err
@@ -523,12 +527,21 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	if err := f.ensureCurrentWritableReadable(); err != nil {
 		return nil, err
 	}
-	if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
-		f.mmapReadHits.Add(1)
-		if err != nil {
-			return nil, err
+	readViaMmapViewOwned := func() ([]byte, error, bool) {
+		f.beginMmapRead()
+		defer f.endMmapRead()
+		val, err, ok := f.readViaMmapView(ptr, verifyCRC)
+		if !ok || err != nil {
+			return nil, err, ok
 		}
 		val, _, _, err = f.maybeDecodeLeafLogPayloadTo(val, nil)
+		if err != nil {
+			return nil, err, true
+		}
+		return cloneValueLogBytes(val), nil, true
+	}
+	if val, err, ok := readViaMmapViewOwned(); ok {
+		f.mmapReadHits.Add(1)
 		if err != nil {
 			return nil, err
 		}
@@ -536,12 +549,8 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	}
 	if !f.usesPersistentMmap() {
 		if f.tryEnableSealedLazyMmap() {
-			if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
+			if val, err, ok := readViaMmapViewOwned(); ok {
 				f.mmapReadHits.Add(1)
-				if err != nil {
-					return nil, err
-				}
-				val, _, _, err = f.maybeDecodeLeafLogPayloadTo(val, nil)
 				if err != nil {
 					return nil, err
 				}
@@ -556,12 +565,8 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	data, _ := f.mmapData.Load().([]byte)
 	if !deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
 		f.remapToFileSize()
-		if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
+		if val, err, ok := readViaMmapViewOwned(); ok {
 			f.mmapReadHits.Add(1)
-			if err != nil {
-				return nil, err
-			}
-			val, _, _, err = f.maybeDecodeLeafLogPayloadTo(val, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -584,33 +589,38 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 	if err := f.ensureCurrentWritableReadable(); err != nil {
 		return nil, false, err
 	}
-	if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
-		f.mmapReadHits.Add(1)
-		if err != nil {
-			return nil, false, err
+	readViaMmapViewToOwned := func() ([]byte, bool, error, bool) {
+		f.beginMmapRead()
+		defer f.endMmapRead()
+		val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst)
+		if !ok || err != nil {
+			return nil, false, err, ok
 		}
 		val, compactUsedDst, compactDecoded, err := f.maybeDecodeLeafLogPayloadTo(val, dst)
 		if err != nil {
-			return nil, false, err
+			return nil, false, err, true
 		}
 		if compactDecoded {
-			return val, compactUsedDst, nil
+			usedDst = compactUsedDst
+		}
+		if !usedDst {
+			val = cloneValueLogBytes(val)
+		}
+		return val, usedDst, nil, true
+	}
+	if val, usedDst, err, ok := readViaMmapViewToOwned(); ok {
+		f.mmapReadHits.Add(1)
+		if err != nil {
+			return nil, false, err
 		}
 		return val, usedDst, nil
 	}
 	if !f.usesPersistentMmap() {
 		if f.tryEnableSealedLazyMmap() {
-			if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
+			if val, usedDst, err, ok := readViaMmapViewToOwned(); ok {
 				f.mmapReadHits.Add(1)
 				if err != nil {
 					return nil, false, err
-				}
-				val, compactUsedDst, compactDecoded, err := f.maybeDecodeLeafLogPayloadTo(val, dst)
-				if err != nil {
-					return nil, false, err
-				}
-				if compactDecoded {
-					return val, compactUsedDst, nil
 				}
 				return val, usedDst, nil
 			}
@@ -638,17 +648,10 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 	data, _ := f.mmapData.Load().([]byte)
 	if !deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
 		f.remapToFileSize()
-		if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
+		if val, usedDst, err, ok := readViaMmapViewToOwned(); ok {
 			f.mmapReadHits.Add(1)
 			if err != nil {
 				return nil, false, err
-			}
-			val, compactUsedDst, compactDecoded, err := f.maybeDecodeLeafLogPayloadTo(val, dst)
-			if err != nil {
-				return nil, false, err
-			}
-			if compactDecoded {
-				return val, compactUsedDst, nil
 			}
 			return val, usedDst, nil
 		}
@@ -845,7 +848,10 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 	if err := f.ensureCurrentWritableReadable(); err != nil {
 		return nil, err
 	}
-	if val, err, ok := f.readViaMmapAppend(ptr, verifyCRC, dst); ok {
+	f.beginMmapRead()
+	val, err, ok := f.readViaMmapAppend(ptr, verifyCRC, dst)
+	f.endMmapRead()
+	if ok {
 		f.mmapReadHits.Add(1)
 		return val, err
 	}

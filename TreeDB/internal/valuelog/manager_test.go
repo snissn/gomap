@@ -456,8 +456,8 @@ func TestManagerPromoteCurrentWritable_RetiresLeafCurrentMmapBeforeSealedFallbac
 	if data, _ := f1.mmapData.Load().([]byte); len(data) != 0 {
 		t.Fatalf("expected prior current leaf mmap to be retired after promotion, len=%d", len(data))
 	}
-	if dead := f1.deadMappingsCount.Load(); dead == 0 {
-		t.Fatalf("expected retired current leaf mapping to move into deadMappings")
+	if dead := f1.deadMappingsCount.Load(); dead != 0 {
+		t.Fatalf("expected retired current leaf mapping to be reclaimed after readers drain, got=%d", dead)
 	}
 
 	got, err = mgr.ReadUnsafe(ptr1)
@@ -712,8 +712,8 @@ func TestManagerPromoteCurrentWritable_RetiresDemotedLeafWhenSealedBudgetAlready
 	if data, _ := f2.mmapData.Load().([]byte); len(data) != 0 {
 		t.Fatalf("expected demoted second segment to retire active mmap once sealed budget is full, len=%d", len(data))
 	}
-	if dead := f2.deadMappingsCount.Load(); dead == 0 {
-		t.Fatalf("expected demoted second segment to move prior current mmap into deadMappings")
+	if dead := f2.deadMappingsCount.Load(); dead != 0 {
+		t.Fatalf("expected demoted second segment mmap to be reclaimed after readers drain, got=%d", dead)
 	}
 	currentSegs, _, sealedSegs, _, deadMappings, _ := mgr.MmapResidencyStats()
 	if currentSegs != 0 {
@@ -722,8 +722,8 @@ func TestManagerPromoteCurrentWritable_RetiresDemotedLeafWhenSealedBudgetAlready
 	if sealedSegs != 1 {
 		t.Fatalf("expected sealed mmap count to stay capped at one, sealedSegs=%d", sealedSegs)
 	}
-	if deadMappings == 0 {
-		t.Fatalf("expected deadMappings to record the retired second segment")
+	if deadMappings != 0 {
+		t.Fatalf("expected no retained dead mappings after reader epochs drain, got=%d", deadMappings)
 	}
 }
 
@@ -793,8 +793,8 @@ func TestManagerPromoteCurrentWritable_RetiresDemotedLeafWhenFileGrewPastSealedB
 	if data, _ := f1.mmapData.Load().([]byte); len(data) != 0 {
 		t.Fatalf("expected demoted id1 mapping to retire once sealed file size exceeds byte cap, len=%d", len(data))
 	}
-	if dead := f1.deadMappingsCount.Load(); dead == 0 {
-		t.Fatalf("expected demoted id1 mapping to be retained in deadMappings after retirement")
+	if dead := f1.deadMappingsCount.Load(); dead != 0 {
+		t.Fatalf("expected demoted id1 mapping to be reclaimed after readers drain, got=%d", dead)
 	}
 }
 
