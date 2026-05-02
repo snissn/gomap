@@ -488,7 +488,7 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	if f == nil || f.File == nil {
 		return nil, errors.New("valuelog: nil file")
 	}
-	if err := f.ensureCurrentWritableReadable(); err != nil {
+	if err := f.ensureCurrentWritableReadableFor(ptr); err != nil {
 		return nil, err
 	}
 	if val, err, ok := f.readViaMmap(ptr, verifyCRC); ok {
@@ -527,7 +527,7 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	if f == nil || f.File == nil {
 		return nil, errors.New("valuelog: nil file")
 	}
-	if err := f.ensureCurrentWritableReadable(); err != nil {
+	if err := f.ensureCurrentWritableReadableFor(ptr); err != nil {
 		return nil, err
 	}
 	if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
@@ -588,7 +588,7 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 	if f == nil || f.File == nil {
 		return nil, false, errors.New("valuelog: nil file")
 	}
-	if err := f.ensureCurrentWritableReadable(); err != nil {
+	if err := f.ensureCurrentWritableReadableFor(ptr); err != nil {
 		return nil, false, err
 	}
 	if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
@@ -849,7 +849,7 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 	if f == nil || f.File == nil {
 		return nil, errors.New("valuelog: nil file")
 	}
-	if err := f.ensureCurrentWritableReadable(); err != nil {
+	if err := f.ensureCurrentWritableReadableFor(ptr); err != nil {
 		return nil, err
 	}
 	if val, err, ok := f.readViaMmapAppend(ptr, verifyCRC, dst); ok {
@@ -1203,7 +1203,14 @@ func (m *Manager) currentWritableBarrier() func(uint32) (int64, error) {
 }
 
 func (f *File) ensureCurrentWritableReadable() error {
+	return f.ensureCurrentWritableReadableFor(page.ValuePtr{})
+}
+
+func (f *File) ensureCurrentWritableReadableFor(ptr page.ValuePtr) error {
 	if f == nil || !f.currentWritable.Load() || f.manager == nil {
+		return nil
+	}
+	if currentWritableRecordKnownReadable(f, ptr) {
 		return nil
 	}
 	if barrier := f.manager.currentWritableBarrier(); barrier != nil {
@@ -1216,6 +1223,21 @@ func (f *File) ensureCurrentWritableReadable() error {
 		}
 	}
 	return nil
+}
+
+func currentWritableRecordKnownReadable(f *File, ptr page.ValuePtr) bool {
+	if f == nil || ptr.Offset < 4 {
+		return false
+	}
+	recordLen := page.ValuePtrRecordLength(ptr)
+	if recordLen == 0 {
+		return false
+	}
+	end := ptr.Offset + uint64(recordLen)
+	if end < ptr.Offset || end > uint64(^uint64(0)>>1) {
+		return false
+	}
+	return f.verifiedFileSize.Load() >= int64(end)
 }
 
 func (m *Manager) ReadChecksumEnabled() bool {
