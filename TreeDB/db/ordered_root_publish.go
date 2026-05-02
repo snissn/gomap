@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"errors"
+	"sort"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -81,6 +82,16 @@ type OrderedRootPublishInput struct {
 type OrderedRootDeltaPublishInput struct {
 	BaseRoot      uint64
 	Iter          iterator.UnsafeIterator
+	StoragePolicy OrderedRootStoragePolicy
+}
+
+// OrderedRootDeltaBatchPublishInput describes a sorted root-local mutation
+// batch whose iterator materialization has already been done by the caller.
+// Callers retain ownership of Delta and must keep any borrowed key/value views
+// immutable until the publish call returns.
+type OrderedRootDeltaBatchPublishInput struct {
+	BaseRoot      uint64
+	Delta         *batch.Batch
 	StoragePolicy OrderedRootStoragePolicy
 }
 
@@ -324,6 +335,9 @@ func orderedRootBatchPut(delta *batch.Batch, iter iterator.UnsafeIterator, borro
 }
 
 func orderedRootDeltaBatchFromIterator(iter iterator.UnsafeIterator) (*batch.Batch, error) {
+	if iter == nil {
+		return nil, errors.New("nil ordered root delta iterator")
+	}
 	delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
 	if hint, ok := iter.(orderedRootLenHintIterator); ok {
 		delta.Reserve(hint.Len())
@@ -355,6 +369,134 @@ func orderedRootDeltaBatchFromIterator(iter iterator.UnsafeIterator) (*batch.Bat
 		return nil, err
 	}
 	return delta, nil
+}
+
+// OrderedRootDeltaBatchFromIterator materializes a root-local mutation iterator
+// into the same transient batch shape used by ordered-root delta publishing.
+// It does not close iter.
+func OrderedRootDeltaBatchFromIterator(iter iterator.UnsafeIterator) (*batch.Batch, error) {
+	return orderedRootDeltaBatchFromIterator(iter)
+}
+
+type orderedRootDeltaBatchIterator struct {
+	entries        []batch.Entry
+	idx            int
+	includeDeleted bool
+}
+
+func newOrderedRootDeltaBatchIterator(delta *batch.Batch, includeDeleted bool) *orderedRootDeltaBatchIterator {
+	it := &orderedRootDeltaBatchIterator{includeDeleted: includeDeleted}
+	if delta != nil {
+		it.entries = delta.SortedEntries()
+	}
+	it.skipDeleted()
+	return it
+}
+
+func (it *orderedRootDeltaBatchIterator) Valid() bool {
+	return it != nil && it.idx < len(it.entries)
+}
+
+func (it *orderedRootDeltaBatchIterator) Next() {
+	if !it.Valid() {
+		return
+	}
+	it.idx++
+	it.skipDeleted()
+}
+
+func (it *orderedRootDeltaBatchIterator) Seek(key []byte) {
+	if it == nil {
+		return
+	}
+	it.idx = sort.Search(len(it.entries), func(i int) bool {
+		return bytes.Compare(it.entries[i].Key, key) >= 0
+	})
+	it.skipDeleted()
+}
+
+func (it *orderedRootDeltaBatchIterator) UnsafeKey() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.entries[it.idx].Key
+}
+
+func (it *orderedRootDeltaBatchIterator) UnsafeValue() []byte {
+	if !it.Valid() || it.entries[it.idx].Type == batch.OpDelete {
+		return nil
+	}
+	return it.entries[it.idx].Value
+}
+
+func (it *orderedRootDeltaBatchIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	if !it.Valid() {
+		return nil, page.ValuePtr{}, node.FlagInline
+	}
+	entry := it.entries[it.idx]
+	if entry.Type == batch.OpDelete {
+		return nil, page.ValuePtr{}, node.FlagTombstone
+	}
+	if entry.IsPtr {
+		return entry.Value, entry.ValuePtr, node.FlagPointer
+	}
+	return entry.Value, page.ValuePtr{}, node.FlagInline
+}
+
+func (it *orderedRootDeltaBatchIterator) Key() []byte {
+	return it.UnsafeKey()
+}
+
+func (it *orderedRootDeltaBatchIterator) Value() []byte {
+	return it.UnsafeValue()
+}
+
+func (it *orderedRootDeltaBatchIterator) KeyCopy(dst []byte) []byte {
+	return append(dst[:0], it.UnsafeKey()...)
+}
+
+func (it *orderedRootDeltaBatchIterator) ValueCopy(dst []byte) []byte {
+	return append(dst[:0], it.UnsafeValue()...)
+}
+
+func (it *orderedRootDeltaBatchIterator) IsDeleted() bool {
+	return it.Valid() && it.entries[it.idx].Type == batch.OpDelete
+}
+
+func (it *orderedRootDeltaBatchIterator) Error() error {
+	return nil
+}
+
+func (it *orderedRootDeltaBatchIterator) Close() error {
+	if it != nil {
+		it.entries = nil
+		it.idx = 0
+	}
+	return nil
+}
+
+func (it *orderedRootDeltaBatchIterator) Domain() (start, end []byte) {
+	return nil, nil
+}
+
+func (it *orderedRootDeltaBatchIterator) StableUnsafeIteratorSlices() bool {
+	return true
+}
+
+func (it *orderedRootDeltaBatchIterator) Len() int {
+	if it == nil {
+		return 0
+	}
+	return len(it.entries) - it.idx
+}
+
+func (it *orderedRootDeltaBatchIterator) skipDeleted() {
+	if it == nil || it.includeDeleted {
+		return
+	}
+	for it.idx < len(it.entries) && it.entries[it.idx].Type == batch.OpDelete {
+		it.idx++
+	}
 }
 
 func collectValueLogRefDeltaFromIterator(iter iterator.UnsafeIterator) (*valueLogRefDelta, error) {
@@ -407,6 +549,45 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 	defer delta.Close()
 	if len(delta.SortedEntries()) == 0 {
 		return baseRoot, nil, metrics, nil
+	}
+	rootZipper, err := db.orderedRootZipperForOptions(idx, opts)
+	if err != nil {
+		return 0, nil, metrics, err
+	}
+	newRoot, retired, metrics, err = rootZipper.Apply(baseRoot, delta)
+	return
+}
+
+func (db *DB) publishOrderedRootDeltaBatch(baseRoot uint64, delta *batch.Batch, opts orderedRootPublishOptions) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, err error) {
+	if db == nil {
+		err = ErrClosed
+		return
+	}
+	if delta == nil {
+		err = errors.New("nil ordered root delta batch")
+		return
+	}
+	if opts.outerLeavesInValueLog && opts.leafPageLog == nil {
+		err = errors.New("ordered root value-log leaf storage requires a leaf page log")
+		return
+	}
+	if len(delta.SortedEntries()) == 0 {
+		return baseRoot, nil, metrics, nil
+	}
+	if baseRoot == 0 {
+		iter := newOrderedRootDeltaBatchIterator(delta, false)
+		if !iter.Valid() {
+			_ = iter.Close()
+			return 0, nil, metrics, nil
+		}
+		newRoot, retired, metrics, _, _, err = db.publishOrderedRootIterator(0, iter, opts, false)
+		return
+	}
+
+	idx := db.idx.Load()
+	if idx == nil {
+		err = errors.New("missing index")
+		return
 	}
 	rootZipper, err := db.orderedRootZipperForOptions(idx, opts)
 	if err != nil {
@@ -932,6 +1113,22 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ord
 	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, preflight, buildSystemDeltaIter)
 }
 
+// PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder is like
+// PublishOrderedRootDeltaGroupWithSystemDeltaBuilder, but the root-local
+// mutation batches have already been materialized by the caller. This lets
+// collection flush paths do iterator-to-batch work before entering the DB write
+// critical section.
+func (db *DB) PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered []OrderedRootDeltaBatchPublishInput, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
+	return db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, nil, buildSystemDeltaIter)
+}
+
+// PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder is like
+// PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder, but runs preflight
+// under the DB write lock before applying root-local deltas.
+func (db *DB) PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
+	return db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, preflight, buildSystemDeltaIter)
+}
+
 func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
 	if buildSystemDeltaIter == nil {
 		return 0, nil, errors.New("nil ordered root group system delta builder")
@@ -1023,6 +1220,102 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 	// The system root was applied as a delta, so we do not have an exact
 	// value-log ref delta for system-root pointer changes. Passing nil keeps the
 	// tracker conservative by invalidating it after commit.
+	var vlogRefDelta *valueLogRefDelta
+	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil); err != nil {
+		return 0, nil, err
+	}
+	return newSystemRoot, rootIDs, nil
+}
+
+func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
+	if buildSystemDeltaIter == nil {
+		return 0, nil, errors.New("nil ordered root group system delta builder")
+	}
+	if db == nil {
+		return 0, nil, ErrClosed
+	}
+	if db.closing.Load() {
+		return 0, nil, ErrClosed
+	}
+
+	lockStart := time.Now()
+	db.writeMu.Lock()
+	holdStart := time.Now()
+	wait := holdStart.Sub(lockStart)
+	rootsObserved := 0
+	finished := false
+	finishPublish := func() {
+		if finished {
+			return
+		}
+		finished = true
+		hold := time.Since(holdStart)
+		db.writeMu.Unlock()
+		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, err)
+	}
+	defer finishPublish()
+
+	if db.readOnly {
+		err = ErrReadOnly
+		return 0, nil, err
+	}
+
+	db.mu.RLock()
+	userRoot := db.meta.UserRootPageID
+	baseSystemRoot := db.meta.SystemRootPageID
+	db.mu.RUnlock()
+	if preflight != nil {
+		if err = preflight(); err != nil {
+			return 0, nil, err
+		}
+	}
+
+	rootIDs = make([]uint64, len(ordered))
+	systemOpts := systemRootOrderedPublishOptions(db)
+	var retired []uint64
+	var merged adaptive.Metrics
+	for idx := range ordered {
+		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[idx].StoragePolicy)
+		if err != nil {
+			return 0, nil, err
+		}
+		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatch(ordered[idx].BaseRoot, ordered[idx].Delta, opts)
+		if err != nil {
+			return 0, nil, err
+		}
+		rootIDs[idx] = rootID
+		rootsObserved++
+		retired = append(retired, rootRetired...)
+		mergeOrderedRootPublishMetrics(&merged, metrics)
+	}
+
+	iter, err := buildSystemDeltaIter(append([]uint64(nil), rootIDs...))
+	if err != nil {
+		return 0, nil, err
+	}
+	if iter == nil {
+		return 0, nil, errors.New("nil system root delta iterator")
+	}
+	rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(baseSystemRoot, iter, systemOpts)
+	if err != nil {
+		return 0, nil, err
+	}
+	newSystemRoot = rootID
+	retired = append(retired, rootRetired...)
+	mergeOrderedRootPublishMetrics(&merged, metrics)
+
+	db.mu.RLock()
+	curUserRoot := db.meta.UserRootPageID
+	curSystemRoot := db.meta.SystemRootPageID
+	db.mu.RUnlock()
+	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
+		return 0, nil, errors.New("concurrent modification detected during ordered root group publish")
+	}
+
+	// Batch-based grouped deltas have the same value-log reachability shape as
+	// iterator-based grouped deltas: non-system roots changed, and the system
+	// delta can change collection descriptors. Keep the incremental ref tracker
+	// conservative by invalidating it after commit.
 	var vlogRefDelta *valueLogRefDelta
 	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil); err != nil {
 		return 0, nil, err

@@ -349,6 +349,27 @@ func TestClosedDB_PublishOrderedRootDeltaGroupWithSystemBuilder(t *testing.T) {
 	})
 }
 
+func TestClosedDB_PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(t *testing.T) {
+	runClosedDBMethod(t, "PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder", func(d *DB) {
+		table := mustFrozenSystemMemtable(t, "root/k", "v")
+		iter := table.NewIterator(nil, nil)
+		delta, err := OrderedRootDeltaBatchFromIterator(iter)
+		_ = iter.Close()
+		if err != nil {
+			t.Fatalf("OrderedRootDeltaBatchFromIterator: %v", err)
+		}
+		defer func() { _ = delta.Close() }()
+		_, _, err = d.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+			Delta: delta,
+		}}, func([]uint64) (iterator.UnsafeIterator, error) {
+			return mustFrozenSystemMemtable(t, "sys/k", "v").NewIterator(nil, nil), nil
+		})
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder err=%v want %v", err, ErrClosed)
+		}
+	})
+}
+
 func TestClosedDB_Stats(t *testing.T) {
 	runClosedDBMethod(t, "Stats", func(d *DB) {
 		_ = d.Stats()

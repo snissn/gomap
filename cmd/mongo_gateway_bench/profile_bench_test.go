@@ -579,7 +579,9 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	b.ReportMetric(float64(writers), "writers")
 	reportProfileBenchBufferedIndexedAsyncFlush(b, collection.Meta().Options)
 	reportCollectionManagerUpdateStats(b, deltaCollectionManagerUpdateStats(manager.StatsSnapshot(), statsBefore), b.N)
-	reportProfileBenchBackendVlogMmapStats(b, backend.Stats(), backendStatsBefore, b.N)
+	backendStatsAfter := backend.Stats()
+	reportProfileBenchOrderedRootPublishStats(b, backendStatsAfter, backendStatsBefore, b.N)
+	reportProfileBenchBackendVlogMmapStats(b, backendStatsAfter, backendStatsBefore, b.N)
 	reportDocsPerSecond(b, b.N, timedElapsed)
 }
 
@@ -648,6 +650,28 @@ func reportProfileBenchBackendVlogMmapStats(b *testing.B, after, before map[stri
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.mmap_sealed_bytes")), "backend_vlog_mmap_sealed_bytes")
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.mmap_active_segments")), "backend_vlog_mmap_active_segments")
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.mmap_active_bytes")), "backend_vlog_mmap_active_bytes")
+}
+
+func reportProfileBenchOrderedRootPublishStats(b *testing.B, after, before map[string]string, docs int) {
+	b.Helper()
+	if docs <= 0 {
+		return
+	}
+	const prefix = "treedb.publish.ordered_root_delta_group."
+	calls := profileBenchDeltaUintStat(after, before, prefix+"calls_total")
+	if calls == 0 {
+		return
+	}
+	roots := profileBenchDeltaUintStat(after, before, prefix+"roots_total")
+	holdNs := profileBenchDeltaUintStat(after, before, prefix+"write_lock_hold_ns_total")
+	waitNs := profileBenchDeltaUintStat(after, before, prefix+"write_lock_wait_ns_total")
+	b.ReportMetric(float64(calls), "publish_delta_group_calls")
+	b.ReportMetric(float64(calls)/float64(docs), "publish_delta_group_calls/doc")
+	b.ReportMetric(float64(roots)/float64(calls), "publish_delta_group_roots/call")
+	b.ReportMetric(float64(holdNs)/float64(docs), "publish_delta_group_lock_hold_ns/doc")
+	b.ReportMetric(float64(waitNs)/float64(docs), "publish_delta_group_lock_wait_ns/doc")
+	b.ReportMetric(float64(holdNs)/float64(calls), "publish_delta_group_lock_hold_ns/call")
+	b.ReportMetric(float64(waitNs)/float64(calls), "publish_delta_group_lock_wait_ns/call")
 }
 
 func deltaCollectionManagerUpdateStats(after, before collections.CollectionManagerStats) collections.CollectionManagerStats {

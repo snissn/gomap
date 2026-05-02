@@ -875,6 +875,126 @@ func TestPublishOrderedRootDeltaGroupWithSystemBuilder_AppliesDeletes(t *testing
 	}
 }
 
+func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_PreservesOmittedBaseEntries(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t,
+		"root/a", "va",
+		"root/b", "vb",
+	).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root: %v", err)
+	}
+
+	deltaTable := mustFrozenSystemMemtable(t,
+		"root/b", "vb2",
+		"root/c", "vc",
+	)
+	iter := deltaTable.NewIterator(nil, nil)
+	delta, err := OrderedRootDeltaBatchFromIterator(iter)
+	_ = iter.Close()
+	if err != nil {
+		t.Fatalf("OrderedRootDeltaBatchFromIterator: %v", err)
+	}
+	defer func() { _ = delta.Close() }()
+
+	newSystemRoot, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+		BaseRoot: baseRoot,
+		Delta:    delta,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 || rootIDs[0] == 0 {
+			t.Fatalf("rootIDs=%v want one non-zero root", rootIDs)
+		}
+		return mustFrozenSystemMemtable(t, "sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish delta batch group: %v", err)
+	}
+	if newSystemRoot == 0 || len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("newSystemRoot=%d rootIDs=%v", newSystemRoot, rootIDs)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	for key, want := range map[string]string{
+		"root/a": "va",
+		"root/b": "vb2",
+		"root/c": "vc",
+	} {
+		entry, err := snap.GetEntryAtRoot(rootIDs[0], []byte(key))
+		if err != nil {
+			t.Fatalf("GetEntryAtRoot(%s): %v", key, err)
+		}
+		if got := string(entry.Value); got != want {
+			t.Fatalf("%s=%q want %q", key, got, want)
+		}
+	}
+}
+
+func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_AppliesDeletes(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t,
+		"root/a", "va",
+		"root/b", "vb",
+	).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root: %v", err)
+	}
+	deltaTable, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new delta table: %v", err)
+	}
+	deltaTable.Delete([]byte("root/b"))
+	deltaTable.Freeze()
+	iter := deltaTable.NewIterator(nil, nil)
+	delta, err := OrderedRootDeltaBatchFromIterator(iter)
+	_ = iter.Close()
+	if err != nil {
+		t.Fatalf("OrderedRootDeltaBatchFromIterator: %v", err)
+	}
+	defer func() { _ = delta.Close() }()
+
+	_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+		BaseRoot: baseRoot,
+		Delta:    delta,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish delta batch group: %v", err)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	entry, err := snap.GetEntryAtRoot(rootIDs[0], []byte("root/a"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(root/a): %v", err)
+	}
+	if got, want := string(entry.Value), "va"; got != want {
+		t.Fatalf("root/a=%q want %q", got, want)
+	}
+	if _, err := snap.GetEntryAtRoot(rootIDs[0], []byte("root/b")); err == nil {
+		t.Fatal("root/b still exists after delta delete")
+	}
+}
+
 func TestPublishOrderedRootDeltaGroupWithSystemBuilder_AcceptsLargeDeltaValueLogLeafValue(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
