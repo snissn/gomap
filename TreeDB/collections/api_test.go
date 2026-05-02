@@ -680,6 +680,41 @@ func TestUpdateBatchPlanUniqueSecondaryIndexByRootAvoidsMapAllocation(t *testing
 	}
 }
 
+func TestCollectionCatalogCachesIndexRuntimesAndRootNames(t *testing.T) {
+	meta := CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "profile.email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}
+	catalog := newCollectionCatalog(meta, map[string]uint64{
+		collectionPrimaryRootName(meta.Name): 11,
+	})
+	runtimes, err := catalog.cachedIndexRuntimes()
+	if err != nil {
+		t.Fatalf("cached index runtimes: %v", err)
+	}
+	if got, want := len(runtimes), 2; got != want {
+		t.Fatalf("cached runtime count=%d want %d", got, want)
+	}
+	if got, want := catalog.primaryRootName, "users/primary"; got != want {
+		t.Fatalf("primary root name=%q want %q", got, want)
+	}
+	if got, want := runtimes[0].secondaryRootName, "users/index/email"; got != want {
+		t.Fatalf("secondary root name=%q want %q", got, want)
+	}
+	if got, want := strings.Join(runtimes[0].path, "."), "profile.email"; got != want {
+		t.Fatalf("runtime path=%q want %q", got, want)
+	}
+	if allocs := testing.AllocsPerRun(1000, func() {
+		runtimes, _ := catalog.cachedIndexRuntimes()
+		_ = runtimeSecondaryRootName(meta.Name, runtimes[0])
+	}); allocs != 0 {
+		t.Fatalf("cached runtime/root lookup allocs=%v want zero", allocs)
+	}
+}
+
 func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

@@ -120,8 +120,9 @@ type insertBatchItem struct {
 }
 
 type indexRuntime struct {
-	def  indexDefinition
-	path []string
+	def               indexDefinition
+	path              []string
+	secondaryRootName string
 }
 
 type uniqueProbeCandidate struct {
@@ -449,9 +450,14 @@ func (p insertBatchPlanner) indexRuntimes() ([]indexRuntime, error) {
 			return nil, fmt.Errorf("collections: duplicate index %q", idx.name)
 		}
 		seen[idx.name] = struct{}{}
+		secondaryRootName := ""
+		if p.collection != "" {
+			secondaryRootName = collectionSecondaryRootName(p.collection, idx.name)
+		}
 		runtimes[i] = indexRuntime{
-			def:  idx,
-			path: splitIndexPath(idx.field),
+			def:               idx,
+			path:              splitIndexPath(idx.field),
+			secondaryRootName: secondaryRootName,
 		}
 	}
 	return runtimes, nil
