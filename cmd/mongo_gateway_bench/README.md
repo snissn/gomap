@@ -536,6 +536,7 @@ The benchmark shapes are intentionally different:
   the final `FlushAll()` drain so background async publish work is charged to the
   same throughput row that scheduled it. The same row also reports backend
   value-log mmap counters such as `backend_vlog_mmap_hits/doc`,
+  `backend_vlog_mmap_miss_dead_mapping_cap/doc`,
   `backend_vlog_mmap_fallback_readat/doc`, and `backend_vlog_mmap_hit_ratio`
   plus sealed-map budget/residency counters such as
   `backend_vlog_mmap_sealed_denied_count_cap/doc`,
