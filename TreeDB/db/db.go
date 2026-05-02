@@ -173,41 +173,42 @@ type DB struct {
 	publishWatermarkLatencyBuckets [publishWatermarkLatencyBucketCount]atomic.Uint64
 
 	// Ordered-root delta groups are the collection multi-root publish hot path.
-	orderedRootDeltaGroupCalls                          atomic.Uint64
-	orderedRootDeltaGroupErrors                         atomic.Uint64
-	orderedRootDeltaGroupRoots                          atomic.Uint64
-	orderedRootDeltaGroupWaitTotalNs                    atomic.Uint64
-	orderedRootDeltaGroupHoldTotalNs                    atomic.Uint64
-	orderedRootDeltaGroupLatencyMaxNs                   atomic.Uint64
-	orderedRootDeltaGroupLatencyBuckets                 [publishWatermarkLatencyBucketCount]atomic.Uint64
-	orderedRootDeltaGroupPreflightNs                    atomic.Uint64
-	orderedRootDeltaGroupRootApplyNs                    atomic.Uint64
-	orderedRootDeltaGroupRootApplyCalls                 atomic.Uint64
-	orderedRootDeltaGroupRootApplyOps                   atomic.Uint64
-	orderedRootDeltaGroupRootApplyNodeLoads             atomic.Uint64
-	orderedRootDeltaGroupRootApplyPagerNodeLoads        atomic.Uint64
-	orderedRootDeltaGroupRootApplyLeafLogNodeLoads      atomic.Uint64
-	orderedRootDeltaGroupRootApplyLeafLogCacheHits      atomic.Uint64
-	orderedRootDeltaGroupRootApplyLeafLogReaderCalls    atomic.Uint64
-	orderedRootDeltaGroupRootApplyLeafLogViewReads      atomic.Uint64
-	orderedRootDeltaGroupRootApplyLeafLogScratchReads   atomic.Uint64
-	orderedRootDeltaGroupRootApplyLeafMerges            atomic.Uint64
-	orderedRootDeltaGroupRootApplyInternalMerges        atomic.Uint64
-	orderedRootDeltaGroupRootApplyLeafPagesWritten      atomic.Uint64
-	orderedRootDeltaGroupRootApplyPagerLeafPagesWritten atomic.Uint64
-	orderedRootDeltaGroupRootApplyLeafLogPagesWritten   atomic.Uint64
-	orderedRootDeltaGroupRootApplyInternalPagesWritten  atomic.Uint64
-	orderedRootDeltaGroupRootApplyInternalChildRefs     atomic.Uint64
-	orderedRootDeltaGroupRootApplyInternalPageChildRefs atomic.Uint64
-	orderedRootDeltaGroupRootApplyInternalLeafLogRefs   atomic.Uint64
-	orderedRootDeltaGroupRootApplyRootSplitLevels       atomic.Uint64
-	orderedRootDeltaGroupSystemBuildNs                  atomic.Uint64
-	orderedRootDeltaGroupSystemApplyNs                  atomic.Uint64
-	orderedRootDeltaGroupSystemApplyCalls               atomic.Uint64
-	orderedRootDeltaGroupSystemApplyOps                 atomic.Uint64
-	orderedRootDeltaGroupSystemApplyNodeLoads           atomic.Uint64
-	orderedRootDeltaGroupFinalizeNs                     atomic.Uint64
-	orderedRootDeltaGroupFinalizeCalls                  atomic.Uint64
+	orderedRootDeltaGroupCalls                             atomic.Uint64
+	orderedRootDeltaGroupErrors                            atomic.Uint64
+	orderedRootDeltaGroupRoots                             atomic.Uint64
+	orderedRootDeltaGroupWaitTotalNs                       atomic.Uint64
+	orderedRootDeltaGroupHoldTotalNs                       atomic.Uint64
+	orderedRootDeltaGroupLatencyMaxNs                      atomic.Uint64
+	orderedRootDeltaGroupLatencyBuckets                    [publishWatermarkLatencyBucketCount]atomic.Uint64
+	orderedRootDeltaGroupPreflightNs                       atomic.Uint64
+	orderedRootDeltaGroupRootApplyNs                       atomic.Uint64
+	orderedRootDeltaGroupRootApplyCalls                    atomic.Uint64
+	orderedRootDeltaGroupRootApplyOps                      atomic.Uint64
+	orderedRootDeltaGroupRootApplyNodeLoads                atomic.Uint64
+	orderedRootDeltaGroupRootApplyPagerNodeLoads           atomic.Uint64
+	orderedRootDeltaGroupRootApplyLeafLogNodeLoads         atomic.Uint64
+	orderedRootDeltaGroupRootApplyLeafLogCacheHits         atomic.Uint64
+	orderedRootDeltaGroupRootApplyLeafLogReaderCalls       atomic.Uint64
+	orderedRootDeltaGroupRootApplyLeafLogViewReads         atomic.Uint64
+	orderedRootDeltaGroupRootApplyLeafLogScratchReads      atomic.Uint64
+	orderedRootDeltaGroupRootApplyLeafMerges               atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalMerges           atomic.Uint64
+	orderedRootDeltaGroupRootApplyLeafPagesWritten         atomic.Uint64
+	orderedRootDeltaGroupRootApplyPagerLeafPagesWritten    atomic.Uint64
+	orderedRootDeltaGroupRootApplyLeafLogPagesWritten      atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalPagesWritten     atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalChildRefs        atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalPageChildRefs    atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalLeafLogRefs      atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalLeafLogRefCopies atomic.Uint64
+	orderedRootDeltaGroupRootApplyRootSplitLevels          atomic.Uint64
+	orderedRootDeltaGroupSystemBuildNs                     atomic.Uint64
+	orderedRootDeltaGroupSystemApplyNs                     atomic.Uint64
+	orderedRootDeltaGroupSystemApplyCalls                  atomic.Uint64
+	orderedRootDeltaGroupSystemApplyOps                    atomic.Uint64
+	orderedRootDeltaGroupSystemApplyNodeLoads              atomic.Uint64
+	orderedRootDeltaGroupFinalizeNs                        atomic.Uint64
+	orderedRootDeltaGroupFinalizeCalls                     atomic.Uint64
 
 	// R4 warm-publish counters. Warm native apply is used for bounded deltas;
 	// larger or ineligible deltas record an explicit rebuild fallback selection.

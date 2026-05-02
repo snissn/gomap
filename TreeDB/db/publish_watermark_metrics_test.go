@@ -98,24 +98,25 @@ func TestObserveOrderedRootDeltaGroupPublishStats(t *testing.T) {
 
 func TestMergeOrderedRootPublishMetricsIncludesLeafLogAttribution(t *testing.T) {
 	src := adaptive.Metrics{
-		ZipperApplyOps:              1,
-		ZipperNodeLoads:             2,
-		ZipperPagerNodeLoads:        3,
-		ZipperLeafLogNodeLoads:      4,
-		ZipperLeafLogCacheHits:      5,
-		ZipperLeafLogReaderCalls:    6,
-		ZipperLeafLogViewReads:      7,
-		ZipperLeafLogScratchReads:   8,
-		ZipperLeafMerges:            9,
-		ZipperInternalMerges:        10,
-		ZipperLeafPagesWritten:      11,
-		ZipperPagerLeafPagesWritten: 12,
-		ZipperLeafLogPagesWritten:   13,
-		ZipperInternalPagesWritten:  14,
-		ZipperInternalChildRefs:     15,
-		ZipperInternalPageChildRefs: 16,
-		ZipperInternalLeafLogRefs:   17,
-		ZipperRootSplitLevels:       18,
+		ZipperApplyOps:                 1,
+		ZipperNodeLoads:                2,
+		ZipperPagerNodeLoads:           3,
+		ZipperLeafLogNodeLoads:         4,
+		ZipperLeafLogCacheHits:         5,
+		ZipperLeafLogReaderCalls:       6,
+		ZipperLeafLogViewReads:         7,
+		ZipperLeafLogScratchReads:      8,
+		ZipperLeafMerges:               9,
+		ZipperInternalMerges:           10,
+		ZipperLeafPagesWritten:         11,
+		ZipperPagerLeafPagesWritten:    12,
+		ZipperLeafLogPagesWritten:      13,
+		ZipperInternalPagesWritten:     14,
+		ZipperInternalChildRefs:        15,
+		ZipperInternalPageChildRefs:    16,
+		ZipperInternalLeafLogRefs:      17,
+		ZipperInternalLeafLogRefCopies: 18,
+		ZipperRootSplitLevels:          19,
 	}
 
 	var dst adaptive.Metrics
@@ -140,6 +141,7 @@ func TestMergeOrderedRootPublishMetricsIncludesLeafLogAttribution(t *testing.T) 
 	want.ZipperInternalChildRefs *= 2
 	want.ZipperInternalPageChildRefs *= 2
 	want.ZipperInternalLeafLogRefs *= 2
+	want.ZipperInternalLeafLogRefCopies *= 2
 	want.ZipperRootSplitLevels *= 2
 
 	if !reflect.DeepEqual(dst, want) {

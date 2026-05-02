@@ -909,6 +909,7 @@ func mergeOrderedRootPublishMetrics(dst *adaptive.Metrics, src adaptive.Metrics)
 	dst.ZipperInternalChildRefs += src.ZipperInternalChildRefs
 	dst.ZipperInternalPageChildRefs += src.ZipperInternalPageChildRefs
 	dst.ZipperInternalLeafLogRefs += src.ZipperInternalLeafLogRefs
+	dst.ZipperInternalLeafLogRefCopies += src.ZipperInternalLeafLogRefCopies
 	dst.ZipperRootSplitLevels += src.ZipperRootSplitLevels
 	if len(src.SlabWriteBytesByFile) != 0 {
 		if dst.SlabWriteBytesByFile == nil {
