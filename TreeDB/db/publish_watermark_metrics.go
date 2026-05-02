@@ -138,13 +138,40 @@ type orderedRootDeltaGroupPublishStats struct {
 	roots              uint64
 	waitTotalNs        uint64
 	holdTotalNs        uint64
+	preflightNs        uint64
+	rootApplyNs        uint64
+	rootApplyCalls     uint64
+	systemBuildNs      uint64
+	systemApplyNs      uint64
+	systemApplyCalls   uint64
+	finalizeNs         uint64
+	finalizeCalls      uint64
 	latencyP99         time.Duration
 	latencyMax         time.Duration
 	writeLockWaitShare float64
 	avgRootsPerCall    float64
 }
 
-func (db *DB) observeOrderedRootDeltaGroupPublish(wait, hold time.Duration, roots int, err error) {
+type orderedRootDeltaGroupPublishPhaseStats struct {
+	preflightNs      uint64
+	rootApplyNs      uint64
+	rootApplyCalls   uint64
+	systemBuildNs    uint64
+	systemApplyNs    uint64
+	systemApplyCalls uint64
+	finalizeNs       uint64
+	finalizeCalls    uint64
+}
+
+func orderedRootDeltaGroupPhaseDurationNs(start time.Time) uint64 {
+	elapsed := time.Since(start)
+	if elapsed <= 0 {
+		return 0
+	}
+	return uint64(elapsed.Nanoseconds())
+}
+
+func (db *DB) observeOrderedRootDeltaGroupPublish(wait, hold time.Duration, roots int, phases orderedRootDeltaGroupPublishPhaseStats, err error) {
 	if db == nil {
 		return
 	}
@@ -174,6 +201,14 @@ func (db *DB) observeOrderedRootDeltaGroupPublish(wait, hold time.Duration, root
 	}
 	db.orderedRootDeltaGroupWaitTotalNs.Add(waitNs)
 	db.orderedRootDeltaGroupHoldTotalNs.Add(holdNs)
+	db.orderedRootDeltaGroupPreflightNs.Add(phases.preflightNs)
+	db.orderedRootDeltaGroupRootApplyNs.Add(phases.rootApplyNs)
+	db.orderedRootDeltaGroupRootApplyCalls.Add(phases.rootApplyCalls)
+	db.orderedRootDeltaGroupSystemBuildNs.Add(phases.systemBuildNs)
+	db.orderedRootDeltaGroupSystemApplyNs.Add(phases.systemApplyNs)
+	db.orderedRootDeltaGroupSystemApplyCalls.Add(phases.systemApplyCalls)
+	db.orderedRootDeltaGroupFinalizeNs.Add(phases.finalizeNs)
+	db.orderedRootDeltaGroupFinalizeCalls.Add(phases.finalizeCalls)
 	for {
 		cur := db.orderedRootDeltaGroupLatencyMaxNs.Load()
 		if latNs <= cur || db.orderedRootDeltaGroupLatencyMaxNs.CompareAndSwap(cur, latNs) {
@@ -193,12 +228,20 @@ func (db *DB) orderedRootDeltaGroupPublishStats() orderedRootDeltaGroupPublishSt
 	holdNs := db.orderedRootDeltaGroupHoldTotalNs.Load()
 	roots := db.orderedRootDeltaGroupRoots.Load()
 	stats := orderedRootDeltaGroupPublishStats{
-		calls:       calls,
-		errors:      db.orderedRootDeltaGroupErrors.Load(),
-		roots:       roots,
-		waitTotalNs: waitNs,
-		holdTotalNs: holdNs,
-		latencyMax:  durationFromUint64Ns(db.orderedRootDeltaGroupLatencyMaxNs.Load()),
+		calls:            calls,
+		errors:           db.orderedRootDeltaGroupErrors.Load(),
+		roots:            roots,
+		waitTotalNs:      waitNs,
+		holdTotalNs:      holdNs,
+		latencyMax:       durationFromUint64Ns(db.orderedRootDeltaGroupLatencyMaxNs.Load()),
+		preflightNs:      db.orderedRootDeltaGroupPreflightNs.Load(),
+		rootApplyNs:      db.orderedRootDeltaGroupRootApplyNs.Load(),
+		rootApplyCalls:   db.orderedRootDeltaGroupRootApplyCalls.Load(),
+		systemBuildNs:    db.orderedRootDeltaGroupSystemBuildNs.Load(),
+		systemApplyNs:    db.orderedRootDeltaGroupSystemApplyNs.Load(),
+		systemApplyCalls: db.orderedRootDeltaGroupSystemApplyCalls.Load(),
+		finalizeNs:       db.orderedRootDeltaGroupFinalizeNs.Load(),
+		finalizeCalls:    db.orderedRootDeltaGroupFinalizeCalls.Load(),
 	}
 	if calls > 0 {
 		stats.avgRootsPerCall = float64(roots) / float64(calls)
