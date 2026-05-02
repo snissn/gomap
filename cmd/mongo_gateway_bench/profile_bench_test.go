@@ -784,7 +784,6 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 		UpdateCombineBatches:           after.UpdateCombineBatches - before.UpdateCombineBatches,
 		UpdateCombineBatchedRequests:   after.UpdateCombineBatchedRequests - before.UpdateCombineBatchedRequests,
 		UpdateCombineFallbackRequests:  after.UpdateCombineFallbackRequests - before.UpdateCombineFallbackRequests,
-		UpdateCombineQueueDepthMax:     after.UpdateCombineQueueDepthMax,
 	}
 }
 
@@ -794,14 +793,12 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateCombineBatches:          3,
 		UpdateCombineBatchedRequests:  8,
 		UpdateCombineFallbackRequests: 1,
-		UpdateCombineQueueDepthMax:    4,
 	}
 	after := collections.CollectionManagerStats{
 		UpdateCombineRequests:         17,
 		UpdateCombineBatches:          5,
 		UpdateCombineBatchedRequests:  14,
 		UpdateCombineFallbackRequests: 2,
-		UpdateCombineQueueDepthMax:    9,
 	}
 	got := deltaCollectionManagerUpdateStats(after, before)
 	if got.UpdateCombineRequests != 7 {
@@ -815,9 +812,6 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 	}
 	if got.UpdateCombineFallbackRequests != 1 {
 		t.Fatalf("UpdateCombineFallbackRequests=%d want 1", got.UpdateCombineFallbackRequests)
-	}
-	if got.UpdateCombineQueueDepthMax != 9 {
-		t.Fatalf("UpdateCombineQueueDepthMax=%d want observed max 9", got.UpdateCombineQueueDepthMax)
 	}
 }
 
@@ -857,9 +851,6 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 	if stats.UpdateCombineFallbackRequests > 0 {
 		b.ReportMetric(float64(stats.UpdateCombineFallbackRequests), "update_combine_fallback_requests")
 		b.ReportMetric(float64(stats.UpdateCombineFallbackRequests)/float64(docs), "update_combine_fallback_requests/doc")
-	}
-	if stats.UpdateCombineQueueDepthMax > 0 {
-		b.ReportMetric(float64(stats.UpdateCombineQueueDepthMax), "update_combine_queue_depth_max")
 	}
 	if stats.UpdateBatchSecondaryDeletes > 0 {
 		b.ReportMetric(float64(stats.UpdateBatchSecondaryDeletes)/float64(docs), "update_secondary_deletes/doc")
