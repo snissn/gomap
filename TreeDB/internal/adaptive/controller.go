@@ -20,6 +20,22 @@ type Metrics struct {
 	SlabWriteBytes  int
 	SlabDeadBytes   int
 
+	// ZipperApply* fields are structural counters gathered while applying a
+	// batch to a B+Tree. They are intentionally simple counters, not timers, so
+	// callers can use them in benchmark reports without adding clock-read
+	// overhead to the core apply path.
+	ZipperApplyOps              int
+	ZipperNodeLoads             int
+	ZipperPagerNodeLoads        int
+	ZipperLeafLogNodeLoads      int
+	ZipperLeafMerges            int
+	ZipperInternalMerges        int
+	ZipperLeafPagesWritten      int
+	ZipperPagerLeafPagesWritten int
+	ZipperLeafLogPagesWritten   int
+	ZipperInternalPagesWritten  int
+	ZipperRootSplitLevels       int
+
 	// SlabWriteBytesByFile tracks bytes appended to each slab file during this
 	// commit (keyed by FileID).
 	SlabWriteBytesByFile map[uint32]int64
