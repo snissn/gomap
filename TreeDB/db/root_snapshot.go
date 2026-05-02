@@ -18,6 +18,8 @@ func (s *Snapshot) treeAtRoot(rootID uint64) (*tree.Tree, error) {
 	if s.state != nil && rootID == s.state.RootPageID {
 		return &s.tree, nil
 	}
+	s.rootTreesMu.Lock()
+	defer s.rootTreesMu.Unlock()
 	for i := range s.rootTrees {
 		if s.rootTrees[i].root == rootID {
 			return &s.rootTrees[i].tree, nil
