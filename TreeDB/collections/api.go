@@ -3845,32 +3845,60 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 			_ = work.pin.Close()
 		}
 	}()
-	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(work.rootNames))
-	iterators := make([]iterator.UnsafeIterator, 0, len(work.rootNames))
-	for _, rootName := range work.rootNames {
-		iter := newBufferedRootRunsIteratorWithDeleted(work.flushUnit.rootRuns[rootName], nil, nil, true)
-		iterators = append(iterators, iter)
-		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
-			BaseRoot:      work.rootBaseIDs[rootName],
-			Iter:          iter,
-			StoragePolicy: work.flushUnit.rootPolicies[rootName],
-		})
+	ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(work.rootNames, work.flushUnit.rootRuns, work.rootBaseIDs, work.flushUnit.rootPolicies)
+	if err != nil {
+		return c.completePreparedIndexedFlush(work, 0, nil, err, 0)
 	}
 	publishStart := time.Now()
-	newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, rootIDs)
 	})
-	for _, it := range iterators {
-		_ = it.Close()
-	}
+	publishElapsed := time.Since(publishStart)
+	cleanupDeltas()
 	if publishErr == nil && len(rootIDs) != len(work.rootNames) {
 		publishErr = unexpectedOrderedRootCountError(work.meta.Name, len(work.rootNames), len(rootIDs))
 	}
-	completeErr := c.completePreparedIndexedFlush(work, newSystemRoot, rootIDs, publishErr, time.Since(publishStart))
+	completeErr := c.completePreparedIndexedFlush(work, newSystemRoot, rootIDs, publishErr, publishElapsed)
 	if publishErr != nil {
 		return publishErr
 	}
 	return completeErr
+}
+
+func buildBufferedRootDeltaBatchPublishInputs(rootNames []string, rootRuns map[string][]memtable.Table, rootBaseIDs map[string]uint64, rootPolicies map[string]backenddb.OrderedRootStoragePolicy) ([]backenddb.OrderedRootDeltaBatchPublishInput, func(), error) {
+	ordered := make([]backenddb.OrderedRootDeltaBatchPublishInput, 0, len(rootNames))
+	iterators := make([]iterator.UnsafeIterator, 0, len(rootNames))
+	cleanup := func() {
+		for idx := range ordered {
+			if ordered[idx].Delta != nil {
+				_ = ordered[idx].Delta.Close()
+				ordered[idx].Delta = nil
+			}
+		}
+		for _, it := range iterators {
+			_ = it.Close()
+		}
+	}
+	for _, rootName := range rootNames {
+		baseRoot, ok := rootBaseIDs[rootName]
+		if !ok {
+			cleanup()
+			return nil, func() {}, fmt.Errorf("collections: buffered indexed flush missing base root for %q", rootName)
+		}
+		iter := newBufferedRootRunsIteratorWithDeleted(rootRuns[rootName], nil, nil, true)
+		iterators = append(iterators, iter)
+		delta, err := backenddb.OrderedRootDeltaBatchFromIterator(iter)
+		if err != nil {
+			cleanup()
+			return nil, func() {}, err
+		}
+		ordered = append(ordered, backenddb.OrderedRootDeltaBatchPublishInput{
+			BaseRoot:      baseRoot,
+			Delta:         delta,
+			StoragePolicy: rootPolicies[rootName],
+		})
+	}
+	return ordered, cleanup, nil
 }
 
 func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork, newSystemRoot uint64, rootIDs []uint64, publishErr error, elapsed time.Duration) error {
@@ -3983,31 +4011,21 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	baseSystemRoot := snapshotSystemRoot(pin)
 	baseCommitSeq := snapshotCommitSeq(pin)
 	baseRootIDs := make(map[string]uint64, len(rootNames))
-	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
-	iterators := make([]iterator.UnsafeIterator, 0, len(rootNames))
 	for _, rootName := range rootNames {
-		iter := newBufferedRootRunsIteratorWithDeleted(flushUnit.rootRuns[rootName], nil, nil, true)
-		iterators = append(iterators, iter)
 		baseRoot, ok := flushUnit.rootBaseIDs[rootName]
 		if !ok {
-			for _, it := range iterators {
-				_ = it.Close()
-			}
 			return fmt.Errorf("collections: buffered indexed flush missing base root for %q", rootName)
 		}
 		baseRootIDs[rootName] = baseRoot
-		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
-			BaseRoot:      baseRoot,
-			Iter:          iter,
-			StoragePolicy: flushUnit.rootPolicies[rootName],
-		})
 	}
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(rootNames, flushUnit.rootRuns, flushUnit.rootBaseIDs, flushUnit.rootPolicies)
+	if err != nil {
+		return err
+	}
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 	})
-	for _, it := range iterators {
-		_ = it.Close()
-	}
+	cleanupDeltas()
 	if err != nil {
 		return err
 	}
