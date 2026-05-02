@@ -3705,7 +3705,7 @@ func TestCollectionUpdateCombinerRunBatchPublishesDistinctIDsOnce(t *testing.T) 
 	}
 
 	before := d.State()
-	combiner := &collectionUpdateCombiner{maxBatch: 8}
+	combiner := &collectionUpdateCombiner{maxBatch: 8, domain: col.writeDomain}
 	requests := []collectionUpdateCombineRequest{
 		{
 			collection: col,
@@ -3775,7 +3775,7 @@ func TestCollectionUpdateCombinerBatchesWhenSecondaryUniqueValuesAreUnchanged(t 
 	}
 
 	before := d.State()
-	combiner := &collectionUpdateCombiner{maxBatch: 8}
+	combiner := &collectionUpdateCombiner{maxBatch: 8, domain: col.writeDomain}
 	requests := []collectionUpdateCombineRequest{
 		{
 			collection: col,
@@ -3830,6 +3830,11 @@ func TestCollectionUpdateCombinerBuffersSingletonWhenSecondaryUniqueValuesAreUnc
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 1 << 20,
+			BufferedIndexedWriteMaxRootRuns:  1 << 20,
+		},
 		Indexes: []IndexDefinition{
 			{Name: "email", Field: "email", Unique: true},
 			{Name: "city", Field: "city"},

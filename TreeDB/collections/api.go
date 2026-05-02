@@ -334,7 +334,7 @@ type CollectionOptions struct {
 	// comparisons; indexed collections use memtables by default.
 	DisableIndexedWriteMemtables bool `json:"disable_indexed_write_memtables,omitempty"`
 	// BufferedIndexedWrites is normalized metadata describing whether indexed
-	// insert and safe update root deltas are staged in the collection write
+	// inserts and safe update root deltas are staged in the collection write
 	// domain before Flush/Close or auto-flush. Staged writes are visible to
 	// primary and secondary reads on the same manager, but durability remains at
 	// the flush boundary, matching the existing no-index buffered path.
@@ -4081,7 +4081,8 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 			completeUpdateCombineBatchWithError(batch, collectionUpdatePanicError("combiner", recovered))
 		}
 	}()
-	if (combiner.domain != nil && combiner.domain.closingWrites.Load()) ||
+	if combiner.domain == nil ||
+		combiner.domain.closingWrites.Load() ||
 		collectionUpdateCombineHasDuplicateIDs(batch) ||
 		!collectionUpdateCombineSameCollection(batch) {
 		if combiner.domain != nil {
