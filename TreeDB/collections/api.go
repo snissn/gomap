@@ -1084,16 +1084,18 @@ func (domain *collectionWriteDomain) observeUpdateBatchStats(stats CollectionUpd
 	domain.updateBatchIndexStateRunNs.Add(durationToAtomicNs(stats.IndexStateRunBuild))
 	domain.updateBatchSecondaryRunNs.Add(durationToAtomicNs(stats.SecondaryRunBuild))
 	domain.updateBatchBufferStageNs.Add(durationToAtomicNs(stats.BufferStage))
-	domain.updateBatchBufferPrecheckNs.Add(durationToAtomicNs(stats.BufferStagePrecheck))
-	domain.updateBatchBufferLockWaitNs.Add(durationToAtomicNs(stats.BufferStageLockWait))
-	domain.updateBatchBufferLockHoldNs.Add(durationToAtomicNs(stats.BufferStageLockHold))
-	domain.updateBatchBufferValidationNs.Add(durationToAtomicNs(stats.BufferStageValidation))
-	domain.updateBatchBufferRootScanNs.Add(durationToAtomicNs(stats.BufferStageRootScan))
-	domain.updateBatchBufferDomainInitNs.Add(durationToAtomicNs(stats.BufferStageDomainInit))
-	domain.updateBatchBufferPrimaryIdxNs.Add(durationToAtomicNs(stats.BufferStagePrimaryIdx))
-	domain.updateBatchBufferUniqueIdxNs.Add(durationToAtomicNs(stats.BufferStageUniqueIdx))
-	domain.updateBatchBufferRootAppendNs.Add(durationToAtomicNs(stats.BufferStageRootAppend))
-	domain.updateBatchBufferFlushNs.Add(durationToAtomicNs(stats.BufferStageFlush))
+	if updateStatsHasBufferStageBreakdown(stats) {
+		domain.updateBatchBufferPrecheckNs.Add(durationToAtomicNs(stats.BufferStagePrecheck))
+		domain.updateBatchBufferLockWaitNs.Add(durationToAtomicNs(stats.BufferStageLockWait))
+		domain.updateBatchBufferLockHoldNs.Add(durationToAtomicNs(stats.BufferStageLockHold))
+		domain.updateBatchBufferValidationNs.Add(durationToAtomicNs(stats.BufferStageValidation))
+		domain.updateBatchBufferRootScanNs.Add(durationToAtomicNs(stats.BufferStageRootScan))
+		domain.updateBatchBufferDomainInitNs.Add(durationToAtomicNs(stats.BufferStageDomainInit))
+		domain.updateBatchBufferPrimaryIdxNs.Add(durationToAtomicNs(stats.BufferStagePrimaryIdx))
+		domain.updateBatchBufferUniqueIdxNs.Add(durationToAtomicNs(stats.BufferStageUniqueIdx))
+		domain.updateBatchBufferRootAppendNs.Add(durationToAtomicNs(stats.BufferStageRootAppend))
+		domain.updateBatchBufferFlushNs.Add(durationToAtomicNs(stats.BufferStageFlush))
+	}
 	domain.updateBatchPublishNs.Add(durationToAtomicNs(stats.Publish))
 	if stats.SecondaryDeleteEntries > 0 {
 		domain.updateBatchSecondaryDeletes.Add(uint64(stats.SecondaryDeleteEntries))
@@ -1104,6 +1106,19 @@ func (domain *collectionWriteDomain) observeUpdateBatchStats(stats CollectionUpd
 	if stats.SecondaryKeyBytes > 0 {
 		domain.updateBatchSecondaryKeyBytes.Add(uint64(stats.SecondaryKeyBytes))
 	}
+}
+
+func updateStatsHasBufferStageBreakdown(stats CollectionUpdateStats) bool {
+	return stats.BufferStagePrecheck != 0 ||
+		stats.BufferStageLockWait != 0 ||
+		stats.BufferStageLockHold != 0 ||
+		stats.BufferStageValidation != 0 ||
+		stats.BufferStageRootScan != 0 ||
+		stats.BufferStageDomainInit != 0 ||
+		stats.BufferStagePrimaryIdx != 0 ||
+		stats.BufferStageUniqueIdx != 0 ||
+		stats.BufferStageRootAppend != 0 ||
+		stats.BufferStageFlush != 0
 }
 
 func (domain *collectionWriteDomain) observeIndexedStage(docs int, bytes int64, rootRuns int) {
@@ -2323,7 +2338,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	domain.observeIndexedStage(len(plan.resultIDs), stagedBytes, stagedRootRuns)
 	c.meta = catalog.meta
 	if shouldFlushBufferedIndexedWrites(domain, catalog.meta.Options) {
-		flushElapsed, err := c.flushBufferedIndexedAfterThresholdLocked(domain, catalog.meta.Options)
+		flushElapsed, _, err := c.flushBufferedIndexedAfterThresholdLocked(domain, catalog.meta.Options)
 		if err != nil {
 			rollbackBufferedIndexedDomain(domain, checkpoint)
 			return 0, err
@@ -2457,9 +2472,9 @@ func bufferedIndexedAutoFlushEnabled(opts CollectionOptions) bool {
 	return opts.BufferedIndexedWriteMaxDocuments > 0 || opts.BufferedIndexedWriteMaxBytes > 0 || opts.BufferedIndexedWriteMaxRootRuns > 0
 }
 
-func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collectionWriteDomain, opts CollectionOptions) (time.Duration, error) {
+func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collectionWriteDomain, opts CollectionOptions) (time.Duration, time.Duration, error) {
 	if domain == nil {
-		return 0, nil
+		return 0, 0, nil
 	}
 	domain.indexedAutoFlushes.Add(1)
 	if opts.BufferedIndexedAsyncFlush {
@@ -2469,41 +2484,44 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 				domain.indexedAsyncFlushBackpressure.Add(1)
 				flushStart := time.Now()
 				err := c.flushBufferedIndexedLocked(domain)
-				return time.Since(flushStart), err
+				return time.Since(flushStart), 0, err
 			}
 			domain.indexedAsyncFlushBackpressure.Add(1)
 			flushStart := time.Now()
+			var lockReleased time.Duration
 			if domain.indexedAsyncFlushRunning() {
+				unlockStart := time.Now()
 				domain.mu.Unlock()
 				domain.waitIndexedAsyncFlush()
 				domain.mu.Lock()
+				lockReleased += time.Since(unlockStart)
 				if err := domain.consumeIndexedAsyncFlushError(); err != nil {
-					return time.Since(flushStart), err
+					return time.Since(flushStart), lockReleased, err
 				}
 				if domain.count == 0 || len(domain.indexedFlushUnits) == 0 || !hasBufferedIndexedRootRuns(domain) {
-					return time.Since(flushStart), nil
+					return time.Since(flushStart), lockReleased, nil
 				}
 				if len(domain.indexedPublishingUnits) == 0 {
 					err := c.flushBufferedIndexedLocked(domain)
-					return time.Since(flushStart), err
+					return time.Since(flushStart), lockReleased, err
 				}
 			}
 			if !c.scheduleIndexedAsyncFlush(domain) && len(domain.indexedPublishingUnits) == 0 {
 				err := c.flushBufferedIndexedLocked(domain)
-				return time.Since(flushStart), err
+				return time.Since(flushStart), lockReleased, err
 			}
-			return time.Since(flushStart), nil
+			return time.Since(flushStart), lockReleased, nil
 		}
 		if !c.scheduleIndexedAsyncFlush(domain) && len(domain.indexedPublishingUnits) == 0 {
 			flushStart := time.Now()
 			err := c.flushBufferedIndexedLocked(domain)
-			return time.Since(flushStart), err
+			return time.Since(flushStart), 0, err
 		}
-		return 0, nil
+		return 0, 0, nil
 	}
 	flushStart := time.Now()
 	err := c.flushBufferedIndexedLocked(domain)
-	return time.Since(flushStart), err
+	return time.Since(flushStart), 0, err
 }
 
 func hasBufferedIndexedRootRuns(domain *collectionWriteDomain) bool {
@@ -7181,8 +7199,17 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	domain.mu.Lock()
 	plan.stats.BufferStageLockWait += updateBatchStatsSince(detailedStats, lockStart)
 	lockHoldStart := updateBatchStatsNow(detailedStats)
+	var lockReleasedDuringHold time.Duration
 	defer func() {
-		plan.stats.BufferStageLockHold += updateBatchStatsSince(detailedStats, lockHoldStart)
+		lockHold := updateBatchStatsSince(detailedStats, lockHoldStart)
+		if lockReleasedDuringHold > 0 {
+			if lockHold > lockReleasedDuringHold {
+				lockHold -= lockReleasedDuringHold
+			} else {
+				lockHold = 0
+			}
+		}
+		plan.stats.BufferStageLockHold += lockHold
 		domain.mu.Unlock()
 	}()
 	phaseStart := updateBatchStatsNow(detailedStats)
@@ -7336,13 +7363,16 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	c.meta = plan.meta
 	phaseStart = updateBatchStatsNow(detailedStats)
 	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
-		if _, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options); err != nil {
+		if _, lockReleased, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options); err != nil {
+			lockReleasedDuringHold += lockReleased
 			plan.stats.BufferStageFlush += updateBatchStatsSince(detailedStats, phaseStart)
 			if shouldAutoFlushAfterAdding {
 				rollbackBufferedIndexedDomain(domain, checkpoint)
 				c.meta = collectionMetaCheckpoint
 			}
 			return false, err
+		} else {
+			lockReleasedDuringHold += lockReleased
 		}
 	}
 	plan.stats.BufferStageFlush += updateBatchStatsSince(detailedStats, phaseStart)
