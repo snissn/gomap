@@ -294,6 +294,13 @@ is_nonnegative_int() {
   [[ "$1" =~ ^[0-9]+$ ]]
 }
 
+trim_spaces() {
+  local value=$1
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
 derived_count() {
   local docs=$1
   local explicit=$2
@@ -502,20 +509,44 @@ if [[ "$PROFILE_TREEDB" != "true" && "$PROFILE_TREEDB" != "false" ]]; then
   echo "invalid PROFILE_TREEDB=$PROFILE_TREEDB (want true or false)" >&2
   exit 2
 fi
+raw_concurrent_reader_sweep=$CONCURRENT_READER_SWEEP
+CONCURRENT_READER_SWEEP=$(trim_spaces "$CONCURRENT_READER_SWEEP")
+if [[ -n "$raw_concurrent_reader_sweep" && -z "$CONCURRENT_READER_SWEEP" ]]; then
+  echo "CONCURRENT_READER_SWEEP must contain at least one positive integer" >&2
+  exit 2
+fi
 if [[ -n "$CONCURRENT_READER_SWEEP" && "$CONCURRENT_READERS" -gt 0 ]]; then
   echo "CONCURRENT_READER_SWEEP cannot be combined with CONCURRENT_READERS" >&2
   exit 2
 fi
 if [[ -n "$CONCURRENT_READER_SWEEP" ]]; then
+  declare -A seen_reader_counts=()
+  validated_reader_counts=0
   for reader_count in ${CONCURRENT_READER_SWEEP//,/ }; do
     if ! is_positive_int "$reader_count"; then
       echo "invalid CONCURRENT_READER_SWEEP value: $reader_count" >&2
       exit 2
     fi
+    if [[ -n "${seen_reader_counts[$reader_count]:-}" ]]; then
+      echo "duplicate CONCURRENT_READER_SWEEP value: $reader_count" >&2
+      exit 2
+    fi
+    seen_reader_counts[$reader_count]=1
+    validated_reader_counts=$((validated_reader_counts + 1))
   done
-  if [[ -z "$CONCURRENT_READS" || "$CONCURRENT_READS" == "0" ]]; then
-    echo "CONCURRENT_READER_SWEEP requires CONCURRENT_READS > 0" >&2
+  if [[ "$validated_reader_counts" -eq 0 ]]; then
+    echo "CONCURRENT_READER_SWEEP must contain at least one positive integer" >&2
     exit 2
+  fi
+  if [[ -n "$CONCURRENT_READS" && "$CONCURRENT_READS" == "0" ]]; then
+    echo "CONCURRENT_READER_SWEEP requires CONCURRENT_READS > 0 when CONCURRENT_READS is set" >&2
+    exit 2
+  fi
+  if [[ -n "$CONCURRENT_READS" ]]; then
+    if ! is_nonnegative_int "$CONCURRENT_READS"; then
+      echo "invalid CONCURRENT_READS=$CONCURRENT_READS (want non-negative integer)" >&2
+      exit 2
+    fi
   fi
 elif [[ "$CONCURRENT_READERS" -eq 0 && -n "$CONCURRENT_READS" && "$CONCURRENT_READS" != "0" ]]; then
   echo "CONCURRENT_READERS or CONCURRENT_READER_SWEEP must be set when CONCURRENT_READS is set" >&2
