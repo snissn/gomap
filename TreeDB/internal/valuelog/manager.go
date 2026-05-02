@@ -90,8 +90,9 @@ type File struct {
 	closed atomic.Bool
 
 	// mmapData holds the current read-only mapping. Readers load it without locks.
-	mmapData atomic.Value // stores []byte (may be nil slice)
-	fileSize atomic.Int64 // last known on-disk size; 0 means unknown
+	mmapData         atomic.Value // stores []byte (may be nil slice)
+	fileSize         atomic.Int64 // last known on-disk size; 0 means unknown
+	verifiedFileSize atomic.Int64 // size observed from stat/barrier; 0 means unknown
 
 	remapMu        sync.Mutex
 	remapRequested atomic.Bool
@@ -157,11 +158,17 @@ func openFile(path string, id uint32, dictLookup DictLookup, templateLookup Temp
 	}
 	vf.mmapData.Store([]byte(nil))
 	if info, err := f.Stat(); err == nil {
-		if sz := info.Size(); sz > 0 {
-			vf.fileSize.Store(sz)
-		}
+		vf.noteVerifiedFileSize(info.Size())
 	}
 	return vf, nil
+}
+
+func (f *File) noteVerifiedFileSize(size int64) {
+	if f == nil || size <= 0 {
+		return
+	}
+	f.fileSize.Store(size)
+	f.verifiedFileSize.Store(size)
 }
 
 var (
@@ -1159,23 +1166,36 @@ func (m *Manager) SetDisableReadChecksum(disable bool) {
 // to flush the owning writer so backend-internal tree reads do not observe EOF
 // from still-buffered grouped records.
 func (m *Manager) SetCurrentWritableReadBarrier(fn func(fileID uint32) error) {
+	if fn == nil {
+		m.SetCurrentWritableReadBarrierWithSize(nil)
+		return
+	}
+	m.SetCurrentWritableReadBarrierWithSize(func(fileID uint32) (int64, error) {
+		return -1, fn(fileID)
+	})
+}
+
+// SetCurrentWritableReadBarrierWithSize is like SetCurrentWritableReadBarrier,
+// but lets the callback return the current on-disk size after its flush barrier.
+// A positive size is used as a file-size hint for current-writable mmap reads.
+func (m *Manager) SetCurrentWritableReadBarrierWithSize(fn func(fileID uint32) (int64, error)) {
 	if m == nil {
 		return
 	}
 	if fn == nil {
-		var cleared func(fileID uint32) error
+		var cleared func(fileID uint32) (int64, error)
 		m.currentWritableReadBarrier.Store(cleared)
 		return
 	}
 	m.currentWritableReadBarrier.Store(fn)
 }
 
-func (m *Manager) currentWritableBarrier() func(uint32) error {
+func (m *Manager) currentWritableBarrier() func(uint32) (int64, error) {
 	if m == nil {
 		return nil
 	}
 	if v := m.currentWritableReadBarrier.Load(); v != nil {
-		if fn, ok := v.(func(uint32) error); ok {
+		if fn, ok := v.(func(uint32) (int64, error)); ok {
 			return fn
 		}
 	}
@@ -1187,7 +1207,13 @@ func (f *File) ensureCurrentWritableReadable() error {
 		return nil
 	}
 	if barrier := f.manager.currentWritableBarrier(); barrier != nil {
-		return barrier(f.ID)
+		size, err := barrier(f.ID)
+		if err != nil {
+			return err
+		}
+		if size > 0 {
+			f.noteVerifiedFileSize(size)
+		}
 	}
 	return nil
 }
@@ -1884,7 +1910,7 @@ func (m *Manager) allowSealedLazyMmapLocked(target *File, targetSize int64) (boo
 			} else if info, err := target.File.Stat(); err == nil {
 				if sz := info.Size(); sz > 0 {
 					targetBytes = uint64(sz)
-					target.fileSize.Store(sz)
+					target.noteVerifiedFileSize(sz)
 				}
 			}
 		}
@@ -1956,7 +1982,7 @@ func (m *Manager) allowDemotedCurrentMmapLocked(target *File, nextCurrentID uint
 			if info, err := target.File.Stat(); err == nil {
 				if sz := info.Size(); sz > int64(targetBytes) {
 					targetBytes = uint64(sz)
-					target.fileSize.Store(sz)
+					target.noteVerifiedFileSize(sz)
 				}
 			}
 		}

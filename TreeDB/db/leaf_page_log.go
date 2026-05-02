@@ -255,3 +255,14 @@ func (db *DB) SetCurrentValueLogReadBarrier(fn func(fileID uint32) error) {
 	}
 	db.valueLogManager.SetCurrentWritableReadBarrier(fn)
 }
+
+// SetCurrentValueLogReadBarrierWithSize is like SetCurrentValueLogReadBarrier,
+// but the callback can return the flushed file size. Current-writable mmap
+// reads use that size hint to avoid a per-read file Stat on freshly flushed
+// segments.
+func (db *DB) SetCurrentValueLogReadBarrierWithSize(fn func(fileID uint32) (int64, error)) {
+	if db == nil || db.valueLogManager == nil {
+		return
+	}
+	db.valueLogManager.SetCurrentWritableReadBarrierWithSize(fn)
+}

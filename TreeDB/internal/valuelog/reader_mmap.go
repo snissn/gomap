@@ -301,7 +301,7 @@ func (f *File) sealedLazyMmapTargetSize() int64 {
 		if info, err := f.File.Stat(); err == nil {
 			if sz := info.Size(); sz > 0 {
 				targetSize = sz
-				f.fileSize.Store(sz)
+				f.noteVerifiedFileSize(sz)
 			}
 		}
 	}
@@ -402,8 +402,10 @@ func (f *File) ensureMmapRangeReadable(data []byte, start, end int64) ([]byte, b
 	if data == nil || end > int64(len(data)) {
 		return f.tryRefreshMmapRange(start, end)
 	}
-	if known := f.fileSize.Load(); known >= end && known <= int64(len(data)) {
-		return data, true
+	if known := f.fileSize.Load(); known >= end {
+		if known <= int64(len(data)) || f.verifiedFileSize.Load() >= end {
+			return data, true
+		}
 	}
 	info, err := f.File.Stat()
 	if err != nil {
@@ -411,7 +413,7 @@ func (f *File) ensureMmapRangeReadable(data []byte, start, end int64) ([]byte, b
 	}
 	currentSize := info.Size()
 	if currentSize > 0 {
-		f.fileSize.Store(currentSize)
+		f.noteVerifiedFileSize(currentSize)
 	}
 	if currentSize < end {
 		return nil, false
@@ -454,7 +456,7 @@ func (f *File) remapToFileSizeWithPolicy(requirePersistent bool) {
 	}
 	currentSize := info.Size()
 	if currentSize > 0 {
-		f.fileSize.Store(currentSize)
+		f.noteVerifiedFileSize(currentSize)
 	}
 	if currentSize <= 0 || currentSize > int64(int(currentSize)) {
 		return

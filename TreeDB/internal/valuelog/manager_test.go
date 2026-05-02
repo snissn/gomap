@@ -236,7 +236,7 @@ func TestManagerSetCurrentWritableReadBarrier_NilClearsCallback(t *testing.T) {
 	if barrier == nil {
 		t.Fatalf("expected installed barrier")
 	}
-	if err := barrier(9); err != nil {
+	if _, err := barrier(9); err != nil {
 		t.Fatalf("barrier(9): %v", err)
 	}
 	if calls != 1 {
@@ -246,6 +246,55 @@ func TestManagerSetCurrentWritableReadBarrier_NilClearsCallback(t *testing.T) {
 	mgr.SetCurrentWritableReadBarrier(nil)
 	if barrier := mgr.currentWritableBarrier(); barrier != nil {
 		t.Fatalf("expected nil barrier after clear")
+	}
+}
+
+func TestManagerCurrentWritableSizedReadBarrier_UpdatesFileSizeHint(t *testing.T) {
+	mgr := &Manager{}
+	f := &File{ID: 9, manager: mgr}
+	f.currentWritable.Store(true)
+
+	mgr.SetCurrentWritableReadBarrierWithSize(func(fileID uint32) (int64, error) {
+		if fileID != f.ID {
+			t.Fatalf("barrier fileID=%d want %d", fileID, f.ID)
+		}
+		return 1234, nil
+	})
+
+	if err := f.ensureCurrentWritableReadable(); err != nil {
+		t.Fatalf("ensureCurrentWritableReadable: %v", err)
+	}
+	if got := f.fileSize.Load(); got != 1234 {
+		t.Fatalf("fileSize hint=%d want 1234", got)
+	}
+}
+
+func TestManagerCurrentWritableSizedReadBarrier_AvoidsStatForMappedRange(t *testing.T) {
+	tmp, err := os.CreateTemp(t.TempDir(), "segment-*.log")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	if err := tmp.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	mgr := &Manager{}
+	f := &File{ID: 9, File: tmp, manager: mgr}
+	f.currentWritable.Store(true)
+	mapped := make([]byte, 128)
+	f.mmapData.Store(mapped)
+	mgr.SetCurrentWritableReadBarrierWithSize(func(fileID uint32) (int64, error) {
+		if fileID != f.ID {
+			t.Fatalf("barrier fileID=%d want %d", fileID, f.ID)
+		}
+		return int64(len(mapped)), nil
+	})
+
+	if err := f.ensureCurrentWritableReadable(); err != nil {
+		t.Fatalf("ensureCurrentWritableReadable: %v", err)
+	}
+	if _, ok := f.ensureMmapRangeReadable(mapped, 0, 64); !ok {
+		t.Fatalf("mapped range should be readable from size hint without stat")
 	}
 }
 
