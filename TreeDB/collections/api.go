@@ -994,10 +994,10 @@ func flushCollectionWriteDomain(db *backenddb.DB, domain *collectionWriteDomain)
 	if db == nil || domain == nil {
 		return nil
 	}
-	domain.waitIndexedAsyncFlush()
 	collection := &Collection{db: db, writeDomain: domain}
 	unlockMutation := lockCollectionDomainMutation(domain)
 	defer unlockMutation()
+	domain.waitIndexedAsyncFlush()
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
 	return collection.flushBufferedWritesLocked(domain)
@@ -1527,10 +1527,11 @@ func (c *Collection) Flush() error {
 		return errCollectionDBNil
 	}
 	if c.writeDomain != nil {
+		unlockMutation := c.lockMutation()
+		defer unlockMutation()
 		c.writeDomain.waitIndexedAsyncFlush()
+		return c.flushBufferedWrites()
 	}
-	unlockMutation := c.lockMutation()
-	defer unlockMutation()
 	return c.flushBufferedWrites()
 }
 
@@ -3518,6 +3519,7 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	domain.primaryRoot = nextCatalog.rootID(collectionPrimaryRootName(work.meta.Name))
 	domain.count = subtractNonNegativeInt(domain.count, work.docCount)
 	domain.bufferedBytes = subtractNonNegativeInt64(domain.bufferedBytes, work.byteCount)
+	domain.clearIndexedAsyncFlushError()
 	retargetPendingIndexedRootBaseIDsLocked(domain, work.rootNames, work.rootBaseIDs, rootIDs)
 	rebuildBufferedPendingIndexesLocked(domain, work.meta.Name, preservePrimaryRunIndex)
 	c.meta = work.meta
