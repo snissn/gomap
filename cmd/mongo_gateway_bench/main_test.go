@@ -17,6 +17,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/event"
 )
@@ -1514,6 +1515,66 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("text output missing %s: %q", want, text)
 		}
+	}
+
+	out.Reset()
+	if err := writeResult(&out, "json", result); err != nil {
+		t.Fatalf("writeResult json: %v", err)
+	}
+	var decoded benchmarkResult
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("unmarshal json result: %v", err)
+	}
+	if decoded.TreeDBBufferedIndexedWriteMaxDocuments != 1234 ||
+		decoded.TreeDBBufferedIndexedWriteMaxBytes != 5678 ||
+		decoded.TreeDBBufferedIndexedWriteMaxRootRuns != 90 {
+		t.Fatalf("json thresholds docs=%d bytes=%d rootRuns=%d want 1234/5678/90",
+			decoded.TreeDBBufferedIndexedWriteMaxDocuments,
+			decoded.TreeDBBufferedIndexedWriteMaxBytes,
+			decoded.TreeDBBufferedIndexedWriteMaxRootRuns)
+	}
+}
+
+func TestRecordEffectiveTreeDBCollectionOptionsUsesNormalizedMetadata(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{
+		Name: "bench.docs",
+		Options: collections.CollectionOptions{
+			BufferedIndexedWriteMaxDocuments: 0,
+			BufferedIndexedWriteMaxBytes:     777,
+			BufferedIndexedWriteMaxRootRuns:  0,
+		},
+		Indexes: []collections.IndexDefinition{{Name: "email_1", Field: "email", Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	result := &benchmarkResult{
+		TreeDBBufferedIndexedWriteMaxDocuments: 0,
+		TreeDBBufferedIndexedWriteMaxBytes:     0,
+		TreeDBBufferedIndexedWriteMaxRootRuns:  0,
+	}
+	cfg := config{
+		Target:           "treedb",
+		Database:         "bench",
+		Collection:       "docs",
+		SecondaryIndexes: 1,
+	}
+	if err := recordEffectiveTreeDBCollectionOptions(result, cfg, &benchTarget{collections: manager}); err != nil {
+		t.Fatalf("record effective options: %v", err)
+	}
+	if result.TreeDBBufferedIndexedWriteMaxDocuments != collections.DefaultIndexedWriteMemtableMaxDocuments ||
+		result.TreeDBBufferedIndexedWriteMaxBytes != 777 ||
+		result.TreeDBBufferedIndexedWriteMaxRootRuns != 0 {
+		t.Fatalf("effective thresholds docs=%d bytes=%d rootRuns=%d want %d/777/0",
+			result.TreeDBBufferedIndexedWriteMaxDocuments,
+			result.TreeDBBufferedIndexedWriteMaxBytes,
+			result.TreeDBBufferedIndexedWriteMaxRootRuns,
+			collections.DefaultIndexedWriteMemtableMaxDocuments)
 	}
 }
 

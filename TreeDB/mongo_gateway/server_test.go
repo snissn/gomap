@@ -3243,6 +3243,7 @@ func TestServerAppliesDefaultCollectionAndIndexOptions(t *testing.T) {
 		DataRootStoragePolicy:            collections.RootStorageCompressed,
 		IndexStateStoragePolicy:          collections.RootStorageCompressed,
 		BufferedIndexedWriteMaxDocuments: 1234,
+		BufferedIndexedWriteMaxBytes:     5678,
 		BufferedIndexedWriteMaxRootRuns:  90,
 	}
 	server.DefaultIndexStoragePolicy = collections.RootStorageCompressed
@@ -3260,6 +3261,10 @@ func TestServerAppliesDefaultCollectionAndIndexOptions(t *testing.T) {
 	}
 	if meta.Options.IndexStateStoragePolicy != collections.RootStorageCompressed {
 		t.Fatalf("index state storage=%q want %q", meta.Options.IndexStateStoragePolicy, collections.RootStorageCompressed)
+	}
+	if meta.Options.BufferedIndexedWriteMaxDocuments != 1234 || meta.Options.BufferedIndexedWriteMaxBytes != 5678 || meta.Options.BufferedIndexedWriteMaxRootRuns != 90 {
+		t.Fatalf("no-index defaults docs=%d bytes=%d rootRuns=%d want 1234/5678/90",
+			meta.Options.BufferedIndexedWriteMaxDocuments, meta.Options.BufferedIndexedWriteMaxBytes, meta.Options.BufferedIndexedWriteMaxRootRuns)
 	}
 
 	commandDoc := mustDocument(t, bson.D{
@@ -3293,6 +3298,9 @@ func TestServerAppliesDefaultCollectionAndIndexOptions(t *testing.T) {
 	if indexedMeta.Options.BufferedIndexedWriteMaxDocuments != 1234 {
 		t.Fatalf("auto-created buffered indexed max documents=%d want 1234", indexedMeta.Options.BufferedIndexedWriteMaxDocuments)
 	}
+	if indexedMeta.Options.BufferedIndexedWriteMaxBytes != 5678 {
+		t.Fatalf("auto-created buffered indexed max bytes=%d want 5678", indexedMeta.Options.BufferedIndexedWriteMaxBytes)
+	}
 	if indexedMeta.Options.BufferedIndexedWriteMaxRootRuns != 90 {
 		t.Fatalf("auto-created buffered indexed max root runs=%d want 90", indexedMeta.Options.BufferedIndexedWriteMaxRootRuns)
 	}
@@ -3302,6 +3310,28 @@ func TestServerAppliesDefaultCollectionAndIndexOptions(t *testing.T) {
 	}
 	if def.StoragePolicy != collections.RootStorageCompressed {
 		t.Fatalf("index storage=%q want %q", def.StoragePolicy, collections.RootStorageCompressed)
+	}
+
+	existingCreateResponse := serveCommand(t, server, 215, bson.D{
+		{Key: "createIndexes", Value: "inserted"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+			{Key: "name", Value: "city_1"},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, existingCreateResponse)
+	inserted, err := server.Collections.OpenCollection("app.inserted")
+	if err != nil {
+		t.Fatalf("open inserted collection after createIndexes: %v", err)
+	}
+	insertedMeta := inserted.Meta()
+	if !insertedMeta.Options.BufferedIndexedWrites {
+		t.Fatal("existing collection did not enable indexed writes after createIndexes")
+	}
+	if insertedMeta.Options.BufferedIndexedWriteMaxDocuments != 1234 || insertedMeta.Options.BufferedIndexedWriteMaxBytes != 5678 || insertedMeta.Options.BufferedIndexedWriteMaxRootRuns != 90 {
+		t.Fatalf("existing collection buffered indexed limits docs=%d bytes=%d rootRuns=%d want 1234/5678/90",
+			insertedMeta.Options.BufferedIndexedWriteMaxDocuments, insertedMeta.Options.BufferedIndexedWriteMaxBytes, insertedMeta.Options.BufferedIndexedWriteMaxRootRuns)
 	}
 }
 

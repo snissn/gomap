@@ -1623,6 +1623,48 @@ func TestCollectionIndexedWriteMemtablesDefaultSkipsNoIndexSchemas(t *testing.T)
 	}
 }
 
+func TestCollectionIndexedWriteMemtablesPreserveNoIndexThresholdsForFutureIndexes(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWriteMaxDocuments: 1234,
+			BufferedIndexedWriteMaxBytes:     5678,
+			BufferedIndexedWriteMaxRootRuns:  90,
+		},
+	})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if meta.Options.BufferedIndexedWrites {
+		t.Fatal("no-index collection enabled indexed write memtables")
+	}
+	if meta.Options.BufferedIndexedWriteMaxDocuments != 1234 || meta.Options.BufferedIndexedWriteMaxBytes != 5678 || meta.Options.BufferedIndexedWriteMaxRootRuns != 90 {
+		t.Fatalf("no-index buffered limits docs=%d bytes=%d rootRuns=%d want 1234/5678/90",
+			meta.Options.BufferedIndexedWriteMaxDocuments, meta.Options.BufferedIndexedWriteMaxBytes, meta.Options.BufferedIndexedWriteMaxRootRuns)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	meta, err = col.CreateIndex(IndexDefinition{Name: "email", Field: "email"})
+	if err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if !meta.Options.BufferedIndexedWrites {
+		t.Fatal("indexed collection did not enable indexed write memtables")
+	}
+	if meta.Options.BufferedIndexedWriteMaxDocuments != 1234 || meta.Options.BufferedIndexedWriteMaxBytes != 5678 || meta.Options.BufferedIndexedWriteMaxRootRuns != 90 {
+		t.Fatalf("indexed buffered limits docs=%d bytes=%d rootRuns=%d want 1234/5678/90",
+			meta.Options.BufferedIndexedWriteMaxDocuments, meta.Options.BufferedIndexedWriteMaxBytes, meta.Options.BufferedIndexedWriteMaxRootRuns)
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesCanBeDisabled(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

@@ -461,9 +461,9 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&treeDBDataRootStorage, "treedb-data-root-storage", treeDBDataRootStorage, "TreeDB collection data root storage for -target treedb: default, fast, or compressed")
 	fs.StringVar(&treeDBIndexStateRootStorage, "treedb-index-state-root-storage", treeDBIndexStateRootStorage, "TreeDB collection index-state root storage for -target treedb: default, fast, or compressed")
 	fs.StringVar(&treeDBIndexRootStorage, "treedb-index-root-storage", treeDBIndexRootStorage, "TreeDB secondary index root storage for -target treedb: default, fast, or compressed")
-	fs.IntVar(&cfg.TreeDBBufferedIndexedWriteMaxDocuments, "treedb-buffered-indexed-write-max-documents", cfg.TreeDBBufferedIndexedWriteMaxDocuments, "TreeDB indexed collection write-domain document auto-flush threshold; 0 disables this trigger")
+	fs.IntVar(&cfg.TreeDBBufferedIndexedWriteMaxDocuments, "treedb-buffered-indexed-write-max-documents", cfg.TreeDBBufferedIndexedWriteMaxDocuments, "TreeDB indexed collection write-domain document auto-flush threshold; 0 uses the collection default")
 	fs.Int64Var(&cfg.TreeDBBufferedIndexedWriteMaxBytes, "treedb-buffered-indexed-write-max-bytes", cfg.TreeDBBufferedIndexedWriteMaxBytes, "TreeDB indexed collection write-domain byte auto-flush threshold; 0 disables this trigger")
-	fs.IntVar(&cfg.TreeDBBufferedIndexedWriteMaxRootRuns, "treedb-buffered-indexed-write-max-root-runs", cfg.TreeDBBufferedIndexedWriteMaxRootRuns, "TreeDB indexed collection write-domain root-run auto-flush threshold; 0 disables this trigger")
+	fs.IntVar(&cfg.TreeDBBufferedIndexedWriteMaxRootRuns, "treedb-buffered-indexed-write-max-root-runs", cfg.TreeDBBufferedIndexedWriteMaxRootRuns, "TreeDB indexed collection write-domain root-run auto-flush threshold; 0 disables this trigger unless all thresholds normalize to collection defaults")
 	fs.StringVar(&cfg.TreeDBMaintenance, "treedb-maintenance", cfg.TreeDBMaintenance, "TreeDB final disk maintenance for -target treedb: full, checkpoint, or none")
 	fs.BoolVar(&cfg.PrebuildDocuments, "prebuild-documents", false, "prebuild benchmark documents before the timed load phase")
 	fs.StringVar(&cfg.ProfileDir, "profile-dir", "", "write per-phase pprof artifacts and a profile_manifest.json into an empty directory")
@@ -1040,6 +1040,9 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	if err := createIndexes(ctx, coll, cfg.SecondaryIndexes); err != nil {
 		return nil, err
 	}
+	if err := recordEffectiveTreeDBCollectionOptions(result, cfg, target); err != nil {
+		return nil, err
+	}
 	var updatedCityValues []string
 	updatedCityValuesForUpdate := func() []string {
 		if !cfg.UpdateIndexedField {
@@ -1317,6 +1320,21 @@ func createIndexes(ctx context.Context, coll *mongo.Collection, secondaryIndexes
 			return err
 		}
 	}
+	return nil
+}
+
+func recordEffectiveTreeDBCollectionOptions(result *benchmarkResult, cfg config, target *benchTarget) error {
+	if result == nil || cfg.Target != "treedb" || target == nil || target.collections == nil || cfg.SecondaryIndexes == 0 {
+		return nil
+	}
+	col, err := target.collections.OpenCollection(cfg.Database + "." + cfg.Collection)
+	if err != nil {
+		return err
+	}
+	meta := col.Meta()
+	result.TreeDBBufferedIndexedWriteMaxDocuments = meta.Options.BufferedIndexedWriteMaxDocuments
+	result.TreeDBBufferedIndexedWriteMaxBytes = meta.Options.BufferedIndexedWriteMaxBytes
+	result.TreeDBBufferedIndexedWriteMaxRootRuns = meta.Options.BufferedIndexedWriteMaxRootRuns
 	return nil
 }
 

@@ -7122,11 +7122,13 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		seen[indexes[i].Name] = struct{}{}
 	}
 	meta.Indexes = indexes
-	if len(meta.Indexes) == 0 || meta.Options.DisableIndexedWriteMemtables {
+	if meta.Options.DisableIndexedWriteMemtables {
 		meta.Options.BufferedIndexedWrites = false
 		meta.Options.BufferedIndexedWriteMaxDocuments = 0
 		meta.Options.BufferedIndexedWriteMaxBytes = 0
 		meta.Options.BufferedIndexedWriteMaxRootRuns = 0
+	} else if len(meta.Indexes) == 0 {
+		meta.Options.BufferedIndexedWrites = false
 	} else {
 		meta.Options.BufferedIndexedWrites = true
 		useNativeDocumentDefault := meta.Options.BufferedIndexedWriteMaxDocuments == 0

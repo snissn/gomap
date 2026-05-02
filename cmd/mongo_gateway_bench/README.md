@@ -113,8 +113,11 @@ canonical Extended JSON bridge used by the JSON/template-v1 gateway paths.
 Use `-treedb-buffered-indexed-write-max-documents`,
 `-treedb-buffered-indexed-write-max-bytes`, and
 `-treedb-buffered-indexed-write-max-root-runs` to reproduce indexed write-domain
-auto-flush threshold experiments. Setting a threshold to `0` disables that
-specific trigger.
+auto-flush threshold experiments. The benchmark report records the effective
+normalized collection thresholds after index creation. For document thresholds,
+`0` means use the collection default. For byte and root-run thresholds, `0`
+disables that trigger unless all indexed-write thresholds are otherwise left at
+their native defaults.
 
 ## MongoDB Target
 
