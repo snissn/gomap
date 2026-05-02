@@ -22,6 +22,9 @@ type LeafPageLog interface {
 }
 
 type LeafPageBatchLog interface {
+	// AppendLeafPages appends every leaf page and returns one pointer per input
+	// page in the same order. Callers use that positional relationship for
+	// cache population and per-page record-length metadata.
 	AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error)
 }
 
@@ -49,6 +52,7 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPage(leafPage []byte) (page
 		return page.LeafLogPtr{}, err
 	}
 	if l.db != nil {
+		l.db.storeLeafPageReadCache(ptr, leafPage)
 		if provider, ok := l.inner.(leafPageLogRecordLengthProvider); ok {
 			l.db.noteLeafGenerationRecordLengthRaw(ptr.FileID, ptr.Offset, provider.LastLeafPageRecordLength())
 		}
@@ -80,12 +84,18 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPages(leafPages [][]byte) (
 			ptrs[i] = ptr
 		}
 	}
+	if len(ptrs) != len(leafPages) {
+		return nil, fmt.Errorf("leaf page batch log returned %d ptrs for %d leaf pages", len(ptrs), len(leafPages))
+	}
 	if l.db != nil {
 		lastRecordLen := uint32(0)
 		if provider, ok := l.inner.(leafPageLogRecordLengthProvider); ok {
 			lastRecordLen = provider.LastLeafPageRecordLength()
 		}
-		for _, ptr := range ptrs {
+		for i, ptr := range ptrs {
+			// LeafPageBatchLog guarantees returned pointers are positional:
+			// ptrs[i] references leafPages[i].
+			l.db.storeLeafPageReadCache(ptr, leafPages[i])
 			recordLen := ptr.RecordLengthHint
 			if recordLen == 0 {
 				recordLen = lastRecordLen

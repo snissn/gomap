@@ -198,7 +198,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	newZ.SetIndexInternalBaseDelta(db.indexInternalBaseDelta)
 	newZ.SetAdaptiveLeafEncoding(db.indexAdaptiveLeafEncoding)
 	newZ.SetMaintenanceOpsPerCoalesce(db.maintenanceOpsPerCoalesce)
-	newZ.SetLeafPageReader(db.valueLogManager)
+	newZ.SetLeafPageReader(db.leafPageReader(db.valueLogManager))
 	newZ.SetLeafPageLog(db.leafPageLog)
 	newZ.SetOuterLeavesInValueLog(db.indexOuterLeavesInValueLog)
 	db.idxMu.Lock()
@@ -490,7 +490,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 
 		// Ensure the new generation preserves leaf-page-in-value-log wiring for
 		// subsequent writes.
-		newZ.SetLeafPageReader(db.valueLogManager)
+		newZ.SetLeafPageReader(db.leafPageReader(db.valueLogManager))
 		newZ.SetLeafPageLog(db.leafPageLog)
 		newZ.SetOuterLeavesInValueLog(db.indexOuterLeavesInValueLog)
 

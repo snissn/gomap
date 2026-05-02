@@ -640,6 +640,14 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_1024_hit_ratio"] = fmt.Sprintf("%.6f", float64(outerLeafReadStats.Recent1KHitsTotal)/float64(outerLeafReadStats.SamplesTotal))
 		stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_4096_hit_ratio"] = fmt.Sprintf("%.6f", float64(outerLeafReadStats.Recent4KHitsTotal)/float64(outerLeafReadStats.SamplesTotal))
 	}
+	cacheStats := db.leafPageReadCache.stats()
+	stats["treedb.process.read_path.outer_leaf.cache.hits"] = fmt.Sprintf("%d", cacheStats.Hits)
+	stats["treedb.process.read_path.outer_leaf.cache.misses"] = fmt.Sprintf("%d", cacheStats.Misses)
+	stats["treedb.process.read_path.outer_leaf.cache.stores"] = fmt.Sprintf("%d", cacheStats.Stores)
+	stats["treedb.process.read_path.outer_leaf.cache.evictions"] = fmt.Sprintf("%d", cacheStats.Evictions)
+	stats["treedb.process.read_path.outer_leaf.cache.entries"] = fmt.Sprintf("%d", cacheStats.Entries)
+	stats["treedb.process.read_path.outer_leaf.cache.capacity"] = fmt.Sprintf("%d", cacheStats.Capacity)
+	stats["treedb.process.read_path.outer_leaf.cache.bytes"] = fmt.Sprintf("%d", cacheStats.Bytes)
 
 	if db.valueLogManager != nil {
 		vlogRemaps, vlogDeadMappings := db.valueLogManager.RemapStats()
