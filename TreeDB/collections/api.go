@@ -284,101 +284,101 @@ type CollectionSecondaryRunStats struct {
 // Update calls that fall back to the legacy direct path are intentionally not
 // represented here yet; the write combiner and UpdateBatch path use this shape.
 type CollectionUpdateStats struct {
-	Items                  int
-	Matched                int
-	Modified               int
-	Indexes                int
-	Runs                   int
-	BufferedBatches        int
-	CurrentRead            time.Duration
-	Callback               time.Duration
-	PrepareDocuments       time.Duration
-	IndexStateExtraction   time.Duration
-	UniqueIndexPreflight   time.Duration
-	TemplateRunBuild       time.Duration
-	PrimaryRunBuild        time.Duration
-	IndexStateRunBuild     time.Duration
-	SecondaryRunBuild      time.Duration
-	BufferStage            time.Duration
-	BufferStagePrecheck    time.Duration
-	BufferStageLockWait    time.Duration
-	BufferStageLockHold    time.Duration
-	BufferStageValidation  time.Duration
-	BufferStageRootScan    time.Duration
-	BufferStageDomainInit  time.Duration
-	BufferStagePrimaryIdx  time.Duration
-	BufferStageUniqueIdx   time.Duration
-	BufferStageRootAppend  time.Duration
-	BufferStageFlush       time.Duration
-	Publish                time.Duration
-	SecondaryDeleteEntries int
-	SecondarySetEntries    int
-	SecondaryKeyBytes      int
+	Items                    int
+	Matched                  int
+	Modified                 int
+	Indexes                  int
+	Runs                     int
+	BufferedBatches          int
+	CurrentRead              time.Duration
+	Callback                 time.Duration
+	PrepareDocuments         time.Duration
+	IndexStateExtraction     time.Duration
+	UniqueIndexPreflight     time.Duration
+	TemplateRunBuild         time.Duration
+	PrimaryRunBuild          time.Duration
+	IndexStateRunBuild       time.Duration
+	SecondaryRunBuild        time.Duration
+	BufferStage              time.Duration
+	BufferStagePrecheck      time.Duration
+	BufferStageLockWait      time.Duration
+	BufferStageLockHold      time.Duration
+	BufferStageValidation    time.Duration
+	BufferStageRootScan      time.Duration
+	BufferStageDomainPrepare time.Duration
+	BufferStagePrimaryIdx    time.Duration
+	BufferStageUniqueIdx     time.Duration
+	BufferStageRootAppend    time.Duration
+	BufferStageFlush         time.Duration
+	Publish                  time.Duration
+	SecondaryDeleteEntries   int
+	SecondarySetEntries      int
+	SecondaryKeyBytes        int
 }
 
 // CollectionManagerStats captures aggregate write-domain counters for a
 // CollectionManager. The counters are process-local observability; they are
 // not persisted with collection metadata.
 type CollectionManagerStats struct {
-	Domains                       int
-	PendingDocuments              int
-	PendingBytes                  int64
-	PendingRootRuns               int
-	PendingIndexedFlushUnits      int
-	IndexedAsyncFlushRunning      int
-	MutationLockCalls             uint64
-	MutationLockWait              time.Duration
-	MutationLockHold              time.Duration
-	IndexedStageBatches           uint64
-	IndexedStageDocs              uint64
-	IndexedStageBytes             uint64
-	IndexedStageRootRuns          uint64
-	IndexedAutoFlushes            uint64
-	IndexedAsyncFlushScheduled    uint64
-	IndexedAsyncFlushBackpressure uint64
-	IndexedAsyncFlushErrors       uint64
-	IndexedFlushCalls             uint64
-	IndexedFlushErrors            uint64
-	IndexedFlushDocs              uint64
-	IndexedFlushBytes             uint64
-	IndexedFlushRootRuns          uint64
-	IndexedFlushRoots             uint64
-	IndexedFlushDuration          time.Duration
-	UpdateCombineRequests         uint64
-	UpdateCombineBatches          uint64
-	UpdateCombineBatchedRequests  uint64
-	UpdateCombineFallbackRequests uint64
-	UpdateCombineQueueDepthMax    uint64
-	UpdateBatchCalls              uint64
-	UpdateBatchItems              uint64
-	UpdateBatchMatched            uint64
-	UpdateBatchModified           uint64
-	UpdateBatchRuns               uint64
-	UpdateBatchBufferedBatches    uint64
-	UpdateBatchCurrentRead        time.Duration
-	UpdateBatchCallback           time.Duration
-	UpdateBatchPrepareDocuments   time.Duration
-	UpdateBatchIndexStateExtract  time.Duration
-	UpdateBatchUniquePreflight    time.Duration
-	UpdateBatchTemplateRunBuild   time.Duration
-	UpdateBatchPrimaryRunBuild    time.Duration
-	UpdateBatchIndexStateRunBuild time.Duration
-	UpdateBatchSecondaryRunBuild  time.Duration
-	UpdateBatchBufferStage        time.Duration
-	UpdateBatchBufferPrecheck     time.Duration
-	UpdateBatchBufferLockWait     time.Duration
-	UpdateBatchBufferLockHold     time.Duration
-	UpdateBatchBufferValidation   time.Duration
-	UpdateBatchBufferRootScan     time.Duration
-	UpdateBatchBufferDomainInit   time.Duration
-	UpdateBatchBufferPrimaryIdx   time.Duration
-	UpdateBatchBufferUniqueIdx    time.Duration
-	UpdateBatchBufferRootAppend   time.Duration
-	UpdateBatchBufferFlush        time.Duration
-	UpdateBatchPublish            time.Duration
-	UpdateBatchSecondaryDeletes   uint64
-	UpdateBatchSecondarySets      uint64
-	UpdateBatchSecondaryKeyBytes  uint64
+	Domains                        int
+	PendingDocuments               int
+	PendingBytes                   int64
+	PendingRootRuns                int
+	PendingIndexedFlushUnits       int
+	IndexedAsyncFlushRunning       int
+	MutationLockCalls              uint64
+	MutationLockWait               time.Duration
+	MutationLockHold               time.Duration
+	IndexedStageBatches            uint64
+	IndexedStageDocs               uint64
+	IndexedStageBytes              uint64
+	IndexedStageRootRuns           uint64
+	IndexedAutoFlushes             uint64
+	IndexedAsyncFlushScheduled     uint64
+	IndexedAsyncFlushBackpressure  uint64
+	IndexedAsyncFlushErrors        uint64
+	IndexedFlushCalls              uint64
+	IndexedFlushErrors             uint64
+	IndexedFlushDocs               uint64
+	IndexedFlushBytes              uint64
+	IndexedFlushRootRuns           uint64
+	IndexedFlushRoots              uint64
+	IndexedFlushDuration           time.Duration
+	UpdateCombineRequests          uint64
+	UpdateCombineBatches           uint64
+	UpdateCombineBatchedRequests   uint64
+	UpdateCombineFallbackRequests  uint64
+	UpdateCombineQueueDepthMax     uint64
+	UpdateBatchCalls               uint64
+	UpdateBatchItems               uint64
+	UpdateBatchMatched             uint64
+	UpdateBatchModified            uint64
+	UpdateBatchRuns                uint64
+	UpdateBatchBufferedBatches     uint64
+	UpdateBatchCurrentRead         time.Duration
+	UpdateBatchCallback            time.Duration
+	UpdateBatchPrepareDocuments    time.Duration
+	UpdateBatchIndexStateExtract   time.Duration
+	UpdateBatchUniquePreflight     time.Duration
+	UpdateBatchTemplateRunBuild    time.Duration
+	UpdateBatchPrimaryRunBuild     time.Duration
+	UpdateBatchIndexStateRunBuild  time.Duration
+	UpdateBatchSecondaryRunBuild   time.Duration
+	UpdateBatchBufferStage         time.Duration
+	UpdateBatchBufferPrecheck      time.Duration
+	UpdateBatchBufferLockWait      time.Duration
+	UpdateBatchBufferLockHold      time.Duration
+	UpdateBatchBufferValidation    time.Duration
+	UpdateBatchBufferRootScan      time.Duration
+	UpdateBatchBufferDomainPrepare time.Duration
+	UpdateBatchBufferPrimaryIdx    time.Duration
+	UpdateBatchBufferUniqueIdx     time.Duration
+	UpdateBatchBufferRootAppend    time.Duration
+	UpdateBatchBufferFlush         time.Duration
+	UpdateBatchPublish             time.Duration
+	UpdateBatchSecondaryDeletes    uint64
+	UpdateBatchSecondarySets       uint64
+	UpdateBatchSecondaryKeyBytes   uint64
 }
 
 // DocumentRecord is one primary collection record returned by ScanDocuments.
@@ -608,60 +608,60 @@ type collectionWriteDomain struct {
 	rootRunCount     int
 	writeGeneration  uint64
 
-	mutationLockCalls             atomic.Uint64
-	mutationLockWaitTotalNs       atomic.Uint64
-	mutationLockHoldTotalNs       atomic.Uint64
-	indexedStageBatches           atomic.Uint64
-	indexedStageDocs              atomic.Uint64
-	indexedStageBytes             atomic.Uint64
-	indexedStageRootRuns          atomic.Uint64
-	indexedAutoFlushes            atomic.Uint64
-	indexedAsyncFlushScheduled    atomic.Uint64
-	indexedAsyncFlushBackpressure atomic.Uint64
-	indexedAsyncFlushErrors       atomic.Uint64
-	indexedFlushCalls             atomic.Uint64
-	indexedFlushErrors            atomic.Uint64
-	indexedFlushDocs              atomic.Uint64
-	indexedFlushBytes             atomic.Uint64
-	indexedFlushRootRuns          atomic.Uint64
-	indexedFlushRoots             atomic.Uint64
-	indexedFlushDurationTotalNs   atomic.Uint64
-	updateCombineRequests         atomic.Uint64
-	updateCombineBatches          atomic.Uint64
-	updateCombineBatchedRequests  atomic.Uint64
-	updateCombineFallbackRequests atomic.Uint64
-	updateCombineQueueDepthMax    atomic.Uint64
-	updateBatchCalls              atomic.Uint64
-	updateBatchItems              atomic.Uint64
-	updateBatchMatched            atomic.Uint64
-	updateBatchModified           atomic.Uint64
-	updateBatchRuns               atomic.Uint64
-	updateBatchBufferedBatches    atomic.Uint64
-	updateBatchCurrentReadNs      atomic.Uint64
-	updateBatchCallbackNs         atomic.Uint64
-	updateBatchPrepareNs          atomic.Uint64
-	updateBatchIndexStateNs       atomic.Uint64
-	updateBatchUniquePreflightNs  atomic.Uint64
-	updateBatchTemplateRunNs      atomic.Uint64
-	updateBatchPrimaryRunNs       atomic.Uint64
-	updateBatchIndexStateRunNs    atomic.Uint64
-	updateBatchSecondaryRunNs     atomic.Uint64
-	updateBatchBufferStageNs      atomic.Uint64
-	updateBatchBufferPrecheckNs   atomic.Uint64
-	updateBatchBufferLockWaitNs   atomic.Uint64
-	updateBatchBufferLockHoldNs   atomic.Uint64
-	updateBatchBufferValidationNs atomic.Uint64
-	updateBatchBufferRootScanNs   atomic.Uint64
-	updateBatchBufferDomainInitNs atomic.Uint64
-	updateBatchBufferPrimaryIdxNs atomic.Uint64
-	updateBatchBufferUniqueIdxNs  atomic.Uint64
-	updateBatchBufferRootAppendNs atomic.Uint64
-	updateBatchBufferFlushNs      atomic.Uint64
-	updateBatchPublishNs          atomic.Uint64
-	updateBatchSecondaryDeletes   atomic.Uint64
-	updateBatchSecondarySets      atomic.Uint64
-	updateBatchSecondaryKeyBytes  atomic.Uint64
-	updateBatchDetailedStats      atomic.Bool
+	mutationLockCalls                atomic.Uint64
+	mutationLockWaitTotalNs          atomic.Uint64
+	mutationLockHoldTotalNs          atomic.Uint64
+	indexedStageBatches              atomic.Uint64
+	indexedStageDocs                 atomic.Uint64
+	indexedStageBytes                atomic.Uint64
+	indexedStageRootRuns             atomic.Uint64
+	indexedAutoFlushes               atomic.Uint64
+	indexedAsyncFlushScheduled       atomic.Uint64
+	indexedAsyncFlushBackpressure    atomic.Uint64
+	indexedAsyncFlushErrors          atomic.Uint64
+	indexedFlushCalls                atomic.Uint64
+	indexedFlushErrors               atomic.Uint64
+	indexedFlushDocs                 atomic.Uint64
+	indexedFlushBytes                atomic.Uint64
+	indexedFlushRootRuns             atomic.Uint64
+	indexedFlushRoots                atomic.Uint64
+	indexedFlushDurationTotalNs      atomic.Uint64
+	updateCombineRequests            atomic.Uint64
+	updateCombineBatches             atomic.Uint64
+	updateCombineBatchedRequests     atomic.Uint64
+	updateCombineFallbackRequests    atomic.Uint64
+	updateCombineQueueDepthMax       atomic.Uint64
+	updateBatchCalls                 atomic.Uint64
+	updateBatchItems                 atomic.Uint64
+	updateBatchMatched               atomic.Uint64
+	updateBatchModified              atomic.Uint64
+	updateBatchRuns                  atomic.Uint64
+	updateBatchBufferedBatches       atomic.Uint64
+	updateBatchCurrentReadNs         atomic.Uint64
+	updateBatchCallbackNs            atomic.Uint64
+	updateBatchPrepareNs             atomic.Uint64
+	updateBatchIndexStateNs          atomic.Uint64
+	updateBatchUniquePreflightNs     atomic.Uint64
+	updateBatchTemplateRunNs         atomic.Uint64
+	updateBatchPrimaryRunNs          atomic.Uint64
+	updateBatchIndexStateRunNs       atomic.Uint64
+	updateBatchSecondaryRunNs        atomic.Uint64
+	updateBatchBufferStageNs         atomic.Uint64
+	updateBatchBufferPrecheckNs      atomic.Uint64
+	updateBatchBufferLockWaitNs      atomic.Uint64
+	updateBatchBufferLockHoldNs      atomic.Uint64
+	updateBatchBufferValidationNs    atomic.Uint64
+	updateBatchBufferRootScanNs      atomic.Uint64
+	updateBatchBufferDomainPrepareNs atomic.Uint64
+	updateBatchBufferPrimaryIdxNs    atomic.Uint64
+	updateBatchBufferUniqueIdxNs     atomic.Uint64
+	updateBatchBufferRootAppendNs    atomic.Uint64
+	updateBatchBufferFlushNs         atomic.Uint64
+	updateBatchPublishNs             atomic.Uint64
+	updateBatchSecondaryDeletes      atomic.Uint64
+	updateBatchSecondarySets         atomic.Uint64
+	updateBatchSecondaryKeyBytes     atomic.Uint64
+	updateBatchDetailedStats         atomic.Bool
 }
 
 func NewCollectionManager(database *backenddb.DB) *CollectionManager {
@@ -846,7 +846,7 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.update_batch.buffer_stage_lock_hold_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferLockHold.Nanoseconds())
 	out["treedb.collections.write_domain.update_batch.buffer_stage_validation_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferValidation.Nanoseconds())
 	out["treedb.collections.write_domain.update_batch.buffer_stage_root_scan_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferRootScan.Nanoseconds())
-	out["treedb.collections.write_domain.update_batch.buffer_stage_domain_init_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferDomainInit.Nanoseconds())
+	out["treedb.collections.write_domain.update_batch.buffer_stage_domain_prepare_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferDomainPrepare.Nanoseconds())
 	out["treedb.collections.write_domain.update_batch.buffer_stage_primary_index_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferPrimaryIdx.Nanoseconds())
 	out["treedb.collections.write_domain.update_batch.buffer_stage_unique_index_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferUniqueIdx.Nanoseconds())
 	out["treedb.collections.write_domain.update_batch.buffer_stage_root_append_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferRootAppend.Nanoseconds())
@@ -936,7 +936,7 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.UpdateBatchBufferLockHold += other.UpdateBatchBufferLockHold
 	s.UpdateBatchBufferValidation += other.UpdateBatchBufferValidation
 	s.UpdateBatchBufferRootScan += other.UpdateBatchBufferRootScan
-	s.UpdateBatchBufferDomainInit += other.UpdateBatchBufferDomainInit
+	s.UpdateBatchBufferDomainPrepare += other.UpdateBatchBufferDomainPrepare
 	s.UpdateBatchBufferPrimaryIdx += other.UpdateBatchBufferPrimaryIdx
 	s.UpdateBatchBufferUniqueIdx += other.UpdateBatchBufferUniqueIdx
 	s.UpdateBatchBufferRootAppend += other.UpdateBatchBufferRootAppend
@@ -1006,7 +1006,7 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.UpdateBatchBufferLockHold = durationFromAtomicNs(domain.updateBatchBufferLockHoldNs.Load())
 	stats.UpdateBatchBufferValidation = durationFromAtomicNs(domain.updateBatchBufferValidationNs.Load())
 	stats.UpdateBatchBufferRootScan = durationFromAtomicNs(domain.updateBatchBufferRootScanNs.Load())
-	stats.UpdateBatchBufferDomainInit = durationFromAtomicNs(domain.updateBatchBufferDomainInitNs.Load())
+	stats.UpdateBatchBufferDomainPrepare = durationFromAtomicNs(domain.updateBatchBufferDomainPrepareNs.Load())
 	stats.UpdateBatchBufferPrimaryIdx = durationFromAtomicNs(domain.updateBatchBufferPrimaryIdxNs.Load())
 	stats.UpdateBatchBufferUniqueIdx = durationFromAtomicNs(domain.updateBatchBufferUniqueIdxNs.Load())
 	stats.UpdateBatchBufferRootAppend = durationFromAtomicNs(domain.updateBatchBufferRootAppendNs.Load())
@@ -1090,7 +1090,7 @@ func (domain *collectionWriteDomain) observeUpdateBatchStats(stats CollectionUpd
 		domain.updateBatchBufferLockHoldNs.Add(durationToAtomicNs(stats.BufferStageLockHold))
 		domain.updateBatchBufferValidationNs.Add(durationToAtomicNs(stats.BufferStageValidation))
 		domain.updateBatchBufferRootScanNs.Add(durationToAtomicNs(stats.BufferStageRootScan))
-		domain.updateBatchBufferDomainInitNs.Add(durationToAtomicNs(stats.BufferStageDomainInit))
+		domain.updateBatchBufferDomainPrepareNs.Add(durationToAtomicNs(stats.BufferStageDomainPrepare))
 		domain.updateBatchBufferPrimaryIdxNs.Add(durationToAtomicNs(stats.BufferStagePrimaryIdx))
 		domain.updateBatchBufferUniqueIdxNs.Add(durationToAtomicNs(stats.BufferStageUniqueIdx))
 		domain.updateBatchBufferRootAppendNs.Add(durationToAtomicNs(stats.BufferStageRootAppend))
@@ -1114,7 +1114,7 @@ func updateStatsHasBufferStageBreakdown(stats CollectionUpdateStats) bool {
 		stats.BufferStageLockHold != 0 ||
 		stats.BufferStageValidation != 0 ||
 		stats.BufferStageRootScan != 0 ||
-		stats.BufferStageDomainInit != 0 ||
+		stats.BufferStageDomainPrepare != 0 ||
 		stats.BufferStagePrimaryIdx != 0 ||
 		stats.BufferStageUniqueIdx != 0 ||
 		stats.BufferStageRootAppend != 0 ||
@@ -7285,7 +7285,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	if shouldAutoFlushAfterAdding {
 		checkpoint = checkpointBufferedIndexedDomain(domain)
 	}
-	plan.stats.BufferStageDomainInit += updateBatchStatsSince(detailedStats, phaseStart)
+	plan.stats.BufferStageDomainPrepare += updateBatchStatsSince(detailedStats, phaseStart)
 	for i, rootName := range plan.rootNames {
 		baseRoot := plan.baseRootIDs[rootName]
 		table := plan.deltaTables[i]

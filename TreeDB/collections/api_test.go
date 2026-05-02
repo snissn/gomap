@@ -607,7 +607,7 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 		stats.BufferStagePrecheck != 0 ||
 		stats.BufferStageLockWait != 0 || stats.BufferStageLockHold != 0 ||
 		stats.BufferStageValidation != 0 || stats.BufferStageRootScan != 0 ||
-		stats.BufferStageDomainInit != 0 ||
+		stats.BufferStageDomainPrepare != 0 ||
 		stats.BufferStagePrimaryIdx != 0 || stats.BufferStageUniqueIdx != 0 ||
 		stats.BufferStageRootAppend != 0 || stats.BufferStageFlush != 0 {
 		t.Fatalf("default update timings=%+v want zero unless detailed stats enabled", stats)
@@ -653,7 +653,7 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 		"treedb.collections.write_domain.update_batch.buffer_stage_lock_hold_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_validation_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_root_scan_ns_total",
-		"treedb.collections.write_domain.update_batch.buffer_stage_domain_init_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_domain_prepare_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_primary_index_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_unique_index_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_root_append_ns_total",
