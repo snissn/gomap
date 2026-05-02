@@ -77,9 +77,10 @@ Options:
                         Reader goroutines for the concurrent _id read phase.
   --concurrent-reader-sweep LIST
                         Space- or comma-separated reader counts for concurrent
-                        _id read throughput sweep phases. Requires
-                        --concurrent-reads and cannot be combined with
-                        --concurrent-readers.
+                        _id read throughput sweep phases. Uses
+                        --concurrent-reads when set, otherwise derives from
+                        documents / CONCURRENT_READS_DIVISOR. Cannot be
+                        combined with --concurrent-readers.
   --concurrent-reads COUNT
                         Concurrent point reads per target/cell.
   --concurrent-writers N
