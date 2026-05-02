@@ -2902,6 +2902,51 @@ func TestCollectionIndexedWriteMemtablesAsyncBackpressurePublishesSynchronously(
 	}
 }
 
+func TestCollectionIndexedWriteMemtablesAsyncScheduleRacePublishesSynchronously(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        1,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if !col.writeDomain.beginIndexedAsyncFlush() {
+		t.Fatal("begin async flush returned false")
+	}
+	defer col.writeDomain.finishIndexedAsyncFlush(nil)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	stats := mgr.StatsSnapshot()
+	if got := stats.IndexedAsyncFlushScheduled; got != 0 {
+		t.Fatalf("async scheduled=%d want 0 when scheduling race falls back", got)
+	}
+	if got := stats.IndexedFlushCalls; got != 1 {
+		t.Fatalf("indexed flush calls=%d want sync fallback flush", got)
+	}
+	if got := stats.PendingDocuments; got != 0 {
+		t.Fatalf("pending docs after sync fallback=%d want 0", got)
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesAsyncQueuedUnitsParticipateInUniqueChecks(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

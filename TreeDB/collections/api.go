@@ -2131,7 +2131,11 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 			err := c.flushBufferedIndexedLocked(domain)
 			return time.Since(flushStart), err
 		}
-		c.scheduleIndexedAsyncFlush(domain)
+		if !c.scheduleIndexedAsyncFlush(domain) {
+			flushStart := time.Now()
+			err := c.flushBufferedIndexedLocked(domain)
+			return time.Since(flushStart), err
+		}
 		return 0, nil
 	}
 	flushStart := time.Now()
