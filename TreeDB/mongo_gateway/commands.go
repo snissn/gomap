@@ -1060,9 +1060,10 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 		if err != nil {
 			// If another request created the collection after our miss, fall
 			// through to the idempotent add-index path below.
+			createErr := err
 			col, err = s.Collections.OpenCollection(name)
 			if err != nil {
-				return commandError(commandCodeBadValue, "BadValue", err.Error())
+				return commandError(commandCodeBadValue, "BadValue", createErr.Error())
 			}
 		} else {
 			return marshalDocument(bson.D{

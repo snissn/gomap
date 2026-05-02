@@ -1863,6 +1863,30 @@ func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
 	})
 	assertCommandError(t, emptyName, "BadValue")
 
+	conflictingDuplicate := serveCommand(t, server, 2331, bson.D{
+		{Key: "createIndexes", Value: "conflicting_dup"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{
+				{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+				{Key: "name", Value: "email_1"},
+				{Key: "unique", Value: true},
+			},
+			bson.D{
+				{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+				{Key: "name", Value: "email_1"},
+			},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, conflictingDuplicate, "BadValue")
+	errmsg, ok := bson.Raw(conflictingDuplicate).Lookup("errmsg").StringValueOK()
+	if !ok || !strings.Contains(errmsg, `duplicate index "email_1"`) {
+		t.Fatalf("errmsg=%q ok=%v want duplicate index", errmsg, ok)
+	}
+	if _, err := server.Collections.OpenCollection("app.conflicting_dup"); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("conflicting duplicate collection err=%v, want collection not found", err)
+	}
+
 	invalidListCollectionsDB := serveCommand(t, server, 234, bson.D{
 		{Key: "listCollections", Value: int32(1)},
 		{Key: "$db", Value: "bad/name"},
