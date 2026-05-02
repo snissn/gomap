@@ -341,9 +341,11 @@ The initial workload phases are:
 - `id_delete_one`: optional deletes; disabled unless `-deletes` is non-zero.
 
 Update phases change only non-indexed fields by default.
-`-update-indexed-field` requires `-secondary-indexes=2` so the city index exists
-and the indexed `city` field changes, exercising secondary-index maintenance in
-the update path.
+`-update-indexed-field` requires `-secondary-indexes=2` or greater so the city
+index exists and the indexed `city` field changes, exercising secondary-index
+maintenance in the update path. `-secondary-indexes=3` adds an unchanged
+`active_1` bool index so city-only update runs can verify that unchanged
+secondary indexes are not rebuilt as total index count grows.
 `-range-index` creates an additional `age_1` index so the age range-read phase
 materially exercises indexed range planning instead of the bounded scan
 fallback.
@@ -474,7 +476,7 @@ OUT=$(mktemp -d /tmp/gomap_mongo_gateway_profile_XXXXXX)
 MONGO_GATEWAY_PROFILE_BENCH_BATCH_SIZE=10000 \
 GOWORK=off go test ./cmd/mongo_gateway_bench \
   -run '^$' \
-  -bench '^(BenchmarkTreeDBGatewayLoadBSONIndexes2|BenchmarkTreeDBGatewayLoadGeneratedIDBSONIndexes2|BenchmarkTreeDBGatewayLoadObjectIDBSONIndexes2|BenchmarkTreeDBGatewayLoadUnackBSONIndexes2|BenchmarkTreeDBGatewayRunCommandLoadBSONIndexes2|BenchmarkTreeDBGatewayRunRawCommandLoadBSONIndexes2|BenchmarkTreeDBGatewayRawWireLoadBSONIndexes2|BenchmarkTreeDBGatewayRawWireTCPLoadBSONIndexes2|BenchmarkDirectCollectionLoadBSONIndexes2|BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2|BenchmarkClientBSONBatchEncode)$' \
+  -bench '^(BenchmarkTreeDBGatewayLoadBSONIndexes2|BenchmarkTreeDBGatewayLoadGeneratedIDBSONIndexes2|BenchmarkTreeDBGatewayLoadObjectIDBSONIndexes2|BenchmarkTreeDBGatewayLoadUnackBSONIndexes2|BenchmarkTreeDBGatewayRunCommandLoadBSONIndexes2|BenchmarkTreeDBGatewayRunRawCommandLoadBSONIndexes2|BenchmarkTreeDBGatewayRawWireLoadBSONIndexes2|BenchmarkTreeDBGatewayRawWireTCPLoadBSONIndexes2|BenchmarkDirectCollectionLoadBSONIndexes2|BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2|BenchmarkDirectCollectionConcurrentUpdateBSONCityIndex1|BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2CityUpdate|BenchmarkDirectCollectionConcurrentUpdateBSONIndexes3CityUpdate|BenchmarkClientBSONBatchEncode)$' \
   -benchtime 2000000x \
   -count 1 \
   -timeout 0 \
@@ -545,6 +547,13 @@ The benchmark shapes are intentionally different:
   `backend_vlog_mmap_sealed_segments`, and `backend_vlog_mmap_active_bytes`, so
   value-log mmap fallbacks can be separated from other `ReadAt` sources in CPU
   profiles and tied back to mmap residency limits.
+- `BenchmarkDirectCollectionConcurrentUpdateBSONCityIndex1`,
+  `BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2CityUpdate`, and
+  `BenchmarkDirectCollectionConcurrentUpdateBSONIndexes3CityUpdate` run the same
+  direct update shape while changing only the indexed `city` field. They are
+  intended to guard per-index changed-delta planning: adding unchanged indexes
+  such as `email_1` and `active_1` should not create extra secondary runs or
+  affected secondary roots for a city-only update.
 - `BenchmarkClientBSONBatchEncode` measures client-side BSON document encoding
   alone.
 
@@ -567,10 +576,11 @@ driver transport while bypassing `InsertMany`'s explicit-`_id` discovery and
 
 ## Interpreting Results
 
-`-secondary-indexes 2` creates `email_1` and `city_1`. The age range phase is a
-bounded scan unless `-range-index` is set; benchmark output names the phase
-`age_range_scan_limit_10` or `age_range_indexed_limit_10` so reports can
-separate fallback cost from indexed range-search cost.
+`-secondary-indexes 2` creates `email_1` and `city_1`; `-secondary-indexes 3`
+adds `active_1`. The age range phase is a bounded scan unless `-range-index` is
+set; benchmark output names the phase `age_range_scan_limit_10` or
+`age_range_indexed_limit_10` so reports can separate fallback cost from indexed
+range-search cost.
 
 For TreeDB, prefer `treedb_disk_after_maintenance.total_bytes` when present, and
 use `treedb_disk_after_checkpoint.total_bytes` for checkpoint-only runs. The

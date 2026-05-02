@@ -129,6 +129,35 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	}
 }
 
+func TestProfileBenchParsedUpdateDocsUsesDistinctCityPhases(t *testing.T) {
+	warmup := profileBenchParsedUpdateDocs(t, true, "warmup")
+	timed := profileBenchParsedUpdateDocs(t, true, "timed")
+	if len(warmup) == 0 || len(timed) == 0 {
+		t.Fatal("expected parsed update docs")
+	}
+	warmupCity := profileBenchSetUpdateFieldString(t, warmup[0], "city")
+	timedCity := profileBenchSetUpdateFieldString(t, timed[0], "city")
+	if warmupCity == timedCity {
+		t.Fatalf("city update phases both produced %q; timed city updates must differ from warmup", warmupCity)
+	}
+}
+
+func profileBenchSetUpdateFieldString(t *testing.T, update profileBenchSetUpdate, key string) string {
+	t.Helper()
+	for _, field := range update.fields {
+		if field.key != key {
+			continue
+		}
+		got, ok := field.value.StringValueOK()
+		if !ok {
+			t.Fatalf("field %q raw value=%v is not a string", key, field.value.Type)
+		}
+		return got
+	}
+	t.Fatalf("missing update field %q in %+v", key, update.fields)
+	return ""
+}
+
 func TestProfileBenchDeltaUintStat(t *testing.T) {
 	before := map[string]string{"x": "10"}
 	after := map[string]string{"x": "17", "bad": "not-a-number"}
@@ -452,6 +481,78 @@ func BenchmarkDirectCollectionLoadBSONIndexes2(b *testing.B) {
 }
 
 func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
+	benchmarkDirectCollectionConcurrentUpdateBSON(b, []collections.IndexDefinition{
+		{
+			Name:          "email_1",
+			Field:         "email",
+			ValueType:     collections.IndexValueString,
+			Unique:        true,
+			StoragePolicy: collections.RootStorageCompressed,
+		},
+		{
+			Name:          "city_1",
+			Field:         "city",
+			ValueType:     collections.IndexValueString,
+			StoragePolicy: collections.RootStorageCompressed,
+		},
+	}, false)
+}
+
+func BenchmarkDirectCollectionConcurrentUpdateBSONCityIndex1(b *testing.B) {
+	benchmarkDirectCollectionConcurrentUpdateBSON(b, []collections.IndexDefinition{
+		{
+			Name:          "city_1",
+			Field:         "city",
+			ValueType:     collections.IndexValueString,
+			StoragePolicy: collections.RootStorageCompressed,
+		},
+	}, true)
+}
+
+func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2CityUpdate(b *testing.B) {
+	benchmarkDirectCollectionConcurrentUpdateBSON(b, []collections.IndexDefinition{
+		{
+			Name:          "email_1",
+			Field:         "email",
+			ValueType:     collections.IndexValueString,
+			Unique:        true,
+			StoragePolicy: collections.RootStorageCompressed,
+		},
+		{
+			Name:          "city_1",
+			Field:         "city",
+			ValueType:     collections.IndexValueString,
+			StoragePolicy: collections.RootStorageCompressed,
+		},
+	}, true)
+}
+
+func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes3CityUpdate(b *testing.B) {
+	benchmarkDirectCollectionConcurrentUpdateBSON(b, []collections.IndexDefinition{
+		{
+			Name:          "email_1",
+			Field:         "email",
+			ValueType:     collections.IndexValueString,
+			Unique:        true,
+			StoragePolicy: collections.RootStorageCompressed,
+		},
+		{
+			Name:          "city_1",
+			Field:         "city",
+			ValueType:     collections.IndexValueString,
+			StoragePolicy: collections.RootStorageCompressed,
+		},
+		{
+			Name:          "active_1",
+			Field:         "active",
+			ValueType:     collections.IndexValueBool,
+			StoragePolicy: collections.RootStorageCompressed,
+		},
+	}, true)
+}
+
+func benchmarkDirectCollectionConcurrentUpdateBSON(b *testing.B, indexes []collections.IndexDefinition, updateCity bool) {
+	b.Helper()
 	dir := filepath.Join(b.TempDir(), "treedb")
 	opts := treedb.OptionsFor(treedb.ProfileWALOnFast, dir)
 	opts.IndexOuterLeavesInValueLog = true
@@ -476,22 +577,10 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	if err != nil {
 		b.Fatalf("open collection: %v", err)
 	}
-	if _, err := collection.CreateIndex(collections.IndexDefinition{
-		Name:          "email_1",
-		Field:         "email",
-		ValueType:     collections.IndexValueString,
-		Unique:        true,
-		StoragePolicy: collections.RootStorageCompressed,
-	}); err != nil {
-		b.Fatalf("create email index: %v", err)
-	}
-	if _, err := collection.CreateIndex(collections.IndexDefinition{
-		Name:          "city_1",
-		Field:         "city",
-		ValueType:     collections.IndexValueString,
-		StoragePolicy: collections.RootStorageCompressed,
-	}); err != nil {
-		b.Fatalf("create city index: %v", err)
+	for _, idx := range indexes {
+		if _, err := collection.CreateIndex(idx); err != nil {
+			b.Fatalf("create index %s: %v", idx.Name, err)
+		}
 	}
 
 	documentCount := profileBenchUpdateDocumentCount(b)
@@ -523,21 +612,8 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	if err := backend.Checkpoint(); err != nil {
 		b.Fatalf("checkpoint preload: %v", err)
 	}
-	updateDocs := make([]profileBenchSetUpdate, profileBenchUpdateDocPoolSize)
-	for i := range updateDocs {
-		updateRaw, err := bson.Marshal(bson.D{{Key: "$set", Value: bson.D{
-			{Key: "concurrent_updated", Value: true},
-			{Key: "concurrent_update_seq", Value: int64(i)},
-		}}})
-		if err != nil {
-			b.Fatalf("marshal update document: %v", err)
-		}
-		parsed, err := parseProfileBenchSetUpdate(bson.Raw(updateRaw))
-		if err != nil {
-			b.Fatalf("parse update document: %v", err)
-		}
-		updateDocs[i] = parsed
-	}
+	warmupUpdateDocs := profileBenchParsedUpdateDocs(b, updateCity, "warmup")
+	updateDocs := profileBenchParsedUpdateDocs(b, updateCity, "timed")
 	ids := make([][]byte, documentCount)
 	for i := range ids {
 		ids[i] = []byte(benchmarkID(i))
@@ -549,7 +625,7 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	if warmupOps > 100000 {
 		warmupOps = 100000
 	}
-	if err := runProfileBenchDirectCollectionConcurrentUpdates(context.Background(), writers, warmupOps, documentCount, idStride, ids, updateDocs, collection); err != nil {
+	if err := runProfileBenchDirectCollectionConcurrentUpdates(context.Background(), writers, warmupOps, documentCount, idStride, ids, warmupUpdateDocs, collection); err != nil {
 		b.Fatalf("warm up concurrent updates: %v", err)
 	}
 	if err := manager.FlushAll(); err != nil {
@@ -583,6 +659,30 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	reportProfileBenchOrderedRootPublishStats(b, backendStatsAfter, backendStatsBefore, b.N)
 	reportProfileBenchBackendVlogMmapStats(b, backendStatsAfter, backendStatsBefore, b.N)
 	reportDocsPerSecond(b, b.N, timedElapsed)
+}
+
+func profileBenchParsedUpdateDocs(tb testing.TB, updateCity bool, cityPhase string) []profileBenchSetUpdate {
+	tb.Helper()
+	updateDocs := make([]profileBenchSetUpdate, profileBenchUpdateDocPoolSize)
+	for i := range updateDocs {
+		set := bson.D{
+			{Key: "concurrent_updated", Value: true},
+			{Key: "concurrent_update_seq", Value: int64(i)},
+		}
+		if updateCity {
+			set = append(set, bson.E{Key: "city", Value: cityPhase + "-" + benchmarkUpdatedCity(i, i, profileBenchUpdateDocPoolSize)})
+		}
+		updateRaw, err := bson.Marshal(bson.D{{Key: "$set", Value: set}})
+		if err != nil {
+			tb.Fatalf("marshal update document: %v", err)
+		}
+		parsed, err := parseProfileBenchSetUpdate(bson.Raw(updateRaw))
+		if err != nil {
+			tb.Fatalf("parse update document: %v", err)
+		}
+		updateDocs[i] = parsed
+	}
+	return updateDocs
 }
 
 func profileBenchDeltaUintStat(after, before map[string]string, key string) uint64 {

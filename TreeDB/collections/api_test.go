@@ -9759,6 +9759,7 @@ func TestCollectionUpdateBatchSkipsUnchangedSecondaryIndexes(t *testing.T) {
 		Indexes: []IndexDefinition{
 			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
 			{Name: "city", Field: "city", ValueType: IndexValueString},
+			{Name: "active", Field: "active", ValueType: IndexValueBool},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -9770,7 +9771,7 @@ func TestCollectionUpdateBatchSkipsUnchangedSecondaryIndexes(t *testing.T) {
 	mgr.SetUpdateBatchDetailedStatsEnabled(true)
 	if _, err := col.InsertBatch(
 		[][]byte{[]byte("u1")},
-		[][]byte{[]byte(`{"email":"ada@example.com","city":"hnl","seen":false}`)},
+		[][]byte{[]byte(`{"email":"ada@example.com","city":"hnl","active":true,"seen":false}`)},
 	); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -9798,6 +9799,7 @@ func TestCollectionUpdateBatchSkipsUnchangedSecondaryIndexes(t *testing.T) {
 			collectionIndexStateRootName("users"),
 			collectionSecondaryRootName("users", "email"),
 			collectionSecondaryRootName("users", "city"),
+			collectionSecondaryRootName("users", "active"),
 		}
 		out := make(map[string]uint64, len(names))
 		for _, name := range names {
@@ -9814,7 +9816,7 @@ func TestCollectionUpdateBatchSkipsUnchangedSecondaryIndexes(t *testing.T) {
 	results, err := col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return []byte(`{"email":"ada@example.com","city":"sea","seen":false}`), true, nil
+			return []byte(`{"email":"ada@example.com","city":"sea","active":true,"seen":false}`), true, nil
 		},
 	}})
 	if err != nil {
@@ -9839,7 +9841,7 @@ func TestCollectionUpdateBatchSkipsUnchangedSecondaryIndexes(t *testing.T) {
 	if got, want := stats.IndexValueChanges, 1; got != want {
 		t.Fatalf("index value changes=%d want %d", got, want)
 	}
-	if got, want := stats.IndexValueUnchanged, 1; got != want {
+	if got, want := stats.IndexValueUnchanged, 2; got != want {
 		t.Fatalf("index value unchanged=%d want %d", got, want)
 	}
 	if got, want := stats.UniqueIndexChecks, 0; got != want {
@@ -9849,7 +9851,7 @@ func TestCollectionUpdateBatchSkipsUnchangedSecondaryIndexes(t *testing.T) {
 		t.Fatalf("unique index check skips=%d want %d", got, want)
 	}
 	indexStats := stats.IndexStats[:stats.IndexStatsCount]
-	if got, want := len(indexStats), 2; got != want {
+	if got, want := len(indexStats), 3; got != want {
 		t.Fatalf("index decision stats=%d want %d: %+v", got, want, stats.IndexStats)
 	}
 	indexStatByName := func(stats []CollectionUpdateIndexStats, name string) CollectionUpdateIndexStats {
@@ -9867,6 +9869,9 @@ func TestCollectionUpdateBatchSkipsUnchangedSecondaryIndexes(t *testing.T) {
 	}
 	if idx := indexStatByName(indexStats, "city"); idx.Unique || idx.Changed != 1 || idx.Unchanged != 0 || idx.SecondaryRuns != 1 || idx.SecondaryDeletes != 1 || idx.SecondarySets != 1 || idx.SecondaryKeyBytes == 0 {
 		t.Fatalf("city index decision stats=%+v want changed secondary run", idx)
+	}
+	if idx := indexStatByName(indexStats, "active"); idx.Unique || idx.Changed != 0 || idx.Unchanged != 1 || idx.SecondaryRuns != 0 || idx.SecondaryDeletes != 0 || idx.SecondarySets != 0 || idx.SecondaryKeyBytes != 0 {
+		t.Fatalf("active index decision stats=%+v want unchanged/no secondary work", idx)
 	}
 	stats.SecondaryRuns[0].IndexName = "mutated"
 	if got := col.LastUpdateStats().SecondaryRuns[0].IndexName; got != "city" {
@@ -9891,6 +9896,9 @@ func TestCollectionUpdateBatchSkipsUnchangedSecondaryIndexes(t *testing.T) {
 	if rootName := collectionSecondaryRootName("users", "email"); afterCity[rootName] != before[rootName] {
 		t.Fatalf("root %q changed from %d to %d for city-only update", rootName, before[rootName], afterCity[rootName])
 	}
+	if rootName := collectionSecondaryRootName("users", "active"); afterCity[rootName] != before[rootName] {
+		t.Fatalf("root %q changed from %d to %d for city-only update", rootName, before[rootName], afterCity[rootName])
+	}
 	ids, err := col.FindByIndexValue("city", "sea")
 	if err != nil {
 		t.Fatalf("find city sea: %v", err)
@@ -9910,7 +9918,7 @@ func TestCollectionUpdateBatchSkipsUnchangedSecondaryIndexes(t *testing.T) {
 	if _, err := col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return []byte(`{"email":"ada@example.com","city":"sea","seen":true}`), true, nil
+			return []byte(`{"email":"ada@example.com","city":"sea","active":true,"seen":true}`), true, nil
 		},
 	}}); err != nil {
 		t.Fatalf("update same indexed values: %v", err)
@@ -9923,7 +9931,7 @@ func TestCollectionUpdateBatchSkipsUnchangedSecondaryIndexes(t *testing.T) {
 	if got, want := stats.IndexValueChanges, 0; got != want {
 		t.Fatalf("same-index update changes=%d want %d", got, want)
 	}
-	if got, want := stats.IndexValueUnchanged, 2; got != want {
+	if got, want := stats.IndexValueUnchanged, 3; got != want {
 		t.Fatalf("same-index update unchanged=%d want %d", got, want)
 	}
 	if got, want := stats.UniqueIndexChecks, 0; got != want {
@@ -9933,7 +9941,7 @@ func TestCollectionUpdateBatchSkipsUnchangedSecondaryIndexes(t *testing.T) {
 		t.Fatalf("same-index update unique check skips=%d want %d", got, want)
 	}
 	indexStats = stats.IndexStats[:stats.IndexStatsCount]
-	if got, want := len(indexStats), 2; got != want {
+	if got, want := len(indexStats), 3; got != want {
 		t.Fatalf("same-index update index decision stats=%d want %d: %+v", got, want, stats.IndexStats)
 	}
 	for _, idx := range indexStats {
@@ -9946,6 +9954,7 @@ func TestCollectionUpdateBatchSkipsUnchangedSecondaryIndexes(t *testing.T) {
 		collectionIndexStateRootName("users"),
 		collectionSecondaryRootName("users", "email"),
 		collectionSecondaryRootName("users", "city"),
+		collectionSecondaryRootName("users", "active"),
 	} {
 		if afterSame[rootName] != beforeSame[rootName] {
 			t.Fatalf("root %q changed from %d to %d for same-index update", rootName, beforeSame[rootName], afterSame[rootName])

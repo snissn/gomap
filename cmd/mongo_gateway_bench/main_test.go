@@ -402,6 +402,13 @@ func TestParseConfigValidation(t *testing.T) {
 	if oneIndexCfg.SecondaryIndexes != 1 {
 		t.Fatalf("SecondaryIndexes=%d want 1", oneIndexCfg.SecondaryIndexes)
 	}
+	threeIndexCfg, err := parseConfig([]string{"-secondary-indexes", "3", "-update-indexed-field"})
+	if err != nil {
+		t.Fatalf("parse secondary-indexes=3 update-indexed-field config: %v", err)
+	}
+	if threeIndexCfg.SecondaryIndexes != 3 || !threeIndexCfg.UpdateIndexedField {
+		t.Fatalf("three-index config=%+v want SecondaryIndexes=3 UpdateIndexedField=true", threeIndexCfg)
+	}
 	if _, err := parseConfig([]string{"-client-mode", "bad"}); err == nil {
 		t.Fatal("bad client-mode accepted")
 	}
@@ -455,6 +462,9 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 	if _, err := parseConfig([]string{"-secondary-indexes", "1", "-update-indexed-field"}); err == nil {
 		t.Fatal("update-indexed-field accepted without city index")
+	}
+	if _, err := parseConfig([]string{"-secondary-indexes", "4"}); err == nil {
+		t.Fatal("secondary-indexes=4 accepted")
 	}
 	if _, err := parseConfig([]string{"-treedb-buffered-indexed-write-max-documents", "-1"}); err == nil {
 		t.Fatal("negative treedb buffered indexed max documents accepted")
