@@ -643,31 +643,40 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 	}
 }
 
-func TestUniqueCollectionSecondaryIndexForRootNameAvoidsMapAllocation(t *testing.T) {
+func TestUpdateBatchPlanUniqueSecondaryIndexByRootAvoidsMapAllocation(t *testing.T) {
 	meta := CollectionMeta{
 		Name: "users",
 		Indexes: []IndexDefinition{
 			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
 			{Name: "city", Field: "city", ValueType: IndexValueString},
+			{Name: "sku", Field: "sku", ValueType: IndexValueString, Unique: true},
 		},
 	}
-	idx, ok := uniqueCollectionSecondaryIndexForRootName(meta, "users/index/email")
+	plan := &updateBatchPlan{
+		meta:                       meta,
+		rootNames:                  []string{"users/primary", "users/index/email", "users/index/city", "users/index/sku"},
+		uniqueSecondaryIndexByRoot: []int{-1, 0, -1, 2},
+	}
+	idx, ok := updateBatchPlanUniqueSecondaryIndex(plan, 1)
 	if !ok {
-		t.Fatal("unique root lookup did not find email index")
+		t.Fatal("unique root metadata did not find email index")
 	}
 	if got, want := idx.Name, "email"; got != want {
-		t.Fatalf("unique root lookup index=%q want %q", got, want)
+		t.Fatalf("unique root metadata index=%q want %q", got, want)
 	}
-	if _, ok := uniqueCollectionSecondaryIndexForRootName(meta, "users/index/city"); ok {
+	if _, ok := updateBatchPlanUniqueSecondaryIndex(plan, 2); ok {
 		t.Fatal("non-unique city index reported as unique")
 	}
-	if _, ok := uniqueCollectionSecondaryIndexForRootName(meta, "users/primary"); ok {
+	if _, ok := updateBatchPlanUniqueSecondaryIndex(plan, 0); ok {
 		t.Fatal("primary root reported as unique secondary index")
 	}
+	if idx, ok := updateBatchPlanUniqueSecondaryIndex(plan, 3); !ok || idx.Name != "sku" {
+		t.Fatalf("unique root metadata sku=(%q,%v) want sku,true", idx.Name, ok)
+	}
 	if allocs := testing.AllocsPerRun(1000, func() {
-		_, _ = uniqueCollectionSecondaryIndexForRootName(meta, "users/index/email")
+		_, _ = updateBatchPlanUniqueSecondaryIndex(plan, 1)
 	}); allocs != 0 {
-		t.Fatalf("unique root lookup allocs=%v want zero", allocs)
+		t.Fatalf("unique root metadata allocs=%v want zero", allocs)
 	}
 }
 
