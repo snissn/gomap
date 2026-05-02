@@ -892,6 +892,17 @@ func mergeOrderedRootPublishMetrics(dst *adaptive.Metrics, src adaptive.Metrics)
 	dst.IndexWriteBytes += src.IndexWriteBytes
 	dst.SlabWriteBytes += src.SlabWriteBytes
 	dst.SlabDeadBytes += src.SlabDeadBytes
+	dst.ZipperApplyOps += src.ZipperApplyOps
+	dst.ZipperNodeLoads += src.ZipperNodeLoads
+	dst.ZipperPagerNodeLoads += src.ZipperPagerNodeLoads
+	dst.ZipperLeafLogNodeLoads += src.ZipperLeafLogNodeLoads
+	dst.ZipperLeafMerges += src.ZipperLeafMerges
+	dst.ZipperInternalMerges += src.ZipperInternalMerges
+	dst.ZipperLeafPagesWritten += src.ZipperLeafPagesWritten
+	dst.ZipperPagerLeafPagesWritten += src.ZipperPagerLeafPagesWritten
+	dst.ZipperLeafLogPagesWritten += src.ZipperLeafLogPagesWritten
+	dst.ZipperInternalPagesWritten += src.ZipperInternalPagesWritten
+	dst.ZipperRootSplitLevels += src.ZipperRootSplitLevels
 	if len(src.SlabWriteBytesByFile) != 0 {
 		if dst.SlabWriteBytesByFile == nil {
 			dst.SlabWriteBytesByFile = make(map[uint32]int64, len(src.SlabWriteBytesByFile))
@@ -1056,6 +1067,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 		rootsObserved++
 		retired = append(retired, rootRetired...)
 		mergeOrderedRootPublishMetrics(&merged, metrics)
+		phaseStats.rootApplyMetrics.add(metrics)
 	}
 
 	phaseStart := time.Now()
@@ -1077,6 +1089,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	newSystemRoot = rootID
 	retired = append(retired, rootRetired...)
 	mergeOrderedRootPublishMetrics(&merged, metrics)
+	phaseStats.systemApplyMetrics.add(metrics)
 	vlogRefDelta := refDelta
 	forceRefTrackerRebuild := publishStats.collectionRootDescriptorReachabilityMayChange()
 	if len(ordered) > 0 || forceRefTrackerRebuild {
@@ -1221,6 +1234,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 		rootsObserved++
 		retired = append(retired, rootRetired...)
 		mergeOrderedRootPublishMetrics(&merged, metrics)
+		phaseStats.rootApplyMetrics.add(metrics)
 	}
 
 	phaseStart := time.Now()
@@ -1242,6 +1256,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 	newSystemRoot = rootID
 	retired = append(retired, rootRetired...)
 	mergeOrderedRootPublishMetrics(&merged, metrics)
+	phaseStats.systemApplyMetrics.add(metrics)
 
 	db.mu.RLock()
 	curUserRoot := db.meta.UserRootPageID
@@ -1332,6 +1347,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered []
 		rootsObserved++
 		retired = append(retired, rootRetired...)
 		mergeOrderedRootPublishMetrics(&merged, metrics)
+		phaseStats.rootApplyMetrics.add(metrics)
 	}
 
 	phaseStart := time.Now()
@@ -1353,6 +1369,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered []
 	newSystemRoot = rootID
 	retired = append(retired, rootRetired...)
 	mergeOrderedRootPublishMetrics(&merged, metrics)
+	phaseStats.systemApplyMetrics.add(metrics)
 
 	db.mu.RLock()
 	curUserRoot := db.meta.UserRootPageID
