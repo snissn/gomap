@@ -887,6 +887,50 @@ func (b *Builder) addInternalLeafLogChild(key []byte, ref page.LogRecordRef) err
 	return nil
 }
 
+// AddInternalLeafLogChildFromNode appends an already-encoded leaf-log child
+// entry from src. Zipper path-copy rebuilds use this when an internal child is
+// unchanged, avoiding LogRecordRef decode/re-encode work while preserving the
+// encoded on-page representation exactly.
+func (b *Builder) AddInternalLeafLogChildFromNode(src *Node, index uint16) error {
+	if b.pType != page.PageTypeInternal || src == nil || !src.internalLeafLogRefs() {
+		return ErrInvalidType
+	}
+	if b.internalBaseDelta {
+		return ErrInvalidType
+	}
+	if b.count > 0 && !b.internalLeafLogRefs {
+		return ErrInvalidType
+	}
+
+	offset, err := src.getOffset(index)
+	if err != nil {
+		return err
+	}
+	ptr := int(offset)
+	if ptr+internalLeafLogRefHeaderSize > len(src.data) {
+		return ErrCorruptedNode
+	}
+	keyLen := int(binary.LittleEndian.Uint16(src.data[ptr : ptr+2]))
+	entrySize := internalLeafLogRefHeaderSize + keyLen
+	if ptr+entrySize > len(src.data) {
+		return ErrCorruptedNode
+	}
+	required := entrySize + DirectoryEntrySize
+	if b.heapStart-b.dirEnd < required {
+		return ErrNodeFull
+	}
+
+	entryStart := b.heapStart - entrySize
+	copy(b.data[entryStart:entryStart+entrySize], src.data[ptr:ptr+entrySize])
+	b.data[b.dirEnd] = byte(entryStart)
+	b.data[b.dirEnd+1] = byte(entryStart >> 8)
+	b.internalLeafLogRefs = true
+	b.heapStart = entryStart
+	b.dirEnd += DirectoryEntrySize
+	b.count++
+	return nil
+}
+
 func (b *Builder) finalize() {
 	internalBaseDeltaApplied := false
 	if b.pType == page.PageTypeInternal && b.internalBaseDelta {
