@@ -1934,7 +1934,7 @@ func parseCreateIndexDefinition(doc wire.Document) (collections.IndexDefinition,
 	switch valueType {
 	case collections.IndexValueString, collections.IndexValueBool, collections.IndexValueInt64, collections.IndexValueDouble:
 	default:
-		return collections.IndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes unsupported treedbValueType %q", valueTypeRaw)
+		return collections.IndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes index %q on field %q has unsupported treedbValueType %q; supported values are string, bool, int64, double", name, field, valueTypeRaw)
 	}
 	return collections.IndexDefinition{
 		Name:      name,

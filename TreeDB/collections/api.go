@@ -6288,7 +6288,16 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 	if empty {
 		return false, true, nil
 	}
-	bufferedTable, err := bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
+	exactPrefix, exactPrefixScan, err := exactIndexRangePrefix(idx.ValueType, opts)
+	if err != nil {
+		return false, true, err
+	}
+	var bufferedTable memtable.Table
+	if exactPrefixScan {
+		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, idx.Unique, exactPrefix, opts.Limit)
+	} else {
+		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
+	}
 	if err != nil {
 		return false, true, err
 	}
@@ -6318,6 +6327,24 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 	}
 	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, opts.Limit, fn)
 	return truncated, true, err
+}
+
+func exactIndexRangePrefix(valueType IndexValueType, opts IndexRangeOptions) ([]byte, bool, error) {
+	if opts.Lower.Unbounded || opts.Upper.Unbounded || !opts.Lower.Inclusive || !opts.Upper.Inclusive {
+		return nil, false, nil
+	}
+	lower, err := encodeIndexScalar(valueType, opts.Lower.Value)
+	if err != nil {
+		return nil, false, err
+	}
+	upper, err := encodeIndexScalar(valueType, opts.Upper.Value)
+	if err != nil {
+		return nil, false, err
+	}
+	if !bytes.Equal(lower, upper) {
+		return nil, false, nil
+	}
+	return lower, true, nil
 }
 
 // bufferedIndexTableLocked materializes buffered entries for one secondary

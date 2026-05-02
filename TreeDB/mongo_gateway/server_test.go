@@ -1850,6 +1850,23 @@ func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
 		}
 	}
 
+	unsupportedValueType := serveCommand(t, server, 2332, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+			{Key: "treedbValueType", Value: "decimal"},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, unsupportedValueType, "BadValue")
+	errmsg, ok = bson.Raw(unsupportedValueType).Lookup("errmsg").StringValueOK()
+	for _, want := range []string{"email_1", "email", "decimal", "string", "bool", "int64", "double"} {
+		if !ok || !strings.Contains(errmsg, want) {
+			t.Fatalf("unsupported value type errmsg=%q ok=%v want %q", errmsg, ok, want)
+		}
+	}
+
 	invalidListCollectionsDB := serveCommand(t, server, 234, bson.D{
 		{Key: "listCollections", Value: int32(1)},
 		{Key: "$db", Value: "bad/name"},
