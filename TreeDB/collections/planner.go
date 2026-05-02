@@ -643,6 +643,10 @@ func setCollectionRunValue(table memtable.Table, key, value []byte) {
 	table.SetEntrySteal(key, value, page.ValuePtr{}, node.FlagInline)
 }
 
+func setCollectionRunCopiedValue(table memtable.Table, key, value []byte) {
+	table.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
+}
+
 func applyCollectionRunEntries(table memtable.Table, count int, emit func(i int) (key, value []byte, err error)) error {
 	if count <= 0 {
 		return nil
@@ -1422,27 +1426,45 @@ func estimateBatchIndexEncodeArenaBytes(items []insertBatchItem, runtimeCount in
 	if len(items) == 0 || runtimeCount <= 0 {
 		return 0
 	}
+	return estimateIndexEncodeArenaBytesForCount(len(items), runtimeCount)
+}
+
+func estimateIndexEncodeArenaBytesForCount(count, runtimeCount int) int {
+	if count == 0 || runtimeCount <= 0 {
+		return 0
+	}
 	perDocument := estimateDocumentIndexEncodeArenaBytes(runtimeCount)
 	if perDocument == 0 {
 		return 0
 	}
-	if len(items) > indexEncodeArenaMaxInitialBytes/perDocument {
+	if count > indexEncodeArenaMaxInitialBytes/perDocument {
 		return indexEncodeArenaMaxInitialBytes
 	}
-	return len(items) * perDocument
+	return count * perDocument
 }
 
 func estimateBatchIndexValueRefCount(items []insertBatchItem, runtimeCount int) int {
 	if len(items) == 0 || runtimeCount <= 0 {
 		return 0
 	}
+	return estimateIndexValueRefCountForCount(len(items), runtimeCount)
+}
+
+func estimateIndexValueRefCountForCount(count, runtimeCount int) int {
+	if count == 0 || runtimeCount <= 0 {
+		return 0
+	}
 	if runtimeCount > indexEncodeArenaMaxInitialValueRefs {
 		return indexEncodeArenaMaxInitialValueRefs
 	}
-	if len(items) > indexEncodeArenaMaxInitialValueRefs/runtimeCount {
+	if count > indexEncodeArenaMaxInitialValueRefs/runtimeCount {
 		return indexEncodeArenaMaxInitialValueRefs
 	}
-	return len(items) * runtimeCount
+	return count * runtimeCount
+}
+
+func estimateIndexStateSlotCountForCount(count, runtimeCount int) int {
+	return estimateIndexValueRefCountForCount(count, runtimeCount)
 }
 
 func documentIndexStateFromOrdered(state orderedDocumentIndexState, runtimes []indexRuntime) documentIndexState {

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +22,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
+	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
 var (
@@ -454,7 +457,7 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	if err := backend.Checkpoint(); err != nil {
 		b.Fatalf("checkpoint preload: %v", err)
 	}
-	updateDocs := make([]bson.Raw, profileBenchUpdateDocPoolSize)
+	updateDocs := make([]profileBenchSetUpdate, profileBenchUpdateDocPoolSize)
 	for i := range updateDocs {
 		updateRaw, err := bson.Marshal(bson.D{{Key: "$set", Value: bson.D{
 			{Key: "concurrent_updated", Value: true},
@@ -463,7 +466,11 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 		if err != nil {
 			b.Fatalf("marshal update document: %v", err)
 		}
-		updateDocs[i] = bson.Raw(updateRaw)
+		parsed, err := parseProfileBenchSetUpdate(bson.Raw(updateRaw))
+		if err != nil {
+			b.Fatalf("parse update document: %v", err)
+		}
+		updateDocs[i] = parsed
 	}
 	ids := make([][]byte, documentCount)
 	for i := range ids {
@@ -472,32 +479,24 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	idStride := profileBenchUpdateIDStride(documentCount)
 
 	writers := profileBenchConcurrentWriters(b)
+	warmupOps := documentCount
+	if warmupOps > 100000 {
+		warmupOps = 100000
+	}
+	if err := runProfileBenchDirectCollectionConcurrentUpdates(context.Background(), writers, warmupOps, documentCount, idStride, ids, updateDocs, collection); err != nil {
+		b.Fatalf("warm up concurrent updates: %v", err)
+	}
+	if err := manager.FlushAll(); err != nil {
+		b.Fatalf("flush warm up: %v", err)
+	}
+	if err := backend.Checkpoint(); err != nil {
+		b.Fatalf("checkpoint warm up: %v", err)
+	}
+
 	b.ReportAllocs()
 	b.ResetTimer()
 	started := time.Now()
-	err = runConcurrentOperations(context.Background(), writers, b.N, func(op int) error {
-		id := ids[(op*idStride)%documentCount]
-		updateRaw := updateDocs[op%len(updateDocs)]
-		matched, _, err := collection.Update(id, func(stored []byte) ([]byte, bool, error) {
-			raw := bson.Raw(stored)
-			originalID := raw.Lookup("_id")
-			updated, shouldWrite, err := profileBenchApplySetUpdate(raw, updateRaw)
-			if err != nil {
-				return nil, false, err
-			}
-			if !updated.Lookup("_id").Equal(originalID) {
-				return nil, false, errUpdatedPrimaryKey
-			}
-			return []byte(updated), shouldWrite, nil
-		})
-		if err != nil {
-			return err
-		}
-		if !matched {
-			return errProfileBenchUpdateMiss
-		}
-		return nil
-	})
+	err = runProfileBenchDirectCollectionConcurrentUpdates(context.Background(), writers, b.N, documentCount, idStride, ids, updateDocs, collection)
 	timedElapsed := time.Since(started)
 	b.StopTimer()
 	if err != nil {
@@ -505,6 +504,92 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	}
 	b.ReportMetric(float64(writers), "writers")
 	reportDocsPerSecond(b, b.N, timedElapsed)
+}
+
+func runProfileBenchDirectCollectionConcurrentUpdates(
+	ctx context.Context,
+	workers, operations, documentCount, idStride int,
+	ids [][]byte,
+	updateDocs []profileBenchSetUpdate,
+	collection *collections.Collection,
+) error {
+	if workers <= 0 || operations <= 0 {
+		return nil
+	}
+	if workers > operations {
+		workers = operations
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	var errOnce sync.Once
+	var firstErr error
+	recordErr := func(err error) {
+		if err == nil {
+			return
+		}
+		errOnce.Do(func() {
+			firstErr = err
+			cancel()
+		})
+	}
+
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			updateScratch := make([]byte, 0, 512)
+			for {
+				if err := runCtx.Err(); err != nil {
+					return
+				}
+				op := int(next.Add(1) - 1)
+				if op >= operations {
+					return
+				}
+				id := ids[(op*idStride)%documentCount]
+				updateDoc := updateDocs[op%len(updateDocs)]
+				matched, _, err := collection.Update(id, func(stored []byte) ([]byte, bool, error) {
+					raw := bson.Raw(stored)
+					originalID := raw.Lookup("_id")
+					updated, nextScratch, shouldWrite, err := profileBenchApplyParsedSetUpdateTo(updateScratch[:0], raw, updateDoc)
+					updateScratch = nextScratch
+					if err != nil {
+						return nil, false, err
+					}
+					if !updated.Lookup("_id").Equal(originalID) {
+						return nil, false, errUpdatedPrimaryKey
+					}
+					return []byte(updated), shouldWrite, nil
+				})
+				if err != nil {
+					recordErr(err)
+					return
+				}
+				if !matched {
+					recordErr(errProfileBenchUpdateMiss)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return firstErr
+	}
+	return ctx.Err()
+}
+
+type profileBenchSetField struct {
+	key      string
+	keyBytes []byte
+	value    bson.RawValue
+}
+
+type profileBenchSetUpdate struct {
+	fields []profileBenchSetField
 }
 
 func profileBenchApplySetUpdate(doc bson.Raw, update bson.Raw) (bson.Raw, bool, error) {
@@ -557,38 +642,149 @@ func profileBenchApplySetUpdate(doc bson.Raw, update bson.Raw) (bson.Raw, bool, 
 		}
 		sets[key] = elem.Value()
 	}
-
-	elements, err := doc.Elements()
-	if err != nil {
-		return nil, false, err
+	parsed := profileBenchSetUpdate{fields: make([]profileBenchSetField, 0, len(setOrder))}
+	for _, key := range setOrder {
+		parsed.fields = append(parsed.fields, profileBenchSetField{
+			key:      key,
+			keyBytes: []byte(key),
+			value:    sets[key],
+		})
 	}
-	out := make(bson.D, 0, len(elements)+len(sets))
-	used := make(map[string]struct{}, len(sets))
-	// Force the benchmark down the write/index update path for any non-empty $set.
-	forceWrite := true
-	for _, elem := range elements {
+	return profileBenchApplyParsedSetUpdate(doc, parsed)
+}
+
+func parseProfileBenchSetUpdate(update bson.Raw) (profileBenchSetUpdate, error) {
+	updateElements, err := update.Elements()
+	if err != nil {
+		return profileBenchSetUpdate{}, err
+	}
+	if len(updateElements) != 1 {
+		return profileBenchSetUpdate{}, errors.New("profile benchmark update supports exactly one $set operator")
+	}
+	operator, err := updateElements[0].KeyErr()
+	if err != nil {
+		return profileBenchSetUpdate{}, err
+	}
+	if operator != "$set" {
+		return profileBenchSetUpdate{}, errors.New("profile benchmark update supports $set only")
+	}
+	setDoc, ok := updateElements[0].Value().DocumentOK()
+	if !ok {
+		return profileBenchSetUpdate{}, errors.New("profile benchmark $set value must be a document")
+	}
+	setElements, err := setDoc.Elements()
+	if err != nil {
+		return profileBenchSetUpdate{}, err
+	}
+	sets := make(map[string]bson.RawValue, len(setElements))
+	setOrder := make([]string, 0, len(setElements))
+	for _, elem := range setElements {
 		key, err := elem.KeyErr()
 		if err != nil {
-			return nil, false, err
+			return profileBenchSetUpdate{}, err
 		}
-		value := elem.Value()
-		if replacement, ok := sets[key]; ok {
-			value = replacement
-			used[key] = struct{}{}
+		if err := validateProfileBenchSetKey(key); err != nil {
+			return profileBenchSetUpdate{}, err
 		}
-		out = append(out, bson.E{Key: key, Value: value})
+		if _, exists := sets[key]; !exists {
+			setOrder = append(setOrder, key)
+		}
+		sets[key] = elem.Value()
 	}
+	parsed := profileBenchSetUpdate{fields: make([]profileBenchSetField, 0, len(setOrder))}
 	for _, key := range setOrder {
-		if _, ok := used[key]; ok {
+		parsed.fields = append(parsed.fields, profileBenchSetField{
+			key:      key,
+			keyBytes: []byte(key),
+			value:    sets[key],
+		})
+	}
+	return parsed, nil
+}
+
+func validateProfileBenchSetKey(key string) error {
+	if key == "" {
+		return errors.New("profile benchmark $set field name cannot be empty")
+	}
+	if key == "_id" {
+		return errors.New("profile benchmark update cannot modify _id")
+	}
+	if strings.Contains(key, ".") {
+		return errors.New("profile benchmark $set currently supports top-level fields only")
+	}
+	if strings.HasPrefix(key, "$") {
+		return errors.New("profile benchmark $set field names cannot start with $")
+	}
+	return nil
+}
+
+func profileBenchApplyParsedSetUpdate(doc bson.Raw, update profileBenchSetUpdate) (bson.Raw, bool, error) {
+	raw, _, changed, err := profileBenchApplyParsedSetUpdateTo(nil, doc, update)
+	return raw, changed, err
+}
+
+func profileBenchApplyParsedSetUpdateTo(dst []byte, doc bson.Raw, update profileBenchSetUpdate) (bson.Raw, []byte, bool, error) {
+	if len(update.fields) == 0 {
+		return doc, dst, false, nil
+	}
+	length, rem, ok := bsoncore.ReadLength(doc)
+	if !ok {
+		return nil, dst, false, bsoncore.NewInsufficientBytesError(doc, rem)
+	}
+	length -= 4
+	out := dst[:0]
+	if cap(out) < len(doc)+64 {
+		out = make([]byte, 0, len(doc)+64)
+	}
+	idx, out := bsoncore.AppendDocumentStart(out)
+	var usedInline [8]bool
+	used := usedInline[:]
+	if len(update.fields) > len(usedInline) {
+		used = make([]bool, len(update.fields))
+	} else {
+		used = used[:len(update.fields)]
+	}
+	var elem bsoncore.Element
+	for length > 1 {
+		var elemOK bool
+		elem, rem, elemOK = bsoncore.ReadElement(rem)
+		length -= int32(len(elem))
+		if !elemOK {
+			return nil, out, false, bsoncore.NewInsufficientBytesError(doc, rem)
+		}
+		replacement := -1
+		keyBytes := elem.KeyBytes()
+		for i := range update.fields {
+			if bytes.Equal(keyBytes, update.fields[i].keyBytes) {
+				replacement = i
+				break
+			}
+		}
+		if replacement >= 0 {
+			field := update.fields[replacement]
+			out = bsoncore.AppendValueElement(out, field.key, bsoncore.Value{
+				Type: bsoncore.Type(field.value.Type),
+				Data: field.value.Value,
+			})
+			used[replacement] = true
 			continue
 		}
-		out = append(out, bson.E{Key: key, Value: sets[key]})
+		out = append(out, elem...)
 	}
-	raw, err := bson.Marshal(out)
+	for i, field := range update.fields {
+		if used[i] {
+			continue
+		}
+		out = bsoncore.AppendValueElement(out, field.key, bsoncore.Value{
+			Type: bsoncore.Type(field.value.Type),
+			Data: field.value.Value,
+		})
+	}
+	raw, err := bsoncore.AppendDocumentEnd(out, idx)
 	if err != nil {
-		return nil, false, err
+		return nil, out, false, err
 	}
-	return bson.Raw(raw), forceWrite, nil
+	return bson.Raw(raw), raw, true, nil
 }
 
 func TestProfileBenchApplySetUpdateHappyPath(t *testing.T) {

@@ -1,6 +1,8 @@
 package caching
 
 import (
+	"sync"
+
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -12,6 +14,12 @@ type cachingLeafPageLog struct {
 }
 
 var _ backenddb.LeafPageLog = (*cachingLeafPageLog)(nil)
+
+var compactLeafLogPayloadScratchPool sync.Pool
+
+type compactLeafLogPayloadScratch struct {
+	buf []byte
+}
 
 func newCachingLeafPageLog(db *DB, l *lane) backenddb.LeafPageLog {
 	return &cachingLeafPageLog{db: db, lane: l}
@@ -30,7 +38,9 @@ func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, e
 	if l == nil || l.db == nil || l.lane == nil {
 		return page.LeafLogPtr{}, errWALUnavailable
 	}
-	encodedLeafPage, _, err := valuelog.MaybeCompactLeafLogPayload(leafPage)
+	scratch := getCompactLeafLogPayloadScratch()
+	defer putCompactLeafLogPayloadScratch(scratch)
+	encodedLeafPage, _, err := valuelog.MaybeCompactLeafLogPayloadTo(scratch.buf[:0], leafPage)
 	if err != nil {
 		return page.LeafLogPtr{}, err
 	}
@@ -48,6 +58,27 @@ func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, e
 	}
 	l.db.noteLeafGenerationRecordLength(ptr)
 	return leafPtr, nil
+}
+
+func getCompactLeafLogPayloadScratch() *compactLeafLogPayloadScratch {
+	if v := compactLeafLogPayloadScratchPool.Get(); v != nil {
+		if scratch, ok := v.(*compactLeafLogPayloadScratch); ok && scratch != nil && cap(scratch.buf) >= page.PageSize {
+			scratch.buf = scratch.buf[:0]
+			return scratch
+		}
+	}
+	return &compactLeafLogPayloadScratch{buf: make([]byte, 0, page.PageSize)}
+}
+
+func putCompactLeafLogPayloadScratch(scratch *compactLeafLogPayloadScratch) {
+	if scratch == nil || cap(scratch.buf) < page.PageSize {
+		return
+	}
+	if cap(scratch.buf) > page.PageSize*2 {
+		return
+	}
+	scratch.buf = scratch.buf[:0]
+	compactLeafLogPayloadScratchPool.Put(scratch)
 }
 
 func (l *cachingLeafPageLog) Flush() error {

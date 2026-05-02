@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -26,6 +27,16 @@ func bsonOrderedIndexStateForDocumentWithArena(document []byte, runtimes []index
 	raw := bson.Raw(document)
 	state := encoder.appendState(len(runtimes))
 	for runtimeIdx, runtime := range runtimes {
+		if len(runtime.path) == 1 {
+			value := raw.Lookup(runtime.path[0])
+			if value.IsZero() {
+				continue
+			}
+			if err := appendBSONIndexValueToState(state, runtimeIdx, runtime, value, opts, encoder); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		values, found, fromArray, err := bsonIndexValuesForPath(raw, runtime.path)
 		if err != nil {
 			return nil, err
@@ -36,7 +47,11 @@ func bsonOrderedIndexStateForDocumentWithArena(document []byte, runtimes []index
 		if fromArray && !runtime.def.multiKey && !opts.allowArrayValuesInIndex {
 			return nil, fmt.Errorf("collections: array value not allowed for index")
 		}
-		var encoded [][]byte
+		var encodedInline [8][]byte
+		encoded := encodedInline[:0]
+		if len(values) > len(encodedInline) {
+			encoded = make([][]byte, 0, len(values))
+		}
 		for _, value := range values {
 			var next []byte
 			var ok bool
@@ -59,6 +74,55 @@ func bsonOrderedIndexStateForDocumentWithArena(document []byte, runtimes []index
 		}
 	}
 	return state, nil
+}
+
+func appendBSONIndexValueToState(state orderedDocumentIndexState, runtimeIdx int, runtime indexRuntime, value bson.RawValue, opts collectionOptions, encoder *indexEncodeArena) error {
+	if array, ok := value.ArrayOK(); ok {
+		values, err := array.Values()
+		if err != nil {
+			return err
+		}
+		if !runtime.def.multiKey && !opts.allowArrayValuesInIndex {
+			return fmt.Errorf("collections: array value not allowed for index")
+		}
+		var encodedInline [8][]byte
+		encoded := encodedInline[:0]
+		if len(values) > len(encodedInline) {
+			encoded = make([][]byte, 0, len(values))
+		}
+		for _, item := range values {
+			var next []byte
+			var ok bool
+			var err error
+			encoder.buf, next, ok, err = appendBSONIndexScalar(encoder.buf, runtime.def.valueType, item)
+			if err != nil {
+				return err
+			}
+			if ok {
+				encoded = append(encoded, next)
+			}
+		}
+		switch len(encoded) {
+		case 0:
+			return nil
+		case 1:
+			state[runtimeIdx] = encoder.appendSingleValueRef(encoded[0])
+		default:
+			state[runtimeIdx] = normalizeOwnedEncodedIndexValues(encoded)
+		}
+		return nil
+	}
+	var next []byte
+	var ok bool
+	var err error
+	encoder.buf, next, ok, err = appendBSONIndexScalar(encoder.buf, runtime.def.valueType, value)
+	if err != nil {
+		return err
+	}
+	if ok {
+		state[runtimeIdx] = encoder.appendSingleValueRef(next)
+	}
+	return nil
 }
 
 func bsonIndexValuesForPath(raw bson.Raw, path []string) ([]bson.RawValue, bool, bool, error) {
@@ -125,11 +189,11 @@ func appendBSONIndexScalar(dst []byte, valueType IndexValueType, value bson.RawV
 	start := len(dst)
 	switch valueType {
 	case IndexValueString:
-		out, ok := value.StringValueOK()
+		out, ok := bsonRawStringBytes(value)
 		if !ok {
 			return dst, nil, false, fmt.Errorf("collections: indexed BSON value for type %q must be string, got %s", valueType, value.Type)
 		}
-		dst = appendIndexStringComponent(dst, []byte(out))
+		dst = appendIndexStringComponent(dst, out)
 	case IndexValueBool:
 		out, ok := value.BooleanOK()
 		if !ok {
@@ -184,4 +248,23 @@ func appendBSONIndexScalar(dst []byte, valueType IndexValueType, value bson.RawV
 		return dst, nil, false, fmt.Errorf("collections: unsupported index value type %q", valueType)
 	}
 	return dst, dst[start:len(dst):len(dst)], true, nil
+}
+
+func bsonRawStringBytes(value bson.RawValue) ([]byte, bool) {
+	if value.Type != bson.TypeString {
+		return nil, false
+	}
+	if len(value.Value) < 5 {
+		return nil, false
+	}
+	const lengthPrefixBytes = 4
+	n32 := binary.LittleEndian.Uint32(value.Value[:lengthPrefixBytes])
+	if n32 == 0 || n32 > uint32(len(value.Value)-lengthPrefixBytes) {
+		return nil, false
+	}
+	n := int(n32)
+	if value.Value[lengthPrefixBytes+n-1] != 0 {
+		return nil, false
+	}
+	return value.Value[lengthPrefixBytes : lengthPrefixBytes+n-1], true
 }

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"runtime"
 	"sort"
 	"strings"
@@ -85,6 +84,8 @@ const (
 	updateBatchModeNoSecondaryUniqueIndexes
 	updateBatchModeNoSecondaryUniqueIndexChanges
 )
+
+const bsonIDSnapshotInlineValueLen = 64
 
 // UpdateBatchResult reports the outcome for one UpdateBatch item.
 type UpdateBatchResult struct {
@@ -4697,7 +4698,7 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	if combiner := c.updateCombiner(); combiner != nil {
 		return combiner.update(c, documentID, update)
 	}
-	return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
+	return c.updateDirect(documentID, update)
 }
 
 func validateCollectionUpdateInput(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) error {
@@ -4784,7 +4785,10 @@ func (c *Collection) updateBatch(items []UpdateBatchItem, mode updateBatchMode) 
 		return nil, false, err
 	}
 	items = cloneUpdateBatchItems(items)
+	return c.updateBatchOwnedItems(items, mode)
+}
 
+func (c *Collection) updateBatchOwnedItems(items []UpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, bool, error) {
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
 		results, err := c.updateBatchOnce(items, mode)
@@ -4849,6 +4853,10 @@ type collectionUpdateCombiner struct {
 	running  atomic.Bool
 	mu       sync.RWMutex
 	stopped  bool
+
+	batchScratch []collectionUpdateCombineRequest
+	itemsScratch []UpdateBatchItem
+	waiters      sync.Pool
 }
 
 type collectionUpdateCombineRequest struct {
@@ -4863,6 +4871,10 @@ type collectionUpdateCombineResult struct {
 	matched  bool
 	modified bool
 	err      error
+}
+
+type collectionUpdateCombineWaiter struct {
+	ch chan collectionUpdateCombineResult
 }
 
 func (c *Collection) updateCombiner() *collectionUpdateCombiner {
@@ -4935,18 +4947,19 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 		if err := c.ensureWriteDomainOpen(); err != nil {
 			return false, false, err
 		}
-		return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
+		return c.updateDirect(documentID, update)
 	}
-	done := make(chan collectionUpdateCombineResult, 1)
+	waiter := combiner.getWaiter()
 	clonedDocumentID := bytes.Clone(documentID)
 	req := collectionUpdateCombineRequest{
 		collection:   c,
 		documentID:   clonedDocumentID,
 		documentHash: xxhash.Sum64(clonedDocumentID),
 		update:       update,
-		done:         done,
+		done:         waiter.ch,
 	}
 	if !combiner.enqueue(req) {
+		combiner.putWaiter(waiter)
 		// Combining is a best-effort throughput optimization. Saturated or stopped
 		// combiners fall back to the direct path so updates still make progress.
 		if combiner.isStopped() {
@@ -4955,30 +4968,57 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 		if err := c.ensureWriteDomainOpen(); err != nil {
 			return false, false, err
 		}
-		return c.updateDirect(documentID, recoverCollectionUpdateCallback(update))
+		return c.updateDirect(documentID, update)
 	}
-	result := combiner.waitForUpdateResult(done)
+	result, reusableWaiter := combiner.waitForUpdateResult(waiter.ch)
+	if reusableWaiter {
+		combiner.putWaiter(waiter)
+	}
 	return result.matched, result.modified, result.err
 }
 
-func (combiner *collectionUpdateCombiner) waitForUpdateResult(done chan collectionUpdateCombineResult) collectionUpdateCombineResult {
+func (combiner *collectionUpdateCombiner) getWaiter() *collectionUpdateCombineWaiter {
+	if combiner == nil {
+		return &collectionUpdateCombineWaiter{ch: make(chan collectionUpdateCombineResult, 1)}
+	}
+	if v := combiner.waiters.Get(); v != nil {
+		waiter, _ := v.(*collectionUpdateCombineWaiter)
+		if waiter != nil && waiter.ch != nil {
+			return waiter
+		}
+	}
+	return &collectionUpdateCombineWaiter{ch: make(chan collectionUpdateCombineResult, 1)}
+}
+
+func (combiner *collectionUpdateCombiner) putWaiter(waiter *collectionUpdateCombineWaiter) {
+	if combiner == nil || waiter == nil || waiter.ch == nil {
+		return
+	}
+	select {
+	case <-waiter.ch:
+	default:
+	}
+	combiner.waiters.Put(waiter)
+}
+
+func (combiner *collectionUpdateCombiner) waitForUpdateResult(done chan collectionUpdateCombineResult) (collectionUpdateCombineResult, bool) {
 	select {
 	case result := <-done:
-		return result
+		return result, true
 	default:
 	}
 	if combiner == nil || combiner.done == nil {
-		return <-done
+		return <-done, true
 	}
 	select {
 	case result := <-done:
-		return result
+		return result, true
 	case <-combiner.done:
 		select {
 		case result := <-done:
-			return result
+			return result, true
 		default:
-			return collectionUpdateCombineResult{err: errUpdateCombinerStopped}
+			return collectionUpdateCombineResult{err: errUpdateCombinerStopped}, false
 		}
 	}
 }
@@ -5124,22 +5164,32 @@ func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionU
 	if batchCap < 1 {
 		batchCap = 1
 	}
-	batch := make([]collectionUpdateCombineRequest, 0, batchCap)
+	if cap(combiner.batchScratch) < batchCap {
+		combiner.batchScratch = make([]collectionUpdateCombineRequest, 0, batchCap)
+	}
+	clear(combiner.batchScratch)
+	batch := combiner.batchScratch[:0]
 	batch = append(batch, first)
 	for len(batch) < batchCap {
 		select {
 		case req, ok := <-combiner.requests:
 			if !ok {
 				combiner.runBatch(batch)
+				clear(batch)
+				combiner.batchScratch = batch[:0]
 				return
 			}
 			batch = append(batch, req)
 		default:
 			combiner.runBatch(batch)
+			clear(batch)
+			combiner.batchScratch = batch[:0]
 			return
 		}
 	}
 	combiner.runBatch(batch)
+	clear(batch)
+	combiner.batchScratch = batch[:0]
 }
 
 func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombineRequest) {
@@ -5165,14 +5215,20 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 		}
 		return
 	}
-	items := make([]UpdateBatchItem, len(batch))
+	if cap(combiner.itemsScratch) < len(batch) {
+		combiner.itemsScratch = make([]UpdateBatchItem, len(batch))
+	}
+	clear(combiner.itemsScratch)
+	items := combiner.itemsScratch[:len(batch)]
 	for i, req := range batch {
 		items[i] = UpdateBatchItem{
 			DocumentID: req.documentID,
-			Update:     recoverCollectionUpdateCallback(req.update),
+			Update:     req.update,
 		}
 	}
-	results, batched, err := batch[0].collection.UpdateBatchIfNoSecondaryUniqueIndexChanges(items)
+	results, batched, err := batch[0].collection.updateBatchOwnedItems(items, updateBatchModeNoSecondaryUniqueIndexChanges)
+	clear(items)
+	combiner.itemsScratch = items[:0]
 	if !batched && err == nil {
 		if combiner.domain != nil {
 			combiner.domain.observeUpdateCombineBatch(len(batch), true)
@@ -5235,7 +5291,7 @@ func runUpdateCombineDirect(req collectionUpdateCombineRequest) collectionUpdate
 	if err := validateCollectionUpdateCombineRequest(req); err != nil {
 		return collectionUpdateCombineResult{err: err}
 	}
-	matched, modified, err := req.collection.updateDirect(req.documentID, recoverCollectionUpdateCallback(req.update))
+	matched, modified, err := req.collection.updateDirect(req.documentID, req.update)
 	return collectionUpdateCombineResult{matched: matched, modified: modified, err: err}
 }
 
@@ -5261,15 +5317,19 @@ func collectionUpdatePanicError(where string, recovered any) error {
 
 func recoverCollectionUpdateCallback(update func(current []byte) (replacement []byte, changed bool, err error)) func(current []byte) (replacement []byte, changed bool, err error) {
 	return func(current []byte) (replacement []byte, changed bool, err error) {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				replacement = nil
-				changed = false
-				err = collectionUpdatePanicError("callback", recovered)
-			}
-		}()
-		return update(current)
+		return callCollectionUpdateCallback(update, current)
 	}
+}
+
+func callCollectionUpdateCallback(update func(current []byte) (replacement []byte, changed bool, err error), current []byte) (replacement []byte, changed bool, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			replacement = nil
+			changed = false
+			err = collectionUpdatePanicError("callback", recovered)
+		}
+	}()
+	return update(current)
 }
 
 func (domain *collectionWriteDomain) updateCombineIdleTTL() time.Duration {
@@ -5318,19 +5378,21 @@ func collectionUpdateCombineHasDuplicateIDs(batch []collectionUpdateCombineReque
 	if len(batch) < 2 {
 		return false
 	}
-	seen := make(map[uint64][][]byte, len(batch))
-	for _, req := range batch {
+	for i, req := range batch {
 		hash := req.documentHash
 		if hash == 0 && len(req.documentID) > 0 {
 			hash = xxhash.Sum64(req.documentID)
 		}
-		candidates := seen[hash]
-		for _, candidate := range candidates {
-			if bytes.Equal(candidate, req.documentID) {
+		for j := 0; j < i; j++ {
+			prev := batch[j]
+			prevHash := prev.documentHash
+			if prevHash == 0 && len(prev.documentID) > 0 {
+				prevHash = xxhash.Sum64(prev.documentID)
+			}
+			if prevHash == hash && bytes.Equal(prev.documentID, req.documentID) {
 				return true
 			}
 		}
-		seen[hash] = append(candidates, req.documentID)
 	}
 	return false
 }
@@ -5362,6 +5424,70 @@ func validateBSONReplacementPreservesID(current, replacement []byte, opts collec
 		return nil
 	}
 	if currentID.IsZero() || replacementID.IsZero() || !currentID.Equal(replacementID) {
+		return errors.New("collections: update replacement cannot modify _id")
+	}
+	return nil
+}
+
+type bsonIDSnapshot struct {
+	typ       bson.Type
+	value     []byte
+	inline    [bsonIDSnapshotInlineValueLen]byte
+	inlineLen int
+	present   bool
+}
+
+func captureBSONIDSnapshot(document []byte, opts collectionOptions) (bsonIDSnapshot, error) {
+	if normalizedDocumentFormat(opts.documentFormat) != DocumentFormatBSON {
+		return bsonIDSnapshot{}, nil
+	}
+	raw := bson.Raw(document)
+	if err := raw.Validate(); err != nil {
+		return bsonIDSnapshot{}, fmt.Errorf("collections: current BSON document: %w", err)
+	}
+	id := raw.Lookup("_id")
+	if id.IsZero() {
+		return bsonIDSnapshot{}, nil
+	}
+	snapshot := bsonIDSnapshot{typ: id.Type, present: true}
+	if len(id.Value) <= len(snapshot.inline) {
+		copy(snapshot.inline[:], id.Value)
+		snapshot.inlineLen = len(id.Value)
+	} else {
+		snapshot.value = bytes.Clone(id.Value)
+	}
+	return snapshot, nil
+}
+
+func (s bsonIDSnapshot) isZero() bool {
+	return !s.present
+}
+
+func (s bsonIDSnapshot) equalRawValue(value bson.RawValue) bool {
+	if !s.present || value.IsZero() || s.typ != value.Type {
+		return false
+	}
+	if s.value != nil {
+		return bytes.Equal(s.value, value.Value)
+	}
+	return bytes.Equal(s.inline[:s.inlineLen], value.Value)
+}
+
+func validateBSONReplacementPreservesIDSnapshot(currentID bsonIDSnapshot, replacement []byte, opts collectionOptions) error {
+	if normalizedDocumentFormat(opts.documentFormat) != DocumentFormatBSON {
+		return nil
+	}
+	replacementRaw := bson.Raw(replacement)
+	if err := replacementRaw.Validate(); err != nil {
+		return fmt.Errorf("collections: replacement BSON document: %w", err)
+	}
+	replacementID := replacementRaw.Lookup("_id")
+	currentMissing := currentID.isZero()
+	replacementMissing := replacementID.IsZero()
+	if currentMissing && replacementMissing {
+		return nil
+	}
+	if currentMissing || replacementMissing || !currentID.equalRawValue(replacementID) {
 		return errors.New("collections: update replacement cannot modify _id")
 	}
 	return nil
@@ -5423,7 +5549,7 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		_ = snap.Close()
 		return false, false, nil
 	}
-	entry, err := snap.GetEntryAtRoot(primaryRoot, documentID)
+	currentValue, err := snap.GetAppendAtRoot(primaryRoot, documentID, nil)
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		_ = snap.Close()
 		return false, false, nil
@@ -5433,7 +5559,31 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		return false, false, err
 	}
 
-	document, changed, err := update(bytes.Clone(entry.Value))
+	runtimes, err := (insertBatchPlanner{
+		collection: c.meta.Name,
+		indexes:    plannerIndexes(c.meta.Indexes),
+	}).indexRuntimes()
+	if err != nil {
+		_ = snap.Close()
+		return false, false, err
+	}
+	currentID, err := captureBSONIDSnapshot(currentValue, plannerOptions)
+	if err != nil {
+		_ = snap.Close()
+		return false, false, err
+	}
+	var oldState documentIndexState
+	var newState documentIndexState
+	indexStateChanged := false
+	if len(runtimes) > 0 {
+		oldState, err = indexStateForDocument(currentValue, runtimes, plannerOptions)
+		if err != nil {
+			_ = snap.Close()
+			return false, false, err
+		}
+	}
+
+	document, changed, err := callCollectionUpdateCallback(update, currentValue)
 	if err != nil {
 		_ = snap.Close()
 		return false, false, err
@@ -5441,6 +5591,10 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	if !changed {
 		_ = snap.Close()
 		return true, false, nil
+	}
+	if err := validateBSONReplacementPreservesIDSnapshot(currentID, document, plannerOptions); err != nil {
+		_ = snap.Close()
+		return false, false, err
 	}
 	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments([][]byte{document}, plannerOptions)
 	if err != nil {
@@ -5456,23 +5610,7 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		plannerOptions.templateResolver = templateResolver
 	}
 
-	runtimes, err := (insertBatchPlanner{
-		collection: c.meta.Name,
-		indexes:    plannerIndexes(c.meta.Indexes),
-	}).indexRuntimes()
-	if err != nil {
-		_ = snap.Close()
-		return false, false, err
-	}
-	var oldState documentIndexState
-	var newState documentIndexState
-	indexStateChanged := false
 	if len(runtimes) > 0 {
-		oldState, err = loadDeleteIndexState(snap, catalog, documentID, entry.Value, runtimes, plannerOptions)
-		if err != nil {
-			_ = snap.Close()
-			return false, false, err
-		}
 		newState, err = indexStateForDocument(document, runtimes, plannerOptions)
 		if err != nil {
 			_ = snap.Close()
@@ -5619,8 +5757,8 @@ type preparedBatchUpdate struct {
 	itemIndex         int
 	documentID        []byte
 	document          []byte
-	oldState          documentIndexState
-	newState          documentIndexState
+	oldState          orderedDocumentIndexState
+	newState          orderedDocumentIndexState
 	indexStateChanged bool
 }
 
@@ -5640,6 +5778,179 @@ type updateBatchPlan struct {
 	bufferedBase                bool
 	bufferedReadGeneration      uint64
 	bufferedReadBlocked         bool
+	scratch                     *updateBatchPlanScratch
+}
+
+var updateBatchPlanPool sync.Pool
+
+func newUpdateBatchPlan() *updateBatchPlan {
+	if v := updateBatchPlanPool.Get(); v != nil {
+		if plan, ok := v.(*updateBatchPlan); ok && plan != nil {
+			return plan
+		}
+	}
+	return &updateBatchPlan{}
+}
+
+type updateBatchPlanScratch struct {
+	changed          []preparedBatchUpdate
+	changedDocuments [][]byte
+	documentArena    []byte
+	stateArena       indexEncodeArena
+	rootNames        []string
+	baseRootIDs      map[string]uint64
+	policies         []backenddb.OrderedRootStoragePolicy
+	deltaTables      []memtable.Table
+}
+
+var updateBatchPlanScratchPool sync.Pool
+
+const (
+	updateBatchPlanScratchMaxChangedCap           = 1 << 15
+	updateBatchPlanScratchDocumentBytes           = 256
+	updateBatchPlanScratchMaxInitialDocumentArena = 4 << 20
+	updateBatchPlanScratchMaxDocumentArena        = 8 << 20
+	updateBatchPlanScratchMaxRootNameCap          = 64
+	updateBatchPlanScratchMaxStateArenaCap        = 4 << 20
+	updateBatchPlanScratchMaxStateSliceCap        = 1 << 16
+	updateBatchPlanScratchMaxValueRefCap          = 1 << 16
+)
+
+func estimateUpdateBatchPlanDocumentArenaBytes(itemCount int) int {
+	if itemCount <= 0 {
+		return 0
+	}
+	if itemCount > updateBatchPlanScratchMaxInitialDocumentArena/updateBatchPlanScratchDocumentBytes {
+		return updateBatchPlanScratchMaxInitialDocumentArena
+	}
+	return itemCount * updateBatchPlanScratchDocumentBytes
+}
+
+func getUpdateBatchPlanScratch(itemCount, runtimeCount int) *updateBatchPlanScratch {
+	var scratch *updateBatchPlanScratch
+	if v := updateBatchPlanScratchPool.Get(); v != nil {
+		scratch, _ = v.(*updateBatchPlanScratch)
+	}
+	if scratch == nil {
+		scratch = &updateBatchPlanScratch{}
+	}
+	if cap(scratch.changed) < itemCount {
+		scratch.changed = make([]preparedBatchUpdate, 0, itemCount)
+	} else {
+		scratch.changed = scratch.changed[:0]
+	}
+	if cap(scratch.changedDocuments) < itemCount {
+		scratch.changedDocuments = make([][]byte, 0, itemCount)
+	} else {
+		scratch.changedDocuments = scratch.changedDocuments[:0]
+	}
+	documentArenaBytes := estimateUpdateBatchPlanDocumentArenaBytes(itemCount)
+	if cap(scratch.documentArena) < documentArenaBytes {
+		scratch.documentArena = make([]byte, 0, documentArenaBytes)
+	} else {
+		scratch.documentArena = scratch.documentArena[:0]
+	}
+	arenaBytes := estimateIndexEncodeArenaBytesForCount(itemCount*2, runtimeCount)
+	if cap(scratch.stateArena.buf) < arenaBytes {
+		scratch.stateArena.buf = make([]byte, 0, arenaBytes)
+	} else {
+		scratch.stateArena.buf = scratch.stateArena.buf[:0]
+	}
+	valueRefs := estimateIndexValueRefCountForCount(itemCount*2, runtimeCount)
+	if cap(scratch.stateArena.valueRefs) < valueRefs {
+		scratch.stateArena.valueRefs = make([][]byte, 0, valueRefs)
+	} else {
+		scratch.stateArena.valueRefs = scratch.stateArena.valueRefs[:0]
+	}
+	stateSlots := estimateIndexStateSlotCountForCount(itemCount*2, runtimeCount)
+	if cap(scratch.stateArena.states) < stateSlots {
+		scratch.stateArena.states = make([][][]byte, 0, stateSlots)
+	} else {
+		scratch.stateArena.states = scratch.stateArena.states[:0]
+	}
+	rootCap := 2 + runtimeCount
+	if cap(scratch.rootNames) < rootCap || cap(scratch.rootNames) > updateBatchPlanScratchMaxRootNameCap {
+		scratch.rootNames = make([]string, 0, rootCap)
+	} else {
+		scratch.rootNames = scratch.rootNames[:0]
+	}
+	if scratch.baseRootIDs == nil || len(scratch.baseRootIDs) > updateBatchPlanScratchMaxRootNameCap {
+		scratch.baseRootIDs = make(map[string]uint64, rootCap)
+	} else {
+		clear(scratch.baseRootIDs)
+	}
+	if cap(scratch.policies) < rootCap || cap(scratch.policies) > updateBatchPlanScratchMaxRootNameCap {
+		scratch.policies = make([]backenddb.OrderedRootStoragePolicy, 0, rootCap)
+	} else {
+		scratch.policies = scratch.policies[:0]
+	}
+	if cap(scratch.deltaTables) < rootCap || cap(scratch.deltaTables) > updateBatchPlanScratchMaxRootNameCap {
+		scratch.deltaTables = make([]memtable.Table, 0, rootCap)
+	} else {
+		scratch.deltaTables = scratch.deltaTables[:0]
+	}
+	return scratch
+}
+
+func putUpdateBatchPlanScratch(scratch *updateBatchPlanScratch) {
+	if scratch == nil {
+		return
+	}
+	clear(scratch.changed)
+	if cap(scratch.changed) > updateBatchPlanScratchMaxChangedCap {
+		scratch.changed = nil
+	} else {
+		scratch.changed = scratch.changed[:0]
+	}
+	clear(scratch.changedDocuments)
+	if cap(scratch.changedDocuments) > updateBatchPlanScratchMaxChangedCap {
+		scratch.changedDocuments = nil
+	} else {
+		scratch.changedDocuments = scratch.changedDocuments[:0]
+	}
+	if cap(scratch.documentArena) > updateBatchPlanScratchMaxDocumentArena {
+		scratch.documentArena = nil
+	} else {
+		scratch.documentArena = scratch.documentArena[:0]
+	}
+	if cap(scratch.stateArena.buf) > updateBatchPlanScratchMaxStateArenaCap {
+		scratch.stateArena.buf = nil
+	} else {
+		scratch.stateArena.buf = scratch.stateArena.buf[:0]
+	}
+	clear(scratch.stateArena.valueRefs)
+	if cap(scratch.stateArena.valueRefs) > updateBatchPlanScratchMaxValueRefCap {
+		scratch.stateArena.valueRefs = nil
+	} else {
+		scratch.stateArena.valueRefs = scratch.stateArena.valueRefs[:0]
+	}
+	clear(scratch.stateArena.states)
+	if cap(scratch.stateArena.states) > updateBatchPlanScratchMaxStateSliceCap {
+		scratch.stateArena.states = nil
+	} else {
+		scratch.stateArena.states = scratch.stateArena.states[:0]
+	}
+	clear(scratch.rootNames)
+	scratch.rootNames = scratch.rootNames[:0]
+	if len(scratch.baseRootIDs) > updateBatchPlanScratchMaxRootNameCap {
+		scratch.baseRootIDs = nil
+	} else {
+		clear(scratch.baseRootIDs)
+	}
+	clear(scratch.policies)
+	scratch.policies = scratch.policies[:0]
+	clear(scratch.deltaTables)
+	scratch.deltaTables = scratch.deltaTables[:0]
+	updateBatchPlanScratchPool.Put(scratch)
+}
+
+func appendUpdateBatchPlanScratchDocument(scratch *updateBatchPlanScratch, document []byte) []byte {
+	if scratch == nil || len(document) == 0 {
+		return nil
+	}
+	start := len(scratch.documentArena)
+	scratch.documentArena = append(scratch.documentArena, document...)
+	return scratch.documentArena[start:len(scratch.documentArena):len(scratch.documentArena)]
 }
 
 type updateBatchBufferedRead struct {
@@ -5666,10 +5977,13 @@ func (plan *updateBatchPlan) close() {
 	}
 	if plan.snap != nil {
 		_ = plan.snap.Close()
-		plan.snap = nil
 	}
 	resetCollectionTables(plan.deltaTables)
-	plan.deltaTables = nil
+	if plan.scratch != nil {
+		putUpdateBatchPlanScratch(plan.scratch)
+	}
+	*plan = updateBatchPlan{}
+	updateBatchPlanPool.Put(plan)
 }
 
 func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, error) {
@@ -5856,7 +6170,7 @@ func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta 
 	return meta.Options.BufferedIndexedWrites && len(meta.Indexes) > 0
 }
 
-func readUpdateBatchCurrentDocument(snap *backenddb.Snapshot, primaryRoot uint64, itemIndex int, documentID []byte, buffered updateBatchBufferedRead) (updateBatchCurrentDocument, error) {
+func readUpdateBatchCurrentDocument(snap *backenddb.Snapshot, primaryRoot uint64, itemIndex int, documentID []byte, buffered updateBatchBufferedRead, dst []byte) (updateBatchCurrentDocument, error) {
 	if buffered.enabled {
 		if itemIndex >= 0 && itemIndex < len(buffered.primaryEntries) {
 			entry := buffered.primaryEntries[itemIndex]
@@ -5871,14 +6185,14 @@ func readUpdateBatchCurrentDocument(snap *backenddb.Snapshot, primaryRoot uint64
 	if primaryRoot == 0 {
 		return updateBatchCurrentDocument{}, nil
 	}
-	entry, err := snap.GetEntryAtRoot(primaryRoot, documentID)
+	value, err := snap.GetAppendAtRoot(primaryRoot, documentID, dst)
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return updateBatchCurrentDocument{}, nil
 	}
 	if err != nil {
 		return updateBatchCurrentDocument{}, err
 	}
-	return updateBatchCurrentDocument{value: entry.Value, found: true}, nil
+	return updateBatchCurrentDocument{value: value, found: true}, nil
 }
 
 const updateBatchBufferedPrimaryDirectProbeLimit = 1024
@@ -6070,7 +6384,8 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	primaryRoot := catalog.rootID(collectionPrimaryRootName(meta.Name))
 	if primaryRoot == 0 && !bufferedRead.enabled {
 		primaryRootName := collectionPrimaryRootName(meta.Name)
-		return &updateBatchPlan{
+		plan := newUpdateBatchPlan()
+		*plan = updateBatchPlan{
 			results:                results,
 			meta:                   meta,
 			catalog:                catalog,
@@ -6082,7 +6397,8 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			baseRootIDs:            map[string]uint64{primaryRootName: primaryRoot},
 			bufferedReadGeneration: bufferedRead.writeGeneration,
 			bufferedReadBlocked:    bufferedReadBlocked,
-		}, nil
+		}
+		return plan, nil
 	}
 	runtimes, err := (insertBatchPlanner{
 		collection: meta.Name,
@@ -6093,10 +6409,28 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		return nil, err
 	}
 
-	changed := make([]preparedBatchUpdate, 0, len(items))
-	changedDocuments := make([][]byte, 0, len(items))
+	scratch := getUpdateBatchPlanScratch(len(items), len(runtimes))
+	scratchOwnedByPlan := false
+	changed := scratch.changed
+	changedDocuments := scratch.changedDocuments
+	stateArena := &scratch.stateArena
+	rootNames := scratch.rootNames
+	baseRootIDs := scratch.baseRootIDs
+	policies := scratch.policies
+	deltaTables := scratch.deltaTables
+	defer func() {
+		scratch.changed = changed
+		scratch.changedDocuments = changedDocuments
+		scratch.rootNames = rootNames
+		scratch.policies = policies
+		scratch.deltaTables = deltaTables
+		if !scratchOwnedByPlan {
+			putUpdateBatchPlanScratch(scratch)
+		}
+	}()
+	var currentScratch []byte
 	for i, item := range items {
-		current, err := readUpdateBatchCurrentDocument(snap, primaryRoot, i, item.DocumentID, bufferedRead)
+		current, err := readUpdateBatchCurrentDocument(snap, primaryRoot, i, item.DocumentID, bufferedRead, currentScratch[:0])
 		if err != nil {
 			_ = snap.Close()
 			return nil, updateBatchItemError(i, err)
@@ -6105,19 +6439,8 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			continue
 		}
 		results[i].Matched = true
-		document, changedOne, err := item.Update(bytes.Clone(current.value))
+		currentID, err := captureBSONIDSnapshot(current.value, plannerOptions)
 		if err != nil {
-			_ = snap.Close()
-			return nil, updateBatchItemError(i, err)
-		}
-		if !changedOne {
-			continue
-		}
-		if len(document) == 0 {
-			_ = snap.Close()
-			return nil, updateBatchItemError(i, errors.New("changed replacement document cannot be empty"))
-		}
-		if err := validateBSONReplacementPreservesID(current.value, document, plannerOptions); err != nil {
 			_ = snap.Close()
 			return nil, updateBatchItemError(i, err)
 		}
@@ -6126,22 +6449,43 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			documentID: item.DocumentID,
 		}
 		if len(runtimes) > 0 {
-			if current.buffered {
-				prepared.oldState, err = indexStateForDocument(current.value, runtimes, plannerOptions)
-			} else {
-				prepared.oldState, err = loadDeleteIndexState(snap, catalog, item.DocumentID, current.value, runtimes, plannerOptions)
-			}
+			prepared.oldState, err = orderedIndexStateForDocumentWithArena(current.value, runtimes, plannerOptions, stateArena)
 			if err != nil {
 				_ = snap.Close()
 				return nil, updateBatchItemError(i, err)
 			}
 		}
+		document, changedOne, err := callCollectionUpdateCallback(item.Update, current.value)
+		if err != nil {
+			_ = snap.Close()
+			return nil, updateBatchItemError(i, err)
+		}
+		if !changedOne {
+			if !current.buffered {
+				currentScratch = current.value[:0]
+			}
+			continue
+		}
+		if len(document) == 0 {
+			_ = snap.Close()
+			return nil, updateBatchItemError(i, errors.New("changed replacement document cannot be empty"))
+		}
+		if err := validateBSONReplacementPreservesIDSnapshot(currentID, document, plannerOptions); err != nil {
+			_ = snap.Close()
+			return nil, updateBatchItemError(i, err)
+		}
 		changed = append(changed, prepared)
-		changedDocuments = append(changedDocuments, bytes.Clone(document))
+		changedDocuments = append(changedDocuments, appendUpdateBatchPlanScratchDocument(scratch, document))
+		if !current.buffered {
+			currentScratch = current.value[:0]
+		}
 	}
 	if len(changed) == 0 {
 		primaryRootName := collectionPrimaryRootName(meta.Name)
-		return &updateBatchPlan{
+		baseRootIDs[primaryRootName] = primaryRoot
+		rootNames = append(rootNames, primaryRootName)
+		plan := newUpdateBatchPlan()
+		*plan = updateBatchPlan{
 			results:                results,
 			meta:                   meta,
 			catalog:                catalog,
@@ -6149,12 +6493,15 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			baseUserRoot:           baseUserRoot,
 			baseSystemRoot:         baseSystemRoot,
 			baseCommitSeq:          baseCommitSeq,
-			rootNames:              []string{primaryRootName},
-			baseRootIDs:            map[string]uint64{primaryRootName: primaryRoot},
+			rootNames:              rootNames,
+			baseRootIDs:            baseRootIDs,
 			bufferedBase:           bufferedRead.enabled,
 			bufferedReadGeneration: bufferedRead.writeGeneration,
 			bufferedReadBlocked:    bufferedReadBlocked,
-		}, nil
+			scratch:                scratch,
+		}
+		scratchOwnedByPlan = true
+		return plan, nil
 	}
 
 	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments(changedDocuments, plannerOptions)
@@ -6178,12 +6525,12 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	for i := range changed {
 		changed[i].document = preparedDocuments[i]
 		if len(runtimes) > 0 {
-			changed[i].newState, err = indexStateForDocument(changed[i].document, runtimes, plannerOptions)
+			changed[i].newState, err = orderedIndexStateForDocumentWithArena(changed[i].document, runtimes, plannerOptions, stateArena)
 			if err != nil {
 				_ = snap.Close()
 				return nil, updateBatchItemError(changed[i].itemIndex, err)
 			}
-			changed[i].indexStateChanged = !documentIndexStatesEqual(changed[i].oldState, changed[i].newState)
+			changed[i].indexStateChanged = !orderedDocumentIndexStatesEqual(changed[i].oldState, changed[i].newState)
 		}
 	}
 	if mode == updateBatchModeNoSecondaryUniqueIndexChanges && updateBatchChangesSecondaryUniqueIndex(runtimes, changed) {
@@ -6193,7 +6540,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	batchReplacements := batchUniqueReplacementOwners(runtimes, changed)
 	for i := range changed {
 		if changed[i].indexStateChanged {
-			if err := rejectReplaceUniqueConflicts(snap, catalog, runtimes, changed[i].newState, changed[i].documentID, batchReplacements); err != nil {
+			if err := rejectReplaceUniqueConflictsOrdered(snap, catalog, runtimes, changed[i].newState, changed[i].documentID, batchReplacements); err != nil {
 				_ = snap.Close()
 				return nil, updateBatchItemError(changed[i].itemIndex, err)
 			}
@@ -6204,10 +6551,6 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		return nil, err
 	}
 
-	rootNames := make([]string, 0, 2+len(runtimes))
-	baseRootIDs := make(map[string]uint64, 2+len(runtimes))
-	policies := make([]backenddb.OrderedRootStoragePolicy, 0, 2+len(runtimes))
-	deltaTables := make([]memtable.Table, 0, 2+len(runtimes))
 	var stateTable memtable.Table
 	secondaryTables := make(map[string]memtable.Table, len(runtimes))
 	success := false
@@ -6247,7 +6590,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	policies = append(policies, plannerOptions.dataStoragePolicy)
 	primaryTable := newCollectionRunTable(len(changed))
 	for _, item := range changed {
-		setCollectionRunValue(primaryTable, bytes.Clone(item.documentID), item.document)
+		setCollectionRunCopiedValue(primaryTable, item.documentID, item.document)
 		results[item.itemIndex].Modified = true
 	}
 	primaryTable.Freeze()
@@ -6262,25 +6605,25 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 				continue
 			}
 			if stateTable != nil {
-				rawState, err := encodeDocumentIndexState(item.newState)
-				if err != nil {
-					_ = snap.Close()
-					return nil, err
-				}
-				if len(item.newState) == 0 {
+				if orderedDocumentIndexStateEmpty(item.newState) {
 					stateTable.DeleteSteal(bytes.Clone(item.documentID))
 				} else {
+					rawState, err := encodeRuntimeOrderedDocumentIndexState(item.newState, runtimes)
+					if err != nil {
+						_ = snap.Close()
+						return nil, err
+					}
 					stateTable.SetSteal(bytes.Clone(item.documentID), rawState)
 				}
 			}
-			for _, runtime := range runtimes {
+			for runtimeIdx, runtime := range runtimes {
 				rootName := collectionSecondaryRootName(meta.Name, runtime.def.name)
 				table := secondaryTables[rootName]
 				if table == nil {
 					table = newCollectionRunTable(0)
 					secondaryTables[rootName] = table
 				}
-				deleteKeys, err := secondaryDeleteKeysForDocument(runtime, item.oldState, item.documentID)
+				deleteKeys, err := secondaryDeleteKeysForOrderedDocument(runtimeIdx, runtime, item.oldState, item.documentID)
 				if err != nil {
 					_ = snap.Close()
 					return nil, err
@@ -6288,7 +6631,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 				for _, key := range deleteKeys {
 					table.DeleteSteal(bytes.Clone(key))
 				}
-				for _, encoded := range item.newState[runtime.def.name] {
+				for _, encoded := range item.newState.valuesAt(runtimeIdx) {
 					key, err := indexEntryKey(encoded, item.documentID)
 					if err != nil {
 						_ = snap.Close()
@@ -6329,7 +6672,8 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		resetCollectionRunTable(table)
 	}
 	success = true
-	return &updateBatchPlan{
+	plan := newUpdateBatchPlan()
+	*plan = updateBatchPlan{
 		results:                     results,
 		meta:                        meta,
 		catalog:                     catalog,
@@ -6345,7 +6689,10 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		bufferedReadBlocked:         bufferedReadBlocked,
 		policies:                    policies,
 		deltaTables:                 deltaTables,
-	}, nil
+		scratch:                     scratch,
+	}
+	scratchOwnedByPlan = true
+	return plan, nil
 }
 
 func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]UpdateBatchResult, error) {
@@ -6587,13 +6934,24 @@ func rejectBatchUniqueConflicts(runtimes []indexRuntime, updates []preparedBatch
 		itemIndex  int
 	}
 
-	for _, runtime := range runtimes {
+	for runtimeIdx, runtime := range runtimes {
 		if !runtime.def.unique {
+			continue
+		}
+		hasChangedUniqueValue := false
+		for _, update := range updates {
+			if normalizedEncodedIndexValuesEqual(update.oldState.valuesAt(runtimeIdx), update.newState.valuesAt(runtimeIdx)) {
+				continue
+			}
+			hasChangedUniqueValue = true
+			break
+		}
+		if !hasChangedUniqueValue {
 			continue
 		}
 		seen := make(map[string]seenUniqueValue)
 		for _, update := range updates {
-			for _, encoded := range update.newState[runtime.def.name] {
+			for _, encoded := range update.newState.valuesAt(runtimeIdx) {
 				key := string(encoded)
 				if previous, ok := seen[key]; ok && !bytes.Equal(previous.documentID, update.documentID) {
 					return fmt.Errorf("%w %q: batch indexes %d and %d document ids %q and %q", ErrUniqueIndexConflict, runtime.def.name, previous.itemIndex, update.itemIndex, previous.documentID, update.documentID)
@@ -6609,13 +6967,12 @@ func updateBatchChangesSecondaryUniqueIndex(runtimes []indexRuntime, updates []p
 	if len(runtimes) == 0 || len(updates) == 0 {
 		return false
 	}
-	for _, runtime := range runtimes {
+	for runtimeIdx, runtime := range runtimes {
 		if !runtime.def.unique {
 			continue
 		}
-		indexName := runtime.def.name
 		for _, update := range updates {
-			if !normalizedEncodedIndexValuesEqual(update.oldState[indexName], update.newState[indexName]) {
+			if !normalizedEncodedIndexValuesEqual(update.oldState.valuesAt(runtimeIdx), update.newState.valuesAt(runtimeIdx)) {
 				return true
 			}
 		}
@@ -6641,21 +6998,24 @@ func batchUniqueReplacementOwners(runtimes []indexRuntime, updates []preparedBat
 	if len(runtimes) == 0 || len(updates) == 0 {
 		return nil
 	}
-	out := make(batchUniqueReplacementSet)
-	for _, runtime := range runtimes {
+	var out batchUniqueReplacementSet
+	for runtimeIdx, runtime := range runtimes {
 		if !runtime.def.unique {
 			continue
 		}
 		indexName := runtime.def.name
 		for _, update := range updates {
-			oldValues := update.oldState[indexName]
+			oldValues := update.oldState.valuesAt(runtimeIdx)
 			if len(oldValues) == 0 {
 				continue
 			}
-			newValues := update.newState[indexName]
+			newValues := update.newState.valuesAt(runtimeIdx)
 			for _, oldValue := range oldValues {
 				if documentIndexStateContainsValue(newValues, oldValue) {
 					continue
+				}
+				if out == nil {
+					out = make(batchUniqueReplacementSet)
 				}
 				byValue := out[indexName]
 				if byValue == nil {
@@ -7057,6 +7417,28 @@ func documentIndexStatesEqual(left, right documentIndexState) bool {
 	return true
 }
 
+func orderedDocumentIndexStatesEqual(left, right orderedDocumentIndexState) bool {
+	maxLen := len(left)
+	if len(right) > maxLen {
+		maxLen = len(right)
+	}
+	for i := 0; i < maxLen; i++ {
+		if !normalizedEncodedIndexValuesEqual(left.valuesAt(i), right.valuesAt(i)) {
+			return false
+		}
+	}
+	return true
+}
+
+func orderedDocumentIndexStateEmpty(state orderedDocumentIndexState) bool {
+	for i := range state {
+		if len(state[i]) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func (c *Collection) buildRootDescriptorSystemIterator(rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 	if len(rootIDs) != len(rootNames) {
 		return nil, unexpectedOrderedRootCountError(c.meta.Name, len(rootNames), len(rootIDs))
@@ -7285,6 +7667,22 @@ func secondaryDeleteKeysForDocument(runtime indexRuntime, state documentIndexSta
 	return out, nil
 }
 
+func secondaryDeleteKeysForOrderedDocument(runtimeIdx int, runtime indexRuntime, state orderedDocumentIndexState, documentID []byte) ([][]byte, error) {
+	values := state.valuesAt(runtimeIdx)
+	if len(values) == 0 {
+		return nil, nil
+	}
+	out := make([][]byte, 0, len(values))
+	for _, encoded := range values {
+		key, err := indexEntryKey(encoded, documentID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, key)
+	}
+	return out, nil
+}
+
 func rejectReplaceUniqueConflicts(snap *backenddb.Snapshot, catalog *collectionCatalog, runtimes []indexRuntime, state documentIndexState, documentID []byte, batchReplacements batchUniqueReplacementSet) error {
 	if snap == nil || catalog == nil {
 		return nil
@@ -7298,6 +7696,56 @@ func rejectReplaceUniqueConflicts(snap *backenddb.Snapshot, catalog *collectionC
 			continue
 		}
 		for _, encoded := range state[runtime.def.name] {
+			_, prefix, err := appendIndexValuePrefixSlice(make([]byte, 0, 2+len(encoded)), encoded)
+			if err != nil {
+				return err
+			}
+			it, err := snap.IteratorAtRoot(rootID, prefix, prefixEnd(prefix))
+			if errors.Is(err, tree.ErrKeyNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			conflict := false
+			for it.Valid() {
+				key := it.UnsafeKey()
+				if !bytes.HasPrefix(key, prefix) {
+					break
+				}
+				ownerID := key[len(prefix):]
+				if !it.IsDeleted() && !bytes.Equal(ownerID, documentID) && !batchReplacements.allows(runtime.def.name, encoded, ownerID) {
+					conflict = true
+					break
+				}
+				it.Next()
+			}
+			iterErr := it.Error()
+			_ = it.Close()
+			if iterErr != nil {
+				return iterErr
+			}
+			if conflict {
+				return fmt.Errorf("%w %q", ErrUniqueIndexConflict, runtime.def.name)
+			}
+		}
+	}
+	return nil
+}
+
+func rejectReplaceUniqueConflictsOrdered(snap *backenddb.Snapshot, catalog *collectionCatalog, runtimes []indexRuntime, state orderedDocumentIndexState, documentID []byte, batchReplacements batchUniqueReplacementSet) error {
+	if snap == nil || catalog == nil {
+		return nil
+	}
+	for runtimeIdx, runtime := range runtimes {
+		if !runtime.def.unique {
+			continue
+		}
+		rootID := catalog.rootID(collectionSecondaryRootName(catalog.meta.Name, runtime.def.name))
+		if rootID == 0 {
+			continue
+		}
+		for _, encoded := range state.valuesAt(runtimeIdx) {
 			_, prefix, err := appendIndexValuePrefixSlice(make([]byte, 0, 2+len(encoded)), encoded)
 			if err != nil {
 				return err
@@ -8555,6 +9003,9 @@ func copyCollectionMeta(meta CollectionMeta) CollectionMeta {
 }
 
 func sameCollectionMeta(a, b CollectionMeta) bool {
+	if collectionMetaValuesEqual(a, b) {
+		return true
+	}
 	na, err := normalizeCollectionMeta(a)
 	if err != nil {
 		return false
@@ -8563,7 +9014,19 @@ func sameCollectionMeta(a, b CollectionMeta) bool {
 	if err != nil {
 		return false
 	}
-	return reflect.DeepEqual(na, nb)
+	return collectionMetaValuesEqual(na, nb)
+}
+
+func collectionMetaValuesEqual(a, b CollectionMeta) bool {
+	if a.Name != b.Name || a.Options != b.Options || len(a.Indexes) != len(b.Indexes) {
+		return false
+	}
+	for i := range a.Indexes {
+		if a.Indexes[i] != b.Indexes[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func collectionMetaHasSecondaryUniqueIndex(meta CollectionMeta) bool {
