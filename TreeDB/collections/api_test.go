@@ -1428,6 +1428,206 @@ func TestCollectionIndexedWriteMemtablesReadUniqueAndFlush(t *testing.T) {
 	}
 }
 
+func TestCollectionIndexedFlushUnitsReadUniqueUpdateAndFlush(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"email":"ada@example.com","city":"hnl","score":1}`),
+			[]byte(`{"email":"grace@example.com","city":"hnl","score":2}`),
+		},
+	); err != nil {
+		t.Fatalf("insert initial batch: %v", err)
+	}
+
+	domain := col.writeDomain
+	domain.mu.Lock()
+	if !rotateIndexedMutableToFlushUnitLocked(domain) {
+		t.Fatal("rotate indexed mutable state returned false")
+	}
+	if got := len(domain.rootRuns); got != 0 {
+		t.Fatalf("mutable root runs after rotate=%d want 0", got)
+	}
+	if got := len(domain.indexedFlushUnits); got != 1 {
+		t.Fatalf("flush units after rotate=%d want 1", got)
+	}
+	domain.mu.Unlock()
+
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get flush-unit u1: %v", err)
+	}
+	if want := []byte(`{"email":"ada@example.com","city":"hnl","score":1}`); !bytes.Equal(got, want) {
+		t.Fatalf("flush-unit u1=%q want %q", got, want)
+	}
+	emailIDs, err := col.FindByIndex("email", "ada@example.com")
+	if err != nil {
+		t.Fatalf("find flush-unit email: %v", err)
+	}
+	if len(emailIDs) != 1 || !bytes.Equal(emailIDs[0], []byte("u1")) {
+		t.Fatalf("flush-unit email ids=%q want [u1]", emailIDs)
+	}
+	cityIDs, err := col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find flush-unit city: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, cityIDs, []byte("u1"), []byte("u2"))
+
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u3")},
+		[][]byte{[]byte(`{"email":"ada@example.com","city":"sea","score":3}`)},
+	); err == nil || !strings.Contains(err.Error(), "unique index") {
+		t.Fatalf("duplicate unique against flush unit err=%v want unique index conflict", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"new@example.com","city":"sea","score":4}`)},
+	); err == nil || !strings.Contains(err.Error(), "document already exists") {
+		t.Fatalf("duplicate primary against flush unit err=%v want document exists", err)
+	}
+
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u3")},
+		[][]byte{[]byte(`{"email":"katherine@example.com","city":"hnl","score":3}`)},
+	); err != nil {
+		t.Fatalf("insert mutable batch after flush unit: %v", err)
+	}
+	results, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			if !bytes.Contains(current, []byte(`"city":"hnl"`)) {
+				return nil, false, fmt.Errorf("update saw current document %s, want buffered hnl document", current)
+			}
+			return []byte(`{"email":"ada@example.com","city":"sea","score":10}`), true, nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("update buffered flush-unit document: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("update results=%+v want matched modified", results)
+	}
+
+	cityIDs, err = col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find hnl after buffered update: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, cityIDs, []byte("u2"), []byte("u3"))
+	cityIDs, err = col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find sea after buffered update: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, cityIDs, []byte("u1"))
+
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush indexed flush units: %v", err)
+	}
+	if deleted, err := col.DeleteDocument([]byte("u2")); err != nil {
+		t.Fatalf("delete after flush-unit flush: %v", err)
+	} else if !deleted {
+		t.Fatal("delete after flush-unit flush deleted=false want true")
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	if _, found, err := reopenedCol.GetInto([]byte("u2"), nil); err != nil {
+		t.Fatalf("get deleted u2 after reopen: %v", err)
+	} else if found {
+		t.Fatal("deleted u2 found after reopen")
+	}
+	cityIDs, err = reopenedCol.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find reopened sea: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, cityIDs, []byte("u1"))
+	cityIDs, err = reopenedCol.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find reopened hnl: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, cityIDs, []byte("u3"))
+}
+
+func TestCollectionIndexedFlushUnitCloseFlushesRotatedState(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"email":"ada@example.com"}`)}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	col.writeDomain.mu.Lock()
+	if !rotateIndexedMutableToFlushUnitLocked(col.writeDomain) {
+		t.Fatal("rotate indexed mutable state returned false")
+	}
+	col.writeDomain.mu.Unlock()
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	ids, err := reopenedCol.FindByIndex("email", "ada@example.com")
+	if err != nil {
+		t.Fatalf("find reopened email: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("reopened email ids=%q want [u1]", ids)
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesReadFlushedDocumentWithBufferedRuns(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -2852,6 +3052,57 @@ func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
 	if _, ok := domain.uniqueValueRuns[collectionSecondaryRootName("users", "email")]; !ok {
 		t.Fatalf("uniqueValueRuns=%v missing users email root", domain.uniqueValueRuns)
 	}
+}
+
+func TestRollbackBufferedIndexedDomainRestoresPreRotationRuns(t *testing.T) {
+	primaryName := collectionPrimaryRootName("users")
+	oldTable := newCollectionRunTable(1)
+	setCollectionRunValue(oldTable, []byte("u1"), []byte(`{"name":"ada"}`))
+	oldTable.Freeze()
+	newTable := newCollectionRunTable(1)
+	setCollectionRunValue(newTable, []byte("u2"), []byte(`{"name":"grace"}`))
+	newTable.Freeze()
+
+	domain := &collectionWriteDomain{
+		loaded:         true,
+		meta:           CollectionMeta{Name: "users"},
+		catalog:        &collectionCatalog{meta: CollectionMeta{Name: "users"}, roots: map[string]uint64{primaryName: 42}},
+		baseCommitSeq:  7,
+		baseSystemRoot: 11,
+		primaryRoot:    42,
+		count:          1,
+		rootRuns: map[string][]memtable.Table{
+			primaryName: {oldTable},
+		},
+		rootPolicies: map[string]backenddb.OrderedRootStoragePolicy{
+			primaryName: backenddb.OrderedRootStorageDefault,
+		},
+		rootBaseIDs: map[string]uint64{
+			primaryName: 42,
+		},
+		rootRunCount: 1,
+	}
+	checkpoint := checkpointBufferedIndexedDomain(domain)
+
+	domain.rootRuns[primaryName] = append(domain.rootRuns[primaryName], newTable)
+	domain.rootRunCount = 2
+	domain.count = 2
+	if !rotateIndexedMutableToFlushUnitLocked(domain) {
+		t.Fatal("rotate indexed mutable state returned false")
+	}
+	rollbackBufferedIndexedDomain(domain, checkpoint)
+	if len(domain.indexedFlushUnits) != 0 {
+		t.Fatalf("flush units after rollback=%d want 0", len(domain.indexedFlushUnits))
+	}
+	runs := domain.rootRuns[primaryName]
+	if len(runs) != 1 || runs[0] != oldTable {
+		t.Fatalf("root runs after rollback=%v want only original table", runs)
+	}
+	value, _, flags, found := runs[0].GetEntry([]byte("u1"))
+	if !found || flags&node.FlagTombstone != 0 || !bytes.Equal(value, []byte(`{"name":"ada"}`)) {
+		t.Fatalf("original table after rollback found=%v flags=%d value=%q", found, flags, value)
+	}
+	resetCollectionRunTable(oldTable)
 }
 
 func TestHasBufferedPrimaryRootRunsIgnoresSecondaryOnlyRuns(t *testing.T) {

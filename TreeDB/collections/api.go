@@ -396,6 +396,14 @@ type noIndexBatchEntry struct {
 	document []byte
 }
 
+type indexedFlushUnit struct {
+	rootRuns        map[string][]memtable.Table
+	rootPolicies    map[string]backenddb.OrderedRootStoragePolicy
+	rootBaseIDs     map[string]uint64
+	uniqueValueRuns map[string][]memtable.Table
+	rootRunCount    int
+}
+
 type bufferedIndexedCheckpoint struct {
 	loaded                bool
 	meta                  CollectionMeta
@@ -409,6 +417,7 @@ type bufferedIndexedCheckpoint struct {
 	rootRuns              map[string][]memtable.Table
 	rootPolicies          map[string]backenddb.OrderedRootStoragePolicy
 	rootBaseIDs           map[string]uint64
+	indexedFlushUnits     []indexedFlushUnit
 	primaryRunIndexActive bool
 	uniqueValueRuns       map[string][]memtable.Table
 	rootRunCount          int
@@ -451,6 +460,7 @@ type collectionWriteDomain struct {
 	primaryRoot       uint64
 	storagePolicy     backenddb.OrderedRootStoragePolicy
 	table             memtable.Table
+	indexedFlushUnits []indexedFlushUnit
 	rootRuns          map[string][]memtable.Table
 	rootPolicies      map[string]backenddb.OrderedRootStoragePolicy
 	rootBaseIDs       map[string]uint64
@@ -1489,11 +1499,14 @@ func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWrite
 	}
 
 	primaryRootName := collectionPrimaryRootName(domain.meta.Name)
-	if len(domain.rootBaseIDs) > 0 {
-		for rootName, baseRootID := range domain.rootBaseIDs {
+	if hasBufferedIndexedRootRuns(domain) {
+		if err := forEachPendingIndexedRootBaseIDLocked(domain, func(rootName string, baseRootID uint64) error {
 			if rootID := catalog.rootID(rootName); rootID != baseRootID {
-				return nil, errConcurrentRootModification(domain.meta.Name, rootName)
+				return errConcurrentRootModification(domain.meta.Name, rootName)
 			}
+			return nil
+		}); err != nil {
+			return nil, err
 		}
 	} else {
 		if rootID := catalog.rootID(primaryRootName); rootID != domain.primaryRoot {
@@ -1536,7 +1549,7 @@ func (c *Collection) flushBufferedNoIndex() error {
 	}
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
-	if len(domain.rootRuns) > 0 {
+	if hasBufferedIndexedRootRuns(domain) {
 		return nil
 	}
 	return c.flushBufferedNoIndexLocked(domain)
@@ -1556,7 +1569,7 @@ func (c *Collection) flushBufferedWritesLocked(domain *collectionWriteDomain) er
 	if domain == nil || domain.count == 0 {
 		return nil
 	}
-	if len(domain.rootRuns) > 0 {
+	if hasBufferedIndexedRootRuns(domain) {
 		return c.flushBufferedIndexedLocked(domain)
 	}
 	return c.flushBufferedNoIndexLocked(domain)
@@ -1673,10 +1686,13 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		if !sameCollectionMeta(currentCatalog.meta, catalog.meta) {
 			return 0, fmt.Errorf("collections: concurrent schema modification detected for %q", catalog.meta.Name)
 		}
-		for rootName, baseRoot := range domain.rootBaseIDs {
+		if err := forEachPendingIndexedRootBaseIDLocked(domain, func(rootName string, baseRoot uint64) error {
 			if got := currentCatalog.rootID(rootName); got != baseRoot {
-				return 0, errConcurrentRootModification(catalog.meta.Name, rootName)
+				return errConcurrentRootModification(catalog.meta.Name, rootName)
 			}
+			return nil
+		}); err != nil {
+			return 0, err
 		}
 		catalog = currentCatalog
 	} else {
@@ -1722,8 +1738,13 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 				return 0, err
 			}
 		}
-		if len(domain.rootRuns[run.name]) == 0 {
+		if !hasPendingIndexedRootRunsForRootLocked(domain, run.name) {
 			domain.rootBaseIDs[run.name] = catalog.rootID(run.name)
+		} else if baseRoot, ok := pendingIndexedRootBaseIDLocked(domain, run.name); ok && baseRoot != catalog.rootID(run.name) {
+			if autoFlushEnabled {
+				rollbackBufferedIndexedDomain(domain, checkpoint)
+			}
+			return 0, errConcurrentRootModification(catalog.meta.Name, run.name)
 		}
 		domain.rootPolicies[run.name] = run.storagePolicy
 		domain.rootRuns[run.name] = append(domain.rootRuns[run.name], run.table)
@@ -1789,6 +1810,7 @@ func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWr
 	domain.baseCommitSeq = baseCommitSeq
 	domain.baseSystemRoot = baseSystemRoot
 	domain.primaryRoot = catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
+	domain.indexedFlushUnits = nil
 	domain.rootRuns = nil
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
@@ -1839,10 +1861,19 @@ func bufferedIndexedRootRunCount(domain *collectionWriteDomain) int {
 	if domain == nil {
 		return 0
 	}
-	if domain.rootRunCount > 0 || len(domain.rootRuns) == 0 {
-		return domain.rootRunCount
-	}
 	total := 0
+	for _, unit := range domain.indexedFlushUnits {
+		if unit.rootRunCount > 0 || len(unit.rootRuns) == 0 {
+			total = saturatingAddNonNegativeInt(total, unit.rootRunCount)
+			continue
+		}
+		for _, runs := range unit.rootRuns {
+			total = saturatingAddNonNegativeInt(total, len(runs))
+		}
+	}
+	if domain.rootRunCount > 0 || len(domain.rootRuns) == 0 {
+		return saturatingAddNonNegativeInt(total, domain.rootRunCount)
+	}
 	for _, runs := range domain.rootRuns {
 		total = saturatingAddNonNegativeInt(total, len(runs))
 	}
@@ -1861,6 +1892,132 @@ func saturatingAddNonNegativeInt(total, n int) int {
 
 func bufferedIndexedAutoFlushEnabled(opts CollectionOptions) bool {
 	return opts.BufferedIndexedWriteMaxDocuments > 0 || opts.BufferedIndexedWriteMaxBytes > 0 || opts.BufferedIndexedWriteMaxRootRuns > 0
+}
+
+func hasBufferedIndexedRootRuns(domain *collectionWriteDomain) bool {
+	return bufferedIndexedRootRunCount(domain) > 0
+}
+
+func pendingIndexedRootRunsLocked(domain *collectionWriteDomain, rootName string) []memtable.Table {
+	if domain == nil || rootName == "" {
+		return nil
+	}
+	if len(domain.indexedFlushUnits) == 0 {
+		return domain.rootRuns[rootName]
+	}
+	total := len(domain.rootRuns[rootName])
+	for _, unit := range domain.indexedFlushUnits {
+		total = saturatingAddNonNegativeInt(total, len(unit.rootRuns[rootName]))
+	}
+	if total == 0 {
+		return nil
+	}
+	out := make([]memtable.Table, 0, total)
+	for _, unit := range domain.indexedFlushUnits {
+		out = append(out, unit.rootRuns[rootName]...)
+	}
+	out = append(out, domain.rootRuns[rootName]...)
+	return out
+}
+
+func hasPendingIndexedRootRunsForRootLocked(domain *collectionWriteDomain, rootName string) bool {
+	if domain == nil || rootName == "" {
+		return false
+	}
+	if len(domain.rootRuns[rootName]) > 0 {
+		return true
+	}
+	for _, unit := range domain.indexedFlushUnits {
+		if len(unit.rootRuns[rootName]) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func pendingIndexedRootRunMapLocked(domain *collectionWriteDomain) map[string][]memtable.Table {
+	if domain == nil {
+		return nil
+	}
+	if len(domain.indexedFlushUnits) == 0 {
+		return domain.rootRuns
+	}
+	out := make(map[string][]memtable.Table, len(domain.rootRuns)+len(domain.indexedFlushUnits))
+	for _, unit := range domain.indexedFlushUnits {
+		appendTableRunMap(out, unit.rootRuns)
+	}
+	appendTableRunMap(out, domain.rootRuns)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func appendTableRunMap(dst, src map[string][]memtable.Table) {
+	if len(src) == 0 {
+		return
+	}
+	for name, runs := range src {
+		if len(runs) == 0 {
+			continue
+		}
+		dst[name] = append(dst[name], runs...)
+	}
+}
+
+func pendingIndexedRootBaseIDLocked(domain *collectionWriteDomain, rootName string) (uint64, bool) {
+	if domain == nil || rootName == "" {
+		return 0, false
+	}
+	for _, unit := range domain.indexedFlushUnits {
+		if baseRoot, ok := unit.rootBaseIDs[rootName]; ok {
+			return baseRoot, true
+		}
+	}
+	baseRoot, ok := domain.rootBaseIDs[rootName]
+	return baseRoot, ok
+}
+
+func forEachPendingIndexedRootBaseIDLocked(domain *collectionWriteDomain, fn func(rootName string, baseRoot uint64) error) error {
+	if domain == nil || fn == nil {
+		return nil
+	}
+	if len(domain.indexedFlushUnits) == 0 {
+		for rootName, baseRoot := range domain.rootBaseIDs {
+			if err := fn(rootName, baseRoot); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	seen := make(map[string]uint64, len(domain.rootBaseIDs))
+	for _, unit := range domain.indexedFlushUnits {
+		for rootName, baseRoot := range unit.rootBaseIDs {
+			if prior, ok := seen[rootName]; ok {
+				if prior != baseRoot {
+					return fmt.Errorf("collections: buffered indexed root %q has conflicting base roots %d and %d", rootName, prior, baseRoot)
+				}
+				continue
+			}
+			seen[rootName] = baseRoot
+			if err := fn(rootName, baseRoot); err != nil {
+				return err
+			}
+		}
+	}
+	for rootName, baseRoot := range domain.rootBaseIDs {
+		if prior, ok := seen[rootName]; ok {
+			if prior != baseRoot {
+				return fmt.Errorf("collections: buffered indexed root %q has conflicting base roots %d and %d", rootName, prior, baseRoot)
+			}
+			continue
+		}
+		seen[rootName] = baseRoot
+		if err := fn(rootName, baseRoot); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func saturatingAddNonNegativeInt64(total, n int64) int64 {
@@ -1891,6 +2048,7 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		rootRuns:              cloneTableRunMap(domain.rootRuns),
 		rootPolicies:          cloneRootPolicyMap(domain.rootPolicies),
 		rootBaseIDs:           cloneUint64Map(domain.rootBaseIDs),
+		indexedFlushUnits:     cloneIndexedFlushUnits(domain.indexedFlushUnits),
 		primaryRunIndexActive: domain.primaryRunIndex != nil,
 		uniqueValueRuns:       cloneTableRunMap(domain.uniqueValueRuns),
 		rootRunCount:          domain.rootRunCount,
@@ -1901,6 +2059,7 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	if domain == nil {
 		return
 	}
+	resetIndexedFlushUnitsAddedAfterCheckpoint(domain.indexedFlushUnits, checkpoint)
 	resetTableRunsAddedAfterCheckpoint(domain.rootRuns, checkpoint.rootRuns)
 	resetTableRunsAddedAfterCheckpoint(domain.uniqueValueRuns, checkpoint.uniqueValueRuns)
 	domain.loaded = checkpoint.loaded
@@ -1912,13 +2071,15 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.count = checkpoint.count
 	domain.bufferedBytes = checkpoint.bufferedBytes
 	domain.writeGeneration = checkpoint.writeGeneration
+	domain.indexedFlushUnits = checkpoint.indexedFlushUnits
 	domain.rootRuns = checkpoint.rootRuns
 	domain.rootPolicies = checkpoint.rootPolicies
 	domain.rootBaseIDs = checkpoint.rootBaseIDs
 	domain.rootRunCount = checkpoint.rootRunCount
-	domain.primaryIDIndex = rebuildBufferedPrimaryIDIndex(checkpoint.meta.Name, checkpoint.rootRuns)
+	pendingRuns := indexedFlushUnitPendingRootRunMap(checkpoint.indexedFlushUnits, checkpoint.rootRuns)
+	domain.primaryIDIndex = rebuildBufferedPrimaryIDIndex(checkpoint.meta.Name, pendingRuns)
 	if checkpoint.primaryRunIndexActive {
-		index, err := rebuildBufferedPrimaryRunIndex(checkpoint.meta.Name, checkpoint.rootRuns)
+		index, err := rebuildBufferedPrimaryRunIndex(checkpoint.meta.Name, pendingRuns)
 		if err != nil {
 			index = nil
 		} else if index == nil {
@@ -1929,7 +2090,99 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 		domain.primaryRunIndex = nil
 	}
 	domain.uniqueValueRuns = checkpoint.uniqueValueRuns
-	domain.uniqueValueIndex = rebuildBufferedUniqueValueIndexes(checkpoint.uniqueValueRuns)
+	domain.uniqueValueIndex = rebuildBufferedUniqueValueIndexes(indexedFlushUnitPendingUniqueValueRunMap(checkpoint.indexedFlushUnits, checkpoint.uniqueValueRuns))
+}
+
+func cloneIndexedFlushUnits(in []indexedFlushUnit) []indexedFlushUnit {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]indexedFlushUnit, len(in))
+	for i, unit := range in {
+		out[i] = indexedFlushUnit{
+			rootRuns:        cloneTableRunMap(unit.rootRuns),
+			rootPolicies:    cloneRootPolicyMap(unit.rootPolicies),
+			rootBaseIDs:     cloneUint64Map(unit.rootBaseIDs),
+			uniqueValueRuns: cloneTableRunMap(unit.uniqueValueRuns),
+			rootRunCount:    unit.rootRunCount,
+		}
+	}
+	return out
+}
+
+func indexedFlushUnitPendingRootRunMap(units []indexedFlushUnit, mutable map[string][]memtable.Table) map[string][]memtable.Table {
+	if len(units) == 0 {
+		return mutable
+	}
+	out := make(map[string][]memtable.Table, len(mutable)+len(units))
+	for _, unit := range units {
+		appendTableRunMap(out, unit.rootRuns)
+	}
+	appendTableRunMap(out, mutable)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func indexedFlushUnitPendingUniqueValueRunMap(units []indexedFlushUnit, mutable map[string][]memtable.Table) map[string][]memtable.Table {
+	if len(units) == 0 {
+		return mutable
+	}
+	out := make(map[string][]memtable.Table, len(mutable)+len(units))
+	for _, unit := range units {
+		appendTableRunMap(out, unit.uniqueValueRuns)
+	}
+	appendTableRunMap(out, mutable)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func resetIndexedFlushUnitsAddedAfterCheckpoint(current []indexedFlushUnit, checkpoint bufferedIndexedCheckpoint) {
+	if len(current) == 0 {
+		return
+	}
+	keep := bufferedIndexedCheckpointTableSet(checkpoint)
+	for _, unit := range current {
+		resetTablesNotInSet(unit.rootRuns, keep)
+		resetTablesNotInSet(unit.uniqueValueRuns, keep)
+	}
+}
+
+func bufferedIndexedCheckpointTableSet(checkpoint bufferedIndexedCheckpoint) map[memtable.Table]struct{} {
+	out := make(map[memtable.Table]struct{})
+	addTablesToSet := func(runs map[string][]memtable.Table) {
+		for _, tables := range runs {
+			for _, table := range tables {
+				if table != nil {
+					out[table] = struct{}{}
+				}
+			}
+		}
+	}
+	addTablesToSet(checkpoint.rootRuns)
+	addTablesToSet(checkpoint.uniqueValueRuns)
+	for _, unit := range checkpoint.indexedFlushUnits {
+		addTablesToSet(unit.rootRuns)
+		addTablesToSet(unit.uniqueValueRuns)
+	}
+	return out
+}
+
+func resetTablesNotInSet(runs map[string][]memtable.Table, keep map[memtable.Table]struct{}) {
+	for _, tables := range runs {
+		for _, table := range tables {
+			if table == nil {
+				continue
+			}
+			if _, ok := keep[table]; ok {
+				continue
+			}
+			resetCollectionRunTable(table)
+		}
+	}
 }
 
 func resetTableRunsAddedAfterCheckpoint(current, checkpoint map[string][]memtable.Table) {
@@ -2067,11 +2320,11 @@ func rebuildBufferedUniqueValueIndexes(runs map[string][]memtable.Table) map[str
 }
 
 func (c *Collection) rejectBufferedIndexedInsertConflictsLocked(domain *collectionWriteDomain, meta CollectionMeta, plan *insertBatchPlan) error {
-	if domain == nil || domain.count == 0 || len(domain.rootRuns) == 0 {
+	if domain == nil || domain.count == 0 || !hasBufferedIndexedRootRuns(domain) {
 		return nil
 	}
 	primaryName := collectionPrimaryRootName(meta.Name)
-	if pendingPrimary := domain.rootRuns[primaryName]; len(pendingPrimary) > 0 {
+	if pendingPrimary := pendingIndexedRootRunsLocked(domain, primaryName); len(pendingPrimary) > 0 {
 		for _, run := range plan.runs {
 			if run.name != primaryName {
 				continue
@@ -2706,7 +2959,7 @@ func (it *bufferedRootRunsIterator) advanceItem(item bufferedRootRunHeapItem) {
 }
 
 func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (err error) {
-	if domain == nil || domain.count == 0 || len(domain.rootRuns) == 0 {
+	if domain == nil || domain.count == 0 || !hasBufferedIndexedRootRuns(domain) {
 		return nil
 	}
 	if domain.catalog == nil {
@@ -2736,14 +2989,20 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	if !sameCollectionMeta(pinnedCatalog.meta, meta) {
 		return fmt.Errorf("collections: concurrent schema modification detected for %q", meta.Name)
 	}
-	for rootName, baseRoot := range domain.rootBaseIDs {
+	if err := forEachPendingIndexedRootBaseIDLocked(domain, func(rootName string, baseRoot uint64) error {
 		if got := pinnedCatalog.rootID(rootName); got != baseRoot {
 			return errConcurrentRootModification(meta.Name, rootName)
 		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
-	rootNames := orderedBufferedRootNames(meta, domain.rootRuns)
+	rotateIndexedMutableToFlushUnitLocked(domain)
+	flushUnit := mergedIndexedFlushUnitLocked(domain)
+	rootNames := orderedBufferedRootNames(meta, flushUnit.rootRuns)
 	if len(rootNames) == 0 {
+		domain.indexedFlushUnits = nil
 		domain.count = 0
 		domain.bufferedBytes = 0
 		return nil
@@ -2762,14 +3021,20 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
 	iterators := make([]iterator.UnsafeIterator, 0, len(rootNames))
 	for _, rootName := range rootNames {
-		iter := newBufferedRootRunsIteratorWithDeleted(domain.rootRuns[rootName], nil, nil, true)
+		iter := newBufferedRootRunsIteratorWithDeleted(flushUnit.rootRuns[rootName], nil, nil, true)
 		iterators = append(iterators, iter)
-		baseRoot := domain.rootBaseIDs[rootName]
+		baseRoot, ok := flushUnit.rootBaseIDs[rootName]
+		if !ok {
+			for _, it := range iterators {
+				_ = it.Close()
+			}
+			return fmt.Errorf("collections: buffered indexed flush missing base root for %q", rootName)
+		}
 		baseRootIDs[rootName] = baseRoot
 		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
 			BaseRoot:      baseRoot,
 			Iter:          iter,
-			StoragePolicy: domain.rootPolicies[rootName],
+			StoragePolicy: flushUnit.rootPolicies[rootName],
 		})
 	}
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -2785,6 +3050,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		return unexpectedOrderedRootCountError(meta.Name, len(rootNames), len(rootIDs))
 	}
 	nextCatalog := cloneCatalogWithRootUpdates(domain.catalog, meta, rootNames, rootIDs)
+	oldUnits := domain.indexedFlushUnits
 	oldRuns := domain.rootRuns
 	domain.loaded = true
 	domain.meta = meta
@@ -2792,6 +3058,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	domain.baseCommitSeq = c.commitSeqForSystemRoot(newSystemRoot)
 	domain.baseSystemRoot = newSystemRoot
 	domain.primaryRoot = nextCatalog.rootID(collectionPrimaryRootName(meta.Name))
+	domain.indexedFlushUnits = nil
 	domain.rootRuns = nil
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
@@ -2805,6 +3072,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	domain.bufferedBytes = 0
 	c.meta = meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+	resetIndexedFlushUnits(oldUnits)
 	for _, runs := range oldRuns {
 		resetCollectionTables(runs)
 	}
@@ -2812,6 +3080,103 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		resetCollectionTables(runs)
 	}
 	return nil
+}
+
+func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
+	if domain == nil || len(domain.rootRuns) == 0 {
+		return false
+	}
+	unit := indexedFlushUnit{
+		rootRuns:        domain.rootRuns,
+		rootPolicies:    domain.rootPolicies,
+		rootBaseIDs:     domain.rootBaseIDs,
+		uniqueValueRuns: domain.uniqueValueRuns,
+		rootRunCount:    domain.rootRunCount,
+	}
+	domain.indexedFlushUnits = append(domain.indexedFlushUnits, unit)
+	domain.rootRuns = nil
+	domain.rootPolicies = nil
+	domain.rootBaseIDs = nil
+	domain.uniqueValueRuns = nil
+	domain.rootRunCount = 0
+	return true
+}
+
+func mergedIndexedFlushUnitLocked(domain *collectionWriteDomain) indexedFlushUnit {
+	if domain == nil {
+		return indexedFlushUnit{}
+	}
+	if len(domain.indexedFlushUnits) == 1 && len(domain.rootRuns) == 0 {
+		return domain.indexedFlushUnits[0]
+	}
+	unit := indexedFlushUnit{
+		rootRuns:        make(map[string][]memtable.Table, len(domain.rootRuns)+len(domain.indexedFlushUnits)),
+		rootPolicies:    make(map[string]backenddb.OrderedRootStoragePolicy, len(domain.rootPolicies)+len(domain.indexedFlushUnits)),
+		rootBaseIDs:     make(map[string]uint64, len(domain.rootBaseIDs)+len(domain.indexedFlushUnits)),
+		uniqueValueRuns: make(map[string][]memtable.Table, len(domain.uniqueValueRuns)+len(domain.indexedFlushUnits)),
+	}
+	for _, pending := range domain.indexedFlushUnits {
+		mergeIndexedFlushUnit(&unit, pending)
+	}
+	mergeIndexedFlushUnit(&unit, indexedFlushUnit{
+		rootRuns:        domain.rootRuns,
+		rootPolicies:    domain.rootPolicies,
+		rootBaseIDs:     domain.rootBaseIDs,
+		uniqueValueRuns: domain.uniqueValueRuns,
+		rootRunCount:    domain.rootRunCount,
+	})
+	if len(unit.rootRuns) == 0 {
+		unit.rootRuns = nil
+	}
+	if len(unit.rootPolicies) == 0 {
+		unit.rootPolicies = nil
+	}
+	if len(unit.rootBaseIDs) == 0 {
+		unit.rootBaseIDs = nil
+	}
+	if len(unit.uniqueValueRuns) == 0 {
+		unit.uniqueValueRuns = nil
+	}
+	return unit
+}
+
+func mergeIndexedFlushUnit(dst *indexedFlushUnit, src indexedFlushUnit) {
+	if dst == nil {
+		return
+	}
+	appendTableRunMap(dst.rootRuns, src.rootRuns)
+	appendTableRunMap(dst.uniqueValueRuns, src.uniqueValueRuns)
+	for rootName, policy := range src.rootPolicies {
+		dst.rootPolicies[rootName] = policy
+	}
+	for rootName, baseRoot := range src.rootBaseIDs {
+		if _, ok := dst.rootBaseIDs[rootName]; !ok {
+			dst.rootBaseIDs[rootName] = baseRoot
+		}
+	}
+	dst.rootRunCount = saturatingAddNonNegativeInt(dst.rootRunCount, indexedFlushUnitRootRunCount(src))
+}
+
+func indexedFlushUnitRootRunCount(unit indexedFlushUnit) int {
+	if unit.rootRunCount > 0 || len(unit.rootRuns) == 0 {
+		return unit.rootRunCount
+	}
+	total := 0
+	for _, runs := range unit.rootRuns {
+		total = saturatingAddNonNegativeInt(total, len(runs))
+	}
+	return total
+}
+
+func resetIndexedFlushUnits(units []indexedFlushUnit) {
+	for _, unit := range units {
+		for _, runs := range unit.rootRuns {
+			resetCollectionTables(runs)
+		}
+		for _, runs := range unit.uniqueValueRuns {
+			resetCollectionTables(runs)
+		}
+	}
 }
 
 func orderedBufferedRootNames(meta CollectionMeta, runs map[string][]memtable.Table) []string {
@@ -4761,11 +5126,11 @@ func (c *Collection) shouldPlanUpdateBatchWithBufferedWrites(mode updateBatchMod
 	domain := c.writeDomain
 	domain.mu.RLock()
 	defer domain.mu.RUnlock()
-	return domain.count > 0 && len(domain.rootRuns) > 0
+	return domain.count > 0 && hasBufferedIndexedRootRuns(domain)
 }
 
 func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64) bool {
-	if domain == nil || domain.count == 0 || len(domain.rootRuns) == 0 {
+	if domain == nil || domain.count == 0 || !hasBufferedIndexedRootRuns(domain) {
 		return false
 	}
 	if !domain.loaded || domain.catalog == nil {
@@ -4778,7 +5143,7 @@ func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta 
 		return false
 	}
 	collectionName := bufferedDomainCollectionName(domain, meta.Name)
-	if collectionName == "" || len(domain.rootRuns[collectionPrimaryRootName(collectionName)]) == 0 {
+	if collectionName == "" || !hasPendingIndexedRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName)) {
 		return false
 	}
 	return meta.Options.BufferedIndexedWrites && len(meta.Indexes) > 0
@@ -4898,7 +5263,7 @@ func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta Collect
 	defer domain.mu.Unlock()
 	bufferedCollectionName := bufferedDomainCollectionName(domain, meta.Name)
 	if updateBatchCanReadBufferedDomainLocked(domain, meta, baseSystemRoot) && domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, bufferedCollectionName) {
-		index, err := rebuildBufferedPrimaryRunIndex(bufferedCollectionName, domain.rootRuns)
+		index, err := rebuildBufferedPrimaryRunIndex(bufferedCollectionName, pendingIndexedRootRunMapLocked(domain))
 		if err != nil {
 			return updateBatchBufferedRead{}, nil, false, err
 		}
@@ -4917,7 +5282,7 @@ func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta C
 		if allowPrimaryRunIndexBuild && domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, bufferedCollectionName) {
 			return updateBatchBufferedRead{}, nil, false, true, nil
 		}
-		primaryRuns := domain.rootRuns[collectionPrimaryRootName(bufferedCollectionName)]
+		primaryRuns := pendingIndexedRootRunsLocked(domain, collectionPrimaryRootName(bufferedCollectionName))
 		var primaryEntries []updateBatchBufferedEntry
 		var err error
 		if domain.primaryRunIndex != nil {
@@ -4930,7 +5295,7 @@ func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta C
 		}
 		var templateRuns []memtable.Table
 		if normalizedDocumentFormat(documentFormat) == DocumentFormatTemplateV1 {
-			templateRuns, err = cloneCollectionRunTables(domain.rootRuns[collectionTemplateRootName(bufferedCollectionName)])
+			templateRuns, err = cloneCollectionRunTables(pendingIndexedRootRunsLocked(domain, collectionTemplateRootName(bufferedCollectionName)))
 			if err != nil {
 				return updateBatchBufferedRead{}, nil, false, false, err
 			}
@@ -4941,7 +5306,7 @@ func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta C
 			writeGeneration: domain.writeGeneration,
 		}, templateRuns, false, false, nil
 	}
-	if domain.count > 0 && len(domain.rootRuns) > 0 {
+	if domain.count > 0 && hasBufferedIndexedRootRuns(domain) {
 		return updateBatchBufferedRead{}, nil, true, false, nil
 	}
 	return updateBatchBufferedRead{}, nil, false, false, nil
@@ -5377,8 +5742,10 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		if table == nil || table.Len() == 0 {
 			continue
 		}
-		if len(domain.rootRuns[rootName]) > 0 && domain.rootBaseIDs[rootName] != baseRoot {
-			return false, errConcurrentRootModification(plan.meta.Name, rootName)
+		if hasPendingIndexedRootRunsForRootLocked(domain, rootName) {
+			if pendingBaseRoot, ok := pendingIndexedRootBaseIDLocked(domain, rootName); ok && pendingBaseRoot != baseRoot {
+				return false, errConcurrentRootModification(plan.meta.Name, rootName)
+			}
 		}
 		stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, table.Size())
 		stagedRootRuns++
@@ -5420,9 +5787,9 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		if table == nil || table.Len() == 0 {
 			continue
 		}
-		if len(domain.rootRuns[rootName]) == 0 {
+		if !hasPendingIndexedRootRunsForRootLocked(domain, rootName) {
 			domain.rootBaseIDs[rootName] = baseRoot
-		} else if domain.rootBaseIDs[rootName] != baseRoot {
+		} else if pendingBaseRoot, ok := pendingIndexedRootBaseIDLocked(domain, rootName); ok && pendingBaseRoot != baseRoot {
 			return false, errConcurrentRootModification(plan.meta.Name, rootName)
 		}
 		if rootName == collectionPrimaryRootName(plan.meta.Name) && domain.primaryRunIndex != nil {
@@ -5780,6 +6147,7 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 	domain.baseSystemRoot = systemRoot
 	domain.primaryRoot = catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
 	domain.storagePolicy = options.dataStoragePolicy
+	domain.indexedFlushUnits = nil
 	domain.rootRuns = nil
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
@@ -6412,7 +6780,7 @@ func (c *Collection) getBufferedDocumentIntoWithPrimaryRunIndex(documentID []byt
 	}
 	if domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, c.meta.Name) {
 		collectionName := bufferedDomainCollectionName(domain, c.meta.Name)
-		index, err := rebuildBufferedPrimaryRunIndex(collectionName, domain.rootRuns)
+		index, err := rebuildBufferedPrimaryRunIndex(collectionName, pendingIndexedRootRunMapLocked(domain))
 		if err == nil {
 			if index == nil {
 				index = newBufferedPrimaryRunIndex(0)
@@ -6431,19 +6799,19 @@ func bufferedDomainCollectionName(domain *collectionWriteDomain, fallback string
 }
 
 func hasBufferedPrimaryRootRuns(domain *collectionWriteDomain, fallbackCollectionName string) bool {
-	if domain == nil || len(domain.rootRuns) == 0 {
+	if domain == nil || !hasBufferedIndexedRootRuns(domain) {
 		return false
 	}
 	collectionName := bufferedDomainCollectionName(domain, fallbackCollectionName)
 	if collectionName == "" {
 		return false
 	}
-	return len(domain.rootRuns[collectionPrimaryRootName(collectionName)]) > 0
+	return hasPendingIndexedRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName))
 }
 
 func (c *Collection) getBufferedDocumentIntoLocked(domain *collectionWriteDomain, documentID []byte, dst []byte) ([]byte, bool, bool) {
 	table := domain.table
-	if len(domain.rootRuns) > 0 {
+	if hasBufferedIndexedRootRuns(domain) {
 		name := collectionPrimaryRootName(c.meta.Name)
 		if domain.meta.Name != "" {
 			name = collectionPrimaryRootName(domain.meta.Name)
@@ -6454,7 +6822,7 @@ func (c *Collection) getBufferedDocumentIntoLocked(domain *collectionWriteDomain
 		if table, ok := domain.primaryRunIndex.lookup(documentID); ok {
 			value, _, flags, found = table.GetEntry(documentID)
 		} else if domain.primaryRunIndex == nil {
-			value, _, flags, found = getBufferedRunEntry(domain.rootRuns[name], documentID)
+			value, _, flags, found = getBufferedRunEntry(pendingIndexedRootRunsLocked(domain, name), documentID)
 		}
 		if found {
 			if flags&node.FlagTombstone != 0 {
@@ -6582,13 +6950,13 @@ func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, ind
 	if domain == nil {
 		return nil, nil
 	}
-	if domain.count == 0 || len(domain.rootRuns) == 0 {
+	if domain.count == 0 || !hasBufferedIndexedRootRuns(domain) {
 		return nil, nil
 	}
 	if domain.meta.Name != "" {
 		collectionName = domain.meta.Name
 	}
-	runs := domain.rootRuns[collectionSecondaryRootName(collectionName, indexName)]
+	runs := pendingIndexedRootRunsLocked(domain, collectionSecondaryRootName(collectionName, indexName))
 	if len(runs) == 0 {
 		return nil, nil
 	}
