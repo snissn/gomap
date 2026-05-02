@@ -1,7 +1,10 @@
 package db
 
 import (
+	"errors"
+	"fmt"
 	"reflect"
+	"sync"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -227,6 +230,66 @@ func TestSnapshotTreeAtRootCachesRootTrees(t *testing.T) {
 		}
 	}); allocs != 0 {
 		t.Fatalf("cached treeAtRoot allocations/run=%0.1f want 0", allocs)
+	}
+}
+
+func TestSnapshotTreeAtRootConcurrentCacheAccess(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	var rootIDs []uint64
+	for i := 0; i < 4; i++ {
+		_, ids, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+			Iter: mustFrozenSystemMemtable(t,
+				fmt.Sprintf("acct/%d/doc-1", i), "v1",
+				fmt.Sprintf("acct/%d/doc-2", i), "v2",
+			).NewIterator(nil, nil),
+		}})
+		if err != nil {
+			t.Fatalf("publish root %d: %v", i, err)
+		}
+		rootIDs = append(rootIDs, ids...)
+	}
+	if len(rootIDs) != 4 {
+		t.Fatalf("root IDs len=%d want 4", len(rootIDs))
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+
+	errCh := make(chan error, 8)
+	var wg sync.WaitGroup
+	for worker := 0; worker < 8; worker++ {
+		wg.Add(1)
+		go func(offset int) {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				rootID := rootIDs[(i+offset)%len(rootIDs)]
+				tr, err := snap.treeAtRoot(rootID)
+				if err != nil {
+					errCh <- err
+					return
+				}
+				if tr == nil {
+					errCh <- errors.New("nil tree")
+					return
+				}
+			}
+		}(worker)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("treeAtRoot concurrent access: %v", err)
+		}
 	}
 }
 

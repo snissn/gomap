@@ -833,6 +833,7 @@ type Snapshot struct {
 	registryID              int64
 	reader                  valueReader
 	tree                    tree.Tree
+	rootTreesMu             sync.Mutex
 	rootTrees               []snapshotRootTree
 	closed                  atomic.Bool
 	treePager               *pager.Pager
@@ -953,6 +954,10 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.vlogManager = vm
 	snap.vlogPinned = vlogNeedsPin
 	snap.reader.reconfigure(vlogSet)
+	for i := range snap.rootTrees {
+		snap.rootTrees[i].root = 0
+		snap.rootTrees[i].tree.Reset(nil, nil, 0)
+	}
 	if cap(snap.rootTrees) > snapshotRootTreeRetainMax {
 		snap.rootTrees = nil
 	} else {
