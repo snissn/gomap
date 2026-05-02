@@ -6234,7 +6234,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	stateArena := indexEncodeArena{
 		buf:       make([]byte, 0, estimateIndexEncodeArenaBytesForCount(len(items)*2, len(runtimes))),
 		valueRefs: make([][]byte, 0, estimateIndexValueRefCountForCount(len(items)*2, len(runtimes))),
-		states:    make([][][]byte, 0, len(items)*2*len(runtimes)),
+		states:    make([][][]byte, 0, estimateIndexStateSlotCountForCount(len(items)*2, len(runtimes))),
 	}
 	for i, item := range items {
 		current, err := readUpdateBatchCurrentDocument(snap, primaryRoot, i, item.DocumentID, bufferedRead)

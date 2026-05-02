@@ -1459,6 +1459,10 @@ func estimateIndexValueRefCountForCount(count, runtimeCount int) int {
 	return count * runtimeCount
 }
 
+func estimateIndexStateSlotCountForCount(count, runtimeCount int) int {
+	return estimateIndexValueRefCountForCount(count, runtimeCount)
+}
+
 func documentIndexStateFromOrdered(state orderedDocumentIndexState, runtimes []indexRuntime) documentIndexState {
 	if len(state) == 0 {
 		return nil

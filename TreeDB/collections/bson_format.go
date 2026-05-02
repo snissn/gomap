@@ -249,9 +249,14 @@ func bsonRawStringBytes(value bson.RawValue) ([]byte, bool) {
 	if len(value.Value) < 5 {
 		return nil, false
 	}
-	n := int(int32(binary.LittleEndian.Uint32(value.Value[:4])))
-	if n <= 0 || len(value.Value) < 4+n || value.Value[4+n-1] != 0 {
+	const lengthPrefixBytes = 4
+	n32 := binary.LittleEndian.Uint32(value.Value[:lengthPrefixBytes])
+	if n32 == 0 || n32 > uint32(len(value.Value)-lengthPrefixBytes) {
 		return nil, false
 	}
-	return value.Value[4 : 4+n-1], true
+	n := int(n32)
+	if value.Value[lengthPrefixBytes+n-1] != 0 {
+		return nil, false
+	}
+	return value.Value[lengthPrefixBytes : lengthPrefixBytes+n-1], true
 }

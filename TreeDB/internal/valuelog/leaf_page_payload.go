@@ -62,10 +62,11 @@ func compactLeafLogPayloadBounds(payload []byte) (prefixLen, suffixLen int, deco
 	}
 	prefixLen = int(binary.LittleEndian.Uint16(payload[len(compactLeafPagePayloadMagic) : len(compactLeafPagePayloadMagic)+2]))
 	suffixLen = int(binary.LittleEndian.Uint16(payload[len(compactLeafPagePayloadMagic)+2 : compactLeafPagePayloadHeaderSize]))
-	if prefixLen < node.NodeHeaderSize || prefixLen+suffixLen > page.PageSize {
+	compactLen := compactLeafPagePayloadHeaderSize + prefixLen + suffixLen
+	if prefixLen < node.NodeHeaderSize || prefixLen+suffixLen > page.PageSize || compactLen > page.PageSize {
 		return 0, 0, true, ErrCorrupt
 	}
-	if compactLeafPagePayloadHeaderSize+prefixLen+suffixLen != len(payload) {
+	if compactLen != len(payload) {
 		return 0, 0, true, ErrCorrupt
 	}
 	return prefixLen, suffixLen, true, nil
