@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -477,32 +479,24 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	idStride := profileBenchUpdateIDStride(documentCount)
 
 	writers := profileBenchConcurrentWriters(b)
+	warmupOps := documentCount
+	if warmupOps > 100000 {
+		warmupOps = 100000
+	}
+	if err := runProfileBenchDirectCollectionConcurrentUpdates(context.Background(), writers, warmupOps, documentCount, idStride, ids, updateDocs, collection); err != nil {
+		b.Fatalf("warm up concurrent updates: %v", err)
+	}
+	if err := manager.FlushAll(); err != nil {
+		b.Fatalf("flush warm up: %v", err)
+	}
+	if err := backend.Checkpoint(); err != nil {
+		b.Fatalf("checkpoint warm up: %v", err)
+	}
+
 	b.ReportAllocs()
 	b.ResetTimer()
 	started := time.Now()
-	err = runConcurrentOperations(context.Background(), writers, b.N, func(op int) error {
-		id := ids[(op*idStride)%documentCount]
-		updateDoc := updateDocs[op%len(updateDocs)]
-		matched, _, err := collection.Update(id, func(stored []byte) ([]byte, bool, error) {
-			raw := bson.Raw(stored)
-			originalID := raw.Lookup("_id")
-			updated, shouldWrite, err := profileBenchApplyParsedSetUpdate(raw, updateDoc)
-			if err != nil {
-				return nil, false, err
-			}
-			if !updated.Lookup("_id").Equal(originalID) {
-				return nil, false, errUpdatedPrimaryKey
-			}
-			return []byte(updated), shouldWrite, nil
-		})
-		if err != nil {
-			return err
-		}
-		if !matched {
-			return errProfileBenchUpdateMiss
-		}
-		return nil
-	})
+	err = runProfileBenchDirectCollectionConcurrentUpdates(context.Background(), writers, b.N, documentCount, idStride, ids, updateDocs, collection)
 	timedElapsed := time.Since(started)
 	b.StopTimer()
 	if err != nil {
@@ -510,6 +504,82 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	}
 	b.ReportMetric(float64(writers), "writers")
 	reportDocsPerSecond(b, b.N, timedElapsed)
+}
+
+func runProfileBenchDirectCollectionConcurrentUpdates(
+	ctx context.Context,
+	workers, operations, documentCount, idStride int,
+	ids [][]byte,
+	updateDocs []profileBenchSetUpdate,
+	collection *collections.Collection,
+) error {
+	if workers <= 0 || operations <= 0 {
+		return nil
+	}
+	if workers > operations {
+		workers = operations
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	var errOnce sync.Once
+	var firstErr error
+	recordErr := func(err error) {
+		if err == nil {
+			return
+		}
+		errOnce.Do(func() {
+			firstErr = err
+			cancel()
+		})
+	}
+
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			updateScratch := make([]byte, 0, 512)
+			for {
+				if err := runCtx.Err(); err != nil {
+					return
+				}
+				op := int(next.Add(1) - 1)
+				if op >= operations {
+					return
+				}
+				id := ids[(op*idStride)%documentCount]
+				updateDoc := updateDocs[op%len(updateDocs)]
+				matched, _, err := collection.Update(id, func(stored []byte) ([]byte, bool, error) {
+					raw := bson.Raw(stored)
+					originalID := raw.Lookup("_id")
+					updated, nextScratch, shouldWrite, err := profileBenchApplyParsedSetUpdateTo(updateScratch[:0], raw, updateDoc)
+					updateScratch = nextScratch
+					if err != nil {
+						return nil, false, err
+					}
+					if !updated.Lookup("_id").Equal(originalID) {
+						return nil, false, errUpdatedPrimaryKey
+					}
+					return []byte(updated), shouldWrite, nil
+				})
+				if err != nil {
+					recordErr(err)
+					return
+				}
+				if !matched {
+					recordErr(errProfileBenchUpdateMiss)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return firstErr
+	}
+	return ctx.Err()
 }
 
 type profileBenchSetField struct {
@@ -649,15 +719,24 @@ func validateProfileBenchSetKey(key string) error {
 }
 
 func profileBenchApplyParsedSetUpdate(doc bson.Raw, update profileBenchSetUpdate) (bson.Raw, bool, error) {
+	raw, _, changed, err := profileBenchApplyParsedSetUpdateTo(nil, doc, update)
+	return raw, changed, err
+}
+
+func profileBenchApplyParsedSetUpdateTo(dst []byte, doc bson.Raw, update profileBenchSetUpdate) (bson.Raw, []byte, bool, error) {
 	if len(update.fields) == 0 {
-		return doc, false, nil
+		return doc, dst, false, nil
 	}
 	length, rem, ok := bsoncore.ReadLength(doc)
 	if !ok {
-		return nil, false, bsoncore.NewInsufficientBytesError(doc, rem)
+		return nil, dst, false, bsoncore.NewInsufficientBytesError(doc, rem)
 	}
 	length -= 4
-	idx, out := bsoncore.AppendDocumentStart(make([]byte, 0, len(doc)+64))
+	out := dst[:0]
+	if cap(out) < len(doc)+64 {
+		out = make([]byte, 0, len(doc)+64)
+	}
+	idx, out := bsoncore.AppendDocumentStart(out)
 	var usedInline [8]bool
 	used := usedInline[:]
 	if len(update.fields) > len(usedInline) {
@@ -671,7 +750,7 @@ func profileBenchApplyParsedSetUpdate(doc bson.Raw, update profileBenchSetUpdate
 		elem, rem, elemOK = bsoncore.ReadElement(rem)
 		length -= int32(len(elem))
 		if !elemOK {
-			return nil, false, bsoncore.NewInsufficientBytesError(doc, rem)
+			return nil, out, false, bsoncore.NewInsufficientBytesError(doc, rem)
 		}
 		replacement := -1
 		keyBytes := elem.KeyBytes()
@@ -703,9 +782,9 @@ func profileBenchApplyParsedSetUpdate(doc bson.Raw, update profileBenchSetUpdate
 	}
 	raw, err := bsoncore.AppendDocumentEnd(out, idx)
 	if err != nil {
-		return nil, false, err
+		return nil, out, false, err
 	}
-	return bson.Raw(raw), true, nil
+	return bson.Raw(raw), raw, true, nil
 }
 
 func TestProfileBenchApplySetUpdateHappyPath(t *testing.T) {

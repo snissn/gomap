@@ -643,6 +643,10 @@ func setCollectionRunValue(table memtable.Table, key, value []byte) {
 	table.SetEntrySteal(key, value, page.ValuePtr{}, node.FlagInline)
 }
 
+func setCollectionRunBorrowedValue(table memtable.Table, key, value []byte) {
+	table.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
+}
+
 func applyCollectionRunEntries(table memtable.Table, count int, emit func(i int) (key, value []byte, err error)) error {
 	if count <= 0 {
 		return nil

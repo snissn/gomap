@@ -5776,6 +5776,164 @@ type updateBatchPlan struct {
 	bufferedBase                bool
 	bufferedReadGeneration      uint64
 	bufferedReadBlocked         bool
+	scratch                     *updateBatchPlanScratch
+}
+
+var updateBatchPlanPool sync.Pool
+
+func newUpdateBatchPlan() *updateBatchPlan {
+	if v := updateBatchPlanPool.Get(); v != nil {
+		if plan, ok := v.(*updateBatchPlan); ok && plan != nil {
+			return plan
+		}
+	}
+	return &updateBatchPlan{}
+}
+
+type updateBatchPlanScratch struct {
+	changed          []preparedBatchUpdate
+	changedDocuments [][]byte
+	documentArena    []byte
+	stateArena       indexEncodeArena
+	rootNames        []string
+	baseRootIDs      map[string]uint64
+	policies         []backenddb.OrderedRootStoragePolicy
+	deltaTables      []memtable.Table
+}
+
+var updateBatchPlanScratchPool sync.Pool
+
+const (
+	updateBatchPlanScratchMaxChangedCap    = 1 << 15
+	updateBatchPlanScratchDocumentBytes    = 256
+	updateBatchPlanScratchMaxDocumentArena = 8 << 20
+	updateBatchPlanScratchMaxRootNameCap   = 64
+	updateBatchPlanScratchMaxStateArenaCap = 4 << 20
+	updateBatchPlanScratchMaxStateSliceCap = 1 << 16
+	updateBatchPlanScratchMaxValueRefCap   = 1 << 16
+)
+
+func getUpdateBatchPlanScratch(itemCount, runtimeCount int) *updateBatchPlanScratch {
+	var scratch *updateBatchPlanScratch
+	if v := updateBatchPlanScratchPool.Get(); v != nil {
+		scratch, _ = v.(*updateBatchPlanScratch)
+	}
+	if scratch == nil {
+		scratch = &updateBatchPlanScratch{}
+	}
+	if cap(scratch.changed) < itemCount {
+		scratch.changed = make([]preparedBatchUpdate, 0, itemCount)
+	} else {
+		scratch.changed = scratch.changed[:0]
+	}
+	if cap(scratch.changedDocuments) < itemCount {
+		scratch.changedDocuments = make([][]byte, 0, itemCount)
+	} else {
+		scratch.changedDocuments = scratch.changedDocuments[:0]
+	}
+	documentArenaBytes := itemCount * updateBatchPlanScratchDocumentBytes
+	if cap(scratch.documentArena) < documentArenaBytes {
+		scratch.documentArena = make([]byte, 0, documentArenaBytes)
+	} else {
+		scratch.documentArena = scratch.documentArena[:0]
+	}
+	arenaBytes := estimateIndexEncodeArenaBytesForCount(itemCount*2, runtimeCount)
+	if cap(scratch.stateArena.buf) < arenaBytes {
+		scratch.stateArena.buf = make([]byte, 0, arenaBytes)
+	} else {
+		scratch.stateArena.buf = scratch.stateArena.buf[:0]
+	}
+	valueRefs := estimateIndexValueRefCountForCount(itemCount*2, runtimeCount)
+	if cap(scratch.stateArena.valueRefs) < valueRefs {
+		scratch.stateArena.valueRefs = make([][]byte, 0, valueRefs)
+	} else {
+		scratch.stateArena.valueRefs = scratch.stateArena.valueRefs[:0]
+	}
+	stateSlots := estimateIndexStateSlotCountForCount(itemCount*2, runtimeCount)
+	if cap(scratch.stateArena.states) < stateSlots {
+		scratch.stateArena.states = make([][][]byte, 0, stateSlots)
+	} else {
+		scratch.stateArena.states = scratch.stateArena.states[:0]
+	}
+	rootCap := 2 + runtimeCount
+	if cap(scratch.rootNames) < rootCap || cap(scratch.rootNames) > updateBatchPlanScratchMaxRootNameCap {
+		scratch.rootNames = make([]string, 0, rootCap)
+	} else {
+		scratch.rootNames = scratch.rootNames[:0]
+	}
+	if scratch.baseRootIDs == nil || len(scratch.baseRootIDs) > updateBatchPlanScratchMaxRootNameCap {
+		scratch.baseRootIDs = make(map[string]uint64, rootCap)
+	} else {
+		clear(scratch.baseRootIDs)
+	}
+	if cap(scratch.policies) < rootCap || cap(scratch.policies) > updateBatchPlanScratchMaxRootNameCap {
+		scratch.policies = make([]backenddb.OrderedRootStoragePolicy, 0, rootCap)
+	} else {
+		scratch.policies = scratch.policies[:0]
+	}
+	if cap(scratch.deltaTables) < rootCap || cap(scratch.deltaTables) > updateBatchPlanScratchMaxRootNameCap {
+		scratch.deltaTables = make([]memtable.Table, 0, rootCap)
+	} else {
+		scratch.deltaTables = scratch.deltaTables[:0]
+	}
+	return scratch
+}
+
+func putUpdateBatchPlanScratch(scratch *updateBatchPlanScratch) {
+	if scratch == nil {
+		return
+	}
+	clear(scratch.changed)
+	if cap(scratch.changed) > updateBatchPlanScratchMaxChangedCap {
+		scratch.changed = nil
+	} else {
+		scratch.changed = scratch.changed[:0]
+	}
+	clear(scratch.changedDocuments)
+	if cap(scratch.changedDocuments) > updateBatchPlanScratchMaxChangedCap {
+		scratch.changedDocuments = nil
+	} else {
+		scratch.changedDocuments = scratch.changedDocuments[:0]
+	}
+	if cap(scratch.documentArena) > updateBatchPlanScratchMaxDocumentArena {
+		scratch.documentArena = nil
+	} else {
+		scratch.documentArena = scratch.documentArena[:0]
+	}
+	if cap(scratch.stateArena.buf) > updateBatchPlanScratchMaxStateArenaCap {
+		scratch.stateArena.buf = nil
+	} else {
+		scratch.stateArena.buf = scratch.stateArena.buf[:0]
+	}
+	clear(scratch.stateArena.valueRefs)
+	if cap(scratch.stateArena.valueRefs) > updateBatchPlanScratchMaxValueRefCap {
+		scratch.stateArena.valueRefs = nil
+	} else {
+		scratch.stateArena.valueRefs = scratch.stateArena.valueRefs[:0]
+	}
+	clear(scratch.stateArena.states)
+	if cap(scratch.stateArena.states) > updateBatchPlanScratchMaxStateSliceCap {
+		scratch.stateArena.states = nil
+	} else {
+		scratch.stateArena.states = scratch.stateArena.states[:0]
+	}
+	clear(scratch.rootNames)
+	scratch.rootNames = scratch.rootNames[:0]
+	clear(scratch.baseRootIDs)
+	clear(scratch.policies)
+	scratch.policies = scratch.policies[:0]
+	clear(scratch.deltaTables)
+	scratch.deltaTables = scratch.deltaTables[:0]
+	updateBatchPlanScratchPool.Put(scratch)
+}
+
+func appendUpdateBatchPlanScratchDocument(scratch *updateBatchPlanScratch, document []byte) []byte {
+	if scratch == nil || len(document) == 0 {
+		return nil
+	}
+	start := len(scratch.documentArena)
+	scratch.documentArena = append(scratch.documentArena, document...)
+	return scratch.documentArena[start:len(scratch.documentArena):len(scratch.documentArena)]
 }
 
 type updateBatchBufferedRead struct {
@@ -5802,10 +5960,13 @@ func (plan *updateBatchPlan) close() {
 	}
 	if plan.snap != nil {
 		_ = plan.snap.Close()
-		plan.snap = nil
 	}
 	resetCollectionTables(plan.deltaTables)
-	plan.deltaTables = nil
+	if plan.scratch != nil {
+		putUpdateBatchPlanScratch(plan.scratch)
+	}
+	*plan = updateBatchPlan{}
+	updateBatchPlanPool.Put(plan)
 }
 
 func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, error) {
@@ -5992,7 +6153,7 @@ func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta 
 	return meta.Options.BufferedIndexedWrites && len(meta.Indexes) > 0
 }
 
-func readUpdateBatchCurrentDocument(snap *backenddb.Snapshot, primaryRoot uint64, itemIndex int, documentID []byte, buffered updateBatchBufferedRead) (updateBatchCurrentDocument, error) {
+func readUpdateBatchCurrentDocument(snap *backenddb.Snapshot, primaryRoot uint64, itemIndex int, documentID []byte, buffered updateBatchBufferedRead, dst []byte) (updateBatchCurrentDocument, error) {
 	if buffered.enabled {
 		if itemIndex >= 0 && itemIndex < len(buffered.primaryEntries) {
 			entry := buffered.primaryEntries[itemIndex]
@@ -6007,7 +6168,7 @@ func readUpdateBatchCurrentDocument(snap *backenddb.Snapshot, primaryRoot uint64
 	if primaryRoot == 0 {
 		return updateBatchCurrentDocument{}, nil
 	}
-	value, err := snap.GetAppendAtRoot(primaryRoot, documentID, nil)
+	value, err := snap.GetAppendAtRoot(primaryRoot, documentID, dst)
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return updateBatchCurrentDocument{}, nil
 	}
@@ -6206,7 +6367,8 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	primaryRoot := catalog.rootID(collectionPrimaryRootName(meta.Name))
 	if primaryRoot == 0 && !bufferedRead.enabled {
 		primaryRootName := collectionPrimaryRootName(meta.Name)
-		return &updateBatchPlan{
+		plan := newUpdateBatchPlan()
+		*plan = updateBatchPlan{
 			results:                results,
 			meta:                   meta,
 			catalog:                catalog,
@@ -6218,7 +6380,8 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			baseRootIDs:            map[string]uint64{primaryRootName: primaryRoot},
 			bufferedReadGeneration: bufferedRead.writeGeneration,
 			bufferedReadBlocked:    bufferedReadBlocked,
-		}, nil
+		}
+		return plan, nil
 	}
 	runtimes, err := (insertBatchPlanner{
 		collection: meta.Name,
@@ -6229,15 +6392,28 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		return nil, err
 	}
 
-	changed := make([]preparedBatchUpdate, 0, len(items))
-	changedDocuments := make([][]byte, 0, len(items))
-	stateArena := indexEncodeArena{
-		buf:       make([]byte, 0, estimateIndexEncodeArenaBytesForCount(len(items)*2, len(runtimes))),
-		valueRefs: make([][]byte, 0, estimateIndexValueRefCountForCount(len(items)*2, len(runtimes))),
-		states:    make([][][]byte, 0, estimateIndexStateSlotCountForCount(len(items)*2, len(runtimes))),
-	}
+	scratch := getUpdateBatchPlanScratch(len(items), len(runtimes))
+	scratchOwnedByPlan := false
+	changed := scratch.changed
+	changedDocuments := scratch.changedDocuments
+	stateArena := &scratch.stateArena
+	rootNames := scratch.rootNames
+	baseRootIDs := scratch.baseRootIDs
+	policies := scratch.policies
+	deltaTables := scratch.deltaTables
+	defer func() {
+		scratch.changed = changed
+		scratch.changedDocuments = changedDocuments
+		scratch.rootNames = rootNames
+		scratch.policies = policies
+		scratch.deltaTables = deltaTables
+		if !scratchOwnedByPlan {
+			putUpdateBatchPlanScratch(scratch)
+		}
+	}()
+	var currentScratch []byte
 	for i, item := range items {
-		current, err := readUpdateBatchCurrentDocument(snap, primaryRoot, i, item.DocumentID, bufferedRead)
+		current, err := readUpdateBatchCurrentDocument(snap, primaryRoot, i, item.DocumentID, bufferedRead, currentScratch[:0])
 		if err != nil {
 			_ = snap.Close()
 			return nil, updateBatchItemError(i, err)
@@ -6256,7 +6432,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			documentID: item.DocumentID,
 		}
 		if len(runtimes) > 0 {
-			prepared.oldState, err = orderedIndexStateForDocumentWithArena(current.value, runtimes, plannerOptions, &stateArena)
+			prepared.oldState, err = orderedIndexStateForDocumentWithArena(current.value, runtimes, plannerOptions, stateArena)
 			if err != nil {
 				_ = snap.Close()
 				return nil, updateBatchItemError(i, err)
@@ -6268,6 +6444,9 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			return nil, updateBatchItemError(i, err)
 		}
 		if !changedOne {
+			if !current.buffered {
+				currentScratch = current.value[:0]
+			}
 			continue
 		}
 		if len(document) == 0 {
@@ -6279,11 +6458,17 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			return nil, updateBatchItemError(i, err)
 		}
 		changed = append(changed, prepared)
-		changedDocuments = append(changedDocuments, bytes.Clone(document))
+		changedDocuments = append(changedDocuments, appendUpdateBatchPlanScratchDocument(scratch, document))
+		if !current.buffered {
+			currentScratch = current.value[:0]
+		}
 	}
 	if len(changed) == 0 {
 		primaryRootName := collectionPrimaryRootName(meta.Name)
-		return &updateBatchPlan{
+		baseRootIDs[primaryRootName] = primaryRoot
+		rootNames = append(rootNames, primaryRootName)
+		plan := newUpdateBatchPlan()
+		*plan = updateBatchPlan{
 			results:                results,
 			meta:                   meta,
 			catalog:                catalog,
@@ -6291,12 +6476,15 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			baseUserRoot:           baseUserRoot,
 			baseSystemRoot:         baseSystemRoot,
 			baseCommitSeq:          baseCommitSeq,
-			rootNames:              []string{primaryRootName},
-			baseRootIDs:            map[string]uint64{primaryRootName: primaryRoot},
+			rootNames:              rootNames,
+			baseRootIDs:            baseRootIDs,
 			bufferedBase:           bufferedRead.enabled,
 			bufferedReadGeneration: bufferedRead.writeGeneration,
 			bufferedReadBlocked:    bufferedReadBlocked,
-		}, nil
+			scratch:                scratch,
+		}
+		scratchOwnedByPlan = true
+		return plan, nil
 	}
 
 	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments(changedDocuments, plannerOptions)
@@ -6320,7 +6508,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	for i := range changed {
 		changed[i].document = preparedDocuments[i]
 		if len(runtimes) > 0 {
-			changed[i].newState, err = orderedIndexStateForDocumentWithArena(changed[i].document, runtimes, plannerOptions, &stateArena)
+			changed[i].newState, err = orderedIndexStateForDocumentWithArena(changed[i].document, runtimes, plannerOptions, stateArena)
 			if err != nil {
 				_ = snap.Close()
 				return nil, updateBatchItemError(changed[i].itemIndex, err)
@@ -6346,10 +6534,6 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		return nil, err
 	}
 
-	rootNames := make([]string, 0, 2+len(runtimes))
-	baseRootIDs := make(map[string]uint64, 2+len(runtimes))
-	policies := make([]backenddb.OrderedRootStoragePolicy, 0, 2+len(runtimes))
-	deltaTables := make([]memtable.Table, 0, 2+len(runtimes))
 	var stateTable memtable.Table
 	secondaryTables := make(map[string]memtable.Table, len(runtimes))
 	success := false
@@ -6389,7 +6573,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	policies = append(policies, plannerOptions.dataStoragePolicy)
 	primaryTable := newCollectionRunTable(len(changed))
 	for _, item := range changed {
-		setCollectionRunValue(primaryTable, bytes.Clone(item.documentID), item.document)
+		setCollectionRunBorrowedValue(primaryTable, item.documentID, item.document)
 		results[item.itemIndex].Modified = true
 	}
 	primaryTable.Freeze()
@@ -6471,7 +6655,8 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		resetCollectionRunTable(table)
 	}
 	success = true
-	return &updateBatchPlan{
+	plan := newUpdateBatchPlan()
+	*plan = updateBatchPlan{
 		results:                     results,
 		meta:                        meta,
 		catalog:                     catalog,
@@ -6487,7 +6672,10 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		bufferedReadBlocked:         bufferedReadBlocked,
 		policies:                    policies,
 		deltaTables:                 deltaTables,
-	}, nil
+		scratch:                     scratch,
+	}
+	scratchOwnedByPlan = true
+	return plan, nil
 }
 
 func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]UpdateBatchResult, error) {
