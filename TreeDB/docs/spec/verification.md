@@ -144,6 +144,13 @@ Invariant:
 - Collection benchmark defaults measure the production-mainline storage cell:
   data roots with outer leaves in the value log and secondary indexes in pager
   leaves unless explicitly overridden.
+- Indexed collection writes use collection-local write memtables by default.
+  Buffered writes are visible through the owning manager before root publish,
+  but the async indexed flush path is flush-boundary durable, not
+  durable-at-ack.
+- Flush barriers and schema/index changes drain pending indexed write-domain
+  state and wait for in-flight async publishing units before planning from
+  persisted roots.
 
 Coverage:
 - `TreeDB/collections/native_default_test.go`:
@@ -157,6 +164,15 @@ Coverage:
   - `TestCollectionSingleInsertMatchesSingleItemBatch`
   - `TestCollectionSingleInsertRejectsUniqueConflictAtomically`
   - `TestCollectionSingleDocumentReopenUsesPersistedRootDescriptors`
+  - `TestCollectionIndexedWriteMemtablesReadUniqueAndFlush`
+  - `TestCollectionIndexedFlushUnitCloseFlushesRotatedState`
+  - `TestCollectionIndexedWriteMemtablesAsyncAutoFlushDrainsOnFlush`
+  - `TestCollectionIndexedWriteMemtablesAsyncPublishingUnitsParticipateInReadsAndUniqueChecks`
+  - `TestCollectionIndexedWriteMemtablesAsyncBackpressureWaitsForPublishingUnit`
+  - `TestCollectionIndexedWriteMemtablesFlushWaitsForPublishingUnits`
+  - `TestCollectionIndexedWriteMemtablesCreateIndexWaitsForPublishingUnits`
+  - `TestCollectionIndexedWriteMemtablesAsyncPublishRetargetsMutableRuns`
+  - `TestCollectionIndexedWriteMemtablesAsyncUpdateAndDeleteDrainCorrectly`
 
 Benchmark verification for collection cutover must include the full storage
 matrix:

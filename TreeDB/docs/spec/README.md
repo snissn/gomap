@@ -61,6 +61,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 - `TreeDB/docs/spec/collections-document-formats.md`
   - collection document-format encodings, including JSON and template-v1
     template-root storage.
+- `TreeDB/docs/spec/collections-write-domain.md`
+  - indexed collection write-domain visibility, async flush, backpressure, and
+    durability-boundary semantics.
 - `TreeDB/docs/spec/write-path-and-durability.md`
   - write pipeline and durability semantics for all durability modes.
 - `TreeDB/docs/spec/recovery.md`
