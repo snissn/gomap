@@ -3212,6 +3212,17 @@ func TestServerFindIndexedRangeSkipsNullMissingAndWrongTypePredicates(t *testing
 	})
 	assertBatchIDs(t, cursorFirstBatch(t, rangeFind), []string{"num"})
 
+	decimalTen, err := bson.ParseDecimal128("10")
+	if err != nil {
+		t.Fatalf("parse decimal: %v", err)
+	}
+	decimalRangeFind := serveCommand(t, server, 268, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: decimalTen}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, decimalRangeFind), []string{"num"})
+
 	wrongTypeRangeFind := serveCommand(t, server, 268, bson.D{
 		{Key: "find", Value: "users"},
 		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: "5"}}}}},
@@ -3220,10 +3231,56 @@ func TestServerFindIndexedRangeSkipsNullMissingAndWrongTypePredicates(t *testing
 	assertBatchIDs(t, cursorFirstBatch(t, wrongTypeRangeFind), nil)
 }
 
+func TestServerFindIndexedRangeDecimal128FractionFallsBackToScan(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.MaxFindScanDocuments = 10
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 269, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}},
+			{Key: "name", Value: "age_1"}, {Key: "treedbValueType", Value: "int64"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 270, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "ten"}, {Key: "age", Value: int64(10)}},
+			bson.D{{Key: "_id", Value: "eleven"}, {Key: "age", Value: int64(11)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	decimal, err := bson.ParseDecimal128("10.5")
+	if err != nil {
+		t.Fatalf("parse decimal: %v", err)
+	}
+	rangeFind := serveCommand(t, server, 271, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: decimal}}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, rangeFind), []string{"eleven"})
+}
+
 func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 	decimal, err := bson.ParseDecimal128("1.50")
 	if err != nil {
 		t.Fatalf("parse decimal: %v", err)
+	}
+	decimalInt, err := bson.ParseDecimal128("37")
+	if err != nil {
+		t.Fatalf("parse decimal int: %v", err)
+	}
+	decimalTenth, err := bson.ParseDecimal128("0.1")
+	if err != nil {
+		t.Fatalf("parse decimal tenth: %v", err)
 	}
 	raw := bson.Raw(mustDocument(t, bson.D{
 		{Key: "nan", Value: math.NaN()},
@@ -3231,6 +3288,8 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 		{Key: "neg_inf", Value: math.Inf(-1)},
 		{Key: "finite", Value: 1.5},
 		{Key: "decimal", Value: decimal},
+		{Key: "decimal_int", Value: decimalInt},
+		{Key: "decimal_tenth", Value: decimalTenth},
 		{Key: "large_int", Value: int64(9007199254740993)},
 		{Key: "double_int", Value: 37.0},
 		{Key: "double_fraction", Value: 37.5},
@@ -3240,6 +3299,8 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 	negInf := raw.Lookup("neg_inf")
 	finite := raw.Lookup("finite")
 	decimalValue := raw.Lookup("decimal")
+	decimalIntValue := raw.Lookup("decimal_int")
+	decimalTenthValue := raw.Lookup("decimal_tenth")
 	largeInt := raw.Lookup("large_int")
 	doubleInt := raw.Lookup("double_int")
 	doubleFraction := raw.Lookup("double_fraction")
@@ -3273,10 +3334,29 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 	if scalar, ok = indexScalarForBSONValue(posInf, collections.IndexValueInt64); ok {
 		t.Fatalf("+Inf int64 scalar=%v ok=%v want not indexable", scalar, ok)
 	}
+	scalar, ok = indexScalarForBSONValue(decimalIntValue, collections.IndexValueInt64)
+	if !ok || scalar != int64(37) {
+		t.Fatalf("decimal int64 scalar=%v ok=%v want int64(37)", scalar, ok)
+	}
+	scalar, ok = indexScalarForBSONValue(decimalValue, collections.IndexValueDouble)
+	if !ok || scalar != float64(1.5) {
+		t.Fatalf("decimal double scalar=%v ok=%v want float64(1.5)", scalar, ok)
+	}
+	if scalar, ok = indexScalarForBSONValue(decimalTenthValue, collections.IndexValueDouble); ok {
+		t.Fatalf("non-exact decimal double scalar=%v ok=%v want not indexable", scalar, ok)
+	}
 }
 
 func TestIndexRangeOptionsForPredicatesCombinesTypedBounds(t *testing.T) {
 	idx := collections.IndexDefinition{Name: "age_1", Field: "age", ValueType: collections.IndexValueInt64}
+	decimalFifteen, err := bson.ParseDecimal128("15")
+	if err != nil {
+		t.Fatalf("parse decimal: %v", err)
+	}
+	decimalFraction, err := bson.ParseDecimal128("15.5")
+	if err != nil {
+		t.Fatalf("parse decimal fraction: %v", err)
+	}
 	opts, ok, empty, err := indexRangeOptionsForPredicates([]findPredicate{
 		{field: "age", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, int32(10))}},
 		{field: "age", op: findPredicateGT, values: []bson.RawValue{mustRawValue(t, int64(10))}},
@@ -3294,6 +3374,29 @@ func TestIndexRangeOptionsForPredicatesCombinesTypedBounds(t *testing.T) {
 	}
 	if opts.Upper.Value != int64(20) || !opts.Upper.Inclusive || opts.Upper.Unbounded {
 		t.Fatalf("upper bound=%+v want inclusive int64(20)", opts.Upper)
+	}
+
+	opts, ok, empty, err = indexRangeOptionsForPredicates([]findPredicate{
+		{field: "age", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, decimalFifteen)}},
+	}, idx)
+	if err != nil {
+		t.Fatalf("decimal int64 range options: %v", err)
+	}
+	if !ok || empty {
+		t.Fatalf("decimal int64 range ok=%v empty=%v want true/false", ok, empty)
+	}
+	if opts.Lower.Value != int64(15) || !opts.Lower.Inclusive || opts.Lower.Unbounded {
+		t.Fatalf("decimal int64 lower bound=%+v want inclusive int64(15)", opts.Lower)
+	}
+
+	_, ok, empty, err = indexRangeOptionsForPredicates([]findPredicate{
+		{field: "age", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, decimalFraction)}},
+	}, idx)
+	if err != nil {
+		t.Fatalf("fractional decimal int64 range options: %v", err)
+	}
+	if ok || empty {
+		t.Fatalf("fractional decimal int64 range ok=%v empty=%v want fallback false/false", ok, empty)
 	}
 
 	_, ok, empty, err = indexRangeOptionsForPredicates([]findPredicate{
@@ -3320,6 +3423,14 @@ func TestIndexRangeOptionsForPredicatesCombinesTypedBounds(t *testing.T) {
 
 func TestIndexRangeOptionsForPredicatesHandlesDoubleBounds(t *testing.T) {
 	idx := collections.IndexDefinition{Name: "score_1", Field: "score", ValueType: collections.IndexValueDouble}
+	decimalOnePointFive, err := bson.ParseDecimal128("1.5")
+	if err != nil {
+		t.Fatalf("parse decimal: %v", err)
+	}
+	decimalTenth, err := bson.ParseDecimal128("0.1")
+	if err != nil {
+		t.Fatalf("parse decimal tenth: %v", err)
+	}
 	opts, ok, empty, err := indexRangeOptionsForPredicates([]findPredicate{
 		{field: "score", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, int64(4))}},
 		{field: "score", op: findPredicateLT, values: []bson.RawValue{mustRawValue(t, 5.5)}},
@@ -3335,6 +3446,29 @@ func TestIndexRangeOptionsForPredicatesHandlesDoubleBounds(t *testing.T) {
 	}
 	if opts.Upper.Value != float64(5.5) || opts.Upper.Inclusive || opts.Upper.Unbounded {
 		t.Fatalf("double upper bound=%+v want exclusive float64(5.5)", opts.Upper)
+	}
+
+	opts, ok, empty, err = indexRangeOptionsForPredicates([]findPredicate{
+		{field: "score", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, decimalOnePointFive)}},
+	}, idx)
+	if err != nil {
+		t.Fatalf("decimal double range options: %v", err)
+	}
+	if !ok || empty {
+		t.Fatalf("decimal double range ok=%v empty=%v want true/false", ok, empty)
+	}
+	if opts.Lower.Value != float64(1.5) || !opts.Lower.Inclusive || opts.Lower.Unbounded {
+		t.Fatalf("decimal double lower bound=%+v want inclusive float64(1.5)", opts.Lower)
+	}
+
+	_, ok, empty, err = indexRangeOptionsForPredicates([]findPredicate{
+		{field: "score", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, decimalTenth)}},
+	}, idx)
+	if err != nil {
+		t.Fatalf("non-exact decimal double range options: %v", err)
+	}
+	if ok || empty {
+		t.Fatalf("non-exact decimal double range ok=%v empty=%v want fallback false/false", ok, empty)
 	}
 
 	_, ok, empty, err = indexRangeOptionsForPredicates([]findPredicate{

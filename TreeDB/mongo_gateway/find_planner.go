@@ -802,6 +802,9 @@ func indexRangeOptionsForPredicates(predicates []findPredicate, idx collections.
 		}
 		scalar, ok := indexScalarForBSONValue(pred.values[0], idx.ValueType)
 		if !ok {
+			if uncoercibleNumericRangeShouldScan(pred.values[0], idx.ValueType) {
+				return collections.IndexRangeOptions{}, false, false, nil
+			}
 			return collections.IndexRangeOptions{}, true, true, nil
 		}
 		switch pred.op {
@@ -1800,6 +1803,16 @@ func indexScalarForBSONValue(value bson.RawValue, valueType collections.IndexVal
 				return nil, false
 			}
 			return intValue, true
+		case bson.TypeDecimal128:
+			out, ok := value.Decimal128OK()
+			if !ok {
+				return nil, false
+			}
+			intValue, ok := exactInt64FromDecimal128(out)
+			if !ok {
+				return nil, false
+			}
+			return intValue, true
 		default:
 			return nil, false
 		}
@@ -1820,12 +1833,51 @@ func indexScalarForBSONValue(value bson.RawValue, valueType collections.IndexVal
 				return nil, false
 			}
 			return float64(out), true
+		case bson.TypeDecimal128:
+			out, ok := value.Decimal128OK()
+			if !ok {
+				return nil, false
+			}
+			doubleValue, ok := exactFloat64FromDecimal128(out)
+			if !ok {
+				return nil, false
+			}
+			return doubleValue, true
 		default:
 			return nil, false
 		}
 	default:
 		return nil, false
 	}
+}
+
+func uncoercibleNumericRangeShouldScan(value bson.RawValue, valueType collections.IndexValueType) bool {
+	switch valueType {
+	case collections.IndexValueInt64, collections.IndexValueDouble:
+		return value.IsNumber() && rawNumberComparable(value)
+	default:
+		return false
+	}
+}
+
+func exactInt64FromDecimal128(value bson.Decimal128) (int64, bool) {
+	rat, ok := decimal128Rat(value)
+	if !ok || rat.Denom().Cmp(big.NewInt(1)) != 0 || !rat.Num().IsInt64() {
+		return 0, false
+	}
+	return rat.Num().Int64(), true
+}
+
+func exactFloat64FromDecimal128(value bson.Decimal128) (float64, bool) {
+	rat, ok := decimal128Rat(value)
+	if !ok {
+		return 0, false
+	}
+	out, exact := rat.Float64()
+	if !exact || math.IsNaN(out) || math.IsInf(out, 0) {
+		return 0, false
+	}
+	return out, true
 }
 
 func exactInt64FromFloat64(value float64) (int64, bool) {
