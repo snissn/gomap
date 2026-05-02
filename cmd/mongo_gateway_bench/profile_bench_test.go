@@ -780,6 +780,10 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 		UpdateBatchSecondaryDeletes:    after.UpdateBatchSecondaryDeletes - before.UpdateBatchSecondaryDeletes,
 		UpdateBatchSecondarySets:       after.UpdateBatchSecondarySets - before.UpdateBatchSecondarySets,
 		UpdateBatchSecondaryKeyBytes:   after.UpdateBatchSecondaryKeyBytes - before.UpdateBatchSecondaryKeyBytes,
+		UpdateBatchIndexValueChanges:   after.UpdateBatchIndexValueChanges - before.UpdateBatchIndexValueChanges,
+		UpdateBatchIndexValueUnchanged: after.UpdateBatchIndexValueUnchanged - before.UpdateBatchIndexValueUnchanged,
+		UpdateBatchUniqueChecks:        after.UpdateBatchUniqueChecks - before.UpdateBatchUniqueChecks,
+		UpdateBatchUniqueCheckSkips:    after.UpdateBatchUniqueCheckSkips - before.UpdateBatchUniqueCheckSkips,
 		UpdateCombineRequests:          after.UpdateCombineRequests - before.UpdateCombineRequests,
 		UpdateCombineBatches:           after.UpdateCombineBatches - before.UpdateCombineBatches,
 		UpdateCombineBatchedRequests:   after.UpdateCombineBatchedRequests - before.UpdateCombineBatchedRequests,
@@ -789,16 +793,24 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 
 func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 	before := collections.CollectionManagerStats{
-		UpdateCombineRequests:         10,
-		UpdateCombineBatches:          3,
-		UpdateCombineBatchedRequests:  8,
-		UpdateCombineFallbackRequests: 1,
+		UpdateCombineRequests:          10,
+		UpdateCombineBatches:           3,
+		UpdateCombineBatchedRequests:   8,
+		UpdateCombineFallbackRequests:  1,
+		UpdateBatchIndexValueChanges:   20,
+		UpdateBatchIndexValueUnchanged: 30,
+		UpdateBatchUniqueChecks:        4,
+		UpdateBatchUniqueCheckSkips:    10,
 	}
 	after := collections.CollectionManagerStats{
-		UpdateCombineRequests:         17,
-		UpdateCombineBatches:          5,
-		UpdateCombineBatchedRequests:  14,
-		UpdateCombineFallbackRequests: 2,
+		UpdateCombineRequests:          17,
+		UpdateCombineBatches:           5,
+		UpdateCombineBatchedRequests:   14,
+		UpdateCombineFallbackRequests:  2,
+		UpdateBatchIndexValueChanges:   27,
+		UpdateBatchIndexValueUnchanged: 43,
+		UpdateBatchUniqueChecks:        6,
+		UpdateBatchUniqueCheckSkips:    19,
 	}
 	got := deltaCollectionManagerUpdateStats(after, before)
 	if got.UpdateCombineRequests != 7 {
@@ -812,6 +824,18 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 	}
 	if got.UpdateCombineFallbackRequests != 1 {
 		t.Fatalf("UpdateCombineFallbackRequests=%d want 1", got.UpdateCombineFallbackRequests)
+	}
+	if got.UpdateBatchIndexValueChanges != 7 {
+		t.Fatalf("UpdateBatchIndexValueChanges=%d want 7", got.UpdateBatchIndexValueChanges)
+	}
+	if got.UpdateBatchIndexValueUnchanged != 13 {
+		t.Fatalf("UpdateBatchIndexValueUnchanged=%d want 13", got.UpdateBatchIndexValueUnchanged)
+	}
+	if got.UpdateBatchUniqueChecks != 2 {
+		t.Fatalf("UpdateBatchUniqueChecks=%d want 2", got.UpdateBatchUniqueChecks)
+	}
+	if got.UpdateBatchUniqueCheckSkips != 9 {
+		t.Fatalf("UpdateBatchUniqueCheckSkips=%d want 9", got.UpdateBatchUniqueCheckSkips)
 	}
 }
 
@@ -860,6 +884,18 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 	}
 	if stats.UpdateBatchSecondaryKeyBytes > 0 {
 		b.ReportMetric(float64(stats.UpdateBatchSecondaryKeyBytes)/float64(docs), "update_secondary_key_bytes/doc")
+	}
+	if stats.UpdateBatchIndexValueChanges > 0 {
+		b.ReportMetric(float64(stats.UpdateBatchIndexValueChanges)/float64(docs), "update_index_value_changes/doc")
+	}
+	if stats.UpdateBatchIndexValueUnchanged > 0 {
+		b.ReportMetric(float64(stats.UpdateBatchIndexValueUnchanged)/float64(docs), "update_index_value_unchanged/doc")
+	}
+	if stats.UpdateBatchUniqueChecks > 0 {
+		b.ReportMetric(float64(stats.UpdateBatchUniqueChecks)/float64(docs), "update_unique_checks/doc")
+	}
+	if stats.UpdateBatchUniqueCheckSkips > 0 {
+		b.ReportMetric(float64(stats.UpdateBatchUniqueCheckSkips)/float64(docs), "update_unique_check_skips/doc")
 	}
 	reportDuration := func(name string, d time.Duration) {
 		if d > 0 {
