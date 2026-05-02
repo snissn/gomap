@@ -58,6 +58,7 @@ type config struct {
 	Updates                                       int
 	Deletes                                       int
 	ConcurrentReaders                             int
+	ConcurrentReaderSweep                         []int
 	ConcurrentReads                               int
 	ConcurrentWriters                             int
 	ConcurrentWrites                              int
@@ -87,23 +88,24 @@ type config struct {
 }
 
 type benchmarkResult struct {
-	Target             string `json:"target"`
-	MongoURI           string `json:"mongo_uri,omitempty"`
-	TreeDBDir          string `json:"treedb_dir,omitempty"`
-	Database           string `json:"database"`
-	Collection         string `json:"collection"`
-	Documents          int    `json:"documents"`
-	BatchSize          int    `json:"batch_size"`
-	InsertProducers    int    `json:"insert_producers"`
-	MongoMaxPoolSize   int    `json:"mongo_max_pool_size,omitempty"`
-	MongoMinPoolSize   int    `json:"mongo_min_pool_size,omitempty"`
-	MongoMaxConnecting int    `json:"mongo_max_connecting,omitempty"`
-	SecondaryIndexes   int    `json:"secondary_indexes"`
-	ClientMode         string `json:"client_mode"`
-	ConcurrentReaders  int    `json:"concurrent_readers,omitempty"`
-	ConcurrentReads    int    `json:"concurrent_reads,omitempty"`
-	ConcurrentWriters  int    `json:"concurrent_writers,omitempty"`
-	ConcurrentWrites   int    `json:"concurrent_writes,omitempty"`
+	Target                string `json:"target"`
+	MongoURI              string `json:"mongo_uri,omitempty"`
+	TreeDBDir             string `json:"treedb_dir,omitempty"`
+	Database              string `json:"database"`
+	Collection            string `json:"collection"`
+	Documents             int    `json:"documents"`
+	BatchSize             int    `json:"batch_size"`
+	InsertProducers       int    `json:"insert_producers"`
+	MongoMaxPoolSize      int    `json:"mongo_max_pool_size,omitempty"`
+	MongoMinPoolSize      int    `json:"mongo_min_pool_size,omitempty"`
+	MongoMaxConnecting    int    `json:"mongo_max_connecting,omitempty"`
+	SecondaryIndexes      int    `json:"secondary_indexes"`
+	ClientMode            string `json:"client_mode"`
+	ConcurrentReaders     int    `json:"concurrent_readers,omitempty"`
+	ConcurrentReaderSweep []int  `json:"concurrent_reader_sweep,omitempty"`
+	ConcurrentReads       int    `json:"concurrent_reads,omitempty"`
+	ConcurrentWriters     int    `json:"concurrent_writers,omitempty"`
+	ConcurrentWrites      int    `json:"concurrent_writes,omitempty"`
 
 	// Always emit this knob in JSON so benchmark artifacts distinguish default
 	// false runs from older runs that predate indexed-field update coverage.
@@ -455,7 +457,9 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.RangeReads, "range-reads", 100, "range reads with limit")
 	fs.IntVar(&cfg.Updates, "updates", 100, "$set updates by _id")
 	fs.IntVar(&cfg.Deletes, "deletes", 0, "deleteOne operations by _id")
+	var concurrentReaderSweep string
 	fs.IntVar(&cfg.ConcurrentReaders, "concurrent-readers", 0, "reader goroutines for the concurrent _id read phase; 0 disables the phase")
+	fs.StringVar(&concurrentReaderSweep, "concurrent-reader-sweep", "", "comma- or space-separated reader counts for a concurrent _id read throughput sweep; requires -concurrent-reads and cannot be combined with -concurrent-readers")
 	fs.IntVar(&cfg.ConcurrentReads, "concurrent-reads", 0, "total _id read operations for the concurrent read phase")
 	fs.IntVar(&cfg.ConcurrentWriters, "concurrent-writers", 0, "writer goroutines for the concurrent _id update phase; 0 disables the phase")
 	fs.IntVar(&cfg.ConcurrentWrites, "concurrent-writes", 0, "total update operations for the concurrent write phase")
@@ -521,10 +525,22 @@ func parseConfig(args []string) (config, error) {
 	if cfg.Reads < 0 || cfg.RangeReads < 0 || cfg.Updates < 0 || cfg.Deletes < 0 || cfg.ConcurrentReads < 0 || cfg.ConcurrentWrites < 0 {
 		return config{}, errors.New("operation counts cannot be negative")
 	}
+	concurrentReaderSweepValues, err := parsePositiveIntList(concurrentReaderSweep, "concurrent-reader-sweep")
+	if err != nil {
+		return config{}, err
+	}
+	cfg.ConcurrentReaderSweep = concurrentReaderSweepValues
 	if cfg.ConcurrentReaders < 0 || cfg.ConcurrentWriters < 0 {
 		return config{}, errors.New("concurrency values cannot be negative")
 	}
-	if (cfg.ConcurrentReaders == 0) != (cfg.ConcurrentReads == 0) {
+	if len(cfg.ConcurrentReaderSweep) > 0 {
+		if cfg.ConcurrentReaders != 0 {
+			return config{}, errors.New("concurrent-reader-sweep cannot be combined with concurrent-readers")
+		}
+		if cfg.ConcurrentReads == 0 {
+			return config{}, errors.New("concurrent-reader-sweep requires concurrent-reads > 0")
+		}
+	} else if (cfg.ConcurrentReaders == 0) != (cfg.ConcurrentReads == 0) {
 		return config{}, errors.New("concurrent-readers and concurrent-reads must both be > 0 or both be 0")
 	}
 	if (cfg.ConcurrentWriters == 0) != (cfg.ConcurrentWrites == 0) {
@@ -673,6 +689,46 @@ func parseClientMode(raw string) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown client-mode %q", raw)
 	}
+}
+
+func parsePositiveIntList(raw, name string) ([]int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n'
+	})
+	out := make([]int, 0, len(parts))
+	seen := make(map[int]struct{}, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		value, err := strconv.Atoi(part)
+		if err != nil || value <= 0 {
+			return nil, fmt.Errorf("%s must contain positive integers: %q", name, raw)
+		}
+		if _, ok := seen[value]; ok {
+			return nil, fmt.Errorf("%s contains duplicate value %d", name, value)
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%s must contain at least one positive integer", name)
+	}
+	return out, nil
+}
+
+func concurrentReaderCounts(cfg config) []int {
+	if len(cfg.ConcurrentReaderSweep) > 0 {
+		return cfg.ConcurrentReaderSweep
+	}
+	if cfg.ConcurrentReaders > 0 && cfg.ConcurrentReads > 0 {
+		return []int{cfg.ConcurrentReaders}
+	}
+	return nil
 }
 
 func isRawWireClientMode(mode string) bool {
@@ -1017,24 +1073,25 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	db := target.client.Database(cfg.Database)
 	coll := db.Collection(cfg.Collection)
 	result := &benchmarkResult{
-		Target:             cfg.Target,
-		Database:           cfg.Database,
-		Collection:         cfg.Collection,
-		Documents:          cfg.Documents,
-		BatchSize:          cfg.BatchSize,
-		InsertProducers:    cfg.InsertProducers,
-		MongoMaxPoolSize:   cfg.MongoMaxPoolSize,
-		MongoMinPoolSize:   cfg.MongoMinPoolSize,
-		MongoMaxConnecting: cfg.MongoMaxConnecting,
-		SecondaryIndexes:   cfg.SecondaryIndexes,
-		ClientMode:         cfg.ClientMode,
-		ConcurrentReaders:  cfg.ConcurrentReaders,
-		ConcurrentReads:    cfg.ConcurrentReads,
-		ConcurrentWriters:  cfg.ConcurrentWriters,
-		ConcurrentWrites:   cfg.ConcurrentWrites,
-		UpdateIndexedField: cfg.UpdateIndexedField,
-		RangeIndex:         cfg.RangeIndex,
-		PrebuildDocuments:  cfg.PrebuildDocuments,
+		Target:                cfg.Target,
+		Database:              cfg.Database,
+		Collection:            cfg.Collection,
+		Documents:             cfg.Documents,
+		BatchSize:             cfg.BatchSize,
+		InsertProducers:       cfg.InsertProducers,
+		MongoMaxPoolSize:      cfg.MongoMaxPoolSize,
+		MongoMinPoolSize:      cfg.MongoMinPoolSize,
+		MongoMaxConnecting:    cfg.MongoMaxConnecting,
+		SecondaryIndexes:      cfg.SecondaryIndexes,
+		ClientMode:            cfg.ClientMode,
+		ConcurrentReaders:     cfg.ConcurrentReaders,
+		ConcurrentReaderSweep: append([]int(nil), cfg.ConcurrentReaderSweep...),
+		ConcurrentReads:       cfg.ConcurrentReads,
+		ConcurrentWriters:     cfg.ConcurrentWriters,
+		ConcurrentWrites:      cfg.ConcurrentWrites,
+		UpdateIndexedField:    cfg.UpdateIndexedField,
+		RangeIndex:            cfg.RangeIndex,
+		PrebuildDocuments:     cfg.PrebuildDocuments,
 	}
 	if cfg.Target == "treedb" {
 		if cfg.TreeDBDir != "" || cfg.KeepTreeDBDir {
@@ -1212,10 +1269,10 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	}
 	result.Phases = append(result.Phases, updatePhase)
 
-	if cfg.ConcurrentReaders > 0 && cfg.ConcurrentReads > 0 {
-		phaseName := fmt.Sprintf("concurrent_id_find_one_r%d", cfg.ConcurrentReaders)
+	for _, concurrentReaders := range concurrentReaderCounts(cfg) {
+		phaseName := fmt.Sprintf("concurrent_id_find_one_r%d", concurrentReaders)
 		concurrentReadPhase, err := measureProfiledPhase(profiler, phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
-			return runConcurrentOperations(ctx, cfg.ConcurrentReaders, cfg.ConcurrentReads, func(op int) error {
+			return runConcurrentOperations(ctx, concurrentReaders, cfg.ConcurrentReads, func(op int) error {
 				id := benchmarkID(benchmarkDocumentOrdinal(op, 17, cfg.Documents))
 				var out bson.M
 				begin := time.Now()
@@ -2636,10 +2693,10 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(result)
 	case "text":
-		fmt.Fprintf(out, "target=%s client_mode=%s database=%s collection=%s documents=%d batch_size=%d insert_producers=%d mongo_max_pool_size=%d mongo_min_pool_size=%d mongo_max_connecting=%d secondary_indexes=%d concurrent_readers=%d concurrent_reads=%d concurrent_writers=%d concurrent_writes=%d\n",
+		fmt.Fprintf(out, "target=%s client_mode=%s database=%s collection=%s documents=%d batch_size=%d insert_producers=%d mongo_max_pool_size=%d mongo_min_pool_size=%d mongo_max_connecting=%d secondary_indexes=%d concurrent_readers=%d concurrent_reader_sweep=%v concurrent_reads=%d concurrent_writers=%d concurrent_writes=%d\n",
 			result.Target, result.ClientMode, result.Database, result.Collection, result.Documents, result.BatchSize,
 			result.InsertProducers, result.MongoMaxPoolSize, result.MongoMinPoolSize, result.MongoMaxConnecting, result.SecondaryIndexes,
-			result.ConcurrentReaders, result.ConcurrentReads, result.ConcurrentWriters, result.ConcurrentWrites)
+			result.ConcurrentReaders, result.ConcurrentReaderSweep, result.ConcurrentReads, result.ConcurrentWriters, result.ConcurrentWrites)
 		fmt.Fprintf(out, "update_indexed_field=%t\n", result.UpdateIndexedField)
 		fmt.Fprintf(out, "range_index=%t\n", result.RangeIndex)
 		if result.TreeDBDir != "" {

@@ -197,6 +197,60 @@ func TestRangeModeLabelsIndexedAndScanPhases(t *testing.T) {
 	}
 }
 
+func TestReportGroupsConcurrentReadSweepRows(t *testing.T) {
+	treedbPhases := []phaseResult{
+		{Name: "concurrent_id_find_one_r4", OpsPerSecond: 4000, SampledOpsPerSecond: 4200, LatencyMicros: latencySummary{P95: 10}},
+		{Name: "concurrent_id_find_one_r1", OpsPerSecond: 1000, SampledOpsPerSecond: 1200, LatencyMicros: latencySummary{P95: 15}},
+	}
+	mongoPhases := []phaseResult{
+		{Name: "concurrent_id_find_one_r4", OpsPerSecond: 2000, SampledOpsPerSecond: 2200, LatencyMicros: latencySummary{P95: 20}},
+		{Name: "concurrent_id_find_one_r1", OpsPerSecond: 500, SampledOpsPerSecond: 600, LatencyMicros: latencySummary{P95: 30}},
+	}
+	cells := []cellComparison{{
+		Key: cellKey{Documents: 100, SecondaryIndexes: 0, TreeDBConfig: "treedb_bson"},
+		TreeDB: &runRecord{
+			Row:      matrixRow{Target: "treedb", Config: "treedb_bson", Documents: 100, RawJSON: "treedb.json"},
+			Result:   benchmarkResult{Target: "treedb", Documents: 100, Phases: treedbPhases},
+			PhaseMap: phaseMap(treedbPhases),
+		},
+		Mongo: &runRecord{
+			Row:      matrixRow{Target: "mongo", Config: "mongo", Documents: 100, RawJSON: "mongo.json"},
+			Result:   benchmarkResult{Target: "mongo", Documents: 100, Phases: mongoPhases},
+			PhaseMap: phaseMap(mongoPhases),
+		},
+	}}
+
+	report := renderReport(config{Title: "test", MatrixPath: "matrix.tsv"}, cells, time.Unix(0, 0).UTC())
+	for _, want := range []string{
+		"## Concurrent Read Sweep",
+		"Serial `id_find_one` remains a separate single-in-flight latency phase.",
+		"| 100 | 0 | `treedb_bson` | 1 | 1000 | 1200 | 500 | 600 | 2.00x | 15.0 | 30.0 |",
+		"| 100 | 0 | `treedb_bson` | 4 | 4000 | 4200 | 2000 | 2200 | 2.00x | 10.0 | 20.0 |",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q\n%s", want, report)
+		}
+	}
+	if strings.Index(report, "| 100 | 0 | `treedb_bson` | 1 |") > strings.Index(report, "| 100 | 0 | `treedb_bson` | 4 |") {
+		t.Fatalf("reader sweep rows should be ordered by reader count:\n%s", report)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		readers int
+		ok      bool
+	}{
+		{name: "concurrent_id_find_one_r8", readers: 8, ok: true},
+		{name: "concurrent_id_find_one_r0", ok: false},
+		{name: "id_find_one", ok: false},
+	} {
+		readers, ok := concurrentReadReaders(tc.name)
+		if readers != tc.readers || ok != tc.ok {
+			t.Fatalf("concurrentReadReaders(%q)=%d,%t want %d,%t", tc.name, readers, ok, tc.readers, tc.ok)
+		}
+	}
+}
+
 func TestReportRejectsIncompleteCell(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "treedb.json"), `{

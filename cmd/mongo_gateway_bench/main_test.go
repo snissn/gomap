@@ -350,6 +350,16 @@ func TestParseConfigValidation(t *testing.T) {
 		!cfg.UpdateIndexedField || !cfg.RangeIndex {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
+	sweepCfg, err := parseConfig([]string{
+		"-concurrent-reader-sweep", "1,2 4",
+		"-concurrent-reads", "30",
+	})
+	if err != nil {
+		t.Fatalf("parse concurrent reader sweep config: %v", err)
+	}
+	if !reflect.DeepEqual(sweepCfg.ConcurrentReaderSweep, []int{1, 2, 4}) || sweepCfg.ConcurrentReads != 30 {
+		t.Fatalf("unexpected concurrent reader sweep config: %+v", sweepCfg)
+	}
 	rawWireCfg, err := parseConfig([]string{"-target", "treedb", "-client-mode", "raw-wire"})
 	if err != nil {
 		t.Fatalf("parse raw-wire config: %v", err)
@@ -415,6 +425,18 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 	if _, err := parseConfig([]string{"-concurrent-reads", "1"}); err == nil {
 		t.Fatal("concurrent-reads without concurrent-readers accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-reader-sweep", "1,2"}); err == nil {
+		t.Fatal("concurrent-reader-sweep without concurrent-reads accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-reader-sweep", "1,2", "-concurrent-reads", "10", "-concurrent-readers", "2"}); err == nil {
+		t.Fatal("concurrent-reader-sweep combined with concurrent-readers accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-reader-sweep", "1,0", "-concurrent-reads", "10"}); err == nil {
+		t.Fatal("invalid concurrent-reader-sweep accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-reader-sweep", "1,1", "-concurrent-reads", "10"}); err == nil {
+		t.Fatal("duplicate concurrent-reader-sweep value accepted")
 	}
 	if _, err := parseConfig([]string{"-insert-producers", "0"}); err == nil {
 		t.Fatal("zero insert-producers accepted")
