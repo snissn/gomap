@@ -2485,6 +2485,14 @@ func bufferedIndexedAutoFlushEnabled(opts CollectionOptions) bool {
 	return opts.BufferedIndexedWriteMaxDocuments > 0 || opts.BufferedIndexedWriteMaxBytes > 0 || opts.BufferedIndexedWriteMaxRootRuns > 0
 }
 
+func collectionObservedElapsedSince(start time.Time) time.Duration {
+	elapsed := time.Since(start)
+	if elapsed <= 0 {
+		return time.Nanosecond
+	}
+	return elapsed
+}
+
 // flushBufferedIndexedAfterThresholdLocked returns the local schedule/publish
 // duration plus any interval where domain.mu was deliberately released while
 // waiting for an already-running async flush. The released interval is not lock
@@ -2501,7 +2509,7 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 				domain.indexedAsyncFlushBackpressure.Add(1)
 				flushStart := time.Now()
 				err := c.flushBufferedIndexedLocked(domain)
-				return time.Since(flushStart), 0, err
+				return collectionObservedElapsedSince(flushStart), 0, err
 			}
 			domain.indexedAsyncFlushBackpressure.Add(1)
 			flushStart := time.Now()
@@ -2521,26 +2529,26 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 				if len(domain.indexedPublishingUnits) == 0 {
 					flushStart = time.Now()
 					err := c.flushBufferedIndexedLocked(domain)
-					return time.Since(flushStart), lockReleased, err
+					return collectionObservedElapsedSince(flushStart), lockReleased, err
 				}
 			}
 			flushStart = time.Now()
 			if !c.scheduleIndexedAsyncFlush(domain) && len(domain.indexedPublishingUnits) == 0 {
 				err := c.flushBufferedIndexedLocked(domain)
-				return time.Since(flushStart), lockReleased, err
+				return collectionObservedElapsedSince(flushStart), lockReleased, err
 			}
-			return time.Since(flushStart), lockReleased, nil
+			return collectionObservedElapsedSince(flushStart), lockReleased, nil
 		}
 		flushStart := time.Now()
 		if !c.scheduleIndexedAsyncFlush(domain) && len(domain.indexedPublishingUnits) == 0 {
 			err := c.flushBufferedIndexedLocked(domain)
-			return time.Since(flushStart), 0, err
+			return collectionObservedElapsedSince(flushStart), 0, err
 		}
-		return time.Since(flushStart), 0, nil
+		return collectionObservedElapsedSince(flushStart), 0, nil
 	}
 	flushStart := time.Now()
 	err := c.flushBufferedIndexedLocked(domain)
-	return time.Since(flushStart), 0, err
+	return collectionObservedElapsedSince(flushStart), 0, err
 }
 
 func hasBufferedIndexedRootRuns(domain *collectionWriteDomain) bool {
