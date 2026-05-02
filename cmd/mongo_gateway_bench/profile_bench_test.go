@@ -780,6 +780,38 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 		UpdateBatchSecondaryDeletes:    after.UpdateBatchSecondaryDeletes - before.UpdateBatchSecondaryDeletes,
 		UpdateBatchSecondarySets:       after.UpdateBatchSecondarySets - before.UpdateBatchSecondarySets,
 		UpdateBatchSecondaryKeyBytes:   after.UpdateBatchSecondaryKeyBytes - before.UpdateBatchSecondaryKeyBytes,
+		UpdateCombineRequests:          after.UpdateCombineRequests - before.UpdateCombineRequests,
+		UpdateCombineBatches:           after.UpdateCombineBatches - before.UpdateCombineBatches,
+		UpdateCombineBatchedRequests:   after.UpdateCombineBatchedRequests - before.UpdateCombineBatchedRequests,
+		UpdateCombineFallbackRequests:  after.UpdateCombineFallbackRequests - before.UpdateCombineFallbackRequests,
+	}
+}
+
+func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
+	before := collections.CollectionManagerStats{
+		UpdateCombineRequests:         10,
+		UpdateCombineBatches:          3,
+		UpdateCombineBatchedRequests:  8,
+		UpdateCombineFallbackRequests: 1,
+	}
+	after := collections.CollectionManagerStats{
+		UpdateCombineRequests:         17,
+		UpdateCombineBatches:          5,
+		UpdateCombineBatchedRequests:  14,
+		UpdateCombineFallbackRequests: 2,
+	}
+	got := deltaCollectionManagerUpdateStats(after, before)
+	if got.UpdateCombineRequests != 7 {
+		t.Fatalf("UpdateCombineRequests=%d want 7", got.UpdateCombineRequests)
+	}
+	if got.UpdateCombineBatches != 2 {
+		t.Fatalf("UpdateCombineBatches=%d want 2", got.UpdateCombineBatches)
+	}
+	if got.UpdateCombineBatchedRequests != 6 {
+		t.Fatalf("UpdateCombineBatchedRequests=%d want 6", got.UpdateCombineBatchedRequests)
+	}
+	if got.UpdateCombineFallbackRequests != 1 {
+		t.Fatalf("UpdateCombineFallbackRequests=%d want 1", got.UpdateCombineFallbackRequests)
 	}
 }
 
@@ -803,6 +835,22 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 	}
 	if stats.UpdateBatchBufferedBatches > 0 {
 		b.ReportMetric(float64(stats.UpdateBatchBufferedBatches), "update_buffered_batches")
+	}
+	if stats.UpdateCombineRequests > 0 {
+		b.ReportMetric(float64(stats.UpdateCombineRequests), "update_combine_requests")
+		b.ReportMetric(float64(stats.UpdateCombineRequests)/float64(docs), "update_combine_requests/doc")
+	}
+	if stats.UpdateCombineBatches > 0 {
+		b.ReportMetric(float64(stats.UpdateCombineBatches), "update_combine_batches")
+		b.ReportMetric(float64(stats.UpdateCombineBatchedRequests)/float64(stats.UpdateCombineBatches), "update_combine_items/batch")
+	}
+	if stats.UpdateCombineBatchedRequests > 0 {
+		b.ReportMetric(float64(stats.UpdateCombineBatchedRequests), "update_combine_batched_requests")
+		b.ReportMetric(float64(stats.UpdateCombineBatchedRequests)/float64(docs), "update_combine_batched_requests/doc")
+	}
+	if stats.UpdateCombineFallbackRequests > 0 {
+		b.ReportMetric(float64(stats.UpdateCombineFallbackRequests), "update_combine_fallback_requests")
+		b.ReportMetric(float64(stats.UpdateCombineFallbackRequests)/float64(docs), "update_combine_fallback_requests/doc")
 	}
 	if stats.UpdateBatchSecondaryDeletes > 0 {
 		b.ReportMetric(float64(stats.UpdateBatchSecondaryDeletes)/float64(docs), "update_secondary_deletes/doc")
