@@ -1016,7 +1016,7 @@ func flushCollectionWriteDomainAsync(db *backenddb.DB, domain *collectionWriteDo
 			return err
 		}
 		domain.mu.RLock()
-		more := len(domain.indexedFlushUnits) > 0 || len(domain.rootRuns) > 0
+		more := len(domain.indexedFlushUnits) > 0
 		domain.mu.RUnlock()
 		if !more {
 			return nil
