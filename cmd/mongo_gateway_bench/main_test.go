@@ -512,6 +512,12 @@ func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
 	if cfg.TreeDBBufferedIndexedWriteMaxRootRuns != collections.DefaultIndexedWriteMemtableMaxRootRuns {
 		t.Fatalf("TreeDBBufferedIndexedWriteMaxRootRuns=%d want %d", cfg.TreeDBBufferedIndexedWriteMaxRootRuns, collections.DefaultIndexedWriteMemtableMaxRootRuns)
 	}
+	if cfg.TreeDBBufferedIndexedAsyncFlush {
+		t.Fatal("TreeDBBufferedIndexedAsyncFlush=true want false by default")
+	}
+	if cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 0 {
+		t.Fatalf("TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits=%d want 0", cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits)
+	}
 	if cfg.InsertProducers != 1 {
 		t.Fatalf("InsertProducers=%d want 1", cfg.InsertProducers)
 	}
@@ -522,6 +528,8 @@ func TestParseConfigTreeDBBufferedIndexedWriteThresholds(t *testing.T) {
 		"-treedb-buffered-indexed-write-max-documents", "1234",
 		"-treedb-buffered-indexed-write-max-bytes", "5678",
 		"-treedb-buffered-indexed-write-max-root-runs", "90",
+		"-treedb-buffered-indexed-async-flush",
+		"-treedb-buffered-indexed-async-flush-max-queued-units", "3",
 	})
 	if err != nil {
 		t.Fatalf("parse buffered indexed thresholds: %v", err)
@@ -534,6 +542,12 @@ func TestParseConfigTreeDBBufferedIndexedWriteThresholds(t *testing.T) {
 	}
 	if cfg.TreeDBBufferedIndexedWriteMaxRootRuns != 90 {
 		t.Fatalf("TreeDBBufferedIndexedWriteMaxRootRuns=%d want 90", cfg.TreeDBBufferedIndexedWriteMaxRootRuns)
+	}
+	if !cfg.TreeDBBufferedIndexedAsyncFlush {
+		t.Fatal("TreeDBBufferedIndexedAsyncFlush=false want true")
+	}
+	if cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 3 {
+		t.Fatalf("TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits=%d want 3", cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits)
 	}
 }
 
@@ -1500,7 +1514,9 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		TreeDBBufferedIndexedWriteMaxDocuments: 1234,
 		TreeDBBufferedIndexedWriteMaxBytes:     5678,
 		TreeDBBufferedIndexedWriteMaxRootRuns:  90,
-		TreeDBMaintenanceMode:                  "none",
+		TreeDBBufferedIndexedAsyncFlush:        true,
+		TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits: 3,
+		TreeDBMaintenanceMode:                         "none",
 	}
 	var out bytes.Buffer
 	if err := writeResult(&out, "text", result); err != nil {
@@ -1511,6 +1527,8 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		"buffered_indexed_max_docs=1234",
 		"buffered_indexed_max_bytes=5678",
 		"buffered_indexed_max_root_runs=90",
+		"buffered_indexed_async_flush=true",
+		"buffered_indexed_async_max_queued_units=3",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("text output missing %s: %q", want, text)
@@ -1527,11 +1545,15 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 	}
 	if decoded.TreeDBBufferedIndexedWriteMaxDocuments != 1234 ||
 		decoded.TreeDBBufferedIndexedWriteMaxBytes != 5678 ||
-		decoded.TreeDBBufferedIndexedWriteMaxRootRuns != 90 {
-		t.Fatalf("json thresholds docs=%d bytes=%d rootRuns=%d want 1234/5678/90",
+		decoded.TreeDBBufferedIndexedWriteMaxRootRuns != 90 ||
+		!decoded.TreeDBBufferedIndexedAsyncFlush ||
+		decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 3 {
+		t.Fatalf("json thresholds docs=%d bytes=%d rootRuns=%d async=%t asyncMax=%d want 1234/5678/90/true/3",
 			decoded.TreeDBBufferedIndexedWriteMaxDocuments,
 			decoded.TreeDBBufferedIndexedWriteMaxBytes,
-			decoded.TreeDBBufferedIndexedWriteMaxRootRuns)
+			decoded.TreeDBBufferedIndexedWriteMaxRootRuns,
+			decoded.TreeDBBufferedIndexedAsyncFlush,
+			decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits)
 	}
 }
 
@@ -1545,9 +1567,11 @@ func TestRecordEffectiveTreeDBCollectionOptionsUsesNormalizedMetadata(t *testing
 	if _, err := manager.CreateCollection(&collections.CollectionMeta{
 		Name: "bench.docs",
 		Options: collections.CollectionOptions{
-			BufferedIndexedWriteMaxDocuments: 0,
-			BufferedIndexedWriteMaxBytes:     777,
-			BufferedIndexedWriteMaxRootRuns:  0,
+			BufferedIndexedWriteMaxDocuments:        0,
+			BufferedIndexedWriteMaxBytes:            777,
+			BufferedIndexedWriteMaxRootRuns:         0,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 3,
 		},
 		Indexes: []collections.IndexDefinition{{Name: "email_1", Field: "email", Unique: true}},
 	}); err != nil {
@@ -1569,11 +1593,15 @@ func TestRecordEffectiveTreeDBCollectionOptionsUsesNormalizedMetadata(t *testing
 	}
 	if result.TreeDBBufferedIndexedWriteMaxDocuments != collections.DefaultIndexedWriteMemtableMaxDocuments ||
 		result.TreeDBBufferedIndexedWriteMaxBytes != 777 ||
-		result.TreeDBBufferedIndexedWriteMaxRootRuns != 0 {
-		t.Fatalf("effective thresholds docs=%d bytes=%d rootRuns=%d want %d/777/0",
+		result.TreeDBBufferedIndexedWriteMaxRootRuns != 0 ||
+		!result.TreeDBBufferedIndexedAsyncFlush ||
+		result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 3 {
+		t.Fatalf("effective thresholds docs=%d bytes=%d rootRuns=%d async=%t asyncMax=%d want %d/777/0/true/3",
 			result.TreeDBBufferedIndexedWriteMaxDocuments,
 			result.TreeDBBufferedIndexedWriteMaxBytes,
 			result.TreeDBBufferedIndexedWriteMaxRootRuns,
+			result.TreeDBBufferedIndexedAsyncFlush,
+			result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
 			collections.DefaultIndexedWriteMemtableMaxDocuments)
 	}
 }

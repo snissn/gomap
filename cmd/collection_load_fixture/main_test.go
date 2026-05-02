@@ -170,6 +170,8 @@ func TestRunFixtureReportsBufferedIndexedWritesOnlyWhenIndexesUseThem(t *testing
 		"-buffered-indexed-write-max-docs", "16",
 		"-buffered-indexed-write-max-bytes", "1024",
 		"-buffered-indexed-write-max-root-runs", "8",
+		"-buffered-indexed-async-flush",
+		"-buffered-indexed-async-flush-max-queued-units", "3",
 		"-reopen-verify=false",
 		"-progress=false",
 	}, io.Discard)
@@ -187,6 +189,10 @@ func TestRunFixtureReportsBufferedIndexedWritesOnlyWhenIndexesUseThem(t *testing
 		t.Fatalf("no-index buffered limits docs=%d bytes=%d rootRuns=%d want zero",
 			noIndexSummary.BufferedIndexedWriteMaxDocs, noIndexSummary.BufferedIndexedWriteMaxBytes, noIndexSummary.BufferedIndexedWriteMaxRuns)
 	}
+	if noIndexSummary.BufferedIndexedAsyncFlush || noIndexSummary.BufferedIndexedAsyncFlushMaxQueuedUnits != 0 {
+		t.Fatalf("no-index async flush=%t max=%d want false/0",
+			noIndexSummary.BufferedIndexedAsyncFlush, noIndexSummary.BufferedIndexedAsyncFlushMaxQueuedUnits)
+	}
 
 	indexedDir := filepath.Join(t.TempDir(), "indexed")
 	indexedCfg, err := parseConfig([]string{
@@ -198,6 +204,8 @@ func TestRunFixtureReportsBufferedIndexedWritesOnlyWhenIndexesUseThem(t *testing
 		"-buffered-indexed-write-max-docs", "16",
 		"-buffered-indexed-write-max-bytes", "1024",
 		"-buffered-indexed-write-max-root-runs", "8",
+		"-buffered-indexed-async-flush",
+		"-buffered-indexed-async-flush-max-queued-units", "3",
 		"-progress=false",
 	}, io.Discard)
 	if err != nil {
@@ -213,6 +221,13 @@ func TestRunFixtureReportsBufferedIndexedWritesOnlyWhenIndexesUseThem(t *testing
 	if indexedSummary.BufferedIndexedWriteMaxDocs != 16 || indexedSummary.BufferedIndexedWriteMaxBytes != 1024 || indexedSummary.BufferedIndexedWriteMaxRuns != 8 {
 		t.Fatalf("indexed buffered limits docs=%d bytes=%d rootRuns=%d want 16/1024/8",
 			indexedSummary.BufferedIndexedWriteMaxDocs, indexedSummary.BufferedIndexedWriteMaxBytes, indexedSummary.BufferedIndexedWriteMaxRuns)
+	}
+	if !indexedSummary.BufferedIndexedAsyncFlush || indexedSummary.BufferedIndexedAsyncFlushMaxQueuedUnits != 3 {
+		t.Fatalf("indexed async flush=%t max=%d want true/3",
+			indexedSummary.BufferedIndexedAsyncFlush, indexedSummary.BufferedIndexedAsyncFlushMaxQueuedUnits)
+	}
+	if indexedSummary.TreeDBStatsFinal["treedb.collections.write_domain.indexed_stage.batches_total"] == "" {
+		t.Fatalf("indexed summary missing collection write-domain stats: %#v", indexedSummary.TreeDBStatsFinal)
 	}
 
 	disabledDir := filepath.Join(t.TempDir(), "disabled")

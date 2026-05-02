@@ -586,7 +586,9 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 	exported := mgr.Stats()
 	for _, key := range []string{
 		"treedb.collections.write_domain.pending_docs",
+		"treedb.collections.write_domain.pending_indexed_flush_units",
 		"treedb.collections.write_domain.indexed_stage.batches_total",
+		"treedb.collections.write_domain.indexed_async_flush.scheduled_total",
 		"treedb.collections.write_domain.mutation_lock.calls_total",
 	} {
 		if exported[key] == "" {
@@ -1778,6 +1780,31 @@ func TestCollectionIndexedWriteMemtablesPreserveDocumentDefaultWithRootRunLimit(
 	}
 }
 
+func TestCollectionIndexedWriteMemtablesAsyncFlushDefaultsQueueLimit(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	meta, err := NewCollectionManager(d).CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email"}},
+	})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if !meta.Options.BufferedIndexedAsyncFlush {
+		t.Fatal("async indexed flush was not preserved for indexed collection")
+	}
+	if got := meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits; got != DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits {
+		t.Fatalf("async max queued units=%d want %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits)
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesCanDisableRootRunLimitWithDocumentLimit(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -2727,6 +2754,330 @@ func TestCollectionIndexedWriteMemtablesAutoFlushMaxDocuments(t *testing.T) {
 	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u1"), []byte("u2"))
 }
 
+func TestCollectionIndexedWriteMemtablesAsyncAutoFlushDrainsOnFlush(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        2,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com","city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("first insert batch: %v", err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog after first batch: %v", err)
+	}
+	if got := catalog.rootID(collectionPrimaryRootName("users")); got != 0 {
+		t.Fatalf("primary root persisted before threshold flush: %d", got)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{[]byte(`{"email":"grace@example.com","city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("second insert batch: %v", err)
+	}
+	stats := mgr.StatsSnapshot()
+	if got, want := stats.IndexedAutoFlushes, uint64(1); got != want {
+		t.Fatalf("indexed auto flushes=%d want %d", got, want)
+	}
+	if got, want := stats.IndexedAsyncFlushScheduled, uint64(1); got != want {
+		t.Fatalf("async flush scheduled=%d want %d", got, want)
+	}
+	if got, err := col.Get([]byte("u2")); err != nil {
+		t.Fatalf("get queued async doc: %v", err)
+	} else if want := []byte(`{"email":"grace@example.com","city":"hnl"}`); !bytes.Equal(got, want) {
+		t.Fatalf("queued async doc=%q want %q", got, want)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush async indexed writes: %v", err)
+	}
+	stats = mgr.StatsSnapshot()
+	if got := stats.PendingDocuments; got != 0 {
+		t.Fatalf("pending docs after async flush drain=%d want 0", got)
+	}
+	if got := stats.PendingIndexedFlushUnits; got != 0 {
+		t.Fatalf("pending async flush units after drain=%d want 0", got)
+	}
+	if stats.IndexedFlushCalls == 0 {
+		t.Fatal("indexed flush calls=0 want background or drain flush")
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	ids, err := reopenedCol.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find city after async flush: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u1"), []byte("u2"))
+}
+
+func TestCollectionIndexedWriteMemtablesAsyncBackpressurePublishesSynchronously(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        1,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 1,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	stats := mgr.StatsSnapshot()
+	if got, want := stats.IndexedAsyncFlushBackpressure, uint64(1); got != want {
+		t.Fatalf("async backpressure sync=%d want %d", got, want)
+	}
+	if got := stats.IndexedAsyncFlushScheduled; got != 0 {
+		t.Fatalf("async scheduled=%d want 0 when backpressure syncs", got)
+	}
+	if got := stats.PendingDocuments; got != 0 {
+		t.Fatalf("pending docs after backpressure sync=%d want 0", got)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot after backpressure sync")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog after backpressure sync: %v", err)
+	}
+	if got := catalog.rootID(collectionPrimaryRootName("users")); got == 0 {
+		t.Fatal("primary root was not persisted after backpressure sync")
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesAsyncScheduleRacePublishesSynchronously(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        1,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if !col.writeDomain.beginIndexedAsyncFlush() {
+		t.Fatal("begin async flush returned false")
+	}
+	defer col.writeDomain.finishIndexedAsyncFlush(nil)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	stats := mgr.StatsSnapshot()
+	if got := stats.IndexedAsyncFlushScheduled; got != 0 {
+		t.Fatalf("async scheduled=%d want 0 when scheduling race falls back", got)
+	}
+	if got := stats.IndexedFlushCalls; got != 1 {
+		t.Fatalf("indexed flush calls=%d want sync fallback flush", got)
+	}
+	if got := stats.PendingDocuments; got != 0 {
+		t.Fatalf("pending docs after sync fallback=%d want 0", got)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesAsyncQueuedUnitsParticipateInUniqueChecks(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        2,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"email":"ada@example.com"}`),
+			[]byte(`{"email":"grace@example.com"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if got := mgr.StatsSnapshot().IndexedAsyncFlushScheduled; got != 1 {
+		t.Fatalf("async flush scheduled=%d want 1", got)
+	}
+	_, err = col.InsertBatch(
+		[][]byte{[]byte("u3")},
+		[][]byte{[]byte(`{"email":"grace@example.com"}`)},
+	)
+	if err == nil || !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("duplicate queued unique insert err=%v want ErrUniqueIndexConflict", err)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesAsyncUpdateAndDeleteDrainCorrectly(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        1,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"city":"hnl","score":0}`),
+			[]byte(`{"city":"hnl","score":0}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush seed: %v", err)
+	}
+	results, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func([]byte) ([]byte, bool, error) {
+			return []byte(`{"city":"sfo","score":1}`), true, nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("update batch: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("update results=%+v want matched modified", results)
+	}
+	if got := mgr.StatsSnapshot().IndexedAsyncFlushScheduled; got == 0 {
+		t.Fatal("async flush scheduled=0 want update to schedule a flush")
+	}
+	ids, err := col.FindByIndex("city", "sfo")
+	if err != nil {
+		t.Fatalf("find updated city before drain: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u1"))
+	deleted, err := col.DeleteDocument([]byte("u1"))
+	if err != nil {
+		t.Fatalf("delete after queued update: %v", err)
+	}
+	if !deleted {
+		t.Fatal("delete after queued update reported not found")
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	if got, err := reopenedCol.Get([]byte("u1")); err != nil {
+		t.Fatalf("get deleted doc after reopen: %v", err)
+	} else if got != nil {
+		t.Fatalf("deleted doc after reopen=%s want nil", got)
+	}
+	ids, err = reopenedCol.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find hnl after reopen: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u2"))
+}
+
 func TestCollectionIndexedWriteMemtablesAutoFlushMaxBytes(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -2977,10 +3328,35 @@ func TestShouldFlushBufferedIndexedWritesAfterAddingBoundaries(t *testing.T) {
 			addedRootRuns: maxCollectionInt,
 			want:          true,
 		},
+		{
+			name:          "async uses mutable document count after rotated units",
+			domain:        &collectionWriteDomain{count: 100, mutableCount: 8, indexedFlushUnits: []indexedFlushUnit{{rootRuns: map[string][]memtable.Table{"a": nil}}}},
+			addedCount:    1,
+			addedRootRuns: 1,
+			want:          false,
+		},
+		{
+			name:          "async mutable document count reaches threshold",
+			domain:        &collectionWriteDomain{count: 100, mutableCount: 9, indexedFlushUnits: []indexedFlushUnit{{rootRuns: map[string][]memtable.Table{"a": nil}}}},
+			addedCount:    1,
+			addedRootRuns: 1,
+			want:          true,
+		},
+		{
+			name:          "async uses mutable root run count after rotated units",
+			domain:        &collectionWriteDomain{count: 100, mutableCount: 1, rootRunCount: 3, indexedFlushUnits: []indexedFlushUnit{{rootRuns: map[string][]memtable.Table{"a": make([]memtable.Table, 10)}}}},
+			addedCount:    1,
+			addedRootRuns: 1,
+			want:          false,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := shouldFlushBufferedIndexedWritesAfterAdding(tc.domain, opts, tc.addedCount, tc.addedBytes, tc.addedRootRuns)
+			caseOpts := opts
+			if strings.HasPrefix(tc.name, "async ") {
+				caseOpts.BufferedIndexedAsyncFlush = true
+			}
+			got := shouldFlushBufferedIndexedWritesAfterAdding(tc.domain, caseOpts, tc.addedCount, tc.addedBytes, tc.addedRootRuns)
 			if got != tc.want {
 				t.Fatalf("shouldFlushBufferedIndexedWritesAfterAdding()=%v want %v", got, tc.want)
 			}
@@ -3002,6 +3378,8 @@ func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
 		primaryRoot:     42,
 		count:           3,
 		bufferedBytes:   99,
+		mutableCount:    2,
+		mutableBytes:    88,
 		writeGeneration: 12,
 		rootRuns: map[string][]memtable.Table{
 			collectionPrimaryRootName("users"): nil,
@@ -3026,6 +3404,8 @@ func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
 	domain.primaryRoot = 300
 	domain.count = 400
 	domain.bufferedBytes = 500
+	domain.mutableCount = 501
+	domain.mutableBytes = 502
 	domain.writeGeneration = 600
 	domain.rootRuns = map[string][]memtable.Table{collectionPrimaryRootName("other"): nil}
 	domain.rootPolicies = nil
@@ -3040,8 +3420,8 @@ func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
 	if domain.baseCommitSeq != 7 || domain.baseSystemRoot != 11 || domain.primaryRoot != 42 {
 		t.Fatalf("roots after rollback commit=%d system=%d primary=%d", domain.baseCommitSeq, domain.baseSystemRoot, domain.primaryRoot)
 	}
-	if domain.count != 3 || domain.bufferedBytes != 99 || domain.writeGeneration != 12 {
-		t.Fatalf("counters after rollback count=%d bytes=%d generation=%d", domain.count, domain.bufferedBytes, domain.writeGeneration)
+	if domain.count != 3 || domain.bufferedBytes != 99 || domain.mutableCount != 2 || domain.mutableBytes != 88 || domain.writeGeneration != 12 {
+		t.Fatalf("counters after rollback count=%d bytes=%d mutable=%d/%d generation=%d", domain.count, domain.bufferedBytes, domain.mutableCount, domain.mutableBytes, domain.writeGeneration)
 	}
 	if _, ok := domain.rootRuns[collectionPrimaryRootName("users")]; !ok {
 		t.Fatalf("rootRuns=%v missing users primary root", domain.rootRuns)

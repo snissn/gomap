@@ -41,8 +41,13 @@ const (
 	// well-amortized InsertBatch calls on the immediate publish path. Smaller
 	// batches use the indexed write-domain memtable path by default.
 	DefaultIndexedWriteMemtableDirectBatchDocuments = DefaultIndexedWriteMemtableMaxDocuments / 4
-	defaultCollectionUpdateCombineMaxBatch          = 256
-	collectionUpdateCombineIdleTTL                  = 30 * time.Second
+	// DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits bounds opt-in
+	// background indexed flush work. When the queue reaches this many immutable
+	// flush units, the triggering writer publishes synchronously to cap memory
+	// and visibility lag.
+	DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits = 4
+	defaultCollectionUpdateCombineMaxBatch              = 256
+	collectionUpdateCombineIdleTTL                      = 30 * time.Second
 )
 
 var (
@@ -278,6 +283,8 @@ type CollectionManagerStats struct {
 	PendingDocuments              int
 	PendingBytes                  int64
 	PendingRootRuns               int
+	PendingIndexedFlushUnits      int
+	IndexedAsyncFlushRunning      int
 	MutationLockCalls             uint64
 	MutationLockWait              time.Duration
 	MutationLockHold              time.Duration
@@ -286,6 +293,9 @@ type CollectionManagerStats struct {
 	IndexedStageBytes             uint64
 	IndexedStageRootRuns          uint64
 	IndexedAutoFlushes            uint64
+	IndexedAsyncFlushScheduled    uint64
+	IndexedAsyncFlushBackpressure uint64
+	IndexedAsyncFlushErrors       uint64
 	IndexedFlushCalls             uint64
 	IndexedFlushErrors            uint64
 	IndexedFlushDocs              uint64
@@ -354,6 +364,15 @@ type CollectionOptions struct {
 	// indexed buffer limits are zero, metadata normalization installs native
 	// defaults.
 	BufferedIndexedWriteMaxRootRuns int `json:"buffered_indexed_write_max_root_runs,omitempty"`
+	// BufferedIndexedAsyncFlush lets threshold-triggered indexed memtable flushes
+	// publish from a background goroutine. This is an opt-in performance mode:
+	// Flush, FlushAll, and backend Close still drain pending indexed writes before
+	// returning, but auto-flush thresholds no longer imply immediate durability.
+	BufferedIndexedAsyncFlush bool `json:"buffered_indexed_async_flush,omitempty"`
+	// BufferedIndexedAsyncFlushMaxQueuedUnits bounds immutable indexed flush
+	// units queued for the background publisher. Zero uses the native default
+	// when async flush is enabled on an indexed schema.
+	BufferedIndexedAsyncFlushMaxQueuedUnits int `json:"buffered_indexed_async_flush_max_queued_units,omitempty"`
 }
 
 type IndexDefinition struct {
@@ -413,6 +432,8 @@ type bufferedIndexedCheckpoint struct {
 	primaryRoot           uint64
 	count                 int
 	bufferedBytes         int64
+	mutableCount          int
+	mutableBytes          int64
 	writeGeneration       uint64
 	rootRuns              map[string][]memtable.Table
 	rootPolicies          map[string]backenddb.OrderedRootStoragePolicy
@@ -446,6 +467,10 @@ type collectionWriteDomain struct {
 	// sustained collection write contention.
 	mutationMu        sync.Mutex
 	mu                sync.RWMutex
+	indexedAsyncMu    sync.Mutex
+	indexedAsyncCond  *sync.Cond
+	indexedAsyncRun   bool
+	indexedAsyncErr   error
 	updateCombineMu   sync.Mutex
 	updateCombiner    *collectionUpdateCombiner
 	updateDraining    *collectionUpdateCombiner
@@ -472,6 +497,8 @@ type collectionWriteDomain struct {
 	uniqueValueIndex map[string]*bufferedUniqueValueIndex
 	count            int
 	bufferedBytes    int64
+	mutableCount     int
+	mutableBytes     int64
 	rootRunCount     int
 	writeGeneration  uint64
 
@@ -483,6 +510,9 @@ type collectionWriteDomain struct {
 	indexedStageBytes             atomic.Uint64
 	indexedStageRootRuns          atomic.Uint64
 	indexedAutoFlushes            atomic.Uint64
+	indexedAsyncFlushScheduled    atomic.Uint64
+	indexedAsyncFlushBackpressure atomic.Uint64
+	indexedAsyncFlushErrors       atomic.Uint64
 	indexedFlushCalls             atomic.Uint64
 	indexedFlushErrors            atomic.Uint64
 	indexedFlushDocs              atomic.Uint64
@@ -571,6 +601,8 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.pending_docs"] = fmt.Sprintf("%d", stats.PendingDocuments)
 	out["treedb.collections.write_domain.pending_bytes"] = fmt.Sprintf("%d", stats.PendingBytes)
 	out["treedb.collections.write_domain.pending_root_runs"] = fmt.Sprintf("%d", stats.PendingRootRuns)
+	out["treedb.collections.write_domain.pending_indexed_flush_units"] = fmt.Sprintf("%d", stats.PendingIndexedFlushUnits)
+	out["treedb.collections.write_domain.indexed_async_flush.running_domains"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushRunning)
 	out["treedb.collections.write_domain.mutation_lock.calls_total"] = fmt.Sprintf("%d", stats.MutationLockCalls)
 	out["treedb.collections.write_domain.mutation_lock.wait_ns_total"] = fmt.Sprintf("%d", stats.MutationLockWait.Nanoseconds())
 	out["treedb.collections.write_domain.mutation_lock.hold_ns_total"] = fmt.Sprintf("%d", stats.MutationLockHold.Nanoseconds())
@@ -582,6 +614,9 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.indexed_stage.bytes_total"] = fmt.Sprintf("%d", stats.IndexedStageBytes)
 	out["treedb.collections.write_domain.indexed_stage.root_runs_total"] = fmt.Sprintf("%d", stats.IndexedStageRootRuns)
 	out["treedb.collections.write_domain.indexed_stage.auto_flushes_total"] = fmt.Sprintf("%d", stats.IndexedAutoFlushes)
+	out["treedb.collections.write_domain.indexed_async_flush.scheduled_total"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushScheduled)
+	out["treedb.collections.write_domain.indexed_async_flush.backpressure_sync_total"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushBackpressure)
+	out["treedb.collections.write_domain.indexed_async_flush.errors_total"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushErrors)
 	out["treedb.collections.write_domain.indexed_flush.calls_total"] = fmt.Sprintf("%d", stats.IndexedFlushCalls)
 	out["treedb.collections.write_domain.indexed_flush.errors_total"] = fmt.Sprintf("%d", stats.IndexedFlushErrors)
 	out["treedb.collections.write_domain.indexed_flush.docs_total"] = fmt.Sprintf("%d", stats.IndexedFlushDocs)
@@ -627,6 +662,8 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.PendingDocuments = saturatingAddNonNegativeInt(s.PendingDocuments, other.PendingDocuments)
 	s.PendingBytes = saturatingAddNonNegativeInt64(s.PendingBytes, other.PendingBytes)
 	s.PendingRootRuns = saturatingAddNonNegativeInt(s.PendingRootRuns, other.PendingRootRuns)
+	s.PendingIndexedFlushUnits = saturatingAddNonNegativeInt(s.PendingIndexedFlushUnits, other.PendingIndexedFlushUnits)
+	s.IndexedAsyncFlushRunning = saturatingAddNonNegativeInt(s.IndexedAsyncFlushRunning, other.IndexedAsyncFlushRunning)
 	s.MutationLockCalls += other.MutationLockCalls
 	s.MutationLockWait += other.MutationLockWait
 	s.MutationLockHold += other.MutationLockHold
@@ -635,6 +672,9 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.IndexedStageBytes += other.IndexedStageBytes
 	s.IndexedStageRootRuns += other.IndexedStageRootRuns
 	s.IndexedAutoFlushes += other.IndexedAutoFlushes
+	s.IndexedAsyncFlushScheduled += other.IndexedAsyncFlushScheduled
+	s.IndexedAsyncFlushBackpressure += other.IndexedAsyncFlushBackpressure
+	s.IndexedAsyncFlushErrors += other.IndexedAsyncFlushErrors
 	s.IndexedFlushCalls += other.IndexedFlushCalls
 	s.IndexedFlushErrors += other.IndexedFlushErrors
 	s.IndexedFlushDocs += other.IndexedFlushDocs
@@ -660,7 +700,11 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.PendingDocuments = domain.count
 	stats.PendingBytes = domain.bufferedBytes
 	stats.PendingRootRuns = bufferedIndexedRootRunCount(domain)
+	stats.PendingIndexedFlushUnits = len(domain.indexedFlushUnits)
 	domain.mu.RUnlock()
+	if domain.indexedAsyncFlushRunning() {
+		stats.IndexedAsyncFlushRunning = 1
+	}
 
 	stats.MutationLockCalls = domain.mutationLockCalls.Load()
 	stats.MutationLockWait = durationFromAtomicNs(domain.mutationLockWaitTotalNs.Load())
@@ -670,6 +714,9 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.IndexedStageBytes = domain.indexedStageBytes.Load()
 	stats.IndexedStageRootRuns = domain.indexedStageRootRuns.Load()
 	stats.IndexedAutoFlushes = domain.indexedAutoFlushes.Load()
+	stats.IndexedAsyncFlushScheduled = domain.indexedAsyncFlushScheduled.Load()
+	stats.IndexedAsyncFlushBackpressure = domain.indexedAsyncFlushBackpressure.Load()
+	stats.IndexedAsyncFlushErrors = domain.indexedAsyncFlushErrors.Load()
 	stats.IndexedFlushCalls = domain.indexedFlushCalls.Load()
 	stats.IndexedFlushErrors = domain.indexedFlushErrors.Load()
 	stats.IndexedFlushDocs = domain.indexedFlushDocs.Load()
@@ -735,6 +782,84 @@ func (domain *collectionWriteDomain) observeIndexedStage(docs int, bytes int64, 
 	if rootRuns > 0 {
 		domain.indexedStageRootRuns.Add(uint64(rootRuns))
 	}
+}
+
+func (domain *collectionWriteDomain) beginIndexedAsyncFlush() bool {
+	if domain == nil {
+		return false
+	}
+	domain.indexedAsyncMu.Lock()
+	defer domain.indexedAsyncMu.Unlock()
+	if domain.indexedAsyncCond == nil {
+		domain.indexedAsyncCond = sync.NewCond(&domain.indexedAsyncMu)
+	}
+	if domain.indexedAsyncRun {
+		return false
+	}
+	domain.indexedAsyncRun = true
+	return true
+}
+
+func (domain *collectionWriteDomain) finishIndexedAsyncFlush(err error) {
+	if domain == nil {
+		return
+	}
+	if err != nil {
+		domain.indexedAsyncFlushErrors.Add(1)
+	}
+	domain.indexedAsyncMu.Lock()
+	if err != nil {
+		domain.indexedAsyncErr = err
+	}
+	domain.indexedAsyncRun = false
+	if domain.indexedAsyncCond != nil {
+		domain.indexedAsyncCond.Broadcast()
+	}
+	domain.indexedAsyncMu.Unlock()
+}
+
+func (domain *collectionWriteDomain) waitIndexedAsyncFlush() {
+	if domain == nil {
+		return
+	}
+	domain.indexedAsyncMu.Lock()
+	if domain.indexedAsyncCond == nil {
+		domain.indexedAsyncCond = sync.NewCond(&domain.indexedAsyncMu)
+	}
+	for domain.indexedAsyncRun {
+		domain.indexedAsyncCond.Wait()
+	}
+	domain.indexedAsyncMu.Unlock()
+}
+
+func (domain *collectionWriteDomain) indexedAsyncFlushRunning() bool {
+	if domain == nil {
+		return false
+	}
+	domain.indexedAsyncMu.Lock()
+	running := domain.indexedAsyncRun
+	domain.indexedAsyncMu.Unlock()
+	return running
+}
+
+func (domain *collectionWriteDomain) clearIndexedAsyncFlushError() {
+	if domain == nil {
+		return
+	}
+	domain.indexedAsyncMu.Lock()
+	domain.indexedAsyncErr = nil
+	domain.indexedAsyncMu.Unlock()
+}
+
+func (domain *collectionWriteDomain) consumeIndexedAsyncFlushError() error {
+	if domain == nil {
+		return nil
+	}
+	domain.indexedAsyncMu.Lock()
+	err := domain.indexedAsyncErr
+	domain.indexedAsyncErr = nil
+	domain.indexedAsyncMu.Unlock()
+	return err
 }
 
 func (domain *collectionWriteDomain) observeIndexedFlush(docs int, bytes int64, rootRuns, roots int, duration time.Duration, err error) {
@@ -837,6 +962,7 @@ func (m *CollectionManager) FlushAll() error {
 
 	var errs []error
 	for _, domain := range domains {
+		domain.waitIndexedAsyncFlush()
 		if err := flushCollectionWriteDomain(m.db, domain); err != nil {
 			errs = append(errs, err)
 		}
@@ -854,6 +980,22 @@ func flushCollectionWriteDomain(db *backenddb.DB, domain *collectionWriteDomain)
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
 	return collection.flushBufferedWritesLocked(domain)
+}
+
+func (c *Collection) scheduleIndexedAsyncFlush(domain *collectionWriteDomain) bool {
+	if c == nil || c.db == nil || domain == nil {
+		return false
+	}
+	if !domain.beginIndexedAsyncFlush() {
+		return false
+	}
+	domain.indexedAsyncFlushScheduled.Add(1)
+	db := c.db
+	go func() {
+		err := flushCollectionWriteDomain(db, domain)
+		domain.finishIndexedAsyncFlush(err)
+	}()
+	return true
 }
 
 func (c *Collection) lockMutation() func() {
@@ -1341,6 +1483,9 @@ func (c *Collection) Flush() error {
 	if c.db == nil {
 		return errCollectionDBNil
 	}
+	if c.writeDomain != nil {
+		c.writeDomain.waitIndexedAsyncFlush()
+	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation()
 	return c.flushBufferedWrites()
@@ -1566,13 +1711,22 @@ func (c *Collection) flushBufferedWrites() error {
 }
 
 func (c *Collection) flushBufferedWritesLocked(domain *collectionWriteDomain) error {
-	if domain == nil || domain.count == 0 {
+	if domain == nil {
 		return nil
 	}
-	if hasBufferedIndexedRootRuns(domain) {
-		return c.flushBufferedIndexedLocked(domain)
+	if domain.count == 0 {
+		return domain.consumeIndexedAsyncFlushError()
 	}
-	return c.flushBufferedNoIndexLocked(domain)
+	var err error
+	if hasBufferedIndexedRootRuns(domain) {
+		err = c.flushBufferedIndexedLocked(domain)
+	} else {
+		err = c.flushBufferedNoIndexLocked(domain)
+	}
+	if err == nil {
+		domain.clearIndexedAsyncFlushError()
+	}
+	return err
 }
 
 func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) error {
@@ -1643,6 +1797,8 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	domain.primaryRoot = rootIDs[0]
 	domain.table = newCollectionRunTable(0)
 	domain.count = 0
+	domain.mutableCount = 0
+	domain.mutableBytes = 0
 	c.meta = meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	resetCollectionRunTable(table)
@@ -1788,17 +1944,18 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	domain.primaryRoot = catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
 	domain.count += len(plan.resultIDs)
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedBytes)
+	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, len(plan.resultIDs))
+	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedBytes)
 	domain.writeGeneration++
 	domain.observeIndexedStage(len(plan.resultIDs), stagedBytes, stagedRootRuns)
 	c.meta = catalog.meta
 	if shouldFlushBufferedIndexedWrites(domain, catalog.meta.Options) {
-		domain.indexedAutoFlushes.Add(1)
-		flushStart := time.Now()
-		if err := c.flushBufferedIndexedLocked(domain); err != nil {
+		flushElapsed, err := c.flushBufferedIndexedAfterThresholdLocked(domain, catalog.meta.Options)
+		if err != nil {
 			rollbackBufferedIndexedDomain(domain, checkpoint)
 			return 0, err
 		}
-		return time.Since(flushStart), nil
+		return flushElapsed, nil
 	}
 	return 0, nil
 }
@@ -1815,24 +1972,39 @@ func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWr
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
 	domain.rootRunCount = 0
+	domain.mutableCount = 0
+	domain.mutableBytes = 0
 	domain.primaryIDIndex = nil
 	domain.primaryRunIndex = nil
 	domain.uniqueValueRuns = nil
 	domain.uniqueValueIndex = nil
 	domain.bufferedBytes = 0
+	domain.mutableCount = 0
+	domain.mutableBytes = 0
 }
 
 func shouldFlushBufferedIndexedWrites(domain *collectionWriteDomain, opts CollectionOptions) bool {
 	if domain == nil || domain.count == 0 {
 		return false
 	}
-	if opts.BufferedIndexedWriteMaxDocuments > 0 && domain.count >= opts.BufferedIndexedWriteMaxDocuments {
+	count := domain.count
+	bytes := domain.bufferedBytes
+	rootRuns := bufferedIndexedRootRunCount(domain)
+	if opts.BufferedIndexedAsyncFlush {
+		if len(domain.rootRuns) == 0 {
+			return false
+		}
+		count = domain.mutableCount
+		bytes = domain.mutableBytes
+		rootRuns = domain.rootRunCount
+	}
+	if opts.BufferedIndexedWriteMaxDocuments > 0 && count >= opts.BufferedIndexedWriteMaxDocuments {
 		return true
 	}
-	if opts.BufferedIndexedWriteMaxBytes > 0 && domain.bufferedBytes >= opts.BufferedIndexedWriteMaxBytes {
+	if opts.BufferedIndexedWriteMaxBytes > 0 && bytes >= opts.BufferedIndexedWriteMaxBytes {
 		return true
 	}
-	if opts.BufferedIndexedWriteMaxRootRuns > 0 && bufferedIndexedRootRunCount(domain) >= opts.BufferedIndexedWriteMaxRootRuns {
+	if opts.BufferedIndexedWriteMaxRootRuns > 0 && rootRuns >= opts.BufferedIndexedWriteMaxRootRuns {
 		return true
 	}
 	return false
@@ -1842,15 +2014,23 @@ func shouldFlushBufferedIndexedWritesAfterAdding(domain *collectionWriteDomain, 
 	if domain == nil || addedCount <= 0 {
 		return false
 	}
-	nextCount := saturatingAddNonNegativeInt(domain.count, addedCount)
+	baseCount := domain.count
+	baseBytes := domain.bufferedBytes
+	baseRootRuns := bufferedIndexedRootRunCount(domain)
+	if opts.BufferedIndexedAsyncFlush {
+		baseCount = domain.mutableCount
+		baseBytes = domain.mutableBytes
+		baseRootRuns = domain.rootRunCount
+	}
+	nextCount := saturatingAddNonNegativeInt(baseCount, addedCount)
 	if opts.BufferedIndexedWriteMaxDocuments > 0 && nextCount >= opts.BufferedIndexedWriteMaxDocuments {
 		return true
 	}
-	nextBytes := saturatingAddNonNegativeInt64(domain.bufferedBytes, addedBytes)
+	nextBytes := saturatingAddNonNegativeInt64(baseBytes, addedBytes)
 	if opts.BufferedIndexedWriteMaxBytes > 0 && nextBytes >= opts.BufferedIndexedWriteMaxBytes {
 		return true
 	}
-	nextRootRuns := saturatingAddNonNegativeInt(bufferedIndexedRootRunCount(domain), addedRootRuns)
+	nextRootRuns := saturatingAddNonNegativeInt(baseRootRuns, addedRootRuns)
 	if opts.BufferedIndexedWriteMaxRootRuns > 0 && nextRootRuns >= opts.BufferedIndexedWriteMaxRootRuns {
 		return true
 	}
@@ -1892,6 +2072,31 @@ func saturatingAddNonNegativeInt(total, n int) int {
 
 func bufferedIndexedAutoFlushEnabled(opts CollectionOptions) bool {
 	return opts.BufferedIndexedWriteMaxDocuments > 0 || opts.BufferedIndexedWriteMaxBytes > 0 || opts.BufferedIndexedWriteMaxRootRuns > 0
+}
+
+func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collectionWriteDomain, opts CollectionOptions) (time.Duration, error) {
+	if domain == nil {
+		return 0, nil
+	}
+	domain.indexedAutoFlushes.Add(1)
+	if opts.BufferedIndexedAsyncFlush {
+		rotateIndexedMutableToFlushUnitLocked(domain)
+		if opts.BufferedIndexedAsyncFlushMaxQueuedUnits > 0 && len(domain.indexedFlushUnits) >= opts.BufferedIndexedAsyncFlushMaxQueuedUnits {
+			domain.indexedAsyncFlushBackpressure.Add(1)
+			flushStart := time.Now()
+			err := c.flushBufferedIndexedLocked(domain)
+			return time.Since(flushStart), err
+		}
+		if !c.scheduleIndexedAsyncFlush(domain) {
+			flushStart := time.Now()
+			err := c.flushBufferedIndexedLocked(domain)
+			return time.Since(flushStart), err
+		}
+		return 0, nil
+	}
+	flushStart := time.Now()
+	err := c.flushBufferedIndexedLocked(domain)
+	return time.Since(flushStart), err
 }
 
 func hasBufferedIndexedRootRuns(domain *collectionWriteDomain) bool {
@@ -2044,6 +2249,8 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		primaryRoot:           domain.primaryRoot,
 		count:                 domain.count,
 		bufferedBytes:         domain.bufferedBytes,
+		mutableCount:          domain.mutableCount,
+		mutableBytes:          domain.mutableBytes,
 		writeGeneration:       domain.writeGeneration,
 		rootRuns:              cloneTableRunMap(domain.rootRuns),
 		rootPolicies:          cloneRootPolicyMap(domain.rootPolicies),
@@ -2070,6 +2277,8 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.primaryRoot = checkpoint.primaryRoot
 	domain.count = checkpoint.count
 	domain.bufferedBytes = checkpoint.bufferedBytes
+	domain.mutableCount = checkpoint.mutableCount
+	domain.mutableBytes = checkpoint.mutableBytes
 	domain.writeGeneration = checkpoint.writeGeneration
 	domain.indexedFlushUnits = checkpoint.indexedFlushUnits
 	domain.rootRuns = checkpoint.rootRuns
@@ -3005,6 +3214,8 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		domain.indexedFlushUnits = nil
 		domain.count = 0
 		domain.bufferedBytes = 0
+		domain.mutableCount = 0
+		domain.mutableBytes = 0
 		return nil
 	}
 	flushDocs := domain.count
@@ -3070,6 +3281,8 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	domain.uniqueValueIndex = nil
 	domain.count = 0
 	domain.bufferedBytes = 0
+	domain.mutableCount = 0
+	domain.mutableBytes = 0
 	c.meta = meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	resetIndexedFlushUnits(oldUnits)
@@ -3099,6 +3312,8 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 	domain.rootBaseIDs = nil
 	domain.uniqueValueRuns = nil
 	domain.rootRunCount = 0
+	domain.mutableCount = 0
+	domain.mutableBytes = 0
 	return true
 }
 
@@ -5842,12 +6057,13 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	}
 	domain.count += modifiedCount
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedBytes)
+	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, modifiedCount)
+	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedBytes)
 	domain.writeGeneration++
 	domain.observeIndexedStage(modifiedCount, stagedBytes, stagedRootRuns)
 	c.meta = plan.meta
 	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
-		domain.indexedAutoFlushes.Add(1)
-		if err := c.flushBufferedIndexedLocked(domain); err != nil {
+		if _, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options); err != nil {
 			if shouldAutoFlushAfterAdding {
 				rollbackBufferedIndexedDomain(domain, checkpoint)
 				c.meta = collectionMetaCheckpoint
@@ -7460,6 +7676,9 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 	if meta.Options.BufferedIndexedWriteMaxRootRuns < 0 {
 		return CollectionMeta{}, errors.New("collections: buffered indexed write max root runs cannot be negative")
 	}
+	if meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits < 0 {
+		return CollectionMeta{}, errors.New("collections: buffered indexed async flush max queued units cannot be negative")
+	}
 	documentFormat, err := normalizeDocumentFormat(meta.Options.DocumentFormat)
 	if err != nil {
 		return CollectionMeta{}, err
@@ -7495,6 +7714,8 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		meta.Options.BufferedIndexedWriteMaxDocuments = 0
 		meta.Options.BufferedIndexedWriteMaxBytes = 0
 		meta.Options.BufferedIndexedWriteMaxRootRuns = 0
+		meta.Options.BufferedIndexedAsyncFlush = false
+		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
 	} else if len(meta.Indexes) == 0 {
 		meta.Options.BufferedIndexedWrites = false
 	} else {
@@ -7505,6 +7726,9 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		}
 		if useNativeDocumentDefault && meta.Options.BufferedIndexedWriteMaxBytes == 0 && meta.Options.BufferedIndexedWriteMaxRootRuns == 0 {
 			meta.Options.BufferedIndexedWriteMaxRootRuns = DefaultIndexedWriteMemtableMaxRootRuns
+		}
+		if meta.Options.BufferedIndexedAsyncFlush && meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits == 0 {
+			meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits
 		}
 	}
 	return meta, nil

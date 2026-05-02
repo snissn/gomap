@@ -207,6 +207,12 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 		if meta.Options.BufferedIndexedWriteMaxRootRuns > 0 {
 			b.ReportMetric(float64(meta.Options.BufferedIndexedWriteMaxRootRuns), "buffered_max_root_runs")
 		}
+		if meta.Options.BufferedIndexedAsyncFlush {
+			b.ReportMetric(1, "buffered_async_flush")
+			if meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits > 0 {
+				b.ReportMetric(float64(meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits), "buffered_async_max_units")
+			}
+		}
 		if insertStats.BufferedIndexedBatches > 0 && insertStats.BufferedIndexedBypassBatches == 0 && insertElapsed > 0 {
 			b.ReportMetric(float64(insertElapsed.Nanoseconds())/float64(b.N), "buffered_insert_ns/doc")
 		}
