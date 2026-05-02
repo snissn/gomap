@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"reflect"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 func TestSnapshot_HasManyAndHasPrefixes(t *testing.T) {
@@ -183,6 +185,131 @@ func TestSnapshot_HasManyAtRootAndHasPrefixesAtRoot(t *testing.T) {
 	if want := []bool{false}; !reflect.DeepEqual(missingRootHasPrefixes, want) {
 		t.Fatalf("HasPrefixesAtRoot missing root mismatch: got=%v want=%v", missingRootHasPrefixes, want)
 	}
+}
+
+func TestSnapshotReaderAtRootGetAppend(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, rootIDs, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+		Iter: mustFrozenSystemMemtable(t,
+			"doc/a", "va",
+			"doc/b", "vb",
+		).NewIterator(nil, nil),
+	}})
+	if err != nil {
+		t.Fatalf("publish root: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("root IDs len=%d want 1", len(rootIDs))
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+
+	reader, err := snap.ReaderAtRoot(rootIDs[0])
+	if err != nil {
+		t.Fatalf("ReaderAtRoot: %v", err)
+	}
+	again, err := snap.ReaderAtRoot(rootIDs[0])
+	if err != nil {
+		t.Fatalf("ReaderAtRoot again: %v", err)
+	}
+	if reader.tree != again.tree {
+		t.Fatal("ReaderAtRoot did not reuse the snapshot root-tree cache")
+	}
+
+	got, err := reader.GetAppend([]byte("doc/a"), []byte("prefix:"))
+	if err != nil {
+		t.Fatalf("reader GetAppend: %v", err)
+	}
+	if want := []byte("prefix:va"); !bytes.Equal(got, want) {
+		t.Fatalf("reader GetAppend got=%q want %q", got, want)
+	}
+
+	out, err := reader.GetAppend([]byte("doc/missing"), []byte("keep"))
+	if !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("reader missing err=%v want %v", err, tree.ErrKeyNotFound)
+	}
+	if !bytes.Equal(out, []byte("keep")) {
+		t.Fatalf("reader missing output=%q want original dst", out)
+	}
+}
+
+func BenchmarkSnapshotRootReaderGetAppend(b *testing.B) {
+	dir := b.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		b.Fatalf("open: %v", err)
+	}
+	b.Cleanup(func() { _ = db.Close() })
+
+	const keyCount = 1024
+	table := memtable.NewAppendOnlyWithCapacity(keyCount)
+	keys := make([][]byte, keyCount)
+	for i := 0; i < keyCount; i++ {
+		key := []byte(fmt.Sprintf("doc/%04d", i))
+		value := []byte(fmt.Sprintf("value/%04d", i))
+		keys[i] = key
+		table.Set(key, value)
+	}
+	table.Freeze()
+	_, rootIDs, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+		Iter: table.NewIterator(nil, nil),
+	}})
+	if err != nil {
+		b.Fatalf("publish root: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		b.Fatalf("root IDs len=%d want 1", len(rootIDs))
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		b.Fatal("AcquireSnapshot returned nil")
+	}
+	b.Cleanup(func() { _ = snap.Close() })
+	if _, err := snap.GetAppendAtRoot(rootIDs[0], keys[0], nil); err != nil {
+		b.Fatalf("warm GetAppendAtRoot: %v", err)
+	}
+	reader, err := snap.ReaderAtRoot(rootIDs[0])
+	if err != nil {
+		b.Fatalf("ReaderAtRoot: %v", err)
+	}
+
+	b.Run("snapshot_get_append_at_root", func(b *testing.B) {
+		b.ReportAllocs()
+		dst := make([]byte, 0, 32)
+		for i := 0; i < b.N; i++ {
+			out, err := snap.GetAppendAtRoot(rootIDs[0], keys[i&(keyCount-1)], dst[:0])
+			if err != nil {
+				b.Fatalf("GetAppendAtRoot: %v", err)
+			}
+			if len(out) == 0 {
+				b.Fatal("GetAppendAtRoot returned empty value")
+			}
+		}
+	})
+	b.Run("bound_reader_get_append", func(b *testing.B) {
+		b.ReportAllocs()
+		dst := make([]byte, 0, 32)
+		for i := 0; i < b.N; i++ {
+			out, err := reader.GetAppend(keys[i&(keyCount-1)], dst[:0])
+			if err != nil {
+				b.Fatalf("reader GetAppend: %v", err)
+			}
+			if len(out) == 0 {
+				b.Fatal("reader GetAppend returned empty value")
+			}
+		}
+	})
 }
 
 func TestSnapshotTreeAtRootCachesRootTrees(t *testing.T) {

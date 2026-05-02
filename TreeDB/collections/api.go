@@ -6942,7 +6942,7 @@ func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta 
 	return meta.Options.BufferedIndexedWrites && len(meta.Indexes) > 0
 }
 
-func readUpdateBatchCurrentDocument(snap *backenddb.Snapshot, primaryRoot uint64, itemIndex int, documentID []byte, buffered updateBatchBufferedRead, dst []byte) (updateBatchCurrentDocument, error) {
+func readUpdateBatchCurrentDocument(primaryReader backenddb.SnapshotRootReader, primaryReaderOK bool, itemIndex int, documentID []byte, buffered updateBatchBufferedRead, dst []byte) (updateBatchCurrentDocument, error) {
 	if buffered.enabled {
 		if itemIndex >= 0 && itemIndex < len(buffered.primaryEntries) {
 			entry := buffered.primaryEntries[itemIndex]
@@ -6954,10 +6954,10 @@ func readUpdateBatchCurrentDocument(snap *backenddb.Snapshot, primaryRoot uint64
 			}
 		}
 	}
-	if primaryRoot == 0 {
+	if !primaryReaderOK {
 		return updateBatchCurrentDocument{}, nil
 	}
-	value, err := snap.GetAppendAtRoot(primaryRoot, documentID, dst)
+	value, err := primaryReader.GetAppend(documentID, dst)
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return updateBatchCurrentDocument{}, nil
 	}
@@ -7198,6 +7198,16 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		_ = snap.Close()
 		return nil, err
 	}
+	var primaryReader backenddb.SnapshotRootReader
+	primaryReaderOK := false
+	if primaryRoot != 0 {
+		primaryReader, err = snap.ReaderAtRoot(primaryRoot)
+		if err != nil {
+			_ = snap.Close()
+			return nil, err
+		}
+		primaryReaderOK = true
+	}
 
 	scratch := getUpdateBatchPlanScratch(len(items), len(runtimes))
 	scratchOwnedByPlan := false
@@ -7232,7 +7242,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	var currentScratch []byte
 	for i, item := range items {
 		phaseStart := updateBatchStatsNow(detailedStats)
-		current, err := readUpdateBatchCurrentDocument(snap, primaryRoot, i, item.DocumentID, bufferedRead, currentScratch[:0])
+		current, err := readUpdateBatchCurrentDocument(primaryReader, primaryReaderOK, i, item.DocumentID, bufferedRead, currentScratch[:0])
 		stats.CurrentRead += updateBatchStatsSince(detailedStats, phaseStart)
 		if err != nil {
 			_ = snap.Close()

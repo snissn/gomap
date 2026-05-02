@@ -8,6 +8,12 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
+// SnapshotRootReader is a root-bound read view owned by a Snapshot.
+// It is valid only while the parent Snapshot remains open.
+type SnapshotRootReader struct {
+	tree *tree.Tree
+}
+
 func (s *Snapshot) treeAtRoot(rootID uint64) (*tree.Tree, error) {
 	if s == nil || s.closed.Load() {
 		return nil, ErrClosed
@@ -29,6 +35,21 @@ func (s *Snapshot) treeAtRoot(rootID uint64) (*tree.Tree, error) {
 	cached := &s.rootTrees[len(s.rootTrees)-1]
 	cached.tree.Reset(s.idx.pager, &s.reader, rootID)
 	return &cached.tree, nil
+}
+
+func (s *Snapshot) ReaderAtRoot(rootID uint64) (SnapshotRootReader, error) {
+	tr, err := s.treeAtRoot(rootID)
+	if err != nil {
+		return SnapshotRootReader{}, err
+	}
+	return SnapshotRootReader{tree: tr}, nil
+}
+
+func (r SnapshotRootReader) GetAppend(key, dst []byte) ([]byte, error) {
+	if r.tree == nil {
+		return dst, tree.ErrKeyNotFound
+	}
+	return r.tree.GetAppend(key, dst)
 }
 
 func (s *Snapshot) GetEntryAtRoot(rootID uint64, key []byte) (node.LeafEntry, error) {
