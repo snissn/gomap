@@ -305,7 +305,10 @@ type CollectionUpdateStats struct {
 	// BufferStageLockHold is an enclosing domain mutex hold-time metric and
 	// overlaps the validation/root/index/root-append subphases; it is not
 	// additive with those child counters.
-	BufferStagePrecheck      time.Duration
+	BufferStagePrecheck time.Duration
+	// BufferStageLockWait measures only domain mutex acquisition time. It does
+	// not include async flush completion waits performed after releasing the
+	// mutex for backpressure.
 	BufferStageLockWait      time.Duration
 	BufferStageLockHold      time.Duration
 	BufferStageValidation    time.Duration
@@ -314,8 +317,10 @@ type CollectionUpdateStats struct {
 	BufferStagePrimaryIdx    time.Duration
 	BufferStageUniqueIdx     time.Duration
 	BufferStageRootAppend    time.Duration
-	// BufferStageFlush measures only threshold-flush work that was actually
-	// scheduled/executed while staging an indexed buffered update batch.
+	// BufferStageFlush measures local threshold-flush schedule/publish work
+	// performed while staging an indexed buffered update batch. It excludes
+	// waits for an already-running async flush that leave no local schedule or
+	// publish work for the current batch.
 	BufferStageFlush       time.Duration
 	Publish                time.Duration
 	SecondaryDeleteEntries int
@@ -2480,6 +2485,10 @@ func bufferedIndexedAutoFlushEnabled(opts CollectionOptions) bool {
 	return opts.BufferedIndexedWriteMaxDocuments > 0 || opts.BufferedIndexedWriteMaxBytes > 0 || opts.BufferedIndexedWriteMaxRootRuns > 0
 }
 
+// flushBufferedIndexedAfterThresholdLocked returns the local schedule/publish
+// duration plus any interval where domain.mu was deliberately released while
+// waiting for an already-running async flush. The released interval is not lock
+// acquisition wait and is not counted as local flush work.
 func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collectionWriteDomain, opts CollectionOptions) (time.Duration, time.Duration, error) {
 	if domain == nil {
 		return 0, 0, nil
@@ -2504,28 +2513,30 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 				domain.mu.Lock()
 				lockReleased += time.Since(unlockStart)
 				if err := domain.consumeIndexedAsyncFlushError(); err != nil {
-					return time.Since(flushStart), lockReleased, err
+					return 0, lockReleased, err
 				}
 				if domain.count == 0 || len(domain.indexedFlushUnits) == 0 || !hasBufferedIndexedRootRuns(domain) {
-					return time.Since(flushStart), lockReleased, nil
+					return 0, lockReleased, nil
 				}
 				if len(domain.indexedPublishingUnits) == 0 {
+					flushStart = time.Now()
 					err := c.flushBufferedIndexedLocked(domain)
 					return time.Since(flushStart), lockReleased, err
 				}
 			}
+			flushStart = time.Now()
 			if !c.scheduleIndexedAsyncFlush(domain) && len(domain.indexedPublishingUnits) == 0 {
 				err := c.flushBufferedIndexedLocked(domain)
 				return time.Since(flushStart), lockReleased, err
 			}
 			return time.Since(flushStart), lockReleased, nil
 		}
+		flushStart := time.Now()
 		if !c.scheduleIndexedAsyncFlush(domain) && len(domain.indexedPublishingUnits) == 0 {
-			flushStart := time.Now()
 			err := c.flushBufferedIndexedLocked(domain)
 			return time.Since(flushStart), 0, err
 		}
-		return 0, 0, nil
+		return time.Since(flushStart), 0, nil
 	}
 	flushStart := time.Now()
 	err := c.flushBufferedIndexedLocked(domain)
@@ -7373,7 +7384,6 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		flushDuration, lockReleased, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options)
 		if lockReleased > 0 {
 			lockReleasedDuringHold += lockReleased
-			plan.stats.BufferStageLockWait += updateBatchStatsDuration(detailedStats, lockReleased)
 		}
 		plan.stats.BufferStageFlush += updateBatchStatsDuration(detailedStats, flushDuration)
 		if err != nil {
