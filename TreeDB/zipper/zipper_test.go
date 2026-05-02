@@ -7,6 +7,7 @@ import (
 	"io"
 	"math/rand"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -272,6 +273,30 @@ func TestZipperLoadNodeRefAttributesLeafPageReaderCacheHit(t *testing.T) {
 	}
 	if reader.calls != 1 {
 		t.Fatalf("reader calls=%d want 1", reader.calls)
+	}
+}
+
+func TestZipperLoadNodeRefAnnotatesLeafPageReaderCacheValidationError(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	z.SetOuterLeavesInValueLog(true)
+	z.SetLeafPageReader(&sourceReportingLeafPageReader{leaf: []byte("short"), cacheHit: true})
+
+	ptr := page.LeafLogPtr{FileID: 1, Offset: 128, RecordLengthHint: page.PageSize}
+	_, _, _, _, _, err = z.loadNodeRef(page.LeafLogChildRef(ptr), nil)
+	if err == nil {
+		t.Fatal("loadNodeRef unexpectedly succeeded")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "leaf-page reader cache invalid leaf-log page") || !strings.Contains(msg, "invalid size") {
+		t.Fatalf("error=%q, want source context and validation detail", msg)
 	}
 }
 

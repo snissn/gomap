@@ -976,6 +976,14 @@ func validateLoadedLeafLogNode(data []byte) (node.Node, error) {
 	return n, nil
 }
 
+func validateLoadedLeafLogNodeFrom(source string, data []byte) (node.Node, error) {
+	n, err := validateLoadedLeafLogNode(data)
+	if err != nil {
+		return node.Node{}, fmt.Errorf("zipper: %s invalid leaf-log page: %w", source, err)
+	}
+	return n, nil
+}
+
 // Apply applies the batch to the tree rooted at rootID.
 // Returns the new root page ID, list of retired pages, and commit metrics.
 func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptive.Metrics, error) {
@@ -1152,7 +1160,7 @@ func (z *Zipper) loadNodeRef(ref page.ChildRef, scratchCtx *mergeScratch) (node.
 			data, cached := z.leafRefCache[ptr]
 			z.leafRefCacheMu.RUnlock()
 			if cached {
-				n, err := validateLoadedLeafLogNode(data)
+				n, err := validateLoadedLeafLogNodeFrom("leaf-ref cache", data)
 				if err != nil {
 					return node.Node{}, false, nil, false, zipperNodeLoadLeafLogCache, err
 				}
@@ -1170,16 +1178,19 @@ func (z *Zipper) loadNodeRef(ref page.ChildRef, scratchCtx *mergeScratch) (node.
 				return node.Node{}, false, nil, false, zipperNodeLoadLeafLogView, err
 			}
 			source := zipperNodeLoadLeafLogScratch
+			sourceLabel := "leaf-page reader scratch"
 			if cacheHit {
 				source = zipperNodeLoadLeafLogCache
+				sourceLabel = "leaf-page reader cache"
 			} else if !usedScratch {
 				source = zipperNodeLoadLeafLogView
+				sourceLabel = "leaf-page reader view"
 			}
 			if !usedScratch {
 				releaseLeafPageScratch(scratchCtx, scratch)
 				scratch = nil
 			}
-			n, err := validateLoadedLeafLogNode(data)
+			n, err := validateLoadedLeafLogNodeFrom(sourceLabel, data)
 			if err != nil {
 				if scratch != nil {
 					releaseLeafPageScratch(scratchCtx, scratch)
@@ -1199,12 +1210,14 @@ func (z *Zipper) loadNodeRef(ref page.ChildRef, scratchCtx *mergeScratch) (node.
 				return node.Node{}, false, nil, false, zipperNodeLoadLeafLogView, err
 			}
 			source := zipperNodeLoadLeafLogScratch
+			sourceLabel := "leaf-page reader scratch"
 			if !usedScratch {
 				releaseLeafPageScratch(scratchCtx, scratch)
 				scratch = nil
 				source = zipperNodeLoadLeafLogView
+				sourceLabel = "leaf-page reader view"
 			}
-			n, err := validateLoadedLeafLogNode(data)
+			n, err := validateLoadedLeafLogNodeFrom(sourceLabel, data)
 			if err != nil {
 				if scratch != nil {
 					releaseLeafPageScratch(scratchCtx, scratch)
@@ -1221,7 +1234,7 @@ func (z *Zipper) loadNodeRef(ref page.ChildRef, scratchCtx *mergeScratch) (node.
 		if err != nil {
 			return node.Node{}, false, nil, false, zipperNodeLoadLeafLogView, err
 		}
-		n, err := validateLoadedLeafLogNode(data)
+		n, err := validateLoadedLeafLogNodeFrom("leaf-page reader unsafe", data)
 		if err != nil {
 			return node.Node{}, false, nil, false, zipperNodeLoadLeafLogView, err
 		}
