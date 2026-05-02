@@ -1386,36 +1386,7 @@ func rangePhaseName(cfg config) string {
 
 func createIndexes(ctx context.Context, db *mongo.Database, coll *mongo.Collection, secondaryIndexes int, rangeIndex bool, treedbTarget bool) error {
 	if treedbTarget {
-		indexDocs := make(bson.A, 0, secondaryIndexes+1)
-		if secondaryIndexes >= 1 {
-			indexDocs = append(indexDocs, bson.D{
-				{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
-				{Key: "name", Value: "email_1"},
-				{Key: "unique", Value: true},
-				{Key: "treedbValueType", Value: string(collections.IndexValueString)},
-			})
-		}
-		if secondaryIndexes >= 2 {
-			indexDocs = append(indexDocs, bson.D{
-				{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
-				{Key: "name", Value: "city_1"},
-				{Key: "treedbValueType", Value: string(collections.IndexValueString)},
-			})
-		}
-		if secondaryIndexes >= 3 {
-			indexDocs = append(indexDocs, bson.D{
-				{Key: "key", Value: bson.D{{Key: "active", Value: int32(1)}}},
-				{Key: "name", Value: "active_1"},
-				{Key: "treedbValueType", Value: string(collections.IndexValueBool)},
-			})
-		}
-		if rangeIndex {
-			indexDocs = append(indexDocs, bson.D{
-				{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}},
-				{Key: "name", Value: "age_1"},
-				{Key: "treedbValueType", Value: string(collections.IndexValueInt64)},
-			})
-		}
+		indexDocs := treedbCreateIndexDocs(secondaryIndexes, rangeIndex)
 		if len(indexDocs) == 0 {
 			return nil
 		}
@@ -1457,6 +1428,40 @@ func createIndexes(ctx context.Context, db *mongo.Database, coll *mongo.Collecti
 		}
 	}
 	return nil
+}
+
+func treedbCreateIndexDocs(secondaryIndexes int, rangeIndex bool) bson.A {
+	indexDocs := make(bson.A, 0, secondaryIndexes+1)
+	if secondaryIndexes >= 1 {
+		indexDocs = append(indexDocs, bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+			{Key: "unique", Value: true},
+			{Key: "treedbValueType", Value: string(collections.IndexValueString)},
+		})
+	}
+	if secondaryIndexes >= 2 {
+		indexDocs = append(indexDocs, bson.D{
+			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+			{Key: "name", Value: "city_1"},
+			{Key: "treedbValueType", Value: string(collections.IndexValueString)},
+		})
+	}
+	if secondaryIndexes >= 3 {
+		indexDocs = append(indexDocs, bson.D{
+			{Key: "key", Value: bson.D{{Key: "active", Value: int32(1)}}},
+			{Key: "name", Value: "active_1"},
+			{Key: "treedbValueType", Value: string(collections.IndexValueBool)},
+		})
+	}
+	if rangeIndex {
+		indexDocs = append(indexDocs, bson.D{
+			{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}},
+			{Key: "name", Value: "age_1"},
+			{Key: "treedbValueType", Value: string(collections.IndexValueInt64)},
+		})
+	}
+	return indexDocs
 }
 
 func recordEffectiveTreeDBCollectionOptions(result *benchmarkResult, cfg config, target *benchTarget) error {
