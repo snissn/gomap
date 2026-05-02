@@ -7,6 +7,7 @@ import (
 	"io"
 	"math/rand"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -43,6 +44,27 @@ type countingLeafPageReader struct {
 func (r *countingLeafPageReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	r.calls.Add(1)
 	return nil, io.EOF
+}
+
+type sourceReportingLeafPageReader struct {
+	leaf     []byte
+	cacheHit bool
+	calls    int
+}
+
+func (r *sourceReportingLeafPageReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	r.calls++
+	return append([]byte(nil), r.leaf...), nil
+}
+
+func (r *sourceReportingLeafPageReader) ReadUnsafeToWithCacheHit(ptr page.ValuePtr, dst []byte) ([]byte, bool, bool, error) {
+	r.calls++
+	if cap(dst) >= len(r.leaf) {
+		out := dst[:len(r.leaf)]
+		copy(out, r.leaf)
+		return out, true, r.cacheHit, nil
+	}
+	return append([]byte(nil), r.leaf...), false, r.cacheHit, nil
 }
 
 type stubLeafPageLog struct {
@@ -209,6 +231,72 @@ func TestZipperLeafRefCacheAvoidsUnflushedReads(t *testing.T) {
 	}
 	if got := reader.calls.Load(); got != 0 {
 		t.Fatalf("leafPageReader calls=%d want 0", got)
+	}
+}
+
+func TestZipperLoadNodeRefAttributesLeafPageReaderCacheHit(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	z.SetOuterLeavesInValueLog(true)
+
+	leaf := make([]byte, page.PageSize)
+	leafNode := node.NewNode(leaf)
+	leafNode.SetPageID(0)
+	leafNode.SetType(page.PageTypeLeaf)
+	leafNode.UpdateChecksum()
+	reader := &sourceReportingLeafPageReader{leaf: leaf, cacheHit: true}
+	z.SetLeafPageReader(reader)
+
+	ptr := page.LeafLogPtr{FileID: 1, Offset: 128, RecordLengthHint: page.PageSize}
+	loaded, fromPager, leafScratch, leafScratchRef, loadSource, err := z.loadNodeRef(page.LeafLogChildRef(ptr), nil)
+	if err != nil {
+		t.Fatalf("loadNodeRef: %v", err)
+	}
+	if leafScratchRef {
+		putLeafPageScratch(leafScratch)
+	}
+	if fromPager {
+		t.Fatalf("fromPager=%t want false", fromPager)
+	}
+	if loadSource != zipperNodeLoadLeafLogCache {
+		t.Fatalf("loadSource=%d want leaf-log cache", loadSource)
+	}
+	if loaded.Type() != page.PageTypeLeaf {
+		t.Fatalf("loaded.Type()=%d want %d", loaded.Type(), page.PageTypeLeaf)
+	}
+	if reader.calls != 1 {
+		t.Fatalf("reader calls=%d want 1", reader.calls)
+	}
+}
+
+func TestZipperLoadNodeRefAnnotatesLeafPageReaderCacheValidationError(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	z.SetOuterLeavesInValueLog(true)
+	z.SetLeafPageReader(&sourceReportingLeafPageReader{leaf: []byte("short"), cacheHit: true})
+
+	ptr := page.LeafLogPtr{FileID: 1, Offset: 128, RecordLengthHint: page.PageSize}
+	_, _, _, _, _, err = z.loadNodeRef(page.LeafLogChildRef(ptr), nil)
+	if err == nil {
+		t.Fatal("loadNodeRef unexpectedly succeeded")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "leaf-page reader cache invalid leaf-log page") || !strings.Contains(msg, "invalid size") {
+		t.Fatalf("error=%q, want source context and validation detail", msg)
 	}
 }
 

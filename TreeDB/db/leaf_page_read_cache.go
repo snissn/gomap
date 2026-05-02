@@ -202,18 +202,30 @@ func (r *cachedLeafPageReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 }
 
 func (r *cachedLeafPageReader) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error) {
+	data, usedDst, _, err := r.ReadUnsafeToWithCacheHit(ptr, dst)
+	return data, usedDst, err
+}
+
+func (r *cachedLeafPageReader) ReadUnsafeToWithCacheHit(ptr page.ValuePtr, dst []byte) ([]byte, bool, bool, error) {
 	if key, err := page.LeafLogPtrFromValuePtr(ptr); err == nil {
 		if data, usedDst, ok := r.cache.getTo(key, dst); ok {
-			return data, usedDst, nil
+			return data, usedDst, true, nil
 		}
 	}
 	if toReader, ok := r.fallback.(interface {
 		ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error)
 	}); ok {
-		return toReader.ReadUnsafeTo(ptr, dst)
+		data, usedDst, err := toReader.ReadUnsafeTo(ptr, dst)
+		if err != nil {
+			return nil, false, false, err
+		}
+		return data, usedDst, false, nil
 	}
 	data, err := r.fallback.ReadUnsafe(ptr)
-	return data, false, err
+	if err != nil {
+		return nil, false, false, err
+	}
+	return data, false, false, nil
 }
 
 func cloneLeafPageReadCacheData(data []byte) []byte {
