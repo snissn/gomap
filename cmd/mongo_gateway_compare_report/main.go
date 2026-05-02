@@ -865,7 +865,18 @@ func renderOpsTable(b *strings.Builder, cells []cellComparison) {
 	b.WriteString("## Ops/Sec Summary\n\n")
 	b.WriteString("| docs | indexes | range index | range mode | TreeDB config | phase | TreeDB wall ops/sec | TreeDB sampled ops/sec | MongoDB wall ops/sec | MongoDB sampled ops/sec | TreeDB / MongoDB wall | TreeDB / MongoDB sampled | TreeDB p95 us | MongoDB p95 us |\n")
 	b.WriteString("| ---: | ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	sweepCells := make(map[cellKey]bool, len(cells))
+	for _, cell := range cells {
+		if cellHasConcurrentReadSweep(cell) {
+			sweepCells[cell.Key] = true
+		}
+	}
 	for _, cmp := range allPhaseComparisons(cells) {
+		if sweepCells[cmp.Cell] {
+			if _, ok := concurrentReadReaders(cmp.Name); ok {
+				continue
+			}
+		}
 		sampledRatio := safeRatio(cmp.TreeDBPhase.SampledOpsPerSecond, cmp.MongoPhase.SampledOpsPerSecond)
 		fmt.Fprintf(b, "| %d | %d | %t | %s | `%s` | `%s` | %s | %s | %s | %s | %s | %s | %s | %s |\n",
 			cmp.Cell.Documents,

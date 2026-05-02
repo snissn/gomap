@@ -234,6 +234,10 @@ func TestReportGroupsConcurrentReadSweepRows(t *testing.T) {
 	if strings.Index(report, "| 100 | 0 | `treedb_bson` | 1 |") > strings.Index(report, "| 100 | 0 | `treedb_bson` | 4 |") {
 		t.Fatalf("reader sweep rows should be ordered by reader count:\n%s", report)
 	}
+	opsSection := strings.Split(strings.Split(report, "## Ops/Sec Summary")[1], "## Raw Inputs")[0]
+	if strings.Contains(opsSection, "`concurrent_id_find_one_r1`") || strings.Contains(opsSection, "`concurrent_id_find_one_r4`") {
+		t.Fatalf("sweep phases should be grouped in the sweep section, not repeated in ops summary:\n%s", opsSection)
+	}
 
 	for _, tc := range []struct {
 		name    string
