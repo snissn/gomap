@@ -747,7 +747,6 @@ func TestCollectionUpdateBufferBreakdownStatsSnapshotAndAdd(t *testing.T) {
 	}
 
 	var updateStats CollectionUpdateStats
-	updateStats.BufferStage = time.Nanosecond
 	for i, tc := range cases {
 		tc.set(&updateStats, time.Duration(i+1)*time.Nanosecond)
 	}
@@ -3280,7 +3279,7 @@ func TestCollectionIndexedWriteMemtablesAsyncBackpressureWaitsForPublishingUnit(
 	backpressureDone := make(chan error, 1)
 	go func() {
 		col.writeDomain.mu.Lock()
-		_, _, err := col.flushBufferedIndexedAfterThresholdLocked(col.writeDomain, CollectionOptions{
+		_, _, _, err := col.flushBufferedIndexedAfterThresholdLocked(col.writeDomain, CollectionOptions{
 			BufferedIndexedWrites:                   true,
 			BufferedIndexedWriteMaxDocuments:        1,
 			BufferedIndexedAsyncFlush:               true,
