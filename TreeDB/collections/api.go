@@ -1007,11 +1007,21 @@ func flushCollectionWriteDomainAsync(db *backenddb.DB, domain *collectionWriteDo
 		return nil
 	}
 	collection := &Collection{db: db, writeDomain: domain}
-	work, err := collection.prepareIndexedAsyncPublish()
-	if err != nil || work == nil {
-		return err
+	for {
+		work, err := collection.prepareIndexedAsyncPublish()
+		if err != nil || work == nil {
+			return err
+		}
+		if err := collection.publishPreparedIndexedFlush(work); err != nil {
+			return err
+		}
+		domain.mu.RLock()
+		more := len(domain.indexedFlushUnits) > 0 || len(domain.rootRuns) > 0
+		domain.mu.RUnlock()
+		if !more {
+			return nil
+		}
 	}
-	return collection.publishPreparedIndexedFlush(work)
 }
 
 func (c *Collection) scheduleIndexedAsyncFlush(domain *collectionWriteDomain) bool {
@@ -2131,7 +2141,7 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 			err := c.flushBufferedIndexedLocked(domain)
 			return time.Since(flushStart), err
 		}
-		if !c.scheduleIndexedAsyncFlush(domain) {
+		if !c.scheduleIndexedAsyncFlush(domain) && len(domain.indexedPublishingUnits) == 0 {
 			flushStart := time.Now()
 			err := c.flushBufferedIndexedLocked(domain)
 			return time.Since(flushStart), err
