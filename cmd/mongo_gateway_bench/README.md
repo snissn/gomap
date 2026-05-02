@@ -246,7 +246,7 @@ BATCH_SIZE=5000 scripts/mongo_gateway_compare.sh \
   --range-reads 5000 \
   --range-index \
   --updates 5000 \
-  --concurrent-readers 16 \
+  --concurrent-reader-sweep "1,2,4,8,16" \
   --concurrent-reads 50000 \
   --concurrent-writers 8 \
   --concurrent-writes 10000 \
@@ -309,7 +309,13 @@ The initial workload phases are:
   indexed variant is emitted when `-range-index` creates `age_1`.
 - `id_update_set`: `$set` update by `_id`.
 - `concurrent_id_find_one_rN`: total `_id` point reads split across `N`
-  goroutines.
+  goroutines. Use `-concurrent-reader-sweep 1,2,4,8,16` with
+  `-concurrent-reads` to emit multiple `concurrent_id_find_one_rN` phases from
+  one loaded database. The comparison report groups these rows into a
+  "Concurrent Read Sweep" table so the reader-count scaling is visible as one
+  throughput sweep rather than unrelated phases. The legacy
+  `-concurrent-readers N` flag still emits one `concurrent_id_find_one_rN`
+  phase and cannot be combined with `-concurrent-reader-sweep`.
 - `concurrent_id_update_set_wN`: total `$set` updates split across `N`
   goroutines.
 - `id_delete_one`: optional deletes; disabled unless `-deletes` is non-zero.

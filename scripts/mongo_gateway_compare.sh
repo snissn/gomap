@@ -25,6 +25,7 @@ DELETES="${DELETES:-0}"
 RANGE_READS_DIVISOR="${RANGE_READS_DIVISOR:-10}"
 UPDATES_DIVISOR="${UPDATES_DIVISOR:-10}"
 CONCURRENT_READERS="${CONCURRENT_READERS:-0}"
+CONCURRENT_READER_SWEEP="${CONCURRENT_READER_SWEEP:-}"
 CONCURRENT_READS="${CONCURRENT_READS:-}"
 CONCURRENT_READS_DIVISOR="${CONCURRENT_READS_DIVISOR:-10}"
 CONCURRENT_WRITERS="${CONCURRENT_WRITERS:-0}"
@@ -74,6 +75,12 @@ Options:
   --profile-treedb      Capture per-phase TreeDB pprof artifacts in profiles/.
   --concurrent-readers N
                         Reader goroutines for the concurrent _id read phase.
+  --concurrent-reader-sweep LIST
+                        Space- or comma-separated reader counts for concurrent
+                        _id read throughput sweep phases. Uses
+                        --concurrent-reads when set, otherwise derives from
+                        documents / CONCURRENT_READS_DIVISOR. Cannot be
+                        combined with --concurrent-readers.
   --concurrent-reads COUNT
                         Concurrent point reads per target/cell.
   --concurrent-writers N
@@ -105,6 +112,7 @@ Environment overrides:
   READS, READS_DIVISOR,
   RANGE_READS, UPDATES, DELETES, RANGE_READS_DIVISOR, UPDATES_DIVISOR,
   CONCURRENT_READERS, CONCURRENT_READS, CONCURRENT_READS_DIVISOR,
+  CONCURRENT_READER_SWEEP,
   CONCURRENT_WRITERS, CONCURRENT_WRITES, CONCURRENT_WRITES_DIVISOR,
   MONGO_MODE, MONGO_URI, MONGO_IMAGE, DATABASE_PREFIX, COLLECTION, TIMEOUT,
   TREEDB_PROFILE, TREEDB_DOCUMENT_FORMAT, TREEDB_DOCUMENT_FORMATS,
@@ -174,6 +182,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --concurrent-readers)
       CONCURRENT_READERS="$2"
+      shift 2
+      ;;
+    --concurrent-reader-sweep)
+      CONCURRENT_READER_SWEEP="$2"
       shift 2
       ;;
     --concurrent-reads)
@@ -281,6 +293,22 @@ is_positive_int() {
 
 is_nonnegative_int() {
   [[ "$1" =~ ^[0-9]+$ ]]
+}
+
+is_positive_decimal_string() {
+  [[ "$1" =~ ^[0-9]+$ ]] || return 1
+  local value=$1
+  while [[ "$value" == 0* && ${#value} -gt 1 ]]; do
+    value=${value#0}
+  done
+  [[ "$value" != "0" ]]
+}
+
+trim_spaces() {
+  local value=$1
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
 }
 
 derived_count() {
@@ -440,6 +468,7 @@ run_target() {
     -updates "$updates" \
     -deletes "$deletes" \
     -concurrent-readers "$concurrent_readers" \
+    -concurrent-reader-sweep "$CONCURRENT_READER_SWEEP" \
     -concurrent-reads "$concurrent_reads" \
     -concurrent-writers "$concurrent_writers" \
     -concurrent-writes "$concurrent_writes" \
@@ -490,8 +519,58 @@ if [[ "$PROFILE_TREEDB" != "true" && "$PROFILE_TREEDB" != "false" ]]; then
   echo "invalid PROFILE_TREEDB=$PROFILE_TREEDB (want true or false)" >&2
   exit 2
 fi
-if [[ "$CONCURRENT_READERS" -eq 0 && -n "$CONCURRENT_READS" && "$CONCURRENT_READS" != "0" ]]; then
-  echo "CONCURRENT_READERS must be > 0 when CONCURRENT_READS is set" >&2
+raw_concurrent_reader_sweep=$CONCURRENT_READER_SWEEP
+CONCURRENT_READER_SWEEP=$(trim_spaces "$CONCURRENT_READER_SWEEP")
+if [[ -n "$raw_concurrent_reader_sweep" && -z "$CONCURRENT_READER_SWEEP" ]]; then
+  echo "CONCURRENT_READER_SWEEP must contain at least one positive integer" >&2
+  exit 2
+fi
+if [[ -n "$CONCURRENT_READER_SWEEP" && "$CONCURRENT_READERS" -gt 0 ]]; then
+  echo "CONCURRENT_READER_SWEEP cannot be combined with CONCURRENT_READERS" >&2
+  exit 2
+fi
+if [[ -n "$CONCURRENT_READER_SWEEP" ]]; then
+  seen_reader_counts=""
+  normalized_reader_sweep=""
+  validated_reader_counts=0
+  for reader_count in ${CONCURRENT_READER_SWEEP//,/ }; do
+    if ! is_positive_decimal_string "$reader_count"; then
+      echo "invalid CONCURRENT_READER_SWEEP value: $reader_count" >&2
+      exit 2
+    fi
+    normalized_reader_count=$reader_count
+    while [[ "$normalized_reader_count" == 0* && ${#normalized_reader_count} -gt 1 ]]; do
+      normalized_reader_count=${normalized_reader_count#0}
+    done
+    if [[ " $seen_reader_counts " == *" $normalized_reader_count "* ]]; then
+      echo "duplicate CONCURRENT_READER_SWEEP value: $reader_count" >&2
+      exit 2
+    fi
+    seen_reader_counts="$seen_reader_counts $normalized_reader_count"
+    if [[ -z "$normalized_reader_sweep" ]]; then
+      normalized_reader_sweep=$normalized_reader_count
+    else
+      normalized_reader_sweep="$normalized_reader_sweep,$normalized_reader_count"
+    fi
+    validated_reader_counts=$((validated_reader_counts + 1))
+  done
+  if [[ "$validated_reader_counts" -eq 0 ]]; then
+    echo "CONCURRENT_READER_SWEEP must contain at least one positive integer" >&2
+    exit 2
+  fi
+  if [[ -n "$CONCURRENT_READS" && "$CONCURRENT_READS" == "0" ]]; then
+    echo "CONCURRENT_READER_SWEEP requires CONCURRENT_READS > 0 when CONCURRENT_READS is set" >&2
+    exit 2
+  fi
+  if [[ -n "$CONCURRENT_READS" ]]; then
+    if ! is_nonnegative_int "$CONCURRENT_READS"; then
+      echo "invalid CONCURRENT_READS=$CONCURRENT_READS (want non-negative integer)" >&2
+      exit 2
+    fi
+  fi
+  CONCURRENT_READER_SWEEP=$normalized_reader_sweep
+elif [[ "$CONCURRENT_READERS" -eq 0 && -n "$CONCURRENT_READS" && "$CONCURRENT_READS" != "0" ]]; then
+  echo "CONCURRENT_READERS or CONCURRENT_READER_SWEEP must be set when CONCURRENT_READS is set" >&2
   exit 2
 fi
 if [[ "$CONCURRENT_WRITERS" -eq 0 && -n "$CONCURRENT_WRITES" && "$CONCURRENT_WRITES" != "0" ]]; then
@@ -514,7 +593,8 @@ fi
   echo "updates: ${UPDATES:-documents / $UPDATES_DIVISOR}"
   echo "deletes: $DELETES"
   echo "concurrent readers: $CONCURRENT_READERS"
-  echo "concurrent reads: ${CONCURRENT_READS:-documents / $CONCURRENT_READS_DIVISOR when readers > 0}"
+  echo "concurrent reader sweep: ${CONCURRENT_READER_SWEEP:-none}"
+  echo "concurrent reads: ${CONCURRENT_READS:-documents / $CONCURRENT_READS_DIVISOR when readers or reader sweep is set}"
   echo "concurrent writers: $CONCURRENT_WRITERS"
   echo "concurrent writes: ${CONCURRENT_WRITES:-documents / $CONCURRENT_WRITES_DIVISOR when writers > 0}"
   echo "mongo mode: $MONGO_MODE"
@@ -545,10 +625,10 @@ for docs in $DOCS_LIST; do
   range_reads=$(derived_count "$docs" "$RANGE_READS" "$RANGE_READS_DIVISOR")
   updates=$(derived_count "$docs" "$UPDATES" "$UPDATES_DIVISOR")
   concurrent_reads=0
-  if [[ "$CONCURRENT_READERS" -gt 0 ]]; then
+  if [[ "$CONCURRENT_READERS" -gt 0 || -n "$CONCURRENT_READER_SWEEP" ]]; then
     concurrent_reads=$(derived_count "$docs" "$CONCURRENT_READS" "$CONCURRENT_READS_DIVISOR")
     if [[ "$concurrent_reads" -eq 0 ]]; then
-      echo "concurrent reads must be > 0 when CONCURRENT_READERS is > 0" >&2
+      echo "concurrent reads must be > 0 when concurrent readers or reader sweep is set" >&2
       exit 2
     fi
   fi
@@ -668,7 +748,8 @@ cat >"$README" <<EOF
 - updates: \`${UPDATES:-documents / $UPDATES_DIVISOR}\`
 - deletes: \`$DELETES\`
 - concurrent readers: \`$CONCURRENT_READERS\`
-- concurrent reads: \`${CONCURRENT_READS:-documents / $CONCURRENT_READS_DIVISOR when readers > 0}\`
+- concurrent reader sweep: \`${CONCURRENT_READER_SWEEP:-none}\`
+- concurrent reads: \`${CONCURRENT_READS:-documents / $CONCURRENT_READS_DIVISOR when readers or reader sweep is set}\`
 - concurrent writers: \`$CONCURRENT_WRITERS\`
 - concurrent writes: \`${CONCURRENT_WRITES:-documents / $CONCURRENT_WRITES_DIVISOR when writers > 0}\`
 - MongoDB mode: \`$MONGO_MODE\`

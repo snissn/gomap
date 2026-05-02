@@ -43,6 +43,7 @@ type benchmarkResult struct {
 	SecondaryIndexes           int            `json:"secondary_indexes"`
 	RangeIndex                 bool           `json:"range_index"`
 	ClientMode                 string         `json:"client_mode,omitempty"`
+	ConcurrentReaderSweep      []int          `json:"concurrent_reader_sweep,omitempty"`
 	TreeDBDocumentFormat       string         `json:"treedb_document_format,omitempty"`
 	Phases                     []phaseResult  `json:"phases"`
 	ProfileDir                 string         `json:"profile_dir,omitempty"`
@@ -542,6 +543,7 @@ func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) str
 	b.WriteString("\n")
 	renderDiskTable(&b, cells)
 	b.WriteString("\n")
+	renderConcurrentReadSweepTable(&b, cells)
 	renderOpsTable(&b, cells)
 	b.WriteString("\n")
 	b.WriteString("## Raw Inputs\n\n")
@@ -578,6 +580,7 @@ func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) str
 	b.WriteString("- MongoDB `dbStats.totalSize` is reported separately because it can diverge sharply from the isolated data-directory `du` measurement on small WiredTiger workloads.\n")
 	b.WriteString("- MongoDB physical bytes are the preferred local disk comparison when the matrix runner has an isolated data directory, such as Docker mode.\n")
 	b.WriteString("- Wall ops/sec values include the full benchmark phase loop. Sampled ops/sec values isolate the timed driver/gateway call inside each phase and are useful when prebuilt fixtures are enabled.\n")
+	b.WriteString("- `concurrent_id_find_one_rN` phases are an `_id` read throughput sweep over `N` concurrent readers, and are grouped in the Concurrent Read Sweep section when present.\n")
 	b.WriteString("- Range-query benchmark rows use explicit phase names: `age_range_indexed_limit_10` means `-range-index` created `age_1`; `age_range_scan_limit_10` means bounded scan fallback.\n")
 	return b.String()
 }
@@ -747,11 +750,133 @@ func renderDiskTable(b *strings.Builder, cells []cellComparison) {
 	}
 }
 
+func renderConcurrentReadSweepTable(b *strings.Builder, cells []cellComparison) {
+	rows := concurrentReadSweepComparisons(cells)
+	if len(rows) == 0 {
+		return
+	}
+	b.WriteString("## Concurrent Read Sweep\n\n")
+	b.WriteString("These rows group `concurrent_id_find_one_rN` phases as one `_id` read throughput sweep. Serial `id_find_one` remains a separate single-in-flight latency phase.\n\n")
+	b.WriteString("| docs | indexes | TreeDB config | readers | TreeDB wall ops/sec | TreeDB sampled ops/sec | MongoDB wall ops/sec | MongoDB sampled ops/sec | TreeDB / MongoDB wall | TreeDB p95 us | MongoDB p95 us |\n")
+	b.WriteString("| ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	for _, cmp := range rows {
+		readers, _ := concurrentReadReaders(cmp.Name)
+		fmt.Fprintf(b, "| %d | %d | `%s` | %d | %s | %s | %s | %s | %s | %s | %s |\n",
+			cmp.Cell.Documents,
+			cmp.Cell.SecondaryIndexes,
+			cmp.Cell.TreeDBConfig,
+			readers,
+			formatPhaseOps(cmp.HasTreeDB, cmp.TreeDBPhase.OpsPerSecond),
+			formatPhaseOps(cmp.HasTreeDB && cmp.TreeDBPhase.SampledOpsPerSecond > 0, cmp.TreeDBPhase.SampledOpsPerSecond),
+			formatPhaseOps(cmp.HasMongo, cmp.MongoPhase.OpsPerSecond),
+			formatPhaseOps(cmp.HasMongo && cmp.MongoPhase.SampledOpsPerSecond > 0, cmp.MongoPhase.SampledOpsPerSecond),
+			formatRatio(cmp.Ratio),
+			formatPhaseLatency(cmp.HasTreeDB, cmp.TreeDBPhase.LatencyMicros.P95),
+			formatPhaseLatency(cmp.HasMongo, cmp.MongoPhase.LatencyMicros.P95),
+		)
+	}
+	b.WriteString("\n")
+}
+
+func concurrentReadSweepComparisons(cells []cellComparison) []phaseComparison {
+	var out []phaseComparison
+	for _, cell := range cells {
+		if !cellHasConcurrentReadSweep(cell) {
+			continue
+		}
+		var mongoPhases []phaseResult
+		mongoPhaseMap := map[string]phaseResult{}
+		if cell.Mongo != nil {
+			mongoPhases = cell.Mongo.Result.Phases
+			mongoPhaseMap = cell.Mongo.PhaseMap
+		}
+		for _, name := range phaseNames(cell.TreeDB.Result.Phases, mongoPhases) {
+			if _, ok := concurrentReadReaders(name); !ok {
+				continue
+			}
+			treePhase, hasTree := cell.TreeDB.PhaseMap[name]
+			mongoPhase, hasMongo := mongoPhaseMap[name]
+			out = append(out, phaseComparison{
+				Cell:        cell.Key,
+				Name:        name,
+				RangeIndex:  cell.TreeDB.Result.RangeIndex,
+				TreeDBPhase: treePhase,
+				MongoPhase:  mongoPhase,
+				HasTreeDB:   hasTree,
+				HasMongo:    hasMongo,
+				Ratio:       safeRatio(treePhase.OpsPerSecond, mongoPhase.OpsPerSecond),
+			})
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		left, right := out[i], out[j]
+		if left.Cell.Documents != right.Cell.Documents {
+			return left.Cell.Documents < right.Cell.Documents
+		}
+		if left.Cell.SecondaryIndexes != right.Cell.SecondaryIndexes {
+			return left.Cell.SecondaryIndexes < right.Cell.SecondaryIndexes
+		}
+		if left.Cell.TreeDBConfig != right.Cell.TreeDBConfig {
+			return left.Cell.TreeDBConfig < right.Cell.TreeDBConfig
+		}
+		leftReaders, _ := concurrentReadReaders(left.Name)
+		rightReaders, _ := concurrentReadReaders(right.Name)
+		return leftReaders < rightReaders
+	})
+	return out
+}
+
+func cellHasConcurrentReadSweep(cell cellComparison) bool {
+	if len(cell.TreeDB.Result.ConcurrentReaderSweep) > 0 {
+		return true
+	}
+	if cell.Mongo != nil && len(cell.Mongo.Result.ConcurrentReaderSweep) > 0 {
+		return true
+	}
+	readers := make(map[int]struct{})
+	for _, phase := range cell.TreeDB.Result.Phases {
+		if readerCount, ok := concurrentReadReaders(phase.Name); ok {
+			readers[readerCount] = struct{}{}
+		}
+	}
+	if cell.Mongo != nil {
+		for _, phase := range cell.Mongo.Result.Phases {
+			if readerCount, ok := concurrentReadReaders(phase.Name); ok {
+				readers[readerCount] = struct{}{}
+			}
+		}
+	}
+	return len(readers) > 1
+}
+
+func concurrentReadReaders(name string) (int, bool) {
+	const prefix = "concurrent_id_find_one_r"
+	if !strings.HasPrefix(name, prefix) {
+		return 0, false
+	}
+	readers, err := strconv.Atoi(strings.TrimPrefix(name, prefix))
+	if err != nil || readers <= 0 {
+		return 0, false
+	}
+	return readers, true
+}
+
 func renderOpsTable(b *strings.Builder, cells []cellComparison) {
 	b.WriteString("## Ops/Sec Summary\n\n")
 	b.WriteString("| docs | indexes | range index | range mode | TreeDB config | phase | TreeDB wall ops/sec | TreeDB sampled ops/sec | MongoDB wall ops/sec | MongoDB sampled ops/sec | TreeDB / MongoDB wall | TreeDB / MongoDB sampled | TreeDB p95 us | MongoDB p95 us |\n")
 	b.WriteString("| ---: | ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	sweepCells := make(map[cellKey]bool, len(cells))
+	for _, cell := range cells {
+		if cellHasConcurrentReadSweep(cell) {
+			sweepCells[cell.Key] = true
+		}
+	}
 	for _, cmp := range allPhaseComparisons(cells) {
+		if sweepCells[cmp.Cell] {
+			if _, ok := concurrentReadReaders(cmp.Name); ok {
+				continue
+			}
+		}
 		sampledRatio := safeRatio(cmp.TreeDBPhase.SampledOpsPerSecond, cmp.MongoPhase.SampledOpsPerSecond)
 		fmt.Fprintf(b, "| %d | %d | %t | %s | `%s` | `%s` | %s | %s | %s | %s | %s | %s | %s | %s |\n",
 			cmp.Cell.Documents,
