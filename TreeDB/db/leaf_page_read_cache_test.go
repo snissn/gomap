@@ -96,6 +96,34 @@ func TestCachedLeafPageReaderHitAvoidsFallback(t *testing.T) {
 	}
 }
 
+func TestCachedLeafPageReaderReadUnsafeToWithCacheHitReportsHit(t *testing.T) {
+	cache := newLeafPageReadCache(8)
+	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+	leaf := bytes.Repeat([]byte{0x42}, page.PageSize)
+	cache.store(ptr, leaf)
+
+	fallback := &leafPageCacheTestFallback{err: errors.New("fallback should not be used")}
+	reader := newCachedLeafPageReader(cache, fallback)
+
+	dst := make([]byte, 0, page.PageSize)
+	got, usedDst, cacheHit, err := reader.ReadUnsafeToWithCacheHit(ptr.ValuePtr(), dst)
+	if err != nil {
+		t.Fatalf("ReadUnsafeToWithCacheHit: %v", err)
+	}
+	if !cacheHit {
+		t.Fatalf("expected cache hit source")
+	}
+	if !usedDst {
+		t.Fatalf("expected cache hit to copy into caller dst")
+	}
+	if !bytes.Equal(got, leaf) {
+		t.Fatalf("cached leaf mismatch")
+	}
+	if fallback.readUnsafeCalls != 0 || fallback.readUnsafeToCalls != 0 {
+		t.Fatalf("fallback calls unsafe=%d unsafeTo=%d, want zero", fallback.readUnsafeCalls, fallback.readUnsafeToCalls)
+	}
+}
+
 func TestCachedLeafPageReaderHitReturnsOwnedBytes(t *testing.T) {
 	cache := newLeafPageReadCache(8)
 	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
@@ -175,6 +203,35 @@ func TestCachedLeafPageReaderMissUsesFallback(t *testing.T) {
 	}
 	if stats := cache.stats(); stats.Misses != 1 {
 		t.Fatalf("misses=%d, want 1", stats.Misses)
+	}
+}
+
+func TestCachedLeafPageReaderMissReportsNoCacheHit(t *testing.T) {
+	cache := newLeafPageReadCache(8)
+	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+	leaf := bytes.Repeat([]byte{0x24}, page.PageSize)
+	fallback := &leafPageCacheTestFallback{data: leaf}
+	reader := newCachedLeafPageReader(cache, fallback)
+
+	dst := make([]byte, 0, page.PageSize)
+	got, usedDst, cacheHit, err := reader.ReadUnsafeToWithCacheHit(ptr.ValuePtr(), dst)
+	if err != nil {
+		t.Fatalf("ReadUnsafeToWithCacheHit: %v", err)
+	}
+	if cacheHit {
+		t.Fatalf("first read should miss cache")
+	}
+	if !usedDst {
+		t.Fatalf("expected fallback to copy into dst")
+	}
+	if !bytes.Equal(got, leaf) {
+		t.Fatalf("fallback leaf mismatch")
+	}
+	if fallback.readUnsafeToCalls != 1 {
+		t.Fatalf("fallback ReadUnsafeTo calls=%d, want 1", fallback.readUnsafeToCalls)
+	}
+	if stats := cache.stats(); stats.Misses != 1 || stats.Stores != 0 || stats.Hits != 0 {
+		t.Fatalf("stats=%+v, want one miss and no store", stats)
 	}
 }
 
