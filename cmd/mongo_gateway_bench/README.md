@@ -522,6 +522,8 @@ The benchmark shapes are intentionally different:
   update attribution metrics such as `update_current_read_ns/doc`,
   `update_callback_ns/doc`, `update_index_state_extract_ns/doc`,
   `update_primary_run_ns/doc`, `update_secondary_runs_ns/doc`,
+  `update_index_value_changes/doc`, `update_index_value_unchanged/doc`,
+  `update_unique_checks/doc`, `update_unique_check_skips/doc`,
   `update_buffer_stage_ns/doc`, buffer-stage submetrics such as
   `update_buffer_precheck_ns/doc`, `update_buffer_lock_wait_ns/doc`,
   `update_buffer_lock_hold_ns/doc`, `update_buffer_validation_ns/doc`,
