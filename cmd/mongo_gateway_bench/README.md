@@ -541,7 +541,10 @@ The benchmark shapes are intentionally different:
 The benchmark-only helpers accept these optional environment variables:
 `MONGO_GATEWAY_PROFILE_BENCH_BATCH_SIZE`,
 `MONGO_GATEWAY_PROFILE_BENCH_UPDATE_DOCUMENTS`, and
-`MONGO_GATEWAY_PROFILE_BENCH_WRITERS`.
+`MONGO_GATEWAY_PROFILE_BENCH_WRITERS`. They also accept
+`MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH` and
+`MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS` for
+focused indexed async-flush experiments.
 
 Use the official-driver row for user-visible Mongo compatibility throughput, the
 driver-command rows to quantify the driver's CRUD-helper overhead, the raw-wire
