@@ -1795,6 +1795,48 @@ func TestServerIndexMetadataCommands(t *testing.T) {
 	assertIndexName(t, indexBatch[0], "_id_")
 }
 
+func TestServerCreateIndexesAutoCreateDedupesIdenticalDefinitions(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	createResponse := serveCommand(t, server, 2272, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{
+				{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+				{Key: "name", Value: "email_1"},
+				{Key: "unique", Value: true},
+			},
+			bson.D{
+				{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+				{Key: "name", Value: "email_1"},
+				{Key: "unique", Value: true},
+			},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, createResponse)
+	assertBool(t, createResponse, "createdCollectionAutomatically", true)
+	assertInt32(t, createResponse, "numIndexesBefore", 1)
+	assertInt32(t, createResponse, "numIndexesAfter", 2)
+
+	indexesResponse := serveCommand(t, server, 2273, bson.D{
+		{Key: "listIndexes", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	indexBatch := cursorFirstBatch(t, indexesResponse)
+	if got, want := len(indexBatch), 2; got != want {
+		t.Fatalf("index batch len=%d want %d", got, want)
+	}
+	assertIndexName(t, indexBatch[0], "_id_")
+	assertIndexName(t, indexBatch[1], "email_1")
+}
+
 func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -1820,6 +1862,30 @@ func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, emptyName, "BadValue")
+
+	conflictingDuplicate := serveCommand(t, server, 2331, bson.D{
+		{Key: "createIndexes", Value: "conflicting_dup"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{
+				{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+				{Key: "name", Value: "email_1"},
+				{Key: "unique", Value: true},
+			},
+			bson.D{
+				{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+				{Key: "name", Value: "email_1"},
+			},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, conflictingDuplicate, "BadValue")
+	errmsg, ok := bson.Raw(conflictingDuplicate).Lookup("errmsg").StringValueOK()
+	if !ok || !strings.Contains(errmsg, `duplicate index "email_1"`) {
+		t.Fatalf("errmsg=%q ok=%v want duplicate index", errmsg, ok)
+	}
+	if _, err := server.Collections.OpenCollection("app.conflicting_dup"); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("conflicting duplicate collection err=%v, want collection not found", err)
+	}
 
 	invalidListCollectionsDB := serveCommand(t, server, 234, bson.D{
 		{Key: "listCollections", Value: int32(1)},
@@ -3173,9 +3239,12 @@ func TestServerAppliesDefaultCollectionAndIndexOptions(t *testing.T) {
 	server := NewServer()
 	server.Collections = collections.NewCollectionManager(db)
 	server.DefaultCollectionOptions = collections.CollectionOptions{
-		DocumentFormat:          collections.DocumentFormatTemplateV1,
-		DataRootStoragePolicy:   collections.RootStorageCompressed,
-		IndexStateStoragePolicy: collections.RootStorageCompressed,
+		DocumentFormat:                   collections.DocumentFormatTemplateV1,
+		DataRootStoragePolicy:            collections.RootStorageCompressed,
+		IndexStateStoragePolicy:          collections.RootStorageCompressed,
+		BufferedIndexedWriteMaxDocuments: 1234,
+		BufferedIndexedWriteMaxBytes:     5678,
+		BufferedIndexedWriteMaxRootRuns:  90,
 	}
 	server.DefaultIndexStoragePolicy = collections.RootStorageCompressed
 
@@ -3192,6 +3261,10 @@ func TestServerAppliesDefaultCollectionAndIndexOptions(t *testing.T) {
 	}
 	if meta.Options.IndexStateStoragePolicy != collections.RootStorageCompressed {
 		t.Fatalf("index state storage=%q want %q", meta.Options.IndexStateStoragePolicy, collections.RootStorageCompressed)
+	}
+	if meta.Options.BufferedIndexedWriteMaxDocuments != 1234 || meta.Options.BufferedIndexedWriteMaxBytes != 5678 || meta.Options.BufferedIndexedWriteMaxRootRuns != 90 {
+		t.Fatalf("no-index defaults docs=%d bytes=%d rootRuns=%d want 1234/5678/90",
+			meta.Options.BufferedIndexedWriteMaxDocuments, meta.Options.BufferedIndexedWriteMaxBytes, meta.Options.BufferedIndexedWriteMaxRootRuns)
 	}
 
 	commandDoc := mustDocument(t, bson.D{
@@ -3222,12 +3295,43 @@ func TestServerAppliesDefaultCollectionAndIndexOptions(t *testing.T) {
 	if indexedMeta.Options.DocumentFormat != collections.DocumentFormatTemplateV1 {
 		t.Fatalf("auto-created document format=%q want %q", indexedMeta.Options.DocumentFormat, collections.DocumentFormatTemplateV1)
 	}
+	if indexedMeta.Options.BufferedIndexedWriteMaxDocuments != 1234 {
+		t.Fatalf("auto-created buffered indexed max documents=%d want 1234", indexedMeta.Options.BufferedIndexedWriteMaxDocuments)
+	}
+	if indexedMeta.Options.BufferedIndexedWriteMaxBytes != 5678 {
+		t.Fatalf("auto-created buffered indexed max bytes=%d want 5678", indexedMeta.Options.BufferedIndexedWriteMaxBytes)
+	}
+	if indexedMeta.Options.BufferedIndexedWriteMaxRootRuns != 90 {
+		t.Fatalf("auto-created buffered indexed max root runs=%d want 90", indexedMeta.Options.BufferedIndexedWriteMaxRootRuns)
+	}
 	def, ok := findIndexDefinition(indexedMeta.Indexes, "email_1")
 	if !ok {
 		t.Fatalf("email_1 index missing from %+v", indexedMeta.Indexes)
 	}
 	if def.StoragePolicy != collections.RootStorageCompressed {
 		t.Fatalf("index storage=%q want %q", def.StoragePolicy, collections.RootStorageCompressed)
+	}
+
+	existingCreateResponse := serveCommand(t, server, 215, bson.D{
+		{Key: "createIndexes", Value: "inserted"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+			{Key: "name", Value: "city_1"},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, existingCreateResponse)
+	inserted, err := server.Collections.OpenCollection("app.inserted")
+	if err != nil {
+		t.Fatalf("open inserted collection after createIndexes: %v", err)
+	}
+	insertedMeta := inserted.Meta()
+	if !insertedMeta.Options.BufferedIndexedWrites {
+		t.Fatal("existing collection did not enable indexed writes after createIndexes")
+	}
+	if insertedMeta.Options.BufferedIndexedWriteMaxDocuments != 1234 || insertedMeta.Options.BufferedIndexedWriteMaxBytes != 5678 || insertedMeta.Options.BufferedIndexedWriteMaxRootRuns != 90 {
+		t.Fatalf("existing collection buffered indexed limits docs=%d bytes=%d rootRuns=%d want 1234/5678/90",
+			insertedMeta.Options.BufferedIndexedWriteMaxDocuments, insertedMeta.Options.BufferedIndexedWriteMaxBytes, insertedMeta.Options.BufferedIndexedWriteMaxRootRuns)
 	}
 }
 

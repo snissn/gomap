@@ -36,7 +36,7 @@ const (
 	// DefaultIndexedWriteMemtableMaxRootRuns bounds accumulated root-local
 	// mutation runs so many small indexed update batches do not create an
 	// expensive pending-run chain before the document threshold is reached.
-	DefaultIndexedWriteMemtableMaxRootRuns = 256
+	DefaultIndexedWriteMemtableMaxRootRuns = 4096
 	// DefaultIndexedWriteMemtableDirectBatchDocuments keeps large, already
 	// well-amortized InsertBatch calls on the immediate publish path. Smaller
 	// batches use the indexed write-domain memtable path by default.
@@ -7122,11 +7122,13 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		seen[indexes[i].Name] = struct{}{}
 	}
 	meta.Indexes = indexes
-	if len(meta.Indexes) == 0 || meta.Options.DisableIndexedWriteMemtables {
+	if meta.Options.DisableIndexedWriteMemtables {
 		meta.Options.BufferedIndexedWrites = false
 		meta.Options.BufferedIndexedWriteMaxDocuments = 0
 		meta.Options.BufferedIndexedWriteMaxBytes = 0
 		meta.Options.BufferedIndexedWriteMaxRootRuns = 0
+	} else if len(meta.Indexes) == 0 {
+		meta.Options.BufferedIndexedWrites = false
 	} else {
 		meta.Options.BufferedIndexedWrites = true
 		useNativeDocumentDefault := meta.Options.BufferedIndexedWriteMaxDocuments == 0
