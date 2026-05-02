@@ -2946,6 +2946,149 @@ func TestCollectionIndexedWriteMemtablesAsyncQueuedUnitsParticipateInUniqueCheck
 	}
 }
 
+func TestCollectionIndexedWriteMemtablesAsyncPublishingUnitsParticipateInReadsAndUniqueChecks(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        1024,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"email":"ada@example.com","city":"hnl"}`),
+			[]byte(`{"email":"grace@example.com","city":"hnl"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare async publish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepare async publish returned nil work")
+	}
+	if got := mgr.StatsSnapshot().PendingIndexedFlushUnits; got != 1 {
+		t.Fatalf("pending publishing units=%d want 1", got)
+	}
+	got, err := col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get publishing doc: %v", err)
+	}
+	if want := []byte(`{"email":"grace@example.com","city":"hnl"}`); !bytes.Equal(got, want) {
+		t.Fatalf("publishing doc=%q want %q", got, want)
+	}
+	ids, err := col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find publishing city: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u1"), []byte("u2"))
+	_, err = col.InsertBatch(
+		[][]byte{[]byte("u3")},
+		[][]byte{[]byte(`{"email":"grace@example.com","city":"sfo"}`)},
+	)
+	if err == nil || !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("duplicate publishing unique insert err=%v want ErrUniqueIndexConflict", err)
+	}
+	if err := col.publishPreparedIndexedFlush(work); err != nil {
+		t.Fatalf("publish prepared async flush: %v", err)
+	}
+	if got := mgr.StatsSnapshot().PendingDocuments; got != 0 {
+		t.Fatalf("pending docs after publish=%d want 0", got)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesAsyncPublishRetargetsMutableRuns(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        1024,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl","score":1}`)},
+	); err != nil {
+		t.Fatalf("insert first batch: %v", err)
+	}
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare async publish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepare async publish returned nil work")
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{[]byte(`{"city":"hnl","score":2}`)},
+	); err != nil {
+		t.Fatalf("insert while publish is in flight: %v", err)
+	}
+	if err := col.publishPreparedIndexedFlush(work); err != nil {
+		t.Fatalf("publish prepared async flush: %v", err)
+	}
+	if got := mgr.StatsSnapshot().PendingDocuments; got != 1 {
+		t.Fatalf("pending docs after publish=%d want mutable doc", got)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush mutable runs after publish retarget: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	ids, err := reopenedCol.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find city after retargeted flush: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u1"), []byte("u2"))
+}
+
 func TestCollectionIndexedWriteMemtablesAsyncUpdateAndDeleteDrainCorrectly(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})
