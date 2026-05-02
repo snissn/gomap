@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -25,6 +26,7 @@ const (
 	// open segments do not retain large decoded-raw payloads per file.
 	defaultGroupedFrameCacheEntries     = 2
 	defaultGroupedFrameCacheMaxRawBytes = 1 << 20
+	valueLogRecordCRCPrefixBytes        = 4
 )
 
 type groupedFrameCacheEntry struct {
@@ -1226,7 +1228,9 @@ func (f *File) ensureCurrentWritableReadableFor(ptr page.ValuePtr) error {
 }
 
 func currentWritableRecordKnownReadable(f *File, ptr page.ValuePtr) bool {
-	if f == nil || ptr.Offset < 4 {
+	// ValuePtr offsets point just after the record CRC prefix. Offsets before
+	// that prefix cannot be converted back to a complete record range.
+	if f == nil || ptr.Offset < valueLogRecordCRCPrefixBytes {
 		return false
 	}
 	recordLen := page.ValuePtrRecordLength(ptr)
@@ -1234,7 +1238,9 @@ func currentWritableRecordKnownReadable(f *File, ptr page.ValuePtr) bool {
 		return false
 	}
 	end := ptr.Offset + uint64(recordLen)
-	if end < ptr.Offset || end > uint64(^uint64(0)>>1) {
+	// verifiedFileSize is int64-backed, so only use the fast path when the
+	// computed exclusive end is representable without overflow or sign loss.
+	if end < ptr.Offset || end > uint64(math.MaxInt64) {
 		return false
 	}
 	return f.verifiedFileSize.Load() >= int64(end)
