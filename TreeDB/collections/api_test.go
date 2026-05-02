@@ -6975,6 +6975,115 @@ func TestSnapshotUpdateBatchBufferedReadCachesEmptyPrimaryRunIndex(t *testing.T)
 	}
 }
 
+func TestSnapshotUpdateBatchBufferedReadPrimaryRunIndexAvoidsCollectingPendingRuns(t *testing.T) {
+	meta := CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}
+	primaryName := collectionPrimaryRootName("users")
+	primaryTable := newCollectionRunTable(1)
+	setCollectionRunValue(primaryTable, []byte("u1"), []byte(`{"city":"paris"}`))
+	primaryTable.Freeze()
+	defer resetCollectionRunTable(primaryTable)
+
+	primaryIndex := newBufferedPrimaryRunIndex(1)
+	if err := addBufferedPrimaryRunIndexEntries(primaryIndex, primaryTable); err != nil {
+		t.Fatalf("add primary run index entries: %v", err)
+	}
+	domain := &collectionWriteDomain{
+		loaded:         true,
+		meta:           meta,
+		catalog:        &collectionCatalog{meta: meta},
+		baseSystemRoot: 7,
+		count:          1,
+		rootRuns: map[string][]memtable.Table{
+			primaryName: {primaryTable},
+		},
+		primaryRunIndex: primaryIndex,
+	}
+	for i := 0; i < 256; i++ {
+		domain.indexedFlushUnits = append(domain.indexedFlushUnits, indexedFlushUnit{
+			rootRuns: map[string][]memtable.Table{
+				primaryName: make([]memtable.Table, 8),
+			},
+			rootRunCount: 8,
+		})
+	}
+	items := []UpdateBatchItem{{DocumentID: []byte("u1")}}
+	assertRead := func() {
+		t.Helper()
+		read, _, blocked, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, 7, items, DocumentFormatJSON, false)
+		if err != nil {
+			t.Fatalf("snapshotUpdateBatchBufferedReadLocked: %v", err)
+		}
+		if blocked || needPrimaryRunIndex || !read.enabled {
+			t.Fatalf("read enabled=%v blocked=%v needPrimaryRunIndex=%v", read.enabled, blocked, needPrimaryRunIndex)
+		}
+		if len(read.primaryEntries) != 1 || !read.primaryEntries[0].found || !bytes.Equal(read.primaryEntries[0].value, []byte(`{"city":"paris"}`)) {
+			t.Fatalf("primary entries=%+v want buffered u1 document", read.primaryEntries)
+		}
+	}
+	assertRead()
+
+	if allocs := testing.AllocsPerRun(100, assertRead); allocs > 2 {
+		t.Fatalf("buffered read allocations/run=%0.1f want <= 2; primary-run index path should not collect pending root runs", allocs)
+	}
+}
+
+func BenchmarkSnapshotUpdateBatchBufferedReadPrimaryRunIndexPendingUnits(b *testing.B) {
+	meta := CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}
+	primaryName := collectionPrimaryRootName("users")
+	primaryTable := newCollectionRunTable(1)
+	setCollectionRunValue(primaryTable, []byte("u1"), []byte(`{"city":"paris"}`))
+	primaryTable.Freeze()
+	defer resetCollectionRunTable(primaryTable)
+
+	primaryIndex := newBufferedPrimaryRunIndex(1)
+	if err := addBufferedPrimaryRunIndexEntries(primaryIndex, primaryTable); err != nil {
+		b.Fatalf("add primary run index entries: %v", err)
+	}
+	domain := &collectionWriteDomain{
+		loaded:         true,
+		meta:           meta,
+		catalog:        &collectionCatalog{meta: meta},
+		baseSystemRoot: 7,
+		count:          1,
+		rootRuns: map[string][]memtable.Table{
+			primaryName: {primaryTable},
+		},
+		primaryRunIndex: primaryIndex,
+	}
+	for i := 0; i < 256; i++ {
+		domain.indexedFlushUnits = append(domain.indexedFlushUnits, indexedFlushUnit{
+			rootRuns: map[string][]memtable.Table{
+				primaryName: make([]memtable.Table, 8),
+			},
+			rootRunCount: 8,
+		})
+	}
+	items := []UpdateBatchItem{{DocumentID: []byte("u1")}}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		read, _, blocked, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, 7, items, DocumentFormatJSON, false)
+		if err != nil {
+			b.Fatalf("snapshotUpdateBatchBufferedReadLocked: %v", err)
+		}
+		if blocked || needPrimaryRunIndex || !read.enabled || len(read.primaryEntries) != 1 || !read.primaryEntries[0].found {
+			b.Fatalf("unexpected read enabled=%v entries=%d blocked=%v needPrimaryRunIndex=%v", read.enabled, len(read.primaryEntries), blocked, needPrimaryRunIndex)
+		}
+	}
+}
+
 func collectionHasBufferedPrimaryRunIndexForTest(t *testing.T, col *Collection) bool {
 	t.Helper()
 	col.writeDomain.mu.RLock()
