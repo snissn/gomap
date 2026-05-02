@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	collectionMetaVersion        = 1
+	collectionMetaVersion        = 2
 	maxCollectionMutationRetries = 64
 	maxCollectionInt             = int(^uint(0) >> 1)
 
@@ -334,6 +334,15 @@ const (
 	DocumentFormatTemplateV1 DocumentFormat = "template-v1"
 )
 
+type IndexValueType string
+
+const (
+	IndexValueString IndexValueType = "string"
+	IndexValueBool   IndexValueType = "bool"
+	IndexValueInt64  IndexValueType = "int64"
+	IndexValueDouble IndexValueType = "double"
+)
+
 type CollectionOptions struct {
 	AllowArrayValuesInIndex bool              `json:"allow_array_values_in_index,omitempty"`
 	DocumentFormat          DocumentFormat    `json:"document_format,omitempty"`
@@ -378,6 +387,7 @@ type CollectionOptions struct {
 type IndexDefinition struct {
 	Name          string            `json:"name"`
 	Field         string            `json:"field"`
+	ValueType     IndexValueType    `json:"value_type"`
 	Unique        bool              `json:"unique,omitempty"`
 	MultiKey      bool              `json:"multi_key,omitempty"`
 	StoragePolicy RootStoragePolicy `json:"storage_policy,omitempty"`
@@ -1938,7 +1948,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		var uniquePrefixes [][]byte
 		if _, ok := uniqueIndexes[run.indexName]; ok && run.kind == collectionRootSecondary {
 			var err error
-			uniqueValueTable, uniquePrefixes, err = bufferedUniqueIndexValueRun(run.table)
+			uniqueValueTable, uniquePrefixes, err = bufferedUniqueIndexValueRun(run.table, run.indexValueType)
 			if err != nil {
 				if autoFlushEnabled {
 					rollbackBufferedIndexedDomain(domain, checkpoint)
@@ -2745,7 +2755,7 @@ func (c *Collection) rejectBufferedIndexedInsertConflictsLocked(domain *collecti
 		if pending == nil || pending.len() == 0 {
 			continue
 		}
-		if err := rejectBufferedUniqueIndexConflicts(run.indexName, pending, run.table); err != nil {
+		if err := rejectBufferedUniqueIndexConflicts(run.indexName, run.indexValueType, pending, run.table); err != nil {
 			return err
 		}
 	}
@@ -2956,11 +2966,11 @@ func uniqueCollectionSecondaryRootNames(meta CollectionMeta) map[string]string {
 	return uniqueRoots
 }
 
-func rejectBufferedUniqueIndexConflicts(indexName string, pendingIndex *bufferedUniqueValueIndex, batchIndex memtable.Table) error {
+func rejectBufferedUniqueIndexConflicts(indexName string, valueType IndexValueType, pendingIndex *bufferedUniqueValueIndex, batchIndex memtable.Table) error {
 	it := batchIndex.NewIterator(nil, nil)
 	defer func() { _ = it.Close() }()
 	for it.Valid() {
-		prefix, err := indexEntryValuePrefix(it.UnsafeKey())
+		prefix, err := indexEntryValuePrefix(it.UnsafeKey(), valueType)
 		if err != nil {
 			return err
 		}
@@ -2975,7 +2985,7 @@ func rejectBufferedUniqueIndexConflicts(indexName string, pendingIndex *buffered
 	return nil
 }
 
-func bufferedUniqueIndexValueRun(batchIndex memtable.Table) (memtable.Table, [][]byte, error) {
+func bufferedUniqueIndexValueRun(batchIndex memtable.Table, valueType IndexValueType) (memtable.Table, [][]byte, error) {
 	table := newCollectionRunTable(max(0, batchIndex.Len()))
 	arenaCap := batchIndex.Size()
 	if arenaCap < 0 || arenaCap > int64(maxCollectionInt) {
@@ -2986,7 +2996,7 @@ func bufferedUniqueIndexValueRun(batchIndex memtable.Table) (memtable.Table, [][
 	it := batchIndex.NewIterator(nil, nil)
 	defer func() { _ = it.Close() }()
 	for it.Valid() {
-		prefix, err := indexEntryValuePrefix(it.UnsafeKey())
+		prefix, err := indexEntryValuePrefix(it.UnsafeKey(), valueType)
 		if err != nil {
 			resetCollectionRunTable(table)
 			return nil, nil, err
@@ -3006,15 +3016,12 @@ func bufferedUniqueIndexValueRun(batchIndex memtable.Table) (memtable.Table, [][
 	return table, prefixes, nil
 }
 
-func indexEntryValuePrefix(key []byte) ([]byte, error) {
-	if len(key) < 2 {
-		return nil, errors.New("collections: malformed index entry key")
+func indexEntryValuePrefix(key []byte, valueType IndexValueType) ([]byte, error) {
+	n, err := indexComponentLength(valueType, key)
+	if err != nil {
+		return nil, err
 	}
-	n := int(binary.BigEndian.Uint16(key[:2]))
-	if len(key) < 2+n {
-		return nil, errors.New("collections: malformed index entry key")
-	}
-	return key[:2+n], nil
+	return key[:n], nil
 }
 
 func getBufferedRunEntry(runs []memtable.Table, key []byte) ([]byte, page.ValuePtr, byte, bool) {
@@ -6504,7 +6511,11 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 			}
 		}
 		if indexName, ok := uniqueSecondaryRoots[rootName]; ok {
-			uniqueValueTable, uniquePrefixes, err := bufferedUniqueIndexValueRun(table)
+			indexDef, ok := findIndex(plan.meta.Indexes, indexName)
+			if !ok {
+				return false, fmt.Errorf("collections: unique index %q missing from schema", indexName)
+			}
+			uniqueValueTable, uniquePrefixes, err := bufferedUniqueIndexValueRun(table, indexDef.ValueType)
 			if err != nil {
 				if shouldAutoFlushAfterAdding {
 					rollbackBufferedIndexedDomain(domain, checkpoint)
@@ -7550,9 +7561,22 @@ func (c *Collection) FindByIndex(indexName, value string) ([][]byte, error) {
 	return c.FindByIndexValue(indexName, value)
 }
 
+type IndexRangeBound struct {
+	Value     any
+	Inclusive bool
+	Unbounded bool
+}
+
+type IndexRangeOptions struct {
+	Lower IndexRangeBound
+	Upper IndexRangeBound
+	Limit int
+	Desc  bool
+}
+
 // FindByIndexValue returns document IDs whose named secondary index equals
-// value. Supported scalar value types are string, bool, int32, int64, float64,
-// json.Number, and nil. If indexName does not exist, it returns nil, nil.
+// value. Query values must match the index value type. If indexName does not
+// exist, it returns nil, nil.
 func (c *Collection) FindByIndexValue(indexName string, value any) ([][]byte, error) {
 	out, _, err := c.findByIndexValue(indexName, value, 0)
 	return out, err
@@ -7568,15 +7592,68 @@ func (c *Collection) FindByIndexValueLimit(indexName string, value any, maxResul
 	return c.findByIndexValue(indexName, value, maxResults)
 }
 
+func (c *Collection) FindByIndexRange(indexName string, opts IndexRangeOptions) ([][]byte, bool, error) {
+	if opts.Limit < 0 {
+		return nil, false, errors.New("collections: index range limit cannot be negative")
+	}
+	capHint := 16
+	if opts.Limit > 0 && opts.Limit < capHint {
+		capHint = opts.Limit
+	}
+	var out [][]byte
+	truncated, found, err := c.scanIndexRange(indexName, opts, func(id []byte) (bool, error) {
+		if out == nil {
+			out = make([][]byte, 0, capHint)
+		}
+		out = append(out, id)
+		return true, nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if !found {
+		return nil, false, nil
+	}
+	if out == nil {
+		out = make([][]byte, 0)
+	}
+	return out, truncated, nil
+}
+
+func (c *Collection) ScanIndexRange(indexName string, opts IndexRangeOptions, fn func(id []byte) (bool, error)) (bool, error) {
+	if fn == nil {
+		return false, errors.New("collections: nil index range callback")
+	}
+	truncated, _, err := c.scanIndexRange(indexName, opts, fn)
+	return truncated, err
+}
+
 func (c *Collection) findByIndexValue(indexName string, value any, maxResults int) ([][]byte, bool, error) {
+	if maxResults < 0 {
+		return nil, false, errors.New("collections: max index results cannot be negative")
+	}
+	return c.FindByIndexRange(indexName, IndexRangeOptions{
+		Lower: IndexRangeBound{Value: value, Inclusive: true},
+		Upper: IndexRangeBound{Value: value, Inclusive: true},
+		Limit: maxResults,
+	})
+}
+
+func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn func(id []byte) (bool, error)) (bool, bool, error) {
 	if c == nil {
-		return nil, false, errCollectionNil
+		return false, false, errCollectionNil
 	}
 	if err := ValidateIndexName(indexName); err != nil {
-		return nil, false, err
+		return false, false, err
+	}
+	if opts.Limit < 0 {
+		return false, false, errors.New("collections: index range limit cannot be negative")
+	}
+	if opts.Desc {
+		return false, false, errors.New("collections: descending index range scans are not supported")
 	}
 	if err := c.flushBufferedNoIndex(); err != nil {
-		return nil, false, err
+		return false, false, err
 	}
 	domain := c.writeDomain
 	domainLocked := false
@@ -7591,32 +7668,39 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
-		return nil, false, backenddb.ErrClosed
+		return false, false, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
 	catalog, err := c.catalogForSnapshotWithWriteDomainLocked(snap)
 	if err != nil {
-		return nil, false, err
+		return false, false, err
 	}
 	if catalog == nil {
-		return nil, false, errCollectionNotFound
+		return false, false, errCollectionNotFound
 	}
 	idx, ok := findIndex(catalog.meta.Indexes, indexName)
 	if !ok {
-		return nil, false, nil
+		return false, false, nil
 	}
-	var arena []byte
-	arena, encoded, err := appendIndexScalar(arena, value)
+	start, end, empty, err := indexRangeScanBounds(idx.ValueType, opts)
 	if err != nil {
-		return nil, false, err
+		return false, true, err
 	}
-	arena, prefix, err := appendIndexValuePrefixSlice(arena, encoded)
-	if err != nil {
-		return nil, false, err
+	if empty {
+		return false, true, nil
 	}
-	bufferedTable, err := bufferedIndexTableLocked(domain, catalog.meta.Name, indexName, idx.Unique, prefix, maxResults)
+	exactPrefix, exactPrefixScan, err := exactIndexRangePrefix(idx.ValueType, opts)
 	if err != nil {
-		return nil, false, err
+		return false, true, err
+	}
+	var bufferedTable memtable.Table
+	if exactPrefixScan {
+		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, idx.Unique, exactPrefix, opts.Limit)
+	} else {
+		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
+	}
+	if err != nil {
+		return false, true, err
 	}
 	if domainLocked {
 		domain.mu.RUnlock()
@@ -7627,28 +7711,51 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 	}
 	var bufferedIt iterator.UnsafeIterator
 	if bufferedTable != nil {
-		bufferedIt = bufferedTable.NewIterator(prefix, prefixEnd(prefix))
+		bufferedIt = bufferedTable.NewIterator(start, end)
 		defer func() { _ = bufferedIt.Close() }()
 	}
 	rootID := catalog.rootID(collectionSecondaryRootName(catalog.meta.Name, idx.Name))
 	var persistedIt iterator.UnsafeIterator
 	if rootID != 0 {
-		it, err := snap.IteratorAtRoot(rootID, prefix, prefixEnd(prefix))
+		it, err := snap.IteratorAtRoot(rootID, start, end)
 		if err != nil && !errors.Is(err, tree.ErrKeyNotFound) {
-			return nil, false, err
+			return false, true, err
 		}
 		if err == nil {
 			persistedIt = it
 			defer func() { _ = persistedIt.Close() }()
 		}
 	}
-	return collectMergedCollectionIndexIDs(bufferedIt, persistedIt, prefix, maxResults)
+	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, opts.Limit, fn)
+	return truncated, true, err
+}
+
+func exactIndexRangePrefix(valueType IndexValueType, opts IndexRangeOptions) ([]byte, bool, error) {
+	if opts.Lower.Unbounded || opts.Upper.Unbounded || !opts.Lower.Inclusive || !opts.Upper.Inclusive {
+		return nil, false, nil
+	}
+	lower, err := encodeIndexScalar(valueType, opts.Lower.Value)
+	if err != nil {
+		return nil, false, err
+	}
+	upper, err := encodeIndexScalar(valueType, opts.Upper.Value)
+	if err != nil {
+		return nil, false, err
+	}
+	if !bytes.Equal(lower, upper) {
+		return nil, false, nil
+	}
+	return lower, true, nil
 }
 
 // bufferedIndexTableLocked materializes buffered entries for one secondary
 // index prefix while domain.mu is held. The returned pooled table is owned by
 // the caller and must be released with resetCollectionRunTable.
 func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, indexName string, unique bool, prefix []byte, maxResults int) (memtable.Table, error) {
+	return bufferedIndexPrefixTableLocked(domain, collectionName, indexName, unique, prefix, maxResults)
+}
+
+func bufferedIndexPrefixTableLocked(domain *collectionWriteDomain, collectionName, indexName string, unique bool, prefix []byte, maxResults int) (memtable.Table, error) {
 	if domain == nil {
 		return nil, nil
 	}
@@ -7699,6 +7806,195 @@ func bufferedIndexTableLocked(domain *collectionWriteDomain, collectionName, ind
 	}
 	table.Freeze()
 	return table, nil
+}
+
+// bufferedIndexRangeTableLocked materializes all buffered entries in a secondary
+// index range while domain.mu is held. It intentionally does not apply a result
+// limit because buffered tombstones outside the first live matches can suppress
+// persisted entries later in the same range. The source run tables are pooled
+// and may be reset by a concurrent flush as soon as domain.mu is released, so
+// callers must materialize an owned table before merging with the persisted
+// snapshot iterator.
+func bufferedIndexRangeTableLocked(domain *collectionWriteDomain, collectionName, indexName string, start, end []byte) (memtable.Table, error) {
+	if domain == nil {
+		return nil, nil
+	}
+	if domain.count == 0 || len(domain.rootRuns) == 0 {
+		return nil, nil
+	}
+	if domain.meta.Name != "" {
+		collectionName = domain.meta.Name
+	}
+	runs := domain.rootRuns[collectionSecondaryRootName(collectionName, indexName)]
+	if len(runs) == 0 {
+		return nil, nil
+	}
+	table := newCollectionRunTable(0)
+	it := newBufferedRootRunsIteratorWithDeleted(runs, start, end, true)
+	defer func() { _ = it.Close() }()
+	for it.Valid() {
+		key := bytes.Clone(it.UnsafeKey())
+		if it.IsDeleted() {
+			table.DeleteSteal(key)
+		} else {
+			setCollectionRunValue(table, key, nil)
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		resetCollectionRunTable(table)
+		return nil, err
+	}
+	if table.Len() == 0 {
+		resetCollectionRunTable(table)
+		return nil, nil
+	}
+	table.Freeze()
+	return table, nil
+}
+
+func indexRangeScanBounds(valueType IndexValueType, opts IndexRangeOptions) ([]byte, []byte, bool, error) {
+	var start []byte
+	var end []byte
+	var err error
+	var lowerEncoded []byte
+	var upperEncoded []byte
+	lowerBounded := !opts.Lower.Unbounded
+	upperBounded := !opts.Upper.Unbounded
+	if lowerBounded {
+		lowerEncoded, err = encodeIndexScalar(valueType, opts.Lower.Value)
+		if err != nil {
+			return nil, nil, false, err
+		}
+	}
+	if upperBounded {
+		upperEncoded, err = encodeIndexScalar(valueType, opts.Upper.Value)
+		if err != nil {
+			return nil, nil, false, err
+		}
+	}
+
+	if valueType == IndexValueDouble {
+		upperNaN := upperBounded && encodedDoubleComponentIsNaN(upperEncoded)
+		switch {
+		case upperNaN && !opts.Upper.Inclusive:
+			return nil, nil, true, nil
+		}
+	}
+
+	if lowerBounded {
+		if opts.Lower.Inclusive {
+			start = bytes.Clone(lowerEncoded)
+		} else {
+			start = prefixEnd(lowerEncoded)
+			if start == nil {
+				return nil, nil, true, nil
+			}
+		}
+	}
+	if upperBounded {
+		if opts.Upper.Inclusive {
+			end = prefixEnd(upperEncoded)
+		} else {
+			end = bytes.Clone(upperEncoded)
+		}
+	}
+	if start != nil && end != nil && bytes.Compare(start, end) >= 0 {
+		return nil, nil, true, nil
+	}
+	return start, end, false, nil
+}
+
+func encodedDoubleComponentIsNaN(encoded []byte) bool {
+	return len(encoded) == 1 && encoded[0] == 0x00
+}
+
+func scanMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, fn func([]byte) (bool, error)) (bool, error) {
+	if maxResults < 0 {
+		return false, errors.New("collections: max index results cannot be negative")
+	}
+	seen := make(map[string]struct{})
+	emitted := 0
+	emit := func(key []byte) (bool, bool, error) {
+		id, err := indexKeyDocumentID(valueType, key)
+		if err != nil {
+			return false, false, err
+		}
+		idKey := string(id)
+		if _, ok := seen[idKey]; ok {
+			return true, false, nil
+		}
+		seen[idKey] = struct{}{}
+		if maxResults > 0 && emitted >= maxResults {
+			return false, true, nil
+		}
+		cont, err := fn(bytes.Clone(id))
+		if err != nil {
+			return false, false, err
+		}
+		emitted++
+		return cont, false, nil
+	}
+	for {
+		bufferedKey, bufferedOK := collectionIndexIteratorKey(bufferedIt)
+		persistedKey, persistedOK := collectionIndexIteratorKey(persistedIt)
+		if !bufferedOK && !persistedOK {
+			break
+		}
+		switch {
+		case !bufferedOK:
+			if !persistedIt.IsDeleted() {
+				cont, truncated, err := emit(persistedKey)
+				if err != nil || truncated || !cont {
+					return truncated, err
+				}
+			}
+			persistedIt.Next()
+		case !persistedOK:
+			if !bufferedIt.IsDeleted() {
+				cont, truncated, err := emit(bufferedKey)
+				if err != nil || truncated || !cont {
+					return truncated, err
+				}
+			}
+			bufferedIt.Next()
+		default:
+			cmp := bytes.Compare(bufferedKey, persistedKey)
+			if cmp < 0 {
+				if !bufferedIt.IsDeleted() {
+					cont, truncated, err := emit(bufferedKey)
+					if err != nil || truncated || !cont {
+						return truncated, err
+					}
+				}
+				bufferedIt.Next()
+			} else if cmp > 0 {
+				if !persistedIt.IsDeleted() {
+					cont, truncated, err := emit(persistedKey)
+					if err != nil || truncated || !cont {
+						return truncated, err
+					}
+				}
+				persistedIt.Next()
+			} else {
+				if !bufferedIt.IsDeleted() {
+					cont, truncated, err := emit(bufferedKey)
+					if err != nil || truncated || !cont {
+						return truncated, err
+					}
+				}
+				bufferedIt.Next()
+				persistedIt.Next()
+			}
+		}
+	}
+	if err := collectionIndexIteratorError(bufferedIt); err != nil {
+		return false, err
+	}
+	if err := collectionIndexIteratorError(persistedIt); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 func collectMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, prefix []byte, maxResults int) ([][]byte, bool, error) {
@@ -7786,6 +8082,13 @@ func collectionIndexIteratorID(it iterator.UnsafeIterator, prefix []byte) ([]byt
 		return nil, false
 	}
 	return key[len(prefix):], true
+}
+
+func collectionIndexIteratorKey(it iterator.UnsafeIterator) ([]byte, bool) {
+	if it == nil || !it.Valid() {
+		return nil, false
+	}
+	return it.UnsafeKey(), true
 }
 
 func collectionIndexIteratorError(it iterator.UnsafeIterator) error {
@@ -8186,6 +8489,11 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		if err := ValidateIndexPath(indexes[i].Field); err != nil {
 			return CollectionMeta{}, fmt.Errorf("collections: invalid index %q field: %w", indexes[i].Name, err)
 		}
+		valueType, err := normalizeIndexValueType(indexes[i].ValueType)
+		if err != nil {
+			return CollectionMeta{}, fmt.Errorf("collections: invalid index %q value_type: %w", indexes[i].Name, err)
+		}
+		indexes[i].ValueType = valueType
 		if _, err := backendRootStoragePolicy(indexes[i].StoragePolicy); err != nil {
 			return CollectionMeta{}, err
 		}
@@ -8218,6 +8526,17 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		}
 	}
 	return meta, nil
+}
+
+func normalizeIndexValueType(valueType IndexValueType) (IndexValueType, error) {
+	switch valueType {
+	case IndexValueString, IndexValueBool, IndexValueInt64, IndexValueDouble:
+		return valueType, nil
+	case "":
+		return "", errors.New("value_type is required")
+	default:
+		return "", fmt.Errorf("unsupported value_type %q", valueType)
+	}
 }
 
 func (m CollectionMeta) copy() *CollectionMeta {
@@ -8296,6 +8615,7 @@ func plannerIndexes(indexes []IndexDefinition) []indexDefinition {
 		out[i] = indexDefinition{
 			name:          idx.Name,
 			field:         idx.Field,
+			valueType:     idx.ValueType,
 			unique:        idx.Unique,
 			multiKey:      idx.MultiKey,
 			storagePolicy: policy,

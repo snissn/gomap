@@ -1,6 +1,7 @@
 package collections_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -754,8 +755,8 @@ func seedBenchmarkCollection(b *testing.B, collection *collections.Collection, s
 
 func secondaryIndexes() []collections.IndexDefinition {
 	return []collections.IndexDefinition{
-		{Name: "email_idx", Field: "email", Unique: true},
-		{Name: "city_idx", Field: "city"},
+		{Name: "email_idx", Field: "email", ValueType: collections.IndexValueString, Unique: true},
+		{Name: "city_idx", Field: "city", ValueType: collections.IndexValueString},
 	}
 }
 
@@ -939,7 +940,7 @@ func BenchmarkSecondaryLookupUnique(b *testing.B) {
 	backend, collection := openBenchmarkCollection(
 		b,
 		"bench_secondary_unique",
-		collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true},
+		collections.IndexDefinition{Name: "email_idx", Field: "email", ValueType: collections.IndexValueString, Unique: true},
 	)
 	seedBenchmarkCollection(b, collection, 0, collectionBenchSeedDocs, true)
 	benchmarkSyncBoundary(b, backend)
@@ -958,7 +959,7 @@ func BenchmarkSecondaryLookupNonUnique(b *testing.B) {
 	backend, collection := openBenchmarkCollection(
 		b,
 		"bench_secondary_non_unique",
-		collections.IndexDefinition{Name: "city_idx", Field: "city"},
+		collections.IndexDefinition{Name: "city_idx", Field: "city", ValueType: collections.IndexValueString},
 	)
 	seedBenchmarkCollection(b, collection, 0, collectionBenchSeedDocs, true)
 	benchmarkSyncBoundary(b, backend)
@@ -969,6 +970,80 @@ func BenchmarkSecondaryLookupNonUnique(b *testing.B) {
 		city := fmt.Sprintf("city-%02d", i%collectionBenchCities)
 		if _, err := collection.FindByIndex("city_idx", city); err != nil {
 			b.Fatalf("lookup non-unique: %v", err)
+		}
+	}
+}
+
+func BenchmarkSecondaryLookupRangeString(b *testing.B) {
+	backend, collection := openBenchmarkCollection(
+		b,
+		"bench_secondary_range_string",
+		collections.IndexDefinition{Name: "city_idx", Field: "city", ValueType: collections.IndexValueString},
+	)
+	seedBenchmarkCollection(b, collection, 0, collectionBenchSeedDocs, true)
+	benchmarkSyncBoundary(b, backend)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		city := fmt.Sprintf("city-%02d", i%collectionBenchCities)
+		ids, truncated, err := collection.FindByIndexRange("city_idx", collections.IndexRangeOptions{
+			Lower: collections.IndexRangeBound{Value: city, Inclusive: true},
+			Upper: collections.IndexRangeBound{Value: city, Inclusive: true},
+		})
+		if err != nil {
+			b.Fatalf("lookup range string: %v", err)
+		}
+		if truncated {
+			b.Fatal("lookup range string truncated unexpectedly")
+		}
+		if len(ids) == 0 {
+			b.Fatalf("lookup range string returned no ids for %s", city)
+		}
+	}
+}
+
+func BenchmarkSecondaryLookupRangeStringScanFallback(b *testing.B) {
+	backend, collection := openBenchmarkCollection(
+		b,
+		"bench_secondary_range_string_scan",
+		collections.IndexDefinition{Name: "city_idx", Field: "city", ValueType: collections.IndexValueString},
+	)
+	seedBenchmarkCollection(b, collection, 0, collectionBenchSeedDocs, true)
+	benchmarkSyncBoundary(b, backend)
+	materializer, err := collection.NewStoredDocumentJSONMaterializer()
+	if err != nil {
+		b.Fatalf("create scan fallback materializer: %v", err)
+	}
+	defer func() {
+		if err := materializer.Close(); err != nil {
+			b.Fatalf("close scan fallback materializer: %v", err)
+		}
+	}()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		city := fmt.Sprintf("city-%02d", i%collectionBenchCities)
+		matches := 0
+		truncated, err := collection.ScanDocumentsFunc(collectionBenchSeedDocs, func(record collections.DocumentRecord) (bool, error) {
+			jsonDoc, err := materializer.StoredDocumentJSON(record.Document)
+			if err != nil {
+				return false, err
+			}
+			if bytes.Contains(jsonDoc, []byte(`"city":"`+city+`"`)) {
+				matches++
+			}
+			return true, nil
+		})
+		if err != nil {
+			b.Fatalf("scan range fallback: %v", err)
+		}
+		if truncated {
+			b.Fatal("scan range fallback truncated unexpectedly")
+		}
+		if matches == 0 {
+			b.Fatalf("scan range fallback found no matches for %s", city)
 		}
 	}
 }
@@ -1009,6 +1084,7 @@ func BenchmarkCollectionCreateIndexBackfillExistingDocs(b *testing.B) {
 		if _, err := collection.CreateIndex(collections.IndexDefinition{
 			Name:          "email_idx",
 			Field:         "email",
+			ValueType:     collections.IndexValueString,
 			Unique:        true,
 			StoragePolicy: benchmarkRootStoragePolicy(indexOuter),
 		}); err != nil {

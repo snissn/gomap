@@ -143,6 +143,7 @@ func BenchmarkTreeDBGatewayRawWireLoadBSONIndexes2(b *testing.B) {
 	if _, err := collection.CreateIndex(collections.IndexDefinition{
 		Name:          "email_1",
 		Field:         "email",
+		ValueType:     collections.IndexValueString,
 		Unique:        true,
 		StoragePolicy: collections.RootStorageCompressed,
 	}); err != nil {
@@ -151,6 +152,7 @@ func BenchmarkTreeDBGatewayRawWireLoadBSONIndexes2(b *testing.B) {
 	if _, err := collection.CreateIndex(collections.IndexDefinition{
 		Name:          "city_1",
 		Field:         "city",
+		ValueType:     collections.IndexValueString,
 		StoragePolicy: collections.RootStorageCompressed,
 	}); err != nil {
 		b.Fatalf("create city index: %v", err)
@@ -242,8 +244,9 @@ func BenchmarkTreeDBGatewayRawWireTCPLoadBSONIndexes2(b *testing.B) {
 			b.Fatalf("close target: %v", err)
 		}
 	}()
-	coll := target.client.Database(cfg.Database).Collection(cfg.Collection)
-	if err := createIndexes(ctx, coll, cfg.SecondaryIndexes); err != nil {
+	db := target.client.Database(cfg.Database)
+	coll := db.Collection(cfg.Collection)
+	if err := createIndexes(ctx, db, coll, cfg.SecondaryIndexes, cfg.RangeIndex, true); err != nil {
 		b.Fatalf("create indexes: %v", err)
 	}
 	commandDoc := mustProfileBenchDocument(b, bson.D{
@@ -321,6 +324,7 @@ func BenchmarkDirectCollectionLoadBSONIndexes2(b *testing.B) {
 	if _, err := collection.CreateIndex(collections.IndexDefinition{
 		Name:          "email_1",
 		Field:         "email",
+		ValueType:     collections.IndexValueString,
 		Unique:        true,
 		StoragePolicy: collections.RootStorageCompressed,
 	}); err != nil {
@@ -329,6 +333,7 @@ func BenchmarkDirectCollectionLoadBSONIndexes2(b *testing.B) {
 	if _, err := collection.CreateIndex(collections.IndexDefinition{
 		Name:          "city_1",
 		Field:         "city",
+		ValueType:     collections.IndexValueString,
 		StoragePolicy: collections.RootStorageCompressed,
 	}); err != nil {
 		b.Fatalf("create city index: %v", err)
@@ -405,6 +410,7 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	if _, err := collection.CreateIndex(collections.IndexDefinition{
 		Name:          "email_1",
 		Field:         "email",
+		ValueType:     collections.IndexValueString,
 		Unique:        true,
 		StoragePolicy: collections.RootStorageCompressed,
 	}); err != nil {
@@ -413,6 +419,7 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	if _, err := collection.CreateIndex(collections.IndexDefinition{
 		Name:          "city_1",
 		Field:         "city",
+		ValueType:     collections.IndexValueString,
 		StoragePolicy: collections.RootStorageCompressed,
 	}); err != nil {
 		b.Fatalf("create city index: %v", err)
@@ -725,8 +732,9 @@ func benchmarkTreeDBGatewayLoadWithDocument(b *testing.B, format collections.Doc
 			b.Fatalf("close target: %v", err)
 		}
 	}()
-	coll := target.client.Database(cfg.Database).Collection(cfg.Collection, collectionOptions...)
-	if err := createIndexes(ctx, coll, secondaryIndexes); err != nil {
+	db := target.client.Database(cfg.Database)
+	coll := db.Collection(cfg.Collection, collectionOptions...)
+	if err := createIndexes(ctx, db, coll, secondaryIndexes, false, true); err != nil {
 		b.Fatalf("create indexes: %v", err)
 	}
 
@@ -811,11 +819,11 @@ func benchmarkTreeDBGatewayRunCommandLoad(b *testing.B, format collections.Docum
 			b.Fatalf("close target: %v", err)
 		}
 	}()
-	coll := target.client.Database(cfg.Database).Collection(cfg.Collection)
-	if err := createIndexes(ctx, coll, secondaryIndexes); err != nil {
+	db := target.client.Database(cfg.Database)
+	coll := db.Collection(cfg.Collection)
+	if err := createIndexes(ctx, db, coll, secondaryIndexes, false, true); err != nil {
 		b.Fatalf("create indexes: %v", err)
 	}
-	db := target.client.Database(cfg.Database)
 
 	b.ReportAllocs()
 	var timedElapsed time.Duration
@@ -876,11 +884,11 @@ func benchmarkTreeDBGatewayRunRawCommandLoad(b *testing.B, format collections.Do
 			b.Fatalf("close target: %v", err)
 		}
 	}()
-	coll := target.client.Database(cfg.Database).Collection(cfg.Collection)
-	if err := createIndexes(ctx, coll, secondaryIndexes); err != nil {
+	db := target.client.Database(cfg.Database)
+	coll := db.Collection(cfg.Collection)
+	if err := createIndexes(ctx, db, coll, secondaryIndexes, false, true); err != nil {
 		b.Fatalf("create indexes: %v", err)
 	}
-	db := target.client.Database(cfg.Database)
 
 	b.ReportAllocs()
 	var timedElapsed time.Duration

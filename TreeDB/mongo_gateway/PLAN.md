@@ -40,6 +40,12 @@ methods such as `insertOne` / `insertMany`, `updateOne`, and `deleteOne` /
 - `createIndexes` and `dropIndexes`.
 - `listCollections` and `listIndexes`.
 
+TreeDB-backed `createIndexes` rejects attempts to create the built-in `_id`
+index. All user-created single-field indexes require the gateway-specific
+`treedbValueType` option. Supported values are `string`, `bool`, `int64`, and
+`double`; the gateway forwards that type into collection secondary-index
+metadata instead of inferring from existing documents.
+
 MVP query support:
 
 - equality predicates on `_id` and indexed scalar fields.
