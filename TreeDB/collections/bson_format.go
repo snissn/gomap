@@ -47,7 +47,11 @@ func bsonOrderedIndexStateForDocumentWithArena(document []byte, runtimes []index
 		if fromArray && !runtime.def.multiKey && !opts.allowArrayValuesInIndex {
 			return nil, fmt.Errorf("collections: array value not allowed for index")
 		}
-		var encoded [][]byte
+		var encodedInline [8][]byte
+		encoded := encodedInline[:0]
+		if len(values) > len(encodedInline) {
+			encoded = make([][]byte, 0, len(values))
+		}
 		for _, value := range values {
 			var next []byte
 			var ok bool
@@ -81,7 +85,11 @@ func appendBSONIndexValueToState(state orderedDocumentIndexState, runtimeIdx int
 		if !runtime.def.multiKey && !opts.allowArrayValuesInIndex {
 			return fmt.Errorf("collections: array value not allowed for index")
 		}
-		var encoded [][]byte
+		var encodedInline [8][]byte
+		encoded := encodedInline[:0]
+		if len(values) > len(encodedInline) {
+			encoded = make([][]byte, 0, len(values))
+		}
 		for _, item := range values {
 			var next []byte
 			var ok bool

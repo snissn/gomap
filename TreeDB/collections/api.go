@@ -5806,14 +5806,25 @@ type updateBatchPlanScratch struct {
 var updateBatchPlanScratchPool sync.Pool
 
 const (
-	updateBatchPlanScratchMaxChangedCap    = 1 << 15
-	updateBatchPlanScratchDocumentBytes    = 256
-	updateBatchPlanScratchMaxDocumentArena = 8 << 20
-	updateBatchPlanScratchMaxRootNameCap   = 64
-	updateBatchPlanScratchMaxStateArenaCap = 4 << 20
-	updateBatchPlanScratchMaxStateSliceCap = 1 << 16
-	updateBatchPlanScratchMaxValueRefCap   = 1 << 16
+	updateBatchPlanScratchMaxChangedCap           = 1 << 15
+	updateBatchPlanScratchDocumentBytes           = 256
+	updateBatchPlanScratchMaxInitialDocumentArena = 4 << 20
+	updateBatchPlanScratchMaxDocumentArena        = 8 << 20
+	updateBatchPlanScratchMaxRootNameCap          = 64
+	updateBatchPlanScratchMaxStateArenaCap        = 4 << 20
+	updateBatchPlanScratchMaxStateSliceCap        = 1 << 16
+	updateBatchPlanScratchMaxValueRefCap          = 1 << 16
 )
+
+func estimateUpdateBatchPlanDocumentArenaBytes(itemCount int) int {
+	if itemCount <= 0 {
+		return 0
+	}
+	if itemCount > updateBatchPlanScratchMaxInitialDocumentArena/updateBatchPlanScratchDocumentBytes {
+		return updateBatchPlanScratchMaxInitialDocumentArena
+	}
+	return itemCount * updateBatchPlanScratchDocumentBytes
+}
 
 func getUpdateBatchPlanScratch(itemCount, runtimeCount int) *updateBatchPlanScratch {
 	var scratch *updateBatchPlanScratch
@@ -5833,7 +5844,7 @@ func getUpdateBatchPlanScratch(itemCount, runtimeCount int) *updateBatchPlanScra
 	} else {
 		scratch.changedDocuments = scratch.changedDocuments[:0]
 	}
-	documentArenaBytes := itemCount * updateBatchPlanScratchDocumentBytes
+	documentArenaBytes := estimateUpdateBatchPlanDocumentArenaBytes(itemCount)
 	if cap(scratch.documentArena) < documentArenaBytes {
 		scratch.documentArena = make([]byte, 0, documentArenaBytes)
 	} else {
@@ -5921,7 +5932,11 @@ func putUpdateBatchPlanScratch(scratch *updateBatchPlanScratch) {
 	}
 	clear(scratch.rootNames)
 	scratch.rootNames = scratch.rootNames[:0]
-	clear(scratch.baseRootIDs)
+	if len(scratch.baseRootIDs) > updateBatchPlanScratchMaxRootNameCap {
+		scratch.baseRootIDs = nil
+	} else {
+		clear(scratch.baseRootIDs)
+	}
 	clear(scratch.policies)
 	scratch.policies = scratch.policies[:0]
 	clear(scratch.deltaTables)
@@ -6575,7 +6590,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	policies = append(policies, plannerOptions.dataStoragePolicy)
 	primaryTable := newCollectionRunTable(len(changed))
 	for _, item := range changed {
-		setCollectionRunBorrowedValue(primaryTable, item.documentID, item.document)
+		setCollectionRunCopiedValue(primaryTable, item.documentID, item.document)
 		results[item.itemIndex].Modified = true
 	}
 	primaryTable.Freeze()

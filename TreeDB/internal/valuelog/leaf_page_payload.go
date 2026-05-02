@@ -40,7 +40,6 @@ func MaybeCompactLeafLogPayloadTo(dst, leafPage []byte) ([]byte, bool, error) {
 	payload := dst
 	if cap(payload) >= compactLen {
 		payload = payload[:compactLen]
-		clear(payload)
 	} else {
 		payload = make([]byte, compactLen)
 	}

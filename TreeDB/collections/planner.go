@@ -643,7 +643,7 @@ func setCollectionRunValue(table memtable.Table, key, value []byte) {
 	table.SetEntrySteal(key, value, page.ValuePtr{}, node.FlagInline)
 }
 
-func setCollectionRunBorrowedValue(table memtable.Table, key, value []byte) {
+func setCollectionRunCopiedValue(table memtable.Table, key, value []byte) {
 	table.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
 }
 
