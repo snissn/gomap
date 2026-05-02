@@ -26,7 +26,7 @@ const (
 	// open segments do not retain large decoded-raw payloads per file.
 	defaultGroupedFrameCacheEntries     = 2
 	defaultGroupedFrameCacheMaxRawBytes = 1 << 20
-	valueLogRecordCRCPrefixBytes        = 4
+	valueLogRecordCRCPrefixBytes        = HeaderSize - headerWithoutCRC
 )
 
 type groupedFrameCacheEntry struct {

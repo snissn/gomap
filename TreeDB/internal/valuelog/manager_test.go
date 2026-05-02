@@ -302,7 +302,7 @@ func TestManagerCurrentWritableReadBarrierSkippedForVerifiedRecord(t *testing.T)
 	mgr := &Manager{}
 	f := &File{ID: 9, manager: mgr}
 	f.currentWritable.Store(true)
-	ptr := page.ValuePtr{Offset: 4, Length: 128}
+	ptr := testCurrentWritableRecordPtr(64)
 	f.noteVerifiedFileSize(int64(ptr.Offset + uint64(page.ValuePtrRecordLength(ptr))))
 	var calls int
 	mgr.SetCurrentWritableReadBarrierWithSize(func(fileID uint32) (int64, error) {
@@ -322,7 +322,7 @@ func TestManagerCurrentWritableReadBarrierUsedForUnverifiedRecord(t *testing.T) 
 	mgr := &Manager{}
 	f := &File{ID: 9, manager: mgr}
 	f.currentWritable.Store(true)
-	ptr := page.ValuePtr{Offset: 4, Length: 128}
+	ptr := testCurrentWritableRecordPtr(64)
 	f.noteVerifiedFileSize(int64(ptr.Offset + uint64(page.ValuePtrRecordLength(ptr)) - 1))
 	var calls int
 	mgr.SetCurrentWritableReadBarrierWithSize(func(fileID uint32) (int64, error) {
@@ -338,6 +338,13 @@ func TestManagerCurrentWritableReadBarrierUsedForUnverifiedRecord(t *testing.T) 
 	}
 	if calls != 1 {
 		t.Fatalf("barrier calls=%d want 1 for unverified record", calls)
+	}
+}
+
+func testCurrentWritableRecordPtr(payloadLen uint32) page.ValuePtr {
+	return page.ValuePtr{
+		Offset: valueLogRecordCRCPrefixBytes,
+		Length: uint32(headerWithoutCRC) + payloadLen,
 	}
 }
 
