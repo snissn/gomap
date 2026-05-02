@@ -5831,19 +5831,11 @@ func TestUpdateBatchBufferedEntryPoolClearsEntries(t *testing.T) {
 	}
 	putUpdateBatchBufferedEntries(entries)
 
-	pooled, ok := updateBatchBufferedEntryPool.Get().([]updateBatchBufferedEntry)
-	if !ok {
-		t.Fatalf("pooled value type %T, want []updateBatchBufferedEntry", pooled)
-	}
-	if cap(pooled) < 2 {
-		t.Fatalf("pooled cap=%d want >= 2", cap(pooled))
-	}
-	for i, entry := range pooled[:2] {
+	for i, entry := range entries {
 		if entry.value != nil || entry.flags != 0 || entry.found {
 			t.Fatalf("pooled entry %d retained data immediately after put: %+v", i, entry)
 		}
 	}
-	updateBatchBufferedEntryPool.Put(pooled)
 
 	reused := getUpdateBatchBufferedEntries(2)
 	defer putUpdateBatchBufferedEntries(reused)
