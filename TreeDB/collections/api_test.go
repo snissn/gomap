@@ -3820,6 +3820,81 @@ func TestCollectionUpdateCombinerBatchesWhenSecondaryUniqueValuesAreUnchanged(t 
 	}
 }
 
+func TestCollectionUpdateCombinerBuffersSingletonWhenSecondaryUniqueValuesAreUnchanged(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"a@example.com","city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+
+	before := d.State()
+	statsBefore := mgr.StatsSnapshot()
+	combiner := &collectionUpdateCombiner{maxBatch: 8, domain: col.writeDomain}
+	req := collectionUpdateCombineRequest{
+		collection: col,
+		documentID: []byte("u1"),
+		update:     setJSONCity("sea"),
+		done:       make(chan collectionUpdateCombineResult, 1),
+	}
+	combiner.runBatch([]collectionUpdateCombineRequest{req})
+	result := <-req.done
+	if result.err != nil {
+		t.Fatalf("request err: %v", result.err)
+	}
+	if !result.matched || !result.modified {
+		t.Fatalf("request matched=%v modified=%v", result.matched, result.modified)
+	}
+	after := d.State()
+	if after.CommitSeq != before.CommitSeq {
+		t.Fatalf("singleton safe update advanced commit seq by %d before flush, want buffered", after.CommitSeq-before.CommitSeq)
+	}
+	stats := mgr.StatsSnapshot()
+	if got, want := stats.IndexedStageDocs-statsBefore.IndexedStageDocs, uint64(1); got != want {
+		t.Fatalf("indexed staged docs=%d want %d", got, want)
+	}
+	if got := stats.UpdateCombineFallbackRequests - statsBefore.UpdateCombineFallbackRequests; got != 0 {
+		t.Fatalf("fallback requests=%d want 0", got)
+	}
+	seaIDs, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find sea city: %v", err)
+	}
+	if len(seaIDs) != 1 || !bytes.Equal(seaIDs[0], []byte("u1")) {
+		t.Fatalf("sea ids=%q want [u1]", seaIDs)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush singleton buffered update: %v", err)
+	}
+	flushed := d.State()
+	if flushed.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("flushed singleton update advanced commit seq by %d, want 1", flushed.CommitSeq-before.CommitSeq)
+	}
+}
+
 func TestCollectionUpdateCombinerRunBatchPreservesIndependentItemErrorOutcomes(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
