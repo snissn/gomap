@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -607,19 +608,20 @@ func profileBenchSignedDeltaUintStat(after, before map[string]string, key string
 	beforeValue := profileBenchUintStat(before, key)
 	if afterValue >= beforeValue {
 		delta := afterValue - beforeValue
-		if delta > uint64(^uint64(0)>>1) {
-			return int64(^uint64(0) >> 1)
+		if delta > uint64(math.MaxInt64) {
+			return math.MaxInt64
 		}
 		return int64(delta)
 	}
 	delta := beforeValue - afterValue
-	if delta > uint64(^uint64(0)>>1) {
-		return -int64(^uint64(0)>>1) - 1
+	if delta > uint64(math.MaxInt64) {
+		return math.MinInt64
 	}
 	return -int64(delta)
 }
 
 func reportProfileBenchBackendVlogMmapStats(b *testing.B, after, before map[string]string, docs int) {
+	b.Helper()
 	if docs <= 0 {
 		return
 	}
@@ -630,7 +632,7 @@ func reportProfileBenchBackendVlogMmapStats(b *testing.B, after, before map[stri
 	reportPerDoc("backend_vlog_mmap_hits/doc", "treedb.vlog.mmap_read.hits")
 	reportPerDoc("backend_vlog_mmap_miss_out_of_range/doc", "treedb.vlog.mmap_read.miss_out_of_range")
 	reportPerDoc("backend_vlog_mmap_miss_no_mapping/doc", "treedb.vlog.mmap_read.miss_no_mapping")
-	reportPerDoc("backend_vlog_mmap_miss_dead_cap/doc", "treedb.vlog.mmap_read.miss_dead_mapping_cap")
+	reportPerDoc("backend_vlog_mmap_miss_dead_mapping_cap/doc", "treedb.vlog.mmap_read.miss_dead_mapping_cap")
 	reportPerDoc("backend_vlog_mmap_fallback_readat/doc", "treedb.vlog.mmap_read.fallback_readat")
 	reportPerDoc("backend_vlog_mmap_sealed_denied_count_cap/doc", "treedb.vlog.mmap_sealed_map_denied.count_cap")
 	reportPerDoc("backend_vlog_mmap_sealed_denied_bytes_cap/doc", "treedb.vlog.mmap_sealed_map_denied.bytes_cap")
