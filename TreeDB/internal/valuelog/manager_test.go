@@ -298,6 +298,56 @@ func TestManagerCurrentWritableSizedReadBarrier_AvoidsStatForMappedRange(t *test
 	}
 }
 
+func TestManagerCurrentWritableReadBarrierSkippedForVerifiedRecord(t *testing.T) {
+	mgr := &Manager{}
+	f := &File{ID: 9, manager: mgr}
+	f.currentWritable.Store(true)
+	ptr := testCurrentWritableRecordPtr(64)
+	f.noteVerifiedFileSize(int64(ptr.Offset + uint64(page.ValuePtrRecordLength(ptr))))
+	var calls int
+	mgr.SetCurrentWritableReadBarrierWithSize(func(fileID uint32) (int64, error) {
+		calls++
+		return -1, nil
+	})
+
+	if err := f.ensureCurrentWritableReadableFor(ptr); err != nil {
+		t.Fatalf("ensureCurrentWritableReadableFor: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("barrier calls=%d want 0 for verified readable record", calls)
+	}
+}
+
+func TestManagerCurrentWritableReadBarrierUsedForUnverifiedRecord(t *testing.T) {
+	mgr := &Manager{}
+	f := &File{ID: 9, manager: mgr}
+	f.currentWritable.Store(true)
+	ptr := testCurrentWritableRecordPtr(64)
+	f.noteVerifiedFileSize(int64(ptr.Offset + uint64(page.ValuePtrRecordLength(ptr)) - 1))
+	var calls int
+	mgr.SetCurrentWritableReadBarrierWithSize(func(fileID uint32) (int64, error) {
+		if fileID != f.ID {
+			t.Fatalf("barrier fileID=%d want %d", fileID, f.ID)
+		}
+		calls++
+		return int64(ptr.Offset + uint64(page.ValuePtrRecordLength(ptr))), nil
+	})
+
+	if err := f.ensureCurrentWritableReadableFor(ptr); err != nil {
+		t.Fatalf("ensureCurrentWritableReadableFor: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("barrier calls=%d want 1 for unverified record", calls)
+	}
+}
+
+func testCurrentWritableRecordPtr(payloadLen uint32) page.ValuePtr {
+	return page.ValuePtr{
+		Offset: valueLogRecordCRCPrefixBytes,
+		Length: uint32(headerWithoutCRC) + payloadLen,
+	}
+}
+
 func TestManagerReadUnsafe_CurrentWritableFallsBackWithoutPersistentMmap(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")
