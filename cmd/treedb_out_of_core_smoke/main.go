@@ -837,9 +837,6 @@ func mongoGatewayResultRow(cfg config, summary mongoGatewaySummary, artifact str
 		format = preferredMongoFormat(cfg.formats)
 	}
 	indexes := summary.SecondaryIndexes
-	if indexes == 0 {
-		indexes = preferredMongoIndexCount(cfg.indexes)
-	}
 	return resultRow{
 		ConfigName:       fmt.Sprintf("treedb_mongo_gateway_%s_%d_indexes", sanitizeName(format), indexes),
 		WorkloadName:     "mongo_gateway_insert",

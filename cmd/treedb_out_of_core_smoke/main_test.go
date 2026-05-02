@@ -156,6 +156,30 @@ func TestMongoGatewayResultRowLabelsOptInWorkload(t *testing.T) {
 	}
 }
 
+func TestMongoGatewayResultRowPreservesZeroIndexShape(t *testing.T) {
+	cfg := testConfig()
+	summary := mongoGatewaySummary{
+		Target:               "treedb",
+		Documents:            100,
+		BatchSize:            25,
+		SecondaryIndexes:     0,
+		TreeDBDocumentFormat: "bson",
+		Phases: []mongoGatewayPhase{{
+			Name:         "load_insert_many",
+			Operations:   100,
+			OpsPerSecond: 5000,
+		}},
+		TreeDBDiskAfterCheckpoint: &mongoGatewayDiskUsage{TotalBytes: 6400},
+		TreeDBStatsFinal: map[string]string{
+			"treedb.vlog.mmap_read.hits": "3",
+		},
+	}
+	row := mongoGatewayResultRow(cfg, summary, "/tmp/mongo.json")
+	if row.IndexCount != 0 || row.ConfigName != "treedb_mongo_gateway_bson_0_indexes" {
+		t.Fatalf("row index shape = %d/%s, want 0-index config", row.IndexCount, row.ConfigName)
+	}
+}
+
 func TestRawDiskUsageForPhasePrefersPhaseSnapshot(t *testing.T) {
 	summary := rawWorkerSummary{
 		DiskUsageFinal: diskUsage{TotalBytes: 300},
