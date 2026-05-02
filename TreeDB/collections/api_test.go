@@ -5012,12 +5012,12 @@ func TestCollectionLockAndValidateInsertBatchPlanAllowsDisjointRootDrift(t *test
 	}
 
 	mutationLocked := false
-	unlockMutation := func() {}
+	var unlockMutation collectionMutationUnlock
 	pin, currentCatalog, _, _, err := col.lockAndValidateInsertBatchPlan(&mutationLocked, &unlockMutation, nil, catalog, meta, rootNames, baseRootIDs, plan)
 	if err != nil {
 		t.Fatalf("validate disjoint root drift: %v", err)
 	}
-	defer unlockMutation()
+	defer unlockMutation.Unlock()
 	defer func() { _ = pin.Close() }()
 	currentPrimaryRoot := currentCatalog.rootID(collectionPrimaryRootName("users"))
 	if currentPrimaryRoot == oldPrimaryRoot {
@@ -7081,6 +7081,20 @@ func BenchmarkSnapshotUpdateBatchBufferedReadPrimaryRunIndexPendingUnits(b *test
 		if blocked || needPrimaryRunIndex || !read.enabled || len(read.primaryEntries) != 1 || !read.primaryEntries[0].found {
 			b.Fatalf("unexpected read enabled=%v entries=%d blocked=%v needPrimaryRunIndex=%v", read.enabled, len(read.primaryEntries), blocked, needPrimaryRunIndex)
 		}
+	}
+}
+
+func TestLockCollectionDomainMutationDoesNotAllocate(t *testing.T) {
+	domain := &collectionWriteDomain{}
+	allocs := testing.AllocsPerRun(1000, func() {
+		unlock := lockCollectionDomainMutation(domain)
+		unlock.Unlock()
+	})
+	if allocs != 0 {
+		t.Fatalf("lockCollectionDomainMutation allocations/run=%0.1f want 0", allocs)
+	}
+	if got := domain.mutationLockCalls.Load(); got == 0 {
+		t.Fatal("mutation lock stats were not recorded")
 	}
 }
 

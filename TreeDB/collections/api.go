@@ -1357,7 +1357,7 @@ func flushCollectionWriteDomain(db *backenddb.DB, domain *collectionWriteDomain)
 	}
 	collection := &Collection{db: db, writeDomain: domain}
 	unlockMutation := lockCollectionDomainMutation(domain)
-	defer unlockMutation()
+	defer unlockMutation.Unlock()
 	domain.waitIndexedAsyncFlush()
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
@@ -1402,26 +1402,37 @@ func (c *Collection) scheduleIndexedAsyncFlush(domain *collectionWriteDomain) bo
 	return true
 }
 
-func (c *Collection) lockMutation() func() {
+func (c *Collection) lockMutation() collectionMutationUnlock {
 	if c == nil || c.writeDomain == nil {
-		return func() {}
+		return collectionMutationUnlock{}
 	}
 	return lockCollectionDomainMutation(c.writeDomain)
 }
 
-func lockCollectionDomainMutation(domain *collectionWriteDomain) func() {
+type collectionMutationUnlock struct {
+	domain    *collectionWriteDomain
+	holdStart time.Time
+	wait      time.Duration
+}
+
+func lockCollectionDomainMutation(domain *collectionWriteDomain) collectionMutationUnlock {
 	if domain == nil {
-		return func() {}
+		return collectionMutationUnlock{}
 	}
 	lockStart := time.Now()
 	domain.mutationMu.Lock()
 	holdStart := time.Now()
 	wait := holdStart.Sub(lockStart)
-	return func() {
-		hold := time.Since(holdStart)
-		domain.mutationMu.Unlock()
-		domain.observeMutationLock(wait, hold)
+	return collectionMutationUnlock{domain: domain, holdStart: holdStart, wait: wait}
+}
+
+func (unlock collectionMutationUnlock) Unlock() {
+	if unlock.domain == nil {
+		return
 	}
+	hold := time.Since(unlock.holdStart)
+	unlock.domain.mutationMu.Unlock()
+	unlock.domain.observeMutationLock(unlock.wait, hold)
 }
 
 func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionMeta, error) {
@@ -1659,7 +1670,7 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 		return nil, errCollectionDBNil
 	}
 	unlockMutation := c.lockMutation()
-	defer unlockMutation()
+	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWrites(); err != nil {
 		return nil, err
 	}
@@ -1780,7 +1791,7 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 		return nil, errCollectionDBNil
 	}
 	unlockMutation := c.lockMutation()
-	defer unlockMutation()
+	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWrites(); err != nil {
 		return nil, err
 	}
@@ -1889,7 +1900,7 @@ func (c *Collection) Flush() error {
 	}
 	if c.writeDomain != nil {
 		unlockMutation := c.lockMutation()
-		defer unlockMutation()
+		defer unlockMutation.Unlock()
 		c.writeDomain.waitIndexedAsyncFlush()
 		return c.flushBufferedWrites()
 	}
@@ -4407,7 +4418,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 	mutationLocked := true
 	unlockIfLocked := func() {
 		if mutationLocked {
-			unlockMutation()
+			unlockMutation.Unlock()
 			mutationLocked = false
 		}
 	}
@@ -4645,7 +4656,7 @@ type insertBatchValidationContext struct {
 
 func (c *Collection) lockAndValidateInsertBatchPlan(
 	mutationLocked *bool,
-	unlockMutation *func(),
+	unlockMutation *collectionMutationUnlock,
 	snap *backenddb.Snapshot,
 	catalog *collectionCatalog,
 	meta CollectionMeta,
@@ -4887,7 +4898,7 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 		return false, errors.New("collections: document id cannot be empty")
 	}
 	unlockMutation := c.lockMutation()
-	defer unlockMutation()
+	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWrites(); err != nil {
 		return false, err
 	}
@@ -5085,7 +5096,7 @@ func validateCollectionUpdateInput(c *Collection, documentID []byte, update func
 
 func (c *Collection) updateDirect(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
 	unlockMutation := c.lockMutation()
-	defer unlockMutation()
+	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWrites(); err != nil {
 		return false, false, err
 	}
@@ -6516,7 +6527,7 @@ func (c *Collection) bufferedUpdateBatchPlanStillCurrent(plan *updateBatchPlan) 
 
 func (c *Collection) withMutationLock(fn func() error) error {
 	unlockMutation := c.lockMutation()
-	defer unlockMutation()
+	defer unlockMutation.Unlock()
 	return fn()
 }
 
