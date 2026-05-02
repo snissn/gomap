@@ -3662,6 +3662,10 @@ type valueLogReadBarrierSetter interface {
 	SetCurrentValueLogReadBarrier(func(fileID uint32) error)
 }
 
+type valueLogReadBarrierWithSizeSetter interface {
+	SetCurrentValueLogReadBarrierWithSize(func(fileID uint32) (int64, error))
+}
+
 func backendValueLogReadBarrierKey(backend any) uintptr {
 	if backend == nil {
 		return 0
@@ -3745,14 +3749,16 @@ func snapshotBackendValueLogReadBarrierDBs(key uintptr) []*DB {
 	return dbs
 }
 
-func dispatchBackendValueLogReadBarrier(key uintptr, fileID uint32) error {
+func dispatchBackendValueLogReadBarrierWithSize(key uintptr, fileID uint32) (int64, error) {
 	dbs := snapshotBackendValueLogReadBarrierDBs(key)
 	if len(dbs) == 0 {
-		return nil
+		return -1, nil
 	}
 	laneID, seq := valuelog.DecodeFileID(fileID)
 	var firstErr error
 	flushedAny := false
+	size := int64(-1)
+	sizeSafe := len(dbs) == 1
 	for _, db := range dbs {
 		if db == nil || db.closing.Load() {
 			continue
@@ -3768,7 +3774,8 @@ func dispatchBackendValueLogReadBarrier(key uintptr, fileID uint32) error {
 		if l.backendReadDirtySeq.Load() == l.backendReadFlushedSeq.Load() {
 			continue
 		}
-		if err := db.flushValueLogLane(l); err != nil {
+		flushedSize, err := db.flushValueLogLaneWithSize(l)
+		if err != nil {
 			if errors.Is(err, errWALUnavailable) {
 				continue
 			}
@@ -3777,16 +3784,43 @@ func dispatchBackendValueLogReadBarrier(key uintptr, fileID uint32) error {
 			}
 			continue
 		}
+		if sizeSafe {
+			size = flushedSize
+		}
 		flushedAny = true
 	}
 	if flushedAny {
-		return nil
+		return size, nil
 	}
-	return firstErr
+	return -1, firstErr
+}
+
+func dispatchBackendValueLogReadBarrier(key uintptr, fileID uint32) error {
+	_, err := dispatchBackendValueLogReadBarrierWithSize(key, fileID)
+	return err
 }
 
 func (db *DB) installBackendValueLogReadBarrier() {
 	if db == nil {
+		return
+	}
+	if barrierSetter, ok := db.backend.(valueLogReadBarrierWithSizeSetter); ok {
+		key := backendValueLogReadBarrierKey(db.backend)
+		if key == 0 {
+			barrierSetter.SetCurrentValueLogReadBarrierWithSize(func(fileID uint32) (int64, error) {
+				laneID, _ := valuelog.DecodeFileID(fileID)
+				l := db.valueLogLaneByID(int(laneID))
+				if l == nil {
+					return -1, nil
+				}
+				return db.flushValueLogLaneWithSize(l)
+			})
+			return
+		}
+		registerBackendValueLogReadBarrierDB(key, db)
+		barrierSetter.SetCurrentValueLogReadBarrierWithSize(func(fileID uint32) (int64, error) {
+			return dispatchBackendValueLogReadBarrierWithSize(key, fileID)
+		})
 		return
 	}
 	barrierSetter, ok := db.backend.(valueLogReadBarrierSetter)
@@ -3813,6 +3847,17 @@ func (db *DB) installBackendValueLogReadBarrier() {
 
 func (db *DB) clearBackendValueLogReadBarrier() {
 	if db == nil {
+		return
+	}
+	if barrierSetter, ok := db.backend.(valueLogReadBarrierWithSizeSetter); ok {
+		key := backendValueLogReadBarrierKey(db.backend)
+		if key == 0 {
+			barrierSetter.SetCurrentValueLogReadBarrierWithSize(nil)
+			return
+		}
+		if remaining := unregisterBackendValueLogReadBarrierDB(key, db); remaining == 0 {
+			barrierSetter.SetCurrentValueLogReadBarrierWithSize(nil)
+		}
 		return
 	}
 	barrierSetter, ok := db.backend.(valueLogReadBarrierSetter)
@@ -3859,8 +3904,13 @@ func (db *DB) syncValueLog(laneIDs ...int) error {
 }
 
 func (db *DB) flushValueLogLane(l *lane) error {
+	_, err := db.flushValueLogLaneWithSize(l)
+	return err
+}
+
+func (db *DB) flushValueLogLaneWithSize(l *lane) (int64, error) {
 	if l == nil {
-		return errWALUnavailable
+		return -1, errWALUnavailable
 	}
 	if db.splitValueLogEnabled() {
 		waitStart := time.Now()
@@ -3869,13 +3919,14 @@ func (db *DB) flushValueLogLane(l *lane) error {
 		w := l.vlog
 		if w == nil {
 			l.vlogMu.Unlock()
-			return errWALUnavailable
+			return -1, errWALUnavailable
 		}
 		// Always take vlogMu first so flush acts as a write barrier for in-flight appends.
 		if !l.vlogDirty.Load() {
 			if pending, ok := w.(interface{ PendingBytes() int }); !ok || pending.PendingBytes() == 0 {
+				size := w.Size()
 				l.vlogMu.Unlock()
-				return nil
+				return size, nil
 			}
 		}
 		start := time.Now()
@@ -3891,8 +3942,12 @@ func (db *DB) flushValueLogLane(l *lane) error {
 			}
 			l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
 		}
+		size := int64(-1)
+		if err == nil {
+			size = w.Size()
+		}
 		l.vlogMu.Unlock()
-		return err
+		return size, err
 	}
 	waitStart := time.Now()
 	l.walMu.Lock()
@@ -3900,7 +3955,7 @@ func (db *DB) flushValueLogLane(l *lane) error {
 	w := l.wal
 	if w == nil {
 		l.walMu.Unlock()
-		return errWALUnavailable
+		return -1, errWALUnavailable
 	}
 	start := time.Now()
 	err := w.Flush()
@@ -3911,8 +3966,12 @@ func (db *DB) flushValueLogLane(l *lane) error {
 	if err == nil {
 		l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
 	}
+	size := int64(-1)
+	if err == nil {
+		size = w.Size()
+	}
 	l.walMu.Unlock()
-	return err
+	return size, err
 }
 
 func (db *DB) syncValueLogLane(l *lane) error {

@@ -108,6 +108,25 @@ func TestFlushValueLogLane_WaitsForBarrierBeforeDirtyCheck(t *testing.T) {
 	}
 }
 
+func TestFlushValueLogLaneWithSize_ReturnsFlushedWriterSize(t *testing.T) {
+	db := &DB{closeCh: make(chan struct{}), splitValueLog: true}
+	l := &lane{id: 0}
+	w := &vlogDirtyOrderWriter{size: 4096}
+	l.vlog = w
+	l.vlogDirty.Store(true)
+
+	size, err := db.flushValueLogLaneWithSize(l)
+	if err != nil {
+		t.Fatalf("flushValueLogLaneWithSize: %v", err)
+	}
+	if size != 4096 {
+		t.Fatalf("flushed size=%d want 4096", size)
+	}
+	if got := w.flushes.Load(); got != 1 {
+		t.Fatalf("flushes=%d want 1", got)
+	}
+}
+
 func TestAppendValueLog_SetsDirtyBeforeUnlock(t *testing.T) {
 	db := &DB{closeCh: make(chan struct{}), splitValueLog: true}
 	l := &lane{id: 0}

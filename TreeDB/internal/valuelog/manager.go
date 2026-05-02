@@ -1159,23 +1159,36 @@ func (m *Manager) SetDisableReadChecksum(disable bool) {
 // to flush the owning writer so backend-internal tree reads do not observe EOF
 // from still-buffered grouped records.
 func (m *Manager) SetCurrentWritableReadBarrier(fn func(fileID uint32) error) {
+	if fn == nil {
+		m.SetCurrentWritableReadBarrierWithSize(nil)
+		return
+	}
+	m.SetCurrentWritableReadBarrierWithSize(func(fileID uint32) (int64, error) {
+		return -1, fn(fileID)
+	})
+}
+
+// SetCurrentWritableReadBarrierWithSize is like SetCurrentWritableReadBarrier,
+// but lets the callback return the current on-disk size after its flush barrier.
+// A positive size is used as a file-size hint for current-writable mmap reads.
+func (m *Manager) SetCurrentWritableReadBarrierWithSize(fn func(fileID uint32) (int64, error)) {
 	if m == nil {
 		return
 	}
 	if fn == nil {
-		var cleared func(fileID uint32) error
+		var cleared func(fileID uint32) (int64, error)
 		m.currentWritableReadBarrier.Store(cleared)
 		return
 	}
 	m.currentWritableReadBarrier.Store(fn)
 }
 
-func (m *Manager) currentWritableBarrier() func(uint32) error {
+func (m *Manager) currentWritableBarrier() func(uint32) (int64, error) {
 	if m == nil {
 		return nil
 	}
 	if v := m.currentWritableReadBarrier.Load(); v != nil {
-		if fn, ok := v.(func(uint32) error); ok {
+		if fn, ok := v.(func(uint32) (int64, error)); ok {
 			return fn
 		}
 	}
@@ -1187,7 +1200,13 @@ func (f *File) ensureCurrentWritableReadable() error {
 		return nil
 	}
 	if barrier := f.manager.currentWritableBarrier(); barrier != nil {
-		return barrier(f.ID)
+		size, err := barrier(f.ID)
+		if err != nil {
+			return err
+		}
+		if size > 0 {
+			f.fileSize.Store(size)
+		}
 	}
 	return nil
 }
