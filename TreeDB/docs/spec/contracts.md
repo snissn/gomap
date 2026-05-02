@@ -152,8 +152,9 @@ overlay state, or other translation-only hooks.
 Indexed collection writes use collection-local write memtables by default.
 Pending indexed writes are visible through the owning collection manager before
 they are published to persisted roots. Primary reads, secondary index lookups,
-unique checks, and update/delete planning must merge publishing units, queued
-flush units, mutable runs, and persisted roots in newest-wins order.
+unique checks, and update/delete planning must merge write-domain state with
+explicit newest-to-oldest precedence: current mutable runs, queued immutable
+flush units, in-flight async publishing units, then persisted roots.
 
 `BufferedIndexedAsyncFlush` is a throughput feature, not a durable-at-ack
 mutation log. The current contract is flush-boundary durable: callers may treat

@@ -26,11 +26,12 @@ escape hatch. It is not the production-mainline path.
 Pending indexed writes are visible through the collection manager that owns the
 write domain.
 
-Reads and checks MUST merge these layers in newest-wins order:
+Reads and checks MUST merge these layers with the following newest-to-oldest
+precedence:
 
-1. in-flight async publishing units,
+1. current mutable indexed runs,
 2. queued immutable indexed flush units,
-3. current mutable indexed runs,
+3. in-flight async publishing units,
 4. persisted backend roots from the current collection catalog.
 
 This applies to:
@@ -107,4 +108,3 @@ backend closes.
 
 After successful close and reopen, collection primary and secondary indexes MUST
 reflect all writes that were visible before close returned.
-
