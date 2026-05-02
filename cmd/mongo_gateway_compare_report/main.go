@@ -780,9 +780,32 @@ func renderConcurrentReadSweepTable(b *strings.Builder, cells []cellComparison) 
 
 func concurrentReadSweepComparisons(cells []cellComparison) []phaseComparison {
 	var out []phaseComparison
-	for _, cmp := range allPhaseComparisons(cells) {
-		if _, ok := concurrentReadReaders(cmp.Name); ok {
-			out = append(out, cmp)
+	for _, cell := range cells {
+		if !cellHasConcurrentReadSweep(cell) {
+			continue
+		}
+		var mongoPhases []phaseResult
+		mongoPhaseMap := map[string]phaseResult{}
+		if cell.Mongo != nil {
+			mongoPhases = cell.Mongo.Result.Phases
+			mongoPhaseMap = cell.Mongo.PhaseMap
+		}
+		for _, name := range phaseNames(cell.TreeDB.Result.Phases, mongoPhases) {
+			if _, ok := concurrentReadReaders(name); !ok {
+				continue
+			}
+			treePhase, hasTree := cell.TreeDB.PhaseMap[name]
+			mongoPhase, hasMongo := mongoPhaseMap[name]
+			out = append(out, phaseComparison{
+				Cell:        cell.Key,
+				Name:        name,
+				RangeIndex:  cell.TreeDB.Result.RangeIndex,
+				TreeDBPhase: treePhase,
+				MongoPhase:  mongoPhase,
+				HasTreeDB:   hasTree,
+				HasMongo:    hasMongo,
+				Ratio:       safeRatio(treePhase.OpsPerSecond, mongoPhase.OpsPerSecond),
+			})
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -801,6 +824,29 @@ func concurrentReadSweepComparisons(cells []cellComparison) []phaseComparison {
 		return leftReaders < rightReaders
 	})
 	return out
+}
+
+func cellHasConcurrentReadSweep(cell cellComparison) bool {
+	if len(cell.TreeDB.Result.ConcurrentReaderSweep) > 0 {
+		return true
+	}
+	if cell.Mongo != nil && len(cell.Mongo.Result.ConcurrentReaderSweep) > 0 {
+		return true
+	}
+	readers := make(map[int]struct{})
+	for _, phase := range cell.TreeDB.Result.Phases {
+		if readerCount, ok := concurrentReadReaders(phase.Name); ok {
+			readers[readerCount] = struct{}{}
+		}
+	}
+	if cell.Mongo != nil {
+		for _, phase := range cell.Mongo.Result.Phases {
+			if readerCount, ok := concurrentReadReaders(phase.Name); ok {
+				readers[readerCount] = struct{}{}
+			}
+		}
+	}
+	return len(readers) > 1
 }
 
 func concurrentReadReaders(name string) (int, bool) {

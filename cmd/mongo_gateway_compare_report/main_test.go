@@ -251,6 +251,31 @@ func TestReportGroupsConcurrentReadSweepRows(t *testing.T) {
 	}
 }
 
+func TestReportDoesNotGroupLegacySingleConcurrentReadPhase(t *testing.T) {
+	phase := phaseResult{Name: "concurrent_id_find_one_r8", OpsPerSecond: 8000}
+	cells := []cellComparison{{
+		Key: cellKey{Documents: 100, SecondaryIndexes: 0, TreeDBConfig: "treedb_legacy"},
+		TreeDB: &runRecord{
+			Row:      matrixRow{Target: "treedb", Config: "treedb_legacy", Documents: 100, RawJSON: "treedb.json"},
+			Result:   benchmarkResult{Target: "treedb", Documents: 100, Phases: []phaseResult{phase}},
+			PhaseMap: phaseMap([]phaseResult{phase}),
+		},
+		Mongo: &runRecord{
+			Row:      matrixRow{Target: "mongo", Config: "mongo", Documents: 100, RawJSON: "mongo.json"},
+			Result:   benchmarkResult{Target: "mongo", Documents: 100, Phases: []phaseResult{phase}},
+			PhaseMap: phaseMap([]phaseResult{phase}),
+		},
+	}}
+
+	report := renderReport(config{Title: "test", MatrixPath: "matrix.tsv"}, cells, time.Unix(0, 0).UTC())
+	if strings.Contains(report, "## Concurrent Read Sweep") {
+		t.Fatalf("legacy single concurrent-read phase should not render sweep section:\n%s", report)
+	}
+	if !strings.Contains(report, "`concurrent_id_find_one_r8`") {
+		t.Fatalf("legacy single concurrent-read phase should remain in ops summary:\n%s", report)
+	}
+}
+
 func TestReportRejectsIncompleteCell(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "treedb.json"), `{
