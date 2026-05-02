@@ -3102,19 +3102,25 @@ func addBufferedPrimaryRunIndexEntries(index *bufferedPrimaryRunIndex, batchPrim
 	if stable, ok := batchPrimary.(memtable.StableUnsafeIteratorTable); ok {
 		stableKeys = stable.StableUnsafeIteratorSlices()
 	}
+	it := batchPrimary.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	if stableKeys {
+		for it.Valid() {
+			key := it.UnsafeKey()
+			index.addRef(xxhash.Sum64(key), bufferedPrimaryRunRef{key: key, table: batchPrimary})
+			it.Next()
+		}
+		return it.Error()
+	}
 	arena := make([]byte, 0, bufferedPrimaryIDArenaCap(batchPrimary.Len()))
 	refs := make([]bufferedPrimaryRunRef, 0, batchPrimary.Len())
 	hashes := make([]uint64, 0, batchPrimary.Len())
-	it := batchPrimary.NewIterator(nil, nil)
-	defer func() { _ = it.Close() }()
 	for it.Valid() {
 		key := it.UnsafeKey()
 		refKey := key
-		if !stableKeys {
-			start := len(arena)
-			arena = append(arena, key...)
-			refKey = arena[start:len(arena)]
-		}
+		start := len(arena)
+		arena = append(arena, key...)
+		refKey = arena[start:len(arena)]
 		hashes = append(hashes, xxhash.Sum64(key))
 		refs = append(refs, bufferedPrimaryRunRef{key: refKey, table: batchPrimary})
 		it.Next()
