@@ -1054,14 +1054,18 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 		if !errors.Is(err, collections.ErrCollectionNotFound) {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
-		if _, err := s.Collections.CreateCollection(s.defaultCollectionMeta(name)); err != nil {
-			return commandError(commandCodeBadValue, "BadValue", err.Error())
-		}
-		createdAutomatically = true
-		col, err = s.Collections.OpenCollection(name)
+		meta := s.defaultCollectionMeta(name)
+		meta.Indexes = append([]collections.IndexDefinition(nil), defs...)
+		created, err := s.Collections.CreateCollection(meta)
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
+		return marshalDocument(bson.D{
+			{Key: "ok", Value: 1.0},
+			{Key: "createdCollectionAutomatically", Value: true},
+			{Key: "numIndexesBefore", Value: int32(1)},
+			{Key: "numIndexesAfter", Value: int32(1 + len(created.Indexes))},
+		})
 	}
 	numBefore := int32(1 + len(col.Meta().Indexes))
 	meta := col.Meta()

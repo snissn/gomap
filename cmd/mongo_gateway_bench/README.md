@@ -92,6 +92,8 @@ collection benchmark profile:
 - `-treedb-data-root-storage compressed`
 - `-treedb-index-state-root-storage compressed`
 - `-treedb-index-root-storage compressed`
+- `-treedb-buffered-indexed-write-max-documents 64000`
+- `-treedb-buffered-indexed-write-max-root-runs 4096`
 - `-treedb-maintenance full`
 - `-client-mode driver`
 
@@ -108,6 +110,11 @@ metric, or `none` to skip final TreeDB disk reporting.
 `-treedb-document-format` accepts `json`, `template-v1`, and `bson`. BSON mode
 stores Mongo wire documents as native BSON collection records, avoiding the
 canonical Extended JSON bridge used by the JSON/template-v1 gateway paths.
+Use `-treedb-buffered-indexed-write-max-documents`,
+`-treedb-buffered-indexed-write-max-bytes`, and
+`-treedb-buffered-indexed-write-max-root-runs` to reproduce indexed write-domain
+auto-flush threshold experiments. Setting a threshold to `0` disables that
+specific trigger.
 
 ## MongoDB Target
 

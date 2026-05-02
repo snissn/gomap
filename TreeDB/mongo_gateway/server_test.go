@@ -3173,9 +3173,11 @@ func TestServerAppliesDefaultCollectionAndIndexOptions(t *testing.T) {
 	server := NewServer()
 	server.Collections = collections.NewCollectionManager(db)
 	server.DefaultCollectionOptions = collections.CollectionOptions{
-		DocumentFormat:          collections.DocumentFormatTemplateV1,
-		DataRootStoragePolicy:   collections.RootStorageCompressed,
-		IndexStateStoragePolicy: collections.RootStorageCompressed,
+		DocumentFormat:                   collections.DocumentFormatTemplateV1,
+		DataRootStoragePolicy:            collections.RootStorageCompressed,
+		IndexStateStoragePolicy:          collections.RootStorageCompressed,
+		BufferedIndexedWriteMaxDocuments: 1234,
+		BufferedIndexedWriteMaxRootRuns:  90,
 	}
 	server.DefaultIndexStoragePolicy = collections.RootStorageCompressed
 
@@ -3221,6 +3223,12 @@ func TestServerAppliesDefaultCollectionAndIndexOptions(t *testing.T) {
 	indexedMeta := indexed.Meta()
 	if indexedMeta.Options.DocumentFormat != collections.DocumentFormatTemplateV1 {
 		t.Fatalf("auto-created document format=%q want %q", indexedMeta.Options.DocumentFormat, collections.DocumentFormatTemplateV1)
+	}
+	if indexedMeta.Options.BufferedIndexedWriteMaxDocuments != 1234 {
+		t.Fatalf("auto-created buffered indexed max documents=%d want 1234", indexedMeta.Options.BufferedIndexedWriteMaxDocuments)
+	}
+	if indexedMeta.Options.BufferedIndexedWriteMaxRootRuns != 90 {
+		t.Fatalf("auto-created buffered indexed max root runs=%d want 90", indexedMeta.Options.BufferedIndexedWriteMaxRootRuns)
 	}
 	def, ok := findIndexDefinition(indexedMeta.Indexes, "email_1")
 	if !ok {

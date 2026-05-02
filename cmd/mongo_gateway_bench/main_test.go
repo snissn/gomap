@@ -432,6 +432,15 @@ func TestParseConfigValidation(t *testing.T) {
 	if _, err := parseConfig([]string{"-secondary-indexes", "1", "-update-indexed-field"}); err == nil {
 		t.Fatal("update-indexed-field accepted without city index")
 	}
+	if _, err := parseConfig([]string{"-treedb-buffered-indexed-write-max-documents", "-1"}); err == nil {
+		t.Fatal("negative treedb buffered indexed max documents accepted")
+	}
+	if _, err := parseConfig([]string{"-treedb-buffered-indexed-write-max-bytes", "-1"}); err == nil {
+		t.Fatal("negative treedb buffered indexed max bytes accepted")
+	}
+	if _, err := parseConfig([]string{"-treedb-buffered-indexed-write-max-root-runs", "-1"}); err == nil {
+		t.Fatal("negative treedb buffered indexed max root runs accepted")
+	}
 }
 
 func TestRawInsertCommandBuildsBSONCommand(t *testing.T) {
@@ -493,8 +502,37 @@ func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
 	if cfg.TreeDBMaintenance != treeDBMaintenanceFull {
 		t.Fatalf("TreeDBMaintenance=%q want %q", cfg.TreeDBMaintenance, treeDBMaintenanceFull)
 	}
+	if cfg.TreeDBBufferedIndexedWriteMaxDocuments != collections.DefaultIndexedWriteMemtableMaxDocuments {
+		t.Fatalf("TreeDBBufferedIndexedWriteMaxDocuments=%d want %d", cfg.TreeDBBufferedIndexedWriteMaxDocuments, collections.DefaultIndexedWriteMemtableMaxDocuments)
+	}
+	if cfg.TreeDBBufferedIndexedWriteMaxBytes != 0 {
+		t.Fatalf("TreeDBBufferedIndexedWriteMaxBytes=%d want 0", cfg.TreeDBBufferedIndexedWriteMaxBytes)
+	}
+	if cfg.TreeDBBufferedIndexedWriteMaxRootRuns != collections.DefaultIndexedWriteMemtableMaxRootRuns {
+		t.Fatalf("TreeDBBufferedIndexedWriteMaxRootRuns=%d want %d", cfg.TreeDBBufferedIndexedWriteMaxRootRuns, collections.DefaultIndexedWriteMemtableMaxRootRuns)
+	}
 	if cfg.InsertProducers != 1 {
 		t.Fatalf("InsertProducers=%d want 1", cfg.InsertProducers)
+	}
+}
+
+func TestParseConfigTreeDBBufferedIndexedWriteThresholds(t *testing.T) {
+	cfg, err := parseConfig([]string{
+		"-treedb-buffered-indexed-write-max-documents", "1234",
+		"-treedb-buffered-indexed-write-max-bytes", "5678",
+		"-treedb-buffered-indexed-write-max-root-runs", "90",
+	})
+	if err != nil {
+		t.Fatalf("parse buffered indexed thresholds: %v", err)
+	}
+	if cfg.TreeDBBufferedIndexedWriteMaxDocuments != 1234 {
+		t.Fatalf("TreeDBBufferedIndexedWriteMaxDocuments=%d want 1234", cfg.TreeDBBufferedIndexedWriteMaxDocuments)
+	}
+	if cfg.TreeDBBufferedIndexedWriteMaxBytes != 5678 {
+		t.Fatalf("TreeDBBufferedIndexedWriteMaxBytes=%d want 5678", cfg.TreeDBBufferedIndexedWriteMaxBytes)
+	}
+	if cfg.TreeDBBufferedIndexedWriteMaxRootRuns != 90 {
+		t.Fatalf("TreeDBBufferedIndexedWriteMaxRootRuns=%d want 90", cfg.TreeDBBufferedIndexedWriteMaxRootRuns)
 	}
 }
 
@@ -1444,6 +1482,38 @@ func TestWriteResultIncludesRedactedMongoURI(t *testing.T) {
 	}
 	if !bytes.Contains(out.Bytes(), []byte("mongo_uri=mongodb://user@127.0.0.1:27017")) {
 		t.Fatalf("text output missing mongo_uri: %q", out.String())
+	}
+}
+
+func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
+	result := &benchmarkResult{
+		Target:                                 "treedb",
+		Database:                               "bench",
+		Collection:                             "docs",
+		Documents:                              1,
+		TreeDBProfile:                          "wal_on_fast",
+		TreeDBDocumentFormat:                   "bson",
+		TreeDBDataRootStorage:                  "compressed",
+		TreeDBIndexStateRootStorage:            "compressed",
+		TreeDBIndexRootStorage:                 "compressed",
+		TreeDBBufferedIndexedWriteMaxDocuments: 1234,
+		TreeDBBufferedIndexedWriteMaxBytes:     5678,
+		TreeDBBufferedIndexedWriteMaxRootRuns:  90,
+		TreeDBMaintenanceMode:                  "none",
+	}
+	var out bytes.Buffer
+	if err := writeResult(&out, "text", result); err != nil {
+		t.Fatalf("writeResult: %v", err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"buffered_indexed_max_docs=1234",
+		"buffered_indexed_max_bytes=5678",
+		"buffered_indexed_max_root_runs=90",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("text output missing %s: %q", want, text)
+		}
 	}
 }
 

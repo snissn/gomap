@@ -36,7 +36,7 @@ const (
 	// DefaultIndexedWriteMemtableMaxRootRuns bounds accumulated root-local
 	// mutation runs so many small indexed update batches do not create an
 	// expensive pending-run chain before the document threshold is reached.
-	DefaultIndexedWriteMemtableMaxRootRuns = 256
+	DefaultIndexedWriteMemtableMaxRootRuns = 4096
 	// DefaultIndexedWriteMemtableDirectBatchDocuments keeps large, already
 	// well-amortized InsertBatch calls on the immediate publish path. Smaller
 	// batches use the indexed write-domain memtable path by default.
