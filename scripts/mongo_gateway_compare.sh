@@ -295,6 +295,15 @@ is_nonnegative_int() {
   [[ "$1" =~ ^[0-9]+$ ]]
 }
 
+is_positive_decimal_string() {
+  [[ "$1" =~ ^[0-9]+$ ]] || return 1
+  local value=$1
+  while [[ "$value" == 0* && ${#value} -gt 1 ]]; do
+    value=${value#0}
+  done
+  [[ "$value" != "0" ]]
+}
+
 trim_spaces() {
   local value=$1
   value="${value#"${value%%[![:space:]]*}"}"
@@ -525,7 +534,7 @@ if [[ -n "$CONCURRENT_READER_SWEEP" ]]; then
   normalized_reader_sweep=""
   validated_reader_counts=0
   for reader_count in ${CONCURRENT_READER_SWEEP//,/ }; do
-    if ! is_positive_int "$reader_count"; then
+    if ! is_positive_decimal_string "$reader_count"; then
       echo "invalid CONCURRENT_READER_SWEEP value: $reader_count" >&2
       exit 2
     fi
