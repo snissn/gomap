@@ -7519,7 +7519,13 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		domain.rootRuns = make(map[string][]memtable.Table, len(plan.rootNames))
 	}
 	hasUniqueSecondaryRoots := collectionMetaHasSecondaryUniqueIndex(plan.meta)
-	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, stagedBytes, stagedRootRuns)
+	projectedStagedBytes := stagedBytes
+	for i := range plan.uniqueValueRuns {
+		if table := plan.uniqueValueRuns[i].table; table != nil {
+			projectedStagedBytes = saturatingAddNonNegativeInt64(projectedStagedBytes, table.Size())
+		}
+	}
+	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, projectedStagedBytes, stagedRootRuns)
 	if !shouldAutoFlushAfterAdding && hasUniqueSecondaryRoots && bufferedIndexedAutoFlushEnabled(plan.meta.Options) {
 		for i := range plan.rootNames {
 			if _, ok := updateBatchPlanUniqueSecondaryIndex(plan, i); !ok {
