@@ -5823,15 +5823,20 @@ func TestCollectionUpdateCombinerDocumentIDLongStorageClonesCallerBytes(t *testi
 func TestUpdateBatchBufferedEntryPoolClearsEntries(t *testing.T) {
 	updateBatchBufferedEntryPool = sync.Pool{}
 
-	entries, buffer := getUpdateBatchBufferedEntries(2)
+	entries, buffer := getUpdateBatchBufferedEntries(4)
 	entries[0] = updateBatchBufferedEntry{
 		value: []byte("current"),
 		flags: node.FlagTombstone,
 		found: true,
 	}
-	putUpdateBatchBufferedEntries(entries, buffer)
+	entries[3] = updateBatchBufferedEntry{
+		value: []byte("stale-capacity"),
+		flags: node.FlagTombstone,
+		found: true,
+	}
+	putUpdateBatchBufferedEntries(entries[:2], buffer)
 
-	for i, entry := range entries {
+	for i, entry := range entries[:cap(entries)] {
 		if entry.value != nil || entry.flags != 0 || entry.found {
 			t.Fatalf("pooled entry %d retained data immediately after put: %+v", i, entry)
 		}
