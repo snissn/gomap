@@ -2136,10 +2136,14 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 	if opts.BufferedIndexedAsyncFlush {
 		rotateIndexedMutableToFlushUnitLocked(domain)
 		if opts.BufferedIndexedAsyncFlushMaxQueuedUnits > 0 && len(domain.indexedFlushUnits) >= opts.BufferedIndexedAsyncFlushMaxQueuedUnits {
-			domain.indexedAsyncFlushBackpressure.Add(1)
-			flushStart := time.Now()
-			err := c.flushBufferedIndexedLocked(domain)
-			return time.Since(flushStart), err
+			if len(domain.indexedPublishingUnits) == 0 {
+				domain.indexedAsyncFlushBackpressure.Add(1)
+				flushStart := time.Now()
+				err := c.flushBufferedIndexedLocked(domain)
+				return time.Since(flushStart), err
+			}
+			c.scheduleIndexedAsyncFlush(domain)
+			return 0, nil
 		}
 		if !c.scheduleIndexedAsyncFlush(domain) && len(domain.indexedPublishingUnits) == 0 {
 			flushStart := time.Now()
@@ -3466,8 +3470,9 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	defer domain.mu.Unlock()
 	preservePrimaryRunIndex := domain.primaryRunIndex != nil
 	if publishErr != nil {
-		removeIndexedPublishingUnitsLocked(domain, len(work.units))
-		domain.indexedFlushUnits = append(cloneIndexedFlushUnits(work.units), domain.indexedFlushUnits...)
+		if removed, ok := removeIndexedPublishingWorkUnitsLocked(domain, work.units); ok {
+			domain.indexedFlushUnits = append(removed, domain.indexedFlushUnits...)
+		}
 		rebuildBufferedPendingIndexesLocked(domain, work.meta.Name, preservePrimaryRunIndex)
 		domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, elapsed, publishErr)
 		return publishErr
@@ -3477,7 +3482,12 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 		baseCatalog = work.catalog
 	}
 	nextCatalog := cloneCatalogWithRootUpdates(baseCatalog, work.meta, work.rootNames, rootIDs)
-	oldPublishing := removeIndexedPublishingUnitsLocked(domain, len(work.units))
+	oldPublishing, owned := removeIndexedPublishingWorkUnitsLocked(domain, work.units)
+	if !owned {
+		err := errors.New("collections: async indexed publish lost ownership of in-flight flush units")
+		domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, elapsed, err)
+		return err
+	}
 	domain.loaded = true
 	domain.meta = work.meta
 	domain.catalog = nextCatalog
@@ -3497,6 +3507,9 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 
 func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (err error) {
 	if domain == nil || domain.count == 0 || !hasBufferedIndexedRootRuns(domain) {
+		return nil
+	}
+	if len(domain.indexedPublishingUnits) > 0 {
 		return nil
 	}
 	if domain.catalog == nil {
@@ -3597,8 +3610,6 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	domain.baseCommitSeq = c.commitSeqForSystemRoot(newSystemRoot)
 	domain.baseSystemRoot = newSystemRoot
 	domain.primaryRoot = nextCatalog.rootID(collectionPrimaryRootName(meta.Name))
-	oldPublishingUnits := domain.indexedPublishingUnits
-	domain.indexedPublishingUnits = nil
 	domain.indexedFlushUnits = nil
 	domain.rootRuns = nil
 	domain.rootPolicies = nil
@@ -3615,7 +3626,6 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	domain.mutableBytes = 0
 	c.meta = meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
-	resetIndexedFlushUnits(oldPublishingUnits)
 	resetIndexedFlushUnits(oldUnits)
 	for _, runs := range oldRuns {
 		resetCollectionTables(runs)
@@ -3665,6 +3675,43 @@ func removeIndexedPublishingUnitsLocked(domain *collectionWriteDomain, n int) []
 		domain.indexedPublishingUnits = remaining
 	}
 	return removed
+}
+
+func removeIndexedPublishingWorkUnitsLocked(domain *collectionWriteDomain, units []indexedFlushUnit) ([]indexedFlushUnit, bool) {
+	if len(units) == 0 {
+		return nil, true
+	}
+	if domain == nil || len(domain.indexedPublishingUnits) < len(units) {
+		return nil, false
+	}
+	for i := range units {
+		if !sameIndexedFlushUnitTables(domain.indexedPublishingUnits[i], units[i]) {
+			return nil, false
+		}
+	}
+	return removeIndexedPublishingUnitsLocked(domain, len(units)), true
+}
+
+func sameIndexedFlushUnitTables(a, b indexedFlushUnit) bool {
+	return sameTableRunMap(a.rootRuns, b.rootRuns) && sameTableRunMap(a.uniqueValueRuns, b.uniqueValueRuns)
+}
+
+func sameTableRunMap(a, b map[string][]memtable.Table) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for name, aRuns := range a {
+		bRuns, ok := b[name]
+		if !ok || len(aRuns) != len(bRuns) {
+			return false
+		}
+		for i := range aRuns {
+			if aRuns[i] != bRuns[i] {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func retargetPendingIndexedRootBaseIDsLocked(domain *collectionWriteDomain, rootNames []string, oldBaseIDs map[string]uint64, newRootIDs []uint64) {
@@ -3726,17 +3773,14 @@ func mergedIndexedFlushUnitLocked(domain *collectionWriteDomain) indexedFlushUni
 	if domain == nil {
 		return indexedFlushUnit{}
 	}
-	if len(domain.indexedPublishingUnits) == 0 && len(domain.indexedFlushUnits) == 1 && len(domain.rootRuns) == 0 {
+	if len(domain.indexedFlushUnits) == 1 && len(domain.rootRuns) == 0 {
 		return domain.indexedFlushUnits[0]
 	}
 	unit := indexedFlushUnit{
-		rootRuns:        make(map[string][]memtable.Table, len(domain.rootRuns)+len(domain.indexedPublishingUnits)+len(domain.indexedFlushUnits)),
-		rootPolicies:    make(map[string]backenddb.OrderedRootStoragePolicy, len(domain.rootPolicies)+len(domain.indexedPublishingUnits)+len(domain.indexedFlushUnits)),
-		rootBaseIDs:     make(map[string]uint64, len(domain.rootBaseIDs)+len(domain.indexedPublishingUnits)+len(domain.indexedFlushUnits)),
-		uniqueValueRuns: make(map[string][]memtable.Table, len(domain.uniqueValueRuns)+len(domain.indexedPublishingUnits)+len(domain.indexedFlushUnits)),
-	}
-	for _, pending := range domain.indexedPublishingUnits {
-		mergeIndexedFlushUnit(&unit, pending)
+		rootRuns:        make(map[string][]memtable.Table, len(domain.rootRuns)+len(domain.indexedFlushUnits)),
+		rootPolicies:    make(map[string]backenddb.OrderedRootStoragePolicy, len(domain.rootPolicies)+len(domain.indexedFlushUnits)),
+		rootBaseIDs:     make(map[string]uint64, len(domain.rootBaseIDs)+len(domain.indexedFlushUnits)),
+		uniqueValueRuns: make(map[string][]memtable.Table, len(domain.uniqueValueRuns)+len(domain.indexedFlushUnits)),
 	}
 	for _, pending := range domain.indexedFlushUnits {
 		mergeIndexedFlushUnit(&unit, pending)

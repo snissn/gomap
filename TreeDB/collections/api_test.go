@@ -3063,6 +3063,59 @@ func TestCollectionIndexedWriteMemtablesAsyncPublishingUnitsParticipateInReadsAn
 	}
 }
 
+func TestCollectionIndexedWriteMemtablesSyncFlushSkipsPublishingUnits(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        1024,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare async publish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepare async publish returned nil work")
+	}
+	col.writeDomain.mu.Lock()
+	err = col.flushBufferedIndexedLocked(col.writeDomain)
+	col.writeDomain.mu.Unlock()
+	if err != nil {
+		t.Fatalf("foreground flush while publish is in-flight: %v", err)
+	}
+	if got := mgr.StatsSnapshot().PendingIndexedFlushUnits; got != 1 {
+		t.Fatalf("pending publishing units after skipped foreground flush=%d want 1", got)
+	}
+	if err := col.publishPreparedIndexedFlush(work); err != nil {
+		t.Fatalf("publish prepared async flush: %v", err)
+	}
+	if got := mgr.StatsSnapshot().PendingDocuments; got != 0 {
+		t.Fatalf("pending docs after async publish=%d want 0", got)
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesAsyncPublishRetargetsMutableRuns(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})
