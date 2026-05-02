@@ -89,11 +89,23 @@ func TestProfileBenchUpdateIDStrideCoversDocumentSet(t *testing.T) {
 func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS", "")
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_DOCUMENTS", "")
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_BYTES", "")
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_ROOT_RUNS", "")
 	if profileBenchBufferedIndexedAsyncFlush(t) {
 		t.Fatal("async flush default=true want false")
 	}
 	if got := profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(t); got != 0 {
 		t.Fatalf("async max queued units default=%d want 0", got)
+	}
+	if got := profileBenchBufferedIndexedWriteMaxDocuments(t); got != 0 {
+		t.Fatalf("buffered max docs default=%d want 0", got)
+	}
+	if got := profileBenchBufferedIndexedWriteMaxBytes(t); got != 0 {
+		t.Fatalf("buffered max bytes default=%d want 0", got)
+	}
+	if got := profileBenchBufferedIndexedWriteMaxRootRuns(t); got != 0 {
+		t.Fatalf("buffered max root runs default=%d want 0", got)
 	}
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH", "true")
 	if !profileBenchBufferedIndexedAsyncFlush(t) {
@@ -102,6 +114,18 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS", "6")
 	if got := profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(t); got != 6 {
 		t.Fatalf("async max queued units=%d want 6", got)
+	}
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_DOCUMENTS", "123")
+	if got := profileBenchBufferedIndexedWriteMaxDocuments(t); got != 123 {
+		t.Fatalf("buffered max docs=%d want 123", got)
+	}
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_BYTES", "1099511627776")
+	if got := profileBenchBufferedIndexedWriteMaxBytes(t); got != 1099511627776 {
+		t.Fatalf("buffered max bytes=%d want 1099511627776", got)
+	}
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_ROOT_RUNS", "789")
+	if got := profileBenchBufferedIndexedWriteMaxRootRuns(t); got != 789 {
+		t.Fatalf("buffered max root runs=%d want 789", got)
 	}
 }
 
@@ -179,14 +203,8 @@ func BenchmarkTreeDBGatewayRawWireLoadBSONIndexes2(b *testing.B) {
 	}()
 	manager := collections.NewCollectionManager(backend)
 	if _, err := manager.CreateCollection(&collections.CollectionMeta{
-		Name: "bench.docs",
-		Options: collections.CollectionOptions{
-			DocumentFormat:                          collections.DocumentFormatBSON,
-			DataRootStoragePolicy:                   collections.RootStorageCompressed,
-			IndexStateStoragePolicy:                 collections.RootStorageCompressed,
-			BufferedIndexedAsyncFlush:               profileBenchBufferedIndexedAsyncFlush(b),
-			BufferedIndexedAsyncFlushMaxQueuedUnits: profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(b),
-		},
+		Name:    "bench.docs",
+		Options: profileBenchCollectionOptions(b, collections.DocumentFormatBSON),
 	}); err != nil {
 		b.Fatalf("create collection: %v", err)
 	}
@@ -214,13 +232,7 @@ func BenchmarkTreeDBGatewayRawWireLoadBSONIndexes2(b *testing.B) {
 	server := mongogateway.NewServer()
 	server.Collections = manager
 	server.MaxFindScanDocuments = b.N
-	server.DefaultCollectionOptions = collections.CollectionOptions{
-		DocumentFormat:                          collections.DocumentFormatBSON,
-		DataRootStoragePolicy:                   collections.RootStorageCompressed,
-		IndexStateStoragePolicy:                 collections.RootStorageCompressed,
-		BufferedIndexedAsyncFlush:               profileBenchBufferedIndexedAsyncFlush(b),
-		BufferedIndexedAsyncFlushMaxQueuedUnits: profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(b),
-	}
+	server.DefaultCollectionOptions = profileBenchCollectionOptions(b, collections.DocumentFormatBSON)
 	server.DefaultIndexStoragePolicy = collections.RootStorageCompressed
 	commandDoc := mustProfileBenchDocument(b, bson.D{
 		{Key: "insert", Value: "docs"},
@@ -273,7 +285,7 @@ func BenchmarkTreeDBGatewayRawWireLoadBSONIndexes2(b *testing.B) {
 	}
 	timedElapsed += time.Since(flushStart)
 	b.StopTimer()
-	reportProfileBenchBufferedIndexedAsyncFlush(b, collection.Meta().Options)
+	reportProfileBenchBufferedIndexedWriteOptions(b, collection.Meta().Options)
 	reportDocsPerSecond(b, b.N, timedElapsed)
 }
 
@@ -370,14 +382,8 @@ func BenchmarkDirectCollectionLoadBSONIndexes2(b *testing.B) {
 	}()
 	manager := collections.NewCollectionManager(backend)
 	if _, err := manager.CreateCollection(&collections.CollectionMeta{
-		Name: "bench.docs",
-		Options: collections.CollectionOptions{
-			DocumentFormat:                          collections.DocumentFormatBSON,
-			DataRootStoragePolicy:                   collections.RootStorageCompressed,
-			IndexStateStoragePolicy:                 collections.RootStorageCompressed,
-			BufferedIndexedAsyncFlush:               profileBenchBufferedIndexedAsyncFlush(b),
-			BufferedIndexedAsyncFlushMaxQueuedUnits: profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(b),
-		},
+		Name:    "bench.docs",
+		Options: profileBenchCollectionOptions(b, collections.DocumentFormatBSON),
 	}); err != nil {
 		b.Fatalf("create collection: %v", err)
 	}
@@ -441,7 +447,7 @@ func BenchmarkDirectCollectionLoadBSONIndexes2(b *testing.B) {
 	if err := backend.Checkpoint(); err != nil {
 		b.Fatalf("checkpoint backend: %v", err)
 	}
-	reportProfileBenchBufferedIndexedAsyncFlush(b, collection.Meta().Options)
+	reportProfileBenchBufferedIndexedWriteOptions(b, collection.Meta().Options)
 	reportDocsPerSecond(b, b.N, timedElapsed)
 }
 
@@ -461,14 +467,8 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	}()
 	manager := collections.NewCollectionManager(backend)
 	if _, err := manager.CreateCollection(&collections.CollectionMeta{
-		Name: "bench.docs",
-		Options: collections.CollectionOptions{
-			DocumentFormat:                          collections.DocumentFormatBSON,
-			DataRootStoragePolicy:                   collections.RootStorageCompressed,
-			IndexStateStoragePolicy:                 collections.RootStorageCompressed,
-			BufferedIndexedAsyncFlush:               profileBenchBufferedIndexedAsyncFlush(b),
-			BufferedIndexedAsyncFlushMaxQueuedUnits: profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(b),
-		},
+		Name:    "bench.docs",
+		Options: profileBenchCollectionOptions(b, collections.DocumentFormatBSON),
 	}); err != nil {
 		b.Fatalf("create collection: %v", err)
 	}
@@ -577,7 +577,7 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 		b.Fatalf("run concurrent updates: %v", err)
 	}
 	b.ReportMetric(float64(writers), "writers")
-	reportProfileBenchBufferedIndexedAsyncFlush(b, collection.Meta().Options)
+	reportProfileBenchBufferedIndexedWriteOptions(b, collection.Meta().Options)
 	reportCollectionManagerUpdateStats(b, deltaCollectionManagerUpdateStats(manager.StatsSnapshot(), statsBefore), b.N)
 	backendStatsAfter := backend.Stats()
 	reportProfileBenchOrderedRootPublishStats(b, backendStatsAfter, backendStatsBefore, b.N)
@@ -1449,6 +1449,32 @@ func profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(tb testing.TB) int {
 	return profileBenchNonNegativeEnvInt(tb, "MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS", 0)
 }
 
+func profileBenchBufferedIndexedWriteMaxDocuments(tb testing.TB) int {
+	return profileBenchNonNegativeEnvInt(tb, "MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_DOCUMENTS", 0)
+}
+
+func profileBenchBufferedIndexedWriteMaxBytes(tb testing.TB) int64 {
+	return profileBenchNonNegativeEnvInt64(tb, "MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_BYTES", 0)
+}
+
+func profileBenchBufferedIndexedWriteMaxRootRuns(tb testing.TB) int {
+	return profileBenchNonNegativeEnvInt(tb, "MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_ROOT_RUNS", 0)
+}
+
+func profileBenchCollectionOptions(tb testing.TB, format collections.DocumentFormat) collections.CollectionOptions {
+	tb.Helper()
+	return collections.CollectionOptions{
+		DocumentFormat:                          format,
+		DataRootStoragePolicy:                   collections.RootStorageCompressed,
+		IndexStateStoragePolicy:                 collections.RootStorageCompressed,
+		BufferedIndexedWriteMaxDocuments:        profileBenchBufferedIndexedWriteMaxDocuments(tb),
+		BufferedIndexedWriteMaxBytes:            profileBenchBufferedIndexedWriteMaxBytes(tb),
+		BufferedIndexedWriteMaxRootRuns:         profileBenchBufferedIndexedWriteMaxRootRuns(tb),
+		BufferedIndexedAsyncFlush:               profileBenchBufferedIndexedAsyncFlush(tb),
+		BufferedIndexedAsyncFlushMaxQueuedUnits: profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(tb),
+	}
+}
+
 func profileBenchBoolEnv(tb testing.TB, name string, defaultValue bool) bool {
 	tb.Helper()
 	raw := strings.TrimSpace(os.Getenv(name))
@@ -1488,8 +1514,30 @@ func profileBenchNonNegativeEnvInt(tb testing.TB, name string, defaultValue int)
 	return value
 }
 
-func reportProfileBenchBufferedIndexedAsyncFlush(b *testing.B, opts collections.CollectionOptions) {
+func profileBenchNonNegativeEnvInt64(tb testing.TB, name string, defaultValue int64) int64 {
+	tb.Helper()
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return defaultValue
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value < 0 {
+		tb.Fatalf("invalid %s=%q", name, raw)
+	}
+	return value
+}
+
+func reportProfileBenchBufferedIndexedWriteOptions(b *testing.B, opts collections.CollectionOptions) {
 	b.Helper()
+	if opts.BufferedIndexedWriteMaxDocuments > 0 {
+		b.ReportMetric(float64(opts.BufferedIndexedWriteMaxDocuments), "buffered_max_docs")
+	}
+	if opts.BufferedIndexedWriteMaxBytes > 0 {
+		b.ReportMetric(float64(opts.BufferedIndexedWriteMaxBytes), "buffered_max_bytes")
+	}
+	if opts.BufferedIndexedWriteMaxRootRuns > 0 {
+		b.ReportMetric(float64(opts.BufferedIndexedWriteMaxRootRuns), "buffered_max_root_runs")
+	}
 	if opts.BufferedIndexedAsyncFlush {
 		b.ReportMetric(1, "buffered_async_flush")
 		if opts.BufferedIndexedAsyncFlushMaxQueuedUnits > 0 {
