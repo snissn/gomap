@@ -86,8 +86,13 @@ func TestProfileBenchUpdateIDStrideCoversDocumentSet(t *testing.T) {
 }
 
 func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH", "")
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS", "")
 	if profileBenchBufferedIndexedAsyncFlush(t) {
 		t.Fatal("async flush default=true want false")
+	}
+	if got := profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(t); got != 0 {
+		t.Fatalf("async max queued units default=%d want 0", got)
 	}
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH", "true")
 	if !profileBenchBufferedIndexedAsyncFlush(t) {
