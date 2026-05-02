@@ -6474,36 +6474,10 @@ func indexRangeScanBounds(valueType IndexValueType, opts IndexRangeOptions) ([]b
 	}
 
 	if valueType == IndexValueDouble {
-		lowerNaN := lowerBounded && encodedDoubleComponentIsNaN(lowerEncoded)
 		upperNaN := upperBounded && encodedDoubleComponentIsNaN(upperEncoded)
 		switch {
-		case lowerNaN && !opts.Lower.Inclusive:
-			return nil, nil, true, nil
-		case lowerNaN:
-			end = prefixEnd(lowerEncoded)
-			if end == nil {
-				return nil, nil, true, nil
-			}
-			if upperBounded {
-				if upperNaN && !opts.Upper.Inclusive {
-					return nil, nil, true, nil
-				}
-				if !upperNaN && bytes.Compare(upperEncoded, lowerEncoded) < 0 {
-					return nil, nil, true, nil
-				}
-			}
-			return bytes.Clone(lowerEncoded), end, false, nil
 		case upperNaN && !opts.Upper.Inclusive:
 			return nil, nil, true, nil
-		case upperNaN:
-			end = prefixEnd(upperEncoded)
-			if end == nil {
-				return nil, nil, true, nil
-			}
-			if lowerBounded && bytes.Compare(lowerEncoded, upperEncoded) > 0 {
-				return nil, nil, true, nil
-			}
-			return bytes.Clone(upperEncoded), end, false, nil
 		}
 	}
 

@@ -326,8 +326,8 @@ func TestIndexRangeScanBoundsDoubleNaN(t *testing.T) {
 	if err != nil {
 		t.Fatalf("> NaN bounds: %v", err)
 	}
-	if !empty || start != nil || end != nil {
-		t.Fatalf("> NaN start=%x end=%x empty=%v want empty", start, end, empty)
+	if empty || !bytes.Equal(start, []byte{0x01}) || end != nil {
+		t.Fatalf("> NaN start=%x end=%x empty=%v want [01,unbounded)", start, end, empty)
 	}
 
 	start, end, empty, err = indexRangeScanBounds(IndexValueDouble, IndexRangeOptions{
@@ -337,8 +337,8 @@ func TestIndexRangeScanBoundsDoubleNaN(t *testing.T) {
 	if err != nil {
 		t.Fatalf(">= NaN bounds: %v", err)
 	}
-	if empty || !bytes.Equal(start, []byte{0x00}) || !bytes.Equal(end, []byte{0x01}) {
-		t.Fatalf(">= NaN start=%x end=%x empty=%v want [00,01)", start, end, empty)
+	if empty || !bytes.Equal(start, []byte{0x00}) || end != nil {
+		t.Fatalf(">= NaN start=%x end=%x empty=%v want [00,unbounded)", start, end, empty)
 	}
 
 	start, end, empty, err = indexRangeScanBounds(IndexValueDouble, IndexRangeOptions{
@@ -348,8 +348,8 @@ func TestIndexRangeScanBoundsDoubleNaN(t *testing.T) {
 	if err != nil {
 		t.Fatalf("<= NaN bounds: %v", err)
 	}
-	if empty || !bytes.Equal(start, []byte{0x00}) || !bytes.Equal(end, []byte{0x01}) {
-		t.Fatalf("<= NaN start=%x end=%x empty=%v want [00,01)", start, end, empty)
+	if empty || start != nil || !bytes.Equal(end, []byte{0x01}) {
+		t.Fatalf("<= NaN start=%x end=%x empty=%v want [unbounded,01)", start, end, empty)
 	}
 }
 
