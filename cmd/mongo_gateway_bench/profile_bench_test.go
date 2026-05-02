@@ -511,26 +511,36 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 
 func deltaCollectionManagerUpdateStats(after, before collections.CollectionManagerStats) collections.CollectionManagerStats {
 	return collections.CollectionManagerStats{
-		UpdateBatchCalls:              after.UpdateBatchCalls - before.UpdateBatchCalls,
-		UpdateBatchItems:              after.UpdateBatchItems - before.UpdateBatchItems,
-		UpdateBatchMatched:            after.UpdateBatchMatched - before.UpdateBatchMatched,
-		UpdateBatchModified:           after.UpdateBatchModified - before.UpdateBatchModified,
-		UpdateBatchRuns:               after.UpdateBatchRuns - before.UpdateBatchRuns,
-		UpdateBatchBufferedBatches:    after.UpdateBatchBufferedBatches - before.UpdateBatchBufferedBatches,
-		UpdateBatchCurrentRead:        after.UpdateBatchCurrentRead - before.UpdateBatchCurrentRead,
-		UpdateBatchCallback:           after.UpdateBatchCallback - before.UpdateBatchCallback,
-		UpdateBatchPrepareDocuments:   after.UpdateBatchPrepareDocuments - before.UpdateBatchPrepareDocuments,
-		UpdateBatchIndexStateExtract:  after.UpdateBatchIndexStateExtract - before.UpdateBatchIndexStateExtract,
-		UpdateBatchUniquePreflight:    after.UpdateBatchUniquePreflight - before.UpdateBatchUniquePreflight,
-		UpdateBatchTemplateRunBuild:   after.UpdateBatchTemplateRunBuild - before.UpdateBatchTemplateRunBuild,
-		UpdateBatchPrimaryRunBuild:    after.UpdateBatchPrimaryRunBuild - before.UpdateBatchPrimaryRunBuild,
-		UpdateBatchIndexStateRunBuild: after.UpdateBatchIndexStateRunBuild - before.UpdateBatchIndexStateRunBuild,
-		UpdateBatchSecondaryRunBuild:  after.UpdateBatchSecondaryRunBuild - before.UpdateBatchSecondaryRunBuild,
-		UpdateBatchBufferStage:        after.UpdateBatchBufferStage - before.UpdateBatchBufferStage,
-		UpdateBatchPublish:            after.UpdateBatchPublish - before.UpdateBatchPublish,
-		UpdateBatchSecondaryDeletes:   after.UpdateBatchSecondaryDeletes - before.UpdateBatchSecondaryDeletes,
-		UpdateBatchSecondarySets:      after.UpdateBatchSecondarySets - before.UpdateBatchSecondarySets,
-		UpdateBatchSecondaryKeyBytes:  after.UpdateBatchSecondaryKeyBytes - before.UpdateBatchSecondaryKeyBytes,
+		UpdateBatchCalls:               after.UpdateBatchCalls - before.UpdateBatchCalls,
+		UpdateBatchItems:               after.UpdateBatchItems - before.UpdateBatchItems,
+		UpdateBatchMatched:             after.UpdateBatchMatched - before.UpdateBatchMatched,
+		UpdateBatchModified:            after.UpdateBatchModified - before.UpdateBatchModified,
+		UpdateBatchRuns:                after.UpdateBatchRuns - before.UpdateBatchRuns,
+		UpdateBatchBufferedBatches:     after.UpdateBatchBufferedBatches - before.UpdateBatchBufferedBatches,
+		UpdateBatchCurrentRead:         after.UpdateBatchCurrentRead - before.UpdateBatchCurrentRead,
+		UpdateBatchCallback:            after.UpdateBatchCallback - before.UpdateBatchCallback,
+		UpdateBatchPrepareDocuments:    after.UpdateBatchPrepareDocuments - before.UpdateBatchPrepareDocuments,
+		UpdateBatchIndexStateExtract:   after.UpdateBatchIndexStateExtract - before.UpdateBatchIndexStateExtract,
+		UpdateBatchUniquePreflight:     after.UpdateBatchUniquePreflight - before.UpdateBatchUniquePreflight,
+		UpdateBatchTemplateRunBuild:    after.UpdateBatchTemplateRunBuild - before.UpdateBatchTemplateRunBuild,
+		UpdateBatchPrimaryRunBuild:     after.UpdateBatchPrimaryRunBuild - before.UpdateBatchPrimaryRunBuild,
+		UpdateBatchIndexStateRunBuild:  after.UpdateBatchIndexStateRunBuild - before.UpdateBatchIndexStateRunBuild,
+		UpdateBatchSecondaryRunBuild:   after.UpdateBatchSecondaryRunBuild - before.UpdateBatchSecondaryRunBuild,
+		UpdateBatchBufferStage:         after.UpdateBatchBufferStage - before.UpdateBatchBufferStage,
+		UpdateBatchBufferPrecheck:      after.UpdateBatchBufferPrecheck - before.UpdateBatchBufferPrecheck,
+		UpdateBatchBufferLockWait:      after.UpdateBatchBufferLockWait - before.UpdateBatchBufferLockWait,
+		UpdateBatchBufferLockHold:      after.UpdateBatchBufferLockHold - before.UpdateBatchBufferLockHold,
+		UpdateBatchBufferValidation:    after.UpdateBatchBufferValidation - before.UpdateBatchBufferValidation,
+		UpdateBatchBufferRootScan:      after.UpdateBatchBufferRootScan - before.UpdateBatchBufferRootScan,
+		UpdateBatchBufferDomainPrepare: after.UpdateBatchBufferDomainPrepare - before.UpdateBatchBufferDomainPrepare,
+		UpdateBatchBufferPrimaryIdx:    after.UpdateBatchBufferPrimaryIdx - before.UpdateBatchBufferPrimaryIdx,
+		UpdateBatchBufferUniqueIdx:     after.UpdateBatchBufferUniqueIdx - before.UpdateBatchBufferUniqueIdx,
+		UpdateBatchBufferRootAppend:    after.UpdateBatchBufferRootAppend - before.UpdateBatchBufferRootAppend,
+		UpdateBatchBufferFlush:         after.UpdateBatchBufferFlush - before.UpdateBatchBufferFlush,
+		UpdateBatchPublish:             after.UpdateBatchPublish - before.UpdateBatchPublish,
+		UpdateBatchSecondaryDeletes:    after.UpdateBatchSecondaryDeletes - before.UpdateBatchSecondaryDeletes,
+		UpdateBatchSecondarySets:       after.UpdateBatchSecondarySets - before.UpdateBatchSecondarySets,
+		UpdateBatchSecondaryKeyBytes:   after.UpdateBatchSecondaryKeyBytes - before.UpdateBatchSecondaryKeyBytes,
 	}
 }
 
@@ -579,6 +589,16 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 	reportDuration("update_index_state_run_ns/doc", stats.UpdateBatchIndexStateRunBuild)
 	reportDuration("update_secondary_runs_ns/doc", stats.UpdateBatchSecondaryRunBuild)
 	reportDuration("update_buffer_stage_ns/doc", stats.UpdateBatchBufferStage)
+	reportDuration("update_buffer_precheck_ns/doc", stats.UpdateBatchBufferPrecheck)
+	reportDuration("update_buffer_lock_wait_ns/doc", stats.UpdateBatchBufferLockWait)
+	reportDuration("update_buffer_lock_hold_ns/doc", stats.UpdateBatchBufferLockHold)
+	reportDuration("update_buffer_validation_ns/doc", stats.UpdateBatchBufferValidation)
+	reportDuration("update_buffer_root_scan_ns/doc", stats.UpdateBatchBufferRootScan)
+	reportDuration("update_buffer_domain_prepare_ns/doc", stats.UpdateBatchBufferDomainPrepare)
+	reportDuration("update_buffer_primary_index_ns/doc", stats.UpdateBatchBufferPrimaryIdx)
+	reportDuration("update_buffer_unique_index_ns/doc", stats.UpdateBatchBufferUniqueIdx)
+	reportDuration("update_buffer_root_append_ns/doc", stats.UpdateBatchBufferRootAppend)
+	reportDuration("update_buffer_flush_ns/doc", stats.UpdateBatchBufferFlush)
 	reportDuration("update_publish_ns/doc", stats.UpdateBatchPublish)
 }
 

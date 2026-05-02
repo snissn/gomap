@@ -284,22 +284,45 @@ type CollectionSecondaryRunStats struct {
 // Update calls that fall back to the legacy direct path are intentionally not
 // represented here yet; the write combiner and UpdateBatch path use this shape.
 type CollectionUpdateStats struct {
-	Items                  int
-	Matched                int
-	Modified               int
-	Indexes                int
-	Runs                   int
-	BufferedBatches        int
-	CurrentRead            time.Duration
-	Callback               time.Duration
-	PrepareDocuments       time.Duration
-	IndexStateExtraction   time.Duration
-	UniqueIndexPreflight   time.Duration
-	TemplateRunBuild       time.Duration
-	PrimaryRunBuild        time.Duration
-	IndexStateRunBuild     time.Duration
-	SecondaryRunBuild      time.Duration
-	BufferStage            time.Duration
+	Items                int
+	Matched              int
+	Modified             int
+	Indexes              int
+	Runs                 int
+	BufferedBatches      int
+	CurrentRead          time.Duration
+	Callback             time.Duration
+	PrepareDocuments     time.Duration
+	IndexStateExtraction time.Duration
+	UniqueIndexPreflight time.Duration
+	TemplateRunBuild     time.Duration
+	PrimaryRunBuild      time.Duration
+	IndexStateRunBuild   time.Duration
+	SecondaryRunBuild    time.Duration
+	BufferStage          time.Duration
+	// Buffer-stage subphase timings are populated only when
+	// CollectionManager.SetUpdateBatchDetailedStatsEnabled(true) is enabled.
+	// BufferStageLockHold is an enclosing domain mutex hold-time metric and
+	// overlaps the validation/root/index/root-append subphases; it is not
+	// additive with those child counters.
+	BufferStagePrecheck time.Duration
+	// BufferStageLockWait measures domain mutex acquisition time, including
+	// relock contention after an async flush wait. It does not include async
+	// flush completion waits performed after releasing the mutex for
+	// backpressure.
+	BufferStageLockWait      time.Duration
+	BufferStageLockHold      time.Duration
+	BufferStageValidation    time.Duration
+	BufferStageRootScan      time.Duration
+	BufferStageDomainPrepare time.Duration
+	BufferStagePrimaryIdx    time.Duration
+	BufferStageUniqueIdx     time.Duration
+	BufferStageRootAppend    time.Duration
+	// BufferStageFlush measures local threshold-flush schedule/publish work
+	// performed while staging an indexed buffered update batch. It excludes
+	// waits for an already-running async flush that leave no local schedule or
+	// publish work for the current batch.
+	BufferStageFlush       time.Duration
 	Publish                time.Duration
 	SecondaryDeleteEntries int
 	SecondarySetEntries    int
@@ -355,10 +378,27 @@ type CollectionManagerStats struct {
 	UpdateBatchIndexStateRunBuild time.Duration
 	UpdateBatchSecondaryRunBuild  time.Duration
 	UpdateBatchBufferStage        time.Duration
-	UpdateBatchPublish            time.Duration
-	UpdateBatchSecondaryDeletes   uint64
-	UpdateBatchSecondarySets      uint64
-	UpdateBatchSecondaryKeyBytes  uint64
+	// Detailed buffer-stage aggregate timings are populated only when
+	// CollectionManager.SetUpdateBatchDetailedStatsEnabled(true) is enabled.
+	// UpdateBatchBufferLockHold is an enclosing domain mutex hold-time metric
+	// and overlaps the validation/root/index/root-append subphases; it is not
+	// additive with those child counters.
+	UpdateBatchBufferPrecheck      time.Duration
+	UpdateBatchBufferLockWait      time.Duration
+	UpdateBatchBufferLockHold      time.Duration
+	UpdateBatchBufferValidation    time.Duration
+	UpdateBatchBufferRootScan      time.Duration
+	UpdateBatchBufferDomainPrepare time.Duration
+	UpdateBatchBufferPrimaryIdx    time.Duration
+	UpdateBatchBufferUniqueIdx     time.Duration
+	UpdateBatchBufferRootAppend    time.Duration
+	// UpdateBatchBufferFlush measures only threshold-flush work that was
+	// actually scheduled/executed while staging indexed buffered update batches.
+	UpdateBatchBufferFlush       time.Duration
+	UpdateBatchPublish           time.Duration
+	UpdateBatchSecondaryDeletes  uint64
+	UpdateBatchSecondarySets     uint64
+	UpdateBatchSecondaryKeyBytes uint64
 }
 
 // DocumentRecord is one primary collection record returned by ScanDocuments.
@@ -588,50 +628,60 @@ type collectionWriteDomain struct {
 	rootRunCount     int
 	writeGeneration  uint64
 
-	mutationLockCalls             atomic.Uint64
-	mutationLockWaitTotalNs       atomic.Uint64
-	mutationLockHoldTotalNs       atomic.Uint64
-	indexedStageBatches           atomic.Uint64
-	indexedStageDocs              atomic.Uint64
-	indexedStageBytes             atomic.Uint64
-	indexedStageRootRuns          atomic.Uint64
-	indexedAutoFlushes            atomic.Uint64
-	indexedAsyncFlushScheduled    atomic.Uint64
-	indexedAsyncFlushBackpressure atomic.Uint64
-	indexedAsyncFlushErrors       atomic.Uint64
-	indexedFlushCalls             atomic.Uint64
-	indexedFlushErrors            atomic.Uint64
-	indexedFlushDocs              atomic.Uint64
-	indexedFlushBytes             atomic.Uint64
-	indexedFlushRootRuns          atomic.Uint64
-	indexedFlushRoots             atomic.Uint64
-	indexedFlushDurationTotalNs   atomic.Uint64
-	updateCombineRequests         atomic.Uint64
-	updateCombineBatches          atomic.Uint64
-	updateCombineBatchedRequests  atomic.Uint64
-	updateCombineFallbackRequests atomic.Uint64
-	updateCombineQueueDepthMax    atomic.Uint64
-	updateBatchCalls              atomic.Uint64
-	updateBatchItems              atomic.Uint64
-	updateBatchMatched            atomic.Uint64
-	updateBatchModified           atomic.Uint64
-	updateBatchRuns               atomic.Uint64
-	updateBatchBufferedBatches    atomic.Uint64
-	updateBatchCurrentReadNs      atomic.Uint64
-	updateBatchCallbackNs         atomic.Uint64
-	updateBatchPrepareNs          atomic.Uint64
-	updateBatchIndexStateNs       atomic.Uint64
-	updateBatchUniquePreflightNs  atomic.Uint64
-	updateBatchTemplateRunNs      atomic.Uint64
-	updateBatchPrimaryRunNs       atomic.Uint64
-	updateBatchIndexStateRunNs    atomic.Uint64
-	updateBatchSecondaryRunNs     atomic.Uint64
-	updateBatchBufferStageNs      atomic.Uint64
-	updateBatchPublishNs          atomic.Uint64
-	updateBatchSecondaryDeletes   atomic.Uint64
-	updateBatchSecondarySets      atomic.Uint64
-	updateBatchSecondaryKeyBytes  atomic.Uint64
-	updateBatchDetailedStats      atomic.Bool
+	mutationLockCalls                atomic.Uint64
+	mutationLockWaitTotalNs          atomic.Uint64
+	mutationLockHoldTotalNs          atomic.Uint64
+	indexedStageBatches              atomic.Uint64
+	indexedStageDocs                 atomic.Uint64
+	indexedStageBytes                atomic.Uint64
+	indexedStageRootRuns             atomic.Uint64
+	indexedAutoFlushes               atomic.Uint64
+	indexedAsyncFlushScheduled       atomic.Uint64
+	indexedAsyncFlushBackpressure    atomic.Uint64
+	indexedAsyncFlushErrors          atomic.Uint64
+	indexedFlushCalls                atomic.Uint64
+	indexedFlushErrors               atomic.Uint64
+	indexedFlushDocs                 atomic.Uint64
+	indexedFlushBytes                atomic.Uint64
+	indexedFlushRootRuns             atomic.Uint64
+	indexedFlushRoots                atomic.Uint64
+	indexedFlushDurationTotalNs      atomic.Uint64
+	updateCombineRequests            atomic.Uint64
+	updateCombineBatches             atomic.Uint64
+	updateCombineBatchedRequests     atomic.Uint64
+	updateCombineFallbackRequests    atomic.Uint64
+	updateCombineQueueDepthMax       atomic.Uint64
+	updateBatchCalls                 atomic.Uint64
+	updateBatchItems                 atomic.Uint64
+	updateBatchMatched               atomic.Uint64
+	updateBatchModified              atomic.Uint64
+	updateBatchRuns                  atomic.Uint64
+	updateBatchBufferedBatches       atomic.Uint64
+	updateBatchCurrentReadNs         atomic.Uint64
+	updateBatchCallbackNs            atomic.Uint64
+	updateBatchPrepareNs             atomic.Uint64
+	updateBatchIndexStateNs          atomic.Uint64
+	updateBatchUniquePreflightNs     atomic.Uint64
+	updateBatchTemplateRunNs         atomic.Uint64
+	updateBatchPrimaryRunNs          atomic.Uint64
+	updateBatchIndexStateRunNs       atomic.Uint64
+	updateBatchSecondaryRunNs        atomic.Uint64
+	updateBatchBufferStageNs         atomic.Uint64
+	updateBatchBufferPrecheckNs      atomic.Uint64
+	updateBatchBufferLockWaitNs      atomic.Uint64
+	updateBatchBufferLockHoldNs      atomic.Uint64
+	updateBatchBufferValidationNs    atomic.Uint64
+	updateBatchBufferRootScanNs      atomic.Uint64
+	updateBatchBufferDomainPrepareNs atomic.Uint64
+	updateBatchBufferPrimaryIdxNs    atomic.Uint64
+	updateBatchBufferUniqueIdxNs     atomic.Uint64
+	updateBatchBufferRootAppendNs    atomic.Uint64
+	updateBatchBufferFlushNs         atomic.Uint64
+	updateBatchPublishNs             atomic.Uint64
+	updateBatchSecondaryDeletes      atomic.Uint64
+	updateBatchSecondarySets         atomic.Uint64
+	updateBatchSecondaryKeyBytes     atomic.Uint64
+	updateBatchDetailedStats         atomic.Bool
 }
 
 func NewCollectionManager(database *backenddb.DB) *CollectionManager {
@@ -755,6 +805,13 @@ func updateBatchStatsSince(enabled bool, start time.Time) time.Duration {
 	return time.Since(start)
 }
 
+func updateBatchStatsDuration(enabled bool, duration time.Duration) time.Duration {
+	if !enabled {
+		return 0
+	}
+	return duration
+}
+
 // Stats returns aggregate process-local collection write-domain metrics with
 // stable TreeDB benchmark key names.
 func (m *CollectionManager) Stats() map[string]string {
@@ -811,6 +868,16 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.update_batch.index_state_run_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchIndexStateRunBuild.Nanoseconds())
 	out["treedb.collections.write_domain.update_batch.secondary_runs_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchSecondaryRunBuild.Nanoseconds())
 	out["treedb.collections.write_domain.update_batch.buffer_stage_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferStage.Nanoseconds())
+	out["treedb.collections.write_domain.update_batch.buffer_stage_precheck_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferPrecheck.Nanoseconds())
+	out["treedb.collections.write_domain.update_batch.buffer_stage_lock_wait_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferLockWait.Nanoseconds())
+	out["treedb.collections.write_domain.update_batch.buffer_stage_lock_hold_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferLockHold.Nanoseconds())
+	out["treedb.collections.write_domain.update_batch.buffer_stage_validation_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferValidation.Nanoseconds())
+	out["treedb.collections.write_domain.update_batch.buffer_stage_root_scan_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferRootScan.Nanoseconds())
+	out["treedb.collections.write_domain.update_batch.buffer_stage_domain_prepare_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferDomainPrepare.Nanoseconds())
+	out["treedb.collections.write_domain.update_batch.buffer_stage_primary_index_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferPrimaryIdx.Nanoseconds())
+	out["treedb.collections.write_domain.update_batch.buffer_stage_unique_index_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferUniqueIdx.Nanoseconds())
+	out["treedb.collections.write_domain.update_batch.buffer_stage_root_append_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferRootAppend.Nanoseconds())
+	out["treedb.collections.write_domain.update_batch.buffer_stage_flush_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferFlush.Nanoseconds())
 	out["treedb.collections.write_domain.update_batch.publish_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchPublish.Nanoseconds())
 	out["treedb.collections.write_domain.update_batch.secondary_deletes_total"] = fmt.Sprintf("%d", stats.UpdateBatchSecondaryDeletes)
 	out["treedb.collections.write_domain.update_batch.secondary_sets_total"] = fmt.Sprintf("%d", stats.UpdateBatchSecondarySets)
@@ -891,6 +958,16 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.UpdateBatchIndexStateRunBuild += other.UpdateBatchIndexStateRunBuild
 	s.UpdateBatchSecondaryRunBuild += other.UpdateBatchSecondaryRunBuild
 	s.UpdateBatchBufferStage += other.UpdateBatchBufferStage
+	s.UpdateBatchBufferPrecheck += other.UpdateBatchBufferPrecheck
+	s.UpdateBatchBufferLockWait += other.UpdateBatchBufferLockWait
+	s.UpdateBatchBufferLockHold += other.UpdateBatchBufferLockHold
+	s.UpdateBatchBufferValidation += other.UpdateBatchBufferValidation
+	s.UpdateBatchBufferRootScan += other.UpdateBatchBufferRootScan
+	s.UpdateBatchBufferDomainPrepare += other.UpdateBatchBufferDomainPrepare
+	s.UpdateBatchBufferPrimaryIdx += other.UpdateBatchBufferPrimaryIdx
+	s.UpdateBatchBufferUniqueIdx += other.UpdateBatchBufferUniqueIdx
+	s.UpdateBatchBufferRootAppend += other.UpdateBatchBufferRootAppend
+	s.UpdateBatchBufferFlush += other.UpdateBatchBufferFlush
 	s.UpdateBatchPublish += other.UpdateBatchPublish
 	s.UpdateBatchSecondaryDeletes += other.UpdateBatchSecondaryDeletes
 	s.UpdateBatchSecondarySets += other.UpdateBatchSecondarySets
@@ -951,6 +1028,16 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.UpdateBatchIndexStateRunBuild = durationFromAtomicNs(domain.updateBatchIndexStateRunNs.Load())
 	stats.UpdateBatchSecondaryRunBuild = durationFromAtomicNs(domain.updateBatchSecondaryRunNs.Load())
 	stats.UpdateBatchBufferStage = durationFromAtomicNs(domain.updateBatchBufferStageNs.Load())
+	stats.UpdateBatchBufferPrecheck = durationFromAtomicNs(domain.updateBatchBufferPrecheckNs.Load())
+	stats.UpdateBatchBufferLockWait = durationFromAtomicNs(domain.updateBatchBufferLockWaitNs.Load())
+	stats.UpdateBatchBufferLockHold = durationFromAtomicNs(domain.updateBatchBufferLockHoldNs.Load())
+	stats.UpdateBatchBufferValidation = durationFromAtomicNs(domain.updateBatchBufferValidationNs.Load())
+	stats.UpdateBatchBufferRootScan = durationFromAtomicNs(domain.updateBatchBufferRootScanNs.Load())
+	stats.UpdateBatchBufferDomainPrepare = durationFromAtomicNs(domain.updateBatchBufferDomainPrepareNs.Load())
+	stats.UpdateBatchBufferPrimaryIdx = durationFromAtomicNs(domain.updateBatchBufferPrimaryIdxNs.Load())
+	stats.UpdateBatchBufferUniqueIdx = durationFromAtomicNs(domain.updateBatchBufferUniqueIdxNs.Load())
+	stats.UpdateBatchBufferRootAppend = durationFromAtomicNs(domain.updateBatchBufferRootAppendNs.Load())
+	stats.UpdateBatchBufferFlush = durationFromAtomicNs(domain.updateBatchBufferFlushNs.Load())
 	stats.UpdateBatchPublish = durationFromAtomicNs(domain.updateBatchPublishNs.Load())
 	stats.UpdateBatchSecondaryDeletes = domain.updateBatchSecondaryDeletes.Load()
 	stats.UpdateBatchSecondarySets = domain.updateBatchSecondarySets.Load()
@@ -1024,6 +1111,18 @@ func (domain *collectionWriteDomain) observeUpdateBatchStats(stats CollectionUpd
 	domain.updateBatchIndexStateRunNs.Add(durationToAtomicNs(stats.IndexStateRunBuild))
 	domain.updateBatchSecondaryRunNs.Add(durationToAtomicNs(stats.SecondaryRunBuild))
 	domain.updateBatchBufferStageNs.Add(durationToAtomicNs(stats.BufferStage))
+	if collectionUpdateStatsHasBufferStageBreakdown(stats) {
+		domain.updateBatchBufferPrecheckNs.Add(durationToAtomicNs(stats.BufferStagePrecheck))
+		domain.updateBatchBufferLockWaitNs.Add(durationToAtomicNs(stats.BufferStageLockWait))
+		domain.updateBatchBufferLockHoldNs.Add(durationToAtomicNs(stats.BufferStageLockHold))
+		domain.updateBatchBufferValidationNs.Add(durationToAtomicNs(stats.BufferStageValidation))
+		domain.updateBatchBufferRootScanNs.Add(durationToAtomicNs(stats.BufferStageRootScan))
+		domain.updateBatchBufferDomainPrepareNs.Add(durationToAtomicNs(stats.BufferStageDomainPrepare))
+		domain.updateBatchBufferPrimaryIdxNs.Add(durationToAtomicNs(stats.BufferStagePrimaryIdx))
+		domain.updateBatchBufferUniqueIdxNs.Add(durationToAtomicNs(stats.BufferStageUniqueIdx))
+		domain.updateBatchBufferRootAppendNs.Add(durationToAtomicNs(stats.BufferStageRootAppend))
+		domain.updateBatchBufferFlushNs.Add(durationToAtomicNs(stats.BufferStageFlush))
+	}
 	domain.updateBatchPublishNs.Add(durationToAtomicNs(stats.Publish))
 	if stats.SecondaryDeleteEntries > 0 {
 		domain.updateBatchSecondaryDeletes.Add(uint64(stats.SecondaryDeleteEntries))
@@ -1034,6 +1133,19 @@ func (domain *collectionWriteDomain) observeUpdateBatchStats(stats CollectionUpd
 	if stats.SecondaryKeyBytes > 0 {
 		domain.updateBatchSecondaryKeyBytes.Add(uint64(stats.SecondaryKeyBytes))
 	}
+}
+
+func collectionUpdateStatsHasBufferStageBreakdown(stats CollectionUpdateStats) bool {
+	return stats.BufferStagePrecheck != 0 ||
+		stats.BufferStageLockWait != 0 ||
+		stats.BufferStageLockHold != 0 ||
+		stats.BufferStageValidation != 0 ||
+		stats.BufferStageRootScan != 0 ||
+		stats.BufferStageDomainPrepare != 0 ||
+		stats.BufferStagePrimaryIdx != 0 ||
+		stats.BufferStageUniqueIdx != 0 ||
+		stats.BufferStageRootAppend != 0 ||
+		stats.BufferStageFlush != 0
 }
 
 func (domain *collectionWriteDomain) observeIndexedStage(docs int, bytes int64, rootRuns int) {
@@ -2253,7 +2365,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	domain.observeIndexedStage(len(plan.resultIDs), stagedBytes, stagedRootRuns)
 	c.meta = catalog.meta
 	if shouldFlushBufferedIndexedWrites(domain, catalog.meta.Options) {
-		flushElapsed, err := c.flushBufferedIndexedAfterThresholdLocked(domain, catalog.meta.Options)
+		flushElapsed, _, _, err := c.flushBufferedIndexedAfterThresholdLocked(domain, catalog.meta.Options)
 		if err != nil {
 			rollbackBufferedIndexedDomain(domain, checkpoint)
 			return 0, err
@@ -2387,9 +2499,21 @@ func bufferedIndexedAutoFlushEnabled(opts CollectionOptions) bool {
 	return opts.BufferedIndexedWriteMaxDocuments > 0 || opts.BufferedIndexedWriteMaxBytes > 0 || opts.BufferedIndexedWriteMaxRootRuns > 0
 }
 
-func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collectionWriteDomain, opts CollectionOptions) (time.Duration, error) {
+func collectionObservedElapsedSince(start time.Time) time.Duration {
+	elapsed := time.Since(start)
+	if elapsed <= 0 {
+		return time.Nanosecond
+	}
+	return elapsed
+}
+
+// flushBufferedIndexedAfterThresholdLocked returns local schedule/publish
+// duration, the full interval where domain.mu was deliberately released while
+// waiting for an already-running async flush, and any mutex reacquire wait after
+// that async wait. The released interval is not counted as local flush work.
+func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collectionWriteDomain, opts CollectionOptions) (time.Duration, time.Duration, time.Duration, error) {
 	if domain == nil {
-		return 0, nil
+		return 0, 0, 0, nil
 	}
 	domain.indexedAutoFlushes.Add(1)
 	if opts.BufferedIndexedAsyncFlush {
@@ -2399,41 +2523,49 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 				domain.indexedAsyncFlushBackpressure.Add(1)
 				flushStart := time.Now()
 				err := c.flushBufferedIndexedLocked(domain)
-				return time.Since(flushStart), err
+				return collectionObservedElapsedSince(flushStart), 0, 0, err
 			}
 			domain.indexedAsyncFlushBackpressure.Add(1)
 			flushStart := time.Now()
+			var lockReleased time.Duration
+			var relockWait time.Duration
 			if domain.indexedAsyncFlushRunning() {
+				unlockStart := time.Now()
 				domain.mu.Unlock()
 				domain.waitIndexedAsyncFlush()
+				relockStart := time.Now()
 				domain.mu.Lock()
+				relockWait += time.Since(relockStart)
+				lockReleased += time.Since(unlockStart)
 				if err := domain.consumeIndexedAsyncFlushError(); err != nil {
-					return time.Since(flushStart), err
+					return 0, lockReleased, relockWait, err
 				}
 				if domain.count == 0 || len(domain.indexedFlushUnits) == 0 || !hasBufferedIndexedRootRuns(domain) {
-					return time.Since(flushStart), nil
+					return 0, lockReleased, relockWait, nil
 				}
 				if len(domain.indexedPublishingUnits) == 0 {
+					flushStart = time.Now()
 					err := c.flushBufferedIndexedLocked(domain)
-					return time.Since(flushStart), err
+					return collectionObservedElapsedSince(flushStart), lockReleased, relockWait, err
 				}
 			}
+			flushStart = time.Now()
 			if !c.scheduleIndexedAsyncFlush(domain) && len(domain.indexedPublishingUnits) == 0 {
 				err := c.flushBufferedIndexedLocked(domain)
-				return time.Since(flushStart), err
+				return collectionObservedElapsedSince(flushStart), lockReleased, relockWait, err
 			}
-			return time.Since(flushStart), nil
+			return collectionObservedElapsedSince(flushStart), lockReleased, relockWait, nil
 		}
+		flushStart := time.Now()
 		if !c.scheduleIndexedAsyncFlush(domain) && len(domain.indexedPublishingUnits) == 0 {
-			flushStart := time.Now()
 			err := c.flushBufferedIndexedLocked(domain)
-			return time.Since(flushStart), err
+			return collectionObservedElapsedSince(flushStart), 0, 0, err
 		}
-		return 0, nil
+		return collectionObservedElapsedSince(flushStart), 0, 0, nil
 	}
 	flushStart := time.Now()
 	err := c.flushBufferedIndexedLocked(domain)
-	return time.Since(flushStart), err
+	return collectionObservedElapsedSince(flushStart), 0, 0, err
 }
 
 func hasBufferedIndexedRootRuns(domain *collectionWriteDomain) bool {
@@ -7073,20 +7205,25 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	}
 	detailedStats := c.updateBatchDetailedStatsEnabled()
 	bufferStart := updateBatchStatsNow(detailedStats)
+	precheckStart := updateBatchStatsNow(detailedStats)
 	defer func() {
 		plan.stats.BufferStage += updateBatchStatsSince(detailedStats, bufferStart)
 	}()
 	if c.writeDomain == nil || !plan.canBufferIndexedUpdateBatch || !plan.meta.Options.BufferedIndexedWrites || len(plan.meta.Indexes) == 0 {
+		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 		return false, nil
 	}
 	if len(plan.rootNames) != len(plan.deltaTables) || len(plan.rootNames) != len(plan.policies) {
+		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 		return false, fmt.Errorf("collections: UpdateBatch collection %q invalid plan lengths roots=%d deltas=%d policies=%d", plan.meta.Name, len(plan.rootNames), len(plan.deltaTables), len(plan.policies))
 	}
 	if len(plan.uniqueSecondaryIndexByRoot) != len(plan.rootNames) {
+		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 		return false, fmt.Errorf("collections: UpdateBatch collection %q invalid unique index plan length roots=%d unique=%d", plan.meta.Name, len(plan.rootNames), len(plan.uniqueSecondaryIndexByRoot))
 	}
 	modifiedCount := updateBatchModifiedCount(plan.results)
 	if modifiedCount == 0 {
+		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 		return false, nil
 	}
 	hasDeltaTable := false
@@ -7097,29 +7234,53 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		}
 	}
 	if !hasDeltaTable {
+		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 		return false, fmt.Errorf("collections: UpdateBatch collection %q modified rows without delta tables modified=%d roots=%d deltas=%d policies=%d", plan.meta.Name, modifiedCount, len(plan.rootNames), len(plan.deltaTables), len(plan.policies))
 	}
+	plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 	domain := c.writeDomain
+	lockStart := updateBatchStatsNow(detailedStats)
 	domain.mu.Lock()
-	defer domain.mu.Unlock()
+	plan.stats.BufferStageLockWait += updateBatchStatsSince(detailedStats, lockStart)
+	lockHoldStart := updateBatchStatsNow(detailedStats)
+	var lockReleasedDuringHold time.Duration
+	defer func() {
+		lockHold := updateBatchStatsSince(detailedStats, lockHoldStart)
+		if lockReleasedDuringHold > 0 {
+			if lockHold > lockReleasedDuringHold {
+				lockHold -= lockReleasedDuringHold
+			} else {
+				lockHold = 0
+			}
+		}
+		plan.stats.BufferStageLockHold += lockHold
+		domain.mu.Unlock()
+	}()
+	phaseStart := updateBatchStatsNow(detailedStats)
 	if domain.count != 0 {
 		if !plan.bufferedBase || !updateBatchCanReadBufferedDomainLocked(domain, plan.meta, plan.baseSystemRoot) {
 			// The caller retries from the normal pre-plan flush path so a plan built
 			// before a concurrent buffered write is not published against stale roots.
+			plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
 			return false, ErrConcurrentMutation
 		}
 		if plan.bufferedReadGeneration != domain.writeGeneration {
+			plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
 			return false, ErrConcurrentMutation
 		}
 	}
 	if err := c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs); err != nil {
+		plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
 		return false, err
 	}
+	plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
 	var stagedBytes int64
 	stagedRootRuns := 0
+	phaseStart = updateBatchStatsNow(detailedStats)
 	for i, rootName := range plan.rootNames {
 		baseRoot, ok := plan.baseRootIDs[rootName]
 		if !ok {
+			plan.stats.BufferStageRootScan += updateBatchStatsSince(detailedStats, phaseStart)
 			return false, fmt.Errorf("collections: UpdateBatch collection %q plan missing base root for %q", plan.meta.Name, rootName)
 		}
 		table := plan.deltaTables[i]
@@ -7128,12 +7289,15 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		}
 		if hasPendingIndexedRootRunsForRootLocked(domain, rootName) {
 			if pendingBaseRoot, ok := pendingIndexedRootBaseIDLocked(domain, rootName); ok && pendingBaseRoot != baseRoot {
+				plan.stats.BufferStageRootScan += updateBatchStatsSince(detailedStats, phaseStart)
 				return false, errConcurrentRootModification(plan.meta.Name, rootName)
 			}
 		}
 		stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, table.Size())
 		stagedRootRuns++
 	}
+	plan.stats.BufferStageRootScan += updateBatchStatsSince(detailedStats, phaseStart)
+	phaseStart = updateBatchStatsNow(detailedStats)
 	if domain.count == 0 && plan.catalog != nil {
 		c.initializeWriteDomainFromCatalogLocked(domain, plan.catalog, plan.baseCommitSeq, plan.baseSystemRoot)
 	}
@@ -7165,6 +7329,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	if shouldAutoFlushAfterAdding {
 		checkpoint = checkpointBufferedIndexedDomain(domain)
 	}
+	plan.stats.BufferStageDomainPrepare += updateBatchStatsSince(detailedStats, phaseStart)
 	for i, rootName := range plan.rootNames {
 		baseRoot := plan.baseRootIDs[rootName]
 		table := plan.deltaTables[i]
@@ -7178,7 +7343,9 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 			domain.rootBaseIDs[rootName] = baseRoot
 		}
 		if rootName == collectionPrimaryRootName(plan.meta.Name) && domain.primaryRunIndex != nil {
+			phaseStart = updateBatchStatsNow(detailedStats)
 			if err := addBufferedPrimaryRunIndexEntries(domain.primaryRunIndex, table); err != nil {
+				plan.stats.BufferStagePrimaryIdx += updateBatchStatsSince(detailedStats, phaseStart)
 				domain.primaryRunIndex = nil
 				if shouldAutoFlushAfterAdding {
 					rollbackBufferedIndexedDomain(domain, checkpoint)
@@ -7186,10 +7353,13 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 				}
 				return false, err
 			}
+			plan.stats.BufferStagePrimaryIdx += updateBatchStatsSince(detailedStats, phaseStart)
 		}
 		if indexDef, ok := updateBatchPlanUniqueSecondaryIndex(plan, i); ok {
+			phaseStart = updateBatchStatsNow(detailedStats)
 			uniqueValueTable, uniquePrefixes, err := bufferedUniqueIndexValueRun(table, indexDef.ValueType)
 			if err != nil {
+				plan.stats.BufferStageUniqueIdx += updateBatchStatsSince(detailedStats, phaseStart)
 				if shouldAutoFlushAfterAdding {
 					rollbackBufferedIndexedDomain(domain, checkpoint)
 					c.meta = collectionMetaCheckpoint
@@ -7210,11 +7380,14 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 			}
 			index.addAll(uniquePrefixes)
 			stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, uniqueValueTable.Size())
+			plan.stats.BufferStageUniqueIdx += updateBatchStatsSince(detailedStats, phaseStart)
 		}
+		phaseStart = updateBatchStatsNow(detailedStats)
 		domain.rootPolicies[rootName] = plan.policies[i]
 		domain.rootRuns[rootName] = append(domain.rootRuns[rootName], table)
 		domain.rootRunCount = saturatingAddNonNegativeInt(domain.rootRunCount, 1)
 		plan.deltaTables[i] = nil
+		plan.stats.BufferStageRootAppend += updateBatchStatsSince(detailedStats, phaseStart)
 	}
 	plan.deltaTables = nil
 	domain.loaded = true
@@ -7233,7 +7406,13 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	domain.observeIndexedStage(modifiedCount, stagedBytes, stagedRootRuns)
 	c.meta = plan.meta
 	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
-		if _, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options); err != nil {
+		flushDuration, lockReleased, relockWait, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options)
+		if lockReleased > 0 {
+			lockReleasedDuringHold += lockReleased
+		}
+		plan.stats.BufferStageLockWait += updateBatchStatsDuration(detailedStats, relockWait)
+		plan.stats.BufferStageFlush += updateBatchStatsDuration(detailedStats, flushDuration)
+		if err != nil {
 			if shouldAutoFlushAfterAdding {
 				rollbackBufferedIndexedDomain(domain, checkpoint)
 				c.meta = collectionMetaCheckpoint

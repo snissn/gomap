@@ -502,8 +502,17 @@ The benchmark shapes are intentionally different:
   update attribution metrics such as `update_current_read_ns/doc`,
   `update_callback_ns/doc`, `update_index_state_extract_ns/doc`,
   `update_primary_run_ns/doc`, `update_secondary_runs_ns/doc`,
-  `update_buffer_stage_ns/doc`, `update_publish_ns/doc`, and
-  `update_items/batch` from the collection manager's measured-phase counters.
+  `update_buffer_stage_ns/doc`, buffer-stage submetrics such as
+  `update_buffer_precheck_ns/doc`, `update_buffer_lock_wait_ns/doc`,
+  `update_buffer_lock_hold_ns/doc`, `update_buffer_validation_ns/doc`,
+  `update_buffer_root_scan_ns/doc`, `update_buffer_domain_prepare_ns/doc`,
+  `update_buffer_primary_index_ns/doc`, `update_buffer_unique_index_ns/doc`,
+  `update_buffer_root_append_ns/doc`, `update_buffer_flush_ns/doc`,
+  `update_publish_ns/doc`, and `update_items/batch` from the collection
+  manager's measured-phase counters. `update_buffer_lock_hold_ns/doc` is the
+  enclosing domain mutex hold time for buffered staging, not an additive sibling
+  of the other buffer-stage submetrics; `update_buffer_flush_ns/doc` reports
+  threshold-flush scheduling/publish time separately.
 - `BenchmarkClientBSONBatchEncode` measures client-side BSON document encoding
   alone.
 

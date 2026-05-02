@@ -603,7 +603,13 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 	if stats.SecondaryKeyBytes == 0 {
 		t.Fatal("stats secondary key bytes=0 want positive")
 	}
-	if stats.CurrentRead != 0 || stats.Callback != 0 || stats.BufferStage != 0 {
+	if stats.CurrentRead != 0 || stats.Callback != 0 || stats.BufferStage != 0 ||
+		stats.BufferStagePrecheck != 0 ||
+		stats.BufferStageLockWait != 0 || stats.BufferStageLockHold != 0 ||
+		stats.BufferStageValidation != 0 || stats.BufferStageRootScan != 0 ||
+		stats.BufferStageDomainPrepare != 0 ||
+		stats.BufferStagePrimaryIdx != 0 || stats.BufferStageUniqueIdx != 0 ||
+		stats.BufferStageRootAppend != 0 || stats.BufferStageFlush != 0 {
 		t.Fatalf("default update timings=%+v want zero unless detailed stats enabled", stats)
 	}
 
@@ -623,6 +629,9 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 	if timedStats.Callback <= 0 {
 		t.Fatalf("timed callback=%s want positive with detailed stats enabled", timedStats.Callback)
 	}
+	if timedStats.BufferStageFlush != 0 {
+		t.Fatalf("timed flush stage=%s want zero without threshold flush", timedStats.BufferStageFlush)
+	}
 
 	managerStats := mgr.StatsSnapshot()
 	if got := managerStats.UpdateBatchCalls; got == 0 {
@@ -640,6 +649,124 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 	exported := mgr.Stats()
 	if _, ok := exported["treedb.collections.write_domain.update_batch.secondary_sets_total"]; !ok {
 		t.Fatalf("manager stats missing update batch secondary set counter: keys=%v", exported)
+	}
+	for _, key := range []string{
+		"treedb.collections.write_domain.update_batch.buffer_stage_precheck_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_lock_wait_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_lock_hold_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_validation_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_root_scan_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_domain_prepare_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_primary_index_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_unique_index_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_root_append_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_flush_ns_total",
+	} {
+		if _, ok := exported[key]; !ok {
+			t.Fatalf("manager stats missing %s: keys=%v", key, exported)
+		}
+	}
+}
+
+func TestCollectionUpdateBufferFlushTimingCountsAsyncSchedule(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        1,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com","city":"hnl","flag":false}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert: %v", err)
+	}
+
+	mgr.SetUpdateBatchDetailedStatsEnabled(true)
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: func(current []byte) ([]byte, bool, error) {
+			return []byte(`{"email":"ada@example.com","city":"hnl","flag":true}`), true, nil
+		}},
+	}); err != nil {
+		t.Fatalf("update batch: %v", err)
+	} else if !batched {
+		t.Fatal("update batch batched=false want true")
+	}
+	stats := col.LastUpdateStats()
+	if got := stats.BufferStageFlush; got <= 0 {
+		t.Fatalf("async schedule flush timing=%s want positive", got)
+	}
+	if got := mgr.StatsSnapshot().IndexedAsyncFlushScheduled; got == 0 {
+		t.Fatal("async flush scheduled=0 want positive")
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("drain async update: %v", err)
+	}
+}
+
+func TestCollectionUpdateBufferBreakdownStatsSnapshotAndAdd(t *testing.T) {
+	cases := []struct {
+		name string
+		key  string
+		set  func(*CollectionUpdateStats, time.Duration)
+		get  func(CollectionManagerStats) time.Duration
+	}{
+		{"precheck", "treedb.collections.write_domain.update_batch.buffer_stage_precheck_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStagePrecheck = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferPrecheck }},
+		{"lock_wait", "treedb.collections.write_domain.update_batch.buffer_stage_lock_wait_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageLockWait = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferLockWait }},
+		{"lock_hold", "treedb.collections.write_domain.update_batch.buffer_stage_lock_hold_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageLockHold = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferLockHold }},
+		{"validation", "treedb.collections.write_domain.update_batch.buffer_stage_validation_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageValidation = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferValidation }},
+		{"root_scan", "treedb.collections.write_domain.update_batch.buffer_stage_root_scan_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageRootScan = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferRootScan }},
+		{"domain_prepare", "treedb.collections.write_domain.update_batch.buffer_stage_domain_prepare_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageDomainPrepare = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferDomainPrepare }},
+		{"primary_index", "treedb.collections.write_domain.update_batch.buffer_stage_primary_index_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStagePrimaryIdx = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferPrimaryIdx }},
+		{"unique_index", "treedb.collections.write_domain.update_batch.buffer_stage_unique_index_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageUniqueIdx = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferUniqueIdx }},
+		{"root_append", "treedb.collections.write_domain.update_batch.buffer_stage_root_append_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageRootAppend = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferRootAppend }},
+		{"flush", "treedb.collections.write_domain.update_batch.buffer_stage_flush_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageFlush = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferFlush }},
+	}
+
+	var updateStats CollectionUpdateStats
+	for i, tc := range cases {
+		tc.set(&updateStats, time.Duration(i+1)*time.Nanosecond)
+	}
+	domain := &collectionWriteDomain{}
+	domain.observeUpdateBatchStats(updateStats)
+	snapshot := domain.statsSnapshot()
+	var merged CollectionManagerStats
+	merged.add(snapshot)
+	exported := (&CollectionManager{domains: map[string]*collectionWriteDomain{"test": domain}}).Stats()
+	for i, tc := range cases {
+		want := time.Duration(i+1) * time.Nanosecond
+		if got := tc.get(snapshot); got != want {
+			t.Fatalf("snapshot %s=%s want %s", tc.name, got, want)
+		}
+		if got := tc.get(merged); got != want {
+			t.Fatalf("merged %s=%s want %s", tc.name, got, want)
+		}
+		if got, want := exported[tc.key], fmt.Sprintf("%d", want.Nanoseconds()); got != want {
+			t.Fatalf("exported %s=%q want %q", tc.key, got, want)
+		}
 	}
 }
 
@@ -3152,7 +3279,7 @@ func TestCollectionIndexedWriteMemtablesAsyncBackpressureWaitsForPublishingUnit(
 	backpressureDone := make(chan error, 1)
 	go func() {
 		col.writeDomain.mu.Lock()
-		_, err := col.flushBufferedIndexedAfterThresholdLocked(col.writeDomain, CollectionOptions{
+		_, _, _, err := col.flushBufferedIndexedAfterThresholdLocked(col.writeDomain, CollectionOptions{
 			BufferedIndexedWrites:                   true,
 			BufferedIndexedWriteMaxDocuments:        1,
 			BufferedIndexedAsyncFlush:               true,
