@@ -5776,6 +5776,30 @@ func TestCollectionUpdateCombinerRejectsFullDoneChannel(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateCombinerDocumentIDInlineStorageDoesNotAllocate(t *testing.T) {
+	id := []byte("user-123")
+	req := newCollectionUpdateCombineRequest(&Collection{db: &backenddb.DB{}}, id, func([]byte) ([]byte, bool, error) {
+		return nil, false, nil
+	}, make(chan collectionUpdateCombineResult, 1))
+	if got := req.documentIDBytes(); !bytes.Equal(got, id) {
+		t.Fatalf("inline document id=%q want %q", got, id)
+	}
+	id[0] = 'X'
+	if got := req.documentIDBytes(); !bytes.Equal(got, []byte("user-123")) {
+		t.Fatalf("inline document id changed after caller mutation: %q", got)
+	}
+
+	allocID := []byte("user-123")
+	if allocs := testing.AllocsPerRun(1000, func() {
+		req := newCollectionUpdateCombineRequest(nil, allocID, nil, nil)
+		if !bytes.Equal((&req).documentIDBytes(), allocID) {
+			t.Fatal("inline document id mismatch")
+		}
+	}); allocs != 0 {
+		t.Fatalf("inline document id request allocations/run=%0.1f want 0", allocs)
+	}
+}
+
 func TestCollectionUpdateCombinerCloseRequestsAllowsNilRequests(t *testing.T) {
 	combiner := &collectionUpdateCombiner{}
 	if !combiner.closeRequests() {

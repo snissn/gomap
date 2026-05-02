@@ -5234,12 +5234,16 @@ type collectionUpdateCombiner struct {
 	waiters      sync.Pool
 }
 
+const collectionUpdateCombineInlineDocumentIDMax = 64
+
 type collectionUpdateCombineRequest struct {
-	collection   *Collection
-	documentID   []byte
-	documentHash uint64
-	update       func(current []byte) (replacement []byte, changed bool, err error)
-	done         chan collectionUpdateCombineResult
+	collection          *Collection
+	documentID          []byte
+	documentIDInline    [collectionUpdateCombineInlineDocumentIDMax]byte
+	documentIDInlineLen int
+	documentHash        uint64
+	update              func(current []byte) (replacement []byte, changed bool, err error)
+	done                chan collectionUpdateCombineResult
 }
 
 type collectionUpdateCombineResult struct {
@@ -5325,14 +5329,7 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 		return c.updateDirect(documentID, update)
 	}
 	waiter := combiner.getWaiter()
-	clonedDocumentID := bytes.Clone(documentID)
-	req := collectionUpdateCombineRequest{
-		collection:   c,
-		documentID:   clonedDocumentID,
-		documentHash: xxhash.Sum64(clonedDocumentID),
-		update:       update,
-		done:         waiter.ch,
-	}
+	req := newCollectionUpdateCombineRequest(c, documentID, update, waiter.ch)
 	if !combiner.enqueue(req) {
 		combiner.putWaiter(waiter)
 		// Combining is a best-effort throughput optimization. Saturated or stopped
@@ -5350,6 +5347,33 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 		combiner.putWaiter(waiter)
 	}
 	return result.matched, result.modified, result.err
+}
+
+func newCollectionUpdateCombineRequest(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error), done chan collectionUpdateCombineResult) collectionUpdateCombineRequest {
+	req := collectionUpdateCombineRequest{
+		collection: c,
+		update:     update,
+		done:       done,
+	}
+	if len(documentID) <= collectionUpdateCombineInlineDocumentIDMax {
+		req.documentIDInlineLen = len(documentID)
+		copy(req.documentIDInline[:], documentID)
+		req.documentHash = xxhash.Sum64(req.documentIDInline[:req.documentIDInlineLen])
+		return req
+	}
+	req.documentID = bytes.Clone(documentID)
+	req.documentHash = xxhash.Sum64(req.documentID)
+	return req
+}
+
+func (req *collectionUpdateCombineRequest) documentIDBytes() []byte {
+	if req == nil {
+		return nil
+	}
+	if req.documentIDInlineLen > 0 {
+		return req.documentIDInline[:req.documentIDInlineLen]
+	}
+	return req.documentID
 }
 
 func (combiner *collectionUpdateCombiner) getWaiter() *collectionUpdateCombineWaiter {
@@ -5595,9 +5619,10 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 	}
 	clear(combiner.itemsScratch)
 	items := combiner.itemsScratch[:len(batch)]
-	for i, req := range batch {
+	for i := range batch {
+		req := &batch[i]
 		items[i] = UpdateBatchItem{
-			DocumentID: req.documentID,
+			DocumentID: req.documentIDBytes(),
 			Update:     req.update,
 		}
 	}
@@ -5666,7 +5691,7 @@ func runUpdateCombineDirect(req collectionUpdateCombineRequest) collectionUpdate
 	if err := validateCollectionUpdateCombineRequest(req); err != nil {
 		return collectionUpdateCombineResult{err: err}
 	}
-	matched, modified, err := req.collection.updateDirect(req.documentID, req.update)
+	matched, modified, err := req.collection.updateDirect((&req).documentIDBytes(), req.update)
 	return collectionUpdateCombineResult{matched: matched, modified: modified, err: err}
 }
 
@@ -5677,7 +5702,7 @@ func validateCollectionUpdateCombineRequest(req collectionUpdateCombineRequest) 
 	if req.collection.db == nil {
 		return errCollectionDBNil
 	}
-	if len(req.documentID) == 0 {
+	if len((&req).documentIDBytes()) == 0 {
 		return errors.New("collections: document id cannot be empty")
 	}
 	if req.update == nil {
@@ -5754,17 +5779,19 @@ func collectionUpdateCombineHasDuplicateIDs(batch []collectionUpdateCombineReque
 		return false
 	}
 	for i, req := range batch {
+		reqDocumentID := (&req).documentIDBytes()
 		hash := req.documentHash
-		if hash == 0 && len(req.documentID) > 0 {
-			hash = xxhash.Sum64(req.documentID)
+		if hash == 0 && len(reqDocumentID) > 0 {
+			hash = xxhash.Sum64(reqDocumentID)
 		}
 		for j := 0; j < i; j++ {
 			prev := batch[j]
+			prevDocumentID := (&prev).documentIDBytes()
 			prevHash := prev.documentHash
-			if prevHash == 0 && len(prev.documentID) > 0 {
-				prevHash = xxhash.Sum64(prev.documentID)
+			if prevHash == 0 && len(prevDocumentID) > 0 {
+				prevHash = xxhash.Sum64(prevDocumentID)
 			}
-			if prevHash == hash && bytes.Equal(prev.documentID, req.documentID) {
+			if prevHash == hash && bytes.Equal(prevDocumentID, reqDocumentID) {
 				return true
 			}
 		}
