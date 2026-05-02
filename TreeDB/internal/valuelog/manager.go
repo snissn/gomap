@@ -90,8 +90,9 @@ type File struct {
 	closed atomic.Bool
 
 	// mmapData holds the current read-only mapping. Readers load it without locks.
-	mmapData atomic.Value // stores []byte (may be nil slice)
-	fileSize atomic.Int64 // last known on-disk size; 0 means unknown
+	mmapData         atomic.Value // stores []byte (may be nil slice)
+	fileSize         atomic.Int64 // last known on-disk size; 0 means unknown
+	verifiedFileSize atomic.Int64 // size observed from stat/barrier; 0 means unknown
 
 	remapMu        sync.Mutex
 	remapRequested atomic.Bool
@@ -157,11 +158,17 @@ func openFile(path string, id uint32, dictLookup DictLookup, templateLookup Temp
 	}
 	vf.mmapData.Store([]byte(nil))
 	if info, err := f.Stat(); err == nil {
-		if sz := info.Size(); sz > 0 {
-			vf.fileSize.Store(sz)
-		}
+		vf.noteVerifiedFileSize(info.Size())
 	}
 	return vf, nil
+}
+
+func (f *File) noteVerifiedFileSize(size int64) {
+	if f == nil || size <= 0 {
+		return
+	}
+	f.fileSize.Store(size)
+	f.verifiedFileSize.Store(size)
 }
 
 var (
@@ -1205,7 +1212,7 @@ func (f *File) ensureCurrentWritableReadable() error {
 			return err
 		}
 		if size > 0 {
-			f.fileSize.Store(size)
+			f.noteVerifiedFileSize(size)
 		}
 	}
 	return nil
@@ -1903,7 +1910,7 @@ func (m *Manager) allowSealedLazyMmapLocked(target *File, targetSize int64) (boo
 			} else if info, err := target.File.Stat(); err == nil {
 				if sz := info.Size(); sz > 0 {
 					targetBytes = uint64(sz)
-					target.fileSize.Store(sz)
+					target.noteVerifiedFileSize(sz)
 				}
 			}
 		}
@@ -1975,7 +1982,7 @@ func (m *Manager) allowDemotedCurrentMmapLocked(target *File, nextCurrentID uint
 			if info, err := target.File.Stat(); err == nil {
 				if sz := info.Size(); sz > int64(targetBytes) {
 					targetBytes = uint64(sz)
-					target.fileSize.Store(sz)
+					target.noteVerifiedFileSize(sz)
 				}
 			}
 		}
