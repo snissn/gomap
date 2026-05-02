@@ -6368,6 +6368,7 @@ func appendUpdateBatchPlanScratchDocument(scratch *updateBatchPlanScratch, docum
 type updateBatchBufferedRead struct {
 	enabled         bool
 	primaryEntries  []updateBatchBufferedEntry
+	primaryBuffer   *updateBatchBufferedEntryBuffer
 	writeGeneration uint64
 }
 
@@ -6379,34 +6380,43 @@ type updateBatchBufferedEntry struct {
 
 var updateBatchBufferedEntryPool sync.Pool
 
-const updateBatchBufferedEntryPoolMaxCap = 1 << 15
-
-func getUpdateBatchBufferedEntries(count int) []updateBatchBufferedEntry {
-	if count <= 0 {
-		return nil
-	}
-	if count > updateBatchBufferedEntryPoolMaxCap {
-		return make([]updateBatchBufferedEntry, count)
-	}
-	if v := updateBatchBufferedEntryPool.Get(); v != nil {
-		if entries, ok := v.([]updateBatchBufferedEntry); ok && cap(entries) >= count {
-			out := entries[:count]
-			clear(out)
-			return out
-		} else if ok {
-			putUpdateBatchBufferedEntries(entries)
-		}
-	}
-	return make([]updateBatchBufferedEntry, count)
+type updateBatchBufferedEntryBuffer struct {
+	entries []updateBatchBufferedEntry
 }
 
-func putUpdateBatchBufferedEntries(entries []updateBatchBufferedEntry) {
-	if entries == nil || cap(entries) == 0 || cap(entries) > updateBatchBufferedEntryPoolMaxCap {
+const updateBatchBufferedEntryPoolMaxCap = 1 << 15
+
+func getUpdateBatchBufferedEntries(count int) ([]updateBatchBufferedEntry, *updateBatchBufferedEntryBuffer) {
+	if count <= 0 {
+		return nil, nil
+	}
+	if count > updateBatchBufferedEntryPoolMaxCap {
+		return make([]updateBatchBufferedEntry, count), nil
+	}
+	if v := updateBatchBufferedEntryPool.Get(); v != nil {
+		if buffer, ok := v.(*updateBatchBufferedEntryBuffer); ok && buffer != nil {
+			if cap(buffer.entries) >= count {
+				buffer.entries = buffer.entries[:count]
+				clear(buffer.entries)
+				return buffer.entries, buffer
+			}
+			putUpdateBatchBufferedEntries(buffer.entries, buffer)
+		}
+	}
+	buffer := &updateBatchBufferedEntryBuffer{
+		entries: make([]updateBatchBufferedEntry, count),
+	}
+	return buffer.entries, buffer
+}
+
+func putUpdateBatchBufferedEntries(entries []updateBatchBufferedEntry, buffer *updateBatchBufferedEntryBuffer) {
+	if entries == nil || buffer == nil || cap(entries) == 0 || cap(entries) > updateBatchBufferedEntryPoolMaxCap {
 		return
 	}
 	full := entries[:cap(entries)]
 	clear(full)
-	updateBatchBufferedEntryPool.Put(full[:0])
+	buffer.entries = full[:0]
+	updateBatchBufferedEntryPool.Put(buffer)
 }
 
 type updateBatchCurrentDocument struct {
@@ -6647,10 +6657,10 @@ func readUpdateBatchCurrentDocument(snap *backenddb.Snapshot, primaryRoot uint64
 
 const updateBatchBufferedPrimaryDirectProbeLimit = 1024
 
-func snapshotUpdateBatchBufferedPrimaryEntries(runs []memtable.Table, items []UpdateBatchItem) ([]updateBatchBufferedEntry, error) {
-	entries := getUpdateBatchBufferedEntries(len(items))
+func snapshotUpdateBatchBufferedPrimaryEntries(runs []memtable.Table, items []UpdateBatchItem) ([]updateBatchBufferedEntry, *updateBatchBufferedEntryBuffer, error) {
+	entries, buffer := getUpdateBatchBufferedEntries(len(items))
 	if len(runs) == 0 || len(items) == 0 {
-		return entries, nil
+		return entries, buffer, nil
 	}
 	if len(runs) <= 1 || len(runs)*len(items) <= updateBatchBufferedPrimaryDirectProbeLimit {
 		for i, item := range items {
@@ -6662,7 +6672,7 @@ func snapshotUpdateBatchBufferedPrimaryEntries(runs []memtable.Table, items []Up
 				}
 			}
 		}
-		return entries, nil
+		return entries, buffer, nil
 	}
 	targets := make(map[string]int, len(items))
 	for i, item := range items {
@@ -6689,17 +6699,18 @@ func snapshotUpdateBatchBufferedPrimaryEntries(runs []memtable.Table, items []Up
 		}
 		if err := it.Error(); err != nil {
 			_ = it.Close()
-			return nil, err
+			putUpdateBatchBufferedEntries(entries, buffer)
+			return nil, nil, err
 		}
 		_ = it.Close()
 	}
-	return entries, nil
+	return entries, buffer, nil
 }
 
-func snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(index *bufferedPrimaryRunIndex, items []UpdateBatchItem) ([]updateBatchBufferedEntry, error) {
-	entries := getUpdateBatchBufferedEntries(len(items))
+func snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(index *bufferedPrimaryRunIndex, items []UpdateBatchItem) ([]updateBatchBufferedEntry, *updateBatchBufferedEntryBuffer, error) {
+	entries, buffer := getUpdateBatchBufferedEntries(len(items))
 	if index == nil || len(items) == 0 {
-		return entries, nil
+		return entries, buffer, nil
 	}
 	for i, item := range items {
 		table, ok := index.lookup(item.DocumentID)
@@ -6716,7 +6727,7 @@ func snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(index *bufferedPrimaryRu
 			found: true,
 		}
 	}
-	return entries, nil
+	return entries, buffer, nil
 }
 
 func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64, items []UpdateBatchItem, documentFormat DocumentFormat) (updateBatchBufferedRead, []memtable.Table, bool, error) {
@@ -6754,12 +6765,13 @@ func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta C
 			return updateBatchBufferedRead{}, nil, false, true, nil
 		}
 		var primaryEntries []updateBatchBufferedEntry
+		var primaryBuffer *updateBatchBufferedEntryBuffer
 		var err error
 		if domain.primaryRunIndex != nil {
-			primaryEntries, err = snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(domain.primaryRunIndex, items)
+			primaryEntries, primaryBuffer, err = snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(domain.primaryRunIndex, items)
 		} else {
 			primaryRuns := pendingIndexedRootRunsLocked(domain, collectionPrimaryRootName(bufferedCollectionName))
-			primaryEntries, err = snapshotUpdateBatchBufferedPrimaryEntries(primaryRuns, items)
+			primaryEntries, primaryBuffer, err = snapshotUpdateBatchBufferedPrimaryEntries(primaryRuns, items)
 		}
 		if err != nil {
 			return updateBatchBufferedRead{}, nil, false, false, err
@@ -6774,6 +6786,7 @@ func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta C
 		return updateBatchBufferedRead{
 			enabled:         true,
 			primaryEntries:  primaryEntries,
+			primaryBuffer:   primaryBuffer,
 			writeGeneration: domain.writeGeneration,
 		}, templateRuns, false, false, nil
 	}
@@ -6831,7 +6844,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			_ = snap.Close()
 			return nil, err
 		}
-		defer putUpdateBatchBufferedEntries(bufferedRead.primaryEntries)
+		defer putUpdateBatchBufferedEntries(bufferedRead.primaryEntries, bufferedRead.primaryBuffer)
 		if len(bufferedTemplateRuns) > 0 {
 			plannerOptions = collectionOptionsWithBufferedTemplateV1RunsResolver(plannerOptions, bufferedTemplateRuns)
 		}
