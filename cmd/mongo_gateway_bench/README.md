@@ -92,8 +92,8 @@ collection benchmark profile:
 - `-treedb-data-root-storage compressed`
 - `-treedb-index-state-root-storage compressed`
 - `-treedb-index-root-storage compressed`
-- `-treedb-buffered-indexed-write-max-documents 64000`
-- `-treedb-buffered-indexed-write-max-root-runs 4096`
+- `-treedb-buffered-indexed-write-max-documents 96000`
+- `-treedb-buffered-indexed-write-max-root-runs 96000`
 - `-treedb-maintenance full`
 - `-client-mode driver`
 
