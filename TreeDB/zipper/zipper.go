@@ -897,13 +897,34 @@ func (z *Zipper) shouldRunMaintenance(ops []batch.Entry) (maintenance bool, dele
 	return maintenance, deleteCount
 }
 
-func recordZipperNodeLoad(metrics *adaptive.Metrics, ref page.ChildRef, _ node.Node) {
+type zipperNodeLoadSource uint8
+
+const (
+	zipperNodeLoadPager zipperNodeLoadSource = iota
+	zipperNodeLoadLeafLogCache
+	zipperNodeLoadLeafLogView
+	zipperNodeLoadLeafLogScratch
+)
+
+func recordZipperNodeLoad(metrics *adaptive.Metrics, ref page.ChildRef, _ node.Node, source zipperNodeLoadSource) {
 	if metrics == nil {
 		return
 	}
 	metrics.ZipperNodeLoads++
 	if ref.Kind == page.ChildRefLeafLog {
 		metrics.ZipperLeafLogNodeLoads++
+		switch source {
+		case zipperNodeLoadLeafLogCache:
+			metrics.ZipperLeafLogCacheHits++
+		case zipperNodeLoadLeafLogView:
+			metrics.ZipperLeafLogReaderCalls++
+			metrics.ZipperLeafLogViewReads++
+		case zipperNodeLoadLeafLogScratch:
+			metrics.ZipperLeafLogReaderCalls++
+			metrics.ZipperLeafLogScratchReads++
+		default:
+			metrics.ZipperLeafLogReaderCalls++
+		}
 	} else {
 		metrics.ZipperPagerNodeLoads++
 	}
@@ -926,6 +947,18 @@ func recordZipperInternalPageWrite(metrics *adaptive.Metrics) {
 		return
 	}
 	metrics.ZipperInternalPagesWritten++
+}
+
+func recordZipperInternalChildRef(metrics *adaptive.Metrics, ref page.ChildRef) {
+	if metrics == nil {
+		return
+	}
+	metrics.ZipperInternalChildRefs++
+	if ref.Kind == page.ChildRefLeafLog {
+		metrics.ZipperInternalLeafLogRefs++
+		return
+	}
+	metrics.ZipperInternalPageChildRefs++
 }
 
 // Apply applies the batch to the tree rooted at rootID.
@@ -1035,6 +1068,9 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 					err = node.ErrNodeFull
 				} else {
 					err = currentBuilder.AddInternalChildRef(childKey, child.Ref)
+					if err == nil {
+						recordZipperInternalChildRef(&metrics, child.Ref)
+					}
 				}
 				if err == node.ErrNodeFull {
 					// Finish current
@@ -1060,6 +1096,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 					if err := currentBuilder.AddInternalChildRef(childKey, child.Ref); err != nil {
 						return 0, nil, metrics, err // Should fit in empty node
 					}
+					recordZipperInternalChildRef(&metrics, child.Ref)
 				} else if err != nil {
 					return 0, nil, metrics, err
 				}
@@ -1085,13 +1122,13 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 	return finalRootID, retired, metrics, nil
 }
 
-func (z *Zipper) loadNode(id uint64, scratchCtx *mergeScratch) (node.Node, bool, []byte, bool, error) {
+func (z *Zipper) loadNode(id uint64, scratchCtx *mergeScratch) (node.Node, bool, []byte, bool, zipperNodeLoadSource, error) {
 	return z.loadNodeRef(page.PageChildRef(id), scratchCtx)
 }
 
-func (z *Zipper) loadNodeRef(ref page.ChildRef, scratchCtx *mergeScratch) (node.Node, bool, []byte, bool, error) {
+func (z *Zipper) loadNodeRef(ref page.ChildRef, scratchCtx *mergeScratch) (node.Node, bool, []byte, bool, zipperNodeLoadSource, error) {
 	if z == nil || z.pager == nil {
-		return node.Node{}, false, nil, false, errors.New("zipper: missing pager")
+		return node.Node{}, false, nil, false, zipperNodeLoadPager, errors.New("zipper: missing pager")
 	}
 	if ref.Kind == page.ChildRefLeafLog {
 		ptr := ref.Log
@@ -1101,66 +1138,68 @@ func (z *Zipper) loadNodeRef(ref page.ChildRef, scratchCtx *mergeScratch) (node.
 			z.leafRefCacheMu.RUnlock()
 			if cached {
 				if len(data) != page.PageSize {
-					return node.Node{}, false, nil, false, errors.New("zipper: cached leaf page has invalid size")
+					return node.Node{}, false, nil, false, zipperNodeLoadLeafLogCache, errors.New("zipper: cached leaf page has invalid size")
 				}
 				n := node.NewNodeView(data)
 				if n.Type() != page.PageTypeLeaf {
-					return node.Node{}, false, nil, false, errors.New("zipper: cached leafref resolved to non-leaf page")
+					return node.Node{}, false, nil, false, zipperNodeLoadLeafLogCache, errors.New("zipper: cached leafref resolved to non-leaf page")
 				}
-				return n, false, nil, false, nil
+				return n, false, nil, false, zipperNodeLoadLeafLogCache, nil
 			}
 		}
 		if z.leafPageReader == nil {
-			return node.Node{}, false, nil, false, errors.New("zipper: missing leaf page reader")
+			return node.Node{}, false, nil, false, zipperNodeLoadLeafLogView, errors.New("zipper: missing leaf page reader")
 		}
 		if r, ok := z.leafPageReader.(leafPageUnsafeToReader); ok {
 			scratch := acquireLeafPageScratch(scratchCtx)
 			data, usedScratch, err := r.ReadUnsafeTo(ptr.ValuePtr(), scratch[:0])
 			if err != nil {
 				releaseLeafPageScratch(scratchCtx, scratch)
-				return node.Node{}, false, nil, false, err
+				return node.Node{}, false, nil, false, zipperNodeLoadLeafLogView, err
 			}
+			source := zipperNodeLoadLeafLogScratch
 			if !usedScratch {
 				releaseLeafPageScratch(scratchCtx, scratch)
 				scratch = nil
+				source = zipperNodeLoadLeafLogView
 			}
 			if len(data) != page.PageSize {
 				if scratch != nil {
 					releaseLeafPageScratch(scratchCtx, scratch)
 				}
-				return node.Node{}, false, nil, false, errors.New("zipper: leaf page has invalid size")
+				return node.Node{}, false, nil, false, source, errors.New("zipper: leaf page has invalid size")
 			}
 			n := node.NewNodeView(data)
 			if n.Type() != page.PageTypeLeaf {
 				if scratch != nil {
 					releaseLeafPageScratch(scratchCtx, scratch)
 				}
-				return node.Node{}, false, nil, false, errors.New("zipper: leafref resolved to non-leaf page")
+				return node.Node{}, false, nil, false, source, errors.New("zipper: leafref resolved to non-leaf page")
 			}
 			if scratch != nil {
-				return n, false, scratch, true, nil
+				return n, false, scratch, true, source, nil
 			}
-			return n, false, nil, false, nil
+			return n, false, nil, false, source, nil
 		}
 
 		data, err := z.leafPageReader.ReadUnsafe(ptr.ValuePtr())
 		if err != nil {
-			return node.Node{}, false, nil, false, err
+			return node.Node{}, false, nil, false, zipperNodeLoadLeafLogView, err
 		}
 		if len(data) != page.PageSize {
-			return node.Node{}, false, nil, false, errors.New("zipper: leaf page has invalid size")
+			return node.Node{}, false, nil, false, zipperNodeLoadLeafLogView, errors.New("zipper: leaf page has invalid size")
 		}
 		n := node.NewNodeView(data)
 		if n.Type() != page.PageTypeLeaf {
-			return node.Node{}, false, nil, false, errors.New("zipper: leafref resolved to non-leaf page")
+			return node.Node{}, false, nil, false, zipperNodeLoadLeafLogView, errors.New("zipper: leafref resolved to non-leaf page")
 		}
-		return n, false, nil, false, nil
+		return n, false, nil, false, zipperNodeLoadLeafLogView, nil
 	}
 	data, err := z.pager.Get(ref.Page)
 	if err != nil {
-		return node.Node{}, false, nil, false, err
+		return node.Node{}, false, nil, false, zipperNodeLoadPager, err
 	}
-	return node.NewNodeView(data), true, nil, false, nil
+	return node.NewNodeView(data), true, nil, false, zipperNodeLoadPager, nil
 }
 
 func (z *Zipper) persistLeafPage(b *node.Builder) (page.ChildRef, error) {
@@ -1209,6 +1248,7 @@ func (z *Zipper) ensureRootPage(key []byte, ref page.ChildRef, metrics *adaptive
 	if err := b.AddInternalChildRef(key, ref); err != nil {
 		return 0, err
 	}
+	recordZipperInternalChildRef(metrics, ref)
 	b.FinishNoNode()
 	recordZipperInternalPageWrite(metrics)
 	return rootID, nil
@@ -1217,11 +1257,11 @@ func (z *Zipper) ensureRootPage(key []byte, ref page.ChildRef, metrics *adaptive
 // writeRecursive handles the COW merge.
 // Returns: newPageID, splits, error.
 func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, maintenance bool, budget *maintenanceBudget, metrics *adaptive.Metrics, low, high []byte, retired *[]uint64, scratch *mergeScratch) (page.ChildRef, []Split, error) {
-	oldNode, oldFromPager, leafScratch, leafScratchRef, err := z.loadNodeRef(ref, scratch)
+	oldNode, oldFromPager, leafScratch, leafScratchRef, loadSource, err := z.loadNodeRef(ref, scratch)
 	if err != nil {
 		return page.ChildRef{}, nil, err
 	}
-	recordZipperNodeLoad(metrics, ref, oldNode)
+	recordZipperNodeLoad(metrics, ref, oldNode, loadSource)
 	if leafScratchRef {
 		defer releaseLeafPageScratch(scratch, leafScratch)
 	}
@@ -1641,6 +1681,9 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			err = node.ErrNodeFull
 		} else {
 			err = target.AddInternalChildRef(key, childRef)
+			if err == nil {
+				recordZipperInternalChildRef(metrics, childRef)
+			}
 		}
 		if err == node.ErrNodeFull {
 			target, err = z.createNewSplitInternal(target, builder, &splits, key, childRef, metrics, scratch)
@@ -1964,12 +2007,19 @@ func mergeMetrics(dst, src *adaptive.Metrics) {
 	dst.ZipperNodeLoads += src.ZipperNodeLoads
 	dst.ZipperPagerNodeLoads += src.ZipperPagerNodeLoads
 	dst.ZipperLeafLogNodeLoads += src.ZipperLeafLogNodeLoads
+	dst.ZipperLeafLogCacheHits += src.ZipperLeafLogCacheHits
+	dst.ZipperLeafLogReaderCalls += src.ZipperLeafLogReaderCalls
+	dst.ZipperLeafLogViewReads += src.ZipperLeafLogViewReads
+	dst.ZipperLeafLogScratchReads += src.ZipperLeafLogScratchReads
 	dst.ZipperLeafMerges += src.ZipperLeafMerges
 	dst.ZipperInternalMerges += src.ZipperInternalMerges
 	dst.ZipperLeafPagesWritten += src.ZipperLeafPagesWritten
 	dst.ZipperPagerLeafPagesWritten += src.ZipperPagerLeafPagesWritten
 	dst.ZipperLeafLogPagesWritten += src.ZipperLeafLogPagesWritten
 	dst.ZipperInternalPagesWritten += src.ZipperInternalPagesWritten
+	dst.ZipperInternalChildRefs += src.ZipperInternalChildRefs
+	dst.ZipperInternalPageChildRefs += src.ZipperInternalPageChildRefs
+	dst.ZipperInternalLeafLogRefs += src.ZipperInternalLeafLogRefs
 	dst.ZipperRootSplitLevels += src.ZipperRootSplitLevels
 
 	if src.SlabWriteBytesByFile != nil {
@@ -2001,14 +2051,14 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 	var retired []uint64
 
 	loadLeaf := func(ref page.ChildRef) (node.Node, bool, bool, []byte, bool, error) {
-		n, fromPager, leafScratch, leafScratchRef, err := z.loadNodeRef(ref, scratch)
+		n, fromPager, leafScratch, leafScratchRef, loadSource, err := z.loadNodeRef(ref, scratch)
 		if err != nil {
 			if leafScratchRef {
 				releaseLeafPageScratch(scratch, leafScratch)
 			}
 			return node.Node{}, false, false, nil, false, err
 		}
-		recordZipperNodeLoad(metrics, ref, n)
+		recordZipperNodeLoad(metrics, ref, n, loadSource)
 		if n.Type() != page.PageTypeLeaf {
 			if leafScratchRef {
 				releaseLeafPageScratch(scratch, leafScratch)
@@ -2550,7 +2600,7 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 			return nil, false, err
 		}
 		n := node.NewNode(data)
-		recordZipperNodeLoad(metrics, ref, *n)
+		recordZipperNodeLoad(metrics, ref, *n, zipperNodeLoadPager)
 		if n.Type() != page.PageTypeInternal {
 			return nil, false, nil
 		}
@@ -2625,6 +2675,7 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 				if err := b.AddInternalChildRef(k, child); err != nil {
 					return err
 				}
+				recordZipperInternalChildRef(metrics, child)
 			}
 			return nil
 		}
@@ -2734,6 +2785,7 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 				if err := b.AddInternalChildRef(k, e.child); err != nil {
 					return err
 				}
+				recordZipperInternalChildRef(metrics, e.child)
 			}
 			return nil
 		}
@@ -2913,6 +2965,7 @@ func (z *Zipper) createNewSplitInternal(currentTarget, rootBuilder *node.Builder
 	if err := sb.AddInternalChildRef(key, val); err != nil {
 		return nil, err
 	}
+	recordZipperInternalChildRef(metrics, val)
 
 	return sb, nil
 }

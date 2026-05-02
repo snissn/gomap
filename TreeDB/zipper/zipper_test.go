@@ -191,7 +191,7 @@ func TestZipperLeafRefCacheAvoidsUnflushedReads(t *testing.T) {
 		t.Fatalf("persistLeafPage: %v", err)
 	}
 
-	loaded, fromPager, leafScratch, leafScratchRef, err := z.loadNodeRef(leafID, nil)
+	loaded, fromPager, leafScratch, leafScratchRef, loadSource, err := z.loadNodeRef(leafID, nil)
 	if err != nil {
 		t.Fatalf("loadNode: %v", err)
 	}
@@ -200,6 +200,9 @@ func TestZipperLeafRefCacheAvoidsUnflushedReads(t *testing.T) {
 	}
 	if fromPager {
 		t.Fatalf("fromPager=%t want false", fromPager)
+	}
+	if loadSource != zipperNodeLoadLeafLogCache {
+		t.Fatalf("loadSource=%d want leaf-log cache", loadSource)
 	}
 	if loaded.Type() != page.PageTypeLeaf {
 		t.Fatalf("loaded.Type()=%d want %d", loaded.Type(), page.PageTypeLeaf)
@@ -284,6 +287,28 @@ func TestZipperApply_MaintenanceRestorePathInstallsLeafRefCache(t *testing.T) {
 	}
 	if z.leafRefCache != nil {
 		t.Fatalf("leafRefCache not cleared after Apply")
+	}
+}
+
+func TestZipperMetricsRecordLeafLogLoadSourcesAndChildRefs(t *testing.T) {
+	var metrics adaptive.Metrics
+	leafRef := page.LeafLogChildRef(page.LogRecordRef{FileID: 1, Offset: 2, RecordLengthHint: page.PageSize})
+	pageRef := page.PageChildRef(7)
+	recordZipperNodeLoad(&metrics, leafRef, node.Node{}, zipperNodeLoadLeafLogCache)
+	recordZipperNodeLoad(&metrics, leafRef, node.Node{}, zipperNodeLoadLeafLogView)
+	recordZipperNodeLoad(&metrics, leafRef, node.Node{}, zipperNodeLoadLeafLogScratch)
+	recordZipperNodeLoad(&metrics, pageRef, node.Node{}, zipperNodeLoadPager)
+	recordZipperInternalChildRef(&metrics, leafRef)
+	recordZipperInternalChildRef(&metrics, pageRef)
+
+	if metrics.ZipperNodeLoads != 4 || metrics.ZipperLeafLogNodeLoads != 3 || metrics.ZipperPagerNodeLoads != 1 {
+		t.Fatalf("node load metrics=%+v, want 3 leaf-log and 1 pager load", metrics)
+	}
+	if metrics.ZipperLeafLogCacheHits != 1 || metrics.ZipperLeafLogReaderCalls != 2 || metrics.ZipperLeafLogViewReads != 1 || metrics.ZipperLeafLogScratchReads != 1 {
+		t.Fatalf("leaf-log source metrics=%+v, want cache/view/scratch attribution", metrics)
+	}
+	if metrics.ZipperInternalChildRefs != 2 || metrics.ZipperInternalLeafLogRefs != 1 || metrics.ZipperInternalPageChildRefs != 1 {
+		t.Fatalf("internal child-ref metrics=%+v, want one leaf-log and one pager child ref", metrics)
 	}
 }
 
