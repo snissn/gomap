@@ -388,6 +388,7 @@ func TestZipperMetricsRecordLeafLogLoadSourcesAndChildRefs(t *testing.T) {
 	recordZipperNodeLoad(&metrics, pageRef, node.Node{}, zipperNodeLoadPager)
 	recordZipperInternalChildRef(&metrics, leafRef)
 	recordZipperInternalChildRef(&metrics, pageRef)
+	recordZipperInternalLeafLogRefCopy(&metrics)
 
 	if metrics.ZipperNodeLoads != 4 || metrics.ZipperLeafLogNodeLoads != 3 || metrics.ZipperPagerNodeLoads != 1 {
 		t.Fatalf("node load metrics=%+v, want 3 leaf-log and 1 pager load", metrics)
@@ -397,6 +398,9 @@ func TestZipperMetricsRecordLeafLogLoadSourcesAndChildRefs(t *testing.T) {
 	}
 	if metrics.ZipperInternalChildRefs != 2 || metrics.ZipperInternalLeafLogRefs != 1 || metrics.ZipperInternalPageChildRefs != 1 {
 		t.Fatalf("internal child-ref metrics=%+v, want one leaf-log and one pager child ref", metrics)
+	}
+	if metrics.ZipperInternalLeafLogRefCopies != 1 {
+		t.Fatalf("internal leaf-log ref copy metrics=%+v, want one copied leaf-log ref", metrics)
 	}
 }
 

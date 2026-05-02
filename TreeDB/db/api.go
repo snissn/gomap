@@ -740,6 +740,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.publish.ordered_root_delta_group.root_apply_internal_child_refs_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyInternalChildRefs)
 	stats["treedb.publish.ordered_root_delta_group.root_apply_internal_page_child_refs_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyInternalPageChildRefs)
 	stats["treedb.publish.ordered_root_delta_group.root_apply_internal_leaf_log_refs_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyInternalLeafLogRefs)
+	stats["treedb.publish.ordered_root_delta_group.root_apply_internal_leaf_log_ref_copies_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyInternalLeafLogRefCopies)
 	stats["treedb.publish.ordered_root_delta_group.root_apply_root_split_levels_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyRootSplitLevels)
 	stats["treedb.publish.ordered_root_delta_group.system_build_ns_total"] = fmt.Sprintf("%d", orderedDeltaStats.systemBuildNs)
 	stats["treedb.publish.ordered_root_delta_group.system_apply_ns_total"] = fmt.Sprintf("%d", orderedDeltaStats.systemApplyNs)

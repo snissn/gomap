@@ -965,6 +965,13 @@ func recordZipperInternalChildRef(metrics *adaptive.Metrics, ref page.ChildRef) 
 	metrics.ZipperInternalPageChildRefs++
 }
 
+func recordZipperInternalLeafLogRefCopy(metrics *adaptive.Metrics) {
+	if metrics == nil {
+		return
+	}
+	metrics.ZipperInternalLeafLogRefCopies++
+}
+
 func validateLoadedLeafLogNode(data []byte) (node.Node, error) {
 	if len(data) != page.PageSize {
 		return node.Node{}, errors.New("zipper: leaf page has invalid size")
@@ -1728,6 +1735,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			err = target.AddInternalLeafLogChildFromNode(oldNode, sourceIndex)
 			if err == nil {
 				recordZipperInternalChildRef(metrics, childRef)
+				recordZipperInternalLeafLogRefCopy(metrics)
 			}
 		} else {
 			err = target.AddInternalChildRef(key, childRef)
@@ -2088,6 +2096,7 @@ func mergeMetrics(dst, src *adaptive.Metrics) {
 	dst.ZipperInternalChildRefs += src.ZipperInternalChildRefs
 	dst.ZipperInternalPageChildRefs += src.ZipperInternalPageChildRefs
 	dst.ZipperInternalLeafLogRefs += src.ZipperInternalLeafLogRefs
+	dst.ZipperInternalLeafLogRefCopies += src.ZipperInternalLeafLogRefCopies
 	dst.ZipperRootSplitLevels += src.ZipperRootSplitLevels
 
 	if src.SlabWriteBytesByFile != nil {

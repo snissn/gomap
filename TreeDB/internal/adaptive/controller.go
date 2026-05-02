@@ -24,24 +24,25 @@ type Metrics struct {
 	// batch to a B+Tree. They are intentionally simple counters, not timers, so
 	// callers can use them in benchmark reports without adding clock-read
 	// overhead to the core apply path.
-	ZipperApplyOps              int
-	ZipperNodeLoads             int
-	ZipperPagerNodeLoads        int
-	ZipperLeafLogNodeLoads      int
-	ZipperLeafLogCacheHits      int
-	ZipperLeafLogReaderCalls    int
-	ZipperLeafLogViewReads      int
-	ZipperLeafLogScratchReads   int
-	ZipperLeafMerges            int
-	ZipperInternalMerges        int
-	ZipperLeafPagesWritten      int
-	ZipperPagerLeafPagesWritten int
-	ZipperLeafLogPagesWritten   int
-	ZipperInternalPagesWritten  int
-	ZipperInternalChildRefs     int
-	ZipperInternalPageChildRefs int
-	ZipperInternalLeafLogRefs   int
-	ZipperRootSplitLevels       int
+	ZipperApplyOps                 int
+	ZipperNodeLoads                int
+	ZipperPagerNodeLoads           int
+	ZipperLeafLogNodeLoads         int
+	ZipperLeafLogCacheHits         int
+	ZipperLeafLogReaderCalls       int
+	ZipperLeafLogViewReads         int
+	ZipperLeafLogScratchReads      int
+	ZipperLeafMerges               int
+	ZipperInternalMerges           int
+	ZipperLeafPagesWritten         int
+	ZipperPagerLeafPagesWritten    int
+	ZipperLeafLogPagesWritten      int
+	ZipperInternalPagesWritten     int
+	ZipperInternalChildRefs        int
+	ZipperInternalPageChildRefs    int
+	ZipperInternalLeafLogRefs      int
+	ZipperInternalLeafLogRefCopies int
+	ZipperRootSplitLevels          int
 
 	// SlabWriteBytesByFile tracks bytes appended to each slab file during this
 	// commit (keyed by FileID).

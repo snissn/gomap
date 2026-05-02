@@ -774,6 +774,7 @@ func TestPublishOrderedRootDeltaGroupWithSystemBuilder_ReportsPublishStats(t *te
 		"treedb.publish.ordered_root_delta_group.root_apply_internal_child_refs_total",
 		"treedb.publish.ordered_root_delta_group.root_apply_internal_page_child_refs_total",
 		"treedb.publish.ordered_root_delta_group.root_apply_internal_leaf_log_refs_total",
+		"treedb.publish.ordered_root_delta_group.root_apply_internal_leaf_log_ref_copies_total",
 		"treedb.publish.ordered_root_delta_group.system_build_ns_total",
 		"treedb.publish.ordered_root_delta_group.system_apply_ns_total",
 		"treedb.publish.ordered_root_delta_group.system_apply_ops_total",
