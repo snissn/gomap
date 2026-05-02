@@ -668,6 +668,65 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBufferFlushTimingCountsAsyncSchedule(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        1,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com","city":"hnl","flag":false}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert: %v", err)
+	}
+
+	mgr.SetUpdateBatchDetailedStatsEnabled(true)
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: func(current []byte) ([]byte, bool, error) {
+			return []byte(`{"email":"ada@example.com","city":"hnl","flag":true}`), true, nil
+		}},
+	}); err != nil {
+		t.Fatalf("update batch: %v", err)
+	} else if !batched {
+		t.Fatal("update batch batched=false want true")
+	}
+	stats := col.LastUpdateStats()
+	if got := stats.BufferStageFlush; got <= 0 {
+		t.Fatalf("async schedule flush timing=%s want positive", got)
+	}
+	if got := mgr.StatsSnapshot().IndexedAsyncFlushScheduled; got == 0 {
+		t.Fatal("async flush scheduled=0 want positive")
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("drain async update: %v", err)
+	}
+}
+
 func TestCollectionUpdateBufferBreakdownStatsSnapshotAndAdd(t *testing.T) {
 	cases := []struct {
 		name string
