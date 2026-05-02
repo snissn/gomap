@@ -40,45 +40,47 @@ const (
 )
 
 type config struct {
-	Dir                          string
-	Reset                        bool
-	Docs                         int
-	BatchSize                    int
-	Collection                   string
-	DocumentFormat               collections.DocumentFormat
-	IndexCount                   int
-	BufferedIndexedWrites        bool
-	BufferedIndexedWriteMaxDocs  int
-	BufferedIndexedWriteMaxBytes int64
-	BufferedIndexedWriteMaxRuns  int
-	Profile                      treedb.Profile
-	DataOuterLeavesInValueLog    bool
-	IndexOuterLeavesInValueLog   bool
-	ChunkSize                    int64
-	KeepRecent                   uint64
-	PreferAppendAlloc            bool
-	PagerSyncConcurrency         int
-	DisableBackgroundPrune       bool
-	PruneInterval                time.Duration
-	PruneMaxPages                int
-	PruneMaxDuration             time.Duration
-	LeafSegmentTargetBytes       int64
-	Checkpoint                   bool
-	CheckpointEachBatch          bool
-	ReopenVerify                 bool
-	VerifySamples                int
-	ValueLogRewrite              bool
-	ValueLogGC                   bool
-	LeafGenerationPackGC         bool
-	LeafGenerationPackForce      bool
-	LeafGenerationPackMaxGen     int
-	LeafGenerationPackFrameK     int
-	IndexVacuum                  string
-	Progress                     bool
-	JSONOutput                   bool
-	CPUProfile                   string
-	MemProfile                   string
-	createdTempDir               bool
+	Dir                                     string
+	Reset                                   bool
+	Docs                                    int
+	BatchSize                               int
+	Collection                              string
+	DocumentFormat                          collections.DocumentFormat
+	IndexCount                              int
+	BufferedIndexedWrites                   bool
+	BufferedIndexedWriteMaxDocs             int
+	BufferedIndexedWriteMaxBytes            int64
+	BufferedIndexedWriteMaxRuns             int
+	BufferedIndexedAsyncFlush               bool
+	BufferedIndexedAsyncFlushMaxQueuedUnits int
+	Profile                                 treedb.Profile
+	DataOuterLeavesInValueLog               bool
+	IndexOuterLeavesInValueLog              bool
+	ChunkSize                               int64
+	KeepRecent                              uint64
+	PreferAppendAlloc                       bool
+	PagerSyncConcurrency                    int
+	DisableBackgroundPrune                  bool
+	PruneInterval                           time.Duration
+	PruneMaxPages                           int
+	PruneMaxDuration                        time.Duration
+	LeafSegmentTargetBytes                  int64
+	Checkpoint                              bool
+	CheckpointEachBatch                     bool
+	ReopenVerify                            bool
+	VerifySamples                           int
+	ValueLogRewrite                         bool
+	ValueLogGC                              bool
+	LeafGenerationPackGC                    bool
+	LeafGenerationPackForce                 bool
+	LeafGenerationPackMaxGen                int
+	LeafGenerationPackFrameK                int
+	IndexVacuum                             string
+	Progress                                bool
+	JSONOutput                              bool
+	CPUProfile                              string
+	MemProfile                              string
+	createdTempDir                          bool
 }
 
 type timingSummary struct {
@@ -226,51 +228,53 @@ type verifySummary struct {
 }
 
 type loadSummary struct {
-	GeneratedAt                   string                 `json:"generated_at"`
-	Dir                           string                 `json:"dir"`
-	CreatedTempDir                bool                   `json:"created_temp_dir,omitempty"`
-	Collection                    string                 `json:"collection"`
-	DocumentFormat                string                 `json:"document_format"`
-	Profile                       string                 `json:"profile"`
-	Docs                          int                    `json:"docs"`
-	BatchSize                     int                    `json:"batch_size"`
-	Batches                       int                    `json:"batches"`
-	IndexCount                    int                    `json:"index_count"`
-	BufferedIndexedWrites         bool                   `json:"buffered_indexed_writes,omitempty"`
-	BufferedIndexedWriteMaxDocs   int                    `json:"buffered_indexed_write_max_docs,omitempty"`
-	BufferedIndexedWriteMaxBytes  int64                  `json:"buffered_indexed_write_max_bytes,omitempty"`
-	BufferedIndexedWriteMaxRuns   int                    `json:"buffered_indexed_write_max_root_runs,omitempty"`
-	DataOuterLeavesInValueLog     bool                   `json:"data_outer_leaves_in_value_log"`
-	IndexOuterLeavesInValueLog    bool                   `json:"index_outer_leaves_in_value_log"`
-	ChunkSize                     int64                  `json:"chunk_size,omitempty"`
-	KeepRecent                    uint64                 `json:"keep_recent"`
-	PreferAppendAlloc             bool                   `json:"prefer_append_alloc"`
-	PagerSyncConcurrency          int                    `json:"pager_sync_concurrency,omitempty"`
-	DisableBackgroundPrune        bool                   `json:"disable_background_prune,omitempty"`
-	PruneInterval                 string                 `json:"prune_interval,omitempty"`
-	PruneMaxPages                 int                    `json:"prune_max_pages,omitempty"`
-	PruneMaxDuration              string                 `json:"prune_max_duration,omitempty"`
-	LeafSegmentTargetBytes        int64                  `json:"leaf_segment_target_bytes,omitempty"`
-	WallTiming                    timingSummary          `json:"wall_timing"`
-	GenerationTiming              timingSummary          `json:"generation_timing"`
-	InsertTiming                  timingSummary          `json:"insert_timing"`
-	FlushTiming                   timingSummary          `json:"flush_timing,omitempty"`
-	CheckpointTiming              timingSummary          `json:"checkpoint_timing,omitempty"`
-	InsertPhases                  insertPhaseSummary     `json:"insert_phases"`
-	IndexStorageBeforeMaintenance indexStorageSummary    `json:"index_storage_before_maintenance"`
-	DiskUsageBeforeMaintenance    diskUsageSummary       `json:"disk_usage_before_maintenance"`
-	DiskUsageFinal                diskUsageSummary       `json:"disk_usage_final"`
-	Rewrite                       rewriteSummary         `json:"rewrite,omitempty"`
-	LeafGeneration                *leafGenerationSummary `json:"leaf_generation,omitempty"`
-	IndexVacuum                   indexVacuumSummary     `json:"index_vacuum,omitempty"`
-	IndexStorageFinal             indexStorageSummary    `json:"index_storage_final"`
-	TreeDBStatsFinal              map[string]string      `json:"treedb_stats_final,omitempty"`
-	Verify                        verifySummary          `json:"verify"`
-	CPUProfile                    string                 `json:"cpu_profile,omitempty"`
-	MemProfile                    string                 `json:"mem_profile,omitempty"`
-	GoVersion                     string                 `json:"go_version"`
-	GOOS                          string                 `json:"goos"`
-	GOARCH                        string                 `json:"goarch"`
+	GeneratedAt                             string                 `json:"generated_at"`
+	Dir                                     string                 `json:"dir"`
+	CreatedTempDir                          bool                   `json:"created_temp_dir,omitempty"`
+	Collection                              string                 `json:"collection"`
+	DocumentFormat                          string                 `json:"document_format"`
+	Profile                                 string                 `json:"profile"`
+	Docs                                    int                    `json:"docs"`
+	BatchSize                               int                    `json:"batch_size"`
+	Batches                                 int                    `json:"batches"`
+	IndexCount                              int                    `json:"index_count"`
+	BufferedIndexedWrites                   bool                   `json:"buffered_indexed_writes,omitempty"`
+	BufferedIndexedWriteMaxDocs             int                    `json:"buffered_indexed_write_max_docs,omitempty"`
+	BufferedIndexedWriteMaxBytes            int64                  `json:"buffered_indexed_write_max_bytes,omitempty"`
+	BufferedIndexedWriteMaxRuns             int                    `json:"buffered_indexed_write_max_root_runs,omitempty"`
+	BufferedIndexedAsyncFlush               bool                   `json:"buffered_indexed_async_flush,omitempty"`
+	BufferedIndexedAsyncFlushMaxQueuedUnits int                    `json:"buffered_indexed_async_flush_max_queued_units,omitempty"`
+	DataOuterLeavesInValueLog               bool                   `json:"data_outer_leaves_in_value_log"`
+	IndexOuterLeavesInValueLog              bool                   `json:"index_outer_leaves_in_value_log"`
+	ChunkSize                               int64                  `json:"chunk_size,omitempty"`
+	KeepRecent                              uint64                 `json:"keep_recent"`
+	PreferAppendAlloc                       bool                   `json:"prefer_append_alloc"`
+	PagerSyncConcurrency                    int                    `json:"pager_sync_concurrency,omitempty"`
+	DisableBackgroundPrune                  bool                   `json:"disable_background_prune,omitempty"`
+	PruneInterval                           string                 `json:"prune_interval,omitempty"`
+	PruneMaxPages                           int                    `json:"prune_max_pages,omitempty"`
+	PruneMaxDuration                        string                 `json:"prune_max_duration,omitempty"`
+	LeafSegmentTargetBytes                  int64                  `json:"leaf_segment_target_bytes,omitempty"`
+	WallTiming                              timingSummary          `json:"wall_timing"`
+	GenerationTiming                        timingSummary          `json:"generation_timing"`
+	InsertTiming                            timingSummary          `json:"insert_timing"`
+	FlushTiming                             timingSummary          `json:"flush_timing,omitempty"`
+	CheckpointTiming                        timingSummary          `json:"checkpoint_timing,omitempty"`
+	InsertPhases                            insertPhaseSummary     `json:"insert_phases"`
+	IndexStorageBeforeMaintenance           indexStorageSummary    `json:"index_storage_before_maintenance"`
+	DiskUsageBeforeMaintenance              diskUsageSummary       `json:"disk_usage_before_maintenance"`
+	DiskUsageFinal                          diskUsageSummary       `json:"disk_usage_final"`
+	Rewrite                                 rewriteSummary         `json:"rewrite,omitempty"`
+	LeafGeneration                          *leafGenerationSummary `json:"leaf_generation,omitempty"`
+	IndexVacuum                             indexVacuumSummary     `json:"index_vacuum,omitempty"`
+	IndexStorageFinal                       indexStorageSummary    `json:"index_storage_final"`
+	TreeDBStatsFinal                        map[string]string      `json:"treedb_stats_final,omitempty"`
+	Verify                                  verifySummary          `json:"verify"`
+	CPUProfile                              string                 `json:"cpu_profile,omitempty"`
+	MemProfile                              string                 `json:"mem_profile,omitempty"`
+	GoVersion                               string                 `json:"go_version"`
+	GOOS                                    string                 `json:"goos"`
+	GOARCH                                  string                 `json:"goarch"`
 }
 
 func main() {
@@ -340,6 +344,8 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	fs.IntVar(&cfg.BufferedIndexedWriteMaxDocs, "buffered-indexed-write-max-docs", cfg.BufferedIndexedWriteMaxDocs, "flush indexed write buffers after this many staged documents; 0 uses the collection default")
 	fs.Int64Var(&cfg.BufferedIndexedWriteMaxBytes, "buffered-indexed-write-max-bytes", 0, "flush indexed write buffers after this many staged root-run bytes; 0 means Flush/Close only")
 	fs.IntVar(&cfg.BufferedIndexedWriteMaxRuns, "buffered-indexed-write-max-root-runs", cfg.BufferedIndexedWriteMaxRuns, "flush indexed write buffers after this many staged root-local mutation runs; 0 disables this trigger")
+	fs.BoolVar(&cfg.BufferedIndexedAsyncFlush, "buffered-indexed-async-flush", false, "publish threshold-triggered indexed write flushes in the background; Flush/Close still drain before returning")
+	fs.IntVar(&cfg.BufferedIndexedAsyncFlushMaxQueuedUnits, "buffered-indexed-async-flush-max-queued-units", 0, "max immutable indexed flush units queued for background publish; 0 uses the collection default when async flush is enabled")
 	fs.StringVar(&profile, "profile", string(cfg.Profile), "TreeDB profile: fast, wal_on_fast, durable, or bench")
 	fs.BoolVar(&cfg.DataOuterLeavesInValueLog, "data-outer-leaves-in-vlog", cfg.DataOuterLeavesInValueLog, "store collection primary/index-state outer leaves through the value log")
 	fs.BoolVar(&cfg.IndexOuterLeavesInValueLog, "index-outer-leaves-in-vlog", cfg.IndexOuterLeavesInValueLog, "store secondary-index outer leaves through the value log")
@@ -400,6 +406,9 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	}
 	if cfg.BufferedIndexedWriteMaxRuns < 0 {
 		return cfg, fmt.Errorf("-buffered-indexed-write-max-root-runs must be >= 0")
+	}
+	if cfg.BufferedIndexedAsyncFlushMaxQueuedUnits < 0 {
+		return cfg, fmt.Errorf("-buffered-indexed-async-flush-max-queued-units must be >= 0")
 	}
 	if strings.TrimSpace(cfg.Collection) == "" {
 		return cfg, fmt.Errorf("-collection cannot be empty")
@@ -496,7 +505,7 @@ func runFixture(cfg config) (loadSummary, error) {
 		}
 	}()
 
-	collection, err := createFixtureCollection(backend, cfg)
+	manager, collection, err := createFixtureCollection(backend, cfg)
 	if err != nil {
 		return loadSummary{}, err
 	}
@@ -589,7 +598,14 @@ func runFixture(cfg config) (loadSummary, error) {
 	if err != nil {
 		return loadSummary{}, err
 	}
-	finalStats := treedbstats.Selected(backend.Stats())
+	rawFinalStats := backend.Stats()
+	if rawFinalStats == nil {
+		rawFinalStats = make(map[string]string)
+	}
+	for key, value := range manager.Stats() {
+		rawFinalStats[key] = value
+	}
+	finalStats := treedbstats.Selected(rawFinalStats)
 	wallElapsed := time.Since(wallStart)
 
 	if !closed {
@@ -626,51 +642,53 @@ func runFixture(cfg config) (loadSummary, error) {
 	}
 
 	return loadSummary{
-		GeneratedAt:                   time.Now().UTC().Format(time.RFC3339),
-		Dir:                           cfg.Dir,
-		CreatedTempDir:                cfg.createdTempDir,
-		Collection:                    cfg.Collection,
-		DocumentFormat:                string(cfg.DocumentFormat),
-		Profile:                       string(cfg.Profile),
-		Docs:                          cfg.Docs,
-		BatchSize:                     cfg.BatchSize,
-		Batches:                       batches,
-		IndexCount:                    cfg.IndexCount,
-		BufferedIndexedWrites:         collectionMeta.Options.BufferedIndexedWrites,
-		BufferedIndexedWriteMaxDocs:   collectionMeta.Options.BufferedIndexedWriteMaxDocuments,
-		BufferedIndexedWriteMaxBytes:  collectionMeta.Options.BufferedIndexedWriteMaxBytes,
-		BufferedIndexedWriteMaxRuns:   collectionMeta.Options.BufferedIndexedWriteMaxRootRuns,
-		DataOuterLeavesInValueLog:     cfg.DataOuterLeavesInValueLog,
-		IndexOuterLeavesInValueLog:    cfg.IndexOuterLeavesInValueLog,
-		ChunkSize:                     cfg.ChunkSize,
-		KeepRecent:                    cfg.KeepRecent,
-		PreferAppendAlloc:             cfg.PreferAppendAlloc,
-		PagerSyncConcurrency:          cfg.PagerSyncConcurrency,
-		DisableBackgroundPrune:        cfg.DisableBackgroundPrune,
-		PruneInterval:                 durationString(cfg.PruneInterval),
-		PruneMaxPages:                 cfg.PruneMaxPages,
-		PruneMaxDuration:              durationString(cfg.PruneMaxDuration),
-		LeafSegmentTargetBytes:        cfg.LeafSegmentTargetBytes,
-		WallTiming:                    timing(wallElapsed, cfg.Docs),
-		GenerationTiming:              timing(generationElapsed, cfg.Docs),
-		InsertTiming:                  timing(insertElapsed, cfg.Docs),
-		FlushTiming:                   timing(flushElapsed, cfg.Docs),
-		CheckpointTiming:              timing(checkpointElapsed, cfg.Docs),
-		InsertPhases:                  summarizeInsertPhases(insertStats, secondaryRuns, cfg.Docs, batches),
-		IndexStorageBeforeMaintenance: beforeIndexStorage,
-		DiskUsageBeforeMaintenance:    beforeMaintenance,
-		DiskUsageFinal:                finalUsage,
-		Rewrite:                       rewrite,
-		LeafGeneration:                leafGeneration,
-		IndexVacuum:                   indexVacuum,
-		IndexStorageFinal:             finalIndexStorage,
-		TreeDBStatsFinal:              finalStats,
-		Verify:                        verify,
-		CPUProfile:                    cfg.CPUProfile,
-		MemProfile:                    cfg.MemProfile,
-		GoVersion:                     runtime.Version(),
-		GOOS:                          runtime.GOOS,
-		GOARCH:                        runtime.GOARCH,
+		GeneratedAt:                             time.Now().UTC().Format(time.RFC3339),
+		Dir:                                     cfg.Dir,
+		CreatedTempDir:                          cfg.createdTempDir,
+		Collection:                              cfg.Collection,
+		DocumentFormat:                          string(cfg.DocumentFormat),
+		Profile:                                 string(cfg.Profile),
+		Docs:                                    cfg.Docs,
+		BatchSize:                               cfg.BatchSize,
+		Batches:                                 batches,
+		IndexCount:                              cfg.IndexCount,
+		BufferedIndexedWrites:                   collectionMeta.Options.BufferedIndexedWrites,
+		BufferedIndexedWriteMaxDocs:             collectionMeta.Options.BufferedIndexedWriteMaxDocuments,
+		BufferedIndexedWriteMaxBytes:            collectionMeta.Options.BufferedIndexedWriteMaxBytes,
+		BufferedIndexedWriteMaxRuns:             collectionMeta.Options.BufferedIndexedWriteMaxRootRuns,
+		BufferedIndexedAsyncFlush:               collectionMeta.Options.BufferedIndexedAsyncFlush && collectionMeta.Options.BufferedIndexedWrites,
+		BufferedIndexedAsyncFlushMaxQueuedUnits: collectionMeta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits,
+		DataOuterLeavesInValueLog:               cfg.DataOuterLeavesInValueLog,
+		IndexOuterLeavesInValueLog:              cfg.IndexOuterLeavesInValueLog,
+		ChunkSize:                               cfg.ChunkSize,
+		KeepRecent:                              cfg.KeepRecent,
+		PreferAppendAlloc:                       cfg.PreferAppendAlloc,
+		PagerSyncConcurrency:                    cfg.PagerSyncConcurrency,
+		DisableBackgroundPrune:                  cfg.DisableBackgroundPrune,
+		PruneInterval:                           durationString(cfg.PruneInterval),
+		PruneMaxPages:                           cfg.PruneMaxPages,
+		PruneMaxDuration:                        durationString(cfg.PruneMaxDuration),
+		LeafSegmentTargetBytes:                  cfg.LeafSegmentTargetBytes,
+		WallTiming:                              timing(wallElapsed, cfg.Docs),
+		GenerationTiming:                        timing(generationElapsed, cfg.Docs),
+		InsertTiming:                            timing(insertElapsed, cfg.Docs),
+		FlushTiming:                             timing(flushElapsed, cfg.Docs),
+		CheckpointTiming:                        timing(checkpointElapsed, cfg.Docs),
+		InsertPhases:                            summarizeInsertPhases(insertStats, secondaryRuns, cfg.Docs, batches),
+		IndexStorageBeforeMaintenance:           beforeIndexStorage,
+		DiskUsageBeforeMaintenance:              beforeMaintenance,
+		DiskUsageFinal:                          finalUsage,
+		Rewrite:                                 rewrite,
+		LeafGeneration:                          leafGeneration,
+		IndexVacuum:                             indexVacuum,
+		IndexStorageFinal:                       finalIndexStorage,
+		TreeDBStatsFinal:                        finalStats,
+		Verify:                                  verify,
+		CPUProfile:                              cfg.CPUProfile,
+		MemProfile:                              cfg.MemProfile,
+		GoVersion:                               runtime.Version(),
+		GOOS:                                    runtime.GOOS,
+		GOARCH:                                  runtime.GOARCH,
 	}, nil
 }
 
@@ -749,7 +767,7 @@ func openBackendReadOnly(cfg config, readOnly bool) (*backenddb.DB, func() error
 	return backend, cleanup, nil
 }
 
-func createFixtureCollection(backend *backenddb.DB, cfg config) (*collections.Collection, error) {
+func createFixtureCollection(backend *backenddb.DB, cfg config) (*collections.CollectionManager, *collections.Collection, error) {
 	manager := collections.NewCollectionManager(backend)
 	indexes := collectionShapeIndexes(cfg.IndexCount)
 	for i := range indexes {
@@ -759,33 +777,39 @@ func createFixtureCollection(backend *backenddb.DB, cfg config) (*collections.Co
 	bufferedIndexedWriteMaxDocs := 0
 	var bufferedIndexedWriteMaxBytes int64
 	bufferedIndexedWriteMaxRuns := 0
+	bufferedIndexedAsyncFlush := false
+	bufferedIndexedAsyncFlushMaxQueuedUnits := 0
 	if bufferedIndexedWrites {
 		bufferedIndexedWriteMaxDocs = cfg.BufferedIndexedWriteMaxDocs
 		bufferedIndexedWriteMaxBytes = cfg.BufferedIndexedWriteMaxBytes
 		bufferedIndexedWriteMaxRuns = cfg.BufferedIndexedWriteMaxRuns
+		bufferedIndexedAsyncFlush = cfg.BufferedIndexedAsyncFlush
+		bufferedIndexedAsyncFlushMaxQueuedUnits = cfg.BufferedIndexedAsyncFlushMaxQueuedUnits
 	}
 	_, err := manager.CreateCollection(&collections.CollectionMeta{
 		Name: cfg.Collection,
 		Options: collections.CollectionOptions{
-			DocumentFormat:                   cfg.DocumentFormat,
-			DataRootStoragePolicy:            rootStoragePolicy(cfg.DataOuterLeavesInValueLog),
-			IndexStateStoragePolicy:          rootStoragePolicy(cfg.DataOuterLeavesInValueLog),
-			DisableIndexedWriteMemtables:     !cfg.BufferedIndexedWrites && cfg.IndexCount > 0,
-			BufferedIndexedWrites:            bufferedIndexedWrites,
-			BufferedIndexedWriteMaxDocuments: bufferedIndexedWriteMaxDocs,
-			BufferedIndexedWriteMaxBytes:     bufferedIndexedWriteMaxBytes,
-			BufferedIndexedWriteMaxRootRuns:  bufferedIndexedWriteMaxRuns,
+			DocumentFormat:                          cfg.DocumentFormat,
+			DataRootStoragePolicy:                   rootStoragePolicy(cfg.DataOuterLeavesInValueLog),
+			IndexStateStoragePolicy:                 rootStoragePolicy(cfg.DataOuterLeavesInValueLog),
+			DisableIndexedWriteMemtables:            !cfg.BufferedIndexedWrites && cfg.IndexCount > 0,
+			BufferedIndexedWrites:                   bufferedIndexedWrites,
+			BufferedIndexedWriteMaxDocuments:        bufferedIndexedWriteMaxDocs,
+			BufferedIndexedWriteMaxBytes:            bufferedIndexedWriteMaxBytes,
+			BufferedIndexedWriteMaxRootRuns:         bufferedIndexedWriteMaxRuns,
+			BufferedIndexedAsyncFlush:               bufferedIndexedAsyncFlush,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: bufferedIndexedAsyncFlushMaxQueuedUnits,
 		},
 		Indexes: indexes,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("create collection: %w", err)
+		return nil, nil, fmt.Errorf("create collection: %w", err)
 	}
 	collection, err := manager.OpenCollection(cfg.Collection)
 	if err != nil {
-		return nil, fmt.Errorf("open collection: %w", err)
+		return nil, nil, fmt.Errorf("open collection: %w", err)
 	}
-	return collection, nil
+	return manager, collection, nil
 }
 
 func rootStoragePolicy(outerLeavesInValueLog bool) collections.RootStoragePolicy {
@@ -1609,6 +1633,9 @@ func printHumanSummary(w io.Writer, summary loadSummary) {
 		if summary.BufferedIndexedWriteMaxDocs > 0 || summary.BufferedIndexedWriteMaxBytes > 0 || summary.BufferedIndexedWriteMaxRuns > 0 {
 			fmt.Fprintf(w, "indexed write buffer limits: max_docs=%d max_bytes=%s max_root_runs=%d\n",
 				summary.BufferedIndexedWriteMaxDocs, humanBytes(uint64(summary.BufferedIndexedWriteMaxBytes)), summary.BufferedIndexedWriteMaxRuns)
+		}
+		if summary.BufferedIndexedAsyncFlush {
+			fmt.Fprintf(w, "indexed async flush: enabled max_queued_units=%d\n", summary.BufferedIndexedAsyncFlushMaxQueuedUnits)
 		}
 	}
 	fmt.Fprintf(w, "index policy: keep_recent=%d prefer_append_alloc=%t background_prune=%t\n",
