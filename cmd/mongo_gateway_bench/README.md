@@ -534,7 +534,11 @@ The benchmark shapes are intentionally different:
   of the other buffer-stage submetrics; `update_buffer_flush_ns/doc` reports
   threshold-flush scheduling/publish time separately. The measured phase includes
   the final `FlushAll()` drain so background async publish work is charged to the
-  same throughput row that scheduled it.
+  same throughput row that scheduled it. The same row also reports backend
+  value-log mmap counters such as `backend_vlog_mmap_hits/doc`,
+  `backend_vlog_mmap_fallback_readat/doc`, and `backend_vlog_mmap_hit_ratio`
+  so value-log mmap fallbacks can be separated from other `ReadAt` sources in
+  CPU profiles.
 - `BenchmarkClientBSONBatchEncode` measures client-side BSON document encoding
   alone.
 
