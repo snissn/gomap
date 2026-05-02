@@ -334,10 +334,10 @@ type CollectionOptions struct {
 	// comparisons; indexed collections use memtables by default.
 	DisableIndexedWriteMemtables bool `json:"disable_indexed_write_memtables,omitempty"`
 	// BufferedIndexedWrites is normalized metadata describing whether indexed
-	// InsertBatch root deltas are staged in the collection write domain before
-	// Flush/Close or auto-flush. Staged writes are visible to primary and
-	// secondary reads on the same manager, but durability remains at the flush
-	// boundary, matching the existing no-index buffered path.
+	// inserts and safe update root deltas are staged in the collection write
+	// domain before Flush/Close or auto-flush. Staged writes are visible to
+	// primary and secondary reads on the same manager, but durability remains at
+	// the flush boundary, matching the existing no-index buffered path.
 	BufferedIndexedWrites bool `json:"buffered_indexed_writes,omitempty"`
 	// BufferedIndexedWriteMaxDocuments flushes indexed write buffers once this
 	// many staged documents are pending. Zero uses the native default for indexed
@@ -3608,7 +3608,10 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 }
 
 // Update applies update to the latest document value and retries if another
-// collection write changes the root before this update publishes.
+// collection write changes the root before this update publishes. For indexed
+// collections with BufferedIndexedWrites enabled, updates that do not change
+// secondary unique index values may be staged in the write domain and become
+// durable at Flush/Close or auto-flush.
 //
 // Callback panics are recovered and returned as errors in both direct and
 // combined execution. When the collection write domain combines concurrent
@@ -4078,7 +4081,10 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 			completeUpdateCombineBatchWithError(batch, collectionUpdatePanicError("combiner", recovered))
 		}
 	}()
-	if len(batch) == 1 || collectionUpdateCombineHasDuplicateIDs(batch) || !collectionUpdateCombineSameCollection(batch) {
+	if combiner.domain == nil ||
+		combiner.domain.closingWrites.Load() ||
+		collectionUpdateCombineHasDuplicateIDs(batch) ||
+		!collectionUpdateCombineSameCollection(batch) {
 		if combiner.domain != nil {
 			combiner.domain.observeUpdateCombineBatch(len(batch), true)
 		}
