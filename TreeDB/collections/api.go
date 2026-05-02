@@ -48,7 +48,6 @@ const (
 	DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits = 4
 	defaultCollectionUpdateCombineMaxBatch              = 256
 	collectionUpdateCombineIdleTTL                      = 30 * time.Second
-	collectionIndexedAsyncFlushIdleDebounce             = 2 * time.Millisecond
 )
 
 var (
@@ -993,35 +992,10 @@ func (c *Collection) scheduleIndexedAsyncFlush(domain *collectionWriteDomain) bo
 	domain.indexedAsyncFlushScheduled.Add(1)
 	db := c.db
 	go func() {
-		waitForIndexedAsyncFlushIdle(domain)
 		err := flushCollectionWriteDomain(db, domain)
 		domain.finishIndexedAsyncFlush(err)
 	}()
 	return true
-}
-
-func waitForIndexedAsyncFlushIdle(domain *collectionWriteDomain) {
-	if domain == nil {
-		return
-	}
-	for {
-		domain.mu.RLock()
-		if domain.count == 0 || !hasBufferedIndexedRootRuns(domain) {
-			domain.mu.RUnlock()
-			return
-		}
-		generation := domain.writeGeneration
-		domain.mu.RUnlock()
-
-		time.Sleep(collectionIndexedAsyncFlushIdleDebounce)
-
-		domain.mu.RLock()
-		idle := domain.writeGeneration == generation
-		domain.mu.RUnlock()
-		if idle {
-			return
-		}
-	}
 }
 
 func (c *Collection) lockMutation() func() {
