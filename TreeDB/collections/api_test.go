@@ -9848,7 +9848,8 @@ func TestCollectionUpdateBatchSkipsUnchangedSecondaryIndexes(t *testing.T) {
 	if got, want := stats.UniqueIndexCheckSkips, 1; got != want {
 		t.Fatalf("unique index check skips=%d want %d", got, want)
 	}
-	if got, want := len(stats.IndexStats), 2; got != want {
+	indexStats := stats.IndexStats[:stats.IndexStatsCount]
+	if got, want := len(indexStats), 2; got != want {
 		t.Fatalf("index decision stats=%d want %d: %+v", got, want, stats.IndexStats)
 	}
 	indexStatByName := func(stats []CollectionUpdateIndexStats, name string) CollectionUpdateIndexStats {
@@ -9861,10 +9862,10 @@ func TestCollectionUpdateBatchSkipsUnchangedSecondaryIndexes(t *testing.T) {
 		t.Fatalf("missing index stat %q in %+v", name, stats)
 		return CollectionUpdateIndexStats{}
 	}
-	if idx := indexStatByName(stats.IndexStats, "email"); !idx.Unique || idx.Changed != 0 || idx.Unchanged != 1 || idx.UniqueChecks != 0 || idx.UniqueCheckSkips != 1 || idx.SecondaryRuns != 0 {
+	if idx := indexStatByName(indexStats, "email"); !idx.Unique || idx.Changed != 0 || idx.Unchanged != 1 || idx.UniqueChecks != 0 || idx.UniqueCheckSkips != 1 || idx.SecondaryRuns != 0 {
 		t.Fatalf("email index decision stats=%+v want unchanged unique skip", idx)
 	}
-	if idx := indexStatByName(stats.IndexStats, "city"); idx.Unique || idx.Changed != 1 || idx.Unchanged != 0 || idx.SecondaryRuns != 1 || idx.SecondaryDeletes != 1 || idx.SecondarySets != 1 || idx.SecondaryKeyBytes == 0 {
+	if idx := indexStatByName(indexStats, "city"); idx.Unique || idx.Changed != 1 || idx.Unchanged != 0 || idx.SecondaryRuns != 1 || idx.SecondaryDeletes != 1 || idx.SecondarySets != 1 || idx.SecondaryKeyBytes == 0 {
 		t.Fatalf("city index decision stats=%+v want changed secondary run", idx)
 	}
 	stats.SecondaryRuns[0].IndexName = "mutated"
@@ -9872,7 +9873,8 @@ func TestCollectionUpdateBatchSkipsUnchangedSecondaryIndexes(t *testing.T) {
 		t.Fatalf("LastUpdateStats did not return owned secondary-run stats, got %q", got)
 	}
 	stats.IndexStats[0].IndexName = "mutated"
-	if got := indexStatByName(col.LastUpdateStats().IndexStats, "email").IndexName; got != "email" {
+	again := col.LastUpdateStats()
+	if got := indexStatByName(again.IndexStats[:again.IndexStatsCount], "email").IndexName; got != "email" {
 		t.Fatalf("LastUpdateStats did not return owned index decision stats, got %q", got)
 	}
 
@@ -9930,10 +9932,11 @@ func TestCollectionUpdateBatchSkipsUnchangedSecondaryIndexes(t *testing.T) {
 	if got, want := stats.UniqueIndexCheckSkips, 1; got != want {
 		t.Fatalf("same-index update unique check skips=%d want %d", got, want)
 	}
-	if got, want := len(stats.IndexStats), 2; got != want {
+	indexStats = stats.IndexStats[:stats.IndexStatsCount]
+	if got, want := len(indexStats), 2; got != want {
 		t.Fatalf("same-index update index decision stats=%d want %d: %+v", got, want, stats.IndexStats)
 	}
-	for _, idx := range stats.IndexStats {
+	for _, idx := range indexStats {
 		if idx.Changed != 0 || idx.Unchanged != 1 || idx.SecondaryRuns != 0 || idx.SecondaryDeletes != 0 || idx.SecondarySets != 0 || idx.SecondaryKeyBytes != 0 {
 			t.Fatalf("same-index update per-index stats=%+v want unchanged/no secondary work", idx)
 		}

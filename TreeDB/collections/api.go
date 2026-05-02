@@ -334,9 +334,14 @@ type CollectionUpdateStats struct {
 	IndexValueUnchanged    int
 	UniqueIndexChecks      int
 	UniqueIndexCheckSkips  int
-	// IndexStats is populated only when detailed update-batch stats are enabled.
-	IndexStats []CollectionUpdateIndexStats
+	// IndexStats is populated only when detailed update-batch stats are enabled
+	// and the collection has at most len(IndexStats) index runtimes. The first
+	// IndexStatsCount entries are valid.
+	IndexStatsCount int
+	IndexStats      [maxCollectionUpdateInlineIndexStats]CollectionUpdateIndexStats
 }
+
+const maxCollectionUpdateInlineIndexStats = 8
 
 // CollectionUpdateSecondaryRunStats captures per-secondary-index delta counters
 // from an UpdateBatch-style call.
@@ -832,9 +837,6 @@ func (c *Collection) setLastUpdateStats(stats CollectionUpdateStats) {
 func cloneCollectionUpdateStats(stats CollectionUpdateStats) CollectionUpdateStats {
 	if len(stats.SecondaryRuns) > 0 {
 		stats.SecondaryRuns = append([]CollectionUpdateSecondaryRunStats(nil), stats.SecondaryRuns...)
-	}
-	if len(stats.IndexStats) > 0 {
-		stats.IndexStats = append([]CollectionUpdateIndexStats(nil), stats.IndexStats...)
 	}
 	return stats
 }
@@ -6516,7 +6518,6 @@ type updateBatchPlanScratch struct {
 	policies         []backenddb.OrderedRootStoragePolicy
 	deltaTables      []memtable.Table
 	uniqueSecondary  []int
-	indexStats       []CollectionUpdateIndexStats
 }
 
 var updateBatchPlanScratchPool sync.Pool
@@ -6530,7 +6531,6 @@ const (
 	updateBatchPlanScratchMaxStateArenaCap        = 4 << 20
 	updateBatchPlanScratchMaxStateSliceCap        = 1 << 16
 	updateBatchPlanScratchMaxValueRefCap          = 1 << 16
-	updateBatchPlanScratchMaxIndexStatsCap        = 64
 )
 
 func estimateUpdateBatchPlanDocumentArenaBytes(itemCount int) int {
@@ -6611,11 +6611,6 @@ func getUpdateBatchPlanScratch(itemCount, runtimeCount int) *updateBatchPlanScra
 	} else {
 		scratch.uniqueSecondary = scratch.uniqueSecondary[:0]
 	}
-	if cap(scratch.indexStats) < runtimeCount || cap(scratch.indexStats) > updateBatchPlanScratchMaxIndexStatsCap {
-		scratch.indexStats = make([]CollectionUpdateIndexStats, 0, runtimeCount)
-	} else {
-		scratch.indexStats = scratch.indexStats[:0]
-	}
 	return scratch
 }
 
@@ -6670,12 +6665,6 @@ func putUpdateBatchPlanScratch(scratch *updateBatchPlanScratch) {
 	scratch.deltaTables = scratch.deltaTables[:0]
 	clear(scratch.uniqueSecondary)
 	scratch.uniqueSecondary = scratch.uniqueSecondary[:0]
-	clear(scratch.indexStats)
-	if cap(scratch.indexStats) > updateBatchPlanScratchMaxIndexStatsCap {
-		scratch.indexStats = nil
-	} else {
-		scratch.indexStats = scratch.indexStats[:0]
-	}
 	updateBatchPlanScratchPool.Put(scratch)
 }
 
@@ -7220,7 +7209,6 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	policies := scratch.policies
 	deltaTables := scratch.deltaTables
 	uniqueSecondary := scratch.uniqueSecondary
-	indexStats := scratch.indexStats
 	defer func() {
 		scratch.changed = changed
 		scratch.changedDocuments = changedDocuments
@@ -7228,17 +7216,17 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		scratch.policies = policies
 		scratch.deltaTables = deltaTables
 		scratch.uniqueSecondary = uniqueSecondary
-		scratch.indexStats = indexStats
 		if !scratchOwnedByPlan {
 			putUpdateBatchPlanScratch(scratch)
 		}
 	}()
-	if detailedStats {
-		for _, runtime := range runtimes {
-			indexStats = append(indexStats, CollectionUpdateIndexStats{
+	if detailedStats && len(runtimes) <= len(stats.IndexStats) {
+		stats.IndexStatsCount = len(runtimes)
+		for i, runtime := range runtimes {
+			stats.IndexStats[i] = CollectionUpdateIndexStats{
 				IndexName: runtime.def.name,
 				Unique:    runtime.def.unique,
-			})
+			}
 		}
 	}
 	var currentScratch []byte
@@ -7369,10 +7357,10 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 					if runtime.def.unique {
 						stats.UniqueIndexChecks++
 					}
-					if runtimeIdx < len(indexStats) {
-						indexStats[runtimeIdx].Changed++
+					if runtimeIdx < stats.IndexStatsCount {
+						stats.IndexStats[runtimeIdx].Changed++
 						if runtime.def.unique {
-							indexStats[runtimeIdx].UniqueChecks++
+							stats.IndexStats[runtimeIdx].UniqueChecks++
 						}
 					}
 					continue
@@ -7381,10 +7369,10 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 				if runtime.def.unique {
 					stats.UniqueIndexCheckSkips++
 				}
-				if runtimeIdx < len(indexStats) {
-					indexStats[runtimeIdx].Unchanged++
+				if runtimeIdx < stats.IndexStatsCount {
+					stats.IndexStats[runtimeIdx].Unchanged++
 					if runtime.def.unique {
-						indexStats[runtimeIdx].UniqueCheckSkips++
+						stats.IndexStats[runtimeIdx].UniqueCheckSkips++
 					}
 				}
 			}
@@ -7526,9 +7514,9 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 					stats.SecondaryKeyBytes += len(key)
 					runStats.Deletes++
 					runStats.KeyBytes += len(key)
-					if runtimeIdx < len(indexStats) {
-						indexStats[runtimeIdx].SecondaryDeletes++
-						indexStats[runtimeIdx].SecondaryKeyBytes += len(key)
+					if runtimeIdx < stats.IndexStatsCount {
+						stats.IndexStats[runtimeIdx].SecondaryDeletes++
+						stats.IndexStats[runtimeIdx].SecondaryKeyBytes += len(key)
 					}
 				}
 				for _, encoded := range item.newState.valuesAt(runtimeIdx) {
@@ -7542,9 +7530,9 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 					stats.SecondaryKeyBytes += len(key)
 					runStats.Sets++
 					runStats.KeyBytes += len(key)
-					if runtimeIdx < len(indexStats) {
-						indexStats[runtimeIdx].SecondarySets++
-						indexStats[runtimeIdx].SecondaryKeyBytes += len(key)
+					if runtimeIdx < stats.IndexStatsCount {
+						stats.IndexStats[runtimeIdx].SecondarySets++
+						stats.IndexStats[runtimeIdx].SecondaryKeyBytes += len(key)
 					}
 				}
 			}
@@ -7568,8 +7556,8 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			if runStats := secondaryRunStats[runtimeIdx]; runStats.Deletes != 0 || runStats.Sets != 0 || runStats.KeyBytes != 0 {
 				stats.SecondaryRuns = append(stats.SecondaryRuns, runStats)
 			}
-			if runtimeIdx < len(indexStats) {
-				indexStats[runtimeIdx].SecondaryRuns++
+			if runtimeIdx < stats.IndexStatsCount {
+				stats.IndexStats[runtimeIdx].SecondaryRuns++
 			}
 			delete(secondaryTables, rootName)
 		}
@@ -7592,9 +7580,6 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	}
 	success = true
 	plan := newUpdateBatchPlan()
-	if len(indexStats) > 0 {
-		stats.IndexStats = append([]CollectionUpdateIndexStats(nil), indexStats...)
-	}
 	stats = updateCollectionUpdateStatsCounts(stats, results, len(deltaTables))
 	*plan = updateBatchPlan{
 		results:                     results,
