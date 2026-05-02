@@ -31,15 +31,17 @@ const (
 
 	// DefaultIndexedWriteMemtableMaxDocuments bounds the native indexed
 	// collection write-domain before it auto-flushes to persistent roots.
-	DefaultIndexedWriteMemtableMaxDocuments = 64000
+	DefaultIndexedWriteMemtableMaxDocuments = 96000
 	// DefaultIndexedWriteMemtableMaxRootRuns bounds accumulated root-local
-	// mutation runs so many small indexed update batches do not create an
-	// expensive pending-run chain before the document threshold is reached.
-	DefaultIndexedWriteMemtableMaxRootRuns = 16 * 1024
+	// mutation runs. When the document threshold is also enabled, hitting this
+	// limit compacts mutable root runs in memory before publishing so many small
+	// indexed update batches do not create an expensive pending-run chain before
+	// the document threshold is reached.
+	DefaultIndexedWriteMemtableMaxRootRuns = DefaultIndexedWriteMemtableMaxDocuments
 	// DefaultIndexedWriteMemtableDirectBatchDocuments keeps large, already
 	// well-amortized InsertBatch calls on the immediate publish path. Smaller
 	// batches use the indexed write-domain memtable path by default.
-	DefaultIndexedWriteMemtableDirectBatchDocuments = DefaultIndexedWriteMemtableMaxDocuments / 4
+	DefaultIndexedWriteMemtableDirectBatchDocuments = 16000
 	// DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits bounds opt-in
 	// background indexed flush work. When the queue reaches this many immutable
 	// flush units, the triggering writer publishes synchronously to cap memory
@@ -2392,6 +2394,12 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	domain.writeGeneration++
 	domain.observeIndexedStage(len(plan.resultIDs), stagedBytes, stagedRootRuns)
 	c.meta = catalog.meta
+	if _, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, catalog.meta.Options); err != nil {
+		if autoFlushEnabled {
+			rollbackBufferedIndexedDomain(domain, checkpoint)
+		}
+		return 0, err
+	}
 	if shouldFlushBufferedIndexedWrites(domain, catalog.meta.Options) {
 		flushElapsed, _, _, err := c.flushBufferedIndexedAfterThresholdLocked(domain, catalog.meta.Options)
 		if err != nil {
@@ -2479,6 +2487,149 @@ func shouldFlushBufferedIndexedWritesAfterAdding(domain *collectionWriteDomain, 
 		return true
 	}
 	return false
+}
+
+func shouldCompactBufferedIndexedMutableRuns(domain *collectionWriteDomain, opts CollectionOptions) bool {
+	if domain == nil || domain.rootRunCount <= 0 {
+		return false
+	}
+	if opts.BufferedIndexedWriteMaxRootRuns <= 0 || opts.BufferedIndexedWriteMaxDocuments <= 0 {
+		return false
+	}
+	if domain.rootRunCount < opts.BufferedIndexedWriteMaxRootRuns {
+		return false
+	}
+	return domain.mutableCount < opts.BufferedIndexedWriteMaxDocuments
+}
+
+func maybeCompactBufferedIndexedMutableRunsLocked(domain *collectionWriteDomain, opts CollectionOptions) (bool, error) {
+	if !shouldCompactBufferedIndexedMutableRuns(domain, opts) {
+		return false, nil
+	}
+	beforeBytes := tableRunMapSize(domain.rootRuns) + tableRunMapSize(domain.uniqueValueRuns)
+	compactedRootRuns, obsoleteRootRuns, rootRunsChanged, err := compactTableRunMap(domain.rootRuns)
+	if err != nil {
+		return false, err
+	}
+	compactedUniqueRuns, obsoleteUniqueRuns, uniqueRunsChanged, err := compactTableRunMap(domain.uniqueValueRuns)
+	if err != nil {
+		resetTableRunMap(compactedRootRuns, domain.rootRuns)
+		return false, err
+	}
+	if !rootRunsChanged && !uniqueRunsChanged {
+		return false, nil
+	}
+	afterBytes := tableRunMapSize(compactedRootRuns) + tableRunMapSize(compactedUniqueRuns)
+	domain.rootRuns = compactedRootRuns
+	domain.uniqueValueRuns = compactedUniqueRuns
+	domain.rootRunCount = tableRunMapRunCount(domain.rootRuns)
+	domain.bufferedBytes = saturatingAddNonNegativeInt64(subtractNonNegativeInt64(domain.bufferedBytes, beforeBytes), afterBytes)
+	domain.mutableBytes = saturatingAddNonNegativeInt64(subtractNonNegativeInt64(domain.mutableBytes, beforeBytes), afterBytes)
+	domain.writeGeneration++
+	for _, table := range obsoleteRootRuns {
+		resetCollectionRunTable(table)
+	}
+	for _, table := range obsoleteUniqueRuns {
+		resetCollectionRunTable(table)
+	}
+	rebuildBufferedPendingIndexesLocked(domain, domain.meta.Name, domain.primaryRunIndex != nil)
+	return true, nil
+}
+
+func compactTableRunMap(runs map[string][]memtable.Table) (map[string][]memtable.Table, []memtable.Table, bool, error) {
+	if len(runs) == 0 {
+		return runs, nil, false, nil
+	}
+	out := make(map[string][]memtable.Table, len(runs))
+	var obsolete []memtable.Table
+	changed := false
+	for name, tables := range runs {
+		if len(tables) <= 1 {
+			out[name] = tables
+			continue
+		}
+		table, err := compactTableRuns(tables)
+		if err != nil {
+			resetTableRunMap(out, runs)
+			return nil, nil, false, err
+		}
+		out[name] = []memtable.Table{table}
+		obsolete = append(obsolete, tables...)
+		changed = true
+	}
+	return out, obsolete, changed, nil
+}
+
+func compactTableRuns(runs []memtable.Table) (memtable.Table, error) {
+	entryCapacity := 0
+	for _, table := range runs {
+		if table != nil {
+			entryCapacity = saturatingAddNonNegativeInt(entryCapacity, table.Len())
+		}
+	}
+	table := newCollectionRunTable(entryCapacity)
+	iter := newBufferedRootRunsIteratorWithDeleted(runs, nil, nil, true)
+	defer func() { _ = iter.Close() }()
+	for ; iter.Valid(); iter.Next() {
+		key := bytes.Clone(iter.UnsafeKey())
+		value, ptr, flags := iter.UnsafeEntry()
+		var valueCopy []byte
+		if value != nil {
+			valueCopy = bytes.Clone(value)
+		}
+		table.SetEntrySteal(key, valueCopy, ptr, flags)
+	}
+	if err := iter.Error(); err != nil {
+		resetCollectionRunTable(table)
+		return nil, err
+	}
+	table.Freeze()
+	return table, nil
+}
+
+func resetTableRunMap(runs, preserved map[string][]memtable.Table) {
+	if len(runs) == 0 {
+		return
+	}
+	preservedTables := make(map[memtable.Table]struct{})
+	for _, tables := range preserved {
+		for _, table := range tables {
+			if table != nil {
+				preservedTables[table] = struct{}{}
+			}
+		}
+	}
+	for _, tables := range runs {
+		for _, table := range tables {
+			if table == nil {
+				continue
+			}
+			if _, ok := preservedTables[table]; ok {
+				continue
+			}
+			resetCollectionRunTable(table)
+		}
+	}
+}
+
+func tableRunMapSize(runs map[string][]memtable.Table) int64 {
+	var total int64
+	for _, tables := range runs {
+		for _, table := range tables {
+			if table != nil {
+				total = saturatingAddNonNegativeInt64(total, table.Size())
+			}
+		}
+	}
+	return total
+}
+
+func tableRunMapRunCount(runs map[string][]memtable.Table) int {
+	total := 0
+	for _, tables := range runs {
+		total = saturatingAddNonNegativeInt(total, len(tables))
+	}
+	return total
 }
 
 func bufferedIndexedRootRunCount(domain *collectionWriteDomain) int {
@@ -7645,6 +7796,13 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	domain.writeGeneration++
 	domain.observeIndexedStage(modifiedCount, stagedBytes, stagedRootRuns)
 	c.meta = plan.meta
+	if _, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, plan.meta.Options); err != nil {
+		if shouldAutoFlushAfterAdding {
+			rollbackBufferedIndexedDomain(domain, checkpoint)
+			c.meta = collectionMetaCheckpoint
+		}
+		return false, err
+	}
 	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
 		flushDuration, lockReleased, relockWait, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options)
 		if lockReleased > 0 {

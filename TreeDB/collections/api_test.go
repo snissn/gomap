@@ -4050,6 +4050,96 @@ func TestCollectionIndexedWriteMemtablesAutoFlushMaxBytes(t *testing.T) {
 	}
 }
 
+func TestCollectionIndexedWriteMemtablesCompactRootRunsBeforeDocumentFlush(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 5,
+			BufferedIndexedWriteMaxRootRuns:  6,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	for i, id := range []string{"u1", "u2"} {
+		doc := fmt.Sprintf(`{"email":"user%d@example.com"}`, i+1)
+		if _, err := col.InsertBatch([][]byte{[]byte(id)}, [][]byte{[]byte(doc)}); err != nil {
+			t.Fatalf("insert %s: %v", id, err)
+		}
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot before document threshold")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog before document threshold: %v", err)
+	}
+	if got := catalog.rootID(collectionPrimaryRootName("users")); got != 0 {
+		t.Fatalf("primary root persisted before document threshold: %d", got)
+	}
+
+	col.writeDomain.mu.RLock()
+	rootRunCount := col.writeDomain.rootRunCount
+	rootNames := len(col.writeDomain.rootRuns)
+	uniqueRuns := len(col.writeDomain.uniqueValueRuns["email"])
+	col.writeDomain.mu.RUnlock()
+	if rootRunCount != rootNames {
+		t.Fatalf("rootRunCount=%d rootNames=%d, want compacted one run per root", rootRunCount, rootNames)
+	}
+	if uniqueRuns != 1 {
+		t.Fatalf("unique value runs=%d want 1 compacted run", uniqueRuns)
+	}
+	got, err := col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get pending compacted doc: %v", err)
+	}
+	if got == nil {
+		t.Fatal("pending compacted doc not visible")
+	}
+	ids, err := col.FindByIndex("email", "user2@example.com")
+	if err != nil {
+		t.Fatalf("find pending compacted email: %v", err)
+	}
+	if !reflect.DeepEqual(ids, [][]byte{[]byte("u2")}) {
+		t.Fatalf("pending compacted email ids=%q want [u2]", ids)
+	}
+
+	for i, id := range []string{"u3", "u4", "u5"} {
+		doc := fmt.Sprintf(`{"email":"user%d@example.com"}`, i+3)
+		if _, err := col.InsertBatch([][]byte{[]byte(id)}, [][]byte{[]byte(doc)}); err != nil {
+			t.Fatalf("insert %s: %v", id, err)
+		}
+	}
+	snap = d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot after document threshold")
+	}
+	catalog, err = loadCollectionCatalog(snap, "users")
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog after document threshold: %v", err)
+	}
+	if got := catalog.rootID(collectionPrimaryRootName("users")); got == 0 {
+		t.Fatal("primary root was not persisted after document threshold")
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesAutoFlushMaxRootRuns(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})
