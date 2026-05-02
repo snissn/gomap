@@ -88,6 +88,83 @@ func TestBatchIsEmpty(t *testing.T) {
 	}
 }
 
+func TestBatchSortedEntriesMemoizesCompactionUntilMutation(t *testing.T) {
+	b := New(newMapValueReader(), page.DefaultInlineThreshold)
+	t.Cleanup(func() { _ = b.Close() })
+
+	if err := b.Set([]byte("a"), []byte("old")); err != nil {
+		t.Fatalf("Set old: %v", err)
+	}
+	if err := b.Set([]byte("a"), []byte("new")); err != nil {
+		t.Fatalf("Set new: %v", err)
+	}
+	if b.compacted {
+		t.Fatalf("batch compacted before SortedEntries")
+	}
+
+	first := b.SortedEntries()
+	if len(first) != 1 {
+		t.Fatalf("first len=%d want 1", len(first))
+	}
+	if got := string(first[0].Value); got != "new" {
+		t.Fatalf("first value=%q want new", got)
+	}
+	if !b.sorted || !b.compacted {
+		t.Fatalf("after first SortedEntries sorted=%v compacted=%v, want true/true", b.sorted, b.compacted)
+	}
+
+	second := b.SortedEntries()
+	if len(second) != 1 {
+		t.Fatalf("second len=%d want 1", len(second))
+	}
+	if &second[0] != &first[0] {
+		t.Fatalf("second SortedEntries did not return the memoized compacted entry slice")
+	}
+	if !b.compacted {
+		t.Fatalf("second SortedEntries invalidated compaction")
+	}
+}
+
+func TestBatchSortedEntriesInvalidatesCompactionAfterMutation(t *testing.T) {
+	b := New(newMapValueReader(), page.DefaultInlineThreshold)
+	t.Cleanup(func() { _ = b.Close() })
+
+	if err := b.Set([]byte("b"), []byte("first-b")); err != nil {
+		t.Fatalf("Set first b: %v", err)
+	}
+	if err := b.Set([]byte("a"), []byte("first-a")); err != nil {
+		t.Fatalf("Set first a: %v", err)
+	}
+	entries := b.SortedEntries()
+	if len(entries) != 2 {
+		t.Fatalf("initial len=%d want 2", len(entries))
+	}
+	if !b.compacted {
+		t.Fatalf("initial SortedEntries did not mark compacted")
+	}
+
+	if err := b.Set([]byte("a"), []byte("second-a")); err != nil {
+		t.Fatalf("Set second a: %v", err)
+	}
+	if b.compacted {
+		t.Fatalf("mutation after SortedEntries did not invalidate compaction")
+	}
+
+	entries = b.SortedEntries()
+	if len(entries) != 2 {
+		t.Fatalf("after mutation len=%d want 2", len(entries))
+	}
+	if gotKey, gotValue := string(entries[0].Key), string(entries[0].Value); gotKey != "a" || gotValue != "second-a" {
+		t.Fatalf("entry[0]=%q/%q want a/second-a", gotKey, gotValue)
+	}
+	if gotKey, gotValue := string(entries[1].Key), string(entries[1].Value); gotKey != "b" || gotValue != "first-b" {
+		t.Fatalf("entry[1]=%q/%q want b/first-b", gotKey, gotValue)
+	}
+	if !b.sorted || !b.compacted {
+		t.Fatalf("after mutation SortedEntries sorted=%v compacted=%v, want true/true", b.sorted, b.compacted)
+	}
+}
+
 func TestBatchSetOps_UsesSlabPointersForLargeValues(t *testing.T) {
 	reader := newMapValueReader()
 	b := New(reader, page.DefaultInlineThreshold)

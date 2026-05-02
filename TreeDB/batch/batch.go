@@ -65,6 +65,7 @@ type Batch struct {
 	touchedValueLog         map[uint32]struct{}
 	hasValueLogPointers     bool
 	sorted                  bool
+	compacted               bool
 	lastKey                 []byte
 	closed                  bool
 	reader                  ValueReader
@@ -82,8 +83,9 @@ const (
 var batchPool = sync.Pool{
 	New: func() any {
 		return &Batch{
-			entries: make([]Entry, 0, 16),
-			sorted:  true,
+			entries:   make([]Entry, 0, 16),
+			sorted:    true,
+			compacted: true,
 		}
 	},
 }
@@ -149,6 +151,7 @@ func (b *Batch) resetLocked() {
 	b.hasValueLogPointers = false
 	b.byteSize = 0
 	b.sorted = true
+	b.compacted = true
 	b.lastKey = nil
 	b.resetArenaLocked()
 }
@@ -172,6 +175,7 @@ func (b *Batch) resetForPool() {
 	b.touchedValueLogSmallLen = 0
 	b.hasValueLogPointers = false
 	b.sorted = true
+	b.compacted = true
 	b.lastKey = nil
 	b.resetArenaLocked()
 }
@@ -372,6 +376,7 @@ func (b *Batch) SetView(key, value []byte) error {
 
 	b.entries = append(b.entries, entry)
 	b.byteSize += len(key) + len(value)
+	b.compacted = false
 	b.noteKeyOrder(entry.Key)
 	return nil
 }
@@ -406,6 +411,7 @@ func (b *Batch) Set(key, value []byte) error {
 	b.entries = append(b.entries, entry)
 	// Approximate size tracking (optional for now)
 	b.byteSize += len(k) + len(value)
+	b.compacted = false
 	b.noteKeyOrder(entry.Key)
 	return nil
 }
@@ -426,6 +432,7 @@ func (b *Batch) DeleteView(key []byte) error {
 		Key:  key,
 	})
 	b.byteSize += len(key)
+	b.compacted = false
 	b.noteKeyOrder(key)
 	return nil
 }
@@ -453,6 +460,7 @@ func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 	b.entries = append(b.entries, entry)
 	b.hasValueLogPointers = true
 	b.noteTouchedValueLog(ptr)
+	b.compacted = false
 	b.noteKeyOrder(entry.Key)
 	return nil
 }
@@ -491,6 +499,7 @@ func (b *Batch) AppendPointerViewNoTouchTrustedSorted(key []byte, ptr page.Value
 		IsPtr:    true,
 	})
 	b.hasValueLogPointers = true
+	b.compacted = false
 	if b.sorted {
 		b.lastKey = key
 	}
@@ -526,6 +535,7 @@ func (b *Batch) setPointerViewInternal(key []byte, ptr page.ValuePtr, noteTouche
 	if noteTouched {
 		b.noteTouchedValueLog(ptr)
 	}
+	b.compacted = false
 	b.noteKeyOrder(key)
 	return nil
 }
@@ -546,6 +556,7 @@ func (b *Batch) Delete(key []byte) error {
 		Key:  k,
 	})
 	b.byteSize += len(k)
+	b.compacted = false
 	b.noteKeyOrder(k)
 	return nil
 }
@@ -587,6 +598,9 @@ func (b *Batch) SetOps(ops []Entry) error {
 	}
 
 	// Just append them. Deduplication happens at Ops() time.
+	if len(ops) > 0 {
+		b.compacted = false
+	}
 	for _, op := range ops {
 		if op.IsPtr {
 			if !page.IsValueLogFileID(op.ValuePtr.FileID) {
@@ -607,7 +621,13 @@ func (b *Batch) SetOps(ops []Entry) error {
 // This modifies the internal entries slice (sorts and compacts).
 func (b *Batch) SortedEntries() []Entry {
 	if len(b.entries) == 0 {
+		b.sorted = true
+		b.compacted = true
+		b.lastKey = nil
 		return nil
+	}
+	if b.sorted && b.compacted {
+		return b.entries
 	}
 	if !b.sorted {
 		sort.SliceStable(b.entries, func(i, j int) bool {
@@ -617,18 +637,21 @@ func (b *Batch) SortedEntries() []Entry {
 	}
 
 	// Compact in place: keep only the last entry for each key
-	oldLen := len(b.entries)
-	out := b.entries[:0]
-	for i := 0; i < len(b.entries); i++ {
-		// If next is same key, skip this one (it's overwritten by next)
-		if i+1 < len(b.entries) && bytes.Equal(b.entries[i].Key, b.entries[i+1].Key) {
-			continue
+	if !b.compacted {
+		oldLen := len(b.entries)
+		out := b.entries[:0]
+		for i := 0; i < len(b.entries); i++ {
+			// If next is same key, skip this one (it's overwritten by next)
+			if i+1 < len(b.entries) && bytes.Equal(b.entries[i].Key, b.entries[i+1].Key) {
+				continue
+			}
+			out = append(out, b.entries[i])
 		}
-		out = append(out, b.entries[i])
+		// Clear the now-unused tail to avoid pinning batch arenas via stale pointers.
+		clear(b.entries[len(out):oldLen])
+		b.entries = out
+		b.compacted = true
 	}
-	// Clear the now-unused tail to avoid pinning batch arenas via stale pointers.
-	clear(b.entries[len(out):oldLen])
-	b.entries = out
 	if len(b.entries) > 0 {
 		b.lastKey = b.entries[len(b.entries)-1].Key
 	}
