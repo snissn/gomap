@@ -981,7 +981,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.state = state
 	snap.vlogManager = vm
 	snap.vlogPinned = vlogNeedsPin
-	snap.reader.reconfigure(vlogSet)
+	snap.reader.reconfigure(vlogSet, db.leafPageReadCache)
 	for i := range snap.rootTrees {
 		snap.rootTrees[i].root = 0
 		snap.rootTrees[i].tree.Reset(nil, nil, 0)

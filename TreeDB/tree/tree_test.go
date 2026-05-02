@@ -54,6 +54,11 @@ type trackedValueReaderWithChecksumMode struct {
 	readChecksumEnabled bool
 }
 
+type trackedLeafLogPageReader struct {
+	*trackedValueReader
+	leafLogPageCalls int
+}
+
 func (r *trackedValueReaderWithChecksumMode) ReadChecksumEnabled() bool {
 	return r.readChecksumEnabled
 }
@@ -66,6 +71,20 @@ func (r *trackedValueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 func (r *trackedValueReader) ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
 	r.readUnsafeAppendCalls++
 	return r.mapValueReader.ReadUnsafeAppend(ptr, dst)
+}
+
+func (r *trackedLeafLogPageReader) ReadLeafLogPageUnsafeTo(ptr page.LeafLogPtr, dst []byte) ([]byte, bool, error) {
+	r.leafLogPageCalls++
+	val, err := r.mapValueReader.ReadUnsafe(ptr.ValuePtr())
+	if err != nil {
+		return nil, false, err
+	}
+	if cap(dst) >= len(val) {
+		out := dst[:len(val)]
+		copy(out, val)
+		return out, true, nil
+	}
+	return val, false, nil
 }
 
 func TestTreeGet(t *testing.T) {
@@ -322,6 +341,54 @@ func TestTreeGetAppend_UsesAppendReaderForLeafRefPages(t *testing.T) {
 	}
 	if tracked.readUnsafeCalls != 0 {
 		t.Fatalf("expected ReadUnsafe to be bypassed, got %d calls", tracked.readUnsafeCalls)
+	}
+}
+
+func TestTreeGetAppend_UsesLeafLogPageReaderForLeafRefPages(t *testing.T) {
+	tracked := &trackedLeafLogPageReader{
+		trackedValueReader: &trackedValueReader{mapValueReader: newMapValueReader()},
+	}
+
+	leafData := make([]byte, page.PageSize)
+	leaf := node.NewNode(leafData)
+	leaf.SetType(page.PageTypeLeaf)
+	leaf.SetPageID(1)
+	leaf.AddLeafEntry([]byte("k"), []byte("v"), node.FlagInline, page.ValuePtr{})
+	leaf.UpdateChecksum()
+
+	ptr := page.LeafLogPtr{
+		FileID: 1,
+		Offset: 8,
+	}
+	tracked.values[ptr.ValuePtr()] = append([]byte(nil), leafData...)
+
+	tr, closeTree := newTreeWithLeafLogRoot(t, tracked, []byte{}, ptr)
+	defer closeTree()
+	got, err := tr.GetAppend([]byte("k"), nil)
+	if err != nil {
+		t.Fatalf("GetAppend failed: %v", err)
+	}
+	if string(got) != "v" {
+		t.Fatalf("unexpected value: %q", got)
+	}
+	if tracked.leafLogPageCalls != 1 {
+		t.Fatalf("expected ReadLeafLogPageUnsafeTo to be used once, got %d", tracked.leafLogPageCalls)
+	}
+	if tracked.readUnsafeAppendCalls != 0 {
+		t.Fatalf("expected generic ReadUnsafeAppend to be bypassed, got %d", tracked.readUnsafeAppendCalls)
+	}
+	if tracked.readUnsafeCalls != 0 {
+		t.Fatalf("expected generic ReadUnsafe to be bypassed, got %d", tracked.readUnsafeCalls)
+	}
+	gotUnsafe, err := tr.GetUnsafe([]byte("k"))
+	if err != nil {
+		t.Fatalf("GetUnsafe failed: %v", err)
+	}
+	if string(gotUnsafe) != "v" {
+		t.Fatalf("unexpected unsafe value: %q", gotUnsafe)
+	}
+	if tracked.leafLogPageCalls != 2 {
+		t.Fatalf("expected ReadLeafLogPageUnsafeTo to cover GetUnsafe too, got %d calls", tracked.leafLogPageCalls)
 	}
 }
 
