@@ -5311,20 +5311,26 @@ func (c *Collection) deleteDocumentOnce(documentID []byte) (bool, error) {
 			}
 		}
 		for _, runtime := range runtimes {
-			deleteKeys, err := secondaryDeleteKeysForDocument(runtime, state, documentID)
-			if err != nil {
-				_ = snap.Close()
-				return false, err
-			}
 			rootName := collectionSecondaryRootName(c.meta.Name, runtime.def.name)
 			rootID := catalog.rootID(rootName)
-			if rootID == 0 || len(deleteKeys) == 0 {
+			if rootID == 0 {
 				continue
 			}
+			table := newCollectionRunTable(0)
+			if err := deleteSecondaryEntriesForDocument(table, runtime, state, documentID); err != nil {
+				_ = snap.Close()
+				resetCollectionRunTable(table)
+				return false, err
+			}
+			if table.Len() == 0 {
+				resetCollectionRunTable(table)
+				continue
+			}
+			table.Freeze()
 			rootNames = append(rootNames, rootName)
 			baseRootIDs[rootName] = rootID
 			policies = append(policies, runtime.def.storagePolicy)
-			deltaTables = append(deltaTables, buildDeleteRootDeltaTable(deleteKeys))
+			deltaTables = append(deltaTables, table)
 		}
 	}
 	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
@@ -6400,14 +6406,10 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 			rootName := collectionSecondaryRootName(c.meta.Name, runtime.def.name)
 			rootID := catalog.rootID(rootName)
 			table := newCollectionRunTable(0)
-			deleteKeys, err := secondaryDeleteKeysForDocument(runtime, oldState, documentID)
-			if err != nil {
+			if err := deleteSecondaryEntriesForDocument(table, runtime, oldState, documentID); err != nil {
 				_ = snap.Close()
 				resetCollectionTables(append(deltaTables, table))
 				return false, false, err
-			}
-			for _, key := range deleteKeys {
-				table.DeleteSteal(bytes.Clone(key))
 			}
 			for _, encoded := range newState[runtime.def.name] {
 				key, err := indexEntryKey(encoded, documentID)
@@ -7513,13 +7515,13 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 				if runStats.IndexName == "" {
 					runStats.IndexName = runtime.def.name
 				}
-				deleteKeys, err := secondaryDeleteKeysForOrderedDocument(runtimeIdx, runtime, item.oldState, item.documentID)
-				if err != nil {
-					_ = snap.Close()
-					return nil, err
-				}
-				for _, key := range deleteKeys {
-					table.DeleteSteal(bytes.Clone(key))
+				for _, encoded := range item.oldState.valuesAt(runtimeIdx) {
+					key, err := indexEntryKey(encoded, item.documentID)
+					if err != nil {
+						_ = snap.Close()
+						return nil, err
+					}
+					table.DeleteSteal(key)
 					stats.SecondaryDeleteEntries++
 					stats.SecondaryKeyBytes += len(key)
 					runStats.Deletes++
@@ -8749,36 +8751,22 @@ func loadDeleteIndexState(snap *backenddb.Snapshot, catalog *collectionCatalog, 
 	return indexStateForDocument(document, runtimes, opts)
 }
 
-func secondaryDeleteKeysForDocument(runtime indexRuntime, state documentIndexState, documentID []byte) ([][]byte, error) {
+func deleteSecondaryEntriesForDocument(table memtable.Table, runtime indexRuntime, state documentIndexState, documentID []byte) error {
+	if table == nil {
+		return nil
+	}
 	values := state[runtime.def.name]
 	if len(values) == 0 {
-		return nil, nil
+		return nil
 	}
-	out := make([][]byte, 0, len(values))
 	for _, encoded := range values {
 		key, err := indexEntryKey(encoded, documentID)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		out = append(out, key)
+		table.DeleteSteal(key)
 	}
-	return out, nil
-}
-
-func secondaryDeleteKeysForOrderedDocument(runtimeIdx int, runtime indexRuntime, state orderedDocumentIndexState, documentID []byte) ([][]byte, error) {
-	values := state.valuesAt(runtimeIdx)
-	if len(values) == 0 {
-		return nil, nil
-	}
-	out := make([][]byte, 0, len(values))
-	for _, encoded := range values {
-		key, err := indexEntryKey(encoded, documentID)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, key)
-	}
-	return out, nil
+	return nil
 }
 
 func rejectReplaceUniqueConflicts(snap *backenddb.Snapshot, catalog *collectionCatalog, runtimes []indexRuntime, oldState, newState documentIndexState, documentID []byte, batchReplacements batchUniqueReplacementSet) error {

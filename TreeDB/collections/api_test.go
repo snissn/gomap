@@ -826,6 +826,52 @@ func TestUpdateBatchPlanUniqueSecondaryIndexByRootAvoidsMapAllocation(t *testing
 	}
 }
 
+func TestDeleteSecondaryEntriesForDocumentOwnsGeneratedKeys(t *testing.T) {
+	encoded, err := encodeIndexScalar(IndexValueString, "hnl")
+	if err != nil {
+		t.Fatalf("encode city: %v", err)
+	}
+	documentID := []byte("u1")
+	wantKey, err := indexEntryKey(encoded, documentID)
+	if err != nil {
+		t.Fatalf("index key: %v", err)
+	}
+	state := documentIndexState{"city": {encoded}}
+	runtime := indexRuntime{def: indexDefinition{name: "city", valueType: IndexValueString}}
+	table := newCollectionRunTable(1)
+	if err := deleteSecondaryEntriesForDocument(table, runtime, state, documentID); err != nil {
+		t.Fatalf("delete secondary entries: %v", err)
+	}
+
+	for i := range encoded {
+		encoded[i] = 0
+	}
+	for i := range documentID {
+		documentID[i] = 0
+	}
+	table.Freeze()
+	defer resetCollectionRunTable(table)
+
+	it := table.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	if !it.Valid() {
+		t.Fatal("delete table is empty")
+	}
+	if got := it.UnsafeKey(); !bytes.Equal(got, wantKey) {
+		t.Fatalf("delete key=%q want %q", got, wantKey)
+	}
+	if !it.IsDeleted() {
+		t.Fatal("delete entry is not a tombstone")
+	}
+	it.Next()
+	if it.Valid() {
+		t.Fatalf("unexpected extra delete entry %q", it.UnsafeKey())
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+}
+
 func TestCollectionCatalogCachesIndexRuntimesAndRootNames(t *testing.T) {
 	meta := CollectionMeta{
 		Name: "users",
