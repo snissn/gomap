@@ -269,6 +269,28 @@ func TestCurrentWritableMmapTargetMapsAheadWithinLeafSegment(t *testing.T) {
 	}
 }
 
+func TestCurrentWritableMmapTargetSizeMapsAheadAtBoundary(t *testing.T) {
+	withCurrentWritableMmapTargetBytes(t, 64)
+
+	tests := []struct {
+		name        string
+		currentSize int64
+		want        int64
+	}{
+		{name: "small rounds to target", currentSize: 1, want: 64},
+		{name: "partial chunk rounds up", currentSize: 65, want: 128},
+		{name: "exact chunk maps one more chunk ahead", currentSize: 64, want: 128},
+		{name: "exact later chunk maps one more chunk ahead", currentSize: 128, want: 192},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := currentWritableMmapTargetSize(tt.currentSize); got != tt.want {
+				t.Fatalf("currentWritableMmapTargetSize(%d)=%d, want %d", tt.currentSize, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCurrentWritableMmapTargetDoesNotReadPastFileSize(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")

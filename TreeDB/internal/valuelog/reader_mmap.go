@@ -309,19 +309,23 @@ func (f *File) sealedLazyMmapTargetSize() int64 {
 }
 
 func currentWritableMmapTargetSize(currentSize int64) int64 {
-	if currentSize <= 0 || CurrentWritableMmapTargetBytes <= 0 {
+	target := CurrentWritableMmapTargetBytes
+	if currentSize <= 0 || target <= 0 {
 		return currentSize
 	}
-	target := CurrentWritableMmapTargetBytes
 	const maxInt64 = int64(^uint64(0) >> 1)
 	if currentSize >= maxInt64-target {
 		return currentSize
 	}
 	rem := currentSize % target
+	add := target - rem
 	if rem == 0 {
+		add = target
+	}
+	if add <= 0 || currentSize > maxInt64-add {
 		return currentSize
 	}
-	return currentSize + target - rem
+	return currentSize + add
 }
 
 func (f *File) retirePersistentMmapToDead() {
