@@ -5316,15 +5316,15 @@ func (c *Collection) deleteDocumentOnce(documentID []byte) (bool, error) {
 			if rootID == 0 {
 				continue
 			}
-			table := newCollectionRunTable(0)
+			deleteValues := state[runtime.def.name]
+			if len(deleteValues) == 0 {
+				continue
+			}
+			table := newCollectionRunTable(len(deleteValues))
 			if err := deleteSecondaryEntriesForDocument(table, runtime, state, documentID); err != nil {
 				_ = snap.Close()
 				resetCollectionRunTable(table)
 				return false, err
-			}
-			if table.Len() == 0 {
-				resetCollectionRunTable(table)
-				continue
 			}
 			table.Freeze()
 			rootNames = append(rootNames, rootName)
