@@ -121,6 +121,13 @@ type slabUnsafeKeyBatchAppender interface {
 	ReadUnsafeAppendBatchForKeys(ptrs []page.ValuePtr, keys [][]byte, dst [][]byte) ([][]byte, error)
 }
 
+// Optional fast path for leaf-log page reads. Unlike SlabReader, this receives
+// the typed leaf-log pointer so implementations can safely use page-only caches
+// without confusing ordinary value-log payloads with B-tree leaf pages.
+type leafLogPageUnsafeToReader interface {
+	ReadLeafLogPageUnsafeTo(ptr page.LeafLogPtr, dst []byte) ([]byte, bool, error)
+}
+
 // Optional capability gate for key-aware pointer read interfaces.
 type slabKeyAwareCapability interface {
 	KeyAwareEnabled() bool
@@ -157,6 +164,7 @@ type Tree struct {
 	slabKeyReader   slabUnsafeKeyReader
 	slabKeyAppender slabUnsafeKeyAppender
 	slabKeyBatcher  slabUnsafeKeyBatchAppender
+	leafLogToReader leafLogPageUnsafeToReader
 	rootPageID      uint64
 }
 
@@ -175,6 +183,9 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 	}
 	if toer, ok := sr.(slabUnsafeToReader); ok {
 		t.slabToReader = toer
+	}
+	if leafToReader, ok := sr.(leafLogPageUnsafeToReader); ok {
+		t.leafLogToReader = leafToReader
 	}
 	if keyAwareEnabled {
 		if keyReader, ok := sr.(slabUnsafeKeyReader); ok {
@@ -208,6 +219,11 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 		t.slabToReader = toer
 	} else {
 		t.slabToReader = nil
+	}
+	if leafToReader, ok := sr.(leafLogPageUnsafeToReader); ok {
+		t.leafLogToReader = leafToReader
+	} else {
+		t.leafLogToReader = nil
 	}
 	if keyAwarePointerReadsEnabled(sr) {
 		if keyReader, ok := sr.(slabUnsafeKeyReader); ok {
@@ -253,7 +269,15 @@ func (t *Tree) loadLeafLogNodeView(ptr page.LogRecordRef, iterator bool) (node.N
 	if t.slabReader == nil {
 		return node.Node{}, errors.New("missing slab reader")
 	}
-	data, err := t.slabReader.ReadUnsafe(ptr.ValuePtr())
+	var (
+		data []byte
+		err  error
+	)
+	if t.leafLogToReader != nil {
+		data, _, err = t.leafLogToReader.ReadLeafLogPageUnsafeTo(ptr, nil)
+	} else {
+		data, err = t.slabReader.ReadUnsafe(ptr.ValuePtr())
+	}
 	if err != nil {
 		return node.Node{}, err
 	}
@@ -397,7 +421,20 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 					data []byte
 					err  error
 				)
-				if t.slabToReader != nil {
+				if t.leafLogToReader != nil {
+					var usedDst bool
+					data, usedDst, err = t.leafLogToReader.ReadLeafLogPageUnsafeTo(ptr, leafScratch.buf)
+					if err != nil {
+						putLeafRefPageScratch(leafScratch)
+						return nil, page.ValuePtr{}, 0, false, err
+					}
+					loadedLeafRef = true
+					leafScratchOwned = usedDst
+					if !usedDst {
+						putLeafRefPageScratch(leafScratch)
+						leafScratch = nil
+					}
+				} else if t.slabToReader != nil {
 					var usedDst bool
 					data, usedDst, err = t.slabToReader.ReadUnsafeTo(ptr.ValuePtr(), leafScratch.buf)
 					if err != nil {

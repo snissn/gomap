@@ -15,6 +15,13 @@ type leafPageCacheTestFallback struct {
 	data              []byte
 }
 
+func (f *leafPageCacheTestFallback) Read(ptr page.ValuePtr) ([]byte, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return append([]byte(nil), f.data...), nil
+}
+
 func (f *leafPageCacheTestFallback) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	f.readUnsafeCalls++
 	if f.err != nil {
@@ -40,6 +47,13 @@ type leafPageCacheUnsafeOnlyFallback struct {
 	readUnsafeCalls int
 	err             error
 	data            []byte
+}
+
+func (f *leafPageCacheUnsafeOnlyFallback) Read(ptr page.ValuePtr) ([]byte, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return append([]byte(nil), f.data...), nil
 }
 
 func (f *leafPageCacheUnsafeOnlyFallback) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
@@ -186,6 +200,73 @@ func TestCachedLeafPageReaderMissUsesReadUnsafeFallback(t *testing.T) {
 	}
 	if stats := cache.stats(); stats.Misses != 1 {
 		t.Fatalf("misses=%d, want 1", stats.Misses)
+	}
+}
+
+func TestValueReaderLeafLogPageUnsafeToUsesCacheHit(t *testing.T) {
+	cache := newLeafPageReadCache(8)
+	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+	leaf := bytes.Repeat([]byte{0x33}, page.PageSize)
+	cache.store(ptr, leaf)
+
+	reader := valueReader{
+		vlogs:         &leafPageCacheTestFallback{err: errors.New("fallback should not be used")},
+		leafPageCache: cache,
+	}
+	dst := make([]byte, 0, page.PageSize)
+	got, usedDst, err := reader.ReadLeafLogPageUnsafeTo(ptr, dst)
+	if err != nil {
+		t.Fatalf("ReadLeafLogPageUnsafeTo: %v", err)
+	}
+	if !usedDst {
+		t.Fatal("expected cache hit to copy into dst")
+	}
+	if !bytes.Equal(got, leaf) {
+		t.Fatal("cached leaf mismatch")
+	}
+	if stats := cache.stats(); stats.Hits != 1 || stats.Misses != 0 || stats.Stores != 1 {
+		t.Fatalf("stats=%+v, want one hit and one store", stats)
+	}
+}
+
+func TestValueReaderLeafLogPageUnsafeToStoresFallbackLeafPage(t *testing.T) {
+	cache := newLeafPageReadCache(8)
+	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+	leaf := bytes.Repeat([]byte{0x44}, page.PageSize)
+	fallback := &leafPageCacheTestFallback{data: leaf}
+	reader := valueReader{
+		vlogs:         fallback,
+		leafPageCache: cache,
+	}
+
+	dst := make([]byte, 0, page.PageSize)
+	got, usedDst, err := reader.ReadLeafLogPageUnsafeTo(ptr, dst)
+	if err != nil {
+		t.Fatalf("ReadLeafLogPageUnsafeTo: %v", err)
+	}
+	if !usedDst {
+		t.Fatal("expected fallback ReadUnsafeTo to use dst")
+	}
+	if !bytes.Equal(got, leaf) {
+		t.Fatal("fallback leaf mismatch")
+	}
+	if fallback.readUnsafeToCalls != 1 {
+		t.Fatalf("fallback ReadUnsafeTo calls=%d, want 1", fallback.readUnsafeToCalls)
+	}
+
+	fallback.err = errors.New("fallback should not be used after cache store")
+	again, usedDst, err := reader.ReadLeafLogPageUnsafeTo(ptr, dst[:0])
+	if err != nil {
+		t.Fatalf("ReadLeafLogPageUnsafeTo cached: %v", err)
+	}
+	if !usedDst || !bytes.Equal(again, leaf) {
+		t.Fatalf("cached leaf mismatch usedDst=%v", usedDst)
+	}
+	if fallback.readUnsafeToCalls != 1 {
+		t.Fatalf("fallback calls after cache hit=%d, want 1", fallback.readUnsafeToCalls)
+	}
+	if stats := cache.stats(); stats.Hits != 1 || stats.Misses != 1 || stats.Stores != 1 {
+		t.Fatalf("stats=%+v, want one miss, one store, one hit", stats)
 	}
 }
 

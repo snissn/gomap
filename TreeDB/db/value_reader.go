@@ -25,7 +25,8 @@ type readChecksumCapability interface {
 
 // valueReader resolves value-log pointers for tree lookups/iterators.
 type valueReader struct {
-	vlogs tree.SlabReader
+	vlogs         tree.SlabReader
+	leafPageCache *leafPageReadCache
 }
 
 // ValueReaderForState returns a reader that resolves value-log pointers.
@@ -40,11 +41,12 @@ func newValueReader(vlogs tree.SlabReader) valueReader {
 	return valueReader{vlogs: vlogs}
 }
 
-func (r *valueReader) reconfigure(vlogs tree.SlabReader) {
+func (r *valueReader) reconfigure(vlogs tree.SlabReader, leafPageCache *leafPageReadCache) {
 	if r == nil {
 		return
 	}
 	r.vlogs = vlogs
+	r.leafPageCache = leafPageCache
 }
 
 func (r valueReader) Read(ptr page.ValuePtr) ([]byte, error) {
@@ -83,6 +85,25 @@ func (r valueReader) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, 
 		return nil, false, err
 	}
 	return val, false, nil
+}
+
+func (r valueReader) ReadLeafLogPageUnsafeTo(ptr page.LeafLogPtr, dst []byte) ([]byte, bool, error) {
+	if r.vlogs == nil {
+		return nil, false, errors.New("treedb: missing value-log reader")
+	}
+	if r.leafPageCache != nil {
+		if val, usedDst, ok := r.leafPageCache.getTo(ptr, dst); ok {
+			return val, usedDst, nil
+		}
+	}
+	val, usedDst, err := r.ReadUnsafeTo(ptr.ValuePtr(), dst)
+	if err != nil {
+		return nil, false, err
+	}
+	if r.leafPageCache != nil && len(val) == page.PageSize {
+		r.leafPageCache.store(ptr, val)
+	}
+	return val, usedDst, nil
 }
 
 func (r valueReader) ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
