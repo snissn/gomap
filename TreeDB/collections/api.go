@@ -6397,7 +6397,6 @@ func getUpdateBatchBufferedEntries(count int) ([]updateBatchBufferedEntry, *upda
 		if buffer, ok := v.(*updateBatchBufferedEntryBuffer); ok && buffer != nil {
 			if cap(buffer.entries) >= count {
 				buffer.entries = buffer.entries[:count]
-				clear(buffer.entries)
 				return buffer.entries, buffer
 			}
 			putUpdateBatchBufferedEntries(buffer.entries, buffer)
