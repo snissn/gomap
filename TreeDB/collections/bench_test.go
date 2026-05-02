@@ -578,6 +578,8 @@ func openBenchmarkCollectionWithManager(b *testing.B, name string, indexes ...co
 	bufferedIndexedWriteMaxDocuments := benchmarkIntEnv(b, "TREEDB_COLLECTION_BUFFERED_INDEXED_WRITE_MAX_DOCUMENTS", 0)
 	bufferedIndexedWriteMaxBytes := benchmarkInt64Env(b, "TREEDB_COLLECTION_BUFFERED_INDEXED_WRITE_MAX_BYTES", 0)
 	bufferedIndexedWriteMaxRootRuns := benchmarkIntEnv(b, "TREEDB_COLLECTION_BUFFERED_INDEXED_WRITE_MAX_ROOT_RUNS", 0)
+	bufferedIndexedAsyncFlush := benchmarkBoolEnv(b, "TREEDB_COLLECTION_BUFFERED_INDEXED_ASYNC_FLUSH", false) && len(indexes) > 0
+	bufferedIndexedAsyncFlushMaxQueuedUnits := benchmarkIntEnv(b, "TREEDB_COLLECTION_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS", 0)
 	indexes = append([]collections.IndexDefinition(nil), indexes...)
 	for i := range indexes {
 		indexes[i].StoragePolicy = benchmarkRootStoragePolicy(indexOuter)
@@ -585,14 +587,16 @@ func openBenchmarkCollectionWithManager(b *testing.B, name string, indexes ...co
 	if _, err := manager.CreateCollection(&collections.CollectionMeta{
 		Name: name,
 		Options: collections.CollectionOptions{
-			DocumentFormat:                   documentFormat,
-			DataRootStoragePolicy:            benchmarkRootStoragePolicy(dataOuter),
-			IndexStateStoragePolicy:          benchmarkRootStoragePolicy(dataOuter),
-			DisableIndexedWriteMemtables:     !bufferedIndexedWrites && len(indexes) > 0,
-			BufferedIndexedWrites:            bufferedIndexedWrites,
-			BufferedIndexedWriteMaxDocuments: bufferedIndexedWriteMaxDocuments,
-			BufferedIndexedWriteMaxBytes:     bufferedIndexedWriteMaxBytes,
-			BufferedIndexedWriteMaxRootRuns:  bufferedIndexedWriteMaxRootRuns,
+			DocumentFormat:                          documentFormat,
+			DataRootStoragePolicy:                   benchmarkRootStoragePolicy(dataOuter),
+			IndexStateStoragePolicy:                 benchmarkRootStoragePolicy(dataOuter),
+			DisableIndexedWriteMemtables:            !bufferedIndexedWrites && len(indexes) > 0,
+			BufferedIndexedWrites:                   bufferedIndexedWrites,
+			BufferedIndexedWriteMaxDocuments:        bufferedIndexedWriteMaxDocuments,
+			BufferedIndexedWriteMaxBytes:            bufferedIndexedWriteMaxBytes,
+			BufferedIndexedWriteMaxRootRuns:         bufferedIndexedWriteMaxRootRuns,
+			BufferedIndexedAsyncFlush:               bufferedIndexedAsyncFlush,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: bufferedIndexedAsyncFlushMaxQueuedUnits,
 		},
 		Indexes: indexes,
 	}); err != nil {
