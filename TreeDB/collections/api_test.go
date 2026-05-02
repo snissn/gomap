@@ -530,6 +530,118 @@ func TestCollectionInsertBatchStatsExposeIndexRunShape(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"email":"ada@example.com","city":"hnl"}`),
+			[]byte(`{"email":"grace@example.com","city":"sfo"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	results, err := col.UpdateBatch([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: func(current []byte) ([]byte, bool, error) {
+			return []byte(`{"email":"ada@example.com","city":"lhr"}`), true, nil
+		}},
+		{DocumentID: []byte("u2"), Update: func(current []byte) ([]byte, bool, error) {
+			return []byte(`{"email":"grace@example.com","city":"ord"}`), true, nil
+		}},
+	})
+	if err != nil {
+		t.Fatalf("update batch: %v", err)
+	}
+	for i, result := range results {
+		if !result.Matched || !result.Modified {
+			t.Fatalf("result %d=%+v want matched+modified", i, result)
+		}
+	}
+
+	stats := col.LastUpdateStats()
+	if got, want := stats.Items, 2; got != want {
+		t.Fatalf("stats items=%d want %d", got, want)
+	}
+	if got, want := stats.Matched, 2; got != want {
+		t.Fatalf("stats matched=%d want %d", got, want)
+	}
+	if got, want := stats.Modified, 2; got != want {
+		t.Fatalf("stats modified=%d want %d", got, want)
+	}
+	if got, want := stats.Indexes, 2; got != want {
+		t.Fatalf("stats indexes=%d want %d", got, want)
+	}
+	if got := stats.Runs; got < 2 {
+		t.Fatalf("stats runs=%d want at least primary+secondary", got)
+	}
+	if got := stats.SecondaryDeleteEntries; got < 2 {
+		t.Fatalf("stats secondary deletes=%d want at least 2", got)
+	}
+	if got := stats.SecondarySetEntries; got < 2 {
+		t.Fatalf("stats secondary sets=%d want at least 2", got)
+	}
+	if stats.SecondaryKeyBytes == 0 {
+		t.Fatal("stats secondary key bytes=0 want positive")
+	}
+	if stats.CurrentRead != 0 || stats.Callback != 0 || stats.BufferStage != 0 {
+		t.Fatalf("default update timings=%+v want zero unless detailed stats enabled", stats)
+	}
+
+	mgr.SetUpdateBatchDetailedStatsEnabled(true)
+	if _, err := col.UpdateBatch([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: func(current []byte) ([]byte, bool, error) {
+			return []byte(`{"email":"ada@example.com","city":"sea"}`), true, nil
+		}},
+		{DocumentID: []byte("u2"), Update: func(current []byte) ([]byte, bool, error) {
+			return []byte(`{"email":"grace@example.com","city":"bos"}`), true, nil
+		}},
+	}); err != nil {
+		t.Fatalf("timed update batch: %v", err)
+	}
+	timedStats := col.LastUpdateStats()
+	if timedStats.CurrentRead <= 0 {
+		t.Fatalf("timed current read=%s want positive with detailed stats enabled", timedStats.CurrentRead)
+	}
+
+	managerStats := mgr.StatsSnapshot()
+	if got := managerStats.UpdateBatchCalls; got == 0 {
+		t.Fatal("manager update batch calls=0 want positive")
+	}
+	if got := managerStats.UpdateBatchItems; got < 2 {
+		t.Fatalf("manager update batch items=%d want at least 2", got)
+	}
+	if got := managerStats.UpdateBatchModified; got < 2 {
+		t.Fatalf("manager update batch modified=%d want at least 2", got)
+	}
+	if got := managerStats.UpdateBatchSecondarySets; got < 2 {
+		t.Fatalf("manager update batch secondary sets=%d want at least 2", got)
+	}
+	exported := mgr.Stats()
+	if _, ok := exported["treedb.collections.write_domain.update_batch.secondary_sets_total"]; !ok {
+		t.Fatalf("manager stats missing update batch secondary set counter: keys=%v", exported)
+	}
+}
+
 func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

@@ -491,7 +491,13 @@ The benchmark shapes are intentionally different:
 - `BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2` preloads a BSON
   collection, then runs concurrent `_id` updates through `Collection.Update`
   without the Mongo gateway. This is useful when comparing gateway update
-  profiles with the storage/update path directly.
+  profiles with the storage/update path directly. The benchmark enables
+  collection-manager detailed update timing for its measured phase and reports
+  update attribution metrics such as `update_current_read_ns/doc`,
+  `update_callback_ns/doc`, `update_index_state_extract_ns/doc`,
+  `update_primary_run_ns/doc`, `update_secondary_runs_ns/doc`,
+  `update_buffer_stage_ns/doc`, `update_publish_ns/doc`, and
+  `update_items/batch` from the collection manager's measured-phase counters.
 - `BenchmarkClientBSONBatchEncode` measures client-side BSON document encoding
   alone.
 

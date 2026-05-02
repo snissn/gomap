@@ -494,6 +494,8 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	}
 
 	b.ReportAllocs()
+	manager.SetUpdateBatchDetailedStatsEnabled(true)
+	statsBefore := manager.StatsSnapshot()
 	b.ResetTimer()
 	started := time.Now()
 	err = runProfileBenchDirectCollectionConcurrentUpdates(context.Background(), writers, b.N, documentCount, idStride, ids, updateDocs, collection)
@@ -503,7 +505,81 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 		b.Fatalf("run concurrent updates: %v", err)
 	}
 	b.ReportMetric(float64(writers), "writers")
+	reportCollectionManagerUpdateStats(b, deltaCollectionManagerUpdateStats(manager.StatsSnapshot(), statsBefore), b.N)
 	reportDocsPerSecond(b, b.N, timedElapsed)
+}
+
+func deltaCollectionManagerUpdateStats(after, before collections.CollectionManagerStats) collections.CollectionManagerStats {
+	return collections.CollectionManagerStats{
+		UpdateBatchCalls:              after.UpdateBatchCalls - before.UpdateBatchCalls,
+		UpdateBatchItems:              after.UpdateBatchItems - before.UpdateBatchItems,
+		UpdateBatchMatched:            after.UpdateBatchMatched - before.UpdateBatchMatched,
+		UpdateBatchModified:           after.UpdateBatchModified - before.UpdateBatchModified,
+		UpdateBatchRuns:               after.UpdateBatchRuns - before.UpdateBatchRuns,
+		UpdateBatchBufferedBatches:    after.UpdateBatchBufferedBatches - before.UpdateBatchBufferedBatches,
+		UpdateBatchCurrentRead:        after.UpdateBatchCurrentRead - before.UpdateBatchCurrentRead,
+		UpdateBatchCallback:           after.UpdateBatchCallback - before.UpdateBatchCallback,
+		UpdateBatchPrepareDocuments:   after.UpdateBatchPrepareDocuments - before.UpdateBatchPrepareDocuments,
+		UpdateBatchIndexStateExtract:  after.UpdateBatchIndexStateExtract - before.UpdateBatchIndexStateExtract,
+		UpdateBatchUniquePreflight:    after.UpdateBatchUniquePreflight - before.UpdateBatchUniquePreflight,
+		UpdateBatchTemplateRunBuild:   after.UpdateBatchTemplateRunBuild - before.UpdateBatchTemplateRunBuild,
+		UpdateBatchPrimaryRunBuild:    after.UpdateBatchPrimaryRunBuild - before.UpdateBatchPrimaryRunBuild,
+		UpdateBatchIndexStateRunBuild: after.UpdateBatchIndexStateRunBuild - before.UpdateBatchIndexStateRunBuild,
+		UpdateBatchSecondaryRunBuild:  after.UpdateBatchSecondaryRunBuild - before.UpdateBatchSecondaryRunBuild,
+		UpdateBatchBufferStage:        after.UpdateBatchBufferStage - before.UpdateBatchBufferStage,
+		UpdateBatchPublish:            after.UpdateBatchPublish - before.UpdateBatchPublish,
+		UpdateBatchSecondaryDeletes:   after.UpdateBatchSecondaryDeletes - before.UpdateBatchSecondaryDeletes,
+		UpdateBatchSecondarySets:      after.UpdateBatchSecondarySets - before.UpdateBatchSecondarySets,
+		UpdateBatchSecondaryKeyBytes:  after.UpdateBatchSecondaryKeyBytes - before.UpdateBatchSecondaryKeyBytes,
+	}
+}
+
+func reportCollectionManagerUpdateStats(b *testing.B, stats collections.CollectionManagerStats, docs int) {
+	b.Helper()
+	if docs <= 0 {
+		return
+	}
+	if stats.UpdateBatchCalls > 0 {
+		b.ReportMetric(float64(stats.UpdateBatchCalls), "update_batches")
+		b.ReportMetric(float64(stats.UpdateBatchItems)/float64(stats.UpdateBatchCalls), "update_items/batch")
+	}
+	if stats.UpdateBatchRuns > 0 && stats.UpdateBatchCalls > 0 {
+		b.ReportMetric(float64(stats.UpdateBatchRuns)/float64(stats.UpdateBatchCalls), "update_roots/batch")
+	}
+	if stats.UpdateBatchMatched > 0 {
+		b.ReportMetric(float64(stats.UpdateBatchMatched)/float64(docs), "update_matched/doc")
+	}
+	if stats.UpdateBatchModified > 0 {
+		b.ReportMetric(float64(stats.UpdateBatchModified)/float64(docs), "update_modified/doc")
+	}
+	if stats.UpdateBatchBufferedBatches > 0 {
+		b.ReportMetric(float64(stats.UpdateBatchBufferedBatches), "update_buffered_batches")
+	}
+	if stats.UpdateBatchSecondaryDeletes > 0 {
+		b.ReportMetric(float64(stats.UpdateBatchSecondaryDeletes)/float64(docs), "update_secondary_deletes/doc")
+	}
+	if stats.UpdateBatchSecondarySets > 0 {
+		b.ReportMetric(float64(stats.UpdateBatchSecondarySets)/float64(docs), "update_secondary_sets/doc")
+	}
+	if stats.UpdateBatchSecondaryKeyBytes > 0 {
+		b.ReportMetric(float64(stats.UpdateBatchSecondaryKeyBytes)/float64(docs), "update_secondary_key_bytes/doc")
+	}
+	reportDuration := func(name string, d time.Duration) {
+		if d > 0 {
+			b.ReportMetric(float64(d.Nanoseconds())/float64(docs), name)
+		}
+	}
+	reportDuration("update_current_read_ns/doc", stats.UpdateBatchCurrentRead)
+	reportDuration("update_callback_ns/doc", stats.UpdateBatchCallback)
+	reportDuration("update_prepare_ns/doc", stats.UpdateBatchPrepareDocuments)
+	reportDuration("update_index_state_extract_ns/doc", stats.UpdateBatchIndexStateExtract)
+	reportDuration("update_unique_preflight_ns/doc", stats.UpdateBatchUniquePreflight)
+	reportDuration("update_template_run_ns/doc", stats.UpdateBatchTemplateRunBuild)
+	reportDuration("update_primary_run_ns/doc", stats.UpdateBatchPrimaryRunBuild)
+	reportDuration("update_index_state_run_ns/doc", stats.UpdateBatchIndexStateRunBuild)
+	reportDuration("update_secondary_runs_ns/doc", stats.UpdateBatchSecondaryRunBuild)
+	reportDuration("update_buffer_stage_ns/doc", stats.UpdateBatchBufferStage)
+	reportDuration("update_publish_ns/doc", stats.UpdateBatchPublish)
 }
 
 func runProfileBenchDirectCollectionConcurrentUpdates(
