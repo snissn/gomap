@@ -11,7 +11,8 @@ import (
 // SnapshotRootReader is a root-bound read view owned by a Snapshot.
 // It is valid only while the parent Snapshot remains open.
 type SnapshotRootReader struct {
-	tree *tree.Tree
+	tree tree.Tree
+	ok   bool
 }
 
 func (s *Snapshot) treeAtRoot(rootID uint64) (*tree.Tree, error) {
@@ -42,11 +43,11 @@ func (s *Snapshot) ReaderAtRoot(rootID uint64) (SnapshotRootReader, error) {
 	if err != nil {
 		return SnapshotRootReader{}, err
 	}
-	return SnapshotRootReader{tree: tr}, nil
+	return SnapshotRootReader{tree: *tr, ok: true}, nil
 }
 
-func (r SnapshotRootReader) GetAppend(key, dst []byte) ([]byte, error) {
-	if r.tree == nil {
+func (r *SnapshotRootReader) GetAppend(key, dst []byte) ([]byte, error) {
+	if r == nil || !r.ok {
 		return dst, tree.ErrKeyNotFound
 	}
 	return r.tree.GetAppend(key, dst)

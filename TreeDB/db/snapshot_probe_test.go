@@ -195,17 +195,27 @@ func TestSnapshotReaderAtRootGetAppend(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	_, rootIDs, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+	const rootCount = 16
+	inputs := make([]OrderedRootPublishInput, rootCount)
+	inputs[0] = OrderedRootPublishInput{
 		Iter: mustFrozenSystemMemtable(t,
 			"doc/a", "va",
 			"doc/b", "vb",
 		).NewIterator(nil, nil),
-	}})
+	}
+	for i := 1; i < rootCount; i++ {
+		inputs[i] = OrderedRootPublishInput{
+			Iter: mustFrozenSystemMemtable(t,
+				fmt.Sprintf("other/%02d", i), fmt.Sprintf("value/%02d", i),
+			).NewIterator(nil, nil),
+		}
+	}
+	_, rootIDs, err := db.PublishOrderedRootGroup(nil, inputs)
 	if err != nil {
 		t.Fatalf("publish root: %v", err)
 	}
-	if len(rootIDs) != 1 {
-		t.Fatalf("root IDs len=%d want 1", len(rootIDs))
+	if len(rootIDs) != rootCount {
+		t.Fatalf("root IDs len=%d want %d", len(rootIDs), rootCount)
 	}
 
 	snap := db.AcquireSnapshot()
@@ -218,12 +228,10 @@ func TestSnapshotReaderAtRootGetAppend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReaderAtRoot: %v", err)
 	}
-	again, err := snap.ReaderAtRoot(rootIDs[0])
-	if err != nil {
-		t.Fatalf("ReaderAtRoot again: %v", err)
-	}
-	if reader.tree != again.tree {
-		t.Fatal("ReaderAtRoot did not reuse the snapshot root-tree cache")
+	for i := 1; i < len(rootIDs); i++ {
+		if _, err := snap.ReaderAtRoot(rootIDs[i]); err != nil {
+			t.Fatalf("ReaderAtRoot(%d): %v", i, err)
+		}
 	}
 
 	got, err := reader.GetAppend([]byte("doc/a"), []byte("prefix:"))
