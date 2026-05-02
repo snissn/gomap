@@ -187,12 +187,19 @@ type DB struct {
 	orderedRootDeltaGroupRootApplyNodeLoads             atomic.Uint64
 	orderedRootDeltaGroupRootApplyPagerNodeLoads        atomic.Uint64
 	orderedRootDeltaGroupRootApplyLeafLogNodeLoads      atomic.Uint64
+	orderedRootDeltaGroupRootApplyLeafLogCacheHits      atomic.Uint64
+	orderedRootDeltaGroupRootApplyLeafLogReaderCalls    atomic.Uint64
+	orderedRootDeltaGroupRootApplyLeafLogViewReads      atomic.Uint64
+	orderedRootDeltaGroupRootApplyLeafLogScratchReads   atomic.Uint64
 	orderedRootDeltaGroupRootApplyLeafMerges            atomic.Uint64
 	orderedRootDeltaGroupRootApplyInternalMerges        atomic.Uint64
 	orderedRootDeltaGroupRootApplyLeafPagesWritten      atomic.Uint64
 	orderedRootDeltaGroupRootApplyPagerLeafPagesWritten atomic.Uint64
 	orderedRootDeltaGroupRootApplyLeafLogPagesWritten   atomic.Uint64
 	orderedRootDeltaGroupRootApplyInternalPagesWritten  atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalChildRefs     atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalPageChildRefs atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalLeafLogRefs   atomic.Uint64
 	orderedRootDeltaGroupRootApplyRootSplitLevels       atomic.Uint64
 	orderedRootDeltaGroupSystemBuildNs                  atomic.Uint64
 	orderedRootDeltaGroupSystemApplyNs                  atomic.Uint64

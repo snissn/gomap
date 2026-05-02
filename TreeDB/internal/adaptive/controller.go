@@ -28,12 +28,19 @@ type Metrics struct {
 	ZipperNodeLoads             int
 	ZipperPagerNodeLoads        int
 	ZipperLeafLogNodeLoads      int
+	ZipperLeafLogCacheHits      int
+	ZipperLeafLogReaderCalls    int
+	ZipperLeafLogViewReads      int
+	ZipperLeafLogScratchReads   int
 	ZipperLeafMerges            int
 	ZipperInternalMerges        int
 	ZipperLeafPagesWritten      int
 	ZipperPagerLeafPagesWritten int
 	ZipperLeafLogPagesWritten   int
 	ZipperInternalPagesWritten  int
+	ZipperInternalChildRefs     int
+	ZipperInternalPageChildRefs int
+	ZipperInternalLeafLogRefs   int
 	ZipperRootSplitLevels       int
 
 	// SlabWriteBytesByFile tracks bytes appended to each slab file during this

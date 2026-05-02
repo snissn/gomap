@@ -1,8 +1,11 @@
 package db
 
 import (
+	"reflect"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 )
 
 func TestEstimatePublishWatermarkPercentile_OverflowBucket(t *testing.T) {
@@ -90,6 +93,57 @@ func TestObserveOrderedRootDeltaGroupPublishStats(t *testing.T) {
 	}
 	if stats.finalizeCalls != 1 {
 		t.Fatalf("finalizeCalls=%d want 1", stats.finalizeCalls)
+	}
+}
+
+func TestMergeOrderedRootPublishMetricsIncludesLeafLogAttribution(t *testing.T) {
+	src := adaptive.Metrics{
+		ZipperApplyOps:              1,
+		ZipperNodeLoads:             2,
+		ZipperPagerNodeLoads:        3,
+		ZipperLeafLogNodeLoads:      4,
+		ZipperLeafLogCacheHits:      5,
+		ZipperLeafLogReaderCalls:    6,
+		ZipperLeafLogViewReads:      7,
+		ZipperLeafLogScratchReads:   8,
+		ZipperLeafMerges:            9,
+		ZipperInternalMerges:        10,
+		ZipperLeafPagesWritten:      11,
+		ZipperPagerLeafPagesWritten: 12,
+		ZipperLeafLogPagesWritten:   13,
+		ZipperInternalPagesWritten:  14,
+		ZipperInternalChildRefs:     15,
+		ZipperInternalPageChildRefs: 16,
+		ZipperInternalLeafLogRefs:   17,
+		ZipperRootSplitLevels:       18,
+	}
+
+	var dst adaptive.Metrics
+	mergeOrderedRootPublishMetrics(&dst, src)
+	mergeOrderedRootPublishMetrics(&dst, src)
+
+	want := src
+	want.ZipperApplyOps *= 2
+	want.ZipperNodeLoads *= 2
+	want.ZipperPagerNodeLoads *= 2
+	want.ZipperLeafLogNodeLoads *= 2
+	want.ZipperLeafLogCacheHits *= 2
+	want.ZipperLeafLogReaderCalls *= 2
+	want.ZipperLeafLogViewReads *= 2
+	want.ZipperLeafLogScratchReads *= 2
+	want.ZipperLeafMerges *= 2
+	want.ZipperInternalMerges *= 2
+	want.ZipperLeafPagesWritten *= 2
+	want.ZipperPagerLeafPagesWritten *= 2
+	want.ZipperLeafLogPagesWritten *= 2
+	want.ZipperInternalPagesWritten *= 2
+	want.ZipperInternalChildRefs *= 2
+	want.ZipperInternalPageChildRefs *= 2
+	want.ZipperInternalLeafLogRefs *= 2
+	want.ZipperRootSplitLevels *= 2
+
+	if !reflect.DeepEqual(dst, want) {
+		t.Fatalf("merged metrics mismatch\n got: %+v\nwant: %+v", dst, want)
 	}
 }
 
