@@ -1685,7 +1685,7 @@ func collectAfterLoadStats(ctx context.Context, cfg config, target *benchTarget,
 		}
 		result.TreeDBDiskAfterLoad = &snapshot
 		if target.db != nil {
-			result.TreeDBStatsAfterLoad = selectedTreeDBStats(target.db.Stats())
+			result.TreeDBStatsAfterLoad = collectLiveTreeDBStats(target)
 		}
 		return nil
 	}
@@ -1706,7 +1706,7 @@ func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, res
 				}
 			}
 			if target.db != nil {
-				result.TreeDBStatsFinal = selectedTreeDBStats(target.db.Stats())
+				result.TreeDBStatsFinal = collectLiveTreeDBStats(target)
 			}
 			return nil
 		}
@@ -1726,7 +1726,7 @@ func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, res
 		}
 		result.TreeDBDiskAfterCheckpoint = &snapshot
 		if target.db != nil {
-			stats := selectedTreeDBStats(target.db.Stats())
+			stats := collectLiveTreeDBStats(target)
 			result.TreeDBStatsAfterCheckpoint = stats
 			result.TreeDBStatsFinal = stats
 		}
@@ -1822,7 +1822,7 @@ func collectTreeDBStatsFromDir(cfg config, target *benchTarget) (map[string]stri
 		return nil, nil
 	}
 	if target.db != nil {
-		return selectedTreeDBStats(target.db.Stats()), nil
+		return collectLiveTreeDBStats(target), nil
 	}
 	if target.treedbDir == "" {
 		return nil, nil
@@ -1835,6 +1835,24 @@ func collectTreeDBStatsFromDir(cfg config, target *benchTarget) (map[string]stri
 	}
 	defer func() { _ = cleanup() }()
 	return selectedTreeDBStats(db.Stats()), nil
+}
+
+func collectLiveTreeDBStats(target *benchTarget) map[string]string {
+	if target == nil {
+		return nil
+	}
+	stats := make(map[string]string)
+	if target.db != nil {
+		for key, value := range target.db.Stats() {
+			stats[key] = value
+		}
+	}
+	if target.collections != nil {
+		for key, value := range target.collections.Stats() {
+			stats[key] = value
+		}
+	}
+	return selectedTreeDBStats(stats)
 }
 
 func mergeTreeDBPersistentStats(base, refreshed map[string]string) map[string]string {
@@ -1875,7 +1893,7 @@ func appendTreeDBMaintenanceStep(ctx context.Context, target *benchTarget, resul
 		if err := target.db.Checkpoint(); err != nil {
 			return fmt.Errorf("checkpoint after %s: %w", name, err)
 		}
-		result.TreeDBStatsFinal = selectedTreeDBStats(target.db.Stats())
+		result.TreeDBStatsFinal = collectLiveTreeDBStats(target)
 	}
 	snapshot, err := collectDiskSnapshot(target.treedbDir)
 	if err != nil {

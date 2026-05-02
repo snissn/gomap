@@ -270,6 +270,36 @@ type CollectionSecondaryRunStats struct {
 	Build         time.Duration
 }
 
+// CollectionManagerStats captures aggregate write-domain counters for a
+// CollectionManager. The counters are process-local observability; they are
+// not persisted with collection metadata.
+type CollectionManagerStats struct {
+	Domains                       int
+	PendingDocuments              int
+	PendingBytes                  int64
+	PendingRootRuns               int
+	MutationLockCalls             uint64
+	MutationLockWait              time.Duration
+	MutationLockHold              time.Duration
+	IndexedStageBatches           uint64
+	IndexedStageDocs              uint64
+	IndexedStageBytes             uint64
+	IndexedStageRootRuns          uint64
+	IndexedAutoFlushes            uint64
+	IndexedFlushCalls             uint64
+	IndexedFlushErrors            uint64
+	IndexedFlushDocs              uint64
+	IndexedFlushBytes             uint64
+	IndexedFlushRootRuns          uint64
+	IndexedFlushRoots             uint64
+	IndexedFlushDuration          time.Duration
+	UpdateCombineRequests         uint64
+	UpdateCombineBatches          uint64
+	UpdateCombineBatchedRequests  uint64
+	UpdateCombineFallbackRequests uint64
+	UpdateCombineQueueDepthMax    uint64
+}
+
 // DocumentRecord is one primary collection record returned by ScanDocuments.
 // ID and Document are cloned byte slices owned by the caller.
 type DocumentRecord struct {
@@ -434,6 +464,27 @@ type collectionWriteDomain struct {
 	bufferedBytes    int64
 	rootRunCount     int
 	writeGeneration  uint64
+
+	mutationLockCalls             atomic.Uint64
+	mutationLockWaitTotalNs       atomic.Uint64
+	mutationLockHoldTotalNs       atomic.Uint64
+	indexedStageBatches           atomic.Uint64
+	indexedStageDocs              atomic.Uint64
+	indexedStageBytes             atomic.Uint64
+	indexedStageRootRuns          atomic.Uint64
+	indexedAutoFlushes            atomic.Uint64
+	indexedFlushCalls             atomic.Uint64
+	indexedFlushErrors            atomic.Uint64
+	indexedFlushDocs              atomic.Uint64
+	indexedFlushBytes             atomic.Uint64
+	indexedFlushRootRuns          atomic.Uint64
+	indexedFlushRoots             atomic.Uint64
+	indexedFlushDurationTotalNs   atomic.Uint64
+	updateCombineRequests         atomic.Uint64
+	updateCombineBatches          atomic.Uint64
+	updateCombineBatchedRequests  atomic.Uint64
+	updateCombineFallbackRequests atomic.Uint64
+	updateCombineQueueDepthMax    atomic.Uint64
 }
 
 func NewCollectionManager(database *backenddb.DB) *CollectionManager {
@@ -496,6 +547,228 @@ func cloneCollectionInsertStats(stats CollectionInsertStats) CollectionInsertSta
 		stats.SecondaryRuns = append([]CollectionSecondaryRunStats(nil), stats.SecondaryRuns...)
 	}
 	return stats
+}
+
+// Stats returns aggregate process-local collection write-domain metrics with
+// stable TreeDB benchmark key names.
+func (m *CollectionManager) Stats() map[string]string {
+	stats := m.StatsSnapshot()
+	if stats == (CollectionManagerStats{}) {
+		return nil
+	}
+	out := make(map[string]string, 32)
+	out["treedb.collections.write_domain.domains"] = fmt.Sprintf("%d", stats.Domains)
+	out["treedb.collections.write_domain.pending_docs"] = fmt.Sprintf("%d", stats.PendingDocuments)
+	out["treedb.collections.write_domain.pending_bytes"] = fmt.Sprintf("%d", stats.PendingBytes)
+	out["treedb.collections.write_domain.pending_root_runs"] = fmt.Sprintf("%d", stats.PendingRootRuns)
+	out["treedb.collections.write_domain.mutation_lock.calls_total"] = fmt.Sprintf("%d", stats.MutationLockCalls)
+	out["treedb.collections.write_domain.mutation_lock.wait_ns_total"] = fmt.Sprintf("%d", stats.MutationLockWait.Nanoseconds())
+	out["treedb.collections.write_domain.mutation_lock.hold_ns_total"] = fmt.Sprintf("%d", stats.MutationLockHold.Nanoseconds())
+	if denom := stats.MutationLockWait + stats.MutationLockHold; denom > 0 {
+		out["treedb.collections.write_domain.mutation_lock.wait_share_pct"] = fmt.Sprintf("%.3f", 100*float64(stats.MutationLockWait)/float64(denom))
+	}
+	out["treedb.collections.write_domain.indexed_stage.batches_total"] = fmt.Sprintf("%d", stats.IndexedStageBatches)
+	out["treedb.collections.write_domain.indexed_stage.docs_total"] = fmt.Sprintf("%d", stats.IndexedStageDocs)
+	out["treedb.collections.write_domain.indexed_stage.bytes_total"] = fmt.Sprintf("%d", stats.IndexedStageBytes)
+	out["treedb.collections.write_domain.indexed_stage.root_runs_total"] = fmt.Sprintf("%d", stats.IndexedStageRootRuns)
+	out["treedb.collections.write_domain.indexed_stage.auto_flushes_total"] = fmt.Sprintf("%d", stats.IndexedAutoFlushes)
+	out["treedb.collections.write_domain.indexed_flush.calls_total"] = fmt.Sprintf("%d", stats.IndexedFlushCalls)
+	out["treedb.collections.write_domain.indexed_flush.errors_total"] = fmt.Sprintf("%d", stats.IndexedFlushErrors)
+	out["treedb.collections.write_domain.indexed_flush.docs_total"] = fmt.Sprintf("%d", stats.IndexedFlushDocs)
+	out["treedb.collections.write_domain.indexed_flush.bytes_total"] = fmt.Sprintf("%d", stats.IndexedFlushBytes)
+	out["treedb.collections.write_domain.indexed_flush.root_runs_total"] = fmt.Sprintf("%d", stats.IndexedFlushRootRuns)
+	out["treedb.collections.write_domain.indexed_flush.roots_total"] = fmt.Sprintf("%d", stats.IndexedFlushRoots)
+	out["treedb.collections.write_domain.indexed_flush.duration_ns_total"] = fmt.Sprintf("%d", stats.IndexedFlushDuration.Nanoseconds())
+	out["treedb.collections.write_domain.update_combine.requests_total"] = fmt.Sprintf("%d", stats.UpdateCombineRequests)
+	out["treedb.collections.write_domain.update_combine.batches_total"] = fmt.Sprintf("%d", stats.UpdateCombineBatches)
+	out["treedb.collections.write_domain.update_combine.batched_requests_total"] = fmt.Sprintf("%d", stats.UpdateCombineBatchedRequests)
+	out["treedb.collections.write_domain.update_combine.fallback_requests_total"] = fmt.Sprintf("%d", stats.UpdateCombineFallbackRequests)
+	out["treedb.collections.write_domain.update_combine.queue_depth_max"] = fmt.Sprintf("%d", stats.UpdateCombineQueueDepthMax)
+	return out
+}
+
+// StatsSnapshot returns aggregate process-local collection write-domain
+// counters in typed form for tests and in-process diagnostics.
+func (m *CollectionManager) StatsSnapshot() CollectionManagerStats {
+	if m == nil {
+		return CollectionManagerStats{}
+	}
+	m.domainMu.RLock()
+	domains := make([]*collectionWriteDomain, 0, len(m.domains))
+	for _, domain := range m.domains {
+		if domain != nil {
+			domains = append(domains, domain)
+		}
+	}
+	m.domainMu.RUnlock()
+
+	var stats CollectionManagerStats
+	stats.Domains = len(domains)
+	for _, domain := range domains {
+		stats.add(domain.statsSnapshot())
+	}
+	return stats
+}
+
+func (s *CollectionManagerStats) add(other CollectionManagerStats) {
+	if s == nil {
+		return
+	}
+	s.PendingDocuments = saturatingAddNonNegativeInt(s.PendingDocuments, other.PendingDocuments)
+	s.PendingBytes = saturatingAddNonNegativeInt64(s.PendingBytes, other.PendingBytes)
+	s.PendingRootRuns = saturatingAddNonNegativeInt(s.PendingRootRuns, other.PendingRootRuns)
+	s.MutationLockCalls += other.MutationLockCalls
+	s.MutationLockWait += other.MutationLockWait
+	s.MutationLockHold += other.MutationLockHold
+	s.IndexedStageBatches += other.IndexedStageBatches
+	s.IndexedStageDocs += other.IndexedStageDocs
+	s.IndexedStageBytes += other.IndexedStageBytes
+	s.IndexedStageRootRuns += other.IndexedStageRootRuns
+	s.IndexedAutoFlushes += other.IndexedAutoFlushes
+	s.IndexedFlushCalls += other.IndexedFlushCalls
+	s.IndexedFlushErrors += other.IndexedFlushErrors
+	s.IndexedFlushDocs += other.IndexedFlushDocs
+	s.IndexedFlushBytes += other.IndexedFlushBytes
+	s.IndexedFlushRootRuns += other.IndexedFlushRootRuns
+	s.IndexedFlushRoots += other.IndexedFlushRoots
+	s.IndexedFlushDuration += other.IndexedFlushDuration
+	s.UpdateCombineRequests += other.UpdateCombineRequests
+	s.UpdateCombineBatches += other.UpdateCombineBatches
+	s.UpdateCombineBatchedRequests += other.UpdateCombineBatchedRequests
+	s.UpdateCombineFallbackRequests += other.UpdateCombineFallbackRequests
+	if other.UpdateCombineQueueDepthMax > s.UpdateCombineQueueDepthMax {
+		s.UpdateCombineQueueDepthMax = other.UpdateCombineQueueDepthMax
+	}
+}
+
+func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
+	if domain == nil {
+		return CollectionManagerStats{}
+	}
+	var stats CollectionManagerStats
+	domain.mu.RLock()
+	stats.PendingDocuments = domain.count
+	stats.PendingBytes = domain.bufferedBytes
+	stats.PendingRootRuns = bufferedIndexedRootRunCount(domain)
+	domain.mu.RUnlock()
+
+	stats.MutationLockCalls = domain.mutationLockCalls.Load()
+	stats.MutationLockWait = durationFromAtomicNs(domain.mutationLockWaitTotalNs.Load())
+	stats.MutationLockHold = durationFromAtomicNs(domain.mutationLockHoldTotalNs.Load())
+	stats.IndexedStageBatches = domain.indexedStageBatches.Load()
+	stats.IndexedStageDocs = domain.indexedStageDocs.Load()
+	stats.IndexedStageBytes = domain.indexedStageBytes.Load()
+	stats.IndexedStageRootRuns = domain.indexedStageRootRuns.Load()
+	stats.IndexedAutoFlushes = domain.indexedAutoFlushes.Load()
+	stats.IndexedFlushCalls = domain.indexedFlushCalls.Load()
+	stats.IndexedFlushErrors = domain.indexedFlushErrors.Load()
+	stats.IndexedFlushDocs = domain.indexedFlushDocs.Load()
+	stats.IndexedFlushBytes = domain.indexedFlushBytes.Load()
+	stats.IndexedFlushRootRuns = domain.indexedFlushRootRuns.Load()
+	stats.IndexedFlushRoots = domain.indexedFlushRoots.Load()
+	stats.IndexedFlushDuration = durationFromAtomicNs(domain.indexedFlushDurationTotalNs.Load())
+	stats.UpdateCombineRequests = domain.updateCombineRequests.Load()
+	stats.UpdateCombineBatches = domain.updateCombineBatches.Load()
+	stats.UpdateCombineBatchedRequests = domain.updateCombineBatchedRequests.Load()
+	stats.UpdateCombineFallbackRequests = domain.updateCombineFallbackRequests.Load()
+	stats.UpdateCombineQueueDepthMax = domain.updateCombineQueueDepthMax.Load()
+	return stats
+}
+
+func durationFromAtomicNs(ns uint64) time.Duration {
+	const maxDurationNs = uint64(1<<63 - 1)
+	if ns > maxDurationNs {
+		return time.Duration(maxDurationNs)
+	}
+	return time.Duration(ns)
+}
+
+func durationToAtomicNs(d time.Duration) uint64 {
+	if d <= 0 {
+		return 0
+	}
+	return uint64(d.Nanoseconds())
+}
+
+func atomicMaxUint64(value *atomic.Uint64, candidate uint64) {
+	if value == nil {
+		return
+	}
+	for {
+		current := value.Load()
+		if candidate <= current || value.CompareAndSwap(current, candidate) {
+			return
+		}
+	}
+}
+
+func (domain *collectionWriteDomain) observeMutationLock(wait, hold time.Duration) {
+	if domain == nil {
+		return
+	}
+	domain.mutationLockCalls.Add(1)
+	domain.mutationLockWaitTotalNs.Add(durationToAtomicNs(wait))
+	domain.mutationLockHoldTotalNs.Add(durationToAtomicNs(hold))
+}
+
+func (domain *collectionWriteDomain) observeIndexedStage(docs int, bytes int64, rootRuns int) {
+	if domain == nil {
+		return
+	}
+	domain.indexedStageBatches.Add(1)
+	if docs > 0 {
+		domain.indexedStageDocs.Add(uint64(docs))
+	}
+	if bytes > 0 {
+		domain.indexedStageBytes.Add(uint64(bytes))
+	}
+	if rootRuns > 0 {
+		domain.indexedStageRootRuns.Add(uint64(rootRuns))
+	}
+}
+
+func (domain *collectionWriteDomain) observeIndexedFlush(docs int, bytes int64, rootRuns, roots int, duration time.Duration, err error) {
+	if domain == nil {
+		return
+	}
+	domain.indexedFlushCalls.Add(1)
+	if err != nil {
+		domain.indexedFlushErrors.Add(1)
+	}
+	if docs > 0 {
+		domain.indexedFlushDocs.Add(uint64(docs))
+	}
+	if bytes > 0 {
+		domain.indexedFlushBytes.Add(uint64(bytes))
+	}
+	if rootRuns > 0 {
+		domain.indexedFlushRootRuns.Add(uint64(rootRuns))
+	}
+	if roots > 0 {
+		domain.indexedFlushRoots.Add(uint64(roots))
+	}
+	domain.indexedFlushDurationTotalNs.Add(durationToAtomicNs(duration))
+}
+
+func (domain *collectionWriteDomain) observeUpdateCombineRequest(queueDepth int) {
+	if domain == nil {
+		return
+	}
+	domain.updateCombineRequests.Add(1)
+	if queueDepth > 0 {
+		atomicMaxUint64(&domain.updateCombineQueueDepthMax, uint64(queueDepth))
+	}
+}
+
+func (domain *collectionWriteDomain) observeUpdateCombineBatch(requests int, fallback bool) {
+	if domain == nil || requests <= 0 {
+		return
+	}
+	domain.updateCombineBatches.Add(1)
+	domain.updateCombineBatchedRequests.Add(uint64(requests))
+	if fallback {
+		domain.updateCombineFallbackRequests.Add(uint64(requests))
+	}
 }
 
 func (m *CollectionManager) writeDomainForCollection(name string) *collectionWriteDomain {
@@ -566,8 +839,8 @@ func flushCollectionWriteDomain(db *backenddb.DB, domain *collectionWriteDomain)
 		return nil
 	}
 	collection := &Collection{db: db, writeDomain: domain}
-	domain.mutationMu.Lock()
-	defer domain.mutationMu.Unlock()
+	unlockMutation := lockCollectionDomainMutation(domain)
+	defer unlockMutation()
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
 	return collection.flushBufferedWritesLocked(domain)
@@ -577,8 +850,22 @@ func (c *Collection) lockMutation() func() {
 	if c == nil || c.writeDomain == nil {
 		return func() {}
 	}
-	c.writeDomain.mutationMu.Lock()
-	return c.writeDomain.mutationMu.Unlock
+	return lockCollectionDomainMutation(c.writeDomain)
+}
+
+func lockCollectionDomainMutation(domain *collectionWriteDomain) func() {
+	if domain == nil {
+		return func() {}
+	}
+	lockStart := time.Now()
+	domain.mutationMu.Lock()
+	holdStart := time.Now()
+	wait := holdStart.Sub(lockStart)
+	return func() {
+		hold := time.Since(holdStart)
+		domain.mutationMu.Unlock()
+		domain.observeMutationLock(wait, hold)
+	}
 }
 
 func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionMeta, error) {
@@ -1421,6 +1708,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	}
 	uniqueIndexes := uniqueCollectionIndexNames(catalog.meta)
 	var stagedBytes int64
+	stagedRootRuns := 0
 	for _, run := range plan.runs {
 		var uniqueValueTable memtable.Table
 		var uniquePrefixes [][]byte
@@ -1440,6 +1728,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		domain.rootPolicies[run.name] = run.storagePolicy
 		domain.rootRuns[run.name] = append(domain.rootRuns[run.name], run.table)
 		domain.rootRunCount = saturatingAddNonNegativeInt(domain.rootRunCount, 1)
+		stagedRootRuns++
 		stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, run.table.Size())
 		if run.kind == collectionRootPrimary {
 			if domain.primaryIDIndex == nil {
@@ -1479,8 +1768,10 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	domain.count += len(plan.resultIDs)
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedBytes)
 	domain.writeGeneration++
+	domain.observeIndexedStage(len(plan.resultIDs), stagedBytes, stagedRootRuns)
 	c.meta = catalog.meta
 	if shouldFlushBufferedIndexedWrites(domain, catalog.meta.Options) {
+		domain.indexedAutoFlushes.Add(1)
 		flushStart := time.Now()
 		if err := c.flushBufferedIndexedLocked(domain); err != nil {
 			rollbackBufferedIndexedDomain(domain, checkpoint)
@@ -2414,7 +2705,7 @@ func (it *bufferedRootRunsIterator) advanceItem(item bufferedRootRunHeapItem) {
 	}
 }
 
-func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) error {
+func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (err error) {
 	if domain == nil || domain.count == 0 || len(domain.rootRuns) == 0 {
 		return nil
 	}
@@ -2457,6 +2748,14 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) e
 		domain.bufferedBytes = 0
 		return nil
 	}
+	flushDocs := domain.count
+	flushBytes := domain.bufferedBytes
+	flushRootRuns := bufferedIndexedRootRunCount(domain)
+	flushRoots := len(rootNames)
+	flushStart := time.Now()
+	defer func() {
+		domain.observeIndexedFlush(flushDocs, flushBytes, flushRootRuns, flushRoots, time.Since(flushStart), err)
+	}()
 	baseSystemRoot := snapshotSystemRoot(pin)
 	baseCommitSeq := snapshotCommitSeq(pin)
 	baseRootIDs := make(map[string]uint64, len(rootNames))
@@ -3626,6 +3925,9 @@ func (combiner *collectionUpdateCombiner) enqueue(req collectionUpdateCombineReq
 	}
 	select {
 	case combiner.requests <- req:
+		if combiner.domain != nil {
+			combiner.domain.observeUpdateCombineRequest(len(combiner.requests))
+		}
 		return true
 	default:
 		return false
@@ -3770,10 +4072,16 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 	defer combiner.running.Store(false)
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			if combiner.domain != nil {
+				combiner.domain.observeUpdateCombineBatch(len(batch), false)
+			}
 			completeUpdateCombineBatchWithError(batch, collectionUpdatePanicError("combiner", recovered))
 		}
 	}()
 	if len(batch) == 1 || collectionUpdateCombineHasDuplicateIDs(batch) || !collectionUpdateCombineSameCollection(batch) {
+		if combiner.domain != nil {
+			combiner.domain.observeUpdateCombineBatch(len(batch), true)
+		}
 		for _, req := range batch {
 			completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
 		}
@@ -3788,6 +4096,9 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 	}
 	results, batched, err := batch[0].collection.UpdateBatchIfNoSecondaryUniqueIndexChanges(items)
 	if !batched && err == nil {
+		if combiner.domain != nil {
+			combiner.domain.observeUpdateCombineBatch(len(batch), true)
+		}
 		for _, req := range batch {
 			completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
 		}
@@ -3795,14 +4106,26 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 	}
 	if err != nil {
 		if completeUpdateCombineBatchWithItemFallback(batch, err) {
+			if combiner.domain != nil {
+				combiner.domain.observeUpdateCombineBatch(len(batch), true)
+			}
 			return
+		}
+		if combiner.domain != nil {
+			combiner.domain.observeUpdateCombineBatch(len(batch), false)
 		}
 		completeUpdateCombineBatchWithError(batch, err)
 		return
 	}
 	if len(results) != len(batch) {
+		if combiner.domain != nil {
+			combiner.domain.observeUpdateCombineBatch(len(batch), false)
+		}
 		completeUpdateCombineBatchWithError(batch, fmt.Errorf("collections: update combiner result count %d for batch size %d", len(results), len(batch)))
 		return
+	}
+	if combiner.domain != nil {
+		combiner.domain.observeUpdateCombineBatch(len(batch), false)
 	}
 	for i, req := range batch {
 		result := results[i]
@@ -5147,8 +5470,10 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	domain.count += modifiedCount
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedBytes)
 	domain.writeGeneration++
+	domain.observeIndexedStage(modifiedCount, stagedBytes, stagedRootRuns)
 	c.meta = plan.meta
 	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
+		domain.indexedAutoFlushes.Add(1)
 		if err := c.flushBufferedIndexedLocked(domain); err != nil {
 			if shouldAutoFlushAfterAdding {
 				rollbackBufferedIndexedDomain(domain, checkpoint)

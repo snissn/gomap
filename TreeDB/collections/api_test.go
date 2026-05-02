@@ -530,6 +530,88 @@ func TestCollectionInsertBatchStatsExposeIndexRunShape(t *testing.T) {
 	}
 }
 
+func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"email":"ada@example.com"}`),
+			[]byte(`{"email":"grace@example.com"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	stats := mgr.StatsSnapshot()
+	if got, want := stats.Domains, 1; got != want {
+		t.Fatalf("stats domains=%d want %d", got, want)
+	}
+	if got, want := stats.PendingDocuments, 2; got != want {
+		t.Fatalf("stats pending documents=%d want %d", got, want)
+	}
+	if stats.PendingBytes == 0 {
+		t.Fatal("stats pending bytes=0 want positive")
+	}
+	if stats.PendingRootRuns == 0 {
+		t.Fatal("stats pending root runs=0 want positive")
+	}
+	if got, want := stats.IndexedStageBatches, uint64(1); got != want {
+		t.Fatalf("stats indexed stage batches=%d want %d", got, want)
+	}
+	if got, want := stats.IndexedStageDocs, uint64(2); got != want {
+		t.Fatalf("stats indexed stage docs=%d want %d", got, want)
+	}
+	if stats.IndexedStageBytes == 0 || stats.IndexedStageRootRuns == 0 {
+		t.Fatalf("stats indexed stage bytes/root-runs=%d/%d want positive", stats.IndexedStageBytes, stats.IndexedStageRootRuns)
+	}
+	if stats.MutationLockCalls == 0 {
+		t.Fatal("stats mutation lock calls=0 want positive")
+	}
+	exported := mgr.Stats()
+	for _, key := range []string{
+		"treedb.collections.write_domain.pending_docs",
+		"treedb.collections.write_domain.indexed_stage.batches_total",
+		"treedb.collections.write_domain.mutation_lock.calls_total",
+	} {
+		if exported[key] == "" {
+			t.Fatalf("exported stats missing %s from %#v", key, exported)
+		}
+	}
+
+	if err := mgr.FlushAll(); err != nil {
+		t.Fatalf("flush all: %v", err)
+	}
+	stats = mgr.StatsSnapshot()
+	if got := stats.PendingDocuments; got != 0 {
+		t.Fatalf("stats pending documents after flush=%d want 0", got)
+	}
+	if got, want := stats.IndexedFlushCalls, uint64(1); got != want {
+		t.Fatalf("stats indexed flush calls=%d want %d", got, want)
+	}
+	if got, want := stats.IndexedFlushDocs, uint64(2); got != want {
+		t.Fatalf("stats indexed flush docs=%d want %d", got, want)
+	}
+	if stats.IndexedFlushBytes == 0 || stats.IndexedFlushRootRuns == 0 || stats.IndexedFlushRoots == 0 {
+		t.Fatalf("stats indexed flush bytes/root-runs/roots=%d/%d/%d want positive", stats.IndexedFlushBytes, stats.IndexedFlushRootRuns, stats.IndexedFlushRoots)
+	}
+}
+
 func writeStandaloneValueLogSegment(t *testing.T, valueDir string, lane, seq uint32, value []byte) string {
 	t.Helper()
 	if err := os.MkdirAll(valueDir, 0o755); err != nil {

@@ -5,11 +5,12 @@ import "testing"
 func TestSelectedKeepsSharedTreeDBStats(t *testing.T) {
 	stats := map[string]string{
 		"treedb.commit_seq": "7",
-		"treedb.process.read_path.outer_leaf.cache.hits":         "11",
-		"treedb.vlog.mmap_read.fallback_readat":                  "13",
-		"treedb.publish.ordered_root_delta_group.calls_total":    "19",
-		"treedb.publish.watermark.latency_p99_ms":                "23",
-		"treedb.unrelated_stat_that_should_not_leave_the_helper": "17",
+		"treedb.process.read_path.outer_leaf.cache.hits":            "11",
+		"treedb.vlog.mmap_read.fallback_readat":                     "13",
+		"treedb.publish.ordered_root_delta_group.calls_total":       "19",
+		"treedb.publish.watermark.latency_p99_ms":                   "23",
+		"treedb.collections.write_domain.indexed_flush.calls_total": "29",
+		"treedb.unrelated_stat_that_should_not_leave_the_helper":    "17",
 	}
 	got := Selected(stats)
 	for _, key := range []string{
@@ -18,6 +19,7 @@ func TestSelectedKeepsSharedTreeDBStats(t *testing.T) {
 		"treedb.vlog.mmap_read.fallback_readat",
 		"treedb.publish.ordered_root_delta_group.calls_total",
 		"treedb.publish.watermark.latency_p99_ms",
+		"treedb.collections.write_domain.indexed_flush.calls_total",
 	} {
 		if got[key] == "" {
 			t.Fatalf("Selected missing %s from %#v", key, got)
