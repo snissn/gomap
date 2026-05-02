@@ -4970,8 +4970,10 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 		}
 		return c.updateDirect(documentID, update)
 	}
-	result := combiner.waitForUpdateResult(waiter.ch)
-	combiner.putWaiter(waiter)
+	result, reusableWaiter := combiner.waitForUpdateResult(waiter.ch)
+	if reusableWaiter {
+		combiner.putWaiter(waiter)
+	}
 	return result.matched, result.modified, result.err
 }
 
@@ -4999,24 +5001,24 @@ func (combiner *collectionUpdateCombiner) putWaiter(waiter *collectionUpdateComb
 	combiner.waiters.Put(waiter)
 }
 
-func (combiner *collectionUpdateCombiner) waitForUpdateResult(done chan collectionUpdateCombineResult) collectionUpdateCombineResult {
+func (combiner *collectionUpdateCombiner) waitForUpdateResult(done chan collectionUpdateCombineResult) (collectionUpdateCombineResult, bool) {
 	select {
 	case result := <-done:
-		return result
+		return result, true
 	default:
 	}
 	if combiner == nil || combiner.done == nil {
-		return <-done
+		return <-done, true
 	}
 	select {
 	case result := <-done:
-		return result
+		return result, true
 	case <-combiner.done:
 		select {
 		case result := <-done:
-			return result
+			return result, true
 		default:
-			return collectionUpdateCombineResult{err: errUpdateCombinerStopped}
+			return collectionUpdateCombineResult{err: errUpdateCombinerStopped}, false
 		}
 	}
 }
