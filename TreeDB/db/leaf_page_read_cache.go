@@ -4,6 +4,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -46,7 +47,10 @@ func newLeafPageReadCacheKey(ptr page.LeafLogPtr) leafPageReadCacheKey {
 }
 
 type leafPageReadCacheSlot struct {
-	entry atomic.Pointer[leafPageReadCacheEntry]
+	mu    sync.RWMutex
+	key   leafPageReadCacheKey
+	data  []byte
+	valid bool
 }
 
 type leafPageReadCache struct {
@@ -80,17 +84,24 @@ func (c *leafPageReadCache) store(ptr page.LeafLogPtr, leafPage []byte) {
 	if c == nil || len(c.slots) == 0 || len(leafPage) != page.PageSize {
 		return
 	}
-	data := make([]byte, page.PageSize)
-	copy(data, leafPage)
 	key := newLeafPageReadCacheKey(ptr)
-	entry := &leafPageReadCacheEntry{key: key, data: data}
 	slot := &c.slots[c.slotIndex(key)]
-	prev := slot.entry.Swap(entry)
+	slot.mu.Lock()
+	wasValid := slot.valid
+	prevKey := slot.key
+	if cap(slot.data) < page.PageSize {
+		slot.data = make([]byte, page.PageSize)
+	}
+	slot.data = slot.data[:page.PageSize]
+	copy(slot.data, leafPage)
+	slot.key = key
+	slot.valid = true
+	slot.mu.Unlock()
 	c.stores.Add(1)
 	switch {
-	case prev == nil:
+	case !wasValid:
 		c.entries.Add(1)
-	case prev.key != key:
+	case prevKey != key:
 		c.evictions.Add(1)
 	}
 }
@@ -100,13 +111,42 @@ func (c *leafPageReadCache) get(ptr page.LeafLogPtr) ([]byte, bool) {
 		return nil, false
 	}
 	key := newLeafPageReadCacheKey(ptr)
-	entry := c.slots[c.slotIndex(key)].entry.Load()
-	if entry == nil || entry.key != key {
+	slot := &c.slots[c.slotIndex(key)]
+	slot.mu.RLock()
+	if !slot.valid || slot.key != key {
+		slot.mu.RUnlock()
 		c.misses.Add(1)
 		return nil, false
 	}
+	data := cloneLeafPageReadCacheData(slot.data)
+	slot.mu.RUnlock()
 	c.hits.Add(1)
-	return entry.data, true
+	return data, true
+}
+
+func (c *leafPageReadCache) getTo(ptr page.LeafLogPtr, dst []byte) ([]byte, bool, bool) {
+	if c == nil || len(c.slots) == 0 {
+		return nil, false, false
+	}
+	key := newLeafPageReadCacheKey(ptr)
+	slot := &c.slots[c.slotIndex(key)]
+	slot.mu.RLock()
+	if !slot.valid || slot.key != key {
+		slot.mu.RUnlock()
+		c.misses.Add(1)
+		return nil, false, false
+	}
+	if cap(dst) >= len(slot.data) {
+		out := dst[:len(slot.data)]
+		copy(out, slot.data)
+		slot.mu.RUnlock()
+		c.hits.Add(1)
+		return out, true, true
+	}
+	data := cloneLeafPageReadCacheData(slot.data)
+	slot.mu.RUnlock()
+	c.hits.Add(1)
+	return data, false, true
 }
 
 func (c *leafPageReadCache) stats() leafPageReadCacheStats {
@@ -155,7 +195,7 @@ func (db *DB) leafPageReader(fallback zipper.LeafPageReader) zipper.LeafPageRead
 func (r *cachedLeafPageReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	if key, err := page.LeafLogPtrFromValuePtr(ptr); err == nil {
 		if data, ok := r.cache.get(key); ok {
-			return cloneLeafPageReadCacheData(data), nil
+			return data, nil
 		}
 	}
 	return r.fallback.ReadUnsafe(ptr)
@@ -163,13 +203,8 @@ func (r *cachedLeafPageReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 
 func (r *cachedLeafPageReader) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error) {
 	if key, err := page.LeafLogPtrFromValuePtr(ptr); err == nil {
-		if data, ok := r.cache.get(key); ok {
-			if cap(dst) >= len(data) {
-				dst = dst[:len(data)]
-				copy(dst, data)
-				return dst, true, nil
-			}
-			return cloneLeafPageReadCacheData(data), false, nil
+		if data, usedDst, ok := r.cache.getTo(key, dst); ok {
+			return data, usedDst, nil
 		}
 	}
 	if toReader, ok := r.fallback.(interface {
