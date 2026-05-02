@@ -70,7 +70,7 @@ func TestBuilderAddInternalLeafLogChildFromNodeRejectsWrongSource(t *testing.T) 
 func BenchmarkBuilderAddInternalLeafLogChildRef(b *testing.B) {
 	refs, _, src := benchmarkLeafLogInternalEntries(b)
 	b.Run("decode_reencode", func(b *testing.B) {
-		for b.Loop() {
+		for n := 0; n < b.N; n++ {
 			dstBuilder := NewBuilder(make([]byte, page.PageSize), page.PageTypeInternal)
 			for i := range refs {
 				key, ref, err := src.GetInternalEntryRefView(uint16(i))
@@ -85,7 +85,7 @@ func BenchmarkBuilderAddInternalLeafLogChildRef(b *testing.B) {
 		}
 	})
 	b.Run("copy_encoded", func(b *testing.B) {
-		for b.Loop() {
+		for n := 0; n < b.N; n++ {
 			dstBuilder := NewBuilder(make([]byte, page.PageSize), page.PageTypeInternal)
 			for i := range refs {
 				if err := dstBuilder.AddInternalLeafLogChildFromNode(src, uint16(i)); err != nil {
