@@ -556,7 +556,7 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 		return 0, nil, metrics, err
 	}
 	defer delta.Close()
-	if len(delta.SortedEntries()) == 0 {
+	if delta.IsEmpty() {
 		return baseRoot, nil, metrics, nil
 	}
 	rootZipper, err := db.orderedRootZipperForOptions(idx, opts)
@@ -580,7 +580,7 @@ func (db *DB) publishOrderedRootDeltaBatch(baseRoot uint64, delta *batch.Batch, 
 		err = errors.New("ordered root value-log leaf storage requires a leaf page log")
 		return
 	}
-	if len(delta.SortedEntries()) == 0 {
+	if delta.IsEmpty() {
 		return baseRoot, nil, metrics, nil
 	}
 	if baseRoot == 0 {

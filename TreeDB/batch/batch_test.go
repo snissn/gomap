@@ -63,6 +63,31 @@ func TestBatchPreWrite(t *testing.T) {
 	}
 }
 
+func TestBatchIsEmpty(t *testing.T) {
+	if !((*Batch)(nil)).IsEmpty() {
+		t.Fatalf("nil batch should be empty")
+	}
+	b := New(newMapValueReader(), page.DefaultInlineThreshold)
+	t.Cleanup(func() { _ = b.Close() })
+	if !b.IsEmpty() {
+		t.Fatalf("new batch should be empty")
+	}
+	if err := b.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if b.IsEmpty() {
+		t.Fatalf("batch with queued op should not be empty")
+	}
+	_ = b.SortedEntries()
+	if b.IsEmpty() {
+		t.Fatalf("batch remains non-empty after sorting entries")
+	}
+	b.Reset()
+	if !b.IsEmpty() {
+		t.Fatalf("reset batch should be empty")
+	}
+}
+
 func TestBatchSetOps_UsesSlabPointersForLargeValues(t *testing.T) {
 	reader := newMapValueReader()
 	b := New(reader, page.DefaultInlineThreshold)
