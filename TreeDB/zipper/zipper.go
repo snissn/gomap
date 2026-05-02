@@ -897,6 +897,43 @@ func (z *Zipper) shouldRunMaintenance(ops []batch.Entry) (maintenance bool, dele
 	return maintenance, deleteCount
 }
 
+func recordZipperNodeLoad(metrics *adaptive.Metrics, ref page.ChildRef, n node.Node) {
+	if metrics == nil {
+		return
+	}
+	metrics.ZipperNodeLoads++
+	if ref.Kind == page.ChildRefLeafLog {
+		metrics.ZipperLeafLogNodeLoads++
+	} else {
+		metrics.ZipperPagerNodeLoads++
+	}
+	switch n.Type() {
+	case page.PageTypeLeaf, 0:
+		metrics.ZipperLeafMerges++
+	case page.PageTypeInternal:
+		metrics.ZipperInternalMerges++
+	}
+}
+
+func recordZipperLeafPageWrite(metrics *adaptive.Metrics, outerLeavesInValueLog bool) {
+	if metrics == nil {
+		return
+	}
+	metrics.ZipperLeafPagesWritten++
+	if outerLeavesInValueLog {
+		metrics.ZipperLeafLogPagesWritten++
+		return
+	}
+	metrics.ZipperPagerLeafPagesWritten++
+}
+
+func recordZipperInternalPageWrite(metrics *adaptive.Metrics) {
+	if metrics == nil {
+		return
+	}
+	metrics.ZipperInternalPagesWritten++
+}
+
 // Apply applies the batch to the tree rooted at rootID.
 // Returns the new root page ID, list of retired pages, and commit metrics.
 func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptive.Metrics, error) {
@@ -905,6 +942,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 	if len(ops) == 0 {
 		return rootID, nil, metrics, nil
 	}
+	metrics.ZipperApplyOps = len(ops)
 
 	scratch := z.acquireApplyScratch()
 	defer z.releaseApplyScratch(scratch)
@@ -954,6 +992,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 				rootID, err := z.ensureRootPage(currentLevelNodes[0].Key, currentLevelNodes[0].Ref)
 				return rootID, retired, metrics, err
 			}
+			metrics.ZipperRootSplitLevels++
 
 			var nextLevelNodes []Split
 
@@ -1006,6 +1045,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 				if err == node.ErrNodeFull {
 					// Finish current
 					currentBuilder.FinishNoNode()
+					recordZipperInternalPageWrite(&metrics)
 					// Promote
 					nextLevelNodes = append(nextLevelNodes, Split{Key: currentStartKey, Ref: page.PageChildRef(currentBuilder.PageID())})
 
@@ -1033,6 +1073,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 				// If this was the last child, finish
 				if i == len(currentLevelNodes)-1 {
 					currentBuilder.FinishNoNode()
+					recordZipperInternalPageWrite(&metrics)
 					nextLevelNodes = append(nextLevelNodes, Split{Key: currentStartKey, Ref: page.PageChildRef(currentBuilder.PageID())})
 					currentBuilder = nil
 				}
@@ -1185,6 +1226,7 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, maintenanc
 	if err != nil {
 		return page.ChildRef{}, nil, err
 	}
+	recordZipperNodeLoad(metrics, ref, oldNode)
 	if leafScratchRef {
 		defer releaseLeafPageScratch(scratch, leafScratch)
 	}
@@ -1254,6 +1296,7 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, maintenanc
 		}
 		n := builder.Finish()
 		metrics.IndexWriteBytes += page.PageSize
+		recordZipperInternalPageWrite(metrics)
 
 		// If this internal page collapsed to a single child and produced no splits,
 		// skip writing the redundant level by returning the child directly.
@@ -1314,6 +1357,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		target.FinishNoNode()
 		metrics.IndexWriteBytes += page.PageSize
 		metrics.LeafFill += float64(page.PageSize-target.FreeSpace()) / float64(page.PageSize)
+		recordZipperLeafPageWrite(metrics, z.outerLeavesInValueLog)
 		if target != builder {
 			metrics.Splits++
 		}
@@ -1683,6 +1727,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		if target != builder {
 			target.FinishNoNode()
 			metrics.IndexWriteBytes += page.PageSize
+			recordZipperInternalPageWrite(metrics)
 		}
 		return page.PageChildRef(builder.PageID()), splits, nil
 	}
@@ -1848,6 +1893,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		if target != builder {
 			target.FinishNoNode()
 			metrics.IndexWriteBytes += page.PageSize
+			recordZipperInternalPageWrite(metrics)
 		}
 		return page.PageChildRef(builder.PageID()), splits, nil
 	}
@@ -1897,6 +1943,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	if target != builder {
 		target.FinishNoNode()
 		metrics.IndexWriteBytes += page.PageSize
+		recordZipperInternalPageWrite(metrics)
 	}
 
 	// builder finalized by caller.
@@ -1912,6 +1959,17 @@ func mergeMetrics(dst, src *adaptive.Metrics) {
 	dst.IndexWriteBytes += src.IndexWriteBytes
 	dst.SlabWriteBytes += src.SlabWriteBytes
 	dst.SlabDeadBytes += src.SlabDeadBytes
+	dst.ZipperApplyOps += src.ZipperApplyOps
+	dst.ZipperNodeLoads += src.ZipperNodeLoads
+	dst.ZipperPagerNodeLoads += src.ZipperPagerNodeLoads
+	dst.ZipperLeafLogNodeLoads += src.ZipperLeafLogNodeLoads
+	dst.ZipperLeafMerges += src.ZipperLeafMerges
+	dst.ZipperInternalMerges += src.ZipperInternalMerges
+	dst.ZipperLeafPagesWritten += src.ZipperLeafPagesWritten
+	dst.ZipperPagerLeafPagesWritten += src.ZipperPagerLeafPagesWritten
+	dst.ZipperLeafLogPagesWritten += src.ZipperLeafLogPagesWritten
+	dst.ZipperInternalPagesWritten += src.ZipperInternalPagesWritten
+	dst.ZipperRootSplitLevels += src.ZipperRootSplitLevels
 
 	if src.SlabWriteBytesByFile != nil {
 		if dst.SlabWriteBytesByFile == nil {
@@ -1949,6 +2007,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 			}
 			return node.Node{}, false, false, nil, false, err
 		}
+		recordZipperNodeLoad(metrics, ref, n)
 		if n.Type() != page.PageTypeLeaf {
 			if leafScratchRef {
 				releaseLeafPageScratch(scratch, leafScratch)
@@ -2086,6 +2145,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		b.FinishNoNode()
 		metrics.IndexWriteBytes += page.PageSize
 		metrics.LeafFill += float64(page.PageSize-b.FreeSpace()) / float64(page.PageSize)
+		recordZipperLeafPageWrite(metrics, z.outerLeavesInValueLog)
 		leafID, err := z.persistLeafPage(b)
 		if err != nil {
 			if !z.outerLeavesInValueLog {
@@ -2144,6 +2204,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		}
 		b.FinishNoNode()
 		metrics.IndexWriteBytes += page.PageSize
+		recordZipperLeafPageWrite(metrics, z.outerLeavesInValueLog)
 		leafID, err := z.persistLeafPage(b)
 		if err != nil {
 			if !z.outerLeavesInValueLog {
@@ -2304,6 +2365,8 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		metrics.IndexWriteBytes += 2 * page.PageSize
 		metrics.LeafFill += float64(page.PageSize-lb.FreeSpace()) / float64(page.PageSize)
 		metrics.LeafFill += float64(page.PageSize-rb.FreeSpace()) / float64(page.PageSize)
+		recordZipperLeafPageWrite(metrics, z.outerLeavesInValueLog)
+		recordZipperLeafPageWrite(metrics, z.outerLeavesInValueLog)
 		leftID, err = z.persistLeafPage(lb)
 		if err != nil {
 			if !z.outerLeavesInValueLog {
@@ -2486,6 +2549,7 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 			return nil, false, err
 		}
 		n := node.NewNode(data)
+		recordZipperNodeLoad(metrics, ref, *n)
 		if n.Type() != page.PageTypeInternal {
 			return nil, false, nil
 		}
@@ -2581,6 +2645,7 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 
 		b.FinishNoNode()
 		metrics.IndexWriteBytes += page.PageSize
+		recordZipperInternalPageWrite(metrics)
 		return page.PageChildRef(pid), true, nil
 	}
 
@@ -2735,6 +2800,8 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 		}
 
 		metrics.IndexWriteBytes += 2 * page.PageSize
+		recordZipperInternalPageWrite(metrics)
+		recordZipperInternalPageWrite(metrics)
 		return lid, rid, rightStart, true, nil
 	}
 
@@ -2821,6 +2888,7 @@ func (z *Zipper) createNewSplitInternal(currentTarget, rootBuilder *node.Builder
 	if currentTarget != rootBuilder {
 		currentTarget.FinishNoNode()
 		metrics.IndexWriteBytes += page.PageSize
+		recordZipperInternalPageWrite(metrics)
 	}
 
 	// 2. Alloc new

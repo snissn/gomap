@@ -763,8 +763,14 @@ func TestPublishOrderedRootDeltaGroupWithSystemBuilder_ReportsPublishStats(t *te
 	for _, key := range []string{
 		"treedb.publish.ordered_root_delta_group.preflight_ns_total",
 		"treedb.publish.ordered_root_delta_group.root_apply_ns_total",
+		"treedb.publish.ordered_root_delta_group.root_apply_ops_total",
+		"treedb.publish.ordered_root_delta_group.root_apply_node_loads_total",
+		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_loads_total",
+		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_pages_written_total",
 		"treedb.publish.ordered_root_delta_group.system_build_ns_total",
 		"treedb.publish.ordered_root_delta_group.system_apply_ns_total",
+		"treedb.publish.ordered_root_delta_group.system_apply_ops_total",
+		"treedb.publish.ordered_root_delta_group.system_apply_node_loads_total",
 		"treedb.publish.ordered_root_delta_group.finalize_ns_total",
 	} {
 		if _, ok := stats[key]; !ok {
