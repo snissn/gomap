@@ -6393,6 +6393,8 @@ func getUpdateBatchBufferedEntries(count int) []updateBatchBufferedEntry {
 			out := entries[:count]
 			clear(out)
 			return out
+		} else if ok {
+			putUpdateBatchBufferedEntries(entries)
 		}
 	}
 	return make([]updateBatchBufferedEntry, count)
