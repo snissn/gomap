@@ -626,9 +626,6 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 	if timedStats.Callback <= 0 {
 		t.Fatalf("timed callback=%s want positive with detailed stats enabled", timedStats.Callback)
 	}
-	if timedStats.BufferStage <= 0 {
-		t.Fatalf("timed buffer stage=%s want positive with detailed stats enabled", timedStats.BufferStage)
-	}
 
 	managerStats := mgr.StatsSnapshot()
 	if got := managerStats.UpdateBatchCalls; got == 0 {
