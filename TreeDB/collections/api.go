@@ -284,22 +284,27 @@ type CollectionSecondaryRunStats struct {
 // Update calls that fall back to the legacy direct path are intentionally not
 // represented here yet; the write combiner and UpdateBatch path use this shape.
 type CollectionUpdateStats struct {
-	Items                    int
-	Matched                  int
-	Modified                 int
-	Indexes                  int
-	Runs                     int
-	BufferedBatches          int
-	CurrentRead              time.Duration
-	Callback                 time.Duration
-	PrepareDocuments         time.Duration
-	IndexStateExtraction     time.Duration
-	UniqueIndexPreflight     time.Duration
-	TemplateRunBuild         time.Duration
-	PrimaryRunBuild          time.Duration
-	IndexStateRunBuild       time.Duration
-	SecondaryRunBuild        time.Duration
-	BufferStage              time.Duration
+	Items                int
+	Matched              int
+	Modified             int
+	Indexes              int
+	Runs                 int
+	BufferedBatches      int
+	CurrentRead          time.Duration
+	Callback             time.Duration
+	PrepareDocuments     time.Duration
+	IndexStateExtraction time.Duration
+	UniqueIndexPreflight time.Duration
+	TemplateRunBuild     time.Duration
+	PrimaryRunBuild      time.Duration
+	IndexStateRunBuild   time.Duration
+	SecondaryRunBuild    time.Duration
+	BufferStage          time.Duration
+	// Buffer-stage subphase timings are populated only when
+	// CollectionManager.SetUpdateBatchDetailedStatsEnabled(true) is enabled.
+	// BufferStageLockHold is an enclosing domain mutex hold-time metric and
+	// overlaps the validation/root/index/root-append subphases; it is not
+	// additive with those child counters.
 	BufferStagePrecheck      time.Duration
 	BufferStageLockWait      time.Duration
 	BufferStageLockHold      time.Duration
@@ -309,62 +314,69 @@ type CollectionUpdateStats struct {
 	BufferStagePrimaryIdx    time.Duration
 	BufferStageUniqueIdx     time.Duration
 	BufferStageRootAppend    time.Duration
-	BufferStageFlush         time.Duration
-	Publish                  time.Duration
-	SecondaryDeleteEntries   int
-	SecondarySetEntries      int
-	SecondaryKeyBytes        int
+	// BufferStageFlush measures only threshold-flush work that was actually
+	// scheduled/executed while staging an indexed buffered update batch.
+	BufferStageFlush       time.Duration
+	Publish                time.Duration
+	SecondaryDeleteEntries int
+	SecondarySetEntries    int
+	SecondaryKeyBytes      int
 }
 
 // CollectionManagerStats captures aggregate write-domain counters for a
 // CollectionManager. The counters are process-local observability; they are
 // not persisted with collection metadata.
 type CollectionManagerStats struct {
-	Domains                        int
-	PendingDocuments               int
-	PendingBytes                   int64
-	PendingRootRuns                int
-	PendingIndexedFlushUnits       int
-	IndexedAsyncFlushRunning       int
-	MutationLockCalls              uint64
-	MutationLockWait               time.Duration
-	MutationLockHold               time.Duration
-	IndexedStageBatches            uint64
-	IndexedStageDocs               uint64
-	IndexedStageBytes              uint64
-	IndexedStageRootRuns           uint64
-	IndexedAutoFlushes             uint64
-	IndexedAsyncFlushScheduled     uint64
-	IndexedAsyncFlushBackpressure  uint64
-	IndexedAsyncFlushErrors        uint64
-	IndexedFlushCalls              uint64
-	IndexedFlushErrors             uint64
-	IndexedFlushDocs               uint64
-	IndexedFlushBytes              uint64
-	IndexedFlushRootRuns           uint64
-	IndexedFlushRoots              uint64
-	IndexedFlushDuration           time.Duration
-	UpdateCombineRequests          uint64
-	UpdateCombineBatches           uint64
-	UpdateCombineBatchedRequests   uint64
-	UpdateCombineFallbackRequests  uint64
-	UpdateCombineQueueDepthMax     uint64
-	UpdateBatchCalls               uint64
-	UpdateBatchItems               uint64
-	UpdateBatchMatched             uint64
-	UpdateBatchModified            uint64
-	UpdateBatchRuns                uint64
-	UpdateBatchBufferedBatches     uint64
-	UpdateBatchCurrentRead         time.Duration
-	UpdateBatchCallback            time.Duration
-	UpdateBatchPrepareDocuments    time.Duration
-	UpdateBatchIndexStateExtract   time.Duration
-	UpdateBatchUniquePreflight     time.Duration
-	UpdateBatchTemplateRunBuild    time.Duration
-	UpdateBatchPrimaryRunBuild     time.Duration
-	UpdateBatchIndexStateRunBuild  time.Duration
-	UpdateBatchSecondaryRunBuild   time.Duration
-	UpdateBatchBufferStage         time.Duration
+	Domains                       int
+	PendingDocuments              int
+	PendingBytes                  int64
+	PendingRootRuns               int
+	PendingIndexedFlushUnits      int
+	IndexedAsyncFlushRunning      int
+	MutationLockCalls             uint64
+	MutationLockWait              time.Duration
+	MutationLockHold              time.Duration
+	IndexedStageBatches           uint64
+	IndexedStageDocs              uint64
+	IndexedStageBytes             uint64
+	IndexedStageRootRuns          uint64
+	IndexedAutoFlushes            uint64
+	IndexedAsyncFlushScheduled    uint64
+	IndexedAsyncFlushBackpressure uint64
+	IndexedAsyncFlushErrors       uint64
+	IndexedFlushCalls             uint64
+	IndexedFlushErrors            uint64
+	IndexedFlushDocs              uint64
+	IndexedFlushBytes             uint64
+	IndexedFlushRootRuns          uint64
+	IndexedFlushRoots             uint64
+	IndexedFlushDuration          time.Duration
+	UpdateCombineRequests         uint64
+	UpdateCombineBatches          uint64
+	UpdateCombineBatchedRequests  uint64
+	UpdateCombineFallbackRequests uint64
+	UpdateCombineQueueDepthMax    uint64
+	UpdateBatchCalls              uint64
+	UpdateBatchItems              uint64
+	UpdateBatchMatched            uint64
+	UpdateBatchModified           uint64
+	UpdateBatchRuns               uint64
+	UpdateBatchBufferedBatches    uint64
+	UpdateBatchCurrentRead        time.Duration
+	UpdateBatchCallback           time.Duration
+	UpdateBatchPrepareDocuments   time.Duration
+	UpdateBatchIndexStateExtract  time.Duration
+	UpdateBatchUniquePreflight    time.Duration
+	UpdateBatchTemplateRunBuild   time.Duration
+	UpdateBatchPrimaryRunBuild    time.Duration
+	UpdateBatchIndexStateRunBuild time.Duration
+	UpdateBatchSecondaryRunBuild  time.Duration
+	UpdateBatchBufferStage        time.Duration
+	// Detailed buffer-stage aggregate timings are populated only when
+	// CollectionManager.SetUpdateBatchDetailedStatsEnabled(true) is enabled.
+	// UpdateBatchBufferLockHold is an enclosing domain mutex hold-time metric
+	// and overlaps the validation/root/index/root-append subphases; it is not
+	// additive with those child counters.
 	UpdateBatchBufferPrecheck      time.Duration
 	UpdateBatchBufferLockWait      time.Duration
 	UpdateBatchBufferLockHold      time.Duration
@@ -374,11 +386,13 @@ type CollectionManagerStats struct {
 	UpdateBatchBufferPrimaryIdx    time.Duration
 	UpdateBatchBufferUniqueIdx     time.Duration
 	UpdateBatchBufferRootAppend    time.Duration
-	UpdateBatchBufferFlush         time.Duration
-	UpdateBatchPublish             time.Duration
-	UpdateBatchSecondaryDeletes    uint64
-	UpdateBatchSecondarySets       uint64
-	UpdateBatchSecondaryKeyBytes   uint64
+	// UpdateBatchBufferFlush measures only threshold-flush work that was
+	// actually scheduled/executed while staging indexed buffered update batches.
+	UpdateBatchBufferFlush       time.Duration
+	UpdateBatchPublish           time.Duration
+	UpdateBatchSecondaryDeletes  uint64
+	UpdateBatchSecondarySets     uint64
+	UpdateBatchSecondaryKeyBytes uint64
 }
 
 // DocumentRecord is one primary collection record returned by ScanDocuments.
@@ -785,6 +799,13 @@ func updateBatchStatsSince(enabled bool, start time.Time) time.Duration {
 	return time.Since(start)
 }
 
+func updateBatchStatsDuration(enabled bool, duration time.Duration) time.Duration {
+	if !enabled {
+		return 0
+	}
+	return duration
+}
+
 // Stats returns aggregate process-local collection write-domain metrics with
 // stable TreeDB benchmark key names.
 func (m *CollectionManager) Stats() map[string]string {
@@ -1084,7 +1105,7 @@ func (domain *collectionWriteDomain) observeUpdateBatchStats(stats CollectionUpd
 	domain.updateBatchIndexStateRunNs.Add(durationToAtomicNs(stats.IndexStateRunBuild))
 	domain.updateBatchSecondaryRunNs.Add(durationToAtomicNs(stats.SecondaryRunBuild))
 	domain.updateBatchBufferStageNs.Add(durationToAtomicNs(stats.BufferStage))
-	if updateStatsHasBufferStageBreakdown(stats) {
+	if stats.BufferStage != 0 {
 		domain.updateBatchBufferPrecheckNs.Add(durationToAtomicNs(stats.BufferStagePrecheck))
 		domain.updateBatchBufferLockWaitNs.Add(durationToAtomicNs(stats.BufferStageLockWait))
 		domain.updateBatchBufferLockHoldNs.Add(durationToAtomicNs(stats.BufferStageLockHold))
@@ -1106,19 +1127,6 @@ func (domain *collectionWriteDomain) observeUpdateBatchStats(stats CollectionUpd
 	if stats.SecondaryKeyBytes > 0 {
 		domain.updateBatchSecondaryKeyBytes.Add(uint64(stats.SecondaryKeyBytes))
 	}
-}
-
-func updateStatsHasBufferStageBreakdown(stats CollectionUpdateStats) bool {
-	return stats.BufferStagePrecheck != 0 ||
-		stats.BufferStageLockWait != 0 ||
-		stats.BufferStageLockHold != 0 ||
-		stats.BufferStageValidation != 0 ||
-		stats.BufferStageRootScan != 0 ||
-		stats.BufferStageDomainPrepare != 0 ||
-		stats.BufferStagePrimaryIdx != 0 ||
-		stats.BufferStageUniqueIdx != 0 ||
-		stats.BufferStageRootAppend != 0 ||
-		stats.BufferStageFlush != 0
 }
 
 func (domain *collectionWriteDomain) observeIndexedStage(docs int, bytes int64, rootRuns int) {
@@ -7361,21 +7369,21 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	domain.writeGeneration++
 	domain.observeIndexedStage(modifiedCount, stagedBytes, stagedRootRuns)
 	c.meta = plan.meta
-	phaseStart = updateBatchStatsNow(detailedStats)
 	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
-		if _, lockReleased, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options); err != nil {
+		flushDuration, lockReleased, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options)
+		if lockReleased > 0 {
 			lockReleasedDuringHold += lockReleased
-			plan.stats.BufferStageFlush += updateBatchStatsSince(detailedStats, phaseStart)
+			plan.stats.BufferStageLockWait += updateBatchStatsDuration(detailedStats, lockReleased)
+		}
+		plan.stats.BufferStageFlush += updateBatchStatsDuration(detailedStats, flushDuration)
+		if err != nil {
 			if shouldAutoFlushAfterAdding {
 				rollbackBufferedIndexedDomain(domain, checkpoint)
 				c.meta = collectionMetaCheckpoint
 			}
 			return false, err
-		} else {
-			lockReleasedDuringHold += lockReleased
 		}
 	}
-	plan.stats.BufferStageFlush += updateBatchStatsSince(detailedStats, phaseStart)
 	plan.stats.BufferedBatches = 1
 	return true, nil
 }

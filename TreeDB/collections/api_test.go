@@ -629,6 +629,9 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 	if timedStats.Callback <= 0 {
 		t.Fatalf("timed callback=%s want positive with detailed stats enabled", timedStats.Callback)
 	}
+	if timedStats.BufferStageFlush != 0 {
+		t.Fatalf("timed flush stage=%s want zero without threshold flush", timedStats.BufferStageFlush)
+	}
 
 	managerStats := mgr.StatsSnapshot()
 	if got := managerStats.UpdateBatchCalls; got == 0 {
@@ -684,6 +687,7 @@ func TestCollectionUpdateBufferBreakdownStatsSnapshotAndAdd(t *testing.T) {
 	}
 
 	var updateStats CollectionUpdateStats
+	updateStats.BufferStage = time.Nanosecond
 	for i, tc := range cases {
 		tc.set(&updateStats, time.Duration(i+1)*time.Nanosecond)
 	}
