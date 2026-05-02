@@ -6377,6 +6377,36 @@ type updateBatchBufferedEntry struct {
 	found bool
 }
 
+var updateBatchBufferedEntryPool sync.Pool
+
+const updateBatchBufferedEntryPoolMaxCap = 1 << 15
+
+func getUpdateBatchBufferedEntries(count int) []updateBatchBufferedEntry {
+	if count <= 0 {
+		return nil
+	}
+	if count > updateBatchBufferedEntryPoolMaxCap {
+		return make([]updateBatchBufferedEntry, count)
+	}
+	if v := updateBatchBufferedEntryPool.Get(); v != nil {
+		if entries, ok := v.([]updateBatchBufferedEntry); ok && cap(entries) >= count {
+			out := entries[:count]
+			clear(out)
+			return out
+		}
+	}
+	return make([]updateBatchBufferedEntry, count)
+}
+
+func putUpdateBatchBufferedEntries(entries []updateBatchBufferedEntry) {
+	if entries == nil || cap(entries) == 0 || cap(entries) > updateBatchBufferedEntryPoolMaxCap {
+		return
+	}
+	full := entries[:cap(entries)]
+	clear(full)
+	updateBatchBufferedEntryPool.Put(full[:0])
+}
+
 type updateBatchCurrentDocument struct {
 	value    []byte
 	buffered bool
@@ -6616,7 +6646,7 @@ func readUpdateBatchCurrentDocument(snap *backenddb.Snapshot, primaryRoot uint64
 const updateBatchBufferedPrimaryDirectProbeLimit = 1024
 
 func snapshotUpdateBatchBufferedPrimaryEntries(runs []memtable.Table, items []UpdateBatchItem) ([]updateBatchBufferedEntry, error) {
-	entries := make([]updateBatchBufferedEntry, len(items))
+	entries := getUpdateBatchBufferedEntries(len(items))
 	if len(runs) == 0 || len(items) == 0 {
 		return entries, nil
 	}
@@ -6665,7 +6695,7 @@ func snapshotUpdateBatchBufferedPrimaryEntries(runs []memtable.Table, items []Up
 }
 
 func snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(index *bufferedPrimaryRunIndex, items []UpdateBatchItem) ([]updateBatchBufferedEntry, error) {
-	entries := make([]updateBatchBufferedEntry, len(items))
+	entries := getUpdateBatchBufferedEntries(len(items))
 	if index == nil || len(items) == 0 {
 		return entries, nil
 	}
@@ -6799,6 +6829,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			_ = snap.Close()
 			return nil, err
 		}
+		defer putUpdateBatchBufferedEntries(bufferedRead.primaryEntries)
 		if len(bufferedTemplateRuns) > 0 {
 			plannerOptions = collectionOptionsWithBufferedTemplateV1RunsResolver(plannerOptions, bufferedTemplateRuns)
 		}

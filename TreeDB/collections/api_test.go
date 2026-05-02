@@ -5820,6 +5820,26 @@ func TestCollectionUpdateCombinerDocumentIDLongStorageClonesCallerBytes(t *testi
 	}
 }
 
+func TestUpdateBatchBufferedEntryPoolClearsEntries(t *testing.T) {
+	updateBatchBufferedEntryPool = sync.Pool{}
+
+	entries := getUpdateBatchBufferedEntries(2)
+	entries[0] = updateBatchBufferedEntry{
+		value: []byte("current"),
+		flags: node.FlagTombstone,
+		found: true,
+	}
+	putUpdateBatchBufferedEntries(entries)
+
+	reused := getUpdateBatchBufferedEntries(2)
+	defer putUpdateBatchBufferedEntries(reused)
+	for i, entry := range reused {
+		if entry.value != nil || entry.flags != 0 || entry.found {
+			t.Fatalf("entry %d not cleared after pool reuse: %+v", i, entry)
+		}
+	}
+}
+
 func TestCollectionUpdateCombinerCloseRequestsAllowsNilRequests(t *testing.T) {
 	combiner := &collectionUpdateCombiner{}
 	if !combiner.closeRequests() {
