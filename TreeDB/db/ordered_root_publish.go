@@ -487,6 +487,15 @@ func (it *orderedRootDeltaBatchIterator) Len() int {
 	if it == nil {
 		return 0
 	}
+	if !it.includeDeleted {
+		n := 0
+		for idx := it.idx; idx < len(it.entries); idx++ {
+			if it.entries[idx].Type != batch.OpDelete {
+				n++
+			}
+		}
+		return n
+	}
 	return len(it.entries) - it.idx
 }
 

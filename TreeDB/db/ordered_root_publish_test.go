@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -1084,6 +1085,36 @@ func TestOrderedRootDeltaBatchFromIterator_StableIteratorUsesViews(t *testing.T)
 	}
 	if &entries[0].Value[0] != &value[0] {
 		t.Fatal("stable iterator value was copied into batch arena")
+	}
+}
+
+func TestOrderedRootDeltaBatchIteratorLenSkipsDeletedWhenHidden(t *testing.T) {
+	delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	if err := delta.Set([]byte("root/a"), []byte("va")); err != nil {
+		t.Fatalf("set root/a: %v", err)
+	}
+	if err := delta.Delete([]byte("root/b")); err != nil {
+		t.Fatalf("delete root/b: %v", err)
+	}
+	if err := delta.Set([]byte("root/c"), []byte("vc")); err != nil {
+		t.Fatalf("set root/c: %v", err)
+	}
+
+	withoutDeletes := newOrderedRootDeltaBatchIterator(delta, false)
+	defer func() { _ = withoutDeletes.Close() }()
+	if got := withoutDeletes.Len(); got != 2 {
+		t.Fatalf("Len without deletes=%d want 2", got)
+	}
+	withoutDeletes.Next()
+	if got := withoutDeletes.Len(); got != 1 {
+		t.Fatalf("Len after Next without deletes=%d want 1", got)
+	}
+
+	withDeletes := newOrderedRootDeltaBatchIterator(delta, true)
+	defer func() { _ = withDeletes.Close() }()
+	if got := withDeletes.Len(); got != 3 {
+		t.Fatalf("Len with deletes=%d want 3", got)
 	}
 }
 

@@ -3867,12 +3867,16 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 
 func buildBufferedRootDeltaBatchPublishInputs(rootNames []string, rootRuns map[string][]memtable.Table, rootBaseIDs map[string]uint64, rootPolicies map[string]backenddb.OrderedRootStoragePolicy) ([]backenddb.OrderedRootDeltaBatchPublishInput, func(), error) {
 	ordered := make([]backenddb.OrderedRootDeltaBatchPublishInput, 0, len(rootNames))
+	iterators := make([]iterator.UnsafeIterator, 0, len(rootNames))
 	cleanup := func() {
 		for idx := range ordered {
 			if ordered[idx].Delta != nil {
 				_ = ordered[idx].Delta.Close()
 				ordered[idx].Delta = nil
 			}
+		}
+		for _, it := range iterators {
+			_ = it.Close()
 		}
 	}
 	for _, rootName := range rootNames {
@@ -3882,11 +3886,8 @@ func buildBufferedRootDeltaBatchPublishInputs(rootNames []string, rootRuns map[s
 			return nil, func() {}, fmt.Errorf("collections: buffered indexed flush missing base root for %q", rootName)
 		}
 		iter := newBufferedRootRunsIteratorWithDeleted(rootRuns[rootName], nil, nil, true)
+		iterators = append(iterators, iter)
 		delta, err := backenddb.OrderedRootDeltaBatchFromIterator(iter)
-		closeErr := iter.Close()
-		if err == nil {
-			err = closeErr
-		}
 		if err != nil {
 			cleanup()
 			return nil, func() {}, err
