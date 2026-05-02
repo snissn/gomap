@@ -896,12 +896,19 @@ func mergeOrderedRootPublishMetrics(dst *adaptive.Metrics, src adaptive.Metrics)
 	dst.ZipperNodeLoads += src.ZipperNodeLoads
 	dst.ZipperPagerNodeLoads += src.ZipperPagerNodeLoads
 	dst.ZipperLeafLogNodeLoads += src.ZipperLeafLogNodeLoads
+	dst.ZipperLeafLogCacheHits += src.ZipperLeafLogCacheHits
+	dst.ZipperLeafLogReaderCalls += src.ZipperLeafLogReaderCalls
+	dst.ZipperLeafLogViewReads += src.ZipperLeafLogViewReads
+	dst.ZipperLeafLogScratchReads += src.ZipperLeafLogScratchReads
 	dst.ZipperLeafMerges += src.ZipperLeafMerges
 	dst.ZipperInternalMerges += src.ZipperInternalMerges
 	dst.ZipperLeafPagesWritten += src.ZipperLeafPagesWritten
 	dst.ZipperPagerLeafPagesWritten += src.ZipperPagerLeafPagesWritten
 	dst.ZipperLeafLogPagesWritten += src.ZipperLeafLogPagesWritten
 	dst.ZipperInternalPagesWritten += src.ZipperInternalPagesWritten
+	dst.ZipperInternalChildRefs += src.ZipperInternalChildRefs
+	dst.ZipperInternalPageChildRefs += src.ZipperInternalPageChildRefs
+	dst.ZipperInternalLeafLogRefs += src.ZipperInternalLeafLogRefs
 	dst.ZipperRootSplitLevels += src.ZipperRootSplitLevels
 	if len(src.SlabWriteBytesByFile) != 0 {
 		if dst.SlabWriteBytesByFile == nil {
