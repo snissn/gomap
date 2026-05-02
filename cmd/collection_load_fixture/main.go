@@ -22,6 +22,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/cmd/internal/treedbstats"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -263,6 +264,7 @@ type loadSummary struct {
 	LeafGeneration                *leafGenerationSummary `json:"leaf_generation,omitempty"`
 	IndexVacuum                   indexVacuumSummary     `json:"index_vacuum,omitempty"`
 	IndexStorageFinal             indexStorageSummary    `json:"index_storage_final"`
+	TreeDBStatsFinal              map[string]string      `json:"treedb_stats_final,omitempty"`
 	Verify                        verifySummary          `json:"verify"`
 	CPUProfile                    string                 `json:"cpu_profile,omitempty"`
 	MemProfile                    string                 `json:"mem_profile,omitempty"`
@@ -587,6 +589,7 @@ func runFixture(cfg config) (loadSummary, error) {
 	if err != nil {
 		return loadSummary{}, err
 	}
+	finalStats := treedbstats.Selected(backend.Stats())
 	wallElapsed := time.Since(wallStart)
 
 	if !closed {
@@ -661,6 +664,7 @@ func runFixture(cfg config) (loadSummary, error) {
 		LeafGeneration:                leafGeneration,
 		IndexVacuum:                   indexVacuum,
 		IndexStorageFinal:             finalIndexStorage,
+		TreeDBStatsFinal:              finalStats,
 		Verify:                        verify,
 		CPUProfile:                    cfg.CPUProfile,
 		MemProfile:                    cfg.MemProfile,
