@@ -5820,6 +5820,37 @@ func TestCollectionUpdateCombinerDocumentIDLongStorageClonesCallerBytes(t *testi
 	}
 }
 
+func TestUpdateBatchBufferedEntryPoolClearsEntries(t *testing.T) {
+	updateBatchBufferedEntryPool = sync.Pool{}
+
+	entries, buffer := getUpdateBatchBufferedEntries(4)
+	entries[0] = updateBatchBufferedEntry{
+		value: []byte("current"),
+		flags: node.FlagTombstone,
+		found: true,
+	}
+	entries[3] = updateBatchBufferedEntry{
+		value: []byte("stale-capacity"),
+		flags: node.FlagTombstone,
+		found: true,
+	}
+	putUpdateBatchBufferedEntries(entries[:2], buffer)
+
+	for i, entry := range entries[:cap(entries)] {
+		if entry.value != nil || entry.flags != 0 || entry.found {
+			t.Fatalf("pooled entry %d retained data immediately after put: %+v", i, entry)
+		}
+	}
+
+	reused, reusedBuffer := getUpdateBatchBufferedEntries(2)
+	defer putUpdateBatchBufferedEntries(reused, reusedBuffer)
+	for i, entry := range reused {
+		if entry.value != nil || entry.flags != 0 || entry.found {
+			t.Fatalf("entry %d not cleared after pool reuse: %+v", i, entry)
+		}
+	}
+}
+
 func TestCollectionUpdateCombinerCloseRequestsAllowsNilRequests(t *testing.T) {
 	combiner := &collectionUpdateCombiner{}
 	if !combiner.closeRequests() {
@@ -7005,6 +7036,7 @@ func TestSnapshotUpdateBatchBufferedReadCachesEmptyPrimaryRunIndex(t *testing.T)
 	if err != nil {
 		t.Fatalf("snapshotUpdateBatchBufferedRead: %v", err)
 	}
+	defer putUpdateBatchBufferedEntries(read.primaryEntries, read.primaryBuffer)
 	if blocked {
 		t.Fatal("buffered read reported blocked")
 	}
@@ -7063,6 +7095,7 @@ func TestSnapshotUpdateBatchBufferedReadPrimaryRunIndexAvoidsCollectingPendingRu
 		if err != nil {
 			t.Fatalf("snapshotUpdateBatchBufferedReadLocked: %v", err)
 		}
+		defer putUpdateBatchBufferedEntries(read.primaryEntries, read.primaryBuffer)
 		if blocked || needPrimaryRunIndex || !read.enabled {
 			t.Fatalf("read enabled=%v blocked=%v needPrimaryRunIndex=%v", read.enabled, blocked, needPrimaryRunIndex)
 		}
@@ -7125,6 +7158,7 @@ func BenchmarkSnapshotUpdateBatchBufferedReadPrimaryRunIndexPendingUnits(b *test
 		if blocked || needPrimaryRunIndex || !read.enabled || len(read.primaryEntries) != 1 || !read.primaryEntries[0].found {
 			b.Fatalf("unexpected read enabled=%v entries=%d blocked=%v needPrimaryRunIndex=%v", read.enabled, len(read.primaryEntries), blocked, needPrimaryRunIndex)
 		}
+		putUpdateBatchBufferedEntries(read.primaryEntries, read.primaryBuffer)
 	}
 }
 
