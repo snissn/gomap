@@ -182,6 +182,94 @@ func TestSnapshot_HasManyAtRootAndHasPrefixesAtRoot(t *testing.T) {
 	}
 }
 
+func TestSnapshotTreeAtRootCachesRootTrees(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, rootIDs, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+		Iter: mustFrozenSystemMemtable(t,
+			"acct/alice/doc-1", "v1",
+			"acct/bob/doc-1", "v2",
+		).NewIterator(nil, nil),
+	}})
+	if err != nil {
+		t.Fatalf("publish root: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("root IDs len=%d want 1", len(rootIDs))
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+
+	first, err := snap.treeAtRoot(rootIDs[0])
+	if err != nil {
+		t.Fatalf("first treeAtRoot: %v", err)
+	}
+	second, err := snap.treeAtRoot(rootIDs[0])
+	if err != nil {
+		t.Fatalf("second treeAtRoot: %v", err)
+	}
+	if first != second {
+		t.Fatal("treeAtRoot returned different tree objects for the same root in one snapshot")
+	}
+	if allocs := testing.AllocsPerRun(1000, func() {
+		tr, err := snap.treeAtRoot(rootIDs[0])
+		if err != nil || tr == nil {
+			panic("treeAtRoot failed")
+		}
+	}); allocs != 0 {
+		t.Fatalf("cached treeAtRoot allocations/run=%0.1f want 0", allocs)
+	}
+}
+
+func BenchmarkSnapshotTreeAtRootCached(b *testing.B) {
+	dir := b.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		b.Fatalf("open: %v", err)
+	}
+	b.Cleanup(func() { _ = db.Close() })
+
+	_, rootIDs, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+		Iter: mustFrozenSystemMemtable(b,
+			"acct/alice/doc-1", "v1",
+			"acct/bob/doc-1", "v2",
+		).NewIterator(nil, nil),
+	}})
+	if err != nil {
+		b.Fatalf("publish root: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		b.Fatalf("root IDs len=%d want 1", len(rootIDs))
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		b.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	if _, err := snap.treeAtRoot(rootIDs[0]); err != nil {
+		b.Fatalf("warm treeAtRoot: %v", err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tr, err := snap.treeAtRoot(rootIDs[0])
+		if err != nil || tr == nil {
+			b.Fatalf("treeAtRoot err=%v tree=%p", err, tr)
+		}
+	}
+}
+
 func TestSnapshot_HasAnySortedAtRootRecordsPerItemFallback(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
