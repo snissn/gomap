@@ -4028,6 +4028,9 @@ func TestBufferedPrimaryRunIndexFindsNewestTable(t *testing.T) {
 	if err := addBufferedPrimaryRunIndexEntries(index, newer); err != nil {
 		t.Fatalf("add newer table: %v", err)
 	}
+	if got := len(index.arenas); got != 0 {
+		t.Fatalf("stable primary run index retained arenas=%d want 0", got)
+	}
 	table, ok := index.lookup([]byte("u1"))
 	if !ok {
 		t.Fatal("lookup u1 missing")
