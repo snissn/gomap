@@ -802,7 +802,7 @@ func indexRangeOptionsForPredicates(predicates []findPredicate, idx collections.
 		}
 		scalar, ok := indexScalarForBSONValue(pred.values[0], idx.ValueType)
 		if !ok {
-			if uncoercibleNumericRangeShouldScan(pred.values[0], idx.ValueType) {
+			if unindexedRangePredicateShouldScan(pred.values[0], idx.ValueType) {
 				return collections.IndexRangeOptions{}, false, false, nil
 			}
 			return collections.IndexRangeOptions{}, true, true, nil
@@ -1858,6 +1858,10 @@ func uncoercibleNumericRangeShouldScan(value bson.RawValue, valueType collection
 	default:
 		return false
 	}
+}
+
+func unindexedRangePredicateShouldScan(value bson.RawValue, valueType collections.IndexValueType) bool {
+	return rawValueIsNull(value) || uncoercibleNumericRangeShouldScan(value, valueType)
 }
 
 func exactInt64FromDecimal128(value bson.Decimal128) (int64, bool) {

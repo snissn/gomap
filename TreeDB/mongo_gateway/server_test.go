@@ -3286,6 +3286,42 @@ func TestServerFindIndexedRangeDecimal128FractionFallsBackToScan(t *testing.T) {
 	assertBatchIDs(t, cursorFirstBatch(t, rangeFind), []string{"eleven"})
 }
 
+func TestServerFindIndexedRangeNullFallsBackToScan(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.MaxFindScanDocuments = 10
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 272, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}},
+			{Key: "name", Value: "age_1"}, {Key: "treedbValueType", Value: "int64"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 273, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "null"}, {Key: "age", Value: nil}},
+			bson.D{{Key: "_id", Value: "num"}, {Key: "age", Value: int64(10)}},
+			bson.D{{Key: "_id", Value: "missing"}, {Key: "name", Value: "no age"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	rangeFind := serveCommand(t, server, 274, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: nil}}}}},
+		{Key: "sort", Value: bson.D{{Key: "age", Value: int32(1)}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, rangeFind), []string{"null"})
+}
+
 func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 	decimal, err := bson.ParseDecimal128("1.50")
 	if err != nil {
@@ -3414,6 +3450,16 @@ func TestIndexRangeOptionsForPredicatesCombinesTypedBounds(t *testing.T) {
 	}
 	if ok || empty {
 		t.Fatalf("fractional decimal int64 range ok=%v empty=%v want fallback false/false", ok, empty)
+	}
+
+	_, ok, empty, err = indexRangeOptionsForPredicates([]findPredicate{
+		{field: "age", op: findPredicateGTE, values: []bson.RawValue{{Type: bson.TypeNull}}},
+	}, idx)
+	if err != nil {
+		t.Fatalf("null int64 range options: %v", err)
+	}
+	if ok || empty {
+		t.Fatalf("null int64 range ok=%v empty=%v want fallback false/false", ok, empty)
 	}
 
 	_, ok, empty, err = indexRangeOptionsForPredicates([]findPredicate{
