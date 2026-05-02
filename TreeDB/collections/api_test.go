@@ -604,7 +604,10 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 		t.Fatal("stats secondary key bytes=0 want positive")
 	}
 	if stats.CurrentRead != 0 || stats.Callback != 0 || stats.BufferStage != 0 ||
+		stats.BufferStagePrecheck != 0 ||
 		stats.BufferStageLockWait != 0 || stats.BufferStageLockHold != 0 ||
+		stats.BufferStageValidation != 0 || stats.BufferStageRootScan != 0 ||
+		stats.BufferStageDomainInit != 0 ||
 		stats.BufferStagePrimaryIdx != 0 || stats.BufferStageUniqueIdx != 0 ||
 		stats.BufferStageRootAppend != 0 || stats.BufferStageFlush != 0 {
 		t.Fatalf("default update timings=%+v want zero unless detailed stats enabled", stats)
@@ -644,8 +647,21 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 	if _, ok := exported["treedb.collections.write_domain.update_batch.secondary_sets_total"]; !ok {
 		t.Fatalf("manager stats missing update batch secondary set counter: keys=%v", exported)
 	}
-	if _, ok := exported["treedb.collections.write_domain.update_batch.buffer_stage_lock_hold_ns_total"]; !ok {
-		t.Fatalf("manager stats missing buffer stage lock hold counter: keys=%v", exported)
+	for _, key := range []string{
+		"treedb.collections.write_domain.update_batch.buffer_stage_precheck_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_lock_wait_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_lock_hold_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_validation_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_root_scan_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_domain_init_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_primary_index_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_unique_index_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_root_append_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_flush_ns_total",
+	} {
+		if _, ok := exported[key]; !ok {
+			t.Fatalf("manager stats missing %s: keys=%v", key, exported)
+		}
 	}
 }
 
@@ -3158,7 +3174,7 @@ func TestCollectionIndexedWriteMemtablesAsyncBackpressureWaitsForPublishingUnit(
 	backpressureDone := make(chan error, 1)
 	go func() {
 		col.writeDomain.mu.Lock()
-		_, err := col.flushBufferedIndexedAfterThresholdLocked(col.writeDomain, CollectionOptions{
+		_, _, err := col.flushBufferedIndexedAfterThresholdLocked(col.writeDomain, CollectionOptions{
 			BufferedIndexedWrites:                   true,
 			BufferedIndexedWriteMaxDocuments:        1,
 			BufferedIndexedAsyncFlush:               true,
