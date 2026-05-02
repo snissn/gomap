@@ -3187,19 +3187,6 @@ func uniqueCollectionIndexNames(meta CollectionMeta) map[string]struct{} {
 	return uniqueIndexes
 }
 
-func uniqueCollectionSecondaryRootNames(meta CollectionMeta) map[string]string {
-	var uniqueRoots map[string]string
-	for _, idx := range meta.Indexes {
-		if idx.Unique {
-			if uniqueRoots == nil {
-				uniqueRoots = make(map[string]string, len(meta.Indexes))
-			}
-			uniqueRoots[collectionSecondaryRootName(meta.Name, idx.Name)] = idx.Name
-		}
-	}
-	return uniqueRoots
-}
-
 func rejectBufferedUniqueIndexConflicts(indexName string, valueType IndexValueType, pendingIndex *bufferedUniqueValueIndex, batchIndex memtable.Table) error {
 	it := batchIndex.NewIterator(nil, nil)
 	defer func() { _ = it.Close() }()
@@ -6009,6 +5996,7 @@ type updateBatchPlan struct {
 	baseRootIDs                 map[string]uint64
 	policies                    []backenddb.OrderedRootStoragePolicy
 	deltaTables                 []memtable.Table
+	uniqueSecondaryIndexByRoot  []int
 	canBufferIndexedUpdateBatch bool
 	bufferedBase                bool
 	bufferedReadGeneration      uint64
@@ -6036,6 +6024,7 @@ type updateBatchPlanScratch struct {
 	baseRootIDs      map[string]uint64
 	policies         []backenddb.OrderedRootStoragePolicy
 	deltaTables      []memtable.Table
+	uniqueSecondary  []int
 }
 
 var updateBatchPlanScratchPool sync.Pool
@@ -6124,6 +6113,11 @@ func getUpdateBatchPlanScratch(itemCount, runtimeCount int) *updateBatchPlanScra
 	} else {
 		scratch.deltaTables = scratch.deltaTables[:0]
 	}
+	if cap(scratch.uniqueSecondary) < rootCap || cap(scratch.uniqueSecondary) > updateBatchPlanScratchMaxRootNameCap {
+		scratch.uniqueSecondary = make([]int, 0, rootCap)
+	} else {
+		scratch.uniqueSecondary = scratch.uniqueSecondary[:0]
+	}
 	return scratch
 }
 
@@ -6176,6 +6170,8 @@ func putUpdateBatchPlanScratch(scratch *updateBatchPlanScratch) {
 	scratch.policies = scratch.policies[:0]
 	clear(scratch.deltaTables)
 	scratch.deltaTables = scratch.deltaTables[:0]
+	clear(scratch.uniqueSecondary)
+	scratch.uniqueSecondary = scratch.uniqueSecondary[:0]
 	updateBatchPlanScratchPool.Put(scratch)
 }
 
@@ -6665,12 +6661,14 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	baseRootIDs := scratch.baseRootIDs
 	policies := scratch.policies
 	deltaTables := scratch.deltaTables
+	uniqueSecondary := scratch.uniqueSecondary
 	defer func() {
 		scratch.changed = changed
 		scratch.changedDocuments = changedDocuments
 		scratch.rootNames = rootNames
 		scratch.policies = policies
 		scratch.deltaTables = deltaTables
+		scratch.uniqueSecondary = uniqueSecondary
 		if !scratchOwnedByPlan {
 			putUpdateBatchPlanScratch(scratch)
 		}
@@ -6737,22 +6735,24 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		primaryRootName := collectionPrimaryRootName(meta.Name)
 		baseRootIDs[primaryRootName] = primaryRoot
 		rootNames = append(rootNames, primaryRootName)
+		uniqueSecondary = append(uniqueSecondary, -1)
 		plan := newUpdateBatchPlan()
 		*plan = updateBatchPlan{
-			results:                results,
-			stats:                  updateCollectionUpdateStatsCounts(stats, results, 0),
-			meta:                   meta,
-			catalog:                catalog,
-			snap:                   snap,
-			baseUserRoot:           baseUserRoot,
-			baseSystemRoot:         baseSystemRoot,
-			baseCommitSeq:          baseCommitSeq,
-			rootNames:              rootNames,
-			baseRootIDs:            baseRootIDs,
-			bufferedBase:           bufferedRead.enabled,
-			bufferedReadGeneration: bufferedRead.writeGeneration,
-			bufferedReadBlocked:    bufferedReadBlocked,
-			scratch:                scratch,
+			results:                    results,
+			stats:                      updateCollectionUpdateStatsCounts(stats, results, 0),
+			meta:                       meta,
+			catalog:                    catalog,
+			snap:                       snap,
+			baseUserRoot:               baseUserRoot,
+			baseSystemRoot:             baseSystemRoot,
+			baseCommitSeq:              baseCommitSeq,
+			rootNames:                  rootNames,
+			baseRootIDs:                baseRootIDs,
+			uniqueSecondaryIndexByRoot: uniqueSecondary,
+			bufferedBase:               bufferedRead.enabled,
+			bufferedReadGeneration:     bufferedRead.writeGeneration,
+			bufferedReadBlocked:        bufferedReadBlocked,
+			scratch:                    scratch,
 		}
 		scratchOwnedByPlan = true
 		return plan, nil
@@ -6839,6 +6839,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		}
 		for _, run := range templatePlan.runs {
 			rootNames = append(rootNames, run.name)
+			uniqueSecondary = append(uniqueSecondary, -1)
 			baseRootIDs[run.name] = catalog.rootID(run.name)
 			policies = append(policies, run.storagePolicy)
 			deltaTables = append(deltaTables, run.table)
@@ -6848,6 +6849,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 
 	primaryRootName := collectionPrimaryRootName(meta.Name)
 	rootNames = append(rootNames, primaryRootName)
+	uniqueSecondary = append(uniqueSecondary, -1)
 	baseRootIDs[primaryRootName] = primaryRoot
 	policies = append(policies, plannerOptions.dataStoragePolicy)
 	phaseStart = updateBatchStatsNow(detailedStats)
@@ -6884,6 +6886,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			stateTable.Freeze()
 			stateRootName := collectionIndexStateRootName(meta.Name)
 			rootNames = append(rootNames, stateRootName)
+			uniqueSecondary = append(uniqueSecondary, -1)
 			baseRootIDs[stateRootName] = catalog.rootID(stateRootName)
 			policies = append(policies, plannerOptions.indexStateStoragePolicy)
 			deltaTables = append(deltaTables, stateTable)
@@ -6924,7 +6927,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 				}
 			}
 		}
-		for _, runtime := range runtimes {
+		for runtimeIdx, runtime := range runtimes {
 			rootName := collectionSecondaryRootName(meta.Name, runtime.def.name)
 			table := secondaryTables[rootName]
 			if table == nil || table.Len() == 0 {
@@ -6932,6 +6935,11 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			}
 			table.Freeze()
 			rootNames = append(rootNames, rootName)
+			if runtime.def.unique {
+				uniqueSecondary = append(uniqueSecondary, runtimeIdx)
+			} else {
+				uniqueSecondary = append(uniqueSecondary, -1)
+			}
 			baseRootIDs[rootName] = catalog.rootID(rootName)
 			policies = append(policies, runtime.def.storagePolicy)
 			deltaTables = append(deltaTables, table)
@@ -6960,6 +6968,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		baseCommitSeq:               baseCommitSeq,
 		rootNames:                   rootNames,
 		baseRootIDs:                 baseRootIDs,
+		uniqueSecondaryIndexByRoot:  uniqueSecondary,
 		canBufferIndexedUpdateBatch: canBufferIndexedUpdateBatch,
 		bufferedBase:                bufferedRead.enabled,
 		bufferedReadGeneration:      bufferedRead.writeGeneration,
@@ -7025,6 +7034,21 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]Upda
 	return plan.results, nil
 }
 
+func updateBatchPlanUniqueSecondaryIndex(plan *updateBatchPlan, rootOffset int) (IndexDefinition, bool) {
+	if plan == nil || rootOffset < 0 || rootOffset >= len(plan.uniqueSecondaryIndexByRoot) {
+		return IndexDefinition{}, false
+	}
+	indexOffset := plan.uniqueSecondaryIndexByRoot[rootOffset]
+	if indexOffset < 0 || indexOffset >= len(plan.meta.Indexes) {
+		return IndexDefinition{}, false
+	}
+	indexDef := plan.meta.Indexes[indexOffset]
+	if !indexDef.Unique {
+		return IndexDefinition{}, false
+	}
+	return indexDef, true
+}
+
 func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, error) {
 	if c == nil || plan == nil || len(plan.deltaTables) == 0 {
 		return false, nil
@@ -7039,6 +7063,9 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	}
 	if len(plan.rootNames) != len(plan.deltaTables) || len(plan.rootNames) != len(plan.policies) {
 		return false, fmt.Errorf("collections: UpdateBatch collection %q invalid plan lengths roots=%d deltas=%d policies=%d", plan.meta.Name, len(plan.rootNames), len(plan.deltaTables), len(plan.policies))
+	}
+	if len(plan.uniqueSecondaryIndexByRoot) != len(plan.rootNames) {
+		return false, fmt.Errorf("collections: UpdateBatch collection %q invalid unique index plan length roots=%d unique=%d", plan.meta.Name, len(plan.rootNames), len(plan.uniqueSecondaryIndexByRoot))
 	}
 	modifiedCount := updateBatchModifiedCount(plan.results)
 	if modifiedCount == 0 {
@@ -7101,11 +7128,11 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	if domain.rootRuns == nil {
 		domain.rootRuns = make(map[string][]memtable.Table, len(plan.rootNames))
 	}
-	uniqueSecondaryRoots := uniqueCollectionSecondaryRootNames(plan.meta)
+	hasUniqueSecondaryRoots := collectionMetaHasSecondaryUniqueIndex(plan.meta)
 	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, stagedBytes, stagedRootRuns)
-	if !shouldAutoFlushAfterAdding && len(uniqueSecondaryRoots) > 0 && bufferedIndexedAutoFlushEnabled(plan.meta.Options) {
-		for i, rootName := range plan.rootNames {
-			if _, ok := uniqueSecondaryRoots[rootName]; !ok {
+	if !shouldAutoFlushAfterAdding && hasUniqueSecondaryRoots && bufferedIndexedAutoFlushEnabled(plan.meta.Options) {
+		for i := range plan.rootNames {
+			if _, ok := updateBatchPlanUniqueSecondaryIndex(plan, i); !ok {
 				continue
 			}
 			table := plan.deltaTables[i]
@@ -7142,11 +7169,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 				return false, err
 			}
 		}
-		if indexName, ok := uniqueSecondaryRoots[rootName]; ok {
-			indexDef, ok := findIndex(plan.meta.Indexes, indexName)
-			if !ok {
-				return false, fmt.Errorf("collections: unique index %q missing from schema", indexName)
-			}
+		if indexDef, ok := updateBatchPlanUniqueSecondaryIndex(plan, i); ok {
 			uniqueValueTable, uniquePrefixes, err := bufferedUniqueIndexValueRun(table, indexDef.ValueType)
 			if err != nil {
 				if shouldAutoFlushAfterAdding {
@@ -7161,11 +7184,11 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 			if domain.uniqueValueIndex == nil {
 				domain.uniqueValueIndex = make(map[string]*bufferedUniqueValueIndex)
 			}
-			domain.uniqueValueRuns[indexName] = append(domain.uniqueValueRuns[indexName], uniqueValueTable)
-			index := domain.uniqueValueIndex[indexName]
+			domain.uniqueValueRuns[indexDef.Name] = append(domain.uniqueValueRuns[indexDef.Name], uniqueValueTable)
+			index := domain.uniqueValueIndex[indexDef.Name]
 			if index == nil {
 				index = newBufferedUniqueValueIndex(max(1, len(uniquePrefixes)))
-				domain.uniqueValueIndex[indexName] = index
+				domain.uniqueValueIndex[indexDef.Name] = index
 			}
 			index.addAll(uniquePrefixes)
 			stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, uniqueValueTable.Size())
