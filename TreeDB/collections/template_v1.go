@@ -146,7 +146,7 @@ func collectionOptionsWithBufferedTemplateV1Resolver(opts collectionOptions, dom
 	}
 	rootName := collectionTemplateRootName(collectionName)
 	domain.mu.RLock()
-	runs := append([]memtable.Table(nil), domain.rootRuns[rootName]...)
+	runs := append([]memtable.Table(nil), pendingIndexedRootRunsLocked(domain, rootName)...)
 	domain.mu.RUnlock()
 	if len(runs) == 0 {
 		return opts
