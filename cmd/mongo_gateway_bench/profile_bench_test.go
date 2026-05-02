@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -101,6 +102,35 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS", "6")
 	if got := profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(t); got != 6 {
 		t.Fatalf("async max queued units=%d want 6", got)
+	}
+}
+
+func TestProfileBenchDeltaUintStat(t *testing.T) {
+	before := map[string]string{"x": "10"}
+	after := map[string]string{"x": "17", "bad": "not-a-number"}
+	if got := profileBenchDeltaUintStat(after, before, "x"); got != 7 {
+		t.Fatalf("delta x=%d want 7", got)
+	}
+	if got := profileBenchDeltaUintStat(after, before, "missing"); got != 0 {
+		t.Fatalf("delta missing=%d want 0", got)
+	}
+	if got := profileBenchDeltaUintStat(after, before, "bad"); got != 0 {
+		t.Fatalf("delta bad=%d want 0", got)
+	}
+	if got := profileBenchDeltaUintStat(map[string]string{"x": "9"}, before, "x"); got != 0 {
+		t.Fatalf("delta underflow=%d want 0", got)
+	}
+	if got := profileBenchSignedDeltaUintStat(after, before, "x"); got != 7 {
+		t.Fatalf("signed delta x=%d want 7", got)
+	}
+	if got := profileBenchSignedDeltaUintStat(map[string]string{"x": "9"}, before, "x"); got != -1 {
+		t.Fatalf("signed delta underflow=%d want -1", got)
+	}
+	if got := profileBenchUintStat(after, "x"); got != 17 {
+		t.Fatalf("value x=%d want 17", got)
+	}
+	if got := profileBenchUintStat(after, "bad"); got != 0 {
+		t.Fatalf("value bad=%d want 0", got)
 	}
 }
 
@@ -532,6 +562,7 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	b.ReportAllocs()
 	manager.SetUpdateBatchDetailedStatsEnabled(true)
 	statsBefore := manager.StatsSnapshot()
+	backendStatsBefore := backend.Stats()
 	b.ResetTimer()
 	started := time.Now()
 	err = runProfileBenchDirectCollectionConcurrentUpdates(context.Background(), writers, b.N, documentCount, idStride, ids, updateDocs, collection)
@@ -548,7 +579,75 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	b.ReportMetric(float64(writers), "writers")
 	reportProfileBenchBufferedIndexedAsyncFlush(b, collection.Meta().Options)
 	reportCollectionManagerUpdateStats(b, deltaCollectionManagerUpdateStats(manager.StatsSnapshot(), statsBefore), b.N)
+	reportProfileBenchBackendVlogMmapStats(b, backend.Stats(), backendStatsBefore, b.N)
 	reportDocsPerSecond(b, b.N, timedElapsed)
+}
+
+func profileBenchDeltaUintStat(after, before map[string]string, key string) uint64 {
+	afterValue := profileBenchUintStat(after, key)
+	if afterValue == 0 {
+		return 0
+	}
+	beforeValue := profileBenchUintStat(before, key)
+	if afterValue < beforeValue {
+		return 0
+	}
+	return afterValue - beforeValue
+}
+
+func profileBenchUintStat(stats map[string]string, key string) uint64 {
+	v, err := strconv.ParseUint(stats[key], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+func profileBenchSignedDeltaUintStat(after, before map[string]string, key string) int64 {
+	afterValue := profileBenchUintStat(after, key)
+	beforeValue := profileBenchUintStat(before, key)
+	if afterValue >= beforeValue {
+		delta := afterValue - beforeValue
+		if delta > uint64(math.MaxInt64) {
+			return math.MaxInt64
+		}
+		return int64(delta)
+	}
+	delta := beforeValue - afterValue
+	if delta > uint64(math.MaxInt64) {
+		return math.MinInt64
+	}
+	return -int64(delta)
+}
+
+func reportProfileBenchBackendVlogMmapStats(b *testing.B, after, before map[string]string, docs int) {
+	b.Helper()
+	if docs <= 0 {
+		return
+	}
+	reportPerDoc := func(metric, key string) {
+		delta := profileBenchDeltaUintStat(after, before, key)
+		b.ReportMetric(float64(delta)/float64(docs), metric)
+	}
+	reportPerDoc("backend_vlog_mmap_hits/doc", "treedb.vlog.mmap_read.hits")
+	reportPerDoc("backend_vlog_mmap_miss_out_of_range/doc", "treedb.vlog.mmap_read.miss_out_of_range")
+	reportPerDoc("backend_vlog_mmap_miss_no_mapping/doc", "treedb.vlog.mmap_read.miss_no_mapping")
+	reportPerDoc("backend_vlog_mmap_miss_dead_mapping_cap/doc", "treedb.vlog.mmap_read.miss_dead_mapping_cap")
+	reportPerDoc("backend_vlog_mmap_fallback_readat/doc", "treedb.vlog.mmap_read.fallback_readat")
+	reportPerDoc("backend_vlog_mmap_sealed_denied_count_cap/doc", "treedb.vlog.mmap_sealed_map_denied.count_cap")
+	reportPerDoc("backend_vlog_mmap_sealed_denied_bytes_cap/doc", "treedb.vlog.mmap_sealed_map_denied.bytes_cap")
+	hits := profileBenchDeltaUintStat(after, before, "treedb.vlog.mmap_read.hits")
+	fallbacks := profileBenchDeltaUintStat(after, before, "treedb.vlog.mmap_read.fallback_readat")
+	if total := hits + fallbacks; total > 0 {
+		b.ReportMetric(float64(hits)/float64(total), "backend_vlog_mmap_hit_ratio")
+	}
+	deadDelta := profileBenchSignedDeltaUintStat(after, before, "treedb.vlog.mmap_dead_mappings")
+	b.ReportMetric(float64(deadDelta), "backend_vlog_mmap_dead_mappings_delta")
+	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.mmap_dead_mappings")), "backend_vlog_mmap_dead_mappings")
+	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.mmap_sealed_segments")), "backend_vlog_mmap_sealed_segments")
+	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.mmap_sealed_bytes")), "backend_vlog_mmap_sealed_bytes")
+	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.mmap_active_segments")), "backend_vlog_mmap_active_segments")
+	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.mmap_active_bytes")), "backend_vlog_mmap_active_bytes")
 }
 
 func deltaCollectionManagerUpdateStats(after, before collections.CollectionManagerStats) collections.CollectionManagerStats {
