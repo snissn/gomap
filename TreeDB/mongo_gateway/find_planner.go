@@ -1832,6 +1832,9 @@ func indexScalarForBSONValue(value bson.RawValue, valueType collections.IndexVal
 		switch value.Type {
 		case bson.TypeDouble:
 			out, ok := value.DoubleOK()
+			if !ok || math.IsNaN(out) {
+				return nil, false
+			}
 			return out, ok
 		case bson.TypeInt32:
 			out, ok := value.Int32OK()

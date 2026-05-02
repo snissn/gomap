@@ -3473,6 +3473,9 @@ func TestCompareRawNumbersHandlesNonFiniteDoubles(t *testing.T) {
 	if match, err := valueMatchesPredicate(nanValue, findPredicate{op: findPredicateGT, values: []bson.RawValue{finite}}); err != nil || match {
 		t.Fatalf("NaN range match/err=%v/%v want false/nil", match, err)
 	}
+	if scalar, ok := indexScalarForBSONValue(nanValue, collections.IndexValueDouble); ok {
+		t.Fatalf("NaN double scalar=%v ok=%v want not indexable", scalar, ok)
+	}
 	if cmp := compareRawValues(posInf, finite); cmp <= 0 {
 		t.Fatalf("+Inf vs finite cmp=%d want >0", cmp)
 	}

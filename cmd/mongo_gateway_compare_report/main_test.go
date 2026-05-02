@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestReportFromMatrix(t *testing.T) {
@@ -130,6 +131,50 @@ func TestReportShowsRangeIndexModeAndProfileDir(t *testing.T) {
 	summary := readFile(t, summaryPath)
 	if !strings.Contains(summary, "1000\t0\ttrue\tindexed\ttreedb_template_v1_driver_range_index\tage_range_indexed_limit_10") {
 		t.Fatalf("summary missing indexed range mode:\n%s", summary)
+	}
+}
+
+func TestReportRawInputsKeepsMongoRowsForDifferentRangeIndexModes(t *testing.T) {
+	cells := []cellComparison{
+		{
+			Key: cellKey{Documents: 1000, SecondaryIndexes: 0, TreeDBConfig: "treedb_scan"},
+			TreeDB: &runRecord{
+				Row:            matrixRow{Target: "treedb", Config: "treedb_scan", Documents: 1000, RawJSON: "treedb_scan.json"},
+				Result:         benchmarkResult{Target: "treedb", Documents: 1000, RangeIndex: false, Phases: []phaseResult{{Name: "age_range_scan_limit_10", OpsPerSecond: 10}}},
+				DisplayRawPath: "treedb_scan.json",
+				PhaseMap:       phaseMap([]phaseResult{{Name: "age_range_scan_limit_10", OpsPerSecond: 10}}),
+			},
+			Mongo: &runRecord{
+				Row:            matrixRow{Target: "mongo", Config: "mongo", Documents: 1000, RawJSON: "mongo_scan.json"},
+				Result:         benchmarkResult{Target: "mongo", Documents: 1000, RangeIndex: false, Phases: []phaseResult{{Name: "age_range_scan_limit_10", OpsPerSecond: 20}}},
+				DisplayRawPath: "mongo_scan.json",
+				PhaseMap:       phaseMap([]phaseResult{{Name: "age_range_scan_limit_10", OpsPerSecond: 20}}),
+			},
+		},
+		{
+			Key: cellKey{Documents: 1000, SecondaryIndexes: 0, TreeDBConfig: "treedb_indexed"},
+			TreeDB: &runRecord{
+				Row:            matrixRow{Target: "treedb", Config: "treedb_indexed", Documents: 1000, RawJSON: "treedb_indexed.json"},
+				Result:         benchmarkResult{Target: "treedb", Documents: 1000, RangeIndex: true, Phases: []phaseResult{{Name: "age_range_indexed_limit_10", OpsPerSecond: 30}}},
+				DisplayRawPath: "treedb_indexed.json",
+				PhaseMap:       phaseMap([]phaseResult{{Name: "age_range_indexed_limit_10", OpsPerSecond: 30}}),
+			},
+			Mongo: &runRecord{
+				Row:            matrixRow{Target: "mongo", Config: "mongo", Documents: 1000, RawJSON: "mongo_indexed.json"},
+				Result:         benchmarkResult{Target: "mongo", Documents: 1000, RangeIndex: true, Phases: []phaseResult{{Name: "age_range_indexed_limit_10", OpsPerSecond: 40}}},
+				DisplayRawPath: "mongo_indexed.json",
+				PhaseMap:       phaseMap([]phaseResult{{Name: "age_range_indexed_limit_10", OpsPerSecond: 40}}),
+			},
+		},
+	}
+	report := renderReport(config{Title: "test", MatrixPath: "matrix.tsv"}, cells, time.Unix(0, 0).UTC())
+	for _, want := range []string{
+		"| 1000 | 0 | false | `mongo` | mongo | `mongo_scan.json` | n/a |",
+		"| 1000 | 0 | true | `mongo` | mongo | `mongo_indexed.json` | n/a |",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q\n%s", want, report)
+		}
 	}
 }
 

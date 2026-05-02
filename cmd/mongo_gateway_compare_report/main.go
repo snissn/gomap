@@ -549,7 +549,8 @@ func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) str
 	b.WriteString("| ---: | ---: | --- | --- | --- | --- | --- |\n")
 	type mongoRawKey struct {
 		baseCellKey
-		Config string
+		Config     string
+		RangeIndex bool
 	}
 	seenMongoRaw := make(map[mongoRawKey]struct{})
 	for _, cell := range cells {
@@ -559,6 +560,7 @@ func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) str
 			mongoKey := mongoRawKey{
 				baseCellKey: baseCellKey{Documents: cell.Key.Documents, SecondaryIndexes: cell.Key.SecondaryIndexes},
 				Config:      cell.Mongo.Row.Config,
+				RangeIndex:  cell.Mongo.Result.RangeIndex,
 			}
 			if _, ok := seenMongoRaw[mongoKey]; ok {
 				continue
