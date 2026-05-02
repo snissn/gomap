@@ -34,6 +34,7 @@ var (
 	treedbPagerSyncConcurrency            = flag.Int("treedb-pager-sync-concurrency", 0, "TreeDB: pager msync concurrency (0=default)")
 	treedbPagerMmapPopulate               = flag.Bool("treedb-pager-mmap-populate", false, "TreeDB (Linux): enable MAP_POPULATE on index.db mmap")
 	treedbPagerPrefetchOnRead             = flag.Bool("treedb-pager-prefetch-on-read", false, "TreeDB (Linux): enable best-effort mmap prefetch hints (madvise WILLNEED) during checkpoint/merge rewrites")
+	treedbLeafPageReadCacheEntries        = flag.Int("treedb-leaf-page-read-cache-entries", 0, "TreeDB: outer-leaf read cache slots for leaf pages stored in the value log (0=default/env, <0=disable)")
 	treedbChunkSize                       = flag.Int64("treedb-chunk-size", defaultTreeDBChunkSizeBytes, "TreeDB: pager chunk size in bytes (default 256KiB)")
 	treedbJournalLanes                    = flag.Int("treedb-journal-lanes", 0, "TreeDB: journal lane count (0=auto)")
 	treedbJournalCompress                 = flag.Bool("treedb-journal-compress", false, "TreeDB: compress journal/commitlog segments (zstd)")
@@ -336,6 +337,7 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("index_packed_valueptr=%t", r.opts.IndexPackedValuePtr))
 	lines = append(lines, fmt.Sprintf("index_internal_base_delta=%t", r.opts.IndexInternalBaseDelta))
 	lines = append(lines, fmt.Sprintf("index_outer_leaves_in_vlog=%t", r.opts.IndexOuterLeavesInValueLog))
+	lines = append(lines, fmt.Sprintf("outer_leaf_read_cache_entries=%s", formatTreeDBLeafPageReadCacheEntries(r.opts.LeafPageReadCacheEntries)))
 	lines = append(lines, fmt.Sprintf("cached.domain_ingress_workers=%d", r.opts.DomainIngressWorkers))
 	lines = append(lines, fmt.Sprintf("cached.domain_ingress_queue_size=%d", r.opts.DomainIngressQueueSize))
 	lines = append(lines, fmt.Sprintf("vlog.force_pointers=%t", r.opts.ValueLog.ForcePointers))
@@ -434,6 +436,17 @@ func formatTreeDBIntegrity(mode treedb.IntegrityMode) string {
 		return "skip_checksums"
 	default:
 		return fmt.Sprintf("integrity_%d", mode)
+	}
+}
+
+func formatTreeDBLeafPageReadCacheEntries(entries int) string {
+	switch {
+	case entries < 0:
+		return "disabled"
+	case entries == 0:
+		return "default/env"
+	default:
+		return fmt.Sprintf("%d", entries)
 	}
 }
 
@@ -595,6 +608,7 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		PagerSyncConcurrency:      *treedbPagerSyncConcurrency,
 		PagerMmapPopulate:         *treedbPagerMmapPopulate,
 		PagerPrefetchOnRead:       *treedbPagerPrefetchOnRead,
+		LeafPageReadCacheEntries:  *treedbLeafPageReadCacheEntries,
 		PreferAppendAlloc:         *treedbPreferAppendAlloc,
 		FreelistRegionPages:       *treedbFreelistRegionPages,
 		FreelistRegionRadius:      *treedbFreelistRegionRadius,

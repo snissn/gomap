@@ -18,7 +18,13 @@ const (
 
 var LeafPageReadCacheEntries = defaultLeafPageReadCacheEntries
 
-func configuredLeafPageReadCacheEntries() int {
+func configuredLeafPageReadCacheEntries(optionEntries int) int {
+	if optionEntries < 0 {
+		return 0
+	}
+	if optionEntries > 0 {
+		return optionEntries
+	}
 	if raw := strings.TrimSpace(os.Getenv(leafPageReadCacheEntriesEnvKey)); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
 			return v

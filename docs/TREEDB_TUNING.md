@@ -231,9 +231,16 @@ process-local cache of recently appended decoded leaf pages. This avoids
 rereading freshly written leaves from mmap or `ReadAt` during follow-up publish,
 update, and maintenance work.
 
-- `TREEDB_LEAF_PAGE_CACHE_ENTRIES` sets the direct-mapped cache slot count.
-  The default is 4096 entries, or about 16 MiB of leaf-page payloads. Set to `0`
-  to disable the cache.
+- `Options.LeafPageReadCacheEntries` sets the direct-mapped cache slot count per
+  DB. `0` uses the process default/env override, `<0` disables the cache, and
+  `>0` sets an explicit slot count.
+- `TREEDB_LEAF_PAGE_CACHE_ENTRIES` sets the process default slot count when the
+  option is left at `0`. The default is 4096 entries, or about 16 MiB of
+  leaf-page payloads. Set the env var to `0` to disable the cache for DBs that
+  do not set `Options.LeafPageReadCacheEntries`.
+- `unified-bench` exposes this as `-treedb-leaf-page-read-cache-entries` so
+  read/publish cache-capacity experiments are captured in the reproduced command
+  instead of relying on ambient environment.
 
 Useful stats:
 - `treedb.process.read_path.outer_leaf.cache.hits`

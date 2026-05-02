@@ -37,6 +37,25 @@ func TestBuildTreeDBOptions_IndexOuterLeavesInVlogEnable(t *testing.T) {
 	}
 }
 
+func TestBuildTreeDBOptions_LeafPageReadCacheEntries(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbLeafPageReadCacheEntries = 32768
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions leaf page read cache entries: %v", err)
+	}
+	if got := opts.LeafPageReadCacheEntries; got != 32768 {
+		t.Fatalf("LeafPageReadCacheEntries=%d want 32768", got)
+	}
+	if got := rep.formatText(""); !strings.Contains(got, "outer_leaf_read_cache_entries=32768") {
+		t.Fatalf("resolved options missing outer_leaf_read_cache_entries=32768: %q", got)
+	}
+}
+
 func TestParseTreeDBVlogGenerationPolicy(t *testing.T) {
 	got, err := parseTreeDBVlogGenerationPolicy("default")
 	if err != nil {
@@ -156,6 +175,7 @@ type savedTreeDBFlagState struct {
 	columnarLeaves          bool
 	packedValuePtr          bool
 	internalBaseDelta       bool
+	leafPageReadCache       int
 	chunkSize               int64
 	vlogCompression         string
 	vlogBlockCodec          string
@@ -195,6 +215,7 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 		columnarLeaves:          *treedbIndexColumnarLeaves,
 		packedValuePtr:          *treedbIndexPackedValuePtr,
 		internalBaseDelta:       *treedbIndexInternalBaseDelta,
+		leafPageReadCache:       *treedbLeafPageReadCacheEntries,
 		chunkSize:               *treedbChunkSize,
 		vlogCompression:         *treedbVlogCompression,
 		vlogBlockCodec:          *treedbVlogBlockCodec,
@@ -230,6 +251,7 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 	*treedbIndexColumnarLeaves = s.columnarLeaves
 	*treedbIndexPackedValuePtr = s.packedValuePtr
 	*treedbIndexInternalBaseDelta = s.internalBaseDelta
+	*treedbLeafPageReadCacheEntries = s.leafPageReadCache
 	*treedbChunkSize = s.chunkSize
 	*treedbVlogCompression = s.vlogCompression
 	*treedbVlogBlockCodec = s.vlogBlockCodec

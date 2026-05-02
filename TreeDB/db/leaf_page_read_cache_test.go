@@ -365,8 +365,34 @@ func TestConfiguredLeafPageReadCacheEntriesReadsEnvAtOpenTime(t *testing.T) {
 	})
 	t.Setenv(leafPageReadCacheEntriesEnvKey, "3")
 
-	if got := configuredLeafPageReadCacheEntries(); got != 3 {
+	if got := configuredLeafPageReadCacheEntries(0); got != 3 {
 		t.Fatalf("configuredLeafPageReadCacheEntries()=%d, want env override 3", got)
+	}
+}
+
+func TestConfiguredLeafPageReadCacheEntriesOptionOverridesEnv(t *testing.T) {
+	prev := LeafPageReadCacheEntries
+	LeafPageReadCacheEntries = 8
+	t.Cleanup(func() {
+		LeafPageReadCacheEntries = prev
+	})
+	t.Setenv(leafPageReadCacheEntriesEnvKey, "3")
+
+	if got := configuredLeafPageReadCacheEntries(16); got != 16 {
+		t.Fatalf("configuredLeafPageReadCacheEntries(16)=%d, want option override 16", got)
+	}
+}
+
+func TestConfiguredLeafPageReadCacheEntriesNegativeOptionDisables(t *testing.T) {
+	prev := LeafPageReadCacheEntries
+	LeafPageReadCacheEntries = 8
+	t.Cleanup(func() {
+		LeafPageReadCacheEntries = prev
+	})
+	t.Setenv(leafPageReadCacheEntriesEnvKey, "3")
+
+	if got := configuredLeafPageReadCacheEntries(-1); got != 0 {
+		t.Fatalf("configuredLeafPageReadCacheEntries(-1)=%d, want disabled cache 0", got)
 	}
 }
 
