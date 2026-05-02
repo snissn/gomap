@@ -619,6 +619,9 @@ func (b *Batch) SetOps(ops []Entry) error {
 // SortedEntries returns the operations sorted by key.
 // Duplicate keys are resolved (last write wins).
 // This modifies the internal entries slice (sorts and compacts).
+// The returned slice aliases batch-owned storage and must be treated as
+// read-only. It remains valid only until the batch is mutated, reset, released,
+// or closed.
 func (b *Batch) SortedEntries() []Entry {
 	if len(b.entries) == 0 {
 		b.sorted = true
