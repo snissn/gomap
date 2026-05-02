@@ -751,6 +751,26 @@ func TestPublishOrderedRootDeltaGroupWithSystemBuilder_ReportsPublishStats(t *te
 	if _, ok := stats["treedb.publish.ordered_root_delta_group.write_lock_wait_share_pct"]; !ok {
 		t.Fatalf("missing ordered root delta write lock wait share stat")
 	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_calls_total"]; got != "1" {
+		t.Fatalf("root apply calls stat=%q want 1", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.system_apply_calls_total"]; got != "1" {
+		t.Fatalf("system apply calls stat=%q want 1", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.finalize_calls_total"]; got != "1" {
+		t.Fatalf("finalize calls stat=%q want 1", got)
+	}
+	for _, key := range []string{
+		"treedb.publish.ordered_root_delta_group.preflight_ns_total",
+		"treedb.publish.ordered_root_delta_group.root_apply_ns_total",
+		"treedb.publish.ordered_root_delta_group.system_build_ns_total",
+		"treedb.publish.ordered_root_delta_group.system_apply_ns_total",
+		"treedb.publish.ordered_root_delta_group.finalize_ns_total",
+	} {
+		if _, ok := stats[key]; !ok {
+			t.Fatalf("missing ordered root delta phase stat %q", key)
+		}
+	}
 }
 
 func TestPublishOrderedRootDeltaGroupPreflightFailureDoesNotCountRoots(t *testing.T) {
@@ -789,6 +809,12 @@ func TestPublishOrderedRootDeltaGroupPreflightFailureDoesNotCountRoots(t *testin
 	if got := stats["treedb.publish.ordered_root_delta_group.roots_total"]; got != "0" {
 		t.Fatalf("roots stat=%q want 0", got)
 	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_calls_total"]; got != "0" {
+		t.Fatalf("root apply calls stat=%q want 0", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.finalize_calls_total"]; got != "0" {
+		t.Fatalf("finalize calls stat=%q want 0", got)
+	}
 }
 
 func TestPublishOrderedRootDeltaGroupSystemBuilderFailureDoesNotCountRoots(t *testing.T) {
@@ -824,6 +850,15 @@ func TestPublishOrderedRootDeltaGroupSystemBuilderFailureDoesNotCountRoots(t *te
 	}
 	if got := stats["treedb.publish.ordered_root_delta_group.roots_total"]; got != "0" {
 		t.Fatalf("roots stat=%q want 0", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_calls_total"]; got != "1" {
+		t.Fatalf("root apply calls stat=%q want 1", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.system_apply_calls_total"]; got != "0" {
+		t.Fatalf("system apply calls stat=%q want 0", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.finalize_calls_total"]; got != "0" {
+		t.Fatalf("finalize calls stat=%q want 0", got)
 	}
 }
 

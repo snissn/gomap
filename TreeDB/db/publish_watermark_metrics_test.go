@@ -27,8 +27,20 @@ func TestEstimatePublishWatermarkPercentile_NonOverflow(t *testing.T) {
 
 func TestObserveOrderedRootDeltaGroupPublishStats(t *testing.T) {
 	db := &DB{}
-	db.observeOrderedRootDeltaGroupPublish(2*time.Millisecond, 3*time.Millisecond, 4, nil)
-	db.observeOrderedRootDeltaGroupPublish(time.Millisecond, time.Millisecond, 2, errTestFinalizeCommitFailpoint)
+	db.observeOrderedRootDeltaGroupPublish(2*time.Millisecond, 3*time.Millisecond, 4, orderedRootDeltaGroupPublishPhaseStats{
+		rootApplyNs:      uint64((7 * time.Millisecond).Nanoseconds()),
+		rootApplyCalls:   4,
+		systemBuildNs:    uint64((200 * time.Microsecond).Nanoseconds()),
+		systemApplyNs:    uint64((800 * time.Microsecond).Nanoseconds()),
+		systemApplyCalls: 1,
+		finalizeNs:       uint64((300 * time.Microsecond).Nanoseconds()),
+		finalizeCalls:    1,
+	}, nil)
+	db.observeOrderedRootDeltaGroupPublish(time.Millisecond, time.Millisecond, 2, orderedRootDeltaGroupPublishPhaseStats{
+		preflightNs:    uint64((100 * time.Microsecond).Nanoseconds()),
+		rootApplyNs:    uint64((2 * time.Millisecond).Nanoseconds()),
+		rootApplyCalls: 1,
+	}, errTestFinalizeCommitFailpoint)
 
 	stats := db.orderedRootDeltaGroupPublishStats()
 	if stats.calls != 2 {
@@ -54,6 +66,30 @@ func TestObserveOrderedRootDeltaGroupPublishStats(t *testing.T) {
 	}
 	if stats.latencyP99 <= 0 {
 		t.Fatalf("latencyP99=%v want >0", stats.latencyP99)
+	}
+	if stats.preflightNs != uint64((100 * time.Microsecond).Nanoseconds()) {
+		t.Fatalf("preflightNs=%d", stats.preflightNs)
+	}
+	if stats.rootApplyNs != uint64((9 * time.Millisecond).Nanoseconds()) {
+		t.Fatalf("rootApplyNs=%d", stats.rootApplyNs)
+	}
+	if stats.rootApplyCalls != 5 {
+		t.Fatalf("rootApplyCalls=%d want 5", stats.rootApplyCalls)
+	}
+	if stats.systemBuildNs != uint64((200 * time.Microsecond).Nanoseconds()) {
+		t.Fatalf("systemBuildNs=%d", stats.systemBuildNs)
+	}
+	if stats.systemApplyNs != uint64((800 * time.Microsecond).Nanoseconds()) {
+		t.Fatalf("systemApplyNs=%d", stats.systemApplyNs)
+	}
+	if stats.systemApplyCalls != 1 {
+		t.Fatalf("systemApplyCalls=%d want 1", stats.systemApplyCalls)
+	}
+	if stats.finalizeNs != uint64((300 * time.Microsecond).Nanoseconds()) {
+		t.Fatalf("finalizeNs=%d", stats.finalizeNs)
+	}
+	if stats.finalizeCalls != 1 {
+		t.Fatalf("finalizeCalls=%d want 1", stats.finalizeCalls)
 	}
 }
 

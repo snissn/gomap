@@ -1000,6 +1000,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	holdStart := time.Now()
 	wait := holdStart.Sub(lockStart)
 	rootsObserved := 0
+	phaseStats := orderedRootDeltaGroupPublishPhaseStats{}
 	finished := false
 	finishPublish := func() {
 		if finished {
@@ -1008,7 +1009,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 		finished = true
 		hold := time.Since(holdStart)
 		db.writeMu.Unlock()
-		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, err)
+		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, err)
 	}
 	cleanupIterators := func() {}
 	// finishPublish intentionally runs before iterator cleanup: caller-provided
@@ -1044,7 +1045,10 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 			return 0, nil, err
 		}
 		orderedConsumed[idx] = true
+		phaseStart := time.Now()
 		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(ordered[idx].BaseRoot, ordered[idx].Iter, opts)
+		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+		phaseStats.rootApplyCalls++
 		if err != nil {
 			return 0, nil, err
 		}
@@ -1054,14 +1058,19 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 		mergeOrderedRootPublishMetrics(&merged, metrics)
 	}
 
+	phaseStart := time.Now()
 	iter, err := buildSystemIter(append([]uint64(nil), rootIDs...))
+	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if err != nil {
 		return 0, nil, err
 	}
 	if iter == nil {
 		return 0, nil, errors.New("nil system root iterator")
 	}
+	phaseStart = time.Now()
 	rootID, rootRetired, metrics, publishStats, refDelta, err := db.publishOrderedRootIterator(baseSystemRoot, iter, systemOpts, true)
+	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	phaseStats.systemApplyCalls++
 	if err != nil {
 		return 0, nil, err
 	}
@@ -1096,7 +1105,11 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	if len(ordered) == 0 && !forceRefTrackerRebuild && vlogRefDelta == nil {
 		vlogRefDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
 	}
-	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil); err != nil {
+	phaseStart = time.Now()
+	err = db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil)
+	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	phaseStats.finalizeCalls++
+	if err != nil {
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
 			vlogRefDelta = nil
@@ -1154,6 +1167,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 	holdStart := time.Now()
 	wait := holdStart.Sub(lockStart)
 	rootsObserved := 0
+	phaseStats := orderedRootDeltaGroupPublishPhaseStats{}
 	finished := false
 	finishPublish := func() {
 		if finished {
@@ -1162,7 +1176,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 		finished = true
 		hold := time.Since(holdStart)
 		db.writeMu.Unlock()
-		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, err)
+		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, err)
 	}
 	rootIDs = make([]uint64, len(ordered))
 	orderedConsumed := make([]bool, len(ordered))
@@ -1179,9 +1193,12 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 	baseSystemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 	if preflight != nil {
+		phaseStart := time.Now()
 		if err = preflight(); err != nil {
+			phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 			return 0, nil, err
 		}
+		phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	}
 
 	systemOpts := systemRootOrderedPublishOptions(db)
@@ -1193,7 +1210,10 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 			return 0, nil, err
 		}
 		orderedConsumed[idx] = true
+		phaseStart := time.Now()
 		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(ordered[idx].BaseRoot, ordered[idx].Iter, opts)
+		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+		phaseStats.rootApplyCalls++
 		if err != nil {
 			return 0, nil, err
 		}
@@ -1203,14 +1223,19 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 		mergeOrderedRootPublishMetrics(&merged, metrics)
 	}
 
+	phaseStart := time.Now()
 	iter, err := buildSystemDeltaIter(append([]uint64(nil), rootIDs...))
+	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if err != nil {
 		return 0, nil, err
 	}
 	if iter == nil {
 		return 0, nil, errors.New("nil system root delta iterator")
 	}
+	phaseStart = time.Now()
 	rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(baseSystemRoot, iter, systemOpts)
+	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	phaseStats.systemApplyCalls++
 	if err != nil {
 		return 0, nil, err
 	}
@@ -1230,7 +1255,11 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 	// value-log ref delta for system-root pointer changes. Passing nil keeps the
 	// tracker conservative by invalidating it after commit.
 	var vlogRefDelta *valueLogRefDelta
-	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil); err != nil {
+	phaseStart = time.Now()
+	err = db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil)
+	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	phaseStats.finalizeCalls++
+	if err != nil {
 		return 0, nil, err
 	}
 	return newSystemRoot, rootIDs, nil
@@ -1252,6 +1281,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered []
 	holdStart := time.Now()
 	wait := holdStart.Sub(lockStart)
 	rootsObserved := 0
+	phaseStats := orderedRootDeltaGroupPublishPhaseStats{}
 	finished := false
 	finishPublish := func() {
 		if finished {
@@ -1260,7 +1290,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered []
 		finished = true
 		hold := time.Since(holdStart)
 		db.writeMu.Unlock()
-		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, err)
+		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, err)
 	}
 	defer finishPublish()
 
@@ -1274,9 +1304,12 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered []
 	baseSystemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 	if preflight != nil {
+		phaseStart := time.Now()
 		if err = preflight(); err != nil {
+			phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 			return 0, nil, err
 		}
+		phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	}
 
 	rootIDs = make([]uint64, len(ordered))
@@ -1288,7 +1321,10 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered []
 		if err != nil {
 			return 0, nil, err
 		}
+		phaseStart := time.Now()
 		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatch(ordered[idx].BaseRoot, ordered[idx].Delta, opts)
+		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+		phaseStats.rootApplyCalls++
 		if err != nil {
 			return 0, nil, err
 		}
@@ -1298,14 +1334,19 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered []
 		mergeOrderedRootPublishMetrics(&merged, metrics)
 	}
 
+	phaseStart := time.Now()
 	iter, err := buildSystemDeltaIter(append([]uint64(nil), rootIDs...))
+	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if err != nil {
 		return 0, nil, err
 	}
 	if iter == nil {
 		return 0, nil, errors.New("nil system root delta iterator")
 	}
+	phaseStart = time.Now()
 	rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(baseSystemRoot, iter, systemOpts)
+	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	phaseStats.systemApplyCalls++
 	if err != nil {
 		return 0, nil, err
 	}
@@ -1326,7 +1367,11 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered []
 	// delta can change collection descriptors. Keep the incremental ref tracker
 	// conservative by invalidating it after commit.
 	var vlogRefDelta *valueLogRefDelta
-	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil); err != nil {
+	phaseStart = time.Now()
+	err = db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil)
+	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	phaseStats.finalizeCalls++
+	if err != nil {
 		return 0, nil, err
 	}
 	return newSystemRoot, rootIDs, nil

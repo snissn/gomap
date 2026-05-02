@@ -665,6 +665,14 @@ func reportProfileBenchOrderedRootPublishStats(b *testing.B, after, before map[s
 	roots := profileBenchDeltaUintStat(after, before, prefix+"roots_total")
 	holdNs := profileBenchDeltaUintStat(after, before, prefix+"write_lock_hold_ns_total")
 	waitNs := profileBenchDeltaUintStat(after, before, prefix+"write_lock_wait_ns_total")
+	preflightNs := profileBenchDeltaUintStat(after, before, prefix+"preflight_ns_total")
+	rootApplyNs := profileBenchDeltaUintStat(after, before, prefix+"root_apply_ns_total")
+	rootApplyCalls := profileBenchDeltaUintStat(after, before, prefix+"root_apply_calls_total")
+	systemBuildNs := profileBenchDeltaUintStat(after, before, prefix+"system_build_ns_total")
+	systemApplyNs := profileBenchDeltaUintStat(after, before, prefix+"system_apply_ns_total")
+	systemApplyCalls := profileBenchDeltaUintStat(after, before, prefix+"system_apply_calls_total")
+	finalizeNs := profileBenchDeltaUintStat(after, before, prefix+"finalize_ns_total")
+	finalizeCalls := profileBenchDeltaUintStat(after, before, prefix+"finalize_calls_total")
 	b.ReportMetric(float64(calls), "publish_delta_group_calls")
 	b.ReportMetric(float64(calls)/float64(docs), "publish_delta_group_calls/doc")
 	b.ReportMetric(float64(roots)/float64(calls), "publish_delta_group_roots/call")
@@ -672,6 +680,20 @@ func reportProfileBenchOrderedRootPublishStats(b *testing.B, after, before map[s
 	b.ReportMetric(float64(waitNs)/float64(docs), "publish_delta_group_lock_wait_ns/doc")
 	b.ReportMetric(float64(holdNs)/float64(calls), "publish_delta_group_lock_hold_ns/call")
 	b.ReportMetric(float64(waitNs)/float64(calls), "publish_delta_group_lock_wait_ns/call")
+	b.ReportMetric(float64(preflightNs)/float64(docs), "publish_delta_group_preflight_ns/doc")
+	b.ReportMetric(float64(rootApplyNs)/float64(docs), "publish_delta_group_root_apply_ns/doc")
+	b.ReportMetric(float64(systemBuildNs)/float64(docs), "publish_delta_group_system_build_ns/doc")
+	b.ReportMetric(float64(systemApplyNs)/float64(docs), "publish_delta_group_system_apply_ns/doc")
+	b.ReportMetric(float64(finalizeNs)/float64(docs), "publish_delta_group_finalize_ns/doc")
+	if rootApplyCalls > 0 {
+		b.ReportMetric(float64(rootApplyNs)/float64(rootApplyCalls), "publish_delta_group_root_apply_ns/call")
+	}
+	if systemApplyCalls > 0 {
+		b.ReportMetric(float64(systemApplyNs)/float64(systemApplyCalls), "publish_delta_group_system_apply_ns/call")
+	}
+	if finalizeCalls > 0 {
+		b.ReportMetric(float64(finalizeNs)/float64(finalizeCalls), "publish_delta_group_finalize_ns/call")
+	}
 }
 
 func deltaCollectionManagerUpdateStats(after, before collections.CollectionManagerStats) collections.CollectionManagerStats {
