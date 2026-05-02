@@ -520,18 +520,18 @@ if [[ -n "$CONCURRENT_READER_SWEEP" && "$CONCURRENT_READERS" -gt 0 ]]; then
   exit 2
 fi
 if [[ -n "$CONCURRENT_READER_SWEEP" ]]; then
-  declare -A seen_reader_counts=()
+  seen_reader_counts=""
   validated_reader_counts=0
   for reader_count in ${CONCURRENT_READER_SWEEP//,/ }; do
     if ! is_positive_int "$reader_count"; then
       echo "invalid CONCURRENT_READER_SWEEP value: $reader_count" >&2
       exit 2
     fi
-    if [[ -n "${seen_reader_counts[$reader_count]:-}" ]]; then
+    if [[ " $seen_reader_counts " == *" $reader_count "* ]]; then
       echo "duplicate CONCURRENT_READER_SWEEP value: $reader_count" >&2
       exit 2
     fi
-    seen_reader_counts[$reader_count]=1
+    seen_reader_counts="$seen_reader_counts $reader_count"
     validated_reader_counts=$((validated_reader_counts + 1))
   done
   if [[ "$validated_reader_counts" -eq 0 ]]; then
