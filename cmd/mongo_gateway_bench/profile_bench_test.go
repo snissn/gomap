@@ -119,6 +119,12 @@ func TestProfileBenchDeltaUintStat(t *testing.T) {
 	if got := profileBenchDeltaUintStat(map[string]string{"x": "9"}, before, "x"); got != 0 {
 		t.Fatalf("delta underflow=%d want 0", got)
 	}
+	if got := profileBenchSignedDeltaUintStat(after, before, "x"); got != 7 {
+		t.Fatalf("signed delta x=%d want 7", got)
+	}
+	if got := profileBenchSignedDeltaUintStat(map[string]string{"x": "9"}, before, "x"); got != -1 {
+		t.Fatalf("signed delta underflow=%d want -1", got)
+	}
 	if got := profileBenchUintStat(after, "x"); got != 17 {
 		t.Fatalf("value x=%d want 17", got)
 	}
@@ -589,6 +595,23 @@ func profileBenchUintStat(stats map[string]string, key string) uint64 {
 	return v
 }
 
+func profileBenchSignedDeltaUintStat(after, before map[string]string, key string) int64 {
+	afterValue := profileBenchUintStat(after, key)
+	beforeValue := profileBenchUintStat(before, key)
+	if afterValue >= beforeValue {
+		delta := afterValue - beforeValue
+		if delta > uint64(^uint64(0)>>1) {
+			return int64(^uint64(0) >> 1)
+		}
+		return int64(delta)
+	}
+	delta := beforeValue - afterValue
+	if delta > uint64(^uint64(0)>>1) {
+		return -int64(^uint64(0)>>1) - 1
+	}
+	return -int64(delta)
+}
+
 func reportProfileBenchBackendVlogMmapStats(b *testing.B, after, before map[string]string, docs int) {
 	if docs <= 0 {
 		return
@@ -604,15 +627,14 @@ func reportProfileBenchBackendVlogMmapStats(b *testing.B, after, before map[stri
 	reportPerDoc("backend_vlog_mmap_fallback_readat/doc", "treedb.vlog.mmap_read.fallback_readat")
 	reportPerDoc("backend_vlog_mmap_sealed_denied_count_cap/doc", "treedb.vlog.mmap_sealed_map_denied.count_cap")
 	reportPerDoc("backend_vlog_mmap_sealed_denied_bytes_cap/doc", "treedb.vlog.mmap_sealed_map_denied.bytes_cap")
-	if hits := profileBenchDeltaUintStat(after, before, "treedb.vlog.mmap_read.hits"); hits > 0 {
-		fallbacks := profileBenchDeltaUintStat(after, before, "treedb.vlog.mmap_read.fallback_readat")
-		total := hits + fallbacks
-		if total > 0 {
-			b.ReportMetric(float64(hits)/float64(total), "backend_vlog_mmap_hit_ratio")
-		}
+	hits := profileBenchDeltaUintStat(after, before, "treedb.vlog.mmap_read.hits")
+	fallbacks := profileBenchDeltaUintStat(after, before, "treedb.vlog.mmap_read.fallback_readat")
+	if total := hits + fallbacks; total > 0 {
+		b.ReportMetric(float64(hits)/float64(total), "backend_vlog_mmap_hit_ratio")
 	}
-	dead := profileBenchDeltaUintStat(after, before, "treedb.vlog.mmap_dead_mappings")
-	b.ReportMetric(float64(dead), "backend_vlog_mmap_dead_mappings_delta")
+	deadDelta := profileBenchSignedDeltaUintStat(after, before, "treedb.vlog.mmap_dead_mappings")
+	b.ReportMetric(float64(deadDelta), "backend_vlog_mmap_dead_mappings_delta")
+	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.mmap_dead_mappings")), "backend_vlog_mmap_dead_mappings")
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.mmap_sealed_segments")), "backend_vlog_mmap_sealed_segments")
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.mmap_sealed_bytes")), "backend_vlog_mmap_sealed_bytes")
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.mmap_active_segments")), "backend_vlog_mmap_active_segments")
