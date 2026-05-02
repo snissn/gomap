@@ -460,8 +460,13 @@ type collectionMetaDisk struct {
 type collectionCatalog struct {
 	// collectionCatalog is immutable once cached or published. Root updates must
 	// create a replacement catalog via cloneCatalogWithRootUpdates.
-	meta  CollectionMeta
-	roots map[string]uint64
+	meta               CollectionMeta
+	roots              map[string]uint64
+	primaryRootName    string
+	templateRootName   string
+	indexStateRootName string
+	indexRuntimes      []indexRuntime
+	indexRuntimesErr   error
 }
 
 type createIndexBackfillPlan struct {
@@ -6623,9 +6628,20 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		}
 	}
 
-	primaryRoot := catalog.rootID(collectionPrimaryRootName(meta.Name))
+	primaryRootName := catalog.primaryRootName
+	if primaryRootName == "" {
+		primaryRootName = collectionPrimaryRootName(meta.Name)
+	}
+	templateRootName := catalog.templateRootName
+	if templateRootName == "" {
+		templateRootName = collectionTemplateRootName(meta.Name)
+	}
+	indexStateRootName := catalog.indexStateRootName
+	if indexStateRootName == "" {
+		indexStateRootName = collectionIndexStateRootName(meta.Name)
+	}
+	primaryRoot := catalog.rootID(primaryRootName)
 	if primaryRoot == 0 && !bufferedRead.enabled {
-		primaryRootName := collectionPrimaryRootName(meta.Name)
 		plan := newUpdateBatchPlan()
 		*plan = updateBatchPlan{
 			results:                results,
@@ -6643,10 +6659,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		}
 		return plan, nil
 	}
-	runtimes, err := (insertBatchPlanner{
-		collection: meta.Name,
-		indexes:    plannerIndexes(meta.Indexes),
-	}).indexRuntimes()
+	runtimes, err := catalog.cachedIndexRuntimes()
 	if err != nil {
 		_ = snap.Close()
 		return nil, err
@@ -6831,7 +6844,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		templatePlan := &insertBatchPlan{}
 		if err := (insertBatchPlanner{
 			collection:             meta.Name,
-			templateRoot:           collectionTemplateRootName(meta.Name),
+			templateRoot:           templateRootName,
 			options:                plannerOptions,
 			cloneTemplateRunValues: true,
 		}).emitTemplateRun(templatePlan, templateRecords); err != nil {
@@ -6847,7 +6860,6 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		stats.TemplateRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
 	}
 
-	primaryRootName := collectionPrimaryRootName(meta.Name)
 	rootNames = append(rootNames, primaryRootName)
 	uniqueSecondary = append(uniqueSecondary, -1)
 	baseRootIDs[primaryRootName] = primaryRoot
@@ -6884,7 +6896,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		}
 		if stateTable != nil && stateTable.Len() > 0 {
 			stateTable.Freeze()
-			stateRootName := collectionIndexStateRootName(meta.Name)
+			stateRootName := indexStateRootName
 			rootNames = append(rootNames, stateRootName)
 			uniqueSecondary = append(uniqueSecondary, -1)
 			baseRootIDs[stateRootName] = catalog.rootID(stateRootName)
@@ -6899,7 +6911,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 				continue
 			}
 			for runtimeIdx, runtime := range runtimes {
-				rootName := collectionSecondaryRootName(meta.Name, runtime.def.name)
+				rootName := runtimeSecondaryRootName(meta.Name, runtime)
 				table := secondaryTables[rootName]
 				if table == nil {
 					table = newCollectionRunTable(0)
@@ -6928,7 +6940,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			}
 		}
 		for runtimeIdx, runtime := range runtimes {
-			rootName := collectionSecondaryRootName(meta.Name, runtime.def.name)
+			rootName := runtimeSecondaryRootName(meta.Name, runtime)
 			table := secondaryTables[rootName]
 			if table == nil || table.Len() == 0 {
 				continue
@@ -7572,7 +7584,38 @@ func cloneCatalogWithRootUpdates(base *collectionCatalog, meta CollectionMeta, r
 			roots[name] = rootIDs[i]
 		}
 	}
-	return &collectionCatalog{meta: copyCollectionMeta(meta), roots: roots}
+	return newCollectionCatalog(copyCollectionMeta(meta), roots)
+}
+
+func newCollectionCatalog(meta CollectionMeta, roots map[string]uint64) *collectionCatalog {
+	catalog := &collectionCatalog{
+		meta:               meta,
+		roots:              roots,
+		primaryRootName:    collectionPrimaryRootName(meta.Name),
+		templateRootName:   collectionTemplateRootName(meta.Name),
+		indexStateRootName: collectionIndexStateRootName(meta.Name),
+	}
+	if len(meta.Indexes) > 0 {
+		catalog.indexRuntimes, catalog.indexRuntimesErr = (insertBatchPlanner{
+			collection: meta.Name,
+			indexes:    plannerIndexes(meta.Indexes),
+		}).indexRuntimes()
+	}
+	return catalog
+}
+
+func (c *collectionCatalog) cachedIndexRuntimes() ([]indexRuntime, error) {
+	if c == nil {
+		return nil, nil
+	}
+	return c.indexRuntimes, c.indexRuntimesErr
+}
+
+func runtimeSecondaryRootName(collection string, runtime indexRuntime) string {
+	if runtime.secondaryRootName != "" {
+		return runtime.secondaryRootName
+	}
+	return collectionSecondaryRootName(collection, runtime.def.name)
 }
 
 func buildDeleteRootDeltaTable(deleteKeys [][]byte) memtable.Table {
@@ -8986,7 +9029,7 @@ func loadCollectionCatalog(snap *backenddb.Snapshot, name string) (*collectionCa
 		}
 		roots[rootName] = rootID
 	}
-	return &collectionCatalog{meta: meta, roots: roots}, nil
+	return newCollectionCatalog(meta, roots), nil
 }
 
 func (c *collectionCatalog) rootID(rootName string) uint64 {
@@ -9004,10 +9047,7 @@ func (c *collectionCatalog) copy() *collectionCatalog {
 	for name, rootID := range c.roots {
 		roots[name] = rootID
 	}
-	return &collectionCatalog{
-		meta:  copyCollectionMeta(c.meta),
-		roots: roots,
-	}
+	return newCollectionCatalog(copyCollectionMeta(c.meta), roots)
 }
 
 func getSystemValue(snap *backenddb.Snapshot, key string) ([]byte, bool, error) {
