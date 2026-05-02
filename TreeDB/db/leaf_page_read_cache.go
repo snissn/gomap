@@ -17,12 +17,13 @@ const (
 
 var LeafPageReadCacheEntries = defaultLeafPageReadCacheEntries
 
-func init() {
+func configuredLeafPageReadCacheEntries() int {
 	if raw := strings.TrimSpace(os.Getenv(leafPageReadCacheEntriesEnvKey)); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
-			LeafPageReadCacheEntries = v
+			return v
 		}
 	}
+	return LeafPageReadCacheEntries
 }
 
 type leafPageReadCacheEntry struct {
@@ -154,7 +155,7 @@ func (db *DB) leafPageReader(fallback zipper.LeafPageReader) zipper.LeafPageRead
 func (r *cachedLeafPageReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	if key, err := page.LeafLogPtrFromValuePtr(ptr); err == nil {
 		if data, ok := r.cache.get(key); ok {
-			return data, nil
+			return cloneLeafPageReadCacheData(data), nil
 		}
 	}
 	return r.fallback.ReadUnsafe(ptr)
@@ -168,7 +169,7 @@ func (r *cachedLeafPageReader) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]by
 				copy(dst, data)
 				return dst, true, nil
 			}
-			return data, false, nil
+			return cloneLeafPageReadCacheData(data), false, nil
 		}
 	}
 	if toReader, ok := r.fallback.(interface {
@@ -178,6 +179,15 @@ func (r *cachedLeafPageReader) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]by
 	}
 	data, err := r.fallback.ReadUnsafe(ptr)
 	return data, false, err
+}
+
+func cloneLeafPageReadCacheData(data []byte) []byte {
+	if len(data) == 0 {
+		return nil
+	}
+	owned := make([]byte, len(data))
+	copy(owned, data)
+	return owned
 }
 
 func (db *DB) storeLeafPageReadCache(ptr page.LeafLogPtr, leafPage []byte) {

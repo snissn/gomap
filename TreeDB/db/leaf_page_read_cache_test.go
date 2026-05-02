@@ -36,6 +36,20 @@ func (f *leafPageCacheTestFallback) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) 
 	return f.data, false, nil
 }
 
+type leafPageCacheUnsafeOnlyFallback struct {
+	readUnsafeCalls int
+	err             error
+	data            []byte
+}
+
+func (f *leafPageCacheUnsafeOnlyFallback) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	f.readUnsafeCalls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.data, nil
+}
+
 func TestCachedLeafPageReaderHitAvoidsFallback(t *testing.T) {
 	cache := newLeafPageReadCache(8)
 	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
@@ -68,6 +82,63 @@ func TestCachedLeafPageReaderHitAvoidsFallback(t *testing.T) {
 	}
 }
 
+func TestCachedLeafPageReaderHitReturnsOwnedBytes(t *testing.T) {
+	cache := newLeafPageReadCache(8)
+	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+	leaf := bytes.Repeat([]byte{0x42}, page.PageSize)
+	cache.store(ptr, leaf)
+
+	fallback := &leafPageCacheTestFallback{err: errors.New("fallback should not be used")}
+	reader := newCachedLeafPageReader(cache, fallback)
+
+	got, err := reader.ReadUnsafe(ptr.ValuePtr())
+	if err != nil {
+		t.Fatalf("ReadUnsafe: %v", err)
+	}
+	got[0] = 0
+	dst := make([]byte, 0, page.PageSize)
+	again, usedDst, err := reader.ReadUnsafeTo(ptr.ValuePtr(), dst)
+	if err != nil {
+		t.Fatalf("ReadUnsafeTo: %v", err)
+	}
+	if !usedDst {
+		t.Fatalf("expected cache hit to copy into caller dst")
+	}
+	if again[0] != 0x42 {
+		t.Fatalf("cache hit returned mutable cache backing; first byte=%x", again[0])
+	}
+}
+
+func TestCachedLeafPageReaderHitWithSmallDstReturnsOwnedBytes(t *testing.T) {
+	cache := newLeafPageReadCache(8)
+	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+	leaf := bytes.Repeat([]byte{0x42}, page.PageSize)
+	cache.store(ptr, leaf)
+
+	fallback := &leafPageCacheTestFallback{err: errors.New("fallback should not be used")}
+	reader := newCachedLeafPageReader(cache, fallback)
+
+	got, usedDst, err := reader.ReadUnsafeTo(ptr.ValuePtr(), nil)
+	if err != nil {
+		t.Fatalf("ReadUnsafeTo: %v", err)
+	}
+	if usedDst {
+		t.Fatalf("nil dst should not report usedDst")
+	}
+	got[0] = 0
+	dst := make([]byte, 0, page.PageSize)
+	again, usedDst, err := reader.ReadUnsafeTo(ptr.ValuePtr(), dst)
+	if err != nil {
+		t.Fatalf("ReadUnsafeTo again: %v", err)
+	}
+	if !usedDst {
+		t.Fatalf("expected second cache hit to copy into caller dst")
+	}
+	if again[0] != 0x42 {
+		t.Fatalf("small-dst cache hit returned mutable cache backing; first byte=%x", again[0])
+	}
+}
+
 func TestCachedLeafPageReaderMissUsesFallback(t *testing.T) {
 	cache := newLeafPageReadCache(8)
 	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
@@ -90,6 +161,44 @@ func TestCachedLeafPageReaderMissUsesFallback(t *testing.T) {
 	}
 	if stats := cache.stats(); stats.Misses != 1 {
 		t.Fatalf("misses=%d, want 1", stats.Misses)
+	}
+}
+
+func TestCachedLeafPageReaderMissUsesReadUnsafeFallback(t *testing.T) {
+	cache := newLeafPageReadCache(8)
+	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+	fallbackData := bytes.Repeat([]byte{0x24}, page.PageSize)
+	fallback := &leafPageCacheUnsafeOnlyFallback{data: fallbackData}
+	reader := newCachedLeafPageReader(cache, fallback)
+
+	got, usedDst, err := reader.ReadUnsafeTo(ptr.ValuePtr(), make([]byte, 0, page.PageSize))
+	if err != nil {
+		t.Fatalf("ReadUnsafeTo: %v", err)
+	}
+	if usedDst {
+		t.Fatalf("ReadUnsafe fallback should not report usedDst")
+	}
+	if !bytes.Equal(got, fallbackData) {
+		t.Fatalf("fallback data mismatch")
+	}
+	if fallback.readUnsafeCalls != 1 {
+		t.Fatalf("fallback ReadUnsafe calls=%d, want 1", fallback.readUnsafeCalls)
+	}
+	if stats := cache.stats(); stats.Misses != 1 {
+		t.Fatalf("misses=%d, want 1", stats.Misses)
+	}
+}
+
+func TestConfiguredLeafPageReadCacheEntriesReadsEnvAtOpenTime(t *testing.T) {
+	prev := LeafPageReadCacheEntries
+	LeafPageReadCacheEntries = 8
+	t.Cleanup(func() {
+		LeafPageReadCacheEntries = prev
+	})
+	t.Setenv(leafPageReadCacheEntriesEnvKey, "3")
+
+	if got := configuredLeafPageReadCacheEntries(); got != 3 {
+		t.Fatalf("configuredLeafPageReadCacheEntries()=%d, want env override 3", got)
 	}
 }
 
