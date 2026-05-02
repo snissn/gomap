@@ -2902,6 +2902,136 @@ func TestCollectionIndexedWriteMemtablesAsyncBackpressurePublishesSynchronously(
 	}
 }
 
+func TestCollectionIndexedWriteMemtablesAsyncBackpressureWaitsForPublishingUnit(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        100,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 1,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com"}`)},
+	); err != nil {
+		t.Fatalf("seed insert batch: %v", err)
+	}
+
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare async publish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepare async publish returned nil work")
+	}
+	var asyncFinished atomic.Bool
+	finishAsync := func(err error) {
+		if asyncFinished.CompareAndSwap(false, true) {
+			col.writeDomain.finishIndexedAsyncFlush(err)
+		}
+	}
+	if !col.writeDomain.beginIndexedAsyncFlush() {
+		t.Fatal("begin async flush returned false")
+	}
+	t.Cleanup(func() {
+		if !asyncFinished.Load() && work.pin != nil {
+			_ = work.pin.Close()
+			work.pin = nil
+		}
+		finishAsync(errors.New("test cleanup"))
+	})
+
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{[]byte(`{"email":"grace@example.com"}`)},
+	); err != nil {
+		t.Fatalf("second insert batch: %v", err)
+	}
+
+	backpressureDone := make(chan error, 1)
+	go func() {
+		col.writeDomain.mu.Lock()
+		_, err := col.flushBufferedIndexedAfterThresholdLocked(col.writeDomain, CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        1,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 1,
+		})
+		col.writeDomain.mu.Unlock()
+		backpressureDone <- err
+	}()
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if mgr.StatsSnapshot().IndexedAsyncFlushBackpressure > 0 {
+			break
+		}
+		select {
+		case err := <-backpressureDone:
+			t.Fatalf("backpressure flush returned before in-flight async publish drained: %v", err)
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if got := mgr.StatsSnapshot().IndexedAsyncFlushBackpressure; got == 0 {
+		t.Fatal("async backpressure did not wait for in-flight publishing unit")
+	}
+
+	publishDone := make(chan error, 1)
+	go func() {
+		err := col.publishPreparedIndexedFlush(work)
+		finishAsync(err)
+		publishDone <- err
+	}()
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("publish prepared async flush: %v", err)
+		}
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("timed out publishing prepared async flush")
+	}
+	select {
+	case err := <-backpressureDone:
+		if err != nil {
+			t.Fatalf("backpressure flush: %v", err)
+		}
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("timed out waiting for backpressure flush")
+	}
+
+	stats := mgr.StatsSnapshot()
+	if got := stats.PendingIndexedFlushUnits; got != 0 {
+		t.Fatalf("pending indexed flush units after backpressure drain=%d want 0", got)
+	}
+	if got := stats.PendingDocuments; got != 0 {
+		t.Fatalf("pending documents after backpressure drain=%d want 0", got)
+	}
+	for _, id := range []string{"u1", "u2"} {
+		got, err := col.Get([]byte(id))
+		if err != nil {
+			t.Fatalf("get %s: %v", id, err)
+		}
+		if len(got) == 0 {
+			t.Fatalf("get %s returned empty document", id)
+		}
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesAsyncScheduleRacePublishesSynchronously(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -2989,6 +3119,475 @@ func TestCollectionIndexedWriteMemtablesAsyncQueuedUnitsParticipateInUniqueCheck
 	if err == nil || !errors.Is(err, ErrUniqueIndexConflict) {
 		t.Fatalf("duplicate queued unique insert err=%v want ErrUniqueIndexConflict", err)
 	}
+}
+
+func TestCollectionIndexedWriteMemtablesAsyncPublishingUnitsParticipateInReadsAndUniqueChecks(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        1024,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", Unique: true},
+			{Name: "city", Field: "city"},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"email":"ada@example.com","city":"hnl"}`),
+			[]byte(`{"email":"grace@example.com","city":"hnl"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare async publish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepare async publish returned nil work")
+	}
+	if got := mgr.StatsSnapshot().PendingIndexedFlushUnits; got != 1 {
+		t.Fatalf("pending publishing units=%d want 1", got)
+	}
+	got, err := col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get publishing doc: %v", err)
+	}
+	if want := []byte(`{"email":"grace@example.com","city":"hnl"}`); !bytes.Equal(got, want) {
+		t.Fatalf("publishing doc=%q want %q", got, want)
+	}
+	ids, err := col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find publishing city: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u1"), []byte("u2"))
+	_, err = col.InsertBatch(
+		[][]byte{[]byte("u3")},
+		[][]byte{[]byte(`{"email":"grace@example.com","city":"sfo"}`)},
+	)
+	if err == nil || !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("duplicate publishing unique insert err=%v want ErrUniqueIndexConflict", err)
+	}
+	if err := col.publishPreparedIndexedFlush(work); err != nil {
+		t.Fatalf("publish prepared async flush: %v", err)
+	}
+	if got := mgr.StatsSnapshot().PendingDocuments; got != 0 {
+		t.Fatalf("pending docs after publish=%d want 0", got)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesFlushWaitsForPublishingUnits(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        1024,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare async publish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepare async publish returned nil work")
+	}
+	var asyncFinished atomic.Bool
+	finishAsync := func(err error) {
+		if asyncFinished.CompareAndSwap(false, true) {
+			col.writeDomain.finishIndexedAsyncFlush(err)
+		}
+	}
+	if !col.writeDomain.beginIndexedAsyncFlush() {
+		t.Fatal("begin async flush returned false")
+	}
+	t.Cleanup(func() {
+		if !asyncFinished.Load() && work.pin != nil {
+			_ = work.pin.Close()
+			work.pin = nil
+		}
+		finishAsync(errors.New("test cleanup"))
+	})
+
+	flushDone := make(chan error, 1)
+	go func() {
+		flushDone <- col.flushBufferedWrites()
+	}()
+	select {
+	case err := <-flushDone:
+		t.Fatalf("flush returned before in-flight async publish drained: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	publishDone := make(chan error, 1)
+	go func() {
+		err := col.publishPreparedIndexedFlush(work)
+		finishAsync(err)
+		publishDone <- err
+	}()
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("publish prepared async flush: %v", err)
+		}
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("timed out publishing prepared async flush")
+	}
+	select {
+	case err := <-flushDone:
+		if err != nil {
+			t.Fatalf("flush after in-flight async publish: %v", err)
+		}
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("timed out waiting for flush after publish")
+	}
+	if got := mgr.StatsSnapshot().PendingDocuments; got != 0 {
+		t.Fatalf("pending docs after async publish=%d want 0", got)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesFlushRetriesAsyncScheduledDuringWaitGap(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        1024,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	domain := col.writeDomain
+	domain.mu.Lock()
+	scanDone := make(chan error, 1)
+	go func() {
+		_, err := col.ScanDocumentsFunc(16, func(DocumentRecord) (bool, error) {
+			return true, nil
+		})
+		scanDone <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+	if !domain.beginIndexedAsyncFlush() {
+		domain.mu.Unlock()
+		t.Fatal("begin async flush returned false")
+	}
+	work, err := col.prepareIndexedAsyncPublishLocked(domain)
+	if err != nil {
+		domain.mu.Unlock()
+		domain.finishIndexedAsyncFlush(err)
+		t.Fatalf("prepare async publish: %v", err)
+	}
+	if work == nil {
+		domain.mu.Unlock()
+		domain.finishIndexedAsyncFlush(nil)
+		t.Fatal("prepare async publish returned nil work")
+	}
+	domain.mu.Unlock()
+
+	var asyncFinished atomic.Bool
+	finishAsync := func(err error) {
+		if asyncFinished.CompareAndSwap(false, true) {
+			domain.finishIndexedAsyncFlush(err)
+		}
+	}
+	t.Cleanup(func() {
+		if !asyncFinished.Load() && work.pin != nil {
+			_ = work.pin.Close()
+			work.pin = nil
+		}
+		finishAsync(errors.New("test cleanup"))
+	})
+
+	select {
+	case err := <-scanDone:
+		t.Fatalf("scan returned before scheduled async publish drained: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	publishDone := make(chan error, 1)
+	go func() {
+		err := col.publishPreparedIndexedFlush(work)
+		finishAsync(err)
+		publishDone <- err
+	}()
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("publish prepared async flush: %v", err)
+		}
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("timed out publishing prepared async flush")
+	}
+	select {
+	case err := <-scanDone:
+		if err != nil {
+			t.Fatalf("scan after scheduled async publish: %v", err)
+		}
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("timed out waiting for scan after publish")
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesCreateIndexWaitsForPublishingUnits(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        1024,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com","city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare async publish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepare async publish returned nil work")
+	}
+	var asyncFinished atomic.Bool
+	finishAsync := func(err error) {
+		if asyncFinished.CompareAndSwap(false, true) {
+			col.writeDomain.finishIndexedAsyncFlush(err)
+		}
+	}
+	if !col.writeDomain.beginIndexedAsyncFlush() {
+		t.Fatal("begin async flush returned false")
+	}
+	t.Cleanup(func() {
+		if !asyncFinished.Load() && work.pin != nil {
+			_ = work.pin.Close()
+			work.pin = nil
+		}
+		finishAsync(errors.New("test cleanup"))
+	})
+
+	createDone := make(chan error, 1)
+	go func() {
+		_, err := col.CreateIndex(IndexDefinition{Name: "city", Field: "city"})
+		createDone <- err
+	}()
+	select {
+	case err := <-createDone:
+		t.Fatalf("CreateIndex returned before in-flight async publish drained: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	publishDone := make(chan error, 1)
+	go func() {
+		err := col.publishPreparedIndexedFlush(work)
+		finishAsync(err)
+		publishDone <- err
+	}()
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("publish prepared async flush: %v", err)
+		}
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("timed out publishing prepared async flush")
+	}
+	select {
+	case err := <-createDone:
+		if err != nil {
+			t.Fatalf("CreateIndex after in-flight async publish: %v", err)
+		}
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("timed out waiting for CreateIndex after publish")
+	}
+	ids, err := col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find city after CreateIndex: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u1"))
+}
+
+func TestCollectionIndexedWriteMemtablesAsyncSuccessClearsPriorError(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        1024,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	col.writeDomain.finishIndexedAsyncFlush(errors.New("prior async failure"))
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare async publish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepare async publish returned nil work")
+	}
+	if err := col.publishPreparedIndexedFlush(work); err != nil {
+		t.Fatalf("publish prepared async flush: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush after successful async publish surfaced stale error: %v", err)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesAsyncPublishRetargetsMutableRuns(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        1024,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl","score":1}`)},
+	); err != nil {
+		t.Fatalf("insert first batch: %v", err)
+	}
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare async publish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepare async publish returned nil work")
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{[]byte(`{"city":"hnl","score":2}`)},
+	); err != nil {
+		t.Fatalf("insert while publish is in flight: %v", err)
+	}
+	if err := col.publishPreparedIndexedFlush(work); err != nil {
+		t.Fatalf("publish prepared async flush: %v", err)
+	}
+	if got := mgr.StatsSnapshot().PendingDocuments; got != 1 {
+		t.Fatalf("pending docs after publish=%d want mutable doc", got)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush mutable runs after publish retarget: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	ids, err := reopenedCol.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find city after retargeted flush: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u1"), []byte("u2"))
 }
 
 func TestCollectionIndexedWriteMemtablesAsyncUpdateAndDeleteDrainCorrectly(t *testing.T) {
