@@ -1844,8 +1844,10 @@ func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
 	})
 	assertCommandError(t, missingValueType, "BadValue")
 	errmsg, ok := bson.Raw(missingValueType).Lookup("errmsg").StringValueOK()
-	if !ok || !strings.Contains(errmsg, "treedbValueType") {
-		t.Fatalf("missing value type errmsg=%q ok=%v want treedbValueType", errmsg, ok)
+	for _, want := range []string{"treedbValueType", "email_1", "email"} {
+		if !ok || !strings.Contains(errmsg, want) {
+			t.Fatalf("missing value type errmsg=%q ok=%v want %q", errmsg, ok, want)
+		}
 	}
 
 	invalidListCollectionsDB := serveCommand(t, server, 234, bson.D{

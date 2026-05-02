@@ -1928,7 +1928,7 @@ func parseCreateIndexDefinition(doc wire.Document) (collections.IndexDefinition,
 		return collections.IndexDefinition{}, err
 	}
 	if !valueTypePresent {
-		return collections.IndexDefinition{}, errors.New("Mongo gateway createIndexes requires treedbValueType")
+		return collections.IndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes index %q on field %q requires treedbValueType", name, field)
 	}
 	valueType := collections.IndexValueType(valueTypeRaw)
 	switch valueType {

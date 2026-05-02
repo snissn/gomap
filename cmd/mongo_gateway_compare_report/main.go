@@ -821,14 +821,13 @@ func (cmp phaseComparison) TreeDBRangeIndex() bool {
 }
 
 func rangeMode(name string) string {
-	switch name {
-	case "age_range_indexed_limit_10":
+	if strings.Contains(name, "_range_indexed_") {
 		return "indexed"
-	case "age_range_scan_limit_10", "age_range_limit_10":
-		return "scan"
-	default:
-		return ""
 	}
+	if strings.Contains(name, "_range_scan_") || strings.Contains(name, "_range_limit_") {
+		return "scan"
+	}
+	return ""
 }
 
 func formatRangeMode(name string) string {

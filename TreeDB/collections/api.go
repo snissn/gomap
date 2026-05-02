@@ -6383,7 +6383,10 @@ func bufferedIndexPrefixTableLocked(domain *collectionWriteDomain, collectionNam
 // bufferedIndexRangeTableLocked materializes all buffered entries in a secondary
 // index range while domain.mu is held. It intentionally does not apply a result
 // limit because buffered tombstones outside the first live matches can suppress
-// persisted entries later in the same range.
+// persisted entries later in the same range. The source run tables are pooled
+// and may be reset by a concurrent flush as soon as domain.mu is released, so
+// callers must materialize an owned table before merging with the persisted
+// snapshot iterator.
 func bufferedIndexRangeTableLocked(domain *collectionWriteDomain, collectionName, indexName string, start, end []byte) (memtable.Table, error) {
 	if domain == nil {
 		return nil, nil

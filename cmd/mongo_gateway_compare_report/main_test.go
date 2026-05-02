@@ -139,8 +139,11 @@ func TestRangeModeLabelsIndexedAndScanPhases(t *testing.T) {
 		want string
 	}{
 		{name: "age_range_indexed_limit_10", want: "indexed"},
+		{name: "score_range_indexed_limit_50", want: "indexed"},
 		{name: "age_range_scan_limit_10", want: "scan"},
+		{name: "score_range_scan_limit_50", want: "scan"},
 		{name: "age_range_limit_10", want: "scan"},
+		{name: "score_range_limit_50", want: "scan"},
 		{name: "id_find_one", want: ""},
 	} {
 		if got := rangeMode(tc.name); got != tc.want {
