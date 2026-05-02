@@ -3187,17 +3187,25 @@ func uniqueCollectionIndexNames(meta CollectionMeta) map[string]struct{} {
 	return uniqueIndexes
 }
 
-func uniqueCollectionSecondaryRootNames(meta CollectionMeta) map[string]string {
-	var uniqueRoots map[string]string
+func uniqueCollectionSecondaryIndexForRootName(meta CollectionMeta, rootName string) (IndexDefinition, bool) {
+	if !strings.HasPrefix(rootName, meta.Name) {
+		return IndexDefinition{}, false
+	}
+	suffix := rootName[len(meta.Name):]
+	const indexRootPrefix = "/index/"
+	if !strings.HasPrefix(suffix, indexRootPrefix) {
+		return IndexDefinition{}, false
+	}
+	indexName := suffix[len(indexRootPrefix):]
+	if indexName == "" {
+		return IndexDefinition{}, false
+	}
 	for _, idx := range meta.Indexes {
-		if idx.Unique {
-			if uniqueRoots == nil {
-				uniqueRoots = make(map[string]string, len(meta.Indexes))
-			}
-			uniqueRoots[collectionSecondaryRootName(meta.Name, idx.Name)] = idx.Name
+		if idx.Unique && idx.Name == indexName {
+			return idx, true
 		}
 	}
-	return uniqueRoots
+	return IndexDefinition{}, false
 }
 
 func rejectBufferedUniqueIndexConflicts(indexName string, valueType IndexValueType, pendingIndex *bufferedUniqueValueIndex, batchIndex memtable.Table) error {
@@ -7101,11 +7109,11 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	if domain.rootRuns == nil {
 		domain.rootRuns = make(map[string][]memtable.Table, len(plan.rootNames))
 	}
-	uniqueSecondaryRoots := uniqueCollectionSecondaryRootNames(plan.meta)
+	hasUniqueSecondaryRoots := collectionMetaHasSecondaryUniqueIndex(plan.meta)
 	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, stagedBytes, stagedRootRuns)
-	if !shouldAutoFlushAfterAdding && len(uniqueSecondaryRoots) > 0 && bufferedIndexedAutoFlushEnabled(plan.meta.Options) {
+	if !shouldAutoFlushAfterAdding && hasUniqueSecondaryRoots && bufferedIndexedAutoFlushEnabled(plan.meta.Options) {
 		for i, rootName := range plan.rootNames {
-			if _, ok := uniqueSecondaryRoots[rootName]; !ok {
+			if _, ok := uniqueCollectionSecondaryIndexForRootName(plan.meta, rootName); !ok {
 				continue
 			}
 			table := plan.deltaTables[i]
@@ -7142,11 +7150,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 				return false, err
 			}
 		}
-		if indexName, ok := uniqueSecondaryRoots[rootName]; ok {
-			indexDef, ok := findIndex(plan.meta.Indexes, indexName)
-			if !ok {
-				return false, fmt.Errorf("collections: unique index %q missing from schema", indexName)
-			}
+		if indexDef, ok := uniqueCollectionSecondaryIndexForRootName(plan.meta, rootName); ok {
 			uniqueValueTable, uniquePrefixes, err := bufferedUniqueIndexValueRun(table, indexDef.ValueType)
 			if err != nil {
 				if shouldAutoFlushAfterAdding {
@@ -7161,11 +7165,11 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 			if domain.uniqueValueIndex == nil {
 				domain.uniqueValueIndex = make(map[string]*bufferedUniqueValueIndex)
 			}
-			domain.uniqueValueRuns[indexName] = append(domain.uniqueValueRuns[indexName], uniqueValueTable)
-			index := domain.uniqueValueIndex[indexName]
+			domain.uniqueValueRuns[indexDef.Name] = append(domain.uniqueValueRuns[indexDef.Name], uniqueValueTable)
+			index := domain.uniqueValueIndex[indexDef.Name]
 			if index == nil {
 				index = newBufferedUniqueValueIndex(max(1, len(uniquePrefixes)))
-				domain.uniqueValueIndex[indexName] = index
+				domain.uniqueValueIndex[indexDef.Name] = index
 			}
 			index.addAll(uniquePrefixes)
 			stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, uniqueValueTable.Size())

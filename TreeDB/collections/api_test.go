@@ -642,6 +642,34 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 	}
 }
 
+func TestUniqueCollectionSecondaryIndexForRootNameAvoidsMapAllocation(t *testing.T) {
+	meta := CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}
+	idx, ok := uniqueCollectionSecondaryIndexForRootName(meta, "users/index/email")
+	if !ok {
+		t.Fatal("unique root lookup did not find email index")
+	}
+	if got, want := idx.Name, "email"; got != want {
+		t.Fatalf("unique root lookup index=%q want %q", got, want)
+	}
+	if _, ok := uniqueCollectionSecondaryIndexForRootName(meta, "users/index/city"); ok {
+		t.Fatal("non-unique city index reported as unique")
+	}
+	if _, ok := uniqueCollectionSecondaryIndexForRootName(meta, "users/primary"); ok {
+		t.Fatal("primary root reported as unique secondary index")
+	}
+	if allocs := testing.AllocsPerRun(1000, func() {
+		_, _ = uniqueCollectionSecondaryIndexForRootName(meta, "users/index/email")
+	}); allocs != 0 {
+		t.Fatalf("unique root lookup allocs=%v want zero", allocs)
+	}
+}
+
 func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
