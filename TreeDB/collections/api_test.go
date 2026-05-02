@@ -2917,7 +2917,7 @@ func TestCollectionIndexedWriteMemtablesAsyncBackpressureWaitsForPublishingUnit(
 			BufferedIndexedAsyncFlush:               true,
 			BufferedIndexedAsyncFlushMaxQueuedUnits: 1,
 		},
-		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -3137,8 +3137,8 @@ func TestCollectionIndexedWriteMemtablesAsyncPublishingUnitsParticipateInReadsAn
 			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
 		},
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -3208,7 +3208,7 @@ func TestCollectionIndexedWriteMemtablesFlushWaitsForPublishingUnits(t *testing.
 			BufferedIndexedAsyncFlush:               true,
 			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
 		},
-		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -3297,7 +3297,7 @@ func TestCollectionIndexedWriteMemtablesFlushRetriesAsyncScheduledDuringWaitGap(
 			BufferedIndexedAsyncFlush:               true,
 			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
 		},
-		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -3397,7 +3397,7 @@ func TestCollectionIndexedWriteMemtablesCreateIndexWaitsForPublishingUnits(t *te
 			BufferedIndexedAsyncFlush:               true,
 			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
 		},
-		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -3437,7 +3437,7 @@ func TestCollectionIndexedWriteMemtablesCreateIndexWaitsForPublishingUnits(t *te
 
 	createDone := make(chan error, 1)
 	go func() {
-		_, err := col.CreateIndex(IndexDefinition{Name: "city", Field: "city"})
+		_, err := col.CreateIndex(IndexDefinition{Name: "city", Field: "city", ValueType: IndexValueString})
 		createDone <- err
 	}()
 	select {
@@ -3489,7 +3489,7 @@ func TestCollectionIndexedWriteMemtablesAsyncSuccessClearsPriorError(t *testing.
 			BufferedIndexedAsyncFlush:               true,
 			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
 		},
-		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -3534,7 +3534,7 @@ func TestCollectionIndexedWriteMemtablesAsyncPublishRetargetsMutableRuns(t *test
 			BufferedIndexedAsyncFlush:               true,
 			BufferedIndexedAsyncFlushMaxQueuedUnits: 8,
 		},
-		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
