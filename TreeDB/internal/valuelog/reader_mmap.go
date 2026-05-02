@@ -58,7 +58,10 @@ const (
 	defaultMaxMappedSealed          = 8
 	defaultMaxMappedSealedBytes     = 64 << 20
 	defaultMaxMappedLeafSealed      = defaultMaxMappedSealed * 4
-	defaultMaxMappedLeafSealedBytes = defaultMaxMappedSealedBytes * 4
+	// Leaf-log reads are on the BTree traversal hot path. Keep a larger mmap
+	// residency window for sealed leaf generations so sustained indexed writes
+	// do not fall back to ReadAt as soon as a few generations rotate.
+	defaultMaxMappedLeafSealedBytes = 1 << 30
 	defaultCurrentWritableMapTarget = 32 << 20
 )
 
