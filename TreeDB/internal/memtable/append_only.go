@@ -154,7 +154,7 @@ func putAppendOnlyIterator(it *appendOnlyIterator) {
 	if it == nil {
 		return
 	}
-	*it = appendOnlyIterator{}
+	*it = appendOnlyIterator{closed: true}
 	appendOnlyIteratorObjectPool.Put(it)
 }
 
@@ -1272,6 +1272,7 @@ type appendOnlyIterator struct {
 	leaseOwner      *AppendOnly
 	leaseHeld       bool
 	reverse         bool
+	closed          bool
 }
 
 func (it *appendOnlyIterator) len() int {
@@ -1448,6 +1449,10 @@ func (it *appendOnlyIterator) ValueCopy(dst []byte) []byte {
 func (it *appendOnlyIterator) Error() error { return nil }
 
 func (it *appendOnlyIterator) Close() error {
+	if it == nil || it.closed {
+		return nil
+	}
+	it.closed = true
 	if it.mu != nil {
 		it.mu.RUnlock()
 		it.mu = nil

@@ -246,6 +246,46 @@ func TestAppendOnlyOrderedIteratorDoesNotAllocateAfterPoolWarm(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyIteratorDoubleCloseDoesNotDuplicatePoolEntry(t *testing.T) {
+	appendOnlyIteratorObjectPool = sync.Pool{}
+
+	m := NewAppendOnlyWithEntryCapacity(2)
+	m.Set([]byte("k1"), []byte("v1"))
+	m.Set([]byte("k2"), []byte("v2"))
+
+	first := m.NewIterator(nil, nil)
+	firstConcrete, ok := first.(*appendOnlyIterator)
+	if !ok {
+		t.Fatalf("iterator type %T, want *appendOnlyIterator", first)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("first close: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("second close: %v", err)
+	}
+
+	second := m.NewIterator(nil, nil)
+	secondConcrete, ok := second.(*appendOnlyIterator)
+	if !ok {
+		t.Fatalf("second iterator type %T, want *appendOnlyIterator", second)
+	}
+	third := m.NewIterator(nil, nil)
+	thirdConcrete, ok := third.(*appendOnlyIterator)
+	if !ok {
+		t.Fatalf("third iterator type %T, want *appendOnlyIterator", third)
+	}
+	defer func() { _ = second.Close() }()
+	defer func() { _ = third.Close() }()
+
+	if secondConcrete != firstConcrete {
+		t.Fatalf("second iterator did not reuse warmed object")
+	}
+	if thirdConcrete == secondConcrete {
+		t.Fatalf("double close returned the same iterator object to the pool twice")
+	}
+}
+
 func BenchmarkAppendOnlyOrderedIterator(b *testing.B) {
 	m := NewAppendOnlyWithEntryCapacity(128)
 	for i := 0; i < 128; i++ {
