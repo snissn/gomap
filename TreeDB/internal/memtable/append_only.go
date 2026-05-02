@@ -40,6 +40,7 @@ const (
 )
 
 var appendOnlyEntryPool sync.Pool
+var appendOnlyIteratorObjectPool sync.Pool
 var appendOnlyIteratorPool sync.Pool
 var appendOnlyIteratorPtrPool sync.Pool
 var appendOnlyValueArenaPools [appendOnlyValueArenaClassCount]sync.Pool
@@ -138,6 +139,23 @@ func putAppendOnlyEntries(entries []appendOnlyEntry) {
 	full := entries[:cap(entries)]
 	clear(full)
 	appendOnlyEntryPool.Put(full[:0])
+}
+
+func getAppendOnlyIterator() *appendOnlyIterator {
+	if v := appendOnlyIteratorObjectPool.Get(); v != nil {
+		if it, ok := v.(*appendOnlyIterator); ok && it != nil {
+			return it
+		}
+	}
+	return &appendOnlyIterator{}
+}
+
+func putAppendOnlyIterator(it *appendOnlyIterator) {
+	if it == nil {
+		return
+	}
+	*it = appendOnlyIterator{}
+	appendOnlyIteratorObjectPool.Put(it)
 }
 
 func getAppendOnlyIteratorEntries(length int) []appendOnlyEntry {
@@ -1135,7 +1153,8 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	m.mu.RLock()
 	if m.ordered {
 		entries := m.entries[:m.count]
-		it := &appendOnlyIterator{
+		it := getAppendOnlyIterator()
+		*it = appendOnlyIterator{
 			entries: entries,
 			start:   start,
 			end:     end,
@@ -1156,7 +1175,8 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 		snapshotPtrs := m.buildSortedLatestSnapshotLocked()
 		m.acquireIteratorLeaseLocked()
 		m.mu.Unlock()
-		it := &appendOnlyIterator{
+		it := getAppendOnlyIterator()
+		*it = appendOnlyIterator{
 			entryPtrs:       snapshotPtrs,
 			start:           start,
 			end:             end,
@@ -1173,7 +1193,8 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	entries := m.buildMutableSortedIteratorEntriesLocked()
 	m.mu.Unlock()
 
-	it := &appendOnlyIterator{
+	it := getAppendOnlyIterator()
+	*it = appendOnlyIterator{
 		entries:       entries,
 		start:         start,
 		end:           end,
@@ -1190,7 +1211,8 @@ func (m *AppendOnly) NewReverseIterator(start, end []byte) iterator.UnsafeIterat
 	m.mu.RLock()
 	if m.ordered {
 		entries := m.entries[:m.count]
-		it := &appendOnlyIterator{
+		it := getAppendOnlyIterator()
+		*it = appendOnlyIterator{
 			entries: entries,
 			start:   start,
 			end:     end,
@@ -1210,7 +1232,8 @@ func (m *AppendOnly) NewReverseIterator(start, end []byte) iterator.UnsafeIterat
 		snapshotPtrs := m.buildSortedLatestSnapshotLocked()
 		m.acquireIteratorLeaseLocked()
 		m.mu.Unlock()
-		it := &appendOnlyIterator{
+		it := getAppendOnlyIterator()
+		*it = appendOnlyIterator{
 			entryPtrs:       snapshotPtrs,
 			start:           start,
 			end:             end,
@@ -1225,7 +1248,8 @@ func (m *AppendOnly) NewReverseIterator(start, end []byte) iterator.UnsafeIterat
 	entries := m.buildMutableSortedIteratorEntriesLocked()
 	m.mu.Unlock()
 
-	it := &appendOnlyIterator{
+	it := getAppendOnlyIterator()
+	*it = appendOnlyIterator{
 		entries:       entries,
 		start:         start,
 		end:           end,
@@ -1443,6 +1467,7 @@ func (it *appendOnlyIterator) Close() error {
 	it.leaseOwner = nil
 	it.entries = nil
 	it.entryPtrs = nil
+	putAppendOnlyIterator(it)
 	return nil
 }
 

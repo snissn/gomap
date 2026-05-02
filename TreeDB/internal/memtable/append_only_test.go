@@ -1,8 +1,10 @@
 package memtable
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -211,6 +213,57 @@ func TestAppendOnlyIteratorSortedLatest(t *testing.T) {
 
 	if it.Valid() {
 		t.Fatalf("iterator should be exhausted")
+	}
+}
+
+func TestAppendOnlyOrderedIteratorDoesNotAllocateAfterPoolWarm(t *testing.T) {
+	appendOnlyIteratorObjectPool = sync.Pool{}
+
+	m := NewAppendOnlyWithEntryCapacity(2)
+	m.Set([]byte("k1"), []byte("v1"))
+	m.Set([]byte("k2"), []byte("v2"))
+
+	warm := m.NewIterator(nil, nil)
+	if err := warm.Close(); err != nil {
+		t.Fatalf("warm iterator close: %v", err)
+	}
+
+	bad := false
+	allocs := testing.AllocsPerRun(1000, func() {
+		it := m.NewIterator(nil, nil)
+		if !it.Valid() || !bytes.Equal(it.UnsafeKey(), []byte("k1")) {
+			bad = true
+		}
+		if err := it.Close(); err != nil {
+			bad = true
+		}
+	})
+	if bad {
+		t.Fatalf("pooled iterator returned incorrect contents or close error")
+	}
+	if allocs != 0 {
+		t.Fatalf("ordered NewIterator allocs/run=%v want 0 after pool warm", allocs)
+	}
+}
+
+func BenchmarkAppendOnlyOrderedIterator(b *testing.B) {
+	m := NewAppendOnlyWithEntryCapacity(128)
+	for i := 0; i < 128; i++ {
+		var key [8]byte
+		binary.BigEndian.PutUint64(key[:], uint64(i))
+		m.Set(key[:], []byte("value"))
+	}
+	warm := m.NewIterator(nil, nil)
+	_ = warm.Close()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		it := m.NewIterator(nil, nil)
+		if !it.Valid() {
+			b.Fatalf("iterator is invalid")
+		}
+		_ = it.Close()
 	}
 }
 
