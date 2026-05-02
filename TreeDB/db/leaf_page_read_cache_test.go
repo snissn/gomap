@@ -229,6 +229,36 @@ func TestValueReaderLeafLogPageUnsafeToUsesCacheHit(t *testing.T) {
 	}
 }
 
+func TestValueReaderLeafLogPageUnsafeToSmallDstBypassesCache(t *testing.T) {
+	cache := newLeafPageReadCache(8)
+	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+	cachedLeaf := bytes.Repeat([]byte{0x33}, page.PageSize)
+	fallbackLeaf := bytes.Repeat([]byte{0x55}, page.PageSize)
+	cache.store(ptr, cachedLeaf)
+
+	fallback := &leafPageCacheTestFallback{data: fallbackLeaf}
+	reader := valueReader{
+		vlogs:         fallback,
+		leafPageCache: cache,
+	}
+	got, usedDst, err := reader.ReadLeafLogPageUnsafeTo(ptr, nil)
+	if err != nil {
+		t.Fatalf("ReadLeafLogPageUnsafeTo: %v", err)
+	}
+	if usedDst {
+		t.Fatal("nil dst should not report usedDst")
+	}
+	if !bytes.Equal(got, fallbackLeaf) {
+		t.Fatal("small-dst read should use fallback instead of copying from cache")
+	}
+	if fallback.readUnsafeToCalls != 1 {
+		t.Fatalf("fallback ReadUnsafeTo calls=%d, want 1", fallback.readUnsafeToCalls)
+	}
+	if stats := cache.stats(); stats.Hits != 0 || stats.Misses != 0 || stats.Stores != 1 {
+		t.Fatalf("stats=%+v, want cache bypass without extra store", stats)
+	}
+}
+
 func TestValueReaderLeafLogPageUnsafeToStoresFallbackLeafPage(t *testing.T) {
 	cache := newLeafPageReadCache(8)
 	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}

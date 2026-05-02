@@ -281,11 +281,15 @@ func (t *Tree) loadLeafLogNodeView(ptr page.LogRecordRef, iterator bool) (node.N
 	if err != nil {
 		return node.Node{}, err
 	}
+	return validateLeafLogNode(data, ptr, t.shouldVerifyLeafRefChecksum(), iterator)
+}
+
+func validateLeafLogNode(data []byte, ptr page.LogRecordRef, verifyChecksum bool, iterator bool) (node.Node, error) {
 	if len(data) != page.PageSize {
 		return node.Node{}, fmt.Errorf("invalid leaf page size %d for leaf-log ref file=%d offset=%d", len(data), ptr.FileID, ptr.Offset)
 	}
 	n := node.NewNodeView(data)
-	if t.shouldVerifyLeafRefChecksum() && !n.VerifyChecksum() {
+	if verifyChecksum && !n.VerifyChecksum() {
 		return node.Node{}, fmt.Errorf("checksum mismatch on leaf-log ref file=%d offset=%d", ptr.FileID, ptr.Offset)
 	}
 	if n.Type() != page.PageTypeLeaf {
@@ -460,26 +464,14 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 					leafScratch = nil
 				}
 				if loadedLeafRef {
-					if len(data) != page.PageSize {
+					var err error
+					n, err = validateLeafLogNode(data, ptr, t.shouldVerifyLeafRefChecksum(), false)
+					if err != nil {
 						if leafScratchOwned {
 							putLeafRefPageScratch(leafScratch)
 						}
-						return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid leaf page size %d for leaf-log ref file=%d offset=%d", len(data), ptr.FileID, ptr.Offset)
+						return nil, page.ValuePtr{}, 0, false, err
 					}
-					n = node.NewNodeView(data)
-					if t.shouldVerifyLeafRefChecksum() && !n.VerifyChecksum() {
-						if leafScratchOwned {
-							putLeafRefPageScratch(leafScratch)
-						}
-						return nil, page.ValuePtr{}, 0, false, fmt.Errorf("checksum mismatch on leaf-log ref file=%d offset=%d", ptr.FileID, ptr.Offset)
-					}
-					if n.Type() != page.PageTypeLeaf {
-						if leafScratchOwned {
-							putLeafRefPageScratch(leafScratch)
-						}
-						return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid page type %d at leaf-log ref file=%d offset=%d", n.Type(), ptr.FileID, ptr.Offset)
-					}
-					noteOuterLeafLoad(ptr.ValuePtr(), len(data), false)
 				}
 			}
 		}

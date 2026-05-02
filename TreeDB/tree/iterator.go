@@ -1026,17 +1026,11 @@ func (it *Iterator) loadNodeRef(ref page.ChildRef) (node.Node, error) {
 		if err != nil {
 			return node.Node{}, err
 		}
-		if len(data) != page.PageSize {
-			return node.Node{}, fmt.Errorf("invalid leaf page size %d for leaf-log ref file=%d offset=%d", len(data), ptr.FileID, ptr.Offset)
+		n, err := validateLeafLogNode(data, ptr, it.tree.shouldVerifyLeafRefChecksum(), true)
+		if err != nil {
+			it.leafRefScratch = it.leafRefScratch[:0]
+			return node.Node{}, err
 		}
-		n := node.NewNodeView(data)
-		if it.tree.shouldVerifyLeafRefChecksum() && !n.VerifyChecksum() {
-			return node.Node{}, fmt.Errorf("checksum mismatch on leaf-log ref file=%d offset=%d", ptr.FileID, ptr.Offset)
-		}
-		if n.Type() != page.PageTypeLeaf {
-			return node.Node{}, fmt.Errorf("invalid page type %d at leaf-log ref file=%d offset=%d", n.Type(), ptr.FileID, ptr.Offset)
-		}
-		noteOuterLeafLoad(ptr.ValuePtr(), len(data), true)
 		if usedDst {
 			it.leafRefScratch = data[:0]
 		} else {
@@ -1053,17 +1047,11 @@ func (it *Iterator) loadNodeRef(ref page.ChildRef) (node.Node, error) {
 		if err != nil {
 			return node.Node{}, err
 		}
-		if len(data) != page.PageSize {
-			return node.Node{}, fmt.Errorf("invalid leaf page size %d for leaf-log ref file=%d offset=%d", len(data), ptr.FileID, ptr.Offset)
+		n, err := validateLeafLogNode(data, ptr, it.tree.shouldVerifyLeafRefChecksum(), true)
+		if err != nil {
+			it.leafRefScratch = it.leafRefScratch[:0]
+			return node.Node{}, err
 		}
-		n := node.NewNodeView(data)
-		if it.tree.shouldVerifyLeafRefChecksum() && !n.VerifyChecksum() {
-			return node.Node{}, fmt.Errorf("checksum mismatch on leaf-log ref file=%d offset=%d", ptr.FileID, ptr.Offset)
-		}
-		if n.Type() != page.PageTypeLeaf {
-			return node.Node{}, fmt.Errorf("invalid page type %d at leaf-log ref file=%d offset=%d", n.Type(), ptr.FileID, ptr.Offset)
-		}
-		noteOuterLeafLoad(ptr.ValuePtr(), len(data), true)
 		it.leafRefScratch = data[:0]
 		return n, nil
 	}

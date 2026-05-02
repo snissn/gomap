@@ -91,7 +91,7 @@ func (r valueReader) ReadLeafLogPageUnsafeTo(ptr page.LeafLogPtr, dst []byte) ([
 	if r.vlogs == nil {
 		return nil, false, errors.New("treedb: missing value-log reader")
 	}
-	if r.leafPageCache != nil {
+	if r.leafPageCache != nil && cap(dst) >= page.PageSize {
 		if val, usedDst, ok := r.leafPageCache.getTo(ptr, dst); ok {
 			return val, usedDst, nil
 		}
@@ -100,7 +100,7 @@ func (r valueReader) ReadLeafLogPageUnsafeTo(ptr page.LeafLogPtr, dst []byte) ([
 	if err != nil {
 		return nil, false, err
 	}
-	if r.leafPageCache != nil && len(val) == page.PageSize {
+	if r.leafPageCache != nil && cap(dst) >= page.PageSize && len(val) == page.PageSize {
 		r.leafPageCache.store(ptr, val)
 	}
 	return val, usedDst, nil
