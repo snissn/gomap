@@ -5,6 +5,7 @@ BENCHPROF_DIR := cmd/benchprof
 COLLECTION_LOAD_FIXTURE_DIR := cmd/collection_load_fixture
 COLLECTION_BENCH_MATRIX_DIR := cmd/collection_bench_matrix
 COLLECTION_CANONICAL_BENCH_DIR := cmd/collection_canonical_bench
+TREEDB_OUT_OF_CORE_SMOKE_DIR := cmd/treedb_out_of_core_smoke
 BIN_DIR := bin
 
 BENCH_KEYCOUNTS ?= 1,10,100,1000,10000,100000,1000000
@@ -34,6 +35,7 @@ help:
 	@echo "  make collection-bench-matrix - build collection benchmark matrix runner"
 	@echo "  make collection-canonical-bench-bin - build canonical collection benchmark runner"
 	@echo "  make bench-collections-canonical - run canonical TreeDB collections vs SQLite benchmark"
+	@echo "  make bench-out-of-core-smoke - run CI-sized TreeDB out-of-core guardrail smoke"
 	@echo "  make clean          - remove ./$(BIN_DIR) and temp dirs"
 
 .PHONY: fmt
@@ -91,8 +93,8 @@ deps:
 docs-check:
 	bash ./scripts/docs_check.sh
 
-.PHONY: build build-hashdb build-treedb treemap treemap-bin unified-bench benchprof collection-load-fixture collection-bench-matrix collection-canonical-bench-bin collection-canonical-bench
-build: build-hashdb build-treedb unified-bench benchprof collection-load-fixture collection-bench-matrix collection-canonical-bench-bin
+.PHONY: build build-hashdb build-treedb treemap treemap-bin unified-bench benchprof collection-load-fixture collection-bench-matrix collection-canonical-bench-bin collection-canonical-bench treedb-out-of-core-smoke-bin treedb-out-of-core-smoke
+build: build-hashdb build-treedb unified-bench benchprof collection-load-fixture collection-bench-matrix collection-canonical-bench-bin treedb-out-of-core-smoke-bin
 
 build-hashdb:
 	mkdir -p $(BIN_DIR)
@@ -137,6 +139,12 @@ collection-canonical-bench-bin:
 
 collection-canonical-bench: collection-canonical-bench-bin
 
+treedb-out-of-core-smoke-bin:
+	mkdir -p $(BIN_DIR)
+	cd $(TREEDB_OUT_OF_CORE_SMOKE_DIR) && go build -o ../../$(BIN_DIR)/treedb-out-of-core-smoke .
+
+treedb-out-of-core-smoke: treedb-out-of-core-smoke-bin
+
 .PHONY: bench bench-readme
 bench: unified-bench
 	./$(BIN_DIR)/unified-bench
@@ -147,6 +155,10 @@ bench-readme: unified-bench
 .PHONY: bench-collections-canonical
 bench-collections-canonical:
 	./scripts/bench_collections_canonical.sh
+
+.PHONY: bench-out-of-core-smoke
+bench-out-of-core-smoke:
+	./scripts/bench_out_of_core_smoke.sh
 
 .PHONY: benchmark-all benchmark-quick
 benchmark-all: build-hashdb

@@ -205,6 +205,45 @@ Notes / gotchas:
 - Dict training is CPU-heavy and is disabled by default.
 - Trained dictionaries are persisted in `dictdb/` and used to decode values after reopen.
 
+### Leaf value-log mmap growth
+
+TreeDB maps current writable `leaf_vlog` files ahead to a bounded segment-scale
+target so recently appended outer leaf pages stay on the mmap read path without
+remapping on every append.
+
+- `TREEDB_VLOG_CURRENT_WRITABLE_MMAP_TARGET_BYTES` sets the map-ahead target
+  for current writable value-log files. The default is 32 MiB, matching the
+  default leaf segment scale. Set to `0` to map only the current file size.
+- `TREEDB_VLOG_MAX_DEAD_MAPPINGS` still caps retained stale mappings for safety;
+  frequent current-writable remaps can hit this cap and force `ReadAt` fallback.
+
+Useful stats:
+- `treedb.vlog.mmap_current_writable_map_target_bytes`
+- `treedb.vlog.mmap_remaps`
+- `treedb.vlog.mmap_dead_mappings`
+- `treedb.vlog.mmap_read.fallback_readat`
+- `treedb.vlog.mmap_read.miss_dead_mapping_cap`
+
+### Outer-leaf read cache
+
+When outer leaf pages are stored in `leaf_vlog`, TreeDB keeps a bounded
+process-local cache of recently appended decoded leaf pages. This avoids
+rereading freshly written leaves from mmap or `ReadAt` during follow-up publish,
+update, and maintenance work.
+
+- `TREEDB_LEAF_PAGE_CACHE_ENTRIES` sets the direct-mapped cache slot count.
+  The default is 4096 entries, or about 16 MiB of leaf-page payloads. Set to `0`
+  to disable the cache.
+
+Useful stats:
+- `treedb.process.read_path.outer_leaf.cache.hits`
+- `treedb.process.read_path.outer_leaf.cache.misses`
+- `treedb.process.read_path.outer_leaf.cache.stores`
+- `treedb.process.read_path.outer_leaf.cache.evictions`
+- `treedb.process.read_path.outer_leaf.cache.entries`
+- `treedb.process.read_path.outer_leaf.cache.capacity`
+- `treedb.process.read_path.outer_leaf.cache.bytes`
+
 ### Leaf key compression (`Options.LeafPrefixCompression`)
 
 TreeDB can compress keys stored in **leaf pages** using a front-coding scheme

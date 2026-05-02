@@ -640,12 +640,21 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_1024_hit_ratio"] = fmt.Sprintf("%.6f", float64(outerLeafReadStats.Recent1KHitsTotal)/float64(outerLeafReadStats.SamplesTotal))
 		stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_4096_hit_ratio"] = fmt.Sprintf("%.6f", float64(outerLeafReadStats.Recent4KHitsTotal)/float64(outerLeafReadStats.SamplesTotal))
 	}
+	cacheStats := db.leafPageReadCache.stats()
+	stats["treedb.process.read_path.outer_leaf.cache.hits"] = fmt.Sprintf("%d", cacheStats.Hits)
+	stats["treedb.process.read_path.outer_leaf.cache.misses"] = fmt.Sprintf("%d", cacheStats.Misses)
+	stats["treedb.process.read_path.outer_leaf.cache.stores"] = fmt.Sprintf("%d", cacheStats.Stores)
+	stats["treedb.process.read_path.outer_leaf.cache.evictions"] = fmt.Sprintf("%d", cacheStats.Evictions)
+	stats["treedb.process.read_path.outer_leaf.cache.entries"] = fmt.Sprintf("%d", cacheStats.Entries)
+	stats["treedb.process.read_path.outer_leaf.cache.capacity"] = fmt.Sprintf("%d", cacheStats.Capacity)
+	stats["treedb.process.read_path.outer_leaf.cache.bytes"] = fmt.Sprintf("%d", cacheStats.Bytes)
 
 	if db.valueLogManager != nil {
 		vlogRemaps, vlogDeadMappings := db.valueLogManager.RemapStats()
 		stats["treedb.vlog.mmap_remaps"] = fmt.Sprintf("%d", vlogRemaps)
 		stats["treedb.vlog.mmap_dead_mappings"] = fmt.Sprintf("%d", vlogDeadMappings)
 		stats["treedb.vlog.mmap_dead_mappings.cap_base"] = fmt.Sprintf("%d", valuelog.MaxDeadMappings)
+		stats["treedb.vlog.mmap_current_writable_map_target_bytes"] = fmt.Sprintf("%d", valuelog.CurrentWritableMmapTargetBytes)
 		stats["treedb.vlog.mmap_max_mapped_sealed_segments"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedSegments)
 		stats["treedb.vlog.mmap_max_mapped_sealed_bytes"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedBytes)
 		currentSegments, currentBytes, sealedSegments, sealedBytes, _, deadBytes := db.valueLogManager.MmapResidencyStats()

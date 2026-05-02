@@ -118,7 +118,7 @@ func TestCollectDiskSnapshotEmptyLeavesPathsNil(t *testing.T) {
 	}
 }
 
-func TestIsSelectedTreeDBStatKey(t *testing.T) {
+func TestSelectedTreeDBStatsKeepsExpectedKeys(t *testing.T) {
 	tests := []struct {
 		name string
 		key  string
@@ -131,8 +131,9 @@ func TestIsSelectedTreeDBStatKey(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isSelectedTreeDBStatKey(tt.key); got != tt.want {
-				t.Fatalf("isSelectedTreeDBStatKey(%q)=%v want %v", tt.key, got, tt.want)
+			got := selectedTreeDBStats(map[string]string{tt.key: "1"})
+			if kept := got != nil && got[tt.key] == "1"; kept != tt.want {
+				t.Fatalf("selectedTreeDBStats kept %q=%v want %v (stats=%v)", tt.key, kept, tt.want, got)
 			}
 		})
 	}
