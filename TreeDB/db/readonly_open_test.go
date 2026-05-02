@@ -39,6 +39,55 @@ func TestReadOnlyRejectsWrites(t *testing.T) {
 	}
 }
 
+func TestReadOnlyOpenConfiguresLeafPageReadCacheEntries(t *testing.T) {
+	dir := t.TempDir()
+
+	w, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetSync([]byte("k"), []byte("v")); err != nil {
+		_ = w.Close()
+		t.Fatalf("SetSync: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	openers := []struct {
+		name string
+		open func(Options) (*DB, error)
+	}{
+		{
+			name: "shared_lock",
+			open: func(opts Options) (*DB, error) {
+				opts.ReadOnly = true
+				return Open(opts)
+			},
+		},
+		{name: "no_lock", open: openReadOnlyNoLock},
+	}
+	for _, opener := range openers {
+		t.Run(opener.name, func(t *testing.T) {
+			ro, err := opener.open(Options{
+				Dir:                      dir,
+				ReadOnly:                 true,
+				ChunkSize:                256 * 1024,
+				LeafPageReadCacheEntries: 7,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = ro.Close() }()
+
+			stats := ro.Stats()
+			if got := stats["treedb.process.read_path.outer_leaf.cache.capacity"]; got != "7" {
+				t.Fatalf("outer leaf cache capacity=%q want 7", got)
+			}
+		})
+	}
+}
+
 func TestReadOnlyDoesNotReplayOrRemoveCommitLog(t *testing.T) {
 	dir := t.TempDir()
 

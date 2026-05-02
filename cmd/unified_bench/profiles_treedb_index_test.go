@@ -56,6 +56,22 @@ func TestBuildTreeDBOptions_LeafPageReadCacheEntries(t *testing.T) {
 	}
 }
 
+func TestBuildTreeDBOptions_LeafPageReadCacheEntriesDefaultReportsEffective(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+	t.Setenv(treeDBLeafPageReadCacheEntriesEnvKey, "")
+
+	resetTreeDBIndexFlagsForTest()
+
+	_, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions default leaf page read cache entries: %v", err)
+	}
+	if got := rep.formatText(""); !strings.Contains(got, "outer_leaf_read_cache_entries=default/env (effective=4096)") {
+		t.Fatalf("resolved options missing effective default cache entries: %q", got)
+	}
+}
+
 func TestParseTreeDBVlogGenerationPolicy(t *testing.T) {
 	got, err := parseTreeDBVlogGenerationPolicy("default")
 	if err != nil {
@@ -280,6 +296,7 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 func resetTreeDBIndexFlagsForTest() {
 	*treedbIndexOptimizations = false
 	*treedbIndexOuterLeavesInVlog = true
+	*treedbLeafPageReadCacheEntries = 0
 	*treedbPreferAppendAlloc = false
 	*treedbForceValuePointers = false
 	*treedbLeafPrefixCompression = false

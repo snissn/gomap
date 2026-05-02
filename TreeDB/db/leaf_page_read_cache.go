@@ -1,6 +1,7 @@
 package db
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -14,23 +15,42 @@ import (
 const (
 	leafPageReadCacheEntriesEnvKey  = "TREEDB_LEAF_PAGE_CACHE_ENTRIES"
 	defaultLeafPageReadCacheEntries = 4096
+	maxLeafPageReadCacheEntries     = 1 << 18
 )
 
 var LeafPageReadCacheEntries = defaultLeafPageReadCacheEntries
 
 func configuredLeafPageReadCacheEntries(optionEntries int) int {
-	if optionEntries < 0 {
+	entries, err := resolveLeafPageReadCacheEntries(optionEntries)
+	if err != nil {
 		return 0
 	}
+	return entries
+}
+
+func resolveLeafPageReadCacheEntries(optionEntries int) (int, error) {
+	if optionEntries < 0 {
+		return 0, nil
+	}
 	if optionEntries > 0 {
-		return optionEntries
+		return validateLeafPageReadCacheEntries(optionEntries)
 	}
 	if raw := strings.TrimSpace(os.Getenv(leafPageReadCacheEntriesEnvKey)); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
-			return v
+			return validateLeafPageReadCacheEntries(v)
 		}
 	}
-	return LeafPageReadCacheEntries
+	return validateLeafPageReadCacheEntries(LeafPageReadCacheEntries)
+}
+
+func validateLeafPageReadCacheEntries(entries int) (int, error) {
+	if entries < 0 {
+		return 0, nil
+	}
+	if entries > maxLeafPageReadCacheEntries {
+		return 0, fmt.Errorf("treedb: leaf page read cache entries out of range [0,%d]: %d", maxLeafPageReadCacheEntries, entries)
+	}
+	return entries, nil
 }
 
 type leafPageReadCacheEntry struct {

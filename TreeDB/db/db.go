@@ -1166,6 +1166,9 @@ func Open(opts Options) (*DB, error) {
 }
 
 func validateOptions(opts Options) error {
+	if _, err := resolveLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries); err != nil {
+		return err
+	}
 	if opts.ReadOnly {
 		// Read-only opens never mutate on-disk state, so "unsafe" write options do
 		// not apply.

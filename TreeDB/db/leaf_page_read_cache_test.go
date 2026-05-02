@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -393,6 +394,29 @@ func TestConfiguredLeafPageReadCacheEntriesNegativeOptionDisables(t *testing.T) 
 
 	if got := configuredLeafPageReadCacheEntries(-1); got != 0 {
 		t.Fatalf("configuredLeafPageReadCacheEntries(-1)=%d, want disabled cache 0", got)
+	}
+}
+
+func TestValidateOptionsRejectsHugeLeafPageReadCacheEntries(t *testing.T) {
+	err := validateOptions(Options{LeafPageReadCacheEntries: maxLeafPageReadCacheEntries + 1})
+	if err == nil {
+		t.Fatal("validateOptions unexpectedly accepted huge leaf page read cache")
+	}
+}
+
+func TestValidateOptionsRejectsHugeLeafPageReadCacheEntriesForReadOnly(t *testing.T) {
+	err := validateOptions(Options{ReadOnly: true, LeafPageReadCacheEntries: maxLeafPageReadCacheEntries + 1})
+	if err == nil {
+		t.Fatal("validateOptions unexpectedly accepted huge read-only leaf page read cache")
+	}
+}
+
+func TestValidateOptionsRejectsHugeLeafPageReadCacheEntriesFromEnv(t *testing.T) {
+	t.Setenv(leafPageReadCacheEntriesEnvKey, strconv.Itoa(maxLeafPageReadCacheEntries+1))
+
+	err := validateOptions(Options{})
+	if err == nil {
+		t.Fatal("validateOptions unexpectedly accepted huge env leaf page read cache")
 	}
 }
 

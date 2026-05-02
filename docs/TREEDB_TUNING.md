@@ -238,6 +238,9 @@ update, and maintenance work.
   option is left at `0`. The default is 4096 entries, or about 16 MiB of
   leaf-page payloads. Set the env var to `0` to disable the cache for DBs that
   do not set `Options.LeafPageReadCacheEntries`.
+- Explicit and env-derived cache sizes are capped at 262144 entries to fail
+  early with a clear configuration error instead of risking an accidental huge
+  cache.
 - `unified-bench` exposes this as `-treedb-leaf-page-read-cache-entries` so
   read/publish cache-capacity experiments are captured in the reproduced command
   instead of relying on ambient environment.

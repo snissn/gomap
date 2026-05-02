@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,7 +18,11 @@ import (
 	treedbadapter "github.com/snissn/gomap/kvstore/adapters/treedb"
 )
 
-const defaultTreeDBChunkSizeBytes int64 = 256 * 1024
+const (
+	defaultTreeDBChunkSizeBytes           int64 = 256 * 1024
+	defaultTreeDBLeafPageReadCacheEntries       = 4096
+	treeDBLeafPageReadCacheEntriesEnvKey        = "TREEDB_LEAF_PAGE_CACHE_ENTRIES"
+)
 
 var (
 	treedbFlushThreshold                  = flag.Int64("treedb-flush-threshold", 64*1024*1024, "TreeDB (cached): flush threshold in bytes")
@@ -444,10 +449,25 @@ func formatTreeDBLeafPageReadCacheEntries(entries int) string {
 	case entries < 0:
 		return "disabled"
 	case entries == 0:
-		return "default/env"
+		return fmt.Sprintf("default/env (effective=%d)", effectiveTreeDBLeafPageReadCacheEntries(entries))
 	default:
 		return fmt.Sprintf("%d", entries)
 	}
+}
+
+func effectiveTreeDBLeafPageReadCacheEntries(entries int) int {
+	if entries < 0 {
+		return 0
+	}
+	if entries > 0 {
+		return entries
+	}
+	if raw := strings.TrimSpace(os.Getenv(treeDBLeafPageReadCacheEntriesEnvKey)); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
+			return v
+		}
+	}
+	return defaultTreeDBLeafPageReadCacheEntries
 }
 
 func formatTreeDBVlogCompression(mode treedb.ValueLogCompressionMode) string {
