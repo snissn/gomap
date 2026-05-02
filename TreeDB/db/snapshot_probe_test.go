@@ -1,7 +1,10 @@
 package db
 
 import (
+	"errors"
+	"fmt"
 	"reflect"
+	"sync"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -179,6 +182,154 @@ func TestSnapshot_HasManyAtRootAndHasPrefixesAtRoot(t *testing.T) {
 	}
 	if want := []bool{false}; !reflect.DeepEqual(missingRootHasPrefixes, want) {
 		t.Fatalf("HasPrefixesAtRoot missing root mismatch: got=%v want=%v", missingRootHasPrefixes, want)
+	}
+}
+
+func TestSnapshotTreeAtRootCachesRootTrees(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, rootIDs, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+		Iter: mustFrozenSystemMemtable(t,
+			"acct/alice/doc-1", "v1",
+			"acct/bob/doc-1", "v2",
+		).NewIterator(nil, nil),
+	}})
+	if err != nil {
+		t.Fatalf("publish root: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("root IDs len=%d want 1", len(rootIDs))
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+
+	first, err := snap.treeAtRoot(rootIDs[0])
+	if err != nil {
+		t.Fatalf("first treeAtRoot: %v", err)
+	}
+	second, err := snap.treeAtRoot(rootIDs[0])
+	if err != nil {
+		t.Fatalf("second treeAtRoot: %v", err)
+	}
+	if first != second {
+		t.Fatal("treeAtRoot returned different tree objects for the same root in one snapshot")
+	}
+	if allocs := testing.AllocsPerRun(1000, func() {
+		tr, err := snap.treeAtRoot(rootIDs[0])
+		if err != nil || tr == nil {
+			panic("treeAtRoot failed")
+		}
+	}); allocs != 0 {
+		t.Fatalf("cached treeAtRoot allocations/run=%0.1f want 0", allocs)
+	}
+}
+
+func TestSnapshotTreeAtRootConcurrentCacheAccess(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	var rootIDs []uint64
+	for i := 0; i < 4; i++ {
+		_, ids, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+			Iter: mustFrozenSystemMemtable(t,
+				fmt.Sprintf("acct/%d/doc-1", i), "v1",
+				fmt.Sprintf("acct/%d/doc-2", i), "v2",
+			).NewIterator(nil, nil),
+		}})
+		if err != nil {
+			t.Fatalf("publish root %d: %v", i, err)
+		}
+		rootIDs = append(rootIDs, ids...)
+	}
+	if len(rootIDs) != 4 {
+		t.Fatalf("root IDs len=%d want 4", len(rootIDs))
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+
+	errCh := make(chan error, 8)
+	var wg sync.WaitGroup
+	for worker := 0; worker < 8; worker++ {
+		wg.Add(1)
+		go func(offset int) {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				rootID := rootIDs[(i+offset)%len(rootIDs)]
+				tr, err := snap.treeAtRoot(rootID)
+				if err != nil {
+					errCh <- err
+					return
+				}
+				if tr == nil {
+					errCh <- errors.New("nil tree")
+					return
+				}
+			}
+		}(worker)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("treeAtRoot concurrent access: %v", err)
+		}
+	}
+}
+
+func BenchmarkSnapshotTreeAtRootCached(b *testing.B) {
+	dir := b.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		b.Fatalf("open: %v", err)
+	}
+	b.Cleanup(func() { _ = db.Close() })
+
+	_, rootIDs, err := db.PublishOrderedRootGroup(nil, []OrderedRootPublishInput{{
+		Iter: mustFrozenSystemMemtable(b,
+			"acct/alice/doc-1", "v1",
+			"acct/bob/doc-1", "v2",
+		).NewIterator(nil, nil),
+	}})
+	if err != nil {
+		b.Fatalf("publish root: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		b.Fatalf("root IDs len=%d want 1", len(rootIDs))
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		b.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	if _, err := snap.treeAtRoot(rootIDs[0]); err != nil {
+		b.Fatalf("warm treeAtRoot: %v", err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tr, err := snap.treeAtRoot(rootIDs[0])
+		if err != nil || tr == nil {
+			b.Fatalf("treeAtRoot err=%v tree=%p", err, tr)
+		}
 	}
 }
 

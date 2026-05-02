@@ -15,7 +15,20 @@ func (s *Snapshot) treeAtRoot(rootID uint64) (*tree.Tree, error) {
 	if rootID == 0 {
 		return nil, tree.ErrKeyNotFound
 	}
-	return tree.New(s.idx.pager, &s.reader, rootID), nil
+	if s.state != nil && rootID == s.state.RootPageID {
+		return &s.tree, nil
+	}
+	s.rootTreesMu.Lock()
+	defer s.rootTreesMu.Unlock()
+	for i := range s.rootTrees {
+		if s.rootTrees[i].root == rootID {
+			return &s.rootTrees[i].tree, nil
+		}
+	}
+	s.rootTrees = append(s.rootTrees, snapshotRootTree{root: rootID})
+	cached := &s.rootTrees[len(s.rootTrees)-1]
+	cached.tree.Reset(s.idx.pager, &s.reader, rootID)
+	return &cached.tree, nil
 }
 
 func (s *Snapshot) GetEntryAtRoot(rootID uint64, key []byte) (node.LeafEntry, error) {

@@ -37,6 +37,7 @@ const (
 
 	snapshotAcquireShardCount = 256
 	snapshotAcquireShardMask  = snapshotAcquireShardCount - 1
+	snapshotRootTreeRetainMax = 16
 )
 
 type DBState struct {
@@ -832,12 +833,19 @@ type Snapshot struct {
 	registryID              int64
 	reader                  valueReader
 	tree                    tree.Tree
+	rootTreesMu             sync.Mutex
+	rootTrees               []snapshotRootTree
 	closed                  atomic.Bool
 	treePager               *pager.Pager
 	treeRoot                uint64
 	// registryShardHint is used to route reader registrations to a stable fast
 	// registry shard for this snapshot object across operations.
 	registryShardHint int
+}
+
+type snapshotRootTree struct {
+	root uint64
+	tree tree.Tree
 }
 
 func registryHintFromSnapshot(s *Snapshot) int {
@@ -946,6 +954,15 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.vlogManager = vm
 	snap.vlogPinned = vlogNeedsPin
 	snap.reader.reconfigure(vlogSet)
+	for i := range snap.rootTrees {
+		snap.rootTrees[i].root = 0
+		snap.rootTrees[i].tree.Reset(nil, nil, 0)
+	}
+	if cap(snap.rootTrees) > snapshotRootTreeRetainMax {
+		snap.rootTrees = nil
+	} else {
+		snap.rootTrees = snap.rootTrees[:0]
+	}
 	snap.registryID = registryID
 	if idx != nil {
 		sameTree := snap.treePager == idx.pager &&
