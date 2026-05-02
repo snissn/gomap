@@ -3900,6 +3900,44 @@ func buildBufferedRootDeltaBatchPublishInputs(rootNames []string, rootRuns map[s
 	return ordered, cleanup, nil
 }
 
+func buildRootDeltaBatchPublishInputsFromTables(collectionName string, rootNames []string, tables []memtable.Table, rootBaseIDs map[string]uint64, policies []backenddb.OrderedRootStoragePolicy) ([]backenddb.OrderedRootDeltaBatchPublishInput, func(), error) {
+	if len(rootNames) != len(tables) || len(rootNames) != len(policies) {
+		return nil, func() {}, fmt.Errorf("collections: collection %q invalid delta lengths roots=%d tables=%d policies=%d", collectionName, len(rootNames), len(tables), len(policies))
+	}
+	ordered := make([]backenddb.OrderedRootDeltaBatchPublishInput, 0, len(rootNames))
+	cleanup := func() {
+		for idx := range ordered {
+			if ordered[idx].Delta != nil {
+				_ = ordered[idx].Delta.Close()
+				ordered[idx].Delta = nil
+			}
+		}
+	}
+	for i, rootName := range rootNames {
+		baseRoot, ok := rootBaseIDs[rootName]
+		if !ok {
+			cleanup()
+			return nil, func() {}, fmt.Errorf("collections: collection %q delta publish missing base root for %q", collectionName, rootName)
+		}
+		iter := tables[i].NewIterator(nil, nil)
+		delta, err := backenddb.OrderedRootDeltaBatchFromIterator(iter)
+		closeErr := iter.Close()
+		if err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			cleanup()
+			return nil, func() {}, err
+		}
+		ordered = append(ordered, backenddb.OrderedRootDeltaBatchPublishInput{
+			BaseRoot:      baseRoot,
+			Delta:         delta,
+			StoragePolicy: policies[i],
+		})
+	}
+	return ordered, cleanup, nil
+}
+
 func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork, newSystemRoot uint64, rootIDs []uint64, publishErr error, elapsed time.Duration) error {
 	if c == nil || c.writeDomain == nil || work == nil {
 		return publishErr
@@ -5029,26 +5067,17 @@ func (c *Collection) deleteDocumentOnce(documentID []byte) (bool, error) {
 	// base roots before stale-root validation rejects concurrent modifications.
 	defer func() { _ = snap.Close() }()
 
-	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
-	iterators := make([]iterator.UnsafeIterator, 0, len(rootNames))
 	defer func() {
-		for _, it := range iterators {
-			_ = it.Close()
-		}
 		resetCollectionTables(deltaTables)
 	}()
-	for i, rootName := range rootNames {
-		iter := deltaTables[i].NewIterator(nil, nil)
-		iterators = append(iterators, iter)
-		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
-			BaseRoot:      baseRootIDs[rootName],
-			Iter:          iter,
-			StoragePolicy: policies[i],
-		})
+	ordered, cleanupDeltas, err := buildRootDeltaBatchPublishInputsFromTables(c.meta.Name, rootNames, deltaTables, baseRootIDs, policies)
+	if err != nil {
+		return false, err
 	}
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 	})
+	cleanupDeltas()
 	if err != nil {
 		return false, err
 	}
@@ -6137,29 +6166,20 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	// base roots before stale-root validation rejects concurrent modifications.
 	defer func() { _ = snap.Close() }()
 
-	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
-	iterators := make([]iterator.UnsafeIterator, 0, len(rootNames))
 	defer func() {
-		for _, it := range iterators {
-			_ = it.Close()
-		}
 		resetCollectionTables(deltaTables)
 	}()
-	for i, rootName := range rootNames {
-		iter := deltaTables[i].NewIterator(nil, nil)
-		iterators = append(iterators, iter)
-		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
-			BaseRoot:      baseRootIDs[rootName],
-			Iter:          iter,
-			StoragePolicy: policies[i],
-		})
+	ordered, cleanupDeltas, err := buildRootDeltaBatchPublishInputsFromTables(c.meta.Name, rootNames, deltaTables, baseRootIDs, policies)
+	if err != nil {
+		return false, false, err
 	}
 	preflight := func() error {
 		return c.validateMutationRootDescriptors(baseUserRoot, baseSystemRoot, baseCommitSeq)
 	}
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 	})
+	cleanupDeltas()
 	if err != nil {
 		return false, false, err
 	}
@@ -7242,34 +7262,19 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]Upda
 		return nil, fmt.Errorf("collections: UpdateBatch collection %q invalid plan lengths roots=%d deltas=%d policies=%d", plan.meta.Name, len(plan.rootNames), len(plan.deltaTables), len(plan.policies))
 	}
 
-	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(plan.rootNames))
-	iterators := make([]iterator.UnsafeIterator, 0, len(plan.rootNames))
-	defer func() {
-		for _, it := range iterators {
-			_ = it.Close()
-		}
-	}()
-	for i, rootName := range plan.rootNames {
-		baseRoot, ok := plan.baseRootIDs[rootName]
-		if !ok {
-			return nil, fmt.Errorf("collections: UpdateBatch collection %q plan missing base root for %q", plan.meta.Name, rootName)
-		}
-		iter := plan.deltaTables[i].NewIterator(nil, nil)
-		iterators = append(iterators, iter)
-		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
-			BaseRoot:      baseRoot,
-			Iter:          iter,
-			StoragePolicy: plan.policies[i],
-		})
+	ordered, cleanupDeltas, err := buildRootDeltaBatchPublishInputsFromTables(plan.meta.Name, plan.rootNames, plan.deltaTables, plan.baseRootIDs, plan.policies)
+	if err != nil {
+		return nil, err
 	}
 	preflight := func() error {
 		return c.validateMutationRootDescriptors(plan.baseUserRoot, plan.baseSystemRoot, plan.baseCommitSeq)
 	}
 	detailedStats := c.updateBatchDetailedStatsEnabled()
 	publishStart := updateBatchStatsNow(detailedStats)
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIteratorForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs, rootIDs)
 	})
+	cleanupDeltas()
 	plan.stats.Publish += updateBatchStatsSince(detailedStats, publishStart)
 	if err != nil {
 		return nil, err
