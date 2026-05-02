@@ -42,26 +42,28 @@ const readViaMmapViewPrefixCacheEnabled = false
 var MaxDeadMappings = defaultMaxDeadMappings
 
 const (
-	defaultMaxDeadMappings          = 64
-	maxAdaptiveDeadMappings         = 4096
-	deadMappingBytesPerStep         = 256 << 10 // increase cap by 1 per 256KiB mapped
-	maxDeadMappingsEnvKey           = "TREEDB_VLOG_MAX_DEAD_MAPPINGS"
-	enableAdaptiveCapEnvKey         = "TREEDB_VLOG_ADAPTIVE_DEAD_MAPPINGS"
-	enableCurrentWritableEnvKey     = "TREEDB_VLOG_ENABLE_CURRENT_WRITABLE_MMAP"
-	enableCurrentLeafWritableEnvKey = "TREEDB_VLOG_ENABLE_CURRENT_LEAF_WRITABLE_MMAP"
-	currentWritableMapTargetEnvKey  = "TREEDB_VLOG_CURRENT_WRITABLE_MMAP_TARGET_BYTES"
-	maxMappedSealedEnvKey           = "TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS"
-	maxMappedSealedBytesEnvKey      = "TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES"
-	maxMappedLeafSealedEnvKey       = "TREEDB_VLOG_MAX_MAPPED_LEAF_SEALED_SEGMENTS"
-	maxMappedLeafBytesEnvKey        = "TREEDB_VLOG_MAX_MAPPED_LEAF_SEALED_BYTES"
-	defaultAdaptiveCapEnabled       = true
-	defaultMaxMappedSealed          = 8
-	defaultMaxMappedSealedBytes     = 64 << 20
-	defaultMaxMappedLeafSealed      = defaultMaxMappedSealed * 4
-	// Leaf-log reads are on the BTree traversal hot path. Keep a larger mmap
-	// residency window for sealed leaf generations so sustained indexed writes
-	// do not fall back to ReadAt as soon as a few generations rotate.
-	defaultMaxMappedLeafSealedBytes = 1 << 30
+	defaultMaxDeadMappings           = 64
+	maxAdaptiveDeadMappings          = 4096
+	deadMappingBytesPerStep          = 256 << 10 // increase cap by 1 per 256KiB mapped
+	maxDeadMappingsEnvKey            = "TREEDB_VLOG_MAX_DEAD_MAPPINGS"
+	enableAdaptiveCapEnvKey          = "TREEDB_VLOG_ADAPTIVE_DEAD_MAPPINGS"
+	enableCurrentWritableEnvKey      = "TREEDB_VLOG_ENABLE_CURRENT_WRITABLE_MMAP"
+	enableCurrentLeafWritableEnvKey  = "TREEDB_VLOG_ENABLE_CURRENT_LEAF_WRITABLE_MMAP"
+	currentWritableMapTargetEnvKey   = "TREEDB_VLOG_CURRENT_WRITABLE_MMAP_TARGET_BYTES"
+	maxMappedSealedEnvKey            = "TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS"
+	maxMappedSealedBytesEnvKey       = "TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES"
+	maxMappedLeafSealedEnvKey        = "TREEDB_VLOG_MAX_MAPPED_LEAF_SEALED_SEGMENTS"
+	maxMappedLeafBytesEnvKey         = "TREEDB_VLOG_MAX_MAPPED_LEAF_SEALED_BYTES"
+	defaultAdaptiveCapEnabled        = true
+	defaultMaxMappedSealed           = 8
+	defaultMaxMappedSealedBytes      = 64 << 20
+	defaultMaxMappedLeafSealed       = defaultMaxMappedSealed * 4
+	defaultLeafSealedBytesMultiplier = 16
+	// Leaf-log reads are on the BTree traversal hot path. Keep a larger mapped
+	// virtual-address window for sealed leaf generations so sustained indexed
+	// writes do not fall back to ReadAt as soon as a few generations rotate; OS
+	// page-cache policy still controls physical memory residency.
+	defaultMaxMappedLeafSealedBytes = defaultMaxMappedSealedBytes * defaultLeafSealedBytesMultiplier
 	defaultCurrentWritableMapTarget = 32 << 20
 )
 
