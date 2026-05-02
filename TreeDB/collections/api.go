@@ -1749,10 +1749,17 @@ func (c *Collection) flushBufferedWrites() error {
 	if domain == nil {
 		return nil
 	}
-	domain.waitIndexedAsyncFlush()
-	domain.mu.Lock()
-	defer domain.mu.Unlock()
-	return c.flushBufferedWritesLocked(domain)
+	for {
+		domain.waitIndexedAsyncFlush()
+		domain.mu.Lock()
+		if domain.indexedAsyncFlushRunning() {
+			domain.mu.Unlock()
+			continue
+		}
+		err := c.flushBufferedWritesLocked(domain)
+		domain.mu.Unlock()
+		return err
+	}
 }
 
 func (c *Collection) flushBufferedWritesLocked(domain *collectionWriteDomain) error {
