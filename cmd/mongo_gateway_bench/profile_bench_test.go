@@ -621,6 +621,7 @@ func profileBenchSignedDeltaUintStat(after, before map[string]string, key string
 }
 
 func reportProfileBenchBackendVlogMmapStats(b *testing.B, after, before map[string]string, docs int) {
+	b.Helper()
 	if docs <= 0 {
 		return
 	}
