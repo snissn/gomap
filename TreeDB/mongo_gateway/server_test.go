@@ -3286,6 +3286,45 @@ func TestServerFindIndexedRangeDecimal128FractionFallsBackToScan(t *testing.T) {
 	assertBatchIDs(t, cursorFirstBatch(t, rangeFind), []string{"eleven"})
 }
 
+func TestServerFindIndexedRangeUnusableBoundUsesUnsortedEarlyStop(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.MaxFindScanDocuments = 1
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 272, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}},
+			{Key: "name", Value: "age_1"}, {Key: "treedbValueType", Value: "int64"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 273, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "a-match"}, {Key: "age", Value: int64(11)}},
+			bson.D{{Key: "_id", Value: "z-other"}, {Key: "age", Value: int64(10)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	decimal, err := bson.ParseDecimal128("10.5")
+	if err != nil {
+		t.Fatalf("parse decimal: %v", err)
+	}
+	rangeFind := serveCommand(t, server, 274, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: decimal}}}}},
+		{Key: "limit", Value: int32(1)},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, rangeFind), []string{"a-match"})
+}
+
 func TestServerFindIndexedRangeNullFallsBackToScan(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -3481,6 +3520,36 @@ func TestIndexRangeOptionsForPredicatesCombinesTypedBounds(t *testing.T) {
 	}
 	if !ok || !empty {
 		t.Fatalf("wrong-type range ok=%v empty=%v want true/true", ok, empty)
+	}
+}
+
+func TestFindPlanHasDirectCandidateRequiresUsableRangeIndex(t *testing.T) {
+	decimalFraction, err := bson.ParseDecimal128("15.5")
+	if err != nil {
+		t.Fatalf("parse decimal fraction: %v", err)
+	}
+	meta := collections.CollectionMeta{Indexes: []collections.IndexDefinition{
+		{Name: "age_1", Field: "age", ValueType: collections.IndexValueInt64},
+	}}
+	if !findPlanHasDirectCandidate(meta, []findPredicate{
+		{field: "age", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, int64(10))}},
+	}) {
+		t.Fatal("usable int64 range should be a direct candidate")
+	}
+	if findPlanHasDirectCandidate(meta, []findPredicate{
+		{field: "age", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, decimalFraction)}},
+	}) {
+		t.Fatal("fractional decimal int64 range should use scan fallback, not direct candidate mode")
+	}
+	if findPlanHasDirectCandidate(meta, []findPredicate{
+		{field: "age", op: findPredicateGTE, values: []bson.RawValue{{Type: bson.TypeNull}}},
+	}) {
+		t.Fatal("null int64 range should use scan fallback, not direct candidate mode")
+	}
+	if !findPlanHasDirectCandidate(meta, []findPredicate{
+		{field: "age", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, "10")}},
+	}) {
+		t.Fatal("wrong-type int64 range should use direct empty-candidate mode")
 	}
 }
 

@@ -582,14 +582,26 @@ func findPlanHasDirectCandidate(meta collections.CollectionMeta, predicates []fi
 		return true
 	}
 	for _, pred := range predicates {
-		if pred.op != findPredicateEq && pred.op != findPredicateIn && !isRangePredicate(pred.op) {
+		if pred.op == findPredicateEq || pred.op == findPredicateIn {
+			if predicateContainsNull(pred) {
+				continue
+			}
+			for _, idx := range meta.Indexes {
+				if idx.Field == pred.field {
+					return true
+				}
+			}
 			continue
 		}
-		if predicateContainsNull(pred) {
+		if !isRangePredicate(pred.op) {
 			continue
 		}
 		for _, idx := range meta.Indexes {
-			if idx.Field == pred.field {
+			if idx.Field != pred.field {
+				continue
+			}
+			_, ok, _, err := indexRangeOptionsForPredicates(predicates, idx)
+			if err != nil || ok {
 				return true
 			}
 		}
