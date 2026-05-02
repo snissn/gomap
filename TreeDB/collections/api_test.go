@@ -610,6 +610,7 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 	mgr.SetUpdateBatchDetailedStatsEnabled(true)
 	if _, err := col.UpdateBatch([]UpdateBatchItem{
 		{DocumentID: []byte("u1"), Update: func(current []byte) ([]byte, bool, error) {
+			time.Sleep(time.Millisecond)
 			return []byte(`{"email":"ada@example.com","city":"sea"}`), true, nil
 		}},
 		{DocumentID: []byte("u2"), Update: func(current []byte) ([]byte, bool, error) {
@@ -619,8 +620,8 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 		t.Fatalf("timed update batch: %v", err)
 	}
 	timedStats := col.LastUpdateStats()
-	if timedStats.CurrentRead <= 0 {
-		t.Fatalf("timed current read=%s want positive with detailed stats enabled", timedStats.CurrentRead)
+	if timedStats.Callback <= 0 {
+		t.Fatalf("timed callback=%s want positive with detailed stats enabled", timedStats.Callback)
 	}
 
 	managerStats := mgr.StatsSnapshot()
