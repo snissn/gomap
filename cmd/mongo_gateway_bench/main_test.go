@@ -17,6 +17,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/event"
 )
@@ -127,6 +128,7 @@ func TestSelectedTreeDBStatsKeepsExpectedKeys(t *testing.T) {
 		{name: "exact commit seq", key: "treedb.commit_seq", want: true},
 		{name: "ordered root prefix", key: "treedb.publish.ordered_root_delta_group.calls_total", want: true},
 		{name: "watermark prefix", key: "treedb.publish.watermark.latency_p99_ms", want: true},
+		{name: "collection write-domain prefix", key: "treedb.collections.write_domain.indexed_flush.calls_total", want: true},
 		{name: "non match", key: "treedb.vlog.reads_total", want: false},
 	}
 	for _, tt := range tests {
@@ -148,16 +150,18 @@ func TestSelectedTreeDBStats(t *testing.T) {
 	}
 	got := selectedTreeDBStats(map[string]string{
 		"treedb.commit_seq": "11",
-		"treedb.publish.ordered_root_delta_group.calls_total":    "3",
-		"treedb.publish.ordered_root_delta_group.latency_p99_ms": "1.5",
-		"treedb.publish.watermark.latency_p99_ms":                "2.5",
-		"treedb.vlog.reads_total":                                "7",
+		"treedb.publish.ordered_root_delta_group.calls_total":       "3",
+		"treedb.publish.ordered_root_delta_group.latency_p99_ms":    "1.5",
+		"treedb.publish.watermark.latency_p99_ms":                   "2.5",
+		"treedb.collections.write_domain.indexed_flush.calls_total": "4",
+		"treedb.vlog.reads_total":                                   "7",
 	})
 	want := map[string]string{
 		"treedb.commit_seq": "11",
-		"treedb.publish.ordered_root_delta_group.calls_total":    "3",
-		"treedb.publish.ordered_root_delta_group.latency_p99_ms": "1.5",
-		"treedb.publish.watermark.latency_p99_ms":                "2.5",
+		"treedb.publish.ordered_root_delta_group.calls_total":       "3",
+		"treedb.publish.ordered_root_delta_group.latency_p99_ms":    "1.5",
+		"treedb.publish.watermark.latency_p99_ms":                   "2.5",
+		"treedb.collections.write_domain.indexed_flush.calls_total": "4",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("selected stats=%v want %v", got, want)
@@ -430,6 +434,15 @@ func TestParseConfigValidation(t *testing.T) {
 	if _, err := parseConfig([]string{"-secondary-indexes", "1", "-update-indexed-field"}); err == nil {
 		t.Fatal("update-indexed-field accepted without city index")
 	}
+	if _, err := parseConfig([]string{"-treedb-buffered-indexed-write-max-documents", "-1"}); err == nil {
+		t.Fatal("negative treedb buffered indexed max documents accepted")
+	}
+	if _, err := parseConfig([]string{"-treedb-buffered-indexed-write-max-bytes", "-1"}); err == nil {
+		t.Fatal("negative treedb buffered indexed max bytes accepted")
+	}
+	if _, err := parseConfig([]string{"-treedb-buffered-indexed-write-max-root-runs", "-1"}); err == nil {
+		t.Fatal("negative treedb buffered indexed max root runs accepted")
+	}
 }
 
 func TestRawInsertCommandBuildsBSONCommand(t *testing.T) {
@@ -491,8 +504,37 @@ func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
 	if cfg.TreeDBMaintenance != treeDBMaintenanceFull {
 		t.Fatalf("TreeDBMaintenance=%q want %q", cfg.TreeDBMaintenance, treeDBMaintenanceFull)
 	}
+	if cfg.TreeDBBufferedIndexedWriteMaxDocuments != collections.DefaultIndexedWriteMemtableMaxDocuments {
+		t.Fatalf("TreeDBBufferedIndexedWriteMaxDocuments=%d want %d", cfg.TreeDBBufferedIndexedWriteMaxDocuments, collections.DefaultIndexedWriteMemtableMaxDocuments)
+	}
+	if cfg.TreeDBBufferedIndexedWriteMaxBytes != 0 {
+		t.Fatalf("TreeDBBufferedIndexedWriteMaxBytes=%d want 0", cfg.TreeDBBufferedIndexedWriteMaxBytes)
+	}
+	if cfg.TreeDBBufferedIndexedWriteMaxRootRuns != collections.DefaultIndexedWriteMemtableMaxRootRuns {
+		t.Fatalf("TreeDBBufferedIndexedWriteMaxRootRuns=%d want %d", cfg.TreeDBBufferedIndexedWriteMaxRootRuns, collections.DefaultIndexedWriteMemtableMaxRootRuns)
+	}
 	if cfg.InsertProducers != 1 {
 		t.Fatalf("InsertProducers=%d want 1", cfg.InsertProducers)
+	}
+}
+
+func TestParseConfigTreeDBBufferedIndexedWriteThresholds(t *testing.T) {
+	cfg, err := parseConfig([]string{
+		"-treedb-buffered-indexed-write-max-documents", "1234",
+		"-treedb-buffered-indexed-write-max-bytes", "5678",
+		"-treedb-buffered-indexed-write-max-root-runs", "90",
+	})
+	if err != nil {
+		t.Fatalf("parse buffered indexed thresholds: %v", err)
+	}
+	if cfg.TreeDBBufferedIndexedWriteMaxDocuments != 1234 {
+		t.Fatalf("TreeDBBufferedIndexedWriteMaxDocuments=%d want 1234", cfg.TreeDBBufferedIndexedWriteMaxDocuments)
+	}
+	if cfg.TreeDBBufferedIndexedWriteMaxBytes != 5678 {
+		t.Fatalf("TreeDBBufferedIndexedWriteMaxBytes=%d want 5678", cfg.TreeDBBufferedIndexedWriteMaxBytes)
+	}
+	if cfg.TreeDBBufferedIndexedWriteMaxRootRuns != 90 {
+		t.Fatalf("TreeDBBufferedIndexedWriteMaxRootRuns=%d want 90", cfg.TreeDBBufferedIndexedWriteMaxRootRuns)
 	}
 }
 
@@ -1451,6 +1493,98 @@ func TestRangePhaseNameDistinguishesScanAndIndexedRuns(t *testing.T) {
 	}
 	if got := rangePhaseName(config{RangeIndex: true}); got != "age_range_indexed_limit_10" {
 		t.Fatalf("indexed range phase name=%q want indexed", got)
+	}
+}
+
+func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
+	result := &benchmarkResult{
+		Target:                                 "treedb",
+		Database:                               "bench",
+		Collection:                             "docs",
+		Documents:                              1,
+		TreeDBProfile:                          "wal_on_fast",
+		TreeDBDocumentFormat:                   "bson",
+		TreeDBDataRootStorage:                  "compressed",
+		TreeDBIndexStateRootStorage:            "compressed",
+		TreeDBIndexRootStorage:                 "compressed",
+		TreeDBBufferedIndexedWriteMaxDocuments: 1234,
+		TreeDBBufferedIndexedWriteMaxBytes:     5678,
+		TreeDBBufferedIndexedWriteMaxRootRuns:  90,
+		TreeDBMaintenanceMode:                  "none",
+	}
+	var out bytes.Buffer
+	if err := writeResult(&out, "text", result); err != nil {
+		t.Fatalf("writeResult: %v", err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"buffered_indexed_max_docs=1234",
+		"buffered_indexed_max_bytes=5678",
+		"buffered_indexed_max_root_runs=90",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("text output missing %s: %q", want, text)
+		}
+	}
+
+	out.Reset()
+	if err := writeResult(&out, "json", result); err != nil {
+		t.Fatalf("writeResult json: %v", err)
+	}
+	var decoded benchmarkResult
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("unmarshal json result: %v", err)
+	}
+	if decoded.TreeDBBufferedIndexedWriteMaxDocuments != 1234 ||
+		decoded.TreeDBBufferedIndexedWriteMaxBytes != 5678 ||
+		decoded.TreeDBBufferedIndexedWriteMaxRootRuns != 90 {
+		t.Fatalf("json thresholds docs=%d bytes=%d rootRuns=%d want 1234/5678/90",
+			decoded.TreeDBBufferedIndexedWriteMaxDocuments,
+			decoded.TreeDBBufferedIndexedWriteMaxBytes,
+			decoded.TreeDBBufferedIndexedWriteMaxRootRuns)
+	}
+}
+
+func TestRecordEffectiveTreeDBCollectionOptionsUsesNormalizedMetadata(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{
+		Name: "bench.docs",
+		Options: collections.CollectionOptions{
+			BufferedIndexedWriteMaxDocuments: 0,
+			BufferedIndexedWriteMaxBytes:     777,
+			BufferedIndexedWriteMaxRootRuns:  0,
+		},
+		Indexes: []collections.IndexDefinition{{Name: "email_1", Field: "email", ValueType: collections.IndexValueString, Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	result := &benchmarkResult{
+		TreeDBBufferedIndexedWriteMaxDocuments: 0,
+		TreeDBBufferedIndexedWriteMaxBytes:     0,
+		TreeDBBufferedIndexedWriteMaxRootRuns:  0,
+	}
+	cfg := config{
+		Target:           "treedb",
+		Database:         "bench",
+		Collection:       "docs",
+		SecondaryIndexes: 1,
+	}
+	if err := recordEffectiveTreeDBCollectionOptions(result, cfg, &benchTarget{collections: manager}); err != nil {
+		t.Fatalf("record effective options: %v", err)
+	}
+	if result.TreeDBBufferedIndexedWriteMaxDocuments != collections.DefaultIndexedWriteMemtableMaxDocuments ||
+		result.TreeDBBufferedIndexedWriteMaxBytes != 777 ||
+		result.TreeDBBufferedIndexedWriteMaxRootRuns != 0 {
+		t.Fatalf("effective thresholds docs=%d bytes=%d rootRuns=%d want %d/777/0",
+			result.TreeDBBufferedIndexedWriteMaxDocuments,
+			result.TreeDBBufferedIndexedWriteMaxBytes,
+			result.TreeDBBufferedIndexedWriteMaxRootRuns,
+			collections.DefaultIndexedWriteMemtableMaxDocuments)
 	}
 }
 

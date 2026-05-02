@@ -370,7 +370,7 @@ func TestTemplateV1IndexedWriteMemtablesResolveBufferedTemplateAcrossBatches(t *
 		doc1[i] = 0
 	}
 	col.writeDomain.mu.RLock()
-	bufferedTemplateRuns := len(col.writeDomain.rootRuns[collectionTemplateRootName("users")])
+	bufferedTemplateRuns := len(pendingIndexedRootRunsLocked(col.writeDomain, collectionTemplateRootName("users")))
 	col.writeDomain.mu.RUnlock()
 	if bufferedTemplateRuns != 1 {
 		t.Fatalf("buffered template runs=%d want 1", bufferedTemplateRuns)
@@ -396,6 +396,57 @@ func TestTemplateV1IndexedWriteMemtablesResolveBufferedTemplateAcrossBatches(t *
 	ids, err := col.FindByIndex("city", "sea")
 	if err != nil {
 		t.Fatalf("find buffered city: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u2")) {
+		t.Fatalf("city ids=%q want [u2]", ids)
+	}
+}
+
+func TestTemplateV1IndexedFlushUnitResolveBufferedTemplate(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatTemplateV1,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	var encoder TemplateV1Encoder
+	doc1, err := encoder.EncodeDocument([]string{"email", "city"}, []any{"ada@example.com", "hnl"})
+	if err != nil {
+		t.Fatalf("encode doc1: %v", err)
+	}
+	doc2, err := encoder.EncodeDocument([]string{"email", "city"}, []any{"grace@example.com", "sea"})
+	if err != nil {
+		t.Fatalf("encode doc2: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{doc1}); err != nil {
+		t.Fatalf("insert first buffered batch: %v", err)
+	}
+	col.writeDomain.mu.Lock()
+	if !rotateIndexedMutableToFlushUnitLocked(col.writeDomain) {
+		t.Fatal("rotate indexed mutable state returned false")
+	}
+	col.writeDomain.mu.Unlock()
+	if _, err := col.InsertBatch([][]byte{[]byte("u2")}, [][]byte{doc2}); err != nil {
+		t.Fatalf("insert second batch using flush-unit template: %v", err)
+	}
+	ids, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find city: %v", err)
 	}
 	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u2")) {
 		t.Fatalf("city ids=%q want [u2]", ids)
