@@ -85,6 +85,25 @@ func TestProfileBenchUpdateIDStrideCoversDocumentSet(t *testing.T) {
 	}
 }
 
+func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH", "")
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS", "")
+	if profileBenchBufferedIndexedAsyncFlush(t) {
+		t.Fatal("async flush default=true want false")
+	}
+	if got := profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(t); got != 0 {
+		t.Fatalf("async max queued units default=%d want 0", got)
+	}
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH", "true")
+	if !profileBenchBufferedIndexedAsyncFlush(t) {
+		t.Fatal("async flush env=true want true")
+	}
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS", "6")
+	if got := profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(t); got != 6 {
+		t.Fatalf("async max queued units=%d want 6", got)
+	}
+}
+
 func BenchmarkTreeDBGatewayLoadBSONIndexes2(b *testing.B) {
 	benchmarkTreeDBGatewayLoad(b, collections.DocumentFormatBSON, 2, false)
 }
@@ -132,9 +151,11 @@ func BenchmarkTreeDBGatewayRawWireLoadBSONIndexes2(b *testing.B) {
 	if _, err := manager.CreateCollection(&collections.CollectionMeta{
 		Name: "bench.docs",
 		Options: collections.CollectionOptions{
-			DocumentFormat:          collections.DocumentFormatBSON,
-			DataRootStoragePolicy:   collections.RootStorageCompressed,
-			IndexStateStoragePolicy: collections.RootStorageCompressed,
+			DocumentFormat:                          collections.DocumentFormatBSON,
+			DataRootStoragePolicy:                   collections.RootStorageCompressed,
+			IndexStateStoragePolicy:                 collections.RootStorageCompressed,
+			BufferedIndexedAsyncFlush:               profileBenchBufferedIndexedAsyncFlush(b),
+			BufferedIndexedAsyncFlushMaxQueuedUnits: profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(b),
 		},
 	}); err != nil {
 		b.Fatalf("create collection: %v", err)
@@ -164,9 +185,11 @@ func BenchmarkTreeDBGatewayRawWireLoadBSONIndexes2(b *testing.B) {
 	server.Collections = manager
 	server.MaxFindScanDocuments = b.N
 	server.DefaultCollectionOptions = collections.CollectionOptions{
-		DocumentFormat:          collections.DocumentFormatBSON,
-		DataRootStoragePolicy:   collections.RootStorageCompressed,
-		IndexStateStoragePolicy: collections.RootStorageCompressed,
+		DocumentFormat:                          collections.DocumentFormatBSON,
+		DataRootStoragePolicy:                   collections.RootStorageCompressed,
+		IndexStateStoragePolicy:                 collections.RootStorageCompressed,
+		BufferedIndexedAsyncFlush:               profileBenchBufferedIndexedAsyncFlush(b),
+		BufferedIndexedAsyncFlushMaxQueuedUnits: profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(b),
 	}
 	server.DefaultIndexStoragePolicy = collections.RootStorageCompressed
 	commandDoc := mustProfileBenchDocument(b, bson.D{
@@ -214,7 +237,13 @@ func BenchmarkTreeDBGatewayRawWireLoadBSONIndexes2(b *testing.B) {
 		timedElapsed += time.Since(batchStart)
 		inserted += count
 	}
+	flushStart := time.Now()
+	if err := manager.FlushAll(); err != nil {
+		b.Fatalf("flush raw-wire collections: %v", err)
+	}
+	timedElapsed += time.Since(flushStart)
 	b.StopTimer()
+	reportProfileBenchBufferedIndexedAsyncFlush(b, collection.Meta().Options)
 	reportDocsPerSecond(b, b.N, timedElapsed)
 }
 
@@ -313,9 +342,11 @@ func BenchmarkDirectCollectionLoadBSONIndexes2(b *testing.B) {
 	if _, err := manager.CreateCollection(&collections.CollectionMeta{
 		Name: "bench.docs",
 		Options: collections.CollectionOptions{
-			DocumentFormat:          collections.DocumentFormatBSON,
-			DataRootStoragePolicy:   collections.RootStorageCompressed,
-			IndexStateStoragePolicy: collections.RootStorageCompressed,
+			DocumentFormat:                          collections.DocumentFormatBSON,
+			DataRootStoragePolicy:                   collections.RootStorageCompressed,
+			IndexStateStoragePolicy:                 collections.RootStorageCompressed,
+			BufferedIndexedAsyncFlush:               profileBenchBufferedIndexedAsyncFlush(b),
+			BufferedIndexedAsyncFlushMaxQueuedUnits: profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(b),
 		},
 	}); err != nil {
 		b.Fatalf("create collection: %v", err)
@@ -371,13 +402,16 @@ func BenchmarkDirectCollectionLoadBSONIndexes2(b *testing.B) {
 		timedElapsed += time.Since(batchStart)
 		inserted += count
 	}
-	b.StopTimer()
+	flushStart := time.Now()
 	if err := manager.FlushAll(); err != nil {
 		b.Fatalf("flush collections: %v", err)
 	}
+	timedElapsed += time.Since(flushStart)
+	b.StopTimer()
 	if err := backend.Checkpoint(); err != nil {
 		b.Fatalf("checkpoint backend: %v", err)
 	}
+	reportProfileBenchBufferedIndexedAsyncFlush(b, collection.Meta().Options)
 	reportDocsPerSecond(b, b.N, timedElapsed)
 }
 
@@ -399,9 +433,11 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	if _, err := manager.CreateCollection(&collections.CollectionMeta{
 		Name: "bench.docs",
 		Options: collections.CollectionOptions{
-			DocumentFormat:          collections.DocumentFormatBSON,
-			DataRootStoragePolicy:   collections.RootStorageCompressed,
-			IndexStateStoragePolicy: collections.RootStorageCompressed,
+			DocumentFormat:                          collections.DocumentFormatBSON,
+			DataRootStoragePolicy:                   collections.RootStorageCompressed,
+			IndexStateStoragePolicy:                 collections.RootStorageCompressed,
+			BufferedIndexedAsyncFlush:               profileBenchBufferedIndexedAsyncFlush(b),
+			BufferedIndexedAsyncFlushMaxQueuedUnits: profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(b),
 		},
 	}); err != nil {
 		b.Fatalf("create collection: %v", err)
@@ -499,12 +535,18 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	b.ResetTimer()
 	started := time.Now()
 	err = runProfileBenchDirectCollectionConcurrentUpdates(context.Background(), writers, b.N, documentCount, idStride, ids, updateDocs, collection)
+	if err == nil {
+		// Keep async indexed-flush rows comparable with synchronous rows: the
+		// timed update phase includes the final drain of deferred publish work.
+		err = manager.FlushAll()
+	}
 	timedElapsed := time.Since(started)
 	b.StopTimer()
 	if err != nil {
 		b.Fatalf("run concurrent updates: %v", err)
 	}
 	b.ReportMetric(float64(writers), "writers")
+	reportProfileBenchBufferedIndexedAsyncFlush(b, collection.Meta().Options)
 	reportCollectionManagerUpdateStats(b, deltaCollectionManagerUpdateStats(manager.StatsSnapshot(), statsBefore), b.N)
 	reportDocsPerSecond(b, b.N, timedElapsed)
 }
@@ -1228,6 +1270,27 @@ func profileBenchConcurrentWriters(tb testing.TB) int {
 	return profileBenchPositiveEnvInt(tb, "MONGO_GATEWAY_PROFILE_BENCH_WRITERS", 8)
 }
 
+func profileBenchBufferedIndexedAsyncFlush(tb testing.TB) bool {
+	return profileBenchBoolEnv(tb, "MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH", false)
+}
+
+func profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(tb testing.TB) int {
+	return profileBenchNonNegativeEnvInt(tb, "MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS", 0)
+}
+
+func profileBenchBoolEnv(tb testing.TB, name string, defaultValue bool) bool {
+	tb.Helper()
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return defaultValue
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		tb.Fatalf("invalid %s=%q", name, raw)
+	}
+	return value
+}
+
 func profileBenchPositiveEnvInt(tb testing.TB, name string, defaultValue int) int {
 	tb.Helper()
 	raw := os.Getenv(name)
@@ -1239,6 +1302,29 @@ func profileBenchPositiveEnvInt(tb testing.TB, name string, defaultValue int) in
 		tb.Fatalf("invalid %s=%q", name, raw)
 	}
 	return value
+}
+
+func profileBenchNonNegativeEnvInt(tb testing.TB, name string, defaultValue int) int {
+	tb.Helper()
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return defaultValue
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		tb.Fatalf("invalid %s=%q", name, raw)
+	}
+	return value
+}
+
+func reportProfileBenchBufferedIndexedAsyncFlush(b *testing.B, opts collections.CollectionOptions) {
+	b.Helper()
+	if opts.BufferedIndexedAsyncFlush {
+		b.ReportMetric(1, "buffered_async_flush")
+		if opts.BufferedIndexedAsyncFlushMaxQueuedUnits > 0 {
+			b.ReportMetric(float64(opts.BufferedIndexedAsyncFlushMaxQueuedUnits), "buffered_async_max_units")
+		}
+	}
 }
 
 func reportDocsPerSecond(b *testing.B, docs int, elapsed time.Duration) {

@@ -119,6 +119,26 @@ normalized collection thresholds after index creation. For document thresholds,
 disables that trigger unless all indexed-write thresholds are otherwise left at
 their native defaults.
 
+The Go profile benchmarks in `profile_bench_test.go` keep their defaults stable,
+but can opt into the same indexed async flush mode for focused root-publish
+experiments:
+
+```sh
+MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH=true \
+MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS=4 \
+go test ./cmd/mongo_gateway_bench \
+  -run '^$' \
+  -bench '^BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2$' \
+  -benchtime=100000x \
+  -benchmem
+```
+
+When enabled, those benchmark rows include `buffered_async_flush` and the
+normalized `buffered_async_max_units` so they are not compared against
+synchronous-threshold rows by accident. The concurrent update profile benchmark
+times a final `FlushAll()` drain before reporting docs/sec, so async rows include
+deferred indexed publish work rather than enqueue latency alone.
+
 ## MongoDB Target
 
 ```sh
@@ -512,14 +532,19 @@ The benchmark shapes are intentionally different:
   manager's measured-phase counters. `update_buffer_lock_hold_ns/doc` is the
   enclosing domain mutex hold time for buffered staging, not an additive sibling
   of the other buffer-stage submetrics; `update_buffer_flush_ns/doc` reports
-  threshold-flush scheduling/publish time separately.
+  threshold-flush scheduling/publish time separately. The measured phase includes
+  the final `FlushAll()` drain so background async publish work is charged to the
+  same throughput row that scheduled it.
 - `BenchmarkClientBSONBatchEncode` measures client-side BSON document encoding
   alone.
 
 The benchmark-only helpers accept these optional environment variables:
 `MONGO_GATEWAY_PROFILE_BENCH_BATCH_SIZE`,
 `MONGO_GATEWAY_PROFILE_BENCH_UPDATE_DOCUMENTS`, and
-`MONGO_GATEWAY_PROFILE_BENCH_WRITERS`.
+`MONGO_GATEWAY_PROFILE_BENCH_WRITERS`. They also accept
+`MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH` and
+`MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS` for
+focused indexed async-flush experiments.
 
 Use the official-driver row for user-visible Mongo compatibility throughput, the
 driver-command rows to quantify the driver's CRUD-helper overhead, the raw-wire
