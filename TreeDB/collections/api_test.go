@@ -603,7 +603,10 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 	if stats.SecondaryKeyBytes == 0 {
 		t.Fatal("stats secondary key bytes=0 want positive")
 	}
-	if stats.CurrentRead != 0 || stats.Callback != 0 || stats.BufferStage != 0 {
+	if stats.CurrentRead != 0 || stats.Callback != 0 || stats.BufferStage != 0 ||
+		stats.BufferStageLockWait != 0 || stats.BufferStageLockHold != 0 ||
+		stats.BufferStagePrimaryIdx != 0 || stats.BufferStageUniqueIdx != 0 ||
+		stats.BufferStageRootAppend != 0 || stats.BufferStageFlush != 0 {
 		t.Fatalf("default update timings=%+v want zero unless detailed stats enabled", stats)
 	}
 
@@ -623,6 +626,9 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 	if timedStats.Callback <= 0 {
 		t.Fatalf("timed callback=%s want positive with detailed stats enabled", timedStats.Callback)
 	}
+	if timedStats.BufferStage <= 0 {
+		t.Fatalf("timed buffer stage=%s want positive with detailed stats enabled", timedStats.BufferStage)
+	}
 
 	managerStats := mgr.StatsSnapshot()
 	if got := managerStats.UpdateBatchCalls; got == 0 {
@@ -640,6 +646,9 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 	exported := mgr.Stats()
 	if _, ok := exported["treedb.collections.write_domain.update_batch.secondary_sets_total"]; !ok {
 		t.Fatalf("manager stats missing update batch secondary set counter: keys=%v", exported)
+	}
+	if _, ok := exported["treedb.collections.write_domain.update_batch.buffer_stage_lock_hold_ns_total"]; !ok {
+		t.Fatalf("manager stats missing buffer stage lock hold counter: keys=%v", exported)
 	}
 }
 
