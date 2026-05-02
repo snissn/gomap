@@ -327,6 +327,16 @@ type CollectionUpdateStats struct {
 	SecondaryDeleteEntries int
 	SecondarySetEntries    int
 	SecondaryKeyBytes      int
+	SecondaryRuns          []CollectionUpdateSecondaryRunStats
+}
+
+// CollectionUpdateSecondaryRunStats captures per-secondary-index delta counters
+// from an UpdateBatch-style call.
+type CollectionUpdateSecondaryRunStats struct {
+	IndexName string
+	Deletes   int
+	Sets      int
+	KeyBytes  int
 }
 
 // CollectionManagerStats captures aggregate write-domain counters for a
@@ -772,7 +782,7 @@ func (c *Collection) LastUpdateStats() CollectionUpdateStats {
 	}
 	c.updateStatsMu.RLock()
 	defer c.updateStatsMu.RUnlock()
-	return c.lastUpdateStats
+	return cloneCollectionUpdateStats(c.lastUpdateStats)
 }
 
 func (c *Collection) setLastUpdateStats(stats CollectionUpdateStats) {
@@ -780,11 +790,18 @@ func (c *Collection) setLastUpdateStats(stats CollectionUpdateStats) {
 		return
 	}
 	c.updateStatsMu.Lock()
-	c.lastUpdateStats = stats
+	c.lastUpdateStats = cloneCollectionUpdateStats(stats)
 	c.updateStatsMu.Unlock()
 	if c.writeDomain != nil {
 		c.writeDomain.observeUpdateBatchStats(stats)
 	}
+}
+
+func cloneCollectionUpdateStats(stats CollectionUpdateStats) CollectionUpdateStats {
+	if len(stats.SecondaryRuns) > 0 {
+		stats.SecondaryRuns = append([]CollectionUpdateSecondaryRunStats(nil), stats.SecondaryRuns...)
+	}
+	return stats
 }
 
 func (c *Collection) updateBatchDetailedStatsEnabled() bool {
@@ -3389,6 +3406,52 @@ func bufferedUniqueIndexValueRun(batchIndex memtable.Table, valueType IndexValue
 	}
 	table.Freeze()
 	return table, prefixes, nil
+}
+
+func bufferedUnchangedUniqueValueRuns(runtimes []indexRuntime, updates []preparedBatchUpdate) ([]updateBatchUniqueValueRun, error) {
+	var out []updateBatchUniqueValueRun
+	for runtimeIdx, runtime := range runtimes {
+		if !runtime.def.unique {
+			continue
+		}
+		var table memtable.Table
+		var prefixes [][]byte
+		var arena []byte
+		for _, update := range updates {
+			if !update.indexStateChanged {
+				continue
+			}
+			if !normalizedEncodedIndexValuesEqual(update.oldState.valuesAt(runtimeIdx), update.newState.valuesAt(runtimeIdx)) {
+				continue
+			}
+			for _, encoded := range update.newState.valuesAt(runtimeIdx) {
+				if table == nil {
+					table = newCollectionRunTable(0)
+				}
+				var prefix []byte
+				var err error
+				arena, prefix, err = appendIndexValuePrefixSlice(arena, encoded)
+				if err != nil {
+					resetCollectionRunTable(table)
+					resetUpdateBatchUniqueValueRuns(out)
+					return nil, err
+				}
+				setCollectionRunValue(table, prefix, nil)
+				prefixes = append(prefixes, prefix)
+			}
+		}
+		if table == nil || table.Len() == 0 {
+			resetCollectionRunTable(table)
+			continue
+		}
+		table.Freeze()
+		out = append(out, updateBatchUniqueValueRun{
+			indexName: runtime.def.name,
+			table:     table,
+			prefixes:  prefixes,
+		})
+	}
+	return out, nil
 }
 
 func indexEntryValuePrefix(key []byte, valueType IndexValueType) ([]byte, error) {
@@ -6068,7 +6131,7 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		}
 		indexStateChanged = !documentIndexStatesEqual(oldState, newState)
 		if indexStateChanged {
-			if err := rejectReplaceUniqueConflicts(snap, catalog, runtimes, newState, documentID, nil); err != nil {
+			if err := rejectReplaceUniqueConflicts(snap, catalog, runtimes, oldState, newState, documentID, nil); err != nil {
 				_ = snap.Close()
 				return false, false, err
 			}
@@ -6132,6 +6195,9 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		}
 
 		for _, runtime := range runtimes {
+			if !documentIndexRuntimeChanged(oldState, newState, runtime) {
+				continue
+			}
 			rootName := collectionSecondaryRootName(c.meta.Name, runtime.def.name)
 			rootID := catalog.rootID(rootName)
 			table := newCollectionRunTable(0)
@@ -6217,11 +6283,18 @@ type updateBatchPlan struct {
 	policies                    []backenddb.OrderedRootStoragePolicy
 	deltaTables                 []memtable.Table
 	uniqueSecondaryIndexByRoot  []int
+	uniqueValueRuns             []updateBatchUniqueValueRun
 	canBufferIndexedUpdateBatch bool
 	bufferedBase                bool
 	bufferedReadGeneration      uint64
 	bufferedReadBlocked         bool
 	scratch                     *updateBatchPlanScratch
+}
+
+type updateBatchUniqueValueRun struct {
+	indexName string
+	table     memtable.Table
+	prefixes  [][]byte
 }
 
 var updateBatchPlanPool sync.Pool
@@ -6471,6 +6544,7 @@ func (plan *updateBatchPlan) close() {
 		_ = plan.snap.Close()
 	}
 	resetCollectionTables(plan.deltaTables)
+	resetUpdateBatchUniqueValueRuns(plan.uniqueValueRuns)
 	if plan.scratch != nil {
 		putUpdateBatchPlanScratch(plan.scratch)
 	}
@@ -7072,7 +7146,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	batchReplacements := batchUniqueReplacementOwners(runtimes, changed)
 	for i := range changed {
 		if changed[i].indexStateChanged {
-			if err := rejectReplaceUniqueConflictsOrdered(snap, catalog, runtimes, changed[i].newState, changed[i].documentID, batchReplacements); err != nil {
+			if err := rejectReplaceUniqueConflictsOrdered(snap, catalog, runtimes, changed[i].oldState, changed[i].newState, changed[i].documentID, batchReplacements); err != nil {
 				_ = snap.Close()
 				return nil, updateBatchItemError(changed[i].itemIndex, err)
 			}
@@ -7086,6 +7160,8 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 
 	var stateTable memtable.Table
 	secondaryTables := make(map[string]memtable.Table, len(runtimes))
+	secondaryRunStats := make([]CollectionUpdateSecondaryRunStats, len(runtimes))
+	var uniqueValueRuns []updateBatchUniqueValueRun
 	success := false
 	defer func() {
 		if success {
@@ -7097,6 +7173,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		for _, table := range secondaryTables {
 			resetCollectionRunTable(table)
 		}
+		resetUpdateBatchUniqueValueRuns(uniqueValueRuns)
 	}()
 
 	if len(templateRecords) > 0 {
@@ -7171,11 +7248,18 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 				continue
 			}
 			for runtimeIdx, runtime := range runtimes {
+				if !orderedDocumentIndexRuntimeChanged(item.oldState, item.newState, runtimeIdx) {
+					continue
+				}
 				rootName := runtimeSecondaryRootName(meta.Name, runtime)
 				table := secondaryTables[rootName]
 				if table == nil {
 					table = newCollectionRunTable(0)
 					secondaryTables[rootName] = table
+				}
+				runStats := &secondaryRunStats[runtimeIdx]
+				if runStats.IndexName == "" {
+					runStats.IndexName = runtime.def.name
 				}
 				deleteKeys, err := secondaryDeleteKeysForOrderedDocument(runtimeIdx, runtime, item.oldState, item.documentID)
 				if err != nil {
@@ -7186,6 +7270,8 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 					table.DeleteSteal(bytes.Clone(key))
 					stats.SecondaryDeleteEntries++
 					stats.SecondaryKeyBytes += len(key)
+					runStats.Deletes++
+					runStats.KeyBytes += len(key)
 				}
 				for _, encoded := range item.newState.valuesAt(runtimeIdx) {
 					key, err := indexEntryKey(encoded, item.documentID)
@@ -7196,6 +7282,8 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 					table.SetSteal(key, nil)
 					stats.SecondarySetEntries++
 					stats.SecondaryKeyBytes += len(key)
+					runStats.Sets++
+					runStats.KeyBytes += len(key)
 				}
 			}
 		}
@@ -7215,6 +7303,9 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			baseRootIDs[rootName] = catalog.rootID(rootName)
 			policies = append(policies, runtime.def.storagePolicy)
 			deltaTables = append(deltaTables, table)
+			if runStats := secondaryRunStats[runtimeIdx]; runStats.Deletes != 0 || runStats.Sets != 0 || runStats.KeyBytes != 0 {
+				stats.SecondaryRuns = append(stats.SecondaryRuns, runStats)
+			}
 			delete(secondaryTables, rootName)
 		}
 		stats.SecondaryRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
@@ -7225,6 +7316,14 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	resetCollectionRunTable(stateTable)
 	for _, table := range secondaryTables {
 		resetCollectionRunTable(table)
+	}
+	if canBufferIndexedUpdateBatch && meta.Options.BufferedIndexedWrites && collectionMetaHasSecondaryUniqueIndex(meta) {
+		var err error
+		uniqueValueRuns, err = bufferedUnchangedUniqueValueRuns(runtimes, changed)
+		if err != nil {
+			_ = snap.Close()
+			return nil, err
+		}
 	}
 	success = true
 	plan := newUpdateBatchPlan()
@@ -7248,7 +7347,9 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		policies:                    policies,
 		deltaTables:                 deltaTables,
 		scratch:                     scratch,
+		uniqueValueRuns:             uniqueValueRuns,
 	}
+	uniqueValueRuns = nil
 	scratchOwnedByPlan = true
 	return plan, nil
 }
@@ -7497,6 +7598,32 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		plan.stats.BufferStageRootAppend += updateBatchStatsSince(detailedStats, phaseStart)
 	}
 	plan.deltaTables = nil
+	if len(plan.uniqueValueRuns) > 0 {
+		phaseStart = updateBatchStatsNow(detailedStats)
+		if domain.uniqueValueRuns == nil {
+			domain.uniqueValueRuns = make(map[string][]memtable.Table)
+		}
+		if domain.uniqueValueIndex == nil {
+			domain.uniqueValueIndex = make(map[string]*bufferedUniqueValueIndex)
+		}
+		for i := range plan.uniqueValueRuns {
+			run := &plan.uniqueValueRuns[i]
+			if run.table == nil {
+				continue
+			}
+			domain.uniqueValueRuns[run.indexName] = append(domain.uniqueValueRuns[run.indexName], run.table)
+			index := domain.uniqueValueIndex[run.indexName]
+			if index == nil {
+				index = newBufferedUniqueValueIndex(max(1, len(run.prefixes)))
+				domain.uniqueValueIndex[run.indexName] = index
+			}
+			index.addAll(run.prefixes)
+			stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, run.table.Size())
+			run.table = nil
+			run.prefixes = nil
+		}
+		plan.stats.BufferStageUniqueIdx += updateBatchStatsSince(detailedStats, phaseStart)
+	}
 	domain.loaded = true
 	domain.meta = plan.meta
 	domain.catalog = plan.catalog
@@ -7593,6 +7720,13 @@ func rejectBatchUniqueConflicts(runtimes []indexRuntime, updates []preparedBatch
 	return nil
 }
 
+func resetUpdateBatchUniqueValueRuns(runs []updateBatchUniqueValueRun) {
+	for i := range runs {
+		resetCollectionRunTable(runs[i].table)
+		runs[i] = updateBatchUniqueValueRun{}
+	}
+}
+
 func updateBatchChangesSecondaryUniqueIndex(runtimes []indexRuntime, updates []preparedBatchUpdate) bool {
 	if len(runtimes) == 0 || len(updates) == 0 {
 		return false
@@ -7608,6 +7742,14 @@ func updateBatchChangesSecondaryUniqueIndex(runtimes []indexRuntime, updates []p
 		}
 	}
 	return false
+}
+
+func documentIndexRuntimeChanged(oldState, newState documentIndexState, runtime indexRuntime) bool {
+	return !normalizedEncodedIndexValuesEqual(oldState[runtime.def.name], newState[runtime.def.name])
+}
+
+func orderedDocumentIndexRuntimeChanged(oldState, newState orderedDocumentIndexState, runtimeIdx int) bool {
+	return !normalizedEncodedIndexValuesEqual(oldState.valuesAt(runtimeIdx), newState.valuesAt(runtimeIdx))
 }
 
 func normalizedEncodedIndexValuesEqual(left, right [][]byte) bool {
@@ -8344,7 +8486,7 @@ func secondaryDeleteKeysForOrderedDocument(runtimeIdx int, runtime indexRuntime,
 	return out, nil
 }
 
-func rejectReplaceUniqueConflicts(snap *backenddb.Snapshot, catalog *collectionCatalog, runtimes []indexRuntime, state documentIndexState, documentID []byte, batchReplacements batchUniqueReplacementSet) error {
+func rejectReplaceUniqueConflicts(snap *backenddb.Snapshot, catalog *collectionCatalog, runtimes []indexRuntime, oldState, newState documentIndexState, documentID []byte, batchReplacements batchUniqueReplacementSet) error {
 	if snap == nil || catalog == nil {
 		return nil
 	}
@@ -8352,11 +8494,14 @@ func rejectReplaceUniqueConflicts(snap *backenddb.Snapshot, catalog *collectionC
 		if !runtime.def.unique {
 			continue
 		}
+		if !documentIndexRuntimeChanged(oldState, newState, runtime) {
+			continue
+		}
 		rootID := catalog.rootID(collectionSecondaryRootName(catalog.meta.Name, runtime.def.name))
 		if rootID == 0 {
 			continue
 		}
-		for _, encoded := range state[runtime.def.name] {
+		for _, encoded := range newState[runtime.def.name] {
 			_, prefix, err := appendIndexValuePrefixSlice(make([]byte, 0, 2+len(encoded)), encoded)
 			if err != nil {
 				return err
@@ -8394,7 +8539,7 @@ func rejectReplaceUniqueConflicts(snap *backenddb.Snapshot, catalog *collectionC
 	return nil
 }
 
-func rejectReplaceUniqueConflictsOrdered(snap *backenddb.Snapshot, catalog *collectionCatalog, runtimes []indexRuntime, state orderedDocumentIndexState, documentID []byte, batchReplacements batchUniqueReplacementSet) error {
+func rejectReplaceUniqueConflictsOrdered(snap *backenddb.Snapshot, catalog *collectionCatalog, runtimes []indexRuntime, oldState, newState orderedDocumentIndexState, documentID []byte, batchReplacements batchUniqueReplacementSet) error {
 	if snap == nil || catalog == nil {
 		return nil
 	}
@@ -8402,11 +8547,14 @@ func rejectReplaceUniqueConflictsOrdered(snap *backenddb.Snapshot, catalog *coll
 		if !runtime.def.unique {
 			continue
 		}
+		if !orderedDocumentIndexRuntimeChanged(oldState, newState, runtimeIdx) {
+			continue
+		}
 		rootID := catalog.rootID(collectionSecondaryRootName(catalog.meta.Name, runtime.def.name))
 		if rootID == 0 {
 			continue
 		}
-		for _, encoded := range state.valuesAt(runtimeIdx) {
+		for _, encoded := range newState.valuesAt(runtimeIdx) {
 			_, prefix, err := appendIndexValuePrefixSlice(make([]byte, 0, 2+len(encoded)), encoded)
 			if err != nil {
 				return err

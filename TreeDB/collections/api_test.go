@@ -9535,6 +9535,9 @@ func TestCollectionUpdateSkipsIndexRootsWhenIndexedValuesUnchanged(t *testing.T)
 			t.Fatalf("root %q did not change for indexed update", rootName)
 		}
 	}
+	if rootName := collectionSecondaryRootName("users", "city"); afterIndexed[rootName] != after[rootName] {
+		t.Fatalf("root %q changed from %d to %d for email-only update", rootName, after[rootName], afterIndexed[rootName])
+	}
 	ids, err := col.FindByIndexValue("email", "ada2@example.com")
 	if err != nil {
 		t.Fatalf("find new email: %v", err)
@@ -9548,6 +9551,160 @@ func TestCollectionUpdateSkipsIndexRootsWhenIndexedValuesUnchanged(t *testing.T)
 	}
 	if len(ids) != 0 {
 		t.Fatalf("old email ids=%q want none", ids)
+	}
+}
+
+func TestCollectionUpdateBatchSkipsUnchangedSecondaryIndexes(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DisableIndexedWriteMemtables: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com","city":"hnl","seen":false}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	loadCatalog := func() *collectionCatalog {
+		t.Helper()
+		snap := d.AcquireSnapshot()
+		if snap == nil {
+			t.Fatal("expected snapshot")
+		}
+		defer func() { _ = snap.Close() }()
+		catalog, err := loadCollectionCatalog(snap, "users")
+		if err != nil {
+			t.Fatalf("load catalog: %v", err)
+		}
+		if catalog == nil {
+			t.Fatal("missing catalog")
+		}
+		return catalog
+	}
+	roots := func(catalog *collectionCatalog) map[string]uint64 {
+		t.Helper()
+		names := []string{
+			collectionPrimaryRootName("users"),
+			collectionIndexStateRootName("users"),
+			collectionSecondaryRootName("users", "email"),
+			collectionSecondaryRootName("users", "city"),
+		}
+		out := make(map[string]uint64, len(names))
+		for _, name := range names {
+			rootID := catalog.rootID(name)
+			if rootID == 0 {
+				t.Fatalf("root %q was not persisted", name)
+			}
+			out[name] = rootID
+		}
+		return out
+	}
+
+	before := roots(loadCatalog())
+	results, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func([]byte) ([]byte, bool, error) {
+			return []byte(`{"email":"ada@example.com","city":"sea","seen":false}`), true, nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("update city: %v", err)
+	}
+	if got := results; len(got) != 1 || !got[0].Matched || !got[0].Modified {
+		t.Fatalf("results=%+v want one matched modified row", got)
+	}
+	stats := col.LastUpdateStats()
+	if got, want := stats.SecondaryDeleteEntries, 1; got != want {
+		t.Fatalf("secondary deletes=%d want %d", got, want)
+	}
+	if got, want := stats.SecondarySetEntries, 1; got != want {
+		t.Fatalf("secondary sets=%d want %d", got, want)
+	}
+	if got, want := len(stats.SecondaryRuns), 1; got != want {
+		t.Fatalf("secondary runs=%d want %d: %+v", got, want, stats.SecondaryRuns)
+	}
+	if run := stats.SecondaryRuns[0]; run.IndexName != "city" || run.Deletes != 1 || run.Sets != 1 || run.KeyBytes == 0 {
+		t.Fatalf("city secondary run stats=%+v want city delete+set with key bytes", run)
+	}
+	stats.SecondaryRuns[0].IndexName = "mutated"
+	if got := col.LastUpdateStats().SecondaryRuns[0].IndexName; got != "city" {
+		t.Fatalf("LastUpdateStats did not return owned secondary-run stats, got %q", got)
+	}
+
+	afterCity := roots(loadCatalog())
+	for _, rootName := range []string{
+		collectionPrimaryRootName("users"),
+		collectionIndexStateRootName("users"),
+		collectionSecondaryRootName("users", "city"),
+	} {
+		if afterCity[rootName] == before[rootName] {
+			t.Fatalf("root %q did not change for city update", rootName)
+		}
+	}
+	if rootName := collectionSecondaryRootName("users", "email"); afterCity[rootName] != before[rootName] {
+		t.Fatalf("root %q changed from %d to %d for city-only update", rootName, before[rootName], afterCity[rootName])
+	}
+	ids, err := col.FindByIndexValue("city", "sea")
+	if err != nil {
+		t.Fatalf("find city sea: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("city sea ids=%q want u1", ids)
+	}
+	ids, err = col.FindByIndexValue("email", "ada@example.com")
+	if err != nil {
+		t.Fatalf("find email: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("email ids=%q want u1", ids)
+	}
+
+	beforeSame := roots(loadCatalog())
+	if _, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func([]byte) ([]byte, bool, error) {
+			return []byte(`{"email":"ada@example.com","city":"sea","seen":true}`), true, nil
+		},
+	}}); err != nil {
+		t.Fatalf("update same indexed values: %v", err)
+	}
+	stats = col.LastUpdateStats()
+	if stats.SecondaryDeleteEntries != 0 || stats.SecondarySetEntries != 0 || stats.SecondaryKeyBytes != 0 || len(stats.SecondaryRuns) != 0 {
+		t.Fatalf("same-index update secondary stats deletes=%d sets=%d bytes=%d runs=%+v, want no secondary work",
+			stats.SecondaryDeleteEntries, stats.SecondarySetEntries, stats.SecondaryKeyBytes, stats.SecondaryRuns)
+	}
+	afterSame := roots(loadCatalog())
+	for _, rootName := range []string{
+		collectionIndexStateRootName("users"),
+		collectionSecondaryRootName("users", "email"),
+		collectionSecondaryRootName("users", "city"),
+	} {
+		if afterSame[rootName] != beforeSame[rootName] {
+			t.Fatalf("root %q changed from %d to %d for same-index update", rootName, beforeSame[rootName], afterSame[rootName])
+		}
+	}
+	if rootName := collectionPrimaryRootName("users"); afterSame[rootName] == beforeSame[rootName] {
+		t.Fatalf("primary root %q did not change for document replacement", rootName)
 	}
 }
 
