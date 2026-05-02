@@ -119,6 +119,24 @@ normalized collection thresholds after index creation. For document thresholds,
 disables that trigger unless all indexed-write thresholds are otherwise left at
 their native defaults.
 
+The Go profile benchmarks in `profile_bench_test.go` keep their defaults stable,
+but can opt into the same indexed async flush mode for focused root-publish
+experiments:
+
+```sh
+MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH=true \
+MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS=4 \
+go test ./cmd/mongo_gateway_bench \
+  -run '^$' \
+  -bench '^BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2$' \
+  -benchtime=100000x \
+  -benchmem
+```
+
+When enabled, those benchmark rows include `buffered_async_flush` and the
+normalized `buffered_async_max_units` so they are not compared against
+synchronous-threshold rows by accident.
+
 ## MongoDB Target
 
 ```sh
