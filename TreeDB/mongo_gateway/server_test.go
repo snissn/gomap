@@ -1795,6 +1795,48 @@ func TestServerIndexMetadataCommands(t *testing.T) {
 	assertIndexName(t, indexBatch[0], "_id_")
 }
 
+func TestServerCreateIndexesAutoCreateDedupesIdenticalDefinitions(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	createResponse := serveCommand(t, server, 2272, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{
+				{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+				{Key: "name", Value: "email_1"},
+				{Key: "unique", Value: true},
+			},
+			bson.D{
+				{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+				{Key: "name", Value: "email_1"},
+				{Key: "unique", Value: true},
+			},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, createResponse)
+	assertBool(t, createResponse, "createdCollectionAutomatically", true)
+	assertInt32(t, createResponse, "numIndexesBefore", 1)
+	assertInt32(t, createResponse, "numIndexesAfter", 2)
+
+	indexesResponse := serveCommand(t, server, 2273, bson.D{
+		{Key: "listIndexes", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	indexBatch := cursorFirstBatch(t, indexesResponse)
+	if got, want := len(indexBatch), 2; got != want {
+		t.Fatalf("index batch len=%d want %d", got, want)
+	}
+	assertIndexName(t, indexBatch[0], "_id_")
+	assertIndexName(t, indexBatch[1], "email_1")
+}
+
 func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

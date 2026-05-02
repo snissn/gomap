@@ -1055,17 +1055,23 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
 		meta := s.defaultCollectionMeta(name)
-		meta.Indexes = append([]collections.IndexDefinition(nil), defs...)
+		meta.Indexes = dedupeIdenticalIndexDefinitions(defs)
 		created, err := s.Collections.CreateCollection(meta)
 		if err != nil {
-			return commandError(commandCodeBadValue, "BadValue", err.Error())
+			// If another request created the collection after our miss, fall
+			// through to the idempotent add-index path below.
+			col, err = s.Collections.OpenCollection(name)
+			if err != nil {
+				return commandError(commandCodeBadValue, "BadValue", err.Error())
+			}
+		} else {
+			return marshalDocument(bson.D{
+				{Key: "ok", Value: 1.0},
+				{Key: "createdCollectionAutomatically", Value: true},
+				{Key: "numIndexesBefore", Value: int32(1)},
+				{Key: "numIndexesAfter", Value: int32(1 + len(created.Indexes))},
+			})
 		}
-		return marshalDocument(bson.D{
-			{Key: "ok", Value: 1.0},
-			{Key: "createdCollectionAutomatically", Value: true},
-			{Key: "numIndexesBefore", Value: int32(1)},
-			{Key: "numIndexesAfter", Value: int32(1 + len(created.Indexes))},
-		})
 	}
 	numBefore := int32(1 + len(col.Meta().Indexes))
 	meta := col.Meta()
@@ -2010,6 +2016,17 @@ func findIndexDefinition(indexes []collections.IndexDefinition, name string) (co
 		}
 	}
 	return collections.IndexDefinition{}, false
+}
+
+func dedupeIdenticalIndexDefinitions(defs []collections.IndexDefinition) []collections.IndexDefinition {
+	out := make([]collections.IndexDefinition, 0, len(defs))
+	for _, def := range defs {
+		if existing, ok := findIndexDefinition(out, def.Name); ok && sameIndexDefinition(existing, def) {
+			continue
+		}
+		out = append(out, def)
+	}
+	return out
 }
 
 func sameIndexDefinition(left, right collections.IndexDefinition) bool {
