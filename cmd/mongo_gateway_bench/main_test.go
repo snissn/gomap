@@ -402,6 +402,13 @@ func TestParseConfigValidation(t *testing.T) {
 	if oneIndexCfg.SecondaryIndexes != 1 {
 		t.Fatalf("SecondaryIndexes=%d want 1", oneIndexCfg.SecondaryIndexes)
 	}
+	threeIndexCfg, err := parseConfig([]string{"-secondary-indexes", "3", "-update-indexed-field"})
+	if err != nil {
+		t.Fatalf("parse secondary-indexes=3 update-indexed-field config: %v", err)
+	}
+	if threeIndexCfg.SecondaryIndexes != 3 || !threeIndexCfg.UpdateIndexedField {
+		t.Fatalf("three-index config=%+v want SecondaryIndexes=3 UpdateIndexedField=true", threeIndexCfg)
+	}
 	if _, err := parseConfig([]string{"-client-mode", "bad"}); err == nil {
 		t.Fatal("bad client-mode accepted")
 	}
@@ -455,6 +462,9 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 	if _, err := parseConfig([]string{"-secondary-indexes", "1", "-update-indexed-field"}); err == nil {
 		t.Fatal("update-indexed-field accepted without city index")
+	}
+	if _, err := parseConfig([]string{"-secondary-indexes", "4"}); err == nil {
+		t.Fatal("secondary-indexes=4 accepted")
 	}
 	if _, err := parseConfig([]string{"-treedb-buffered-indexed-write-max-documents", "-1"}); err == nil {
 		t.Fatal("negative treedb buffered indexed max documents accepted")
@@ -1341,6 +1351,57 @@ func TestWriteResultSupportsGenericWriter(t *testing.T) {
 	if !bytes.Contains(out.Bytes(), []byte("insert_producers=2")) || !bytes.Contains(out.Bytes(), []byte("producer=0")) {
 		t.Fatalf("text output missing producer metadata: %q", out.String())
 	}
+}
+
+func TestTreeDBCreateIndexDocsIncludesActiveBoolIndex(t *testing.T) {
+	docs := treedbCreateIndexDocs(3, false)
+	if got, want := len(docs), 3; got != want {
+		t.Fatalf("index docs len=%d want %d: %#v", got, want, docs)
+	}
+	active, ok := findBSONDByStringField(docs, "name", "active_1")
+	if !ok {
+		t.Fatalf("active_1 index doc missing: %#v", docs)
+	}
+	if got, ok := bsonDStringField(active, "treedbValueType"); !ok || got != string(collections.IndexValueBool) {
+		t.Fatalf("active_1 treedbValueType=%q ok=%t want %q", got, ok, string(collections.IndexValueBool))
+	}
+	keyDoc, ok := bsonDField(active, "key").(bson.D)
+	if !ok {
+		t.Fatalf("active_1 key doc missing or wrong type: %#v", active)
+	}
+	if got, ok := bsonDField(keyDoc, "active").(int32); !ok || got != 1 {
+		t.Fatalf("active_1 key active=%v ok=%t want int32(1)", bsonDField(keyDoc, "active"), ok)
+	}
+	if _, ok := findBSONDByStringField(treedbCreateIndexDocs(2, false), "name", "active_1"); ok {
+		t.Fatal("active_1 index doc was emitted for secondaryIndexes=2")
+	}
+}
+
+func findBSONDByStringField(docs bson.A, key, want string) (bson.D, bool) {
+	for _, raw := range docs {
+		doc, ok := raw.(bson.D)
+		if !ok {
+			continue
+		}
+		if got, ok := bsonDStringField(doc, key); ok && got == want {
+			return doc, true
+		}
+	}
+	return nil, false
+}
+
+func bsonDStringField(doc bson.D, key string) (string, bool) {
+	got, ok := bsonDField(doc, key).(string)
+	return got, ok
+}
+
+func bsonDField(doc bson.D, key string) any {
+	for _, elem := range doc {
+		if elem.Key == key {
+			return elem.Value
+		}
+	}
+	return nil
 }
 
 func TestBenchmarkSetUpdateCanExerciseIndexedField(t *testing.T) {

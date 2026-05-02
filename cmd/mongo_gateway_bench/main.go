@@ -463,9 +463,9 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.ConcurrentReads, "concurrent-reads", 0, "total _id read operations for the concurrent read phase")
 	fs.IntVar(&cfg.ConcurrentWriters, "concurrent-writers", 0, "writer goroutines for the concurrent _id update phase; 0 disables the phase")
 	fs.IntVar(&cfg.ConcurrentWrites, "concurrent-writes", 0, "total update operations for the concurrent write phase")
-	fs.BoolVar(&cfg.UpdateIndexedField, "update-indexed-field", false, "include the city field in update phases; requires -secondary-indexes=2 so the city index exists")
+	fs.BoolVar(&cfg.UpdateIndexedField, "update-indexed-field", false, "include the city field in update phases; requires -secondary-indexes >= 2 so the city index exists")
 	fs.BoolVar(&cfg.RangeIndex, "range-index", false, "create an age_1 secondary index for the age range-read phase")
-	fs.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 2, "secondary indexes to create: 0, 1=email, 2=both single-field indexes: email and city")
+	fs.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 2, "secondary indexes to create: 0, 1=email, 2=email+city, 3=email+city+active")
 	fs.StringVar(&cfg.ClientMode, "client-mode", cfg.ClientMode, "benchmark client path: driver, driver-command, driver-command-raw, driver-unack, raw-wire, or raw-wire-tcp; raw-wire modes are TreeDB-only and bypass the MongoDB Go driver for the insert load phase")
 	fs.StringVar(&treeDBProfile, "treedb-profile", treeDBProfile, "TreeDB profile for -target treedb: fast, wal_on_fast, durable, or bench")
 	fs.StringVar(&treeDBDocumentFormat, "treedb-document-format", treeDBDocumentFormat, "TreeDB collection document format for -target treedb: json, template-v1, or bson")
@@ -561,11 +561,11 @@ func parseConfig(args []string) (config, error) {
 	if cfg.ProfileHeapGC && strings.TrimSpace(cfg.ProfileDir) == "" {
 		return config{}, errors.New("profile-heap-gc requires -profile-dir")
 	}
-	if cfg.SecondaryIndexes < 0 || cfg.SecondaryIndexes > 2 {
-		return config{}, errors.New("secondary-indexes must be 0, 1, or 2")
+	if cfg.SecondaryIndexes < 0 || cfg.SecondaryIndexes > 3 {
+		return config{}, errors.New("secondary-indexes must be 0, 1, 2, or 3")
 	}
 	if cfg.UpdateIndexedField && cfg.SecondaryIndexes < 2 {
-		return config{}, errors.New("update-indexed-field requires secondary-indexes=2 so the city index exists")
+		return config{}, errors.New("update-indexed-field requires secondary-indexes >= 2 so the city index exists")
 	}
 	if cfg.TreeDBBufferedIndexedWriteMaxDocuments < 0 {
 		return config{}, errors.New("treedb-buffered-indexed-write-max-documents must be >= 0")
@@ -1386,29 +1386,7 @@ func rangePhaseName(cfg config) string {
 
 func createIndexes(ctx context.Context, db *mongo.Database, coll *mongo.Collection, secondaryIndexes int, rangeIndex bool, treedbTarget bool) error {
 	if treedbTarget {
-		indexDocs := make(bson.A, 0, secondaryIndexes+1)
-		if secondaryIndexes >= 1 {
-			indexDocs = append(indexDocs, bson.D{
-				{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
-				{Key: "name", Value: "email_1"},
-				{Key: "unique", Value: true},
-				{Key: "treedbValueType", Value: string(collections.IndexValueString)},
-			})
-		}
-		if secondaryIndexes >= 2 {
-			indexDocs = append(indexDocs, bson.D{
-				{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
-				{Key: "name", Value: "city_1"},
-				{Key: "treedbValueType", Value: string(collections.IndexValueString)},
-			})
-		}
-		if rangeIndex {
-			indexDocs = append(indexDocs, bson.D{
-				{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}},
-				{Key: "name", Value: "age_1"},
-				{Key: "treedbValueType", Value: string(collections.IndexValueInt64)},
-			})
-		}
+		indexDocs := treedbCreateIndexDocs(secondaryIndexes, rangeIndex)
 		if len(indexDocs) == 0 {
 			return nil
 		}
@@ -1433,6 +1411,14 @@ func createIndexes(ctx context.Context, db *mongo.Database, coll *mongo.Collecti
 			return err
 		}
 	}
+	if secondaryIndexes >= 3 {
+		if _, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
+			Keys:    bson.D{{Key: "active", Value: int32(1)}},
+			Options: options.Index().SetName("active_1"),
+		}); err != nil {
+			return err
+		}
+	}
 	if rangeIndex {
 		if _, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
 			Keys:    bson.D{{Key: "age", Value: int32(1)}},
@@ -1442,6 +1428,40 @@ func createIndexes(ctx context.Context, db *mongo.Database, coll *mongo.Collecti
 		}
 	}
 	return nil
+}
+
+func treedbCreateIndexDocs(secondaryIndexes int, rangeIndex bool) bson.A {
+	indexDocs := make(bson.A, 0, secondaryIndexes+1)
+	if secondaryIndexes >= 1 {
+		indexDocs = append(indexDocs, bson.D{
+			{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+			{Key: "name", Value: "email_1"},
+			{Key: "unique", Value: true},
+			{Key: "treedbValueType", Value: string(collections.IndexValueString)},
+		})
+	}
+	if secondaryIndexes >= 2 {
+		indexDocs = append(indexDocs, bson.D{
+			{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+			{Key: "name", Value: "city_1"},
+			{Key: "treedbValueType", Value: string(collections.IndexValueString)},
+		})
+	}
+	if secondaryIndexes >= 3 {
+		indexDocs = append(indexDocs, bson.D{
+			{Key: "key", Value: bson.D{{Key: "active", Value: int32(1)}}},
+			{Key: "name", Value: "active_1"},
+			{Key: "treedbValueType", Value: string(collections.IndexValueBool)},
+		})
+	}
+	if rangeIndex {
+		indexDocs = append(indexDocs, bson.D{
+			{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}},
+			{Key: "name", Value: "age_1"},
+			{Key: "treedbValueType", Value: string(collections.IndexValueInt64)},
+		})
+	}
+	return indexDocs
 }
 
 func recordEffectiveTreeDBCollectionOptions(result *benchmarkResult, cfg config, target *benchTarget) error {
