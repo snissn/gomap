@@ -645,6 +645,16 @@ type Options struct {
 	// prefetch requests opportunistically (e.g. before rewriting child pages
 	// during checkpoint/merge). It is a no-op on unsupported platforms.
 	PagerPrefetchOnRead bool
+	// LeafPageReadCacheEntries controls the bounded process-local cache used for
+	// B-tree leaf pages stored in the value log. The cache stores decoded 4KiB
+	// leaf pages and is most useful for sparse update/publish/read workloads that
+	// revisit recently-written outer leaves.
+	//
+	// Semantics:
+	//   - 0 uses the process default/env override.
+	//   - <0 disables the cache for this DB.
+	//   - >0 sets the exact number of direct-mapped cache slots.
+	LeafPageReadCacheEntries int
 
 	// Durability configures cached-mode durability semantics.
 	//
@@ -1156,6 +1166,9 @@ func Open(opts Options) (*DB, error) {
 }
 
 func validateOptions(opts Options) error {
+	if _, err := resolveLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries); err != nil {
+		return err
+	}
 	if opts.ReadOnly {
 		// Read-only opens never mutate on-disk state, so "unsafe" write options do
 		// not apply.
@@ -1366,7 +1379,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen.zipper.SetIndexPackedValuePtr(opts.IndexPackedValuePtr)
 	gen.zipper.SetIndexInternalBaseDelta(opts.IndexInternalBaseDelta)
 	gen.zipper.SetOuterLeavesInValueLog(opts.IndexOuterLeavesInValueLog)
-	db.leafPageReadCache = newLeafPageReadCache(configuredLeafPageReadCacheEntries())
+	db.leafPageReadCache = newLeafPageReadCache(configuredLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries))
 	gen.zipper.SetLeafPageReader(db.leafPageReader(vm))
 	gen.zipper.SetAdaptiveLeafEncoding(opts.IndexAdaptiveLeafEncoding)
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)

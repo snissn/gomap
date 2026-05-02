@@ -13,6 +13,9 @@ import (
 )
 
 func openReadOnly(opts Options) (*DB, error) {
+	if _, err := resolveLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries); err != nil {
+		return nil, err
+	}
 	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
 		return nil, err
 	}
@@ -110,6 +113,9 @@ func openReadOnly(opts Options) (*DB, error) {
 
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
 	gen.zipper.SetPiggybackCompaction(!opts.DisablePiggybackCompaction)
+	gen.zipper.SetOuterLeavesInValueLog(opts.IndexOuterLeavesInValueLog)
+	db.leafPageReadCache = newLeafPageReadCache(configuredLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries))
+	gen.zipper.SetLeafPageReader(db.leafPageReader(vm))
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
 	if err := db.recover(); err != nil {
@@ -141,6 +147,9 @@ func openReadOnly(opts Options) (*DB, error) {
 }
 
 func openReadOnlyNoLock(opts Options) (*DB, error) {
+	if _, err := resolveLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries); err != nil {
+		return nil, err
+	}
 	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
 		return nil, err
 	}
@@ -225,6 +234,9 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
 	gen.zipper.SetPiggybackCompaction(!opts.DisablePiggybackCompaction)
+	gen.zipper.SetOuterLeavesInValueLog(opts.IndexOuterLeavesInValueLog)
+	db.leafPageReadCache = newLeafPageReadCache(configuredLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries))
+	gen.zipper.SetLeafPageReader(db.leafPageReader(vm))
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
 	if err := db.recover(); err != nil {
