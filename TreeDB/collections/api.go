@@ -994,6 +994,7 @@ func flushCollectionWriteDomain(db *backenddb.DB, domain *collectionWriteDomain)
 	if db == nil || domain == nil {
 		return nil
 	}
+	domain.waitIndexedAsyncFlush()
 	collection := &Collection{db: db, writeDomain: domain}
 	unlockMutation := lockCollectionDomainMutation(domain)
 	defer unlockMutation()
@@ -1747,6 +1748,7 @@ func (c *Collection) flushBufferedWrites() error {
 	if domain == nil {
 		return nil
 	}
+	domain.waitIndexedAsyncFlush()
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
 	return c.flushBufferedWritesLocked(domain)
@@ -2142,8 +2144,28 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 				err := c.flushBufferedIndexedLocked(domain)
 				return time.Since(flushStart), err
 			}
-			c.scheduleIndexedAsyncFlush(domain)
-			return 0, nil
+			domain.indexedAsyncFlushBackpressure.Add(1)
+			flushStart := time.Now()
+			if domain.indexedAsyncFlushRunning() {
+				domain.mu.Unlock()
+				domain.waitIndexedAsyncFlush()
+				domain.mu.Lock()
+				if err := domain.consumeIndexedAsyncFlushError(); err != nil {
+					return time.Since(flushStart), err
+				}
+				if domain.count == 0 || len(domain.indexedFlushUnits) == 0 || !hasBufferedIndexedRootRuns(domain) {
+					return time.Since(flushStart), nil
+				}
+				if len(domain.indexedPublishingUnits) == 0 {
+					err := c.flushBufferedIndexedLocked(domain)
+					return time.Since(flushStart), err
+				}
+			}
+			if !c.scheduleIndexedAsyncFlush(domain) && len(domain.indexedPublishingUnits) == 0 {
+				err := c.flushBufferedIndexedLocked(domain)
+				return time.Since(flushStart), err
+			}
+			return time.Since(flushStart), nil
 		}
 		if !c.scheduleIndexedAsyncFlush(domain) && len(domain.indexedPublishingUnits) == 0 {
 			flushStart := time.Now()
@@ -3446,7 +3468,7 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	}
 	publishStart := time.Now()
 	newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-		return c.buildRootDescriptorSystemDeltaIterator(work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, rootIDs)
+		return c.buildRootDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, rootIDs)
 	})
 	for _, it := range iterators {
 		_ = it.Close()
@@ -3510,7 +3532,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		return nil
 	}
 	if len(domain.indexedPublishingUnits) > 0 {
-		return nil
+		return errors.New("collections: indexed async publish still in flight")
 	}
 	if domain.catalog == nil {
 		return errCollectionNotFound

@@ -2902,6 +2902,136 @@ func TestCollectionIndexedWriteMemtablesAsyncBackpressurePublishesSynchronously(
 	}
 }
 
+func TestCollectionIndexedWriteMemtablesAsyncBackpressureWaitsForPublishingUnit(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        100,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 1,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com"}`)},
+	); err != nil {
+		t.Fatalf("seed insert batch: %v", err)
+	}
+
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare async publish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepare async publish returned nil work")
+	}
+	var asyncFinished atomic.Bool
+	finishAsync := func(err error) {
+		if asyncFinished.CompareAndSwap(false, true) {
+			col.writeDomain.finishIndexedAsyncFlush(err)
+		}
+	}
+	if !col.writeDomain.beginIndexedAsyncFlush() {
+		t.Fatal("begin async flush returned false")
+	}
+	t.Cleanup(func() {
+		if !asyncFinished.Load() && work.pin != nil {
+			_ = work.pin.Close()
+			work.pin = nil
+		}
+		finishAsync(errors.New("test cleanup"))
+	})
+
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{[]byte(`{"email":"grace@example.com"}`)},
+	); err != nil {
+		t.Fatalf("second insert batch: %v", err)
+	}
+
+	backpressureDone := make(chan error, 1)
+	go func() {
+		col.writeDomain.mu.Lock()
+		_, err := col.flushBufferedIndexedAfterThresholdLocked(col.writeDomain, CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        1,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 1,
+		})
+		col.writeDomain.mu.Unlock()
+		backpressureDone <- err
+	}()
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if mgr.StatsSnapshot().IndexedAsyncFlushBackpressure > 0 {
+			break
+		}
+		select {
+		case err := <-backpressureDone:
+			t.Fatalf("backpressure flush returned before in-flight async publish drained: %v", err)
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if got := mgr.StatsSnapshot().IndexedAsyncFlushBackpressure; got == 0 {
+		t.Fatal("async backpressure did not wait for in-flight publishing unit")
+	}
+
+	publishDone := make(chan error, 1)
+	go func() {
+		err := col.publishPreparedIndexedFlush(work)
+		finishAsync(err)
+		publishDone <- err
+	}()
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("publish prepared async flush: %v", err)
+		}
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("timed out publishing prepared async flush")
+	}
+	select {
+	case err := <-backpressureDone:
+		if err != nil {
+			t.Fatalf("backpressure flush: %v", err)
+		}
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("timed out waiting for backpressure flush")
+	}
+
+	stats := mgr.StatsSnapshot()
+	if got := stats.PendingIndexedFlushUnits; got != 0 {
+		t.Fatalf("pending indexed flush units after backpressure drain=%d want 0", got)
+	}
+	if got := stats.PendingDocuments; got != 0 {
+		t.Fatalf("pending documents after backpressure drain=%d want 0", got)
+	}
+	for _, id := range []string{"u1", "u2"} {
+		got, err := col.Get([]byte(id))
+		if err != nil {
+			t.Fatalf("get %s: %v", id, err)
+		}
+		if len(got) == 0 {
+			t.Fatalf("get %s returned empty document", id)
+		}
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesAsyncScheduleRacePublishesSynchronously(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -3063,12 +3193,12 @@ func TestCollectionIndexedWriteMemtablesAsyncPublishingUnitsParticipateInReadsAn
 	}
 }
 
-func TestCollectionIndexedWriteMemtablesSyncFlushSkipsPublishingUnits(t *testing.T) {
+func TestCollectionIndexedWriteMemtablesFlushWaitsForPublishingUnits(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer func() { _ = d.Close() }()
+	t.Cleanup(func() { _ = d.Close() })
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
@@ -3099,17 +3229,53 @@ func TestCollectionIndexedWriteMemtablesSyncFlushSkipsPublishingUnits(t *testing
 	if work == nil {
 		t.Fatal("prepare async publish returned nil work")
 	}
-	col.writeDomain.mu.Lock()
-	err = col.flushBufferedIndexedLocked(col.writeDomain)
-	col.writeDomain.mu.Unlock()
-	if err != nil {
-		t.Fatalf("foreground flush while publish is in-flight: %v", err)
+	var asyncFinished atomic.Bool
+	finishAsync := func(err error) {
+		if asyncFinished.CompareAndSwap(false, true) {
+			col.writeDomain.finishIndexedAsyncFlush(err)
+		}
 	}
-	if got := mgr.StatsSnapshot().PendingIndexedFlushUnits; got != 1 {
-		t.Fatalf("pending publishing units after skipped foreground flush=%d want 1", got)
+	if !col.writeDomain.beginIndexedAsyncFlush() {
+		t.Fatal("begin async flush returned false")
 	}
-	if err := col.publishPreparedIndexedFlush(work); err != nil {
-		t.Fatalf("publish prepared async flush: %v", err)
+	t.Cleanup(func() {
+		if !asyncFinished.Load() && work.pin != nil {
+			_ = work.pin.Close()
+			work.pin = nil
+		}
+		finishAsync(errors.New("test cleanup"))
+	})
+
+	flushDone := make(chan error, 1)
+	go func() {
+		flushDone <- col.flushBufferedWrites()
+	}()
+	select {
+	case err := <-flushDone:
+		t.Fatalf("flush returned before in-flight async publish drained: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	publishDone := make(chan error, 1)
+	go func() {
+		err := col.publishPreparedIndexedFlush(work)
+		finishAsync(err)
+		publishDone <- err
+	}()
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("publish prepared async flush: %v", err)
+		}
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("timed out publishing prepared async flush")
+	}
+	select {
+	case err := <-flushDone:
+		if err != nil {
+			t.Fatalf("flush after in-flight async publish: %v", err)
+		}
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("timed out waiting for flush after publish")
 	}
 	if got := mgr.StatsSnapshot().PendingDocuments; got != 0 {
 		t.Fatalf("pending docs after async publish=%d want 0", got)
