@@ -522,17 +522,27 @@ if [[ -n "$CONCURRENT_READER_SWEEP" && "$CONCURRENT_READERS" -gt 0 ]]; then
 fi
 if [[ -n "$CONCURRENT_READER_SWEEP" ]]; then
   seen_reader_counts=""
+  normalized_reader_sweep=""
   validated_reader_counts=0
   for reader_count in ${CONCURRENT_READER_SWEEP//,/ }; do
     if ! is_positive_int "$reader_count"; then
       echo "invalid CONCURRENT_READER_SWEEP value: $reader_count" >&2
       exit 2
     fi
-    if [[ " $seen_reader_counts " == *" $reader_count "* ]]; then
+    normalized_reader_count=$reader_count
+    while [[ "$normalized_reader_count" == 0* && ${#normalized_reader_count} -gt 1 ]]; do
+      normalized_reader_count=${normalized_reader_count#0}
+    done
+    if [[ " $seen_reader_counts " == *" $normalized_reader_count "* ]]; then
       echo "duplicate CONCURRENT_READER_SWEEP value: $reader_count" >&2
       exit 2
     fi
-    seen_reader_counts="$seen_reader_counts $reader_count"
+    seen_reader_counts="$seen_reader_counts $normalized_reader_count"
+    if [[ -z "$normalized_reader_sweep" ]]; then
+      normalized_reader_sweep=$normalized_reader_count
+    else
+      normalized_reader_sweep="$normalized_reader_sweep,$normalized_reader_count"
+    fi
     validated_reader_counts=$((validated_reader_counts + 1))
   done
   if [[ "$validated_reader_counts" -eq 0 ]]; then
@@ -549,6 +559,7 @@ if [[ -n "$CONCURRENT_READER_SWEEP" ]]; then
       exit 2
     fi
   fi
+  CONCURRENT_READER_SWEEP=$normalized_reader_sweep
 elif [[ "$CONCURRENT_READERS" -eq 0 && -n "$CONCURRENT_READS" && "$CONCURRENT_READS" != "0" ]]; then
   echo "CONCURRENT_READERS or CONCURRENT_READER_SWEEP must be set when CONCURRENT_READS is set" >&2
   exit 2
