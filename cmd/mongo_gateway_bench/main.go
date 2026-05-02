@@ -62,6 +62,7 @@ type config struct {
 	ConcurrentWriters                             int
 	ConcurrentWrites                              int
 	UpdateIndexedField                            bool
+	RangeIndex                                    bool
 	SecondaryIndexes                              int
 	ClientMode                                    string
 	TreeDBProfile                                 treedb.Profile
@@ -107,6 +108,7 @@ type benchmarkResult struct {
 	// Always emit this knob in JSON so benchmark artifacts distinguish default
 	// false runs from older runs that predate indexed-field update coverage.
 	UpdateIndexedField bool `json:"update_indexed_field"`
+	RangeIndex         bool `json:"range_index"`
 
 	TreeDBProfile                                 string              `json:"treedb_profile,omitempty"`
 	TreeDBDocumentFormat                          string              `json:"treedb_document_format,omitempty"`
@@ -458,6 +460,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.ConcurrentWriters, "concurrent-writers", 0, "writer goroutines for the concurrent _id update phase; 0 disables the phase")
 	fs.IntVar(&cfg.ConcurrentWrites, "concurrent-writes", 0, "total update operations for the concurrent write phase")
 	fs.BoolVar(&cfg.UpdateIndexedField, "update-indexed-field", false, "include the city field in update phases; requires -secondary-indexes=2 so the city index exists")
+	fs.BoolVar(&cfg.RangeIndex, "range-index", false, "create an age_1 secondary index for the age range-read phase")
 	fs.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 2, "secondary indexes to create: 0, 1=email, 2=both single-field indexes: email and city")
 	fs.StringVar(&cfg.ClientMode, "client-mode", cfg.ClientMode, "benchmark client path: driver, driver-command, driver-command-raw, driver-unack, raw-wire, or raw-wire-tcp; raw-wire modes are TreeDB-only and bypass the MongoDB Go driver for the insert load phase")
 	fs.StringVar(&treeDBProfile, "treedb-profile", treeDBProfile, "TreeDB profile for -target treedb: fast, wal_on_fast, durable, or bench")
@@ -1030,6 +1033,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		ConcurrentWriters:  cfg.ConcurrentWriters,
 		ConcurrentWrites:   cfg.ConcurrentWrites,
 		UpdateIndexedField: cfg.UpdateIndexedField,
+		RangeIndex:         cfg.RangeIndex,
 		PrebuildDocuments:  cfg.PrebuildDocuments,
 	}
 	if cfg.Target == "treedb" {
@@ -1050,7 +1054,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	} else {
 		result.MongoURI = redactMongoURI(cfg.MongoURI)
 	}
-	if err := createIndexes(ctx, coll, cfg.SecondaryIndexes); err != nil {
+	if err := createIndexes(ctx, db, coll, cfg.SecondaryIndexes, cfg.RangeIndex, cfg.Target == "treedb"); err != nil {
 		return nil, err
 	}
 	if err := recordEffectiveTreeDBCollectionOptions(result, cfg, target); err != nil {
@@ -1142,7 +1146,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		result.Phases = append(result.Phases, emailPhase)
 	}
 
-	rangePhase, err := measureProfiledPhase(profiler, "age_range_limit_10", cfg.RangeReads, func(sample func(time.Duration)) error {
+	rangePhase, err := measureProfiledPhase(profiler, rangePhaseName(cfg), cfg.RangeReads, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.RangeReads; i++ {
 			minAge := int64(20 + (i % 40))
 			begin := time.Now()
@@ -1316,7 +1320,46 @@ func runEmailFindPhase(cfg config) bool {
 	return cfg.Reads > 0 && cfg.SecondaryIndexes >= 1
 }
 
-func createIndexes(ctx context.Context, coll *mongo.Collection, secondaryIndexes int) error {
+func rangePhaseName(cfg config) string {
+	if cfg.RangeIndex {
+		return "age_range_indexed_limit_10"
+	}
+	return "age_range_scan_limit_10"
+}
+
+func createIndexes(ctx context.Context, db *mongo.Database, coll *mongo.Collection, secondaryIndexes int, rangeIndex bool, treedbTarget bool) error {
+	if treedbTarget {
+		indexDocs := make(bson.A, 0, secondaryIndexes+1)
+		if secondaryIndexes >= 1 {
+			indexDocs = append(indexDocs, bson.D{
+				{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+				{Key: "name", Value: "email_1"},
+				{Key: "unique", Value: true},
+				{Key: "treedbValueType", Value: string(collections.IndexValueString)},
+			})
+		}
+		if secondaryIndexes >= 2 {
+			indexDocs = append(indexDocs, bson.D{
+				{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+				{Key: "name", Value: "city_1"},
+				{Key: "treedbValueType", Value: string(collections.IndexValueString)},
+			})
+		}
+		if rangeIndex {
+			indexDocs = append(indexDocs, bson.D{
+				{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}},
+				{Key: "name", Value: "age_1"},
+				{Key: "treedbValueType", Value: string(collections.IndexValueInt64)},
+			})
+		}
+		if len(indexDocs) == 0 {
+			return nil
+		}
+		return db.RunCommand(ctx, bson.D{
+			{Key: "createIndexes", Value: coll.Name()},
+			{Key: "indexes", Value: indexDocs},
+		}).Err()
+	}
 	if secondaryIndexes >= 1 {
 		if _, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
 			Keys:    bson.D{{Key: "email", Value: int32(1)}},
@@ -1329,6 +1372,14 @@ func createIndexes(ctx context.Context, coll *mongo.Collection, secondaryIndexes
 		if _, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
 			Keys:    bson.D{{Key: "city", Value: int32(1)}},
 			Options: options.Index().SetName("city_1"),
+		}); err != nil {
+			return err
+		}
+	}
+	if rangeIndex {
+		if _, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{
+			Keys:    bson.D{{Key: "age", Value: int32(1)}},
+			Options: options.Index().SetName("age_1"),
 		}); err != nil {
 			return err
 		}
@@ -2590,6 +2641,7 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 			result.InsertProducers, result.MongoMaxPoolSize, result.MongoMinPoolSize, result.MongoMaxConnecting, result.SecondaryIndexes,
 			result.ConcurrentReaders, result.ConcurrentReads, result.ConcurrentWriters, result.ConcurrentWrites)
 		fmt.Fprintf(out, "update_indexed_field=%t\n", result.UpdateIndexedField)
+		fmt.Fprintf(out, "range_index=%t\n", result.RangeIndex)
 		if result.TreeDBDir != "" {
 			fmt.Fprintf(out, "treedb_dir=%s\n", result.TreeDBDir)
 		}

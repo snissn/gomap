@@ -98,7 +98,7 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 		}
 		return findResultSet{docs: docs, projection: plan.projection}, nil
 	}
-	docs, err := s.findCandidateDocuments(col, materializer, plan.predicates)
+	docs, err := s.findCandidateDocuments(col, materializer, plan)
 	if err != nil {
 		return findResultSet{}, err
 	}
@@ -179,11 +179,12 @@ func (s *Server) maxFindBatchBytes() int {
 	return max
 }
 
-func (s *Server) findCandidateDocuments(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, predicates []findPredicate) ([]wire.Document, error) {
+func (s *Server) findCandidateDocuments(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan) ([]wire.Document, error) {
 	meta := col.Meta()
 	maxDocuments := s.maxFindScanDocuments()
 	var primaryDocs []wire.Document
 	primarySet := false
+	predicates := plan.predicates
 	if pred, ok := primaryCandidatePredicate(predicates); ok {
 		docs, err := documentsForPrimaryPredicate(col, materializer, pred, maxDocuments)
 		if err != nil {
@@ -192,7 +193,7 @@ func (s *Server) findCandidateDocuments(col *collections.Collection, materialize
 		primaryDocs = docs
 		primarySet = true
 	}
-	if docs, ok, err := s.bestIndexedCandidateDocuments(col, materializer, meta, predicates, maxDocuments); ok || err != nil {
+	if docs, ok, err := s.bestIndexedCandidateDocuments(col, materializer, meta, plan, maxDocuments); ok || err != nil {
 		if err != nil {
 			if primarySet {
 				return s.limitCandidateDocuments(primaryDocs)
@@ -581,14 +582,26 @@ func findPlanHasDirectCandidate(meta collections.CollectionMeta, predicates []fi
 		return true
 	}
 	for _, pred := range predicates {
-		if pred.op != findPredicateEq && pred.op != findPredicateIn {
+		if pred.op == findPredicateEq || pred.op == findPredicateIn {
+			if predicateContainsNull(pred) {
+				continue
+			}
+			for _, idx := range meta.Indexes {
+				if idx.Field == pred.field {
+					return true
+				}
+			}
 			continue
 		}
-		if predicateContainsNull(pred) {
+		if !isRangePredicate(pred.op) {
 			continue
 		}
 		for _, idx := range meta.Indexes {
-			if idx.Field == pred.field {
+			if idx.Field != pred.field {
+				continue
+			}
+			_, ok, _, err := indexRangeOptionsForPredicates(predicates, idx)
+			if err != nil || ok {
 				return true
 			}
 		}
@@ -605,29 +618,20 @@ func (s *Server) limitCandidateDocuments(docs []wire.Document) ([]wire.Document,
 	return docs, nil
 }
 
-func (s *Server) bestIndexedCandidateDocuments(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, meta collections.CollectionMeta, predicates []findPredicate, maxDocuments int) ([]wire.Document, bool, error) {
+func (s *Server) bestIndexedCandidateDocuments(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, meta collections.CollectionMeta, plan findPlan, maxDocuments int) ([]wire.Document, bool, error) {
 	var best []wire.Document
 	bestSet := false
-	for _, pred := range predicates {
-		if pred.op != findPredicateEq && pred.op != findPredicateIn {
+	for _, idx := range meta.Indexes {
+		docs, ok, err := documentsForIndexedFieldPredicates(col, materializer, plan, idx, maxDocuments)
+		if err != nil {
+			return nil, false, err
+		}
+		if !ok {
 			continue
 		}
-		if predicateContainsNull(pred) {
-			continue
-		}
-		for _, idx := range meta.Indexes {
-			if idx.Field != pred.field {
-				continue
-			}
-			docs, err := documentsForIndexedPredicate(col, materializer, pred, idx, maxDocuments)
-			if err != nil {
-				return nil, false, err
-			}
-			if !bestSet || len(docs) < len(best) {
-				best = docs
-				bestSet = true
-			}
-			break
+		if !bestSet || len(docs) < len(best) {
+			best = docs
+			bestSet = true
 		}
 	}
 	return best, bestSet, nil
@@ -677,12 +681,13 @@ func documentsForPrimaryPredicate(col *collections.Collection, materializer *col
 func documentsForIndexedPredicate(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, pred findPredicate, idx collections.IndexDefinition, maxDocuments int) ([]wire.Document, error) {
 	out := make([]wire.Document, 0)
 	seen := make(map[string]struct{})
+	candidateLimit := candidateLimitWithOverflowSlot(maxDocuments)
 	for _, value := range pred.values {
-		scalar, ok := indexScalarForBSONValue(value)
+		scalar, ok := indexScalarForBSONValue(value, idx.ValueType)
 		if !ok {
-			return nil, fmt.Errorf("Mongo gateway find value cannot be represented in index %q", idx.Name)
+			continue
 		}
-		ids, _, err := col.FindByIndexValueLimit(idx.Name, scalar, maxDocuments+1)
+		ids, _, err := col.FindByIndexValueLimit(idx.Name, scalar, candidateLimit)
 		if err != nil {
 			return nil, err
 		}
@@ -706,6 +711,300 @@ func documentsForIndexedPredicate(col *collections.Collection, materializer *col
 			if len(out) > maxDocuments {
 				return out, nil
 			}
+		}
+	}
+	return out, nil
+}
+
+func documentsForIndexedFieldPredicates(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan, idx collections.IndexDefinition, maxDocuments int) ([]wire.Document, bool, error) {
+	var best []wire.Document
+	bestSet := false
+	consider := func(docs []wire.Document) {
+		if !bestSet || len(docs) < len(best) {
+			best = docs
+			bestSet = true
+		}
+	}
+	for _, pred := range plan.predicates {
+		if pred.field != idx.Field || (pred.op != findPredicateEq && pred.op != findPredicateIn) {
+			continue
+		}
+		if predicateContainsNull(pred) {
+			continue
+		}
+		docs, err := documentsForIndexedPredicate(col, materializer, pred, idx, maxDocuments)
+		if err != nil {
+			return nil, false, err
+		}
+		consider(docs)
+	}
+	opts, ok, empty, err := indexRangeOptionsForPredicates(plan.predicates, idx)
+	if err != nil || !ok {
+		if bestSet {
+			return best, true, err
+		}
+		return nil, false, err
+	}
+	if empty {
+		consider(nil)
+		return best, true, nil
+	}
+	candidateLimit := candidateLimitWithOverflowSlot(maxDocuments)
+	if limit, ok := indexedRangeCandidateLimit(plan, idx, maxDocuments); ok {
+		candidateLimit = limit
+	}
+	docs, err := documentsForIndexedRange(col, materializer, idx, opts, candidateLimit, maxDocuments)
+	if err != nil {
+		return nil, false, err
+	}
+	consider(docs)
+	return best, bestSet, nil
+}
+
+func indexedRangeCandidateLimit(plan findPlan, idx collections.IndexDefinition, maxDocuments int) (int, bool) {
+	if plan.limit <= 0 {
+		return 0, false
+	}
+	if plan.sort.field != "" && (plan.sort.field != idx.Field || plan.sort.desc) {
+		return 0, false
+	}
+	for _, pred := range plan.predicates {
+		if pred.field != idx.Field || !isRangePredicate(pred.op) {
+			return 0, false
+		}
+	}
+	limit := int64(plan.skip) + int64(plan.limit)
+	if limit <= 0 {
+		return 0, false
+	}
+	maxCandidateLimit := candidateLimitWithOverflowSlot(maxDocuments)
+	if limit > int64(maxCandidateLimit) {
+		return maxCandidateLimit, true
+	}
+	return int(limit), true
+}
+
+func candidateLimitWithOverflowSlot(maxDocuments int) int {
+	if maxDocuments <= 0 {
+		return 0
+	}
+	maxInt := int(^uint(0) >> 1)
+	if maxDocuments >= maxInt {
+		return maxInt
+	}
+	return maxDocuments + 1
+}
+
+type indexRangeCandidateBound struct {
+	value     any
+	inclusive bool
+	set       bool
+}
+
+func indexRangeOptionsForPredicates(predicates []findPredicate, idx collections.IndexDefinition) (collections.IndexRangeOptions, bool, bool, error) {
+	var lower, upper indexRangeCandidateBound
+	found := false
+	for _, pred := range predicates {
+		if pred.field != idx.Field || !isRangePredicate(pred.op) {
+			continue
+		}
+		found = true
+		if len(pred.values) != 1 || rawValueIsNaN(pred.values[0]) {
+			return collections.IndexRangeOptions{}, true, true, nil
+		}
+		scalar, ok := indexScalarForBSONValue(pred.values[0], idx.ValueType)
+		if !ok {
+			if unindexedRangePredicateShouldScan(pred.values[0], idx.ValueType) {
+				return collections.IndexRangeOptions{}, false, false, nil
+			}
+			return collections.IndexRangeOptions{}, true, true, nil
+		}
+		switch pred.op {
+		case findPredicateGT:
+			next := indexRangeCandidateBound{value: scalar, inclusive: false, set: true}
+			var err error
+			lower, err = stricterLowerIndexBound(idx.ValueType, lower, next)
+			if err != nil {
+				return collections.IndexRangeOptions{}, true, false, err
+			}
+		case findPredicateGTE:
+			next := indexRangeCandidateBound{value: scalar, inclusive: true, set: true}
+			var err error
+			lower, err = stricterLowerIndexBound(idx.ValueType, lower, next)
+			if err != nil {
+				return collections.IndexRangeOptions{}, true, false, err
+			}
+		case findPredicateLT:
+			next := indexRangeCandidateBound{value: scalar, inclusive: false, set: true}
+			var err error
+			upper, err = stricterUpperIndexBound(idx.ValueType, upper, next)
+			if err != nil {
+				return collections.IndexRangeOptions{}, true, false, err
+			}
+		case findPredicateLTE:
+			next := indexRangeCandidateBound{value: scalar, inclusive: true, set: true}
+			var err error
+			upper, err = stricterUpperIndexBound(idx.ValueType, upper, next)
+			if err != nil {
+				return collections.IndexRangeOptions{}, true, false, err
+			}
+		}
+	}
+	if !found {
+		return collections.IndexRangeOptions{}, false, false, nil
+	}
+	if lower.set && upper.set {
+		cmp, err := compareIndexScalars(idx.ValueType, lower.value, upper.value)
+		if err != nil {
+			return collections.IndexRangeOptions{}, true, false, err
+		}
+		if cmp > 0 || (cmp == 0 && (!lower.inclusive || !upper.inclusive)) {
+			return collections.IndexRangeOptions{}, true, true, nil
+		}
+	}
+	opts := collections.IndexRangeOptions{}
+	if lower.set {
+		opts.Lower = collections.IndexRangeBound{Value: lower.value, Inclusive: lower.inclusive}
+	} else {
+		opts.Lower = collections.IndexRangeBound{Unbounded: true}
+	}
+	if upper.set {
+		opts.Upper = collections.IndexRangeBound{Value: upper.value, Inclusive: upper.inclusive}
+	} else {
+		opts.Upper = collections.IndexRangeBound{Unbounded: true}
+	}
+	return opts, true, false, nil
+}
+
+func stricterLowerIndexBound(valueType collections.IndexValueType, current, next indexRangeCandidateBound) (indexRangeCandidateBound, error) {
+	if !current.set {
+		return next, nil
+	}
+	cmp, err := compareIndexScalars(valueType, next.value, current.value)
+	if err != nil {
+		return indexRangeCandidateBound{}, err
+	}
+	if cmp > 0 {
+		return next, nil
+	}
+	if cmp == 0 {
+		current.inclusive = current.inclusive && next.inclusive
+	}
+	return current, nil
+}
+
+func stricterUpperIndexBound(valueType collections.IndexValueType, current, next indexRangeCandidateBound) (indexRangeCandidateBound, error) {
+	if !current.set {
+		return next, nil
+	}
+	cmp, err := compareIndexScalars(valueType, next.value, current.value)
+	if err != nil {
+		return indexRangeCandidateBound{}, err
+	}
+	if cmp < 0 {
+		return next, nil
+	}
+	if cmp == 0 {
+		current.inclusive = current.inclusive && next.inclusive
+	}
+	return current, nil
+}
+
+func compareIndexScalars(valueType collections.IndexValueType, left, right any) (int, error) {
+	switch valueType {
+	case collections.IndexValueString:
+		leftString, leftOK := left.(string)
+		rightString, rightOK := right.(string)
+		if !leftOK || !rightOK {
+			return 0, fmt.Errorf("Mongo gateway internal string index bound mismatch")
+		}
+		return strings.Compare(leftString, rightString), nil
+	case collections.IndexValueBool:
+		leftBool, leftOK := left.(bool)
+		rightBool, rightOK := right.(bool)
+		if !leftOK || !rightOK {
+			return 0, fmt.Errorf("Mongo gateway internal bool index bound mismatch")
+		}
+		switch {
+		case leftBool == rightBool:
+			return 0, nil
+		case !leftBool && rightBool:
+			return -1, nil
+		default:
+			return 1, nil
+		}
+	case collections.IndexValueInt64:
+		leftInt, leftOK := left.(int64)
+		rightInt, rightOK := right.(int64)
+		if !leftOK || !rightOK {
+			return 0, fmt.Errorf("Mongo gateway internal int64 index bound mismatch")
+		}
+		return compareInt64(leftInt, rightInt), nil
+	case collections.IndexValueDouble:
+		leftFloat, leftOK := left.(float64)
+		rightFloat, rightOK := right.(float64)
+		if !leftOK || !rightOK {
+			return 0, fmt.Errorf("Mongo gateway internal double index bound mismatch")
+		}
+		return compareFloat64IndexValues(leftFloat, rightFloat), nil
+	default:
+		return 0, fmt.Errorf("Mongo gateway unsupported index value type %q", valueType)
+	}
+}
+
+func compareInt64(left, right int64) int {
+	switch {
+	case left < right:
+		return -1
+	case left > right:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func compareFloat64IndexValues(left, right float64) int {
+	switch {
+	case math.IsNaN(left) && math.IsNaN(right):
+		return 0
+	case math.IsNaN(left):
+		return -1
+	case math.IsNaN(right):
+		return 1
+	case left < right:
+		return -1
+	case left > right:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func documentsForIndexedRange(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, idx collections.IndexDefinition, opts collections.IndexRangeOptions, candidateLimit, maxDocuments int) ([]wire.Document, error) {
+	if candidateLimit <= 0 {
+		candidateLimit = candidateLimitWithOverflowSlot(maxDocuments)
+	}
+	opts.Limit = candidateLimit
+	ids, _, err := col.FindByIndexRange(idx.Name, opts)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]wire.Document, 0, len(ids))
+	for _, id := range ids {
+		stored, err := col.Get(id)
+		if err != nil {
+			return nil, err
+		}
+		if len(stored) == 0 {
+			continue
+		}
+		doc, err := storedDocumentToBSON(col, materializer, stored)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, doc)
+		if len(out) > maxDocuments {
+			return out, nil
 		}
 	}
 	return out, nil
@@ -1481,29 +1780,142 @@ func bsonTypeSortRank(t bson.Type) int {
 	}
 }
 
-func indexScalarForBSONValue(value bson.RawValue) (any, bool) {
-	switch value.Type {
-	case bson.TypeString:
-		out, ok := value.StringValueOK()
-		return out, ok
-	case bson.TypeBoolean:
-		out, ok := value.BooleanOK()
-		return out, ok
-	case bson.TypeNull:
-		return nil, true
-	case bson.TypeDouble:
-		out, ok := value.DoubleOK()
-		if ok && (math.IsNaN(out) || math.IsInf(out, 0)) {
+func indexScalarForBSONValue(value bson.RawValue, valueType collections.IndexValueType) (any, bool) {
+	switch valueType {
+	case collections.IndexValueString:
+		if value.Type != bson.TypeString {
 			return nil, false
 		}
+		out, ok := value.StringValueOK()
 		return out, ok
-	case bson.TypeInt32:
-		out, ok := value.Int32OK()
+	case collections.IndexValueBool:
+		if value.Type != bson.TypeBoolean {
+			return nil, false
+		}
+		out, ok := value.BooleanOK()
 		return out, ok
-	case bson.TypeInt64:
-		out, ok := value.Int64OK()
-		return out, ok
+	case collections.IndexValueInt64:
+		switch value.Type {
+		case bson.TypeInt32:
+			out, ok := value.Int32OK()
+			if !ok {
+				return nil, false
+			}
+			return int64(out), true
+		case bson.TypeInt64:
+			out, ok := value.Int64OK()
+			return out, ok
+		case bson.TypeDouble:
+			out, ok := value.DoubleOK()
+			if !ok {
+				return nil, false
+			}
+			intValue, ok := exactInt64FromFloat64(out)
+			if !ok {
+				return nil, false
+			}
+			return intValue, true
+		case bson.TypeDecimal128:
+			out, ok := value.Decimal128OK()
+			if !ok {
+				return nil, false
+			}
+			intValue, ok := exactInt64FromDecimal128(out)
+			if !ok {
+				return nil, false
+			}
+			return intValue, true
+		default:
+			return nil, false
+		}
+	case collections.IndexValueDouble:
+		switch value.Type {
+		case bson.TypeDouble:
+			out, ok := value.DoubleOK()
+			if !ok || math.IsNaN(out) {
+				return nil, false
+			}
+			return out, ok
+		case bson.TypeInt32:
+			out, ok := value.Int32OK()
+			if !ok {
+				return nil, false
+			}
+			return float64(out), true
+		case bson.TypeInt64:
+			out, ok := value.Int64OK()
+			if !ok || !int64CanRepresentAsExactFloat64(out) {
+				return nil, false
+			}
+			return float64(out), true
+		case bson.TypeDecimal128:
+			out, ok := value.Decimal128OK()
+			if !ok {
+				return nil, false
+			}
+			doubleValue, ok := exactFloat64FromDecimal128(out)
+			if !ok {
+				return nil, false
+			}
+			return doubleValue, true
+		default:
+			return nil, false
+		}
 	default:
 		return nil, false
 	}
+}
+
+func uncoercibleNumericRangeShouldScan(value bson.RawValue, valueType collections.IndexValueType) bool {
+	switch valueType {
+	case collections.IndexValueInt64, collections.IndexValueDouble:
+		return value.IsNumber() && rawNumberComparable(value)
+	default:
+		return false
+	}
+}
+
+func unindexedRangePredicateShouldScan(value bson.RawValue, valueType collections.IndexValueType) bool {
+	return rawValueIsNull(value) || uncoercibleNumericRangeShouldScan(value, valueType)
+}
+
+func exactInt64FromDecimal128(value bson.Decimal128) (int64, bool) {
+	rat, ok := decimal128Rat(value)
+	if !ok || rat.Denom().Cmp(big.NewInt(1)) != 0 || !rat.Num().IsInt64() {
+		return 0, false
+	}
+	return rat.Num().Int64(), true
+}
+
+func exactFloat64FromDecimal128(value bson.Decimal128) (float64, bool) {
+	rat, ok := decimal128Rat(value)
+	if !ok {
+		return 0, false
+	}
+	out, exact := rat.Float64()
+	if !exact || math.IsNaN(out) || math.IsInf(out, 0) {
+		return 0, false
+	}
+	return out, true
+}
+
+func exactInt64FromFloat64(value float64) (int64, bool) {
+	const minInt64AsFloat64 = -9223372036854775808.0
+	const maxInt64PlusOneAsFloat64 = 9223372036854775808.0
+	if math.IsNaN(value) || math.IsInf(value, 0) || math.Trunc(value) != value {
+		return 0, false
+	}
+	if value < minInt64AsFloat64 || value >= maxInt64PlusOneAsFloat64 {
+		return 0, false
+	}
+	return int64(value), true
+}
+
+func int64CanRepresentAsExactFloat64(value int64) bool {
+	const int64UpperBoundAsFloat64 = 9223372036854775808.0
+	out := float64(value)
+	if out < -int64UpperBoundAsFloat64 || out >= int64UpperBoundAsFloat64 {
+		return false
+	}
+	return int64(out) == value
 }

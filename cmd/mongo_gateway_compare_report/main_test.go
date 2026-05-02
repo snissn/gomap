@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestReportFromMatrix(t *testing.T) {
@@ -56,8 +57,8 @@ func TestReportFromMatrix(t *testing.T) {
 		"# Mongo Gateway Benchmark Comparison",
 		"Largest TreeDB ops/sec lead: `load_insert_many`",
 		"Largest MongoDB ops/sec lead: `id_find_one`",
-		"| 100 | 1 | `treedb` | `load_insert_many` | 10000 | 12500 | 5000 | 6250 | 2.00x | 2.00x | 20.0 | 40.0 |",
-		"| 100 | 1 | `treedb` | checkpoint | 1000 B | 10.0 B | 2.00 KiB | 20.5 B | 1.27 KiB | 1.46 KiB | 4.00 KiB | 41.0 B | 0.67x | 0.50x |",
+		"| 100 | 1 | false | n/a | `treedb` | `load_insert_many` | 10000 | 12500 | 5000 | 6250 | 2.00x | 2.00x | 20.0 | 40.0 |",
+		"| 100 | 1 | false | `treedb` | checkpoint | 1000 B | 10.0 B | 2.00 KiB | 20.5 B | 1.27 KiB | 1.46 KiB | 4.00 KiB | 41.0 B | 0.67x | 0.50x |",
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q\n%s", want, report)
@@ -67,6 +68,132 @@ func TestReportFromMatrix(t *testing.T) {
 	summary := readFile(t, summaryPath)
 	if !strings.Contains(summary, "load_insert_many\t10000.000000\t12500.000000\t80.000000\t5000.000000\t6250.000000\t160.000000\t2.000000\t2.000000") {
 		t.Fatalf("summary missing load ratio:\n%s", summary)
+	}
+}
+
+func TestReportShowsRangeIndexModeAndProfileDir(t *testing.T) {
+	dir := t.TempDir()
+	treedbPath := filepath.Join(dir, "treedb_range.json")
+	mongoPath := filepath.Join(dir, "mongo_range.json")
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	reportPath := filepath.Join(dir, "report.md")
+	summaryPath := filepath.Join(dir, "summary.tsv")
+
+	writeFile(t, treedbPath, `{
+  "target": "treedb",
+  "database": "bench",
+  "collection": "docs",
+  "documents": 1000,
+  "secondary_indexes": 0,
+  "range_index": true,
+  "profile_dir": "/tmp/range-profiles",
+  "profile_manifest": "profile_manifest.json",
+  "profile_result": "benchmark_result.json",
+  "phases": [
+    {"name": "age_range_indexed_limit_10", "operations": 100, "driver_calls": 100, "ops_per_sec": 3000, "sampled_ops_per_sec": 3100, "sampled_ns_per_op": 322000, "latency_micros": {"p50": 300, "p95": 400, "p99": 500}}
+  ],
+  "treedb_disk_after_load": {"total_bytes": 5000}
+}`)
+	writeFile(t, mongoPath, `{
+  "target": "mongo",
+  "database": "bench",
+  "collection": "docs",
+  "documents": 1000,
+  "secondary_indexes": 0,
+  "range_index": true,
+  "phases": [
+    {"name": "age_range_indexed_limit_10", "operations": 100, "driver_calls": 100, "ops_per_sec": 4000, "sampled_ops_per_sec": 4100, "sampled_ns_per_op": 244000, "latency_micros": {"p50": 200, "p95": 300, "p99": 450}}
+  ],
+  "mongodb_stats_final": {"dataSize": 10000, "totalSize": 20000}
+}`)
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_template_v1_driver_range_index\t1000\t0\ttreedb_range.json\t6000\n"+
+		"mongo\tmongo_range_index\t1000\t0\tmongo_range.json\t300000\n")
+
+	if err := run([]string{
+		"-matrix", matrixPath,
+		"-report", reportPath,
+		"-summary", summaryPath,
+	}); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	report := readFile(t, reportPath)
+	for _, want := range []string{
+		"| 1000 | 0 | true | `indexed` | `treedb_template_v1_driver_range_index` | `age_range_indexed_limit_10` | 3000 | 3100 | 4000 | 4100 | 0.75x | 0.76x | 400 | 300 |",
+		"| 1000 | 0 | true | `treedb_template_v1_driver_range_index` | treedb | `treedb_range.json` | `/tmp/range-profiles` |",
+		"Range-query benchmark rows use explicit phase names",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q\n%s", want, report)
+		}
+	}
+	summary := readFile(t, summaryPath)
+	if !strings.Contains(summary, "1000\t0\ttrue\tindexed\ttreedb_template_v1_driver_range_index\tage_range_indexed_limit_10") {
+		t.Fatalf("summary missing indexed range mode:\n%s", summary)
+	}
+}
+
+func TestReportRawInputsKeepsMongoRowsForDifferentRangeIndexModes(t *testing.T) {
+	cells := []cellComparison{
+		{
+			Key: cellKey{Documents: 1000, SecondaryIndexes: 0, TreeDBConfig: "treedb_scan"},
+			TreeDB: &runRecord{
+				Row:            matrixRow{Target: "treedb", Config: "treedb_scan", Documents: 1000, RawJSON: "treedb_scan.json"},
+				Result:         benchmarkResult{Target: "treedb", Documents: 1000, RangeIndex: false, Phases: []phaseResult{{Name: "age_range_scan_limit_10", OpsPerSecond: 10}}},
+				DisplayRawPath: "treedb_scan.json",
+				PhaseMap:       phaseMap([]phaseResult{{Name: "age_range_scan_limit_10", OpsPerSecond: 10}}),
+			},
+			Mongo: &runRecord{
+				Row:            matrixRow{Target: "mongo", Config: "mongo", Documents: 1000, RawJSON: "mongo_scan.json"},
+				Result:         benchmarkResult{Target: "mongo", Documents: 1000, RangeIndex: false, Phases: []phaseResult{{Name: "age_range_scan_limit_10", OpsPerSecond: 20}}},
+				DisplayRawPath: "mongo_scan.json",
+				PhaseMap:       phaseMap([]phaseResult{{Name: "age_range_scan_limit_10", OpsPerSecond: 20}}),
+			},
+		},
+		{
+			Key: cellKey{Documents: 1000, SecondaryIndexes: 0, TreeDBConfig: "treedb_indexed"},
+			TreeDB: &runRecord{
+				Row:            matrixRow{Target: "treedb", Config: "treedb_indexed", Documents: 1000, RawJSON: "treedb_indexed.json"},
+				Result:         benchmarkResult{Target: "treedb", Documents: 1000, RangeIndex: true, Phases: []phaseResult{{Name: "age_range_indexed_limit_10", OpsPerSecond: 30}}},
+				DisplayRawPath: "treedb_indexed.json",
+				PhaseMap:       phaseMap([]phaseResult{{Name: "age_range_indexed_limit_10", OpsPerSecond: 30}}),
+			},
+			Mongo: &runRecord{
+				Row:            matrixRow{Target: "mongo", Config: "mongo", Documents: 1000, RawJSON: "mongo_indexed.json"},
+				Result:         benchmarkResult{Target: "mongo", Documents: 1000, RangeIndex: true, Phases: []phaseResult{{Name: "age_range_indexed_limit_10", OpsPerSecond: 40}}},
+				DisplayRawPath: "mongo_indexed.json",
+				PhaseMap:       phaseMap([]phaseResult{{Name: "age_range_indexed_limit_10", OpsPerSecond: 40}}),
+			},
+		},
+	}
+	report := renderReport(config{Title: "test", MatrixPath: "matrix.tsv"}, cells, time.Unix(0, 0).UTC())
+	for _, want := range []string{
+		"| 1000 | 0 | false | `mongo` | mongo | `mongo_scan.json` | n/a |",
+		"| 1000 | 0 | true | `mongo` | mongo | `mongo_indexed.json` | n/a |",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q\n%s", want, report)
+		}
+	}
+}
+
+func TestRangeModeLabelsIndexedAndScanPhases(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want string
+	}{
+		{name: "age_range_indexed_limit_10", want: "indexed"},
+		{name: "score_range_indexed_limit_50", want: "indexed"},
+		{name: "age_range_scan_limit_10", want: "scan"},
+		{name: "score_range_scan_limit_50", want: "scan"},
+		{name: "age_range_limit_10", want: "scan"},
+		{name: "score_range_limit_50", want: "scan"},
+		{name: "id_find_one", want: ""},
+	} {
+		if got := rangeMode(tc.name); got != tc.want {
+			t.Fatalf("rangeMode(%q)=%q want %q", tc.name, got, tc.want)
+		}
 	}
 }
 
@@ -208,8 +335,8 @@ func TestReportAllowsMixedIncompleteCells(t *testing.T) {
 	}
 	report := readFile(t, reportPath)
 	for _, want := range []string{
-		"| 10 | 0 | `treedb_complete` | `load_insert_many` | 1000 | 1100 | 500 | 550 | 2.00x | 2.00x | 2.00 | 4.00 |",
-		"| 20 | 1 | `treedb_only` | `concurrent_id_find_one_r2` | 2000 | 2200 | n/a | n/a | n/a | n/a | 3.00 | n/a |",
+		"| 10 | 0 | false | n/a | `treedb_complete` | `load_insert_many` | 1000 | 1100 | 500 | 550 | 2.00x | 2.00x | 2.00 | 4.00 |",
+		"| 20 | 1 | false | n/a | `treedb_only` | `concurrent_id_find_one_r2` | 2000 | 2200 | n/a | n/a | n/a | n/a | 3.00 | n/a |",
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q\n%s", want, report)
@@ -262,15 +389,15 @@ func TestReportSupportsMultipleTreeDBConfigsPerMongoCell(t *testing.T) {
 	report := readFile(t, reportPath)
 	for _, want := range []string{
 		"comparison cells: `2`",
-		"| 100 | 2 | `treedb_bson` | maintenance | 1.46 KiB",
-		"| 100 | 2 | `treedb_json` | maintenance | 1.95 KiB",
-		"| 100 | 2 | `mongo` | mongo | `mongo.json` |",
+		"| 100 | 2 | false | `treedb_bson` | maintenance | 1.46 KiB",
+		"| 100 | 2 | false | `treedb_json` | maintenance | 1.95 KiB",
+		"| 100 | 2 | false | `mongo` | mongo | `mongo.json` | n/a |",
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q\n%s", want, report)
 		}
 	}
-	if got := strings.Count(report, "| 100 | 2 | `mongo` | mongo | `mongo.json` |"); got != 1 {
+	if got := strings.Count(report, "| 100 | 2 | false | `mongo` | mongo | `mongo.json` | n/a |"); got != 1 {
 		t.Fatalf("mongo raw input rows=%d want 1\n%s", got, report)
 	}
 }
@@ -318,10 +445,10 @@ func TestReportSupportsScalingMongoConfigsPerScenario(t *testing.T) {
 	}
 	report := readFile(t, reportPath)
 	for _, want := range []string{
-		"| 100 | 2 | `treedb_bson_driver-command-raw_writers_1` | `concurrent_id_update_set_w1` | 1000 | n/a | 500 | n/a | 2.00x | n/a | 10.0 | 30.0 |",
-		"| 100 | 2 | `treedb_bson_driver-command-raw_writers_2` | `concurrent_id_update_set_w2` | 1500 | n/a | 750 | n/a | 2.00x | n/a | 20.0 | 40.0 |",
-		"| 100 | 2 | `mongo_writers_1` | mongo | `mongo_w1.json` |",
-		"| 100 | 2 | `mongo_writers_2` | mongo | `mongo_w2.json` |",
+		"| 100 | 2 | false | n/a | `treedb_bson_driver-command-raw_writers_1` | `concurrent_id_update_set_w1` | 1000 | n/a | 500 | n/a | 2.00x | n/a | 10.0 | 30.0 |",
+		"| 100 | 2 | false | n/a | `treedb_bson_driver-command-raw_writers_2` | `concurrent_id_update_set_w2` | 1500 | n/a | 750 | n/a | 2.00x | n/a | 20.0 | 40.0 |",
+		"| 100 | 2 | false | `mongo_writers_1` | mongo | `mongo_w1.json` | n/a |",
+		"| 100 | 2 | false | `mongo_writers_2` | mongo | `mongo_w2.json` | n/a |",
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q\n%s", want, report)
@@ -575,7 +702,7 @@ func TestReportMatchesUnsuffixedTreeConfigWithMixedMongoRows(t *testing.T) {
 		t.Fatalf("run failed: %v", err)
 	}
 	report := readFile(t, reportPath)
-	if !strings.Contains(report, "| 100 | 2 | `treedb_bson_driver-command-raw` | `insert` | 1000 | n/a | 500 | n/a | 2.00x | n/a |") {
+	if !strings.Contains(report, "| 100 | 2 | false | n/a | `treedb_bson_driver-command-raw` | `insert` | 1000 | n/a | 500 | n/a | 2.00x | n/a |") {
 		t.Fatalf("report missing unsuffixed comparison\n%s", report)
 	}
 }
@@ -698,7 +825,7 @@ func TestMissingTreeDBDiskSnapshotRendersNA(t *testing.T) {
 
 	var table strings.Builder
 	renderDiskTable(&table, cells)
-	row := "| 100 | 1 | `` | n/a | n/a | n/a | n/a | n/a | 1.27 KiB | 1.46 KiB | n/a | n/a | n/a | n/a |"
+	row := "| 100 | 1 | false | `` | n/a | n/a | n/a | n/a | n/a | 1.27 KiB | 1.46 KiB | n/a | n/a | n/a | n/a |"
 	if !strings.Contains(table.String(), row) {
 		t.Fatalf("disk table missing n/a row %q:\n%s", row, table.String())
 	}

@@ -156,8 +156,8 @@ func overheadBenchIndexedPlanner() insertBatchPlanner {
 	return insertBatchPlanner{
 		collection: "users",
 		indexes: []indexDefinition{
-			{name: "email_idx", field: "email", unique: true},
-			{name: "city_idx", field: "city"},
+			{name: "email_idx", field: "email", valueType: IndexValueString, unique: true},
+			{name: "city_idx", field: "city", valueType: IndexValueString},
 		},
 	}
 }

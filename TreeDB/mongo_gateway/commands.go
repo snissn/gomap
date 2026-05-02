@@ -1934,10 +1934,24 @@ func parseCreateIndexDefinition(doc wire.Document) (collections.IndexDefinition,
 	if err != nil {
 		return collections.IndexDefinition{}, err
 	}
+	valueTypeRaw, valueTypePresent, err := optionalStringFieldWithPresence(doc, "treedbValueType")
+	if err != nil {
+		return collections.IndexDefinition{}, err
+	}
+	if !valueTypePresent {
+		return collections.IndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes index %q on field %q requires treedbValueType", name, field)
+	}
+	valueType := collections.IndexValueType(valueTypeRaw)
+	switch valueType {
+	case collections.IndexValueString, collections.IndexValueBool, collections.IndexValueInt64, collections.IndexValueDouble:
+	default:
+		return collections.IndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes index %q on field %q has unsupported treedbValueType %q; supported values are string, bool, int64, double", name, field, valueTypeRaw)
+	}
 	return collections.IndexDefinition{
-		Name:   name,
-		Field:  field,
-		Unique: unique,
+		Name:      name,
+		Field:     field,
+		ValueType: valueType,
+		Unique:    unique,
 	}, nil
 }
 
@@ -2001,6 +2015,7 @@ func mongoIndexDocuments(meta collections.CollectionMeta) bson.A {
 			{Key: "v", Value: int32(2)},
 			{Key: "key", Value: bson.D{{Key: idx.Field, Value: int32(1)}}},
 			{Key: "name", Value: idx.Name},
+			{Key: "treedbValueType", Value: string(idx.ValueType)},
 		}
 		if idx.Unique {
 			doc = append(doc, bson.E{Key: "unique", Value: true})
@@ -2033,6 +2048,7 @@ func dedupeIdenticalIndexDefinitions(defs []collections.IndexDefinition) []colle
 func sameIndexDefinition(left, right collections.IndexDefinition) bool {
 	return left.Name == right.Name &&
 		left.Field == right.Field &&
+		left.ValueType == right.ValueType &&
 		left.Unique == right.Unique &&
 		left.MultiKey == right.MultiKey &&
 		left.StoragePolicy == right.StoragePolicy

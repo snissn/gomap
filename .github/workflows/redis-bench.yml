@@ -25,8 +25,12 @@ jobs:
 
       - name: Install redis-benchmark
         run: |
-          sudo apt-get update
-          sudo apt-get install -y redis-tools
+          docker pull redis:8.4.0
+          cid="$(docker create redis:8.4.0)"
+          docker cp "$cid:/usr/local/bin/redis-benchmark" /tmp/redis-benchmark
+          docker rm "$cid"
+          sudo install -m 0755 /tmp/redis-benchmark /usr/local/bin/redis-benchmark
+          redis-benchmark --version
 
       - name: Run redis protocol bench
         env:

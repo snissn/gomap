@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"math"
 	"sort"
 	"strings"
 	"testing"
@@ -9,12 +10,21 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
+func mustEncodeTestIndexScalar(t *testing.T, valueType IndexValueType, value any) []byte {
+	t.Helper()
+	encoded, err := encodeIndexScalar(valueType, value)
+	if err != nil {
+		t.Fatalf("encode index scalar: %v", err)
+	}
+	return encoded
+}
+
 func TestInsertBatchPlanner_EmitsRootLocalRunsForPrimaryIndexStateAndSecondaryRoots(t *testing.T) {
 	planner := insertBatchPlanner{
 		collection: "users",
 		indexes: []indexDefinition{
-			{name: "email", field: "email", unique: true},
-			{name: "city", field: "city"},
+			{name: "email", field: "email", valueType: IndexValueString, unique: true},
+			{name: "city", field: "city", valueType: IndexValueString},
 		},
 	}
 
@@ -77,8 +87,8 @@ func TestInsertBatchPlanner_TemplateV1SkipsIndexStateRun(t *testing.T) {
 	planner := insertBatchPlanner{
 		collection: "users",
 		indexes: []indexDefinition{
-			{name: "email", field: "email", unique: true},
-			{name: "city", field: "city"},
+			{name: "email", field: "email", valueType: IndexValueString, unique: true},
+			{name: "city", field: "city", valueType: IndexValueString},
 		},
 		options: collectionOptions{documentFormat: DocumentFormatTemplateV1},
 	}
@@ -167,7 +177,7 @@ func TestEmitSecondaryRunsPreservesInputOrderSortedFastPath(t *testing.T) {
 	planner := insertBatchPlanner{collection: "users"}
 	plan := &insertBatchPlan{}
 	runtimes := []indexRuntime{{
-		def: indexDefinition{name: "city", field: "city"},
+		def: indexDefinition{name: "city", field: "city", valueType: IndexValueString},
 	}}
 	if err := planner.emitSecondaryRuns(plan, items, runtimes, primaryOrder); err != nil {
 		t.Fatalf("emit secondary runs: %v", err)
@@ -232,29 +242,29 @@ func TestEncodeNormalizedDocumentIndexStateMatchesConservativeEncoder(t *testing
 func TestAppendIndexScalarEncodesIntoArena(t *testing.T) {
 	var arena []byte
 	tests := []struct {
-		name  string
-		value any
-		want  string
+		name      string
+		valueType IndexValueType
+		value     any
+		want      []byte
 	}{
-		{name: "string", value: "ada", want: "s:ada"},
-		{name: "bool true", value: true, want: "b:1"},
-		{name: "bool false", value: false, want: "b:0"},
-		{name: "number", value: float64(42.5), want: "n:42.5"},
-		{name: "int32", value: int32(42), want: "n:42"},
-		{name: "int64", value: int64(9007199254740993), want: "n:9007199254740993"},
-		{name: "null", value: nil, want: "z:"},
+		{name: "string", valueType: IndexValueString, value: "ada", want: []byte{'a', 'd', 'a', 0x00, 0x00}},
+		{name: "string nul", valueType: IndexValueString, value: "a\x00b", want: []byte{'a', 0x00, 0xff, 'b', 0x00, 0x00}},
+		{name: "bool true", valueType: IndexValueBool, value: true, want: []byte{0x01}},
+		{name: "bool false", valueType: IndexValueBool, value: false, want: []byte{0x00}},
+		{name: "int64", valueType: IndexValueInt64, value: int64(0), want: []byte{0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}},
+		{name: "double zero", valueType: IndexValueDouble, value: float64(0), want: []byte{0x02, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			before := len(arena)
 			var encoded []byte
 			var err error
-			arena, encoded, err = appendIndexScalar(arena, tc.value)
+			arena, encoded, err = appendIndexScalar(arena, tc.valueType, tc.value)
 			if err != nil {
 				t.Fatalf("append index scalar: %v", err)
 			}
-			if got := string(encoded); got != tc.want {
-				t.Fatalf("encoded=%q want %q", got, tc.want)
+			if !bytes.Equal(encoded, tc.want) {
+				t.Fatalf("encoded=%x want %x", encoded, tc.want)
 			}
 			if !bytes.Equal(encoded, arena[before:]) {
 				t.Fatalf("encoded slice is not backed by arena tail")
@@ -264,39 +274,273 @@ func TestAppendIndexScalarEncodesIntoArena(t *testing.T) {
 }
 
 func TestAppendIndexScalarRejectsPlatformInt(t *testing.T) {
-	_, _, err := appendIndexScalar(nil, int(42))
-	if err == nil || !strings.Contains(err.Error(), "unsupported indexed value type int") {
+	_, _, err := appendIndexScalar(nil, IndexValueInt64, int(42))
+	if err == nil || !strings.Contains(err.Error(), "must be int64-compatible") {
 		t.Fatalf("appendIndexScalar(int) err=%v want unsupported int", err)
+	}
+}
+
+func TestTypedIndexScalarOrdering(t *testing.T) {
+	requireEncodedIndexOrder(t, IndexValueString, "", "a", "a\x00", "aa", "b", "ba")
+	requireEncodedIndexOrder(t, IndexValueBool, false, true)
+	requireEncodedIndexOrder(t, IndexValueInt64,
+		int64(math.MinInt64),
+		int64(-10),
+		int64(-2),
+		int64(0),
+		int64(2),
+		int64(10),
+		int64(math.MaxInt64),
+	)
+	requireEncodedIndexOrder(t, IndexValueDouble,
+		math.NaN(),
+		math.Inf(-1),
+		float64(-10),
+		math.Copysign(0, -1),
+		float64(2),
+		float64(10),
+		math.Inf(1),
+	)
+
+	negZero := mustEncodeTestIndexScalar(t, IndexValueDouble, math.Copysign(0, -1))
+	posZero := mustEncodeTestIndexScalar(t, IndexValueDouble, float64(0))
+	if !bytes.Equal(negZero, posZero) {
+		t.Fatalf("double -0 encoded %x want +0 encoding %x", negZero, posZero)
+	}
+	nanA := mustEncodeTestIndexScalar(t, IndexValueDouble, math.Float64frombits(0x7ff8000000000001))
+	nanB := mustEncodeTestIndexScalar(t, IndexValueDouble, math.Float64frombits(0x7ff0000000000001))
+	if !bytes.Equal(nanA, nanB) {
+		t.Fatalf("NaN encodings differ: %x vs %x", nanA, nanB)
+	}
+	end := prefixEnd(mustEncodeTestIndexScalar(t, IndexValueString, "a\x00"))
+	if end == nil || bytes.Compare(end, mustEncodeTestIndexScalar(t, IndexValueString, "a\x00")) <= 0 {
+		t.Fatalf("prefixEnd for escaped string=%x", end)
+	}
+}
+
+func TestIndexRangeScanBoundsDoubleNaN(t *testing.T) {
+	start, end, empty, err := indexRangeScanBounds(IndexValueDouble, IndexRangeOptions{
+		Lower: IndexRangeBound{Value: math.NaN(), Inclusive: false},
+		Upper: IndexRangeBound{Unbounded: true},
+	})
+	if err != nil {
+		t.Fatalf("> NaN bounds: %v", err)
+	}
+	if empty || !bytes.Equal(start, []byte{0x01}) || end != nil {
+		t.Fatalf("> NaN start=%x end=%x empty=%v want [01,unbounded)", start, end, empty)
+	}
+
+	start, end, empty, err = indexRangeScanBounds(IndexValueDouble, IndexRangeOptions{
+		Lower: IndexRangeBound{Value: math.NaN(), Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+	})
+	if err != nil {
+		t.Fatalf(">= NaN bounds: %v", err)
+	}
+	if empty || !bytes.Equal(start, []byte{0x00}) || end != nil {
+		t.Fatalf(">= NaN start=%x end=%x empty=%v want [00,unbounded)", start, end, empty)
+	}
+
+	start, end, empty, err = indexRangeScanBounds(IndexValueDouble, IndexRangeOptions{
+		Lower: IndexRangeBound{Unbounded: true},
+		Upper: IndexRangeBound{Value: math.NaN(), Inclusive: true},
+	})
+	if err != nil {
+		t.Fatalf("<= NaN bounds: %v", err)
+	}
+	if empty || start != nil || !bytes.Equal(end, []byte{0x01}) {
+		t.Fatalf("<= NaN start=%x end=%x empty=%v want [unbounded,01)", start, end, empty)
+	}
+}
+
+func TestIndexRangeScanBoundsTypedScalars(t *testing.T) {
+	encoded := func(valueType IndexValueType, value any) []byte {
+		t.Helper()
+		return mustEncodeTestIndexScalar(t, valueType, value)
+	}
+	prefixAfter := func(valueType IndexValueType, value any) []byte {
+		t.Helper()
+		out := prefixEnd(encoded(valueType, value))
+		if out == nil {
+			t.Fatalf("prefixEnd returned nil for %s %v", valueType, value)
+		}
+		return out
+	}
+	tests := []struct {
+		name      string
+		valueType IndexValueType
+		opts      IndexRangeOptions
+		wantStart []byte
+		wantEnd   []byte
+		wantEmpty bool
+	}{
+		{
+			name:      "string lower inclusive",
+			valueType: IndexValueString,
+			opts: IndexRangeOptions{
+				Lower: IndexRangeBound{Value: "m", Inclusive: true},
+				Upper: IndexRangeBound{Unbounded: true},
+			},
+			wantStart: encoded(IndexValueString, "m"),
+		},
+		{
+			name:      "string lower exclusive",
+			valueType: IndexValueString,
+			opts: IndexRangeOptions{
+				Lower: IndexRangeBound{Value: "m", Inclusive: false},
+				Upper: IndexRangeBound{Unbounded: true},
+			},
+			wantStart: prefixAfter(IndexValueString, "m"),
+		},
+		{
+			name:      "string upper inclusive",
+			valueType: IndexValueString,
+			opts: IndexRangeOptions{
+				Lower: IndexRangeBound{Unbounded: true},
+				Upper: IndexRangeBound{Value: "m", Inclusive: true},
+			},
+			wantEnd: prefixAfter(IndexValueString, "m"),
+		},
+		{
+			name:      "string upper exclusive",
+			valueType: IndexValueString,
+			opts: IndexRangeOptions{
+				Lower: IndexRangeBound{Unbounded: true},
+				Upper: IndexRangeBound{Value: "m", Inclusive: false},
+			},
+			wantEnd: encoded(IndexValueString, "m"),
+		},
+		{
+			name:      "bool closed",
+			valueType: IndexValueBool,
+			opts: IndexRangeOptions{
+				Lower: IndexRangeBound{Value: false, Inclusive: true},
+				Upper: IndexRangeBound{Value: true, Inclusive: true},
+			},
+			wantStart: encoded(IndexValueBool, false),
+			wantEnd:   prefixAfter(IndexValueBool, true),
+		},
+		{
+			name:      "int64 equality",
+			valueType: IndexValueInt64,
+			opts: IndexRangeOptions{
+				Lower: IndexRangeBound{Value: int64(10), Inclusive: true},
+				Upper: IndexRangeBound{Value: int64(10), Inclusive: true},
+			},
+			wantStart: encoded(IndexValueInt64, int64(10)),
+			wantEnd:   prefixAfter(IndexValueInt64, int64(10)),
+		},
+		{
+			name:      "int64 empty half-open equality",
+			valueType: IndexValueInt64,
+			opts: IndexRangeOptions{
+				Lower: IndexRangeBound{Value: int64(10), Inclusive: true},
+				Upper: IndexRangeBound{Value: int64(10), Inclusive: false},
+			},
+			wantEmpty: true,
+		},
+		{
+			name:      "double infinities",
+			valueType: IndexValueDouble,
+			opts: IndexRangeOptions{
+				Lower: IndexRangeBound{Value: math.Inf(-1), Inclusive: true},
+				Upper: IndexRangeBound{Value: math.Inf(1), Inclusive: true},
+			},
+			wantStart: encoded(IndexValueDouble, math.Inf(-1)),
+			wantEnd:   prefixAfter(IndexValueDouble, math.Inf(1)),
+		},
+		{
+			name:      "double negative zero exclusive",
+			valueType: IndexValueDouble,
+			opts: IndexRangeOptions{
+				Lower: IndexRangeBound{Value: math.Copysign(0, -1), Inclusive: false},
+				Upper: IndexRangeBound{Value: float64(1), Inclusive: false},
+			},
+			wantStart: prefixAfter(IndexValueDouble, float64(0)),
+			wantEnd:   encoded(IndexValueDouble, float64(1)),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			start, end, empty, err := indexRangeScanBounds(tc.valueType, tc.opts)
+			if err != nil {
+				t.Fatalf("indexRangeScanBounds: %v", err)
+			}
+			if empty != tc.wantEmpty {
+				t.Fatalf("empty=%v want %v start=%x end=%x", empty, tc.wantEmpty, start, end)
+			}
+			if !bytes.Equal(start, tc.wantStart) || !bytes.Equal(end, tc.wantEnd) {
+				t.Fatalf("bounds start=%x end=%x want start=%x end=%x", start, end, tc.wantStart, tc.wantEnd)
+			}
+		})
+	}
+}
+
+func requireEncodedIndexOrder(t *testing.T, valueType IndexValueType, values ...any) {
+	t.Helper()
+	var prev []byte
+	for i, value := range values {
+		encoded := mustEncodeTestIndexScalar(t, valueType, value)
+		if i > 0 && bytes.Compare(prev, encoded) >= 0 {
+			t.Fatalf("%s encoded order values[%d]=%v encoded=%x after prev=%x", valueType, i, value, encoded, prev)
+		}
+		prev = encoded
 	}
 }
 
 func TestOrderedIndexStateForDocumentHandlesScalarAndArrayValues(t *testing.T) {
 	scalarRuntime := []indexRuntime{{
-		def:  indexDefinition{name: "email", field: "email"},
+		def:  indexDefinition{name: "email", field: "email", valueType: IndexValueString},
 		path: []string{"email"},
 	}}
 	scalarState, err := orderedIndexStateForDocument([]byte(`{"email":"ada@example.com"}`), scalarRuntime, collectionOptions{})
 	if err != nil {
 		t.Fatalf("scalar index state: %v", err)
 	}
-	if got, want := scalarState.valuesAt(0), [][]byte{[]byte("s:ada@example.com")}; !byteMatrixEqual(got, want) {
+	if got, want := scalarState.valuesAt(0), [][]byte{mustEncodeTestIndexScalar(t, IndexValueString, "ada@example.com")}; !byteMatrixEqual(got, want) {
 		t.Fatalf("scalar values=%q want %q", got, want)
 	}
 
 	arrayRuntime := []indexRuntime{{
-		def:  indexDefinition{name: "tags", field: "tags", multiKey: true},
+		def:  indexDefinition{name: "tags", field: "tags", valueType: IndexValueString, multiKey: true},
 		path: []string{"tags"},
 	}}
-	arrayState, err := orderedIndexStateForDocument([]byte(`{"tags":["b","a","a"]}`), arrayRuntime, collectionOptions{})
+	arrayState, err := orderedIndexStateForDocument([]byte(`{"tags":["b",null,"a","a"]}`), arrayRuntime, collectionOptions{})
 	if err != nil {
 		t.Fatalf("array index state: %v", err)
 	}
-	if got, want := arrayState.valuesAt(0), [][]byte{[]byte("s:a"), []byte("s:b")}; !byteMatrixEqual(got, want) {
+	if got, want := arrayState.valuesAt(0), [][]byte{
+		mustEncodeTestIndexScalar(t, IndexValueString, "a"),
+		mustEncodeTestIndexScalar(t, IndexValueString, "b"),
+	}; !byteMatrixEqual(got, want) {
 		t.Fatalf("array values=%q want %q", got, want)
 	}
 
+	nullArrayState, err := orderedIndexStateForDocument([]byte(`{"tags":[null,null]}`), arrayRuntime, collectionOptions{})
+	if err != nil {
+		t.Fatalf("null array index state: %v", err)
+	}
+	if got := nullArrayState.valuesAt(0); len(got) != 0 {
+		t.Fatalf("null array values=%q want none", got)
+	}
+
+	nestedArrayRuntime := []indexRuntime{{
+		def:  indexDefinition{name: "tags", field: "profile.tags", valueType: IndexValueString, multiKey: true},
+		path: []string{"profile", "tags"},
+	}}
+	nestedArrayState, err := orderedIndexStateForDocument([]byte(`{"profile":{"tags":["b",null,"a","a"]}}`), nestedArrayRuntime, collectionOptions{})
+	if err != nil {
+		t.Fatalf("nested array index state: %v", err)
+	}
+	if got, want := nestedArrayState.valuesAt(0), [][]byte{
+		mustEncodeTestIndexScalar(t, IndexValueString, "a"),
+		mustEncodeTestIndexScalar(t, IndexValueString, "b"),
+	}; !byteMatrixEqual(got, want) {
+		t.Fatalf("nested array values=%q want %q", got, want)
+	}
+
 	_, err = orderedIndexStateForDocument([]byte(`{"tags":["a"]}`), []indexRuntime{{
-		def:  indexDefinition{name: "tags", field: "tags"},
+		def:  indexDefinition{name: "tags", field: "tags", valueType: IndexValueString},
 		path: []string{"tags"},
 	}}, collectionOptions{})
 	if err == nil || !strings.Contains(err.Error(), "array value not allowed") {
@@ -306,26 +550,26 @@ func TestOrderedIndexStateForDocumentHandlesScalarAndArrayValues(t *testing.T) {
 
 func TestOrderedIndexStateForDocumentPreservesLargeIntegerNumbers(t *testing.T) {
 	rootRuntime := []indexRuntime{{
-		def:  indexDefinition{name: "big", field: "big"},
+		def:  indexDefinition{name: "big", field: "big", valueType: IndexValueInt64},
 		path: []string{"big"},
 	}}
 	rootState, err := orderedIndexStateForDocument([]byte(`{"big":9007199254740993}`), rootRuntime, collectionOptions{})
 	if err != nil {
 		t.Fatalf("root large int index state: %v", err)
 	}
-	if got, want := rootState.valuesAt(0), [][]byte{[]byte("n:9007199254740993")}; !byteMatrixEqual(got, want) {
+	if got, want := rootState.valuesAt(0), [][]byte{mustEncodeTestIndexScalar(t, IndexValueInt64, int64(9007199254740993))}; !byteMatrixEqual(got, want) {
 		t.Fatalf("root large int values=%q want %q", got, want)
 	}
 
 	nestedRuntime := []indexRuntime{{
-		def:  indexDefinition{name: "big", field: "nested.big"},
+		def:  indexDefinition{name: "big", field: "nested.big", valueType: IndexValueInt64},
 		path: []string{"nested", "big"},
 	}}
 	nestedState, err := orderedIndexStateForDocument([]byte(`{"nested":{"big":9007199254740993}}`), nestedRuntime, collectionOptions{})
 	if err != nil {
 		t.Fatalf("nested large int index state: %v", err)
 	}
-	if got, want := nestedState.valuesAt(0), [][]byte{[]byte("n:9007199254740993")}; !byteMatrixEqual(got, want) {
+	if got, want := nestedState.valuesAt(0), [][]byte{mustEncodeTestIndexScalar(t, IndexValueInt64, int64(9007199254740993))}; !byteMatrixEqual(got, want) {
 		t.Fatalf("nested large int values=%q want %q", got, want)
 	}
 }
@@ -333,8 +577,8 @@ func TestOrderedIndexStateForDocumentPreservesLargeIntegerNumbers(t *testing.T) 
 func TestOrderedIndexStateForDocumentJSONRootFastPathPreservesFieldSemantics(t *testing.T) {
 	planner := insertBatchPlanner{
 		indexes: []indexDefinition{
-			{name: "email", field: "email"},
-			{name: "literal", field: "a*b"},
+			{name: "email", field: "email", valueType: IndexValueString},
+			{name: "literal", field: "a*b", valueType: IndexValueString},
 		},
 	}
 	runtimes, err := planner.indexRuntimes()
@@ -345,17 +589,17 @@ func TestOrderedIndexStateForDocumentJSONRootFastPathPreservesFieldSemantics(t *
 	if err != nil {
 		t.Fatalf("root fast path index state: %v", err)
 	}
-	if got, want := state.valuesAt(0), [][]byte{[]byte("s:second")}; !byteMatrixEqual(got, want) {
+	if got, want := state.valuesAt(0), [][]byte{mustEncodeTestIndexScalar(t, IndexValueString, "second")}; !byteMatrixEqual(got, want) {
 		t.Fatalf("duplicate email values=%q want %q", got, want)
 	}
-	if got, want := state.valuesAt(1), [][]byte{[]byte("s:literal")}; !byteMatrixEqual(got, want) {
+	if got, want := state.valuesAt(1), [][]byte{mustEncodeTestIndexScalar(t, IndexValueString, "literal")}; !byteMatrixEqual(got, want) {
 		t.Fatalf("literal field values=%q want %q", got, want)
 	}
 }
 
 func TestOrderedIndexStateForDocumentJSONRootFastPathUnescapesStringValues(t *testing.T) {
 	planner := insertBatchPlanner{
-		indexes: []indexDefinition{{name: "email", field: "email"}},
+		indexes: []indexDefinition{{name: "email", field: "email", valueType: IndexValueString}},
 	}
 	runtimes, err := planner.indexRuntimes()
 	if err != nil {
@@ -365,28 +609,45 @@ func TestOrderedIndexStateForDocumentJSONRootFastPathUnescapesStringValues(t *te
 	if err != nil {
 		t.Fatalf("root fast path index state: %v", err)
 	}
-	if got, want := state.valuesAt(0), [][]byte{[]byte("s:ada\n@example.com")}; !byteMatrixEqual(got, want) {
+	if got, want := state.valuesAt(0), [][]byte{mustEncodeTestIndexScalar(t, IndexValueString, "ada\n@example.com")}; !byteMatrixEqual(got, want) {
 		t.Fatalf("escaped string values=%q want %q", got, want)
 	}
 }
 
 func TestOrderedIndexStateForDocumentJSONRootFastPathRejectsOutOfRangeNumber(t *testing.T) {
 	planner := insertBatchPlanner{
-		indexes: []indexDefinition{{name: "score", field: "score"}},
+		indexes: []indexDefinition{{name: "score", field: "score", valueType: IndexValueDouble}},
 	}
 	runtimes, err := planner.indexRuntimes()
 	if err != nil {
 		t.Fatalf("index runtimes: %v", err)
 	}
 	_, err = orderedIndexStateForDocument([]byte(`{"score":1e999}`), runtimes, collectionOptions{})
-	if err == nil || !strings.Contains(err.Error(), "unsupported indexed JSON number") {
+	if err == nil || !strings.Contains(err.Error(), "unsupported indexed JSON") {
 		t.Fatalf("err=%v want unsupported indexed JSON number", err)
+	}
+}
+
+func TestOrderedIndexStateForDocumentJSONRootFastPathAcceptsExponentDoubleOutsideInt64Range(t *testing.T) {
+	planner := insertBatchPlanner{
+		indexes: []indexDefinition{{name: "score", field: "score", valueType: IndexValueDouble}},
+	}
+	runtimes, err := planner.indexRuntimes()
+	if err != nil {
+		t.Fatalf("index runtimes: %v", err)
+	}
+	state, err := orderedIndexStateForDocument([]byte(`{"score":1e20}`), runtimes, collectionOptions{})
+	if err != nil {
+		t.Fatalf("root fast path index state: %v", err)
+	}
+	if got, want := state.valuesAt(0), [][]byte{mustEncodeTestIndexScalar(t, IndexValueDouble, 1e20)}; !byteMatrixEqual(got, want) {
+		t.Fatalf("exponent double values=%q want %q", got, want)
 	}
 }
 
 func TestOrderedIndexStateForDocumentJSONRootFastPathRejectsInvalidJSON(t *testing.T) {
 	planner := insertBatchPlanner{
-		indexes: []indexDefinition{{name: "email", field: "email"}},
+		indexes: []indexDefinition{{name: "email", field: "email", valueType: IndexValueString}},
 	}
 	runtimes, err := planner.indexRuntimes()
 	if err != nil {
@@ -432,8 +693,8 @@ func TestInsertBatchPlanner_BuildsUniqueProbePrefixesOnlyForPersistedRoots(t *te
 	planner := insertBatchPlanner{
 		collection: "users",
 		indexes: []indexDefinition{
-			{name: "email", field: "email", unique: true},
-			{name: "username", field: "username", unique: true},
+			{name: "email", field: "email", valueType: IndexValueString, unique: true},
+			{name: "username", field: "username", valueType: IndexValueString, unique: true},
 		},
 	}
 	probe := &recordingRootSnapshotProbe{}
@@ -576,7 +837,7 @@ func TestInsertBatchPlanCheckPersistedConflictsRejectsIncompleteDerivedInputs(t 
 		t.Fatalf("checkPersistedConflicts err=%v want missing primary keys", err)
 	}
 
-	catalog.meta.Indexes = []IndexDefinition{{Name: "email", Field: "email", Unique: true}}
+	catalog.meta.Indexes = []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}}
 	catalog.roots[collectionSecondaryRootName("users", "email")] = 2
 	err = (&insertBatchPlan{
 		resultIDs:   [][]byte{[]byte("u1")},
@@ -618,7 +879,7 @@ func TestInsertBatchPlanner_FailFastDuplicatesBeforePayloadConstruction(t *testi
 	}
 
 	builds = 0
-	planner.indexes = []indexDefinition{{name: "email", field: "email", unique: true}}
+	planner.indexes = []indexDefinition{{name: "email", field: "email", valueType: IndexValueString, unique: true}}
 	_, err = planner.planInsertBatch(
 		[][]byte{[]byte("u1"), []byte("u2")},
 		[][]byte{[]byte(`{"email":"same@example.com"}`), []byte(`{"email":"same@example.com"}`)},
@@ -685,7 +946,7 @@ func TestInsertBatchPlanner_RejectsPersistedUniqueValueBeforePayloadConstruction
 	}
 	defer func() { _ = d.Close() }()
 
-	seedKey, err := indexEntryKey([]byte("s:seed@example.com"), []byte("seed"))
+	seedKey, err := indexEntryKey(mustEncodeTestIndexScalar(t, IndexValueString, "seed@example.com"), []byte("seed"))
 	if err != nil {
 		t.Fatalf("seed index key: %v", err)
 	}
@@ -709,7 +970,7 @@ func TestInsertBatchPlanner_RejectsPersistedUniqueValueBeforePayloadConstruction
 	planner := insertBatchPlanner{
 		collection: "users",
 		indexes: []indexDefinition{
-			{name: "email", field: "email", unique: true},
+			{name: "email", field: "email", valueType: IndexValueString, unique: true},
 		},
 		buildPrimaryVal: func(_, document []byte) ([]byte, error) {
 			builds++
@@ -740,7 +1001,7 @@ func TestInsertBatchPlanner_PreflightUsesRootBatchProbes(t *testing.T) {
 	planner := insertBatchPlanner{
 		collection: "users",
 		indexes: []indexDefinition{
-			{name: "email", field: "email", unique: true},
+			{name: "email", field: "email", valueType: IndexValueString, unique: true},
 		},
 		buildPrimaryVal: func(_, document []byte) ([]byte, error) {
 			builds++
@@ -798,7 +1059,7 @@ func TestInsertBatchPlanner_PublishesRunsThroughGroupedOrderedRootPublisher(t *t
 	planner := insertBatchPlanner{
 		collection: "users",
 		indexes: []indexDefinition{
-			{name: "email", field: "email", unique: true},
+			{name: "email", field: "email", valueType: IndexValueString, unique: true},
 		},
 	}
 	plan, err := planner.planInsertBatch(

@@ -824,17 +824,17 @@ func collectionShapeIndexes(indexCount int) []collections.IndexDefinition {
 	case 0:
 		return nil
 	case 1:
-		return []collections.IndexDefinition{{Name: "email_idx", Field: "email", Unique: true}}
+		return []collections.IndexDefinition{{Name: "email_idx", Field: "email", ValueType: collections.IndexValueString, Unique: true}}
 	case 2:
 		return []collections.IndexDefinition{
-			{Name: "email_idx", Field: "email", Unique: true},
-			{Name: "city_idx", Field: "city"},
+			{Name: "email_idx", Field: "email", ValueType: collections.IndexValueString, Unique: true},
+			{Name: "city_idx", Field: "city", ValueType: collections.IndexValueString},
 		}
 	case 3:
 		return []collections.IndexDefinition{
-			{Name: "email_idx", Field: "email", Unique: true},
-			{Name: "city_idx", Field: "city"},
-			{Name: "name_idx", Field: "name"},
+			{Name: "email_idx", Field: "email", ValueType: collections.IndexValueString, Unique: true},
+			{Name: "city_idx", Field: "city", ValueType: collections.IndexValueString},
+			{Name: "name_idx", Field: "name", ValueType: collections.IndexValueString},
 		}
 	default:
 		panic(fmt.Sprintf("unsupported index count %d", indexCount))

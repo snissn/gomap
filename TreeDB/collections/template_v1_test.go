@@ -59,8 +59,8 @@ func TestTemplateV1CollectionInsertBatchIndexesAndTemplateRoot(t *testing.T) {
 			DocumentFormat: DocumentFormatTemplateV1,
 		},
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -158,7 +158,7 @@ func TestTemplateV1UniqueIndexSkipsNullValues(t *testing.T) {
 		Options: CollectionOptions{
 			DocumentFormat: DocumentFormatTemplateV1,
 		},
-		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -190,8 +190,8 @@ func TestTemplateV1CollectionReopenFindAndDelete(t *testing.T) {
 			DocumentFormat: DocumentFormatTemplateV1,
 		},
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -257,7 +257,7 @@ func TestTemplateV1EncoderReusesPersistedTemplateRoot(t *testing.T) {
 		Options: CollectionOptions{
 			DocumentFormat: DocumentFormatTemplateV1,
 		},
-		Indexes: []IndexDefinition{{Name: "email", Field: "email", Unique: true}},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestTemplateV1IndexedWriteMemtablesResolveBufferedTemplateAcrossBatches(t *
 		Options: CollectionOptions{
 			DocumentFormat: DocumentFormatTemplateV1,
 		},
-		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -415,7 +415,7 @@ func TestTemplateV1IndexedFlushUnitResolveBufferedTemplate(t *testing.T) {
 		Options: CollectionOptions{
 			DocumentFormat: DocumentFormatTemplateV1,
 		},
-		Indexes: []IndexDefinition{{Name: "city", Field: "city"}},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -694,8 +694,8 @@ func TestTemplateV1UpdatePublishesNewTemplateShape(t *testing.T) {
 			DocumentFormat: DocumentFormatTemplateV1,
 		},
 		Indexes: []IndexDefinition{
-			{Name: "email", Field: "email", Unique: true},
-			{Name: "city", Field: "city"},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -780,7 +780,7 @@ func TestTemplateV1CreateIndexBackfillsFromTemplateRoot(t *testing.T) {
 		t.Fatalf("insert batch: %v", err)
 	}
 
-	if _, err := col.CreateIndex(IndexDefinition{Name: "city", Field: "city"}); err != nil {
+	if _, err := col.CreateIndex(IndexDefinition{Name: "city", Field: "city", ValueType: IndexValueString}); err != nil {
 		t.Fatalf("create index: %v", err)
 	}
 	ids, err := col.FindByIndex("city", "sea")
@@ -813,7 +813,7 @@ func TestTemplateV1MultiKeyIndex(t *testing.T) {
 			DocumentFormat: DocumentFormatTemplateV1,
 		},
 		Indexes: []IndexDefinition{
-			{Name: "tag", Field: "tags", MultiKey: true},
+			{Name: "tag", Field: "tags", ValueType: IndexValueString, MultiKey: true},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -823,8 +823,11 @@ func TestTemplateV1MultiKeyIndex(t *testing.T) {
 		t.Fatalf("open collection: %v", err)
 	}
 	if _, err := col.InsertBatch(
-		[][]byte{[]byte("d1")},
-		[][]byte{mustTemplateV1Document(t, []string{"tags"}, []any{[]any{"b", "a", "a"}})},
+		[][]byte{[]byte("d1"), []byte("d2")},
+		[][]byte{
+			mustTemplateV1Document(t, []string{"tags"}, []any{[]any{"b", nil, "a", "a"}}),
+			mustTemplateV1Document(t, []string{"tags"}, []any{[]any{nil, nil}}),
+		},
 	); err != nil {
 		t.Fatalf("insert batch: %v", err)
 	}
@@ -834,6 +837,13 @@ func TestTemplateV1MultiKeyIndex(t *testing.T) {
 	}
 	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("d1")) {
 		t.Fatalf("tag ids=%q want d1", ids)
+	}
+	ids, err = col.FindByIndex("tag", "b")
+	if err != nil {
+		t.Fatalf("find tag b: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("d1")) {
+		t.Fatalf("tag b ids=%q want d1", ids)
 	}
 }
 
@@ -856,7 +866,7 @@ func TestTemplateV1NestedIndexExtraction(t *testing.T) {
 		}
 	}
 	runtimes := []indexRuntime{{
-		def:  indexDefinition{name: "city", field: "profile.city"},
+		def:  indexDefinition{name: "city", field: "profile.city", valueType: IndexValueString},
 		path: []string{"profile", "city"},
 	}}
 	state, err := orderedIndexStateForDocument(stored, runtimes, collectionOptions{
@@ -866,7 +876,7 @@ func TestTemplateV1NestedIndexExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extract nested index state: %v", err)
 	}
-	if got, want := state.valuesAt(0), [][]byte{[]byte("s:hnl")}; !byteMatrixEqual(got, want) {
+	if got, want := state.valuesAt(0), [][]byte{mustEncodeTestIndexScalar(t, IndexValueString, "hnl")}; !byteMatrixEqual(got, want) {
 		t.Fatalf("nested values=%q want %q", got, want)
 	}
 }
@@ -892,8 +902,8 @@ func TestTemplateV1RootIndexExtraction(t *testing.T) {
 	}
 	planner := insertBatchPlanner{
 		indexes: []indexDefinition{
-			{name: "email", field: "email"},
-			{name: "city", field: "city"},
+			{name: "email", field: "email", valueType: IndexValueString},
+			{name: "city", field: "city", valueType: IndexValueString},
 		},
 	}
 	runtimes, err := planner.indexRuntimes()
@@ -907,10 +917,10 @@ func TestTemplateV1RootIndexExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extract root index state: %v", err)
 	}
-	if got, want := state.valuesAt(0), [][]byte{[]byte("s:ada@example.com")}; !byteMatrixEqual(got, want) {
+	if got, want := state.valuesAt(0), [][]byte{mustEncodeTestIndexScalar(t, IndexValueString, "ada@example.com")}; !byteMatrixEqual(got, want) {
 		t.Fatalf("email values=%q want %q", got, want)
 	}
-	if got, want := state.valuesAt(1), [][]byte{[]byte("s:hnl")}; !byteMatrixEqual(got, want) {
+	if got, want := state.valuesAt(1), [][]byte{mustEncodeTestIndexScalar(t, IndexValueString, "hnl")}; !byteMatrixEqual(got, want) {
 		t.Fatalf("city values=%q want %q", got, want)
 	}
 }

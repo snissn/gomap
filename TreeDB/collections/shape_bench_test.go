@@ -85,17 +85,17 @@ func collectionShapeIndexes(indexCount int) []collections.IndexDefinition {
 	case 0:
 		return nil
 	case 1:
-		return []collections.IndexDefinition{{Name: "email_idx", Field: "email", Unique: true}}
+		return []collections.IndexDefinition{{Name: "email_idx", Field: "email", ValueType: collections.IndexValueString, Unique: true}}
 	case 2:
 		return []collections.IndexDefinition{
-			{Name: "email_idx", Field: "email", Unique: true},
-			{Name: "city_idx", Field: "city"},
+			{Name: "email_idx", Field: "email", ValueType: collections.IndexValueString, Unique: true},
+			{Name: "city_idx", Field: "city", ValueType: collections.IndexValueString},
 		}
 	case 3:
 		return []collections.IndexDefinition{
-			{Name: "email_idx", Field: "email", Unique: true},
-			{Name: "city_idx", Field: "city"},
-			{Name: "name_idx", Field: "name"},
+			{Name: "email_idx", Field: "email", ValueType: collections.IndexValueString, Unique: true},
+			{Name: "city_idx", Field: "city", ValueType: collections.IndexValueString},
+			{Name: "name_idx", Field: "name", ValueType: collections.IndexValueString},
 		}
 	default:
 		panic(fmt.Sprintf("unsupported collection benchmark index count %d", indexCount))
@@ -107,7 +107,7 @@ func collectionSingleStringIndexes(indexCount int) []collections.IndexDefinition
 	case 0:
 		return nil
 	case 1:
-		return []collections.IndexDefinition{{Name: "value_idx", Field: "value", Unique: true}}
+		return []collections.IndexDefinition{{Name: "value_idx", Field: "value", ValueType: collections.IndexValueString, Unique: true}}
 	default:
 		panic(fmt.Sprintf("unsupported single-string benchmark index count %d", indexCount))
 	}

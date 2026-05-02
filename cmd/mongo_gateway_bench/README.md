@@ -200,6 +200,8 @@ The bundle contains:
 - `summary.tsv`: machine-readable per-phase comparison rows.
 - `matrix.tsv`: target/config/document/index/raw-json/physical-byte index.
 - `raw/*.json`: unmodified `mongo_gateway_bench -format json` output.
+- `profiles/`: per-phase TreeDB pprof artifacts when `--profile-treedb` is
+  used.
 - `treedb_data/` and, in Docker mode, `mongodb_data/`: final data directories
   for post-run inspection.
 
@@ -222,6 +224,11 @@ Useful overrides:
 - `TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack raw-wire-tcp raw-wire"`
 - `READS=50000`, `RANGE_READS=5000`, `UPDATES=5000`
 - `DELETES=1000`
+- `RANGE_INDEX=true` or `--range-index` to create `age_1` and report
+  `age_range_indexed_limit_10` instead of scan fallback.
+- `PROFILE_TREEDB=true` or `--profile-treedb` to pass `-profile-dir` for every
+  TreeDB cell and retain per-phase profiles under the bundle's `profiles/`
+  directory.
 - `CONCURRENT_READERS=16`, `CONCURRENT_READS=50000`
 - `CONCURRENT_WRITERS=8`, `CONCURRENT_WRITES=10000`
 - `BATCH_SIZE=1000`
@@ -237,6 +244,7 @@ BATCH_SIZE=5000 scripts/mongo_gateway_compare.sh \
   --indexes "2" \
   --reads 50000 \
   --range-reads 5000 \
+  --range-index \
   --updates 5000 \
   --concurrent-readers 16 \
   --concurrent-reads 50000 \
@@ -296,8 +304,9 @@ The initial workload phases are:
 - `id_find_one`: point lookup by `_id`.
 - `email_find_one`: point lookup by the `email` field; emitted only when the
   email secondary index is part of the cell.
-- `age_range_limit_10`: bounded range query with `limit: 10`; operations count
-  range queries, not returned documents.
+- `age_range_scan_limit_10` / `age_range_indexed_limit_10`: bounded range query
+  with `limit: 10`; operations count range queries, not returned documents. The
+  indexed variant is emitted when `-range-index` creates `age_1`.
 - `id_update_set`: `$set` update by `_id`.
 - `concurrent_id_find_one_rN`: total `_id` point reads split across `N`
   goroutines.
@@ -309,6 +318,9 @@ Update phases change only non-indexed fields by default.
 `-update-indexed-field` requires `-secondary-indexes=2` so the city index exists
 and the indexed `city` field changes, exercising secondary-index maintenance in
 the update path.
+`-range-index` creates an additional `age_1` index so the age range-read phase
+materially exercises indexed range planning instead of the bounded scan
+fallback.
 
 Latency samples are per MongoDB driver/gateway call. Update phases build the
 filter and update document before starting the sampled timer, so update samples
@@ -499,9 +511,10 @@ driver transport while bypassing `InsertMany`'s explicit-`_id` discovery and
 
 ## Interpreting Results
 
-`-secondary-indexes 2` creates `email_1` and `city_1`; the age range phase is
-currently a bounded scan in the gateway and is included to make that cost
-visible.
+`-secondary-indexes 2` creates `email_1` and `city_1`. The age range phase is a
+bounded scan unless `-range-index` is set; benchmark output names the phase
+`age_range_scan_limit_10` or `age_range_indexed_limit_10` so reports can
+separate fallback cost from indexed range-search cost.
 
 For TreeDB, prefer `treedb_disk_after_maintenance.total_bytes` when present, and
 use `treedb_disk_after_checkpoint.total_bytes` for checkpoint-only runs. The
