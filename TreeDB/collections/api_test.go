@@ -4489,6 +4489,86 @@ func TestRollbackBufferedIndexedDomainRestoresPreRotationRuns(t *testing.T) {
 	resetCollectionRunTable(oldTable)
 }
 
+func TestRollbackBufferedIndexedDomainPreservesCompactedCheckpointRuns(t *testing.T) {
+	primaryName := collectionPrimaryRootName("users")
+	emailUniqueName := collectionSecondaryRootName("users", "email")
+	primaryOld := newCollectionRunTable(1)
+	setCollectionRunValue(primaryOld, []byte("u1"), []byte(`{"email":"a@example.com","city":"nyc"}`))
+	primaryOld.Freeze()
+	primaryNew := newCollectionRunTable(1)
+	setCollectionRunValue(primaryNew, []byte("u1"), []byte(`{"email":"a@example.com","city":"sf"}`))
+	primaryNew.Freeze()
+	uniqueOld := newCollectionRunTable(1)
+	setCollectionRunValue(uniqueOld, []byte("a@example.com"), nil)
+	uniqueOld.Freeze()
+	uniqueNew := newCollectionRunTable(1)
+	setCollectionRunValue(uniqueNew, []byte("b@example.com"), nil)
+	uniqueNew.Freeze()
+
+	domain := &collectionWriteDomain{
+		loaded:         true,
+		meta:           CollectionMeta{Name: "users"},
+		catalog:        &collectionCatalog{meta: CollectionMeta{Name: "users"}, roots: map[string]uint64{primaryName: 42, emailUniqueName: 43}},
+		baseCommitSeq:  7,
+		baseSystemRoot: 11,
+		primaryRoot:    42,
+		count:          1,
+		mutableCount:   1,
+		rootRuns: map[string][]memtable.Table{
+			primaryName: {primaryOld, primaryNew},
+		},
+		rootPolicies: map[string]backenddb.OrderedRootStoragePolicy{
+			primaryName: backenddb.OrderedRootStorageDefault,
+		},
+		rootBaseIDs: map[string]uint64{
+			primaryName: 42,
+		},
+		uniqueValueRuns: map[string][]memtable.Table{
+			"email": {uniqueOld, uniqueNew},
+		},
+		rootRunCount: 2,
+	}
+	checkpoint := checkpointBufferedIndexedDomain(domain)
+
+	obsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, CollectionOptions{
+		BufferedIndexedWriteMaxDocuments: 3,
+		BufferedIndexedWriteMaxRootRuns:  2,
+	})
+	if err != nil {
+		t.Fatalf("compact mutable runs: %v", err)
+	}
+	if len(domain.rootRuns[primaryName]) != 1 {
+		t.Fatalf("compacted primary run count=%d want 1", len(domain.rootRuns[primaryName]))
+	}
+	if len(domain.uniqueValueRuns["email"]) != 1 {
+		t.Fatalf("compacted unique run count=%d want 1", len(domain.uniqueValueRuns["email"]))
+	}
+	if len(obsolete) != 4 {
+		t.Fatalf("obsolete table count=%d want 4", len(obsolete))
+	}
+
+	rollbackBufferedIndexedDomain(domain, checkpoint)
+	primaryRuns := domain.rootRuns[primaryName]
+	if len(primaryRuns) != 2 || primaryRuns[0] != primaryOld || primaryRuns[1] != primaryNew {
+		t.Fatalf("primary runs after rollback=%v want checkpoint tables", primaryRuns)
+	}
+	value, _, flags, found := getBufferedRunEntry(primaryRuns, []byte("u1"))
+	if !found || flags&node.FlagTombstone != 0 || !bytes.Equal(value, []byte(`{"email":"a@example.com","city":"sf"}`)) {
+		t.Fatalf("primary value after rollback found=%v flags=%d value=%q", found, flags, value)
+	}
+	uniqueRuns := domain.uniqueValueRuns["email"]
+	if len(uniqueRuns) != 2 || uniqueRuns[0] != uniqueOld || uniqueRuns[1] != uniqueNew {
+		t.Fatalf("unique runs after rollback=%v want checkpoint tables", uniqueRuns)
+	}
+	if _, _, flags, found := getBufferedRunEntry(uniqueRuns, []byte("a@example.com")); !found || flags&node.FlagTombstone != 0 {
+		t.Fatalf("unique a@example.com after rollback found=%v flags=%d", found, flags)
+	}
+	if _, _, flags, found := getBufferedRunEntry(uniqueRuns, []byte("b@example.com")); !found || flags&node.FlagTombstone != 0 {
+		t.Fatalf("unique b@example.com after rollback found=%v flags=%d", found, flags)
+	}
+	resetCollectionTables(obsolete)
+}
+
 func TestHasBufferedPrimaryRootRunsIgnoresSecondaryOnlyRuns(t *testing.T) {
 	domain := &collectionWriteDomain{
 		meta: CollectionMeta{Name: "users"},

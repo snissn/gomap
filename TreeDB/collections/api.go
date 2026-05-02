@@ -2394,7 +2394,8 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	domain.writeGeneration++
 	domain.observeIndexedStage(len(plan.resultIDs), stagedBytes, stagedRootRuns)
 	c.meta = catalog.meta
-	if _, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, catalog.meta.Options); err != nil {
+	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, catalog.meta.Options)
+	if err != nil {
 		if autoFlushEnabled {
 			rollbackBufferedIndexedDomain(domain, checkpoint)
 		}
@@ -2406,8 +2407,10 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 			rollbackBufferedIndexedDomain(domain, checkpoint)
 			return 0, err
 		}
+		resetCollectionTables(compactedObsolete)
 		return flushElapsed, nil
 	}
+	resetCollectionTables(compactedObsolete)
 	return 0, nil
 }
 
@@ -2502,22 +2505,22 @@ func shouldCompactBufferedIndexedMutableRuns(domain *collectionWriteDomain, opts
 	return domain.mutableCount < opts.BufferedIndexedWriteMaxDocuments
 }
 
-func maybeCompactBufferedIndexedMutableRunsLocked(domain *collectionWriteDomain, opts CollectionOptions) (bool, error) {
+func maybeCompactBufferedIndexedMutableRunsLocked(domain *collectionWriteDomain, opts CollectionOptions) ([]memtable.Table, error) {
 	if !shouldCompactBufferedIndexedMutableRuns(domain, opts) {
-		return false, nil
+		return nil, nil
 	}
 	beforeBytes := tableRunMapSize(domain.rootRuns) + tableRunMapSize(domain.uniqueValueRuns)
 	compactedRootRuns, obsoleteRootRuns, rootRunsChanged, err := compactTableRunMap(domain.rootRuns)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	compactedUniqueRuns, obsoleteUniqueRuns, uniqueRunsChanged, err := compactTableRunMap(domain.uniqueValueRuns)
 	if err != nil {
 		resetTableRunMap(compactedRootRuns, domain.rootRuns)
-		return false, err
+		return nil, err
 	}
 	if !rootRunsChanged && !uniqueRunsChanged {
-		return false, nil
+		return nil, nil
 	}
 	afterBytes := tableRunMapSize(compactedRootRuns) + tableRunMapSize(compactedUniqueRuns)
 	domain.rootRuns = compactedRootRuns
@@ -2526,14 +2529,11 @@ func maybeCompactBufferedIndexedMutableRunsLocked(domain *collectionWriteDomain,
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(subtractNonNegativeInt64(domain.bufferedBytes, beforeBytes), afterBytes)
 	domain.mutableBytes = saturatingAddNonNegativeInt64(subtractNonNegativeInt64(domain.mutableBytes, beforeBytes), afterBytes)
 	domain.writeGeneration++
-	for _, table := range obsoleteRootRuns {
-		resetCollectionRunTable(table)
-	}
-	for _, table := range obsoleteUniqueRuns {
-		resetCollectionRunTable(table)
-	}
 	rebuildBufferedPendingIndexesLocked(domain, domain.meta.Name, domain.primaryRunIndex != nil)
-	return true, nil
+	obsolete := make([]memtable.Table, 0, len(obsoleteRootRuns)+len(obsoleteUniqueRuns))
+	obsolete = append(obsolete, obsoleteRootRuns...)
+	obsolete = append(obsolete, obsoleteUniqueRuns...)
+	return obsolete, nil
 }
 
 func compactTableRunMap(runs map[string][]memtable.Table) (map[string][]memtable.Table, []memtable.Table, bool, error) {
@@ -2968,9 +2968,10 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	if domain == nil {
 		return
 	}
+	keep := bufferedIndexedCheckpointTableSet(checkpoint)
 	resetIndexedFlushUnitsAddedAfterCheckpoint(domain.indexedFlushUnits, checkpoint)
-	resetTableRunsAddedAfterCheckpoint(domain.rootRuns, checkpoint.rootRuns)
-	resetTableRunsAddedAfterCheckpoint(domain.uniqueValueRuns, checkpoint.uniqueValueRuns)
+	resetTablesNotInSet(domain.rootRuns, keep)
+	resetTablesNotInSet(domain.uniqueValueRuns, keep)
 	domain.loaded = checkpoint.loaded
 	domain.meta = checkpoint.meta
 	domain.catalog = checkpoint.catalog
@@ -3138,18 +3139,6 @@ func resetTablesNotInSet(runs map[string][]memtable.Table, keep map[memtable.Tab
 			if _, ok := keep[table]; ok {
 				continue
 			}
-			resetCollectionRunTable(table)
-		}
-	}
-}
-
-func resetTableRunsAddedAfterCheckpoint(current, checkpoint map[string][]memtable.Table) {
-	for name, runs := range current {
-		keep := 0
-		if checkpointRuns, ok := checkpoint[name]; ok {
-			keep = len(checkpointRuns)
-		}
-		for _, table := range runs[keep:] {
 			resetCollectionRunTable(table)
 		}
 	}
@@ -7796,7 +7785,8 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	domain.writeGeneration++
 	domain.observeIndexedStage(modifiedCount, stagedBytes, stagedRootRuns)
 	c.meta = plan.meta
-	if _, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, plan.meta.Options); err != nil {
+	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, plan.meta.Options)
+	if err != nil {
 		if shouldAutoFlushAfterAdding {
 			rollbackBufferedIndexedDomain(domain, checkpoint)
 			c.meta = collectionMetaCheckpoint
@@ -7818,6 +7808,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 			return false, err
 		}
 	}
+	resetCollectionTables(compactedObsolete)
 	plan.stats.BufferedBatches = 1
 	return true, nil
 }
