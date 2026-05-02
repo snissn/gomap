@@ -628,7 +628,7 @@ func TestOrderedIndexStateForDocumentJSONRootFastPathRejectsOutOfRangeNumber(t *
 	}
 }
 
-func TestOrderedIndexStateForDocumentJSONRootFastPathRejectsRoundedExponentInteger(t *testing.T) {
+func TestOrderedIndexStateForDocumentJSONRootFastPathAcceptsExponentDoubleOutsideInt64Range(t *testing.T) {
 	planner := insertBatchPlanner{
 		indexes: []indexDefinition{{name: "score", field: "score", valueType: IndexValueDouble}},
 	}
@@ -636,9 +636,12 @@ func TestOrderedIndexStateForDocumentJSONRootFastPathRejectsRoundedExponentInteg
 	if err != nil {
 		t.Fatalf("index runtimes: %v", err)
 	}
-	_, err = orderedIndexStateForDocument([]byte(`{"score":9007199254740993e0}`), runtimes, collectionOptions{})
-	if err == nil || !strings.Contains(err.Error(), "cannot be represented exactly as double") {
-		t.Fatalf("err=%v want exact double representation error", err)
+	state, err := orderedIndexStateForDocument([]byte(`{"score":1e20}`), runtimes, collectionOptions{})
+	if err != nil {
+		t.Fatalf("root fast path index state: %v", err)
+	}
+	if got, want := state.valuesAt(0), [][]byte{mustEncodeTestIndexScalar(t, IndexValueDouble, 1e20)}; !byteMatrixEqual(got, want) {
+		t.Fatalf("exponent double values=%q want %q", got, want)
 	}
 }
 

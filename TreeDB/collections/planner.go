@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -1869,7 +1868,8 @@ func exactFloat64AsInt64(value float64) (int64, error) {
 }
 
 func parseJSONDoubleIndexValue(raw string) (float64, error) {
-	if value, ok, err := parseJSONIntegerLikeNumber(raw); ok || err != nil {
+	if jsonNumberLooksInteger(raw) {
+		value, err := parseJSONInt64IndexValue(raw)
 		if err != nil {
 			return 0, err
 		}
@@ -1883,22 +1883,6 @@ func parseJSONDoubleIndexValue(raw string) (float64, error) {
 		return 0, fmt.Errorf("collections: unsupported indexed JSON double %q", raw)
 	}
 	return value, nil
-}
-
-func parseJSONIntegerLikeNumber(raw string) (int64, bool, error) {
-	if jsonNumberLooksInteger(raw) {
-		value, err := parseJSONInt64IndexValue(raw)
-		return value, true, err
-	}
-	rat, ok := new(big.Rat).SetString(raw)
-	if !ok || !rat.IsInt() {
-		return 0, false, nil
-	}
-	num := rat.Num()
-	if !num.IsInt64() {
-		return 0, true, fmt.Errorf("collections: unsupported indexed JSON int64 %q: out of range", raw)
-	}
-	return num.Int64(), true, nil
 }
 
 func indexEntryKey(encodedValue, documentID []byte) ([]byte, error) {
