@@ -130,6 +130,11 @@ func (b *Batch) Reset() {
 	b.resetLocked()
 }
 
+// IsEmpty reports whether the batch currently has no queued operations.
+func (b *Batch) IsEmpty() bool {
+	return b == nil || len(b.entries) == 0
+}
+
 func (b *Batch) resetLocked() {
 	if b.entries != nil {
 		// Avoid holding onto key/value copies from previous uses.
