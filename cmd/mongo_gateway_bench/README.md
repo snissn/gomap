@@ -135,7 +135,9 @@ go test ./cmd/mongo_gateway_bench \
 
 When enabled, those benchmark rows include `buffered_async_flush` and the
 normalized `buffered_async_max_units` so they are not compared against
-synchronous-threshold rows by accident.
+synchronous-threshold rows by accident. The concurrent update profile benchmark
+times a final `FlushAll()` drain before reporting docs/sec, so async rows include
+deferred indexed publish work rather than enqueue latency alone.
 
 ## MongoDB Target
 
@@ -530,7 +532,9 @@ The benchmark shapes are intentionally different:
   manager's measured-phase counters. `update_buffer_lock_hold_ns/doc` is the
   enclosing domain mutex hold time for buffered staging, not an additive sibling
   of the other buffer-stage submetrics; `update_buffer_flush_ns/doc` reports
-  threshold-flush scheduling/publish time separately.
+  threshold-flush scheduling/publish time separately. The measured phase includes
+  the final `FlushAll()` drain so background async publish work is charged to the
+  same throughput row that scheduled it.
 - `BenchmarkClientBSONBatchEncode` measures client-side BSON document encoding
   alone.
 

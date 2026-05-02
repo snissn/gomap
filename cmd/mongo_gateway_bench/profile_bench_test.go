@@ -528,6 +528,11 @@ func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	b.ResetTimer()
 	started := time.Now()
 	err = runProfileBenchDirectCollectionConcurrentUpdates(context.Background(), writers, b.N, documentCount, idStride, ids, updateDocs, collection)
+	if err == nil {
+		// Keep async indexed-flush rows comparable with synchronous rows: the
+		// timed update phase includes the final drain of deferred publish work.
+		err = manager.FlushAll()
+	}
 	timedElapsed := time.Since(started)
 	b.StopTimer()
 	if err != nil {
