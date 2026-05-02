@@ -1052,21 +1052,11 @@ func orderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRunt
 			if !runtime.def.multiKey && !opts.allowArrayValuesInIndex {
 				return nil, errors.New("collections: array value not allowed for index")
 			}
-			switch len(arr) {
-			case 0:
-				continue
-			case 1:
-				var next []byte
-				var err error
-				encoder.buf, next, err = appendIndexScalar(encoder.buf, runtime.def.valueType, arr[0])
-				if err != nil {
-					return nil, err
-				}
-				state[runtimeIdx] = encoder.appendSingleValueRef(next)
-				continue
-			}
 			encoded := make([][]byte, 0, len(arr))
 			for _, scalar := range arr {
+				if scalar == nil {
+					continue
+				}
 				var next []byte
 				var err error
 				encoder.buf, next, err = appendIndexScalar(encoder.buf, runtime.def.valueType, scalar)
@@ -1075,11 +1065,19 @@ func orderedIndexStateForDocumentWithArena(document []byte, runtimes []indexRunt
 				}
 				encoded = append(encoded, next)
 			}
-			encoded = normalizeOwnedEncodedIndexValues(encoded)
-			if len(encoded) > 0 {
-				state[runtimeIdx] = encoded
+			switch len(encoded) {
+			case 0:
+				continue
+			case 1:
+				state[runtimeIdx] = encoder.appendSingleValueRef(encoded[0])
+				continue
+			default:
+				encoded = normalizeOwnedEncodedIndexValues(encoded)
+				if len(encoded) > 0 {
+					state[runtimeIdx] = encoded
+				}
+				continue
 			}
-			continue
 		}
 
 		var next []byte
@@ -1171,6 +1169,9 @@ func appendJSONParserArrayIndexValues(value []byte, valueType IndexValueType, en
 		}
 		if elemErr != nil {
 			encodeErr = elemErr
+			return
+		}
+		if dataType == jsonparser.Null || dataType == jsonparser.NotExist {
 			return
 		}
 		var next []byte

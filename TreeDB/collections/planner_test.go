@@ -505,7 +505,7 @@ func TestOrderedIndexStateForDocumentHandlesScalarAndArrayValues(t *testing.T) {
 		def:  indexDefinition{name: "tags", field: "tags", valueType: IndexValueString, multiKey: true},
 		path: []string{"tags"},
 	}}
-	arrayState, err := orderedIndexStateForDocument([]byte(`{"tags":["b","a","a"]}`), arrayRuntime, collectionOptions{})
+	arrayState, err := orderedIndexStateForDocument([]byte(`{"tags":["b",null,"a","a"]}`), arrayRuntime, collectionOptions{})
 	if err != nil {
 		t.Fatalf("array index state: %v", err)
 	}
@@ -514,6 +514,29 @@ func TestOrderedIndexStateForDocumentHandlesScalarAndArrayValues(t *testing.T) {
 		mustEncodeTestIndexScalar(t, IndexValueString, "b"),
 	}; !byteMatrixEqual(got, want) {
 		t.Fatalf("array values=%q want %q", got, want)
+	}
+
+	nullArrayState, err := orderedIndexStateForDocument([]byte(`{"tags":[null,null]}`), arrayRuntime, collectionOptions{})
+	if err != nil {
+		t.Fatalf("null array index state: %v", err)
+	}
+	if got := nullArrayState.valuesAt(0); len(got) != 0 {
+		t.Fatalf("null array values=%q want none", got)
+	}
+
+	nestedArrayRuntime := []indexRuntime{{
+		def:  indexDefinition{name: "tags", field: "profile.tags", valueType: IndexValueString, multiKey: true},
+		path: []string{"profile", "tags"},
+	}}
+	nestedArrayState, err := orderedIndexStateForDocument([]byte(`{"profile":{"tags":["b",null,"a","a"]}}`), nestedArrayRuntime, collectionOptions{})
+	if err != nil {
+		t.Fatalf("nested array index state: %v", err)
+	}
+	if got, want := nestedArrayState.valuesAt(0), [][]byte{
+		mustEncodeTestIndexScalar(t, IndexValueString, "a"),
+		mustEncodeTestIndexScalar(t, IndexValueString, "b"),
+	}; !byteMatrixEqual(got, want) {
+		t.Fatalf("nested array values=%q want %q", got, want)
 	}
 
 	_, err = orderedIndexStateForDocument([]byte(`{"tags":["a"]}`), []indexRuntime{{

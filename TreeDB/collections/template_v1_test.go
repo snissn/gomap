@@ -772,8 +772,11 @@ func TestTemplateV1MultiKeyIndex(t *testing.T) {
 		t.Fatalf("open collection: %v", err)
 	}
 	if _, err := col.InsertBatch(
-		[][]byte{[]byte("d1")},
-		[][]byte{mustTemplateV1Document(t, []string{"tags"}, []any{[]any{"b", "a", "a"}})},
+		[][]byte{[]byte("d1"), []byte("d2")},
+		[][]byte{
+			mustTemplateV1Document(t, []string{"tags"}, []any{[]any{"b", nil, "a", "a"}}),
+			mustTemplateV1Document(t, []string{"tags"}, []any{[]any{nil, nil}}),
+		},
 	); err != nil {
 		t.Fatalf("insert batch: %v", err)
 	}
@@ -783,6 +786,13 @@ func TestTemplateV1MultiKeyIndex(t *testing.T) {
 	}
 	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("d1")) {
 		t.Fatalf("tag ids=%q want d1", ids)
+	}
+	ids, err = col.FindByIndex("tag", "b")
+	if err != nil {
+		t.Fatalf("find tag b: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("d1")) {
+		t.Fatalf("tag b ids=%q want d1", ids)
 	}
 }
 

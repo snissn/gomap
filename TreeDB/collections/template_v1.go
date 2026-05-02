@@ -1168,6 +1168,9 @@ func templateV1AppendArrayIndexValues(raw []byte, valueType IndexValueType, enco
 		if err := skipTemplateV1Value(raw, &pos, nil); err != nil {
 			return nil, err
 		}
+		if len(raw[start:pos]) == 0 || raw[start] == templateV1KindNull {
+			continue
+		}
 		var next []byte
 		encoder.buf, next, err = appendTemplateV1IndexScalar(encoder.buf, valueType, raw[start:pos])
 		if err != nil {
