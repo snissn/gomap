@@ -897,7 +897,7 @@ func (z *Zipper) shouldRunMaintenance(ops []batch.Entry) (maintenance bool, dele
 	return maintenance, deleteCount
 }
 
-func recordZipperNodeLoad(metrics *adaptive.Metrics, ref page.ChildRef, n node.Node) {
+func recordZipperNodeLoad(metrics *adaptive.Metrics, ref page.ChildRef, _ node.Node) {
 	if metrics == nil {
 		return
 	}
@@ -906,12 +906,6 @@ func recordZipperNodeLoad(metrics *adaptive.Metrics, ref page.ChildRef, n node.N
 		metrics.ZipperLeafLogNodeLoads++
 	} else {
 		metrics.ZipperPagerNodeLoads++
-	}
-	switch n.Type() {
-	case page.PageTypeLeaf, 0:
-		metrics.ZipperLeafMerges++
-	case page.PageTypeInternal:
-		metrics.ZipperInternalMerges++
 	}
 }
 
@@ -989,7 +983,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 		for {
 			// If we only have 1 node left, that is our new root.
 			if len(currentLevelNodes) == 1 {
-				rootID, err := z.ensureRootPage(currentLevelNodes[0].Key, currentLevelNodes[0].Ref)
+				rootID, err := z.ensureRootPage(currentLevelNodes[0].Key, currentLevelNodes[0].Ref, &metrics)
 				return rootID, retired, metrics, err
 			}
 			metrics.ZipperRootSplitLevels++
@@ -1084,7 +1078,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 		}
 	}
 
-	finalRootID, err := z.ensureRootPage([]byte{}, newRootRef)
+	finalRootID, err := z.ensureRootPage([]byte{}, newRootRef, &metrics)
 	if err != nil {
 		return 0, nil, metrics, err
 	}
@@ -1191,7 +1185,7 @@ func (z *Zipper) persistLeafPage(b *node.Builder) (page.ChildRef, error) {
 	return page.LeafLogChildRef(ptr), nil
 }
 
-func (z *Zipper) ensureRootPage(key []byte, ref page.ChildRef) (uint64, error) {
+func (z *Zipper) ensureRootPage(key []byte, ref page.ChildRef, metrics *adaptive.Metrics) (uint64, error) {
 	if ref.Kind == page.ChildRefPage {
 		return ref.Page, nil
 	}
@@ -1216,6 +1210,7 @@ func (z *Zipper) ensureRootPage(key []byte, ref page.ChildRef) (uint64, error) {
 		return 0, err
 	}
 	b.FinishNoNode()
+	recordZipperInternalPageWrite(metrics)
 	return rootID, nil
 }
 
@@ -1318,6 +1313,9 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, maintenanc
 }
 
 func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, metrics *adaptive.Metrics, scratch *mergeScratch, reuseOuterLeafPages bool) (page.ChildRef, []Split, error) {
+	if metrics != nil {
+		metrics.ZipperLeafMerges++
+	}
 	oldIdx := uint16(0)
 	oldCount := oldNode.Count()
 	opIdx := 0
@@ -1582,6 +1580,9 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 }
 
 func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, maintenance bool, budget *maintenanceBudget, metrics *adaptive.Metrics, retired *[]uint64, low, high []byte, scratch *mergeScratch) (page.ChildRef, []Split, error) {
+	if metrics != nil {
+		metrics.ZipperInternalMerges++
+	}
 	count := oldNode.Count()
 
 	var splits []Split

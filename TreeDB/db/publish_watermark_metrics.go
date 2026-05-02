@@ -173,13 +173,44 @@ type orderedRootDeltaGroupPublishPhaseStats struct {
 	preflightNs        uint64
 	rootApplyNs        uint64
 	rootApplyCalls     uint64
-	rootApplyMetrics   adaptive.Metrics
+	rootApplyMetrics   orderedRootDeltaGroupZipperStats
 	systemBuildNs      uint64
 	systemApplyNs      uint64
 	systemApplyCalls   uint64
-	systemApplyMetrics adaptive.Metrics
+	systemApplyMetrics orderedRootDeltaGroupZipperStats
 	finalizeNs         uint64
 	finalizeCalls      uint64
+}
+
+type orderedRootDeltaGroupZipperStats struct {
+	ZipperApplyOps              int
+	ZipperNodeLoads             int
+	ZipperPagerNodeLoads        int
+	ZipperLeafLogNodeLoads      int
+	ZipperLeafMerges            int
+	ZipperInternalMerges        int
+	ZipperLeafPagesWritten      int
+	ZipperPagerLeafPagesWritten int
+	ZipperLeafLogPagesWritten   int
+	ZipperInternalPagesWritten  int
+	ZipperRootSplitLevels       int
+}
+
+func (dst *orderedRootDeltaGroupZipperStats) add(src adaptive.Metrics) {
+	if dst == nil {
+		return
+	}
+	dst.ZipperApplyOps += src.ZipperApplyOps
+	dst.ZipperNodeLoads += src.ZipperNodeLoads
+	dst.ZipperPagerNodeLoads += src.ZipperPagerNodeLoads
+	dst.ZipperLeafLogNodeLoads += src.ZipperLeafLogNodeLoads
+	dst.ZipperLeafMerges += src.ZipperLeafMerges
+	dst.ZipperInternalMerges += src.ZipperInternalMerges
+	dst.ZipperLeafPagesWritten += src.ZipperLeafPagesWritten
+	dst.ZipperPagerLeafPagesWritten += src.ZipperPagerLeafPagesWritten
+	dst.ZipperLeafLogPagesWritten += src.ZipperLeafLogPagesWritten
+	dst.ZipperInternalPagesWritten += src.ZipperInternalPagesWritten
+	dst.ZipperRootSplitLevels += src.ZipperRootSplitLevels
 }
 
 func orderedRootDeltaGroupMetricUint(v int) uint64 {
