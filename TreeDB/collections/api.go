@@ -6530,6 +6530,7 @@ const (
 	updateBatchPlanScratchMaxStateArenaCap        = 4 << 20
 	updateBatchPlanScratchMaxStateSliceCap        = 1 << 16
 	updateBatchPlanScratchMaxValueRefCap          = 1 << 16
+	updateBatchPlanScratchMaxIndexStatsCap        = 64
 )
 
 func estimateUpdateBatchPlanDocumentArenaBytes(itemCount int) int {
@@ -6610,7 +6611,7 @@ func getUpdateBatchPlanScratch(itemCount, runtimeCount int) *updateBatchPlanScra
 	} else {
 		scratch.uniqueSecondary = scratch.uniqueSecondary[:0]
 	}
-	if cap(scratch.indexStats) < runtimeCount || cap(scratch.indexStats) > updateBatchPlanScratchMaxRootNameCap {
+	if cap(scratch.indexStats) < runtimeCount || cap(scratch.indexStats) > updateBatchPlanScratchMaxIndexStatsCap {
 		scratch.indexStats = make([]CollectionUpdateIndexStats, 0, runtimeCount)
 	} else {
 		scratch.indexStats = scratch.indexStats[:0]
@@ -6670,7 +6671,7 @@ func putUpdateBatchPlanScratch(scratch *updateBatchPlanScratch) {
 	clear(scratch.uniqueSecondary)
 	scratch.uniqueSecondary = scratch.uniqueSecondary[:0]
 	clear(scratch.indexStats)
-	if cap(scratch.indexStats) > updateBatchPlanScratchMaxRootNameCap {
+	if cap(scratch.indexStats) > updateBatchPlanScratchMaxIndexStatsCap {
 		scratch.indexStats = nil
 	} else {
 		scratch.indexStats = scratch.indexStats[:0]
