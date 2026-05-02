@@ -237,6 +237,11 @@ func BenchmarkTreeDBGatewayRawWireLoadBSONIndexes2(b *testing.B) {
 		timedElapsed += time.Since(batchStart)
 		inserted += count
 	}
+	flushStart := time.Now()
+	if err := manager.FlushAll(); err != nil {
+		b.Fatalf("flush raw-wire collections: %v", err)
+	}
+	timedElapsed += time.Since(flushStart)
 	b.StopTimer()
 	reportProfileBenchBufferedIndexedAsyncFlush(b, collection.Meta().Options)
 	reportDocsPerSecond(b, b.N, timedElapsed)
@@ -397,10 +402,12 @@ func BenchmarkDirectCollectionLoadBSONIndexes2(b *testing.B) {
 		timedElapsed += time.Since(batchStart)
 		inserted += count
 	}
-	b.StopTimer()
+	flushStart := time.Now()
 	if err := manager.FlushAll(); err != nil {
 		b.Fatalf("flush collections: %v", err)
 	}
+	timedElapsed += time.Since(flushStart)
+	b.StopTimer()
 	if err := backend.Checkpoint(); err != nil {
 		b.Fatalf("checkpoint backend: %v", err)
 	}
