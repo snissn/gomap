@@ -6683,12 +6683,12 @@ func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta C
 		if allowPrimaryRunIndexBuild && domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, bufferedCollectionName) {
 			return updateBatchBufferedRead{}, nil, false, true, nil
 		}
-		primaryRuns := pendingIndexedRootRunsLocked(domain, collectionPrimaryRootName(bufferedCollectionName))
 		var primaryEntries []updateBatchBufferedEntry
 		var err error
 		if domain.primaryRunIndex != nil {
 			primaryEntries, err = snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(domain.primaryRunIndex, items)
 		} else {
+			primaryRuns := pendingIndexedRootRunsLocked(domain, collectionPrimaryRootName(bufferedCollectionName))
 			primaryEntries, err = snapshotUpdateBatchBufferedPrimaryEntries(primaryRuns, items)
 		}
 		if err != nil {
