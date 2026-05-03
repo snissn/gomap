@@ -771,7 +771,10 @@ func TestReportMatchesUnsuffixedTreeConfigWithMixedMongoRows(t *testing.T) {
   "target": "mongo",
   "documents": 100,
   "secondary_indexes": 2,
-  "phases": [{"name": "concurrent_id_update_set_w1", "operations": 100, "ops_per_sec": 600, "latency_micros": {}}],
+  "phases": [
+    {"name": "load_insert_many", "operations": 100, "ops_per_sec": 300, "latency_micros": {}},
+    {"name": "concurrent_id_update_set_w1", "operations": 100, "ops_per_sec": 600, "latency_micros": {}}
+  ],
   "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4100}
 }`)
 	matrixPath := filepath.Join(dir, "matrix.tsv")
@@ -790,6 +793,51 @@ func TestReportMatchesUnsuffixedTreeConfigWithMixedMongoRows(t *testing.T) {
 		"## Mongo Matrix Rows",
 		"| 100 | 2 | false | `mongo_writers_1` | `concurrent_id_update_set_w1` | 600 | n/a | 0 | 4.00 KiB | 4.00 KiB | `mongo_w1.json` |",
 		"| 100 | 2 | false | `mongo_writers_1` | mongo | `mongo_w1.json` | n/a |",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q\n%s", want, report)
+		}
+	}
+}
+
+func TestReportUsesDeterministicMongoFallbackWithoutDriverBaseline(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb.json"), `{
+  "target": "treedb",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "load_insert_many", "operations": 100, "ops_per_sec": 1000, "latency_micros": {}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 2000}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo_command.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "load_insert_many", "operations": 100, "ops_per_sec": 800, "latency_micros": {}}],
+  "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4000}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo_unack.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "load_insert_many", "operations": 100, "ops_per_sec": 700, "latency_micros": {}}],
+  "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4100}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	reportPath := filepath.Join(dir, "report.md")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_driver_command_raw\t100\t2\ttreedb.json\t2000\n"+
+		"mongo\tmongo_driver_command\t100\t2\tmongo_command.json\t4000\n"+
+		"mongo\tmongo_driver_unack\t100\t2\tmongo_unack.json\t4100\n")
+
+	if err := run([]string{"-matrix", matrixPath, "-report", reportPath}); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	report := readFile(t, reportPath)
+	for _, want := range []string{
+		"| 100 | 2 | false | n/a | `treedb_bson_driver_command_raw` | `load_insert_many` | 1000 | n/a | 800 | n/a | 1.25x | n/a |",
+		"| 100 | 2 | false | `mongo_driver_command` | `load_insert_many` | 800 | n/a | 0 | 3.91 KiB | 3.91 KiB | `mongo_command.json` |",
+		"| 100 | 2 | false | `mongo_driver_unack` | `load_insert_many` | 700 | n/a | 0 | 4.00 KiB | 4.00 KiB | `mongo_unack.json` |",
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q\n%s", want, report)

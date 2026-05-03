@@ -323,8 +323,14 @@ func matchingMongoRecord(key baseCellKey, treeConfig string, mongoIndex mongoSce
 	matches := mongoIndex.bySuffix[treeScenario.suffix]
 	candidates := mongoIndex.suffixConfig[treeScenario.suffix]
 	if len(candidates) > 1 {
-		if record := preferredMongoDriverBaseline(matches); record != nil {
+		if record, ambiguous := preferredMongoDriverBaseline(matches); record != nil {
 			return record, nil
+		} else if ambiguous {
+			return nil, fmt.Errorf("ambiguous mongo rows for documents=%d secondary_indexes=%d config=%q tree_scenario=%q candidates=%v available_mongo_configs=%v", key.Documents, key.SecondaryIndexes, treeConfig, treeScenarioLabel, candidates, sortedRunRecordKeys(mongoIndex.exact))
+		}
+		records := sortedRunRecords(matches)
+		if len(records) > 0 {
+			return records[0], nil
 		}
 		return nil, fmt.Errorf("ambiguous mongo rows for documents=%d secondary_indexes=%d config=%q tree_scenario=%q candidates=%v available_mongo_configs=%v", key.Documents, key.SecondaryIndexes, treeConfig, treeScenarioLabel, candidates, sortedRunRecordKeys(mongoIndex.exact))
 	}
@@ -334,31 +340,34 @@ func matchingMongoRecord(key baseCellKey, treeConfig string, mongoIndex mongoSce
 	return nil, fmt.Errorf("missing mongo row for documents=%d secondary_indexes=%d config=%q tree_scenario=%q available_mongo_configs=%v", key.Documents, key.SecondaryIndexes, treeConfig, treeScenarioLabel, sortedRunRecordKeys(mongoIndex.exact))
 }
 
-func preferredMongoDriverBaseline(records []*runRecord) *runRecord {
+func preferredMongoDriverBaseline(records []*runRecord) (*runRecord, bool) {
 	var legacy *runRecord
 	var explicit *runRecord
+	baselines := 0
 	for _, record := range records {
 		if record == nil {
 			continue
 		}
 		if isLegacyMongoDriverBaselineConfig(record.Row.Config) {
-			if legacy != nil {
-				return nil
-			}
+			baselines++
 			legacy = record
 			continue
 		}
 		if isExplicitMongoDriverBaselineConfig(record.Row.Config) {
-			if explicit != nil {
-				return nil
-			}
+			baselines++
 			explicit = record
 		}
 	}
-	if legacy != nil {
-		return legacy
+	if baselines > 1 && legacy == nil {
+		return nil, true
 	}
-	return explicit
+	if baselines > 1 && explicit == nil {
+		return nil, true
+	}
+	if legacy != nil {
+		return legacy, false
+	}
+	return explicit, false
 }
 
 func sortedMongoRecords(recordsByConfig map[string]*runRecord) []*runRecord {
@@ -366,6 +375,11 @@ func sortedMongoRecords(recordsByConfig map[string]*runRecord) []*runRecord {
 	for _, record := range recordsByConfig {
 		records = append(records, record)
 	}
+	return sortedRunRecords(records)
+}
+
+func sortedRunRecords(records []*runRecord) []*runRecord {
+	records = append([]*runRecord(nil), records...)
 	sort.Slice(records, func(i, j int) bool {
 		if records[i].Row.Config != records[j].Row.Config {
 			return records[i].Row.Config < records[j].Row.Config
@@ -688,6 +702,11 @@ func primaryMongoPhase(record *runRecord) (phaseResult, bool) {
 	if record == nil {
 		return phaseResult{}, false
 	}
+	if phaseName := scalingPrimaryPhaseName(record.Row.Config); phaseName != "" {
+		if phase, ok := record.PhaseMap[phaseName]; ok {
+			return phase, true
+		}
+	}
 	if phase, ok := record.PhaseMap["load_insert_many"]; ok {
 		return phase, true
 	}
@@ -700,6 +719,20 @@ func primaryMongoPhase(record *runRecord) (phaseResult, bool) {
 		return record.Result.Phases[0], true
 	}
 	return phaseResult{}, false
+}
+
+func scalingPrimaryPhaseName(config string) string {
+	scenario := parseScalingScenario(config)
+	if !scenario.valid || !scenario.hasMarker {
+		return ""
+	}
+	if count, ok := strings.CutPrefix(scenario.suffix, "writers_"); ok {
+		return "concurrent_id_update_set_w" + count
+	}
+	if count, ok := strings.CutPrefix(scenario.suffix, "readers_"); ok {
+		return "concurrent_id_find_one_r" + count
+	}
+	return ""
 }
 
 type runRecordRawKey struct {
