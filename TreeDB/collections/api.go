@@ -4578,21 +4578,21 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		materializeStart := time.Now()
 		rootOverlayFilters, err := buildCollectionRootOverlayFilters(work.rootNames, work.flushUnit.rootRuns, work.rootOverlays, work.catalog.rootOverlayFilters)
 		if err != nil {
-			materializeElapsed := time.Since(materializeStart)
+			materializeElapsed := collectionObservedElapsedSince(materializeStart)
 			return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 		}
 		work.rootOverlayFilters = rootOverlayFilters
 		ordered, cleanupDeltas, err := buildBufferedRootOverlayDeltaBatchPublishInputs(work.rootNames, work.flushUnit.rootRuns, work.flushUnit.rootPolicies, work.rootOverlays)
 		if err != nil {
-			materializeElapsed := time.Since(materializeStart)
+			materializeElapsed := collectionObservedElapsedSince(materializeStart)
 			return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 		}
-		materializeElapsed := time.Since(materializeStart)
+		materializeElapsed := collectionObservedElapsedSince(materializeStart)
 		publishStart := time.Now()
 		newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, work.rootOverlays, rootIDs)
 		})
-		publishElapsed := time.Since(publishStart)
+		publishElapsed := collectionObservedElapsedSince(publishStart)
 		cleanupDeltas()
 		if publishErr == nil && len(rootIDs) != len(work.rootNames) {
 			publishErr = unexpectedOrderedRootCountError(work.meta.Name, len(work.rootNames), len(rootIDs))
@@ -4606,15 +4606,15 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	materializeStart := time.Now()
 	ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(work.rootNames, work.flushUnit.rootRuns, work.rootBaseIDs, work.flushUnit.rootPolicies)
 	if err != nil {
-		materializeElapsed := time.Since(materializeStart)
+		materializeElapsed := collectionObservedElapsedSince(materializeStart)
 		return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 	}
-	materializeElapsed := time.Since(materializeStart)
+	materializeElapsed := collectionObservedElapsedSince(materializeStart)
 	publishStart := time.Now()
 	newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, rootIDs)
 	})
-	publishElapsed := time.Since(publishStart)
+	publishElapsed := collectionObservedElapsedSince(publishStart)
 	cleanupDeltas()
 	if publishErr == nil && len(rootIDs) != len(work.rootNames) {
 		publishErr = unexpectedOrderedRootCountError(work.meta.Name, len(work.rootNames), len(rootIDs))
@@ -4856,7 +4856,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	var materializeElapsed time.Duration
 	var publishElapsed time.Duration
 	defer func() {
-		domain.observeIndexedFlush(flushDocs, flushBytes, flushRootRuns, flushRoots, time.Since(flushStart), materializeElapsed, publishElapsed, err)
+		domain.observeIndexedFlush(flushDocs, flushBytes, flushRootRuns, flushRoots, collectionObservedElapsedSince(flushStart), materializeElapsed, publishElapsed, err)
 	}()
 	baseSystemRoot := snapshotSystemRoot(pin)
 	baseCommitSeq := snapshotCommitSeq(pin)
@@ -4877,34 +4877,34 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		materializeStart := time.Now()
 		rootOverlayFilters, err = buildCollectionRootOverlayFilters(rootNames, flushUnit.rootRuns, rootOverlays, catalog.rootOverlayFilters)
 		if err != nil {
-			materializeElapsed = time.Since(materializeStart)
+			materializeElapsed = collectionObservedElapsedSince(materializeStart)
 			return err
 		}
 		ordered, cleanupDeltas, err := buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames, flushUnit.rootRuns, flushUnit.rootPolicies, rootOverlays)
 		if err != nil {
-			materializeElapsed = time.Since(materializeStart)
+			materializeElapsed = collectionObservedElapsedSince(materializeStart)
 			return err
 		}
-		materializeElapsed = time.Since(materializeStart)
+		materializeElapsed = collectionObservedElapsedSince(materializeStart)
 		publishStart := time.Now()
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays, rootIDs)
 		})
-		publishElapsed = time.Since(publishStart)
+		publishElapsed = collectionObservedElapsedSince(publishStart)
 		cleanupDeltas()
 	} else {
 		materializeStart := time.Now()
 		ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(rootNames, flushUnit.rootRuns, flushUnit.rootBaseIDs, flushUnit.rootPolicies)
 		if err != nil {
-			materializeElapsed = time.Since(materializeStart)
+			materializeElapsed = collectionObservedElapsedSince(materializeStart)
 			return err
 		}
-		materializeElapsed = time.Since(materializeStart)
+		materializeElapsed = collectionObservedElapsedSince(materializeStart)
 		publishStart := time.Now()
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 		})
-		publishElapsed = time.Since(publishStart)
+		publishElapsed = collectionObservedElapsedSince(publishStart)
 		cleanupDeltas()
 	}
 	if err != nil {
