@@ -790,6 +790,45 @@ func TestReportMatchesUnsuffixedTreeConfigWithMixedMongoRows(t *testing.T) {
 	}
 }
 
+func TestReportUsesMongoDriverBaselineWithMultipleMongoClientModes(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "treedb.json"), `{
+  "target": "treedb",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "load_insert_many", "operations": 100, "ops_per_sec": 1000, "latency_micros": {}}],
+  "treedb_disk_after_checkpoint": {"total_bytes": 2000}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo_driver.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "load_insert_many", "operations": 100, "ops_per_sec": 500, "latency_micros": {}}],
+  "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4000}
+}`)
+	writeFile(t, filepath.Join(dir, "mongo_command.json"), `{
+  "target": "mongo",
+  "documents": 100,
+  "secondary_indexes": 2,
+  "phases": [{"name": "load_insert_many", "operations": 100, "ops_per_sec": 800, "latency_micros": {}}],
+  "mongodb_stats_final": {"dataSize": 3000, "totalSize": 4100}
+}`)
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	reportPath := filepath.Join(dir, "report.md")
+	writeFile(t, matrixPath, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_driver_command_raw\t100\t2\ttreedb.json\t2000\n"+
+		"mongo\tmongo_driver\t100\t2\tmongo_driver.json\t4000\n"+
+		"mongo\tmongo_driver_command\t100\t2\tmongo_command.json\t4100\n")
+
+	if err := run([]string{"-matrix", matrixPath, "-report", reportPath}); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	report := readFile(t, reportPath)
+	if !strings.Contains(report, "| 100 | 2 | false | n/a | `treedb_bson_driver_command_raw` | `load_insert_many` | 1000 | n/a | 500 | n/a | 2.00x | n/a |") {
+		t.Fatalf("report missing driver-baseline comparison\n%s", report)
+	}
+}
+
 func TestReportRejectsAmbiguousScalingMongoConfigsPerScenario(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "treedb_w1.json"), `{
