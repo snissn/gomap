@@ -1509,12 +1509,6 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			db.writeMu.RUnlock()
 		}
 	}()
-	for orderedIdx := range ordered {
-		if ordered[orderedIdx].BaseRoot == 0 {
-			retrySerialized = true
-			return 0, nil, retrySerialized, nil
-		}
-	}
 	if baseSystemRoot == 0 {
 		retrySerialized = true
 		return 0, nil, retrySerialized, nil
