@@ -114,7 +114,7 @@ The default run uses:
 - batch size 16,000
 - two secondary indexes for the primary TreeDB/SQLite comparison
 - TreeDB `production_fast`
-- TreeDB document formats `json` and `template-v1`
+- TreeDB document formats `template-v1`, `bson`, and `json`
 - SQLite JSON and SQLite native-column baselines
 - full leafgen pack/GC with:
   - `leaf-segment-target-bytes=1048576`

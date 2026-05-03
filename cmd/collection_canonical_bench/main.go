@@ -1483,7 +1483,7 @@ func splitCSV(v string) []string {
 }
 
 func canonicalFormat(format string) string {
-	return strings.ReplaceAll(strings.TrimSpace(format), "_", "-")
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(format), "_", "-"))
 }
 
 func canonicalConfigName(engine, format, shape string, indexes int) string {
@@ -1500,13 +1500,13 @@ func canonicalConfigName(engine, format, shape string, indexes int) string {
 func primaryFormat(canon *canonicalRun) string {
 	if canon != nil {
 		for _, f := range canon.Config.Formats {
-			format := strings.ToLower(canonicalFormat(f))
+			format := canonicalFormat(f)
 			if format == "template-v1" {
 				return "template-v1"
 			}
 		}
 		if len(canon.Config.Formats) > 0 {
-			return strings.ToLower(canonicalFormat(canon.Config.Formats[0]))
+			return canonicalFormat(canon.Config.Formats[0])
 		}
 	}
 	return "template-v1"
@@ -1523,7 +1523,7 @@ func compactedTreeDBConfigNames(canon *canonicalRun) []string {
 	seen := make(map[string]bool)
 	var out []string
 	for _, format := range canon.Config.Formats {
-		format = strings.ToLower(canonicalFormat(format))
+		format = canonicalFormat(format)
 		name := canonicalConfigName("treedb", format, "collection", canonicalIndexCount(canon))
 		if seen[name] {
 			continue
