@@ -8494,6 +8494,36 @@ func TestCollectionUpdateBatchDirectBufferedTemplateV1AccumulatesRootRuns(t *tes
 	}
 }
 
+func TestDirectBufferedRootEntriesOwnSourceBytes(t *testing.T) {
+	documentID := []byte("u1")
+	document := []byte(`{"city":"hnl"}`)
+	primaryEntries := buildDirectBufferedPrimaryRootEntries([]preparedBatchUpdate{{
+		documentID: documentID,
+		document:   document,
+	}})
+	if len(primaryEntries) != 1 {
+		t.Fatalf("primary entries=%d want 1", len(primaryEntries))
+	}
+	documentID[0] = 'x'
+	document[0] = '['
+	if !bytes.Equal(primaryEntries[0].key, []byte("u1")) || !bytes.Equal(primaryEntries[0].value, []byte(`{"city":"hnl"}`)) {
+		t.Fatalf("primary entry key=%q value=%q, want owned original bytes", primaryEntries[0].key, primaryEntries[0].value)
+	}
+
+	templateRecord := templateV1Record{
+		id:  [32]byte{1, 2, 3},
+		raw: []byte("template-record"),
+	}
+	templateEntries := buildDirectBufferedTemplateRootEntries([]templateV1Record{templateRecord})
+	if len(templateEntries) != 1 {
+		t.Fatalf("template entries=%d want 1", len(templateEntries))
+	}
+	templateRecord.raw[0] = 'X'
+	if templateEntries[0].key[0] != 1 || !bytes.Equal(templateEntries[0].value, []byte("template-record")) {
+		t.Fatalf("template entry key[0]=%d value=%q, want owned original bytes", templateEntries[0].key[0], templateEntries[0].value)
+	}
+}
+
 func newBufferedUsersUpdateCollection(t *testing.T) (*backenddb.DB, *Collection) {
 	t.Helper()
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})

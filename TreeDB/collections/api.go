@@ -7288,12 +7288,18 @@ type updateBatchPlan struct {
 }
 
 type directBufferedUpdatePlan struct {
-	changed            []preparedBatchUpdate
-	templateRecords    []templateV1Record
+	templateEntries    []directBufferedRootEntry
+	primaryEntries     []directBufferedRootEntry
 	secondaryRootPlans []directBufferedSecondaryRootPlan
 	templateRootName   string
 	primaryRootName    string
 	stagedBytes        int64
+}
+
+type directBufferedRootEntry struct {
+	key   []byte
+	value []byte
+	flags byte
 }
 
 type directBufferedSecondaryRootPlan struct {
@@ -7309,6 +7315,46 @@ type directBufferedSecondaryRootPlan struct {
 type directBufferedSecondaryRootEntry struct {
 	key       []byte
 	tombstone bool
+}
+
+func buildDirectBufferedTemplateRootEntries(records []templateV1Record) []directBufferedRootEntry {
+	if len(records) == 0 {
+		return nil
+	}
+	entries := make([]directBufferedRootEntry, len(records))
+	for i := range records {
+		entries[i] = directBufferedRootEntry{
+			key:   bytes.Clone(records[i].id[:]),
+			value: bytes.Clone(records[i].raw),
+			flags: node.FlagInline,
+		}
+	}
+	return entries
+}
+
+func buildDirectBufferedPrimaryRootEntries(changed []preparedBatchUpdate) []directBufferedRootEntry {
+	if len(changed) == 0 {
+		return nil
+	}
+	entries := make([]directBufferedRootEntry, len(changed))
+	for i := range changed {
+		entries[i] = directBufferedRootEntry{
+			key:   bytes.Clone(changed[i].documentID),
+			value: bytes.Clone(changed[i].document),
+			flags: node.FlagInline,
+		}
+	}
+	return entries
+}
+
+func applyDirectBufferedRootEntries(table memtable.Table, entries []directBufferedRootEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	return applyCollectionRunEntriesWithFlags(table, len(entries), func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
+		entry := entries[i]
+		return entry.key, entry.value, page.ValuePtr{}, entry.flags, nil
+	})
 }
 
 func buildDirectBufferedSecondaryRootPlans(collectionName string, runtimes []indexRuntime, changed []preparedBatchUpdate, stats *CollectionUpdateStats) ([]directBufferedSecondaryRootPlan, int64, error) {
@@ -8412,6 +8458,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	success := false
 	if c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode) {
 		phaseStart = updateBatchStatsNow(detailedStats)
+		var templateEntries []directBufferedRootEntry
 		if len(templateRecords) > 0 {
 			sortTemplateV1Records(templateRecords)
 			var err error
@@ -8420,6 +8467,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 				_ = snap.Close()
 				return nil, err
 			}
+			templateEntries = buildDirectBufferedTemplateRootEntries(templateRecords)
 			rootNames = append(rootNames, templateRootName)
 			uniqueSecondary = append(uniqueSecondary, -1)
 			baseRootIDs[templateRootName] = catalog.rootID(templateRootName)
@@ -8428,6 +8476,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		stats.TemplateRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
 
 		phaseStart = updateBatchStatsNow(detailedStats)
+		primaryEntries := buildDirectBufferedPrimaryRootEntries(changed)
 		rootNames = append(rootNames, primaryRootName)
 		uniqueSecondary = append(uniqueSecondary, -1)
 		baseRootIDs[primaryRootName] = primaryRoot
@@ -8440,6 +8489,9 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			results[changed[i].itemIndex].Modified = true
 			stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, int64(len(changed[i].documentID)+len(changed[i].document)))
 		}
+		stats.PrimaryRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
+
+		phaseStart = updateBatchStatsNow(detailedStats)
 		secondaryRootPlans, secondaryStagedBytes, err := buildDirectBufferedSecondaryRootPlans(meta.Name, runtimes, changed, &stats)
 		if err != nil {
 			_ = snap.Close()
@@ -8480,8 +8532,8 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			bufferedReadBlocked:         bufferedReadBlocked,
 			policies:                    policies,
 			directBufferedUpdate: &directBufferedUpdatePlan{
-				changed:            changed,
-				templateRecords:    templateRecords,
+				templateEntries:    templateEntries,
+				primaryEntries:     primaryEntries,
 				secondaryRootPlans: secondaryRootPlans,
 				templateRootName:   templateRootName,
 				primaryRootName:    primaryRootName,
@@ -8742,7 +8794,7 @@ func updateBatchPlanUniqueSecondaryIndex(plan *updateBatchPlan, rootOffset int) 
 }
 
 func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, error) {
-	if c == nil || plan == nil || plan.directBufferedUpdate == nil || len(plan.directBufferedUpdate.changed) == 0 {
+	if c == nil || plan == nil || plan.directBufferedUpdate == nil || len(plan.directBufferedUpdate.primaryEntries) == 0 {
 		return false, nil
 	}
 	direct := plan.directBufferedUpdate
@@ -8873,32 +8925,26 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 			actualRootRuns = saturatingAddNonNegativeInt(actualRootRuns, 1)
 		}
 	}
-	if len(direct.templateRecords) > 0 {
+	if len(direct.templateEntries) > 0 {
 		templateTable := rootTables[direct.templateRootName]
 		if templateTable == nil {
 			return false, fmt.Errorf("collections: UpdateBatch collection %q missing direct template root accumulator for %q", plan.meta.Name, direct.templateRootName)
 		}
-		if err := applyCollectionRunEntries(templateTable, len(direct.templateRecords), func(i int) (key, value []byte, err error) {
-			record := direct.templateRecords[i]
-			return bytes.Clone(record.id[:]), bytes.Clone(record.raw), nil
-		}); err != nil {
+		if err := applyDirectBufferedRootEntries(templateTable, direct.templateEntries); err != nil {
 			return false, err
 		}
 	}
 	primaryTable := rootTables[direct.primaryRootName]
 	var primaryIndexKeys [][]byte
 	if domain.primaryRunIndex != nil {
-		primaryIndexKeys = make([][]byte, 0, len(direct.changed))
+		primaryIndexKeys = make([][]byte, 0, len(direct.primaryEntries))
 	}
-	if err := applyCollectionRunEntries(primaryTable, len(direct.changed), func(i int) (key, value []byte, err error) {
-		item := direct.changed[i]
-		return bytes.Clone(item.documentID), bytes.Clone(item.document), nil
-	}); err != nil {
+	if err := applyDirectBufferedRootEntries(primaryTable, direct.primaryEntries); err != nil {
 		return false, err
 	}
-	for _, item := range direct.changed {
+	for _, entry := range direct.primaryEntries {
 		if primaryIndexKeys != nil {
-			primaryIndexKeys = append(primaryIndexKeys, item.documentID)
+			primaryIndexKeys = append(primaryIndexKeys, entry.key)
 		}
 	}
 	if primaryIndexKeys != nil {
