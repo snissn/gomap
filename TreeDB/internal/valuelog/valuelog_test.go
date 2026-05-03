@@ -888,6 +888,86 @@ func TestValueLogManager_ReadUnsafeTo_CompressedGroupedFallbackUsesCache(t *test
 	}
 }
 
+func TestValueLogManager_ReadUnsafeTo_CompressedGroupedMmapUsesCache(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	withMappedSealedBudget(t, 8)
+
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+	ptrs, want := appendCompressedFrameForCacheTests(t, writer, 0, 4)
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	m, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+	m.SetDisableReadChecksum(true)
+	m.SetGroupedFrameCacheEntries(4)
+
+	f := m.files[fileID]
+	if f == nil {
+		t.Fatalf("missing opened file for id=%d", fileID)
+	}
+
+	dst := make([]byte, 0, 512)
+	got0, used0, err := m.ReadUnsafeTo(ptrs[0], dst[:0])
+	if err != nil {
+		t.Fatalf("read unsafe to first: %v", err)
+	}
+	if !used0 {
+		t.Fatalf("expected first read to use dst")
+	}
+	if !bytes.Equal(got0, want[0]) {
+		t.Fatalf("first value mismatch: got=%q want=%q", got0, want[0])
+	}
+
+	hits0, misses0, entries0, _ := f.groupedFrameCacheStats()
+	if misses0 == 0 {
+		t.Fatalf("expected first mmap grouped read to miss cache")
+	}
+	if entries0 == 0 {
+		t.Fatalf("expected first mmap grouped read to populate cache")
+	}
+
+	got1, used1, err := m.ReadUnsafeTo(ptrs[1], dst[:0])
+	if err != nil {
+		t.Fatalf("read unsafe to second: %v", err)
+	}
+	if !used1 {
+		t.Fatalf("expected second read to use dst")
+	}
+	if !bytes.Equal(got1, want[1]) {
+		t.Fatalf("second value mismatch: got=%q want=%q", got1, want[1])
+	}
+
+	hits1, misses1, entries1, _ := f.groupedFrameCacheStats()
+	if entries1 != entries0 {
+		t.Fatalf("cache entries changed after hit: before=%d after=%d", entries0, entries1)
+	}
+	if hits1 <= hits0 {
+		t.Fatalf("expected second mmap read to hit grouped cache: hits before=%d after=%d", hits0, hits1)
+	}
+	if misses1 != misses0 {
+		t.Fatalf("unexpected cache miss increase on second mmap read: before=%d after=%d", misses0, misses1)
+	}
+}
+
 func TestReadAtGroupedFastPathWithoutChecksum(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-000001.log")
