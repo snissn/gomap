@@ -8287,6 +8287,105 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesAppendsToBufferedUp
 	}
 }
 
+func TestCollectionUpdateBatchDirectBufferedBSONAccumulatesRootRuns(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatBSON,
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "email", Value: "a@example.com"},
+			{Key: "city", Value: "hnl"},
+		})},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+	before := d.State()
+
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setBSONField("city", "sea")},
+	}); err != nil {
+		t.Fatalf("first UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("first batch was declined")
+	}
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setBSONField("city", "sfo")},
+	}); err != nil {
+		t.Fatalf("second UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("second batch was declined")
+	}
+	afterSecond := d.State()
+	if afterSecond.CommitSeq != before.CommitSeq {
+		t.Fatalf("buffered BSON updates advanced commit seq by %d, want 0", afterSecond.CommitSeq-before.CommitSeq)
+	}
+	col.writeDomain.mu.RLock()
+	rootRunCount := col.writeDomain.rootRunCount
+	primaryRuns := len(col.writeDomain.rootRuns[collectionPrimaryRootName("users")])
+	cityRuns := len(col.writeDomain.rootRuns[collectionSecondaryRootName("users", "city")])
+	rootMutableRuns := len(col.writeDomain.rootMutableRuns)
+	col.writeDomain.mu.RUnlock()
+	if rootRunCount != 2 {
+		t.Fatalf("rootRunCount=%d want 2 accumulated roots after two BSON update batches", rootRunCount)
+	}
+	if primaryRuns != 1 || cityRuns != 1 {
+		t.Fatalf("runs primary=%d city=%d, want one run per affected root", primaryRuns, cityRuns)
+	}
+	if rootMutableRuns != 2 {
+		t.Fatalf("rootMutableRuns=%d want 2 active root-local accumulators", rootMutableRuns)
+	}
+	seaIDs, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find sea city: %v", err)
+	}
+	if len(seaIDs) != 0 {
+		t.Fatalf("sea ids=%q want none after second buffered update", seaIDs)
+	}
+	sfoIDs, err := col.FindByIndex("city", "sfo")
+	if err != nil {
+		t.Fatalf("find sfo city: %v", err)
+	}
+	if len(sfoIDs) != 1 || !bytes.Equal(sfoIDs[0], []byte("u1")) {
+		t.Fatalf("sfo ids=%q want [u1]", sfoIDs)
+	}
+	emailIDs, err := col.FindByIndex("email", "a@example.com")
+	if err != nil {
+		t.Fatalf("find email: %v", err)
+	}
+	if len(emailIDs) != 1 || !bytes.Equal(emailIDs[0], []byte("u1")) {
+		t.Fatalf("email ids=%q want [u1]", emailIDs)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered BSON update batches: %v", err)
+	}
+}
+
 func newBufferedUsersUpdateCollection(t *testing.T) (*backenddb.DB, *Collection) {
 	t.Helper()
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
@@ -9837,6 +9936,21 @@ func setJSONEmail(email string) func([]byte) ([]byte, bool, error) {
 
 func setJSONCity(city string) func([]byte) ([]byte, bool, error) {
 	return setJSONField("city", city)
+}
+
+func setBSONField(field string, value any) func([]byte) ([]byte, bool, error) {
+	return func(current []byte) ([]byte, bool, error) {
+		var doc bson.M
+		if err := bson.Unmarshal(current, &doc); err != nil {
+			return nil, false, err
+		}
+		doc[field] = value
+		next, err := bson.Marshal(doc)
+		if err != nil {
+			return nil, false, err
+		}
+		return next, true, nil
+	}
 }
 
 func setJSONField(field string, value any) func([]byte) ([]byte, bool, error) {

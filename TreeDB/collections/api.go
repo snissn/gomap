@@ -659,6 +659,7 @@ type bufferedIndexedCheckpoint struct {
 	mutableBytes           int64
 	writeGeneration        uint64
 	rootRuns               map[string][]memtable.Table
+	rootMutableRuns        map[string]memtable.Table
 	rootPolicies           map[string]backenddb.OrderedRootStoragePolicy
 	rootBaseIDs            map[string]uint64
 	indexedPublishingUnits []indexedFlushUnit
@@ -712,6 +713,7 @@ type collectionWriteDomain struct {
 	indexedPublishingUnits []indexedFlushUnit
 	indexedFlushUnits      []indexedFlushUnit
 	rootRuns               map[string][]memtable.Table
+	rootMutableRuns        map[string]memtable.Table
 	rootPolicies           map[string]backenddb.OrderedRootStoragePolicy
 	rootBaseIDs            map[string]uint64
 	primaryIDIndex         *bufferedUniqueValueIndex
@@ -2764,6 +2766,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		domain.uniqueValueIndex = make(map[string]*bufferedUniqueValueIndex)
 	}
 	autoFlushEnabled := bufferedIndexedAutoFlushEnabled(catalog.meta.Options)
+	freezeMutableIndexedRunMapsLocked(domain)
 	var checkpoint bufferedIndexedCheckpoint
 	if autoFlushEnabled {
 		checkpoint = checkpointBufferedIndexedDomain(domain)
@@ -2871,6 +2874,7 @@ func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWr
 	domain.indexedPublishingUnits = nil
 	domain.indexedFlushUnits = nil
 	domain.rootRuns = nil
+	domain.rootMutableRuns = nil
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
 	domain.rootRunCount = 0
@@ -2971,6 +2975,7 @@ func maybeCompactBufferedIndexedMutableRunsLocked(domain *collectionWriteDomain,
 	}
 	afterBytes := tableRunMapSize(compactedRootRuns) + tableRunMapSize(compactedUniqueRuns)
 	domain.rootRuns = compactedRootRuns
+	domain.rootMutableRuns = nil
 	domain.uniqueValueRuns = compactedUniqueRuns
 	domain.rootRunCount = tableRunMapRunCount(domain.rootRuns)
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(subtractNonNegativeInt64(domain.bufferedBytes, beforeBytes), afterBytes)
@@ -3032,6 +3037,66 @@ func compactTableRuns(runs []memtable.Table) (memtable.Table, error) {
 	}
 	table.Freeze()
 	return table, nil
+}
+
+func mutableRootRunLocked(domain *collectionWriteDomain, rootName string) (memtable.Table, bool) {
+	if domain == nil || rootName == "" {
+		return nil, false
+	}
+	if domain.rootRuns == nil {
+		domain.rootRuns = make(map[string][]memtable.Table)
+	}
+	if domain.rootMutableRuns == nil {
+		domain.rootMutableRuns = make(map[string]memtable.Table)
+	}
+	if table := domain.rootMutableRuns[rootName]; table != nil {
+		return table, false
+	}
+	table := newCollectionRootAccumulatorRunTable()
+	domain.rootMutableRuns[rootName] = table
+	domain.rootRuns[rootName] = append(domain.rootRuns[rootName], table)
+	domain.rootRunCount = saturatingAddNonNegativeInt(domain.rootRunCount, 1)
+	return table, true
+}
+
+func newCollectionRootAccumulatorRunTable() memtable.Table {
+	return newFreezeSortRunTable()
+}
+
+func freezeMutableIndexedRunMapsLocked(domain *collectionWriteDomain) {
+	if domain == nil || len(domain.rootMutableRuns) == 0 {
+		return
+	}
+	for _, table := range domain.rootMutableRuns {
+		if table != nil {
+			table.Freeze()
+		}
+	}
+	domain.rootMutableRuns = nil
+}
+
+func estimateAccumulatedRootRunsForNamesLocked(domain *collectionWriteDomain, rootNames []string) int {
+	added := 0
+	for i, rootName := range rootNames {
+		if rootName == "" {
+			continue
+		}
+		seen := false
+		for j := 0; j < i; j++ {
+			if rootNames[j] == rootName {
+				seen = true
+				break
+			}
+		}
+		if seen {
+			continue
+		}
+		if domain != nil && domain.rootMutableRuns != nil && domain.rootMutableRuns[rootName] != nil {
+			continue
+		}
+		added++
+	}
+	return added
 }
 
 func resetTableRunMap(runs, preserved map[string][]memtable.Table) {
@@ -3401,6 +3466,7 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		mutableBytes:           domain.mutableBytes,
 		writeGeneration:        domain.writeGeneration,
 		rootRuns:               cloneTableRunMap(domain.rootRuns),
+		rootMutableRuns:        cloneMutableRunMap(domain.rootMutableRuns),
 		rootPolicies:           cloneRootPolicyMap(domain.rootPolicies),
 		rootBaseIDs:            cloneUint64Map(domain.rootBaseIDs),
 		indexedPublishingUnits: cloneIndexedFlushUnits(domain.indexedPublishingUnits),
@@ -3433,6 +3499,7 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.indexedPublishingUnits = checkpoint.indexedPublishingUnits
 	domain.indexedFlushUnits = checkpoint.indexedFlushUnits
 	domain.rootRuns = checkpoint.rootRuns
+	domain.rootMutableRuns = checkpoint.rootMutableRuns
 	domain.rootPolicies = checkpoint.rootPolicies
 	domain.rootBaseIDs = checkpoint.rootBaseIDs
 	domain.rootRunCount = checkpoint.rootRunCount
@@ -3598,6 +3665,17 @@ func cloneTableRunMap(in map[string][]memtable.Table) map[string][]memtable.Tabl
 	out := make(map[string][]memtable.Table, len(in))
 	for name, runs := range in {
 		out[name] = runs
+	}
+	return out
+}
+
+func cloneMutableRunMap(in map[string]memtable.Table) map[string]memtable.Table {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]memtable.Table, len(in))
+	for name, table := range in {
+		out[name] = table
 	}
 	return out
 }
@@ -3882,6 +3960,25 @@ func addBufferedPrimaryRunIndexEntries(index *bufferedPrimaryRunIndex, batchPrim
 		index.arenas = append(index.arenas, arena)
 	}
 	return nil
+}
+
+func addBufferedPrimaryRunIndexKeys(index *bufferedPrimaryRunIndex, keys [][]byte, table memtable.Table) {
+	if index == nil || table == nil || len(keys) == 0 {
+		return
+	}
+	arena := make([]byte, 0, bufferedPrimaryIDArenaCap(len(keys)))
+	for _, key := range keys {
+		if len(key) == 0 {
+			continue
+		}
+		start := len(arena)
+		arena = append(arena, key...)
+		refKey := arena[start:len(arena)]
+		index.addRef(xxhash.Sum64(key), bufferedPrimaryRunRef{key: refKey, table: table})
+	}
+	if len(arena) > 0 {
+		index.arenas = append(index.arenas, arena)
+	}
 }
 
 func bufferedPrimaryIDArenaCap(entries int) int {
@@ -4530,6 +4627,7 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 		_ = pin.Close()
 		work.pin = nil
 		domain.indexedFlushUnits = nil
+		domain.rootMutableRuns = nil
 		domain.count = 0
 		domain.bufferedBytes = 0
 		domain.mutableCount = 0
@@ -4902,6 +5000,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	rootNames := orderedBufferedRootNames(meta, flushUnit.rootRuns)
 	if len(rootNames) == 0 {
 		domain.indexedFlushUnits = nil
+		domain.rootMutableRuns = nil
 		domain.count = 0
 		domain.bufferedBytes = 0
 		domain.mutableCount = 0
@@ -4988,6 +5087,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	domain.primaryRoot = nextCatalog.rootID(collectionPrimaryRootName(meta.Name))
 	domain.indexedFlushUnits = nil
 	domain.rootRuns = nil
+	domain.rootMutableRuns = nil
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
 	domain.rootRunCount = 0
@@ -5016,6 +5116,7 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 	if domain == nil || len(domain.rootRuns) == 0 {
 		return false
 	}
+	freezeMutableIndexedRunMapsLocked(domain)
 	unit := indexedFlushUnit{
 		rootRuns:        domain.rootRuns,
 		rootPolicies:    domain.rootPolicies,
@@ -5027,6 +5128,7 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 	}
 	domain.indexedFlushUnits = append(domain.indexedFlushUnits, unit)
 	domain.rootRuns = nil
+	domain.rootMutableRuns = nil
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
 	domain.uniqueValueRuns = nil
@@ -7176,12 +7278,20 @@ type updateBatchPlan struct {
 	baseRootIDs                 map[string]uint64
 	policies                    []backenddb.OrderedRootStoragePolicy
 	deltaTables                 []memtable.Table
+	directBufferedUpdate        *directBufferedUpdatePlan
 	uniqueSecondaryIndexByRoot  []int
 	canBufferIndexedUpdateBatch bool
 	bufferedBase                bool
 	bufferedReadGeneration      uint64
 	bufferedReadBlocked         bool
 	scratch                     *updateBatchPlanScratch
+}
+
+type directBufferedUpdatePlan struct {
+	changed         []preparedBatchUpdate
+	runtimes        []indexRuntime
+	primaryRootName string
+	stagedBytes     int64
 }
 
 var updateBatchPlanPool sync.Pool
@@ -7490,6 +7600,19 @@ func (c *Collection) validateUpdateBatchPlanRootDescriptors(plan *updateBatchPla
 	return c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs)
 }
 
+func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts collectionOptions, canBuffer bool, mode updateBatchMode, templateRecords []templateV1Record) bool {
+	if c == nil || c.writeDomain == nil || !canBuffer || mode == updateBatchModeAny {
+		return false
+	}
+	if !meta.Options.BufferedIndexedWrites || len(meta.Indexes) == 0 {
+		return false
+	}
+	if len(templateRecords) != 0 {
+		return false
+	}
+	return !persistIndexStateForOptions(opts)
+}
+
 func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, error) {
 	if c.shouldPlanUpdateBatchWithBufferedWrites(mode) {
 		useBufferedRead := true
@@ -7504,7 +7627,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 			var results []UpdateBatchResult
 			replan := false
 			err = c.withMutationLock(func() error {
-				if len(plan.deltaTables) == 0 {
+				if len(plan.deltaTables) == 0 && plan.directBufferedUpdate == nil {
 					if plan.bufferedReadBlocked && useBufferedRead {
 						if err := c.flushBufferedWrites(); err != nil {
 							return err
@@ -7548,6 +7671,14 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 					results = plan.results
 					return nil
 				}
+				if plan.directBufferedUpdate != nil {
+					if err := c.flushBufferedWrites(); err != nil {
+						return err
+					}
+					useBufferedRead = false
+					replan = true
+					return nil
+				}
 				if err := c.flushBufferedWrites(); err != nil {
 					return err
 				}
@@ -7587,7 +7718,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 		return nil, nil
 	}
 	defer plan.close()
-	if len(plan.deltaTables) == 0 {
+	if len(plan.deltaTables) == 0 && plan.directBufferedUpdate == nil {
 		if err := c.withMutationLock(func() error {
 			if err := c.flushBufferedWrites(); err != nil {
 				return err
@@ -7613,6 +7744,12 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 		if buffered {
 			results = plan.results
 			return nil
+		}
+		if plan.directBufferedUpdate != nil {
+			if err := c.flushBufferedWrites(); err != nil {
+				return err
+			}
+			return ErrConcurrentMutation
 		}
 		var publishErr error
 		if err := c.flushBufferedWrites(); err != nil {
@@ -8181,10 +8318,107 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	}
 	stats.UniqueIndexPreflight += updateBatchStatsSince(detailedStats, phaseStart)
 
+	success := false
+	if c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode, templateRecords) {
+		phaseStart = updateBatchStatsNow(detailedStats)
+		rootNames = append(rootNames, primaryRootName)
+		uniqueSecondary = append(uniqueSecondary, -1)
+		baseRootIDs[primaryRootName] = primaryRoot
+		policies = append(policies, plannerOptions.dataStoragePolicy)
+		var stagedBytes int64
+		for i := range changed {
+			results[changed[i].itemIndex].Modified = true
+			stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, int64(len(changed[i].documentID)+len(changed[i].document)))
+		}
+		secondaryRunStats := make([]CollectionUpdateSecondaryRunStats, len(runtimes))
+		for runtimeIdx, runtime := range runtimes {
+			rootHasDelta := false
+			runStats := &secondaryRunStats[runtimeIdx]
+			runStats.IndexName = runtime.def.name
+			for _, item := range changed {
+				if !item.indexStateChanged || !preparedBatchUpdateIndexChanged(item, runtimeIdx) {
+					continue
+				}
+				for _, encoded := range item.oldState.valuesAt(runtimeIdx) {
+					keyBytes := len(encoded) + len(item.documentID)
+					stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, int64(keyBytes))
+					stats.SecondaryDeleteEntries++
+					stats.SecondaryKeyBytes += keyBytes
+					runStats.Deletes++
+					runStats.KeyBytes += keyBytes
+					if runtimeIdx < stats.IndexStatsCount {
+						stats.IndexStats[runtimeIdx].SecondaryDeletes++
+						stats.IndexStats[runtimeIdx].SecondaryKeyBytes += keyBytes
+					}
+					rootHasDelta = true
+				}
+				for _, encoded := range item.newState.valuesAt(runtimeIdx) {
+					keyBytes := len(encoded) + len(item.documentID)
+					stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, int64(keyBytes))
+					stats.SecondarySetEntries++
+					stats.SecondaryKeyBytes += keyBytes
+					runStats.Sets++
+					runStats.KeyBytes += keyBytes
+					if runtimeIdx < stats.IndexStatsCount {
+						stats.IndexStats[runtimeIdx].SecondarySets++
+						stats.IndexStats[runtimeIdx].SecondaryKeyBytes += keyBytes
+					}
+					rootHasDelta = true
+				}
+			}
+			if !rootHasDelta {
+				continue
+			}
+			rootName := runtimeSecondaryRootName(meta.Name, runtime)
+			rootNames = append(rootNames, rootName)
+			if runtime.def.unique {
+				uniqueSecondary = append(uniqueSecondary, runtimeIdx)
+			} else {
+				uniqueSecondary = append(uniqueSecondary, -1)
+			}
+			baseRootIDs[rootName] = catalog.rootID(rootName)
+			policies = append(policies, runtime.def.storagePolicy)
+			stats.SecondaryRuns = append(stats.SecondaryRuns, *runStats)
+			if runtimeIdx < stats.IndexStatsCount {
+				stats.IndexStats[runtimeIdx].SecondaryRuns++
+			}
+		}
+		stats.SecondaryRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
+		success = true
+		plan := newUpdateBatchPlan()
+		stats = updateCollectionUpdateStatsCounts(stats, results, len(rootNames))
+		*plan = updateBatchPlan{
+			results:                     results,
+			stats:                       stats,
+			meta:                        meta,
+			catalog:                     catalog,
+			snap:                        snap,
+			baseUserRoot:                baseUserRoot,
+			baseSystemRoot:              baseSystemRoot,
+			baseCommitSeq:               baseCommitSeq,
+			rootNames:                   rootNames,
+			baseRootIDs:                 baseRootIDs,
+			uniqueSecondaryIndexByRoot:  uniqueSecondary,
+			canBufferIndexedUpdateBatch: canBufferIndexedUpdateBatch,
+			bufferedBase:                bufferedRead.enabled,
+			bufferedReadGeneration:      bufferedRead.writeGeneration,
+			bufferedReadBlocked:         bufferedReadBlocked,
+			policies:                    policies,
+			directBufferedUpdate: &directBufferedUpdatePlan{
+				changed:         changed,
+				runtimes:        runtimes,
+				primaryRootName: primaryRootName,
+				stagedBytes:     stagedBytes,
+			},
+			scratch: scratch,
+		}
+		scratchOwnedByPlan = true
+		return plan, nil
+	}
+
 	var stateTable memtable.Table
 	secondaryTables := make(map[string]memtable.Table, len(runtimes))
 	secondaryRunStats := make([]CollectionUpdateSecondaryRunStats, len(runtimes))
-	success := false
 	defer func() {
 		if success {
 			return
@@ -8430,8 +8664,235 @@ func updateBatchPlanUniqueSecondaryIndex(plan *updateBatchPlan, rootOffset int) 
 	return indexDef, true
 }
 
+func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, error) {
+	if c == nil || plan == nil || plan.directBufferedUpdate == nil || len(plan.directBufferedUpdate.changed) == 0 {
+		return false, nil
+	}
+	direct := plan.directBufferedUpdate
+	detailedStats := c.updateBatchDetailedStatsEnabled()
+	bufferStart := updateBatchStatsNow(detailedStats)
+	precheckStart := updateBatchStatsNow(detailedStats)
+	defer func() {
+		plan.stats.BufferStage += updateBatchStatsSince(detailedStats, bufferStart)
+	}()
+	if c.writeDomain == nil || !plan.canBufferIndexedUpdateBatch || !plan.meta.Options.BufferedIndexedWrites || len(plan.meta.Indexes) == 0 {
+		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
+		return false, nil
+	}
+	if len(plan.rootNames) == 0 || len(plan.rootNames) != len(plan.policies) || len(plan.rootNames) != len(plan.uniqueSecondaryIndexByRoot) {
+		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
+		return false, fmt.Errorf("collections: UpdateBatch collection %q invalid direct plan lengths roots=%d policies=%d unique=%d", plan.meta.Name, len(plan.rootNames), len(plan.policies), len(plan.uniqueSecondaryIndexByRoot))
+	}
+	modifiedCount := updateBatchModifiedCount(plan.results)
+	if modifiedCount == 0 {
+		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
+		return false, nil
+	}
+	plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
+
+	domain := c.writeDomain
+	lockStart := updateBatchStatsNow(detailedStats)
+	domain.mu.Lock()
+	plan.stats.BufferStageLockWait += updateBatchStatsSince(detailedStats, lockStart)
+	lockHoldStart := updateBatchStatsNow(detailedStats)
+	var lockReleasedDuringHold time.Duration
+	defer func() {
+		lockHold := updateBatchStatsSince(detailedStats, lockHoldStart)
+		if lockReleasedDuringHold > 0 {
+			if lockHold > lockReleasedDuringHold {
+				lockHold -= lockReleasedDuringHold
+			} else {
+				lockHold = 0
+			}
+		}
+		plan.stats.BufferStageLockHold += lockHold
+		domain.mu.Unlock()
+	}()
+
+	phaseStart := updateBatchStatsNow(detailedStats)
+	if domain.count != 0 {
+		if !plan.bufferedBase || !updateBatchCanReadBufferedDomainLocked(domain, plan.meta, plan.baseSystemRoot) {
+			plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
+			return false, ErrConcurrentMutation
+		}
+		if plan.bufferedReadGeneration != domain.writeGeneration {
+			plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
+			return false, ErrConcurrentMutation
+		}
+	}
+	if err := c.validateUpdateBatchPlanRootDescriptors(plan); err != nil {
+		plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
+		return false, err
+	}
+	plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
+
+	phaseStart = updateBatchStatsNow(detailedStats)
+	for _, rootName := range plan.rootNames {
+		baseRoot, ok := plan.baseRootIDs[rootName]
+		if !ok {
+			plan.stats.BufferStageRootScan += updateBatchStatsSince(detailedStats, phaseStart)
+			return false, fmt.Errorf("collections: UpdateBatch collection %q direct plan missing base root for %q", plan.meta.Name, rootName)
+		}
+		if hasPendingIndexedRootRunsForRootLocked(domain, rootName) {
+			if pendingBaseRoot, ok := pendingIndexedRootBaseIDLocked(domain, rootName); ok && pendingBaseRoot != baseRoot {
+				plan.stats.BufferStageRootScan += updateBatchStatsSince(detailedStats, phaseStart)
+				return false, errConcurrentRootModification(plan.meta.Name, rootName)
+			}
+		}
+	}
+	plan.stats.BufferStageRootScan += updateBatchStatsSince(detailedStats, phaseStart)
+
+	phaseStart = updateBatchStatsNow(detailedStats)
+	if domain.count == 0 && plan.catalog != nil {
+		c.initializeWriteDomainFromCatalogLocked(domain, plan.catalog, plan.baseCommitSeq, plan.baseSystemRoot)
+	}
+	if domain.rootPolicies == nil {
+		domain.rootPolicies = make(map[string]backenddb.OrderedRootStoragePolicy, len(plan.rootNames))
+	}
+	if domain.rootBaseIDs == nil {
+		domain.rootBaseIDs = make(map[string]uint64, len(plan.rootNames))
+	}
+	if domain.rootRuns == nil {
+		domain.rootRuns = make(map[string][]memtable.Table, len(plan.rootNames))
+	}
+	addedRootRuns := estimateAccumulatedRootRunsForNamesLocked(domain, plan.rootNames)
+	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, direct.stagedBytes, addedRootRuns)
+	if !shouldAutoFlushAfterAdding && collectionMetaHasSecondaryUniqueIndex(plan.meta) && bufferedIndexedAutoFlushEnabled(plan.meta.Options) {
+		for i := range plan.rootNames {
+			if _, ok := updateBatchPlanUniqueSecondaryIndex(plan, i); ok {
+				shouldAutoFlushAfterAdding = true
+				break
+			}
+		}
+	}
+	if shouldAutoFlushAfterAdding {
+		freezeMutableIndexedRunMapsLocked(domain)
+	}
+	var checkpoint bufferedIndexedCheckpoint
+	collectionMetaCheckpoint := c.meta
+	if shouldAutoFlushAfterAdding {
+		checkpoint = checkpointBufferedIndexedDomain(domain)
+	}
+	plan.stats.BufferStageDomainPrepare += updateBatchStatsSince(detailedStats, phaseStart)
+
+	phaseStart = updateBatchStatsNow(detailedStats)
+	rootTables := make(map[string]memtable.Table, len(plan.rootNames))
+	actualRootRuns := 0
+	for i, rootName := range plan.rootNames {
+		baseRoot := plan.baseRootIDs[rootName]
+		if pendingBaseRoot, ok := pendingIndexedRootBaseIDLocked(domain, rootName); ok && pendingBaseRoot != baseRoot {
+			return false, errConcurrentRootModification(plan.meta.Name, rootName)
+		}
+		if _, ok := domain.rootBaseIDs[rootName]; !ok {
+			domain.rootBaseIDs[rootName] = baseRoot
+		}
+		domain.rootPolicies[rootName] = plan.policies[i]
+		table, created := mutableRootRunLocked(domain, rootName)
+		if table == nil {
+			return false, fmt.Errorf("collections: UpdateBatch collection %q failed to allocate direct root accumulator for %q", plan.meta.Name, rootName)
+		}
+		rootTables[rootName] = table
+		if created {
+			actualRootRuns = saturatingAddNonNegativeInt(actualRootRuns, 1)
+		}
+	}
+	primaryTable := rootTables[direct.primaryRootName]
+	var primaryIndexKeys [][]byte
+	if domain.primaryRunIndex != nil {
+		primaryIndexKeys = make([][]byte, 0, len(direct.changed))
+	}
+	for _, item := range direct.changed {
+		setCollectionRunCopiedValue(primaryTable, item.documentID, item.document)
+		if primaryIndexKeys != nil {
+			primaryIndexKeys = append(primaryIndexKeys, item.documentID)
+		}
+	}
+	if primaryIndexKeys != nil {
+		addBufferedPrimaryRunIndexKeys(domain.primaryRunIndex, primaryIndexKeys, primaryTable)
+	}
+	for runtimeIdx, runtime := range direct.runtimes {
+		rootName := runtimeSecondaryRootName(plan.meta.Name, runtime)
+		table := rootTables[rootName]
+		if table == nil {
+			continue
+		}
+		for _, item := range direct.changed {
+			if !item.indexStateChanged || !preparedBatchUpdateIndexChanged(item, runtimeIdx) {
+				continue
+			}
+			for _, encoded := range item.oldState.valuesAt(runtimeIdx) {
+				if _, err := deleteCollectionSecondaryIndexEntry(table, encoded, item.documentID); err != nil {
+					if shouldAutoFlushAfterAdding {
+						rollbackBufferedIndexedDomain(domain, checkpoint)
+						c.meta = collectionMetaCheckpoint
+					}
+					return false, err
+				}
+			}
+			for _, encoded := range item.newState.valuesAt(runtimeIdx) {
+				if _, err := setCollectionSecondaryIndexEntry(table, encoded, item.documentID); err != nil {
+					if shouldAutoFlushAfterAdding {
+						rollbackBufferedIndexedDomain(domain, checkpoint)
+						c.meta = collectionMetaCheckpoint
+					}
+					return false, err
+				}
+			}
+		}
+	}
+	plan.stats.BufferStageRootAppend += updateBatchStatsSince(detailedStats, phaseStart)
+
+	domain.loaded = true
+	domain.meta = plan.meta
+	domain.catalog = plan.catalog
+	domain.baseCommitSeq = plan.baseCommitSeq
+	domain.baseSystemRoot = plan.baseSystemRoot
+	if plan.catalog != nil {
+		domain.primaryRoot = plan.catalog.rootID(collectionPrimaryRootName(plan.meta.Name))
+	}
+	domain.count += modifiedCount
+	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, direct.stagedBytes)
+	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, modifiedCount)
+	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, direct.stagedBytes)
+	domain.writeGeneration++
+	domain.observeIndexedStage(modifiedCount, direct.stagedBytes, actualRootRuns)
+	c.meta = plan.meta
+	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, plan.meta.Options)
+	if err != nil {
+		if shouldAutoFlushAfterAdding {
+			rollbackBufferedIndexedDomain(domain, checkpoint)
+			c.meta = collectionMetaCheckpoint
+		}
+		return false, err
+	}
+	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
+		flushDuration, lockReleased, relockWait, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options)
+		if lockReleased > 0 {
+			lockReleasedDuringHold += lockReleased
+		}
+		plan.stats.BufferStageLockWait += updateBatchStatsDuration(detailedStats, relockWait)
+		plan.stats.BufferStageFlush += updateBatchStatsDuration(detailedStats, flushDuration)
+		if err != nil {
+			if shouldAutoFlushAfterAdding {
+				rollbackBufferedIndexedDomain(domain, checkpoint)
+				c.meta = collectionMetaCheckpoint
+			}
+			return false, err
+		}
+	}
+	resetCollectionTables(compactedObsolete)
+	plan.stats.BufferedBatches = 1
+	return true, nil
+}
+
 func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, error) {
-	if c == nil || plan == nil || len(plan.deltaTables) == 0 {
+	if c == nil || plan == nil {
+		return false, nil
+	}
+	if plan.directBufferedUpdate != nil {
+		return c.bufferDirectUpdateBatchPlanLocked(plan)
+	}
+	if len(plan.deltaTables) == 0 {
 		return false, nil
 	}
 	detailedStats := c.updateBatchDetailedStatsEnabled()
@@ -8541,6 +9002,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	if domain.rootRuns == nil {
 		domain.rootRuns = make(map[string][]memtable.Table, len(plan.rootNames))
 	}
+	freezeMutableIndexedRunMapsLocked(domain)
 	hasUniqueSecondaryRoots := collectionMetaHasSecondaryUniqueIndex(plan.meta)
 	projectedStagedBytes := stagedBytes
 	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, projectedStagedBytes, stagedRootRuns)
