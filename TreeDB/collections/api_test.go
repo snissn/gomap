@@ -7772,6 +7772,9 @@ func TestBufferedRunLenHintSumsPendingRunLengths(t *testing.T) {
 	if got := bufferedRunLenHint([]memtable.Table{nil, first, second}); got != 3 {
 		t.Fatalf("bufferedRunLenHint=%d want 3", got)
 	}
+	if got := boundedBufferedRunLenHint(bufferedRunLenHintMaxCapacity + 1); got != bufferedRunLenHintMaxCapacity {
+		t.Fatalf("boundedBufferedRunLenHint over cap=%d want %d", got, bufferedRunLenHintMaxCapacity)
+	}
 }
 
 func TestRebuildBufferedIndexesCoverMultiplePendingRuns(t *testing.T) {
@@ -7802,8 +7805,11 @@ func TestRebuildBufferedIndexesCoverMultiplePendingRuns(t *testing.T) {
 		"city_1":    {uniqueA, uniqueB},
 	}
 	primaryIDs := rebuildBufferedPrimaryIDIndex("users", runs)
-	if primaryIDs == nil || primaryIDs.len() != 3 {
-		t.Fatalf("primary ID index len=%d want 3", primaryIDs.len())
+	if primaryIDs == nil {
+		t.Fatal("primary ID index is nil")
+	}
+	if got := primaryIDs.len(); got != 3 {
+		t.Fatalf("primary ID index len=%d want 3", got)
 	}
 	for _, key := range [][]byte{[]byte("u1"), []byte("u2"), []byte("u3")} {
 		if !primaryIDs.contains(key) {
@@ -7833,8 +7839,11 @@ func TestRebuildBufferedIndexesCoverMultiplePendingRuns(t *testing.T) {
 		"city_1": {uniqueA, uniqueB},
 	})
 	unique := uniqueIndexes["city_1"]
-	if unique == nil || unique.len() != 2 {
-		t.Fatalf("unique index len=%d want 2", unique.len())
+	if unique == nil {
+		t.Fatal("unique index is nil")
+	}
+	if got := unique.len(); got != 2 {
+		t.Fatalf("unique index len=%d want 2", got)
 	}
 	for _, key := range [][]byte{[]byte("city:boston"), []byte("city:seattle")} {
 		if !unique.contains(key) {
@@ -7862,16 +7871,30 @@ func BenchmarkRebuildBufferedPendingIndexes(b *testing.B) {
 		primaryName: {primary},
 		"email_1":   {unique},
 	}
+	uniqueRuns := map[string][]memtable.Table{"email_1": {unique}}
 	b.ReportAllocs()
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if index := rebuildBufferedPrimaryIDIndex("users", runs); index == nil || index.len() != entries {
-			b.Fatalf("primary ID index len=%d want %d", index.len(), entries)
+			got := 0
+			if index != nil {
+				got = index.len()
+			}
+			b.Fatalf("primary ID index len=%d want %d", got, entries)
 		}
 		if index, err := rebuildBufferedPrimaryRunIndex("users", runs); err != nil || index == nil || len(index.values) != entries {
-			b.Fatalf("primary run index len=%d err=%v want %d", len(index.values), err, entries)
+			got := 0
+			if index != nil {
+				got = len(index.values)
+			}
+			b.Fatalf("primary run index len=%d err=%v want %d", got, err, entries)
 		}
-		if indexes := rebuildBufferedUniqueValueIndexes(map[string][]memtable.Table{"email_1": {unique}}); indexes["email_1"] == nil || indexes["email_1"].len() != entries {
-			b.Fatalf("unique index len=%d want %d", indexes["email_1"].len(), entries)
+		if indexes := rebuildBufferedUniqueValueIndexes(uniqueRuns); indexes["email_1"] == nil || indexes["email_1"].len() != entries {
+			got := 0
+			if index := indexes["email_1"]; index != nil {
+				got = index.len()
+			}
+			b.Fatalf("unique index len=%d want %d", got, entries)
 		}
 	}
 }

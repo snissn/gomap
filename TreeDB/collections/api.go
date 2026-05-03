@@ -3706,6 +3706,21 @@ func bufferedRunLenHint(tables []memtable.Table) int {
 		}
 		total = saturatingAddNonNegativeInt(total, table.Len())
 	}
+	return boundedBufferedRunLenHint(total)
+}
+
+// bufferedRunLenHintMaxCapacity keeps duplicate-heavy pending-run rebuilds from
+// sizing maps to the full historical mutation count when the final cardinality
+// may be much smaller.
+const bufferedRunLenHintMaxCapacity = 1 << 16
+
+func boundedBufferedRunLenHint(total int) int {
+	if total <= 0 {
+		return 0
+	}
+	if total > bufferedRunLenHintMaxCapacity {
+		return bufferedRunLenHintMaxCapacity
+	}
 	return total
 }
 
