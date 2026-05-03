@@ -355,6 +355,21 @@ Reference phases:
 
 ## Reporting Template
 
+When a run produces the canonical artifact directories under one root, generate
+the full human-readable HTML report before posting or reviewing results:
+
+```sh
+go run ./cmd/benchmark_run_report \
+  -run-root "$RUN_ROOT" \
+  -out "$RUN_ROOT/deep_report.html" \
+  -title "TreeDB Canonical Benchmark Report"
+```
+
+The deep report preserves full raw-engine, collection, Mongo full-sweep,
+client-mode, and reader/writer scaling tables. It also renders inline SVG charts
+for TreeDB-vs-MongoDB load, disk, read fanout, writer scaling, and client-mode
+load comparisons.
+
 Use this shape in PR and issue comments:
 
 ```md
