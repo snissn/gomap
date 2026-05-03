@@ -101,7 +101,7 @@ func (r valueReader) ReadLeafLogPageUnsafeTo(ptr page.LeafLogPtr, dst []byte) ([
 		return nil, false, err
 	}
 	if r.leafPageCache != nil && cap(dst) >= page.PageSize && len(val) == page.PageSize {
-		r.leafPageCache.store(ptr, val)
+		r.leafPageCache.storeReadMiss(ptr, val)
 	}
 	return val, usedDst, nil
 }

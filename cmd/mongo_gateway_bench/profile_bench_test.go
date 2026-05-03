@@ -802,6 +802,8 @@ func reportProfileBenchBackendVlogMmapStats(b *testing.B, after, before map[stri
 	reportPerDoc("backend_outer_leaf_cache_misses/doc", "treedb.process.read_path.outer_leaf.cache.misses")
 	reportPerDoc("backend_outer_leaf_cache_stores/doc", "treedb.process.read_path.outer_leaf.cache.stores")
 	reportPerDoc("backend_outer_leaf_cache_evictions/doc", "treedb.process.read_path.outer_leaf.cache.evictions")
+	reportPerDoc("backend_outer_leaf_cache_read_miss_admission_skips/doc", "treedb.process.read_path.outer_leaf.cache.read_miss_admission_skips")
+	reportPerDoc("backend_outer_leaf_cache_read_miss_admission_stores/doc", "treedb.process.read_path.outer_leaf.cache.read_miss_admission_stores")
 	reportProfileBenchBackendReadPathRatios(b, after, before)
 	hits := profileBenchDeltaUintStat(after, before, "treedb.vlog.mmap_read.hits")
 	fallbacks := profileBenchDeltaUintStat(after, before, "treedb.vlog.mmap_read.fallback_readat")

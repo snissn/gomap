@@ -24105,6 +24105,12 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_1024_hit_ratio"] = fmt.Sprintf("%.6f", float64(outerLeafReadStats.Recent1KHitsTotal)/float64(outerLeafReadStats.SamplesTotal))
 		stats["treedb.process.read_path.outer_leaf.cache_potential.capacity_4096_hit_ratio"] = fmt.Sprintf("%.6f", float64(outerLeafReadStats.Recent4KHitsTotal)/float64(outerLeafReadStats.SamplesTotal))
 	}
+	if _, ok := stats["treedb.process.read_path.outer_leaf.cache.read_miss_admission_skips"]; !ok {
+		stats["treedb.process.read_path.outer_leaf.cache.read_miss_admission_skips"] = "0"
+	}
+	if _, ok := stats["treedb.process.read_path.outer_leaf.cache.read_miss_admission_stores"]; !ok {
+		stats["treedb.process.read_path.outer_leaf.cache.read_miss_admission_stores"] = "0"
+	}
 	stats["treedb.process.flush_merge.shadowed_ops_total"] = fmt.Sprintf("%d", mergeShadowedOpsTotal)
 	stats["treedb.process.flush_merge.applied_ops_total"] = fmt.Sprintf("%d", mergeAppliedOpsTotal)
 	if mergeAppliedOpsTotal > 0 {

@@ -73,10 +73,12 @@ func newLeafPageReadCacheKey(ptr page.LeafLogPtr) leafPageReadCacheKey {
 }
 
 type leafPageReadCacheSlot struct {
-	mu    sync.RWMutex
-	key   leafPageReadCacheKey
-	data  []byte
-	valid bool
+	mu                     sync.RWMutex
+	key                    leafPageReadCacheKey
+	data                   []byte
+	valid                  bool
+	readMissCandidate      leafPageReadCacheKey
+	readMissCandidateValid bool
 }
 
 type leafPageReadCache struct {
@@ -87,16 +89,21 @@ type leafPageReadCache struct {
 	stores    atomic.Uint64
 	evictions atomic.Uint64
 	entries   atomic.Uint64
+
+	readMissAdmissionSkips  atomic.Uint64
+	readMissAdmissionStores atomic.Uint64
 }
 
 type leafPageReadCacheStats struct {
-	Hits      uint64
-	Misses    uint64
-	Stores    uint64
-	Evictions uint64
-	Entries   uint64
-	Capacity  uint64
-	Bytes     uint64
+	Hits                    uint64
+	Misses                  uint64
+	Stores                  uint64
+	Evictions               uint64
+	Entries                 uint64
+	Capacity                uint64
+	Bytes                   uint64
+	ReadMissAdmissionSkips  uint64
+	ReadMissAdmissionStores uint64
 }
 
 func newLeafPageReadCache(entries int) *leafPageReadCache {
@@ -113,21 +120,66 @@ func (c *leafPageReadCache) store(ptr page.LeafLogPtr, leafPage []byte) {
 	key := newLeafPageReadCacheKey(ptr)
 	slot := &c.slots[c.slotIndex(key)]
 	slot.mu.Lock()
-	wasValid := slot.valid
-	prevKey := slot.key
-	if cap(slot.data) < page.PageSize {
-		slot.data = make([]byte, page.PageSize)
-	}
-	slot.data = slot.data[:page.PageSize]
-	copy(slot.data, leafPage)
-	slot.key = key
-	slot.valid = true
+	result := slot.storeLocked(key, leafPage)
 	slot.mu.Unlock()
+	c.recordStore(result, key)
+}
+
+// storeReadMiss admits read-miss pages only after a repeated miss to the same
+// direct-mapped slot/key. Write-side stores remain immediate; this keeps
+// one-off sparse reads from copying 4KiB pages into the cache and evicting
+// recently-written leaves that are likely to be reused during publish/apply.
+func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte) {
+	if c == nil || len(c.slots) == 0 || len(leafPage) != page.PageSize {
+		return
+	}
+	key := newLeafPageReadCacheKey(ptr)
+	slot := &c.slots[c.slotIndex(key)]
+	slot.mu.Lock()
+	if slot.valid && slot.key == key {
+		slot.mu.Unlock()
+		return
+	}
+	if !slot.readMissCandidateValid || slot.readMissCandidate != key {
+		slot.readMissCandidate = key
+		slot.readMissCandidateValid = true
+		slot.mu.Unlock()
+		c.readMissAdmissionSkips.Add(1)
+		return
+	}
+	result := slot.storeLocked(key, leafPage)
+	slot.mu.Unlock()
+	c.readMissAdmissionStores.Add(1)
+	c.recordStore(result, key)
+}
+
+type leafPageReadCacheStoreResult struct {
+	wasValid bool
+	prevKey  leafPageReadCacheKey
+}
+
+func (s *leafPageReadCacheSlot) storeLocked(key leafPageReadCacheKey, leafPage []byte) leafPageReadCacheStoreResult {
+	result := leafPageReadCacheStoreResult{
+		wasValid: s.valid,
+		prevKey:  s.key,
+	}
+	if cap(s.data) < page.PageSize {
+		s.data = make([]byte, page.PageSize)
+	}
+	s.data = s.data[:page.PageSize]
+	copy(s.data, leafPage)
+	s.key = key
+	s.valid = true
+	s.readMissCandidateValid = false
+	return result
+}
+
+func (c *leafPageReadCache) recordStore(result leafPageReadCacheStoreResult, key leafPageReadCacheKey) {
 	c.stores.Add(1)
 	switch {
-	case !wasValid:
+	case !result.wasValid:
 		c.entries.Add(1)
-	case prevKey != key:
+	case result.prevKey != key:
 		c.evictions.Add(1)
 	}
 }
@@ -181,13 +233,15 @@ func (c *leafPageReadCache) stats() leafPageReadCacheStats {
 	}
 	entries := c.entries.Load()
 	return leafPageReadCacheStats{
-		Hits:      c.hits.Load(),
-		Misses:    c.misses.Load(),
-		Stores:    c.stores.Load(),
-		Evictions: c.evictions.Load(),
-		Entries:   entries,
-		Capacity:  uint64(len(c.slots)),
-		Bytes:     entries * page.PageSize,
+		Hits:                    c.hits.Load(),
+		Misses:                  c.misses.Load(),
+		Stores:                  c.stores.Load(),
+		Evictions:               c.evictions.Load(),
+		Entries:                 entries,
+		Capacity:                uint64(len(c.slots)),
+		Bytes:                   entries * page.PageSize,
+		ReadMissAdmissionSkips:  c.readMissAdmissionSkips.Load(),
+		ReadMissAdmissionStores: c.readMissAdmissionStores.Load(),
 	}
 }
 

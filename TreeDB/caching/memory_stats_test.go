@@ -105,6 +105,8 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 		"treedb.process.read_path.outer_leaf.cache_potential.capacity_256_hits_total",
 		"treedb.process.read_path.outer_leaf.cache_potential.capacity_1024_hits_total",
 		"treedb.process.read_path.outer_leaf.cache_potential.capacity_4096_hits_total",
+		"treedb.process.read_path.outer_leaf.cache.read_miss_admission_skips",
+		"treedb.process.read_path.outer_leaf.cache.read_miss_admission_stores",
 		"treedb.process.batch.set.calls_total",
 		"treedb.process.batch.set.bytes_total",
 		"treedb.process.batch.set_view.calls_total",

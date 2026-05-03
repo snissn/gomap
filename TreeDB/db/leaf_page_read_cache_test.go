@@ -317,7 +317,7 @@ func TestValueReaderLeafLogPageUnsafeToSmallDstBypassesCache(t *testing.T) {
 	}
 }
 
-func TestValueReaderLeafLogPageUnsafeToStoresFallbackLeafPage(t *testing.T) {
+func TestValueReaderLeafLogPageUnsafeToAdmitsRepeatedReadMiss(t *testing.T) {
 	cache := newLeafPageReadCache(8)
 	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
 	leaf := bytes.Repeat([]byte{0x44}, page.PageSize)
@@ -342,19 +342,78 @@ func TestValueReaderLeafLogPageUnsafeToStoresFallbackLeafPage(t *testing.T) {
 		t.Fatalf("fallback ReadUnsafeTo calls=%d, want 1", fallback.readUnsafeToCalls)
 	}
 
-	fallback.err = errors.New("fallback should not be used after cache store")
+	if stats := cache.stats(); stats.Hits != 0 || stats.Misses != 1 || stats.Stores != 0 || stats.ReadMissAdmissionSkips != 1 {
+		t.Fatalf("stats=%+v, want first miss to skip read-miss admission", stats)
+	}
+
 	again, usedDst, err := reader.ReadLeafLogPageUnsafeTo(ptr, dst[:0])
+	if err != nil {
+		t.Fatalf("ReadLeafLogPageUnsafeTo second miss: %v", err)
+	}
+	if !usedDst || !bytes.Equal(again, leaf) {
+		t.Fatalf("second fallback leaf mismatch usedDst=%v", usedDst)
+	}
+	if fallback.readUnsafeToCalls != 2 {
+		t.Fatalf("fallback calls after second miss=%d, want 2", fallback.readUnsafeToCalls)
+	}
+	if stats := cache.stats(); stats.Hits != 0 || stats.Misses != 2 || stats.Stores != 1 || stats.ReadMissAdmissionStores != 1 {
+		t.Fatalf("stats=%+v, want repeated read miss admitted", stats)
+	}
+
+	fallback.err = errors.New("fallback should not be used after repeated read-miss admission")
+	third, usedDst, err := reader.ReadLeafLogPageUnsafeTo(ptr, dst[:0])
 	if err != nil {
 		t.Fatalf("ReadLeafLogPageUnsafeTo cached: %v", err)
 	}
-	if !usedDst || !bytes.Equal(again, leaf) {
+	if !usedDst || !bytes.Equal(third, leaf) {
 		t.Fatalf("cached leaf mismatch usedDst=%v", usedDst)
 	}
-	if fallback.readUnsafeToCalls != 1 {
-		t.Fatalf("fallback calls after cache hit=%d, want 1", fallback.readUnsafeToCalls)
+	if fallback.readUnsafeToCalls != 2 {
+		t.Fatalf("fallback calls after cache hit=%d, want 2", fallback.readUnsafeToCalls)
 	}
-	if stats := cache.stats(); stats.Hits != 1 || stats.Misses != 1 || stats.Stores != 1 {
-		t.Fatalf("stats=%+v, want one miss, one store, one hit", stats)
+	if stats := cache.stats(); stats.Hits != 1 || stats.Misses != 2 || stats.Stores != 1 {
+		t.Fatalf("stats=%+v, want two misses, one admitted store, one hit", stats)
+	}
+}
+
+func TestValueReaderLeafLogPageUnsafeToOneOffReadMissDoesNotEvictStoredLeaf(t *testing.T) {
+	cache := newLeafPageReadCache(1)
+	hotPtr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+	coldPtr := page.LeafLogPtr{FileID: 7, Offset: 256, RecordLengthHint: 4096}
+	hotLeaf := bytes.Repeat([]byte{0x33}, page.PageSize)
+	coldLeaf := bytes.Repeat([]byte{0x55}, page.PageSize)
+	cache.store(hotPtr, hotLeaf)
+
+	fallback := &leafPageCacheTestFallback{data: coldLeaf}
+	reader := valueReader{
+		vlogs:         fallback,
+		leafPageCache: cache,
+	}
+	dst := make([]byte, 0, page.PageSize)
+	got, usedDst, err := reader.ReadLeafLogPageUnsafeTo(coldPtr, dst)
+	if err != nil {
+		t.Fatalf("ReadLeafLogPageUnsafeTo cold miss: %v", err)
+	}
+	if !usedDst || !bytes.Equal(got, coldLeaf) {
+		t.Fatalf("cold fallback mismatch usedDst=%v", usedDst)
+	}
+	if fallback.readUnsafeToCalls != 1 {
+		t.Fatalf("fallback calls=%d, want 1", fallback.readUnsafeToCalls)
+	}
+	if stats := cache.stats(); stats.Stores != 1 || stats.Evictions != 0 || stats.ReadMissAdmissionSkips != 1 {
+		t.Fatalf("stats=%+v, want one-off read miss not to evict stored hot leaf", stats)
+	}
+
+	fallback.err = errors.New("hot leaf should still be cached")
+	got, usedDst, err = reader.ReadLeafLogPageUnsafeTo(hotPtr, dst[:0])
+	if err != nil {
+		t.Fatalf("ReadLeafLogPageUnsafeTo hot hit: %v", err)
+	}
+	if !usedDst || !bytes.Equal(got, hotLeaf) {
+		t.Fatalf("hot cache mismatch usedDst=%v", usedDst)
+	}
+	if stats := cache.stats(); stats.Hits != 1 || stats.Stores != 1 || stats.Evictions != 0 {
+		t.Fatalf("stats=%+v, want hot cache entry retained", stats)
 	}
 }
 
