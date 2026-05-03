@@ -48,6 +48,7 @@ const (
 	// and visibility lag.
 	DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits = 4
 	defaultCollectionUpdateCombineMaxBatch              = 256
+	defaultCollectionUpdateCombineDrainYields           = 1
 	collectionUpdateCombineIdleTTL                      = 30 * time.Second
 )
 
@@ -5676,6 +5677,7 @@ type collectionUpdateCombiner struct {
 	batchScratch []collectionUpdateCombineRequest
 	itemsScratch []UpdateBatchItem
 	waiters      sync.Pool
+	drainYield   func()
 }
 
 const collectionUpdateCombineInlineDocumentIDMax = 64
@@ -6013,6 +6015,7 @@ func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionU
 	clear(combiner.batchScratch)
 	batch := combiner.batchScratch[:0]
 	batch = append(batch, first)
+	drainYields := 0
 	for len(batch) < batchCap {
 		select {
 		case req, ok := <-combiner.requests:
@@ -6024,6 +6027,15 @@ func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionU
 			}
 			batch = append(batch, req)
 		default:
+			if drainYields < defaultCollectionUpdateCombineDrainYields {
+				drainYields++
+				if combiner.drainYield != nil {
+					combiner.drainYield()
+				} else {
+					runtime.Gosched()
+				}
+				continue
+			}
 			combiner.runBatch(batch)
 			clear(batch)
 			combiner.batchScratch = batch[:0]
