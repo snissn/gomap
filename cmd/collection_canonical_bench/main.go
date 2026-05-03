@@ -334,7 +334,7 @@ func run(argv []string) error {
 		}
 	}
 	if !cfg.SkipFullLeafgen {
-		if err := runFullLeafgenFixture(cfg, canon); err != nil {
+		if err := runFullLeafgenFixture(cfg, canon, formats); err != nil {
 			return err
 		}
 	}
@@ -428,7 +428,7 @@ func parseConfig(args []string) (config, error) {
 		Count:                     1,
 		TreeEngine:                "production_fast",
 		Profile:                   "fast",
-		Formats:                   "json,template-v1",
+		Formats:                   "template-v1,bson,json",
 		StorageCells:              "index-vlog",
 		LeafSegmentTargetBytes:    1048576,
 		LeafgenPackFrameK:         16,
@@ -446,7 +446,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.Count, "count", cfg.Count, "go test -count for timed matrix")
 	fs.StringVar(&cfg.TreeEngine, "tree-engine", cfg.TreeEngine, "TreeDB collection benchmark engine")
 	fs.StringVar(&cfg.Profile, "profile", cfg.Profile, "Fixture/raw TreeDB profile")
-	fs.StringVar(&cfg.Formats, "formats", cfg.Formats, "Comma-separated TreeDB document formats for timed matrix")
+	fs.StringVar(&cfg.Formats, "formats", cfg.Formats, "Comma-separated TreeDB document formats for timed matrix and full leafgen fixture")
 	fs.StringVar(&cfg.StorageCells, "storage-cells", cfg.StorageCells, "collection_bench_matrix storage cells")
 	fs.Int64Var(&cfg.LeafSegmentTargetBytes, "leaf-segment-target-bytes", cfg.LeafSegmentTargetBytes, "Leaf vlog segment target bytes used by canonical compacted runs")
 	fs.IntVar(&cfg.LeafgenPackFrameK, "leafgen-pack-frame-k", cfg.LeafgenPackFrameK, "Leaf pages per grouped frame for full leafgen pack")
@@ -540,10 +540,21 @@ func runOfflineRewriteMatrix(cfg config, canon *canonicalRun) error {
 	return parseOfflineRewriteTSV(canon, filepath.Join(rewriteDir, "compression_matrix.tsv"), cfg)
 }
 
-func runFullLeafgenFixture(cfg config, canon *canonicalRun) error {
-	fullDir := filepath.Join(cfg.OutDir, "full_leafgen_pack_gc", canonicalConfigName("treedb", "template-v1", "collection", cfg.Indexes))
-	summaryPath := filepath.Join(cfg.OutDir, "full_leafgen_pack_gc", "fixture_summary.json")
-	stderrPath := filepath.Join(cfg.OutDir, "logs", "full_leafgen_pack_gc.stderr.log")
+func runFullLeafgenFixture(cfg config, canon *canonicalRun, formats []string) error {
+	for _, format := range formats {
+		if err := runFullLeafgenFixtureForFormat(cfg, canon, format); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func runFullLeafgenFixtureForFormat(cfg config, canon *canonicalRun, format string) error {
+	format = canonicalFormat(format)
+	configName := canonicalConfigName("treedb", format, "collection", cfg.Indexes)
+	fullDir := filepath.Join(cfg.OutDir, "full_leafgen_pack_gc", configName)
+	summaryPath := filepath.Join(cfg.OutDir, "full_leafgen_pack_gc", configName+".fixture_summary.json")
+	stderrPath := filepath.Join(cfg.OutDir, "logs", "full_leafgen_pack_gc_"+strings.ReplaceAll(format, "-", "_")+".stderr.log")
 	if err := os.MkdirAll(filepath.Dir(summaryPath), 0755); err != nil {
 		return err
 	}
@@ -553,7 +564,7 @@ func runFullLeafgenFixture(cfg config, canon *canonicalRun) error {
 		"-reset",
 		"-docs", strconv.Itoa(cfg.Docs),
 		"-batch-size", strconv.Itoa(cfg.BatchSize),
-		"-format", "template-v1",
+		"-format", format,
 		"-indexes", strconv.Itoa(cfg.Indexes),
 		"-profile", cfg.Profile,
 		"-progress=false",
@@ -590,7 +601,7 @@ func runFullLeafgenFixture(cfg config, canon *canonicalRun) error {
 		}
 	}
 	canon.Commands = append(canon.Commands, commandRecord{
-		Name:     "full_leafgen_pack_gc",
+		Name:     "full_leafgen_pack_gc_" + strings.ReplaceAll(format, "-", "_"),
 		Command:  append([]string{filepath.Join(cfg.RepoRoot, "bin", "collection-load-fixture")}, args...),
 		WorkDir:  cfg.RepoRoot,
 		LogPath:  stderrPath,
@@ -598,11 +609,11 @@ func runFullLeafgenFixture(cfg config, canon *canonicalRun) error {
 		Duration: time.Since(start).String(),
 	})
 	if err != nil {
-		return fmt.Errorf("full leafgen fixture: %w", err)
+		return fmt.Errorf("full leafgen fixture %s: %w", format, err)
 	}
 	canon.Artifacts["full_leafgen_dir"] = filepath.Dir(summaryPath)
-	canon.Artifacts["full_leafgen_fixture_dir"] = fullDir
-	canon.Artifacts["full_leafgen_summary_json"] = summaryPath
+	canon.Artifacts["full_leafgen_fixture_dir_"+strings.ReplaceAll(format, "-", "_")] = fullDir
+	canon.Artifacts["full_leafgen_summary_json_"+strings.ReplaceAll(format, "-", "_")] = summaryPath
 	return parseFullLeafgenSummary(canon, summaryPath, cfg)
 }
 
@@ -1105,30 +1116,31 @@ func buildCompactedComparisons(canon *canonicalRun) []comparisonRow {
 		return nil
 	}
 	var comparisons []comparisonRow
-	treeDBConfig := compactedTreeDBConfigName(canon)
 	sqliteConfigs := []string{sqliteNativeConfigName(canon), sqliteJSONConfigName(canon)}
-	for _, treedbPhase := range []string{phaseOfflineRewrite, phaseFullLeafgenPackGC} {
-		treeRow := findResult(canon.Results, treeDBConfig, treedbPhase)
-		if !hasPositiveBytesPerDoc(treeRow) {
-			continue
-		}
-		for _, sqliteConfig := range sqliteConfigs {
-			sqliteRow := findResult(canon.Results, sqliteConfig, phaseSQLiteVacuum)
-			if !hasPositiveBytesPerDoc(sqliteRow) {
+	for _, treeDBConfig := range compactedTreeDBConfigNames(canon) {
+		for _, treedbPhase := range []string{phaseOfflineRewrite, phaseFullLeafgenPackGC} {
+			treeRow := findResult(canon.Results, treeDBConfig, treedbPhase)
+			if !hasPositiveBytesPerDoc(treeRow) {
 				continue
 			}
-			comparisonName := fmt.Sprintf("%s_%s_vs_%s_%s", treeDBConfig, treedbPhase, sqliteConfig, phaseSQLiteVacuum)
-			comparisons = append(comparisons, comparisonRow{
-				ComparisonName:    comparisonName,
-				TreeDBConfigName:  treeDBConfig,
-				TreeDBPhase:       treedbPhase,
-				SQLiteConfigName:  sqliteConfig,
-				SQLitePhase:       phaseSQLiteVacuum,
-				TreeDBBytesPerDoc: *treeRow.BytesPerDoc,
-				SQLiteBytesPerDoc: *sqliteRow.BytesPerDoc,
-				SmallerRatio:      *sqliteRow.BytesPerDoc / *treeRow.BytesPerDoc,
-				ComparisonBasis:   "TreeDB compacted phase versus SQLite after VACUUM",
-			})
+			for _, sqliteConfig := range sqliteConfigs {
+				sqliteRow := findResult(canon.Results, sqliteConfig, phaseSQLiteVacuum)
+				if !hasPositiveBytesPerDoc(sqliteRow) {
+					continue
+				}
+				comparisonName := fmt.Sprintf("%s_%s_vs_%s_%s", treeDBConfig, treedbPhase, sqliteConfig, phaseSQLiteVacuum)
+				comparisons = append(comparisons, comparisonRow{
+					ComparisonName:    comparisonName,
+					TreeDBConfigName:  treeDBConfig,
+					TreeDBPhase:       treedbPhase,
+					SQLiteConfigName:  sqliteConfig,
+					SQLitePhase:       phaseSQLiteVacuum,
+					TreeDBBytesPerDoc: *treeRow.BytesPerDoc,
+					SQLiteBytesPerDoc: *sqliteRow.BytesPerDoc,
+					SmallerRatio:      *sqliteRow.BytesPerDoc / *treeRow.BytesPerDoc,
+					ComparisonBasis:   "TreeDB compacted phase versus SQLite after VACUUM",
+				})
+			}
 		}
 	}
 	return comparisons
@@ -1483,6 +1495,26 @@ func canonicalConfigName(engine, format, shape string, indexes int) string {
 
 func compactedTreeDBConfigName(canon *canonicalRun) string {
 	return canonicalConfigName("treedb", "template-v1", "collection", canonicalIndexCount(canon))
+}
+
+func compactedTreeDBConfigNames(canon *canonicalRun) []string {
+	if canon == nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var out []string
+	for _, format := range canon.Config.Formats {
+		name := canonicalConfigName("treedb", format, "collection", canonicalIndexCount(canon))
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	if len(out) == 0 {
+		out = append(out, compactedTreeDBConfigName(canon))
+	}
+	return out
 }
 
 func sqliteJSONConfigName(canon *canonicalRun) string {

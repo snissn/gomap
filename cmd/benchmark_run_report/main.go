@@ -139,9 +139,15 @@ type loadModeRow struct {
 	RawJSON       string
 }
 
+type gitIdentity struct {
+	Label string
+	Hash  string
+}
+
 type reportData struct {
 	Config                config
 	GeneratedAt           time.Time
+	Git                   []gitIdentity
 	RawEngine             []rawEngineRun
 	Collections           []collectionRow
 	CollectionComparisons []collectionComparison
@@ -205,6 +211,7 @@ func loadReportData(cfg config) (reportData, error) {
 	data := reportData{
 		Config:       cfg,
 		GeneratedAt:  time.Now().UTC(),
+		Git:          loadGitIdentity(cfg.RunRoot),
 		MongoScaling: make(map[int][]mongoSummaryRow),
 	}
 	if rows, warnings := loadRawEngine(filepath.Join(cfg.RunRoot, "raw_engine_full_matrix")); len(rows) > 0 || len(warnings) > 0 {
@@ -238,6 +245,32 @@ func loadReportData(cfg config) (reportData, error) {
 		}
 	}
 	return data, nil
+}
+
+func loadGitIdentity(runRoot string) []gitIdentity {
+	path := filepath.Join(runRoot, "HEAD.txt")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var out []gitIdentity
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		out = append(out, gitIdentity{Label: key, Hash: value})
+	}
+	return out
 }
 
 func loadRawEngine(dir string) ([]rawEngineRun, []string) {
@@ -639,6 +672,13 @@ func renderHTML(data reportData) string {
 	b.WriteString("</head>\n<body>\n")
 	b.WriteString("<header><div><p class=\"eyebrow\">TreeDB benchmark evidence</p><h1>" + esc(data.Config.Title) + "</h1>")
 	b.WriteString("<p class=\"subtle\">Generated " + esc(data.GeneratedAt.Format(time.RFC3339)) + " from <code>" + esc(data.Config.RunRoot) + "</code>.</p></div>")
+	if len(data.Git) > 0 {
+		b.WriteString("<p class=\"subtle\">Git identity:")
+		for _, item := range data.Git {
+			b.WriteString(" <code>" + esc(item.Label) + "=" + esc(item.Hash) + "</code>")
+		}
+		b.WriteString("</p>")
+	}
 	b.WriteString("<nav><a href=\"#mongo-full\">Mongo full sweep</a><a href=\"#mongo-load\">Load modes</a><a href=\"#scaling\">Scaling</a><a href=\"#collections\">Collections</a><a href=\"#raw-engine\">Raw engine</a></nav></header>\n")
 	if len(data.Warnings) > 0 {
 		b.WriteString("<section class=\"warn\"><h2>Warnings</h2><ul>")
@@ -811,23 +851,15 @@ func renderCollections(b *strings.Builder, rows []collectionRow, comps []collect
 		return
 	}
 	b.WriteString("<section id=\"collections\"><h2>Collections vs SQLite</h2>")
-	b.WriteString("<p class=\"subtle\">Charts show post-insert throughput and compacted bytes/doc for the primary TreeDB template-v1 and SQLite baselines. Disclosure tables preserve the parsed rows and compacted-state comparisons.</p>")
+	b.WriteString("<p class=\"subtle\">Charts show post-insert throughput and compacted bytes/doc for TreeDB collection formats and SQLite baselines. Disclosure tables preserve the parsed rows and compacted-state comparisons.</p>")
 	b.WriteString("<div class=\"chart-grid\">")
 	docsRows := collectionDocsRows(rows)
 	if len(docsRows.Categories) > 0 {
-		b.WriteString(compactVerticalBarChart("Post-insert throughput by index count", docsRows.Categories, "index count", []chartSeries{
-			{Name: "TreeDB template-v1", Values: docsRows.TreeDB, Color: "#2867c7"},
-			{Name: "SQLite native", Values: docsRows.SQLiteNative, Color: "#1f8a5b"},
-			{Name: "SQLite JSON", Values: docsRows.SQLiteJSON, Color: "#bd6a21"},
-		}, "docs/sec"))
+		b.WriteString(compactVerticalBarChart("Post-insert throughput by index count", docsRows.Categories, "index count", collectionSeries(docsRows, "docs"), "docs/sec"))
 	}
 	diskRows := collectionDiskRows(rows)
 	if len(diskRows.Categories) > 0 {
-		b.WriteString(compactVerticalBarChart("Compacted bytes/doc by index count", diskRows.Categories, "index count", []chartSeries{
-			{Name: "TreeDB leafgen pack/GC", Values: diskRows.TreeDB, Color: "#2867c7"},
-			{Name: "SQLite native VACUUM", Values: diskRows.SQLiteNative, Color: "#1f8a5b"},
-			{Name: "SQLite JSON VACUUM", Values: diskRows.SQLiteJSON, Color: "#bd6a21"},
-		}, "B/doc"))
+		b.WriteString(compactVerticalBarChart("Compacted bytes/doc by index count", diskRows.Categories, "index count", collectionSeries(diskRows, "bytes"), "B/doc"))
 	}
 	b.WriteString("</div>")
 	b.WriteString("<details><summary>Collection highlight rows</summary>")
@@ -852,17 +884,21 @@ func renderCollections(b *strings.Builder, rows []collectionRow, comps []collect
 }
 
 type collectionDiskHighlight struct {
-	Categories   []string
-	TreeDB       []float64
-	SQLiteNative []float64
-	SQLiteJSON   []float64
+	Categories       []string
+	TreeDBTemplateV1 []float64
+	TreeDBBSON       []float64
+	TreeDBJSON       []float64
+	SQLiteNative     []float64
+	SQLiteJSON       []float64
 }
 
 func collectionDocsRows(rows []collectionRow) collectionDiskHighlight {
 	var out collectionDiskHighlight
 	for _, idx := range sortedCollectionIndexes(rows) {
 		out.Categories = append(out.Categories, indexCountLabel(idx))
-		out.TreeDB = append(out.TreeDB, collectionValue(rows, idx, fmt.Sprintf("treedb_template_v1_collection_%d_indexes", idx), "post_insert", "docs"))
+		out.TreeDBTemplateV1 = append(out.TreeDBTemplateV1, collectionValue(rows, idx, fmt.Sprintf("treedb_template_v1_collection_%d_indexes", idx), "post_insert", "docs"))
+		out.TreeDBBSON = append(out.TreeDBBSON, collectionValue(rows, idx, fmt.Sprintf("treedb_bson_collection_%d_indexes", idx), "post_insert", "docs"))
+		out.TreeDBJSON = append(out.TreeDBJSON, collectionValue(rows, idx, fmt.Sprintf("treedb_json_collection_%d_indexes", idx), "post_insert", "docs"))
 		out.SQLiteNative = append(out.SQLiteNative, collectionValue(rows, idx, fmt.Sprintf("sqlite_native_columns_%d_indexes", idx), "post_insert", "docs"))
 		out.SQLiteJSON = append(out.SQLiteJSON, collectionValue(rows, idx, fmt.Sprintf("sqlite_json_%d_indexes", idx), "post_insert", "docs"))
 	}
@@ -873,9 +909,47 @@ func collectionDiskRows(rows []collectionRow) collectionDiskHighlight {
 	var out collectionDiskHighlight
 	for _, idx := range sortedCollectionIndexes(rows) {
 		out.Categories = append(out.Categories, indexCountLabel(idx))
-		out.TreeDB = append(out.TreeDB, collectionValue(rows, idx, fmt.Sprintf("treedb_template_v1_collection_%d_indexes", idx), "full_leafgen_pack_gc", "bytes"))
+		out.TreeDBTemplateV1 = append(out.TreeDBTemplateV1, collectionValue(rows, idx, fmt.Sprintf("treedb_template_v1_collection_%d_indexes", idx), "full_leafgen_pack_gc", "bytes"))
+		out.TreeDBBSON = append(out.TreeDBBSON, collectionValue(rows, idx, fmt.Sprintf("treedb_bson_collection_%d_indexes", idx), "full_leafgen_pack_gc", "bytes"))
+		out.TreeDBJSON = append(out.TreeDBJSON, collectionValue(rows, idx, fmt.Sprintf("treedb_json_collection_%d_indexes", idx), "full_leafgen_pack_gc", "bytes"))
 		out.SQLiteNative = append(out.SQLiteNative, collectionValue(rows, idx, fmt.Sprintf("sqlite_native_columns_%d_indexes", idx), "sqlite_vacuum", "bytes"))
 		out.SQLiteJSON = append(out.SQLiteJSON, collectionValue(rows, idx, fmt.Sprintf("sqlite_json_%d_indexes", idx), "sqlite_vacuum", "bytes"))
+	}
+	return out
+}
+
+func collectionSeries(rows collectionDiskHighlight, kind string) []chartSeries {
+	treeTemplateLabel := "TreeDB template-v1"
+	treeBSONLabel := "TreeDB BSON"
+	treeJSONLabel := "TreeDB JSON"
+	sqliteNativeLabel := "SQLite native"
+	sqliteJSONLabel := "SQLite JSON"
+	if kind == "bytes" {
+		treeTemplateLabel += " leafgen"
+		treeBSONLabel += " leafgen"
+		treeJSONLabel += " leafgen"
+		sqliteNativeLabel += " VACUUM"
+		sqliteJSONLabel += " VACUUM"
+	}
+	series := []chartSeries{
+		{Name: treeTemplateLabel, Values: rows.TreeDBTemplateV1, Color: "#2867c7"},
+		{Name: treeBSONLabel, Values: rows.TreeDBBSON, Color: "#6b7fd7"},
+		{Name: treeJSONLabel, Values: rows.TreeDBJSON, Color: "#bd6a21"},
+		{Name: sqliteNativeLabel, Values: rows.SQLiteNative, Color: "#1f8a5b"},
+		{Name: sqliteJSONLabel, Values: rows.SQLiteJSON, Color: "#b94242"},
+	}
+	return nonZeroSeries(series)
+}
+
+func nonZeroSeries(series []chartSeries) []chartSeries {
+	out := make([]chartSeries, 0, len(series))
+	for _, s := range series {
+		for _, v := range s.Values {
+			if v > 0 {
+				out = append(out, s)
+				break
+			}
+		}
 	}
 	return out
 }
@@ -886,16 +960,18 @@ func renderCollectionHighlight(b *strings.Builder, rows []collectionRow) {
 		body = append(body, []string{
 			strconv.Itoa(idx),
 			fmtOps(collectionValue(rows, idx, fmt.Sprintf("treedb_template_v1_collection_%d_indexes", idx), "post_insert", "docs")),
+			fmtOps(collectionValue(rows, idx, fmt.Sprintf("treedb_bson_collection_%d_indexes", idx), "post_insert", "docs")),
+			fmtOps(collectionValue(rows, idx, fmt.Sprintf("treedb_json_collection_%d_indexes", idx), "post_insert", "docs")),
 			fmtOps(collectionValue(rows, idx, fmt.Sprintf("sqlite_native_columns_%d_indexes", idx), "post_insert", "docs")),
 			fmtOps(collectionValue(rows, idx, fmt.Sprintf("sqlite_json_%d_indexes", idx), "post_insert", "docs")),
-			fmtFloat(collectionValue(rows, idx, fmt.Sprintf("treedb_template_v1_collection_%d_indexes", idx), "post_insert", "bytes"), 1),
-			fmtFloat(collectionValue(rows, idx, fmt.Sprintf("treedb_template_v1_collection_%d_indexes", idx), "offline_rewrite", "bytes"), 1),
 			fmtFloat(collectionValue(rows, idx, fmt.Sprintf("treedb_template_v1_collection_%d_indexes", idx), "full_leafgen_pack_gc", "bytes"), 1),
+			fmtFloat(collectionValue(rows, idx, fmt.Sprintf("treedb_bson_collection_%d_indexes", idx), "full_leafgen_pack_gc", "bytes"), 1),
+			fmtFloat(collectionValue(rows, idx, fmt.Sprintf("treedb_json_collection_%d_indexes", idx), "full_leafgen_pack_gc", "bytes"), 1),
 			fmtFloat(collectionValue(rows, idx, fmt.Sprintf("sqlite_native_columns_%d_indexes", idx), "sqlite_vacuum", "bytes"), 1),
 			fmtFloat(collectionValue(rows, idx, fmt.Sprintf("sqlite_json_%d_indexes", idx), "sqlite_vacuum", "bytes"), 1),
 		})
 	}
-	writeTable(b, []string{"indexes", "TreeDB template docs/s", "SQLite native docs/s", "SQLite JSON docs/s", "TreeDB post B/doc", "TreeDB rewrite B/doc", "TreeDB leafgen B/doc", "SQLite native VACUUM B/doc", "SQLite JSON VACUUM B/doc"}, body, numericColumns(0, 9))
+	writeTable(b, []string{"indexes", "TreeDB template-v1 docs/s", "TreeDB BSON docs/s", "TreeDB JSON docs/s", "SQLite native docs/s", "SQLite JSON docs/s", "TreeDB template-v1 leafgen B/doc", "TreeDB BSON leafgen B/doc", "TreeDB JSON leafgen B/doc", "SQLite native VACUUM B/doc", "SQLite JSON VACUUM B/doc"}, body, numericColumns(0, 10))
 }
 
 func sortedCollectionIndexes(rows []collectionRow) []int {
@@ -1448,7 +1524,7 @@ func verticalBarChartWithSize(title string, categories []string, xAxisLabel stri
 	for i, cat := range categories {
 		groupX := left + float64(i)*groupW
 		for sidx, s := range series {
-			if sidx >= len(s.Values) {
+			if i >= len(s.Values) {
 				continue
 			}
 			v := s.Values[i]

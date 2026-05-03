@@ -125,10 +125,12 @@ The default run uses:
 
 ## Adding Configurations
 
-For TreeDB document formats, pass `-formats`:
+For TreeDB document formats, pass `-formats`. The default exercises
+`template-v1`, `bson`, and `json` for timed inserts and full leafgen/GC
+compacted-size fixtures:
 
 ```bash
-./scripts/bench_collections_canonical.sh -formats json,template-v1
+./scripts/bench_collections_canonical.sh -formats template-v1,bson,json
 ```
 
 For a different primary index-count shape:

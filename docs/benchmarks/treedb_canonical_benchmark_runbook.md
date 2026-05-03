@@ -136,6 +136,7 @@ OUT_ROOT=/tmp/collections_canonical_$(date +%Y%m%d_%H%M%S)
 for indexes in 0 1 2; do
   ./scripts/bench_collections_canonical.sh \
     -out-dir "$OUT_ROOT/indexes_${indexes}" \
+    -formats template-v1,bson,json \
     -indexes "$indexes"
 done
 ```
@@ -147,7 +148,7 @@ The canonical runner emits:
 - `benchmark_matrix.csv`
 - `timed_matrix/`
 - `offline_rewrite/`
-- `full_leafgen_pack_gc/`
+- `full_leafgen_pack_gc/` with per-format full leafgen/GC fixture summaries
 
 For broader matrix work, build and run:
 
