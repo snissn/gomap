@@ -174,13 +174,23 @@ func (db *DB) orderedRootPublishOptionsForPolicy(policy OrderedRootStoragePolicy
 }
 
 func (db *DB) orderedRootZipperForOptions(idx *indexGen, opts orderedRootPublishOptions) (*zipper.Zipper, error) {
+	if idx == nil {
+		return nil, errors.New("missing index")
+	}
+	return db.orderedRootZipperForOptionsWithAllocator(idx, opts, idx.allocator)
+}
+
+func (db *DB) orderedRootZipperForOptionsWithAllocator(idx *indexGen, opts orderedRootPublishOptions, alloc zipper.PageAllocator) (*zipper.Zipper, error) {
 	if idx == nil || idx.zipper == nil {
 		return nil, errors.New("missing index")
 	}
-	if db != nil && db.orderedRootOptionsUseDefaultZipper(opts) {
+	if alloc == nil {
+		return nil, errors.New("missing allocator")
+	}
+	if db != nil && alloc == idx.allocator && db.orderedRootOptionsUseDefaultZipper(opts) {
 		return idx.zipper, nil
 	}
-	z := idx.zipper.CloneWithAllocator(idx.allocator)
+	z := idx.zipper.CloneWithAllocator(alloc)
 	z.SetOuterLeavesInValueLog(opts.outerLeavesInValueLog)
 	z.SetIndexInternalBaseDelta(opts.internalBaseDelta && !opts.outerLeavesInValueLog)
 	if opts.outerLeavesInValueLog {
@@ -588,8 +598,29 @@ func (db *DB) publishOrderedRootDeltaBatch(baseRoot uint64, delta *batch.Batch, 
 		err = ErrClosed
 		return
 	}
+	idx := db.idx.Load()
+	if idx == nil {
+		err = errors.New("missing index")
+		return
+	}
+	return db.publishOrderedRootDeltaBatchWithAllocator(idx, baseRoot, delta, opts, idx.allocator)
+}
+
+func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot uint64, delta *batch.Batch, opts orderedRootPublishOptions, alloc zipper.PageAllocator) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, err error) {
+	if db == nil {
+		err = ErrClosed
+		return
+	}
+	if idx == nil {
+		err = errors.New("missing index")
+		return
+	}
 	if delta == nil {
 		err = errors.New("nil ordered root delta batch")
+		return
+	}
+	if alloc == nil {
+		err = errors.New("missing allocator")
 		return
 	}
 	if opts.outerLeavesInValueLog && opts.leafPageLog == nil {
@@ -605,16 +636,22 @@ func (db *DB) publishOrderedRootDeltaBatch(baseRoot uint64, delta *batch.Batch, 
 			_ = iter.Close()
 			return 0, nil, metrics, nil
 		}
-		newRoot, retired, metrics, _, _, err = db.publishOrderedRootIterator(0, iter, opts, false)
+		defer func() { _ = iter.Close() }()
+		var leafPageLog bulk.LeafPageAppender
+		if opts.outerLeavesInValueLog {
+			leafPageLog = opts.leafPageLog
+		}
+		newRoot, err = bulk.BuildWithOptions(iter, alloc, idx.pager, bulk.BuildOptions{
+			LeafPrefixCompression: opts.leafPrefixCompression,
+			LeafColumnar:          opts.leafColumnar,
+			PackedValuePtr:        opts.packedValuePtr,
+			InternalBaseDelta:     opts.internalBaseDelta && !opts.outerLeavesInValueLog,
+			LeafPageLog:           leafPageLog,
+		})
 		return
 	}
 
-	idx := db.idx.Load()
-	if idx == nil {
-		err = errors.New("missing index")
-		return
-	}
-	rootZipper, err := db.orderedRootZipperForOptions(idx, opts)
+	rootZipper, err := db.orderedRootZipperForOptionsWithAllocator(idx, opts, alloc)
 	if err != nil {
 		return 0, nil, metrics, err
 	}
@@ -1313,6 +1350,164 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 }
 
 func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
+	if preflight == nil && db != nil && !db.closing.Load() {
+		if db.writeMu.TryLock() {
+			db.writeMu.Unlock()
+			return db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(ordered, preflight, buildSystemDeltaIter)
+		}
+		var retry bool
+		newSystemRoot, rootIDs, retry, err = db.tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered, buildSystemDeltaIter)
+		if err != nil || !retry {
+			return newSystemRoot, rootIDs, err
+		}
+	}
+	return db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(ordered, preflight, buildSystemDeltaIter)
+}
+
+func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRootDeltaBatchPublishInput, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, retrySerialized bool, err error) {
+	if buildSystemDeltaIter == nil {
+		return 0, nil, false, errors.New("nil ordered root group system delta builder")
+	}
+	if db == nil {
+		return 0, nil, false, ErrClosed
+	}
+	if db.closing.Load() {
+		return 0, nil, false, ErrClosed
+	}
+
+	phaseStats := orderedRootDeltaGroupPublishPhaseStats{}
+	rootsObserved := 0
+
+	db.writeMu.RLock()
+	if db.readOnly {
+		db.writeMu.RUnlock()
+		err = ErrReadOnly
+		return 0, nil, false, err
+	}
+	idx := db.idx.Load()
+	if idx == nil {
+		db.writeMu.RUnlock()
+		err = errors.New("missing index")
+		return 0, nil, false, err
+	}
+
+	db.mu.RLock()
+	baseUserRoot := db.meta.UserRootPageID
+	baseSystemRoot := db.meta.SystemRootPageID
+	baseSeq := db.meta.CommitSeq
+	regID := idx.registry.Register(baseSeq)
+	db.mu.RUnlock()
+
+	defer func() {
+		idx.registry.Unregister(regID)
+		if err != nil || retrySerialized {
+			db.writeMu.RUnlock()
+		}
+	}()
+
+	tracker := newAllocTracker(idx.allocator)
+	commitStarted := false
+	freeTrackedPages := func() {
+		if freeErr := tracker.FreeAll(); freeErr != nil && err == nil {
+			err = freeErr
+		}
+	}
+	defer func() {
+		if (err != nil || retrySerialized) && !commitStarted {
+			freeTrackedPages()
+		}
+	}()
+
+	rootIDs = make([]uint64, len(ordered))
+	systemOpts := systemRootOrderedPublishOptions(db)
+	var retired []uint64
+	var merged adaptive.Metrics
+	for orderedIdx := range ordered {
+		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[orderedIdx].StoragePolicy)
+		if err != nil {
+			return 0, nil, false, err
+		}
+		phaseStart := time.Now()
+		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, opts, tracker)
+		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+		phaseStats.rootApplyCalls++
+		if err != nil {
+			return 0, nil, false, err
+		}
+		rootIDs[orderedIdx] = rootID
+		rootsObserved++
+		retired = append(retired, rootRetired...)
+		mergeOrderedRootPublishMetrics(&merged, metrics)
+		phaseStats.rootApplyMetrics.add(metrics)
+	}
+
+	phaseStart := time.Now()
+	iter, err := buildSystemDeltaIter(append([]uint64(nil), rootIDs...))
+	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	if err != nil {
+		return 0, nil, false, err
+	}
+	if iter == nil {
+		return 0, nil, false, errors.New("nil system root delta iterator")
+	}
+	systemDelta, err := orderedRootDeltaBatchFromIterator(iter)
+	_ = iter.Close()
+	if err != nil {
+		return 0, nil, false, err
+	}
+	defer func() { _ = systemDelta.Close() }()
+	phaseStart = time.Now()
+	rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idx, baseSystemRoot, systemDelta, systemOpts, tracker)
+	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	phaseStats.systemApplyCalls++
+	if err != nil {
+		return 0, nil, false, err
+	}
+	newSystemRoot = rootID
+	retired = append(retired, rootRetired...)
+	mergeOrderedRootPublishMetrics(&merged, metrics)
+	phaseStats.systemApplyMetrics.add(metrics)
+
+	lockStart := time.Now()
+	db.commitMu.Lock()
+	holdStart := time.Now()
+	wait := holdStart.Sub(lockStart)
+	db.mu.RLock()
+	curUserRoot := db.meta.UserRootPageID
+	curSystemRoot := db.meta.SystemRootPageID
+	db.mu.RUnlock()
+	if curSystemRoot != baseSystemRoot {
+		db.commitMu.Unlock()
+		retrySerialized = true
+		return 0, nil, retrySerialized, nil
+	}
+	if curUserRoot == 0 {
+		curUserRoot = baseUserRoot
+	}
+
+	// Batch-based grouped deltas have the same value-log reachability shape as
+	// iterator-based grouped deltas: non-system roots changed, and the system
+	// delta can change collection descriptors. Keep the incremental ref tracker
+	// conservative by invalidating it after commit.
+	var vlogRefDelta *valueLogRefDelta
+	phaseStart = time.Now()
+	var post finalizeCommitPost
+	commitStarted = true
+	post, err = db.finalizeCommitLocked(curUserRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil)
+	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	phaseStats.finalizeCalls++
+	hold := time.Since(holdStart)
+	db.commitMu.Unlock()
+	if err != nil {
+		return 0, nil, false, err
+	}
+	db.finalizeCommitPostWork(post)
+	db.writeMu.RUnlock()
+	db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, nil)
+	return newSystemRoot, rootIDs, false, nil
+}
+
+func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
 	if buildSystemDeltaIter == nil {
 		return 0, nil, errors.New("nil ordered root group system delta builder")
 	}
