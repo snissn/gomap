@@ -6,6 +6,8 @@ import (
 	"errors"
 	"reflect"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1303,6 +1305,168 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticPrese
 	}
 	if got := string(entry.Value); got != "vb" {
 		t.Fatalf("root/b=%q want vb", got)
+	}
+}
+
+func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticRebasesSystemDeltaAfterConcurrentSystemCommit(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	baseRootA, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t,
+		"root/a", "va",
+	).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root A: %v", err)
+	}
+	baseRootB, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t,
+		"root/x", "vx",
+	).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root B: %v", err)
+	}
+
+	deltaTableA := mustFrozenSystemMemtable(t, "root/b", "vb")
+	iterA := deltaTableA.NewIterator(nil, nil)
+	deltaA, err := OrderedRootDeltaBatchFromIterator(iterA)
+	_ = iterA.Close()
+	if err != nil {
+		t.Fatalf("OrderedRootDeltaBatchFromIterator A: %v", err)
+	}
+	defer func() { _ = deltaA.Close() }()
+
+	deltaTableB := mustFrozenSystemMemtable(t, "root/y", "vy")
+	iterB := deltaTableB.NewIterator(nil, nil)
+	deltaB, err := OrderedRootDeltaBatchFromIterator(iterB)
+	_ = iterB.Close()
+	if err != nil {
+		t.Fatalf("OrderedRootDeltaBatchFromIterator B: %v", err)
+	}
+	defer func() { _ = deltaB.Close() }()
+
+	type publishResult struct {
+		systemRoot uint64
+		rootIDs    []uint64
+		err        error
+	}
+	aBuilderEntered := make(chan struct{})
+	releaseABuilder := make(chan struct{})
+	aDone := make(chan publishResult, 1)
+	var releaseABuilderOnce sync.Once
+	releaseA := func() {
+		releaseABuilderOnce.Do(func() {
+			close(releaseABuilder)
+		})
+	}
+	t.Cleanup(releaseA)
+	var aBuilderCalls atomic.Int32
+	go func() {
+		systemRoot, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+			BaseRoot: baseRootA,
+			Delta:    deltaA,
+		}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			if len(rootIDs) != 1 || rootIDs[0] == 0 {
+				return nil, errors.New("unexpected root IDs for A")
+			}
+			if aBuilderCalls.Add(1) == 1 {
+				close(aBuilderEntered)
+				<-releaseABuilder
+			}
+			return mustFrozenSystemMemtable(t,
+				"sys/collections/a/primary", strconv.FormatUint(rootIDs[0], 10),
+			).NewIterator(nil, nil), nil
+		})
+		aDone <- publishResult{systemRoot: systemRoot, rootIDs: rootIDs, err: err}
+	}()
+
+	select {
+	case <-aBuilderEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("publish A did not reach system delta builder")
+	}
+
+	systemRootB, rootIDsB, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+		BaseRoot: baseRootB,
+		Delta:    deltaB,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 || rootIDs[0] == 0 {
+			return nil, errors.New("unexpected root IDs for B")
+		}
+		return mustFrozenSystemMemtable(t,
+			"sys/collections/b/primary", strconv.FormatUint(rootIDs[0], 10),
+		).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish B: %v", err)
+	}
+	if systemRootB == 0 || len(rootIDsB) != 1 || rootIDsB[0] == 0 {
+		t.Fatalf("systemRootB=%d rootIDsB=%v, want non-zero roots", systemRootB, rootIDsB)
+	}
+
+	releaseA()
+	var resultA publishResult
+	select {
+	case resultA = <-aDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("publish A did not complete after system root rebase")
+	}
+	if resultA.err != nil {
+		t.Fatalf("publish A: %v", resultA.err)
+	}
+	if resultA.systemRoot == 0 || len(resultA.rootIDs) != 1 || resultA.rootIDs[0] == 0 {
+		t.Fatalf("systemRootA=%d rootIDsA=%v, want non-zero roots", resultA.systemRoot, resultA.rootIDs)
+	}
+	if got := aBuilderCalls.Load(); got != 2 {
+		t.Fatalf("A system delta builder calls=%d want 2", got)
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.publish.ordered_root_delta_group.calls_total"]; got != "2" {
+		t.Fatalf("calls stat=%q want 2", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.errors_total"]; got != "0" {
+		t.Fatalf("errors stat=%q want 0", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_calls_total"]; got != "2" {
+		t.Fatalf("root apply calls stat=%q want 2; non-system root work should not be rebuilt after system-root rebase", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.system_apply_calls_total"]; got != "3" {
+		t.Fatalf("system apply calls stat=%q want 3", got)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	for key, wantRoot := range map[string]uint64{
+		"sys/collections/a/primary": resultA.rootIDs[0],
+		"sys/collections/b/primary": rootIDsB[0],
+	} {
+		entry, err := snap.GetEntryAtRoot(snap.State().SystemRootPageID, []byte(key))
+		if err != nil {
+			t.Fatalf("GetEntryAtRoot(%s): %v", key, err)
+		}
+		if got := string(entry.Value); got != strconv.FormatUint(wantRoot, 10) {
+			t.Fatalf("%s=%q want %d", key, got, wantRoot)
+		}
+	}
+	for rootID, kv := range map[uint64]map[string]string{
+		resultA.rootIDs[0]: {"root/a": "va", "root/b": "vb"},
+		rootIDsB[0]:        {"root/x": "vx", "root/y": "vy"},
+	} {
+		for key, want := range kv {
+			entry, err := snap.GetEntryAtRoot(rootID, []byte(key))
+			if err != nil {
+				t.Fatalf("GetEntryAtRoot(root=%d key=%s): %v", rootID, key, err)
+			}
+			if got := string(entry.Value); got != want {
+				t.Fatalf("root=%d key=%s got %q want %q", rootID, key, got, want)
+			}
+		}
 	}
 }
 

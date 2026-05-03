@@ -35,6 +35,8 @@ const (
 // delta streams bounded rather than using this as a bulk-load accumulator.
 var orderedRootDeltaBatchInlineThreshold = int(^uint(0) >> 1)
 
+const orderedRootOptimisticSystemDeltaRebaseMaxAttempts = 4
+
 type orderedRootPublishStats struct {
 	warmAttempts                          uint64
 	warmNativeApplyAttempts               uint64
@@ -1433,11 +1435,17 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		return 0, nil, retrySerialized, nil
 	}
 
-	tracker := newAllocTracker(idx.allocator)
+	rootTracker := newAllocTracker(idx.allocator)
+	var systemTracker *allocTracker
 	commitStarted := false
 	freeTrackedPages := func() {
-		if freeErr := tracker.FreeAll(); freeErr != nil && err == nil {
+		if freeErr := rootTracker.FreeAll(); freeErr != nil && err == nil {
 			err = freeErr
+		}
+		if systemTracker != nil {
+			if freeErr := systemTracker.FreeAll(); freeErr != nil && err == nil {
+				err = freeErr
+			}
 		}
 	}
 	defer func() {
@@ -1448,15 +1456,15 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 
 	rootIDs = make([]uint64, len(ordered))
 	systemOpts := systemRootOrderedPublishOptions(db)
-	var retired []uint64
-	var merged adaptive.Metrics
+	var nonSystemRetired []uint64
+	var nonSystemMetrics adaptive.Metrics
 	for orderedIdx := range ordered {
 		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[orderedIdx].StoragePolicy)
 		if err != nil {
 			return 0, nil, false, err
 		}
 		phaseStart := time.Now()
-		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, opts, tracker, tracker)
+		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, opts, rootTracker, rootTracker)
 		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.rootApplyCalls++
 		if err != nil {
@@ -1464,76 +1472,97 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		}
 		rootIDs[orderedIdx] = rootID
 		rootsObserved++
-		retired = append(retired, rootRetired...)
-		mergeOrderedRootPublishMetrics(&merged, metrics)
+		nonSystemRetired = append(nonSystemRetired, rootRetired...)
+		mergeOrderedRootPublishMetrics(&nonSystemMetrics, metrics)
 		phaseStats.rootApplyMetrics.add(metrics)
 	}
 
-	phaseStart := time.Now()
-	iter, err := buildSystemDeltaIter(append([]uint64(nil), rootIDs...))
-	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
-	if err != nil {
-		return 0, nil, false, err
-	}
-	if iter == nil {
-		return 0, nil, false, errors.New("nil system root delta iterator")
-	}
-	systemDelta, err := orderedRootDeltaBatchFromIterator(iter)
-	_ = iter.Close()
-	if err != nil {
-		return 0, nil, false, err
-	}
-	defer func() { _ = systemDelta.Close() }()
-	phaseStart = time.Now()
-	rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idx, baseSystemRoot, systemDelta, systemOpts, tracker, tracker)
-	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
-	phaseStats.systemApplyCalls++
-	if err != nil {
-		return 0, nil, false, err
-	}
-	newSystemRoot = rootID
-	retired = append(retired, rootRetired...)
-	mergeOrderedRootPublishMetrics(&merged, metrics)
-	phaseStats.systemApplyMetrics.add(metrics)
+	systemBaseRoot := baseSystemRoot
+	var committedRootPages []uint64
+	var committedSystemPages []uint64
+	for attempt := 0; ; attempt++ {
+		systemTracker = newAllocTracker(idx.allocator)
+		phaseStart := time.Now()
+		iter, err := buildSystemDeltaIter(append([]uint64(nil), rootIDs...))
+		phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+		if err != nil {
+			return 0, nil, false, err
+		}
+		if iter == nil {
+			return 0, nil, false, errors.New("nil system root delta iterator")
+		}
+		systemDelta, err := orderedRootDeltaBatchFromIterator(iter)
+		_ = iter.Close()
+		if err != nil {
+			return 0, nil, false, err
+		}
+		phaseStart = time.Now()
+		rootID, systemRetired, systemMetrics, applyErr := db.publishOrderedRootDeltaBatchWithAllocator(idx, systemBaseRoot, systemDelta, systemOpts, systemTracker, systemTracker)
+		phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+		phaseStats.systemApplyCalls++
+		_ = systemDelta.Close()
+		if applyErr != nil {
+			err = applyErr
+			return 0, nil, false, err
+		}
+		phaseStats.systemApplyMetrics.add(systemMetrics)
 
-	lockStart := time.Now()
-	db.commitMu.Lock()
-	holdStart := time.Now()
-	wait := holdStart.Sub(lockStart)
-	db.mu.RLock()
-	curUserRoot := db.meta.UserRootPageID
-	curSystemRoot := db.meta.SystemRootPageID
-	db.mu.RUnlock()
-	if curSystemRoot != baseSystemRoot {
+		lockStart := time.Now()
+		db.commitMu.Lock()
+		holdStart := time.Now()
+		wait := holdStart.Sub(lockStart)
+		db.mu.RLock()
+		curUserRoot := db.meta.UserRootPageID
+		curSystemRoot := db.meta.SystemRootPageID
+		db.mu.RUnlock()
+		if curSystemRoot != systemBaseRoot {
+			db.commitMu.Unlock()
+			if freeErr := systemTracker.FreeAll(); freeErr != nil {
+				err = freeErr
+				return 0, nil, false, err
+			}
+			systemTracker = nil
+			if curSystemRoot == 0 || attempt+1 >= orderedRootOptimisticSystemDeltaRebaseMaxAttempts {
+				retrySerialized = true
+				return 0, nil, retrySerialized, nil
+			}
+			systemBaseRoot = curSystemRoot
+			continue
+		}
+		if curUserRoot == 0 {
+			curUserRoot = baseUserRoot
+		}
+
+		retired := append([]uint64(nil), nonSystemRetired...)
+		retired = append(retired, systemRetired...)
+		merged := nonSystemMetrics
+		mergeOrderedRootPublishMetrics(&merged, systemMetrics)
+		newSystemRoot = rootID
+
+		// Batch-based grouped deltas have the same value-log reachability shape as
+		// iterator-based grouped deltas: non-system roots changed, and the system
+		// delta can change collection descriptors. Keep the incremental ref tracker
+		// conservative by invalidating it after commit.
+		var vlogRefDelta *valueLogRefDelta
+		phaseStart = time.Now()
+		var post finalizeCommitPost
+		commitStarted = true
+		post, err = db.finalizeCommitLocked(curUserRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil)
+		phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+		phaseStats.finalizeCalls++
+		hold := time.Since(holdStart)
+		committedRootPages = rootTracker.Pages()
+		committedSystemPages = systemTracker.Pages()
 		db.commitMu.Unlock()
-		retrySerialized = true
-		return 0, nil, retrySerialized, nil
+		if err != nil {
+			return 0, nil, false, err
+		}
+		db.invalidateLeafGenerationSubtreeStats(append(committedRootPages, committedSystemPages...))
+		db.finalizeCommitPostWork(post)
+		db.writeMu.RUnlock()
+		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, nil)
+		return newSystemRoot, rootIDs, false, nil
 	}
-	if curUserRoot == 0 {
-		curUserRoot = baseUserRoot
-	}
-
-	// Batch-based grouped deltas have the same value-log reachability shape as
-	// iterator-based grouped deltas: non-system roots changed, and the system
-	// delta can change collection descriptors. Keep the incremental ref tracker
-	// conservative by invalidating it after commit.
-	var vlogRefDelta *valueLogRefDelta
-	phaseStart = time.Now()
-	var post finalizeCommitPost
-	commitStarted = true
-	post, err = db.finalizeCommitLocked(curUserRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil)
-	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
-	phaseStats.finalizeCalls++
-	hold := time.Since(holdStart)
-	db.commitMu.Unlock()
-	if err != nil {
-		return 0, nil, false, err
-	}
-	db.invalidateLeafGenerationSubtreeStats(tracker.Pages())
-	db.finalizeCommitPostWork(post)
-	db.writeMu.RUnlock()
-	db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, nil)
-	return newSystemRoot, rootIDs, false, nil
 }
 
 func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
