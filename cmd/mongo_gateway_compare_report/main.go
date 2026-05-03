@@ -260,7 +260,7 @@ func loadComparisons(matrixPath string, allowIncomplete bool) ([]cellComparison,
 				},
 				TreeDB:          cell.trees[config],
 				Mongo:           mongo,
-				MongoAlternates: mongoRecordsForTreeConfig(config, mongoIndex),
+				MongoAlternates: sortedMongoRecords(cell.mongos),
 			})
 		}
 	}
@@ -361,12 +361,11 @@ func preferredMongoDriverBaseline(records []*runRecord) *runRecord {
 	return explicit
 }
 
-func mongoRecordsForTreeConfig(treeConfig string, mongoIndex mongoScenarioIndex) []*runRecord {
-	treeScenario := parseScalingScenario(treeConfig)
-	if !treeScenario.valid {
-		return nil
+func sortedMongoRecords(recordsByConfig map[string]*runRecord) []*runRecord {
+	records := make([]*runRecord, 0, len(recordsByConfig))
+	for _, record := range recordsByConfig {
+		records = append(records, record)
 	}
-	records := append([]*runRecord(nil), mongoIndex.bySuffix[treeScenario.suffix]...)
 	sort.Slice(records, func(i, j int) bool {
 		return records[i].Row.Config < records[j].Row.Config
 	})

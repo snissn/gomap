@@ -385,6 +385,28 @@ list_word_count() {
   echo "$count"
 }
 
+validate_unique_labels() {
+  local name=$1
+  local values=$2
+  local seen=""
+  local count=0
+  local item
+  local label
+  for item in $values; do
+    label=$(safe_label "${item//-/_}")
+    if [[ " $seen " == *" $label "* ]]; then
+      echo "duplicate $name value after normalization: $item" >&2
+      exit 2
+    fi
+    seen="$seen $label"
+    count=$((count + 1))
+  done
+  if [[ "$count" -eq 0 ]]; then
+    echo "$name must contain at least one value" >&2
+    exit 2
+  fi
+}
+
 mongo_config_name() {
   local client_mode=$1
   local client_label=$2
@@ -561,6 +583,9 @@ if [[ "$PROFILE_TREEDB" != "true" && "$PROFILE_TREEDB" != "false" ]]; then
   echo "invalid PROFILE_TREEDB=$PROFILE_TREEDB (want true or false)" >&2
   exit 2
 fi
+validate_unique_labels MONGO_CLIENT_MODES "$MONGO_CLIENT_MODES"
+validate_unique_labels TREEDB_CLIENT_MODES "$TREEDB_CLIENT_MODES"
+validate_unique_labels TREEDB_DOCUMENT_FORMATS "$TREEDB_DOCUMENT_FORMATS"
 raw_concurrent_reader_sweep=$CONCURRENT_READER_SWEEP
 CONCURRENT_READER_SWEEP=$(trim_spaces "$CONCURRENT_READER_SWEEP")
 if [[ -n "$raw_concurrent_reader_sweep" && -z "$CONCURRENT_READER_SWEEP" ]]; then

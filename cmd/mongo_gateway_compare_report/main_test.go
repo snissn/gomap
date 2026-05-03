@@ -788,6 +788,14 @@ func TestReportMatchesUnsuffixedTreeConfigWithMixedMongoRows(t *testing.T) {
 	if !strings.Contains(report, "| 100 | 2 | false | n/a | `treedb_bson_driver-command-raw` | `insert` | 1000 | n/a | 500 | n/a | 2.00x | n/a |") {
 		t.Fatalf("report missing unsuffixed comparison\n%s", report)
 	}
+	for _, want := range []string{
+		"| 100 | 2 | false | `mongo_writers_1` | `concurrent_id_update_set_w1` | 600 | n/a | 0 | 4.00 KiB | 4.00 KiB | `mongo_w1.json` |",
+		"| 100 | 2 | false | `mongo_writers_1` | mongo | `mongo_w1.json` | n/a |",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing mixed Mongo row %q\n%s", want, report)
+		}
+	}
 }
 
 func TestReportUsesMongoDriverBaselineWithMultipleMongoClientModes(t *testing.T) {
