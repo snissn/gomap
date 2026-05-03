@@ -16,6 +16,7 @@ import (
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -2942,6 +2943,63 @@ func TestBufferedRootRunsIteratorMultiRunIncludesNewestTombstone(t *testing.T) {
 	}
 	if err := it.Error(); err != nil {
 		t.Fatalf("iterator error: %v", err)
+	}
+}
+
+func TestBufferedRootRunsIteratorMultiRunStableUnsafeSlices(t *testing.T) {
+	older := newCollectionRunTable(2)
+	defer resetCollectionRunTable(older)
+	setCollectionRunValue(older, []byte("a"), []byte("older"))
+	setCollectionRunValue(older, []byte("b"), []byte("older"))
+	older.Freeze()
+
+	newer := newCollectionRunTable(2)
+	defer resetCollectionRunTable(newer)
+	newer.DeleteSteal([]byte("a"))
+	setCollectionRunValue(newer, []byte("c"), []byte("newer"))
+	newer.Freeze()
+
+	it := newBufferedRootRunsIteratorWithDeleted([]memtable.Table{older, newer}, nil, nil, true)
+	stable, ok := it.(interface {
+		StableUnsafeIteratorSlices() bool
+	})
+	if !ok {
+		t.Fatalf("buffered root iterator does not expose StableUnsafeIteratorSlices")
+	}
+	if !stable.StableUnsafeIteratorSlices() {
+		t.Fatalf("buffered root iterator did not preserve stable memtable slices")
+	}
+	lenHint, ok := it.(interface {
+		Len() int
+	})
+	if !ok {
+		t.Fatalf("buffered root iterator does not expose Len hint")
+	}
+	if got, want := lenHint.Len(), 4; got != want {
+		t.Fatalf("buffered root iterator Len hint=%d want %d", got, want)
+	}
+
+	delta, err := backenddb.OrderedRootDeltaBatchFromIterator(it)
+	if err != nil {
+		t.Fatalf("materialize delta: %v", err)
+	}
+	defer func() { _ = delta.Close() }()
+	if err := it.Close(); err != nil {
+		t.Fatalf("close iterator: %v", err)
+	}
+
+	entries := delta.SortedEntries()
+	if got, want := len(entries), 3; got != want {
+		t.Fatalf("delta entries=%d want %d", got, want)
+	}
+	if got := entries[0]; string(got.Key) != "a" || got.Type != batch.OpDelete {
+		t.Fatalf("entry[0]=%+v want tombstone a", got)
+	}
+	if got := entries[1]; string(got.Key) != "b" || string(got.Value) != "older" {
+		t.Fatalf("entry[1]=%+v want b=older", got)
+	}
+	if got := entries[2]; string(got.Key) != "c" || string(got.Value) != "newer" {
+		t.Fatalf("entry[2]=%+v want c=newer", got)
 	}
 }
 

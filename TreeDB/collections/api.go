@@ -3789,16 +3789,18 @@ func (h *bufferedRootRunHeap) down(i0, n int) bool {
 }
 
 type bufferedRootRunsIterator struct {
-	iters          []iterator.UnsafeIterator
-	heap           bufferedRootRunHeap
-	cur            bufferedRootRunHeapItem
-	hasCur         bool
-	valid          bool
-	includeDeleted bool
-	start          []byte
-	end            []byte
-	closed         bool
-	firstErr       error
+	iters              []iterator.UnsafeIterator
+	heap               bufferedRootRunHeap
+	cur                bufferedRootRunHeapItem
+	hasCur             bool
+	valid              bool
+	includeDeleted     bool
+	stableUnsafeSlices bool
+	lenHint            int
+	start              []byte
+	end                []byte
+	closed             bool
+	firstErr           error
 }
 
 func newBufferedRootRunsIterator(runs []memtable.Table, start, end []byte) iterator.UnsafeIterator {
@@ -3810,14 +3812,21 @@ func newBufferedRootRunsIteratorWithDeleted(runs []memtable.Table, start, end []
 		return runs[0].NewIterator(start, end)
 	}
 	it := &bufferedRootRunsIterator{
-		iters:          make([]iterator.UnsafeIterator, 0, len(runs)),
-		includeDeleted: includeDeleted,
-		start:          start,
-		end:            end,
+		iters:              make([]iterator.UnsafeIterator, 0, len(runs)),
+		includeDeleted:     includeDeleted,
+		stableUnsafeSlices: true,
+		start:              start,
+		end:                end,
 	}
 	for i, run := range runs {
 		if run == nil {
 			continue
+		}
+		if stable, ok := run.(memtable.StableUnsafeIteratorTable); !ok || !stable.StableUnsafeIteratorSlices() {
+			it.stableUnsafeSlices = false
+		}
+		if start == nil && end == nil {
+			it.lenHint += run.Len()
 		}
 		runIter := run.NewIterator(start, end)
 		idx := len(it.iters)
@@ -3959,6 +3968,17 @@ func (it *bufferedRootRunsIterator) Domain() (start, end []byte) {
 		return nil, nil
 	}
 	return it.start, it.end
+}
+
+func (it *bufferedRootRunsIterator) StableUnsafeIteratorSlices() bool {
+	return it != nil && it.stableUnsafeSlices
+}
+
+func (it *bufferedRootRunsIterator) Len() int {
+	if it == nil {
+		return 0
+	}
+	return it.lenHint
 }
 
 func (it *bufferedRootRunsIterator) advance() {
