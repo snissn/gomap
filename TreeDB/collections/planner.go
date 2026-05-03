@@ -733,21 +733,32 @@ func applyCollectionRunEntries(table memtable.Table, count int, emit func(i int)
 	if count <= 0 {
 		return nil
 	}
+	return applyCollectionRunEntriesWithFlags(table, count, func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
+		key, value, err = emit(i)
+		if err != nil {
+			return nil, nil, page.ValuePtr{}, 0, err
+		}
+		return key, value, page.ValuePtr{}, node.FlagInline, nil
+	})
+}
+
+func applyCollectionRunEntriesWithFlags(table memtable.Table, count int, emit func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error)) error {
+	if count <= 0 {
+		return nil
+	}
 	if appender, ok := table.(memtable.StealEntryFuncApplier); ok {
-		return appender.ApplyStealEntryFunc(count, func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
-			key, value, err = emit(i)
-			if err != nil {
-				return nil, nil, page.ValuePtr{}, 0, err
-			}
-			return key, value, page.ValuePtr{}, node.FlagInline, nil
-		})
+		return appender.ApplyStealEntryFunc(count, emit)
 	}
 	for i := 0; i < count; i++ {
-		key, value, err := emit(i)
+		key, value, ptr, flags, err := emit(i)
 		if err != nil {
 			return err
 		}
-		setCollectionRunValue(table, key, value)
+		if flags&node.FlagTombstone != 0 {
+			table.DeleteSteal(key)
+			continue
+		}
+		table.SetEntrySteal(key, value, ptr, flags)
 	}
 	return nil
 }
