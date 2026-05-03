@@ -3957,7 +3957,9 @@ func (it *bufferedRootRunsIterator) Next() {
 		return
 	}
 	if it.hasCur {
-		it.advanceItem(it.cur)
+		if it.advanceCurrentItemDirect(it.cur) {
+			return
+		}
 		it.hasCur = false
 	}
 	it.advance()
@@ -4127,6 +4129,34 @@ func (it *bufferedRootRunsIterator) advanceItem(item bufferedRootRunHeapItem) {
 	} else if err := source.Error(); err != nil && it.firstErr == nil {
 		it.firstErr = err
 	}
+}
+
+func (it *bufferedRootRunsIterator) advanceCurrentItemDirect(item bufferedRootRunHeapItem) bool {
+	source := it.iters[item.idx]
+	source.Next()
+	if !source.Valid() {
+		if err := source.Error(); err != nil && it.firstErr == nil {
+			it.firstErr = err
+		}
+		return false
+	}
+	item.key = source.UnsafeKey()
+	if it.end != nil && bytes.Compare(item.key, it.end) >= 0 {
+		return false
+	}
+	if !it.includeDeleted && source.IsDeleted() {
+		it.heap.push(item)
+		return false
+	}
+	next := it.heap.peek()
+	if next == nil || bytes.Compare(item.key, next.key) < 0 {
+		it.cur = item
+		it.hasCur = true
+		it.valid = true
+		return true
+	}
+	it.heap.push(item)
+	return false
 }
 
 func (c *Collection) prepareIndexedAsyncPublish() (*indexedFlushPublishWork, error) {

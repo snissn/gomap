@@ -3108,6 +3108,98 @@ func TestBufferedRootRunsIteratorMultiRunIncludesNewestTombstone(t *testing.T) {
 	}
 }
 
+func TestBufferedRootRunsIteratorDirectPathPreservesDisjointRunOrder(t *testing.T) {
+	front := newCollectionRunTable(3)
+	defer resetCollectionRunTable(front)
+	setCollectionRunValue(front, []byte("a"), []byte("front-a"))
+	setCollectionRunValue(front, []byte("c"), []byte("front-c"))
+	setCollectionRunValue(front, []byte("e"), []byte("front-e"))
+	front.Freeze()
+
+	back := newCollectionRunTable(1)
+	defer resetCollectionRunTable(back)
+	setCollectionRunValue(back, []byte("z"), []byte("back-z"))
+	back.Freeze()
+
+	it := newBufferedRootRunsIteratorWithDeleted([]memtable.Table{front, back}, nil, nil, true)
+	defer func() { _ = it.Close() }()
+
+	var got []string
+	for it.Valid() {
+		got = append(got, string(it.UnsafeKey())+"="+string(it.UnsafeValue()))
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	want := []string{"a=front-a", "c=front-c", "e=front-e", "z=back-z"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("entries=%v want %v", got, want)
+	}
+}
+
+func TestBufferedRootRunsIteratorDirectPathFallsBackForEqualKeys(t *testing.T) {
+	older := newCollectionRunTable(2)
+	defer resetCollectionRunTable(older)
+	setCollectionRunValue(older, []byte("a"), []byte("older-a"))
+	setCollectionRunValue(older, []byte("b"), []byte("older-b"))
+	older.Freeze()
+
+	newer := newCollectionRunTable(1)
+	defer resetCollectionRunTable(newer)
+	setCollectionRunValue(newer, []byte("b"), []byte("newer-b"))
+	newer.Freeze()
+
+	it := newBufferedRootRunsIteratorWithDeleted([]memtable.Table{older, newer}, nil, nil, true)
+	defer func() { _ = it.Close() }()
+
+	if !it.Valid() {
+		t.Fatal("iterator invalid, want key a")
+	}
+	if got := string(it.UnsafeKey()) + "=" + string(it.UnsafeValue()); got != "a=older-a" {
+		t.Fatalf("first entry=%s want a=older-a", got)
+	}
+	it.Next()
+	if !it.Valid() {
+		t.Fatal("iterator missing shadowed key b")
+	}
+	if got := string(it.UnsafeKey()) + "=" + string(it.UnsafeValue()); got != "b=newer-b" {
+		t.Fatalf("second entry=%s want b=newer-b", got)
+	}
+	it.Next()
+	if it.Valid() {
+		t.Fatalf("iterator has extra key %q", it.UnsafeKey())
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+}
+
+func TestBufferedRootRunsIteratorDirectPathSkipsMiddleTombstone(t *testing.T) {
+	table := newCollectionRunTable(3)
+	defer resetCollectionRunTable(table)
+	setCollectionRunValue(table, []byte("a"), []byte("live-a"))
+	table.DeleteSteal([]byte("b"))
+	setCollectionRunValue(table, []byte("c"), []byte("live-c"))
+	table.Freeze()
+
+	it := newBufferedRootRunsIterator([]memtable.Table{table}, nil, nil)
+	defer func() { _ = it.Close() }()
+
+	var got []string
+	for it.Valid() {
+		got = append(got, string(it.UnsafeKey()))
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	want := []string{"a", "c"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("keys=%v want %v", got, want)
+	}
+}
+
 func TestBufferedRootRunsIteratorMultiRunStableUnsafeSlices(t *testing.T) {
 	oldAKey := []byte("a")
 	oldBKey := []byte("b")
