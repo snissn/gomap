@@ -16,9 +16,10 @@ Default load shape:
 - two secondary indexes: unique `email_idx` and non-unique `city_idx`
 - collection data/index-state outer leaves in the value log
 - secondary-index outer leaves in the value log
-- native indexed write memtables enabled with a default 96000-document
-  auto-flush limit; batches at 16000 documents or larger use direct publish by
-  default because they already amortize publish overhead well
+- native indexed write memtables enabled with the collection default auto-flush
+  cadence: 96000 staged documents for synchronous flushing, or 256000 when
+  async flush is enabled; batches at 16000 documents or larger use direct
+  publish by default because they already amortize publish overhead well
 - `fast` TreeDB profile
 - final checkpoint and reopen verification
 - automatic offline index vacuum when `-vlog-rewrite` or `-leafgen-pack-gc`
@@ -52,15 +53,20 @@ Useful variants:
 ./bin/collection-load-fixture -index-outer-leaves-in-vlog=false -dir /tmp/treedb_two_index_template_v1_fast_index -reset
 
 # Native indexed write memtables are enabled by default. This explicitly keeps
-# them enabled and force-bounds publishes every 96000 staged docs; very large
-# batches at the default 16000-document direct-publish threshold still bypass
-# staging.
+# them enabled and leaves the staged-doc/root-run thresholds at 0 so collection
+# metadata normalization chooses the current defaults. Very large batches at the
+# default 16000-document direct-publish threshold still bypass staging.
 ./bin/collection-load-fixture \
   -buffered-indexed-writes=true \
-  -buffered-indexed-write-max-docs 96000 \
-  -buffered-indexed-write-max-root-runs 256 \
+  -buffered-indexed-write-max-docs 0 \
+  -buffered-indexed-write-max-root-runs 0 \
   -dir /tmp/treedb_two_index_buffered_bounded \
   -reset
+
+# When overriding only the document or byte threshold, omitted root-run threshold
+# flags keep the compatibility root-run default. Pass
+# -buffered-indexed-write-max-root-runs 0 explicitly to disable root-run flushing
+# for that partial-threshold experiment.
 
 # Disable indexed write memtables for immediate-publish baseline comparisons.
 ./bin/collection-load-fixture \

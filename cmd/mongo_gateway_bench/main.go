@@ -417,18 +417,16 @@ func run(parent context.Context, args []string) error {
 
 func parseConfig(args []string) (config, error) {
 	cfg := config{
-		TreeDBProfile:                          treedb.ProfileWALOnFast,
-		TreeDBDocumentFormat:                   collections.DocumentFormatTemplateV1,
-		TreeDBDataRootStorage:                  collections.RootStorageCompressed,
-		TreeDBIndexStateRootStorage:            collections.RootStorageCompressed,
-		TreeDBIndexRootStorage:                 collections.RootStorageCompressed,
-		TreeDBBufferedIndexedWriteMaxDocuments: collections.DefaultIndexedWriteMemtableMaxDocuments,
-		TreeDBBufferedIndexedWriteMaxRootRuns:  collections.DefaultIndexedWriteMemtableMaxRootRuns,
-		TreeDBMaintenance:                      treeDBMaintenanceFull,
-		ClientMode:                             clientModeDriver,
-		InsertProducers:                        1,
-		ProfileBlockRate:                       1,
-		ProfileMutexFraction:                   5,
+		TreeDBProfile:               treedb.ProfileWALOnFast,
+		TreeDBDocumentFormat:        collections.DocumentFormatTemplateV1,
+		TreeDBDataRootStorage:       collections.RootStorageCompressed,
+		TreeDBIndexStateRootStorage: collections.RootStorageCompressed,
+		TreeDBIndexRootStorage:      collections.RootStorageCompressed,
+		TreeDBMaintenance:           treeDBMaintenanceFull,
+		ClientMode:                  clientModeDriver,
+		InsertProducers:             1,
+		ProfileBlockRate:            1,
+		ProfileMutexFraction:        5,
 	}
 	fs := flag.NewFlagSet("mongo_gateway_bench", flag.ContinueOnError)
 	var flagOutput bytes.Buffer
@@ -474,7 +472,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&treeDBIndexRootStorage, "treedb-index-root-storage", treeDBIndexRootStorage, "TreeDB secondary index root storage for -target treedb: default, fast, or compressed")
 	fs.IntVar(&cfg.TreeDBBufferedIndexedWriteMaxDocuments, "treedb-buffered-indexed-write-max-documents", cfg.TreeDBBufferedIndexedWriteMaxDocuments, "TreeDB indexed collection write-domain document auto-flush threshold; 0 uses the collection default")
 	fs.Int64Var(&cfg.TreeDBBufferedIndexedWriteMaxBytes, "treedb-buffered-indexed-write-max-bytes", cfg.TreeDBBufferedIndexedWriteMaxBytes, "TreeDB indexed collection write-domain byte auto-flush threshold; 0 disables this trigger")
-	fs.IntVar(&cfg.TreeDBBufferedIndexedWriteMaxRootRuns, "treedb-buffered-indexed-write-max-root-runs", cfg.TreeDBBufferedIndexedWriteMaxRootRuns, "TreeDB indexed collection write-domain root-run auto-flush threshold; 0 disables this trigger unless all thresholds normalize to collection defaults")
+	fs.IntVar(&cfg.TreeDBBufferedIndexedWriteMaxRootRuns, "treedb-buffered-indexed-write-max-root-runs", cfg.TreeDBBufferedIndexedWriteMaxRootRuns, "TreeDB indexed collection write-domain root-run auto-flush threshold; explicit 0 disables this trigger; omitted with docs/bytes override keeps the compatibility default")
 	fs.BoolVar(&cfg.TreeDBBufferedIndexedAsyncFlush, "treedb-buffered-indexed-async-flush", false, "TreeDB indexed collection threshold flushes publish in the background; explicit Flush/Close still drain before returning")
 	fs.IntVar(&cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits, "treedb-buffered-indexed-async-flush-max-queued-units", 0, "TreeDB indexed collection background flush unit queue limit; 0 uses the collection default when async flush is enabled")
 	fs.StringVar(&cfg.TreeDBMaintenance, "treedb-maintenance", cfg.TreeDBMaintenance, "TreeDB final disk maintenance for -target treedb: full, checkpoint, or none")
@@ -491,6 +489,18 @@ func parseConfig(args []string) (config, error) {
 			return config{}, fmt.Errorf("%w\n%s", err, output)
 		}
 		return config{}, err
+	}
+	seenFlags := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) {
+		seenFlags[f.Name] = true
+	})
+	if !seenFlags["treedb-buffered-indexed-write-max-root-runs"] &&
+		(seenFlags["treedb-buffered-indexed-write-max-documents"] || seenFlags["treedb-buffered-indexed-write-max-bytes"]) &&
+		(cfg.TreeDBBufferedIndexedWriteMaxDocuments != 0 || cfg.TreeDBBufferedIndexedWriteMaxBytes != 0) {
+		cfg.TreeDBBufferedIndexedWriteMaxRootRuns = collections.DefaultIndexedWriteMemtableMaxRootRuns
+		if cfg.TreeDBBufferedIndexedAsyncFlush {
+			cfg.TreeDBBufferedIndexedWriteMaxRootRuns = collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns
+		}
 	}
 	if cfg.Target != "treedb" && cfg.Target != "mongo" {
 		return config{}, fmt.Errorf("unknown target %q", cfg.Target)

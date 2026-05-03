@@ -305,26 +305,24 @@ func main() {
 
 func parseConfig(args []string, output io.Writer) (config, error) {
 	cfg := config{
-		Docs:                        defaultDocs,
-		BatchSize:                   defaultBatchSize,
-		Collection:                  defaultCollectionName,
-		DocumentFormat:              collections.DocumentFormatTemplateV1,
-		IndexCount:                  2,
-		BufferedIndexedWrites:       true,
-		BufferedIndexedWriteMaxDocs: collections.DefaultIndexedWriteMemtableMaxDocuments,
-		BufferedIndexedWriteMaxRuns: collections.DefaultIndexedWriteMemtableMaxRootRuns,
-		Profile:                     treedb.ProfileFast,
-		DataOuterLeavesInValueLog:   true,
-		IndexOuterLeavesInValueLog:  true,
-		KeepRecent:                  1,
-		PreferAppendAlloc:           false,
-		Checkpoint:                  true,
-		ReopenVerify:                true,
-		VerifySamples:               8,
-		ValueLogGC:                  true,
-		LeafGenerationPackMaxGen:    1,
-		IndexVacuum:                 indexVacuumModeAuto,
-		Progress:                    true,
+		Docs:                       defaultDocs,
+		BatchSize:                  defaultBatchSize,
+		Collection:                 defaultCollectionName,
+		DocumentFormat:             collections.DocumentFormatTemplateV1,
+		IndexCount:                 2,
+		BufferedIndexedWrites:      true,
+		Profile:                    treedb.ProfileFast,
+		DataOuterLeavesInValueLog:  true,
+		IndexOuterLeavesInValueLog: true,
+		KeepRecent:                 1,
+		PreferAppendAlloc:          false,
+		Checkpoint:                 true,
+		ReopenVerify:               true,
+		VerifySamples:              8,
+		ValueLogGC:                 true,
+		LeafGenerationPackMaxGen:   1,
+		IndexVacuum:                indexVacuumModeAuto,
+		Progress:                   true,
 	}
 	var documentFormat string
 	var profile string
@@ -343,7 +341,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	fs.BoolVar(&cfg.BufferedIndexedWrites, "buffered-indexed-writes", cfg.BufferedIndexedWrites, "use native collection-local memtables for indexed InsertBatch writes; set false for immediate-publish baseline comparisons")
 	fs.IntVar(&cfg.BufferedIndexedWriteMaxDocs, "buffered-indexed-write-max-docs", cfg.BufferedIndexedWriteMaxDocs, "flush indexed write buffers after this many staged documents; 0 uses the collection default")
 	fs.Int64Var(&cfg.BufferedIndexedWriteMaxBytes, "buffered-indexed-write-max-bytes", 0, "flush indexed write buffers after this many staged root-run bytes; 0 means Flush/Close only")
-	fs.IntVar(&cfg.BufferedIndexedWriteMaxRuns, "buffered-indexed-write-max-root-runs", cfg.BufferedIndexedWriteMaxRuns, "flush indexed write buffers after this many staged root-local mutation runs; 0 disables this trigger")
+	fs.IntVar(&cfg.BufferedIndexedWriteMaxRuns, "buffered-indexed-write-max-root-runs", cfg.BufferedIndexedWriteMaxRuns, "flush indexed write buffers after this many staged root-local mutation runs; explicit 0 disables this trigger; omitted with docs/bytes override keeps the compatibility default")
 	fs.BoolVar(&cfg.BufferedIndexedAsyncFlush, "buffered-indexed-async-flush", false, "publish threshold-triggered indexed write flushes in the background; Flush/Close still drain before returning")
 	fs.IntVar(&cfg.BufferedIndexedAsyncFlushMaxQueuedUnits, "buffered-indexed-async-flush-max-queued-units", 0, "max immutable indexed flush units queued for background publish; 0 uses the collection default when async flush is enabled")
 	fs.StringVar(&profile, "profile", string(cfg.Profile), "TreeDB profile: fast, wal_on_fast, durable, or bench")
@@ -378,6 +376,18 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	}
 	if fs.NArg() != 0 {
 		return cfg, fmt.Errorf("unexpected positional arguments: %s", strings.Join(fs.Args(), " "))
+	}
+	seenFlags := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) {
+		seenFlags[f.Name] = true
+	})
+	if !seenFlags["buffered-indexed-write-max-root-runs"] &&
+		(seenFlags["buffered-indexed-write-max-docs"] || seenFlags["buffered-indexed-write-max-bytes"]) &&
+		(cfg.BufferedIndexedWriteMaxDocs != 0 || cfg.BufferedIndexedWriteMaxBytes != 0) {
+		cfg.BufferedIndexedWriteMaxRuns = collections.DefaultIndexedWriteMemtableMaxRootRuns
+		if cfg.BufferedIndexedAsyncFlush {
+			cfg.BufferedIndexedWriteMaxRuns = collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns
+		}
 	}
 	parsedFormat, err := parseDocumentFormat(documentFormat)
 	if err != nil {

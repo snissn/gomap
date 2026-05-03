@@ -2359,6 +2359,12 @@ func TestCollectionIndexedWriteMemtablesAsyncFlushDefaultsQueueLimit(t *testing.
 	if !meta.Options.BufferedIndexedAsyncFlush {
 		t.Fatal("async indexed flush was not preserved for indexed collection")
 	}
+	if got := meta.Options.BufferedIndexedWriteMaxDocuments; got != DefaultIndexedWriteMemtableAsyncFlushMaxDocuments {
+		t.Fatalf("async max documents=%d want %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxDocuments)
+	}
+	if got := meta.Options.BufferedIndexedWriteMaxRootRuns; got != DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns {
+		t.Fatalf("async max root runs=%d want %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns)
+	}
 	if got := meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits; got != DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits {
 		t.Fatalf("async max queued units=%d want %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits)
 	}
@@ -2515,6 +2521,15 @@ func TestCollectionIndexedWriteMemtablesBypassDefaultLargeBatches(t *testing.T) 
 	if col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableDirectBatchDocuments) {
 		t.Fatal("default indexed memtable path buffered a large direct-publish batch")
 	}
+	meta.Options.BufferedIndexedAsyncFlush = true
+	meta.Options.BufferedIndexedWriteMaxDocuments = DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
+	if !col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableDirectBatchDocuments-1) {
+		t.Fatal("async default indexed memtable path bypassed a below-threshold batch")
+	}
+	if col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableDirectBatchDocuments) {
+		t.Fatal("async default indexed memtable path buffered a large direct-publish batch")
+	}
+	meta.Options.BufferedIndexedAsyncFlush = false
 	meta.Options.BufferedIndexedWriteMaxDocuments = 2
 	if !col.shouldBufferIndexedInsertBatch(meta, 2) {
 		t.Fatal("explicit small flush threshold should not trigger the default large-batch bypass")

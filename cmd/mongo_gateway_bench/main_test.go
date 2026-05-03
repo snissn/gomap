@@ -539,14 +539,14 @@ func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
 	if cfg.TreeDBMaintenance != treeDBMaintenanceFull {
 		t.Fatalf("TreeDBMaintenance=%q want %q", cfg.TreeDBMaintenance, treeDBMaintenanceFull)
 	}
-	if cfg.TreeDBBufferedIndexedWriteMaxDocuments != collections.DefaultIndexedWriteMemtableMaxDocuments {
-		t.Fatalf("TreeDBBufferedIndexedWriteMaxDocuments=%d want %d", cfg.TreeDBBufferedIndexedWriteMaxDocuments, collections.DefaultIndexedWriteMemtableMaxDocuments)
+	if cfg.TreeDBBufferedIndexedWriteMaxDocuments != 0 {
+		t.Fatalf("TreeDBBufferedIndexedWriteMaxDocuments=%d want 0", cfg.TreeDBBufferedIndexedWriteMaxDocuments)
 	}
 	if cfg.TreeDBBufferedIndexedWriteMaxBytes != 0 {
 		t.Fatalf("TreeDBBufferedIndexedWriteMaxBytes=%d want 0", cfg.TreeDBBufferedIndexedWriteMaxBytes)
 	}
-	if cfg.TreeDBBufferedIndexedWriteMaxRootRuns != collections.DefaultIndexedWriteMemtableMaxRootRuns {
-		t.Fatalf("TreeDBBufferedIndexedWriteMaxRootRuns=%d want %d", cfg.TreeDBBufferedIndexedWriteMaxRootRuns, collections.DefaultIndexedWriteMemtableMaxRootRuns)
+	if cfg.TreeDBBufferedIndexedWriteMaxRootRuns != 0 {
+		t.Fatalf("TreeDBBufferedIndexedWriteMaxRootRuns=%d want 0", cfg.TreeDBBufferedIndexedWriteMaxRootRuns)
 	}
 	if cfg.TreeDBBufferedIndexedAsyncFlush {
 		t.Fatal("TreeDBBufferedIndexedAsyncFlush=true want false by default")
@@ -556,6 +556,35 @@ func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
 	}
 	if cfg.InsertProducers != 1 {
 		t.Fatalf("InsertProducers=%d want 1", cfg.InsertProducers)
+	}
+}
+
+func TestParseConfigTreeDBPartialBufferedIndexedThresholdKeepsRootRunDefault(t *testing.T) {
+	cfg, err := parseConfig([]string{"-treedb-buffered-indexed-write-max-documents", "1234"})
+	if err != nil {
+		t.Fatalf("parse docs threshold: %v", err)
+	}
+	if cfg.TreeDBBufferedIndexedWriteMaxDocuments != 1234 {
+		t.Fatalf("TreeDBBufferedIndexedWriteMaxDocuments=%d want 1234", cfg.TreeDBBufferedIndexedWriteMaxDocuments)
+	}
+	if cfg.TreeDBBufferedIndexedWriteMaxRootRuns != collections.DefaultIndexedWriteMemtableMaxRootRuns {
+		t.Fatalf("TreeDBBufferedIndexedWriteMaxRootRuns=%d want %d", cfg.TreeDBBufferedIndexedWriteMaxRootRuns, collections.DefaultIndexedWriteMemtableMaxRootRuns)
+	}
+
+	asyncCfg, err := parseConfig([]string{"-treedb-buffered-indexed-async-flush", "-treedb-buffered-indexed-write-max-documents", "1234"})
+	if err != nil {
+		t.Fatalf("parse async docs threshold: %v", err)
+	}
+	if asyncCfg.TreeDBBufferedIndexedWriteMaxRootRuns != collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns {
+		t.Fatalf("async TreeDBBufferedIndexedWriteMaxRootRuns=%d want %d", asyncCfg.TreeDBBufferedIndexedWriteMaxRootRuns, collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns)
+	}
+
+	explicitZeroCfg, err := parseConfig([]string{"-treedb-buffered-indexed-write-max-documents", "1234", "-treedb-buffered-indexed-write-max-root-runs", "0"})
+	if err != nil {
+		t.Fatalf("parse explicit root-run zero: %v", err)
+	}
+	if explicitZeroCfg.TreeDBBufferedIndexedWriteMaxRootRuns != 0 {
+		t.Fatalf("explicit TreeDBBufferedIndexedWriteMaxRootRuns=%d want 0", explicitZeroCfg.TreeDBBufferedIndexedWriteMaxRootRuns)
 	}
 }
 
@@ -1687,7 +1716,7 @@ func TestRecordEffectiveTreeDBCollectionOptionsUsesNormalizedMetadata(t *testing
 	if err := recordEffectiveTreeDBCollectionOptions(result, cfg, &benchTarget{collections: manager}); err != nil {
 		t.Fatalf("record effective options: %v", err)
 	}
-	if result.TreeDBBufferedIndexedWriteMaxDocuments != collections.DefaultIndexedWriteMemtableMaxDocuments ||
+	if result.TreeDBBufferedIndexedWriteMaxDocuments != collections.DefaultIndexedWriteMemtableAsyncFlushMaxDocuments ||
 		result.TreeDBBufferedIndexedWriteMaxBytes != 777 ||
 		result.TreeDBBufferedIndexedWriteMaxRootRuns != 0 ||
 		!result.TreeDBBufferedIndexedAsyncFlush ||
@@ -1698,7 +1727,7 @@ func TestRecordEffectiveTreeDBCollectionOptionsUsesNormalizedMetadata(t *testing
 			result.TreeDBBufferedIndexedWriteMaxRootRuns,
 			result.TreeDBBufferedIndexedAsyncFlush,
 			result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
-			collections.DefaultIndexedWriteMemtableMaxDocuments)
+			collections.DefaultIndexedWriteMemtableAsyncFlushMaxDocuments)
 	}
 }
 
