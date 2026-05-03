@@ -1169,6 +1169,44 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 	}
 }
 
+func TestReportCollectionManagerUpdateStatsIncludesIndexedFlushMetrics(t *testing.T) {
+	stats := collections.CollectionManagerStats{
+		IndexedFlushCalls:    5,
+		IndexedFlushErrors:   1,
+		IndexedFlushDocs:     600,
+		IndexedFlushBytes:    18000,
+		IndexedFlushRootRuns: 180,
+		IndexedFlushRoots:    15,
+		IndexedFlushDuration: 60 * time.Millisecond,
+	}
+	result := testing.Benchmark(func(b *testing.B) {
+		reportCollectionManagerUpdateStats(b, stats, 600)
+	})
+	want := map[string]float64{
+		"indexed_flush_calls":          5,
+		"indexed_flush_docs/call":      120,
+		"indexed_flush_docs/doc":       1,
+		"indexed_flush_bytes/call":     3600,
+		"indexed_flush_bytes/doc":      30,
+		"indexed_flush_root_runs/call": 36,
+		"indexed_flush_root_runs/doc":  0.3,
+		"indexed_flush_roots/call":     3,
+		"indexed_flush_roots/doc":      0.025,
+		"indexed_flush_errors":         1,
+		"indexed_flush_ns/call":        12_000_000,
+		"indexed_flush_ns/doc":         100_000,
+	}
+	for metric, wantValue := range want {
+		gotValue, ok := result.Extra[metric]
+		if !ok {
+			t.Fatalf("missing benchmark metric %q in %v", metric, result.Extra)
+		}
+		if math.Abs(gotValue-wantValue) > 1e-9 {
+			t.Fatalf("benchmark metric %s=%g want %g", metric, gotValue, wantValue)
+		}
+	}
+}
+
 func reportCollectionManagerUpdateStats(b *testing.B, stats collections.CollectionManagerStats, docs int) {
 	b.Helper()
 	if docs <= 0 {
