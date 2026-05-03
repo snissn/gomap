@@ -7288,10 +7288,12 @@ type updateBatchPlan struct {
 }
 
 type directBufferedUpdatePlan struct {
-	changed         []preparedBatchUpdate
-	runtimes        []indexRuntime
-	primaryRootName string
-	stagedBytes     int64
+	changed          []preparedBatchUpdate
+	runtimes         []indexRuntime
+	templateRecords  []templateV1Record
+	templateRootName string
+	primaryRootName  string
+	stagedBytes      int64
 }
 
 var updateBatchPlanPool sync.Pool
@@ -7600,14 +7602,11 @@ func (c *Collection) validateUpdateBatchPlanRootDescriptors(plan *updateBatchPla
 	return c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs)
 }
 
-func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts collectionOptions, canBuffer bool, mode updateBatchMode, templateRecords []templateV1Record) bool {
+func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts collectionOptions, canBuffer bool, mode updateBatchMode) bool {
 	if c == nil || c.writeDomain == nil || !canBuffer || mode == updateBatchModeAny {
 		return false
 	}
 	if !meta.Options.BufferedIndexedWrites || len(meta.Indexes) == 0 {
-		return false
-	}
-	if len(templateRecords) != 0 {
 		return false
 	}
 	return !persistIndexStateForOptions(opts)
@@ -8319,13 +8318,32 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	stats.UniqueIndexPreflight += updateBatchStatsSince(detailedStats, phaseStart)
 
 	success := false
-	if c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode, templateRecords) {
+	if c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode) {
+		phaseStart = updateBatchStatsNow(detailedStats)
+		if len(templateRecords) > 0 {
+			sortTemplateV1Records(templateRecords)
+			var err error
+			templateRecords, err = dedupeTemplateV1Records(templateRecords)
+			if err != nil {
+				_ = snap.Close()
+				return nil, err
+			}
+			rootNames = append(rootNames, templateRootName)
+			uniqueSecondary = append(uniqueSecondary, -1)
+			baseRootIDs[templateRootName] = catalog.rootID(templateRootName)
+			policies = append(policies, plannerOptions.dataStoragePolicy)
+		}
+		stats.TemplateRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
+
 		phaseStart = updateBatchStatsNow(detailedStats)
 		rootNames = append(rootNames, primaryRootName)
 		uniqueSecondary = append(uniqueSecondary, -1)
 		baseRootIDs[primaryRootName] = primaryRoot
 		policies = append(policies, plannerOptions.dataStoragePolicy)
 		var stagedBytes int64
+		for i := range templateRecords {
+			stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, int64(len(templateRecords[i].id)+len(templateRecords[i].raw)))
+		}
 		for i := range changed {
 			results[changed[i].itemIndex].Modified = true
 			stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, int64(len(changed[i].documentID)+len(changed[i].document)))
@@ -8405,10 +8423,12 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			bufferedReadBlocked:         bufferedReadBlocked,
 			policies:                    policies,
 			directBufferedUpdate: &directBufferedUpdatePlan{
-				changed:         changed,
-				runtimes:        runtimes,
-				primaryRootName: primaryRootName,
-				stagedBytes:     stagedBytes,
+				changed:          changed,
+				runtimes:         runtimes,
+				templateRecords:  templateRecords,
+				templateRootName: templateRootName,
+				primaryRootName:  primaryRootName,
+				stagedBytes:      stagedBytes,
 			},
 			scratch: scratch,
 		}
@@ -8796,13 +8816,30 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 			actualRootRuns = saturatingAddNonNegativeInt(actualRootRuns, 1)
 		}
 	}
+	if len(direct.templateRecords) > 0 {
+		templateTable := rootTables[direct.templateRootName]
+		if templateTable == nil {
+			return false, fmt.Errorf("collections: UpdateBatch collection %q missing direct template root accumulator for %q", plan.meta.Name, direct.templateRootName)
+		}
+		if err := applyCollectionRunEntries(templateTable, len(direct.templateRecords), func(i int) (key, value []byte, err error) {
+			record := direct.templateRecords[i]
+			return bytes.Clone(record.id[:]), bytes.Clone(record.raw), nil
+		}); err != nil {
+			return false, err
+		}
+	}
 	primaryTable := rootTables[direct.primaryRootName]
 	var primaryIndexKeys [][]byte
 	if domain.primaryRunIndex != nil {
 		primaryIndexKeys = make([][]byte, 0, len(direct.changed))
 	}
+	if err := applyCollectionRunEntries(primaryTable, len(direct.changed), func(i int) (key, value []byte, err error) {
+		item := direct.changed[i]
+		return bytes.Clone(item.documentID), bytes.Clone(item.document), nil
+	}); err != nil {
+		return false, err
+	}
 	for _, item := range direct.changed {
-		setCollectionRunCopiedValue(primaryTable, item.documentID, item.document)
 		if primaryIndexKeys != nil {
 			primaryIndexKeys = append(primaryIndexKeys, item.documentID)
 		}

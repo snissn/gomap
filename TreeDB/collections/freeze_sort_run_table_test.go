@@ -7,6 +7,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestFreezeSortRunTableLatestSortedAndTombstoneSemantics(t *testing.T) {
@@ -98,6 +99,40 @@ func TestFreezeSortRunIteratorAdvertisesTrustedMaterializeFastPath(t *testing.T)
 	}
 	if got := rangedLen.Len(); got != 1 {
 		t.Fatalf("ranged iterator Len=%d want 1", got)
+	}
+}
+
+func TestFreezeSortRunTableApplyStealEntryFunc(t *testing.T) {
+	table := newFreezeSortRunTable()
+	appender, ok := table.(interface {
+		ApplyStealEntryFunc(count int, emit func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error)) error
+	})
+	if !ok {
+		t.Fatal("freeze-sort run table does not expose ApplyStealEntryFunc")
+	}
+	err := appender.ApplyStealEntryFunc(4, func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
+		switch i {
+		case 0:
+			return []byte("b"), []byte("old-b"), page.ValuePtr{}, node.FlagInline, nil
+		case 1:
+			return []byte("a"), []byte("value-a"), page.ValuePtr{}, node.FlagInline, nil
+		case 2:
+			return []byte("b"), []byte("new-b"), page.ValuePtr{}, node.FlagInline, nil
+		default:
+			return []byte("c"), nil, page.ValuePtr{}, node.FlagTombstone, nil
+		}
+	})
+	if err != nil {
+		t.Fatalf("ApplyStealEntryFunc: %v", err)
+	}
+
+	if got, _, flags, ok := table.GetEntry([]byte("b")); !ok || flags&node.FlagTombstone != 0 || !bytes.Equal(got, []byte("new-b")) {
+		t.Fatalf("mutable GetEntry b=(%q,%02x,%v), want latest new-b", got, flags, ok)
+	}
+	table.Freeze()
+	requireFreezeSortRunIterator(t, table.NewIterator(nil, nil), []string{"a", "b", "c"})
+	if got := table.Len(); got != 3 {
+		t.Fatalf("frozen Len=%d want 3", got)
 	}
 }
 
