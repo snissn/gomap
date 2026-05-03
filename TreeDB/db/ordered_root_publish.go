@@ -603,10 +603,10 @@ func (db *DB) publishOrderedRootDeltaBatch(baseRoot uint64, delta *batch.Batch, 
 		err = errors.New("missing index")
 		return
 	}
-	return db.publishOrderedRootDeltaBatchWithAllocator(idx, baseRoot, delta, opts, idx.allocator)
+	return db.publishOrderedRootDeltaBatchWithAllocator(idx, baseRoot, delta, opts, idx.allocator, &pagerAllocator{p: idx.pager})
 }
 
-func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot uint64, delta *batch.Batch, opts orderedRootPublishOptions, alloc zipper.PageAllocator) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, err error) {
+func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot uint64, delta *batch.Batch, opts orderedRootPublishOptions, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, err error) {
 	if db == nil {
 		err = ErrClosed
 		return
@@ -632,16 +632,15 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 	}
 	if baseRoot == 0 {
 		iter := newOrderedRootDeltaBatchIterator(delta, false)
-		if !iter.Valid() {
-			_ = iter.Close()
-			return 0, nil, metrics, nil
-		}
 		defer func() { _ = iter.Close() }()
+		if coldBuildAlloc == nil {
+			coldBuildAlloc = alloc
+		}
 		var leafPageLog bulk.LeafPageAppender
 		if opts.outerLeavesInValueLog {
 			leafPageLog = opts.leafPageLog
 		}
-		newRoot, err = bulk.BuildWithOptions(iter, alloc, idx.pager, bulk.BuildOptions{
+		newRoot, err = bulk.BuildWithOptions(iter, coldBuildAlloc, idx.pager, bulk.BuildOptions{
 			LeafPrefixCompression: opts.leafPrefixCompression,
 			LeafColumnar:          opts.leafColumnar,
 			PackedValuePtr:        opts.packedValuePtr,
@@ -1404,6 +1403,16 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			db.writeMu.RUnlock()
 		}
 	}()
+	for orderedIdx := range ordered {
+		if ordered[orderedIdx].BaseRoot == 0 {
+			retrySerialized = true
+			return 0, nil, retrySerialized, nil
+		}
+	}
+	if baseSystemRoot == 0 {
+		retrySerialized = true
+		return 0, nil, retrySerialized, nil
+	}
 
 	tracker := newAllocTracker(idx.allocator)
 	commitStarted := false
@@ -1428,7 +1437,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			return 0, nil, false, err
 		}
 		phaseStart := time.Now()
-		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, opts, tracker)
+		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, opts, tracker, tracker)
 		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.rootApplyCalls++
 		if err != nil {
@@ -1457,7 +1466,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 	}
 	defer func() { _ = systemDelta.Close() }()
 	phaseStart = time.Now()
-	rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idx, baseSystemRoot, systemDelta, systemOpts, tracker)
+	rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idx, baseSystemRoot, systemDelta, systemOpts, tracker, tracker)
 	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.systemApplyCalls++
 	if err != nil {
@@ -1501,6 +1510,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 	if err != nil {
 		return 0, nil, false, err
 	}
+	db.invalidateLeafGenerationSubtreeStats(tracker.Pages())
 	db.finalizeCommitPostWork(post)
 	db.writeMu.RUnlock()
 	db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, nil)

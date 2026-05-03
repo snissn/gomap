@@ -1093,6 +1093,97 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticPubli
 	}
 }
 
+func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticInvalidatesLeafGenerationSubtreeStats(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t,
+		"root/a", "va",
+	).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root: %v", err)
+	}
+
+	deltaTable := mustFrozenSystemMemtable(t, "root/b", "vb")
+	iter := deltaTable.NewIterator(nil, nil)
+	delta, err := OrderedRootDeltaBatchFromIterator(iter)
+	_ = iter.Close()
+	if err != nil {
+		t.Fatalf("OrderedRootDeltaBatchFromIterator: %v", err)
+	}
+	defer func() { _ = delta.Close() }()
+
+	idx := db.idx.Load()
+	if idx == nil {
+		t.Fatal("missing index")
+	}
+	maxSeedPageID := idx.pager.PageCount() + 1024
+	for pageID := uint64(1); pageID <= maxSeedPageID; pageID++ {
+		db.storeLeafGenerationSubtreeStats(pageID, leafGenerationSubtreeStats{
+			1: {LivePages: 1, LiveBytes: 4096},
+		})
+	}
+
+	done := make(chan struct {
+		systemRoot uint64
+		rootIDs    []uint64
+		err        error
+	}, 1)
+	db.writeMu.RLock()
+	locked := true
+	go func() {
+		systemRoot, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+			BaseRoot: baseRoot,
+			Delta:    delta,
+		}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			if len(rootIDs) != 1 || rootIDs[0] == 0 {
+				return nil, errors.New("unexpected optimistic root IDs")
+			}
+			return mustFrozenSystemMemtable(t, "sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+		})
+		done <- struct {
+			systemRoot uint64
+			rootIDs    []uint64
+			err        error
+		}{systemRoot: systemRoot, rootIDs: rootIDs, err: err}
+	}()
+
+	var result struct {
+		systemRoot uint64
+		rootIDs    []uint64
+		err        error
+	}
+	select {
+	case result = <-done:
+	case <-time.After(2 * time.Second):
+		db.writeMu.RUnlock()
+		locked = false
+		t.Fatal("optimistic batch root publish did not finish under a shared write gate")
+	}
+	if locked {
+		db.writeMu.RUnlock()
+	}
+	if result.err != nil {
+		t.Fatalf("publish delta batch group: %v", result.err)
+	}
+	if len(result.rootIDs) != 1 || result.rootIDs[0] == 0 || result.systemRoot == 0 {
+		t.Fatalf("systemRoot=%d rootIDs=%v, want non-zero roots", result.systemRoot, result.rootIDs)
+	}
+	if result.rootIDs[0] > maxSeedPageID || result.systemRoot > maxSeedPageID {
+		t.Fatalf("test did not seed new roots: maxSeed=%d systemRoot=%d rootIDs=%v", maxSeedPageID, result.systemRoot, result.rootIDs)
+	}
+	if stats, ok := db.loadLeafGenerationSubtreeStats(result.rootIDs[0]); ok {
+		t.Fatalf("new non-system root retained stale leaf-generation subtree stats: %v", stats)
+	}
+	if stats, ok := db.loadLeafGenerationSubtreeStats(result.systemRoot); ok {
+		t.Fatalf("new system root retained stale leaf-generation subtree stats: %v", stats)
+	}
+}
+
 func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticPreservesConcurrentUserRootWrite(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
@@ -1212,6 +1303,46 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticPrese
 	}
 	if got := string(entry.Value); got != "vb" {
 		t.Fatalf("root/b=%q want vb", got)
+	}
+}
+
+func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_DeleteOnlyColdBuildPublishesEmptyRoot(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := delta.Delete([]byte("root/missing")); err != nil {
+		t.Fatalf("delete root/missing: %v", err)
+	}
+	defer func() { _ = delta.Close() }()
+
+	_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+		BaseRoot: 0,
+		Delta:    delta,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 || rootIDs[0] == 0 {
+			return nil, errors.New("expected delete-only cold build to publish a non-zero empty root")
+		}
+		return mustFrozenSystemMemtable(t, "sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish delete-only cold build: %v", err)
+	}
+	if len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("rootIDs=%v want one non-zero empty root", rootIDs)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	if _, err := snap.GetEntryAtRoot(rootIDs[0], []byte("root/missing")); err == nil {
+		t.Fatal("root/missing exists in delete-only cold root")
 	}
 }
 
