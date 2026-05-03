@@ -9010,7 +9010,7 @@ func cloneCatalogWithRootUpdates(base *collectionCatalog, meta CollectionMeta, r
 			}
 		}
 	}
-	return newCollectionCatalogWithOverlayMetadata(copyCollectionMeta(meta), roots, rootOverlays, rootOverlayFilters)
+	return newCollectionCatalogWithOverlayMetadataOwned(copyCollectionMeta(meta), roots, rootOverlays, rootOverlayFilters)
 }
 
 func cloneCatalogWithRootOverlays(base *collectionCatalog, meta CollectionMeta, rootNames []string, rootIDs []uint64) *collectionCatalog {
@@ -9041,7 +9041,7 @@ func cloneCatalogWithRootOverlays(base *collectionCatalog, meta CollectionMeta, 
 			}
 		}
 	}
-	return newCollectionCatalogWithOverlayMetadata(copyCollectionMeta(meta), roots, rootOverlays, rootOverlayFilters)
+	return newCollectionCatalogWithOverlayMetadataOwned(copyCollectionMeta(meta), roots, rootOverlays, rootOverlayFilters)
 }
 
 func cloneCatalogWithRootOverlayFilters(base *collectionCatalog, rootNames []string, rootIDs []uint64, filters map[string]collectionRootOverlayFilter) *collectionCatalog {
@@ -9072,7 +9072,7 @@ func cloneCatalogWithRootOverlayFilters(base *collectionCatalog, rootNames []str
 		}
 		byRoot[rootIDs[i]] = filter.clone()
 	}
-	return newCollectionCatalogWithOverlayMetadata(copyCollectionMeta(base.meta), roots, rootOverlays, rootOverlayFilters)
+	return newCollectionCatalogWithOverlayMetadataOwned(copyCollectionMeta(base.meta), roots, rootOverlays, rootOverlayFilters)
 }
 
 func newCollectionCatalog(meta CollectionMeta, roots map[string]uint64) *collectionCatalog {
@@ -9084,11 +9084,15 @@ func newCollectionCatalogWithOverlays(meta CollectionMeta, roots map[string]uint
 }
 
 func newCollectionCatalogWithOverlayMetadata(meta CollectionMeta, roots map[string]uint64, rootOverlays map[string][]uint64, rootOverlayFilters map[string]map[uint64]collectionRootOverlayFilter) *collectionCatalog {
+	return newCollectionCatalogWithOverlayMetadataOwned(meta, roots, cloneRootOverlayMap(rootOverlays), cloneRootOverlayFilterMap(rootOverlayFilters))
+}
+
+func newCollectionCatalogWithOverlayMetadataOwned(meta CollectionMeta, roots map[string]uint64, rootOverlays map[string][]uint64, rootOverlayFilters map[string]map[uint64]collectionRootOverlayFilter) *collectionCatalog {
 	catalog := &collectionCatalog{
 		meta:               meta,
 		roots:              roots,
-		rootOverlays:       cloneRootOverlayMap(rootOverlays),
-		rootOverlayFilters: cloneRootOverlayFilterMap(rootOverlayFilters),
+		rootOverlays:       rootOverlays,
+		rootOverlayFilters: rootOverlayFilters,
 		primaryRootName:    collectionPrimaryRootName(meta.Name),
 		templateRootName:   collectionTemplateRootName(meta.Name),
 		indexStateRootName: collectionIndexStateRootName(meta.Name),
@@ -11002,7 +11006,7 @@ func (c *collectionCatalog) copy() *collectionCatalog {
 	}
 	rootOverlays := cloneRootOverlayMap(c.rootOverlays)
 	rootOverlayFilters := cloneRootOverlayFilterMap(c.rootOverlayFilters)
-	return newCollectionCatalogWithOverlayMetadata(copyCollectionMeta(c.meta), roots, rootOverlays, rootOverlayFilters)
+	return newCollectionCatalogWithOverlayMetadataOwned(copyCollectionMeta(c.meta), roots, rootOverlays, rootOverlayFilters)
 }
 
 func getSystemValue(snap *backenddb.Snapshot, key string) ([]byte, bool, error) {
@@ -11583,6 +11587,9 @@ func buildCollectionRootOverlayFilter(runs []memtable.Table) (collectionRootOver
 	var filter collectionRootOverlayFilter
 	for it.Valid() {
 		filter.addKey(it.UnsafeKey())
+		if filter.count > maxCollectionRootOverlayFilterKeys {
+			return collectionRootOverlayFilter{}, it.Error()
+		}
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
