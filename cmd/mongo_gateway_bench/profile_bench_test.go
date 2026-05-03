@@ -152,6 +152,9 @@ func TestProfileBenchTimedUpdatePhaseLabels(t *testing.T) {
 	if !called {
 		t.Fatal("timed phase callback was not called")
 	}
+	if err := runProfileBenchTimedUpdatePhase(context.Background(), nil); err == nil {
+		t.Fatal("nil timed phase callback returned nil error")
+	}
 }
 
 func TestProfileBenchParsedUpdateDocsUsesDistinctCityPhases(t *testing.T) {
@@ -721,7 +724,7 @@ func runProfileBenchTimedUpdatePhase(ctx context.Context, run func(context.Conte
 		ctx = context.Background()
 	}
 	if run == nil {
-		return nil
+		return errors.New("mongo gateway profile benchmark timed update phase callback is nil")
 	}
 	var err error
 	pprof.Do(ctx, pprof.Labels(

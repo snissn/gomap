@@ -73,6 +73,10 @@ var (
 	errUpdateBatchHasSecondaryUniqueIndex     = errors.New("collections: update batch has secondary unique index")
 	errUpdateBatchChangesSecondaryUniqueIndex = errors.New("collections: update batch changes secondary unique index")
 	errUpdateCombinerStopped                  = errors.New("collections: update combiner stopped before DB update completed; callback may have been invoked")
+	indexedAsyncFlushPprofLabels              = pprof.Labels(
+		collectionPprofComponentKey, collectionPprofIndexedAsyncFlush,
+		collectionPprofOperationKey, collectionPprofIndexedAsyncFlushRun,
+	)
 )
 
 // UpdateBatchItem describes one document update in a batch. DocumentID must be
@@ -1652,10 +1656,7 @@ func (c *Collection) scheduleIndexedAsyncFlush(domain *collectionWriteDomain) bo
 	db := c.db
 	go func() {
 		var err error
-		pprof.Do(context.Background(), pprof.Labels(
-			collectionPprofComponentKey, collectionPprofIndexedAsyncFlush,
-			collectionPprofOperationKey, collectionPprofIndexedAsyncFlushRun,
-		), func(context.Context) {
+		pprof.Do(context.Background(), indexedAsyncFlushPprofLabels, func(context.Context) {
 			err = flushCollectionWriteDomainAsync(db, domain)
 		})
 		domain.finishIndexedAsyncFlush(err)
