@@ -233,16 +233,9 @@ func loadReportData(cfg config) (reportData, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		data.Warnings = append(data.Warnings, err.Error())
 	}
-	for _, idx := range []int{0, 1, 2, 3} {
-		path := filepath.Join(cfg.RunRoot, "mongo_gateway_reader_writer_scaling_1m", fmt.Sprintf("indexes_%d", idx), "summary.tsv")
-		rows, err := readMongoSummary(path)
-		if err == nil {
-			data.MongoScaling[idx] = rows
-			continue
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			data.Warnings = append(data.Warnings, err.Error())
-		}
+	if scaling, warnings := loadMongoScaling(filepath.Join(cfg.RunRoot, "mongo_gateway_reader_writer_scaling_1m")); len(scaling) > 0 || len(warnings) > 0 {
+		data.MongoScaling = scaling
+		data.Warnings = append(data.Warnings, warnings...)
 	}
 	return data, nil
 }
@@ -601,6 +594,46 @@ func loadMongoLoadModes(dir string) ([]loadModeRow, error) {
 	return out, nil
 }
 
+func loadMongoScaling(dir string) (map[int][]mongoSummaryRow, []string) {
+	out := make(map[int][]mongoSummaryRow)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return out, nil
+		}
+		return out, []string{fmt.Sprintf("mongo scaling: %v", err)}
+	}
+	var warnings []string
+	for _, entry := range entries {
+		idx, ok := indexDirCount(entry.Name())
+		if !entry.IsDir() || !ok {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name(), "summary.tsv")
+		rows, err := readMongoSummary(path)
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				warnings = append(warnings, err.Error())
+			}
+			continue
+		}
+		out[idx] = rows
+	}
+	return out, warnings
+}
+
+func indexDirCount(name string) (int, bool) {
+	value, ok := strings.CutPrefix(name, "indexes_")
+	if !ok || value == "" {
+		return 0, false
+	}
+	idx, err := strconv.Atoi(value)
+	if err != nil || idx < 0 {
+		return 0, false
+	}
+	return idx, true
+}
+
 func readMatrix(path string) ([]matrixRow, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -636,7 +669,7 @@ func readMatrix(path string) ([]matrixRow, error) {
 			Documents:        atoi(get("documents")),
 			SecondaryIndexes: atoi(get("secondary_indexes")),
 			RawJSON:          get("raw_json"),
-			PhysicalBytes:    int64(atoi(get("physical_bytes"))),
+			PhysicalBytes:    atoi64(get("physical_bytes")),
 		})
 	}
 	return rows, nil
@@ -1018,16 +1051,18 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 	b.WriteString("<p class=\"subtle\">These two charts show the headline insert throughput and physical disk footprint as secondary indexes are added.</p>")
 	b.WriteString(fullSweepLoadNote(rows))
 	b.WriteString("<div class=\"chart-grid\">")
-	b.WriteString(lineChart("Load throughput by index", []string{"0", "1", "2"}, "secondary indexes", "docs/sec", []chartSeries{
-		{Name: "TreeDB", Values: mongoPhaseByIndex(rows, "load_insert_many", "tree"), Color: "#2867c7"},
-		{Name: "MongoDB", Values: mongoPhaseByIndex(rows, "load_insert_many", "mongo"), Color: "#1f8a5b"},
+	indexes := sortedMongoIndexes(rows)
+	indexLabels := indexNumberLabels(indexes)
+	b.WriteString(lineChart("Load throughput by index", indexLabels, "secondary indexes", "docs/sec", []chartSeries{
+		{Name: "TreeDB", Values: mongoPhaseByIndex(rows, indexes, "load_insert_many", "tree"), Color: "#2867c7"},
+		{Name: "MongoDB", Values: mongoPhaseByIndex(rows, indexes, "load_insert_many", "mongo"), Color: "#1f8a5b"},
 	}, "docs/sec"))
-	b.WriteString(lineChart("Physical disk by index", []string{"0", "1", "2"}, "secondary indexes", "physical bytes", []chartSeries{
-		{Name: "TreeDB", Values: mongoDiskByIndex(rows, "tree"), Color: "#2867c7"},
-		{Name: "MongoDB", Values: mongoDiskByIndex(rows, "mongo"), Color: "#1f8a5b"},
+	b.WriteString(lineChart("Physical disk by index", indexLabels, "secondary indexes", "physical bytes", []chartSeries{
+		{Name: "TreeDB", Values: mongoDiskByIndex(rows, indexes, "tree"), Color: "#2867c7"},
+		{Name: "MongoDB", Values: mongoDiskByIndex(rows, indexes, "mongo"), Color: "#1f8a5b"},
 	}, "bytes"))
 	b.WriteString("</div></div>")
-	for _, idx := range sortedMongoIndexes(rows) {
+	for _, idx := range indexes {
 		indexLabel := indexCountLabel(idx)
 		b.WriteString("<div class=\"chart-group\"><h3>" + esc(indexLabel) + ": phase detail and reader fanout</h3>")
 		b.WriteString("<p class=\"subtle\">The phase chart keeps load out so point reads, range reads, and updates are easier to compare. The fanout chart shows concurrent `_id` reader scaling from one to thirty-two readers.</p>")
@@ -1173,9 +1208,17 @@ func sortedMongoIndexes(rows []mongoSummaryRow) []int {
 	return out
 }
 
-func mongoPhaseByIndex(rows []mongoSummaryRow, phase, side string) []float64 {
+func indexNumberLabels(indexes []int) []string {
+	out := make([]string, 0, len(indexes))
+	for _, idx := range indexes {
+		out = append(out, strconv.Itoa(idx))
+	}
+	return out
+}
+
+func mongoPhaseByIndex(rows []mongoSummaryRow, indexes []int, phase, side string) []float64 {
 	var out []float64
-	for _, idx := range []int{0, 1, 2} {
+	for _, idx := range indexes {
 		row, ok := mongoRow(rows, idx, phase)
 		if !ok {
 			out = append(out, 0)
@@ -1190,9 +1233,9 @@ func mongoPhaseByIndex(rows []mongoSummaryRow, phase, side string) []float64 {
 	return out
 }
 
-func mongoDiskByIndex(rows []mongoSummaryRow, side string) []float64 {
+func mongoDiskByIndex(rows []mongoSummaryRow, indexes []int, side string) []float64 {
 	var out []float64
-	for _, idx := range []int{0, 1, 2} {
+	for _, idx := range indexes {
 		row, ok := mongoRow(rows, idx, "load_insert_many")
 		if !ok {
 			out = append(out, 0)
@@ -1824,6 +1867,11 @@ func emptyDash(s string) string {
 
 func atoi(s string) int {
 	v, _ := strconv.Atoi(strings.TrimSpace(s))
+	return v
+}
+
+func atoi64(s string) int64 {
+	v, _ := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
 	return v
 }
 
