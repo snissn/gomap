@@ -63,6 +63,11 @@ Useful variants:
   -dir /tmp/treedb_two_index_buffered_bounded \
   -reset
 
+# When overriding only the document or byte threshold, omitted root-run threshold
+# flags keep the compatibility root-run default. Pass
+# -buffered-indexed-write-max-root-runs 0 explicitly to disable root-run flushing
+# for that partial-threshold experiment.
+
 # Disable indexed write memtables for immediate-publish baseline comparisons.
 ./bin/collection-load-fixture \
   -buffered-indexed-writes=false \
