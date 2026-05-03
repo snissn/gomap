@@ -19,6 +19,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 	"github.com/tidwall/gjson"
 )
 
@@ -362,9 +363,18 @@ func (plan *insertBatchPlan) checkPersistedConflicts(snap *backenddb.Snapshot, c
 		return fmt.Errorf("collections: insert conflict check missing primary keys: got %d, want %d", len(plan.primaryKeys), len(plan.resultIDs))
 	}
 	uniqueRootIDs := uniqueIndexRootIDs(catalog)
+	if len(catalog.rootOverlays) != 0 {
+		uniqueRootIDs = uniqueIndexRootIDsOrOverlays(catalog)
+	}
 	uniqueProbeRuns, err := plan.uniqueProbeRunsForPersistedConflicts(uniqueRootIDs)
 	if err != nil {
 		return err
+	}
+	if len(catalog.rootOverlays) != 0 {
+		if err := plan.checkPersistedDocumentConflictsAtCatalogRoot(snap, catalog); err != nil {
+			return err
+		}
+		return checkPersistedUniqueConflictsAtCatalogRoots(snap, catalog, uniqueProbeRuns)
 	}
 	preflight := insertBatchPreflight{
 		snapshot:           snap,
@@ -375,6 +385,47 @@ func (plan *insertBatchPlan) checkPersistedConflicts(snap *backenddb.Snapshot, c
 		return err
 	}
 	return preflight.checkUniqueConflicts(uniqueProbeRuns)
+}
+
+func (plan *insertBatchPlan) checkPersistedDocumentConflictsAtCatalogRoot(snap *backenddb.Snapshot, catalog *collectionCatalog) error {
+	rootName := collectionPrimaryRootName(catalog.meta.Name)
+	for _, key := range plan.primaryKeys {
+		entry, _, err := collectionGetEntryAtCatalogRoot(snap, catalog, rootName, key)
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if entry.Flags&node.FlagTombstone == 0 {
+			return ErrDocumentExists
+		}
+	}
+	return nil
+}
+
+func checkPersistedUniqueConflictsAtCatalogRoots(snap *backenddb.Snapshot, catalog *collectionCatalog, runs []collectionUniqueProbeRun) error {
+	if snap == nil || catalog == nil || len(runs) == 0 {
+		return nil
+	}
+	for _, run := range runs {
+		rootName := collectionSecondaryRootName(catalog.meta.Name, run.indexName)
+		for _, prefix := range run.prefixes {
+			it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, prefix, prefixEnd(prefix), false)
+			if err != nil {
+				return err
+			}
+			if it == nil {
+				continue
+			}
+			conflict := it.Valid()
+			_ = it.Close()
+			if conflict {
+				return fmt.Errorf("%w %q", ErrUniqueIndexConflict, run.indexName)
+			}
+		}
+	}
+	return nil
 }
 
 func (plan *insertBatchPlan) uniqueProbeRunsForPersistedConflicts(uniqueRootIDs map[string]uint64) ([]collectionUniqueProbeRun, error) {
