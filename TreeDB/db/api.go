@@ -648,6 +648,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.read_path.outer_leaf.cache.entries"] = fmt.Sprintf("%d", cacheStats.Entries)
 	stats["treedb.process.read_path.outer_leaf.cache.capacity"] = fmt.Sprintf("%d", cacheStats.Capacity)
 	stats["treedb.process.read_path.outer_leaf.cache.bytes"] = fmt.Sprintf("%d", cacheStats.Bytes)
+	stats["treedb.process.read_path.outer_leaf.cache.read_miss_admission_skips"] = fmt.Sprintf("%d", cacheStats.ReadMissAdmissionSkips)
+	stats["treedb.process.read_path.outer_leaf.cache.read_miss_admission_stores"] = fmt.Sprintf("%d", cacheStats.ReadMissAdmissionStores)
 
 	if db.valueLogManager != nil {
 		vlogRemaps, vlogDeadMappings := db.valueLogManager.RemapStats()
