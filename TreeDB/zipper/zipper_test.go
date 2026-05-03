@@ -389,9 +389,19 @@ func TestZipperMetricsRecordLeafLogLoadSourcesAndChildRefs(t *testing.T) {
 	recordZipperInternalChildRef(&metrics, leafRef)
 	recordZipperInternalChildRef(&metrics, pageRef)
 	recordZipperInternalLeafLogRefCopy(&metrics)
+	recordZipperLeafPageWrite(&metrics, true)
+	recordZipperLeafLogPageRecordHintWrite(&metrics, leafRef)
+	recordZipperLeafPageWrite(&metrics, false)
+	recordZipperInternalPageWrite(&metrics)
 
 	if metrics.ZipperNodeLoads != 4 || metrics.ZipperLeafLogNodeLoads != 3 || metrics.ZipperPagerNodeLoads != 1 {
 		t.Fatalf("node load metrics=%+v, want 3 leaf-log and 1 pager load", metrics)
+	}
+	if metrics.ZipperLeafLogNodeBytesRead != 3*page.PageSize || metrics.ZipperPagerNodeBytesRead != page.PageSize {
+		t.Fatalf("node byte metrics=%+v, want leaf-log=%d pager=%d", metrics, 3*page.PageSize, page.PageSize)
+	}
+	if metrics.ZipperLeafLogRecordHintBytesRead != 3*page.PageSize {
+		t.Fatalf("leaf-log record-hint read bytes=%d want %d", metrics.ZipperLeafLogRecordHintBytesRead, 3*page.PageSize)
 	}
 	if metrics.ZipperLeafLogCacheHits != 1 || metrics.ZipperLeafLogReaderCalls != 2 || metrics.ZipperLeafLogViewReads != 1 || metrics.ZipperLeafLogScratchReads != 1 {
 		t.Fatalf("leaf-log source metrics=%+v, want cache/view/scratch attribution", metrics)
@@ -401,6 +411,18 @@ func TestZipperMetricsRecordLeafLogLoadSourcesAndChildRefs(t *testing.T) {
 	}
 	if metrics.ZipperInternalLeafLogRefCopies != 1 {
 		t.Fatalf("internal leaf-log ref copy metrics=%+v, want one copied leaf-log ref", metrics)
+	}
+	if metrics.ZipperLeafPagesWritten != 2 || metrics.ZipperLeafLogPagesWritten != 1 || metrics.ZipperPagerLeafPagesWritten != 1 {
+		t.Fatalf("leaf write metrics=%+v, want one leaf-log and one pager leaf write", metrics)
+	}
+	if metrics.ZipperLeafPageBytesWritten != 2*page.PageSize || metrics.ZipperLeafLogPageBytesWritten != page.PageSize || metrics.ZipperPagerLeafPageBytesWritten != page.PageSize {
+		t.Fatalf("leaf write byte metrics=%+v, want logical bytes for one leaf-log and one pager write", metrics)
+	}
+	if metrics.ZipperLeafLogRecordHintBytesWritten != page.PageSize {
+		t.Fatalf("leaf-log record-hint written bytes=%d want %d", metrics.ZipperLeafLogRecordHintBytesWritten, page.PageSize)
+	}
+	if metrics.ZipperInternalPagesWritten != 1 || metrics.ZipperInternalPageBytesWritten != page.PageSize {
+		t.Fatalf("internal page write metrics=%+v, want one page write", metrics)
 	}
 }
 

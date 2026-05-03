@@ -888,12 +888,20 @@ func reportProfileBenchOrderedRootPublishStats(b *testing.B, after, before map[s
 	rootApplyLeafLogReaderCalls := profileBenchDeltaUintStat(after, before, prefix+"root_apply_leaf_log_reader_calls_total")
 	rootApplyLeafLogViewReads := profileBenchDeltaUintStat(after, before, prefix+"root_apply_leaf_log_view_reads_total")
 	rootApplyLeafLogScratchReads := profileBenchDeltaUintStat(after, before, prefix+"root_apply_leaf_log_scratch_reads_total")
+	rootApplyPagerNodeBytesRead := profileBenchDeltaUintStat(after, before, prefix+"root_apply_pager_node_bytes_read_total")
+	rootApplyLeafLogNodeBytesRead := profileBenchDeltaUintStat(after, before, prefix+"root_apply_leaf_log_node_bytes_read_total")
+	rootApplyLeafLogRecordHintBytesRead := profileBenchDeltaUintStat(after, before, prefix+"root_apply_leaf_log_record_hint_bytes_read_total")
 	rootApplyLeafMerges := profileBenchDeltaUintStat(after, before, prefix+"root_apply_leaf_merges_total")
 	rootApplyInternalMerges := profileBenchDeltaUintStat(after, before, prefix+"root_apply_internal_merges_total")
 	rootApplyLeafPagesWritten := profileBenchDeltaUintStat(after, before, prefix+"root_apply_leaf_pages_written_total")
 	rootApplyPagerLeafPagesWritten := profileBenchDeltaUintStat(after, before, prefix+"root_apply_pager_leaf_pages_written_total")
 	rootApplyLeafLogPagesWritten := profileBenchDeltaUintStat(after, before, prefix+"root_apply_leaf_log_pages_written_total")
+	rootApplyLeafPageBytesWritten := profileBenchDeltaUintStat(after, before, prefix+"root_apply_leaf_page_bytes_written_total")
+	rootApplyPagerLeafPageBytesWritten := profileBenchDeltaUintStat(after, before, prefix+"root_apply_pager_leaf_page_bytes_written_total")
+	rootApplyLeafLogPageBytesWritten := profileBenchDeltaUintStat(after, before, prefix+"root_apply_leaf_log_page_bytes_written_total")
+	rootApplyLeafLogRecordHintBytesWritten := profileBenchDeltaUintStat(after, before, prefix+"root_apply_leaf_log_record_hint_bytes_written_total")
 	rootApplyInternalPagesWritten := profileBenchDeltaUintStat(after, before, prefix+"root_apply_internal_pages_written_total")
+	rootApplyInternalPageBytesWritten := profileBenchDeltaUintStat(after, before, prefix+"root_apply_internal_page_bytes_written_total")
 	rootApplyInternalChildRefs := profileBenchDeltaUintStat(after, before, prefix+"root_apply_internal_child_refs_total")
 	rootApplyInternalPageChildRefs := profileBenchDeltaUintStat(after, before, prefix+"root_apply_internal_page_child_refs_total")
 	rootApplyInternalLeafLogRefs := profileBenchDeltaUintStat(after, before, prefix+"root_apply_internal_leaf_log_refs_total")
@@ -923,12 +931,20 @@ func reportProfileBenchOrderedRootPublishStats(b *testing.B, after, before map[s
 	b.ReportMetric(float64(rootApplyLeafLogReaderCalls)/float64(docs), "publish_delta_group_root_apply_leaf_log_reader_calls/doc")
 	b.ReportMetric(float64(rootApplyLeafLogViewReads)/float64(docs), "publish_delta_group_root_apply_leaf_log_view_reads/doc")
 	b.ReportMetric(float64(rootApplyLeafLogScratchReads)/float64(docs), "publish_delta_group_root_apply_leaf_log_scratch_reads/doc")
+	b.ReportMetric(float64(rootApplyPagerNodeBytesRead)/float64(docs), "publish_delta_group_root_apply_pager_node_read_bytes/doc")
+	b.ReportMetric(float64(rootApplyLeafLogNodeBytesRead)/float64(docs), "publish_delta_group_root_apply_leaf_log_node_read_bytes/doc")
+	b.ReportMetric(float64(rootApplyLeafLogRecordHintBytesRead)/float64(docs), "publish_delta_group_root_apply_leaf_log_record_hint_read_bytes/doc")
 	b.ReportMetric(float64(rootApplyLeafMerges)/float64(docs), "publish_delta_group_root_apply_leaf_merges/doc")
 	b.ReportMetric(float64(rootApplyInternalMerges)/float64(docs), "publish_delta_group_root_apply_internal_merges/doc")
 	b.ReportMetric(float64(rootApplyLeafPagesWritten)/float64(docs), "publish_delta_group_root_apply_leaf_pages_written/doc")
 	b.ReportMetric(float64(rootApplyPagerLeafPagesWritten)/float64(docs), "publish_delta_group_root_apply_pager_leaf_pages_written/doc")
 	b.ReportMetric(float64(rootApplyLeafLogPagesWritten)/float64(docs), "publish_delta_group_root_apply_leaf_log_pages_written/doc")
+	b.ReportMetric(float64(rootApplyLeafPageBytesWritten)/float64(docs), "publish_delta_group_root_apply_leaf_page_write_bytes/doc")
+	b.ReportMetric(float64(rootApplyPagerLeafPageBytesWritten)/float64(docs), "publish_delta_group_root_apply_pager_leaf_page_write_bytes/doc")
+	b.ReportMetric(float64(rootApplyLeafLogPageBytesWritten)/float64(docs), "publish_delta_group_root_apply_leaf_log_page_write_bytes/doc")
+	b.ReportMetric(float64(rootApplyLeafLogRecordHintBytesWritten)/float64(docs), "publish_delta_group_root_apply_leaf_log_record_hint_write_bytes/doc")
 	b.ReportMetric(float64(rootApplyInternalPagesWritten)/float64(docs), "publish_delta_group_root_apply_internal_pages_written/doc")
+	b.ReportMetric(float64(rootApplyInternalPageBytesWritten)/float64(docs), "publish_delta_group_root_apply_internal_page_write_bytes/doc")
 	b.ReportMetric(float64(rootApplyInternalChildRefs)/float64(docs), "publish_delta_group_root_apply_internal_child_refs/doc")
 	b.ReportMetric(float64(rootApplyInternalPageChildRefs)/float64(docs), "publish_delta_group_root_apply_internal_page_child_refs/doc")
 	b.ReportMetric(float64(rootApplyInternalLeafLogRefs)/float64(docs), "publish_delta_group_root_apply_internal_leaf_log_refs/doc")
@@ -941,6 +957,15 @@ func reportProfileBenchOrderedRootPublishStats(b *testing.B, after, before map[s
 	b.ReportMetric(float64(finalizeNs)/float64(docs), "publish_delta_group_finalize_ns/doc")
 	if rootApplyCalls > 0 {
 		b.ReportMetric(float64(rootApplyNs)/float64(rootApplyCalls), "publish_delta_group_root_apply_ns/call")
+	}
+	if rootApplyLeafLogNodeLoads > 0 {
+		b.ReportMetric(float64(rootApplyLeafLogRecordHintBytesRead)/float64(rootApplyLeafLogNodeLoads), "publish_delta_group_root_apply_leaf_log_record_hint_read_bytes/load")
+	}
+	if rootApplyLeafLogPagesWritten > 0 {
+		b.ReportMetric(float64(rootApplyLeafLogRecordHintBytesWritten)/float64(rootApplyLeafLogPagesWritten), "publish_delta_group_root_apply_leaf_log_record_hint_write_bytes/page")
+	}
+	if rootApplyLeafLogPageBytesWritten > 0 {
+		b.ReportMetric(float64(rootApplyLeafLogRecordHintBytesWritten)/float64(rootApplyLeafLogPageBytesWritten), "publish_delta_group_root_apply_leaf_log_record_hint_write_ratio")
 	}
 	if systemApplyCalls > 0 {
 		b.ReportMetric(float64(systemApplyNs)/float64(systemApplyCalls), "publish_delta_group_system_apply_ns/call")
