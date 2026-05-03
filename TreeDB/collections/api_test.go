@@ -7757,6 +7757,125 @@ func TestSnapshotUpdateBatchBufferedReadPrimaryRunIndexAvoidsCollectingPendingRu
 	}
 }
 
+func TestBufferedRunLenHintSumsPendingRunLengths(t *testing.T) {
+	first := newCollectionRunTable(2)
+	setCollectionRunValue(first, []byte("u1"), []byte("one"))
+	setCollectionRunValue(first, []byte("u2"), []byte("two"))
+	first.Freeze()
+	defer resetCollectionRunTable(first)
+
+	second := newCollectionRunTable(1)
+	setCollectionRunValue(second, []byte("u3"), []byte("three"))
+	second.Freeze()
+	defer resetCollectionRunTable(second)
+
+	if got := bufferedRunLenHint([]memtable.Table{nil, first, second}); got != 3 {
+		t.Fatalf("bufferedRunLenHint=%d want 3", got)
+	}
+}
+
+func TestRebuildBufferedIndexesCoverMultiplePendingRuns(t *testing.T) {
+	primaryName := collectionPrimaryRootName("users")
+	primaryA := newCollectionRunTable(2)
+	setCollectionRunValue(primaryA, []byte("u1"), []byte("one"))
+	setCollectionRunValue(primaryA, []byte("u2"), []byte("two"))
+	primaryA.Freeze()
+	defer resetCollectionRunTable(primaryA)
+
+	primaryB := newCollectionRunTable(1)
+	setCollectionRunValue(primaryB, []byte("u3"), []byte("three"))
+	primaryB.Freeze()
+	defer resetCollectionRunTable(primaryB)
+
+	uniqueA := newCollectionRunTable(1)
+	setCollectionRunValue(uniqueA, []byte("city:boston"), nil)
+	uniqueA.Freeze()
+	defer resetCollectionRunTable(uniqueA)
+
+	uniqueB := newCollectionRunTable(1)
+	setCollectionRunValue(uniqueB, []byte("city:seattle"), nil)
+	uniqueB.Freeze()
+	defer resetCollectionRunTable(uniqueB)
+
+	runs := map[string][]memtable.Table{
+		primaryName: {primaryA, primaryB},
+		"city_1":    {uniqueA, uniqueB},
+	}
+	primaryIDs := rebuildBufferedPrimaryIDIndex("users", runs)
+	if primaryIDs == nil || primaryIDs.len() != 3 {
+		t.Fatalf("primary ID index len=%d want 3", primaryIDs.len())
+	}
+	for _, key := range [][]byte{[]byte("u1"), []byte("u2"), []byte("u3")} {
+		if !primaryIDs.contains(key) {
+			t.Fatalf("primary ID index missing %q", key)
+		}
+	}
+
+	primaryRuns, err := rebuildBufferedPrimaryRunIndex("users", runs)
+	if err != nil {
+		t.Fatalf("rebuildBufferedPrimaryRunIndex: %v", err)
+	}
+	for _, tc := range []struct {
+		key   []byte
+		table memtable.Table
+	}{
+		{[]byte("u1"), primaryA},
+		{[]byte("u2"), primaryA},
+		{[]byte("u3"), primaryB},
+	} {
+		got, ok := primaryRuns.lookup(tc.key)
+		if !ok || got != tc.table {
+			t.Fatalf("primary run lookup %q table=%p ok=%v want %p", tc.key, got, ok, tc.table)
+		}
+	}
+
+	uniqueIndexes := rebuildBufferedUniqueValueIndexes(map[string][]memtable.Table{
+		"city_1": {uniqueA, uniqueB},
+	})
+	unique := uniqueIndexes["city_1"]
+	if unique == nil || unique.len() != 2 {
+		t.Fatalf("unique index len=%d want 2", unique.len())
+	}
+	for _, key := range [][]byte{[]byte("city:boston"), []byte("city:seattle")} {
+		if !unique.contains(key) {
+			t.Fatalf("unique index missing %q", key)
+		}
+	}
+}
+
+func BenchmarkRebuildBufferedPendingIndexes(b *testing.B) {
+	const entries = 4096
+	primaryName := collectionPrimaryRootName("users")
+	primary := newCollectionRunTable(entries)
+	unique := newCollectionRunTable(entries)
+	for i := 0; i < entries; i++ {
+		id := fmt.Sprintf("u%05d", i)
+		setCollectionRunValue(primary, []byte(id), []byte("doc"))
+		setCollectionRunValue(unique, []byte("email:"+id), nil)
+	}
+	primary.Freeze()
+	unique.Freeze()
+	defer resetCollectionRunTable(primary)
+	defer resetCollectionRunTable(unique)
+
+	runs := map[string][]memtable.Table{
+		primaryName: {primary},
+		"email_1":   {unique},
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if index := rebuildBufferedPrimaryIDIndex("users", runs); index == nil || index.len() != entries {
+			b.Fatalf("primary ID index len=%d want %d", index.len(), entries)
+		}
+		if index, err := rebuildBufferedPrimaryRunIndex("users", runs); err != nil || index == nil || len(index.values) != entries {
+			b.Fatalf("primary run index len=%d err=%v want %d", len(index.values), err, entries)
+		}
+		if indexes := rebuildBufferedUniqueValueIndexes(map[string][]memtable.Table{"email_1": {unique}}); indexes["email_1"] == nil || indexes["email_1"].len() != entries {
+			b.Fatalf("unique index len=%d want %d", indexes["email_1"].len(), entries)
+		}
+	}
+}
+
 func BenchmarkSnapshotUpdateBatchBufferedReadPrimaryRunIndexPendingUnits(b *testing.B) {
 	meta := CollectionMeta{
 		Name: "users",

@@ -3457,7 +3457,7 @@ func rebuildBufferedUniqueValueIndexes(runs map[string][]memtable.Table) map[str
 	}
 	out := make(map[string]*bufferedUniqueValueIndex, len(runs))
 	for indexName, tables := range runs {
-		index := newBufferedUniqueValueIndex(0)
+		index := newBufferedUniqueValueIndex(bufferedRunLenHint(tables))
 		for _, table := range tables {
 			it := table.NewIterator(nil, nil)
 			for it.Valid() {
@@ -3666,7 +3666,7 @@ func rebuildBufferedPrimaryRunIndex(collectionName string, runs map[string][]mem
 	if len(tables) == 0 {
 		return nil, nil
 	}
-	index := newBufferedPrimaryRunIndex(0)
+	index := newBufferedPrimaryRunIndex(bufferedRunLenHint(tables))
 	for _, table := range tables {
 		if err := addBufferedPrimaryRunIndexEntries(index, table); err != nil {
 			return nil, err
@@ -3686,7 +3686,7 @@ func rebuildBufferedPrimaryIDIndex(collectionName string, runs map[string][]memt
 	if len(tables) == 0 {
 		return nil
 	}
-	index := newBufferedUniqueValueIndex(0)
+	index := newBufferedUniqueValueIndex(bufferedRunLenHint(tables))
 	for _, table := range tables {
 		if err := addBufferedPrimaryIDs(index, table); err != nil {
 			return nil
@@ -3696,6 +3696,17 @@ func rebuildBufferedPrimaryIDIndex(collectionName string, runs map[string][]memt
 		return nil
 	}
 	return index
+}
+
+func bufferedRunLenHint(tables []memtable.Table) int {
+	total := 0
+	for _, table := range tables {
+		if table == nil {
+			continue
+		}
+		total = saturatingAddNonNegativeInt(total, table.Len())
+	}
+	return total
 }
 
 func uniqueCollectionIndexNames(meta CollectionMeta) map[string]struct{} {
