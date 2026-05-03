@@ -811,7 +811,12 @@ func TestCollectionUpdateIndexStatsSnapshotAndExport(t *testing.T) {
 			},
 		},
 	}
-	domain := &collectionWriteDomain{}
+	domain := &collectionWriteDomain{
+		meta: CollectionMeta{Indexes: []IndexDefinition{
+			{Name: "email", Unique: true},
+			{Name: "city/name"},
+		}},
+	}
 	domain.observeUpdateBatchStats(updateStats)
 	domain.observeUpdateBatchStats(updateStats)
 
