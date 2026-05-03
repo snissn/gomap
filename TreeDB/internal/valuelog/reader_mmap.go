@@ -33,6 +33,23 @@ func appendDecodedTemplatePayload(dst, payload []byte, lookup TemplateLookup, ca
 // lock-contention amplification on the unsafe view path.
 const readViaMmapViewPrefixCacheEnabled = false
 
+func (f *File) ensureMmapRecordInitialRange(data []byte, ptr page.ValuePtr, start int64) ([]byte, bool, bool) {
+	if hint := page.ValuePtrRecordLength(ptr); hint > 0 {
+		end := int64(ptr.Offset) + int64(hint)
+		if headerEnd := start + HeaderSize; end < headerEnd {
+			end = headerEnd
+		}
+		if refreshed, ok := f.ensureMmapRangeReadable(data, start, end); ok {
+			return refreshed, true, true
+		}
+		return nil, false, false
+	}
+	if refreshed, ok := f.ensureMmapRangeReadable(data, start, start+HeaderSize); ok {
+		return refreshed, true, false
+	}
+	return nil, false, false
+}
+
 // MaxDeadMappings is the base cap for old mmaps retained to avoid exhausting
 // vm.max_map_count. Unless explicitly configured, the effective cap can grow
 // with mapped size up to maxAdaptiveDeadMappings. Set <= 0 to disable the cap.
@@ -522,8 +539,10 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 		return nil, ErrCorrupt, true
 	}
 	start := int64(ptr.Offset - 4)
-	if refreshed, ok := f.ensureMmapRangeReadable(data, start, start+HeaderSize); ok {
+	fullRangeReadable := false
+	if refreshed, ok, full := f.ensureMmapRecordInitialRange(data, ptr, start); ok {
 		data = refreshed
+		fullRangeReadable = full
 	} else {
 		f.mmapReadMissOutOfRange.Add(1)
 		return nil, nil, false
@@ -546,12 +565,14 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 	}
 
 	end := start + HeaderSize + int64(valueLen)
-	if refreshed, ok := f.ensureMmapRangeReadable(data, start, end); ok {
-		data = refreshed
-		header = data[start : start+HeaderSize]
-	} else {
-		f.mmapReadMissOutOfRange.Add(1)
-		return nil, nil, false
+	if !fullRangeReadable {
+		if refreshed, ok := f.ensureMmapRangeReadable(data, start, end); ok {
+			data = refreshed
+			header = data[start : start+HeaderSize]
+		} else {
+			f.mmapReadMissOutOfRange.Add(1)
+			return nil, nil, false
+		}
 	}
 
 	payload := data[start+HeaderSize : end]
@@ -828,8 +849,10 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		return nil, false, ErrCorrupt, true
 	}
 	start := int64(ptr.Offset - 4)
-	if refreshed, ok := f.ensureMmapRangeReadable(data, start, start+HeaderSize); ok {
+	fullRangeReadable := false
+	if refreshed, ok, full := f.ensureMmapRecordInitialRange(data, ptr, start); ok {
 		data = refreshed
+		fullRangeReadable = full
 	} else {
 		f.mmapReadMissOutOfRange.Add(1)
 		return nil, false, nil, false
@@ -852,12 +875,14 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	}
 
 	end := start + HeaderSize + int64(valueLen)
-	if refreshed, ok := f.ensureMmapRangeReadable(data, start, end); ok {
-		data = refreshed
-		header = data[start : start+HeaderSize]
-	} else {
-		f.mmapReadMissOutOfRange.Add(1)
-		return nil, false, nil, false
+	if !fullRangeReadable {
+		if refreshed, ok := f.ensureMmapRangeReadable(data, start, end); ok {
+			data = refreshed
+			header = data[start : start+HeaderSize]
+		} else {
+			f.mmapReadMissOutOfRange.Add(1)
+			return nil, false, nil, false
+		}
 	}
 
 	payload := data[start+HeaderSize : end]
@@ -1058,8 +1083,10 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		return nil, ErrCorrupt, true
 	}
 	start := int64(ptr.Offset - 4)
-	if refreshed, ok := f.ensureMmapRangeReadable(data, start, start+HeaderSize); ok {
+	fullRangeReadable := false
+	if refreshed, ok, full := f.ensureMmapRecordInitialRange(data, ptr, start); ok {
 		data = refreshed
+		fullRangeReadable = full
 	} else {
 		f.mmapReadMissOutOfRange.Add(1)
 		return nil, nil, false
@@ -1082,12 +1109,14 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	}
 
 	end := start + HeaderSize + int64(valueLen)
-	if refreshed, ok := f.ensureMmapRangeReadable(data, start, end); ok {
-		data = refreshed
-		header = data[start : start+HeaderSize]
-	} else {
-		f.mmapReadMissOutOfRange.Add(1)
-		return nil, nil, false
+	if !fullRangeReadable {
+		if refreshed, ok := f.ensureMmapRangeReadable(data, start, end); ok {
+			data = refreshed
+			header = data[start : start+HeaderSize]
+		} else {
+			f.mmapReadMissOutOfRange.Add(1)
+			return nil, nil, false
+		}
 	}
 
 	payload := data[start+HeaderSize : end]
