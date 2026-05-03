@@ -3279,6 +3279,30 @@ func TestBufferedRootRunsIteratorMultiRunStableUnsafeSlices(t *testing.T) {
 	}
 }
 
+func BenchmarkBufferedRootRunsIteratorBuildManyRuns(b *testing.B) {
+	const runCount = 8192
+	runs := make([]memtable.Table, 0, runCount)
+	for i := 0; i < runCount; i++ {
+		table := newCollectionRunTable(1)
+		setCollectionRunValue(table, []byte(fmt.Sprintf("k%08d", i)), []byte("value"))
+		table.Freeze()
+		runs = append(runs, table)
+	}
+	defer resetCollectionTables(runs)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		it := newBufferedRootRunsIteratorWithDeleted(runs, nil, nil, true)
+		if !it.Valid() {
+			b.Fatal("iterator invalid")
+		}
+		if err := it.Close(); err != nil {
+			b.Fatalf("close iterator: %v", err)
+		}
+	}
+}
+
 func TestCollectMergedCollectionIndexIDsSkipsPersistedTombstones(t *testing.T) {
 	encoded, err := encodeIndexScalar(IndexValueString, "hnl")
 	if err != nil {
