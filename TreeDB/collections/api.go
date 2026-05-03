@@ -3842,6 +3842,13 @@ func (h *bufferedRootRunHeap) push(item bufferedRootRunHeapItem) {
 	h.up(len(*h) - 1)
 }
 
+func (h *bufferedRootRunHeap) init() {
+	n := len(*h)
+	for i := n/2 - 1; i >= 0; i-- {
+		h.down(i, n)
+	}
+}
+
 func (h *bufferedRootRunHeap) pop() bufferedRootRunHeapItem {
 	old := *h
 	n := len(old)
@@ -3918,6 +3925,7 @@ func newBufferedRootRunsIteratorWithDeleted(runs []memtable.Table, start, end []
 	}
 	it := &bufferedRootRunsIterator{
 		iters:              make([]iterator.UnsafeIterator, 0, len(runs)),
+		heap:               make(bufferedRootRunHeap, 0, len(runs)),
 		includeDeleted:     includeDeleted,
 		stableUnsafeSlices: true,
 		start:              start,
@@ -3937,13 +3945,14 @@ func newBufferedRootRunsIteratorWithDeleted(runs []memtable.Table, start, end []
 		idx := len(it.iters)
 		it.iters = append(it.iters, runIter)
 		if runIter.Valid() {
-			it.heap.push(bufferedRootRunHeapItem{
+			it.heap = append(it.heap, bufferedRootRunHeapItem{
 				idx:      idx,
 				priority: len(runs) - 1 - i,
 				key:      runIter.UnsafeKey(),
 			})
 		}
 	}
+	it.heap.init()
 	it.advance()
 	return it
 }
