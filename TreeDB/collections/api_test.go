@@ -9,6 +9,7 @@ import (
 	"os"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -2502,6 +2503,79 @@ func TestCollectionIndexedOverlayRootFlushSupportsReadsUpdatesAndUniqueChecks(t 
 		t.Fatalf("reopened primary overlay without in-memory filter must fall back to maybe-present")
 	}
 	_ = reopenedSnap.Close()
+}
+
+func TestCollectionIndexedOverlayRootColdFlushPublishesBatchRootsInParallel(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedOverlayRoots:      true,
+			BufferedIndexedWriteMaxDocuments: 1024,
+			BufferedIndexedWriteMaxRootRuns:  1024,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	statUint := func(stats map[string]string, key string) uint64 {
+		t.Helper()
+		raw, ok := stats[key]
+		if !ok {
+			t.Fatalf("missing stat %s", key)
+		}
+		value, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			t.Fatalf("parse stat %s=%q: %v", key, raw, err)
+		}
+		return value
+	}
+	const parallelGroupsKey = "treedb.publish.ordered_root_delta_group.root_apply_parallel_groups_total"
+	const parallelRootsKey = "treedb.publish.ordered_root_delta_group.root_apply_parallel_roots_total"
+	before := db.Stats()
+	beforeParallelGroups := statUint(before, parallelGroupsKey)
+	beforeParallelRoots := statUint(before, parallelRootsKey)
+
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"city":"hnl"}`),
+			[]byte(`{"city":"sea"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush overlays: %v", err)
+	}
+	after := db.Stats()
+	if got := statUint(after, parallelGroupsKey) - beforeParallelGroups; got != 1 {
+		t.Fatalf("parallel groups delta=%d want 1", got)
+	}
+	if got := statUint(after, parallelRootsKey) - beforeParallelRoots; got < 2 {
+		t.Fatalf("parallel roots delta=%d want at least 2", got)
+	}
+	if got, err := col.Get([]byte("u1")); err != nil || !bytes.Contains(got, []byte(`"hnl"`)) {
+		t.Fatalf("get u1 doc=%q err=%v", got, err)
+	}
+	ids, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find city: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u2")) {
+		t.Fatalf("city ids=%q want [u2]", ids)
+	}
 }
 
 func TestCollectionIndexedOverlayRootFilterUnionsDeltaBase(t *testing.T) {
