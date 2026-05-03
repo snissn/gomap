@@ -1543,7 +1543,7 @@ func TestApplyOrderedRootDeltaBatchGroupRoots_MixedOptInStartsParallelBeforeSeri
 	}
 }
 
-func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_ColdBatchCanPreserveDeletes(t *testing.T) {
+func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_SerializedColdBatchCanPreserveDeletes(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
 	if err != nil {
@@ -1557,11 +1557,13 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_ColdBatchCanPre
 	}
 	defer func() { _ = delta.Close() }()
 
-	_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+	_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
 		BaseRoot:                  0,
 		Delta:                     delta,
 		IncludeDeletedOnColdBuild: true,
-	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	}}, func() error {
+		return nil
+	}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		if len(rootIDs) != 1 || rootIDs[0] == 0 {
 			return nil, errors.New("unexpected cold tombstone root ID")
 		}

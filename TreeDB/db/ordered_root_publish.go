@@ -1692,6 +1692,11 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		err = ErrReadOnly
 		return 0, nil, err
 	}
+	idxGen := db.idx.Load()
+	if idxGen == nil {
+		err = errors.New("missing index")
+		return 0, nil, err
+	}
 
 	db.mu.RLock()
 	userRoot := db.meta.UserRootPageID
@@ -1716,7 +1721,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 			return 0, nil, err
 		}
 		phaseStart := time.Now()
-		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatch(ordered[idx].BaseRoot, ordered[idx].Delta, opts)
+		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idxGen, ordered[idx].BaseRoot, ordered[idx].Delta, opts, idxGen.allocator, &pagerAllocator{p: idxGen.pager}, ordered[idx].IncludeDeletedOnColdBuild)
 		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.rootApplyCalls++
 		if err != nil {
