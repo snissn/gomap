@@ -428,6 +428,32 @@ func (b *Batch) SetView(key, value []byte) error {
 	return nil
 }
 
+// AppendViewTrustedSortedUnique records a Put without copying key/value bytes or
+// invalidating the sorted/compacted state. Caller must guarantee key is non-empty,
+// key/value remain immutable until commit/close, and appended keys are strictly
+// increasing with no duplicates.
+func (b *Batch) AppendViewTrustedSortedUnique(key, value []byte) error {
+	if err := b.ensureOpen(); err != nil {
+		return err
+	}
+	if len(key) == 0 {
+		return ErrKeyEmpty
+	}
+	if len(value) > b.inlineThresholdForKey(key) {
+		return ErrValueTooLarge
+	}
+	b.entries = append(b.entries, Entry{
+		Type:  OpPut,
+		Key:   key,
+		Value: value,
+	})
+	b.byteSize += len(key) + len(value)
+	if b.sorted {
+		b.lastKey = key
+	}
+	return nil
+}
+
 // Set adds or replaces a key/value operation.
 func (b *Batch) Set(key, value []byte) error {
 	if err := b.ensureOpen(); err != nil {
@@ -484,6 +510,28 @@ func (b *Batch) DeleteView(key []byte) error {
 	return nil
 }
 
+// AppendDeleteViewTrustedSortedUnique records a Delete without copying key bytes
+// or invalidating sorted/compacted state. Caller must guarantee key is non-empty,
+// key remains immutable until commit/close, and appended keys are strictly
+// increasing with no duplicates.
+func (b *Batch) AppendDeleteViewTrustedSortedUnique(key []byte) error {
+	if err := b.ensureOpen(); err != nil {
+		return err
+	}
+	if len(key) == 0 {
+		return ErrKeyEmpty
+	}
+	b.entries = append(b.entries, Entry{
+		Type: OpDelete,
+		Key:  key,
+	})
+	b.byteSize += len(key)
+	if b.sorted {
+		b.lastKey = key
+	}
+	return nil
+}
+
 // SetPointer adds a pointer directly to the batch (used by Compaction).
 func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 	if err := b.ensureOpen(); err != nil {
@@ -529,6 +577,34 @@ func (b *Batch) SetPointerView(key []byte, ptr page.ValuePtr) error {
 // publication needs them.
 func (b *Batch) SetPointerViewNoTouch(key []byte, ptr page.ValuePtr) error {
 	return b.setPointerViewInternal(key, ptr, false)
+}
+
+// AppendPointerViewTrustedSortedUnique records a pointer Put without copying key
+// bytes or invalidating sorted/compacted state. Caller must guarantee key is
+// non-empty, key remains immutable until commit/close, ptr is a value-log pointer,
+// and appended keys are strictly increasing with no duplicates.
+func (b *Batch) AppendPointerViewTrustedSortedUnique(key []byte, ptr page.ValuePtr) error {
+	if err := b.ensureOpen(); err != nil {
+		return err
+	}
+	if len(key) == 0 {
+		return ErrKeyEmpty
+	}
+	if !page.IsValueLogFileID(ptr.FileID) {
+		return fmt.Errorf("invalid value-log pointer: file %d", ptr.FileID)
+	}
+	b.entries = append(b.entries, Entry{
+		Type:     OpPut,
+		Key:      key,
+		ValuePtr: ptr,
+		IsPtr:    true,
+	})
+	b.hasValueLogPointers = true
+	b.noteTouchedValueLog(ptr)
+	if b.sorted {
+		b.lastKey = key
+	}
+	return nil
 }
 
 // AppendPointerViewNoTouchTrustedSorted appends a pointer Put without input

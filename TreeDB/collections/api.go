@@ -4078,6 +4078,10 @@ func (it *bufferedRootRunsIterator) StableUnsafeIteratorSlices() bool {
 	return it != nil && it.stableUnsafeSlices
 }
 
+func (it *bufferedRootRunsIterator) OrderedUniqueUnsafeIterator() bool {
+	return true
+}
+
 func (it *bufferedRootRunsIterator) Len() int {
 	if it == nil {
 		return 0

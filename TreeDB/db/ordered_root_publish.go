@@ -132,6 +132,10 @@ type orderedRootStableUnsafeIterator interface {
 	StableUnsafeIteratorSlices() bool
 }
 
+type orderedRootTrustedSortedUniqueIterator interface {
+	OrderedUniqueUnsafeIterator() bool
+}
+
 type orderedRootLenHintIterator interface {
 	Len() int
 }
@@ -317,16 +321,22 @@ func orderedRootEntryValueLogFileID(iter iterator.UnsafeIterator) (uint32, bool)
 	return ptr.FileID, true
 }
 
-func orderedRootBatchPut(delta *batch.Batch, iter iterator.UnsafeIterator, borrowEntryViews bool) error {
+func orderedRootBatchPut(delta *batch.Batch, iter iterator.UnsafeIterator, borrowEntryViews bool, trustedSortedUnique bool) error {
 	if delta == nil || iter == nil || !iter.Valid() {
 		return nil
 	}
 	val, ptr, flags := iter.UnsafeEntry()
 	if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
+		if borrowEntryViews && trustedSortedUnique {
+			return delta.AppendPointerViewTrustedSortedUnique(iter.UnsafeKey(), ptr)
+		}
 		if borrowEntryViews {
 			return delta.SetPointerView(iter.UnsafeKey(), ptr)
 		}
 		return delta.SetPointer(iter.UnsafeKey(), ptr)
+	}
+	if borrowEntryViews && trustedSortedUnique {
+		return delta.AppendViewTrustedSortedUnique(iter.UnsafeKey(), val)
 	}
 	if borrowEntryViews {
 		return delta.SetView(iter.UnsafeKey(), val)
@@ -346,10 +356,16 @@ func orderedRootDeltaBatchFromIterator(iter iterator.UnsafeIterator) (*batch.Bat
 	if stable, ok := iter.(orderedRootStableUnsafeIterator); ok {
 		borrowEntryViews = stable.StableUnsafeIteratorSlices()
 	}
+	trustedSortedUnique := false
+	if trusted, ok := iter.(orderedRootTrustedSortedUniqueIterator); ok {
+		trustedSortedUnique = trusted.OrderedUniqueUnsafeIterator()
+	}
 	for iter.Valid() {
 		if iter.IsDeleted() {
 			var err error
-			if borrowEntryViews {
+			if borrowEntryViews && trustedSortedUnique {
+				err = delta.AppendDeleteViewTrustedSortedUnique(iter.UnsafeKey())
+			} else if borrowEntryViews {
 				err = delta.DeleteView(iter.UnsafeKey())
 			} else {
 				err = delta.Delete(iter.UnsafeKey())
@@ -358,7 +374,7 @@ func orderedRootDeltaBatchFromIterator(iter iterator.UnsafeIterator) (*batch.Bat
 				_ = delta.Close()
 				return nil, err
 			}
-		} else if err := orderedRootBatchPut(delta, iter, borrowEntryViews); err != nil {
+		} else if err := orderedRootBatchPut(delta, iter, borrowEntryViews, trustedSortedUnique); err != nil {
 			_ = delta.Close()
 			return nil, err
 		}
@@ -636,7 +652,7 @@ func buildOrderedRootDeltaBatch(baseIter, targetIter iterator.UnsafeIterator, tr
 					vlogRefDelta.add(fileID, 1)
 				}
 			}
-			if err := orderedRootBatchPut(delta, targetIter, false); err != nil {
+			if err := orderedRootBatchPut(delta, targetIter, false, false); err != nil {
 				_ = delta.Close()
 				return nil, 0, nil, err
 			}
@@ -664,7 +680,7 @@ func buildOrderedRootDeltaBatch(baseIter, targetIter iterator.UnsafeIterator, tr
 						vlogRefDelta.add(fileID, 1)
 					}
 				}
-				if err := orderedRootBatchPut(delta, targetIter, false); err != nil {
+				if err := orderedRootBatchPut(delta, targetIter, false, false); err != nil {
 					_ = delta.Close()
 					return nil, 0, nil, err
 				}
@@ -681,7 +697,7 @@ func buildOrderedRootDeltaBatch(baseIter, targetIter iterator.UnsafeIterator, tr
 							vlogRefDelta.add(fileID, 1)
 						}
 					}
-					if err := orderedRootBatchPut(delta, targetIter, false); err != nil {
+					if err := orderedRootBatchPut(delta, targetIter, false, false); err != nil {
 						_ = delta.Close()
 						return nil, 0, nil, err
 					}
