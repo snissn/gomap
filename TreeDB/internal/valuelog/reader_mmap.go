@@ -987,26 +987,64 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		Reserved: frameHeader[3],
 		DictID:   binary.LittleEndian.Uint64(frameHeader[4:12]),
 	}
-	raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, dst)
+	valLen := int(valEnd - valStart)
+	copyValueToDst := dst != nil && cap(dst) >= valLen && cap(dst) < int(rawLen)
+	cacheableRaw := false
+	if copyValueToDst {
+		f.cacheMu.Lock()
+		cacheableRaw = f.groupedFrameCacheEntries > 0 && (f.groupedFrameCacheMaxRaw <= 0 || int(rawLen) <= f.groupedFrameCacheMaxRaw)
+		f.cacheMu.Unlock()
+	}
+	decodeDst := dst
+	rawPooled := false
+	if copyValueToDst {
+		decodeDst = f.takeDecodeScratch(int(rawLen))
+		rawPooled = true
+	}
+	raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, decodeDst)
 	if err != nil {
+		if rawPooled {
+			f.releaseDecodeScratch(decodeDst)
+		}
 		return nil, false, err, true
 	}
 	if uint32(len(raw)) != rawLen {
+		if rawPooled {
+			f.releaseDecodeScratch(raw)
+		}
 		return nil, false, ErrCorrupt, true
 	}
-	// dst is used iff it was provided with enough capacity to hold rawLen.
-	usedDst := dst != nil && cap(dst) >= int(rawLen)
-
 	val, decoded, err := decodeTemplatePayload(raw[valStart:valEnd])
 	if err != nil {
+		if rawPooled {
+			f.releaseDecodeScratch(raw)
+		}
 		return nil, false, err, true
+	}
+	if cacheableRaw {
+		cachedRaw := f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, rawPooled)
+		if rawPooled && cachedRaw {
+			rawPooled = false
+		}
 	}
 	// Template decoding allocates new bytes; the returned slice is no longer
 	// backed by dst even if we decoded into it.
 	if decoded {
-		usedDst = false
+		if rawPooled {
+			f.releaseDecodeScratch(raw)
+		}
+		return val, false, nil, true
 	}
-	return val, usedDst, nil, true
+	if copyValueToDst {
+		out := dst[:valLen]
+		copy(out, val)
+		if rawPooled {
+			f.releaseDecodeScratch(raw)
+		}
+		return out, true, nil, true
+	}
+	// dst is used iff it was provided with enough capacity to hold rawLen.
+	return val, dst != nil && cap(dst) >= int(rawLen), nil, true
 }
 
 func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error, bool) {
