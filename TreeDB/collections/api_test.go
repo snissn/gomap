@@ -1154,6 +1154,19 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 	if stats.IndexedFlushBytes == 0 || stats.IndexedFlushRootRuns == 0 || stats.IndexedFlushRoots == 0 {
 		t.Fatalf("stats indexed flush bytes/root-runs/roots=%d/%d/%d want positive", stats.IndexedFlushBytes, stats.IndexedFlushRootRuns, stats.IndexedFlushRoots)
 	}
+	if stats.IndexedFlushDuration <= 0 || stats.IndexedFlushMaterialize <= 0 || stats.IndexedFlushPublish <= 0 {
+		t.Fatalf("stats indexed flush duration/materialize/publish=%s/%s/%s want positive", stats.IndexedFlushDuration, stats.IndexedFlushMaterialize, stats.IndexedFlushPublish)
+	}
+	exported = mgr.Stats()
+	for _, key := range []string{
+		"treedb.collections.write_domain.indexed_flush.duration_ns_total",
+		"treedb.collections.write_domain.indexed_flush.materialize_ns_total",
+		"treedb.collections.write_domain.indexed_flush.publish_ns_total",
+	} {
+		if exported[key] == "" {
+			t.Fatalf("exported stats missing %s from %#v", key, exported)
+		}
+	}
 }
 
 func TestCollectionManagerResetUpdateCombineQueueDepthMax(t *testing.T) {
