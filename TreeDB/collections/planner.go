@@ -19,6 +19,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 	"github.com/tidwall/gjson"
 )
 
@@ -361,6 +362,20 @@ func (plan *insertBatchPlan) checkPersistedConflicts(snap *backenddb.Snapshot, c
 	if len(plan.primaryKeys) != len(plan.resultIDs) {
 		return fmt.Errorf("collections: insert conflict check missing primary keys: got %d, want %d", len(plan.primaryKeys), len(plan.resultIDs))
 	}
+	if len(catalog.rootOverlays) != 0 {
+		uniqueIndexNames := uniqueIndexNamesWithDataOrOverlays(catalog)
+		uniqueProbeRuns, err := plan.uniqueProbeRunsForPersistedConflictIndexes(func(indexName string) bool {
+			_, ok := uniqueIndexNames[indexName]
+			return ok
+		})
+		if err != nil {
+			return err
+		}
+		if err := plan.checkPersistedDocumentConflictsAtCatalogRoot(snap, catalog); err != nil {
+			return err
+		}
+		return checkPersistedUniqueConflictsAtCatalogRoots(snap, catalog, uniqueProbeRuns)
+	}
 	uniqueRootIDs := uniqueIndexRootIDs(catalog)
 	uniqueProbeRuns, err := plan.uniqueProbeRunsForPersistedConflicts(uniqueRootIDs)
 	if err != nil {
@@ -377,19 +392,80 @@ func (plan *insertBatchPlan) checkPersistedConflicts(snap *backenddb.Snapshot, c
 	return preflight.checkUniqueConflicts(uniqueProbeRuns)
 }
 
+func (plan *insertBatchPlan) checkPersistedDocumentConflictsAtCatalogRoot(snap *backenddb.Snapshot, catalog *collectionCatalog) error {
+	rootName := collectionPrimaryRootName(catalog.meta.Name)
+	for _, key := range plan.primaryKeys {
+		entry, _, err := collectionGetEntryAtCatalogRoot(snap, catalog, rootName, key)
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if entry.Flags&node.FlagTombstone == 0 {
+			return ErrDocumentExists
+		}
+	}
+	return nil
+}
+
+func checkPersistedUniqueConflictsAtCatalogRoots(snap *backenddb.Snapshot, catalog *collectionCatalog, runs []collectionUniqueProbeRun) error {
+	if snap == nil || catalog == nil || len(runs) == 0 {
+		return nil
+	}
+	for _, run := range runs {
+		rootName := collectionSecondaryRootName(catalog.meta.Name, run.indexName)
+		for _, prefix := range run.prefixes {
+			it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, prefix, prefixEnd(prefix), false)
+			if err != nil {
+				return err
+			}
+			if it == nil {
+				continue
+			}
+			conflict := it.Valid()
+			iterErr := it.Error()
+			closeErr := it.Close()
+			if iterErr != nil {
+				return iterErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+			if conflict {
+				return fmt.Errorf("%w %q", ErrUniqueIndexConflict, run.indexName)
+			}
+		}
+	}
+	return nil
+}
+
 func (plan *insertBatchPlan) uniqueProbeRunsForPersistedConflicts(uniqueRootIDs map[string]uint64) ([]collectionUniqueProbeRun, error) {
 	if plan == nil || len(plan.resultIDs) == 0 || len(uniqueRootIDs) == 0 {
 		return nil, nil
 	}
+	return plan.uniqueProbeRunsForPersistedConflictIndexes(func(indexName string) bool {
+		return uniqueRootIDs[indexName] != 0
+	})
+}
+
+func (plan *insertBatchPlan) uniqueProbeRunsForPersistedConflictIndexes(includeIndex func(indexName string) bool) ([]collectionUniqueProbeRun, error) {
+	if plan == nil || len(plan.resultIDs) == 0 || includeIndex == nil {
+		return nil, nil
+	}
 	if plan.allUniqueProbeRunsBuilt {
-		return plan.allUniqueProbeRuns, nil
+		out := make([]collectionUniqueProbeRun, 0, len(plan.allUniqueProbeRuns))
+		for _, run := range plan.allUniqueProbeRuns {
+			if includeIndex(run.indexName) {
+				out = append(out, run)
+			}
+		}
+		return out, nil
 	}
 	if !plan.uniqueProbeCandidatesBuilt {
 		return nil, errors.New("collections: insert conflict check missing unique probe candidates")
 	}
-	return buildUniqueProbeRunsFromSorted(plan.uniqueProbeCandidates, func(indexName string) bool {
-		return uniqueRootIDs[indexName] != 0
-	})
+	return buildUniqueProbeRunsFromSorted(plan.uniqueProbeCandidates, includeIndex)
 }
 
 func (p insertBatchPreflight) checkUniqueConflicts(runs []collectionUniqueProbeRun) error {

@@ -538,6 +538,11 @@ type CollectionOptions struct {
 	// Flush, FlushAll, and backend Close still drain pending indexed writes before
 	// returning, but auto-flush thresholds no longer imply immediate durability.
 	BufferedIndexedAsyncFlush bool `json:"buffered_indexed_async_flush,omitempty"`
+	// BufferedIndexedOverlayRoots publishes indexed memtable flush units as
+	// durable overlay roots instead of immediately applying them into base roots.
+	// Maintenance can later compact overlay roots into base roots; reads merge
+	// overlay roots over base roots while they are pending.
+	BufferedIndexedOverlayRoots bool `json:"buffered_indexed_overlay_roots,omitempty"`
 	// BufferedIndexedAsyncFlushMaxQueuedUnits bounds immutable indexed flush
 	// units queued for the background publisher. Zero uses the native default
 	// when async flush is enabled on an indexed schema.
@@ -611,6 +616,7 @@ type indexedFlushPublishWork struct {
 	flushUnit      indexedFlushUnit
 	rootNames      []string
 	rootBaseIDs    map[string]uint64
+	rootOverlays   map[string][]uint64
 	docCount       int
 	byteCount      int64
 	rootRunCount   int
@@ -2249,7 +2255,7 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 		if err != nil {
 			return nil, collectionOptions{}, false, err
 		}
-		if err := rejectCatalogRootOverlaysForWrite(catalog); err != nil {
+		if err := rejectCatalogRootOverlaysForIndexedBufferWrite(catalog); err != nil {
 			return nil, collectionOptions{}, false, err
 		}
 		options, err := collectionPlannerOptions(catalog.meta)
@@ -2259,7 +2265,7 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 		return catalog, options, len(catalog.meta.Indexes) > 0, nil
 	}
 	if domain.loaded && domain.count == 0 && domain.baseSystemRoot == currentSystemRoot && domain.baseCommitSeq == currentCommitSeq {
-		if err := rejectCatalogRootOverlaysForWrite(domain.catalog); err != nil {
+		if err := rejectCatalogRootOverlaysForIndexedBufferWrite(domain.catalog); err != nil {
 			return nil, collectionOptions{}, false, err
 		}
 		options, err := collectionPlannerOptions(domain.meta)
@@ -2276,7 +2282,7 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
 	if catalog := cachedWriteDomainCatalogForStateLocked(domain, baseSystemRoot, baseCommitSeq); catalog != nil {
-		if err := rejectCatalogRootOverlaysForWrite(catalog); err != nil {
+		if err := rejectCatalogRootOverlaysForIndexedBufferWrite(catalog); err != nil {
 			_ = snap.Close()
 			return nil, collectionOptions{}, false, err
 		}
@@ -2301,7 +2307,7 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 		_ = snap.Close()
 		return nil, collectionOptions{}, false, errCollectionNotFound
 	}
-	if err := rejectCatalogRootOverlaysForWrite(catalog); err != nil {
+	if err := rejectCatalogRootOverlaysForIndexedBufferWrite(catalog); err != nil {
 		_ = snap.Close()
 		return nil, collectionOptions{}, false, err
 	}
@@ -2351,7 +2357,7 @@ func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWrite
 	if catalog == nil {
 		return nil, errCollectionNotFound
 	}
-	if err := rejectCatalogRootOverlaysForWrite(catalog); err != nil {
+	if err := rejectCatalogRootOverlaysForIndexedBufferWrite(catalog); err != nil {
 		return nil, err
 	}
 	if !sameCollectionMeta(catalog.meta, domain.meta) {
@@ -2364,12 +2370,18 @@ func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWrite
 			if rootID := catalog.rootID(rootName); rootID != baseRootID {
 				return errConcurrentRootModification(domain.meta.Name, rootName)
 			}
+			if !uint64SlicesEqual(catalog.overlayRootIDs(rootName), domain.catalog.overlayRootIDs(rootName)) {
+				return errConcurrentRootModification(domain.meta.Name, rootName)
+			}
 			return nil
 		}); err != nil {
 			return nil, err
 		}
 	} else {
 		if rootID := catalog.rootID(primaryRootName); rootID != domain.primaryRoot {
+			return nil, errConcurrentRootModification(domain.meta.Name, primaryRootName)
+		}
+		if !uint64SlicesEqual(catalog.overlayRootIDs(primaryRootName), domain.catalog.overlayRootIDs(primaryRootName)) {
 			return nil, errConcurrentRootModification(domain.meta.Name, primaryRootName)
 		}
 	}
@@ -4378,6 +4390,7 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 		return nil, nil
 	}
 	rootBaseIDs := make(map[string]uint64, len(rootNames))
+	rootOverlays := make(map[string][]uint64, len(rootNames))
 	for _, rootName := range rootNames {
 		baseRoot, ok := flushUnit.rootBaseIDs[rootName]
 		if !ok {
@@ -4385,6 +4398,7 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 			return nil, err
 		}
 		rootBaseIDs[rootName] = baseRoot
+		rootOverlays[rootName] = append([]uint64(nil), catalog.overlayRootIDs(rootName)...)
 	}
 	work.baseSystemRoot = snapshotSystemRoot(pin)
 	work.baseCommitSeq = snapshotCommitSeq(pin)
@@ -4392,6 +4406,7 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 	work.flushUnit = flushUnit
 	work.rootNames = rootNames
 	work.rootBaseIDs = rootBaseIDs
+	work.rootOverlays = rootOverlays
 	work.docCount = flushUnit.docCount
 	work.byteCount = flushUnit.byteCount
 	work.rootRunCount = indexedFlushUnitRootRunCount(flushUnit)
@@ -4412,6 +4427,26 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 			_ = work.pin.Close()
 		}
 	}()
+	if collectionMetaUsesIndexedOverlayRoots(work.meta) {
+		ordered, cleanupIters, err := buildBufferedRootOverlayDeltaPublishInputs(work.rootNames, work.flushUnit.rootRuns, work.flushUnit.rootPolicies, work.rootOverlays)
+		if err != nil {
+			return c.completePreparedIndexedFlush(work, 0, nil, err, 0)
+		}
+		publishStart := time.Now()
+		newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaGroupWithSystemBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return c.buildRootOverlayDescriptorSystemIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, work.rootOverlays, rootIDs)
+		})
+		publishElapsed := time.Since(publishStart)
+		cleanupIters()
+		if publishErr == nil && len(rootIDs) != len(work.rootNames) {
+			publishErr = unexpectedOrderedRootCountError(work.meta.Name, len(work.rootNames), len(rootIDs))
+		}
+		completeErr := c.completePreparedIndexedFlush(work, newSystemRoot, rootIDs, publishErr, publishElapsed)
+		if publishErr != nil {
+			return publishErr
+		}
+		return completeErr
+	}
 	ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(work.rootNames, work.flushUnit.rootRuns, work.rootBaseIDs, work.flushUnit.rootPolicies)
 	if err != nil {
 		return c.completePreparedIndexedFlush(work, 0, nil, err, 0)
@@ -4430,6 +4465,33 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		return publishErr
 	}
 	return completeErr
+}
+
+func buildBufferedRootOverlayDeltaPublishInputs(rootNames []string, rootRuns map[string][]memtable.Table, rootPolicies map[string]backenddb.OrderedRootStoragePolicy, rootOverlays map[string][]uint64) ([]backenddb.OrderedRootDeltaPublishInput, func(), error) {
+	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
+	iterators := make([]iterator.UnsafeIterator, 0, len(rootNames))
+	cleanup := func() {
+		for _, it := range iterators {
+			_ = it.Close()
+		}
+	}
+	for _, rootName := range rootNames {
+		iter := newBufferedRootRunsIteratorWithDeleted(rootRuns[rootName], nil, nil, true)
+		iterators = append(iterators, iter)
+		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
+			BaseRoot:      overlayDeltaBaseRoot(rootOverlays[rootName]),
+			Iter:          iter,
+			StoragePolicy: rootPolicies[rootName],
+		})
+	}
+	return ordered, cleanup, nil
+}
+
+func overlayDeltaBaseRoot(overlays []uint64) uint64 {
+	if len(overlays) == 1 {
+		return overlays[0]
+	}
+	return 0
 }
 
 func buildBufferedRootDeltaBatchPublishInputs(rootNames []string, rootRuns map[string][]memtable.Table, rootBaseIDs map[string]uint64, rootPolicies map[string]backenddb.OrderedRootStoragePolicy) ([]backenddb.OrderedRootDeltaBatchPublishInput, func(), error) {
@@ -4527,7 +4589,11 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	if baseCatalog == nil {
 		baseCatalog = work.catalog
 	}
+	overlayPublish := collectionMetaUsesIndexedOverlayRoots(work.meta)
 	nextCatalog := cloneCatalogWithRootUpdates(baseCatalog, work.meta, work.rootNames, rootIDs)
+	if overlayPublish {
+		nextCatalog = cloneCatalogWithRootOverlays(baseCatalog, work.meta, work.rootNames, rootIDs)
+	}
 	oldPublishing, owned := removeIndexedPublishingWorkUnitsLocked(domain, work.units)
 	if !owned {
 		err := errors.New("collections: async indexed publish lost ownership of in-flight flush units")
@@ -4543,7 +4609,9 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	domain.count = subtractNonNegativeInt(domain.count, work.docCount)
 	domain.bufferedBytes = subtractNonNegativeInt64(domain.bufferedBytes, work.byteCount)
 	domain.clearIndexedAsyncFlushError()
-	retargetPendingIndexedRootBaseIDsLocked(domain, work.rootNames, work.rootBaseIDs, rootIDs)
+	if !overlayPublish {
+		retargetPendingIndexedRootBaseIDsLocked(domain, work.rootNames, work.rootBaseIDs, rootIDs)
+	}
 	rebuildBufferedPendingIndexesLocked(domain, work.meta.Name, preservePrimaryRunIndex)
 	c.meta = work.meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
@@ -4617,21 +4685,36 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	baseSystemRoot := snapshotSystemRoot(pin)
 	baseCommitSeq := snapshotCommitSeq(pin)
 	baseRootIDs := make(map[string]uint64, len(rootNames))
+	rootOverlays := make(map[string][]uint64, len(rootNames))
 	for _, rootName := range rootNames {
 		baseRoot, ok := flushUnit.rootBaseIDs[rootName]
 		if !ok {
 			return fmt.Errorf("collections: buffered indexed flush missing base root for %q", rootName)
 		}
 		baseRootIDs[rootName] = baseRoot
+		rootOverlays[rootName] = append([]uint64(nil), catalog.overlayRootIDs(rootName)...)
 	}
-	ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(rootNames, flushUnit.rootRuns, flushUnit.rootBaseIDs, flushUnit.rootPolicies)
-	if err != nil {
-		return err
+	var newSystemRoot uint64
+	var rootIDs []uint64
+	if collectionMetaUsesIndexedOverlayRoots(meta) {
+		ordered, cleanupIters, err := buildBufferedRootOverlayDeltaPublishInputs(rootNames, flushUnit.rootRuns, flushUnit.rootPolicies, rootOverlays)
+		if err != nil {
+			return err
+		}
+		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithSystemBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return c.buildRootOverlayDescriptorSystemIteratorForMeta(meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays, rootIDs)
+		})
+		cleanupIters()
+	} else {
+		ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(rootNames, flushUnit.rootRuns, flushUnit.rootBaseIDs, flushUnit.rootPolicies)
+		if err != nil {
+			return err
+		}
+		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+		})
+		cleanupDeltas()
 	}
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-		return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
-	})
-	cleanupDeltas()
 	if err != nil {
 		return err
 	}
@@ -4639,6 +4722,9 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		return unexpectedOrderedRootCountError(meta.Name, len(rootNames), len(rootIDs))
 	}
 	nextCatalog := cloneCatalogWithRootUpdates(domain.catalog, meta, rootNames, rootIDs)
+	if collectionMetaUsesIndexedOverlayRoots(meta) {
+		nextCatalog = cloneCatalogWithRootOverlays(domain.catalog, meta, rootNames, rootIDs)
+	}
 	oldUnits := domain.indexedFlushUnits
 	oldRuns := domain.rootRuns
 	domain.loaded = true
@@ -5082,7 +5168,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		closePlanningSnapshot()
 		return nil, errCollectionNotFound
 	}
-	if err := rejectCatalogRootOverlaysForWrite(catalog); err != nil {
+	if err := rejectCatalogRootOverlaysForIndexedBufferWrite(catalog); err != nil {
 		closePlanningSnapshot()
 		return nil, err
 	}
@@ -5119,7 +5205,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 			closePlanningSnapshot()
 			return nil, errCollectionNotFound
 		}
-		if err := rejectCatalogRootOverlaysForWrite(catalog); err != nil {
+		if err := rejectCatalogRootOverlaysForIndexedBufferWrite(catalog); err != nil {
 			closePlanningSnapshot()
 			return nil, err
 		}
@@ -5206,6 +5292,11 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		plan.stats.Publish += bufferFlushElapsed
 		c.setLastInsertStats(plan.stats.CollectionInsertStats)
 		return resultIDs, nil
+	}
+	if err := rejectCatalogRootOverlaysForWrite(catalog); err != nil {
+		closePlanningSnapshot()
+		resetCollectionRunTables(plan.runs)
+		return nil, err
 	}
 
 	pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(&mutationLocked, &unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, plan)
@@ -7136,6 +7227,16 @@ func (plan *updateBatchPlan) close() {
 	updateBatchPlanPool.Put(plan)
 }
 
+func (c *Collection) validateUpdateBatchPlanRootDescriptors(plan *updateBatchPlan) error {
+	if plan == nil {
+		return nil
+	}
+	if plan.catalog != nil && len(plan.catalog.rootOverlays) != 0 && collectionMetaUsesIndexedOverlayRoots(plan.catalog.meta) {
+		return c.validateRootOverlayDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs, plan.catalog.rootOverlays)
+	}
+	return c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs)
+}
+
 func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, error) {
 	if c.shouldPlanUpdateBatchWithBufferedWrites(mode) {
 		useBufferedRead := true
@@ -7170,7 +7271,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 						}
 						return ErrConcurrentMutation
 					}
-					if err := c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs); err != nil {
+					if err := c.validateUpdateBatchPlanRootDescriptors(plan); err != nil {
 						return err
 					}
 					c.meta = plan.meta
@@ -7238,7 +7339,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 			if err := c.flushBufferedWrites(); err != nil {
 				return err
 			}
-			if err := c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs); err != nil {
+			if err := c.validateUpdateBatchPlanRootDescriptors(plan); err != nil {
 				return err
 			}
 			c.meta = plan.meta
@@ -7507,7 +7608,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		_ = snap.Close()
 		return nil, errCollectionNotFound
 	}
-	if err := rejectCatalogRootOverlaysForWrite(catalog); err != nil {
+	if err := rejectCatalogRootOverlaysForIndexedBufferWrite(catalog); err != nil {
 		_ = snap.Close()
 		return nil, err
 	}
@@ -7563,7 +7664,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		indexStateRootName = collectionIndexStateRootName(meta.Name)
 	}
 	primaryRoot := catalog.rootID(primaryRootName)
-	if primaryRoot == 0 && !bufferedRead.enabled {
+	if primaryRoot == 0 && !bufferedRead.enabled && len(catalog.overlayRootIDs(primaryRootName)) == 0 {
 		plan := newUpdateBatchPlan()
 		*plan = updateBatchPlan{
 			results:                results,
@@ -7633,6 +7734,14 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	for i, item := range items {
 		phaseStart := updateBatchStatsNow(detailedStats)
 		current, err := readUpdateBatchCurrentDocument(&primaryReader, primaryReaderOK, i, item.DocumentID, bufferedRead, currentScratch[:0])
+		if err == nil && !current.buffered && len(catalog.overlayRootIDs(primaryRootName)) != 0 {
+			value, found, overlayErr := collectionGetAppendAtCatalogRoot(snap, catalog, primaryRootName, item.DocumentID, currentScratch[:0])
+			if overlayErr != nil {
+				err = overlayErr
+			} else {
+				current = updateBatchCurrentDocument{value: value, found: found}
+			}
+		}
 		stats.CurrentRead += updateBatchStatsSince(detailedStats, phaseStart)
 		if err != nil {
 			_ = snap.Close()
@@ -8000,6 +8109,9 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]Upda
 	if len(plan.deltaTables) == 0 {
 		return plan.results, nil
 	}
+	if err := rejectCatalogRootOverlaysForWrite(plan.catalog); err != nil {
+		return nil, err
+	}
 	if len(plan.rootNames) != len(plan.deltaTables) || len(plan.rootNames) != len(plan.policies) {
 		return nil, fmt.Errorf("collections: UpdateBatch collection %q invalid plan lengths roots=%d deltas=%d policies=%d", plan.meta.Name, len(plan.rootNames), len(plan.deltaTables), len(plan.policies))
 	}
@@ -8116,7 +8228,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 			return false, ErrConcurrentMutation
 		}
 	}
-	if err := c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs); err != nil {
+	if err := c.validateUpdateBatchPlanRootDescriptors(plan); err != nil {
 		plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
 		return false, err
 	}
@@ -8659,6 +8771,28 @@ func cloneCatalogWithRootUpdates(base *collectionCatalog, meta CollectionMeta, r
 	return newCollectionCatalogWithOverlays(copyCollectionMeta(meta), roots, rootOverlays)
 }
 
+func cloneCatalogWithRootOverlays(base *collectionCatalog, meta CollectionMeta, rootNames []string, rootIDs []uint64) *collectionCatalog {
+	roots := make(map[string]uint64)
+	var rootOverlays map[string][]uint64
+	if base != nil {
+		for name, rootID := range base.roots {
+			roots[name] = rootID
+		}
+		rootOverlays = cloneRootOverlayMap(base.rootOverlays)
+	}
+	if rootOverlays == nil {
+		rootOverlays = make(map[string][]uint64)
+	}
+	for i, name := range rootNames {
+		if i >= len(rootIDs) || rootIDs[i] == 0 {
+			continue
+		}
+		existing := rootOverlays[name]
+		rootOverlays[name] = overlayDescriptorRootsAfterDelta(existing, rootIDs[i])
+	}
+	return newCollectionCatalogWithOverlays(copyCollectionMeta(meta), roots, rootOverlays)
+}
+
 func newCollectionCatalog(meta CollectionMeta, roots map[string]uint64) *collectionCatalog {
 	return newCollectionCatalogWithOverlays(meta, roots, nil)
 }
@@ -8703,6 +8837,17 @@ func rejectCatalogRootOverlaysForWrite(catalog *collectionCatalog) error {
 		return nil
 	}
 	return errCollectionRootOverlaysRequireCompaction
+}
+
+func rejectCatalogRootOverlaysForIndexedBufferWrite(catalog *collectionCatalog) error {
+	if catalog == nil || len(catalog.rootOverlays) == 0 || collectionMetaUsesIndexedOverlayRoots(catalog.meta) {
+		return nil
+	}
+	return errCollectionRootOverlaysRequireCompaction
+}
+
+func collectionMetaUsesIndexedOverlayRoots(meta CollectionMeta) bool {
+	return meta.Options.BufferedIndexedOverlayRoots && meta.Options.BufferedIndexedWrites && len(meta.Indexes) > 0
 }
 
 func (c *collectionCatalog) cachedIndexRuntimes() ([]indexRuntime, error) {
@@ -8963,6 +9108,43 @@ func (c *Collection) buildRootDescriptorSystemDeltaIteratorForMeta(meta Collecti
 	return buildSystemDeltaIterator(updates)
 }
 
+func (c *Collection) buildRootOverlayDescriptorSystemIteratorForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, expectedOverlays map[string][]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	if c == nil || c.db == nil {
+		return nil, backenddb.ErrClosed
+	}
+	if len(rootIDs) != len(rootNames) {
+		return nil, unexpectedOrderedRootCountError(meta.Name, len(rootNames), len(rootIDs))
+	}
+	current := c.db.AcquireSnapshot()
+	if current == nil {
+		return nil, backenddb.ErrClosed
+	}
+	defer func() { _ = current.Close() }()
+	if err := c.validateRootOverlayDescriptorSnapshotForMeta(current, meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs, expectedOverlays); err != nil {
+		return nil, err
+	}
+	updates := make(map[string][]byte, len(rootNames))
+	for i, rootName := range rootNames {
+		existing := expectedOverlays[rootName]
+		overlays := overlayDescriptorRootsAfterDelta(existing, rootIDs[i])
+		updates[systemCollectionRootOverlayKey(rootName)] = encodeRootIDList(overlays)
+	}
+	return buildSystemTargetIterator(current, updates)
+}
+
+func overlayDescriptorRootsAfterDelta(existing []uint64, newRoot uint64) []uint64 {
+	if newRoot == 0 {
+		return append([]uint64(nil), existing...)
+	}
+	if len(existing) <= 1 {
+		return []uint64{newRoot}
+	}
+	overlays := make([]uint64, 0, len(existing)+1)
+	overlays = append(overlays, newRoot)
+	overlays = append(overlays, existing...)
+	return overlays
+}
+
 func (c *Collection) validateRootDescriptorSystemDelta(expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64) error {
 	if c == nil || c.db == nil {
 		return backenddb.ErrClosed
@@ -9004,6 +9186,67 @@ func (c *Collection) validateRootDescriptorSystemDeltaForMeta(meta CollectionMet
 		}
 	}
 	return nil
+}
+
+func (c *Collection) validateRootOverlayDescriptorSystemDeltaForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, expectedOverlays map[string][]uint64) error {
+	if c == nil || c.db == nil {
+		return backenddb.ErrClosed
+	}
+	current := c.db.AcquireSnapshot()
+	if current == nil {
+		return backenddb.ErrClosed
+	}
+	defer func() { _ = current.Close() }()
+	return c.validateRootOverlayDescriptorSnapshotForMeta(current, meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs, expectedOverlays)
+}
+
+func (c *Collection) validateRootOverlayDescriptorSnapshotForMeta(snap *backenddb.Snapshot, meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, expectedOverlays map[string][]uint64) error {
+	if snap == nil {
+		return backenddb.ErrClosed
+	}
+	if snap.State() == nil {
+		return backenddb.ErrClosed
+	}
+	// A raw TreeDB user-root commit does not change collection descriptors, and
+	// unrelated collection commits should not block this collection. Validate the
+	// descriptor contents directly instead of relying only on commit sequence.
+	_ = expectedCommitSeq
+	_ = expectedSystemRoot
+	catalog, err := loadCollectionCatalog(snap, meta.Name)
+	if err != nil {
+		return err
+	}
+	if catalog == nil {
+		return errCollectionNotFound
+	}
+	if !sameCollectionMeta(catalog.meta, meta) {
+		return fmt.Errorf("collections: concurrent schema modification detected for %q", meta.Name)
+	}
+	for _, rootName := range rootNames {
+		wantRoot, ok := baseRootIDs[rootName]
+		if !ok {
+			return fmt.Errorf("collections: missing base root for collection %q root %q", meta.Name, rootName)
+		}
+		if got := catalog.rootID(rootName); got != wantRoot {
+			return errConcurrentRootModification(meta.Name, rootName)
+		}
+		if !uint64SlicesEqual(catalog.overlayRootIDs(rootName), expectedOverlays[rootName]) {
+			return errConcurrentRootModification(meta.Name, rootName)
+		}
+	}
+	return nil
+}
+
+func uint64SlicesEqual(left, right []uint64) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Collection) validateMutationRootDescriptors(expectedUserRoot, expectedSystemRoot, expectedCommitSeq uint64) error {
@@ -10582,6 +10825,7 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		meta.Options.BufferedIndexedWriteMaxBytes = 0
 		meta.Options.BufferedIndexedWriteMaxRootRuns = 0
 		meta.Options.BufferedIndexedAsyncFlush = false
+		meta.Options.BufferedIndexedOverlayRoots = false
 		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
 	} else if len(meta.Indexes) == 0 {
 		meta.Options.BufferedIndexedWrites = false
@@ -10730,6 +10974,24 @@ func uniqueIndexRootIDs(catalog *collectionCatalog) map[string]uint64 {
 		rootID := catalog.rootID(collectionSecondaryRootName(catalog.meta.Name, idx.Name))
 		if rootID != 0 {
 			out[idx.Name] = rootID
+		}
+	}
+	return out
+}
+
+func uniqueIndexNamesWithDataOrOverlays(catalog *collectionCatalog) map[string]struct{} {
+	if catalog == nil {
+		return nil
+	}
+	out := make(map[string]struct{})
+	for _, idx := range catalog.meta.Indexes {
+		if !idx.Unique {
+			continue
+		}
+		rootName := collectionSecondaryRootName(catalog.meta.Name, idx.Name)
+		rootID := catalog.rootID(rootName)
+		if rootID != 0 || len(catalog.overlayRootIDs(rootName)) != 0 {
+			out[idx.Name] = struct{}{}
 		}
 	}
 	return out

@@ -2358,6 +2358,186 @@ func TestCollectionCatalogOverlayRootsAreVisibleAfterReopen(t *testing.T) {
 	}
 }
 
+func TestCollectionIndexedOverlayRootFlushSupportsReadsUpdatesAndUniqueChecks(t *testing.T) {
+	dir := t.TempDir()
+	db, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedOverlayRoots:      true,
+			BufferedIndexedWriteMaxDocuments: 1,
+			BufferedIndexedWriteMaxRootRuns:  1,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com","city":"hnl"}`)); err != nil {
+		t.Fatalf("insert u1: %v", err)
+	}
+	if _, err := col.Insert([]byte("u2"), []byte(`{"email":"ada@example.com","city":"sea"}`)); !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("insert duplicate email err=%v want %v", err, ErrUniqueIndexConflict)
+	}
+	results, buffered, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			return []byte(`{"email":"ada@example.com","city":"sea"}`), true, nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("update city: %v", err)
+	}
+	if !buffered || len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("update results=%+v buffered=%v", results, buffered)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush overlays: %v", err)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get updated doc: %v", err)
+	}
+	if want := []byte(`{"email":"ada@example.com","city":"sea"}`); !bytes.Equal(got, want) {
+		t.Fatalf("updated doc=%q want %q", got, want)
+	}
+	hnlIDs, err := col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find old city: %v", err)
+	}
+	if len(hnlIDs) != 0 {
+		t.Fatalf("old city ids=%q want none", hnlIDs)
+	}
+	seaIDs, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find new city: %v", err)
+	}
+	if len(seaIDs) != 1 || !bytes.Equal(seaIDs[0], []byte("u1")) {
+		t.Fatalf("new city ids=%q want [u1]", seaIDs)
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("acquire snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("load catalog: %v", err)
+	}
+	if got := len(catalog.overlayRootIDs(collectionPrimaryRootName("users"))); got != 1 {
+		_ = snap.Close()
+		t.Fatalf("primary overlay roots=%d want 1 coalesced overlay", got)
+	}
+	_ = snap.Close()
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	reopenedDoc, err := reopenedCol.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get reopened doc: %v", err)
+	}
+	if want := []byte(`{"email":"ada@example.com","city":"sea"}`); !bytes.Equal(reopenedDoc, want) {
+		t.Fatalf("reopened doc=%q want %q", reopenedDoc, want)
+	}
+	reopenedSeaIDs, err := reopenedCol.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find reopened city: %v", err)
+	}
+	if len(reopenedSeaIDs) != 1 || !bytes.Equal(reopenedSeaIDs[0], []byte("u1")) {
+		t.Fatalf("reopened city ids=%q want [u1]", reopenedSeaIDs)
+	}
+}
+
+func TestCollectionIndexedOverlayRootValidationRejectsStaleOverlayDescriptors(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedOverlayRoots:      true,
+			BufferedIndexedWriteMaxDocuments: 1,
+			BufferedIndexedWriteMaxRootRuns:  1,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com","city":"hnl"}`)); err != nil {
+		t.Fatalf("insert u1: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush u1: %v", err)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("acquire snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("load catalog: %v", err)
+	}
+	primaryRootName := collectionPrimaryRootName("users")
+	if got := len(catalog.overlayRootIDs(primaryRootName)); got != 1 {
+		_ = snap.Close()
+		t.Fatalf("primary overlay roots=%d want 1", got)
+	}
+	stalePlan := &updateBatchPlan{
+		meta:           catalog.meta,
+		catalog:        catalog,
+		baseCommitSeq:  snapshotCommitSeq(snap),
+		baseSystemRoot: snapshotSystemRoot(snap),
+		rootNames:      []string{primaryRootName},
+		baseRootIDs: map[string]uint64{
+			primaryRootName: catalog.rootID(primaryRootName),
+		},
+	}
+	_ = snap.Close()
+
+	if _, err := col.Insert([]byte("u2"), []byte(`{"email":"grace@example.com","city":"sea"}`)); err != nil {
+		t.Fatalf("insert u2: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush u2: %v", err)
+	}
+	if err := col.validateUpdateBatchPlanRootDescriptors(stalePlan); !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("stale overlay validation err=%v want %v", err, ErrConcurrentMutation)
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesReadFlushedDocumentWithBufferedRuns(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
