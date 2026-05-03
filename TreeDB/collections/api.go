@@ -7288,12 +7288,104 @@ type updateBatchPlan struct {
 }
 
 type directBufferedUpdatePlan struct {
-	changed          []preparedBatchUpdate
-	runtimes         []indexRuntime
-	templateRecords  []templateV1Record
-	templateRootName string
-	primaryRootName  string
-	stagedBytes      int64
+	changed            []preparedBatchUpdate
+	templateRecords    []templateV1Record
+	secondaryRootPlans []directBufferedSecondaryRootPlan
+	templateRootName   string
+	primaryRootName    string
+	stagedBytes        int64
+}
+
+type directBufferedSecondaryRootPlan struct {
+	rootName   string
+	entries    []directBufferedSecondaryRootEntry
+	arena      []byte
+	deletes    int
+	sets       int
+	keyBytes   int
+	runtimeIdx int
+}
+
+type directBufferedSecondaryRootEntry struct {
+	key       []byte
+	tombstone bool
+}
+
+func buildDirectBufferedSecondaryRootPlans(collectionName string, runtimes []indexRuntime, changed []preparedBatchUpdate, stats *CollectionUpdateStats) ([]directBufferedSecondaryRootPlan, int64, error) {
+	if len(runtimes) == 0 || len(changed) == 0 {
+		return nil, 0, nil
+	}
+	plans := make([]directBufferedSecondaryRootPlan, 0, len(runtimes))
+	var stagedBytes int64
+	for runtimeIdx, runtime := range runtimes {
+		runStats := CollectionUpdateSecondaryRunStats{IndexName: runtime.def.name}
+		for _, item := range changed {
+			if !item.indexStateChanged || !preparedBatchUpdateIndexChanged(item, runtimeIdx) {
+				continue
+			}
+			for _, encoded := range item.oldState.valuesAt(runtimeIdx) {
+				keyBytes := len(encoded) + len(item.documentID)
+				runStats.Deletes++
+				runStats.KeyBytes += keyBytes
+			}
+			for _, encoded := range item.newState.valuesAt(runtimeIdx) {
+				keyBytes := len(encoded) + len(item.documentID)
+				runStats.Sets++
+				runStats.KeyBytes += keyBytes
+			}
+		}
+		entryCount := runStats.Deletes + runStats.Sets
+		if entryCount == 0 {
+			continue
+		}
+		plan := directBufferedSecondaryRootPlan{
+			rootName:   runtimeSecondaryRootName(collectionName, runtime),
+			entries:    make([]directBufferedSecondaryRootEntry, 0, entryCount),
+			arena:      make([]byte, 0, runStats.KeyBytes),
+			deletes:    runStats.Deletes,
+			sets:       runStats.Sets,
+			keyBytes:   runStats.KeyBytes,
+			runtimeIdx: runtimeIdx,
+		}
+		for _, item := range changed {
+			if !item.indexStateChanged || !preparedBatchUpdateIndexChanged(item, runtimeIdx) {
+				continue
+			}
+			for _, encoded := range item.oldState.valuesAt(runtimeIdx) {
+				var key []byte
+				var err error
+				plan.arena, key, err = appendIndexEntryKey(plan.arena, encoded, item.documentID)
+				if err != nil {
+					return nil, 0, err
+				}
+				plan.entries = append(plan.entries, directBufferedSecondaryRootEntry{key: key, tombstone: true})
+			}
+			for _, encoded := range item.newState.valuesAt(runtimeIdx) {
+				var key []byte
+				var err error
+				plan.arena, key, err = appendIndexEntryKey(plan.arena, encoded, item.documentID)
+				if err != nil {
+					return nil, 0, err
+				}
+				plan.entries = append(plan.entries, directBufferedSecondaryRootEntry{key: key})
+			}
+		}
+		stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, int64(runStats.KeyBytes))
+		if stats != nil {
+			stats.SecondaryDeleteEntries += runStats.Deletes
+			stats.SecondarySetEntries += runStats.Sets
+			stats.SecondaryKeyBytes += runStats.KeyBytes
+			stats.SecondaryRuns = append(stats.SecondaryRuns, runStats)
+			if runtimeIdx < stats.IndexStatsCount {
+				stats.IndexStats[runtimeIdx].SecondaryDeletes += runStats.Deletes
+				stats.IndexStats[runtimeIdx].SecondarySets += runStats.Sets
+				stats.IndexStats[runtimeIdx].SecondaryKeyBytes += runStats.KeyBytes
+				stats.IndexStats[runtimeIdx].SecondaryRuns++
+			}
+		}
+		plans = append(plans, plan)
+	}
+	return plans, stagedBytes, nil
 }
 
 var updateBatchPlanPool sync.Pool
@@ -8348,58 +8440,23 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			results[changed[i].itemIndex].Modified = true
 			stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, int64(len(changed[i].documentID)+len(changed[i].document)))
 		}
-		secondaryRunStats := make([]CollectionUpdateSecondaryRunStats, len(runtimes))
-		for runtimeIdx, runtime := range runtimes {
-			rootHasDelta := false
-			runStats := &secondaryRunStats[runtimeIdx]
-			runStats.IndexName = runtime.def.name
-			for _, item := range changed {
-				if !item.indexStateChanged || !preparedBatchUpdateIndexChanged(item, runtimeIdx) {
-					continue
-				}
-				for _, encoded := range item.oldState.valuesAt(runtimeIdx) {
-					keyBytes := len(encoded) + len(item.documentID)
-					stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, int64(keyBytes))
-					stats.SecondaryDeleteEntries++
-					stats.SecondaryKeyBytes += keyBytes
-					runStats.Deletes++
-					runStats.KeyBytes += keyBytes
-					if runtimeIdx < stats.IndexStatsCount {
-						stats.IndexStats[runtimeIdx].SecondaryDeletes++
-						stats.IndexStats[runtimeIdx].SecondaryKeyBytes += keyBytes
-					}
-					rootHasDelta = true
-				}
-				for _, encoded := range item.newState.valuesAt(runtimeIdx) {
-					keyBytes := len(encoded) + len(item.documentID)
-					stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, int64(keyBytes))
-					stats.SecondarySetEntries++
-					stats.SecondaryKeyBytes += keyBytes
-					runStats.Sets++
-					runStats.KeyBytes += keyBytes
-					if runtimeIdx < stats.IndexStatsCount {
-						stats.IndexStats[runtimeIdx].SecondarySets++
-						stats.IndexStats[runtimeIdx].SecondaryKeyBytes += keyBytes
-					}
-					rootHasDelta = true
-				}
-			}
-			if !rootHasDelta {
-				continue
-			}
-			rootName := runtimeSecondaryRootName(meta.Name, runtime)
+		secondaryRootPlans, secondaryStagedBytes, err := buildDirectBufferedSecondaryRootPlans(meta.Name, runtimes, changed, &stats)
+		if err != nil {
+			_ = snap.Close()
+			return nil, err
+		}
+		stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, secondaryStagedBytes)
+		for _, secondaryPlan := range secondaryRootPlans {
+			runtime := runtimes[secondaryPlan.runtimeIdx]
+			rootName := secondaryPlan.rootName
 			rootNames = append(rootNames, rootName)
 			if runtime.def.unique {
-				uniqueSecondary = append(uniqueSecondary, runtimeIdx)
+				uniqueSecondary = append(uniqueSecondary, secondaryPlan.runtimeIdx)
 			} else {
 				uniqueSecondary = append(uniqueSecondary, -1)
 			}
 			baseRootIDs[rootName] = catalog.rootID(rootName)
 			policies = append(policies, runtime.def.storagePolicy)
-			stats.SecondaryRuns = append(stats.SecondaryRuns, *runStats)
-			if runtimeIdx < stats.IndexStatsCount {
-				stats.IndexStats[runtimeIdx].SecondaryRuns++
-			}
 		}
 		stats.SecondaryRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
 		success = true
@@ -8423,12 +8480,12 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			bufferedReadBlocked:         bufferedReadBlocked,
 			policies:                    policies,
 			directBufferedUpdate: &directBufferedUpdatePlan{
-				changed:          changed,
-				runtimes:         runtimes,
-				templateRecords:  templateRecords,
-				templateRootName: templateRootName,
-				primaryRootName:  primaryRootName,
-				stagedBytes:      stagedBytes,
+				changed:            changed,
+				templateRecords:    templateRecords,
+				secondaryRootPlans: secondaryRootPlans,
+				templateRootName:   templateRootName,
+				primaryRootName:    primaryRootName,
+				stagedBytes:        stagedBytes,
 			},
 			scratch: scratch,
 		}
@@ -8847,34 +8904,23 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	if primaryIndexKeys != nil {
 		addBufferedPrimaryRunIndexKeys(domain.primaryRunIndex, primaryIndexKeys, primaryTable)
 	}
-	for runtimeIdx, runtime := range direct.runtimes {
-		rootName := runtimeSecondaryRootName(plan.meta.Name, runtime)
-		table := rootTables[rootName]
+	for _, secondaryPlan := range direct.secondaryRootPlans {
+		table := rootTables[secondaryPlan.rootName]
 		if table == nil {
 			continue
 		}
-		for _, item := range direct.changed {
-			if !item.indexStateChanged || !preparedBatchUpdateIndexChanged(item, runtimeIdx) {
-				continue
+		if err := applyCollectionRunEntriesWithFlags(table, len(secondaryPlan.entries), func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
+			entry := secondaryPlan.entries[i]
+			if entry.tombstone {
+				return entry.key, nil, page.ValuePtr{}, node.FlagTombstone, nil
 			}
-			for _, encoded := range item.oldState.valuesAt(runtimeIdx) {
-				if _, err := deleteCollectionSecondaryIndexEntry(table, encoded, item.documentID); err != nil {
-					if shouldAutoFlushAfterAdding {
-						rollbackBufferedIndexedDomain(domain, checkpoint)
-						c.meta = collectionMetaCheckpoint
-					}
-					return false, err
-				}
+			return entry.key, nil, page.ValuePtr{}, node.FlagInline, nil
+		}); err != nil {
+			if shouldAutoFlushAfterAdding {
+				rollbackBufferedIndexedDomain(domain, checkpoint)
+				c.meta = collectionMetaCheckpoint
 			}
-			for _, encoded := range item.newState.valuesAt(runtimeIdx) {
-				if _, err := setCollectionSecondaryIndexEntry(table, encoded, item.documentID); err != nil {
-					if shouldAutoFlushAfterAdding {
-						rollbackBufferedIndexedDomain(domain, checkpoint)
-						c.meta = collectionMetaCheckpoint
-					}
-					return false, err
-				}
-			}
+			return false, err
 		}
 	}
 	plan.stats.BufferStageRootAppend += updateBatchStatsSince(detailedStats, phaseStart)

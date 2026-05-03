@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func mustEncodeTestIndexScalar(t *testing.T, valueType IndexValueType, value any) []byte {
@@ -17,6 +19,31 @@ func mustEncodeTestIndexScalar(t *testing.T, valueType IndexValueType, value any
 		t.Fatalf("encode index scalar: %v", err)
 	}
 	return encoded
+}
+
+func TestApplyCollectionRunEntriesWithFlagsBulkTombstones(t *testing.T) {
+	table := newCollectionRootAccumulatorRunTable()
+	err := applyCollectionRunEntriesWithFlags(table, 3, func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
+		switch i {
+		case 0:
+			return []byte("a"), []byte("old-a"), page.ValuePtr{}, node.FlagInline, nil
+		case 1:
+			return []byte("b"), nil, page.ValuePtr{}, node.FlagInline, nil
+		default:
+			return []byte("a"), nil, page.ValuePtr{}, node.FlagTombstone, nil
+		}
+	})
+	if err != nil {
+		t.Fatalf("applyCollectionRunEntriesWithFlags: %v", err)
+	}
+	if _, _, flags, ok := table.GetEntry([]byte("a")); !ok || flags&node.FlagTombstone == 0 {
+		t.Fatalf("a entry ok=%v flags=%02x, want tombstone", ok, flags)
+	}
+	if got, _, flags, ok := table.GetEntry([]byte("b")); !ok || flags&node.FlagTombstone != 0 || got != nil {
+		t.Fatalf("b entry value=%q flags=%02x ok=%v, want live nil inline value", got, flags, ok)
+	}
+	table.Freeze()
+	requireFreezeSortRunIterator(t, table.NewIterator(nil, nil), []string{"a", "b"})
 }
 
 func TestInsertBatchPlanner_EmitsRootLocalRunsForPrimaryIndexStateAndSecondaryRoots(t *testing.T) {
