@@ -4547,16 +4547,36 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		}
 	}()
 	if collectionMetaUsesIndexedOverlayRoots(work.meta) {
-		ordered, cleanupIters, err := buildBufferedRootOverlayDeltaPublishInputs(work.rootNames, work.flushUnit.rootRuns, work.flushUnit.rootPolicies, work.rootOverlays)
+		if !bufferedRootOverlayDeltaBatchEligible(work.rootNames, work.rootOverlays) {
+			ordered, cleanupIters, err := buildBufferedRootOverlayDeltaPublishInputs(work.rootNames, work.flushUnit.rootRuns, work.flushUnit.rootPolicies, work.rootOverlays)
+			if err != nil {
+				return c.completePreparedIndexedFlush(work, 0, nil, err, 0)
+			}
+			publishStart := time.Now()
+			newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, work.rootOverlays, rootIDs)
+			})
+			publishElapsed := time.Since(publishStart)
+			cleanupIters()
+			if publishErr == nil && len(rootIDs) != len(work.rootNames) {
+				publishErr = unexpectedOrderedRootCountError(work.meta.Name, len(work.rootNames), len(rootIDs))
+			}
+			completeErr := c.completePreparedIndexedFlush(work, newSystemRoot, rootIDs, publishErr, publishElapsed)
+			if publishErr != nil {
+				return publishErr
+			}
+			return completeErr
+		}
+		ordered, cleanupDeltas, err := buildBufferedRootOverlayDeltaBatchPublishInputs(work.rootNames, work.flushUnit.rootRuns, work.flushUnit.rootPolicies, work.rootOverlays)
 		if err != nil {
 			return c.completePreparedIndexedFlush(work, 0, nil, err, 0)
 		}
 		publishStart := time.Now()
-		newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaGroupWithSystemBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootOverlayDescriptorSystemIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, work.rootOverlays, rootIDs)
+		newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, work.rootOverlays, rootIDs)
 		})
 		publishElapsed := time.Since(publishStart)
-		cleanupIters()
+		cleanupDeltas()
 		if publishErr == nil && len(rootIDs) != len(work.rootNames) {
 			publishErr = unexpectedOrderedRootCountError(work.meta.Name, len(work.rootNames), len(rootIDs))
 		}
@@ -4586,6 +4606,15 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	return completeErr
 }
 
+func bufferedRootOverlayDeltaBatchEligible(rootNames []string, rootOverlays map[string][]uint64) bool {
+	for _, rootName := range rootNames {
+		if overlayDeltaBaseRoot(rootOverlays[rootName]) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func buildBufferedRootOverlayDeltaPublishInputs(rootNames []string, rootRuns map[string][]memtable.Table, rootPolicies map[string]backenddb.OrderedRootStoragePolicy, rootOverlays map[string][]uint64) ([]backenddb.OrderedRootDeltaPublishInput, func(), error) {
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
 	iterators := make([]iterator.UnsafeIterator, 0, len(rootNames))
@@ -4600,6 +4629,37 @@ func buildBufferedRootOverlayDeltaPublishInputs(rootNames []string, rootRuns map
 		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
 			BaseRoot:      overlayDeltaBaseRoot(rootOverlays[rootName]),
 			Iter:          iter,
+			StoragePolicy: rootPolicies[rootName],
+		})
+	}
+	return ordered, cleanup, nil
+}
+
+func buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames []string, rootRuns map[string][]memtable.Table, rootPolicies map[string]backenddb.OrderedRootStoragePolicy, rootOverlays map[string][]uint64) ([]backenddb.OrderedRootDeltaBatchPublishInput, func(), error) {
+	ordered := make([]backenddb.OrderedRootDeltaBatchPublishInput, 0, len(rootNames))
+	iterators := make([]iterator.UnsafeIterator, 0, len(rootNames))
+	cleanup := func() {
+		for idx := range ordered {
+			if ordered[idx].Delta != nil {
+				_ = ordered[idx].Delta.Close()
+				ordered[idx].Delta = nil
+			}
+		}
+		for _, it := range iterators {
+			_ = it.Close()
+		}
+	}
+	for _, rootName := range rootNames {
+		iter := newBufferedRootRunsIteratorWithDeleted(rootRuns[rootName], nil, nil, true)
+		iterators = append(iterators, iter)
+		delta, err := backenddb.OrderedRootDeltaBatchFromIterator(iter)
+		if err != nil {
+			cleanup()
+			return nil, func() {}, err
+		}
+		ordered = append(ordered, backenddb.OrderedRootDeltaBatchPublishInput{
+			BaseRoot:      overlayDeltaBaseRoot(rootOverlays[rootName]),
+			Delta:         delta,
 			StoragePolicy: rootPolicies[rootName],
 		})
 	}
@@ -4816,14 +4876,25 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	var newSystemRoot uint64
 	var rootIDs []uint64
 	if collectionMetaUsesIndexedOverlayRoots(meta) {
-		ordered, cleanupIters, err := buildBufferedRootOverlayDeltaPublishInputs(rootNames, flushUnit.rootRuns, flushUnit.rootPolicies, rootOverlays)
-		if err != nil {
-			return err
+		if bufferedRootOverlayDeltaBatchEligible(rootNames, rootOverlays) {
+			ordered, cleanupDeltas, err := buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames, flushUnit.rootRuns, flushUnit.rootPolicies, rootOverlays)
+			if err != nil {
+				return err
+			}
+			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays, rootIDs)
+			})
+			cleanupDeltas()
+		} else {
+			ordered, cleanupIters, err := buildBufferedRootOverlayDeltaPublishInputs(rootNames, flushUnit.rootRuns, flushUnit.rootPolicies, rootOverlays)
+			if err != nil {
+				return err
+			}
+			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays, rootIDs)
+			})
+			cleanupIters()
 		}
-		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithSystemBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootOverlayDescriptorSystemIteratorForMeta(meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays, rootIDs)
-		})
-		cleanupIters()
 	} else {
 		ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(rootNames, flushUnit.rootRuns, flushUnit.rootBaseIDs, flushUnit.rootPolicies)
 		if err != nil {
@@ -9227,19 +9298,14 @@ func (c *Collection) buildRootDescriptorSystemDeltaIteratorForMeta(meta Collecti
 	return buildSystemDeltaIterator(updates)
 }
 
-func (c *Collection) buildRootOverlayDescriptorSystemIteratorForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, expectedOverlays map[string][]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+func (c *Collection) buildRootOverlayDescriptorSystemDeltaIteratorForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, expectedOverlays map[string][]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 	if c == nil || c.db == nil {
 		return nil, backenddb.ErrClosed
 	}
 	if len(rootIDs) != len(rootNames) {
 		return nil, unexpectedOrderedRootCountError(meta.Name, len(rootNames), len(rootIDs))
 	}
-	current := c.db.AcquireSnapshot()
-	if current == nil {
-		return nil, backenddb.ErrClosed
-	}
-	defer func() { _ = current.Close() }()
-	if err := c.validateRootOverlayDescriptorSnapshotForMeta(current, meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs, expectedOverlays); err != nil {
+	if err := c.validateRootOverlayDescriptorSystemDeltaForMeta(meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs, expectedOverlays); err != nil {
 		return nil, err
 	}
 	updates := make(map[string][]byte, len(rootNames))
@@ -9248,7 +9314,7 @@ func (c *Collection) buildRootOverlayDescriptorSystemIteratorForMeta(meta Collec
 		overlays := overlayDescriptorRootsAfterDelta(existing, rootIDs[i])
 		updates[systemCollectionRootOverlayKey(rootName)] = encodeRootIDList(overlays)
 	}
-	return buildSystemTargetIterator(current, updates)
+	return buildSystemDeltaIterator(updates)
 }
 
 func (c *Collection) buildRootOverlayCompactionSystemDeltaIteratorForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, expectedOverlays map[string][]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
