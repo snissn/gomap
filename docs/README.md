@@ -43,6 +43,8 @@ Behavioral guarantees for downstream systems (e.g., replication layers).
 ## 📊 Benchmarking
 
 - **[Benchmark Spec](BENCHMARK_SPEC.md)**: Methodology and test definitions.
+- **[TreeDB Canonical Benchmark Runbook](benchmarks/treedb_canonical_benchmark_runbook.md)**: Standard TreeDB engine, collections, Mongo gateway, profiling, and reporting workflows.
+- **[TreeDB Collections Canonical Benchmark](benchmarks/collections_canonical_benchmark.md)**: Canonical TreeDB-vs-SQLite collection benchmark and maintenance-phase semantics.
 - **[Unified Bench](../cmd/unified_bench/README.md)**: Usage guide for benchmark execution and artifact capture.
 - **[BenchProf](../cmd/benchprof/README.md)**: Analysis tool for CPU/alloc/block/mutex profiles and ops/sec outputs.
 - **[Redis Protocol Benchmarking](REDIS_PROTOCOL_BENCHMARKING.md)**: Preferred way to measure Redis wrapper throughput.
