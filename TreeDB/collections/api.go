@@ -4793,6 +4793,10 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	if c == nil || c.writeDomain == nil || work == nil {
 		return publishErr
 	}
+	completeStart := time.Now()
+	observedElapsed := func() time.Duration {
+		return elapsed + collectionObservedElapsedSince(completeStart)
+	}
 	domain := c.writeDomain
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
@@ -4802,7 +4806,7 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 			domain.indexedFlushUnits = append(removed, domain.indexedFlushUnits...)
 		}
 		rebuildBufferedPendingIndexesLocked(domain, work.meta.Name, preservePrimaryRunIndex)
-		domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, elapsed, materializeElapsed, publishElapsed, publishErr)
+		domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, publishErr)
 		return publishErr
 	}
 	baseCatalog := domain.catalog
@@ -4818,7 +4822,7 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	oldPublishing, owned := removeIndexedPublishingWorkUnitsLocked(domain, work.units)
 	if !owned {
 		err := errors.New("collections: async indexed publish lost ownership of in-flight flush units")
-		domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, elapsed, materializeElapsed, publishElapsed, err)
+		domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, err)
 		return err
 	}
 	domain.loaded = true
@@ -4837,7 +4841,7 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	c.meta = work.meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	resetIndexedFlushUnits(oldPublishing)
-	domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, elapsed, materializeElapsed, publishElapsed, nil)
+	domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, nil)
 	return nil
 }
 
