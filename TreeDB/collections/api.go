@@ -9400,6 +9400,15 @@ func (c *Collection) validateRootOverlayDescriptorSystemDeltaForMeta(meta Collec
 	if c == nil || c.db == nil {
 		return backenddb.ErrClosed
 	}
+	for _, rootName := range rootNames {
+		if _, ok := baseRootIDs[rootName]; !ok {
+			return fmt.Errorf("collections: missing base root for collection %q root %q", meta.Name, rootName)
+		}
+	}
+	currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
+	if currentSystemRoot == expectedSystemRoot && currentCommitSeq == expectedCommitSeq {
+		return nil
+	}
 	current := c.db.AcquireSnapshot()
 	if current == nil {
 		return backenddb.ErrClosed
