@@ -1036,7 +1036,6 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 			add("error", "missing_compaction_flags", fmt.Sprintf("%s/%s is missing compaction flags", r.ConfigName, r.Phase))
 		}
 	}
-	treeDBConfig := compactedTreeDBConfigName(canon)
 	sqliteJSONConfig := sqliteJSONConfigName(canon)
 	sqliteNativeConfig := sqliteNativeConfigName(canon)
 	sqliteRows := hasSQLiteRows(canon.Results)
@@ -1052,9 +1051,11 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 		if findResult(canon.Results, sqliteNativeConfig, phaseSQLiteVacuum) == nil {
 			add("error", "missing_sqlite_native_vacuum", "SQLite native-columns VACUUM result is required for fair compacted-state comparison")
 		}
-		if findResult(canon.Results, treeDBConfig, phaseOfflineRewrite) != nil &&
-			findResult(canon.Results, sqliteNativeConfig, phaseSQLiteVacuum) == nil {
-			add("error", "unfair_compacted_comparison", "TreeDB offline/full compaction must be compared against SQLite after VACUUM, not SQLite post-insert")
+		for _, treeDBConfig := range compactedTreeDBConfigNames(canon) {
+			if findResult(canon.Results, treeDBConfig, phaseOfflineRewrite) != nil &&
+				findResult(canon.Results, sqliteNativeConfig, phaseSQLiteVacuum) == nil {
+				add("error", "unfair_compacted_comparison", "TreeDB offline/full compaction must be compared against SQLite after VACUUM, not SQLite post-insert")
+			}
 		}
 	}
 	if findResult(canon.Results, "treedb_template_v1_raw", phaseOfflineRewrite) != nil {
@@ -1066,13 +1067,15 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 		}
 	}
 	if !sqliteSkipped {
-		for _, treedbPhase := range []string{phaseOfflineRewrite, phaseFullLeafgenPackGC} {
-			if findResult(canon.Results, treeDBConfig, treedbPhase) == nil {
-				continue
-			}
-			for _, sqliteName := range []string{sqliteNativeConfig, sqliteJSONConfig} {
-				if findComparison(canon.Comparisons, treeDBConfig, treedbPhase, sqliteName, phaseSQLiteVacuum) == nil {
-					add("error", "missing_compacted_ratio", fmt.Sprintf("missing derived compacted comparison for %s/%s vs %s/%s", treeDBConfig, treedbPhase, sqliteName, phaseSQLiteVacuum))
+		for _, treeDBConfig := range compactedTreeDBConfigNames(canon) {
+			for _, treedbPhase := range []string{phaseOfflineRewrite, phaseFullLeafgenPackGC} {
+				if findResult(canon.Results, treeDBConfig, treedbPhase) == nil {
+					continue
+				}
+				for _, sqliteName := range []string{sqliteNativeConfig, sqliteJSONConfig} {
+					if findComparison(canon.Comparisons, treeDBConfig, treedbPhase, sqliteName, phaseSQLiteVacuum) == nil {
+						add("error", "missing_compacted_ratio", fmt.Sprintf("missing derived compacted comparison for %s/%s vs %s/%s", treeDBConfig, treedbPhase, sqliteName, phaseSQLiteVacuum))
+					}
 				}
 			}
 		}
@@ -1329,14 +1332,13 @@ func renderExecutiveSummary(canon *canonicalRun) string {
 		fullNative := *sqliteNative.BytesPerDoc / *full.BytesPerDoc
 		offlineJSON := *sqliteJSON.BytesPerDoc / *offline.BytesPerDoc
 		fullJSON := *sqliteJSON.BytesPerDoc / *full.BytesPerDoc
-		return fmt.Sprintf("`%s` is the fastest indexed ingest row in this run. TreeDB fully compacted %s template-v1 collection storage is %.1f B/doc via PR 1096-style offline rewrite and %.1f B/doc via full leafgen pack/GC. Compared with SQLite after `VACUUM`, offline rewrite is about %.1fx smaller than SQLite native columns and %.1fx smaller than SQLite JSON; full leafgen pack/GC is about %.1fx and %.1fx smaller, respectively.",
-			engine, indexCountLabel(canonicalIndexCount(canon)), *offline.BytesPerDoc, *full.BytesPerDoc, offlineNative, offlineJSON, fullNative, fullJSON)
+		return fmt.Sprintf("`%s` is the fastest indexed ingest row in this run. TreeDB fully compacted %s %s collection storage is %.1f B/doc via PR 1096-style offline rewrite and %.1f B/doc via full leafgen pack/GC. Compared with SQLite after `VACUUM`, offline rewrite is about %.1fx smaller than SQLite native columns and %.1fx smaller than SQLite JSON; full leafgen pack/GC is about %.1fx and %.1fx smaller, respectively.",
+			engine, indexCountLabel(canonicalIndexCount(canon)), primaryFormat(canon), *offline.BytesPerDoc, *full.BytesPerDoc, offlineNative, offlineJSON, fullNative, fullJSON)
 	}
 	return "This report separates post-insert, partial online maintenance, offline rewrite, full leafgen pack/GC, and SQLite VACUUM states. Some compacted-state rows are missing, so the fair compacted-state headline could not be generated."
 }
 
 func writeFairComparison(sb *strings.Builder, canon *canonicalRun) {
-	treeDBConfig := compactedTreeDBConfigName(canon)
 	sqliteJSONConfig := sqliteJSONConfigName(canon)
 	sqliteNativeConfig := sqliteNativeConfigName(canon)
 	sqliteJSON := findResult(canon.Results, sqliteJSONConfig, phaseSQLiteVacuum)
@@ -1354,27 +1356,29 @@ func writeFairComparison(sb *strings.Builder, canon *canonicalRun) {
 	sb.WriteString("\nTreeDB compacted rows versus SQLite after `VACUUM`:\n\n")
 	sb.WriteString("| TreeDB config | Phase | B/doc | vs SQLite native-columns VACUUM | vs SQLite JSON VACUUM |\n")
 	sb.WriteString("| --- | --- | ---: | ---: | ---: |\n")
-	for _, phase := range []string{phaseOfflineRewrite, phaseFullLeafgenPackGC} {
-		nativeCmp := findComparison(comparisons, treeDBConfig, phase, sqliteNativeConfig, phaseSQLiteVacuum)
-		jsonCmp := findComparison(comparisons, treeDBConfig, phase, sqliteJSONConfig, phaseSQLiteVacuum)
-		if nativeCmp == nil && jsonCmp == nil {
-			continue
+	for _, treeDBConfig := range compactedTreeDBConfigNames(canon) {
+		for _, phase := range []string{phaseOfflineRewrite, phaseFullLeafgenPackGC} {
+			nativeCmp := findComparison(comparisons, treeDBConfig, phase, sqliteNativeConfig, phaseSQLiteVacuum)
+			jsonCmp := findComparison(comparisons, treeDBConfig, phase, sqliteJSONConfig, phaseSQLiteVacuum)
+			if nativeCmp == nil && jsonCmp == nil {
+				continue
+			}
+			bpd := 0.0
+			if nativeCmp != nil {
+				bpd = nativeCmp.TreeDBBytesPerDoc
+			} else {
+				bpd = jsonCmp.TreeDBBytesPerDoc
+			}
+			nativeRatio := "-"
+			jsonRatio := "-"
+			if nativeCmp != nil {
+				nativeRatio = fmt.Sprintf("%.1fx smaller", nativeCmp.SmallerRatio)
+			}
+			if jsonCmp != nil {
+				jsonRatio = fmt.Sprintf("%.1fx smaller", jsonCmp.SmallerRatio)
+			}
+			sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %.1f | %s | %s |\n", treeDBConfig, phase, bpd, nativeRatio, jsonRatio))
 		}
-		bpd := 0.0
-		if nativeCmp != nil {
-			bpd = nativeCmp.TreeDBBytesPerDoc
-		} else {
-			bpd = jsonCmp.TreeDBBytesPerDoc
-		}
-		nativeRatio := "-"
-		jsonRatio := "-"
-		if nativeCmp != nil {
-			nativeRatio = fmt.Sprintf("%.1fx smaller", nativeCmp.SmallerRatio)
-		}
-		if jsonCmp != nil {
-			jsonRatio = fmt.Sprintf("%.1fx smaller", jsonCmp.SmallerRatio)
-		}
-		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %.1f | %s | %s |\n", treeDBConfig, phase, bpd, nativeRatio, jsonRatio))
 	}
 	sb.WriteString("\nDerived comparison rows are also emitted in `benchmark_results.json` under `comparisons`.\n")
 }
@@ -1493,8 +1497,22 @@ func canonicalConfigName(engine, format, shape string, indexes int) string {
 	return fmt.Sprintf("%s_%s_%s_%d_indexes", engine, format, shape, indexes)
 }
 
+func primaryFormat(canon *canonicalRun) string {
+	if canon != nil {
+		for _, f := range canon.Config.Formats {
+			if f == "template-v1" {
+				return "template-v1"
+			}
+		}
+		if len(canon.Config.Formats) > 0 {
+			return canon.Config.Formats[0]
+		}
+	}
+	return "template-v1"
+}
+
 func compactedTreeDBConfigName(canon *canonicalRun) string {
-	return canonicalConfigName("treedb", "template-v1", "collection", canonicalIndexCount(canon))
+	return canonicalConfigName("treedb", primaryFormat(canon), "collection", canonicalIndexCount(canon))
 }
 
 func compactedTreeDBConfigNames(canon *canonicalRun) []string {
