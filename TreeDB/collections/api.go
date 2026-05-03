@@ -356,7 +356,9 @@ type CollectionUpdateSecondaryRunStats struct {
 // an UpdateBatch-style call. Changed/unchanged are counted per modified
 // document for each cached index runtime.
 type CollectionUpdateIndexStats struct {
+	CollectionName    string
 	IndexName         string
+	IndexOrdinal      int
 	Unique            bool
 	Changed           int
 	Unchanged         int
@@ -442,6 +444,8 @@ type CollectionManagerStats struct {
 	UpdateBatchIndexValueUnchanged uint64
 	UpdateBatchUniqueChecks        uint64
 	UpdateBatchUniqueCheckSkips    uint64
+	UpdateBatchIndexStatsCount     int
+	UpdateBatchIndexStats          [maxCollectionUpdateInlineIndexStats]CollectionUpdateIndexStats
 }
 
 // DocumentRecord is one primary collection record returned by ScanDocuments.
@@ -729,6 +733,14 @@ type collectionWriteDomain struct {
 	updateBatchUniqueChecks          atomic.Uint64
 	updateBatchUniqueCheckSkips      atomic.Uint64
 	updateBatchDetailedStats         atomic.Bool
+	updateBatchIndexChanged          [maxCollectionUpdateInlineIndexStats]atomic.Uint64
+	updateBatchIndexUnchanged        [maxCollectionUpdateInlineIndexStats]atomic.Uint64
+	updateBatchIndexUniqueChecks     [maxCollectionUpdateInlineIndexStats]atomic.Uint64
+	updateBatchIndexUniqueSkips      [maxCollectionUpdateInlineIndexStats]atomic.Uint64
+	updateBatchIndexSecondaryRuns    [maxCollectionUpdateInlineIndexStats]atomic.Uint64
+	updateBatchIndexSecondaryDeletes [maxCollectionUpdateInlineIndexStats]atomic.Uint64
+	updateBatchIndexSecondarySets    [maxCollectionUpdateInlineIndexStats]atomic.Uint64
+	updateBatchIndexSecondaryBytes   [maxCollectionUpdateInlineIndexStats]atomic.Uint64
 }
 
 func NewCollectionManager(database *backenddb.DB) *CollectionManager {
@@ -940,7 +952,57 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.update_batch.index_value_unchanged_total"] = fmt.Sprintf("%d", stats.UpdateBatchIndexValueUnchanged)
 	out["treedb.collections.write_domain.update_batch.unique_checks_total"] = fmt.Sprintf("%d", stats.UpdateBatchUniqueChecks)
 	out["treedb.collections.write_domain.update_batch.unique_check_skips_total"] = fmt.Sprintf("%d", stats.UpdateBatchUniqueCheckSkips)
+	for i := 0; i < stats.UpdateBatchIndexStatsCount && i < len(stats.UpdateBatchIndexStats); i++ {
+		indexStats := stats.UpdateBatchIndexStats[i]
+		if indexStats.IndexName == "" {
+			continue
+		}
+		prefix := fmt.Sprintf(
+			"treedb.collections.write_domain.update_batch.collection.%s.index.%d.%s.",
+			collectionStatsMetricToken(indexStats.CollectionName),
+			indexStats.IndexOrdinal,
+			collectionStatsMetricToken(indexStats.IndexName),
+		)
+		if indexStats.Unique {
+			out[prefix+"unique"] = "1"
+		} else {
+			out[prefix+"unique"] = "0"
+		}
+		out[prefix+"changed_total"] = fmt.Sprintf("%d", indexStats.Changed)
+		out[prefix+"unchanged_total"] = fmt.Sprintf("%d", indexStats.Unchanged)
+		out[prefix+"unique_checks_total"] = fmt.Sprintf("%d", indexStats.UniqueChecks)
+		out[prefix+"unique_check_skips_total"] = fmt.Sprintf("%d", indexStats.UniqueCheckSkips)
+		out[prefix+"secondary_runs_total"] = fmt.Sprintf("%d", indexStats.SecondaryRuns)
+		out[prefix+"secondary_deletes_total"] = fmt.Sprintf("%d", indexStats.SecondaryDeletes)
+		out[prefix+"secondary_sets_total"] = fmt.Sprintf("%d", indexStats.SecondarySets)
+		out[prefix+"secondary_key_bytes_total"] = fmt.Sprintf("%d", indexStats.SecondaryKeyBytes)
+	}
 	return out
+}
+
+func collectionStatsMetricToken(name string) string {
+	original := strings.TrimSpace(name)
+	name = strings.ToLower(original)
+	var builder strings.Builder
+	builder.Grow(len(name))
+	lastUnderscore := false
+	for _, r := range name {
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if ok {
+			builder.WriteRune(r)
+			lastUnderscore = false
+			continue
+		}
+		if !lastUnderscore {
+			builder.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+	out := strings.Trim(builder.String(), "_")
+	if out == "" {
+		return "unnamed"
+	}
+	return fmt.Sprintf("%s_%016x", out, xxhash.Sum64String(original))
 }
 
 // StatsSnapshot returns aggregate process-local collection write-domain
@@ -949,19 +1011,26 @@ func (m *CollectionManager) StatsSnapshot() CollectionManagerStats {
 	if m == nil {
 		return CollectionManagerStats{}
 	}
+	type domainTarget struct {
+		name   string
+		domain *collectionWriteDomain
+	}
 	m.domainMu.RLock()
-	domains := make([]*collectionWriteDomain, 0, len(m.domains))
-	for _, domain := range m.domains {
+	domains := make([]domainTarget, 0, len(m.domains))
+	for name, domain := range m.domains {
 		if domain != nil {
-			domains = append(domains, domain)
+			domains = append(domains, domainTarget{name: name, domain: domain})
 		}
 	}
 	m.domainMu.RUnlock()
+	sort.Slice(domains, func(i, j int) bool {
+		return domains[i].name < domains[j].name
+	})
 
 	var stats CollectionManagerStats
 	stats.Domains = len(domains)
-	for _, domain := range domains {
-		stats.add(domain.statsSnapshot())
+	for _, target := range domains {
+		stats.add(target.domain.statsSnapshot())
 	}
 	return stats
 }
@@ -1034,6 +1103,9 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.UpdateBatchIndexValueUnchanged += other.UpdateBatchIndexValueUnchanged
 	s.UpdateBatchUniqueChecks += other.UpdateBatchUniqueChecks
 	s.UpdateBatchUniqueCheckSkips += other.UpdateBatchUniqueCheckSkips
+	for i := 0; i < other.UpdateBatchIndexStatsCount && i < len(other.UpdateBatchIndexStats); i++ {
+		mergeCollectionUpdateIndexStat(&s.UpdateBatchIndexStats, &s.UpdateBatchIndexStatsCount, other.UpdateBatchIndexStats[i])
+	}
 }
 
 func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
@@ -1046,6 +1118,16 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.PendingBytes = domain.bufferedBytes
 	stats.PendingRootRuns = bufferedIndexedRootRunCount(domain)
 	stats.PendingIndexedFlushUnits = len(domain.indexedPublishingUnits) + len(domain.indexedFlushUnits)
+	stats.UpdateBatchIndexStatsCount = len(domain.meta.Indexes)
+	if stats.UpdateBatchIndexStatsCount > len(stats.UpdateBatchIndexStats) {
+		stats.UpdateBatchIndexStatsCount = len(stats.UpdateBatchIndexStats)
+	}
+	for i := 0; i < stats.UpdateBatchIndexStatsCount; i++ {
+		stats.UpdateBatchIndexStats[i].CollectionName = domain.meta.Name
+		stats.UpdateBatchIndexStats[i].IndexName = domain.meta.Indexes[i].Name
+		stats.UpdateBatchIndexStats[i].IndexOrdinal = i
+		stats.UpdateBatchIndexStats[i].Unique = domain.meta.Indexes[i].Unique
+	}
 	domain.mu.RUnlock()
 	if domain.indexedAsyncFlushRunning() {
 		stats.IndexedAsyncFlushRunning = 1
@@ -1108,7 +1190,24 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.UpdateBatchIndexValueUnchanged = domain.updateBatchIndexValueUnchanged.Load()
 	stats.UpdateBatchUniqueChecks = domain.updateBatchUniqueChecks.Load()
 	stats.UpdateBatchUniqueCheckSkips = domain.updateBatchUniqueCheckSkips.Load()
+	for i := 0; i < stats.UpdateBatchIndexStatsCount; i++ {
+		stats.UpdateBatchIndexStats[i].Changed = collectionStatsUint64ToInt(domain.updateBatchIndexChanged[i].Load())
+		stats.UpdateBatchIndexStats[i].Unchanged = collectionStatsUint64ToInt(domain.updateBatchIndexUnchanged[i].Load())
+		stats.UpdateBatchIndexStats[i].UniqueChecks = collectionStatsUint64ToInt(domain.updateBatchIndexUniqueChecks[i].Load())
+		stats.UpdateBatchIndexStats[i].UniqueCheckSkips = collectionStatsUint64ToInt(domain.updateBatchIndexUniqueSkips[i].Load())
+		stats.UpdateBatchIndexStats[i].SecondaryRuns = collectionStatsUint64ToInt(domain.updateBatchIndexSecondaryRuns[i].Load())
+		stats.UpdateBatchIndexStats[i].SecondaryDeletes = collectionStatsUint64ToInt(domain.updateBatchIndexSecondaryDeletes[i].Load())
+		stats.UpdateBatchIndexStats[i].SecondarySets = collectionStatsUint64ToInt(domain.updateBatchIndexSecondarySets[i].Load())
+		stats.UpdateBatchIndexStats[i].SecondaryKeyBytes = collectionStatsUint64ToInt(domain.updateBatchIndexSecondaryBytes[i].Load())
+	}
 	return stats
+}
+
+func collectionStatsUint64ToInt(v uint64) int {
+	if v > uint64(maxCollectionInt) {
+		return maxCollectionInt
+	}
+	return int(v)
 }
 
 func durationFromAtomicNs(ns uint64) time.Duration {
@@ -1211,6 +1310,57 @@ func (domain *collectionWriteDomain) observeUpdateBatchStats(stats CollectionUpd
 	if stats.UniqueIndexCheckSkips > 0 {
 		domain.updateBatchUniqueCheckSkips.Add(uint64(stats.UniqueIndexCheckSkips))
 	}
+	if stats.IndexStatsCount > 0 {
+		for i := 0; i < stats.IndexStatsCount && i < len(stats.IndexStats); i++ {
+			indexStats := stats.IndexStats[i]
+			atomicAddNonNegativeInt(&domain.updateBatchIndexChanged[i], indexStats.Changed)
+			atomicAddNonNegativeInt(&domain.updateBatchIndexUnchanged[i], indexStats.Unchanged)
+			atomicAddNonNegativeInt(&domain.updateBatchIndexUniqueChecks[i], indexStats.UniqueChecks)
+			atomicAddNonNegativeInt(&domain.updateBatchIndexUniqueSkips[i], indexStats.UniqueCheckSkips)
+			atomicAddNonNegativeInt(&domain.updateBatchIndexSecondaryRuns[i], indexStats.SecondaryRuns)
+			atomicAddNonNegativeInt(&domain.updateBatchIndexSecondaryDeletes[i], indexStats.SecondaryDeletes)
+			atomicAddNonNegativeInt(&domain.updateBatchIndexSecondarySets[i], indexStats.SecondarySets)
+			atomicAddNonNegativeInt(&domain.updateBatchIndexSecondaryBytes[i], indexStats.SecondaryKeyBytes)
+		}
+	}
+}
+
+func atomicAddNonNegativeInt(counter *atomic.Uint64, n int) {
+	if counter == nil || n <= 0 {
+		return
+	}
+	counter.Add(uint64(n))
+}
+
+func mergeCollectionUpdateIndexStat(dst *[maxCollectionUpdateInlineIndexStats]CollectionUpdateIndexStats, dstCount *int, src CollectionUpdateIndexStats) {
+	if dst == nil || dstCount == nil || src.IndexName == "" {
+		return
+	}
+	for i := 0; i < *dstCount && i < len(dst); i++ {
+		if sameCollectionUpdateIndexStat(dst[i], src) {
+			dst[i].Unique = src.Unique
+			dst[i].Changed = saturatingAddNonNegativeInt(dst[i].Changed, src.Changed)
+			dst[i].Unchanged = saturatingAddNonNegativeInt(dst[i].Unchanged, src.Unchanged)
+			dst[i].UniqueChecks = saturatingAddNonNegativeInt(dst[i].UniqueChecks, src.UniqueChecks)
+			dst[i].UniqueCheckSkips = saturatingAddNonNegativeInt(dst[i].UniqueCheckSkips, src.UniqueCheckSkips)
+			dst[i].SecondaryRuns = saturatingAddNonNegativeInt(dst[i].SecondaryRuns, src.SecondaryRuns)
+			dst[i].SecondaryDeletes = saturatingAddNonNegativeInt(dst[i].SecondaryDeletes, src.SecondaryDeletes)
+			dst[i].SecondarySets = saturatingAddNonNegativeInt(dst[i].SecondarySets, src.SecondarySets)
+			dst[i].SecondaryKeyBytes = saturatingAddNonNegativeInt(dst[i].SecondaryKeyBytes, src.SecondaryKeyBytes)
+			return
+		}
+	}
+	if *dstCount >= len(dst) {
+		return
+	}
+	dst[*dstCount] = src
+	*dstCount = *dstCount + 1
+}
+
+func sameCollectionUpdateIndexStat(a, b CollectionUpdateIndexStats) bool {
+	return a.CollectionName == b.CollectionName &&
+		a.IndexOrdinal == b.IndexOrdinal &&
+		a.IndexName == b.IndexName
 }
 
 func collectionUpdateStatsHasBufferStageBreakdown(stats CollectionUpdateStats) bool {
@@ -7202,8 +7352,10 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		stats.IndexStatsCount = len(runtimes)
 		for i, runtime := range runtimes {
 			stats.IndexStats[i] = CollectionUpdateIndexStats{
-				IndexName: runtime.def.name,
-				Unique:    runtime.def.unique,
+				CollectionName: meta.Name,
+				IndexName:      runtime.def.name,
+				IndexOrdinal:   i,
+				Unique:         runtime.def.unique,
 			}
 		}
 	}
