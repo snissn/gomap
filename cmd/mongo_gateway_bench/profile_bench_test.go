@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +39,10 @@ const (
 	// Preferred deterministic stride for scrambling sequential operation
 	// numbers across the preloaded ID set.
 	profileBenchPreferredUpdateIDStride = 37
+	profileBenchLabelBenchmarkKey       = "gomap_benchmark"
+	profileBenchLabelPhaseKey           = "gomap_benchmark_phase"
+	profileBenchDirectUpdateBenchmark   = "direct_collection_concurrent_update_bson"
+	profileBenchTimedUpdatePhase        = "timed_update_and_flush"
 )
 
 func profileBenchUpdateIDStride(documentCount int) int {
@@ -126,6 +131,26 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_ROOT_RUNS", "789")
 	if got := profileBenchBufferedIndexedWriteMaxRootRuns(t); got != 789 {
 		t.Fatalf("buffered max root runs=%d want 789", got)
+	}
+}
+
+func TestProfileBenchTimedUpdatePhaseLabels(t *testing.T) {
+	called := false
+	err := runProfileBenchTimedUpdatePhase(context.Background(), func(ctx context.Context) error {
+		called = true
+		if got, ok := pprof.Label(ctx, profileBenchLabelBenchmarkKey); !ok || got != profileBenchDirectUpdateBenchmark {
+			t.Fatalf("benchmark label=(%q,%v), want (%q,true)", got, ok, profileBenchDirectUpdateBenchmark)
+		}
+		if got, ok := pprof.Label(ctx, profileBenchLabelPhaseKey); !ok || got != profileBenchTimedUpdatePhase {
+			t.Fatalf("phase label=(%q,%v), want (%q,true)", got, ok, profileBenchTimedUpdatePhase)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("run timed phase: %v", err)
+	}
+	if !called {
+		t.Fatal("timed phase callback was not called")
 	}
 }
 
@@ -669,12 +694,14 @@ func benchmarkDirectCollectionConcurrentUpdateBSON(b *testing.B, indexes []colle
 	backendStatsBefore := backend.Stats()
 	b.ResetTimer()
 	started := time.Now()
-	err = runProfileBenchDirectCollectionConcurrentUpdates(context.Background(), writers, b.N, documentCount, idStride, ids, updateDocs, collection)
-	if err == nil {
+	err = runProfileBenchTimedUpdatePhase(context.Background(), func(ctx context.Context) error {
+		if err := runProfileBenchDirectCollectionConcurrentUpdates(ctx, writers, b.N, documentCount, idStride, ids, updateDocs, collection); err != nil {
+			return err
+		}
 		// Keep async indexed-flush rows comparable with synchronous rows: the
 		// timed update phase includes the final drain of deferred publish work.
-		err = manager.FlushAll()
-	}
+		return manager.FlushAll()
+	})
 	timedElapsed := time.Since(started)
 	b.StopTimer()
 	if err != nil {
@@ -687,6 +714,23 @@ func benchmarkDirectCollectionConcurrentUpdateBSON(b *testing.B, indexes []colle
 	reportProfileBenchOrderedRootPublishStats(b, backendStatsAfter, backendStatsBefore, b.N)
 	reportProfileBenchBackendVlogMmapStats(b, backendStatsAfter, backendStatsBefore, b.N)
 	reportDocsPerSecond(b, b.N, timedElapsed)
+}
+
+func runProfileBenchTimedUpdatePhase(ctx context.Context, run func(context.Context) error) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if run == nil {
+		return nil
+	}
+	var err error
+	pprof.Do(ctx, pprof.Labels(
+		profileBenchLabelBenchmarkKey, profileBenchDirectUpdateBenchmark,
+		profileBenchLabelPhaseKey, profileBenchTimedUpdatePhase,
+	), func(ctx context.Context) {
+		err = run(ctx)
+	})
+	return err
 }
 
 func profileBenchParsedUpdateDocs(tb testing.TB, updateCity bool, cityPhase string) []profileBenchSetUpdate {
@@ -1448,6 +1492,7 @@ func runProfileBenchDirectCollectionConcurrentUpdates(
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			pprof.SetGoroutineLabels(runCtx)
 			updateScratch := make([]byte, 0, 512)
 			for {
 				if err := runCtx.Err(); err != nil {
