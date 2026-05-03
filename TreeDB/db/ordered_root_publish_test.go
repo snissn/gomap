@@ -1346,6 +1346,105 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticMixed
 	}
 }
 
+func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticMixedOptInParallelizesEligibleRoots(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	baseRootA, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "a/1", "base-a").NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root a: %v", err)
+	}
+	baseRootB, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "b/1", "base-b").NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root b: %v", err)
+	}
+	baseRootC, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "c/1", "base-c").NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root c: %v", err)
+	}
+
+	deltaAIter := mustFrozenSystemMemtable(t, "a/2", "delta-a").NewIterator(nil, nil)
+	deltaA, err := OrderedRootDeltaBatchFromIterator(deltaAIter)
+	_ = deltaAIter.Close()
+	if err != nil {
+		t.Fatalf("delta a batch: %v", err)
+	}
+	defer func() { _ = deltaA.Close() }()
+
+	deltaBIter := mustFrozenSystemMemtable(t, "b/2", "delta-b").NewIterator(nil, nil)
+	deltaB, err := OrderedRootDeltaBatchFromIterator(deltaBIter)
+	_ = deltaBIter.Close()
+	if err != nil {
+		t.Fatalf("delta b batch: %v", err)
+	}
+	defer func() { _ = deltaB.Close() }()
+
+	deltaCIter := mustFrozenSystemMemtable(t, "c/2", "delta-c").NewIterator(nil, nil)
+	deltaC, err := OrderedRootDeltaBatchFromIterator(deltaCIter)
+	_ = deltaCIter.Close()
+	if err != nil {
+		t.Fatalf("delta c batch: %v", err)
+	}
+	defer func() { _ = deltaC.Close() }()
+
+	systemRoot, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{
+		{BaseRoot: baseRootA, Delta: deltaA, ParallelApply: true},
+		{BaseRoot: baseRootB, Delta: deltaB},
+		{BaseRoot: baseRootC, Delta: deltaC, ParallelApply: true},
+	}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 3 || rootIDs[0] == 0 || rootIDs[1] == 0 || rootIDs[2] == 0 {
+			return nil, errors.New("unexpected mixed optimistic root IDs")
+		}
+		return mustFrozenSystemMemtable(t,
+			"sys/collections/users/a", strconv.FormatUint(rootIDs[0], 10),
+			"sys/collections/users/b", strconv.FormatUint(rootIDs[1], 10),
+			"sys/collections/users/c", strconv.FormatUint(rootIDs[2], 10),
+		).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish mixed delta batch group: %v", err)
+	}
+	if systemRoot == 0 || len(rootIDs) != 3 || rootIDs[0] == 0 || rootIDs[1] == 0 || rootIDs[2] == 0 {
+		t.Fatalf("systemRoot=%d rootIDs=%v, want non-zero system root and three non-zero roots", systemRoot, rootIDs)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	for rootIdx, kv := range []map[string]string{
+		{"a/1": "base-a", "a/2": "delta-a"},
+		{"b/1": "base-b", "b/2": "delta-b"},
+		{"c/1": "base-c", "c/2": "delta-c"},
+	} {
+		for key, want := range kv {
+			entry, err := snap.GetEntryAtRoot(rootIDs[rootIdx], []byte(key))
+			if err != nil {
+				t.Fatalf("GetEntryAtRoot(root=%d key=%s): %v", rootIdx, key, err)
+			}
+			if got := string(entry.Value); got != want {
+				t.Fatalf("root=%d key=%s got=%q want %q", rootIdx, key, got, want)
+			}
+		}
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_parallel_groups_total"]; got != "1" {
+		t.Fatalf("parallel groups stat=%q want 1", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_parallel_roots_total"]; got != "2" {
+		t.Fatalf("parallel roots stat=%q want 2", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_calls_total"]; got != "3" {
+		t.Fatalf("root apply calls stat=%q want 3", got)
+	}
+}
+
 func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticInvalidatesLeafGenerationSubtreeStats(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})

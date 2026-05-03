@@ -1401,18 +1401,16 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered []
 }
 
 func orderedRootDeltaBatchGroupParallelApplyEligible(ordered []OrderedRootDeltaBatchPublishInput) bool {
-	active := 0
 	parallelActive := 0
 	for idx := range ordered {
 		if ordered[idx].Delta == nil || ordered[idx].Delta.IsEmpty() {
 			continue
 		}
-		active++
 		if ordered[idx].ParallelApply {
 			parallelActive++
 		}
 	}
-	return active == parallelActive && parallelActive >= orderedRootDeltaBatchGroupParallelApplyMinRoots
+	return parallelActive >= orderedRootDeltaBatchGroupParallelApplyMinRoots
 }
 
 func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []OrderedRootDeltaBatchPublishInput, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator) ([]orderedRootDeltaBatchGroupApplyResult, bool) {
