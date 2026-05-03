@@ -1036,6 +1036,26 @@ func (m *CollectionManager) StatsSnapshot() CollectionManagerStats {
 	return stats
 }
 
+// ResetUpdateCombineQueueDepthMax clears the process-local update-combiner
+// queue-depth maximum. It is intended for benchmark/profiling windows; it does
+// not affect collection contents or pending writes.
+func (m *CollectionManager) ResetUpdateCombineQueueDepthMax() {
+	if m == nil {
+		return
+	}
+	m.domainMu.RLock()
+	domains := make([]*collectionWriteDomain, 0, len(m.domains))
+	for _, domain := range m.domains {
+		if domain != nil {
+			domains = append(domains, domain)
+		}
+	}
+	m.domainMu.RUnlock()
+	for _, domain := range domains {
+		domain.updateCombineQueueDepthMax.Store(0)
+	}
+}
+
 func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	if s == nil {
 		return
