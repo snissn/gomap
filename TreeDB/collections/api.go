@@ -2252,7 +2252,7 @@ func (c *Collection) compactRootOverlaysLocked(ctx context.Context) (CollectionR
 	}
 	baseRootIDs := make(map[string]uint64, len(rootNames))
 	rootOverlays := make(map[string][]uint64, len(rootNames))
-	ordered := make([]backenddb.OrderedRootPublishInput, 0, len(rootNames))
+	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
 	cleanupIters := func() {
 		for i := range ordered {
 			if ordered[i].Iter != nil {
@@ -2284,7 +2284,7 @@ func (c *Collection) compactRootOverlaysLocked(ctx context.Context) (CollectionR
 		}
 		baseRootIDs[rootName] = catalog.rootID(rootName)
 		rootOverlays[rootName] = overlays
-		ordered = append(ordered, backenddb.OrderedRootPublishInput{
+		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
 			BaseRoot:      0,
 			Iter:          it,
 			StoragePolicy: policy,
@@ -2297,8 +2297,8 @@ func (c *Collection) compactRootOverlaysLocked(ctx context.Context) (CollectionR
 	}
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootGroupWithSystemBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-		return c.buildRootOverlayCompactionSystemIteratorForMeta(catalog.meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays, rootIDs)
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return c.buildRootOverlayCompactionSystemDeltaIteratorForMeta(catalog.meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays, rootIDs)
 	})
 	cleanupIters()
 	if err != nil {
@@ -9251,7 +9251,7 @@ func (c *Collection) buildRootOverlayDescriptorSystemIteratorForMeta(meta Collec
 	return buildSystemTargetIterator(current, updates)
 }
 
-func (c *Collection) buildRootOverlayCompactionSystemIteratorForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, expectedOverlays map[string][]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+func (c *Collection) buildRootOverlayCompactionSystemDeltaIteratorForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, expectedOverlays map[string][]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 	if c == nil || c.db == nil {
 		return nil, backenddb.ErrClosed
 	}
@@ -9271,7 +9271,7 @@ func (c *Collection) buildRootOverlayCompactionSystemIteratorForMeta(meta Collec
 		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
 		updates[systemCollectionRootOverlayKey(rootName)] = encodeRootIDList(nil)
 	}
-	return buildSystemTargetIterator(current, updates)
+	return buildSystemDeltaIterator(updates)
 }
 
 func overlayDescriptorRootsAfterDelta(existing []uint64, newRoot uint64) []uint64 {
