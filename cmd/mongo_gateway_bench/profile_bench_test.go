@@ -664,6 +664,7 @@ func benchmarkDirectCollectionConcurrentUpdateBSON(b *testing.B, indexes []colle
 
 	b.ReportAllocs()
 	manager.SetUpdateBatchDetailedStatsEnabled(true)
+	manager.ResetUpdateCombineQueueDepthMax()
 	statsBefore := manager.StatsSnapshot()
 	backendStatsBefore := backend.Stats()
 	b.ResetTimer()
@@ -1026,7 +1027,6 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 		UpdateCombineBatches:           after.UpdateCombineBatches - before.UpdateCombineBatches,
 		UpdateCombineBatchedRequests:   after.UpdateCombineBatchedRequests - before.UpdateCombineBatchedRequests,
 		UpdateCombineFallbackRequests:  after.UpdateCombineFallbackRequests - before.UpdateCombineFallbackRequests,
-		UpdateCombineQueueDepthMax:     after.UpdateCombineQueueDepthMax,
 		IndexedFlushCalls:              after.IndexedFlushCalls - before.IndexedFlushCalls,
 		IndexedFlushErrors:             after.IndexedFlushErrors - before.IndexedFlushErrors,
 		IndexedFlushDocs:               after.IndexedFlushDocs - before.IndexedFlushDocs,
@@ -1034,6 +1034,9 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 		IndexedFlushRootRuns:           after.IndexedFlushRootRuns - before.IndexedFlushRootRuns,
 		IndexedFlushRoots:              after.IndexedFlushRoots - before.IndexedFlushRoots,
 		IndexedFlushDuration:           after.IndexedFlushDuration - before.IndexedFlushDuration,
+	}
+	if after.UpdateCombineQueueDepthMax > before.UpdateCombineQueueDepthMax {
+		delta.UpdateCombineQueueDepthMax = after.UpdateCombineQueueDepthMax
 	}
 	for i := 0; i < after.UpdateBatchIndexStatsCount && i < len(after.UpdateBatchIndexStats); i++ {
 		next := after.UpdateBatchIndexStats[i]
@@ -1141,6 +1144,13 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 	}
 	if got.UpdateCombineQueueDepthMax != 31 {
 		t.Fatalf("UpdateCombineQueueDepthMax=%d want 31", got.UpdateCombineQueueDepthMax)
+	}
+	staleMax := deltaCollectionManagerUpdateStats(
+		collections.CollectionManagerStats{UpdateCombineQueueDepthMax: 31},
+		collections.CollectionManagerStats{UpdateCombineQueueDepthMax: 31},
+	)
+	if staleMax.UpdateCombineQueueDepthMax != 0 {
+		t.Fatalf("stale UpdateCombineQueueDepthMax=%d want 0", staleMax.UpdateCombineQueueDepthMax)
 	}
 	if got.UpdateBatchIndexValueChanges != 7 {
 		t.Fatalf("UpdateBatchIndexValueChanges=%d want 7", got.UpdateBatchIndexValueChanges)

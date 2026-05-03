@@ -1154,6 +1154,25 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 	}
 }
 
+func TestCollectionManagerResetUpdateCombineQueueDepthMax(t *testing.T) {
+	domain := &collectionWriteDomain{}
+	mgr := &CollectionManager{
+		domains: map[string]*collectionWriteDomain{"users": domain},
+	}
+	domain.observeUpdateCombineRequest(12)
+	if got := mgr.StatsSnapshot().UpdateCombineQueueDepthMax; got != 12 {
+		t.Fatalf("queue depth max before reset=%d want 12", got)
+	}
+	mgr.ResetUpdateCombineQueueDepthMax()
+	if got := mgr.StatsSnapshot().UpdateCombineQueueDepthMax; got != 0 {
+		t.Fatalf("queue depth max after reset=%d want 0", got)
+	}
+	domain.observeUpdateCombineRequest(5)
+	if got := mgr.StatsSnapshot().UpdateCombineQueueDepthMax; got != 5 {
+		t.Fatalf("queue depth max after new observation=%d want 5", got)
+	}
+}
+
 func writeStandaloneValueLogSegment(t *testing.T, valueDir string, lane, seq uint32, value []byte) string {
 	t.Helper()
 	if err := os.MkdirAll(valueDir, 0o755); err != nil {
