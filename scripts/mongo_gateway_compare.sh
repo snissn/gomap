@@ -416,6 +416,20 @@ normalize_unique_word_list() {
   printf '%s' "$out"
 }
 
+validate_mongo_client_modes() {
+  local mode
+  for mode in $1; do
+    case "$mode" in
+      driver|driver-command|driver-command-raw|driver-unack)
+        ;;
+      *)
+        echo "invalid MONGO_CLIENT_MODES value: $mode (want driver, driver-command, driver-command-raw, or driver-unack)" >&2
+        exit 2
+        ;;
+    esac
+  done
+}
+
 list_word_count() {
   local count=0
   local item
@@ -603,6 +617,7 @@ if [[ "$PROFILE_TREEDB" != "true" && "$PROFILE_TREEDB" != "false" ]]; then
   exit 2
 fi
 MONGO_CLIENT_MODES=$(normalize_unique_word_list MONGO_CLIENT_MODES "$MONGO_CLIENT_MODES")
+validate_mongo_client_modes "$MONGO_CLIENT_MODES"
 TREEDB_CLIENT_MODES=$(normalize_unique_word_list TREEDB_CLIENT_MODES "$TREEDB_CLIENT_MODES")
 TREEDB_DOCUMENT_FORMATS=$(normalize_unique_word_list TREEDB_DOCUMENT_FORMATS "$TREEDB_DOCUMENT_FORMATS")
 raw_concurrent_reader_sweep=$CONCURRENT_READER_SWEEP
