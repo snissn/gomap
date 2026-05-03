@@ -7757,6 +7757,95 @@ func TestSnapshotUpdateBatchBufferedReadPrimaryRunIndexAvoidsCollectingPendingRu
 	}
 }
 
+func TestSnapshotUpdateBatchBufferedPrimaryEntriesFromIndexReusesValueArena(t *testing.T) {
+	primaryTable := newCollectionRunTable(3)
+	setCollectionRunValue(primaryTable, []byte("u1"), []byte(`{"city":"paris"}`))
+	setCollectionRunValue(primaryTable, []byte("u2"), []byte(`{"city":"rome"}`))
+	setCollectionRunValue(primaryTable, []byte("u3"), []byte(`{"city":"oslo"}`))
+	primaryTable.Freeze()
+	defer resetCollectionRunTable(primaryTable)
+
+	primaryIndex := newBufferedPrimaryRunIndex(3)
+	if err := addBufferedPrimaryRunIndexEntries(primaryIndex, primaryTable); err != nil {
+		t.Fatalf("add primary run index entries: %v", err)
+	}
+	items := []UpdateBatchItem{
+		{DocumentID: []byte("u1")},
+		{DocumentID: []byte("u2")},
+		{DocumentID: []byte("u3")},
+	}
+	assertRead := func() {
+		t.Helper()
+		entries, buffer, err := snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(primaryIndex, items)
+		if err != nil {
+			t.Fatalf("snapshotUpdateBatchBufferedPrimaryEntriesFromIndex: %v", err)
+		}
+		defer putUpdateBatchBufferedEntries(entries, buffer)
+		if buffer == nil || len(buffer.arena) == 0 {
+			t.Fatal("buffered primary read did not use the pooled value arena")
+		}
+		arenaStart := uintptr(unsafe.Pointer(unsafe.SliceData(buffer.arena)))
+		arenaEnd := arenaStart + uintptr(len(buffer.arena))
+		want := [][]byte{
+			[]byte(`{"city":"paris"}`),
+			[]byte(`{"city":"rome"}`),
+			[]byte(`{"city":"oslo"}`),
+		}
+		for i := range want {
+			if !entries[i].found || !bytes.Equal(entries[i].value, want[i]) {
+				t.Fatalf("entry %d found=%v value=%q want %q", i, entries[i].found, entries[i].value, want[i])
+			}
+			valueStart := uintptr(unsafe.Pointer(unsafe.SliceData(entries[i].value)))
+			if valueStart < arenaStart || valueStart >= arenaEnd {
+				t.Fatalf("entry %d value is not backed by buffered arena", i)
+			}
+		}
+	}
+	assertRead()
+}
+
+func BenchmarkSnapshotUpdateBatchBufferedPrimaryEntriesFromIndexValues(b *testing.B) {
+	const entriesCount = 256
+	primaryTable := newCollectionRunTable(entriesCount)
+	items := make([]UpdateBatchItem, 0, entriesCount)
+	value := []byte(strings.Repeat("x", 512))
+	for i := 0; i < entriesCount; i++ {
+		id := []byte(fmt.Sprintf("u%05d", i))
+		setCollectionRunValue(primaryTable, id, value)
+		items = append(items, UpdateBatchItem{DocumentID: id})
+	}
+	primaryTable.Freeze()
+	defer resetCollectionRunTable(primaryTable)
+
+	primaryIndex := newBufferedPrimaryRunIndex(entriesCount)
+	if err := addBufferedPrimaryRunIndexEntries(primaryIndex, primaryTable); err != nil {
+		b.Fatalf("add primary run index entries: %v", err)
+	}
+	warmEntries, warmBuffer, err := snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(primaryIndex, items)
+	if err != nil {
+		b.Fatalf("warm buffered read: %v", err)
+	}
+	putUpdateBatchBufferedEntries(warmEntries, warmBuffer)
+
+	total := 0
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		entries, buffer, err := snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(primaryIndex, items)
+		if err != nil {
+			b.Fatalf("snapshotUpdateBatchBufferedPrimaryEntriesFromIndex: %v", err)
+		}
+		for j := range entries {
+			total += len(entries[j].value)
+		}
+		putUpdateBatchBufferedEntries(entries, buffer)
+	}
+	b.StopTimer()
+	if total == 0 {
+		b.Fatal("benchmark did not consume buffered values")
+	}
+}
+
 func BenchmarkSnapshotUpdateBatchBufferedReadPrimaryRunIndexPendingUnits(b *testing.B) {
 	meta := CollectionMeta{
 		Name: "users",
