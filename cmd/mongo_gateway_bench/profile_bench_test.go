@@ -98,11 +98,15 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_BYTES", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_ROOT_RUNS", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_OVERLAY_ROOTS", "")
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_COMPACT_OVERLAY_ROOTS_AFTER_FLUSH", "")
 	if profileBenchBufferedIndexedAsyncFlush(t) {
 		t.Fatal("async flush default=true want false")
 	}
 	if profileBenchBufferedIndexedOverlayRoots(t) {
 		t.Fatal("overlay roots default=true want false")
+	}
+	if profileBenchCompactOverlayRootsAfterFlush(t) {
+		t.Fatal("compact overlay roots after flush default=true want false")
 	}
 	if got := profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(t); got != 0 {
 		t.Fatalf("async max queued units default=%d want 0", got)
@@ -139,6 +143,10 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_OVERLAY_ROOTS", "true")
 	if !profileBenchBufferedIndexedOverlayRoots(t) {
 		t.Fatal("overlay roots env=true want true")
+	}
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_COMPACT_OVERLAY_ROOTS_AFTER_FLUSH", "true")
+	if !profileBenchCompactOverlayRootsAfterFlush(t) {
+		t.Fatal("compact overlay roots after flush env=true want true")
 	}
 }
 
@@ -672,6 +680,7 @@ func benchmarkDirectCollectionConcurrentUpdateBSON(b *testing.B, indexes []colle
 	if err := manager.FlushAll(); err != nil {
 		b.Fatalf("flush preload: %v", err)
 	}
+	preloadCompactStats := compactProfileBenchOverlayRootsAfterFlush(b, collection, "preload")
 	if err := backend.Checkpoint(); err != nil {
 		b.Fatalf("checkpoint preload: %v", err)
 	}
@@ -694,6 +703,7 @@ func benchmarkDirectCollectionConcurrentUpdateBSON(b *testing.B, indexes []colle
 	if err := manager.FlushAll(); err != nil {
 		b.Fatalf("flush warm up: %v", err)
 	}
+	warmupCompactStats := compactProfileBenchOverlayRootsAfterFlush(b, collection, "warmup")
 	if err := backend.Checkpoint(); err != nil {
 		b.Fatalf("checkpoint warm up: %v", err)
 	}
@@ -720,6 +730,8 @@ func benchmarkDirectCollectionConcurrentUpdateBSON(b *testing.B, indexes []colle
 	}
 	b.ReportMetric(float64(writers), "writers")
 	reportProfileBenchBufferedIndexedWriteOptions(b, collection.Meta().Options)
+	reportProfileBenchOverlayCompactionStats(b, "preload", preloadCompactStats)
+	reportProfileBenchOverlayCompactionStats(b, "warmup", warmupCompactStats)
 	reportCollectionManagerUpdateStats(b, deltaCollectionManagerUpdateStats(manager.StatsSnapshot(), statsBefore), b.N)
 	backendStatsAfter := backend.Stats()
 	reportProfileBenchOrderedRootPublishStats(b, backendStatsAfter, backendStatsBefore, b.N)
@@ -742,6 +754,21 @@ func runProfileBenchTimedUpdatePhase(ctx context.Context, run func(context.Conte
 		err = run(ctx)
 	})
 	return err
+}
+
+func compactProfileBenchOverlayRootsAfterFlush(tb testing.TB, collection *collections.Collection, phase string) collections.CollectionRootOverlayCompactionStats {
+	tb.Helper()
+	if !profileBenchCompactOverlayRootsAfterFlush(tb) {
+		return collections.CollectionRootOverlayCompactionStats{}
+	}
+	if collection == nil {
+		tb.Fatalf("compact overlay roots after %s: collection is nil", phase)
+	}
+	stats, err := collection.CompactRootOverlays(context.Background())
+	if err != nil {
+		tb.Fatalf("compact overlay roots after %s: %v", phase, err)
+	}
+	return stats
 }
 
 func profileBenchParsedUpdateDocs(tb testing.TB, updateCity bool, cityPhase string) []profileBenchSetUpdate {
@@ -2140,6 +2167,10 @@ func profileBenchBufferedIndexedOverlayRoots(tb testing.TB) bool {
 	return profileBenchBoolEnv(tb, "MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_OVERLAY_ROOTS", false)
 }
 
+func profileBenchCompactOverlayRootsAfterFlush(tb testing.TB) bool {
+	return profileBenchBoolEnv(tb, "MONGO_GATEWAY_PROFILE_BENCH_COMPACT_OVERLAY_ROOTS_AFTER_FLUSH", false)
+}
+
 func profileBenchCollectionOptions(tb testing.TB, format collections.DocumentFormat) collections.CollectionOptions {
 	tb.Helper()
 	return collections.CollectionOptions{
@@ -2227,6 +2258,21 @@ func reportProfileBenchBufferedIndexedWriteOptions(b *testing.B, opts collection
 	if opts.BufferedIndexedOverlayRoots {
 		b.ReportMetric(1, "buffered_overlay_roots")
 	}
+	if profileBenchCompactOverlayRootsAfterFlush(b) {
+		b.ReportMetric(1, "compact_overlay_roots_after_flush")
+	}
+}
+
+func reportProfileBenchOverlayCompactionStats(b *testing.B, phase string, stats collections.CollectionRootOverlayCompactionStats) {
+	b.Helper()
+	if !profileBenchCompactOverlayRootsAfterFlush(b) {
+		return
+	}
+	if phase == "" {
+		phase = "unknown"
+	}
+	b.ReportMetric(float64(stats.Roots), phase+"_overlay_compact_roots")
+	b.ReportMetric(float64(stats.OverlayRoots), phase+"_overlay_compact_overlay_roots")
 }
 
 func reportDocsPerSecond(b *testing.B, docs int, elapsed time.Duration) {

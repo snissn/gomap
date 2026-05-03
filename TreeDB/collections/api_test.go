@@ -2538,6 +2538,133 @@ func TestCollectionIndexedOverlayRootValidationRejectsStaleOverlayDescriptors(t 
 	}
 }
 
+func TestCollectionCompactRootOverlaysFoldsIntoBaseRoots(t *testing.T) {
+	dir := t.TempDir()
+	db, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedOverlayRoots:      true,
+			BufferedIndexedWriteMaxDocuments: 1,
+			BufferedIndexedWriteMaxRootRuns:  1,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com","city":"hnl"}`)); err != nil {
+		t.Fatalf("insert u1: %v", err)
+	}
+	if _, _, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			return []byte(`{"email":"ada@example.com","city":"sea"}`), true, nil
+		},
+	}}); err != nil {
+		t.Fatalf("update city: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush overlays: %v", err)
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("acquire snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("load catalog before compact: %v", err)
+	}
+	if got := len(catalog.overlayRootNames()); got == 0 {
+		_ = snap.Close()
+		t.Fatal("overlay root names before compact=0")
+	}
+	_ = snap.Close()
+
+	stats, err := col.CompactRootOverlays(context.Background())
+	if err != nil {
+		t.Fatalf("compact root overlays: %v", err)
+	}
+	if stats.Roots == 0 || stats.OverlayRoots == 0 {
+		t.Fatalf("compact stats=%+v want nonzero roots and overlays", stats)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get compacted doc: %v", err)
+	}
+	if want := []byte(`{"email":"ada@example.com","city":"sea"}`); !bytes.Equal(got, want) {
+		t.Fatalf("compacted doc=%q want %q", got, want)
+	}
+	hnlIDs, err := col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find compacted old city: %v", err)
+	}
+	if len(hnlIDs) != 0 {
+		t.Fatalf("old city ids=%q want none", hnlIDs)
+	}
+	seaIDs, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find compacted new city: %v", err)
+	}
+	if len(seaIDs) != 1 || !bytes.Equal(seaIDs[0], []byte("u1")) {
+		t.Fatalf("new city ids=%q want [u1]", seaIDs)
+	}
+	snap = db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("acquire snapshot after compact")
+	}
+	catalog, err = loadCollectionCatalog(snap, "users")
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("load catalog after compact: %v", err)
+	}
+	if got := len(catalog.overlayRootNames()); got != 0 {
+		_ = snap.Close()
+		t.Fatalf("overlay root names after compact=%d want 0", got)
+	}
+	_ = snap.Close()
+	matched, modified, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+		return []byte(`{"email":"ada@example.com","city":"lax"}`), true, nil
+	})
+	if err != nil {
+		t.Fatalf("direct update after compact: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("direct update after compact matched=%v modified=%v", matched, modified)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	reopenedIDs, err := reopenedCol.FindByIndex("city", "lax")
+	if err != nil {
+		t.Fatalf("find reopened direct update city: %v", err)
+	}
+	if len(reopenedIDs) != 1 || !bytes.Equal(reopenedIDs[0], []byte("u1")) {
+		t.Fatalf("reopened city ids=%q want [u1]", reopenedIDs)
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesReadFlushedDocumentWithBufferedRuns(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

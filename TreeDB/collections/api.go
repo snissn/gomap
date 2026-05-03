@@ -219,6 +219,11 @@ type Collection struct {
 	lastUpdateStats   CollectionUpdateStats
 }
 
+type CollectionRootOverlayCompactionStats struct {
+	Roots        int
+	OverlayRoots int
+}
+
 // StoredDocumentJSONMaterializer reuses any resources needed to materialize
 // stored collection documents as JSON.
 type StoredDocumentJSONMaterializer struct {
@@ -2193,6 +2198,120 @@ func (c *Collection) Flush() error {
 		return c.flushBufferedWrites()
 	}
 	return c.flushBufferedWrites()
+}
+
+// CompactRootOverlays folds durable collection root overlays into their base
+// collection roots and clears the overlay descriptors in the same backend
+// commit. It is an explicit maintenance boundary for the overlay-root write-back
+// architecture: hot writes may publish durable overlays quickly, then maintenance
+// can restore the simple one-root read shape.
+func (c *Collection) CompactRootOverlays(ctx context.Context) (CollectionRootOverlayCompactionStats, error) {
+	if c == nil {
+		return CollectionRootOverlayCompactionStats{}, errCollectionNil
+	}
+	if c.db == nil {
+		return CollectionRootOverlayCompactionStats{}, errCollectionDBNil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
+	if c.writeDomain != nil {
+		c.writeDomain.waitIndexedAsyncFlush()
+	}
+	return c.compactRootOverlaysLocked(ctx)
+}
+
+func (c *Collection) compactRootOverlaysLocked(ctx context.Context) (CollectionRootOverlayCompactionStats, error) {
+	var stats CollectionRootOverlayCompactionStats
+	if err := ctx.Err(); err != nil {
+		return stats, err
+	}
+	if err := c.flushBufferedWrites(); err != nil {
+		return stats, err
+	}
+	if err := ctx.Err(); err != nil {
+		return stats, err
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return stats, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return stats, err
+	}
+	if catalog == nil {
+		return stats, errCollectionNotFound
+	}
+	rootNames := catalog.overlayRootNames()
+	if len(rootNames) == 0 {
+		return stats, nil
+	}
+	baseRootIDs := make(map[string]uint64, len(rootNames))
+	rootOverlays := make(map[string][]uint64, len(rootNames))
+	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(rootNames))
+	cleanupIters := func() {
+		for i := range ordered {
+			if ordered[i].Iter != nil {
+				_ = ordered[i].Iter.Close()
+			}
+		}
+	}
+	for _, rootName := range rootNames {
+		if err := ctx.Err(); err != nil {
+			cleanupIters()
+			return stats, err
+		}
+		overlays := append([]uint64(nil), catalog.overlayRootIDs(rootName)...)
+		if len(overlays) == 0 {
+			continue
+		}
+		policy, err := collectionRootStoragePolicy(catalog.meta, rootName)
+		if err != nil {
+			cleanupIters()
+			return stats, err
+		}
+		it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
+		if err != nil {
+			cleanupIters()
+			return stats, err
+		}
+		if it == nil {
+			it = &systemTargetIterator{}
+		}
+		baseRootIDs[rootName] = catalog.rootID(rootName)
+		rootOverlays[rootName] = overlays
+		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
+			BaseRoot:      0,
+			Iter:          it,
+			StoragePolicy: policy,
+		})
+		stats.Roots++
+		stats.OverlayRoots += len(overlays)
+	}
+	if len(ordered) == 0 {
+		return stats, nil
+	}
+	baseSystemRoot := snapshotSystemRoot(snap)
+	baseCommitSeq := snapshotCommitSeq(snap)
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return c.buildRootOverlayCompactionSystemDeltaIteratorForMeta(catalog.meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays, rootIDs)
+	})
+	cleanupIters()
+	if err != nil {
+		return stats, err
+	}
+	if len(rootIDs) != len(rootNames) {
+		return stats, unexpectedOrderedRootCountError(catalog.meta.Name, len(rootNames), len(rootIDs))
+	}
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, catalog.meta, rootNames, rootIDs)
+	c.meta = catalog.meta
+	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	return stats, nil
 }
 
 func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, error) {
@@ -9132,6 +9251,29 @@ func (c *Collection) buildRootOverlayDescriptorSystemIteratorForMeta(meta Collec
 	return buildSystemTargetIterator(current, updates)
 }
 
+func (c *Collection) buildRootOverlayCompactionSystemDeltaIteratorForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, expectedOverlays map[string][]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	if c == nil || c.db == nil {
+		return nil, backenddb.ErrClosed
+	}
+	if len(rootIDs) != len(rootNames) {
+		return nil, unexpectedOrderedRootCountError(meta.Name, len(rootNames), len(rootIDs))
+	}
+	current := c.db.AcquireSnapshot()
+	if current == nil {
+		return nil, backenddb.ErrClosed
+	}
+	defer func() { _ = current.Close() }()
+	if err := c.validateRootOverlayDescriptorSnapshotForMeta(current, meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs, expectedOverlays); err != nil {
+		return nil, err
+	}
+	updates := make(map[string][]byte, len(rootNames)*2)
+	for i, rootName := range rootNames {
+		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
+		updates[systemCollectionRootOverlayKey(rootName)] = encodeRootIDList(nil)
+	}
+	return buildSystemDeltaIterator(updates)
+}
+
 func overlayDescriptorRootsAfterDelta(existing []uint64, newRoot uint64) []uint64 {
 	if newRoot == 0 {
 		return append([]uint64(nil), existing...)
@@ -10401,11 +10543,40 @@ func (c *collectionCatalog) rootID(rootName string) uint64 {
 	return c.roots[rootName]
 }
 
+func (c *collectionCatalog) overlayRootNames() []string {
+	if c == nil || len(c.rootOverlays) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(c.rootOverlays))
+	for rootName, overlays := range c.rootOverlays {
+		if len(overlays) != 0 {
+			names = append(names, rootName)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
 func (c *collectionCatalog) overlayRootIDs(rootName string) []uint64 {
 	if c == nil || len(c.rootOverlays) == 0 {
 		return nil
 	}
 	return c.rootOverlays[rootName]
+}
+
+func collectionRootStoragePolicy(meta CollectionMeta, rootName string) (backenddb.OrderedRootStoragePolicy, error) {
+	switch rootName {
+	case collectionPrimaryRootName(meta.Name), collectionTemplateRootName(meta.Name):
+		return backendRootStoragePolicy(meta.Options.DataRootStoragePolicy)
+	case collectionIndexStateRootName(meta.Name):
+		return backendRootStoragePolicy(meta.Options.IndexStateStoragePolicy)
+	}
+	for _, idx := range meta.Indexes {
+		if rootName == collectionSecondaryRootName(meta.Name, idx.Name) {
+			return backendRootStoragePolicy(idx.StoragePolicy)
+		}
+	}
+	return backenddb.OrderedRootStorageDefault, fmt.Errorf("collections: unknown collection root %q for %q", rootName, meta.Name)
 }
 
 func (c *collectionCatalog) rootStack(rootName string) []uint64 {
