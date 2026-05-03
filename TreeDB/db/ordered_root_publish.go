@@ -338,7 +338,7 @@ func orderedRootDeltaBatchFromIterator(iter iterator.UnsafeIterator) (*batch.Bat
 	if iter == nil {
 		return nil, errors.New("nil ordered root delta iterator")
 	}
-	delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	delta := batch.NewRetainingLargeEntries(nil, orderedRootDeltaBatchInlineThreshold)
 	if hint, ok := iter.(orderedRootLenHintIterator); ok {
 		delta.Reserve(hint.Len())
 	}
@@ -607,7 +607,7 @@ func (db *DB) publishOrderedRootDeltaBatch(baseRoot uint64, delta *batch.Batch, 
 }
 
 func buildOrderedRootDeltaBatch(baseIter, targetIter iterator.UnsafeIterator, trackRefs bool) (*batch.Batch, int, *valueLogRefDelta, error) {
-	delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	delta := batch.NewRetainingLargeEntries(nil, orderedRootDeltaBatchInlineThreshold)
 	baseValid := baseIter.Valid()
 	targetValid := targetIter.Valid()
 	deltaOps := 0

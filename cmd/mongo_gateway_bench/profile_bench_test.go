@@ -789,6 +789,8 @@ func reportProfileBenchBackendVlogMmapStats(b *testing.B, after, before map[stri
 	reportPerDoc("backend_vlog_mmap_fallback_readat/doc", "treedb.vlog.mmap_read.fallback_readat")
 	reportPerDoc("backend_vlog_mmap_sealed_denied_count_cap/doc", "treedb.vlog.mmap_sealed_map_denied.count_cap")
 	reportPerDoc("backend_vlog_mmap_sealed_denied_bytes_cap/doc", "treedb.vlog.mmap_sealed_map_denied.bytes_cap")
+	reportPerDoc("backend_vlog_grouped_frame_cache_hits/doc", "treedb.vlog.grouped_frame_cache.hits")
+	reportPerDoc("backend_vlog_grouped_frame_cache_misses/doc", "treedb.vlog.grouped_frame_cache.misses")
 	reportPerDoc("backend_tree_get_append_inline_hits/doc", "treedb.process.read_path.backend_tree.get_append_inline_hits_total")
 	reportPerDoc("backend_tree_get_append_inline_bytes/doc", "treedb.process.read_path.backend_tree.get_append_inline_bytes_total")
 	reportPerDoc("backend_tree_get_append_pointer_hits/doc", "treedb.process.read_path.backend_tree.get_append_pointer_hits_total")
@@ -810,6 +812,11 @@ func reportProfileBenchBackendVlogMmapStats(b *testing.B, after, before map[stri
 	if total := hits + fallbacks; total > 0 {
 		b.ReportMetric(float64(hits)/float64(total), "backend_vlog_mmap_hit_ratio")
 	}
+	groupedFrameCacheHits := profileBenchDeltaUintStat(after, before, "treedb.vlog.grouped_frame_cache.hits")
+	groupedFrameCacheMisses := profileBenchDeltaUintStat(after, before, "treedb.vlog.grouped_frame_cache.misses")
+	if total := groupedFrameCacheHits + groupedFrameCacheMisses; total > 0 {
+		b.ReportMetric(float64(groupedFrameCacheHits)/float64(total), "backend_vlog_grouped_frame_cache_hit_ratio")
+	}
 	outerLeafCacheHits := profileBenchDeltaUintStat(after, before, "treedb.process.read_path.outer_leaf.cache.hits")
 	outerLeafCacheMisses := profileBenchDeltaUintStat(after, before, "treedb.process.read_path.outer_leaf.cache.misses")
 	if total := outerLeafCacheHits + outerLeafCacheMisses; total > 0 {
@@ -822,6 +829,8 @@ func reportProfileBenchBackendVlogMmapStats(b *testing.B, after, before map[stri
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.mmap_sealed_bytes")), "backend_vlog_mmap_sealed_bytes")
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.mmap_active_segments")), "backend_vlog_mmap_active_segments")
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.mmap_active_bytes")), "backend_vlog_mmap_active_bytes")
+	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.grouped_frame_cache.entries")), "backend_vlog_grouped_frame_cache_entries")
+	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.grouped_frame_cache.capacity")), "backend_vlog_grouped_frame_cache_capacity")
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.process.read_path.outer_leaf.cache.entries")), "backend_outer_leaf_cache_entries")
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.process.read_path.outer_leaf.cache.capacity")), "backend_outer_leaf_cache_capacity")
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.process.read_path.outer_leaf.cache.bytes")), "backend_outer_leaf_cache_bytes")
