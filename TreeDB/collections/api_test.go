@@ -2571,6 +2571,27 @@ func TestCollectionIndexedOverlayRootFilterUnionsDeltaBase(t *testing.T) {
 	}
 }
 
+func TestCollectionRootOverlayFilterSkipsBaseOnlyUnionWhenDeltaFilterDisabled(t *testing.T) {
+	primaryRootName := collectionPrimaryRootName("users")
+	var baseFilter collectionRootOverlayFilter
+	baseFilter.addKey([]byte("u1"))
+
+	filters, err := buildCollectionRootOverlayFilters(
+		[]string{primaryRootName},
+		map[string][]memtable.Table{primaryRootName: nil},
+		map[string][]uint64{primaryRootName: []uint64{123}},
+		map[string]map[uint64]collectionRootOverlayFilter{
+			primaryRootName: map[uint64]collectionRootOverlayFilter{123: baseFilter},
+		},
+	)
+	if err != nil {
+		t.Fatalf("build overlay filters: %v", err)
+	}
+	if len(filters) != 0 {
+		t.Fatalf("filters=%v, want no base-only filter when delta filter is disabled", filters)
+	}
+}
+
 func TestCollectionOverlayPrimaryProbeMissDoesNotFallThroughToBase(t *testing.T) {
 	dir := t.TempDir()
 	db, err := backenddb.Open(backenddb.Options{Dir: dir})

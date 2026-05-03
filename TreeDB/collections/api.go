@@ -11568,6 +11568,9 @@ func buildCollectionRootOverlayFilters(rootNames []string, rootRuns map[string][
 		if err != nil {
 			return nil, err
 		}
+		if filter.empty() {
+			continue
+		}
 		if baseRoot != 0 {
 			filter = unionCollectionRootOverlayFilters(baseFilter, filter)
 		}
