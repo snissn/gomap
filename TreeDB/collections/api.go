@@ -623,6 +623,7 @@ type indexedFlushUnit struct {
 	rootPolicies    map[string]backenddb.OrderedRootStoragePolicy
 	rootBaseIDs     map[string]uint64
 	uniqueValueRuns map[string][]memtable.Table
+	arenaRefs       [][]byte
 	docCount        int
 	byteCount       int64
 	rootRunCount    int
@@ -662,6 +663,7 @@ type bufferedIndexedCheckpoint struct {
 	rootMutableRuns        map[string]memtable.Table
 	rootPolicies           map[string]backenddb.OrderedRootStoragePolicy
 	rootBaseIDs            map[string]uint64
+	rootValueArenas        [][]byte
 	indexedPublishingUnits []indexedFlushUnit
 	indexedFlushUnits      []indexedFlushUnit
 	primaryRunIndexActive  bool
@@ -716,6 +718,7 @@ type collectionWriteDomain struct {
 	rootMutableRuns        map[string]memtable.Table
 	rootPolicies           map[string]backenddb.OrderedRootStoragePolicy
 	rootBaseIDs            map[string]uint64
+	rootValueArenas        [][]byte
 	primaryIDIndex         *bufferedUniqueValueIndex
 	// Built lazily by readers so write-only indexed buffering does not pay for
 	// an auxiliary lookup structure it never uses.
@@ -2877,6 +2880,7 @@ func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWr
 	domain.rootMutableRuns = nil
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
+	domain.rootValueArenas = nil
 	domain.rootRunCount = 0
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
@@ -3469,6 +3473,7 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		rootMutableRuns:        cloneMutableRunMap(domain.rootMutableRuns),
 		rootPolicies:           cloneRootPolicyMap(domain.rootPolicies),
 		rootBaseIDs:            cloneUint64Map(domain.rootBaseIDs),
+		rootValueArenas:        cloneArenaRefs(domain.rootValueArenas),
 		indexedPublishingUnits: cloneIndexedFlushUnits(domain.indexedPublishingUnits),
 		indexedFlushUnits:      cloneIndexedFlushUnits(domain.indexedFlushUnits),
 		primaryRunIndexActive:  domain.primaryRunIndex != nil,
@@ -3502,6 +3507,7 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.rootMutableRuns = checkpoint.rootMutableRuns
 	domain.rootPolicies = checkpoint.rootPolicies
 	domain.rootBaseIDs = checkpoint.rootBaseIDs
+	domain.rootValueArenas = checkpoint.rootValueArenas
 	domain.rootRunCount = checkpoint.rootRunCount
 	pendingRuns := indexedFlushUnitPendingRootRunMap(indexedFlushUnitsWithPublishing(checkpoint.indexedPublishingUnits, checkpoint.indexedFlushUnits), checkpoint.rootRuns)
 	domain.primaryIDIndex = rebuildBufferedPrimaryIDIndex(checkpoint.meta.Name, pendingRuns)
@@ -3531,12 +3537,20 @@ func cloneIndexedFlushUnits(in []indexedFlushUnit) []indexedFlushUnit {
 			rootPolicies:    cloneRootPolicyMap(unit.rootPolicies),
 			rootBaseIDs:     cloneUint64Map(unit.rootBaseIDs),
 			uniqueValueRuns: cloneTableRunMap(unit.uniqueValueRuns),
+			arenaRefs:       cloneArenaRefs(unit.arenaRefs),
 			docCount:        unit.docCount,
 			byteCount:       unit.byteCount,
 			rootRunCount:    unit.rootRunCount,
 		}
 	}
 	return out
+}
+
+func cloneArenaRefs(in [][]byte) [][]byte {
+	if len(in) == 0 {
+		return nil
+	}
+	return append([][]byte(nil), in...)
 }
 
 func indexedFlushUnitsWithPublishing(publishing, queued []indexedFlushUnit) []indexedFlushUnit {
@@ -4628,6 +4642,7 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 		work.pin = nil
 		domain.indexedFlushUnits = nil
 		domain.rootMutableRuns = nil
+		domain.rootValueArenas = nil
 		domain.count = 0
 		domain.bufferedBytes = 0
 		domain.mutableCount = 0
@@ -5001,6 +5016,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	if len(rootNames) == 0 {
 		domain.indexedFlushUnits = nil
 		domain.rootMutableRuns = nil
+		domain.rootValueArenas = nil
 		domain.count = 0
 		domain.bufferedBytes = 0
 		domain.mutableCount = 0
@@ -5090,6 +5106,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	domain.rootMutableRuns = nil
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
+	domain.rootValueArenas = nil
 	domain.rootRunCount = 0
 	domain.primaryIDIndex = nil
 	domain.primaryRunIndex = nil
@@ -5122,6 +5139,7 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 		rootPolicies:    domain.rootPolicies,
 		rootBaseIDs:     domain.rootBaseIDs,
 		uniqueValueRuns: domain.uniqueValueRuns,
+		arenaRefs:       domain.rootValueArenas,
 		docCount:        domain.mutableCount,
 		byteCount:       domain.mutableBytes,
 		rootRunCount:    domain.rootRunCount,
@@ -5132,6 +5150,7 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
 	domain.uniqueValueRuns = nil
+	domain.rootValueArenas = nil
 	domain.rootRunCount = 0
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
@@ -5268,6 +5287,7 @@ func mergedIndexedFlushUnitLocked(domain *collectionWriteDomain) indexedFlushUni
 		rootPolicies:    domain.rootPolicies,
 		rootBaseIDs:     domain.rootBaseIDs,
 		uniqueValueRuns: domain.uniqueValueRuns,
+		arenaRefs:       domain.rootValueArenas,
 		rootRunCount:    domain.rootRunCount,
 	})
 	if len(unit.rootRuns) == 0 {
@@ -5291,6 +5311,7 @@ func mergeIndexedFlushUnit(dst *indexedFlushUnit, src indexedFlushUnit) {
 	}
 	appendTableRunMap(dst.rootRuns, src.rootRuns)
 	appendTableRunMap(dst.uniqueValueRuns, src.uniqueValueRuns)
+	dst.arenaRefs = append(dst.arenaRefs, src.arenaRefs...)
 	for rootName, policy := range src.rootPolicies {
 		dst.rootPolicies[rootName] = policy
 	}
@@ -7288,12 +7309,18 @@ type updateBatchPlan struct {
 }
 
 type directBufferedUpdatePlan struct {
-	changed            []preparedBatchUpdate
-	templateRecords    []templateV1Record
+	templateEntries    []directBufferedRootEntry
+	primaryEntries     []directBufferedRootEntry
 	secondaryRootPlans []directBufferedSecondaryRootPlan
 	templateRootName   string
 	primaryRootName    string
 	stagedBytes        int64
+}
+
+type directBufferedRootEntry struct {
+	key   []byte
+	value []byte
+	flags byte
 }
 
 type directBufferedSecondaryRootPlan struct {
@@ -7309,6 +7336,66 @@ type directBufferedSecondaryRootPlan struct {
 type directBufferedSecondaryRootEntry struct {
 	key       []byte
 	tombstone bool
+}
+
+func buildDirectBufferedTemplateRootEntries(records []templateV1Record) []directBufferedRootEntry {
+	if len(records) == 0 {
+		return nil
+	}
+	entries := make([]directBufferedRootEntry, len(records))
+	for i := range records {
+		entries[i] = directBufferedRootEntry{
+			key:   bytes.Clone(records[i].id[:]),
+			value: bytes.Clone(records[i].raw),
+			flags: node.FlagInline,
+		}
+	}
+	return entries
+}
+
+func buildDirectBufferedPrimaryRootEntries(changed []preparedBatchUpdate) []directBufferedRootEntry {
+	if len(changed) == 0 {
+		return nil
+	}
+	entries := make([]directBufferedRootEntry, len(changed))
+	for i := range changed {
+		entries[i] = directBufferedRootEntry{
+			key:   bytes.Clone(changed[i].documentID),
+			value: changed[i].document,
+			flags: node.FlagInline,
+		}
+	}
+	return entries
+}
+
+func detachUpdateBatchPlanDocumentArena(scratch *updateBatchPlanScratch) []byte {
+	if scratch == nil || len(scratch.documentArena) == 0 {
+		return nil
+	}
+	arena := scratch.documentArena
+	scratch.documentArena = nil
+	return arena
+}
+
+func retainDirectBufferedDocumentArenaLocked(domain *collectionWriteDomain, plan *updateBatchPlan) {
+	if domain == nil || plan == nil || plan.directBufferedUpdate == nil {
+		return
+	}
+	arena := detachUpdateBatchPlanDocumentArena(plan.scratch)
+	if len(arena) == 0 {
+		return
+	}
+	domain.rootValueArenas = append(domain.rootValueArenas, arena)
+}
+
+func applyDirectBufferedRootEntries(table memtable.Table, entries []directBufferedRootEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	return applyCollectionRunEntriesWithFlags(table, len(entries), func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
+		entry := entries[i]
+		return entry.key, entry.value, page.ValuePtr{}, entry.flags, nil
+	})
 }
 
 func buildDirectBufferedSecondaryRootPlans(collectionName string, runtimes []indexRuntime, changed []preparedBatchUpdate, stats *CollectionUpdateStats) ([]directBufferedSecondaryRootPlan, int64, error) {
@@ -8412,6 +8499,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	success := false
 	if c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode) {
 		phaseStart = updateBatchStatsNow(detailedStats)
+		var templateEntries []directBufferedRootEntry
 		if len(templateRecords) > 0 {
 			sortTemplateV1Records(templateRecords)
 			var err error
@@ -8420,6 +8508,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 				_ = snap.Close()
 				return nil, err
 			}
+			templateEntries = buildDirectBufferedTemplateRootEntries(templateRecords)
 			rootNames = append(rootNames, templateRootName)
 			uniqueSecondary = append(uniqueSecondary, -1)
 			baseRootIDs[templateRootName] = catalog.rootID(templateRootName)
@@ -8428,6 +8517,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		stats.TemplateRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
 
 		phaseStart = updateBatchStatsNow(detailedStats)
+		primaryEntries := buildDirectBufferedPrimaryRootEntries(changed)
 		rootNames = append(rootNames, primaryRootName)
 		uniqueSecondary = append(uniqueSecondary, -1)
 		baseRootIDs[primaryRootName] = primaryRoot
@@ -8440,6 +8530,9 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			results[changed[i].itemIndex].Modified = true
 			stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, int64(len(changed[i].documentID)+len(changed[i].document)))
 		}
+		stats.PrimaryRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
+
+		phaseStart = updateBatchStatsNow(detailedStats)
 		secondaryRootPlans, secondaryStagedBytes, err := buildDirectBufferedSecondaryRootPlans(meta.Name, runtimes, changed, &stats)
 		if err != nil {
 			_ = snap.Close()
@@ -8480,8 +8573,8 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			bufferedReadBlocked:         bufferedReadBlocked,
 			policies:                    policies,
 			directBufferedUpdate: &directBufferedUpdatePlan{
-				changed:            changed,
-				templateRecords:    templateRecords,
+				templateEntries:    templateEntries,
+				primaryEntries:     primaryEntries,
 				secondaryRootPlans: secondaryRootPlans,
 				templateRootName:   templateRootName,
 				primaryRootName:    primaryRootName,
@@ -8742,7 +8835,7 @@ func updateBatchPlanUniqueSecondaryIndex(plan *updateBatchPlan, rootOffset int) 
 }
 
 func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, error) {
-	if c == nil || plan == nil || plan.directBufferedUpdate == nil || len(plan.directBufferedUpdate.changed) == 0 {
+	if c == nil || plan == nil || plan.directBufferedUpdate == nil || len(plan.directBufferedUpdate.primaryEntries) == 0 {
 		return false, nil
 	}
 	direct := plan.directBufferedUpdate
@@ -8873,32 +8966,26 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 			actualRootRuns = saturatingAddNonNegativeInt(actualRootRuns, 1)
 		}
 	}
-	if len(direct.templateRecords) > 0 {
+	if len(direct.templateEntries) > 0 {
 		templateTable := rootTables[direct.templateRootName]
 		if templateTable == nil {
 			return false, fmt.Errorf("collections: UpdateBatch collection %q missing direct template root accumulator for %q", plan.meta.Name, direct.templateRootName)
 		}
-		if err := applyCollectionRunEntries(templateTable, len(direct.templateRecords), func(i int) (key, value []byte, err error) {
-			record := direct.templateRecords[i]
-			return bytes.Clone(record.id[:]), bytes.Clone(record.raw), nil
-		}); err != nil {
+		if err := applyDirectBufferedRootEntries(templateTable, direct.templateEntries); err != nil {
 			return false, err
 		}
 	}
 	primaryTable := rootTables[direct.primaryRootName]
 	var primaryIndexKeys [][]byte
 	if domain.primaryRunIndex != nil {
-		primaryIndexKeys = make([][]byte, 0, len(direct.changed))
+		primaryIndexKeys = make([][]byte, 0, len(direct.primaryEntries))
 	}
-	if err := applyCollectionRunEntries(primaryTable, len(direct.changed), func(i int) (key, value []byte, err error) {
-		item := direct.changed[i]
-		return bytes.Clone(item.documentID), bytes.Clone(item.document), nil
-	}); err != nil {
+	if err := applyDirectBufferedRootEntries(primaryTable, direct.primaryEntries); err != nil {
 		return false, err
 	}
-	for _, item := range direct.changed {
+	for _, entry := range direct.primaryEntries {
 		if primaryIndexKeys != nil {
-			primaryIndexKeys = append(primaryIndexKeys, item.documentID)
+			primaryIndexKeys = append(primaryIndexKeys, entry.key)
 		}
 	}
 	if primaryIndexKeys != nil {
@@ -8924,6 +9011,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		}
 	}
 	plan.stats.BufferStageRootAppend += updateBatchStatsSince(detailedStats, phaseStart)
+	retainDirectBufferedDocumentArenaLocked(domain, plan)
 
 	domain.loaded = true
 	domain.meta = plan.meta
@@ -9558,6 +9646,7 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 	domain.rootRuns = nil
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
+	domain.rootValueArenas = nil
 	domain.rootRunCount = 0
 	domain.primaryIDIndex = nil
 	domain.primaryRunIndex = nil
