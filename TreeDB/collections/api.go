@@ -6536,13 +6536,11 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 				return false, false, err
 			}
 			for _, encoded := range newState[runtime.def.name] {
-				key, err := indexEntryKey(encoded, documentID)
-				if err != nil {
+				if _, err := setCollectionSecondaryIndexEntry(table, encoded, documentID); err != nil {
 					_ = snap.Close()
 					resetCollectionTables(append(deltaTables, table))
 					return false, false, err
 				}
-				table.SetSteal(key, nil)
 			}
 			if table.Len() == 0 {
 				resetCollectionRunTable(table)
@@ -7632,35 +7630,33 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 					runStats.IndexName = runtime.def.name
 				}
 				for _, encoded := range item.oldState.valuesAt(runtimeIdx) {
-					key, err := indexEntryKey(encoded, item.documentID)
+					keyLen, err := deleteCollectionSecondaryIndexEntry(table, encoded, item.documentID)
 					if err != nil {
 						_ = snap.Close()
 						return nil, err
 					}
-					table.DeleteSteal(key)
 					stats.SecondaryDeleteEntries++
-					stats.SecondaryKeyBytes += len(key)
+					stats.SecondaryKeyBytes += keyLen
 					runStats.Deletes++
-					runStats.KeyBytes += len(key)
+					runStats.KeyBytes += keyLen
 					if runtimeIdx < stats.IndexStatsCount {
 						stats.IndexStats[runtimeIdx].SecondaryDeletes++
-						stats.IndexStats[runtimeIdx].SecondaryKeyBytes += len(key)
+						stats.IndexStats[runtimeIdx].SecondaryKeyBytes += keyLen
 					}
 				}
 				for _, encoded := range item.newState.valuesAt(runtimeIdx) {
-					key, err := indexEntryKey(encoded, item.documentID)
+					keyLen, err := setCollectionSecondaryIndexEntry(table, encoded, item.documentID)
 					if err != nil {
 						_ = snap.Close()
 						return nil, err
 					}
-					table.SetSteal(key, nil)
 					stats.SecondarySetEntries++
-					stats.SecondaryKeyBytes += len(key)
+					stats.SecondaryKeyBytes += keyLen
 					runStats.Sets++
-					runStats.KeyBytes += len(key)
+					runStats.KeyBytes += keyLen
 					if runtimeIdx < stats.IndexStatsCount {
 						stats.IndexStats[runtimeIdx].SecondarySets++
-						stats.IndexStats[runtimeIdx].SecondaryKeyBytes += len(key)
+						stats.IndexStats[runtimeIdx].SecondaryKeyBytes += keyLen
 					}
 				}
 			}
@@ -8506,11 +8502,9 @@ func buildCreateIndexBackfillPlan(
 		}
 
 		for _, encoded := range values {
-			key, err := indexEntryKey(encoded, documentID)
-			if err != nil {
+			if _, err := setCollectionSecondaryIndexEntry(secondaryTable, encoded, documentID); err != nil {
 				return nil, err
 			}
-			secondaryTable.SetSteal(key, nil)
 			secondaryCount++
 			if !newRuntime.def.unique {
 				continue
@@ -8828,11 +8822,9 @@ func deleteSecondaryEntriesForDocument(table memtable.Table, runtime indexRuntim
 		return nil
 	}
 	for _, encoded := range values {
-		key, err := indexEntryKey(encoded, documentID)
-		if err != nil {
+		if _, err := deleteCollectionSecondaryIndexEntry(table, encoded, documentID); err != nil {
 			return err
 		}
-		table.DeleteSteal(key)
 	}
 	return nil
 }

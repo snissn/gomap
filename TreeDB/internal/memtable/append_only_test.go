@@ -133,6 +133,49 @@ func TestAppendOnlyCRUD(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyKeyPartsOwnsKeyBytes(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	first := []byte("city\x00\x00")
+	second := []byte("user-0001")
+	m.SetInlineNilKeyParts(first, second)
+
+	first[0] = 'x'
+	second[0] = 'x'
+
+	key := []byte("city\x00\x00user-0001")
+	value, _, flags, found := m.GetEntry(key)
+	if !found {
+		t.Fatalf("missing key built from original parts")
+	}
+	if flags != node.FlagInline {
+		t.Fatalf("flags=%08b want inline", flags)
+	}
+	if value != nil {
+		t.Fatalf("value=%q want nil", value)
+	}
+	if _, _, _, found := m.GetEntry([]byte("xity\x00\x00xser-0001")); found {
+		t.Fatalf("mutated caller key parts affected stored key")
+	}
+}
+
+func TestAppendOnlyDeleteKeyPartsOwnsKeyBytes(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	first := []byte("city\x00\x00")
+	second := []byte("user-0001")
+	m.DeleteKeyParts(first, second)
+
+	first[0] = 'x'
+	second[0] = 'x'
+
+	_, deleted, found := m.Get([]byte("city\x00\x00user-0001"))
+	if !found || !deleted {
+		t.Fatalf("Get(original)=(deleted=%v,found=%v) want tombstone", deleted, found)
+	}
+	if _, _, found := m.Get([]byte("xity\x00\x00xser-0001")); found {
+		t.Fatalf("mutated caller key parts affected stored tombstone")
+	}
+}
+
 func TestAppendOnlyApplyStealEntryFunc(t *testing.T) {
 	m := NewAppendOnlyWithEntryCapacity(3)
 	err := m.ApplyStealEntryFunc(3, func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {

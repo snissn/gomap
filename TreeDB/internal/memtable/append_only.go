@@ -27,6 +27,7 @@ const (
 	appendOnlyIteratorPoolMaxCap            = 1 << 20
 	appendOnlyIteratorPtrPoolMaxCap         = 1 << 20
 	appendOnlyReusableKeyMaxCap             = 1 << 10
+	appendOnlyKeyArenaDefaultChunk          = 2 << 10
 	appendOnlyValueArenaMinShift            = 12
 	appendOnlyValueArenaMaxShift            = 20
 	appendOnlyValueArenaClassCount          = appendOnlyValueArenaMaxShift - appendOnlyValueArenaMinShift + 1
@@ -51,6 +52,7 @@ type appendOnlyEntry struct {
 	inlineKey  [appendOnlyInlineKeyLen]byte
 	flags      byte
 	keyInline  bool
+	keyArena   bool
 	valueOwned bool
 }
 
@@ -62,6 +64,12 @@ type appendOnlyValueArena struct {
 	curPos    int
 }
 
+type appendOnlyKeyArena struct {
+	chunks [][]byte
+	cur    []byte
+	curPos int
+}
+
 type AppendOnly struct {
 	mu sync.RWMutex
 
@@ -71,6 +79,7 @@ type AppendOnly struct {
 	latest64       map[uint64]int
 	snapshot       []*appendOnlyEntry
 	indexBuf       []int
+	keyArena       appendOnlyKeyArena
 	valueArena     appendOnlyValueArena
 	count          int
 	snapCount      int
@@ -424,6 +433,34 @@ func (a *appendOnlyValueArena) dropRetained() {
 	a.retainedB = 0
 }
 
+func (a *appendOnlyKeyArena) alloc(length int) []byte {
+	if length <= 0 {
+		return nil
+	}
+	if a.cur == nil || cap(a.cur)-a.curPos < length {
+		chunkCap := appendOnlyKeyArenaDefaultChunk
+		if length > chunkCap {
+			chunkCap = 1 << uint(bits.Len(uint(length-1)))
+		}
+		chunk := make([]byte, chunkCap)
+		a.chunks = append(a.chunks, chunk)
+		a.cur = chunk
+		a.curPos = 0
+	}
+	out := a.cur[a.curPos : a.curPos+length : a.curPos+length]
+	a.curPos += length
+	return out
+}
+
+func (a *appendOnlyKeyArena) reset() {
+	for i := range a.chunks {
+		a.chunks[i] = nil
+	}
+	a.chunks = a.chunks[:0]
+	a.cur = nil
+	a.curPos = 0
+}
+
 func appendOnlyNextCapacity(current int) int {
 	if current < appendOnlyMinInitialEntries {
 		return appendOnlyMinInitialEntries
@@ -563,7 +600,7 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 	m.latest[appendOnlyKeyString(key)] = idx
 }
 
-func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) {
+func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) *appendOnlyEntry {
 	if m.count == len(m.entries) {
 		nextCap := appendOnlyNextCapacity(len(m.entries))
 		prev := m.entries
@@ -578,6 +615,7 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	ent.ptr = ptr
 	ent.flags = flags
 	ent.keyInline = false
+	ent.keyArena = false
 	ent.valueOwned = false
 	if steal {
 		ent.key = key
@@ -613,14 +651,14 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	if !m.hasLast {
 		m.lastIdx = idx
 		m.hasLast = true
-		return
+		return ent
 	}
 	if m.ordered {
 		prev := appendOnlyEntryKey(&m.entries[m.lastIdx])
 		cmp := bytes.Compare(k, prev)
 		if cmp > 0 {
 			m.lastIdx = idx
-			return
+			return ent
 		}
 		m.ordered = false
 		// Once order breaks, invalidate the cached snapshot state and
@@ -630,12 +668,13 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 		// rebuildLatestIndexLocked clears the cached snapshot as part of the
 		// transition.
 		m.rebuildLatestIndexLocked()
-		return
+		return ent
 	}
 	if !m.latestDirty {
 		m.updateLatestIndexLocked(k, idx)
 	}
 	m.clearSnapshotLocked()
+	return ent
 }
 
 func (m *AppendOnly) Set(key, value []byte) {
@@ -658,6 +697,28 @@ func (m *AppendOnly) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags b
 	m.mu.Unlock()
 }
 
+func (m *AppendOnly) copyKeyPartsLocked(first, second []byte) []byte {
+	total := len(first) + len(second)
+	if total <= 0 {
+		return nil
+	}
+	key := m.keyArena.alloc(total)
+	n := copy(key, first)
+	copy(key[n:], second)
+	return key
+}
+
+// SetInlineNilKeyParts stores an inline entry with a nil value and a key built
+// from first+second. The key is copied into table-owned storage so callers can
+// reuse or mutate both input slices after the call.
+func (m *AppendOnly) SetInlineNilKeyParts(first, second []byte) {
+	m.mu.Lock()
+	key := m.copyKeyPartsLocked(first, second)
+	ent := m.appendEntryLocked(key, nil, page.ValuePtr{}, node.FlagInline, true, false)
+	ent.keyArena = true
+	m.mu.Unlock()
+}
+
 func (m *AppendOnly) SetEntryBorrowValue(key, value []byte, ptr page.ValuePtr, flags byte) {
 	m.mu.Lock()
 	m.appendEntryLocked(key, value, ptr, flags, false, true)
@@ -670,6 +731,16 @@ func (m *AppendOnly) Delete(key []byte) {
 
 func (m *AppendOnly) DeleteSteal(key []byte) {
 	m.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
+}
+
+// DeleteKeyParts stores a tombstone whose key is built from first+second and
+// copied into table-owned storage.
+func (m *AppendOnly) DeleteKeyParts(first, second []byte) {
+	m.mu.Lock()
+	key := m.copyKeyPartsLocked(first, second)
+	ent := m.appendEntryLocked(key, nil, page.ValuePtr{}, node.FlagTombstone, true, false)
+	ent.keyArena = true
+	m.mu.Unlock()
 }
 
 func (m *AppendOnly) PutWithCallback(key, value []byte, cb func(k, v []byte) error) error {
@@ -955,6 +1026,7 @@ func (m *AppendOnly) Release() {
 	m.latest64 = nil
 	m.snapshot = nil
 	m.indexBuf = nil
+	m.keyArena.reset()
 	m.valueArena.reset()
 	m.valueArena.dropRetained()
 	m.count = 0
@@ -1014,7 +1086,11 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int,
 		ent := &m.entries[i]
 		ent.ptr = page.ValuePtr{}
 		ent.flags = 0
+		if ent.keyArena {
+			ent.key = nil
+		}
 		ent.keyInline = false
+		ent.keyArena = false
 		ent.valueOwned = false
 		if cap(ent.key) > appendOnlyReusableKeyMaxCap {
 			ent.key = nil
@@ -1023,6 +1099,7 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int,
 		}
 		ent.value = nil
 	}
+	m.keyArena.reset()
 	m.valueArena.reset()
 	if !retainObserved {
 		m.valueArena.dropRetained()

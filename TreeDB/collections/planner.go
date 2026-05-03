@@ -1929,6 +1929,43 @@ func appendIndexEntryKey(dst, encodedValue, documentID []byte) ([]byte, []byte, 
 	return dst, dst[start:len(dst):len(dst)], nil
 }
 
+type collectionSecondaryKeyPartsTable interface {
+	SetInlineNilKeyParts(first, second []byte)
+	DeleteKeyParts(first, second []byte)
+}
+
+func setCollectionSecondaryIndexEntry(table memtable.Table, encodedValue, documentID []byte) (int, error) {
+	if table == nil {
+		return 0, nil
+	}
+	if keyParts, ok := table.(collectionSecondaryKeyPartsTable); ok {
+		keyParts.SetInlineNilKeyParts(encodedValue, documentID)
+		return len(encodedValue) + len(documentID), nil
+	}
+	key, err := indexEntryKey(encodedValue, documentID)
+	if err != nil {
+		return 0, err
+	}
+	table.SetSteal(key, nil)
+	return len(key), nil
+}
+
+func deleteCollectionSecondaryIndexEntry(table memtable.Table, encodedValue, documentID []byte) (int, error) {
+	if table == nil {
+		return 0, nil
+	}
+	if keyParts, ok := table.(collectionSecondaryKeyPartsTable); ok {
+		keyParts.DeleteKeyParts(encodedValue, documentID)
+		return len(encodedValue) + len(documentID), nil
+	}
+	key, err := indexEntryKey(encodedValue, documentID)
+	if err != nil {
+		return 0, err
+	}
+	table.DeleteSteal(key)
+	return len(key), nil
+}
+
 func indexValuePrefix(encodedValue []byte) ([]byte, error) {
 	_, prefix, err := appendIndexValuePrefixSlice(make([]byte, 0, len(encodedValue)), encodedValue)
 	return prefix, err
