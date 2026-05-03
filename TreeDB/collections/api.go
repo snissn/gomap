@@ -4698,15 +4698,29 @@ func buildBufferedRootDeltaBatchPublishInputsFromSpecs(specs []bufferedRootDelta
 		return ordered, cleanup, nil
 	}
 
-	errs := make([]error, len(specs))
-	var wg sync.WaitGroup
-	for i := range specs {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			errs[i] = buildBufferedRootDeltaBatchPublishInput(specs[i], rootRuns, &ordered[i], &iterators[i])
-		}(i)
+	parallelism := runtime.GOMAXPROCS(0)
+	if parallelism < 1 {
+		parallelism = 1
 	}
+	if parallelism > len(specs) {
+		parallelism = len(specs)
+	}
+	errs := make([]error, len(specs))
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for worker := 0; worker < parallelism; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				errs[i] = buildBufferedRootDeltaBatchPublishInput(specs[i], rootRuns, &ordered[i], &iterators[i])
+			}
+		}()
+	}
+	for i := range specs {
+		jobs <- i
+	}
+	close(jobs)
 	wg.Wait()
 	for _, err := range errs {
 		if err != nil {
