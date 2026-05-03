@@ -1017,6 +1017,13 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 		UpdateCombineBatches:           after.UpdateCombineBatches - before.UpdateCombineBatches,
 		UpdateCombineBatchedRequests:   after.UpdateCombineBatchedRequests - before.UpdateCombineBatchedRequests,
 		UpdateCombineFallbackRequests:  after.UpdateCombineFallbackRequests - before.UpdateCombineFallbackRequests,
+		IndexedFlushCalls:              after.IndexedFlushCalls - before.IndexedFlushCalls,
+		IndexedFlushErrors:             after.IndexedFlushErrors - before.IndexedFlushErrors,
+		IndexedFlushDocs:               after.IndexedFlushDocs - before.IndexedFlushDocs,
+		IndexedFlushBytes:              after.IndexedFlushBytes - before.IndexedFlushBytes,
+		IndexedFlushRootRuns:           after.IndexedFlushRootRuns - before.IndexedFlushRootRuns,
+		IndexedFlushRoots:              after.IndexedFlushRoots - before.IndexedFlushRoots,
+		IndexedFlushDuration:           after.IndexedFlushDuration - before.IndexedFlushDuration,
 	}
 	for i := 0; i < after.UpdateBatchIndexStatsCount && i < len(after.UpdateBatchIndexStats); i++ {
 		next := after.UpdateBatchIndexStats[i]
@@ -1072,6 +1079,13 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateBatchIndexValueUnchanged: 30,
 		UpdateBatchUniqueChecks:        4,
 		UpdateBatchUniqueCheckSkips:    10,
+		IndexedFlushCalls:              3,
+		IndexedFlushErrors:             1,
+		IndexedFlushDocs:               300,
+		IndexedFlushBytes:              9000,
+		IndexedFlushRootRuns:           90,
+		IndexedFlushRoots:              9,
+		IndexedFlushDuration:           30 * time.Millisecond,
 		UpdateBatchIndexStatsCount:     2,
 		UpdateBatchIndexStats: [8]collections.CollectionUpdateIndexStats{
 			{CollectionName: "users", IndexName: "email", IndexOrdinal: 0, Unique: true, Changed: 1, Unchanged: 9, UniqueChecks: 1, UniqueCheckSkips: 8},
@@ -1087,6 +1101,13 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateBatchIndexValueUnchanged: 43,
 		UpdateBatchUniqueChecks:        6,
 		UpdateBatchUniqueCheckSkips:    19,
+		IndexedFlushCalls:              8,
+		IndexedFlushErrors:             2,
+		IndexedFlushDocs:               900,
+		IndexedFlushBytes:              27000,
+		IndexedFlushRootRuns:           270,
+		IndexedFlushRoots:              24,
+		IndexedFlushDuration:           90 * time.Millisecond,
 		UpdateBatchIndexStatsCount:     2,
 		UpdateBatchIndexStats: [8]collections.CollectionUpdateIndexStats{
 			{CollectionName: "users", IndexName: "email", IndexOrdinal: 0, Unique: true, Changed: 1, Unchanged: 22, UniqueChecks: 1, UniqueCheckSkips: 17},
@@ -1118,6 +1139,17 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 	if got.UpdateBatchUniqueCheckSkips != 9 {
 		t.Fatalf("UpdateBatchUniqueCheckSkips=%d want 9", got.UpdateBatchUniqueCheckSkips)
 	}
+	if got.IndexedFlushCalls != 5 || got.IndexedFlushErrors != 1 || got.IndexedFlushDocs != 600 || got.IndexedFlushBytes != 18000 || got.IndexedFlushRootRuns != 180 || got.IndexedFlushRoots != 15 || got.IndexedFlushDuration != 60*time.Millisecond {
+		t.Fatalf("indexed flush delta calls/errors/docs/bytes/rootRuns/roots/duration=%d/%d/%d/%d/%d/%d/%s want 5/1/600/18000/180/15/60ms",
+			got.IndexedFlushCalls,
+			got.IndexedFlushErrors,
+			got.IndexedFlushDocs,
+			got.IndexedFlushBytes,
+			got.IndexedFlushRootRuns,
+			got.IndexedFlushRoots,
+			got.IndexedFlushDuration,
+		)
+	}
 	if got.UpdateBatchIndexStatsCount != 2 {
 		t.Fatalf("UpdateBatchIndexStatsCount=%d want 2", got.UpdateBatchIndexStatsCount)
 	}
@@ -1137,10 +1169,76 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 	}
 }
 
+func TestReportCollectionManagerUpdateStatsIncludesIndexedFlushMetrics(t *testing.T) {
+	stats := collections.CollectionManagerStats{
+		IndexedFlushCalls:    5,
+		IndexedFlushErrors:   1,
+		IndexedFlushDocs:     600,
+		IndexedFlushBytes:    18000,
+		IndexedFlushRootRuns: 180,
+		IndexedFlushRoots:    15,
+		IndexedFlushDuration: 60 * time.Millisecond,
+	}
+	result := testing.Benchmark(func(b *testing.B) {
+		reportCollectionManagerUpdateStats(b, stats, 600)
+	})
+	want := map[string]float64{
+		"indexed_flush_calls":          5,
+		"indexed_flush_docs/call":      120,
+		"indexed_flush_docs/doc":       1,
+		"indexed_flush_bytes/call":     3600,
+		"indexed_flush_bytes/doc":      30,
+		"indexed_flush_root_runs/call": 36,
+		"indexed_flush_root_runs/doc":  0.3,
+		"indexed_flush_roots/call":     3,
+		"indexed_flush_roots/doc":      0.025,
+		"indexed_flush_errors":         1,
+		"indexed_flush_ns/call":        12_000_000,
+		"indexed_flush_ns/doc":         100_000,
+	}
+	for metric, wantValue := range want {
+		gotValue, ok := result.Extra[metric]
+		if !ok {
+			t.Fatalf("missing benchmark metric %q in %v", metric, result.Extra)
+		}
+		if math.Abs(gotValue-wantValue) > 1e-9 {
+			t.Fatalf("benchmark metric %s=%g want %g", metric, gotValue, wantValue)
+		}
+	}
+}
+
 func reportCollectionManagerUpdateStats(b *testing.B, stats collections.CollectionManagerStats, docs int) {
 	b.Helper()
 	if docs <= 0 {
 		return
+	}
+	if stats.IndexedFlushCalls > 0 {
+		b.ReportMetric(float64(stats.IndexedFlushCalls), "indexed_flush_calls")
+		if stats.IndexedFlushDocs > 0 {
+			b.ReportMetric(float64(stats.IndexedFlushDocs)/float64(stats.IndexedFlushCalls), "indexed_flush_docs/call")
+			b.ReportMetric(float64(stats.IndexedFlushDocs)/float64(docs), "indexed_flush_docs/doc")
+		}
+		if stats.IndexedFlushBytes > 0 {
+			b.ReportMetric(float64(stats.IndexedFlushBytes)/float64(stats.IndexedFlushCalls), "indexed_flush_bytes/call")
+			b.ReportMetric(float64(stats.IndexedFlushBytes)/float64(docs), "indexed_flush_bytes/doc")
+		}
+		if stats.IndexedFlushRootRuns > 0 {
+			b.ReportMetric(float64(stats.IndexedFlushRootRuns)/float64(stats.IndexedFlushCalls), "indexed_flush_root_runs/call")
+			b.ReportMetric(float64(stats.IndexedFlushRootRuns)/float64(docs), "indexed_flush_root_runs/doc")
+		}
+		if stats.IndexedFlushRoots > 0 {
+			b.ReportMetric(float64(stats.IndexedFlushRoots)/float64(stats.IndexedFlushCalls), "indexed_flush_roots/call")
+			b.ReportMetric(float64(stats.IndexedFlushRoots)/float64(docs), "indexed_flush_roots/doc")
+		}
+		if stats.IndexedFlushErrors > 0 {
+			b.ReportMetric(float64(stats.IndexedFlushErrors), "indexed_flush_errors")
+		}
+		if stats.IndexedFlushDuration > 0 {
+			b.ReportMetric(float64(stats.IndexedFlushDuration.Nanoseconds())/float64(stats.IndexedFlushCalls), "indexed_flush_ns/call")
+			if stats.IndexedFlushDocs > 0 {
+				b.ReportMetric(float64(stats.IndexedFlushDuration.Nanoseconds())/float64(stats.IndexedFlushDocs), "indexed_flush_ns/doc")
+			}
+		}
 	}
 	if stats.UpdateBatchCalls > 0 {
 		b.ReportMetric(float64(stats.UpdateBatchCalls), "update_batches")
