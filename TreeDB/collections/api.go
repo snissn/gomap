@@ -7227,6 +7227,16 @@ func (plan *updateBatchPlan) close() {
 	updateBatchPlanPool.Put(plan)
 }
 
+func (c *Collection) validateUpdateBatchPlanRootDescriptors(plan *updateBatchPlan) error {
+	if plan == nil {
+		return nil
+	}
+	if plan.catalog != nil && len(plan.catalog.rootOverlays) != 0 && collectionMetaUsesIndexedOverlayRoots(plan.catalog.meta) {
+		return c.validateRootOverlayDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs, plan.catalog.rootOverlays)
+	}
+	return c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs)
+}
+
 func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, error) {
 	if c.shouldPlanUpdateBatchWithBufferedWrites(mode) {
 		useBufferedRead := true
@@ -7261,7 +7271,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 						}
 						return ErrConcurrentMutation
 					}
-					if err := c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs); err != nil {
+					if err := c.validateUpdateBatchPlanRootDescriptors(plan); err != nil {
 						return err
 					}
 					c.meta = plan.meta
@@ -7329,7 +7339,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 			if err := c.flushBufferedWrites(); err != nil {
 				return err
 			}
-			if err := c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs); err != nil {
+			if err := c.validateUpdateBatchPlanRootDescriptors(plan); err != nil {
 				return err
 			}
 			c.meta = plan.meta
@@ -8218,7 +8228,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 			return false, ErrConcurrentMutation
 		}
 	}
-	if err := c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs); err != nil {
+	if err := c.validateUpdateBatchPlanRootDescriptors(plan); err != nil {
 		plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
 		return false, err
 	}
@@ -9176,6 +9186,18 @@ func (c *Collection) validateRootDescriptorSystemDeltaForMeta(meta CollectionMet
 		}
 	}
 	return nil
+}
+
+func (c *Collection) validateRootOverlayDescriptorSystemDeltaForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, expectedOverlays map[string][]uint64) error {
+	if c == nil || c.db == nil {
+		return backenddb.ErrClosed
+	}
+	current := c.db.AcquireSnapshot()
+	if current == nil {
+		return backenddb.ErrClosed
+	}
+	defer func() { _ = current.Close() }()
+	return c.validateRootOverlayDescriptorSnapshotForMeta(current, meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs, expectedOverlays)
 }
 
 func (c *Collection) validateRootOverlayDescriptorSnapshotForMeta(snap *backenddb.Snapshot, meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, expectedOverlays map[string][]uint64) error {
@@ -10957,11 +10979,11 @@ func uniqueIndexRootIDs(catalog *collectionCatalog) map[string]uint64 {
 	return out
 }
 
-func uniqueIndexRootIDsOrOverlays(catalog *collectionCatalog) map[string]uint64 {
+func uniqueIndexNamesWithDataOrOverlays(catalog *collectionCatalog) map[string]struct{} {
 	if catalog == nil {
 		return nil
 	}
-	out := make(map[string]uint64)
+	out := make(map[string]struct{})
 	for _, idx := range catalog.meta.Indexes {
 		if !idx.Unique {
 			continue
@@ -10969,10 +10991,7 @@ func uniqueIndexRootIDsOrOverlays(catalog *collectionCatalog) map[string]uint64 
 		rootName := collectionSecondaryRootName(catalog.meta.Name, idx.Name)
 		rootID := catalog.rootID(rootName)
 		if rootID != 0 || len(catalog.overlayRootIDs(rootName)) != 0 {
-			if rootID == 0 {
-				rootID = 1
-			}
-			out[idx.Name] = rootID
+			out[idx.Name] = struct{}{}
 		}
 	}
 	return out

@@ -2468,6 +2468,76 @@ func TestCollectionIndexedOverlayRootFlushSupportsReadsUpdatesAndUniqueChecks(t 
 	}
 }
 
+func TestCollectionIndexedOverlayRootValidationRejectsStaleOverlayDescriptors(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedOverlayRoots:      true,
+			BufferedIndexedWriteMaxDocuments: 1,
+			BufferedIndexedWriteMaxRootRuns:  1,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com","city":"hnl"}`)); err != nil {
+		t.Fatalf("insert u1: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush u1: %v", err)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("acquire snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("load catalog: %v", err)
+	}
+	primaryRootName := collectionPrimaryRootName("users")
+	if got := len(catalog.overlayRootIDs(primaryRootName)); got != 1 {
+		_ = snap.Close()
+		t.Fatalf("primary overlay roots=%d want 1", got)
+	}
+	stalePlan := &updateBatchPlan{
+		meta:           catalog.meta,
+		catalog:        catalog,
+		baseCommitSeq:  snapshotCommitSeq(snap),
+		baseSystemRoot: snapshotSystemRoot(snap),
+		rootNames:      []string{primaryRootName},
+		baseRootIDs: map[string]uint64{
+			primaryRootName: catalog.rootID(primaryRootName),
+		},
+	}
+	_ = snap.Close()
+
+	if _, err := col.Insert([]byte("u2"), []byte(`{"email":"grace@example.com","city":"sea"}`)); err != nil {
+		t.Fatalf("insert u2: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush u2: %v", err)
+	}
+	if err := col.validateUpdateBatchPlanRootDescriptors(stalePlan); !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("stale overlay validation err=%v want %v", err, ErrConcurrentMutation)
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesReadFlushedDocumentWithBufferedRuns(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

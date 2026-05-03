@@ -362,19 +362,24 @@ func (plan *insertBatchPlan) checkPersistedConflicts(snap *backenddb.Snapshot, c
 	if len(plan.primaryKeys) != len(plan.resultIDs) {
 		return fmt.Errorf("collections: insert conflict check missing primary keys: got %d, want %d", len(plan.primaryKeys), len(plan.resultIDs))
 	}
-	uniqueRootIDs := uniqueIndexRootIDs(catalog)
 	if len(catalog.rootOverlays) != 0 {
-		uniqueRootIDs = uniqueIndexRootIDsOrOverlays(catalog)
-	}
-	uniqueProbeRuns, err := plan.uniqueProbeRunsForPersistedConflicts(uniqueRootIDs)
-	if err != nil {
-		return err
-	}
-	if len(catalog.rootOverlays) != 0 {
+		uniqueIndexNames := uniqueIndexNamesWithDataOrOverlays(catalog)
+		uniqueProbeRuns, err := plan.uniqueProbeRunsForPersistedConflictIndexes(func(indexName string) bool {
+			_, ok := uniqueIndexNames[indexName]
+			return ok
+		})
+		if err != nil {
+			return err
+		}
 		if err := plan.checkPersistedDocumentConflictsAtCatalogRoot(snap, catalog); err != nil {
 			return err
 		}
 		return checkPersistedUniqueConflictsAtCatalogRoots(snap, catalog, uniqueProbeRuns)
+	}
+	uniqueRootIDs := uniqueIndexRootIDs(catalog)
+	uniqueProbeRuns, err := plan.uniqueProbeRunsForPersistedConflicts(uniqueRootIDs)
+	if err != nil {
+		return err
 	}
 	preflight := insertBatchPreflight{
 		snapshot:           snap,
@@ -419,7 +424,14 @@ func checkPersistedUniqueConflictsAtCatalogRoots(snap *backenddb.Snapshot, catal
 				continue
 			}
 			conflict := it.Valid()
-			_ = it.Close()
+			iterErr := it.Error()
+			closeErr := it.Close()
+			if iterErr != nil {
+				return iterErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
 			if conflict {
 				return fmt.Errorf("%w %q", ErrUniqueIndexConflict, run.indexName)
 			}
@@ -432,15 +444,28 @@ func (plan *insertBatchPlan) uniqueProbeRunsForPersistedConflicts(uniqueRootIDs 
 	if plan == nil || len(plan.resultIDs) == 0 || len(uniqueRootIDs) == 0 {
 		return nil, nil
 	}
+	return plan.uniqueProbeRunsForPersistedConflictIndexes(func(indexName string) bool {
+		return uniqueRootIDs[indexName] != 0
+	})
+}
+
+func (plan *insertBatchPlan) uniqueProbeRunsForPersistedConflictIndexes(includeIndex func(indexName string) bool) ([]collectionUniqueProbeRun, error) {
+	if plan == nil || len(plan.resultIDs) == 0 || includeIndex == nil {
+		return nil, nil
+	}
 	if plan.allUniqueProbeRunsBuilt {
-		return plan.allUniqueProbeRuns, nil
+		out := make([]collectionUniqueProbeRun, 0, len(plan.allUniqueProbeRuns))
+		for _, run := range plan.allUniqueProbeRuns {
+			if includeIndex(run.indexName) {
+				out = append(out, run)
+			}
+		}
+		return out, nil
 	}
 	if !plan.uniqueProbeCandidatesBuilt {
 		return nil, errors.New("collections: insert conflict check missing unique probe candidates")
 	}
-	return buildUniqueProbeRunsFromSorted(plan.uniqueProbeCandidates, func(indexName string) bool {
-		return uniqueRootIDs[indexName] != 0
-	})
+	return buildUniqueProbeRunsFromSorted(plan.uniqueProbeCandidates, includeIndex)
 }
 
 func (p insertBatchPreflight) checkUniqueConflicts(runs []collectionUniqueProbeRun) error {
