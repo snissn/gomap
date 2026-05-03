@@ -1687,7 +1687,7 @@ func TestRecordEffectiveTreeDBCollectionOptionsUsesNormalizedMetadata(t *testing
 	if err := recordEffectiveTreeDBCollectionOptions(result, cfg, &benchTarget{collections: manager}); err != nil {
 		t.Fatalf("record effective options: %v", err)
 	}
-	if result.TreeDBBufferedIndexedWriteMaxDocuments != collections.DefaultIndexedWriteMemtableMaxDocuments ||
+	if result.TreeDBBufferedIndexedWriteMaxDocuments != collections.DefaultIndexedWriteMemtableAsyncFlushMaxDocuments ||
 		result.TreeDBBufferedIndexedWriteMaxBytes != 777 ||
 		result.TreeDBBufferedIndexedWriteMaxRootRuns != 0 ||
 		!result.TreeDBBufferedIndexedAsyncFlush ||
@@ -1698,7 +1698,7 @@ func TestRecordEffectiveTreeDBCollectionOptionsUsesNormalizedMetadata(t *testing
 			result.TreeDBBufferedIndexedWriteMaxRootRuns,
 			result.TreeDBBufferedIndexedAsyncFlush,
 			result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
-			collections.DefaultIndexedWriteMemtableMaxDocuments)
+			collections.DefaultIndexedWriteMemtableAsyncFlushMaxDocuments)
 	}
 }
 
