@@ -376,6 +376,46 @@ safe_label() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c '[:alnum:]_.-' '_'
 }
 
+lower_word() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+normalized_label() {
+  local value
+  value=$(lower_word "$1")
+  value="${value//-/_}"
+  safe_label "$value"
+}
+
+normalize_unique_word_list() {
+  local name=$1
+  local values=$2
+  local seen=""
+  local out=""
+  local count=0
+  local item normalized label
+  for item in $values; do
+    normalized=$(lower_word "$item")
+    label=$(normalized_label "$normalized")
+    if [[ " $seen " == *" $label "* ]]; then
+      echo "duplicate $name value after normalization: $item (label=$label)" >&2
+      exit 2
+    fi
+    seen="$seen $label"
+    if [[ -z "$out" ]]; then
+      out=$normalized
+    else
+      out="$out $normalized"
+    fi
+    count=$((count + 1))
+  done
+  if [[ "$count" -eq 0 ]]; then
+    echo "$name must contain at least one value" >&2
+    exit 2
+  fi
+  printf '%s' "$out"
+}
+
 list_word_count() {
   local count=0
   local item
@@ -385,33 +425,12 @@ list_word_count() {
   echo "$count"
 }
 
-validate_unique_labels() {
-  local name=$1
-  local values=$2
-  local seen=""
-  local count=0
-  local item
-  local label
-  for item in $values; do
-    label=$(safe_label "${item//-/_}")
-    if [[ " $seen " == *" $label "* ]]; then
-      echo "duplicate $name value after normalization: $item" >&2
-      exit 2
-    fi
-    seen="$seen $label"
-    count=$((count + 1))
-  done
-  if [[ "$count" -eq 0 ]]; then
-    echo "$name must contain at least one value" >&2
-    exit 2
-  fi
-}
-
 mongo_config_name() {
-  local client_mode=$1
+  local client_mode
+  client_mode=$(lower_word "$1")
   local client_label=$2
   local config
-  if [[ "$client_label" == "driver" ]] && [[ "$(list_word_count "$MONGO_CLIENT_MODES")" -eq 1 ]]; then
+  if [[ "$client_mode" == "driver" ]] && [[ "$(list_word_count "$MONGO_CLIENT_MODES")" -eq 1 ]]; then
     config="mongo"
   else
     config="mongo_${client_label}"
@@ -583,9 +602,9 @@ if [[ "$PROFILE_TREEDB" != "true" && "$PROFILE_TREEDB" != "false" ]]; then
   echo "invalid PROFILE_TREEDB=$PROFILE_TREEDB (want true or false)" >&2
   exit 2
 fi
-validate_unique_labels MONGO_CLIENT_MODES "$MONGO_CLIENT_MODES"
-validate_unique_labels TREEDB_CLIENT_MODES "$TREEDB_CLIENT_MODES"
-validate_unique_labels TREEDB_DOCUMENT_FORMATS "$TREEDB_DOCUMENT_FORMATS"
+MONGO_CLIENT_MODES=$(normalize_unique_word_list MONGO_CLIENT_MODES "$MONGO_CLIENT_MODES")
+TREEDB_CLIENT_MODES=$(normalize_unique_word_list TREEDB_CLIENT_MODES "$TREEDB_CLIENT_MODES")
+TREEDB_DOCUMENT_FORMATS=$(normalize_unique_word_list TREEDB_DOCUMENT_FORMATS "$TREEDB_DOCUMENT_FORMATS")
 raw_concurrent_reader_sweep=$CONCURRENT_READER_SWEEP
 CONCURRENT_READER_SWEEP=$(trim_spaces "$CONCURRENT_READER_SWEEP")
 if [[ -n "$raw_concurrent_reader_sweep" && -z "$CONCURRENT_READER_SWEEP" ]]; then
@@ -719,8 +738,8 @@ for docs in $DOCS_LIST; do
 
     for tree_format in $TREEDB_DOCUMENT_FORMATS; do
       for tree_client_mode in $TREEDB_CLIENT_MODES; do
-        format_label=$(safe_label "${tree_format//-/_}")
-        client_label=$(safe_label "${tree_client_mode//-/_}")
+        format_label=$(normalized_label "$tree_format")
+        client_label=$(normalized_label "$tree_client_mode")
         tree_config="treedb_${format_label}_${client_label}"
         if [[ "$RANGE_INDEX" == "true" ]]; then
           tree_config="${tree_config}_range_index"
@@ -756,7 +775,7 @@ for docs in $DOCS_LIST; do
     done
 
     for mongo_client_mode in $MONGO_CLIENT_MODES; do
-      mongo_client_label=$(safe_label "${mongo_client_mode//-/_}")
+      mongo_client_label=$(normalized_label "$mongo_client_mode")
       mongo_config=$(mongo_config_name "$mongo_client_mode" "$mongo_client_label")
       mongo_raw_rel="raw/${mongo_config}_${cell}.json"
       mongo_raw="$OUT_DIR/$mongo_raw_rel"

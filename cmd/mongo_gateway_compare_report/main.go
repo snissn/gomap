@@ -367,7 +367,10 @@ func sortedMongoRecords(recordsByConfig map[string]*runRecord) []*runRecord {
 		records = append(records, record)
 	}
 	sort.Slice(records, func(i, j int) bool {
-		return records[i].Row.Config < records[j].Row.Config
+		if records[i].Row.Config != records[j].Row.Config {
+			return records[i].Row.Config < records[j].Row.Config
+		}
+		return records[i].DisplayRawPath < records[j].DisplayRawPath
 	})
 	return records
 }
