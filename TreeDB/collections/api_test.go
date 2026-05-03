@@ -2359,6 +2359,12 @@ func TestCollectionIndexedWriteMemtablesAsyncFlushDefaultsQueueLimit(t *testing.
 	if !meta.Options.BufferedIndexedAsyncFlush {
 		t.Fatal("async indexed flush was not preserved for indexed collection")
 	}
+	if got := meta.Options.BufferedIndexedWriteMaxDocuments; got != DefaultIndexedWriteMemtableAsyncFlushMaxDocuments {
+		t.Fatalf("async max documents=%d want %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxDocuments)
+	}
+	if got := meta.Options.BufferedIndexedWriteMaxRootRuns; got != DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns {
+		t.Fatalf("async max root runs=%d want %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns)
+	}
 	if got := meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits; got != DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits {
 		t.Fatalf("async max queued units=%d want %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits)
 	}

@@ -34,12 +34,21 @@ const (
 	// DefaultIndexedWriteMemtableMaxDocuments bounds the native indexed
 	// collection write-domain before it auto-flushes to persistent roots.
 	DefaultIndexedWriteMemtableMaxDocuments = 96000
+	// DefaultIndexedWriteMemtableAsyncFlushMaxDocuments uses a larger publish
+	// cadence for async indexed flushes. Background publishing decouples writer
+	// staging from root apply enough that larger immutable flush units reduce
+	// root-apply amplification without penalizing synchronous/checkpoint-heavy
+	// insert shapes that still use DefaultIndexedWriteMemtableMaxDocuments.
+	DefaultIndexedWriteMemtableAsyncFlushMaxDocuments = 256000
 	// DefaultIndexedWriteMemtableMaxRootRuns bounds accumulated root-local
 	// mutation runs. When the document threshold is also enabled, hitting this
 	// limit compacts mutable root runs in memory before publishing so many small
 	// indexed update batches do not create an expensive pending-run chain before
 	// the document threshold is reached.
 	DefaultIndexedWriteMemtableMaxRootRuns = DefaultIndexedWriteMemtableMaxDocuments
+	// DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns pairs with
+	// DefaultIndexedWriteMemtableAsyncFlushMaxDocuments.
+	DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns = DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
 	// DefaultIndexedWriteMemtableDirectBatchDocuments keeps large, already
 	// well-amortized InsertBatch calls on the immediate publish path. Smaller
 	// batches use the indexed write-domain memtable path by default.
@@ -2500,10 +2509,18 @@ func (c *Collection) shouldBufferIndexedInsertBatch(meta CollectionMeta, documen
 		return false
 	}
 	if documentCount >= DefaultIndexedWriteMemtableDirectBatchDocuments &&
-		meta.Options.BufferedIndexedWriteMaxDocuments == DefaultIndexedWriteMemtableMaxDocuments {
+		isDefaultIndexedWriteMemtableMaxDocuments(meta.Options) {
 		return false
 	}
 	return true
+}
+
+func isDefaultIndexedWriteMemtableMaxDocuments(opts CollectionOptions) bool {
+	if opts.BufferedIndexedWriteMaxDocuments == DefaultIndexedWriteMemtableMaxDocuments {
+		return true
+	}
+	return opts.BufferedIndexedAsyncFlush &&
+		opts.BufferedIndexedWriteMaxDocuments == DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
 }
 
 func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64, plan *insertBatchPlan) (time.Duration, error) {
@@ -10267,12 +10284,18 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		meta.Options.BufferedIndexedWrites = false
 	} else {
 		meta.Options.BufferedIndexedWrites = true
+		defaultMaxDocuments := DefaultIndexedWriteMemtableMaxDocuments
+		defaultMaxRootRuns := DefaultIndexedWriteMemtableMaxRootRuns
+		if meta.Options.BufferedIndexedAsyncFlush {
+			defaultMaxDocuments = DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
+			defaultMaxRootRuns = DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns
+		}
 		useNativeDocumentDefault := meta.Options.BufferedIndexedWriteMaxDocuments == 0
 		if useNativeDocumentDefault {
-			meta.Options.BufferedIndexedWriteMaxDocuments = DefaultIndexedWriteMemtableMaxDocuments
+			meta.Options.BufferedIndexedWriteMaxDocuments = defaultMaxDocuments
 		}
 		if useNativeDocumentDefault && meta.Options.BufferedIndexedWriteMaxBytes == 0 && meta.Options.BufferedIndexedWriteMaxRootRuns == 0 {
-			meta.Options.BufferedIndexedWriteMaxRootRuns = DefaultIndexedWriteMemtableMaxRootRuns
+			meta.Options.BufferedIndexedWriteMaxRootRuns = defaultMaxRootRuns
 		}
 		if meta.Options.BufferedIndexedAsyncFlush && meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits == 0 {
 			meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits

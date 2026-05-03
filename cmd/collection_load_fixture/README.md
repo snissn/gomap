@@ -58,7 +58,7 @@ Useful variants:
 ./bin/collection-load-fixture \
   -buffered-indexed-writes=true \
   -buffered-indexed-write-max-docs 96000 \
-  -buffered-indexed-write-max-root-runs 256 \
+  -buffered-indexed-write-max-root-runs 96000 \
   -dir /tmp/treedb_two_index_buffered_bounded \
   -reset
 
