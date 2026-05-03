@@ -4627,36 +4627,17 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 }
 
 func buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames []string, rootRuns map[string][]memtable.Table, rootPolicies map[string]backenddb.OrderedRootStoragePolicy, rootOverlays map[string][]uint64) ([]backenddb.OrderedRootDeltaBatchPublishInput, func(), error) {
-	ordered := make([]backenddb.OrderedRootDeltaBatchPublishInput, 0, len(rootNames))
-	iterators := make([]iterator.UnsafeIterator, 0, len(rootNames))
-	cleanup := func() {
-		for idx := range ordered {
-			if ordered[idx].Delta != nil {
-				_ = ordered[idx].Delta.Close()
-				ordered[idx].Delta = nil
-			}
-		}
-		for _, it := range iterators {
-			_ = it.Close()
+	specs := make([]bufferedRootDeltaBatchSpec, len(rootNames))
+	for i, rootName := range rootNames {
+		specs[i] = bufferedRootDeltaBatchSpec{
+			rootName:                  rootName,
+			baseRoot:                  overlayDeltaBaseRoot(rootOverlays[rootName]),
+			storagePolicy:             rootPolicies[rootName],
+			includeDeletedOnColdBuild: true,
+			parallelApply:             true,
 		}
 	}
-	for _, rootName := range rootNames {
-		iter := newBufferedRootRunsIteratorWithDeleted(rootRuns[rootName], nil, nil, true)
-		iterators = append(iterators, iter)
-		delta, err := backenddb.OrderedRootDeltaBatchFromIterator(iter)
-		if err != nil {
-			cleanup()
-			return nil, func() {}, err
-		}
-		ordered = append(ordered, backenddb.OrderedRootDeltaBatchPublishInput{
-			BaseRoot:                  overlayDeltaBaseRoot(rootOverlays[rootName]),
-			Delta:                     delta,
-			StoragePolicy:             rootPolicies[rootName],
-			IncludeDeletedOnColdBuild: true,
-			ParallelApply:             true,
-		})
-	}
-	return ordered, cleanup, nil
+	return buildBufferedRootDeltaBatchPublishInputsFromSpecs(specs, rootRuns)
 }
 
 func overlayDeltaBaseRoot(overlays []uint64) uint64 {
@@ -4667,8 +4648,33 @@ func overlayDeltaBaseRoot(overlays []uint64) uint64 {
 }
 
 func buildBufferedRootDeltaBatchPublishInputs(rootNames []string, rootRuns map[string][]memtable.Table, rootBaseIDs map[string]uint64, rootPolicies map[string]backenddb.OrderedRootStoragePolicy) ([]backenddb.OrderedRootDeltaBatchPublishInput, func(), error) {
-	ordered := make([]backenddb.OrderedRootDeltaBatchPublishInput, 0, len(rootNames))
-	iterators := make([]iterator.UnsafeIterator, 0, len(rootNames))
+	specs := make([]bufferedRootDeltaBatchSpec, 0, len(rootNames))
+	for _, rootName := range rootNames {
+		baseRoot, ok := rootBaseIDs[rootName]
+		if !ok {
+			return nil, func() {}, fmt.Errorf("collections: buffered indexed flush missing base root for %q", rootName)
+		}
+		specs = append(specs, bufferedRootDeltaBatchSpec{
+			rootName:      rootName,
+			baseRoot:      baseRoot,
+			storagePolicy: rootPolicies[rootName],
+			parallelApply: true,
+		})
+	}
+	return buildBufferedRootDeltaBatchPublishInputsFromSpecs(specs, rootRuns)
+}
+
+type bufferedRootDeltaBatchSpec struct {
+	rootName                  string
+	baseRoot                  uint64
+	storagePolicy             backenddb.OrderedRootStoragePolicy
+	includeDeletedOnColdBuild bool
+	parallelApply             bool
+}
+
+func buildBufferedRootDeltaBatchPublishInputsFromSpecs(specs []bufferedRootDeltaBatchSpec, rootRuns map[string][]memtable.Table) ([]backenddb.OrderedRootDeltaBatchPublishInput, func(), error) {
+	ordered := make([]backenddb.OrderedRootDeltaBatchPublishInput, len(specs))
+	iterators := make([]iterator.UnsafeIterator, len(specs))
 	cleanup := func() {
 		for idx := range ordered {
 			if ordered[idx].Delta != nil {
@@ -4677,30 +4683,57 @@ func buildBufferedRootDeltaBatchPublishInputs(rootNames []string, rootRuns map[s
 			}
 		}
 		for _, it := range iterators {
-			_ = it.Close()
+			if it != nil {
+				_ = it.Close()
+			}
 		}
 	}
-	for _, rootName := range rootNames {
-		baseRoot, ok := rootBaseIDs[rootName]
-		if !ok {
-			cleanup()
-			return nil, func() {}, fmt.Errorf("collections: buffered indexed flush missing base root for %q", rootName)
+	if len(specs) <= 1 {
+		for i := range specs {
+			if err := buildBufferedRootDeltaBatchPublishInput(specs[i], rootRuns, &ordered[i], &iterators[i]); err != nil {
+				cleanup()
+				return nil, func() {}, err
+			}
 		}
-		iter := newBufferedRootRunsIteratorWithDeleted(rootRuns[rootName], nil, nil, true)
-		iterators = append(iterators, iter)
-		delta, err := backenddb.OrderedRootDeltaBatchFromIterator(iter)
+		return ordered, cleanup, nil
+	}
+
+	errs := make([]error, len(specs))
+	var wg sync.WaitGroup
+	for i := range specs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = buildBufferedRootDeltaBatchPublishInput(specs[i], rootRuns, &ordered[i], &iterators[i])
+		}(i)
+	}
+	wg.Wait()
+	for _, err := range errs {
 		if err != nil {
 			cleanup()
 			return nil, func() {}, err
 		}
-		ordered = append(ordered, backenddb.OrderedRootDeltaBatchPublishInput{
-			BaseRoot:      baseRoot,
-			Delta:         delta,
-			StoragePolicy: rootPolicies[rootName],
-			ParallelApply: true,
-		})
 	}
 	return ordered, cleanup, nil
+}
+
+func buildBufferedRootDeltaBatchPublishInput(spec bufferedRootDeltaBatchSpec, rootRuns map[string][]memtable.Table, ordered *backenddb.OrderedRootDeltaBatchPublishInput, iterOut *iterator.UnsafeIterator) error {
+	iter := newBufferedRootRunsIteratorWithDeleted(rootRuns[spec.rootName], nil, nil, true)
+	if iterOut != nil {
+		*iterOut = iter
+	}
+	delta, err := backenddb.OrderedRootDeltaBatchFromIterator(iter)
+	if err != nil {
+		return err
+	}
+	*ordered = backenddb.OrderedRootDeltaBatchPublishInput{
+		BaseRoot:                  spec.baseRoot,
+		Delta:                     delta,
+		StoragePolicy:             spec.storagePolicy,
+		IncludeDeletedOnColdBuild: spec.includeDeletedOnColdBuild,
+		ParallelApply:             spec.parallelApply,
+	}
+	return nil
 }
 
 func buildRootDeltaBatchPublishInputsFromTables(collectionName string, rootNames []string, tables []memtable.Table, rootBaseIDs map[string]uint64, policies []backenddb.OrderedRootStoragePolicy) ([]backenddb.OrderedRootDeltaBatchPublishInput, func(), error) {
