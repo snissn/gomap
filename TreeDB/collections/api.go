@@ -7854,11 +7854,11 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		phaseStart := updateBatchStatsNow(detailedStats)
 		current, err := readUpdateBatchCurrentDocument(&primaryReader, primaryReaderOK, i, item.DocumentID, bufferedRead, currentScratch[:0])
 		if err == nil && !current.buffered && len(catalog.overlayRootIDs(primaryRootName)) != 0 {
-			value, found, overlayErr := collectionGetAppendAtCatalogRoot(snap, catalog, primaryRootName, item.DocumentID, currentScratch[:0])
+			value, overlayFound, documentFound, overlayErr := collectionGetAppendAtCatalogOverlayRoot(snap, catalog, primaryRootName, item.DocumentID, currentScratch[:0])
 			if overlayErr != nil {
 				err = overlayErr
-			} else {
-				current = updateBatchCurrentDocument{value: value, found: found}
+			} else if overlayFound {
+				current = updateBatchCurrentDocument{value: value, found: documentFound}
 			}
 		}
 		stats.CurrentRead += updateBatchStatsSince(detailedStats, phaseStart)
@@ -10662,6 +10662,39 @@ func collectionGetAppendAtCatalogRoot(snap *backenddb.Snapshot, catalog *collect
 		return dst[:0], false, err
 	}
 	return out, true, nil
+}
+
+func collectionGetAppendAtCatalogOverlayRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, key, dst []byte) ([]byte, bool, bool, error) {
+	if snap == nil {
+		return dst[:0], false, false, backenddb.ErrClosed
+	}
+	for _, rootID := range catalog.overlayRootIDs(rootName) {
+		if rootID == 0 {
+			continue
+		}
+		entry, err := snap.GetEntryAtRoot(rootID, key)
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			continue
+		}
+		if err != nil {
+			return dst[:0], false, false, err
+		}
+		if entry.Flags&node.FlagTombstone != 0 {
+			return dst[:0], true, false, nil
+		}
+		if entry.Flags&node.FlagPointer == 0 {
+			return append(dst[:0], entry.Value...), true, true, nil
+		}
+		out, err := snap.GetAppendAtRoot(rootID, key, dst[:0])
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			return dst[:0], false, false, nil
+		}
+		if err != nil {
+			return dst[:0], false, false, err
+		}
+		return out, true, true, nil
+	}
+	return dst[:0], false, false, nil
 }
 
 func collectionIteratorAtCatalogRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, start, end []byte, includeDeleted bool) (iterator.UnsafeIterator, error) {
