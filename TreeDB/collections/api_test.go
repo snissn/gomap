@@ -7499,7 +7499,7 @@ func collectionHasBufferedPrimaryRunIndexForTest(t *testing.T, col *Collection) 
 	return col.writeDomain.primaryRunIndex != nil
 }
 
-func TestCollectionUpdateBatchMaintainsBufferedUniqueValueIndex(t *testing.T) {
+func TestCollectionUpdateBatchDoesNotBufferUnchangedUniqueValues(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -7543,20 +7543,48 @@ func TestCollectionUpdateBatchMaintainsBufferedUniqueValueIndex(t *testing.T) {
 		t.Fatal("update batch was not buffered")
 	}
 
-	encoded, err := encodeIndexScalar(IndexValueString, "a@example.com")
+	encodedA, err := encodeIndexScalar(IndexValueString, "a@example.com")
 	if err != nil {
 		t.Fatalf("encode email: %v", err)
 	}
-	_, prefix, err := appendIndexValuePrefixSlice(nil, encoded)
+	_, prefixA, err := appendIndexValuePrefixSlice(nil, encodedA)
 	if err != nil {
 		t.Fatalf("email prefix: %v", err)
 	}
+	encodedB, err := encodeIndexScalar(IndexValueString, "b@example.com")
+	if err != nil {
+		t.Fatalf("encode buffered email: %v", err)
+	}
+	_, prefixB, err := appendIndexValuePrefixSlice(nil, encodedB)
+	if err != nil {
+		t.Fatalf("buffered email prefix: %v", err)
+	}
 	col.writeDomain.mu.RLock()
 	pending := col.writeDomain.uniqueValueIndex["email"]
-	contains := pending != nil && pending.contains(prefix)
+	containsA := pending != nil && pending.contains(prefixA)
+	containsB := pending != nil && pending.contains(prefixB)
+	uniqueRuns := len(col.writeDomain.uniqueValueRuns["email"])
 	col.writeDomain.mu.RUnlock()
-	if !contains {
-		t.Fatal("buffered update did not add unchanged unique email to pending unique-value index")
+	if containsA {
+		t.Fatal("buffered non-unique update added unchanged persisted unique email to pending unique-value index")
+	}
+	if !containsB {
+		t.Fatal("pending buffered insert unique email missing from pending unique-value index")
+	}
+	if uniqueRuns != 1 {
+		t.Fatalf("unique value runs=%d want only the pending insert run", uniqueRuns)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u3")},
+		[][]byte{[]byte(`{"email":"a@example.com","city":"hnl"}`)},
+	); !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("duplicate persisted unique email err=%v want ErrUniqueIndexConflict", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u4")},
+		[][]byte{[]byte(`{"email":"b@example.com","city":"hnl"}`)},
+	); !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("duplicate pending unique email err=%v want ErrUniqueIndexConflict", err)
 	}
 	ids, err := col.FindByIndex("email", "a@example.com")
 	if err != nil {
