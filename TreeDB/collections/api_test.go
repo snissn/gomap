@@ -2468,6 +2468,95 @@ func TestCollectionIndexedOverlayRootFlushSupportsReadsUpdatesAndUniqueChecks(t 
 	}
 }
 
+func TestCollectionOverlayPrimaryProbeDoesNotReadBaseOnMiss(t *testing.T) {
+	dir := t.TempDir()
+	db, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	for _, doc := range []struct {
+		id  string
+		raw string
+	}{
+		{id: "u1", raw: `{"city":"hnl"}`},
+		{id: "u2", raw: `{"city":"sea"}`},
+		{id: "u3", raw: `{"city":"lax"}`},
+	} {
+		if _, err := col.Insert([]byte(doc.id), []byte(doc.raw)); err != nil {
+			t.Fatalf("insert %s: %v", doc.id, err)
+		}
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush base: %v", err)
+	}
+
+	primaryRootName := collectionPrimaryRootName("users")
+	primaryOverlay := newCollectionRunTable(2)
+	setCollectionRunValue(primaryOverlay, []byte("u2"), []byte(`{"city":"bos"}`))
+	primaryOverlay.DeleteSteal([]byte("u3"))
+	primaryOverlay.Freeze()
+	defer resetCollectionRunTable(primaryOverlay)
+	_, overlayRootIDs, err := db.PublishOrderedRootGroupWithSystemBuilder([]backenddb.OrderedRootPublishInput{{
+		BaseRoot: 0,
+		Iter:     primaryOverlay.NewIterator(nil, nil),
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		snap := db.AcquireSnapshot()
+		if snap == nil {
+			return nil, backenddb.ErrClosed
+		}
+		defer func() { _ = snap.Close() }()
+		return buildSystemTargetIterator(snap, map[string][]byte{
+			systemCollectionRootOverlayKey(primaryRootName): encodeRootIDList([]uint64{rootIDs[0]}),
+		})
+	})
+	if err != nil {
+		t.Fatalf("publish primary overlay: %v", err)
+	}
+	if len(overlayRootIDs) != 1 {
+		t.Fatalf("overlay roots=%d want 1", len(overlayRootIDs))
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("acquire snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, "users")
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	value, overlayFound, documentFound, err := collectionGetAppendAtCatalogOverlayRoot(snap, catalog, primaryRootName, []byte("u1"), nil)
+	if err != nil {
+		t.Fatalf("overlay miss probe: %v", err)
+	}
+	if overlayFound || documentFound || len(value) != 0 {
+		t.Fatalf("overlay miss value=%q overlayFound=%v documentFound=%v, want no overlay result", value, overlayFound, documentFound)
+	}
+	value, overlayFound, documentFound, err = collectionGetAppendAtCatalogOverlayRoot(snap, catalog, primaryRootName, []byte("u2"), nil)
+	if err != nil {
+		t.Fatalf("overlay hit probe: %v", err)
+	}
+	if !overlayFound || !documentFound || !bytes.Equal(value, []byte(`{"city":"bos"}`)) {
+		t.Fatalf("overlay hit value=%q overlayFound=%v documentFound=%v", value, overlayFound, documentFound)
+	}
+	value, overlayFound, documentFound, err = collectionGetAppendAtCatalogOverlayRoot(snap, catalog, primaryRootName, []byte("u3"), nil)
+	if err != nil {
+		t.Fatalf("overlay tombstone probe: %v", err)
+	}
+	if !overlayFound || documentFound || len(value) != 0 {
+		t.Fatalf("overlay tombstone value=%q overlayFound=%v documentFound=%v, want overlay tombstone", value, overlayFound, documentFound)
+	}
+}
+
 func TestCollectionIndexedOverlayRootValidationRejectsStaleOverlayDescriptors(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
