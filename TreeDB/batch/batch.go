@@ -158,12 +158,15 @@ func (b *Batch) resetLocked() {
 
 func (b *Batch) resetForPool() {
 	if b.entries != nil {
-		// SortedEntries clears the compacted tail, so clearing len is sufficient
-		// here while avoiding O(cap) work for large pooled batches.
-		clear(b.entries)
 		if cap(b.entries) > maxBatchPoolCap {
+			// Drop oversized backing arrays without clearing them first. Once the
+			// slice is nil, the batch no longer retains the array or its key/value
+			// references, so clearing len entries would only add discard-path CPU.
 			b.entries = nil
 		} else {
+			// SortedEntries clears the compacted tail, so clearing len here is
+			// sufficient for normal pooled batches.
+			clear(b.entries)
 			b.entries = b.entries[:0]
 		}
 	}
