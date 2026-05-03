@@ -183,6 +183,8 @@ type DB struct {
 	orderedRootDeltaGroupPreflightNs                            atomic.Uint64
 	orderedRootDeltaGroupRootApplyNs                            atomic.Uint64
 	orderedRootDeltaGroupRootApplyCalls                         atomic.Uint64
+	orderedRootDeltaGroupRootApplyParallelGroups                atomic.Uint64
+	orderedRootDeltaGroupRootApplyParallelRoots                 atomic.Uint64
 	orderedRootDeltaGroupRootApplyOps                           atomic.Uint64
 	orderedRootDeltaGroupRootApplyNodeLoads                     atomic.Uint64
 	orderedRootDeltaGroupRootApplyPagerNodeLoads                atomic.Uint64

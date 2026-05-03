@@ -725,6 +725,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.publish.ordered_root_delta_group.preflight_ns_total"] = fmt.Sprintf("%d", orderedDeltaStats.preflightNs)
 	stats["treedb.publish.ordered_root_delta_group.root_apply_ns_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyNs)
 	stats["treedb.publish.ordered_root_delta_group.root_apply_calls_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyCalls)
+	stats["treedb.publish.ordered_root_delta_group.root_apply_parallel_groups_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyParallelGroups)
+	stats["treedb.publish.ordered_root_delta_group.root_apply_parallel_roots_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyParallelRoots)
 	stats["treedb.publish.ordered_root_delta_group.root_apply_ops_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyOps)
 	stats["treedb.publish.ordered_root_delta_group.root_apply_node_loads_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyNodeLoads)
 	stats["treedb.publish.ordered_root_delta_group.root_apply_pager_node_loads_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyPagerNodeLoads)

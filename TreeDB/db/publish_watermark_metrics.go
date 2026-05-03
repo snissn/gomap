@@ -145,6 +145,8 @@ type orderedRootDeltaGroupPublishStats struct {
 	preflightNs                            uint64
 	rootApplyNs                            uint64
 	rootApplyCalls                         uint64
+	rootApplyParallelGroups                uint64
+	rootApplyParallelRoots                 uint64
 	rootApplyOps                           uint64
 	rootApplyNodeLoads                     uint64
 	rootApplyPagerNodeLoads                uint64
@@ -186,16 +188,18 @@ type orderedRootDeltaGroupPublishStats struct {
 }
 
 type orderedRootDeltaGroupPublishPhaseStats struct {
-	preflightNs        uint64
-	rootApplyNs        uint64
-	rootApplyCalls     uint64
-	rootApplyMetrics   orderedRootDeltaGroupZipperStats
-	systemBuildNs      uint64
-	systemApplyNs      uint64
-	systemApplyCalls   uint64
-	systemApplyMetrics orderedRootDeltaGroupZipperStats
-	finalizeNs         uint64
-	finalizeCalls      uint64
+	preflightNs             uint64
+	rootApplyNs             uint64
+	rootApplyCalls          uint64
+	rootApplyParallelGroups uint64
+	rootApplyParallelRoots  uint64
+	rootApplyMetrics        orderedRootDeltaGroupZipperStats
+	systemBuildNs           uint64
+	systemApplyNs           uint64
+	systemApplyCalls        uint64
+	systemApplyMetrics      orderedRootDeltaGroupZipperStats
+	finalizeNs              uint64
+	finalizeCalls           uint64
 }
 
 type orderedRootDeltaGroupZipperStats struct {
@@ -309,6 +313,8 @@ func (db *DB) observeOrderedRootDeltaGroupPublish(wait, hold time.Duration, root
 	db.orderedRootDeltaGroupPreflightNs.Add(phases.preflightNs)
 	db.orderedRootDeltaGroupRootApplyNs.Add(phases.rootApplyNs)
 	db.orderedRootDeltaGroupRootApplyCalls.Add(phases.rootApplyCalls)
+	db.orderedRootDeltaGroupRootApplyParallelGroups.Add(phases.rootApplyParallelGroups)
+	db.orderedRootDeltaGroupRootApplyParallelRoots.Add(phases.rootApplyParallelRoots)
 	db.orderedRootDeltaGroupRootApplyOps.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperApplyOps))
 	db.orderedRootDeltaGroupRootApplyNodeLoads.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperNodeLoads))
 	db.orderedRootDeltaGroupRootApplyPagerNodeLoads.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperPagerNodeLoads))
@@ -371,6 +377,8 @@ func (db *DB) orderedRootDeltaGroupPublishStats() orderedRootDeltaGroupPublishSt
 		preflightNs:                            db.orderedRootDeltaGroupPreflightNs.Load(),
 		rootApplyNs:                            db.orderedRootDeltaGroupRootApplyNs.Load(),
 		rootApplyCalls:                         db.orderedRootDeltaGroupRootApplyCalls.Load(),
+		rootApplyParallelGroups:                db.orderedRootDeltaGroupRootApplyParallelGroups.Load(),
+		rootApplyParallelRoots:                 db.orderedRootDeltaGroupRootApplyParallelRoots.Load(),
 		rootApplyOps:                           db.orderedRootDeltaGroupRootApplyOps.Load(),
 		rootApplyNodeLoads:                     db.orderedRootDeltaGroupRootApplyNodeLoads.Load(),
 		rootApplyPagerNodeLoads:                db.orderedRootDeltaGroupRootApplyPagerNodeLoads.Load(),
