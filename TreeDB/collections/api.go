@@ -425,6 +425,8 @@ type CollectionManagerStats struct {
 	IndexedFlushRootRuns          uint64
 	IndexedFlushRoots             uint64
 	IndexedFlushDuration          time.Duration
+	IndexedFlushMaterialize       time.Duration
+	IndexedFlushPublish           time.Duration
 	UpdateCombineRequests         uint64
 	UpdateCombineBatches          uint64
 	UpdateCombineBatchedRequests  uint64
@@ -743,6 +745,8 @@ type collectionWriteDomain struct {
 	indexedFlushRootRuns             atomic.Uint64
 	indexedFlushRoots                atomic.Uint64
 	indexedFlushDurationTotalNs      atomic.Uint64
+	indexedFlushMaterializeTotalNs   atomic.Uint64
+	indexedFlushPublishTotalNs       atomic.Uint64
 	updateCombineRequests            atomic.Uint64
 	updateCombineBatches             atomic.Uint64
 	updateCombineBatchedRequests     atomic.Uint64
@@ -963,6 +967,8 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.indexed_flush.root_runs_total"] = fmt.Sprintf("%d", stats.IndexedFlushRootRuns)
 	out["treedb.collections.write_domain.indexed_flush.roots_total"] = fmt.Sprintf("%d", stats.IndexedFlushRoots)
 	out["treedb.collections.write_domain.indexed_flush.duration_ns_total"] = fmt.Sprintf("%d", stats.IndexedFlushDuration.Nanoseconds())
+	out["treedb.collections.write_domain.indexed_flush.materialize_ns_total"] = fmt.Sprintf("%d", stats.IndexedFlushMaterialize.Nanoseconds())
+	out["treedb.collections.write_domain.indexed_flush.publish_ns_total"] = fmt.Sprintf("%d", stats.IndexedFlushPublish.Nanoseconds())
 	out["treedb.collections.write_domain.update_combine.requests_total"] = fmt.Sprintf("%d", stats.UpdateCombineRequests)
 	out["treedb.collections.write_domain.update_combine.batches_total"] = fmt.Sprintf("%d", stats.UpdateCombineBatches)
 	out["treedb.collections.write_domain.update_combine.batched_requests_total"] = fmt.Sprintf("%d", stats.UpdateCombineBatchedRequests)
@@ -1132,6 +1138,8 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.IndexedFlushRootRuns += other.IndexedFlushRootRuns
 	s.IndexedFlushRoots += other.IndexedFlushRoots
 	s.IndexedFlushDuration += other.IndexedFlushDuration
+	s.IndexedFlushMaterialize += other.IndexedFlushMaterialize
+	s.IndexedFlushPublish += other.IndexedFlushPublish
 	s.UpdateCombineRequests += other.UpdateCombineRequests
 	s.UpdateCombineBatches += other.UpdateCombineBatches
 	s.UpdateCombineBatchedRequests += other.UpdateCombineBatchedRequests
@@ -1221,6 +1229,8 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.IndexedFlushRootRuns = domain.indexedFlushRootRuns.Load()
 	stats.IndexedFlushRoots = domain.indexedFlushRoots.Load()
 	stats.IndexedFlushDuration = durationFromAtomicNs(domain.indexedFlushDurationTotalNs.Load())
+	stats.IndexedFlushMaterialize = durationFromAtomicNs(domain.indexedFlushMaterializeTotalNs.Load())
+	stats.IndexedFlushPublish = durationFromAtomicNs(domain.indexedFlushPublishTotalNs.Load())
 	stats.UpdateCombineRequests = domain.updateCombineRequests.Load()
 	stats.UpdateCombineBatches = domain.updateCombineBatches.Load()
 	stats.UpdateCombineBatchedRequests = domain.updateCombineBatchedRequests.Load()
@@ -1540,7 +1550,7 @@ func (domain *collectionWriteDomain) consumeIndexedAsyncFlushError() error {
 	return err
 }
 
-func (domain *collectionWriteDomain) observeIndexedFlush(docs int, bytes int64, rootRuns, roots int, duration time.Duration, err error) {
+func (domain *collectionWriteDomain) observeIndexedFlush(docs int, bytes int64, rootRuns, roots int, duration, materialize, publish time.Duration, err error) {
 	if domain == nil {
 		return
 	}
@@ -1561,6 +1571,8 @@ func (domain *collectionWriteDomain) observeIndexedFlush(docs int, bytes int64, 
 		domain.indexedFlushRoots.Add(uint64(roots))
 	}
 	domain.indexedFlushDurationTotalNs.Add(durationToAtomicNs(duration))
+	domain.indexedFlushMaterializeTotalNs.Add(durationToAtomicNs(materialize))
+	domain.indexedFlushPublishTotalNs.Add(durationToAtomicNs(publish))
 }
 
 func (domain *collectionWriteDomain) observeUpdateCombineRequest(queueDepth int) {
@@ -4563,15 +4575,19 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		}
 	}()
 	if collectionMetaUsesIndexedOverlayRoots(work.meta) {
+		materializeStart := time.Now()
 		rootOverlayFilters, err := buildCollectionRootOverlayFilters(work.rootNames, work.flushUnit.rootRuns, work.rootOverlays, work.catalog.rootOverlayFilters)
 		if err != nil {
-			return c.completePreparedIndexedFlush(work, 0, nil, err, 0)
+			materializeElapsed := time.Since(materializeStart)
+			return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 		}
 		work.rootOverlayFilters = rootOverlayFilters
 		ordered, cleanupDeltas, err := buildBufferedRootOverlayDeltaBatchPublishInputs(work.rootNames, work.flushUnit.rootRuns, work.flushUnit.rootPolicies, work.rootOverlays)
 		if err != nil {
-			return c.completePreparedIndexedFlush(work, 0, nil, err, 0)
+			materializeElapsed := time.Since(materializeStart)
+			return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 		}
+		materializeElapsed := time.Since(materializeStart)
 		publishStart := time.Now()
 		newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, work.rootOverlays, rootIDs)
@@ -4581,16 +4597,19 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		if publishErr == nil && len(rootIDs) != len(work.rootNames) {
 			publishErr = unexpectedOrderedRootCountError(work.meta.Name, len(work.rootNames), len(rootIDs))
 		}
-		completeErr := c.completePreparedIndexedFlush(work, newSystemRoot, rootIDs, publishErr, publishElapsed)
+		completeErr := c.completePreparedIndexedFlush(work, newSystemRoot, rootIDs, publishErr, materializeElapsed+publishElapsed, materializeElapsed, publishElapsed)
 		if publishErr != nil {
 			return publishErr
 		}
 		return completeErr
 	}
+	materializeStart := time.Now()
 	ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(work.rootNames, work.flushUnit.rootRuns, work.rootBaseIDs, work.flushUnit.rootPolicies)
 	if err != nil {
-		return c.completePreparedIndexedFlush(work, 0, nil, err, 0)
+		materializeElapsed := time.Since(materializeStart)
+		return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 	}
+	materializeElapsed := time.Since(materializeStart)
 	publishStart := time.Now()
 	newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, rootIDs)
@@ -4600,7 +4619,7 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	if publishErr == nil && len(rootIDs) != len(work.rootNames) {
 		publishErr = unexpectedOrderedRootCountError(work.meta.Name, len(work.rootNames), len(rootIDs))
 	}
-	completeErr := c.completePreparedIndexedFlush(work, newSystemRoot, rootIDs, publishErr, publishElapsed)
+	completeErr := c.completePreparedIndexedFlush(work, newSystemRoot, rootIDs, publishErr, materializeElapsed+publishElapsed, materializeElapsed, publishElapsed)
 	if publishErr != nil {
 		return publishErr
 	}
@@ -4723,7 +4742,7 @@ func buildRootDeltaBatchPublishInputsFromTables(collectionName string, rootNames
 	return ordered, cleanup, nil
 }
 
-func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork, newSystemRoot uint64, rootIDs []uint64, publishErr error, elapsed time.Duration) error {
+func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork, newSystemRoot uint64, rootIDs []uint64, publishErr error, elapsed, materializeElapsed, publishElapsed time.Duration) error {
 	if c == nil || c.writeDomain == nil || work == nil {
 		return publishErr
 	}
@@ -4736,7 +4755,7 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 			domain.indexedFlushUnits = append(removed, domain.indexedFlushUnits...)
 		}
 		rebuildBufferedPendingIndexesLocked(domain, work.meta.Name, preservePrimaryRunIndex)
-		domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, elapsed, publishErr)
+		domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, elapsed, materializeElapsed, publishElapsed, publishErr)
 		return publishErr
 	}
 	baseCatalog := domain.catalog
@@ -4752,7 +4771,7 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	oldPublishing, owned := removeIndexedPublishingWorkUnitsLocked(domain, work.units)
 	if !owned {
 		err := errors.New("collections: async indexed publish lost ownership of in-flight flush units")
-		domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, elapsed, err)
+		domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, elapsed, materializeElapsed, publishElapsed, err)
 		return err
 	}
 	domain.loaded = true
@@ -4771,7 +4790,7 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	c.meta = work.meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	resetIndexedFlushUnits(oldPublishing)
-	domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, elapsed, nil)
+	domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, elapsed, materializeElapsed, publishElapsed, nil)
 	return nil
 }
 
@@ -4834,8 +4853,10 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	flushRootRuns := bufferedIndexedRootRunCount(domain)
 	flushRoots := len(rootNames)
 	flushStart := time.Now()
+	var materializeElapsed time.Duration
+	var publishElapsed time.Duration
 	defer func() {
-		domain.observeIndexedFlush(flushDocs, flushBytes, flushRootRuns, flushRoots, time.Since(flushStart), err)
+		domain.observeIndexedFlush(flushDocs, flushBytes, flushRootRuns, flushRoots, time.Since(flushStart), materializeElapsed, publishElapsed, err)
 	}()
 	baseSystemRoot := snapshotSystemRoot(pin)
 	baseCommitSeq := snapshotCommitSeq(pin)
@@ -4853,26 +4874,37 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	var rootIDs []uint64
 	var rootOverlayFilters map[string]collectionRootOverlayFilter
 	if collectionMetaUsesIndexedOverlayRoots(meta) {
+		materializeStart := time.Now()
 		rootOverlayFilters, err = buildCollectionRootOverlayFilters(rootNames, flushUnit.rootRuns, rootOverlays, catalog.rootOverlayFilters)
 		if err != nil {
+			materializeElapsed = time.Since(materializeStart)
 			return err
 		}
 		ordered, cleanupDeltas, err := buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames, flushUnit.rootRuns, flushUnit.rootPolicies, rootOverlays)
 		if err != nil {
+			materializeElapsed = time.Since(materializeStart)
 			return err
 		}
+		materializeElapsed = time.Since(materializeStart)
+		publishStart := time.Now()
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays, rootIDs)
 		})
+		publishElapsed = time.Since(publishStart)
 		cleanupDeltas()
 	} else {
+		materializeStart := time.Now()
 		ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(rootNames, flushUnit.rootRuns, flushUnit.rootBaseIDs, flushUnit.rootPolicies)
 		if err != nil {
+			materializeElapsed = time.Since(materializeStart)
 			return err
 		}
+		materializeElapsed = time.Since(materializeStart)
+		publishStart := time.Now()
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 		})
+		publishElapsed = time.Since(publishStart)
 		cleanupDeltas()
 	}
 	if err != nil {
