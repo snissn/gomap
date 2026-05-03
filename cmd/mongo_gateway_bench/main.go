@@ -417,18 +417,16 @@ func run(parent context.Context, args []string) error {
 
 func parseConfig(args []string) (config, error) {
 	cfg := config{
-		TreeDBProfile:                          treedb.ProfileWALOnFast,
-		TreeDBDocumentFormat:                   collections.DocumentFormatTemplateV1,
-		TreeDBDataRootStorage:                  collections.RootStorageCompressed,
-		TreeDBIndexStateRootStorage:            collections.RootStorageCompressed,
-		TreeDBIndexRootStorage:                 collections.RootStorageCompressed,
-		TreeDBBufferedIndexedWriteMaxDocuments: collections.DefaultIndexedWriteMemtableMaxDocuments,
-		TreeDBBufferedIndexedWriteMaxRootRuns:  collections.DefaultIndexedWriteMemtableMaxRootRuns,
-		TreeDBMaintenance:                      treeDBMaintenanceFull,
-		ClientMode:                             clientModeDriver,
-		InsertProducers:                        1,
-		ProfileBlockRate:                       1,
-		ProfileMutexFraction:                   5,
+		TreeDBProfile:               treedb.ProfileWALOnFast,
+		TreeDBDocumentFormat:        collections.DocumentFormatTemplateV1,
+		TreeDBDataRootStorage:       collections.RootStorageCompressed,
+		TreeDBIndexStateRootStorage: collections.RootStorageCompressed,
+		TreeDBIndexRootStorage:      collections.RootStorageCompressed,
+		TreeDBMaintenance:           treeDBMaintenanceFull,
+		ClientMode:                  clientModeDriver,
+		InsertProducers:             1,
+		ProfileBlockRate:            1,
+		ProfileMutexFraction:        5,
 	}
 	fs := flag.NewFlagSet("mongo_gateway_bench", flag.ContinueOnError)
 	var flagOutput bytes.Buffer

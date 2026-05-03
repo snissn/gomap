@@ -539,14 +539,14 @@ func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
 	if cfg.TreeDBMaintenance != treeDBMaintenanceFull {
 		t.Fatalf("TreeDBMaintenance=%q want %q", cfg.TreeDBMaintenance, treeDBMaintenanceFull)
 	}
-	if cfg.TreeDBBufferedIndexedWriteMaxDocuments != collections.DefaultIndexedWriteMemtableMaxDocuments {
-		t.Fatalf("TreeDBBufferedIndexedWriteMaxDocuments=%d want %d", cfg.TreeDBBufferedIndexedWriteMaxDocuments, collections.DefaultIndexedWriteMemtableMaxDocuments)
+	if cfg.TreeDBBufferedIndexedWriteMaxDocuments != 0 {
+		t.Fatalf("TreeDBBufferedIndexedWriteMaxDocuments=%d want 0", cfg.TreeDBBufferedIndexedWriteMaxDocuments)
 	}
 	if cfg.TreeDBBufferedIndexedWriteMaxBytes != 0 {
 		t.Fatalf("TreeDBBufferedIndexedWriteMaxBytes=%d want 0", cfg.TreeDBBufferedIndexedWriteMaxBytes)
 	}
-	if cfg.TreeDBBufferedIndexedWriteMaxRootRuns != collections.DefaultIndexedWriteMemtableMaxRootRuns {
-		t.Fatalf("TreeDBBufferedIndexedWriteMaxRootRuns=%d want %d", cfg.TreeDBBufferedIndexedWriteMaxRootRuns, collections.DefaultIndexedWriteMemtableMaxRootRuns)
+	if cfg.TreeDBBufferedIndexedWriteMaxRootRuns != 0 {
+		t.Fatalf("TreeDBBufferedIndexedWriteMaxRootRuns=%d want 0", cfg.TreeDBBufferedIndexedWriteMaxRootRuns)
 	}
 	if cfg.TreeDBBufferedIndexedAsyncFlush {
 		t.Fatal("TreeDBBufferedIndexedAsyncFlush=true want false by default")

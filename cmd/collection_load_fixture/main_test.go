@@ -28,11 +28,11 @@ func TestParseConfigDefaultsToInspectableTwoIndexTemplateFixture(t *testing.T) {
 	if !cfg.BufferedIndexedWrites {
 		t.Fatal("expected indexed write memtables enabled by default")
 	}
-	if cfg.BufferedIndexedWriteMaxDocs != collections.DefaultIndexedWriteMemtableMaxDocuments {
-		t.Fatalf("buffered indexed max docs=%d want %d", cfg.BufferedIndexedWriteMaxDocs, collections.DefaultIndexedWriteMemtableMaxDocuments)
+	if cfg.BufferedIndexedWriteMaxDocs != 0 {
+		t.Fatalf("buffered indexed max docs=%d want 0", cfg.BufferedIndexedWriteMaxDocs)
 	}
-	if cfg.BufferedIndexedWriteMaxRuns != collections.DefaultIndexedWriteMemtableMaxRootRuns {
-		t.Fatalf("buffered indexed max root runs=%d want %d", cfg.BufferedIndexedWriteMaxRuns, collections.DefaultIndexedWriteMemtableMaxRootRuns)
+	if cfg.BufferedIndexedWriteMaxRuns != 0 {
+		t.Fatalf("buffered indexed max root runs=%d want 0", cfg.BufferedIndexedWriteMaxRuns)
 	}
 	if !cfg.DataOuterLeavesInValueLog {
 		t.Fatal("expected data outer leaves in value log by default")
