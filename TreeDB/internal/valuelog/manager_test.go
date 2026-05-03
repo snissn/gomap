@@ -341,6 +341,37 @@ func TestManagerCurrentWritableReadBarrierUsedForUnverifiedRecord(t *testing.T) 
 	}
 }
 
+func TestFileEnsureMmapRecordInitialRangeRequiresHeaderForSmallHint(t *testing.T) {
+	tmp, err := os.CreateTemp(t.TempDir(), "segment-*.log")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	if _, err := tmp.Write(make([]byte, HeaderSize-1)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := tmp.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	file, err := os.Open(tmp.Name())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = file.Close() }()
+
+	data := make([]byte, HeaderSize-1)
+	f := &File{ID: 9, File: file}
+	f.mmapData.Store(data)
+	f.noteVerifiedFileSize(int64(len(data)))
+	ptr := page.ValuePtr{
+		Offset: valueLogRecordCRCPrefixBytes,
+		Length: 1,
+	}
+
+	if _, ok, _ := f.ensureMmapRecordInitialRange(data, ptr, int64(ptr.Offset-4)); ok {
+		t.Fatalf("small nonzero hint should not make a partial header readable")
+	}
+}
+
 func testCurrentWritableRecordPtr(payloadLen uint32) page.ValuePtr {
 	return page.ValuePtr{
 		Offset: valueLogRecordCRCPrefixBytes,

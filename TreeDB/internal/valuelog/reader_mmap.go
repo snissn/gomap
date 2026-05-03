@@ -35,7 +35,11 @@ const readViaMmapViewPrefixCacheEnabled = false
 
 func (f *File) ensureMmapRecordInitialRange(data []byte, ptr page.ValuePtr, start int64) ([]byte, bool, bool) {
 	if hint := page.ValuePtrRecordLength(ptr); hint > 0 {
-		if refreshed, ok := f.ensureMmapRangeReadable(data, start, int64(ptr.Offset)+int64(hint)); ok {
+		end := int64(ptr.Offset) + int64(hint)
+		if headerEnd := start + HeaderSize; end < headerEnd {
+			end = headerEnd
+		}
+		if refreshed, ok := f.ensureMmapRangeReadable(data, start, end); ok {
 			return refreshed, true, true
 		}
 		return nil, false, false
