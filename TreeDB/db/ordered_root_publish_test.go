@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1354,6 +1355,13 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticRebas
 	aBuilderEntered := make(chan struct{})
 	releaseABuilder := make(chan struct{})
 	aDone := make(chan publishResult, 1)
+	var releaseABuilderOnce sync.Once
+	releaseA := func() {
+		releaseABuilderOnce.Do(func() {
+			close(releaseABuilder)
+		})
+	}
+	t.Cleanup(releaseA)
 	var aBuilderCalls atomic.Int32
 	go func() {
 		systemRoot, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
@@ -1398,7 +1406,7 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticRebas
 		t.Fatalf("systemRootB=%d rootIDsB=%v, want non-zero roots", systemRootB, rootIDsB)
 	}
 
-	close(releaseABuilder)
+	releaseA()
 	var resultA publishResult
 	select {
 	case resultA = <-aDone:

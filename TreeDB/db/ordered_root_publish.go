@@ -1442,8 +1442,10 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		if freeErr := rootTracker.FreeAll(); freeErr != nil && err == nil {
 			err = freeErr
 		}
-		if freeErr := systemTracker.FreeAll(); freeErr != nil && err == nil {
-			err = freeErr
+		if systemTracker != nil {
+			if freeErr := systemTracker.FreeAll(); freeErr != nil && err == nil {
+				err = freeErr
+			}
 		}
 	}
 	defer func() {
