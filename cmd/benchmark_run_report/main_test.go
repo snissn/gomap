@@ -99,6 +99,28 @@ func TestReadMatrixPreservesLargePhysicalBytes(t *testing.T) {
 	}
 }
 
+func TestLoadMongoLoadModesBestEffort(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "matrix.tsv"), "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_driver\t100\t0\traw/good.json\t2000\n"+
+		"mongo\tmongo_driver\t100\t0\traw/missing.json\t5000\n")
+	writeFile(t, filepath.Join(root, "raw", "good.json"), `{"target":"treedb","documents":100,"secondary_indexes":0,"phases":[{"name":"load_insert_many","ops_per_sec":1000}]}`)
+
+	rows, warnings, err := loadMongoLoadModes(root)
+	if err != nil {
+		t.Fatalf("loadMongoLoadModes failed: %v", err)
+	}
+	if got, want := len(rows), 1; got != want {
+		t.Fatalf("rows = %d, want %d", got, want)
+	}
+	if got, want := len(warnings), 1; got != want {
+		t.Fatalf("warnings = %d, want %d", got, want)
+	}
+	if !strings.Contains(warnings[0], "raw/missing.json") {
+		t.Fatalf("warning %q does not name missing raw JSON", warnings[0])
+	}
+}
+
 func TestParseConfigRejectsInvalidRunRoot(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing")
 	if _, err := parseConfig([]string{"-run-root", missing}); err == nil {

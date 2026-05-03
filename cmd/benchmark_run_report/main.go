@@ -238,8 +238,9 @@ func loadReportData(cfg config) (reportData, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		data.Warnings = append(data.Warnings, err.Error())
 	}
-	if rows, err := loadMongoLoadModes(filepath.Join(cfg.RunRoot, "mongo_client_mode_load_matrix_1m")); err == nil {
+	if rows, warnings, err := loadMongoLoadModes(filepath.Join(cfg.RunRoot, "mongo_client_mode_load_matrix_1m")); err == nil {
 		data.MongoLoadModes = rows
+		data.Warnings = append(data.Warnings, warnings...)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		data.Warnings = append(data.Warnings, err.Error())
 	}
@@ -563,13 +564,14 @@ func readMongoSummary(path string) ([]mongoSummaryRow, error) {
 	return rows, nil
 }
 
-func loadMongoLoadModes(dir string) ([]loadModeRow, error) {
+func loadMongoLoadModes(dir string) ([]loadModeRow, []string, error) {
 	matrixPath := filepath.Join(dir, "matrix.tsv")
 	rows, err := readMatrix(matrixPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var out []loadModeRow
+	var warnings []string
 	for _, row := range rows {
 		rawPath := row.RawJSON
 		if !filepath.IsAbs(rawPath) {
@@ -577,7 +579,8 @@ func loadMongoLoadModes(dir string) ([]loadModeRow, error) {
 		}
 		result, err := readBenchmarkResult(rawPath)
 		if err != nil {
-			return nil, err
+			warnings = append(warnings, fmt.Sprintf("%s: %v", rawPath, err))
+			continue
 		}
 		phase := findPhase(result.Phases, "load_insert_many")
 		if phase.Name == "" {
@@ -601,7 +604,7 @@ func loadMongoLoadModes(dir string) ([]loadModeRow, error) {
 		}
 		return out[i].Config < out[j].Config
 	})
-	return out, nil
+	return out, warnings, nil
 }
 
 func loadMongoScaling(dir string) (map[int][]mongoSummaryRow, []string) {
@@ -1202,7 +1205,7 @@ func writeMongoSummaryTable(b *strings.Builder, rows []mongoSummaryRow) {
 			row.Source,
 		})
 	}
-	writeTable(b, []string{"docs", "indexes", "range index", "range mode", "TreeDB config", "Mongo config", "phase", "TreeDB ops/s", "Mongo ops/s", "ratio", "TreeDB p95 us", "Mongo p95 us", "TreeDB disk snapshot", "TreeDB logical bytes", "TreeDB physical", "Mongo dbStats total", "Mongo physical", "source"}, body, numericColumns(0, 2, 7, 8, 9, 10, 11, 13, 14, 15, 16))
+	writeTable(b, []string{"docs", "indexes", "range index", "range mode", "TreeDB config", "Mongo config", "phase", "TreeDB ops/s", "Mongo ops/s", "ratio", "TreeDB p95 us", "Mongo p95 us", "TreeDB disk snapshot", "TreeDB logical bytes", "TreeDB physical", "Mongo dbStats total", "Mongo physical", "source"}, body, numericColumns(0, 1, 7, 8, 9, 10, 11, 13, 14, 15, 16))
 }
 
 func sortedMongoIndexes(rows []mongoSummaryRow) []int {

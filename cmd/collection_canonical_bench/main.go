@@ -1500,12 +1500,13 @@ func canonicalConfigName(engine, format, shape string, indexes int) string {
 func primaryFormat(canon *canonicalRun) string {
 	if canon != nil {
 		for _, f := range canon.Config.Formats {
-			if f == "template-v1" {
+			format := strings.ToLower(canonicalFormat(f))
+			if format == "template-v1" {
 				return "template-v1"
 			}
 		}
 		if len(canon.Config.Formats) > 0 {
-			return canon.Config.Formats[0]
+			return strings.ToLower(canonicalFormat(canon.Config.Formats[0]))
 		}
 	}
 	return "template-v1"

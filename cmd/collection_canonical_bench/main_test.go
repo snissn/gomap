@@ -311,6 +311,19 @@ func TestExecutiveSummaryUsesConfiguredIndexCountLabel(t *testing.T) {
 	}
 }
 
+func TestPrimaryFormatNormalizesConfiguredFormats(t *testing.T) {
+	canon := knownExampleRun()
+	canon.Config.Formats = []string{" JSON ", "template_v1"}
+	if got, want := primaryFormat(canon), "template-v1"; got != want {
+		t.Fatalf("primaryFormat = %q, want %q", got, want)
+	}
+
+	canon.Config.Formats = []string{" JSON "}
+	if got, want := primaryFormat(canon), "json"; got != want {
+		t.Fatalf("primaryFormat = %q, want %q", got, want)
+	}
+}
+
 func TestGuardrailRespectsSkipSQLite(t *testing.T) {
 	canon := knownExampleRun()
 	canon.Config.SkipSQLite = true
