@@ -582,12 +582,27 @@ type collectionCatalog struct {
 	meta               CollectionMeta
 	roots              map[string]uint64
 	rootOverlays       map[string][]uint64
+	rootOverlayFilters map[string]map[uint64]collectionRootOverlayFilter
 	primaryRootName    string
 	templateRootName   string
 	indexStateRootName string
 	indexRuntimes      []indexRuntime
 	indexRuntimesErr   error
 }
+
+type collectionRootOverlayFilter struct {
+	words []uint64
+	count uint32
+}
+
+const (
+	// Overlay filters are handle-local metadata. Persisted overlay descriptors
+	// keep only root IDs, so reopened handles fall back to safe maybe-present
+	// probing instead of growing system-root descriptors.
+	collectionRootOverlayFilterBits    = 2 << 20
+	collectionRootOverlayFilterWords   = collectionRootOverlayFilterBits / 64
+	maxCollectionRootOverlayFilterKeys = 512 << 10
+)
 
 type createIndexBackfillPlan struct {
 	rootNames   []string
@@ -612,20 +627,21 @@ type indexedFlushUnit struct {
 }
 
 type indexedFlushPublishWork struct {
-	pin            *backenddb.Snapshot
-	meta           CollectionMeta
-	catalog        *collectionCatalog
-	baseSystemRoot uint64
-	baseCommitSeq  uint64
-	units          []indexedFlushUnit
-	flushUnit      indexedFlushUnit
-	rootNames      []string
-	rootBaseIDs    map[string]uint64
-	rootOverlays   map[string][]uint64
-	docCount       int
-	byteCount      int64
-	rootRunCount   int
-	rootCount      int
+	pin                *backenddb.Snapshot
+	meta               CollectionMeta
+	catalog            *collectionCatalog
+	baseSystemRoot     uint64
+	baseCommitSeq      uint64
+	units              []indexedFlushUnit
+	flushUnit          indexedFlushUnit
+	rootNames          []string
+	rootBaseIDs        map[string]uint64
+	rootOverlays       map[string][]uint64
+	rootOverlayFilters map[string]collectionRootOverlayFilter
+	docCount           int
+	byteCount          int64
+	rootRunCount       int
+	rootCount          int
 }
 
 type bufferedIndexedCheckpoint struct {
@@ -4547,6 +4563,11 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		}
 	}()
 	if collectionMetaUsesIndexedOverlayRoots(work.meta) {
+		rootOverlayFilters, err := buildCollectionRootOverlayFilters(work.rootNames, work.flushUnit.rootRuns, work.rootOverlays, work.catalog.rootOverlayFilters)
+		if err != nil {
+			return c.completePreparedIndexedFlush(work, 0, nil, err, 0)
+		}
+		work.rootOverlayFilters = rootOverlayFilters
 		if !bufferedRootOverlayDeltaBatchEligible(work.rootNames, work.rootOverlays) {
 			ordered, cleanupIters, err := buildBufferedRootOverlayDeltaPublishInputs(work.rootNames, work.flushUnit.rootRuns, work.flushUnit.rootPolicies, work.rootOverlays)
 			if err != nil {
@@ -4772,6 +4793,7 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	nextCatalog := cloneCatalogWithRootUpdates(baseCatalog, work.meta, work.rootNames, rootIDs)
 	if overlayPublish {
 		nextCatalog = cloneCatalogWithRootOverlays(baseCatalog, work.meta, work.rootNames, rootIDs)
+		nextCatalog = cloneCatalogWithRootOverlayFilters(nextCatalog, work.rootNames, rootIDs, work.rootOverlayFilters)
 	}
 	oldPublishing, owned := removeIndexedPublishingWorkUnitsLocked(domain, work.units)
 	if !owned {
@@ -4875,7 +4897,12 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	}
 	var newSystemRoot uint64
 	var rootIDs []uint64
+	var rootOverlayFilters map[string]collectionRootOverlayFilter
 	if collectionMetaUsesIndexedOverlayRoots(meta) {
+		rootOverlayFilters, err = buildCollectionRootOverlayFilters(rootNames, flushUnit.rootRuns, rootOverlays, catalog.rootOverlayFilters)
+		if err != nil {
+			return err
+		}
 		if bufferedRootOverlayDeltaBatchEligible(rootNames, rootOverlays) {
 			ordered, cleanupDeltas, err := buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames, flushUnit.rootRuns, flushUnit.rootPolicies, rootOverlays)
 			if err != nil {
@@ -4914,6 +4941,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	nextCatalog := cloneCatalogWithRootUpdates(domain.catalog, meta, rootNames, rootIDs)
 	if collectionMetaUsesIndexedOverlayRoots(meta) {
 		nextCatalog = cloneCatalogWithRootOverlays(domain.catalog, meta, rootNames, rootIDs)
+		nextCatalog = cloneCatalogWithRootOverlayFilters(nextCatalog, rootNames, rootIDs, rootOverlayFilters)
 	}
 	oldUnits := domain.indexedFlushUnits
 	oldRuns := domain.rootRuns
@@ -7642,6 +7670,33 @@ func readUpdateBatchCurrentDocument(primaryReader *backenddb.SnapshotRootReader,
 	return updateBatchCurrentDocument{value: value, found: true}, nil
 }
 
+func readUpdateBatchCurrentDocumentAtCatalogRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, primaryRootName string, primaryReader *backenddb.SnapshotRootReader, primaryReaderOK bool, itemIndex int, documentID []byte, buffered updateBatchBufferedRead, dst []byte) (updateBatchCurrentDocument, error) {
+	if buffered.enabled {
+		if itemIndex >= 0 && itemIndex < len(buffered.primaryEntries) {
+			entry := buffered.primaryEntries[itemIndex]
+			if entry.found {
+				if entry.flags&node.FlagTombstone != 0 {
+					return updateBatchCurrentDocument{buffered: true}, nil
+				}
+				return updateBatchCurrentDocument{value: entry.value, buffered: true, found: true}, nil
+			}
+		}
+	}
+	if catalog == nil || len(catalog.overlayRootIDs(primaryRootName)) == 0 {
+		return readUpdateBatchCurrentDocument(primaryReader, primaryReaderOK, -1, documentID, updateBatchBufferedRead{}, dst)
+	}
+	if catalog.rootID(primaryRootName) == 0 || catalog.anyOverlayRootMayContainKey(primaryRootName, documentID) {
+		value, overlayFound, documentFound, err := collectionGetAppendAtCatalogOverlayRoot(snap, catalog, primaryRootName, documentID, dst)
+		if err != nil {
+			return updateBatchCurrentDocument{}, err
+		}
+		if overlayFound {
+			return updateBatchCurrentDocument{value: value, found: documentFound}, nil
+		}
+	}
+	return readUpdateBatchCurrentDocument(primaryReader, primaryReaderOK, -1, documentID, updateBatchBufferedRead{}, dst)
+}
+
 const updateBatchBufferedPrimaryDirectProbeLimit = 1024
 
 func snapshotUpdateBatchBufferedPrimaryEntries(runs []memtable.Table, items []UpdateBatchItem) ([]updateBatchBufferedEntry, *updateBatchBufferedEntryBuffer, error) {
@@ -7923,15 +7978,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	var currentScratch []byte
 	for i, item := range items {
 		phaseStart := updateBatchStatsNow(detailedStats)
-		current, err := readUpdateBatchCurrentDocument(&primaryReader, primaryReaderOK, i, item.DocumentID, bufferedRead, currentScratch[:0])
-		if err == nil && !current.buffered && len(catalog.overlayRootIDs(primaryRootName)) != 0 {
-			value, overlayFound, documentFound, overlayErr := collectionGetAppendAtCatalogOverlayRoot(snap, catalog, primaryRootName, item.DocumentID, currentScratch[:0])
-			if overlayErr != nil {
-				err = overlayErr
-			} else if overlayFound {
-				current = updateBatchCurrentDocument{value: value, found: documentFound}
-			}
-		}
+		current, err := readUpdateBatchCurrentDocumentAtCatalogRoot(snap, catalog, primaryRootName, &primaryReader, primaryReaderOK, i, item.DocumentID, bufferedRead, currentScratch[:0])
 		stats.CurrentRead += updateBatchStatsSince(detailedStats, phaseStart)
 		if err != nil {
 			_ = snap.Close()
@@ -8944,11 +8991,13 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 func cloneCatalogWithRootUpdates(base *collectionCatalog, meta CollectionMeta, rootNames []string, rootIDs []uint64) *collectionCatalog {
 	roots := make(map[string]uint64)
 	var rootOverlays map[string][]uint64
+	var rootOverlayFilters map[string]map[uint64]collectionRootOverlayFilter
 	if base != nil {
 		for name, rootID := range base.roots {
 			roots[name] = rootID
 		}
 		rootOverlays = cloneRootOverlayMap(base.rootOverlays)
+		rootOverlayFilters = cloneRootOverlayFilterMap(base.rootOverlayFilters)
 	}
 	for i, name := range rootNames {
 		if i < len(rootIDs) {
@@ -8956,19 +9005,24 @@ func cloneCatalogWithRootUpdates(base *collectionCatalog, meta CollectionMeta, r
 			if len(rootOverlays) != 0 {
 				delete(rootOverlays, name)
 			}
+			if len(rootOverlayFilters) != 0 {
+				delete(rootOverlayFilters, name)
+			}
 		}
 	}
-	return newCollectionCatalogWithOverlays(copyCollectionMeta(meta), roots, rootOverlays)
+	return newCollectionCatalogWithOverlayMetadata(copyCollectionMeta(meta), roots, rootOverlays, rootOverlayFilters)
 }
 
 func cloneCatalogWithRootOverlays(base *collectionCatalog, meta CollectionMeta, rootNames []string, rootIDs []uint64) *collectionCatalog {
 	roots := make(map[string]uint64)
 	var rootOverlays map[string][]uint64
+	var rootOverlayFilters map[string]map[uint64]collectionRootOverlayFilter
 	if base != nil {
 		for name, rootID := range base.roots {
 			roots[name] = rootID
 		}
 		rootOverlays = cloneRootOverlayMap(base.rootOverlays)
+		rootOverlayFilters = cloneRootOverlayFilterMap(base.rootOverlayFilters)
 	}
 	if rootOverlays == nil {
 		rootOverlays = make(map[string][]uint64)
@@ -8978,9 +9032,47 @@ func cloneCatalogWithRootOverlays(base *collectionCatalog, meta CollectionMeta, 
 			continue
 		}
 		existing := rootOverlays[name]
-		rootOverlays[name] = overlayDescriptorRootsAfterDelta(existing, rootIDs[i])
+		overlays := overlayDescriptorRootsAfterDelta(existing, rootIDs[i])
+		rootOverlays[name] = overlays
+		if len(rootOverlayFilters) != 0 {
+			rootOverlayFilters[name] = pruneRootOverlayFilters(rootOverlayFilters[name], overlays)
+			if len(rootOverlayFilters[name]) == 0 {
+				delete(rootOverlayFilters, name)
+			}
+		}
 	}
-	return newCollectionCatalogWithOverlays(copyCollectionMeta(meta), roots, rootOverlays)
+	return newCollectionCatalogWithOverlayMetadata(copyCollectionMeta(meta), roots, rootOverlays, rootOverlayFilters)
+}
+
+func cloneCatalogWithRootOverlayFilters(base *collectionCatalog, rootNames []string, rootIDs []uint64, filters map[string]collectionRootOverlayFilter) *collectionCatalog {
+	if base == nil || len(filters) == 0 {
+		return base
+	}
+	roots := make(map[string]uint64, len(base.roots))
+	for name, rootID := range base.roots {
+		roots[name] = rootID
+	}
+	rootOverlays := cloneRootOverlayMap(base.rootOverlays)
+	rootOverlayFilters := cloneRootOverlayFilterMap(base.rootOverlayFilters)
+	if rootOverlayFilters == nil {
+		rootOverlayFilters = make(map[string]map[uint64]collectionRootOverlayFilter)
+	}
+	for i, rootName := range rootNames {
+		if i >= len(rootIDs) || rootIDs[i] == 0 {
+			continue
+		}
+		filter, ok := filters[rootName]
+		if !ok {
+			continue
+		}
+		byRoot := rootOverlayFilters[rootName]
+		if byRoot == nil {
+			byRoot = make(map[uint64]collectionRootOverlayFilter)
+			rootOverlayFilters[rootName] = byRoot
+		}
+		byRoot[rootIDs[i]] = filter.clone()
+	}
+	return newCollectionCatalogWithOverlayMetadata(copyCollectionMeta(base.meta), roots, rootOverlays, rootOverlayFilters)
 }
 
 func newCollectionCatalog(meta CollectionMeta, roots map[string]uint64) *collectionCatalog {
@@ -8988,10 +9080,15 @@ func newCollectionCatalog(meta CollectionMeta, roots map[string]uint64) *collect
 }
 
 func newCollectionCatalogWithOverlays(meta CollectionMeta, roots map[string]uint64, rootOverlays map[string][]uint64) *collectionCatalog {
+	return newCollectionCatalogWithOverlayMetadata(meta, roots, rootOverlays, nil)
+}
+
+func newCollectionCatalogWithOverlayMetadata(meta CollectionMeta, roots map[string]uint64, rootOverlays map[string][]uint64, rootOverlayFilters map[string]map[uint64]collectionRootOverlayFilter) *collectionCatalog {
 	catalog := &collectionCatalog{
 		meta:               meta,
 		roots:              roots,
 		rootOverlays:       cloneRootOverlayMap(rootOverlays),
+		rootOverlayFilters: cloneRootOverlayFilterMap(rootOverlayFilters),
 		primaryRootName:    collectionPrimaryRootName(meta.Name),
 		templateRootName:   collectionTemplateRootName(meta.Name),
 		indexStateRootName: collectionIndexStateRootName(meta.Name),
@@ -9015,6 +9112,47 @@ func cloneRootOverlayMap(in map[string][]uint64) map[string][]uint64 {
 			continue
 		}
 		out[name] = append([]uint64(nil), roots...)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func cloneRootOverlayFilterMap(in map[string]map[uint64]collectionRootOverlayFilter) map[string]map[uint64]collectionRootOverlayFilter {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]map[uint64]collectionRootOverlayFilter, len(in))
+	for rootName, byRoot := range in {
+		if len(byRoot) == 0 {
+			continue
+		}
+		outByRoot := make(map[uint64]collectionRootOverlayFilter, len(byRoot))
+		for rootID, filter := range byRoot {
+			outByRoot[rootID] = filter.clone()
+		}
+		if len(outByRoot) != 0 {
+			out[rootName] = outByRoot
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func pruneRootOverlayFilters(filters map[uint64]collectionRootOverlayFilter, rootIDs []uint64) map[uint64]collectionRootOverlayFilter {
+	if len(filters) == 0 || len(rootIDs) == 0 {
+		return nil
+	}
+	out := make(map[uint64]collectionRootOverlayFilter, len(rootIDs))
+	for _, rootID := range rootIDs {
+		filter, ok := filters[rootID]
+		if !ok {
+			continue
+		}
+		out[rootID] = filter.clone()
 	}
 	if len(out) == 0 {
 		return nil
@@ -10639,6 +10777,33 @@ func (c *collectionCatalog) overlayRootIDs(rootName string) []uint64 {
 	return c.rootOverlays[rootName]
 }
 
+func (c *collectionCatalog) overlayRootMayContainKey(rootName string, rootID uint64, key []byte) bool {
+	if c == nil || rootID == 0 || len(c.rootOverlayFilters) == 0 {
+		return true
+	}
+	byRoot := c.rootOverlayFilters[rootName]
+	if byRoot == nil {
+		return true
+	}
+	filter, ok := byRoot[rootID]
+	if !ok {
+		return true
+	}
+	return filter.mayContainKey(key)
+}
+
+func (c *collectionCatalog) anyOverlayRootMayContainKey(rootName string, key []byte) bool {
+	if c == nil {
+		return false
+	}
+	for _, rootID := range c.overlayRootIDs(rootName) {
+		if c.overlayRootMayContainKey(rootName, rootID, key) {
+			return true
+		}
+	}
+	return false
+}
+
 func collectionRootStoragePolicy(meta CollectionMeta, rootName string) (backenddb.OrderedRootStoragePolicy, error) {
 	switch rootName {
 	case collectionPrimaryRootName(meta.Name), collectionTemplateRootName(meta.Name):
@@ -10688,7 +10853,11 @@ func collectionGetEntryAtCatalogRoot(snap *backenddb.Snapshot, catalog *collecti
 		entry, err := snap.GetEntryAtRoot(rootID, key)
 		return entry, rootID, err
 	}
+	useOverlayFilters := catalog.rootID(rootName) != 0
 	for _, rootID := range catalog.rootStack(rootName) {
+		if useOverlayFilters && !catalog.overlayRootMayContainKey(rootName, rootID, key) {
+			continue
+		}
 		entry, err := snap.GetEntryAtRoot(rootID, key)
 		if errors.Is(err, tree.ErrKeyNotFound) {
 			continue
@@ -10743,8 +10912,12 @@ func collectionGetAppendAtCatalogOverlayRoot(snap *backenddb.Snapshot, catalog *
 	if snap == nil {
 		return dst[:0], false, false, backenddb.ErrClosed
 	}
+	useOverlayFilters := catalog.rootID(rootName) != 0
 	for _, rootID := range catalog.overlayRootIDs(rootName) {
 		if rootID == 0 {
+			continue
+		}
+		if useOverlayFilters && !catalog.overlayRootMayContainKey(rootName, rootID, key) {
 			continue
 		}
 		entry, err := snap.GetEntryAtRoot(rootID, key)
@@ -10828,7 +11001,8 @@ func (c *collectionCatalog) copy() *collectionCatalog {
 		roots[name] = rootID
 	}
 	rootOverlays := cloneRootOverlayMap(c.rootOverlays)
-	return newCollectionCatalogWithOverlays(copyCollectionMeta(c.meta), roots, rootOverlays)
+	rootOverlayFilters := cloneRootOverlayFilterMap(c.rootOverlayFilters)
+	return newCollectionCatalogWithOverlayMetadata(copyCollectionMeta(c.meta), roots, rootOverlays, rootOverlayFilters)
 }
 
 func getSystemValue(snap *backenddb.Snapshot, key string) ([]byte, bool, error) {
@@ -11363,6 +11537,128 @@ func decodeRootIDList(raw []byte) ([]uint64, error) {
 		out[i] = binary.BigEndian.Uint64(raw[i*8 : (i+1)*8])
 	}
 	return out, nil
+}
+
+func buildCollectionRootOverlayFilters(rootNames []string, rootRuns map[string][]memtable.Table, rootOverlays map[string][]uint64, existingFilters map[string]map[uint64]collectionRootOverlayFilter) (map[string]collectionRootOverlayFilter, error) {
+	if len(rootNames) == 0 || len(rootRuns) == 0 {
+		return nil, nil
+	}
+	filters := make(map[string]collectionRootOverlayFilter, len(rootNames))
+	for _, rootName := range rootNames {
+		// The current read bottleneck is the primary document root; secondary
+		// overlay probes are left on the existing safe path until their cost is
+		// proven separately.
+		if !strings.HasSuffix(rootName, "/primary") {
+			continue
+		}
+		baseRoot := overlayDeltaBaseRoot(rootOverlays[rootName])
+		var baseFilter collectionRootOverlayFilter
+		if baseRoot != 0 {
+			var ok bool
+			baseFilter, ok = existingFilters[rootName][baseRoot]
+			if !ok {
+				continue
+			}
+		}
+		filter, err := buildCollectionRootOverlayFilter(rootRuns[rootName])
+		if err != nil {
+			return nil, err
+		}
+		if baseRoot != 0 {
+			filter = unionCollectionRootOverlayFilters(baseFilter, filter)
+		}
+		if !filter.empty() && filter.count <= maxCollectionRootOverlayFilterKeys {
+			filters[rootName] = filter
+		}
+	}
+	return filters, nil
+}
+
+func buildCollectionRootOverlayFilter(runs []memtable.Table) (collectionRootOverlayFilter, error) {
+	if len(runs) == 0 {
+		return collectionRootOverlayFilter{}, nil
+	}
+	it := newBufferedRootRunsIteratorWithDeleted(runs, nil, nil, true)
+	defer func() { _ = it.Close() }()
+	var filter collectionRootOverlayFilter
+	for it.Valid() {
+		filter.addKey(it.UnsafeKey())
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return collectionRootOverlayFilter{}, err
+	}
+	return filter, nil
+}
+
+func unionCollectionRootOverlayFilters(left, right collectionRootOverlayFilter) collectionRootOverlayFilter {
+	if left.empty() {
+		return right.clone()
+	}
+	if right.empty() {
+		return left.clone()
+	}
+	out := left.clone()
+	for i := range out.words {
+		out.words[i] |= right.words[i]
+	}
+	out.count = saturatingAddUint32(out.count, right.count)
+	return out
+}
+
+func (f collectionRootOverlayFilter) mayContainKey(key []byte) bool {
+	if f.empty() {
+		return false
+	}
+	hash := xxhash.Sum64(key)
+	for i := uint64(0); i < 4; i++ {
+		bit := collectionRootOverlayFilterBit(hash, i)
+		if f.words[bit>>6]&(uint64(1)<<(bit&63)) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func (f *collectionRootOverlayFilter) addKey(key []byte) {
+	if f.words == nil {
+		f.words = make([]uint64, collectionRootOverlayFilterWords)
+	}
+	hash := xxhash.Sum64(key)
+	for i := uint64(0); i < 4; i++ {
+		bit := collectionRootOverlayFilterBit(hash, i)
+		f.words[bit>>6] |= uint64(1) << (bit & 63)
+	}
+	if f.count < ^uint32(0) {
+		f.count++
+	}
+}
+
+func (f collectionRootOverlayFilter) clone() collectionRootOverlayFilter {
+	if len(f.words) == 0 {
+		return collectionRootOverlayFilter{}
+	}
+	return collectionRootOverlayFilter{words: append([]uint64(nil), f.words...), count: f.count}
+}
+
+func (f collectionRootOverlayFilter) empty() bool {
+	return len(f.words) == 0
+}
+
+func collectionRootOverlayFilterBit(hash, ordinal uint64) uint64 {
+	mixed := hash + ordinal*0x9e3779b97f4a7c15
+	mixed ^= mixed >> 33
+	mixed *= 0xff51afd7ed558ccd
+	mixed ^= mixed >> 33
+	return mixed & (collectionRootOverlayFilterBits - 1)
+}
+
+func saturatingAddUint32(left, right uint32) uint32 {
+	sum := uint64(left) + uint64(right)
+	if sum > uint64(^uint32(0)) {
+		return ^uint32(0)
+	}
+	return uint32(sum)
 }
 
 func ValidateCollectionName(name string) error {
