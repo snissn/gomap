@@ -99,6 +99,19 @@ func TestReadMatrixPreservesLargePhysicalBytes(t *testing.T) {
 	}
 }
 
+func TestParseConfigRejectsInvalidRunRoot(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	if _, err := parseConfig([]string{"-run-root", missing}); err == nil {
+		t.Fatal("parseConfig accepted a missing run root")
+	}
+
+	file := filepath.Join(t.TempDir(), "not-a-dir")
+	writeFile(t, file, "not a directory")
+	if _, err := parseConfig([]string{"-run-root", file}); err == nil {
+		t.Fatal("parseConfig accepted a file as run root")
+	}
+}
+
 const mongoSummaryHeader = "documents\tsecondary_indexes\trange_index\trange_mode\ttreedb_config\tmongo_config\tphase\ttreedb_ops_sec\ttreedb_sampled_ops_sec\ttreedb_sampled_ns_per_op\tmongo_ops_sec\tmongo_sampled_ops_sec\tmongo_sampled_ns_per_op\ttreedb_to_mongo_ops_ratio\ttreedb_to_mongo_sampled_ops_ratio\ttreedb_p50_us\tmongo_p50_us\ttreedb_p95_us\tmongo_p95_us\ttreedb_p99_us\tmongo_p99_us\ttreedb_disk_snapshot\ttreedb_disk_bytes\ttreedb_physical_bytes\tmongo_dbstats_data_size_bytes\tmongo_dbstats_total_size_bytes\tmongo_physical_bytes\ttreedb_to_mongo_dbstats_total_ratio\ttreedb_to_mongo_physical_ratio\n"
 
 func mongoSummaryFixture(indexes int) string {

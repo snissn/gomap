@@ -201,6 +201,16 @@ func parseConfig(args []string) (config, error) {
 		return config{}, err
 	}
 	cfg.RunRoot = abs
+	info, err := os.Stat(cfg.RunRoot)
+	if err != nil {
+		return config{}, fmt.Errorf("-run-root %q: %w", cfg.RunRoot, err)
+	}
+	if !info.IsDir() {
+		return config{}, fmt.Errorf("-run-root %q is not a directory", cfg.RunRoot)
+	}
+	if _, err := os.ReadDir(cfg.RunRoot); err != nil {
+		return config{}, fmt.Errorf("-run-root %q is not readable: %w", cfg.RunRoot, err)
+	}
 	if cfg.OutPath == "" {
 		cfg.OutPath = filepath.Join(cfg.RunRoot, "deep_report.html")
 	}
