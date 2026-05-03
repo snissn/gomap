@@ -917,6 +917,10 @@ func recordZipperNodeLoad(metrics *adaptive.Metrics, ref page.ChildRef, _ node.N
 	metrics.ZipperNodeLoads++
 	if ref.Kind == page.ChildRefLeafLog {
 		metrics.ZipperLeafLogNodeLoads++
+		metrics.ZipperLeafLogNodeBytesRead += page.PageSize
+		if hint := int(ref.Log.RecordLengthHint); hint > 0 {
+			metrics.ZipperLeafLogRecordHintBytesRead += hint
+		}
 		switch source {
 		case zipperNodeLoadLeafLogCache:
 			metrics.ZipperLeafLogCacheHits++
@@ -931,6 +935,7 @@ func recordZipperNodeLoad(metrics *adaptive.Metrics, ref page.ChildRef, _ node.N
 		}
 	} else {
 		metrics.ZipperPagerNodeLoads++
+		metrics.ZipperPagerNodeBytesRead += page.PageSize
 	}
 }
 
@@ -939,11 +944,23 @@ func recordZipperLeafPageWrite(metrics *adaptive.Metrics, outerLeavesInValueLog 
 		return
 	}
 	metrics.ZipperLeafPagesWritten++
+	metrics.ZipperLeafPageBytesWritten += page.PageSize
 	if outerLeavesInValueLog {
 		metrics.ZipperLeafLogPagesWritten++
+		metrics.ZipperLeafLogPageBytesWritten += page.PageSize
 		return
 	}
 	metrics.ZipperPagerLeafPagesWritten++
+	metrics.ZipperPagerLeafPageBytesWritten += page.PageSize
+}
+
+func recordZipperLeafLogPageRecordHintWrite(metrics *adaptive.Metrics, ref page.ChildRef) {
+	if metrics == nil || ref.Kind != page.ChildRefLeafLog {
+		return
+	}
+	if hint := int(ref.Log.RecordLengthHint); hint > 0 {
+		metrics.ZipperLeafLogRecordHintBytesWritten += hint
+	}
 }
 
 func recordZipperInternalPageWrite(metrics *adaptive.Metrics) {
@@ -951,6 +968,7 @@ func recordZipperInternalPageWrite(metrics *adaptive.Metrics) {
 		return
 	}
 	metrics.ZipperInternalPagesWritten++
+	metrics.ZipperInternalPageBytesWritten += page.PageSize
 }
 
 func recordZipperInternalChildRef(metrics *adaptive.Metrics, ref page.ChildRef) {
@@ -1456,6 +1474,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		if err != nil {
 			return page.ChildRef{}, err
 		}
+		recordZipperLeafLogPageRecordHintWrite(metrics, nodeRef)
 
 		if target == builder {
 			rootNodeRef = nodeRef
@@ -2087,12 +2106,20 @@ func mergeMetrics(dst, src *adaptive.Metrics) {
 	dst.ZipperLeafLogReaderCalls += src.ZipperLeafLogReaderCalls
 	dst.ZipperLeafLogViewReads += src.ZipperLeafLogViewReads
 	dst.ZipperLeafLogScratchReads += src.ZipperLeafLogScratchReads
+	dst.ZipperPagerNodeBytesRead += src.ZipperPagerNodeBytesRead
+	dst.ZipperLeafLogNodeBytesRead += src.ZipperLeafLogNodeBytesRead
+	dst.ZipperLeafLogRecordHintBytesRead += src.ZipperLeafLogRecordHintBytesRead
 	dst.ZipperLeafMerges += src.ZipperLeafMerges
 	dst.ZipperInternalMerges += src.ZipperInternalMerges
 	dst.ZipperLeafPagesWritten += src.ZipperLeafPagesWritten
 	dst.ZipperPagerLeafPagesWritten += src.ZipperPagerLeafPagesWritten
 	dst.ZipperLeafLogPagesWritten += src.ZipperLeafLogPagesWritten
+	dst.ZipperLeafPageBytesWritten += src.ZipperLeafPageBytesWritten
+	dst.ZipperPagerLeafPageBytesWritten += src.ZipperPagerLeafPageBytesWritten
+	dst.ZipperLeafLogPageBytesWritten += src.ZipperLeafLogPageBytesWritten
+	dst.ZipperLeafLogRecordHintBytesWritten += src.ZipperLeafLogRecordHintBytesWritten
 	dst.ZipperInternalPagesWritten += src.ZipperInternalPagesWritten
+	dst.ZipperInternalPageBytesWritten += src.ZipperInternalPageBytesWritten
 	dst.ZipperInternalChildRefs += src.ZipperInternalChildRefs
 	dst.ZipperInternalPageChildRefs += src.ZipperInternalPageChildRefs
 	dst.ZipperInternalLeafLogRefs += src.ZipperInternalLeafLogRefs
@@ -2281,6 +2308,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 			}
 			return page.ChildRef{}, false, err
 		}
+		recordZipperLeafLogPageRecordHintWrite(metrics, leafID)
 		return leafID, true, nil
 	}
 
@@ -2340,6 +2368,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 			}
 			return page.ChildRef{}, err
 		}
+		recordZipperLeafLogPageRecordHintWrite(metrics, leafID)
 		return leafID, nil
 	}
 
@@ -2502,6 +2531,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 			}
 			return page.ChildRef{}, page.ChildRef{}, nil, false, err
 		}
+		recordZipperLeafLogPageRecordHintWrite(metrics, leftID)
 		rightID, err = z.persistLeafPage(rb)
 		if err != nil {
 			if !z.outerLeavesInValueLog {
@@ -2509,6 +2539,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 			}
 			return page.ChildRef{}, page.ChildRef{}, nil, false, err
 		}
+		recordZipperLeafLogPageRecordHintWrite(metrics, rightID)
 		return leftID, rightID, rightStart, true, nil
 	}
 
