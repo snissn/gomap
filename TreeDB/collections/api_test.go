@@ -5844,12 +5844,14 @@ func TestCollectionUpdateCombinerRunBatchStartingWithYieldsForQueuedPeer(t *test
 	}
 	before := d.State()
 	queuedSecond := false
+	yieldCalls := 0
 	var combiner *collectionUpdateCombiner
 	combiner = &collectionUpdateCombiner{
-		maxBatch: 2,
+		maxBatch: 3,
 		domain:   col.writeDomain,
 		requests: make(chan collectionUpdateCombineRequest, 1),
 		drainYield: func() {
+			yieldCalls++
 			if queuedSecond {
 				return
 			}
@@ -5874,6 +5876,9 @@ func TestCollectionUpdateCombinerRunBatchStartingWithYieldsForQueuedPeer(t *test
 	after := d.State()
 	if after.CommitSeq != before.CommitSeq+1 {
 		t.Fatalf("combined batch advanced commit seq by %d, want 1", after.CommitSeq-before.CommitSeq)
+	}
+	if yieldCalls != 1 {
+		t.Fatalf("drainYield calls=%d want exactly one bounded yield", yieldCalls)
 	}
 }
 

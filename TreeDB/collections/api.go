@@ -6026,7 +6026,6 @@ func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionU
 				return
 			}
 			batch = append(batch, req)
-			drainYields = 0
 		default:
 			if drainYields < defaultCollectionUpdateCombineDrainYields {
 				drainYields++
