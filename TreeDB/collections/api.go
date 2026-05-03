@@ -4725,6 +4725,7 @@ func buildBufferedRootDeltaBatchPublishInputs(rootNames []string, rootRuns map[s
 			BaseRoot:      baseRoot,
 			Delta:         delta,
 			StoragePolicy: rootPolicies[rootName],
+			ParallelApply: true,
 		})
 	}
 	return ordered, cleanup, nil

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -37,6 +38,8 @@ var orderedRootDeltaBatchInlineThreshold = int(^uint(0) >> 1)
 
 const orderedRootOptimisticSystemDeltaRebaseMaxAttempts = 4
 
+const orderedRootDeltaBatchGroupParallelApplyMinRoots = 2
+
 type orderedRootPublishStats struct {
 	warmAttempts                          uint64
 	warmNativeApplyAttempts               uint64
@@ -55,6 +58,14 @@ type orderedRootPublishOptions struct {
 	internalBaseDelta     bool
 	outerLeavesInValueLog bool
 	leafPageLog           bulk.LeafPageAppender
+}
+
+type orderedRootDeltaBatchGroupApplyResult struct {
+	idx     int
+	rootID  uint64
+	retired []uint64
+	metrics adaptive.Metrics
+	err     error
 }
 
 // OrderedRootStoragePolicy selects the physical storage policy for a published
@@ -95,6 +106,11 @@ type OrderedRootDeltaBatchPublishInput struct {
 	BaseRoot      uint64
 	Delta         *batch.Batch
 	StoragePolicy OrderedRootStoragePolicy
+	// ParallelApply allows this root-local batch apply to run concurrently with
+	// other opted-in roots in the same group before the final commit validation.
+	// Callers should opt in only when root deltas are already materialized and
+	// benchmarked as large enough to amortize goroutine and shared backend costs.
+	ParallelApply bool
 }
 
 func closeUnconsumedOrderedRootPublishIterators(ordered []OrderedRootPublishInput, consumed []bool) {
@@ -1384,6 +1400,75 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered []
 	return db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(ordered, preflight, buildSystemDeltaIter)
 }
 
+func orderedRootDeltaBatchGroupParallelApplyEligible(ordered []OrderedRootDeltaBatchPublishInput) bool {
+	active := 0
+	parallelActive := 0
+	for idx := range ordered {
+		if ordered[idx].Delta == nil || ordered[idx].Delta.IsEmpty() {
+			continue
+		}
+		active++
+		if ordered[idx].ParallelApply {
+			parallelActive++
+		}
+	}
+	return active == parallelActive && parallelActive >= orderedRootDeltaBatchGroupParallelApplyMinRoots
+}
+
+func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []OrderedRootDeltaBatchPublishInput, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator) ([]orderedRootDeltaBatchGroupApplyResult, bool) {
+	results := make([]orderedRootDeltaBatchGroupApplyResult, len(ordered))
+	applyOne := func(orderedIdx int) orderedRootDeltaBatchGroupApplyResult {
+		result := orderedRootDeltaBatchGroupApplyResult{idx: orderedIdx}
+		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[orderedIdx].StoragePolicy)
+		if err != nil {
+			result.err = err
+			return result
+		}
+		rootID, retired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, opts, alloc, coldBuildAlloc)
+		result.rootID = rootID
+		result.retired = retired
+		result.metrics = metrics
+		result.err = err
+		return result
+	}
+
+	if !orderedRootDeltaBatchGroupParallelApplyEligible(ordered) {
+		for orderedIdx := range ordered {
+			results[orderedIdx] = applyOne(orderedIdx)
+			if results[orderedIdx].err != nil {
+				return results, false
+			}
+		}
+		return results, false
+	}
+
+	parallelRoots := 0
+	for orderedIdx := range ordered {
+		if !ordered[orderedIdx].ParallelApply || ordered[orderedIdx].Delta == nil || ordered[orderedIdx].Delta.IsEmpty() {
+			results[orderedIdx] = applyOne(orderedIdx)
+			if results[orderedIdx].err != nil {
+				return results, false
+			}
+			continue
+		}
+		parallelRoots++
+	}
+
+	var wg sync.WaitGroup
+	for orderedIdx := range ordered {
+		if !ordered[orderedIdx].ParallelApply || ordered[orderedIdx].Delta == nil || ordered[orderedIdx].Delta.IsEmpty() {
+			continue
+		}
+		wg.Add(1)
+		go func(orderedIdx int) {
+			defer wg.Done()
+			results[orderedIdx] = applyOne(orderedIdx)
+		}(orderedIdx)
+	}
+	wg.Wait()
+	return results, parallelRoots >= orderedRootDeltaBatchGroupParallelApplyMinRoots
+}
+
 func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRootDeltaBatchPublishInput, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, retrySerialized bool, err error) {
 	if buildSystemDeltaIter == nil {
 		return 0, nil, false, errors.New("nil ordered root group system delta builder")
@@ -1458,23 +1543,28 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 	systemOpts := systemRootOrderedPublishOptions(db)
 	var nonSystemRetired []uint64
 	var nonSystemMetrics adaptive.Metrics
-	for orderedIdx := range ordered {
-		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[orderedIdx].StoragePolicy)
-		if err != nil {
-			return 0, nil, false, err
+	phaseStart := time.Now()
+	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idx, ordered, rootTracker, rootTracker)
+	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	if parallelRootApply {
+		phaseStats.rootApplyParallelGroups++
+		for orderedIdx := range ordered {
+			if ordered[orderedIdx].ParallelApply && ordered[orderedIdx].Delta != nil && !ordered[orderedIdx].Delta.IsEmpty() {
+				phaseStats.rootApplyParallelRoots++
+			}
 		}
-		phaseStart := time.Now()
-		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, opts, rootTracker, rootTracker)
-		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
-		phaseStats.rootApplyCalls++
-		if err != nil {
-			return 0, nil, false, err
+	}
+	for orderedIdx := range rootApplyResults {
+		result := rootApplyResults[orderedIdx]
+		if result.err != nil {
+			return 0, nil, false, result.err
 		}
-		rootIDs[orderedIdx] = rootID
+		rootIDs[orderedIdx] = result.rootID
 		rootsObserved++
-		nonSystemRetired = append(nonSystemRetired, rootRetired...)
-		mergeOrderedRootPublishMetrics(&nonSystemMetrics, metrics)
-		phaseStats.rootApplyMetrics.add(metrics)
+		nonSystemRetired = append(nonSystemRetired, result.retired...)
+		mergeOrderedRootPublishMetrics(&nonSystemMetrics, result.metrics)
+		phaseStats.rootApplyMetrics.add(result.metrics)
+		phaseStats.rootApplyCalls++
 	}
 
 	systemBaseRoot := baseSystemRoot
