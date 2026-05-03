@@ -1373,10 +1373,6 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 
 func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
 	if preflight == nil && db != nil && !db.closing.Load() {
-		if db.writeMu.TryLock() {
-			db.writeMu.Unlock()
-			return db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(ordered, preflight, buildSystemDeltaIter)
-		}
 		var retry bool
 		newSystemRoot, rootIDs, retry, err = db.tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered, buildSystemDeltaIter)
 		if err != nil || !retry {
