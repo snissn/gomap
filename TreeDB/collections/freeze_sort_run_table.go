@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"errors"
 	"sort"
 	"sync"
 	"unsafe"
@@ -86,6 +87,47 @@ func (t *freezeSortRunTable) SetEntrySteal(key, value []byte, ptr page.ValuePtr,
 		t.latest[unsafe.String(&key[0], len(key))] = idx
 	}
 	t.mu.Unlock()
+}
+
+func (t *freezeSortRunTable) ApplyStealEntryFunc(count int, emit func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error)) error {
+	if count <= 0 {
+		return nil
+	}
+	if emit == nil {
+		return errors.New("collections: nil freeze-sort entry emitter")
+	}
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for i := 0; i < count; i++ {
+		key, value, ptr, flags, err := emit(i)
+		if err != nil {
+			return err
+		}
+		if len(key) == 0 {
+			continue
+		}
+		if flags&node.FlagTombstone != 0 {
+			value = nil
+			ptr = page.ValuePtr{}
+		}
+		idx := len(t.entries)
+		t.entries = append(t.entries, freezeSortRunEntry{
+			key:   key,
+			value: value,
+			ptr:   ptr,
+			seq:   t.nextSeq,
+			flags: flags,
+		})
+		t.nextSeq++
+		t.sizeBytes += int64(len(key) + entryLogicalValueSize(flags, value))
+		if t.latest != nil && !t.latestDirty {
+			t.latest[unsafe.String(&key[0], len(key))] = idx
+		}
+	}
+	return nil
 }
 
 func (t *freezeSortRunTable) Delete(key []byte) {

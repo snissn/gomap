@@ -8386,6 +8386,114 @@ func TestCollectionUpdateBatchDirectBufferedBSONAccumulatesRootRuns(t *testing.T
 	}
 }
 
+func TestCollectionUpdateBatchDirectBufferedTemplateV1AccumulatesRootRuns(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatTemplateV1,
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustTemplateV1Document(t, []string{"email", "city"}, []any{"a@example.com", "hnl"})},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+	before := d.State()
+
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setTemplateV1JSON(t, `{"email":"a@example.com","city":"sea","score":1}`)},
+	}); err != nil {
+		t.Fatalf("first UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("first batch was declined")
+	}
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setTemplateV1JSON(t, `{"email":"a@example.com","city":"sfo","score":2}`)},
+	}); err != nil {
+		t.Fatalf("second UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("second batch was declined")
+	}
+	afterSecond := d.State()
+	if afterSecond.CommitSeq != before.CommitSeq {
+		t.Fatalf("buffered template-v1 updates advanced commit seq by %d, want 0", afterSecond.CommitSeq-before.CommitSeq)
+	}
+
+	col.writeDomain.mu.RLock()
+	rootRunCount := col.writeDomain.rootRunCount
+	templateRuns := len(col.writeDomain.rootRuns[collectionTemplateRootName("users")])
+	primaryRuns := len(col.writeDomain.rootRuns[collectionPrimaryRootName("users")])
+	cityRuns := len(col.writeDomain.rootRuns[collectionSecondaryRootName("users", "city")])
+	rootMutableRuns := len(col.writeDomain.rootMutableRuns)
+	col.writeDomain.mu.RUnlock()
+	if rootRunCount != 3 {
+		t.Fatalf("rootRunCount=%d want 3 accumulated roots after two template-v1 update batches", rootRunCount)
+	}
+	if templateRuns != 1 || primaryRuns != 1 || cityRuns != 1 {
+		t.Fatalf("runs template=%d primary=%d city=%d, want one run per affected root", templateRuns, primaryRuns, cityRuns)
+	}
+	if rootMutableRuns != 3 {
+		t.Fatalf("rootMutableRuns=%d want 3 active root-local accumulators", rootMutableRuns)
+	}
+
+	seaIDs, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find sea city: %v", err)
+	}
+	if len(seaIDs) != 0 {
+		t.Fatalf("sea ids=%q want none after second buffered update", seaIDs)
+	}
+	sfoIDs, err := col.FindByIndex("city", "sfo")
+	if err != nil {
+		t.Fatalf("find sfo city: %v", err)
+	}
+	if len(sfoIDs) != 1 || !bytes.Equal(sfoIDs[0], []byte("u1")) {
+		t.Fatalf("sfo ids=%q want [u1]", sfoIDs)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get template-v1 buffered document: %v", err)
+	}
+	gotJSON, err := col.StoredDocumentJSON(got)
+	if err != nil {
+		t.Fatalf("materialize template-v1 buffered document: %v", err)
+	}
+	for _, want := range [][]byte{[]byte(`"city":"sfo"`), []byte(`"score":2`)} {
+		if !bytes.Contains(gotJSON, want) {
+			t.Fatalf("buffered document=%s missing %s", gotJSON, want)
+		}
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered template-v1 update batches: %v", err)
+	}
+	flushed := d.State()
+	if flushed.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("flush advanced commit seq by %d, want 1", flushed.CommitSeq-before.CommitSeq)
+	}
+}
+
 func newBufferedUsersUpdateCollection(t *testing.T) (*backenddb.DB, *Collection) {
 	t.Helper()
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
@@ -9949,6 +10057,17 @@ func setBSONField(field string, value any) func([]byte) ([]byte, bool, error) {
 		if err != nil {
 			return nil, false, err
 		}
+		return next, true, nil
+	}
+}
+
+func setTemplateV1JSON(t *testing.T, raw string) func([]byte) ([]byte, bool, error) {
+	t.Helper()
+	next, err := EncodeTemplateV1DocumentJSON([]byte(raw))
+	if err != nil {
+		t.Fatalf("encode template-v1 update document: %v", err)
+	}
+	return func([]byte) ([]byte, bool, error) {
 		return next, true, nil
 	}
 }
