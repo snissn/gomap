@@ -789,10 +789,20 @@ func reportProfileBenchBackendVlogMmapStats(b *testing.B, after, before map[stri
 	reportPerDoc("backend_vlog_mmap_fallback_readat/doc", "treedb.vlog.mmap_read.fallback_readat")
 	reportPerDoc("backend_vlog_mmap_sealed_denied_count_cap/doc", "treedb.vlog.mmap_sealed_map_denied.count_cap")
 	reportPerDoc("backend_vlog_mmap_sealed_denied_bytes_cap/doc", "treedb.vlog.mmap_sealed_map_denied.bytes_cap")
+	reportPerDoc("backend_tree_get_append_inline_hits/doc", "treedb.process.read_path.backend_tree.get_append_inline_hits_total")
+	reportPerDoc("backend_tree_get_append_inline_bytes/doc", "treedb.process.read_path.backend_tree.get_append_inline_bytes_total")
+	reportPerDoc("backend_tree_get_append_pointer_hits/doc", "treedb.process.read_path.backend_tree.get_append_pointer_hits_total")
+	reportPerDoc("backend_tree_get_append_pointer_bytes/doc", "treedb.process.read_path.backend_tree.get_append_pointer_bytes_total")
+	reportPerDoc("backend_outer_leaf_loads/doc", "treedb.process.read_path.outer_leaf.loads_total")
+	reportPerDoc("backend_outer_leaf_point_loads/doc", "treedb.process.read_path.outer_leaf.point_loads_total")
+	reportPerDoc("backend_outer_leaf_iterator_loads/doc", "treedb.process.read_path.outer_leaf.iterator_loads_total")
+	reportPerDoc("backend_outer_leaf_bytes/doc", "treedb.process.read_path.outer_leaf.bytes_total")
+	reportPerDoc("backend_outer_leaf_samples/doc", "treedb.process.read_path.outer_leaf.samples_total")
 	reportPerDoc("backend_outer_leaf_cache_hits/doc", "treedb.process.read_path.outer_leaf.cache.hits")
 	reportPerDoc("backend_outer_leaf_cache_misses/doc", "treedb.process.read_path.outer_leaf.cache.misses")
 	reportPerDoc("backend_outer_leaf_cache_stores/doc", "treedb.process.read_path.outer_leaf.cache.stores")
 	reportPerDoc("backend_outer_leaf_cache_evictions/doc", "treedb.process.read_path.outer_leaf.cache.evictions")
+	reportProfileBenchBackendReadPathRatios(b, after, before)
 	hits := profileBenchDeltaUintStat(after, before, "treedb.vlog.mmap_read.hits")
 	fallbacks := profileBenchDeltaUintStat(after, before, "treedb.vlog.mmap_read.fallback_readat")
 	if total := hits + fallbacks; total > 0 {
@@ -813,6 +823,45 @@ func reportProfileBenchBackendVlogMmapStats(b *testing.B, after, before map[stri
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.process.read_path.outer_leaf.cache.entries")), "backend_outer_leaf_cache_entries")
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.process.read_path.outer_leaf.cache.capacity")), "backend_outer_leaf_cache_capacity")
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.process.read_path.outer_leaf.cache.bytes")), "backend_outer_leaf_cache_bytes")
+	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.process.read_path.outer_leaf.sample_mod")), "backend_outer_leaf_sample_mod")
+}
+
+func reportProfileBenchBackendReadPathRatios(b *testing.B, after, before map[string]string) {
+	b.Helper()
+	reportPerHit := func(metric, bytesKey, hitsKey string) {
+		bytes := profileBenchDeltaUintStat(after, before, bytesKey)
+		hits := profileBenchDeltaUintStat(after, before, hitsKey)
+		if hits > 0 {
+			b.ReportMetric(float64(bytes)/float64(hits), metric)
+		}
+	}
+	reportPerHit(
+		"backend_tree_get_append_inline_bytes/hit",
+		"treedb.process.read_path.backend_tree.get_append_inline_bytes_total",
+		"treedb.process.read_path.backend_tree.get_append_inline_hits_total",
+	)
+	reportPerHit(
+		"backend_tree_get_append_pointer_bytes/hit",
+		"treedb.process.read_path.backend_tree.get_append_pointer_bytes_total",
+		"treedb.process.read_path.backend_tree.get_append_pointer_hits_total",
+	)
+	outerLeafLoads := profileBenchDeltaUintStat(after, before, "treedb.process.read_path.outer_leaf.loads_total")
+	outerLeafBytes := profileBenchDeltaUintStat(after, before, "treedb.process.read_path.outer_leaf.bytes_total")
+	if outerLeafLoads > 0 {
+		b.ReportMetric(float64(outerLeafBytes)/float64(outerLeafLoads), "backend_outer_leaf_bytes/load")
+	}
+	outerLeafSamples := profileBenchDeltaUintStat(after, before, "treedb.process.read_path.outer_leaf.samples_total")
+	if outerLeafSamples == 0 {
+		return
+	}
+	reportPotential := func(metric, key string) {
+		hits := profileBenchDeltaUintStat(after, before, key)
+		b.ReportMetric(float64(hits)/float64(outerLeafSamples), metric)
+	}
+	reportPotential("backend_outer_leaf_cache_potential_64_hit_ratio", "treedb.process.read_path.outer_leaf.cache_potential.capacity_64_hits_total")
+	reportPotential("backend_outer_leaf_cache_potential_256_hit_ratio", "treedb.process.read_path.outer_leaf.cache_potential.capacity_256_hits_total")
+	reportPotential("backend_outer_leaf_cache_potential_1024_hit_ratio", "treedb.process.read_path.outer_leaf.cache_potential.capacity_1024_hits_total")
+	reportPotential("backend_outer_leaf_cache_potential_4096_hit_ratio", "treedb.process.read_path.outer_leaf.cache_potential.capacity_4096_hits_total")
 }
 
 func reportProfileBenchOrderedRootPublishStats(b *testing.B, after, before map[string]string, docs int) {

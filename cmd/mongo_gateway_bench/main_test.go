@@ -126,6 +126,7 @@ func TestSelectedTreeDBStatsKeepsExpectedKeys(t *testing.T) {
 		want bool
 	}{
 		{name: "exact commit seq", key: "treedb.commit_seq", want: true},
+		{name: "backend tree read path prefix", key: "treedb.process.read_path.backend_tree.get_append_pointer_hits_total", want: true},
 		{name: "ordered root prefix", key: "treedb.publish.ordered_root_delta_group.calls_total", want: true},
 		{name: "watermark prefix", key: "treedb.publish.watermark.latency_p99_ms", want: true},
 		{name: "collection write-domain prefix", key: "treedb.collections.write_domain.indexed_flush.calls_total", want: true},
@@ -150,18 +151,20 @@ func TestSelectedTreeDBStats(t *testing.T) {
 	}
 	got := selectedTreeDBStats(map[string]string{
 		"treedb.commit_seq": "11",
-		"treedb.publish.ordered_root_delta_group.calls_total":       "3",
-		"treedb.publish.ordered_root_delta_group.latency_p99_ms":    "1.5",
-		"treedb.publish.watermark.latency_p99_ms":                   "2.5",
-		"treedb.collections.write_domain.indexed_flush.calls_total": "4",
-		"treedb.vlog.reads_total":                                   "7",
+		"treedb.process.read_path.backend_tree.get_append_pointer_hits_total": "2",
+		"treedb.publish.ordered_root_delta_group.calls_total":                 "3",
+		"treedb.publish.ordered_root_delta_group.latency_p99_ms":              "1.5",
+		"treedb.publish.watermark.latency_p99_ms":                             "2.5",
+		"treedb.collections.write_domain.indexed_flush.calls_total":           "4",
+		"treedb.vlog.reads_total":                                             "7",
 	})
 	want := map[string]string{
 		"treedb.commit_seq": "11",
-		"treedb.publish.ordered_root_delta_group.calls_total":       "3",
-		"treedb.publish.ordered_root_delta_group.latency_p99_ms":    "1.5",
-		"treedb.publish.watermark.latency_p99_ms":                   "2.5",
-		"treedb.collections.write_domain.indexed_flush.calls_total": "4",
+		"treedb.process.read_path.backend_tree.get_append_pointer_hits_total": "2",
+		"treedb.publish.ordered_root_delta_group.calls_total":                 "3",
+		"treedb.publish.ordered_root_delta_group.latency_p99_ms":              "1.5",
+		"treedb.publish.watermark.latency_p99_ms":                             "2.5",
+		"treedb.collections.write_domain.indexed_flush.calls_total":           "4",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("selected stats=%v want %v", got, want)
