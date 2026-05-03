@@ -94,8 +94,9 @@ collection benchmark profile:
 - `-treedb-index-root-storage compressed`
 - `-treedb-buffered-indexed-write-max-documents 0` (use the collection default:
   96000 for synchronous flushing, 256000 when async flush is enabled)
-- `-treedb-buffered-indexed-write-max-root-runs 0` (use the matching collection
-  default only when document, byte, and root-run thresholds are all left at 0)
+- `-treedb-buffered-indexed-write-max-root-runs 0` (explicit `0` disables this
+  trigger; when this flag is omitted while document or byte thresholds are
+  overridden, the tool keeps the matching root-run compatibility default)
 - `-treedb-maintenance full`
 - `-client-mode driver`
 
@@ -119,7 +120,11 @@ auto-flush threshold experiments. The benchmark report records the effective
 normalized collection thresholds after index creation. For document thresholds,
 `0` means use the collection default. For byte and root-run thresholds, `0`
 disables that trigger unless all indexed-write thresholds are otherwise left at
-their native defaults.
+their native defaults. For compatibility with older threshold experiments, if a
+document or byte threshold is overridden and the root-run flag is omitted, the
+tool fills in the matching root-run default; pass
+`-treedb-buffered-indexed-write-max-root-runs 0` explicitly to keep root-run
+flushing disabled in that case.
 
 The Go profile benchmarks in `profile_bench_test.go` keep their defaults stable,
 but can opt into the same indexed async flush mode for focused root-publish
