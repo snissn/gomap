@@ -812,7 +812,7 @@ func TestCollectionUpdateIndexStatsSnapshotAndExport(t *testing.T) {
 		},
 	}
 	domain := &collectionWriteDomain{
-		meta: CollectionMeta{Indexes: []IndexDefinition{
+		meta: CollectionMeta{Name: "users", Indexes: []IndexDefinition{
 			{Name: "email", Unique: true},
 			{Name: "city/name"},
 		}},
@@ -836,11 +836,11 @@ func TestCollectionUpdateIndexStatsSnapshotAndExport(t *testing.T) {
 	}
 	stats := snapshot.UpdateBatchIndexStats[:snapshot.UpdateBatchIndexStatsCount]
 	email := indexStatByName(stats, "email")
-	if !email.Unique || email.Unchanged != 2 || email.UniqueCheckSkips != 2 {
+	if email.CollectionName != "users" || email.IndexOrdinal != 0 || !email.Unique || email.Unchanged != 2 || email.UniqueCheckSkips != 2 {
 		t.Fatalf("email aggregate=%+v want unchanged/skips 2", email)
 	}
 	city := indexStatByName(stats, "city/name")
-	if city.Changed != 4 || city.SecondaryRuns != 4 || city.SecondaryDeletes != 4 || city.SecondarySets != 4 || city.SecondaryKeyBytes != 256 {
+	if city.CollectionName != "users" || city.IndexOrdinal != 1 || city.Changed != 4 || city.SecondaryRuns != 4 || city.SecondaryDeletes != 4 || city.SecondarySets != 4 || city.SecondaryKeyBytes != 256 {
 		t.Fatalf("city aggregate=%+v want doubled secondary work", city)
 	}
 
@@ -852,20 +852,103 @@ func TestCollectionUpdateIndexStatsSnapshotAndExport(t *testing.T) {
 	}
 
 	exported := (&CollectionManager{domains: map[string]*collectionWriteDomain{"test": domain}}).Stats()
-	if got, want := exported["treedb.collections.write_domain.update_batch.index.email.unique"], "1"; got != want {
+	emailPrefix := "treedb.collections.write_domain.update_batch.collection." + collectionStatsMetricToken("users") + ".index.0." + collectionStatsMetricToken("email") + "."
+	cityPrefix := "treedb.collections.write_domain.update_batch.collection." + collectionStatsMetricToken("users") + ".index.1." + collectionStatsMetricToken("city/name") + "."
+	if got, want := exported[emailPrefix+"unique"], "1"; got != want {
 		t.Fatalf("exported email unique=%q want %q", got, want)
 	}
-	if got, want := exported["treedb.collections.write_domain.update_batch.index.email.unchanged_total"], "2"; got != want {
+	if got, want := exported[emailPrefix+"unchanged_total"], "2"; got != want {
 		t.Fatalf("exported email unchanged=%q want %q", got, want)
 	}
-	if got, want := exported["treedb.collections.write_domain.update_batch.index.email.unique_check_skips_total"], "2"; got != want {
+	if got, want := exported[emailPrefix+"unique_check_skips_total"], "2"; got != want {
 		t.Fatalf("exported email skips=%q want %q", got, want)
 	}
-	if got, want := exported["treedb.collections.write_domain.update_batch.index.city_name.changed_total"], "4"; got != want {
+	if got, want := exported[cityPrefix+"changed_total"], "4"; got != want {
 		t.Fatalf("exported city changed=%q want %q", got, want)
 	}
-	if got, want := exported["treedb.collections.write_domain.update_batch.index.city_name.secondary_key_bytes_total"], "256"; got != want {
+	if got, want := exported[cityPrefix+"secondary_key_bytes_total"], "256"; got != want {
 		t.Fatalf("exported city key bytes=%q want %q", got, want)
+	}
+}
+
+func TestCollectionUpdateIndexStatsDoNotMergeOverlappingIndexNames(t *testing.T) {
+	newDomain := func(collection string, changed int) *collectionWriteDomain {
+		domain := &collectionWriteDomain{
+			meta: CollectionMeta{
+				Name:    collection,
+				Indexes: []IndexDefinition{{Name: "email", Unique: true}},
+			},
+		}
+		domain.observeUpdateBatchStats(CollectionUpdateStats{
+			IndexStatsCount: 1,
+			IndexStats: [maxCollectionUpdateInlineIndexStats]CollectionUpdateIndexStats{
+				{CollectionName: collection, IndexName: "email", IndexOrdinal: 0, Unique: true, Changed: changed},
+			},
+		})
+		return domain
+	}
+	mgr := &CollectionManager{domains: map[string]*collectionWriteDomain{
+		"users":  newDomain("users", 1),
+		"orders": newDomain("orders", 2),
+	}}
+	stats := mgr.StatsSnapshot()
+	indexStat := func(collection, index string) CollectionUpdateIndexStats {
+		t.Helper()
+		for _, stat := range stats.UpdateBatchIndexStats[:stats.UpdateBatchIndexStatsCount] {
+			if stat.CollectionName == collection && stat.IndexName == index {
+				return stat
+			}
+		}
+		t.Fatalf("missing %s/%s in %+v", collection, index, stats.UpdateBatchIndexStats)
+		return CollectionUpdateIndexStats{}
+	}
+	if got := indexStat("users", "email").Changed; got != 1 {
+		t.Fatalf("users/email changed=%d want 1", got)
+	}
+	if got := indexStat("orders", "email").Changed; got != 2 {
+		t.Fatalf("orders/email changed=%d want 2", got)
+	}
+
+	exported := mgr.Stats()
+	usersPrefix := "treedb.collections.write_domain.update_batch.collection." + collectionStatsMetricToken("users") + ".index.0." + collectionStatsMetricToken("email") + "."
+	ordersPrefix := "treedb.collections.write_domain.update_batch.collection." + collectionStatsMetricToken("orders") + ".index.0." + collectionStatsMetricToken("email") + "."
+	if usersPrefix == ordersPrefix {
+		t.Fatalf("collection-qualified prefixes collided: %q", usersPrefix)
+	}
+	if got, want := exported[usersPrefix+"changed_total"], "1"; got != want {
+		t.Fatalf("users exported changed=%q want %q", got, want)
+	}
+	if got, want := exported[ordersPrefix+"changed_total"], "2"; got != want {
+		t.Fatalf("orders exported changed=%q want %q", got, want)
+	}
+}
+
+func TestCollectionUpdateIndexStatsSnapshotCapsAtInlineIndexLimit(t *testing.T) {
+	indexes := make([]IndexDefinition, maxCollectionUpdateInlineIndexStats+1)
+	for i := range indexes {
+		indexes[i] = IndexDefinition{Name: fmt.Sprintf("idx_%02d", i)}
+	}
+	domain := &collectionWriteDomain{
+		meta: CollectionMeta{Name: "wide", Indexes: indexes},
+	}
+	var updateStats CollectionUpdateStats
+	updateStats.IndexStatsCount = maxCollectionUpdateInlineIndexStats
+	for i := 0; i < maxCollectionUpdateInlineIndexStats; i++ {
+		updateStats.IndexStats[i] = CollectionUpdateIndexStats{
+			CollectionName: "wide",
+			IndexName:      indexes[i].Name,
+			IndexOrdinal:   i,
+			Changed:        i + 1,
+		}
+	}
+	domain.observeUpdateBatchStats(updateStats)
+	stats := domain.statsSnapshot()
+	if got, want := stats.UpdateBatchIndexStatsCount, maxCollectionUpdateInlineIndexStats; got != want {
+		t.Fatalf("index stats count=%d want cap %d", got, want)
+	}
+	last := stats.UpdateBatchIndexStats[maxCollectionUpdateInlineIndexStats-1]
+	if got, want := last.IndexName, indexes[maxCollectionUpdateInlineIndexStats-1].Name; got != want {
+		t.Fatalf("last retained index=%q want %q", got, want)
 	}
 }
 

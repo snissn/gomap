@@ -1021,7 +1021,7 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 		if next.IndexName == "" {
 			continue
 		}
-		if previous, ok := collectionManagerUpdateIndexStatByName(before, next.IndexName); ok {
+		if previous, ok := collectionManagerUpdateIndexStat(before, next); ok {
 			next.Changed -= previous.Changed
 			next.Unchanged -= previous.Unchanged
 			next.UniqueChecks -= previous.UniqueChecks
@@ -1048,6 +1048,18 @@ func collectionManagerUpdateIndexStatByName(stats collections.CollectionManagerS
 	return collections.CollectionUpdateIndexStats{}, false
 }
 
+func collectionManagerUpdateIndexStat(stats collections.CollectionManagerStats, target collections.CollectionUpdateIndexStats) (collections.CollectionUpdateIndexStats, bool) {
+	for i := 0; i < stats.UpdateBatchIndexStatsCount && i < len(stats.UpdateBatchIndexStats); i++ {
+		candidate := stats.UpdateBatchIndexStats[i]
+		if candidate.CollectionName == target.CollectionName &&
+			candidate.IndexOrdinal == target.IndexOrdinal &&
+			candidate.IndexName == target.IndexName {
+			return candidate, true
+		}
+	}
+	return collections.CollectionUpdateIndexStats{}, false
+}
+
 func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 	before := collections.CollectionManagerStats{
 		UpdateCombineRequests:          10,
@@ -1060,8 +1072,8 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateBatchUniqueCheckSkips:    10,
 		UpdateBatchIndexStatsCount:     2,
 		UpdateBatchIndexStats: [8]collections.CollectionUpdateIndexStats{
-			{IndexName: "email", Unique: true, Changed: 1, Unchanged: 9, UniqueChecks: 1, UniqueCheckSkips: 8},
-			{IndexName: "city", Changed: 10, SecondaryRuns: 10, SecondaryDeletes: 10, SecondarySets: 10, SecondaryKeyBytes: 1000},
+			{CollectionName: "users", IndexName: "email", IndexOrdinal: 0, Unique: true, Changed: 1, Unchanged: 9, UniqueChecks: 1, UniqueCheckSkips: 8},
+			{CollectionName: "users", IndexName: "city", IndexOrdinal: 1, Changed: 10, SecondaryRuns: 10, SecondaryDeletes: 10, SecondarySets: 10, SecondaryKeyBytes: 1000},
 		},
 	}
 	after := collections.CollectionManagerStats{
@@ -1075,8 +1087,8 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateBatchUniqueCheckSkips:    19,
 		UpdateBatchIndexStatsCount:     2,
 		UpdateBatchIndexStats: [8]collections.CollectionUpdateIndexStats{
-			{IndexName: "email", Unique: true, Changed: 1, Unchanged: 22, UniqueChecks: 1, UniqueCheckSkips: 17},
-			{IndexName: "city", Changed: 17, SecondaryRuns: 17, SecondaryDeletes: 17, SecondarySets: 17, SecondaryKeyBytes: 1700},
+			{CollectionName: "users", IndexName: "email", IndexOrdinal: 0, Unique: true, Changed: 1, Unchanged: 22, UniqueChecks: 1, UniqueCheckSkips: 17},
+			{CollectionName: "users", IndexName: "city", IndexOrdinal: 1, Changed: 17, SecondaryRuns: 17, SecondaryDeletes: 17, SecondarySets: 17, SecondaryKeyBytes: 1700},
 		},
 	}
 	got := deltaCollectionManagerUpdateStats(after, before)
@@ -1186,7 +1198,8 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 		if indexStats.IndexName == "" {
 			continue
 		}
-		prefix := "update_index_" + sanitizeProfileName(indexStats.IndexName) + "_"
+		prefix := "update_collection_" + sanitizeProfileName(indexStats.CollectionName) +
+			"_index_" + strconv.Itoa(indexStats.IndexOrdinal) + "_" + sanitizeProfileName(indexStats.IndexName) + "_"
 		if indexStats.Changed > 0 {
 			b.ReportMetric(float64(indexStats.Changed)/float64(docs), prefix+"changed/doc")
 		}

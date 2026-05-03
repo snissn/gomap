@@ -356,7 +356,9 @@ type CollectionUpdateSecondaryRunStats struct {
 // an UpdateBatch-style call. Changed/unchanged are counted per modified
 // document for each cached index runtime.
 type CollectionUpdateIndexStats struct {
+	CollectionName    string
 	IndexName         string
+	IndexOrdinal      int
 	Unique            bool
 	Changed           int
 	Unchanged         int
@@ -955,7 +957,12 @@ func (m *CollectionManager) Stats() map[string]string {
 		if indexStats.IndexName == "" {
 			continue
 		}
-		prefix := "treedb.collections.write_domain.update_batch.index." + collectionStatsMetricToken(indexStats.IndexName) + "."
+		prefix := fmt.Sprintf(
+			"treedb.collections.write_domain.update_batch.collection.%s.index.%d.%s.",
+			collectionStatsMetricToken(indexStats.CollectionName),
+			indexStats.IndexOrdinal,
+			collectionStatsMetricToken(indexStats.IndexName),
+		)
 		if indexStats.Unique {
 			out[prefix+"unique"] = "1"
 		} else {
@@ -974,7 +981,8 @@ func (m *CollectionManager) Stats() map[string]string {
 }
 
 func collectionStatsMetricToken(name string) string {
-	name = strings.TrimSpace(strings.ToLower(name))
+	original := strings.TrimSpace(name)
+	name = strings.ToLower(original)
 	var builder strings.Builder
 	builder.Grow(len(name))
 	lastUnderscore := false
@@ -994,7 +1002,7 @@ func collectionStatsMetricToken(name string) string {
 	if out == "" {
 		return "unnamed"
 	}
-	return out
+	return fmt.Sprintf("%s_%016x", out, xxhash.Sum64String(original))
 }
 
 // StatsSnapshot returns aggregate process-local collection write-domain
@@ -1003,19 +1011,26 @@ func (m *CollectionManager) StatsSnapshot() CollectionManagerStats {
 	if m == nil {
 		return CollectionManagerStats{}
 	}
+	type domainTarget struct {
+		name   string
+		domain *collectionWriteDomain
+	}
 	m.domainMu.RLock()
-	domains := make([]*collectionWriteDomain, 0, len(m.domains))
-	for _, domain := range m.domains {
+	domains := make([]domainTarget, 0, len(m.domains))
+	for name, domain := range m.domains {
 		if domain != nil {
-			domains = append(domains, domain)
+			domains = append(domains, domainTarget{name: name, domain: domain})
 		}
 	}
 	m.domainMu.RUnlock()
+	sort.Slice(domains, func(i, j int) bool {
+		return domains[i].name < domains[j].name
+	})
 
 	var stats CollectionManagerStats
 	stats.Domains = len(domains)
-	for _, domain := range domains {
-		stats.add(domain.statsSnapshot())
+	for _, target := range domains {
+		stats.add(target.domain.statsSnapshot())
 	}
 	return stats
 }
@@ -1108,7 +1123,9 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 		stats.UpdateBatchIndexStatsCount = len(stats.UpdateBatchIndexStats)
 	}
 	for i := 0; i < stats.UpdateBatchIndexStatsCount; i++ {
+		stats.UpdateBatchIndexStats[i].CollectionName = domain.meta.Name
 		stats.UpdateBatchIndexStats[i].IndexName = domain.meta.Indexes[i].Name
+		stats.UpdateBatchIndexStats[i].IndexOrdinal = i
 		stats.UpdateBatchIndexStats[i].Unique = domain.meta.Indexes[i].Unique
 	}
 	domain.mu.RUnlock()
@@ -1320,7 +1337,7 @@ func mergeCollectionUpdateIndexStat(dst *[maxCollectionUpdateInlineIndexStats]Co
 		return
 	}
 	for i := 0; i < *dstCount && i < len(dst); i++ {
-		if dst[i].IndexName == src.IndexName {
+		if sameCollectionUpdateIndexStat(dst[i], src) {
 			dst[i].Unique = src.Unique
 			dst[i].Changed = saturatingAddNonNegativeInt(dst[i].Changed, src.Changed)
 			dst[i].Unchanged = saturatingAddNonNegativeInt(dst[i].Unchanged, src.Unchanged)
@@ -1338,6 +1355,12 @@ func mergeCollectionUpdateIndexStat(dst *[maxCollectionUpdateInlineIndexStats]Co
 	}
 	dst[*dstCount] = src
 	*dstCount = *dstCount + 1
+}
+
+func sameCollectionUpdateIndexStat(a, b CollectionUpdateIndexStats) bool {
+	return a.CollectionName == b.CollectionName &&
+		a.IndexOrdinal == b.IndexOrdinal &&
+		a.IndexName == b.IndexName
 }
 
 func collectionUpdateStatsHasBufferStageBreakdown(stats CollectionUpdateStats) bool {
@@ -7329,8 +7352,10 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		stats.IndexStatsCount = len(runtimes)
 		for i, runtime := range runtimes {
 			stats.IndexStats[i] = CollectionUpdateIndexStats{
-				IndexName: runtime.def.name,
-				Unique:    runtime.def.unique,
+				CollectionName: meta.Name,
+				IndexName:      runtime.def.name,
+				IndexOrdinal:   i,
+				Unique:         runtime.def.unique,
 			}
 		}
 	}

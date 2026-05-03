@@ -527,10 +527,11 @@ The benchmark shapes are intentionally different:
   `update_index_value_changes/doc`, `update_index_value_unchanged/doc`,
   `update_unique_checks/doc`, `update_unique_check_skips/doc`,
   per-index changed-delta metrics such as
-  `update_index_city_1_changed/doc`,
-  `update_index_city_1_secondary_runs/doc`,
-  `update_index_email_1_unchanged/doc`, and
-  `update_index_email_1_unique_check_skips/doc`,
+  `update_collection_bench.docs_index_1_city_1_changed/doc`,
+  `update_collection_bench.docs_index_1_city_1_secondary_runs/doc`,
+  `update_collection_bench.docs_index_2_email_1_unchanged/doc`, and
+  `update_collection_bench.docs_index_2_email_1_unique_check_skips/doc`
+  for collections with at most eight index runtimes,
   `update_buffer_stage_ns/doc`, buffer-stage submetrics such as
   `update_buffer_precheck_ns/doc`, `update_buffer_lock_wait_ns/doc`,
   `update_buffer_lock_hold_ns/doc`, `update_buffer_validation_ns/doc`,
