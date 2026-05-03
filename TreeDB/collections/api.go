@@ -623,6 +623,7 @@ type indexedFlushUnit struct {
 	rootPolicies    map[string]backenddb.OrderedRootStoragePolicy
 	rootBaseIDs     map[string]uint64
 	uniqueValueRuns map[string][]memtable.Table
+	arenaRefs       [][]byte
 	docCount        int
 	byteCount       int64
 	rootRunCount    int
@@ -662,6 +663,7 @@ type bufferedIndexedCheckpoint struct {
 	rootMutableRuns        map[string]memtable.Table
 	rootPolicies           map[string]backenddb.OrderedRootStoragePolicy
 	rootBaseIDs            map[string]uint64
+	rootValueArenas        [][]byte
 	indexedPublishingUnits []indexedFlushUnit
 	indexedFlushUnits      []indexedFlushUnit
 	primaryRunIndexActive  bool
@@ -716,6 +718,7 @@ type collectionWriteDomain struct {
 	rootMutableRuns        map[string]memtable.Table
 	rootPolicies           map[string]backenddb.OrderedRootStoragePolicy
 	rootBaseIDs            map[string]uint64
+	rootValueArenas        [][]byte
 	primaryIDIndex         *bufferedUniqueValueIndex
 	// Built lazily by readers so write-only indexed buffering does not pay for
 	// an auxiliary lookup structure it never uses.
@@ -2877,6 +2880,7 @@ func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWr
 	domain.rootMutableRuns = nil
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
+	domain.rootValueArenas = nil
 	domain.rootRunCount = 0
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
@@ -3469,6 +3473,7 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		rootMutableRuns:        cloneMutableRunMap(domain.rootMutableRuns),
 		rootPolicies:           cloneRootPolicyMap(domain.rootPolicies),
 		rootBaseIDs:            cloneUint64Map(domain.rootBaseIDs),
+		rootValueArenas:        cloneArenaRefs(domain.rootValueArenas),
 		indexedPublishingUnits: cloneIndexedFlushUnits(domain.indexedPublishingUnits),
 		indexedFlushUnits:      cloneIndexedFlushUnits(domain.indexedFlushUnits),
 		primaryRunIndexActive:  domain.primaryRunIndex != nil,
@@ -3502,6 +3507,7 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.rootMutableRuns = checkpoint.rootMutableRuns
 	domain.rootPolicies = checkpoint.rootPolicies
 	domain.rootBaseIDs = checkpoint.rootBaseIDs
+	domain.rootValueArenas = checkpoint.rootValueArenas
 	domain.rootRunCount = checkpoint.rootRunCount
 	pendingRuns := indexedFlushUnitPendingRootRunMap(indexedFlushUnitsWithPublishing(checkpoint.indexedPublishingUnits, checkpoint.indexedFlushUnits), checkpoint.rootRuns)
 	domain.primaryIDIndex = rebuildBufferedPrimaryIDIndex(checkpoint.meta.Name, pendingRuns)
@@ -3531,12 +3537,20 @@ func cloneIndexedFlushUnits(in []indexedFlushUnit) []indexedFlushUnit {
 			rootPolicies:    cloneRootPolicyMap(unit.rootPolicies),
 			rootBaseIDs:     cloneUint64Map(unit.rootBaseIDs),
 			uniqueValueRuns: cloneTableRunMap(unit.uniqueValueRuns),
+			arenaRefs:       cloneArenaRefs(unit.arenaRefs),
 			docCount:        unit.docCount,
 			byteCount:       unit.byteCount,
 			rootRunCount:    unit.rootRunCount,
 		}
 	}
 	return out
+}
+
+func cloneArenaRefs(in [][]byte) [][]byte {
+	if len(in) == 0 {
+		return nil
+	}
+	return append([][]byte(nil), in...)
 }
 
 func indexedFlushUnitsWithPublishing(publishing, queued []indexedFlushUnit) []indexedFlushUnit {
@@ -4628,6 +4642,7 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 		work.pin = nil
 		domain.indexedFlushUnits = nil
 		domain.rootMutableRuns = nil
+		domain.rootValueArenas = nil
 		domain.count = 0
 		domain.bufferedBytes = 0
 		domain.mutableCount = 0
@@ -5001,6 +5016,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	if len(rootNames) == 0 {
 		domain.indexedFlushUnits = nil
 		domain.rootMutableRuns = nil
+		domain.rootValueArenas = nil
 		domain.count = 0
 		domain.bufferedBytes = 0
 		domain.mutableCount = 0
@@ -5090,6 +5106,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	domain.rootMutableRuns = nil
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
+	domain.rootValueArenas = nil
 	domain.rootRunCount = 0
 	domain.primaryIDIndex = nil
 	domain.primaryRunIndex = nil
@@ -5122,6 +5139,7 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 		rootPolicies:    domain.rootPolicies,
 		rootBaseIDs:     domain.rootBaseIDs,
 		uniqueValueRuns: domain.uniqueValueRuns,
+		arenaRefs:       domain.rootValueArenas,
 		docCount:        domain.mutableCount,
 		byteCount:       domain.mutableBytes,
 		rootRunCount:    domain.rootRunCount,
@@ -5132,6 +5150,7 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
 	domain.uniqueValueRuns = nil
+	domain.rootValueArenas = nil
 	domain.rootRunCount = 0
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
@@ -5268,6 +5287,7 @@ func mergedIndexedFlushUnitLocked(domain *collectionWriteDomain) indexedFlushUni
 		rootPolicies:    domain.rootPolicies,
 		rootBaseIDs:     domain.rootBaseIDs,
 		uniqueValueRuns: domain.uniqueValueRuns,
+		arenaRefs:       domain.rootValueArenas,
 		rootRunCount:    domain.rootRunCount,
 	})
 	if len(unit.rootRuns) == 0 {
@@ -5291,6 +5311,7 @@ func mergeIndexedFlushUnit(dst *indexedFlushUnit, src indexedFlushUnit) {
 	}
 	appendTableRunMap(dst.rootRuns, src.rootRuns)
 	appendTableRunMap(dst.uniqueValueRuns, src.uniqueValueRuns)
+	dst.arenaRefs = append(dst.arenaRefs, src.arenaRefs...)
 	for rootName, policy := range src.rootPolicies {
 		dst.rootPolicies[rootName] = policy
 	}
@@ -7340,11 +7361,31 @@ func buildDirectBufferedPrimaryRootEntries(changed []preparedBatchUpdate) []dire
 	for i := range changed {
 		entries[i] = directBufferedRootEntry{
 			key:   bytes.Clone(changed[i].documentID),
-			value: bytes.Clone(changed[i].document),
+			value: changed[i].document,
 			flags: node.FlagInline,
 		}
 	}
 	return entries
+}
+
+func detachUpdateBatchPlanDocumentArena(scratch *updateBatchPlanScratch) []byte {
+	if scratch == nil || len(scratch.documentArena) == 0 {
+		return nil
+	}
+	arena := scratch.documentArena
+	scratch.documentArena = nil
+	return arena
+}
+
+func retainDirectBufferedDocumentArenaLocked(domain *collectionWriteDomain, plan *updateBatchPlan) {
+	if domain == nil || plan == nil || plan.directBufferedUpdate == nil {
+		return
+	}
+	arena := detachUpdateBatchPlanDocumentArena(plan.scratch)
+	if len(arena) == 0 {
+		return
+	}
+	domain.rootValueArenas = append(domain.rootValueArenas, arena)
 }
 
 func applyDirectBufferedRootEntries(table memtable.Table, entries []directBufferedRootEntry) error {
@@ -8970,6 +9011,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		}
 	}
 	plan.stats.BufferStageRootAppend += updateBatchStatsSince(detailedStats, phaseStart)
+	retainDirectBufferedDocumentArenaLocked(domain, plan)
 
 	domain.loaded = true
 	domain.meta = plan.meta
@@ -9604,6 +9646,7 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 	domain.rootRuns = nil
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
+	domain.rootValueArenas = nil
 	domain.rootRunCount = 0
 	domain.primaryIDIndex = nil
 	domain.primaryRunIndex = nil

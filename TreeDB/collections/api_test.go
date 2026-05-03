@@ -8494,9 +8494,10 @@ func TestCollectionUpdateBatchDirectBufferedTemplateV1AccumulatesRootRuns(t *tes
 	}
 }
 
-func TestDirectBufferedRootEntriesOwnSourceBytes(t *testing.T) {
+func TestDirectBufferedRootEntriesOwnKeysAndRetainDocumentArena(t *testing.T) {
+	scratch := getUpdateBatchPlanScratch(1, 0)
 	documentID := []byte("u1")
-	document := []byte(`{"city":"hnl"}`)
+	document := appendUpdateBatchPlanScratchDocument(scratch, []byte(`{"city":"hnl"}`))
 	primaryEntries := buildDirectBufferedPrimaryRootEntries([]preparedBatchUpdate{{
 		documentID: documentID,
 		document:   document,
@@ -8505,20 +8506,44 @@ func TestDirectBufferedRootEntriesOwnSourceBytes(t *testing.T) {
 		t.Fatalf("primary entries=%d want 1", len(primaryEntries))
 	}
 	documentID[0] = 'x'
-	document[0] = '['
-	if !bytes.Equal(primaryEntries[0].key, []byte("u1")) || !bytes.Equal(primaryEntries[0].value, []byte(`{"city":"hnl"}`)) {
-		t.Fatalf("primary entry key=%q value=%q, want owned original bytes", primaryEntries[0].key, primaryEntries[0].value)
+	if !bytes.Equal(primaryEntries[0].key, []byte("u1")) {
+		t.Fatalf("primary entry key=%q, want owned original key", primaryEntries[0].key)
+	}
+	if &primaryEntries[0].value[0] != &document[0] {
+		t.Fatalf("primary entry value was cloned, want borrowed document arena")
 	}
 
-	templateRecord := templateV1Record{
+	table := newFreezeSortRunTable()
+	if err := applyDirectBufferedRootEntries(table, primaryEntries); err != nil {
+		t.Fatalf("apply direct primary entries: %v", err)
+	}
+	plan := newUpdateBatchPlan()
+	plan.scratch = scratch
+	plan.directBufferedUpdate = &directBufferedUpdatePlan{primaryEntries: primaryEntries}
+	var domain collectionWriteDomain
+	retainDirectBufferedDocumentArenaLocked(&domain, plan)
+	if got := len(domain.rootValueArenas); got != 1 {
+		t.Fatalf("retained document arenas=%d want 1", got)
+	}
+	plan.close()
+	reused := getUpdateBatchPlanScratch(1, 0)
+	_ = appendUpdateBatchPlanScratchDocument(reused, []byte(`{"city":"koa"}`))
+	putUpdateBatchPlanScratch(reused)
+	got, deleted, ok := table.Get([]byte("u1"))
+	if !ok || deleted || !bytes.Equal(got, []byte(`{"city":"hnl"}`)) {
+		t.Fatalf("staged primary value=%q ok=%v deleted=%v, want retained original", got, ok, deleted)
+	}
+
+	templateRecords := []templateV1Record{{
 		id:  [32]byte{1, 2, 3},
 		raw: []byte("template-record"),
-	}
-	templateEntries := buildDirectBufferedTemplateRootEntries([]templateV1Record{templateRecord})
+	}}
+	templateEntries := buildDirectBufferedTemplateRootEntries(templateRecords)
 	if len(templateEntries) != 1 {
 		t.Fatalf("template entries=%d want 1", len(templateEntries))
 	}
-	templateRecord.raw[0] = 'X'
+	templateRecords[0].id[0] = 9
+	templateRecords[0].raw[0] = 'X'
 	if templateEntries[0].key[0] != 1 || !bytes.Equal(templateEntries[0].value, []byte("template-record")) {
 		t.Fatalf("template entry key[0]=%d value=%q, want owned original bytes", templateEntries[0].key[0], templateEntries[0].value)
 	}
