@@ -10682,6 +10682,9 @@ func collectionGetAppendAtCatalogOverlayRoot(snap *backenddb.Snapshot, catalog *
 		if entry.Flags&node.FlagTombstone != 0 {
 			return dst[:0], true, false, nil
 		}
+		if entry.Flags&node.FlagPointer == 0 {
+			return append(dst[:0], entry.Value...), true, true, nil
+		}
 		out, err := snap.GetAppendAtRoot(rootID, key, dst[:0])
 		if errors.Is(err, tree.ErrKeyNotFound) {
 			return dst[:0], false, false, nil

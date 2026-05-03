@@ -2468,7 +2468,7 @@ func TestCollectionIndexedOverlayRootFlushSupportsReadsUpdatesAndUniqueChecks(t 
 	}
 }
 
-func TestCollectionOverlayPrimaryProbeDoesNotReadBaseOnMiss(t *testing.T) {
+func TestCollectionOverlayPrimaryProbeMissDoesNotFallThroughToBase(t *testing.T) {
 	dir := t.TempDir()
 	db, err := backenddb.Open(backenddb.Options{Dir: dir})
 	if err != nil {
