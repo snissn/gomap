@@ -924,6 +924,8 @@ func TestValueLogManager_ReadUnsafeTo_CompressedGroupedMmapUsesCache(t *testing.
 	if f == nil {
 		t.Fatalf("missing opened file for id=%d", fileID)
 	}
+	f.remapToFileSize()
+	hitsBefore, _, _, _, fallbacksBefore := m.MmapReadStats()
 
 	dst := make([]byte, 0, 512)
 	got0, used0, err := m.ReadUnsafeTo(ptrs[0], dst[:0])
@@ -935,6 +937,13 @@ func TestValueLogManager_ReadUnsafeTo_CompressedGroupedMmapUsesCache(t *testing.
 	}
 	if !bytes.Equal(got0, want[0]) {
 		t.Fatalf("first value mismatch: got=%q want=%q", got0, want[0])
+	}
+	hitsAfterFirst, _, _, _, fallbacksAfterFirst := m.MmapReadStats()
+	if hitsAfterFirst <= hitsBefore {
+		t.Fatalf("expected first read to use mmap path: hits before=%d after=%d", hitsBefore, hitsAfterFirst)
+	}
+	if fallbacksAfterFirst != fallbacksBefore {
+		t.Fatalf("unexpected readat fallback on first read: before=%d after=%d", fallbacksBefore, fallbacksAfterFirst)
 	}
 
 	hits0, misses0, entries0, _ := f.groupedFrameCacheStats()
@@ -954,6 +963,13 @@ func TestValueLogManager_ReadUnsafeTo_CompressedGroupedMmapUsesCache(t *testing.
 	}
 	if !bytes.Equal(got1, want[1]) {
 		t.Fatalf("second value mismatch: got=%q want=%q", got1, want[1])
+	}
+	hitsAfterSecond, _, _, _, fallbacksAfterSecond := m.MmapReadStats()
+	if hitsAfterSecond <= hitsAfterFirst {
+		t.Fatalf("expected second read to use mmap path: hits before=%d after=%d", hitsAfterFirst, hitsAfterSecond)
+	}
+	if fallbacksAfterSecond != fallbacksBefore {
+		t.Fatalf("unexpected readat fallback after second read: before=%d after=%d", fallbacksBefore, fallbacksAfterSecond)
 	}
 
 	hits1, misses1, entries1, _ := f.groupedFrameCacheStats()
