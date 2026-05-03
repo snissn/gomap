@@ -6892,9 +6892,11 @@ var updateBatchBufferedEntryPool sync.Pool
 
 type updateBatchBufferedEntryBuffer struct {
 	entries []updateBatchBufferedEntry
+	arena   []byte
 }
 
 const updateBatchBufferedEntryPoolMaxCap = 1 << 15
+const updateBatchBufferedValueArenaPoolMaxCap = updateBatchPlanScratchMaxDocumentArena
 
 func getUpdateBatchBufferedEntries(count int) ([]updateBatchBufferedEntry, *updateBatchBufferedEntryBuffer) {
 	if count <= 0 {
@@ -6907,6 +6909,7 @@ func getUpdateBatchBufferedEntries(count int) ([]updateBatchBufferedEntry, *upda
 		if buffer, ok := v.(*updateBatchBufferedEntryBuffer); ok && buffer != nil {
 			if cap(buffer.entries) >= count {
 				buffer.entries = buffer.entries[:count]
+				buffer.ensureValueArenaCapacity(estimateUpdateBatchPlanDocumentArenaBytes(count))
 				return buffer.entries, buffer
 			}
 			putUpdateBatchBufferedEntries(buffer.entries, buffer)
@@ -6915,6 +6918,7 @@ func getUpdateBatchBufferedEntries(count int) ([]updateBatchBufferedEntry, *upda
 	buffer := &updateBatchBufferedEntryBuffer{
 		entries: make([]updateBatchBufferedEntry, count),
 	}
+	buffer.ensureValueArenaCapacity(estimateUpdateBatchPlanDocumentArenaBytes(count))
 	return buffer.entries, buffer
 }
 
@@ -6925,7 +6929,45 @@ func putUpdateBatchBufferedEntries(entries []updateBatchBufferedEntry, buffer *u
 	full := entries[:cap(entries)]
 	clear(full)
 	buffer.entries = full[:0]
+	if cap(buffer.arena) > updateBatchBufferedValueArenaPoolMaxCap {
+		buffer.arena = nil
+	} else if buffer.arena != nil {
+		buffer.arena = buffer.arena[:0]
+	}
 	updateBatchBufferedEntryPool.Put(buffer)
+}
+
+func (buffer *updateBatchBufferedEntryBuffer) copyValue(value []byte) []byte {
+	if value == nil {
+		return nil
+	}
+	if buffer == nil {
+		return bytes.Clone(value)
+	}
+	if len(value) == 0 {
+		if buffer.arena == nil {
+			buffer.ensureValueArenaCapacity(1)
+		}
+		return buffer.arena[len(buffer.arena):len(buffer.arena):len(buffer.arena)]
+	}
+	start := len(buffer.arena)
+	buffer.arena = append(buffer.arena, value...)
+	return buffer.arena[start:len(buffer.arena):len(buffer.arena)]
+}
+
+func (buffer *updateBatchBufferedEntryBuffer) ensureValueArenaCapacity(capacity int) {
+	if buffer == nil {
+		return
+	}
+	if capacity <= 0 {
+		buffer.arena = buffer.arena[:0]
+		return
+	}
+	if cap(buffer.arena) < capacity || cap(buffer.arena) > updateBatchBufferedValueArenaPoolMaxCap {
+		buffer.arena = make([]byte, 0, capacity)
+		return
+	}
+	buffer.arena = buffer.arena[:0]
 }
 
 type updateBatchCurrentDocument struct {
@@ -7175,7 +7217,7 @@ func snapshotUpdateBatchBufferedPrimaryEntries(runs []memtable.Table, items []Up
 		for i, item := range items {
 			if value, _, flags, found := getBufferedRunEntry(runs, item.DocumentID); found {
 				entries[i] = updateBatchBufferedEntry{
-					value: bytes.Clone(value),
+					value: buffer.copyValue(value),
 					flags: flags,
 					found: true,
 				}
@@ -7198,7 +7240,7 @@ func snapshotUpdateBatchBufferedPrimaryEntries(runs []memtable.Table, items []Up
 			if itemIndex, ok := targets[key]; ok && !entries[itemIndex].found {
 				value, _, flags := it.UnsafeEntry()
 				entries[itemIndex] = updateBatchBufferedEntry{
-					value: bytes.Clone(value),
+					value: buffer.copyValue(value),
 					flags: flags,
 					found: true,
 				}
@@ -7231,7 +7273,7 @@ func snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(index *bufferedPrimaryRu
 			continue
 		}
 		entries[i] = updateBatchBufferedEntry{
-			value: bytes.Clone(value),
+			value: buffer.copyValue(value),
 			flags: flags,
 			found: true,
 		}
