@@ -7757,7 +7757,7 @@ func TestSnapshotUpdateBatchBufferedReadPrimaryRunIndexAvoidsCollectingPendingRu
 	}
 }
 
-func TestSnapshotUpdateBatchBufferedPrimaryEntriesFromIndexReusesValueArena(t *testing.T) {
+func TestSnapshotUpdateBatchBufferedPrimaryEntriesFromIndexUsesValueArena(t *testing.T) {
 	primaryTable := newCollectionRunTable(3)
 	setCollectionRunValue(primaryTable, []byte("u1"), []byte(`{"city":"paris"}`))
 	setCollectionRunValue(primaryTable, []byte("u2"), []byte(`{"city":"rome"}`))
@@ -7802,6 +7802,22 @@ func TestSnapshotUpdateBatchBufferedPrimaryEntriesFromIndexReusesValueArena(t *t
 		}
 	}
 	assertRead()
+}
+
+func TestUpdateBatchBufferedEntryBufferCopyValuePreservesEmptySlice(t *testing.T) {
+	buffer := &updateBatchBufferedEntryBuffer{}
+	buffer.ensureValueArenaCapacity(1)
+	empty := []byte{}
+	got := buffer.copyValue(empty)
+	if got == nil {
+		t.Fatal("copyValue(empty non-nil slice) returned nil")
+	}
+	if len(got) != 0 {
+		t.Fatalf("copyValue(empty) len=%d want 0", len(got))
+	}
+	if nilValue := buffer.copyValue(nil); nilValue != nil {
+		t.Fatalf("copyValue(nil)=%v want nil", nilValue)
+	}
 }
 
 func BenchmarkSnapshotUpdateBatchBufferedPrimaryEntriesFromIndexValues(b *testing.B) {

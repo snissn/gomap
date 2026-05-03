@@ -6903,11 +6903,17 @@ func putUpdateBatchBufferedEntries(entries []updateBatchBufferedEntry, buffer *u
 }
 
 func (buffer *updateBatchBufferedEntryBuffer) copyValue(value []byte) []byte {
-	if len(value) == 0 {
+	if value == nil {
 		return nil
 	}
 	if buffer == nil {
 		return bytes.Clone(value)
+	}
+	if len(value) == 0 {
+		if buffer.arena == nil {
+			buffer.ensureValueArenaCapacity(1)
+		}
+		return buffer.arena[len(buffer.arena):len(buffer.arena):len(buffer.arena)]
 	}
 	start := len(buffer.arena)
 	buffer.arena = append(buffer.arena, value...)
