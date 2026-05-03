@@ -106,6 +106,11 @@ type OrderedRootDeltaBatchPublishInput struct {
 	BaseRoot      uint64
 	Delta         *batch.Batch
 	StoragePolicy OrderedRootStoragePolicy
+	// IncludeDeletedOnColdBuild preserves tombstones when BaseRoot is zero.
+	// Most cold root builds can omit deletes because there is no base tree to
+	// hide, but collection overlay roots need tombstones to mask older overlay
+	// or base-root entries during reads.
+	IncludeDeletedOnColdBuild bool
 	// ParallelApply allows this root-local batch apply to run concurrently with
 	// other opted-in roots in the same group before the final commit validation.
 	// Callers should opt in only when root deltas are already materialized and
@@ -644,10 +649,10 @@ func (db *DB) publishOrderedRootDeltaBatch(baseRoot uint64, delta *batch.Batch, 
 		err = errors.New("missing index")
 		return
 	}
-	return db.publishOrderedRootDeltaBatchWithAllocator(idx, baseRoot, delta, opts, idx.allocator, &pagerAllocator{p: idx.pager})
+	return db.publishOrderedRootDeltaBatchWithAllocator(idx, baseRoot, delta, opts, idx.allocator, &pagerAllocator{p: idx.pager}, false)
 }
 
-func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot uint64, delta *batch.Batch, opts orderedRootPublishOptions, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, err error) {
+func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot uint64, delta *batch.Batch, opts orderedRootPublishOptions, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator, includeDeletedOnColdBuild bool) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, err error) {
 	if db == nil {
 		err = ErrClosed
 		return
@@ -672,7 +677,7 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 		return baseRoot, nil, metrics, nil
 	}
 	if baseRoot == 0 {
-		iter := newOrderedRootDeltaBatchIterator(delta, false)
+		iter := newOrderedRootDeltaBatchIterator(delta, includeDeletedOnColdBuild)
 		defer func() { _ = iter.Close() }()
 		if coldBuildAlloc == nil {
 			coldBuildAlloc = alloc
@@ -1422,7 +1427,7 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 			result.err = err
 			return result
 		}
-		rootID, retired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, opts, alloc, coldBuildAlloc)
+		rootID, retired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, opts, alloc, coldBuildAlloc, ordered[orderedIdx].IncludeDeletedOnColdBuild)
 		result.rootID = rootID
 		result.retired = retired
 		result.metrics = metrics
@@ -1586,7 +1591,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			return 0, nil, false, err
 		}
 		phaseStart = time.Now()
-		rootID, systemRetired, systemMetrics, applyErr := db.publishOrderedRootDeltaBatchWithAllocator(idx, systemBaseRoot, systemDelta, systemOpts, systemTracker, systemTracker)
+		rootID, systemRetired, systemMetrics, applyErr := db.publishOrderedRootDeltaBatchWithAllocator(idx, systemBaseRoot, systemDelta, systemOpts, systemTracker, systemTracker, false)
 		phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.systemApplyCalls++
 		_ = systemDelta.Close()
@@ -1687,6 +1692,11 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		err = ErrReadOnly
 		return 0, nil, err
 	}
+	idxGen := db.idx.Load()
+	if idxGen == nil {
+		err = errors.New("missing index")
+		return 0, nil, err
+	}
 
 	db.mu.RLock()
 	userRoot := db.meta.UserRootPageID
@@ -1711,7 +1721,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 			return 0, nil, err
 		}
 		phaseStart := time.Now()
-		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatch(ordered[idx].BaseRoot, ordered[idx].Delta, opts)
+		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idxGen, ordered[idx].BaseRoot, ordered[idx].Delta, opts, idxGen.allocator, &pagerAllocator{p: idxGen.pager}, ordered[idx].IncludeDeletedOnColdBuild)
 		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.rootApplyCalls++
 		if err != nil {
