@@ -976,7 +976,7 @@ func reportProfileBenchOrderedRootPublishStats(b *testing.B, after, before map[s
 }
 
 func deltaCollectionManagerUpdateStats(after, before collections.CollectionManagerStats) collections.CollectionManagerStats {
-	return collections.CollectionManagerStats{
+	delta := collections.CollectionManagerStats{
 		UpdateBatchCalls:               after.UpdateBatchCalls - before.UpdateBatchCalls,
 		UpdateBatchItems:               after.UpdateBatchItems - before.UpdateBatchItems,
 		UpdateBatchMatched:             after.UpdateBatchMatched - before.UpdateBatchMatched,
@@ -1016,6 +1016,36 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 		UpdateCombineBatchedRequests:   after.UpdateCombineBatchedRequests - before.UpdateCombineBatchedRequests,
 		UpdateCombineFallbackRequests:  after.UpdateCombineFallbackRequests - before.UpdateCombineFallbackRequests,
 	}
+	for i := 0; i < after.UpdateBatchIndexStatsCount && i < len(after.UpdateBatchIndexStats); i++ {
+		next := after.UpdateBatchIndexStats[i]
+		if next.IndexName == "" {
+			continue
+		}
+		if previous, ok := collectionManagerUpdateIndexStatByName(before, next.IndexName); ok {
+			next.Changed -= previous.Changed
+			next.Unchanged -= previous.Unchanged
+			next.UniqueChecks -= previous.UniqueChecks
+			next.UniqueCheckSkips -= previous.UniqueCheckSkips
+			next.SecondaryRuns -= previous.SecondaryRuns
+			next.SecondaryDeletes -= previous.SecondaryDeletes
+			next.SecondarySets -= previous.SecondarySets
+			next.SecondaryKeyBytes -= previous.SecondaryKeyBytes
+		}
+		if delta.UpdateBatchIndexStatsCount < len(delta.UpdateBatchIndexStats) {
+			delta.UpdateBatchIndexStats[delta.UpdateBatchIndexStatsCount] = next
+			delta.UpdateBatchIndexStatsCount++
+		}
+	}
+	return delta
+}
+
+func collectionManagerUpdateIndexStatByName(stats collections.CollectionManagerStats, name string) (collections.CollectionUpdateIndexStats, bool) {
+	for i := 0; i < stats.UpdateBatchIndexStatsCount && i < len(stats.UpdateBatchIndexStats); i++ {
+		if stats.UpdateBatchIndexStats[i].IndexName == name {
+			return stats.UpdateBatchIndexStats[i], true
+		}
+	}
+	return collections.CollectionUpdateIndexStats{}, false
 }
 
 func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
@@ -1028,6 +1058,11 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateBatchIndexValueUnchanged: 30,
 		UpdateBatchUniqueChecks:        4,
 		UpdateBatchUniqueCheckSkips:    10,
+		UpdateBatchIndexStatsCount:     2,
+		UpdateBatchIndexStats: [8]collections.CollectionUpdateIndexStats{
+			{IndexName: "email", Unique: true, Changed: 1, Unchanged: 9, UniqueChecks: 1, UniqueCheckSkips: 8},
+			{IndexName: "city", Changed: 10, SecondaryRuns: 10, SecondaryDeletes: 10, SecondarySets: 10, SecondaryKeyBytes: 1000},
+		},
 	}
 	after := collections.CollectionManagerStats{
 		UpdateCombineRequests:          17,
@@ -1038,6 +1073,11 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateBatchIndexValueUnchanged: 43,
 		UpdateBatchUniqueChecks:        6,
 		UpdateBatchUniqueCheckSkips:    19,
+		UpdateBatchIndexStatsCount:     2,
+		UpdateBatchIndexStats: [8]collections.CollectionUpdateIndexStats{
+			{IndexName: "email", Unique: true, Changed: 1, Unchanged: 22, UniqueChecks: 1, UniqueCheckSkips: 17},
+			{IndexName: "city", Changed: 17, SecondaryRuns: 17, SecondaryDeletes: 17, SecondarySets: 17, SecondaryKeyBytes: 1700},
+		},
 	}
 	got := deltaCollectionManagerUpdateStats(after, before)
 	if got.UpdateCombineRequests != 7 {
@@ -1063,6 +1103,23 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 	}
 	if got.UpdateBatchUniqueCheckSkips != 9 {
 		t.Fatalf("UpdateBatchUniqueCheckSkips=%d want 9", got.UpdateBatchUniqueCheckSkips)
+	}
+	if got.UpdateBatchIndexStatsCount != 2 {
+		t.Fatalf("UpdateBatchIndexStatsCount=%d want 2", got.UpdateBatchIndexStatsCount)
+	}
+	email, ok := collectionManagerUpdateIndexStatByName(got, "email")
+	if !ok {
+		t.Fatalf("missing email index stat in %+v", got.UpdateBatchIndexStats)
+	}
+	if !email.Unique || email.Changed != 0 || email.Unchanged != 13 || email.UniqueChecks != 0 || email.UniqueCheckSkips != 9 {
+		t.Fatalf("email delta=%+v want unchanged=13 unique_skips=9", email)
+	}
+	city, ok := collectionManagerUpdateIndexStatByName(got, "city")
+	if !ok {
+		t.Fatalf("missing city index stat in %+v", got.UpdateBatchIndexStats)
+	}
+	if city.Changed != 7 || city.SecondaryRuns != 7 || city.SecondaryDeletes != 7 || city.SecondarySets != 7 || city.SecondaryKeyBytes != 700 {
+		t.Fatalf("city delta=%+v want changed/run/delete/set/key-bytes 7/7/7/7/700", city)
 	}
 }
 
@@ -1123,6 +1180,37 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 	}
 	if stats.UpdateBatchUniqueCheckSkips > 0 {
 		b.ReportMetric(float64(stats.UpdateBatchUniqueCheckSkips)/float64(docs), "update_unique_check_skips/doc")
+	}
+	for i := 0; i < stats.UpdateBatchIndexStatsCount && i < len(stats.UpdateBatchIndexStats); i++ {
+		indexStats := stats.UpdateBatchIndexStats[i]
+		if indexStats.IndexName == "" {
+			continue
+		}
+		prefix := "update_index_" + sanitizeProfileName(indexStats.IndexName) + "_"
+		if indexStats.Changed > 0 {
+			b.ReportMetric(float64(indexStats.Changed)/float64(docs), prefix+"changed/doc")
+		}
+		if indexStats.Unchanged > 0 {
+			b.ReportMetric(float64(indexStats.Unchanged)/float64(docs), prefix+"unchanged/doc")
+		}
+		if indexStats.UniqueChecks > 0 {
+			b.ReportMetric(float64(indexStats.UniqueChecks)/float64(docs), prefix+"unique_checks/doc")
+		}
+		if indexStats.UniqueCheckSkips > 0 {
+			b.ReportMetric(float64(indexStats.UniqueCheckSkips)/float64(docs), prefix+"unique_check_skips/doc")
+		}
+		if indexStats.SecondaryRuns > 0 {
+			b.ReportMetric(float64(indexStats.SecondaryRuns)/float64(docs), prefix+"secondary_runs/doc")
+		}
+		if indexStats.SecondaryDeletes > 0 {
+			b.ReportMetric(float64(indexStats.SecondaryDeletes)/float64(docs), prefix+"secondary_deletes/doc")
+		}
+		if indexStats.SecondarySets > 0 {
+			b.ReportMetric(float64(indexStats.SecondarySets)/float64(docs), prefix+"secondary_sets/doc")
+		}
+		if indexStats.SecondaryKeyBytes > 0 {
+			b.ReportMetric(float64(indexStats.SecondaryKeyBytes)/float64(docs), prefix+"secondary_key_bytes/doc")
+		}
 	}
 	reportDuration := func(name string, d time.Duration) {
 		if d > 0 {

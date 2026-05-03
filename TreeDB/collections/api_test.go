@@ -791,6 +791,79 @@ func TestCollectionUpdateBufferBreakdownStatsSnapshotAndAdd(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateIndexStatsSnapshotAndExport(t *testing.T) {
+	updateStats := CollectionUpdateStats{
+		IndexStatsCount: 2,
+		IndexStats: [maxCollectionUpdateInlineIndexStats]CollectionUpdateIndexStats{
+			{
+				IndexName:        "email",
+				Unique:           true,
+				Unchanged:        1,
+				UniqueCheckSkips: 1,
+			},
+			{
+				IndexName:         "city/name",
+				Changed:           2,
+				SecondaryRuns:     2,
+				SecondaryDeletes:  2,
+				SecondarySets:     2,
+				SecondaryKeyBytes: 128,
+			},
+		},
+	}
+	domain := &collectionWriteDomain{}
+	domain.observeUpdateBatchStats(updateStats)
+	domain.observeUpdateBatchStats(updateStats)
+
+	snapshot := domain.statsSnapshot()
+	if got, want := snapshot.UpdateBatchIndexStatsCount, 2; got != want {
+		t.Fatalf("snapshot index stats count=%d want %d", got, want)
+	}
+	indexStatByName := func(stats []CollectionUpdateIndexStats, name string) CollectionUpdateIndexStats {
+		t.Helper()
+		for _, stat := range stats {
+			if stat.IndexName == name {
+				return stat
+			}
+		}
+		t.Fatalf("missing index stat %q in %+v", name, stats)
+		return CollectionUpdateIndexStats{}
+	}
+	stats := snapshot.UpdateBatchIndexStats[:snapshot.UpdateBatchIndexStatsCount]
+	email := indexStatByName(stats, "email")
+	if !email.Unique || email.Unchanged != 2 || email.UniqueCheckSkips != 2 {
+		t.Fatalf("email aggregate=%+v want unchanged/skips 2", email)
+	}
+	city := indexStatByName(stats, "city/name")
+	if city.Changed != 4 || city.SecondaryRuns != 4 || city.SecondaryDeletes != 4 || city.SecondarySets != 4 || city.SecondaryKeyBytes != 256 {
+		t.Fatalf("city aggregate=%+v want doubled secondary work", city)
+	}
+
+	var merged CollectionManagerStats
+	merged.add(snapshot)
+	mergedStats := merged.UpdateBatchIndexStats[:merged.UpdateBatchIndexStatsCount]
+	if got := indexStatByName(mergedStats, "city/name").SecondaryKeyBytes; got != 256 {
+		t.Fatalf("merged city key bytes=%d want 256", got)
+	}
+
+	exported := (&CollectionManager{domains: map[string]*collectionWriteDomain{"test": domain}}).Stats()
+	if got, want := exported["treedb.collections.write_domain.update_batch.index.email.unique"], "1"; got != want {
+		t.Fatalf("exported email unique=%q want %q", got, want)
+	}
+	if got, want := exported["treedb.collections.write_domain.update_batch.index.email.unchanged_total"], "2"; got != want {
+		t.Fatalf("exported email unchanged=%q want %q", got, want)
+	}
+	if got, want := exported["treedb.collections.write_domain.update_batch.index.email.unique_check_skips_total"], "2"; got != want {
+		t.Fatalf("exported email skips=%q want %q", got, want)
+	}
+	if got, want := exported["treedb.collections.write_domain.update_batch.index.city_name.changed_total"], "4"; got != want {
+		t.Fatalf("exported city changed=%q want %q", got, want)
+	}
+	if got, want := exported["treedb.collections.write_domain.update_batch.index.city_name.secondary_key_bytes_total"], "256"; got != want {
+		t.Fatalf("exported city key bytes=%q want %q", got, want)
+	}
+}
+
 func TestUpdateBatchPlanUniqueSecondaryIndexByRootAvoidsMapAllocation(t *testing.T) {
 	meta := CollectionMeta{
 		Name: "users",
