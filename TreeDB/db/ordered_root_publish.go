@@ -1442,14 +1442,9 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 
 	parallelRoots := 0
 	for orderedIdx := range ordered {
-		if !ordered[orderedIdx].ParallelApply || ordered[orderedIdx].Delta == nil || ordered[orderedIdx].Delta.IsEmpty() {
-			results[orderedIdx] = applyOne(orderedIdx)
-			if results[orderedIdx].err != nil {
-				return results, false
-			}
-			continue
+		if ordered[orderedIdx].ParallelApply && ordered[orderedIdx].Delta != nil && !ordered[orderedIdx].Delta.IsEmpty() {
+			parallelRoots++
 		}
-		parallelRoots++
 	}
 
 	var wg sync.WaitGroup
@@ -1464,6 +1459,18 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 		}(orderedIdx)
 	}
 	wg.Wait()
+	for orderedIdx := range ordered {
+		if ordered[orderedIdx].ParallelApply && ordered[orderedIdx].Delta != nil && !ordered[orderedIdx].Delta.IsEmpty() {
+			if results[orderedIdx].err != nil {
+				return results, false
+			}
+			continue
+		}
+		results[orderedIdx] = applyOne(orderedIdx)
+		if results[orderedIdx].err != nil {
+			return results, false
+		}
+	}
 	return results, parallelRoots >= orderedRootDeltaBatchGroupParallelApplyMinRoots
 }
 
