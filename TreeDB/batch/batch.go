@@ -59,6 +59,8 @@ type Batch struct {
 	byteSize        int
 	inlineThreshold int
 	thresholdForKey func([]byte) int
+	poolKind        batchPoolKind
+	maxPoolEntries  int
 	// Small-set fast path: most batches touch <=4 value-log segments.
 	touchedValueLogSmall    [4]uint32
 	touchedValueLogSmallLen int
@@ -71,7 +73,17 @@ type Batch struct {
 	reader                  ValueReader
 }
 
-const maxBatchPoolCap = 1 << 16
+const (
+	maxBatchPoolCap           = 1 << 16
+	maxLargeEntryBatchPoolCap = 1 << 18
+)
+
+type batchPoolKind uint8
+
+const (
+	batchPoolKindDefault batchPoolKind = iota
+	batchPoolKindLargeEntries
+)
 
 const (
 	// Store key/value copies in chunks so Set/Delete avoid per-entry allocations.
@@ -80,14 +92,16 @@ const (
 	batchArenaMaxRetainCap = 1 << 20
 )
 
-var batchPool = sync.Pool{
-	New: func() any {
-		return &Batch{
-			entries:   make([]Entry, 0, 16),
-			sorted:    true,
-			compacted: true,
-		}
-	},
+var batchPool = sync.Pool{New: func() any { return newPooledBatch() }}
+
+var largeEntryBatchPool = sync.Pool{New: func() any { return newPooledBatch() }}
+
+func newPooledBatch() any {
+	return &Batch{
+		entries:   make([]Entry, 0, 16),
+		sorted:    true,
+		compacted: true,
+	}
 }
 
 // New creates a new Batch.
@@ -95,14 +109,33 @@ func New(reader ValueReader, threshold int) *Batch {
 	return Acquire(reader, threshold)
 }
 
+// NewRetainingLargeEntries returns a batch from a separate pool that can retain
+// larger entry slices. Use this only for repeated internal materializations with
+// known large entry counts; ordinary batches should use New/Acquire.
+func NewRetainingLargeEntries(reader ValueReader, threshold int) *Batch {
+	return AcquireRetainingLargeEntries(reader, threshold)
+}
+
 // Acquire returns a reusable Batch from the pool.
 func Acquire(reader ValueReader, threshold int) *Batch {
+	return acquireFromPool(&batchPool, batchPoolKindDefault, maxBatchPoolCap, reader, threshold)
+}
+
+// AcquireRetainingLargeEntries returns a reusable Batch from the large-entry
+// pool. See NewRetainingLargeEntries.
+func AcquireRetainingLargeEntries(reader ValueReader, threshold int) *Batch {
+	return acquireFromPool(&largeEntryBatchPool, batchPoolKindLargeEntries, maxLargeEntryBatchPoolCap, reader, threshold)
+}
+
+func acquireFromPool(pool *sync.Pool, kind batchPoolKind, maxEntries int, reader ValueReader, threshold int) *Batch {
 	if threshold < 0 {
 		threshold = page.DefaultInlineThreshold
 	}
-	b := batchPool.Get().(*Batch)
+	b := pool.Get().(*Batch)
 	b.reader = reader
 	b.inlineThreshold = threshold
+	b.poolKind = kind
+	b.maxPoolEntries = maxEntries
 	b.closed = false
 	b.resetLocked()
 	return b
@@ -158,7 +191,11 @@ func (b *Batch) resetLocked() {
 
 func (b *Batch) resetForPool() {
 	if b.entries != nil {
-		if cap(b.entries) > maxBatchPoolCap {
+		maxEntries := b.maxPoolEntries
+		if maxEntries <= 0 {
+			maxEntries = maxBatchPoolCap
+		}
+		if cap(b.entries) > maxEntries {
 			// Drop oversized backing arrays without clearing them first. Once the
 			// slice is nil, the batch no longer retains the array or its key/value
 			// references, so clearing len entries would only add discard-path CPU.
@@ -230,7 +267,14 @@ func Release(b *Batch) {
 	b.inlineThreshold = 0
 	b.thresholdForKey = nil
 	b.closed = true
-	batchPool.Put(b)
+	switch b.poolKind {
+	case batchPoolKindLargeEntries:
+		largeEntryBatchPool.Put(b)
+	default:
+		b.poolKind = batchPoolKindDefault
+		b.maxPoolEntries = maxBatchPoolCap
+		batchPool.Put(b)
+	}
 }
 
 func (b *Batch) inlineThresholdForKey(key []byte) int {
