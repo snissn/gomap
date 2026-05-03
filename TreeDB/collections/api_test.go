@@ -4146,6 +4146,156 @@ func TestBufferedRootRunsIteratorMultiRunStableUnsafeSlices(t *testing.T) {
 	}
 }
 
+func TestBuildBufferedRootDeltaBatchPublishInputsParallelPreservesRootOrderAndTombstones(t *testing.T) {
+	primaryName := collectionPrimaryRootName("users")
+	stateName := collectionIndexStateRootName("users")
+	cityName := collectionSecondaryRootName("users", "city")
+
+	primaryTable := newCollectionRunTable(2)
+	primaryTable.DeleteSteal([]byte("u1"))
+	setCollectionRunValue(primaryTable, []byte("u2"), []byte(`{"city":"sea"}`))
+	primaryTable.Freeze()
+
+	stateTable := newCollectionRunTable(1)
+	setCollectionRunValue(stateTable, []byte("u2"), []byte("state"))
+	stateTable.Freeze()
+
+	cityTable := newCollectionRunTable(1)
+	setCollectionRunValue(cityTable, []byte("city:sea/u2"), nil)
+	cityTable.Freeze()
+	defer resetCollectionTables([]memtable.Table{primaryTable, stateTable, cityTable})
+
+	rootNames := []string{stateName, primaryName, cityName}
+	rootRuns := map[string][]memtable.Table{
+		primaryName: {primaryTable},
+		stateName:   {stateTable},
+		cityName:    {cityTable},
+	}
+	rootBaseIDs := map[string]uint64{
+		primaryName: 42,
+		stateName:   43,
+		cityName:    44,
+	}
+	rootPolicies := map[string]backenddb.OrderedRootStoragePolicy{
+		primaryName: backenddb.OrderedRootStorageValueLogLeaves,
+		stateName:   backenddb.OrderedRootStoragePagerLeaves,
+		cityName:    backenddb.OrderedRootStoragePagerLeaves,
+	}
+
+	ordered, cleanup, err := buildBufferedRootDeltaBatchPublishInputs(rootNames, rootRuns, rootBaseIDs, rootPolicies)
+	if err != nil {
+		t.Fatalf("build buffered root deltas: %v", err)
+	}
+	defer cleanup()
+
+	if got, want := len(ordered), len(rootNames); got != want {
+		t.Fatalf("ordered roots=%d want %d", got, want)
+	}
+	for i, rootName := range rootNames {
+		if ordered[i].BaseRoot != rootBaseIDs[rootName] {
+			t.Fatalf("ordered[%d] base=%d want %d", i, ordered[i].BaseRoot, rootBaseIDs[rootName])
+		}
+		if ordered[i].StoragePolicy != rootPolicies[rootName] {
+			t.Fatalf("ordered[%d] policy=%d want %d", i, ordered[i].StoragePolicy, rootPolicies[rootName])
+		}
+		if !ordered[i].ParallelApply {
+			t.Fatalf("ordered[%d] ParallelApply=false want true", i)
+		}
+		if ordered[i].IncludeDeletedOnColdBuild {
+			t.Fatalf("ordered[%d] IncludeDeletedOnColdBuild=true want false", i)
+		}
+	}
+
+	primaryEntries := ordered[1].Delta.SortedEntries()
+	if got, want := len(primaryEntries), 2; got != want {
+		t.Fatalf("primary entries=%d want %d", got, want)
+	}
+	if entry := primaryEntries[0]; string(entry.Key) != "u1" || entry.Type != batch.OpDelete {
+		t.Fatalf("primary entry[0]=%+v want tombstone u1", entry)
+	}
+	if entry := primaryEntries[1]; string(entry.Key) != "u2" || string(entry.Value) != `{"city":"sea"}` {
+		t.Fatalf("primary entry[1]=%+v want u2 document", entry)
+	}
+
+	stateEntries := ordered[0].Delta.SortedEntries()
+	if got, want := len(stateEntries), 1; got != want || string(stateEntries[0].Key) != "u2" || string(stateEntries[0].Value) != "state" {
+		t.Fatalf("state entries=%+v want u2=state", stateEntries)
+	}
+	cityEntries := ordered[2].Delta.SortedEntries()
+	if got, want := len(cityEntries), 1; got != want || string(cityEntries[0].Key) != "city:sea/u2" || cityEntries[0].Type != batch.OpPut {
+		t.Fatalf("city entries=%+v want city:sea/u2 put", cityEntries)
+	}
+}
+
+func TestBuildBufferedRootOverlayDeltaBatchPublishInputsPreservesColdTombstones(t *testing.T) {
+	primaryName := collectionPrimaryRootName("users")
+	cityName := collectionSecondaryRootName("users", "city")
+
+	primaryTable := newCollectionRunTable(2)
+	primaryTable.DeleteSteal([]byte("u1"))
+	setCollectionRunValue(primaryTable, []byte("u2"), []byte(`{"city":"sea"}`))
+	primaryTable.Freeze()
+
+	cityTable := newCollectionRunTable(1)
+	cityTable.DeleteSteal([]byte("city:old/u1"))
+	cityTable.Freeze()
+	defer resetCollectionTables([]memtable.Table{primaryTable, cityTable})
+
+	rootNames := []string{primaryName, cityName}
+	rootRuns := map[string][]memtable.Table{
+		primaryName: {primaryTable},
+		cityName:    {cityTable},
+	}
+	rootPolicies := map[string]backenddb.OrderedRootStoragePolicy{
+		primaryName: backenddb.OrderedRootStorageValueLogLeaves,
+		cityName:    backenddb.OrderedRootStoragePagerLeaves,
+	}
+	rootOverlays := map[string][]uint64{
+		primaryName: {102},
+		cityName:    nil,
+	}
+
+	ordered, cleanup, err := buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames, rootRuns, rootPolicies, rootOverlays)
+	if err != nil {
+		t.Fatalf("build overlay root deltas: %v", err)
+	}
+	defer cleanup()
+
+	if got, want := len(ordered), len(rootNames); got != want {
+		t.Fatalf("ordered roots=%d want %d", got, want)
+	}
+	if ordered[0].BaseRoot != 102 {
+		t.Fatalf("primary overlay base=%d want latest overlay 102", ordered[0].BaseRoot)
+	}
+	if ordered[1].BaseRoot != 0 {
+		t.Fatalf("city overlay base=%d want cold overlay 0", ordered[1].BaseRoot)
+	}
+	for i := range ordered {
+		if !ordered[i].IncludeDeletedOnColdBuild {
+			t.Fatalf("ordered[%d] IncludeDeletedOnColdBuild=false want true", i)
+		}
+		if !ordered[i].ParallelApply {
+			t.Fatalf("ordered[%d] ParallelApply=false want true", i)
+		}
+	}
+
+	primaryEntries := ordered[0].Delta.SortedEntries()
+	if got, want := len(primaryEntries), 2; got != want {
+		t.Fatalf("primary entries=%d want %d", got, want)
+	}
+	if entry := primaryEntries[0]; string(entry.Key) != "u1" || entry.Type != batch.OpDelete {
+		t.Fatalf("primary entry[0]=%+v want tombstone u1", entry)
+	}
+
+	cityEntries := ordered[1].Delta.SortedEntries()
+	if got, want := len(cityEntries), 1; got != want {
+		t.Fatalf("city entries=%d want %d", got, want)
+	}
+	if entry := cityEntries[0]; string(entry.Key) != "city:old/u1" || entry.Type != batch.OpDelete {
+		t.Fatalf("city entry[0]=%+v want tombstone city:old/u1", entry)
+	}
+}
+
 func BenchmarkBufferedRootRunsIteratorBuildManyRuns(b *testing.B) {
 	const runCount = 8192
 	runs := make([]memtable.Table, 0, runCount)
