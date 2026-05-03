@@ -80,6 +80,7 @@ OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
   -dbs treedb \
   -keys 800000 \
   -profile wal_on_fast \
+  -path-label native-fastpath \
   -checkpoint-between-tests \
   -test random_write,random_delete,random_read,full_scan,prefix_scan \
   -profile-dir "$OUT" \
@@ -390,6 +391,6 @@ For raw TreeDB profile-output changes:
 GOWORK=off go test ./cmd/unified_bench ./cmd/benchprof
 make unified-bench benchprof
 OUT=$(mktemp -d /tmp/gomap_profiles_smoke_XXXXXX)
-./bin/unified-bench -dbs treedb -keys 200000 -profile wal_on_fast -profile-dir "$OUT" -progress=false
+./bin/unified-bench -dbs treedb -keys 200000 -profile wal_on_fast -path-label native-fastpath -profile-dir "$OUT" -progress=false
 ./bin/benchprof -profiles-dir "$OUT"
 ```
