@@ -1187,6 +1187,8 @@ type stableRootDeltaIterator struct {
 
 func (it *stableRootDeltaIterator) StableUnsafeIteratorSlices() bool { return true }
 
+func (it *stableRootDeltaIterator) OrderedUniqueUnsafeIterator() bool { return true }
+
 func (it *stableRootDeltaIterator) Len() int {
 	if it == nil {
 		return 0

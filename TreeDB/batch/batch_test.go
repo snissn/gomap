@@ -165,6 +165,70 @@ func TestBatchSortedEntriesInvalidatesCompactionAfterMutation(t *testing.T) {
 	}
 }
 
+func TestBatchAppendViewTrustedSortedUniquePreservesCompactedState(t *testing.T) {
+	b := New(newMapValueReader(), page.DefaultInlineThreshold)
+	t.Cleanup(func() { _ = b.Close() })
+
+	if err := b.AppendViewTrustedSortedUnique([]byte("a"), []byte("va")); err != nil {
+		t.Fatalf("append a: %v", err)
+	}
+	if err := b.AppendViewTrustedSortedUnique([]byte("b"), []byte("vb")); err != nil {
+		t.Fatalf("append b: %v", err)
+	}
+	if err := b.AppendDeleteViewTrustedSortedUnique([]byte("c")); err != nil {
+		t.Fatalf("append delete c: %v", err)
+	}
+	if !b.sorted || !b.compacted {
+		t.Fatalf("trusted appends sorted=%v compacted=%v, want true/true", b.sorted, b.compacted)
+	}
+
+	first := b.SortedEntries()
+	if len(first) != 3 {
+		t.Fatalf("len(first)=%d want 3", len(first))
+	}
+	if &first[0] != &b.entries[0] {
+		t.Fatal("trusted sorted unique appends forced a SortedEntries compaction")
+	}
+	second := b.SortedEntries()
+	if &second[0] != &first[0] {
+		t.Fatal("second SortedEntries did not reuse trusted compacted slice")
+	}
+	if got := string(second[0].Key); got != "a" {
+		t.Fatalf("entry[0] key=%q want a", got)
+	}
+	if second[2].Type != OpDelete || string(second[2].Key) != "c" {
+		t.Fatalf("entry[2]=%v/%q want delete c", second[2].Type, second[2].Key)
+	}
+}
+
+func TestBatchAppendPointerViewTrustedSortedUniqueTracksTouchedSegment(t *testing.T) {
+	b := New(newMapValueReader(), page.DefaultInlineThreshold)
+	t.Cleanup(func() { _ = b.Close() })
+
+	ptr := page.ValuePtr{
+		FileID: page.ValueLogFileID(7),
+		Offset: 123,
+		Length: 456,
+	}
+	if err := b.AppendPointerViewTrustedSortedUnique([]byte("a"), ptr); err != nil {
+		t.Fatalf("append pointer: %v", err)
+	}
+	if !b.sorted || !b.compacted {
+		t.Fatalf("trusted pointer append sorted=%v compacted=%v, want true/true", b.sorted, b.compacted)
+	}
+	if !b.HasValueLogPointers() {
+		t.Fatal("HasValueLogPointers()=false, want true")
+	}
+	touched := b.TouchedValueLogSegments()
+	if len(touched) != 1 || touched[0] != ptr.FileID {
+		t.Fatalf("TouchedValueLogSegments()=%v want [%d]", touched, ptr.FileID)
+	}
+	entries := b.SortedEntries()
+	if len(entries) != 1 || !entries[0].IsPtr || entries[0].ValuePtr != ptr {
+		t.Fatalf("entries=%+v want pointer %+v", entries, ptr)
+	}
+}
+
 func TestBatchSetOps_UsesSlabPointersForLargeValues(t *testing.T) {
 	reader := newMapValueReader()
 	b := New(reader, page.DefaultInlineThreshold)
