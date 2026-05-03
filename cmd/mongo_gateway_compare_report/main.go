@@ -100,15 +100,17 @@ type baseCellKey struct {
 }
 
 type cellComparison struct {
-	Key    cellKey
-	TreeDB *runRecord
-	Mongo  *runRecord
+	Key             cellKey
+	TreeDB          *runRecord
+	Mongo           *runRecord
+	MongoAlternates []*runRecord
 }
 
 type phaseComparison struct {
 	Cell        cellKey
 	Name        string
 	RangeIndex  bool
+	MongoConfig string
 	TreeDBPhase phaseResult
 	MongoPhase  phaseResult
 	HasTreeDB   bool
@@ -257,8 +259,9 @@ func loadComparisons(matrixPath string, allowIncomplete bool) ([]cellComparison,
 					SecondaryIndexes: key.SecondaryIndexes,
 					TreeDBConfig:     config,
 				},
-				TreeDB: cell.trees[config],
-				Mongo:  mongo,
+				TreeDB:          cell.trees[config],
+				Mongo:           mongo,
+				MongoAlternates: sortedMongoRecords(cell.mongos),
 			})
 		}
 	}
@@ -321,12 +324,107 @@ func matchingMongoRecord(key baseCellKey, treeConfig string, mongoIndex mongoSce
 	matches := mongoIndex.bySuffix[treeScenario.suffix]
 	candidates := mongoIndex.suffixConfig[treeScenario.suffix]
 	if len(candidates) > 1 {
-		return nil, fmt.Errorf("ambiguous mongo rows for documents=%d secondary_indexes=%d config=%q tree_scenario=%q candidates=%v available_mongo_configs=%v", key.Documents, key.SecondaryIndexes, treeConfig, treeScenarioLabel, candidates, sortedRunRecordKeys(mongoIndex.exact))
+		record, err := mongoComparisonBaseline(matches)
+		if err != nil {
+			return nil, fmt.Errorf("ambiguous mongo rows for documents=%d secondary_indexes=%d config=%q tree_scenario=%q candidates=%v available_mongo_configs=%v: %w", key.Documents, key.SecondaryIndexes, treeConfig, treeScenarioLabel, candidates, sortedRunRecordKeys(mongoIndex.exact), err)
+		}
+		return record, nil
 	}
 	if len(matches) == 1 {
 		return matches[0], nil
 	}
 	return nil, fmt.Errorf("missing mongo row for documents=%d secondary_indexes=%d config=%q tree_scenario=%q available_mongo_configs=%v", key.Documents, key.SecondaryIndexes, treeConfig, treeScenarioLabel, sortedRunRecordKeys(mongoIndex.exact))
+}
+
+func mongoComparisonBaseline(records []*runRecord) (*runRecord, error) {
+	var legacy *runRecord
+	var explicit *runRecord
+	for _, record := range records {
+		if record == nil {
+			continue
+		}
+		if isLegacyMongoDriverBaselineConfig(record.Row.Config) {
+			if legacy != nil {
+				return nil, fmt.Errorf("multiple legacy MongoDB driver baseline candidates: %q and %q", legacy.Row.Config, record.Row.Config)
+			}
+			legacy = record
+			continue
+		}
+		if isExplicitMongoDriverBaselineConfig(record.Row.Config) {
+			if explicit != nil {
+				return nil, fmt.Errorf("multiple explicit MongoDB driver baseline candidates: %q and %q", explicit.Row.Config, record.Row.Config)
+			}
+			explicit = record
+		}
+	}
+	if legacy != nil {
+		return legacy, nil
+	}
+	if explicit != nil {
+		return explicit, nil
+	}
+	for _, record := range sortedRunRecords(records) {
+		if record != nil {
+			return record, nil
+		}
+	}
+	return nil, errors.New("no MongoDB baseline candidates")
+}
+
+func sortedMongoRecords(recordsByConfig map[string]*runRecord) []*runRecord {
+	records := make([]*runRecord, 0, len(recordsByConfig))
+	for _, record := range recordsByConfig {
+		records = append(records, record)
+	}
+	return sortedRunRecords(records)
+}
+
+func sortedRunRecords(records []*runRecord) []*runRecord {
+	records = append([]*runRecord(nil), records...)
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].Row.Config != records[j].Row.Config {
+			return records[i].Row.Config < records[j].Row.Config
+		}
+		return records[i].DisplayRawPath < records[j].DisplayRawPath
+	})
+	return records
+}
+
+func isMongoDriverBaselineConfig(config string) bool {
+	return isLegacyMongoDriverBaselineConfig(config) || isExplicitMongoDriverBaselineConfig(config)
+}
+
+func isLegacyMongoDriverBaselineConfig(config string) bool {
+	if config == "mongo" {
+		return true
+	}
+	if !strings.HasPrefix(config, "mongo_") {
+		return false
+	}
+	if config == "mongo_driver" || strings.HasPrefix(config, "mongo_driver_") {
+		return false
+	}
+	// Legacy Mongo rows predate explicit client-mode naming and look like
+	// mongo_range_index or mongo_writers_4. They are ordinary driver baselines.
+	return true
+}
+
+func isExplicitMongoDriverBaselineConfig(config string) bool {
+	if config == "mongo_driver" {
+		return true
+	}
+	for _, base := range []string{"mongo_driver", "mongo_driver_range_index"} {
+		if config == base {
+			return true
+		}
+		for _, marker := range []string{"_writers_", "_readers_"} {
+			if strings.HasPrefix(config, base+marker) {
+				scenario := parseScalingScenario(config)
+				return scenario.hasMarker && scenario.valid
+			}
+		}
+	}
+	return false
 }
 
 func sortedRunRecordKeys(records map[string]*runRecord) []string {
@@ -543,34 +641,21 @@ func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) str
 	b.WriteString("\n")
 	renderDiskTable(&b, cells)
 	b.WriteString("\n")
+	renderMongoRowsTable(&b, cells)
+	b.WriteString("\n")
 	renderConcurrentReadSweepTable(&b, cells)
 	renderOpsTable(&b, cells)
 	b.WriteString("\n")
 	b.WriteString("## Raw Inputs\n\n")
 	b.WriteString("| docs | indexes | range index | config | target | raw json | profile dir |\n")
 	b.WriteString("| ---: | ---: | --- | --- | --- | --- | --- |\n")
-	type mongoRawKey struct {
-		baseCellKey
-		Config     string
-		RangeIndex bool
-	}
-	seenMongoRaw := make(map[mongoRawKey]struct{})
 	for _, cell := range cells {
 		fmt.Fprintf(&b, "| %d | %d | %t | `%s` | treedb | `%s` | %s |\n",
 			cell.Key.Documents, cell.Key.SecondaryIndexes, cell.TreeDB.Result.RangeIndex, cell.Key.TreeDBConfig, cell.TreeDB.DisplayRawPath, formatOptionalCode(cell.TreeDB.Result.ProfileDir))
-		if cell.Mongo != nil {
-			mongoKey := mongoRawKey{
-				baseCellKey: baseCellKey{Documents: cell.Key.Documents, SecondaryIndexes: cell.Key.SecondaryIndexes},
-				Config:      cell.Mongo.Row.Config,
-				RangeIndex:  cell.Mongo.Result.RangeIndex,
-			}
-			if _, ok := seenMongoRaw[mongoKey]; ok {
-				continue
-			}
-			fmt.Fprintf(&b, "| %d | %d | %t | `%s` | mongo | `%s` | %s |\n",
-				cell.Key.Documents, cell.Key.SecondaryIndexes, cell.Mongo.Result.RangeIndex, cell.Mongo.Row.Config, cell.Mongo.DisplayRawPath, formatOptionalCode(cell.Mongo.Result.ProfileDir))
-			seenMongoRaw[mongoKey] = struct{}{}
-		}
+	}
+	for _, mongo := range uniqueMongoRecords(cells) {
+		fmt.Fprintf(&b, "| %d | %d | %t | `%s` | mongo | `%s` | %s |\n",
+			mongo.Row.Documents, mongo.Row.SecondaryIndexes, mongo.Result.RangeIndex, mongo.Row.Config, mongo.DisplayRawPath, formatOptionalCode(mongo.Result.ProfileDir))
 	}
 	b.WriteString("\n")
 	b.WriteString("## Notes\n\n")
@@ -582,7 +667,126 @@ func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) str
 	b.WriteString("- Wall ops/sec values include the full benchmark phase loop. Sampled ops/sec values isolate the timed driver/gateway call inside each phase and are useful when prebuilt fixtures are enabled.\n")
 	b.WriteString("- `concurrent_id_find_one_rN` phases are an `_id` read throughput sweep over `N` concurrent readers, and are grouped in the Concurrent Read Sweep section when present.\n")
 	b.WriteString("- Range-query benchmark rows use explicit phase names: `age_range_indexed_limit_10` means `-range-index` created `age_1`; `age_range_scan_limit_10` means bounded scan fallback.\n")
+	b.WriteString("- Main comparison tables label the MongoDB config chosen as the baseline. In multi-mode matrices, all other MongoDB rows remain visible in the Mongo Matrix Rows section.\n")
 	return b.String()
+}
+
+func renderMongoRowsTable(b *strings.Builder, cells []cellComparison) {
+	rows := uniqueMongoRecords(cells)
+	if len(rows) == 0 {
+		return
+	}
+	b.WriteString("## Mongo Matrix Rows\n\n")
+	b.WriteString("These rows list every MongoDB matrix row, including non-baseline client-mode rows that are not used as the TreeDB comparison baseline.\n\n")
+	b.WriteString("| docs | indexes | range index | config | phase | ops/sec | sampled ops/sec | p95 us | dbStats totalSize | physical du | raw json |\n")
+	b.WriteString("| ---: | ---: | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |\n")
+	for _, record := range rows {
+		phase, hasPhase := primaryMongoPhase(record)
+		total, totalOK := mongoDBStatsTotalBytes(record.Result)
+		fmt.Fprintf(b, "| %d | %d | %t | `%s` | `%s` | %s | %s | %s | %s | %s | `%s` |\n",
+			record.Row.Documents,
+			record.Row.SecondaryIndexes,
+			record.Result.RangeIndex,
+			record.Row.Config,
+			phase.Name,
+			formatPhaseOps(hasPhase, phase.OpsPerSecond),
+			formatPhaseOps(hasPhase && phase.SampledOpsPerSecond > 0, phase.SampledOpsPerSecond),
+			formatPhaseLatency(hasPhase, phase.LatencyMicros.P95),
+			formatMeasuredBytes(totalOK, total),
+			formatOptionalBytes(record.Row.PhysicalBytes),
+			record.DisplayRawPath,
+		)
+	}
+	b.WriteString("\n")
+}
+
+func primaryMongoPhase(record *runRecord) (phaseResult, bool) {
+	if record == nil {
+		return phaseResult{}, false
+	}
+	if phaseName := scalingPrimaryPhaseName(record.Row.Config); phaseName != "" {
+		if phase, ok := record.PhaseMap[phaseName]; ok {
+			return phase, true
+		}
+	}
+	if phase, ok := record.PhaseMap["load_insert_many"]; ok {
+		return phase, true
+	}
+	for _, phase := range record.Result.Phases {
+		if phase.OpsPerSecond > 0 {
+			return phase, true
+		}
+	}
+	if len(record.Result.Phases) > 0 {
+		return record.Result.Phases[0], true
+	}
+	return phaseResult{}, false
+}
+
+func scalingPrimaryPhaseName(config string) string {
+	scenario := parseScalingScenario(config)
+	if !scenario.valid || !scenario.hasMarker {
+		return ""
+	}
+	if count, ok := strings.CutPrefix(scenario.suffix, "writers_"); ok {
+		return "concurrent_id_update_set_w" + count
+	}
+	if count, ok := strings.CutPrefix(scenario.suffix, "readers_"); ok {
+		return "concurrent_id_find_one_r" + count
+	}
+	return ""
+}
+
+type runRecordRawKey struct {
+	baseCellKey
+	Config     string
+	RangeIndex bool
+	RawPath    string
+}
+
+func uniqueMongoRecords(cells []cellComparison) []*runRecord {
+	seen := make(map[runRecordRawKey]struct{})
+	var out []*runRecord
+	for _, cell := range cells {
+		addMongoRecord(&out, seen, cell.Mongo)
+		for _, record := range cell.MongoAlternates {
+			addMongoRecord(&out, seen, record)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Row.Documents != b.Row.Documents {
+			return a.Row.Documents < b.Row.Documents
+		}
+		if a.Row.SecondaryIndexes != b.Row.SecondaryIndexes {
+			return a.Row.SecondaryIndexes < b.Row.SecondaryIndexes
+		}
+		if a.Result.RangeIndex != b.Result.RangeIndex {
+			return !a.Result.RangeIndex && b.Result.RangeIndex
+		}
+		if a.Row.Config != b.Row.Config {
+			return a.Row.Config < b.Row.Config
+		}
+		return a.DisplayRawPath < b.DisplayRawPath
+	})
+	return out
+}
+
+func addMongoRecord(out *[]*runRecord, seen map[runRecordRawKey]struct{}, record *runRecord) {
+	if record == nil {
+		return
+	}
+	key := runRecordRawKey{
+		baseCellKey: baseCellKey{Documents: record.Row.Documents, SecondaryIndexes: record.Row.SecondaryIndexes},
+		Config:      record.Row.Config,
+		RangeIndex:  record.Result.RangeIndex,
+		RawPath:     record.DisplayRawPath,
+	}
+	if _, ok := seen[key]; ok {
+		return
+	}
+	seen[key] = struct{}{}
+	*out = append(*out, record)
 }
 
 func hasMongoCells(cells []cellComparison) bool {
@@ -717,8 +921,8 @@ func cellDiskScore(cell cellComparison) int64 {
 
 func renderDiskTable(b *strings.Builder, cells []cellComparison) {
 	b.WriteString("## Disk Summary\n\n")
-	b.WriteString("| docs | indexes | range index | TreeDB config | TreeDB snapshot | TreeDB bytes | TreeDB bytes/doc | TreeDB physical du | TreeDB physical bytes/doc | MongoDB dbStats dataSize | MongoDB dbStats totalSize | MongoDB physical du | MongoDB physical bytes/doc | TreeDB / MongoDB dbStats totalSize | TreeDB / MongoDB physical |\n")
-	b.WriteString("| ---: | ---: | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	b.WriteString("| docs | indexes | range index | TreeDB config | MongoDB baseline config | TreeDB snapshot | TreeDB bytes | TreeDB bytes/doc | TreeDB physical du | TreeDB physical bytes/doc | MongoDB dbStats dataSize | MongoDB dbStats totalSize | MongoDB physical du | MongoDB physical bytes/doc | TreeDB / MongoDB dbStats totalSize | TreeDB / MongoDB physical |\n")
+	b.WriteString("| ---: | ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, cell := range cells {
 		treeBytes, treeSnapshot, treeOK := treeDBBytesSnapshot(cell.TreeDB.Result)
 		treePhysical := cell.TreeDB.Row.PhysicalBytes
@@ -730,11 +934,12 @@ func renderDiskTable(b *strings.Builder, cells []cellComparison) {
 			mongoTotal, mongoTotalOK = mongoDBStatsTotalBytes(cell.Mongo.Result)
 			mongoPhysical = cell.Mongo.Row.PhysicalBytes
 		}
-		fmt.Fprintf(b, "| %d | %d | %t | `%s` | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
+		fmt.Fprintf(b, "| %d | %d | %t | `%s` | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
 			cell.Key.Documents,
 			cell.Key.SecondaryIndexes,
 			cell.TreeDB.Result.RangeIndex,
 			cell.Key.TreeDBConfig,
+			formatRunConfig(cell.Mongo),
 			treeSnapshot,
 			formatMeasuredBytes(treeOK, treeBytes),
 			formatMeasuredBytesPerDoc(treeOK, treeBytes, cell.Key.Documents),
@@ -757,14 +962,15 @@ func renderConcurrentReadSweepTable(b *strings.Builder, cells []cellComparison) 
 	}
 	b.WriteString("## Concurrent Read Sweep\n\n")
 	b.WriteString("These rows group `concurrent_id_find_one_rN` phases as one `_id` read throughput sweep. Serial `id_find_one` remains a separate single-in-flight latency phase.\n\n")
-	b.WriteString("| docs | indexes | TreeDB config | readers | TreeDB wall ops/sec | TreeDB sampled ops/sec | MongoDB wall ops/sec | MongoDB sampled ops/sec | TreeDB / MongoDB wall | TreeDB p95 us | MongoDB p95 us |\n")
-	b.WriteString("| ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	b.WriteString("| docs | indexes | TreeDB config | MongoDB baseline config | readers | TreeDB wall ops/sec | TreeDB sampled ops/sec | MongoDB wall ops/sec | MongoDB sampled ops/sec | TreeDB / MongoDB wall | TreeDB p95 us | MongoDB p95 us |\n")
+	b.WriteString("| ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, cmp := range rows {
 		readers, _ := concurrentReadReaders(cmp.Name)
-		fmt.Fprintf(b, "| %d | %d | `%s` | %d | %s | %s | %s | %s | %s | %s | %s |\n",
+		fmt.Fprintf(b, "| %d | %d | `%s` | %s | %d | %s | %s | %s | %s | %s | %s | %s |\n",
 			cmp.Cell.Documents,
 			cmp.Cell.SecondaryIndexes,
 			cmp.Cell.TreeDBConfig,
+			formatConfig(cmp.MongoConfig),
 			readers,
 			formatPhaseOps(cmp.HasTreeDB, cmp.TreeDBPhase.OpsPerSecond),
 			formatPhaseOps(cmp.HasTreeDB && cmp.TreeDBPhase.SampledOpsPerSecond > 0, cmp.TreeDBPhase.SampledOpsPerSecond),
@@ -800,6 +1006,7 @@ func concurrentReadSweepComparisons(cells []cellComparison) []phaseComparison {
 				Cell:        cell.Key,
 				Name:        name,
 				RangeIndex:  cell.TreeDB.Result.RangeIndex,
+				MongoConfig: recordConfig(cell.Mongo),
 				TreeDBPhase: treePhase,
 				MongoPhase:  mongoPhase,
 				HasTreeDB:   hasTree,
@@ -863,8 +1070,8 @@ func concurrentReadReaders(name string) (int, bool) {
 
 func renderOpsTable(b *strings.Builder, cells []cellComparison) {
 	b.WriteString("## Ops/Sec Summary\n\n")
-	b.WriteString("| docs | indexes | range index | range mode | TreeDB config | phase | TreeDB wall ops/sec | TreeDB sampled ops/sec | MongoDB wall ops/sec | MongoDB sampled ops/sec | TreeDB / MongoDB wall | TreeDB / MongoDB sampled | TreeDB p95 us | MongoDB p95 us |\n")
-	b.WriteString("| ---: | ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	b.WriteString("| docs | indexes | range index | range mode | TreeDB config | MongoDB baseline config | phase | TreeDB wall ops/sec | TreeDB sampled ops/sec | MongoDB wall ops/sec | MongoDB sampled ops/sec | TreeDB / MongoDB wall | TreeDB / MongoDB sampled | TreeDB p95 us | MongoDB p95 us |\n")
+	b.WriteString("| ---: | ---: | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	sweepCells := make(map[cellKey]bool, len(cells))
 	for _, cell := range cells {
 		if cellHasConcurrentReadSweep(cell) {
@@ -878,12 +1085,13 @@ func renderOpsTable(b *strings.Builder, cells []cellComparison) {
 			}
 		}
 		sampledRatio := safeRatio(cmp.TreeDBPhase.SampledOpsPerSecond, cmp.MongoPhase.SampledOpsPerSecond)
-		fmt.Fprintf(b, "| %d | %d | %t | %s | `%s` | `%s` | %s | %s | %s | %s | %s | %s | %s | %s |\n",
+		fmt.Fprintf(b, "| %d | %d | %t | %s | `%s` | %s | `%s` | %s | %s | %s | %s | %s | %s | %s | %s |\n",
 			cmp.Cell.Documents,
 			cmp.Cell.SecondaryIndexes,
 			cmp.TreeDBRangeIndex(),
 			formatRangeMode(cmp.Name),
 			cmp.Cell.TreeDBConfig,
+			formatConfig(cmp.MongoConfig),
 			cmp.Name,
 			formatPhaseOps(cmp.HasTreeDB, cmp.TreeDBPhase.OpsPerSecond),
 			formatPhaseOps(cmp.HasTreeDB && cmp.TreeDBPhase.SampledOpsPerSecond > 0, cmp.TreeDBPhase.SampledOpsPerSecond),
@@ -914,6 +1122,7 @@ func allPhaseComparisons(cells []cellComparison) []phaseComparison {
 				Cell:        cell.Key,
 				Name:        name,
 				RangeIndex:  cell.TreeDB.Result.RangeIndex,
+				MongoConfig: recordConfig(cell.Mongo),
 				TreeDBPhase: treePhase,
 				MongoPhase:  mongoPhase,
 				HasTreeDB:   hasTree,
@@ -972,6 +1181,24 @@ func formatOptionalCode(raw string) string {
 	return "`" + raw + "`"
 }
 
+func recordConfig(record *runRecord) string {
+	if record == nil {
+		return ""
+	}
+	return record.Row.Config
+}
+
+func formatRunConfig(record *runRecord) string {
+	return formatConfig(recordConfig(record))
+}
+
+func formatConfig(config string) string {
+	if config == "" {
+		return "n/a"
+	}
+	return "`" + config + "`"
+}
+
 func writeSummaryTSV(path string, cells []cellComparison) error {
 	f, err := os.Create(path)
 	if err != nil {
@@ -986,6 +1213,7 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 		"range_index",
 		"range_mode",
 		"treedb_config",
+		"mongo_config",
 		"phase",
 		"treedb_ops_sec",
 		"treedb_sampled_ops_sec",
@@ -1032,6 +1260,7 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 			strconv.FormatBool(cmp.TreeDBRangeIndex()),
 			rangeMode(cmp.Name),
 			cmp.Cell.TreeDBConfig,
+			recordConfig(cell.Mongo),
 			cmp.Name,
 			formatRawFloat(cmp.HasTreeDB, cmp.TreeDBPhase.OpsPerSecond),
 			formatRawFloat(cmp.HasTreeDB && cmp.TreeDBPhase.SampledOpsPerSecond > 0, cmp.TreeDBPhase.SampledOpsPerSecond),

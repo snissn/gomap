@@ -188,6 +188,21 @@ TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack raw-w
 scripts/mongo_gateway_compare.sh
 ```
 
+To run matching TreeDB and MongoDB client-mode rows where MongoDB supports the
+mode:
+
+```sh
+TREEDB_DOCUMENT_FORMATS="bson" \
+TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack" \
+MONGO_CLIENT_MODES="driver driver-command driver-command-raw driver-unack" \
+scripts/mongo_gateway_compare.sh
+```
+
+When the MongoDB side runs only the ordinary `driver` mode, the matrix keeps
+the legacy baseline config names `mongo` and `mongo_range_index`. Explicit
+`mongo_driver` config names are used only when `driver` is part of a multi-mode
+MongoDB client matrix.
+
 ```sh
 scripts/mongo_gateway_compare.sh \
   --out /tmp/gomap_mongo_gateway_compare \
@@ -242,6 +257,7 @@ Useful overrides:
 - `DOCS_LIST="1000 10000 100000"`
 - `INDEXES_LIST="0 1 2"`
 - `TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack raw-wire-tcp raw-wire"`
+- `MONGO_CLIENT_MODES="driver driver-command driver-command-raw driver-unack"`
 - `READS=50000`, `RANGE_READS=5000`, `UPDATES=5000`
 - `DELETES=1000`
 - `RANGE_INDEX=true` or `--range-index` to create `age_1` and report

@@ -34,6 +34,8 @@ CONCURRENT_WRITES_DIVISOR="${CONCURRENT_WRITES_DIVISOR:-10}"
 MONGO_MODE="${MONGO_MODE:-docker}"
 MONGO_URI="${MONGO_URI:-mongodb://127.0.0.1:27017}"
 MONGO_IMAGE="${MONGO_IMAGE:-mongo:7}"
+MONGO_CLIENT_MODE="${MONGO_CLIENT_MODE:-driver}"
+MONGO_CLIENT_MODES="${MONGO_CLIENT_MODES:-$MONGO_CLIENT_MODE}"
 DATABASE_PREFIX="${DATABASE_PREFIX:-mongo_gateway_compare}"
 COLLECTION="${COLLECTION:-docs}"
 TIMEOUT="${TIMEOUT:-20m}"
@@ -90,6 +92,12 @@ Options:
   --mongo-mode MODE     docker or external. Default: docker.
   --mongo-uri URI       MongoDB URI for --mongo-mode external.
   --mongo-image IMAGE   Docker image for --mongo-mode docker. Default: mongo:7.
+  --mongo-client-mode MODE
+                        Single MongoDB client mode: driver, driver-command,
+                        driver-command-raw, or driver-unack.
+  --mongo-client-modes LIST
+                        Space-separated MongoDB client modes. Example:
+                        "driver driver-command driver-command-raw driver-unack".
   --timeout DURATION    Per-run benchmark timeout. Default: 20m.
   --treedb-profile NAME TreeDB profile. Default: wal_on_fast.
   --treedb-document-format FORMAT
@@ -115,6 +123,7 @@ Environment overrides:
   CONCURRENT_READER_SWEEP,
   CONCURRENT_WRITERS, CONCURRENT_WRITES, CONCURRENT_WRITES_DIVISOR,
   MONGO_MODE, MONGO_URI, MONGO_IMAGE, DATABASE_PREFIX, COLLECTION, TIMEOUT,
+  MONGO_CLIENT_MODE, MONGO_CLIENT_MODES,
   TREEDB_PROFILE, TREEDB_DOCUMENT_FORMAT, TREEDB_DOCUMENT_FORMATS,
   TREEDB_CLIENT_MODE, TREEDB_CLIENT_MODES,
   TREEDB_DATA_ROOT_STORAGE, TREEDB_INDEX_STATE_ROOT_STORAGE, TREEDB_INDEX_ROOT_STORAGE,
@@ -210,6 +219,15 @@ while [[ $# -gt 0 ]]; do
       ;;
     --mongo-image)
       MONGO_IMAGE="$2"
+      shift 2
+      ;;
+    --mongo-client-mode)
+      MONGO_CLIENT_MODE="$2"
+      MONGO_CLIENT_MODES="$2"
+      shift 2
+      ;;
+    --mongo-client-modes)
+      MONGO_CLIENT_MODES="$2"
       shift 2
       ;;
     --timeout)
@@ -355,7 +373,86 @@ reset_mongo_data_dir() {
 }
 
 safe_label() {
-  printf '%s' "$1" | tr -c '[:alnum:]_.-' '_'
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c '[:alnum:]_.-' '_'
+}
+
+lower_word() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+normalized_label() {
+  local value
+  value=$(lower_word "$1")
+  value="${value//-/_}"
+  safe_label "$value"
+}
+
+normalize_unique_word_list() {
+  local name=$1
+  local values=$2
+  local seen=""
+  local out=""
+  local count=0
+  local item normalized label
+  for item in $values; do
+    normalized=$(lower_word "$item")
+    label=$(normalized_label "$normalized")
+    if [[ " $seen " == *" $label "* ]]; then
+      echo "duplicate $name value after normalization: $item (label=$label)" >&2
+      exit 2
+    fi
+    seen="$seen $label"
+    if [[ -z "$out" ]]; then
+      out=$normalized
+    else
+      out="$out $normalized"
+    fi
+    count=$((count + 1))
+  done
+  if [[ "$count" -eq 0 ]]; then
+    echo "$name must contain at least one value" >&2
+    exit 2
+  fi
+  printf '%s' "$out"
+}
+
+validate_mongo_client_modes() {
+  local mode
+  for mode in $1; do
+    case "$mode" in
+      driver|driver-command|driver-command-raw|driver-unack)
+        ;;
+      *)
+        echo "invalid MONGO_CLIENT_MODES value: $mode (want driver, driver-command, driver-command-raw, or driver-unack)" >&2
+        exit 2
+        ;;
+    esac
+  done
+}
+
+list_word_count() {
+  local count=0
+  local item
+  for item in $1; do
+    count=$((count + 1))
+  done
+  echo "$count"
+}
+
+mongo_config_name() {
+  local client_mode
+  client_mode=$(lower_word "$1")
+  local client_label=$2
+  local config
+  if [[ "$client_mode" == "driver" ]] && [[ "$(list_word_count "$MONGO_CLIENT_MODES")" -eq 1 ]]; then
+    config="mongo"
+  else
+    config="mongo_${client_label}"
+  fi
+  if [[ "$RANGE_INDEX" == "true" ]]; then
+    config="${config}_range_index"
+  fi
+  printf '%s' "$config"
 }
 
 start_mongo_container() {
@@ -519,6 +616,10 @@ if [[ "$PROFILE_TREEDB" != "true" && "$PROFILE_TREEDB" != "false" ]]; then
   echo "invalid PROFILE_TREEDB=$PROFILE_TREEDB (want true or false)" >&2
   exit 2
 fi
+MONGO_CLIENT_MODES=$(normalize_unique_word_list MONGO_CLIENT_MODES "$MONGO_CLIENT_MODES")
+validate_mongo_client_modes "$MONGO_CLIENT_MODES"
+TREEDB_CLIENT_MODES=$(normalize_unique_word_list TREEDB_CLIENT_MODES "$TREEDB_CLIENT_MODES")
+TREEDB_DOCUMENT_FORMATS=$(normalize_unique_word_list TREEDB_DOCUMENT_FORMATS "$TREEDB_DOCUMENT_FORMATS")
 raw_concurrent_reader_sweep=$CONCURRENT_READER_SWEEP
 CONCURRENT_READER_SWEEP=$(trim_spaces "$CONCURRENT_READER_SWEEP")
 if [[ -n "$raw_concurrent_reader_sweep" && -z "$CONCURRENT_READER_SWEEP" ]]; then
@@ -598,6 +699,7 @@ fi
   echo "concurrent writers: $CONCURRENT_WRITERS"
   echo "concurrent writes: ${CONCURRENT_WRITES:-documents / $CONCURRENT_WRITES_DIVISOR when writers > 0}"
   echo "mongo mode: $MONGO_MODE"
+  echo "mongo client modes: $MONGO_CLIENT_MODES"
   echo "treedb profile: $TREEDB_PROFILE"
   echo "treedb document formats: $TREEDB_DOCUMENT_FORMATS"
   echo "treedb client modes: $TREEDB_CLIENT_MODES"
@@ -647,18 +749,12 @@ for docs in $DOCS_LIST; do
     fi
     cell="docs_${docs}_idx_${indexes}"
     database="${DATABASE_PREFIX}_${cell}"
-    mongo_config="mongo"
-    if [[ "$RANGE_INDEX" == "true" ]]; then
-      mongo_config="mongo_range_index"
-    fi
-    mongo_raw_rel="raw/${mongo_config}_${cell}.json"
-    mongo_raw="$OUT_DIR/$mongo_raw_rel"
     mongo_data="$MONGO_DIR/$cell"
 
     for tree_format in $TREEDB_DOCUMENT_FORMATS; do
       for tree_client_mode in $TREEDB_CLIENT_MODES; do
-        format_label=$(safe_label "${tree_format//-/_}")
-        client_label=$(safe_label "${tree_client_mode//-/_}")
+        format_label=$(normalized_label "$tree_format")
+        client_label=$(normalized_label "$tree_client_mode")
         tree_config="treedb_${format_label}_${client_label}"
         if [[ "$RANGE_INDEX" == "true" ]]; then
           tree_config="${tree_config}_range_index"
@@ -693,28 +789,37 @@ for docs in $DOCS_LIST; do
       done
     done
 
-    echo "==> $cell MongoDB"
-    mongo_uri="$MONGO_URI"
-    mongo_container=""
-    if [[ "$MONGO_MODE" == "docker" ]]; then
-      start_mongo_container "$cell" "$mongo_data"
-      mongo_uri="$STARTED_MONGO_URI"
-      mongo_container="$STARTED_MONGO_CONTAINER"
-      if ! wait_for_mongo "$mongo_uri" "$database"; then
-        echo "MongoDB container did not become ready for $cell" >&2
-        exit 1
+    for mongo_client_mode in $MONGO_CLIENT_MODES; do
+      mongo_client_label=$(normalized_label "$mongo_client_mode")
+      mongo_config=$(mongo_config_name "$mongo_client_mode" "$mongo_client_label")
+      mongo_raw_rel="raw/${mongo_config}_${cell}.json"
+      mongo_raw="$OUT_DIR/$mongo_raw_rel"
+      mongo_cell_data="$mongo_data/$mongo_client_label"
+
+      echo "==> $cell MongoDB (client=$mongo_client_mode)"
+      mongo_uri="$MONGO_URI"
+      mongo_container=""
+      if [[ "$MONGO_MODE" == "docker" ]]; then
+        start_mongo_container "${cell}_${mongo_client_label}" "$mongo_cell_data"
+        mongo_uri="$STARTED_MONGO_URI"
+        mongo_container="$STARTED_MONGO_CONTAINER"
+        if ! wait_for_mongo "$mongo_uri" "$database"; then
+          echo "MongoDB container did not become ready for $cell client=$mongo_client_mode" >&2
+          exit 1
+        fi
       fi
-    fi
-    run_target mongo "$docs" "$indexes" "$mongo_raw" "$database" "$reads" "$range_reads" "$updates" "$DELETES" \
-      "$CONCURRENT_READERS" "$concurrent_reads" "$CONCURRENT_WRITERS" "$concurrent_writes" \
-      -mongo-uri "$mongo_uri"
-    if [[ "$MONGO_MODE" == "docker" ]]; then
-      stop_mongo_container "$mongo_container"
-      mongo_physical=$(docker_du_bytes "$mongo_data")
-    else
-      mongo_physical=0
-    fi
-    printf "mongo\t%s\t%s\t%s\t%s\t%s\n" "$mongo_config" "$docs" "$indexes" "$mongo_raw_rel" "$mongo_physical" >>"$MATRIX"
+      run_target mongo "$docs" "$indexes" "$mongo_raw" "$database" "$reads" "$range_reads" "$updates" "$DELETES" \
+        "$CONCURRENT_READERS" "$concurrent_reads" "$CONCURRENT_WRITERS" "$concurrent_writes" \
+        -mongo-uri "$mongo_uri" \
+        -client-mode "$mongo_client_mode"
+      if [[ "$MONGO_MODE" == "docker" ]]; then
+        stop_mongo_container "$mongo_container"
+        mongo_physical=$(docker_du_bytes "$mongo_cell_data")
+      else
+        mongo_physical=0
+      fi
+      printf "mongo\t%s\t%s\t%s\t%s\t%s\n" "$mongo_config" "$docs" "$indexes" "$mongo_raw_rel" "$mongo_physical" >>"$MATRIX"
+    done
   done
 done
 
@@ -754,6 +859,7 @@ cat >"$README" <<EOF
 - concurrent writes: \`${CONCURRENT_WRITES:-documents / $CONCURRENT_WRITES_DIVISOR when writers > 0}\`
 - MongoDB mode: \`$MONGO_MODE\`
 - MongoDB image: \`$MONGO_IMAGE\`
+- MongoDB client modes: \`$MONGO_CLIENT_MODES\`
 - benchmark timeout: \`$TIMEOUT\`
 - TreeDB profile: \`$TREEDB_PROFILE\`
 - TreeDB document formats: \`$TREEDB_DOCUMENT_FORMATS\`
