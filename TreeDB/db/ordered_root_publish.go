@@ -1401,18 +1401,16 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered []
 }
 
 func orderedRootDeltaBatchGroupParallelApplyEligible(ordered []OrderedRootDeltaBatchPublishInput) bool {
-	active := 0
 	parallelActive := 0
 	for idx := range ordered {
 		if ordered[idx].Delta == nil || ordered[idx].Delta.IsEmpty() {
 			continue
 		}
-		active++
 		if ordered[idx].ParallelApply {
 			parallelActive++
 		}
 	}
-	return active == parallelActive && parallelActive >= orderedRootDeltaBatchGroupParallelApplyMinRoots
+	return parallelActive >= orderedRootDeltaBatchGroupParallelApplyMinRoots
 }
 
 func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []OrderedRootDeltaBatchPublishInput, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator) ([]orderedRootDeltaBatchGroupApplyResult, bool) {
@@ -1444,14 +1442,9 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 
 	parallelRoots := 0
 	for orderedIdx := range ordered {
-		if !ordered[orderedIdx].ParallelApply || ordered[orderedIdx].Delta == nil || ordered[orderedIdx].Delta.IsEmpty() {
-			results[orderedIdx] = applyOne(orderedIdx)
-			if results[orderedIdx].err != nil {
-				return results, false
-			}
-			continue
+		if ordered[orderedIdx].ParallelApply && ordered[orderedIdx].Delta != nil && !ordered[orderedIdx].Delta.IsEmpty() {
+			parallelRoots++
 		}
-		parallelRoots++
 	}
 
 	var wg sync.WaitGroup
@@ -1466,6 +1459,18 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 		}(orderedIdx)
 	}
 	wg.Wait()
+	for orderedIdx := range ordered {
+		if ordered[orderedIdx].ParallelApply && ordered[orderedIdx].Delta != nil && !ordered[orderedIdx].Delta.IsEmpty() {
+			if results[orderedIdx].err != nil {
+				return results, false
+			}
+			continue
+		}
+		results[orderedIdx] = applyOne(orderedIdx)
+		if results[orderedIdx].err != nil {
+			return results, false
+		}
+	}
 	return results, parallelRoots >= orderedRootDeltaBatchGroupParallelApplyMinRoots
 }
 

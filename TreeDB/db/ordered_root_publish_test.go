@@ -1346,6 +1346,217 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticMixed
 	}
 }
 
+func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticMixedOptInParallelizesEligibleRoots(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	baseRootA, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "a/1", "base-a").NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root a: %v", err)
+	}
+	baseRootB, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "b/1", "base-b").NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root b: %v", err)
+	}
+	baseRootC, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "c/1", "base-c").NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root c: %v", err)
+	}
+
+	deltaAIter := mustFrozenSystemMemtable(t, "a/2", "delta-a").NewIterator(nil, nil)
+	deltaA, err := OrderedRootDeltaBatchFromIterator(deltaAIter)
+	_ = deltaAIter.Close()
+	if err != nil {
+		t.Fatalf("delta a batch: %v", err)
+	}
+	defer func() { _ = deltaA.Close() }()
+
+	deltaBIter := mustFrozenSystemMemtable(t, "b/2", "delta-b").NewIterator(nil, nil)
+	deltaB, err := OrderedRootDeltaBatchFromIterator(deltaBIter)
+	_ = deltaBIter.Close()
+	if err != nil {
+		t.Fatalf("delta b batch: %v", err)
+	}
+	defer func() { _ = deltaB.Close() }()
+
+	deltaCIter := mustFrozenSystemMemtable(t, "c/2", "delta-c").NewIterator(nil, nil)
+	deltaC, err := OrderedRootDeltaBatchFromIterator(deltaCIter)
+	_ = deltaCIter.Close()
+	if err != nil {
+		t.Fatalf("delta c batch: %v", err)
+	}
+	defer func() { _ = deltaC.Close() }()
+
+	systemRoot, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{
+		{BaseRoot: baseRootA, Delta: deltaA, ParallelApply: true},
+		{BaseRoot: baseRootB, Delta: deltaB},
+		{BaseRoot: baseRootC, Delta: deltaC, ParallelApply: true},
+	}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 3 || rootIDs[0] == 0 || rootIDs[1] == 0 || rootIDs[2] == 0 {
+			return nil, errors.New("unexpected mixed optimistic root IDs")
+		}
+		return mustFrozenSystemMemtable(t,
+			"sys/collections/users/a", strconv.FormatUint(rootIDs[0], 10),
+			"sys/collections/users/b", strconv.FormatUint(rootIDs[1], 10),
+			"sys/collections/users/c", strconv.FormatUint(rootIDs[2], 10),
+		).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish mixed delta batch group: %v", err)
+	}
+	if systemRoot == 0 || len(rootIDs) != 3 || rootIDs[0] == 0 || rootIDs[1] == 0 || rootIDs[2] == 0 {
+		t.Fatalf("systemRoot=%d rootIDs=%v, want non-zero system root and three non-zero roots", systemRoot, rootIDs)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	for rootIdx, kv := range []map[string]string{
+		{"a/1": "base-a", "a/2": "delta-a"},
+		{"b/1": "base-b", "b/2": "delta-b"},
+		{"c/1": "base-c", "c/2": "delta-c"},
+	} {
+		for key, want := range kv {
+			entry, err := snap.GetEntryAtRoot(rootIDs[rootIdx], []byte(key))
+			if err != nil {
+				t.Fatalf("GetEntryAtRoot(root=%d key=%s): %v", rootIdx, key, err)
+			}
+			if got := string(entry.Value); got != want {
+				t.Fatalf("root=%d key=%s got=%q want %q", rootIdx, key, got, want)
+			}
+		}
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_parallel_groups_total"]; got != "1" {
+		t.Fatalf("parallel groups stat=%q want 1", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_parallel_roots_total"]; got != "2" {
+		t.Fatalf("parallel roots stat=%q want 2", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_calls_total"]; got != "3" {
+		t.Fatalf("root apply calls stat=%q want 3", got)
+	}
+}
+
+func TestApplyOrderedRootDeltaBatchGroupRoots_MixedOptInStartsParallelBeforeSerial(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	idx := db.idx.Load()
+	if idx == nil {
+		t.Fatal("missing index")
+	}
+
+	baseRootB, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t,
+		"b/1", "base-b",
+	).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root B: %v", err)
+	}
+	if baseRootB == 0 {
+		t.Fatal("expected non-zero base root B")
+	}
+
+	deltaAIter := mustFrozenSystemMemtable(t, "a/1", "delta-a").NewIterator(nil, nil)
+	deltaA, err := OrderedRootDeltaBatchFromIterator(deltaAIter)
+	_ = deltaAIter.Close()
+	if err != nil {
+		t.Fatalf("delta a batch: %v", err)
+	}
+	defer func() { _ = deltaA.Close() }()
+
+	deltaBIter := mustFrozenSystemMemtable(t, "b/2", "delta-b").NewIterator(nil, nil)
+	deltaB, err := OrderedRootDeltaBatchFromIterator(deltaBIter)
+	_ = deltaBIter.Close()
+	if err != nil {
+		t.Fatalf("delta b batch: %v", err)
+	}
+	defer func() { _ = deltaB.Close() }()
+
+	deltaCIter := mustFrozenSystemMemtable(t, "c/1", "delta-c").NewIterator(nil, nil)
+	deltaC, err := OrderedRootDeltaBatchFromIterator(deltaCIter)
+	_ = deltaCIter.Close()
+	if err != nil {
+		t.Fatalf("delta c batch: %v", err)
+	}
+	defer func() { _ = deltaC.Close() }()
+
+	parallelStarted := make(chan struct{})
+	var parallelAllocCalls atomic.Int32
+	var closeParallelStarted sync.Once
+	coldAlloc := &orderedRootDeltaBatchGroupTestAllocator{
+		delegate: &pagerAllocator{p: idx.pager},
+		onAlloc: func() {
+			if parallelAllocCalls.Add(1) >= 2 {
+				closeParallelStarted.Do(func() { close(parallelStarted) })
+			}
+		},
+	}
+
+	var serialStartedBeforeParallel atomic.Bool
+	serialAlloc := &orderedRootDeltaBatchGroupTestAllocator{
+		delegate: idx.allocator,
+		onAlloc: func() {
+			select {
+			case <-parallelStarted:
+			default:
+				serialStartedBeforeParallel.Store(true)
+			}
+		},
+	}
+
+	results, parallel := db.applyOrderedRootDeltaBatchGroupRoots(idx, []OrderedRootDeltaBatchPublishInput{
+		{BaseRoot: 0, Delta: deltaA, ParallelApply: true},
+		{BaseRoot: baseRootB, Delta: deltaB},
+		{BaseRoot: 0, Delta: deltaC, ParallelApply: true},
+	}, serialAlloc, coldAlloc)
+	if !parallel {
+		t.Fatal("expected mixed group to use parallel apply")
+	}
+	if serialStartedBeforeParallel.Load() {
+		t.Fatal("serialized root apply started before both eligible parallel roots started")
+	}
+	if parallelAllocCalls.Load() < 2 {
+		t.Fatalf("parallel allocator calls=%d want at least 2", parallelAllocCalls.Load())
+	}
+	if len(results) != 3 {
+		t.Fatalf("results len=%d want 3", len(results))
+	}
+	for idx, result := range results {
+		if result.err != nil {
+			t.Fatalf("result %d err: %v", idx, result.err)
+		}
+		if result.rootID == 0 {
+			t.Fatalf("result %d rootID=0", idx)
+		}
+	}
+}
+
+type orderedRootDeltaBatchGroupTestAllocator struct {
+	delegate interface {
+		Alloc(uint64) (uint64, error)
+	}
+	onAlloc func()
+}
+
+func (a *orderedRootDeltaBatchGroupTestAllocator) Alloc(hint uint64) (uint64, error) {
+	if a.onAlloc != nil {
+		a.onAlloc()
+	}
+	return a.delegate.Alloc(hint)
+}
+
 func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticInvalidatesLeafGenerationSubtreeStats(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
