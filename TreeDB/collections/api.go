@@ -3607,52 +3607,6 @@ func bufferedUniqueIndexValueRun(batchIndex memtable.Table, valueType IndexValue
 	return table, prefixes, nil
 }
 
-func bufferedUnchangedUniqueValueRuns(runtimes []indexRuntime, updates []preparedBatchUpdate) ([]updateBatchUniqueValueRun, error) {
-	var out []updateBatchUniqueValueRun
-	for runtimeIdx, runtime := range runtimes {
-		if !runtime.def.unique {
-			continue
-		}
-		var table memtable.Table
-		var prefixes [][]byte
-		var arena []byte
-		for _, update := range updates {
-			if !update.indexStateChanged {
-				continue
-			}
-			if preparedBatchUpdateIndexChanged(update, runtimeIdx) {
-				continue
-			}
-			for _, encoded := range update.newState.valuesAt(runtimeIdx) {
-				if table == nil {
-					table = newCollectionRunTable(0)
-				}
-				var prefix []byte
-				var err error
-				arena, prefix, err = appendIndexValuePrefixSlice(arena, encoded)
-				if err != nil {
-					resetCollectionRunTable(table)
-					resetUpdateBatchUniqueValueRuns(out)
-					return nil, err
-				}
-				setCollectionRunValue(table, prefix, nil)
-				prefixes = append(prefixes, prefix)
-			}
-		}
-		if table == nil || table.Len() == 0 {
-			resetCollectionRunTable(table)
-			continue
-		}
-		table.Freeze()
-		out = append(out, updateBatchUniqueValueRun{
-			indexName: runtime.def.name,
-			table:     table,
-			prefixes:  prefixes,
-		})
-	}
-	return out, nil
-}
-
 func indexEntryValuePrefix(key []byte, valueType IndexValueType) ([]byte, error) {
 	n, err := indexComponentLength(valueType, key)
 	if err != nil {
@@ -6505,18 +6459,11 @@ type updateBatchPlan struct {
 	policies                    []backenddb.OrderedRootStoragePolicy
 	deltaTables                 []memtable.Table
 	uniqueSecondaryIndexByRoot  []int
-	uniqueValueRuns             []updateBatchUniqueValueRun
 	canBufferIndexedUpdateBatch bool
 	bufferedBase                bool
 	bufferedReadGeneration      uint64
 	bufferedReadBlocked         bool
 	scratch                     *updateBatchPlanScratch
-}
-
-type updateBatchUniqueValueRun struct {
-	indexName string
-	table     memtable.Table
-	prefixes  [][]byte
 }
 
 var updateBatchPlanPool sync.Pool
@@ -6766,7 +6713,6 @@ func (plan *updateBatchPlan) close() {
 		_ = plan.snap.Close()
 	}
 	resetCollectionTables(plan.deltaTables)
-	resetUpdateBatchUniqueValueRuns(plan.uniqueValueRuns)
 	if plan.scratch != nil {
 		putUpdateBatchPlanScratch(plan.scratch)
 	}
@@ -7435,7 +7381,6 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	var stateTable memtable.Table
 	secondaryTables := make(map[string]memtable.Table, len(runtimes))
 	secondaryRunStats := make([]CollectionUpdateSecondaryRunStats, len(runtimes))
-	var uniqueValueRuns []updateBatchUniqueValueRun
 	success := false
 	defer func() {
 		if success {
@@ -7447,7 +7392,6 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		for _, table := range secondaryTables {
 			resetCollectionRunTable(table)
 		}
-		resetUpdateBatchUniqueValueRuns(uniqueValueRuns)
 	}()
 
 	if len(templateRecords) > 0 {
@@ -7602,14 +7546,6 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	for _, table := range secondaryTables {
 		resetCollectionRunTable(table)
 	}
-	if canBufferIndexedUpdateBatch && meta.Options.BufferedIndexedWrites && collectionMetaHasSecondaryUniqueIndex(meta) {
-		var err error
-		uniqueValueRuns, err = bufferedUnchangedUniqueValueRuns(runtimes, changed)
-		if err != nil {
-			_ = snap.Close()
-			return nil, err
-		}
-	}
 	success = true
 	plan := newUpdateBatchPlan()
 	stats = updateCollectionUpdateStatsCounts(stats, results, len(deltaTables))
@@ -7632,9 +7568,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		policies:                    policies,
 		deltaTables:                 deltaTables,
 		scratch:                     scratch,
-		uniqueValueRuns:             uniqueValueRuns,
 	}
-	uniqueValueRuns = nil
 	scratchOwnedByPlan = true
 	return plan, nil
 }
@@ -7805,11 +7739,6 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	}
 	hasUniqueSecondaryRoots := collectionMetaHasSecondaryUniqueIndex(plan.meta)
 	projectedStagedBytes := stagedBytes
-	for i := range plan.uniqueValueRuns {
-		if table := plan.uniqueValueRuns[i].table; table != nil {
-			projectedStagedBytes = saturatingAddNonNegativeInt64(projectedStagedBytes, table.Size())
-		}
-	}
 	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, projectedStagedBytes, stagedRootRuns)
 	if !shouldAutoFlushAfterAdding && hasUniqueSecondaryRoots && bufferedIndexedAutoFlushEnabled(plan.meta.Options) {
 		for i := range plan.rootNames {
@@ -7889,32 +7818,6 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		plan.stats.BufferStageRootAppend += updateBatchStatsSince(detailedStats, phaseStart)
 	}
 	plan.deltaTables = nil
-	if len(plan.uniqueValueRuns) > 0 {
-		phaseStart = updateBatchStatsNow(detailedStats)
-		if domain.uniqueValueRuns == nil {
-			domain.uniqueValueRuns = make(map[string][]memtable.Table)
-		}
-		if domain.uniqueValueIndex == nil {
-			domain.uniqueValueIndex = make(map[string]*bufferedUniqueValueIndex)
-		}
-		for i := range plan.uniqueValueRuns {
-			run := &plan.uniqueValueRuns[i]
-			if run.table == nil {
-				continue
-			}
-			domain.uniqueValueRuns[run.indexName] = append(domain.uniqueValueRuns[run.indexName], run.table)
-			index := domain.uniqueValueIndex[run.indexName]
-			if index == nil {
-				index = newBufferedUniqueValueIndex(max(1, len(run.prefixes)))
-				domain.uniqueValueIndex[run.indexName] = index
-			}
-			index.addAll(run.prefixes)
-			stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, run.table.Size())
-			run.table = nil
-			run.prefixes = nil
-		}
-		plan.stats.BufferStageUniqueIdx += updateBatchStatsSince(detailedStats, phaseStart)
-	}
 	domain.loaded = true
 	domain.meta = plan.meta
 	domain.catalog = plan.catalog
@@ -8018,13 +7921,6 @@ func rejectBatchUniqueConflicts(runtimes []indexRuntime, updates []preparedBatch
 		}
 	}
 	return nil
-}
-
-func resetUpdateBatchUniqueValueRuns(runs []updateBatchUniqueValueRun) {
-	for i := range runs {
-		resetCollectionRunTable(runs[i].table)
-		runs[i] = updateBatchUniqueValueRun{}
-	}
 }
 
 func updateBatchChangesSecondaryUniqueIndex(runtimes []indexRuntime, updates []preparedBatchUpdate) bool {
