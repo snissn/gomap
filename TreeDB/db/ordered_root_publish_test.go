@@ -1543,6 +1543,54 @@ func TestApplyOrderedRootDeltaBatchGroupRoots_MixedOptInStartsParallelBeforeSeri
 	}
 }
 
+func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_ColdBatchCanPreserveDeletes(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := delta.Delete([]byte("doc/u1")); err != nil {
+		t.Fatalf("delete delta: %v", err)
+	}
+	defer func() { _ = delta.Close() }()
+
+	_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+		BaseRoot:                  0,
+		Delta:                     delta,
+		IncludeDeletedOnColdBuild: true,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 || rootIDs[0] == 0 {
+			return nil, errors.New("unexpected cold tombstone root ID")
+		}
+		return mustFrozenSystemMemtable(t,
+			"sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10),
+		).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish cold delete batch group: %v", err)
+	}
+	if len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("rootIDs=%v want one non-zero root", rootIDs)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	it, err := snap.IteratorAtRootWithOptions(rootIDs[0], []byte("doc/u1"), nil, IteratorOptions{IncludeTombstones: true})
+	if err != nil {
+		t.Fatalf("IteratorAtRootWithOptions: %v", err)
+	}
+	defer func() { _ = it.Close() }()
+	if !it.Valid() || !bytes.Equal(it.UnsafeKey(), []byte("doc/u1")) || !it.IsDeleted() {
+		t.Fatalf("iterator valid/key/deleted=%v/%q/%v, want tombstone doc/u1", it.Valid(), it.UnsafeKey(), it.Valid() && it.IsDeleted())
+	}
+}
+
 type orderedRootDeltaBatchGroupTestAllocator struct {
 	delegate interface {
 		Alloc(uint64) (uint64, error)

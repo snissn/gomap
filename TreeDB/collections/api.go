@@ -4630,10 +4630,11 @@ func buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames []string, rootRun
 			return nil, func() {}, err
 		}
 		ordered = append(ordered, backenddb.OrderedRootDeltaBatchPublishInput{
-			BaseRoot:      overlayDeltaBaseRoot(rootOverlays[rootName]),
-			Delta:         delta,
-			StoragePolicy: rootPolicies[rootName],
-			ParallelApply: true,
+			BaseRoot:                  overlayDeltaBaseRoot(rootOverlays[rootName]),
+			Delta:                     delta,
+			StoragePolicy:             rootPolicies[rootName],
+			IncludeDeletedOnColdBuild: true,
+			ParallelApply:             true,
 		})
 	}
 	return ordered, cleanup, nil

@@ -2578,6 +2578,63 @@ func TestCollectionIndexedOverlayRootColdFlushPublishesBatchRootsInParallel(t *t
 	}
 }
 
+func TestCollectionIndexedOverlayRootColdFlushPreservesDeletes(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedOverlayRoots:      true,
+			BufferedIndexedWriteMaxDocuments: 1024,
+			BufferedIndexedWriteMaxRootRuns:  1024,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"city":"hnl"}`)); err != nil {
+		t.Fatalf("insert base doc: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush base doc: %v", err)
+	}
+	if _, err := col.CompactRootOverlays(context.Background()); err != nil {
+		t.Fatalf("compact base overlay: %v", err)
+	}
+	deleted, err := col.DeleteDocument([]byte("u1"))
+	if err != nil {
+		t.Fatalf("delete base doc: %v", err)
+	}
+	if !deleted {
+		t.Fatal("delete base doc deleted=false want true")
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush cold delete overlay: %v", err)
+	}
+	if got, err := col.Get([]byte("u1")); err != nil {
+		t.Fatalf("get deleted doc: %v", err)
+	} else if got != nil {
+		t.Fatalf("deleted doc=%s want nil", got)
+	}
+	ids, err := col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find city after delete: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("city ids=%q want empty after delete", ids)
+	}
+}
+
 func TestCollectionIndexedOverlayRootFilterUnionsDeltaBase(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
