@@ -376,6 +376,30 @@ safe_label() {
   printf '%s' "$1" | tr -c '[:alnum:]_.-' '_'
 }
 
+list_word_count() {
+  local count=0
+  local item
+  for item in $1; do
+    count=$((count + 1))
+  done
+  echo "$count"
+}
+
+mongo_config_name() {
+  local client_mode=$1
+  local client_label=$2
+  local config
+  if [[ "$client_mode" == "driver" ]] && [[ "$(list_word_count "$MONGO_CLIENT_MODES")" -eq 1 ]]; then
+    config="mongo"
+  else
+    config="mongo_${client_label}"
+  fi
+  if [[ "$RANGE_INDEX" == "true" ]]; then
+    config="${config}_range_index"
+  fi
+  printf '%s' "$config"
+}
+
 start_mongo_container() {
   local cell=$1
   local data_dir=$2
@@ -708,10 +732,7 @@ for docs in $DOCS_LIST; do
 
     for mongo_client_mode in $MONGO_CLIENT_MODES; do
       mongo_client_label=$(safe_label "${mongo_client_mode//-/_}")
-      mongo_config="mongo_${mongo_client_label}"
-      if [[ "$RANGE_INDEX" == "true" ]]; then
-        mongo_config="${mongo_config}_range_index"
-      fi
+      mongo_config=$(mongo_config_name "$mongo_client_mode" "$mongo_client_label")
       mongo_raw_rel="raw/${mongo_config}_${cell}.json"
       mongo_raw="$OUT_DIR/$mongo_raw_rel"
       mongo_cell_data="$mongo_data/$mongo_client_label"

@@ -195,6 +195,11 @@ MONGO_CLIENT_MODES="driver driver-command driver-command-raw driver-unack" \
 scripts/mongo_gateway_compare.sh
 ```
 
+When the MongoDB side runs only the ordinary `driver` mode, the matrix keeps
+the legacy baseline config names `mongo` and `mongo_range_index`. Explicit
+`mongo_driver` config names are used only when `driver` is part of a multi-mode
+MongoDB client matrix.
+
 ```sh
 scripts/mongo_gateway_compare.sh \
   --out /tmp/gomap_mongo_gateway_compare \

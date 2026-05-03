@@ -335,17 +335,30 @@ func matchingMongoRecord(key baseCellKey, treeConfig string, mongoIndex mongoSce
 }
 
 func preferredMongoDriverBaseline(records []*runRecord) *runRecord {
-	var out *runRecord
+	var legacy *runRecord
+	var explicit *runRecord
 	for _, record := range records {
-		if record == nil || !isMongoDriverBaselineConfig(record.Row.Config) {
+		if record == nil {
 			continue
 		}
-		if out != nil {
-			return nil
+		if isLegacyMongoDriverBaselineConfig(record.Row.Config) {
+			if legacy != nil {
+				return nil
+			}
+			legacy = record
+			continue
 		}
-		out = record
+		if isExplicitMongoDriverBaselineConfig(record.Row.Config) {
+			if explicit != nil {
+				return nil
+			}
+			explicit = record
+		}
 	}
-	return out
+	if legacy != nil {
+		return legacy
+	}
+	return explicit
 }
 
 func mongoRecordsForTreeConfig(treeConfig string, mongoIndex mongoScenarioIndex) []*runRecord {
@@ -361,6 +374,10 @@ func mongoRecordsForTreeConfig(treeConfig string, mongoIndex mongoScenarioIndex)
 }
 
 func isMongoDriverBaselineConfig(config string) bool {
+	return isLegacyMongoDriverBaselineConfig(config) || isExplicitMongoDriverBaselineConfig(config)
+}
+
+func isLegacyMongoDriverBaselineConfig(config string) bool {
 	if config == "mongo" {
 		return true
 	}
@@ -368,7 +385,7 @@ func isMongoDriverBaselineConfig(config string) bool {
 		return false
 	}
 	if config == "mongo_driver" || strings.HasPrefix(config, "mongo_driver_") {
-		return isExplicitMongoDriverBaselineConfig(config)
+		return false
 	}
 	// Legacy Mongo rows predate explicit client-mode naming and look like
 	// mongo_range_index or mongo_writers_4. They are ordinary driver baselines.

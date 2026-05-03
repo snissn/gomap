@@ -255,6 +255,11 @@ scripts/mongo_gateway_compare.sh \
   --timeout 120m
 ```
 
+MongoDB matrix config names intentionally keep `mongo` / `mongo_range_index`
+for the ordinary single-driver case. The explicit `mongo_driver` row name is
+reserved for multi-mode MongoDB client matrices so older comparison bundles and
+new client-mode bundles remain readable side by side.
+
 Interpret client modes as separate questions:
 
 - `driver`: ordinary official MongoDB Go driver CRUD-helper path.
