@@ -2286,6 +2286,9 @@ func TestCollectionCatalogOverlayRootsAreVisibleAfterReopen(t *testing.T) {
 	if got := catalog.overlayRootIDs(cityRootName); !reflect.DeepEqual(got, []uint64{overlayRootIDs[1]}) {
 		t.Fatalf("city overlay roots=%v want [%d]", got, overlayRootIDs[1])
 	}
+	if !catalog.overlayRootMayContainKey(primaryRootName, overlayRootIDs[0], []byte("definitely-missing")) {
+		t.Fatalf("legacy overlay descriptor without filter must fall back to maybe-present")
+	}
 	rawOverlayIt, err := snap.IteratorAtRootWithOptions(overlayRootIDs[1], oldCity, prefixEnd(oldCity), backenddb.IteratorOptions{IncludeTombstones: true})
 	if err != nil {
 		t.Fatalf("open raw old city overlay iterator: %v", err)
@@ -2429,7 +2432,7 @@ func TestCollectionIndexedOverlayRootFlushSupportsReadsUpdatesAndUniqueChecks(t 
 	if snap == nil {
 		t.Fatal("acquire snapshot")
 	}
-	catalog, err := loadCollectionCatalog(snap, "users")
+	catalog, err := col.catalogForSnapshot(snap)
 	if err != nil {
 		_ = snap.Close()
 		t.Fatalf("load catalog: %v", err)
@@ -2437,6 +2440,16 @@ func TestCollectionIndexedOverlayRootFlushSupportsReadsUpdatesAndUniqueChecks(t 
 	if got := len(catalog.overlayRootIDs(collectionPrimaryRootName("users"))); got != 1 {
 		_ = snap.Close()
 		t.Fatalf("primary overlay roots=%d want 1 coalesced overlay", got)
+	}
+	primaryRootName := collectionPrimaryRootName("users")
+	primaryOverlays := catalog.overlayRootIDs(primaryRootName)
+	if !catalog.overlayRootMayContainKey(primaryRootName, primaryOverlays[0], []byte("u1")) {
+		_ = snap.Close()
+		t.Fatalf("primary overlay filter does not contain updated document")
+	}
+	if catalog.overlayRootMayContainKey(primaryRootName, primaryOverlays[0], []byte("definitely-missing")) {
+		_ = snap.Close()
+		t.Fatalf("primary overlay filter contains unrelated document")
 	}
 	_ = snap.Close()
 	if err := db.Close(); err != nil {
@@ -2465,6 +2478,117 @@ func TestCollectionIndexedOverlayRootFlushSupportsReadsUpdatesAndUniqueChecks(t 
 	}
 	if len(reopenedSeaIDs) != 1 || !bytes.Equal(reopenedSeaIDs[0], []byte("u1")) {
 		t.Fatalf("reopened city ids=%q want [u1]", reopenedSeaIDs)
+	}
+	reopenedSnap := reopened.AcquireSnapshot()
+	if reopenedSnap == nil {
+		t.Fatal("acquire reopened snapshot")
+	}
+	reopenedCatalog, err := loadCollectionCatalog(reopenedSnap, "users")
+	if err != nil {
+		_ = reopenedSnap.Close()
+		t.Fatalf("load reopened catalog: %v", err)
+	}
+	reopenedPrimaryOverlays := reopenedCatalog.overlayRootIDs(primaryRootName)
+	if len(reopenedPrimaryOverlays) != 1 {
+		_ = reopenedSnap.Close()
+		t.Fatalf("reopened primary overlay roots=%d want 1", len(reopenedPrimaryOverlays))
+	}
+	if !reopenedCatalog.overlayRootMayContainKey(primaryRootName, reopenedPrimaryOverlays[0], []byte("u1")) {
+		_ = reopenedSnap.Close()
+		t.Fatalf("reopened primary overlay filter does not contain updated document")
+	}
+	if !reopenedCatalog.overlayRootMayContainKey(primaryRootName, reopenedPrimaryOverlays[0], []byte("definitely-missing")) {
+		_ = reopenedSnap.Close()
+		t.Fatalf("reopened primary overlay without in-memory filter must fall back to maybe-present")
+	}
+	_ = reopenedSnap.Close()
+}
+
+func TestCollectionIndexedOverlayRootFilterUnionsDeltaBase(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedOverlayRoots:      true,
+			BufferedIndexedWriteMaxDocuments: 1,
+			BufferedIndexedWriteMaxRootRuns:  1,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"city":"hnl"}`)); err != nil {
+		t.Fatalf("insert u1: %v", err)
+	}
+	if _, err := col.Insert([]byte("u2"), []byte(`{"city":"sea"}`)); err != nil {
+		t.Fatalf("insert u2: %v", err)
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("acquire snapshot")
+	}
+	catalog, err := col.catalogForSnapshot(snap)
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("load catalog: %v", err)
+	}
+	primaryRootName := collectionPrimaryRootName("users")
+	primaryOverlays := catalog.overlayRootIDs(primaryRootName)
+	if len(primaryOverlays) != 1 {
+		_ = snap.Close()
+		t.Fatalf("primary overlay roots=%d want 1 coalesced overlay", len(primaryOverlays))
+	}
+	for _, id := range []string{"u1", "u2"} {
+		if !catalog.overlayRootMayContainKey(primaryRootName, primaryOverlays[0], []byte(id)) {
+			_ = snap.Close()
+			t.Fatalf("primary overlay filter does not contain %s after delta-over-overlay publish", id)
+		}
+	}
+	_ = snap.Close()
+
+	results, buffered, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			return []byte(`{"city":"bos"}`), true, nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("update u1: %v", err)
+	}
+	if !buffered || len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("update results=%+v buffered=%v", results, buffered)
+	}
+}
+
+func TestCollectionRootOverlayFilterSkipsBaseOnlyUnionWhenDeltaFilterDisabled(t *testing.T) {
+	primaryRootName := collectionPrimaryRootName("users")
+	var baseFilter collectionRootOverlayFilter
+	baseFilter.addKey([]byte("u1"))
+
+	filters, err := buildCollectionRootOverlayFilters(
+		[]string{primaryRootName},
+		map[string][]memtable.Table{primaryRootName: nil},
+		map[string][]uint64{primaryRootName: []uint64{123}},
+		map[string]map[uint64]collectionRootOverlayFilter{
+			primaryRootName: map[uint64]collectionRootOverlayFilter{123: baseFilter},
+		},
+	)
+	if err != nil {
+		t.Fatalf("build overlay filters: %v", err)
+	}
+	if len(filters) != 0 {
+		t.Fatalf("filters=%v, want no base-only filter when delta filter is disabled", filters)
 	}
 }
 
