@@ -429,14 +429,14 @@ func (b *Batch) SetView(key, value []byte) error {
 }
 
 // AppendViewTrustedSortedUnique records a Put without copying key/value bytes or
-// invalidating the sorted/compacted state. Caller must guarantee key is non-nil,
+// invalidating the sorted/compacted state. Caller must guarantee key is non-empty,
 // key/value remain immutable until commit/close, and appended keys are strictly
 // increasing with no duplicates.
 func (b *Batch) AppendViewTrustedSortedUnique(key, value []byte) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
-	if key == nil {
+	if len(key) == 0 {
 		return ErrKeyEmpty
 	}
 	if len(value) > b.inlineThresholdForKey(key) {
@@ -511,14 +511,14 @@ func (b *Batch) DeleteView(key []byte) error {
 }
 
 // AppendDeleteViewTrustedSortedUnique records a Delete without copying key bytes
-// or invalidating sorted/compacted state. Caller must guarantee key is non-nil,
+// or invalidating sorted/compacted state. Caller must guarantee key is non-empty,
 // key remains immutable until commit/close, and appended keys are strictly
 // increasing with no duplicates.
 func (b *Batch) AppendDeleteViewTrustedSortedUnique(key []byte) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
-	if key == nil {
+	if len(key) == 0 {
 		return ErrKeyEmpty
 	}
 	b.entries = append(b.entries, Entry{
