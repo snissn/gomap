@@ -1523,6 +1523,7 @@ func compactedTreeDBConfigNames(canon *canonicalRun) []string {
 	seen := make(map[string]bool)
 	var out []string
 	for _, format := range canon.Config.Formats {
+		format = strings.ToLower(canonicalFormat(format))
 		name := canonicalConfigName("treedb", format, "collection", canonicalIndexCount(canon))
 		if seen[name] {
 			continue
