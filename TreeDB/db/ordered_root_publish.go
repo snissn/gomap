@@ -246,19 +246,42 @@ type orderedRootCollectionDescriptorEntry struct {
 }
 
 func orderedRootTableCollectionRootDescriptorEntries(table memtable.Table) ([]orderedRootCollectionDescriptorEntry, error) {
-	iter := table.NewIterator(collectionRootDescriptorPrefixBytes, collectionRootDescriptorPrefixEnd())
-	defer func() { _ = iter.Close() }()
-	return orderedRootIteratorCollectionRootDescriptorEntries(iter)
+	rootIter := table.NewIterator(collectionRootDescriptorPrefixBytes, collectionRootDescriptorPrefixEnd())
+	entries, err := orderedRootIteratorCollectionRootDescriptorEntriesForPrefix(rootIter, collectionRootDescriptorPrefixBytes)
+	_ = rootIter.Close()
+	if err != nil {
+		return nil, err
+	}
+	overlayIter := table.NewIterator(collectionRootOverlayDescriptorPrefixBytes, collectionRootOverlayDescriptorPrefixEnd())
+	overlayEntries, err := orderedRootIteratorCollectionRootDescriptorEntriesForPrefix(overlayIter, collectionRootOverlayDescriptorPrefixBytes)
+	_ = overlayIter.Close()
+	if err != nil {
+		return nil, err
+	}
+	return append(entries, overlayEntries...), nil
 }
 
 func orderedRootIteratorCollectionRootDescriptorEntries(iter iterator.UnsafeIterator) ([]orderedRootCollectionDescriptorEntry, error) {
+	entries, err := orderedRootIteratorCollectionRootDescriptorEntriesForPrefix(iter, collectionRootDescriptorPrefixBytes)
+	if err != nil {
+		return nil, err
+	}
+	overlayEntries, err := orderedRootIteratorCollectionRootDescriptorEntriesForPrefix(iter, collectionRootOverlayDescriptorPrefixBytes)
+	if err != nil {
+		return nil, err
+	}
+	return append(entries, overlayEntries...), nil
+}
+
+func orderedRootIteratorCollectionRootDescriptorEntriesForPrefix(iter iterator.UnsafeIterator, prefix []byte) ([]orderedRootCollectionDescriptorEntry, error) {
 	if iter == nil {
 		return nil, nil
 	}
 	var out []orderedRootCollectionDescriptorEntry
+	iter.Seek(prefix)
 	for iter.Valid() {
 		key := iter.UnsafeKey()
-		if !bytes.HasPrefix(key, collectionRootDescriptorPrefixBytes) {
+		if !bytes.HasPrefix(key, prefix) {
 			break
 		}
 		val, ptr, flags := iter.UnsafeEntry()
@@ -795,7 +818,7 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 			return rootTree.CollectPageIDs()
 		}
 		if trackValueLogRefs {
-			baseDescriptorIter := rootTree.Iterator(collectionRootDescriptorPrefixBytes, collectionRootDescriptorPrefixEnd())
+			baseDescriptorIter := rootTree.Iterator(nil, nil)
 			stats.collectionRootDescriptorBaseEntries, err = orderedRootIteratorCollectionRootDescriptorEntries(baseDescriptorIter)
 			_ = baseDescriptorIter.Close()
 			if err != nil {

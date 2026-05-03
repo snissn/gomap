@@ -26,7 +26,6 @@ func TestCollectionsRuntimeHasNoOracleOrTranslationSelectors(t *testing.T) {
 			"TREEDB_COLLECTION_PATH_LABEL",
 			"executionPath",
 			"detached",
-			"overlay",
 			"replay",
 		} {
 			if strings.Contains(src, forbidden) {

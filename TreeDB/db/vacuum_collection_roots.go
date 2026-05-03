@@ -16,13 +16,21 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
-const vacuumCollectionRootDescriptorPrefix = "collections/root/"
+const (
+	vacuumCollectionRootDescriptorPrefix        = "collections/root/"
+	vacuumCollectionRootOverlayDescriptorPrefix = "collections/root-overlay/"
+)
 
-var vacuumCollectionRootDescriptorPrefixBytes = []byte(vacuumCollectionRootDescriptorPrefix)
+var (
+	vacuumCollectionRootDescriptorPrefixBytes        = []byte(vacuumCollectionRootDescriptorPrefix)
+	vacuumCollectionRootOverlayDescriptorPrefixBytes = []byte(vacuumCollectionRootOverlayDescriptorPrefix)
+)
 
 type vacuumCollectionRootDescriptor struct {
-	key    []byte
-	rootID uint64
+	key       []byte
+	rootID    uint64
+	rootIDs   []uint64
+	rootIndex int
 }
 
 type vacuumCollectionRootReplacement struct {
@@ -45,7 +53,15 @@ type vacuumUnsafeAppendReader interface {
 }
 
 func vacuumCollectionRootDescriptorPrefixEnd() []byte {
-	out := append([]byte(nil), vacuumCollectionRootDescriptorPrefixBytes...)
+	return vacuumDescriptorPrefixEnd(vacuumCollectionRootDescriptorPrefixBytes)
+}
+
+func vacuumCollectionRootOverlayDescriptorPrefixEnd() []byte {
+	return vacuumDescriptorPrefixEnd(vacuumCollectionRootOverlayDescriptorPrefixBytes)
+}
+
+func vacuumDescriptorPrefixEnd(prefix []byte) []byte {
+	out := append([]byte(nil), prefix...)
 	for i := len(out) - 1; i >= 0; i-- {
 		if out[i] != 0xff {
 			out[i]++
@@ -73,38 +89,79 @@ func vacuumCollectCollectionRootDescriptorsWithContext(ctx context.Context, p *p
 		return nil, err
 	}
 
-	it := tree.New(p, reader, systemRootID).IteratorWithOptions(vacuumCollectionRootDescriptorPrefixBytes, vacuumCollectionRootDescriptorPrefixEnd(), tree.IteratorOptions{
-		Mode: tree.IteratorModePointerProjection,
-	})
-	defer func() { _ = it.Close() }()
-
 	var out []vacuumCollectionRootDescriptor
 	var pointerScratch []byte
-	for it.Valid() {
-		if err := ctx.Err(); err != nil {
+	descriptorPrefixes := []struct {
+		prefix    []byte
+		end       []byte
+		allowList bool
+	}{
+		{prefix: vacuumCollectionRootDescriptorPrefixBytes, end: vacuumCollectionRootDescriptorPrefixEnd()},
+		{prefix: vacuumCollectionRootOverlayDescriptorPrefixBytes, end: vacuumCollectionRootOverlayDescriptorPrefixEnd(), allowList: true},
+	}
+	for _, descriptorPrefix := range descriptorPrefixes {
+		it := tree.New(p, reader, systemRootID).IteratorWithOptions(descriptorPrefix.prefix, descriptorPrefix.end, tree.IteratorOptions{
+			Mode: tree.IteratorModePointerProjection,
+		})
+		for it.Valid() {
+			if err := ctx.Err(); err != nil {
+				_ = it.Close()
+				return nil, err
+			}
+			key := it.UnsafeKey()
+			if !bytes.HasPrefix(key, descriptorPrefix.prefix) {
+				break
+			}
+			val, ptr, flags := it.UnsafeEntry()
+			var err error
+			val, pointerScratch, err = vacuumCollectionRootDescriptorValue(reader, key, val, ptr, flags, pointerScratch)
+			if err != nil {
+				_ = it.Close()
+				return nil, err
+			}
+			rootIDs, err := decodeCollectionRootDescriptorRootIDs(key, val, descriptorPrefix.allowList)
+			if err != nil {
+				_ = it.Close()
+				return nil, err
+			}
+			keyCopy := append([]byte(nil), key...)
+			for i, rootID := range rootIDs {
+				out = append(out, vacuumCollectionRootDescriptor{
+					key:       keyCopy,
+					rootID:    rootID,
+					rootIDs:   append([]uint64(nil), rootIDs...),
+					rootIndex: i,
+				})
+			}
+			it.Next()
+		}
+		if err := it.Error(); err != nil {
+			_ = it.Close()
 			return nil, err
 		}
-		key := it.UnsafeKey()
-		if !bytes.HasPrefix(key, vacuumCollectionRootDescriptorPrefixBytes) {
-			break
-		}
-		val, ptr, flags := it.UnsafeEntry()
-		var err error
-		val, pointerScratch, err = vacuumCollectionRootDescriptorValue(reader, key, val, ptr, flags, pointerScratch)
-		if err != nil {
+		if err := it.Close(); err != nil {
 			return nil, err
 		}
+	}
+	return out, nil
+}
+
+func decodeCollectionRootDescriptorRootIDs(key, val []byte, allowList bool) ([]uint64, error) {
+	if len(val) == 0 && allowList {
+		return nil, nil
+	}
+	if !allowList {
 		if len(val) != 8 {
 			return nil, fmt.Errorf("vacuum: collection root descriptor %q has malformed root id length %d", string(key), len(val))
 		}
-		out = append(out, vacuumCollectionRootDescriptor{
-			key:    append([]byte(nil), key...),
-			rootID: binary.BigEndian.Uint64(val),
-		})
-		it.Next()
+		return []uint64{binary.BigEndian.Uint64(val)}, nil
 	}
-	if err := it.Error(); err != nil {
-		return nil, err
+	if len(val)%8 != 0 {
+		return nil, fmt.Errorf("vacuum: collection root overlay descriptor %q has malformed root id list length %d", string(key), len(val))
+	}
+	out := make([]uint64, len(val)/8)
+	for i := range out {
+		out[i] = binary.BigEndian.Uint64(val[i*8 : (i+1)*8])
 	}
 	return out, nil
 }
@@ -159,9 +216,23 @@ func vacuumRewriteCollectionRootDescriptors(descriptors []vacuumCollectionRootDe
 		return nil, errors.New(errPrefix + ": missing rewrite function")
 	}
 
-	replacements := make([]vacuumCollectionRootReplacement, 0, len(descriptors))
 	rootRemap := make(map[uint64]uint64, len(descriptors))
+	type descriptorRewriteState struct {
+		key     []byte
+		rootIDs []uint64
+		changed bool
+	}
+	statesByKey := make(map[string]*descriptorRewriteState, len(descriptors))
 	for _, descriptor := range descriptors {
+		key := string(descriptor.key)
+		state := statesByKey[key]
+		if state == nil {
+			state = &descriptorRewriteState{
+				key:     append([]byte(nil), descriptor.key...),
+				rootIDs: append([]uint64(nil), descriptor.rootIDs...),
+			}
+			statesByKey[key] = state
+		}
 		oldRoot := descriptor.rootID
 		newRoot := oldRoot
 		if oldRoot != 0 {
@@ -177,11 +248,22 @@ func vacuumRewriteCollectionRootDescriptors(descriptors []vacuumCollectionRootDe
 			}
 		}
 		if newRoot != oldRoot {
-			replacements = append(replacements, vacuumCollectionRootReplacement{
-				key:   descriptor.key,
-				value: encodeCollectionRootDescriptorRootID(newRoot),
-			})
+			if descriptor.rootIndex < 0 || descriptor.rootIndex >= len(state.rootIDs) {
+				return nil, fmt.Errorf("%s %q: malformed descriptor root index %d", errPrefix, string(descriptor.key), descriptor.rootIndex)
+			}
+			state.rootIDs[descriptor.rootIndex] = newRoot
+			state.changed = true
 		}
+	}
+	replacements := make([]vacuumCollectionRootReplacement, 0, len(statesByKey))
+	for _, state := range statesByKey {
+		if !state.changed {
+			continue
+		}
+		replacements = append(replacements, vacuumCollectionRootReplacement{
+			key:   state.key,
+			value: encodeCollectionRootDescriptorRootIDs(state.rootIDs),
+		})
 	}
 	if len(replacements) == 0 {
 		return nil, nil
@@ -195,6 +277,17 @@ func vacuumRewriteCollectionRootDescriptors(descriptors []vacuumCollectionRootDe
 func encodeCollectionRootDescriptorRootID(rootID uint64) []byte {
 	encoded := make([]byte, 8)
 	binary.BigEndian.PutUint64(encoded, rootID)
+	return encoded
+}
+
+func encodeCollectionRootDescriptorRootIDs(rootIDs []uint64) []byte {
+	if len(rootIDs) == 1 {
+		return encodeCollectionRootDescriptorRootID(rootIDs[0])
+	}
+	encoded := make([]byte, len(rootIDs)*8)
+	for i, rootID := range rootIDs {
+		binary.BigEndian.PutUint64(encoded[i*8:(i+1)*8], rootID)
+	}
 	return encoded
 }
 
@@ -306,9 +399,6 @@ func (it *vacuumSystemRootRewriteIterator) replacement() ([]byte, bool) {
 		return nil, false
 	}
 	key := it.base.UnsafeKey()
-	if !bytes.HasPrefix(key, vacuumCollectionRootDescriptorPrefixBytes) {
-		return nil, false
-	}
 	idx := sort.Search(len(it.replacements), func(i int) bool {
 		return bytes.Compare(it.replacements[i].key, key) >= 0
 	})
