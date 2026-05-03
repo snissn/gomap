@@ -4705,6 +4705,15 @@ func buildBufferedRootDeltaBatchPublishInputsFromSpecs(specs []bufferedRootDelta
 	if parallelism > len(specs) {
 		parallelism = len(specs)
 	}
+	if parallelism <= 1 {
+		for i := range specs {
+			if err := buildBufferedRootDeltaBatchPublishInput(specs[i], rootRuns, &ordered[i], &iterators[i]); err != nil {
+				cleanup()
+				return nil, func() {}, err
+			}
+		}
+		return ordered, cleanup, nil
+	}
 	errs := make([]error, len(specs))
 	jobs := make(chan int)
 	var wg sync.WaitGroup
