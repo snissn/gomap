@@ -188,9 +188,12 @@ TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack raw-w
 scripts/mongo_gateway_compare.sh
 ```
 
-To run matching MongoDB client-mode rows where MongoDB supports the mode:
+To run matching TreeDB and MongoDB client-mode rows where MongoDB supports the
+mode:
 
 ```sh
+TREEDB_DOCUMENT_FORMATS="bson" \
+TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack" \
 MONGO_CLIENT_MODES="driver driver-command driver-command-raw driver-unack" \
 scripts/mongo_gateway_compare.sh
 ```

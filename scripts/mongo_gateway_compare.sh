@@ -373,7 +373,7 @@ reset_mongo_data_dir() {
 }
 
 safe_label() {
-  printf '%s' "$1" | tr -c '[:alnum:]_.-' '_'
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c '[:alnum:]_.-' '_'
 }
 
 list_word_count() {
@@ -411,7 +411,7 @@ mongo_config_name() {
   local client_mode=$1
   local client_label=$2
   local config
-  if [[ "$client_mode" == "driver" ]] && [[ "$(list_word_count "$MONGO_CLIENT_MODES")" -eq 1 ]]; then
+  if [[ "$client_label" == "driver" ]] && [[ "$(list_word_count "$MONGO_CLIENT_MODES")" -eq 1 ]]; then
     config="mongo"
   else
     config="mongo_${client_label}"
