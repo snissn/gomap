@@ -54,6 +54,35 @@ func TestParseConfigDefaultsToInspectableTwoIndexTemplateFixture(t *testing.T) {
 	}
 }
 
+func TestParseConfigPartialBufferedIndexedThresholdKeepsRootRunDefault(t *testing.T) {
+	cfg, err := parseConfig([]string{"-buffered-indexed-write-max-docs", "1234"}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse docs threshold: %v", err)
+	}
+	if cfg.BufferedIndexedWriteMaxDocs != 1234 {
+		t.Fatalf("buffered indexed max docs=%d want 1234", cfg.BufferedIndexedWriteMaxDocs)
+	}
+	if cfg.BufferedIndexedWriteMaxRuns != collections.DefaultIndexedWriteMemtableMaxRootRuns {
+		t.Fatalf("buffered indexed max root runs=%d want %d", cfg.BufferedIndexedWriteMaxRuns, collections.DefaultIndexedWriteMemtableMaxRootRuns)
+	}
+
+	asyncCfg, err := parseConfig([]string{"-buffered-indexed-async-flush", "-buffered-indexed-write-max-docs", "1234"}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse async docs threshold: %v", err)
+	}
+	if asyncCfg.BufferedIndexedWriteMaxRuns != collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns {
+		t.Fatalf("async buffered indexed max root runs=%d want %d", asyncCfg.BufferedIndexedWriteMaxRuns, collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns)
+	}
+
+	explicitZeroCfg, err := parseConfig([]string{"-buffered-indexed-write-max-docs", "1234", "-buffered-indexed-write-max-root-runs", "0"}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse explicit root-run zero: %v", err)
+	}
+	if explicitZeroCfg.BufferedIndexedWriteMaxRuns != 0 {
+		t.Fatalf("explicit root-run zero=%d want 0", explicitZeroCfg.BufferedIndexedWriteMaxRuns)
+	}
+}
+
 func TestParseConfigRejectsExplicitEmptyFormat(t *testing.T) {
 	if _, err := parseConfig([]string{"-format", ""}, io.Discard); err == nil {
 		t.Fatal("expected explicit empty -format to fail")

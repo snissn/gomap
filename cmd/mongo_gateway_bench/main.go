@@ -490,6 +490,18 @@ func parseConfig(args []string) (config, error) {
 		}
 		return config{}, err
 	}
+	seenFlags := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) {
+		seenFlags[f.Name] = true
+	})
+	if !seenFlags["treedb-buffered-indexed-write-max-root-runs"] &&
+		(seenFlags["treedb-buffered-indexed-write-max-documents"] || seenFlags["treedb-buffered-indexed-write-max-bytes"]) &&
+		(cfg.TreeDBBufferedIndexedWriteMaxDocuments != 0 || cfg.TreeDBBufferedIndexedWriteMaxBytes != 0) {
+		cfg.TreeDBBufferedIndexedWriteMaxRootRuns = collections.DefaultIndexedWriteMemtableMaxRootRuns
+		if cfg.TreeDBBufferedIndexedAsyncFlush {
+			cfg.TreeDBBufferedIndexedWriteMaxRootRuns = collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns
+		}
+	}
 	if cfg.Target != "treedb" && cfg.Target != "mongo" {
 		return config{}, fmt.Errorf("unknown target %q", cfg.Target)
 	}

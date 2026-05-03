@@ -377,6 +377,18 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	if fs.NArg() != 0 {
 		return cfg, fmt.Errorf("unexpected positional arguments: %s", strings.Join(fs.Args(), " "))
 	}
+	seenFlags := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) {
+		seenFlags[f.Name] = true
+	})
+	if !seenFlags["buffered-indexed-write-max-root-runs"] &&
+		(seenFlags["buffered-indexed-write-max-docs"] || seenFlags["buffered-indexed-write-max-bytes"]) &&
+		(cfg.BufferedIndexedWriteMaxDocs != 0 || cfg.BufferedIndexedWriteMaxBytes != 0) {
+		cfg.BufferedIndexedWriteMaxRuns = collections.DefaultIndexedWriteMemtableMaxRootRuns
+		if cfg.BufferedIndexedAsyncFlush {
+			cfg.BufferedIndexedWriteMaxRuns = collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns
+		}
+	}
 	parsedFormat, err := parseDocumentFormat(documentFormat)
 	if err != nil {
 		return cfg, err

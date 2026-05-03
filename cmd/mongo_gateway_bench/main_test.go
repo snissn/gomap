@@ -559,6 +559,35 @@ func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
 	}
 }
 
+func TestParseConfigTreeDBPartialBufferedIndexedThresholdKeepsRootRunDefault(t *testing.T) {
+	cfg, err := parseConfig([]string{"-treedb-buffered-indexed-write-max-documents", "1234"})
+	if err != nil {
+		t.Fatalf("parse docs threshold: %v", err)
+	}
+	if cfg.TreeDBBufferedIndexedWriteMaxDocuments != 1234 {
+		t.Fatalf("TreeDBBufferedIndexedWriteMaxDocuments=%d want 1234", cfg.TreeDBBufferedIndexedWriteMaxDocuments)
+	}
+	if cfg.TreeDBBufferedIndexedWriteMaxRootRuns != collections.DefaultIndexedWriteMemtableMaxRootRuns {
+		t.Fatalf("TreeDBBufferedIndexedWriteMaxRootRuns=%d want %d", cfg.TreeDBBufferedIndexedWriteMaxRootRuns, collections.DefaultIndexedWriteMemtableMaxRootRuns)
+	}
+
+	asyncCfg, err := parseConfig([]string{"-treedb-buffered-indexed-async-flush", "-treedb-buffered-indexed-write-max-documents", "1234"})
+	if err != nil {
+		t.Fatalf("parse async docs threshold: %v", err)
+	}
+	if asyncCfg.TreeDBBufferedIndexedWriteMaxRootRuns != collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns {
+		t.Fatalf("async TreeDBBufferedIndexedWriteMaxRootRuns=%d want %d", asyncCfg.TreeDBBufferedIndexedWriteMaxRootRuns, collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns)
+	}
+
+	explicitZeroCfg, err := parseConfig([]string{"-treedb-buffered-indexed-write-max-documents", "1234", "-treedb-buffered-indexed-write-max-root-runs", "0"})
+	if err != nil {
+		t.Fatalf("parse explicit root-run zero: %v", err)
+	}
+	if explicitZeroCfg.TreeDBBufferedIndexedWriteMaxRootRuns != 0 {
+		t.Fatalf("explicit TreeDBBufferedIndexedWriteMaxRootRuns=%d want 0", explicitZeroCfg.TreeDBBufferedIndexedWriteMaxRootRuns)
+	}
+}
+
 func TestParseConfigTreeDBBufferedIndexedWriteThresholds(t *testing.T) {
 	cfg, err := parseConfig([]string{
 		"-treedb-buffered-indexed-write-max-documents", "1234",
