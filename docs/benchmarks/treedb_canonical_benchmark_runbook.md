@@ -71,22 +71,31 @@ Build the tools:
 make unified-bench benchprof
 ```
 
-Standard profile capture:
+Standard profile capture runs the full raw-engine test matrix at 800k keys.
+Omit `-test`; the default is `-test all`.
 
 ```sh
-OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
+OUT_ROOT=/tmp/gomap_raw_engine_full_$(date +%Y%m%d_%H%M%S)
+mkdir -p "$OUT_ROOT"
 
-./bin/unified-bench \
-  -dbs treedb \
-  -keys 800000 \
-  -profile wal_on_fast \
-  -path-label native-fastpath \
-  -checkpoint-between-tests \
-  -test random_write,random_delete,random_read,full_scan,prefix_scan \
-  -profile-dir "$OUT" \
-  -progress=false
-
-./bin/benchprof -profiles-dir "$OUT"
+for profile in wal_on_fast fast; do
+  for checkpoint_mode in checkpoint_between_tests no_checkpoint_between_tests; do
+    OUT="$OUT_ROOT/${profile}_${checkpoint_mode}"
+    args=(
+      -dbs treedb
+      -keys 800000
+      -profile "$profile"
+      -path-label native-fastpath
+      -profile-dir "$OUT"
+      -progress=false
+    )
+    if [ "$checkpoint_mode" = checkpoint_between_tests ]; then
+      args+=(-checkpoint-between-tests)
+    fi
+    ./bin/unified-bench "${args[@]}"
+    ./bin/benchprof -profiles-dir "$OUT"
+  done
+done
 ```
 
 Expected profile artifacts:
@@ -123,8 +132,12 @@ Use a stable output directory for any result that will be posted to a PR or
 issue:
 
 ```sh
-OUT=/tmp/collections_canonical_$(date +%Y%m%d_%H%M%S)
-./scripts/bench_collections_canonical.sh -out-dir "$OUT"
+OUT_ROOT=/tmp/collections_canonical_$(date +%Y%m%d_%H%M%S)
+for indexes in 0 1 2; do
+  ./scripts/bench_collections_canonical.sh \
+    -out-dir "$OUT_ROOT/indexes_${indexes}" \
+    -indexes "$indexes"
+done
 ```
 
 The canonical runner emits:
@@ -255,6 +268,10 @@ scripts/mongo_gateway_compare.sh \
   --timeout 120m
 ```
 
+This client-mode matrix is load-only by design. It should report insert
+throughput and disk by client mode, and should not be used as reader/writer
+scaling evidence.
+
 MongoDB matrix config names intentionally keep `mongo` / `mongo_range_index`
 for the ordinary single-driver case. The explicit `mongo_driver` row name is
 reserved for multi-mode MongoDB client matrices so older comparison bundles and
@@ -277,24 +294,30 @@ only to estimate TreeDB gateway/server ceiling.
 ## Reader and Writer Scaling
 
 Use the scaling wrapper when the question is concurrency plateau, update cost,
-or indexed-field update overhead:
+or indexed-field update overhead. Run the index-count loop when reader/writer
+scaling is part of a PR evidence bundle:
 
 ```sh
-scripts/mongo_gateway_scaling_bench.sh \
-  --out /tmp/gomap_mongo_gateway_scaling \
-  --docs 1000000 \
-  --indexes 2 \
-  --batch-size 10000 \
-  --insert-producers 8 \
-  --writers "1 2 4 8 16 32" \
-  --readers "1 2 4 8 16 32" \
-  --concurrent-writes 80000 \
-  --concurrent-reads 80000
+OUT_ROOT=/tmp/gomap_mongo_gateway_scaling_$(date +%Y%m%d_%H%M%S)
+for indexes in 0 1 2; do
+  scripts/mongo_gateway_scaling_bench.sh \
+    --out "$OUT_ROOT/indexes_${indexes}" \
+    --docs 1000000 \
+    --indexes "$indexes" \
+    --batch-size 10000 \
+    --insert-producers 8 \
+    --writers "1 2 4 8 16 32" \
+    --readers "1 2 4 8 16 32" \
+    --concurrent-writes 80000 \
+    --concurrent-reads 80000 \
+    --include-mongo \
+    --mongo-uri mongodb://127.0.0.1:27017
+done
 ```
 
-Add `--include-mongo --mongo-uri mongodb://127.0.0.1:27017` to compare against
-an existing MongoDB server. Add `--update-indexed-field` to update `city` and
-exercise secondary-index maintenance instead of non-indexed document updates.
+Omit `--include-mongo` for a TreeDB-only scaling ceiling check. Add
+`--update-indexed-field` to update `city` and exercise secondary-index
+maintenance instead of non-indexed document updates.
 
 ## Recommended Reference Workloads
 
