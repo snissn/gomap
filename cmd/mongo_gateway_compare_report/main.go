@@ -321,12 +321,40 @@ func matchingMongoRecord(key baseCellKey, treeConfig string, mongoIndex mongoSce
 	matches := mongoIndex.bySuffix[treeScenario.suffix]
 	candidates := mongoIndex.suffixConfig[treeScenario.suffix]
 	if len(candidates) > 1 {
+		if record := preferredMongoDriverBaseline(matches); record != nil {
+			return record, nil
+		}
 		return nil, fmt.Errorf("ambiguous mongo rows for documents=%d secondary_indexes=%d config=%q tree_scenario=%q candidates=%v available_mongo_configs=%v", key.Documents, key.SecondaryIndexes, treeConfig, treeScenarioLabel, candidates, sortedRunRecordKeys(mongoIndex.exact))
 	}
 	if len(matches) == 1 {
 		return matches[0], nil
 	}
 	return nil, fmt.Errorf("missing mongo row for documents=%d secondary_indexes=%d config=%q tree_scenario=%q available_mongo_configs=%v", key.Documents, key.SecondaryIndexes, treeConfig, treeScenarioLabel, sortedRunRecordKeys(mongoIndex.exact))
+}
+
+func preferredMongoDriverBaseline(records []*runRecord) *runRecord {
+	var out *runRecord
+	for _, record := range records {
+		if record == nil || !isMongoDriverBaselineConfig(record.Row.Config) {
+			continue
+		}
+		if out != nil {
+			return nil
+		}
+		out = record
+	}
+	return out
+}
+
+func isMongoDriverBaselineConfig(config string) bool {
+	if config == "mongo" || config == "mongo_driver" {
+		return true
+	}
+	if !strings.HasPrefix(config, "mongo_driver_") {
+		return false
+	}
+	return !strings.HasPrefix(config, "mongo_driver_command") &&
+		!strings.HasPrefix(config, "mongo_driver_unack")
 }
 
 func sortedRunRecordKeys(records map[string]*runRecord) []string {
