@@ -887,6 +887,36 @@ func TestReportUsesLegacyMongoBaselineWithMultipleMongoClientModes(t *testing.T)
 	}
 }
 
+func TestMongoDriverBaselineConfigRequiresKnownBaselineForms(t *testing.T) {
+	for _, tc := range []struct {
+		config string
+		want   bool
+	}{
+		{config: "mongo", want: true},
+		{config: "mongo_driver", want: true},
+		{config: "mongo_driver_range_index", want: true},
+		{config: "mongo_driver_writers_4", want: true},
+		{config: "mongo_driver_readers_16", want: true},
+		{config: "mongo_driver_range_index_writers_4", want: true},
+		{config: "mongo_driver_range_index_readers_16", want: true},
+		{config: "mongo_driver_command", want: false},
+		{config: "mongo_driver_command_range_index", want: false},
+		{config: "mongo_driver_command_raw", want: false},
+		{config: "mongo_driver_command_raw_range_index", want: false},
+		{config: "mongo_driver_unack", want: false},
+		{config: "mongo_driver_unack_range_index", want: false},
+		{config: "mongo_driver_future_mode", want: false},
+		{config: "mongo_driver_future_mode_writers_4", want: false},
+		{config: "mongo_range_index", want: true},
+		{config: "mongo_writers_4", want: true},
+		{config: "treedb_bson_driver", want: false},
+	} {
+		if got := isMongoDriverBaselineConfig(tc.config); got != tc.want {
+			t.Fatalf("isMongoDriverBaselineConfig(%q)=%t want %t", tc.config, got, tc.want)
+		}
+	}
+}
+
 func TestReportRejectsAmbiguousScalingMongoConfigsPerScenario(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "treedb_w1.json"), `{

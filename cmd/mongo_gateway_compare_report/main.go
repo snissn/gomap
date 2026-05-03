@@ -361,24 +361,36 @@ func mongoRecordsForTreeConfig(treeConfig string, mongoIndex mongoScenarioIndex)
 }
 
 func isMongoDriverBaselineConfig(config string) bool {
-	if config == "mongo" || config == "mongo_driver" {
+	if config == "mongo" {
 		return true
 	}
 	if !strings.HasPrefix(config, "mongo_") {
 		return false
 	}
-	suffix := strings.TrimPrefix(config, "mongo_")
-	for _, explicitNonBaseline := range []string{"driver_command", "driver_unack"} {
-		if suffix == explicitNonBaseline || strings.HasPrefix(suffix, explicitNonBaseline+"_") {
-			return false
-		}
-	}
-	if suffix == "driver" || strings.HasPrefix(suffix, "driver_") {
-		return true
+	if config == "mongo_driver" || strings.HasPrefix(config, "mongo_driver_") {
+		return isExplicitMongoDriverBaselineConfig(config)
 	}
 	// Legacy Mongo rows predate explicit client-mode naming and look like
 	// mongo_range_index or mongo_writers_4. They are ordinary driver baselines.
 	return true
+}
+
+func isExplicitMongoDriverBaselineConfig(config string) bool {
+	if config == "mongo_driver" {
+		return true
+	}
+	for _, base := range []string{"mongo_driver", "mongo_driver_range_index"} {
+		if config == base {
+			return true
+		}
+		for _, marker := range []string{"_writers_", "_readers_"} {
+			if strings.HasPrefix(config, base+marker) {
+				scenario := parseScalingScenario(config)
+				return scenario.hasMarker && scenario.valid
+			}
+		}
+	}
+	return false
 }
 
 func sortedRunRecordKeys(records map[string]*runRecord) []string {
