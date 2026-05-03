@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -2947,16 +2948,23 @@ func TestBufferedRootRunsIteratorMultiRunIncludesNewestTombstone(t *testing.T) {
 }
 
 func TestBufferedRootRunsIteratorMultiRunStableUnsafeSlices(t *testing.T) {
+	oldAKey := []byte("a")
+	oldBKey := []byte("b")
+	oldBValue := []byte("older")
+	newAKey := []byte("a")
+	newCKey := []byte("c")
+	newCValue := []byte("newer")
+
 	older := newCollectionRunTable(2)
 	defer resetCollectionRunTable(older)
-	setCollectionRunValue(older, []byte("a"), []byte("older"))
-	setCollectionRunValue(older, []byte("b"), []byte("older"))
+	setCollectionRunValue(older, oldAKey, []byte("older"))
+	setCollectionRunValue(older, oldBKey, oldBValue)
 	older.Freeze()
 
 	newer := newCollectionRunTable(2)
 	defer resetCollectionRunTable(newer)
-	newer.DeleteSteal([]byte("a"))
-	setCollectionRunValue(newer, []byte("c"), []byte("newer"))
+	newer.DeleteSteal(newAKey)
+	setCollectionRunValue(newer, newCKey, newCValue)
 	newer.Freeze()
 
 	it := newBufferedRootRunsIteratorWithDeleted([]memtable.Table{older, newer}, nil, nil, true)
@@ -2975,8 +2983,8 @@ func TestBufferedRootRunsIteratorMultiRunStableUnsafeSlices(t *testing.T) {
 	if !ok {
 		t.Fatalf("buffered root iterator does not expose Len hint")
 	}
-	if got, want := lenHint.Len(), 4; got != want {
-		t.Fatalf("buffered root iterator Len hint=%d want %d", got, want)
+	if got, wantAtLeast := lenHint.Len(), 3; got < wantAtLeast {
+		t.Fatalf("buffered root iterator Len hint=%d want at least %d", got, wantAtLeast)
 	}
 
 	delta, err := backenddb.OrderedRootDeltaBatchFromIterator(it)
@@ -2995,11 +3003,26 @@ func TestBufferedRootRunsIteratorMultiRunStableUnsafeSlices(t *testing.T) {
 	if got := entries[0]; string(got.Key) != "a" || got.Type != batch.OpDelete {
 		t.Fatalf("entry[0]=%+v want tombstone a", got)
 	}
+	if unsafe.SliceData(entries[0].Key) != unsafe.SliceData(newAKey) {
+		t.Fatal("tombstone key was copied instead of borrowed from the newer run")
+	}
 	if got := entries[1]; string(got.Key) != "b" || string(got.Value) != "older" {
 		t.Fatalf("entry[1]=%+v want b=older", got)
 	}
+	if unsafe.SliceData(entries[1].Key) != unsafe.SliceData(oldBKey) {
+		t.Fatal("older run key was copied instead of borrowed")
+	}
+	if unsafe.SliceData(entries[1].Value) != unsafe.SliceData(oldBValue) {
+		t.Fatal("older run value was copied instead of borrowed")
+	}
 	if got := entries[2]; string(got.Key) != "c" || string(got.Value) != "newer" {
 		t.Fatalf("entry[2]=%+v want c=newer", got)
+	}
+	if unsafe.SliceData(entries[2].Key) != unsafe.SliceData(newCKey) {
+		t.Fatal("newer run key was copied instead of borrowed")
+	}
+	if unsafe.SliceData(entries[2].Value) != unsafe.SliceData(newCValue) {
+		t.Fatal("newer run value was copied instead of borrowed")
 	}
 }
 

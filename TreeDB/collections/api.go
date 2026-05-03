@@ -3826,7 +3826,7 @@ func newBufferedRootRunsIteratorWithDeleted(runs []memtable.Table, start, end []
 			it.stableUnsafeSlices = false
 		}
 		if start == nil && end == nil {
-			it.lenHint += run.Len()
+			it.lenHint = saturatingAddNonNegativeInt(it.lenHint, run.Len())
 		}
 		runIter := run.NewIterator(start, end)
 		idx := len(it.iters)
