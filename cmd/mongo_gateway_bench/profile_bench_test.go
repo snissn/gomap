@@ -97,8 +97,12 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_DOCUMENTS", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_BYTES", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_ROOT_RUNS", "")
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_OVERLAY_ROOTS", "")
 	if profileBenchBufferedIndexedAsyncFlush(t) {
 		t.Fatal("async flush default=true want false")
+	}
+	if profileBenchBufferedIndexedOverlayRoots(t) {
+		t.Fatal("overlay roots default=true want false")
 	}
 	if got := profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(t); got != 0 {
 		t.Fatalf("async max queued units default=%d want 0", got)
@@ -131,6 +135,10 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_ROOT_RUNS", "789")
 	if got := profileBenchBufferedIndexedWriteMaxRootRuns(t); got != 789 {
 		t.Fatalf("buffered max root runs=%d want 789", got)
+	}
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_OVERLAY_ROOTS", "true")
+	if !profileBenchBufferedIndexedOverlayRoots(t) {
+		t.Fatal("overlay roots env=true want true")
 	}
 }
 
@@ -2128,6 +2136,10 @@ func profileBenchBufferedIndexedWriteMaxRootRuns(tb testing.TB) int {
 	return profileBenchNonNegativeEnvInt(tb, "MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_ROOT_RUNS", 0)
 }
 
+func profileBenchBufferedIndexedOverlayRoots(tb testing.TB) bool {
+	return profileBenchBoolEnv(tb, "MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_OVERLAY_ROOTS", false)
+}
+
 func profileBenchCollectionOptions(tb testing.TB, format collections.DocumentFormat) collections.CollectionOptions {
 	tb.Helper()
 	return collections.CollectionOptions{
@@ -2138,6 +2150,7 @@ func profileBenchCollectionOptions(tb testing.TB, format collections.DocumentFor
 		BufferedIndexedWriteMaxBytes:            profileBenchBufferedIndexedWriteMaxBytes(tb),
 		BufferedIndexedWriteMaxRootRuns:         profileBenchBufferedIndexedWriteMaxRootRuns(tb),
 		BufferedIndexedAsyncFlush:               profileBenchBufferedIndexedAsyncFlush(tb),
+		BufferedIndexedOverlayRoots:             profileBenchBufferedIndexedOverlayRoots(tb),
 		BufferedIndexedAsyncFlushMaxQueuedUnits: profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(tb),
 	}
 }
@@ -2210,6 +2223,9 @@ func reportProfileBenchBufferedIndexedWriteOptions(b *testing.B, opts collection
 		if opts.BufferedIndexedAsyncFlushMaxQueuedUnits > 0 {
 			b.ReportMetric(float64(opts.BufferedIndexedAsyncFlushMaxQueuedUnits), "buffered_async_max_units")
 		}
+	}
+	if opts.BufferedIndexedOverlayRoots {
+		b.ReportMetric(1, "buffered_overlay_roots")
 	}
 }
 
