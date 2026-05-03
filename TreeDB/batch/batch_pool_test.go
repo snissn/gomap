@@ -56,7 +56,7 @@ func TestBatchReleaseDropsOversizedEntriesWithoutClearing(t *testing.T) {
 	}
 }
 
-func TestBatchReleaseRetainsMaxSizedEntries(t *testing.T) {
+func TestBatchReleaseRetainsDefaultMaxSizedEntries(t *testing.T) {
 	b := New(newMapValueReader(), page.DefaultInlineThreshold)
 	key := []byte("flush-sized-key")
 	value := []byte("flush-sized-value")
@@ -77,5 +77,40 @@ func TestBatchReleaseRetainsMaxSizedEntries(t *testing.T) {
 	}
 	if entries[0].Key != nil || entries[0].Value != nil || entries[0].IsPtr || entries[0].ValuePtr != (page.ValuePtr{}) {
 		t.Fatalf("retained entries were not cleared: %+v", entries[0])
+	}
+}
+
+func TestBatchReleaseDropsLargeEntryBatchFromDefaultPool(t *testing.T) {
+	b := New(newMapValueReader(), page.DefaultInlineThreshold)
+	b.entries = make([]Entry, 1, maxLargeEntryBatchPoolCap)
+
+	Release(b)
+
+	if b.entries != nil {
+		t.Fatalf("default pool retained large entries with cap=%d", cap(b.entries))
+	}
+}
+
+func TestLargeEntryBatchReleaseRetainsMaxSizedEntries(t *testing.T) {
+	b := NewRetainingLargeEntries(newMapValueReader(), page.DefaultInlineThreshold)
+	key := []byte("large-flush-sized-key")
+	value := []byte("large-flush-sized-value")
+	b.entries = make([]Entry, 1, maxLargeEntryBatchPoolCap)
+	b.entries[0] = Entry{Type: OpPut, Key: key, Value: value}
+	entries := b.entries
+
+	Release(b)
+
+	if b.entries == nil {
+		t.Fatalf("large-entry pool dropped max-sized entries")
+	}
+	if got := cap(b.entries); got != maxLargeEntryBatchPoolCap {
+		t.Fatalf("retained large entries cap=%d want %d", got, maxLargeEntryBatchPoolCap)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("captured entries len=%d want 1", len(entries))
+	}
+	if entries[0].Key != nil || entries[0].Value != nil || entries[0].IsPtr || entries[0].ValuePtr != (page.ValuePtr{}) {
+		t.Fatalf("retained large entries were not cleared: %+v", entries[0])
 	}
 }
