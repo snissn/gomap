@@ -111,6 +111,49 @@ func TestMaintenanceRoots_DeduplicatesCollectionRootDescriptors(t *testing.T) {
 	requireMaintenanceRootCount(t, roots, maintenanceRootCollection, 1)
 }
 
+func TestMaintenanceRoots_IncludesCollectionOverlayRootDescriptors(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	_, rootIDs, err := d.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{
+		{BaseRoot: 0, Iter: mustFrozenSystemMemtable(t, "doc/u1", "base").NewIterator(nil, nil), StoragePolicy: OrderedRootStoragePagerLeaves},
+		{BaseRoot: 0, Iter: mustFrozenSystemMemtable(t, "doc/u1", "overlay-1").NewIterator(nil, nil), StoragePolicy: OrderedRootStoragePagerLeaves},
+		{BaseRoot: 0, Iter: mustFrozenSystemMemtable(t, "doc/u2", "overlay-2").NewIterator(nil, nil), StoragePolicy: OrderedRootStoragePagerLeaves},
+	}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenRawMemtable(t,
+			maintenanceTestCollectionRootKey, encodeMaintenanceRootID(rootIDs[0]),
+			"collections/root-overlay/users/primary", encodeCollectionRootDescriptorRootIDs([]uint64{rootIDs[2], rootIDs[1]}),
+		).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish roots: %v", err)
+	}
+	if len(rootIDs) != 3 {
+		t.Fatalf("rootIDs=%d want 3", len(rootIDs))
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil || snap.state == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+
+	roots, err := maintenanceRootsForSnapshot(snap)
+	if err != nil {
+		t.Fatalf("maintenanceRootsForSnapshot: %v", err)
+	}
+	requireMaintenanceRoot(t, roots, maintenanceRootCollection, rootIDs[0])
+	overlayNewest := requireMaintenanceRoot(t, roots, maintenanceRootCollection, rootIDs[2])
+	overlayOlder := requireMaintenanceRoot(t, roots, maintenanceRootCollection, rootIDs[1])
+	if want := []byte("collections/root-overlay/users/primary"); !bytes.Equal(overlayNewest.descriptorKey, want) || !bytes.Equal(overlayOlder.descriptorKey, want) {
+		t.Fatalf("overlay descriptor keys newest=%q older=%q want %q", overlayNewest.descriptorKey, overlayOlder.descriptorKey, want)
+	}
+	requireMaintenanceRootCount(t, roots, maintenanceRootCollection, 3)
+}
+
 func TestMaintenanceRoots_MalformedCollectionDescriptorFails(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {

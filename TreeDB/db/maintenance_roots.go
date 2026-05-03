@@ -8,12 +8,19 @@ import (
 )
 
 const collectionRootDescriptorPrefix = vacuumCollectionRootDescriptorPrefix
+const collectionRootOverlayDescriptorPrefix = vacuumCollectionRootOverlayDescriptorPrefix
 
 var collectionRootDescriptorPrefixBytes = vacuumCollectionRootDescriptorPrefixBytes
 var collectionRootDescriptorPrefixEndBytes = vacuumCollectionRootDescriptorPrefixEnd()
+var collectionRootOverlayDescriptorPrefixBytes = vacuumCollectionRootOverlayDescriptorPrefixBytes
+var collectionRootOverlayDescriptorPrefixEndBytes = vacuumCollectionRootOverlayDescriptorPrefixEnd()
 
 func collectionRootDescriptorPrefixEnd() []byte {
 	return collectionRootDescriptorPrefixEndBytes
+}
+
+func collectionRootOverlayDescriptorPrefixEnd() []byte {
+	return collectionRootOverlayDescriptorPrefixEndBytes
 }
 
 type maintenanceRootKind uint8

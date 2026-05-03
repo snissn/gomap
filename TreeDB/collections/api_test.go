@@ -19,6 +19,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -2186,6 +2187,174 @@ func TestCollectionIndexedFlushUnitCloseFlushesRotatedState(t *testing.T) {
 	}
 	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
 		t.Fatalf("reopened email ids=%q want [u1]", ids)
+	}
+}
+
+func TestCollectionCatalogOverlayRootsAreVisibleAfterReopen(t *testing.T) {
+	dir := t.TempDir()
+	db, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com","city":"hnl"}`)); err != nil {
+		t.Fatalf("insert u1: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush base collection: %v", err)
+	}
+
+	primaryOverlay := newCollectionRunTable(1)
+	setCollectionRunValue(primaryOverlay, []byte("u1"), []byte(`{"email":"ada@example.com","city":"sea"}`))
+	primaryOverlay.Freeze()
+	defer resetCollectionRunTable(primaryOverlay)
+
+	cityOverlay := newCollectionRunTable(2)
+	oldCity, err := encodeIndexScalar(IndexValueString, "hnl")
+	if err != nil {
+		t.Fatalf("encode old city: %v", err)
+	}
+	if _, err := deleteCollectionSecondaryIndexEntry(cityOverlay, oldCity, []byte("u1")); err != nil {
+		t.Fatalf("delete old city entry: %v", err)
+	}
+	newCity, err := encodeIndexScalar(IndexValueString, "sea")
+	if err != nil {
+		t.Fatalf("encode new city: %v", err)
+	}
+	if _, err := setCollectionSecondaryIndexEntry(cityOverlay, newCity, []byte("u1")); err != nil {
+		t.Fatalf("set new city entry: %v", err)
+	}
+	cityOverlay.Freeze()
+	defer resetCollectionRunTable(cityOverlay)
+
+	primaryRootName := collectionPrimaryRootName("users")
+	cityRootName := collectionSecondaryRootName("users", "city")
+	_, overlayRootIDs, err := db.PublishOrderedRootGroupWithSystemBuilder([]backenddb.OrderedRootPublishInput{
+		{BaseRoot: 0, Iter: primaryOverlay.NewIterator(nil, nil)},
+		{BaseRoot: 0, Iter: cityOverlay.NewIterator(nil, nil)},
+	}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		snap := db.AcquireSnapshot()
+		if snap == nil {
+			return nil, backenddb.ErrClosed
+		}
+		defer func() { _ = snap.Close() }()
+		return buildSystemTargetIterator(snap, map[string][]byte{
+			systemCollectionRootOverlayKey(primaryRootName): encodeRootIDList([]uint64{rootIDs[0]}),
+			systemCollectionRootOverlayKey(cityRootName):    encodeRootIDList([]uint64{rootIDs[1]}),
+		})
+	})
+	if err != nil {
+		t.Fatalf("publish overlay roots: %v", err)
+	}
+	if len(overlayRootIDs) != 2 {
+		t.Fatalf("overlay root ids len=%d want 2", len(overlayRootIDs))
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	snap := reopened.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("acquire reopened snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("load reopened catalog: %v", err)
+	}
+	if got := catalog.overlayRootIDs(cityRootName); !reflect.DeepEqual(got, []uint64{overlayRootIDs[1]}) {
+		t.Fatalf("city overlay roots=%v want [%d]", got, overlayRootIDs[1])
+	}
+	rawOverlayIt, err := snap.IteratorAtRootWithOptions(overlayRootIDs[1], oldCity, prefixEnd(oldCity), backenddb.IteratorOptions{IncludeTombstones: true})
+	if err != nil {
+		t.Fatalf("open raw old city overlay iterator: %v", err)
+	}
+	if !rawOverlayIt.Valid() || !rawOverlayIt.IsDeleted() {
+		t.Fatalf("raw old city overlay iterator valid/deleted=%v/%v key=%x", rawOverlayIt.Valid(), rawOverlayIt.Valid() && rawOverlayIt.IsDeleted(), rawOverlayIt.UnsafeKey())
+	}
+	_ = rawOverlayIt.Close()
+	oldCityIt, err := collectionIteratorAtCatalogRoot(snap, catalog, cityRootName, oldCity, prefixEnd(oldCity), true)
+	if err != nil {
+		t.Fatalf("open old city overlay iterator: %v", err)
+	}
+	if oldCityIt == nil || !oldCityIt.Valid() || !oldCityIt.IsDeleted() {
+		t.Fatalf("old city overlay iterator valid/deleted=%v/%v", oldCityIt != nil && oldCityIt.Valid(), oldCityIt != nil && oldCityIt.IsDeleted())
+	}
+	_ = oldCityIt.Close()
+	hiddenOldCityIt, err := collectionIteratorAtCatalogRoot(snap, catalog, cityRootName, oldCity, prefixEnd(oldCity), false)
+	if err != nil {
+		t.Fatalf("open hidden old city overlay iterator: %v", err)
+	}
+	if hiddenOldCityIt != nil {
+		hiddenOldCityIt.Seek(oldCity)
+		if hiddenOldCityIt.Valid() {
+			t.Fatalf("hidden old city iterator key=%x deleted=%v, want no visible base row after overlay tombstone", hiddenOldCityIt.UnsafeKey(), hiddenOldCityIt.IsDeleted())
+		}
+		_ = hiddenOldCityIt.Close()
+	}
+	_ = snap.Close()
+	if _, err := reopenedCol.Insert([]byte("u2"), []byte(`{"email":"grace@example.com","city":"sea"}`)); !errors.Is(err, errCollectionRootOverlaysRequireCompaction) {
+		t.Fatalf("insert with overlay roots err=%v want %v", err, errCollectionRootOverlaysRequireCompaction)
+	}
+	if matched, modified, err := reopenedCol.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+		return []byte(`{"email":"ada@example.com","city":"bos"}`), true, nil
+	}); !errors.Is(err, errCollectionRootOverlaysRequireCompaction) || matched || modified {
+		t.Fatalf("update with overlay roots matched=%v modified=%v err=%v want %v", matched, modified, err, errCollectionRootOverlaysRequireCompaction)
+	}
+	if deleted, err := reopenedCol.DeleteDocument([]byte("u1")); !errors.Is(err, errCollectionRootOverlaysRequireCompaction) || deleted {
+		t.Fatalf("delete with overlay roots deleted=%v err=%v want %v", deleted, err, errCollectionRootOverlaysRequireCompaction)
+	}
+	if _, err := reopenedCol.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString}); !errors.Is(err, errCollectionRootOverlaysRequireCompaction) {
+		t.Fatalf("create index with overlay roots err=%v want %v", err, errCollectionRootOverlaysRequireCompaction)
+	}
+	got, err := reopenedCol.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get overlay document: %v", err)
+	}
+	if want := []byte(`{"email":"ada@example.com","city":"sea"}`); !bytes.Equal(got, want) {
+		t.Fatalf("overlay document=%q want %q", got, want)
+	}
+	hnlIDs, err := reopenedCol.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find old city: %v", err)
+	}
+	if len(hnlIDs) != 0 {
+		t.Fatalf("old city ids=%q want none", hnlIDs)
+	}
+	seaIDs, err := reopenedCol.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find new city: %v", err)
+	}
+	if len(seaIDs) != 1 || !bytes.Equal(seaIDs[0], []byte("u1")) {
+		t.Fatalf("new city ids=%q want [u1]", seaIDs)
+	}
+	docs, truncated, err := reopenedCol.ScanDocuments(10)
+	if err != nil {
+		t.Fatalf("scan documents: %v", err)
+	}
+	if truncated || len(docs) != 1 || !bytes.Equal(docs[0].Document, []byte(`{"email":"ada@example.com","city":"sea"}`)) {
+		t.Fatalf("scan docs=%+v truncated=%v", docs, truncated)
 	}
 }
 

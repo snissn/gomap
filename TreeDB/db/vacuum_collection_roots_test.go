@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"reflect"
 	"runtime"
 	"testing"
 
@@ -56,6 +57,35 @@ func TestVacuumIndexOnline_PreservesCollectionRootFromPointerBackedDescriptor(t 
 		t.Fatalf("vacuum online: %v", err)
 	}
 	verifyVacuumCollectionRootDescriptor(t, d, vacuumTestCollectionRootKey)
+}
+
+func TestVacuumRewriteCollectionRootDescriptorsRewritesOverlayLists(t *testing.T) {
+	key := []byte("collections/root-overlay/users/primary")
+	rootIDs := []uint64{3, 2}
+	descriptors := []vacuumCollectionRootDescriptor{
+		{key: key, rootID: 3, rootIDs: rootIDs, rootIndex: 0},
+		{key: key, rootID: 2, rootIDs: rootIDs, rootIndex: 1},
+	}
+	replacements, err := vacuumRewriteCollectionRootDescriptors(descriptors, func(descriptor vacuumCollectionRootDescriptor) (uint64, error) {
+		return descriptor.rootID + 100, nil
+	}, "test")
+	if err != nil {
+		t.Fatalf("rewrite descriptors: %v", err)
+	}
+	if len(replacements) != 1 {
+		t.Fatalf("replacements=%d want 1", len(replacements))
+	}
+	if !bytes.Equal(replacements[0].key, key) {
+		t.Fatalf("replacement key=%q want %q", replacements[0].key, key)
+	}
+	got, err := decodeCollectionRootDescriptorRootIDs(key, replacements[0].value, true)
+	if err != nil {
+		t.Fatalf("decode replacement: %v", err)
+	}
+	want := []uint64{103, 102}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("replacement root ids=%v want %v", got, want)
+	}
 }
 
 func vacuumPointerDescriptorOptions(dir string) Options {
