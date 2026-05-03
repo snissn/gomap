@@ -3,7 +3,9 @@ package collections
 import (
 	"bytes"
 	"testing"
+	"unsafe"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/node"
 )
 
@@ -34,6 +36,69 @@ func TestFreezeSortRunTableLatestSortedAndTombstoneSemantics(t *testing.T) {
 	requireFreezeSortRunIterator(t, table.NewIterator([]byte("b"), nil), []string{"b", "c"})
 	requireFreezeSortRunIterator(t, table.NewIterator(nil, []byte("c")), []string{"a", "b"})
 	requireFreezeSortRunReverseIterator(t, table.NewReverseIterator(nil, []byte("c")), []string{"b", "a"})
+}
+
+func TestFreezeSortRunIteratorAdvertisesTrustedMaterializeFastPath(t *testing.T) {
+	table := newFreezeSortRunTable()
+	key := []byte("a")
+	value := []byte("value-a")
+	table.SetSteal(key, value)
+	table.Set([]byte("b"), []byte("value-b"))
+	table.Freeze()
+
+	it := table.NewIterator(nil, nil)
+	stable, ok := it.(interface {
+		StableUnsafeIteratorSlices() bool
+	})
+	if !ok || !stable.StableUnsafeIteratorSlices() {
+		t.Fatalf("freeze-sort iterator exposes stable=%v, want stable unsafe slices", ok)
+	}
+	trusted, ok := it.(interface {
+		OrderedUniqueUnsafeIterator() bool
+	})
+	if !ok || !trusted.OrderedUniqueUnsafeIterator() {
+		t.Fatalf("freeze-sort iterator exposes trusted=%v, want ordered unique", ok)
+	}
+	lenHint, ok := it.(interface {
+		Len() int
+	})
+	if !ok {
+		t.Fatal("freeze-sort iterator does not expose Len hint")
+	}
+	if got := lenHint.Len(); got != 2 {
+		t.Fatalf("freeze-sort iterator Len=%d want 2", got)
+	}
+
+	delta, err := backenddb.OrderedRootDeltaBatchFromIterator(it)
+	if err != nil {
+		t.Fatalf("materialize delta: %v", err)
+	}
+	defer func() { _ = delta.Close() }()
+	if err := it.Close(); err != nil {
+		t.Fatalf("close iterator: %v", err)
+	}
+	entries := delta.SortedEntries()
+	if len(entries) != 2 {
+		t.Fatalf("delta entries=%d want 2", len(entries))
+	}
+	if unsafe.SliceData(entries[0].Key) != unsafe.SliceData(key) {
+		t.Fatal("trusted materialize path copied key instead of borrowing stable view")
+	}
+	if unsafe.SliceData(entries[0].Value) != unsafe.SliceData(value) {
+		t.Fatal("trusted materialize path copied value instead of borrowing stable view")
+	}
+
+	ranged := table.NewIterator([]byte("b"), nil)
+	defer func() { _ = ranged.Close() }()
+	rangedLen, ok := ranged.(interface {
+		Len() int
+	})
+	if !ok {
+		t.Fatal("ranged iterator does not expose Len hint")
+	}
+	if got := rangedLen.Len(); got != 1 {
+		t.Fatalf("ranged iterator Len=%d want 1", got)
+	}
 }
 
 func requireFreezeSortRunIterator(t *testing.T, it interface {

@@ -133,16 +133,24 @@ func (t *freezeSortRunTable) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, 
 	if t == nil || len(key) == 0 {
 		return nil, page.ValuePtr{}, 0, false
 	}
+	t.mu.RLock()
+	if t.frozen {
+		entry, found := t.getFrozenEntryLocked(key)
+		t.mu.RUnlock()
+		if !found {
+			return nil, page.ValuePtr{}, 0, false
+		}
+		return entry.value, entry.ptr, entry.flags, true
+	}
+	t.mu.RUnlock()
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.frozen {
-		idx := sort.Search(len(t.entries), func(i int) bool {
-			return bytes.Compare(t.entries[i].key, key) >= 0
-		})
-		if idx >= len(t.entries) || !bytes.Equal(t.entries[idx].key, key) {
+		entry, found := t.getFrozenEntryLocked(key)
+		if !found {
 			return nil, page.ValuePtr{}, 0, false
 		}
-		entry := t.entries[idx]
 		return entry.value, entry.ptr, entry.flags, true
 	}
 	t.rebuildLatestLocked()
@@ -155,6 +163,16 @@ func (t *freezeSortRunTable) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, 
 		return nil, page.ValuePtr{}, 0, false
 	}
 	return entry.value, entry.ptr, entry.flags, true
+}
+
+func (t *freezeSortRunTable) getFrozenEntryLocked(key []byte) (freezeSortRunEntry, bool) {
+	idx := sort.Search(len(t.entries), func(i int) bool {
+		return bytes.Compare(t.entries[i].key, key) >= 0
+	})
+	if idx >= len(t.entries) || !bytes.Equal(t.entries[idx].key, key) {
+		return freezeSortRunEntry{}, false
+	}
+	return t.entries[idx], true
 }
 
 func (t *freezeSortRunTable) Size() int64 {
@@ -460,6 +478,42 @@ func (it *freezeSortRunIterator) Domain() ([]byte, []byte) {
 		return nil, nil
 	}
 	return it.start, it.end
+}
+
+func (it *freezeSortRunIterator) StableUnsafeIteratorSlices() bool {
+	return true
+}
+
+func (it *freezeSortRunIterator) OrderedUniqueUnsafeIterator() bool {
+	return true
+}
+
+func (it *freezeSortRunIterator) Len() int {
+	if it == nil || !it.Valid() {
+		return 0
+	}
+	if it.reverse {
+		lower := 0
+		if it.start != nil {
+			lower = sort.Search(len(it.entries), func(i int) bool {
+				return bytes.Compare(it.entries[i].key, it.start) >= 0
+			})
+		}
+		if it.idx < lower {
+			return 0
+		}
+		return it.idx - lower + 1
+	}
+	upper := len(it.entries)
+	if it.end != nil {
+		upper = sort.Search(len(it.entries), func(i int) bool {
+			return bytes.Compare(it.entries[i].key, it.end) >= 0
+		})
+	}
+	if it.idx >= upper {
+		return 0
+	}
+	return upper - it.idx
 }
 
 func (it *freezeSortRunIterator) inBounds() bool {
