@@ -1026,6 +1026,7 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 		UpdateCombineBatches:           after.UpdateCombineBatches - before.UpdateCombineBatches,
 		UpdateCombineBatchedRequests:   after.UpdateCombineBatchedRequests - before.UpdateCombineBatchedRequests,
 		UpdateCombineFallbackRequests:  after.UpdateCombineFallbackRequests - before.UpdateCombineFallbackRequests,
+		UpdateCombineQueueDepthMax:     after.UpdateCombineQueueDepthMax,
 		IndexedFlushCalls:              after.IndexedFlushCalls - before.IndexedFlushCalls,
 		IndexedFlushErrors:             after.IndexedFlushErrors - before.IndexedFlushErrors,
 		IndexedFlushDocs:               after.IndexedFlushDocs - before.IndexedFlushDocs,
@@ -1084,6 +1085,7 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateCombineBatches:           3,
 		UpdateCombineBatchedRequests:   8,
 		UpdateCombineFallbackRequests:  1,
+		UpdateCombineQueueDepthMax:     12,
 		UpdateBatchIndexValueChanges:   20,
 		UpdateBatchIndexValueUnchanged: 30,
 		UpdateBatchUniqueChecks:        4,
@@ -1106,6 +1108,7 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateCombineBatches:           5,
 		UpdateCombineBatchedRequests:   14,
 		UpdateCombineFallbackRequests:  2,
+		UpdateCombineQueueDepthMax:     31,
 		UpdateBatchIndexValueChanges:   27,
 		UpdateBatchIndexValueUnchanged: 43,
 		UpdateBatchUniqueChecks:        6,
@@ -1135,6 +1138,9 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 	}
 	if got.UpdateCombineFallbackRequests != 1 {
 		t.Fatalf("UpdateCombineFallbackRequests=%d want 1", got.UpdateCombineFallbackRequests)
+	}
+	if got.UpdateCombineQueueDepthMax != 31 {
+		t.Fatalf("UpdateCombineQueueDepthMax=%d want 31", got.UpdateCombineQueueDepthMax)
 	}
 	if got.UpdateBatchIndexValueChanges != 7 {
 		t.Fatalf("UpdateBatchIndexValueChanges=%d want 7", got.UpdateBatchIndexValueChanges)
@@ -1216,6 +1222,39 @@ func TestReportCollectionManagerUpdateStatsIncludesIndexedFlushMetrics(t *testin
 	}
 }
 
+func TestReportCollectionManagerUpdateStatsIncludesCombinerQueueDepth(t *testing.T) {
+	stats := collections.CollectionManagerStats{
+		UpdateCombineRequests:         600,
+		UpdateCombineBatches:          30,
+		UpdateCombineBatchedRequests:  600,
+		UpdateCombineFallbackRequests: 6,
+		UpdateCombineQueueDepthMax:    31,
+	}
+	result := testing.Benchmark(func(b *testing.B) {
+		reportCollectionManagerUpdateStats(b, stats, 600)
+	})
+	want := map[string]float64{
+		"update_combine_requests":              600,
+		"update_combine_requests/doc":          1,
+		"update_combine_batches":               30,
+		"update_combine_items/batch":           20,
+		"update_combine_batched_requests":      600,
+		"update_combine_batched_requests/doc":  1,
+		"update_combine_fallback_requests":     6,
+		"update_combine_fallback_requests/doc": 0.01,
+		"update_combine_queue_depth_max":       31,
+	}
+	for metric, wantValue := range want {
+		gotValue, ok := result.Extra[metric]
+		if !ok {
+			t.Fatalf("missing benchmark metric %q in %v", metric, result.Extra)
+		}
+		if math.Abs(gotValue-wantValue) > 1e-9 {
+			t.Fatalf("benchmark metric %s=%g want %g", metric, gotValue, wantValue)
+		}
+	}
+}
+
 func reportCollectionManagerUpdateStats(b *testing.B, stats collections.CollectionManagerStats, docs int) {
 	b.Helper()
 	if docs <= 0 {
@@ -1280,6 +1319,9 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 	if stats.UpdateCombineFallbackRequests > 0 {
 		b.ReportMetric(float64(stats.UpdateCombineFallbackRequests), "update_combine_fallback_requests")
 		b.ReportMetric(float64(stats.UpdateCombineFallbackRequests)/float64(docs), "update_combine_fallback_requests/doc")
+	}
+	if stats.UpdateCombineQueueDepthMax > 0 {
+		b.ReportMetric(float64(stats.UpdateCombineQueueDepthMax), "update_combine_queue_depth_max")
 	}
 	if stats.UpdateBatchSecondaryDeletes > 0 {
 		b.ReportMetric(float64(stats.UpdateBatchSecondaryDeletes)/float64(docs), "update_secondary_deletes/doc")
