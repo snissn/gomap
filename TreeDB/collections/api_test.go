@@ -7574,6 +7574,31 @@ func TestCollectionUpdateBatchDoesNotBufferUnchangedUniqueValues(t *testing.T) {
 	if uniqueRuns != 1 {
 		t.Fatalf("unique value runs=%d want only the pending insert run", uniqueRuns)
 	}
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare async publish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepare async publish returned nil work")
+	}
+	col.writeDomain.mu.RLock()
+	pending = col.writeDomain.uniqueValueIndex["email"]
+	containsA = pending != nil && pending.contains(prefixA)
+	containsB = pending != nil && pending.contains(prefixB)
+	publishingUniqueRuns := 0
+	if len(col.writeDomain.indexedPublishingUnits) > 0 {
+		publishingUniqueRuns = len(col.writeDomain.indexedPublishingUnits[0].uniqueValueRuns["email"])
+	}
+	col.writeDomain.mu.RUnlock()
+	if containsA {
+		t.Fatal("rotated non-unique update added unchanged persisted unique email to pending unique-value index")
+	}
+	if !containsB {
+		t.Fatal("rotated pending insert unique email missing from pending unique-value index")
+	}
+	if publishingUniqueRuns != 1 {
+		t.Fatalf("publishing unique value runs=%d want only the pending insert run", publishingUniqueRuns)
+	}
 	if _, err := col.InsertBatch(
 		[][]byte{[]byte("u3")},
 		[][]byte{[]byte(`{"email":"a@example.com","city":"hnl"}`)},
@@ -7592,6 +7617,9 @@ func TestCollectionUpdateBatchDoesNotBufferUnchangedUniqueValues(t *testing.T) {
 	}
 	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
 		t.Fatalf("email ids=%q want [u1]", ids)
+	}
+	if err := col.publishPreparedIndexedFlush(work); err != nil {
+		t.Fatalf("publish prepared async flush: %v", err)
 	}
 }
 
