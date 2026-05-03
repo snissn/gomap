@@ -55,3 +55,27 @@ func TestBatchReleaseDropsOversizedEntriesWithoutClearing(t *testing.T) {
 		t.Fatalf("oversized discarded entries were cleared before drop: %+v", entries)
 	}
 }
+
+func TestBatchReleaseRetainsMaxSizedEntries(t *testing.T) {
+	b := New(newMapValueReader(), page.DefaultInlineThreshold)
+	key := []byte("flush-sized-key")
+	value := []byte("flush-sized-value")
+	b.entries = make([]Entry, 1, maxBatchPoolCap)
+	b.entries[0] = Entry{Type: OpPut, Key: key, Value: value}
+	entries := b.entries
+
+	Release(b)
+
+	if b.entries == nil {
+		t.Fatalf("max-sized entries were dropped")
+	}
+	if got := cap(b.entries); got != maxBatchPoolCap {
+		t.Fatalf("retained entries cap=%d want %d", got, maxBatchPoolCap)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("captured entries len=%d want 1", len(entries))
+	}
+	if entries[0].Key != nil || entries[0].Value != nil || entries[0].IsPtr || entries[0].ValuePtr != (page.ValuePtr{}) {
+		t.Fatalf("retained entries were not cleared: %+v", entries[0])
+	}
+}

@@ -71,7 +71,10 @@ type Batch struct {
 	reader                  ValueReader
 }
 
-const maxBatchPoolCap = 1 << 16
+// maxBatchPoolCap is sized to retain the transient ordered-root delta batches
+// created by the default 96k-document indexed collection flush window. Larger
+// spikes are still dropped so the pool does not pin unbounded entry slices.
+const maxBatchPoolCap = 1 << 18
 
 const (
 	// Store key/value copies in chunks so Set/Delete avoid per-entry allocations.
