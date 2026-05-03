@@ -94,8 +94,8 @@ collection benchmark profile:
 - `-treedb-index-root-storage compressed`
 - `-treedb-buffered-indexed-write-max-documents 0` (use the collection default:
   96000 for synchronous flushing, 256000 when async flush is enabled)
-- `-treedb-buffered-indexed-write-max-root-runs 0` (same collection-default
-  cadence as documents when byte and root-run thresholds are otherwise unset)
+- `-treedb-buffered-indexed-write-max-root-runs 0` (use the matching collection
+  default only when document, byte, and root-run thresholds are all left at 0)
 - `-treedb-maintenance full`
 - `-client-mode driver`
 

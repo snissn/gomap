@@ -2521,6 +2521,15 @@ func TestCollectionIndexedWriteMemtablesBypassDefaultLargeBatches(t *testing.T) 
 	if col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableDirectBatchDocuments) {
 		t.Fatal("default indexed memtable path buffered a large direct-publish batch")
 	}
+	meta.Options.BufferedIndexedAsyncFlush = true
+	meta.Options.BufferedIndexedWriteMaxDocuments = DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
+	if !col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableDirectBatchDocuments-1) {
+		t.Fatal("async default indexed memtable path bypassed a below-threshold batch")
+	}
+	if col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableDirectBatchDocuments) {
+		t.Fatal("async default indexed memtable path buffered a large direct-publish batch")
+	}
+	meta.Options.BufferedIndexedAsyncFlush = false
 	meta.Options.BufferedIndexedWriteMaxDocuments = 2
 	if !col.shouldBufferIndexedInsertBatch(meta, 2) {
 		t.Fatal("explicit small flush threshold should not trigger the default large-batch bypass")
