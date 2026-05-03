@@ -445,6 +445,18 @@ func TestAppendOnlyResetDoesNotPoolStolenValueSlices(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyResetDoesNotPoolStolenKeySlices(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	external := []byte("external-key")
+	m.SetEntrySteal(external, nil, page.ValuePtr{}, node.FlagInline)
+	m.Reset()
+
+	m.Set([]byte("replacement"), nil)
+	if string(external) != "external-key" {
+		t.Fatalf("stolen caller key was mutated via pooled reuse: got %q", external)
+	}
+}
+
 func TestAppendOnlyResetDoesNotPoolBorrowedValueSlices(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	external := []byte("borrowed-immutable")

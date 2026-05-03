@@ -102,6 +102,13 @@ type ValueBorrower interface {
 	SetEntryBorrowValue(key, value []byte, ptr page.ValuePtr, flags byte)
 }
 
+// KeyPartsWriter marks memtables that can build and own common two-part keys
+// without forcing callers to allocate a concatenated key slice first.
+type KeyPartsWriter interface {
+	SetInlineNilKeyParts(first, second []byte)
+	DeleteKeyParts(first, second []byte)
+}
+
 // StableUnsafeIteratorTable marks memtable implementations whose
 // iterator.UnsafeIterator key/value views (from UnsafeKey/UnsafeValue/UnsafeEntry)
 // are backed by storage that outlives the iterator itself.

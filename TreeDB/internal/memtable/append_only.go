@@ -46,14 +46,15 @@ var appendOnlyIteratorPtrPool sync.Pool
 var appendOnlyValueArenaPools [appendOnlyValueArenaClassCount]sync.Pool
 
 type appendOnlyEntry struct {
-	key        []byte
-	value      []byte
-	ptr        page.ValuePtr
-	inlineKey  [appendOnlyInlineKeyLen]byte
-	flags      byte
-	keyInline  bool
-	keyArena   bool
-	valueOwned bool
+	key         []byte
+	value       []byte
+	ptr         page.ValuePtr
+	inlineKey   [appendOnlyInlineKeyLen]byte
+	flags       byte
+	keyInline   bool
+	keyArena    bool
+	keyReusable bool
+	valueOwned  bool
 }
 
 type appendOnlyValueArena struct {
@@ -616,6 +617,7 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	ent.flags = flags
 	ent.keyInline = false
 	ent.keyArena = false
+	ent.keyReusable = false
 	ent.valueOwned = false
 	if steal {
 		ent.key = key
@@ -627,6 +629,7 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 			ent.key = nil
 		} else {
 			ent.key = cloneOrReuseBytes(ent.key, key, appendOnlyReusableKeyMaxCap)
+			ent.keyReusable = true
 		}
 		if len(value) > 0 {
 			if borrowValue {
@@ -1091,6 +1094,10 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int,
 		}
 		ent.keyInline = false
 		ent.keyArena = false
+		if !ent.keyReusable {
+			ent.key = nil
+		}
+		ent.keyReusable = false
 		ent.valueOwned = false
 		if cap(ent.key) > appendOnlyReusableKeyMaxCap {
 			ent.key = nil

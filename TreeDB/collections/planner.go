@@ -1929,16 +1929,11 @@ func appendIndexEntryKey(dst, encodedValue, documentID []byte) ([]byte, []byte, 
 	return dst, dst[start:len(dst):len(dst)], nil
 }
 
-type collectionSecondaryKeyPartsTable interface {
-	SetInlineNilKeyParts(first, second []byte)
-	DeleteKeyParts(first, second []byte)
-}
-
 func setCollectionSecondaryIndexEntry(table memtable.Table, encodedValue, documentID []byte) (int, error) {
 	if table == nil {
 		return 0, nil
 	}
-	if keyParts, ok := table.(collectionSecondaryKeyPartsTable); ok {
+	if keyParts, ok := table.(memtable.KeyPartsWriter); ok {
 		keyParts.SetInlineNilKeyParts(encodedValue, documentID)
 		return len(encodedValue) + len(documentID), nil
 	}
@@ -1954,7 +1949,7 @@ func deleteCollectionSecondaryIndexEntry(table memtable.Table, encodedValue, doc
 	if table == nil {
 		return 0, nil
 	}
-	if keyParts, ok := table.(collectionSecondaryKeyPartsTable); ok {
+	if keyParts, ok := table.(memtable.KeyPartsWriter); ok {
 		keyParts.DeleteKeyParts(encodedValue, documentID)
 		return len(encodedValue) + len(documentID), nil
 	}
