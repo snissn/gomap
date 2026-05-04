@@ -60,6 +60,9 @@ Outputs:
   - `checkpoint_cpu_checkpoint_<test>_<db>.pprof` (checkpoint CPU sections)
   - `block.pprof` / `mutex.pprof` (global run-level fallback/supplement)
   - `trace.out` (detected, but not deeply analyzed yet)
+- `benchprof_results.json` preserves selected TreeDB stats under
+  `runs[].treedb_stats` when the benchmark exposes them. This is the raw
+  counter metadata used for TreeDB root-apply/cache review artifacts.
 - Optional flags:
   - `-bin` if you want explicit symbolization target (otherwise profile-only mode is used)
   - `-run-md` to force a specific markdown log file for ops/sec parsing

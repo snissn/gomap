@@ -1197,6 +1197,18 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 	if stats.PendingRootRuns == 0 {
 		t.Fatal("stats pending root runs=0 want positive")
 	}
+	if got, want := stats.OverlayMutableDocuments, 2; got != want {
+		t.Fatalf("stats overlay mutable docs=%d want %d", got, want)
+	}
+	if got := stats.OverlayQueuedIndexedFlushUnits; got != 0 {
+		t.Fatalf("stats overlay queued flush units=%d want 0", got)
+	}
+	if got := stats.OverlayActiveIndexedFlushUnits; got != 0 {
+		t.Fatalf("stats overlay active flush units=%d want 0", got)
+	}
+	if got, want := stats.OverlayVisibleDepth, 1; got != want {
+		t.Fatalf("stats overlay visible depth=%d want %d", got, want)
+	}
 	if got, want := stats.IndexedStageBatches, uint64(1); got != want {
 		t.Fatalf("stats indexed stage batches=%d want %d", got, want)
 	}
@@ -1213,8 +1225,13 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 	for _, key := range []string{
 		"treedb.collections.write_domain.pending_docs",
 		"treedb.collections.write_domain.pending_indexed_flush_units",
+		"treedb.collections.write_domain.overlay.mutable_docs",
+		"treedb.collections.write_domain.overlay.queued_indexed_flush_units",
+		"treedb.collections.write_domain.overlay.active_indexed_flush_units",
+		"treedb.collections.write_domain.overlay.visible_depth",
 		"treedb.collections.write_domain.indexed_stage.batches_total",
 		"treedb.collections.write_domain.indexed_async_flush.scheduled_total",
+		"treedb.collections.write_domain.indexed_async_flush.wait_ns_total",
 		"treedb.collections.write_domain.mutation_lock.calls_total",
 	} {
 		if exported[key] == "" {
@@ -1232,6 +1249,9 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 	if got, want := stats.IndexedFlushCalls, uint64(1); got != want {
 		t.Fatalf("stats indexed flush calls=%d want %d", got, want)
 	}
+	if got, want := stats.IndexedFlushUnits, uint64(1); got != want {
+		t.Fatalf("stats indexed flush units=%d want %d", got, want)
+	}
 	if got, want := stats.IndexedFlushDocs, uint64(2); got != want {
 		t.Fatalf("stats indexed flush docs=%d want %d", got, want)
 	}
@@ -1241,11 +1261,98 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 	if stats.IndexedFlushDuration <= 0 || stats.IndexedFlushMaterialize <= 0 || stats.IndexedFlushPublish <= 0 {
 		t.Fatalf("stats indexed flush duration/materialize/publish=%s/%s/%s want positive", stats.IndexedFlushDuration, stats.IndexedFlushMaterialize, stats.IndexedFlushPublish)
 	}
+	if stats.RootDeltaPlanPrimaryRoots == 0 || stats.RootDeltaPlanSecondaryRoots == 0 || stats.RootDeltaPlanEntries == 0 {
+		t.Fatalf("stats root delta primary/secondary/entries=%d/%d/%d want positive", stats.RootDeltaPlanPrimaryRoots, stats.RootDeltaPlanSecondaryRoots, stats.RootDeltaPlanEntries)
+	}
+	if stats.RootDeltaPlanKeyBytes == 0 || stats.RootDeltaPlanValueBytes == 0 {
+		t.Fatalf("stats root delta key/value bytes=%d/%d want positive", stats.RootDeltaPlanKeyBytes, stats.RootDeltaPlanValueBytes)
+	}
 	exported = mgr.Stats()
 	for _, key := range []string{
+		"treedb.collections.write_domain.indexed_flush.units_total",
+		"treedb.collections.write_domain.indexed_flush.forced_drains_total",
 		"treedb.collections.write_domain.indexed_flush.duration_ns_total",
 		"treedb.collections.write_domain.indexed_flush.materialize_ns_total",
 		"treedb.collections.write_domain.indexed_flush.publish_ns_total",
+		"treedb.collections.write_domain.root_delta_plan.roots.primary_total",
+		"treedb.collections.write_domain.root_delta_plan.roots.template_total",
+		"treedb.collections.write_domain.root_delta_plan.roots.index_state_total",
+		"treedb.collections.write_domain.root_delta_plan.roots.secondary_total",
+		"treedb.collections.write_domain.root_delta_plan.entries_total",
+		"treedb.collections.write_domain.root_delta_plan.key_bytes_total",
+		"treedb.collections.write_domain.root_delta_plan.value_bytes_total",
+		"treedb.collections.write_domain.root_delta_plan.tombstones_total",
+		"treedb.collections.write_domain.primary_only.buffered_calls_total",
+	} {
+		if exported[key] == "" {
+			t.Fatalf("exported stats missing %s from %#v", key, exported)
+		}
+	}
+}
+
+func TestPrimaryOnlyNoIndexUpdateCounters(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"name":"ada","city":"hnl"}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	statsBefore := mgr.StatsSnapshot()
+	matched, modified, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+		return []byte(`{"name":"ada","city":"sea"}`), true, nil
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("update matched/modified=%v/%v want true/true", matched, modified)
+	}
+	stats := mgr.StatsSnapshot()
+	if got, want := stats.PrimaryOnlyUpdateCalls-statsBefore.PrimaryOnlyUpdateCalls, uint64(1); got != want {
+		t.Fatalf("primary-only update calls delta=%d want %d", got, want)
+	}
+	if got, want := stats.PrimaryOnlyMatched-statsBefore.PrimaryOnlyMatched, uint64(1); got != want {
+		t.Fatalf("primary-only matched delta=%d want %d", got, want)
+	}
+	if got, want := stats.PrimaryOnlyModified-statsBefore.PrimaryOnlyModified, uint64(1); got != want {
+		t.Fatalf("primary-only modified delta=%d want %d", got, want)
+	}
+	if got, want := stats.PrimaryOnlyRootPublishes-statsBefore.PrimaryOnlyRootPublishes, uint64(1); got != want {
+		t.Fatalf("primary-only root publishes delta=%d want %d", got, want)
+	}
+	if got, want := stats.PrimaryOnlyRootDeltaEntries-statsBefore.PrimaryOnlyRootDeltaEntries, uint64(1); got != want {
+		t.Fatalf("primary-only root delta entries delta=%d want %d", got, want)
+	}
+	if got := stats.PrimaryOnlyRootDeltaKeyBytes - statsBefore.PrimaryOnlyRootDeltaKeyBytes; got != uint64(len("u1")) {
+		t.Fatalf("primary-only root delta key bytes delta=%d want %d", got, len("u1"))
+	}
+	if got := stats.PrimaryOnlyRootDeltaValueBytes - statsBefore.PrimaryOnlyRootDeltaValueBytes; got == 0 {
+		t.Fatal("primary-only root delta value bytes delta=0 want positive")
+	}
+	if got, want := stats.PrimaryOnlyCoalescedDocs-statsBefore.PrimaryOnlyCoalescedDocs, uint64(1); got != want {
+		t.Fatalf("primary-only coalesced docs delta=%d want %d", got, want)
+	}
+	exported := mgr.Stats()
+	for _, key := range []string{
+		"treedb.collections.write_domain.primary_only.update_calls_total",
+		"treedb.collections.write_domain.primary_only.matched_total",
+		"treedb.collections.write_domain.primary_only.modified_total",
+		"treedb.collections.write_domain.primary_only.root_publishes_total",
+		"treedb.collections.write_domain.primary_only.root_delta_entries_total",
+		"treedb.collections.write_domain.primary_only.root_delta_key_bytes_total",
+		"treedb.collections.write_domain.primary_only.root_delta_value_bytes_total",
+		"treedb.collections.write_domain.primary_only.coalesced_docs_total",
 	} {
 		if exported[key] == "" {
 			t.Fatalf("exported stats missing %s from %#v", key, exported)
@@ -4857,6 +4964,12 @@ func TestCollectionIndexedWriteMemtablesAsyncBackpressureWaitsForPublishingUnit(
 	if got := stats.PendingDocuments; got != 0 {
 		t.Fatalf("pending documents after backpressure drain=%d want 0", got)
 	}
+	if got := stats.IndexedAsyncFlushWait; got <= 0 {
+		t.Fatalf("async flush wait=%s want positive", got)
+	}
+	if got := stats.IndexedFlushForcedDrains; got == 0 {
+		t.Fatal("indexed flush forced drains=0 want positive")
+	}
 	for _, id := range []string{"u1", "u2"} {
 		got, err := col.Get([]byte(id))
 		if err != nil {
@@ -4907,6 +5020,9 @@ func TestCollectionIndexedWriteMemtablesAsyncScheduleRacePublishesSynchronously(
 	}
 	if got := stats.IndexedFlushCalls; got != 1 {
 		t.Fatalf("indexed flush calls=%d want sync fallback flush", got)
+	}
+	if got := stats.IndexedFlushForcedDrains; got != 1 {
+		t.Fatalf("indexed flush forced drains=%d want 1", got)
 	}
 	if got := stats.PendingDocuments; got != 0 {
 		t.Fatalf("pending docs after sync fallback=%d want 0", got)
@@ -11380,6 +11496,8 @@ func TestCollectionFindByIndexRangeTypedInt64(t *testing.T) {
 		t.Fatalf("insert batch: %v", err)
 	}
 
+	// Use a non-equality range so this exercises non-exact range materialization,
+	// not the exact-prefix helper that already used pending root runs.
 	ids, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
 		Lower: IndexRangeBound{Value: int64(0), Inclusive: true},
 		Upper: IndexRangeBound{Value: int64(10), Inclusive: false},
@@ -11496,6 +11614,8 @@ func TestCollectionFindByIndexRangeMergesBufferedUpdates(t *testing.T) {
 		t.Fatalf("buffered update advanced commit seq by %d, want 0", after.CommitSeq-before.CommitSeq)
 	}
 
+	// Use a non-equality range so this exercises non-exact range materialization,
+	// not the exact-prefix helper that already used pending root runs.
 	ids, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
 		Lower: IndexRangeBound{Value: int64(5), Inclusive: true},
 		Upper: IndexRangeBound{Value: int64(6), Inclusive: true},
@@ -11528,6 +11648,168 @@ func TestCollectionFindByIndexRangeMergesBufferedUpdates(t *testing.T) {
 	}
 	if truncated || len(ids) != 2 || !bytes.Equal(ids[0], []byte("u1")) || !bytes.Equal(ids[1], []byte("u2")) {
 		t.Fatalf("flushed score ids=%q truncated=%v want u1,u2 false", ids, truncated)
+	}
+}
+
+func TestCollectionFindByIndexRangeSeesQueuedIndexedFlushUnits(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "score", Field: "score", ValueType: IndexValueInt64}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2"), []byte("u3")},
+		[][]byte{
+			[]byte(`{"score":5}`),
+			[]byte(`{"score":6}`),
+			[]byte(`{"score":9}`),
+		},
+	); err != nil {
+		t.Fatalf("insert persisted rows: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush persisted rows: %v", err)
+	}
+	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONField("score", int64(7))},
+		{DocumentID: []byte("u2"), Update: setJSONField("score", int64(8))},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	}
+	if !batched {
+		t.Fatalf("batched=%v results=%+v want buffered update batch", batched, results)
+	}
+	col.writeDomain.mu.Lock()
+	if !rotateIndexedMutableToFlushUnitLocked(col.writeDomain) {
+		col.writeDomain.mu.Unlock()
+		t.Fatal("rotate indexed mutable state returned false")
+	}
+	if got := len(col.writeDomain.indexedFlushUnits); got != 1 {
+		col.writeDomain.mu.Unlock()
+		t.Fatalf("queued flush units=%d want 1", got)
+	}
+	col.writeDomain.mu.Unlock()
+
+	ids, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(7), Inclusive: true},
+		Upper: IndexRangeBound{Value: int64(9), Inclusive: false},
+	})
+	if err != nil {
+		t.Fatalf("find queued new score range: %v", err)
+	}
+	if truncated || len(ids) != 2 || !bytes.Equal(ids[0], []byte("u1")) || !bytes.Equal(ids[1], []byte("u2")) {
+		t.Fatalf("queued new score ids=%q truncated=%v want u1,u2 false", ids, truncated)
+	}
+	ids, truncated, err = col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(5), Inclusive: true},
+		Upper: IndexRangeBound{Value: int64(7), Inclusive: false},
+	})
+	if err != nil {
+		t.Fatalf("find queued old score range: %v", err)
+	}
+	if truncated || len(ids) != 0 {
+		t.Fatalf("queued old score ids=%q truncated=%v want none false", ids, truncated)
+	}
+}
+
+func TestCollectionFindByIndexRangeSeesPublishingIndexedFlushUnits(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "score", Field: "score", ValueType: IndexValueInt64}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2"), []byte("u3")},
+		[][]byte{
+			[]byte(`{"score":5}`),
+			[]byte(`{"score":6}`),
+			[]byte(`{"score":9}`),
+		},
+	); err != nil {
+		t.Fatalf("insert persisted rows: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush persisted rows: %v", err)
+	}
+	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONField("score", int64(7))},
+		{DocumentID: []byte("u2"), Update: setJSONField("score", int64(8))},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	}
+	if !batched {
+		t.Fatalf("batched=%v results=%+v want buffered update batch", batched, results)
+	}
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare async publish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepare async publish returned nil work")
+	}
+	publishAttempted := false
+	defer func() {
+		if !publishAttempted && work.pin != nil {
+			_ = work.pin.Close()
+			work.pin = nil
+		}
+	}()
+
+	ids, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(7), Inclusive: true},
+		Upper: IndexRangeBound{Value: int64(9), Inclusive: false},
+	})
+	if err != nil {
+		t.Fatalf("find publishing new score range: %v", err)
+	}
+	if truncated || len(ids) != 2 || !bytes.Equal(ids[0], []byte("u1")) || !bytes.Equal(ids[1], []byte("u2")) {
+		t.Fatalf("publishing new score ids=%q truncated=%v want u1,u2 false", ids, truncated)
+	}
+	ids, truncated, err = col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(5), Inclusive: true},
+		Upper: IndexRangeBound{Value: int64(7), Inclusive: false},
+	})
+	if err != nil {
+		t.Fatalf("find publishing old score range: %v", err)
+	}
+	if truncated || len(ids) != 0 {
+		t.Fatalf("publishing old score ids=%q truncated=%v want none false", ids, truncated)
+	}
+	publishAttempted = true
+	if err := col.publishPreparedIndexedFlush(work); err != nil {
+		t.Fatalf("publish prepared async flush: %v", err)
 	}
 }
 

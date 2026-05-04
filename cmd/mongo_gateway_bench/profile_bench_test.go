@@ -1116,6 +1116,8 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 		UpdateCombineFallbackRequests:  after.UpdateCombineFallbackRequests - before.UpdateCombineFallbackRequests,
 		IndexedFlushCalls:              after.IndexedFlushCalls - before.IndexedFlushCalls,
 		IndexedFlushErrors:             after.IndexedFlushErrors - before.IndexedFlushErrors,
+		IndexedFlushForcedDrains:       after.IndexedFlushForcedDrains - before.IndexedFlushForcedDrains,
+		IndexedFlushUnits:              after.IndexedFlushUnits - before.IndexedFlushUnits,
 		IndexedFlushDocs:               after.IndexedFlushDocs - before.IndexedFlushDocs,
 		IndexedFlushBytes:              after.IndexedFlushBytes - before.IndexedFlushBytes,
 		IndexedFlushRootRuns:           after.IndexedFlushRootRuns - before.IndexedFlushRootRuns,
@@ -1123,7 +1125,29 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 		IndexedFlushDuration:           after.IndexedFlushDuration - before.IndexedFlushDuration,
 		IndexedFlushMaterialize:        after.IndexedFlushMaterialize - before.IndexedFlushMaterialize,
 		IndexedFlushPublish:            after.IndexedFlushPublish - before.IndexedFlushPublish,
+		IndexedAsyncFlushWait:          after.IndexedAsyncFlushWait - before.IndexedAsyncFlushWait,
+		RootDeltaPlanPrimaryRoots:      after.RootDeltaPlanPrimaryRoots - before.RootDeltaPlanPrimaryRoots,
+		RootDeltaPlanTemplateRoots:     after.RootDeltaPlanTemplateRoots - before.RootDeltaPlanTemplateRoots,
+		RootDeltaPlanIndexStateRoots:   after.RootDeltaPlanIndexStateRoots - before.RootDeltaPlanIndexStateRoots,
+		RootDeltaPlanSecondaryRoots:    after.RootDeltaPlanSecondaryRoots - before.RootDeltaPlanSecondaryRoots,
+		RootDeltaPlanEntries:           after.RootDeltaPlanEntries - before.RootDeltaPlanEntries,
+		RootDeltaPlanKeyBytes:          after.RootDeltaPlanKeyBytes - before.RootDeltaPlanKeyBytes,
+		RootDeltaPlanValueBytes:        after.RootDeltaPlanValueBytes - before.RootDeltaPlanValueBytes,
+		RootDeltaPlanTombstones:        after.RootDeltaPlanTombstones - before.RootDeltaPlanTombstones,
+		PrimaryOnlyUpdateCalls:         after.PrimaryOnlyUpdateCalls - before.PrimaryOnlyUpdateCalls,
+		PrimaryOnlyMatched:             after.PrimaryOnlyMatched - before.PrimaryOnlyMatched,
+		PrimaryOnlyModified:            after.PrimaryOnlyModified - before.PrimaryOnlyModified,
+		PrimaryOnlyBufferedCalls:       after.PrimaryOnlyBufferedCalls - before.PrimaryOnlyBufferedCalls,
+		PrimaryOnlyRootPublishes:       after.PrimaryOnlyRootPublishes - before.PrimaryOnlyRootPublishes,
+		PrimaryOnlyRootDeltaEntries:    after.PrimaryOnlyRootDeltaEntries - before.PrimaryOnlyRootDeltaEntries,
+		PrimaryOnlyRootDeltaKeyBytes:   after.PrimaryOnlyRootDeltaKeyBytes - before.PrimaryOnlyRootDeltaKeyBytes,
+		PrimaryOnlyRootDeltaValueBytes: after.PrimaryOnlyRootDeltaValueBytes - before.PrimaryOnlyRootDeltaValueBytes,
+		PrimaryOnlyCoalescedDocs:       after.PrimaryOnlyCoalescedDocs - before.PrimaryOnlyCoalescedDocs,
 	}
+	delta.OverlayMutableDocuments = after.OverlayMutableDocuments
+	delta.OverlayQueuedIndexedFlushUnits = after.OverlayQueuedIndexedFlushUnits
+	delta.OverlayActiveIndexedFlushUnits = after.OverlayActiveIndexedFlushUnits
+	delta.OverlayVisibleDepth = after.OverlayVisibleDepth
 	if after.UpdateCombineQueueDepthMax > before.UpdateCombineQueueDepthMax {
 		delta.UpdateCombineQueueDepthMax = after.UpdateCombineQueueDepthMax
 	}
@@ -1185,6 +1209,8 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateBatchUniqueCheckSkips:    10,
 		IndexedFlushCalls:              3,
 		IndexedFlushErrors:             1,
+		IndexedFlushForcedDrains:       2,
+		IndexedFlushUnits:              6,
 		IndexedFlushDocs:               300,
 		IndexedFlushBytes:              9000,
 		IndexedFlushRootRuns:           90,
@@ -1192,6 +1218,24 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		IndexedFlushDuration:           30 * time.Millisecond,
 		IndexedFlushMaterialize:        12 * time.Millisecond,
 		IndexedFlushPublish:            18 * time.Millisecond,
+		IndexedAsyncFlushWait:          2 * time.Millisecond,
+		RootDeltaPlanPrimaryRoots:      3,
+		RootDeltaPlanTemplateRoots:     2,
+		RootDeltaPlanIndexStateRoots:   1,
+		RootDeltaPlanSecondaryRoots:    6,
+		RootDeltaPlanEntries:           300,
+		RootDeltaPlanKeyBytes:          1200,
+		RootDeltaPlanValueBytes:        2400,
+		RootDeltaPlanTombstones:        30,
+		PrimaryOnlyUpdateCalls:         10,
+		PrimaryOnlyMatched:             9,
+		PrimaryOnlyModified:            8,
+		PrimaryOnlyBufferedCalls:       1,
+		PrimaryOnlyRootPublishes:       8,
+		PrimaryOnlyRootDeltaEntries:    8,
+		PrimaryOnlyRootDeltaKeyBytes:   16,
+		PrimaryOnlyRootDeltaValueBytes: 160,
+		PrimaryOnlyCoalescedDocs:       8,
 		UpdateBatchIndexStatsCount:     2,
 		UpdateBatchIndexStats: [8]collections.CollectionUpdateIndexStats{
 			{CollectionName: "users", IndexName: "email", IndexOrdinal: 0, Unique: true, Changed: 1, Unchanged: 9, UniqueChecks: 1, UniqueCheckSkips: 8},
@@ -1211,6 +1255,8 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateBatchUniqueCheckSkips:    19,
 		IndexedFlushCalls:              8,
 		IndexedFlushErrors:             2,
+		IndexedFlushForcedDrains:       5,
+		IndexedFlushUnits:              16,
 		IndexedFlushDocs:               900,
 		IndexedFlushBytes:              27000,
 		IndexedFlushRootRuns:           270,
@@ -1218,6 +1264,24 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		IndexedFlushDuration:           90 * time.Millisecond,
 		IndexedFlushMaterialize:        30 * time.Millisecond,
 		IndexedFlushPublish:            60 * time.Millisecond,
+		IndexedAsyncFlushWait:          11 * time.Millisecond,
+		RootDeltaPlanPrimaryRoots:      8,
+		RootDeltaPlanTemplateRoots:     5,
+		RootDeltaPlanIndexStateRoots:   4,
+		RootDeltaPlanSecondaryRoots:    16,
+		RootDeltaPlanEntries:           900,
+		RootDeltaPlanKeyBytes:          3600,
+		RootDeltaPlanValueBytes:        7200,
+		RootDeltaPlanTombstones:        90,
+		PrimaryOnlyUpdateCalls:         17,
+		PrimaryOnlyMatched:             16,
+		PrimaryOnlyModified:            15,
+		PrimaryOnlyBufferedCalls:       3,
+		PrimaryOnlyRootPublishes:       15,
+		PrimaryOnlyRootDeltaEntries:    15,
+		PrimaryOnlyRootDeltaKeyBytes:   30,
+		PrimaryOnlyRootDeltaValueBytes: 300,
+		PrimaryOnlyCoalescedDocs:       15,
 		UpdateBatchIndexStatsCount:     2,
 		UpdateBatchIndexStats: [8]collections.CollectionUpdateIndexStats{
 			{CollectionName: "users", IndexName: "email", IndexOrdinal: 0, Unique: true, Changed: 1, Unchanged: 22, UniqueChecks: 1, UniqueCheckSkips: 17},
@@ -1262,10 +1326,12 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 	if got.UpdateBatchUniqueCheckSkips != 9 {
 		t.Fatalf("UpdateBatchUniqueCheckSkips=%d want 9", got.UpdateBatchUniqueCheckSkips)
 	}
-	if got.IndexedFlushCalls != 5 || got.IndexedFlushErrors != 1 || got.IndexedFlushDocs != 600 || got.IndexedFlushBytes != 18000 || got.IndexedFlushRootRuns != 180 || got.IndexedFlushRoots != 15 || got.IndexedFlushDuration != 60*time.Millisecond || got.IndexedFlushMaterialize != 18*time.Millisecond || got.IndexedFlushPublish != 42*time.Millisecond {
-		t.Fatalf("indexed flush delta calls/errors/docs/bytes/rootRuns/roots/duration/materialize/publish=%d/%d/%d/%d/%d/%d/%s/%s/%s want 5/1/600/18000/180/15/60ms/18ms/42ms",
+	if got.IndexedFlushCalls != 5 || got.IndexedFlushErrors != 1 || got.IndexedFlushForcedDrains != 3 || got.IndexedFlushUnits != 10 || got.IndexedFlushDocs != 600 || got.IndexedFlushBytes != 18000 || got.IndexedFlushRootRuns != 180 || got.IndexedFlushRoots != 15 || got.IndexedFlushDuration != 60*time.Millisecond || got.IndexedFlushMaterialize != 18*time.Millisecond || got.IndexedFlushPublish != 42*time.Millisecond || got.IndexedAsyncFlushWait != 9*time.Millisecond {
+		t.Fatalf("indexed flush delta calls/errors/forced/units/docs/bytes/rootRuns/roots/duration/materialize/publish/wait=%d/%d/%d/%d/%d/%d/%d/%d/%s/%s/%s/%s want 5/1/3/10/600/18000/180/15/60ms/18ms/42ms/9ms",
 			got.IndexedFlushCalls,
 			got.IndexedFlushErrors,
+			got.IndexedFlushForcedDrains,
+			got.IndexedFlushUnits,
 			got.IndexedFlushDocs,
 			got.IndexedFlushBytes,
 			got.IndexedFlushRootRuns,
@@ -1273,6 +1339,32 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 			got.IndexedFlushDuration,
 			got.IndexedFlushMaterialize,
 			got.IndexedFlushPublish,
+			got.IndexedAsyncFlushWait,
+		)
+	}
+	if got.RootDeltaPlanPrimaryRoots != 5 || got.RootDeltaPlanTemplateRoots != 3 || got.RootDeltaPlanIndexStateRoots != 3 || got.RootDeltaPlanSecondaryRoots != 10 || got.RootDeltaPlanEntries != 600 || got.RootDeltaPlanKeyBytes != 2400 || got.RootDeltaPlanValueBytes != 4800 || got.RootDeltaPlanTombstones != 60 {
+		t.Fatalf("root delta plan stats=%d/%d/%d/%d/%d/%d/%d/%d want 5/3/3/10/600/2400/4800/60",
+			got.RootDeltaPlanPrimaryRoots,
+			got.RootDeltaPlanTemplateRoots,
+			got.RootDeltaPlanIndexStateRoots,
+			got.RootDeltaPlanSecondaryRoots,
+			got.RootDeltaPlanEntries,
+			got.RootDeltaPlanKeyBytes,
+			got.RootDeltaPlanValueBytes,
+			got.RootDeltaPlanTombstones,
+		)
+	}
+	if got.PrimaryOnlyUpdateCalls != 7 || got.PrimaryOnlyMatched != 7 || got.PrimaryOnlyModified != 7 || got.PrimaryOnlyBufferedCalls != 2 || got.PrimaryOnlyRootPublishes != 7 || got.PrimaryOnlyRootDeltaEntries != 7 || got.PrimaryOnlyRootDeltaKeyBytes != 14 || got.PrimaryOnlyRootDeltaValueBytes != 140 || got.PrimaryOnlyCoalescedDocs != 7 {
+		t.Fatalf("primary-only stats calls/matched/modified/buffered/publishes/entries/key/value/coalesced=%d/%d/%d/%d/%d/%d/%d/%d/%d want 7/7/7/2/7/7/14/140/7",
+			got.PrimaryOnlyUpdateCalls,
+			got.PrimaryOnlyMatched,
+			got.PrimaryOnlyModified,
+			got.PrimaryOnlyBufferedCalls,
+			got.PrimaryOnlyRootPublishes,
+			got.PrimaryOnlyRootDeltaEntries,
+			got.PrimaryOnlyRootDeltaKeyBytes,
+			got.PrimaryOnlyRootDeltaValueBytes,
+			got.PrimaryOnlyCoalescedDocs,
 		)
 	}
 	if got.UpdateBatchIndexStatsCount != 2 {
@@ -1298,6 +1390,8 @@ func TestReportCollectionManagerUpdateStatsIncludesIndexedFlushMetrics(t *testin
 	stats := collections.CollectionManagerStats{
 		IndexedFlushCalls:              5,
 		IndexedFlushErrors:             1,
+		IndexedFlushForcedDrains:       2,
+		IndexedFlushUnits:              10,
 		IndexedFlushDocs:               600,
 		IndexedFlushBytes:              18000,
 		IndexedFlushRootRuns:           180,
@@ -1305,6 +1399,24 @@ func TestReportCollectionManagerUpdateStatsIncludesIndexedFlushMetrics(t *testin
 		IndexedFlushDuration:           60 * time.Millisecond,
 		IndexedFlushMaterialize:        18 * time.Millisecond,
 		IndexedFlushPublish:            42 * time.Millisecond,
+		IndexedAsyncFlushWait:          6 * time.Millisecond,
+		RootDeltaPlanPrimaryRoots:      5,
+		RootDeltaPlanTemplateRoots:     2,
+		RootDeltaPlanIndexStateRoots:   3,
+		RootDeltaPlanSecondaryRoots:    10,
+		RootDeltaPlanEntries:           600,
+		RootDeltaPlanKeyBytes:          2400,
+		RootDeltaPlanValueBytes:        4800,
+		RootDeltaPlanTombstones:        60,
+		PrimaryOnlyUpdateCalls:         600,
+		PrimaryOnlyMatched:             600,
+		PrimaryOnlyModified:            600,
+		PrimaryOnlyBufferedCalls:       30,
+		PrimaryOnlyRootPublishes:       600,
+		PrimaryOnlyRootDeltaEntries:    600,
+		PrimaryOnlyRootDeltaKeyBytes:   1200,
+		PrimaryOnlyRootDeltaValueBytes: 12000,
+		PrimaryOnlyCoalescedDocs:       600,
 		UpdateBatchIndexValueChanges:   300,
 		UpdateBatchIndexValueUnchanged: 900,
 		UpdateBatchMaskFallbacks:       60,
@@ -1314,8 +1426,13 @@ func TestReportCollectionManagerUpdateStatsIncludesIndexedFlushMetrics(t *testin
 	})
 	want := map[string]float64{
 		"indexed_flush_calls":                   5,
+		"indexed_flush_units/call":              2,
+		"indexed_flush_units/batch":             2,
+		"indexed_flush_units/doc":               1.0 / 60.0,
 		"indexed_flush_docs/call":               120,
+		"indexed_flush_docs/batch":              120,
 		"indexed_flush_docs/doc":                1,
+		"indexed_flush_docs/unit":               60,
 		"indexed_flush_bytes/call":              3600,
 		"indexed_flush_bytes/doc":               30,
 		"indexed_flush_root_runs/call":          36,
@@ -1323,12 +1440,33 @@ func TestReportCollectionManagerUpdateStatsIncludesIndexedFlushMetrics(t *testin
 		"indexed_flush_roots/call":              3,
 		"indexed_flush_roots/doc":               0.025,
 		"indexed_flush_errors":                  1,
+		"indexed_flush_forced_drains":           2,
+		"indexed_flush_forced_drains/doc":       1.0 / 300.0,
 		"indexed_flush_ns/call":                 12_000_000,
 		"indexed_flush_ns/doc":                  100_000,
 		"indexed_flush_materialize_ns/call":     3_600_000,
 		"indexed_flush_materialize_ns/doc":      30_000,
 		"indexed_flush_publish_ns/call":         8_400_000,
 		"indexed_flush_publish_ns/doc":          70_000,
+		"indexed_async_flush_wait_ns":           6_000_000,
+		"indexed_async_flush_wait_ns/doc":       10_000,
+		"root_delta_plan_entries/doc":           1,
+		"root_delta_plan_key_bytes/doc":         4,
+		"root_delta_plan_value_bytes/doc":       8,
+		"root_delta_plan_tombstones/doc":        0.1,
+		"affected_primary_roots/doc":            1.0 / 120.0,
+		"affected_template_roots/doc":           1.0 / 300.0,
+		"affected_index_state_roots/doc":        0.005,
+		"affected_secondary_roots/doc":          1.0 / 60.0,
+		"primary_only_update_calls/doc":         1,
+		"primary_only_matched/doc":              1,
+		"primary_only_modified/doc":             1,
+		"primary_only_buffered_calls":           30,
+		"primary_only_buffered_calls/doc":       0.05,
+		"primary_root_publishes/doc":            1,
+		"primary_root_delta_entries/doc":        1,
+		"primary_root_delta_bytes/doc":          22,
+		"primary_only_coalesced_docs/publish":   1,
 		"update_index_value_changes/doc":        0.5,
 		"update_index_value_unchanged/doc":      1.5,
 		"changed_index_fast_mask_fallbacks/doc": 0.1,
@@ -1384,9 +1522,18 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 	}
 	if stats.IndexedFlushCalls > 0 {
 		b.ReportMetric(float64(stats.IndexedFlushCalls), "indexed_flush_calls")
+		if stats.IndexedFlushUnits > 0 {
+			b.ReportMetric(float64(stats.IndexedFlushUnits)/float64(stats.IndexedFlushCalls), "indexed_flush_units/call")
+			b.ReportMetric(float64(stats.IndexedFlushUnits)/float64(stats.IndexedFlushCalls), "indexed_flush_units/batch")
+			b.ReportMetric(float64(stats.IndexedFlushUnits)/float64(docs), "indexed_flush_units/doc")
+		}
 		if stats.IndexedFlushDocs > 0 {
 			b.ReportMetric(float64(stats.IndexedFlushDocs)/float64(stats.IndexedFlushCalls), "indexed_flush_docs/call")
+			b.ReportMetric(float64(stats.IndexedFlushDocs)/float64(stats.IndexedFlushCalls), "indexed_flush_docs/batch")
 			b.ReportMetric(float64(stats.IndexedFlushDocs)/float64(docs), "indexed_flush_docs/doc")
+		}
+		if stats.IndexedFlushUnits > 0 && stats.IndexedFlushDocs > 0 {
+			b.ReportMetric(float64(stats.IndexedFlushDocs)/float64(stats.IndexedFlushUnits), "indexed_flush_docs/unit")
 		}
 		if stats.IndexedFlushBytes > 0 {
 			b.ReportMetric(float64(stats.IndexedFlushBytes)/float64(stats.IndexedFlushCalls), "indexed_flush_bytes/call")
@@ -1402,6 +1549,10 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 		}
 		if stats.IndexedFlushErrors > 0 {
 			b.ReportMetric(float64(stats.IndexedFlushErrors), "indexed_flush_errors")
+		}
+		if stats.IndexedFlushForcedDrains > 0 {
+			b.ReportMetric(float64(stats.IndexedFlushForcedDrains), "indexed_flush_forced_drains")
+			b.ReportMetric(float64(stats.IndexedFlushForcedDrains)/float64(docs), "indexed_flush_forced_drains/doc")
 		}
 		if stats.IndexedFlushDuration > 0 {
 			b.ReportMetric(float64(stats.IndexedFlushDuration.Nanoseconds())/float64(stats.IndexedFlushCalls), "indexed_flush_ns/call")
@@ -1421,6 +1572,71 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 				b.ReportMetric(float64(stats.IndexedFlushPublish.Nanoseconds())/float64(stats.IndexedFlushDocs), "indexed_flush_publish_ns/doc")
 			}
 		}
+	}
+	if stats.IndexedAsyncFlushWait > 0 {
+		b.ReportMetric(float64(stats.IndexedAsyncFlushWait.Nanoseconds()), "indexed_async_flush_wait_ns")
+		b.ReportMetric(float64(stats.IndexedAsyncFlushWait.Nanoseconds())/float64(docs), "indexed_async_flush_wait_ns/doc")
+	}
+	if stats.OverlayMutableDocuments > 0 {
+		b.ReportMetric(float64(stats.OverlayMutableDocuments), "overlay_mutable_docs")
+	}
+	if stats.OverlayQueuedIndexedFlushUnits > 0 {
+		b.ReportMetric(float64(stats.OverlayQueuedIndexedFlushUnits), "overlay_queued_indexed_flush_units")
+	}
+	if stats.OverlayActiveIndexedFlushUnits > 0 {
+		b.ReportMetric(float64(stats.OverlayActiveIndexedFlushUnits), "overlay_active_indexed_flush_units")
+	}
+	if stats.OverlayVisibleDepth > 0 {
+		b.ReportMetric(float64(stats.OverlayVisibleDepth), "overlay_visible_depth")
+	}
+	if stats.RootDeltaPlanEntries > 0 {
+		b.ReportMetric(float64(stats.RootDeltaPlanEntries)/float64(docs), "root_delta_plan_entries/doc")
+	}
+	if stats.RootDeltaPlanKeyBytes > 0 {
+		b.ReportMetric(float64(stats.RootDeltaPlanKeyBytes)/float64(docs), "root_delta_plan_key_bytes/doc")
+	}
+	if stats.RootDeltaPlanValueBytes > 0 {
+		b.ReportMetric(float64(stats.RootDeltaPlanValueBytes)/float64(docs), "root_delta_plan_value_bytes/doc")
+	}
+	if stats.RootDeltaPlanTombstones > 0 {
+		b.ReportMetric(float64(stats.RootDeltaPlanTombstones)/float64(docs), "root_delta_plan_tombstones/doc")
+	}
+	if stats.RootDeltaPlanPrimaryRoots > 0 {
+		b.ReportMetric(float64(stats.RootDeltaPlanPrimaryRoots)/float64(docs), "affected_primary_roots/doc")
+	}
+	if stats.RootDeltaPlanTemplateRoots > 0 {
+		b.ReportMetric(float64(stats.RootDeltaPlanTemplateRoots)/float64(docs), "affected_template_roots/doc")
+	}
+	if stats.RootDeltaPlanIndexStateRoots > 0 {
+		b.ReportMetric(float64(stats.RootDeltaPlanIndexStateRoots)/float64(docs), "affected_index_state_roots/doc")
+	}
+	if stats.RootDeltaPlanSecondaryRoots > 0 {
+		b.ReportMetric(float64(stats.RootDeltaPlanSecondaryRoots)/float64(docs), "affected_secondary_roots/doc")
+	}
+	if stats.PrimaryOnlyUpdateCalls > 0 {
+		b.ReportMetric(float64(stats.PrimaryOnlyUpdateCalls)/float64(docs), "primary_only_update_calls/doc")
+	}
+	if stats.PrimaryOnlyMatched > 0 {
+		b.ReportMetric(float64(stats.PrimaryOnlyMatched)/float64(docs), "primary_only_matched/doc")
+	}
+	if stats.PrimaryOnlyModified > 0 {
+		b.ReportMetric(float64(stats.PrimaryOnlyModified)/float64(docs), "primary_only_modified/doc")
+	}
+	if stats.PrimaryOnlyBufferedCalls > 0 {
+		b.ReportMetric(float64(stats.PrimaryOnlyBufferedCalls), "primary_only_buffered_calls")
+		b.ReportMetric(float64(stats.PrimaryOnlyBufferedCalls)/float64(docs), "primary_only_buffered_calls/doc")
+	}
+	if stats.PrimaryOnlyRootPublishes > 0 {
+		b.ReportMetric(float64(stats.PrimaryOnlyRootPublishes)/float64(docs), "primary_root_publishes/doc")
+	}
+	if stats.PrimaryOnlyRootDeltaEntries > 0 {
+		b.ReportMetric(float64(stats.PrimaryOnlyRootDeltaEntries)/float64(docs), "primary_root_delta_entries/doc")
+	}
+	if stats.PrimaryOnlyRootDeltaKeyBytes+stats.PrimaryOnlyRootDeltaValueBytes > 0 {
+		b.ReportMetric(float64(stats.PrimaryOnlyRootDeltaKeyBytes+stats.PrimaryOnlyRootDeltaValueBytes)/float64(docs), "primary_root_delta_bytes/doc")
+	}
+	if stats.PrimaryOnlyRootPublishes > 0 {
+		b.ReportMetric(float64(stats.PrimaryOnlyCoalescedDocs)/float64(stats.PrimaryOnlyRootPublishes), "primary_only_coalesced_docs/publish")
 	}
 	if stats.UpdateBatchCalls > 0 {
 		b.ReportMetric(float64(stats.UpdateBatchCalls), "update_batches")

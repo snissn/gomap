@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"math/bits"
 	"os"
 	"path/filepath"
@@ -168,6 +169,108 @@ func TestSelectedTreeDBStats(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("selected stats=%v want %v", got, want)
+	}
+}
+
+func TestTreeDBStatsDeltaAndPhaseMetrics(t *testing.T) {
+	before := map[string]string{
+		"treedb.publish.ordered_root_delta_group.calls_total":                                  "2",
+		"treedb.publish.ordered_root_delta_group.roots_total":                                  "6",
+		"treedb.publish.ordered_root_delta_group.root_apply_calls_total":                       "6",
+		"treedb.publish.ordered_root_delta_group.root_apply_ns_total":                          "1000",
+		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_loads_total":         "4",
+		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_pages_written_total":      "1",
+		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total":    "128",
+		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_page_bytes_written_total": "256",
+		"treedb.collections.write_domain.indexed_flush.calls_total":                            "1",
+		"treedb.collections.write_domain.indexed_flush.docs_total":                             "8",
+		"treedb.collections.write_domain.indexed_flush.units_total":                            "1",
+		"treedb.collections.write_domain.indexed_flush.root_runs_total":                        "4",
+		"treedb.collections.write_domain.root_delta_plan.entries_total":                        "10",
+		"treedb.collections.write_domain.root_delta_plan.key_bytes_total":                      "100",
+		"treedb.collections.write_domain.root_delta_plan.value_bytes_total":                    "200",
+		"treedb.collections.write_domain.root_delta_plan.tombstones_total":                     "1",
+		"treedb.collections.write_domain.root_delta_plan.roots.primary_total":                  "2",
+		"treedb.collections.write_domain.root_delta_plan.roots.template_total":                 "0",
+		"treedb.collections.write_domain.root_delta_plan.roots.index_state_total":              "1",
+		"treedb.collections.write_domain.root_delta_plan.roots.secondary_total":                "3",
+	}
+	after := map[string]string{
+		"treedb.publish.ordered_root_delta_group.calls_total":                                  "5",
+		"treedb.publish.ordered_root_delta_group.roots_total":                                  "15",
+		"treedb.publish.ordered_root_delta_group.root_apply_calls_total":                       "15",
+		"treedb.publish.ordered_root_delta_group.root_apply_ns_total":                          "7000",
+		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_loads_total":         "10",
+		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_pages_written_total":      "4",
+		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total":    "640",
+		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_page_bytes_written_total": "1280",
+		"treedb.collections.write_domain.indexed_flush.calls_total":                            "3",
+		"treedb.collections.write_domain.indexed_flush.docs_total":                             "48",
+		"treedb.collections.write_domain.indexed_flush.units_total":                            "7",
+		"treedb.collections.write_domain.indexed_flush.root_runs_total":                        "16",
+		"treedb.collections.write_domain.root_delta_plan.entries_total":                        "50",
+		"treedb.collections.write_domain.root_delta_plan.key_bytes_total":                      "500",
+		"treedb.collections.write_domain.root_delta_plan.value_bytes_total":                    "1000",
+		"treedb.collections.write_domain.root_delta_plan.tombstones_total":                     "5",
+		"treedb.collections.write_domain.root_delta_plan.roots.primary_total":                  "6",
+		"treedb.collections.write_domain.root_delta_plan.roots.template_total":                 "2",
+		"treedb.collections.write_domain.root_delta_plan.roots.index_state_total":              "3",
+		"treedb.collections.write_domain.root_delta_plan.roots.secondary_total":                "9",
+	}
+	phase := summarizePhase("concurrent_id_update_set_w8", 40, 20, time.Second, []time.Duration{time.Millisecond})
+	attachTreeDBPhaseStats(&phase, before, after)
+	if got := phase.TreeDBStatsDelta["treedb.publish.ordered_root_delta_group.calls_total"]; got != "3" {
+		t.Fatalf("calls delta=%q want 3; deltas=%v", got, phase.TreeDBStatsDelta)
+	}
+	for name, want := range map[string]float64{
+		"publish_delta_group_calls/doc":         0.075,
+		"root_apply_calls/doc":                  0.225,
+		"roots/publish":                         3,
+		"publish_delta_group_root_apply_ns/doc": 150,
+		"leaf_log_node_loads/doc":               0.15,
+		"leaf_log_pages_written/doc":            0.075,
+		"leaf_log_read_bytes/doc":               12.8,
+		"leaf_log_write_bytes/doc":              25.6,
+		"indexed_flush_calls/doc":               0.05,
+		"indexed_flush_docs/batch":              20,
+		"indexed_flush_units/batch":             3,
+		"indexed_flush_root_runs/doc":           0.3,
+		"root_delta_plan_entries/doc":           1,
+		"root_delta_plan_key_bytes/doc":         10,
+		"root_delta_plan_value_bytes/doc":       20,
+		"root_delta_plan_tombstones/doc":        0.1,
+		"affected_primary_roots/doc":            0.1,
+		"affected_template_roots/doc":           0.05,
+		"affected_index_state_roots/doc":        0.05,
+		"affected_secondary_roots/doc":          0.15,
+		"publish_delta_group_calls/driver_call": 0.15,
+	} {
+		if got := phase.TreeDBMetrics[name]; math.Abs(got-want) > 1e-9 {
+			t.Fatalf("metric %s=%v want %v; metrics=%v", name, got, want, phase.TreeDBMetrics)
+		}
+	}
+}
+
+func TestPhaseResultJSONIncludesTreeDBStatsDelta(t *testing.T) {
+	phase := phaseResult{
+		Name:       "concurrent_id_update_set_w4",
+		Operations: 10,
+		TreeDBStatsDelta: map[string]string{
+			"treedb.publish.ordered_root_delta_group.calls_total": "10",
+		},
+		TreeDBMetrics: map[string]float64{
+			"publish_delta_group_calls/doc": 1,
+		},
+	}
+	raw, err := json.Marshal(phase)
+	if err != nil {
+		t.Fatalf("marshal phase: %v", err)
+	}
+	if !bytes.Contains(raw, []byte(`"treedb_stats_delta"`)) {
+		t.Fatalf("phase JSON missing treedb_stats_delta: %s", raw)
+	}
+	if !bytes.Contains(raw, []byte(`"treedb_metrics"`)) {
+		t.Fatalf("phase JSON missing treedb_metrics: %s", raw)
 	}
 }
 
