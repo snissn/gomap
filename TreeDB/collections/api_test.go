@@ -8494,6 +8494,113 @@ func TestCollectionUpdateBatchDirectBufferedTemplateV1AccumulatesRootRuns(t *tes
 	}
 }
 
+func TestCollectionUpdateBatchDirectBufferedTemplateV1TemplateOnlySkipsSecondaryRoots(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatTemplateV1,
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustTemplateV1Document(t, []string{"email", "city"}, []any{"a@example.com", "hnl"})},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+	before := d.State()
+
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setTemplateV1JSON(t, `{"email":"a@example.com","city":"hnl","score":1}`)},
+	}); err != nil {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("batch was declined")
+	}
+	afterUpdate := d.State()
+	if afterUpdate.CommitSeq != before.CommitSeq {
+		t.Fatalf("buffered template-v1 update advanced commit seq by %d, want 0", afterUpdate.CommitSeq-before.CommitSeq)
+	}
+
+	col.writeDomain.mu.RLock()
+	rootRunCount := col.writeDomain.rootRunCount
+	templateRuns := len(col.writeDomain.rootRuns[collectionTemplateRootName("users")])
+	primaryRuns := len(col.writeDomain.rootRuns[collectionPrimaryRootName("users")])
+	emailRuns := len(col.writeDomain.rootRuns[collectionSecondaryRootName("users", "email")])
+	cityRuns := len(col.writeDomain.rootRuns[collectionSecondaryRootName("users", "city")])
+	rootMutableRuns := len(col.writeDomain.rootMutableRuns)
+	uniqueRuns := len(col.writeDomain.uniqueValueRuns["email"])
+	col.writeDomain.mu.RUnlock()
+	if rootRunCount != 2 {
+		t.Fatalf("rootRunCount=%d want only primary and template roots", rootRunCount)
+	}
+	if templateRuns != 1 || primaryRuns != 1 {
+		t.Fatalf("runs template=%d primary=%d, want one run for each", templateRuns, primaryRuns)
+	}
+	if emailRuns != 0 || cityRuns != 0 {
+		t.Fatalf("secondary runs email=%d city=%d, want none for unchanged indexed values", emailRuns, cityRuns)
+	}
+	if rootMutableRuns != 2 {
+		t.Fatalf("rootMutableRuns=%d want two active root-local accumulators", rootMutableRuns)
+	}
+	if uniqueRuns != 0 {
+		t.Fatalf("unique value runs=%d want none for unchanged unique value", uniqueRuns)
+	}
+
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get template-v1 buffered document: %v", err)
+	}
+	gotJSON, err := col.StoredDocumentJSON(got)
+	if err != nil {
+		t.Fatalf("materialize template-v1 buffered document: %v", err)
+	}
+	if !bytes.Contains(gotJSON, []byte(`"score":1`)) {
+		t.Fatalf("buffered document=%s missing score update", gotJSON)
+	}
+	emailIDs, err := col.FindByIndex("email", "a@example.com")
+	if err != nil {
+		t.Fatalf("find email: %v", err)
+	}
+	if len(emailIDs) != 1 || !bytes.Equal(emailIDs[0], []byte("u1")) {
+		t.Fatalf("email ids=%q want [u1]", emailIDs)
+	}
+	cityIDs, err := col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find city: %v", err)
+	}
+	if len(cityIDs) != 1 || !bytes.Equal(cityIDs[0], []byte("u1")) {
+		t.Fatalf("city ids=%q want [u1]", cityIDs)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered template-v1 update: %v", err)
+	}
+	flushed := d.State()
+	if flushed.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("flush advanced commit seq by %d, want 1", flushed.CommitSeq-before.CommitSeq)
+	}
+}
+
 func TestDirectBufferedRootEntriesOwnKeysAndRetainDocumentArena(t *testing.T) {
 	scratch := getUpdateBatchPlanScratch(1, 0)
 	documentID := []byte("u1")
