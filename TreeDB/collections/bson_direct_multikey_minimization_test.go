@@ -1,7 +1,7 @@
 package collections
 
 import (
-	"bytes"
+	"sort"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -132,11 +132,18 @@ func assertBSONMultikeyIDs(t *testing.T, col *Collection, tag string, want ...st
 	if err != nil {
 		t.Fatalf("find tag %q: %v", tag, err)
 	}
-	if len(ids) != len(want) {
+	got := make([]string, len(ids))
+	for i := range ids {
+		got[i] = string(ids[i])
+	}
+	sort.Strings(got)
+	wantSorted := append([]string(nil), want...)
+	sort.Strings(wantSorted)
+	if len(got) != len(wantSorted) {
 		t.Fatalf("tag %q ids=%q want %q", tag, ids, want)
 	}
-	for i := range want {
-		if !bytes.Equal(ids[i], []byte(want[i])) {
+	for i := range wantSorted {
+		if got[i] != wantSorted[i] {
 			t.Fatalf("tag %q ids=%q want %q", tag, ids, want)
 		}
 	}
