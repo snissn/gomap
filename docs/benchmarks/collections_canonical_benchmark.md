@@ -114,7 +114,7 @@ The default run uses:
 - batch size 16,000
 - two secondary indexes for the primary TreeDB/SQLite comparison
 - TreeDB `production_fast`
-- TreeDB document formats `json` and `template-v1`
+- TreeDB document formats `template-v1`, `bson`, and `json`
 - SQLite JSON and SQLite native-column baselines
 - full leafgen pack/GC with:
   - `leaf-segment-target-bytes=1048576`
@@ -125,10 +125,12 @@ The default run uses:
 
 ## Adding Configurations
 
-For TreeDB document formats, pass `-formats`:
+For TreeDB document formats, pass `-formats`. The default exercises
+`template-v1`, `bson`, and `json` for timed inserts and full leafgen/GC
+compacted-size fixtures:
 
 ```bash
-./scripts/bench_collections_canonical.sh -formats json,template-v1
+./scripts/bench_collections_canonical.sh -formats template-v1,bson,json
 ```
 
 For a different primary index-count shape:

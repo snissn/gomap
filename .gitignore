@@ -14,3 +14,4 @@ treedb_opt_node.prof
 TreeDB/db/test-*
 .worktrees/
 artifacts/
+/collection_canonical_bench

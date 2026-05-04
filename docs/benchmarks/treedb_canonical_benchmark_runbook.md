@@ -136,6 +136,7 @@ OUT_ROOT=/tmp/collections_canonical_$(date +%Y%m%d_%H%M%S)
 for indexes in 0 1 2; do
   ./scripts/bench_collections_canonical.sh \
     -out-dir "$OUT_ROOT/indexes_${indexes}" \
+    -formats template-v1,bson,json \
     -indexes "$indexes"
 done
 ```
@@ -147,7 +148,7 @@ The canonical runner emits:
 - `benchmark_matrix.csv`
 - `timed_matrix/`
 - `offline_rewrite/`
-- `full_leafgen_pack_gc/`
+- `full_leafgen_pack_gc/` with per-format full leafgen/GC fixture summaries
 
 For broader matrix work, build and run:
 
@@ -354,6 +355,21 @@ Reference phases:
 - maintenance and disk phases.
 
 ## Reporting Template
+
+When a run produces the canonical artifact directories under one root, generate
+the full human-readable HTML report before posting or reviewing results:
+
+```sh
+go run ./cmd/benchmark_run_report \
+  -run-root "$RUN_ROOT" \
+  -out "$RUN_ROOT/deep_report.html" \
+  -title "TreeDB Canonical Benchmark Report"
+```
+
+The deep report preserves full raw-engine, collection, Mongo full-sweep,
+client-mode, and reader/writer scaling tables. It also renders inline SVG charts
+for TreeDB-vs-MongoDB load, disk, read fanout, writer scaling, and client-mode
+load comparisons.
 
 Use this shape in PR and issue comments:
 

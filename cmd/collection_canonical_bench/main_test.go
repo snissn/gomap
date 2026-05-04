@@ -90,6 +90,14 @@ func TestNormalizeRunPathsMakesOutDirAbsolute(t *testing.T) {
 	}
 }
 
+func TestCanonicalFormatListDedupesCanonicalAliases(t *testing.T) {
+	got := strings.Join(canonicalFormatList([]string{"JSON", "json", "template_v1", "template-v1", "bson", ""}), ",")
+	want := "json,template-v1,bson"
+	if got != want {
+		t.Fatalf("canonicalFormatList = %q, want %q", got, want)
+	}
+}
+
 func TestValidateSafeRunDirRefusesUnsafeExistingDirectory(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "unrelated.txt"), []byte("data"), 0644); err != nil {
@@ -308,6 +316,25 @@ func TestExecutiveSummaryUsesConfiguredIndexCountLabel(t *testing.T) {
 	}
 	if strings.Contains(summary, "two-index") {
 		t.Fatalf("summary should not hardcode two-index for one-index run: %s", summary)
+	}
+}
+
+func TestPrimaryFormatNormalizesConfiguredFormats(t *testing.T) {
+	canon := knownExampleRun()
+	canon.Config.Formats = []string{" JSON ", "template_v1"}
+	if got, want := primaryFormat(canon), "template-v1"; got != want {
+		t.Fatalf("primaryFormat = %q, want %q", got, want)
+	}
+
+	canon.Config.Formats = []string{" JSON "}
+	if got, want := primaryFormat(canon), "json"; got != want {
+		t.Fatalf("primaryFormat = %q, want %q", got, want)
+	}
+
+	canon.Config.Formats = []string{" JSON ", "bson", "JSON"}
+	wantNames := []string{"treedb_json_collection_2_indexes", "treedb_bson_collection_2_indexes", "treedb_template_v1_collection_2_indexes"}
+	if got := compactedTreeDBConfigNames(canon); strings.Join(got, ",") != strings.Join(wantNames, ",") {
+		t.Fatalf("compactedTreeDBConfigNames = %v, want %v", got, wantNames)
 	}
 }
 
