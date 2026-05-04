@@ -11258,9 +11258,11 @@ func TestCollectionFindByIndexRangeSkipsBufferedTombstone(t *testing.T) {
 	}
 	domain.mu.Unlock()
 
+	// Use a non-equality range so this exercises bufferedIndexRangeTableLocked,
+	// not the exact-prefix helper.
 	ids, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
 		Lower: IndexRangeBound{Value: int64(5), Inclusive: true},
-		Upper: IndexRangeBound{Value: int64(5), Inclusive: true},
+		Upper: IndexRangeBound{Value: int64(6), Inclusive: false},
 	})
 	if err != nil {
 		t.Fatalf("find range: %v", err)
