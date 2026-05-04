@@ -323,6 +323,26 @@ func TestMongoRowsForPhaseSkipsMissingPhase(t *testing.T) {
 	}
 }
 
+func TestFullSweepLoadNoteRangeIndexMentionsDisplayedZeroOnly(t *testing.T) {
+	note := fullSweepLoadNote([]mongoSummaryRow{{SecondaryIndexes: 1, Phase: "load_insert_many", RangeIndex: true}})
+	if strings.Contains(note, "0-secondary-index load cell") {
+		t.Fatalf("note mentions absent 0-index cell: %s", note)
+	}
+	note = fullSweepLoadNote([]mongoSummaryRow{{SecondaryIndexes: 0, Phase: "load_insert_many", RangeIndex: true}})
+	if !strings.Contains(note, "0-secondary-index load cell") {
+		t.Fatalf("note omits displayed 0-index cell caveat: %s", note)
+	}
+}
+
+func TestFormatChartTooltipValueDoesNotDoubleBytes(t *testing.T) {
+	if got := formatChartTooltipValue(1024*1024, "bytes"); got != "1.00 MiB" {
+		t.Fatalf("bytes tooltip = %q, want 1.00 MiB", got)
+	}
+	if got := formatChartTooltipValue(1200, "docs/sec"); got != "1K docs/sec" {
+		t.Fatalf("docs tooltip = %q, want 1K docs/sec", got)
+	}
+}
+
 func TestLoadMongoScalingWarnsMissingSummary(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "indexes_0"), 0o755); err != nil {

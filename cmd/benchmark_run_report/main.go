@@ -1394,7 +1394,7 @@ func renderMongoLoadModes(b *strings.Builder, rows []loadModeRow) {
 func fullSweepLoadNote(rows []mongoSummaryRow) string {
 	note := "The load chart in this section is the load phase of the broader full sweep, not the pure ingest client-mode matrix. Use it when interpreting the read/range/update sweep as a whole; use the load-only matrix below when comparing client paths."
 	for _, row := range rows {
-		if row.Phase == "load_insert_many" && row.RangeIndex {
+		if row.Phase == "load_insert_many" && row.SecondaryIndexes == 0 && row.RangeIndex {
 			note += " This run has range_index=true, so even the displayed 0-secondary-index load cell maintains the additional age_1 range index during insert."
 			break
 		}
@@ -1882,7 +1882,7 @@ func lineChart(title string, labels []string, xAxisLabel, yAxisLabel string, ser
 		}
 		b.WriteString("<polyline fill=\"none\" stroke=\"" + esc(s.Color) + "\" stroke-width=\"2.5\" points=\"" + strings.Join(points, " ") + "\"/>")
 		for i, v := range s.Values {
-			b.WriteString(fmt.Sprintf("<circle cx=\"%.1f\" cy=\"%.1f\" r=\"3.2\" fill=\"%s\"><title>%s %s: %s %s</title></circle>", x(i), y(v), esc(s.Color), esc(s.Name), esc(labels[i]), esc(formatChartValue(v, unit)), esc(unit)))
+			b.WriteString(fmt.Sprintf("<circle cx=\"%.1f\" cy=\"%.1f\" r=\"3.2\" fill=\"%s\"><title>%s %s: %s</title></circle>", x(i), y(v), esc(s.Color), esc(s.Name), esc(labels[i]), esc(formatChartTooltipValue(v, unit))))
 		}
 	}
 	b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"13\" font-weight=\"700\" fill=\"#344256\">%s</text>", left+plotW/2, height-10, esc(chartLabel(xAxisLabel))))
@@ -2056,7 +2056,7 @@ func verticalBarChartWithSize(title string, categories []string, xAxisLabel stri
 			barH := (v / maxV) * plotH
 			x := groupX + innerPad + float64(sidx)*(barW+barGap)
 			yy := axisY - barH
-			b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s %s: %s %s</title></rect>", x, yy, barW, barH, esc(s.Color), esc(cat), esc(s.Name), esc(formatChartValue(v, unit)), esc(unit)))
+			b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s %s: %s</title></rect>", x, yy, barW, barH, esc(s.Color), esc(cat), esc(s.Name), esc(formatChartTooltipValue(v, unit))))
 			if barW >= 10 && v > 0 {
 				b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"#344256\">%s</text>", x+barW/2, math.Max(top+10, yy-5), esc(formatChartValue(v, unit))))
 			}
@@ -2181,6 +2181,14 @@ func formatChartValue(v float64, unit string) string {
 		return fmtBytes(v)
 	}
 	return shortNumber(v)
+}
+
+func formatChartTooltipValue(v float64, unit string) string {
+	formatted := formatChartValue(v, unit)
+	if unit == "bytes" {
+		return formatted
+	}
+	return formatted + " " + unit
 }
 
 func commaInt(v int64) string {
