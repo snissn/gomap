@@ -8,6 +8,8 @@ import (
 )
 
 func TestCollectionJSONUpdateBatchSkipsUnchangedUniqueWhenNonUniqueChanges(t *testing.T) {
+	const collectionName = "users"
+
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -17,7 +19,7 @@ func TestCollectionJSONUpdateBatchSkipsUnchangedUniqueWhenNonUniqueChanges(t *te
 	mgr := NewCollectionManager(d)
 	mgr.SetUpdateBatchDetailedStatsEnabled(true)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
-		Name: "users",
+		Name: collectionName,
 		Options: CollectionOptions{
 			DisableIndexedWriteMemtables: true,
 		},
@@ -28,7 +30,7 @@ func TestCollectionJSONUpdateBatchSkipsUnchangedUniqueWhenNonUniqueChanges(t *te
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
-	col, err := mgr.OpenCollection("users")
+	col, err := mgr.OpenCollection(collectionName)
 	if err != nil {
 		t.Fatalf("open collection: %v", err)
 	}
@@ -40,7 +42,7 @@ func TestCollectionJSONUpdateBatchSkipsUnchangedUniqueWhenNonUniqueChanges(t *te
 		t.Fatalf("insert: %v", err)
 	}
 
-	before := jsonUpdateBatchUniqueSkipRoots(t, d)
+	before := jsonUpdateBatchUniqueSkipRoots(t, d, collectionName)
 	jsonUpdateBatchUniqueSkipRequireIndexIDs(t, col, "email", "ada@example.com", "u1")
 	jsonUpdateBatchUniqueSkipRequireIndexIDs(t, col, "city", "hnl", "u1")
 
@@ -76,17 +78,17 @@ func TestCollectionJSONUpdateBatchSkipsUnchangedUniqueWhenNonUniqueChanges(t *te
 		t.Fatalf("city secondary run stats=%+v want city delete+set with key bytes", run)
 	}
 
-	after := jsonUpdateBatchUniqueSkipRoots(t, d)
+	after := jsonUpdateBatchUniqueSkipRoots(t, d, collectionName)
 	for _, rootName := range []string{
-		collectionPrimaryRootName("users"),
-		collectionIndexStateRootName("users"),
-		collectionSecondaryRootName("users", "city"),
+		collectionPrimaryRootName(collectionName),
+		collectionIndexStateRootName(collectionName),
+		collectionSecondaryRootName(collectionName, "city"),
 	} {
 		if after[rootName] == before[rootName] {
 			t.Fatalf("root %q did not change for JSON city-only update", rootName)
 		}
 	}
-	if rootName := collectionSecondaryRootName("users", "email"); after[rootName] != before[rootName] {
+	if rootName := collectionSecondaryRootName(collectionName, "email"); after[rootName] != before[rootName] {
 		t.Fatalf("email root %q changed from %d to %d for unchanged unique email", rootName, before[rootName], after[rootName])
 	}
 	jsonUpdateBatchUniqueSkipRequireIndexIDs(t, col, "email", "ada@example.com", "u1")
@@ -94,14 +96,14 @@ func TestCollectionJSONUpdateBatchSkipsUnchangedUniqueWhenNonUniqueChanges(t *te
 	jsonUpdateBatchUniqueSkipRequireIndexIDs(t, col, "city", "sea", "u1")
 }
 
-func jsonUpdateBatchUniqueSkipRoots(tb testing.TB, d *backenddb.DB) map[string]uint64 {
+func jsonUpdateBatchUniqueSkipRoots(tb testing.TB, d *backenddb.DB, collectionName string) map[string]uint64 {
 	tb.Helper()
 	snap := d.AcquireSnapshot()
 	if snap == nil {
 		tb.Fatal("expected snapshot")
 	}
 	defer func() { _ = snap.Close() }()
-	catalog, err := loadCollectionCatalog(snap, "users")
+	catalog, err := loadCollectionCatalog(snap, collectionName)
 	if err != nil {
 		tb.Fatalf("load catalog: %v", err)
 	}
@@ -109,10 +111,10 @@ func jsonUpdateBatchUniqueSkipRoots(tb testing.TB, d *backenddb.DB) map[string]u
 		tb.Fatal("missing catalog")
 	}
 	names := []string{
-		collectionPrimaryRootName("users"),
-		collectionIndexStateRootName("users"),
-		collectionSecondaryRootName("users", "email"),
-		collectionSecondaryRootName("users", "city"),
+		collectionPrimaryRootName(collectionName),
+		collectionIndexStateRootName(collectionName),
+		collectionSecondaryRootName(collectionName, "email"),
+		collectionSecondaryRootName(collectionName, "city"),
 	}
 	roots := make(map[string]uint64, len(names))
 	for _, name := range names {
