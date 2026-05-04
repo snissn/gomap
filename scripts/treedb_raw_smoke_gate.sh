@@ -89,9 +89,9 @@ RAW_OPS_BENCH_RE='Benchmark(Batch|WriteParallel|Stress|ReadUnderWrite|LargeVal)$
 cat >"$OUT_DIR/commands.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-GOWORK=$GOWORK_MODE go test ./TreeDB/db ./TreeDB/zipper ./TreeDB/caching -run '$RAW_TEST_RE'
-GOWORK=$GOWORK_MODE go test ./TreeDB/db -run '^$' -bench '$ROOT_APPLY_BENCH_RE' -benchmem -count=$COUNT
-GOWORK=$GOWORK_MODE go test ./TreeDB/db -run '^$' -bench '$RAW_OPS_BENCH_RE' -benchmem -count=$COUNT
+GOWORK="$GOWORK_MODE" go test ./TreeDB/db ./TreeDB/zipper ./TreeDB/caching -run '$RAW_TEST_RE'
+GOWORK="$GOWORK_MODE" go test ./TreeDB/db -run '^$' -bench '$ROOT_APPLY_BENCH_RE' -benchmem -count="$COUNT"
+GOWORK="$GOWORK_MODE" go test ./TreeDB/db -run '^$' -bench '$RAW_OPS_BENCH_RE' -benchmem -count="$COUNT"
 EOF
 chmod +x "$OUT_DIR/commands.sh"
 
@@ -99,16 +99,16 @@ GOWORK="$GOWORK_MODE" go version | tee "$OUT_DIR/go_version.txt"
 
 echo "running raw TreeDB tests"
 GOWORK="$GOWORK_MODE" go test ./TreeDB/db ./TreeDB/zipper ./TreeDB/caching \
-  -run "$RAW_TEST_RE" | tee "$OUT_DIR/raw_tests.log"
+  -run "$RAW_TEST_RE" 2>&1 | tee "$OUT_DIR/raw_tests.log"
 
 echo "running raw root-apply benchmarks"
 GOWORK="$GOWORK_MODE" go test ./TreeDB/db -run '^$' \
   -bench "$ROOT_APPLY_BENCH_RE" \
-  -benchmem -count="$COUNT" | tee "$OUT_DIR/raw_db_root_apply.bench"
+  -benchmem -count="$COUNT" 2>&1 | tee "$OUT_DIR/raw_db_root_apply.bench"
 
 echo "running raw DB operation benchmarks"
 GOWORK="$GOWORK_MODE" go test ./TreeDB/db -run '^$' \
   -bench "$RAW_OPS_BENCH_RE" \
-  -benchmem -count="$COUNT" | tee "$OUT_DIR/raw_db_ops.bench"
+  -benchmem -count="$COUNT" 2>&1 | tee "$OUT_DIR/raw_db_ops.bench"
 
 echo "raw TreeDB smoke artifacts: $OUT_DIR"

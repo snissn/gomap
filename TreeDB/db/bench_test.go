@@ -375,15 +375,15 @@ func BenchmarkLargeVal(b *testing.B) {
 	}
 	defer d.Close()
 
-	walDir := filepath.Join(tmpDir, "value_vlog")
-	if err := os.MkdirAll(walDir, 0o755); err != nil {
+	valueLogDir := filepath.Join(tmpDir, "value_vlog")
+	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
 		b.Fatalf("mkdir value log: %v", err)
 	}
 	fileID, err := valuelog.EncodeFileID(0, 1)
 	if err != nil {
 		b.Fatalf("encode value-log file id: %v", err)
 	}
-	valueLogPath := filepath.Join(walDir, "value-l0-000001.log")
+	valueLogPath := filepath.Join(valueLogDir, "value-l0-000001.log")
 	valueWriter, err := valuelog.NewWriter(valueLogPath, fileID)
 	if err != nil {
 		b.Fatalf("new value-log writer: %v", err)
@@ -398,7 +398,7 @@ func BenchmarkLargeVal(b *testing.B) {
 
 	var (
 		valueLogMu sync.Mutex
-		nextRID    atomic.Uint64
+		nextRID    uint64
 	)
 	valSize := 4096 // 4KB
 	valBuf := make([]byte, valSize)
@@ -416,10 +416,8 @@ func BenchmarkLargeVal(b *testing.B) {
 			key := keys[r.Intn(len(keys))]
 
 			valueLogMu.Lock()
-			ptr, err := valueWriter.Append(0, nil, nextRID.Add(1), valBuf)
-			if err == nil {
-				err = valueWriter.Flush()
-			}
+			nextRID++
+			ptr, err := valueWriter.Append(0, nil, nextRID, valBuf)
 			valueLogMu.Unlock()
 			if err != nil {
 				b.Errorf("value-log append failed: %v", err)
