@@ -332,7 +332,7 @@ func TestPrimaryFormatNormalizesConfiguredFormats(t *testing.T) {
 	}
 
 	canon.Config.Formats = []string{" JSON ", "bson", "JSON"}
-	wantNames := []string{"treedb_json_collection_2_indexes", "treedb_bson_collection_2_indexes"}
+	wantNames := []string{"treedb_json_collection_2_indexes", "treedb_bson_collection_2_indexes", "treedb_template_v1_collection_2_indexes"}
 	if got := compactedTreeDBConfigNames(canon); strings.Join(got, ",") != strings.Join(wantNames, ",") {
 		t.Fatalf("compactedTreeDBConfigNames = %v, want %v", got, wantNames)
 	}

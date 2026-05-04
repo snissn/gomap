@@ -174,6 +174,21 @@ func TestRenderCollectionsWithOnlyComparisons(t *testing.T) {
 	}
 }
 
+func TestCollectionChartsIncludeAdditionalFormats(t *testing.T) {
+	html := renderHTML(reportData{
+		Config: config{Title: "extra formats", RunRoot: t.TempDir()},
+		Collections: []collectionRow{
+			{ConfigName: "treedb_msgpack_collection_0_indexes", Engine: "treedb_fast", Format: "msgpack", Shape: "collection", IndexCount: 0, Phase: "post_insert", DocsPerSec: 1234},
+			{ConfigName: "treedb_msgpack_collection_0_indexes", Engine: "treedb_fast", Format: "msgpack", Shape: "collection", IndexCount: 0, Phase: "full_leafgen_pack_gc", BytesPerDoc: 12.3},
+		},
+	})
+	for _, want := range []string{"TreeDB Msgpack", "TreeDB Msgpack Leafgen"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("collection chart missing additional format label %q\n%s", want, html)
+		}
+	}
+}
+
 func TestRawEngineChartOmitsMissingVariants(t *testing.T) {
 	html := renderHTML(reportData{
 		Config: config{Title: "partial raw", RunRoot: t.TempDir()},

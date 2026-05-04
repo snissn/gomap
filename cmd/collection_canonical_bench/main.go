@@ -1537,17 +1537,32 @@ func compactedTreeDBConfigNames(canon *canonicalRun) []string {
 	}
 	seen := make(map[string]bool)
 	var out []string
-	for _, format := range canon.Config.Formats {
-		format = canonicalFormat(format)
-		name := canonicalConfigName("treedb", format, "collection", canonicalIndexCount(canon))
-		if seen[name] {
-			continue
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			return
 		}
 		seen[name] = true
 		out = append(out, name)
 	}
+	for _, format := range canon.Config.Formats {
+		format = canonicalFormat(format)
+		add(canonicalConfigName("treedb", format, "collection", canonicalIndexCount(canon)))
+	}
+	for _, row := range canon.Results {
+		if row.Shape != "collection" || !strings.HasPrefix(row.ConfigName, "treedb_") {
+			continue
+		}
+		if row.IndexCount != canonicalIndexCount(canon) {
+			continue
+		}
+		if row.Phase != phaseOfflineRewrite && row.Phase != phaseFullLeafgenPackGC {
+			continue
+		}
+		add(row.ConfigName)
+	}
 	if len(out) == 0 {
-		out = append(out, compactedTreeDBConfigName(canon))
+		add(compactedTreeDBConfigName(canon))
 	}
 	return out
 }

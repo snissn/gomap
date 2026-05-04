@@ -1026,11 +1026,11 @@ func renderCollections(b *strings.Builder, rows []collectionRow, comps []collect
 		b.WriteString("<div class=\"chart-grid\">")
 		docsRows := collectionDocsRows(rows)
 		if len(docsRows.Categories) > 0 {
-			b.WriteString(compactVerticalBarChart("Post-insert throughput by index count", docsRows.Categories, "index count", collectionSeries(docsRows, "docs"), "docs/sec"))
+			b.WriteString(compactVerticalBarChart("Post-insert throughput by index count", docsRows.Categories, "index count", docsRows.Series, "docs/sec"))
 		}
 		diskRows := collectionDiskRows(rows)
 		if len(diskRows.Categories) > 0 {
-			b.WriteString(compactVerticalBarChart("Compacted bytes/doc by index count", diskRows.Categories, "index count", collectionSeries(diskRows, "bytes"), "B/doc"))
+			b.WriteString(compactVerticalBarChart("Compacted bytes/doc by index count", diskRows.Categories, "index count", diskRows.Series, "B/doc"))
 		}
 		b.WriteString("</div>")
 		b.WriteString("<details><summary>Collection highlight rows</summary>")
@@ -1058,62 +1058,182 @@ func renderCollections(b *strings.Builder, rows []collectionRow, comps []collect
 	b.WriteString("</section>\n")
 }
 
-type collectionDiskHighlight struct {
-	Categories       []string
-	TreeDBTemplateV1 []float64
-	TreeDBBSON       []float64
-	TreeDBJSON       []float64
-	SQLiteNative     []float64
-	SQLiteJSON       []float64
+type collectionChartRows struct {
+	Categories []string
+	Series     []chartSeries
 }
 
-func collectionDocsRows(rows []collectionRow) collectionDiskHighlight {
-	var out collectionDiskHighlight
-	for _, idx := range sortedCollectionIndexes(rows) {
-		out.Categories = append(out.Categories, indexCountLabel(idx))
-		out.TreeDBTemplateV1 = append(out.TreeDBTemplateV1, collectionValue(rows, idx, fmt.Sprintf("treedb_template_v1_collection_%d_indexes", idx), "post_insert", "docs"))
-		out.TreeDBBSON = append(out.TreeDBBSON, collectionValue(rows, idx, fmt.Sprintf("treedb_bson_collection_%d_indexes", idx), "post_insert", "docs"))
-		out.TreeDBJSON = append(out.TreeDBJSON, collectionValue(rows, idx, fmt.Sprintf("treedb_json_collection_%d_indexes", idx), "post_insert", "docs"))
-		out.SQLiteNative = append(out.SQLiteNative, collectionValue(rows, idx, fmt.Sprintf("sqlite_native_columns_%d_indexes", idx), "post_insert", "docs"))
-		out.SQLiteJSON = append(out.SQLiteJSON, collectionValue(rows, idx, fmt.Sprintf("sqlite_json_%d_indexes", idx), "post_insert", "docs"))
+func collectionDocsRows(rows []collectionRow) collectionChartRows {
+	return collectionChart(rows, "docs")
+}
+
+func collectionDiskRows(rows []collectionRow) collectionChartRows {
+	return collectionChart(rows, "bytes")
+}
+
+func collectionChart(rows []collectionRow, kind string) collectionChartRows {
+	indexes := sortedCollectionIndexes(rows)
+	categories := make([]string, 0, len(indexes))
+	indexPos := make(map[int]int, len(indexes))
+	for pos, idx := range indexes {
+		categories = append(categories, indexCountLabel(idx))
+		indexPos[idx] = pos
 	}
-	return out
-}
-
-func collectionDiskRows(rows []collectionRow) collectionDiskHighlight {
-	var out collectionDiskHighlight
-	for _, idx := range sortedCollectionIndexes(rows) {
-		out.Categories = append(out.Categories, indexCountLabel(idx))
-		out.TreeDBTemplateV1 = append(out.TreeDBTemplateV1, collectionValue(rows, idx, fmt.Sprintf("treedb_template_v1_collection_%d_indexes", idx), "full_leafgen_pack_gc", "bytes"))
-		out.TreeDBBSON = append(out.TreeDBBSON, collectionValue(rows, idx, fmt.Sprintf("treedb_bson_collection_%d_indexes", idx), "full_leafgen_pack_gc", "bytes"))
-		out.TreeDBJSON = append(out.TreeDBJSON, collectionValue(rows, idx, fmt.Sprintf("treedb_json_collection_%d_indexes", idx), "full_leafgen_pack_gc", "bytes"))
-		out.SQLiteNative = append(out.SQLiteNative, collectionValue(rows, idx, fmt.Sprintf("sqlite_native_columns_%d_indexes", idx), "sqlite_vacuum", "bytes"))
-		out.SQLiteJSON = append(out.SQLiteJSON, collectionValue(rows, idx, fmt.Sprintf("sqlite_json_%d_indexes", idx), "sqlite_vacuum", "bytes"))
+	values := make(map[string][]float64)
+	labels := make(map[string]string)
+	orders := make(map[string]string)
+	for _, row := range rows {
+		if row.Shape != "collection" {
+			continue
+		}
+		family := collectionEngineFamily(row)
+		if family == "" {
+			continue
+		}
+		phase, ok := collectionChartPhase(family, kind)
+		if !ok || row.Phase != phase {
+			continue
+		}
+		pos, ok := indexPos[row.IndexCount]
+		if !ok {
+			continue
+		}
+		key := family + "\x00" + canonicalFormat(row.Format)
+		if _, ok := values[key]; !ok {
+			values[key] = make([]float64, len(indexes))
+			labels[key] = collectionSeriesLabel(family, row.Format, kind)
+			orders[key] = collectionSeriesOrder(family, row.Format)
+		}
+		if kind == "bytes" {
+			values[key][pos] = row.BytesPerDoc
+		} else {
+			values[key][pos] = row.DocsPerSec
+		}
 	}
-	return out
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if orders[keys[i]] != orders[keys[j]] {
+			return orders[keys[i]] < orders[keys[j]]
+		}
+		return labels[keys[i]] < labels[keys[j]]
+	})
+	var series []chartSeries
+	for _, key := range keys {
+		series = append(series, chartSeries{Name: labels[key], Values: values[key], Color: collectionSeriesColor(key)})
+	}
+	return collectionChartRows{Categories: categories, Series: nonZeroSeries(series)}
 }
 
-func collectionSeries(rows collectionDiskHighlight, kind string) []chartSeries {
-	treeTemplateLabel := "TreeDB template-v1"
-	treeBSONLabel := "TreeDB BSON"
-	treeJSONLabel := "TreeDB JSON"
-	sqliteNativeLabel := "SQLite native"
-	sqliteJSONLabel := "SQLite JSON"
+func collectionEngineFamily(row collectionRow) string {
+	engine := strings.ToLower(row.Engine)
+	config := strings.ToLower(row.ConfigName)
+	switch {
+	case strings.HasPrefix(config, "treedb_") || strings.HasPrefix(engine, "treedb"):
+		return "TreeDB"
+	case strings.HasPrefix(config, "sqlite_") || strings.HasPrefix(engine, "sqlite"):
+		return "SQLite"
+	default:
+		return ""
+	}
+}
+
+func collectionChartPhase(family, kind string) (string, bool) {
+	if kind == "docs" {
+		return "post_insert", true
+	}
+	if kind != "bytes" {
+		return "", false
+	}
+	if family == "TreeDB" {
+		return "full_leafgen_pack_gc", true
+	}
+	if family == "SQLite" {
+		return "sqlite_vacuum", true
+	}
+	return "", false
+}
+
+func collectionSeriesLabel(family, format, kind string) string {
+	label := family + " " + displayFormat(format)
 	if kind == "bytes" {
-		treeTemplateLabel += " leafgen"
-		treeBSONLabel += " leafgen"
-		treeJSONLabel += " leafgen"
-		sqliteNativeLabel += " VACUUM"
-		sqliteJSONLabel += " VACUUM"
+		if family == "TreeDB" {
+			label += " leafgen"
+		} else if family == "SQLite" {
+			label += " VACUUM"
+		}
 	}
-	series := []chartSeries{
-		{Name: treeTemplateLabel, Values: rows.TreeDBTemplateV1, Color: "#2867c7"},
-		{Name: treeBSONLabel, Values: rows.TreeDBBSON, Color: "#6b7fd7"},
-		{Name: treeJSONLabel, Values: rows.TreeDBJSON, Color: "#bd6a21"},
-		{Name: sqliteNativeLabel, Values: rows.SQLiteNative, Color: "#1f8a5b"},
-		{Name: sqliteJSONLabel, Values: rows.SQLiteJSON, Color: "#b94242"},
+	return label
+}
+
+func displayFormat(format string) string {
+	switch canonicalFormat(format) {
+	case "bson":
+		return "BSON"
+	case "json":
+		return "JSON"
+	case "native-columns":
+		return "native"
+	case "template-v1":
+		return "template-v1"
+	case "":
+		return "unknown"
+	default:
+		return chartLabel(strings.ReplaceAll(canonicalFormat(format), "-", " "))
 	}
-	return nonZeroSeries(series)
+}
+
+func canonicalFormat(format string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(format), "_", "-"))
+}
+
+func collectionSeriesOrder(family, format string) string {
+	familyOrder := "2"
+	if family == "TreeDB" {
+		familyOrder = "0"
+	} else if family == "SQLite" {
+		familyOrder = "1"
+	}
+	formatOrder := map[string]string{
+		"template-v1":    "00",
+		"bson":           "01",
+		"json":           "02",
+		"native-columns": "03",
+		"native":         "03",
+		"extended-json":  "04",
+		"canonical-json": "05",
+	}
+	order, ok := formatOrder[canonicalFormat(format)]
+	if !ok {
+		order = "99_" + canonicalFormat(format)
+	}
+	return familyOrder + "_" + order
+}
+
+func collectionSeriesColor(key string) string {
+	parts := strings.SplitN(key, "\x00", 2)
+	if len(parts) == 2 {
+		switch parts[0] + "\x00" + parts[1] {
+		case "TreeDB\x00template-v1":
+			return "#2867c7"
+		case "TreeDB\x00bson":
+			return "#6b7fd7"
+		case "TreeDB\x00json":
+			return "#bd6a21"
+		case "SQLite\x00native-columns":
+			return "#1f8a5b"
+		case "SQLite\x00json":
+			return "#b94242"
+		}
+	}
+	palette := []string{"#2867c7", "#6b7fd7", "#bd6a21", "#1f8a5b", "#b94242", "#7c5a2f", "#6c6f7d", "#8a4f9e"}
+	sum := 0
+	for _, r := range key {
+		sum += int(r)
+	}
+	return palette[sum%len(palette)]
 }
 
 func nonZeroSeries(series []chartSeries) []chartSeries {
