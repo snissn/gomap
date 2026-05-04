@@ -46,6 +46,63 @@ func TestCollectionIndexedFlushGuardCounters(t *testing.T) {
 		}
 	})
 
+	t.Run("publish_error_lost_ownership", func(t *testing.T) {
+		d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		defer func() { _ = d.Close() }()
+		mgr, col := collectionTestIndexedFlushCounterCollection(t, d)
+		if _, err := col.InsertBatch(
+			[][]byte{[]byte("u1")},
+			[][]byte{[]byte(`{"email":"ada@example.com"}`)},
+		); err != nil {
+			t.Fatalf("insert buffered batch: %v", err)
+		}
+		work, err := col.prepareIndexedAsyncPublish()
+		if err != nil {
+			t.Fatalf("prepare async publish: %v", err)
+		}
+		if work == nil {
+			t.Fatal("prepare async publish returned nil work")
+		}
+		defer collectionTestCloseIndexedFlushWork(work)
+
+		col.writeDomain.mu.Lock()
+		currentPublishing := indexedFlushUnit{}
+		col.writeDomain.indexedPublishingUnits = []indexedFlushUnit{currentPublishing}
+		col.writeDomain.mu.Unlock()
+
+		injectedErr := errors.New("injected publish failure")
+		err = col.completePreparedIndexedFlush(work, 0, nil, injectedErr, 0, 0, 0)
+		if !errors.Is(err, errIndexedFlushLostOwnership) {
+			t.Fatalf("complete failure err=%v want lost ownership", err)
+		}
+		if !errors.Is(err, injectedErr) {
+			t.Fatalf("complete failure err=%v want injected error", err)
+		}
+		col.writeDomain.mu.RLock()
+		publishingUnits := append([]indexedFlushUnit(nil), col.writeDomain.indexedPublishingUnits...)
+		queuedUnits := len(col.writeDomain.indexedFlushUnits)
+		col.writeDomain.mu.RUnlock()
+		if len(publishingUnits) != 1 || !sameIndexedFlushUnitTables(publishingUnits[0], currentPublishing) {
+			t.Fatalf("publishing units after lost ownership publish error=%+v want current unit retained", publishingUnits)
+		}
+		if queuedUnits != 0 {
+			t.Fatalf("queued units after lost ownership publish error=%d want 0", queuedUnits)
+		}
+		stats := mgr.StatsSnapshot()
+		if got := stats.IndexedFlushLostOwnership; got != 1 {
+			t.Fatalf("indexed flush lost ownership=%d want 1", got)
+		}
+		if got := stats.IndexedFlushRequeues; got != 0 {
+			t.Fatalf("indexed flush requeues=%d want 0", got)
+		}
+		if got := mgr.Stats()["treedb.collections.write_domain.indexed_flush.lost_ownership_total"]; got != "1" {
+			t.Fatalf("lost ownership stat=%q want 1", got)
+		}
+	})
+
 	t.Run("lost_ownership", func(t *testing.T) {
 		d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 		if err != nil {
