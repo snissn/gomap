@@ -1229,6 +1229,79 @@ func TestMissingTreeDBDiskSnapshotRendersNA(t *testing.T) {
 	}
 }
 
+func TestRenderWriterSweepCounterTableUsesPhaseMetrics(t *testing.T) {
+	treePhase := phaseResult{
+		Name:         "concurrent_id_update_set_w8",
+		Operations:   800,
+		DriverCalls:  800,
+		OpsPerSecond: 1200,
+		LatencyMicros: latencySummary{
+			P95: 750,
+		},
+		TreeDBStatsDelta: map[string]string{
+			"treedb.publish.ordered_root_delta_group.calls_total": "400",
+		},
+		TreeDBMetrics: map[string]float64{
+			"publish_delta_group_calls/doc":         0.5,
+			"root_apply_calls/doc":                  0.5,
+			"roots/publish":                         1,
+			"publish_delta_group_root_apply_ns/doc": 2500,
+			"leaf_log_node_loads/doc":               2,
+			"leaf_log_pages_written/doc":            0.25,
+			"leaf_log_read_bytes/doc":               64,
+			"leaf_log_write_bytes/doc":              128,
+			"indexed_flush_calls/doc":               0.125,
+			"indexed_flush_units/batch":             4,
+			"indexed_flush_docs/batch":              32,
+			"indexed_flush_root_runs/doc":           0.75,
+			"root_delta_plan_entries/doc":           1,
+			"root_delta_plan_key_bytes/doc":         10,
+			"root_delta_plan_value_bytes/doc":       20,
+			"root_delta_plan_tombstones/doc":        0.1,
+			"affected_primary_roots/doc":            0.5,
+			"affected_secondary_roots/doc":          0.25,
+			"primary_root_publishes/doc":            0.5,
+			"primary_root_delta_entries/doc":        1,
+			"primary_root_delta_bytes/doc":          42,
+			"primary_only_coalesced_docs/publish":   2,
+		},
+	}
+	mongoPhase := phaseResult{
+		Name:         "concurrent_id_update_set_w8",
+		DriverCalls:  800,
+		OpsPerSecond: 2400,
+		LatencyMicros: latencySummary{
+			P95: 500,
+		},
+	}
+	cells := []cellComparison{{
+		Key: cellKey{Documents: 1000, SecondaryIndexes: 0, TreeDBConfig: "treedb_0idx"},
+		TreeDB: &runRecord{
+			Row:            matrixRow{RawJSON: "/tmp/treedb.json"},
+			DisplayRawPath: "/tmp/treedb.json",
+			Result:         benchmarkResult{Phases: []phaseResult{treePhase}},
+			PhaseMap:       map[string]phaseResult{treePhase.Name: treePhase},
+		},
+		Mongo: &runRecord{
+			Row:      matrixRow{Config: "mongo_baseline"},
+			Result:   benchmarkResult{Phases: []phaseResult{mongoPhase}},
+			PhaseMap: map[string]phaseResult{mongoPhase.Name: mongoPhase},
+		},
+	}}
+	var out strings.Builder
+	renderWriterSweepCounterTable(&out, cells)
+	rendered := out.String()
+	for _, want := range []string{
+		"## 0-Index Writer Sweep Counters",
+		"publish calls/doc",
+		"| 1000 | 0 | `treedb_0idx` | `mongo_baseline` | 8 | 1200 | 2400 | 750 | 500 | 800 | 800 | 0.50 | 0.50 | 1.00 | 2500 | 2.00 | 0.25 | 64.0 | 128 | 0.12 | 4.00 | 32.0 | 0.75 | 1.00 | 10.0 | 20.0 | 0.10 | 0.50 | 0.25 | 0.50 | 1.00 | 42.0 | 2.00 | `/tmp/treedb.json` |",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("writer sweep table missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {

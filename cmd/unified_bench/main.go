@@ -31,6 +31,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/cmd/internal/treedbstats"
 	"github.com/snissn/gomap/internal/benchprof"
 	"github.com/snissn/gomap/kvstore"
 	treedbadapter "github.com/snissn/gomap/kvstore/adapters/treedb"
@@ -252,6 +253,7 @@ type benchprofExportRun struct {
 	ExecutionPath string                                  `json:"execution_path,omitempty"`
 	Results       map[string]map[string]float64           `json:"results,omitempty"`
 	TreeDBPerf    map[string]map[string]treeDBPerfMetrics `json:"treedb_perf,omitempty"`
+	TreeDBStats   map[string]map[string]string            `json:"treedb_stats,omitempty"`
 }
 
 type scanDiag struct {
@@ -1072,6 +1074,7 @@ func writeBenchprofArtifacts(dir, executionPath string, runs []BenchRun) error {
 			ExecutionPath: executionPath,
 			Results:       run.Results,
 			TreeDBPerf:    run.TreeDBPerf,
+			TreeDBStats:   selectedBenchprofTreeDBStats(run.TreeDBStats),
 		})
 	}
 
@@ -1096,6 +1099,24 @@ func writeBenchprofArtifacts(dir, executionPath string, runs []BenchRun) error {
 		return fmt.Errorf("write benchprof_results.md: %w", err)
 	}
 	return nil
+}
+
+func selectedBenchprofTreeDBStats(stats map[string]map[string]string) map[string]map[string]string {
+	if len(stats) == 0 {
+		return nil
+	}
+	out := make(map[string]map[string]string)
+	for dbName, dbStats := range stats {
+		selected := treedbstats.Selected(dbStats)
+		if len(selected) == 0 {
+			continue
+		}
+		out[dbName] = selected
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func validateBenchprofExecutionPath(executionPath string) error {
@@ -4809,6 +4830,19 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 		{label: "vlog_mmap.read.hit_ratio", alts: []string{"treedb.cache.vlog_mmap.read.hit_ratio", "treedb.vlog.mmap_read.hit_ratio"}},
 		{label: "leaf_generation.generations.pinned", alts: []string{"treedb.leaf_generation.generations.pinned"}},
 		{label: "leaf_generation.pins.total", alts: []string{"treedb.leaf_generation.pins.total"}},
+		{label: "publish.ordered_root_delta_group.calls_total", alts: []string{"treedb.publish.ordered_root_delta_group.calls_total"}},
+		{label: "publish.ordered_root_delta_group.roots_total", alts: []string{"treedb.publish.ordered_root_delta_group.roots_total"}},
+		{label: "publish.ordered_root_delta_group.avg_roots_per_call", alts: []string{"treedb.publish.ordered_root_delta_group.avg_roots_per_call"}},
+		{label: "publish.ordered_root_delta_group.root_apply_calls_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_calls_total"}},
+		{label: "publish.ordered_root_delta_group.root_apply_ns_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_ns_total"}},
+		{label: "publish.ordered_root_delta_group.root_apply_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_ops_total"}},
+		{label: "publish.ordered_root_delta_group.root_apply_node_loads_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_node_loads_total"}},
+		{label: "publish.ordered_root_delta_group.root_apply_leaf_log_node_loads_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_loads_total"}},
+		{label: "publish.ordered_root_delta_group.root_apply_leaf_log_pages_written_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_pages_written_total"}},
+		{label: "publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total"}},
+		{label: "publish.ordered_root_delta_group.root_apply_leaf_log_page_bytes_written_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_page_bytes_written_total"}},
+		{label: "publish.ordered_root_delta_group.write_lock_wait_ns_total", alts: []string{"treedb.publish.ordered_root_delta_group.write_lock_wait_ns_total"}},
+		{label: "publish.ordered_root_delta_group.write_lock_hold_ns_total", alts: []string{"treedb.publish.ordered_root_delta_group.write_lock_hold_ns_total"}},
 	}
 	var sb strings.Builder
 	for _, inst := range instances {

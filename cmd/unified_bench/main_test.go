@@ -1204,10 +1204,15 @@ func TestRenderMarkdownSingle_IncludesTreeDBPerfSections(t *testing.T) {
 		},
 		TreeDBStats: map[string]map[string]string{
 			"TreeDB": {
-				"treedb.cache.vlog_mmap.read.hits":          "7",
-				"treedb.cache.vlog_mmap.read.hit_ratio":     "0.700000",
-				"treedb.leaf_generation.generations.pinned": "1",
-				"treedb.leaf_generation.pins.total":         "4",
+				"treedb.cache.vlog_mmap.read.hits":                                                     "7",
+				"treedb.cache.vlog_mmap.read.hit_ratio":                                                "0.700000",
+				"treedb.leaf_generation.generations.pinned":                                            "1",
+				"treedb.leaf_generation.pins.total":                                                    "4",
+				"treedb.publish.ordered_root_delta_group.calls_total":                                  "9",
+				"treedb.publish.ordered_root_delta_group.root_apply_calls_total":                       "11",
+				"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total":    "2048",
+				"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_page_bytes_written_total": "4096",
+				"treedb.publish.ordered_root_delta_group.write_lock_hold_ns_total":                     "12345",
 			},
 		},
 	}
@@ -1227,6 +1232,17 @@ func TestRenderMarkdownSingle_IncludesTreeDBPerfSections(t *testing.T) {
 	}
 	if !strings.Contains(md, "leaf_generation.pins.total: 4") {
 		t.Fatalf("expected selected stats in markdown, got:\n%s", md)
+	}
+	for _, want := range []string{
+		"publish.ordered_root_delta_group.calls_total: 9",
+		"publish.ordered_root_delta_group.root_apply_calls_total: 11",
+		"publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total: 2048",
+		"publish.ordered_root_delta_group.root_apply_leaf_log_page_bytes_written_total: 4096",
+		"publish.ordered_root_delta_group.write_lock_hold_ns_total: 12345",
+	} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("expected selected ordered-root stat %q in markdown, got:\n%s", want, md)
+		}
 	}
 }
 
@@ -1400,7 +1416,9 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 			},
 			TreeDBStats: map[string]map[string]string{
 				"TreeDB": {
-					"treedb.cache.vlog_mmap.read.hits": "10",
+					"treedb.cache.vlog_mmap.read.hits":                               "10",
+					"treedb.publish.ordered_root_delta_group.root_apply_calls_total": "4",
+					"treedb.unselected":                                              "drop",
 				},
 			},
 		},
@@ -1446,6 +1464,12 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	if got := parsed.Runs[0].TreeDBPerf["full_scan"]["TreeDB"].Mmap.Hits; got != 10 {
 		t.Fatalf("unexpected TreeDB perf mmap hits: %v", got)
 	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.publish.ordered_root_delta_group.root_apply_calls_total"]; got != "4" {
+		t.Fatalf("unexpected TreeDB selected stat root_apply_calls_total=%q", got)
+	}
+	if _, ok := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.unselected"]; ok {
+		t.Fatalf("unselected TreeDB stat was exported: %#v", parsed.Runs[0].TreeDBStats["TreeDB"])
+	}
 	var raw map[string]any
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatalf("unmarshal raw json: %v", err)
@@ -1458,8 +1482,8 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected raw run object, got %#v", runsValue[0])
 	}
-	if _, ok := runValue["treedb_stats"]; ok {
-		t.Fatalf("expected treedb_stats to be omitted from benchprof json, got: %#v", runValue["treedb_stats"])
+	if _, ok := runValue["treedb_stats"]; !ok {
+		t.Fatalf("expected treedb_stats in benchprof json, got: %#v", runValue)
 	}
 }
 

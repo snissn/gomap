@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/cespare/xxhash/v2"
+	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -406,6 +407,10 @@ type CollectionManagerStats struct {
 	PendingBytes                   int64
 	PendingRootRuns                int
 	PendingIndexedFlushUnits       int
+	OverlayMutableDocuments        int
+	OverlayQueuedIndexedFlushUnits int
+	OverlayActiveIndexedFlushUnits int
+	OverlayVisibleDepth            int
 	IndexedAsyncFlushRunning       int
 	MutationLockCalls              uint64
 	MutationLockWait               time.Duration
@@ -417,9 +422,12 @@ type CollectionManagerStats struct {
 	IndexedAutoFlushes             uint64
 	IndexedAsyncFlushScheduled     uint64
 	IndexedAsyncFlushBackpressure  uint64
+	IndexedAsyncFlushWait          time.Duration
 	IndexedAsyncFlushErrors        uint64
 	IndexedFlushCalls              uint64
 	IndexedFlushErrors             uint64
+	IndexedFlushForcedDrains       uint64
+	IndexedFlushUnits              uint64
 	IndexedFlushRequeues           uint64
 	IndexedFlushRequeuedUnits      uint64
 	IndexedFlushLostOwnership      uint64
@@ -431,6 +439,23 @@ type CollectionManagerStats struct {
 	IndexedFlushDuration           time.Duration
 	IndexedFlushMaterialize        time.Duration
 	IndexedFlushPublish            time.Duration
+	RootDeltaPlanPrimaryRoots      uint64
+	RootDeltaPlanTemplateRoots     uint64
+	RootDeltaPlanIndexStateRoots   uint64
+	RootDeltaPlanSecondaryRoots    uint64
+	RootDeltaPlanEntries           uint64
+	RootDeltaPlanKeyBytes          uint64
+	RootDeltaPlanValueBytes        uint64
+	RootDeltaPlanTombstones        uint64
+	PrimaryOnlyUpdateCalls         uint64
+	PrimaryOnlyMatched             uint64
+	PrimaryOnlyModified            uint64
+	PrimaryOnlyBufferedCalls       uint64
+	PrimaryOnlyRootPublishes       uint64
+	PrimaryOnlyRootDeltaEntries    uint64
+	PrimaryOnlyRootDeltaKeyBytes   uint64
+	PrimaryOnlyRootDeltaValueBytes uint64
+	PrimaryOnlyCoalescedDocs       uint64
 	UpdateCombineRequests          uint64
 	UpdateCombineBatches           uint64
 	UpdateCombineBatchedRequests   uint64
@@ -649,6 +674,7 @@ type indexedFlushPublishWork struct {
 	byteCount          int64
 	rootRunCount       int
 	rootCount          int
+	rootDeltaStats     collectionRootDeltaPlanStats
 }
 
 type bufferedIndexedCheckpoint struct {
@@ -746,9 +772,12 @@ type collectionWriteDomain struct {
 	indexedAutoFlushes               atomic.Uint64
 	indexedAsyncFlushScheduled       atomic.Uint64
 	indexedAsyncFlushBackpressure    atomic.Uint64
+	indexedAsyncFlushWaitTotalNs     atomic.Uint64
 	indexedAsyncFlushErrors          atomic.Uint64
 	indexedFlushCalls                atomic.Uint64
 	indexedFlushErrors               atomic.Uint64
+	indexedFlushForcedDrains         atomic.Uint64
+	indexedFlushUnitsTotal           atomic.Uint64
 	indexedFlushRequeues             atomic.Uint64
 	indexedFlushRequeuedUnits        atomic.Uint64
 	indexedFlushLostOwnership        atomic.Uint64
@@ -760,6 +789,23 @@ type collectionWriteDomain struct {
 	indexedFlushDurationTotalNs      atomic.Uint64
 	indexedFlushMaterializeTotalNs   atomic.Uint64
 	indexedFlushPublishTotalNs       atomic.Uint64
+	rootDeltaPlanPrimaryRoots        atomic.Uint64
+	rootDeltaPlanTemplateRoots       atomic.Uint64
+	rootDeltaPlanIndexStateRoots     atomic.Uint64
+	rootDeltaPlanSecondaryRoots      atomic.Uint64
+	rootDeltaPlanEntries             atomic.Uint64
+	rootDeltaPlanKeyBytes            atomic.Uint64
+	rootDeltaPlanValueBytes          atomic.Uint64
+	rootDeltaPlanTombstones          atomic.Uint64
+	primaryOnlyUpdateCalls           atomic.Uint64
+	primaryOnlyMatched               atomic.Uint64
+	primaryOnlyModified              atomic.Uint64
+	primaryOnlyBufferedCalls         atomic.Uint64
+	primaryOnlyRootPublishes         atomic.Uint64
+	primaryOnlyRootDeltaEntries      atomic.Uint64
+	primaryOnlyRootDeltaKeyBytes     atomic.Uint64
+	primaryOnlyRootDeltaValueBytes   atomic.Uint64
+	primaryOnlyCoalescedDocs         atomic.Uint64
 	updateCombineRequests            atomic.Uint64
 	updateCombineBatches             atomic.Uint64
 	updateCombineBatchedRequests     atomic.Uint64
@@ -958,6 +1004,10 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.pending_bytes"] = fmt.Sprintf("%d", stats.PendingBytes)
 	out["treedb.collections.write_domain.pending_root_runs"] = fmt.Sprintf("%d", stats.PendingRootRuns)
 	out["treedb.collections.write_domain.pending_indexed_flush_units"] = fmt.Sprintf("%d", stats.PendingIndexedFlushUnits)
+	out["treedb.collections.write_domain.overlay.mutable_docs"] = fmt.Sprintf("%d", stats.OverlayMutableDocuments)
+	out["treedb.collections.write_domain.overlay.queued_indexed_flush_units"] = fmt.Sprintf("%d", stats.OverlayQueuedIndexedFlushUnits)
+	out["treedb.collections.write_domain.overlay.active_indexed_flush_units"] = fmt.Sprintf("%d", stats.OverlayActiveIndexedFlushUnits)
+	out["treedb.collections.write_domain.overlay.visible_depth"] = fmt.Sprintf("%d", stats.OverlayVisibleDepth)
 	out["treedb.collections.write_domain.indexed_async_flush.running_domains"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushRunning)
 	out["treedb.collections.write_domain.mutation_lock.calls_total"] = fmt.Sprintf("%d", stats.MutationLockCalls)
 	out["treedb.collections.write_domain.mutation_lock.wait_ns_total"] = fmt.Sprintf("%d", stats.MutationLockWait.Nanoseconds())
@@ -972,9 +1022,12 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.indexed_stage.auto_flushes_total"] = fmt.Sprintf("%d", stats.IndexedAutoFlushes)
 	out["treedb.collections.write_domain.indexed_async_flush.scheduled_total"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushScheduled)
 	out["treedb.collections.write_domain.indexed_async_flush.backpressure_sync_total"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushBackpressure)
+	out["treedb.collections.write_domain.indexed_async_flush.wait_ns_total"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushWait.Nanoseconds())
 	out["treedb.collections.write_domain.indexed_async_flush.errors_total"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushErrors)
 	out["treedb.collections.write_domain.indexed_flush.calls_total"] = fmt.Sprintf("%d", stats.IndexedFlushCalls)
 	out["treedb.collections.write_domain.indexed_flush.errors_total"] = fmt.Sprintf("%d", stats.IndexedFlushErrors)
+	out["treedb.collections.write_domain.indexed_flush.forced_drains_total"] = fmt.Sprintf("%d", stats.IndexedFlushForcedDrains)
+	out["treedb.collections.write_domain.indexed_flush.units_total"] = fmt.Sprintf("%d", stats.IndexedFlushUnits)
 	out["treedb.collections.write_domain.indexed_flush.requeue_total"] = fmt.Sprintf("%d", stats.IndexedFlushRequeues)
 	out["treedb.collections.write_domain.indexed_flush.requeued_units_total"] = fmt.Sprintf("%d", stats.IndexedFlushRequeuedUnits)
 	out["treedb.collections.write_domain.indexed_flush.lost_ownership_total"] = fmt.Sprintf("%d", stats.IndexedFlushLostOwnership)
@@ -986,6 +1039,23 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.indexed_flush.duration_ns_total"] = fmt.Sprintf("%d", stats.IndexedFlushDuration.Nanoseconds())
 	out["treedb.collections.write_domain.indexed_flush.materialize_ns_total"] = fmt.Sprintf("%d", stats.IndexedFlushMaterialize.Nanoseconds())
 	out["treedb.collections.write_domain.indexed_flush.publish_ns_total"] = fmt.Sprintf("%d", stats.IndexedFlushPublish.Nanoseconds())
+	out["treedb.collections.write_domain.root_delta_plan.roots.primary_total"] = fmt.Sprintf("%d", stats.RootDeltaPlanPrimaryRoots)
+	out["treedb.collections.write_domain.root_delta_plan.roots.template_total"] = fmt.Sprintf("%d", stats.RootDeltaPlanTemplateRoots)
+	out["treedb.collections.write_domain.root_delta_plan.roots.index_state_total"] = fmt.Sprintf("%d", stats.RootDeltaPlanIndexStateRoots)
+	out["treedb.collections.write_domain.root_delta_plan.roots.secondary_total"] = fmt.Sprintf("%d", stats.RootDeltaPlanSecondaryRoots)
+	out["treedb.collections.write_domain.root_delta_plan.entries_total"] = fmt.Sprintf("%d", stats.RootDeltaPlanEntries)
+	out["treedb.collections.write_domain.root_delta_plan.key_bytes_total"] = fmt.Sprintf("%d", stats.RootDeltaPlanKeyBytes)
+	out["treedb.collections.write_domain.root_delta_plan.value_bytes_total"] = fmt.Sprintf("%d", stats.RootDeltaPlanValueBytes)
+	out["treedb.collections.write_domain.root_delta_plan.tombstones_total"] = fmt.Sprintf("%d", stats.RootDeltaPlanTombstones)
+	out["treedb.collections.write_domain.primary_only.update_calls_total"] = fmt.Sprintf("%d", stats.PrimaryOnlyUpdateCalls)
+	out["treedb.collections.write_domain.primary_only.matched_total"] = fmt.Sprintf("%d", stats.PrimaryOnlyMatched)
+	out["treedb.collections.write_domain.primary_only.modified_total"] = fmt.Sprintf("%d", stats.PrimaryOnlyModified)
+	out["treedb.collections.write_domain.primary_only.buffered_calls_total"] = fmt.Sprintf("%d", stats.PrimaryOnlyBufferedCalls)
+	out["treedb.collections.write_domain.primary_only.root_publishes_total"] = fmt.Sprintf("%d", stats.PrimaryOnlyRootPublishes)
+	out["treedb.collections.write_domain.primary_only.root_delta_entries_total"] = fmt.Sprintf("%d", stats.PrimaryOnlyRootDeltaEntries)
+	out["treedb.collections.write_domain.primary_only.root_delta_key_bytes_total"] = fmt.Sprintf("%d", stats.PrimaryOnlyRootDeltaKeyBytes)
+	out["treedb.collections.write_domain.primary_only.root_delta_value_bytes_total"] = fmt.Sprintf("%d", stats.PrimaryOnlyRootDeltaValueBytes)
+	out["treedb.collections.write_domain.primary_only.coalesced_docs_total"] = fmt.Sprintf("%d", stats.PrimaryOnlyCoalescedDocs)
 	out["treedb.collections.write_domain.update_combine.requests_total"] = fmt.Sprintf("%d", stats.UpdateCombineRequests)
 	out["treedb.collections.write_domain.update_combine.batches_total"] = fmt.Sprintf("%d", stats.UpdateCombineBatches)
 	out["treedb.collections.write_domain.update_combine.batched_requests_total"] = fmt.Sprintf("%d", stats.UpdateCombineBatchedRequests)
@@ -1136,6 +1206,10 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.PendingBytes = saturatingAddNonNegativeInt64(s.PendingBytes, other.PendingBytes)
 	s.PendingRootRuns = saturatingAddNonNegativeInt(s.PendingRootRuns, other.PendingRootRuns)
 	s.PendingIndexedFlushUnits = saturatingAddNonNegativeInt(s.PendingIndexedFlushUnits, other.PendingIndexedFlushUnits)
+	s.OverlayMutableDocuments = saturatingAddNonNegativeInt(s.OverlayMutableDocuments, other.OverlayMutableDocuments)
+	s.OverlayQueuedIndexedFlushUnits = saturatingAddNonNegativeInt(s.OverlayQueuedIndexedFlushUnits, other.OverlayQueuedIndexedFlushUnits)
+	s.OverlayActiveIndexedFlushUnits = saturatingAddNonNegativeInt(s.OverlayActiveIndexedFlushUnits, other.OverlayActiveIndexedFlushUnits)
+	s.OverlayVisibleDepth = saturatingAddNonNegativeInt(s.OverlayVisibleDepth, other.OverlayVisibleDepth)
 	s.IndexedAsyncFlushRunning = saturatingAddNonNegativeInt(s.IndexedAsyncFlushRunning, other.IndexedAsyncFlushRunning)
 	s.MutationLockCalls += other.MutationLockCalls
 	s.MutationLockWait += other.MutationLockWait
@@ -1147,9 +1221,12 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.IndexedAutoFlushes += other.IndexedAutoFlushes
 	s.IndexedAsyncFlushScheduled += other.IndexedAsyncFlushScheduled
 	s.IndexedAsyncFlushBackpressure += other.IndexedAsyncFlushBackpressure
+	s.IndexedAsyncFlushWait += other.IndexedAsyncFlushWait
 	s.IndexedAsyncFlushErrors += other.IndexedAsyncFlushErrors
 	s.IndexedFlushCalls += other.IndexedFlushCalls
 	s.IndexedFlushErrors += other.IndexedFlushErrors
+	s.IndexedFlushForcedDrains += other.IndexedFlushForcedDrains
+	s.IndexedFlushUnits += other.IndexedFlushUnits
 	s.IndexedFlushRequeues += other.IndexedFlushRequeues
 	s.IndexedFlushRequeuedUnits += other.IndexedFlushRequeuedUnits
 	s.IndexedFlushLostOwnership += other.IndexedFlushLostOwnership
@@ -1161,6 +1238,23 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.IndexedFlushDuration += other.IndexedFlushDuration
 	s.IndexedFlushMaterialize += other.IndexedFlushMaterialize
 	s.IndexedFlushPublish += other.IndexedFlushPublish
+	s.RootDeltaPlanPrimaryRoots += other.RootDeltaPlanPrimaryRoots
+	s.RootDeltaPlanTemplateRoots += other.RootDeltaPlanTemplateRoots
+	s.RootDeltaPlanIndexStateRoots += other.RootDeltaPlanIndexStateRoots
+	s.RootDeltaPlanSecondaryRoots += other.RootDeltaPlanSecondaryRoots
+	s.RootDeltaPlanEntries += other.RootDeltaPlanEntries
+	s.RootDeltaPlanKeyBytes += other.RootDeltaPlanKeyBytes
+	s.RootDeltaPlanValueBytes += other.RootDeltaPlanValueBytes
+	s.RootDeltaPlanTombstones += other.RootDeltaPlanTombstones
+	s.PrimaryOnlyUpdateCalls += other.PrimaryOnlyUpdateCalls
+	s.PrimaryOnlyMatched += other.PrimaryOnlyMatched
+	s.PrimaryOnlyModified += other.PrimaryOnlyModified
+	s.PrimaryOnlyBufferedCalls += other.PrimaryOnlyBufferedCalls
+	s.PrimaryOnlyRootPublishes += other.PrimaryOnlyRootPublishes
+	s.PrimaryOnlyRootDeltaEntries += other.PrimaryOnlyRootDeltaEntries
+	s.PrimaryOnlyRootDeltaKeyBytes += other.PrimaryOnlyRootDeltaKeyBytes
+	s.PrimaryOnlyRootDeltaValueBytes += other.PrimaryOnlyRootDeltaValueBytes
+	s.PrimaryOnlyCoalescedDocs += other.PrimaryOnlyCoalescedDocs
 	s.UpdateCombineRequests += other.UpdateCombineRequests
 	s.UpdateCombineBatches += other.UpdateCombineBatches
 	s.UpdateCombineBatchedRequests += other.UpdateCombineBatchedRequests
@@ -1215,8 +1309,13 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	domain.mu.RLock()
 	stats.PendingDocuments = domain.count
 	stats.PendingBytes = domain.bufferedBytes
-	stats.PendingRootRuns = bufferedIndexedRootRunCount(domain)
+	pendingRootRuns := bufferedIndexedRootRunCount(domain)
+	stats.PendingRootRuns = pendingRootRuns
 	stats.PendingIndexedFlushUnits = len(domain.indexedPublishingUnits) + len(domain.indexedFlushUnits)
+	stats.OverlayMutableDocuments = domain.mutableCount
+	stats.OverlayQueuedIndexedFlushUnits = len(domain.indexedFlushUnits)
+	stats.OverlayActiveIndexedFlushUnits = len(domain.indexedPublishingUnits)
+	stats.OverlayVisibleDepth = collectionWriteDomainVisibleDepthLocked(domain, pendingRootRuns)
 	stats.UpdateBatchIndexStatsCount = len(domain.meta.Indexes)
 	if stats.UpdateBatchIndexStatsCount > len(stats.UpdateBatchIndexStats) {
 		stats.UpdateBatchIndexStatsCount = len(stats.UpdateBatchIndexStats)
@@ -1242,9 +1341,12 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.IndexedAutoFlushes = domain.indexedAutoFlushes.Load()
 	stats.IndexedAsyncFlushScheduled = domain.indexedAsyncFlushScheduled.Load()
 	stats.IndexedAsyncFlushBackpressure = domain.indexedAsyncFlushBackpressure.Load()
+	stats.IndexedAsyncFlushWait = durationFromAtomicNs(domain.indexedAsyncFlushWaitTotalNs.Load())
 	stats.IndexedAsyncFlushErrors = domain.indexedAsyncFlushErrors.Load()
 	stats.IndexedFlushCalls = domain.indexedFlushCalls.Load()
 	stats.IndexedFlushErrors = domain.indexedFlushErrors.Load()
+	stats.IndexedFlushForcedDrains = domain.indexedFlushForcedDrains.Load()
+	stats.IndexedFlushUnits = domain.indexedFlushUnitsTotal.Load()
 	stats.IndexedFlushRequeues = domain.indexedFlushRequeues.Load()
 	stats.IndexedFlushRequeuedUnits = domain.indexedFlushRequeuedUnits.Load()
 	stats.IndexedFlushLostOwnership = domain.indexedFlushLostOwnership.Load()
@@ -1256,6 +1358,23 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.IndexedFlushDuration = durationFromAtomicNs(domain.indexedFlushDurationTotalNs.Load())
 	stats.IndexedFlushMaterialize = durationFromAtomicNs(domain.indexedFlushMaterializeTotalNs.Load())
 	stats.IndexedFlushPublish = durationFromAtomicNs(domain.indexedFlushPublishTotalNs.Load())
+	stats.RootDeltaPlanPrimaryRoots = domain.rootDeltaPlanPrimaryRoots.Load()
+	stats.RootDeltaPlanTemplateRoots = domain.rootDeltaPlanTemplateRoots.Load()
+	stats.RootDeltaPlanIndexStateRoots = domain.rootDeltaPlanIndexStateRoots.Load()
+	stats.RootDeltaPlanSecondaryRoots = domain.rootDeltaPlanSecondaryRoots.Load()
+	stats.RootDeltaPlanEntries = domain.rootDeltaPlanEntries.Load()
+	stats.RootDeltaPlanKeyBytes = domain.rootDeltaPlanKeyBytes.Load()
+	stats.RootDeltaPlanValueBytes = domain.rootDeltaPlanValueBytes.Load()
+	stats.RootDeltaPlanTombstones = domain.rootDeltaPlanTombstones.Load()
+	stats.PrimaryOnlyUpdateCalls = domain.primaryOnlyUpdateCalls.Load()
+	stats.PrimaryOnlyMatched = domain.primaryOnlyMatched.Load()
+	stats.PrimaryOnlyModified = domain.primaryOnlyModified.Load()
+	stats.PrimaryOnlyBufferedCalls = domain.primaryOnlyBufferedCalls.Load()
+	stats.PrimaryOnlyRootPublishes = domain.primaryOnlyRootPublishes.Load()
+	stats.PrimaryOnlyRootDeltaEntries = domain.primaryOnlyRootDeltaEntries.Load()
+	stats.PrimaryOnlyRootDeltaKeyBytes = domain.primaryOnlyRootDeltaKeyBytes.Load()
+	stats.PrimaryOnlyRootDeltaValueBytes = domain.primaryOnlyRootDeltaValueBytes.Load()
+	stats.PrimaryOnlyCoalescedDocs = domain.primaryOnlyCoalescedDocs.Load()
 	stats.UpdateCombineRequests = domain.updateCombineRequests.Load()
 	stats.UpdateCombineBatches = domain.updateCombineBatches.Load()
 	stats.UpdateCombineBatchedRequests = domain.updateCombineBatchedRequests.Load()
@@ -1306,6 +1425,17 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 		stats.UpdateBatchIndexStats[i].SecondaryKeyBytes = collectionStatsUint64ToInt(domain.updateBatchIndexSecondaryBytes[i].Load())
 	}
 	return stats
+}
+
+func collectionWriteDomainVisibleDepthLocked(domain *collectionWriteDomain, pendingRootRuns int) int {
+	if domain == nil {
+		return 0
+	}
+	depth := len(domain.indexedPublishingUnits) + len(domain.indexedFlushUnits)
+	if pendingRootRuns > 0 {
+		depth++
+	}
+	return depth
 }
 
 func collectionStatsUint64ToInt(v uint64) int {
@@ -1535,14 +1665,21 @@ func (domain *collectionWriteDomain) waitIndexedAsyncFlush() {
 	if domain == nil {
 		return
 	}
+	var waitStart time.Time
 	domain.indexedAsyncMu.Lock()
 	if domain.indexedAsyncCond == nil {
 		domain.indexedAsyncCond = sync.NewCond(&domain.indexedAsyncMu)
 	}
 	for domain.indexedAsyncRun {
+		if waitStart.IsZero() {
+			waitStart = time.Now()
+		}
 		domain.indexedAsyncCond.Wait()
 	}
 	domain.indexedAsyncMu.Unlock()
+	if !waitStart.IsZero() {
+		domain.indexedAsyncFlushWaitTotalNs.Add(durationToAtomicNs(time.Since(waitStart)))
+	}
 }
 
 func (domain *collectionWriteDomain) indexedAsyncFlushRunning() bool {
@@ -1575,13 +1712,16 @@ func (domain *collectionWriteDomain) consumeIndexedAsyncFlushError() error {
 	return err
 }
 
-func (domain *collectionWriteDomain) observeIndexedFlush(docs int, bytes int64, rootRuns, roots int, duration, materialize, publish time.Duration, err error) {
+func (domain *collectionWriteDomain) observeIndexedFlush(units, docs int, bytes int64, rootRuns, roots int, duration, materialize, publish time.Duration, err error) {
 	if domain == nil {
 		return
 	}
 	domain.indexedFlushCalls.Add(1)
 	if err != nil {
 		domain.indexedFlushErrors.Add(1)
+	}
+	if units > 0 {
+		domain.indexedFlushUnitsTotal.Add(uint64(units))
 	}
 	if docs > 0 {
 		domain.indexedFlushDocs.Add(uint64(docs))
@@ -1598,6 +1738,76 @@ func (domain *collectionWriteDomain) observeIndexedFlush(docs int, bytes int64, 
 	domain.indexedFlushDurationTotalNs.Add(durationToAtomicNs(duration))
 	domain.indexedFlushMaterializeTotalNs.Add(durationToAtomicNs(materialize))
 	domain.indexedFlushPublishTotalNs.Add(durationToAtomicNs(publish))
+}
+
+func (domain *collectionWriteDomain) observeIndexedFlushForcedDrain() {
+	if domain == nil {
+		return
+	}
+	domain.indexedFlushForcedDrains.Add(1)
+}
+
+type collectionRootDeltaPlanStats struct {
+	primaryRoots    uint64
+	templateRoots   uint64
+	indexStateRoots uint64
+	secondaryRoots  uint64
+	entries         uint64
+	keyBytes        uint64
+	valueBytes      uint64
+	tombstones      uint64
+}
+
+func (domain *collectionWriteDomain) observeRootDeltaPlan(stats collectionRootDeltaPlanStats) {
+	if domain == nil || stats == (collectionRootDeltaPlanStats{}) {
+		return
+	}
+	domain.rootDeltaPlanPrimaryRoots.Add(stats.primaryRoots)
+	domain.rootDeltaPlanTemplateRoots.Add(stats.templateRoots)
+	domain.rootDeltaPlanIndexStateRoots.Add(stats.indexStateRoots)
+	domain.rootDeltaPlanSecondaryRoots.Add(stats.secondaryRoots)
+	domain.rootDeltaPlanEntries.Add(stats.entries)
+	domain.rootDeltaPlanKeyBytes.Add(stats.keyBytes)
+	domain.rootDeltaPlanValueBytes.Add(stats.valueBytes)
+	domain.rootDeltaPlanTombstones.Add(stats.tombstones)
+}
+
+func (domain *collectionWriteDomain) observePrimaryOnlyUpdate(matched, modified, published bool, deltaStats collectionRootDeltaPlanStats) {
+	items := 1
+	matchedCount := 0
+	if matched {
+		matchedCount = 1
+	}
+	modifiedCount := 0
+	if modified {
+		modifiedCount = 1
+	}
+	domain.observePrimaryOnlyUpdateBatch(items, matchedCount, modifiedCount, published, deltaStats)
+}
+
+func (domain *collectionWriteDomain) observePrimaryOnlyUpdateBatch(items, matched, modified int, published bool, deltaStats collectionRootDeltaPlanStats) {
+	if domain == nil {
+		return
+	}
+	if items > 0 {
+		domain.primaryOnlyUpdateCalls.Add(uint64(items))
+	}
+	if matched > 0 {
+		domain.primaryOnlyMatched.Add(uint64(matched))
+	}
+	if modified > 0 {
+		domain.primaryOnlyModified.Add(uint64(modified))
+	}
+	if !published {
+		return
+	}
+	domain.primaryOnlyRootPublishes.Add(1)
+	domain.primaryOnlyRootDeltaEntries.Add(deltaStats.entries)
+	domain.primaryOnlyRootDeltaKeyBytes.Add(deltaStats.keyBytes)
+	domain.primaryOnlyRootDeltaValueBytes.Add(deltaStats.valueBytes)
+	if modified > 0 {
+		domain.primaryOnlyCoalescedDocs.Add(uint64(modified))
+	}
 }
 
 func (domain *collectionWriteDomain) observeUpdateCombineRequest(queueDepth int) {
@@ -1696,6 +1906,9 @@ func flushCollectionWriteDomain(db *backenddb.DB, domain *collectionWriteDomain)
 	domain.waitIndexedAsyncFlush()
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
+	if hasBufferedIndexedRootRuns(domain) {
+		domain.observeIndexedFlushForcedDrain()
+	}
 	return collection.flushBufferedWritesLocked(domain)
 }
 
@@ -2614,6 +2827,9 @@ func (c *Collection) flushBufferedWrites() error {
 			domain.mu.Unlock()
 			continue
 		}
+		if hasBufferedIndexedRootRuns(domain) {
+			domain.observeIndexedFlushForcedDrain()
+		}
 		err := c.flushBufferedWritesLocked(domain)
 		domain.mu.Unlock()
 		return err
@@ -3239,6 +3455,7 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 		if opts.BufferedIndexedAsyncFlushMaxQueuedUnits > 0 && len(domain.indexedFlushUnits) >= opts.BufferedIndexedAsyncFlushMaxQueuedUnits {
 			if len(domain.indexedPublishingUnits) == 0 {
 				domain.indexedAsyncFlushBackpressure.Add(1)
+				domain.observeIndexedFlushForcedDrain()
 				flushStart := time.Now()
 				err := c.flushBufferedIndexedLocked(domain)
 				return collectionObservedElapsedSince(flushStart), 0, 0, err
@@ -3262,6 +3479,7 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 					return 0, lockReleased, relockWait, nil
 				}
 				if len(domain.indexedPublishingUnits) == 0 {
+					domain.observeIndexedFlushForcedDrain()
 					flushStart = time.Now()
 					err := c.flushBufferedIndexedLocked(domain)
 					return collectionObservedElapsedSince(flushStart), lockReleased, relockWait, err
@@ -3269,6 +3487,7 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 			}
 			flushStart = time.Now()
 			if !c.scheduleIndexedAsyncFlush(domain) && len(domain.indexedPublishingUnits) == 0 {
+				domain.observeIndexedFlushForcedDrain()
 				err := c.flushBufferedIndexedLocked(domain)
 				return collectionObservedElapsedSince(flushStart), lockReleased, relockWait, err
 			}
@@ -3276,6 +3495,7 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 		}
 		flushStart := time.Now()
 		if !c.scheduleIndexedAsyncFlush(domain) && len(domain.indexedPublishingUnits) == 0 {
+			domain.observeIndexedFlushForcedDrain()
 			err := c.flushBufferedIndexedLocked(domain)
 			return collectionObservedElapsedSince(flushStart), 0, 0, err
 		}
@@ -4745,6 +4965,7 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 			materializeElapsed := collectionObservedElapsedSince(materializeStart)
 			return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 		}
+		work.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, work.rootNames, ordered)
 		materializeElapsed := collectionObservedElapsedSince(materializeStart)
 		publishStart := time.Now()
 		newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -4767,6 +4988,7 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		materializeElapsed := collectionObservedElapsedSince(materializeStart)
 		return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 	}
+	work.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, work.rootNames, ordered)
 	materializeElapsed := collectionObservedElapsedSince(materializeStart)
 	publishStart := time.Now()
 	newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -4956,6 +5178,48 @@ func buildRootDeltaBatchPublishInputsFromTables(collectionName string, rootNames
 	return ordered, cleanup, nil
 }
 
+func collectionRootDeltaPlanStatsFromOrdered(collectionName string, rootNames []string, ordered []backenddb.OrderedRootDeltaBatchPublishInput) collectionRootDeltaPlanStats {
+	var stats collectionRootDeltaPlanStats
+	for i, rootName := range rootNames {
+		stats.addRoot(collectionName, rootName)
+		if i < len(ordered) {
+			stats.addBatch(ordered[i].Delta)
+		}
+	}
+	return stats
+}
+
+func (stats *collectionRootDeltaPlanStats) addRoot(collectionName, rootName string) {
+	if stats == nil || rootName == "" {
+		return
+	}
+	switch {
+	case rootName == collectionPrimaryRootName(collectionName):
+		stats.primaryRoots++
+	case rootName == collectionTemplateRootName(collectionName):
+		stats.templateRoots++
+	case rootName == collectionIndexStateRootName(collectionName):
+		stats.indexStateRoots++
+	case strings.HasPrefix(rootName, collectionName+"/index/"):
+		stats.secondaryRoots++
+	}
+}
+
+func (stats *collectionRootDeltaPlanStats) addBatch(delta *batch.Batch) {
+	if stats == nil || delta == nil {
+		return
+	}
+	for _, entry := range delta.SortedEntries() {
+		stats.entries++
+		stats.keyBytes += uint64(len(entry.Key))
+		if entry.Type == batch.OpDelete {
+			stats.tombstones++
+			continue
+		}
+		stats.valueBytes += uint64(len(entry.Value))
+	}
+}
+
 func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork, newSystemRoot uint64, rootIDs []uint64, publishErr error, elapsed, materializeElapsed, publishElapsed time.Duration) error {
 	if c == nil || c.writeDomain == nil || work == nil {
 		return publishErr
@@ -4977,7 +5241,7 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 			domain.indexedFlushUnits = append(removed, domain.indexedFlushUnits...)
 		}
 		rebuildBufferedPendingIndexesLocked(domain, work.meta.Name, preservePrimaryRunIndex)
-		domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, publishErr)
+		domain.observeIndexedFlush(len(work.units), work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, publishErr)
 		return publishErr
 	}
 	baseCatalog := domain.catalog
@@ -4994,7 +5258,7 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	if !owned {
 		err := errors.New("collections: async indexed publish lost ownership of in-flight flush units")
 		domain.indexedFlushLostOwnership.Add(1)
-		domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, err)
+		domain.observeIndexedFlush(len(work.units), work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, err)
 		return err
 	}
 	domain.loaded = true
@@ -5013,7 +5277,8 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	c.meta = work.meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	resetIndexedFlushUnits(oldPublishing)
-	domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, nil)
+	domain.observeIndexedFlush(len(work.units), work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, nil)
+	domain.observeRootDeltaPlan(work.rootDeltaStats)
 	return nil
 }
 
@@ -5075,13 +5340,14 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	}
 	flushDocs := domain.count
 	flushBytes := domain.bufferedBytes
+	flushUnits := len(domain.indexedFlushUnits)
 	flushRootRuns := bufferedIndexedRootRunCount(domain)
 	flushRoots := len(rootNames)
 	flushStart := time.Now()
 	var materializeElapsed time.Duration
 	var publishElapsed time.Duration
 	defer func() {
-		domain.observeIndexedFlush(flushDocs, flushBytes, flushRootRuns, flushRoots, collectionObservedElapsedSince(flushStart), materializeElapsed, publishElapsed, err)
+		domain.observeIndexedFlush(flushUnits, flushDocs, flushBytes, flushRootRuns, flushRoots, collectionObservedElapsedSince(flushStart), materializeElapsed, publishElapsed, err)
 	}()
 	baseSystemRoot := snapshotSystemRoot(pin)
 	baseCommitSeq := snapshotCommitSeq(pin)
@@ -5110,6 +5376,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 			materializeElapsed = collectionObservedElapsedSince(materializeStart)
 			return err
 		}
+		rootDeltaStats := collectionRootDeltaPlanStatsFromOrdered(meta.Name, rootNames, ordered)
 		materializeElapsed = collectionObservedElapsedSince(materializeStart)
 		publishStart := time.Now()
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -5117,6 +5384,9 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		})
 		publishElapsed = collectionObservedElapsedSince(publishStart)
 		cleanupDeltas()
+		if err == nil {
+			domain.observeRootDeltaPlan(rootDeltaStats)
+		}
 	} else {
 		materializeStart := time.Now()
 		ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(rootNames, flushUnit.rootRuns, flushUnit.rootBaseIDs, flushUnit.rootPolicies)
@@ -5124,6 +5394,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 			materializeElapsed = collectionObservedElapsedSince(materializeStart)
 			return err
 		}
+		rootDeltaStats := collectionRootDeltaPlanStatsFromOrdered(meta.Name, rootNames, ordered)
 		materializeElapsed = collectionObservedElapsedSince(materializeStart)
 		publishStart := time.Now()
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -5131,6 +5402,9 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		})
 		publishElapsed = collectionObservedElapsedSince(publishStart)
 		cleanupDeltas()
+		if err == nil {
+			domain.observeRootDeltaPlan(rootDeltaStats)
+		}
 	}
 	if err != nil {
 		return err
@@ -6200,6 +6474,7 @@ func (c *Collection) deleteDocumentOnce(documentID []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	deltaStats := collectionRootDeltaPlanStatsFromOrdered(c.meta.Name, rootNames, ordered)
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 	})
@@ -6213,6 +6488,9 @@ func (c *Collection) deleteDocumentOnce(documentID []byte) (bool, error) {
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	if c.writeDomain != nil {
+		c.writeDomain.observeRootDeltaPlan(deltaStats)
+	}
 	return true, nil
 }
 
@@ -7129,6 +7407,7 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		return false, false, err
 	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
+	primaryOnlyUpdate := len(c.meta.Indexes) == 0
 	baseUserRoot := snapshotUserRoot(snap)
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
@@ -7141,6 +7420,9 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	}
 	if !found {
 		_ = snap.Close()
+		if primaryOnlyUpdate && c.writeDomain != nil {
+			c.writeDomain.observePrimaryOnlyUpdate(false, false, false, collectionRootDeltaPlanStats{})
+		}
 		return false, false, nil
 	}
 	primaryRoot := catalog.rootID(primaryRootName)
@@ -7176,6 +7458,9 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	}
 	if !changed {
 		_ = snap.Close()
+		if primaryOnlyUpdate && c.writeDomain != nil {
+			c.writeDomain.observePrimaryOnlyUpdate(true, false, false, collectionRootDeltaPlanStats{})
+		}
 		return true, false, nil
 	}
 	if err := validateBSONReplacementPreservesIDSnapshot(currentID, document, plannerOptions); err != nil {
@@ -7307,6 +7592,7 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	if err != nil {
 		return false, false, err
 	}
+	deltaStats := collectionRootDeltaPlanStatsFromOrdered(c.meta.Name, rootNames, ordered)
 	preflight := func() error {
 		return c.validateMutationRootDescriptors(baseUserRoot, baseSystemRoot, baseCommitSeq)
 	}
@@ -7323,6 +7609,12 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	if c.writeDomain != nil {
+		c.writeDomain.observeRootDeltaPlan(deltaStats)
+		if primaryOnlyUpdate {
+			c.writeDomain.observePrimaryOnlyUpdate(true, true, true, deltaStats)
+		}
+	}
 	return true, true, nil
 }
 
@@ -7919,6 +8211,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 				results, publishErr = c.publishUpdateBatchPlanLocked(plan)
 				return publishErr
 			})
+			primaryOnlyNoPublish := len(plan.meta.Indexes) == 0 && len(plan.deltaTables) == 0 && plan.directBufferedUpdate == nil
 			stats := plan.stats
 			plan.close()
 			if err != nil {
@@ -7926,6 +8219,9 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 			}
 			if replan {
 				continue
+			}
+			if primaryOnlyNoPublish && c.writeDomain != nil {
+				c.writeDomain.observePrimaryOnlyUpdateBatch(stats.Items, stats.Matched, stats.Modified, false, collectionRootDeltaPlanStats{})
 			}
 			c.setLastUpdateStats(stats)
 			return results, nil
@@ -7958,6 +8254,9 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 			return nil
 		}); err != nil {
 			return nil, err
+		}
+		if len(plan.meta.Indexes) == 0 && c.writeDomain != nil {
+			c.writeDomain.observePrimaryOnlyUpdateBatch(plan.stats.Items, plan.stats.Matched, plan.stats.Modified, false, collectionRootDeltaPlanStats{})
 		}
 		c.setLastUpdateStats(plan.stats)
 		return plan.results, nil
@@ -8846,6 +9145,7 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]Upda
 	if err != nil {
 		return nil, err
 	}
+	deltaStats := collectionRootDeltaPlanStatsFromOrdered(plan.meta.Name, plan.rootNames, ordered)
 	preflight := func() error {
 		return c.validateMutationRootDescriptors(plan.baseUserRoot, plan.baseSystemRoot, plan.baseCommitSeq)
 	}
@@ -8866,6 +9166,12 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]Upda
 	c.meta = plan.meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	if c.writeDomain != nil {
+		c.writeDomain.observeRootDeltaPlan(deltaStats)
+		if len(plan.meta.Indexes) == 0 {
+			c.writeDomain.observePrimaryOnlyUpdateBatch(plan.stats.Items, plan.stats.Matched, plan.stats.Modified, true, deltaStats)
+		}
+	}
 	return plan.results, nil
 }
 

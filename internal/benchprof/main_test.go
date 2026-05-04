@@ -296,6 +296,58 @@ func TestParseScanOpsResultsJSON(t *testing.T) {
 	}
 }
 
+func TestLoadTreeDBStatsMetadata(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "benchprof_results.json")
+	payload := benchprofResultsFile{
+		Runs: []benchprofResultsRun{
+			{
+				Keys: 800000,
+				TreeDBStats: map[string]map[string]string{
+					"TreeDB": {
+						"treedb.publish.ordered_root_delta_group.root_apply_calls_total": "4",
+						"treedb.publish.ordered_root_delta_group.root_apply_ns_total":    "1200",
+					},
+				},
+			},
+		},
+	}
+	js, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(path, js, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	stats, err := loadTreeDBStatsMetadata(dir)
+	if err != nil {
+		t.Fatalf("loadTreeDBStatsMetadata: %v", err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("stats runs=%d want 1: %+v", len(stats), stats)
+	}
+	if got, want := stats[0].Keys, 800000; got != want {
+		t.Fatalf("keys=%d want %d", got, want)
+	}
+	if got, want := stats[0].DBName, "TreeDB"; got != want {
+		t.Fatalf("db name=%q want %q", got, want)
+	}
+	if got, want := stats[0].Stats["treedb.publish.ordered_root_delta_group.root_apply_calls_total"], "4"; got != want {
+		t.Fatalf("root_apply_calls_total=%q want %q", got, want)
+	}
+
+	md := renderMarkdown(report{
+		GeneratedAt: "now",
+		ProfilesDir: dir,
+		TreeDBStats: stats,
+	})
+	if !strings.Contains(md, "## TreeDB Stats Metadata") ||
+		!strings.Contains(md, "treedb.publish.ordered_root_delta_group.root_apply_calls_total") {
+		t.Fatalf("markdown missing TreeDB stats metadata:\n%s", md)
+	}
+}
+
 func TestBuildInvestigations_IteratorOverheadInference(t *testing.T) {
 	rep := report{
 		OpsRows: []opsRow{
