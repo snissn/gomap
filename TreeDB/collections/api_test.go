@@ -10897,7 +10897,7 @@ func TestCollectionFindByIndexRangeTypedInt64(t *testing.T) {
 		t.Fatalf("insert batch: %v", err)
 	}
 
-	// Use a half-open range so this exercises non-exact range materialization,
+	// Use a non-equality range so this exercises non-exact range materialization,
 	// not the exact-prefix helper that already used pending root runs.
 	ids, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
 		Lower: IndexRangeBound{Value: int64(0), Inclusive: true},
@@ -11015,7 +11015,7 @@ func TestCollectionFindByIndexRangeMergesBufferedUpdates(t *testing.T) {
 		t.Fatalf("buffered update advanced commit seq by %d, want 0", after.CommitSeq-before.CommitSeq)
 	}
 
-	// Use a half-open range so this exercises non-exact range materialization,
+	// Use a non-equality range so this exercises non-exact range materialization,
 	// not the exact-prefix helper that already used pending root runs.
 	ids, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
 		Lower: IndexRangeBound{Value: int64(5), Inclusive: true},
