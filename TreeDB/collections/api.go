@@ -402,57 +402,53 @@ type CollectionUpdateIndexStats struct {
 // CollectionManager. The counters are process-local observability; they are
 // not persisted with collection metadata.
 type CollectionManagerStats struct {
-	Domains                        int
-	PendingDocuments               int
-	PendingBytes                   int64
-	PendingRootRuns                int
-	PendingIndexedFlushUnits       int
-	IndexedAsyncFlushRunning       int
-	MutationLockCalls              uint64
-	MutationLockWait               time.Duration
-	MutationLockHold               time.Duration
-	IndexedStageBatches            uint64
-	IndexedStageDocs               uint64
-	IndexedStageBytes              uint64
-	IndexedStageRootRuns           uint64
-	IndexedAutoFlushes             uint64
-	IndexedAsyncFlushScheduled     uint64
-	IndexedAsyncFlushBackpressure  uint64
-	IndexedAsyncFlushErrors        uint64
-	IndexedFlushCalls              uint64
-	IndexedFlushErrors             uint64
-	IndexedFlushRequeues           uint64
-	IndexedFlushRequeuedUnits      uint64
-	IndexedFlushLostOwnership      uint64
-	IndexedFlushRootBaseMismatches uint64
-	IndexedFlushDocs               uint64
-	IndexedFlushBytes              uint64
-	IndexedFlushRootRuns           uint64
-	IndexedFlushRoots              uint64
-	IndexedFlushDuration           time.Duration
-	IndexedFlushMaterialize        time.Duration
-	IndexedFlushPublish            time.Duration
-	UpdateCombineRequests          uint64
-	UpdateCombineBatches           uint64
-	UpdateCombineBatchedRequests   uint64
-	UpdateCombineFallbackRequests  uint64
-	UpdateCombineQueueDepthMax     uint64
-	UpdateBatchCalls               uint64
-	UpdateBatchItems               uint64
-	UpdateBatchMatched             uint64
-	UpdateBatchModified            uint64
-	UpdateBatchRuns                uint64
-	UpdateBatchBufferedBatches     uint64
-	UpdateBatchCurrentRead         time.Duration
-	UpdateBatchCallback            time.Duration
-	UpdateBatchPrepareDocuments    time.Duration
-	UpdateBatchIndexStateExtract   time.Duration
-	UpdateBatchUniquePreflight     time.Duration
-	UpdateBatchTemplateRunBuild    time.Duration
-	UpdateBatchPrimaryRunBuild     time.Duration
-	UpdateBatchIndexStateRunBuild  time.Duration
-	UpdateBatchSecondaryRunBuild   time.Duration
-	UpdateBatchBufferStage         time.Duration
+	Domains                       int
+	PendingDocuments              int
+	PendingBytes                  int64
+	PendingRootRuns               int
+	PendingIndexedFlushUnits      int
+	IndexedAsyncFlushRunning      int
+	MutationLockCalls             uint64
+	MutationLockWait              time.Duration
+	MutationLockHold              time.Duration
+	IndexedStageBatches           uint64
+	IndexedStageDocs              uint64
+	IndexedStageBytes             uint64
+	IndexedStageRootRuns          uint64
+	IndexedAutoFlushes            uint64
+	IndexedAsyncFlushScheduled    uint64
+	IndexedAsyncFlushBackpressure uint64
+	IndexedAsyncFlushErrors       uint64
+	IndexedFlushCalls             uint64
+	IndexedFlushErrors            uint64
+	IndexedFlushDocs              uint64
+	IndexedFlushBytes             uint64
+	IndexedFlushRootRuns          uint64
+	IndexedFlushRoots             uint64
+	IndexedFlushDuration          time.Duration
+	IndexedFlushMaterialize       time.Duration
+	IndexedFlushPublish           time.Duration
+	UpdateCombineRequests         uint64
+	UpdateCombineBatches          uint64
+	UpdateCombineBatchedRequests  uint64
+	UpdateCombineFallbackRequests uint64
+	UpdateCombineQueueDepthMax    uint64
+	UpdateBatchCalls              uint64
+	UpdateBatchItems              uint64
+	UpdateBatchMatched            uint64
+	UpdateBatchModified           uint64
+	UpdateBatchRuns               uint64
+	UpdateBatchBufferedBatches    uint64
+	UpdateBatchCurrentRead        time.Duration
+	UpdateBatchCallback           time.Duration
+	UpdateBatchPrepareDocuments   time.Duration
+	UpdateBatchIndexStateExtract  time.Duration
+	UpdateBatchUniquePreflight    time.Duration
+	UpdateBatchTemplateRunBuild   time.Duration
+	UpdateBatchPrimaryRunBuild    time.Duration
+	UpdateBatchIndexStateRunBuild time.Duration
+	UpdateBatchSecondaryRunBuild  time.Duration
+	UpdateBatchBufferStage        time.Duration
 	// Detailed buffer-stage aggregate timings are populated only when
 	// CollectionManager.SetUpdateBatchDetailedStatsEnabled(true) is enabled.
 	// UpdateBatchBufferLockHold is an enclosing domain mutex hold-time metric
@@ -480,6 +476,10 @@ type CollectionManagerStats struct {
 	UpdateBatchUniqueCheckSkips    uint64
 	UpdateBatchIndexStatsCount     int
 	UpdateBatchIndexStats          [maxCollectionUpdateInlineIndexStats]CollectionUpdateIndexStats
+	IndexedFlushRequeues           uint64
+	IndexedFlushRequeuedUnits      uint64
+	IndexedFlushLostOwnership      uint64
+	IndexedFlushRootBaseMismatches uint64
 }
 
 // DocumentRecord is one primary collection record returned by ScanDocuments.
@@ -976,7 +976,7 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.indexed_async_flush.errors_total"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushErrors)
 	out["treedb.collections.write_domain.indexed_flush.calls_total"] = fmt.Sprintf("%d", stats.IndexedFlushCalls)
 	out["treedb.collections.write_domain.indexed_flush.errors_total"] = fmt.Sprintf("%d", stats.IndexedFlushErrors)
-	out["treedb.collections.write_domain.indexed_flush.requeue_total"] = fmt.Sprintf("%d", stats.IndexedFlushRequeues)
+	out["treedb.collections.write_domain.indexed_flush.requeues_total"] = fmt.Sprintf("%d", stats.IndexedFlushRequeues)
 	out["treedb.collections.write_domain.indexed_flush.requeued_units_total"] = fmt.Sprintf("%d", stats.IndexedFlushRequeuedUnits)
 	out["treedb.collections.write_domain.indexed_flush.lost_ownership_total"] = fmt.Sprintf("%d", stats.IndexedFlushLostOwnership)
 	out["treedb.collections.write_domain.indexed_flush.root_base_mismatch_total"] = fmt.Sprintf("%d", stats.IndexedFlushRootBaseMismatches)
@@ -3627,6 +3627,9 @@ func pendingIndexedUniqueValueRunMapLocked(domain *collectionWriteDomain) map[st
 	return indexedFlushUnitPendingUniqueValueRunMap(indexedFlushUnitsWithPublishing(domain.indexedPublishingUnits, domain.indexedFlushUnits), domain.uniqueValueRuns)
 }
 
+// pendingUniqueReservationIndexLocked requires domain.mu to be held. When
+// cache is true it may write the rebuilt pending unique index back to the
+// domain, so callers using only an RLock must pass cache=false.
 func pendingUniqueReservationIndexLocked(domain *collectionWriteDomain, indexName string, cache bool) *bufferedUniqueValueIndex {
 	if domain == nil || indexName == "" {
 		return nil

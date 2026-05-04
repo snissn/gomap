@@ -41,7 +41,7 @@ func TestCollectionIndexedFlushGuardCounters(t *testing.T) {
 		if got := stats.IndexedFlushRequeuedUnits; got != 1 {
 			t.Fatalf("indexed flush requeued units=%d want 1", got)
 		}
-		if got := mgr.Stats()["treedb.collections.write_domain.indexed_flush.requeue_total"]; got != "1" {
+		if got := mgr.Stats()["treedb.collections.write_domain.indexed_flush.requeues_total"]; got != "1" {
 			t.Fatalf("requeue stat=%q want 1", got)
 		}
 	})
