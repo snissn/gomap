@@ -10976,13 +10976,13 @@ func bufferedIndexRangeTableLocked(domain *collectionWriteDomain, collectionName
 	if domain == nil {
 		return nil, nil
 	}
-	if domain.count == 0 || len(domain.rootRuns) == 0 {
+	if domain.count == 0 || !hasBufferedIndexedRootRuns(domain) {
 		return nil, nil
 	}
 	if domain.meta.Name != "" {
 		collectionName = domain.meta.Name
 	}
-	runs := domain.rootRuns[collectionSecondaryRootName(collectionName, indexName)]
+	runs := pendingIndexedRootRunsLocked(domain, collectionSecondaryRootName(collectionName, indexName))
 	if len(runs) == 0 {
 		return nil, nil
 	}
