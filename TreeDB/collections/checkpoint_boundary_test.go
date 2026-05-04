@@ -60,6 +60,74 @@ func TestCollectionCheckpointDoesNotFlushPendingNoIndexInsert(t *testing.T) {
 	}
 }
 
+func TestCollectionCheckpointSeesSynchronousNoIndexUpdate(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"name":"ada","city":"hnl"}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert: %v", err)
+	}
+	beforeRoot := collectionCheckpointBoundaryPrimaryRootIDForTest(t, d, "users")
+
+	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"name":"ada","city":"sea"}`), true, nil
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("update matched/modified=%v/%v want true/true", matched, modified)
+	}
+	updatedRoot := collectionCheckpointBoundaryPrimaryRootIDForTest(t, d, "users")
+	if updatedRoot == beforeRoot {
+		t.Fatalf("synchronous no-index update left primary root at %d", updatedRoot)
+	}
+	if got := collectionCheckpointBoundaryPendingCountForTest(t, col); got != 0 {
+		t.Fatalf("pending count after synchronous no-index update=%d want 0", got)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	afterCheckpointRoot := collectionCheckpointBoundaryPrimaryRootIDForTest(t, d, "users")
+	if afterCheckpointRoot != updatedRoot {
+		t.Fatalf("checkpoint changed primary root from %d to %d after synchronous update", updatedRoot, afterCheckpointRoot)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	got, err := reopenedCol.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get reopened updated doc: %v", err)
+	}
+	if want := []byte(`{"name":"ada","city":"sea"}`); !bytes.Equal(got, want) {
+		t.Fatalf("reopened updated doc=%q want %q", got, want)
+	}
+}
+
 func collectionCheckpointBoundaryPrimaryRootIDForTest(t *testing.T, d *backenddb.DB, collectionName string) uint64 {
 	t.Helper()
 	snap := d.AcquireSnapshot()

@@ -6624,6 +6624,14 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 // secondary unique index values may be staged in the write domain and become
 // durable at Flush/Close or auto-flush.
 //
+// For no-secondary-index collections, single-document Update deliberately
+// preserves the current synchronous publish contract: pending collection-local
+// writes are flushed first, then a modified document is published to the
+// primary root before Update returns. No-index updates may coalesce only
+// opportunistically when callers already reach the existing combiner as a
+// multi-request UpdateBatch-backed batch; they are not staged in the no-index
+// insert buffer or indexed flush queues.
+//
 // Callback panics are recovered and returned as errors in both direct and
 // combined execution. When the collection write domain combines concurrent
 // updates, update may run on an internal combiner goroutine. The callback must
@@ -6661,6 +6669,9 @@ func validateCollectionUpdateInput(c *Collection, documentID []byte, update func
 func (c *Collection) updateDirect(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
+	// PR2b pins no-index Update as synchronous: pending no-index inserts or
+	// indexed buffered writes are drained before reading/planning the update,
+	// and a modified no-index replacement publishes before this call returns.
 	if err := c.flushBufferedWrites(); err != nil {
 		return false, false, err
 	}
