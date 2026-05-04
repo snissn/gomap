@@ -39,7 +39,10 @@ func TestCollectionUpdateBatchManyIndexesSkipsAllSecondaryWorkForNonIndexedUpdat
 		t.Fatalf("insert: %v", err)
 	}
 
-	rootNames := []string{collectionPrimaryRootName("users")}
+	rootNames := []string{
+		collectionPrimaryRootName("users"),
+		collectionIndexStateRootName("users"),
+	}
 	for i := 0; i < indexCount; i++ {
 		rootNames = append(rootNames, collectionSecondaryRootName("users", fmt.Sprintf("idx%02d", i)))
 	}
@@ -72,6 +75,9 @@ func TestCollectionUpdateBatchManyIndexesSkipsAllSecondaryWorkForNonIndexedUpdat
 	after := batchManyUnchangedRootIDsForTest(t, d, "users", rootNames)
 	if after[collectionPrimaryRootName("users")] == before[collectionPrimaryRootName("users")] {
 		t.Fatal("primary root did not change for document replacement")
+	}
+	if rootName := collectionIndexStateRootName("users"); after[rootName] != before[rootName] {
+		t.Fatalf("index-state root %q changed from %d to %d for non-indexed update", rootName, before[rootName], after[rootName])
 	}
 	for i := 0; i < indexCount; i++ {
 		rootName := collectionSecondaryRootName("users", fmt.Sprintf("idx%02d", i))

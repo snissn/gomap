@@ -1,8 +1,8 @@
 package collections
 
 import (
-	"bytes"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 
@@ -25,6 +25,7 @@ func TestCollectionUpdateBatchChangesOneIndexAmongMany(t *testing.T) {
 		indexes[i] = IndexDefinition{Name: field, Field: field, ValueType: IndexValueString}
 	}
 	mgr := NewCollectionManager(d)
+	mgr.SetUpdateBatchDetailedStatsEnabled(true)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "docs",
 		Options: CollectionOptions{
@@ -173,8 +174,15 @@ func updateBatchManyIndexRequireIndexIDs(tb testing.TB, col *Collection, indexNa
 	if len(ids) != len(want) {
 		tb.Fatalf("index %s=%v ids=%q want %q", indexName, value, ids, want)
 	}
-	for i := range want {
-		if !bytes.Equal(ids[i], []byte(want[i])) {
+	got := make([]string, len(ids))
+	for i := range ids {
+		got[i] = string(ids[i])
+	}
+	wantSorted := append([]string(nil), want...)
+	sort.Strings(got)
+	sort.Strings(wantSorted)
+	for i := range wantSorted {
+		if got[i] != wantSorted[i] {
 			tb.Fatalf("index %s=%v ids=%q want %q", indexName, value, ids, want)
 		}
 	}

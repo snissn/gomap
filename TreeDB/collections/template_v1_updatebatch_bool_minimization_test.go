@@ -122,15 +122,7 @@ func TestCollectionUpdateBatchTemplateV1BoolSameEffectiveSkipsSecondaryRoot(t *t
 
 func mustTemplateV1UpdateBatchBoolDocument(t *testing.T, active bool, note string) []byte {
 	t.Helper()
-	activeJSON := "false"
-	if active {
-		activeJSON = "true"
-	}
-	doc, err := EncodeTemplateV1DocumentJSON([]byte(`{"active":` + activeJSON + `,"note":"` + note + `"}`))
-	if err != nil {
-		t.Fatalf("encode template-v1 document: %v", err)
-	}
-	return doc
+	return mustTemplateV1Document(t, []string{"active", "note"}, []any{active, note})
 }
 
 func mustTemplateV1UpdateBatchBoolRootIDs(t *testing.T, d *backenddb.DB, collectionName string, rootNames ...string) map[string]uint64 {

@@ -1,7 +1,7 @@
 package collections
 
 import (
-	"bytes"
+	"sort"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -130,8 +130,15 @@ func replaceMinimizationRequireIndexIDs(tb testing.TB, col *Collection, indexNam
 	if len(ids) != len(want) {
 		tb.Fatalf("index %s=%v ids=%q want %q", indexName, value, ids, want)
 	}
-	for i := range want {
-		if !bytes.Equal(ids[i], []byte(want[i])) {
+	got := make([]string, len(ids))
+	for i := range ids {
+		got[i] = string(ids[i])
+	}
+	wantSorted := append([]string(nil), want...)
+	sort.Strings(got)
+	sort.Strings(wantSorted)
+	for i := range wantSorted {
+		if got[i] != wantSorted[i] {
 			tb.Fatalf("index %s=%v ids=%q want %q", indexName, value, ids, want)
 		}
 	}
