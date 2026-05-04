@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
 // BenchmarkStress performs mixed Read/Write operations.
@@ -372,6 +375,31 @@ func BenchmarkLargeVal(b *testing.B) {
 	}
 	defer d.Close()
 
+	walDir := filepath.Join(tmpDir, "value_vlog")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		b.Fatalf("mkdir value log: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		b.Fatalf("encode value-log file id: %v", err)
+	}
+	valueLogPath := filepath.Join(walDir, "value-l0-000001.log")
+	valueWriter, err := valuelog.NewWriter(valueLogPath, fileID)
+	if err != nil {
+		b.Fatalf("new value-log writer: %v", err)
+	}
+	defer valueWriter.Close()
+	if err := d.valueLogManager.RegisterSegment(valueLogPath, fileID); err != nil {
+		b.Fatalf("register value-log segment: %v", err)
+	}
+	if err := d.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
+		b.Fatalf("promote value-log segment: %v", err)
+	}
+
+	var (
+		valueLogMu sync.Mutex
+		nextRID    atomic.Uint64
+	)
 	valSize := 4096 // 4KB
 	valBuf := make([]byte, valSize)
 	rand.Read(valBuf)
@@ -386,8 +414,30 @@ func BenchmarkLargeVal(b *testing.B) {
 		r := rand.New(rand.NewSource(time.Now().UnixNano()))
 		for pb.Next() {
 			key := keys[r.Intn(len(keys))]
-			if err := d.Set(key, valBuf); err != nil {
-				b.Errorf("Set failed: %v", err)
+
+			valueLogMu.Lock()
+			ptr, err := valueWriter.Append(0, nil, nextRID.Add(1), valBuf)
+			if err == nil {
+				err = valueWriter.Flush()
+			}
+			valueLogMu.Unlock()
+			if err != nil {
+				b.Errorf("value-log append failed: %v", err)
+				continue
+			}
+
+			unlock := d.lockUpdateKey(key)
+			wb := d.NewBatch().(*Batch)
+			err = wb.SetPointer(key, ptr)
+			if err == nil {
+				err = wb.Write()
+			}
+			if closeErr := wb.Close(); err == nil {
+				err = closeErr
+			}
+			unlock()
+			if err != nil {
+				b.Errorf("SetPointer failed: %v", err)
 			}
 		}
 	})
