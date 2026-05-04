@@ -45,6 +45,25 @@ func TestPendingUniqueReservationProbeIncludesPublishingQueuedAndMutable(t *test
 	}
 }
 
+func TestPendingUniqueReservationIndexCachesWriteLockRebuild(t *testing.T) {
+	const indexName = "email"
+	prefix := collectionTestUniquePrefix(t, "queued@example.com")
+	domain := &collectionWriteDomain{
+		indexedFlushUnits: []indexedFlushUnit{{
+			uniqueValueRuns: map[string][]memtable.Table{
+				indexName: {collectionTestUniqueRunTable(prefix)},
+			},
+		}},
+	}
+	index := pendingUniqueReservationIndexLocked(domain, indexName, true)
+	if index == nil || !index.contains(prefix) {
+		t.Fatal("rebuilt pending unique index missed queued reservation")
+	}
+	if domain.uniqueValueIndex[indexName] != index {
+		t.Fatal("rebuilt pending unique index was not cached on write-lock path")
+	}
+}
+
 func collectionTestUniqueRunTable(prefix []byte) memtable.Table {
 	table := newCollectionRunTable(1)
 	setCollectionRunValue(table, append([]byte(nil), prefix...), nil)

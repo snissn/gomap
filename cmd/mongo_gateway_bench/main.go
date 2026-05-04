@@ -2274,7 +2274,7 @@ func addPerDriverCallMetric(metrics map[string]float64, name string, numerator f
 }
 
 func addRatioMetric(metrics map[string]float64, name string, numerator, denominator float64) {
-	if numerator == 0 || denominator == 0 {
+	if denominator == 0 {
 		return
 	}
 	metrics[name] = numerator / denominator

@@ -84,6 +84,7 @@ var (
 	errCollectionRootOverlaysRequireCompaction = errors.New("collections: collection root overlays require compaction before writes")
 	errUpdateBatchHasSecondaryUniqueIndex      = errors.New("collections: update batch has secondary unique index")
 	errUpdateBatchChangesSecondaryUniqueIndex  = errors.New("collections: update batch changes secondary unique index")
+	errIndexedFlushLostOwnership               = errors.New("collections: async indexed publish lost ownership of in-flight flush units")
 	errUpdateCombinerStopped                   = errors.New("collections: update combiner stopped before DB update completed; callback may have been invoked")
 	indexedAsyncFlushPprofLabels               = pprof.Labels(
 		collectionPprofComponentKey, collectionPprofIndexedAsyncFlush,
@@ -1339,7 +1340,7 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.OverlayMutableDocuments = domain.mutableCount
 	stats.OverlayQueuedIndexedFlushUnits = len(domain.indexedFlushUnits)
 	stats.OverlayActiveIndexedFlushUnits = len(domain.indexedPublishingUnits)
-	stats.OverlayVisibleDepth = collectionWriteDomainVisibleDepthLocked(domain, pendingRootRuns)
+	stats.OverlayVisibleDepth = collectionWriteDomainVisibleDepthLocked(domain)
 	stats.UpdateBatchIndexStatsCount = len(domain.meta.Indexes)
 	if stats.UpdateBatchIndexStatsCount > len(stats.UpdateBatchIndexStats) {
 		stats.UpdateBatchIndexStatsCount = len(stats.UpdateBatchIndexStats)
@@ -1452,12 +1453,12 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	return stats
 }
 
-func collectionWriteDomainVisibleDepthLocked(domain *collectionWriteDomain, pendingRootRuns int) int {
+func collectionWriteDomainVisibleDepthLocked(domain *collectionWriteDomain) int {
 	if domain == nil {
 		return 0
 	}
 	depth := len(domain.indexedPublishingUnits) + len(domain.indexedFlushUnits)
-	if pendingRootRuns > 0 {
+	if len(domain.rootRuns) > 0 || domain.mutableCount > 0 || domain.rootRunCount > 0 {
 		depth++
 	}
 	return depth
@@ -3874,7 +3875,7 @@ func pendingIndexedUniqueValueRunMapLocked(domain *collectionWriteDomain) map[st
 	return indexedFlushUnitPendingUniqueValueRunMap(indexedFlushUnitsWithPublishing(domain.indexedPublishingUnits, domain.indexedFlushUnits), domain.uniqueValueRuns)
 }
 
-func pendingUniqueReservationIndexLocked(domain *collectionWriteDomain, indexName string) *bufferedUniqueValueIndex {
+func pendingUniqueReservationIndexLocked(domain *collectionWriteDomain, indexName string, cache bool) *bufferedUniqueValueIndex {
 	if domain == nil || indexName == "" {
 		return nil
 	}
@@ -3885,11 +3886,18 @@ func pendingUniqueReservationIndexLocked(domain *collectionWriteDomain, indexNam
 	if len(runs) == 0 {
 		return nil
 	}
-	return rebuildBufferedUniqueValueIndexes(map[string][]memtable.Table{indexName: runs})[indexName]
+	index := rebuildBufferedUniqueValueIndexes(map[string][]memtable.Table{indexName: runs})[indexName]
+	if cache && index != nil {
+		if domain.uniqueValueIndex == nil {
+			domain.uniqueValueIndex = make(map[string]*bufferedUniqueValueIndex, 1)
+		}
+		domain.uniqueValueIndex[indexName] = index
+	}
+	return index
 }
 
 func pendingUniqueReservationProbeLocked(domain *collectionWriteDomain, indexName string, valuePrefix []byte) bool {
-	index := pendingUniqueReservationIndexLocked(domain, indexName)
+	index := pendingUniqueReservationIndexLocked(domain, indexName, false)
 	return index != nil && index.contains(valuePrefix)
 }
 
@@ -4119,7 +4127,7 @@ func (c *Collection) rejectBufferedIndexedInsertConflictsLocked(domain *collecti
 		if _, ok := uniqueIndexes[run.indexName]; !ok {
 			continue
 		}
-		pending := pendingUniqueReservationIndexLocked(domain, run.indexName)
+		pending := pendingUniqueReservationIndexLocked(domain, run.indexName, true)
 		if pending == nil || pending.len() == 0 {
 			continue
 		}
@@ -5288,10 +5296,9 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	}
 	oldPublishing, owned := removeIndexedPublishingWorkUnitsLocked(domain, work.units)
 	if !owned {
-		err := errors.New("collections: async indexed publish lost ownership of in-flight flush units")
 		domain.indexedFlushLostOwnership.Add(1)
-		domain.observeIndexedFlush(len(work.units), work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, err)
-		return err
+		domain.observeIndexedFlush(len(work.units), work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, errIndexedFlushLostOwnership)
+		return errIndexedFlushLostOwnership
 	}
 	domain.loaded = true
 	domain.meta = work.meta
@@ -11395,7 +11402,7 @@ func bufferedIndexPrefixTableLocked(domain *collectionWriteDomain, collectionNam
 		return nil, nil
 	}
 	if unique {
-		pending := pendingUniqueReservationIndexLocked(domain, indexName)
+		pending := pendingUniqueReservationIndexLocked(domain, indexName, false)
 		if pending != nil && !pending.contains(prefix) {
 			return nil, nil
 		}

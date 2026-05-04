@@ -256,6 +256,35 @@ func TestTreeDBStatsDeltaAndPhaseMetrics(t *testing.T) {
 	}
 }
 
+func TestDeriveTreeDBPhaseMetricsEmitsZeroValues(t *testing.T) {
+	metrics := deriveTreeDBPhaseMetrics(map[string]float64{
+		"treedb.publish.ordered_root_delta_group.calls_total":                          2,
+		"treedb.publish.ordered_root_delta_group.roots_total":                          2,
+		"treedb.publish.ordered_root_delta_group.root_apply_calls_total":               2,
+		"treedb.publish.ordered_root_delta_group.root_apply_ns_total":                  20,
+		"treedb.collections.write_domain.indexed_flush.calls_total":                    2,
+		"treedb.collections.write_domain.indexed_flush.docs_total":                     20,
+		"treedb.collections.write_domain.indexed_flush.units_total":                    2,
+		"treedb.collections.write_domain.primary_only.root_publishes_total":            2,
+		"treedb.collections.write_domain.root_delta_plan.tombstones_total":             0,
+		"treedb.collections.write_domain.primary_only.coalesced_docs_total":            0,
+		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_loads_total": 0,
+	}, 10, 2)
+	for _, name := range []string{
+		"root_delta_plan_tombstones/doc",
+		"primary_only_coalesced_docs/publish",
+		"leaf_log_node_loads/doc",
+	} {
+		got, ok := metrics[name]
+		if !ok {
+			t.Fatalf("metric %s missing from metrics=%v", name, metrics)
+		}
+		if got != 0 {
+			t.Fatalf("metric %s=%v want 0", name, got)
+		}
+	}
+}
+
 func TestPhaseResultJSONIncludesTreeDBStatsDelta(t *testing.T) {
 	phase := phaseResult{
 		Name:       "concurrent_id_update_set_w4",

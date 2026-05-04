@@ -1238,6 +1238,26 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 			t.Fatalf("exported stats missing %s from %#v", key, exported)
 		}
 	}
+	domain := col.writeDomain
+	domain.mu.Lock()
+	if !rotateIndexedMutableToFlushUnitLocked(domain) {
+		domain.mu.Unlock()
+		t.Fatal("rotate mutable indexed runs to queued unit returned false")
+	}
+	domain.mu.Unlock()
+	stats = mgr.StatsSnapshot()
+	if got, want := stats.OverlayMutableDocuments, 0; got != want {
+		t.Fatalf("stats overlay mutable docs after rotate=%d want %d", got, want)
+	}
+	if got, want := stats.OverlayQueuedIndexedFlushUnits, 1; got != want {
+		t.Fatalf("stats overlay queued flush units after rotate=%d want %d", got, want)
+	}
+	if got := stats.OverlayActiveIndexedFlushUnits; got != 0 {
+		t.Fatalf("stats overlay active flush units after rotate=%d want 0", got)
+	}
+	if got, want := stats.OverlayVisibleDepth, 1; got != want {
+		t.Fatalf("stats overlay visible depth after rotate=%d want %d", got, want)
+	}
 
 	if err := mgr.FlushAll(); err != nil {
 		t.Fatalf("flush all: %v", err)
