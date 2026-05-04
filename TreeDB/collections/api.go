@@ -403,77 +403,82 @@ type CollectionUpdateIndexStats struct {
 // CollectionManager. The counters are process-local observability; they are
 // not persisted with collection metadata.
 type CollectionManagerStats struct {
-	Domains                        int
-	PendingDocuments               int
-	PendingBytes                   int64
-	PendingRootRuns                int
-	PendingIndexedFlushUnits       int
-	OverlayMutableDocuments        int
-	OverlayQueuedIndexedFlushUnits int
-	OverlayActiveIndexedFlushUnits int
-	OverlayVisibleDepth            int
-	IndexedAsyncFlushRunning       int
-	MutationLockCalls              uint64
-	MutationLockWait               time.Duration
-	MutationLockHold               time.Duration
-	IndexedStageBatches            uint64
-	IndexedStageDocs               uint64
-	IndexedStageBytes              uint64
-	IndexedStageRootRuns           uint64
-	IndexedAutoFlushes             uint64
-	IndexedAsyncFlushScheduled     uint64
-	IndexedAsyncFlushBackpressure  uint64
-	IndexedAsyncFlushWait          time.Duration
-	IndexedAsyncFlushErrors        uint64
-	IndexedFlushCalls              uint64
-	IndexedFlushErrors             uint64
-	IndexedFlushForcedDrains       uint64
-	IndexedFlushUnits              uint64
-	IndexedFlushDocs               uint64
-	IndexedFlushBytes              uint64
-	IndexedFlushRootRuns           uint64
-	IndexedFlushRoots              uint64
-	IndexedFlushDuration           time.Duration
-	IndexedFlushMaterialize        time.Duration
-	IndexedFlushPublish            time.Duration
-	RootDeltaPlanPrimaryRoots      uint64
-	RootDeltaPlanTemplateRoots     uint64
-	RootDeltaPlanIndexStateRoots   uint64
-	RootDeltaPlanSecondaryRoots    uint64
-	RootDeltaPlanEntries           uint64
-	RootDeltaPlanKeyBytes          uint64
-	RootDeltaPlanValueBytes        uint64
-	RootDeltaPlanTombstones        uint64
-	PrimaryOnlyUpdateCalls         uint64
-	PrimaryOnlyMatched             uint64
-	PrimaryOnlyModified            uint64
-	PrimaryOnlyBufferedCalls       uint64
-	PrimaryOnlyRootPublishes       uint64
-	PrimaryOnlyRootDeltaEntries    uint64
-	PrimaryOnlyRootDeltaKeyBytes   uint64
-	PrimaryOnlyRootDeltaValueBytes uint64
-	PrimaryOnlyCoalescedDocs       uint64
-	UpdateCombineRequests          uint64
-	UpdateCombineBatches           uint64
-	UpdateCombineBatchedRequests   uint64
-	UpdateCombineFallbackRequests  uint64
-	UpdateCombineQueueDepthMax     uint64
-	UpdateBatchCalls               uint64
-	UpdateBatchItems               uint64
-	UpdateBatchMatched             uint64
-	UpdateBatchModified            uint64
-	UpdateBatchRuns                uint64
-	UpdateBatchBufferedBatches     uint64
-	UpdateBatchCurrentRead         time.Duration
-	UpdateBatchCallback            time.Duration
-	UpdateBatchPrepareDocuments    time.Duration
-	UpdateBatchIndexStateExtract   time.Duration
-	UpdateBatchUniquePreflight     time.Duration
-	UpdateBatchTemplateRunBuild    time.Duration
-	UpdateBatchPrimaryRunBuild     time.Duration
-	UpdateBatchIndexStateRunBuild  time.Duration
-	UpdateBatchSecondaryRunBuild   time.Duration
-	UpdateBatchBufferStage         time.Duration
+	Domains                         int
+	PendingDocuments                int
+	PendingBytes                    int64
+	PendingRootRuns                 int
+	PendingIndexedFlushUnits        int
+	PendingIndexedSemanticRecords   int
+	OverlayMutableDocuments         int
+	OverlayQueuedIndexedFlushUnits  int
+	OverlayActiveIndexedFlushUnits  int
+	OverlayVisibleDepth             int
+	IndexedAsyncFlushRunning        int
+	MutationLockCalls               uint64
+	MutationLockWait                time.Duration
+	MutationLockHold                time.Duration
+	IndexedStageBatches             uint64
+	IndexedStageDocs                uint64
+	IndexedStageBytes               uint64
+	IndexedStageRootRuns            uint64
+	IndexedSemanticRawRecords       uint64
+	IndexedSemanticRawIndexDeltas   uint64
+	IndexedSemanticFallbackRecords  uint64
+	IndexedSemanticEffectiveRecords uint64
+	IndexedAutoFlushes              uint64
+	IndexedAsyncFlushScheduled      uint64
+	IndexedAsyncFlushBackpressure   uint64
+	IndexedAsyncFlushWait           time.Duration
+	IndexedAsyncFlushErrors         uint64
+	IndexedFlushCalls               uint64
+	IndexedFlushErrors              uint64
+	IndexedFlushForcedDrains        uint64
+	IndexedFlushUnits               uint64
+	IndexedFlushDocs                uint64
+	IndexedFlushBytes               uint64
+	IndexedFlushRootRuns            uint64
+	IndexedFlushRoots               uint64
+	IndexedFlushDuration            time.Duration
+	IndexedFlushMaterialize         time.Duration
+	IndexedFlushPublish             time.Duration
+	RootDeltaPlanPrimaryRoots       uint64
+	RootDeltaPlanTemplateRoots      uint64
+	RootDeltaPlanIndexStateRoots    uint64
+	RootDeltaPlanSecondaryRoots     uint64
+	RootDeltaPlanEntries            uint64
+	RootDeltaPlanKeyBytes           uint64
+	RootDeltaPlanValueBytes         uint64
+	RootDeltaPlanTombstones         uint64
+	PrimaryOnlyUpdateCalls          uint64
+	PrimaryOnlyMatched              uint64
+	PrimaryOnlyModified             uint64
+	PrimaryOnlyBufferedCalls        uint64
+	PrimaryOnlyRootPublishes        uint64
+	PrimaryOnlyRootDeltaEntries     uint64
+	PrimaryOnlyRootDeltaKeyBytes    uint64
+	PrimaryOnlyRootDeltaValueBytes  uint64
+	PrimaryOnlyCoalescedDocs        uint64
+	UpdateCombineRequests           uint64
+	UpdateCombineBatches            uint64
+	UpdateCombineBatchedRequests    uint64
+	UpdateCombineFallbackRequests   uint64
+	UpdateCombineQueueDepthMax      uint64
+	UpdateBatchCalls                uint64
+	UpdateBatchItems                uint64
+	UpdateBatchMatched              uint64
+	UpdateBatchModified             uint64
+	UpdateBatchRuns                 uint64
+	UpdateBatchBufferedBatches      uint64
+	UpdateBatchCurrentRead          time.Duration
+	UpdateBatchCallback             time.Duration
+	UpdateBatchPrepareDocuments     time.Duration
+	UpdateBatchIndexStateExtract    time.Duration
+	UpdateBatchUniquePreflight      time.Duration
+	UpdateBatchTemplateRunBuild     time.Duration
+	UpdateBatchPrimaryRunBuild      time.Duration
+	UpdateBatchIndexStateRunBuild   time.Duration
+	UpdateBatchSecondaryRunBuild    time.Duration
+	UpdateBatchBufferStage          time.Duration
 	// Detailed buffer-stage aggregate timings are populated only when
 	// CollectionManager.SetUpdateBatchDetailedStatsEnabled(true) is enabled.
 	// UpdateBatchBufferLockHold is an enclosing domain mutex hold-time metric
@@ -649,11 +654,42 @@ type noIndexBatchEntry struct {
 	document []byte
 }
 
+type indexedSemanticRecordKind uint8
+
+const (
+	indexedSemanticRecordUnknown indexedSemanticRecordKind = iota
+	indexedSemanticRecordUpdate
+)
+
+type indexedSemanticFallbackReason uint8
+
+const (
+	indexedSemanticFallbackNone indexedSemanticFallbackReason = iota
+	indexedSemanticFallbackRawOnly
+)
+
+type indexedSemanticRecord struct {
+	kind        indexedSemanticRecordKind
+	documentID  []byte
+	indexDeltas []indexedSemanticIndexDelta
+	fallback    indexedSemanticFallbackReason
+}
+
+type indexedSemanticIndexDelta struct {
+	indexName  string
+	rootName   string
+	runtimeIdx int
+	unique     bool
+	oldValues  [][]byte
+	newValues  [][]byte
+}
+
 type indexedFlushUnit struct {
 	rootRuns        map[string][]memtable.Table
 	rootPolicies    map[string]backenddb.OrderedRootStoragePolicy
 	rootBaseIDs     map[string]uint64
 	uniqueValueRuns map[string][]memtable.Table
+	semanticRecords []indexedSemanticRecord
 	arenaRefs       [][]byte
 	docCount        int
 	byteCount       int64
@@ -677,8 +713,9 @@ type coalescedFlushBatch struct {
 
 	// Original immutable units, in FIFO order. The merged unit is only the
 	// mechanical publish view for the current DB ordered-root API.
-	units      []indexedFlushUnit
-	mergedUnit indexedFlushUnit
+	units           []indexedFlushUnit
+	mergedUnit      indexedFlushUnit
+	semanticRecords []indexedSemanticRecord
 
 	rootNames          []string
 	rootBaseIDs        map[string]uint64
@@ -718,6 +755,7 @@ type bufferedIndexedCheckpoint struct {
 	rootPolicies           map[string]backenddb.OrderedRootStoragePolicy
 	rootBaseIDs            map[string]uint64
 	rootValueArenas        [][]byte
+	indexedSemanticRecords []indexedSemanticRecord
 	indexedPublishingUnits []indexedFlushUnit
 	indexedFlushUnits      []indexedFlushUnit
 	primaryRunIndexActive  bool
@@ -773,6 +811,7 @@ type collectionWriteDomain struct {
 	rootPolicies           map[string]backenddb.OrderedRootStoragePolicy
 	rootBaseIDs            map[string]uint64
 	rootValueArenas        [][]byte
+	indexedSemanticRecords []indexedSemanticRecord
 	primaryIDIndex         *bufferedUniqueValueIndex
 	// Built lazily by readers so write-only indexed buffering does not pay for
 	// an auxiliary lookup structure it never uses.
@@ -793,6 +832,10 @@ type collectionWriteDomain struct {
 	indexedStageDocs                 atomic.Uint64
 	indexedStageBytes                atomic.Uint64
 	indexedStageRootRuns             atomic.Uint64
+	indexedSemanticRawRecords        atomic.Uint64
+	indexedSemanticRawIndexDeltas    atomic.Uint64
+	indexedSemanticFallbackRecords   atomic.Uint64
+	indexedSemanticEffectiveRecords  atomic.Uint64
 	indexedAutoFlushes               atomic.Uint64
 	indexedAsyncFlushScheduled       atomic.Uint64
 	indexedAsyncFlushBackpressure    atomic.Uint64
@@ -1049,6 +1092,7 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.pending_bytes"] = fmt.Sprintf("%d", stats.PendingBytes)
 	out["treedb.collections.write_domain.pending_root_runs"] = fmt.Sprintf("%d", stats.PendingRootRuns)
 	out["treedb.collections.write_domain.pending_indexed_flush_units"] = fmt.Sprintf("%d", stats.PendingIndexedFlushUnits)
+	out["treedb.collections.write_domain.pending_indexed_semantic_raw_records"] = fmt.Sprintf("%d", stats.PendingIndexedSemanticRecords)
 	out["treedb.collections.write_domain.overlay.mutable_docs"] = fmt.Sprintf("%d", stats.OverlayMutableDocuments)
 	out["treedb.collections.write_domain.overlay.queued_indexed_flush_units"] = fmt.Sprintf("%d", stats.OverlayQueuedIndexedFlushUnits)
 	out["treedb.collections.write_domain.overlay.active_indexed_flush_units"] = fmt.Sprintf("%d", stats.OverlayActiveIndexedFlushUnits)
@@ -1064,6 +1108,10 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.indexed_stage.docs_total"] = fmt.Sprintf("%d", stats.IndexedStageDocs)
 	out["treedb.collections.write_domain.indexed_stage.bytes_total"] = fmt.Sprintf("%d", stats.IndexedStageBytes)
 	out["treedb.collections.write_domain.indexed_stage.root_runs_total"] = fmt.Sprintf("%d", stats.IndexedStageRootRuns)
+	out["treedb.collections.write_domain.indexed_semantic.raw_records_total"] = fmt.Sprintf("%d", stats.IndexedSemanticRawRecords)
+	out["treedb.collections.write_domain.indexed_semantic.raw_index_deltas_total"] = fmt.Sprintf("%d", stats.IndexedSemanticRawIndexDeltas)
+	out["treedb.collections.write_domain.indexed_semantic.fallback_records_total"] = fmt.Sprintf("%d", stats.IndexedSemanticFallbackRecords)
+	out["treedb.collections.write_domain.indexed_semantic.effective_records_total"] = fmt.Sprintf("%d", stats.IndexedSemanticEffectiveRecords)
 	out["treedb.collections.write_domain.indexed_stage.auto_flushes_total"] = fmt.Sprintf("%d", stats.IndexedAutoFlushes)
 	out["treedb.collections.write_domain.indexed_async_flush.scheduled_total"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushScheduled)
 	out["treedb.collections.write_domain.indexed_async_flush.backpressure_sync_total"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushBackpressure)
@@ -1252,6 +1300,7 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.PendingBytes = saturatingAddNonNegativeInt64(s.PendingBytes, other.PendingBytes)
 	s.PendingRootRuns = saturatingAddNonNegativeInt(s.PendingRootRuns, other.PendingRootRuns)
 	s.PendingIndexedFlushUnits = saturatingAddNonNegativeInt(s.PendingIndexedFlushUnits, other.PendingIndexedFlushUnits)
+	s.PendingIndexedSemanticRecords = saturatingAddNonNegativeInt(s.PendingIndexedSemanticRecords, other.PendingIndexedSemanticRecords)
 	s.OverlayMutableDocuments = saturatingAddNonNegativeInt(s.OverlayMutableDocuments, other.OverlayMutableDocuments)
 	s.OverlayQueuedIndexedFlushUnits = saturatingAddNonNegativeInt(s.OverlayQueuedIndexedFlushUnits, other.OverlayQueuedIndexedFlushUnits)
 	s.OverlayActiveIndexedFlushUnits = saturatingAddNonNegativeInt(s.OverlayActiveIndexedFlushUnits, other.OverlayActiveIndexedFlushUnits)
@@ -1264,6 +1313,10 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.IndexedStageDocs += other.IndexedStageDocs
 	s.IndexedStageBytes += other.IndexedStageBytes
 	s.IndexedStageRootRuns += other.IndexedStageRootRuns
+	s.IndexedSemanticRawRecords += other.IndexedSemanticRawRecords
+	s.IndexedSemanticRawIndexDeltas += other.IndexedSemanticRawIndexDeltas
+	s.IndexedSemanticFallbackRecords += other.IndexedSemanticFallbackRecords
+	s.IndexedSemanticEffectiveRecords += other.IndexedSemanticEffectiveRecords
 	s.IndexedAutoFlushes += other.IndexedAutoFlushes
 	s.IndexedAsyncFlushScheduled += other.IndexedAsyncFlushScheduled
 	s.IndexedAsyncFlushBackpressure += other.IndexedAsyncFlushBackpressure
@@ -1359,6 +1412,7 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	pendingRootRuns := bufferedIndexedRootRunCount(domain)
 	stats.PendingRootRuns = pendingRootRuns
 	stats.PendingIndexedFlushUnits = len(domain.indexedPublishingUnits) + len(domain.indexedFlushUnits)
+	stats.PendingIndexedSemanticRecords = pendingIndexedSemanticRecordCountLocked(domain)
 	stats.OverlayMutableDocuments = domain.mutableCount
 	stats.OverlayQueuedIndexedFlushUnits = len(domain.indexedFlushUnits)
 	stats.OverlayActiveIndexedFlushUnits = len(domain.indexedPublishingUnits)
@@ -1385,6 +1439,10 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.IndexedStageDocs = domain.indexedStageDocs.Load()
 	stats.IndexedStageBytes = domain.indexedStageBytes.Load()
 	stats.IndexedStageRootRuns = domain.indexedStageRootRuns.Load()
+	stats.IndexedSemanticRawRecords = domain.indexedSemanticRawRecords.Load()
+	stats.IndexedSemanticRawIndexDeltas = domain.indexedSemanticRawIndexDeltas.Load()
+	stats.IndexedSemanticFallbackRecords = domain.indexedSemanticFallbackRecords.Load()
+	stats.IndexedSemanticEffectiveRecords = domain.indexedSemanticEffectiveRecords.Load()
 	stats.IndexedAutoFlushes = domain.indexedAutoFlushes.Load()
 	stats.IndexedAsyncFlushScheduled = domain.indexedAsyncFlushScheduled.Load()
 	stats.IndexedAsyncFlushBackpressure = domain.indexedAsyncFlushBackpressure.Load()
@@ -1484,6 +1542,38 @@ func collectionWriteDomainVisibleDepthLocked(domain *collectionWriteDomain) int 
 		depth++
 	}
 	return depth
+}
+
+func pendingIndexedSemanticRecordCountLocked(domain *collectionWriteDomain) int {
+	if domain == nil {
+		return 0
+	}
+	total := len(domain.indexedSemanticRecords)
+	for _, unit := range domain.indexedPublishingUnits {
+		total = saturatingAddNonNegativeInt(total, len(unit.semanticRecords))
+	}
+	for _, unit := range domain.indexedFlushUnits {
+		total = saturatingAddNonNegativeInt(total, len(unit.semanticRecords))
+	}
+	return total
+}
+
+func indexedSemanticRecordIndexDeltaCount(records []indexedSemanticRecord) int {
+	total := 0
+	for _, record := range records {
+		total = saturatingAddNonNegativeInt(total, len(record.indexDeltas))
+	}
+	return total
+}
+
+func indexedSemanticRecordFallbackCount(records []indexedSemanticRecord) int {
+	total := 0
+	for _, record := range records {
+		if record.fallback != indexedSemanticFallbackNone {
+			total = saturatingAddNonNegativeInt(total, 1)
+		}
+	}
+	return total
 }
 
 func collectionStatsUint64ToInt(v uint64) int {
@@ -1675,6 +1765,19 @@ func (domain *collectionWriteDomain) observeIndexedStage(docs int, bytes int64, 
 	}
 	if rootRuns > 0 {
 		domain.indexedStageRootRuns.Add(uint64(rootRuns))
+	}
+}
+
+func (domain *collectionWriteDomain) observeIndexedSemanticRawRecords(records []indexedSemanticRecord) {
+	if domain == nil || len(records) == 0 {
+		return
+	}
+	domain.indexedSemanticRawRecords.Add(uint64(len(records)))
+	if deltas := indexedSemanticRecordIndexDeltaCount(records); deltas > 0 {
+		domain.indexedSemanticRawIndexDeltas.Add(uint64(deltas))
+	}
+	if fallbacks := indexedSemanticRecordFallbackCount(records); fallbacks > 0 {
+		domain.indexedSemanticFallbackRecords.Add(uint64(fallbacks))
 	}
 }
 
@@ -3202,6 +3305,7 @@ func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWr
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
 	domain.rootValueArenas = nil
+	domain.indexedSemanticRecords = nil
 	domain.rootRunCount = 0
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
@@ -3799,6 +3903,7 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		rootPolicies:           cloneRootPolicyMap(domain.rootPolicies),
 		rootBaseIDs:            cloneUint64Map(domain.rootBaseIDs),
 		rootValueArenas:        cloneArenaRefs(domain.rootValueArenas),
+		indexedSemanticRecords: cloneIndexedSemanticRecords(domain.indexedSemanticRecords),
 		indexedPublishingUnits: cloneIndexedFlushUnits(domain.indexedPublishingUnits),
 		indexedFlushUnits:      cloneIndexedFlushUnits(domain.indexedFlushUnits),
 		primaryRunIndexActive:  domain.primaryRunIndex != nil,
@@ -3833,6 +3938,7 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.rootPolicies = checkpoint.rootPolicies
 	domain.rootBaseIDs = checkpoint.rootBaseIDs
 	domain.rootValueArenas = checkpoint.rootValueArenas
+	domain.indexedSemanticRecords = checkpoint.indexedSemanticRecords
 	domain.rootRunCount = checkpoint.rootRunCount
 	pendingRuns := indexedFlushUnitPendingRootRunMap(indexedFlushUnitsWithPublishing(checkpoint.indexedPublishingUnits, checkpoint.indexedFlushUnits), checkpoint.rootRuns)
 	domain.primaryIDIndex = rebuildBufferedPrimaryIDIndex(checkpoint.meta.Name, pendingRuns)
@@ -3862,11 +3968,57 @@ func cloneIndexedFlushUnits(in []indexedFlushUnit) []indexedFlushUnit {
 			rootPolicies:    cloneRootPolicyMap(unit.rootPolicies),
 			rootBaseIDs:     cloneUint64Map(unit.rootBaseIDs),
 			uniqueValueRuns: cloneTableRunMap(unit.uniqueValueRuns),
+			semanticRecords: cloneIndexedSemanticRecords(unit.semanticRecords),
 			arenaRefs:       cloneArenaRefs(unit.arenaRefs),
 			docCount:        unit.docCount,
 			byteCount:       unit.byteCount,
 			rootRunCount:    unit.rootRunCount,
 		}
+	}
+	return out
+}
+
+func cloneIndexedSemanticRecords(in []indexedSemanticRecord) []indexedSemanticRecord {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]indexedSemanticRecord, len(in))
+	for i, record := range in {
+		out[i] = indexedSemanticRecord{
+			kind:        record.kind,
+			documentID:  bytes.Clone(record.documentID),
+			fallback:    record.fallback,
+			indexDeltas: cloneIndexedSemanticIndexDeltas(record.indexDeltas),
+		}
+	}
+	return out
+}
+
+func cloneIndexedSemanticIndexDeltas(in []indexedSemanticIndexDelta) []indexedSemanticIndexDelta {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]indexedSemanticIndexDelta, len(in))
+	for i, delta := range in {
+		out[i] = indexedSemanticIndexDelta{
+			indexName:  delta.indexName,
+			rootName:   delta.rootName,
+			runtimeIdx: delta.runtimeIdx,
+			unique:     delta.unique,
+			oldValues:  cloneIndexedSemanticValueSet(delta.oldValues),
+			newValues:  cloneIndexedSemanticValueSet(delta.newValues),
+		}
+	}
+	return out
+}
+
+func cloneIndexedSemanticValueSet(in [][]byte) [][]byte {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([][]byte, len(in))
+	for i, value := range in {
+		out[i] = bytes.Clone(value)
 	}
 	return out
 }
@@ -5009,6 +5161,7 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 		domain.indexedFlushUnits = nil
 		domain.rootMutableRuns = nil
 		domain.rootValueArenas = nil
+		domain.indexedSemanticRecords = nil
 		domain.count = 0
 		domain.bufferedBytes = 0
 		domain.mutableCount = 0
@@ -5460,6 +5613,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		domain.indexedFlushUnits = nil
 		domain.rootMutableRuns = nil
 		domain.rootValueArenas = nil
+		domain.indexedSemanticRecords = nil
 		domain.count = 0
 		domain.bufferedBytes = 0
 		domain.mutableCount = 0
@@ -5559,6 +5713,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
 	domain.rootValueArenas = nil
+	domain.indexedSemanticRecords = nil
 	domain.rootRunCount = 0
 	domain.primaryIDIndex = nil
 	domain.primaryRunIndex = nil
@@ -5591,6 +5746,7 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 		rootPolicies:    domain.rootPolicies,
 		rootBaseIDs:     domain.rootBaseIDs,
 		uniqueValueRuns: domain.uniqueValueRuns,
+		semanticRecords: domain.indexedSemanticRecords,
 		arenaRefs:       domain.rootValueArenas,
 		docCount:        domain.mutableCount,
 		byteCount:       domain.mutableBytes,
@@ -5603,6 +5759,7 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 	domain.rootBaseIDs = nil
 	domain.uniqueValueRuns = nil
 	domain.rootValueArenas = nil
+	domain.indexedSemanticRecords = nil
 	domain.rootRunCount = 0
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
@@ -5691,14 +5848,15 @@ func buildCoalescedFlushBatchFromUnits(meta CollectionMeta, catalog *collectionC
 	merged := mergedIndexedFlushUnits(units)
 	rootNames := orderedBufferedRootNames(meta, merged.rootRuns)
 	batch := coalescedFlushBatch{
-		state:        coalescedFlushBatchQueued,
-		units:        append([]indexedFlushUnit(nil), units...),
-		mergedUnit:   merged,
-		rootNames:    rootNames,
-		docCount:     merged.docCount,
-		byteCount:    merged.byteCount,
-		rootRunCount: indexedFlushUnitRootRunCount(merged),
-		rootCount:    len(rootNames),
+		state:           coalescedFlushBatchQueued,
+		units:           append([]indexedFlushUnit(nil), units...),
+		mergedUnit:      merged,
+		semanticRecords: cloneIndexedSemanticRecords(merged.semanticRecords),
+		rootNames:       rootNames,
+		docCount:        merged.docCount,
+		byteCount:       merged.byteCount,
+		rootRunCount:    indexedFlushUnitRootRunCount(merged),
+		rootCount:       len(rootNames),
 	}
 	if len(rootNames) == 0 {
 		return batch, nil
@@ -5747,6 +5905,9 @@ func mergedIndexedFlushUnits(units []indexedFlushUnit) indexedFlushUnit {
 	if len(unit.uniqueValueRuns) == 0 {
 		unit.uniqueValueRuns = nil
 	}
+	if len(unit.semanticRecords) == 0 {
+		unit.semanticRecords = nil
+	}
 	return unit
 }
 
@@ -5771,6 +5932,7 @@ func mergedIndexedFlushUnitLocked(domain *collectionWriteDomain) indexedFlushUni
 		rootPolicies:    domain.rootPolicies,
 		rootBaseIDs:     domain.rootBaseIDs,
 		uniqueValueRuns: domain.uniqueValueRuns,
+		semanticRecords: domain.indexedSemanticRecords,
 		arenaRefs:       domain.rootValueArenas,
 		rootRunCount:    domain.rootRunCount,
 	})
@@ -5786,6 +5948,9 @@ func mergedIndexedFlushUnitLocked(domain *collectionWriteDomain) indexedFlushUni
 	if len(unit.uniqueValueRuns) == 0 {
 		unit.uniqueValueRuns = nil
 	}
+	if len(unit.semanticRecords) == 0 {
+		unit.semanticRecords = nil
+	}
 	return unit
 }
 
@@ -5795,6 +5960,7 @@ func mergeIndexedFlushUnit(dst *indexedFlushUnit, src indexedFlushUnit) {
 	}
 	appendTableRunMap(dst.rootRuns, src.rootRuns)
 	appendTableRunMap(dst.uniqueValueRuns, src.uniqueValueRuns)
+	dst.semanticRecords = append(dst.semanticRecords, src.semanticRecords...)
 	dst.arenaRefs = append(dst.arenaRefs, src.arenaRefs...)
 	for rootName, policy := range src.rootPolicies {
 		dst.rootPolicies[rootName] = policy
@@ -7908,6 +8074,7 @@ type updateBatchPlan struct {
 	policies                    []backenddb.OrderedRootStoragePolicy
 	deltaTables                 []memtable.Table
 	directBufferedUpdate        *directBufferedUpdatePlan
+	semanticRecords             []indexedSemanticRecord
 	uniqueSecondaryIndexByRoot  []int
 	canBufferIndexedUpdateBatch bool
 	bufferedBase                bool
@@ -8004,6 +8171,44 @@ func applyDirectBufferedRootEntries(table memtable.Table, entries []directBuffer
 		entry := entries[i]
 		return entry.key, entry.value, page.ValuePtr{}, entry.flags, nil
 	})
+}
+
+func buildIndexedSemanticUpdateRecords(collectionName string, runtimes []indexRuntime, updates []preparedBatchUpdate) []indexedSemanticRecord {
+	if len(updates) == 0 {
+		return nil
+	}
+	records := make([]indexedSemanticRecord, 0, len(updates))
+	for _, update := range updates {
+		record := indexedSemanticRecord{
+			kind:       indexedSemanticRecordUpdate,
+			documentID: bytes.Clone(update.documentID),
+			fallback:   indexedSemanticFallbackRawOnly,
+		}
+		if update.indexStateChanged && len(runtimes) > 0 {
+			for runtimeIdx, runtime := range runtimes {
+				if !preparedBatchUpdateIndexChanged(update, runtimeIdx) {
+					continue
+				}
+				record.indexDeltas = append(record.indexDeltas, indexedSemanticIndexDelta{
+					indexName:  runtime.def.name,
+					rootName:   runtimeSecondaryRootName(collectionName, runtime),
+					runtimeIdx: runtimeIdx,
+					unique:     runtime.def.unique,
+					oldValues:  cloneIndexedSemanticValueSet(update.oldState.valuesAt(runtimeIdx)),
+					newValues:  cloneIndexedSemanticValueSet(update.newState.valuesAt(runtimeIdx)),
+				})
+			}
+		}
+		records = append(records, record)
+	}
+	return records
+}
+
+func appendIndexedSemanticRecordsLocked(domain *collectionWriteDomain, records []indexedSemanticRecord) {
+	if domain == nil || len(records) == 0 {
+		return
+	}
+	domain.indexedSemanticRecords = append(domain.indexedSemanticRecords, cloneIndexedSemanticRecords(records)...)
 }
 
 func buildDirectBufferedSecondaryRootPlans(collectionName string, runtimes []indexRuntime, changed []preparedBatchUpdate, stats *CollectionUpdateStats) ([]directBufferedSecondaryRootPlan, int64, error) {
@@ -9164,6 +9369,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		success = true
 		plan := newUpdateBatchPlan()
 		stats = updateCollectionUpdateStatsCounts(stats, results, len(rootNames))
+		semanticRecords := buildIndexedSemanticUpdateRecords(meta.Name, runtimes, changed)
 		*plan = updateBatchPlan{
 			results:                     results,
 			stats:                       stats,
@@ -9181,6 +9387,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			bufferedReadGeneration:      bufferedRead.writeGeneration,
 			bufferedReadBlocked:         bufferedReadBlocked,
 			policies:                    policies,
+			semanticRecords:             semanticRecords,
 			directBufferedUpdate: &directBufferedUpdatePlan{
 				templateEntries:    templateEntries,
 				primaryEntries:     primaryEntries,
@@ -9363,6 +9570,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	success = true
 	plan := newUpdateBatchPlan()
 	stats = updateCollectionUpdateStatsCounts(stats, results, len(deltaTables))
+	semanticRecords := buildIndexedSemanticUpdateRecords(meta.Name, runtimes, changed)
 	*plan = updateBatchPlan{
 		results:                     results,
 		stats:                       stats,
@@ -9381,6 +9589,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		bufferedReadBlocked:         bufferedReadBlocked,
 		policies:                    policies,
 		deltaTables:                 deltaTables,
+		semanticRecords:             semanticRecords,
 		scratch:                     scratch,
 	}
 	scratchOwnedByPlan = true
@@ -9655,6 +9864,10 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		}
 		return false, err
 	}
+	semanticRecords := plan.semanticRecords
+	if len(semanticRecords) > 0 {
+		appendIndexedSemanticRecordsLocked(domain, semanticRecords)
+	}
 	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
 		flushDuration, lockReleased, relockWait, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options)
 		if lockReleased > 0 {
@@ -9671,6 +9884,9 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		}
 	}
 	resetCollectionTables(compactedObsolete)
+	if len(semanticRecords) > 0 {
+		domain.observeIndexedSemanticRawRecords(semanticRecords)
+	}
 	plan.stats.BufferedBatches = 1
 	return true, nil
 }
@@ -9897,6 +10113,10 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		}
 		return false, err
 	}
+	semanticRecords := plan.semanticRecords
+	if len(semanticRecords) > 0 {
+		appendIndexedSemanticRecordsLocked(domain, semanticRecords)
+	}
 	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
 		flushDuration, lockReleased, relockWait, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options)
 		if lockReleased > 0 {
@@ -9913,6 +10133,9 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		}
 	}
 	resetCollectionTables(compactedObsolete)
+	if len(semanticRecords) > 0 {
+		domain.observeIndexedSemanticRawRecords(semanticRecords)
+	}
 	plan.stats.BufferedBatches = 1
 	return true, nil
 }
