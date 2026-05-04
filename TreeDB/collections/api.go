@@ -1675,6 +1675,7 @@ func (domain *collectionWriteDomain) waitIndexedAsyncFlush() {
 		if waitStart.IsZero() {
 			waitStart = time.Now()
 		}
+		runCollectionWaitIndexedAsyncFlushHook()
 		domain.indexedAsyncCond.Wait()
 	}
 	domain.indexedAsyncMu.Unlock()
@@ -1711,6 +1712,32 @@ func (domain *collectionWriteDomain) consumeIndexedAsyncFlushError() error {
 	domain.indexedAsyncErr = nil
 	domain.indexedAsyncMu.Unlock()
 	return err
+}
+
+var collectionWaitIndexedAsyncFlushHook struct {
+	mu sync.Mutex
+	fn func()
+}
+
+func setCollectionWaitIndexedAsyncFlushHookForTest(fn func()) func() {
+	collectionWaitIndexedAsyncFlushHook.mu.Lock()
+	prev := collectionWaitIndexedAsyncFlushHook.fn
+	collectionWaitIndexedAsyncFlushHook.fn = fn
+	collectionWaitIndexedAsyncFlushHook.mu.Unlock()
+	return func() {
+		collectionWaitIndexedAsyncFlushHook.mu.Lock()
+		collectionWaitIndexedAsyncFlushHook.fn = prev
+		collectionWaitIndexedAsyncFlushHook.mu.Unlock()
+	}
+}
+
+func runCollectionWaitIndexedAsyncFlushHook() {
+	collectionWaitIndexedAsyncFlushHook.mu.Lock()
+	fn := collectionWaitIndexedAsyncFlushHook.fn
+	collectionWaitIndexedAsyncFlushHook.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 func (domain *collectionWriteDomain) observeIndexedFlush(units, docs int, bytes int64, rootRuns, roots int, duration, materialize, publish time.Duration, err error) {
