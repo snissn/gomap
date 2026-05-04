@@ -51,13 +51,16 @@ func TestCollectionManagerCloseWaitsForActiveIndexedPublish(t *testing.T) {
 	}
 
 	closeDone := make(chan error, 1)
+	closeStarted := make(chan struct{})
 	go func() {
+		close(closeStarted)
 		closeDone <- d.Close()
 	}()
+	<-closeStarted
 	select {
 	case err := <-closeDone:
 		t.Fatalf("Close returned before active indexed publish finished: %v", err)
-	default:
+	case <-time.After(collectionTestTimeout(t, 100*time.Millisecond)):
 	}
 
 	publishErr := col.publishPreparedIndexedFlush(work)

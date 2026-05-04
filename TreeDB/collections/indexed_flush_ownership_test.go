@@ -1,7 +1,7 @@
 package collections
 
 import (
-	"strings"
+	"errors"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -56,7 +56,7 @@ func TestCollectionIndexedAsyncPublishLostOwnershipDoesNotRemoveCurrentPublishin
 		rootIDs[i] = uint64(1000 + i)
 	}
 	err = col.completePreparedIndexedFlush(work, 999, rootIDs, nil, 0, 0, 0)
-	if err == nil || !strings.Contains(err.Error(), "lost ownership") {
+	if !errors.Is(err, errIndexedFlushLostOwnership) {
 		t.Fatalf("complete lost ownership err=%v want lost ownership", err)
 	}
 
