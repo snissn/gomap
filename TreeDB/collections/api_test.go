@@ -1380,6 +1380,21 @@ func TestPrimaryOnlyNoIndexUpdateCounters(t *testing.T) {
 	if got := stats.PrimaryOnlyCoalescedDocs - statsBefore.PrimaryOnlyCoalescedDocs; got != 0 {
 		t.Fatalf("primary-only coalesced docs before flush delta=%d want 0", got)
 	}
+	if got := stats.RootDeltaPlanPrimaryRoots - statsBefore.RootDeltaPlanPrimaryRoots; got != 0 {
+		t.Fatalf("root delta primary roots before flush delta=%d want 0", got)
+	}
+	if got := stats.RootDeltaPlanTemplateRoots - statsBefore.RootDeltaPlanTemplateRoots; got != 0 {
+		t.Fatalf("root delta template roots before flush delta=%d want 0", got)
+	}
+	if got := stats.RootDeltaPlanIndexStateRoots - statsBefore.RootDeltaPlanIndexStateRoots; got != 0 {
+		t.Fatalf("root delta index-state roots before flush delta=%d want 0", got)
+	}
+	if got := stats.RootDeltaPlanSecondaryRoots - statsBefore.RootDeltaPlanSecondaryRoots; got != 0 {
+		t.Fatalf("root delta secondary roots before flush delta=%d want 0", got)
+	}
+	if got := stats.RootDeltaPlanEntries - statsBefore.RootDeltaPlanEntries; got != 0 {
+		t.Fatalf("root delta entries before flush delta=%d want 0", got)
+	}
 
 	if err := col.Flush(); err != nil {
 		t.Fatalf("flush staged update: %v", err)
@@ -1408,6 +1423,27 @@ func TestPrimaryOnlyNoIndexUpdateCounters(t *testing.T) {
 	}
 	if got, want := afterFlush.PrimaryOnlyCoalescedDocs-statsBefore.PrimaryOnlyCoalescedDocs, uint64(1); got != want {
 		t.Fatalf("primary-only coalesced docs delta=%d want %d", got, want)
+	}
+	if got, want := afterFlush.RootDeltaPlanPrimaryRoots-statsBefore.RootDeltaPlanPrimaryRoots, uint64(1); got != want {
+		t.Fatalf("root delta primary roots after flush delta=%d want %d", got, want)
+	}
+	if got := afterFlush.RootDeltaPlanTemplateRoots - statsBefore.RootDeltaPlanTemplateRoots; got != 0 {
+		t.Fatalf("root delta template roots after flush delta=%d want 0", got)
+	}
+	if got := afterFlush.RootDeltaPlanIndexStateRoots - statsBefore.RootDeltaPlanIndexStateRoots; got != 0 {
+		t.Fatalf("root delta index-state roots after flush delta=%d want 0", got)
+	}
+	if got := afterFlush.RootDeltaPlanSecondaryRoots - statsBefore.RootDeltaPlanSecondaryRoots; got != 0 {
+		t.Fatalf("root delta secondary roots after flush delta=%d want 0", got)
+	}
+	if got, want := afterFlush.RootDeltaPlanEntries-statsBefore.RootDeltaPlanEntries, uint64(1); got != want {
+		t.Fatalf("root delta entries after flush delta=%d want %d", got, want)
+	}
+	if got := afterFlush.RootDeltaPlanKeyBytes - statsBefore.RootDeltaPlanKeyBytes; got != uint64(len("u1")) {
+		t.Fatalf("root delta key bytes after flush delta=%d want %d", got, len("u1"))
+	}
+	if got := afterFlush.RootDeltaPlanValueBytes - statsBefore.RootDeltaPlanValueBytes; got == 0 {
+		t.Fatal("root delta value bytes after flush delta=0 want positive")
 	}
 	exported := mgr.Stats()
 	for _, key := range []string{
@@ -7552,9 +7588,14 @@ func TestCollectionUpdateCombinerRunBatchPreservesIndependentItemErrorOutcomes(t
 	); err != nil {
 		t.Fatalf("insert batch: %v", err)
 	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert batch: %v", err)
+	}
 
 	itemErr := errors.New("bad update")
-	combiner := &collectionUpdateCombiner{maxBatch: 8}
+	beforeState := d.State()
+	beforeRoot := collectionNoIndexPrimaryRootIDForTest(t, d, "users")
+	combiner := &collectionUpdateCombiner{maxBatch: 8, domain: col.writeDomain}
 	firstCalls := 0
 	secondCalls := 0
 	requests := []collectionUpdateCombineRequest{
@@ -7592,6 +7633,15 @@ func TestCollectionUpdateCombinerRunBatchPreservesIndependentItemErrorOutcomes(t
 	if firstCalls == 0 || secondCalls != 1 {
 		t.Fatalf("callback calls first=%d second=%d want first called and second called once", firstCalls, secondCalls)
 	}
+	if got := d.State().CommitSeq; got != beforeState.CommitSeq {
+		t.Fatalf("item-error fallback advanced commit seq from %d to %d before flush", beforeState.CommitSeq, got)
+	}
+	if got := collectionNoIndexPrimaryRootIDForTest(t, d, "users"); got != beforeRoot {
+		t.Fatalf("item-error fallback published primary root from %d to %d before flush", beforeRoot, got)
+	}
+	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 1 || state.tableLen != 1 || state.indexedQueued != 0 || state.indexedPublishing != 0 || state.indexedRootRuns != 0 {
+		t.Fatalf("pending state after item-error fallback=%+v want one no-index row", state)
+	}
 	got, err := col.Get([]byte("u1"))
 	if err != nil {
 		t.Fatalf("get u1: %v", err)
@@ -7605,6 +7655,15 @@ func TestCollectionUpdateCombinerRunBatchPreservesIndependentItemErrorOutcomes(t
 	}
 	if !bytes.Contains(got, []byte(`"score":0`)) {
 		t.Fatalf("u2 document=%s want unchanged score", got)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush item-error fallback update: %v", err)
+	}
+	if got := d.State().CommitSeq; got != beforeState.CommitSeq+1 {
+		t.Fatalf("item-error fallback flush commit seq=%d want %d", got, beforeState.CommitSeq+1)
+	}
+	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 0 || state.tableLen != 0 {
+		t.Fatalf("pending state after item-error fallback flush=%+v want empty", state)
 	}
 }
 
@@ -7629,8 +7688,13 @@ func TestCollectionUpdateCombinerRunBatchRecoversCallbackPanic(t *testing.T) {
 	); err != nil {
 		t.Fatalf("insert batch: %v", err)
 	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert batch: %v", err)
+	}
 
-	combiner := &collectionUpdateCombiner{maxBatch: 8}
+	beforeState := d.State()
+	beforeRoot := collectionNoIndexPrimaryRootIDForTest(t, d, "users")
+	combiner := &collectionUpdateCombiner{maxBatch: 8, domain: col.writeDomain}
 	secondCalls := 0
 	requests := []collectionUpdateCombineRequest{
 		{
@@ -7667,12 +7731,123 @@ func TestCollectionUpdateCombinerRunBatchRecoversCallbackPanic(t *testing.T) {
 	if secondCalls != 1 {
 		t.Fatalf("second callback calls=%d want 1", secondCalls)
 	}
+	if got := d.State().CommitSeq; got != beforeState.CommitSeq {
+		t.Fatalf("panic fallback advanced commit seq from %d to %d before flush", beforeState.CommitSeq, got)
+	}
+	if got := collectionNoIndexPrimaryRootIDForTest(t, d, "users"); got != beforeRoot {
+		t.Fatalf("panic fallback published primary root from %d to %d before flush", beforeRoot, got)
+	}
+	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 1 || state.tableLen != 1 || state.indexedQueued != 0 || state.indexedPublishing != 0 || state.indexedRootRuns != 0 {
+		t.Fatalf("pending state after panic fallback=%+v want one no-index row", state)
+	}
 	got, err := col.Get([]byte("u2"))
 	if err != nil {
 		t.Fatalf("get u2: %v", err)
 	}
 	if !bytes.Contains(got, []byte(`"score":2`)) {
 		t.Fatalf("u2 document=%s want updated score", got)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush panic fallback update: %v", err)
+	}
+	if got := d.State().CommitSeq; got != beforeState.CommitSeq+1 {
+		t.Fatalf("panic fallback flush commit seq=%d want %d", got, beforeState.CommitSeq+1)
+	}
+	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 0 || state.tableLen != 0 {
+		t.Fatalf("pending state after panic fallback flush=%+v want empty", state)
+	}
+}
+
+func TestCollectionUpdateCombinerRunBatchDuplicateIDsUseSerialNoIndexWriteBack(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"count":0}`)}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert batch: %v", err)
+	}
+
+	beforeState := d.State()
+	beforeRoot := collectionNoIndexPrimaryRootIDForTest(t, d, "users")
+	combiner := &collectionUpdateCombiner{maxBatch: 8, domain: col.writeDomain}
+	firstCalls := 0
+	secondCalls := 0
+	requests := []collectionUpdateCombineRequest{
+		{
+			collection: col,
+			documentID: []byte("u1"),
+			update: func(current []byte) ([]byte, bool, error) {
+				firstCalls++
+				if !bytes.Equal(current, []byte(`{"count":0}`)) {
+					return nil, false, fmt.Errorf("first current=%q want count 0", current)
+				}
+				return []byte(`{"count":1}`), true, nil
+			},
+			done: make(chan collectionUpdateCombineResult, 1),
+		},
+		{
+			collection: col,
+			documentID: []byte("u1"),
+			update: func(current []byte) ([]byte, bool, error) {
+				secondCalls++
+				if !bytes.Equal(current, []byte(`{"count":1}`)) {
+					return nil, false, fmt.Errorf("second current=%q want staged count 1", current)
+				}
+				return []byte(`{"count":2}`), true, nil
+			},
+			done: make(chan collectionUpdateCombineResult, 1),
+		},
+	}
+	combiner.runBatch(requests)
+	for i := range requests {
+		result := <-requests[i].done
+		if result.err != nil {
+			t.Fatalf("request %d err=%v", i, result.err)
+		}
+		if !result.matched || !result.modified {
+			t.Fatalf("request %d matched=%v modified=%v want true,true", i, result.matched, result.modified)
+		}
+	}
+	if firstCalls != 1 || secondCalls != 1 {
+		t.Fatalf("callback calls first=%d second=%d want 1,1", firstCalls, secondCalls)
+	}
+	if got := d.State().CommitSeq; got != beforeState.CommitSeq {
+		t.Fatalf("duplicate-id fallback advanced commit seq from %d to %d before flush", beforeState.CommitSeq, got)
+	}
+	if got := collectionNoIndexPrimaryRootIDForTest(t, d, "users"); got != beforeRoot {
+		t.Fatalf("duplicate-id fallback published primary root from %d to %d before flush", beforeRoot, got)
+	}
+	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 1 || state.tableLen != 1 || state.indexedQueued != 0 || state.indexedPublishing != 0 || state.indexedRootRuns != 0 {
+		t.Fatalf("pending state after duplicate-id fallback=%+v want one no-index row", state)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1: %v", err)
+	}
+	if want := []byte(`{"count":2}`); !bytes.Equal(got, want) {
+		t.Fatalf("u1 document=%q want %q", got, want)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush duplicate-id fallback update: %v", err)
+	}
+	if got := d.State().CommitSeq; got != beforeState.CommitSeq+1 {
+		t.Fatalf("duplicate-id fallback flush commit seq=%d want %d", got, beforeState.CommitSeq+1)
+	}
+	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 0 || state.tableLen != 0 {
+		t.Fatalf("pending state after duplicate-id fallback flush=%+v want empty", state)
 	}
 }
 

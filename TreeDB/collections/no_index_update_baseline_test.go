@@ -239,6 +239,18 @@ func TestCollectionNoIndexUpdateMissingAndUnchangedDoNotPublishOrQueue(t *testin
 		t.Fatalf("unchanged update primary root=%d want %d", got, beforeRoot)
 	}
 	afterUnchangedStats := mgr.StatsSnapshot()
+	if got, want := afterUnchangedStats.PrimaryOnlyUpdateCalls-beforeStats.PrimaryOnlyUpdateCalls, uint64(1); got != want {
+		t.Fatalf("unchanged update primary-only update calls delta=%d want %d", got, want)
+	}
+	if got, want := afterUnchangedStats.PrimaryOnlyMatched-beforeStats.PrimaryOnlyMatched, uint64(1); got != want {
+		t.Fatalf("unchanged update primary-only matched delta=%d want %d", got, want)
+	}
+	if got := afterUnchangedStats.PrimaryOnlyModified - beforeStats.PrimaryOnlyModified; got != 0 {
+		t.Fatalf("unchanged update primary-only modified delta=%d want 0", got)
+	}
+	if got := afterUnchangedStats.PrimaryOnlyBufferedCalls - beforeStats.PrimaryOnlyBufferedCalls; got != 0 {
+		t.Fatalf("unchanged update primary-only buffered calls delta=%d want 0", got)
+	}
 	if got := afterUnchangedStats.PrimaryOnlyRootPublishes - beforeStats.PrimaryOnlyRootPublishes; got != 0 {
 		t.Fatalf("unchanged update primary root publishes delta=%d want 0", got)
 	}
@@ -267,6 +279,18 @@ func TestCollectionNoIndexUpdateMissingAndUnchangedDoNotPublishOrQueue(t *testin
 		t.Fatalf("missing update primary root=%d want %d", got, beforeRoot)
 	}
 	afterMissingStats := mgr.StatsSnapshot()
+	if got, want := afterMissingStats.PrimaryOnlyUpdateCalls-afterUnchangedStats.PrimaryOnlyUpdateCalls, uint64(1); got != want {
+		t.Fatalf("missing update primary-only update calls delta=%d want %d", got, want)
+	}
+	if got := afterMissingStats.PrimaryOnlyMatched - afterUnchangedStats.PrimaryOnlyMatched; got != 0 {
+		t.Fatalf("missing update primary-only matched delta=%d want 0", got)
+	}
+	if got := afterMissingStats.PrimaryOnlyModified - afterUnchangedStats.PrimaryOnlyModified; got != 0 {
+		t.Fatalf("missing update primary-only modified delta=%d want 0", got)
+	}
+	if got := afterMissingStats.PrimaryOnlyBufferedCalls - afterUnchangedStats.PrimaryOnlyBufferedCalls; got != 0 {
+		t.Fatalf("missing update primary-only buffered calls delta=%d want 0", got)
+	}
 	if got := afterMissingStats.PrimaryOnlyRootPublishes - beforeStats.PrimaryOnlyRootPublishes; got != 0 {
 		t.Fatalf("missing update primary root publishes delta=%d want 0", got)
 	}
@@ -436,6 +460,13 @@ func TestCollectionNoIndexRepeatedSameIDUpdatesCoalesceAndPreserveOrder(t *testi
 	if !matched || !modified {
 		t.Fatalf("first update matched/modified=%v/%v want true/true", matched, modified)
 	}
+	afterFirstStats := mgr.StatsSnapshot()
+	if got, want := afterFirstStats.PendingDocuments, 1; got != want {
+		t.Fatalf("pending docs after first same-id update=%d want %d", got, want)
+	}
+	if afterFirstStats.PendingBytes <= 0 {
+		t.Fatalf("pending bytes after first same-id update=%d want positive", afterFirstStats.PendingBytes)
+	}
 	matched, modified, err = col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
 		if !bytes.Equal(current, []byte(`{"count":1}`)) {
 			return nil, false, fmt.Errorf("second callback current=%q want count 1", current)
@@ -447,6 +478,13 @@ func TestCollectionNoIndexRepeatedSameIDUpdatesCoalesceAndPreserveOrder(t *testi
 	}
 	if !matched || !modified {
 		t.Fatalf("second update matched/modified=%v/%v want true/true", matched, modified)
+	}
+	afterSecondStats := mgr.StatsSnapshot()
+	if got, want := afterSecondStats.PendingDocuments, 1; got != want {
+		t.Fatalf("pending docs after second same-id update=%d want %d", got, want)
+	}
+	if got, want := afterSecondStats.PendingBytes, afterFirstStats.PendingBytes; got != want {
+		t.Fatalf("pending bytes after same-length overwrite=%d want current-table bytes %d", got, want)
 	}
 	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 1 || state.tableLen < 1 || state.indexedQueued != 0 || state.indexedPublishing != 0 || state.indexedRootRuns != 0 {
 		t.Fatalf("pending state after repeated updates=%+v want one unique no-index row", state)
@@ -561,6 +599,276 @@ func TestCollectionNoIndexUpdateBatchReadsStagedPrimaryOnlyValue(t *testing.T) {
 	}
 	if got, want := afterFlushStats.PrimaryOnlyCoalescedDocs-beforeStats.PrimaryOnlyCoalescedDocs, uint64(2); got != want {
 		t.Fatalf("primary-only coalesced docs delta=%d want %d", got, want)
+	}
+}
+
+func TestCollectionNoIndexUpdateBatchAfterUnrelatedCatalogChangePreservesStagedWrite(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"count":0}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert: %v", err)
+	}
+	if _, _, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+		if !bytes.Equal(current, []byte(`{"count":0}`)) {
+			return nil, false, fmt.Errorf("stage current=%q want count 0", current)
+		}
+		return []byte(`{"count":1}`), true, nil
+	}); err != nil {
+		t.Fatalf("stage update: %v", err)
+	}
+	stagedRoot := collectionNoIndexPrimaryRootIDForTest(t, d, "users")
+	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 1 || state.tableLen != 1 {
+		t.Fatalf("pending state after staged update=%+v want one no-index row", state)
+	}
+
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "other"}); err != nil {
+		t.Fatalf("create unrelated collection: %v", err)
+	}
+	beforeBatchState := d.State()
+	if got := collectionNoIndexPrimaryRootIDForTest(t, d, "users"); got != stagedRoot {
+		t.Fatalf("unrelated catalog change changed users primary root from %d to %d", stagedRoot, got)
+	}
+	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 1 || state.tableLen != 1 {
+		t.Fatalf("pending state after unrelated catalog change=%+v want one no-index row", state)
+	}
+
+	results, err := col.UpdateBatch([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: func(current []byte) ([]byte, bool, error) {
+			if !bytes.Equal(current, []byte(`{"count":1}`)) {
+				return nil, false, fmt.Errorf("batch current=%q want staged count 1", current)
+			}
+			return []byte(`{"count":2}`), true, nil
+		}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("UpdateBatch results=%+v want one matched/modified result", results)
+	}
+	if got := d.State().CommitSeq; got != beforeBatchState.CommitSeq {
+		t.Fatalf("UpdateBatch after unrelated catalog change advanced commit seq from %d to %d", beforeBatchState.CommitSeq, got)
+	}
+	if got := collectionNoIndexPrimaryRootIDForTest(t, d, "users"); got != stagedRoot {
+		t.Fatalf("UpdateBatch after unrelated catalog change published primary root from %d to %d", stagedRoot, got)
+	}
+	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 1 || state.tableLen != 1 || state.indexedQueued != 0 || state.indexedPublishing != 0 || state.indexedRootRuns != 0 {
+		t.Fatalf("pending state after UpdateBatch replan=%+v want one no-index row", state)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get staged batch update: %v", err)
+	}
+	if want := []byte(`{"count":2}`); !bytes.Equal(got, want) {
+		t.Fatalf("staged batch document=%q want %q", got, want)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush staged batch update: %v", err)
+	}
+	if got := d.State().CommitSeq; got != beforeBatchState.CommitSeq+1 {
+		t.Fatalf("flush after staged batch advanced commit seq to %d want %d", got, beforeBatchState.CommitSeq+1)
+	}
+	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 0 || state.tableLen != 0 {
+		t.Fatalf("pending state after flush=%+v want empty", state)
+	}
+}
+
+func TestCollectionNoIndexUpdateBatchGenerationConflictReplansWithoutFlush(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"count":0}`), []byte(`{"count":0}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert: %v", err)
+	}
+	beforeState := d.State()
+	beforeRoot := collectionNoIndexPrimaryRootIDForTest(t, d, "users")
+	if _, _, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+		if !bytes.Equal(current, []byte(`{"count":0}`)) {
+			return nil, false, fmt.Errorf("stage u1 current=%q want count 0", current)
+		}
+		return []byte(`{"count":1}`), true, nil
+	}); err != nil {
+		t.Fatalf("stage u1: %v", err)
+	}
+
+	injected := false
+	callbackCalls := 0
+	results, err := col.UpdateBatch([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: func(current []byte) ([]byte, bool, error) {
+			callbackCalls++
+			if !bytes.Equal(current, []byte(`{"count":1}`)) {
+				return nil, false, fmt.Errorf("batch current=%q want staged count 1", current)
+			}
+			if !injected {
+				injected = true
+				matched, modified, err := col.Update([]byte("u2"), func(current []byte) ([]byte, bool, error) {
+					if !bytes.Equal(current, []byte(`{"count":0}`)) {
+						return nil, false, fmt.Errorf("nested u2 current=%q want count 0", current)
+					}
+					return []byte(`{"count":1}`), true, nil
+				})
+				if err != nil {
+					return nil, false, err
+				}
+				if !matched || !modified {
+					return nil, false, fmt.Errorf("nested u2 matched/modified=%v/%v want true/true", matched, modified)
+				}
+			}
+			return []byte(`{"count":2}`), true, nil
+		}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("UpdateBatch results=%+v want one matched/modified result", results)
+	}
+	if callbackCalls < 2 {
+		t.Fatalf("batch callback calls=%d want retry after generation conflict", callbackCalls)
+	}
+	if got := d.State().CommitSeq; got != beforeState.CommitSeq {
+		t.Fatalf("generation-conflict retry advanced commit seq from %d to %d", beforeState.CommitSeq, got)
+	}
+	if got := collectionNoIndexPrimaryRootIDForTest(t, d, "users"); got != beforeRoot {
+		t.Fatalf("generation-conflict retry published primary root from %d to %d", beforeRoot, got)
+	}
+	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 2 || state.tableLen != 2 || state.indexedQueued != 0 || state.indexedPublishing != 0 || state.indexedRootRuns != 0 {
+		t.Fatalf("pending state after generation-conflict retry=%+v want two no-index rows", state)
+	}
+	for _, tc := range []struct {
+		id   []byte
+		want []byte
+	}{
+		{id: []byte("u1"), want: []byte(`{"count":2}`)},
+		{id: []byte("u2"), want: []byte(`{"count":1}`)},
+	} {
+		got, err := col.Get(tc.id)
+		if err != nil {
+			t.Fatalf("get %s: %v", tc.id, err)
+		}
+		if !bytes.Equal(got, tc.want) {
+			t.Fatalf("document %s=%q want %q", tc.id, got, tc.want)
+		}
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush staged generation-conflict updates: %v", err)
+	}
+	if got := d.State().CommitSeq; got != beforeState.CommitSeq+1 {
+		t.Fatalf("flush after generation-conflict retry advanced commit seq to %d want %d", got, beforeState.CommitSeq+1)
+	}
+	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 0 || state.tableLen != 0 {
+		t.Fatalf("pending state after flush=%+v want empty", state)
+	}
+}
+
+func TestCollectionNoIndexUpdateCreateIndexDrainsStagedUpdateBeforeBackfill(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"city":"hnl","score":0}`), []byte(`{"city":"hnl","score":0}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert: %v", err)
+	}
+	beforeState := d.State()
+	beforeRoot := collectionNoIndexPrimaryRootIDForTest(t, d, "users")
+	if _, _, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+		if !bytes.Contains(current, []byte(`"city":"hnl"`)) {
+			return nil, false, fmt.Errorf("stage current=%q missing hnl", current)
+		}
+		return []byte(`{"city":"sea","score":1}`), true, nil
+	}); err != nil {
+		t.Fatalf("stage update: %v", err)
+	}
+	if got := d.State().CommitSeq; got != beforeState.CommitSeq {
+		t.Fatalf("staged update before CreateIndex advanced commit seq from %d to %d", beforeState.CommitSeq, got)
+	}
+	if got := collectionNoIndexPrimaryRootIDForTest(t, d, "users"); got != beforeRoot {
+		t.Fatalf("staged update before CreateIndex changed primary root from %d to %d", beforeRoot, got)
+	}
+	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 1 || state.tableLen != 1 {
+		t.Fatalf("pending state before CreateIndex=%+v want one no-index row", state)
+	}
+
+	if _, err := col.CreateIndex(IndexDefinition{Name: "city", Field: "city", ValueType: IndexValueString}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if got := d.State().CommitSeq; got <= beforeState.CommitSeq {
+		t.Fatalf("CreateIndex commit seq=%d want greater than %d", got, beforeState.CommitSeq)
+	}
+	if got := collectionNoIndexPrimaryRootIDForTest(t, d, "users"); got == beforeRoot {
+		t.Fatalf("CreateIndex left primary root at %d after draining staged update", got)
+	}
+	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 0 || state.tableLen != 0 {
+		t.Fatalf("pending state after CreateIndex=%+v want empty", state)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1 after CreateIndex: %v", err)
+	}
+	if !bytes.Equal(got, []byte(`{"city":"sea","score":1}`)) {
+		t.Fatalf("u1 after CreateIndex=%q want staged value", got)
+	}
+	seaIDs, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find sea city: %v", err)
+	}
+	if len(seaIDs) != 1 || !bytes.Equal(seaIDs[0], []byte("u1")) {
+		t.Fatalf("sea city ids=%q want [u1]", seaIDs)
+	}
+	hnlIDs, err := col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find hnl city: %v", err)
+	}
+	if len(hnlIDs) != 1 || !bytes.Equal(hnlIDs[0], []byte("u2")) {
+		t.Fatalf("hnl city ids=%q want [u2]", hnlIDs)
 	}
 }
 

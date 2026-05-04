@@ -7694,10 +7694,10 @@ func completeUpdateCombineBatchWithItemFallback(batch []collectionUpdateCombineR
 			completeUpdateCombineRequest(req, collectionUpdateCombineResult{err: reqErr})
 			continue
 		}
-		// Keep the non-error fallbacks synchronous: the original internal batch
-		// already had one item callback fail, so staging the remaining items
-		// would partially accept a failed combined execution into write-back.
-		completeUpdateCombineRequest(req, runUpdateCombineDirectSynchronous(req))
+		// The failed combined batch has not staged any rows. Retry sibling
+		// requests as independent Update calls so eligible no-index updates keep
+		// the same write-back contract as the public direct path.
+		completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
 	}
 	return true
 }
@@ -8211,6 +8211,7 @@ type updateBatchPlan struct {
 	uniqueSecondaryIndexByRoot  []int
 	canBufferIndexedUpdateBatch bool
 	bufferedBase                bool
+	bufferedReadNoIndex         bool
 	bufferedReadGeneration      uint64
 	bufferedReadBlocked         bool
 	scratch                     *updateBatchPlanScratch
@@ -8565,6 +8566,7 @@ func appendUpdateBatchPlanScratchDocument(scratch *updateBatchPlanScratch, docum
 
 type updateBatchBufferedRead struct {
 	enabled         bool
+	noIndex         bool
 	primaryEntries  []updateBatchBufferedEntry
 	primaryBuffer   *updateBatchBufferedEntryBuffer
 	writeGeneration uint64
@@ -8702,6 +8704,17 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, error) {
 	if c.shouldPlanUpdateBatchWithBufferedWrites(mode) {
 		useBufferedRead := true
+		noIndexReplans := 0
+		replanNoIndex := func(cause error) error {
+			noIndexReplans++
+			if noIndexReplans > maxCollectionMutationRetries {
+				if cause == nil {
+					cause = ErrConcurrentMutation
+				}
+				return collectionMutationRetryExhausted(cause)
+			}
+			return nil
+		}
 		for {
 			plan, err := c.buildUpdateBatchPlan(items, mode, useBufferedRead)
 			if err != nil {
@@ -8715,6 +8728,13 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 			err = c.withMutationLock(func() error {
 				if len(plan.deltaTables) == 0 && plan.directBufferedUpdate == nil {
 					if plan.bufferedReadBlocked && useBufferedRead {
+						if c.hasPendingNoIndexBufferedWrites() {
+							if err := replanNoIndex(ErrConcurrentMutation); err != nil {
+								return err
+							}
+							replan = true
+							return nil
+						}
 						if err := c.flushBufferedWrites(); err != nil {
 							return err
 						}
@@ -8724,6 +8744,13 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 					}
 					if plan.bufferedBase && !c.bufferedUpdateBatchPlanStillCurrent(plan) {
 						if useBufferedRead {
+							if plan.bufferedReadNoIndex {
+								if err := replanNoIndex(ErrConcurrentMutation); err != nil {
+									return err
+								}
+								replan = true
+								return nil
+							}
 							if err := c.flushBufferedWrites(); err != nil {
 								return err
 							}
@@ -8743,6 +8770,13 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 				buffered, bufferErr := c.bufferUpdateBatchPlanLocked(plan)
 				if bufferErr != nil {
 					if errors.Is(bufferErr, ErrConcurrentMutation) && useBufferedRead {
+						if plan.bufferedReadNoIndex || isPrimaryOnlyNoIndexUpdateBatchPlan(plan) {
+							if err := replanNoIndex(bufferErr); err != nil {
+								return err
+							}
+							replan = true
+							return nil
+						}
 						if err := c.flushBufferedWrites(); err != nil {
 							return err
 						}
@@ -8873,6 +8907,24 @@ func (c *Collection) bufferedUpdateBatchPlanStillCurrent(plan *updateBatchPlan) 
 	return (updateBatchCanReadBufferedDomainLocked(domain, plan.meta, plan.baseSystemRoot) ||
 		updateBatchCanReadNoIndexBufferedDomainLocked(domain, plan.meta, plan.baseSystemRoot)) &&
 		plan.bufferedReadGeneration == domain.writeGeneration
+}
+
+func (c *Collection) hasPendingNoIndexBufferedWrites() bool {
+	if c == nil || c.writeDomain == nil {
+		return false
+	}
+	domain := c.writeDomain
+	domain.mu.RLock()
+	defer domain.mu.RUnlock()
+	return hasPendingNoIndexBufferedWritesLocked(domain)
+}
+
+func hasPendingNoIndexBufferedWritesLocked(domain *collectionWriteDomain) bool {
+	return domain != nil &&
+		domain.count > 0 &&
+		domain.table != nil &&
+		domain.table.Len() > 0 &&
+		!hasBufferedIndexedRootRuns(domain)
 }
 
 func (c *Collection) withMutationLock(fn func() error) error {
@@ -9110,6 +9162,24 @@ func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta Collect
 	return read, templateRuns, blocked, err
 }
 
+func (c *Collection) snapshotUpdateBatchBufferedReadForPlan(domain *collectionWriteDomain, meta CollectionMeta, baseCommitSeq, baseSystemRoot uint64, items []UpdateBatchItem, documentFormat DocumentFormat) (updateBatchBufferedRead, []memtable.Table, bool, error) {
+	read, templateRuns, blocked, err := snapshotUpdateBatchBufferedRead(domain, meta, baseSystemRoot, items, documentFormat)
+	if err != nil || !blocked || domain == nil {
+		return read, templateRuns, blocked, err
+	}
+
+	domain.mu.Lock()
+	defer domain.mu.Unlock()
+	if !hasPendingNoIndexBufferedWritesLocked(domain) {
+		return read, templateRuns, blocked, nil
+	}
+	if _, err := c.revalidateBufferedWriteDomainLocked(domain, baseCommitSeq, baseSystemRoot); err != nil {
+		return updateBatchBufferedRead{}, nil, false, err
+	}
+	read, templateRuns, blocked, _, err = snapshotUpdateBatchBufferedReadLocked(domain, meta, baseSystemRoot, items, documentFormat, false)
+	return read, templateRuns, blocked, err
+}
+
 func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64, items []UpdateBatchItem, documentFormat DocumentFormat, allowPrimaryRunIndexBuild bool) (updateBatchBufferedRead, []memtable.Table, bool, bool, error) {
 	if updateBatchCanReadNoIndexBufferedDomainLocked(domain, meta, baseSystemRoot) {
 		primaryEntries, primaryBuffer, err := snapshotUpdateBatchNoIndexBufferedPrimaryEntriesLocked(domain, items)
@@ -9118,6 +9188,7 @@ func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta C
 		}
 		return updateBatchBufferedRead{
 			enabled:         true,
+			noIndex:         true,
 			primaryEntries:  primaryEntries,
 			primaryBuffer:   primaryBuffer,
 			writeGeneration: domain.writeGeneration,
@@ -9210,7 +9281,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	defer func() { resetCollectionTables(bufferedTemplateRuns) }()
 	bufferedReadBlocked := false
 	if domain := c.writeDomain; useBufferedRead && domain != nil {
-		bufferedRead, bufferedTemplateRuns, bufferedReadBlocked, err = snapshotUpdateBatchBufferedRead(domain, meta, baseSystemRoot, items, plannerOptions.documentFormat)
+		bufferedRead, bufferedTemplateRuns, bufferedReadBlocked, err = c.snapshotUpdateBatchBufferedReadForPlan(domain, meta, baseCommitSeq, baseSystemRoot, items, plannerOptions.documentFormat)
 		if err != nil {
 			_ = snap.Close()
 			return nil, err
@@ -9247,6 +9318,8 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			baseCommitSeq:          baseCommitSeq,
 			rootNames:              []string{primaryRootName},
 			baseRootIDs:            map[string]uint64{primaryRootName: primaryRoot},
+			bufferedBase:           bufferedRead.enabled,
+			bufferedReadNoIndex:    bufferedRead.noIndex,
 			bufferedReadGeneration: bufferedRead.writeGeneration,
 			bufferedReadBlocked:    bufferedReadBlocked,
 		}
@@ -9367,6 +9440,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			baseRootIDs:                baseRootIDs,
 			uniqueSecondaryIndexByRoot: uniqueSecondary,
 			bufferedBase:               bufferedRead.enabled,
+			bufferedReadNoIndex:        bufferedRead.noIndex,
 			bufferedReadGeneration:     bufferedRead.writeGeneration,
 			bufferedReadBlocked:        bufferedReadBlocked,
 			scratch:                    scratch,
@@ -9538,6 +9612,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			uniqueSecondaryIndexByRoot:  uniqueSecondary,
 			canBufferIndexedUpdateBatch: canBufferIndexedUpdateBatch,
 			bufferedBase:                bufferedRead.enabled,
+			bufferedReadNoIndex:         bufferedRead.noIndex,
 			bufferedReadGeneration:      bufferedRead.writeGeneration,
 			bufferedReadBlocked:         bufferedReadBlocked,
 			policies:                    policies,
@@ -9737,6 +9812,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		uniqueSecondaryIndexByRoot:  uniqueSecondary,
 		canBufferIndexedUpdateBatch: canBufferIndexedUpdateBatch,
 		bufferedBase:                bufferedRead.enabled,
+		bufferedReadNoIndex:         bufferedRead.noIndex,
 		bufferedReadGeneration:      bufferedRead.writeGeneration,
 		bufferedReadBlocked:         bufferedReadBlocked,
 		policies:                    policies,

@@ -182,8 +182,9 @@ no-index staged write-domain state must not be advertised as crash-durable.
 collection-local write-domain state.
 
 Operations that need persisted roots as planning input, including schema/index
-changes, must drain pending indexed write-domain state and wait for in-flight
-async publish units before taking their planning snapshot.
+changes, must drain primary-only no-index staged updates and pending indexed
+write-domain state, and wait for in-flight async publish units before taking
+their planning snapshot.
 
 Detailed indexed collection write-domain semantics are in
 `TreeDB/docs/spec/collections-write-domain.md`.
