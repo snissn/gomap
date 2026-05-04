@@ -108,10 +108,14 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"TreeDB BSON",
 		"TreeDB JSON",
 		"SQLite native VACUUM: 20",
-		"raw modes are TreeDB-only ingest ceiling probes",
+		"Client modes marked with <strong>*</strong>",
+		"BSON Raw</text><text",
+		"Wire TCP *</text>",
+		"Wire *</text>",
+		"* Raw-wire modes:",
 		"bypassing the MongoDB Go driver",
 		"same raw command/gateway path in process",
-		"TreeDB-only raw-wire ceiling",
+		"one centered TreeDB bar",
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("report missing %q\n%s", want, html)
