@@ -94,7 +94,7 @@ RAW_OPS_BENCH_RE='Benchmark(Batch|WriteParallel|Stress|ReadUnderWrite|LargeVal)$
   printf 'RAW_TEST_RE=%q\n' "$RAW_TEST_RE"
   printf 'ROOT_APPLY_BENCH_RE=%q\n' "$ROOT_APPLY_BENCH_RE"
   printf 'RAW_OPS_BENCH_RE=%q\n' "$RAW_OPS_BENCH_RE"
-  echo 'GOWORK="$GOWORK_MODE" go test ./TreeDB/db ./TreeDB/zipper ./TreeDB/caching -run "$RAW_TEST_RE"'
+  echo 'GOWORK="$GOWORK_MODE" go test ./TreeDB/db ./TreeDB/zipper ./TreeDB/caching -run "$RAW_TEST_RE" -count=1'
   echo 'GOWORK="$GOWORK_MODE" go test ./TreeDB/db -run "^$" -bench "$ROOT_APPLY_BENCH_RE" -benchmem -count="$COUNT"'
   echo 'GOWORK="$GOWORK_MODE" go test ./TreeDB/db -run "^$" -bench "$RAW_OPS_BENCH_RE" -benchmem -count="$COUNT"'
 } >"$OUT_DIR/commands.sh"
@@ -104,7 +104,7 @@ GOWORK="$GOWORK_MODE" go version | tee "$OUT_DIR/go_version.txt"
 
 echo "running raw TreeDB tests"
 GOWORK="$GOWORK_MODE" go test ./TreeDB/db ./TreeDB/zipper ./TreeDB/caching \
-  -run "$RAW_TEST_RE" 2>&1 | tee "$OUT_DIR/raw_tests.log"
+  -run "$RAW_TEST_RE" -count=1 2>&1 | tee "$OUT_DIR/raw_tests.log"
 
 echo "running raw root-apply benchmarks"
 GOWORK="$GOWORK_MODE" go test ./TreeDB/db -run '^$' \

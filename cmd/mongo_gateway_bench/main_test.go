@@ -321,6 +321,101 @@ func TestTreeDBStatsDeltaPreservesHugeIntegerStrings(t *testing.T) {
 	}
 }
 
+func TestTreeDBStatsDeltaOmitsUnsafeCompositeMetric(t *testing.T) {
+	_, numeric := treeDBStatsDelta(
+		map[string]string{
+			"treedb.collections.write_domain.primary_only.root_delta_key_bytes_total":   "0",
+			"treedb.collections.write_domain.primary_only.root_delta_value_bytes_total": "0",
+		},
+		map[string]string{
+			"treedb.collections.write_domain.primary_only.root_delta_key_bytes_total":   "18446744073709551615",
+			"treedb.collections.write_domain.primary_only.root_delta_value_bytes_total": "8",
+		},
+	)
+	if _, ok := numeric["treedb.collections.write_domain.primary_only.root_delta_key_bytes_total"]; ok {
+		t.Fatalf("unsafe key-byte counter unexpectedly present in numeric deltas: %v", numeric)
+	}
+	if got := numeric["treedb.collections.write_domain.primary_only.root_delta_value_bytes_total"]; got != 8 {
+		t.Fatalf("value-byte numeric delta=%v want 8; numeric=%v", got, numeric)
+	}
+	metrics := deriveTreeDBPhaseMetrics(numeric, 4, 1)
+	if _, ok := metrics["primary_root_delta_bytes/doc"]; ok {
+		t.Fatalf("unsafe partial primary_root_delta_bytes/doc emitted: %v", metrics)
+	}
+}
+
+func TestTreeDBStatsDeltaPreservesZeroMetrics(t *testing.T) {
+	phase := summarizePhase("concurrent_id_update_set_w1", 10, 10, time.Second, nil)
+	attachTreeDBPhaseStats(&phase,
+		map[string]string{
+			"treedb.collections.write_domain.root_delta_plan.roots.secondary_total": "0",
+			"treedb.collections.write_domain.root_delta_plan.tombstones_total":      "0",
+		},
+		map[string]string{
+			"treedb.collections.write_domain.root_delta_plan.roots.secondary_total": "0",
+			"treedb.collections.write_domain.root_delta_plan.tombstones_total":      "0",
+		},
+	)
+	if got := phase.TreeDBStatsDelta["treedb.collections.write_domain.root_delta_plan.roots.secondary_total"]; got != "0" {
+		t.Fatalf("secondary-root zero delta=%q want 0; deltas=%v", got, phase.TreeDBStatsDelta)
+	}
+	for _, name := range []string{"affected_secondary_roots/doc", "root_delta_plan_tombstones/doc"} {
+		got, ok := phase.TreeDBMetrics[name]
+		if !ok {
+			t.Fatalf("zero metric %s missing from metrics=%v", name, phase.TreeDBMetrics)
+		}
+		if got != 0 {
+			t.Fatalf("zero metric %s=%v want 0", name, got)
+		}
+	}
+	var out bytes.Buffer
+	writeTreeDBFloatStats(&out, "phase_treedb_metrics.test", phase.TreeDBMetrics)
+	if !strings.Contains(out.String(), "affected_secondary_roots/doc=0") {
+		t.Fatalf("text output missing explicit zero metric: %q", out.String())
+	}
+}
+
+func TestRunTreeDBProfiledPhaseDrainsBeforeStatsSnapshot(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := collections.NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{
+		Name: "users",
+		Options: collections.CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []collections.IndexDefinition{
+			{Name: "email", Field: "email", ValueType: collections.IndexValueString, Unique: true},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	target := &benchTarget{db: d, collections: mgr}
+	phase, err := runTreeDBProfiledPhase(target, nil, "load_insert_many", func() (phaseResult, error) {
+		_, err := col.InsertBatch(
+			[][]byte{[]byte("u1")},
+			[][]byte{[]byte(`{"email":"ada@example.com"}`)},
+		)
+		return summarizePhase("load_insert_many", 1, 1, time.Millisecond, []time.Duration{time.Millisecond}), err
+	})
+	if err != nil {
+		t.Fatalf("run phase: %v", err)
+	}
+	if got := phase.TreeDBStatsDelta["treedb.collections.write_domain.indexed_flush.calls_total"]; got != "1" {
+		t.Fatalf("indexed flush calls delta=%q want 1; deltas=%v", got, phase.TreeDBStatsDelta)
+	}
+	if got := phase.TreeDBMetrics["indexed_flush_calls/doc"]; got != 1 {
+		t.Fatalf("indexed_flush_calls/doc=%v want 1; metrics=%v", got, phase.TreeDBMetrics)
+	}
+}
+
 func TestValidateResettableTreeDBDirRejectsDangerousPaths(t *testing.T) {
 	for _, dir := range []string{"", ".", "..", string(os.PathSeparator), os.TempDir()} {
 		if _, err := validateResettableTreeDBDir(dir); err == nil {

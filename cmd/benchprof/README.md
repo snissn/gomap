@@ -18,7 +18,7 @@ make benchprof
 
 ## Typical flow
 
-1. Run `unified-bench` with profile outputs into one directory.
+1. Run `unified-bench` with profile outputs into one directory. `-profile-dir` requires an explicit execution path such as `-path-label native-fastpath` or `-path-label oracle`.
 2. `unified-bench` auto-runs `benchprof` in-process when `-profile-dir` is enabled. You can still run `benchprof` manually if needed.
 
 Example:
@@ -34,6 +34,7 @@ mkdir -p /tmp/scan-profiles
   -treedb-vlog-compression-variant off \
   -test full_scan,prefix_scan \
   -profile-dir /tmp/scan-profiles \
+  -path-label native-fastpath \
   -progress=false
 
 ./bin/benchprof \

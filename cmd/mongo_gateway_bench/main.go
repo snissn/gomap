@@ -1394,13 +1394,45 @@ func runProfiledPhase(profiler *profileRecorder, name string, run func() (phaseR
 
 func runTreeDBProfiledPhase(target *benchTarget, profiler *profileRecorder, name string, run func() (phaseResult, error)) (phaseResult, error) {
 	before := collectLiveTreeDBStats(target)
-	result, err := runProfiledPhase(profiler, name, run)
+	result, err := runProfiledPhase(profiler, name, func() (phaseResult, error) {
+		result, err := run()
+		if err != nil {
+			return result, err
+		}
+		drainElapsed, err := drainTreeDBCollectionsForPhase(target)
+		if err != nil {
+			return result, err
+		}
+		addPhaseDuration(&result, drainElapsed)
+		return result, nil
+	})
 	if err != nil {
 		return result, err
 	}
 	after := collectLiveTreeDBStats(target)
 	attachTreeDBPhaseStats(&result, before, after)
 	return result, nil
+}
+
+func drainTreeDBCollectionsForPhase(target *benchTarget) (time.Duration, error) {
+	if target == nil || target.collections == nil {
+		return 0, nil
+	}
+	start := time.Now()
+	err := target.collections.FlushAll()
+	return time.Since(start), err
+}
+
+func addPhaseDuration(result *phaseResult, extra time.Duration) {
+	if result == nil || extra <= 0 {
+		return
+	}
+	total := time.Duration(result.DurationMillis * float64(time.Millisecond))
+	total += extra
+	result.DurationMillis = float64(total.Microseconds()) / 1000.0
+	if result.Operations > 0 && total > 0 {
+		result.OpsPerSecond = float64(result.Operations) / total.Seconds()
+	}
 }
 
 func runEmailFindPhase(cfg config) bool {
@@ -2197,9 +2229,6 @@ func treeDBStatBigIntFitsExactFloat(value *big.Int) bool {
 func treeDBStatDelta(after, before treeDBStatNumber) (float64, string, bool, bool) {
 	if after.integer && before.integer {
 		deltaInt := new(big.Int).Sub(after.intValue, before.intValue)
-		if deltaInt.Sign() == 0 {
-			return 0, "", false, false
-		}
 		if treeDBStatBigIntFitsExactFloat(deltaInt) {
 			return float64(deltaInt.Int64()), deltaInt.String(), true, true
 		}
@@ -2209,9 +2238,6 @@ func treeDBStatDelta(after, before treeDBStatNumber) (float64, string, bool, boo
 		return 0, "", false, false
 	}
 	delta := after.floatValue - before.floatValue
-	if delta == 0 {
-		return 0, "", false, false
-	}
 	return delta, formatTreeDBStatNumber(delta), true, true
 }
 
@@ -2227,57 +2253,97 @@ func deriveTreeDBPhaseMetrics(delta map[string]float64, operations, driverCalls 
 		return nil
 	}
 	metrics := make(map[string]float64)
-	addPerOperationMetric(metrics, "publish_delta_group_calls/doc", delta["treedb.publish.ordered_root_delta_group.calls_total"], operations)
-	addPerOperationMetric(metrics, "root_apply_calls/doc", delta["treedb.publish.ordered_root_delta_group.root_apply_calls_total"], operations)
-	addRatioMetric(metrics, "roots/publish", delta["treedb.publish.ordered_root_delta_group.roots_total"], delta["treedb.publish.ordered_root_delta_group.calls_total"])
-	addPerOperationMetric(metrics, "publish_delta_group_root_apply_ns/doc", delta["treedb.publish.ordered_root_delta_group.root_apply_ns_total"], operations)
-	addPerOperationMetric(metrics, "leaf_log_node_loads/doc", delta["treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_loads_total"], operations)
-	addPerOperationMetric(metrics, "leaf_log_pages_written/doc", delta["treedb.publish.ordered_root_delta_group.root_apply_leaf_log_pages_written_total"], operations)
-	addPerOperationMetric(metrics, "leaf_log_read_bytes/doc", delta["treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total"], operations)
-	addPerOperationMetric(metrics, "leaf_log_write_bytes/doc", delta["treedb.publish.ordered_root_delta_group.root_apply_leaf_log_page_bytes_written_total"], operations)
-	addPerOperationMetric(metrics, "indexed_flush_calls/doc", delta["treedb.collections.write_domain.indexed_flush.calls_total"], operations)
-	addRatioMetric(metrics, "indexed_flush_docs/batch", delta["treedb.collections.write_domain.indexed_flush.docs_total"], delta["treedb.collections.write_domain.indexed_flush.calls_total"])
-	addRatioMetric(metrics, "indexed_flush_units/batch", delta["treedb.collections.write_domain.indexed_flush.units_total"], delta["treedb.collections.write_domain.indexed_flush.calls_total"])
-	addPerOperationMetric(metrics, "indexed_flush_root_runs/doc", delta["treedb.collections.write_domain.indexed_flush.root_runs_total"], operations)
-	addPerOperationMetric(metrics, "root_delta_plan_entries/doc", delta["treedb.collections.write_domain.root_delta_plan.entries_total"], operations)
-	addPerOperationMetric(metrics, "root_delta_plan_key_bytes/doc", delta["treedb.collections.write_domain.root_delta_plan.key_bytes_total"], operations)
-	addPerOperationMetric(metrics, "root_delta_plan_value_bytes/doc", delta["treedb.collections.write_domain.root_delta_plan.value_bytes_total"], operations)
-	addPerOperationMetric(metrics, "root_delta_plan_tombstones/doc", delta["treedb.collections.write_domain.root_delta_plan.tombstones_total"], operations)
-	addPerOperationMetric(metrics, "affected_primary_roots/doc", delta["treedb.collections.write_domain.root_delta_plan.roots.primary_total"], operations)
-	addPerOperationMetric(metrics, "affected_template_roots/doc", delta["treedb.collections.write_domain.root_delta_plan.roots.template_total"], operations)
-	addPerOperationMetric(metrics, "affected_index_state_roots/doc", delta["treedb.collections.write_domain.root_delta_plan.roots.index_state_total"], operations)
-	addPerOperationMetric(metrics, "affected_secondary_roots/doc", delta["treedb.collections.write_domain.root_delta_plan.roots.secondary_total"], operations)
-	addPerOperationMetric(metrics, "primary_root_publishes/doc", delta["treedb.collections.write_domain.primary_only.root_publishes_total"], operations)
-	addPerOperationMetric(metrics, "primary_root_delta_entries/doc", delta["treedb.collections.write_domain.primary_only.root_delta_entries_total"], operations)
-	addPerOperationMetric(metrics, "primary_root_delta_bytes/doc", delta["treedb.collections.write_domain.primary_only.root_delta_key_bytes_total"]+delta["treedb.collections.write_domain.primary_only.root_delta_value_bytes_total"], operations)
-	addRatioMetric(metrics, "primary_only_coalesced_docs/publish", delta["treedb.collections.write_domain.primary_only.coalesced_docs_total"], delta["treedb.collections.write_domain.primary_only.root_publishes_total"])
-	addPerOperationMetric(metrics, "unique_eligible_checks/doc", delta["treedb.collections.write_domain.update_batch.unique_checks_total"]+delta["treedb.collections.write_domain.update_batch.unique_check_skips_total"], operations)
-	addPerDriverCallMetric(metrics, "publish_delta_group_calls/driver_call", delta["treedb.publish.ordered_root_delta_group.calls_total"], driverCalls)
+	addPerOperationMetric(metrics, "publish_delta_group_calls/doc", delta, "treedb.publish.ordered_root_delta_group.calls_total", operations)
+	addPerOperationMetric(metrics, "root_apply_calls/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_calls_total", operations)
+	addRatioMetric(metrics, "roots/publish", delta, "treedb.publish.ordered_root_delta_group.roots_total", "treedb.publish.ordered_root_delta_group.calls_total")
+	addPerOperationMetric(metrics, "publish_delta_group_root_apply_ns/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_ns_total", operations)
+	addPerOperationMetric(metrics, "leaf_log_node_loads/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_loads_total", operations)
+	addPerOperationMetric(metrics, "leaf_log_pages_written/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_leaf_log_pages_written_total", operations)
+	addPerOperationMetric(metrics, "leaf_log_read_bytes/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total", operations)
+	addPerOperationMetric(metrics, "leaf_log_write_bytes/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_leaf_log_page_bytes_written_total", operations)
+	addPerOperationMetric(metrics, "indexed_flush_calls/doc", delta, "treedb.collections.write_domain.indexed_flush.calls_total", operations)
+	addRatioMetric(metrics, "indexed_flush_docs/batch", delta, "treedb.collections.write_domain.indexed_flush.docs_total", "treedb.collections.write_domain.indexed_flush.calls_total")
+	addRatioMetric(metrics, "indexed_flush_units/batch", delta, "treedb.collections.write_domain.indexed_flush.units_total", "treedb.collections.write_domain.indexed_flush.calls_total")
+	addPerOperationMetric(metrics, "indexed_flush_root_runs/doc", delta, "treedb.collections.write_domain.indexed_flush.root_runs_total", operations)
+	addPerOperationMetric(metrics, "root_delta_plan_entries/doc", delta, "treedb.collections.write_domain.root_delta_plan.entries_total", operations)
+	addPerOperationMetric(metrics, "root_delta_plan_key_bytes/doc", delta, "treedb.collections.write_domain.root_delta_plan.key_bytes_total", operations)
+	addPerOperationMetric(metrics, "root_delta_plan_value_bytes/doc", delta, "treedb.collections.write_domain.root_delta_plan.value_bytes_total", operations)
+	addPerOperationMetric(metrics, "root_delta_plan_tombstones/doc", delta, "treedb.collections.write_domain.root_delta_plan.tombstones_total", operations)
+	addPerOperationMetric(metrics, "affected_primary_roots/doc", delta, "treedb.collections.write_domain.root_delta_plan.roots.primary_total", operations)
+	addPerOperationMetric(metrics, "affected_template_roots/doc", delta, "treedb.collections.write_domain.root_delta_plan.roots.template_total", operations)
+	addPerOperationMetric(metrics, "affected_index_state_roots/doc", delta, "treedb.collections.write_domain.root_delta_plan.roots.index_state_total", operations)
+	addPerOperationMetric(metrics, "affected_secondary_roots/doc", delta, "treedb.collections.write_domain.root_delta_plan.roots.secondary_total", operations)
+	addPerOperationMetric(metrics, "primary_root_publishes/doc", delta, "treedb.collections.write_domain.primary_only.root_publishes_total", operations)
+	addPerOperationMetric(metrics, "primary_root_delta_entries/doc", delta, "treedb.collections.write_domain.primary_only.root_delta_entries_total", operations)
+	if bytesTotal, ok := sumTreeDBMetricDeltas(delta, "treedb.collections.write_domain.primary_only.root_delta_key_bytes_total", "treedb.collections.write_domain.primary_only.root_delta_value_bytes_total"); ok {
+		addPerOperationMetricValue(metrics, "primary_root_delta_bytes/doc", bytesTotal, operations)
+	}
+	addRatioMetric(metrics, "primary_only_coalesced_docs/publish", delta, "treedb.collections.write_domain.primary_only.coalesced_docs_total", "treedb.collections.write_domain.primary_only.root_publishes_total")
+	if uniqueEligible, ok := sumTreeDBMetricDeltas(delta, "treedb.collections.write_domain.update_batch.unique_checks_total", "treedb.collections.write_domain.update_batch.unique_check_skips_total"); ok {
+		addPerOperationMetricValue(metrics, "unique_eligible_checks/doc", uniqueEligible, operations)
+	}
+	addPerDriverCallMetric(metrics, "publish_delta_group_calls/driver_call", delta, "treedb.publish.ordered_root_delta_group.calls_total", driverCalls)
 	if len(metrics) == 0 {
 		return nil
 	}
 	return metrics
 }
 
-func addPerOperationMetric(metrics map[string]float64, name string, numerator float64, operations int) {
+func addPerOperationMetric(metrics map[string]float64, name string, delta map[string]float64, key string, operations int) {
 	if operations <= 0 {
 		return
 	}
-	addRatioMetric(metrics, name, numerator, float64(operations))
+	numerator, ok := delta[key]
+	if !ok {
+		return
+	}
+	addRatioMetricValue(metrics, name, numerator, float64(operations))
 }
 
-func addPerDriverCallMetric(metrics map[string]float64, name string, numerator float64, driverCalls int) {
+func addPerOperationMetricValue(metrics map[string]float64, name string, numerator float64, operations int) {
+	if operations <= 0 {
+		return
+	}
+	addRatioMetricValue(metrics, name, numerator, float64(operations))
+}
+
+func addPerDriverCallMetric(metrics map[string]float64, name string, delta map[string]float64, key string, driverCalls int) {
 	if driverCalls <= 0 {
 		return
 	}
-	addRatioMetric(metrics, name, numerator, float64(driverCalls))
+	numerator, ok := delta[key]
+	if !ok {
+		return
+	}
+	addRatioMetricValue(metrics, name, numerator, float64(driverCalls))
 }
 
-func addRatioMetric(metrics map[string]float64, name string, numerator, denominator float64) {
+func addRatioMetric(metrics map[string]float64, name string, delta map[string]float64, numeratorKey, denominatorKey string) {
+	numerator, numeratorOK := delta[numeratorKey]
+	denominator, denominatorOK := delta[denominatorKey]
+	if !numeratorOK || !denominatorOK {
+		return
+	}
+	addRatioMetricValue(metrics, name, numerator, denominator)
+}
+
+func addRatioMetricValue(metrics map[string]float64, name string, numerator, denominator float64) {
 	if denominator == 0 {
 		return
 	}
 	metrics[name] = numerator / denominator
+}
+
+func sumTreeDBMetricDeltas(delta map[string]float64, keys ...string) (float64, bool) {
+	var total float64
+	for _, key := range keys {
+		value, ok := delta[key]
+		if !ok {
+			return 0, false
+		}
+		total += value
+	}
+	return total, true
 }
 
 func appendTreeDBMaintenanceStep(ctx context.Context, target *benchTarget, result *benchmarkResult, name string, run func() (map[string]int64, string, error)) error {
@@ -3066,7 +3132,7 @@ func writeTreeDBFloatStats(out io.Writer, label string, stats map[string]float64
 	wroteAny := false
 	for _, key := range keys {
 		value, ok := stats[key]
-		if !ok || value == 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		if !ok || math.IsNaN(value) || math.IsInf(value, 0) {
 			continue
 		}
 		if !wroteAny {
