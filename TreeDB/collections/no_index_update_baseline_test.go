@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -31,12 +32,18 @@ func TestCollectionNoIndexUpdatePublishesSynchronouslyNotQueued(t *testing.T) {
 	beforeState := d.State()
 	beforePrimaryRoot := collectionNoIndexPrimaryRootIDForTest(t, d, "users")
 
+	callbackErr := errors.New("unexpected current document")
+	var unexpectedCurrent []byte
 	matched, modified, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
 		if !bytes.Contains(current, []byte(`"city":"hnl"`)) {
-			t.Fatalf("current document=%s missing city hnl", current)
+			unexpectedCurrent = bytes.Clone(current)
+			return nil, false, callbackErr
 		}
 		return []byte(`{"name":"ada","city":"sea"}`), true, nil
 	})
+	if unexpectedCurrent != nil {
+		t.Fatalf("current document=%s missing city hnl", unexpectedCurrent)
+	}
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}

@@ -54,6 +54,13 @@ func TestCollectionManagerCloseWaitsForActiveIndexedPublish(t *testing.T) {
 	waitEntered := make(chan struct{})
 	allowWait := make(chan struct{})
 	var waitEnteredOnce sync.Once
+	var allowWaitOnce sync.Once
+	releaseWait := func() {
+		allowWaitOnce.Do(func() {
+			close(allowWait)
+		})
+	}
+	defer releaseWait()
 	restoreWaitHook := setCollectionWaitIndexedAsyncFlushHookForTest(func() {
 		waitEnteredOnce.Do(func() {
 			close(waitEntered)
@@ -76,7 +83,7 @@ func TestCollectionManagerCloseWaitsForActiveIndexedPublish(t *testing.T) {
 		t.Fatalf("Close returned before active indexed publish finished: %v", err)
 	default:
 	}
-	close(allowWait)
+	releaseWait()
 
 	publishErr := col.publishPreparedIndexedFlush(work)
 	col.writeDomain.finishIndexedAsyncFlush(publishErr)

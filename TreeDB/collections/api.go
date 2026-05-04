@@ -3898,6 +3898,7 @@ func pendingUniqueReservationIndexLocked(domain *collectionWriteDomain, indexNam
 	return index
 }
 
+// pendingUniqueReservationProbeLocked requires domain.mu to be held.
 func pendingUniqueReservationProbeLocked(domain *collectionWriteDomain, indexName string, valuePrefix []byte) bool {
 	index := pendingUniqueReservationIndexLocked(domain, indexName, false)
 	return index != nil && index.contains(valuePrefix)
