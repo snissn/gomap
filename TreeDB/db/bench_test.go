@@ -415,6 +415,9 @@ func BenchmarkLargeVal(b *testing.B) {
 		for pb.Next() {
 			key := keys[r.Intn(len(keys))]
 
+			// Value-log writer append is intentionally serialized here; this
+			// benchmark exercises the raw pointer write path without assuming
+			// valuelog.Writer is goroutine-safe.
 			valueLogMu.Lock()
 			nextRID++
 			ptr, err := valueWriter.Append(0, nil, nextRID, valBuf)

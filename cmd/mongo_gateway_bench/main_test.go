@@ -279,6 +279,19 @@ func TestPhaseResultJSONIncludesTreeDBStatsDelta(t *testing.T) {
 	}
 }
 
+func TestTreeDBStatsDeltaPreservesHugeIntegerStrings(t *testing.T) {
+	delta, numeric := treeDBStatsDelta(
+		map[string]string{"treedb.test.huge_counter_total": "0"},
+		map[string]string{"treedb.test.huge_counter_total": "18446744073709551615"},
+	)
+	if got := delta["treedb.test.huge_counter_total"]; got != "18446744073709551615" {
+		t.Fatalf("huge counter delta=%q want exact uint64 max string", got)
+	}
+	if _, ok := numeric["treedb.test.huge_counter_total"]; ok {
+		t.Fatalf("huge counter unexpectedly present in numeric deltas: %v", numeric)
+	}
+}
+
 func TestValidateResettableTreeDBDirRejectsDangerousPaths(t *testing.T) {
 	for _, dir := range []string{"", ".", "..", string(os.PathSeparator), os.TempDir()} {
 		if _, err := validateResettableTreeDBDir(dir); err == nil {
