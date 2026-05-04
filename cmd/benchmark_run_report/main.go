@@ -515,51 +515,105 @@ func readMongoSummary(path string) ([]mongoSummaryRow, error) {
 	if len(records) == 0 {
 		return nil, fmt.Errorf("%s: empty summary", path)
 	}
-	header := make(map[string]int)
-	for i, name := range records[0] {
-		header[name] = i
+	header, err := tsvHeader(path, records[0], []string{
+		"documents",
+		"secondary_indexes",
+		"range_index",
+		"range_mode",
+		"treedb_config",
+		"mongo_config",
+		"phase",
+		"treedb_ops_sec",
+		"treedb_sampled_ops_sec",
+		"treedb_sampled_ns_per_op",
+		"mongo_ops_sec",
+		"mongo_sampled_ops_sec",
+		"mongo_sampled_ns_per_op",
+		"treedb_to_mongo_ops_ratio",
+		"treedb_to_mongo_sampled_ops_ratio",
+		"treedb_p50_us",
+		"mongo_p50_us",
+		"treedb_p95_us",
+		"mongo_p95_us",
+		"treedb_p99_us",
+		"mongo_p99_us",
+		"treedb_disk_snapshot",
+		"treedb_disk_bytes",
+		"treedb_physical_bytes",
+		"mongo_dbstats_data_size_bytes",
+		"mongo_dbstats_total_size_bytes",
+		"mongo_physical_bytes",
+		"treedb_to_mongo_dbstats_total_ratio",
+		"treedb_to_mongo_physical_ratio",
+	})
+	if err != nil {
+		return nil, err
 	}
 	var rows []mongoSummaryRow
-	for _, rec := range records[1:] {
-		get := func(name string) string {
-			i, ok := header[name]
-			if !ok || i >= len(rec) {
-				return ""
+	for rowIdx, rec := range records[1:] {
+		line := rowIdx + 2
+		var parseErr error
+		setErr := func(err error) {
+			if err != nil && parseErr == nil {
+				parseErr = err
 			}
-			return rec[i]
 		}
-		rows = append(rows, mongoSummaryRow{
-			Documents:               atoi(get("documents")),
-			SecondaryIndexes:        atoi(get("secondary_indexes")),
-			RangeIndex:              get("range_index") == "true",
+		get := func(name string) string {
+			v, err := tsvField(path, header, rec, line, name)
+			setErr(err)
+			return v
+		}
+		intField := func(name string) int {
+			v, err := parseIntColumn(path, line, name, get(name))
+			setErr(err)
+			return v
+		}
+		floatField := func(name string) float64 {
+			v, err := parseFloatColumn(path, line, name, get(name))
+			setErr(err)
+			return v
+		}
+		boolField := func(name string) bool {
+			v, err := parseBoolColumn(path, line, name, get(name))
+			setErr(err)
+			return v
+		}
+		row := mongoSummaryRow{
+			Documents:               intField("documents"),
+			SecondaryIndexes:        intField("secondary_indexes"),
+			RangeIndex:              boolField("range_index"),
 			RangeMode:               get("range_mode"),
 			TreeDBConfig:            get("treedb_config"),
 			MongoConfig:             get("mongo_config"),
 			Phase:                   get("phase"),
-			TreeDBOpsSec:            atof(get("treedb_ops_sec")),
-			TreeDBSampledOpsSec:     atof(get("treedb_sampled_ops_sec")),
-			TreeDBSampledNsPerOp:    atof(get("treedb_sampled_ns_per_op")),
-			MongoOpsSec:             atof(get("mongo_ops_sec")),
-			MongoSampledOpsSec:      atof(get("mongo_sampled_ops_sec")),
-			MongoSampledNsPerOp:     atof(get("mongo_sampled_ns_per_op")),
-			TreeDBToMongoRatio:      atof(get("treedb_to_mongo_ops_ratio")),
-			TreeDBToMongoSampled:    atof(get("treedb_to_mongo_sampled_ops_ratio")),
-			TreeDBP50US:             atof(get("treedb_p50_us")),
-			TreeDBP95US:             atof(get("treedb_p95_us")),
-			TreeDBP99US:             atof(get("treedb_p99_us")),
-			MongoP50US:              atof(get("mongo_p50_us")),
-			MongoP95US:              atof(get("mongo_p95_us")),
-			MongoP99US:              atof(get("mongo_p99_us")),
+			TreeDBOpsSec:            floatField("treedb_ops_sec"),
+			TreeDBSampledOpsSec:     floatField("treedb_sampled_ops_sec"),
+			TreeDBSampledNsPerOp:    floatField("treedb_sampled_ns_per_op"),
+			MongoOpsSec:             floatField("mongo_ops_sec"),
+			MongoSampledOpsSec:      floatField("mongo_sampled_ops_sec"),
+			MongoSampledNsPerOp:     floatField("mongo_sampled_ns_per_op"),
+			TreeDBToMongoRatio:      floatField("treedb_to_mongo_ops_ratio"),
+			TreeDBToMongoSampled:    floatField("treedb_to_mongo_sampled_ops_ratio"),
+			TreeDBP50US:             floatField("treedb_p50_us"),
+			TreeDBP95US:             floatField("treedb_p95_us"),
+			TreeDBP99US:             floatField("treedb_p99_us"),
+			MongoP50US:              floatField("mongo_p50_us"),
+			MongoP95US:              floatField("mongo_p95_us"),
+			MongoP99US:              floatField("mongo_p99_us"),
 			TreeDBDiskSnapshot:      get("treedb_disk_snapshot"),
-			TreeDBDiskBytes:         atof(get("treedb_disk_bytes")),
-			TreeDBPhysicalBytes:     atof(get("treedb_physical_bytes")),
-			MongoDBStatsDataSize:    atof(get("mongo_dbstats_data_size_bytes")),
-			MongoDBStatsTotalSize:   atof(get("mongo_dbstats_total_size_bytes")),
-			MongoPhysicalBytes:      atof(get("mongo_physical_bytes")),
-			TreeDBToMongoTotalRatio: atof(get("treedb_to_mongo_dbstats_total_ratio")),
-			TreeDBToMongoPhysRatio:  atof(get("treedb_to_mongo_physical_ratio")),
+			TreeDBDiskBytes:         floatField("treedb_disk_bytes"),
+			TreeDBPhysicalBytes:     floatField("treedb_physical_bytes"),
+			MongoDBStatsDataSize:    floatField("mongo_dbstats_data_size_bytes"),
+			MongoDBStatsTotalSize:   floatField("mongo_dbstats_total_size_bytes"),
+			MongoPhysicalBytes:      floatField("mongo_physical_bytes"),
+			TreeDBToMongoTotalRatio: floatField("treedb_to_mongo_dbstats_total_ratio"),
+			TreeDBToMongoPhysRatio:  floatField("treedb_to_mongo_physical_ratio"),
 			Source:                  filepath.Base(filepath.Dir(path)),
-		})
+		}
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		rows = append(rows, row)
 	}
 	return rows, nil
 }
@@ -663,26 +717,43 @@ func readMatrix(path string) ([]matrixRow, error) {
 	if len(records) == 0 {
 		return nil, fmt.Errorf("%s: empty matrix", path)
 	}
-	header := make(map[string]int)
-	for i, name := range records[0] {
-		header[name] = i
+	header, err := tsvHeader(path, records[0], []string{"target", "config", "documents", "secondary_indexes", "raw_json", "physical_bytes"})
+	if err != nil {
+		return nil, err
 	}
 	var rows []matrixRow
-	for _, rec := range records[1:] {
-		get := func(name string) string {
-			i, ok := header[name]
-			if !ok || i >= len(rec) {
-				return ""
+	for rowIdx, rec := range records[1:] {
+		line := rowIdx + 2
+		var parseErr error
+		setErr := func(err error) {
+			if err != nil && parseErr == nil {
+				parseErr = err
 			}
-			return rec[i]
+		}
+		get := func(name string) string {
+			v, err := tsvField(path, header, rec, line, name)
+			setErr(err)
+			return v
+		}
+		documents, err := parseIntColumn(path, line, "documents", get("documents"))
+		setErr(err)
+		secondaryIndexes, err := parseIntColumn(path, line, "secondary_indexes", get("secondary_indexes"))
+		setErr(err)
+		physicalBytes, err := parseInt64Column(path, line, "physical_bytes", get("physical_bytes"))
+		setErr(err)
+		target := get("target")
+		config := get("config")
+		rawJSON := get("raw_json")
+		if parseErr != nil {
+			return nil, parseErr
 		}
 		rows = append(rows, matrixRow{
-			Target:           get("target"),
-			Config:           get("config"),
-			Documents:        atoi(get("documents")),
-			SecondaryIndexes: atoi(get("secondary_indexes")),
-			RawJSON:          get("raw_json"),
-			PhysicalBytes:    atoi64(get("physical_bytes")),
+			Target:           target,
+			Config:           config,
+			Documents:        documents,
+			SecondaryIndexes: secondaryIndexes,
+			RawJSON:          rawJSON,
+			PhysicalBytes:    physicalBytes,
 		})
 	}
 	return rows, nil
@@ -946,24 +1017,26 @@ func rawTestOrder(test string) string {
 }
 
 func renderCollections(b *strings.Builder, rows []collectionRow, comps []collectionComparison) {
-	if len(rows) == 0 {
+	if len(rows) == 0 && len(comps) == 0 {
 		return
 	}
 	b.WriteString("<section id=\"collections\"><h2>Collections vs SQLite</h2>")
 	b.WriteString("<p class=\"subtle\">Charts show post-insert throughput and compacted bytes/doc for TreeDB collection formats and SQLite baselines. Disclosure tables preserve the parsed rows and compacted-state comparisons.</p>")
-	b.WriteString("<div class=\"chart-grid\">")
-	docsRows := collectionDocsRows(rows)
-	if len(docsRows.Categories) > 0 {
-		b.WriteString(compactVerticalBarChart("Post-insert throughput by index count", docsRows.Categories, "index count", collectionSeries(docsRows, "docs"), "docs/sec"))
+	if len(rows) > 0 {
+		b.WriteString("<div class=\"chart-grid\">")
+		docsRows := collectionDocsRows(rows)
+		if len(docsRows.Categories) > 0 {
+			b.WriteString(compactVerticalBarChart("Post-insert throughput by index count", docsRows.Categories, "index count", collectionSeries(docsRows, "docs"), "docs/sec"))
+		}
+		diskRows := collectionDiskRows(rows)
+		if len(diskRows.Categories) > 0 {
+			b.WriteString(compactVerticalBarChart("Compacted bytes/doc by index count", diskRows.Categories, "index count", collectionSeries(diskRows, "bytes"), "B/doc"))
+		}
+		b.WriteString("</div>")
+		b.WriteString("<details><summary>Collection highlight rows</summary>")
+		renderCollectionHighlight(b, rows)
+		b.WriteString("</details>")
 	}
-	diskRows := collectionDiskRows(rows)
-	if len(diskRows.Categories) > 0 {
-		b.WriteString(compactVerticalBarChart("Compacted bytes/doc by index count", diskRows.Categories, "index count", collectionSeries(diskRows, "bytes"), "B/doc"))
-	}
-	b.WriteString("</div>")
-	b.WriteString("<details><summary>Collection highlight rows</summary>")
-	renderCollectionHighlight(b, rows)
-	b.WriteString("</details>")
 	if len(comps) > 0 {
 		b.WriteString("<details><summary>Compacted-state comparisons</summary>")
 		var body [][]string
@@ -973,13 +1046,16 @@ func renderCollections(b *strings.Builder, rows []collectionRow, comps []collect
 		writeTable(b, []string{"TreeDB config", "TreeDB phase", "SQLite config", "SQLite phase", "TreeDB B/doc", "SQLite B/doc", "SQLite/TreeDB size ratio", "basis"}, body, numericColumns(4, 5, 6))
 		b.WriteString("</details>")
 	}
-	b.WriteString("<details><summary>All collection result rows</summary>")
-	var body [][]string
-	for _, r := range rows {
-		body = append(body, []string{r.ConfigName, r.Engine, r.Format, strconv.Itoa(r.IndexCount), r.Phase, r.MaintenanceMode, fmtOps(r.DocsPerSec), fmtFloat(r.BytesPerDoc, 1), fmtBytes(r.TotalBytes), r.MeasurementKind, r.MeasurementNote})
+	if len(rows) > 0 {
+		b.WriteString("<details><summary>All collection result rows</summary>")
+		var body [][]string
+		for _, r := range rows {
+			body = append(body, []string{r.ConfigName, r.Engine, r.Format, strconv.Itoa(r.IndexCount), r.Phase, r.MaintenanceMode, fmtOps(r.DocsPerSec), fmtFloat(r.BytesPerDoc, 1), fmtBytes(r.TotalBytes), r.MeasurementKind, r.MeasurementNote})
+		}
+		writeTable(b, []string{"config", "engine", "format", "indexes", "phase", "maintenance", "docs/sec", "B/doc", "total bytes", "kind", "note"}, body, numericColumns(3, 6, 7, 8))
+		b.WriteString("</details>")
 	}
-	writeTable(b, []string{"config", "engine", "format", "indexes", "phase", "maintenance", "docs/sec", "B/doc", "total bytes", "kind", "note"}, body, numericColumns(3, 6, 7, 8))
-	b.WriteString("</details></section>\n")
+	b.WriteString("</section>\n")
 }
 
 type collectionDiskHighlight struct {
@@ -1131,7 +1207,7 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 	for _, idx := range indexes {
 		indexLabel := indexCountLabel(idx)
 		b.WriteString("<div class=\"chart-group\"><h3>" + esc(indexLabel) + ": phase detail and reader fanout</h3>")
-		b.WriteString("<p class=\"subtle\">The phase chart keeps load out so point reads, range reads, and updates are easier to compare. The fanout chart shows concurrent `_id` reader scaling from one to thirty-two readers.</p>")
+		b.WriteString("<p class=\"subtle\">The phase chart keeps load out so point reads, range reads, and updates are easier to compare. The fanout chart shows concurrent `_id` reader scaling for the reader counts present in the run data.</p>")
 		b.WriteString("<div class=\"chart-grid\">")
 		categories := []string{}
 		tree := []float64{}
@@ -1148,10 +1224,13 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 		if len(categories) > 0 {
 			b.WriteString(verticalBarChart("Full sweep non-load phases, "+indexLabel, categories, "phase", []chartSeries{{Name: "TreeDB", Values: tree, Color: "#2867c7"}, {Name: "MongoDB", Values: mongo, Color: "#1f8a5b"}}, "ops/sec"))
 		}
-		b.WriteString(lineChart("Full sweep reader fanout, "+indexLabel, []string{"1", "2", "4", "8", "16", "32"}, "reader count", "ops/sec", []chartSeries{
-			{Name: "TreeDB", Values: mongoSweep(rows, idx, "concurrent_id_find_one_r", "tree"), Color: "#2867c7"},
-			{Name: "MongoDB", Values: mongoSweep(rows, idx, "concurrent_id_find_one_r", "mongo"), Color: "#1f8a5b"},
-		}, "ops/sec"))
+		readerCounts := mongoSweepCounts(rows, idx, "concurrent_id_find_one_r")
+		if len(readerCounts) > 0 {
+			b.WriteString(lineChart("Full sweep reader fanout, "+indexLabel, countLabels(readerCounts), "reader count", "ops/sec", []chartSeries{
+				{Name: "TreeDB", Values: mongoSweep(rows, idx, "concurrent_id_find_one_r", "tree", readerCounts), Color: "#2867c7"},
+				{Name: "MongoDB", Values: mongoSweep(rows, idx, "concurrent_id_find_one_r", "mongo", readerCounts), Color: "#1f8a5b"},
+			}, "ops/sec"))
+		}
 		b.WriteString("</div></div>")
 	}
 	b.WriteString("<details><summary>All full-sweep rows</summary>")
@@ -1215,14 +1294,20 @@ func renderMongoScaling(b *strings.Builder, byIndex map[int][]mongoSummaryRow) {
 		b.WriteString("<div class=\"chart-group\"><h3>" + esc(indexLabel) + ": dedicated scaling</h3>")
 		b.WriteString("<p class=\"subtle\">Fresh 1M-document load per cell, then a focused writer or reader concurrency sweep for this index count.</p>")
 		b.WriteString("<div class=\"chart-grid\">")
-		b.WriteString(lineChart("Writer sweep, "+indexLabel, []string{"1", "2", "4", "8", "16", "32"}, "writer count", "ops/sec", []chartSeries{
-			{Name: "TreeDB", Values: mongoSweep(rows, idx, "concurrent_id_update_set_w", "tree"), Color: "#2867c7"},
-			{Name: "MongoDB", Values: mongoSweep(rows, idx, "concurrent_id_update_set_w", "mongo"), Color: "#1f8a5b"},
-		}, "ops/sec"))
-		b.WriteString(lineChart("Reader sweep, "+indexLabel, []string{"1", "2", "4", "8", "16", "32"}, "reader count", "ops/sec", []chartSeries{
-			{Name: "TreeDB", Values: mongoSweep(rows, idx, "concurrent_id_find_one_r", "tree"), Color: "#2867c7"},
-			{Name: "MongoDB", Values: mongoSweep(rows, idx, "concurrent_id_find_one_r", "mongo"), Color: "#1f8a5b"},
-		}, "ops/sec"))
+		writerCounts := mongoSweepCounts(rows, idx, "concurrent_id_update_set_w")
+		if len(writerCounts) > 0 {
+			b.WriteString(lineChart("Writer sweep, "+indexLabel, countLabels(writerCounts), "writer count", "ops/sec", []chartSeries{
+				{Name: "TreeDB", Values: mongoSweep(rows, idx, "concurrent_id_update_set_w", "tree", writerCounts), Color: "#2867c7"},
+				{Name: "MongoDB", Values: mongoSweep(rows, idx, "concurrent_id_update_set_w", "mongo", writerCounts), Color: "#1f8a5b"},
+			}, "ops/sec"))
+		}
+		readerCounts := mongoSweepCounts(rows, idx, "concurrent_id_find_one_r")
+		if len(readerCounts) > 0 {
+			b.WriteString(lineChart("Reader sweep, "+indexLabel, countLabels(readerCounts), "reader count", "ops/sec", []chartSeries{
+				{Name: "TreeDB", Values: mongoSweep(rows, idx, "concurrent_id_find_one_r", "tree", readerCounts), Color: "#2867c7"},
+				{Name: "MongoDB", Values: mongoSweep(rows, idx, "concurrent_id_find_one_r", "mongo", readerCounts), Color: "#1f8a5b"},
+			}, "ops/sec"))
+		}
 		b.WriteString("</div></div>")
 	}
 	for _, idx := range indexes {
@@ -1324,9 +1409,37 @@ func mongoRow(rows []mongoSummaryRow, idx int, phase string) (mongoSummaryRow, b
 	return mongoSummaryRow{}, false
 }
 
-func mongoSweep(rows []mongoSummaryRow, idx int, prefix, side string) []float64 {
+func mongoSweepCounts(rows []mongoSummaryRow, idx int, prefix string) []int {
+	seen := make(map[int]bool)
+	for _, row := range rows {
+		if row.SecondaryIndexes != idx || !strings.HasPrefix(row.Phase, prefix) {
+			continue
+		}
+		count, err := strconv.Atoi(strings.TrimPrefix(row.Phase, prefix))
+		if err != nil || count <= 0 {
+			continue
+		}
+		seen[count] = true
+	}
+	out := make([]int, 0, len(seen))
+	for count := range seen {
+		out = append(out, count)
+	}
+	sort.Ints(out)
+	return out
+}
+
+func countLabels(counts []int) []string {
+	out := make([]string, 0, len(counts))
+	for _, count := range counts {
+		out = append(out, strconv.Itoa(count))
+	}
+	return out
+}
+
+func mongoSweep(rows []mongoSummaryRow, idx int, prefix, side string, counts []int) []float64 {
 	var out []float64
-	for _, count := range []int{1, 2, 4, 8, 16, 32} {
+	for _, count := range counts {
 		row, ok := mongoRow(rows, idx, prefix+strconv.Itoa(count))
 		if !ok {
 			out = append(out, 0)
@@ -2046,19 +2159,72 @@ func emptyDash(s string) string {
 	return s
 }
 
-func atoi(s string) int {
-	v, _ := strconv.Atoi(strings.TrimSpace(s))
-	return v
+func tsvHeader(path string, names []string, required []string) (map[string]int, error) {
+	header := make(map[string]int, len(names))
+	for i, name := range names {
+		normalized := normalizeTSVHeader(name)
+		if normalized == "" {
+			continue
+		}
+		if prev, ok := header[normalized]; ok {
+			return nil, fmt.Errorf("%s: duplicate TSV header %q at columns %d and %d", path, normalized, prev+1, i+1)
+		}
+		header[normalized] = i
+	}
+	for _, name := range required {
+		normalized := normalizeTSVHeader(name)
+		if _, ok := header[normalized]; !ok {
+			return nil, fmt.Errorf("%s: missing required TSV column %q", path, name)
+		}
+	}
+	return header, nil
 }
 
-func atoi64(s string) int64 {
-	v, _ := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
-	return v
+func normalizeTSVHeader(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
 }
 
-func atof(s string) float64 {
-	v, _ := strconv.ParseFloat(strings.TrimSpace(s), 64)
-	return v
+func tsvField(path string, header map[string]int, rec []string, line int, name string) (string, error) {
+	idx, ok := header[normalizeTSVHeader(name)]
+	if !ok {
+		return "", fmt.Errorf("%s:%d: missing TSV column %q", path, line, name)
+	}
+	if idx >= len(rec) {
+		return "", fmt.Errorf("%s:%d: row has %d fields, missing column %q at field %d", path, line, len(rec), name, idx+1)
+	}
+	return strings.TrimSpace(rec[idx]), nil
+}
+
+func parseIntColumn(path string, line int, name, value string) (int, error) {
+	v, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s:%d: parse int column %q value %q: %w", path, line, name, value, err)
+	}
+	return v, nil
+}
+
+func parseInt64Column(path string, line int, name, value string) (int64, error) {
+	v, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s:%d: parse int64 column %q value %q: %w", path, line, name, value, err)
+	}
+	return v, nil
+}
+
+func parseFloatColumn(path string, line int, name, value string) (float64, error) {
+	v, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s:%d: parse float column %q value %q: %w", path, line, name, value, err)
+	}
+	return v, nil
+}
+
+func parseBoolColumn(path string, line int, name, value string) (bool, error) {
+	v, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%s:%d: parse bool column %q value %q: %w", path, line, name, value, err)
+	}
+	return v, nil
 }
 
 func esc(s string) string {

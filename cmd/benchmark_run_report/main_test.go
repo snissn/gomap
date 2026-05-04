@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -149,6 +150,30 @@ func TestRenderHTMLNavOmitsMissingSections(t *testing.T) {
 	}
 }
 
+func TestRenderCollectionsWithOnlyComparisons(t *testing.T) {
+	html := renderHTML(reportData{
+		Config: config{Title: "comparison only", RunRoot: t.TempDir()},
+		CollectionComparisons: []collectionComparison{{
+			TreeDBConfig:      "treedb_bson_collection_0_indexes",
+			TreeDBPhase:       "full_leafgen_pack_gc",
+			SQLiteConfig:      "sqlite_native_columns_0_indexes",
+			SQLitePhase:       "sqlite_vacuum",
+			TreeDBBytesPerDoc: 4,
+			SQLiteBytesPerDoc: 20,
+			SmallerRatio:      5,
+			ComparisonBasis:   "fixture",
+		}},
+	})
+	for _, want := range []string{"href=\"#collections\"", "<section id=\"collections\"", "Compacted-state comparisons", "treedb_bson_collection_0_indexes"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("comparison-only collection report missing %q\n%s", want, html)
+		}
+	}
+	if strings.Contains(html, "Collection highlight rows") {
+		t.Fatalf("comparison-only collection report renders row-only highlights\n%s", html)
+	}
+}
+
 func TestRawEngineChartOmitsMissingVariants(t *testing.T) {
 	html := renderHTML(reportData{
 		Config: config{Title: "partial raw", RunRoot: t.TempDir()},
@@ -171,8 +196,8 @@ func TestRawEngineChartOmitsMissingVariants(t *testing.T) {
 func TestReadMatrixPreservesLargePhysicalBytes(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "matrix.tsv")
-	writeFile(t, path, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
-		"treedb\ttreedb_bson_driver\t100\t0\traw/treedb.json\t5000000000\n")
+	writeFile(t, path, " target \t config \t documents \t secondary_indexes \t raw_json \t physical_bytes \n"+
+		" treedb \t treedb_bson_driver \t 100 \t 0 \t raw/treedb.json \t 5000000000 \n")
 
 	rows, err := readMatrix(path)
 	if err != nil {
@@ -180,6 +205,55 @@ func TestReadMatrixPreservesLargePhysicalBytes(t *testing.T) {
 	}
 	if got, want := rows[0].PhysicalBytes, int64(5_000_000_000); got != want {
 		t.Fatalf("PhysicalBytes = %d, want %d", got, want)
+	}
+}
+
+func TestReadMatrixRejectsInvalidNumbers(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "matrix.tsv")
+	writeFile(t, path, "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_driver\t100\t0\traw/treedb.json\tnope\n")
+
+	_, err := readMatrix(path)
+	if err == nil || !strings.Contains(err.Error(), "physical_bytes") {
+		t.Fatalf("readMatrix error = %v, want physical_bytes parse failure", err)
+	}
+}
+
+func TestReadMongoSummaryStrictParsing(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "summary.tsv")
+	paddedHeader := " " + strings.ReplaceAll(strings.TrimSuffix(mongoSummaryHeader, "\n"), "\t", " \t ") + " \n"
+	writeFile(t, path, paddedHeader+strings.TrimPrefix(mongoSummaryFixture(0), mongoSummaryHeader))
+
+	rows, err := readMongoSummary(path)
+	if err != nil {
+		t.Fatalf("readMongoSummary failed: %v", err)
+	}
+	if got, want := rows[0].Documents, 100; got != want {
+		t.Fatalf("Documents = %d, want %d", got, want)
+	}
+
+	writeFile(t, path, strings.Replace(mongoSummaryFixture(0), "100\t0\t", "oops\t0\t", 1))
+	_, err = readMongoSummary(path)
+	if err == nil || !strings.Contains(err.Error(), "documents") {
+		t.Fatalf("readMongoSummary error = %v, want documents parse failure", err)
+	}
+}
+
+func TestMongoSweepCountsObservedOnly(t *testing.T) {
+	rows := []mongoSummaryRow{
+		{SecondaryIndexes: 0, Phase: "concurrent_id_find_one_r16", TreeDBOpsSec: 160, MongoOpsSec: 80},
+		{SecondaryIndexes: 0, Phase: "concurrent_id_find_one_r1", TreeDBOpsSec: 10, MongoOpsSec: 5},
+		{SecondaryIndexes: 0, Phase: "concurrent_id_update_set_w8", TreeDBOpsSec: 800, MongoOpsSec: 400},
+	}
+	counts := mongoSweepCounts(rows, 0, "concurrent_id_find_one_r")
+	if want := []int{1, 16}; !reflect.DeepEqual(counts, want) {
+		t.Fatalf("counts = %v, want %v", counts, want)
+	}
+	values := mongoSweep(rows, 0, "concurrent_id_find_one_r", "tree", counts)
+	if want := []float64{10, 160}; !reflect.DeepEqual(values, want) {
+		t.Fatalf("values = %v, want %v", values, want)
 	}
 }
 
