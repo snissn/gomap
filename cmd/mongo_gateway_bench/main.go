@@ -2121,7 +2121,7 @@ func treeDBStatsDelta(before, after map[string]string) (map[string]string, map[s
 		if !ok {
 			continue
 		}
-		beforeNumber := 0.0
+		beforeNumber := treeDBStatNumber{integer: afterNumber.integer}
 		if beforeValue, exists := before[key]; exists {
 			parsed, parsedOK := parseTreeDBStatNumber(beforeValue)
 			if !parsedOK {
@@ -2129,11 +2129,11 @@ func treeDBStatsDelta(before, after map[string]string) (map[string]string, map[s
 			}
 			beforeNumber = parsed
 		}
-		delta := afterNumber - beforeNumber
-		if delta == 0 {
+		delta, formatted, ok := treeDBStatDelta(afterNumber, beforeNumber)
+		if !ok {
 			continue
 		}
-		out[key] = formatTreeDBStatNumber(delta)
+		out[key] = formatted
 		numeric[key] = delta
 	}
 	if len(out) == 0 {
@@ -2142,15 +2142,43 @@ func treeDBStatsDelta(before, after map[string]string) (map[string]string, map[s
 	return out, numeric
 }
 
-func parseTreeDBStatNumber(value string) (float64, bool) {
+type treeDBStatNumber struct {
+	floatValue float64
+	intValue   int64
+	integer    bool
+}
+
+func parseTreeDBStatNumber(value string) (treeDBStatNumber, bool) {
+	value = strings.TrimSpace(value)
 	if value == "" {
-		return 0, false
+		return treeDBStatNumber{}, false
+	}
+	if !strings.ContainsAny(value, ".eE") {
+		intValue, err := strconv.ParseInt(value, 10, 64)
+		if err == nil {
+			return treeDBStatNumber{floatValue: float64(intValue), intValue: intValue, integer: true}, true
+		}
 	}
 	number, err := strconv.ParseFloat(value, 64)
 	if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
-		return 0, false
+		return treeDBStatNumber{}, false
 	}
-	return number, true
+	return treeDBStatNumber{floatValue: number}, true
+}
+
+func treeDBStatDelta(after, before treeDBStatNumber) (float64, string, bool) {
+	if after.integer && before.integer {
+		delta := after.intValue - before.intValue
+		if delta == 0 {
+			return 0, "", false
+		}
+		return float64(delta), strconv.FormatInt(delta, 10), true
+	}
+	delta := after.floatValue - before.floatValue
+	if delta == 0 {
+		return 0, "", false
+	}
+	return delta, formatTreeDBStatNumber(delta), true
 }
 
 func formatTreeDBStatNumber(value float64) string {

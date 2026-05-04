@@ -1120,6 +1120,9 @@ func writerSweepComparisons(cells []cellComparison) []phaseComparison {
 		if cell.Key.SecondaryIndexes != 0 {
 			continue
 		}
+		if cell.TreeDB == nil {
+			continue
+		}
 		var mongoPhaseMap map[string]phaseResult
 		if cell.Mongo != nil {
 			mongoPhaseMap = cell.Mongo.PhaseMap
@@ -1594,7 +1597,7 @@ func formatPhaseLatency(ok bool, value float64) string {
 
 func formatPhaseMetric(phase phaseResult, name string) string {
 	value, ok := phase.TreeDBMetrics[name]
-	if !ok || value == 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+	if !ok || math.IsNaN(value) || math.IsInf(value, 0) {
 		return "n/a"
 	}
 	return formatNumber(value)

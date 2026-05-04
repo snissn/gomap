@@ -348,6 +348,24 @@ func TestLoadTreeDBStatsMetadata(t *testing.T) {
 	}
 }
 
+func TestLoadTreeDBStatsMetadataMissingAndDirectory(t *testing.T) {
+	missingStats, err := loadTreeDBStatsMetadata(t.TempDir())
+	if err != nil {
+		t.Fatalf("missing metadata err=%v", err)
+	}
+	if missingStats != nil {
+		t.Fatalf("missing metadata stats=%v want nil", missingStats)
+	}
+
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "benchprof_results.json"), 0o755); err != nil {
+		t.Fatalf("mkdir metadata path: %v", err)
+	}
+	if _, err := loadTreeDBStatsMetadata(dir); err == nil {
+		t.Fatal("directory metadata path returned nil error")
+	}
+}
+
 func TestBuildInvestigations_IteratorOverheadInference(t *testing.T) {
 	rep := report{
 		OpsRows: []opsRow{

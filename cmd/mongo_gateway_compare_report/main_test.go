@@ -1263,7 +1263,7 @@ func TestRenderWriterSweepCounterTableUsesPhaseMetrics(t *testing.T) {
 			"primary_root_publishes/doc":            0.5,
 			"primary_root_delta_entries/doc":        1,
 			"primary_root_delta_bytes/doc":          42,
-			"primary_only_coalesced_docs/publish":   2,
+			"primary_only_coalesced_docs/publish":   0,
 		},
 	}
 	mongoPhase := phaseResult{
@@ -1294,11 +1294,27 @@ func TestRenderWriterSweepCounterTableUsesPhaseMetrics(t *testing.T) {
 	for _, want := range []string{
 		"## 0-Index Writer Sweep Counters",
 		"publish calls/doc",
-		"| 1000 | 0 | `treedb_0idx` | `mongo_baseline` | 8 | 1200 | 2400 | 750 | 500 | 800 | 800 | 0.50 | 0.50 | 1.00 | 2500 | 2.00 | 0.25 | 64.0 | 128 | 0.12 | 4.00 | 32.0 | 0.75 | 1.00 | 10.0 | 20.0 | 0.10 | 0.50 | 0.25 | 0.50 | 1.00 | 42.0 | 2.00 | `/tmp/treedb.json` |",
+		"| 1000 | 0 | `treedb_0idx` | `mongo_baseline` | 8 | 1200 | 2400 | 750 | 500 | 800 | 800 | 0.50 | 0.50 | 1.00 | 2500 | 2.00 | 0.25 | 64.0 | 128 | 0.12 | 4.00 | 32.0 | 0.75 | 1.00 | 10.0 | 20.0 | 0.10 | 0.50 | 0.25 | 0.50 | 1.00 | 42.0 | 0 | `/tmp/treedb.json` |",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("writer sweep table missing %q:\n%s", want, rendered)
 		}
+	}
+}
+
+func TestWriterSweepCounterTableSkipsMissingTreeDBCell(t *testing.T) {
+	mongoPhase := phaseResult{Name: "concurrent_id_update_set_w8", OpsPerSecond: 2400}
+	cells := []cellComparison{{
+		Key: cellKey{Documents: 1000, SecondaryIndexes: 0},
+		Mongo: &runRecord{
+			Result:   benchmarkResult{Phases: []phaseResult{mongoPhase}},
+			PhaseMap: map[string]phaseResult{mongoPhase.Name: mongoPhase},
+		},
+	}}
+	var out strings.Builder
+	renderWriterSweepCounterTable(&out, cells)
+	if got := out.String(); got != "" {
+		t.Fatalf("writer sweep table rendered without TreeDB cell:\n%s", got)
 	}
 }
 
