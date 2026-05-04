@@ -29,6 +29,7 @@ Environment:
 
 Outputs:
   raw_tests.log
+  raw_tests.json
   raw_db_root_apply.bench
   raw_db_ops.bench
   commands.sh

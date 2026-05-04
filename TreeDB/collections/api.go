@@ -3930,6 +3930,7 @@ func pendingUniqueReservationIndexLocked(domain *collectionWriteDomain, indexNam
 	return index
 }
 
+// pendingUniqueReservationProbeLocked requires domain.mu to be held.
 func pendingUniqueReservationProbeLocked(domain *collectionWriteDomain, indexName string, valuePrefix []byte) bool {
 	index := pendingUniqueReservationIndexLocked(domain, indexName, false)
 	return index != nil && index.contains(valuePrefix)
@@ -5312,9 +5313,13 @@ func (stats *collectionRootDeltaPlanStats) addBatch(kind collectionRootDeltaPlan
 			}
 			continue
 		}
-		stats.valueBytes += uint64(len(entry.Value))
+		valueBytes := uint64(len(entry.Value))
+		if entry.IsPtr {
+			valueBytes += page.ValuePtrSize
+		}
+		stats.valueBytes += valueBytes
 		if kind == collectionRootDeltaPlanPrimary {
-			stats.primaryValueBytes += uint64(len(entry.Value))
+			stats.primaryValueBytes += valueBytes
 		}
 	}
 }
@@ -6580,7 +6585,10 @@ func (c *Collection) deleteDocumentOnce(documentID []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	deltaStats := collectionRootDeltaPlanStatsFromOrdered(c.meta.Name, rootNames, ordered)
+	var deltaStats collectionRootDeltaPlanStats
+	if c.writeDomain != nil {
+		deltaStats = collectionRootDeltaPlanStatsFromOrdered(c.meta.Name, rootNames, ordered)
+	}
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 	})
@@ -7782,7 +7790,10 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	if err != nil {
 		return false, false, err
 	}
-	deltaStats := collectionRootDeltaPlanStatsFromOrdered(c.meta.Name, rootNames, ordered)
+	var deltaStats collectionRootDeltaPlanStats
+	if c.writeDomain != nil {
+		deltaStats = collectionRootDeltaPlanStatsFromOrdered(c.meta.Name, rootNames, ordered)
+	}
 	preflight := func() error {
 		return c.validateMutationRootDescriptors(baseUserRoot, baseSystemRoot, baseCommitSeq)
 	}
@@ -9334,7 +9345,10 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]Upda
 	if err != nil {
 		return nil, err
 	}
-	deltaStats := collectionRootDeltaPlanStatsFromOrdered(plan.meta.Name, plan.rootNames, ordered)
+	var deltaStats collectionRootDeltaPlanStats
+	if c.writeDomain != nil {
+		deltaStats = collectionRootDeltaPlanStatsFromOrdered(plan.meta.Name, plan.rootNames, ordered)
+	}
 	preflight := func() error {
 		return c.validateMutationRootDescriptors(plan.baseUserRoot, plan.baseSystemRoot, plan.baseCommitSeq)
 	}
