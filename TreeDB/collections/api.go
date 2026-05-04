@@ -3603,6 +3603,25 @@ func pendingIndexedUniqueValueRunMapLocked(domain *collectionWriteDomain) map[st
 	return indexedFlushUnitPendingUniqueValueRunMap(indexedFlushUnitsWithPublishing(domain.indexedPublishingUnits, domain.indexedFlushUnits), domain.uniqueValueRuns)
 }
 
+func pendingUniqueReservationIndexLocked(domain *collectionWriteDomain, indexName string) *bufferedUniqueValueIndex {
+	if domain == nil || indexName == "" {
+		return nil
+	}
+	if index := domain.uniqueValueIndex[indexName]; index != nil {
+		return index
+	}
+	runs := pendingIndexedUniqueValueRunMapLocked(domain)[indexName]
+	if len(runs) == 0 {
+		return nil
+	}
+	return rebuildBufferedUniqueValueIndexes(map[string][]memtable.Table{indexName: runs})[indexName]
+}
+
+func pendingUniqueReservationProbeLocked(domain *collectionWriteDomain, indexName string, valuePrefix []byte) bool {
+	index := pendingUniqueReservationIndexLocked(domain, indexName)
+	return index != nil && index.contains(valuePrefix)
+}
+
 func rebuildBufferedPendingIndexesLocked(domain *collectionWriteDomain, collectionName string, preservePrimaryRunIndex bool) {
 	if domain == nil {
 		return
@@ -3829,7 +3848,7 @@ func (c *Collection) rejectBufferedIndexedInsertConflictsLocked(domain *collecti
 		if _, ok := uniqueIndexes[run.indexName]; !ok {
 			continue
 		}
-		pending := domain.uniqueValueIndex[run.indexName]
+		pending := pendingUniqueReservationIndexLocked(domain, run.indexName)
 		if pending == nil || pending.len() == 0 {
 			continue
 		}
@@ -10927,7 +10946,7 @@ func bufferedIndexPrefixTableLocked(domain *collectionWriteDomain, collectionNam
 		return nil, nil
 	}
 	if unique {
-		pending := domain.uniqueValueIndex[indexName]
+		pending := pendingUniqueReservationIndexLocked(domain, indexName)
 		if pending != nil && !pending.contains(prefix) {
 			return nil, nil
 		}
