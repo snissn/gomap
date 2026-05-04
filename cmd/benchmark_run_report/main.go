@@ -1113,18 +1113,37 @@ func renderMongoLoadModes(b *strings.Builder, rows []loadModeRow) {
 	b.WriteString("<section id=\"mongo-load\"><h2>Load-Only Client-Mode Matrix</h2>")
 	b.WriteString("<p class=\"subtle\">Insert-only matrix. This section uses raw JSON directly so every MongoDB and TreeDB client mode has its own throughput and physical-disk row.</p>")
 	b.WriteString("<p class=\"subtle\">Use this section for pure ingest client-path comparisons. It is intentionally separate from the full-sweep load chart, which inherits the broader read/range/update sweep setup.</p>")
+	b.WriteString("<div class=\"chart-group\"><h3>Comparable official-driver modes</h3>")
+	b.WriteString("<p class=\"subtle\">These charts compare modes that both systems run through the MongoDB Go driver. They are the right view for Mongo-compatible client behavior and driver-path overhead.</p>")
 	b.WriteString("<div class=\"chart-grid\">")
 	for _, idx := range sortedLoadModeIndexes(rows) {
-		cats, tree, mongo := loadModeChartRows(rows, idx)
+		cats, tree, mongo := comparableLoadModeChartRows(rows, idx)
 		if len(cats) == 0 {
 			continue
 		}
-		b.WriteString(verticalBarChart(fmt.Sprintf("Load throughput by client mode, %d indexes", idx), cats, "client mode", []chartSeries{
+		b.WriteString(verticalBarChart(fmt.Sprintf("Comparable load throughput by client mode, %d indexes", idx), cats, "client mode", []chartSeries{
 			{Name: "TreeDB", Values: tree, Color: "#2867c7"},
 			{Name: "MongoDB", Values: mongo, Color: "#1f8a5b"},
 		}, "docs/sec"))
 	}
-	b.WriteString("</div>")
+	b.WriteString("</div></div>")
+	var rawCharts strings.Builder
+	for _, idx := range sortedLoadModeIndexes(rows) {
+		cats, tree := rawWireLoadModeChartRows(rows, idx)
+		if len(cats) == 0 {
+			continue
+		}
+		rawCharts.WriteString(verticalBarChart(fmt.Sprintf("TreeDB raw-wire ceiling modes, %d indexes", idx), cats, "client mode", []chartSeries{
+			{Name: "TreeDB", Values: tree, Color: "#2867c7"},
+		}, "docs/sec"))
+	}
+	if rawCharts.Len() > 0 {
+		b.WriteString("<div class=\"chart-group\"><h3>TreeDB raw-wire ceiling modes</h3>")
+		b.WriteString("<p class=\"subtle\"><code>raw-wire-tcp</code> still sends Mongo OP_MSG bytes over loopback TCP to the TreeDB gateway, but it bypasses the MongoDB Go driver. <code>raw-wire</code> removes the socket as well and drives the same raw command/gateway path in process. These modes are closer to TreeDB gateway/server ingest ceiling measurements than to user-facing Mongo compatibility comparisons, so MongoDB bars are intentionally omitted rather than shown as missing data.</p>")
+		b.WriteString("<div class=\"chart-grid\">")
+		b.WriteString(rawCharts.String())
+		b.WriteString("</div></div>")
+	}
 	var body [][]string
 	for _, row := range rows {
 		body = append(body, []string{strconv.Itoa(row.Indexes), row.Target, row.Config, fmtOps(row.OpsPerSec), fmtBytes(float64(row.PhysicalBytes)), row.RawJSON})
@@ -1302,7 +1321,13 @@ func sortedLoadModeIndexes(rows []loadModeRow) []int {
 	return out
 }
 
-func loadModeChartRows(rows []loadModeRow, idx int) ([]string, []float64, []float64) {
+func comparableLoadModeChartRows(rows []loadModeRow, idx int) ([]string, []float64, []float64) {
+	return pairedLoadModeChartRows(rows, idx, func(mode string) bool {
+		return !isRawWireLoadMode(mode)
+	})
+}
+
+func pairedLoadModeChartRows(rows []loadModeRow, idx int, include func(string) bool) ([]string, []float64, []float64) {
 	type pair struct {
 		TreeDB float64
 		Mongo  float64
@@ -1313,6 +1338,9 @@ func loadModeChartRows(rows []loadModeRow, idx int) ([]string, []float64, []floa
 			continue
 		}
 		mode := loadModeLabel(row)
+		if !include(mode) {
+			continue
+		}
 		pair := pairs[mode]
 		switch row.Target {
 		case "treedb":
@@ -1337,6 +1365,36 @@ func loadModeChartRows(rows []loadModeRow, idx int) ([]string, []float64, []floa
 		mongo = append(mongo, pair.Mongo)
 	}
 	return labels, tree, mongo
+}
+
+func rawWireLoadModeChartRows(rows []loadModeRow, idx int) ([]string, []float64) {
+	values := make(map[string]float64)
+	for _, row := range rows {
+		if row.Indexes != idx || row.Target != "treedb" {
+			continue
+		}
+		mode := loadModeLabel(row)
+		if !isRawWireLoadMode(mode) {
+			continue
+		}
+		values[mode] = row.OpsPerSec
+	}
+	var labels []string
+	for mode := range values {
+		labels = append(labels, mode)
+	}
+	sort.Slice(labels, func(i, j int) bool {
+		return loadModeOrder(labels[i]) < loadModeOrder(labels[j])
+	})
+	tree := make([]float64, 0, len(labels))
+	for _, mode := range labels {
+		tree = append(tree, values[mode])
+	}
+	return labels, tree
+}
+
+func isRawWireLoadMode(mode string) bool {
+	return mode == "BSON raw_wire_tcp" || mode == "BSON raw_wire"
 }
 
 func loadModeLabel(row loadModeRow) string {

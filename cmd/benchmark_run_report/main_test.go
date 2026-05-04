@@ -43,8 +43,12 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 	writeFile(t, filepath.Join(root, "mongo_gateway_reader_writer_scaling_1m", "indexes_4", "summary.tsv"), summary4)
 	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "matrix.tsv"), "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
 		"treedb\ttreedb_bson_driver\t100\t0\traw/treedb.json\t5000000000\n"+
+		"treedb\ttreedb_bson_raw_wire_tcp\t100\t0\traw/treedb_raw_wire_tcp.json\t3000\n"+
+		"treedb\ttreedb_bson_raw_wire\t100\t0\traw/treedb_raw_wire.json\t2500\n"+
 		"mongo\tmongo_driver\t100\t0\traw/mongo.json\t5000\n")
 	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "raw", "treedb.json"), `{"target":"treedb","documents":100,"secondary_indexes":0,"phases":[{"name":"load_insert_many","ops_per_sec":1000}]}`)
+	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "raw", "treedb_raw_wire_tcp.json"), `{"target":"treedb","documents":100,"secondary_indexes":0,"phases":[{"name":"load_insert_many","ops_per_sec":1500}]}`)
+	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "raw", "treedb_raw_wire.json"), `{"target":"treedb","documents":100,"secondary_indexes":0,"phases":[{"name":"load_insert_many","ops_per_sec":1800}]}`)
 	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "raw", "mongo.json"), `{"target":"mongo","documents":100,"secondary_indexes":0,"phases":[{"name":"load_insert_many","ops_per_sec":500}]}`)
 
 	out := filepath.Join(root, "deep_report.html")
@@ -77,6 +81,11 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"TreeDB BSON",
 		"TreeDB JSON",
 		"SQLite native VACUUM: 20",
+		"Comparable official-driver modes",
+		"TreeDB raw-wire ceiling modes",
+		"bypasses the MongoDB Go driver",
+		"same raw command/gateway path in process",
+		"MongoDB bars are intentionally omitted",
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("report missing %q\n%s", want, html)
