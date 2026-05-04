@@ -401,53 +401,57 @@ type CollectionUpdateIndexStats struct {
 // CollectionManager. The counters are process-local observability; they are
 // not persisted with collection metadata.
 type CollectionManagerStats struct {
-	Domains                       int
-	PendingDocuments              int
-	PendingBytes                  int64
-	PendingRootRuns               int
-	PendingIndexedFlushUnits      int
-	IndexedAsyncFlushRunning      int
-	MutationLockCalls             uint64
-	MutationLockWait              time.Duration
-	MutationLockHold              time.Duration
-	IndexedStageBatches           uint64
-	IndexedStageDocs              uint64
-	IndexedStageBytes             uint64
-	IndexedStageRootRuns          uint64
-	IndexedAutoFlushes            uint64
-	IndexedAsyncFlushScheduled    uint64
-	IndexedAsyncFlushBackpressure uint64
-	IndexedAsyncFlushErrors       uint64
-	IndexedFlushCalls             uint64
-	IndexedFlushErrors            uint64
-	IndexedFlushDocs              uint64
-	IndexedFlushBytes             uint64
-	IndexedFlushRootRuns          uint64
-	IndexedFlushRoots             uint64
-	IndexedFlushDuration          time.Duration
-	IndexedFlushMaterialize       time.Duration
-	IndexedFlushPublish           time.Duration
-	UpdateCombineRequests         uint64
-	UpdateCombineBatches          uint64
-	UpdateCombineBatchedRequests  uint64
-	UpdateCombineFallbackRequests uint64
-	UpdateCombineQueueDepthMax    uint64
-	UpdateBatchCalls              uint64
-	UpdateBatchItems              uint64
-	UpdateBatchMatched            uint64
-	UpdateBatchModified           uint64
-	UpdateBatchRuns               uint64
-	UpdateBatchBufferedBatches    uint64
-	UpdateBatchCurrentRead        time.Duration
-	UpdateBatchCallback           time.Duration
-	UpdateBatchPrepareDocuments   time.Duration
-	UpdateBatchIndexStateExtract  time.Duration
-	UpdateBatchUniquePreflight    time.Duration
-	UpdateBatchTemplateRunBuild   time.Duration
-	UpdateBatchPrimaryRunBuild    time.Duration
-	UpdateBatchIndexStateRunBuild time.Duration
-	UpdateBatchSecondaryRunBuild  time.Duration
-	UpdateBatchBufferStage        time.Duration
+	Domains                        int
+	PendingDocuments               int
+	PendingBytes                   int64
+	PendingRootRuns                int
+	PendingIndexedFlushUnits       int
+	IndexedAsyncFlushRunning       int
+	MutationLockCalls              uint64
+	MutationLockWait               time.Duration
+	MutationLockHold               time.Duration
+	IndexedStageBatches            uint64
+	IndexedStageDocs               uint64
+	IndexedStageBytes              uint64
+	IndexedStageRootRuns           uint64
+	IndexedAutoFlushes             uint64
+	IndexedAsyncFlushScheduled     uint64
+	IndexedAsyncFlushBackpressure  uint64
+	IndexedAsyncFlushErrors        uint64
+	IndexedFlushCalls              uint64
+	IndexedFlushErrors             uint64
+	IndexedFlushRequeues           uint64
+	IndexedFlushRequeuedUnits      uint64
+	IndexedFlushLostOwnership      uint64
+	IndexedFlushRootBaseMismatches uint64
+	IndexedFlushDocs               uint64
+	IndexedFlushBytes              uint64
+	IndexedFlushRootRuns           uint64
+	IndexedFlushRoots              uint64
+	IndexedFlushDuration           time.Duration
+	IndexedFlushMaterialize        time.Duration
+	IndexedFlushPublish            time.Duration
+	UpdateCombineRequests          uint64
+	UpdateCombineBatches           uint64
+	UpdateCombineBatchedRequests   uint64
+	UpdateCombineFallbackRequests  uint64
+	UpdateCombineQueueDepthMax     uint64
+	UpdateBatchCalls               uint64
+	UpdateBatchItems               uint64
+	UpdateBatchMatched             uint64
+	UpdateBatchModified            uint64
+	UpdateBatchRuns                uint64
+	UpdateBatchBufferedBatches     uint64
+	UpdateBatchCurrentRead         time.Duration
+	UpdateBatchCallback            time.Duration
+	UpdateBatchPrepareDocuments    time.Duration
+	UpdateBatchIndexStateExtract   time.Duration
+	UpdateBatchUniquePreflight     time.Duration
+	UpdateBatchTemplateRunBuild    time.Duration
+	UpdateBatchPrimaryRunBuild     time.Duration
+	UpdateBatchIndexStateRunBuild  time.Duration
+	UpdateBatchSecondaryRunBuild   time.Duration
+	UpdateBatchBufferStage         time.Duration
 	// Detailed buffer-stage aggregate timings are populated only when
 	// CollectionManager.SetUpdateBatchDetailedStatsEnabled(true) is enabled.
 	// UpdateBatchBufferLockHold is an enclosing domain mutex hold-time metric
@@ -745,6 +749,10 @@ type collectionWriteDomain struct {
 	indexedAsyncFlushErrors          atomic.Uint64
 	indexedFlushCalls                atomic.Uint64
 	indexedFlushErrors               atomic.Uint64
+	indexedFlushRequeues             atomic.Uint64
+	indexedFlushRequeuedUnits        atomic.Uint64
+	indexedFlushLostOwnership        atomic.Uint64
+	indexedFlushRootBaseMismatches   atomic.Uint64
 	indexedFlushDocs                 atomic.Uint64
 	indexedFlushBytes                atomic.Uint64
 	indexedFlushRootRuns             atomic.Uint64
@@ -967,6 +975,10 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.indexed_async_flush.errors_total"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushErrors)
 	out["treedb.collections.write_domain.indexed_flush.calls_total"] = fmt.Sprintf("%d", stats.IndexedFlushCalls)
 	out["treedb.collections.write_domain.indexed_flush.errors_total"] = fmt.Sprintf("%d", stats.IndexedFlushErrors)
+	out["treedb.collections.write_domain.indexed_flush.requeue_total"] = fmt.Sprintf("%d", stats.IndexedFlushRequeues)
+	out["treedb.collections.write_domain.indexed_flush.requeued_units_total"] = fmt.Sprintf("%d", stats.IndexedFlushRequeuedUnits)
+	out["treedb.collections.write_domain.indexed_flush.lost_ownership_total"] = fmt.Sprintf("%d", stats.IndexedFlushLostOwnership)
+	out["treedb.collections.write_domain.indexed_flush.root_base_mismatch_total"] = fmt.Sprintf("%d", stats.IndexedFlushRootBaseMismatches)
 	out["treedb.collections.write_domain.indexed_flush.docs_total"] = fmt.Sprintf("%d", stats.IndexedFlushDocs)
 	out["treedb.collections.write_domain.indexed_flush.bytes_total"] = fmt.Sprintf("%d", stats.IndexedFlushBytes)
 	out["treedb.collections.write_domain.indexed_flush.root_runs_total"] = fmt.Sprintf("%d", stats.IndexedFlushRootRuns)
@@ -1138,6 +1150,10 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.IndexedAsyncFlushErrors += other.IndexedAsyncFlushErrors
 	s.IndexedFlushCalls += other.IndexedFlushCalls
 	s.IndexedFlushErrors += other.IndexedFlushErrors
+	s.IndexedFlushRequeues += other.IndexedFlushRequeues
+	s.IndexedFlushRequeuedUnits += other.IndexedFlushRequeuedUnits
+	s.IndexedFlushLostOwnership += other.IndexedFlushLostOwnership
+	s.IndexedFlushRootBaseMismatches += other.IndexedFlushRootBaseMismatches
 	s.IndexedFlushDocs += other.IndexedFlushDocs
 	s.IndexedFlushBytes += other.IndexedFlushBytes
 	s.IndexedFlushRootRuns += other.IndexedFlushRootRuns
@@ -1229,6 +1245,10 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.IndexedAsyncFlushErrors = domain.indexedAsyncFlushErrors.Load()
 	stats.IndexedFlushCalls = domain.indexedFlushCalls.Load()
 	stats.IndexedFlushErrors = domain.indexedFlushErrors.Load()
+	stats.IndexedFlushRequeues = domain.indexedFlushRequeues.Load()
+	stats.IndexedFlushRequeuedUnits = domain.indexedFlushRequeuedUnits.Load()
+	stats.IndexedFlushLostOwnership = domain.indexedFlushLostOwnership.Load()
+	stats.IndexedFlushRootBaseMismatches = domain.indexedFlushRootBaseMismatches.Load()
 	stats.IndexedFlushDocs = domain.indexedFlushDocs.Load()
 	stats.IndexedFlushBytes = domain.indexedFlushBytes.Load()
 	stats.IndexedFlushRootRuns = domain.indexedFlushRootRuns.Load()
@@ -2527,6 +2547,9 @@ func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWrite
 			}
 			return nil
 		}); err != nil {
+			if errors.Is(err, ErrConcurrentMutation) {
+				domain.indexedFlushRootBaseMismatches.Add(1)
+			}
 			return nil, err
 		}
 	} else {
@@ -4630,6 +4653,9 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 		}
 		return nil
 	}); err != nil {
+		if errors.Is(err, ErrConcurrentMutation) {
+			domain.indexedFlushRootBaseMismatches.Add(1)
+		}
 		return nil, err
 	}
 
@@ -4925,6 +4951,10 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	preservePrimaryRunIndex := domain.primaryRunIndex != nil
 	if publishErr != nil {
 		if removed, ok := removeIndexedPublishingWorkUnitsLocked(domain, work.units); ok {
+			if len(removed) > 0 {
+				domain.indexedFlushRequeues.Add(1)
+				domain.indexedFlushRequeuedUnits.Add(uint64(len(removed)))
+			}
 			domain.indexedFlushUnits = append(removed, domain.indexedFlushUnits...)
 		}
 		rebuildBufferedPendingIndexesLocked(domain, work.meta.Name, preservePrimaryRunIndex)
@@ -4944,6 +4974,7 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	oldPublishing, owned := removeIndexedPublishingWorkUnitsLocked(domain, work.units)
 	if !owned {
 		err := errors.New("collections: async indexed publish lost ownership of in-flight flush units")
+		domain.indexedFlushLostOwnership.Add(1)
 		domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, err)
 		return err
 	}
