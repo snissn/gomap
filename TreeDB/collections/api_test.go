@@ -666,6 +666,7 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 	for _, key := range []string{
 		"treedb.collections.write_domain.update_batch.index_value_changes_total",
 		"treedb.collections.write_domain.update_batch.index_value_unchanged_total",
+		"treedb.collections.write_domain.update_batch.changed_index_fast_mask_fallbacks_total",
 		"treedb.collections.write_domain.update_batch.unique_checks_total",
 		"treedb.collections.write_domain.update_batch.unique_check_skips_total",
 	} {
@@ -688,6 +689,88 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 		if _, ok := exported[key]; !ok {
 			t.Fatalf("manager stats missing %s: keys=%v", key, exported)
 		}
+	}
+}
+
+func TestCollectionUpdateBatchStatsCountFastMaskFallbacks(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	indexes := make([]IndexDefinition, 65)
+	for i := range indexes {
+		field := fmt.Sprintf("f%d", i)
+		indexes[i] = IndexDefinition{
+			Name:      fmt.Sprintf("idx_%02d", i),
+			Field:     field,
+			ValueType: IndexValueString,
+		}
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "wide", Indexes: indexes}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("wide")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	document := func(value64 string) []byte {
+		var b strings.Builder
+		b.WriteByte('{')
+		for i := range indexes {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			value := fmt.Sprintf("v%d", i)
+			if i == 64 {
+				value = value64
+			}
+			fmt.Fprintf(&b, "%q:%q", fmt.Sprintf("f%d", i), value)
+		}
+		b.WriteByte('}')
+		return []byte(b.String())
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{document("v64")}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	results, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			return document("changed"), true, nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("update batch: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("results=%+v want one matched modified update", results)
+	}
+	stats := col.LastUpdateStats()
+	if got, want := stats.MaskFallbacks, 1; got != want {
+		t.Fatalf("last update fast-mask fallbacks=%d want %d", got, want)
+	}
+	if got, want := stats.IndexValueChanges, 1; got != want {
+		t.Fatalf("last update changed indexes=%d want %d", got, want)
+	}
+	if got, want := stats.IndexValueUnchanged, 64; got != want {
+		t.Fatalf("last update unchanged indexes=%d want %d", got, want)
+	}
+	managerStats := mgr.StatsSnapshot()
+	if got, want := managerStats.UpdateBatchMaskFallbacks, uint64(1); got != want {
+		t.Fatalf("manager fast-mask fallbacks=%d want %d", got, want)
+	}
+	exported := mgr.Stats()
+	if got, want := exported["treedb.collections.write_domain.update_batch.changed_index_fast_mask_fallbacks_total"], "1"; got != want {
+		t.Fatalf("exported fast-mask fallback counter=%q want %q", got, want)
+	}
+	ids, err := col.FindByIndexValue("idx_64", "changed")
+	if err != nil {
+		t.Fatalf("find updated ordinal 64 index: %v", err)
+	}
+	if len(ids) != 1 || string(ids[0]) != "u1" {
+		t.Fatalf("idx_64 changed ids=%q want [u1]", ids)
 	}
 }
 

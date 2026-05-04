@@ -359,6 +359,7 @@ type CollectionUpdateStats struct {
 	SecondaryRuns          []CollectionUpdateSecondaryRunStats
 	IndexValueChanges      int
 	IndexValueUnchanged    int
+	MaskFallbacks          int
 	UniqueIndexChecks      int
 	UniqueIndexCheckSkips  int
 	// IndexStats is populated only when detailed update-batch stats are enabled
@@ -471,6 +472,7 @@ type CollectionManagerStats struct {
 	UpdateBatchSecondaryKeyBytes   uint64
 	UpdateBatchIndexValueChanges   uint64
 	UpdateBatchIndexValueUnchanged uint64
+	UpdateBatchMaskFallbacks       uint64
 	UpdateBatchUniqueChecks        uint64
 	UpdateBatchUniqueCheckSkips    uint64
 	UpdateBatchIndexStatsCount     int
@@ -789,6 +791,7 @@ type collectionWriteDomain struct {
 	updateBatchSecondaryKeyBytes     atomic.Uint64
 	updateBatchIndexValueChanges     atomic.Uint64
 	updateBatchIndexValueUnchanged   atomic.Uint64
+	updateBatchMaskFallbacks         atomic.Uint64
 	updateBatchUniqueChecks          atomic.Uint64
 	updateBatchUniqueCheckSkips      atomic.Uint64
 	updateBatchDetailedStats         atomic.Bool
@@ -1011,6 +1014,7 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.update_batch.secondary_key_bytes_total"] = fmt.Sprintf("%d", stats.UpdateBatchSecondaryKeyBytes)
 	out["treedb.collections.write_domain.update_batch.index_value_changes_total"] = fmt.Sprintf("%d", stats.UpdateBatchIndexValueChanges)
 	out["treedb.collections.write_domain.update_batch.index_value_unchanged_total"] = fmt.Sprintf("%d", stats.UpdateBatchIndexValueUnchanged)
+	out["treedb.collections.write_domain.update_batch.changed_index_fast_mask_fallbacks_total"] = fmt.Sprintf("%d", stats.UpdateBatchMaskFallbacks)
 	out["treedb.collections.write_domain.update_batch.unique_checks_total"] = fmt.Sprintf("%d", stats.UpdateBatchUniqueChecks)
 	out["treedb.collections.write_domain.update_batch.unique_check_skips_total"] = fmt.Sprintf("%d", stats.UpdateBatchUniqueCheckSkips)
 	for i := 0; i < stats.UpdateBatchIndexStatsCount && i < len(stats.UpdateBatchIndexStats); i++ {
@@ -1184,6 +1188,7 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.UpdateBatchSecondaryKeyBytes += other.UpdateBatchSecondaryKeyBytes
 	s.UpdateBatchIndexValueChanges += other.UpdateBatchIndexValueChanges
 	s.UpdateBatchIndexValueUnchanged += other.UpdateBatchIndexValueUnchanged
+	s.UpdateBatchMaskFallbacks += other.UpdateBatchMaskFallbacks
 	s.UpdateBatchUniqueChecks += other.UpdateBatchUniqueChecks
 	s.UpdateBatchUniqueCheckSkips += other.UpdateBatchUniqueCheckSkips
 	for i := 0; i < other.UpdateBatchIndexStatsCount && i < len(other.UpdateBatchIndexStats); i++ {
@@ -1273,6 +1278,7 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.UpdateBatchSecondaryKeyBytes = domain.updateBatchSecondaryKeyBytes.Load()
 	stats.UpdateBatchIndexValueChanges = domain.updateBatchIndexValueChanges.Load()
 	stats.UpdateBatchIndexValueUnchanged = domain.updateBatchIndexValueUnchanged.Load()
+	stats.UpdateBatchMaskFallbacks = domain.updateBatchMaskFallbacks.Load()
 	stats.UpdateBatchUniqueChecks = domain.updateBatchUniqueChecks.Load()
 	stats.UpdateBatchUniqueCheckSkips = domain.updateBatchUniqueCheckSkips.Load()
 	for i := 0; i < stats.UpdateBatchIndexStatsCount; i++ {
@@ -1388,6 +1394,9 @@ func (domain *collectionWriteDomain) observeUpdateBatchStats(stats CollectionUpd
 	}
 	if stats.IndexValueUnchanged > 0 {
 		domain.updateBatchIndexValueUnchanged.Add(uint64(stats.IndexValueUnchanged))
+	}
+	if stats.MaskFallbacks > 0 {
+		domain.updateBatchMaskFallbacks.Add(uint64(stats.MaskFallbacks))
 	}
 	if stats.UniqueIndexChecks > 0 {
 		domain.updateBatchUniqueChecks.Add(uint64(stats.UniqueIndexChecks))
@@ -8444,10 +8453,14 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			indexStateChanged := false
 			for runtimeIdx, runtime := range runtimes {
 				runtimeChanged := orderedDocumentIndexRuntimeChanged(changed[i].oldState, changed[i].newState, runtimeIdx)
+				maskBit, maskBitOK := updateIndexChangedMaskBit(runtimeIdx)
+				if !maskBitOK {
+					stats.MaskFallbacks++
+				}
 				if runtimeChanged {
 					indexStateChanged = true
-					if bit, ok := updateIndexChangedMaskBit(runtimeIdx); ok {
-						changedIndexes |= bit
+					if maskBitOK {
+						changedIndexes |= maskBit
 					}
 					stats.IndexValueChanges++
 					if runtime.def.unique {

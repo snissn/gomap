@@ -1107,6 +1107,7 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 		UpdateBatchSecondaryKeyBytes:   after.UpdateBatchSecondaryKeyBytes - before.UpdateBatchSecondaryKeyBytes,
 		UpdateBatchIndexValueChanges:   after.UpdateBatchIndexValueChanges - before.UpdateBatchIndexValueChanges,
 		UpdateBatchIndexValueUnchanged: after.UpdateBatchIndexValueUnchanged - before.UpdateBatchIndexValueUnchanged,
+		UpdateBatchMaskFallbacks:       after.UpdateBatchMaskFallbacks - before.UpdateBatchMaskFallbacks,
 		UpdateBatchUniqueChecks:        after.UpdateBatchUniqueChecks - before.UpdateBatchUniqueChecks,
 		UpdateBatchUniqueCheckSkips:    after.UpdateBatchUniqueCheckSkips - before.UpdateBatchUniqueCheckSkips,
 		UpdateCombineRequests:          after.UpdateCombineRequests - before.UpdateCombineRequests,
@@ -1179,6 +1180,7 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateCombineQueueDepthMax:     12,
 		UpdateBatchIndexValueChanges:   20,
 		UpdateBatchIndexValueUnchanged: 30,
+		UpdateBatchMaskFallbacks:       5,
 		UpdateBatchUniqueChecks:        4,
 		UpdateBatchUniqueCheckSkips:    10,
 		IndexedFlushCalls:              3,
@@ -1204,6 +1206,7 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateCombineQueueDepthMax:     31,
 		UpdateBatchIndexValueChanges:   27,
 		UpdateBatchIndexValueUnchanged: 43,
+		UpdateBatchMaskFallbacks:       12,
 		UpdateBatchUniqueChecks:        6,
 		UpdateBatchUniqueCheckSkips:    19,
 		IndexedFlushCalls:              8,
@@ -1250,6 +1253,9 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 	if got.UpdateBatchIndexValueUnchanged != 13 {
 		t.Fatalf("UpdateBatchIndexValueUnchanged=%d want 13", got.UpdateBatchIndexValueUnchanged)
 	}
+	if got.UpdateBatchMaskFallbacks != 7 {
+		t.Fatalf("UpdateBatchMaskFallbacks=%d want 7", got.UpdateBatchMaskFallbacks)
+	}
 	if got.UpdateBatchUniqueChecks != 2 {
 		t.Fatalf("UpdateBatchUniqueChecks=%d want 2", got.UpdateBatchUniqueChecks)
 	}
@@ -1290,36 +1296,42 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 
 func TestReportCollectionManagerUpdateStatsIncludesIndexedFlushMetrics(t *testing.T) {
 	stats := collections.CollectionManagerStats{
-		IndexedFlushCalls:       5,
-		IndexedFlushErrors:      1,
-		IndexedFlushDocs:        600,
-		IndexedFlushBytes:       18000,
-		IndexedFlushRootRuns:    180,
-		IndexedFlushRoots:       15,
-		IndexedFlushDuration:    60 * time.Millisecond,
-		IndexedFlushMaterialize: 18 * time.Millisecond,
-		IndexedFlushPublish:     42 * time.Millisecond,
+		IndexedFlushCalls:              5,
+		IndexedFlushErrors:             1,
+		IndexedFlushDocs:               600,
+		IndexedFlushBytes:              18000,
+		IndexedFlushRootRuns:           180,
+		IndexedFlushRoots:              15,
+		IndexedFlushDuration:           60 * time.Millisecond,
+		IndexedFlushMaterialize:        18 * time.Millisecond,
+		IndexedFlushPublish:            42 * time.Millisecond,
+		UpdateBatchIndexValueChanges:   300,
+		UpdateBatchIndexValueUnchanged: 900,
+		UpdateBatchMaskFallbacks:       60,
 	}
 	result := testing.Benchmark(func(b *testing.B) {
 		reportCollectionManagerUpdateStats(b, stats, 600)
 	})
 	want := map[string]float64{
-		"indexed_flush_calls":               5,
-		"indexed_flush_docs/call":           120,
-		"indexed_flush_docs/doc":            1,
-		"indexed_flush_bytes/call":          3600,
-		"indexed_flush_bytes/doc":           30,
-		"indexed_flush_root_runs/call":      36,
-		"indexed_flush_root_runs/doc":       0.3,
-		"indexed_flush_roots/call":          3,
-		"indexed_flush_roots/doc":           0.025,
-		"indexed_flush_errors":              1,
-		"indexed_flush_ns/call":             12_000_000,
-		"indexed_flush_ns/doc":              100_000,
-		"indexed_flush_materialize_ns/call": 3_600_000,
-		"indexed_flush_materialize_ns/doc":  30_000,
-		"indexed_flush_publish_ns/call":     8_400_000,
-		"indexed_flush_publish_ns/doc":      70_000,
+		"indexed_flush_calls":                   5,
+		"indexed_flush_docs/call":               120,
+		"indexed_flush_docs/doc":                1,
+		"indexed_flush_bytes/call":              3600,
+		"indexed_flush_bytes/doc":               30,
+		"indexed_flush_root_runs/call":          36,
+		"indexed_flush_root_runs/doc":           0.3,
+		"indexed_flush_roots/call":              3,
+		"indexed_flush_roots/doc":               0.025,
+		"indexed_flush_errors":                  1,
+		"indexed_flush_ns/call":                 12_000_000,
+		"indexed_flush_ns/doc":                  100_000,
+		"indexed_flush_materialize_ns/call":     3_600_000,
+		"indexed_flush_materialize_ns/doc":      30_000,
+		"indexed_flush_publish_ns/call":         8_400_000,
+		"indexed_flush_publish_ns/doc":          70_000,
+		"update_index_value_changes/doc":        0.5,
+		"update_index_value_unchanged/doc":      1.5,
+		"changed_index_fast_mask_fallbacks/doc": 0.1,
 	}
 	for metric, wantValue := range want {
 		gotValue, ok := result.Extra[metric]
@@ -1459,6 +1471,9 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 	}
 	if stats.UpdateBatchIndexValueUnchanged > 0 {
 		b.ReportMetric(float64(stats.UpdateBatchIndexValueUnchanged)/float64(docs), "update_index_value_unchanged/doc")
+	}
+	if stats.UpdateBatchMaskFallbacks > 0 {
+		b.ReportMetric(float64(stats.UpdateBatchMaskFallbacks)/float64(docs), "changed_index_fast_mask_fallbacks/doc")
 	}
 	if stats.UpdateBatchUniqueChecks > 0 {
 		b.ReportMetric(float64(stats.UpdateBatchUniqueChecks)/float64(docs), "update_unique_checks/doc")
