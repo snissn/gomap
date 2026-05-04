@@ -2,7 +2,7 @@ package collections
 
 import (
 	"bytes"
-	"strings"
+	"errors"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -38,7 +38,7 @@ func TestCollectionUpdateBSONRejectsIDMutationBeforeRootWork(t *testing.T) {
 	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return replacement, true, nil
 	})
-	if err == nil || !strings.Contains(err.Error(), "cannot modify _id") {
+	if !errors.Is(err, errBSONIDMutation) {
 		t.Fatalf("Update err=%v want _id mutation error", err)
 	}
 	if matched || modified {

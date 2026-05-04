@@ -10542,7 +10542,7 @@ func TestCollectionUpdateBatchBSONRejectsIDMutation(t *testing.T) {
 			return replacement, true, nil
 		}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "index 0") || !strings.Contains(err.Error(), "cannot modify _id") {
+	if !errors.Is(err, errBSONIDMutation) || !strings.Contains(err.Error(), "index 0") {
 		t.Fatalf("UpdateBatch err=%v want indexed _id mutation error", err)
 	}
 }

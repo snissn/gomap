@@ -76,6 +76,7 @@ var (
 	ErrUniqueIndexConflict = errors.New("collections: unique index conflict")
 	ErrConcurrentMutation  = errors.New("collections: concurrent mutation")
 
+	errBSONIDMutation                          = errors.New("collections: update replacement cannot modify _id")
 	errCollectionManagerNil                    = errors.New("collections: collection manager is nil")
 	errCollectionNil                           = errors.New("collections: collection is nil")
 	errCollectionDBNil                         = errors.New("collections: db is nil")
@@ -7318,7 +7319,7 @@ func validateBSONReplacementPreservesID(current, replacement []byte, opts collec
 		return nil
 	}
 	if currentID.IsZero() || replacementID.IsZero() || !currentID.Equal(replacementID) {
-		return errors.New("collections: update replacement cannot modify _id")
+		return errBSONIDMutation
 	}
 	return nil
 }
@@ -7382,7 +7383,7 @@ func validateBSONReplacementPreservesIDSnapshot(currentID bsonIDSnapshot, replac
 		return nil
 	}
 	if currentMissing || replacementMissing || !currentID.equalRawValue(replacementID) {
-		return errors.New("collections: update replacement cannot modify _id")
+		return errBSONIDMutation
 	}
 	return nil
 }
