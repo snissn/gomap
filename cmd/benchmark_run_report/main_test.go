@@ -108,14 +108,22 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"TreeDB BSON",
 		"TreeDB JSON",
 		"SQLite native VACUUM: 20",
-		"Comparable official-driver modes",
-		"TreeDB raw-wire ceiling modes",
-		"bypasses the MongoDB Go driver",
+		"raw modes are TreeDB-only ingest ceiling probes",
+		"bypassing the MongoDB Go driver",
 		"same raw command/gateway path in process",
-		"MongoDB bars are intentionally omitted",
+		"TreeDB-only raw-wire ceiling",
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("report missing %q\n%s", want, html)
+		}
+	}
+	for _, unwanted := range []string{
+		"TreeDB Raw Wire Ceiling Modes",
+		"BSON raw_wire_tcp MongoDB",
+		"BSON raw_wire MongoDB",
+	} {
+		if strings.Contains(html, unwanted) {
+			t.Fatalf("report still contains unwanted split/missing raw-wire marker %q\n%s", unwanted, html)
 		}
 	}
 }

@@ -1166,37 +1166,16 @@ func renderMongoLoadModes(b *strings.Builder, rows []loadModeRow) {
 	b.WriteString("<section id=\"mongo-load\"><h2>Load-Only Client-Mode Matrix</h2>")
 	b.WriteString("<p class=\"subtle\">Insert-only matrix. This section uses raw JSON directly so every MongoDB and TreeDB client mode has its own throughput and physical-disk row.</p>")
 	b.WriteString("<p class=\"subtle\">Use this section for pure ingest client-path comparisons. It is intentionally separate from the full-sweep load chart, which inherits the broader read/range/update sweep setup.</p>")
-	b.WriteString("<div class=\"chart-group\"><h3>Comparable official-driver modes</h3>")
-	b.WriteString("<p class=\"subtle\">These charts compare modes that both systems run through the MongoDB Go driver. They are the right view for Mongo-compatible client behavior and driver-path overhead.</p>")
+	b.WriteString("<p class=\"subtle\">Driver, driver-command, driver-command-raw, and driver-unack modes are comparable Mongo-compatible client paths and render as paired TreeDB/MongoDB bars. <code>raw-wire-tcp</code> still sends Mongo OP_MSG bytes over loopback TCP to the TreeDB gateway while bypassing the MongoDB Go driver; <code>raw-wire</code> also removes the socket and drives the same raw command/gateway path in process. Those two raw modes are TreeDB-only ingest ceiling probes, so they render as single TreeDB bars instead of MongoDB zero or missing bars.</p>")
 	b.WriteString("<div class=\"chart-grid\">")
 	for _, idx := range sortedLoadModeIndexes(rows) {
-		cats, tree, mongo := comparableLoadModeChartRows(rows, idx)
+		cats, tree, mongo := loadModeChartRows(rows, idx)
 		if len(cats) == 0 {
 			continue
 		}
-		b.WriteString(verticalBarChart(fmt.Sprintf("Comparable load throughput by client mode, %d indexes", idx), cats, "client mode", []chartSeries{
-			{Name: "TreeDB", Values: tree, Color: "#2867c7"},
-			{Name: "MongoDB", Values: mongo, Color: "#1f8a5b"},
-		}, "docs/sec"))
+		b.WriteString(loadModeBarChart(fmt.Sprintf("Load throughput by client mode, %d indexes", idx), cats, tree, mongo))
 	}
-	b.WriteString("</div></div>")
-	var rawCharts strings.Builder
-	for _, idx := range sortedLoadModeIndexes(rows) {
-		cats, tree := rawWireLoadModeChartRows(rows, idx)
-		if len(cats) == 0 {
-			continue
-		}
-		rawCharts.WriteString(verticalBarChart(fmt.Sprintf("TreeDB raw-wire ceiling modes, %d indexes", idx), cats, "client mode", []chartSeries{
-			{Name: "TreeDB", Values: tree, Color: "#2867c7"},
-		}, "docs/sec"))
-	}
-	if rawCharts.Len() > 0 {
-		b.WriteString("<div class=\"chart-group\"><h3>TreeDB raw-wire ceiling modes</h3>")
-		b.WriteString("<p class=\"subtle\"><code>raw-wire-tcp</code> still sends Mongo OP_MSG bytes over loopback TCP to the TreeDB gateway, but it bypasses the MongoDB Go driver. <code>raw-wire</code> removes the socket as well and drives the same raw command/gateway path in process. These modes are closer to TreeDB gateway/server ingest ceiling measurements than to user-facing Mongo compatibility comparisons, so MongoDB bars are intentionally omitted rather than shown as missing data.</p>")
-		b.WriteString("<div class=\"chart-grid\">")
-		b.WriteString(rawCharts.String())
-		b.WriteString("</div></div>")
-	}
+	b.WriteString("</div>")
 	var body [][]string
 	for _, row := range rows {
 		body = append(body, []string{strconv.Itoa(row.Indexes), row.Target, row.Config, fmtOps(row.OpsPerSec), fmtBytes(float64(row.PhysicalBytes)), row.RawJSON})
@@ -1374,13 +1353,7 @@ func sortedLoadModeIndexes(rows []loadModeRow) []int {
 	return out
 }
 
-func comparableLoadModeChartRows(rows []loadModeRow, idx int) ([]string, []float64, []float64) {
-	return pairedLoadModeChartRows(rows, idx, func(mode string) bool {
-		return !isRawWireLoadMode(mode)
-	})
-}
-
-func pairedLoadModeChartRows(rows []loadModeRow, idx int, include func(string) bool) ([]string, []float64, []float64) {
+func loadModeChartRows(rows []loadModeRow, idx int) ([]string, []float64, []float64) {
 	type pair struct {
 		TreeDB float64
 		Mongo  float64
@@ -1391,9 +1364,6 @@ func pairedLoadModeChartRows(rows []loadModeRow, idx int, include func(string) b
 			continue
 		}
 		mode := loadModeLabel(row)
-		if !include(mode) {
-			continue
-		}
 		pair := pairs[mode]
 		switch row.Target {
 		case "treedb":
@@ -1418,32 +1388,6 @@ func pairedLoadModeChartRows(rows []loadModeRow, idx int, include func(string) b
 		mongo = append(mongo, pair.Mongo)
 	}
 	return labels, tree, mongo
-}
-
-func rawWireLoadModeChartRows(rows []loadModeRow, idx int) ([]string, []float64) {
-	values := make(map[string]float64)
-	for _, row := range rows {
-		if row.Indexes != idx || row.Target != "treedb" {
-			continue
-		}
-		mode := loadModeLabel(row)
-		if !isRawWireLoadMode(mode) {
-			continue
-		}
-		values[mode] = row.OpsPerSec
-	}
-	var labels []string
-	for mode := range values {
-		labels = append(labels, mode)
-	}
-	sort.Slice(labels, func(i, j int) bool {
-		return loadModeOrder(labels[i]) < loadModeOrder(labels[j])
-	})
-	tree := make([]float64, 0, len(labels))
-	for _, mode := range labels {
-		tree = append(tree, values[mode])
-	}
-	return labels, tree
 }
 
 func isRawWireLoadMode(mode string) bool {
@@ -1645,6 +1589,108 @@ func verticalBarChart(title string, categories []string, xAxisLabel string, seri
 
 func compactVerticalBarChart(title string, categories []string, xAxisLabel string, series []chartSeries, unit string) string {
 	return verticalBarChartWithSize(title, categories, xAxisLabel, series, unit, 330, 86, 14, 2)
+}
+
+func loadModeBarChart(title string, categories []string, tree, mongo []float64) string {
+	if len(categories) == 0 {
+		return ""
+	}
+	maxV := 0.0
+	for i := range categories {
+		if i < len(tree) && tree[i] > maxV {
+			maxV = tree[i]
+		}
+		if i < len(mongo) && mongo[i] > maxV {
+			maxV = mongo[i]
+		}
+	}
+	if maxV <= 0 {
+		maxV = 1
+	}
+	maxV *= 1.08
+	const width = 760.0
+	const height = 430.0
+	const left = 76.0
+	const right = 18.0
+	const top = 22.0
+	const bottom = 112.0
+	plotW := width - left - right
+	plotH := height - top - bottom
+	axisY := top + plotH
+	groupW := plotW / float64(len(categories))
+	barGap := math.Max(1.0, groupW*0.04)
+	innerPad := math.Max(3.0, groupW*0.16)
+	pairedBarW := (groupW - innerPad*2 - barGap) / 2
+	if pairedBarW < 1 {
+		pairedBarW = 1
+	}
+	soloBarW := groupW - innerPad*2
+	if soloBarW < 1 {
+		soloBarW = 1
+	}
+	y := func(v float64) float64 {
+		return top + plotH - (v/maxV)*plotH
+	}
+	var b strings.Builder
+	b.WriteString(chartHeader(title, []chartSeries{
+		{Name: "TreeDB", Color: "#2867c7"},
+		{Name: "MongoDB", Color: "#1f8a5b"},
+	}))
+	b.WriteString(fmt.Sprintf("<svg width=\"760\" height=\"430\" viewBox=\"0 0 760 430\" role=\"img\" aria-label=\"%s, x axis Client Mode, y axis Docs/Sec\">", esc(chartLabel(title))))
+	for tick := 0; tick <= 4; tick++ {
+		value := maxV * float64(tick) / 4
+		yy := y(value)
+		b.WriteString(fmt.Sprintf("<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#edf2f7\"/>", left, yy, left+plotW, yy))
+		b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"end\" font-size=\"11\" font-weight=\"700\" fill=\"#344256\">%s</text>", left-7, yy+4, esc(shortNumber(value))))
+	}
+	b.WriteString(fmt.Sprintf("<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#748399\" stroke-width=\"2\"/>", left, axisY, left+plotW, axisY))
+	b.WriteString(fmt.Sprintf("<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#748399\" stroke-width=\"2\"/>", left, top, left, axisY))
+	for i, cat := range categories {
+		groupX := left + float64(i)*groupW
+		rawMode := isRawWireLoadMode(cat)
+		if rawMode {
+			if i < len(tree) && tree[i] > 0 {
+				v := tree[i]
+				barH := (v / maxV) * plotH
+				x := groupX + innerPad
+				yy := axisY - barH
+				b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"#2867c7\"><title>%s TreeDB-only raw-wire ceiling: %s docs/sec</title></rect>", x, yy, soloBarW, barH, esc(cat), esc(formatChartValue(v, "docs/sec"))))
+				if soloBarW >= 10 {
+					b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"#344256\">%s</text>", x+soloBarW/2, math.Max(top+10, yy-5), esc(formatChartValue(v, "docs/sec"))))
+				}
+			}
+		} else {
+			if i < len(tree) && tree[i] > 0 {
+				v := tree[i]
+				barH := (v / maxV) * plotH
+				x := groupX + innerPad
+				yy := axisY - barH
+				b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"#2867c7\"><title>%s TreeDB: %s docs/sec</title></rect>", x, yy, pairedBarW, barH, esc(cat), esc(formatChartValue(v, "docs/sec"))))
+				if pairedBarW >= 10 {
+					b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"#344256\">%s</text>", x+pairedBarW/2, math.Max(top+10, yy-5), esc(formatChartValue(v, "docs/sec"))))
+				}
+			}
+			if i < len(mongo) && mongo[i] > 0 {
+				v := mongo[i]
+				barH := (v / maxV) * plotH
+				x := groupX + innerPad + pairedBarW + barGap
+				yy := axisY - barH
+				b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"#1f8a5b\"><title>%s MongoDB: %s docs/sec</title></rect>", x, yy, pairedBarW, barH, esc(cat), esc(formatChartValue(v, "docs/sec"))))
+				if pairedBarW >= 10 {
+					b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"#344256\">%s</text>", x+pairedBarW/2, math.Max(top+10, yy-5), esc(formatChartValue(v, "docs/sec"))))
+				}
+			}
+		}
+		labelX := groupX + groupW/2
+		for lineIdx, line := range chartLabelLines(cat, 11, 4) {
+			b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"11\" font-weight=\"700\" fill=\"#344256\">%s</text>", labelX, axisY+20+float64(lineIdx)*14, esc(line)))
+		}
+	}
+	b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"12\" font-weight=\"700\" fill=\"#344256\">Client Mode</text>", left+plotW/2, height-8))
+	b.WriteString(fmt.Sprintf("<text transform=\"translate(16 %.1f) rotate(-90)\" text-anchor=\"middle\" font-size=\"12\" font-weight=\"700\" fill=\"#344256\">Docs/Sec</text>", top+plotH/2))
+	b.WriteString("</svg>")
+	b.WriteString("</div>")
+	return b.String()
 }
 
 func verticalBarChartWithSize(title string, categories []string, xAxisLabel string, series []chartSeries, unit string, height, bottom float64, labelMaxChars, labelMaxLines int) string {
