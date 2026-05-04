@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"sync"
 	"testing"
 	"time"
 
@@ -50,18 +51,32 @@ func TestCollectionManagerCloseWaitsForActiveIndexedPublish(t *testing.T) {
 		t.Fatal("begin indexed async flush returned false")
 	}
 
+	waitEntered := make(chan struct{})
+	allowWait := make(chan struct{})
+	var waitEnteredOnce sync.Once
+	restoreWaitHook := setCollectionWaitIndexedAsyncFlushHookForTest(func() {
+		waitEnteredOnce.Do(func() {
+			close(waitEntered)
+			<-allowWait
+		})
+	})
+	defer restoreWaitHook()
+
 	closeDone := make(chan error, 1)
-	closeStarted := make(chan struct{})
 	go func() {
-		close(closeStarted)
 		closeDone <- d.Close()
 	}()
-	<-closeStarted
+	select {
+	case <-waitEntered:
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("timed out waiting for Close to reach indexed async flush drain")
+	}
 	select {
 	case err := <-closeDone:
 		t.Fatalf("Close returned before active indexed publish finished: %v", err)
-	case <-time.After(collectionTestTimeout(t, 100*time.Millisecond)):
+	default:
 	}
+	close(allowWait)
 
 	publishErr := col.publishPreparedIndexedFlush(work)
 	col.writeDomain.finishIndexedAsyncFlush(publishErr)
