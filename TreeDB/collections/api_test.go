@@ -9,6 +9,7 @@ import (
 	"os"
 	"reflect"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -666,6 +667,7 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 	for _, key := range []string{
 		"treedb.collections.write_domain.update_batch.index_value_changes_total",
 		"treedb.collections.write_domain.update_batch.index_value_unchanged_total",
+		"treedb.collections.write_domain.update_batch.changed_index_fast_mask_fallbacks_total",
 		"treedb.collections.write_domain.update_batch.unique_checks_total",
 		"treedb.collections.write_domain.update_batch.unique_check_skips_total",
 	} {
@@ -688,6 +690,88 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 		if _, ok := exported[key]; !ok {
 			t.Fatalf("manager stats missing %s: keys=%v", key, exported)
 		}
+	}
+}
+
+func TestCollectionUpdateBatchStatsCountFastMaskFallbacks(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	indexes := make([]IndexDefinition, 65)
+	for i := range indexes {
+		field := fmt.Sprintf("f%d", i)
+		indexes[i] = IndexDefinition{
+			Name:      fmt.Sprintf("idx_%02d", i),
+			Field:     field,
+			ValueType: IndexValueString,
+		}
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "wide", Indexes: indexes}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("wide")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	document := func(value64 string) []byte {
+		var b strings.Builder
+		b.WriteByte('{')
+		for i := range indexes {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			value := fmt.Sprintf("v%d", i)
+			if i == 64 {
+				value = value64
+			}
+			fmt.Fprintf(&b, "%q:%q", fmt.Sprintf("f%d", i), value)
+		}
+		b.WriteByte('}')
+		return []byte(b.String())
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{document("v64")}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	results, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			return document("changed"), true, nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("update batch: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("results=%+v want one matched modified update", results)
+	}
+	stats := col.LastUpdateStats()
+	if got, want := stats.MaskFallbacks, 1; got != want {
+		t.Fatalf("last update fast-mask fallbacks=%d want %d", got, want)
+	}
+	if got, want := stats.IndexValueChanges, 1; got != want {
+		t.Fatalf("last update changed indexes=%d want %d", got, want)
+	}
+	if got, want := stats.IndexValueUnchanged, 64; got != want {
+		t.Fatalf("last update unchanged indexes=%d want %d", got, want)
+	}
+	managerStats := mgr.StatsSnapshot()
+	if got, want := managerStats.UpdateBatchMaskFallbacks, uint64(1); got != want {
+		t.Fatalf("manager fast-mask fallbacks=%d want %d", got, want)
+	}
+	exported := mgr.Stats()
+	if got, want := exported["treedb.collections.write_domain.update_batch.changed_index_fast_mask_fallbacks_total"], "1"; got != want {
+		t.Fatalf("exported fast-mask fallback counter=%q want %q", got, want)
+	}
+	ids, err := col.FindByIndexValue("idx_64", "changed")
+	if err != nil {
+		t.Fatalf("find updated ordinal 64 index: %v", err)
+	}
+	if len(ids) != 1 || string(ids[0]) != "u1" {
+		t.Fatalf("idx_64 changed ids=%q want [u1]", ids)
 	}
 }
 
@@ -8502,6 +8586,160 @@ func TestCollectionUpdateBatchDirectBufferedBSONAccumulatesRootRuns(t *testing.T
 	}
 }
 
+func TestCollectionUpdateBatchDirectBufferedBSONDoesNotReserveUnchangedUnique(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatBSON,
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "email", Value: "a@example.com"},
+			{Key: "city", Value: "hnl"},
+		})},
+	); err != nil {
+		t.Fatalf("insert flushed document: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush document: %v", err)
+	}
+	before := d.State()
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u2"},
+			{Key: "email", Value: "b@example.com"},
+			{Key: "city", Value: "hnl"},
+		})},
+	); err != nil {
+		t.Fatalf("insert buffered document: %v", err)
+	}
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setBSONField("city", "sea")},
+	}); err != nil {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatal("update batch was not buffered")
+	}
+	afterUpdate := d.State()
+	if afterUpdate.CommitSeq != before.CommitSeq {
+		t.Fatalf("buffered BSON update advanced commit seq by %d, want 0", afterUpdate.CommitSeq-before.CommitSeq)
+	}
+
+	encodedA, err := encodeIndexScalar(IndexValueString, "a@example.com")
+	if err != nil {
+		t.Fatalf("encode email: %v", err)
+	}
+	_, prefixA, err := appendIndexValuePrefixSlice(nil, encodedA)
+	if err != nil {
+		t.Fatalf("email prefix: %v", err)
+	}
+	encodedB, err := encodeIndexScalar(IndexValueString, "b@example.com")
+	if err != nil {
+		t.Fatalf("encode buffered email: %v", err)
+	}
+	_, prefixB, err := appendIndexValuePrefixSlice(nil, encodedB)
+	if err != nil {
+		t.Fatalf("buffered email prefix: %v", err)
+	}
+
+	emailRoot := collectionSecondaryRootName("users", "email")
+	col.writeDomain.mu.RLock()
+	pending := col.writeDomain.uniqueValueIndex["email"]
+	containsA := pending != nil && pending.contains(prefixA)
+	containsB := pending != nil && pending.contains(prefixB)
+	uniqueRuns := len(col.writeDomain.uniqueValueRuns["email"])
+	emailRuns := len(col.writeDomain.rootRuns[emailRoot])
+	col.writeDomain.mu.RUnlock()
+	if containsA {
+		t.Fatal("direct-buffered BSON update added unchanged persisted unique email to pending unique-value index")
+	}
+	if !containsB {
+		t.Fatal("pending buffered insert unique email missing from pending unique-value index")
+	}
+	if uniqueRuns != 1 {
+		t.Fatalf("unique value runs=%d want only the pending insert run", uniqueRuns)
+	}
+	if emailRuns != 1 {
+		t.Fatalf("email root runs=%d want only the pending insert secondary run", emailRuns)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u3")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u3"},
+			{Key: "email", Value: "a@example.com"},
+			{Key: "city", Value: "hnl"},
+		})},
+	); !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("duplicate persisted unique email err=%v want ErrUniqueIndexConflict", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u4")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u4"},
+			{Key: "email", Value: "b@example.com"},
+			{Key: "city", Value: "hnl"},
+		})},
+	); !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("duplicate pending unique email err=%v want ErrUniqueIndexConflict", err)
+	}
+
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare async publish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepare async publish returned nil work")
+	}
+	col.writeDomain.mu.RLock()
+	pending = col.writeDomain.uniqueValueIndex["email"]
+	containsA = pending != nil && pending.contains(prefixA)
+	containsB = pending != nil && pending.contains(prefixB)
+	publishingUniqueRuns := 0
+	publishingEmailRuns := 0
+	if len(col.writeDomain.indexedPublishingUnits) > 0 {
+		publishingUniqueRuns = len(col.writeDomain.indexedPublishingUnits[0].uniqueValueRuns["email"])
+		publishingEmailRuns = len(col.writeDomain.indexedPublishingUnits[0].rootRuns[emailRoot])
+	}
+	col.writeDomain.mu.RUnlock()
+	if containsA {
+		t.Fatal("rotated direct-buffered BSON update added unchanged persisted unique email to pending unique-value index")
+	}
+	if !containsB {
+		t.Fatal("rotated pending insert unique email missing from pending unique-value index")
+	}
+	if publishingUniqueRuns != 1 {
+		t.Fatalf("publishing unique value runs=%d want only the pending insert run", publishingUniqueRuns)
+	}
+	if publishingEmailRuns != 1 {
+		t.Fatalf("publishing email root runs=%d want only the pending insert secondary run", publishingEmailRuns)
+	}
+	if err := col.publishPreparedIndexedFlush(work); err != nil {
+		t.Fatalf("publish prepared async flush: %v", err)
+	}
+}
+
 func TestCollectionUpdateBatchDirectBufferedTemplateV1AccumulatesRootRuns(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -8607,6 +8845,251 @@ func TestCollectionUpdateBatchDirectBufferedTemplateV1AccumulatesRootRuns(t *tes
 	flushed := d.State()
 	if flushed.CommitSeq != before.CommitSeq+1 {
 		t.Fatalf("flush advanced commit seq by %d, want 1", flushed.CommitSeq-before.CommitSeq)
+	}
+}
+
+func TestCollectionUpdateBatchDirectBufferedTemplateV1TemplateOnlySkipsSecondaryRoots(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatTemplateV1,
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustTemplateV1Document(t, []string{"email", "city"}, []any{"a@example.com", "hnl"})},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+	before := d.State()
+
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setTemplateV1JSON(t, `{"email":"a@example.com","city":"hnl","score":1}`)},
+	}); err != nil {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("batch was declined")
+	}
+	afterUpdate := d.State()
+	if afterUpdate.CommitSeq != before.CommitSeq {
+		t.Fatalf("buffered template-v1 update advanced commit seq by %d, want 0", afterUpdate.CommitSeq-before.CommitSeq)
+	}
+
+	col.writeDomain.mu.RLock()
+	rootRunCount := col.writeDomain.rootRunCount
+	templateRuns := len(col.writeDomain.rootRuns[collectionTemplateRootName("users")])
+	primaryRuns := len(col.writeDomain.rootRuns[collectionPrimaryRootName("users")])
+	emailRuns := len(col.writeDomain.rootRuns[collectionSecondaryRootName("users", "email")])
+	cityRuns := len(col.writeDomain.rootRuns[collectionSecondaryRootName("users", "city")])
+	rootMutableRuns := len(col.writeDomain.rootMutableRuns)
+	uniqueRuns := len(col.writeDomain.uniqueValueRuns["email"])
+	col.writeDomain.mu.RUnlock()
+	if rootRunCount != 2 {
+		t.Fatalf("rootRunCount=%d want only primary and template roots", rootRunCount)
+	}
+	if templateRuns != 1 || primaryRuns != 1 {
+		t.Fatalf("runs template=%d primary=%d, want one run for each", templateRuns, primaryRuns)
+	}
+	if emailRuns != 0 || cityRuns != 0 {
+		t.Fatalf("secondary runs email=%d city=%d, want none for unchanged indexed values", emailRuns, cityRuns)
+	}
+	if rootMutableRuns != 2 {
+		t.Fatalf("rootMutableRuns=%d want two active root-local accumulators", rootMutableRuns)
+	}
+	if uniqueRuns != 0 {
+		t.Fatalf("unique value runs=%d want none for unchanged unique value", uniqueRuns)
+	}
+
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get template-v1 buffered document: %v", err)
+	}
+	gotJSON, err := col.StoredDocumentJSON(got)
+	if err != nil {
+		t.Fatalf("materialize template-v1 buffered document: %v", err)
+	}
+	if !bytes.Contains(gotJSON, []byte(`"score":1`)) {
+		t.Fatalf("buffered document=%s missing score update", gotJSON)
+	}
+	emailIDs, err := col.FindByIndex("email", "a@example.com")
+	if err != nil {
+		t.Fatalf("find email: %v", err)
+	}
+	if len(emailIDs) != 1 || !bytes.Equal(emailIDs[0], []byte("u1")) {
+		t.Fatalf("email ids=%q want [u1]", emailIDs)
+	}
+	cityIDs, err := col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find city: %v", err)
+	}
+	if len(cityIDs) != 1 || !bytes.Equal(cityIDs[0], []byte("u1")) {
+		t.Fatalf("city ids=%q want [u1]", cityIDs)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered template-v1 update: %v", err)
+	}
+	flushed := d.State()
+	if flushed.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("flush advanced commit seq by %d, want 1", flushed.CommitSeq-before.CommitSeq)
+	}
+}
+
+func TestCollectionUpdateBatchDirectBufferedTemplateV1DoesNotReserveUnchangedUnique(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatTemplateV1,
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustTemplateV1Document(t, []string{"email", "city"}, []any{"a@example.com", "hnl"})},
+	); err != nil {
+		t.Fatalf("insert flushed document: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush document: %v", err)
+	}
+	before := d.State()
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{mustTemplateV1Document(t, []string{"email", "city"}, []any{"b@example.com", "hnl"})},
+	); err != nil {
+		t.Fatalf("insert buffered document: %v", err)
+	}
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setTemplateV1JSON(t, `{"email":"a@example.com","city":"sea","score":1}`)},
+	}); err != nil {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatal("update batch was not buffered")
+	}
+	afterUpdate := d.State()
+	if afterUpdate.CommitSeq != before.CommitSeq {
+		t.Fatalf("buffered template-v1 update advanced commit seq by %d, want 0", afterUpdate.CommitSeq-before.CommitSeq)
+	}
+
+	encodedA, err := encodeIndexScalar(IndexValueString, "a@example.com")
+	if err != nil {
+		t.Fatalf("encode email: %v", err)
+	}
+	_, prefixA, err := appendIndexValuePrefixSlice(nil, encodedA)
+	if err != nil {
+		t.Fatalf("email prefix: %v", err)
+	}
+	encodedB, err := encodeIndexScalar(IndexValueString, "b@example.com")
+	if err != nil {
+		t.Fatalf("encode buffered email: %v", err)
+	}
+	_, prefixB, err := appendIndexValuePrefixSlice(nil, encodedB)
+	if err != nil {
+		t.Fatalf("buffered email prefix: %v", err)
+	}
+
+	emailRoot := collectionSecondaryRootName("users", "email")
+	col.writeDomain.mu.RLock()
+	pending := col.writeDomain.uniqueValueIndex["email"]
+	containsA := pending != nil && pending.contains(prefixA)
+	containsB := pending != nil && pending.contains(prefixB)
+	uniqueRuns := len(col.writeDomain.uniqueValueRuns["email"])
+	emailRuns := len(col.writeDomain.rootRuns[emailRoot])
+	col.writeDomain.mu.RUnlock()
+	if containsA {
+		t.Fatal("direct-buffered template-v1 update added unchanged persisted unique email to pending unique-value index")
+	}
+	if !containsB {
+		t.Fatal("pending buffered insert unique email missing from pending unique-value index")
+	}
+	if uniqueRuns != 1 {
+		t.Fatalf("unique value runs=%d want only the pending insert run", uniqueRuns)
+	}
+	if emailRuns != 1 {
+		t.Fatalf("email root runs=%d want only the pending insert secondary run", emailRuns)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u3")},
+		[][]byte{mustTemplateV1Document(t, []string{"email", "city"}, []any{"a@example.com", "hnl"})},
+	); !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("duplicate persisted unique email err=%v want ErrUniqueIndexConflict", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u4")},
+		[][]byte{mustTemplateV1Document(t, []string{"email", "city"}, []any{"b@example.com", "hnl"})},
+	); !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("duplicate pending unique email err=%v want ErrUniqueIndexConflict", err)
+	}
+
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare async publish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepare async publish returned nil work")
+	}
+	col.writeDomain.mu.RLock()
+	pending = col.writeDomain.uniqueValueIndex["email"]
+	containsA = pending != nil && pending.contains(prefixA)
+	containsB = pending != nil && pending.contains(prefixB)
+	publishingUniqueRuns := 0
+	publishingEmailRuns := 0
+	if len(col.writeDomain.indexedPublishingUnits) > 0 {
+		publishingUniqueRuns = len(col.writeDomain.indexedPublishingUnits[0].uniqueValueRuns["email"])
+		publishingEmailRuns = len(col.writeDomain.indexedPublishingUnits[0].rootRuns[emailRoot])
+	}
+	col.writeDomain.mu.RUnlock()
+	if containsA {
+		t.Fatal("rotated direct-buffered template-v1 update added unchanged persisted unique email to pending unique-value index")
+	}
+	if !containsB {
+		t.Fatal("rotated pending insert unique email missing from pending unique-value index")
+	}
+	if publishingUniqueRuns != 1 {
+		t.Fatalf("publishing unique value runs=%d want only the pending insert run", publishingUniqueRuns)
+	}
+	if publishingEmailRuns != 1 {
+		t.Fatalf("publishing email root runs=%d want only the pending insert secondary run", publishingEmailRuns)
+	}
+	if err := col.publishPreparedIndexedFlush(work); err != nil {
+		t.Fatalf("publish prepared async flush: %v", err)
 	}
 }
 
@@ -12335,6 +12818,279 @@ func TestCollectionUpdateBatchSkipsUnchangedSecondaryIndexes(t *testing.T) {
 	if rootName := collectionPrimaryRootName("users"); afterSame[rootName] == beforeSame[rootName] {
 		t.Fatalf("primary root %q did not change for document replacement", rootName)
 	}
+}
+
+func TestCollectionUpdateBatchIndexChangedMaskFallbackForRuntimeAtOrAbove64(t *testing.T) {
+	for _, targetOrdinal := range []int{63, 64, 71} {
+		t.Run(fmt.Sprintf("ordinal_%d", targetOrdinal), func(t *testing.T) {
+			const indexCount = 72
+			d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatalf("open db: %v", err)
+			}
+			defer func() { _ = d.Close() }()
+
+			mgr := NewCollectionManager(d)
+			meta := CollectionMeta{
+				Name: "users",
+				Options: CollectionOptions{
+					DisableIndexedWriteMemtables: true,
+				},
+				Indexes: collectionManyStringIndexesForTest(indexCount, nil),
+			}
+			if _, err := mgr.CreateCollection(&meta); err != nil {
+				t.Fatalf("create collection: %v", err)
+			}
+			col, err := mgr.OpenCollection("users")
+			if err != nil {
+				t.Fatalf("open collection: %v", err)
+			}
+			if _, err := col.InsertBatch(
+				[][]byte{[]byte("u1")},
+				[][]byte{collectionManyIndexJSONDocumentForTest(indexCount, nil, nil)},
+			); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
+
+			rootNames := make([]string, 0, indexCount)
+			for i := 0; i < indexCount; i++ {
+				rootNames = append(rootNames, collectionSecondaryRootName("users", fmt.Sprintf("idx%02d", i)))
+			}
+			before := collectionRootIDsForTest(t, d, "users", rootNames)
+			replacement := collectionManyIndexJSONDocumentForTest(indexCount, map[int]string{
+				targetOrdinal: fmt.Sprintf("new%02d", targetOrdinal),
+			}, map[string]string{"note": "replacement"})
+			results, err := col.UpdateBatch([]UpdateBatchItem{{
+				DocumentID: []byte("u1"),
+				Update: func([]byte) ([]byte, bool, error) {
+					return replacement, true, nil
+				},
+			}})
+			if err != nil {
+				t.Fatalf("update target ordinal %d: %v", targetOrdinal, err)
+			}
+			if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+				t.Fatalf("results=%+v want one matched modified row", results)
+			}
+			stats := col.LastUpdateStats()
+			if got, want := stats.IndexValueChanges, 1; got != want {
+				t.Fatalf("changed indexes=%d want %d", got, want)
+			}
+			if got, want := stats.IndexValueUnchanged, indexCount-1; got != want {
+				t.Fatalf("unchanged indexes=%d want %d", got, want)
+			}
+
+			after := collectionRootIDsForTest(t, d, "users", rootNames)
+			targetRoot := collectionSecondaryRootName("users", fmt.Sprintf("idx%02d", targetOrdinal))
+			changedRoots := 0
+			for _, rootName := range rootNames {
+				changed := after[rootName] != before[rootName]
+				if rootName == targetRoot {
+					if !changed {
+						t.Fatalf("target root %q did not change", rootName)
+					}
+					changedRoots++
+					continue
+				}
+				if changed {
+					t.Fatalf("unrelated root %q changed from %d to %d for target ordinal %d", rootName, before[rootName], after[rootName], targetOrdinal)
+				}
+			}
+			if changedRoots != 1 {
+				t.Fatalf("changed secondary roots=%d want 1", changedRoots)
+			}
+
+			newIDs, err := col.FindByIndexValue(fmt.Sprintf("idx%02d", targetOrdinal), fmt.Sprintf("new%02d", targetOrdinal))
+			if err != nil {
+				t.Fatalf("find new target value: %v", err)
+			}
+			if len(newIDs) != 1 || !bytes.Equal(newIDs[0], []byte("u1")) {
+				t.Fatalf("new target ids=%q want [u1]", newIDs)
+			}
+			oldIDs, err := col.FindByIndexValue(fmt.Sprintf("idx%02d", targetOrdinal), fmt.Sprintf("v%02d", targetOrdinal))
+			if err != nil {
+				t.Fatalf("find old target value: %v", err)
+			}
+			if len(oldIDs) != 0 {
+				t.Fatalf("old target ids=%q want none", oldIDs)
+			}
+		})
+	}
+}
+
+func TestCollectionUpdateBatchUniqueOrdinal64Fallback(t *testing.T) {
+	const indexCount = 65
+	const uniqueOrdinal = 64
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: collectionManyStringIndexesForTest(indexCount, map[int]bool{uniqueOrdinal: true}),
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	u1Doc := collectionManyIndexJSONDocumentForTest(indexCount, map[int]string{
+		uniqueOrdinal: "u1-unique",
+	}, nil)
+	u2Doc := collectionManyIndexJSONDocumentForTest(indexCount, map[int]string{
+		uniqueOrdinal: "u2-unique",
+	}, nil)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{u1Doc, u2Doc},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+
+	unchangedUniqueReplacement := collectionManyIndexJSONDocumentForTest(indexCount, map[int]string{
+		0:             "new-nonunique",
+		uniqueOrdinal: "u1-unique",
+	}, nil)
+	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func([]byte) ([]byte, bool, error) {
+			return unchangedUniqueReplacement, true, nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("unchanged unique ordinal %d update: %v", uniqueOrdinal, err)
+	}
+	if !batched {
+		t.Fatalf("unchanged unique ordinal %d update declined", uniqueOrdinal)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("unchanged unique results=%+v want one matched modified row", results)
+	}
+	stats := col.LastUpdateStats()
+	if got, want := stats.UniqueIndexChecks, 0; got != want {
+		t.Fatalf("unchanged unique checks=%d want %d", got, want)
+	}
+	if got, want := stats.UniqueIndexCheckSkips, 1; got != want {
+		t.Fatalf("unchanged unique skips=%d want %d", got, want)
+	}
+	if got, want := stats.IndexValueChanges, 1; got != want {
+		t.Fatalf("unchanged unique changed indexes=%d want %d", got, want)
+	}
+	if got, want := stats.IndexValueUnchanged, indexCount-1; got != want {
+		t.Fatalf("unchanged unique unchanged indexes=%d want %d", got, want)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush unchanged unique update: %v", err)
+	}
+
+	changedUniqueReplacement := collectionManyIndexJSONDocumentForTest(indexCount, map[int]string{
+		0:             "new-nonunique",
+		uniqueOrdinal: "fresh-unique",
+	}, nil)
+	results, batched, err = col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func([]byte) ([]byte, bool, error) {
+			return changedUniqueReplacement, true, nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("changed unique ordinal %d declined update returned err: %v", uniqueOrdinal, err)
+	}
+	if batched {
+		t.Fatalf("changed unique ordinal %d update batched with results=%+v, want declined", uniqueOrdinal, results)
+	}
+
+	conflictingUniqueReplacement := collectionManyIndexJSONDocumentForTest(indexCount, map[int]string{
+		0:             "new-nonunique",
+		uniqueOrdinal: "u2-unique",
+	}, nil)
+	_, err = col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func([]byte) ([]byte, bool, error) {
+			return conflictingUniqueReplacement, true, nil
+		},
+	}})
+	if !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("conflicting unique ordinal %d update err=%v want ErrUniqueIndexConflict", uniqueOrdinal, err)
+	}
+}
+
+func collectionManyStringIndexesForTest(n int, unique map[int]bool) []IndexDefinition {
+	indexes := make([]IndexDefinition, n)
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("idx%02d", i)
+		indexes[i] = IndexDefinition{
+			Name:      name,
+			Field:     fmt.Sprintf("f%02d", i),
+			ValueType: IndexValueString,
+			Unique:    unique[i],
+		}
+	}
+	return indexes
+}
+
+func collectionManyIndexJSONDocumentForTest(indexCount int, overrides map[int]string, extra map[string]string) []byte {
+	var builder strings.Builder
+	builder.WriteByte('{')
+	first := true
+	writeStringField := func(name, value string) {
+		if !first {
+			builder.WriteByte(',')
+		}
+		first = false
+		fmt.Fprintf(&builder, "%q:%q", name, value)
+	}
+	for i := 0; i < indexCount; i++ {
+		value := fmt.Sprintf("v%02d", i)
+		if overrides != nil {
+			if override, ok := overrides[i]; ok {
+				value = override
+			}
+		}
+		writeStringField(fmt.Sprintf("f%02d", i), value)
+	}
+	extraNames := make([]string, 0, len(extra))
+	for name := range extra {
+		extraNames = append(extraNames, name)
+	}
+	sort.Strings(extraNames)
+	for _, name := range extraNames {
+		writeStringField(name, extra[name])
+	}
+	builder.WriteByte('}')
+	return []byte(builder.String())
+}
+
+func collectionRootIDsForTest(t *testing.T, d *backenddb.DB, collectionName string, rootNames []string) map[string]uint64 {
+	t.Helper()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, collectionName)
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	if catalog == nil {
+		t.Fatal("missing catalog")
+	}
+	out := make(map[string]uint64, len(rootNames))
+	for _, rootName := range rootNames {
+		rootID := catalog.rootID(rootName)
+		if rootID == 0 {
+			t.Fatalf("root %q was not persisted", rootName)
+		}
+		out[rootName] = rootID
+	}
+	return out
 }
 
 func TestCollectionInsertBatchBridge_RejectsPersistedUniqueConflictAtomically(t *testing.T) {
