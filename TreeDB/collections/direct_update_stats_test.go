@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"fmt"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -158,6 +159,86 @@ func TestCollectionDirectUpdateStatsForNoopAndMissingDocument(t *testing.T) {
 	if stats.Items != 1 || stats.Matched != 0 || stats.Modified != 0 || stats.Runs != 0 || stats.IndexValueChanges != 0 || stats.IndexValueUnchanged != 0 {
 		t.Fatalf("missing stats=%+v want one unmatched item and no root/index work", stats)
 	}
+}
+
+func TestCollectionDirectUpdateDetailedStatsCapsAtInlineIndexLimit(t *testing.T) {
+	const indexCount = maxCollectionUpdateInlineIndexStats + 2
+
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	indexes := make([]IndexDefinition, indexCount)
+	for i := range indexes {
+		indexes[i] = IndexDefinition{
+			Name:      fmt.Sprintf("idx%02d", i),
+			Field:     fmt.Sprintf("f%02d", i),
+			ValueType: IndexValueString,
+		}
+	}
+	mgr := NewCollectionManager(d)
+	mgr.SetUpdateBatchDetailedStatsEnabled(true)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DisableIndexedWriteMemtables: true,
+		},
+		Indexes: indexes,
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{directUpdateStatsWideDocument(indexCount, -1, "")},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+		return directUpdateStatsWideDocument(indexCount, 1, "changed"), true, nil
+	})
+	if err != nil {
+		t.Fatalf("direct update: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("direct update matched/modified=%v/%v want true/true", matched, modified)
+	}
+	stats := col.LastUpdateStats()
+	if got, want := stats.IndexStatsCount, maxCollectionUpdateInlineIndexStats; got != want {
+		t.Fatalf("index stats count=%d want inline cap %d", got, want)
+	}
+	if got, want := stats.IndexStats[maxCollectionUpdateInlineIndexStats-1].IndexName, fmt.Sprintf("idx%02d", maxCollectionUpdateInlineIndexStats-1); got != want {
+		t.Fatalf("last inline index stat name=%q want %q", got, want)
+	}
+	if got, want := stats.IndexValueChanges, 1; got != want {
+		t.Fatalf("aggregate index changes=%d want %d", got, want)
+	}
+	if got, want := stats.IndexValueUnchanged, indexCount-1; got != want {
+		t.Fatalf("aggregate index unchanged=%d want %d", got, want)
+	}
+	directUpdateStatsRequireIndex(t, stats.IndexStats[:stats.IndexStatsCount], "idx01", false, 1, 0, 0, 0, 1, 1, 1)
+}
+
+func directUpdateStatsWideDocument(indexCount, changedOrdinal int, changedValue string) []byte {
+	out := []byte{'{'}
+	for i := 0; i < indexCount; i++ {
+		if i > 0 {
+			out = append(out, ',')
+		}
+		value := fmt.Sprintf("v%02d", i)
+		if i == changedOrdinal {
+			value = changedValue
+		}
+		out = fmt.Appendf(out, "%q:%q", fmt.Sprintf("f%02d", i), value)
+	}
+	out = append(out, '}')
+	return out
 }
 
 func directUpdateStatsRequireIndex(

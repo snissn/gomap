@@ -359,9 +359,9 @@ type CollectionUpdateStats struct {
 	IndexValueUnchanged    int
 	UniqueIndexChecks      int
 	UniqueIndexCheckSkips  int
-	// IndexStats is populated only when detailed update-batch stats are enabled
-	// and the collection has at most len(IndexStats) index runtimes. The first
-	// IndexStatsCount entries are valid.
+	// IndexStats is populated for the first inline index runtimes when detailed
+	// update-batch stats are enabled. The first IndexStatsCount entries are
+	// valid; remaining indexes are represented only by aggregate counters.
 	IndexStatsCount int
 	IndexStats      [maxCollectionUpdateInlineIndexStats]CollectionUpdateIndexStats
 }
@@ -908,6 +908,26 @@ func cloneCollectionUpdateStats(stats CollectionUpdateStats) CollectionUpdateSta
 		stats.SecondaryRuns = append([]CollectionUpdateSecondaryRunStats(nil), stats.SecondaryRuns...)
 	}
 	return stats
+}
+
+func initCollectionUpdateIndexStats(stats *CollectionUpdateStats, collectionName string, runtimes []indexRuntime, enabled bool) {
+	if stats == nil || !enabled || len(runtimes) == 0 {
+		return
+	}
+	count := len(runtimes)
+	if count > len(stats.IndexStats) {
+		count = len(stats.IndexStats)
+	}
+	stats.IndexStatsCount = count
+	for i := 0; i < count; i++ {
+		runtime := runtimes[i]
+		stats.IndexStats[i] = CollectionUpdateIndexStats{
+			CollectionName: collectionName,
+			IndexName:      runtime.def.name,
+			IndexOrdinal:   i,
+			Unique:         runtime.def.unique,
+		}
+	}
 }
 
 func (c *Collection) updateBatchDetailedStatsEnabled() bool {
@@ -7110,17 +7130,7 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		_ = snap.Close()
 		return false, false, err
 	}
-	if detailedStats && len(runtimes) <= len(stats.IndexStats) {
-		stats.IndexStatsCount = len(runtimes)
-		for i, runtime := range runtimes {
-			stats.IndexStats[i] = CollectionUpdateIndexStats{
-				CollectionName: c.meta.Name,
-				IndexName:      runtime.def.name,
-				IndexOrdinal:   i,
-				Unique:         runtime.def.unique,
-			}
-		}
-	}
+	initCollectionUpdateIndexStats(&stats, c.meta.Name, runtimes, detailedStats)
 	currentID, err := captureBSONIDSnapshot(currentValue, plannerOptions)
 	if err != nil {
 		_ = snap.Close()
@@ -8408,17 +8418,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			putUpdateBatchPlanScratch(scratch)
 		}
 	}()
-	if detailedStats && len(runtimes) <= len(stats.IndexStats) {
-		stats.IndexStatsCount = len(runtimes)
-		for i, runtime := range runtimes {
-			stats.IndexStats[i] = CollectionUpdateIndexStats{
-				CollectionName: meta.Name,
-				IndexName:      runtime.def.name,
-				IndexOrdinal:   i,
-				Unique:         runtime.def.unique,
-			}
-		}
-	}
+	initCollectionUpdateIndexStats(&stats, meta.Name, runtimes, detailedStats)
 	var currentScratch []byte
 	for i, item := range items {
 		phaseStart := updateBatchStatsNow(detailedStats)
