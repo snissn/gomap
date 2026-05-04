@@ -46,6 +46,7 @@ type report struct {
 	Comparisons   []scanComparison `json:"comparisons,omitempty"`
 	BlockProfile  *pprofSummary    `json:"block_profile,omitempty"`
 	MutexProfile  *pprofSummary    `json:"mutex_profile,omitempty"`
+	TreeDBStats   []treeDBStatsRun `json:"treedb_stats,omitempty"`
 
 	Insights []string `json:"insights,omitempty"`
 	Warnings []string `json:"warnings,omitempty"`
@@ -82,6 +83,12 @@ type scanComparison struct {
 	SharedTop     []sharedHot  `json:"shared_top,omitempty"`
 	PrefixOnlyTop []pprofEntry `json:"prefix_only_top,omitempty"`
 	FullOnlyTop   []pprofEntry `json:"full_only_top,omitempty"`
+}
+
+type treeDBStatsRun struct {
+	Keys   int               `json:"keys,omitempty"`
+	DBName string            `json:"db_name"`
+	Stats  map[string]string `json:"stats"`
 }
 
 type investigationTarget struct {
@@ -125,8 +132,9 @@ type benchprofResultsFile struct {
 }
 
 type benchprofResultsRun struct {
-	Keys    int                           `json:"keys"`
-	Results map[string]map[string]float64 `json:"results"`
+	Keys        int                           `json:"keys"`
+	Results     map[string]map[string]float64 `json:"results"`
+	TreeDBStats map[string]map[string]string  `json:"treedb_stats,omitempty"`
 }
 
 func RunFromProfilesDir(profilesDir string) error {
@@ -268,6 +276,11 @@ func buildReport(cfg config) (report, error) {
 	}
 	if len(rep.OpsRows) == 0 {
 		rep.Warnings = append(rep.Warnings, "no scan ops found; unified-bench -profile-dir now writes benchprof_results.json automatically")
+	}
+	if stats, err := loadTreeDBStatsMetadata(cfg.profilesDir); err != nil {
+		rep.Warnings = append(rep.Warnings, err.Error())
+	} else {
+		rep.TreeDBStats = stats
 	}
 
 	rep.CPUProfiles, rep.Warnings = appendCPUProfiles(rep.CPUProfiles, rep.Warnings, cfg, files)
@@ -566,6 +579,49 @@ func loadKnownTests(profilesDir string) map[string]struct{} {
 		}
 	}
 	return tests
+}
+
+func loadTreeDBStatsMetadata(profilesDir string) ([]treeDBStatsRun, error) {
+	path := filepath.Join(strings.TrimSpace(profilesDir), "benchprof_results.json")
+	st, err := os.Stat(path)
+	if err != nil || st.IsDir() {
+		return nil, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %q: %w", path, err)
+	}
+	var parsed benchprofResultsFile
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return nil, fmt.Errorf("parse %q: %w", path, err)
+	}
+	out := make([]treeDBStatsRun, 0)
+	for _, run := range parsed.Runs {
+		dbNames := make([]string, 0, len(run.TreeDBStats))
+		for dbName, stats := range run.TreeDBStats {
+			if len(stats) == 0 {
+				continue
+			}
+			dbNames = append(dbNames, dbName)
+		}
+		sort.Strings(dbNames)
+		for _, dbName := range dbNames {
+			stats := run.TreeDBStats[dbName]
+			copyStats := make(map[string]string, len(stats))
+			for key, value := range stats {
+				copyStats[key] = value
+			}
+			out = append(out, treeDBStatsRun{
+				Keys:   run.Keys,
+				DBName: dbName,
+				Stats:  copyStats,
+			})
+		}
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }
 
 func analyzePprofPath(kind, testName, dbTag, path, sampleIndex string, cfg config) (pprofSummary, error) {
@@ -1674,6 +1730,28 @@ func renderMarkdown(rep report) string {
 		}
 		if rep.MutexProfile != nil {
 			writeOneProfileMarkdown(&sb, "mutex", *rep.MutexProfile)
+		}
+	}
+
+	if len(rep.TreeDBStats) > 0 {
+		sb.WriteString("## TreeDB Stats Metadata\n\n")
+		for _, run := range rep.TreeDBStats {
+			title := run.DBName
+			if run.Keys > 0 {
+				title = fmt.Sprintf("keys=%d / %s", run.Keys, run.DBName)
+			}
+			sb.WriteString(fmt.Sprintf("### %s\n\n", title))
+			sb.WriteString("| stat | value |\n")
+			sb.WriteString("|---|---:|\n")
+			keys := make([]string, 0, len(run.Stats))
+			for key := range run.Stats {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				sb.WriteString(fmt.Sprintf("| `%s` | `%s` |\n", key, run.Stats[key]))
+			}
+			sb.WriteString("\n")
 		}
 	}
 

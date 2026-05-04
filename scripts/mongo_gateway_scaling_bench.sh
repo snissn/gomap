@@ -11,8 +11,9 @@ DOCS="${DOCS:-100000}"
 INDEXES="${INDEXES:-2}"
 BATCH_SIZE="${BATCH_SIZE:-10000}"
 INSERT_PRODUCERS="${INSERT_PRODUCERS:-8}"
-WRITERS_LIST="${WRITERS_LIST:-1 2 4 8 16}"
+WRITERS_LIST="${WRITERS_LIST:-1 2 4 8 16 32}"
 READERS_LIST="${READERS_LIST:-1 2 4 8 16}"
+RUN_READER_SWEEP="${RUN_READER_SWEEP:-true}"
 CONCURRENT_WRITES="${CONCURRENT_WRITES:-80000}"
 CONCURRENT_READS="${CONCURRENT_READS:-80000}"
 READS="${READS:-0}"
@@ -52,8 +53,9 @@ Options:
   --indexes N            Secondary index count. Default: 2.
   --batch-size N         Insert batch size. Default: 10000.
   --insert-producers N   Insert load producers. Default: 8.
-  --writers LIST         Quoted space-separated concurrent writer counts (for example: "1 2 4"). Default: "1 2 4 8 16".
+  --writers LIST         Quoted space-separated concurrent writer counts (for example: "1 2 4"). Default: "1 2 4 8 16 32".
   --readers LIST         Quoted space-separated concurrent reader counts (for example: "1 2 4"). Default: "1 2 4 8 16".
+  --no-reader-sweep      Run writer-scaling cells only.
   --concurrent-writes N  Total updates per writer-scaling cell. Default: 80000.
   --concurrent-reads N   Total reads per reader-scaling cell. Default: 80000.
   --include-mongo        Also run each cell against an external MongoDB URI.
@@ -73,7 +75,7 @@ Environment overrides use the uppercase variable names shown in the script:
 OUT_DIR, DOCS, INDEXES, BATCH_SIZE, INSERT_PRODUCERS, WRITERS_LIST,
 READERS_LIST, CONCURRENT_WRITES, CONCURRENT_READS, INCLUDE_MONGO (0/1, true/false, or yes/no), MONGO_URI, DATABASE_PREFIX,
 TREEDB_DOCUMENT_FORMAT, TREEDB_CLIENT_MODE, TREEDB_PROFILE,
-TREEDB_MAINTENANCE, UPDATE_INDEXED_FIELD (0/1, true/false, or yes/no), GOWORK, TIMEOUT, TITLE,
+TREEDB_MAINTENANCE, UPDATE_INDEXED_FIELD (0/1, true/false, or yes/no), RUN_READER_SWEEP (0/1, true/false, or yes/no), GOWORK, TIMEOUT, TITLE,
 and related storage/pool settings.
 EOF
 }
@@ -168,6 +170,10 @@ while [[ $# -gt 0 ]]; do
       require_option_value "$1" "${2-}"
       READERS_LIST="$2"
       shift 2
+      ;;
+    --no-reader-sweep)
+      RUN_READER_SWEEP=false
+      shift
       ;;
     --concurrent-writes)
       require_option_value "$1" "${2-}"
@@ -297,6 +303,7 @@ case "$UPDATE_INDEXED_FIELD" in
 esac
 UPDATE_INDEXED_FIELD_TEXT=$(bool_01_text "$UPDATE_INDEXED_FIELD")
 INCLUDE_MONGO=$(normalize_bool_01 INCLUDE_MONGO "$INCLUDE_MONGO")
+RUN_READER_SWEEP=$(normalize_bool_01 RUN_READER_SWEEP "$RUN_READER_SWEEP")
 
 mkdir -p "$OUT_DIR"
 OUT_DIR=$(cd "$OUT_DIR" && pwd -P)
@@ -312,6 +319,7 @@ DATABASE_PREFIX=$(mongo_database_prefix_label "$DATABASE_PREFIX")
 RAW_DIR="$OUT_DIR/raw"
 BIN_DIR="$OUT_DIR/bin"
 MATRIX="$OUT_DIR/matrix.tsv"
+WRITER_METRICS="$OUT_DIR/writer_metrics.tsv"
 REPORT="$OUT_DIR/report.md"
 SUMMARY="$OUT_DIR/summary.tsv"
 README="$OUT_DIR/README.md"
@@ -351,6 +359,11 @@ report_treedb_location_on_exit() {
 trap 'report_treedb_location_on_exit "$?"' EXIT
 
 mkdir -p "$RAW_DIR" "$TREE_DIR" "$BIN_DIR"
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 is required to write writer_metrics.tsv" >&2
+  exit 2
+fi
 
 BENCH_BIN="$BIN_DIR/mongo_gateway_bench"
 REPORT_BIN="$BIN_DIR/mongo_gateway_compare_report"
@@ -410,7 +423,7 @@ printf "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n
 
 echo "running Mongo gateway scaling matrix into: $OUT_DIR"
 echo "docs=$DOCS indexes=$INDEXES batch_size=$BATCH_SIZE insert_producers=$INSERT_PRODUCERS"
-echo "writers=$WRITERS_LIST readers=$READERS_LIST include_mongo=$INCLUDE_MONGO update_indexed_field=$UPDATE_INDEXED_FIELD_TEXT"
+echo "writers=$WRITERS_LIST readers=$READERS_LIST run_reader_sweep=$RUN_READER_SWEEP include_mongo=$INCLUDE_MONGO update_indexed_field=$UPDATE_INDEXED_FIELD_TEXT"
 
 run_cell() {
   local scenario=$1
@@ -458,9 +471,11 @@ for writers in $WRITERS_LIST; do
   run_cell "writers_${writers}" 0 0 "$writers" "$CONCURRENT_WRITES"
 done
 
-for readers in $READERS_LIST; do
-  run_cell "readers_${readers}" "$readers" "$CONCURRENT_READS" 0 0
-done
+if [[ "$RUN_READER_SWEEP" == "1" ]]; then
+  for readers in $READERS_LIST; do
+    run_cell "readers_${readers}" "$readers" "$CONCURRENT_READS" 0 0
+  done
+fi
 
 report_extra=()
 if [[ "$INCLUDE_MONGO" != "1" ]]; then
@@ -473,6 +488,142 @@ fi
   -summary "$SUMMARY" \
   -title "$TITLE" \
   "${report_extra[@]}"
+
+python3 - "$OUT_DIR" "$MATRIX" "$WRITER_METRICS" <<'PY'
+import csv
+import json
+import os
+import re
+import sys
+
+out_dir, matrix_path, writer_metrics_path = sys.argv[1:4]
+
+columns = [
+    "target",
+    "config",
+    "documents",
+    "secondary_indexes",
+    "writers",
+    "phase",
+    "ops_per_sec",
+    "sampled_ns_per_op",
+    "driver_calls",
+    "publish_delta_group_calls_per_doc",
+    "root_apply_calls_per_doc",
+    "roots_per_publish",
+    "primary_root_publishes_per_doc",
+    "primary_root_delta_entries_per_doc",
+    "primary_root_delta_bytes_per_doc",
+    "indexed_flush_units_per_batch",
+    "indexed_flush_docs_per_batch",
+    "leaf_log_node_loads_per_doc",
+    "leaf_log_pages_written_per_doc",
+    "leaf_log_read_bytes_per_doc",
+    "leaf_log_write_bytes_per_doc",
+    "backpressure_sync_total",
+    "root_mismatch_total",
+    "raw_json",
+]
+
+metric_columns = {
+    "publish_delta_group_calls_per_doc": "publish_delta_group_calls/doc",
+    "root_apply_calls_per_doc": "root_apply_calls/doc",
+    "roots_per_publish": "roots/publish",
+    "primary_root_publishes_per_doc": "primary_root_publishes/doc",
+    "primary_root_delta_entries_per_doc": "primary_root_delta_entries/doc",
+    "primary_root_delta_bytes_per_doc": "primary_root_delta_bytes/doc",
+    "indexed_flush_units_per_batch": "indexed_flush_units/batch",
+    "indexed_flush_docs_per_batch": "indexed_flush_docs/batch",
+    "leaf_log_node_loads_per_doc": "leaf_log_node_loads/doc",
+    "leaf_log_pages_written_per_doc": "leaf_log_pages_written/doc",
+    "leaf_log_read_bytes_per_doc": "leaf_log_read_bytes/doc",
+    "leaf_log_write_bytes_per_doc": "leaf_log_write_bytes/doc",
+}
+
+writer_phase_re = re.compile(r"^concurrent_id_update_set_w([0-9]+)$")
+
+
+def fmt(value):
+    if value is None or value == "":
+        return ""
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return format(value, ".12g")
+    return str(value)
+
+
+def parse_number(value):
+    if value is None or value == "":
+        return 0.0, False
+    try:
+        return float(value), True
+    except (TypeError, ValueError):
+        return 0.0, False
+
+
+def delta_count(delta, keys):
+    found = False
+    total = 0.0
+    for key in keys:
+        if key not in delta:
+            continue
+        found = True
+        value, ok = parse_number(delta.get(key))
+        if ok:
+            total += value
+    if not found:
+        return ""
+    return fmt(total)
+
+
+with open(writer_metrics_path, "w", newline="") as out_file:
+    writer = csv.DictWriter(out_file, fieldnames=columns, delimiter="\t", lineterminator="\n")
+    writer.writeheader()
+    with open(matrix_path, newline="") as matrix_file:
+        matrix = csv.DictReader(matrix_file, delimiter="\t")
+        for row in matrix:
+            raw_json = row.get("raw_json", "")
+            if not raw_json:
+                continue
+            raw_path = raw_json if os.path.isabs(raw_json) else os.path.join(out_dir, raw_json)
+            with open(raw_path) as raw_file:
+                result = json.load(raw_file)
+            target = row.get("target") or result.get("target", "")
+            config = row.get("config", "")
+            documents = row.get("documents") or str(result.get("documents", ""))
+            secondary_indexes = row.get("secondary_indexes") or str(result.get("secondary_indexes", ""))
+            for phase in result.get("phases") or []:
+                phase_name = phase.get("name", "")
+                match = writer_phase_re.match(phase_name)
+                if not match:
+                    continue
+                metrics = phase.get("treedb_metrics") or {}
+                delta = phase.get("treedb_stats_delta") or {}
+                out = {
+                    "target": target,
+                    "config": config,
+                    "documents": documents,
+                    "secondary_indexes": secondary_indexes,
+                    "writers": match.group(1),
+                    "phase": phase_name,
+                    "ops_per_sec": fmt(phase.get("ops_per_sec")),
+                    "sampled_ns_per_op": fmt(phase.get("sampled_ns_per_op")),
+                    "driver_calls": fmt(phase.get("driver_calls")),
+                    "raw_json": raw_json,
+                }
+                for column, metric_name in metric_columns.items():
+                    out[column] = fmt(metrics.get(metric_name))
+                out["backpressure_sync_total"] = delta_count(delta, [
+                    "treedb.collections.write_domain.indexed_async_flush.backpressure_sync_total",
+                ])
+                out["root_mismatch_total"] = delta_count(delta, [
+                    "treedb.collections.write_domain.collection_root_base_mismatch_total",
+                    "treedb.collections.write_domain.indexed_flush.root_base_mismatch_total",
+                    "treedb.collections.write_domain.coordinator_requeue_on_mismatch_total",
+                ])
+                writer.writerow(out)
+PY
 
 report_extra_text=""
 if (( ${#report_extra[@]} > 0 )); then
@@ -487,6 +638,7 @@ cat >"$README" <<EOF
 - report: \`$REPORT\`
 - summary TSV: \`$SUMMARY\`
 - matrix TSV: \`$MATRIX\`
+- writer metrics TSV: \`$WRITER_METRICS\`
 - raw JSON directory: \`$RAW_DIR\`
 - TreeDB data directory: \`$TREE_DIR\`
 - TreeDB location metadata: \`$TREE_METADATA\`
@@ -496,6 +648,7 @@ cat >"$README" <<EOF
 - insert producers: \`$INSERT_PRODUCERS\`
 - writer sweep: \`$WRITERS_LIST\`
 - reader sweep: \`$READERS_LIST\`
+- run reader sweep: \`$RUN_READER_SWEEP\`
 - concurrent writes per writer cell: \`$CONCURRENT_WRITES\`
 - concurrent reads per reader cell: \`$CONCURRENT_READS\`
 - TreeDB profile: \`$TREEDB_PROFILE\`
@@ -522,4 +675,5 @@ EOF
 
 echo "scaling report: $REPORT"
 echo "summary TSV: $SUMMARY"
+echo "writer metrics TSV: $WRITER_METRICS"
 echo "bundle README: $README"
