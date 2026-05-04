@@ -4998,15 +4998,22 @@ func TestCollectionIndexedWriteMemtablesFlushWaitsForPublishingUnits(t *testing.
 		finishAsync(errors.New("test cleanup"))
 	})
 
+	waitEntered, releaseWait := collectionWaitIndexedAsyncFlushGateForTest(t)
 	flushDone := make(chan error, 1)
 	go func() {
 		flushDone <- col.flushBufferedWrites()
 	}()
 	select {
-	case err := <-flushDone:
-		t.Fatalf("flush returned before in-flight async publish drained: %v", err)
-	case <-time.After(50 * time.Millisecond):
+	case <-waitEntered:
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("timed out waiting for flush to reach indexed async drain")
 	}
+	select {
+	case err := <-flushDone:
+		t.Fatalf("flush returned after entering indexed async drain but before publish finished: %v", err)
+	default:
+	}
+	releaseWait()
 	publishDone := make(chan error, 1)
 	go func() {
 		err := col.publishPreparedIndexedFlush(work)
@@ -5065,6 +5072,7 @@ func TestCollectionIndexedWriteMemtablesFlushRetriesAsyncScheduledDuringWaitGap(
 	}
 
 	domain := col.writeDomain
+	waitEntered, releaseWait := collectionWaitIndexedAsyncFlushGateForTest(t)
 	domain.mu.Lock()
 	scanDone := make(chan error, 1)
 	go func() {
@@ -5073,7 +5081,6 @@ func TestCollectionIndexedWriteMemtablesFlushRetriesAsyncScheduledDuringWaitGap(
 		})
 		scanDone <- err
 	}()
-	time.Sleep(20 * time.Millisecond)
 	if !domain.beginIndexedAsyncFlush() {
 		domain.mu.Unlock()
 		t.Fatal("begin async flush returned false")
@@ -5106,10 +5113,16 @@ func TestCollectionIndexedWriteMemtablesFlushRetriesAsyncScheduledDuringWaitGap(
 	})
 
 	select {
-	case err := <-scanDone:
-		t.Fatalf("scan returned before scheduled async publish drained: %v", err)
-	case <-time.After(50 * time.Millisecond):
+	case <-waitEntered:
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("timed out waiting for scan to reach indexed async drain")
 	}
+	select {
+	case err := <-scanDone:
+		t.Fatalf("scan returned after entering indexed async drain but before publish finished: %v", err)
+	default:
+	}
+	releaseWait()
 	publishDone := make(chan error, 1)
 	go func() {
 		err := col.publishPreparedIndexedFlush(work)
@@ -5187,16 +5200,23 @@ func TestCollectionIndexedWriteMemtablesCreateIndexWaitsForPublishingUnits(t *te
 		finishAsync(errors.New("test cleanup"))
 	})
 
+	waitEntered, releaseWait := collectionWaitIndexedAsyncFlushGateForTest(t)
 	createDone := make(chan error, 1)
 	go func() {
 		_, err := col.CreateIndex(IndexDefinition{Name: "city", Field: "city", ValueType: IndexValueString})
 		createDone <- err
 	}()
 	select {
-	case err := <-createDone:
-		t.Fatalf("CreateIndex returned before in-flight async publish drained: %v", err)
-	case <-time.After(50 * time.Millisecond):
+	case <-waitEntered:
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("timed out waiting for CreateIndex to reach indexed async drain")
 	}
+	select {
+	case err := <-createDone:
+		t.Fatalf("CreateIndex returned after entering indexed async drain but before publish finished: %v", err)
+	default:
+	}
+	releaseWait()
 	publishDone := make(chan error, 1)
 	go func() {
 		err := col.publishPreparedIndexedFlush(work)
@@ -5224,6 +5244,28 @@ func TestCollectionIndexedWriteMemtablesCreateIndexWaitsForPublishingUnits(t *te
 		t.Fatalf("find city after CreateIndex: %v", err)
 	}
 	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u1"))
+}
+
+func collectionWaitIndexedAsyncFlushGateForTest(tb testing.TB) (<-chan struct{}, func()) {
+	tb.Helper()
+	waitEntered := make(chan struct{})
+	allowWait := make(chan struct{})
+	var waitEnteredOnce sync.Once
+	var releaseOnce sync.Once
+	restoreWaitHook := setCollectionWaitIndexedAsyncFlushHookForTest(func() {
+		waitEnteredOnce.Do(func() {
+			close(waitEntered)
+			<-allowWait
+		})
+	})
+	release := func() {
+		releaseOnce.Do(func() {
+			close(allowWait)
+			restoreWaitHook()
+		})
+	}
+	tb.Cleanup(release)
+	return waitEntered, release
 }
 
 func TestCollectionIndexedWriteMemtablesAsyncSuccessClearsPriorError(t *testing.T) {
@@ -10897,6 +10939,8 @@ func TestCollectionFindByIndexRangeTypedInt64(t *testing.T) {
 		t.Fatalf("insert batch: %v", err)
 	}
 
+	// Use a non-equality range so this exercises non-exact range materialization,
+	// not the exact-prefix helper that already used pending root runs.
 	ids, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
 		Lower: IndexRangeBound{Value: int64(0), Inclusive: true},
 		Upper: IndexRangeBound{Value: int64(10), Inclusive: false},
@@ -11013,6 +11057,8 @@ func TestCollectionFindByIndexRangeMergesBufferedUpdates(t *testing.T) {
 		t.Fatalf("buffered update advanced commit seq by %d, want 0", after.CommitSeq-before.CommitSeq)
 	}
 
+	// Use a non-equality range so this exercises non-exact range materialization,
+	// not the exact-prefix helper that already used pending root runs.
 	ids, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
 		Lower: IndexRangeBound{Value: int64(5), Inclusive: true},
 		Upper: IndexRangeBound{Value: int64(6), Inclusive: true},
@@ -11045,6 +11091,161 @@ func TestCollectionFindByIndexRangeMergesBufferedUpdates(t *testing.T) {
 	}
 	if truncated || len(ids) != 2 || !bytes.Equal(ids[0], []byte("u1")) || !bytes.Equal(ids[1], []byte("u2")) {
 		t.Fatalf("flushed score ids=%q truncated=%v want u1,u2 false", ids, truncated)
+	}
+}
+
+func TestCollectionFindByIndexRangeSeesQueuedIndexedFlushUnits(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "score", Field: "score", ValueType: IndexValueInt64}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2"), []byte("u3")},
+		[][]byte{
+			[]byte(`{"score":5}`),
+			[]byte(`{"score":6}`),
+			[]byte(`{"score":9}`),
+		},
+	); err != nil {
+		t.Fatalf("insert persisted rows: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush persisted rows: %v", err)
+	}
+	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONField("score", int64(7))},
+		{DocumentID: []byte("u2"), Update: setJSONField("score", int64(8))},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	}
+	if !batched {
+		t.Fatalf("batched=%v results=%+v want buffered update batch", batched, results)
+	}
+	col.writeDomain.mu.Lock()
+	if !rotateIndexedMutableToFlushUnitLocked(col.writeDomain) {
+		col.writeDomain.mu.Unlock()
+		t.Fatal("rotate indexed mutable state returned false")
+	}
+	if got := len(col.writeDomain.indexedFlushUnits); got != 1 {
+		col.writeDomain.mu.Unlock()
+		t.Fatalf("queued flush units=%d want 1", got)
+	}
+	col.writeDomain.mu.Unlock()
+
+	ids, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(7), Inclusive: true},
+		Upper: IndexRangeBound{Value: int64(9), Inclusive: false},
+	})
+	if err != nil {
+		t.Fatalf("find queued new score range: %v", err)
+	}
+	if truncated || len(ids) != 2 || !bytes.Equal(ids[0], []byte("u1")) || !bytes.Equal(ids[1], []byte("u2")) {
+		t.Fatalf("queued new score ids=%q truncated=%v want u1,u2 false", ids, truncated)
+	}
+	ids, truncated, err = col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(5), Inclusive: true},
+		Upper: IndexRangeBound{Value: int64(7), Inclusive: false},
+	})
+	if err != nil {
+		t.Fatalf("find queued old score range: %v", err)
+	}
+	if truncated || len(ids) != 0 {
+		t.Fatalf("queued old score ids=%q truncated=%v want none false", ids, truncated)
+	}
+}
+
+func TestCollectionFindByIndexRangeSeesPublishingIndexedFlushUnits(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "score", Field: "score", ValueType: IndexValueInt64}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2"), []byte("u3")},
+		[][]byte{
+			[]byte(`{"score":5}`),
+			[]byte(`{"score":6}`),
+			[]byte(`{"score":9}`),
+		},
+	); err != nil {
+		t.Fatalf("insert persisted rows: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush persisted rows: %v", err)
+	}
+	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONField("score", int64(7))},
+		{DocumentID: []byte("u2"), Update: setJSONField("score", int64(8))},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	}
+	if !batched {
+		t.Fatalf("batched=%v results=%+v want buffered update batch", batched, results)
+	}
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare async publish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepare async publish returned nil work")
+	}
+	defer collectionTestCloseIndexedFlushWork(work)
+
+	ids, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(7), Inclusive: true},
+		Upper: IndexRangeBound{Value: int64(9), Inclusive: false},
+	})
+	if err != nil {
+		t.Fatalf("find publishing new score range: %v", err)
+	}
+	if truncated || len(ids) != 2 || !bytes.Equal(ids[0], []byte("u1")) || !bytes.Equal(ids[1], []byte("u2")) {
+		t.Fatalf("publishing new score ids=%q truncated=%v want u1,u2 false", ids, truncated)
+	}
+	ids, truncated, err = col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(5), Inclusive: true},
+		Upper: IndexRangeBound{Value: int64(7), Inclusive: false},
+	})
+	if err != nil {
+		t.Fatalf("find publishing old score range: %v", err)
+	}
+	if truncated || len(ids) != 0 {
+		t.Fatalf("publishing old score ids=%q truncated=%v want none false", ids, truncated)
+	}
+	if err := col.publishPreparedIndexedFlush(work); err != nil {
+		t.Fatalf("publish prepared async flush: %v", err)
 	}
 }
 
@@ -11099,9 +11300,11 @@ func TestCollectionFindByIndexRangeSkipsBufferedTombstone(t *testing.T) {
 	}
 	domain.mu.Unlock()
 
+	// Use a non-equality range so this exercises bufferedIndexRangeTableLocked,
+	// not the exact-prefix helper.
 	ids, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
 		Lower: IndexRangeBound{Value: int64(5), Inclusive: true},
-		Upper: IndexRangeBound{Value: int64(5), Inclusive: true},
+		Upper: IndexRangeBound{Value: int64(6), Inclusive: false},
 	})
 	if err != nil {
 		t.Fatalf("find range: %v", err)

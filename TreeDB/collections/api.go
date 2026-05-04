@@ -82,6 +82,7 @@ var (
 	errCollectionRootOverlaysRequireCompaction = errors.New("collections: collection root overlays require compaction before writes")
 	errUpdateBatchHasSecondaryUniqueIndex      = errors.New("collections: update batch has secondary unique index")
 	errUpdateBatchChangesSecondaryUniqueIndex  = errors.New("collections: update batch changes secondary unique index")
+	errIndexedFlushLostOwnership               = errors.New("collections: async indexed publish lost ownership of in-flight flush units")
 	errUpdateCombinerStopped                   = errors.New("collections: update combiner stopped before DB update completed; callback may have been invoked")
 	indexedAsyncFlushPprofLabels               = pprof.Labels(
 		collectionPprofComponentKey, collectionPprofIndexedAsyncFlush,
@@ -475,6 +476,10 @@ type CollectionManagerStats struct {
 	UpdateBatchUniqueCheckSkips    uint64
 	UpdateBatchIndexStatsCount     int
 	UpdateBatchIndexStats          [maxCollectionUpdateInlineIndexStats]CollectionUpdateIndexStats
+	IndexedFlushRequeues           uint64
+	IndexedFlushRequeuedUnits      uint64
+	IndexedFlushLostOwnership      uint64
+	IndexedFlushRootBaseMismatches uint64
 }
 
 // DocumentRecord is one primary collection record returned by ScanDocuments.
@@ -745,6 +750,10 @@ type collectionWriteDomain struct {
 	indexedAsyncFlushErrors          atomic.Uint64
 	indexedFlushCalls                atomic.Uint64
 	indexedFlushErrors               atomic.Uint64
+	indexedFlushRequeues             atomic.Uint64
+	indexedFlushRequeuedUnits        atomic.Uint64
+	indexedFlushLostOwnership        atomic.Uint64
+	indexedFlushRootBaseMismatches   atomic.Uint64
 	indexedFlushDocs                 atomic.Uint64
 	indexedFlushBytes                atomic.Uint64
 	indexedFlushRootRuns             atomic.Uint64
@@ -967,6 +976,10 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.indexed_async_flush.errors_total"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushErrors)
 	out["treedb.collections.write_domain.indexed_flush.calls_total"] = fmt.Sprintf("%d", stats.IndexedFlushCalls)
 	out["treedb.collections.write_domain.indexed_flush.errors_total"] = fmt.Sprintf("%d", stats.IndexedFlushErrors)
+	out["treedb.collections.write_domain.indexed_flush.requeues_total"] = fmt.Sprintf("%d", stats.IndexedFlushRequeues)
+	out["treedb.collections.write_domain.indexed_flush.requeued_units_total"] = fmt.Sprintf("%d", stats.IndexedFlushRequeuedUnits)
+	out["treedb.collections.write_domain.indexed_flush.lost_ownership_total"] = fmt.Sprintf("%d", stats.IndexedFlushLostOwnership)
+	out["treedb.collections.write_domain.indexed_flush.root_base_mismatch_total"] = fmt.Sprintf("%d", stats.IndexedFlushRootBaseMismatches)
 	out["treedb.collections.write_domain.indexed_flush.docs_total"] = fmt.Sprintf("%d", stats.IndexedFlushDocs)
 	out["treedb.collections.write_domain.indexed_flush.bytes_total"] = fmt.Sprintf("%d", stats.IndexedFlushBytes)
 	out["treedb.collections.write_domain.indexed_flush.root_runs_total"] = fmt.Sprintf("%d", stats.IndexedFlushRootRuns)
@@ -1138,6 +1151,10 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.IndexedAsyncFlushErrors += other.IndexedAsyncFlushErrors
 	s.IndexedFlushCalls += other.IndexedFlushCalls
 	s.IndexedFlushErrors += other.IndexedFlushErrors
+	s.IndexedFlushRequeues += other.IndexedFlushRequeues
+	s.IndexedFlushRequeuedUnits += other.IndexedFlushRequeuedUnits
+	s.IndexedFlushLostOwnership += other.IndexedFlushLostOwnership
+	s.IndexedFlushRootBaseMismatches += other.IndexedFlushRootBaseMismatches
 	s.IndexedFlushDocs += other.IndexedFlushDocs
 	s.IndexedFlushBytes += other.IndexedFlushBytes
 	s.IndexedFlushRootRuns += other.IndexedFlushRootRuns
@@ -1229,6 +1246,10 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.IndexedAsyncFlushErrors = domain.indexedAsyncFlushErrors.Load()
 	stats.IndexedFlushCalls = domain.indexedFlushCalls.Load()
 	stats.IndexedFlushErrors = domain.indexedFlushErrors.Load()
+	stats.IndexedFlushRequeues = domain.indexedFlushRequeues.Load()
+	stats.IndexedFlushRequeuedUnits = domain.indexedFlushRequeuedUnits.Load()
+	stats.IndexedFlushLostOwnership = domain.indexedFlushLostOwnership.Load()
+	stats.IndexedFlushRootBaseMismatches = domain.indexedFlushRootBaseMismatches.Load()
 	stats.IndexedFlushDocs = domain.indexedFlushDocs.Load()
 	stats.IndexedFlushBytes = domain.indexedFlushBytes.Load()
 	stats.IndexedFlushRootRuns = domain.indexedFlushRootRuns.Load()
@@ -1520,6 +1541,7 @@ func (domain *collectionWriteDomain) waitIndexedAsyncFlush() {
 		domain.indexedAsyncCond = sync.NewCond(&domain.indexedAsyncMu)
 	}
 	for domain.indexedAsyncRun {
+		runCollectionWaitIndexedAsyncFlushHook()
 		domain.indexedAsyncCond.Wait()
 	}
 	domain.indexedAsyncMu.Unlock()
@@ -1553,6 +1575,32 @@ func (domain *collectionWriteDomain) consumeIndexedAsyncFlushError() error {
 	domain.indexedAsyncErr = nil
 	domain.indexedAsyncMu.Unlock()
 	return err
+}
+
+var collectionWaitIndexedAsyncFlushHook struct {
+	mu sync.Mutex
+	fn func()
+}
+
+func setCollectionWaitIndexedAsyncFlushHookForTest(fn func()) func() {
+	collectionWaitIndexedAsyncFlushHook.mu.Lock()
+	prev := collectionWaitIndexedAsyncFlushHook.fn
+	collectionWaitIndexedAsyncFlushHook.fn = fn
+	collectionWaitIndexedAsyncFlushHook.mu.Unlock()
+	return func() {
+		collectionWaitIndexedAsyncFlushHook.mu.Lock()
+		collectionWaitIndexedAsyncFlushHook.fn = prev
+		collectionWaitIndexedAsyncFlushHook.mu.Unlock()
+	}
+}
+
+func runCollectionWaitIndexedAsyncFlushHook() {
+	collectionWaitIndexedAsyncFlushHook.mu.Lock()
+	fn := collectionWaitIndexedAsyncFlushHook.fn
+	collectionWaitIndexedAsyncFlushHook.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 func (domain *collectionWriteDomain) observeIndexedFlush(docs int, bytes int64, rootRuns, roots int, duration, materialize, publish time.Duration, err error) {
@@ -2527,6 +2575,9 @@ func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWrite
 			}
 			return nil
 		}); err != nil {
+			if errors.Is(err, ErrConcurrentMutation) {
+				domain.indexedFlushRootBaseMismatches.Add(1)
+			}
 			return nil, err
 		}
 	} else {
@@ -3603,6 +3654,36 @@ func pendingIndexedUniqueValueRunMapLocked(domain *collectionWriteDomain) map[st
 	return indexedFlushUnitPendingUniqueValueRunMap(indexedFlushUnitsWithPublishing(domain.indexedPublishingUnits, domain.indexedFlushUnits), domain.uniqueValueRuns)
 }
 
+// pendingUniqueReservationIndexLocked requires domain.mu to be held. When
+// cache is true it may write the rebuilt pending unique index back to the
+// domain, so callers using only an RLock must pass cache=false.
+func pendingUniqueReservationIndexLocked(domain *collectionWriteDomain, indexName string, cache bool) *bufferedUniqueValueIndex {
+	if domain == nil || indexName == "" {
+		return nil
+	}
+	if index := domain.uniqueValueIndex[indexName]; index != nil {
+		return index
+	}
+	runs := pendingIndexedUniqueValueRunMapLocked(domain)[indexName]
+	if len(runs) == 0 {
+		return nil
+	}
+	index := rebuildBufferedUniqueValueIndexes(map[string][]memtable.Table{indexName: runs})[indexName]
+	if cache && index != nil {
+		if domain.uniqueValueIndex == nil {
+			domain.uniqueValueIndex = make(map[string]*bufferedUniqueValueIndex, 1)
+		}
+		domain.uniqueValueIndex[indexName] = index
+	}
+	return index
+}
+
+// pendingUniqueReservationProbeLocked requires domain.mu to be held.
+func pendingUniqueReservationProbeLocked(domain *collectionWriteDomain, indexName string, valuePrefix []byte) bool {
+	index := pendingUniqueReservationIndexLocked(domain, indexName, false)
+	return index != nil && index.contains(valuePrefix)
+}
+
 func rebuildBufferedPendingIndexesLocked(domain *collectionWriteDomain, collectionName string, preservePrimaryRunIndex bool) {
 	if domain == nil {
 		return
@@ -3829,7 +3910,7 @@ func (c *Collection) rejectBufferedIndexedInsertConflictsLocked(domain *collecti
 		if _, ok := uniqueIndexes[run.indexName]; !ok {
 			continue
 		}
-		pending := domain.uniqueValueIndex[run.indexName]
+		pending := pendingUniqueReservationIndexLocked(domain, run.indexName, true)
 		if pending == nil || pending.len() == 0 {
 			continue
 		}
@@ -4630,6 +4711,12 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 		}
 		return nil
 	}); err != nil {
+		if errors.Is(err, ErrConcurrentMutation) {
+			// This is distinct from revalidateBufferedWriteDomainLocked above:
+			// revalidation checks the current root before acquiring the publish
+			// pin, while this catches races observed after the pin is held.
+			domain.indexedFlushRootBaseMismatches.Add(1)
+		}
 		return nil, err
 	}
 
@@ -4685,6 +4772,7 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	defer func() {
 		if work.pin != nil {
 			_ = work.pin.Close()
+			work.pin = nil
 		}
 	}()
 	if collectionMetaUsesIndexedOverlayRoots(work.meta) {
@@ -4711,10 +4799,10 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 			publishErr = unexpectedOrderedRootCountError(work.meta.Name, len(work.rootNames), len(rootIDs))
 		}
 		completeErr := c.completePreparedIndexedFlush(work, newSystemRoot, rootIDs, publishErr, materializeElapsed+publishElapsed, materializeElapsed, publishElapsed)
-		if publishErr != nil {
-			return publishErr
+		if completeErr != nil {
+			return completeErr
 		}
-		return completeErr
+		return publishErr
 	}
 	materializeStart := time.Now()
 	ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(work.rootNames, work.flushUnit.rootRuns, work.rootBaseIDs, work.flushUnit.rootPolicies)
@@ -4733,10 +4821,10 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		publishErr = unexpectedOrderedRootCountError(work.meta.Name, len(work.rootNames), len(rootIDs))
 	}
 	completeErr := c.completePreparedIndexedFlush(work, newSystemRoot, rootIDs, publishErr, materializeElapsed+publishElapsed, materializeElapsed, publishElapsed)
-	if publishErr != nil {
-		return publishErr
+	if completeErr != nil {
+		return completeErr
 	}
-	return completeErr
+	return publishErr
 }
 
 func buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames []string, rootRuns map[string][]memtable.Table, rootPolicies map[string]backenddb.OrderedRootStoragePolicy, rootOverlays map[string][]uint64) ([]backenddb.OrderedRootDeltaBatchPublishInput, func(), error) {
@@ -4924,9 +5012,21 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	defer domain.mu.Unlock()
 	preservePrimaryRunIndex := domain.primaryRunIndex != nil
 	if publishErr != nil {
-		if removed, ok := removeIndexedPublishingWorkUnitsLocked(domain, work.units); ok {
-			domain.indexedFlushUnits = append(removed, domain.indexedFlushUnits...)
+		if errors.Is(publishErr, ErrConcurrentMutation) {
+			domain.indexedFlushRootBaseMismatches.Add(1)
 		}
+		removed, owned := removeIndexedPublishingWorkUnitsLocked(domain, work.units)
+		if !owned {
+			err := errors.Join(errIndexedFlushLostOwnership, publishErr)
+			domain.indexedFlushLostOwnership.Add(1)
+			domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, err)
+			return err
+		}
+		if len(removed) > 0 {
+			domain.indexedFlushRequeues.Add(1)
+			domain.indexedFlushRequeuedUnits.Add(uint64(len(removed)))
+		}
+		domain.indexedFlushUnits = append(removed, domain.indexedFlushUnits...)
 		rebuildBufferedPendingIndexesLocked(domain, work.meta.Name, preservePrimaryRunIndex)
 		domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, publishErr)
 		return publishErr
@@ -4943,9 +5043,9 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	}
 	oldPublishing, owned := removeIndexedPublishingWorkUnitsLocked(domain, work.units)
 	if !owned {
-		err := errors.New("collections: async indexed publish lost ownership of in-flight flush units")
-		domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, err)
-		return err
+		domain.indexedFlushLostOwnership.Add(1)
+		domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, errIndexedFlushLostOwnership)
+		return errIndexedFlushLostOwnership
 	}
 	domain.loaded = true
 	domain.meta = work.meta
@@ -10927,7 +11027,7 @@ func bufferedIndexPrefixTableLocked(domain *collectionWriteDomain, collectionNam
 		return nil, nil
 	}
 	if unique {
-		pending := domain.uniqueValueIndex[indexName]
+		pending := pendingUniqueReservationIndexLocked(domain, indexName, false)
 		if pending != nil && !pending.contains(prefix) {
 			return nil, nil
 		}
@@ -10976,13 +11076,13 @@ func bufferedIndexRangeTableLocked(domain *collectionWriteDomain, collectionName
 	if domain == nil {
 		return nil, nil
 	}
-	if domain.count == 0 || len(domain.rootRuns) == 0 {
+	if domain.count == 0 || !hasBufferedIndexedRootRuns(domain) {
 		return nil, nil
 	}
 	if domain.meta.Name != "" {
 		collectionName = domain.meta.Name
 	}
-	runs := domain.rootRuns[collectionSecondaryRootName(collectionName, indexName)]
+	runs := pendingIndexedRootRunsLocked(domain, collectionSecondaryRootName(collectionName, indexName))
 	if len(runs) == 0 {
 		return nil, nil
 	}
