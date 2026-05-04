@@ -162,13 +162,24 @@ unique checks, and update/delete planning must merge write-domain state with
 explicit newest-to-oldest precedence: current mutable runs, queued immutable
 flush units, in-flight async publishing units, then persisted roots.
 
+No-secondary-index JSON/BSON `Collection.Update` uses primary-only write-back:
+modified updates stage the final replacement primary document bytes in the
+owning collection manager's write domain. The owning manager sees staged values
+through point reads and later update callbacks before flush; another collection
+manager on the same backend is not required to see those values until they are
+published.
+
 `BufferedIndexedAsyncFlush` is a throughput feature, not a durable-at-ack
-mutation log. The current contract is flush-boundary durable: callers may treat
+mutation log. Primary-only no-index write-back has the same durability shape.
+The current contract is flush-boundary durable: callers may treat
 `Collection.Flush`, `CollectionManager.FlushAll`, backend `DB.Close`, or a
 threshold-triggered synchronous publish as durability boundaries when those
 operations return successfully. Background async publish may complete earlier,
-but acknowledged writes that remain only in mutable, queued, or publishing
-write-domain state must not be advertised as crash-durable.
+but acknowledged writes that remain only in mutable, queued, publishing, or
+no-index staged write-domain state must not be advertised as crash-durable.
+
+`DB.Checkpoint()` syncs already-published backend state but does not drain
+collection-local write-domain state.
 
 Operations that need persisted roots as planning input, including schema/index
 changes, must drain pending indexed write-domain state and wait for in-flight

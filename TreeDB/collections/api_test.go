@@ -1368,19 +1368,45 @@ func TestPrimaryOnlyNoIndexUpdateCounters(t *testing.T) {
 	if got, want := stats.PrimaryOnlyModified-statsBefore.PrimaryOnlyModified, uint64(1); got != want {
 		t.Fatalf("primary-only modified delta=%d want %d", got, want)
 	}
-	if got, want := stats.PrimaryOnlyRootPublishes-statsBefore.PrimaryOnlyRootPublishes, uint64(1); got != want {
-		t.Fatalf("primary-only root publishes delta=%d want %d", got, want)
+	if got, want := stats.PrimaryOnlyBufferedCalls-statsBefore.PrimaryOnlyBufferedCalls, uint64(1); got != want {
+		t.Fatalf("primary-only buffered calls delta=%d want %d", got, want)
 	}
-	if got, want := stats.PrimaryOnlyRootDeltaEntries-statsBefore.PrimaryOnlyRootDeltaEntries, uint64(1); got != want {
-		t.Fatalf("primary-only root delta entries delta=%d want %d", got, want)
+	if got := stats.PrimaryOnlyRootPublishes - statsBefore.PrimaryOnlyRootPublishes; got != 0 {
+		t.Fatalf("primary-only root publishes before flush delta=%d want 0", got)
 	}
-	if got := stats.PrimaryOnlyRootDeltaKeyBytes - statsBefore.PrimaryOnlyRootDeltaKeyBytes; got != uint64(len("u1")) {
+	if got := stats.PrimaryOnlyRootDeltaEntries - statsBefore.PrimaryOnlyRootDeltaEntries; got != 0 {
+		t.Fatalf("primary-only root delta entries before flush delta=%d want 0", got)
+	}
+	if got := stats.PrimaryOnlyCoalescedDocs - statsBefore.PrimaryOnlyCoalescedDocs; got != 0 {
+		t.Fatalf("primary-only coalesced docs before flush delta=%d want 0", got)
+	}
+
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush staged update: %v", err)
+	}
+	afterFlush := mgr.StatsSnapshot()
+	if got, want := afterFlush.PrimaryOnlyUpdateCalls-statsBefore.PrimaryOnlyUpdateCalls, uint64(1); got != want {
+		t.Fatalf("primary-only update calls after flush delta=%d want %d", got, want)
+	}
+	if got, want := afterFlush.PrimaryOnlyMatched-statsBefore.PrimaryOnlyMatched, uint64(1); got != want {
+		t.Fatalf("primary-only matched after flush delta=%d want %d", got, want)
+	}
+	if got, want := afterFlush.PrimaryOnlyModified-statsBefore.PrimaryOnlyModified, uint64(1); got != want {
+		t.Fatalf("primary-only modified after flush delta=%d want %d", got, want)
+	}
+	if got, want := afterFlush.PrimaryOnlyRootPublishes-statsBefore.PrimaryOnlyRootPublishes, uint64(1); got != want {
+		t.Fatalf("primary-only root publishes after flush delta=%d want %d", got, want)
+	}
+	if got, want := afterFlush.PrimaryOnlyRootDeltaEntries-statsBefore.PrimaryOnlyRootDeltaEntries, uint64(1); got != want {
+		t.Fatalf("primary-only root delta entries after flush delta=%d want %d", got, want)
+	}
+	if got := afterFlush.PrimaryOnlyRootDeltaKeyBytes - statsBefore.PrimaryOnlyRootDeltaKeyBytes; got != uint64(len("u1")) {
 		t.Fatalf("primary-only root delta key bytes delta=%d want %d", got, len("u1"))
 	}
-	if got := stats.PrimaryOnlyRootDeltaValueBytes - statsBefore.PrimaryOnlyRootDeltaValueBytes; got == 0 {
+	if got := afterFlush.PrimaryOnlyRootDeltaValueBytes - statsBefore.PrimaryOnlyRootDeltaValueBytes; got == 0 {
 		t.Fatal("primary-only root delta value bytes delta=0 want positive")
 	}
-	if got, want := stats.PrimaryOnlyCoalescedDocs-statsBefore.PrimaryOnlyCoalescedDocs, uint64(1); got != want {
+	if got, want := afterFlush.PrimaryOnlyCoalescedDocs-statsBefore.PrimaryOnlyCoalescedDocs, uint64(1); got != want {
 		t.Fatalf("primary-only coalesced docs delta=%d want %d", got, want)
 	}
 	exported := mgr.Stats()
@@ -7036,8 +7062,11 @@ func TestCollectionUpdateBatchUpdatesMultipleDocuments(t *testing.T) {
 		t.Fatalf("missing document result matched/modified: %+v", results[2])
 	}
 	after := d.State()
-	if after.CommitSeq != before.CommitSeq+1 {
-		t.Fatalf("CommitSeq after batch=%d want %d", after.CommitSeq, before.CommitSeq+1)
+	if after.CommitSeq != before.CommitSeq {
+		t.Fatalf("CommitSeq after staged no-index batch=%d want %d", after.CommitSeq, before.CommitSeq)
+	}
+	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 2 || state.tableLen < 2 || state.indexedQueued != 0 || state.indexedPublishing != 0 || state.indexedRootRuns != 0 {
+		t.Fatalf("pending state after staged no-index batch=%+v want two staged primary rows", state)
 	}
 	for _, id := range []string{"u1", "u2"} {
 		got, err := col.Get([]byte(id))
@@ -7047,6 +7076,16 @@ func TestCollectionUpdateBatchUpdatesMultipleDocuments(t *testing.T) {
 		if !bytes.Contains(got, []byte(`"count":1`)) {
 			t.Fatalf("%s document=%s want count 1", id, got)
 		}
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush staged no-index batch: %v", err)
+	}
+	flushed := d.State()
+	if flushed.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("CommitSeq after flushing staged no-index batch=%d want %d", flushed.CommitSeq, before.CommitSeq+1)
+	}
+	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 0 || state.tableLen != 0 || state.indexedQueued != 0 || state.indexedPublishing != 0 || state.indexedRootRuns != 0 {
+		t.Fatalf("pending state after flushing no-index batch=%+v want empty", state)
 	}
 }
 
@@ -7161,7 +7200,7 @@ func TestCollectionUpdateBatchRejectsUniqueConflictsWithinBatch(t *testing.T) {
 	}
 }
 
-func TestCollectionUpdateCombinerRunBatchPublishesDistinctIDsOnce(t *testing.T) {
+func TestCollectionUpdateCombinerStagesDistinctNoIndexIDsAndFlushPublishesOnce(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -7213,9 +7252,34 @@ func TestCollectionUpdateCombinerRunBatchPublishesDistinctIDsOnce(t *testing.T) 
 			t.Fatalf("request %d matched=%v modified=%v", i, result.matched, result.modified)
 		}
 	}
-	after := d.State()
-	if after.CommitSeq != before.CommitSeq+1 {
-		t.Fatalf("combined batch advanced commit seq by %d, want 1", after.CommitSeq-before.CommitSeq)
+	afterBatch := d.State()
+	if afterBatch.CommitSeq != before.CommitSeq {
+		t.Fatalf("combined no-index batch advanced commit seq by %d before flush, want 0", afterBatch.CommitSeq-before.CommitSeq)
+	}
+	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 2 || state.tableLen < 2 || state.indexedQueued != 0 || state.indexedPublishing != 0 || state.indexedRootRuns != 0 {
+		t.Fatalf("combined no-index pending state=%+v want two staged primary rows", state)
+	}
+	for _, tc := range []struct {
+		id   []byte
+		want []byte
+	}{
+		{[]byte("u1"), []byte(`{"score":1}`)},
+		{[]byte("u2"), []byte(`{"score":2}`)},
+	} {
+		got, err := col.Get(tc.id)
+		if err != nil {
+			t.Fatalf("get staged %s: %v", tc.id, err)
+		}
+		if !bytes.Equal(got, tc.want) {
+			t.Fatalf("staged %s=%q want %q", tc.id, got, tc.want)
+		}
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush combined no-index batch: %v", err)
+	}
+	afterFlush := d.State()
+	if afterFlush.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("flushed combined batch advanced commit seq by %d, want 1", afterFlush.CommitSeq-before.CommitSeq)
 	}
 }
 
@@ -7288,12 +7352,22 @@ func TestCollectionUpdateCombinerRunBatchStartingWithYieldsForQueuedPeer(t *test
 			t.Fatalf("request %d was not included in yielded batch", i)
 		}
 	}
-	after := d.State()
-	if after.CommitSeq != before.CommitSeq+1 {
-		t.Fatalf("combined batch advanced commit seq by %d, want 1", after.CommitSeq-before.CommitSeq)
+	afterBatch := d.State()
+	if afterBatch.CommitSeq != before.CommitSeq {
+		t.Fatalf("combined no-index batch advanced commit seq by %d before flush, want 0", afterBatch.CommitSeq-before.CommitSeq)
 	}
 	if yieldCalls != 1 {
 		t.Fatalf("drainYield calls=%d want exactly one bounded yield", yieldCalls)
+	}
+	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 2 || state.tableLen < 2 || state.indexedQueued != 0 || state.indexedPublishing != 0 || state.indexedRootRuns != 0 {
+		t.Fatalf("combined yielded no-index pending state=%+v want two staged primary rows", state)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush yielded combined no-index batch: %v", err)
+	}
+	afterFlush := d.State()
+	if afterFlush.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("flushed yielded combined batch advanced commit seq by %d, want 1", afterFlush.CommitSeq-before.CommitSeq)
 	}
 }
 

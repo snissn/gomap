@@ -9,7 +9,76 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-func TestCollectionUpdateBSONRejectsIDMutationBeforeRootWork(t *testing.T) {
+func TestCollectionNoIndexUpdateBSONStagesValidIDPreservingReplacement(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	doc := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(0)}})
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{doc}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	beforeState := d.State()
+	beforeRoot := collectionPrimaryRootIDForTest(t, d, "users")
+	replacement := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(1)}})
+
+	matched, modified, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+		requireBSONInt32FieldForUpdateTest(t, current, "score", 0)
+		return replacement, true, nil
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("Update matched/modified=%v/%v want true/true", matched, modified)
+	}
+	if got := d.State().CommitSeq; got != beforeState.CommitSeq {
+		t.Fatalf("staged BSON update commit seq=%d want %d", got, beforeState.CommitSeq)
+	}
+	if got := collectionPrimaryRootIDForTest(t, d, "users"); got != beforeRoot {
+		t.Fatalf("staged BSON update primary root=%d want %d", got, beforeRoot)
+	}
+	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 1 || state.tableLen < 1 {
+		t.Fatalf("pending state after staged BSON update=%+v want one row", state)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get staged BSON u1: %v", err)
+	}
+	requireBSONStringFieldForUpdateTest(t, got, "_id", "u1")
+	requireBSONInt32FieldForUpdateTest(t, got, "score", 1)
+
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush staged BSON update: %v", err)
+	}
+	if got := d.State().CommitSeq; got != beforeState.CommitSeq+1 {
+		t.Fatalf("flushed BSON update commit seq=%d want %d", got, beforeState.CommitSeq+1)
+	}
+	if got := collectionPrimaryRootIDForTest(t, d, "users"); got == beforeRoot {
+		t.Fatalf("flushed BSON update primary root stayed at %d", got)
+	}
+	got, err = col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get flushed BSON u1: %v", err)
+	}
+	requireBSONStringFieldForUpdateTest(t, got, "_id", "u1")
+	requireBSONInt32FieldForUpdateTest(t, got, "score", 1)
+}
+
+func TestCollectionUpdateBSONRejectsIDMutationBeforeStaging(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -66,9 +135,15 @@ func TestCollectionUpdateBSONRejectsIDMutationBeforeRootWork(t *testing.T) {
 	if got != nil {
 		t.Fatalf("u2 after rejected _id update=%x want nil", got)
 	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush after rejected _id update: %v", err)
+	}
+	if got := d.State().CommitSeq; got != beforeState.CommitSeq {
+		t.Fatalf("flush after rejected _id update commit seq=%d want %d", got, beforeState.CommitSeq)
+	}
 }
 
-func TestCollectionUpdateBSONRejectsInPlaceIDMutationBeforeRootWork(t *testing.T) {
+func TestCollectionUpdateBSONRejectsInPlaceIDMutationBeforeStaging(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -129,9 +204,15 @@ func TestCollectionUpdateBSONRejectsInPlaceIDMutationBeforeRootWork(t *testing.T
 	if got != nil {
 		t.Fatalf("u2 after rejected in-place _id update=%x want nil", got)
 	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush after rejected in-place _id update: %v", err)
+	}
+	if got := d.State().CommitSeq; got != beforeState.CommitSeq {
+		t.Fatalf("flush after rejected in-place _id update commit seq=%d want %d", got, beforeState.CommitSeq)
+	}
 }
 
-func TestCollectionUpdateBSONRejectsMissingIDBeforeRootWork(t *testing.T) {
+func TestCollectionUpdateBSONRejectsMissingIDBeforeStaging(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -180,6 +261,34 @@ func TestCollectionUpdateBSONRejectsMissingIDBeforeRootWork(t *testing.T) {
 	}
 	if !bytes.Equal(got, doc) {
 		t.Fatalf("u1 after rejected missing _id update=%x want original %x", got, doc)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush after rejected missing _id update: %v", err)
+	}
+	if got := d.State().CommitSeq; got != beforeState.CommitSeq {
+		t.Fatalf("flush after rejected missing _id update commit seq=%d want %d", got, beforeState.CommitSeq)
+	}
+}
+
+func requireBSONStringFieldForUpdateTest(t *testing.T, raw []byte, field, want string) {
+	t.Helper()
+	value := bson.Raw(raw).Lookup(field)
+	if value.Type != bson.TypeString {
+		t.Fatalf("BSON field %q type=%s want string", field, value.Type)
+	}
+	if got := value.StringValue(); got != want {
+		t.Fatalf("BSON field %q=%q want %q", field, got, want)
+	}
+}
+
+func requireBSONInt32FieldForUpdateTest(t *testing.T, raw []byte, field string, want int32) {
+	t.Helper()
+	value := bson.Raw(raw).Lookup(field)
+	if value.Type != bson.TypeInt32 {
+		t.Fatalf("BSON field %q type=%s want int32", field, value.Type)
+	}
+	if got := value.Int32(); got != want {
+		t.Fatalf("BSON field %q=%d want %d", field, got, want)
 	}
 }
 
