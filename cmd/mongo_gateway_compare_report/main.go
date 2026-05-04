@@ -1074,12 +1074,12 @@ func renderWriterSweepCounterTable(b *strings.Builder, cells []cellComparison) {
 	for _, cmp := range rows {
 		writers, _ := concurrentUpdateWriters(cmp.Name)
 		cell := findCell(cells, cmp.Cell)
-		fmt.Fprintf(b, "| %d | %d | `%s` | %s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | `%s` |\n",
-			cmp.Cell.Documents,
-			cmp.Cell.SecondaryIndexes,
-			cmp.Cell.TreeDBConfig,
+		row := []string{
+			strconv.Itoa(cmp.Cell.Documents),
+			strconv.Itoa(cmp.Cell.SecondaryIndexes),
+			"`" + cmp.Cell.TreeDBConfig + "`",
 			formatConfig(cmp.MongoConfig),
-			writers,
+			strconv.Itoa(writers),
 			formatPhaseOps(cmp.HasTreeDB, cmp.TreeDBPhase.OpsPerSecond),
 			formatPhaseOps(cmp.HasMongo, cmp.MongoPhase.OpsPerSecond),
 			formatPhaseLatency(cmp.HasTreeDB, cmp.TreeDBPhase.LatencyMicros.P95),
@@ -1108,8 +1108,9 @@ func renderWriterSweepCounterTable(b *strings.Builder, cells []cellComparison) {
 			formatPhaseMetric(cmp.TreeDBPhase, "primary_root_delta_entries/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "primary_root_delta_bytes/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "primary_only_coalesced_docs/publish"),
-			cell.TreeDB.DisplayRawPath,
-		)
+			"`" + cell.TreeDB.DisplayRawPath + "`",
+		}
+		b.WriteString("| " + strings.Join(row, " | ") + " |\n")
 	}
 	b.WriteString("\n")
 }

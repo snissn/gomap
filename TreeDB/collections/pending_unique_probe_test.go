@@ -26,8 +26,12 @@ func TestPendingUniqueReservationProbeIncludesPublishingQueuedAndMutable(t *test
 			indexName: {collectionTestUniqueRunTable(mutablePrefix)},
 		},
 	}
+	domain.mu.Lock()
 	domain.uniqueValueIndex = rebuildBufferedUniqueValueIndexes(pendingIndexedUniqueValueRunMapLocked(domain))
+	domain.mu.Unlock()
 
+	domain.mu.RLock()
+	defer domain.mu.RUnlock()
 	for _, tt := range []struct {
 		name   string
 		prefix []byte
@@ -55,6 +59,8 @@ func TestPendingUniqueReservationIndexCachesWriteLockRebuild(t *testing.T) {
 			},
 		}},
 	}
+	domain.mu.Lock()
+	defer domain.mu.Unlock()
 	index := pendingUniqueReservationIndexLocked(domain, indexName, true)
 	if index == nil || !index.contains(prefix) {
 		t.Fatal("rebuilt pending unique index missed queued reservation")
