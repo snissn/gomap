@@ -1115,6 +1115,7 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 		UpdateCombineFallbackRequests:  after.UpdateCombineFallbackRequests - before.UpdateCombineFallbackRequests,
 		IndexedFlushCalls:              after.IndexedFlushCalls - before.IndexedFlushCalls,
 		IndexedFlushErrors:             after.IndexedFlushErrors - before.IndexedFlushErrors,
+		IndexedFlushForcedDrains:       after.IndexedFlushForcedDrains - before.IndexedFlushForcedDrains,
 		IndexedFlushUnits:              after.IndexedFlushUnits - before.IndexedFlushUnits,
 		IndexedFlushDocs:               after.IndexedFlushDocs - before.IndexedFlushDocs,
 		IndexedFlushBytes:              after.IndexedFlushBytes - before.IndexedFlushBytes,
@@ -1123,6 +1124,7 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 		IndexedFlushDuration:           after.IndexedFlushDuration - before.IndexedFlushDuration,
 		IndexedFlushMaterialize:        after.IndexedFlushMaterialize - before.IndexedFlushMaterialize,
 		IndexedFlushPublish:            after.IndexedFlushPublish - before.IndexedFlushPublish,
+		IndexedAsyncFlushWait:          after.IndexedAsyncFlushWait - before.IndexedAsyncFlushWait,
 		RootDeltaPlanPrimaryRoots:      after.RootDeltaPlanPrimaryRoots - before.RootDeltaPlanPrimaryRoots,
 		RootDeltaPlanTemplateRoots:     after.RootDeltaPlanTemplateRoots - before.RootDeltaPlanTemplateRoots,
 		RootDeltaPlanIndexStateRoots:   after.RootDeltaPlanIndexStateRoots - before.RootDeltaPlanIndexStateRoots,
@@ -1205,6 +1207,7 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateBatchUniqueCheckSkips:    10,
 		IndexedFlushCalls:              3,
 		IndexedFlushErrors:             1,
+		IndexedFlushForcedDrains:       2,
 		IndexedFlushUnits:              6,
 		IndexedFlushDocs:               300,
 		IndexedFlushBytes:              9000,
@@ -1213,6 +1216,7 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		IndexedFlushDuration:           30 * time.Millisecond,
 		IndexedFlushMaterialize:        12 * time.Millisecond,
 		IndexedFlushPublish:            18 * time.Millisecond,
+		IndexedAsyncFlushWait:          2 * time.Millisecond,
 		RootDeltaPlanPrimaryRoots:      3,
 		RootDeltaPlanTemplateRoots:     2,
 		RootDeltaPlanIndexStateRoots:   1,
@@ -1248,6 +1252,7 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateBatchUniqueCheckSkips:    19,
 		IndexedFlushCalls:              8,
 		IndexedFlushErrors:             2,
+		IndexedFlushForcedDrains:       5,
 		IndexedFlushUnits:              16,
 		IndexedFlushDocs:               900,
 		IndexedFlushBytes:              27000,
@@ -1256,6 +1261,7 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		IndexedFlushDuration:           90 * time.Millisecond,
 		IndexedFlushMaterialize:        30 * time.Millisecond,
 		IndexedFlushPublish:            60 * time.Millisecond,
+		IndexedAsyncFlushWait:          11 * time.Millisecond,
 		RootDeltaPlanPrimaryRoots:      8,
 		RootDeltaPlanTemplateRoots:     5,
 		RootDeltaPlanIndexStateRoots:   4,
@@ -1314,10 +1320,11 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 	if got.UpdateBatchUniqueCheckSkips != 9 {
 		t.Fatalf("UpdateBatchUniqueCheckSkips=%d want 9", got.UpdateBatchUniqueCheckSkips)
 	}
-	if got.IndexedFlushCalls != 5 || got.IndexedFlushErrors != 1 || got.IndexedFlushUnits != 10 || got.IndexedFlushDocs != 600 || got.IndexedFlushBytes != 18000 || got.IndexedFlushRootRuns != 180 || got.IndexedFlushRoots != 15 || got.IndexedFlushDuration != 60*time.Millisecond || got.IndexedFlushMaterialize != 18*time.Millisecond || got.IndexedFlushPublish != 42*time.Millisecond {
-		t.Fatalf("indexed flush delta calls/errors/units/docs/bytes/rootRuns/roots/duration/materialize/publish=%d/%d/%d/%d/%d/%d/%d/%s/%s/%s want 5/1/10/600/18000/180/15/60ms/18ms/42ms",
+	if got.IndexedFlushCalls != 5 || got.IndexedFlushErrors != 1 || got.IndexedFlushForcedDrains != 3 || got.IndexedFlushUnits != 10 || got.IndexedFlushDocs != 600 || got.IndexedFlushBytes != 18000 || got.IndexedFlushRootRuns != 180 || got.IndexedFlushRoots != 15 || got.IndexedFlushDuration != 60*time.Millisecond || got.IndexedFlushMaterialize != 18*time.Millisecond || got.IndexedFlushPublish != 42*time.Millisecond || got.IndexedAsyncFlushWait != 9*time.Millisecond {
+		t.Fatalf("indexed flush delta calls/errors/forced/units/docs/bytes/rootRuns/roots/duration/materialize/publish/wait=%d/%d/%d/%d/%d/%d/%d/%d/%s/%s/%s/%s want 5/1/3/10/600/18000/180/15/60ms/18ms/42ms/9ms",
 			got.IndexedFlushCalls,
 			got.IndexedFlushErrors,
+			got.IndexedFlushForcedDrains,
 			got.IndexedFlushUnits,
 			got.IndexedFlushDocs,
 			got.IndexedFlushBytes,
@@ -1326,6 +1333,7 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 			got.IndexedFlushDuration,
 			got.IndexedFlushMaterialize,
 			got.IndexedFlushPublish,
+			got.IndexedAsyncFlushWait,
 		)
 	}
 	if got.RootDeltaPlanPrimaryRoots != 5 || got.RootDeltaPlanTemplateRoots != 3 || got.RootDeltaPlanIndexStateRoots != 3 || got.RootDeltaPlanSecondaryRoots != 10 || got.RootDeltaPlanEntries != 600 || got.RootDeltaPlanKeyBytes != 2400 || got.RootDeltaPlanValueBytes != 4800 || got.RootDeltaPlanTombstones != 60 {
@@ -1376,6 +1384,7 @@ func TestReportCollectionManagerUpdateStatsIncludesIndexedFlushMetrics(t *testin
 	stats := collections.CollectionManagerStats{
 		IndexedFlushCalls:              5,
 		IndexedFlushErrors:             1,
+		IndexedFlushForcedDrains:       2,
 		IndexedFlushUnits:              10,
 		IndexedFlushDocs:               600,
 		IndexedFlushBytes:              18000,
@@ -1384,6 +1393,7 @@ func TestReportCollectionManagerUpdateStatsIncludesIndexedFlushMetrics(t *testin
 		IndexedFlushDuration:           60 * time.Millisecond,
 		IndexedFlushMaterialize:        18 * time.Millisecond,
 		IndexedFlushPublish:            42 * time.Millisecond,
+		IndexedAsyncFlushWait:          6 * time.Millisecond,
 		RootDeltaPlanPrimaryRoots:      5,
 		RootDeltaPlanTemplateRoots:     2,
 		RootDeltaPlanIndexStateRoots:   3,
@@ -1421,12 +1431,16 @@ func TestReportCollectionManagerUpdateStatsIncludesIndexedFlushMetrics(t *testin
 		"indexed_flush_roots/call":            3,
 		"indexed_flush_roots/doc":             0.025,
 		"indexed_flush_errors":                1,
+		"indexed_flush_forced_drains":         2,
+		"indexed_flush_forced_drains/doc":     1.0 / 300.0,
 		"indexed_flush_ns/call":               12_000_000,
 		"indexed_flush_ns/doc":                100_000,
 		"indexed_flush_materialize_ns/call":   3_600_000,
 		"indexed_flush_materialize_ns/doc":    30_000,
 		"indexed_flush_publish_ns/call":       8_400_000,
 		"indexed_flush_publish_ns/doc":        70_000,
+		"indexed_async_flush_wait_ns":         6_000_000,
+		"indexed_async_flush_wait_ns/doc":     10_000,
 		"root_delta_plan_entries/doc":         1,
 		"root_delta_plan_key_bytes/doc":       4,
 		"root_delta_plan_value_bytes/doc":     8,
@@ -1524,6 +1538,10 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 		if stats.IndexedFlushErrors > 0 {
 			b.ReportMetric(float64(stats.IndexedFlushErrors), "indexed_flush_errors")
 		}
+		if stats.IndexedFlushForcedDrains > 0 {
+			b.ReportMetric(float64(stats.IndexedFlushForcedDrains), "indexed_flush_forced_drains")
+			b.ReportMetric(float64(stats.IndexedFlushForcedDrains)/float64(docs), "indexed_flush_forced_drains/doc")
+		}
 		if stats.IndexedFlushDuration > 0 {
 			b.ReportMetric(float64(stats.IndexedFlushDuration.Nanoseconds())/float64(stats.IndexedFlushCalls), "indexed_flush_ns/call")
 			if stats.IndexedFlushDocs > 0 {
@@ -1542,6 +1560,10 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 				b.ReportMetric(float64(stats.IndexedFlushPublish.Nanoseconds())/float64(stats.IndexedFlushDocs), "indexed_flush_publish_ns/doc")
 			}
 		}
+	}
+	if stats.IndexedAsyncFlushWait > 0 {
+		b.ReportMetric(float64(stats.IndexedAsyncFlushWait.Nanoseconds()), "indexed_async_flush_wait_ns")
+		b.ReportMetric(float64(stats.IndexedAsyncFlushWait.Nanoseconds())/float64(docs), "indexed_async_flush_wait_ns/doc")
 	}
 	if stats.OverlayMutableDocuments > 0 {
 		b.ReportMetric(float64(stats.OverlayMutableDocuments), "overlay_mutable_docs")

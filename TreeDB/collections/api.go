@@ -422,9 +422,11 @@ type CollectionManagerStats struct {
 	IndexedAutoFlushes             uint64
 	IndexedAsyncFlushScheduled     uint64
 	IndexedAsyncFlushBackpressure  uint64
+	IndexedAsyncFlushWait          time.Duration
 	IndexedAsyncFlushErrors        uint64
 	IndexedFlushCalls              uint64
 	IndexedFlushErrors             uint64
+	IndexedFlushForcedDrains       uint64
 	IndexedFlushUnits              uint64
 	IndexedFlushDocs               uint64
 	IndexedFlushBytes              uint64
@@ -766,9 +768,11 @@ type collectionWriteDomain struct {
 	indexedAutoFlushes               atomic.Uint64
 	indexedAsyncFlushScheduled       atomic.Uint64
 	indexedAsyncFlushBackpressure    atomic.Uint64
+	indexedAsyncFlushWaitTotalNs     atomic.Uint64
 	indexedAsyncFlushErrors          atomic.Uint64
 	indexedFlushCalls                atomic.Uint64
 	indexedFlushErrors               atomic.Uint64
+	indexedFlushForcedDrains         atomic.Uint64
 	indexedFlushUnitsTotal           atomic.Uint64
 	indexedFlushDocs                 atomic.Uint64
 	indexedFlushBytes                atomic.Uint64
@@ -1010,9 +1014,11 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.indexed_stage.auto_flushes_total"] = fmt.Sprintf("%d", stats.IndexedAutoFlushes)
 	out["treedb.collections.write_domain.indexed_async_flush.scheduled_total"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushScheduled)
 	out["treedb.collections.write_domain.indexed_async_flush.backpressure_sync_total"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushBackpressure)
+	out["treedb.collections.write_domain.indexed_async_flush.wait_ns_total"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushWait.Nanoseconds())
 	out["treedb.collections.write_domain.indexed_async_flush.errors_total"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushErrors)
 	out["treedb.collections.write_domain.indexed_flush.calls_total"] = fmt.Sprintf("%d", stats.IndexedFlushCalls)
 	out["treedb.collections.write_domain.indexed_flush.errors_total"] = fmt.Sprintf("%d", stats.IndexedFlushErrors)
+	out["treedb.collections.write_domain.indexed_flush.forced_drains_total"] = fmt.Sprintf("%d", stats.IndexedFlushForcedDrains)
 	out["treedb.collections.write_domain.indexed_flush.units_total"] = fmt.Sprintf("%d", stats.IndexedFlushUnits)
 	out["treedb.collections.write_domain.indexed_flush.docs_total"] = fmt.Sprintf("%d", stats.IndexedFlushDocs)
 	out["treedb.collections.write_domain.indexed_flush.bytes_total"] = fmt.Sprintf("%d", stats.IndexedFlushBytes)
@@ -1203,9 +1209,11 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.IndexedAutoFlushes += other.IndexedAutoFlushes
 	s.IndexedAsyncFlushScheduled += other.IndexedAsyncFlushScheduled
 	s.IndexedAsyncFlushBackpressure += other.IndexedAsyncFlushBackpressure
+	s.IndexedAsyncFlushWait += other.IndexedAsyncFlushWait
 	s.IndexedAsyncFlushErrors += other.IndexedAsyncFlushErrors
 	s.IndexedFlushCalls += other.IndexedFlushCalls
 	s.IndexedFlushErrors += other.IndexedFlushErrors
+	s.IndexedFlushForcedDrains += other.IndexedFlushForcedDrains
 	s.IndexedFlushUnits += other.IndexedFlushUnits
 	s.IndexedFlushDocs += other.IndexedFlushDocs
 	s.IndexedFlushBytes += other.IndexedFlushBytes
@@ -1317,9 +1325,11 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.IndexedAutoFlushes = domain.indexedAutoFlushes.Load()
 	stats.IndexedAsyncFlushScheduled = domain.indexedAsyncFlushScheduled.Load()
 	stats.IndexedAsyncFlushBackpressure = domain.indexedAsyncFlushBackpressure.Load()
+	stats.IndexedAsyncFlushWait = durationFromAtomicNs(domain.indexedAsyncFlushWaitTotalNs.Load())
 	stats.IndexedAsyncFlushErrors = domain.indexedAsyncFlushErrors.Load()
 	stats.IndexedFlushCalls = domain.indexedFlushCalls.Load()
 	stats.IndexedFlushErrors = domain.indexedFlushErrors.Load()
+	stats.IndexedFlushForcedDrains = domain.indexedFlushForcedDrains.Load()
 	stats.IndexedFlushUnits = domain.indexedFlushUnitsTotal.Load()
 	stats.IndexedFlushDocs = domain.indexedFlushDocs.Load()
 	stats.IndexedFlushBytes = domain.indexedFlushBytes.Load()
@@ -1635,14 +1645,21 @@ func (domain *collectionWriteDomain) waitIndexedAsyncFlush() {
 	if domain == nil {
 		return
 	}
+	var waitStart time.Time
 	domain.indexedAsyncMu.Lock()
 	if domain.indexedAsyncCond == nil {
 		domain.indexedAsyncCond = sync.NewCond(&domain.indexedAsyncMu)
 	}
 	for domain.indexedAsyncRun {
+		if waitStart.IsZero() {
+			waitStart = time.Now()
+		}
 		domain.indexedAsyncCond.Wait()
 	}
 	domain.indexedAsyncMu.Unlock()
+	if !waitStart.IsZero() {
+		domain.indexedAsyncFlushWaitTotalNs.Add(durationToAtomicNs(time.Since(waitStart)))
+	}
 }
 
 func (domain *collectionWriteDomain) indexedAsyncFlushRunning() bool {
@@ -1701,6 +1718,13 @@ func (domain *collectionWriteDomain) observeIndexedFlush(units, docs int, bytes 
 	domain.indexedFlushDurationTotalNs.Add(durationToAtomicNs(duration))
 	domain.indexedFlushMaterializeTotalNs.Add(durationToAtomicNs(materialize))
 	domain.indexedFlushPublishTotalNs.Add(durationToAtomicNs(publish))
+}
+
+func (domain *collectionWriteDomain) observeIndexedFlushForcedDrain() {
+	if domain == nil {
+		return
+	}
+	domain.indexedFlushForcedDrains.Add(1)
 }
 
 type collectionRootDeltaPlanStats struct {
@@ -1862,6 +1886,9 @@ func flushCollectionWriteDomain(db *backenddb.DB, domain *collectionWriteDomain)
 	domain.waitIndexedAsyncFlush()
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
+	if hasBufferedIndexedRootRuns(domain) {
+		domain.observeIndexedFlushForcedDrain()
+	}
 	return collection.flushBufferedWritesLocked(domain)
 }
 
@@ -2777,6 +2804,9 @@ func (c *Collection) flushBufferedWrites() error {
 			domain.mu.Unlock()
 			continue
 		}
+		if hasBufferedIndexedRootRuns(domain) {
+			domain.observeIndexedFlushForcedDrain()
+		}
 		err := c.flushBufferedWritesLocked(domain)
 		domain.mu.Unlock()
 		return err
@@ -3402,6 +3432,7 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 		if opts.BufferedIndexedAsyncFlushMaxQueuedUnits > 0 && len(domain.indexedFlushUnits) >= opts.BufferedIndexedAsyncFlushMaxQueuedUnits {
 			if len(domain.indexedPublishingUnits) == 0 {
 				domain.indexedAsyncFlushBackpressure.Add(1)
+				domain.observeIndexedFlushForcedDrain()
 				flushStart := time.Now()
 				err := c.flushBufferedIndexedLocked(domain)
 				return collectionObservedElapsedSince(flushStart), 0, 0, err
@@ -3425,6 +3456,7 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 					return 0, lockReleased, relockWait, nil
 				}
 				if len(domain.indexedPublishingUnits) == 0 {
+					domain.observeIndexedFlushForcedDrain()
 					flushStart = time.Now()
 					err := c.flushBufferedIndexedLocked(domain)
 					return collectionObservedElapsedSince(flushStart), lockReleased, relockWait, err
@@ -3432,6 +3464,7 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 			}
 			flushStart = time.Now()
 			if !c.scheduleIndexedAsyncFlush(domain) && len(domain.indexedPublishingUnits) == 0 {
+				domain.observeIndexedFlushForcedDrain()
 				err := c.flushBufferedIndexedLocked(domain)
 				return collectionObservedElapsedSince(flushStart), lockReleased, relockWait, err
 			}
@@ -3439,6 +3472,7 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 		}
 		flushStart := time.Now()
 		if !c.scheduleIndexedAsyncFlush(domain) && len(domain.indexedPublishingUnits) == 0 {
+			domain.observeIndexedFlushForcedDrain()
 			err := c.flushBufferedIndexedLocked(domain)
 			return collectionObservedElapsedSince(flushStart), 0, 0, err
 		}
