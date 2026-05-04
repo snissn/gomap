@@ -1259,7 +1259,7 @@ func TestRenderWriterSweepCounterTableUsesPhaseMetrics(t *testing.T) {
 			"root_delta_plan_value_bytes/doc":       20,
 			"root_delta_plan_tombstones/doc":        0.1,
 			"affected_primary_roots/doc":            0.5,
-			"affected_secondary_roots/doc":          0.25,
+			"affected_secondary_roots/doc":          0,
 			"primary_root_publishes/doc":            0.5,
 			"primary_root_delta_entries/doc":        1,
 			"primary_root_delta_bytes/doc":          42,
@@ -1294,7 +1294,7 @@ func TestRenderWriterSweepCounterTableUsesPhaseMetrics(t *testing.T) {
 	for _, want := range []string{
 		"## 0-Index Writer Sweep Counters",
 		"publish calls/doc",
-		"| 1000 | 0 | `treedb_0idx` | `mongo_baseline` | 8 | 1200 | 2400 | 750 | 500 | 800 | 800 | 0.50 | 0.50 | 1.00 | 2500 | 2.00 | 0.25 | 64.0 | 128 | 0.12 | 4.00 | 32.0 | 0.75 | 1.00 | 10.0 | 20.0 | 0.10 | 0.50 | 0.25 | 0.50 | 1.00 | 42.0 | 0 | `/tmp/treedb.json` |",
+		"| 1000 | 0 | `treedb_0idx` | `mongo_baseline` | 8 | 1200 | 2400 | 750 | 500 | 800 | 800 | 0.50 | 0.50 | 1.00 | 2500 | 2.00 | 0.25 | 64.0 | 128 | 0.12 | 4.00 | 32.0 | 0.75 | 1.00 | 10.0 | 20.0 | 0.10 | 0.50 | 0 | 0.50 | 1.00 | 42.0 | 0 | `/tmp/treedb.json` |",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("writer sweep table missing %q:\n%s", want, rendered)

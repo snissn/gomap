@@ -87,6 +87,17 @@ def delta_count(delta, keys):
     return fmt(total)
 
 
+def load_result(raw_path):
+    try:
+        with open(raw_path) as raw_file:
+            return json.load(raw_file)
+    except OSError as err:
+        print(f"warning: skipping raw JSON {raw_path}: {err}", file=sys.stderr)
+    except json.JSONDecodeError as err:
+        print(f"warning: skipping raw JSON {raw_path}: {err}", file=sys.stderr)
+    return None
+
+
 def write_writer_metrics(out_dir, matrix_path, writer_metrics_path):
     with open(writer_metrics_path, "w", newline="") as out_file:
         writer = csv.DictWriter(out_file, fieldnames=COLUMNS, delimiter="\t", lineterminator="\n")
@@ -98,8 +109,9 @@ def write_writer_metrics(out_dir, matrix_path, writer_metrics_path):
                 if not raw_json:
                     continue
                 raw_path = raw_json if os.path.isabs(raw_json) else os.path.join(out_dir, raw_json)
-                with open(raw_path) as raw_file:
-                    result = json.load(raw_file)
+                result = load_result(raw_path)
+                if result is None:
+                    continue
                 target = row.get("target") or result.get("target", "")
                 config = row.get("config", "")
                 documents = row.get("documents") or str(result.get("documents", ""))
