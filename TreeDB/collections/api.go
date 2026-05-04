@@ -4768,10 +4768,10 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 			publishErr = unexpectedOrderedRootCountError(work.meta.Name, len(work.rootNames), len(rootIDs))
 		}
 		completeErr := c.completePreparedIndexedFlush(work, newSystemRoot, rootIDs, publishErr, materializeElapsed+publishElapsed, materializeElapsed, publishElapsed)
-		if publishErr != nil {
-			return publishErr
+		if completeErr != nil {
+			return completeErr
 		}
-		return completeErr
+		return publishErr
 	}
 	materializeStart := time.Now()
 	ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(work.rootNames, work.flushUnit.rootRuns, work.rootBaseIDs, work.flushUnit.rootPolicies)
@@ -4790,10 +4790,10 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		publishErr = unexpectedOrderedRootCountError(work.meta.Name, len(work.rootNames), len(rootIDs))
 	}
 	completeErr := c.completePreparedIndexedFlush(work, newSystemRoot, rootIDs, publishErr, materializeElapsed+publishElapsed, materializeElapsed, publishElapsed)
-	if publishErr != nil {
-		return publishErr
+	if completeErr != nil {
+		return completeErr
 	}
-	return completeErr
+	return publishErr
 }
 
 func buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames []string, rootRuns map[string][]memtable.Table, rootPolicies map[string]backenddb.OrderedRootStoragePolicy, rootOverlays map[string][]uint64) ([]backenddb.OrderedRootDeltaBatchPublishInput, func(), error) {
@@ -4981,13 +4981,21 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	defer domain.mu.Unlock()
 	preservePrimaryRunIndex := domain.primaryRunIndex != nil
 	if publishErr != nil {
-		if removed, ok := removeIndexedPublishingWorkUnitsLocked(domain, work.units); ok {
-			if len(removed) > 0 {
-				domain.indexedFlushRequeues.Add(1)
-				domain.indexedFlushRequeuedUnits.Add(uint64(len(removed)))
-			}
-			domain.indexedFlushUnits = append(removed, domain.indexedFlushUnits...)
+		if errors.Is(publishErr, ErrConcurrentMutation) {
+			domain.indexedFlushRootBaseMismatches.Add(1)
 		}
+		removed, owned := removeIndexedPublishingWorkUnitsLocked(domain, work.units)
+		if !owned {
+			err := errors.Join(errIndexedFlushLostOwnership, publishErr)
+			domain.indexedFlushLostOwnership.Add(1)
+			domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, err)
+			return err
+		}
+		if len(removed) > 0 {
+			domain.indexedFlushRequeues.Add(1)
+			domain.indexedFlushRequeuedUnits.Add(uint64(len(removed)))
+		}
+		domain.indexedFlushUnits = append(removed, domain.indexedFlushUnits...)
 		rebuildBufferedPendingIndexesLocked(domain, work.meta.Name, preservePrimaryRunIndex)
 		domain.observeIndexedFlush(work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, publishErr)
 		return publishErr
