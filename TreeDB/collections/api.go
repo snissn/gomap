@@ -76,6 +76,7 @@ var (
 	ErrUniqueIndexConflict = errors.New("collections: unique index conflict")
 	ErrConcurrentMutation  = errors.New("collections: concurrent mutation")
 
+	errBSONIDMutation                          = errors.New("collections: update replacement cannot modify _id")
 	errCollectionManagerNil                    = errors.New("collections: collection manager is nil")
 	errCollectionNil                           = errors.New("collections: collection is nil")
 	errCollectionDBNil                         = errors.New("collections: db is nil")
@@ -311,9 +312,7 @@ type CollectionSecondaryRunStats struct {
 }
 
 // CollectionUpdateStats captures phase timings and counters from the most
-// recent successful UpdateBatch-style call on a Collection handle. Individual
-// Update calls that fall back to the legacy direct path are intentionally not
-// represented here yet; the write combiner and UpdateBatch path use this shape.
+// recent successful Update/UpdateBatch-style call on a Collection handle.
 type CollectionUpdateStats struct {
 	Items                int
 	Matched              int
@@ -361,11 +360,12 @@ type CollectionUpdateStats struct {
 	SecondaryRuns          []CollectionUpdateSecondaryRunStats
 	IndexValueChanges      int
 	IndexValueUnchanged    int
+	MaskFallbacks          int
 	UniqueIndexChecks      int
 	UniqueIndexCheckSkips  int
-	// IndexStats is populated only when detailed update-batch stats are enabled
-	// and the collection has at most len(IndexStats) index runtimes. The first
-	// IndexStatsCount entries are valid.
+	// IndexStats is populated for the first inline index runtimes when detailed
+	// update-batch stats are enabled. The first IndexStatsCount entries are
+	// valid; remaining indexes are represented only by aggregate counters.
 	IndexStatsCount int
 	IndexStats      [maxCollectionUpdateInlineIndexStats]CollectionUpdateIndexStats
 }
@@ -497,6 +497,7 @@ type CollectionManagerStats struct {
 	UpdateBatchSecondaryKeyBytes   uint64
 	UpdateBatchIndexValueChanges   uint64
 	UpdateBatchIndexValueUnchanged uint64
+	UpdateBatchMaskFallbacks       uint64
 	UpdateBatchUniqueChecks        uint64
 	UpdateBatchUniqueCheckSkips    uint64
 	UpdateBatchIndexStatsCount     int
@@ -844,6 +845,7 @@ type collectionWriteDomain struct {
 	updateBatchSecondaryKeyBytes     atomic.Uint64
 	updateBatchIndexValueChanges     atomic.Uint64
 	updateBatchIndexValueUnchanged   atomic.Uint64
+	updateBatchMaskFallbacks         atomic.Uint64
 	updateBatchUniqueChecks          atomic.Uint64
 	updateBatchUniqueCheckSkips      atomic.Uint64
 	updateBatchDetailedStats         atomic.Bool
@@ -965,6 +967,26 @@ func cloneCollectionUpdateStats(stats CollectionUpdateStats) CollectionUpdateSta
 		stats.SecondaryRuns = append([]CollectionUpdateSecondaryRunStats(nil), stats.SecondaryRuns...)
 	}
 	return stats
+}
+
+func initCollectionUpdateIndexStats(stats *CollectionUpdateStats, collectionName string, runtimes []indexRuntime, enabled bool) {
+	if stats == nil || !enabled || len(runtimes) == 0 {
+		return
+	}
+	count := len(runtimes)
+	if count > len(stats.IndexStats) {
+		count = len(stats.IndexStats)
+	}
+	stats.IndexStatsCount = count
+	for i := 0; i < count; i++ {
+		runtime := runtimes[i]
+		stats.IndexStats[i] = CollectionUpdateIndexStats{
+			CollectionName: collectionName,
+			IndexName:      runtime.def.name,
+			IndexOrdinal:   i,
+			Unique:         runtime.def.unique,
+		}
+	}
 }
 
 func (c *Collection) updateBatchDetailedStatsEnabled() bool {
@@ -1094,6 +1116,7 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.update_batch.secondary_key_bytes_total"] = fmt.Sprintf("%d", stats.UpdateBatchSecondaryKeyBytes)
 	out["treedb.collections.write_domain.update_batch.index_value_changes_total"] = fmt.Sprintf("%d", stats.UpdateBatchIndexValueChanges)
 	out["treedb.collections.write_domain.update_batch.index_value_unchanged_total"] = fmt.Sprintf("%d", stats.UpdateBatchIndexValueUnchanged)
+	out["treedb.collections.write_domain.update_batch.changed_index_fast_mask_fallbacks_total"] = fmt.Sprintf("%d", stats.UpdateBatchMaskFallbacks)
 	out["treedb.collections.write_domain.update_batch.unique_checks_total"] = fmt.Sprintf("%d", stats.UpdateBatchUniqueChecks)
 	out["treedb.collections.write_domain.update_batch.unique_check_skips_total"] = fmt.Sprintf("%d", stats.UpdateBatchUniqueCheckSkips)
 	for i := 0; i < stats.UpdateBatchIndexStatsCount && i < len(stats.UpdateBatchIndexStats); i++ {
@@ -1295,6 +1318,7 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.UpdateBatchSecondaryKeyBytes += other.UpdateBatchSecondaryKeyBytes
 	s.UpdateBatchIndexValueChanges += other.UpdateBatchIndexValueChanges
 	s.UpdateBatchIndexValueUnchanged += other.UpdateBatchIndexValueUnchanged
+	s.UpdateBatchMaskFallbacks += other.UpdateBatchMaskFallbacks
 	s.UpdateBatchUniqueChecks += other.UpdateBatchUniqueChecks
 	s.UpdateBatchUniqueCheckSkips += other.UpdateBatchUniqueCheckSkips
 	for i := 0; i < other.UpdateBatchIndexStatsCount && i < len(other.UpdateBatchIndexStats); i++ {
@@ -1413,6 +1437,7 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.UpdateBatchSecondaryKeyBytes = domain.updateBatchSecondaryKeyBytes.Load()
 	stats.UpdateBatchIndexValueChanges = domain.updateBatchIndexValueChanges.Load()
 	stats.UpdateBatchIndexValueUnchanged = domain.updateBatchIndexValueUnchanged.Load()
+	stats.UpdateBatchMaskFallbacks = domain.updateBatchMaskFallbacks.Load()
 	stats.UpdateBatchUniqueChecks = domain.updateBatchUniqueChecks.Load()
 	stats.UpdateBatchUniqueCheckSkips = domain.updateBatchUniqueCheckSkips.Load()
 	for i := 0; i < stats.UpdateBatchIndexStatsCount; i++ {
@@ -1539,6 +1564,9 @@ func (domain *collectionWriteDomain) observeUpdateBatchStats(stats CollectionUpd
 	}
 	if stats.IndexValueUnchanged > 0 {
 		domain.updateBatchIndexValueUnchanged.Add(uint64(stats.IndexValueUnchanged))
+	}
+	if stats.MaskFallbacks > 0 {
+		domain.updateBatchMaskFallbacks.Add(uint64(stats.MaskFallbacks))
 	}
 	if stats.UniqueIndexChecks > 0 {
 		domain.updateBatchUniqueChecks.Add(uint64(stats.UniqueIndexChecks))
@@ -7373,7 +7401,7 @@ func validateBSONReplacementPreservesID(current, replacement []byte, opts collec
 		return nil
 	}
 	if currentID.IsZero() || replacementID.IsZero() || !currentID.Equal(replacementID) {
-		return errors.New("collections: update replacement cannot modify _id")
+		return errBSONIDMutation
 	}
 	return nil
 }
@@ -7437,7 +7465,7 @@ func validateBSONReplacementPreservesIDSnapshot(currentID bsonIDSnapshot, replac
 		return nil
 	}
 	if currentMissing || replacementMissing || !currentID.equalRawValue(replacementID) {
-		return errors.New("collections: update replacement cannot modify _id")
+		return errBSONIDMutation
 	}
 	return nil
 }
@@ -7469,6 +7497,7 @@ func errConcurrentRootModification(collectionName, rootName string) error {
 }
 
 func (c *Collection) updateDocumentOnce(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
+	detailedStats := c.updateBatchDetailedStatsEnabled()
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return false, false, backenddb.ErrClosed
@@ -7492,6 +7521,10 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		_ = snap.Close()
 		return false, false, err
 	}
+	stats := CollectionUpdateStats{
+		Items:   1,
+		Indexes: len(c.meta.Indexes),
+	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 	primaryOnlyUpdate := len(c.meta.Indexes) == 0
 	baseUserRoot := snapshotUserRoot(snap)
@@ -7499,7 +7532,9 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	baseCommitSeq := snapshotCommitSeq(snap)
 
 	primaryRootName := collectionPrimaryRootName(c.meta.Name)
+	phaseStart := updateBatchStatsNow(detailedStats)
 	currentValue, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, primaryRootName, documentID, nil)
+	stats.CurrentRead += updateBatchStatsSince(detailedStats, phaseStart)
 	if err != nil {
 		_ = snap.Close()
 		return false, false, err
@@ -7509,8 +7544,10 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		if primaryOnlyUpdate && c.writeDomain != nil {
 			c.writeDomain.observePrimaryOnlyUpdate(false, false, false, collectionRootDeltaPlanStats{})
 		}
+		c.setLastUpdateStats(stats)
 		return false, false, nil
 	}
+	stats.Matched = 1
 	primaryRoot := catalog.rootID(primaryRootName)
 
 	runtimes, err := (insertBatchPlanner{
@@ -7521,6 +7558,7 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		_ = snap.Close()
 		return false, false, err
 	}
+	initCollectionUpdateIndexStats(&stats, c.meta.Name, runtimes, detailedStats)
 	currentID, err := captureBSONIDSnapshot(currentValue, plannerOptions)
 	if err != nil {
 		_ = snap.Close()
@@ -7530,14 +7568,18 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	var newState documentIndexState
 	indexStateChanged := false
 	if len(runtimes) > 0 {
+		phaseStart = updateBatchStatsNow(detailedStats)
 		oldState, err = indexStateForDocument(currentValue, runtimes, plannerOptions)
+		stats.IndexStateExtraction += updateBatchStatsSince(detailedStats, phaseStart)
 		if err != nil {
 			_ = snap.Close()
 			return false, false, err
 		}
 	}
 
+	phaseStart = updateBatchStatsNow(detailedStats)
 	document, changed, err := callCollectionUpdateCallback(update, currentValue)
+	stats.Callback += updateBatchStatsSince(detailedStats, phaseStart)
 	if err != nil {
 		_ = snap.Close()
 		return false, false, err
@@ -7547,13 +7589,16 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		if primaryOnlyUpdate && c.writeDomain != nil {
 			c.writeDomain.observePrimaryOnlyUpdate(true, false, false, collectionRootDeltaPlanStats{})
 		}
+		c.setLastUpdateStats(stats)
 		return true, false, nil
 	}
 	if err := validateBSONReplacementPreservesIDSnapshot(currentID, document, plannerOptions); err != nil {
 		_ = snap.Close()
 		return false, false, err
 	}
+	phaseStart = updateBatchStatsNow(detailedStats)
 	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments([][]byte{document}, plannerOptions)
+	stats.PrepareDocuments += updateBatchStatsSince(detailedStats, phaseStart)
 	if err != nil {
 		_ = snap.Close()
 		return false, false, err
@@ -7568,17 +7613,49 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	}
 
 	if len(runtimes) > 0 {
+		phaseStart = updateBatchStatsNow(detailedStats)
 		newState, err = indexStateForDocument(document, runtimes, plannerOptions)
+		stats.IndexStateExtraction += updateBatchStatsSince(detailedStats, phaseStart)
 		if err != nil {
 			_ = snap.Close()
 			return false, false, err
 		}
 		indexStateChanged = !documentIndexStatesEqual(oldState, newState)
+		for runtimeIdx, runtime := range runtimes {
+			if _, ok := updateIndexChangedMaskBit(runtimeIdx); !ok {
+				stats.MaskFallbacks++
+			}
+			if documentIndexRuntimeChanged(oldState, newState, runtime) {
+				stats.IndexValueChanges++
+				if runtime.def.unique {
+					stats.UniqueIndexChecks++
+				}
+				if runtimeIdx < stats.IndexStatsCount {
+					stats.IndexStats[runtimeIdx].Changed++
+					if runtime.def.unique {
+						stats.IndexStats[runtimeIdx].UniqueChecks++
+					}
+				}
+				continue
+			}
+			stats.IndexValueUnchanged++
+			if runtime.def.unique {
+				stats.UniqueIndexCheckSkips++
+			}
+			if runtimeIdx < stats.IndexStatsCount {
+				stats.IndexStats[runtimeIdx].Unchanged++
+				if runtime.def.unique {
+					stats.IndexStats[runtimeIdx].UniqueCheckSkips++
+				}
+			}
+		}
 		if indexStateChanged {
+			phaseStart = updateBatchStatsNow(detailedStats)
 			if err := rejectReplaceUniqueConflicts(snap, catalog, runtimes, oldState, newState, documentID, nil); err != nil {
 				_ = snap.Close()
 				return false, false, err
 			}
+			stats.UniqueIndexPreflight += updateBatchStatsSince(detailedStats, phaseStart)
 		}
 	}
 
@@ -7588,6 +7665,7 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	deltaTables := make([]memtable.Table, 0, 2+len(runtimes))
 
 	if len(templateRecords) > 0 {
+		phaseStart = updateBatchStatsNow(detailedStats)
 		templatePlan := &insertBatchPlan{}
 		if err := (insertBatchPlanner{
 			collection:             c.meta.Name,
@@ -7604,18 +7682,22 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 			policies = append(policies, run.storagePolicy)
 			deltaTables = append(deltaTables, run.table)
 		}
+		stats.TemplateRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
 	}
 
 	rootNames = append(rootNames, primaryRootName)
 	baseRootIDs[primaryRootName] = primaryRoot
 	policies = append(policies, plannerOptions.dataStoragePolicy)
+	phaseStart = updateBatchStatsNow(detailedStats)
 	primaryTable := newCollectionRunTable(1)
 	setCollectionRunValue(primaryTable, bytes.Clone(documentID), document)
 	primaryTable.Freeze()
 	deltaTables = append(deltaTables, primaryTable)
+	stats.PrimaryRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
 
 	if indexStateChanged {
 		if persistIndexStateForOptions(plannerOptions) {
+			phaseStart = updateBatchStatsNow(detailedStats)
 			stateRootName := collectionIndexStateRootName(c.meta.Name)
 			stateRootID := catalog.rootID(stateRootName)
 			rootNames = append(rootNames, stateRootName)
@@ -7635,25 +7717,48 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 			}
 			stateTable.Freeze()
 			deltaTables = append(deltaTables, stateTable)
+			stats.IndexStateRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
 		}
 
-		for _, runtime := range runtimes {
+		phaseStart = updateBatchStatsNow(detailedStats)
+		for runtimeIdx, runtime := range runtimes {
 			if !documentIndexRuntimeChanged(oldState, newState, runtime) {
 				continue
 			}
 			rootName := collectionSecondaryRootName(c.meta.Name, runtime.def.name)
 			rootID := catalog.rootID(rootName)
 			table := newCollectionRunTable(0)
-			if err := deleteSecondaryEntriesForDocument(table, runtime, oldState, documentID); err != nil {
-				_ = snap.Close()
-				resetCollectionTables(append(deltaTables, table))
-				return false, false, err
-			}
-			for _, encoded := range newState[runtime.def.name] {
-				if _, err := setCollectionSecondaryIndexEntry(table, encoded, documentID); err != nil {
+			runStats := CollectionUpdateSecondaryRunStats{IndexName: runtime.def.name}
+			for _, encoded := range oldState[runtime.def.name] {
+				keyLen, err := deleteCollectionSecondaryIndexEntry(table, encoded, documentID)
+				if err != nil {
 					_ = snap.Close()
 					resetCollectionTables(append(deltaTables, table))
 					return false, false, err
+				}
+				stats.SecondaryDeleteEntries++
+				stats.SecondaryKeyBytes += keyLen
+				runStats.Deletes++
+				runStats.KeyBytes += keyLen
+				if runtimeIdx < stats.IndexStatsCount {
+					stats.IndexStats[runtimeIdx].SecondaryDeletes++
+					stats.IndexStats[runtimeIdx].SecondaryKeyBytes += keyLen
+				}
+			}
+			for _, encoded := range newState[runtime.def.name] {
+				keyLen, err := setCollectionSecondaryIndexEntry(table, encoded, documentID)
+				if err != nil {
+					_ = snap.Close()
+					resetCollectionTables(append(deltaTables, table))
+					return false, false, err
+				}
+				stats.SecondarySetEntries++
+				stats.SecondaryKeyBytes += keyLen
+				runStats.Sets++
+				runStats.KeyBytes += keyLen
+				if runtimeIdx < stats.IndexStatsCount {
+					stats.IndexStats[runtimeIdx].SecondarySets++
+					stats.IndexStats[runtimeIdx].SecondaryKeyBytes += keyLen
 				}
 			}
 			if table.Len() == 0 {
@@ -7665,7 +7770,14 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 			baseRootIDs[rootName] = rootID
 			policies = append(policies, runtime.def.storagePolicy)
 			deltaTables = append(deltaTables, table)
+			if runStats.Deletes != 0 || runStats.Sets != 0 || runStats.KeyBytes != 0 {
+				stats.SecondaryRuns = append(stats.SecondaryRuns, runStats)
+			}
+			if runtimeIdx < stats.IndexStatsCount {
+				stats.IndexStats[runtimeIdx].SecondaryRuns++
+			}
 		}
+		stats.SecondaryRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
 	}
 	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
 	// base roots before stale-root validation rejects concurrent modifications.
@@ -7685,9 +7797,11 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	preflight := func() error {
 		return c.validateMutationRootDescriptors(baseUserRoot, baseSystemRoot, baseCommitSeq)
 	}
+	phaseStart = updateBatchStatsNow(detailedStats)
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 	})
+	stats.Publish += updateBatchStatsSince(detailedStats, phaseStart)
 	cleanupDeltas()
 	if err != nil {
 		return false, false, err
@@ -7704,6 +7818,9 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 			c.writeDomain.observePrimaryOnlyUpdate(true, true, true, deltaStats)
 		}
 	}
+	stats.Modified = 1
+	stats.Runs = len(rootNames)
+	c.setLastUpdateStats(stats)
 	return true, true, nil
 }
 
@@ -8752,17 +8869,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			putUpdateBatchPlanScratch(scratch)
 		}
 	}()
-	if detailedStats && len(runtimes) <= len(stats.IndexStats) {
-		stats.IndexStatsCount = len(runtimes)
-		for i, runtime := range runtimes {
-			stats.IndexStats[i] = CollectionUpdateIndexStats{
-				CollectionName: meta.Name,
-				IndexName:      runtime.def.name,
-				IndexOrdinal:   i,
-				Unique:         runtime.def.unique,
-			}
-		}
-	}
+	initCollectionUpdateIndexStats(&stats, meta.Name, runtimes, detailedStats)
 	var currentScratch []byte
 	for i, item := range items {
 		phaseStart := updateBatchStatsNow(detailedStats)
@@ -8882,10 +8989,14 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			indexStateChanged := false
 			for runtimeIdx, runtime := range runtimes {
 				runtimeChanged := orderedDocumentIndexRuntimeChanged(changed[i].oldState, changed[i].newState, runtimeIdx)
+				maskBit, maskBitOK := updateIndexChangedMaskBit(runtimeIdx)
+				if !maskBitOK {
+					stats.MaskFallbacks++
+				}
 				if runtimeChanged {
 					indexStateChanged = true
-					if bit, ok := updateIndexChangedMaskBit(runtimeIdx); ok {
-						changedIndexes |= bit
+					if maskBitOK {
+						changedIndexes |= maskBit
 					}
 					stats.IndexValueChanges++
 					if runtime.def.unique {
@@ -10083,6 +10194,9 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 		domain.loaded = false
 		return
 	}
+	if !collectionMetaIndexSchemasEqual(domain.meta, catalog.meta) {
+		resetCollectionUpdateIndexAggregateStatsLocked(domain)
+	}
 	domain.loaded = true
 	domain.meta = copyCollectionMeta(catalog.meta)
 	domain.catalog = catalog
@@ -10102,6 +10216,34 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 	domain.uniqueValueIndex = nil
 	if domain.table == nil {
 		domain.table = newCollectionRunTable(0)
+	}
+}
+
+func collectionMetaIndexSchemasEqual(left, right CollectionMeta) bool {
+	if left.Name != right.Name || len(left.Indexes) != len(right.Indexes) {
+		return false
+	}
+	for i := range left.Indexes {
+		if left.Indexes[i] != right.Indexes[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func resetCollectionUpdateIndexAggregateStatsLocked(domain *collectionWriteDomain) {
+	if domain == nil {
+		return
+	}
+	for i := 0; i < maxCollectionUpdateInlineIndexStats; i++ {
+		domain.updateBatchIndexChanged[i].Store(0)
+		domain.updateBatchIndexUnchanged[i].Store(0)
+		domain.updateBatchIndexUniqueChecks[i].Store(0)
+		domain.updateBatchIndexUniqueSkips[i].Store(0)
+		domain.updateBatchIndexSecondaryRuns[i].Store(0)
+		domain.updateBatchIndexSecondaryDeletes[i].Store(0)
+		domain.updateBatchIndexSecondarySets[i].Store(0)
+		domain.updateBatchIndexSecondaryBytes[i].Store(0)
 	}
 }
 
