@@ -1052,10 +1052,12 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 		if findResult(canon.Results, sqliteNativeConfig, phaseSQLiteVacuum) == nil {
 			add("error", "missing_sqlite_native_vacuum", "SQLite native-columns VACUUM result is required for fair compacted-state comparison")
 		}
-		for _, treeDBConfig := range compactedTreeDBConfigNames(canon) {
-			if findResult(canon.Results, treeDBConfig, phaseOfflineRewrite) != nil &&
-				findResult(canon.Results, sqliteNativeConfig, phaseSQLiteVacuum) == nil {
-				add("error", "unfair_compacted_comparison", "TreeDB offline/full compaction must be compared against SQLite after VACUUM, not SQLite post-insert")
+		if findResult(canon.Results, sqliteNativeConfig, phaseSQLiteVacuum) == nil {
+			for _, treeDBConfig := range compactedTreeDBConfigNames(canon) {
+				if findResult(canon.Results, treeDBConfig, phaseOfflineRewrite) != nil {
+					add("error", "unfair_compacted_comparison", "TreeDB offline/full compaction must be compared against SQLite after VACUUM, not SQLite post-insert")
+					break
+				}
 			}
 		}
 	}

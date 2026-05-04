@@ -627,9 +627,10 @@ func loadMongoLoadModes(dir string) ([]loadModeRow, []string, error) {
 	var out []loadModeRow
 	var warnings []string
 	for _, row := range rows {
-		rawPath := row.RawJSON
-		if !filepath.IsAbs(rawPath) {
-			rawPath = filepath.Join(dir, rawPath)
+		rawPath, err := resolveRunArtifactPath(dir, row.RawJSON)
+		if err != nil {
+			warnings = append(warnings, err.Error())
+			continue
 		}
 		result, err := readBenchmarkResult(rawPath)
 		if err != nil {
@@ -659,6 +660,28 @@ func loadMongoLoadModes(dir string) ([]loadModeRow, []string, error) {
 		return out[i].Config < out[j].Config
 	})
 	return out, warnings, nil
+}
+
+func resolveRunArtifactPath(baseDir, relPath string) (string, error) {
+	if strings.TrimSpace(relPath) == "" {
+		return "", fmt.Errorf("empty artifact path under %s", baseDir)
+	}
+	if filepath.IsAbs(relPath) {
+		return "", fmt.Errorf("%s: artifact path must be relative to %s", relPath, baseDir)
+	}
+	baseAbs, err := filepath.Abs(baseDir)
+	if err != nil {
+		return "", err
+	}
+	pathAbs := filepath.Join(baseAbs, filepath.Clean(relPath))
+	relative, err := filepath.Rel(baseAbs, pathAbs)
+	if err != nil {
+		return "", err
+	}
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("%s: artifact path escapes %s", relPath, baseDir)
+	}
+	return pathAbs, nil
 }
 
 func loadMongoScaling(dir string) (map[int][]mongoSummaryRow, []string) {
@@ -1252,23 +1275,35 @@ func nonZeroSeries(series []chartSeries) []chartSeries {
 }
 
 func renderCollectionHighlight(b *strings.Builder, rows []collectionRow) {
-	var body [][]string
-	for _, idx := range sortedCollectionIndexes(rows) {
-		body = append(body, []string{
-			strconv.Itoa(idx),
-			fmtOps(collectionValue(rows, idx, fmt.Sprintf("treedb_template_v1_collection_%d_indexes", idx), "post_insert", "docs")),
-			fmtOps(collectionValue(rows, idx, fmt.Sprintf("treedb_bson_collection_%d_indexes", idx), "post_insert", "docs")),
-			fmtOps(collectionValue(rows, idx, fmt.Sprintf("treedb_json_collection_%d_indexes", idx), "post_insert", "docs")),
-			fmtOps(collectionValue(rows, idx, fmt.Sprintf("sqlite_native_columns_%d_indexes", idx), "post_insert", "docs")),
-			fmtOps(collectionValue(rows, idx, fmt.Sprintf("sqlite_json_%d_indexes", idx), "post_insert", "docs")),
-			fmtFloat(collectionValue(rows, idx, fmt.Sprintf("treedb_template_v1_collection_%d_indexes", idx), "full_leafgen_pack_gc", "bytes"), 1),
-			fmtFloat(collectionValue(rows, idx, fmt.Sprintf("treedb_bson_collection_%d_indexes", idx), "full_leafgen_pack_gc", "bytes"), 1),
-			fmtFloat(collectionValue(rows, idx, fmt.Sprintf("treedb_json_collection_%d_indexes", idx), "full_leafgen_pack_gc", "bytes"), 1),
-			fmtFloat(collectionValue(rows, idx, fmt.Sprintf("sqlite_native_columns_%d_indexes", idx), "sqlite_vacuum", "bytes"), 1),
-			fmtFloat(collectionValue(rows, idx, fmt.Sprintf("sqlite_json_%d_indexes", idx), "sqlite_vacuum", "bytes"), 1),
-		})
+	docsRows := collectionDocsRows(rows)
+	diskRows := collectionDiskRows(rows)
+	headers := []string{"indexes"}
+	for _, series := range docsRows.Series {
+		headers = append(headers, series.Name+" docs/s")
 	}
-	writeTable(b, []string{"indexes", "TreeDB template-v1 docs/s", "TreeDB BSON docs/s", "TreeDB JSON docs/s", "SQLite native docs/s", "SQLite JSON docs/s", "TreeDB template-v1 leafgen B/doc", "TreeDB BSON leafgen B/doc", "TreeDB JSON leafgen B/doc", "SQLite native VACUUM B/doc", "SQLite JSON VACUUM B/doc"}, body, numericColumns(0, 10))
+	for _, series := range diskRows.Series {
+		headers = append(headers, series.Name+" B/doc")
+	}
+	var body [][]string
+	for idx, label := range docsRows.Categories {
+		row := []string{label}
+		for _, series := range docsRows.Series {
+			row = append(row, fmtOps(series.Values[idx]))
+		}
+		for _, series := range diskRows.Series {
+			if idx < len(series.Values) {
+				row = append(row, fmtFloat(series.Values[idx], 1))
+			} else {
+				row = append(row, "-")
+			}
+		}
+		body = append(body, row)
+	}
+	numeric := make(map[int]bool)
+	for i := 1; i < len(headers); i++ {
+		numeric[i] = true
+	}
+	writeTable(b, headers, body, numeric)
 }
 
 func sortedCollectionIndexes(rows []collectionRow) []int {
@@ -1705,6 +1740,9 @@ func loadModeDisplayLabel(mode string) string {
 
 func loadModeLabel(row loadModeRow) string {
 	config := row.Config
+	if config == row.Target {
+		config = row.Target + "_driver"
+	}
 	config = strings.TrimPrefix(config, row.Target+"_")
 	config = strings.TrimPrefix(config, "bson_")
 	return "BSON " + config

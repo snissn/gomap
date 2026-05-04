@@ -189,6 +189,12 @@ func TestCollectionChartsIncludeAdditionalFormats(t *testing.T) {
 	}
 }
 
+func TestLoadModeLabelNormalizesSingleMongoConfig(t *testing.T) {
+	if got, want := loadModeLabel(loadModeRow{Target: "mongo", Config: "mongo"}), "BSON driver"; got != want {
+		t.Fatalf("label = %q, want %q", got, want)
+	}
+}
+
 func TestRawEngineChartOmitsMissingVariants(t *testing.T) {
 	html := renderHTML(reportData{
 		Config: config{Title: "partial raw", RunRoot: t.TempDir()},
@@ -376,6 +382,23 @@ func TestLoadMongoLoadModesBestEffort(t *testing.T) {
 	}
 	if !strings.Contains(warnings[0], "raw/missing.json") {
 		t.Fatalf("warning %q does not name missing raw JSON", warnings[0])
+	}
+}
+
+func TestLoadMongoLoadModesRejectsEscapingRawJSONPath(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "matrix.tsv"), "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_driver\t100\t0\t../outside.json\t2000\n")
+
+	rows, warnings, err := loadMongoLoadModes(root)
+	if err != nil {
+		t.Fatalf("loadMongoLoadModes failed: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("rows = %v, want none", rows)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "escapes") {
+		t.Fatalf("warnings = %v, want path escape warning", warnings)
 	}
 }
 
