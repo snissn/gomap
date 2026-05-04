@@ -154,6 +154,67 @@ func (d *checkpointCountingDB) Checkpoint() error {
 	return nil
 }
 
+type closeStatsDB struct {
+	name     string
+	closeErr error
+	closed   atomic.Bool
+}
+
+func (d *closeStatsDB) Name() string { return d.name }
+
+func (d *closeStatsDB) Close() error {
+	d.closed.Store(true)
+	return d.closeErr
+}
+
+func (d *closeStatsDB) Get(key []byte) ([]byte, error) { return nil, nil }
+
+func (d *closeStatsDB) Set(key, value []byte) error { return nil }
+
+func (d *closeStatsDB) Delete(key []byte) error { return nil }
+
+func (d *closeStatsDB) Stats() map[string]string {
+	if d.closed.Load() {
+		return map[string]string{"treedb.publish.ordered_root_delta_group.root_apply_calls_total": "1"}
+	}
+	return map[string]string{"treedb.publish.ordered_root_delta_group.root_apply_calls_total": "0"}
+}
+
+type settleProbeDB struct {
+	id       int
+	probe    *settleProbeState
+	setCalls atomic.Int64
+}
+
+type settleProbeState struct {
+	nextID                  atomic.Int64
+	writerClosedBeforeRead  atomic.Bool
+	readAfterWriterCloseCnt atomic.Int64
+}
+
+func (d *settleProbeDB) Name() string { return "SettleProbe" }
+
+func (d *settleProbeDB) Close() error {
+	if d.setCalls.Load() > 0 {
+		d.probe.writerClosedBeforeRead.Store(true)
+	}
+	return nil
+}
+
+func (d *settleProbeDB) Get(key []byte) ([]byte, error) {
+	if d.probe.writerClosedBeforeRead.Load() {
+		d.probe.readAfterWriterCloseCnt.Add(1)
+	}
+	return nil, nil
+}
+
+func (d *settleProbeDB) Set(key, value []byte) error {
+	d.setCalls.Add(1)
+	return nil
+}
+
+func (d *settleProbeDB) Delete(key []byte) error { return nil }
+
 type preferGetManyDB struct {
 	getCalls     int
 	getManyCalls int
@@ -831,6 +892,86 @@ func TestRunBenchmark_CheckpointBetweenTests_RunsFinalCheckpoint(t *testing.T) {
 	}
 	if _, ok := run.CheckpointDurations[checkpointPostRunLabel]; !ok {
 		t.Fatalf("expected post-run checkpoint durations under %q", checkpointPostRunLabel)
+	}
+}
+
+func TestRunBenchmark_CapturesTreeDBStatsAfterClose(t *testing.T) {
+	const dbName = "close_stats_mock"
+	RegisterHiddenDB(dbName, func(dir string) (kvstore.DB, error) {
+		return &closeStatsDB{name: dbName}, nil
+	})
+
+	run, err := runBenchmark(BenchConfig{
+		Keys:         1,
+		ValueSize:    1,
+		BatchSize:    1,
+		RangeQueries: 0,
+		RangeSpan:    0,
+		DBsArg:       dbName,
+		TestsArg:     "sequential_write",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	stats := run.TreeDBStats[dbName]
+	if got, want := stats["treedb.publish.ordered_root_delta_group.root_apply_calls_total"], "1"; got != want {
+		t.Fatalf("post-close TreeDB stat=%q want %q in %#v", got, want, stats)
+	}
+}
+
+func TestRunBenchmark_PropagatesCloseError(t *testing.T) {
+	const dbName = "close_error_mock"
+	closeErr := errors.New("close failed")
+	RegisterHiddenDB(dbName, func(dir string) (kvstore.DB, error) {
+		return &closeStatsDB{name: dbName, closeErr: closeErr}, nil
+	})
+
+	_, err := runBenchmark(BenchConfig{
+		Keys:         1,
+		ValueSize:    1,
+		BatchSize:    1,
+		RangeQueries: 0,
+		RangeSpan:    0,
+		DBsArg:       dbName,
+		TestsArg:     "sequential_write",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("runBenchmark err=%v want close error", err)
+	}
+}
+
+func TestRunBenchmark_SettleBeforeScansRunsAfterMeasuredWrites(t *testing.T) {
+	const dbName = "settle_probe"
+	probe := &settleProbeState{}
+	RegisterHiddenDB(dbName, func(dir string) (kvstore.DB, error) {
+		id := int(probe.nextID.Add(1))
+		return &settleProbeDB{id: id, probe: probe}, nil
+	})
+
+	_, err := runBenchmark(BenchConfig{
+		Keys:              16,
+		ValueSize:         1,
+		BatchSize:         4,
+		RangeQueries:      0,
+		RangeSpan:         0,
+		DBsArg:            dbName,
+		TestsArg:          "sequential_write,dataset_read_random",
+		KeepDir:           false,
+		Progress:          false,
+		SeedUsed:          1,
+		SettleBeforeScans: true,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if got := probe.readAfterWriterCloseCnt.Load(); got == 0 {
+		t.Fatalf("dataset_read_random did not run after closing the measured write instance")
 	}
 }
 

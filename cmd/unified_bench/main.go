@@ -3727,30 +3727,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		prefixScanBase = cfg.Keys
 	}
 
-	// Settle before scans?
-	if cfg.SettleBeforeScans && containsAny(finalTestOrder, "full_scan", "prefix_scan", "random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_batch") {
-		fmt.Fprintf(os.Stderr, "Settling DBs (Close/Open)...\n")
-		for _, inst := range instances {
-			// Close
-			if err := inst.Wrapper.Close(); err != nil {
-				return BenchRun{}, fmt.Errorf("settle/close %s: %w", inst.Name, err)
-			}
-
-			// Reopen
-			factory, err := GetDBFactory(inst.Name)
-			if err != nil {
-				return BenchRun{}, err
-			}
-			// Reopen
-			newWrapper, err := factory(inst.Dir)
-			if err != nil {
-				return BenchRun{}, fmt.Errorf("settle/reopen %s: %w", inst.Name, err)
-			}
-			inst.Wrapper = newWrapper
-
-			// Optional TreeDB maintenance hooks can be added here if needed.
-		}
-	}
+	settledBeforeScans := false
 
 	if cfg.BlockProfile != "" {
 		rate := cfg.BlockProfileRate
@@ -3818,6 +3795,14 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	for _, testName := range finalTestOrder {
 		fn := testFuncs[testName]
 		seed := testSeed(cfg.SeedUsed, testName)
+
+		if cfg.SettleBeforeScans && !settledBeforeScans && isSettleBeforeScanTest(testName) {
+			fmt.Fprintf(os.Stderr, "Settling DBs (Close/Open) before %s...\n", testName)
+			if err := settleBenchInstances(instances); err != nil {
+				return BenchRun{}, err
+			}
+			settledBeforeScans = true
+		}
 
 		if cfg.TreeDBCacheStatsBeforeReads && containsAny([]string{testName}, "random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_batch", "dataset_read_random", "full_scan", "prefix_scan", "full_scan2", "prefix_scan2") {
 			for _, inst := range instances {
@@ -4141,17 +4126,21 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	treedbStats := make(map[string]map[string]string)
 	diskUsage := make(map[string]dirDiskUsage)
 	for _, inst := range instances {
-		if sp, ok := inst.Wrapper.(kvstore.StatsProvider); ok {
+		wrapperName := inst.Wrapper.Name()
+		sp, hasStatsProvider := inst.Wrapper.(kvstore.StatsProvider)
+		if err := inst.Wrapper.Close(); err != nil {
+			return BenchRun{}, fmt.Errorf("close %s: %w", inst.Name, err)
+		}
+		if hasStatsProvider {
 			snap := sp.Stats()
 			if len(snap) > 0 {
 				copySnap := make(map[string]string, len(snap))
 				for k, v := range snap {
 					copySnap[k] = v
 				}
-				treedbStats[inst.Wrapper.Name()] = copySnap
+				treedbStats[wrapperName] = copySnap
 			}
 		}
-		_ = inst.Wrapper.Close()
 		if cfg.TreeDBVlogRewriteAfterRun && isTreeDBInstance(inst) {
 			beforeUsage, _ := computeDirDiskUsage(inst.Dir)
 			beforeTree, _ := computeTreeDBDiskUsage(inst.Dir)
@@ -4196,13 +4185,13 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		}
 		if usage, err := computeDirDiskUsage(inst.Dir); err == nil {
 			if usage.TotalBytes > 0 || usage.TotalFiles > 0 {
-				diskUsage[inst.Wrapper.Name()] = usage
+				diskUsage[wrapperName] = usage
 			}
 		}
 		if isTreeDBInstance(inst) {
 			if usage, err := computeTreeDBDiskUsage(inst.Dir); err == nil {
 				if usage.MainIndexBytes > 0 || usage.MainWAL.TotalBytes > 0 || usage.MainValueLog.TotalBytes > 0 || usage.MainLeafLog.TotalBytes > 0 || usage.DictIndexBytes > 0 || usage.DictWAL.TotalBytes > 0 || usage.DictValueLog.TotalBytes > 0 {
-					treedbDisk[inst.Wrapper.Name()] = usage
+					treedbDisk[wrapperName] = usage
 				}
 			}
 		}
@@ -5871,6 +5860,38 @@ func contains(list []string, item string) bool {
 		}
 	}
 	return false
+}
+
+func isSettleBeforeScanTest(testName string) bool {
+	switch testName {
+	case "full_scan", "prefix_scan",
+		"random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_batch",
+		"dataset_read_random":
+		return true
+	default:
+		return false
+	}
+}
+
+func settleBenchInstances(instances []*DBInstance) error {
+	for _, inst := range instances {
+		if inst == nil || inst.Wrapper == nil {
+			continue
+		}
+		if err := inst.Wrapper.Close(); err != nil {
+			return fmt.Errorf("settle/close %s: %w", inst.Name, err)
+		}
+		factory, err := GetDBFactory(inst.Name)
+		if err != nil {
+			return err
+		}
+		newWrapper, err := factory(inst.Dir)
+		if err != nil {
+			return fmt.Errorf("settle/reopen %s: %w", inst.Name, err)
+		}
+		inst.Wrapper = newWrapper
+	}
+	return nil
 }
 
 func containsAny(list []string, items ...string) bool {

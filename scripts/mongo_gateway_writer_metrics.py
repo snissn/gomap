@@ -61,28 +61,34 @@ def fmt(value):
     return str(value)
 
 
-def parse_number(value):
+def parse_int_counter(value):
     if value is None or value == "":
-        return 0.0, False
+        return 0, False
     try:
-        return float(value), True
+        text = str(value).strip()
+        if not re.fullmatch(r"[+-]?[0-9]+", text):
+            return 0, False
+        return int(text, 10), True
     except (TypeError, ValueError):
-        return 0.0, False
+        return 0, False
 
 
-def delta_count(delta, keys):
+def delta_count(delta, keys, label):
     found = False
-    parsed = False
-    total = 0.0
+    total = 0
     for key in keys:
         if key not in delta:
             continue
         found = True
-        value, ok = parse_number(delta.get(key))
-        if ok:
-            parsed = True
-            total += value
-    if not found or not parsed:
+        value, ok = parse_int_counter(delta.get(key))
+        if not ok:
+            print(
+                f"warning: skipping {label}: TreeDB delta {key}={delta.get(key)!r} is not an integer",
+                file=sys.stderr,
+            )
+            return ""
+        total += value
+    if not found:
         return ""
     return fmt(total)
 
@@ -90,12 +96,21 @@ def delta_count(delta, keys):
 def load_result(raw_path):
     try:
         with open(raw_path) as raw_file:
-            return json.load(raw_file)
+            result = json.load(raw_file)
     except OSError as err:
         print(f"warning: skipping raw JSON {raw_path}: {err}", file=sys.stderr)
+        return None
     except json.JSONDecodeError as err:
         print(f"warning: skipping raw JSON {raw_path}: {err}", file=sys.stderr)
-    return None
+        return None
+    if not isinstance(result, dict):
+        print(f"warning: skipping raw JSON {raw_path}: top-level JSON is not an object", file=sys.stderr)
+        return None
+    phases = result.get("phases")
+    if phases is not None and not isinstance(phases, list):
+        print(f"warning: skipping raw JSON {raw_path}: phases is not a list", file=sys.stderr)
+        return None
+    return result
 
 
 def write_writer_metrics(out_dir, matrix_path, writer_metrics_path):
@@ -117,12 +132,19 @@ def write_writer_metrics(out_dir, matrix_path, writer_metrics_path):
                 documents = row.get("documents") or str(result.get("documents", ""))
                 secondary_indexes = row.get("secondary_indexes") or str(result.get("secondary_indexes", ""))
                 for phase in result.get("phases") or []:
+                    if not isinstance(phase, dict):
+                        print(f"warning: skipping non-object phase in raw JSON {raw_path}", file=sys.stderr)
+                        continue
                     phase_name = phase.get("name", "")
                     match = WRITER_PHASE_RE.match(phase_name)
                     if not match:
                         continue
                     metrics = phase.get("treedb_metrics") or {}
+                    if not isinstance(metrics, dict):
+                        metrics = {}
                     delta = phase.get("treedb_stats_delta") or {}
+                    if not isinstance(delta, dict):
+                        delta = {}
                     out = {
                         "target": target,
                         "config": config,
@@ -139,12 +161,12 @@ def write_writer_metrics(out_dir, matrix_path, writer_metrics_path):
                         out[column] = fmt(metrics.get(metric_name))
                     out["backpressure_sync_total"] = delta_count(delta, [
                         "treedb.collections.write_domain.indexed_async_flush.backpressure_sync_total",
-                    ])
+                    ], "backpressure_sync_total")
                     out["root_mismatch_total"] = delta_count(delta, [
                         "treedb.collections.write_domain.collection_root_base_mismatch_total",
                         "treedb.collections.write_domain.indexed_flush.root_base_mismatch_total",
                         "treedb.collections.write_domain.coordinator_requeue_on_mismatch_total",
-                    ])
+                    ], "root_mismatch_total")
                     writer.writerow(out)
 
 
