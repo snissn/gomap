@@ -9,6 +9,7 @@ import (
 	"os"
 	"reflect"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -12053,6 +12054,279 @@ func TestCollectionUpdateBatchSkipsUnchangedSecondaryIndexes(t *testing.T) {
 	if rootName := collectionPrimaryRootName("users"); afterSame[rootName] == beforeSame[rootName] {
 		t.Fatalf("primary root %q did not change for document replacement", rootName)
 	}
+}
+
+func TestCollectionUpdateBatchIndexChangedMaskFallbackForRuntimeAtOrAbove64(t *testing.T) {
+	for _, targetOrdinal := range []int{63, 64, 71} {
+		t.Run(fmt.Sprintf("ordinal_%d", targetOrdinal), func(t *testing.T) {
+			const indexCount = 72
+			d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatalf("open db: %v", err)
+			}
+			defer func() { _ = d.Close() }()
+
+			mgr := NewCollectionManager(d)
+			meta := CollectionMeta{
+				Name: "users",
+				Options: CollectionOptions{
+					DisableIndexedWriteMemtables: true,
+				},
+				Indexes: collectionManyStringIndexesForTest(indexCount, nil),
+			}
+			if _, err := mgr.CreateCollection(&meta); err != nil {
+				t.Fatalf("create collection: %v", err)
+			}
+			col, err := mgr.OpenCollection("users")
+			if err != nil {
+				t.Fatalf("open collection: %v", err)
+			}
+			if _, err := col.InsertBatch(
+				[][]byte{[]byte("u1")},
+				[][]byte{collectionManyIndexJSONDocumentForTest(indexCount, nil, nil)},
+			); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
+
+			rootNames := make([]string, 0, indexCount)
+			for i := 0; i < indexCount; i++ {
+				rootNames = append(rootNames, collectionSecondaryRootName("users", fmt.Sprintf("idx%02d", i)))
+			}
+			before := collectionRootIDsForTest(t, d, "users", rootNames)
+			replacement := collectionManyIndexJSONDocumentForTest(indexCount, map[int]string{
+				targetOrdinal: fmt.Sprintf("new%02d", targetOrdinal),
+			}, map[string]string{"note": "replacement"})
+			results, err := col.UpdateBatch([]UpdateBatchItem{{
+				DocumentID: []byte("u1"),
+				Update: func([]byte) ([]byte, bool, error) {
+					return replacement, true, nil
+				},
+			}})
+			if err != nil {
+				t.Fatalf("update target ordinal %d: %v", targetOrdinal, err)
+			}
+			if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+				t.Fatalf("results=%+v want one matched modified row", results)
+			}
+			stats := col.LastUpdateStats()
+			if got, want := stats.IndexValueChanges, 1; got != want {
+				t.Fatalf("changed indexes=%d want %d", got, want)
+			}
+			if got, want := stats.IndexValueUnchanged, indexCount-1; got != want {
+				t.Fatalf("unchanged indexes=%d want %d", got, want)
+			}
+
+			after := collectionRootIDsForTest(t, d, "users", rootNames)
+			targetRoot := collectionSecondaryRootName("users", fmt.Sprintf("idx%02d", targetOrdinal))
+			changedRoots := 0
+			for _, rootName := range rootNames {
+				changed := after[rootName] != before[rootName]
+				if rootName == targetRoot {
+					if !changed {
+						t.Fatalf("target root %q did not change", rootName)
+					}
+					changedRoots++
+					continue
+				}
+				if changed {
+					t.Fatalf("unrelated root %q changed from %d to %d for target ordinal %d", rootName, before[rootName], after[rootName], targetOrdinal)
+				}
+			}
+			if changedRoots != 1 {
+				t.Fatalf("changed secondary roots=%d want 1", changedRoots)
+			}
+
+			newIDs, err := col.FindByIndexValue(fmt.Sprintf("idx%02d", targetOrdinal), fmt.Sprintf("new%02d", targetOrdinal))
+			if err != nil {
+				t.Fatalf("find new target value: %v", err)
+			}
+			if len(newIDs) != 1 || !bytes.Equal(newIDs[0], []byte("u1")) {
+				t.Fatalf("new target ids=%q want [u1]", newIDs)
+			}
+			oldIDs, err := col.FindByIndexValue(fmt.Sprintf("idx%02d", targetOrdinal), fmt.Sprintf("v%02d", targetOrdinal))
+			if err != nil {
+				t.Fatalf("find old target value: %v", err)
+			}
+			if len(oldIDs) != 0 {
+				t.Fatalf("old target ids=%q want none", oldIDs)
+			}
+		})
+	}
+}
+
+func TestCollectionUpdateBatchUniqueOrdinal64Fallback(t *testing.T) {
+	const indexCount = 65
+	const uniqueOrdinal = 64
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: collectionManyStringIndexesForTest(indexCount, map[int]bool{uniqueOrdinal: true}),
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	u1Doc := collectionManyIndexJSONDocumentForTest(indexCount, map[int]string{
+		uniqueOrdinal: "u1-unique",
+	}, nil)
+	u2Doc := collectionManyIndexJSONDocumentForTest(indexCount, map[int]string{
+		uniqueOrdinal: "u2-unique",
+	}, nil)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{u1Doc, u2Doc},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+
+	unchangedUniqueReplacement := collectionManyIndexJSONDocumentForTest(indexCount, map[int]string{
+		0:             "new-nonunique",
+		uniqueOrdinal: "u1-unique",
+	}, nil)
+	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func([]byte) ([]byte, bool, error) {
+			return unchangedUniqueReplacement, true, nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("unchanged unique ordinal %d update: %v", uniqueOrdinal, err)
+	}
+	if !batched {
+		t.Fatalf("unchanged unique ordinal %d update declined", uniqueOrdinal)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("unchanged unique results=%+v want one matched modified row", results)
+	}
+	stats := col.LastUpdateStats()
+	if got, want := stats.UniqueIndexChecks, 0; got != want {
+		t.Fatalf("unchanged unique checks=%d want %d", got, want)
+	}
+	if got, want := stats.UniqueIndexCheckSkips, 1; got != want {
+		t.Fatalf("unchanged unique skips=%d want %d", got, want)
+	}
+	if got, want := stats.IndexValueChanges, 1; got != want {
+		t.Fatalf("unchanged unique changed indexes=%d want %d", got, want)
+	}
+	if got, want := stats.IndexValueUnchanged, indexCount-1; got != want {
+		t.Fatalf("unchanged unique unchanged indexes=%d want %d", got, want)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush unchanged unique update: %v", err)
+	}
+
+	changedUniqueReplacement := collectionManyIndexJSONDocumentForTest(indexCount, map[int]string{
+		0:             "new-nonunique",
+		uniqueOrdinal: "fresh-unique",
+	}, nil)
+	results, batched, err = col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func([]byte) ([]byte, bool, error) {
+			return changedUniqueReplacement, true, nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("changed unique ordinal %d declined update returned err: %v", uniqueOrdinal, err)
+	}
+	if batched {
+		t.Fatalf("changed unique ordinal %d update batched with results=%+v, want declined", uniqueOrdinal, results)
+	}
+
+	conflictingUniqueReplacement := collectionManyIndexJSONDocumentForTest(indexCount, map[int]string{
+		0:             "new-nonunique",
+		uniqueOrdinal: "u2-unique",
+	}, nil)
+	_, err = col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func([]byte) ([]byte, bool, error) {
+			return conflictingUniqueReplacement, true, nil
+		},
+	}})
+	if !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("conflicting unique ordinal %d update err=%v want ErrUniqueIndexConflict", uniqueOrdinal, err)
+	}
+}
+
+func collectionManyStringIndexesForTest(n int, unique map[int]bool) []IndexDefinition {
+	indexes := make([]IndexDefinition, n)
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("idx%02d", i)
+		indexes[i] = IndexDefinition{
+			Name:      name,
+			Field:     fmt.Sprintf("f%02d", i),
+			ValueType: IndexValueString,
+			Unique:    unique[i],
+		}
+	}
+	return indexes
+}
+
+func collectionManyIndexJSONDocumentForTest(indexCount int, overrides map[int]string, extra map[string]string) []byte {
+	var builder strings.Builder
+	builder.WriteByte('{')
+	first := true
+	writeStringField := func(name, value string) {
+		if !first {
+			builder.WriteByte(',')
+		}
+		first = false
+		fmt.Fprintf(&builder, "%q:%q", name, value)
+	}
+	for i := 0; i < indexCount; i++ {
+		value := fmt.Sprintf("v%02d", i)
+		if overrides != nil {
+			if override, ok := overrides[i]; ok {
+				value = override
+			}
+		}
+		writeStringField(fmt.Sprintf("f%02d", i), value)
+	}
+	extraNames := make([]string, 0, len(extra))
+	for name := range extra {
+		extraNames = append(extraNames, name)
+	}
+	sort.Strings(extraNames)
+	for _, name := range extraNames {
+		writeStringField(name, extra[name])
+	}
+	builder.WriteByte('}')
+	return []byte(builder.String())
+}
+
+func collectionRootIDsForTest(t *testing.T, d *backenddb.DB, collectionName string, rootNames []string) map[string]uint64 {
+	t.Helper()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, collectionName)
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	if catalog == nil {
+		t.Fatal("missing catalog")
+	}
+	out := make(map[string]uint64, len(rootNames))
+	for _, rootName := range rootNames {
+		rootID := catalog.rootID(rootName)
+		if rootID == 0 {
+			t.Fatalf("root %q was not persisted", rootName)
+		}
+		out[rootName] = rootID
+	}
+	return out
 }
 
 func TestCollectionInsertBatchBridge_RejectsPersistedUniqueConflictAtomically(t *testing.T) {
