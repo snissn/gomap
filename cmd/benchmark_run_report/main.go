@@ -725,7 +725,8 @@ func renderHTML(data reportData) string {
 		}
 		b.WriteString("</p>")
 	}
-	b.WriteString("<nav><a href=\"#mongo-full\">Mongo full sweep</a><a href=\"#mongo-load\">Load modes</a><a href=\"#scaling\">Scaling</a><a href=\"#collections\">Collections</a><a href=\"#raw-engine\">Raw engine</a></nav></header>\n")
+	b.WriteString(reportNav(data))
+	b.WriteString("</header>\n")
 	if len(data.Warnings) > 0 {
 		b.WriteString("<section class=\"warn\"><h2>Warnings</h2><ul>")
 		for _, warning := range data.Warnings {
@@ -739,6 +740,39 @@ func renderHTML(data reportData) string {
 	renderCollections(&b, data.Collections, data.CollectionComparisons)
 	renderRawEngine(&b, data.RawEngine)
 	b.WriteString("</body>\n</html>\n")
+	return b.String()
+}
+
+func reportNav(data reportData) string {
+	type navItem struct {
+		Href  string
+		Label string
+	}
+	var items []navItem
+	if len(data.MongoFullSweep) > 0 {
+		items = append(items, navItem{Href: "#mongo-full", Label: "Mongo full sweep"})
+	}
+	if len(data.MongoLoadModes) > 0 {
+		items = append(items, navItem{Href: "#mongo-load", Label: "Load modes"})
+	}
+	if len(data.MongoScaling) > 0 {
+		items = append(items, navItem{Href: "#scaling", Label: "Scaling"})
+	}
+	if len(data.Collections) > 0 || len(data.CollectionComparisons) > 0 {
+		items = append(items, navItem{Href: "#collections", Label: "Collections"})
+	}
+	if len(data.RawEngine) > 0 {
+		items = append(items, navItem{Href: "#raw-engine", Label: "Raw engine"})
+	}
+	if len(items) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("<nav>")
+	for _, item := range items {
+		b.WriteString("<a href=\"" + esc(item.Href) + "\">" + esc(item.Label) + "</a>")
+	}
+	b.WriteString("</nav>")
 	return b.String()
 }
 
@@ -804,7 +838,11 @@ func renderRawEngine(b *strings.Builder, rows []rawEngineRun) {
 	for _, test := range tests {
 		line := []string{test}
 		for _, row := range rows {
-			line = append(line, fmtOps(row.Results[test]))
+			if v, ok := row.Results[test]; ok {
+				line = append(line, fmtOps(v))
+			} else {
+				line = append(line, "-")
+			}
 		}
 		body = append(body, line)
 	}
@@ -822,7 +860,7 @@ func renderRawEngine(b *strings.Builder, rows []rawEngineRun) {
 }
 
 func renderRawEngineCharts(b *strings.Builder, rows []rawEngineRun, tests []string) {
-	b.WriteString(rawEngineGroupedBarChart("Raw engine throughput by test", rows, tests, rawEngineVariants()))
+	b.WriteString(rawEngineGroupedBarChart("Raw engine throughput by test", rows, tests, rawEnginePresentVariants(rows, rawEngineVariants())))
 }
 
 type rawEngineVariant struct {
@@ -841,13 +879,28 @@ func rawEngineVariants() []rawEngineVariant {
 	}
 }
 
-func rawEngineResult(rows []rawEngineRun, profile, checkpoint, test string) float64 {
+func rawEnginePresentVariants(rows []rawEngineRun, variants []rawEngineVariant) []rawEngineVariant {
+	present := make(map[string]bool)
 	for _, row := range rows {
-		if row.Profile == profile && row.Checkpoint == checkpoint {
-			return row.Results[test]
+		present[row.Profile+"\x00"+row.Checkpoint] = true
+	}
+	var out []rawEngineVariant
+	for _, variant := range variants {
+		if present[variant.Profile+"\x00"+variant.Checkpoint] {
+			out = append(out, variant)
 		}
 	}
-	return 0
+	return out
+}
+
+func rawEngineResult(rows []rawEngineRun, profile, checkpoint, test string) (float64, bool) {
+	for _, row := range rows {
+		if row.Profile == profile && row.Checkpoint == checkpoint {
+			v, ok := row.Results[test]
+			return v, ok
+		}
+	}
+	return 0, false
 }
 
 func collectRawTests(rows []rawEngineRun) []string {
@@ -1448,7 +1501,7 @@ func rawEngineGroupedBarChart(title string, rows []rawEngineRun, tests []string,
 	maxV := 0.0
 	for _, test := range tests {
 		for _, variant := range variants {
-			if v := rawEngineResult(rows, variant.Profile, variant.Checkpoint, test); v > maxV {
+			if v, ok := rawEngineResult(rows, variant.Profile, variant.Checkpoint, test); ok && v > maxV {
 				maxV = v
 			}
 		}
@@ -1486,17 +1539,20 @@ func rawEngineGroupedBarChart(title string, rows []rawEngineRun, tests []string,
 		largestVariant := -1
 		largestValue := 0.0
 		for vidx, variant := range variants {
-			if v := rawEngineResult(rows, variant.Profile, variant.Checkpoint, test); v > largestValue {
+			if v, ok := rawEngineResult(rows, variant.Profile, variant.Checkpoint, test); ok && v > largestValue {
 				largestValue = v
 				largestVariant = vidx
 			}
 		}
 		for vidx, variant := range variants {
-			v := rawEngineResult(rows, variant.Profile, variant.Checkpoint, test)
+			v, ok := rawEngineResult(rows, variant.Profile, variant.Checkpoint, test)
+			if !ok || v <= 0 {
+				continue
+			}
 			barH := (v / maxV) * plotH
 			x := groupX + innerPad + float64(vidx)*(barW+barGap)
 			yy := axisY - barH
-			b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s, %s: %s ops/sec</title></rect>", x, yy, barW, math.Max(barH, 1), esc(variant.Color), esc(test), esc(variant.Label), esc(formatChartValue(v, "ops/sec"))))
+			b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s, %s: %s ops/sec</title></rect>", x, yy, barW, barH, esc(variant.Color), esc(test), esc(variant.Label), esc(formatChartValue(v, "ops/sec"))))
 			if vidx == largestVariant && barW >= 10 && v > 0 {
 				b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"#344256\">%s</text>", x+barW/2, math.Max(top+10, yy-5), esc(shortNumber(v))))
 			}
@@ -1642,10 +1698,13 @@ func verticalBarChartWithSize(title string, categories []string, xAxisLabel stri
 				continue
 			}
 			v := s.Values[i]
+			if v <= 0 {
+				continue
+			}
 			barH := (v / maxV) * plotH
 			x := groupX + innerPad + float64(sidx)*(barW+barGap)
 			yy := axisY - barH
-			b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s %s: %s %s</title></rect>", x, yy, barW, math.Max(barH, 1), esc(s.Color), esc(cat), esc(s.Name), esc(formatChartValue(v, unit)), esc(unit)))
+			b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s %s: %s %s</title></rect>", x, yy, barW, barH, esc(s.Color), esc(cat), esc(s.Name), esc(formatChartValue(v, unit)), esc(unit)))
 			if barW >= 10 && v > 0 {
 				b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"#344256\">%s</text>", x+barW/2, math.Max(top+10, yy-5), esc(formatChartValue(v, unit))))
 			}

@@ -90,6 +90,14 @@ func TestNormalizeRunPathsMakesOutDirAbsolute(t *testing.T) {
 	}
 }
 
+func TestCanonicalFormatListDedupesCanonicalAliases(t *testing.T) {
+	got := strings.Join(canonicalFormatList([]string{"JSON", "json", "template_v1", "template-v1", "bson", ""}), ",")
+	want := "json,template-v1,bson"
+	if got != want {
+		t.Fatalf("canonicalFormatList = %q, want %q", got, want)
+	}
+}
+
 func TestValidateSafeRunDirRefusesUnsafeExistingDirectory(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "unrelated.txt"), []byte("data"), 0644); err != nil {

@@ -20,6 +20,33 @@ func TestDeepReportFromRunRoot(t *testing.T) {
     }
   }]
 }`)
+	writeFile(t, filepath.Join(root, "raw_engine_full_matrix", "wal_on_fast_no_checkpoint_between_tests", "benchprof_results.json"), `{
+  "runs": [{
+    "profile": "wal_on_fast",
+    "results": {
+      "sequential_write": {"TreeDB": 1100},
+      "random_read": {"TreeDB": 2100}
+    }
+  }]
+}`)
+	writeFile(t, filepath.Join(root, "raw_engine_full_matrix", "fast_checkpoint_between_tests", "benchprof_results.json"), `{
+  "runs": [{
+    "profile": "fast",
+    "results": {
+      "sequential_write": {"TreeDB": 1200},
+      "random_read": {"TreeDB": 2200}
+    }
+  }]
+}`)
+	writeFile(t, filepath.Join(root, "raw_engine_full_matrix", "fast_no_checkpoint_between_tests", "benchprof_results.json"), `{
+  "runs": [{
+    "profile": "fast",
+    "results": {
+      "sequential_write": {"TreeDB": 1300},
+      "random_read": {"TreeDB": 2300}
+    }
+  }]
+}`)
 	writeFile(t, filepath.Join(root, "raw_engine_full_matrix", "wal_on_fast_checkpoint_between_tests", "unified-bench.log"), "Disk Usage (End of Run)\nTreeDB:\n  maindb/index.db: 1 MiB\n  maindb/leaf_vlog: total=2 MiB files=1 value=2 MiB other=0 B\n")
 	writeFile(t, filepath.Join(root, "collections_sqlite_canonical_1m", "indexes_0", "benchmark_results.json"), `{
   "results": [
@@ -90,6 +117,42 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Fatalf("report missing %q\n%s", want, html)
 		}
+	}
+}
+
+func TestRenderHTMLNavOmitsMissingSections(t *testing.T) {
+	html := renderHTML(reportData{
+		Config: config{Title: "partial", RunRoot: t.TempDir()},
+		MongoLoadModes: []loadModeRow{
+			{Indexes: 0, Target: "treedb", Config: "treedb_bson_driver", OpsPerSec: 1000},
+		},
+	})
+	if !strings.Contains(html, "href=\"#mongo-load\"") {
+		t.Fatalf("nav missing present load-mode section\n%s", html)
+	}
+	for _, absent := range []string{"href=\"#mongo-full\"", "href=\"#scaling\"", "href=\"#collections\"", "href=\"#raw-engine\""} {
+		if strings.Contains(html, absent) {
+			t.Fatalf("nav includes missing section %s\n%s", absent, html)
+		}
+	}
+}
+
+func TestRawEngineChartOmitsMissingVariants(t *testing.T) {
+	html := renderHTML(reportData{
+		Config: config{Title: "partial raw", RunRoot: t.TempDir()},
+		RawEngine: []rawEngineRun{
+			{
+				Profile:    "wal_on_fast",
+				Checkpoint: "checkpoint between tests",
+				Results:    map[string]float64{"sequential_write": 1000},
+			},
+		},
+	})
+	if strings.Contains(html, "fast / no checkpoint between tests") {
+		t.Fatalf("chart legend includes an absent raw-engine variant\n%s", html)
+	}
+	if strings.Contains(html, ": 0 ops/sec") {
+		t.Fatalf("chart renders a missing raw-engine cell as zero throughput\n%s", html)
 	}
 }
 

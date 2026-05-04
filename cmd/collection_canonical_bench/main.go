@@ -274,10 +274,11 @@ func run(argv []string) error {
 	if cfg.Benchtime == "" {
 		cfg.Benchtime = fmt.Sprintf("%dx", cfg.Docs)
 	}
-	formats := splitCSV(cfg.Formats)
+	formats := canonicalFormatList(splitCSV(cfg.Formats))
 	if len(formats) == 0 {
 		return errors.New("-formats must contain at least one value")
 	}
+	cfg.Formats = strings.Join(formats, ",")
 	if err := prepareRunDir(cfg); err != nil {
 		return err
 	}
@@ -1478,6 +1479,20 @@ func splitCSV(v string) []string {
 		if part != "" {
 			out = append(out, part)
 		}
+	}
+	return out
+}
+
+func canonicalFormatList(formats []string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, format := range formats {
+		format = canonicalFormat(format)
+		if format == "" || seen[format] {
+			continue
+		}
+		seen[format] = true
+		out = append(out, format)
 	}
 	return out
 }
