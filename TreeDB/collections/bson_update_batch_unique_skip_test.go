@@ -16,6 +16,7 @@ func TestCollectionBSONUpdateBatchSkipsUnchangedUniqueWhenNonUniqueChanges(t *te
 	defer func() { _ = d.Close() }()
 
 	mgr := NewCollectionManager(d)
+	mgr.SetUpdateBatchDetailedStatsEnabled(true)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Options: CollectionOptions{

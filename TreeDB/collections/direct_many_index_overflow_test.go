@@ -10,7 +10,7 @@ import (
 )
 
 func TestCollectionDirectUpdateMinimizesIndexOrdinalBeyondMaskWidth(t *testing.T) {
-	const indexCount = 72
+	const indexCount = 65
 	const targetOrdinal = 64
 
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
