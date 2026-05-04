@@ -194,6 +194,7 @@ func TestTreeDBStatsDeltaAndPhaseMetrics(t *testing.T) {
 		"treedb.collections.write_domain.root_delta_plan.roots.template_total":                 "0",
 		"treedb.collections.write_domain.root_delta_plan.roots.index_state_total":              "1",
 		"treedb.collections.write_domain.root_delta_plan.roots.secondary_total":                "3",
+		"treedb.test.large_counter_total":                                                      "9007199254740993",
 	}
 	after := map[string]string{
 		"treedb.publish.ordered_root_delta_group.calls_total":                                  "5",
@@ -216,11 +217,15 @@ func TestTreeDBStatsDeltaAndPhaseMetrics(t *testing.T) {
 		"treedb.collections.write_domain.root_delta_plan.roots.template_total":                 "2",
 		"treedb.collections.write_domain.root_delta_plan.roots.index_state_total":              "3",
 		"treedb.collections.write_domain.root_delta_plan.roots.secondary_total":                "9",
+		"treedb.test.large_counter_total":                                                      "9007199254741000",
 	}
 	phase := summarizePhase("concurrent_id_update_set_w8", 40, 20, time.Second, []time.Duration{time.Millisecond})
 	attachTreeDBPhaseStats(&phase, before, after)
 	if got := phase.TreeDBStatsDelta["treedb.publish.ordered_root_delta_group.calls_total"]; got != "3" {
 		t.Fatalf("calls delta=%q want 3; deltas=%v", got, phase.TreeDBStatsDelta)
+	}
+	if got := phase.TreeDBStatsDelta["treedb.test.large_counter_total"]; got != "7" {
+		t.Fatalf("large counter delta=%q want 7; deltas=%v", got, phase.TreeDBStatsDelta)
 	}
 	for name, want := range map[string]float64{
 		"publish_delta_group_calls/doc":         0.075,

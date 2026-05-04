@@ -584,8 +584,14 @@ func loadKnownTests(profilesDir string) map[string]struct{} {
 func loadTreeDBStatsMetadata(profilesDir string) ([]treeDBStatsRun, error) {
 	path := filepath.Join(strings.TrimSpace(profilesDir), "benchprof_results.json")
 	st, err := os.Stat(path)
-	if err != nil || st.IsDir() {
-		return nil, nil
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("stat %q: %w", path, err)
+	}
+	if st.IsDir() {
+		return nil, fmt.Errorf("stat %q: expected file, got directory", path)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {

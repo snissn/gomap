@@ -11779,13 +11779,7 @@ func TestCollectionFindByIndexRangeSeesPublishingIndexedFlushUnits(t *testing.T)
 	if work == nil {
 		t.Fatal("prepare async publish returned nil work")
 	}
-	publishAttempted := false
-	defer func() {
-		if !publishAttempted && work.pin != nil {
-			_ = work.pin.Close()
-			work.pin = nil
-		}
-	}()
+	defer collectionTestCloseIndexedFlushWork(work)
 
 	ids, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
 		Lower: IndexRangeBound{Value: int64(7), Inclusive: true},
@@ -11807,7 +11801,6 @@ func TestCollectionFindByIndexRangeSeesPublishingIndexedFlushUnits(t *testing.T)
 	if truncated || len(ids) != 0 {
 		t.Fatalf("publishing old score ids=%q truncated=%v want none false", ids, truncated)
 	}
-	publishAttempted = true
 	if err := col.publishPreparedIndexedFlush(work); err != nil {
 		t.Fatalf("publish prepared async flush: %v", err)
 	}

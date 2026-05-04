@@ -564,6 +564,7 @@ def parse_number(value):
 
 def delta_count(delta, keys):
     found = False
+    parsed = False
     total = 0.0
     for key in keys:
         if key not in delta:
@@ -571,8 +572,9 @@ def delta_count(delta, keys):
         found = True
         value, ok = parse_number(delta.get(key))
         if ok:
+            parsed = True
             total += value
-    if not found:
+    if not found or not parsed:
         return ""
     return fmt(total)
 
