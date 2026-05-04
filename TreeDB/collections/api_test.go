@@ -24,6 +24,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -1223,6 +1224,25 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 		if exported[key] == "" {
 			t.Fatalf("exported stats missing %s from %#v", key, exported)
 		}
+	}
+}
+
+func TestCollectionRootDeltaPlanStatsCountsPointerValueBytes(t *testing.T) {
+	delta := batch.New(nil, 0)
+	defer func() { _ = delta.Close() }()
+	ptr := page.ValuePtr{FileID: page.ValueLogFileID(1), Offset: 128, Length: 64}
+	if err := delta.SetPointer([]byte("u1"), ptr); err != nil {
+		t.Fatalf("set pointer delta: %v", err)
+	}
+	stats := collectionRootDeltaPlanStatsFromOrdered("users",
+		[]string{collectionPrimaryRootName("users")},
+		[]backenddb.OrderedRootDeltaBatchPublishInput{{Delta: delta}},
+	)
+	if got, want := stats.valueBytes, uint64(page.ValuePtrSize); got != want {
+		t.Fatalf("root delta value bytes=%d want pointer payload %d", got, want)
+	}
+	if got, want := stats.primaryValueBytes, uint64(page.ValuePtrSize); got != want {
+		t.Fatalf("primary root delta value bytes=%d want pointer payload %d", got, want)
 	}
 }
 

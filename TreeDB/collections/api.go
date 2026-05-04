@@ -1776,14 +1776,18 @@ func (domain *collectionWriteDomain) observeIndexedFlushForcedDrain() {
 }
 
 type collectionRootDeltaPlanStats struct {
-	primaryRoots    uint64
-	templateRoots   uint64
-	indexStateRoots uint64
-	secondaryRoots  uint64
-	entries         uint64
-	keyBytes        uint64
-	valueBytes      uint64
-	tombstones      uint64
+	primaryRoots      uint64
+	templateRoots     uint64
+	indexStateRoots   uint64
+	secondaryRoots    uint64
+	entries           uint64
+	keyBytes          uint64
+	valueBytes        uint64
+	tombstones        uint64
+	primaryEntries    uint64
+	primaryKeyBytes   uint64
+	primaryValueBytes uint64
+	primaryTombstones uint64
 }
 
 func (domain *collectionWriteDomain) observeRootDeltaPlan(stats collectionRootDeltaPlanStats) {
@@ -1830,9 +1834,9 @@ func (domain *collectionWriteDomain) observePrimaryOnlyUpdateBatch(items, matche
 		return
 	}
 	domain.primaryOnlyRootPublishes.Add(1)
-	domain.primaryOnlyRootDeltaEntries.Add(deltaStats.entries)
-	domain.primaryOnlyRootDeltaKeyBytes.Add(deltaStats.keyBytes)
-	domain.primaryOnlyRootDeltaValueBytes.Add(deltaStats.valueBytes)
+	domain.primaryOnlyRootDeltaEntries.Add(deltaStats.primaryEntries)
+	domain.primaryOnlyRootDeltaKeyBytes.Add(deltaStats.primaryKeyBytes)
+	domain.primaryOnlyRootDeltaValueBytes.Add(deltaStats.primaryValueBytes)
 	if modified > 0 {
 		domain.primaryOnlyCoalescedDocs.Add(uint64(modified))
 	}
@@ -5224,42 +5228,71 @@ func buildRootDeltaBatchPublishInputsFromTables(collectionName string, rootNames
 func collectionRootDeltaPlanStatsFromOrdered(collectionName string, rootNames []string, ordered []backenddb.OrderedRootDeltaBatchPublishInput) collectionRootDeltaPlanStats {
 	var stats collectionRootDeltaPlanStats
 	for i, rootName := range rootNames {
-		stats.addRoot(collectionName, rootName)
+		kind := stats.addRoot(collectionName, rootName)
 		if i < len(ordered) {
-			stats.addBatch(ordered[i].Delta)
+			stats.addBatch(kind, ordered[i].Delta)
 		}
 	}
 	return stats
 }
 
-func (stats *collectionRootDeltaPlanStats) addRoot(collectionName, rootName string) {
+type collectionRootDeltaPlanKind uint8
+
+const (
+	collectionRootDeltaPlanUnknown collectionRootDeltaPlanKind = iota
+	collectionRootDeltaPlanPrimary
+	collectionRootDeltaPlanTemplate
+	collectionRootDeltaPlanIndexState
+	collectionRootDeltaPlanSecondary
+)
+
+func (stats *collectionRootDeltaPlanStats) addRoot(collectionName, rootName string) collectionRootDeltaPlanKind {
 	if stats == nil || rootName == "" {
-		return
+		return collectionRootDeltaPlanUnknown
 	}
 	switch {
 	case rootName == collectionPrimaryRootName(collectionName):
 		stats.primaryRoots++
+		return collectionRootDeltaPlanPrimary
 	case rootName == collectionTemplateRootName(collectionName):
 		stats.templateRoots++
+		return collectionRootDeltaPlanTemplate
 	case rootName == collectionIndexStateRootName(collectionName):
 		stats.indexStateRoots++
+		return collectionRootDeltaPlanIndexState
 	case strings.HasPrefix(rootName, collectionName+"/index/"):
 		stats.secondaryRoots++
+		return collectionRootDeltaPlanSecondary
 	}
+	return collectionRootDeltaPlanUnknown
 }
 
-func (stats *collectionRootDeltaPlanStats) addBatch(delta *batch.Batch) {
+func (stats *collectionRootDeltaPlanStats) addBatch(kind collectionRootDeltaPlanKind, delta *batch.Batch) {
 	if stats == nil || delta == nil {
 		return
 	}
 	for _, entry := range delta.SortedEntries() {
 		stats.entries++
 		stats.keyBytes += uint64(len(entry.Key))
+		if kind == collectionRootDeltaPlanPrimary {
+			stats.primaryEntries++
+			stats.primaryKeyBytes += uint64(len(entry.Key))
+		}
 		if entry.Type == batch.OpDelete {
 			stats.tombstones++
+			if kind == collectionRootDeltaPlanPrimary {
+				stats.primaryTombstones++
+			}
 			continue
 		}
-		stats.valueBytes += uint64(len(entry.Value))
+		valueBytes := uint64(len(entry.Value))
+		if entry.IsPtr {
+			valueBytes += page.ValuePtrSize
+		}
+		stats.valueBytes += valueBytes
+		if kind == collectionRootDeltaPlanPrimary {
+			stats.primaryValueBytes += valueBytes
+		}
 	}
 }
 
@@ -6524,7 +6557,10 @@ func (c *Collection) deleteDocumentOnce(documentID []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	deltaStats := collectionRootDeltaPlanStatsFromOrdered(c.meta.Name, rootNames, ordered)
+	var deltaStats collectionRootDeltaPlanStats
+	if c.writeDomain != nil {
+		deltaStats = collectionRootDeltaPlanStatsFromOrdered(c.meta.Name, rootNames, ordered)
+	}
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 	})
@@ -7642,7 +7678,10 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	if err != nil {
 		return false, false, err
 	}
-	deltaStats := collectionRootDeltaPlanStatsFromOrdered(c.meta.Name, rootNames, ordered)
+	var deltaStats collectionRootDeltaPlanStats
+	if c.writeDomain != nil {
+		deltaStats = collectionRootDeltaPlanStatsFromOrdered(c.meta.Name, rootNames, ordered)
+	}
 	preflight := func() error {
 		return c.validateMutationRootDescriptors(baseUserRoot, baseSystemRoot, baseCommitSeq)
 	}
@@ -9195,7 +9234,10 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]Upda
 	if err != nil {
 		return nil, err
 	}
-	deltaStats := collectionRootDeltaPlanStatsFromOrdered(plan.meta.Name, plan.rootNames, ordered)
+	var deltaStats collectionRootDeltaPlanStats
+	if c.writeDomain != nil {
+		deltaStats = collectionRootDeltaPlanStatsFromOrdered(plan.meta.Name, plan.rootNames, ordered)
+	}
 	preflight := func() error {
 		return c.validateMutationRootDescriptors(plan.baseUserRoot, plan.baseSystemRoot, plan.baseCommitSeq)
 	}
