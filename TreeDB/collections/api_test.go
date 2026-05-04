@@ -1113,6 +1113,12 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 	if stats.PendingRootRuns == 0 {
 		t.Fatal("stats pending root runs=0 want positive")
 	}
+	if got, want := stats.OverlayMutableDocs, 2; got != want {
+		t.Fatalf("stats overlay mutable docs=%d want %d", got, want)
+	}
+	if got, want := stats.OverlayVisibleDepth, 1; got != want {
+		t.Fatalf("stats overlay visible depth=%d want %d", got, want)
+	}
 	if got, want := stats.IndexedStageBatches, uint64(1); got != want {
 		t.Fatalf("stats indexed stage batches=%d want %d", got, want)
 	}
@@ -1129,6 +1135,10 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 	for _, key := range []string{
 		"treedb.collections.write_domain.pending_docs",
 		"treedb.collections.write_domain.pending_indexed_flush_units",
+		"treedb.collections.write_domain.overlay.mutable_docs",
+		"treedb.collections.write_domain.overlay.queued_indexed_flush_units",
+		"treedb.collections.write_domain.overlay.active_indexed_flush_units",
+		"treedb.collections.write_domain.overlay.visible_depth",
 		"treedb.collections.write_domain.indexed_stage.batches_total",
 		"treedb.collections.write_domain.indexed_async_flush.scheduled_total",
 		"treedb.collections.write_domain.mutation_lock.calls_total",
@@ -1151,17 +1161,102 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 	if got, want := stats.IndexedFlushDocs, uint64(2); got != want {
 		t.Fatalf("stats indexed flush docs=%d want %d", got, want)
 	}
+	if got, want := stats.IndexedFlushUnits, uint64(1); got != want {
+		t.Fatalf("stats indexed flush units=%d want %d", got, want)
+	}
 	if stats.IndexedFlushBytes == 0 || stats.IndexedFlushRootRuns == 0 || stats.IndexedFlushRoots == 0 {
 		t.Fatalf("stats indexed flush bytes/root-runs/roots=%d/%d/%d want positive", stats.IndexedFlushBytes, stats.IndexedFlushRootRuns, stats.IndexedFlushRoots)
+	}
+	if got, want := stats.RootDeltaPlanPrimaryRoots, uint64(1); got != want {
+		t.Fatalf("stats root-delta primary roots=%d want %d", got, want)
+	}
+	if got, want := stats.RootDeltaPlanSecondaryRoots, uint64(1); got != want {
+		t.Fatalf("stats root-delta secondary roots=%d want %d", got, want)
+	}
+	if stats.RootDeltaPlanEntries == 0 || stats.RootDeltaPlanKeyBytes == 0 {
+		t.Fatalf("stats root-delta entries/key-bytes=%d/%d want positive", stats.RootDeltaPlanEntries, stats.RootDeltaPlanKeyBytes)
 	}
 	if stats.IndexedFlushDuration <= 0 || stats.IndexedFlushMaterialize <= 0 || stats.IndexedFlushPublish <= 0 {
 		t.Fatalf("stats indexed flush duration/materialize/publish=%s/%s/%s want positive", stats.IndexedFlushDuration, stats.IndexedFlushMaterialize, stats.IndexedFlushPublish)
 	}
 	exported = mgr.Stats()
 	for _, key := range []string{
+		"treedb.collections.write_domain.indexed_flush.units_total",
 		"treedb.collections.write_domain.indexed_flush.duration_ns_total",
 		"treedb.collections.write_domain.indexed_flush.materialize_ns_total",
 		"treedb.collections.write_domain.indexed_flush.publish_ns_total",
+		"treedb.collections.write_domain.root_delta_plan.roots.primary_total",
+		"treedb.collections.write_domain.root_delta_plan.roots.secondary_total",
+		"treedb.collections.write_domain.root_delta_plan.entries_total",
+		"treedb.collections.write_domain.root_delta_plan.key_bytes_total",
+	} {
+		if exported[key] == "" {
+			t.Fatalf("exported stats missing %s from %#v", key, exported)
+		}
+	}
+}
+
+func TestPrimaryOnlyNoIndexUpdateCounters(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"name":"ada","city":"hnl"}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	matched, modified, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+		return []byte(`{"name":"ada","city":"sea"}`), true, nil
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("update matched/modified=%v/%v want true/true", matched, modified)
+	}
+
+	stats := mgr.StatsSnapshot()
+	if got, want := stats.PrimaryOnlyUpdateCalls, uint64(1); got != want {
+		t.Fatalf("primary-only update calls=%d want %d", got, want)
+	}
+	if got, want := stats.PrimaryOnlyMatched, uint64(1); got != want {
+		t.Fatalf("primary-only matched=%d want %d", got, want)
+	}
+	if got, want := stats.PrimaryOnlyModified, uint64(1); got != want {
+		t.Fatalf("primary-only modified=%d want %d", got, want)
+	}
+	if got, want := stats.PrimaryOnlyRootPublishes, uint64(1); got != want {
+		t.Fatalf("primary-only root publishes=%d want %d", got, want)
+	}
+	if got, want := stats.PrimaryOnlyRootDeltaEntries, uint64(1); got != want {
+		t.Fatalf("primary-only root delta entries=%d want %d", got, want)
+	}
+	if stats.PrimaryOnlyRootDeltaKeyBytes == 0 || stats.PrimaryOnlyRootDeltaValueBytes == 0 {
+		t.Fatalf("primary-only root delta key/value bytes=%d/%d want positive", stats.PrimaryOnlyRootDeltaKeyBytes, stats.PrimaryOnlyRootDeltaValueBytes)
+	}
+	if got, want := stats.PrimaryOnlyCoalescedDocs, uint64(1); got != want {
+		t.Fatalf("primary-only coalesced docs=%d want %d", got, want)
+	}
+
+	exported := mgr.Stats()
+	for _, key := range []string{
+		"treedb.collections.write_domain.primary_only.update_calls_total",
+		"treedb.collections.write_domain.primary_only.matched_total",
+		"treedb.collections.write_domain.primary_only.modified_total",
+		"treedb.collections.write_domain.primary_only.root_publishes_total",
+		"treedb.collections.write_domain.primary_only.root_delta_entries_total",
+		"treedb.collections.write_domain.primary_only.root_delta_key_bytes_total",
+		"treedb.collections.write_domain.primary_only.root_delta_value_bytes_total",
+		"treedb.collections.write_domain.primary_only.coalesced_docs_total",
 	} {
 		if exported[key] == "" {
 			t.Fatalf("exported stats missing %s from %#v", key, exported)
@@ -4182,11 +4277,17 @@ func TestBuildBufferedRootDeltaBatchPublishInputsParallelPreservesRootOrderAndTo
 		cityName:    backenddb.OrderedRootStoragePagerLeaves,
 	}
 
-	ordered, cleanup, err := buildBufferedRootDeltaBatchPublishInputs(rootNames, rootRuns, rootBaseIDs, rootPolicies)
+	ordered, stats, cleanup, err := buildBufferedRootDeltaBatchPublishInputs("users", rootNames, rootRuns, rootBaseIDs, rootPolicies)
 	if err != nil {
 		t.Fatalf("build buffered root deltas: %v", err)
 	}
 	defer cleanup()
+	if got, want := stats.Entries, uint64(4); got != want {
+		t.Fatalf("delta stats entries=%d want %d", got, want)
+	}
+	if got, want := stats.Tombstones, uint64(1); got != want {
+		t.Fatalf("delta stats tombstones=%d want %d", got, want)
+	}
 
 	if got, want := len(ordered), len(rootNames); got != want {
 		t.Fatalf("ordered roots=%d want %d", got, want)
@@ -4255,11 +4356,14 @@ func TestBuildBufferedRootOverlayDeltaBatchPublishInputsPreservesColdTombstones(
 		cityName:    nil,
 	}
 
-	ordered, cleanup, err := buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames, rootRuns, rootPolicies, rootOverlays)
+	ordered, stats, cleanup, err := buildBufferedRootOverlayDeltaBatchPublishInputs("users", rootNames, rootRuns, rootPolicies, rootOverlays)
 	if err != nil {
 		t.Fatalf("build overlay root deltas: %v", err)
 	}
 	defer cleanup()
+	if got, want := stats.Tombstones, uint64(2); got != want {
+		t.Fatalf("overlay delta stats tombstones=%d want %d", got, want)
+	}
 
 	if got, want := len(ordered), len(rootNames); got != want {
 		t.Fatalf("ordered roots=%d want %d", got, want)

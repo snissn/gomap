@@ -186,6 +186,14 @@ func TestTreeDBStatsDeltaAndPhaseMetrics(t *testing.T) {
 		"treedb.collections.write_domain.indexed_flush.docs_total":                             "8",
 		"treedb.collections.write_domain.indexed_flush.units_total":                            "1",
 		"treedb.collections.write_domain.indexed_flush.root_runs_total":                        "4",
+		"treedb.collections.write_domain.root_delta_plan.entries_total":                        "10",
+		"treedb.collections.write_domain.root_delta_plan.key_bytes_total":                      "100",
+		"treedb.collections.write_domain.root_delta_plan.value_bytes_total":                    "200",
+		"treedb.collections.write_domain.root_delta_plan.tombstones_total":                     "1",
+		"treedb.collections.write_domain.root_delta_plan.roots.primary_total":                  "2",
+		"treedb.collections.write_domain.root_delta_plan.roots.template_total":                 "0",
+		"treedb.collections.write_domain.root_delta_plan.roots.index_state_total":              "1",
+		"treedb.collections.write_domain.root_delta_plan.roots.secondary_total":                "3",
 	}
 	after := map[string]string{
 		"treedb.publish.ordered_root_delta_group.calls_total":                                  "5",
@@ -200,6 +208,14 @@ func TestTreeDBStatsDeltaAndPhaseMetrics(t *testing.T) {
 		"treedb.collections.write_domain.indexed_flush.docs_total":                             "48",
 		"treedb.collections.write_domain.indexed_flush.units_total":                            "7",
 		"treedb.collections.write_domain.indexed_flush.root_runs_total":                        "16",
+		"treedb.collections.write_domain.root_delta_plan.entries_total":                        "50",
+		"treedb.collections.write_domain.root_delta_plan.key_bytes_total":                      "500",
+		"treedb.collections.write_domain.root_delta_plan.value_bytes_total":                    "1000",
+		"treedb.collections.write_domain.root_delta_plan.tombstones_total":                     "5",
+		"treedb.collections.write_domain.root_delta_plan.roots.primary_total":                  "6",
+		"treedb.collections.write_domain.root_delta_plan.roots.template_total":                 "2",
+		"treedb.collections.write_domain.root_delta_plan.roots.index_state_total":              "3",
+		"treedb.collections.write_domain.root_delta_plan.roots.secondary_total":                "9",
 	}
 	phase := summarizePhase("concurrent_id_update_set_w8", 40, 20, time.Second, []time.Duration{time.Millisecond})
 	attachTreeDBPhaseStats(&phase, before, after)
@@ -219,6 +235,14 @@ func TestTreeDBStatsDeltaAndPhaseMetrics(t *testing.T) {
 		"indexed_flush_docs/batch":              20,
 		"indexed_flush_units/batch":             3,
 		"indexed_flush_root_runs/doc":           0.3,
+		"root_delta_plan_entries/doc":           1,
+		"root_delta_plan_key_bytes/doc":         10,
+		"root_delta_plan_value_bytes/doc":       20,
+		"root_delta_plan_tombstones/doc":        0.1,
+		"affected_primary_roots/doc":            0.1,
+		"affected_template_roots/doc":           0.05,
+		"affected_index_state_roots/doc":        0.05,
+		"affected_secondary_roots/doc":          0.15,
 		"publish_delta_group_calls/driver_call": 0.15,
 	} {
 		if got := phase.TreeDBMetrics[name]; math.Abs(got-want) > 1e-9 {

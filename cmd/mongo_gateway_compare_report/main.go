@@ -1069,12 +1069,12 @@ func renderWriterSweepCounterTable(b *strings.Builder, cells []cellComparison) {
 	}
 	b.WriteString("## 0-Index Writer Sweep Counters\n\n")
 	b.WriteString("These rows preserve TreeDB per-phase counter deltas for `concurrent_id_update_set_wN` phases. Values come from `phase.treedb_metrics` when present, so load counters and writer counters remain separate.\n\n")
-	b.WriteString("| docs | indexes | TreeDB config | MongoDB baseline config | writers | TreeDB ops/s | MongoDB ops/s | TreeDB p95 us | MongoDB p95 us | TreeDB driver calls | MongoDB driver calls | publish calls/doc | root apply calls/doc | roots/publish | root apply ns/doc | leaf-log loads/doc | leaf-log pages written/doc | leaf-log read bytes/doc | leaf-log write bytes/doc | indexed flush calls/doc | indexed flush units/batch | indexed flush docs/batch | indexed flush root-runs/doc | raw JSON |\n")
-	b.WriteString("| ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
+	b.WriteString("| docs | indexes | TreeDB config | MongoDB baseline config | writers | TreeDB ops/s | MongoDB ops/s | TreeDB p95 us | MongoDB p95 us | TreeDB driver calls | MongoDB driver calls | publish calls/doc | root apply calls/doc | roots/publish | root apply ns/doc | leaf-log loads/doc | leaf-log pages written/doc | leaf-log read bytes/doc | leaf-log write bytes/doc | indexed flush calls/doc | indexed flush units/batch | indexed flush docs/batch | indexed flush root-runs/doc | root-delta entries/doc | root-delta key bytes/doc | root-delta value bytes/doc | root-delta tombstones/doc | affected primary roots/doc | affected secondary roots/doc | primary root publishes/doc | primary root delta entries/doc | primary root delta bytes/doc | primary-only coalesced docs/publish | raw JSON |\n")
+	b.WriteString("| ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
 	for _, cmp := range rows {
 		writers, _ := concurrentUpdateWriters(cmp.Name)
 		cell := findCell(cells, cmp.Cell)
-		fmt.Fprintf(b, "| %d | %d | `%s` | %s | %d | %s | %s | %s | %s | %d | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | `%s` |\n",
+		fmt.Fprintf(b, "| %d | %d | `%s` | %s | %d | %s | %s | %s | %s | %d | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | `%s` |\n",
 			cmp.Cell.Documents,
 			cmp.Cell.SecondaryIndexes,
 			cmp.Cell.TreeDBConfig,
@@ -1098,6 +1098,16 @@ func renderWriterSweepCounterTable(b *strings.Builder, cells []cellComparison) {
 			formatPhaseMetric(cmp.TreeDBPhase, "indexed_flush_units/batch"),
 			formatPhaseMetric(cmp.TreeDBPhase, "indexed_flush_docs/batch"),
 			formatPhaseMetric(cmp.TreeDBPhase, "indexed_flush_root_runs/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "root_delta_plan_entries/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "root_delta_plan_key_bytes/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "root_delta_plan_value_bytes/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "root_delta_plan_tombstones/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "affected_primary_roots/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "affected_secondary_roots/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "primary_root_publishes/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "primary_root_delta_entries/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "primary_root_delta_bytes/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "primary_only_coalesced_docs/publish"),
 			cell.TreeDB.DisplayRawPath,
 		)
 	}
