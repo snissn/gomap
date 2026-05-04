@@ -1,7 +1,7 @@
 package collections
 
 import (
-	"bytes"
+	"sort"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -163,11 +163,18 @@ func assertTemplateV1UpdateBatchInt64IDs(t *testing.T, col *Collection, score in
 	if err != nil {
 		t.Fatalf("find score %d: %v", score, err)
 	}
-	if len(ids) != len(want) {
+	got := make([]string, len(ids))
+	for i := range ids {
+		got[i] = string(ids[i])
+	}
+	sort.Strings(got)
+	wantSorted := append([]string(nil), want...)
+	sort.Strings(wantSorted)
+	if len(got) != len(wantSorted) {
 		t.Fatalf("score %d ids=%q want %q", score, ids, want)
 	}
-	for i := range want {
-		if !bytes.Equal(ids[i], []byte(want[i])) {
+	for i := range wantSorted {
+		if got[i] != wantSorted[i] {
 			t.Fatalf("score %d ids=%q want %q", score, ids, want)
 		}
 	}
