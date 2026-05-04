@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"encoding/json"
 	"sort"
 	"testing"
 
@@ -101,7 +102,19 @@ func TestCollectionTemplateV1UpdateBatchSkipsUnchangedUniqueWhenNonUniqueChanges
 
 func templateV1UpdateBatchUniqueSkipDoc(tb testing.TB, email, city, note string) []byte {
 	tb.Helper()
-	doc, err := EncodeTemplateV1DocumentJSON([]byte(`{"email":"` + email + `","city":"` + city + `","note":"` + note + `"}`))
+	raw, err := json.Marshal(struct {
+		Email string `json:"email"`
+		City  string `json:"city"`
+		Note  string `json:"note"`
+	}{
+		Email: email,
+		City:  city,
+		Note:  note,
+	})
+	if err != nil {
+		tb.Fatalf("marshal template-v1 document JSON: %v", err)
+	}
+	doc, err := EncodeTemplateV1DocumentJSON(raw)
 	if err != nil {
 		tb.Fatalf("encode template-v1 document: %v", err)
 	}
