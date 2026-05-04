@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"math"
+	"math/big"
 	"math/bits"
 	"net"
 	"net/url"
@@ -142,18 +143,20 @@ type benchmarkResult struct {
 }
 
 type phaseResult struct {
-	Name                    string           `json:"name"`
-	Operations              int              `json:"operations"`
-	DriverCalls             int              `json:"driver_calls"`
-	EffectiveProducers      int              `json:"effective_producers,omitempty"`
-	DurationMillis          float64          `json:"duration_ms"`
-	OpsPerSecond            float64          `json:"ops_per_sec"`
-	SampledOpsPerSecond     float64          `json:"sampled_ops_per_sec,omitempty"`
-	SampledNsPerOp          float64          `json:"sampled_ns_per_op,omitempty"`
-	DriverAggregateMillis   float64          `json:"driver_aggregate_duration_ms,omitempty"`
-	DriverMeanLatencyMicros float64          `json:"driver_mean_latency_us,omitempty"`
-	LatencyMicros           latencySummary   `json:"latency_micros"`
-	ProducerResults         []producerResult `json:"producer_results,omitempty"`
+	Name                    string             `json:"name"`
+	Operations              int                `json:"operations"`
+	DriverCalls             int                `json:"driver_calls"`
+	EffectiveProducers      int                `json:"effective_producers,omitempty"`
+	DurationMillis          float64            `json:"duration_ms"`
+	OpsPerSecond            float64            `json:"ops_per_sec"`
+	SampledOpsPerSecond     float64            `json:"sampled_ops_per_sec,omitempty"`
+	SampledNsPerOp          float64            `json:"sampled_ns_per_op,omitempty"`
+	DriverAggregateMillis   float64            `json:"driver_aggregate_duration_ms,omitempty"`
+	DriverMeanLatencyMicros float64            `json:"driver_mean_latency_us,omitempty"`
+	LatencyMicros           latencySummary     `json:"latency_micros"`
+	ProducerResults         []producerResult   `json:"producer_results,omitempty"`
+	TreeDBStatsDelta        map[string]string  `json:"treedb_stats_delta,omitempty"`
+	TreeDBMetrics           map[string]float64 `json:"treedb_metrics,omitempty"`
 }
 
 type producerResult struct {
@@ -1155,7 +1158,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	if target.poolStats != nil {
 		target.poolStats.Reset()
 	}
-	loadPhase, err := runProfiledPhase(profiler, "load_insert_many", func() (phaseResult, error) {
+	loadPhase, err := runTreeDBProfiledPhase(target, profiler, "load_insert_many", func() (phaseResult, error) {
 		return runLoadPhase(ctx, cfg, target, coll, prebuilt, prebuiltRaw)
 	})
 	if err != nil {
@@ -1169,7 +1172,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		return nil, err
 	}
 
-	idPhase, err := measureProfiledPhase(profiler, "id_find_one", cfg.Reads, func(sample func(time.Duration)) error {
+	idPhase, err := measureTreeDBProfiledPhase(target, profiler, "id_find_one", cfg.Reads, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.Reads; i++ {
 			id := benchmarkID(i % cfg.Documents)
 			var out bson.M
@@ -1191,7 +1194,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	result.Phases = append(result.Phases, idPhase)
 
 	if runEmailFindPhase(cfg) {
-		emailPhase, err := measureProfiledPhase(profiler, "email_find_one", cfg.Reads, func(sample func(time.Duration)) error {
+		emailPhase, err := measureTreeDBProfiledPhase(target, profiler, "email_find_one", cfg.Reads, func(sample func(time.Duration)) error {
 			for i := 0; i < cfg.Reads; i++ {
 				email := benchmarkEmail((i * 17) % cfg.Documents)
 				var out bson.M
@@ -1213,7 +1216,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		result.Phases = append(result.Phases, emailPhase)
 	}
 
-	rangePhase, err := measureProfiledPhase(profiler, rangePhaseName(cfg), cfg.RangeReads, func(sample func(time.Duration)) error {
+	rangePhase, err := measureTreeDBProfiledPhase(target, profiler, rangePhaseName(cfg), cfg.RangeReads, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.RangeReads; i++ {
 			minAge := int64(20 + (i % 40))
 			begin := time.Now()
@@ -1248,7 +1251,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	if cfg.Updates > 0 {
 		updateCityValues = updatedCityValuesForUpdate()
 	}
-	updatePhase, err := measureProfiledPhase(profiler, "id_update_set", cfg.Updates, func(sample func(time.Duration)) error {
+	updatePhase, err := measureTreeDBProfiledPhase(target, profiler, "id_update_set", cfg.Updates, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.Updates; i++ {
 			documentOrdinal := benchmarkDocumentOrdinal(i, 31, cfg.Documents)
 			id := benchmarkID(documentOrdinal)
@@ -1281,7 +1284,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 
 	for _, concurrentReaders := range concurrentReaderCounts(cfg) {
 		phaseName := fmt.Sprintf("concurrent_id_find_one_r%d", concurrentReaders)
-		concurrentReadPhase, err := measureProfiledPhase(profiler, phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
+		concurrentReadPhase, err := measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
 			return runConcurrentOperations(ctx, concurrentReaders, cfg.ConcurrentReads, func(op int) error {
 				id := benchmarkID(benchmarkDocumentOrdinal(op, 17, cfg.Documents))
 				var out bson.M
@@ -1306,7 +1309,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	if cfg.ConcurrentWriters > 0 && cfg.ConcurrentWrites > 0 {
 		phaseName := fmt.Sprintf("concurrent_id_update_set_w%d", cfg.ConcurrentWriters)
 		concurrentUpdateCityValues := updatedCityValuesForUpdate()
-		concurrentWritePhase, err := measureProfiledPhase(profiler, phaseName, cfg.ConcurrentWrites, func(sample func(time.Duration)) error {
+		concurrentWritePhase, err := measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentWrites, func(sample func(time.Duration)) error {
 			return runConcurrentOperations(ctx, cfg.ConcurrentWriters, cfg.ConcurrentWrites, func(op int) error {
 				documentOrdinal := benchmarkDocumentOrdinal(op, 37, cfg.Documents)
 				id := benchmarkID(documentOrdinal)
@@ -1340,7 +1343,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	}
 
 	if cfg.Deletes > 0 {
-		deletePhase, err := measureProfiledPhase(profiler, "id_delete_one", cfg.Deletes, func(sample func(time.Duration)) error {
+		deletePhase, err := measureTreeDBProfiledPhase(target, profiler, "id_delete_one", cfg.Deletes, func(sample func(time.Duration)) error {
 			for i := 0; i < cfg.Deletes; i++ {
 				id := benchmarkID(cfg.Documents - 1 - i)
 				begin := time.Now()
@@ -1376,11 +1379,60 @@ func measureProfiledPhase(profiler *profileRecorder, name string, operations int
 	})
 }
 
+func measureTreeDBProfiledPhase(target *benchTarget, profiler *profileRecorder, name string, operations int, run func(func(time.Duration)) error) (phaseResult, error) {
+	return runTreeDBProfiledPhase(target, profiler, name, func() (phaseResult, error) {
+		return measurePhase(name, operations, run)
+	})
+}
+
 func runProfiledPhase(profiler *profileRecorder, name string, run func() (phaseResult, error)) (phaseResult, error) {
 	if profiler == nil {
 		return run()
 	}
 	return profiler.RunPhase(name, run)
+}
+
+func runTreeDBProfiledPhase(target *benchTarget, profiler *profileRecorder, name string, run func() (phaseResult, error)) (phaseResult, error) {
+	before := collectLiveTreeDBStats(target)
+	result, err := runProfiledPhase(profiler, name, func() (phaseResult, error) {
+		result, err := run()
+		if err != nil {
+			return result, err
+		}
+		drainElapsed, err := drainTreeDBCollectionsForPhase(target)
+		if err != nil {
+			return result, err
+		}
+		addPhaseDuration(&result, drainElapsed)
+		return result, nil
+	})
+	if err != nil {
+		return result, err
+	}
+	after := collectLiveTreeDBStats(target)
+	attachTreeDBPhaseStats(&result, before, after)
+	return result, nil
+}
+
+func drainTreeDBCollectionsForPhase(target *benchTarget) (time.Duration, error) {
+	if target == nil || target.collections == nil {
+		return 0, nil
+	}
+	start := time.Now()
+	err := target.collections.FlushAll()
+	return time.Since(start), err
+}
+
+func addPhaseDuration(result *phaseResult, extra time.Duration) {
+	if result == nil || extra <= 0 {
+		return
+	}
+	total := time.Duration(result.DurationMillis * float64(time.Millisecond))
+	total += extra
+	result.DurationMillis = float64(total.Microseconds()) / 1000.0
+	if result.Operations > 0 && total > 0 {
+		result.OpsPerSecond = float64(result.Operations) / total.Seconds()
+	}
 }
 
 func runEmailFindPhase(cfg config) bool {
@@ -2079,6 +2131,221 @@ func cloneStringMap(in map[string]string) map[string]string {
 	return out
 }
 
+func attachTreeDBPhaseStats(result *phaseResult, before, after map[string]string) {
+	if result == nil {
+		return
+	}
+	delta, numeric := treeDBStatsDelta(before, after)
+	if len(delta) == 0 {
+		return
+	}
+	result.TreeDBStatsDelta = delta
+	result.TreeDBMetrics = deriveTreeDBPhaseMetrics(numeric, result.Operations, result.DriverCalls)
+}
+
+func treeDBStatsDelta(before, after map[string]string) (map[string]string, map[string]float64) {
+	if len(after) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string)
+	numeric := make(map[string]float64)
+	for key, afterValue := range after {
+		afterNumber, ok := parseTreeDBStatNumber(afterValue)
+		if !ok {
+			continue
+		}
+		beforeNumber := treeDBStatNumber{floatValid: true}
+		if afterNumber.integer {
+			beforeNumber = treeDBStatNumberFromBigInt(big.NewInt(0))
+		}
+		if beforeValue, exists := before[key]; exists {
+			parsed, parsedOK := parseTreeDBStatNumber(beforeValue)
+			if !parsedOK {
+				continue
+			}
+			beforeNumber = parsed
+		}
+		delta, formatted, numericOK, ok := treeDBStatDelta(afterNumber, beforeNumber)
+		if !ok {
+			continue
+		}
+		out[key] = formatted
+		if numericOK {
+			numeric[key] = delta
+		}
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, numeric
+}
+
+type treeDBStatNumber struct {
+	floatValue float64
+	intValue   *big.Int
+	integer    bool
+	floatValid bool
+}
+
+func parseTreeDBStatNumber(value string) (treeDBStatNumber, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return treeDBStatNumber{}, false
+	}
+	if !strings.ContainsAny(value, ".eE") {
+		if intValue, ok := new(big.Int).SetString(value, 10); ok {
+			return treeDBStatNumberFromBigInt(intValue), true
+		}
+	}
+	number, err := strconv.ParseFloat(value, 64)
+	if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
+		return treeDBStatNumber{}, false
+	}
+	return treeDBStatNumber{floatValue: number, floatValid: true}, true
+}
+
+func treeDBStatNumberFromBigInt(value *big.Int) treeDBStatNumber {
+	out := treeDBStatNumber{
+		intValue: new(big.Int).Set(value),
+		integer:  true,
+	}
+	if treeDBStatBigIntFitsExactFloat(value) {
+		out.floatValue = float64(value.Int64())
+		out.floatValid = true
+	}
+	return out
+}
+
+func treeDBStatBigIntFitsExactFloat(value *big.Int) bool {
+	if value == nil {
+		return true
+	}
+	const maxExactFloatInt64 = int64(1 << 53)
+	maxExact := big.NewInt(maxExactFloatInt64)
+	minExact := big.NewInt(-maxExactFloatInt64)
+	return value.Cmp(minExact) >= 0 && value.Cmp(maxExact) <= 0
+}
+
+func treeDBStatDelta(after, before treeDBStatNumber) (float64, string, bool, bool) {
+	if after.integer && before.integer {
+		deltaInt := new(big.Int).Sub(after.intValue, before.intValue)
+		if treeDBStatBigIntFitsExactFloat(deltaInt) {
+			return float64(deltaInt.Int64()), deltaInt.String(), true, true
+		}
+		return 0, deltaInt.String(), false, true
+	}
+	if !after.floatValid || !before.floatValid {
+		return 0, "", false, false
+	}
+	delta := after.floatValue - before.floatValue
+	return delta, formatTreeDBStatNumber(delta), true, true
+}
+
+func formatTreeDBStatNumber(value float64) string {
+	if math.Trunc(value) == value && value >= math.MinInt64 && value <= math.MaxInt64 {
+		return strconv.FormatInt(int64(value), 10)
+	}
+	return strconv.FormatFloat(value, 'f', -1, 64)
+}
+
+func deriveTreeDBPhaseMetrics(delta map[string]float64, operations, driverCalls int) map[string]float64 {
+	if len(delta) == 0 {
+		return nil
+	}
+	metrics := make(map[string]float64)
+	addPerOperationMetric(metrics, "publish_delta_group_calls/doc", delta, "treedb.publish.ordered_root_delta_group.calls_total", operations)
+	addPerOperationMetric(metrics, "root_apply_calls/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_calls_total", operations)
+	addRatioMetric(metrics, "roots/publish", delta, "treedb.publish.ordered_root_delta_group.roots_total", "treedb.publish.ordered_root_delta_group.calls_total")
+	addPerOperationMetric(metrics, "publish_delta_group_root_apply_ns/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_ns_total", operations)
+	addPerOperationMetric(metrics, "leaf_log_node_loads/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_loads_total", operations)
+	addPerOperationMetric(metrics, "leaf_log_pages_written/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_leaf_log_pages_written_total", operations)
+	addPerOperationMetric(metrics, "leaf_log_read_bytes/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total", operations)
+	addPerOperationMetric(metrics, "leaf_log_write_bytes/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_leaf_log_page_bytes_written_total", operations)
+	addPerOperationMetric(metrics, "indexed_flush_calls/doc", delta, "treedb.collections.write_domain.indexed_flush.calls_total", operations)
+	addRatioMetric(metrics, "indexed_flush_docs/batch", delta, "treedb.collections.write_domain.indexed_flush.docs_total", "treedb.collections.write_domain.indexed_flush.calls_total")
+	addRatioMetric(metrics, "indexed_flush_units/batch", delta, "treedb.collections.write_domain.indexed_flush.units_total", "treedb.collections.write_domain.indexed_flush.calls_total")
+	addPerOperationMetric(metrics, "indexed_flush_root_runs/doc", delta, "treedb.collections.write_domain.indexed_flush.root_runs_total", operations)
+	addPerOperationMetric(metrics, "root_delta_plan_entries/doc", delta, "treedb.collections.write_domain.root_delta_plan.entries_total", operations)
+	addPerOperationMetric(metrics, "root_delta_plan_key_bytes/doc", delta, "treedb.collections.write_domain.root_delta_plan.key_bytes_total", operations)
+	addPerOperationMetric(metrics, "root_delta_plan_value_bytes/doc", delta, "treedb.collections.write_domain.root_delta_plan.value_bytes_total", operations)
+	addPerOperationMetric(metrics, "root_delta_plan_tombstones/doc", delta, "treedb.collections.write_domain.root_delta_plan.tombstones_total", operations)
+	addPerOperationMetric(metrics, "affected_primary_roots/doc", delta, "treedb.collections.write_domain.root_delta_plan.roots.primary_total", operations)
+	addPerOperationMetric(metrics, "affected_template_roots/doc", delta, "treedb.collections.write_domain.root_delta_plan.roots.template_total", operations)
+	addPerOperationMetric(metrics, "affected_index_state_roots/doc", delta, "treedb.collections.write_domain.root_delta_plan.roots.index_state_total", operations)
+	addPerOperationMetric(metrics, "affected_secondary_roots/doc", delta, "treedb.collections.write_domain.root_delta_plan.roots.secondary_total", operations)
+	addPerOperationMetric(metrics, "primary_root_publishes/doc", delta, "treedb.collections.write_domain.primary_only.root_publishes_total", operations)
+	addPerOperationMetric(metrics, "primary_root_delta_entries/doc", delta, "treedb.collections.write_domain.primary_only.root_delta_entries_total", operations)
+	if bytesTotal, ok := sumTreeDBMetricDeltas(delta, "treedb.collections.write_domain.primary_only.root_delta_key_bytes_total", "treedb.collections.write_domain.primary_only.root_delta_value_bytes_total"); ok {
+		addPerOperationMetricValue(metrics, "primary_root_delta_bytes/doc", bytesTotal, operations)
+	}
+	addRatioMetric(metrics, "primary_only_coalesced_docs/publish", delta, "treedb.collections.write_domain.primary_only.coalesced_docs_total", "treedb.collections.write_domain.primary_only.root_publishes_total")
+	if uniqueEligible, ok := sumTreeDBMetricDeltas(delta, "treedb.collections.write_domain.update_batch.unique_checks_total", "treedb.collections.write_domain.update_batch.unique_check_skips_total"); ok {
+		addPerOperationMetricValue(metrics, "unique_eligible_checks/doc", uniqueEligible, operations)
+	}
+	addPerDriverCallMetric(metrics, "publish_delta_group_calls/driver_call", delta, "treedb.publish.ordered_root_delta_group.calls_total", driverCalls)
+	if len(metrics) == 0 {
+		return nil
+	}
+	return metrics
+}
+
+func addPerOperationMetric(metrics map[string]float64, name string, delta map[string]float64, key string, operations int) {
+	if operations <= 0 {
+		return
+	}
+	numerator, ok := delta[key]
+	if !ok {
+		return
+	}
+	addRatioMetricValue(metrics, name, numerator, float64(operations))
+}
+
+func addPerOperationMetricValue(metrics map[string]float64, name string, numerator float64, operations int) {
+	if operations <= 0 {
+		return
+	}
+	addRatioMetricValue(metrics, name, numerator, float64(operations))
+}
+
+func addPerDriverCallMetric(metrics map[string]float64, name string, delta map[string]float64, key string, driverCalls int) {
+	if driverCalls <= 0 {
+		return
+	}
+	numerator, ok := delta[key]
+	if !ok {
+		return
+	}
+	addRatioMetricValue(metrics, name, numerator, float64(driverCalls))
+}
+
+func addRatioMetric(metrics map[string]float64, name string, delta map[string]float64, numeratorKey, denominatorKey string) {
+	numerator, numeratorOK := delta[numeratorKey]
+	denominator, denominatorOK := delta[denominatorKey]
+	if !numeratorOK || !denominatorOK {
+		return
+	}
+	addRatioMetricValue(metrics, name, numerator, denominator)
+}
+
+func addRatioMetricValue(metrics map[string]float64, name string, numerator, denominator float64) {
+	if denominator == 0 {
+		return
+	}
+	metrics[name] = numerator / denominator
+}
+
+func sumTreeDBMetricDeltas(delta map[string]float64, keys ...string) (float64, bool) {
+	var total float64
+	for _, key := range keys {
+		value, ok := delta[key]
+		if !ok {
+			return 0, false
+		}
+		total += value
+	}
+	return total, true
+}
+
 func appendTreeDBMaintenanceStep(ctx context.Context, target *benchTarget, result *benchmarkResult, name string, run func() (map[string]int64, string, error)) error {
 	start := time.Now()
 	metrics, skipped, err := run()
@@ -2762,6 +3029,12 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 					producer.DriverAggregateMillis, producer.DriverMeanLatencyMicros,
 					producer.LatencyMicros.P50, producer.LatencyMicros.P95, producer.LatencyMicros.P99)
 			}
+			if len(phase.TreeDBStatsDelta) > 0 {
+				writeTreeDBStats(out, "phase_treedb_stats_delta."+phase.Name, phase.TreeDBStatsDelta)
+			}
+			if len(phase.TreeDBMetrics) > 0 {
+				writeTreeDBFloatStats(out, "phase_treedb_metrics."+phase.Name, phase.TreeDBMetrics)
+			}
 		}
 		if result.MongoPoolStatsAfterLoad != nil {
 			writeMongoPoolStats(out, "mongo_pool_after_load", result.MongoPoolStatsAfterLoad)
@@ -2841,6 +3114,32 @@ func writeTreeDBStats(out io.Writer, label string, stats map[string]string) {
 			}
 			fmt.Fprintf(out, " %s=%s", key, value)
 		}
+	}
+	if wroteAny {
+		fmt.Fprintln(out)
+	}
+}
+
+func writeTreeDBFloatStats(out io.Writer, label string, stats map[string]float64) {
+	if len(stats) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(stats))
+	for key := range stats {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	wroteAny := false
+	for _, key := range keys {
+		value, ok := stats[key]
+		if !ok || math.IsNaN(value) || math.IsInf(value, 0) {
+			continue
+		}
+		if !wroteAny {
+			fmt.Fprintf(out, "%s", label)
+			wroteAny = true
+		}
+		fmt.Fprintf(out, " %s=%s", key, strconv.FormatFloat(value, 'f', -1, 64))
 	}
 	if wroteAny {
 		fmt.Fprintln(out)

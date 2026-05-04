@@ -18,7 +18,7 @@ make benchprof
 
 ## Typical flow
 
-1. Run `unified-bench` with profile outputs into one directory.
+1. Run `unified-bench` with profile outputs into one directory. `-profile-dir` requires an explicit execution path such as `-path-label native-fastpath` or `-path-label oracle`.
 2. `unified-bench` auto-runs `benchprof` in-process when `-profile-dir` is enabled. You can still run `benchprof` manually if needed.
 
 Example:
@@ -34,6 +34,7 @@ mkdir -p /tmp/scan-profiles
   -treedb-vlog-compression-variant off \
   -test full_scan,prefix_scan \
   -profile-dir /tmp/scan-profiles \
+  -path-label native-fastpath \
   -progress=false
 
 ./bin/benchprof \
@@ -60,6 +61,9 @@ Outputs:
   - `checkpoint_cpu_checkpoint_<test>_<db>.pprof` (checkpoint CPU sections)
   - `block.pprof` / `mutex.pprof` (global run-level fallback/supplement)
   - `trace.out` (detected, but not deeply analyzed yet)
+- `benchprof_results.json` preserves selected TreeDB stats under
+  `runs[].treedb_stats` when the benchmark exposes them. This is the raw
+  counter metadata used for TreeDB root-apply/cache review artifacts.
 - Optional flags:
   - `-bin` if you want explicit symbolization target (otherwise profile-only mode is used)
   - `-run-md` to force a specific markdown log file for ops/sec parsing

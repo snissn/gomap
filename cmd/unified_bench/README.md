@@ -138,7 +138,7 @@ Use `./bin/unified-bench -h` for the full grouped TreeDB advanced flag list.
 - `-allocsprofilerate` allocation sampling rate in bytes for `runtime.MemProfileRate` (default `524288`)
 - `-checkpoint-cpuprofile` write per-checkpoint CPU profiles to `<prefix>_checkpoint_<test>_<db>.pprof`
 - `-checkpoint-cpuprofile-tests` restrict checkpoint CPU profiling to a CSV list of tests
-- `-profile-dir` write all profile outputs into one directory (auto-sets defaults for `-cpuprofile`, `-allocsprofile`, `-checkpoint-cpuprofile`, `-blockprofile`, `-mutexprofile`, `-trace`; explicit flags still win). Also emits `benchprof_results.json` and `benchprof_results.md`, then automatically runs `benchprof` in-process.
+- `-profile-dir` write all profile outputs into one directory (auto-sets defaults for `-cpuprofile`, `-allocsprofile`, `-checkpoint-cpuprofile`, `-blockprofile`, `-mutexprofile`, `-trace`; explicit flags still win). Also emits `benchprof_results.json` and `benchprof_results.md`, then automatically runs `benchprof` in-process. Requires `-path-label native-fastpath` or `-path-label oracle`.
 - `-treedb-cache-stats-before-reads` print select `treedb.cache.*` stats before read/scan tests (treedb only)
 - `-blockprofile`, `-mutexprofile` write global profiling artifacts to files and also emit per-test contention delta profiles in the same directory (`block_<test>_<db>.pprof`, `mutex_<test>_<db>.pprof`) when the computed delta is non-empty
 - `-trace` write runtime execution trace to file
@@ -175,6 +175,7 @@ OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
   -checkpoint-between-tests \
   -test random_write,random_delete,random_read,full_scan,prefix_scan \
   -profile-dir "$OUT" \
+  -path-label native-fastpath \
   -progress=false
 
 ./bin/benchprof -profiles-dir "$OUT"
@@ -189,6 +190,10 @@ This writes:
 - `checkpoint_cpu_checkpoint_<test>_<db>.pprof`
 - `block.pprof`, `mutex.pprof`, `trace.out`
 - `insights.md`, `insights.json`, `insights.html` (from `benchprof`)
+
+For TreeDB runs, `benchprof_results.json` also preserves selected TreeDB stats
+under `runs[].treedb_stats`, including ordered-root/root-apply and cache
+counters used by raw-engine review gates.
 
 ## Notes
 

@@ -31,6 +31,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/cmd/internal/treedbstats"
 	"github.com/snissn/gomap/internal/benchprof"
 	"github.com/snissn/gomap/kvstore"
 	treedbadapter "github.com/snissn/gomap/kvstore/adapters/treedb"
@@ -252,6 +253,7 @@ type benchprofExportRun struct {
 	ExecutionPath string                                  `json:"execution_path,omitempty"`
 	Results       map[string]map[string]float64           `json:"results,omitempty"`
 	TreeDBPerf    map[string]map[string]treeDBPerfMetrics `json:"treedb_perf,omitempty"`
+	TreeDBStats   map[string]map[string]string            `json:"treedb_stats,omitempty"`
 }
 
 type scanDiag struct {
@@ -1072,6 +1074,7 @@ func writeBenchprofArtifacts(dir, executionPath string, runs []BenchRun) error {
 			ExecutionPath: executionPath,
 			Results:       run.Results,
 			TreeDBPerf:    run.TreeDBPerf,
+			TreeDBStats:   selectedBenchprofTreeDBStats(run.TreeDBStats),
 		})
 	}
 
@@ -1096,6 +1099,24 @@ func writeBenchprofArtifacts(dir, executionPath string, runs []BenchRun) error {
 		return fmt.Errorf("write benchprof_results.md: %w", err)
 	}
 	return nil
+}
+
+func selectedBenchprofTreeDBStats(stats map[string]map[string]string) map[string]map[string]string {
+	if len(stats) == 0 {
+		return nil
+	}
+	out := make(map[string]map[string]string)
+	for dbName, dbStats := range stats {
+		selected := treedbstats.Selected(dbStats)
+		if len(selected) == 0 {
+			continue
+		}
+		out[dbName] = selected
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func validateBenchprofExecutionPath(executionPath string) error {
@@ -3706,30 +3727,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		prefixScanBase = cfg.Keys
 	}
 
-	// Settle before scans?
-	if cfg.SettleBeforeScans && containsAny(finalTestOrder, "full_scan", "prefix_scan", "random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_batch") {
-		fmt.Fprintf(os.Stderr, "Settling DBs (Close/Open)...\n")
-		for _, inst := range instances {
-			// Close
-			if err := inst.Wrapper.Close(); err != nil {
-				return BenchRun{}, fmt.Errorf("settle/close %s: %w", inst.Name, err)
-			}
-
-			// Reopen
-			factory, err := GetDBFactory(inst.Name)
-			if err != nil {
-				return BenchRun{}, err
-			}
-			// Reopen
-			newWrapper, err := factory(inst.Dir)
-			if err != nil {
-				return BenchRun{}, fmt.Errorf("settle/reopen %s: %w", inst.Name, err)
-			}
-			inst.Wrapper = newWrapper
-
-			// Optional TreeDB maintenance hooks can be added here if needed.
-		}
-	}
+	settledBeforeScans := false
 
 	if cfg.BlockProfile != "" {
 		rate := cfg.BlockProfileRate
@@ -3797,6 +3795,14 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	for _, testName := range finalTestOrder {
 		fn := testFuncs[testName]
 		seed := testSeed(cfg.SeedUsed, testName)
+
+		if cfg.SettleBeforeScans && !settledBeforeScans && isSettleBeforeScanTest(testName) {
+			fmt.Fprintf(os.Stderr, "Settling DBs (Close/Open) before %s...\n", testName)
+			if err := settleBenchInstances(instances); err != nil {
+				return BenchRun{}, err
+			}
+			settledBeforeScans = true
+		}
 
 		if cfg.TreeDBCacheStatsBeforeReads && containsAny([]string{testName}, "random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_batch", "dataset_read_random", "full_scan", "prefix_scan", "full_scan2", "prefix_scan2") {
 			for _, inst := range instances {
@@ -4120,17 +4126,28 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	treedbStats := make(map[string]map[string]string)
 	diskUsage := make(map[string]dirDiskUsage)
 	for _, inst := range instances {
-		if sp, ok := inst.Wrapper.(kvstore.StatsProvider); ok {
+		wrapperName := inst.Wrapper.Name()
+		sp, hasStatsProvider := inst.Wrapper.(kvstore.StatsProvider)
+		if hasStatsProvider {
+			if cp, ok := inst.Wrapper.(checkpointer); ok {
+				if err := cp.Checkpoint(); err != nil {
+					return BenchRun{}, fmt.Errorf("checkpoint %s before final stats: %w", inst.Name, err)
+				}
+			}
+		}
+		if err := inst.Wrapper.Close(); err != nil {
+			return BenchRun{}, fmt.Errorf("close %s: %w", inst.Name, err)
+		}
+		if hasStatsProvider {
 			snap := sp.Stats()
 			if len(snap) > 0 {
 				copySnap := make(map[string]string, len(snap))
 				for k, v := range snap {
 					copySnap[k] = v
 				}
-				treedbStats[inst.Wrapper.Name()] = copySnap
+				treedbStats[wrapperName] = copySnap
 			}
 		}
-		_ = inst.Wrapper.Close()
 		if cfg.TreeDBVlogRewriteAfterRun && isTreeDBInstance(inst) {
 			beforeUsage, _ := computeDirDiskUsage(inst.Dir)
 			beforeTree, _ := computeTreeDBDiskUsage(inst.Dir)
@@ -4175,13 +4192,13 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		}
 		if usage, err := computeDirDiskUsage(inst.Dir); err == nil {
 			if usage.TotalBytes > 0 || usage.TotalFiles > 0 {
-				diskUsage[inst.Wrapper.Name()] = usage
+				diskUsage[wrapperName] = usage
 			}
 		}
 		if isTreeDBInstance(inst) {
 			if usage, err := computeTreeDBDiskUsage(inst.Dir); err == nil {
 				if usage.MainIndexBytes > 0 || usage.MainWAL.TotalBytes > 0 || usage.MainValueLog.TotalBytes > 0 || usage.MainLeafLog.TotalBytes > 0 || usage.DictIndexBytes > 0 || usage.DictWAL.TotalBytes > 0 || usage.DictValueLog.TotalBytes > 0 {
-					treedbDisk[inst.Wrapper.Name()] = usage
+					treedbDisk[wrapperName] = usage
 				}
 			}
 		}
@@ -4809,6 +4826,19 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 		{label: "vlog_mmap.read.hit_ratio", alts: []string{"treedb.cache.vlog_mmap.read.hit_ratio", "treedb.vlog.mmap_read.hit_ratio"}},
 		{label: "leaf_generation.generations.pinned", alts: []string{"treedb.leaf_generation.generations.pinned"}},
 		{label: "leaf_generation.pins.total", alts: []string{"treedb.leaf_generation.pins.total"}},
+		{label: "publish.ordered_root_delta_group.calls_total", alts: []string{"treedb.publish.ordered_root_delta_group.calls_total"}},
+		{label: "publish.ordered_root_delta_group.roots_total", alts: []string{"treedb.publish.ordered_root_delta_group.roots_total"}},
+		{label: "publish.ordered_root_delta_group.avg_roots_per_call", alts: []string{"treedb.publish.ordered_root_delta_group.avg_roots_per_call"}},
+		{label: "publish.ordered_root_delta_group.root_apply_calls_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_calls_total"}},
+		{label: "publish.ordered_root_delta_group.root_apply_ns_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_ns_total"}},
+		{label: "publish.ordered_root_delta_group.root_apply_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_ops_total"}},
+		{label: "publish.ordered_root_delta_group.root_apply_node_loads_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_node_loads_total"}},
+		{label: "publish.ordered_root_delta_group.root_apply_leaf_log_node_loads_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_loads_total"}},
+		{label: "publish.ordered_root_delta_group.root_apply_leaf_log_pages_written_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_pages_written_total"}},
+		{label: "publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total"}},
+		{label: "publish.ordered_root_delta_group.root_apply_leaf_log_page_bytes_written_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_page_bytes_written_total"}},
+		{label: "publish.ordered_root_delta_group.write_lock_wait_ns_total", alts: []string{"treedb.publish.ordered_root_delta_group.write_lock_wait_ns_total"}},
+		{label: "publish.ordered_root_delta_group.write_lock_hold_ns_total", alts: []string{"treedb.publish.ordered_root_delta_group.write_lock_hold_ns_total"}},
 	}
 	var sb strings.Builder
 	for _, inst := range instances {
@@ -5837,6 +5867,38 @@ func contains(list []string, item string) bool {
 		}
 	}
 	return false
+}
+
+func isSettleBeforeScanTest(testName string) bool {
+	switch testName {
+	case "full_scan", "prefix_scan",
+		"random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_batch",
+		"dataset_read_random":
+		return true
+	default:
+		return false
+	}
+}
+
+func settleBenchInstances(instances []*DBInstance) error {
+	for _, inst := range instances {
+		if inst == nil || inst.Wrapper == nil {
+			continue
+		}
+		if err := inst.Wrapper.Close(); err != nil {
+			return fmt.Errorf("settle/close %s: %w", inst.Name, err)
+		}
+		factory, err := GetDBFactory(inst.Name)
+		if err != nil {
+			return err
+		}
+		newWrapper, err := factory(inst.Dir)
+		if err != nil {
+			return fmt.Errorf("settle/reopen %s: %w", inst.Name, err)
+		}
+		inst.Wrapper = newWrapper
+	}
+	return nil
 }
 
 func containsAny(list []string, items ...string) bool {
