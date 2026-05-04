@@ -1214,13 +1214,17 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		IndexedFlushMaterialize:        12 * time.Millisecond,
 		IndexedFlushPublish:            18 * time.Millisecond,
 		RootDeltaPlanPrimaryRoots:      3,
+		RootDeltaPlanTemplateRoots:     2,
+		RootDeltaPlanIndexStateRoots:   1,
 		RootDeltaPlanSecondaryRoots:    6,
 		RootDeltaPlanEntries:           300,
 		RootDeltaPlanKeyBytes:          1200,
 		RootDeltaPlanValueBytes:        2400,
+		RootDeltaPlanTombstones:        30,
 		PrimaryOnlyUpdateCalls:         10,
 		PrimaryOnlyMatched:             9,
 		PrimaryOnlyModified:            8,
+		PrimaryOnlyBufferedCalls:       1,
 		PrimaryOnlyRootPublishes:       8,
 		PrimaryOnlyRootDeltaEntries:    8,
 		PrimaryOnlyRootDeltaKeyBytes:   16,
@@ -1253,13 +1257,17 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		IndexedFlushMaterialize:        30 * time.Millisecond,
 		IndexedFlushPublish:            60 * time.Millisecond,
 		RootDeltaPlanPrimaryRoots:      8,
+		RootDeltaPlanTemplateRoots:     5,
+		RootDeltaPlanIndexStateRoots:   4,
 		RootDeltaPlanSecondaryRoots:    16,
 		RootDeltaPlanEntries:           900,
 		RootDeltaPlanKeyBytes:          3600,
 		RootDeltaPlanValueBytes:        7200,
+		RootDeltaPlanTombstones:        90,
 		PrimaryOnlyUpdateCalls:         17,
 		PrimaryOnlyMatched:             16,
 		PrimaryOnlyModified:            15,
+		PrimaryOnlyBufferedCalls:       3,
 		PrimaryOnlyRootPublishes:       15,
 		PrimaryOnlyRootDeltaEntries:    15,
 		PrimaryOnlyRootDeltaKeyBytes:   30,
@@ -1320,20 +1328,24 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 			got.IndexedFlushPublish,
 		)
 	}
-	if got.RootDeltaPlanPrimaryRoots != 5 || got.RootDeltaPlanSecondaryRoots != 10 || got.RootDeltaPlanEntries != 600 || got.RootDeltaPlanKeyBytes != 2400 || got.RootDeltaPlanValueBytes != 4800 {
-		t.Fatalf("root delta plan stats=%d/%d/%d/%d/%d want 5/10/600/2400/4800",
+	if got.RootDeltaPlanPrimaryRoots != 5 || got.RootDeltaPlanTemplateRoots != 3 || got.RootDeltaPlanIndexStateRoots != 3 || got.RootDeltaPlanSecondaryRoots != 10 || got.RootDeltaPlanEntries != 600 || got.RootDeltaPlanKeyBytes != 2400 || got.RootDeltaPlanValueBytes != 4800 || got.RootDeltaPlanTombstones != 60 {
+		t.Fatalf("root delta plan stats=%d/%d/%d/%d/%d/%d/%d/%d want 5/3/3/10/600/2400/4800/60",
 			got.RootDeltaPlanPrimaryRoots,
+			got.RootDeltaPlanTemplateRoots,
+			got.RootDeltaPlanIndexStateRoots,
 			got.RootDeltaPlanSecondaryRoots,
 			got.RootDeltaPlanEntries,
 			got.RootDeltaPlanKeyBytes,
 			got.RootDeltaPlanValueBytes,
+			got.RootDeltaPlanTombstones,
 		)
 	}
-	if got.PrimaryOnlyUpdateCalls != 7 || got.PrimaryOnlyMatched != 7 || got.PrimaryOnlyModified != 7 || got.PrimaryOnlyRootPublishes != 7 || got.PrimaryOnlyRootDeltaEntries != 7 || got.PrimaryOnlyRootDeltaKeyBytes != 14 || got.PrimaryOnlyRootDeltaValueBytes != 140 || got.PrimaryOnlyCoalescedDocs != 7 {
-		t.Fatalf("primary-only stats calls/matched/modified/publishes/entries/key/value/coalesced=%d/%d/%d/%d/%d/%d/%d/%d want 7/7/7/7/7/14/140/7",
+	if got.PrimaryOnlyUpdateCalls != 7 || got.PrimaryOnlyMatched != 7 || got.PrimaryOnlyModified != 7 || got.PrimaryOnlyBufferedCalls != 2 || got.PrimaryOnlyRootPublishes != 7 || got.PrimaryOnlyRootDeltaEntries != 7 || got.PrimaryOnlyRootDeltaKeyBytes != 14 || got.PrimaryOnlyRootDeltaValueBytes != 140 || got.PrimaryOnlyCoalescedDocs != 7 {
+		t.Fatalf("primary-only stats calls/matched/modified/buffered/publishes/entries/key/value/coalesced=%d/%d/%d/%d/%d/%d/%d/%d/%d want 7/7/7/2/7/7/14/140/7",
 			got.PrimaryOnlyUpdateCalls,
 			got.PrimaryOnlyMatched,
 			got.PrimaryOnlyModified,
+			got.PrimaryOnlyBufferedCalls,
 			got.PrimaryOnlyRootPublishes,
 			got.PrimaryOnlyRootDeltaEntries,
 			got.PrimaryOnlyRootDeltaKeyBytes,
@@ -1373,13 +1385,17 @@ func TestReportCollectionManagerUpdateStatsIncludesIndexedFlushMetrics(t *testin
 		IndexedFlushMaterialize:        18 * time.Millisecond,
 		IndexedFlushPublish:            42 * time.Millisecond,
 		RootDeltaPlanPrimaryRoots:      5,
+		RootDeltaPlanTemplateRoots:     2,
+		RootDeltaPlanIndexStateRoots:   3,
 		RootDeltaPlanSecondaryRoots:    10,
 		RootDeltaPlanEntries:           600,
 		RootDeltaPlanKeyBytes:          2400,
 		RootDeltaPlanValueBytes:        4800,
+		RootDeltaPlanTombstones:        60,
 		PrimaryOnlyUpdateCalls:         600,
 		PrimaryOnlyMatched:             600,
 		PrimaryOnlyModified:            600,
+		PrimaryOnlyBufferedCalls:       30,
 		PrimaryOnlyRootPublishes:       600,
 		PrimaryOnlyRootDeltaEntries:    600,
 		PrimaryOnlyRootDeltaKeyBytes:   1200,
@@ -1414,11 +1430,16 @@ func TestReportCollectionManagerUpdateStatsIncludesIndexedFlushMetrics(t *testin
 		"root_delta_plan_entries/doc":         1,
 		"root_delta_plan_key_bytes/doc":       4,
 		"root_delta_plan_value_bytes/doc":     8,
+		"root_delta_plan_tombstones/doc":      0.1,
 		"affected_primary_roots/doc":          1.0 / 120.0,
+		"affected_template_roots/doc":         1.0 / 300.0,
+		"affected_index_state_roots/doc":      0.005,
 		"affected_secondary_roots/doc":        1.0 / 60.0,
 		"primary_only_update_calls/doc":       1,
 		"primary_only_matched/doc":            1,
 		"primary_only_modified/doc":           1,
+		"primary_only_buffered_calls":         30,
+		"primary_only_buffered_calls/doc":     0.05,
 		"primary_root_publishes/doc":          1,
 		"primary_root_delta_entries/doc":      1,
 		"primary_root_delta_bytes/doc":        22,
@@ -1566,6 +1587,10 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 	}
 	if stats.PrimaryOnlyModified > 0 {
 		b.ReportMetric(float64(stats.PrimaryOnlyModified)/float64(docs), "primary_only_modified/doc")
+	}
+	if stats.PrimaryOnlyBufferedCalls > 0 {
+		b.ReportMetric(float64(stats.PrimaryOnlyBufferedCalls), "primary_only_buffered_calls")
+		b.ReportMetric(float64(stats.PrimaryOnlyBufferedCalls)/float64(docs), "primary_only_buffered_calls/doc")
 	}
 	if stats.PrimaryOnlyRootPublishes > 0 {
 		b.ReportMetric(float64(stats.PrimaryOnlyRootPublishes)/float64(docs), "primary_root_publishes/doc")

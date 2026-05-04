@@ -1189,10 +1189,14 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 		"treedb.collections.write_domain.indexed_flush.materialize_ns_total",
 		"treedb.collections.write_domain.indexed_flush.publish_ns_total",
 		"treedb.collections.write_domain.root_delta_plan.roots.primary_total",
+		"treedb.collections.write_domain.root_delta_plan.roots.template_total",
+		"treedb.collections.write_domain.root_delta_plan.roots.index_state_total",
 		"treedb.collections.write_domain.root_delta_plan.roots.secondary_total",
 		"treedb.collections.write_domain.root_delta_plan.entries_total",
 		"treedb.collections.write_domain.root_delta_plan.key_bytes_total",
 		"treedb.collections.write_domain.root_delta_plan.value_bytes_total",
+		"treedb.collections.write_domain.root_delta_plan.tombstones_total",
+		"treedb.collections.write_domain.primary_only.buffered_calls_total",
 	} {
 		if exported[key] == "" {
 			t.Fatalf("exported stats missing %s from %#v", key, exported)

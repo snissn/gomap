@@ -1285,12 +1285,13 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	domain.mu.RLock()
 	stats.PendingDocuments = domain.count
 	stats.PendingBytes = domain.bufferedBytes
-	stats.PendingRootRuns = bufferedIndexedRootRunCount(domain)
+	pendingRootRuns := bufferedIndexedRootRunCount(domain)
+	stats.PendingRootRuns = pendingRootRuns
 	stats.PendingIndexedFlushUnits = len(domain.indexedPublishingUnits) + len(domain.indexedFlushUnits)
 	stats.OverlayMutableDocuments = domain.mutableCount
 	stats.OverlayQueuedIndexedFlushUnits = len(domain.indexedFlushUnits)
 	stats.OverlayActiveIndexedFlushUnits = len(domain.indexedPublishingUnits)
-	stats.OverlayVisibleDepth = collectionWriteDomainVisibleDepthLocked(domain)
+	stats.OverlayVisibleDepth = collectionWriteDomainVisibleDepthLocked(domain, pendingRootRuns)
 	stats.UpdateBatchIndexStatsCount = len(domain.meta.Indexes)
 	if stats.UpdateBatchIndexStatsCount > len(stats.UpdateBatchIndexStats) {
 		stats.UpdateBatchIndexStatsCount = len(stats.UpdateBatchIndexStats)
@@ -1396,12 +1397,12 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	return stats
 }
 
-func collectionWriteDomainVisibleDepthLocked(domain *collectionWriteDomain) int {
+func collectionWriteDomainVisibleDepthLocked(domain *collectionWriteDomain, pendingRootRuns int) int {
 	if domain == nil {
 		return 0
 	}
 	depth := len(domain.indexedPublishingUnits) + len(domain.indexedFlushUnits)
-	if hasBufferedIndexedRootRuns(domain) {
+	if pendingRootRuns > 0 {
 		depth++
 	}
 	return depth
