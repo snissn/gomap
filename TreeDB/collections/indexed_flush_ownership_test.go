@@ -44,6 +44,9 @@ func TestCollectionIndexedAsyncPublishLostOwnershipDoesNotRemoveCurrentPublishin
 	if work == nil {
 		t.Fatal("prepare async publish returned nil work")
 	}
+	if got := work.batch.state; got != coalescedFlushBatchActive {
+		t.Fatalf("prepared batch state=%d want active", got)
+	}
 	if work.pin != nil {
 		defer func() { _ = work.pin.Close() }()
 	}
@@ -72,13 +75,16 @@ func TestCollectionIndexedAsyncPublishLostOwnershipDoesNotRemoveCurrentPublishin
 		resetIndexedFlushUnits(publishingUnits)
 	})
 
-	rootIDs := make([]uint64, len(work.rootNames))
+	rootIDs := make([]uint64, len(work.batch.rootNames))
 	for i := range rootIDs {
 		rootIDs[i] = uint64(1000 + i)
 	}
 	err = col.completePreparedIndexedFlush(work, 999, rootIDs, nil, 0, 0, 0)
 	if !errors.Is(err, errIndexedFlushLostOwnership) {
 		t.Fatalf("complete lost ownership err=%v want lost ownership", err)
+	}
+	if got := work.batch.state; got != coalescedFlushBatchLostOwnership {
+		t.Fatalf("lost-ownership batch state=%d want lost ownership", got)
 	}
 
 	col.writeDomain.mu.RLock()
