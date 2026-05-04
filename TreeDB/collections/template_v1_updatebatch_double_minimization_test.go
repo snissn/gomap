@@ -1,13 +1,14 @@
 package collections
 
 import (
+	"encoding/json"
 	"sort"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
-func TestCollectionUpdateBatchTemplateV1DoubleSameEffectiveSkipsSecondaryRoot(t *testing.T) {
+func TestCollectionUpdateBatchTemplateV1DoubleSameEffectiveAndChangedRootBehavior(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -74,6 +75,7 @@ func TestCollectionUpdateBatchTemplateV1DoubleSameEffectiveSkipsSecondaryRoot(t 
 	if got, want := stats.IndexValueUnchanged, 1; got != want {
 		t.Fatalf("same-score update index unchanged=%d want %d", got, want)
 	}
+	assertTemplateV1UpdateBatchDoubleNote(t, col, "same-score")
 
 	afterSame := mustTemplateV1UpdateBatchDoubleRootIDs(t, d, "scores", rootNames...)
 	if afterSame[collectionPrimaryRootName("scores")] == before[collectionPrimaryRootName("scores")] {
@@ -111,6 +113,10 @@ func TestCollectionUpdateBatchTemplateV1DoubleSameEffectiveSkipsSecondaryRoot(t 
 	if got, want := stats.IndexValueChanges, 1; got != want {
 		t.Fatalf("changed-score update index changes=%d want %d", got, want)
 	}
+	if got, want := stats.IndexValueUnchanged, 0; got != want {
+		t.Fatalf("changed-score update index unchanged=%d want %d", got, want)
+	}
+	assertTemplateV1UpdateBatchDoubleNote(t, col, "changed-score")
 	afterChanged := mustTemplateV1UpdateBatchDoubleRootIDs(t, d, "scores", rootNames...)
 	if afterChanged[scoreRoot] == afterSame[scoreRoot] {
 		t.Fatalf("score secondary root did not change for changed template-v1 double value")
@@ -120,6 +126,27 @@ func TestCollectionUpdateBatchTemplateV1DoubleSameEffectiveSkipsSecondaryRoot(t 
 	}
 	assertTemplateV1UpdateBatchDoubleIDs(t, col, 2.5)
 	assertTemplateV1UpdateBatchDoubleIDs(t, col, 3.5, "u1")
+}
+
+func assertTemplateV1UpdateBatchDoubleNote(t *testing.T, col *Collection, want string) {
+	t.Helper()
+	stored, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1: %v", err)
+	}
+	jsonDoc, err := col.StoredDocumentJSON(stored)
+	if err != nil {
+		t.Fatalf("stored document JSON: %v", err)
+	}
+	var doc struct {
+		Note string `json:"note"`
+	}
+	if err := json.Unmarshal(jsonDoc, &doc); err != nil {
+		t.Fatalf("unmarshal stored document: %v", err)
+	}
+	if doc.Note != want {
+		t.Fatalf("stored note=%q want %q", doc.Note, want)
+	}
 }
 
 func mustTemplateV1UpdateBatchDoubleDocument(t *testing.T, score string, note string) []byte {
