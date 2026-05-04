@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -36,7 +37,9 @@ func TestCollectionNoIndexUpdateBSONStagesValidIDPreservingReplacement(t *testin
 	replacement := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(1)}})
 
 	matched, modified, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
-		requireBSONInt32FieldForUpdateTest(t, current, "score", 0)
+		if err := checkBSONInt32FieldForUpdateTest(current, "score", 0); err != nil {
+			return nil, false, err
+		}
 		return replacement, true, nil
 	})
 	if err != nil {
@@ -283,13 +286,20 @@ func requireBSONStringFieldForUpdateTest(t *testing.T, raw []byte, field, want s
 
 func requireBSONInt32FieldForUpdateTest(t *testing.T, raw []byte, field string, want int32) {
 	t.Helper()
+	if err := checkBSONInt32FieldForUpdateTest(raw, field, want); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func checkBSONInt32FieldForUpdateTest(raw []byte, field string, want int32) error {
 	value := bson.Raw(raw).Lookup(field)
 	if value.Type != bson.TypeInt32 {
-		t.Fatalf("BSON field %q type=%s want int32", field, value.Type)
+		return fmt.Errorf("BSON field %q type=%s want int32", field, value.Type)
 	}
 	if got := value.Int32(); got != want {
-		t.Fatalf("BSON field %q=%d want %d", field, got, want)
+		return fmt.Errorf("BSON field %q=%d want %d", field, got, want)
 	}
+	return nil
 }
 
 func collectionPrimaryRootIDForTest(t *testing.T, d *backenddb.DB, collectionName string) uint64 {

@@ -595,7 +595,7 @@ func TestCollectionNoIndexUpdateCallbackErrorDoesNotDropPriorStagedUpdate(t *tes
 	sentinel := errors.New("callback failed")
 	matched, modified, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
 		if !bytes.Equal(current, []byte(`{"count":1}`)) {
-			t.Fatalf("error callback current=%q want staged count 1", current)
+			return nil, false, fmt.Errorf("error callback current=%q want staged count 1", current)
 		}
 		return nil, false, sentinel
 	})
@@ -667,7 +667,7 @@ func TestCollectionNoIndexUpdateCallbackPanicDoesNotDropPriorStagedUpdate(t *tes
 	beforeStats := mgr.StatsSnapshot()
 	matched, modified, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
 		if !bytes.Equal(current, []byte(`{"count":1}`)) {
-			t.Fatalf("panic callback current=%q want staged count 1", current)
+			return nil, false, fmt.Errorf("panic callback current=%q want staged count 1", current)
 		}
 		panic("bad callback")
 	})

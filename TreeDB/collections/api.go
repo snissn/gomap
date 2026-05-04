@@ -6962,25 +6962,69 @@ func (c *Collection) stagePrimaryOnlyNoIndexWriteBack(domain *collectionWriteDom
 		domain.table = newCollectionRunTable(0)
 	}
 	_, _, _, existed := domain.table.GetEntry(documentID)
-	if !existed {
-		domain.count++
-		domain.mutableCount++
-	}
 	key := bytes.Clone(documentID)
 	value := bytes.Clone(document)
 	domain.table.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
+	if existed {
+		table, err := coalesceNoIndexBufferedTable(domain.table)
+		if err != nil {
+			return err
+		}
+		domain.table = table
+	}
 	if domain.primaryOnlyPendingUpdateKeys == nil {
 		domain.primaryOnlyPendingUpdateKeys = make(map[string]struct{})
 	}
 	domain.primaryOnlyPendingUpdateKeys[string(documentID)] = struct{}{}
 	domain.primaryOnlyPendingUpdateCalls++
-	stagedBytes := int64(len(key) + len(value))
-	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedBytes)
-	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedBytes)
+	refreshNoIndexBufferedAccountingLocked(domain)
 	domain.writeGeneration++
 	domain.observePrimaryOnlyBufferedUpdateBatch(1, 1, 1)
 	c.meta = read.meta
 	return nil
+}
+
+func coalesceNoIndexBufferedTable(table memtable.Table) (memtable.Table, error) {
+	if table == nil {
+		return newCollectionRunTable(0), nil
+	}
+	keys := make(map[string][]byte, max(0, table.Len()))
+	it := table.NewIterator(nil, nil)
+	for it.Valid() {
+		key := bytes.Clone(it.UnsafeKey())
+		keys[string(key)] = key
+		it.Next()
+	}
+	err := it.Error()
+	_ = it.Close()
+	if err != nil {
+		return nil, err
+	}
+	out := newCollectionRunTable(len(keys))
+	for _, key := range keys {
+		value, ptr, flags, found := table.GetEntry(key)
+		if !found {
+			continue
+		}
+		out.SetEntry(key, bytes.Clone(value), ptr, flags)
+	}
+	return out, nil
+}
+
+func refreshNoIndexBufferedAccountingLocked(domain *collectionWriteDomain) {
+	if domain == nil || domain.table == nil {
+		if domain != nil {
+			domain.count = 0
+			domain.bufferedBytes = 0
+			domain.mutableCount = 0
+			domain.mutableBytes = 0
+		}
+		return
+	}
+	domain.count = domain.table.Len()
+	domain.bufferedBytes = domain.table.Size()
+	domain.mutableCount = domain.count
+	domain.mutableBytes = domain.bufferedBytes
 }
 
 // UpdateBatch applies a unique set of document updates under one collection
@@ -7650,6 +7694,9 @@ func completeUpdateCombineBatchWithItemFallback(batch []collectionUpdateCombineR
 			completeUpdateCombineRequest(req, collectionUpdateCombineResult{err: reqErr})
 			continue
 		}
+		// Keep the non-error fallbacks synchronous: the original internal batch
+		// already had one item callback fail, so staging the remaining items
+		// would partially accept a failed combined execution into write-back.
 		completeUpdateCombineRequest(req, runUpdateCombineDirectSynchronous(req))
 	}
 	return true
@@ -10106,17 +10153,22 @@ func (c *Collection) bufferNoIndexUpdateBatchPlanLocked(plan *updateBatchPlan) (
 	if domain.table == nil {
 		domain.table = newCollectionRunTable(0)
 	}
-	uniqueAdds := 0
+	replaced := false
 	for _, entry := range entries {
 		_, _, _, existed := domain.table.GetEntry(entry.key)
-		if !existed {
-			uniqueAdds++
-		}
+		replaced = replaced || existed
 		domain.table.SetEntry(entry.key, entry.value, page.ValuePtr{}, entry.flags)
 		if domain.primaryOnlyPendingUpdateKeys == nil {
 			domain.primaryOnlyPendingUpdateKeys = make(map[string]struct{})
 		}
 		domain.primaryOnlyPendingUpdateKeys[string(entry.key)] = struct{}{}
+	}
+	if replaced {
+		table, err := coalesceNoIndexBufferedTable(domain.table)
+		if err != nil {
+			return false, err
+		}
+		domain.table = table
 	}
 	domain.primaryOnlyPendingUpdateCalls += modifiedCount
 	domain.loaded = true
@@ -10126,11 +10178,7 @@ func (c *Collection) bufferNoIndexUpdateBatchPlanLocked(plan *updateBatchPlan) (
 	domain.baseSystemRoot = plan.baseSystemRoot
 	domain.primaryRoot = plan.baseRootIDs[collectionPrimaryRootName(plan.meta.Name)]
 	domain.storagePolicy = plan.policies[0]
-	domain.count = saturatingAddNonNegativeInt(domain.count, uniqueAdds)
-	stagedBytes := primaryTable.Size()
-	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedBytes)
-	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, uniqueAdds)
-	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedBytes)
+	refreshNoIndexBufferedAccountingLocked(domain)
 	domain.writeGeneration++
 	domain.observePrimaryOnlyBufferedUpdateBatch(plan.stats.Items, plan.stats.Matched, plan.stats.Modified)
 	c.meta = plan.meta
