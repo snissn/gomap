@@ -2400,6 +2400,9 @@ func parseInt64Column(path string, line int, name, value string) (int64, error) 
 }
 
 func parseFloatColumn(path string, line int, name, value string) (float64, error) {
+	if value == "" {
+		return 0, nil
+	}
 	v, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		return 0, fmt.Errorf("%s:%d: parse float column %q value %q: %w", path, line, name, value, err)

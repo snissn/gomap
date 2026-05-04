@@ -249,6 +249,23 @@ func TestReadMongoSummaryStrictParsing(t *testing.T) {
 		t.Fatalf("Documents = %d, want %d", got, want)
 	}
 
+	withEmptyOptionalFloat := strings.Replace(mongoSummaryFixture(0), "\t1000\t1000\t1000\t500", "\t1000\t\t1000\t500", 1)
+	writeFile(t, path, withEmptyOptionalFloat)
+	rows, err = readMongoSummary(path)
+	if err != nil {
+		t.Fatalf("readMongoSummary rejected empty optional float: %v", err)
+	}
+	if got := rows[0].TreeDBSampledOpsSec; got != 0 {
+		t.Fatalf("TreeDBSampledOpsSec = %v, want 0 for empty optional float", got)
+	}
+
+	withInvalidFloat := strings.Replace(mongoSummaryFixture(0), "\t1000\t1000\t1000\t500", "\tnope\t1000\t1000\t500", 1)
+	writeFile(t, path, withInvalidFloat)
+	_, err = readMongoSummary(path)
+	if err == nil || !strings.Contains(err.Error(), "treedb_ops_sec") {
+		t.Fatalf("readMongoSummary error = %v, want treedb_ops_sec parse failure", err)
+	}
+
 	writeFile(t, path, strings.Replace(mongoSummaryFixture(0), "100\t0\t", "oops\t0\t", 1))
 	_, err = readMongoSummary(path)
 	if err == nil || !strings.Contains(err.Error(), "documents") {
