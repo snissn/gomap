@@ -34,39 +34,44 @@ type matrixRow struct {
 }
 
 type benchmarkResult struct {
-	Target                     string         `json:"target"`
-	MongoURI                   string         `json:"mongo_uri,omitempty"`
-	TreeDBDir                  string         `json:"treedb_dir,omitempty"`
-	Database                   string         `json:"database"`
-	Collection                 string         `json:"collection"`
-	Documents                  int            `json:"documents"`
-	SecondaryIndexes           int            `json:"secondary_indexes"`
-	RangeIndex                 bool           `json:"range_index"`
-	ClientMode                 string         `json:"client_mode,omitempty"`
-	ConcurrentReaderSweep      []int          `json:"concurrent_reader_sweep,omitempty"`
-	TreeDBDocumentFormat       string         `json:"treedb_document_format,omitempty"`
-	Phases                     []phaseResult  `json:"phases"`
-	ProfileDir                 string         `json:"profile_dir,omitempty"`
-	ProfileManifest            string         `json:"profile_manifest,omitempty"`
-	ProfileResult              string         `json:"profile_result,omitempty"`
-	TreeDBDiskAfterLoad        *diskSnapshot  `json:"treedb_disk_after_load,omitempty"`
-	TreeDBDiskAfterCheckpoint  *diskSnapshot  `json:"treedb_disk_after_checkpoint,omitempty"`
-	TreeDBDiskAfterMaintenance *diskSnapshot  `json:"treedb_disk_after_maintenance,omitempty"`
-	MongoDBStatsAfterLoad      map[string]any `json:"mongodb_stats_after_load,omitempty"`
-	MongoDBStatsFinal          map[string]any `json:"mongodb_stats_final,omitempty"`
+	Target                     string            `json:"target"`
+	MongoURI                   string            `json:"mongo_uri,omitempty"`
+	TreeDBDir                  string            `json:"treedb_dir,omitempty"`
+	Database                   string            `json:"database"`
+	Collection                 string            `json:"collection"`
+	Documents                  int               `json:"documents"`
+	SecondaryIndexes           int               `json:"secondary_indexes"`
+	RangeIndex                 bool              `json:"range_index"`
+	ClientMode                 string            `json:"client_mode,omitempty"`
+	ConcurrentReaderSweep      []int             `json:"concurrent_reader_sweep,omitempty"`
+	TreeDBDocumentFormat       string            `json:"treedb_document_format,omitempty"`
+	Phases                     []phaseResult     `json:"phases"`
+	ProfileDir                 string            `json:"profile_dir,omitempty"`
+	ProfileManifest            string            `json:"profile_manifest,omitempty"`
+	ProfileResult              string            `json:"profile_result,omitempty"`
+	TreeDBDiskAfterLoad        *diskSnapshot     `json:"treedb_disk_after_load,omitempty"`
+	TreeDBDiskAfterCheckpoint  *diskSnapshot     `json:"treedb_disk_after_checkpoint,omitempty"`
+	TreeDBDiskAfterMaintenance *diskSnapshot     `json:"treedb_disk_after_maintenance,omitempty"`
+	TreeDBStatsAfterLoad       map[string]string `json:"treedb_stats_after_load,omitempty"`
+	TreeDBStatsAfterCheckpoint map[string]string `json:"treedb_stats_after_checkpoint,omitempty"`
+	TreeDBStatsFinal           map[string]string `json:"treedb_stats_final,omitempty"`
+	MongoDBStatsAfterLoad      map[string]any    `json:"mongodb_stats_after_load,omitempty"`
+	MongoDBStatsFinal          map[string]any    `json:"mongodb_stats_final,omitempty"`
 }
 
 type phaseResult struct {
-	Name                    string         `json:"name"`
-	Operations              int            `json:"operations"`
-	DriverCalls             int            `json:"driver_calls"`
-	DurationMillis          float64        `json:"duration_ms"`
-	OpsPerSecond            float64        `json:"ops_per_sec"`
-	SampledOpsPerSecond     float64        `json:"sampled_ops_per_sec,omitempty"`
-	SampledNsPerOp          float64        `json:"sampled_ns_per_op,omitempty"`
-	DriverAggregateMillis   float64        `json:"driver_aggregate_duration_ms,omitempty"`
-	DriverMeanLatencyMicros float64        `json:"driver_mean_latency_us,omitempty"`
-	LatencyMicros           latencySummary `json:"latency_micros"`
+	Name                    string             `json:"name"`
+	Operations              int                `json:"operations"`
+	DriverCalls             int                `json:"driver_calls"`
+	DurationMillis          float64            `json:"duration_ms"`
+	OpsPerSecond            float64            `json:"ops_per_sec"`
+	SampledOpsPerSecond     float64            `json:"sampled_ops_per_sec,omitempty"`
+	SampledNsPerOp          float64            `json:"sampled_ns_per_op,omitempty"`
+	DriverAggregateMillis   float64            `json:"driver_aggregate_duration_ms,omitempty"`
+	DriverMeanLatencyMicros float64            `json:"driver_mean_latency_us,omitempty"`
+	LatencyMicros           latencySummary     `json:"latency_micros"`
+	TreeDBStatsDelta        map[string]string  `json:"treedb_stats_delta,omitempty"`
+	TreeDBMetrics           map[string]float64 `json:"treedb_metrics,omitempty"`
 }
 
 type latencySummary struct {
@@ -644,6 +649,7 @@ func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) str
 	renderMongoRowsTable(&b, cells)
 	b.WriteString("\n")
 	renderConcurrentReadSweepTable(&b, cells)
+	renderWriterSweepCounterTable(&b, cells)
 	renderOpsTable(&b, cells)
 	b.WriteString("\n")
 	b.WriteString("## Raw Inputs\n\n")
@@ -1056,6 +1062,94 @@ func cellHasConcurrentReadSweep(cell cellComparison) bool {
 	return len(readers) > 1
 }
 
+func renderWriterSweepCounterTable(b *strings.Builder, cells []cellComparison) {
+	rows := writerSweepComparisons(cells)
+	if len(rows) == 0 {
+		return
+	}
+	b.WriteString("## 0-Index Writer Sweep Counters\n\n")
+	b.WriteString("These rows preserve TreeDB per-phase counter deltas for `concurrent_id_update_set_wN` phases. Values come from `phase.treedb_metrics` when present, so load counters and writer counters remain separate.\n\n")
+	b.WriteString("| docs | indexes | TreeDB config | MongoDB baseline config | writers | TreeDB ops/s | MongoDB ops/s | TreeDB p95 us | MongoDB p95 us | TreeDB driver calls | MongoDB driver calls | publish calls/doc | root apply calls/doc | roots/publish | root apply ns/doc | leaf-log loads/doc | leaf-log pages written/doc | leaf-log read bytes/doc | leaf-log write bytes/doc | indexed flush calls/doc | indexed flush units/batch | indexed flush docs/batch | indexed flush root-runs/doc | raw JSON |\n")
+	b.WriteString("| ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
+	for _, cmp := range rows {
+		writers, _ := concurrentUpdateWriters(cmp.Name)
+		cell := findCell(cells, cmp.Cell)
+		fmt.Fprintf(b, "| %d | %d | `%s` | %s | %d | %s | %s | %s | %s | %d | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | `%s` |\n",
+			cmp.Cell.Documents,
+			cmp.Cell.SecondaryIndexes,
+			cmp.Cell.TreeDBConfig,
+			formatConfig(cmp.MongoConfig),
+			writers,
+			formatPhaseOps(cmp.HasTreeDB, cmp.TreeDBPhase.OpsPerSecond),
+			formatPhaseOps(cmp.HasMongo, cmp.MongoPhase.OpsPerSecond),
+			formatPhaseLatency(cmp.HasTreeDB, cmp.TreeDBPhase.LatencyMicros.P95),
+			formatPhaseLatency(cmp.HasMongo, cmp.MongoPhase.LatencyMicros.P95),
+			cmp.TreeDBPhase.DriverCalls,
+			cmp.MongoPhase.DriverCalls,
+			formatPhaseMetric(cmp.TreeDBPhase, "publish_delta_group_calls/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "root_apply_calls/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "roots/publish"),
+			formatPhaseMetric(cmp.TreeDBPhase, "publish_delta_group_root_apply_ns/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "leaf_log_node_loads/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "leaf_log_pages_written/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "leaf_log_read_bytes/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "leaf_log_write_bytes/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "indexed_flush_calls/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "indexed_flush_units/batch"),
+			formatPhaseMetric(cmp.TreeDBPhase, "indexed_flush_docs/batch"),
+			formatPhaseMetric(cmp.TreeDBPhase, "indexed_flush_root_runs/doc"),
+			cell.TreeDB.DisplayRawPath,
+		)
+	}
+	b.WriteString("\n")
+}
+
+func writerSweepComparisons(cells []cellComparison) []phaseComparison {
+	var out []phaseComparison
+	for _, cell := range cells {
+		if cell.Key.SecondaryIndexes != 0 {
+			continue
+		}
+		var mongoPhaseMap map[string]phaseResult
+		if cell.Mongo != nil {
+			mongoPhaseMap = cell.Mongo.PhaseMap
+		}
+		for _, phase := range cell.TreeDB.Result.Phases {
+			if _, ok := concurrentUpdateWriters(phase.Name); !ok {
+				continue
+			}
+			mongoPhase, hasMongo := mongoPhaseMap[phase.Name]
+			out = append(out, phaseComparison{
+				Cell:        cell.Key,
+				Name:        phase.Name,
+				RangeIndex:  cell.TreeDB.Result.RangeIndex,
+				MongoConfig: recordConfig(cell.Mongo),
+				TreeDBPhase: phase,
+				MongoPhase:  mongoPhase,
+				HasTreeDB:   true,
+				HasMongo:    hasMongo,
+				Ratio:       safeRatio(phase.OpsPerSecond, mongoPhase.OpsPerSecond),
+			})
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		left, right := out[i], out[j]
+		if left.Cell.Documents != right.Cell.Documents {
+			return left.Cell.Documents < right.Cell.Documents
+		}
+		if left.Cell.SecondaryIndexes != right.Cell.SecondaryIndexes {
+			return left.Cell.SecondaryIndexes < right.Cell.SecondaryIndexes
+		}
+		if left.Cell.TreeDBConfig != right.Cell.TreeDBConfig {
+			return left.Cell.TreeDBConfig < right.Cell.TreeDBConfig
+		}
+		leftWriters, _ := concurrentUpdateWriters(left.Name)
+		rightWriters, _ := concurrentUpdateWriters(right.Name)
+		return leftWriters < rightWriters
+	})
+	return out
+}
+
 func concurrentReadReaders(name string) (int, bool) {
 	const prefix = "concurrent_id_find_one_r"
 	if !strings.HasPrefix(name, prefix) {
@@ -1066,6 +1160,18 @@ func concurrentReadReaders(name string) (int, bool) {
 		return 0, false
 	}
 	return readers, true
+}
+
+func concurrentUpdateWriters(name string) (int, bool) {
+	const prefix = "concurrent_id_update_set_w"
+	if !strings.HasPrefix(name, prefix) {
+		return 0, false
+	}
+	writers, err := strconv.Atoi(strings.TrimPrefix(name, prefix))
+	if err != nil || writers <= 0 {
+		return 0, false
+	}
+	return writers, true
 }
 
 func renderOpsTable(b *strings.Builder, cells []cellComparison) {
@@ -1471,6 +1577,14 @@ func formatPhaseOps(ok bool, value float64) string {
 
 func formatPhaseLatency(ok bool, value float64) string {
 	if !ok {
+		return "n/a"
+	}
+	return formatNumber(value)
+}
+
+func formatPhaseMetric(phase phaseResult, name string) string {
+	value, ok := phase.TreeDBMetrics[name]
+	if !ok || value == 0 || math.IsNaN(value) || math.IsInf(value, 0) {
 		return "n/a"
 	}
 	return formatNumber(value)
