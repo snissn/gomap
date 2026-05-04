@@ -1624,10 +1624,7 @@ func loadModeBarChart(title string, categories []string, tree, mongo []float64) 
 	if pairedBarW < 1 {
 		pairedBarW = 1
 	}
-	soloBarW := groupW - innerPad*2
-	if soloBarW < 1 {
-		soloBarW = 1
-	}
+	soloBarW := pairedBarW
 	y := func(v float64) float64 {
 		return top + plotH - (v/maxV)*plotH
 	}
@@ -1652,7 +1649,7 @@ func loadModeBarChart(title string, categories []string, tree, mongo []float64) 
 			if i < len(tree) && tree[i] > 0 {
 				v := tree[i]
 				barH := (v / maxV) * plotH
-				x := groupX + innerPad
+				x := groupX + (groupW-soloBarW)/2
 				yy := axisY - barH
 				b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"#2867c7\"><title>%s TreeDB-only raw-wire ceiling: %s docs/sec</title></rect>", x, yy, soloBarW, barH, esc(cat), esc(formatChartValue(v, "docs/sec"))))
 				if soloBarW >= 10 {
