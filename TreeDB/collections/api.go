@@ -4944,6 +4944,9 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 	if c == nil || c.db == nil || domain == nil || domain.count == 0 || !hasBufferedIndexedRootRuns(domain) {
 		return nil, nil
 	}
+	if len(domain.indexedPublishingUnits) != 0 {
+		return nil, errors.New("collections: indexed async publish still in flight")
+	}
 	if len(domain.indexedFlushUnits) == 0 && len(domain.rootRuns) == 0 {
 		return nil, nil
 	}
@@ -5017,7 +5020,7 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 	work.baseCommitSeq = snapshotCommitSeq(pin)
 	work.batch = batch
 
-	domain.indexedPublishingUnits = append(domain.indexedPublishingUnits, units...)
+	domain.indexedPublishingUnits = append([]indexedFlushUnit(nil), units...)
 	domain.indexedFlushUnits = nil
 	domain.writeGeneration++
 	return work, nil
@@ -5613,7 +5616,7 @@ func removeIndexedPublishingUnitsLocked(domain *collectionWriteDomain, n int) []
 	if n > len(domain.indexedPublishingUnits) {
 		n = len(domain.indexedPublishingUnits)
 	}
-	removed := domain.indexedPublishingUnits[:n]
+	removed := append([]indexedFlushUnit(nil), domain.indexedPublishingUnits[:n]...)
 	remaining := domain.indexedPublishingUnits[n:]
 	if len(remaining) == 0 {
 		domain.indexedPublishingUnits = nil
@@ -5627,7 +5630,7 @@ func removeIndexedPublishingWorkUnitsLocked(domain *collectionWriteDomain, units
 	if len(units) == 0 {
 		return nil, true
 	}
-	if domain == nil || len(domain.indexedPublishingUnits) < len(units) {
+	if domain == nil || len(domain.indexedPublishingUnits) != len(units) {
 		return nil, false
 	}
 	for i := range units {

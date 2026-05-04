@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 func TestCollectionIndexedAsyncPublishLostOwnershipDoesNotRemoveCurrentPublishingUnit(t *testing.T) {
@@ -122,5 +123,40 @@ func TestCollectionIndexedAsyncPublishLostOwnershipDoesNotRemoveCurrentPublishin
 	}
 	if got := stats.IndexedFlushLostOwnership; got != 1 {
 		t.Fatalf("indexed flush lost ownership=%d want 1", got)
+	}
+}
+
+func TestIndexedPublishingWorkOwnershipRejectsPrefixOfActiveBatch(t *testing.T) {
+	unitA := indexedFlushOwnershipUnitForTest("users")
+	unitB := indexedFlushOwnershipUnitForTest("users")
+	t.Cleanup(func() {
+		resetIndexedFlushUnits([]indexedFlushUnit{unitA, unitB})
+	})
+
+	domain := &collectionWriteDomain{
+		indexedPublishingUnits: []indexedFlushUnit{unitA, unitB},
+	}
+	removed, owned := removeIndexedPublishingWorkUnitsLocked(domain, []indexedFlushUnit{unitA})
+	if owned {
+		t.Fatal("prefix work unexpectedly owned the active multi-unit batch")
+	}
+	if removed != nil {
+		t.Fatalf("removed prefix units=%+v want nil", removed)
+	}
+	if got := len(domain.indexedPublishingUnits); got != 2 {
+		t.Fatalf("active publishing units after prefix removal attempt=%d want 2", got)
+	}
+	if !sameIndexedFlushUnitTables(domain.indexedPublishingUnits[0], unitA) ||
+		!sameIndexedFlushUnitTables(domain.indexedPublishingUnits[1], unitB) {
+		t.Fatal("active publishing units changed after rejected prefix ownership attempt")
+	}
+}
+
+func indexedFlushOwnershipUnitForTest(collectionName string) indexedFlushUnit {
+	rootName := collectionPrimaryRootName(collectionName)
+	return indexedFlushUnit{
+		rootRuns: map[string][]memtable.Table{
+			rootName: {newCollectionRunTable(0)},
+		},
 	}
 }
