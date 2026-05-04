@@ -58,6 +58,14 @@ func TestCollectionDirectUpdateMinimizesIndexOrdinalBeyondMaskWidth(t *testing.T
 	if !matched || !modified {
 		t.Fatalf("direct update matched/modified=%v/%v want true/true", matched, modified)
 	}
+	stats := col.LastUpdateStats()
+	if got, want := stats.MaskFallbacks, 1; got != want {
+		t.Fatalf("direct update fast-mask fallbacks=%d want %d", got, want)
+	}
+	managerStats := mgr.StatsSnapshot()
+	if got, want := managerStats.UpdateBatchMaskFallbacks, uint64(1); got != want {
+		t.Fatalf("manager fast-mask fallbacks=%d want %d", got, want)
+	}
 
 	after := directOverflowRootIDs(t, d, rootNames)
 	for _, rootName := range []string{

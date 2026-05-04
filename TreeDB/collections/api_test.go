@@ -10556,6 +10556,8 @@ func TestCollectionUpdateBatchBSONRejectsIDMutation(t *testing.T) {
 	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{doc}); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
+	beforeState := d.State()
+	beforeRoot := collectionPrimaryRootIDForTest(t, d, "users")
 	replacement := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u2"}, {Key: "score", Value: int32(1)}})
 	_, err = col.UpdateBatch([]UpdateBatchItem{
 		{DocumentID: []byte("u1"), Update: func([]byte) ([]byte, bool, error) {
@@ -10564,6 +10566,28 @@ func TestCollectionUpdateBatchBSONRejectsIDMutation(t *testing.T) {
 	})
 	if !errors.Is(err, errBSONIDMutation) || !strings.Contains(err.Error(), "index 0") {
 		t.Fatalf("UpdateBatch err=%v want indexed _id mutation error", err)
+	}
+	afterState := d.State()
+	if afterState.CommitSeq != beforeState.CommitSeq {
+		t.Fatalf("rejected _id UpdateBatch advanced commit seq by %d", afterState.CommitSeq-beforeState.CommitSeq)
+	}
+	afterRoot := collectionPrimaryRootIDForTest(t, d, "users")
+	if afterRoot != beforeRoot {
+		t.Fatalf("primary root changed from %d to %d after rejected _id UpdateBatch", beforeRoot, afterRoot)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1: %v", err)
+	}
+	if !bytes.Equal(got, doc) {
+		t.Fatalf("u1 after rejected _id UpdateBatch=%x want original %x", got, doc)
+	}
+	got, err = col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get u2: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("u2 after rejected _id UpdateBatch=%x want nil", got)
 	}
 }
 
