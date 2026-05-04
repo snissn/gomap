@@ -4998,15 +4998,22 @@ func TestCollectionIndexedWriteMemtablesFlushWaitsForPublishingUnits(t *testing.
 		finishAsync(errors.New("test cleanup"))
 	})
 
+	waitEntered, releaseWait := collectionWaitIndexedAsyncFlushGateForTest(t)
 	flushDone := make(chan error, 1)
 	go func() {
 		flushDone <- col.flushBufferedWrites()
 	}()
 	select {
-	case err := <-flushDone:
-		t.Fatalf("flush returned before in-flight async publish drained: %v", err)
-	case <-time.After(50 * time.Millisecond):
+	case <-waitEntered:
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("timed out waiting for flush to reach indexed async drain")
 	}
+	select {
+	case err := <-flushDone:
+		t.Fatalf("flush returned after entering indexed async drain but before publish finished: %v", err)
+	default:
+	}
+	releaseWait()
 	publishDone := make(chan error, 1)
 	go func() {
 		err := col.publishPreparedIndexedFlush(work)
@@ -5065,6 +5072,7 @@ func TestCollectionIndexedWriteMemtablesFlushRetriesAsyncScheduledDuringWaitGap(
 	}
 
 	domain := col.writeDomain
+	waitEntered, releaseWait := collectionWaitIndexedAsyncFlushGateForTest(t)
 	domain.mu.Lock()
 	scanDone := make(chan error, 1)
 	go func() {
@@ -5073,7 +5081,6 @@ func TestCollectionIndexedWriteMemtablesFlushRetriesAsyncScheduledDuringWaitGap(
 		})
 		scanDone <- err
 	}()
-	time.Sleep(20 * time.Millisecond)
 	if !domain.beginIndexedAsyncFlush() {
 		domain.mu.Unlock()
 		t.Fatal("begin async flush returned false")
@@ -5106,10 +5113,16 @@ func TestCollectionIndexedWriteMemtablesFlushRetriesAsyncScheduledDuringWaitGap(
 	})
 
 	select {
-	case err := <-scanDone:
-		t.Fatalf("scan returned before scheduled async publish drained: %v", err)
-	case <-time.After(50 * time.Millisecond):
+	case <-waitEntered:
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("timed out waiting for scan to reach indexed async drain")
 	}
+	select {
+	case err := <-scanDone:
+		t.Fatalf("scan returned after entering indexed async drain but before publish finished: %v", err)
+	default:
+	}
+	releaseWait()
 	publishDone := make(chan error, 1)
 	go func() {
 		err := col.publishPreparedIndexedFlush(work)
@@ -5187,16 +5200,23 @@ func TestCollectionIndexedWriteMemtablesCreateIndexWaitsForPublishingUnits(t *te
 		finishAsync(errors.New("test cleanup"))
 	})
 
+	waitEntered, releaseWait := collectionWaitIndexedAsyncFlushGateForTest(t)
 	createDone := make(chan error, 1)
 	go func() {
 		_, err := col.CreateIndex(IndexDefinition{Name: "city", Field: "city", ValueType: IndexValueString})
 		createDone <- err
 	}()
 	select {
-	case err := <-createDone:
-		t.Fatalf("CreateIndex returned before in-flight async publish drained: %v", err)
-	case <-time.After(50 * time.Millisecond):
+	case <-waitEntered:
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("timed out waiting for CreateIndex to reach indexed async drain")
 	}
+	select {
+	case err := <-createDone:
+		t.Fatalf("CreateIndex returned after entering indexed async drain but before publish finished: %v", err)
+	default:
+	}
+	releaseWait()
 	publishDone := make(chan error, 1)
 	go func() {
 		err := col.publishPreparedIndexedFlush(work)
@@ -5224,6 +5244,28 @@ func TestCollectionIndexedWriteMemtablesCreateIndexWaitsForPublishingUnits(t *te
 		t.Fatalf("find city after CreateIndex: %v", err)
 	}
 	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u1"))
+}
+
+func collectionWaitIndexedAsyncFlushGateForTest(tb testing.TB) (<-chan struct{}, func()) {
+	tb.Helper()
+	waitEntered := make(chan struct{})
+	allowWait := make(chan struct{})
+	var waitEnteredOnce sync.Once
+	var releaseOnce sync.Once
+	restoreWaitHook := setCollectionWaitIndexedAsyncFlushHookForTest(func() {
+		waitEnteredOnce.Do(func() {
+			close(waitEntered)
+			<-allowWait
+		})
+	})
+	release := func() {
+		releaseOnce.Do(func() {
+			close(allowWait)
+			restoreWaitHook()
+		})
+	}
+	tb.Cleanup(release)
+	return waitEntered, release
 }
 
 func TestCollectionIndexedWriteMemtablesAsyncSuccessClearsPriorError(t *testing.T) {
