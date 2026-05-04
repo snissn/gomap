@@ -86,13 +86,18 @@ RAW_TEST_RE='Test(PublishOrderedRoot|ApplyOrderedRoot|Zipper|Coalesce|MergeLeaf|
 ROOT_APPLY_BENCH_RE='BenchmarkPublishSystemRootIterator_Warm(SparseDelta|DenseDelta)$'
 RAW_OPS_BENCH_RE='Benchmark(Batch|WriteParallel|Stress|ReadUnderWrite|LargeVal)$'
 
-cat >"$OUT_DIR/commands.sh" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-GOWORK="$GOWORK_MODE" go test ./TreeDB/db ./TreeDB/zipper ./TreeDB/caching -run '$RAW_TEST_RE'
-GOWORK="$GOWORK_MODE" go test ./TreeDB/db -run '^$' -bench '$ROOT_APPLY_BENCH_RE' -benchmem -count="$COUNT"
-GOWORK="$GOWORK_MODE" go test ./TreeDB/db -run '^$' -bench '$RAW_OPS_BENCH_RE' -benchmem -count="$COUNT"
-EOF
+{
+  echo '#!/usr/bin/env bash'
+  echo 'set -euo pipefail'
+  printf 'GOWORK_MODE=%q\n' "$GOWORK_MODE"
+  printf 'COUNT=%q\n' "$COUNT"
+  printf 'RAW_TEST_RE=%q\n' "$RAW_TEST_RE"
+  printf 'ROOT_APPLY_BENCH_RE=%q\n' "$ROOT_APPLY_BENCH_RE"
+  printf 'RAW_OPS_BENCH_RE=%q\n' "$RAW_OPS_BENCH_RE"
+  echo 'GOWORK="$GOWORK_MODE" go test ./TreeDB/db ./TreeDB/zipper ./TreeDB/caching -run "$RAW_TEST_RE"'
+  echo 'GOWORK="$GOWORK_MODE" go test ./TreeDB/db -run "^$" -bench "$ROOT_APPLY_BENCH_RE" -benchmem -count="$COUNT"'
+  echo 'GOWORK="$GOWORK_MODE" go test ./TreeDB/db -run "^$" -bench "$RAW_OPS_BENCH_RE" -benchmem -count="$COUNT"'
+} >"$OUT_DIR/commands.sh"
 chmod +x "$OUT_DIR/commands.sh"
 
 GOWORK="$GOWORK_MODE" go version | tee "$OUT_DIR/go_version.txt"

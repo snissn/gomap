@@ -1074,7 +1074,7 @@ func renderWriterSweepCounterTable(b *strings.Builder, cells []cellComparison) {
 	for _, cmp := range rows {
 		writers, _ := concurrentUpdateWriters(cmp.Name)
 		cell := findCell(cells, cmp.Cell)
-		fmt.Fprintf(b, "| %d | %d | `%s` | %s | %d | %s | %s | %s | %s | %d | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | `%s` |\n",
+		fmt.Fprintf(b, "| %d | %d | `%s` | %s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | `%s` |\n",
 			cmp.Cell.Documents,
 			cmp.Cell.SecondaryIndexes,
 			cmp.Cell.TreeDBConfig,
@@ -1084,8 +1084,8 @@ func renderWriterSweepCounterTable(b *strings.Builder, cells []cellComparison) {
 			formatPhaseOps(cmp.HasMongo, cmp.MongoPhase.OpsPerSecond),
 			formatPhaseLatency(cmp.HasTreeDB, cmp.TreeDBPhase.LatencyMicros.P95),
 			formatPhaseLatency(cmp.HasMongo, cmp.MongoPhase.LatencyMicros.P95),
-			cmp.TreeDBPhase.DriverCalls,
-			cmp.MongoPhase.DriverCalls,
+			formatPhaseDriverCalls(cmp.HasTreeDB, cmp.TreeDBPhase.DriverCalls),
+			formatPhaseDriverCalls(cmp.HasMongo, cmp.MongoPhase.DriverCalls),
 			formatPhaseMetric(cmp.TreeDBPhase, "publish_delta_group_calls/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "root_apply_calls/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "roots/publish"),
@@ -1593,6 +1593,13 @@ func formatPhaseLatency(ok bool, value float64) string {
 		return "n/a"
 	}
 	return formatNumber(value)
+}
+
+func formatPhaseDriverCalls(ok bool, value int) string {
+	if !ok {
+		return "n/a"
+	}
+	return fmt.Sprintf("%d", value)
 }
 
 func formatPhaseMetric(phase phaseResult, name string) string {

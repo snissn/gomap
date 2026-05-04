@@ -360,9 +360,11 @@ trap 'report_treedb_location_on_exit "$?"' EXIT
 
 mkdir -p "$RAW_DIR" "$TREE_DIR" "$BIN_DIR"
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 is required to write writer_metrics.tsv" >&2
-  exit 2
+PYTHON3_BIN=""
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON3_BIN=$(command -v python3)
+else
+  echo "python3 not found; writer_metrics.tsv will be skipped" >&2
 fi
 
 BENCH_BIN="$BIN_DIR/mongo_gateway_bench"
@@ -489,7 +491,13 @@ fi
   -title "$TITLE" \
   "${report_extra[@]}"
 
-python3 "$ROOT/scripts/mongo_gateway_writer_metrics.py" "$OUT_DIR" "$MATRIX" "$WRITER_METRICS"
+if [[ -n "$PYTHON3_BIN" ]]; then
+  "$PYTHON3_BIN" "$ROOT/scripts/mongo_gateway_writer_metrics.py" "$OUT_DIR" "$MATRIX" "$WRITER_METRICS"
+fi
+WRITER_METRICS_STATUS="$WRITER_METRICS"
+if [[ -z "$PYTHON3_BIN" ]]; then
+  WRITER_METRICS_STATUS="skipped (python3 not found)"
+fi
 
 report_extra_text=""
 if (( ${#report_extra[@]} > 0 )); then
@@ -504,7 +512,7 @@ cat >"$README" <<EOF
 - report: \`$REPORT\`
 - summary TSV: \`$SUMMARY\`
 - matrix TSV: \`$MATRIX\`
-- writer metrics TSV: \`$WRITER_METRICS\`
+- writer metrics TSV: \`$WRITER_METRICS_STATUS\`
 - raw JSON directory: \`$RAW_DIR\`
 - TreeDB data directory: \`$TREE_DIR\`
 - TreeDB location metadata: \`$TREE_METADATA\`
@@ -541,5 +549,5 @@ EOF
 
 echo "scaling report: $REPORT"
 echo "summary TSV: $SUMMARY"
-echo "writer metrics TSV: $WRITER_METRICS"
+echo "writer metrics TSV: $WRITER_METRICS_STATUS"
 echo "bundle README: $README"

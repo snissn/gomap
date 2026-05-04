@@ -429,10 +429,6 @@ type CollectionManagerStats struct {
 	IndexedFlushErrors             uint64
 	IndexedFlushForcedDrains       uint64
 	IndexedFlushUnits              uint64
-	IndexedFlushRequeues           uint64
-	IndexedFlushRequeuedUnits      uint64
-	IndexedFlushLostOwnership      uint64
-	IndexedFlushRootBaseMismatches uint64
 	IndexedFlushDocs               uint64
 	IndexedFlushBytes              uint64
 	IndexedFlushRootRuns           uint64
@@ -506,6 +502,10 @@ type CollectionManagerStats struct {
 	UpdateBatchUniqueCheckSkips    uint64
 	UpdateBatchIndexStatsCount     int
 	UpdateBatchIndexStats          [maxCollectionUpdateInlineIndexStats]CollectionUpdateIndexStats
+	IndexedFlushRequeues           uint64
+	IndexedFlushRequeuedUnits      uint64
+	IndexedFlushLostOwnership      uint64
+	IndexedFlushRootBaseMismatches uint64
 }
 
 // DocumentRecord is one primary collection record returned by ScanDocuments.
@@ -1051,7 +1051,7 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.indexed_flush.errors_total"] = fmt.Sprintf("%d", stats.IndexedFlushErrors)
 	out["treedb.collections.write_domain.indexed_flush.forced_drains_total"] = fmt.Sprintf("%d", stats.IndexedFlushForcedDrains)
 	out["treedb.collections.write_domain.indexed_flush.units_total"] = fmt.Sprintf("%d", stats.IndexedFlushUnits)
-	out["treedb.collections.write_domain.indexed_flush.requeue_total"] = fmt.Sprintf("%d", stats.IndexedFlushRequeues)
+	out["treedb.collections.write_domain.indexed_flush.requeues_total"] = fmt.Sprintf("%d", stats.IndexedFlushRequeues)
 	out["treedb.collections.write_domain.indexed_flush.requeued_units_total"] = fmt.Sprintf("%d", stats.IndexedFlushRequeuedUnits)
 	out["treedb.collections.write_domain.indexed_flush.lost_ownership_total"] = fmt.Sprintf("%d", stats.IndexedFlushLostOwnership)
 	out["treedb.collections.write_domain.indexed_flush.root_base_mismatch_total"] = fmt.Sprintf("%d", stats.IndexedFlushRootBaseMismatches)
@@ -3875,6 +3875,9 @@ func pendingIndexedUniqueValueRunMapLocked(domain *collectionWriteDomain) map[st
 	return indexedFlushUnitPendingUniqueValueRunMap(indexedFlushUnitsWithPublishing(domain.indexedPublishingUnits, domain.indexedFlushUnits), domain.uniqueValueRuns)
 }
 
+// pendingUniqueReservationIndexLocked requires domain.mu to be held. When
+// cache is true it may write the rebuilt pending unique index back to the
+// domain, so callers using only an RLock must pass cache=false.
 func pendingUniqueReservationIndexLocked(domain *collectionWriteDomain, indexName string, cache bool) *bufferedUniqueValueIndex {
 	if domain == nil || indexName == "" {
 		return nil
