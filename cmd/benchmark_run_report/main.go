@@ -679,7 +679,9 @@ func loadMongoScaling(dir string) (map[int][]mongoSummaryRow, []string) {
 		path := filepath.Join(dir, entry.Name(), "summary.tsv")
 		rows, err := readMongoSummary(path)
 		if err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
+			if errors.Is(err, os.ErrNotExist) {
+				warnings = append(warnings, fmt.Sprintf("mongo scaling: %s is missing summary.tsv", filepath.Join(entry.Name(), "summary.tsv")))
+			} else {
 				warnings = append(warnings, err.Error())
 			}
 			continue
@@ -1314,15 +1316,18 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 	b.WriteString(fullSweepLoadNote(rows))
 	b.WriteString("<div class=\"chart-grid\">")
 	indexes := sortedMongoIndexes(rows)
-	indexLabels := indexNumberLabels(indexes)
-	b.WriteString(lineChart("Load throughput by index", indexLabels, "secondary indexes", "docs/sec", []chartSeries{
-		{Name: "TreeDB", Values: mongoPhaseByIndex(rows, indexes, "load_insert_many", "tree"), Color: "#2867c7"},
-		{Name: "MongoDB", Values: mongoPhaseByIndex(rows, indexes, "load_insert_many", "mongo"), Color: "#1f8a5b"},
-	}, "docs/sec"))
-	b.WriteString(lineChart("Physical disk by index", indexLabels, "secondary indexes", "physical bytes", []chartSeries{
-		{Name: "TreeDB", Values: mongoDiskByIndex(rows, indexes, "tree"), Color: "#2867c7"},
-		{Name: "MongoDB", Values: mongoDiskByIndex(rows, indexes, "mongo"), Color: "#1f8a5b"},
-	}, "bytes"))
+	loadIndexes := sortedMongoIndexesForPhase(rows, "load_insert_many")
+	if len(loadIndexes) > 0 {
+		indexLabels := indexNumberLabels(loadIndexes)
+		b.WriteString(lineChart("Load throughput by index", indexLabels, "secondary indexes", "docs/sec", []chartSeries{
+			{Name: "TreeDB", Values: mongoPhaseByIndex(rows, loadIndexes, "load_insert_many", "tree"), Color: "#2867c7"},
+			{Name: "MongoDB", Values: mongoPhaseByIndex(rows, loadIndexes, "load_insert_many", "mongo"), Color: "#1f8a5b"},
+		}, "docs/sec"))
+		b.WriteString(lineChart("Physical disk by index", indexLabels, "secondary indexes", "physical bytes", []chartSeries{
+			{Name: "TreeDB", Values: mongoDiskByIndex(rows, loadIndexes, "tree"), Color: "#2867c7"},
+			{Name: "MongoDB", Values: mongoDiskByIndex(rows, loadIndexes, "mongo"), Color: "#1f8a5b"},
+		}, "bytes"))
+	}
 	b.WriteString("</div></div>")
 	for _, idx := range indexes {
 		indexLabel := indexCountLabel(idx)
@@ -1478,6 +1483,21 @@ func sortedMongoIndexes(rows []mongoSummaryRow) []int {
 	return out
 }
 
+func sortedMongoIndexesForPhase(rows []mongoSummaryRow, phase string) []int {
+	seen := make(map[int]bool)
+	for _, row := range rows {
+		if row.Phase == phase {
+			seen[row.SecondaryIndexes] = true
+		}
+	}
+	var out []int
+	for idx := range seen {
+		out = append(out, idx)
+	}
+	sort.Ints(out)
+	return out
+}
+
 func indexNumberLabels(indexes []int) []string {
 	out := make([]string, 0, len(indexes))
 	for _, idx := range indexes {
@@ -1521,18 +1541,71 @@ func mongoDiskByIndex(rows []mongoSummaryRow, indexes []int, side string) []floa
 }
 
 func mongoRow(rows []mongoSummaryRow, idx int, phase string) (mongoSummaryRow, bool) {
+	scope, hasScope := mongoPrimaryScope(rows, idx)
+	var fallback mongoSummaryRow
+	var hasFallback bool
 	for _, row := range rows {
-		if row.SecondaryIndexes == idx && row.Phase == phase {
+		if row.SecondaryIndexes != idx || row.Phase != phase {
+			continue
+		}
+		if !hasFallback {
+			fallback = row
+			hasFallback = true
+		}
+		if !hasScope || mongoSameScope(row, scope) {
 			return row, true
 		}
+	}
+	if hasFallback {
+		return fallback, true
 	}
 	return mongoSummaryRow{}, false
 }
 
+func mongoPrimaryScope(rows []mongoSummaryRow, idx int) (mongoSummaryRow, bool) {
+	var candidates []mongoSummaryRow
+	for _, row := range rows {
+		if row.SecondaryIndexes == idx && row.Phase == "load_insert_many" {
+			candidates = append(candidates, row)
+		}
+	}
+	if len(candidates) == 0 {
+		return mongoSummaryRow{}, false
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].Documents != candidates[j].Documents {
+			return candidates[i].Documents > candidates[j].Documents
+		}
+		if candidates[i].TreeDBConfig != candidates[j].TreeDBConfig {
+			return candidates[i].TreeDBConfig < candidates[j].TreeDBConfig
+		}
+		if candidates[i].MongoConfig != candidates[j].MongoConfig {
+			return candidates[i].MongoConfig < candidates[j].MongoConfig
+		}
+		if candidates[i].RangeIndex != candidates[j].RangeIndex {
+			return !candidates[i].RangeIndex && candidates[j].RangeIndex
+		}
+		return candidates[i].RangeMode < candidates[j].RangeMode
+	})
+	return candidates[0], true
+}
+
+func mongoSameScope(row, scope mongoSummaryRow) bool {
+	return row.Documents == scope.Documents &&
+		row.TreeDBConfig == scope.TreeDBConfig &&
+		row.MongoConfig == scope.MongoConfig &&
+		row.RangeIndex == scope.RangeIndex &&
+		row.RangeMode == scope.RangeMode
+}
+
 func mongoSweepCounts(rows []mongoSummaryRow, idx int, prefix string) []int {
+	scope, hasScope := mongoPrimaryScope(rows, idx)
 	seen := make(map[int]bool)
 	for _, row := range rows {
 		if row.SecondaryIndexes != idx || !strings.HasPrefix(row.Phase, prefix) {
+			continue
+		}
+		if hasScope && !mongoSameScope(row, scope) {
 			continue
 		}
 		count, err := strconv.Atoi(strings.TrimPrefix(row.Phase, prefix))

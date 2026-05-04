@@ -272,6 +272,50 @@ func TestMongoSweepCountsObservedOnly(t *testing.T) {
 	}
 }
 
+func TestMongoRowsUsePrimaryScope(t *testing.T) {
+	rows := []mongoSummaryRow{
+		{Documents: 100, SecondaryIndexes: 0, TreeDBConfig: "treedb_a", MongoConfig: "mongo", Phase: "load_insert_many"},
+		{Documents: 100, SecondaryIndexes: 0, TreeDBConfig: "treedb_a", MongoConfig: "mongo", Phase: "id_find_one", TreeDBOpsSec: 100},
+		{Documents: 1_000, SecondaryIndexes: 0, TreeDBConfig: "treedb_b", MongoConfig: "mongo", Phase: "load_insert_many"},
+		{Documents: 1_000, SecondaryIndexes: 0, TreeDBConfig: "treedb_b", MongoConfig: "mongo", Phase: "id_find_one", TreeDBOpsSec: 1000},
+		{Documents: 100, SecondaryIndexes: 0, TreeDBConfig: "treedb_a", MongoConfig: "mongo", Phase: "concurrent_id_find_one_r2"},
+		{Documents: 1_000, SecondaryIndexes: 0, TreeDBConfig: "treedb_b", MongoConfig: "mongo", Phase: "concurrent_id_find_one_r8"},
+	}
+	row, ok := mongoRow(rows, 0, "id_find_one")
+	if !ok || row.Documents != 1_000 || row.TreeDBOpsSec != 1000 {
+		t.Fatalf("mongoRow = %+v, %v; want primary 1000-doc scope", row, ok)
+	}
+	counts := mongoSweepCounts(rows, 0, "concurrent_id_find_one_r")
+	if want := []int{8}; !reflect.DeepEqual(counts, want) {
+		t.Fatalf("counts = %v, want %v", counts, want)
+	}
+}
+
+func TestSortedMongoIndexesForPhaseSkipsMissingPhase(t *testing.T) {
+	rows := []mongoSummaryRow{
+		{SecondaryIndexes: 0, Phase: "load_insert_many"},
+		{SecondaryIndexes: 1, Phase: "id_find_one"},
+		{SecondaryIndexes: 2, Phase: "load_insert_many"},
+	}
+	if got, want := sortedMongoIndexesForPhase(rows, "load_insert_many"), []int{0, 2}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("indexes = %v, want %v", got, want)
+	}
+}
+
+func TestLoadMongoScalingWarnsMissingSummary(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "indexes_0"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rows, warnings := loadMongoScaling(root)
+	if len(rows) != 0 {
+		t.Fatalf("rows = %v, want none", rows)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "indexes_0") || !strings.Contains(warnings[0], "summary.tsv") {
+		t.Fatalf("warnings = %v, want missing summary warning", warnings)
+	}
+}
+
 func TestLoadMongoLoadModesBestEffort(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "matrix.tsv"), "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
