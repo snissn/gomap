@@ -45,6 +45,7 @@ func TestCollectionManagerCloseWaitsForActiveIndexedPublish(t *testing.T) {
 	if work == nil {
 		t.Fatal("prepare indexed async publish returned nil work")
 	}
+	defer collectionTestCloseIndexedFlushWork(work)
 	if !col.writeDomain.beginIndexedAsyncFlush() {
 		t.Fatal("begin indexed async flush returned false")
 	}
