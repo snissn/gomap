@@ -8386,6 +8386,160 @@ func TestCollectionUpdateBatchDirectBufferedBSONAccumulatesRootRuns(t *testing.T
 	}
 }
 
+func TestCollectionUpdateBatchDirectBufferedBSONDoesNotReserveUnchangedUnique(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatBSON,
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "email", Value: "a@example.com"},
+			{Key: "city", Value: "hnl"},
+		})},
+	); err != nil {
+		t.Fatalf("insert flushed document: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush document: %v", err)
+	}
+	before := d.State()
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u2"},
+			{Key: "email", Value: "b@example.com"},
+			{Key: "city", Value: "hnl"},
+		})},
+	); err != nil {
+		t.Fatalf("insert buffered document: %v", err)
+	}
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setBSONField("city", "sea")},
+	}); err != nil {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatal("update batch was not buffered")
+	}
+	afterUpdate := d.State()
+	if afterUpdate.CommitSeq != before.CommitSeq {
+		t.Fatalf("buffered BSON update advanced commit seq by %d, want 0", afterUpdate.CommitSeq-before.CommitSeq)
+	}
+
+	encodedA, err := encodeIndexScalar(IndexValueString, "a@example.com")
+	if err != nil {
+		t.Fatalf("encode email: %v", err)
+	}
+	_, prefixA, err := appendIndexValuePrefixSlice(nil, encodedA)
+	if err != nil {
+		t.Fatalf("email prefix: %v", err)
+	}
+	encodedB, err := encodeIndexScalar(IndexValueString, "b@example.com")
+	if err != nil {
+		t.Fatalf("encode buffered email: %v", err)
+	}
+	_, prefixB, err := appendIndexValuePrefixSlice(nil, encodedB)
+	if err != nil {
+		t.Fatalf("buffered email prefix: %v", err)
+	}
+
+	emailRoot := collectionSecondaryRootName("users", "email")
+	col.writeDomain.mu.RLock()
+	pending := col.writeDomain.uniqueValueIndex["email"]
+	containsA := pending != nil && pending.contains(prefixA)
+	containsB := pending != nil && pending.contains(prefixB)
+	uniqueRuns := len(col.writeDomain.uniqueValueRuns["email"])
+	emailRuns := len(col.writeDomain.rootRuns[emailRoot])
+	col.writeDomain.mu.RUnlock()
+	if containsA {
+		t.Fatal("direct-buffered BSON update added unchanged persisted unique email to pending unique-value index")
+	}
+	if !containsB {
+		t.Fatal("pending buffered insert unique email missing from pending unique-value index")
+	}
+	if uniqueRuns != 1 {
+		t.Fatalf("unique value runs=%d want only the pending insert run", uniqueRuns)
+	}
+	if emailRuns != 1 {
+		t.Fatalf("email root runs=%d want only the pending insert secondary run", emailRuns)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u3")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u3"},
+			{Key: "email", Value: "a@example.com"},
+			{Key: "city", Value: "hnl"},
+		})},
+	); !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("duplicate persisted unique email err=%v want ErrUniqueIndexConflict", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u4")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u4"},
+			{Key: "email", Value: "b@example.com"},
+			{Key: "city", Value: "hnl"},
+		})},
+	); !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("duplicate pending unique email err=%v want ErrUniqueIndexConflict", err)
+	}
+
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare async publish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepare async publish returned nil work")
+	}
+	col.writeDomain.mu.RLock()
+	pending = col.writeDomain.uniqueValueIndex["email"]
+	containsA = pending != nil && pending.contains(prefixA)
+	containsB = pending != nil && pending.contains(prefixB)
+	publishingUniqueRuns := 0
+	publishingEmailRuns := 0
+	if len(col.writeDomain.indexedPublishingUnits) > 0 {
+		publishingUniqueRuns = len(col.writeDomain.indexedPublishingUnits[0].uniqueValueRuns["email"])
+		publishingEmailRuns = len(col.writeDomain.indexedPublishingUnits[0].rootRuns[emailRoot])
+	}
+	col.writeDomain.mu.RUnlock()
+	if containsA {
+		t.Fatal("rotated direct-buffered BSON update added unchanged persisted unique email to pending unique-value index")
+	}
+	if !containsB {
+		t.Fatal("rotated pending insert unique email missing from pending unique-value index")
+	}
+	if publishingUniqueRuns != 1 {
+		t.Fatalf("publishing unique value runs=%d want only the pending insert run", publishingUniqueRuns)
+	}
+	if publishingEmailRuns != 1 {
+		t.Fatalf("publishing email root runs=%d want only the pending insert secondary run", publishingEmailRuns)
+	}
+	if err := col.publishPreparedIndexedFlush(work); err != nil {
+		t.Fatalf("publish prepared async flush: %v", err)
+	}
+}
+
 func TestCollectionUpdateBatchDirectBufferedTemplateV1AccumulatesRootRuns(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
