@@ -31,6 +31,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/cmd/internal/treedbstats"
 	"github.com/snissn/gomap/internal/benchprof"
 	"github.com/snissn/gomap/kvstore"
 	treedbadapter "github.com/snissn/gomap/kvstore/adapters/treedb"
@@ -252,6 +253,7 @@ type benchprofExportRun struct {
 	ExecutionPath string                                  `json:"execution_path,omitempty"`
 	Results       map[string]map[string]float64           `json:"results,omitempty"`
 	TreeDBPerf    map[string]map[string]treeDBPerfMetrics `json:"treedb_perf,omitempty"`
+	TreeDBStats   map[string]map[string]string            `json:"treedb_stats,omitempty"`
 }
 
 type scanDiag struct {
@@ -1072,6 +1074,7 @@ func writeBenchprofArtifacts(dir, executionPath string, runs []BenchRun) error {
 			ExecutionPath: executionPath,
 			Results:       run.Results,
 			TreeDBPerf:    run.TreeDBPerf,
+			TreeDBStats:   selectedBenchprofTreeDBStats(run.TreeDBStats),
 		})
 	}
 
@@ -1096,6 +1099,24 @@ func writeBenchprofArtifacts(dir, executionPath string, runs []BenchRun) error {
 		return fmt.Errorf("write benchprof_results.md: %w", err)
 	}
 	return nil
+}
+
+func selectedBenchprofTreeDBStats(stats map[string]map[string]string) map[string]map[string]string {
+	if len(stats) == 0 {
+		return nil
+	}
+	out := make(map[string]map[string]string)
+	for dbName, dbStats := range stats {
+		selected := treedbstats.Selected(dbStats)
+		if len(selected) == 0 {
+			continue
+		}
+		out[dbName] = selected
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func validateBenchprofExecutionPath(executionPath string) error {

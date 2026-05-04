@@ -1400,7 +1400,9 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 			},
 			TreeDBStats: map[string]map[string]string{
 				"TreeDB": {
-					"treedb.cache.vlog_mmap.read.hits": "10",
+					"treedb.cache.vlog_mmap.read.hits":                               "10",
+					"treedb.publish.ordered_root_delta_group.root_apply_calls_total": "4",
+					"treedb.unselected":                                              "drop",
 				},
 			},
 		},
@@ -1446,6 +1448,12 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	if got := parsed.Runs[0].TreeDBPerf["full_scan"]["TreeDB"].Mmap.Hits; got != 10 {
 		t.Fatalf("unexpected TreeDB perf mmap hits: %v", got)
 	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.publish.ordered_root_delta_group.root_apply_calls_total"]; got != "4" {
+		t.Fatalf("unexpected TreeDB selected stat root_apply_calls_total=%q", got)
+	}
+	if _, ok := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.unselected"]; ok {
+		t.Fatalf("unselected TreeDB stat was exported: %#v", parsed.Runs[0].TreeDBStats["TreeDB"])
+	}
 	var raw map[string]any
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatalf("unmarshal raw json: %v", err)
@@ -1458,8 +1466,8 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected raw run object, got %#v", runsValue[0])
 	}
-	if _, ok := runValue["treedb_stats"]; ok {
-		t.Fatalf("expected treedb_stats to be omitted from benchprof json, got: %#v", runValue["treedb_stats"])
+	if _, ok := runValue["treedb_stats"]; !ok {
+		t.Fatalf("expected treedb_stats in benchprof json, got: %#v", runValue)
 	}
 }
 
