@@ -46,8 +46,9 @@ func TestCollectionBSONUpdateSkipsUnchangedDottedAndArraySecondaryRoots(t *testi
 	bsonExtractionRequireIndexIDs(t, col, "tag", "a", "u1")
 	bsonExtractionRequireIndexIDs(t, col, "tag", "b", "u1")
 
+	sameEffectiveDoc := bsonExtractionDoc(t, "u1", "ada@example.com", bson.A{"a", "b", "a"}, "same-effective-indexes")
 	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
-		return bsonExtractionDoc(t, "u1", "ada@example.com", bson.A{"a", "b", "a"}, "same-effective-indexes"), true, nil
+		return sameEffectiveDoc, true, nil
 	})
 	if err != nil {
 		t.Fatalf("update same effective BSON indexes: %v", err)
@@ -71,8 +72,9 @@ func TestCollectionBSONUpdateSkipsUnchangedDottedAndArraySecondaryRoots(t *testi
 	bsonExtractionRequireIndexIDs(t, col, "tag", "a", "u1")
 	bsonExtractionRequireIndexIDs(t, col, "tag", "b", "u1")
 
+	emailChangedDoc := bsonExtractionDoc(t, "u1", "grace@example.com", bson.A{"b", "a"}, "email-changed")
 	matched, modified, err = col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
-		return bsonExtractionDoc(t, "u1", "grace@example.com", bson.A{"b", "a"}, "email-changed"), true, nil
+		return emailChangedDoc, true, nil
 	})
 	if err != nil {
 		t.Fatalf("update dotted BSON email: %v", err)
@@ -92,8 +94,9 @@ func TestCollectionBSONUpdateSkipsUnchangedDottedAndArraySecondaryRoots(t *testi
 	bsonExtractionRequireIndexIDs(t, col, "tag", "a", "u1")
 	bsonExtractionRequireIndexIDs(t, col, "tag", "b", "u1")
 
+	tagChangedDoc := bsonExtractionDoc(t, "u1", "grace@example.com", bson.A{"a", "c"}, "tag-changed")
 	matched, modified, err = col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
-		return bsonExtractionDoc(t, "u1", "grace@example.com", bson.A{"a", "c"}, "tag-changed"), true, nil
+		return tagChangedDoc, true, nil
 	})
 	if err != nil {
 		t.Fatalf("update BSON multikey tags: %v", err)

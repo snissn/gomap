@@ -47,10 +47,11 @@ func TestCollectionUpdateBatchTemplateV1BoolSameEffectiveSkipsSecondaryRoot(t *t
 	before := mustTemplateV1UpdateBatchBoolRootIDs(t, d, "flags", rootNames...)
 	assertTemplateV1UpdateBatchBoolIDs(t, col, true, "u1")
 
+	sameActiveDoc := mustTemplateV1UpdateBatchBoolDocument(t, true, "same-active")
 	results, err := col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return mustTemplateV1UpdateBatchBoolDocument(t, true, "same-active"), true, nil
+			return sameActiveDoc, true, nil
 		},
 	}})
 	if err != nil {
@@ -85,10 +86,11 @@ func TestCollectionUpdateBatchTemplateV1BoolSameEffectiveSkipsSecondaryRoot(t *t
 	}
 	assertTemplateV1UpdateBatchBoolIDs(t, col, true, "u1")
 
+	changedActiveDoc := mustTemplateV1UpdateBatchBoolDocument(t, false, "changed-active")
 	results, err = col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return mustTemplateV1UpdateBatchBoolDocument(t, false, "changed-active"), true, nil
+			return changedActiveDoc, true, nil
 		},
 	}})
 	if err != nil {

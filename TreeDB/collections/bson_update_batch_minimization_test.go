@@ -46,10 +46,11 @@ func TestCollectionBSONUpdateBatchSkipsUnchangedDottedAndMultikeyIndexes(t *test
 	bsonUpdateBatchMinRequireIndexIDs(t, col, "tag", "a", "u1")
 	bsonUpdateBatchMinRequireIndexIDs(t, col, "tag", "b", "u1")
 
+	sameEffectiveDoc := bsonUpdateBatchMinDoc(t, "u1", "ada@example.com", bson.A{"a", "b", "a", nil}, "same-effective")
 	results, err := col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return bsonUpdateBatchMinDoc(t, "u1", "ada@example.com", bson.A{"a", "b", "a", nil}, "same-effective"), true, nil
+			return sameEffectiveDoc, true, nil
 		},
 	}})
 	if err != nil {
@@ -88,10 +89,11 @@ func TestCollectionBSONUpdateBatchSkipsUnchangedDottedAndMultikeyIndexes(t *test
 		t.Fatalf("primary root %q did not change for modified BSON replacement", rootName)
 	}
 
+	emailChangedDoc := bsonUpdateBatchMinDoc(t, "u1", "grace@example.com", bson.A{"a", "b"}, "email-changed")
 	results, err = col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return bsonUpdateBatchMinDoc(t, "u1", "grace@example.com", bson.A{"a", "b"}, "email-changed"), true, nil
+			return emailChangedDoc, true, nil
 		},
 	}})
 	if err != nil {

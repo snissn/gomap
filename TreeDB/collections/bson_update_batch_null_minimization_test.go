@@ -45,10 +45,11 @@ func TestCollectionBSONUpdateBatchTreatsMissingAndNullIndexValuesAsUnchanged(t *
 	bsonUpdateBatchNullRequireIndexIDs(t, col, "city", "hnl", "u1")
 	bsonUpdateBatchNullRequireIndexIDs(t, col, "deleted_at", "2026-05-03")
 
+	nullDoc := bsonUpdateBatchNullDoc(t, "u1", "hnl", nil, true, "explicit-null")
 	results, err := col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return bsonUpdateBatchNullDoc(t, "u1", "hnl", nil, true, "explicit-null"), true, nil
+			return nullDoc, true, nil
 		},
 	}})
 	if err != nil {
@@ -81,10 +82,11 @@ func TestCollectionBSONUpdateBatchTreatsMissingAndNullIndexValuesAsUnchanged(t *
 		t.Fatalf("primary root %q did not change for modified BSON replacement", rootName)
 	}
 
+	valueDoc := bsonUpdateBatchNullDoc(t, "u1", "hnl", "2026-05-03", true, "deleted-at-set")
 	results, err = col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return bsonUpdateBatchNullDoc(t, "u1", "hnl", "2026-05-03", true, "deleted-at-set"), true, nil
+			return valueDoc, true, nil
 		},
 	}})
 	if err != nil {

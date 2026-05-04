@@ -46,10 +46,11 @@ func TestCollectionTemplateV1UpdateBatchSkipsUnchangedUniqueWhenNonUniqueChanges
 	templateV1UpdateBatchUniqueSkipRequireIndexIDs(t, col, "email", "ada@example.com", "u1")
 	templateV1UpdateBatchUniqueSkipRequireIndexIDs(t, col, "city", "hnl", "u1")
 
+	replacement := templateV1UpdateBatchUniqueSkipDoc(t, "ada@example.com", "sea", "city-changed")
 	results, err := col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return templateV1UpdateBatchUniqueSkipDoc(t, "ada@example.com", "sea", "city-changed"), true, nil
+			return replacement, true, nil
 		},
 	}})
 	if err != nil {

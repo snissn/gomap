@@ -53,14 +53,15 @@ func TestCollectionUpdateBatchBSONSameEffectiveMultikeySkipsSecondaryRoot(t *tes
 	assertBSONUpdateBatchMultikeyIDs(t, col, "a", "u1")
 	assertBSONUpdateBatchMultikeyIDs(t, col, "b", "u1")
 
+	sameTagsDoc := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "tags", Value: bson.A{"a", "b"}},
+		{Key: "note", Value: "same-effective-tags"},
+	})
 	results, err := col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return mustBSONCollectionDocument(t, bson.D{
-				{Key: "_id", Value: "u1"},
-				{Key: "tags", Value: bson.A{"a", "b"}},
-				{Key: "note", Value: "same-effective-tags"},
-			}), true, nil
+			return sameTagsDoc, true, nil
 		},
 	}})
 	if err != nil {
@@ -94,14 +95,15 @@ func TestCollectionUpdateBatchBSONSameEffectiveMultikeySkipsSecondaryRoot(t *tes
 	assertBSONUpdateBatchMultikeyIDs(t, col, "b", "u1")
 	assertBSONUpdateBatchMultikeyIDs(t, col, "c")
 
+	changedTagsDoc := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "tags", Value: bson.A{"a", "c"}},
+		{Key: "note", Value: "changed-tags"},
+	})
 	results, err = col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return mustBSONCollectionDocument(t, bson.D{
-				{Key: "_id", Value: "u1"},
-				{Key: "tags", Value: bson.A{"a", "c"}},
-				{Key: "note", Value: "changed-tags"},
-			}), true, nil
+			return changedTagsDoc, true, nil
 		},
 	}})
 	if err != nil {

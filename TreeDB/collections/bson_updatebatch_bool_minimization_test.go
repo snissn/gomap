@@ -52,14 +52,15 @@ func TestCollectionUpdateBatchBSONBoolSameEffectiveSkipsSecondaryRoot(t *testing
 	before := mustBSONUpdateBatchBoolRootIDs(t, d, "flags", rootNames...)
 	assertBSONUpdateBatchBoolIDs(t, col, true, "u1")
 
+	sameActiveDoc := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "active", Value: true},
+		{Key: "note", Value: "same-active"},
+	})
 	results, err := col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return mustBSONCollectionDocument(t, bson.D{
-				{Key: "_id", Value: "u1"},
-				{Key: "active", Value: true},
-				{Key: "note", Value: "same-active"},
-			}), true, nil
+			return sameActiveDoc, true, nil
 		},
 	}})
 	if err != nil {
@@ -90,14 +91,15 @@ func TestCollectionUpdateBatchBSONBoolSameEffectiveSkipsSecondaryRoot(t *testing
 	}
 	assertBSONUpdateBatchBoolIDs(t, col, true, "u1")
 
+	changedActiveDoc := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "active", Value: false},
+		{Key: "note", Value: "changed-active"},
+	})
 	results, err = col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return mustBSONCollectionDocument(t, bson.D{
-				{Key: "_id", Value: "u1"},
-				{Key: "active", Value: false},
-				{Key: "note", Value: "changed-active"},
-			}), true, nil
+			return changedActiveDoc, true, nil
 		},
 	}})
 	if err != nil {

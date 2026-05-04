@@ -56,14 +56,15 @@ func TestCollectionUpdateBatchBSONInt64SameEffectiveSkipsSecondaryRoot(t *testin
 	before := mustBSONUpdateBatchInt64RootIDs(t, d, "scores", rootNames...)
 	assertBSONUpdateBatchInt64IDs(t, col, oldScore, "u1")
 
+	sameScoreDoc := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "score", Value: oldScore},
+		{Key: "note", Value: "same-score"},
+	})
 	results, err := col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return mustBSONCollectionDocument(t, bson.D{
-				{Key: "_id", Value: "u1"},
-				{Key: "score", Value: oldScore},
-				{Key: "note", Value: "same-score"},
-			}), true, nil
+			return sameScoreDoc, true, nil
 		},
 	}})
 	if err != nil {
@@ -94,14 +95,15 @@ func TestCollectionUpdateBatchBSONInt64SameEffectiveSkipsSecondaryRoot(t *testin
 	}
 	assertBSONUpdateBatchInt64IDs(t, col, oldScore, "u1")
 
+	changedScoreDoc := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "score", Value: newScore},
+		{Key: "note", Value: "changed-score"},
+	})
 	results, err = col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return mustBSONCollectionDocument(t, bson.D{
-				{Key: "_id", Value: "u1"},
-				{Key: "score", Value: newScore},
-				{Key: "note", Value: "changed-score"},
-			}), true, nil
+			return changedScoreDoc, true, nil
 		},
 	}})
 	if err != nil {

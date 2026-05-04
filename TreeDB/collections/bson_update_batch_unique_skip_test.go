@@ -46,10 +46,11 @@ func TestCollectionBSONUpdateBatchSkipsUnchangedUniqueWhenNonUniqueChanges(t *te
 	bsonUpdateBatchUniqueSkipRequireIndexIDs(t, col, "email", "ada@example.com", "u1")
 	bsonUpdateBatchUniqueSkipRequireIndexIDs(t, col, "city", "hnl", "u1")
 
+	replacement := bsonUpdateBatchUniqueSkipDoc(t, "u1", "ada@example.com", "sea", "city-changed")
 	results, err := col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return bsonUpdateBatchUniqueSkipDoc(t, "u1", "ada@example.com", "sea", "city-changed"), true, nil
+			return replacement, true, nil
 		},
 	}})
 	if err != nil {

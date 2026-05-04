@@ -43,8 +43,9 @@ func TestCollectionTemplateV1UpdateSkipsUnchangedMultikeySecondaryRoot(t *testin
 	templateV1MultikeyRequireIndexIDs(t, col, "tag", "a", "d1")
 	templateV1MultikeyRequireIndexIDs(t, col, "tag", "b", "d1")
 
+	sameTagsDoc := templateV1MultikeyDoc(t, []any{"a", "b", "a", nil}, "same-effective-tags")
 	matched, modified, err := col.Update([]byte("d1"), func([]byte) ([]byte, bool, error) {
-		return templateV1MultikeyDoc(t, []any{"a", "b", "a", nil}, "same-effective-tags"), true, nil
+		return sameTagsDoc, true, nil
 	})
 	if err != nil {
 		t.Fatalf("update same effective tags: %v", err)
@@ -67,8 +68,9 @@ func TestCollectionTemplateV1UpdateSkipsUnchangedMultikeySecondaryRoot(t *testin
 	templateV1MultikeyRequireIndexIDs(t, col, "tag", "a", "d1")
 	templateV1MultikeyRequireIndexIDs(t, col, "tag", "b", "d1")
 
+	changedTagsDoc := templateV1MultikeyDoc(t, []any{"a", "c"}, "tag-changed")
 	matched, modified, err = col.Update([]byte("d1"), func([]byte) ([]byte, bool, error) {
-		return templateV1MultikeyDoc(t, []any{"a", "c"}, "tag-changed"), true, nil
+		return changedTagsDoc, true, nil
 	})
 	if err != nil {
 		t.Fatalf("update changed tags: %v", err)

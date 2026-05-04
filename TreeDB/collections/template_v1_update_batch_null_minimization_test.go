@@ -44,10 +44,11 @@ func TestCollectionTemplateV1UpdateBatchTreatsMissingAndNullIndexValuesAsUnchang
 	templateV1UpdateBatchNullRequireIndexIDs(t, col, "city", "hnl", "u1")
 	templateV1UpdateBatchNullRequireIndexIDs(t, col, "deleted_at", "2026-05-03")
 
+	nullDoc := templateV1UpdateBatchNullDoc(t, `{"city":"hnl","deleted_at":null,"note":"explicit-null"}`)
 	results, err := col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return templateV1UpdateBatchNullDoc(t, `{"city":"hnl","deleted_at":null,"note":"explicit-null"}`), true, nil
+			return nullDoc, true, nil
 		},
 	}})
 	if err != nil {
@@ -83,10 +84,11 @@ func TestCollectionTemplateV1UpdateBatchTreatsMissingAndNullIndexValuesAsUnchang
 		t.Fatalf("primary root %q did not change for modified template-v1 replacement", rootName)
 	}
 
+	valueDoc := templateV1UpdateBatchNullDoc(t, `{"city":"hnl","deleted_at":"2026-05-03","note":"deleted-at-set"}`)
 	results, err = col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return templateV1UpdateBatchNullDoc(t, `{"city":"hnl","deleted_at":"2026-05-03","note":"deleted-at-set"}`), true, nil
+			return valueDoc, true, nil
 		},
 	}})
 	if err != nil {

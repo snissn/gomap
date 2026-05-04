@@ -44,8 +44,9 @@ func TestCollectionTemplateV1UpdateSeparatesTemplateAndSecondaryRootWork(t *test
 	templateV1MinimizationRequireIndexIDs(t, col, "email", "ada@example.com", "u1")
 	templateV1MinimizationRequireIndexIDs(t, col, "city", "hnl", "u1")
 
+	sameTemplateDoc := templateV1MinimizationDoc(t, `{"email":"ada@example.com","city":"hnl","note":"same-template"}`)
 	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
-		return templateV1MinimizationDoc(t, `{"email":"ada@example.com","city":"hnl","note":"same-template"}`), true, nil
+		return sameTemplateDoc, true, nil
 	})
 	if err != nil {
 		t.Fatalf("update same template/index values: %v", err)
@@ -67,8 +68,9 @@ func TestCollectionTemplateV1UpdateSeparatesTemplateAndSecondaryRootWork(t *test
 		t.Fatalf("primary root %q did not change for modified template-v1 replacement", rootName)
 	}
 
+	newTemplateDoc := templateV1MinimizationDoc(t, `{"email":"ada@example.com","city":"hnl","note":"new-template","updated":true}`)
 	matched, modified, err = col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
-		return templateV1MinimizationDoc(t, `{"email":"ada@example.com","city":"hnl","note":"new-template","updated":true}`), true, nil
+		return newTemplateDoc, true, nil
 	})
 	if err != nil {
 		t.Fatalf("update new template shape: %v", err)
@@ -91,8 +93,9 @@ func TestCollectionTemplateV1UpdateSeparatesTemplateAndSecondaryRootWork(t *test
 	templateV1MinimizationRequireIndexIDs(t, col, "email", "ada@example.com", "u1")
 	templateV1MinimizationRequireIndexIDs(t, col, "city", "hnl", "u1")
 
+	cityDoc := templateV1MinimizationDoc(t, `{"email":"ada@example.com","city":"sea","note":"city-changed","updated":true}`)
 	matched, modified, err = col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
-		return templateV1MinimizationDoc(t, `{"email":"ada@example.com","city":"sea","note":"city-changed","updated":true}`), true, nil
+		return cityDoc, true, nil
 	})
 	if err != nil {
 		t.Fatalf("update city value: %v", err)

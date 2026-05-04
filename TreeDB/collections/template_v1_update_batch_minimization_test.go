@@ -44,10 +44,11 @@ func TestCollectionTemplateV1UpdateBatchSeparatesTemplateAndSecondaryRootWork(t 
 	templateV1UpdateBatchMinRequireIndexIDs(t, col, "email", "ada@example.com", "u1")
 	templateV1UpdateBatchMinRequireIndexIDs(t, col, "city", "hnl", "u1")
 
+	sameTemplateDoc := templateV1UpdateBatchMinDoc(t, `{"email":"ada@example.com","city":"hnl","note":"same-template"}`)
 	results, err := col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return templateV1UpdateBatchMinDoc(t, `{"email":"ada@example.com","city":"hnl","note":"same-template"}`), true, nil
+			return sameTemplateDoc, true, nil
 		},
 	}})
 	if err != nil {
@@ -87,10 +88,11 @@ func TestCollectionTemplateV1UpdateBatchSeparatesTemplateAndSecondaryRootWork(t 
 		t.Fatalf("primary root %q did not change for modified template-v1 replacement", rootName)
 	}
 
+	newTemplateDoc := templateV1UpdateBatchMinDoc(t, `{"email":"ada@example.com","city":"hnl","note":"new-template","updated":true}`)
 	results, err = col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return templateV1UpdateBatchMinDoc(t, `{"email":"ada@example.com","city":"hnl","note":"new-template","updated":true}`), true, nil
+			return newTemplateDoc, true, nil
 		},
 	}})
 	if err != nil {
@@ -123,10 +125,11 @@ func TestCollectionTemplateV1UpdateBatchSeparatesTemplateAndSecondaryRootWork(t 
 		}
 	}
 
+	cityDoc := templateV1UpdateBatchMinDoc(t, `{"email":"ada@example.com","city":"sea","note":"city-changed","updated":true}`)
 	results, err = col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return templateV1UpdateBatchMinDoc(t, `{"email":"ada@example.com","city":"sea","note":"city-changed","updated":true}`), true, nil
+			return cityDoc, true, nil
 		},
 	}})
 	if err != nil {

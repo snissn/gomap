@@ -51,10 +51,11 @@ func TestCollectionUpdateBatchTemplateV1Int64SameEffectiveSkipsSecondaryRoot(t *
 	before := mustTemplateV1UpdateBatchInt64RootIDs(t, d, "scores", rootNames...)
 	assertTemplateV1UpdateBatchInt64IDs(t, col, int64(9007199254740993), "u1")
 
+	sameScoreDoc := mustTemplateV1UpdateBatchInt64Document(t, oldScore, "same-score")
 	results, err := col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return mustTemplateV1UpdateBatchInt64Document(t, oldScore, "same-score"), true, nil
+			return sameScoreDoc, true, nil
 		},
 	}})
 	if err != nil {
@@ -89,10 +90,11 @@ func TestCollectionUpdateBatchTemplateV1Int64SameEffectiveSkipsSecondaryRoot(t *
 	}
 	assertTemplateV1UpdateBatchInt64IDs(t, col, int64(9007199254740993), "u1")
 
+	changedScoreDoc := mustTemplateV1UpdateBatchInt64Document(t, newScore, "changed-score")
 	results, err = col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return mustTemplateV1UpdateBatchInt64Document(t, newScore, "changed-score"), true, nil
+			return changedScoreDoc, true, nil
 		},
 	}})
 	if err != nil {

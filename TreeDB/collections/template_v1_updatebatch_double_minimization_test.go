@@ -52,10 +52,11 @@ func TestCollectionUpdateBatchTemplateV1DoubleSameEffectiveAndChangedRootBehavio
 	before := mustTemplateV1UpdateBatchDoubleRootIDs(t, d, "scores", rootNames...)
 	assertTemplateV1UpdateBatchDoubleIDs(t, col, 2.5, "u1")
 
+	sameScoreDoc := mustTemplateV1UpdateBatchDoubleDocument(t, oldScore, "same-score")
 	results, err := col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return mustTemplateV1UpdateBatchDoubleDocument(t, oldScore, "same-score"), true, nil
+			return sameScoreDoc, true, nil
 		},
 	}})
 	if err != nil {
@@ -91,10 +92,11 @@ func TestCollectionUpdateBatchTemplateV1DoubleSameEffectiveAndChangedRootBehavio
 	}
 	assertTemplateV1UpdateBatchDoubleIDs(t, col, 2.5, "u1")
 
+	changedScoreDoc := mustTemplateV1UpdateBatchDoubleDocument(t, newScore, "changed-score")
 	results, err = col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return mustTemplateV1UpdateBatchDoubleDocument(t, newScore, "changed-score"), true, nil
+			return changedScoreDoc, true, nil
 		},
 	}})
 	if err != nil {

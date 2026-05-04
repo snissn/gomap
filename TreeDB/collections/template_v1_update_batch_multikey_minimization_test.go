@@ -43,10 +43,11 @@ func TestCollectionTemplateV1UpdateBatchSkipsUnchangedMultikeySecondaryRoot(t *t
 	templateV1UpdateBatchMultikeyRequireIndexIDs(t, col, "tag", "a", "d1")
 	templateV1UpdateBatchMultikeyRequireIndexIDs(t, col, "tag", "b", "d1")
 
+	sameTagsDoc := templateV1UpdateBatchMultikeyDoc(t, []any{"a", "b", "a", nil}, "same-effective-tags")
 	results, err := col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("d1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return templateV1UpdateBatchMultikeyDoc(t, []any{"a", "b", "a", nil}, "same-effective-tags"), true, nil
+			return sameTagsDoc, true, nil
 		},
 	}})
 	if err != nil {
@@ -79,10 +80,11 @@ func TestCollectionTemplateV1UpdateBatchSkipsUnchangedMultikeySecondaryRoot(t *t
 		t.Fatalf("primary root %q did not change for modified template-v1 replacement", rootName)
 	}
 
+	changedTagsDoc := templateV1UpdateBatchMultikeyDoc(t, []any{"a", "c"}, "tag-changed")
 	results, err = col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("d1"),
 		Update: func([]byte) ([]byte, bool, error) {
-			return templateV1UpdateBatchMultikeyDoc(t, []any{"a", "c"}, "tag-changed"), true, nil
+			return changedTagsDoc, true, nil
 		},
 	}})
 	if err != nil {

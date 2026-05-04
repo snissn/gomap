@@ -45,8 +45,9 @@ func TestCollectionBSONUpdateTreatsMissingAndNullIndexValuesAsUnchanged(t *testi
 	bsonNullMissingRequireIndexIDs(t, col, "city", "hnl", "u1")
 	bsonNullMissingRequireIndexIDs(t, col, "deleted_at", "2026-05-03")
 
+	nullDoc := bsonNullMissingDoc(t, "u1", "hnl", nil, true, "explicit-null")
 	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
-		return bsonNullMissingDoc(t, "u1", "hnl", nil, true, "explicit-null"), true, nil
+		return nullDoc, true, nil
 	})
 	if err != nil {
 		t.Fatalf("update missing deleted_at to null: %v", err)
@@ -69,8 +70,9 @@ func TestCollectionBSONUpdateTreatsMissingAndNullIndexValuesAsUnchanged(t *testi
 	bsonNullMissingRequireIndexIDs(t, col, "city", "hnl", "u1")
 	bsonNullMissingRequireIndexIDs(t, col, "deleted_at", "2026-05-03")
 
+	valueDoc := bsonNullMissingDoc(t, "u1", "hnl", "2026-05-03", true, "deleted-at-set")
 	matched, modified, err = col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
-		return bsonNullMissingDoc(t, "u1", "hnl", "2026-05-03", true, "deleted-at-set"), true, nil
+		return valueDoc, true, nil
 	})
 	if err != nil {
 		t.Fatalf("update deleted_at value: %v", err)
@@ -88,8 +90,9 @@ func TestCollectionBSONUpdateTreatsMissingAndNullIndexValuesAsUnchanged(t *testi
 	bsonNullMissingRequireIndexIDs(t, col, "city", "hnl", "u1")
 	bsonNullMissingRequireIndexIDs(t, col, "deleted_at", "2026-05-03", "u1")
 
+	missingDoc := bsonNullMissingDoc(t, "u1", "hnl", nil, false, "deleted-at-missing-again")
 	matched, modified, err = col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
-		return bsonNullMissingDoc(t, "u1", "hnl", nil, false, "deleted-at-missing-again"), true, nil
+		return missingDoc, true, nil
 	})
 	if err != nil {
 		t.Fatalf("update deleted_at value to missing: %v", err)

@@ -44,8 +44,9 @@ func TestCollectionTemplateV1UpdateTreatsMissingAndNullIndexValuesAsUnchanged(t 
 	templateV1NullMinRequireIndexIDs(t, col, "city", "hnl", "u1")
 	templateV1NullMinRequireIndexIDs(t, col, "deleted_at", "2026-05-03")
 
+	nullDoc := templateV1NullMinDoc(t, `{"city":"hnl","deleted_at":null,"note":"explicit-null"}`)
 	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
-		return templateV1NullMinDoc(t, `{"city":"hnl","deleted_at":null,"note":"explicit-null"}`), true, nil
+		return nullDoc, true, nil
 	})
 	if err != nil {
 		t.Fatalf("update missing deleted_at to null: %v", err)
@@ -71,8 +72,9 @@ func TestCollectionTemplateV1UpdateTreatsMissingAndNullIndexValuesAsUnchanged(t 
 	templateV1NullMinRequireIndexIDs(t, col, "city", "hnl", "u1")
 	templateV1NullMinRequireIndexIDs(t, col, "deleted_at", "2026-05-03")
 
+	valueDoc := templateV1NullMinDoc(t, `{"city":"hnl","deleted_at":"2026-05-03","note":"deleted-at-set"}`)
 	matched, modified, err = col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
-		return templateV1NullMinDoc(t, `{"city":"hnl","deleted_at":"2026-05-03","note":"deleted-at-set"}`), true, nil
+		return valueDoc, true, nil
 	})
 	if err != nil {
 		t.Fatalf("update deleted_at value: %v", err)
