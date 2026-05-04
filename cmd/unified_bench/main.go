@@ -4128,6 +4128,13 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	for _, inst := range instances {
 		wrapperName := inst.Wrapper.Name()
 		sp, hasStatsProvider := inst.Wrapper.(kvstore.StatsProvider)
+		if hasStatsProvider {
+			if cp, ok := inst.Wrapper.(checkpointer); ok {
+				if err := cp.Checkpoint(); err != nil {
+					return BenchRun{}, fmt.Errorf("checkpoint %s before final stats: %w", inst.Name, err)
+				}
+			}
+		}
 		if err := inst.Wrapper.Close(); err != nil {
 			return BenchRun{}, fmt.Errorf("close %s: %w", inst.Name, err)
 		}

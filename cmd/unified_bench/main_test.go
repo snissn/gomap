@@ -155,9 +155,11 @@ func (d *checkpointCountingDB) Checkpoint() error {
 }
 
 type closeStatsDB struct {
-	name     string
-	closeErr error
-	closed   atomic.Bool
+	name          string
+	checkpointErr error
+	closeErr      error
+	checkpointed  atomic.Bool
+	closed        atomic.Bool
 }
 
 func (d *closeStatsDB) Name() string { return d.name }
@@ -167,6 +169,14 @@ func (d *closeStatsDB) Close() error {
 	return d.closeErr
 }
 
+func (d *closeStatsDB) Checkpoint() error {
+	if d.checkpointErr != nil {
+		return d.checkpointErr
+	}
+	d.checkpointed.Store(true)
+	return nil
+}
+
 func (d *closeStatsDB) Get(key []byte) ([]byte, error) { return nil, nil }
 
 func (d *closeStatsDB) Set(key, value []byte) error { return nil }
@@ -174,10 +184,18 @@ func (d *closeStatsDB) Set(key, value []byte) error { return nil }
 func (d *closeStatsDB) Delete(key []byte) error { return nil }
 
 func (d *closeStatsDB) Stats() map[string]string {
-	if d.closed.Load() {
-		return map[string]string{"treedb.publish.ordered_root_delta_group.root_apply_calls_total": "1"}
+	stats := map[string]string{
+		"treedb.test.final_checkpoint_total": "0",
 	}
-	return map[string]string{"treedb.publish.ordered_root_delta_group.root_apply_calls_total": "0"}
+	if d.checkpointed.Load() {
+		stats["treedb.test.final_checkpoint_total"] = "1"
+	}
+	if d.closed.Load() {
+		stats["treedb.publish.ordered_root_delta_group.root_apply_calls_total"] = "1"
+		return stats
+	}
+	stats["treedb.publish.ordered_root_delta_group.root_apply_calls_total"] = "0"
+	return stats
 }
 
 type settleProbeDB struct {
@@ -920,6 +938,9 @@ func TestRunBenchmark_CapturesTreeDBStatsAfterClose(t *testing.T) {
 	if got, want := stats["treedb.publish.ordered_root_delta_group.root_apply_calls_total"], "1"; got != want {
 		t.Fatalf("post-close TreeDB stat=%q want %q in %#v", got, want, stats)
 	}
+	if got, want := stats["treedb.test.final_checkpoint_total"], "1"; got != want {
+		t.Fatalf("final-checkpoint TreeDB stat=%q want %q in %#v", got, want, stats)
+	}
 }
 
 func TestRunBenchmark_PropagatesCloseError(t *testing.T) {
@@ -943,6 +964,30 @@ func TestRunBenchmark_PropagatesCloseError(t *testing.T) {
 	})
 	if !errors.Is(err, closeErr) {
 		t.Fatalf("runBenchmark err=%v want close error", err)
+	}
+}
+
+func TestRunBenchmark_PropagatesFinalStatsCheckpointError(t *testing.T) {
+	const dbName = "final_stats_checkpoint_error_mock"
+	checkpointErr := errors.New("checkpoint failed")
+	RegisterHiddenDB(dbName, func(dir string) (kvstore.DB, error) {
+		return &closeStatsDB{name: dbName, checkpointErr: checkpointErr}, nil
+	})
+
+	_, err := runBenchmark(BenchConfig{
+		Keys:         1,
+		ValueSize:    1,
+		BatchSize:    1,
+		RangeQueries: 0,
+		RangeSpan:    0,
+		DBsArg:       dbName,
+		TestsArg:     "sequential_write",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if !errors.Is(err, checkpointErr) {
+		t.Fatalf("runBenchmark err=%v want checkpoint error", err)
 	}
 }
 
