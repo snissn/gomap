@@ -1113,6 +1113,18 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 	if stats.PendingRootRuns == 0 {
 		t.Fatal("stats pending root runs=0 want positive")
 	}
+	if got, want := stats.OverlayMutableDocuments, 2; got != want {
+		t.Fatalf("stats overlay mutable docs=%d want %d", got, want)
+	}
+	if got := stats.OverlayQueuedIndexedFlushUnits; got != 0 {
+		t.Fatalf("stats overlay queued flush units=%d want 0", got)
+	}
+	if got := stats.OverlayActiveIndexedFlushUnits; got != 0 {
+		t.Fatalf("stats overlay active flush units=%d want 0", got)
+	}
+	if got, want := stats.OverlayVisibleDepth, 1; got != want {
+		t.Fatalf("stats overlay visible depth=%d want %d", got, want)
+	}
 	if got, want := stats.IndexedStageBatches, uint64(1); got != want {
 		t.Fatalf("stats indexed stage batches=%d want %d", got, want)
 	}
@@ -1129,6 +1141,10 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 	for _, key := range []string{
 		"treedb.collections.write_domain.pending_docs",
 		"treedb.collections.write_domain.pending_indexed_flush_units",
+		"treedb.collections.write_domain.overlay.mutable_docs",
+		"treedb.collections.write_domain.overlay.queued_indexed_flush_units",
+		"treedb.collections.write_domain.overlay.active_indexed_flush_units",
+		"treedb.collections.write_domain.overlay.visible_depth",
 		"treedb.collections.write_domain.indexed_stage.batches_total",
 		"treedb.collections.write_domain.indexed_async_flush.scheduled_total",
 		"treedb.collections.write_domain.mutation_lock.calls_total",
@@ -1148,6 +1164,9 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 	if got, want := stats.IndexedFlushCalls, uint64(1); got != want {
 		t.Fatalf("stats indexed flush calls=%d want %d", got, want)
 	}
+	if got, want := stats.IndexedFlushUnits, uint64(1); got != want {
+		t.Fatalf("stats indexed flush units=%d want %d", got, want)
+	}
 	if got, want := stats.IndexedFlushDocs, uint64(2); got != want {
 		t.Fatalf("stats indexed flush docs=%d want %d", got, want)
 	}
@@ -1157,11 +1176,93 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 	if stats.IndexedFlushDuration <= 0 || stats.IndexedFlushMaterialize <= 0 || stats.IndexedFlushPublish <= 0 {
 		t.Fatalf("stats indexed flush duration/materialize/publish=%s/%s/%s want positive", stats.IndexedFlushDuration, stats.IndexedFlushMaterialize, stats.IndexedFlushPublish)
 	}
+	if stats.RootDeltaPlanPrimaryRoots == 0 || stats.RootDeltaPlanSecondaryRoots == 0 || stats.RootDeltaPlanEntries == 0 {
+		t.Fatalf("stats root delta primary/secondary/entries=%d/%d/%d want positive", stats.RootDeltaPlanPrimaryRoots, stats.RootDeltaPlanSecondaryRoots, stats.RootDeltaPlanEntries)
+	}
+	if stats.RootDeltaPlanKeyBytes == 0 || stats.RootDeltaPlanValueBytes == 0 {
+		t.Fatalf("stats root delta key/value bytes=%d/%d want positive", stats.RootDeltaPlanKeyBytes, stats.RootDeltaPlanValueBytes)
+	}
 	exported = mgr.Stats()
 	for _, key := range []string{
+		"treedb.collections.write_domain.indexed_flush.units_total",
 		"treedb.collections.write_domain.indexed_flush.duration_ns_total",
 		"treedb.collections.write_domain.indexed_flush.materialize_ns_total",
 		"treedb.collections.write_domain.indexed_flush.publish_ns_total",
+		"treedb.collections.write_domain.root_delta_plan.roots.primary_total",
+		"treedb.collections.write_domain.root_delta_plan.roots.secondary_total",
+		"treedb.collections.write_domain.root_delta_plan.entries_total",
+		"treedb.collections.write_domain.root_delta_plan.key_bytes_total",
+		"treedb.collections.write_domain.root_delta_plan.value_bytes_total",
+	} {
+		if exported[key] == "" {
+			t.Fatalf("exported stats missing %s from %#v", key, exported)
+		}
+	}
+}
+
+func TestPrimaryOnlyNoIndexUpdateCounters(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"name":"ada","city":"hnl"}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	statsBefore := mgr.StatsSnapshot()
+	matched, modified, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+		return []byte(`{"name":"ada","city":"sea"}`), true, nil
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("update matched/modified=%v/%v want true/true", matched, modified)
+	}
+	stats := mgr.StatsSnapshot()
+	if got, want := stats.PrimaryOnlyUpdateCalls-statsBefore.PrimaryOnlyUpdateCalls, uint64(1); got != want {
+		t.Fatalf("primary-only update calls delta=%d want %d", got, want)
+	}
+	if got, want := stats.PrimaryOnlyMatched-statsBefore.PrimaryOnlyMatched, uint64(1); got != want {
+		t.Fatalf("primary-only matched delta=%d want %d", got, want)
+	}
+	if got, want := stats.PrimaryOnlyModified-statsBefore.PrimaryOnlyModified, uint64(1); got != want {
+		t.Fatalf("primary-only modified delta=%d want %d", got, want)
+	}
+	if got, want := stats.PrimaryOnlyRootPublishes-statsBefore.PrimaryOnlyRootPublishes, uint64(1); got != want {
+		t.Fatalf("primary-only root publishes delta=%d want %d", got, want)
+	}
+	if got, want := stats.PrimaryOnlyRootDeltaEntries-statsBefore.PrimaryOnlyRootDeltaEntries, uint64(1); got != want {
+		t.Fatalf("primary-only root delta entries delta=%d want %d", got, want)
+	}
+	if got := stats.PrimaryOnlyRootDeltaKeyBytes - statsBefore.PrimaryOnlyRootDeltaKeyBytes; got != uint64(len("u1")) {
+		t.Fatalf("primary-only root delta key bytes delta=%d want %d", got, len("u1"))
+	}
+	if got := stats.PrimaryOnlyRootDeltaValueBytes - statsBefore.PrimaryOnlyRootDeltaValueBytes; got == 0 {
+		t.Fatal("primary-only root delta value bytes delta=0 want positive")
+	}
+	if got, want := stats.PrimaryOnlyCoalescedDocs-statsBefore.PrimaryOnlyCoalescedDocs, uint64(1); got != want {
+		t.Fatalf("primary-only coalesced docs delta=%d want %d", got, want)
+	}
+	exported := mgr.Stats()
+	for _, key := range []string{
+		"treedb.collections.write_domain.primary_only.update_calls_total",
+		"treedb.collections.write_domain.primary_only.matched_total",
+		"treedb.collections.write_domain.primary_only.modified_total",
+		"treedb.collections.write_domain.primary_only.root_publishes_total",
+		"treedb.collections.write_domain.primary_only.root_delta_entries_total",
+		"treedb.collections.write_domain.primary_only.root_delta_key_bytes_total",
+		"treedb.collections.write_domain.primary_only.root_delta_value_bytes_total",
+		"treedb.collections.write_domain.primary_only.coalesced_docs_total",
 	} {
 		if exported[key] == "" {
 			t.Fatalf("exported stats missing %s from %#v", key, exported)
