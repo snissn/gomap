@@ -75,6 +75,9 @@ func TestCollectionDirectUpdateJSONBoolSameEffectiveSkipsSecondaryRoot(t *testin
 	}
 
 	afterChanged := jsonDirectBoolRootIDs(t, d)
+	if rootName := collectionPrimaryRootName("flags"); afterChanged[rootName] == afterSame[rootName] {
+		t.Fatalf("primary root %q did not change for second modified JSON replacement", rootName)
+	}
 	for _, rootName := range []string{
 		collectionIndexStateRootName("flags"),
 		collectionSecondaryRootName("flags", "active"),
