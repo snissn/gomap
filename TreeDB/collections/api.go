@@ -309,9 +309,7 @@ type CollectionSecondaryRunStats struct {
 }
 
 // CollectionUpdateStats captures phase timings and counters from the most
-// recent successful UpdateBatch-style call on a Collection handle. Individual
-// Update calls that fall back to the legacy direct path are intentionally not
-// represented here yet; the write combiner and UpdateBatch path use this shape.
+// recent successful Update/UpdateBatch-style call on a Collection handle.
 type CollectionUpdateStats struct {
 	Items                int
 	Matched              int
@@ -7055,6 +7053,7 @@ func errConcurrentRootModification(collectionName, rootName string) error {
 }
 
 func (c *Collection) updateDocumentOnce(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
+	detailedStats := c.updateBatchDetailedStatsEnabled()
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return false, false, backenddb.ErrClosed
@@ -7078,21 +7077,29 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		_ = snap.Close()
 		return false, false, err
 	}
+	stats := CollectionUpdateStats{
+		Items:   1,
+		Indexes: len(c.meta.Indexes),
+	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 	baseUserRoot := snapshotUserRoot(snap)
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
 
 	primaryRootName := collectionPrimaryRootName(c.meta.Name)
+	phaseStart := updateBatchStatsNow(detailedStats)
 	currentValue, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, primaryRootName, documentID, nil)
+	stats.CurrentRead += updateBatchStatsSince(detailedStats, phaseStart)
 	if err != nil {
 		_ = snap.Close()
 		return false, false, err
 	}
 	if !found {
 		_ = snap.Close()
+		c.setLastUpdateStats(stats)
 		return false, false, nil
 	}
+	stats.Matched = 1
 	primaryRoot := catalog.rootID(primaryRootName)
 
 	runtimes, err := (insertBatchPlanner{
@@ -7103,6 +7110,17 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		_ = snap.Close()
 		return false, false, err
 	}
+	if detailedStats && len(runtimes) <= len(stats.IndexStats) {
+		stats.IndexStatsCount = len(runtimes)
+		for i, runtime := range runtimes {
+			stats.IndexStats[i] = CollectionUpdateIndexStats{
+				CollectionName: c.meta.Name,
+				IndexName:      runtime.def.name,
+				IndexOrdinal:   i,
+				Unique:         runtime.def.unique,
+			}
+		}
+	}
 	currentID, err := captureBSONIDSnapshot(currentValue, plannerOptions)
 	if err != nil {
 		_ = snap.Close()
@@ -7112,27 +7130,34 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	var newState documentIndexState
 	indexStateChanged := false
 	if len(runtimes) > 0 {
+		phaseStart = updateBatchStatsNow(detailedStats)
 		oldState, err = indexStateForDocument(currentValue, runtimes, plannerOptions)
+		stats.IndexStateExtraction += updateBatchStatsSince(detailedStats, phaseStart)
 		if err != nil {
 			_ = snap.Close()
 			return false, false, err
 		}
 	}
 
+	phaseStart = updateBatchStatsNow(detailedStats)
 	document, changed, err := callCollectionUpdateCallback(update, currentValue)
+	stats.Callback += updateBatchStatsSince(detailedStats, phaseStart)
 	if err != nil {
 		_ = snap.Close()
 		return false, false, err
 	}
 	if !changed {
 		_ = snap.Close()
+		c.setLastUpdateStats(stats)
 		return true, false, nil
 	}
 	if err := validateBSONReplacementPreservesIDSnapshot(currentID, document, plannerOptions); err != nil {
 		_ = snap.Close()
 		return false, false, err
 	}
+	phaseStart = updateBatchStatsNow(detailedStats)
 	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments([][]byte{document}, plannerOptions)
+	stats.PrepareDocuments += updateBatchStatsSince(detailedStats, phaseStart)
 	if err != nil {
 		_ = snap.Close()
 		return false, false, err
@@ -7147,17 +7172,46 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	}
 
 	if len(runtimes) > 0 {
+		phaseStart = updateBatchStatsNow(detailedStats)
 		newState, err = indexStateForDocument(document, runtimes, plannerOptions)
+		stats.IndexStateExtraction += updateBatchStatsSince(detailedStats, phaseStart)
 		if err != nil {
 			_ = snap.Close()
 			return false, false, err
 		}
 		indexStateChanged = !documentIndexStatesEqual(oldState, newState)
+		for runtimeIdx, runtime := range runtimes {
+			if documentIndexRuntimeChanged(oldState, newState, runtime) {
+				stats.IndexValueChanges++
+				if runtime.def.unique {
+					stats.UniqueIndexChecks++
+				}
+				if runtimeIdx < stats.IndexStatsCount {
+					stats.IndexStats[runtimeIdx].Changed++
+					if runtime.def.unique {
+						stats.IndexStats[runtimeIdx].UniqueChecks++
+					}
+				}
+				continue
+			}
+			stats.IndexValueUnchanged++
+			if runtime.def.unique {
+				stats.UniqueIndexCheckSkips++
+			}
+			if runtimeIdx < stats.IndexStatsCount {
+				stats.IndexStats[runtimeIdx].Unchanged++
+				if runtime.def.unique {
+					stats.IndexStats[runtimeIdx].UniqueCheckSkips++
+				}
+			}
+		}
 		if indexStateChanged {
+			phaseStart = updateBatchStatsNow(detailedStats)
 			if err := rejectReplaceUniqueConflicts(snap, catalog, runtimes, oldState, newState, documentID, nil); err != nil {
 				_ = snap.Close()
 				return false, false, err
 			}
+			stats.UniqueIndexPreflight += updateBatchStatsSince(detailedStats, phaseStart)
 		}
 	}
 
@@ -7167,6 +7221,7 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	deltaTables := make([]memtable.Table, 0, 2+len(runtimes))
 
 	if len(templateRecords) > 0 {
+		phaseStart = updateBatchStatsNow(detailedStats)
 		templatePlan := &insertBatchPlan{}
 		if err := (insertBatchPlanner{
 			collection:             c.meta.Name,
@@ -7183,18 +7238,22 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 			policies = append(policies, run.storagePolicy)
 			deltaTables = append(deltaTables, run.table)
 		}
+		stats.TemplateRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
 	}
 
 	rootNames = append(rootNames, primaryRootName)
 	baseRootIDs[primaryRootName] = primaryRoot
 	policies = append(policies, plannerOptions.dataStoragePolicy)
+	phaseStart = updateBatchStatsNow(detailedStats)
 	primaryTable := newCollectionRunTable(1)
 	setCollectionRunValue(primaryTable, bytes.Clone(documentID), document)
 	primaryTable.Freeze()
 	deltaTables = append(deltaTables, primaryTable)
+	stats.PrimaryRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
 
 	if indexStateChanged {
 		if persistIndexStateForOptions(plannerOptions) {
+			phaseStart = updateBatchStatsNow(detailedStats)
 			stateRootName := collectionIndexStateRootName(c.meta.Name)
 			stateRootID := catalog.rootID(stateRootName)
 			rootNames = append(rootNames, stateRootName)
@@ -7214,25 +7273,48 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 			}
 			stateTable.Freeze()
 			deltaTables = append(deltaTables, stateTable)
+			stats.IndexStateRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
 		}
 
-		for _, runtime := range runtimes {
+		phaseStart = updateBatchStatsNow(detailedStats)
+		for runtimeIdx, runtime := range runtimes {
 			if !documentIndexRuntimeChanged(oldState, newState, runtime) {
 				continue
 			}
 			rootName := collectionSecondaryRootName(c.meta.Name, runtime.def.name)
 			rootID := catalog.rootID(rootName)
 			table := newCollectionRunTable(0)
-			if err := deleteSecondaryEntriesForDocument(table, runtime, oldState, documentID); err != nil {
-				_ = snap.Close()
-				resetCollectionTables(append(deltaTables, table))
-				return false, false, err
-			}
-			for _, encoded := range newState[runtime.def.name] {
-				if _, err := setCollectionSecondaryIndexEntry(table, encoded, documentID); err != nil {
+			runStats := CollectionUpdateSecondaryRunStats{IndexName: runtime.def.name}
+			for _, encoded := range oldState[runtime.def.name] {
+				keyLen, err := deleteCollectionSecondaryIndexEntry(table, encoded, documentID)
+				if err != nil {
 					_ = snap.Close()
 					resetCollectionTables(append(deltaTables, table))
 					return false, false, err
+				}
+				stats.SecondaryDeleteEntries++
+				stats.SecondaryKeyBytes += keyLen
+				runStats.Deletes++
+				runStats.KeyBytes += keyLen
+				if runtimeIdx < stats.IndexStatsCount {
+					stats.IndexStats[runtimeIdx].SecondaryDeletes++
+					stats.IndexStats[runtimeIdx].SecondaryKeyBytes += keyLen
+				}
+			}
+			for _, encoded := range newState[runtime.def.name] {
+				keyLen, err := setCollectionSecondaryIndexEntry(table, encoded, documentID)
+				if err != nil {
+					_ = snap.Close()
+					resetCollectionTables(append(deltaTables, table))
+					return false, false, err
+				}
+				stats.SecondarySetEntries++
+				stats.SecondaryKeyBytes += keyLen
+				runStats.Sets++
+				runStats.KeyBytes += keyLen
+				if runtimeIdx < stats.IndexStatsCount {
+					stats.IndexStats[runtimeIdx].SecondarySets++
+					stats.IndexStats[runtimeIdx].SecondaryKeyBytes += keyLen
 				}
 			}
 			if table.Len() == 0 {
@@ -7244,7 +7326,14 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 			baseRootIDs[rootName] = rootID
 			policies = append(policies, runtime.def.storagePolicy)
 			deltaTables = append(deltaTables, table)
+			if runStats.Deletes != 0 || runStats.Sets != 0 || runStats.KeyBytes != 0 {
+				stats.SecondaryRuns = append(stats.SecondaryRuns, runStats)
+			}
+			if runtimeIdx < stats.IndexStatsCount {
+				stats.IndexStats[runtimeIdx].SecondaryRuns++
+			}
 		}
+		stats.SecondaryRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
 	}
 	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
 	// base roots before stale-root validation rejects concurrent modifications.
@@ -7260,9 +7349,11 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	preflight := func() error {
 		return c.validateMutationRootDescriptors(baseUserRoot, baseSystemRoot, baseCommitSeq)
 	}
+	phaseStart = updateBatchStatsNow(detailedStats)
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 	})
+	stats.Publish += updateBatchStatsSince(detailedStats, phaseStart)
 	cleanupDeltas()
 	if err != nil {
 		return false, false, err
@@ -7273,6 +7364,9 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	stats.Modified = 1
+	stats.Runs = len(rootNames)
+	c.setLastUpdateStats(stats)
 	return true, true, nil
 }
 
