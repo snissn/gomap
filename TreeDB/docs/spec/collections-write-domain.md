@@ -26,11 +26,13 @@ escape hatch. It is not the production-mainline path.
 Pending indexed writes are visible through the collection manager that owns the
 write domain.
 
-Reads and checks MUST merge these layers with the following precedence:
+Reads and checks enumerate pending runs in active, queued, then mutable order.
+Lookups and merged iterators use newest-wins shadowing, so effective precedence
+is:
 
-1. the active in-flight async publishing batch, in original FIFO unit order,
+1. current mutable indexed runs,
 2. queued immutable indexed flush units, in FIFO order,
-3. current mutable indexed runs,
+3. the active in-flight async publishing batch, in original FIFO unit order,
 4. persisted backend roots from the current collection catalog.
 
 This applies to:

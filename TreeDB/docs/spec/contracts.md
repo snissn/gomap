@@ -159,8 +159,8 @@ Indexed collection writes use collection-local write memtables by default.
 Pending indexed writes are visible through the owning collection manager before
 they are published to persisted roots. Primary reads, secondary index lookups,
 unique checks, and update/delete planning must merge write-domain state with
-explicit precedence: active in-flight async publishing units, queued immutable
-flush units, current mutable runs, then persisted roots. The active async
+newest-wins shadowing: current mutable runs, queued immutable flush units,
+active in-flight async publishing units, then persisted roots. The active async
 publish uses a coalesced flush batch that preserves original FIFO unit
 boundaries while using a mechanical merged view for ordered-root publish.
 
