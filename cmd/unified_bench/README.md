@@ -190,6 +190,10 @@ This writes:
 - `block.pprof`, `mutex.pprof`, `trace.out`
 - `insights.md`, `insights.json`, `insights.html` (from `benchprof`)
 
+For TreeDB runs, `benchprof_results.json` also preserves selected TreeDB stats
+under `runs[].treedb_stats`, including ordered-root/root-apply and cache
+counters used by raw-engine review gates.
+
 ## Notes
 
 TreeDB is a cached engine (memtable + background flush). If you run long write-heavy phases and then measure `random_read`/scans immediately, the results can be dominated by background flush work (“flush debt”).
