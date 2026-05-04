@@ -291,14 +291,18 @@ func TestMongoRowsUsePrimaryScope(t *testing.T) {
 	}
 }
 
-func TestSortedMongoIndexesForPhaseSkipsMissingPhase(t *testing.T) {
+func TestMongoRowsForPhaseSkipsMissingPhase(t *testing.T) {
 	rows := []mongoSummaryRow{
-		{SecondaryIndexes: 0, Phase: "load_insert_many"},
+		{SecondaryIndexes: 0, Phase: "load_insert_many", TreeDBOpsSec: 10},
 		{SecondaryIndexes: 1, Phase: "id_find_one"},
-		{SecondaryIndexes: 2, Phase: "load_insert_many"},
+		{SecondaryIndexes: 2, Phase: "load_insert_many", TreeDBOpsSec: 20},
 	}
-	if got, want := sortedMongoIndexesForPhase(rows, "load_insert_many"), []int{0, 2}; !reflect.DeepEqual(got, want) {
+	loadRows := mongoRowsForPhase(rows, "load_insert_many")
+	if got, want := mongoRowIndexLabels(loadRows), []string{"0", "2"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("indexes = %v, want %v", got, want)
+	}
+	if got, want := mongoRowOps(loadRows, "tree"), []float64{10, 20}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ops = %v, want %v", got, want)
 	}
 }
 

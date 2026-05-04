@@ -1316,16 +1316,16 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 	b.WriteString(fullSweepLoadNote(rows))
 	b.WriteString("<div class=\"chart-grid\">")
 	indexes := sortedMongoIndexes(rows)
-	loadIndexes := sortedMongoIndexesForPhase(rows, "load_insert_many")
-	if len(loadIndexes) > 0 {
-		indexLabels := indexNumberLabels(loadIndexes)
+	loadRows := mongoRowsForPhase(rows, "load_insert_many")
+	if len(loadRows) > 0 {
+		indexLabels := mongoRowIndexLabels(loadRows)
 		b.WriteString(lineChart("Load throughput by index", indexLabels, "secondary indexes", "docs/sec", []chartSeries{
-			{Name: "TreeDB", Values: mongoPhaseByIndex(rows, loadIndexes, "load_insert_many", "tree"), Color: "#2867c7"},
-			{Name: "MongoDB", Values: mongoPhaseByIndex(rows, loadIndexes, "load_insert_many", "mongo"), Color: "#1f8a5b"},
+			{Name: "TreeDB", Values: mongoRowOps(loadRows, "tree"), Color: "#2867c7"},
+			{Name: "MongoDB", Values: mongoRowOps(loadRows, "mongo"), Color: "#1f8a5b"},
 		}, "docs/sec"))
 		b.WriteString(lineChart("Physical disk by index", indexLabels, "secondary indexes", "physical bytes", []chartSeries{
-			{Name: "TreeDB", Values: mongoDiskByIndex(rows, loadIndexes, "tree"), Color: "#2867c7"},
-			{Name: "MongoDB", Values: mongoDiskByIndex(rows, loadIndexes, "mongo"), Color: "#1f8a5b"},
+			{Name: "TreeDB", Values: mongoRowDisk(loadRows, "tree"), Color: "#2867c7"},
+			{Name: "MongoDB", Values: mongoRowDisk(loadRows, "mongo"), Color: "#1f8a5b"},
 		}, "bytes"))
 	}
 	b.WriteString("</div></div>")
@@ -1483,21 +1483,6 @@ func sortedMongoIndexes(rows []mongoSummaryRow) []int {
 	return out
 }
 
-func sortedMongoIndexesForPhase(rows []mongoSummaryRow, phase string) []int {
-	seen := make(map[int]bool)
-	for _, row := range rows {
-		if row.Phase == phase {
-			seen[row.SecondaryIndexes] = true
-		}
-	}
-	var out []int
-	for idx := range seen {
-		out = append(out, idx)
-	}
-	sort.Ints(out)
-	return out
-}
-
 func indexNumberLabels(indexes []int) []string {
 	out := make([]string, 0, len(indexes))
 	for _, idx := range indexes {
@@ -1506,14 +1491,29 @@ func indexNumberLabels(indexes []int) []string {
 	return out
 }
 
-func mongoPhaseByIndex(rows []mongoSummaryRow, indexes []int, phase, side string) []float64 {
-	var out []float64
-	for _, idx := range indexes {
+func mongoRowsForPhase(rows []mongoSummaryRow, phase string) []mongoSummaryRow {
+	var out []mongoSummaryRow
+	for _, idx := range sortedMongoIndexes(rows) {
 		row, ok := mongoRow(rows, idx, phase)
 		if !ok {
-			out = append(out, 0)
 			continue
 		}
+		out = append(out, row)
+	}
+	return out
+}
+
+func mongoRowIndexLabels(rows []mongoSummaryRow) []string {
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, strconv.Itoa(row.SecondaryIndexes))
+	}
+	return out
+}
+
+func mongoRowOps(rows []mongoSummaryRow, side string) []float64 {
+	out := make([]float64, 0, len(rows))
+	for _, row := range rows {
 		if side == "mongo" {
 			out = append(out, row.MongoOpsSec)
 		} else {
@@ -1523,14 +1523,9 @@ func mongoPhaseByIndex(rows []mongoSummaryRow, indexes []int, phase, side string
 	return out
 }
 
-func mongoDiskByIndex(rows []mongoSummaryRow, indexes []int, side string) []float64 {
-	var out []float64
-	for _, idx := range indexes {
-		row, ok := mongoRow(rows, idx, "load_insert_many")
-		if !ok {
-			out = append(out, 0)
-			continue
-		}
+func mongoRowDisk(rows []mongoSummaryRow, side string) []float64 {
+	out := make([]float64, 0, len(rows))
+	for _, row := range rows {
 		if side == "mongo" {
 			out = append(out, row.MongoPhysicalBytes)
 		} else {
