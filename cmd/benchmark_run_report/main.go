@@ -1384,7 +1384,7 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 		if len(categories) > 0 {
 			b.WriteString(verticalBarChart("Full sweep non-load phases, "+indexLabel, categories, "phase", []chartSeries{{Name: "TreeDB", Values: tree, Color: "#2867c7"}, {Name: "MongoDB", Values: mongo, Color: "#1f8a5b"}}, "ops/sec"))
 		}
-		readerCounts := mongoSweepCounts(rows, idx, "concurrent_id_find_one_r")
+		readerCounts := mongoSweepCountsInPrimaryScope(rows, idx, "concurrent_id_find_one_r")
 		if len(readerCounts) > 0 {
 			b.WriteString(lineChart("Full sweep reader fanout, "+indexLabel, countLabels(readerCounts), "reader count", "ops/sec", []chartSeries{
 				{Name: "TreeDB", Values: mongoSweep(rows, idx, "concurrent_id_find_one_r", "tree", readerCounts), Color: "#2867c7"},
@@ -1457,15 +1457,15 @@ func renderMongoScaling(b *strings.Builder, byIndex map[int][]mongoSummaryRow) {
 		writerCounts := mongoSweepCounts(rows, idx, "concurrent_id_update_set_w")
 		if len(writerCounts) > 0 {
 			b.WriteString(lineChart("Writer sweep, "+indexLabel, countLabels(writerCounts), "writer count", "ops/sec", []chartSeries{
-				{Name: "TreeDB", Values: mongoSweep(rows, idx, "concurrent_id_update_set_w", "tree", writerCounts), Color: "#2867c7"},
-				{Name: "MongoDB", Values: mongoSweep(rows, idx, "concurrent_id_update_set_w", "mongo", writerCounts), Color: "#1f8a5b"},
+				{Name: "TreeDB", Values: mongoSweepAny(rows, idx, "concurrent_id_update_set_w", "tree", writerCounts), Color: "#2867c7"},
+				{Name: "MongoDB", Values: mongoSweepAny(rows, idx, "concurrent_id_update_set_w", "mongo", writerCounts), Color: "#1f8a5b"},
 			}, "ops/sec"))
 		}
 		readerCounts := mongoSweepCounts(rows, idx, "concurrent_id_find_one_r")
 		if len(readerCounts) > 0 {
 			b.WriteString(lineChart("Reader sweep, "+indexLabel, countLabels(readerCounts), "reader count", "ops/sec", []chartSeries{
-				{Name: "TreeDB", Values: mongoSweep(rows, idx, "concurrent_id_find_one_r", "tree", readerCounts), Color: "#2867c7"},
-				{Name: "MongoDB", Values: mongoSweep(rows, idx, "concurrent_id_find_one_r", "mongo", readerCounts), Color: "#1f8a5b"},
+				{Name: "TreeDB", Values: mongoSweepAny(rows, idx, "concurrent_id_find_one_r", "tree", readerCounts), Color: "#2867c7"},
+				{Name: "MongoDB", Values: mongoSweepAny(rows, idx, "concurrent_id_find_one_r", "mongo", readerCounts), Color: "#1f8a5b"},
 			}, "ops/sec"))
 		}
 		b.WriteString("</div></div>")
@@ -1629,13 +1629,26 @@ func mongoSameScope(row, scope mongoSummaryRow) bool {
 }
 
 func mongoSweepCounts(rows []mongoSummaryRow, idx int, prefix string) []int {
+	return mongoSweepCountsFiltered(rows, idx, prefix, nil)
+}
+
+func mongoSweepCountsInPrimaryScope(rows []mongoSummaryRow, idx int, prefix string) []int {
 	scope, hasScope := mongoPrimaryScope(rows, idx)
+	if !hasScope {
+		return mongoSweepCounts(rows, idx, prefix)
+	}
+	return mongoSweepCountsFiltered(rows, idx, prefix, func(row mongoSummaryRow) bool {
+		return mongoSameScope(row, scope)
+	})
+}
+
+func mongoSweepCountsFiltered(rows []mongoSummaryRow, idx int, prefix string, include func(mongoSummaryRow) bool) []int {
 	seen := make(map[int]bool)
 	for _, row := range rows {
 		if row.SecondaryIndexes != idx || !strings.HasPrefix(row.Phase, prefix) {
 			continue
 		}
-		if hasScope && !mongoSameScope(row, scope) {
+		if include != nil && !include(row) {
 			continue
 		}
 		count, err := strconv.Atoi(strings.TrimPrefix(row.Phase, prefix))
@@ -1660,10 +1673,27 @@ func countLabels(counts []int) []string {
 	return out
 }
 
+func mongoRowAny(rows []mongoSummaryRow, idx int, phase string) (mongoSummaryRow, bool) {
+	for _, row := range rows {
+		if row.SecondaryIndexes == idx && row.Phase == phase {
+			return row, true
+		}
+	}
+	return mongoSummaryRow{}, false
+}
+
 func mongoSweep(rows []mongoSummaryRow, idx int, prefix, side string, counts []int) []float64 {
+	return mongoSweepWithLookup(rows, idx, prefix, side, counts, mongoRow)
+}
+
+func mongoSweepAny(rows []mongoSummaryRow, idx int, prefix, side string, counts []int) []float64 {
+	return mongoSweepWithLookup(rows, idx, prefix, side, counts, mongoRowAny)
+}
+
+func mongoSweepWithLookup(rows []mongoSummaryRow, idx int, prefix, side string, counts []int, lookup func([]mongoSummaryRow, int, string) (mongoSummaryRow, bool)) []float64 {
 	var out []float64
 	for _, count := range counts {
-		row, ok := mongoRow(rows, idx, prefix+strconv.Itoa(count))
+		row, ok := lookup(rows, idx, prefix+strconv.Itoa(count))
 		if !ok {
 			out = append(out, 0)
 			continue

@@ -308,9 +308,26 @@ func TestMongoRowsUsePrimaryScope(t *testing.T) {
 	if !ok || row.Documents != 1_000 || row.TreeDBOpsSec != 1000 {
 		t.Fatalf("mongoRow = %+v, %v; want primary 1000-doc scope", row, ok)
 	}
-	counts := mongoSweepCounts(rows, 0, "concurrent_id_find_one_r")
+	counts := mongoSweepCountsInPrimaryScope(rows, 0, "concurrent_id_find_one_r")
 	if want := []int{8}; !reflect.DeepEqual(counts, want) {
 		t.Fatalf("counts = %v, want %v", counts, want)
+	}
+}
+
+func TestMongoScalingCountsAcrossPerCountConfigs(t *testing.T) {
+	rows := []mongoSummaryRow{
+		{Documents: 1000, SecondaryIndexes: 0, TreeDBConfig: "treedb_readers_1", MongoConfig: "mongo_readers_1", Phase: "load_insert_many"},
+		{Documents: 1000, SecondaryIndexes: 0, TreeDBConfig: "treedb_readers_1", MongoConfig: "mongo_readers_1", Phase: "concurrent_id_find_one_r1", TreeDBOpsSec: 10, MongoOpsSec: 5},
+		{Documents: 1000, SecondaryIndexes: 0, TreeDBConfig: "treedb_readers_16", MongoConfig: "mongo_readers_16", Phase: "load_insert_many"},
+		{Documents: 1000, SecondaryIndexes: 0, TreeDBConfig: "treedb_readers_16", MongoConfig: "mongo_readers_16", Phase: "concurrent_id_find_one_r16", TreeDBOpsSec: 160, MongoOpsSec: 80},
+	}
+	counts := mongoSweepCounts(rows, 0, "concurrent_id_find_one_r")
+	if want := []int{1, 16}; !reflect.DeepEqual(counts, want) {
+		t.Fatalf("scaling counts = %v, want %v", counts, want)
+	}
+	values := mongoSweepAny(rows, 0, "concurrent_id_find_one_r", "tree", counts)
+	if want := []float64{10, 160}; !reflect.DeepEqual(values, want) {
+		t.Fatalf("scaling values = %v, want %v", values, want)
 	}
 }
 
