@@ -50,7 +50,7 @@ func TestCollectionDirectUpdateManyIndexesTouchesOnlyChangedSecondaryRoot(t *tes
 		targetOrdinal: "target-new",
 	}, map[string]string{"note": "primary changed"})
 
-	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err := col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return replacement, true, nil
 	})
 	if err != nil {
@@ -129,7 +129,7 @@ func TestCollectionDirectUpdateManyIndexesSkipsAllSecondaryRootsWhenEffectiveVal
 	before := directManyRootIDsForTest(t, d, "users", rootNames)
 	replacement := directManyIndexDocumentForTest(indexCount, nil, map[string]string{"note": "primary changed"})
 
-	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err := col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return replacement, true, nil
 	})
 	if err != nil {

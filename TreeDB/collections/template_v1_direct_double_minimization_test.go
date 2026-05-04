@@ -49,7 +49,7 @@ func TestCollectionDirectUpdateTemplateV1DoubleSameEffectiveSkipsSecondaryRoot(t
 	before := mustTemplateV1DirectDoubleRootIDs(t, d, "scores", rootNames...)
 	assertTemplateV1DirectDoubleIDs(t, col, 2.5, "u1")
 
-	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err := col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return mustTemplateV1DoubleDocument(t, oldScore, "after"), true, nil
 	})
 	if err != nil {
@@ -73,7 +73,7 @@ func TestCollectionDirectUpdateTemplateV1DoubleSameEffectiveSkipsSecondaryRoot(t
 	}
 	assertTemplateV1DirectDoubleIDs(t, col, 2.5, "u1")
 
-	matched, modified, err = col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err = col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return mustTemplateV1DoubleDocument(t, newScore, "changed-score"), true, nil
 	})
 	if err != nil {

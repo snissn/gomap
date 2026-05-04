@@ -46,7 +46,7 @@ func TestCollectionDirectUpdateTemplateV1BoolSameEffectiveSkipsSecondaryRoot(t *
 	before := mustTemplateV1DirectBoolRootIDs(t, d, "flags", rootNames...)
 	assertTemplateV1DirectBoolIDs(t, col, true, "u1")
 
-	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err := col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return mustTemplateV1BoolDocument(t, true, "same-active"), true, nil
 	})
 	if err != nil {
@@ -70,7 +70,7 @@ func TestCollectionDirectUpdateTemplateV1BoolSameEffectiveSkipsSecondaryRoot(t *
 	}
 	assertTemplateV1DirectBoolIDs(t, col, true, "u1")
 
-	matched, modified, err = col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err = col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return mustTemplateV1BoolDocument(t, false, "changed-active"), true, nil
 	})
 	if err != nil {

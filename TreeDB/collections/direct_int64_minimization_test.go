@@ -40,7 +40,7 @@ func TestCollectionDirectUpdateSkipsUnchangedInt64IndexRoot(t *testing.T) {
 	}
 	before := directInt64RootIDs(t, d)
 
-	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err := col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return []byte(`{"score":9007199254740993,"note":1}`), true, nil
 	})
 	if err != nil {

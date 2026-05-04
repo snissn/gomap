@@ -45,7 +45,7 @@ func TestCollectionBSONDirectUpdateSkipsUnchangedUniqueWhenNonUniqueChanges(t *t
 	bsonDirectUniqueSkipRequireIndexIDs(t, col, "email", "ada@example.com", "u1")
 	bsonDirectUniqueSkipRequireIndexIDs(t, col, "city", "hnl", "u1")
 
-	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err := col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return bsonDirectUniqueSkipDoc(t, "u1", "ada@example.com", "sea", "city-changed"), true, nil
 	})
 	if err != nil {

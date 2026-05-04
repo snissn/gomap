@@ -40,7 +40,7 @@ func TestCollectionDirectUpdateJSONBoolSameEffectiveSkipsSecondaryRoot(t *testin
 	before := jsonDirectBoolRootIDs(t, d)
 	assertJSONDirectBoolIDs(t, col, true, "u1")
 
-	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err := col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return []byte(`{"active":true,"note":"same-active"}`), true, nil
 	})
 	if err != nil {
@@ -64,7 +64,7 @@ func TestCollectionDirectUpdateJSONBoolSameEffectiveSkipsSecondaryRoot(t *testin
 	}
 	assertJSONDirectBoolIDs(t, col, true, "u1")
 
-	matched, modified, err = col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err = col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return []byte(`{"active":false,"note":"changed-active"}`), true, nil
 	})
 	if err != nil {

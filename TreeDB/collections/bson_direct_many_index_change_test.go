@@ -55,7 +55,7 @@ func TestCollectionBSONDirectUpdateChangesOneIndexAmongMany(t *testing.T) {
 
 	changedField := bsonDirectManyIndexField(changedIndex)
 	changedValue := "changed-13"
-	matched, modified, err := col.Update([]byte("d1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err := col.updateDirect([]byte("d1"), func([]byte) ([]byte, bool, error) {
 		return bsonDirectManyIndexDoc(t, indexCount, changedIndex, changedValue, "one-index-changed"), true, nil
 	})
 	if err != nil {

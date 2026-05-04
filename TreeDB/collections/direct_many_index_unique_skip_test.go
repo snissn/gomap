@@ -53,7 +53,7 @@ func TestCollectionDirectUpdateManyIndexesSkipsUnchangedUniqueRoot(t *testing.T)
 	}
 	before := directManyUniqueSkipRootIDs(t, d, "users", rootNames)
 
-	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err := col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return directManyUniqueSkipDocument(indexCount, map[int]string{
 			targetOrdinal: "target-new",
 			uniqueOrdinal: "stable-unique",

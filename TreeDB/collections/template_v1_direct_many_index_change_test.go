@@ -55,7 +55,7 @@ func TestCollectionTemplateV1DirectUpdateChangesOneIndexAmongMany(t *testing.T) 
 
 	changedField := templateV1DirectManyIndexField(changedIndex)
 	changedValue := "changed-13"
-	matched, modified, err := col.Update([]byte("d1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err := col.updateDirect([]byte("d1"), func([]byte) ([]byte, bool, error) {
 		return templateV1DirectManyIndexDoc(t, indexCount, changedIndex, changedValue, "one-index-changed"), true, nil
 	})
 	if err != nil {

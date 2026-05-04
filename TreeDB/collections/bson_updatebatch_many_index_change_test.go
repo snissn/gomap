@@ -10,8 +10,8 @@ import (
 )
 
 func TestCollectionBSONUpdateBatchChangesOneIndexAmongMany(t *testing.T) {
-	const indexCount = 24
-	const changedIndex = 13
+	const indexCount = 65
+	const changedIndex = 64
 
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -74,6 +74,9 @@ func TestCollectionBSONUpdateBatchChangesOneIndexAmongMany(t *testing.T) {
 	}
 	if got, want := stats.IndexValueUnchanged, indexCount-1; got != want {
 		t.Fatalf("index unchanged=%d want %d", got, want)
+	}
+	if got := stats.MaskFallbacks; got == 0 {
+		t.Fatalf("fast-mask fallbacks=%d want positive for changed index ordinal %d", got, changedIndex)
 	}
 	if got, want := len(stats.SecondaryRuns), 1; got != want {
 		t.Fatalf("secondary runs=%d want %d: %+v", got, want, stats.SecondaryRuns)

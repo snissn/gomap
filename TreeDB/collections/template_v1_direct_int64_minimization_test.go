@@ -49,7 +49,7 @@ func TestCollectionDirectUpdateTemplateV1Int64SameEffectiveSkipsSecondaryRoot(t 
 	before := mustTemplateV1DirectInt64RootIDs(t, d, "scores", rootNames...)
 	assertTemplateV1DirectInt64IDs(t, col, int64(9007199254740993), "u1")
 
-	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err := col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return mustTemplateV1Int64Document(t, oldScore, "after"), true, nil
 	})
 	if err != nil {
@@ -73,7 +73,7 @@ func TestCollectionDirectUpdateTemplateV1Int64SameEffectiveSkipsSecondaryRoot(t 
 	}
 	assertTemplateV1DirectInt64IDs(t, col, int64(9007199254740993), "u1")
 
-	matched, modified, err = col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err = col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return mustTemplateV1Int64Document(t, newScore, "changed-score"), true, nil
 	})
 	if err != nil {

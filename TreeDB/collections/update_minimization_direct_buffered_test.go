@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -102,6 +103,92 @@ func TestCollectionUpdateBatchDirectBufferedBSONSkipsUnchangedSecondaryRoots(t *
 	}
 	if gotScore := doc["score"]; gotScore != int32(2) {
 		t.Fatalf("buffered BSON score=%v want int32(2)", gotScore)
+	}
+}
+
+func TestCollectionUpdateBatchDirectBufferedBSONRejectsIDMutationBeforeStaging(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatBSON,
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	doc := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "city", Value: "hnl"},
+		{Key: "score", Value: int32(1)},
+	})
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{doc}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+	beforeState := d.State()
+	beforeRoot := collectionPrimaryRootIDForTest(t, d, "users")
+	replacement := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "u2"},
+		{Key: "city", Value: "sea"},
+		{Key: "score", Value: int32(2)},
+	})
+
+	_, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func([]byte) ([]byte, bool, error) {
+			return replacement, true, nil
+		},
+	}})
+	if !errors.Is(err, errBSONIDMutation) {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges err=%v want _id mutation error", err)
+	}
+	if !batched {
+		t.Fatal("BSON _id mutation did not exercise the direct-buffered batch path")
+	}
+	afterState := d.State()
+	if afterState.CommitSeq != beforeState.CommitSeq {
+		t.Fatalf("rejected direct-buffered _id update advanced commit seq by %d", afterState.CommitSeq-beforeState.CommitSeq)
+	}
+	afterRoot := collectionPrimaryRootIDForTest(t, d, "users")
+	if afterRoot != beforeRoot {
+		t.Fatalf("primary root changed from %d to %d after rejected direct-buffered _id update", beforeRoot, afterRoot)
+	}
+	rootCounts, rootRunCount := bufferedRootRunCountsForTest(t, col,
+		collectionPrimaryRootName("users"),
+		collectionSecondaryRootName("users", "city"),
+	)
+	if rootRunCount != 0 || rootCounts[collectionPrimaryRootName("users")] != 0 || rootCounts[collectionSecondaryRootName("users", "city")] != 0 {
+		t.Fatalf("buffered root runs after rejected direct-buffered _id update: count=%d roots=%v want none", rootRunCount, rootCounts)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1: %v", err)
+	}
+	if !bytes.Equal(got, doc) {
+		t.Fatalf("u1 after rejected direct-buffered _id update=%x want original %x", got, doc)
+	}
+	got, err = col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get u2: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("u2 after rejected direct-buffered _id update=%x want nil", got)
 	}
 }
 

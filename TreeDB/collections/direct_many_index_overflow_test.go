@@ -49,7 +49,7 @@ func TestCollectionDirectUpdateMinimizesIndexOrdinalBeyondMaskWidth(t *testing.T
 	}
 	before := directOverflowRootIDs(t, d, rootNames)
 
-	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err := col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return directOverflowDocument(indexCount, targetOrdinal, "target-new", "primary changed"), true, nil
 	})
 	if err != nil {

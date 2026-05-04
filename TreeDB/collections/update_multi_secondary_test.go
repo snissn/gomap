@@ -16,7 +16,7 @@ func TestCollectionUpdateChangesMultipleSecondaryRoots(t *testing.T) {
 			name: "direct",
 			run: func(t *testing.T, col *Collection, replacement []byte) CollectionUpdateStats {
 				t.Helper()
-				matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+				matched, modified, err := col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 					return replacement, true, nil
 				})
 				if err != nil {
@@ -97,6 +97,9 @@ func TestCollectionUpdateChangesMultipleSecondaryRoots(t *testing.T) {
 			}
 			if got, want := len(stats.SecondaryRuns), 2; got != want {
 				t.Fatalf("secondary runs=%d want %d: %+v", got, want, stats.SecondaryRuns)
+			}
+			if stats.SecondaryRuns[0].IndexName != "city" || stats.SecondaryRuns[1].IndexName != "email" {
+				t.Fatalf("secondary run order=%+v want deterministic root order city, email", stats.SecondaryRuns)
 			}
 			multiSecondaryRequireRun(t, stats.SecondaryRuns, "email")
 			multiSecondaryRequireRun(t, stats.SecondaryRuns, "city")

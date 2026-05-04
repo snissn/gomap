@@ -40,7 +40,7 @@ func TestCollectionDirectUpdatePopulatesLastUpdateStats(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err := col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return []byte(`{"email":"ada@example.com","city":"sea","active":true,"seen":false}`), true, nil
 	})
 	if err != nil {
@@ -131,7 +131,7 @@ func TestCollectionDirectUpdateStatsForNoopAndMissingDocument(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	matched, modified, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+	matched, modified, err := col.updateDirect([]byte("u1"), func(current []byte) ([]byte, bool, error) {
 		return current, false, nil
 	})
 	if err != nil {
@@ -145,7 +145,7 @@ func TestCollectionDirectUpdateStatsForNoopAndMissingDocument(t *testing.T) {
 		t.Fatalf("noop stats=%+v want one matched unmodified item and no root/index work", stats)
 	}
 
-	matched, modified, err = col.Update([]byte("missing"), func(current []byte) ([]byte, bool, error) {
+	matched, modified, err = col.updateDirect([]byte("missing"), func(current []byte) ([]byte, bool, error) {
 		t.Fatalf("callback should not run for missing document: %q", current)
 		return nil, false, nil
 	})
@@ -200,7 +200,7 @@ func TestCollectionDirectUpdateDetailedStatsCapsAtInlineIndexLimit(t *testing.T)
 		t.Fatalf("insert: %v", err)
 	}
 
-	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err := col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return directUpdateStatsWideDocument(indexCount, 1, "changed"), true, nil
 	})
 	if err != nil {

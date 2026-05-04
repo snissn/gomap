@@ -40,7 +40,7 @@ func TestCollectionDirectUpdateJSONDoubleSameEffectiveSkipsSecondaryRoot(t *test
 	before := jsonDirectDoubleRootIDs(t, d)
 	assertJSONDirectDoubleIDs(t, col, 2.5, "u1")
 
-	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err := col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return []byte(`{"score":{"$numberDouble":"2.5"},"note":"same-score"}`), true, nil
 	})
 	if err != nil {
@@ -64,7 +64,7 @@ func TestCollectionDirectUpdateJSONDoubleSameEffectiveSkipsSecondaryRoot(t *test
 	}
 	assertJSONDirectDoubleIDs(t, col, 2.5, "u1")
 
-	matched, modified, err = col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err = col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return []byte(`{"score":{"$numberDouble":"3.5"},"note":"changed-score"}`), true, nil
 	})
 	if err != nil {

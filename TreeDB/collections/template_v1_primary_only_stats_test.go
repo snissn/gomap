@@ -15,7 +15,7 @@ func TestCollectionTemplateV1PrimaryOnlyDeltasExcludeTemplateRootWork(t *testing
 			name: "direct",
 			run: func(t *testing.T, col *Collection, replacement []byte) {
 				t.Helper()
-				matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+				matched, modified, err := col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 					return replacement, true, nil
 				})
 				if err != nil {

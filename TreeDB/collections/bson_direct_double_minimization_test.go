@@ -55,7 +55,7 @@ func TestCollectionDirectUpdateBSONDoubleSameEffectiveSkipsSecondaryRoot(t *test
 	before := mustBSONDirectDoubleRootIDs(t, d, "scores", rootNames...)
 	assertBSONDirectDoubleIDs(t, col, oldScore, "u1")
 
-	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err := col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return mustBSONCollectionDocument(t, bson.D{
 			{Key: "_id", Value: "u1"},
 			{Key: "score", Value: oldScore},
@@ -79,7 +79,7 @@ func TestCollectionDirectUpdateBSONDoubleSameEffectiveSkipsSecondaryRoot(t *test
 	}
 	assertBSONDirectDoubleIDs(t, col, oldScore, "u1")
 
-	matched, modified, err = col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err = col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return mustBSONCollectionDocument(t, bson.D{
 			{Key: "_id", Value: "u1"},
 			{Key: "score", Value: newScore},

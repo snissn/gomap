@@ -52,7 +52,7 @@ func TestCollectionDirectUpdateBSONSameEffectiveMultikeySkipsSecondaryRoot(t *te
 	assertBSONMultikeyIDs(t, col, "a", "u1")
 	assertBSONMultikeyIDs(t, col, "b", "u1")
 
-	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err := col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return mustBSONCollectionDocument(t, bson.D{
 			{Key: "_id", Value: "u1"},
 			{Key: "tags", Value: bson.A{"a", "b"}},
@@ -78,7 +78,7 @@ func TestCollectionDirectUpdateBSONSameEffectiveMultikeySkipsSecondaryRoot(t *te
 	assertBSONMultikeyIDs(t, col, "b", "u1")
 	assertBSONMultikeyIDs(t, col, "c")
 
-	matched, modified, err = col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err = col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return mustBSONCollectionDocument(t, bson.D{
 			{Key: "_id", Value: "u1"},
 			{Key: "tags", Value: bson.A{"a", "c"}},

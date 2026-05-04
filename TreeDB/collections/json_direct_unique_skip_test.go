@@ -43,7 +43,7 @@ func TestCollectionJSONDirectUpdateSkipsUnchangedUniqueWhenNonUniqueChanges(t *t
 	jsonDirectUniqueSkipRequireIndexIDs(t, col, "email", "ada@example.com", "u1")
 	jsonDirectUniqueSkipRequireIndexIDs(t, col, "city", "hnl", "u1")
 
-	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err := col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return []byte(`{"email":"ada@example.com","city":"sea","note":"city-changed"}`), true, nil
 	})
 	if err != nil {

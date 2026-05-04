@@ -51,7 +51,7 @@ func TestCollectionDirectUpdateBSONBoolSameEffectiveSkipsSecondaryRoot(t *testin
 	before := mustBSONDirectBoolRootIDs(t, d, "flags", rootNames...)
 	assertBSONDirectBoolIDs(t, col, true, "u1")
 
-	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err := col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return mustBSONCollectionDocument(t, bson.D{
 			{Key: "_id", Value: "u1"},
 			{Key: "active", Value: true},
@@ -75,7 +75,7 @@ func TestCollectionDirectUpdateBSONBoolSameEffectiveSkipsSecondaryRoot(t *testin
 	}
 	assertBSONDirectBoolIDs(t, col, true, "u1")
 
-	matched, modified, err = col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+	matched, modified, err = col.updateDirect([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return mustBSONCollectionDocument(t, bson.D{
 			{Key: "_id", Value: "u1"},
 			{Key: "active", Value: false},
