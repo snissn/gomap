@@ -1147,6 +1147,7 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 		"treedb.collections.write_domain.overlay.visible_depth",
 		"treedb.collections.write_domain.indexed_stage.batches_total",
 		"treedb.collections.write_domain.indexed_async_flush.scheduled_total",
+		"treedb.collections.write_domain.indexed_async_flush.wait_ns_total",
 		"treedb.collections.write_domain.mutation_lock.calls_total",
 	} {
 		if exported[key] == "" {
@@ -1185,6 +1186,7 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 	exported = mgr.Stats()
 	for _, key := range []string{
 		"treedb.collections.write_domain.indexed_flush.units_total",
+		"treedb.collections.write_domain.indexed_flush.forced_drains_total",
 		"treedb.collections.write_domain.indexed_flush.duration_ns_total",
 		"treedb.collections.write_domain.indexed_flush.materialize_ns_total",
 		"treedb.collections.write_domain.indexed_flush.publish_ns_total",
@@ -4874,6 +4876,12 @@ func TestCollectionIndexedWriteMemtablesAsyncBackpressureWaitsForPublishingUnit(
 	if got := stats.PendingDocuments; got != 0 {
 		t.Fatalf("pending documents after backpressure drain=%d want 0", got)
 	}
+	if got := stats.IndexedAsyncFlushWait; got <= 0 {
+		t.Fatalf("async flush wait=%s want positive", got)
+	}
+	if got := stats.IndexedFlushForcedDrains; got == 0 {
+		t.Fatal("indexed flush forced drains=0 want positive")
+	}
 	for _, id := range []string{"u1", "u2"} {
 		got, err := col.Get([]byte(id))
 		if err != nil {
@@ -4924,6 +4932,9 @@ func TestCollectionIndexedWriteMemtablesAsyncScheduleRacePublishesSynchronously(
 	}
 	if got := stats.IndexedFlushCalls; got != 1 {
 		t.Fatalf("indexed flush calls=%d want sync fallback flush", got)
+	}
+	if got := stats.IndexedFlushForcedDrains; got != 1 {
+		t.Fatalf("indexed flush forced drains=%d want 1", got)
 	}
 	if got := stats.PendingDocuments; got != 0 {
 		t.Fatalf("pending docs after sync fallback=%d want 0", got)
