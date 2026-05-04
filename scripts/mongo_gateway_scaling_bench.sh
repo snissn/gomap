@@ -11,7 +11,7 @@ DOCS="${DOCS:-100000}"
 INDEXES="${INDEXES:-2}"
 BATCH_SIZE="${BATCH_SIZE:-10000}"
 INSERT_PRODUCERS="${INSERT_PRODUCERS:-8}"
-WRITERS_LIST="${WRITERS_LIST:-1 2 4 8 16}"
+WRITERS_LIST="${WRITERS_LIST:-1 2 4 8 16 32}"
 READERS_LIST="${READERS_LIST:-1 2 4 8 16}"
 CONCURRENT_WRITES="${CONCURRENT_WRITES:-80000}"
 CONCURRENT_READS="${CONCURRENT_READS:-80000}"
@@ -52,7 +52,7 @@ Options:
   --indexes N            Secondary index count. Default: 2.
   --batch-size N         Insert batch size. Default: 10000.
   --insert-producers N   Insert load producers. Default: 8.
-  --writers LIST         Quoted space-separated concurrent writer counts (for example: "1 2 4"). Default: "1 2 4 8 16".
+  --writers LIST         Quoted space-separated concurrent writer counts (for example: "1 2 4"). Default: "1 2 4 8 16 32".
   --readers LIST         Quoted space-separated concurrent reader counts (for example: "1 2 4"). Default: "1 2 4 8 16".
   --concurrent-writes N  Total updates per writer-scaling cell. Default: 80000.
   --concurrent-reads N   Total reads per reader-scaling cell. Default: 80000.
