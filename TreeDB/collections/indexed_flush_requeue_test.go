@@ -48,9 +48,7 @@ func TestCollectionIndexedAsyncPublishFailureRequeuesUnitsAndPreservesUniqueRese
 	if work == nil {
 		t.Fatal("prepare async publish returned nil work")
 	}
-	if work.pin != nil {
-		defer func() { _ = work.pin.Close() }()
-	}
+	defer collectionTestCloseIndexedFlushWork(work)
 
 	if _, err := col.InsertBatch(
 		[][]byte{[]byte("u2")},
@@ -78,10 +76,6 @@ func TestCollectionIndexedAsyncPublishFailureRequeuesUnitsAndPreservesUniqueRese
 	injectedErr := errors.New("injected publish failure")
 	if err := col.completePreparedIndexedFlush(work, 0, nil, injectedErr, 0, 0, 0); !errors.Is(err, injectedErr) {
 		t.Fatalf("complete failure err=%v want injected publish failure", err)
-	}
-	if work.pin != nil {
-		_ = work.pin.Close()
-		work.pin = nil
 	}
 
 	col.writeDomain.mu.RLock()

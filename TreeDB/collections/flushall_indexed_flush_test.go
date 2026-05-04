@@ -13,6 +13,12 @@ func TestCollectionManagerFlushAllDrainsQueuedIndexedFlushUnit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = d.Close()
+		}
+	}()
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
@@ -66,6 +72,7 @@ func TestCollectionManagerFlushAllDrainsQueuedIndexedFlushUnit(t *testing.T) {
 	if err := d.Close(); err != nil {
 		t.Fatalf("close db: %v", err)
 	}
+	closed = true
 
 	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
 	if err != nil {

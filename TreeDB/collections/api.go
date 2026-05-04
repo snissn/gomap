@@ -4673,6 +4673,9 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 		return nil
 	}); err != nil {
 		if errors.Is(err, ErrConcurrentMutation) {
+			// This is distinct from revalidateBufferedWriteDomainLocked above:
+			// revalidation checks the current root before acquiring the publish
+			// pin, while this catches races observed after the pin is held.
 			domain.indexedFlushRootBaseMismatches.Add(1)
 		}
 		return nil, err
@@ -4730,6 +4733,7 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	defer func() {
 		if work.pin != nil {
 			_ = work.pin.Close()
+			work.pin = nil
 		}
 	}()
 	if collectionMetaUsesIndexedOverlayRoots(work.meta) {
