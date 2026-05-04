@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"math"
+	"math/big"
 	"math/bits"
 	"net"
 	"net/url"
@@ -2121,7 +2122,10 @@ func treeDBStatsDelta(before, after map[string]string) (map[string]string, map[s
 		if !ok {
 			continue
 		}
-		beforeNumber := treeDBStatNumber{integer: afterNumber.integer}
+		beforeNumber := treeDBStatNumber{floatValid: true}
+		if afterNumber.integer {
+			beforeNumber = treeDBStatNumberFromBigInt(big.NewInt(0))
+		}
 		if beforeValue, exists := before[key]; exists {
 			parsed, parsedOK := parseTreeDBStatNumber(beforeValue)
 			if !parsedOK {
@@ -2129,12 +2133,14 @@ func treeDBStatsDelta(before, after map[string]string) (map[string]string, map[s
 			}
 			beforeNumber = parsed
 		}
-		delta, formatted, ok := treeDBStatDelta(afterNumber, beforeNumber)
+		delta, formatted, numericOK, ok := treeDBStatDelta(afterNumber, beforeNumber)
 		if !ok {
 			continue
 		}
 		out[key] = formatted
-		numeric[key] = delta
+		if numericOK {
+			numeric[key] = delta
+		}
 	}
 	if len(out) == 0 {
 		return nil, nil
@@ -2144,8 +2150,9 @@ func treeDBStatsDelta(before, after map[string]string) (map[string]string, map[s
 
 type treeDBStatNumber struct {
 	floatValue float64
-	intValue   int64
+	intValue   *big.Int
 	integer    bool
+	floatValid bool
 }
 
 func parseTreeDBStatNumber(value string) (treeDBStatNumber, bool) {
@@ -2154,35 +2161,62 @@ func parseTreeDBStatNumber(value string) (treeDBStatNumber, bool) {
 		return treeDBStatNumber{}, false
 	}
 	if !strings.ContainsAny(value, ".eE") {
-		intValue, err := strconv.ParseInt(value, 10, 64)
-		if err == nil {
-			return treeDBStatNumber{floatValue: float64(intValue), intValue: intValue, integer: true}, true
+		if intValue, ok := new(big.Int).SetString(value, 10); ok {
+			return treeDBStatNumberFromBigInt(intValue), true
 		}
 	}
 	number, err := strconv.ParseFloat(value, 64)
 	if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
 		return treeDBStatNumber{}, false
 	}
-	return treeDBStatNumber{floatValue: number}, true
+	return treeDBStatNumber{floatValue: number, floatValid: true}, true
 }
 
-func treeDBStatDelta(after, before treeDBStatNumber) (float64, string, bool) {
+func treeDBStatNumberFromBigInt(value *big.Int) treeDBStatNumber {
+	out := treeDBStatNumber{
+		intValue: new(big.Int).Set(value),
+		integer:  true,
+	}
+	if treeDBStatBigIntFitsExactFloat(value) {
+		out.floatValue = float64(value.Int64())
+		out.floatValid = true
+	}
+	return out
+}
+
+func treeDBStatBigIntFitsExactFloat(value *big.Int) bool {
+	if value == nil {
+		return true
+	}
+	const maxExactFloatInt64 = int64(1 << 53)
+	maxExact := big.NewInt(maxExactFloatInt64)
+	minExact := big.NewInt(-maxExactFloatInt64)
+	return value.Cmp(minExact) >= 0 && value.Cmp(maxExact) <= 0
+}
+
+func treeDBStatDelta(after, before treeDBStatNumber) (float64, string, bool, bool) {
 	if after.integer && before.integer {
-		delta := after.intValue - before.intValue
-		if delta == 0 {
-			return 0, "", false
+		deltaInt := new(big.Int).Sub(after.intValue, before.intValue)
+		if deltaInt.Sign() == 0 {
+			return 0, "", false, false
 		}
-		return float64(delta), strconv.FormatInt(delta, 10), true
+		if treeDBStatBigIntFitsExactFloat(deltaInt) {
+			return float64(deltaInt.Int64()), deltaInt.String(), true, true
+		}
+		return 0, deltaInt.String(), false, true
+	}
+	if !after.floatValid || !before.floatValid {
+		return 0, "", false, false
 	}
 	delta := after.floatValue - before.floatValue
 	if delta == 0 {
-		return 0, "", false
+		return 0, "", false, false
 	}
-	return delta, formatTreeDBStatNumber(delta), true
+	return delta, formatTreeDBStatNumber(delta), true, true
 }
 
 func formatTreeDBStatNumber(value float64) string {
-	if math.Trunc(value) == value {
+	if math.Trunc(value) == value && value >= math.MinInt64 && value <= math.MaxInt64 {
 		return strconv.FormatInt(int64(value), 10)
 	}
 	return strconv.FormatFloat(value, 'f', -1, 64)
