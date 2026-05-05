@@ -508,6 +508,13 @@ func TestAcquireSnapshot_FallsBackToBackendPublishedSetWithoutInstalledGroup(t *
 	if rootSnap.publishedRootID == 0 {
 		t.Fatal("expected backend published root id")
 	}
+	lookup, ok := rootSnap.published.(*backendSnapshotLookup)
+	if !ok {
+		t.Fatalf("published lookup type=%T, want *backendSnapshotLookup", rootSnap.published)
+	}
+	if lookup != &snap.backendRoot {
+		t.Fatal("expected point fallback to reuse snapshot backendRoot lookup")
+	}
 	if stats := db.rootDomainPublishStatsSnapshot(); stats.backendFallbacks != 1 {
 		t.Fatalf("backendFallbacks=%d want 1", stats.backendFallbacks)
 	}
@@ -535,5 +542,75 @@ func TestAcquireSnapshot_BackendFallbackPinsSystemRootPageID(t *testing.T) {
 	systemSnap := rootDomainSystemSnapshotFromCachedSnapshot(snap)
 	if got, want := systemSnap.publishedRootID, backend.State().SystemRootPageID; got != want {
 		t.Fatalf("system published root id=%d want %d", got, want)
+	}
+	lookup, ok := systemSnap.published.(*backendSnapshotLookup)
+	if !ok {
+		t.Fatalf("system published lookup type=%T, want *backendSnapshotLookup", systemSnap.published)
+	}
+	if lookup != &snap.backendSystem {
+		t.Fatal("expected system fallback to reuse snapshot backendSystem lookup")
+	}
+}
+
+func TestAcquireSnapshot_InstallsBackendLookupForPublishedPointRoots(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	pointTable := newRootDomainTestTable(t, rootDomainTestOp{key: "published/k", value: "published-v"})
+	pointRootID, err := backend.PublishOrderedRootIterator(0, pointTable.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish point root: %v", err)
+	}
+	if pointRootID == backend.State().RootPageID {
+		t.Fatalf("test point root unexpectedly matches default root %d", pointRootID)
+	}
+
+	db := &DB{
+		backend:          backend,
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+	view := &memtableView{
+		rootSnapshotShards: []rootDomainSnapshot{{}},
+		publishedRoots: &publishedRootSet{
+			pointShards: []publishedRootRef{{rootID: pointRootID}},
+		},
+	}
+	view.refs.Store(1)
+	db.memtables.Store(view)
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+
+	if snap.publishedRoots == view.publishedRoots {
+		t.Fatal("expected snapshot to clone published root set before installing lookups")
+	}
+	if got := len(snap.backendPublishedLookups); got != 1 {
+		t.Fatalf("backendPublishedLookups len=%d want 1", got)
+	}
+
+	rootSnap := rootDomainSnapshotFromCachedSnapshot(snap, []byte("published/k"))
+	lookup, ok := rootSnap.published.(*backendSnapshotLookup)
+	if !ok {
+		t.Fatalf("published lookup type=%T, want *backendSnapshotLookup", rootSnap.published)
+	}
+	if lookup != &snap.backendPublishedLookups[0] {
+		t.Fatal("expected point published ref to use snapshot-owned backend lookup")
+	}
+	if lookup.rootID != pointRootID {
+		t.Fatalf("lookup rootID=%d want %d", lookup.rootID, pointRootID)
+	}
+	if lookup.snapshot != snap.backend {
+		t.Fatal("expected published lookup to use acquired backend snapshot")
+	}
+	if lookup.db != db {
+		t.Fatal("expected published lookup to retain parent db")
 	}
 }
