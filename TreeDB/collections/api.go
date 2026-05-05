@@ -425,7 +425,6 @@ type CollectionManagerStats struct {
 	IndexedSemanticRawIndexDeltas               uint64
 	IndexedSemanticFallbackRecords              uint64
 	IndexedSemanticEffectiveRecords             uint64
-	IndexedSemanticCoalescedNoopIndexChanges    uint64
 	IndexedSemanticSkippedSecondaryRoots        uint64
 	IndexedSemanticDuplicatePrimaryIDsCoalesced uint64
 	IndexedAutoFlushes                          uint64
@@ -876,7 +875,6 @@ type collectionWriteDomain struct {
 	indexedSemanticRawIndexDeltas               atomic.Uint64
 	indexedSemanticFallbackRecords              atomic.Uint64
 	indexedSemanticEffectiveRecords             atomic.Uint64
-	indexedSemanticCoalescedNoopIndexChanges    atomic.Uint64
 	indexedSemanticSkippedSecondaryRoots        atomic.Uint64
 	indexedSemanticDuplicatePrimaryIDsCoalesced atomic.Uint64
 	indexedAutoFlushes                          atomic.Uint64
@@ -1191,7 +1189,6 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.indexed_semantic.raw_index_deltas_total"] = fmt.Sprintf("%d", stats.IndexedSemanticRawIndexDeltas)
 	out["treedb.collections.write_domain.indexed_semantic.fallback_records_total"] = fmt.Sprintf("%d", stats.IndexedSemanticFallbackRecords)
 	out["treedb.collections.write_domain.indexed_semantic.effective_records_total"] = fmt.Sprintf("%d", stats.IndexedSemanticEffectiveRecords)
-	out["treedb.collections.write_domain.indexed_semantic.coalesced_noop_index_changes_total"] = fmt.Sprintf("%d", stats.IndexedSemanticCoalescedNoopIndexChanges)
 	out["treedb.collections.write_domain.indexed_semantic.skipped_secondary_roots_total"] = fmt.Sprintf("%d", stats.IndexedSemanticSkippedSecondaryRoots)
 	out["treedb.collections.write_domain.indexed_semantic.duplicate_primary_ids_coalesced_total"] = fmt.Sprintf("%d", stats.IndexedSemanticDuplicatePrimaryIDsCoalesced)
 	out["treedb.collections.write_domain.indexed_stage.auto_flushes_total"] = fmt.Sprintf("%d", stats.IndexedAutoFlushes)
@@ -1435,7 +1432,6 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.IndexedSemanticRawIndexDeltas += other.IndexedSemanticRawIndexDeltas
 	s.IndexedSemanticFallbackRecords += other.IndexedSemanticFallbackRecords
 	s.IndexedSemanticEffectiveRecords += other.IndexedSemanticEffectiveRecords
-	s.IndexedSemanticCoalescedNoopIndexChanges += other.IndexedSemanticCoalescedNoopIndexChanges
 	s.IndexedSemanticSkippedSecondaryRoots += other.IndexedSemanticSkippedSecondaryRoots
 	s.IndexedSemanticDuplicatePrimaryIDsCoalesced += other.IndexedSemanticDuplicatePrimaryIDsCoalesced
 	s.IndexedAutoFlushes += other.IndexedAutoFlushes
@@ -1600,7 +1596,6 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.IndexedSemanticRawIndexDeltas = domain.indexedSemanticRawIndexDeltas.Load()
 	stats.IndexedSemanticFallbackRecords = domain.indexedSemanticFallbackRecords.Load()
 	stats.IndexedSemanticEffectiveRecords = domain.indexedSemanticEffectiveRecords.Load()
-	stats.IndexedSemanticCoalescedNoopIndexChanges = domain.indexedSemanticCoalescedNoopIndexChanges.Load()
 	stats.IndexedSemanticSkippedSecondaryRoots = domain.indexedSemanticSkippedSecondaryRoots.Load()
 	stats.IndexedSemanticDuplicatePrimaryIDsCoalesced = domain.indexedSemanticDuplicatePrimaryIDsCoalesced.Load()
 	stats.IndexedAutoFlushes = domain.indexedAutoFlushes.Load()

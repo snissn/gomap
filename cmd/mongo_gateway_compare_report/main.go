@@ -1106,8 +1106,8 @@ func renderWriterSweepCounterTable(b *strings.Builder, cells []cellComparison) {
 		"final template entries/doc", "final template bytes/doc", "final template tombstones/doc",
 		"final index-state entries/doc", "final index-state bytes/doc", "final index-state tombstones/doc",
 		"final secondary entries/doc", "final secondary bytes/doc", "final secondary tombstones/doc",
-		"squashed entries/doc", "coalesced no-op index changes/doc", "net-zero root batches/doc", "net-zero root plans/doc", "skipped secondary roots/doc", "duplicate primary IDs coalesced/doc",
-		"primary root publishes/doc", "primary root delta entries/doc", "primary root delta bytes/doc", "primary-only coalesced docs/publish", "primary-only duplicate IDs coalesced/doc", "primary-only drains/doc", "primary-only drain docs/drain", "primary-only publishes/drain",
+		"squashed entries/doc", "net-zero root batches/doc", "net-zero root plans/doc", "skipped secondary roots/doc", "duplicate primary IDs coalesced/doc",
+		"primary root publishes/doc", "primary root delta entries/doc", "primary root delta bytes/doc", "primary-only coalesced docs/publish", "primary-only duplicate IDs coalesced/doc", "primary-only drains/doc", "primary-only drain docs/drain",
 		"raw JSON",
 	}
 	b.WriteString("| " + strings.Join(headers, " | ") + " |\n")
@@ -1187,7 +1187,6 @@ func renderWriterSweepCounterTable(b *strings.Builder, cells []cellComparison) {
 			formatPhaseMetric(cmp.TreeDBPhase, "final_secondary_root_delta_bytes/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "final_secondary_root_delta_tombstones/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "squashed_root_delta_entries/doc"),
-			formatPhaseMetric(cmp.TreeDBPhase, "coalesced_noop_index_changes/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "net_zero_root_batches/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "net_zero_root_plans/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "skipped_secondary_roots/doc"),
@@ -1199,7 +1198,6 @@ func renderWriterSweepCounterTable(b *strings.Builder, cells []cellComparison) {
 			formatPhaseMetric(cmp.TreeDBPhase, "primary_only_duplicate_ids_coalesced/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "primary_only_drains/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "primary_only_drain_docs/drain"),
-			formatPhaseMetric(cmp.TreeDBPhase, "primary_only_publishes/drain"),
 			"`" + cell.TreeDB.DisplayRawPath + "`",
 		}
 		b.WriteString("| " + strings.Join(row, " | ") + " |\n")
@@ -1486,13 +1484,11 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 		"treedb_squashed_root_delta_entries_per_doc",
 		"treedb_net_zero_root_batches_per_doc",
 		"treedb_net_zero_root_plans_per_doc",
-		"treedb_coalesced_noop_index_changes_per_doc",
 		"treedb_skipped_secondary_roots_per_doc",
 		"treedb_duplicate_primary_ids_coalesced_per_doc",
 		"treedb_primary_only_duplicate_ids_coalesced_per_doc",
 		"treedb_primary_only_drains_per_doc",
 		"treedb_primary_only_drain_docs_per_drain",
-		"treedb_primary_only_publishes_per_drain",
 	}
 	if err := writer.Write(header); err != nil {
 		return err
@@ -1577,13 +1573,11 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 			formatRawPhaseMetric(cmp.TreeDBPhase, "squashed_root_delta_entries/doc"),
 			formatRawPhaseMetric(cmp.TreeDBPhase, "net_zero_root_batches/doc"),
 			formatRawPhaseMetric(cmp.TreeDBPhase, "net_zero_root_plans/doc"),
-			formatRawPhaseMetric(cmp.TreeDBPhase, "coalesced_noop_index_changes/doc"),
 			formatRawPhaseMetric(cmp.TreeDBPhase, "skipped_secondary_roots/doc"),
 			formatRawPhaseMetric(cmp.TreeDBPhase, "duplicate_primary_ids_coalesced/doc"),
 			formatRawPhaseMetric(cmp.TreeDBPhase, "primary_only_duplicate_ids_coalesced/doc"),
 			formatRawPhaseMetric(cmp.TreeDBPhase, "primary_only_drains/doc"),
 			formatRawPhaseMetric(cmp.TreeDBPhase, "primary_only_drain_docs/drain"),
-			formatRawPhaseMetric(cmp.TreeDBPhase, "primary_only_publishes/drain"),
 		}
 		if err := writer.Write(row); err != nil {
 			return err

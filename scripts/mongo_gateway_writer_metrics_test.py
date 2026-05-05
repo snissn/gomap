@@ -122,12 +122,10 @@ class WriterMetricsTests(unittest.TestCase):
                             "squashed_root_delta_entries/doc": 3,
                             "net_zero_root_batches/doc": 0,
                             "net_zero_root_plans/doc": 0.25,
-                            "coalesced_noop_index_changes/doc": 1.5,
                             "skipped_secondary_roots/doc": 2.5,
                             "duplicate_primary_ids_coalesced/doc": 0.5,
                             "primary_only_duplicate_ids_coalesced/doc": 0.75,
                             "primary_only_drains/doc": 0.125,
-                            "primary_only_publishes/drain": 1,
                         },
                         "treedb_stats_delta": {
                             "treedb.collections.write_domain.indexed_async_flush.backpressure_sync_total": huge,
@@ -179,9 +177,7 @@ class WriterMetricsTests(unittest.TestCase):
             self.assertEqual(rows[0]["final_secondary_root_delta_tombstones_per_doc"], "0")
             self.assertEqual(rows[0]["squashed_root_delta_entries_per_doc"], "3")
             self.assertEqual(rows[0]["net_zero_root_batches_per_doc"], "0")
-            self.assertEqual(rows[0]["coalesced_noop_index_changes_per_doc"], "1.5")
             self.assertEqual(rows[0]["duplicate_primary_ids_coalesced_per_doc"], "0.5")
-            self.assertEqual(rows[0]["primary_only_publishes_per_drain"], "1")
             self.assertEqual(rows[0]["backpressure_sync_total"], huge)
             self.assertEqual(rows[0]["root_mismatch_total"], "")
             self.assertEqual(rows[0]["root_delta_plan_raw_unit_primary_entries_total"], huge)

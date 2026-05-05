@@ -155,10 +155,6 @@ func TestPR3bRootDeltaCoalescingSkippedSecondaryRootsUseUniqueRoots(t *testing.T
 	if got := domain.indexedSemanticSkippedSecondaryRoots.Load(); got != 0 {
 		t.Fatalf("skipped secondary roots=%d want 0 for repeated raw units that still publish the root", got)
 	}
-	if got := domain.indexedSemanticCoalescedNoopIndexChanges.Load(); got != 0 {
-		t.Fatalf("coalesced noop index changes=%d want 0 without semantic no-op observations", got)
-	}
-
 	domain = &collectionWriteDomain{}
 	domain.observeRootDeltaPlanCoalescing(raw, collectionRootDeltaPlanStats{})
 	if got := domain.indexedSemanticSkippedSecondaryRoots.Load(); got != 1 {
@@ -484,7 +480,6 @@ func pr3bRequireSemanticMetricKeys(tb testing.TB, mgr *CollectionManager) {
 		"treedb.collections.write_domain.indexed_semantic.raw_index_deltas_total",
 		"treedb.collections.write_domain.indexed_semantic.fallback_records_total",
 		"treedb.collections.write_domain.indexed_semantic.effective_records_total",
-		"treedb.collections.write_domain.indexed_semantic.coalesced_noop_index_changes_total",
 		"treedb.collections.write_domain.indexed_semantic.skipped_secondary_roots_total",
 		"treedb.collections.write_domain.indexed_semantic.duplicate_primary_ids_coalesced_total",
 		"treedb.collections.write_domain.coalesced_flush_batch.batches_total",

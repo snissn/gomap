@@ -1258,13 +1258,11 @@ func TestWriteSummaryTSVRendersTreeDBCoalescingColumns(t *testing.T) {
 			"squashed_root_delta_entries/doc":          1.5,
 			"net_zero_root_batches/doc":                0.01,
 			"net_zero_root_plans/doc":                  0.02,
-			"coalesced_noop_index_changes/doc":         0.25,
 			"skipped_secondary_roots/doc":              0.5,
 			"duplicate_primary_ids_coalesced/doc":      0.75,
 			"primary_only_duplicate_ids_coalesced/doc": 0.125,
 			"primary_only_drains/doc":                  0.05,
 			"primary_only_drain_docs/drain":            20,
-			"primary_only_publishes/drain":             1,
 		},
 	}
 	cells := []cellComparison{{
@@ -1305,11 +1303,9 @@ func TestWriteSummaryTSVRendersTreeDBCoalescingColumns(t *testing.T) {
 		"treedb_final_root_delta_entries_per_doc":             "2.500000",
 		"treedb_squashed_root_delta_entries_per_doc":          "1.500000",
 		"treedb_net_zero_root_batches_per_doc":                "0.010000",
-		"treedb_coalesced_noop_index_changes_per_doc":         "0.250000",
 		"treedb_duplicate_primary_ids_coalesced_per_doc":      "0.750000",
 		"treedb_primary_only_duplicate_ids_coalesced_per_doc": "0.125000",
 		"treedb_primary_only_drains_per_doc":                  "0.050000",
-		"treedb_primary_only_publishes_per_drain":             "1.000000",
 	} {
 		if got := values[column]; got != want {
 			t.Fatalf("summary column %s=%q want %q; values=%v", column, got, want, values)
@@ -1412,7 +1408,6 @@ func TestRenderWriterSweepCounterTableUsesPhaseMetrics(t *testing.T) {
 			"final_secondary_root_delta_bytes/doc":        25,
 			"final_secondary_root_delta_tombstones/doc":   0,
 			"squashed_root_delta_entries/doc":             0.75,
-			"coalesced_noop_index_changes/doc":            0.33,
 			"net_zero_root_batches/doc":                   0.01,
 			"net_zero_root_plans/doc":                     0.02,
 			"skipped_secondary_roots/doc":                 0.44,
@@ -1424,7 +1419,6 @@ func TestRenderWriterSweepCounterTableUsesPhaseMetrics(t *testing.T) {
 			"primary_only_duplicate_ids_coalesced/doc":    0.25,
 			"primary_only_drains/doc":                     0.125,
 			"primary_only_drain_docs/drain":               8,
-			"primary_only_publishes/drain":                1,
 		},
 	}
 	mongoPhase := phaseResult{
@@ -1458,13 +1452,12 @@ func TestRenderWriterSweepCounterTableUsesPhaseMetrics(t *testing.T) {
 		"TreeDB drain ms",
 		"raw root-delta entries/doc",
 		"final root-delta entries/doc",
-		"primary-only publishes/drain",
 		"| 1000 | 0 | `treedb_0idx` | `mongo_baseline` | 8 | 1200 | 2400 | 750 | 500 | 800 | 800 | 2.50 |",
 		"| 1000 | 0 | `treedb_0idx` | `mongo_baseline` | 8 | 1200 | 2400",
 		"3.00 | 96.0 | 8192",
 		"2.00 | 200 | 0.05 | 1.50 | 150 | 0.05 | 0.10 | 10.0 | 0 | 0.40 | 40.0 | 0 | 0.50 | 50.0 | 0 | 1.25 | 125 | 0 | 1.00 | 100 | 0 | 0.05 | 5.00 | 0 | 0.20 | 20.0 | 0 | 0.25 | 25.0 | 0",
-		"0.75 | 0.33 | 0.01 | 0.02 | 0.44 | 0.55",
-		"0.25 | 0.12 | 8.00 | 1.00 | `/tmp/treedb.json` |",
+		"0.75 | 0.01 | 0.02 | 0.44 | 0.55",
+		"0.25 | 0.12 | 8.00 | `/tmp/treedb.json` |",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("writer sweep table missing %q:\n%s", want, rendered)

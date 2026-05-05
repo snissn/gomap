@@ -2311,7 +2311,6 @@ func deriveTreeDBPhaseMetrics(delta map[string]float64, operations, driverCalls 
 	addRootDeltaKindMetrics(metrics, "root_delta_plan.final", "final", delta, operations)
 	addPerOperationMetric(metrics, "squashed_root_delta_entries/doc", delta, "treedb.collections.write_domain.root_delta_plan.squashed_entries_total", operations)
 	addPerOperationMetric(metrics, "net_zero_root_plans/doc", delta, "treedb.collections.write_domain.root_delta_plan.net_zero_plans_total", operations)
-	addPerOperationMetric(metrics, "coalesced_noop_index_changes/doc", delta, "treedb.collections.write_domain.indexed_semantic.coalesced_noop_index_changes_total", operations)
 	addPerOperationMetric(metrics, "skipped_secondary_roots/doc", delta, "treedb.collections.write_domain.indexed_semantic.skipped_secondary_roots_total", operations)
 	addPerOperationMetric(metrics, "duplicate_primary_ids_coalesced/doc", delta, "treedb.collections.write_domain.indexed_semantic.duplicate_primary_ids_coalesced_total", operations)
 	addPerOperationMetric(metrics, "primary_root_publishes/doc", delta, "treedb.collections.write_domain.primary_only.root_publishes_total", operations)
@@ -2325,7 +2324,6 @@ func deriveTreeDBPhaseMetrics(delta map[string]float64, operations, driverCalls 
 	addRatioMetric(metrics, "primary_only_drain_docs/drain", delta, "treedb.collections.write_domain.primary_only.drain_docs_total", "treedb.collections.write_domain.primary_only.drains_total")
 	addPerOperationMetric(metrics, "primary_only_drain_bytes/doc", delta, "treedb.collections.write_domain.primary_only.drain_bytes_total", operations)
 	addPerOperationMetric(metrics, "primary_only_drain_ns/doc", delta, "treedb.collections.write_domain.primary_only.drain_ns_total", operations)
-	addRatioMetric(metrics, "primary_only_publishes/drain", delta, "treedb.collections.write_domain.primary_only.drains_total", "treedb.collections.write_domain.primary_only.drains_total")
 	addPerDriverCallMetric(metrics, "primary_only_buffered_calls/driver_call", delta, "treedb.collections.write_domain.primary_only.buffered_calls_total", driverCalls)
 	addPerDriverCallMetric(metrics, "primary_only_publish_calls/driver_call", delta, "treedb.collections.write_domain.primary_only.root_publishes_total", driverCalls)
 	if uniqueEligible, ok := sumTreeDBMetricDeltas(delta, "treedb.collections.write_domain.update_batch.unique_checks_total", "treedb.collections.write_domain.update_batch.unique_check_skips_total"); ok {
