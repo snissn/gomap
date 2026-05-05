@@ -588,6 +588,25 @@ func putChildWorkSlice(children []childWork) {
 	childWorkPool.Put(children[:0])
 }
 
+func appendChildRetiredPages(dst *[]uint64, children []childWork, total int) {
+	if dst == nil {
+		return
+	}
+	if total == 0 {
+		return
+	}
+	retired := *dst
+	if cap(retired)-len(retired) < total {
+		grown := make([]uint64, len(retired), len(retired)+total)
+		copy(grown, retired)
+		retired = grown
+	}
+	for i := range children {
+		retired = append(retired, children[i].retired...)
+	}
+	*dst = retired
+}
+
 func getInternalEntrySlice(capacity int) []internalEntry {
 	if capacity < 0 {
 		capacity = 0
@@ -2571,15 +2590,15 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		if firstErr != nil {
 			return page.ChildRef{}, nil, firstErr
 		}
+		totalRetired := 0
 		for i := range children {
 			if len(children[i].ops) == 0 {
 				continue
 			}
 			mergeMetrics(metrics, &children[i].childStat)
-			if retired != nil && len(children[i].retired) > 0 {
-				*retired = append(*retired, children[i].retired...)
-			}
+			totalRetired += len(children[i].retired)
 		}
+		appendChildRetiredPages(retired, children, totalRetired)
 	} else {
 		for i := range children {
 			if len(children[i].ops) > 0 {
