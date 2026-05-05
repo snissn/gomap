@@ -236,10 +236,11 @@ func rootHasInternalChild(tb testing.TB, z *Zipper, rootID uint64) bool {
 		if err != nil {
 			tb.Fatalf("load child %d: %v", i, err)
 		}
+		childType := child.Type()
 		if childLeafScratchRef {
 			releaseLeafPageScratch(scratch, childLeafScratch)
 		}
-		if child.Type() == page.PageTypeInternal {
+		if childType == page.PageTypeInternal {
 			return true
 		}
 	}
@@ -249,7 +250,7 @@ func rootHasInternalChild(tb testing.TB, z *Zipper, rootID uint64) bool {
 func buildMultiLevelInternalRoot(tb testing.TB, z *Zipper) (uint64, int) {
 	tb.Helper()
 
-	for _, count := range []int{2048, 4096, 8192, 16384} {
+	for count := 1024; count <= 32768; count *= 2 {
 		rootID := buildInternalRootWithKeys(tb, z, count)
 		if rootHasInternalChild(tb, z, rootID) {
 			return rootID, count
@@ -283,11 +284,89 @@ func TestZipperPrepareReadOnlyColdBuildDoesNotLoadOrWrite(t *testing.T) {
 		t.Fatalf("leaf spans=%d want 1", len(prepared.LeafSpans))
 	}
 	span := prepared.LeafSpans[0]
+	if span.Ref != (page.ChildRef{}) {
+		t.Fatalf("cold span ref=%+v want zero ChildRef", span.Ref)
+	}
 	if span.OpCount != 2 || string(span.FirstOpKey) != "a" || string(span.LastOpKey) != "z" {
 		t.Fatalf("cold span=%+v want two ops from a to z", span)
 	}
 	if prepared.Metrics.ZipperNodeLoads != 0 || prepared.Metrics.IndexWriteBytes != 0 {
 		t.Fatalf("cold prepare metrics=%+v want no node load/write", prepared.Metrics)
+	}
+}
+
+func TestZipperPrepareReadOnlyEmptyBatchDoesNotTraverse(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	rootID := buildOuterLeafInternalRoot(t, z)
+	beforePages := p.PageCount()
+
+	b := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = b.Close() }()
+	prepared, err := z.PrepareReadOnly(rootID, b, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatalf("PrepareReadOnly: %v", err)
+	}
+	if got := p.PageCount(); got != beforePages {
+		t.Fatalf("page count changed during empty read-only prepare: got %d want %d", got, beforePages)
+	}
+	if prepared.RootID != rootID || prepared.Ops != 0 || !prepared.ExactLeafSpans {
+		t.Fatalf("prepared=%+v want root %d zero ops exact", prepared, rootID)
+	}
+	if len(prepared.LeafSpans) != 0 {
+		t.Fatalf("empty batch spans=%d want 0", len(prepared.LeafSpans))
+	}
+	if prepared.Metrics.ZipperNodeLoads != 0 {
+		t.Fatalf("empty batch traversed tree metrics=%+v", prepared.Metrics)
+	}
+}
+
+func TestZipperPrepareReadOnlyExistingLeafRoot(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	rootID := buildInternalRootWithKeys(t, z, 8)
+	rootData, err := p.Get(rootID)
+	if err != nil {
+		t.Fatalf("get root: %v", err)
+	}
+	if got := node.NewNode(rootData).Type(); got != page.PageTypeLeaf {
+		t.Fatalf("root type=%d want leaf", got)
+	}
+
+	b := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = b.Close() }()
+	b.Set([]byte("key-000003"), []byte("new"))
+
+	prepared, err := z.PrepareReadOnly(rootID, b, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatalf("PrepareReadOnly: %v", err)
+	}
+	if prepared.ColdBuild || prepared.Maintenance || !prepared.ExactLeafSpans {
+		t.Fatalf("prepare cold/maintenance/exact=%v/%v/%v want false/false/true", prepared.ColdBuild, prepared.Maintenance, prepared.ExactLeafSpans)
+	}
+	if len(prepared.LeafSpans) != 1 {
+		t.Fatalf("leaf spans=%d want 1", len(prepared.LeafSpans))
+	}
+	span := prepared.LeafSpans[0]
+	if span.Ref != page.PageChildRef(rootID) {
+		t.Fatalf("span ref=%+v want page root %d", span.Ref, rootID)
+	}
+	if string(span.FirstOpKey) != "key-000003" || string(span.LastOpKey) != "key-000003" || span.OpCount != 1 {
+		t.Fatalf("span=%+v want one key-000003 op", span)
 	}
 }
 
@@ -343,6 +422,49 @@ func TestZipperPrepareReadOnlyDiscoversLeafSpansWithoutWrites(t *testing.T) {
 		if len(span.FirstOpKey) == 0 || len(span.LastOpKey) == 0 {
 			t.Fatalf("span missing op bounds: %+v", span)
 		}
+	}
+}
+
+func TestZipperPrepareReadOnlyReuseOptions(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	rootID := buildOuterLeafInternalRoot(t, z)
+
+	firstBatch := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = firstBatch.Close() }()
+	firstBatch.Set([]byte("key-001"), []byte("one"))
+	firstBatch.Set([]byte("key-199"), []byte("two"))
+
+	first, err := z.PrepareReadOnly(rootID, firstBatch, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatalf("first PrepareReadOnly: %v", err)
+	}
+	if len(first.LeafSpans) == 0 {
+		t.Fatal("first prepare returned no spans")
+	}
+	opts := first.ReuseOptions()
+
+	secondBatch := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = secondBatch.Close() }()
+	secondBatch.Set([]byte("key-067"), []byte("three"))
+
+	second, err := z.PrepareReadOnly(rootID, secondBatch, opts)
+	if err != nil {
+		t.Fatalf("second PrepareReadOnly: %v", err)
+	}
+	if len(second.LeafSpans) != 1 {
+		t.Fatalf("second spans=%d want 1", len(second.LeafSpans))
+	}
+	span := second.LeafSpans[0]
+	if string(span.FirstOpKey) != "key-067" || string(span.LastOpKey) != "key-067" || span.OpCount != 1 {
+		t.Fatalf("second reused span=%+v want key-067", span)
 	}
 }
 
