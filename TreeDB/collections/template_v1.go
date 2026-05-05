@@ -63,7 +63,7 @@ type templateV1Resolver interface {
 
 type templateV1MemoryResolver struct {
 	templatesByID   map[uint64]*templateV1Template
-	templatesByHash map[string]*templateV1Template
+	templatesByHash map[[32]byte]*templateV1Template
 }
 
 type templateV1CompositeResolver struct {
@@ -75,14 +75,14 @@ type templateV1SnapshotResolver struct {
 	snap   *backenddb.Snapshot
 	rootID uint64
 	byID   map[uint64]*templateV1Template
-	byHash map[string]*templateV1Template
+	byHash map[[32]byte]*templateV1Template
 }
 
 type templateV1BufferedRunsResolver struct {
 	runs     []memtable.Table
 	fallback templateV1Resolver
 	byID     map[uint64]*templateV1Template
-	byHash   map[string]*templateV1Template
+	byHash   map[[32]byte]*templateV1Template
 }
 
 type templateV1ObjectRef struct {
@@ -149,7 +149,7 @@ func collectionOptionsWithTemplateV1Resolver(opts collectionOptions, snap *backe
 		snap:   snap,
 		rootID: catalog.rootID(collectionTemplateRootName(catalog.meta.Name)),
 		byID:   make(map[uint64]*templateV1Template),
-		byHash: make(map[string]*templateV1Template),
+		byHash: make(map[[32]byte]*templateV1Template),
 	}
 	return opts
 }
@@ -176,7 +176,7 @@ func collectionOptionsWithBufferedTemplateV1RunsResolver(opts collectionOptions,
 		runs:     runs,
 		fallback: opts.templateResolver,
 		byID:     make(map[uint64]*templateV1Template),
-		byHash:   make(map[string]*templateV1Template),
+		byHash:   make(map[[32]byte]*templateV1Template),
 	}
 	return opts
 }
@@ -189,7 +189,7 @@ type templateV1ParsedInsertDocument struct {
 
 func prepareTemplateV1InsertDocuments(documents [][]byte, fallback templateV1Resolver) ([][]byte, []templateV1Record, templateV1Resolver, error) {
 	parsed := make([]templateV1ParsedInsertDocument, len(documents))
-	byHash := make(map[string]templateV1Record)
+	byHash := make(map[[32]byte]templateV1Record)
 	for i, document := range documents {
 		next, err := parseTemplateV1InsertDocument(document)
 		if err != nil {
@@ -209,9 +209,11 @@ func prepareTemplateV1InsertDocuments(documents [][]byte, fallback templateV1Res
 	}
 	resolver := templateV1PreparedResolver(memory, fallback)
 	prepared := make([][]byte, len(documents))
+	validatePrepared := make([][]byte, 0)
 	for i, document := range parsed {
 		if document.stored != nil {
 			prepared[i] = document.stored
+			validatePrepared = append(validatePrepared, document.stored)
 			continue
 		}
 		stored, err := convertTemplateV1InsertDocumentToStored(document.hashDocument, resolver)
@@ -222,8 +224,10 @@ func prepareTemplateV1InsertDocuments(documents [][]byte, fallback templateV1Res
 		// documents; publish consumes the prepared batch synchronously.
 		prepared[i] = stored
 	}
-	if err := validateTemplateV1PreparedDocuments(prepared, resolver); err != nil {
-		return nil, nil, nil, err
+	if len(validatePrepared) > 0 {
+		if err := validateTemplateV1PreparedDocuments(validatePrepared, resolver); err != nil {
+			return nil, nil, nil, err
+		}
 	}
 	return prepared, publishRecords, resolver, nil
 }
@@ -284,11 +288,10 @@ func parseTemplateV1InsertEnvelope(raw []byte) (templateV1ParsedInsertDocument, 
 	return templateV1ParsedInsertDocument{hashDocument: hashDocument, records: records}, nil
 }
 
-func addPendingTemplateV1Record(records map[string]templateV1Record, record templateV1Record) error {
-	key := string(record.hash[:])
-	existing, ok := records[key]
+func addPendingTemplateV1Record(records map[[32]byte]templateV1Record, record templateV1Record) error {
+	existing, ok := records[record.hash]
 	if !ok {
-		records[key] = record
+		records[record.hash] = record
 		return nil
 	}
 	if !bytes.Equal(record.raw, existing.raw) {
@@ -297,7 +300,7 @@ func addPendingTemplateV1Record(records map[string]templateV1Record, record temp
 	return nil
 }
 
-func assignTemplateV1RecordIDs(recordsByHash map[string]templateV1Record, fallback templateV1Resolver) (*templateV1MemoryResolver, []templateV1Record, error) {
+func assignTemplateV1RecordIDs(recordsByHash map[[32]byte]templateV1Record, fallback templateV1Resolver) (*templateV1MemoryResolver, []templateV1Record, error) {
 	memory := &templateV1MemoryResolver{}
 	if len(recordsByHash) == 0 {
 		return memory, nil, nil
@@ -487,21 +490,20 @@ func (r *templateV1MemoryResolver) addTemplate(tpl *templateV1Template) error {
 		r.templatesByID = make(map[uint64]*templateV1Template)
 	}
 	if r.templatesByHash == nil {
-		r.templatesByHash = make(map[string]*templateV1Template)
+		r.templatesByHash = make(map[[32]byte]*templateV1Template)
 	}
-	hashKey := string(tpl.hash[:])
 	if existing := r.templatesByID[tpl.id]; existing != nil {
 		if existing.hash != tpl.hash || !equalStringSlices(existing.fields, tpl.fields) {
 			return errors.New("collections: template-v1 template id collision")
 		}
 	}
-	if existing := r.templatesByHash[hashKey]; existing != nil {
+	if existing := r.templatesByHash[tpl.hash]; existing != nil {
 		if existing.id != tpl.id || !equalStringSlices(existing.fields, tpl.fields) {
 			return errors.New("collections: template-v1 template hash collision")
 		}
 	}
 	r.templatesByID[tpl.id] = tpl
-	r.templatesByHash[hashKey] = tpl
+	r.templatesByHash[tpl.hash] = tpl
 	return nil
 }
 
@@ -520,7 +522,7 @@ func (r *templateV1MemoryResolver) lookupTemplateV1ByHash(hash [32]byte) (*templ
 	if r == nil {
 		return nil, errTemplateV1MissingResolver
 	}
-	tpl := r.templatesByHash[string(hash[:])]
+	tpl := r.templatesByHash[hash]
 	if tpl == nil {
 		return nil, errTemplateV1TemplateNotFound
 	}
@@ -626,7 +628,7 @@ func (r *templateV1SnapshotResolver) lookupTemplateV1ByHash(hash [32]byte) (*tem
 	if r == nil || r.snap == nil || r.rootID == 0 {
 		return nil, errTemplateV1MissingTemplateRoot
 	}
-	if tpl := r.byHash[string(hash[:])]; tpl != nil {
+	if tpl := r.byHash[hash]; tpl != nil {
 		return tpl, nil
 	}
 	entry, err := r.snap.GetEntryAtRoot(r.rootID, templateV1HashKey(hash))
@@ -669,10 +671,10 @@ func (r *templateV1SnapshotResolver) cacheTemplate(tpl *templateV1Template) {
 		r.byID = make(map[uint64]*templateV1Template)
 	}
 	if r.byHash == nil {
-		r.byHash = make(map[string]*templateV1Template)
+		r.byHash = make(map[[32]byte]*templateV1Template)
 	}
 	r.byID[tpl.id] = tpl
-	r.byHash[string(tpl.hash[:])] = tpl
+	r.byHash[tpl.hash] = tpl
 }
 
 func (r *templateV1BufferedRunsResolver) lookupTemplateV1(id uint64) (*templateV1Template, error) {
@@ -709,7 +711,7 @@ func (r *templateV1BufferedRunsResolver) lookupTemplateV1ByHash(hash [32]byte) (
 	if r == nil {
 		return nil, errTemplateV1MissingResolver
 	}
-	if tpl := r.byHash[string(hash[:])]; tpl != nil {
+	if tpl := r.byHash[hash]; tpl != nil {
 		return tpl, nil
 	}
 	key := templateV1HashKey(hash)
@@ -768,10 +770,10 @@ func (r *templateV1BufferedRunsResolver) cacheTemplate(tpl *templateV1Template) 
 		r.byID = make(map[uint64]*templateV1Template)
 	}
 	if r.byHash == nil {
-		r.byHash = make(map[string]*templateV1Template)
+		r.byHash = make(map[[32]byte]*templateV1Template)
 	}
 	r.byID[tpl.id] = tpl
-	r.byHash[string(tpl.hash[:])] = tpl
+	r.byHash[tpl.hash] = tpl
 }
 
 func sortTemplateV1Records(records []templateV1Record) {
@@ -803,7 +805,7 @@ func EncodeTemplateV1Document(fields []string, values []any) ([]byte, error) {
 }
 
 type TemplateV1Encoder struct {
-	emitted map[string]struct{}
+	emitted map[[32]byte]struct{}
 }
 
 func (e *TemplateV1Encoder) Reset() {
@@ -813,13 +815,12 @@ func (e *TemplateV1Encoder) Reset() {
 func (e *TemplateV1Encoder) EncodeDocument(fields []string, values []any) ([]byte, error) {
 	return encodeTemplateV1FieldsWithRecordFilter(fields, values, func(record templateV1Record) bool {
 		if e.emitted == nil {
-			e.emitted = make(map[string]struct{})
+			e.emitted = make(map[[32]byte]struct{})
 		}
-		key := string(record.hash[:])
-		if _, exists := e.emitted[key]; exists {
+		if _, exists := e.emitted[record.hash]; exists {
 			return false
 		}
-		e.emitted[key] = struct{}{}
+		e.emitted[record.hash] = struct{}{}
 		return true
 	})
 }

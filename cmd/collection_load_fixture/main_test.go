@@ -25,6 +25,9 @@ func TestParseConfigDefaultsToInspectableTwoIndexTemplateFixture(t *testing.T) {
 	if cfg.IndexCount != 2 {
 		t.Fatalf("index count=%d want 2", cfg.IndexCount)
 	}
+	if cfg.DocumentShape != documentShapeDefault || cfg.FieldCount != defaultFixtureFieldCount || cfg.ShapeCount != 1 {
+		t.Fatalf("shape=%q fields=%d shapes=%d, want default/%d/1", cfg.DocumentShape, cfg.FieldCount, cfg.ShapeCount, defaultFixtureFieldCount)
+	}
 	if !cfg.BufferedIndexedWrites {
 		t.Fatal("expected indexed write memtables enabled by default")
 	}
@@ -96,6 +99,32 @@ func TestParseConfigAcceptsBSONFormat(t *testing.T) {
 	}
 	if cfg.DocumentFormat != collections.DocumentFormatBSON {
 		t.Fatalf("document format=%q want bson", cfg.DocumentFormat)
+	}
+}
+
+func TestParseConfigAcceptsWideDocumentShape(t *testing.T) {
+	cfg, err := parseConfig([]string{"-document-shape", "wide", "-field-count", "32", "-indexes", "0"}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse wide shape: %v", err)
+	}
+	if cfg.DocumentShape != documentShapeWide || cfg.FieldCount != 32 || cfg.ShapeCount != 1 {
+		t.Fatalf("shape=%q fields=%d shapes=%d, want wide/32/1", cfg.DocumentShape, cfg.FieldCount, cfg.ShapeCount)
+	}
+}
+
+func TestParseConfigAcceptsHeterogeneousDocumentShape(t *testing.T) {
+	cfg, err := parseConfig([]string{"-document-shape", "heterogeneous", "-field-count", "8", "-shape-count", "1024", "-docs", "100", "-indexes", "0"}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse heterogeneous shape: %v", err)
+	}
+	if cfg.DocumentShape != documentShapeHetero || cfg.FieldCount != 8 || cfg.ShapeCount != 100 {
+		t.Fatalf("shape=%q fields=%d shapes=%d, want heterogeneous/8/100", cfg.DocumentShape, cfg.FieldCount, cfg.ShapeCount)
+	}
+}
+
+func TestParseConfigRejectsWideShapeWithIndexes(t *testing.T) {
+	if _, err := parseConfig([]string{"-document-shape", "wide"}, io.Discard); err == nil {
+		t.Fatal("expected wide shape with default indexes to fail")
 	}
 }
 
@@ -453,7 +482,12 @@ func TestContainsDocumentID(t *testing.T) {
 
 func TestTemplateV1StoredDocumentExtractsInputEnvelope(t *testing.T) {
 	var encoder collections.TemplateV1Encoder
-	raw, err := document(collections.DocumentFormatTemplateV1, &encoder, 7)
+	raw, err := document(config{
+		DocumentFormat: collections.DocumentFormatTemplateV1,
+		DocumentShape:  documentShapeDefault,
+		FieldCount:     defaultFixtureFieldCount,
+		ShapeCount:     1,
+	}, &encoder, 7)
 	if err != nil {
 		t.Fatalf("document: %v", err)
 	}

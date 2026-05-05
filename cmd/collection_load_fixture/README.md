@@ -49,6 +49,30 @@ Useful variants:
 # Native BSON documents with the same two-index shape.
 ./bin/collection-load-fixture -format bson -dir /tmp/treedb_two_index_bson_index_vlog -reset
 
+# Homogeneous wide documents, useful for template-v1/BSON disk comparisons where
+# repeated field-name storage should dominate. Non-default document shapes require
+# -indexes 0 because they do not include the default indexed fields.
+./bin/collection-load-fixture \
+  -format template-v1 \
+  -document-shape wide \
+  -field-count 32 \
+  -indexes 0 \
+  -dir /tmp/treedb_wide32_template_v1 \
+  -reset
+
+# Heterogeneous template-shape stress. This creates many distinct field-name sets
+# and is useful with -reopen-verify=false for high-cardinality template-map
+# performance checks.
+./bin/collection-load-fixture \
+  -format template-v1 \
+  -document-shape heterogeneous \
+  -field-count 8 \
+  -shape-count 8192 \
+  -indexes 0 \
+  -reopen-verify=false \
+  -dir /tmp/treedb_heterogeneous_template_v1 \
+  -reset
+
 # Disable secondary-index value-log outer leaves.
 ./bin/collection-load-fixture -index-outer-leaves-in-vlog=false -dir /tmp/treedb_two_index_template_v1_fast_index -reset
 
