@@ -6058,16 +6058,19 @@ func indexedSemanticValueSetsEqual(left, right [][]byte) bool {
 
 func indexedSemanticValueSetDiff(base, final [][]byte) (deletes, sets [][]byte) {
 	if len(base) == 0 {
-		return nil, final
+		if len(final) == 0 {
+			return nil, nil
+		}
+		return nil, cloneIndexedSemanticValueSetRefs(final)
 	}
 	if len(final) == 0 {
-		return base, nil
+		return cloneIndexedSemanticValueSetRefs(base), nil
 	}
 	if len(base) == 1 && len(final) == 1 {
 		if bytes.Equal(base[0], final[0]) {
 			return nil, nil
 		}
-		return base, final
+		return cloneIndexedSemanticValueSetRefs(base), cloneIndexedSemanticValueSetRefs(final)
 	}
 	baseCounts := make(map[string]int, len(base))
 	for _, value := range base {
@@ -6094,6 +6097,15 @@ func indexedSemanticValueSetDiff(base, final [][]byte) (deletes, sets [][]byte) 
 		sets = append(sets, value)
 	}
 	return deletes, sets
+}
+
+func cloneIndexedSemanticValueSetRefs(values [][]byte) [][]byte {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([][]byte, len(values))
+	copy(out, values)
+	return out
 }
 
 func collectionRootDeltaPlanStatsFromCollectionRootRuns(collectionName string, runs []collectionRootRun) (collectionRootDeltaPlanStats, error) {
