@@ -1121,7 +1121,8 @@ func (r ReadOnlyPrepareResult) LeafSpanSummary() ReadOnlyLeafSpanSummary {
 		ColdBuild:      r.ColdBuild,
 		Maintenance:    r.Maintenance,
 	}
-	for i, span := range r.LeafSpans {
+	for i := range r.LeafSpans {
+		span := &r.LeafSpans[i]
 		if i == 0 || span.OpCount < summary.MinSpanOps {
 			summary.MinSpanOps = span.OpCount
 		}
