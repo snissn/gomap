@@ -730,6 +730,85 @@ func TestReadOnlyPrepareResultValidateLeafSpansAcceptsOpenBounds(t *testing.T) {
 	requireValidReadOnlyPrepare(t, prepared)
 }
 
+func TestReadOnlyPrepareResultLeafSpanSummary(t *testing.T) {
+	prepared := ReadOnlyPrepareResult{
+		Ops:            6,
+		ExactLeafSpans: true,
+		LeafSpans: []ReadOnlyLeafSpan{
+			{FirstOpKey: []byte("a"), LastOpKey: []byte("a"), OpCount: 1, HighKey: []byte("d")},
+			{LowKey: []byte("d"), HighKey: []byte("m"), FirstOpKey: []byte("e"), LastOpKey: []byte("h"), OpCount: 2},
+			{LowKey: []byte("m"), FirstOpKey: []byte("q"), LastOpKey: []byte("z"), OpCount: 3},
+		},
+	}
+
+	summary := prepared.LeafSpanSummary()
+	if summary.Ops != 6 || summary.Spans != 3 || !summary.ExactLeafSpans {
+		t.Fatalf("summary ops/spans/exact=%d/%d/%v want 6/3/true", summary.Ops, summary.Spans, summary.ExactLeafSpans)
+	}
+	if summary.MinSpanOps != 1 || summary.MaxSpanOps != 3 || summary.SingleOpSpans != 1 {
+		t.Fatalf("summary op distribution min/max/single=%d/%d/%d want 1/3/1", summary.MinSpanOps, summary.MaxSpanOps, summary.SingleOpSpans)
+	}
+	if summary.OpenLowSpans != 1 || summary.OpenHighSpans != 1 {
+		t.Fatalf("summary open bounds low/high=%d/%d want 1/1", summary.OpenLowSpans, summary.OpenHighSpans)
+	}
+}
+
+func TestZipperPrepareReadOnlyLeafSpanSummaryMatchesPlan(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	rootID := buildOuterLeafInternalRoot(t, z)
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	delta.Set([]byte("key-001"), []byte("new-001"))
+	delta.Set([]byte("key-067"), []byte("new-067"))
+	delta.Set([]byte("key-133"), []byte("new-133"))
+	delta.Set([]byte("key-199"), []byte("new-199"))
+
+	prepared, err := z.PrepareReadOnly(rootID, delta, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatalf("PrepareReadOnly: %v", err)
+	}
+	requireValidReadOnlyPrepare(t, prepared)
+
+	summary := prepared.LeafSpanSummary()
+	if summary.Ops != prepared.Ops || summary.Spans != len(prepared.LeafSpans) {
+		t.Fatalf("summary ops/spans=%d/%d want %d/%d", summary.Ops, summary.Spans, prepared.Ops, len(prepared.LeafSpans))
+	}
+	if summary.MaxSpanOps < summary.MinSpanOps || summary.MinSpanOps <= 0 {
+		t.Fatalf("invalid summary span distribution: %+v", summary)
+	}
+	if summary.OpenLowSpans == 0 || summary.OpenHighSpans == 0 {
+		t.Fatalf("summary open bounds low/high=%d/%d want both nonzero", summary.OpenLowSpans, summary.OpenHighSpans)
+	}
+}
+
+var readOnlyLeafSpanSummaryBenchmarkSink ReadOnlyLeafSpanSummary
+
+func BenchmarkReadOnlyPrepareResultLeafSpanSummary(b *testing.B) {
+	prepared := ReadOnlyPrepareResult{
+		Ops:            4,
+		ExactLeafSpans: true,
+		LeafSpans: []ReadOnlyLeafSpan{
+			{FirstOpKey: []byte("a"), LastOpKey: []byte("a"), OpCount: 1, HighKey: []byte("d")},
+			{LowKey: []byte("d"), HighKey: []byte("m"), FirstOpKey: []byte("e"), LastOpKey: []byte("h"), OpCount: 2},
+			{LowKey: []byte("m"), FirstOpKey: []byte("q"), LastOpKey: []byte("z"), OpCount: 1},
+		},
+	}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		readOnlyLeafSpanSummaryBenchmarkSink = prepared.LeafSpanSummary()
+	}
+}
+
 func BenchmarkZipperPrepareReadOnlyWarmSparse(b *testing.B) {
 	dir := b.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)

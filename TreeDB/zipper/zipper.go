@@ -1072,6 +1072,23 @@ type ReadOnlyLeafSpan struct {
 	OpCount    int
 }
 
+// ReadOnlyLeafSpanSummary is a compact, allocation-free summary of a read-only
+// leaf-span plan. It is intended for callers and benchmarks that need to
+// report span distribution without walking or retaining the span slice.
+type ReadOnlyLeafSpanSummary struct {
+	Ops            int
+	Spans          int
+	ExactLeafSpans bool
+	ColdBuild      bool
+	Maintenance    bool
+
+	MinSpanOps    int
+	MaxSpanOps    int
+	SingleOpSpans int
+	OpenLowSpans  int
+	OpenHighSpans int
+}
+
 // ReadOnlyPrepareResult is the read-only portion of a root apply attempt. It is
 // safe to discard on root mismatch because it has not allocated or persisted
 // output pages.
@@ -1091,6 +1108,35 @@ type ReadOnlyPrepareResult struct {
 	Metrics   adaptive.Metrics
 
 	keyArena []byte
+}
+
+// LeafSpanSummary returns an allocation-free aggregate view of r's leaf spans.
+func (r ReadOnlyPrepareResult) LeafSpanSummary() ReadOnlyLeafSpanSummary {
+	summary := ReadOnlyLeafSpanSummary{
+		Ops:            r.Ops,
+		Spans:          len(r.LeafSpans),
+		ExactLeafSpans: r.ExactLeafSpans,
+		ColdBuild:      r.ColdBuild,
+		Maintenance:    r.Maintenance,
+	}
+	for i, span := range r.LeafSpans {
+		if i == 0 || span.OpCount < summary.MinSpanOps {
+			summary.MinSpanOps = span.OpCount
+		}
+		if i == 0 || span.OpCount > summary.MaxSpanOps {
+			summary.MaxSpanOps = span.OpCount
+		}
+		if span.OpCount == 1 {
+			summary.SingleOpSpans++
+		}
+		if span.LowKey == nil {
+			summary.OpenLowSpans++
+		}
+		if span.HighKey == nil {
+			summary.OpenHighSpans++
+		}
+	}
+	return summary
 }
 
 // ReuseOptions returns buffers from r for a later read-only preparation pass.
