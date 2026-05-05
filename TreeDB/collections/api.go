@@ -6962,9 +6962,7 @@ func (c *Collection) stagePrimaryOnlyNoIndexWriteBack(domain *collectionWriteDom
 		domain.table = newCollectionRunTable(0)
 	}
 	_, _, _, existed := domain.table.GetEntry(documentID)
-	key := bytes.Clone(documentID)
-	value := bytes.Clone(document)
-	domain.table.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
+	domain.table.SetEntry(documentID, document, page.ValuePtr{}, node.FlagInline)
 	if existed {
 		table, err := coalesceNoIndexBufferedTable(domain.table)
 		if err != nil {
@@ -7001,12 +6999,19 @@ func coalesceNoIndexBufferedTable(table memtable.Table) (memtable.Table, error) 
 		return nil, err
 	}
 	out := newCollectionRunTable(len(keys))
+	orderedKeys := make([][]byte, 0, len(keys))
 	for _, key := range keys {
+		orderedKeys = append(orderedKeys, key)
+	}
+	sort.Slice(orderedKeys, func(i, j int) bool {
+		return bytes.Compare(orderedKeys[i], orderedKeys[j]) < 0
+	})
+	for _, key := range orderedKeys {
 		value, ptr, flags, found := table.GetEntry(key)
 		if !found {
 			continue
 		}
-		out.SetEntry(key, bytes.Clone(value), ptr, flags)
+		out.SetEntry(key, value, ptr, flags)
 	}
 	return out, nil
 }
@@ -10233,7 +10238,7 @@ func (c *Collection) bufferNoIndexUpdateBatchPlanLocked(plan *updateBatchPlan) (
 	for _, entry := range entries {
 		_, _, _, existed := domain.table.GetEntry(entry.key)
 		replaced = replaced || existed
-		domain.table.SetEntry(entry.key, entry.value, page.ValuePtr{}, entry.flags)
+		domain.table.SetEntrySteal(entry.key, entry.value, page.ValuePtr{}, entry.flags)
 		if domain.primaryOnlyPendingUpdateKeys == nil {
 			domain.primaryOnlyPendingUpdateKeys = make(map[string]struct{})
 		}
