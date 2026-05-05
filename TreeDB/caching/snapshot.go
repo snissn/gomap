@@ -397,7 +397,7 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 		return dst, tree.ErrKeyNotFound
 	}
 	snap := rootDomainSnapshotFromCachedSnapshot(s, key)
-	val, ptr, flags, found, source := snap.getCachedEntryWithSource(key)
+	val, ptr, flags, found, _ := snap.getCachedEntryWithSource(key)
 	if found {
 		if flags&node.FlagTombstone != 0 {
 			return dst, tree.ErrKeyNotFound
@@ -411,14 +411,14 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 			if err != nil {
 				return dst, err
 			}
-			recordSnapshotRootDomainRead(source, true, len(out)-oldLen)
+			recordSnapshotRootDomainRead(rootDomainEntrySourceCached, true, len(out)-oldLen)
 			return out, nil
 		}
 		if val == nil {
-			recordSnapshotRootDomainRead(source, false, 0)
+			recordSnapshotRootDomainRead(rootDomainEntrySourceCached, false, 0)
 			return dst, nil
 		}
-		recordSnapshotRootDomainRead(source, false, len(val))
+		recordSnapshotRootDomainRead(rootDomainEntrySourceCached, false, len(val))
 		return append(dst, val...), nil
 	}
 
@@ -433,7 +433,7 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 			return dst, err
 		}
 	}
-	val, ptr, flags, found, source = snap.getPublishedEntryWithSource(key)
+	val, ptr, flags, found, source := snap.getPublishedEntryWithSource(key)
 	if found {
 		if flags&node.FlagTombstone != 0 {
 			return dst, tree.ErrKeyNotFound
