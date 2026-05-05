@@ -889,10 +889,23 @@ func rootDomainSystemSnapshotFromCachedSnapshot(s *Snapshot) rootDomainSnapshot 
 			snap.publishedRootID = rootID
 		}
 		if rootID != 0 {
-			snap.published = backendSnapshotLookup{db: s.db, snapshot: s.backend, rootID: rootID}
+			snap.published = s.backendSnapshotLookupForRoot(rootID)
 		}
 	}
 	return snap
+}
+
+func (s *Snapshot) backendSnapshotLookupForRoot(rootID uint64) rootDomainLookup {
+	if s == nil || s.backend == nil {
+		return nil
+	}
+	if s.backendRootOK && s.backendRoot.rootID == rootID {
+		return &s.backendRoot
+	}
+	if s.backendSystemOK && s.backendSystem.rootID == rootID {
+		return &s.backendSystem
+	}
+	return backendSnapshotLookup{db: s.db, snapshot: s.backend, rootID: rootID}
 }
 
 func rootDomainSnapshotBackendRootID(s *Snapshot, fallback uint64) uint64 {
@@ -934,7 +947,7 @@ func rootDomainApplyPublishedRef(s *Snapshot, snap *rootDomainSnapshot, ref publ
 		return true
 	}
 	if s != nil && s.backend != nil && snap.publishedRootID != 0 {
-		snap.published = backendSnapshotLookup{db: s.db, snapshot: s.backend, rootID: snap.publishedRootID}
+		snap.published = s.backendSnapshotLookupForRoot(snap.publishedRootID)
 		return true
 	}
 	return false
@@ -948,7 +961,7 @@ func rootDomainApplyBackendFallback(s *Snapshot, snap *rootDomainSnapshot) {
 	if rootID != 0 {
 		snap.publishedRootID = rootID
 	}
-	snap.published = backendSnapshotLookup{db: s.db, snapshot: s.backend, rootID: rootID}
+	snap.published = s.backendSnapshotLookupForRoot(rootID)
 }
 
 func rootDomainIteratorPublishedRef(set *publishedRootSet) publishedRootRef {
@@ -1120,7 +1133,7 @@ func (s rootDomainSnapshot) getEntry(key []byte) (val []byte, ptr page.ValuePtr,
 	return val, ptr, flags, found
 }
 
-func (s rootDomainSnapshot) getEntryWithSource(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
+func (s rootDomainSnapshot) getCachedEntryWithSource(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
 	if s.mutable != nil {
 		if val, ptr, flags, found = s.mutable.GetEntry(key); found {
 			return val, ptr, flags, true, rootDomainEntrySourceCached
@@ -1131,13 +1144,25 @@ func (s rootDomainSnapshot) getEntryWithSource(key []byte) (val []byte, ptr page
 			return val, ptr, flags, true, rootDomainEntrySourceCached
 		}
 	}
-	if s.published != nil {
-		val, ptr, flags, found = s.published.GetEntry(key)
-		if found {
-			return val, ptr, flags, true, rootDomainEntrySourcePublished
-		}
+	return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
+}
+
+func (s rootDomainSnapshot) getPublishedEntryWithSource(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
+	if s.published == nil {
+		return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
+	}
+	val, ptr, flags, found = s.published.GetEntry(key)
+	if found {
+		return val, ptr, flags, true, rootDomainEntrySourcePublished
 	}
 	return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
+}
+
+func (s rootDomainSnapshot) getEntryWithSource(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
+	if val, ptr, flags, found, source = s.getCachedEntryWithSource(key); found {
+		return val, ptr, flags, true, source
+	}
+	return s.getPublishedEntryWithSource(key)
 }
 
 func (s rootDomainSnapshot) visibleValue(key []byte) ([]byte, bool) {
