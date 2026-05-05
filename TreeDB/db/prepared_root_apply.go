@@ -149,6 +149,7 @@ func (group *preparedRootApplyGroup) setSystemRoot(baseRootID uint64, delta *bat
 			if apply.prepared {
 				if apply.state != preparedRootApplyStateInstalled {
 					apply.state = preparedRootApplyStateAbandoned
+					apply.output.State = preparedOutputStateAbandoned
 				}
 				break
 			}
