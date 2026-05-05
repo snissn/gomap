@@ -98,19 +98,26 @@ func TestIteratorWrappersForwardUnsafeViews(t *testing.T) {
 		value: []byte("value"),
 		valid: true,
 	}
+	foreground, ok := (&DB{}).wrapForegroundIterator(base).(unsafeIteratorView)
+	if !ok {
+		t.Fatalf("foreground iterator type=%T does not implement unsafeIteratorView", foreground)
+	}
 
-	for name, view := range map[string]unsafeIteratorView{
-		"debug":      &debugIterator{Iterator: base},
-		"leased":     &leasedMergingIterator{Iterator: base},
-		"foreground": (&DB{}).wrapForegroundIterator(base).(unsafeIteratorView),
+	for _, tc := range []struct {
+		name string
+		view unsafeIteratorView
+	}{
+		{name: "debug", view: &debugIterator{Iterator: base}},
+		{name: "leased", view: &leasedMergingIterator{Iterator: base}},
+		{name: "foreground", view: foreground},
 	} {
-		key := view.UnsafeKey()
+		key := tc.view.UnsafeKey()
 		if len(key) == 0 || &key[0] != &base.key[0] {
-			t.Fatalf("%s UnsafeKey did not forward the backing key view", name)
+			t.Fatalf("%s UnsafeKey did not forward the backing key view", tc.name)
 		}
-		value := view.UnsafeValue()
+		value := tc.view.UnsafeValue()
 		if len(value) == 0 || &value[0] != &base.value[0] {
-			t.Fatalf("%s UnsafeValue did not forward the backing value view", name)
+			t.Fatalf("%s UnsafeValue did not forward the backing value view", tc.name)
 		}
 	}
 
@@ -131,25 +138,32 @@ func TestIteratorWrappersFallbackToSafeCopiesWithoutUnsafeViews(t *testing.T) {
 		value: []byte("value"),
 		valid: true,
 	}
+	foreground, ok := (&DB{}).wrapForegroundIterator(base).(unsafeIteratorView)
+	if !ok {
+		t.Fatalf("foreground iterator type=%T does not implement unsafeIteratorView", foreground)
+	}
 
-	for name, view := range map[string]unsafeIteratorView{
-		"debug":      &debugIterator{Iterator: base},
-		"leased":     &leasedMergingIterator{Iterator: base},
-		"foreground": (&DB{}).wrapForegroundIterator(base).(unsafeIteratorView),
+	for _, tc := range []struct {
+		name string
+		view unsafeIteratorView
+	}{
+		{name: "debug", view: &debugIterator{Iterator: base}},
+		{name: "leased", view: &leasedMergingIterator{Iterator: base}},
+		{name: "foreground", view: foreground},
 	} {
-		key := view.UnsafeKey()
+		key := tc.view.UnsafeKey()
 		if string(key) != "key" {
-			t.Fatalf("%s UnsafeKey fallback=%q want key", name, key)
+			t.Fatalf("%s UnsafeKey fallback=%q want key", tc.name, key)
 		}
 		if len(key) != 0 && &key[0] == &base.key[0] {
-			t.Fatalf("%s UnsafeKey fallback returned backing key view", name)
+			t.Fatalf("%s UnsafeKey fallback returned backing key view", tc.name)
 		}
-		value := view.UnsafeValue()
+		value := tc.view.UnsafeValue()
 		if string(value) != "value" {
-			t.Fatalf("%s UnsafeValue fallback=%q want value", name, value)
+			t.Fatalf("%s UnsafeValue fallback=%q want value", tc.name, value)
 		}
 		if len(value) != 0 && &value[0] == &base.value[0] {
-			t.Fatalf("%s UnsafeValue fallback returned backing value view", name)
+			t.Fatalf("%s UnsafeValue fallback returned backing value view", tc.name)
 		}
 	}
 
