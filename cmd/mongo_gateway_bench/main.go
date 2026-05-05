@@ -125,8 +125,8 @@ type benchmarkResult struct {
 	TreeDBBufferedIndexedWriteMaxRootRuns         int                 `json:"treedb_buffered_indexed_write_max_root_runs"`
 	TreeDBBufferedIndexedAsyncFlush               bool                `json:"treedb_buffered_indexed_async_flush,omitempty"`
 	TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits int                 `json:"treedb_buffered_indexed_async_flush_max_queued_units,omitempty"`
-	TreeDBBufferedIndexedReadOnlyPrepare          bool                `json:"treedb_buffered_indexed_read_only_prepare,omitempty"`
-	TreeDBBufferedIndexedReadOnlyPrepareWorkers   int                 `json:"treedb_buffered_indexed_read_only_prepare_workers,omitempty"`
+	TreeDBBufferedIndexedReadOnlyPrepare          bool                `json:"treedb_buffered_indexed_read_only_prepare"`
+	TreeDBBufferedIndexedReadOnlyPrepareWorkers   int                 `json:"treedb_buffered_indexed_read_only_prepare_workers"`
 	TreeDBMaintenanceMode                         string              `json:"treedb_maintenance_mode,omitempty"`
 	PrebuildDocuments                             bool                `json:"prebuild_documents,omitempty"`
 	Phases                                        []phaseResult       `json:"phases"`
@@ -603,7 +603,7 @@ func parseConfig(args []string) (config, error) {
 	if cfg.TreeDBBufferedIndexedReadOnlyPrepareWorkers < 0 {
 		return config{}, errors.New("treedb-buffered-indexed-read-only-prepare-workers must be >= 0")
 	}
-	if cfg.TreeDBBufferedIndexedReadOnlyPrepareWorkers > 0 && !cfg.TreeDBBufferedIndexedReadOnlyPrepare {
+	if seenFlags["treedb-buffered-indexed-read-only-prepare-workers"] && !cfg.TreeDBBufferedIndexedReadOnlyPrepare {
 		return config{}, errors.New("treedb-buffered-indexed-read-only-prepare-workers requires -treedb-buffered-indexed-read-only-prepare")
 	}
 	if cfg.Format != "text" && cfg.Format != "json" {
