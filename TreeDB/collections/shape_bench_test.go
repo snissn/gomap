@@ -2,7 +2,10 @@ package collections_test
 
 import (
 	"fmt"
+	"os"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -81,25 +84,22 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 }
 
 func collectionShapeIndexes(indexCount int) []collections.IndexDefinition {
-	switch indexCount {
-	case 0:
+	if indexCount == 0 {
 		return nil
-	case 1:
-		return []collections.IndexDefinition{{Name: "email_idx", Field: "email", ValueType: collections.IndexValueString, Unique: true}}
-	case 2:
-		return []collections.IndexDefinition{
-			{Name: "email_idx", Field: "email", ValueType: collections.IndexValueString, Unique: true},
-			{Name: "city_idx", Field: "city", ValueType: collections.IndexValueString},
-		}
-	case 3:
-		return []collections.IndexDefinition{
-			{Name: "email_idx", Field: "email", ValueType: collections.IndexValueString, Unique: true},
-			{Name: "city_idx", Field: "city", ValueType: collections.IndexValueString},
-			{Name: "name_idx", Field: "name", ValueType: collections.IndexValueString},
-		}
-	default:
-		panic(fmt.Sprintf("unsupported collection benchmark index count %d", indexCount))
 	}
+	indexes := make([]collections.IndexDefinition, 0, indexCount)
+	indexes = append(indexes, collections.IndexDefinition{Name: "email_idx", Field: "email", ValueType: collections.IndexValueString, Unique: true})
+	if indexCount >= 2 {
+		indexes = append(indexes, collections.IndexDefinition{Name: "city_idx", Field: "city", ValueType: collections.IndexValueString})
+	}
+	if indexCount >= 3 {
+		indexes = append(indexes, collections.IndexDefinition{Name: "name_idx", Field: "name", ValueType: collections.IndexValueString})
+	}
+	for i := 4; i <= indexCount; i++ {
+		field := collectionShapeExtraIndexFieldName(i)
+		indexes = append(indexes, collections.IndexDefinition{Name: field + "_idx", Field: field, ValueType: collections.IndexValueString})
+	}
+	return indexes
 }
 
 func collectionSingleStringIndexes(indexCount int) []collections.IndexDefinition {
@@ -133,6 +133,80 @@ func benchmarkSingleStringDocumentBatch(tb testing.TB, start, count int) ([][]by
 	return ids, docs
 }
 
+func benchmarkCollectionShapeIndexCounts(b *testing.B) []int {
+	b.Helper()
+	raw := strings.TrimSpace(os.Getenv("TREEDB_COLLECTION_SHAPE_INDEX_COUNTS"))
+	if raw == "" {
+		return []int{0, 1, 2, 3}
+	}
+	parts := strings.Split(raw, ",")
+	counts := make([]int, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 0 {
+			b.Fatalf("unsupported TREEDB_COLLECTION_SHAPE_INDEX_COUNTS=%q", raw)
+		}
+		counts = append(counts, n)
+	}
+	if len(counts) == 0 {
+		b.Fatalf("unsupported TREEDB_COLLECTION_SHAPE_INDEX_COUNTS=%q", raw)
+	}
+	return counts
+}
+
+func benchmarkCollectionShapeDocumentBatch(tb testing.TB, start, count, indexCount int) ([][]byte, [][]byte) {
+	tb.Helper()
+	if indexCount <= 3 {
+		return benchmarkDocumentBatch(tb, start, count, true)
+	}
+	if benchmarkCollectionDocumentFormat(tb) != collections.DocumentFormatJSON {
+		tb.Skip("shape benchmark index counts above 3 use JSON documents")
+	}
+	ids := make([][]byte, count)
+	docs := make([][]byte, count)
+	for i := 0; i < count; i++ {
+		docNum := start + i
+		ids[i] = benchmarkDocumentID(docNum)
+		docs[i] = benchmarkCollectionShapeIndexedDocument(docNum, indexCount)
+	}
+	return ids, docs
+}
+
+func benchmarkCollectionShapeIndexedDocument(n, indexCount int) []byte {
+	if indexCount <= 3 {
+		return benchmarkIndexedDocument(n)
+	}
+	out := make([]byte, 0, 112+(indexCount-3)*24)
+	out = append(out, `{"name":"user-`...)
+	out = appendZeroPaddedInt(out, n, 9)
+	out = append(out, `","email":"user-`...)
+	out = appendZeroPaddedInt(out, n, 9)
+	out = append(out, `@example.com","city":"city-`...)
+	out = appendZeroPaddedInt(out, n%collectionBenchCities, 2)
+	out = append(out, `"`...)
+	for i := 4; i <= indexCount; i++ {
+		out = append(out, `,"`...)
+		out = append(out, collectionShapeExtraIndexFieldName(i)...)
+		out = append(out, `":"v-`...)
+		out = appendZeroPaddedInt(out, i, 3)
+		out = append(out, '-')
+		out = appendZeroPaddedInt(out, (n+i)%1024, 4)
+		out = append(out, '"')
+	}
+	out = append(out, `,"pad":"`...)
+	out = append(out, collectionBenchIndexedPad...)
+	out = append(out, `"}`...)
+	return out
+}
+
+func collectionShapeExtraIndexFieldName(n int) string {
+	return fmt.Sprintf("k_%03d", n)
+}
+
 func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoint bool) {
 	backend, collection := openBenchmarkCollection(b, fmt.Sprintf("bench_shape_insert_%d", indexCount), collectionShapeIndexes(indexCount)...)
 	targetBatchSize := benchmarkBatchSize(b)
@@ -156,7 +230,7 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 		if remaining := b.N - inserted; remaining < batchSize {
 			batchSize = remaining
 		}
-		ids, docs := benchmarkDocumentBatch(b, inserted, batchSize, true)
+		ids, docs := benchmarkCollectionShapeDocumentBatch(b, inserted, batchSize, indexCount)
 		b.StartTimer()
 
 		insertStart := time.Now()
@@ -229,7 +303,7 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 }
 
 func BenchmarkCollectionShapeInsertBatch(b *testing.B) {
-	for _, indexCount := range []int{0, 1, 2, 3} {
+	for _, indexCount := range benchmarkCollectionShapeIndexCounts(b) {
 		b.Run(fmt.Sprintf("indexes_%d", indexCount), func(b *testing.B) {
 			benchmarkCollectionShapeInsertBatch(b, indexCount, false)
 		})
@@ -237,7 +311,7 @@ func BenchmarkCollectionShapeInsertBatch(b *testing.B) {
 }
 
 func BenchmarkCollectionShapeInsertBatchCheckpoint(b *testing.B) {
-	for _, indexCount := range []int{0, 1, 2, 3} {
+	for _, indexCount := range benchmarkCollectionShapeIndexCounts(b) {
 		b.Run(fmt.Sprintf("indexes_%d", indexCount), func(b *testing.B) {
 			benchmarkCollectionShapeInsertBatch(b, indexCount, true)
 		})
