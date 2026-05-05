@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -182,46 +183,46 @@ func collectionOptionsWithBufferedTemplateV1RunsResolver(opts collectionOptions,
 }
 
 type templateV1ParsedInsertDocument struct {
-	stored       []byte
-	hashDocument []byte
-	records      []templateV1Record
+	hashDocumentOffset int
+	records            []templateV1Record
 }
 
+const templateV1StoredDocumentOffset = -1
+
 func prepareTemplateV1InsertDocuments(documents [][]byte, fallback templateV1Resolver) ([][]byte, []templateV1Record, templateV1Resolver, error) {
-	parsed := make([]templateV1ParsedInsertDocument, len(documents))
-	byHash := make(map[[32]byte]templateV1Record)
+	hashDocumentOffsets := make([]int, len(documents))
+	var pendingRecords []templateV1Record
 	for i, document := range documents {
 		next, err := parseTemplateV1InsertDocument(document)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		parsed[i] = next
-		for _, record := range next.records {
-			if err := addPendingTemplateV1Record(byHash, record); err != nil {
-				return nil, nil, nil, err
-			}
-		}
+		pendingRecords = append(pendingRecords, next.records...)
+		hashDocumentOffsets[i] = next.hashDocumentOffset
 	}
 
-	memory, publishRecords, err := assignTemplateV1RecordIDs(byHash, fallback)
+	memory, publishRecords, err := assignTemplateV1RecordIDs(pendingRecords, fallback)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	resolver := templateV1PreparedResolver(memory, fallback)
 	prepared := make([][]byte, len(documents))
 	validatePrepared := make([][]byte, 0)
-	for i, document := range parsed {
-		if document.stored != nil {
-			prepared[i] = document.stored
-			validatePrepared = append(validatePrepared, document.stored)
+	conversionArena := make([]byte, 0, estimateTemplateV1ConversionArenaSize(documents, hashDocumentOffsets))
+	for i, document := range documents {
+		hashDocumentOffset := hashDocumentOffsets[i]
+		if hashDocumentOffset == templateV1StoredDocumentOffset {
+			prepared[i] = document
+			validatePrepared = append(validatePrepared, document)
 			continue
 		}
-		stored, err := convertTemplateV1InsertDocumentToStored(document.hashDocument, resolver)
+		nextArena, stored, err := appendTemplateV1InsertDocumentToStored(conversionArena, document[hashDocumentOffset:], resolver)
 		if err != nil {
 			return nil, nil, nil, err
 		}
 		// Keep compact stored bytes borrowed or freshly prepared like JSON
 		// documents; publish consumes the prepared batch synchronously.
+		conversionArena = nextArena
 		prepared[i] = stored
 	}
 	if len(validatePrepared) > 0 {
@@ -234,10 +235,10 @@ func prepareTemplateV1InsertDocuments(documents [][]byte, fallback templateV1Res
 
 func parseTemplateV1InsertDocument(raw []byte) (templateV1ParsedInsertDocument, error) {
 	switch {
-	case bytes.HasPrefix(raw, []byte(templateV1StoredMagic)):
-		return templateV1ParsedInsertDocument{stored: raw}, nil
-	case bytes.HasPrefix(raw, []byte(templateV1InsertDocumentMagic)):
-		return templateV1ParsedInsertDocument{hashDocument: raw}, nil
+	case hasTemplateV1Magic(raw, templateV1StoredMagic):
+		return templateV1ParsedInsertDocument{hashDocumentOffset: templateV1StoredDocumentOffset}, nil
+	case hasTemplateV1Magic(raw, templateV1InsertDocumentMagic):
+		return templateV1ParsedInsertDocument{hashDocumentOffset: 0}, nil
 	default:
 		return parseTemplateV1InsertEnvelope(raw)
 	}
@@ -282,34 +283,45 @@ func parseTemplateV1InsertEnvelope(raw []byte) (templateV1ParsedInsertDocument, 
 		records = append(records, record)
 	}
 	hashDocument := raw[pos:]
-	if !bytes.HasPrefix(hashDocument, []byte(templateV1InsertDocumentMagic)) {
+	if !hasTemplateV1Magic(hashDocument, templateV1InsertDocumentMagic) {
 		return templateV1ParsedInsertDocument{}, errors.New("collections: malformed template-v1 insert document")
 	}
-	return templateV1ParsedInsertDocument{hashDocument: hashDocument, records: records}, nil
+	return templateV1ParsedInsertDocument{hashDocumentOffset: pos, records: records}, nil
 }
 
-func addPendingTemplateV1Record(records map[[32]byte]templateV1Record, record templateV1Record) error {
-	existing, ok := records[record.hash]
-	if !ok {
-		records[record.hash] = record
-		return nil
+func estimateTemplateV1ConversionArenaSize(documents [][]byte, hashDocumentOffsets []int) int {
+	total := 0
+	for i, document := range documents {
+		if i >= len(hashDocumentOffsets) {
+			break
+		}
+		offset := hashDocumentOffsets[i]
+		if offset == templateV1StoredDocumentOffset || offset > len(document) {
+			continue
+		}
+		// Root hash references shrink from 32 bytes to a uvarint ID. Nested
+		// object references shrink too, so root replacement with max varint is
+		// a conservative upper bound for each converted document.
+		total += len(document[offset:]) - 32 + binary.MaxVarintLen64
 	}
-	if !bytes.Equal(record.raw, existing.raw) {
-		return errors.New("collections: template-v1 template hash collision")
-	}
-	return nil
+	return total
 }
 
-func assignTemplateV1RecordIDs(recordsByHash map[[32]byte]templateV1Record, fallback templateV1Resolver) (*templateV1MemoryResolver, []templateV1Record, error) {
+func assignTemplateV1RecordIDs(records []templateV1Record, fallback templateV1Resolver) (*templateV1MemoryResolver, []templateV1Record, error) {
 	memory := &templateV1MemoryResolver{}
-	if len(recordsByHash) == 0 {
+	if len(records) == 0 {
 		return memory, nil, nil
 	}
-	records := make([]templateV1Record, 0, len(recordsByHash))
-	for _, record := range recordsByHash {
-		records = append(records, record)
-	}
 	sortTemplateV1Records(records)
+	var err error
+	records, err = dedupeTemplateV1Records(records)
+	if err != nil {
+		return nil, nil, err
+	}
+	memory = &templateV1MemoryResolver{
+		templatesByID:   make(map[uint64]*templateV1Template, len(records)),
+		templatesByHash: make(map[[32]byte]*templateV1Template, len(records)),
+	}
 
 	var nextID uint64
 	nextIDReady := false
@@ -434,7 +446,7 @@ func templateV1RecordKey(id uint64) []byte {
 }
 
 func encodeTemplateV1ID(id uint64) []byte {
-	return binary.AppendUvarint(nil, id)
+	return appendTemplateV1Uvarint(nil, id)
 }
 
 func decodeTemplateV1ID(raw []byte) (uint64, error) {
@@ -777,8 +789,8 @@ func (r *templateV1BufferedRunsResolver) cacheTemplate(tpl *templateV1Template) 
 }
 
 func sortTemplateV1Records(records []templateV1Record) {
-	sort.Slice(records, func(i, j int) bool {
-		return bytes.Compare(records[i].hash[:], records[j].hash[:]) < 0
+	slices.SortFunc(records, func(a, b templateV1Record) int {
+		return bytes.Compare(a.hash[:], b.hash[:])
 	})
 }
 
@@ -996,9 +1008,9 @@ func encodeTemplateV1RootWithRecords(root []byte, state *templateV1BuildState, i
 func encodeTemplateV1RootWithSingleRecord(root []byte, record templateV1Record) []byte {
 	out := make([]byte, 0, len(templateV1InputMagic)+binary.MaxVarintLen64+32+binary.MaxVarintLen64+len(record.raw)+len(root))
 	out = append(out, templateV1InputMagic...)
-	out = binary.AppendUvarint(out, 1)
+	out = appendTemplateV1Uvarint(out, 1)
 	out = append(out, record.hash[:]...)
-	out = binary.AppendUvarint(out, uint64(len(record.raw)))
+	out = appendTemplateV1Uvarint(out, uint64(len(record.raw)))
 	out = append(out, record.raw...)
 	out = append(out, root...)
 	return out
@@ -1007,10 +1019,10 @@ func encodeTemplateV1RootWithSingleRecord(root []byte, record templateV1Record) 
 func encodeTemplateV1RootWithRecordSlice(root []byte, records []templateV1Record) []byte {
 	out := make([]byte, 0, len(templateV1InputMagic)+len(root)+len(records)*48)
 	out = append(out, templateV1InputMagic...)
-	out = binary.AppendUvarint(out, uint64(len(records)))
+	out = appendTemplateV1Uvarint(out, uint64(len(records)))
 	for _, record := range records {
 		out = append(out, record.hash[:]...)
-		out = binary.AppendUvarint(out, uint64(len(record.raw)))
+		out = appendTemplateV1Uvarint(out, uint64(len(record.raw)))
 		out = append(out, record.raw...)
 	}
 	out = append(out, root...)
@@ -1148,7 +1160,7 @@ func (s *templateV1BuildState) appendValue(dst []byte, value any) ([]byte, error
 		return append(dst, templateV1KindNull), nil
 	case string:
 		dst = append(dst, templateV1KindString)
-		dst = binary.AppendUvarint(dst, uint64(len(v)))
+		dst = appendTemplateV1Uvarint(dst, uint64(len(v)))
 		return append(dst, v...), nil
 	case bool:
 		if v {
@@ -1174,7 +1186,7 @@ func (s *templateV1BuildState) appendValue(dst []byte, value any) ([]byte, error
 		return s.appendValue(dst, f)
 	case []any:
 		dst = append(dst, templateV1KindArray)
-		dst = binary.AppendUvarint(dst, uint64(len(v)))
+		dst = appendTemplateV1Uvarint(dst, uint64(len(v)))
 		var err error
 		for _, item := range v {
 			dst, err = s.appendValue(dst, item)
@@ -1185,7 +1197,7 @@ func (s *templateV1BuildState) appendValue(dst []byte, value any) ([]byte, error
 		return dst, nil
 	case []string:
 		dst = append(dst, templateV1KindArray)
-		dst = binary.AppendUvarint(dst, uint64(len(v)))
+		dst = appendTemplateV1Uvarint(dst, uint64(len(v)))
 		var err error
 		for _, item := range v {
 			dst, err = s.appendValue(dst, item)
@@ -1204,12 +1216,12 @@ func (s *templateV1BuildState) appendValue(dst []byte, value any) ([]byte, error
 func buildTemplateV1Record(fields []string) (templateV1Record, error) {
 	raw := make([]byte, 0, len(templateV1RecordMagic)+len(fields)*8)
 	raw = append(raw, templateV1RecordMagic...)
-	raw = binary.AppendUvarint(raw, uint64(len(fields)))
+	raw = appendTemplateV1Uvarint(raw, uint64(len(fields)))
 	for _, field := range fields {
 		if err := validateTemplateV1FieldName(field); err != nil {
 			return templateV1Record{}, err
 		}
-		raw = binary.AppendUvarint(raw, uint64(len(field)))
+		raw = appendTemplateV1Uvarint(raw, uint64(len(field)))
 		raw = append(raw, field...)
 	}
 	hash := sha256.Sum256(raw)
@@ -1293,31 +1305,105 @@ func parseTemplateV1InsertHashDocument(raw []byte) (templateV1HashObjectRef, err
 }
 
 func convertTemplateV1InsertDocumentToStored(raw []byte, resolver templateV1Resolver) ([]byte, error) {
+	_, stored, err := appendTemplateV1InsertDocumentToStored(nil, raw, resolver)
+	return stored, err
+}
+
+func appendTemplateV1InsertDocumentToStored(dst []byte, raw []byte, resolver templateV1Resolver) ([]byte, []byte, error) {
 	if resolver == nil {
-		return nil, errTemplateV1MissingResolver
+		return dst, nil, errTemplateV1MissingResolver
 	}
 	root, err := parseTemplateV1InsertHashDocument(raw)
 	if err != nil {
-		return nil, err
+		return dst, nil, err
 	}
 	tpl, err := resolver.lookupTemplateV1ByHash(root.templateHash)
 	if err != nil {
-		return nil, err
+		return dst, nil, err
 	}
-	out := make([]byte, 0, len(raw)-32+binary.MaxVarintLen64)
-	out = append(out, templateV1StoredMagic...)
-	out = binary.AppendUvarint(out, tpl.id)
+	start := len(dst)
+	dst = append(dst, templateV1StoredMagic...)
+	dst = appendTemplateV1Uvarint(dst, tpl.id)
+	needsConversion, err := templateV1ValuesNeedHashConversion(root.values, len(tpl.fields))
+	if err != nil {
+		return dst, nil, err
+	}
+	if !needsConversion {
+		dst = append(dst, root.values...)
+		return dst, dst[start:len(dst):len(dst)], nil
+	}
 	pos := 0
 	for range tpl.fields {
-		out, err = appendTemplateV1ConvertedValue(out, root.values, &pos, resolver)
+		dst, err = appendTemplateV1ConvertedValue(dst, root.values, &pos, resolver)
 		if err != nil {
-			return nil, err
+			return dst, nil, err
 		}
 	}
 	if pos != len(root.values) {
-		return nil, errors.New("collections: trailing template-v1 object values")
+		return dst, nil, errors.New("collections: trailing template-v1 object values")
 	}
-	return out, nil
+	return dst, dst[start:len(dst):len(dst)], nil
+}
+
+func templateV1ValuesNeedHashConversion(raw []byte, fieldCount int) (bool, error) {
+	pos := 0
+	for i := 0; i < fieldCount; i++ {
+		needsConversion, err := templateV1ValueNeedsHashConversion(raw, &pos)
+		if err != nil || needsConversion {
+			return needsConversion, err
+		}
+	}
+	if pos != len(raw) {
+		return false, errors.New("collections: trailing template-v1 object values")
+	}
+	return false, nil
+}
+
+func templateV1ValueNeedsHashConversion(raw []byte, pos *int) (bool, error) {
+	if pos == nil || *pos >= len(raw) {
+		return false, errors.New("collections: malformed template-v1 value")
+	}
+	kind := raw[*pos]
+	*pos = *pos + 1
+	switch kind {
+	case templateV1KindNull, templateV1KindFalse, templateV1KindTrue:
+		return false, nil
+	case templateV1KindFloat64:
+		if len(raw)-*pos < 8 {
+			return false, errors.New("collections: malformed template-v1 number")
+		}
+		*pos += 8
+		return false, nil
+	case templateV1KindString:
+		n, err := readTemplateV1Uvarint(raw, pos)
+		if err != nil {
+			return false, err
+		}
+		if n > uint64(len(raw)-*pos) {
+			return false, errors.New("collections: malformed template-v1 string")
+		}
+		*pos += int(n)
+		return false, nil
+	case templateV1KindArray:
+		count, err := readTemplateV1Uvarint(raw, pos)
+		if err != nil {
+			return false, err
+		}
+		if err := validateTemplateV1ArrayCount(raw, pos, count); err != nil {
+			return false, err
+		}
+		for i := uint64(0); i < count; i++ {
+			needsConversion, err := templateV1ValueNeedsHashConversion(raw, pos)
+			if err != nil || needsConversion {
+				return needsConversion, err
+			}
+		}
+		return false, nil
+	case templateV1KindObject:
+		return true, nil
+	default:
+		return false, fmt.Errorf("collections: unknown template-v1 value kind %d", kind)
+	}
 }
 
 func appendTemplateV1ConvertedValue(dst []byte, raw []byte, pos *int, resolver templateV1Resolver) ([]byte, error) {
@@ -1374,7 +1460,7 @@ func appendTemplateV1ConvertedValue(dst []byte, raw []byte, pos *int, resolver t
 			return nil, err
 		}
 		dst = append(dst, kind)
-		dst = binary.AppendUvarint(dst, tpl.id)
+		dst = appendTemplateV1Uvarint(dst, tpl.id)
 		for range tpl.fields {
 			dst, err = appendTemplateV1ConvertedValue(dst, raw, pos, resolver)
 			if err != nil {
@@ -1850,19 +1936,45 @@ func skipTemplateV1Value(raw []byte, pos *int, resolver templateV1Resolver) erro
 }
 
 func consumeMagic(raw []byte, pos *int, magic string) bool {
-	if pos == nil || len(raw)-*pos < len(magic) {
-		return false
-	}
-	if string(raw[*pos:*pos+len(magic)]) != magic {
+	if pos == nil || !hasTemplateV1MagicAt(raw, *pos, magic) {
 		return false
 	}
 	*pos += len(magic)
 	return true
 }
 
+func hasTemplateV1Magic(raw []byte, magic string) bool {
+	return hasTemplateV1MagicAt(raw, 0, magic)
+}
+
+func hasTemplateV1MagicAt(raw []byte, pos int, magic string) bool {
+	if pos < 0 || len(raw)-pos < len(magic) {
+		return false
+	}
+	for i := 0; i < len(magic); i++ {
+		if raw[pos+i] != magic[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func appendTemplateV1Uvarint(dst []byte, v uint64) []byte {
+	if v < 0x80 {
+		return append(dst, byte(v))
+	}
+	return binary.AppendUvarint(dst, v)
+}
+
 func readTemplateV1Uvarint(raw []byte, pos *int) (uint64, error) {
 	if pos == nil || *pos > len(raw) {
 		return 0, errors.New("collections: malformed template-v1 varint")
+	}
+	if *pos < len(raw) {
+		if b := raw[*pos]; b < 0x80 {
+			*pos = *pos + 1
+			return uint64(b), nil
+		}
 	}
 	v, n := binary.Uvarint(raw[*pos:])
 	if n <= 0 {
@@ -1896,8 +2008,11 @@ func validateTemplateV1FieldName(field string) error {
 	if field == "" {
 		return errors.New("collections: template-v1 field name cannot be empty")
 	}
-	if strings.ContainsAny(field, "\x00.") {
-		return fmt.Errorf("collections: template-v1 field %q contains reserved punctuation", field)
+	for i := 0; i < len(field); i++ {
+		switch field[i] {
+		case 0, '.':
+			return fmt.Errorf("collections: template-v1 field %q contains reserved punctuation", field)
+		}
 	}
 	return nil
 }
