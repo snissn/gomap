@@ -178,6 +178,7 @@ type orderedRootDeltaGroupPublishStats struct {
 	rootApplyReadOnlyPrepareCalls          uint64
 	rootApplyReadOnlyPrepareOps            uint64
 	rootApplyReadOnlyPrepareLeafSpans      uint64
+	rootApplyReadOnlyPrepareWorker         orderedRootDeltaGroupReadOnlyPrepareWorkerStats
 	rootApplyReadOnlyPrepareExactPlans     uint64
 	rootApplyReadOnlyPrepareMaintenance    uint64
 	rootApplyReadOnlyPrepareColdBuilds     uint64
@@ -224,6 +225,7 @@ type orderedRootDeltaGroupPublishPhaseStats struct {
 	rootApplyReadOnlyPrepareCalls       uint64
 	rootApplyReadOnlyPrepareOps         uint64
 	rootApplyReadOnlyPrepareLeafSpans   uint64
+	rootApplyReadOnlyPrepareWorker      orderedRootDeltaGroupReadOnlyPrepareWorkerStats
 	rootApplyReadOnlyPrepareExactPlans  uint64
 	rootApplyReadOnlyPrepareMaintenance uint64
 	rootApplyReadOnlyPrepareColdBuilds  uint64
@@ -238,6 +240,14 @@ type orderedRootDeltaGroupPublishPhaseStats struct {
 	preparedRootStats                   preparedRootApplyStats
 	finalizeNs                          uint64
 	finalizeCalls                       uint64
+}
+
+type orderedRootDeltaGroupReadOnlyPrepareWorkerStats struct {
+	targets    uint64
+	ranges     uint64
+	minOps     uint64
+	maxOps     uint64
+	singleSpan uint64
 }
 
 type orderedRootDeltaGroupZipperStats struct {
@@ -388,6 +398,11 @@ func (db *DB) observeOrderedRootDeltaGroupPublish(wait, hold time.Duration, root
 	db.orderedRootDeltaGroupRootApplyReadOnlyPrepareCalls.Add(phases.rootApplyReadOnlyPrepareCalls)
 	db.orderedRootDeltaGroupRootApplyReadOnlyPrepareOps.Add(phases.rootApplyReadOnlyPrepareOps)
 	db.orderedRootDeltaGroupRootApplyReadOnlyPrepareLeafSpans.Add(phases.rootApplyReadOnlyPrepareLeafSpans)
+	db.orderedRootDeltaGroupRootApplyReadOnlyPrepareWorker.targets.Add(phases.rootApplyReadOnlyPrepareWorker.targets)
+	db.orderedRootDeltaGroupRootApplyReadOnlyPrepareWorker.ranges.Add(phases.rootApplyReadOnlyPrepareWorker.ranges)
+	db.orderedRootDeltaGroupRootApplyReadOnlyPrepareWorker.minOps.Add(phases.rootApplyReadOnlyPrepareWorker.minOps)
+	db.orderedRootDeltaGroupRootApplyReadOnlyPrepareWorker.maxOps.Add(phases.rootApplyReadOnlyPrepareWorker.maxOps)
+	db.orderedRootDeltaGroupRootApplyReadOnlyPrepareWorker.singleSpan.Add(phases.rootApplyReadOnlyPrepareWorker.singleSpan)
 	db.orderedRootDeltaGroupRootApplyReadOnlyPrepareExactPlans.Add(phases.rootApplyReadOnlyPrepareExactPlans)
 	db.orderedRootDeltaGroupRootApplyReadOnlyPrepareMaintenance.Add(phases.rootApplyReadOnlyPrepareMaintenance)
 	db.orderedRootDeltaGroupRootApplyReadOnlyPrepareColdBuilds.Add(phases.rootApplyReadOnlyPrepareColdBuilds)
@@ -490,35 +505,42 @@ func (db *DB) orderedRootDeltaGroupPublishStats() orderedRootDeltaGroupPublishSt
 		rootApplyReadOnlyPrepareCalls:          db.orderedRootDeltaGroupRootApplyReadOnlyPrepareCalls.Load(),
 		rootApplyReadOnlyPrepareOps:            db.orderedRootDeltaGroupRootApplyReadOnlyPrepareOps.Load(),
 		rootApplyReadOnlyPrepareLeafSpans:      db.orderedRootDeltaGroupRootApplyReadOnlyPrepareLeafSpans.Load(),
-		rootApplyReadOnlyPrepareExactPlans:     db.orderedRootDeltaGroupRootApplyReadOnlyPrepareExactPlans.Load(),
-		rootApplyReadOnlyPrepareMaintenance:    db.orderedRootDeltaGroupRootApplyReadOnlyPrepareMaintenance.Load(),
-		rootApplyReadOnlyPrepareColdBuilds:     db.orderedRootDeltaGroupRootApplyReadOnlyPrepareColdBuilds.Load(),
-		systemBuildNs:                          db.orderedRootDeltaGroupSystemBuildNs.Load(),
-		systemApplyNs:                          db.orderedRootDeltaGroupSystemApplyNs.Load(),
-		systemApplyCalls:                       db.orderedRootDeltaGroupSystemApplyCalls.Load(),
-		systemApplyOps:                         db.orderedRootDeltaGroupSystemApplyOps.Load(),
-		systemApplyNodeLoads:                   db.orderedRootDeltaGroupSystemApplyNodeLoads.Load(),
-		installGuardNs:                         db.orderedRootDeltaGroupInstallGuardNs.Load(),
-		installGuardCalls:                      db.orderedRootDeltaGroupInstallGuardCalls.Load(),
-		installGuardFailures:                   db.orderedRootDeltaGroupInstallGuardFailures.Load(),
-		preparedRootPrepareNs:                  db.orderedRootDeltaGroupPreparedRootPrepareNs.Load(),
-		preparedRootGroups:                     db.orderedRootDeltaGroupPreparedRootGroups.Load(),
-		preparedRootRoots:                      db.orderedRootDeltaGroupPreparedRootRoots.Load(),
-		preparedRootEntries:                    db.orderedRootDeltaGroupPreparedRootEntries.Load(),
-		preparedRootTombstones:                 db.orderedRootDeltaGroupPreparedRootTombstones.Load(),
-		preparedRootKeyBytes:                   db.orderedRootDeltaGroupPreparedRootKeyBytes.Load(),
-		preparedRootValueBytes:                 db.orderedRootDeltaGroupPreparedRootValueBytes.Load(),
-		preparedRootPointerValues:              db.orderedRootDeltaGroupPreparedRootPointerValues.Load(),
-		preparedRootInstalled:                  db.orderedRootDeltaGroupPreparedRootInstalled.Load(),
-		preparedRootAbandoned:                  db.orderedRootDeltaGroupPreparedRootAbandoned.Load(),
-		preparedRootOutputPages:                db.orderedRootDeltaGroupPreparedRootOutputPages.Load(),
-		preparedRootOutputLeafLogPtrs:          db.orderedRootDeltaGroupPreparedRootOutputLeafLogPtrs.Load(),
-		preparedRootInstalledPages:             db.orderedRootDeltaGroupPreparedRootInstalledPages.Load(),
-		preparedRootInstalledLeafLogPtrs:       db.orderedRootDeltaGroupPreparedRootInstalledLeafLogPtrs.Load(),
-		preparedRootAbandonedPages:             db.orderedRootDeltaGroupPreparedRootAbandonedPages.Load(),
-		preparedRootAbandonedLeafLogPtrs:       db.orderedRootDeltaGroupPreparedRootAbandonedLeafLogPtrs.Load(),
-		finalizeNs:                             db.orderedRootDeltaGroupFinalizeNs.Load(),
-		finalizeCalls:                          db.orderedRootDeltaGroupFinalizeCalls.Load(),
+		rootApplyReadOnlyPrepareWorker: orderedRootDeltaGroupReadOnlyPrepareWorkerStats{
+			targets:    db.orderedRootDeltaGroupRootApplyReadOnlyPrepareWorker.targets.Load(),
+			ranges:     db.orderedRootDeltaGroupRootApplyReadOnlyPrepareWorker.ranges.Load(),
+			minOps:     db.orderedRootDeltaGroupRootApplyReadOnlyPrepareWorker.minOps.Load(),
+			maxOps:     db.orderedRootDeltaGroupRootApplyReadOnlyPrepareWorker.maxOps.Load(),
+			singleSpan: db.orderedRootDeltaGroupRootApplyReadOnlyPrepareWorker.singleSpan.Load(),
+		},
+		rootApplyReadOnlyPrepareExactPlans:  db.orderedRootDeltaGroupRootApplyReadOnlyPrepareExactPlans.Load(),
+		rootApplyReadOnlyPrepareMaintenance: db.orderedRootDeltaGroupRootApplyReadOnlyPrepareMaintenance.Load(),
+		rootApplyReadOnlyPrepareColdBuilds:  db.orderedRootDeltaGroupRootApplyReadOnlyPrepareColdBuilds.Load(),
+		systemBuildNs:                       db.orderedRootDeltaGroupSystemBuildNs.Load(),
+		systemApplyNs:                       db.orderedRootDeltaGroupSystemApplyNs.Load(),
+		systemApplyCalls:                    db.orderedRootDeltaGroupSystemApplyCalls.Load(),
+		systemApplyOps:                      db.orderedRootDeltaGroupSystemApplyOps.Load(),
+		systemApplyNodeLoads:                db.orderedRootDeltaGroupSystemApplyNodeLoads.Load(),
+		installGuardNs:                      db.orderedRootDeltaGroupInstallGuardNs.Load(),
+		installGuardCalls:                   db.orderedRootDeltaGroupInstallGuardCalls.Load(),
+		installGuardFailures:                db.orderedRootDeltaGroupInstallGuardFailures.Load(),
+		preparedRootPrepareNs:               db.orderedRootDeltaGroupPreparedRootPrepareNs.Load(),
+		preparedRootGroups:                  db.orderedRootDeltaGroupPreparedRootGroups.Load(),
+		preparedRootRoots:                   db.orderedRootDeltaGroupPreparedRootRoots.Load(),
+		preparedRootEntries:                 db.orderedRootDeltaGroupPreparedRootEntries.Load(),
+		preparedRootTombstones:              db.orderedRootDeltaGroupPreparedRootTombstones.Load(),
+		preparedRootKeyBytes:                db.orderedRootDeltaGroupPreparedRootKeyBytes.Load(),
+		preparedRootValueBytes:              db.orderedRootDeltaGroupPreparedRootValueBytes.Load(),
+		preparedRootPointerValues:           db.orderedRootDeltaGroupPreparedRootPointerValues.Load(),
+		preparedRootInstalled:               db.orderedRootDeltaGroupPreparedRootInstalled.Load(),
+		preparedRootAbandoned:               db.orderedRootDeltaGroupPreparedRootAbandoned.Load(),
+		preparedRootOutputPages:             db.orderedRootDeltaGroupPreparedRootOutputPages.Load(),
+		preparedRootOutputLeafLogPtrs:       db.orderedRootDeltaGroupPreparedRootOutputLeafLogPtrs.Load(),
+		preparedRootInstalledPages:          db.orderedRootDeltaGroupPreparedRootInstalledPages.Load(),
+		preparedRootInstalledLeafLogPtrs:    db.orderedRootDeltaGroupPreparedRootInstalledLeafLogPtrs.Load(),
+		preparedRootAbandonedPages:          db.orderedRootDeltaGroupPreparedRootAbandonedPages.Load(),
+		preparedRootAbandonedLeafLogPtrs:    db.orderedRootDeltaGroupPreparedRootAbandonedLeafLogPtrs.Load(),
+		finalizeNs:                          db.orderedRootDeltaGroupFinalizeNs.Load(),
+		finalizeCalls:                       db.orderedRootDeltaGroupFinalizeCalls.Load(),
 	}
 	if calls > 0 {
 		stats.avgRootsPerCall = float64(roots) / float64(calls)

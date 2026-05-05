@@ -58,6 +58,14 @@ type snapshotView struct {
 	vlogManager *valuelog.Manager
 }
 
+type orderedRootDeltaGroupReadOnlyPrepareWorkerCounters struct {
+	targets    atomic.Uint64
+	ranges     atomic.Uint64
+	minOps     atomic.Uint64
+	maxOps     atomic.Uint64
+	singleSpan atomic.Uint64
+}
+
 type DB struct {
 	valueLogManager                *valuelog.Manager
 	snapshotViewRO                 atomic.Pointer[snapshotView]
@@ -216,6 +224,7 @@ type DB struct {
 	orderedRootDeltaGroupRootApplyReadOnlyPrepareCalls          atomic.Uint64
 	orderedRootDeltaGroupRootApplyReadOnlyPrepareOps            atomic.Uint64
 	orderedRootDeltaGroupRootApplyReadOnlyPrepareLeafSpans      atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareWorker         orderedRootDeltaGroupReadOnlyPrepareWorkerCounters
 	orderedRootDeltaGroupRootApplyReadOnlyPrepareExactPlans     atomic.Uint64
 	orderedRootDeltaGroupRootApplyReadOnlyPrepareMaintenance    atomic.Uint64
 	orderedRootDeltaGroupRootApplyReadOnlyPrepareColdBuilds     atomic.Uint64

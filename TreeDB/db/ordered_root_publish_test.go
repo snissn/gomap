@@ -795,6 +795,11 @@ func TestPublishOrderedRootDeltaGroupWithSystemBuilder_ReportsPublishStats(t *te
 		"treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total",
 		"treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ops_total",
 		"treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_leaf_spans_total",
+		"treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_targets_total",
+		"treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_ranges_total",
+		"treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_range_min_ops_total",
+		"treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_range_max_ops_total",
+		"treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_range_single_span_total",
 		"treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_exact_plans_total",
 		"treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_maintenance_plans_total",
 		"treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_cold_build_plans_total",
@@ -896,6 +901,59 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptionalReadOnl
 	}
 }
 
+func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_ReadOnlyPrepareWorkerRangeStats(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t,
+		"root/a", "va",
+		"root/m", "vm",
+		"root/z", "vz",
+	).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root: %v", err)
+	}
+	delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	for _, key := range []string{"root/b", "root/y"} {
+		if err := delta.Set([]byte(key), []byte("updated")); err != nil {
+			t.Fatalf("set delta %q: %v", key, err)
+		}
+	}
+	defer func() { _ = delta.Close() }()
+
+	_, _, err = db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+		BaseRoot:                   baseRoot,
+		Delta:                      delta,
+		PrepareReadOnly:            true,
+		ReadOnlyPrepareWorkerCount: 4,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish ordered root delta batch group: %v", err)
+	}
+
+	stats := db.Stats()
+	targets := requireUintStat(t, stats, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_targets_total")
+	ranges := requireUintStat(t, stats, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_ranges_total")
+	minOps := requireUintStat(t, stats, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_range_min_ops_total")
+	maxOps := requireUintStat(t, stats, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_range_max_ops_total")
+	singleSpan := requireUintStat(t, stats, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_range_single_span_total")
+	if targets != 4 || ranges == 0 {
+		t.Fatalf("worker targets/ranges=%d/%d want 4/>0", targets, ranges)
+	}
+	if minOps == 0 || maxOps < minOps {
+		t.Fatalf("worker range min/max ops=%d/%d want nonzero ordered values", minOps, maxOps)
+	}
+	if singleSpan > ranges {
+		t.Fatalf("single-span worker ranges=%d exceeds ranges=%d", singleSpan, ranges)
+	}
+}
+
 func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_DefaultReadOnlyPrepareStatsZero(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
@@ -930,6 +988,9 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_DefaultReadOnly
 	}
 	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ops_total"]; got != "0" {
 		t.Fatalf("readonly prepare ops=%q want 0", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_ranges_total"]; got != "0" {
+		t.Fatalf("readonly prepare worker ranges=%q want 0", got)
 	}
 }
 
