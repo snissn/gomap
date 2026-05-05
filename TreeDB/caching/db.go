@@ -25863,6 +25863,9 @@ type debugIterator struct {
 }
 
 type unsafeIteratorView interface {
+	// UnsafeKey and UnsafeValue return views owned by the iterator and valid
+	// only until the iterator moves or closes. Wrappers may return safe Key/Value
+	// copies when the wrapped iterator does not expose unsafe views.
 	UnsafeKey() []byte
 	UnsafeValue() []byte
 }
@@ -26025,14 +26028,14 @@ func (it *concatUnsafeIterator) Value() []byte {
 
 func (it *concatUnsafeIterator) UnsafeKey() []byte {
 	if !it.valid {
-		return nil
+		panic("iterator invalid")
 	}
 	return it.cur.UnsafeKey()
 }
 
 func (it *concatUnsafeIterator) UnsafeValue() []byte {
 	if !it.valid {
-		return nil
+		panic("iterator invalid")
 	}
 	return it.cur.UnsafeValue()
 }
