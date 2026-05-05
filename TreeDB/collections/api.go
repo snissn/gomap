@@ -5965,17 +5965,19 @@ func buildIndexedSemanticEffectiveSecondaryRuns(records []indexedSemanticRecord)
 			}
 			state := states[documentKey]
 			if state == nil {
+				// Unit semantic records are immutable during publish planning; keep
+				// transient references instead of cloning value sets again.
 				states[documentKey] = &indexedSemanticDocumentRootState{
 					documentID:  record.documentID,
-					baseValues:  cloneIndexedSemanticValueSet(delta.oldValues),
-					finalValues: cloneIndexedSemanticValueSet(delta.newValues),
+					baseValues:  delta.oldValues,
+					finalValues: delta.newValues,
 				}
 				continue
 			}
 			if !indexedSemanticValueSetsEqual(state.finalValues, delta.oldValues) {
 				return nil, 0, false, nil
 			}
-			state.finalValues = cloneIndexedSemanticValueSet(delta.newValues)
+			state.finalValues = delta.newValues
 		}
 	}
 	if len(rootStates) == 0 {
@@ -6034,6 +6036,12 @@ func indexedSemanticValueSetsEqual(left, right [][]byte) bool {
 	if len(left) != len(right) {
 		return false
 	}
+	switch len(left) {
+	case 0:
+		return true
+	case 1:
+		return bytes.Equal(left[0], right[0])
+	}
 	seen := make(map[string]int, len(left))
 	for _, value := range left {
 		seen[string(value)]++
@@ -6049,6 +6057,21 @@ func indexedSemanticValueSetsEqual(left, right [][]byte) bool {
 }
 
 func indexedSemanticValueSetDiff(base, final [][]byte) (deletes, sets [][]byte) {
+	if len(base) == 0 {
+		if len(final) == 0 {
+			return nil, nil
+		}
+		return nil, cloneIndexedSemanticValueSetRefs(final)
+	}
+	if len(final) == 0 {
+		return cloneIndexedSemanticValueSetRefs(base), nil
+	}
+	if len(base) == 1 && len(final) == 1 {
+		if bytes.Equal(base[0], final[0]) {
+			return nil, nil
+		}
+		return cloneIndexedSemanticValueSetRefs(base), cloneIndexedSemanticValueSetRefs(final)
+	}
 	baseCounts := make(map[string]int, len(base))
 	for _, value := range base {
 		baseCounts[string(value)]++
@@ -6074,6 +6097,15 @@ func indexedSemanticValueSetDiff(base, final [][]byte) (deletes, sets [][]byte) 
 		sets = append(sets, value)
 	}
 	return deletes, sets
+}
+
+func cloneIndexedSemanticValueSetRefs(values [][]byte) [][]byte {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([][]byte, len(values))
+	copy(out, values)
+	return out
 }
 
 func collectionRootDeltaPlanStatsFromCollectionRootRuns(collectionName string, runs []collectionRootRun) (collectionRootDeltaPlanStats, error) {
