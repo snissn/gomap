@@ -24,6 +24,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
+	"github.com/snissn/gomap/TreeDB/zipper"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -5678,6 +5679,7 @@ type bufferedRootDeltaBatchSpec struct {
 func buildBufferedRootDeltaBatchPublishInputsFromSpecs(specs []bufferedRootDeltaBatchSpec, rootRuns map[string][]memtable.Table) ([]backenddb.OrderedRootDeltaBatchPublishInput, func(), error) {
 	ordered := make([]backenddb.OrderedRootDeltaBatchPublishInput, len(specs))
 	iterators := make([]iterator.UnsafeIterator, len(specs))
+	readOnlyPrepareResults := bufferedRootDeltaReadOnlyPrepareResults(specs)
 	cleanup := func() {
 		for idx := range ordered {
 			if ordered[idx].Delta != nil {
@@ -5698,6 +5700,7 @@ func buildBufferedRootDeltaBatchPublishInputsFromSpecs(specs []bufferedRootDelta
 				return nil, func() {}, err
 			}
 		}
+		attachBufferedRootDeltaReadOnlyPrepareResults(specs, ordered, readOnlyPrepareResults)
 		return ordered, cleanup, nil
 	}
 
@@ -5715,6 +5718,7 @@ func buildBufferedRootDeltaBatchPublishInputsFromSpecs(specs []bufferedRootDelta
 				return nil, func() {}, err
 			}
 		}
+		attachBufferedRootDeltaReadOnlyPrepareResults(specs, ordered, readOnlyPrepareResults)
 		return ordered, cleanup, nil
 	}
 	errs := make([]error, len(specs))
@@ -5740,7 +5744,28 @@ func buildBufferedRootDeltaBatchPublishInputsFromSpecs(specs []bufferedRootDelta
 			return nil, func() {}, err
 		}
 	}
+	attachBufferedRootDeltaReadOnlyPrepareResults(specs, ordered, readOnlyPrepareResults)
 	return ordered, cleanup, nil
+}
+
+func bufferedRootDeltaReadOnlyPrepareResults(specs []bufferedRootDeltaBatchSpec) []zipper.ReadOnlyPrepareResult {
+	for i := range specs {
+		if specs[i].prepareReadOnly {
+			return make([]zipper.ReadOnlyPrepareResult, len(specs))
+		}
+	}
+	return nil
+}
+
+func attachBufferedRootDeltaReadOnlyPrepareResults(specs []bufferedRootDeltaBatchSpec, ordered []backenddb.OrderedRootDeltaBatchPublishInput, results []zipper.ReadOnlyPrepareResult) {
+	if len(results) == 0 {
+		return
+	}
+	for i := range specs {
+		if specs[i].prepareReadOnly {
+			ordered[i].ReadOnlyPrepareResult = &results[i]
+		}
+	}
 }
 
 func buildBufferedRootDeltaBatchPublishInput(spec bufferedRootDeltaBatchSpec, rootRuns map[string][]memtable.Table, ordered *backenddb.OrderedRootDeltaBatchPublishInput, iterOut *iterator.UnsafeIterator) error {
