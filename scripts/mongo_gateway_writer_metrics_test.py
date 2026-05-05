@@ -97,6 +97,14 @@ class WriterMetricsTests(unittest.TestCase):
                             "coalesced_batch_units/batch": 2,
                             "coalesced_batch_docs/batch": 50,
                             "coalesced_batch_bytes/batch": 4096,
+                            "read_only_prepare_calls/doc": 0.1,
+                            "read_only_prepare_ns/doc": 25,
+                            "read_only_prepare_ns/plan": 250,
+                            "read_only_prepare_ops/doc": 3,
+                            "read_only_prepare_leaf_spans/plan": 6,
+                            "read_only_prepare_worker_targets/plan": 4,
+                            "read_only_prepare_worker_ranges/plan": 3,
+                            "read_only_prepare_worker_max_ops/plan": 512,
                             "raw_root_delta_entries/doc": 6,
                             "raw_primary_root_delta_entries/doc": 2,
                             "raw_primary_root_delta_tombstones/doc": 0.1,
@@ -138,6 +146,9 @@ class WriterMetricsTests(unittest.TestCase):
                             "treedb.collections.write_domain.coalesced_flush_batch.net_zero_batches_total": "0",
                             "treedb.collections.write_domain.primary_only.duplicate_ids_coalesced_total": "6",
                             "treedb.collections.write_domain.primary_only.drains_total": "2",
+                            "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total": "10",
+                            "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_targets_total": "40",
+                            "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_ranges_total": "30",
                         },
                     }],
                 }),
@@ -163,6 +174,14 @@ class WriterMetricsTests(unittest.TestCase):
             self.assertEqual(rows[0]["drain_coalesced_flush_batches_total"], "1")
             self.assertEqual(rows[0]["drain_primary_only_drains_total"], "0")
             self.assertEqual(rows[0]["coalesced_batch_units_per_batch"], "2")
+            self.assertEqual(rows[0]["read_only_prepare_calls_per_doc"], "0.1")
+            self.assertEqual(rows[0]["read_only_prepare_ns_per_doc"], "25")
+            self.assertEqual(rows[0]["read_only_prepare_ns_per_plan"], "250")
+            self.assertEqual(rows[0]["read_only_prepare_ops_per_doc"], "3")
+            self.assertEqual(rows[0]["read_only_prepare_leaf_spans_per_plan"], "6")
+            self.assertEqual(rows[0]["read_only_prepare_worker_targets_per_plan"], "4")
+            self.assertEqual(rows[0]["read_only_prepare_worker_ranges_per_plan"], "3")
+            self.assertEqual(rows[0]["read_only_prepare_worker_max_ops_per_plan"], "512")
             self.assertEqual(rows[0]["raw_root_delta_entries_per_doc"], "6")
             self.assertEqual(rows[0]["raw_primary_root_delta_entries_per_doc"], "2")
             self.assertEqual(rows[0]["raw_primary_root_delta_tombstones_per_doc"], "0.1")
@@ -178,6 +197,9 @@ class WriterMetricsTests(unittest.TestCase):
             self.assertEqual(rows[0]["net_zero_root_batches_per_doc"], "0")
             self.assertEqual(rows[0]["backpressure_sync_total"], huge)
             self.assertEqual(rows[0]["root_mismatch_total"], "")
+            self.assertEqual(rows[0]["read_only_prepare_calls_total"], "10")
+            self.assertEqual(rows[0]["read_only_prepare_worker_targets_total"], "40")
+            self.assertEqual(rows[0]["read_only_prepare_worker_ranges_total"], "30")
             self.assertEqual(rows[0]["root_delta_plan_raw_unit_primary_entries_total"], huge)
             self.assertEqual(rows[0]["root_delta_plan_raw_unit_secondary_entries_total"], "11")
             self.assertEqual(rows[0]["root_delta_plan_final_primary_entries_total"], "7")

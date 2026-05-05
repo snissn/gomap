@@ -23,6 +23,14 @@ COLUMNS = [
     "publish_delta_group_calls_per_doc",
     "root_apply_calls_per_doc",
     "roots_per_publish",
+    "read_only_prepare_calls_per_doc",
+    "read_only_prepare_ns_per_doc",
+    "read_only_prepare_ns_per_plan",
+    "read_only_prepare_ops_per_doc",
+    "read_only_prepare_leaf_spans_per_plan",
+    "read_only_prepare_worker_targets_per_plan",
+    "read_only_prepare_worker_ranges_per_plan",
+    "read_only_prepare_worker_max_ops_per_plan",
     "primary_root_publishes_per_doc",
     "primary_root_delta_entries_per_doc",
     "primary_root_delta_bytes_per_doc",
@@ -74,6 +82,9 @@ COLUMNS = [
     "leaf_log_write_bytes_per_doc",
     "backpressure_sync_total",
     "root_mismatch_total",
+    "read_only_prepare_calls_total",
+    "read_only_prepare_worker_targets_total",
+    "read_only_prepare_worker_ranges_total",
     "root_delta_plan_raw_unit_primary_entries_total",
     "root_delta_plan_raw_unit_secondary_entries_total",
     "root_delta_plan_final_primary_entries_total",
@@ -89,6 +100,14 @@ METRIC_COLUMNS = {
     "publish_delta_group_calls_per_doc": "publish_delta_group_calls/doc",
     "root_apply_calls_per_doc": "root_apply_calls/doc",
     "roots_per_publish": "roots/publish",
+    "read_only_prepare_calls_per_doc": "read_only_prepare_calls/doc",
+    "read_only_prepare_ns_per_doc": "read_only_prepare_ns/doc",
+    "read_only_prepare_ns_per_plan": "read_only_prepare_ns/plan",
+    "read_only_prepare_ops_per_doc": "read_only_prepare_ops/doc",
+    "read_only_prepare_leaf_spans_per_plan": "read_only_prepare_leaf_spans/plan",
+    "read_only_prepare_worker_targets_per_plan": "read_only_prepare_worker_targets/plan",
+    "read_only_prepare_worker_ranges_per_plan": "read_only_prepare_worker_ranges/plan",
+    "read_only_prepare_worker_max_ops_per_plan": "read_only_prepare_worker_max_ops/plan",
     "primary_root_publishes_per_doc": "primary_root_publishes/doc",
     "primary_root_delta_entries_per_doc": "primary_root_delta_entries/doc",
     "primary_root_delta_bytes_per_doc": "primary_root_delta_bytes/doc",
@@ -272,6 +291,15 @@ def write_writer_metrics(out_dir, matrix_path, writer_metrics_path):
                         "treedb.collections.write_domain.indexed_flush.root_base_mismatch_total",
                         "treedb.collections.write_domain.coordinator_requeue_on_mismatch_total",
                     ], "root_mismatch_total")
+                    out["read_only_prepare_calls_total"] = delta_count(delta, [
+                        "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total",
+                    ], "read_only_prepare_calls_total")
+                    out["read_only_prepare_worker_targets_total"] = delta_count(delta, [
+                        "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_targets_total",
+                    ], "read_only_prepare_worker_targets_total")
+                    out["read_only_prepare_worker_ranges_total"] = delta_count(delta, [
+                        "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_ranges_total",
+                    ], "read_only_prepare_worker_ranges_total")
                     out["root_delta_plan_raw_unit_primary_entries_total"] = delta_count(delta, [
                         "treedb.collections.write_domain.root_delta_plan.raw_unit.primary.entries_total",
                     ], "root_delta_plan_raw_unit_primary_entries_total")
