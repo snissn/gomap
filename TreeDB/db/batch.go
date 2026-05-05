@@ -230,7 +230,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		if freeErr != nil {
 			return false, freeErr
 		}
-		if errors.Is(guardErr, errInstallGuardMismatch) {
+		if errors.Is(guardErr, ErrInstallGuardMismatch) {
 			return false, nil
 		}
 		return false, guardErr

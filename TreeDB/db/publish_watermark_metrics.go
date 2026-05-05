@@ -278,12 +278,16 @@ func orderedRootDeltaGroupMetricUint(v int) uint64 {
 	return uint64(v)
 }
 
-func orderedRootDeltaGroupPhaseDurationNs(start time.Time) uint64 {
+func elapsedDurationNs(start time.Time) uint64 {
 	elapsed := time.Since(start)
 	if elapsed <= 0 {
 		return 0
 	}
 	return uint64(elapsed.Nanoseconds())
+}
+
+func orderedRootDeltaGroupPhaseDurationNs(start time.Time) uint64 {
+	return elapsedDurationNs(start)
 }
 
 func (db *DB) observeOrderedRootDeltaGroupPublish(wait, hold time.Duration, roots int, phases orderedRootDeltaGroupPublishPhaseStats, err error) {

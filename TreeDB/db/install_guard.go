@@ -6,7 +6,9 @@ import (
 	"time"
 )
 
-var errInstallGuardMismatch = errors.New("treedb: install guard mismatch")
+// ErrInstallGuardMismatch marks a guarded install whose captured root state no
+// longer matches the DB's current roots. Callers can retry after replanning.
+var ErrInstallGuardMismatch = errors.New("treedb: install guard mismatch")
 
 type dbInstallGuardKind string
 
@@ -74,7 +76,7 @@ func (db *DB) runInstallGuard(guard dbInstallGuard) (uint64, error) {
 	if err == nil {
 		err = db.checkInstallGuard(guard)
 	}
-	elapsed := orderedRootDeltaGroupPhaseDurationNs(start)
+	elapsed := elapsedDurationNs(start)
 	if db != nil {
 		db.publishInstallGuardCalls.Add(1)
 		db.publishInstallGuardNs.Add(elapsed)
@@ -94,10 +96,10 @@ func (db *DB) checkInstallGuard(guard dbInstallGuard) error {
 	currentSystemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 	if guard.checkUserRoot && currentUserRoot != guard.userRoot {
-		return fmt.Errorf("%w: user root changed from %d to %d", errInstallGuardMismatch, guard.userRoot, currentUserRoot)
+		return fmt.Errorf("%w: user root changed from %d to %d", ErrInstallGuardMismatch, guard.userRoot, currentUserRoot)
 	}
 	if guard.checkSystemRoot && currentSystemRoot != guard.systemRoot {
-		return fmt.Errorf("%w: system root changed from %d to %d", errInstallGuardMismatch, guard.systemRoot, currentSystemRoot)
+		return fmt.Errorf("%w: system root changed from %d to %d", ErrInstallGuardMismatch, guard.systemRoot, currentSystemRoot)
 	}
 	return nil
 }

@@ -49,7 +49,7 @@ func TestRawBatchInstallGuardMismatchFreesTrackedPagesAndSkipsRetire(t *testing.
 			return nil
 		}
 		hookCalls++
-		return errInstallGuardMismatch
+		return ErrInstallGuardMismatch
 	}
 	committed, err := b.writeOptimistic(false)
 	db.testInstallGuardHook = nil
@@ -117,7 +117,7 @@ func TestOrderedRootDeltaBatchGroupInstallGuardFailureAbandonsGroup(t *testing.T
 			return nil
 		}
 		hookCalls++
-		return errInstallGuardMismatch
+		return ErrInstallGuardMismatch
 	}
 	_, _, err = db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
 		BaseRoot: baseRoot,
@@ -128,7 +128,7 @@ func TestOrderedRootDeltaBatchGroupInstallGuardFailureAbandonsGroup(t *testing.T
 		return mustFrozenSystemMemtable(t, "sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
 	})
 	db.testInstallGuardHook = nil
-	if !errors.Is(err, errInstallGuardMismatch) {
+	if !errors.Is(err, ErrInstallGuardMismatch) {
 		t.Fatalf("publish err=%v want install guard mismatch", err)
 	}
 	if hookCalls != 1 {
