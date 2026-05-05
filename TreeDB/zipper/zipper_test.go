@@ -718,6 +718,28 @@ func TestReadOnlyPrepareResultValidateLeafSpansRejectsInvalidPlans(t *testing.T)
 	}
 }
 
+func TestReadOnlyPrepareResultValidateLeafSpansFormatsKeysSafely(t *testing.T) {
+	longKey := []byte("0123456789abcdef")
+	prepared := ReadOnlyPrepareResult{
+		Ops: 1,
+		LeafSpans: []ReadOnlyLeafSpan{
+			{FirstOpKey: longKey, LastOpKey: []byte("0"), OpCount: 1},
+		},
+	}
+
+	err := prepared.ValidateLeafSpans()
+	if err == nil {
+		t.Fatal("ValidateLeafSpans returned nil, want key-order error")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, string(longKey)) {
+		t.Fatalf("error leaked full raw key %q: %s", longKey, msg)
+	}
+	if !strings.Contains(msg, "len=16") || !strings.Contains(msg, "hex_prefix=3031323334353637") {
+		t.Fatalf("error missing safe key summary: %s", msg)
+	}
+}
+
 func TestReadOnlyPrepareResultValidateLeafSpansAcceptsOpenBounds(t *testing.T) {
 	prepared := ReadOnlyPrepareResult{
 		Ops:            3,

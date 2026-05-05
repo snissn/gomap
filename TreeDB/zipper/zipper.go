@@ -1240,19 +1240,19 @@ func (r ReadOnlyPrepareResult) ValidateLeafSpans() error {
 			return fmt.Errorf("zipper: read-only leaf span %d has empty last op key", i)
 		}
 		if bytes.Compare(span.FirstOpKey, span.LastOpKey) > 0 {
-			return fmt.Errorf("zipper: read-only leaf span %d first op key %q is after last op key %q", i, span.FirstOpKey, span.LastOpKey)
+			return fmt.Errorf("zipper: read-only leaf span %d first op key %s is after last op key %s", i, readOnlyPrepareKeyForError(span.FirstOpKey), readOnlyPrepareKeyForError(span.LastOpKey))
 		}
 		if prevLastOp != nil && bytes.Compare(prevLastOp, span.FirstOpKey) >= 0 {
-			return fmt.Errorf("zipper: read-only leaf span %d first op key %q is not after previous last op key %q", i, span.FirstOpKey, prevLastOp)
+			return fmt.Errorf("zipper: read-only leaf span %d first op key %s is not after previous last op key %s", i, readOnlyPrepareKeyForError(span.FirstOpKey), readOnlyPrepareKeyForError(prevLastOp))
 		}
 		if span.LowKey != nil && span.HighKey != nil && bytes.Compare(span.LowKey, span.HighKey) >= 0 {
-			return fmt.Errorf("zipper: read-only leaf span %d low key %q is not before high key %q", i, span.LowKey, span.HighKey)
+			return fmt.Errorf("zipper: read-only leaf span %d low key %s is not before high key %s", i, readOnlyPrepareKeyForError(span.LowKey), readOnlyPrepareKeyForError(span.HighKey))
 		}
 		if span.LowKey != nil && bytes.Compare(span.FirstOpKey, span.LowKey) < 0 {
-			return fmt.Errorf("zipper: read-only leaf span %d first op key %q is before low key %q", i, span.FirstOpKey, span.LowKey)
+			return fmt.Errorf("zipper: read-only leaf span %d first op key %s is before low key %s", i, readOnlyPrepareKeyForError(span.FirstOpKey), readOnlyPrepareKeyForError(span.LowKey))
 		}
 		if span.HighKey != nil && bytes.Compare(span.LastOpKey, span.HighKey) >= 0 {
-			return fmt.Errorf("zipper: read-only leaf span %d last op key %q is not before high key %q", i, span.LastOpKey, span.HighKey)
+			return fmt.Errorf("zipper: read-only leaf span %d last op key %s is not before high key %s", i, readOnlyPrepareKeyForError(span.LastOpKey), readOnlyPrepareKeyForError(span.HighKey))
 		}
 		totalOps += span.OpCount
 		prevLastOp = span.LastOpKey
@@ -1261,6 +1261,17 @@ func (r ReadOnlyPrepareResult) ValidateLeafSpans() error {
 		return fmt.Errorf("zipper: read-only leaf spans cover %d ops, want %d", totalOps, r.Ops)
 	}
 	return nil
+}
+
+func readOnlyPrepareKeyForError(key []byte) string {
+	const maxPrefix = 8
+	if key == nil {
+		return "nil"
+	}
+	if len(key) <= maxPrefix {
+		return fmt.Sprintf("len=%d hex=%x", len(key), key)
+	}
+	return fmt.Sprintf("len=%d hex_prefix=%x", len(key), key[:maxPrefix])
 }
 
 func (r *ReadOnlyPrepareResult) cloneKey(src []byte) []byte {
