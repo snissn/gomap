@@ -52,17 +52,18 @@ type orderedRootPublishStats struct {
 }
 
 type orderedRootPublishOptions struct {
-	maxWarmDeltaOps          int
-	leafPrefixCompression    bool
-	leafColumnar             bool
-	packedValuePtr           bool
-	internalBaseDelta        bool
-	outerLeavesInValueLog    bool
-	leafPageLog              bulk.LeafPageAppender
-	applyOptions             zipper.ApplyOptions
-	readOnlyPrepareSummary   *zipper.ReadOnlyLeafSpanSummary
-	readOnlyPrepareNs        *uint64
-	readOnlyPrepareAttempted *bool
+	maxWarmDeltaOps             int
+	leafPrefixCompression       bool
+	leafColumnar                bool
+	packedValuePtr              bool
+	internalBaseDelta           bool
+	outerLeavesInValueLog       bool
+	leafPageLog                 bulk.LeafPageAppender
+	applyOptions                zipper.ApplyOptions
+	readOnlyPrepareSummary      *zipper.ReadOnlyLeafSpanSummary
+	readOnlyPrepareCallerResult *zipper.ReadOnlyPrepareResult
+	readOnlyPrepareNs           *uint64
+	readOnlyPrepareAttempted    *bool
 }
 
 type orderedRootDeltaBatchGroupApplyResult struct {
@@ -168,6 +169,11 @@ type OrderedRootDeltaBatchPublishInput struct {
 	// root apply and records planning stats. It is observability/planning only;
 	// it does not change publish output or enable parallel leaf execution.
 	PrepareReadOnly bool
+	// ReadOnlyPrepareResult, when non-nil, is both the reuse source and output
+	// destination for this root's optional preparation metadata. It must be
+	// owned by this input within the group; sharing one result pointer across
+	// group inputs is rejected. It is ignored unless PrepareReadOnly is true.
+	ReadOnlyPrepareResult *zipper.ReadOnlyPrepareResult
 }
 
 func closeUnconsumedOrderedRootPublishIterators(ordered []OrderedRootPublishInput, consumed []bool) {
@@ -692,6 +698,9 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 		summary := readOnlyPrepare.LeafSpanSummary()
 		*opts.readOnlyPrepareSummary = summary
 	}
+	if opts.readOnlyPrepareCallerResult != nil {
+		*opts.readOnlyPrepareCallerResult = readOnlyPrepare
+	}
 	if opts.readOnlyPrepareNs != nil {
 		*opts.readOnlyPrepareNs = readOnlyPrepareNs
 	}
@@ -802,6 +811,9 @@ func runOrderedRootReadOnlyPrepare(rootZipper *zipper.Zipper, baseRoot uint64, d
 	if opts.readOnlyPrepareSummary != nil {
 		summary := prepared.LeafSpanSummary()
 		*opts.readOnlyPrepareSummary = summary
+	}
+	if opts.readOnlyPrepareCallerResult != nil {
+		*opts.readOnlyPrepareCallerResult = prepared
 	}
 	if opts.readOnlyPrepareNs != nil {
 		*opts.readOnlyPrepareNs = prepareNs
@@ -1544,8 +1556,34 @@ func orderedRootDeltaBatchGroupParallelApplyEligible(ordered []OrderedRootDeltaB
 	return parallelActive >= orderedRootDeltaBatchGroupParallelApplyMinRoots
 }
 
+func validateOrderedRootReadOnlyPrepareResultOwnership(ordered []OrderedRootDeltaBatchPublishInput) error {
+	// Keep this validation allocation-free. Ordered root groups are expected to
+	// be small, and the read-only prepare reuse path is allocation-sensitive.
+	for idx := range ordered {
+		result := ordered[idx].ReadOnlyPrepareResult
+		if !ordered[idx].PrepareReadOnly || result == nil {
+			continue
+		}
+		for otherIdx := idx + 1; otherIdx < len(ordered); otherIdx++ {
+			if ordered[otherIdx].PrepareReadOnly && ordered[otherIdx].ReadOnlyPrepareResult == result {
+				return errors.New("ordered root read-only prepare result reused by multiple inputs")
+			}
+		}
+	}
+	return nil
+}
+
 func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []OrderedRootDeltaBatchPublishInput, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator, includeOutputSnapshot bool) ([]orderedRootDeltaBatchGroupApplyResult, bool) {
 	results := make([]orderedRootDeltaBatchGroupApplyResult, len(ordered))
+	if err := validateOrderedRootReadOnlyPrepareResultOwnership(ordered); err != nil {
+		if len(results) > 0 {
+			// recordOrderedRootDeltaBatchGroupApplyResults uses attempted to find
+			// terminal per-input errors. No root apply metrics are recorded for
+			// errored results.
+			results[0] = orderedRootDeltaBatchGroupApplyResult{idx: 0, err: err, attempted: true}
+		}
+		return results, false
+	}
 	var outputID preparedOutputID
 	var outputTracker *allocTracker
 	if tracker, ok := alloc.(*allocTracker); ok {
@@ -1578,7 +1616,11 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 		}
 		if ordered[orderedIdx].PrepareReadOnly {
 			opts.applyOptions.PrepareReadOnly = true
+			if resultOut := ordered[orderedIdx].ReadOnlyPrepareResult; resultOut != nil {
+				opts.applyOptions.ReadOnlyPrepare = resultOut.ReuseOptions()
+			}
 			opts.readOnlyPrepareSummary = &result.readOnlyPrepareSummary
+			opts.readOnlyPrepareCallerResult = ordered[orderedIdx].ReadOnlyPrepareResult
 			opts.readOnlyPrepareNs = &result.readOnlyPrepareNs
 			opts.readOnlyPrepareAttempted = &result.readOnlyPrepareAttempted
 		}

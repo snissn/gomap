@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
 type closeCountingUnsafeIterator struct {
@@ -975,7 +977,6 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_ReadOnlyPrepare
 	if err != nil {
 		t.Fatalf("publish maintenance ordered root delta batch group: %v", err)
 	}
-
 	stats := db.Stats()
 	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total"]; got != "2" {
 		t.Fatalf("readonly prepare calls=%q want 2", got)
@@ -985,6 +986,132 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_ReadOnlyPrepare
 	}
 	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_maintenance_plans_total"]; got != "1" {
 		t.Fatalf("readonly prepare maintenance plans=%q want 1", got)
+	}
+}
+
+func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_ReadOnlyPrepareResultReuse(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t,
+		"root/a", "va",
+		"root/m", "vm",
+		"root/z", "vz",
+	).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root: %v", err)
+	}
+
+	first := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := first.Set([]byte("root/b"), []byte("vb")); err != nil {
+		t.Fatalf("set first delta: %v", err)
+	}
+	defer func() { _ = first.Close() }()
+
+	second := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := second.Set([]byte("root/y"), []byte("vy")); err != nil {
+		t.Fatalf("set second delta: %v", err)
+	}
+	defer func() { _ = second.Close() }()
+
+	var prepared zipper.ReadOnlyPrepareResult
+	publish := func(delta *batch.Batch) uint64 {
+		t.Helper()
+		_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+			BaseRoot:              baseRoot,
+			Delta:                 delta,
+			PrepareReadOnly:       true,
+			ReadOnlyPrepareResult: &prepared,
+		}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return mustFrozenSystemMemtable(t, "sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+		})
+		if err != nil {
+			t.Fatalf("publish ordered root delta batch group: %v", err)
+		}
+		if prepared.RootID != baseRoot {
+			t.Fatalf("prepared root=%d want base root %d", prepared.RootID, baseRoot)
+		}
+		if prepared.Ops != 1 || len(prepared.LeafSpans) == 0 {
+			t.Fatalf("prepared ops/spans=%d/%d want 1/>0", prepared.Ops, len(prepared.LeafSpans))
+		}
+		if len(rootIDs) != 1 || rootIDs[0] == 0 {
+			t.Fatalf("rootIDs=%v want one non-zero root", rootIDs)
+		}
+		return rootIDs[0]
+	}
+
+	baseRoot = publish(first)
+	firstSpanCap := cap(prepared.LeafSpans)
+	if firstSpanCap == 0 {
+		t.Fatal("prepared leaf span capacity is zero after first publish")
+	}
+	firstSpan := &prepared.LeafSpans[0]
+	baseRoot = publish(second)
+	if cap(prepared.LeafSpans) < firstSpanCap {
+		t.Fatalf("prepared leaf span capacity shrank from %d to %d", firstSpanCap, cap(prepared.LeafSpans))
+	}
+	if &prepared.LeafSpans[0] != firstSpan {
+		t.Fatal("prepared leaf span backing array was not reused")
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total"]; got != "2" {
+		t.Fatalf("readonly prepare calls=%q want 2", got)
+	}
+}
+
+func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_ReadOnlyPrepareResultRejectsSharedResult(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	baseRootA, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "root/a", "va").NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root A: %v", err)
+	}
+	baseRootB, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "root/b", "vb").NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root B: %v", err)
+	}
+	deltaA := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := deltaA.Set([]byte("root/a"), []byte("next-a")); err != nil {
+		t.Fatalf("set delta A: %v", err)
+	}
+	defer func() { _ = deltaA.Close() }()
+	deltaB := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := deltaB.Set([]byte("root/b"), []byte("next-b")); err != nil {
+		t.Fatalf("set delta B: %v", err)
+	}
+	defer func() { _ = deltaB.Close() }()
+
+	var shared zipper.ReadOnlyPrepareResult
+	_, _, err = db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{
+		{
+			BaseRoot:              baseRootA,
+			Delta:                 deltaA,
+			PrepareReadOnly:       true,
+			ParallelApply:         true,
+			ReadOnlyPrepareResult: &shared,
+		},
+		{
+			BaseRoot:              baseRootB,
+			Delta:                 deltaB,
+			PrepareReadOnly:       true,
+			ParallelApply:         true,
+			ReadOnlyPrepareResult: &shared,
+		},
+	}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "read-only prepare result reused") {
+		t.Fatalf("error=%v want shared read-only prepare result rejection", err)
 	}
 }
 

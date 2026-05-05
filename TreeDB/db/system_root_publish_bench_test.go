@@ -9,6 +9,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
 type benchSingleKVIterator struct {
@@ -170,14 +171,23 @@ func BenchmarkPublishSystemRootIterator_WarmDenseDelta(b *testing.B) {
 }
 
 func BenchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_WarmSingleRoot(b *testing.B) {
-	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, false)
+	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, orderedRootBatchGroupWarmBenchOptions{})
 }
 
 func BenchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_WarmSingleRootReadOnlyPrepare(b *testing.B) {
-	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, true)
+	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, orderedRootBatchGroupWarmBenchOptions{prepareReadOnly: true})
 }
 
-func benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b *testing.B, prepareReadOnly bool) {
+func BenchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_WarmSingleRootReadOnlyPrepareReuse(b *testing.B) {
+	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, orderedRootBatchGroupWarmBenchOptions{prepareReadOnly: true, reusePrepare: true})
+}
+
+type orderedRootBatchGroupWarmBenchOptions struct {
+	prepareReadOnly bool
+	reusePrepare    bool
+}
+
+func benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b *testing.B, benchOpts orderedRootBatchGroupWarmBenchOptions) {
 	dir := b.TempDir()
 	db, err := Open(Options{Dir: dir})
 	if err != nil {
@@ -202,19 +212,17 @@ func benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleR
 
 	ordered := []OrderedRootDeltaBatchPublishInput{{
 		StoragePolicy:   OrderedRootStorageDefault,
-		PrepareReadOnly: prepareReadOnly,
+		PrepareReadOnly: benchOpts.prepareReadOnly,
 	}}
+	var prepared zipper.ReadOnlyPrepareResult
 	systemKey := []byte("sys/collections/users/primary")
 	var systemValueBuf [20]byte
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		delta := left
-		if i&1 == 1 {
-			delta = right
-		}
+	publish := func(delta *batch.Batch) {
 		ordered[0].BaseRoot = baseRoot
 		ordered[0].Delta = delta
+		if benchOpts.prepareReadOnly && benchOpts.reusePrepare {
+			ordered[0].ReadOnlyPrepareResult = &prepared
+		}
 		_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			value := strconv.AppendUint(systemValueBuf[:0], rootIDs[0], 10)
 			return &benchSingleKVIterator{
@@ -227,5 +235,17 @@ func benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleR
 			b.Fatalf("publish batch group: %v", err)
 		}
 		baseRoot = rootIDs[0]
+	}
+	if benchOpts.prepareReadOnly && benchOpts.reusePrepare {
+		publish(left)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		delta := left
+		if i&1 == 1 {
+			delta = right
+		}
+		publish(delta)
 	}
 }
