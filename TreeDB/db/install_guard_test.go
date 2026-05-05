@@ -51,6 +51,7 @@ func TestRawBatchInstallGuardMismatchFreesTrackedPagesAndSkipsRetire(t *testing.
 		hookCalls++
 		return ErrInstallGuardMismatch
 	}
+	t.Cleanup(func() { db.testInstallGuardHook = nil })
 	committed, err := b.writeOptimistic(false)
 	db.testInstallGuardHook = nil
 	if err != nil {
