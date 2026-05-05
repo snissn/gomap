@@ -221,6 +221,12 @@ func TestSnapshotBackendPublishedMissConsistentAcrossReadAPIs(t *testing.T) {
 	if ok {
 		t.Fatal("Has=true, want false")
 	}
+	if _, err := snap.GetEntry([]byte("k")); !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("GetEntry err=%v, want ErrKeyNotFound", err)
+	}
+	if _, err := snap.GetEntryExact([]byte("k")); !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("GetEntryExact err=%v, want ErrKeyNotFound", err)
+	}
 }
 
 func TestSnapshotBackendPublishedReadErrorsPropagate(t *testing.T) {
@@ -241,6 +247,12 @@ func TestSnapshotBackendPublishedReadErrorsPropagate(t *testing.T) {
 	}
 	if _, err := snap.Has([]byte("k")); !errors.Is(err, backenddb.ErrClosed) {
 		t.Fatalf("Has err=%v, want ErrClosed", err)
+	}
+	if _, err := snap.GetEntry([]byte("k")); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("GetEntry err=%v, want ErrClosed", err)
+	}
+	if _, err := snap.GetEntryExact([]byte("k")); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("GetEntryExact err=%v, want ErrClosed", err)
 	}
 }
 
@@ -300,6 +312,13 @@ func TestSnapshotGetAppendBackendPublishedHitViaInstalledLookup(t *testing.T) {
 	}
 	if string(got) != "prefix:from-published-root" {
 		t.Fatalf("GetAppend value=%q, want prefix:from-published-root", got)
+	}
+	entry, err := snap.GetEntry([]byte("k"))
+	if err != nil {
+		t.Fatalf("GetEntry: %v", err)
+	}
+	if string(entry.Value) != "from-published-root" {
+		t.Fatalf("GetEntry value=%q, want from-published-root", entry.Value)
 	}
 }
 

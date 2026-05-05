@@ -782,7 +782,10 @@ func (s *Snapshot) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 }
 
 func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
-	val, ptr, flags, found := s.lookupQueueEntry(key)
+	snap, val, ptr, flags, found, _, err := s.lookupRootDomainSnapshotEntryWithError(key)
+	if err != nil {
+		return node.LeafEntry{}, err
+	}
 	if found {
 		keyCopy := append([]byte(nil), key...)
 		return node.LeafEntry{
@@ -791,6 +794,9 @@ func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
 			ValuePtr: ptr,
 			Flags:    flags,
 		}, nil
+	}
+	if s.publishedLookupBackedByBackendSnapshot(snap) {
+		return node.LeafEntry{}, tree.ErrKeyNotFound
 	}
 
 	if s == nil || s.backend == nil || s.db == nil {
@@ -803,7 +809,10 @@ func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
 }
 
 func (s *Snapshot) GetEntryExact(key []byte) (node.LeafEntry, error) {
-	val, ptr, flags, found := s.lookupQueueEntry(key)
+	snap, val, ptr, flags, found, _, err := s.lookupRootDomainSnapshotEntryWithError(key)
+	if err != nil {
+		return node.LeafEntry{}, err
+	}
 	if found {
 		keyCopy := append([]byte(nil), key...)
 		return node.LeafEntry{
@@ -812,6 +821,9 @@ func (s *Snapshot) GetEntryExact(key []byte) (node.LeafEntry, error) {
 			ValuePtr: ptr,
 			Flags:    flags,
 		}, nil
+	}
+	if s.publishedLookupBackedByBackendSnapshot(snap) {
+		return node.LeafEntry{}, tree.ErrKeyNotFound
 	}
 
 	if s == nil || s.backend == nil || s.db == nil {
