@@ -636,12 +636,12 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 		return 0, nil, metrics, err
 	}
 	applyResult, err := rootZipper.ApplyWithOptions(baseRoot, delta, zipper.ApplyOptions{})
-	if err != nil {
-		return 0, nil, metrics, err
-	}
 	newRoot = applyResult.RootID
 	retired = applyResult.PendingRetiredPages
 	metrics = applyResult.Metrics
+	if err != nil {
+		return 0, nil, metrics, err
+	}
 	return
 }
 
