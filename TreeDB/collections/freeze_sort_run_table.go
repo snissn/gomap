@@ -31,6 +31,8 @@ type freezeSortRunTable struct {
 	nextSeq     uint64
 }
 
+const freezeSortRunTablePreallocEntryThreshold = 1024
+
 // freezeSortRunTable is a collection-write-domain run table optimized for
 // root-local accumulation: writes append cheaply while mutable, and rotation to
 // an immutable flush unit pays the sort/coalesce cost once.
@@ -101,6 +103,11 @@ func (t *freezeSortRunTable) ApplyStealEntryFunc(count int, emit func(i int) (ke
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if count >= freezeSortRunTablePreallocEntryThreshold && cap(t.entries)-len(t.entries) < count {
+		entries := make([]freezeSortRunEntry, len(t.entries), len(t.entries)+count)
+		copy(entries, t.entries)
+		t.entries = entries
+	}
 	for i := 0; i < count; i++ {
 		key, value, ptr, flags, err := emit(i)
 		if err != nil {

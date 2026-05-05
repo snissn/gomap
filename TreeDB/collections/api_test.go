@@ -609,13 +609,18 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 	if stats.SecondaryKeyBytes == 0 {
 		t.Fatal("stats secondary key bytes=0 want positive")
 	}
-	if stats.CurrentRead != 0 || stats.Callback != 0 || stats.BufferStage != 0 ||
+	if stats.BatchValidate != 0 || stats.BatchClone != 0 ||
+		stats.PlanSetup != 0 || stats.BufferedReadSnapshot != 0 ||
+		stats.CurrentRead != 0 || stats.BSONIDValidation != 0 ||
+		stats.Callback != 0 || stats.ReplacementStage != 0 ||
+		stats.IndexStateCompare != 0 || stats.BufferStage != 0 ||
 		stats.BufferStagePrecheck != 0 ||
 		stats.BufferStageLockWait != 0 || stats.BufferStageLockHold != 0 ||
 		stats.BufferStageValidation != 0 || stats.BufferStageRootScan != 0 ||
 		stats.BufferStageDomainPrepare != 0 ||
 		stats.BufferStagePrimaryIdx != 0 || stats.BufferStageUniqueIdx != 0 ||
-		stats.BufferStageRootAppend != 0 || stats.BufferStageFlush != 0 {
+		stats.BufferStageRootAppend != 0 || stats.BufferStageFlush != 0 ||
+		stats.PlanClose != 0 {
 		t.Fatalf("default update timings=%+v want zero unless detailed stats enabled", stats)
 	}
 
@@ -677,6 +682,16 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 		}
 	}
 	for _, key := range []string{
+		"treedb.collections.write_domain.update_batch.validate_items_ns_total",
+		"treedb.collections.write_domain.update_batch.clone_items_ns_total",
+		"treedb.collections.write_domain.update_batch.plan_setup_ns_total",
+		"treedb.collections.write_domain.update_batch.buffered_read_snapshot_ns_total",
+		"treedb.collections.write_domain.update_batch.bson_id_validation_ns_total",
+		"treedb.collections.write_domain.update_batch.replacement_stage_ns_total",
+		"treedb.collections.write_domain.update_batch.index_state_compare_ns_total",
+		"treedb.collections.write_domain.indexed_flush.preflight_ns_total",
+		"treedb.collections.write_domain.indexed_flush.rotate_ns_total",
+		"treedb.collections.write_domain.indexed_flush.merge_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_precheck_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_lock_wait_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_lock_hold_ns_total",
@@ -687,6 +702,7 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 		"treedb.collections.write_domain.update_batch.buffer_stage_unique_index_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_root_append_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_flush_ns_total",
+		"treedb.collections.write_domain.update_batch.plan_close_ns_total",
 	} {
 		if _, ok := exported[key]; !ok {
 			t.Fatalf("manager stats missing %s: keys=%v", key, exported)
@@ -842,6 +858,13 @@ func TestCollectionUpdateBufferBreakdownStatsSnapshotAndAdd(t *testing.T) {
 		set  func(*CollectionUpdateStats, time.Duration)
 		get  func(CollectionManagerStats) time.Duration
 	}{
+		{"validate_items", "treedb.collections.write_domain.update_batch.validate_items_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BatchValidate = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchValidate }},
+		{"clone_items", "treedb.collections.write_domain.update_batch.clone_items_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BatchClone = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchClone }},
+		{"plan_setup", "treedb.collections.write_domain.update_batch.plan_setup_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.PlanSetup = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchPlanSetup }},
+		{"buffered_read_snapshot", "treedb.collections.write_domain.update_batch.buffered_read_snapshot_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferedReadSnapshot = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferedReadSnapshot }},
+		{"bson_id_validation", "treedb.collections.write_domain.update_batch.bson_id_validation_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BSONIDValidation = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBSONIDValidation }},
+		{"replacement_stage", "treedb.collections.write_domain.update_batch.replacement_stage_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.ReplacementStage = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchReplacementStage }},
+		{"index_state_compare", "treedb.collections.write_domain.update_batch.index_state_compare_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.IndexStateCompare = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchIndexStateCompare }},
 		{"precheck", "treedb.collections.write_domain.update_batch.buffer_stage_precheck_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStagePrecheck = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferPrecheck }},
 		{"lock_wait", "treedb.collections.write_domain.update_batch.buffer_stage_lock_wait_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageLockWait = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferLockWait }},
 		{"lock_hold", "treedb.collections.write_domain.update_batch.buffer_stage_lock_hold_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageLockHold = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferLockHold }},
@@ -851,7 +874,9 @@ func TestCollectionUpdateBufferBreakdownStatsSnapshotAndAdd(t *testing.T) {
 		{"primary_index", "treedb.collections.write_domain.update_batch.buffer_stage_primary_index_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStagePrimaryIdx = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferPrimaryIdx }},
 		{"unique_index", "treedb.collections.write_domain.update_batch.buffer_stage_unique_index_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageUniqueIdx = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferUniqueIdx }},
 		{"root_append", "treedb.collections.write_domain.update_batch.buffer_stage_root_append_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageRootAppend = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferRootAppend }},
+		{"semantic_append", "treedb.collections.write_domain.update_batch.buffer_stage_semantic_append_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageSemanticAppend = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferSemanticAppend }},
 		{"flush", "treedb.collections.write_domain.update_batch.buffer_stage_flush_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageFlush = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferFlush }},
+		{"plan_close", "treedb.collections.write_domain.update_batch.plan_close_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.PlanClose = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchPlanClose }},
 	}
 
 	var updateStats CollectionUpdateStats
@@ -9510,7 +9535,7 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleBuffere
 
 	plan, err := col.buildUpdateBatchPlan([]UpdateBatchItem{
 		{DocumentID: []byte("u1"), Update: setJSONCity("sfo")},
-	}, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+	}, updateBatchModeNoSecondaryUniqueIndexChanges, true, CollectionUpdateStats{})
 	if err != nil {
 		t.Fatalf("build stale plan: %v", err)
 	}
@@ -9562,7 +9587,7 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleZeroDel
 				return current, false, nil
 			},
 		},
-	}, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+	}, updateBatchModeNoSecondaryUniqueIndexChanges, true, CollectionUpdateStats{})
 	if err != nil {
 		t.Fatalf("build stale zero-delta plan: %v", err)
 	}
