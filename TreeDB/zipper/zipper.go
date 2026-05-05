@@ -1044,6 +1044,73 @@ type ApplyResult struct {
 	Metrics             adaptive.Metrics
 }
 
+// ReadOnlyPrepareOptions configures a read-only root preparation pass.
+type ReadOnlyPrepareOptions struct {
+	leafSpans []ReadOnlyLeafSpan
+	keyArena  []byte
+}
+
+// ReadOnlyLeafSpan describes one existing leaf range touched by a sorted delta.
+// It contains only in-memory planning metadata; it does not own prepared pager
+// pages, leaf-log records, or pending retired pages.
+type ReadOnlyLeafSpan struct {
+	Ref page.ChildRef
+
+	LowKey  []byte
+	HighKey []byte
+
+	FirstOpKey []byte
+	LastOpKey  []byte
+	OpCount    int
+}
+
+// ReadOnlyPrepareResult is the read-only portion of a root apply attempt. It is
+// safe to discard on root mismatch because it has not allocated or persisted
+// output pages.
+type ReadOnlyPrepareResult struct {
+	RootID    uint64
+	Ops       int
+	ColdBuild bool
+
+	LeafSpans []ReadOnlyLeafSpan
+	Metrics   adaptive.Metrics
+
+	keyArena []byte
+}
+
+// ReuseOptions returns buffers from r for a later read-only preparation pass.
+// The returned options must not be used while r's LeafSpans are still needed.
+func (r ReadOnlyPrepareResult) ReuseOptions() ReadOnlyPrepareOptions {
+	return ReadOnlyPrepareOptions{
+		leafSpans: r.LeafSpans[:0],
+		keyArena:  r.keyArena[:0],
+	}
+}
+
+func (r *ReadOnlyPrepareResult) cloneKey(src []byte) []byte {
+	if len(src) == 0 {
+		return []byte{}
+	}
+	start := len(r.keyArena)
+	r.keyArena = append(r.keyArena, src...)
+	return r.keyArena[start : start+len(src)]
+}
+
+func (r *ReadOnlyPrepareResult) addLeafSpan(ref page.ChildRef, low, high []byte, ops []batch.Entry) {
+	if len(ops) == 0 {
+		return
+	}
+	span := ReadOnlyLeafSpan{
+		Ref:        ref,
+		LowKey:     r.cloneKey(low),
+		HighKey:    r.cloneKey(high),
+		FirstOpKey: r.cloneKey(ops[0].Key),
+		LastOpKey:  r.cloneKey(ops[len(ops)-1].Key),
+		OpCount:    len(ops),
+	}
+	r.LeafSpans = append(r.LeafSpans, span)
+}
+
 // ApplyWithOptions applies the batch to the tree rooted at rootID and returns
 // a result object suitable for guarded install paths.
 func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptions) (ApplyResult, error) {
@@ -1054,6 +1121,99 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 		PendingRetiredPages: retired,
 		Metrics:             metrics,
 	}, err
+}
+
+// PrepareReadOnly discovers the existing leaf spans touched by b without
+// allocating or writing pager/leaf-log output. It is the safe preparation phase
+// that future prepared-output paths can run before the final install section.
+func (z *Zipper) PrepareReadOnly(rootID uint64, b *batch.Batch, opts ReadOnlyPrepareOptions) (ReadOnlyPrepareResult, error) {
+	result := ReadOnlyPrepareResult{
+		LeafSpans: opts.leafSpans[:0],
+		keyArena:  opts.keyArena[:0],
+	}
+	if b == nil {
+		return result, errors.New("zipper: nil batch")
+	}
+	ops := b.SortedEntries()
+	result.RootID = rootID
+	result.Ops = len(ops)
+	if len(ops) == 0 {
+		return result, nil
+	}
+	if rootID == 0 {
+		result.ColdBuild = true
+		result.addLeafSpan(page.ChildRef{}, nil, nil, ops)
+		return result, nil
+	}
+
+	scratch := z.acquireApplyScratch()
+	defer z.releaseApplyScratch(scratch)
+	err := z.prepareReadOnlyRecursive(page.PageChildRef(rootID), ops, nil, nil, &result, scratch)
+	return result, err
+}
+
+func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, low, high []byte, result *ReadOnlyPrepareResult, scratch *mergeScratch) error {
+	oldNode, _, leafScratch, leafScratchRef, loadSource, err := z.loadNodeRef(ref, scratch)
+	if err != nil {
+		return err
+	}
+	recordZipperNodeLoad(&result.Metrics, ref, oldNode, loadSource)
+	if leafScratchRef {
+		defer releaseLeafPageScratch(scratch, leafScratch)
+	}
+
+	switch oldNode.Type() {
+	case page.PageTypeLeaf, 0:
+		result.addLeafSpan(ref, low, high, ops)
+		return nil
+	case page.PageTypeInternal:
+		count := oldNode.Count()
+		opIdx := 0
+		for i := uint16(0); i < count; i++ {
+			key, childRef, err := oldNode.GetInternalEntryRefView(i)
+			if err != nil {
+				return err
+			}
+			if key == nil {
+				key = []byte{}
+			}
+
+			var endKey []byte
+			if i+1 < count {
+				nextKey, _, err := oldNode.GetInternalEntryRefView(i + 1)
+				if err != nil {
+					return err
+				}
+				if nextKey == nil {
+					nextKey = []byte{}
+				}
+				endKey = nextKey
+			}
+
+			startOpIdx := opIdx
+			for opIdx < len(ops) {
+				if endKey == nil || bytes.Compare(ops[opIdx].Key, endKey) < 0 {
+					opIdx++
+					continue
+				}
+				break
+			}
+			if startOpIdx == opIdx {
+				continue
+			}
+
+			childHigh := high
+			if endKey != nil {
+				childHigh = endKey
+			}
+			if err := z.prepareReadOnlyRecursive(childRef, ops[startOpIdx:opIdx], key, childHigh, result, scratch); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return page.ErrInvalidPageType
+	}
 }
 
 // Apply applies the batch to the tree rooted at rootID.
