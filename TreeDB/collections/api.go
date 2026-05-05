@@ -5881,12 +5881,7 @@ type indexedSemanticDocumentRootState struct {
 }
 
 func buildIndexedSemanticEffectiveSecondaryRuns(records []indexedSemanticRecord) (map[string]memtable.Table, int, bool, error) {
-	type stateKey struct {
-		rootName   string
-		documentID string
-	}
-	states := make(map[stateKey]*indexedSemanticDocumentRootState)
-	roots := make(map[string]struct{})
+	statesByRoot := make(map[string]map[string]*indexedSemanticDocumentRootState)
 	for _, record := range records {
 		if record.kind != indexedSemanticRecordUpdate {
 			return nil, 0, false, nil
@@ -5898,15 +5893,19 @@ func buildIndexedSemanticEffectiveSecondaryRuns(records []indexedSemanticRecord)
 			if delta.rootName == "" {
 				return nil, 0, false, nil
 			}
-			key := stateKey{rootName: delta.rootName, documentID: string(record.documentID)}
-			state := states[key]
+			rootStates := statesByRoot[delta.rootName]
+			if rootStates == nil {
+				rootStates = make(map[string]*indexedSemanticDocumentRootState)
+				statesByRoot[delta.rootName] = rootStates
+			}
+			documentKey := string(record.documentID)
+			state := rootStates[documentKey]
 			if state == nil {
-				states[key] = &indexedSemanticDocumentRootState{
+				rootStates[documentKey] = &indexedSemanticDocumentRootState{
 					documentID:  bytes.Clone(record.documentID),
 					baseValues:  cloneIndexedSemanticValueSet(delta.oldValues),
 					finalValues: cloneIndexedSemanticValueSet(delta.newValues),
 				}
-				roots[delta.rootName] = struct{}{}
 				continue
 			}
 			if !indexedSemanticValueSetsEqual(state.finalValues, delta.oldValues) {
@@ -5915,23 +5914,20 @@ func buildIndexedSemanticEffectiveSecondaryRuns(records []indexedSemanticRecord)
 			state.finalValues = cloneIndexedSemanticValueSet(delta.newValues)
 		}
 	}
-	if len(states) == 0 {
+	if len(statesByRoot) == 0 {
 		return nil, 0, false, nil
 	}
 
-	rootTables := make(map[string]memtable.Table, len(roots))
-	effectiveRecords := 0
-	for rootName := range roots {
+	rootTables := make(map[string]memtable.Table, len(statesByRoot))
+	effectiveDocuments := make(map[string]struct{})
+	for rootName, states := range statesByRoot {
 		table := newCollectionRunTable(0)
-		for key, state := range states {
-			if key.rootName != rootName {
-				continue
-			}
+		for documentKey, state := range states {
 			deletes, sets := indexedSemanticValueSetDiff(state.baseValues, state.finalValues)
 			if len(deletes) == 0 && len(sets) == 0 {
 				continue
 			}
-			effectiveRecords++
+			effectiveDocuments[documentKey] = struct{}{}
 			for _, encoded := range deletes {
 				if _, err := deleteCollectionSecondaryIndexEntry(table, encoded, state.documentID); err != nil {
 					resetCollectionRunTable(table)
@@ -5954,7 +5950,7 @@ func buildIndexedSemanticEffectiveSecondaryRuns(records []indexedSemanticRecord)
 		table.Freeze()
 		rootTables[rootName] = table
 	}
-	return rootTables, effectiveRecords, true, nil
+	return rootTables, len(effectiveDocuments), true, nil
 }
 
 func indexedSemanticValueSetsEqual(left, right [][]byte) bool {
@@ -5976,14 +5972,13 @@ func indexedSemanticValueSetsEqual(left, right [][]byte) bool {
 }
 
 func indexedSemanticValueSetDiff(base, final [][]byte) (deletes, sets [][]byte) {
+	baseCounts := make(map[string]int, len(base))
+	for _, value := range base {
+		baseCounts[string(value)]++
+	}
 	finalCounts := make(map[string]int, len(final))
-	finalValues := make(map[string][]byte, len(final))
 	for _, value := range final {
-		key := string(value)
-		finalCounts[key]++
-		if _, ok := finalValues[key]; !ok {
-			finalValues[key] = value
-		}
+		finalCounts[string(value)]++
 	}
 	for _, value := range base {
 		key := string(value)
@@ -5993,10 +5988,13 @@ func indexedSemanticValueSetDiff(base, final [][]byte) (deletes, sets [][]byte) 
 		}
 		deletes = append(deletes, value)
 	}
-	for key, count := range finalCounts {
-		for i := 0; i < count; i++ {
-			sets = append(sets, finalValues[key])
+	for _, value := range final {
+		key := string(value)
+		if baseCounts[key] > 0 {
+			baseCounts[key]--
+			continue
 		}
+		sets = append(sets, value)
 	}
 	return deletes, sets
 }

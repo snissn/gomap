@@ -484,6 +484,70 @@ func TestPR3bSemanticMixedInsertUpdateFallsBackToMechanicalPublish(t *testing.T)
 	}
 }
 
+func TestPR3bSemanticMultiSecondaryChangeCountsOneEffectiveRecord(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+			{Name: "score", Field: "score", ValueType: IndexValueInt64},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl","score":1}`)},
+	); err != nil {
+		t.Fatalf("insert seed user: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush seed user: %v", err)
+	}
+
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			if !bytes.Contains(current, []byte(`"city":"hnl"`)) {
+				return nil, false, fmt.Errorf("current=%s want city hnl", current)
+			}
+			return []byte(`{"city":"sea","score":2}`), true, nil
+		},
+	}}); err != nil {
+		t.Fatalf("buffer multi-secondary update: %v", err)
+	} else if !batched {
+		t.Fatal("multi-secondary update was not buffered")
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush multi-secondary update: %v", err)
+	}
+
+	pr3bRequireIndexIDs(t, col, "city", "sea", "u1")
+	pr3bRequireIndexIDs(t, col, "score", int64(2), "u1")
+	stats := mgr.StatsSnapshot()
+	if got := stats.IndexedSemanticRawRecords; got != 1 {
+		t.Fatalf("raw semantic records after multi-secondary flush=%d want 1", got)
+	}
+	if got := stats.IndexedSemanticRawIndexDeltas; got != 2 {
+		t.Fatalf("raw semantic index deltas after multi-secondary flush=%d want 2", got)
+	}
+	if got := stats.IndexedSemanticEffectiveRecords; got != 1 {
+		t.Fatalf("effective semantic records after multi-secondary flush=%d want 1", got)
+	}
+}
+
 func TestPR3bSemanticUniqueHandoffFallsBackToMechanicalPath(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
