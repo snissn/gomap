@@ -82,9 +82,9 @@ COLUMNS = [
     "leaf_log_write_bytes_per_doc",
     "backpressure_sync_total",
     "root_mismatch_total",
-    "readonly_prepare_calls_total",
-    "readonly_prepare_worker_targets_total",
-    "readonly_prepare_worker_ranges_total",
+    "read_only_prepare_calls_total",
+    "read_only_prepare_worker_targets_total",
+    "read_only_prepare_worker_ranges_total",
     "root_delta_plan_raw_unit_primary_entries_total",
     "root_delta_plan_raw_unit_secondary_entries_total",
     "root_delta_plan_final_primary_entries_total",
@@ -291,15 +291,15 @@ def write_writer_metrics(out_dir, matrix_path, writer_metrics_path):
                         "treedb.collections.write_domain.indexed_flush.root_base_mismatch_total",
                         "treedb.collections.write_domain.coordinator_requeue_on_mismatch_total",
                     ], "root_mismatch_total")
-                    out["readonly_prepare_calls_total"] = delta_count(delta, [
+                    out["read_only_prepare_calls_total"] = delta_count(delta, [
                         "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total",
-                    ], "readonly_prepare_calls_total")
-                    out["readonly_prepare_worker_targets_total"] = delta_count(delta, [
+                    ], "read_only_prepare_calls_total")
+                    out["read_only_prepare_worker_targets_total"] = delta_count(delta, [
                         "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_targets_total",
-                    ], "readonly_prepare_worker_targets_total")
-                    out["readonly_prepare_worker_ranges_total"] = delta_count(delta, [
+                    ], "read_only_prepare_worker_targets_total")
+                    out["read_only_prepare_worker_ranges_total"] = delta_count(delta, [
                         "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_ranges_total",
-                    ], "readonly_prepare_worker_ranges_total")
+                    ], "read_only_prepare_worker_ranges_total")
                     out["root_delta_plan_raw_unit_primary_entries_total"] = delta_count(delta, [
                         "treedb.collections.write_domain.root_delta_plan.raw_unit.primary.entries_total",
                     ], "root_delta_plan_raw_unit_primary_entries_total")
