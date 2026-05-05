@@ -132,13 +132,17 @@ func (group *preparedRootApplyGroup) setSystemRoot(baseRootID uint64, delta *bat
 	if group == nil {
 		return -1
 	}
-	for i := 0; i < group.applyCount; i++ {
+	group.baseSystemRootID = baseRootID
+	for i := group.applyCount - 1; i >= 0; i-- {
 		apply := group.applyAt(i)
 		if apply != nil && apply.identity.kind == preparedRootIdentitySystem {
 			if apply.prepared {
 				if apply.state != preparedRootApplyStateInstalled {
 					apply.state = preparedRootApplyStateAbandoned
 				}
+				break
+			}
+			if apply.state == preparedRootApplyStateAbandoned {
 				break
 			}
 			*apply = preparedRootApply{

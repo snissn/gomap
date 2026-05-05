@@ -768,9 +768,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.publish.ordered_root_delta_group.install_guard_ns_total"] = fmt.Sprintf("%d", orderedDeltaStats.installGuardNs)
 	stats["treedb.publish.ordered_root_delta_group.install_guard_calls_total"] = fmt.Sprintf("%d", orderedDeltaStats.installGuardCalls)
 	stats["treedb.publish.ordered_root_delta_group.install_guard_failures_total"] = fmt.Sprintf("%d", orderedDeltaStats.installGuardFailures)
-	// prepared_root.* counts prepared root apply attempts, including optimistic
-	// attempts abandoned before retrying through serialized publish. These
-	// counters intentionally are not a strict subset of calls_total/roots_total.
+	// prepared_root.prepare_ns_total includes metadata planning time, including
+	// attempts that fail before any root reaches prepared state. Other
+	// prepared_root.* counters count roots that reached prepared state, including
+	// optimistic attempts abandoned before retrying through serialized publish;
+	// they intentionally are not a strict subset of calls_total/roots_total.
 	stats["treedb.publish.ordered_root_delta_group.prepared_root.prepare_ns_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootPrepareNs)
 	stats["treedb.publish.ordered_root_delta_group.prepared_root.groups_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootGroups)
 	stats["treedb.publish.ordered_root_delta_group.prepared_root.roots_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootRoots)
