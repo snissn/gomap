@@ -2699,11 +2699,13 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 	if domain.table == nil {
 		domain.table = newCollectionRunTable(0)
 	}
-	if _, _, flags, found := domain.table.GetEntry(id); found && flags&node.FlagTombstone == 0 {
+	_, _, flags, found := domain.table.GetEntry(id)
+	pendingTombstone := found && flags&node.FlagTombstone != 0
+	if found && !pendingTombstone {
 		domain.mu.Unlock()
 		return nil, ErrDocumentExists
 	}
-	if domain.primaryRoot != 0 {
+	if !pendingTombstone && domain.primaryRoot != 0 {
 		exists, err := c.persistedDocumentExists(domain.primaryRoot, id)
 		if err != nil {
 			domain.mu.Unlock()
@@ -2716,7 +2718,15 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 	}
 	domain.storagePolicy = plannerOptions.dataStoragePolicy
 	domain.table.SetEntry(id, document, page.ValuePtr{}, node.FlagInline)
-	domain.count++
+	if found {
+		table, err := coalesceNoIndexBufferedTable(domain.table)
+		if err != nil {
+			domain.mu.Unlock()
+			return nil, err
+		}
+		domain.table = table
+	}
+	refreshNoIndexBufferedAccountingLocked(domain)
 	domain.writeGeneration++
 	resultID := bytes.Clone(id)
 	domain.mu.Unlock()
@@ -6552,42 +6562,12 @@ func (c *Collection) insertBatchNoIndexBuffered(
 			return nil, ErrDuplicateDocumentID
 		}
 	}
-	rootName := collectionPrimaryRootName(c.meta.Name)
-	baseRoot := catalog.rootID(rootName)
-	if len(catalog.overlayRootIDs(rootName)) == 0 {
-		if baseRoot != 0 {
-			keys := make([][]byte, len(entries))
-			for i := range entries {
-				keys[i] = entries[i].id
-			}
-			exists, err := snap.HasAnySortedAtRoot(baseRoot, keys)
-			if err != nil {
-				return nil, err
-			}
-			if exists {
-				return nil, ErrDocumentExists
-			}
-		}
-	} else {
-		for i := range entries {
-			entry, _, err := collectionGetEntryAtCatalogRoot(snap, catalog, rootName, entries[i].id)
-			if err == nil {
-				if entry.Flags&node.FlagTombstone == 0 {
-					return nil, ErrDocumentExists
-				}
-				continue
-			}
-			if !errors.Is(err, tree.ErrKeyNotFound) {
-				return nil, err
-			}
-		}
-	}
-	stats.DuplicateDocumentPreflight = time.Since(phaseStart)
-
 	domain := c.writeDomain
 	if domain == nil {
 		return nil, errPrimaryOnlyNoIndexWriteBackNotEligible
 	}
+	rootName := collectionPrimaryRootName(c.meta.Name)
+	baseRoot := catalog.rootID(rootName)
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
 	read := primaryOnlyNoIndexWriteBackRead{
@@ -6606,6 +6586,46 @@ func (c *Collection) insertBatchNoIndexBuffered(
 	if domain.table == nil {
 		domain.table = newCollectionRunTable(0)
 	}
+	var persistedEntries []noIndexBatchEntry
+	for _, entry := range entries {
+		_, _, flags, found := domain.table.GetEntry(entry.id)
+		if found && flags&node.FlagTombstone == 0 {
+			return nil, ErrDocumentExists
+		}
+		if !found {
+			persistedEntries = append(persistedEntries, entry)
+		}
+	}
+	if len(catalog.overlayRootIDs(rootName)) == 0 {
+		if baseRoot != 0 && len(persistedEntries) > 0 {
+			keys := make([][]byte, len(persistedEntries))
+			for i := range persistedEntries {
+				keys[i] = persistedEntries[i].id
+			}
+			exists, err := snap.HasAnySortedAtRoot(baseRoot, keys)
+			if err != nil {
+				return nil, err
+			}
+			if exists {
+				return nil, ErrDocumentExists
+			}
+		}
+	} else {
+		for i := range persistedEntries {
+			entry, _, err := collectionGetEntryAtCatalogRoot(snap, catalog, rootName, persistedEntries[i].id)
+			if err == nil {
+				if entry.Flags&node.FlagTombstone == 0 {
+					return nil, ErrDocumentExists
+				}
+				continue
+			}
+			if !errors.Is(err, tree.ErrKeyNotFound) {
+				return nil, err
+			}
+		}
+	}
+	stats.DuplicateDocumentPreflight = time.Since(phaseStart)
+
 	replaced := false
 	for _, entry := range entries {
 		_, _, flags, found := domain.table.GetEntry(entry.id)

@@ -1264,6 +1264,137 @@ func TestCollectionNoIndexStagedUpdateSurvivesNonBarrierOperations(t *testing.T)
 	}
 }
 
+func TestCollectionNoIndexInsertReusesPendingDeletedIDWithoutPublishing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(t *testing.T, col *Collection)
+	}{
+		{
+			name: "insert-one",
+			run: func(t *testing.T, col *Collection) {
+				t.Helper()
+				if _, err := col.Insert([]byte("u1"), []byte(`{"count":1}`)); err != nil {
+					t.Fatalf("Insert after staged delete: %v", err)
+				}
+			},
+		},
+		{
+			name: "insert-batch",
+			run: func(t *testing.T, col *Collection) {
+				t.Helper()
+				if _, err := col.InsertBatch(
+					[][]byte{[]byte("u1")},
+					[][]byte{[]byte(`{"count":1}`)},
+				); err != nil {
+					t.Fatalf("InsertBatch after staged delete: %v", err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatalf("open db: %v", err)
+			}
+			defer func() { _ = d.Close() }()
+			mgr := NewCollectionManager(d)
+			if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+				t.Fatalf("create collection: %v", err)
+			}
+			col, err := mgr.OpenCollection("users")
+			if err != nil {
+				t.Fatalf("open collection: %v", err)
+			}
+			other, err := NewCollectionManager(d).OpenCollection("users")
+			if err != nil {
+				t.Fatalf("open other collection: %v", err)
+			}
+			if _, err := col.InsertBatch(
+				[][]byte{[]byte("u1"), []byte("u2")},
+				[][]byte{[]byte(`{"count":0}`), []byte(`{"count":0}`)},
+			); err != nil {
+				t.Fatalf("insert seed: %v", err)
+			}
+			if err := col.Flush(); err != nil {
+				t.Fatalf("flush seed: %v", err)
+			}
+			beforeState := d.State()
+			beforeRoot := collectionNoIndexPrimaryRootIDForTest(t, d, "users")
+			if _, _, err := col.Update([]byte("u2"), func(current []byte) ([]byte, bool, error) {
+				if !bytes.Equal(current, []byte(`{"count":0}`)) {
+					return nil, false, fmt.Errorf("stage u2 current=%q want count 0", current)
+				}
+				return []byte(`{"count":2}`), true, nil
+			}); err != nil {
+				t.Fatalf("stage u2 update: %v", err)
+			}
+
+			deleted, err := col.DeleteDocument([]byte("u1"))
+			if err != nil {
+				t.Fatalf("staged delete: %v", err)
+			}
+			if !deleted {
+				t.Fatal("staged delete deleted=false want true")
+			}
+			if got, found, err := col.GetInto([]byte("u1"), nil); err != nil {
+				t.Fatalf("same-manager get after staged delete: %v", err)
+			} else if found {
+				t.Fatalf("same-manager saw staged-deleted u1=%q", got)
+			}
+
+			tc.run(t, col)
+
+			if got := d.State().CommitSeq; got != beforeState.CommitSeq {
+				t.Fatalf("%s advanced commit seq from %d to %d", tc.name, beforeState.CommitSeq, got)
+			}
+			if got := collectionNoIndexPrimaryRootIDForTest(t, d, "users"); got != beforeRoot {
+				t.Fatalf("%s published primary root from %d to %d", tc.name, beforeRoot, got)
+			}
+			if state := collectionNoIndexPendingStateForTest(t, col); state.count != 2 || state.tableLen != 2 {
+				t.Fatalf("%s pending state=%+v want replacement row plus staged u2", tc.name, state)
+			}
+			got, err := col.Get([]byte("u1"))
+			if err != nil {
+				t.Fatalf("same-manager get replacement: %v", err)
+			}
+			if want := []byte(`{"count":1}`); !bytes.Equal(got, want) {
+				t.Fatalf("same-manager replacement=%q want %q", got, want)
+			}
+			got, err = other.Get([]byte("u1"))
+			if err != nil {
+				t.Fatalf("other-manager get before flush: %v", err)
+			}
+			if want := []byte(`{"count":0}`); !bytes.Equal(got, want) {
+				t.Fatalf("other-manager before flush=%q want %q", got, want)
+			}
+			got, err = other.Get([]byte("u2"))
+			if err != nil {
+				t.Fatalf("other-manager get u2 before flush: %v", err)
+			}
+			if want := []byte(`{"count":0}`); !bytes.Equal(got, want) {
+				t.Fatalf("other-manager u2 before flush=%q want %q", got, want)
+			}
+			if err := col.Flush(); err != nil {
+				t.Fatalf("flush replacement: %v", err)
+			}
+			got, err = other.Get([]byte("u1"))
+			if err != nil {
+				t.Fatalf("other-manager get after flush: %v", err)
+			}
+			if want := []byte(`{"count":1}`); !bytes.Equal(got, want) {
+				t.Fatalf("other-manager after flush=%q want %q", got, want)
+			}
+			got, err = other.Get([]byte("u2"))
+			if err != nil {
+				t.Fatalf("other-manager get u2 after flush: %v", err)
+			}
+			if want := []byte(`{"count":2}`); !bytes.Equal(got, want) {
+				t.Fatalf("other-manager u2 after flush=%q want %q", got, want)
+			}
+		})
+	}
+}
+
 type collectionNoIndexPendingState struct {
 	count             int
 	tableLen          int
