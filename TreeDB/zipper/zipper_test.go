@@ -688,6 +688,36 @@ func TestReadOnlyPrepareResultValidateLeafSpansRejectsInvalidPlans(t *testing.T)
 			},
 		},
 		{
+			name: "second span open low bound",
+			in: ReadOnlyPrepareResult{
+				Ops: 2,
+				LeafSpans: []ReadOnlyLeafSpan{
+					{HighKey: []byte("m"), FirstOpKey: []byte("a"), LastOpKey: []byte("b"), OpCount: 1},
+					{FirstOpKey: []byte("n"), LastOpKey: []byte("n"), OpCount: 1},
+				},
+			},
+		},
+		{
+			name: "non-final open high bound",
+			in: ReadOnlyPrepareResult{
+				Ops: 2,
+				LeafSpans: []ReadOnlyLeafSpan{
+					{FirstOpKey: []byte("a"), LastOpKey: []byte("b"), OpCount: 1},
+					{LowKey: []byte("m"), FirstOpKey: []byte("n"), LastOpKey: []byte("n"), OpCount: 1},
+				},
+			},
+		},
+		{
+			name: "overlapping bounds",
+			in: ReadOnlyPrepareResult{
+				Ops: 2,
+				LeafSpans: []ReadOnlyLeafSpan{
+					{HighKey: []byte("m"), FirstOpKey: []byte("a"), LastOpKey: []byte("b"), OpCount: 1},
+					{LowKey: []byte("c"), FirstOpKey: []byte("d"), LastOpKey: []byte("d"), OpCount: 1},
+				},
+			},
+		},
+		{
 			name: "op before low bound",
 			in: ReadOnlyPrepareResult{
 				Ops:       1,
