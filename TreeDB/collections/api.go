@@ -4239,23 +4239,25 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		return bufferedIndexedCheckpoint{}
 	}
 	return bufferedIndexedCheckpoint{
-		loaded:                 domain.loaded,
-		meta:                   domain.meta,
-		catalog:                domain.catalog,
-		baseCommitSeq:          domain.baseCommitSeq,
-		baseSystemRoot:         domain.baseSystemRoot,
-		primaryRoot:            domain.primaryRoot,
-		count:                  domain.count,
-		bufferedBytes:          domain.bufferedBytes,
-		mutableCount:           domain.mutableCount,
-		mutableBytes:           domain.mutableBytes,
-		writeGeneration:        domain.writeGeneration,
-		rootRuns:               cloneTableRunMap(domain.rootRuns),
-		rootMutableRuns:        cloneMutableRunMap(domain.rootMutableRuns),
-		rootPolicies:           cloneRootPolicyMap(domain.rootPolicies),
-		rootBaseIDs:            cloneUint64Map(domain.rootBaseIDs),
-		rootValueArenas:        cloneArenaRefs(domain.rootValueArenas),
-		indexedSemanticRecords: cloneIndexedSemanticRecords(domain.indexedSemanticRecords),
+		loaded:          domain.loaded,
+		meta:            domain.meta,
+		catalog:         domain.catalog,
+		baseCommitSeq:   domain.baseCommitSeq,
+		baseSystemRoot:  domain.baseSystemRoot,
+		primaryRoot:     domain.primaryRoot,
+		count:           domain.count,
+		bufferedBytes:   domain.bufferedBytes,
+		mutableCount:    domain.mutableCount,
+		mutableBytes:    domain.mutableBytes,
+		writeGeneration: domain.writeGeneration,
+		rootRuns:        cloneTableRunMap(domain.rootRuns),
+		rootMutableRuns: cloneMutableRunMap(domain.rootMutableRuns),
+		rootPolicies:    cloneRootPolicyMap(domain.rootPolicies),
+		rootBaseIDs:     cloneUint64Map(domain.rootBaseIDs),
+		rootValueArenas: cloneArenaRefs(domain.rootValueArenas),
+		// Semantic records are immutable after staging. Rollback only needs to
+		// restore the previous mutable slice view, not deep-clone every record.
+		indexedSemanticRecords: domain.indexedSemanticRecords,
 		indexedPublishingUnits: cloneIndexedFlushUnits(domain.indexedPublishingUnits),
 		indexedFlushUnits:      cloneIndexedFlushUnits(domain.indexedFlushUnits),
 		primaryRunIndexActive:  domain.primaryRunIndex != nil,
@@ -4291,6 +4293,9 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.rootPolicies = checkpoint.rootPolicies
 	domain.rootBaseIDs = checkpoint.rootBaseIDs
 	domain.rootValueArenas = checkpoint.rootValueArenas
+	if len(domain.indexedSemanticRecords) > len(checkpoint.indexedSemanticRecords) {
+		clear(domain.indexedSemanticRecords[len(checkpoint.indexedSemanticRecords):])
+	}
 	domain.indexedSemanticRecords = checkpoint.indexedSemanticRecords
 	domain.rootRunCount = checkpoint.rootRunCount
 	domain.rootDeltaStats = checkpoint.rootDeltaStats
