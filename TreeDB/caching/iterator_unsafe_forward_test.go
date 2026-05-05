@@ -7,8 +7,10 @@ type unsafeForwardTestIterator struct {
 	value []byte
 	valid bool
 
-	keyCalls   int
-	valueCalls int
+	keyCalls       int
+	valueCalls     int
+	keyCopyCalls   int
+	valueCopyCalls int
 }
 
 func (it *unsafeForwardTestIterator) Next() {
@@ -28,10 +30,12 @@ func (it *unsafeForwardTestIterator) Value() []byte {
 }
 
 func (it *unsafeForwardTestIterator) KeyCopy(dst []byte) []byte {
+	it.keyCopyCalls++
 	return append(dst[:0], it.key...)
 }
 
 func (it *unsafeForwardTestIterator) ValueCopy(dst []byte) []byte {
+	it.valueCopyCalls++
 	return append(dst[:0], it.value...)
 }
 
@@ -67,7 +71,13 @@ func TestIteratorWrappersForwardUnsafeViews(t *testing.T) {
 		}
 	}
 
-	if base.keyCalls != 0 || base.valueCalls != 0 {
-		t.Fatalf("safe Key/Value fallback called: key=%d value=%d", base.keyCalls, base.valueCalls)
+	if base.keyCalls != 0 || base.valueCalls != 0 || base.keyCopyCalls != 0 || base.valueCopyCalls != 0 {
+		t.Fatalf(
+			"safe iterator fallback called: key=%d value=%d keyCopy=%d valueCopy=%d",
+			base.keyCalls,
+			base.valueCalls,
+			base.keyCopyCalls,
+			base.valueCopyCalls,
+		)
 	}
 }
