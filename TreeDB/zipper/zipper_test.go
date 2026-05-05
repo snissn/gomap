@@ -722,7 +722,7 @@ func TestZipperApplyWithOptionsDefaultSkipsReadOnlyPrepare(t *testing.T) {
 }
 
 func TestZipperApplyWarmSparseManyLeafPreservesValues(t *testing.T) {
-	prevGOMAXPROCS := runtime.GOMAXPROCS(4)
+	prevGOMAXPROCS := runtime.GOMAXPROCS(8)
 	defer runtime.GOMAXPROCS(prevGOMAXPROCS)
 
 	dir := t.TempDir()
@@ -766,8 +766,8 @@ func TestZipperApplyWarmSparseManyLeafPreservesValues(t *testing.T) {
 	if got := metrics.ZipperInternalParallelChildren; got < 2 {
 		t.Fatalf("ZipperInternalParallelChildren=%d want multiple active children", got)
 	}
-	if got := metrics.ZipperInternalParallelWorkers; got < 2 {
-		t.Fatalf("ZipperInternalParallelWorkers=%d want multiple workers", got)
+	if got := metrics.ZipperInternalParallelWorkers; got != mergeInternalMaxParallelWorkers {
+		t.Fatalf("ZipperInternalParallelWorkers=%d want capped workers %d", got, mergeInternalMaxParallelWorkers)
 	}
 	if got := metrics.ZipperInternalParallelOps; got == 0 {
 		t.Fatalf("ZipperInternalParallelOps=%d want routed parallel ops", got)
