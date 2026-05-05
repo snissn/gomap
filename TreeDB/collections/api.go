@@ -765,6 +765,7 @@ type coalescedFlushBatch struct {
 	rootCount         int
 	rootDeltaStats    collectionRootDeltaPlanStats
 	rawRootDeltaStats collectionRootDeltaPlanStats
+	rawRootDeltaReady bool
 }
 
 type indexedFlushPublishWork struct {
@@ -2230,6 +2231,13 @@ func (domain *collectionWriteDomain) observeRootDeltaPlanCoalescing(rawStats, fi
 	if rawStats.entries > 0 && finalStats.entries == 0 {
 		domain.rootDeltaPlanNetZeroPlans.Add(1)
 	}
+}
+
+func coalescedFlushBatchRawRootDeltaStats(batch coalescedFlushBatch) collectionRootDeltaPlanStats {
+	if batch.rawRootDeltaReady {
+		return batch.rawRootDeltaStats
+	}
+	return batch.rootDeltaStats
 }
 
 func (domain *collectionWriteDomain) observePrimaryOnlyDrain(docs int, bytes int64, uniqueDocs int, duration time.Duration) {
@@ -5471,9 +5479,10 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 	if len(batch.rootNames) == 0 {
 		_ = pin.Close()
 		work.pin = nil
+		rawRootDeltaStats := coalescedFlushBatchRawRootDeltaStats(batch)
 		domain.observeCoalescedFlushBatch(len(batch.units), batch.docCount, batch.byteCount, true)
-		domain.observeRootDeltaPlanRawUnit(batch.rawRootDeltaStats)
-		domain.observeRootDeltaPlanCoalescing(batch.rawRootDeltaStats, collectionRootDeltaPlanStats{})
+		domain.observeRootDeltaPlanRawUnit(rawRootDeltaStats)
+		domain.observeRootDeltaPlanCoalescing(rawRootDeltaStats, collectionRootDeltaPlanStats{})
 		domain.indexedFlushUnits = nil
 		domain.rootMutableRuns = nil
 		domain.rootValueArenas = nil
@@ -5520,6 +5529,10 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 			return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 		}
 		work.batch.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, work.batch.rootNames, ordered)
+		if !work.batch.rawRootDeltaReady {
+			work.batch.rawRootDeltaStats = work.batch.rootDeltaStats
+			work.batch.rawRootDeltaReady = true
+		}
 		materializeElapsed := collectionObservedElapsedSince(materializeStart)
 		publishStart := time.Now()
 		work.batch.state = coalescedFlushBatchPublishing
@@ -5545,6 +5558,10 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 	}
 	work.batch.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, work.batch.rootNames, ordered)
+	if !work.batch.rawRootDeltaReady {
+		work.batch.rawRootDeltaStats = work.batch.rootDeltaStats
+		work.batch.rawRootDeltaReady = true
+	}
 	materializeElapsed := collectionObservedElapsedSince(materializeStart)
 	publishStart := time.Now()
 	work.batch.state = coalescedFlushBatchPublishing
@@ -6050,11 +6067,12 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	c.meta = work.meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	resetIndexedFlushUnits(oldPublishing)
+	rawRootDeltaStats := coalescedFlushBatchRawRootDeltaStats(work.batch)
 	domain.observeIndexedFlush(len(work.batch.units), work.batch.docCount, work.batch.byteCount, work.batch.rootRunCount, work.batch.rootCount, observedElapsed(), materializeElapsed, publishElapsed, nil)
 	domain.observeCoalescedFlushBatch(len(work.batch.units), work.batch.docCount, work.batch.byteCount, work.batch.rootDeltaStats.entries == 0)
-	domain.observeRootDeltaPlanRawUnit(work.batch.rawRootDeltaStats)
+	domain.observeRootDeltaPlanRawUnit(rawRootDeltaStats)
 	domain.observeRootDeltaPlanFinal(work.batch.rootDeltaStats)
-	domain.observeRootDeltaPlanCoalescing(work.batch.rawRootDeltaStats, work.batch.rootDeltaStats)
+	domain.observeRootDeltaPlanCoalescing(rawRootDeltaStats, work.batch.rootDeltaStats)
 	domain.observeRootDeltaPlan(work.batch.rootDeltaStats)
 	return nil
 }
@@ -6104,9 +6122,15 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 
 	rotateIndexedMutableToFlushUnitLocked(domain)
 	flushUnit := mergedIndexedFlushUnitLocked(domain)
-	rawRootDeltaStats, err := collectionRootDeltaPlanStatsFromIndexedFlushUnits(meta.Name, domain.indexedFlushUnits)
-	if err != nil {
-		return err
+	flushUnits := len(domain.indexedFlushUnits)
+	var rawRootDeltaStats collectionRootDeltaPlanStats
+	rawRootDeltaReady := false
+	if flushUnits > 1 {
+		rawRootDeltaStats, err = collectionRootDeltaPlanStatsFromIndexedFlushUnits(meta.Name, domain.indexedFlushUnits)
+		if err != nil {
+			return err
+		}
+		rawRootDeltaReady = true
 	}
 	rootNames := orderedBufferedRootNames(meta, flushUnit.rootRuns)
 	if len(rootNames) == 0 {
@@ -6125,7 +6149,6 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	}
 	flushDocs := domain.count
 	flushBytes := domain.bufferedBytes
-	flushUnits := len(domain.indexedFlushUnits)
 	flushRootRuns := bufferedIndexedRootRunCount(domain)
 	flushRoots := len(rootNames)
 	flushStart := time.Now()
@@ -6162,6 +6185,10 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 			return err
 		}
 		rootDeltaStats := collectionRootDeltaPlanStatsFromOrdered(meta.Name, rootNames, ordered)
+		if !rawRootDeltaReady {
+			rawRootDeltaStats = rootDeltaStats
+			rawRootDeltaReady = true
+		}
 		materializeElapsed = collectionObservedElapsedSince(materializeStart)
 		publishStart := time.Now()
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -6184,6 +6211,10 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 			return err
 		}
 		rootDeltaStats := collectionRootDeltaPlanStatsFromOrdered(meta.Name, rootNames, ordered)
+		if !rawRootDeltaReady {
+			rawRootDeltaStats = rootDeltaStats
+			rawRootDeltaReady = true
+		}
 		materializeElapsed = collectionObservedElapsedSince(materializeStart)
 		publishStart := time.Now()
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -6358,9 +6389,15 @@ func retargetPendingIndexedRootBaseIDsLocked(domain *collectionWriteDomain, root
 func buildCoalescedFlushBatchFromUnits(meta CollectionMeta, catalog *collectionCatalog, units []indexedFlushUnit) (coalescedFlushBatch, error) {
 	merged := mergedIndexedFlushUnits(units)
 	rootNames := orderedBufferedRootNames(meta, merged.rootRuns)
-	rawRootDeltaStats, err := collectionRootDeltaPlanStatsFromIndexedFlushUnits(meta.Name, units)
-	if err != nil {
-		return coalescedFlushBatch{}, err
+	var rawRootDeltaStats collectionRootDeltaPlanStats
+	rawRootDeltaReady := false
+	if len(units) > 1 {
+		var err error
+		rawRootDeltaStats, err = collectionRootDeltaPlanStatsFromIndexedFlushUnits(meta.Name, units)
+		if err != nil {
+			return coalescedFlushBatch{}, err
+		}
+		rawRootDeltaReady = true
 	}
 	batch := coalescedFlushBatch{
 		state:             coalescedFlushBatchQueued,
@@ -6373,6 +6410,7 @@ func buildCoalescedFlushBatchFromUnits(meta CollectionMeta, catalog *collectionC
 		rootRunCount:      indexedFlushUnitRootRunCount(merged),
 		rootCount:         len(rootNames),
 		rawRootDeltaStats: rawRootDeltaStats,
+		rawRootDeltaReady: rawRootDeltaReady,
 	}
 	if len(rootNames) == 0 {
 		return batch, nil
