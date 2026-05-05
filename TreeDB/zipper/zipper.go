@@ -1091,6 +1091,15 @@ type ReadOnlyLeafSpanSummary struct {
 	OpenHighSpans int
 }
 
+// ReadOnlyLeafSpanWorkerRange assigns a contiguous range of read-only leaf
+// spans to one future worker. The range is a planning primitive only; it does
+// not imply parallel execution or prepared output ownership.
+type ReadOnlyLeafSpanWorkerRange struct {
+	FirstSpan int
+	SpanCount int
+	Ops       int
+}
+
 // ReadOnlyPrepareResult is the read-only portion of a root apply attempt. It is
 // safe to discard on root mismatch because it has not allocated or persisted
 // output pages.
@@ -1140,6 +1149,51 @@ func (r ReadOnlyPrepareResult) LeafSpanSummary() ReadOnlyLeafSpanSummary {
 		}
 	}
 	return summary
+}
+
+// AppendLeafSpanWorkerRanges appends deterministic contiguous span partitions
+// to dst. It creates at most workers ranges and never creates empty ranges. The
+// returned ranges preserve span order and are suitable for future parallel
+// preparation steps that still need serial output append and assembly order.
+// No-op inputs return dst unchanged.
+func (r ReadOnlyPrepareResult) AppendLeafSpanWorkerRanges(dst []ReadOnlyLeafSpanWorkerRange, workers int) []ReadOnlyLeafSpanWorkerRange {
+	if workers <= 0 || len(r.LeafSpans) == 0 {
+		return dst
+	}
+	if workers > len(r.LeafSpans) {
+		workers = len(r.LeafSpans)
+	}
+	totalOps := int64(r.Ops)
+
+	spanIdx := 0
+	cumulativeOps := int64(0)
+	for rangeIdx := 0; rangeIdx < workers && spanIdx < len(r.LeafSpans); rangeIdx++ {
+		firstSpan := spanIdx
+		rangeOps := 0
+		remainingRanges := workers - rangeIdx - 1
+		lastAllowedSpan := len(r.LeafSpans) - remainingRanges
+		targetCumulativeOps := readOnlyPrepareCeilDiv64(totalOps*int64(rangeIdx+1), int64(workers))
+
+		for spanIdx < lastAllowedSpan {
+			spanOps := r.LeafSpans[spanIdx].OpCount
+			rangeOps += spanOps
+			cumulativeOps += int64(spanOps)
+			spanIdx++
+			if remainingRanges > 0 && cumulativeOps >= targetCumulativeOps {
+				break
+			}
+		}
+		dst = append(dst, ReadOnlyLeafSpanWorkerRange{
+			FirstSpan: firstSpan,
+			SpanCount: spanIdx - firstSpan,
+			Ops:       rangeOps,
+		})
+	}
+	return dst
+}
+
+func readOnlyPrepareCeilDiv64(n, d int64) int64 {
+	return (n + d - 1) / d
 }
 
 // ReuseOptions returns buffers from r for a later read-only preparation pass.
