@@ -151,6 +151,7 @@ const (
 	mergeInternalMinParallelOps              = 1024
 	mergeInternalMaintenanceMinParallelOps   = 4096
 	mergeInternalOuterLeafLogMinParallelOps  = 4096
+	mergeInternalMaxParallelWorkers          = 4
 	mergeInternalHighPressureMinChildren     = 16
 	mergeInternalHighPressureMinOps          = 16 * 1024
 	mergeInternalCriticalPressureMinChildren = 32
@@ -2524,6 +2525,9 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		maxParallel := gomaxprocs
 		if activeChildren > 0 && maxParallel > activeChildren {
 			maxParallel = activeChildren
+		}
+		if maxParallel > mergeInternalMaxParallelWorkers {
+			maxParallel = mergeInternalMaxParallelWorkers
 		}
 		if maxParallel < 1 {
 			maxParallel = 1
