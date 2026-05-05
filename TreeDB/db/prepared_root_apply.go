@@ -302,14 +302,12 @@ func preparedRootDeltaPlanSummaryFromBatch(delta *batch.Batch, includeChecksum b
 		return preparedRootDeltaPlanSummary{}
 	}
 	summary := preparedRootDeltaPlanSummary{
-		entries:  uint64(len(entries)),
-		firstKey: entries[0].Key,
-		lastKey:  entries[len(entries)-1].Key,
+		entries: uint64(len(entries)),
 	}
 	if includeChecksum {
 		summary.checksum = preparedRootPlanChecksumOffset
-		summary.firstKey = append([]byte(nil), summary.firstKey...)
-		summary.lastKey = append([]byte(nil), summary.lastKey...)
+		summary.firstKey = append([]byte(nil), entries[0].Key...)
+		summary.lastKey = append([]byte(nil), entries[len(entries)-1].Key...)
 	}
 	for i := range entries {
 		entry := entries[i]

@@ -1555,6 +1555,9 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		if err == nil && !retrySerialized {
 			return
 		}
+		// Optimistic attempts can prepare data/system roots before failing or
+		// falling back to the serialized path. Record those roots as abandoned
+		// before allocator cleanup discards the prepared output.
 		if !preparedGroupObserved {
 			observePreparedGroup(preparedRootApplyStateAbandoned)
 		}

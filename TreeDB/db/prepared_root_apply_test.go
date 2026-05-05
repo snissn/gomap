@@ -51,6 +51,13 @@ func TestPreparedRootDeltaPlanSummaryFromBatch(t *testing.T) {
 	if summary.checksum == 0 || summary.checksum == preparedRootPlanChecksumOffset {
 		t.Fatalf("checksum=%d looks uninitialized", summary.checksum)
 	}
+	noSnapshotSummary := preparedRootDeltaPlanSummaryFromBatch(delta, false)
+	if noSnapshotSummary.firstKey != nil || noSnapshotSummary.lastKey != nil {
+		t.Fatalf("non-hook summary retained key span=%q..%q", noSnapshotSummary.firstKey, noSnapshotSummary.lastKey)
+	}
+	if noSnapshotSummary.checksum != 0 {
+		t.Fatalf("non-hook checksum=%d want 0", noSnapshotSummary.checksum)
+	}
 }
 
 func TestOrderedRootDeltaBatchGroupPreparedRootMetadataRecordsInstall(t *testing.T) {
