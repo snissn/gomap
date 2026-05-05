@@ -30,18 +30,19 @@ import (
 // Snapshot pointers are single-use: after Close returns, callers must discard the
 // pointer and treat further use as invalid.
 type Snapshot struct {
-	db              *DB
-	view            *memtableView
-	backend         *backenddb.Snapshot
-	rootVersion     uint64
-	rootPointShards []rootDomainSnapshot // snapshot point roots; mutable runs are intentionally excluded
-	rootSystem      rootDomainSnapshot
-	rootIterator    rootDomainSnapshot
-	publishedRoots  *publishedRootSet
-	backendRoot     backendSnapshotLookup
-	backendRootOK   bool
-	backendSystem   backendSnapshotLookup
-	backendSystemOK bool
+	db                      *DB
+	view                    *memtableView
+	backend                 *backenddb.Snapshot
+	rootVersion             uint64
+	rootPointShards         []rootDomainSnapshot // snapshot point roots; mutable runs are intentionally excluded
+	rootSystem              rootDomainSnapshot
+	rootIterator            rootDomainSnapshot
+	publishedRoots          *publishedRootSet
+	backendRoot             backendSnapshotLookup
+	backendRootOK           bool
+	backendSystem           backendSnapshotLookup
+	backendSystemOK         bool
+	backendPublishedLookups []backendSnapshotLookup
 
 	closed atomic.Bool
 }
@@ -181,6 +182,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.rootSystem = viewRootSystem
 	snap.rootIterator = viewRootIterator
 	snap.publishedRoots = viewPublishedRoots
+	snap.installBackendPublishedRootLookups()
 	if snap.publishedRoots == nil {
 		db.rootPublishStats.backendFallbacks.Add(1)
 	}
@@ -226,6 +228,7 @@ func (s *Snapshot) Close() error {
 	s.backendRootOK = false
 	s.backendSystem = backendSnapshotLookup{}
 	s.backendSystemOK = false
+	s.backendPublishedLookups = nil
 	s.rootVersion = 0
 	s.db = nil
 	return err
@@ -317,6 +320,36 @@ func rootDomainPublishedGetUnsafe(snap rootDomainSnapshot, key []byte) ([]byte, 
 	return out, true, err
 }
 
+func (s *Snapshot) appendRootDomainEntryValue(
+	key, dst []byte,
+	val []byte,
+	ptr page.ValuePtr,
+	flags byte,
+	source rootDomainEntrySource,
+	oldLen int,
+) ([]byte, error) {
+	if flags&node.FlagTombstone != 0 {
+		return dst, tree.ErrKeyNotFound
+	}
+	if flags&node.FlagPointer != 0 {
+		if s == nil || s.db == nil {
+			return dst, errors.New("caching snapshot: value-log reader unavailable")
+		}
+		out, err := s.db.readValueLogAppend(key, ptr, dst)
+		if err != nil {
+			return dst, err
+		}
+		recordSnapshotRootDomainRead(source, true, len(out)-oldLen)
+		return out, nil
+	}
+	if val == nil {
+		recordSnapshotRootDomainRead(source, false, 0)
+		return dst, nil
+	}
+	recordSnapshotRootDomainRead(source, false, len(val))
+	return append(dst, val...), nil
+}
+
 func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.IteratorSource, error) {
 	if s == nil || s.backend == nil {
 		return nil, backenddb.ErrClosed
@@ -397,29 +430,9 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 		return dst, tree.ErrKeyNotFound
 	}
 	snap := rootDomainSnapshotFromCachedSnapshot(s, key)
-	val, ptr, flags, found, source := snap.getCachedEntryWithSource(key)
+	val, ptr, flags, found, _ := snap.getCachedEntryWithSource(key)
 	if found {
-		if flags&node.FlagTombstone != 0 {
-			return dst, tree.ErrKeyNotFound
-		}
-		if flags&node.FlagPointer != 0 {
-			if s.db == nil {
-				return dst, errors.New("caching snapshot: value-log reader unavailable")
-			}
-			oldLen := len(dst)
-			out, err := s.db.readValueLogAppend(key, ptr, dst)
-			if err != nil {
-				return dst, err
-			}
-			recordSnapshotRootDomainRead(source, true, len(out)-oldLen)
-			return out, nil
-		}
-		if val == nil {
-			recordSnapshotRootDomainRead(source, false, 0)
-			return dst, nil
-		}
-		recordSnapshotRootDomainRead(source, false, len(val))
-		return append(dst, val...), nil
+		return s.appendRootDomainEntryValue(key, dst, val, ptr, flags, rootDomainEntrySourceCached, len(dst))
 	}
 
 	oldLen := len(dst)
@@ -432,29 +445,13 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 		if !errors.Is(err, tree.ErrKeyNotFound) {
 			return dst, err
 		}
-	}
-	val, ptr, flags, found, source = snap.getPublishedEntryWithSource(key)
-	if found {
-		if flags&node.FlagTombstone != 0 {
+		if s.publishedLookupBackedByBackendSnapshot(snap) {
 			return dst, tree.ErrKeyNotFound
 		}
-		if flags&node.FlagPointer != 0 {
-			if s.db == nil {
-				return dst, errors.New("caching snapshot: value-log reader unavailable")
-			}
-			out, err := s.db.readValueLogAppend(key, ptr, dst)
-			if err != nil {
-				return dst, err
-			}
-			recordSnapshotRootDomainRead(source, true, len(out)-oldLen)
-			return out, nil
-		}
-		if val == nil {
-			recordSnapshotRootDomainRead(source, false, 0)
-			return dst, nil
-		}
-		recordSnapshotRootDomainRead(source, false, len(val))
-		return append(dst, val...), nil
+	}
+	val, ptr, flags, found, source := snap.getPublishedEntryWithSource(key)
+	if found {
+		return s.appendRootDomainEntryValue(key, dst, val, ptr, flags, source, oldLen)
 	}
 
 	if s == nil || s.backend == nil || s.db == nil {
