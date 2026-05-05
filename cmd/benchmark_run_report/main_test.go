@@ -139,6 +139,7 @@ func TestDeepReportComparesRunRoots(t *testing.T) {
 	writeComparableRun(t, baseline, comparableRunValues{
 		Head:            "base123",
 		RawOps:          1000,
+		RawReadOps:      1000,
 		MongoLoadOps:    1000,
 		MongoReaderOps:  2000,
 		LoadModeOps:     1500,
@@ -148,6 +149,7 @@ func TestDeepReportComparesRunRoots(t *testing.T) {
 	writeComparableRun(t, current, comparableRunValues{
 		Head:            "cur456",
 		RawOps:          1100,
+		RawReadOps:      900,
 		MongoLoadOps:    1100,
 		MongoReaderOps:  2200,
 		LoadModeOps:     1800,
@@ -171,6 +173,7 @@ func TestDeepReportComparesRunRoots(t *testing.T) {
 		"compare report",
 		"href=\"#compare\"",
 		"Run Comparison",
+		"Overall",
 		"Baseline git identity:",
 		"HEAD=base123",
 		"Mongo full-sweep deltas",
@@ -182,11 +185,28 @@ func TestDeepReportComparesRunRoots(t *testing.T) {
 		"candidate TreeDB ops/s",
 		"+10.0%",
 		"+20.0%",
+		"-10.0%",
 		"-20.0%",
 		"delta-good",
+		"delta-bad",
+		"matched rows",
+		"measured deltas",
+		"avg better",
+		"avg worse",
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("comparison report missing %q\n%s", want, html)
+		}
+	}
+	for _, collapsed := range []string{
+		"<details open><summary>Mongo full-sweep deltas",
+		"<details open><summary>Load-mode deltas",
+		"<details open><summary>Dedicated scaling deltas",
+		"<details open><summary>Collection deltas",
+		"<details open><summary>Raw engine deltas",
+	} {
+		if strings.Contains(html, collapsed) {
+			t.Fatalf("comparison report should hide %q by default\n%s", collapsed, html)
 		}
 	}
 }
@@ -506,6 +526,7 @@ func mongoSummaryFixture(indexes int) string {
 type comparableRunValues struct {
 	Head            string
 	RawOps          float64
+	RawReadOps      float64
 	MongoLoadOps    float64
 	MongoReaderOps  float64
 	LoadModeOps     float64
@@ -520,10 +541,11 @@ func writeComparableRun(t *testing.T, root string, values comparableRunValues) {
   "runs": [{
     "profile": "wal_on_fast",
     "results": {
-      "sequential_write": {"TreeDB": %.0f}
+      "sequential_write": {"TreeDB": %.0f},
+      "random_read": {"TreeDB": %.0f}
     }
   }]
-}`, values.RawOps))
+}`, values.RawOps, values.RawReadOps))
 	writeFile(t, filepath.Join(root, "collections_sqlite_canonical_1m", "indexes_0", "benchmark_results.json"), fmt.Sprintf(`{
   "results": [
     {"config_name":"treedb_bson_collection_0_indexes","engine":"treedb_fast","format":"bson","shape":"collection","index_count":0,"document_count":100,"phase":"post_insert","maintenance_mode":"none","total_bytes":800,"bytes_per_doc":%.1f,"docs_per_sec":%.0f,"measurement_kind":"go_benchmark"}

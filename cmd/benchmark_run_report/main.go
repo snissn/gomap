@@ -177,6 +177,12 @@ type runComparison struct {
 type comparisonRow struct {
 	Cells   []string
 	Classes map[int]string
+	Deltas  []comparisonDelta
+}
+
+type comparisonDelta struct {
+	Percent float64
+	Class   string
 }
 
 func main() {
@@ -1027,6 +1033,7 @@ func renderRunComparison(b *strings.Builder, comparison *runComparison) {
 		b.WriteString("</p>")
 	}
 	b.WriteString("<div class=\"grid\">")
+	renderOverallComparisonCard(b, comparison)
 	renderComparisonCard(b, "Mongo full sweep", comparison.MongoFullSweepRows)
 	renderComparisonCard(b, "Load modes", comparison.MongoLoadModeRows)
 	renderComparisonCard(b, "Scaling", comparison.MongoScalingRows)
@@ -1034,7 +1041,7 @@ func renderRunComparison(b *strings.Builder, comparison *runComparison) {
 	renderComparisonCard(b, "Raw engine", comparison.RawEngineRows)
 	b.WriteString("</div>")
 	if len(comparison.MongoFullSweepRows) > 0 {
-		b.WriteString("<details open><summary>Mongo full-sweep deltas</summary>")
+		b.WriteString("<details><summary>Mongo full-sweep deltas</summary>")
 		writeComparisonTable(b, []string{"docs", "indexes", "TreeDB config", "Mongo config", "phase", comparison.BaselineLabel + " TreeDB ops/s", comparison.CurrentLabel + " TreeDB ops/s", "TreeDB delta", comparison.BaselineLabel + " ratio", comparison.CurrentLabel + " ratio", comparison.CurrentLabel + " TreeDB physical", comparison.CurrentLabel + " Mongo physical"}, comparison.MongoFullSweepRows, numericColumns(0, 1, 5, 6, 7, 8, 9, 10, 11))
 		b.WriteString("</details>")
 	}
@@ -1044,7 +1051,7 @@ func renderRunComparison(b *strings.Builder, comparison *runComparison) {
 		b.WriteString("</details>")
 	}
 	if len(comparison.MongoScalingRows) > 0 {
-		b.WriteString("<details open><summary>Dedicated scaling deltas</summary>")
+		b.WriteString("<details><summary>Dedicated scaling deltas</summary>")
 		writeComparisonTable(b, []string{"docs", "indexes", "TreeDB config", "Mongo config", "phase", comparison.BaselineLabel + " TreeDB ops/s", comparison.CurrentLabel + " TreeDB ops/s", "TreeDB delta", comparison.BaselineLabel + " ratio", comparison.CurrentLabel + " ratio", comparison.CurrentLabel + " TreeDB physical", comparison.CurrentLabel + " Mongo physical"}, comparison.MongoScalingRows, numericColumns(0, 1, 5, 6, 7, 8, 9, 10, 11))
 		b.WriteString("</details>")
 	}
@@ -1061,33 +1068,96 @@ func renderRunComparison(b *strings.Builder, comparison *runComparison) {
 	b.WriteString("</section>\n")
 }
 
+func renderOverallComparisonCard(b *strings.Builder, comparison *runComparison) {
+	rows := allComparisonRows(comparison)
+	if len(rows) == 0 {
+		return
+	}
+	renderComparisonCard(b, "Overall", rows)
+}
+
+func allComparisonRows(comparison *runComparison) []comparisonRow {
+	if comparison == nil {
+		return nil
+	}
+	var rows []comparisonRow
+	rows = append(rows, comparison.MongoFullSweepRows...)
+	rows = append(rows, comparison.MongoLoadModeRows...)
+	rows = append(rows, comparison.MongoScalingRows...)
+	rows = append(rows, comparison.CollectionRows...)
+	rows = append(rows, comparison.RawEngineRows...)
+	return rows
+}
+
 func renderComparisonCard(b *strings.Builder, title string, rows []comparisonRow) {
 	if len(rows) == 0 {
 		return
 	}
-	good, flat, bad := comparisonDeltaCounts(rows)
-	total := good + flat + bad
+	stats := comparisonDeltaStats(rows)
 	b.WriteString("<div class=\"compare-card\"><strong>" + esc(title) + "</strong>")
-	b.WriteString("<span class=\"delta-good\">" + strconv.Itoa(good) + " better</span>")
-	b.WriteString(" / <span class=\"delta-flat\">" + strconv.Itoa(flat) + " flat</span>")
-	b.WriteString(" / <span class=\"delta-bad\">" + strconv.Itoa(bad) + " worse</span>")
-	b.WriteString("<p class=\"subtle\">" + strconv.Itoa(total) + " matched deltas across " + strconv.Itoa(len(rows)) + " rows</p></div>")
+	b.WriteString("<span class=\"delta-good\">" + strconv.Itoa(stats.Good) + " better</span>")
+	b.WriteString(" / <span class=\"delta-flat\">" + strconv.Itoa(stats.Flat) + " flat</span>")
+	b.WriteString(" / <span class=\"delta-bad\">" + strconv.Itoa(stats.Bad) + " worse</span>")
+	b.WriteString("<p class=\"subtle\">" + strconv.Itoa(len(rows)) + " matched rows, " + strconv.Itoa(stats.Total()) + " measured deltas</p>")
+	if stats.Good > 0 || stats.Bad > 0 {
+		b.WriteString("<p class=\"subtle\">")
+		if stats.Good > 0 {
+			b.WriteString("<span class=\"delta-good\">avg better " + esc(fmtSignedPercent(stats.AvgGood())) + "</span>")
+		}
+		if stats.Good > 0 && stats.Bad > 0 {
+			b.WriteString(" / ")
+		}
+		if stats.Bad > 0 {
+			b.WriteString("<span class=\"delta-bad\">avg worse " + esc(fmtSignedPercent(stats.AvgBad())) + "</span>")
+		}
+		b.WriteString("</p>")
+	}
+	b.WriteString("</div>")
 }
 
-func comparisonDeltaCounts(rows []comparisonRow) (good, flat, bad int) {
+type comparisonDeltaSummary struct {
+	Good    int
+	Flat    int
+	Bad     int
+	GoodSum float64
+	BadSum  float64
+}
+
+func (s comparisonDeltaSummary) Total() int {
+	return s.Good + s.Flat + s.Bad
+}
+
+func (s comparisonDeltaSummary) AvgGood() float64 {
+	if s.Good == 0 {
+		return 0
+	}
+	return s.GoodSum / float64(s.Good)
+}
+
+func (s comparisonDeltaSummary) AvgBad() float64 {
+	if s.Bad == 0 {
+		return 0
+	}
+	return s.BadSum / float64(s.Bad)
+}
+
+func comparisonDeltaStats(rows []comparisonRow) comparisonDeltaSummary {
+	var stats comparisonDeltaSummary
 	for _, row := range rows {
-		for _, className := range row.Classes {
-			switch className {
+		for _, delta := range row.Deltas {
+			switch delta.Class {
 			case "delta-good":
-				good++
+				stats.Good++
+				stats.GoodSum += delta.Percent
 			case "delta-bad":
-				bad++
+				stats.Bad++
+				stats.BadSum += delta.Percent
 			case "delta-flat":
-				flat++
+				stats.Flat++
 			}
 		}
 	}
-	return good, flat, bad
+	return stats
 }
 
 func compareRawEngine(current, baseline []rawEngineRun) []comparisonRow {
@@ -1112,12 +1182,12 @@ func compareRawEngine(current, baseline []rawEngineRun) []comparisonRow {
 		})
 		for _, test := range tests {
 			old, now := prev.Results[test], cur.Results[test]
-			rows = append(rows, comparisonRow{
-				Cells: []string{cur.Profile, cur.Checkpoint, test, fmtOps(old), fmtOps(now), fmtDelta(old, now)},
-				Classes: map[int]string{
-					5: deltaClass(old, now, true),
-				},
-			})
+			row := comparisonRow{
+				Cells:   []string{cur.Profile, cur.Checkpoint, test, fmtOps(old), fmtOps(now), fmtDelta(old, now)},
+				Classes: map[int]string{},
+			}
+			addComparisonDelta(&row, 5, old, now, true)
+			rows = append(rows, row)
 		}
 	}
 	return rows
@@ -1148,7 +1218,7 @@ func compareMongoRows(current, baseline []mongoSummaryRow, anyScope bool) []comp
 		if !ok {
 			continue
 		}
-		rows = append(rows, comparisonRow{
+		row := comparisonRow{
 			Cells: []string{
 				strconv.Itoa(cur.Documents),
 				strconv.Itoa(cur.SecondaryIndexes),
@@ -1163,10 +1233,10 @@ func compareMongoRows(current, baseline []mongoSummaryRow, anyScope bool) []comp
 				fmtBytes(cur.TreeDBPhysicalBytes),
 				fmtBytes(cur.MongoPhysicalBytes),
 			},
-			Classes: map[int]string{
-				7: deltaClass(prev.TreeDBOpsSec, cur.TreeDBOpsSec, true),
-			},
-		})
+			Classes: map[int]string{},
+		}
+		addComparisonDelta(&row, 7, prev.TreeDBOpsSec, cur.TreeDBOpsSec, true)
+		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		return strings.Join(rows[i].Cells[:5], "\x00") < strings.Join(rows[j].Cells[:5], "\x00")
@@ -1215,7 +1285,7 @@ func compareMongoLoadModes(current, baseline []loadModeRow) []comparisonRow {
 		if !ok {
 			continue
 		}
-		rows = append(rows, comparisonRow{
+		row := comparisonRow{
 			Cells: []string{
 				strconv.Itoa(cur.Indexes),
 				cur.Target,
@@ -1226,10 +1296,10 @@ func compareMongoLoadModes(current, baseline []loadModeRow) []comparisonRow {
 				fmtBytes(float64(prev.PhysicalBytes)),
 				fmtBytes(float64(cur.PhysicalBytes)),
 			},
-			Classes: map[int]string{
-				5: deltaClass(prev.OpsPerSec, cur.OpsPerSec, true),
-			},
-		})
+			Classes: map[int]string{},
+		}
+		addComparisonDelta(&row, 5, prev.OpsPerSec, cur.OpsPerSec, true)
+		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		return strings.Join(rows[i].Cells[:3], "\x00") < strings.Join(rows[j].Cells[:3], "\x00")
@@ -1281,8 +1351,8 @@ func compareCollections(current, baseline []collectionRow) []comparisonRow {
 			},
 			Classes: make(map[int]string),
 		}
-		row.Classes[7] = deltaClass(prev.DocsPerSec, cur.DocsPerSec, true)
-		row.Classes[10] = deltaClass(prev.BytesPerDoc, cur.BytesPerDoc, false)
+		addComparisonDelta(&row, 7, prev.DocsPerSec, cur.DocsPerSec, true)
+		addComparisonDelta(&row, 10, prev.BytesPerDoc, cur.BytesPerDoc, false)
 		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool {
@@ -2640,14 +2710,31 @@ func fmtDelta(old, current float64) string {
 	if !ok {
 		return "-"
 	}
+	return fmtSignedPercent(pct)
+}
+
+func fmtSignedPercent(pct float64) string {
 	return fmt.Sprintf("%+.1f%%", pct)
 }
 
-func deltaClass(old, current float64, higherIsBetter bool) string {
+func addComparisonDelta(row *comparisonRow, column int, old, current float64, higherIsBetter bool) {
+	delta, ok := newComparisonDelta(old, current, higherIsBetter)
+	if !ok {
+		return
+	}
+	row.Classes[column] = delta.Class
+	row.Deltas = append(row.Deltas, delta)
+}
+
+func newComparisonDelta(old, current float64, higherIsBetter bool) (comparisonDelta, bool) {
 	pct, ok := deltaPercent(old, current)
 	if !ok {
-		return ""
+		return comparisonDelta{}, false
 	}
+	return comparisonDelta{Percent: pct, Class: deltaClassForPercent(pct, higherIsBetter)}, true
+}
+
+func deltaClassForPercent(pct float64, higherIsBetter bool) string {
 	const threshold = 2.0
 	if math.Abs(pct) < threshold {
 		return "delta-flat"
