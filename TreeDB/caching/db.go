@@ -23183,9 +23183,9 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	//
 	// The cache layer may need to resolve value-log pointers for memtable hits;
 	// by using the append path, those decodes can write directly into this arena
-	// instead of allocating per key. The limit below bounds only the initial
-	// arena capacity; subsequent appends may still grow the backing array, so
-	// multiple underlying allocations may be retained.
+	// instead of allocating per key. newGetManyValueCopyArena caps only the
+	// initial arena capacity; subsequent appends may still grow the backing
+	// array, so multiple underlying allocations may be retained.
 	arena := newGetManyValueCopyArena(len(keys))
 	for i, key := range keys {
 		start := len(arena.buf)
