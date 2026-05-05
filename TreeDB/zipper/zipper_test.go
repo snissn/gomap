@@ -738,6 +738,50 @@ func TestZipperApplyWithOptionsReusesReadOnlyPrepareBuffers(t *testing.T) {
 	}
 }
 
+func TestReadOnlyPrepareResultResetForReuseKeepsBoundedBuffers(t *testing.T) {
+	result := ReadOnlyPrepareResult{
+		RootID:         123,
+		Ops:            2,
+		ExactLeafSpans: true,
+		LeafSpans:      make([]ReadOnlyLeafSpan, 2, 8),
+		keyArena:       make([]byte, 4, 16),
+	}
+	leafBase := &result.LeafSpans[:cap(result.LeafSpans)][0]
+	keyBase := &result.keyArena[:cap(result.keyArena)][0]
+
+	result.ResetForReuse()
+	if result.RootID != 0 || result.Ops != 0 || result.ExactLeafSpans {
+		t.Fatalf("metadata not reset: %+v", result)
+	}
+	if len(result.LeafSpans) != 0 || cap(result.LeafSpans) != 8 {
+		t.Fatalf("leaf spans len/cap=%d/%d want 0/8", len(result.LeafSpans), cap(result.LeafSpans))
+	}
+	if &result.LeafSpans[:cap(result.LeafSpans)][0] != leafBase {
+		t.Fatal("leaf span buffer was not retained")
+	}
+	if len(result.keyArena) != 0 || cap(result.keyArena) != 16 {
+		t.Fatalf("key arena len/cap=%d/%d want 0/16", len(result.keyArena), cap(result.keyArena))
+	}
+	if &result.keyArena[:cap(result.keyArena)][0] != keyBase {
+		t.Fatal("key arena buffer was not retained")
+	}
+}
+
+func TestReadOnlyPrepareResultResetForReuseDropsOversizedBuffers(t *testing.T) {
+	result := ReadOnlyPrepareResult{
+		LeafSpans: make([]ReadOnlyLeafSpan, 1, readOnlyPrepareResultReuseLeafSpanKeepCap+1),
+		keyArena:  make([]byte, 1, readOnlyPrepareResultReuseKeyArenaKeepCap+1),
+	}
+
+	result.ResetForReuse()
+	if cap(result.LeafSpans) != 0 {
+		t.Fatalf("leaf span cap=%d want dropped", cap(result.LeafSpans))
+	}
+	if cap(result.keyArena) != 0 {
+		t.Fatalf("key arena cap=%d want dropped", cap(result.keyArena))
+	}
+}
+
 func TestReadOnlyPrepareResultValidateLeafSpansRejectsInvalidPlans(t *testing.T) {
 	validSpan := ReadOnlyLeafSpan{
 		LowKey:     []byte("a"),

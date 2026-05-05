@@ -1148,6 +1148,11 @@ type ReadOnlyPrepareResult struct {
 	keyArena []byte
 }
 
+const (
+	readOnlyPrepareResultReuseLeafSpanKeepCap = 4096
+	readOnlyPrepareResultReuseKeyArenaKeepCap = 1 << 20
+)
+
 // LeafSpanSummary returns an allocation-free aggregate view of r's leaf spans.
 func (r ReadOnlyPrepareResult) LeafSpanSummary() ReadOnlyLeafSpanSummary {
 	summary := ReadOnlyLeafSpanSummary{
@@ -1274,6 +1279,25 @@ func (r ReadOnlyPrepareResult) ReuseOptions() ReadOnlyPrepareOptions {
 	return ReadOnlyPrepareOptions{
 		leafSpans: r.LeafSpans[:0],
 		keyArena:  r.keyArena[:0],
+	}
+}
+
+// ResetForReuse clears result metadata while retaining bounded reusable
+// leaf-span and key-arena buffers for a later ReuseOptions call. Oversized
+// buffers are dropped so temporary prepare pools do not retain one-off large
+// batch state indefinitely.
+func (r *ReadOnlyPrepareResult) ResetForReuse() {
+	if r == nil {
+		return
+	}
+	leafSpans := r.LeafSpans
+	keyArena := r.keyArena
+	*r = ReadOnlyPrepareResult{}
+	if cap(leafSpans) <= readOnlyPrepareResultReuseLeafSpanKeepCap {
+		r.LeafSpans = leafSpans[:0]
+	}
+	if cap(keyArena) <= readOnlyPrepareResultReuseKeyArenaKeepCap {
+		r.keyArena = keyArena[:0]
 	}
 }
 

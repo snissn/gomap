@@ -901,6 +901,60 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptionalReadOnl
 	}
 }
 
+func TestPublishOrderedRootDeltaIteratorOptionalReadOnlyPrepareSummary(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t,
+		"root/a", "va",
+		"root/m", "vm",
+		"root/z", "vz",
+	).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root: %v", err)
+	}
+
+	opts, err := db.orderedRootPublishOptionsForPolicy(OrderedRootStorageDefault)
+	if err != nil {
+		t.Fatalf("ordered root publish options: %v", err)
+	}
+	var summary zipper.ReadOnlyLeafSpanSummary
+	var workerSummary zipper.ReadOnlyLeafSpanWorkerRangeSummary
+	var attempted bool
+	opts.applyOptions.PrepareReadOnly = true
+	opts.readOnlyPrepareSummary = &summary
+	opts.readOnlyPrepareWorkerSummary = &workerSummary
+	opts.readOnlyPrepareWorkerCount = 4
+	opts.readOnlyPrepareAttempted = &attempted
+
+	newRoot, retired, _, err := db.publishOrderedRootDeltaIterator(baseRoot, mustFrozenSystemMemtable(t,
+		"root/b", "vb",
+		"root/y", "vy",
+	).NewIterator(nil, nil), opts)
+	if err != nil {
+		t.Fatalf("publish ordered root delta iterator: %v", err)
+	}
+	if newRoot == 0 || newRoot == baseRoot {
+		t.Fatalf("new root=%d base=%d want changed non-zero root", newRoot, baseRoot)
+	}
+	if len(retired) == 0 {
+		t.Fatal("retired pages empty; warm iterator apply should retire old root pages")
+	}
+	if summary.Ops != 2 || summary.Spans == 0 || !summary.ExactLeafSpans {
+		t.Fatalf("read-only prepare summary=%+v want ops=2 spans>0 exact", summary)
+	}
+	if workerSummary.TargetWorkers != 4 || workerSummary.Ranges == 0 || workerSummary.Ops != summary.Ops {
+		t.Fatalf("worker summary=%+v want target=4 ranges>0 ops=%d", workerSummary, summary.Ops)
+	}
+	if !attempted {
+		t.Fatal("read-only prepare attempt was not recorded")
+	}
+}
+
 func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_ReadOnlyPrepareWorkerRangeStats(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})

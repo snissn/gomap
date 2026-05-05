@@ -41,6 +41,28 @@ const orderedRootOptimisticSystemDeltaRebaseMaxAttempts = 4
 
 const orderedRootDeltaBatchGroupParallelApplyMinRoots = 2
 
+var orderedRootReadOnlyPrepareResultPool = sync.Pool{
+	New: func() any {
+		return new(zipper.ReadOnlyPrepareResult)
+	},
+}
+
+func acquireOrderedRootReadOnlyPrepareResult() *zipper.ReadOnlyPrepareResult {
+	result, _ := orderedRootReadOnlyPrepareResultPool.Get().(*zipper.ReadOnlyPrepareResult)
+	if result == nil {
+		return new(zipper.ReadOnlyPrepareResult)
+	}
+	return result
+}
+
+func releaseOrderedRootReadOnlyPrepareResult(result *zipper.ReadOnlyPrepareResult) {
+	if result == nil {
+		return
+	}
+	result.ResetForReuse()
+	orderedRootReadOnlyPrepareResultPool.Put(result)
+}
+
 type orderedRootPublishStats struct {
 	warmAttempts                          uint64
 	warmNativeApplyAttempts               uint64
@@ -700,16 +722,33 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 	if err != nil {
 		return 0, nil, metrics, err
 	}
-	newRoot, retired, metrics, readOnlyPrepare, readOnlyPrepareNs, err := applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, opts.applyOptions)
+	applyOptions := opts.applyOptions
+	var pooledResult *zipper.ReadOnlyPrepareResult
+	if applyOptions.PrepareReadOnly && opts.readOnlyPrepareCallerResult == nil {
+		pooledResult = acquireOrderedRootReadOnlyPrepareResult()
+		applyOptions.ReadOnlyPrepare = pooledResult.ReuseOptions()
+	}
+	if opts.applyOptions.PrepareReadOnly && opts.readOnlyPrepareAttempted != nil {
+		*opts.readOnlyPrepareAttempted = true
+	}
+	newRoot, retired, metrics, readOnlyPrepare, readOnlyPrepareNs, err := applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, applyOptions)
 	if opts.applyOptions.PrepareReadOnly && opts.readOnlyPrepareSummary != nil {
 		summary := readOnlyPrepare.LeafSpanSummary()
 		*opts.readOnlyPrepareSummary = summary
+	}
+	if opts.applyOptions.PrepareReadOnly && opts.readOnlyPrepareWorkerSummary != nil {
+		summary := readOnlyPrepare.LeafSpanWorkerRangeSummary(opts.readOnlyPrepareWorkerCount)
+		*opts.readOnlyPrepareWorkerSummary = summary
 	}
 	if opts.readOnlyPrepareCallerResult != nil {
 		*opts.readOnlyPrepareCallerResult = readOnlyPrepare
 	}
 	if opts.readOnlyPrepareNs != nil {
 		*opts.readOnlyPrepareNs = readOnlyPrepareNs
+	}
+	if pooledResult != nil {
+		*pooledResult = readOnlyPrepare
+		releaseOrderedRootReadOnlyPrepareResult(pooledResult)
 	}
 	return newRoot, retired, metrics, err
 }
@@ -812,9 +851,19 @@ func runOrderedRootReadOnlyPrepare(rootZipper *zipper.Zipper, baseRoot uint64, d
 	if opts.readOnlyPrepareAttempted != nil {
 		*opts.readOnlyPrepareAttempted = true
 	}
+	prepareOptions := opts.applyOptions.ReadOnlyPrepare
+	var pooledResult *zipper.ReadOnlyPrepareResult
+	if opts.readOnlyPrepareCallerResult == nil {
+		pooledResult = acquireOrderedRootReadOnlyPrepareResult()
+		prepareOptions = pooledResult.ReuseOptions()
+	}
 	prepareStart := time.Now()
-	prepared, err := rootZipper.PrepareReadOnly(baseRoot, delta, opts.applyOptions.ReadOnlyPrepare)
+	prepared, err := rootZipper.PrepareReadOnly(baseRoot, delta, prepareOptions)
 	prepareNs := elapsedDurationNs(prepareStart)
+	if pooledResult != nil {
+		*pooledResult = prepared
+		defer releaseOrderedRootReadOnlyPrepareResult(pooledResult)
+	}
 	if opts.readOnlyPrepareSummary != nil {
 		summary := prepared.LeafSpanSummary()
 		*opts.readOnlyPrepareSummary = summary
