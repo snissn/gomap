@@ -927,47 +927,88 @@ func (s *Snapshot) backendSnapshotLookupForRoot(rootID uint64) rootDomainLookup 
 }
 
 func (s *Snapshot) installBackendPublishedRootLookups(publishedRootsOwned bool) {
-	if s == nil || s.backend == nil || s.publishedRoots == nil {
+	if s == nil || s.backend == nil {
 		return
 	}
 	needed := 0
+	directPointNeedsInstall := false
 	countRef := func(ref publishedRootRef) {
 		if ref.lookup == nil && ref.rootID != 0 && s.staticBackendSnapshotLookupForRoot(ref.rootID) == nil {
 			needed++
 		}
 	}
-	for _, ref := range s.publishedRoots.pointShards {
-		countRef(ref)
+	countSnapshot := func(snap rootDomainSnapshot) bool {
+		if snap.published != nil || snap.publishedRootID == 0 {
+			return false
+		}
+		if s.staticBackendSnapshotLookupForRoot(snap.publishedRootID) == nil {
+			needed++
+		}
+		return true
 	}
-	countRef(s.publishedRoots.system)
-	countRef(s.publishedRoots.iterator)
+	if s.publishedRoots != nil {
+		for _, ref := range s.publishedRoots.pointShards {
+			countRef(ref)
+		}
+		countRef(s.publishedRoots.system)
+		countRef(s.publishedRoots.iterator)
+	}
+	for _, snap := range s.rootPointShards {
+		if countSnapshot(snap) {
+			directPointNeedsInstall = true
+		}
+	}
+	countSnapshot(s.rootSystem)
+	countSnapshot(s.rootIterator)
 	if needed == 0 {
 		return
 	}
 
 	cloned := s.publishedRoots
-	if !publishedRootsOwned {
+	if cloned != nil && !publishedRootsOwned {
 		cloned = clonePublishedRootSet(s.publishedRoots)
 	}
 	s.backendPublishedLookups = make([]backendSnapshotLookup, needed)
 	next := 0
+	installLookup := func(rootID uint64) rootDomainLookup {
+		if rootID == 0 {
+			return nil
+		}
+		if lookup := s.staticBackendSnapshotLookupForRoot(rootID); lookup != nil {
+			return lookup
+		}
+		s.backendPublishedLookups[next] = backendSnapshotLookup{db: s.db, snapshot: s.backend, rootID: rootID}
+		lookup := &s.backendPublishedLookups[next]
+		next++
+		return lookup
+	}
 	installRef := func(ref *publishedRootRef) {
 		if ref == nil || ref.lookup != nil || ref.rootID == 0 {
 			return
 		}
-		if lookup := s.staticBackendSnapshotLookupForRoot(ref.rootID); lookup != nil {
-			ref.lookup = lookup
+		ref.lookup = installLookup(ref.rootID)
+	}
+	installSnapshot := func(snap *rootDomainSnapshot) {
+		if snap == nil || snap.published != nil || snap.publishedRootID == 0 {
 			return
 		}
-		s.backendPublishedLookups[next] = backendSnapshotLookup{db: s.db, snapshot: s.backend, rootID: ref.rootID}
-		ref.lookup = &s.backendPublishedLookups[next]
-		next++
+		snap.published = installLookup(snap.publishedRootID)
 	}
-	for i := range cloned.pointShards {
-		installRef(&cloned.pointShards[i])
+	if cloned != nil {
+		for i := range cloned.pointShards {
+			installRef(&cloned.pointShards[i])
+		}
+		installRef(&cloned.system)
+		installRef(&cloned.iterator)
 	}
-	installRef(&cloned.system)
-	installRef(&cloned.iterator)
+	if directPointNeedsInstall {
+		s.rootPointShards = append([]rootDomainSnapshot(nil), s.rootPointShards...)
+	}
+	for i := range s.rootPointShards {
+		installSnapshot(&s.rootPointShards[i])
+	}
+	installSnapshot(&s.rootSystem)
+	installSnapshot(&s.rootIterator)
 	s.backendPublishedLookups = s.backendPublishedLookups[:next]
 	s.publishedRoots = cloned
 }
