@@ -5922,6 +5922,10 @@ func buildIndexedSemanticEffectiveSecondaryRuns(records []indexedSemanticRecord)
 		if record.kind != indexedSemanticRecordUpdate {
 			return nil, 0, false, nil
 		}
+		var documentKey string
+		if len(record.indexDeltas) > 0 {
+			documentKey = string(record.documentID)
+		}
 		for _, delta := range record.indexDeltas {
 			if delta.unique {
 				return nil, 0, false, nil
@@ -5934,11 +5938,10 @@ func buildIndexedSemanticEffectiveSecondaryRuns(records []indexedSemanticRecord)
 				states = make(map[string]*indexedSemanticDocumentRootState)
 				rootStates[delta.rootName] = states
 			}
-			documentKey := string(record.documentID)
 			state := states[documentKey]
 			if state == nil {
 				states[documentKey] = &indexedSemanticDocumentRootState{
-					documentID:  bytes.Clone(record.documentID),
+					documentID:  record.documentID,
 					baseValues:  cloneIndexedSemanticValueSet(delta.oldValues),
 					finalValues: cloneIndexedSemanticValueSet(delta.newValues),
 				}
