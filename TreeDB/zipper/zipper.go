@@ -1327,8 +1327,11 @@ func (r *ReadOnlyPrepareResult) addLeafSpan(ref page.ChildRef, low, high []byte,
 	r.LeafSpans = append(r.LeafSpans, span)
 }
 
-// ApplyWithOptions applies the batch to the tree rooted at rootID and returns
-// a result object suitable for guarded install paths.
+// ApplyWithOptions applies the batch to the tree rooted at rootID and returns a
+// result object suitable for guarded install paths. When opts.PrepareReadOnly is
+// true, it first runs PrepareReadOnly and returns that planning metadata on the
+// result. If the read-only preparation fails, the returned result may contain
+// partial ReadOnlyPrepare metadata and no root output.
 func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptions) (ApplyResult, error) {
 	var prepared ReadOnlyPrepareResult
 	if opts.PrepareReadOnly {

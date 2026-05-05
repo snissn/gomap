@@ -622,17 +622,23 @@ func TestZipperPrepareReadOnlyNestedInternalBoundsInheritParentRange(t *testing.
 	}
 }
 
-func TestZipperApplyWithOptionsReturnsReadOnlyPrepare(t *testing.T) {
-	dir := t.TempDir()
+func newTestZipperWithOuterLeafInternalRoot(tb testing.TB) (*Zipper, uint64) {
+	tb.Helper()
+	dir := tb.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
-	defer p.Close()
+	tb.Cleanup(func() { _ = p.Close() })
 
 	alloc := &MockAllocator{p: p}
 	z := New(p, alloc)
-	rootID := buildOuterLeafInternalRoot(t, z)
+	rootID := buildOuterLeafInternalRoot(tb, z)
+	return z, rootID
+}
+
+func TestZipperApplyWithOptionsReturnsReadOnlyPrepare(t *testing.T) {
+	z, rootID := newTestZipperWithOuterLeafInternalRoot(t)
 
 	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
 	defer func() { _ = delta.Close() }()
@@ -669,16 +675,7 @@ func TestZipperApplyWithOptionsReturnsReadOnlyPrepare(t *testing.T) {
 }
 
 func TestZipperApplyWithOptionsDefaultSkipsReadOnlyPrepare(t *testing.T) {
-	dir := t.TempDir()
-	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer p.Close()
-
-	alloc := &MockAllocator{p: p}
-	z := New(p, alloc)
-	rootID := buildOuterLeafInternalRoot(t, z)
+	z, rootID := newTestZipperWithOuterLeafInternalRoot(t)
 
 	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
 	defer func() { _ = delta.Close() }()
@@ -699,16 +696,7 @@ func TestZipperApplyWithOptionsDefaultSkipsReadOnlyPrepare(t *testing.T) {
 }
 
 func TestZipperApplyWithOptionsReusesReadOnlyPrepareBuffers(t *testing.T) {
-	dir := t.TempDir()
-	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer p.Close()
-
-	alloc := &MockAllocator{p: p}
-	z := New(p, alloc)
-	rootID := buildOuterLeafInternalRoot(t, z)
+	z, rootID := newTestZipperWithOuterLeafInternalRoot(t)
 
 	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
 	defer func() { _ = delta.Close() }()
