@@ -279,7 +279,7 @@ func (b *Batch) writeSerialized(sync bool) error {
 	applyResult, err := z.ApplyWithOptions(rootID, b.batch, zipper.ApplyOptions{})
 	if err != nil {
 		if freeErr := tracker.FreeAll(); freeErr != nil {
-			return freeErr
+			return errors.Join(err, freeErr)
 		}
 		return err
 	}
@@ -290,7 +290,7 @@ func (b *Batch) writeSerialized(sync bool) error {
 	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries)
 	if err != nil {
 		if freeErr := tracker.FreeAll(); freeErr != nil {
-			return freeErr
+			return errors.Join(err, freeErr)
 		}
 		return err
 	}
@@ -302,7 +302,7 @@ func (b *Batch) writeSerialized(sync bool) error {
 
 	if _, err := b.db.runInstallGuard(rawBatchInstallGuard(rootID)); err != nil {
 		if freeErr := tracker.FreeAll(); freeErr != nil {
-			return freeErr
+			return errors.Join(err, freeErr)
 		}
 		return err
 	}
