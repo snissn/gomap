@@ -521,6 +521,9 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 		copy(owned, val)
 		return owned, nil
 	}
+	if s.publishedLookupBackedByBackendSnapshot(snap) {
+		return nil, tree.ErrKeyNotFound
+	}
 
 	if s == nil || s.backend == nil || s.db == nil {
 		return nil, tree.ErrKeyNotFound
@@ -564,6 +567,9 @@ func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
 		}
 		return val, nil
 	}
+	if s.publishedLookupBackedByBackendSnapshot(snap) {
+		return nil, tree.ErrKeyNotFound
+	}
 
 	if s == nil || s.backend == nil || s.db == nil {
 		return nil, tree.ErrKeyNotFound
@@ -575,15 +581,19 @@ func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
 }
 
 func (s *Snapshot) Has(key []byte) (bool, error) {
-	_, _, flags, found := s.lookupCachedRootDomainEntry(key)
+	if s == nil {
+		return false, nil
+	}
+	snap := rootDomainSnapshotFromCachedSnapshot(s, key)
+	_, _, flags, found, _ := snap.getCachedEntryWithSource(key)
 	if found {
 		return flags&node.FlagTombstone == 0, nil
 	}
-	_, _, flags, found = s.lookupQueueEntry(key)
+	_, _, flags, found, _ = snap.getPublishedEntryWithSource(key)
 	if found {
 		return flags&node.FlagTombstone == 0, nil
 	}
-	if s == nil || s.backend == nil {
+	if s.publishedLookupBackedByBackendSnapshot(snap) || s.backend == nil {
 		return false, nil
 	}
 	return s.backend.Has(key)
