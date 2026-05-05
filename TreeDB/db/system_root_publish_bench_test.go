@@ -212,17 +212,10 @@ func benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleR
 	var prepared zipper.ReadOnlyPrepareResult
 	systemKey := []byte("sys/collections/users/primary")
 	var systemValueBuf [20]byte
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		delta := left
-		if i&1 == 1 {
-			delta = right
-		}
+	publish := func(delta *batch.Batch) {
 		ordered[0].BaseRoot = baseRoot
 		ordered[0].Delta = delta
 		if prepareReadOnly && reusePrepare {
-			ordered[0].ReadOnlyPrepareOptions = prepared.ReuseOptions()
 			ordered[0].ReadOnlyPrepareResult = &prepared
 		}
 		_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -237,5 +230,17 @@ func benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleR
 			b.Fatalf("publish batch group: %v", err)
 		}
 		baseRoot = rootIDs[0]
+	}
+	if prepareReadOnly && reusePrepare {
+		publish(left)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		delta := left
+		if i&1 == 1 {
+			delta = right
+		}
+		publish(delta)
 	}
 }
