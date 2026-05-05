@@ -134,6 +134,12 @@ func (group *preparedRootApplyGroup) setSystemRoot(baseRootID uint64, delta *bat
 	for i := 0; i < group.applyCount; i++ {
 		apply := group.applyAt(i)
 		if apply != nil && apply.identity.kind == preparedRootIdentitySystem {
+			if apply.preparedRoot != 0 {
+				if apply.state != preparedRootApplyStateInstalled {
+					apply.state = preparedRootApplyStateAbandoned
+				}
+				break
+			}
 			*apply = preparedRootApply{
 				identity: preparedRootIdentity{
 					kind:    preparedRootIdentitySystem,
@@ -187,7 +193,7 @@ func (group *preparedRootApplyGroup) markInstalled() {
 	}
 	group.state = preparedRootApplyStateInstalled
 	for i := 0; i < group.applyCount; i++ {
-		if apply := group.applyAt(i); apply != nil {
+		if apply := group.applyAt(i); apply != nil && apply.state != preparedRootApplyStateAbandoned {
 			apply.state = preparedRootApplyStateInstalled
 		}
 	}
@@ -210,26 +216,39 @@ func (stats *preparedRootApplyStats) observeGroup(group *preparedRootApplyGroup)
 	if stats == nil || group == nil || group.applyCount == 0 {
 		return
 	}
-	stats.groups++
-	stats.roots += uint64(group.applyCount)
-	switch group.state {
-	case preparedRootApplyStateInstalled:
-		stats.installed++
-	case preparedRootApplyStateAbandoned:
-		stats.abandoned++
-	}
+	groupStats := preparedRootApplyStats{}
 	for i := 0; i < group.applyCount; i++ {
 		apply := group.applyAt(i)
-		if apply == nil {
+		if apply == nil || apply.preparedRoot == 0 {
 			continue
 		}
+		groupStats.roots++
+		switch apply.state {
+		case preparedRootApplyStateInstalled:
+			groupStats.installed++
+		case preparedRootApplyStateAbandoned:
+			groupStats.abandoned++
+		}
 		plan := apply.plan
-		stats.entries += plan.entries
-		stats.tombstones += plan.tombstones
-		stats.keyBytes += plan.keyBytes
-		stats.valueBytes += plan.valueBytes
-		stats.pointerValues += plan.pointerValues
+		groupStats.entries += plan.entries
+		groupStats.tombstones += plan.tombstones
+		groupStats.keyBytes += plan.keyBytes
+		groupStats.valueBytes += plan.valueBytes
+		groupStats.pointerValues += plan.pointerValues
 	}
+	if groupStats.roots == 0 {
+		return
+	}
+	groupStats.groups = 1
+	stats.groups += groupStats.groups
+	stats.roots += groupStats.roots
+	stats.entries += groupStats.entries
+	stats.tombstones += groupStats.tombstones
+	stats.keyBytes += groupStats.keyBytes
+	stats.valueBytes += groupStats.valueBytes
+	stats.pointerValues += groupStats.pointerValues
+	stats.installed += groupStats.installed
+	stats.abandoned += groupStats.abandoned
 }
 
 func observePreparedRootApplyGroup(db *DB, phases *orderedRootDeltaGroupPublishPhaseStats, group *preparedRootApplyGroup, state preparedRootApplyState) {
@@ -289,6 +308,8 @@ func preparedRootDeltaPlanSummaryFromBatch(delta *batch.Batch, includeChecksum b
 	}
 	if includeChecksum {
 		summary.checksum = preparedRootPlanChecksumOffset
+		summary.firstKey = append([]byte(nil), summary.firstKey...)
+		summary.lastKey = append([]byte(nil), summary.lastKey...)
 	}
 	for i := range entries {
 		entry := entries[i]

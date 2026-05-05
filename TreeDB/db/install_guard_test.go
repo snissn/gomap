@@ -173,8 +173,8 @@ func TestOrderedRootDeltaBatchGroupInstallGuardFailureAbandonsGroup(t *testing.T
 	if captured[0].state != preparedRootApplyStateAbandoned {
 		t.Fatalf("prepared group state=%v want abandoned", captured[0].state)
 	}
-	if got := installGuardStatUint(t, afterStats, "treedb.publish.ordered_root_delta_group.prepared_root.abandoned_total"); got != 1 {
-		t.Fatalf("prepared abandoned=%d want 1", got)
+	if got := installGuardStatUint(t, afterStats, "treedb.publish.ordered_root_delta_group.prepared_root.abandoned_total"); got != 2 {
+		t.Fatalf("prepared abandoned=%d want 2", got)
 	}
 	if got := installGuardStatUint(t, afterStats, "treedb.publish.ordered_root_delta_group.prepared_root.installed_total"); got != 0 {
 		t.Fatalf("prepared installed=%d want 0", got)

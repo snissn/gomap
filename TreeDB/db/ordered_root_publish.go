@@ -1543,6 +1543,29 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		preparedGroupObserved = true
 		observePreparedRootApplyGroup(db, &phaseStats, &preparedGroup, state)
 	}
+	publishObserved := false
+	observePublish := func(wait, hold time.Duration, publishErr error) {
+		if publishObserved {
+			return
+		}
+		publishObserved = true
+		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, publishErr)
+	}
+	defer func() {
+		if err == nil && !retrySerialized {
+			return
+		}
+		if !preparedGroupObserved {
+			observePreparedGroup(preparedRootApplyStateAbandoned)
+		}
+		if err != nil && !publishObserved {
+			observePublish(0, 0, err)
+			return
+		}
+		if retrySerialized && !publishObserved {
+			db.observeOrderedRootDeltaGroupPreparedRootApply(phaseStats.preparedRootPrepareNs, phaseStats.preparedRootStats)
+		}
+	}()
 
 	rootTracker := newAllocTracker(idx.allocator)
 	var systemTracker *allocTracker
@@ -1672,7 +1695,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			hold := time.Since(holdStart)
 			db.commitMu.Unlock()
 			observePreparedGroup(preparedRootApplyStateAbandoned)
-			db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, guardErr)
+			observePublish(wait, hold, guardErr)
 			err = guardErr
 			return 0, nil, false, err
 		}
@@ -1687,13 +1710,15 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		committedSystemPages = systemTracker.Pages()
 		db.commitMu.Unlock()
 		if err != nil {
+			observePreparedGroup(preparedRootApplyStateAbandoned)
+			observePublish(wait, hold, err)
 			return 0, nil, false, err
 		}
 		db.invalidateLeafGenerationSubtreeStats(append(committedRootPages, committedSystemPages...))
 		db.finalizeCommitPostWork(post)
 		db.writeMu.RUnlock()
 		observePreparedGroup(preparedRootApplyStateInstalled)
-		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, nil)
+		observePublish(wait, hold, nil)
 		return newSystemRoot, rootIDs, false, nil
 	}
 }

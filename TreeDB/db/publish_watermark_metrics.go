@@ -372,16 +372,7 @@ func (db *DB) observeOrderedRootDeltaGroupPublish(wait, hold time.Duration, root
 	db.orderedRootDeltaGroupInstallGuardNs.Add(phases.installGuardNs)
 	db.orderedRootDeltaGroupInstallGuardCalls.Add(phases.installGuardCalls)
 	db.orderedRootDeltaGroupInstallGuardFailures.Add(phases.installGuardFailures)
-	db.orderedRootDeltaGroupPreparedRootPrepareNs.Add(phases.preparedRootPrepareNs)
-	db.orderedRootDeltaGroupPreparedRootGroups.Add(phases.preparedRootStats.groups)
-	db.orderedRootDeltaGroupPreparedRootRoots.Add(phases.preparedRootStats.roots)
-	db.orderedRootDeltaGroupPreparedRootEntries.Add(phases.preparedRootStats.entries)
-	db.orderedRootDeltaGroupPreparedRootTombstones.Add(phases.preparedRootStats.tombstones)
-	db.orderedRootDeltaGroupPreparedRootKeyBytes.Add(phases.preparedRootStats.keyBytes)
-	db.orderedRootDeltaGroupPreparedRootValueBytes.Add(phases.preparedRootStats.valueBytes)
-	db.orderedRootDeltaGroupPreparedRootPointerValues.Add(phases.preparedRootStats.pointerValues)
-	db.orderedRootDeltaGroupPreparedRootInstalled.Add(phases.preparedRootStats.installed)
-	db.orderedRootDeltaGroupPreparedRootAbandoned.Add(phases.preparedRootStats.abandoned)
+	db.observeOrderedRootDeltaGroupPreparedRootApply(phases.preparedRootPrepareNs, phases.preparedRootStats)
 	db.orderedRootDeltaGroupFinalizeNs.Add(phases.finalizeNs)
 	db.orderedRootDeltaGroupFinalizeCalls.Add(phases.finalizeCalls)
 	for {
@@ -392,6 +383,25 @@ func (db *DB) observeOrderedRootDeltaGroupPublish(wait, hold time.Duration, root
 	}
 	bucket := publishWatermarkLatencyBucketIndex(latency)
 	db.orderedRootDeltaGroupLatencyBuckets[bucket].Add(1)
+}
+
+func (db *DB) observeOrderedRootDeltaGroupPreparedRootApply(prepareNs uint64, stats preparedRootApplyStats) {
+	if db == nil {
+		return
+	}
+	if stats.groups == 0 || stats.roots == 0 {
+		return
+	}
+	db.orderedRootDeltaGroupPreparedRootPrepareNs.Add(prepareNs)
+	db.orderedRootDeltaGroupPreparedRootGroups.Add(stats.groups)
+	db.orderedRootDeltaGroupPreparedRootRoots.Add(stats.roots)
+	db.orderedRootDeltaGroupPreparedRootEntries.Add(stats.entries)
+	db.orderedRootDeltaGroupPreparedRootTombstones.Add(stats.tombstones)
+	db.orderedRootDeltaGroupPreparedRootKeyBytes.Add(stats.keyBytes)
+	db.orderedRootDeltaGroupPreparedRootValueBytes.Add(stats.valueBytes)
+	db.orderedRootDeltaGroupPreparedRootPointerValues.Add(stats.pointerValues)
+	db.orderedRootDeltaGroupPreparedRootInstalled.Add(stats.installed)
+	db.orderedRootDeltaGroupPreparedRootAbandoned.Add(stats.abandoned)
 }
 
 func (db *DB) orderedRootDeltaGroupPublishStats() orderedRootDeltaGroupPublishStats {
