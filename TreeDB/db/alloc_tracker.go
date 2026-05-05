@@ -76,12 +76,16 @@ func (t *allocTracker) MarkInstalled() {
 		return
 	}
 	t.mu.Lock()
-	if t.preparedOutputID != 0 {
+	if t.preparedOutputID != 0 && t.preparedOutputState == preparedOutputStatePrepared {
 		t.preparedOutputState = preparedOutputStateInstalled
 	}
 	t.mu.Unlock()
 }
 
+// FreeAll releases tracked pages for abandoned write attempts. Prepared output
+// trackers that have been marked installed intentionally retain their pages;
+// those pages are now reachable through the installed root and must not be
+// returned to the allocator by this cleanup path.
 func (t *allocTracker) FreeAll() error {
 	if t == nil {
 		return nil
@@ -93,7 +97,7 @@ func (t *allocTracker) FreeAll() error {
 	}
 	pages := append([]uint64(nil), t.pages...)
 	t.pages = nil
-	if t.preparedOutputID != 0 {
+	if t.preparedOutputID != 0 && len(pages) > 0 {
 		t.preparedOutputState = preparedOutputStateAbandoned
 	}
 	t.mu.Unlock()
