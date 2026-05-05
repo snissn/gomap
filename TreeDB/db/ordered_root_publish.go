@@ -1781,11 +1781,11 @@ func recordOrderedRootDeltaBatchGroupApplyResults(
 				phaseStats.rootApplyReadOnlyPrepareOps += uint64(summary.Ops)
 				phaseStats.rootApplyReadOnlyPrepareLeafSpans += uint64(summary.Spans)
 				workerSummary := result.readOnlyPrepareWorkerSummary
-				phaseStats.rootApplyReadOnlyPrepareWorkerTargets += uint64(workerSummary.TargetWorkers)
-				phaseStats.rootApplyReadOnlyPrepareWorkerRanges += uint64(workerSummary.Ranges)
-				phaseStats.rootApplyReadOnlyPrepareWorkerRangeMinOps += uint64(workerSummary.MinRangeOps)
-				phaseStats.rootApplyReadOnlyPrepareWorkerRangeMaxOps += uint64(workerSummary.MaxRangeOps)
-				phaseStats.rootApplyReadOnlyPrepareWorkerRangeSingleSpan += uint64(workerSummary.SingleSpanRanges)
+				phaseStats.rootApplyReadOnlyPrepareWorker.targets += uint64(workerSummary.TargetWorkers)
+				phaseStats.rootApplyReadOnlyPrepareWorker.ranges += uint64(workerSummary.Ranges)
+				phaseStats.rootApplyReadOnlyPrepareWorker.minOps += uint64(workerSummary.MinRangeOps)
+				phaseStats.rootApplyReadOnlyPrepareWorker.maxOps += uint64(workerSummary.MaxRangeOps)
+				phaseStats.rootApplyReadOnlyPrepareWorker.singleSpan += uint64(workerSummary.SingleSpanRanges)
 				if summary.ExactLeafSpans {
 					phaseStats.rootApplyReadOnlyPrepareExactPlans++
 				}
