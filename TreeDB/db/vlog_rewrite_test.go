@@ -3005,6 +3005,12 @@ func readFirstRewriteFrameHeader(t *testing.T, walDir string) valuelog.FrameHead
 
 func readFirstRewriteFrameHeaderForLane(t *testing.T, walDir string, lane uint32) valuelog.FrameHeader {
 	t.Helper()
+	frameHeader, _ := readFirstRewriteFrameHeaderAndStoredPayloadForLane(t, walDir, lane)
+	return frameHeader
+}
+
+func readFirstRewriteFrameHeaderAndStoredPayloadForLane(t *testing.T, walDir string, lane uint32) (valuelog.FrameHeader, int) {
+	t.Helper()
 	paths, err := filepath.Glob(filepath.Join(walDir, fmt.Sprintf("value-l%d-*.log", lane)))
 	if err != nil {
 		t.Fatalf("glob value-log files: %v", err)
@@ -3027,11 +3033,11 @@ func readFirstRewriteFrameHeaderForLane(t *testing.T, walDir string, lane uint32
 	if _, err := io.ReadFull(f, body); err != nil {
 		t.Fatalf("read frame body: %v", err)
 	}
-	frameHeader, _, _, _, err := valuelog.DecodeFrame(body)
+	frameHeader, _, _, payload, err := valuelog.DecodeFrame(body)
 	if err != nil {
 		t.Fatalf("DecodeFrame: %v", err)
 	}
-	return frameHeader
+	return frameHeader, len(payload)
 }
 
 func buildRewriteLeafPageFixture(t *testing.T, seed string) []byte {
@@ -3704,6 +3710,78 @@ func TestRewriteWriter_AppendLeafPageUsesLeafDictWhenConfigured(t *testing.T) {
 	}
 	if blockFrames != 0 {
 		t.Fatalf("expected no block-compressed frames when leaf dict is configured, blockFrames=%d", blockFrames)
+	}
+}
+
+func TestRewriteWriter_DictFrameEncoderOptionsApplyToLeafWriter(t *testing.T) {
+	dictID := uint64(94025)
+	leafPages := make([][]byte, 0, 16)
+	for i := 0; i < 16; i++ {
+		leafPages = append(leafPages, buildRewriteLeafPageFixture(t, fmt.Sprintf("leaf-entropy-%02d", i%4)))
+	}
+	dictSamples := make([][]byte, 0, 4)
+	for _, leafPage := range leafPages[:4] {
+		payload, _, err := valuelog.MaybeCompactLeafLogPayload(leafPage)
+		if err != nil {
+			t.Fatalf("MaybeCompactLeafLogPayload: %v", err)
+		}
+		dictSamples = append(dictSamples, payload)
+	}
+	history := append([]byte(nil), dictSamples[0]...)
+	if len(history) > 8<<10 {
+		history = history[:8<<10]
+	}
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: dictSamples,
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("BuildDict: %v", err)
+	}
+	if len(dict) == 0 {
+		t.Fatalf("BuildDict returned empty dict")
+	}
+
+	storedPayloadLen := func(enableEntropy bool) int {
+		t.Helper()
+		dir := t.TempDir()
+		valueDir := filepath.Join(dir, "value_vlog")
+		leafDir := filepath.Join(dir, "leaf_vlog")
+		if err := os.MkdirAll(valueDir, 0o755); err != nil {
+			t.Fatalf("mkdir value dir: %v", err)
+		}
+		if err := os.MkdirAll(leafDir, 0o755); err != nil {
+			t.Fatalf("mkdir leaf dir: %v", err)
+		}
+		w := newRewriteWriter(valueDir, 0, 0, defaultValueLogRewriteSegmentBytes)
+		w.ConfigureLeafLog(leafDir, rewriteLeafLogLaneID, 0)
+		w.blockCompression = true
+		w.SetKeepPolicy(0, 0, 0)
+		w.SetDictFrameEncoderOptions(zstd.SpeedBestCompression, enableEntropy)
+		w.SetLeafDict(dictID, dict)
+		if _, err := w.appendLeafPagesWithRIDStart(1, leafPages); err != nil {
+			t.Fatalf("appendLeafPagesWithRIDStart entropy=%t: %v", enableEntropy, err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("Close entropy=%t: %v", enableEntropy, err)
+		}
+		frameHeader, stored := readFirstRewriteFrameHeaderAndStoredPayloadForLane(t, leafDir, rewriteLeafLogLaneID)
+		if frameHeader.DictID != dictID {
+			t.Fatalf("frame dictID=%d want %d", frameHeader.DictID, dictID)
+		}
+		if frameHeader.Flags&valuelog.FrameFlagCompressed == 0 {
+			t.Fatalf("expected compressed frame for entropy=%t", enableEntropy)
+		}
+		return stored
+	}
+
+	noEntropyStored := storedPayloadLen(false)
+	entropyStored := storedPayloadLen(true)
+	if entropyStored == noEntropyStored {
+		t.Fatalf("expected entropy option to affect stored payload length, both=%d", entropyStored)
 	}
 }
 

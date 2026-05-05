@@ -1730,6 +1730,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
 	writer.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
+	writer.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
 	if db.indexOuterLeavesInValueLog {
 		if state := db.State(); state != nil {
 			leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(db, state, db.valueLogDictCurrentForClass, db.valueLogDictLeafPayloadMode, db.valueLogDictLookup, db.valueLogDictPut, db.valueLogDictSetCurrentForClass, db.valueLogDictSetLeafPayloadMode, compression.TrainConfig{})
@@ -2974,6 +2975,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	writer.blockCompression = compressionMode != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(opts.ValueLog.BlockCodec)
 	writer.leafBlockCodec = leafPageBlockCodecFromOptions(compressionMode, opts.ValueLog.AutoPolicy, opts.ValueLog.BlockCodec, rewriteUsesLeafLog)
+	writer.SetDictFrameEncoderOptions(opts.ValueLog.DictFrameEncodeLevel, opts.ValueLog.DictFrameEnableEntropy)
 	if err := writer.ensureWriter(); err != nil {
 		_ = d.Close()
 		return stats, err
@@ -3287,6 +3289,8 @@ type rewriteWriter struct {
 	leafDictID              uint64
 	leafDict                []byte
 	leafDictUseRawPages     bool
+	dictFrameEncodeLevel    zstd.EncoderLevel
+	dictFrameEnableEntropy  bool
 	templateMode            template.Mode
 	templateEngineValue     *template.Engine
 	templateEngineOuterLeaf *template.Engine
@@ -3714,6 +3718,7 @@ func (w *rewriteWriter) rotate() error {
 		}
 		writer.SetBlockCompression(w.blockCodec, w.blockCompression)
 		writer.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
+		writer.SetDictFrameEncoderOptions(w.dictFrameEncodeLevel, w.dictFrameEnableEntropy)
 		w.w = writer
 		w.seq = nextSeq
 		w.noteCreatedSegment(path, fileID)
@@ -3726,6 +3731,7 @@ func (w *rewriteWriter) rotate() error {
 	}
 	w.w.SetBlockCompression(w.blockCodec, w.blockCompression)
 	w.w.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
+	w.w.SetDictFrameEncoderOptions(w.dictFrameEncodeLevel, w.dictFrameEnableEntropy)
 	w.seq = nextSeq
 	w.noteCreatedSegment(path, fileID)
 	w.currentPath = path
@@ -3783,6 +3789,7 @@ func (w *rewriteWriter) rotateLeaf() error {
 		}
 		writer.SetBlockCompression(leafCodec, w.blockCompression)
 		writer.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
+		writer.SetDictFrameEncoderOptions(w.dictFrameEncodeLevel, w.dictFrameEnableEntropy)
 		w.leafW = writer
 		w.leafSeq = nextSeq
 		w.noteCreatedSegment(path, fileID)
@@ -3799,6 +3806,7 @@ func (w *rewriteWriter) rotateLeaf() error {
 	}
 	w.leafW.SetBlockCompression(leafCodec, w.blockCompression)
 	w.leafW.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
+	w.leafW.SetDictFrameEncoderOptions(w.dictFrameEncodeLevel, w.dictFrameEnableEntropy)
 	w.leafSeq = nextSeq
 	w.noteCreatedSegment(path, fileID)
 	w.leafCurrentPath = path
@@ -3818,6 +3826,20 @@ func (w *rewriteWriter) SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, saf
 	}
 	if w.leafW != nil {
 		w.leafW.SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin)
+	}
+}
+
+func (w *rewriteWriter) SetDictFrameEncoderOptions(level zstd.EncoderLevel, enableEntropy bool) {
+	if w == nil {
+		return
+	}
+	w.dictFrameEncodeLevel = level
+	w.dictFrameEnableEntropy = enableEntropy
+	if w.w != nil {
+		w.w.SetDictFrameEncoderOptions(level, enableEntropy)
+	}
+	if w.leafW != nil {
+		w.leafW.SetDictFrameEncoderOptions(level, enableEntropy)
 	}
 }
 

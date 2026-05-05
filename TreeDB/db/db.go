@@ -104,6 +104,8 @@ type DB struct {
 	valueLogDictPut                func(context.Context, []byte) (uint64, error)
 	valueLogDictSetCurrentForClass func(context.Context, string, uint64) error
 	valueLogDictSetLeafPayloadMode func(context.Context, uint64, bool) error
+	valueLogDictFrameEncodeLevel   zstd.EncoderLevel
+	valueLogDictFrameEnableEntropy bool
 	valueLogDomainThresholds       []ValueLogDomainThreshold
 	leafFillTargetPPM              uint32
 	internalFillTargetPPM          uint32
@@ -1352,6 +1354,8 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		valueLogDictPut:                opts.ValueLog.DictPut,
 		valueLogDictSetCurrentForClass: opts.ValueLog.DictSetCurrentForClass,
 		valueLogDictSetLeafPayloadMode: opts.ValueLog.DictSetLeafPayloadMode,
+		valueLogDictFrameEncodeLevel:   opts.ValueLog.DictFrameEncodeLevel,
+		valueLogDictFrameEnableEntropy: opts.ValueLog.DictFrameEnableEntropy,
 		valueLogDomainThresholds:       NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
 		leafFillTargetPPM:              opts.LeafFillTargetPPM,
 		internalFillTargetPPM:          opts.InternalFillTargetPPM,
