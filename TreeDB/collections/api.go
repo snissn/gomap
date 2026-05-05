@@ -7221,6 +7221,7 @@ func coalesceNoIndexBufferedTable(table memtable.Table) (memtable.Table, error) 
 		}
 		out.SetEntry(key, value, ptr, flags)
 	}
+	resetCollectionRunTable(table)
 	return out, nil
 }
 
