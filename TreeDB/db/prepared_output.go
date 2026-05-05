@@ -1,6 +1,9 @@
 package db
 
-import "github.com/snissn/gomap/TreeDB/freelist"
+import (
+	"github.com/snissn/gomap/TreeDB/freelist"
+	"github.com/snissn/gomap/TreeDB/page"
+)
 
 type preparedOutputID uint64
 
@@ -14,9 +17,10 @@ const (
 )
 
 type preparedOutputSnapshot struct {
-	ID    preparedOutputID
-	State preparedOutputState
-	Pages []uint64
+	ID          preparedOutputID
+	State       preparedOutputState
+	Pages       []uint64
+	LeafLogPtrs []page.LeafLogPtr
 }
 
 func (db *DB) nextPreparedOutputID() preparedOutputID {
