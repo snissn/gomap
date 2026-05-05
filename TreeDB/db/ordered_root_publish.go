@@ -1530,6 +1530,20 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		return 0, nil, retrySerialized, nil
 	}
 
+	phaseStart := time.Now()
+	var preparedGroup preparedRootApplyGroup
+	includePreparedChecksum := db.testPreparedRootApplyHook != nil
+	initPreparedRootApplyGroup(&preparedGroup, baseUserRoot, baseSystemRoot, ordered, includePreparedChecksum)
+	phaseStats.preparedRootPrepareNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	preparedGroupObserved := false
+	observePreparedGroup := func(state preparedRootApplyState) {
+		if preparedGroupObserved {
+			return
+		}
+		preparedGroupObserved = true
+		observePreparedRootApplyGroup(db, &phaseStats, &preparedGroup, state)
+	}
+
 	rootTracker := newAllocTracker(idx.allocator)
 	var systemTracker *allocTracker
 	commitStarted := false
@@ -1553,7 +1567,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 	systemOpts := systemRootOrderedPublishOptions(db)
 	var nonSystemPendingRetiredPages []uint64
 	var nonSystemMetrics adaptive.Metrics
-	phaseStart := time.Now()
+	phaseStart = time.Now()
 	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idx, ordered, rootTracker, rootTracker)
 	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if parallelRootApply {
@@ -1570,6 +1584,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			return 0, nil, false, result.err
 		}
 		rootIDs[orderedIdx] = result.rootID
+		preparedGroup.markPrepared(orderedIdx, result.rootID)
 		rootsObserved++
 		nonSystemPendingRetiredPages = append(nonSystemPendingRetiredPages, result.pendingRetiredPages...)
 		mergeOrderedRootPublishMetrics(&nonSystemMetrics, result.metrics)
@@ -1597,6 +1612,9 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			return 0, nil, false, err
 		}
 		phaseStart = time.Now()
+		systemPreparedIdx := preparedGroup.setSystemRoot(systemBaseRoot, systemDelta, includePreparedChecksum)
+		phaseStats.preparedRootPrepareNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+		phaseStart = time.Now()
 		rootID, systemPendingRetiredPages, systemMetrics, applyErr := db.publishOrderedRootDeltaBatchWithAllocator(idx, systemBaseRoot, systemDelta, systemOpts, systemTracker, systemTracker, systemBaseRoot == 0)
 		phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.systemApplyCalls++
@@ -1605,6 +1623,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			err = applyErr
 			return 0, nil, false, err
 		}
+		preparedGroup.markPrepared(systemPreparedIdx, rootID)
 		phaseStats.systemApplyMetrics.add(systemMetrics)
 
 		lockStart := time.Now()
@@ -1644,6 +1663,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		// delta can change collection descriptors. Keep the incremental ref tracker
 		// conservative by invalidating it after commit.
 		var vlogRefDelta *valueLogRefDelta
+		preparedGroup.markInstalling()
 		guardNs, guardErr := db.runInstallGuard(orderedRootDeltaGroupSystemInstallGuard(systemBaseRoot))
 		phaseStats.installGuardNs += guardNs
 		phaseStats.installGuardCalls++
@@ -1651,6 +1671,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			phaseStats.installGuardFailures++
 			hold := time.Since(holdStart)
 			db.commitMu.Unlock()
+			observePreparedGroup(preparedRootApplyStateAbandoned)
 			db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, guardErr)
 			err = guardErr
 			return 0, nil, false, err
@@ -1671,6 +1692,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		db.invalidateLeafGenerationSubtreeStats(append(committedRootPages, committedSystemPages...))
 		db.finalizeCommitPostWork(post)
 		db.writeMu.RUnlock()
+		observePreparedGroup(preparedRootApplyStateInstalled)
 		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, nil)
 		return newSystemRoot, rootIDs, false, nil
 	}
@@ -1728,6 +1750,25 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	}
 
+	phaseStart := time.Now()
+	var preparedGroup preparedRootApplyGroup
+	includePreparedChecksum := db.testPreparedRootApplyHook != nil
+	initPreparedRootApplyGroup(&preparedGroup, userRoot, baseSystemRoot, ordered, includePreparedChecksum)
+	phaseStats.preparedRootPrepareNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	preparedGroupObserved := false
+	observePreparedGroup := func(state preparedRootApplyState) {
+		if preparedGroupObserved {
+			return
+		}
+		preparedGroupObserved = true
+		observePreparedRootApplyGroup(db, &phaseStats, &preparedGroup, state)
+	}
+	defer func() {
+		if !preparedGroupObserved && err != nil {
+			observePreparedGroup(preparedRootApplyStateAbandoned)
+		}
+	}()
+
 	rootTracker := newAllocTracker(idxGen.allocator)
 	systemTracker := newAllocTracker(idxGen.allocator)
 	commitStarted := false
@@ -1742,7 +1783,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	systemOpts := systemRootOrderedPublishOptions(db)
 	var pendingRetiredPages []uint64
 	var merged adaptive.Metrics
-	phaseStart := time.Now()
+	phaseStart = time.Now()
 	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, ordered, rootTracker, rootTracker)
 	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if parallelRootApply {
@@ -1759,6 +1800,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 			return 0, nil, result.err
 		}
 		rootIDs[orderedIdx] = result.rootID
+		preparedGroup.markPrepared(orderedIdx, result.rootID)
 		rootsObserved++
 		pendingRetiredPages = append(pendingRetiredPages, result.pendingRetiredPages...)
 		mergeOrderedRootPublishMetrics(&merged, result.metrics)
@@ -1781,6 +1823,9 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		return 0, nil, err
 	}
 	phaseStart = time.Now()
+	systemPreparedIdx := preparedGroup.setSystemRoot(baseSystemRoot, systemDelta, includePreparedChecksum)
+	phaseStats.preparedRootPrepareNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	phaseStart = time.Now()
 	rootID, systemPendingRetiredPages, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idxGen, baseSystemRoot, systemDelta, systemOpts, systemTracker, systemTracker, baseSystemRoot == 0)
 	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.systemApplyCalls++
@@ -1788,11 +1833,13 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	if err != nil {
 		return 0, nil, err
 	}
+	preparedGroup.markPrepared(systemPreparedIdx, rootID)
 	newSystemRoot = rootID
 	pendingRetiredPages = append(pendingRetiredPages, systemPendingRetiredPages...)
 	mergeOrderedRootPublishMetrics(&merged, metrics)
 	phaseStats.systemApplyMetrics.add(metrics)
 
+	preparedGroup.markInstalling()
 	guardNs, guardErr := db.runInstallGuard(orderedRootDeltaGroupInstallGuard(userRoot, baseSystemRoot))
 	phaseStats.installGuardNs += guardNs
 	phaseStats.installGuardCalls++
@@ -1814,6 +1861,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	if err != nil {
 		return 0, nil, err
 	}
+	observePreparedGroup(preparedRootApplyStateInstalled)
 	return newSystemRoot, rootIDs, nil
 }
 

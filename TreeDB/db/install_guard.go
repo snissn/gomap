@@ -11,10 +11,18 @@ import (
 var ErrInstallGuardMismatch = errors.New("treedb: install guard mismatch")
 
 type dbInstallGuardKind string
+type dbInstallGuardFailureCause uint8
 
 const (
 	dbInstallGuardRawBatch         dbInstallGuardKind = "raw_batch"
 	dbInstallGuardOrderedRootGroup dbInstallGuardKind = "ordered_root_delta_group"
+)
+
+const (
+	dbInstallGuardFailureNone dbInstallGuardFailureCause = iota
+	dbInstallGuardFailureHook
+	dbInstallGuardFailureUserRoot
+	dbInstallGuardFailureSystemRoot
 )
 
 type dbInstallGuard struct {
@@ -62,6 +70,7 @@ func orderedRootDeltaGroupSystemInstallGuard(systemRoot uint64) dbInstallGuard {
 func (db *DB) runInstallGuard(guard dbInstallGuard) (uint64, error) {
 	start := time.Now()
 	var err error
+	cause := dbInstallGuardFailureNone
 	if db == nil {
 		err = ErrClosed
 	} else if hook := db.testInstallGuardHook; hook != nil {
@@ -72,9 +81,12 @@ func (db *DB) runInstallGuard(guard dbInstallGuard) (uint64, error) {
 			CheckUserRoot:   guard.checkUserRoot,
 			CheckSystemRoot: guard.checkSystemRoot,
 		})
+		if err != nil {
+			cause = dbInstallGuardFailureHook
+		}
 	}
 	if err == nil {
-		err = db.checkInstallGuard(guard)
+		cause, err = db.checkInstallGuard(guard)
 	}
 	elapsed := elapsedDurationNs(start)
 	if db != nil {
@@ -82,24 +94,32 @@ func (db *DB) runInstallGuard(guard dbInstallGuard) (uint64, error) {
 		db.publishInstallGuardNs.Add(elapsed)
 		if err != nil {
 			db.publishInstallGuardFailures.Add(1)
+			switch cause {
+			case dbInstallGuardFailureHook:
+				db.publishInstallGuardHookFailures.Add(1)
+			case dbInstallGuardFailureUserRoot:
+				db.publishInstallGuardUserRootMismatches.Add(1)
+			case dbInstallGuardFailureSystemRoot:
+				db.publishInstallGuardSystemRootMismatches.Add(1)
+			}
 		}
 	}
 	return elapsed, err
 }
 
-func (db *DB) checkInstallGuard(guard dbInstallGuard) error {
+func (db *DB) checkInstallGuard(guard dbInstallGuard) (dbInstallGuardFailureCause, error) {
 	if db == nil {
-		return ErrClosed
+		return dbInstallGuardFailureNone, ErrClosed
 	}
 	db.mu.RLock()
 	currentUserRoot := db.meta.UserRootPageID
 	currentSystemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 	if guard.checkUserRoot && currentUserRoot != guard.userRoot {
-		return fmt.Errorf("%w: user root changed from %d to %d", ErrInstallGuardMismatch, guard.userRoot, currentUserRoot)
+		return dbInstallGuardFailureUserRoot, fmt.Errorf("%w: user root changed from %d to %d", ErrInstallGuardMismatch, guard.userRoot, currentUserRoot)
 	}
 	if guard.checkSystemRoot && currentSystemRoot != guard.systemRoot {
-		return fmt.Errorf("%w: system root changed from %d to %d", ErrInstallGuardMismatch, guard.systemRoot, currentSystemRoot)
+		return dbInstallGuardFailureSystemRoot, fmt.Errorf("%w: system root changed from %d to %d", ErrInstallGuardMismatch, guard.systemRoot, currentSystemRoot)
 	}
-	return nil
+	return dbInstallGuardFailureNone, nil
 }

@@ -793,10 +793,23 @@ func TestPublishOrderedRootDeltaGroupWithSystemBuilder_ReportsPublishStats(t *te
 		"treedb.publish.ordered_root_delta_group.install_guard_ns_total",
 		"treedb.publish.ordered_root_delta_group.install_guard_calls_total",
 		"treedb.publish.ordered_root_delta_group.install_guard_failures_total",
+		"treedb.publish.ordered_root_delta_group.prepared_root.prepare_ns_total",
+		"treedb.publish.ordered_root_delta_group.prepared_root.groups_total",
+		"treedb.publish.ordered_root_delta_group.prepared_root.roots_total",
+		"treedb.publish.ordered_root_delta_group.prepared_root.entries_total",
+		"treedb.publish.ordered_root_delta_group.prepared_root.tombstones_total",
+		"treedb.publish.ordered_root_delta_group.prepared_root.key_bytes_total",
+		"treedb.publish.ordered_root_delta_group.prepared_root.value_bytes_total",
+		"treedb.publish.ordered_root_delta_group.prepared_root.pointer_values_total",
+		"treedb.publish.ordered_root_delta_group.prepared_root.installed_total",
+		"treedb.publish.ordered_root_delta_group.prepared_root.abandoned_total",
 		"treedb.publish.ordered_root_delta_group.finalize_ns_total",
 		"treedb.publish.install_guard.ns_total",
 		"treedb.publish.install_guard.calls_total",
 		"treedb.publish.install_guard.failures_total",
+		"treedb.publish.install_guard.hook_failures_total",
+		"treedb.publish.install_guard.user_root_mismatches_total",
+		"treedb.publish.install_guard.system_root_mismatches_total",
 	} {
 		if _, ok := stats[key]; !ok {
 			t.Fatalf("missing ordered root delta phase stat %q", key)

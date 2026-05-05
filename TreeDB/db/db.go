@@ -223,9 +223,23 @@ type DB struct {
 	orderedRootDeltaGroupFinalizeNs                             atomic.Uint64
 	orderedRootDeltaGroupFinalizeCalls                          atomic.Uint64
 
-	publishInstallGuardNs       atomic.Uint64
-	publishInstallGuardCalls    atomic.Uint64
-	publishInstallGuardFailures atomic.Uint64
+	orderedRootDeltaGroupPreparedRootPrepareNs     atomic.Uint64
+	orderedRootDeltaGroupPreparedRootGroups        atomic.Uint64
+	orderedRootDeltaGroupPreparedRootRoots         atomic.Uint64
+	orderedRootDeltaGroupPreparedRootEntries       atomic.Uint64
+	orderedRootDeltaGroupPreparedRootTombstones    atomic.Uint64
+	orderedRootDeltaGroupPreparedRootKeyBytes      atomic.Uint64
+	orderedRootDeltaGroupPreparedRootValueBytes    atomic.Uint64
+	orderedRootDeltaGroupPreparedRootPointerValues atomic.Uint64
+	orderedRootDeltaGroupPreparedRootInstalled     atomic.Uint64
+	orderedRootDeltaGroupPreparedRootAbandoned     atomic.Uint64
+
+	publishInstallGuardNs                   atomic.Uint64
+	publishInstallGuardCalls                atomic.Uint64
+	publishInstallGuardFailures             atomic.Uint64
+	publishInstallGuardHookFailures         atomic.Uint64
+	publishInstallGuardUserRootMismatches   atomic.Uint64
+	publishInstallGuardSystemRootMismatches atomic.Uint64
 
 	// R4 warm-publish counters. Warm native apply is used for bounded deltas;
 	// larger or ineligible deltas record an explicit rebuild fallback selection.
@@ -246,6 +260,7 @@ type DB struct {
 	testBatchCreateHook           func()
 	testOrderedRootPublishHook    func(baseRoot uint64)
 	testInstallGuardHook          func(dbInstallGuardHookEvent) error
+	testPreparedRootApplyHook     func(preparedRootApplyGroup)
 	testSystemRootWarmMaxDeltaOps int
 	// testFailWriteMeta forces writeMeta to fail before mutating the target meta
 	// page so tests can exercise pre-publish cleanup paths.

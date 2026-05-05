@@ -182,6 +182,16 @@ type orderedRootDeltaGroupPublishStats struct {
 	installGuardNs                         uint64
 	installGuardCalls                      uint64
 	installGuardFailures                   uint64
+	preparedRootPrepareNs                  uint64
+	preparedRootGroups                     uint64
+	preparedRootRoots                      uint64
+	preparedRootEntries                    uint64
+	preparedRootTombstones                 uint64
+	preparedRootKeyBytes                   uint64
+	preparedRootValueBytes                 uint64
+	preparedRootPointerValues              uint64
+	preparedRootInstalled                  uint64
+	preparedRootAbandoned                  uint64
 	finalizeNs                             uint64
 	finalizeCalls                          uint64
 	latencyP99                             time.Duration
@@ -204,6 +214,8 @@ type orderedRootDeltaGroupPublishPhaseStats struct {
 	installGuardNs          uint64
 	installGuardCalls       uint64
 	installGuardFailures    uint64
+	preparedRootPrepareNs   uint64
+	preparedRootStats       preparedRootApplyStats
 	finalizeNs              uint64
 	finalizeCalls           uint64
 }
@@ -360,6 +372,16 @@ func (db *DB) observeOrderedRootDeltaGroupPublish(wait, hold time.Duration, root
 	db.orderedRootDeltaGroupInstallGuardNs.Add(phases.installGuardNs)
 	db.orderedRootDeltaGroupInstallGuardCalls.Add(phases.installGuardCalls)
 	db.orderedRootDeltaGroupInstallGuardFailures.Add(phases.installGuardFailures)
+	db.orderedRootDeltaGroupPreparedRootPrepareNs.Add(phases.preparedRootPrepareNs)
+	db.orderedRootDeltaGroupPreparedRootGroups.Add(phases.preparedRootStats.groups)
+	db.orderedRootDeltaGroupPreparedRootRoots.Add(phases.preparedRootStats.roots)
+	db.orderedRootDeltaGroupPreparedRootEntries.Add(phases.preparedRootStats.entries)
+	db.orderedRootDeltaGroupPreparedRootTombstones.Add(phases.preparedRootStats.tombstones)
+	db.orderedRootDeltaGroupPreparedRootKeyBytes.Add(phases.preparedRootStats.keyBytes)
+	db.orderedRootDeltaGroupPreparedRootValueBytes.Add(phases.preparedRootStats.valueBytes)
+	db.orderedRootDeltaGroupPreparedRootPointerValues.Add(phases.preparedRootStats.pointerValues)
+	db.orderedRootDeltaGroupPreparedRootInstalled.Add(phases.preparedRootStats.installed)
+	db.orderedRootDeltaGroupPreparedRootAbandoned.Add(phases.preparedRootStats.abandoned)
 	db.orderedRootDeltaGroupFinalizeNs.Add(phases.finalizeNs)
 	db.orderedRootDeltaGroupFinalizeCalls.Add(phases.finalizeCalls)
 	for {
@@ -427,6 +449,16 @@ func (db *DB) orderedRootDeltaGroupPublishStats() orderedRootDeltaGroupPublishSt
 		installGuardNs:                         db.orderedRootDeltaGroupInstallGuardNs.Load(),
 		installGuardCalls:                      db.orderedRootDeltaGroupInstallGuardCalls.Load(),
 		installGuardFailures:                   db.orderedRootDeltaGroupInstallGuardFailures.Load(),
+		preparedRootPrepareNs:                  db.orderedRootDeltaGroupPreparedRootPrepareNs.Load(),
+		preparedRootGroups:                     db.orderedRootDeltaGroupPreparedRootGroups.Load(),
+		preparedRootRoots:                      db.orderedRootDeltaGroupPreparedRootRoots.Load(),
+		preparedRootEntries:                    db.orderedRootDeltaGroupPreparedRootEntries.Load(),
+		preparedRootTombstones:                 db.orderedRootDeltaGroupPreparedRootTombstones.Load(),
+		preparedRootKeyBytes:                   db.orderedRootDeltaGroupPreparedRootKeyBytes.Load(),
+		preparedRootValueBytes:                 db.orderedRootDeltaGroupPreparedRootValueBytes.Load(),
+		preparedRootPointerValues:              db.orderedRootDeltaGroupPreparedRootPointerValues.Load(),
+		preparedRootInstalled:                  db.orderedRootDeltaGroupPreparedRootInstalled.Load(),
+		preparedRootAbandoned:                  db.orderedRootDeltaGroupPreparedRootAbandoned.Load(),
 		finalizeNs:                             db.orderedRootDeltaGroupFinalizeNs.Load(),
 		finalizeCalls:                          db.orderedRootDeltaGroupFinalizeCalls.Load(),
 	}
