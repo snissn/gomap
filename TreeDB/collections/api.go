@@ -9280,15 +9280,23 @@ func applyDirectBufferedRootEntries(table memtable.Table, entries []directBuffer
 	})
 }
 
-func buildIndexedSemanticUpdateRecords(collectionName string, runtimes []indexRuntime, updates []preparedBatchUpdate) []indexedSemanticRecord {
+func buildIndexedSemanticUpdateRecords(collectionName string, runtimes []indexRuntime, updates []preparedBatchUpdate, primaryEntries []directBufferedRootEntry) []indexedSemanticRecord {
 	if len(updates) == 0 {
 		return nil
 	}
 	records := make([]indexedSemanticRecord, 0, len(updates))
-	for _, update := range updates {
+	for i, update := range updates {
+		var documentID []byte
+		if i < len(primaryEntries) && len(primaryEntries[i].key) > 0 {
+			// Direct primary entries are built from the same changed slice and carry
+			// an owned, staged document ID clone, so the semantic sidecar can share it.
+			documentID = primaryEntries[i].key
+		} else {
+			documentID = bytes.Clone(update.documentID)
+		}
 		record := indexedSemanticRecord{
 			kind:       indexedSemanticRecordUpdate,
-			documentID: bytes.Clone(update.documentID),
+			documentID: documentID,
 		}
 		if update.indexStateChanged && len(runtimes) > 0 {
 			for runtimeIdx, runtime := range runtimes {
@@ -10482,7 +10490,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		stats = updateCollectionUpdateStatsCounts(stats, results, len(rootNames))
 		var semanticRecords []indexedSemanticRecord
 		if c.writeDomain != nil && canBufferIndexedUpdateBatch && meta.Options.BufferedIndexedWrites {
-			semanticRecords = buildIndexedSemanticUpdateRecords(meta.Name, runtimes, changed)
+			semanticRecords = buildIndexedSemanticUpdateRecords(meta.Name, runtimes, changed, primaryEntries)
 		}
 		*plan = updateBatchPlan{
 			results:                     results,
@@ -10686,7 +10694,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	stats = updateCollectionUpdateStatsCounts(stats, results, len(deltaTables))
 	var semanticRecords []indexedSemanticRecord
 	if c.writeDomain != nil && canBufferIndexedUpdateBatch && meta.Options.BufferedIndexedWrites {
-		semanticRecords = buildIndexedSemanticUpdateRecords(meta.Name, runtimes, changed)
+		semanticRecords = buildIndexedSemanticUpdateRecords(meta.Name, runtimes, changed, nil)
 	}
 	*plan = updateBatchPlan{
 		results:                     results,
