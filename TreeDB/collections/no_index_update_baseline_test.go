@@ -872,6 +872,101 @@ func TestCollectionNoIndexUpdateCreateIndexDrainsStagedUpdateBeforeBackfill(t *t
 	}
 }
 
+func TestCollectionNoIndexUpdateBatchNoOpNestedStageDoesNotFlush(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	other, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open other collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"count":0}`), []byte(`{"count":0}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert: %v", err)
+	}
+	beforeState := d.State()
+	beforeRoot := collectionNoIndexPrimaryRootIDForTest(t, d, "users")
+	nested := false
+	results, err := col.UpdateBatch([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: func(current []byte) ([]byte, bool, error) {
+			if !bytes.Equal(current, []byte(`{"count":0}`)) {
+				return nil, false, fmt.Errorf("batch current=%q want count 0", current)
+			}
+			if !nested {
+				nested = true
+				matched, modified, err := col.Update([]byte("u2"), func(current []byte) ([]byte, bool, error) {
+					if !bytes.Equal(current, []byte(`{"count":0}`)) {
+						return nil, false, fmt.Errorf("nested current=%q want count 0", current)
+					}
+					return []byte(`{"count":1}`), true, nil
+				})
+				if err != nil {
+					return nil, false, err
+				}
+				if !matched || !modified {
+					return nil, false, fmt.Errorf("nested matched/modified=%v/%v want true/true", matched, modified)
+				}
+			}
+			return current, false, nil
+		}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || results[0].Modified {
+		t.Fatalf("UpdateBatch results=%+v want matched no-op", results)
+	}
+	if got := d.State().CommitSeq; got != beforeState.CommitSeq {
+		t.Fatalf("no-op UpdateBatch nested stage advanced commit seq from %d to %d", beforeState.CommitSeq, got)
+	}
+	if got := collectionNoIndexPrimaryRootIDForTest(t, d, "users"); got != beforeRoot {
+		t.Fatalf("no-op UpdateBatch nested stage published primary root from %d to %d", beforeRoot, got)
+	}
+	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 1 || state.tableLen != 1 {
+		t.Fatalf("pending state after no-op nested stage=%+v want one no-index row", state)
+	}
+	got, err := col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("same-manager get staged u2: %v", err)
+	}
+	if want := []byte(`{"count":1}`); !bytes.Equal(got, want) {
+		t.Fatalf("same-manager staged u2=%q want %q", got, want)
+	}
+	got, err = other.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("other-manager get u2 before flush: %v", err)
+	}
+	if want := []byte(`{"count":0}`); !bytes.Equal(got, want) {
+		t.Fatalf("other-manager u2 before flush=%q want %q", got, want)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush staged u2: %v", err)
+	}
+	got, err = other.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("other-manager get u2 after flush: %v", err)
+	}
+	if want := []byte(`{"count":1}`); !bytes.Equal(got, want) {
+		t.Fatalf("other-manager u2 after flush=%q want %q", got, want)
+	}
+}
+
 func TestCollectionNoIndexUpdateCallbackErrorDoesNotDropPriorStagedUpdate(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -1007,6 +1102,165 @@ func TestCollectionNoIndexUpdateCallbackPanicDoesNotDropPriorStagedUpdate(t *tes
 	}
 	if want := []byte(`{"count":1}`); !bytes.Equal(got, want) {
 		t.Fatalf("document after flush=%q want %q", got, want)
+	}
+}
+
+func TestCollectionNoIndexStagedUpdateSurvivesNonBarrierOperations(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(t *testing.T, col, other *Collection)
+		want int
+	}{
+		{
+			name: "missing-index-lookup",
+			run: func(t *testing.T, col, other *Collection) {
+				t.Helper()
+				ids, err := col.FindByIndex("missing", "x")
+				if err != nil {
+					t.Fatalf("FindByIndex missing: %v", err)
+				}
+				if len(ids) != 0 {
+					t.Fatalf("FindByIndex missing ids=%q want empty", ids)
+				}
+			},
+			want: 1,
+		},
+		{
+			name: "scan",
+			run: func(t *testing.T, col, other *Collection) {
+				t.Helper()
+				seen := 0
+				if _, err := col.ScanDocumentsFunc(10, func(DocumentRecord) (bool, error) {
+					seen++
+					return true, nil
+				}); err != nil {
+					t.Fatalf("ScanDocumentsFunc: %v", err)
+				}
+				if seen == 0 {
+					t.Fatal("ScanDocumentsFunc saw no persisted documents")
+				}
+			},
+			want: 1,
+		},
+		{
+			name: "insert-batch",
+			run: func(t *testing.T, col, other *Collection) {
+				t.Helper()
+				if _, err := col.InsertBatch(
+					[][]byte{[]byte("u3")},
+					[][]byte{[]byte(`{"count":3}`)},
+				); err != nil {
+					t.Fatalf("InsertBatch: %v", err)
+				}
+				got, err := col.Get([]byte("u3"))
+				if err != nil {
+					t.Fatalf("same-manager get staged u3: %v", err)
+				}
+				if want := []byte(`{"count":3}`); !bytes.Equal(got, want) {
+					t.Fatalf("same-manager u3=%q want %q", got, want)
+				}
+				if got, found, err := other.GetInto([]byte("u3"), nil); err != nil {
+					t.Fatalf("other-manager get u3 before flush: %v", err)
+				} else if found {
+					t.Fatalf("other-manager saw staged insert u3=%q before flush", got)
+				}
+			},
+			want: 2,
+		},
+		{
+			name: "delete-document",
+			run: func(t *testing.T, col, other *Collection) {
+				t.Helper()
+				deleted, err := col.DeleteDocument([]byte("u2"))
+				if err != nil {
+					t.Fatalf("DeleteDocument: %v", err)
+				}
+				if !deleted {
+					t.Fatal("DeleteDocument deleted=false want true")
+				}
+				if got, found, err := col.GetInto([]byte("u2"), nil); err != nil {
+					t.Fatalf("same-manager get u2 after staged delete: %v", err)
+				} else if found {
+					t.Fatalf("same-manager saw deleted u2=%q", got)
+				}
+				got, err := other.Get([]byte("u2"))
+				if err != nil {
+					t.Fatalf("other-manager get u2 before flush: %v", err)
+				}
+				if want := []byte(`{"count":0}`); !bytes.Equal(got, want) {
+					t.Fatalf("other-manager u2 before flush=%q want %q", got, want)
+				}
+			},
+			want: 2,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatalf("open db: %v", err)
+			}
+			defer func() { _ = d.Close() }()
+			mgr := NewCollectionManager(d)
+			if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+				t.Fatalf("create collection: %v", err)
+			}
+			col, err := mgr.OpenCollection("users")
+			if err != nil {
+				t.Fatalf("open collection: %v", err)
+			}
+			other, err := NewCollectionManager(d).OpenCollection("users")
+			if err != nil {
+				t.Fatalf("open other collection: %v", err)
+			}
+			if _, err := col.InsertBatch(
+				[][]byte{[]byte("u1"), []byte("u2")},
+				[][]byte{[]byte(`{"count":0}`), []byte(`{"count":0}`)},
+			); err != nil {
+				t.Fatalf("insert batch: %v", err)
+			}
+			if err := col.Flush(); err != nil {
+				t.Fatalf("flush insert: %v", err)
+			}
+			beforeState := d.State()
+			beforeRoot := collectionNoIndexPrimaryRootIDForTest(t, d, "users")
+			if _, _, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+				if !bytes.Equal(current, []byte(`{"count":0}`)) {
+					return nil, false, fmt.Errorf("stage current=%q want count 0", current)
+				}
+				return []byte(`{"count":1}`), true, nil
+			}); err != nil {
+				t.Fatalf("stage update: %v", err)
+			}
+
+			tc.run(t, col, other)
+
+			if got := d.State().CommitSeq; got != beforeState.CommitSeq {
+				t.Fatalf("%s advanced commit seq from %d to %d", tc.name, beforeState.CommitSeq, got)
+			}
+			if got := collectionNoIndexPrimaryRootIDForTest(t, d, "users"); got != beforeRoot {
+				t.Fatalf("%s published primary root from %d to %d", tc.name, beforeRoot, got)
+			}
+			if state := collectionNoIndexPendingStateForTest(t, col); state.count != tc.want || state.tableLen != tc.want {
+				t.Fatalf("%s pending state=%+v want %d no-index rows", tc.name, state, tc.want)
+			}
+			got, err := other.Get([]byte("u1"))
+			if err != nil {
+				t.Fatalf("other-manager get u1 before flush: %v", err)
+			}
+			if want := []byte(`{"count":0}`); !bytes.Equal(got, want) {
+				t.Fatalf("other-manager u1 before flush=%q want %q", got, want)
+			}
+			if err := col.Flush(); err != nil {
+				t.Fatalf("flush after %s: %v", tc.name, err)
+			}
+			got, err = other.Get([]byte("u1"))
+			if err != nil {
+				t.Fatalf("other-manager get u1 after flush: %v", err)
+			}
+			if want := []byte(`{"count":1}`); !bytes.Equal(got, want) {
+				t.Fatalf("other-manager u1 after flush=%q want %q", got, want)
+			}
+		})
 	}
 }
 

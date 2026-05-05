@@ -81,6 +81,72 @@ func TestCollectionNoIndexUpdateBSONStagesValidIDPreservingReplacement(t *testin
 	requireBSONInt32FieldForUpdateTest(t, got, "score", 1)
 }
 
+func TestCollectionNoIndexUpdateBSONMissingIndexLookupDoesNotFlushStagedUpdate(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	other, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open other collection: %v", err)
+	}
+	doc := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(0)}})
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{doc}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	beforeState := d.State()
+	beforeRoot := collectionPrimaryRootIDForTest(t, d, "users")
+	replacement := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(1)}})
+	if _, _, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+		if err := checkBSONInt32FieldForUpdateTest(current, "score", 0); err != nil {
+			return nil, false, err
+		}
+		return replacement, true, nil
+	}); err != nil {
+		t.Fatalf("stage BSON update: %v", err)
+	}
+	if ids, err := col.FindByIndex("missing", "x"); err != nil {
+		t.Fatalf("FindByIndex missing: %v", err)
+	} else if len(ids) != 0 {
+		t.Fatalf("FindByIndex missing ids=%q want empty", ids)
+	}
+	if got := d.State().CommitSeq; got != beforeState.CommitSeq {
+		t.Fatalf("missing-index lookup advanced commit seq from %d to %d", beforeState.CommitSeq, got)
+	}
+	if got := collectionPrimaryRootIDForTest(t, d, "users"); got != beforeRoot {
+		t.Fatalf("missing-index lookup published primary root from %d to %d", beforeRoot, got)
+	}
+	if state := collectionNoIndexPendingStateForTest(t, col); state.count != 1 || state.tableLen < 1 {
+		t.Fatalf("pending BSON state=%+v want one row", state)
+	}
+	got, err := other.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("other-manager get BSON before flush: %v", err)
+	}
+	requireBSONInt32FieldForUpdateTest(t, got, "score", 0)
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush staged BSON update: %v", err)
+	}
+	got, err = other.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("other-manager get BSON after flush: %v", err)
+	}
+	requireBSONInt32FieldForUpdateTest(t, got, "score", 1)
+}
+
 func TestCollectionUpdateBSONRejectsIDMutationBeforeStaging(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
