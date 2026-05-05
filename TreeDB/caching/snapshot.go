@@ -130,6 +130,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		viewRootSystem      rootDomainSnapshot
 		viewRootIterator    rootDomainSnapshot
 		viewPublishedRoots  *publishedRootSet
+		publishedRootsOwned bool
 	)
 	if view != nil {
 		viewRootVersion = view.rootVersion
@@ -146,6 +147,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 			} else {
 				viewRootPointShards = append([]rootDomainSnapshot(nil), view.rootSnapshotShards...)
 				viewPublishedRoots = clonePublishedRootSet(view.publishedRoots)
+				publishedRootsOwned = true
 			}
 			db.releaseMemtableView(view)
 			view = nil
@@ -182,7 +184,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.rootSystem = viewRootSystem
 	snap.rootIterator = viewRootIterator
 	snap.publishedRoots = viewPublishedRoots
-	snap.installBackendPublishedRootLookups()
+	snap.installBackendPublishedRootLookups(publishedRootsOwned)
 	if snap.publishedRoots == nil {
 		db.rootPublishStats.backendFallbacks.Add(1)
 	}
