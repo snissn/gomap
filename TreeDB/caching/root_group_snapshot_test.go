@@ -615,6 +615,131 @@ func TestAcquireSnapshot_InstallsBackendLookupForPublishedPointRoots(t *testing.
 	}
 }
 
+func TestAcquireSnapshot_InstallsBackendLookupForPublishedSystemAndIteratorRoots(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	systemTable := newRootDomainTestTable(t, rootDomainTestOp{key: "system/k", value: "system-v"})
+	systemRootID, err := backend.PublishOrderedRootIterator(0, systemTable.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish system root: %v", err)
+	}
+	iteratorTable := newRootDomainTestTable(t, rootDomainTestOp{key: "iterator/k", value: "iterator-v"})
+	iteratorRootID, err := backend.PublishOrderedRootIterator(0, iteratorTable.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish iterator root: %v", err)
+	}
+	if state := backend.State(); state != nil {
+		if systemRootID == state.RootPageID || systemRootID == state.SystemRootPageID {
+			t.Fatalf("test system root unexpectedly matches static root state: %d", systemRootID)
+		}
+		if iteratorRootID == state.RootPageID || iteratorRootID == state.SystemRootPageID {
+			t.Fatalf("test iterator root unexpectedly matches static root state: %d", iteratorRootID)
+		}
+	}
+
+	db := &DB{
+		backend:          backend,
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+	view := &memtableView{
+		publishedRoots: &publishedRootSet{
+			system:   publishedRootRef{rootID: systemRootID},
+			iterator: publishedRootRef{rootID: iteratorRootID},
+		},
+	}
+	view.refs.Store(1)
+	db.memtables.Store(view)
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+
+	if got := len(snap.backendPublishedLookups); got != 2 {
+		t.Fatalf("backendPublishedLookups len=%d want 2", got)
+	}
+	systemLookup, ok := snap.publishedRoots.system.lookup.(*backendSnapshotLookup)
+	if !ok {
+		t.Fatalf("system lookup type=%T, want *backendSnapshotLookup", snap.publishedRoots.system.lookup)
+	}
+	iteratorLookup, ok := snap.publishedRoots.iterator.lookup.(*backendSnapshotLookup)
+	if !ok {
+		t.Fatalf("iterator lookup type=%T, want *backendSnapshotLookup", snap.publishedRoots.iterator.lookup)
+	}
+	if systemLookup.rootID != systemRootID {
+		t.Fatalf("system lookup rootID=%d want %d", systemLookup.rootID, systemRootID)
+	}
+	if iteratorLookup.rootID != iteratorRootID {
+		t.Fatalf("iterator lookup rootID=%d want %d", iteratorLookup.rootID, iteratorRootID)
+	}
+	if systemLookup == iteratorLookup {
+		t.Fatal("expected distinct system and iterator lookup slots")
+	}
+}
+
+func TestAcquireSnapshot_InstallsBackendLookupForDirectPublishedPointRootID(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	pointTable := newRootDomainTestTable(t, rootDomainTestOp{key: "published/k", value: "published-v"})
+	pointRootID, err := backend.PublishOrderedRootIterator(0, pointTable.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish point root: %v", err)
+	}
+	if pointRootID == backend.State().RootPageID {
+		t.Fatalf("test point root unexpectedly matches default root %d", pointRootID)
+	}
+
+	db := &DB{
+		backend:          backend,
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+	view := &memtableView{
+		queue:              []memtable.Table{newRootDomainTestTable(t, rootDomainTestOp{key: "queued/k", value: "queued-v"})},
+		rootSnapshotShards: []rootDomainSnapshot{{publishedRootID: pointRootID}},
+	}
+	view.refs.Store(1)
+	db.memtables.Store(view)
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+
+	if got := len(snap.backendPublishedLookups); got != 1 {
+		t.Fatalf("backendPublishedLookups len=%d want 1", got)
+	}
+	if snap.publishedRoots != nil {
+		t.Fatal("expected direct published root ID to avoid synthesizing a published root set")
+	}
+	if view.rootSnapshotShards[0].published != nil {
+		t.Fatal("expected snapshot acquisition not to mutate retained memtable view root snapshot")
+	}
+	lookup, ok := snap.rootPointShards[0].published.(*backendSnapshotLookup)
+	if !ok {
+		t.Fatalf("published lookup type=%T, want *backendSnapshotLookup", snap.rootPointShards[0].published)
+	}
+	if lookup != &snap.backendPublishedLookups[0] {
+		t.Fatal("expected direct point root to use snapshot-owned backend lookup")
+	}
+	if lookup.rootID != pointRootID {
+		t.Fatalf("lookup rootID=%d want %d", lookup.rootID, pointRootID)
+	}
+}
+
 func TestAcquireSnapshot_InstalledPublishedPointRootAllocsBounded(t *testing.T) {
 	if testRaceEnabled {
 		t.Skip("AllocsPerRun is not stable under -race")
