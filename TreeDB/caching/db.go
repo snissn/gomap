@@ -22862,7 +22862,7 @@ func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]b
 	db.noteRootDomainGetManyNative(len(keys), len(unique))
 
 	results := make([]rootDomainProbeResult, len(unique))
-	arena := newGetManyValueCopyArena(len(keys))
+	arena := newGetManyValueCopyArena(len(unique))
 	start := 0
 	for start < len(unique) {
 		end := start + 1
