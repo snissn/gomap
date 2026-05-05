@@ -637,12 +637,12 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 		return 0, nil, metrics, err
 	}
 	applyResult, err := rootZipper.ApplyWithOptions(baseRoot, delta, zipper.ApplyOptions{})
-	if err != nil {
-		return 0, nil, metrics, err
-	}
 	newRoot = applyResult.RootID
 	retired = applyResult.PendingRetiredPages
 	metrics = applyResult.Metrics
+	if err != nil {
+		return 0, nil, metrics, err
+	}
 	return
 }
 
@@ -918,13 +918,13 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 					return
 				}
 				applyResult, applyErr := rootZipper.ApplyWithOptions(baseRoot, delta, zipper.ApplyOptions{})
+				newRoot = applyResult.RootID
+				retired = applyResult.PendingRetiredPages
+				metrics = applyResult.Metrics
 				if applyErr != nil {
 					err = applyErr
 					return
 				}
-				newRoot = applyResult.RootID
-				retired = applyResult.PendingRetiredPages
-				metrics = applyResult.Metrics
 				// Avoid a full old-tree page scan on the warm apply path. The
 				// retired page list is exact; preserved pages are tracked as a
 				// lower bound so the public counter still proves warm apply
