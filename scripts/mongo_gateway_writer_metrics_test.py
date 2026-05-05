@@ -99,6 +99,10 @@ class WriterMetricsTests(unittest.TestCase):
                             "coalesced_batch_bytes/batch": 4096,
                             "publish_delta_group_root_apply_ns/doc": 100,
                             "publish_delta_group_root_apply_excluding_read_only_prepare_ns/doc": 75,
+                            "internal_parallel_merges/doc": 0.08,
+                            "internal_parallel_children/merge": 7,
+                            "internal_parallel_workers/merge": 4,
+                            "internal_parallel_ops/merge": 625,
                             "read_only_prepare_root_apply_share_pct": 25,
                             "read_only_prepare_calls/doc": 0.1,
                             "read_only_prepare_ns/doc": 25,
@@ -179,6 +183,10 @@ class WriterMetricsTests(unittest.TestCase):
             self.assertEqual(rows[0]["coalesced_batch_units_per_batch"], "2")
             self.assertEqual(rows[0]["publish_delta_group_root_apply_ns_per_doc"], "100")
             self.assertEqual(rows[0]["publish_delta_group_root_apply_excluding_read_only_prepare_ns_per_doc"], "75")
+            self.assertEqual(rows[0]["internal_parallel_merges_per_doc"], "0.08")
+            self.assertEqual(rows[0]["internal_parallel_children_per_merge"], "7")
+            self.assertEqual(rows[0]["internal_parallel_workers_per_merge"], "4")
+            self.assertEqual(rows[0]["internal_parallel_ops_per_merge"], "625")
             self.assertEqual(rows[0]["read_only_prepare_root_apply_share_pct"], "25")
             self.assertEqual(rows[0]["read_only_prepare_calls_per_doc"], "0.1")
             self.assertEqual(rows[0]["read_only_prepare_ns_per_doc"], "25")

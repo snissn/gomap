@@ -7,6 +7,7 @@ import (
 	"io"
 	"math/rand"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -721,6 +722,9 @@ func TestZipperApplyWithOptionsDefaultSkipsReadOnlyPrepare(t *testing.T) {
 }
 
 func TestZipperApplyWarmSparseManyLeafPreservesValues(t *testing.T) {
+	prevGOMAXPROCS := runtime.GOMAXPROCS(4)
+	defer runtime.GOMAXPROCS(prevGOMAXPROCS)
+
 	dir := t.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
 	if err != nil {
@@ -755,6 +759,18 @@ func TestZipperApplyWarmSparseManyLeafPreservesValues(t *testing.T) {
 	}
 	if got := metrics.ZipperLeafMerges; got < 2 {
 		t.Fatalf("ZipperLeafMerges=%d want multi-leaf apply", got)
+	}
+	if got := metrics.ZipperInternalParallelMerges; got == 0 {
+		t.Fatalf("ZipperInternalParallelMerges=%d want parallel internal merge", got)
+	}
+	if got := metrics.ZipperInternalParallelChildren; got < 2 {
+		t.Fatalf("ZipperInternalParallelChildren=%d want multiple active children", got)
+	}
+	if got := metrics.ZipperInternalParallelWorkers; got < 2 {
+		t.Fatalf("ZipperInternalParallelWorkers=%d want multiple workers", got)
+	}
+	if got := metrics.ZipperInternalParallelOps; got == 0 {
+		t.Fatalf("ZipperInternalParallelOps=%d want routed parallel ops", got)
 	}
 	if len(retired) == 0 {
 		t.Fatal("expected pending retired pages from warm apply")
@@ -1488,6 +1504,10 @@ func BenchmarkZipperApplyWarmSparseManyLeaf(b *testing.B) {
 	if b.N > 0 {
 		b.ReportMetric(float64(total.ZipperLeafMerges)/float64(b.N), "leaf_merges/op")
 		b.ReportMetric(float64(total.ZipperInternalMerges)/float64(b.N), "internal_merges/op")
+		b.ReportMetric(float64(total.ZipperInternalParallelMerges)/float64(b.N), "internal_parallel_merges/op")
+		b.ReportMetric(float64(total.ZipperInternalParallelChildren)/float64(b.N), "internal_parallel_children/op")
+		b.ReportMetric(float64(total.ZipperInternalParallelWorkers)/float64(b.N), "internal_parallel_workers/op")
+		b.ReportMetric(float64(total.ZipperInternalParallelOps)/float64(b.N), "internal_parallel_ops/op")
 		b.ReportMetric(float64(total.IndexWriteBytes)/float64(b.N), "index_write_bytes/op")
 		b.ReportMetric(float64(totalRetired)/float64(b.N), "pending_retired_pages/op")
 	}

@@ -111,20 +111,24 @@ func TestMergeOrderedRootPublishMetricsIncludesLeafLogAttribution(t *testing.T) 
 		ZipperLeafLogRecordHintBytesRead:    11,
 		ZipperLeafMerges:                    12,
 		ZipperInternalMerges:                13,
-		ZipperLeafPagesWritten:              14,
-		ZipperPagerLeafPagesWritten:         15,
-		ZipperLeafLogPagesWritten:           16,
-		ZipperLeafPageBytesWritten:          17,
-		ZipperPagerLeafPageBytesWritten:     18,
-		ZipperLeafLogPageBytesWritten:       19,
-		ZipperLeafLogRecordHintBytesWritten: 20,
-		ZipperInternalPagesWritten:          21,
-		ZipperInternalPageBytesWritten:      22,
-		ZipperInternalChildRefs:             23,
-		ZipperInternalPageChildRefs:         24,
-		ZipperInternalLeafLogRefs:           25,
-		ZipperInternalLeafLogRefCopies:      26,
-		ZipperRootSplitLevels:               27,
+		ZipperInternalParallelMerges:        14,
+		ZipperInternalParallelChildren:      15,
+		ZipperInternalParallelWorkers:       16,
+		ZipperInternalParallelOps:           17,
+		ZipperLeafPagesWritten:              18,
+		ZipperPagerLeafPagesWritten:         19,
+		ZipperLeafLogPagesWritten:           20,
+		ZipperLeafPageBytesWritten:          21,
+		ZipperPagerLeafPageBytesWritten:     22,
+		ZipperLeafLogPageBytesWritten:       23,
+		ZipperLeafLogRecordHintBytesWritten: 24,
+		ZipperInternalPagesWritten:          25,
+		ZipperInternalPageBytesWritten:      26,
+		ZipperInternalChildRefs:             27,
+		ZipperInternalPageChildRefs:         28,
+		ZipperInternalLeafLogRefs:           29,
+		ZipperInternalLeafLogRefCopies:      30,
+		ZipperRootSplitLevels:               31,
 	}
 
 	var dst adaptive.Metrics
@@ -145,6 +149,10 @@ func TestMergeOrderedRootPublishMetricsIncludesLeafLogAttribution(t *testing.T) 
 	want.ZipperLeafLogRecordHintBytesRead *= 2
 	want.ZipperLeafMerges *= 2
 	want.ZipperInternalMerges *= 2
+	want.ZipperInternalParallelMerges *= 2
+	want.ZipperInternalParallelChildren *= 2
+	want.ZipperInternalParallelWorkers *= 2
+	want.ZipperInternalParallelOps *= 2
 	want.ZipperLeafPagesWritten *= 2
 	want.ZipperPagerLeafPagesWritten *= 2
 	want.ZipperLeafLogPagesWritten *= 2

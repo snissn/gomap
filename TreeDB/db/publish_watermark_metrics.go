@@ -160,6 +160,10 @@ type orderedRootDeltaGroupPublishStats struct {
 	rootApplyLeafLogRecordHintBytesRead    uint64
 	rootApplyLeafMerges                    uint64
 	rootApplyInternalMerges                uint64
+	rootApplyInternalParallelMerges        uint64
+	rootApplyInternalParallelChildren      uint64
+	rootApplyInternalParallelWorkers       uint64
+	rootApplyInternalParallelOps           uint64
 	rootApplyLeafPagesWritten              uint64
 	rootApplyPagerLeafPagesWritten         uint64
 	rootApplyLeafLogPagesWritten           uint64
@@ -264,6 +268,10 @@ type orderedRootDeltaGroupZipperStats struct {
 	ZipperLeafLogRecordHintBytesRead    int
 	ZipperLeafMerges                    int
 	ZipperInternalMerges                int
+	ZipperInternalParallelMerges        int
+	ZipperInternalParallelChildren      int
+	ZipperInternalParallelWorkers       int
+	ZipperInternalParallelOps           int
 	ZipperLeafPagesWritten              int
 	ZipperPagerLeafPagesWritten         int
 	ZipperLeafLogPagesWritten           int
@@ -297,6 +305,10 @@ func (dst *orderedRootDeltaGroupZipperStats) add(src adaptive.Metrics) {
 	dst.ZipperLeafLogRecordHintBytesRead += src.ZipperLeafLogRecordHintBytesRead
 	dst.ZipperLeafMerges += src.ZipperLeafMerges
 	dst.ZipperInternalMerges += src.ZipperInternalMerges
+	dst.ZipperInternalParallelMerges += src.ZipperInternalParallelMerges
+	dst.ZipperInternalParallelChildren += src.ZipperInternalParallelChildren
+	dst.ZipperInternalParallelWorkers += src.ZipperInternalParallelWorkers
+	dst.ZipperInternalParallelOps += src.ZipperInternalParallelOps
 	dst.ZipperLeafPagesWritten += src.ZipperLeafPagesWritten
 	dst.ZipperPagerLeafPagesWritten += src.ZipperPagerLeafPagesWritten
 	dst.ZipperLeafLogPagesWritten += src.ZipperLeafLogPagesWritten
@@ -380,6 +392,10 @@ func (db *DB) observeOrderedRootDeltaGroupPublish(wait, hold time.Duration, root
 	db.orderedRootDeltaGroupRootApplyLeafLogRecordHintBytesRead.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperLeafLogRecordHintBytesRead))
 	db.orderedRootDeltaGroupRootApplyLeafMerges.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperLeafMerges))
 	db.orderedRootDeltaGroupRootApplyInternalMerges.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperInternalMerges))
+	db.orderedRootDeltaGroupRootApplyInternalParallelMerges.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperInternalParallelMerges))
+	db.orderedRootDeltaGroupRootApplyInternalParallelChildren.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperInternalParallelChildren))
+	db.orderedRootDeltaGroupRootApplyInternalParallelWorkers.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperInternalParallelWorkers))
+	db.orderedRootDeltaGroupRootApplyInternalParallelOps.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperInternalParallelOps))
 	db.orderedRootDeltaGroupRootApplyLeafPagesWritten.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperLeafPagesWritten))
 	db.orderedRootDeltaGroupRootApplyPagerLeafPagesWritten.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperPagerLeafPagesWritten))
 	db.orderedRootDeltaGroupRootApplyLeafLogPagesWritten.Add(orderedRootDeltaGroupMetricUint(phases.rootApplyMetrics.ZipperLeafLogPagesWritten))
@@ -487,6 +503,10 @@ func (db *DB) orderedRootDeltaGroupPublishStats() orderedRootDeltaGroupPublishSt
 		rootApplyLeafLogRecordHintBytesRead:    db.orderedRootDeltaGroupRootApplyLeafLogRecordHintBytesRead.Load(),
 		rootApplyLeafMerges:                    db.orderedRootDeltaGroupRootApplyLeafMerges.Load(),
 		rootApplyInternalMerges:                db.orderedRootDeltaGroupRootApplyInternalMerges.Load(),
+		rootApplyInternalParallelMerges:        db.orderedRootDeltaGroupRootApplyInternalParallelMerges.Load(),
+		rootApplyInternalParallelChildren:      db.orderedRootDeltaGroupRootApplyInternalParallelChildren.Load(),
+		rootApplyInternalParallelWorkers:       db.orderedRootDeltaGroupRootApplyInternalParallelWorkers.Load(),
+		rootApplyInternalParallelOps:           db.orderedRootDeltaGroupRootApplyInternalParallelOps.Load(),
 		rootApplyLeafPagesWritten:              db.orderedRootDeltaGroupRootApplyLeafPagesWritten.Load(),
 		rootApplyPagerLeafPagesWritten:         db.orderedRootDeltaGroupRootApplyPagerLeafPagesWritten.Load(),
 		rootApplyLeafLogPagesWritten:           db.orderedRootDeltaGroupRootApplyLeafLogPagesWritten.Load(),
