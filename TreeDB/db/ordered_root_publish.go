@@ -635,7 +635,13 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 	if err != nil {
 		return 0, nil, metrics, err
 	}
-	newRoot, retired, metrics, err = rootZipper.Apply(baseRoot, delta)
+	applyResult, err := rootZipper.ApplyWithOptions(baseRoot, delta, zipper.ApplyOptions{})
+	if err != nil {
+		return 0, nil, metrics, err
+	}
+	newRoot = applyResult.RootID
+	retired = applyResult.PendingRetiredPages
+	metrics = applyResult.Metrics
 	return
 }
 
@@ -1638,6 +1644,15 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		// delta can change collection descriptors. Keep the incremental ref tracker
 		// conservative by invalidating it after commit.
 		var vlogRefDelta *valueLogRefDelta
+		guardNs, guardErr := db.runInstallGuard(orderedRootDeltaGroupSystemInstallGuard(systemBaseRoot))
+		phaseStats.installGuardNs += guardNs
+		phaseStats.installGuardCalls++
+		if guardErr != nil {
+			phaseStats.installGuardFailures++
+			db.commitMu.Unlock()
+			err = guardErr
+			return 0, nil, false, err
+		}
 		phaseStart = time.Now()
 		var post finalizeCommitPost
 		commitStarted = true
@@ -1711,13 +1726,22 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	}
 
+	rootTracker := newAllocTracker(idxGen.allocator)
+	systemTracker := newAllocTracker(idxGen.allocator)
+	commitStarted := false
+	defer func() {
+		if err != nil && !commitStarted {
+			_ = rootTracker.FreeAll()
+			_ = systemTracker.FreeAll()
+		}
+	}()
+
 	rootIDs = make([]uint64, len(ordered))
 	systemOpts := systemRootOrderedPublishOptions(db)
 	var retired []uint64
 	var merged adaptive.Metrics
 	phaseStart := time.Now()
-	rootApplyAlloc := newAllocTracker(idxGen.allocator)
-	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, ordered, rootApplyAlloc, rootApplyAlloc)
+	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, ordered, rootTracker, rootTracker)
 	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if parallelRootApply {
 		phaseStats.rootApplyParallelGroups++
@@ -1749,10 +1773,16 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	if iter == nil {
 		return 0, nil, errors.New("nil system root delta iterator")
 	}
+	systemDelta, err := orderedRootDeltaBatchFromIterator(iter)
+	_ = iter.Close()
+	if err != nil {
+		return 0, nil, err
+	}
 	phaseStart = time.Now()
-	rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(baseSystemRoot, iter, systemOpts)
+	rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idxGen, baseSystemRoot, systemDelta, systemOpts, systemTracker, systemTracker, false)
 	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.systemApplyCalls++
+	_ = systemDelta.Close()
 	if err != nil {
 		return 0, nil, err
 	}
@@ -1761,12 +1791,12 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	mergeOrderedRootPublishMetrics(&merged, metrics)
 	phaseStats.systemApplyMetrics.add(metrics)
 
-	db.mu.RLock()
-	curUserRoot := db.meta.UserRootPageID
-	curSystemRoot := db.meta.SystemRootPageID
-	db.mu.RUnlock()
-	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
-		return 0, nil, errors.New("concurrent modification detected during ordered root group publish")
+	guardNs, guardErr := db.runInstallGuard(orderedRootDeltaGroupInstallGuard(userRoot, baseSystemRoot))
+	phaseStats.installGuardNs += guardNs
+	phaseStats.installGuardCalls++
+	if guardErr != nil {
+		phaseStats.installGuardFailures++
+		return 0, nil, guardErr
 	}
 
 	// Batch-based grouped deltas have the same value-log reachability shape as
@@ -1775,6 +1805,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	// conservative by invalidating it after commit.
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
+	commitStarted = true
 	err = db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++

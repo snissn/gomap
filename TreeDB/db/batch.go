@@ -1,10 +1,12 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
 // Batch implements the cosmos-db Batch interface.
@@ -192,7 +194,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 
 	tracker := newAllocTracker(idx.allocator)
 	z := idx.zipper.CloneWithAllocator(tracker)
-	newRoot, retired, metrics, err := z.Apply(rootID, b.batch)
+	applyResult, err := z.ApplyWithOptions(rootID, b.batch, zipper.ApplyOptions{})
 	if err != nil {
 		freeErr := tracker.FreeAll()
 		b.db.writeMu.RUnlock()
@@ -201,6 +203,9 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		}
 		return false, err
 	}
+	newRoot := applyResult.RootID
+	pendingRetiredPages := applyResult.PendingRetiredPages
+	metrics := applyResult.Metrics
 	entries := b.batch.SortedEntries()
 	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries)
 	if err != nil {
@@ -217,21 +222,24 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		}
 	}()
 	b.db.commitMu.Lock()
-	b.db.mu.RLock()
-	currentRoot := b.db.meta.UserRootPageID
-	sysRoot := b.db.meta.SystemRootPageID
-	b.db.mu.RUnlock()
-	if currentRoot != rootID {
+	_, guardErr := b.db.runInstallGuard(rawBatchInstallGuard(rootID))
+	if guardErr != nil {
 		b.db.commitMu.Unlock()
 		freeErr := tracker.FreeAll()
 		b.db.writeMu.RUnlock()
 		if freeErr != nil {
 			return false, freeErr
 		}
-		return false, nil
+		if errors.Is(guardErr, errInstallGuardMismatch) {
+			return false, nil
+		}
+		return false, guardErr
 	}
+	b.db.mu.RLock()
+	sysRoot := b.db.meta.SystemRootPageID
+	b.db.mu.RUnlock()
 
-	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil)
+	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, pendingRetiredPages, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil)
 	b.db.commitMu.Unlock()
 	if err != nil {
 		b.db.writeMu.RUnlock()
@@ -266,13 +274,24 @@ func (b *Batch) writeSerialized(sync bool) error {
 
 	defer idx.registry.Unregister(regID)
 
-	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b.batch)
+	tracker := newAllocTracker(idx.allocator)
+	z := idx.zipper.CloneWithAllocator(tracker)
+	applyResult, err := z.ApplyWithOptions(rootID, b.batch, zipper.ApplyOptions{})
 	if err != nil {
+		if freeErr := tracker.FreeAll(); freeErr != nil {
+			return freeErr
+		}
 		return err
 	}
+	newRoot := applyResult.RootID
+	pendingRetiredPages := applyResult.PendingRetiredPages
+	metrics := applyResult.Metrics
 	entries := b.batch.SortedEntries()
 	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries)
 	if err != nil {
+		if freeErr := tracker.FreeAll(); freeErr != nil {
+			return freeErr
+		}
 		return err
 	}
 	defer func() {
@@ -281,19 +300,21 @@ func (b *Batch) writeSerialized(sync bool) error {
 		}
 	}()
 
-	b.db.mu.Lock()
-	if b.db.meta.UserRootPageID != rootID {
-		// This should not happen if writeMu is held and we are the only writer.
-		b.db.mu.Unlock()
-		return fmt.Errorf("concurrent modification detected during batch write")
+	if _, err := b.db.runInstallGuard(rawBatchInstallGuard(rootID)); err != nil {
+		if freeErr := tracker.FreeAll(); freeErr != nil {
+			return freeErr
+		}
+		return err
 	}
+	b.db.mu.Lock()
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
-	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil); err != nil {
+	if err := b.db.finalizeCommit(newRoot, sysRoot, pendingRetiredPages, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil); err != nil {
 		return err
 	}
 	vlogRefDelta = nil
+	b.db.invalidateLeafGenerationSubtreeStats(tracker.Pages())
 	b.db.clearLeafGenerationReachabilityCaches()
 	if b.db.vacuum.Active() {
 		b.db.vacuum.RecordEntries(entries)

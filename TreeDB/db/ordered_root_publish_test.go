@@ -790,7 +790,13 @@ func TestPublishOrderedRootDeltaGroupWithSystemBuilder_ReportsPublishStats(t *te
 		"treedb.publish.ordered_root_delta_group.system_apply_ns_total",
 		"treedb.publish.ordered_root_delta_group.system_apply_ops_total",
 		"treedb.publish.ordered_root_delta_group.system_apply_node_loads_total",
+		"treedb.publish.ordered_root_delta_group.install_guard_ns_total",
+		"treedb.publish.ordered_root_delta_group.install_guard_calls_total",
+		"treedb.publish.ordered_root_delta_group.install_guard_failures_total",
 		"treedb.publish.ordered_root_delta_group.finalize_ns_total",
+		"treedb.publish.install_guard.ns_total",
+		"treedb.publish.install_guard.calls_total",
+		"treedb.publish.install_guard.failures_total",
 	} {
 		if _, ok := stats[key]; !ok {
 			t.Fatalf("missing ordered root delta phase stat %q", key)

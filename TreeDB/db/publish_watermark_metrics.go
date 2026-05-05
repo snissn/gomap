@@ -179,6 +179,9 @@ type orderedRootDeltaGroupPublishStats struct {
 	systemApplyCalls                       uint64
 	systemApplyOps                         uint64
 	systemApplyNodeLoads                   uint64
+	installGuardNs                         uint64
+	installGuardCalls                      uint64
+	installGuardFailures                   uint64
 	finalizeNs                             uint64
 	finalizeCalls                          uint64
 	latencyP99                             time.Duration
@@ -198,6 +201,9 @@ type orderedRootDeltaGroupPublishPhaseStats struct {
 	systemApplyNs           uint64
 	systemApplyCalls        uint64
 	systemApplyMetrics      orderedRootDeltaGroupZipperStats
+	installGuardNs          uint64
+	installGuardCalls       uint64
+	installGuardFailures    uint64
 	finalizeNs              uint64
 	finalizeCalls           uint64
 }
@@ -347,6 +353,9 @@ func (db *DB) observeOrderedRootDeltaGroupPublish(wait, hold time.Duration, root
 	db.orderedRootDeltaGroupSystemApplyCalls.Add(phases.systemApplyCalls)
 	db.orderedRootDeltaGroupSystemApplyOps.Add(orderedRootDeltaGroupMetricUint(phases.systemApplyMetrics.ZipperApplyOps))
 	db.orderedRootDeltaGroupSystemApplyNodeLoads.Add(orderedRootDeltaGroupMetricUint(phases.systemApplyMetrics.ZipperNodeLoads))
+	db.orderedRootDeltaGroupInstallGuardNs.Add(phases.installGuardNs)
+	db.orderedRootDeltaGroupInstallGuardCalls.Add(phases.installGuardCalls)
+	db.orderedRootDeltaGroupInstallGuardFailures.Add(phases.installGuardFailures)
 	db.orderedRootDeltaGroupFinalizeNs.Add(phases.finalizeNs)
 	db.orderedRootDeltaGroupFinalizeCalls.Add(phases.finalizeCalls)
 	for {
@@ -411,6 +420,9 @@ func (db *DB) orderedRootDeltaGroupPublishStats() orderedRootDeltaGroupPublishSt
 		systemApplyCalls:                       db.orderedRootDeltaGroupSystemApplyCalls.Load(),
 		systemApplyOps:                         db.orderedRootDeltaGroupSystemApplyOps.Load(),
 		systemApplyNodeLoads:                   db.orderedRootDeltaGroupSystemApplyNodeLoads.Load(),
+		installGuardNs:                         db.orderedRootDeltaGroupInstallGuardNs.Load(),
+		installGuardCalls:                      db.orderedRootDeltaGroupInstallGuardCalls.Load(),
+		installGuardFailures:                   db.orderedRootDeltaGroupInstallGuardFailures.Load(),
 		finalizeNs:                             db.orderedRootDeltaGroupFinalizeNs.Load(),
 		finalizeCalls:                          db.orderedRootDeltaGroupFinalizeCalls.Load(),
 	}

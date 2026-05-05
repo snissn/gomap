@@ -1009,8 +1009,35 @@ func validateLoadedLeafLogNodeFrom(source string, data []byte) (node.Node, error
 	return n, nil
 }
 
+// ApplyOptions configures a root apply attempt. The first version is
+// intentionally empty so callers can move to the result-shaped API before
+// prepared-output options exist.
+type ApplyOptions struct{}
+
+// ApplyResult is the complete in-memory result of a root apply attempt. The
+// retired page list is pending until the caller's install guard succeeds and
+// the new root is committed.
+type ApplyResult struct {
+	RootID              uint64
+	PendingRetiredPages []uint64
+	Metrics             adaptive.Metrics
+}
+
+// ApplyWithOptions applies the batch to the tree rooted at rootID and returns
+// a result object suitable for guarded install paths.
+func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptions) (ApplyResult, error) {
+	_ = opts
+	newRoot, retired, metrics, err := z.Apply(rootID, b)
+	return ApplyResult{
+		RootID:              newRoot,
+		PendingRetiredPages: retired,
+		Metrics:             metrics,
+	}, err
+}
+
 // Apply applies the batch to the tree rooted at rootID.
-// Returns the new root page ID, list of retired pages, and commit metrics.
+// Returns the new root page ID, list of pending retired pages, and commit
+// metrics.
 func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptive.Metrics, error) {
 	var metrics adaptive.Metrics
 	ops := b.SortedEntries()
