@@ -1715,26 +1715,38 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	systemOpts := systemRootOrderedPublishOptions(db)
 	var retired []uint64
 	var merged adaptive.Metrics
-	for idx := range ordered {
-		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[idx].StoragePolicy)
-		if err != nil {
-			return 0, nil, err
+	phaseStart := time.Now()
+	rootApplyAlloc := newAllocTracker(idxGen.allocator)
+	rootApplyCommitted := false
+	defer func() {
+		if err != nil && !rootApplyCommitted {
+			_ = rootApplyAlloc.FreeAll()
 		}
-		phaseStart := time.Now()
-		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idxGen, ordered[idx].BaseRoot, ordered[idx].Delta, opts, idxGen.allocator, &pagerAllocator{p: idxGen.pager}, ordered[idx].IncludeDeletedOnColdBuild)
-		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
-		phaseStats.rootApplyCalls++
-		if err != nil {
-			return 0, nil, err
+	}()
+	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, ordered, rootApplyAlloc, rootApplyAlloc)
+	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	if parallelRootApply {
+		phaseStats.rootApplyParallelGroups++
+		for orderedIdx := range ordered {
+			if ordered[orderedIdx].ParallelApply && ordered[orderedIdx].Delta != nil && !ordered[orderedIdx].Delta.IsEmpty() {
+				phaseStats.rootApplyParallelRoots++
+			}
 		}
-		rootIDs[idx] = rootID
+	}
+	for orderedIdx := range rootApplyResults {
+		result := rootApplyResults[orderedIdx]
+		if result.err != nil {
+			return 0, nil, result.err
+		}
+		rootIDs[orderedIdx] = result.rootID
 		rootsObserved++
-		retired = append(retired, rootRetired...)
-		mergeOrderedRootPublishMetrics(&merged, metrics)
-		phaseStats.rootApplyMetrics.add(metrics)
+		retired = append(retired, result.retired...)
+		mergeOrderedRootPublishMetrics(&merged, result.metrics)
+		phaseStats.rootApplyMetrics.add(result.metrics)
+		phaseStats.rootApplyCalls++
 	}
 
-	phaseStart := time.Now()
+	phaseStart = time.Now()
 	iter, err := buildSystemDeltaIter(append([]uint64(nil), rootIDs...))
 	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if err != nil {
@@ -1775,6 +1787,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	if err != nil {
 		return 0, nil, err
 	}
+	rootApplyCommitted = true
 	return newSystemRoot, rootIDs, nil
 }
 
