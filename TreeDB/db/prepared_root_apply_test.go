@@ -172,6 +172,57 @@ func TestPreparedRootApplyRecordsLaterSuccessBeforeEarlierApplyError(t *testing.
 	}
 }
 
+func TestPreparedRootSetSystemRootSupersedesLatestActiveSystemApply(t *testing.T) {
+	first := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := first.Set([]byte("sys/a"), []byte("1")); err != nil {
+		t.Fatalf("first set: %v", err)
+	}
+	defer func() { _ = first.Close() }()
+	second := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := second.Set([]byte("sys/b"), []byte("2")); err != nil {
+		t.Fatalf("second set: %v", err)
+	}
+	defer func() { _ = second.Close() }()
+	third := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := third.Set([]byte("sys/c"), []byte("3")); err != nil {
+		t.Fatalf("third set: %v", err)
+	}
+	defer func() { _ = third.Close() }()
+
+	group := preparedRootApplyGroup{
+		baseSystemRootID: 7,
+		state:            preparedRootApplyStatePlanned,
+	}
+	firstIdx := group.setSystemRoot(10, first, false)
+	group.markPrepared(firstIdx, 100)
+	secondIdx := group.setSystemRoot(20, second, false)
+	group.markPrepared(secondIdx, 200)
+	thirdIdx := group.setSystemRoot(30, third, false)
+
+	if firstIdx == secondIdx || secondIdx == thirdIdx || firstIdx == thirdIdx {
+		t.Fatalf("system indexes should be distinct, got %d/%d/%d", firstIdx, secondIdx, thirdIdx)
+	}
+	if got := group.baseSystemRootID; got != 30 {
+		t.Fatalf("group base system root=%d want latest 30", got)
+	}
+	if firstApply := group.applyAt(firstIdx); firstApply == nil || firstApply.state != preparedRootApplyStateAbandoned {
+		t.Fatalf("first system apply=%+v want abandoned", firstApply)
+	}
+	if secondApply := group.applyAt(secondIdx); secondApply == nil || secondApply.state != preparedRootApplyStateAbandoned {
+		t.Fatalf("second system apply=%+v want abandoned", secondApply)
+	}
+	latest := group.applyAt(thirdIdx)
+	if latest == nil {
+		t.Fatal("missing latest system apply")
+	}
+	if latest.prepared {
+		t.Fatalf("latest system apply is already prepared: %+v", latest)
+	}
+	if latest.baseRootID != 30 || latest.state != preparedRootApplyStatePlanned {
+		t.Fatalf("latest system apply=%+v want base 30 planned", latest)
+	}
+}
+
 func TestPreparedRootPrepareNsRecordedWithoutPreparedRoots(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {

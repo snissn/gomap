@@ -1044,7 +1044,9 @@ type ApplyResult struct {
 	Metrics             adaptive.Metrics
 }
 
-// ReadOnlyPrepareOptions configures a read-only root preparation pass.
+// ReadOnlyPrepareOptions configures a read-only root preparation pass. The zero
+// value is the normal caller-constructed form. Non-zero buffer reuse options are
+// produced by ReadOnlyPrepareResult.ReuseOptions.
 type ReadOnlyPrepareOptions struct {
 	leafSpans []ReadOnlyLeafSpan
 	keyArena  []byte
@@ -1054,6 +1056,9 @@ type ReadOnlyPrepareOptions struct {
 // It contains only in-memory planning metadata; it does not own prepared pager
 // pages, leaf-log records, or pending retired pages.
 type ReadOnlyLeafSpan struct {
+	// Ref identifies the existing leaf that owns this span. When ColdBuild is
+	// true there is no existing leaf; Ref is the zero ChildRef and is not
+	// actionable.
 	Ref page.ChildRef
 
 	// LowKey is the inclusive lower bound for the leaf span. HighKey is the
