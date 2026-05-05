@@ -171,18 +171,22 @@ func BenchmarkPublishSystemRootIterator_WarmDenseDelta(b *testing.B) {
 }
 
 func BenchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_WarmSingleRoot(b *testing.B) {
-	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, false, false)
+	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, false, false, 0)
 }
 
 func BenchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_WarmSingleRootReadOnlyPrepare(b *testing.B) {
-	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, true, false)
+	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, true, false, 0)
 }
 
 func BenchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_WarmSingleRootReadOnlyPrepareReuse(b *testing.B) {
-	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, true, true)
+	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, true, true, 0)
 }
 
-func benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b *testing.B, prepareReadOnly, reusePrepare bool) {
+func BenchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_WarmSingleRootReadOnlyPrepareWorkerStats(b *testing.B) {
+	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, true, false, 3)
+}
+
+func benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b *testing.B, prepareReadOnly, reusePrepare bool, prepareWorkerCount int) {
 	dir := b.TempDir()
 	db, err := Open(Options{Dir: dir})
 	if err != nil {
@@ -206,8 +210,9 @@ func benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleR
 	defer func() { _ = right.Close() }()
 
 	ordered := []OrderedRootDeltaBatchPublishInput{{
-		StoragePolicy:   OrderedRootStorageDefault,
-		PrepareReadOnly: prepareReadOnly,
+		StoragePolicy:              OrderedRootStorageDefault,
+		PrepareReadOnly:            prepareReadOnly,
+		ReadOnlyPrepareWorkerCount: prepareWorkerCount,
 	}}
 	var prepared zipper.ReadOnlyPrepareResult
 	systemKey := []byte("sys/collections/users/primary")

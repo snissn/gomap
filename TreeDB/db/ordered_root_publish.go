@@ -52,34 +52,37 @@ type orderedRootPublishStats struct {
 }
 
 type orderedRootPublishOptions struct {
-	maxWarmDeltaOps             int
-	leafPrefixCompression       bool
-	leafColumnar                bool
-	packedValuePtr              bool
-	internalBaseDelta           bool
-	outerLeavesInValueLog       bool
-	leafPageLog                 bulk.LeafPageAppender
-	applyOptions                zipper.ApplyOptions
-	readOnlyPrepareSummary      *zipper.ReadOnlyLeafSpanSummary
-	readOnlyPrepareCallerResult *zipper.ReadOnlyPrepareResult
-	readOnlyPrepareNs           *uint64
-	readOnlyPrepareAttempted    *bool
+	maxWarmDeltaOps              int
+	leafPrefixCompression        bool
+	leafColumnar                 bool
+	packedValuePtr               bool
+	internalBaseDelta            bool
+	outerLeavesInValueLog        bool
+	leafPageLog                  bulk.LeafPageAppender
+	applyOptions                 zipper.ApplyOptions
+	readOnlyPrepareSummary       *zipper.ReadOnlyLeafSpanSummary
+	readOnlyPrepareWorkerSummary *zipper.ReadOnlyLeafSpanWorkerRangeSummary
+	readOnlyPrepareCallerResult  *zipper.ReadOnlyPrepareResult
+	readOnlyPrepareNs            *uint64
+	readOnlyPrepareAttempted     *bool
+	readOnlyPrepareWorkerCount   int
 }
 
 type orderedRootDeltaBatchGroupApplyResult struct {
-	idx                      int
-	rootID                   uint64
-	outputID                 preparedOutputID
-	output                   *preparedOutputSnapshot
-	outputPages              uint64
-	outputLeafLogPtrs        uint64
-	pendingRetiredPages      []uint64
-	metrics                  adaptive.Metrics
-	readOnlyPrepareSummary   zipper.ReadOnlyLeafSpanSummary
-	readOnlyPrepareNs        uint64
-	readOnlyPrepareAttempted bool
-	err                      error
-	attempted                bool
+	idx                          int
+	rootID                       uint64
+	outputID                     preparedOutputID
+	output                       *preparedOutputSnapshot
+	outputPages                  uint64
+	outputLeafLogPtrs            uint64
+	pendingRetiredPages          []uint64
+	metrics                      adaptive.Metrics
+	readOnlyPrepareSummary       zipper.ReadOnlyLeafSpanSummary
+	readOnlyPrepareWorkerSummary zipper.ReadOnlyLeafSpanWorkerRangeSummary
+	readOnlyPrepareNs            uint64
+	readOnlyPrepareAttempted     bool
+	err                          error
+	attempted                    bool
 }
 
 type preparedLeafLogOutputRecorder interface {
@@ -174,6 +177,10 @@ type OrderedRootDeltaBatchPublishInput struct {
 	// owned by this input within the group; sharing one result pointer across
 	// group inputs is rejected.
 	ReadOnlyPrepareResult *zipper.ReadOnlyPrepareResult
+	// ReadOnlyPrepareWorkerCount, when positive with PrepareReadOnly, records an
+	// allocation-free summary of deterministic leaf-span worker ranges for this
+	// target worker count. It is observability/planning only.
+	ReadOnlyPrepareWorkerCount int
 }
 
 func closeUnconsumedOrderedRootPublishIterators(ordered []OrderedRootPublishInput, consumed []bool) {
@@ -811,6 +818,10 @@ func runOrderedRootReadOnlyPrepare(rootZipper *zipper.Zipper, baseRoot uint64, d
 	if opts.readOnlyPrepareSummary != nil {
 		summary := prepared.LeafSpanSummary()
 		*opts.readOnlyPrepareSummary = summary
+	}
+	if opts.readOnlyPrepareWorkerSummary != nil {
+		summary := prepared.LeafSpanWorkerRangeSummary(opts.readOnlyPrepareWorkerCount)
+		*opts.readOnlyPrepareWorkerSummary = summary
 	}
 	if opts.readOnlyPrepareCallerResult != nil {
 		*opts.readOnlyPrepareCallerResult = prepared
@@ -1615,6 +1626,10 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 				opts.applyOptions.ReadOnlyPrepare = resultOut.ReuseOptions()
 			}
 			opts.readOnlyPrepareSummary = &result.readOnlyPrepareSummary
+			if ordered[orderedIdx].ReadOnlyPrepareWorkerCount > 0 {
+				opts.readOnlyPrepareWorkerSummary = &result.readOnlyPrepareWorkerSummary
+				opts.readOnlyPrepareWorkerCount = ordered[orderedIdx].ReadOnlyPrepareWorkerCount
+			}
 			opts.readOnlyPrepareCallerResult = ordered[orderedIdx].ReadOnlyPrepareResult
 			opts.readOnlyPrepareNs = &result.readOnlyPrepareNs
 			opts.readOnlyPrepareAttempted = &result.readOnlyPrepareAttempted
@@ -1760,6 +1775,12 @@ func recordOrderedRootDeltaBatchGroupApplyResults(
 				phaseStats.rootApplyReadOnlyPrepareCalls++
 				phaseStats.rootApplyReadOnlyPrepareOps += uint64(summary.Ops)
 				phaseStats.rootApplyReadOnlyPrepareLeafSpans += uint64(summary.Spans)
+				workerSummary := result.readOnlyPrepareWorkerSummary
+				phaseStats.rootApplyReadOnlyPrepareWorkerTargets += uint64(workerSummary.TargetWorkers)
+				phaseStats.rootApplyReadOnlyPrepareWorkerRanges += uint64(workerSummary.Ranges)
+				phaseStats.rootApplyReadOnlyPrepareWorkerRangeMinOps += uint64(workerSummary.MinRangeOps)
+				phaseStats.rootApplyReadOnlyPrepareWorkerRangeMaxOps += uint64(workerSummary.MaxRangeOps)
+				phaseStats.rootApplyReadOnlyPrepareWorkerRangeSingleSpan += uint64(workerSummary.SingleSpanRanges)
 				if summary.ExactLeafSpans {
 					phaseStats.rootApplyReadOnlyPrepareExactPlans++
 				}
