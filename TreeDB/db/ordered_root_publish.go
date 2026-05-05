@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -73,17 +74,16 @@ type orderedRootDeltaBatchGroupApplyResult struct {
 	attempted           bool
 }
 
-type preparedOutputRecorder interface {
+type preparedLeafLogOutputRecorder interface {
 	notePreparedLeafLogPtr(page.LeafLogPtr)
 }
 
 type preparedRootApplyOutputCounter struct {
 	inner    zipper.PageAllocator
-	recorder preparedOutputRecorder
+	recorder preparedLeafLogOutputRecorder
 
-	mu          sync.Mutex
-	pages       uint64
-	leafLogPtrs uint64
+	pages       atomic.Uint64
+	leafLogPtrs atomic.Uint64
 }
 
 func (c *preparedRootApplyOutputCounter) Alloc(hint uint64) (uint64, error) {
@@ -91,9 +91,7 @@ func (c *preparedRootApplyOutputCounter) Alloc(hint uint64) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	c.mu.Lock()
-	c.pages++
-	c.mu.Unlock()
+	c.pages.Add(1)
 	return id, nil
 }
 
@@ -101,18 +99,14 @@ func (c *preparedRootApplyOutputCounter) notePreparedLeafLogPtr(ptr page.LeafLog
 	if c.recorder != nil {
 		c.recorder.notePreparedLeafLogPtr(ptr)
 	}
-	c.mu.Lock()
-	c.leafLogPtrs++
-	c.mu.Unlock()
+	c.leafLogPtrs.Add(1)
 }
 
 func (c *preparedRootApplyOutputCounter) counts() (pages, leafLogPtrs uint64) {
 	if c == nil {
 		return 0, 0
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.pages, c.leafLogPtrs
+	return c.pages.Load(), c.leafLogPtrs.Load()
 }
 
 // OrderedRootStoragePolicy selects the physical storage policy for a published
@@ -754,11 +748,11 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 	return applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, zipper.ApplyOptions{})
 }
 
-func preparedOutputTrackerFromAlloc(alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator) preparedOutputRecorder {
-	if tracker, ok := alloc.(preparedOutputRecorder); ok && tracker != nil {
+func preparedOutputTrackerFromAlloc(alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator) preparedLeafLogOutputRecorder {
+	if tracker, ok := alloc.(preparedLeafLogOutputRecorder); ok && tracker != nil {
 		return tracker
 	}
-	if tracker, ok := coldBuildAlloc.(preparedOutputRecorder); ok && tracker != nil {
+	if tracker, ok := coldBuildAlloc.(preparedLeafLogOutputRecorder); ok && tracker != nil {
 		return tracker
 	}
 	return nil
