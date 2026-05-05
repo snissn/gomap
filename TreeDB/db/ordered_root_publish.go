@@ -1717,6 +1717,12 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	var merged adaptive.Metrics
 	phaseStart := time.Now()
 	rootApplyAlloc := newAllocTracker(idxGen.allocator)
+	rootApplyCommitted := false
+	defer func() {
+		if err != nil && !rootApplyCommitted {
+			_ = rootApplyAlloc.FreeAll()
+		}
+	}()
 	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, ordered, rootApplyAlloc, rootApplyAlloc)
 	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if parallelRootApply {
@@ -1781,6 +1787,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	if err != nil {
 		return 0, nil, err
 	}
+	rootApplyCommitted = true
 	return newSystemRoot, rootIDs, nil
 }
 
