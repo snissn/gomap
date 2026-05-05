@@ -42,8 +42,8 @@ func TestPR3bSemanticRawRecordsSurviveMutableQueuedActiveRequeued(t *testing.T) 
 	if got := stats.IndexedSemanticRawIndexDeltas; got != 1 {
 		t.Fatalf("raw semantic index deltas after stage=%d want 1", got)
 	}
-	if got := stats.IndexedSemanticFallbackRecords; got != 1 {
-		t.Fatalf("fallback semantic records after stage=%d want 1", got)
+	if got := stats.IndexedSemanticFallbackRecords; got != 0 {
+		t.Fatalf("fallback semantic records after stage=%d want 0", got)
 	}
 	if got := stats.IndexedSemanticEffectiveRecords; got != 0 {
 		t.Fatalf("effective semantic records after stage=%d want 0", got)
@@ -127,8 +127,8 @@ func TestPR3bSemanticRawRecordsSurviveMutableQueuedActiveRequeued(t *testing.T) 
 	if got := stats.IndexedSemanticRawRecords; got != 1 {
 		t.Fatalf("raw semantic records after flush=%d want 1", got)
 	}
-	if got := stats.IndexedSemanticEffectiveRecords; got != 0 {
-		t.Fatalf("effective semantic records after flush=%d want 0", got)
+	if got := stats.IndexedSemanticEffectiveRecords; got != 1 {
+		t.Fatalf("effective semantic records after flush=%d want 1", got)
 	}
 }
 
@@ -216,6 +216,7 @@ func TestPR3bSemanticRepeatedSameDocumentUpdatesSerialEquivalent(t *testing.T) {
 	d, mgr, col := pr3bSemanticTestCollection(t)
 	defer func() { _ = d.Close() }()
 	pr3bSeedSemanticUser(t, col)
+	before := mgr.StatsSnapshot()
 
 	firstCalls := 0
 	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
@@ -291,12 +292,25 @@ func TestPR3bSemanticRepeatedSameDocumentUpdatesSerialEquivalent(t *testing.T) {
 	if got := stats.IndexedSemanticEffectiveRecords; got != 0 {
 		t.Fatalf("effective semantic records after flush=%d want 0", got)
 	}
+	if got := stats.RootDeltaPlanRawUnitSecondaryEntries - before.RootDeltaPlanRawUnitSecondaryEntries; got == 0 {
+		t.Fatalf("raw secondary root entries delta=%d want >0", got)
+	}
+	if got := stats.RootDeltaPlanFinalSecondaryEntries - before.RootDeltaPlanFinalSecondaryEntries; got != 0 {
+		t.Fatalf("final secondary root entries delta=%d want 0", got)
+	}
+	if got := stats.IndexedSemanticSkippedSecondaryRoots - before.IndexedSemanticSkippedSecondaryRoots; got == 0 {
+		t.Fatalf("skipped secondary roots delta=%d want >0", got)
+	}
+	if got := stats.RootDeltaPlanSquashedEntries - before.RootDeltaPlanSquashedEntries; got == 0 {
+		t.Fatalf("squashed entries delta=%d want >0", got)
+	}
 }
 
-func TestPR3bSemanticNonUniqueChangeChangeBackFallsBackRawOnly(t *testing.T) {
+func TestPR3bSemanticNonUniqueChangeChangeBackSkipsSecondaryRoot(t *testing.T) {
 	d, mgr, col := pr3bSemanticTestCollection(t)
 	defer func() { _ = d.Close() }()
 	pr3bSeedSemanticUser(t, col)
+	before := mgr.StatsSnapshot()
 
 	for _, city := range []string{"sea", "hnl"} {
 		if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
@@ -316,8 +330,8 @@ func TestPR3bSemanticNonUniqueChangeChangeBackFallsBackRawOnly(t *testing.T) {
 		t.Fatalf("mutable semantic records=%d want 2", got)
 	}
 	for i, record := range records {
-		if record.fallback != indexedSemanticFallbackRawOnly {
-			t.Fatalf("record %d fallback=%d want raw-only", i, record.fallback)
+		if record.fallback != indexedSemanticFallbackNone {
+			t.Fatalf("record %d fallback=%d want none", i, record.fallback)
 		}
 	}
 	pr3bRequireCitySemanticRecord(t, records[:1], "hnl", "sea")
@@ -333,11 +347,140 @@ func TestPR3bSemanticNonUniqueChangeChangeBackFallsBackRawOnly(t *testing.T) {
 	if got := stats.IndexedSemanticRawRecords; got != 2 {
 		t.Fatalf("raw semantic records=%d want 2", got)
 	}
-	if got := stats.IndexedSemanticFallbackRecords; got != 2 {
-		t.Fatalf("fallback semantic records=%d want 2", got)
+	if got := stats.IndexedSemanticFallbackRecords; got != 0 {
+		t.Fatalf("fallback semantic records=%d want 0", got)
 	}
 	if got := stats.IndexedSemanticEffectiveRecords; got != 0 {
 		t.Fatalf("effective semantic records=%d want 0", got)
+	}
+	if got := stats.RootDeltaPlanRawUnitSecondaryEntries - before.RootDeltaPlanRawUnitSecondaryEntries; got == 0 {
+		t.Fatalf("raw secondary root entries delta=%d want >0", got)
+	}
+	if got := stats.RootDeltaPlanFinalSecondaryEntries - before.RootDeltaPlanFinalSecondaryEntries; got != 0 {
+		t.Fatalf("final secondary root entries delta=%d want 0", got)
+	}
+	if got := stats.IndexedSemanticSkippedSecondaryRoots - before.IndexedSemanticSkippedSecondaryRoots; got == 0 {
+		t.Fatalf("skipped secondary roots delta=%d want >0", got)
+	}
+	if got := stats.RootDeltaPlanSquashedEntries - before.RootDeltaPlanSquashedEntries; got == 0 {
+		t.Fatalf("squashed entries delta=%d want >0", got)
+	}
+}
+
+func TestPR3bSemanticAsyncPublishSkipsChangeBackSecondaryRoot(t *testing.T) {
+	d, mgr, col := pr3bSemanticTestCollection(t)
+	defer func() { _ = d.Close() }()
+	pr3bSeedSemanticUser(t, col)
+	before := mgr.StatsSnapshot()
+
+	for _, city := range []string{"sea", "hnl"} {
+		if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
+			DocumentID: []byte("u1"),
+			Update:     setJSONCity(city),
+		}}); err != nil {
+			t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges city=%s: %v", city, err)
+		} else if !batched {
+			t.Fatalf("city=%s update was not buffered", city)
+		}
+		col.writeDomain.mu.Lock()
+		if !rotateIndexedMutableToFlushUnitLocked(col.writeDomain) {
+			col.writeDomain.mu.Unlock()
+			t.Fatalf("rotate indexed mutable state for city=%s returned false", city)
+		}
+		col.writeDomain.mu.Unlock()
+	}
+
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare async semantic publish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepare async semantic publish returned nil work")
+	}
+	if got := len(work.batch.units); got != 2 {
+		collectionTestCloseIndexedFlushWork(work)
+		t.Fatalf("prepared semantic units=%d want 2", got)
+	}
+	if err := col.publishPreparedIndexedFlush(work); err != nil {
+		t.Fatalf("publish async semantic work: %v", err)
+	}
+
+	pr3bRequireIndexIDs(t, col, "city", "hnl", "u1")
+	pr3bRequireIndexIDs(t, col, "city", "sea")
+	stats := mgr.StatsSnapshot()
+	if got := stats.PendingIndexedSemanticRecords; got != 0 {
+		t.Fatalf("pending semantic records after async publish=%d want 0", got)
+	}
+	if got := stats.RootDeltaPlanRawUnitSecondaryEntries - before.RootDeltaPlanRawUnitSecondaryEntries; got == 0 {
+		t.Fatalf("async raw secondary root entries delta=%d want >0", got)
+	}
+	if got := stats.RootDeltaPlanFinalSecondaryEntries - before.RootDeltaPlanFinalSecondaryEntries; got != 0 {
+		t.Fatalf("async final secondary root entries delta=%d want 0", got)
+	}
+	if got := stats.IndexedSemanticSkippedSecondaryRoots - before.IndexedSemanticSkippedSecondaryRoots; got == 0 {
+		t.Fatalf("async skipped secondary roots delta=%d want >0", got)
+	}
+	if got := stats.RootDeltaPlanSquashedEntries - before.RootDeltaPlanSquashedEntries; got == 0 {
+		t.Fatalf("async squashed entries delta=%d want >0", got)
+	}
+}
+
+func TestPR3bSemanticMixedInsertUpdateFallsBackToMechanicalPublish(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"city":"hnl","score":0}`)},
+	); err != nil {
+		t.Fatalf("insert seed user: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush seed user: %v", err)
+	}
+
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{[]byte(`{"city":"lax","score":0}`)},
+	); err != nil {
+		t.Fatalf("buffer insert u2: %v", err)
+	}
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update:     setJSONCity("sea"),
+	}}); err != nil {
+		t.Fatalf("buffer update u1: %v", err)
+	} else if !batched {
+		t.Fatal("u1 city update was not buffered")
+	}
+
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush mixed insert/update: %v", err)
+	}
+	pr3bRequireIndexIDs(t, col, "city", "sea", "u1")
+	pr3bRequireIndexIDs(t, col, "city", "lax", "u2")
+	stats := mgr.StatsSnapshot()
+	if got := stats.IndexedSemanticRawRecords; got != 1 {
+		t.Fatalf("raw semantic records after mixed flush=%d want 1", got)
+	}
+	if got := stats.IndexedSemanticEffectiveRecords; got != 0 {
+		t.Fatalf("effective semantic records after mixed flush=%d want 0", got)
 	}
 }
 
@@ -467,8 +610,8 @@ func pr3bRequireCitySemanticRecord(tb testing.TB, records []indexedSemanticRecor
 	if !bytes.Equal(record.documentID, []byte("u1")) {
 		tb.Fatalf("semantic record documentID=%q want u1", record.documentID)
 	}
-	if record.fallback != indexedSemanticFallbackRawOnly {
-		tb.Fatalf("semantic record fallback=%d want raw-only", record.fallback)
+	if record.fallback != indexedSemanticFallbackNone {
+		tb.Fatalf("semantic record fallback=%d want none", record.fallback)
 	}
 	if len(record.indexDeltas) != 1 {
 		tb.Fatalf("semantic index deltas=%d want 1", len(record.indexDeltas))

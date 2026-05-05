@@ -765,6 +765,7 @@ type coalescedFlushBatch struct {
 	rootCount         int
 	rootDeltaStats    collectionRootDeltaPlanStats
 	rawRootDeltaStats collectionRootDeltaPlanStats
+	effectiveRecords  int
 }
 
 type indexedFlushPublishWork struct {
@@ -2230,6 +2231,13 @@ func (domain *collectionWriteDomain) observeRootDeltaPlanCoalescing(rawStats, fi
 	if rawStats.entries > 0 && finalStats.entries == 0 {
 		domain.rootDeltaPlanNetZeroPlans.Add(1)
 	}
+}
+
+func (domain *collectionWriteDomain) observeIndexedSemanticEffectiveRecords(records int) {
+	if domain == nil || records <= 0 {
+		return
+	}
+	domain.indexedSemanticEffectiveRecords.Add(uint64(records))
 }
 
 func (domain *collectionWriteDomain) observePrimaryOnlyDrain(docs int, bytes int64, uniqueDocs int, duration time.Duration) {
@@ -5539,22 +5547,32 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	}
 	materializeStart := time.Now()
 	work.batch.state = coalescedFlushBatchMaterializing
-	ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(work.batch.rootNames, work.batch.mergedUnit.rootRuns, work.batch.rootBaseIDs, work.batch.mergedUnit.rootPolicies)
+	view, err := buildIndexedSemanticPublishView(work.meta, work.batch.mergedUnit, work.batch.rootNames, work.batch.rootBaseIDs)
 	if err != nil {
 		materializeElapsed := collectionObservedElapsedSince(materializeStart)
 		return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 	}
-	work.batch.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, work.batch.rootNames, ordered)
+	defer resetIndexedSemanticPublishView(view)
+	work.batch.rootNames = view.rootNames
+	work.batch.rootBaseIDs = view.rootBaseIDs
+	work.batch.rootCount = len(view.rootNames)
+	work.batch.effectiveRecords = view.effectiveRecords
+	ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(view.rootNames, view.rootRuns, view.rootBaseIDs, view.rootPolicies)
+	if err != nil {
+		materializeElapsed := collectionObservedElapsedSince(materializeStart)
+		return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
+	}
+	work.batch.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, view.rootNames, ordered)
 	materializeElapsed := collectionObservedElapsedSince(materializeStart)
 	publishStart := time.Now()
 	work.batch.state = coalescedFlushBatchPublishing
 	newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-		return c.buildRootDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.batch.rootNames, work.batch.rootBaseIDs, rootIDs)
+		return c.buildRootDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, view.rootNames, view.rootBaseIDs, rootIDs)
 	})
 	publishElapsed := collectionObservedElapsedSince(publishStart)
 	cleanupDeltas()
-	if publishErr == nil && len(rootIDs) != len(work.batch.rootNames) {
-		publishErr = unexpectedOrderedRootCountError(work.meta.Name, len(work.batch.rootNames), len(rootIDs))
+	if publishErr == nil && len(rootIDs) != len(view.rootNames) {
+		publishErr = unexpectedOrderedRootCountError(work.meta.Name, len(view.rootNames), len(rootIDs))
 	}
 	completeErr := c.completePreparedIndexedFlush(work, newSystemRoot, rootIDs, publishErr, materializeElapsed+publishElapsed, materializeElapsed, publishElapsed)
 	if completeErr != nil {
@@ -5791,6 +5809,196 @@ func collectionRootDeltaPlanStatsFromRootRuns(collectionName string, rootRuns ma
 		}
 	}
 	return stats, nil
+}
+
+type indexedSemanticPublishView struct {
+	rootNames        []string
+	rootRuns         map[string][]memtable.Table
+	rootPolicies     map[string]backenddb.OrderedRootStoragePolicy
+	rootBaseIDs      map[string]uint64
+	ownedTables      []memtable.Table
+	effectiveRecords int
+}
+
+func buildIndexedSemanticPublishView(meta CollectionMeta, unit indexedFlushUnit, rootNames []string, rootBaseIDs map[string]uint64) (indexedSemanticPublishView, error) {
+	view := indexedSemanticPublishView{
+		rootNames:    rootNames,
+		rootRuns:     unit.rootRuns,
+		rootPolicies: unit.rootPolicies,
+		rootBaseIDs:  rootBaseIDs,
+	}
+	if normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatTemplateV1 ||
+		len(unit.semanticRecords) == 0 ||
+		unit.docCount != len(unit.semanticRecords) ||
+		len(unit.uniqueValueRuns) != 0 {
+		return view, nil
+	}
+	effectiveRuns, effectiveRecords, ok, err := buildIndexedSemanticEffectiveSecondaryRuns(unit.semanticRecords)
+	if err != nil || !ok || len(effectiveRuns) == 0 {
+		return view, err
+	}
+
+	rootRuns := cloneTableRunMap(unit.rootRuns)
+	rootPolicies := cloneRootPolicyMap(unit.rootPolicies)
+	baseIDs := cloneUint64Map(rootBaseIDs)
+	for rootName, table := range effectiveRuns {
+		if table == nil || table.Len() == 0 {
+			resetCollectionRunTable(table)
+			delete(rootRuns, rootName)
+			delete(rootPolicies, rootName)
+			continue
+		}
+		rootRuns[rootName] = []memtable.Table{table}
+		view.ownedTables = append(view.ownedTables, table)
+	}
+	view.rootRuns = rootRuns
+	view.rootPolicies = rootPolicies
+	view.rootBaseIDs = baseIDs
+	view.rootNames = orderedBufferedRootNames(meta, rootRuns)
+	if len(view.rootNames) == 0 {
+		resetIndexedSemanticPublishView(view)
+		return indexedSemanticPublishView{
+			rootNames:    rootNames,
+			rootRuns:     unit.rootRuns,
+			rootPolicies: unit.rootPolicies,
+			rootBaseIDs:  rootBaseIDs,
+		}, nil
+	}
+	view.effectiveRecords = effectiveRecords
+	return view, nil
+}
+
+func resetIndexedSemanticPublishView(view indexedSemanticPublishView) {
+	for _, table := range view.ownedTables {
+		resetCollectionRunTable(table)
+	}
+}
+
+type indexedSemanticDocumentRootState struct {
+	documentID  []byte
+	baseValues  [][]byte
+	finalValues [][]byte
+}
+
+func buildIndexedSemanticEffectiveSecondaryRuns(records []indexedSemanticRecord) (map[string]memtable.Table, int, bool, error) {
+	type stateKey struct {
+		rootName   string
+		documentID string
+	}
+	states := make(map[stateKey]*indexedSemanticDocumentRootState)
+	roots := make(map[string]struct{})
+	for _, record := range records {
+		if record.kind != indexedSemanticRecordUpdate {
+			return nil, 0, false, nil
+		}
+		for _, delta := range record.indexDeltas {
+			if delta.unique {
+				return nil, 0, false, nil
+			}
+			if delta.rootName == "" {
+				return nil, 0, false, nil
+			}
+			key := stateKey{rootName: delta.rootName, documentID: string(record.documentID)}
+			state := states[key]
+			if state == nil {
+				states[key] = &indexedSemanticDocumentRootState{
+					documentID:  bytes.Clone(record.documentID),
+					baseValues:  cloneIndexedSemanticValueSet(delta.oldValues),
+					finalValues: cloneIndexedSemanticValueSet(delta.newValues),
+				}
+				roots[delta.rootName] = struct{}{}
+				continue
+			}
+			if !indexedSemanticValueSetsEqual(state.finalValues, delta.oldValues) {
+				return nil, 0, false, nil
+			}
+			state.finalValues = cloneIndexedSemanticValueSet(delta.newValues)
+		}
+	}
+	if len(states) == 0 {
+		return nil, 0, false, nil
+	}
+
+	rootTables := make(map[string]memtable.Table, len(roots))
+	effectiveRecords := 0
+	for rootName := range roots {
+		table := newCollectionRunTable(0)
+		for key, state := range states {
+			if key.rootName != rootName {
+				continue
+			}
+			deletes, sets := indexedSemanticValueSetDiff(state.baseValues, state.finalValues)
+			if len(deletes) == 0 && len(sets) == 0 {
+				continue
+			}
+			effectiveRecords++
+			for _, encoded := range deletes {
+				if _, err := deleteCollectionSecondaryIndexEntry(table, encoded, state.documentID); err != nil {
+					resetCollectionRunTable(table)
+					for _, existing := range rootTables {
+						resetCollectionRunTable(existing)
+					}
+					return nil, 0, false, err
+				}
+			}
+			for _, encoded := range sets {
+				if _, err := setCollectionSecondaryIndexEntry(table, encoded, state.documentID); err != nil {
+					resetCollectionRunTable(table)
+					for _, existing := range rootTables {
+						resetCollectionRunTable(existing)
+					}
+					return nil, 0, false, err
+				}
+			}
+		}
+		table.Freeze()
+		rootTables[rootName] = table
+	}
+	return rootTables, effectiveRecords, true, nil
+}
+
+func indexedSemanticValueSetsEqual(left, right [][]byte) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	seen := make(map[string]int, len(left))
+	for _, value := range left {
+		seen[string(value)]++
+	}
+	for _, value := range right {
+		key := string(value)
+		if seen[key] == 0 {
+			return false
+		}
+		seen[key]--
+	}
+	return true
+}
+
+func indexedSemanticValueSetDiff(base, final [][]byte) (deletes, sets [][]byte) {
+	finalCounts := make(map[string]int, len(final))
+	finalValues := make(map[string][]byte, len(final))
+	for _, value := range final {
+		key := string(value)
+		finalCounts[key]++
+		if _, ok := finalValues[key]; !ok {
+			finalValues[key] = value
+		}
+	}
+	for _, value := range base {
+		key := string(value)
+		if finalCounts[key] > 0 {
+			finalCounts[key]--
+			continue
+		}
+		deletes = append(deletes, value)
+	}
+	for key, count := range finalCounts {
+		for i := 0; i < count; i++ {
+			sets = append(sets, finalValues[key])
+		}
+	}
+	return deletes, sets
 }
 
 func collectionRootDeltaPlanStatsFromCollectionRootRuns(collectionName string, runs []collectionRootRun) (collectionRootDeltaPlanStats, error) {
@@ -6056,6 +6264,7 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	domain.observeRootDeltaPlanFinal(work.batch.rootDeltaStats)
 	domain.observeRootDeltaPlanCoalescing(work.batch.rawRootDeltaStats, work.batch.rootDeltaStats)
 	domain.observeRootDeltaPlan(work.batch.rootDeltaStats)
+	domain.observeIndexedSemanticEffectiveRecords(work.batch.effectiveRecords)
 	return nil
 }
 
@@ -6178,25 +6387,35 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		}
 	} else {
 		materializeStart := time.Now()
-		ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(rootNames, flushUnit.rootRuns, flushUnit.rootBaseIDs, flushUnit.rootPolicies)
+		view, err := buildIndexedSemanticPublishView(meta, flushUnit, rootNames, baseRootIDs)
 		if err != nil {
 			materializeElapsed = collectionObservedElapsedSince(materializeStart)
 			return err
 		}
-		rootDeltaStats := collectionRootDeltaPlanStatsFromOrdered(meta.Name, rootNames, ordered)
+		defer resetIndexedSemanticPublishView(view)
+		ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(view.rootNames, view.rootRuns, view.rootBaseIDs, view.rootPolicies)
+		if err != nil {
+			materializeElapsed = collectionObservedElapsedSince(materializeStart)
+			return err
+		}
+		rootDeltaStats := collectionRootDeltaPlanStatsFromOrdered(meta.Name, view.rootNames, ordered)
 		materializeElapsed = collectionObservedElapsedSince(materializeStart)
 		publishStart := time.Now()
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, view.rootNames, view.rootBaseIDs, rootIDs)
 		})
 		publishElapsed = collectionObservedElapsedSince(publishStart)
 		cleanupDeltas()
 		if err == nil {
+			rootNames = view.rootNames
+			baseRootIDs = view.rootBaseIDs
+			flushRoots = len(view.rootNames)
 			domain.observeCoalescedFlushBatch(flushUnits, flushDocs, flushBytes, rootDeltaStats.entries == 0)
 			domain.observeRootDeltaPlanRawUnit(rawRootDeltaStats)
 			domain.observeRootDeltaPlanFinal(rootDeltaStats)
 			domain.observeRootDeltaPlanCoalescing(rawRootDeltaStats, rootDeltaStats)
 			domain.observeRootDeltaPlan(rootDeltaStats)
+			domain.observeIndexedSemanticEffectiveRecords(view.effectiveRecords)
 		}
 	}
 	if err != nil {
@@ -8734,12 +8953,14 @@ func buildIndexedSemanticUpdateRecords(collectionName string, runtimes []indexRu
 		record := indexedSemanticRecord{
 			kind:       indexedSemanticRecordUpdate,
 			documentID: bytes.Clone(update.documentID),
-			fallback:   indexedSemanticFallbackRawOnly,
 		}
 		if update.indexStateChanged && len(runtimes) > 0 {
 			for runtimeIdx, runtime := range runtimes {
 				if !preparedBatchUpdateIndexChanged(update, runtimeIdx) {
 					continue
+				}
+				if runtime.def.unique {
+					record.fallback = indexedSemanticFallbackRawOnly
 				}
 				record.indexDeltas = append(record.indexDeltas, indexedSemanticIndexDelta{
 					indexName:  runtime.def.name,
