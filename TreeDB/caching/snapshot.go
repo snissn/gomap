@@ -240,12 +240,17 @@ func (s *Snapshot) lookupQueueEntry(key []byte) (val []byte, ptr page.ValuePtr, 
 }
 
 func (s *Snapshot) lookupRootDomainSnapshotEntry(key []byte) (snap rootDomainSnapshot, val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
+	snap, val, ptr, flags, found, source, _ = s.lookupRootDomainSnapshotEntryWithError(key)
+	return snap, val, ptr, flags, found, source
+}
+
+func (s *Snapshot) lookupRootDomainSnapshotEntryWithError(key []byte) (snap rootDomainSnapshot, val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource, err error) {
 	if s == nil {
-		return rootDomainSnapshot{}, nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
+		return rootDomainSnapshot{}, nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone, nil
 	}
 	snap = rootDomainSnapshotFromCachedSnapshot(s, key)
-	val, ptr, flags, found, source = snap.getEntryWithSource(key)
-	return snap, val, ptr, flags, found, source
+	val, ptr, flags, found, source, err = snap.getEntryWithSourceError(key)
+	return snap, val, ptr, flags, found, source, err
 }
 
 func (s *Snapshot) lookupRootDomainEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
@@ -472,7 +477,10 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 }
 
 func (s *Snapshot) Get(key []byte) ([]byte, error) {
-	snap, val, ptr, flags, found, source := s.lookupRootDomainSnapshotEntry(key)
+	snap, val, ptr, flags, found, source, err := s.lookupRootDomainSnapshotEntryWithError(key)
+	if err != nil {
+		return nil, err
+	}
 	if found {
 		if flags&node.FlagTombstone != 0 {
 			return nil, tree.ErrKeyNotFound
@@ -545,7 +553,10 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 }
 
 func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
-	snap, val, ptr, flags, found, source := s.lookupRootDomainSnapshotEntry(key)
+	snap, val, ptr, flags, found, source, err := s.lookupRootDomainSnapshotEntryWithError(key)
+	if err != nil {
+		return nil, err
+	}
 	if found {
 		if flags&node.FlagTombstone != 0 {
 			return nil, tree.ErrKeyNotFound
@@ -584,12 +595,10 @@ func (s *Snapshot) Has(key []byte) (bool, error) {
 	if s == nil {
 		return false, nil
 	}
-	snap := rootDomainSnapshotFromCachedSnapshot(s, key)
-	_, _, flags, found, _ := snap.getCachedEntryWithSource(key)
-	if found {
-		return flags&node.FlagTombstone == 0, nil
+	snap, _, _, flags, found, _, err := s.lookupRootDomainSnapshotEntryWithError(key)
+	if err != nil {
+		return false, err
 	}
-	_, _, flags, found, _ = snap.getPublishedEntryWithSource(key)
 	if found {
 		return flags&node.FlagTombstone == 0, nil
 	}

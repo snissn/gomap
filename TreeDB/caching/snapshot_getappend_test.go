@@ -223,6 +223,27 @@ func TestSnapshotBackendPublishedMissConsistentAcrossReadAPIs(t *testing.T) {
 	}
 }
 
+func TestSnapshotBackendPublishedReadErrorsPropagate(t *testing.T) {
+	snap := &Snapshot{
+		rootPointShards: []rootDomainSnapshot{{
+			published:       backendSnapshotLookup{},
+			publishedRootID: 1,
+		}},
+	}
+	if _, err := snap.Get([]byte("k")); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("Get err=%v, want ErrClosed", err)
+	}
+	if _, err := snap.GetUnsafe([]byte("k")); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("GetUnsafe err=%v, want ErrClosed", err)
+	}
+	if _, err := snap.GetAppend([]byte("k"), nil); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("GetAppend err=%v, want ErrClosed", err)
+	}
+	if _, err := snap.Has([]byte("k")); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("Has err=%v, want ErrClosed", err)
+	}
+}
+
 func newSnapshotWithBackendPublishedPointRootMissingKey(t *testing.T) *Snapshot {
 	t.Helper()
 
