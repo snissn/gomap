@@ -1114,6 +1114,11 @@ func TestParseConfigTreeDBBufferedIndexedReadOnlyPrepareWorkersRequirePrepare(t 
 	if err == nil || !strings.Contains(err.Error(), "requires -treedb-buffered-indexed-read-only-prepare") {
 		t.Fatalf("parse workers without prepare err=%v want requires prepare", err)
 	}
+
+	_, err = parseConfig([]string{"-treedb-buffered-indexed-read-only-prepare-workers", "0"})
+	if err == nil || !strings.Contains(err.Error(), "requires -treedb-buffered-indexed-read-only-prepare") {
+		t.Fatalf("parse explicit zero workers without prepare err=%v want requires prepare", err)
+	}
 }
 
 func TestParseConfigAcceptsTreeDBBSONDocumentFormat(t *testing.T) {
@@ -2187,6 +2192,31 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 			decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
 			decoded.TreeDBBufferedIndexedReadOnlyPrepare,
 			decoded.TreeDBBufferedIndexedReadOnlyPrepareWorkers)
+	}
+}
+
+func TestWriteResultIncludesTreeDBBufferedIndexedReadOnlyPrepareDefaultsJSON(t *testing.T) {
+	result := &benchmarkResult{
+		Target:     "treedb",
+		Database:   "bench",
+		Collection: "docs",
+		Documents:  1,
+	}
+	var out bytes.Buffer
+	if err := writeResult(&out, "json", result); err != nil {
+		t.Fatalf("writeResult json: %v", err)
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("unmarshal json result: %v", err)
+	}
+	for _, key := range []string{
+		"treedb_buffered_indexed_read_only_prepare",
+		"treedb_buffered_indexed_read_only_prepare_workers",
+	} {
+		if _, ok := decoded[key]; !ok {
+			t.Fatalf("json result omitted %s: %s", key, out.String())
+		}
 	}
 }
 
