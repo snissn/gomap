@@ -55,6 +55,12 @@ const (
 	// well-amortized InsertBatch calls on the immediate publish path. Smaller
 	// batches use the indexed write-domain memtable path by default.
 	DefaultIndexedWriteMemtableDirectBatchDocuments = 16000
+	// DefaultIndexedWriteMemtableLowFanoutDirectBatchDocuments keeps moderately
+	// large low-index InsertBatch calls on the immediate publish path. With only
+	// one or two secondary indexes, root apply is already cheap enough that the
+	// indexed write-domain pending-visibility indexes can cost more than they
+	// save.
+	DefaultIndexedWriteMemtableLowFanoutDirectBatchDocuments = 4096
 	// DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits bounds opt-in
 	// background indexed flush work. When the queue reaches this many immutable
 	// flush units, the triggering writer publishes synchronously to cap memory
@@ -3602,6 +3608,11 @@ func (c *Collection) shouldBufferIndexedInsertBatch(meta CollectionMeta, documen
 		isDefaultIndexedWriteMemtableMaxDocuments(meta.Options) {
 		return false
 	}
+	if len(meta.Indexes) <= 2 &&
+		documentCount >= DefaultIndexedWriteMemtableLowFanoutDirectBatchDocuments &&
+		isDefaultIndexedWriteMemtableMaxDocuments(meta.Options) {
+		return false
+	}
 	return true
 }
 
@@ -3621,10 +3632,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	if catalog == nil {
 		return 0, errCollectionNotFound
 	}
-	rootDeltaStats, err := collectionRootDeltaPlanStatsFromCollectionRootRuns(catalog.meta.Name, plan.runs)
-	if err != nil {
-		return 0, err
-	}
+	rootDeltaStats := plan.stats.rootDeltaStats
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
 	if len(catalog.meta.Indexes) == 0 {
@@ -6520,26 +6528,31 @@ func (stats *collectionRootDeltaPlanStats) addEntry(kind collectionRootDeltaPlan
 	if stats == nil {
 		return
 	}
-	stats.entries++
+	tombstones := uint64(0)
+	if tombstone {
+		tombstones = 1
+	}
+	stats.addEntries(kind, 1, keyBytes, valueBytes, tombstones)
+}
+
+func (stats *collectionRootDeltaPlanStats) addEntries(kind collectionRootDeltaPlanKind, entries, keyBytes, valueBytes, tombstones uint64) {
+	if stats == nil || entries == 0 {
+		return
+	}
+	stats.entries += entries
 	stats.keyBytes += keyBytes
 	stats.valueBytes += valueBytes
-	if tombstone {
-		stats.tombstones++
-	}
+	stats.tombstones += tombstones
 	if detail := stats.detailForKind(kind); detail != nil {
-		detail.entries++
+		detail.entries += entries
 		detail.bytes += keyBytes + valueBytes
-		if tombstone {
-			detail.tombstones++
-		}
+		detail.tombstones += tombstones
 	}
 	if kind == collectionRootDeltaPlanPrimary {
-		stats.primaryEntries++
+		stats.primaryEntries += entries
 		stats.primaryKeyBytes += keyBytes
 		stats.primaryValueBytes += valueBytes
-		if tombstone {
-			stats.primaryTombstones++
-		}
+		stats.primaryTombstones += tombstones
 	}
 }
 
@@ -7627,12 +7640,9 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		}
 		resetCollectionRunTables(plan.runs)
 	}()
-	var deltaStats collectionRootDeltaPlanStats
+	deltaStats := plan.stats.rootDeltaStats
 	for _, run := range plan.runs {
 		iter := run.table.NewIterator(nil, nil)
-		if c.writeDomain != nil {
-			iter = newCollectionRootDeltaStatsIterator(meta.Name, run.name, iter, &deltaStats)
-		}
 		iterators = append(iterators, iter)
 		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
 			BaseRoot:      baseRootIDs[run.name],
@@ -9652,6 +9662,10 @@ func appendIndexedSemanticRecordsLocked(domain *collectionWriteDomain, records [
 	}
 	// buildIndexedSemanticUpdateRecords already owns cloned document IDs and
 	// value sets; staging transfers those records into the mutable domain.
+	if len(domain.indexedSemanticRecords) == 0 {
+		domain.indexedSemanticRecords = records
+		return
+	}
 	domain.indexedSemanticRecords = append(domain.indexedSemanticRecords, records...)
 }
 

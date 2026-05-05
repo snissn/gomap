@@ -3781,19 +3781,29 @@ func TestCollectionIndexedWriteMemtablesBypassDefaultLargeBatches(t *testing.T) 
 		},
 		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}
-	if !col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableDirectBatchDocuments-1) {
-		t.Fatal("default indexed memtable path bypassed a below-threshold batch")
-	}
 	if col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableDirectBatchDocuments) {
 		t.Fatal("default indexed memtable path buffered a large direct-publish batch")
 	}
+	if col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableLowFanoutDirectBatchDocuments) {
+		t.Fatal("default indexed memtable path buffered a low-fanout direct-publish batch")
+	}
+	if !col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableLowFanoutDirectBatchDocuments-1) {
+		t.Fatal("default indexed memtable path bypassed a below-threshold low-fanout batch")
+	}
 	meta.Options.BufferedIndexedAsyncFlush = true
 	meta.Options.BufferedIndexedWriteMaxDocuments = DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
-	if !col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableDirectBatchDocuments-1) {
-		t.Fatal("async default indexed memtable path bypassed a below-threshold batch")
-	}
 	if col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableDirectBatchDocuments) {
 		t.Fatal("async default indexed memtable path buffered a large direct-publish batch")
+	}
+	if col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableLowFanoutDirectBatchDocuments) {
+		t.Fatal("async default indexed memtable path buffered a low-fanout direct-publish batch")
+	}
+	meta.Indexes = append(meta.Indexes,
+		IndexDefinition{Name: "state", Field: "state", ValueType: IndexValueString},
+		IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString},
+	)
+	if !col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableLowFanoutDirectBatchDocuments) {
+		t.Fatal("default indexed memtable path bypassed a moderate three-index batch")
 	}
 	meta.Options.BufferedIndexedAsyncFlush = false
 	meta.Options.BufferedIndexedWriteMaxDocuments = 2
