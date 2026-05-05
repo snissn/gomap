@@ -71,9 +71,25 @@ type phaseResult struct {
 	DriverMeanLatencyMicros float64            `json:"driver_mean_latency_us,omitempty"`
 	LatencyMicros           latencySummary     `json:"latency_micros"`
 	TreeDBDrainMillis       float64            `json:"treedb_drain_ms,omitempty"`
+	TreeDBDrainMillisSet    bool               `json:"-"`
 	TreeDBDrainStatsDelta   map[string]string  `json:"treedb_drain_stats_delta,omitempty"`
 	TreeDBStatsDelta        map[string]string  `json:"treedb_stats_delta,omitempty"`
 	TreeDBMetrics           map[string]float64 `json:"treedb_metrics,omitempty"`
+}
+
+func (p *phaseResult) UnmarshalJSON(data []byte) error {
+	type phaseResultAlias phaseResult
+	var alias phaseResultAlias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+	*p = phaseResult(alias)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	_, p.TreeDBDrainMillisSet = raw["treedb_drain_ms"]
+	return nil
 }
 
 type latencySummary struct {
@@ -1768,7 +1784,7 @@ func formatPhaseDriverCalls(ok bool, value int) string {
 }
 
 func formatPhaseDrainMillis(ok bool, phase phaseResult) string {
-	if !ok {
+	if !ok || !phaseHasDrainMillis(phase) {
 		return "n/a"
 	}
 	return formatNumber(phase.TreeDBDrainMillis)
@@ -1790,10 +1806,14 @@ func formatRawFloat(ok bool, value float64) string {
 }
 
 func formatRawDrainMillis(ok bool, phase phaseResult) string {
-	if !ok {
+	if !ok || !phaseHasDrainMillis(phase) {
 		return ""
 	}
 	return strconv.FormatFloat(phase.TreeDBDrainMillis, 'f', 6, 64)
+}
+
+func phaseHasDrainMillis(phase phaseResult) bool {
+	return phase.TreeDBDrainMillisSet || phase.TreeDBDrainMillis != 0
 }
 
 func formatRawPhaseMetric(phase phaseResult, name string) string {

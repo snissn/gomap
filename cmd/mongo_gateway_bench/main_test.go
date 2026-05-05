@@ -370,7 +370,7 @@ func TestTreeDBStatsDeltaAndPhaseMetrics(t *testing.T) {
 		"primary_only_drain_docs/drain":            20,
 		"primary_only_drain_bytes/doc":             10,
 		"primary_only_drain_ns/doc":                100,
-		"primary_only_publishes/drain":             4,
+		"primary_only_publishes/drain":             1,
 		"primary_only_buffered_calls/driver_call":  0.4,
 		"primary_only_publish_calls/driver_call":   0.4,
 		"publish_delta_group_calls/driver_call":    0.15,

@@ -2237,9 +2237,6 @@ func (domain *collectionWriteDomain) observeRootDeltaPlanCoalescing(rawStats, fi
 	if rawStats.primaryDetail.entries > finalStats.primaryDetail.entries {
 		domain.indexedSemanticDuplicatePrimaryIDsCoalesced.Add(rawStats.primaryDetail.entries - finalStats.primaryDetail.entries)
 	}
-	if rawStats.secondaryDetail.entries > finalStats.secondaryDetail.entries {
-		domain.indexedSemanticCoalescedNoopIndexChanges.Add(rawStats.secondaryDetail.entries - finalStats.secondaryDetail.entries)
-	}
 	if rawSecondaryRoots > finalSecondaryRoots {
 		domain.indexedSemanticSkippedSecondaryRoots.Add(rawSecondaryRoots - finalSecondaryRoots)
 	}
@@ -5783,22 +5780,15 @@ func collectionRootDeltaPlanStatsFromRootRuns(collectionName string, rootRuns ma
 	for _, rootName := range rootNames {
 		kind := stats.addRoot(collectionName, rootName)
 		iter := newBufferedRootRunsIteratorWithDeleted(rootRuns[rootName], nil, nil, true)
-		delta, err := backenddb.OrderedRootDeltaBatchFromIterator(iter)
+		stats.addIterator(kind, iter)
+		err := iter.Error()
 		closeErr := iter.Close()
 		if err != nil {
-			if delta != nil {
-				_ = delta.Close()
-			}
 			return stats, err
 		}
 		if closeErr != nil {
-			if delta != nil {
-				_ = delta.Close()
-			}
 			return stats, closeErr
 		}
-		stats.addBatch(kind, delta)
-		_ = delta.Close()
 	}
 	return stats, nil
 }
@@ -5878,6 +5868,46 @@ func (stats *collectionRootDeltaPlanStats) addBatch(kind collectionRootDeltaPlan
 		if !tombstone {
 			valueBytes = uint64(len(entry.Value))
 			if entry.IsPtr {
+				valueBytes += page.ValuePtrSize
+			}
+		}
+		stats.entries++
+		stats.keyBytes += keyBytes
+		stats.valueBytes += valueBytes
+		if tombstone {
+			stats.tombstones++
+		}
+		if detail := stats.detailForKind(kind); detail != nil {
+			detail.entries++
+			detail.bytes += keyBytes + valueBytes
+			if tombstone {
+				detail.tombstones++
+			}
+		}
+		if kind == collectionRootDeltaPlanPrimary {
+			stats.primaryEntries++
+			stats.primaryKeyBytes += keyBytes
+			stats.primaryValueBytes += valueBytes
+			if tombstone {
+				stats.primaryTombstones++
+			}
+		}
+	}
+}
+
+func (stats *collectionRootDeltaPlanStats) addIterator(kind collectionRootDeltaPlanKind, iter iterator.UnsafeIterator) {
+	if stats == nil || iter == nil {
+		return
+	}
+	for ; iter.Valid(); iter.Next() {
+		key := iter.Key()
+		value, _, flags := iter.UnsafeEntry()
+		keyBytes := uint64(len(key))
+		valueBytes := uint64(0)
+		tombstone := flags&node.FlagTombstone != 0 || iter.IsDeleted()
+		if !tombstone {
+			valueBytes = uint64(len(value))
+			if flags&node.FlagPointer != 0 {
 				valueBytes += page.ValuePtrSize
 			}
 		}

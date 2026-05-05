@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1263,7 +1264,7 @@ func TestWriteSummaryTSVRendersTreeDBCoalescingColumns(t *testing.T) {
 			"primary_only_duplicate_ids_coalesced/doc": 0.125,
 			"primary_only_drains/doc":                  0.05,
 			"primary_only_drain_docs/drain":            20,
-			"primary_only_publishes/drain":             4,
+			"primary_only_publishes/drain":             1,
 		},
 	}
 	cells := []cellComparison{{
@@ -1308,11 +1309,40 @@ func TestWriteSummaryTSVRendersTreeDBCoalescingColumns(t *testing.T) {
 		"treedb_duplicate_primary_ids_coalesced_per_doc":      "0.750000",
 		"treedb_primary_only_duplicate_ids_coalesced_per_doc": "0.125000",
 		"treedb_primary_only_drains_per_doc":                  "0.050000",
-		"treedb_primary_only_publishes_per_drain":             "4.000000",
+		"treedb_primary_only_publishes_per_drain":             "1.000000",
 	} {
 		if got := values[column]; got != want {
 			t.Fatalf("summary column %s=%q want %q; values=%v", column, got, want, values)
 		}
+	}
+}
+
+func TestPhaseResultMissingDrainMillisRendersMissing(t *testing.T) {
+	var phase phaseResult
+	if err := json.Unmarshal([]byte(`{"name":"load","operations":1,"ops_per_sec":10}`), &phase); err != nil {
+		t.Fatalf("unmarshal phase: %v", err)
+	}
+	if phase.TreeDBDrainMillisSet {
+		t.Fatal("missing treedb_drain_ms marked present")
+	}
+	if got := formatPhaseDrainMillis(true, phase); got != "n/a" {
+		t.Fatalf("missing drain millis rendered as %q want n/a", got)
+	}
+	if got := formatRawDrainMillis(true, phase); got != "" {
+		t.Fatalf("missing raw drain millis rendered as %q want empty", got)
+	}
+
+	if err := json.Unmarshal([]byte(`{"name":"load","operations":1,"ops_per_sec":10,"treedb_drain_ms":0}`), &phase); err != nil {
+		t.Fatalf("unmarshal present zero phase: %v", err)
+	}
+	if !phase.TreeDBDrainMillisSet {
+		t.Fatal("present zero treedb_drain_ms was not marked present")
+	}
+	if got := formatPhaseDrainMillis(true, phase); got != "0" {
+		t.Fatalf("present zero drain millis rendered as %q want 0", got)
+	}
+	if got := formatRawDrainMillis(true, phase); got != "0.000000" {
+		t.Fatalf("present zero raw drain millis rendered as %q want 0.000000", got)
 	}
 }
 
@@ -1394,7 +1424,7 @@ func TestRenderWriterSweepCounterTableUsesPhaseMetrics(t *testing.T) {
 			"primary_only_duplicate_ids_coalesced/doc":    0.25,
 			"primary_only_drains/doc":                     0.125,
 			"primary_only_drain_docs/drain":               8,
-			"primary_only_publishes/drain":                4,
+			"primary_only_publishes/drain":                1,
 		},
 	}
 	mongoPhase := phaseResult{
@@ -1434,7 +1464,7 @@ func TestRenderWriterSweepCounterTableUsesPhaseMetrics(t *testing.T) {
 		"3.00 | 96.0 | 8192",
 		"2.00 | 200 | 0.05 | 1.50 | 150 | 0.05 | 0.10 | 10.0 | 0 | 0.40 | 40.0 | 0 | 0.50 | 50.0 | 0 | 1.25 | 125 | 0 | 1.00 | 100 | 0 | 0.05 | 5.00 | 0 | 0.20 | 20.0 | 0 | 0.25 | 25.0 | 0",
 		"0.75 | 0.33 | 0.01 | 0.02 | 0.44 | 0.55",
-		"0.25 | 0.12 | 8.00 | 4.00 | `/tmp/treedb.json` |",
+		"0.25 | 0.12 | 8.00 | 1.00 | `/tmp/treedb.json` |",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("writer sweep table missing %q:\n%s", want, rendered)

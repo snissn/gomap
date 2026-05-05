@@ -2325,7 +2325,7 @@ func deriveTreeDBPhaseMetrics(delta map[string]float64, operations, driverCalls 
 	addRatioMetric(metrics, "primary_only_drain_docs/drain", delta, "treedb.collections.write_domain.primary_only.drain_docs_total", "treedb.collections.write_domain.primary_only.drains_total")
 	addPerOperationMetric(metrics, "primary_only_drain_bytes/doc", delta, "treedb.collections.write_domain.primary_only.drain_bytes_total", operations)
 	addPerOperationMetric(metrics, "primary_only_drain_ns/doc", delta, "treedb.collections.write_domain.primary_only.drain_ns_total", operations)
-	addRatioMetric(metrics, "primary_only_publishes/drain", delta, "treedb.collections.write_domain.primary_only.root_publishes_total", "treedb.collections.write_domain.primary_only.drains_total")
+	addRatioMetric(metrics, "primary_only_publishes/drain", delta, "treedb.collections.write_domain.primary_only.drains_total", "treedb.collections.write_domain.primary_only.drains_total")
 	addPerDriverCallMetric(metrics, "primary_only_buffered_calls/driver_call", delta, "treedb.collections.write_domain.primary_only.buffered_calls_total", driverCalls)
 	addPerDriverCallMetric(metrics, "primary_only_publish_calls/driver_call", delta, "treedb.collections.write_domain.primary_only.root_publishes_total", driverCalls)
 	if uniqueEligible, ok := sumTreeDBMetricDeltas(delta, "treedb.collections.write_domain.update_batch.unique_checks_total", "treedb.collections.write_domain.update_batch.unique_check_skips_total"); ok {

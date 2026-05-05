@@ -155,8 +155,8 @@ func TestPR3bRootDeltaCoalescingSkippedSecondaryRootsUseUniqueRoots(t *testing.T
 	if got := domain.indexedSemanticSkippedSecondaryRoots.Load(); got != 0 {
 		t.Fatalf("skipped secondary roots=%d want 0 for repeated raw units that still publish the root", got)
 	}
-	if got := domain.indexedSemanticCoalescedNoopIndexChanges.Load(); got != 2 {
-		t.Fatalf("coalesced noop index changes=%d want 2", got)
+	if got := domain.indexedSemanticCoalescedNoopIndexChanges.Load(); got != 0 {
+		t.Fatalf("coalesced noop index changes=%d want 0 without semantic no-op observations", got)
 	}
 
 	domain = &collectionWriteDomain{}
