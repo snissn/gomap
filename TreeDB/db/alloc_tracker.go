@@ -12,10 +12,21 @@ type allocTracker struct {
 	alloc *freelist.Allocator
 	mu    sync.Mutex
 	pages []uint64
+
+	preparedOutputID    preparedOutputID
+	preparedOutputState preparedOutputState
 }
 
 func newAllocTracker(alloc *freelist.Allocator) *allocTracker {
 	return &allocTracker{alloc: alloc}
+}
+
+func newPreparedOutputAllocTracker(alloc *freelist.Allocator, id preparedOutputID) *allocTracker {
+	return &allocTracker{
+		alloc:               alloc,
+		preparedOutputID:    id,
+		preparedOutputState: preparedOutputStatePrepared,
+	}
 }
 
 func (t *allocTracker) Alloc(hint uint64) (uint64, error) {
@@ -38,13 +49,57 @@ func (t *allocTracker) Pages() []uint64 {
 	return append([]uint64(nil), t.pages...)
 }
 
+func (t *allocTracker) PreparedOutputID() preparedOutputID {
+	if t == nil {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.preparedOutputID
+}
+
+func (t *allocTracker) PreparedOutputSnapshot() preparedOutputSnapshot {
+	if t == nil {
+		return preparedOutputSnapshot{}
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return preparedOutputSnapshot{
+		ID:    t.preparedOutputID,
+		State: t.preparedOutputState,
+		Pages: append([]uint64(nil), t.pages...),
+	}
+}
+
+func (t *allocTracker) MarkInstalled() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.preparedOutputID != 0 && t.preparedOutputState == preparedOutputStatePrepared {
+		t.preparedOutputState = preparedOutputStateInstalled
+	}
+	t.mu.Unlock()
+}
+
+// FreeAll releases tracked pages for abandoned write attempts. Prepared output
+// trackers that have been marked installed intentionally retain their pages;
+// those pages are now reachable through the installed root and must not be
+// returned to the allocator by this cleanup path.
 func (t *allocTracker) FreeAll() error {
 	if t == nil {
 		return nil
 	}
 	t.mu.Lock()
+	if t.preparedOutputState == preparedOutputStateInstalled {
+		t.mu.Unlock()
+		return nil
+	}
 	pages := append([]uint64(nil), t.pages...)
 	t.pages = nil
+	if t.preparedOutputID != 0 && len(pages) > 0 {
+		t.preparedOutputState = preparedOutputStateAbandoned
+	}
 	t.mu.Unlock()
 	var firstErr error
 	for _, id := range pages {

@@ -42,6 +42,7 @@ type preparedRootApply struct {
 	identity     preparedRootIdentity
 	baseRootID   uint64
 	preparedRoot uint64
+	outputID     preparedOutputID
 	prepared     bool
 	storage      OrderedRootStoragePolicy
 	plan         preparedRootDeltaPlanSummary
@@ -170,12 +171,13 @@ func (group *preparedRootApplyGroup) setSystemRoot(baseRootID uint64, delta *bat
 	})
 }
 
-func (group *preparedRootApplyGroup) markPrepared(idx int, rootID uint64) {
+func (group *preparedRootApplyGroup) markPrepared(idx int, rootID uint64, outputID preparedOutputID) {
 	apply := group.applyAt(idx)
 	if apply == nil {
 		return
 	}
 	apply.preparedRoot = rootID
+	apply.outputID = outputID
 	apply.prepared = true
 	apply.state = preparedRootApplyStatePrepared
 }
