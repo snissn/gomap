@@ -148,7 +148,9 @@ const (
 	mergeNodeKeyScratchMaxCap = 1 << 20
 
 	mergeInternalMinParallelChildren         = 8
-	mergeInternalMinParallelOps              = 4096
+	mergeInternalMinParallelOps              = 1024
+	mergeInternalMaintenanceMinParallelOps   = 4096
+	mergeInternalOuterLeafLogMinParallelOps  = 4096
 	mergeInternalHighPressureMinChildren     = 16
 	mergeInternalHighPressureMinOps          = 16 * 1024
 	mergeInternalCriticalPressureMinChildren = 32
@@ -466,7 +468,10 @@ type childWork struct {
 	childStat adaptive.Metrics
 }
 
-const maxChildWorkCap = 1 << 14
+const (
+	maxChildWorkCap            = 1 << 14
+	maxChildWorkRetiredKeepCap = 8
+)
 
 var childWorkPool sync.Pool
 
@@ -573,7 +578,11 @@ func putChildWorkSlice(children []childWork) {
 		return
 	}
 	for i := range children {
+		retired := children[i].retired
 		children[i] = childWork{}
+		if cap(retired) <= maxChildWorkRetiredKeepCap {
+			children[i].retired = retired[:0]
+		}
 	}
 	childWorkPool.Put(children[:0])
 }
@@ -751,7 +760,7 @@ func internalMergeParallelThresholds(maintenance bool, pressure ParallelMergePre
 	minChildren = mergeInternalMinParallelChildren
 	minOps = mergeInternalMinParallelOps
 	if maintenance {
-		return minChildren, minOps
+		return minChildren, mergeInternalMaintenanceMinParallelOps
 	}
 	switch pressure {
 	case ParallelMergePressureCritical:
@@ -2261,6 +2270,9 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			useParallel = shouldUseParallelInternalMerge(int(count), len(ops), gomaxprocs, maintenance, pressure)
 		}
 	}
+	if useParallel && z != nil && z.outerLeavesInValueLog && len(ops) < mergeInternalOuterLeafLogMinParallelOps {
+		useParallel = false
+	}
 
 	copyKeys := oldNode.InternalBaseDeltaEnabled()
 	var keyArena []byte
@@ -2414,7 +2426,9 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	}
 
 	children := getChildWorkSlice(int(count))
-	defer putChildWorkSlice(children)
+	defer func() {
+		putChildWorkSlice(children)
+	}()
 
 	for i := uint16(0); i < count; i++ {
 		key, childRef, err := oldNode.GetInternalEntryRefView(i)
@@ -2425,11 +2439,17 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			key = []byte{}
 		}
 		keyCopy := cloneKey(key)
-		children = append(children, childWork{
+		children = children[:len(children)+1]
+		child := &children[len(children)-1]
+		retired := child.retired
+		*child = childWork{
 			key:   keyCopy,
 			low:   keyCopy,
 			child: childRef,
-		})
+		}
+		if cap(retired) <= maxChildWorkRetiredKeepCap {
+			child.retired = retired[:0]
+		}
 	}
 
 	for i := range children {
@@ -2463,7 +2483,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	if useParallel {
 		const (
 			minParallelActiveChildren = 2
-			minParallelOpsPerChild    = 256
+			minParallelOpsPerChild    = 4
 		)
 		if activeChildren < minParallelActiveChildren || len(ops)/activeChildren < minParallelOpsPerChild {
 			useParallel = false
@@ -2511,17 +2531,15 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 				if len(children[i].ops) == 0 {
 					continue
 				}
-				var childMetrics adaptive.Metrics
-				childRet := children[i].retired[:0]
-				ncID, cs, err := z.writeRecursive(children[i].child, children[i].ops, maintenance, budget, &childMetrics, children[i].low, children[i].high, &childRet, scratch)
+				children[i].childStat = adaptive.Metrics{}
+				children[i].retired = children[i].retired[:0]
+				ncID, cs, err := z.writeRecursive(children[i].child, children[i].ops, maintenance, budget, &children[i].childStat, children[i].low, children[i].high, &children[i].retired, scratch)
 				if err != nil {
 					errOnce.Do(func() { firstErr = err })
 					continue
 				}
 				children[i].newChild = ncID
 				children[i].splits = cs
-				children[i].retired = childRet
-				children[i].childStat = childMetrics
 			}
 		}
 		for i := 0; i < maxParallel; i++ {
