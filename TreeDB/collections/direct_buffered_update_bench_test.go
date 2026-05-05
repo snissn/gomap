@@ -178,6 +178,9 @@ func collectionManagerStatsBenchmarkDelta(after, before CollectionManagerStats) 
 		IndexedFlushBytes:               after.IndexedFlushBytes - before.IndexedFlushBytes,
 		IndexedFlushRootRuns:            after.IndexedFlushRootRuns - before.IndexedFlushRootRuns,
 		IndexedFlushRoots:               after.IndexedFlushRoots - before.IndexedFlushRoots,
+		IndexedFlushPreflight:           after.IndexedFlushPreflight - before.IndexedFlushPreflight,
+		IndexedFlushRotate:              after.IndexedFlushRotate - before.IndexedFlushRotate,
+		IndexedFlushMerge:               after.IndexedFlushMerge - before.IndexedFlushMerge,
 		IndexedFlushDuration:            after.IndexedFlushDuration - before.IndexedFlushDuration,
 		IndexedFlushMaterialize:         after.IndexedFlushMaterialize - before.IndexedFlushMaterialize,
 		IndexedFlushSemanticPlan:        after.IndexedFlushSemanticPlan - before.IndexedFlushSemanticPlan,
@@ -190,10 +193,17 @@ func collectionManagerStatsBenchmarkDelta(after, before CollectionManagerStats) 
 		UpdateBatchModified:             after.UpdateBatchModified - before.UpdateBatchModified,
 		UpdateBatchRuns:                 after.UpdateBatchRuns - before.UpdateBatchRuns,
 		UpdateBatchBufferedBatches:      after.UpdateBatchBufferedBatches - before.UpdateBatchBufferedBatches,
+		UpdateBatchValidate:             after.UpdateBatchValidate - before.UpdateBatchValidate,
+		UpdateBatchClone:                after.UpdateBatchClone - before.UpdateBatchClone,
+		UpdateBatchPlanSetup:            after.UpdateBatchPlanSetup - before.UpdateBatchPlanSetup,
+		UpdateBatchBufferedReadSnapshot: after.UpdateBatchBufferedReadSnapshot - before.UpdateBatchBufferedReadSnapshot,
 		UpdateBatchCurrentRead:          after.UpdateBatchCurrentRead - before.UpdateBatchCurrentRead,
+		UpdateBatchBSONIDValidation:     after.UpdateBatchBSONIDValidation - before.UpdateBatchBSONIDValidation,
 		UpdateBatchCallback:             after.UpdateBatchCallback - before.UpdateBatchCallback,
+		UpdateBatchReplacementStage:     after.UpdateBatchReplacementStage - before.UpdateBatchReplacementStage,
 		UpdateBatchPrepareDocuments:     after.UpdateBatchPrepareDocuments - before.UpdateBatchPrepareDocuments,
 		UpdateBatchIndexStateExtract:    after.UpdateBatchIndexStateExtract - before.UpdateBatchIndexStateExtract,
+		UpdateBatchIndexStateCompare:    after.UpdateBatchIndexStateCompare - before.UpdateBatchIndexStateCompare,
 		UpdateBatchUniquePreflight:      after.UpdateBatchUniquePreflight - before.UpdateBatchUniquePreflight,
 		UpdateBatchTemplateRunBuild:     after.UpdateBatchTemplateRunBuild - before.UpdateBatchTemplateRunBuild,
 		UpdateBatchPrimaryRunBuild:      after.UpdateBatchPrimaryRunBuild - before.UpdateBatchPrimaryRunBuild,
@@ -212,6 +222,7 @@ func collectionManagerStatsBenchmarkDelta(after, before CollectionManagerStats) 
 		UpdateBatchBufferRootAppend:     after.UpdateBatchBufferRootAppend - before.UpdateBatchBufferRootAppend,
 		UpdateBatchBufferSemanticAppend: after.UpdateBatchBufferSemanticAppend - before.UpdateBatchBufferSemanticAppend,
 		UpdateBatchBufferFlush:          after.UpdateBatchBufferFlush - before.UpdateBatchBufferFlush,
+		UpdateBatchPlanClose:            after.UpdateBatchPlanClose - before.UpdateBatchPlanClose,
 		UpdateBatchPublish:              after.UpdateBatchPublish - before.UpdateBatchPublish,
 		UpdateBatchSecondaryDeletes:     after.UpdateBatchSecondaryDeletes - before.UpdateBatchSecondaryDeletes,
 		UpdateBatchSecondarySets:        after.UpdateBatchSecondarySets - before.UpdateBatchSecondarySets,
@@ -255,6 +266,9 @@ func reportCollectionUpdateStatsForBenchmark(b *testing.B, stats CollectionManag
 	reportUintPerDoc(stats.IndexedFlushBytes, "indexed_flush_bytes/doc")
 	reportUintPerDoc(stats.IndexedFlushRootRuns, "indexed_flush_root_runs/doc")
 	reportUintPerDoc(stats.IndexedFlushRoots, "indexed_flush_roots/doc")
+	reportDurationPerDoc(stats.IndexedFlushPreflight, "indexed_flush_preflight_ns/doc")
+	reportDurationPerDoc(stats.IndexedFlushRotate, "indexed_flush_rotate_ns/doc")
+	reportDurationPerDoc(stats.IndexedFlushMerge, "indexed_flush_merge_ns/doc")
 	reportDurationPerDoc(stats.IndexedFlushDuration, "indexed_flush_ns/doc")
 	reportDurationPerDoc(stats.IndexedFlushMaterialize, "indexed_flush_materialize_ns/doc")
 	reportDurationPerDoc(stats.IndexedFlushSemanticPlan, "indexed_flush_semantic_plan_ns/doc")
@@ -275,10 +289,17 @@ func reportCollectionUpdateStatsForBenchmark(b *testing.B, stats CollectionManag
 	reportUintPerDoc(stats.UpdateBatchIndexValueUnchanged, "update_index_value_unchanged/doc")
 	reportUintPerDoc(stats.UpdateBatchUniqueChecks, "update_unique_checks/doc")
 	reportUintPerDoc(stats.UpdateBatchUniqueCheckSkips, "update_unique_check_skips/doc")
+	reportDurationPerDoc(stats.UpdateBatchValidate, "update_validate_items_ns/doc")
+	reportDurationPerDoc(stats.UpdateBatchClone, "update_clone_items_ns/doc")
+	reportDurationPerDoc(stats.UpdateBatchPlanSetup, "update_plan_setup_ns/doc")
+	reportDurationPerDoc(stats.UpdateBatchBufferedReadSnapshot, "update_buffered_read_snapshot_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchCurrentRead, "update_current_read_ns/doc")
+	reportDurationPerDoc(stats.UpdateBatchBSONIDValidation, "update_bson_id_validation_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchCallback, "update_callback_ns/doc")
+	reportDurationPerDoc(stats.UpdateBatchReplacementStage, "update_replacement_stage_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchPrepareDocuments, "update_prepare_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchIndexStateExtract, "update_index_state_extract_ns/doc")
+	reportDurationPerDoc(stats.UpdateBatchIndexStateCompare, "update_index_state_compare_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchUniquePreflight, "update_unique_preflight_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchTemplateRunBuild, "update_template_run_build_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchPrimaryRunBuild, "update_primary_run_build_ns/doc")
@@ -297,5 +318,6 @@ func reportCollectionUpdateStatsForBenchmark(b *testing.B, stats CollectionManag
 	reportDurationPerDoc(stats.UpdateBatchBufferRootAppend, "update_buffer_root_append_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchBufferSemanticAppend, "update_buffer_semantic_append_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchBufferFlush, "update_buffer_flush_ns/doc")
+	reportDurationPerDoc(stats.UpdateBatchPlanClose, "update_plan_close_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchPublish, "update_publish_ns/doc")
 }

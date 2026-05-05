@@ -846,7 +846,7 @@ func benchmarkDirectCollectionUpdateBatchBSON(b *testing.B, indexes []collection
 	if warmupOps > 100000 {
 		warmupOps = 100000
 	}
-	if err := runProfileBenchDirectCollectionUpdateBatches(context.Background(), warmupOps, documentCount, idStride, actualBatchSize, ids, warmupUpdateDocs, collection); err != nil {
+	if err := runProfileBenchDirectCollectionUpdateBatches(context.Background(), warmupOps, documentCount, idStride, actualBatchSize, ids, warmupUpdateDocs, collection, nil); err != nil {
 		b.Fatalf("warm up update batches: %v", err)
 	}
 	if err := manager.FlushAll(); err != nil {
@@ -864,11 +864,15 @@ func benchmarkDirectCollectionUpdateBatchBSON(b *testing.B, indexes []collection
 	backendStatsBefore := backend.Stats()
 	b.ResetTimer()
 	started := time.Now()
+	var directBatchStats profileBenchDirectUpdateBatchRunStats
 	err = runProfileBenchTimedUpdatePhase(context.Background(), func(ctx context.Context) error {
-		if err := runProfileBenchDirectCollectionUpdateBatches(ctx, b.N, documentCount, idStride, actualBatchSize, ids, updateDocs, collection); err != nil {
+		if err := runProfileBenchDirectCollectionUpdateBatches(ctx, b.N, documentCount, idStride, actualBatchSize, ids, updateDocs, collection, &directBatchStats); err != nil {
 			return err
 		}
-		return manager.FlushAll()
+		phaseStart := time.Now()
+		err := manager.FlushAll()
+		directBatchStats.FlushAll += time.Since(phaseStart)
+		return err
 	})
 	timedElapsed := time.Since(started)
 	b.StopTimer()
@@ -879,6 +883,7 @@ func benchmarkDirectCollectionUpdateBatchBSON(b *testing.B, indexes []collection
 	reportProfileBenchBufferedIndexedWriteOptions(b, collection.Meta().Options)
 	reportProfileBenchOverlayCompactionStats(b, "preload", preloadCompactStats)
 	reportProfileBenchOverlayCompactionStats(b, "warmup", warmupCompactStats)
+	reportProfileBenchDirectUpdateBatchRunStats(b, directBatchStats, b.N)
 	reportCollectionManagerUpdateStats(b, deltaCollectionManagerUpdateStats(manager.StatsSnapshot(), statsBefore), b.N)
 	backendStatsAfter := backend.Stats()
 	reportProfileBenchOrderedRootPublishStats(b, backendStatsAfter, backendStatsBefore, b.N)
@@ -1228,10 +1233,17 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 		UpdateBatchModified:             after.UpdateBatchModified - before.UpdateBatchModified,
 		UpdateBatchRuns:                 after.UpdateBatchRuns - before.UpdateBatchRuns,
 		UpdateBatchBufferedBatches:      after.UpdateBatchBufferedBatches - before.UpdateBatchBufferedBatches,
+		UpdateBatchValidate:             after.UpdateBatchValidate - before.UpdateBatchValidate,
+		UpdateBatchClone:                after.UpdateBatchClone - before.UpdateBatchClone,
+		UpdateBatchPlanSetup:            after.UpdateBatchPlanSetup - before.UpdateBatchPlanSetup,
+		UpdateBatchBufferedReadSnapshot: after.UpdateBatchBufferedReadSnapshot - before.UpdateBatchBufferedReadSnapshot,
 		UpdateBatchCurrentRead:          after.UpdateBatchCurrentRead - before.UpdateBatchCurrentRead,
+		UpdateBatchBSONIDValidation:     after.UpdateBatchBSONIDValidation - before.UpdateBatchBSONIDValidation,
 		UpdateBatchCallback:             after.UpdateBatchCallback - before.UpdateBatchCallback,
+		UpdateBatchReplacementStage:     after.UpdateBatchReplacementStage - before.UpdateBatchReplacementStage,
 		UpdateBatchPrepareDocuments:     after.UpdateBatchPrepareDocuments - before.UpdateBatchPrepareDocuments,
 		UpdateBatchIndexStateExtract:    after.UpdateBatchIndexStateExtract - before.UpdateBatchIndexStateExtract,
+		UpdateBatchIndexStateCompare:    after.UpdateBatchIndexStateCompare - before.UpdateBatchIndexStateCompare,
 		UpdateBatchUniquePreflight:      after.UpdateBatchUniquePreflight - before.UpdateBatchUniquePreflight,
 		UpdateBatchTemplateRunBuild:     after.UpdateBatchTemplateRunBuild - before.UpdateBatchTemplateRunBuild,
 		UpdateBatchPrimaryRunBuild:      after.UpdateBatchPrimaryRunBuild - before.UpdateBatchPrimaryRunBuild,
@@ -1250,6 +1262,7 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 		UpdateBatchBufferRootAppend:     after.UpdateBatchBufferRootAppend - before.UpdateBatchBufferRootAppend,
 		UpdateBatchBufferSemanticAppend: after.UpdateBatchBufferSemanticAppend - before.UpdateBatchBufferSemanticAppend,
 		UpdateBatchBufferFlush:          after.UpdateBatchBufferFlush - before.UpdateBatchBufferFlush,
+		UpdateBatchPlanClose:            after.UpdateBatchPlanClose - before.UpdateBatchPlanClose,
 		UpdateBatchPublish:              after.UpdateBatchPublish - before.UpdateBatchPublish,
 		UpdateBatchSecondaryDeletes:     after.UpdateBatchSecondaryDeletes - before.UpdateBatchSecondaryDeletes,
 		UpdateBatchSecondarySets:        after.UpdateBatchSecondarySets - before.UpdateBatchSecondarySets,
@@ -1271,6 +1284,9 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 		IndexedFlushBytes:               after.IndexedFlushBytes - before.IndexedFlushBytes,
 		IndexedFlushRootRuns:            after.IndexedFlushRootRuns - before.IndexedFlushRootRuns,
 		IndexedFlushRoots:               after.IndexedFlushRoots - before.IndexedFlushRoots,
+		IndexedFlushPreflight:           after.IndexedFlushPreflight - before.IndexedFlushPreflight,
+		IndexedFlushRotate:              after.IndexedFlushRotate - before.IndexedFlushRotate,
+		IndexedFlushMerge:               after.IndexedFlushMerge - before.IndexedFlushMerge,
 		IndexedFlushDuration:            after.IndexedFlushDuration - before.IndexedFlushDuration,
 		IndexedFlushMaterialize:         after.IndexedFlushMaterialize - before.IndexedFlushMaterialize,
 		IndexedFlushSemanticPlan:        after.IndexedFlushSemanticPlan - before.IndexedFlushSemanticPlan,
@@ -1699,6 +1715,18 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 			b.ReportMetric(float64(stats.IndexedFlushRoots)/float64(stats.IndexedFlushCalls), "indexed_flush_roots/call")
 			b.ReportMetric(float64(stats.IndexedFlushRoots)/float64(docs), "indexed_flush_roots/doc")
 		}
+		reportFlushDuration := func(value time.Duration, callName, docName string) {
+			if value <= 0 {
+				return
+			}
+			b.ReportMetric(float64(value.Nanoseconds())/float64(stats.IndexedFlushCalls), callName)
+			if stats.IndexedFlushDocs > 0 {
+				b.ReportMetric(float64(value.Nanoseconds())/float64(stats.IndexedFlushDocs), docName)
+			}
+		}
+		reportFlushDuration(stats.IndexedFlushPreflight, "indexed_flush_preflight_ns/call", "indexed_flush_preflight_ns/doc")
+		reportFlushDuration(stats.IndexedFlushRotate, "indexed_flush_rotate_ns/call", "indexed_flush_rotate_ns/doc")
+		reportFlushDuration(stats.IndexedFlushMerge, "indexed_flush_merge_ns/call", "indexed_flush_merge_ns/doc")
 		if stats.IndexedFlushErrors > 0 {
 			b.ReportMetric(float64(stats.IndexedFlushErrors), "indexed_flush_errors")
 		}
@@ -1716,15 +1744,6 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 			b.ReportMetric(float64(stats.IndexedFlushMaterialize.Nanoseconds())/float64(stats.IndexedFlushCalls), "indexed_flush_materialize_ns/call")
 			if stats.IndexedFlushDocs > 0 {
 				b.ReportMetric(float64(stats.IndexedFlushMaterialize.Nanoseconds())/float64(stats.IndexedFlushDocs), "indexed_flush_materialize_ns/doc")
-			}
-		}
-		reportFlushDuration := func(value time.Duration, callName, docName string) {
-			if value <= 0 {
-				return
-			}
-			b.ReportMetric(float64(value.Nanoseconds())/float64(stats.IndexedFlushCalls), callName)
-			if stats.IndexedFlushDocs > 0 {
-				b.ReportMetric(float64(value.Nanoseconds())/float64(stats.IndexedFlushDocs), docName)
 			}
 		}
 		reportFlushDuration(stats.IndexedFlushSemanticPlan, "indexed_flush_semantic_plan_ns/call", "indexed_flush_semantic_plan_ns/doc")
@@ -1898,10 +1917,17 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 			b.ReportMetric(float64(d.Nanoseconds())/float64(docs), name)
 		}
 	}
+	reportDuration("update_validate_items_ns/doc", stats.UpdateBatchValidate)
+	reportDuration("update_clone_items_ns/doc", stats.UpdateBatchClone)
+	reportDuration("update_plan_setup_ns/doc", stats.UpdateBatchPlanSetup)
+	reportDuration("update_buffered_read_snapshot_ns/doc", stats.UpdateBatchBufferedReadSnapshot)
 	reportDuration("update_current_read_ns/doc", stats.UpdateBatchCurrentRead)
+	reportDuration("update_bson_id_validation_ns/doc", stats.UpdateBatchBSONIDValidation)
 	reportDuration("update_callback_ns/doc", stats.UpdateBatchCallback)
+	reportDuration("update_replacement_stage_ns/doc", stats.UpdateBatchReplacementStage)
 	reportDuration("update_prepare_ns/doc", stats.UpdateBatchPrepareDocuments)
 	reportDuration("update_index_state_extract_ns/doc", stats.UpdateBatchIndexStateExtract)
+	reportDuration("update_index_state_compare_ns/doc", stats.UpdateBatchIndexStateCompare)
 	reportDuration("update_unique_preflight_ns/doc", stats.UpdateBatchUniquePreflight)
 	reportDuration("update_template_run_ns/doc", stats.UpdateBatchTemplateRunBuild)
 	reportDuration("update_primary_run_ns/doc", stats.UpdateBatchPrimaryRunBuild)
@@ -1920,6 +1946,7 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 	reportDuration("update_buffer_root_append_ns/doc", stats.UpdateBatchBufferRootAppend)
 	reportDuration("update_buffer_semantic_append_ns/doc", stats.UpdateBatchBufferSemanticAppend)
 	reportDuration("update_buffer_flush_ns/doc", stats.UpdateBatchBufferFlush)
+	reportDuration("update_plan_close_ns/doc", stats.UpdateBatchPlanClose)
 	reportDuration("update_publish_ns/doc", stats.UpdateBatchPublish)
 }
 
@@ -2007,6 +2034,7 @@ func runProfileBenchDirectCollectionUpdateBatches(
 	ids [][]byte,
 	updateDocs []profileBenchSetUpdate,
 	collection *collections.Collection,
+	stats *profileBenchDirectUpdateBatchRunStats,
 ) error {
 	if operations <= 0 {
 		return nil
@@ -2030,6 +2058,7 @@ func runProfileBenchDirectCollectionUpdateBatches(
 		if remaining := operations - start; remaining < count {
 			count = remaining
 		}
+		phaseStart := time.Now()
 		for i := 0; i < count; i++ {
 			slot := i
 			op := start + i
@@ -2053,21 +2082,56 @@ func runProfileBenchDirectCollectionUpdateBatches(
 				},
 			}
 		}
+		if stats != nil {
+			stats.ItemBuild += time.Since(phaseStart)
+		}
+		phaseStart = time.Now()
 		results, batched, err := collection.UpdateBatchIfNoSecondaryUniqueIndexChanges(items[:count])
+		if stats != nil {
+			stats.UpdateBatchCall += time.Since(phaseStart)
+		}
 		if err != nil {
 			return err
 		}
 		if !batched {
 			return errors.New("profile benchmark update batch was declined")
 		}
+		phaseStart = time.Now()
 		for i := 0; i < count; i++ {
 			if !results[i].Matched {
 				return errProfileBenchUpdateMiss
 			}
 		}
+		if stats != nil {
+			stats.ResultCheck += time.Since(phaseStart)
+		}
 		start += count
 	}
 	return ctx.Err()
+}
+
+type profileBenchDirectUpdateBatchRunStats struct {
+	ItemBuild       time.Duration
+	UpdateBatchCall time.Duration
+	ResultCheck     time.Duration
+	FlushAll        time.Duration
+}
+
+func reportProfileBenchDirectUpdateBatchRunStats(b *testing.B, stats profileBenchDirectUpdateBatchRunStats, docs int) {
+	b.Helper()
+	if docs <= 0 {
+		return
+	}
+	report := func(name string, value time.Duration) {
+		if value <= 0 {
+			return
+		}
+		b.ReportMetric(float64(value.Nanoseconds())/float64(docs), name)
+	}
+	report("bench_update_item_build_ns/doc", stats.ItemBuild)
+	report("bench_update_batch_call_ns/doc", stats.UpdateBatchCall)
+	report("bench_update_result_check_ns/doc", stats.ResultCheck)
+	report("bench_update_flush_all_ns/doc", stats.FlushAll)
 }
 
 type profileBenchSetField struct {
