@@ -1453,6 +1453,19 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 		outputTracker = tracker
 		outputID = tracker.PreparedOutputID()
 	}
+	captureOutputSnapshot := func() {
+		if !includeOutputSnapshot || outputTracker == nil {
+			return
+		}
+		output := outputTracker.PreparedOutputSnapshot()
+		for resultIdx := range results {
+			if !results[resultIdx].attempted || results[resultIdx].err != nil {
+				continue
+			}
+			results[resultIdx].output = &output
+			results[resultIdx].outputID = output.ID
+		}
+	}
 	applyOne := func(orderedIdx int) orderedRootDeltaBatchGroupApplyResult {
 		result := orderedRootDeltaBatchGroupApplyResult{
 			idx:       orderedIdx,
@@ -1469,14 +1482,6 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 		result.pendingRetiredPages = pendingRetiredPages
 		result.metrics = metrics
 		result.err = err
-		if includeOutputSnapshot {
-			if outputTracker == nil {
-				return result
-			}
-			output := outputTracker.PreparedOutputSnapshot()
-			result.output = &output
-			result.outputID = output.ID
-		}
 		return result
 	}
 
@@ -1484,9 +1489,11 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 		for orderedIdx := range ordered {
 			results[orderedIdx] = applyOne(orderedIdx)
 			if results[orderedIdx].err != nil {
+				captureOutputSnapshot()
 				return results, false
 			}
 		}
+		captureOutputSnapshot()
 		return results, false
 	}
 
@@ -1512,15 +1519,18 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 	for orderedIdx := range ordered {
 		if ordered[orderedIdx].ParallelApply && ordered[orderedIdx].Delta != nil && !ordered[orderedIdx].Delta.IsEmpty() {
 			if results[orderedIdx].err != nil {
+				captureOutputSnapshot()
 				return results, false
 			}
 			continue
 		}
 		results[orderedIdx] = applyOne(orderedIdx)
 		if results[orderedIdx].err != nil {
+			captureOutputSnapshot()
 			return results, false
 		}
 	}
+	captureOutputSnapshot()
 	return results, parallelRoots >= orderedRootDeltaBatchGroupParallelApplyMinRoots
 }
 
