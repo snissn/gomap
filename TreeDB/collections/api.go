@@ -329,6 +329,7 @@ type CollectionUpdateStats struct {
 	PrimaryRunBuild      time.Duration
 	IndexStateRunBuild   time.Duration
 	SecondaryRunBuild    time.Duration
+	SemanticRecordBuild  time.Duration
 	BufferStage          time.Duration
 	// Buffer-stage subphase timings are populated only when
 	// CollectionManager.SetUpdateBatchDetailedStatsEnabled(true) is enabled.
@@ -340,14 +341,15 @@ type CollectionUpdateStats struct {
 	// relock contention after an async flush wait. It does not include async
 	// flush completion waits performed after releasing the mutex for
 	// backpressure.
-	BufferStageLockWait      time.Duration
-	BufferStageLockHold      time.Duration
-	BufferStageValidation    time.Duration
-	BufferStageRootScan      time.Duration
-	BufferStageDomainPrepare time.Duration
-	BufferStagePrimaryIdx    time.Duration
-	BufferStageUniqueIdx     time.Duration
-	BufferStageRootAppend    time.Duration
+	BufferStageLockWait       time.Duration
+	BufferStageLockHold       time.Duration
+	BufferStageValidation     time.Duration
+	BufferStageRootScan       time.Duration
+	BufferStageDomainPrepare  time.Duration
+	BufferStagePrimaryIdx     time.Duration
+	BufferStageUniqueIdx      time.Duration
+	BufferStageRootAppend     time.Duration
+	BufferStageSemanticAppend time.Duration
 	// BufferStageFlush measures local threshold-flush schedule/publish work
 	// performed while staging an indexed buffered update batch. It excludes
 	// waits for an already-running async flush that leave no local schedule or
@@ -441,6 +443,9 @@ type CollectionManagerStats struct {
 	IndexedFlushRoots                        uint64
 	IndexedFlushDuration                     time.Duration
 	IndexedFlushMaterialize                  time.Duration
+	IndexedFlushSemanticPlan                 time.Duration
+	IndexedFlushBuildInputs                  time.Duration
+	IndexedFlushPlanStats                    time.Duration
 	IndexedFlushPublish                      time.Duration
 	CoalescedFlushBatches                    uint64
 	CoalescedFlushBatchUnits                 uint64
@@ -515,21 +520,23 @@ type CollectionManagerStats struct {
 	UpdateBatchPrimaryRunBuild               time.Duration
 	UpdateBatchIndexStateRunBuild            time.Duration
 	UpdateBatchSecondaryRunBuild             time.Duration
+	UpdateBatchSemanticRecordBuild           time.Duration
 	UpdateBatchBufferStage                   time.Duration
 	// Detailed buffer-stage aggregate timings are populated only when
 	// CollectionManager.SetUpdateBatchDetailedStatsEnabled(true) is enabled.
 	// UpdateBatchBufferLockHold is an enclosing domain mutex hold-time metric
 	// and overlaps the validation/root/index/root-append subphases; it is not
 	// additive with those child counters.
-	UpdateBatchBufferPrecheck      time.Duration
-	UpdateBatchBufferLockWait      time.Duration
-	UpdateBatchBufferLockHold      time.Duration
-	UpdateBatchBufferValidation    time.Duration
-	UpdateBatchBufferRootScan      time.Duration
-	UpdateBatchBufferDomainPrepare time.Duration
-	UpdateBatchBufferPrimaryIdx    time.Duration
-	UpdateBatchBufferUniqueIdx     time.Duration
-	UpdateBatchBufferRootAppend    time.Duration
+	UpdateBatchBufferPrecheck       time.Duration
+	UpdateBatchBufferLockWait       time.Duration
+	UpdateBatchBufferLockHold       time.Duration
+	UpdateBatchBufferValidation     time.Duration
+	UpdateBatchBufferRootScan       time.Duration
+	UpdateBatchBufferDomainPrepare  time.Duration
+	UpdateBatchBufferPrimaryIdx     time.Duration
+	UpdateBatchBufferUniqueIdx      time.Duration
+	UpdateBatchBufferRootAppend     time.Duration
+	UpdateBatchBufferSemanticAppend time.Duration
 	// UpdateBatchBufferFlush measures only threshold-flush work that was
 	// actually scheduled/executed while staging indexed buffered update batches.
 	UpdateBatchBufferFlush         time.Duration
@@ -899,6 +906,9 @@ type collectionWriteDomain struct {
 	indexedFlushRoots                        atomic.Uint64
 	indexedFlushDurationTotalNs              atomic.Uint64
 	indexedFlushMaterializeTotalNs           atomic.Uint64
+	indexedFlushSemanticPlanTotalNs          atomic.Uint64
+	indexedFlushBuildInputsTotalNs           atomic.Uint64
+	indexedFlushPlanStatsTotalNs             atomic.Uint64
 	indexedFlushPublishTotalNs               atomic.Uint64
 	coalescedFlushBatches                    atomic.Uint64
 	coalescedFlushBatchUnits                 atomic.Uint64
@@ -973,6 +983,7 @@ type collectionWriteDomain struct {
 	updateBatchPrimaryRunNs                  atomic.Uint64
 	updateBatchIndexStateRunNs               atomic.Uint64
 	updateBatchSecondaryRunNs                atomic.Uint64
+	updateBatchSemanticRecordNs              atomic.Uint64
 	updateBatchBufferStageNs                 atomic.Uint64
 	updateBatchBufferPrecheckNs              atomic.Uint64
 	updateBatchBufferLockWaitNs              atomic.Uint64
@@ -983,6 +994,7 @@ type collectionWriteDomain struct {
 	updateBatchBufferPrimaryIdxNs            atomic.Uint64
 	updateBatchBufferUniqueIdxNs             atomic.Uint64
 	updateBatchBufferRootAppendNs            atomic.Uint64
+	updateBatchBufferSemanticAppendNs        atomic.Uint64
 	updateBatchBufferFlushNs                 atomic.Uint64
 	updateBatchPublishNs                     atomic.Uint64
 	updateBatchSecondaryDeletes              atomic.Uint64
@@ -1212,6 +1224,9 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.indexed_flush.roots_total"] = fmt.Sprintf("%d", stats.IndexedFlushRoots)
 	out["treedb.collections.write_domain.indexed_flush.duration_ns_total"] = fmt.Sprintf("%d", stats.IndexedFlushDuration.Nanoseconds())
 	out["treedb.collections.write_domain.indexed_flush.materialize_ns_total"] = fmt.Sprintf("%d", stats.IndexedFlushMaterialize.Nanoseconds())
+	out["treedb.collections.write_domain.indexed_flush.materialize_semantic_plan_ns_total"] = fmt.Sprintf("%d", stats.IndexedFlushSemanticPlan.Nanoseconds())
+	out["treedb.collections.write_domain.indexed_flush.materialize_build_inputs_ns_total"] = fmt.Sprintf("%d", stats.IndexedFlushBuildInputs.Nanoseconds())
+	out["treedb.collections.write_domain.indexed_flush.materialize_plan_stats_ns_total"] = fmt.Sprintf("%d", stats.IndexedFlushPlanStats.Nanoseconds())
 	out["treedb.collections.write_domain.indexed_flush.publish_ns_total"] = fmt.Sprintf("%d", stats.IndexedFlushPublish.Nanoseconds())
 	out["treedb.collections.write_domain.coalesced_flush_batch.batches_total"] = fmt.Sprintf("%d", stats.CoalescedFlushBatches)
 	out["treedb.collections.write_domain.coalesced_flush_batch.units_total"] = fmt.Sprintf("%d", stats.CoalescedFlushBatchUnits)
@@ -1286,6 +1301,7 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.update_batch.primary_run_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchPrimaryRunBuild.Nanoseconds())
 	out["treedb.collections.write_domain.update_batch.index_state_run_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchIndexStateRunBuild.Nanoseconds())
 	out["treedb.collections.write_domain.update_batch.secondary_runs_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchSecondaryRunBuild.Nanoseconds())
+	out["treedb.collections.write_domain.update_batch.semantic_record_build_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchSemanticRecordBuild.Nanoseconds())
 	out["treedb.collections.write_domain.update_batch.buffer_stage_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferStage.Nanoseconds())
 	out["treedb.collections.write_domain.update_batch.buffer_stage_precheck_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferPrecheck.Nanoseconds())
 	out["treedb.collections.write_domain.update_batch.buffer_stage_lock_wait_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferLockWait.Nanoseconds())
@@ -1296,6 +1312,7 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.update_batch.buffer_stage_primary_index_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferPrimaryIdx.Nanoseconds())
 	out["treedb.collections.write_domain.update_batch.buffer_stage_unique_index_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferUniqueIdx.Nanoseconds())
 	out["treedb.collections.write_domain.update_batch.buffer_stage_root_append_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferRootAppend.Nanoseconds())
+	out["treedb.collections.write_domain.update_batch.buffer_stage_semantic_append_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferSemanticAppend.Nanoseconds())
 	out["treedb.collections.write_domain.update_batch.buffer_stage_flush_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchBufferFlush.Nanoseconds())
 	out["treedb.collections.write_domain.update_batch.publish_ns_total"] = fmt.Sprintf("%d", stats.UpdateBatchPublish.Nanoseconds())
 	out["treedb.collections.write_domain.update_batch.secondary_deletes_total"] = fmt.Sprintf("%d", stats.UpdateBatchSecondaryDeletes)
@@ -1454,6 +1471,9 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.IndexedFlushRoots += other.IndexedFlushRoots
 	s.IndexedFlushDuration += other.IndexedFlushDuration
 	s.IndexedFlushMaterialize += other.IndexedFlushMaterialize
+	s.IndexedFlushSemanticPlan += other.IndexedFlushSemanticPlan
+	s.IndexedFlushBuildInputs += other.IndexedFlushBuildInputs
+	s.IndexedFlushPlanStats += other.IndexedFlushPlanStats
 	s.IndexedFlushPublish += other.IndexedFlushPublish
 	s.CoalescedFlushBatches += other.CoalescedFlushBatches
 	s.CoalescedFlushBatchUnits += other.CoalescedFlushBatchUnits
@@ -1530,6 +1550,7 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.UpdateBatchPrimaryRunBuild += other.UpdateBatchPrimaryRunBuild
 	s.UpdateBatchIndexStateRunBuild += other.UpdateBatchIndexStateRunBuild
 	s.UpdateBatchSecondaryRunBuild += other.UpdateBatchSecondaryRunBuild
+	s.UpdateBatchSemanticRecordBuild += other.UpdateBatchSemanticRecordBuild
 	s.UpdateBatchBufferStage += other.UpdateBatchBufferStage
 	s.UpdateBatchBufferPrecheck += other.UpdateBatchBufferPrecheck
 	s.UpdateBatchBufferLockWait += other.UpdateBatchBufferLockWait
@@ -1540,6 +1561,7 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.UpdateBatchBufferPrimaryIdx += other.UpdateBatchBufferPrimaryIdx
 	s.UpdateBatchBufferUniqueIdx += other.UpdateBatchBufferUniqueIdx
 	s.UpdateBatchBufferRootAppend += other.UpdateBatchBufferRootAppend
+	s.UpdateBatchBufferSemanticAppend += other.UpdateBatchBufferSemanticAppend
 	s.UpdateBatchBufferFlush += other.UpdateBatchBufferFlush
 	s.UpdateBatchPublish += other.UpdateBatchPublish
 	s.UpdateBatchSecondaryDeletes += other.UpdateBatchSecondaryDeletes
@@ -1617,6 +1639,9 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.IndexedFlushRoots = domain.indexedFlushRoots.Load()
 	stats.IndexedFlushDuration = durationFromAtomicNs(domain.indexedFlushDurationTotalNs.Load())
 	stats.IndexedFlushMaterialize = durationFromAtomicNs(domain.indexedFlushMaterializeTotalNs.Load())
+	stats.IndexedFlushSemanticPlan = durationFromAtomicNs(domain.indexedFlushSemanticPlanTotalNs.Load())
+	stats.IndexedFlushBuildInputs = durationFromAtomicNs(domain.indexedFlushBuildInputsTotalNs.Load())
+	stats.IndexedFlushPlanStats = durationFromAtomicNs(domain.indexedFlushPlanStatsTotalNs.Load())
 	stats.IndexedFlushPublish = durationFromAtomicNs(domain.indexedFlushPublishTotalNs.Load())
 	stats.CoalescedFlushBatches = domain.coalescedFlushBatches.Load()
 	stats.CoalescedFlushBatchUnits = domain.coalescedFlushBatchUnits.Load()
@@ -1691,6 +1716,7 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.UpdateBatchPrimaryRunBuild = durationFromAtomicNs(domain.updateBatchPrimaryRunNs.Load())
 	stats.UpdateBatchIndexStateRunBuild = durationFromAtomicNs(domain.updateBatchIndexStateRunNs.Load())
 	stats.UpdateBatchSecondaryRunBuild = durationFromAtomicNs(domain.updateBatchSecondaryRunNs.Load())
+	stats.UpdateBatchSemanticRecordBuild = durationFromAtomicNs(domain.updateBatchSemanticRecordNs.Load())
 	stats.UpdateBatchBufferStage = durationFromAtomicNs(domain.updateBatchBufferStageNs.Load())
 	stats.UpdateBatchBufferPrecheck = durationFromAtomicNs(domain.updateBatchBufferPrecheckNs.Load())
 	stats.UpdateBatchBufferLockWait = durationFromAtomicNs(domain.updateBatchBufferLockWaitNs.Load())
@@ -1701,6 +1727,7 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.UpdateBatchBufferPrimaryIdx = durationFromAtomicNs(domain.updateBatchBufferPrimaryIdxNs.Load())
 	stats.UpdateBatchBufferUniqueIdx = durationFromAtomicNs(domain.updateBatchBufferUniqueIdxNs.Load())
 	stats.UpdateBatchBufferRootAppend = durationFromAtomicNs(domain.updateBatchBufferRootAppendNs.Load())
+	stats.UpdateBatchBufferSemanticAppend = durationFromAtomicNs(domain.updateBatchBufferSemanticAppendNs.Load())
 	stats.UpdateBatchBufferFlush = durationFromAtomicNs(domain.updateBatchBufferFlushNs.Load())
 	stats.UpdateBatchPublish = durationFromAtomicNs(domain.updateBatchPublishNs.Load())
 	stats.UpdateBatchSecondaryDeletes = domain.updateBatchSecondaryDeletes.Load()
@@ -1839,6 +1866,7 @@ func (domain *collectionWriteDomain) observeUpdateBatchStats(stats CollectionUpd
 	domain.updateBatchPrimaryRunNs.Add(durationToAtomicNs(stats.PrimaryRunBuild))
 	domain.updateBatchIndexStateRunNs.Add(durationToAtomicNs(stats.IndexStateRunBuild))
 	domain.updateBatchSecondaryRunNs.Add(durationToAtomicNs(stats.SecondaryRunBuild))
+	domain.updateBatchSemanticRecordNs.Add(durationToAtomicNs(stats.SemanticRecordBuild))
 	domain.updateBatchBufferStageNs.Add(durationToAtomicNs(stats.BufferStage))
 	if collectionUpdateStatsHasBufferStageBreakdown(stats) {
 		domain.updateBatchBufferPrecheckNs.Add(durationToAtomicNs(stats.BufferStagePrecheck))
@@ -1850,6 +1878,7 @@ func (domain *collectionWriteDomain) observeUpdateBatchStats(stats CollectionUpd
 		domain.updateBatchBufferPrimaryIdxNs.Add(durationToAtomicNs(stats.BufferStagePrimaryIdx))
 		domain.updateBatchBufferUniqueIdxNs.Add(durationToAtomicNs(stats.BufferStageUniqueIdx))
 		domain.updateBatchBufferRootAppendNs.Add(durationToAtomicNs(stats.BufferStageRootAppend))
+		domain.updateBatchBufferSemanticAppendNs.Add(durationToAtomicNs(stats.BufferStageSemanticAppend))
 		domain.updateBatchBufferFlushNs.Add(durationToAtomicNs(stats.BufferStageFlush))
 	}
 	domain.updateBatchPublishNs.Add(durationToAtomicNs(stats.Publish))
@@ -1940,6 +1969,7 @@ func collectionUpdateStatsHasBufferStageBreakdown(stats CollectionUpdateStats) b
 		stats.BufferStagePrimaryIdx != 0 ||
 		stats.BufferStageUniqueIdx != 0 ||
 		stats.BufferStageRootAppend != 0 ||
+		stats.BufferStageSemanticAppend != 0 ||
 		stats.BufferStageFlush != 0
 }
 
@@ -2110,6 +2140,15 @@ func (domain *collectionWriteDomain) observeIndexedFlush(units, docs int, bytes 
 	domain.indexedFlushDurationTotalNs.Add(durationToAtomicNs(duration))
 	domain.indexedFlushMaterializeTotalNs.Add(durationToAtomicNs(materialize))
 	domain.indexedFlushPublishTotalNs.Add(durationToAtomicNs(publish))
+}
+
+func (domain *collectionWriteDomain) observeIndexedFlushMaterializeBreakdown(semanticPlan, buildInputs, planStats time.Duration) {
+	if domain == nil {
+		return
+	}
+	domain.indexedFlushSemanticPlanTotalNs.Add(durationToAtomicNs(semanticPlan))
+	domain.indexedFlushBuildInputsTotalNs.Add(durationToAtomicNs(buildInputs))
+	domain.indexedFlushPlanStatsTotalNs.Add(durationToAtomicNs(planStats))
 }
 
 func (domain *collectionWriteDomain) observeIndexedFlushForcedDrain() {
@@ -5593,9 +5632,14 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	}
 	materializeStart := time.Now()
 	work.batch.state = coalescedFlushBatchMaterializing
+	semanticPlanStart := time.Now()
 	view, err := buildIndexedSemanticPublishView(work.meta, work.batch.mergedUnit, work.batch.rootNames, work.batch.rootBaseIDs)
+	semanticPlanElapsed := collectionObservedElapsedSince(semanticPlanStart)
 	if err != nil {
 		materializeElapsed := collectionObservedElapsedSince(materializeStart)
+		if c.writeDomain != nil {
+			c.writeDomain.observeIndexedFlushMaterializeBreakdown(semanticPlanElapsed, 0, 0)
+		}
 		return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 	}
 	defer resetIndexedSemanticPublishView(view)
@@ -5603,11 +5647,17 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	work.batch.rootBaseIDs = view.rootBaseIDs
 	work.batch.rootCount = len(view.rootNames)
 	work.batch.effectiveRecords = view.effectiveRecords
+	buildInputsStart := time.Now()
 	ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(view.rootNames, view.rootRuns, view.rootBaseIDs, view.rootPolicies)
+	buildInputsElapsed := collectionObservedElapsedSince(buildInputsStart)
 	if err != nil {
 		materializeElapsed := collectionObservedElapsedSince(materializeStart)
+		if c.writeDomain != nil {
+			c.writeDomain.observeIndexedFlushMaterializeBreakdown(semanticPlanElapsed, buildInputsElapsed, 0)
+		}
 		return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 	}
+	planStatsStart := time.Now()
 	work.batch.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, view.rootNames, ordered)
 	if !work.batch.rawRootDeltaReady {
 		if view.semanticApplied {
@@ -5615,6 +5665,9 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 			if err != nil {
 				cleanupDeltas()
 				materializeElapsed := collectionObservedElapsedSince(materializeStart)
+				if c.writeDomain != nil {
+					c.writeDomain.observeIndexedFlushMaterializeBreakdown(semanticPlanElapsed, buildInputsElapsed, collectionObservedElapsedSince(planStatsStart))
+				}
 				return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 			}
 			work.batch.rawRootDeltaStats = rawStats
@@ -5623,9 +5676,16 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 			if err := ensureCoalescedFlushBatchRawRootDeltaStats(work.meta.Name, &work.batch); err != nil {
 				cleanupDeltas()
 				materializeElapsed := collectionObservedElapsedSince(materializeStart)
+				if c.writeDomain != nil {
+					c.writeDomain.observeIndexedFlushMaterializeBreakdown(semanticPlanElapsed, buildInputsElapsed, collectionObservedElapsedSince(planStatsStart))
+				}
 				return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 			}
 		}
+	}
+	planStatsElapsed := collectionObservedElapsedSince(planStatsStart)
+	if c.writeDomain != nil {
+		c.writeDomain.observeIndexedFlushMaterializeBreakdown(semanticPlanElapsed, buildInputsElapsed, planStatsElapsed)
 	}
 	materializeElapsed := collectionObservedElapsedSince(materializeStart)
 	publishStart := time.Now()
@@ -6633,17 +6693,24 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		}
 	} else {
 		materializeStart := time.Now()
+		semanticPlanStart := time.Now()
 		view, err := buildIndexedSemanticPublishView(meta, flushUnit, rootNames, baseRootIDs)
+		semanticPlanElapsed := collectionObservedElapsedSince(semanticPlanStart)
 		if err != nil {
 			materializeElapsed = collectionObservedElapsedSince(materializeStart)
+			domain.observeIndexedFlushMaterializeBreakdown(semanticPlanElapsed, 0, 0)
 			return err
 		}
 		defer resetIndexedSemanticPublishView(view)
+		buildInputsStart := time.Now()
 		ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(view.rootNames, view.rootRuns, view.rootBaseIDs, view.rootPolicies)
+		buildInputsElapsed := collectionObservedElapsedSince(buildInputsStart)
 		if err != nil {
 			materializeElapsed = collectionObservedElapsedSince(materializeStart)
+			domain.observeIndexedFlushMaterializeBreakdown(semanticPlanElapsed, buildInputsElapsed, 0)
 			return err
 		}
+		planStatsStart := time.Now()
 		rootDeltaStats := collectionRootDeltaPlanStatsFromOrdered(meta.Name, view.rootNames, ordered)
 		rawRootDeltaStats := flushUnit.rootDeltaStats
 		if rawRootDeltaStats == (collectionRootDeltaPlanStats{}) && view.semanticApplied {
@@ -6651,6 +6718,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 			if err != nil {
 				cleanupDeltas()
 				materializeElapsed = collectionObservedElapsedSince(materializeStart)
+				domain.observeIndexedFlushMaterializeBreakdown(semanticPlanElapsed, buildInputsElapsed, collectionObservedElapsedSince(planStatsStart))
 				return err
 			}
 			rawRootDeltaStats = rawStats
@@ -6658,6 +6726,8 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		if rawRootDeltaStats == (collectionRootDeltaPlanStats{}) {
 			rawRootDeltaStats = rootDeltaStats
 		}
+		planStatsElapsed := collectionObservedElapsedSince(planStatsStart)
+		domain.observeIndexedFlushMaterializeBreakdown(semanticPlanElapsed, buildInputsElapsed, planStatsElapsed)
 		materializeElapsed = collectionObservedElapsedSince(materializeStart)
 		publishStart := time.Now()
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -10458,7 +10528,9 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		stats = updateCollectionUpdateStatsCounts(stats, results, len(rootNames))
 		var semanticRecords []indexedSemanticRecord
 		if c.writeDomain != nil && canBufferIndexedUpdateBatch && meta.Options.BufferedIndexedWrites {
+			phaseStart = updateBatchStatsNow(detailedStats)
 			semanticRecords = buildIndexedSemanticUpdateRecords(meta.Name, runtimes, changed, primaryEntries)
+			stats.SemanticRecordBuild += updateBatchStatsSince(detailedStats, phaseStart)
 		}
 		*plan = updateBatchPlan{
 			results:                     results,
@@ -10662,7 +10734,9 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	stats = updateCollectionUpdateStatsCounts(stats, results, len(deltaTables))
 	var semanticRecords []indexedSemanticRecord
 	if c.writeDomain != nil && canBufferIndexedUpdateBatch && meta.Options.BufferedIndexedWrites {
+		phaseStart = updateBatchStatsNow(detailedStats)
 		semanticRecords = buildIndexedSemanticUpdateRecords(meta.Name, runtimes, changed, nil)
+		stats.SemanticRecordBuild += updateBatchStatsSince(detailedStats, phaseStart)
 	}
 	*plan = updateBatchPlan{
 		results:                     results,
@@ -10962,7 +11036,9 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	}
 	semanticRecords := plan.semanticRecords
 	if len(semanticRecords) > 0 {
+		phaseStart = updateBatchStatsNow(detailedStats)
 		appendIndexedSemanticRecordsLocked(domain, semanticRecords)
+		plan.stats.BufferStageSemanticAppend += updateBatchStatsSince(detailedStats, phaseStart)
 	}
 	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
 		flushDuration, lockReleased, relockWait, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options)
@@ -11217,7 +11293,9 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	}
 	semanticRecords := plan.semanticRecords
 	if len(semanticRecords) > 0 {
+		phaseStart = updateBatchStatsNow(detailedStats)
 		appendIndexedSemanticRecordsLocked(domain, semanticRecords)
+		plan.stats.BufferStageSemanticAppend += updateBatchStatsSince(detailedStats, phaseStart)
 	}
 	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
 		flushDuration, lockReleased, relockWait, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options)

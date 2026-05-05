@@ -851,6 +851,7 @@ func TestCollectionUpdateBufferBreakdownStatsSnapshotAndAdd(t *testing.T) {
 		{"primary_index", "treedb.collections.write_domain.update_batch.buffer_stage_primary_index_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStagePrimaryIdx = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferPrimaryIdx }},
 		{"unique_index", "treedb.collections.write_domain.update_batch.buffer_stage_unique_index_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageUniqueIdx = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferUniqueIdx }},
 		{"root_append", "treedb.collections.write_domain.update_batch.buffer_stage_root_append_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageRootAppend = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferRootAppend }},
+		{"semantic_append", "treedb.collections.write_domain.update_batch.buffer_stage_semantic_append_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageSemanticAppend = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferSemanticAppend }},
 		{"flush", "treedb.collections.write_domain.update_batch.buffer_stage_flush_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageFlush = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferFlush }},
 	}
 
