@@ -5531,7 +5531,10 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		materializeElapsed := collectionObservedElapsedSince(materializeStart)
 		publishStart := time.Now()
 		work.batch.state = coalescedFlushBatchPublishing
-		newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		preflight := func() error {
+			return c.validateRootOverlayDescriptorSystemDeltaForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.batch.rootNames, work.batch.rootBaseIDs, work.batch.rootOverlays)
+		}
+		newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.batch.rootNames, work.batch.rootBaseIDs, work.batch.rootOverlays, rootIDs)
 		})
 		publishElapsed := collectionObservedElapsedSince(publishStart)
@@ -5547,6 +5550,8 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	}
 	materializeStart := time.Now()
 	work.batch.state = coalescedFlushBatchMaterializing
+	preflightRootNames := append([]string(nil), work.batch.rootNames...)
+	preflightRootBaseIDs := cloneUint64Map(work.batch.rootBaseIDs)
 	view, err := buildIndexedSemanticPublishView(work.meta, work.batch.mergedUnit, work.batch.rootNames, work.batch.rootBaseIDs)
 	if err != nil {
 		materializeElapsed := collectionObservedElapsedSince(materializeStart)
@@ -5566,7 +5571,10 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	materializeElapsed := collectionObservedElapsedSince(materializeStart)
 	publishStart := time.Now()
 	work.batch.state = coalescedFlushBatchPublishing
-	newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	preflight := func() error {
+		return c.validateRootDescriptorSystemDeltaForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, preflightRootNames, preflightRootBaseIDs)
+	}
+	newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, view.rootNames, view.rootBaseIDs, rootIDs)
 	})
 	publishElapsed := collectionObservedElapsedSince(publishStart)
@@ -6371,7 +6379,10 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		rootDeltaStats := collectionRootDeltaPlanStatsFromOrdered(meta.Name, rootNames, ordered)
 		materializeElapsed = collectionObservedElapsedSince(materializeStart)
 		publishStart := time.Now()
-		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		preflight := func() error {
+			return c.validateRootOverlayDescriptorSystemDeltaForMeta(meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays)
+		}
+		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays, rootIDs)
 		})
 		publishElapsed = collectionObservedElapsedSince(publishStart)
@@ -6399,7 +6410,12 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		rootDeltaStats := collectionRootDeltaPlanStatsFromOrdered(meta.Name, view.rootNames, ordered)
 		materializeElapsed = collectionObservedElapsedSince(materializeStart)
 		publishStart := time.Now()
-		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		preflightRootNames := append([]string(nil), rootNames...)
+		preflightRootBaseIDs := cloneUint64Map(baseRootIDs)
+		preflight := func() error {
+			return c.validateRootDescriptorSystemDeltaForMeta(meta, baseCommitSeq, baseSystemRoot, preflightRootNames, preflightRootBaseIDs)
+		}
+		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, view.rootNames, view.rootBaseIDs, rootIDs)
 		})
 		publishElapsed = collectionObservedElapsedSince(publishStart)
