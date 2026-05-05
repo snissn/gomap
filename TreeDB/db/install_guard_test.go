@@ -119,12 +119,10 @@ func TestOrderedRootDeltaBatchGroupInstallGuardFailureAbandonsGroup(t *testing.T
 		hookCalls++
 		return ErrInstallGuardMismatch
 	}
-	_, _, err = db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+	_, _, err = db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
 		BaseRoot: baseRoot,
 		Delta:    delta,
-	}}, func() error {
-		return nil
-	}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return mustFrozenSystemMemtable(t, "sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
 	})
 	db.testInstallGuardHook = nil

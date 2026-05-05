@@ -1649,7 +1649,9 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		phaseStats.installGuardCalls++
 		if guardErr != nil {
 			phaseStats.installGuardFailures++
+			hold := time.Since(holdStart)
 			db.commitMu.Unlock()
+			db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, guardErr)
 			err = guardErr
 			return 0, nil, false, err
 		}
