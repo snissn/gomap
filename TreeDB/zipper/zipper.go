@@ -570,13 +570,12 @@ func getChildWorkBuffer(capacity int) *childWorkBuffer {
 	if capacity < 0 {
 		capacity = 0
 	}
+	if capacity > maxChildWorkCap {
+		return &childWorkBuffer{items: make([]childWork, 0, capacity)}
+	}
 	buf, _ := childWorkPool.Get().(*childWorkBuffer)
 	if buf == nil {
 		buf = &childWorkBuffer{}
-	}
-	if capacity > maxChildWorkCap {
-		buf.items = make([]childWork, 0, capacity)
-		return buf
 	}
 	if cap(buf.items) >= capacity {
 		buf.items = buf.items[:0]
