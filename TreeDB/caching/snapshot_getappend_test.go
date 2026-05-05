@@ -244,6 +244,65 @@ func TestSnapshotBackendPublishedReadErrorsPropagate(t *testing.T) {
 	}
 }
 
+func TestSnapshotGetAppendBackendPublishedHitViaInstalledLookup(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	t.Cleanup(func() { _ = backend.Close() })
+
+	if err := backend.SetSync([]byte("k"), []byte("default-root")); err != nil {
+		t.Fatalf("backend set: %v", err)
+	}
+
+	// Publish a backend root that contains the key we want to read.
+	pubTable := newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "from-published-root"})
+	pointRootID, err := backend.PublishOrderedRootIterator(0, pubTable.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish root: %v", err)
+	}
+	if pointRootID == backend.State().RootPageID {
+		t.Fatalf("test point root unexpectedly matches default root %d", pointRootID)
+	}
+
+	db := &DB{
+		backend:          backend,
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+
+	// Install a published root set with only a rootID (no lookup object).
+	// AcquireSnapshot must wire the backend lookup via installBackendPublishedRootLookups.
+	db.mu.Lock()
+	db.installPublishedRootSetLocked(&publishedRootSet{
+		generation:  1,
+		pointShards: []publishedRootRef{{rootID: pointRootID}},
+	})
+	db.mu.Unlock()
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	t.Cleanup(func() { _ = snap.Close() })
+
+	// Verify the backend lookup was wired by installBackendPublishedRootLookups.
+	if len(snap.backendPublishedLookups) == 0 {
+		t.Fatal("expected backendPublishedLookups to be populated")
+	}
+
+	// GetAppend must read through the wired backend lookup without falling through
+	// to the default-root backend fallback.
+	got, err := snap.GetAppend([]byte("k"), []byte("prefix:"))
+	if err != nil {
+		t.Fatalf("GetAppend: %v", err)
+	}
+	if string(got) != "prefix:from-published-root" {
+		t.Fatalf("GetAppend value=%q, want prefix:from-published-root", got)
+	}
+}
+
 func newSnapshotWithBackendPublishedPointRootMissingKey(t *testing.T) *Snapshot {
 	t.Helper()
 
