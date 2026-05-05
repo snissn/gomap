@@ -1229,7 +1229,6 @@ func (r ReadOnlyPrepareResult) LeafSpanWorkerRangeSummary(workers int) ReadOnlyL
 	if workers > len(r.LeafSpans) {
 		workers = len(r.LeafSpans)
 	}
-	summary.TargetWorkers = workers
 	summary.Ops = r.Ops
 	totalOps := int64(r.Ops)
 

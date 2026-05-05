@@ -1108,6 +1108,30 @@ func TestReadOnlyPrepareResultLeafSpanWorkerRangeSummaryMatchesRanges(t *testing
 	}
 }
 
+func TestReadOnlyPrepareResultLeafSpanWorkerRangeSummaryCapsRangesButKeepsTarget(t *testing.T) {
+	prepared := ReadOnlyPrepareResult{
+		Ops: 3,
+		LeafSpans: []ReadOnlyLeafSpan{
+			{FirstOpKey: []byte("a"), LastOpKey: []byte("a"), OpCount: 1},
+			{FirstOpKey: []byte("b"), LastOpKey: []byte("b"), OpCount: 2},
+		},
+	}
+
+	summary := prepared.LeafSpanWorkerRangeSummary(8)
+	if summary.TargetWorkers != 8 {
+		t.Fatalf("target workers=%d want 8", summary.TargetWorkers)
+	}
+	if summary.Ranges != len(prepared.LeafSpans) {
+		t.Fatalf("ranges=%d want span count %d", summary.Ranges, len(prepared.LeafSpans))
+	}
+	if summary.Ops != prepared.Ops {
+		t.Fatalf("ops=%d want %d", summary.Ops, prepared.Ops)
+	}
+	if summary.MinRangeOps != 1 || summary.MaxRangeOps != 2 || summary.SingleSpanRanges != 2 {
+		t.Fatalf("summary min/max/single=%d/%d/%d want 1/2/2", summary.MinRangeOps, summary.MaxRangeOps, summary.SingleSpanRanges)
+	}
+}
+
 func TestReadOnlyPrepareResultLeafSpanWorkerRangeSummaryEmptyInputs(t *testing.T) {
 	for _, workers := range []int{-1, 0, 1} {
 		summary := (ReadOnlyPrepareResult{}).LeafSpanWorkerRangeSummary(workers)

@@ -943,8 +943,8 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_ReadOnlyPrepare
 	minOps := requireUintStat(t, stats, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_range_min_ops_total")
 	maxOps := requireUintStat(t, stats, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_range_max_ops_total")
 	singleSpan := requireUintStat(t, stats, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_range_single_span_total")
-	if targets == 0 || ranges == 0 {
-		t.Fatalf("worker targets/ranges=%d/%d want > 0", targets, ranges)
+	if targets != 4 || ranges == 0 {
+		t.Fatalf("worker targets/ranges=%d/%d want 4/>0", targets, ranges)
 	}
 	if minOps == 0 || maxOps < minOps {
 		t.Fatalf("worker range min/max ops=%d/%d want nonzero ordered values", minOps, maxOps)
