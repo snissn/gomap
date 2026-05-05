@@ -23,6 +23,16 @@ import (
 	"go.mongodb.org/mongo-driver/v2/event"
 )
 
+const (
+	testReadOnlyPrepareCallsStat        = "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total"
+	testReadOnlyPrepareNSStat           = "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ns_total"
+	testReadOnlyPrepareOpsStat          = "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ops_total"
+	testReadOnlyPrepareLeafSpansStat    = "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_leaf_spans_total"
+	testReadOnlyPrepareWorkerTargetStat = "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_targets_total"
+	testReadOnlyPrepareWorkerRangesStat = "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_ranges_total"
+	testReadOnlyPrepareWorkerMaxOpsStat = "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_range_max_ops_total"
+)
+
 func TestSummarizeLatencyNearestRank(t *testing.T) {
 	summary := summarizeLatency([]time.Duration{
 		10 * time.Microsecond,
@@ -178,6 +188,13 @@ func TestTreeDBStatsDeltaAndPhaseMetrics(t *testing.T) {
 		"treedb.publish.ordered_root_delta_group.roots_total":                                   "6",
 		"treedb.publish.ordered_root_delta_group.root_apply_calls_total":                        "6",
 		"treedb.publish.ordered_root_delta_group.root_apply_ns_total":                           "1000",
+		testReadOnlyPrepareCallsStat:                                                            "1",
+		testReadOnlyPrepareNSStat:                                                               "100",
+		testReadOnlyPrepareOpsStat:                                                              "10",
+		testReadOnlyPrepareLeafSpansStat:                                                        "5",
+		testReadOnlyPrepareWorkerTargetStat:                                                     "4",
+		testReadOnlyPrepareWorkerRangesStat:                                                     "2",
+		testReadOnlyPrepareWorkerMaxOpsStat:                                                     "20",
 		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_loads_total":          "4",
 		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_pages_written_total":       "1",
 		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total":     "128",
@@ -244,6 +261,13 @@ func TestTreeDBStatsDeltaAndPhaseMetrics(t *testing.T) {
 		"treedb.publish.ordered_root_delta_group.roots_total":                                   "15",
 		"treedb.publish.ordered_root_delta_group.root_apply_calls_total":                        "15",
 		"treedb.publish.ordered_root_delta_group.root_apply_ns_total":                           "7000",
+		testReadOnlyPrepareCallsStat:                                                            "4",
+		testReadOnlyPrepareNSStat:                                                               "700",
+		testReadOnlyPrepareOpsStat:                                                              "70",
+		testReadOnlyPrepareLeafSpansStat:                                                        "20",
+		testReadOnlyPrepareWorkerTargetStat:                                                     "16",
+		testReadOnlyPrepareWorkerRangesStat:                                                     "11",
+		testReadOnlyPrepareWorkerMaxOpsStat:                                                     "110",
 		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_loads_total":          "10",
 		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_pages_written_total":       "4",
 		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total":     "640",
@@ -318,6 +342,14 @@ func TestTreeDBStatsDeltaAndPhaseMetrics(t *testing.T) {
 		"root_apply_calls/doc":                     0.225,
 		"roots/publish":                            3,
 		"publish_delta_group_root_apply_ns/doc":    150,
+		"read_only_prepare_calls/doc":              0.075,
+		"read_only_prepare_ns/doc":                 15,
+		"read_only_prepare_ns/plan":                200,
+		"read_only_prepare_ops/doc":                1.5,
+		"read_only_prepare_leaf_spans/plan":        5,
+		"read_only_prepare_worker_targets/plan":    4,
+		"read_only_prepare_worker_ranges/plan":     3,
+		"read_only_prepare_worker_max_ops/plan":    30,
 		"leaf_log_node_loads/doc":                  0.15,
 		"leaf_log_pages_written/doc":               0.075,
 		"leaf_log_read_bytes/doc":                  12.8,
@@ -380,6 +412,13 @@ func TestDeriveTreeDBPhaseMetricsEmitsZeroValues(t *testing.T) {
 		"treedb.publish.ordered_root_delta_group.roots_total":                            2,
 		"treedb.publish.ordered_root_delta_group.root_apply_calls_total":                 2,
 		"treedb.publish.ordered_root_delta_group.root_apply_ns_total":                    20,
+		testReadOnlyPrepareCallsStat:                                                     0,
+		testReadOnlyPrepareNSStat:                                                        0,
+		testReadOnlyPrepareOpsStat:                                                       0,
+		testReadOnlyPrepareLeafSpansStat:                                                 0,
+		testReadOnlyPrepareWorkerTargetStat:                                              0,
+		testReadOnlyPrepareWorkerRangesStat:                                              0,
+		testReadOnlyPrepareWorkerMaxOpsStat:                                              0,
 		"treedb.collections.write_domain.indexed_flush.calls_total":                      2,
 		"treedb.collections.write_domain.indexed_flush.docs_total":                       20,
 		"treedb.collections.write_domain.indexed_flush.units_total":                      2,
@@ -411,6 +450,9 @@ func TestDeriveTreeDBPhaseMetricsEmitsZeroValues(t *testing.T) {
 		"root_delta_plan_tombstones/doc",
 		"primary_only_coalesced_docs/publish",
 		"leaf_log_node_loads/doc",
+		"read_only_prepare_calls/doc",
+		"read_only_prepare_ns/doc",
+		"read_only_prepare_ops/doc",
 		"coalesced_batch_units/batch",
 		"coalesced_batch_docs/batch",
 		"coalesced_batch_bytes/batch",
