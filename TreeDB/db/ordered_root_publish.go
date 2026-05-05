@@ -65,6 +65,8 @@ type orderedRootDeltaBatchGroupApplyResult struct {
 	rootID              uint64
 	outputID            preparedOutputID
 	output              *preparedOutputSnapshot
+	outputPages         uint64
+	outputLeafs         uint64
 	pendingRetiredPages []uint64
 	metrics             adaptive.Metrics
 	err                 error
@@ -1448,7 +1450,9 @@ func orderedRootDeltaBatchGroupParallelApplyEligible(ordered []OrderedRootDeltaB
 func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []OrderedRootDeltaBatchPublishInput, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator, includeOutputSnapshot bool) ([]orderedRootDeltaBatchGroupApplyResult, bool) {
 	results := make([]orderedRootDeltaBatchGroupApplyResult, len(ordered))
 	var outputID preparedOutputID
+	var outputTracker *allocTracker
 	if tracker, ok := alloc.(*allocTracker); ok {
+		outputTracker = tracker
 		outputID = tracker.PreparedOutputID()
 	}
 	applyOne := func(orderedIdx int) orderedRootDeltaBatchGroupApplyResult {
@@ -1467,12 +1471,14 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 		result.pendingRetiredPages = pendingRetiredPages
 		result.metrics = metrics
 		result.err = err
+		if outputTracker != nil {
+			result.outputPages, result.outputLeafs = outputTracker.PreparedOutputCounts()
+		}
 		if includeOutputSnapshot {
-			tracker, _ := alloc.(*allocTracker)
-			if tracker == nil {
+			if outputTracker == nil {
 				return result
 			}
-			output := tracker.PreparedOutputSnapshot()
+			output := outputTracker.PreparedOutputSnapshot()
 			result.output = &output
 			result.outputID = output.ID
 		}
@@ -1551,7 +1557,7 @@ func recordOrderedRootDeltaBatchGroupApplyResults(
 			if result.output != nil {
 				preparedGroup.markPreparedOutput(orderedIdx, result.rootID, *result.output)
 			} else {
-				preparedGroup.markPrepared(orderedIdx, result.rootID, result.outputID)
+				preparedGroup.markPreparedOutputCounts(orderedIdx, result.rootID, result.outputID, result.outputPages, result.outputLeafs)
 			}
 		}
 		if rootsObserved != nil {
@@ -1728,7 +1734,8 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		if includePreparedChecksum {
 			preparedGroup.markPreparedOutput(systemPreparedIdx, rootID, systemTracker.PreparedOutputSnapshot())
 		} else {
-			preparedGroup.markPrepared(systemPreparedIdx, rootID, systemTracker.PreparedOutputID())
+			outputPages, outputLeafs := systemTracker.PreparedOutputCounts()
+			preparedGroup.markPreparedOutputCounts(systemPreparedIdx, rootID, systemTracker.PreparedOutputID(), outputPages, outputLeafs)
 		}
 		phaseStats.systemApplyMetrics.add(systemMetrics)
 
@@ -1936,7 +1943,8 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	if includePreparedChecksum {
 		preparedGroup.markPreparedOutput(systemPreparedIdx, rootID, systemTracker.PreparedOutputSnapshot())
 	} else {
-		preparedGroup.markPrepared(systemPreparedIdx, rootID, systemTracker.PreparedOutputID())
+		outputPages, outputLeafs := systemTracker.PreparedOutputCounts()
+		preparedGroup.markPreparedOutputCounts(systemPreparedIdx, rootID, systemTracker.PreparedOutputID(), outputPages, outputLeafs)
 	}
 	newSystemRoot = rootID
 	pendingRetiredPages = append(pendingRetiredPages, systemPendingRetiredPages...)

@@ -426,6 +426,12 @@ func TestOrderedRootDeltaBatchGroupPreparedRootMetadataTracksLeafLogOutput(t *te
 	if len(data.output.Pages) == 0 {
 		t.Fatalf("data prepared output did not record root/internal pages: %+v", data.output)
 	}
+	if data.outputPages != uint64(len(data.output.Pages)) {
+		t.Fatalf("data output page count=%d want %d", data.outputPages, len(data.output.Pages))
+	}
+	if data.outputLeafs != uint64(len(data.output.LeafLogPtrs)) {
+		t.Fatalf("data output leaf-log count=%d want %d", data.outputLeafs, len(data.output.LeafLogPtrs))
+	}
 
 	system := captured[0].applyAt(1)
 	if system == nil {
@@ -433,6 +439,20 @@ func TestOrderedRootDeltaBatchGroupPreparedRootMetadataTracksLeafLogOutput(t *te
 	}
 	if len(system.output.LeafLogPtrs) != 0 {
 		t.Fatalf("system prepared output recorded leaf-log pointers: %+v", system.output.LeafLogPtrs)
+	}
+
+	stats := db.Stats()
+	if got := installGuardStatUint(t, stats, "treedb.publish.ordered_root_delta_group.prepared_root.output_pages_total"); got < data.outputPages+system.outputPages {
+		t.Fatalf("output pages total=%d want at least %d", got, data.outputPages+system.outputPages)
+	}
+	if got := installGuardStatUint(t, stats, "treedb.publish.ordered_root_delta_group.prepared_root.output_leaf_log_ptrs_total"); got != data.outputLeafs {
+		t.Fatalf("output leaf-log ptrs total=%d want %d", got, data.outputLeafs)
+	}
+	if got := installGuardStatUint(t, stats, "treedb.publish.ordered_root_delta_group.prepared_root.installed_output_leaf_log_ptrs_total"); got != data.outputLeafs {
+		t.Fatalf("installed output leaf-log ptrs total=%d want %d", got, data.outputLeafs)
+	}
+	if got := installGuardStatUint(t, stats, "treedb.publish.ordered_root_delta_group.prepared_root.abandoned_output_leaf_log_ptrs_total"); got != 0 {
+		t.Fatalf("abandoned output leaf-log ptrs total=%d want 0", got)
 	}
 }
 

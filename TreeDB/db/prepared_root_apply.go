@@ -44,6 +44,8 @@ type preparedRootApply struct {
 	preparedRoot uint64
 	outputID     preparedOutputID
 	output       preparedOutputSnapshot
+	outputPages  uint64
+	outputLeafs  uint64
 	prepared     bool
 	storage      OrderedRootStoragePolicy
 	plan         preparedRootDeltaPlanSummary
@@ -60,15 +62,21 @@ type preparedRootApplyGroup struct {
 }
 
 type preparedRootApplyStats struct {
-	groups        uint64
-	roots         uint64
-	entries       uint64
-	tombstones    uint64
-	keyBytes      uint64
-	valueBytes    uint64
-	pointerValues uint64
-	installed     uint64
-	abandoned     uint64
+	groups         uint64
+	roots          uint64
+	entries        uint64
+	tombstones     uint64
+	keyBytes       uint64
+	valueBytes     uint64
+	pointerValues  uint64
+	installed      uint64
+	abandoned      uint64
+	outputPages    uint64
+	outputLeafs    uint64
+	installedPages uint64
+	installedLeafs uint64
+	abandonedPages uint64
+	abandonedLeafs uint64
 }
 
 const (
@@ -173,17 +181,26 @@ func (group *preparedRootApplyGroup) setSystemRoot(baseRootID uint64, delta *bat
 }
 
 func (group *preparedRootApplyGroup) markPrepared(idx int, rootID uint64, outputID preparedOutputID) {
-	group.markPreparedOutput(idx, rootID, preparedOutputSnapshot{ID: outputID})
+	group.markPreparedOutputCounts(idx, rootID, outputID, 0, 0)
 }
 
 func (group *preparedRootApplyGroup) markPreparedOutput(idx int, rootID uint64, output preparedOutputSnapshot) {
+	group.markPreparedOutputCounts(idx, rootID, output.ID, uint64(len(output.Pages)), uint64(len(output.LeafLogPtrs)))
+	apply := group.applyAt(idx)
+	if apply != nil {
+		apply.output = clonePreparedOutputSnapshot(output)
+	}
+}
+
+func (group *preparedRootApplyGroup) markPreparedOutputCounts(idx int, rootID uint64, outputID preparedOutputID, outputPages, outputLeafs uint64) {
 	apply := group.applyAt(idx)
 	if apply == nil {
 		return
 	}
 	apply.preparedRoot = rootID
-	apply.outputID = output.ID
-	apply.output = clonePreparedOutputSnapshot(output)
+	apply.outputID = outputID
+	apply.outputPages = outputPages
+	apply.outputLeafs = outputLeafs
 	apply.prepared = true
 	apply.state = preparedRootApplyStatePrepared
 }
@@ -242,9 +259,15 @@ func (stats *preparedRootApplyStats) observeGroup(group *preparedRootApplyGroup)
 		switch apply.state {
 		case preparedRootApplyStateInstalled:
 			groupStats.installed++
+			groupStats.installedPages += apply.outputPages
+			groupStats.installedLeafs += apply.outputLeafs
 		case preparedRootApplyStateAbandoned:
 			groupStats.abandoned++
+			groupStats.abandonedPages += apply.outputPages
+			groupStats.abandonedLeafs += apply.outputLeafs
 		}
+		groupStats.outputPages += apply.outputPages
+		groupStats.outputLeafs += apply.outputLeafs
 		plan := apply.plan
 		groupStats.entries += plan.entries
 		groupStats.tombstones += plan.tombstones
@@ -265,6 +288,12 @@ func (stats *preparedRootApplyStats) observeGroup(group *preparedRootApplyGroup)
 	stats.pointerValues += groupStats.pointerValues
 	stats.installed += groupStats.installed
 	stats.abandoned += groupStats.abandoned
+	stats.outputPages += groupStats.outputPages
+	stats.outputLeafs += groupStats.outputLeafs
+	stats.installedPages += groupStats.installedPages
+	stats.installedLeafs += groupStats.installedLeafs
+	stats.abandonedPages += groupStats.abandonedPages
+	stats.abandonedLeafs += groupStats.abandonedLeafs
 }
 
 func observePreparedRootApplyGroup(db *DB, phases *orderedRootDeltaGroupPublishPhaseStats, group *preparedRootApplyGroup, state preparedRootApplyState) {
