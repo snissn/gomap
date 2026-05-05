@@ -4248,23 +4248,25 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		return bufferedIndexedCheckpoint{}
 	}
 	return bufferedIndexedCheckpoint{
-		loaded:                 domain.loaded,
-		meta:                   domain.meta,
-		catalog:                domain.catalog,
-		baseCommitSeq:          domain.baseCommitSeq,
-		baseSystemRoot:         domain.baseSystemRoot,
-		primaryRoot:            domain.primaryRoot,
-		count:                  domain.count,
-		bufferedBytes:          domain.bufferedBytes,
-		mutableCount:           domain.mutableCount,
-		mutableBytes:           domain.mutableBytes,
-		writeGeneration:        domain.writeGeneration,
-		rootRuns:               cloneTableRunMap(domain.rootRuns),
-		rootMutableRuns:        cloneMutableRunMap(domain.rootMutableRuns),
-		rootPolicies:           cloneRootPolicyMap(domain.rootPolicies),
-		rootBaseIDs:            cloneUint64Map(domain.rootBaseIDs),
-		rootValueArenas:        cloneArenaRefs(domain.rootValueArenas),
-		indexedSemanticRecords: cloneIndexedSemanticRecords(domain.indexedSemanticRecords),
+		loaded:          domain.loaded,
+		meta:            domain.meta,
+		catalog:         domain.catalog,
+		baseCommitSeq:   domain.baseCommitSeq,
+		baseSystemRoot:  domain.baseSystemRoot,
+		primaryRoot:     domain.primaryRoot,
+		count:           domain.count,
+		bufferedBytes:   domain.bufferedBytes,
+		mutableCount:    domain.mutableCount,
+		mutableBytes:    domain.mutableBytes,
+		writeGeneration: domain.writeGeneration,
+		rootRuns:        cloneTableRunMap(domain.rootRuns),
+		rootMutableRuns: cloneMutableRunMap(domain.rootMutableRuns),
+		rootPolicies:    cloneRootPolicyMap(domain.rootPolicies),
+		rootBaseIDs:     cloneUint64Map(domain.rootBaseIDs),
+		rootValueArenas: cloneArenaRefs(domain.rootValueArenas),
+		// Semantic records are immutable after staging. Rollback only needs to
+		// restore the previous mutable slice view, not deep-clone every record.
+		indexedSemanticRecords: domain.indexedSemanticRecords,
 		indexedPublishingUnits: cloneIndexedFlushUnits(domain.indexedPublishingUnits),
 		indexedFlushUnits:      cloneIndexedFlushUnits(domain.indexedFlushUnits),
 		primaryRunIndexActive:  domain.primaryRunIndex != nil,
@@ -4300,6 +4302,9 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.rootPolicies = checkpoint.rootPolicies
 	domain.rootBaseIDs = checkpoint.rootBaseIDs
 	domain.rootValueArenas = checkpoint.rootValueArenas
+	if len(domain.indexedSemanticRecords) > len(checkpoint.indexedSemanticRecords) {
+		clear(domain.indexedSemanticRecords[len(checkpoint.indexedSemanticRecords):])
+	}
 	domain.indexedSemanticRecords = checkpoint.indexedSemanticRecords
 	domain.rootRunCount = checkpoint.rootRunCount
 	domain.rootDeltaStats = checkpoint.rootDeltaStats
@@ -9285,6 +9290,21 @@ func buildIndexedSemanticUpdateRecords(collectionName string, runtimes []indexRu
 		return nil
 	}
 	records := make([]indexedSemanticRecord, 0, len(updates))
+	totalIndexDeltas := 0
+	if len(runtimes) > 0 {
+		for _, update := range updates {
+			if !update.indexStateChanged {
+				continue
+			}
+			for runtimeIdx := range runtimes {
+				if preparedBatchUpdateIndexChanged(update, runtimeIdx) {
+					totalIndexDeltas++
+				}
+			}
+		}
+	}
+	indexDeltas := make([]indexedSemanticIndexDelta, totalIndexDeltas)
+	indexDeltaPos := 0
 	for i, update := range updates {
 		var documentID []byte
 		if i < len(primaryEntries) && len(primaryEntries[i].key) > 0 {
@@ -9299,6 +9319,7 @@ func buildIndexedSemanticUpdateRecords(collectionName string, runtimes []indexRu
 			documentID: documentID,
 		}
 		if update.indexStateChanged && len(runtimes) > 0 {
+			indexDeltaStart := indexDeltaPos
 			for runtimeIdx, runtime := range runtimes {
 				if !preparedBatchUpdateIndexChanged(update, runtimeIdx) {
 					continue
@@ -9306,14 +9327,18 @@ func buildIndexedSemanticUpdateRecords(collectionName string, runtimes []indexRu
 				if runtime.def.unique {
 					record.fallback = indexedSemanticFallbackRawOnly
 				}
-				record.indexDeltas = append(record.indexDeltas, indexedSemanticIndexDelta{
+				indexDeltas[indexDeltaPos] = indexedSemanticIndexDelta{
 					indexName:  runtime.def.name,
 					rootName:   runtimeSecondaryRootName(collectionName, runtime),
 					runtimeIdx: runtimeIdx,
 					unique:     runtime.def.unique,
 					oldValues:  cloneIndexedSemanticValueSet(update.oldState.valuesAt(runtimeIdx)),
 					newValues:  cloneIndexedSemanticValueSet(update.newState.valuesAt(runtimeIdx)),
-				})
+				}
+				indexDeltaPos++
+			}
+			if indexDeltaPos > indexDeltaStart {
+				record.indexDeltas = indexDeltas[indexDeltaStart:indexDeltaPos:indexDeltaPos]
 			}
 		}
 		records = append(records, record)
