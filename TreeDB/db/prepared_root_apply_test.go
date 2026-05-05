@@ -183,7 +183,7 @@ func TestRecordOrderedRootDeltaBatchGroupApplyResultsCountsZeroReadOnlyPrepare(t
 			idx:                      0,
 			attempted:                true,
 			readOnlyPrepareAttempted: true,
-			readOnlyPrepare: zipper.ReadOnlyPrepareResult{
+			readOnlyPrepareSummary: zipper.ReadOnlyLeafSpanSummary{
 				ExactLeafSpans: true,
 			},
 		}},

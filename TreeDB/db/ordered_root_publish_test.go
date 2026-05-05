@@ -894,6 +894,100 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptionalReadOnl
 	}
 }
 
+func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_DefaultReadOnlyPrepareStatsZero(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "root/a", "va").NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root: %v", err)
+	}
+	delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := delta.Set([]byte("root/b"), []byte("vb")); err != nil {
+		t.Fatalf("set delta: %v", err)
+	}
+	defer func() { _ = delta.Close() }()
+
+	_, _, err = db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+		BaseRoot: baseRoot,
+		Delta:    delta,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish ordered root delta batch group: %v", err)
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total"]; got != "0" {
+		t.Fatalf("readonly prepare calls=%q want 0", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ops_total"]; got != "0" {
+		t.Fatalf("readonly prepare ops=%q want 0", got)
+	}
+}
+
+func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_ReadOnlyPreparePlanKindStats(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	cold := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := cold.Set([]byte("root/a"), []byte("va")); err != nil {
+		t.Fatalf("set cold delta: %v", err)
+	}
+	defer func() { _ = cold.Close() }()
+
+	_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+		BaseRoot:        0,
+		Delta:           cold,
+		PrepareReadOnly: true,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish cold ordered root delta batch group: %v", err)
+	}
+	if len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("cold rootIDs=%v want one non-zero root", rootIDs)
+	}
+
+	maintenance := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := maintenance.Delete([]byte("root/a")); err != nil {
+		t.Fatalf("delete maintenance delta: %v", err)
+	}
+	defer func() { _ = maintenance.Close() }()
+
+	_, _, err = db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+		BaseRoot:        rootIDs[0],
+		Delta:           maintenance,
+		PrepareReadOnly: true,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish maintenance ordered root delta batch group: %v", err)
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total"]; got != "2" {
+		t.Fatalf("readonly prepare calls=%q want 2", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_cold_build_plans_total"]; got != "1" {
+		t.Fatalf("readonly prepare cold build plans=%q want 1", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_maintenance_plans_total"]; got != "1" {
+		t.Fatalf("readonly prepare maintenance plans=%q want 1", got)
+	}
+}
+
 func requireUintStat(tb testing.TB, stats map[string]string, key string) uint64 {
 	tb.Helper()
 	raw, ok := stats[key]
