@@ -68,6 +68,9 @@ func TestRawBatchInstallGuardMismatchFreesTrackedPagesAndSkipsRetire(t *testing.
 	if got := installGuardStatUint(t, after, "treedb.publish.install_guard.failures_total"); got != 1 {
 		t.Fatalf("install guard failures=%d want 1", got)
 	}
+	if got := installGuardStatUint(t, after, "treedb.publish.install_guard.hook_failures_total"); got != 1 {
+		t.Fatalf("install guard hook failures=%d want 1", got)
+	}
 	if got := installGuardStatUint(t, after, "treedb.graveyard.pages"); got != beforeGraveyardPages {
 		t.Fatalf("graveyard pages=%d want unchanged %d", got, beforeGraveyardPages)
 	}
@@ -113,12 +116,16 @@ func TestOrderedRootDeltaBatchGroupInstallGuardFailureAbandonsGroup(t *testing.T
 	defer func() { _ = delta.Close() }()
 
 	hookCalls := 0
+	var captured []preparedRootApplyGroup
 	db.testInstallGuardHook = func(ev dbInstallGuardHookEvent) error {
 		if ev.Kind != dbInstallGuardOrderedRootGroup {
 			return nil
 		}
 		hookCalls++
 		return ErrInstallGuardMismatch
+	}
+	db.testPreparedRootApplyHook = func(group preparedRootApplyGroup) {
+		captured = append(captured, group)
 	}
 	_, _, err = db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
 		BaseRoot: baseRoot,
@@ -127,6 +134,7 @@ func TestOrderedRootDeltaBatchGroupInstallGuardFailureAbandonsGroup(t *testing.T
 		return mustFrozenSystemMemtable(t, "sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
 	})
 	db.testInstallGuardHook = nil
+	db.testPreparedRootApplyHook = nil
 	if !errors.Is(err, ErrInstallGuardMismatch) {
 		t.Fatalf("publish err=%v want install guard mismatch", err)
 	}
@@ -148,6 +156,9 @@ func TestOrderedRootDeltaBatchGroupInstallGuardFailureAbandonsGroup(t *testing.T
 	if got := installGuardStatUint(t, afterStats, "treedb.publish.ordered_root_delta_group.install_guard_failures_total"); got != 1 {
 		t.Fatalf("ordered install guard failures=%d want 1", got)
 	}
+	if got := installGuardStatUint(t, afterStats, "treedb.publish.install_guard.hook_failures_total"); got != 1 {
+		t.Fatalf("ordered install guard hook failures=%d want 1", got)
+	}
 	if got := installGuardStatUint(t, afterStats, "treedb.publish.ordered_root_delta_group.roots_total"); got != 0 {
 		t.Fatalf("ordered roots total=%d want 0 after failed install guard", got)
 	}
@@ -157,6 +168,18 @@ func TestOrderedRootDeltaBatchGroupInstallGuardFailureAbandonsGroup(t *testing.T
 	if got := installGuardStatUint(t, afterStats, "treedb.freelist.free_pages_total"); got <= beforeFree {
 		t.Fatalf("freelist free pages=%d want > %d after abandoning ordered output", got, beforeFree)
 	}
+	if len(captured) != 1 {
+		t.Fatalf("prepared apply groups=%d want 1", len(captured))
+	}
+	if captured[0].state != preparedRootApplyStateAbandoned {
+		t.Fatalf("prepared group state=%v want abandoned", captured[0].state)
+	}
+	if got := installGuardStatUint(t, afterStats, "treedb.publish.ordered_root_delta_group.prepared_root.abandoned_total"); got != 2 {
+		t.Fatalf("prepared abandoned=%d want 2", got)
+	}
+	if got := installGuardStatUint(t, afterStats, "treedb.publish.ordered_root_delta_group.prepared_root.installed_total"); got != 0 {
+		t.Fatalf("prepared installed=%d want 0", got)
+	}
 
 	snap := db.AcquireSnapshot()
 	if snap == nil {
@@ -165,6 +188,71 @@ func TestOrderedRootDeltaBatchGroupInstallGuardFailureAbandonsGroup(t *testing.T
 	defer func() { _ = snap.Close() }()
 	if _, err := snap.GetEntryAtRoot(afterState.SystemRootPageID, []byte("sys/collections/users/primary")); err == nil {
 		t.Fatal("unexpected descriptor installed after failed install guard")
+	}
+}
+
+func TestInstallGuardMismatchCauseCounters(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if _, err := db.runInstallGuard(rawBatchInstallGuard(999)); !errors.Is(err, ErrInstallGuardMismatch) {
+		t.Fatalf("user-root guard err=%v want install guard mismatch", err)
+	}
+	if _, err := db.runInstallGuard(orderedRootDeltaGroupSystemInstallGuard(999)); !errors.Is(err, ErrInstallGuardMismatch) {
+		t.Fatalf("system-root guard err=%v want install guard mismatch", err)
+	}
+
+	stats := db.Stats()
+	if got := installGuardStatUint(t, stats, "treedb.publish.install_guard.user_root_mismatches_total"); got != 1 {
+		t.Fatalf("user-root mismatch counter=%d want 1", got)
+	}
+	if got := installGuardStatUint(t, stats, "treedb.publish.install_guard.system_root_mismatches_total"); got != 1 {
+		t.Fatalf("system-root mismatch counter=%d want 1", got)
+	}
+	if got := installGuardStatUint(t, stats, "treedb.publish.install_guard.hook_failures_total"); got != 0 {
+		t.Fatalf("hook failure counter=%d want 0", got)
+	}
+}
+
+func TestInstallGuardCountsDualRootMismatchCauses(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	state := db.State()
+	if state == nil {
+		t.Fatal("state is nil")
+	}
+	before := db.Stats()
+	_, err = db.runInstallGuard(orderedRootDeltaGroupInstallGuard(
+		state.RootPageID+1,
+		state.SystemRootPageID+1,
+	))
+	if !errors.Is(err, ErrInstallGuardMismatch) {
+		t.Fatalf("install guard err=%v want mismatch", err)
+	}
+	after := db.Stats()
+	statDelta := func(name string) uint64 {
+		gotAfter := installGuardStatUint(t, after, name)
+		gotBefore := installGuardStatUint(t, before, name)
+		if gotAfter < gotBefore {
+			t.Fatalf("%s decreased: before=%d after=%d", name, gotBefore, gotAfter)
+		}
+		return gotAfter - gotBefore
+	}
+	if got := statDelta("treedb.publish.install_guard.failures_total"); got != 1 {
+		t.Fatalf("install guard failures delta=%d want 1", got)
+	}
+	if got := statDelta("treedb.publish.install_guard.user_root_mismatches_total"); got != 1 {
+		t.Fatalf("user-root mismatch delta=%d want 1", got)
+	}
+	if got := statDelta("treedb.publish.install_guard.system_root_mismatches_total"); got != 1 {
+		t.Fatalf("system-root mismatch delta=%d want 1", got)
 	}
 }
 
