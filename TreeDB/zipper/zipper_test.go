@@ -27,6 +27,25 @@ func (m *MockAllocator) Alloc(hint uint64) (uint64, error) {
 	return m.p.Alloc(1)
 }
 
+type recyclingMockAllocator struct {
+	p       *pager.Pager
+	retired []uint64
+}
+
+func (m *recyclingMockAllocator) Alloc(hint uint64) (uint64, error) {
+	n := len(m.retired)
+	if n > 0 {
+		id := m.retired[n-1]
+		m.retired = m.retired[:n-1]
+		return id, nil
+	}
+	return m.p.Alloc(1)
+}
+
+func (m *recyclingMockAllocator) Recycle(ids []uint64) {
+	m.retired = append(m.retired, ids...)
+}
+
 type panicValueReader struct{}
 
 func (panicValueReader) Read(ptr page.ValuePtr) ([]byte, error) {
@@ -1346,7 +1365,7 @@ func BenchmarkZipperApplyWarmSparseManyLeaf(b *testing.B) {
 		step     = 4
 		workers  = 4
 	)
-	alloc := &MockAllocator{p: p}
+	alloc := &recyclingMockAllocator{p: p}
 	z := New(p, alloc)
 	rootID := buildInternalRootWithKeys(b, z, keyCount)
 
@@ -1372,6 +1391,7 @@ func BenchmarkZipperApplyWarmSparseManyLeaf(b *testing.B) {
 	}
 
 	var total adaptive.Metrics
+	var totalRetired int
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -1379,7 +1399,7 @@ func BenchmarkZipperApplyWarmSparseManyLeaf(b *testing.B) {
 		if i&1 == 1 {
 			delta = right
 		}
-		newRoot, _, metrics, err := z.Apply(rootID, delta)
+		newRoot, retired, metrics, err := z.Apply(rootID, delta)
 		if err != nil {
 			b.Fatalf("Apply: %v", err)
 		}
@@ -1387,6 +1407,8 @@ func BenchmarkZipperApplyWarmSparseManyLeaf(b *testing.B) {
 			b.Fatalf("new root=%d old root=%d want changed non-zero root", newRoot, rootID)
 		}
 		rootID = newRoot
+		totalRetired += len(retired)
+		alloc.Recycle(retired)
 		mergeMetrics(&total, &metrics)
 	}
 	b.ReportMetric(float64(summary.Spans), "leaf_spans/op")
@@ -1397,6 +1419,7 @@ func BenchmarkZipperApplyWarmSparseManyLeaf(b *testing.B) {
 		b.ReportMetric(float64(total.ZipperLeafMerges)/float64(b.N), "leaf_merges/op")
 		b.ReportMetric(float64(total.ZipperInternalMerges)/float64(b.N), "internal_merges/op")
 		b.ReportMetric(float64(total.IndexWriteBytes)/float64(b.N), "index_write_bytes/op")
+		b.ReportMetric(float64(totalRetired)/float64(b.N), "pending_retired_pages/op")
 	}
 }
 
