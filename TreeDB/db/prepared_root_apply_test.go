@@ -558,6 +558,19 @@ func TestOrderedRootDeltaBatchGroupPreparedRootOutputStatsCountSharedTrackerOnce
 	}
 }
 
+func TestOrderedRootDeltaBatchGroupPreparedOutputCountsIgnoreFailedRoots(t *testing.T) {
+	results := []orderedRootDeltaBatchGroupApplyResult{
+		{attempted: true, outputPages: 2, outputLeafLogPtrs: 3},
+		{attempted: true, err: errors.New("root apply failed"), outputPages: 100, outputLeafLogPtrs: 200},
+		{outputPages: 1000, outputLeafLogPtrs: 2000},
+		{attempted: true, outputPages: 5, outputLeafLogPtrs: 7},
+	}
+	pages, leafLogPtrs := orderedRootDeltaBatchGroupPreparedOutputCounts(results)
+	if pages != 7 || leafLogPtrs != 10 {
+		t.Fatalf("prepared output counts pages/leaf-log=%d/%d want 7/10", pages, leafLogPtrs)
+	}
+}
+
 func TestOrderedRootDeltaBatchGroupPreparedRootMetadataCapturesFinalSharedOutput(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
