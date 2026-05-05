@@ -2305,6 +2305,7 @@ func deriveTreeDBPhaseMetrics(delta map[string]float64, operations, driverCalls 
 	addPerOperationMetric(metrics, "root_apply_calls/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_calls_total", operations)
 	addRatioMetric(metrics, "roots/publish", delta, "treedb.publish.ordered_root_delta_group.roots_total", "treedb.publish.ordered_root_delta_group.calls_total")
 	addPerOperationMetric(metrics, "publish_delta_group_root_apply_ns/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_ns_total", operations)
+	addReadOnlyPrepareRootApplySplitMetrics(metrics, delta, operations)
 	addPerOperationMetric(metrics, "read_only_prepare_calls/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total", operations)
 	addPerOperationMetric(metrics, "read_only_prepare_ns/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ns_total", operations)
 	addRatioMetric(metrics, "read_only_prepare_ns/plan", delta, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ns_total", "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total")
@@ -2359,6 +2360,20 @@ func deriveTreeDBPhaseMetrics(delta map[string]float64, operations, driverCalls 
 		return nil
 	}
 	return metrics
+}
+
+func addReadOnlyPrepareRootApplySplitMetrics(metrics map[string]float64, delta map[string]float64, operations int) {
+	rootApplyNS, rootOK := delta["treedb.publish.ordered_root_delta_group.root_apply_ns_total"]
+	readOnlyPrepareNS, prepareOK := delta["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ns_total"]
+	if !rootOK || !prepareOK {
+		return
+	}
+	remainingNS := rootApplyNS - readOnlyPrepareNS
+	if remainingNS < 0 {
+		remainingNS = 0
+	}
+	addPerOperationMetricValue(metrics, "publish_delta_group_root_apply_excluding_read_only_prepare_ns/doc", remainingNS, operations)
+	addRatioMetricValue(metrics, "read_only_prepare_root_apply_share_pct", readOnlyPrepareNS*100, rootApplyNS)
 }
 
 func addRootDeltaKindMetrics(metrics map[string]float64, statPrefix, metricPrefix string, delta map[string]float64, operations int) {

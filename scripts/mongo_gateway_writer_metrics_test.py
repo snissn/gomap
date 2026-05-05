@@ -97,6 +97,9 @@ class WriterMetricsTests(unittest.TestCase):
                             "coalesced_batch_units/batch": 2,
                             "coalesced_batch_docs/batch": 50,
                             "coalesced_batch_bytes/batch": 4096,
+                            "publish_delta_group_root_apply_ns/doc": 100,
+                            "publish_delta_group_root_apply_excluding_read_only_prepare_ns/doc": 75,
+                            "read_only_prepare_root_apply_share_pct": 25,
                             "read_only_prepare_calls/doc": 0.1,
                             "read_only_prepare_ns/doc": 25,
                             "read_only_prepare_ns/plan": 250,
@@ -174,6 +177,9 @@ class WriterMetricsTests(unittest.TestCase):
             self.assertEqual(rows[0]["drain_coalesced_flush_batches_total"], "1")
             self.assertEqual(rows[0]["drain_primary_only_drains_total"], "0")
             self.assertEqual(rows[0]["coalesced_batch_units_per_batch"], "2")
+            self.assertEqual(rows[0]["publish_delta_group_root_apply_ns_per_doc"], "100")
+            self.assertEqual(rows[0]["publish_delta_group_root_apply_excluding_read_only_prepare_ns_per_doc"], "75")
+            self.assertEqual(rows[0]["read_only_prepare_root_apply_share_pct"], "25")
             self.assertEqual(rows[0]["read_only_prepare_calls_per_doc"], "0.1")
             self.assertEqual(rows[0]["read_only_prepare_ns_per_doc"], "25")
             self.assertEqual(rows[0]["read_only_prepare_ns_per_plan"], "250")
