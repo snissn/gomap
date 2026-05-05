@@ -134,7 +134,7 @@ func TestTemplateV1CollectionInsertBatchIndexesAndTemplateRoot(t *testing.T) {
 		_ = snap.Close()
 		t.Fatalf("parse stored document: %v", err)
 	}
-	resolver := &templateV1SnapshotResolver{snap: snap, rootID: templateRoot, cache: make(map[string]*templateV1Template)}
+	resolver := &templateV1SnapshotResolver{snap: snap, rootID: templateRoot}
 	tpl, err := resolver.lookupTemplateV1(root.templateID)
 	_ = snap.Close()
 	if err != nil {
@@ -142,6 +142,54 @@ func TestTemplateV1CollectionInsertBatchIndexesAndTemplateRoot(t *testing.T) {
 	}
 	if got, want := tpl.fields, []string{"city", "email", "name"}; !equalStringSlices(got, want) {
 		t.Fatalf("template fields=%q want %q", got, want)
+	}
+}
+
+func TestTemplateV1StoredDocumentUsesVarintTemplateIDs(t *testing.T) {
+	doc := mustTemplateV1Document(t,
+		[]string{"profile", "email"},
+		[]any{
+			map[string]any{"city": "hnl"},
+			"ada@example.com",
+		},
+	)
+	prepared, records, resolver, err := prepareTemplateV1InsertDocuments([][]byte{doc}, nil)
+	if err != nil {
+		t.Fatalf("prepare template-v1 document: %v", err)
+	}
+	if got, want := len(records), 2; got != want {
+		t.Fatalf("published template records=%d want %d", got, want)
+	}
+	if got := prepared[0]; !bytes.HasPrefix(got, []byte(templateV1StoredMagic)) {
+		t.Fatalf("prepared prefix=%q want stored magic", got[:min(len(got), len(templateV1StoredMagic))])
+	}
+	pos := len(templateV1StoredMagic)
+	if _, err := readTemplateV1TemplateID(prepared[0], &pos); err != nil {
+		t.Fatalf("read root template id: %v", err)
+	}
+	if got, want := pos, len(templateV1StoredMagic)+1; got != want {
+		t.Fatalf("root template id ended at byte %d want %d-byte varint", got, want)
+	}
+	root, err := parseTemplateV1StoredDocument(prepared[0])
+	if err != nil {
+		t.Fatalf("parse stored document: %v", err)
+	}
+	profile, found, err := templateV1ObjectFieldValue(root, "profile", resolver)
+	if err != nil {
+		t.Fatalf("extract profile: %v", err)
+	}
+	if !found {
+		t.Fatal("profile field not found")
+	}
+	if len(profile) == 0 || profile[0] != templateV1KindObject {
+		t.Fatalf("profile value prefix=%v want object", profile[:min(len(profile), 1)])
+	}
+	pos = 1
+	if _, err := readTemplateV1TemplateID(profile, &pos); err != nil {
+		t.Fatalf("read nested template id: %v", err)
+	}
+	if pos != 2 {
+		t.Fatalf("nested template id ended at byte %d want 1-byte varint after kind", pos)
 	}
 }
 
@@ -278,8 +326,8 @@ func TestTemplateV1EncoderReusesPersistedTemplateRoot(t *testing.T) {
 	if !bytes.HasPrefix(doc1, []byte(templateV1InputMagic)) {
 		t.Fatalf("first encoded doc should include template record")
 	}
-	if !bytes.HasPrefix(doc2, []byte(templateV1StoredMagic)) {
-		t.Fatalf("second encoded doc should reuse emitted template and be stored bytes")
+	if !bytes.HasPrefix(doc2, []byte(templateV1InsertDocumentMagic)) {
+		t.Fatalf("second encoded doc should reuse emitted template and be hash-referenced insert bytes")
 	}
 	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{doc1}); err != nil {
 		t.Fatalf("insert doc1: %v", err)
@@ -301,18 +349,22 @@ func TestTemplateV1EncoderReusesPersistedTemplateRoot(t *testing.T) {
 		_ = snap.Close()
 		t.Fatal("template root missing after first insert")
 	}
-	storedDoc2, _, err := parseTemplateV1InsertDocument(doc2)
+	resolver := &templateV1SnapshotResolver{snap: snap, rootID: templateRoot}
+	preparedDoc2, _, repeatResolver, err := prepareTemplateV1InsertDocuments([][]byte{doc2}, resolver)
 	if err != nil {
 		_ = snap.Close()
-		t.Fatalf("parse stored doc2: %v", err)
+		t.Fatalf("prepare doc2: %v", err)
 	}
-	rootDoc2, err := parseTemplateV1StoredDocument(storedDoc2)
+	if len(preparedDoc2) != 1 {
+		_ = snap.Close()
+		t.Fatalf("prepared doc2 count=%d want 1", len(preparedDoc2))
+	}
+	rootDoc2, err := parseTemplateV1StoredDocument(preparedDoc2[0])
 	if err != nil {
 		_ = snap.Close()
 		t.Fatalf("parse doc2 root: %v", err)
 	}
-	resolver := &templateV1SnapshotResolver{snap: snap, rootID: templateRoot, cache: make(map[string]*templateV1Template)}
-	if _, err := resolver.lookupTemplateV1(rootDoc2.templateID); err != nil {
+	if _, err := repeatResolver.lookupTemplateV1(rootDoc2.templateID); err != nil {
 		_ = snap.Close()
 		t.Fatalf("lookup doc2 template after first insert: %v", err)
 	}
@@ -360,8 +412,8 @@ func TestTemplateV1IndexedWriteMemtablesResolveBufferedTemplateAcrossBatches(t *
 	if err != nil {
 		t.Fatalf("encode doc2: %v", err)
 	}
-	if !bytes.HasPrefix(doc2, []byte(templateV1StoredMagic)) {
-		t.Fatalf("second encoded doc should reuse emitted template and be stored bytes")
+	if !bytes.HasPrefix(doc2, []byte(templateV1InsertDocumentMagic)) {
+		t.Fatalf("second encoded doc should reuse emitted template and be hash-referenced insert bytes")
 	}
 	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{doc1}); err != nil {
 		t.Fatalf("insert first buffered batch: %v", err)
@@ -375,19 +427,19 @@ func TestTemplateV1IndexedWriteMemtablesResolveBufferedTemplateAcrossBatches(t *
 	if bufferedTemplateRuns != 1 {
 		t.Fatalf("buffered template runs=%d want 1", bufferedTemplateRuns)
 	}
-	storedDoc2, _, err := parseTemplateV1InsertDocument(doc2)
-	if err != nil {
-		t.Fatalf("parse doc2: %v", err)
-	}
-	rootDoc2, err := parseTemplateV1StoredDocument(storedDoc2)
-	if err != nil {
-		t.Fatalf("parse doc2 root: %v", err)
-	}
 	opts := collectionOptionsWithBufferedTemplateV1Resolver(collectionOptions{
 		documentFormat:   DocumentFormatTemplateV1,
 		templateResolver: nil,
 	}, col.writeDomain, "users")
-	if _, err := opts.templateResolver.lookupTemplateV1(rootDoc2.templateID); err != nil {
+	preparedDoc2, _, preparedResolver, err := prepareTemplateV1InsertDocuments([][]byte{doc2}, opts.templateResolver)
+	if err != nil {
+		t.Fatalf("prepare doc2 with buffered resolver: %v", err)
+	}
+	rootDoc2, err := parseTemplateV1StoredDocument(preparedDoc2[0])
+	if err != nil {
+		t.Fatalf("parse doc2 root: %v", err)
+	}
+	if _, err := preparedResolver.lookupTemplateV1(rootDoc2.templateID); err != nil {
 		t.Fatalf("lookup buffered template directly: %v", err)
 	}
 	if _, err := col.InsertBatch([][]byte{[]byte("u2")}, [][]byte{doc2}); err != nil {
@@ -462,7 +514,7 @@ func TestTemplateV1EncoderResetEmitsTemplateAgain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode second doc: %v", err)
 	}
-	if !bytes.HasPrefix(doc, []byte(templateV1StoredMagic)) {
+	if !bytes.HasPrefix(doc, []byte(templateV1InsertDocumentMagic)) {
 		t.Fatalf("second encoded doc should omit previously emitted template record")
 	}
 	encoder.Reset()
@@ -527,9 +579,17 @@ type countingMissingTemplateV1Resolver struct {
 	lookups int
 }
 
-func (r *countingMissingTemplateV1Resolver) lookupTemplateV1([32]byte) (*templateV1Template, error) {
+func (r *countingMissingTemplateV1Resolver) lookupTemplateV1(uint64) (*templateV1Template, error) {
+	return nil, errTemplateV1TemplateNotFound
+}
+
+func (r *countingMissingTemplateV1Resolver) lookupTemplateV1ByHash([32]byte) (*templateV1Template, error) {
 	r.lookups++
 	return nil, errTemplateV1TemplateNotFound
+}
+
+func (r *countingMissingTemplateV1Resolver) nextTemplateV1ID() (uint64, error) {
+	return 1, nil
 }
 
 func TestPrepareTemplateV1InsertDocumentsDedupesBatchTemplateRecords(t *testing.T) {
@@ -583,8 +643,8 @@ func TestTemplateV1CompactDocumentRequiresKnownTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode compact doc: %v", err)
 	}
-	if !bytes.HasPrefix(compact, []byte(templateV1StoredMagic)) {
-		t.Fatalf("expected compact stored document")
+	if !bytes.HasPrefix(compact, []byte(templateV1InsertDocumentMagic)) {
+		t.Fatalf("expected compact hash-referenced insert document")
 	}
 	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{compact}); err == nil {
 		t.Fatalf("insert compact doc without persisted template got nil error")
@@ -647,7 +707,7 @@ func TestTemplateV1UnbufferedSingleInsertUsesTemplateRoot(t *testing.T) {
 		_ = snap.Close()
 		t.Fatalf("parse stored doc: %v", err)
 	}
-	resolver := &templateV1SnapshotResolver{snap: snap, rootID: templateRoot, cache: make(map[string]*templateV1Template)}
+	resolver := &templateV1SnapshotResolver{snap: snap, rootID: templateRoot}
 	if _, err := resolver.lookupTemplateV1(stored.templateID); err != nil {
 		_ = snap.Close()
 		t.Fatalf("lookup template: %v", err)
@@ -855,16 +915,11 @@ func TestTemplateV1NestedIndexExtraction(t *testing.T) {
 			"ada@example.com",
 		},
 	)
-	stored, records, err := parseTemplateV1InsertEnvelope(doc)
+	prepared, _, resolver, err := prepareTemplateV1InsertDocuments([][]byte{doc}, nil)
 	if err != nil {
-		t.Fatalf("parse template envelope: %v", err)
+		t.Fatalf("prepare template document: %v", err)
 	}
-	resolver := &templateV1MemoryResolver{}
-	for _, record := range records {
-		if _, err := resolver.addRecord(record); err != nil {
-			t.Fatalf("add template record: %v", err)
-		}
-	}
+	stored := prepared[0]
 	runtimes := []indexRuntime{{
 		def:  indexDefinition{name: "city", field: "profile.city", valueType: IndexValueString},
 		path: []string{"profile", "city"},
@@ -890,16 +945,11 @@ func TestTemplateV1RootIndexExtraction(t *testing.T) {
 			"hnl",
 		},
 	)
-	stored, records, err := parseTemplateV1InsertEnvelope(doc)
+	prepared, _, resolver, err := prepareTemplateV1InsertDocuments([][]byte{doc}, nil)
 	if err != nil {
-		t.Fatalf("parse template envelope: %v", err)
+		t.Fatalf("prepare template document: %v", err)
 	}
-	resolver := &templateV1MemoryResolver{}
-	for _, record := range records {
-		if _, err := resolver.addRecord(record); err != nil {
-			t.Fatalf("add template record: %v", err)
-		}
-	}
+	stored := prepared[0]
 	planner := insertBatchPlanner{
 		indexes: []indexDefinition{
 			{name: "email", field: "email", valueType: IndexValueString},

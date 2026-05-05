@@ -1455,39 +1455,49 @@ func expectedStoredDocument(format collections.DocumentFormat, n int) ([]byte, e
 func templateV1StoredDocument(raw []byte) ([]byte, error) {
 	const (
 		inputMagic  = "TD1I"
+		insertMagic = "TD1H"
 		storedMagic = "TD1D"
 	)
 	if bytes.HasPrefix(raw, []byte(storedMagic)) {
 		return raw, nil
 	}
-	if !bytes.HasPrefix(raw, []byte(inputMagic)) {
-		return nil, errors.New("template-v1 document is missing input envelope")
-	}
-	pos := len(inputMagic)
-	templateCount, n := binary.Uvarint(raw[pos:])
-	if n <= 0 {
-		return nil, errors.New("template-v1 document has malformed template count")
-	}
-	pos += n
-	for i := uint64(0); i < templateCount; i++ {
-		if len(raw)-pos < 32 {
-			return nil, errors.New("template-v1 document has malformed template id")
-		}
-		pos += 32
-		recordLen, n := binary.Uvarint(raw[pos:])
+	pos := 0
+	if bytes.HasPrefix(raw, []byte(inputMagic)) {
+		pos = len(inputMagic)
+		templateCount, n := binary.Uvarint(raw[pos:])
 		if n <= 0 {
-			return nil, errors.New("template-v1 document has malformed template length")
+			return nil, errors.New("template-v1 document has malformed template count")
 		}
 		pos += n
-		if recordLen > uint64(len(raw)-pos) {
-			return nil, errors.New("template-v1 document has truncated template record")
+		for i := uint64(0); i < templateCount; i++ {
+			if len(raw)-pos < 32 {
+				return nil, errors.New("template-v1 document has malformed template hash")
+			}
+			pos += 32
+			recordLen, n := binary.Uvarint(raw[pos:])
+			if n <= 0 {
+				return nil, errors.New("template-v1 document has malformed template length")
+			}
+			pos += n
+			if recordLen > uint64(len(raw)-pos) {
+				return nil, errors.New("template-v1 document has truncated template record")
+			}
+			pos += int(recordLen)
 		}
-		pos += int(recordLen)
 	}
-	if !bytes.HasPrefix(raw[pos:], []byte(storedMagic)) {
-		return nil, errors.New("template-v1 document is missing stored payload")
+	if !bytes.HasPrefix(raw[pos:], []byte(insertMagic)) {
+		return nil, errors.New("template-v1 document is missing insert payload")
 	}
-	return raw[pos:], nil
+	pos += len(insertMagic)
+	if len(raw)-pos < 32 {
+		return nil, errors.New("template-v1 document has malformed root template hash")
+	}
+	pos += 32
+	out := make([]byte, 0, len(storedMagic)+binary.MaxVarintLen64+len(raw)-pos)
+	out = append(out, storedMagic...)
+	out = binary.AppendUvarint(out, 1)
+	out = append(out, raw[pos:]...)
+	return out, nil
 }
 
 func containsDocumentID(ids [][]byte, want []byte) bool {

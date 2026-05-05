@@ -288,19 +288,9 @@ func BenchmarkCollectionOverheadIndexStateTemplateV1Extraction(b *testing.B) {
 	if err != nil {
 		b.Fatalf("index runtimes: %v", err)
 	}
-	storedDocs := make([][]byte, len(docs))
-	resolver := &templateV1MemoryResolver{}
-	for i, doc := range docs {
-		stored, records, err := parseTemplateV1InsertDocument(doc)
-		if err != nil {
-			b.Fatalf("parse template-v1 document: %v", err)
-		}
-		storedDocs[i] = stored
-		for _, record := range records {
-			if _, err := resolver.addRecord(record); err != nil {
-				b.Fatalf("add template-v1 record: %v", err)
-			}
-		}
+	storedDocs, _, resolver, err := prepareTemplateV1InsertDocuments(docs, nil)
+	if err != nil {
+		b.Fatalf("prepare template-v1 documents: %v", err)
 	}
 	opts := collectionOptions{documentFormat: DocumentFormatTemplateV1, templateResolver: resolver}
 	for _, doc := range storedDocs {

@@ -185,10 +185,11 @@ matrix:
 ## 12. Collections Document Formats
 
 Invariant:
-- Template-v1 collections persist their template ID map in the collection-local
-  `<collection>/templates` TreeDB ordered root.
-- Template-v1 primary documents store compact `TD1D` bytes and resolve template
-  IDs from the current batch or from the persisted template root.
+- Template-v1 collections persist their hash-to-numeric-ID template map in the
+  collection-local `<collection>/templates` TreeDB ordered root.
+- Template-v1 primary documents store compact `TD1D` bytes with numeric
+  template IDs and resolve templates from the current batch or from the
+  persisted template root.
 - Secondary indexes, deletes, reopens, and index backfills use the template root
   instead of JSON parsing.
 

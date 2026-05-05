@@ -701,13 +701,28 @@ func (p insertBatchPlanner) emitTemplateRun(plan *insertBatchPlan, records []tem
 	if err != nil {
 		return err
 	}
-	table := newCollectionRunTable(len(records))
-	if err := applyCollectionRunEntries(table, len(records), func(i int) (key, value []byte, err error) {
-		raw := records[i].raw
+	entryCount := len(records)*2 + 1
+	var maxID uint64
+	for _, record := range records {
+		if record.id > maxID {
+			maxID = record.id
+		}
+	}
+	nextID := maxID + 1
+	table := newCollectionRunTable(entryCount)
+	if err := applyCollectionRunEntries(table, entryCount, func(i int) (key, value []byte, err error) {
+		if i == 0 {
+			return templateV1NextIDKey(), encodeTemplateV1ID(nextID), nil
+		}
+		record := records[(i-1)/2]
+		if (i-1)%2 == 0 {
+			return templateV1HashKey(record.hash), encodeTemplateV1ID(record.id), nil
+		}
+		raw := record.raw
 		if p.cloneTemplateRunValues {
 			raw = bytes.Clone(raw)
 		}
-		return records[i].id[:], raw, nil
+		return templateV1RecordKey(record.id), raw, nil
 	}); err != nil {
 		return err
 	}
