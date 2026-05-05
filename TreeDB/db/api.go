@@ -710,6 +710,9 @@ func (db *DB) Stats() map[string]string {
 	// Backend DB path currently doesn't track queue drift; emit a stable default
 	// for suite compatibility and fail-closed checks that require key presence.
 	stats["treedb.publish.watermark.lag_drift_bytes_per_sec"] = "0.000"
+	stats["treedb.publish.install_guard.ns_total"] = fmt.Sprintf("%d", db.publishInstallGuardNs.Load())
+	stats["treedb.publish.install_guard.calls_total"] = fmt.Sprintf("%d", db.publishInstallGuardCalls.Load())
+	stats["treedb.publish.install_guard.failures_total"] = fmt.Sprintf("%d", db.publishInstallGuardFailures.Load())
 	orderedDeltaStats := db.orderedRootDeltaGroupPublishStats()
 	// Ordered-root delta group stats cover calls that entered the DB write
 	// lock, including failed calls. roots_total counts successfully published
@@ -759,6 +762,9 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.publish.ordered_root_delta_group.system_apply_calls_total"] = fmt.Sprintf("%d", orderedDeltaStats.systemApplyCalls)
 	stats["treedb.publish.ordered_root_delta_group.system_apply_ops_total"] = fmt.Sprintf("%d", orderedDeltaStats.systemApplyOps)
 	stats["treedb.publish.ordered_root_delta_group.system_apply_node_loads_total"] = fmt.Sprintf("%d", orderedDeltaStats.systemApplyNodeLoads)
+	stats["treedb.publish.ordered_root_delta_group.install_guard_ns_total"] = fmt.Sprintf("%d", orderedDeltaStats.installGuardNs)
+	stats["treedb.publish.ordered_root_delta_group.install_guard_calls_total"] = fmt.Sprintf("%d", orderedDeltaStats.installGuardCalls)
+	stats["treedb.publish.ordered_root_delta_group.install_guard_failures_total"] = fmt.Sprintf("%d", orderedDeltaStats.installGuardFailures)
 	stats["treedb.publish.ordered_root_delta_group.finalize_ns_total"] = fmt.Sprintf("%d", orderedDeltaStats.finalizeNs)
 	stats["treedb.publish.ordered_root_delta_group.finalize_calls_total"] = fmt.Sprintf("%d", orderedDeltaStats.finalizeCalls)
 	stats["treedb.publish.ordered_root_delta_group.latency_p99_ms"] = fmt.Sprintf("%.3f", float64(orderedDeltaStats.latencyP99)/float64(time.Millisecond))

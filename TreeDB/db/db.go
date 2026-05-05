@@ -217,8 +217,15 @@ type DB struct {
 	orderedRootDeltaGroupSystemApplyCalls                       atomic.Uint64
 	orderedRootDeltaGroupSystemApplyOps                         atomic.Uint64
 	orderedRootDeltaGroupSystemApplyNodeLoads                   atomic.Uint64
+	orderedRootDeltaGroupInstallGuardNs                         atomic.Uint64
+	orderedRootDeltaGroupInstallGuardCalls                      atomic.Uint64
+	orderedRootDeltaGroupInstallGuardFailures                   atomic.Uint64
 	orderedRootDeltaGroupFinalizeNs                             atomic.Uint64
 	orderedRootDeltaGroupFinalizeCalls                          atomic.Uint64
+
+	publishInstallGuardNs       atomic.Uint64
+	publishInstallGuardCalls    atomic.Uint64
+	publishInstallGuardFailures atomic.Uint64
 
 	// R4 warm-publish counters. Warm native apply is used for bounded deltas;
 	// larger or ineligible deltas record an explicit rebuild fallback selection.
@@ -238,6 +245,7 @@ type DB struct {
 	testFailFinalizeCommit        atomic.Bool
 	testBatchCreateHook           func()
 	testOrderedRootPublishHook    func(baseRoot uint64)
+	testInstallGuardHook          func(dbInstallGuardHookEvent) error
 	testSystemRootWarmMaxDeltaOps int
 	// testFailWriteMeta forces writeMeta to fail before mutating the target meta
 	// page so tests can exercise pre-publish cleanup paths.
