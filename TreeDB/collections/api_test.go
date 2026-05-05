@@ -4615,6 +4615,9 @@ func TestBuildBufferedRootDeltaBatchPublishInputsParallelPreservesRootOrderAndTo
 		if ordered[i].PrepareReadOnly || ordered[i].ReadOnlyPrepareWorkerCount != 0 {
 			t.Fatalf("ordered[%d] read-only prepare=%t/%d want false/0", i, ordered[i].PrepareReadOnly, ordered[i].ReadOnlyPrepareWorkerCount)
 		}
+		if ordered[i].ReadOnlyPrepareResult != nil {
+			t.Fatalf("ordered[%d] ReadOnlyPrepareResult=%p want nil by default", i, ordered[i].ReadOnlyPrepareResult)
+		}
 	}
 
 	primaryEntries := ordered[1].Delta.SortedEntries()
@@ -4704,6 +4707,56 @@ func TestBuildBufferedRootOverlayDeltaBatchPublishInputsPreservesColdTombstones(
 	}
 	if entry := cityEntries[0]; string(entry.Key) != "city:old/u1" || entry.Type != batch.OpDelete {
 		t.Fatalf("city entry[0]=%+v want tombstone city:old/u1", entry)
+	}
+}
+
+func TestBuildBufferedRootDeltaBatchPublishInputsReusesReadOnlyPrepareResults(t *testing.T) {
+	const collectionName = "users"
+	primaryName := collectionPrimaryRootName(collectionName)
+	cityName := collectionSecondaryRootName(collectionName, "city")
+
+	primaryTable := newCollectionRunTable(1)
+	setCollectionRunValue(primaryTable, []byte("u1"), []byte(`{"city":"hnl"}`))
+	primaryTable.Freeze()
+
+	cityTable := newCollectionRunTable(1)
+	setCollectionRunValue(cityTable, []byte("city:hnl/u1"), nil)
+	cityTable.Freeze()
+	defer resetCollectionTables([]memtable.Table{primaryTable, cityTable})
+
+	rootNames := []string{primaryName, cityName}
+	rootRuns := map[string][]memtable.Table{
+		primaryName: {primaryTable},
+		cityName:    {cityTable},
+	}
+	rootBaseIDs := map[string]uint64{
+		primaryName: 42,
+		cityName:    43,
+	}
+	rootPolicies := map[string]backenddb.OrderedRootStoragePolicy{
+		primaryName: backenddb.OrderedRootStorageValueLogLeaves,
+		cityName:    backenddb.OrderedRootStoragePagerLeaves,
+	}
+
+	ordered, cleanup, err := buildBufferedRootDeltaBatchPublishInputs(rootNames, rootRuns, rootBaseIDs, rootPolicies, true, 4)
+	if err != nil {
+		t.Fatalf("build buffered root deltas: %v", err)
+	}
+	defer cleanup()
+
+	if got, want := len(ordered), len(rootNames); got != want {
+		t.Fatalf("ordered roots=%d want %d", got, want)
+	}
+	for i := range ordered {
+		if !ordered[i].PrepareReadOnly || ordered[i].ReadOnlyPrepareWorkerCount != 4 {
+			t.Fatalf("ordered[%d] read-only prepare=%t/%d want true/4", i, ordered[i].PrepareReadOnly, ordered[i].ReadOnlyPrepareWorkerCount)
+		}
+		if ordered[i].ReadOnlyPrepareResult == nil {
+			t.Fatalf("ordered[%d] ReadOnlyPrepareResult=nil want reusable result", i)
+		}
+	}
+	if ordered[0].ReadOnlyPrepareResult == ordered[1].ReadOnlyPrepareResult {
+		t.Fatal("ordered roots share one ReadOnlyPrepareResult")
 	}
 }
 
