@@ -460,6 +460,87 @@ func TestOrderedRootDeltaBatchGroupPreparedRootMetadataTracksLeafLogOutput(t *te
 	}
 }
 
+func TestOrderedRootDeltaBatchGroupPreparedRootOutputStatsCountSharedTrackerOnce(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	leafLog := &preparedOutputTestLeafLog{}
+	db.SetLeafPageLog(leafLog)
+
+	deltaTableA := mustFrozenSystemMemtable(t, "root/a", "va")
+	iterA := deltaTableA.NewIterator(nil, nil)
+	deltaA, err := OrderedRootDeltaBatchFromIterator(iterA)
+	_ = iterA.Close()
+	if err != nil {
+		t.Fatalf("OrderedRootDeltaBatchFromIterator A: %v", err)
+	}
+	defer func() { _ = deltaA.Close() }()
+
+	deltaTableB := mustFrozenSystemMemtable(t, "root/b", "vb")
+	iterB := deltaTableB.NewIterator(nil, nil)
+	deltaB, err := OrderedRootDeltaBatchFromIterator(iterB)
+	_ = iterB.Close()
+	if err != nil {
+		t.Fatalf("OrderedRootDeltaBatchFromIterator B: %v", err)
+	}
+	defer func() { _ = deltaB.Close() }()
+
+	beforeStats := db.Stats()
+	_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{
+		{
+			BaseRoot:      0,
+			Delta:         deltaA,
+			StoragePolicy: OrderedRootStorageValueLogLeaves,
+		},
+		{
+			BaseRoot:      0,
+			Delta:         deltaB,
+			StoragePolicy: OrderedRootStorageValueLogLeaves,
+		},
+	}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 2 || rootIDs[0] == 0 || rootIDs[1] == 0 {
+			return nil, errors.New("unexpected root IDs")
+		}
+		return mustFrozenSystemMemtable(t,
+			"sys/collections/users/primary",
+			strconv.FormatUint(rootIDs[0], 10),
+			"sys/collections/users/secondary",
+			strconv.FormatUint(rootIDs[1], 10),
+		).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish ordered root group: %v", err)
+	}
+	if len(rootIDs) != 2 || rootIDs[0] == 0 || rootIDs[1] == 0 {
+		t.Fatalf("root IDs=%v want two nonzero roots", rootIDs)
+	}
+	if len(leafLog.ptrs) == 0 {
+		t.Fatal("publish did not write leaf-log output")
+	}
+
+	afterStats := db.Stats()
+	statDelta := func(name string) uint64 {
+		after := installGuardStatUint(t, afterStats, name)
+		before := installGuardStatUint(t, beforeStats, name)
+		if after < before {
+			t.Fatalf("%s decreased: before=%d after=%d", name, before, after)
+		}
+		return after - before
+	}
+	wantLeafs := uint64(len(leafLog.ptrs))
+	if got := statDelta("treedb.publish.ordered_root_delta_group.prepared_root.output_leaf_log_ptrs_total"); got != wantLeafs {
+		t.Fatalf("output leaf-log ptrs delta=%d want exactly written ptrs %d", got, wantLeafs)
+	}
+	if got := statDelta("treedb.publish.ordered_root_delta_group.prepared_root.installed_output_leaf_log_ptrs_total"); got != wantLeafs {
+		t.Fatalf("installed output leaf-log ptrs delta=%d want exactly written ptrs %d", got, wantLeafs)
+	}
+	if got := statDelta("treedb.publish.ordered_root_delta_group.prepared_root.abandoned_output_leaf_log_ptrs_total"); got != 0 {
+		t.Fatalf("abandoned output leaf-log ptrs delta=%d want 0", got)
+	}
+}
+
 func TestOrderedRootDeltaBatchGroupPreparedRootMetadataRecordsOptimisticBuilderError(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {

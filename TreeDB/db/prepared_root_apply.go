@@ -55,6 +55,8 @@ type preparedRootApply struct {
 type preparedRootApplyGroup struct {
 	baseUserRootID   uint64
 	baseSystemRootID uint64
+	outputPages      uint64
+	outputLeafs      uint64
 	state            preparedRootApplyState
 	applyCount       int
 	inlineApplies    [4]preparedRootApply
@@ -206,6 +208,14 @@ func (group *preparedRootApplyGroup) markPreparedOutputCounts(idx int, rootID ui
 	apply.state = preparedRootApplyStatePrepared
 }
 
+func (group *preparedRootApplyGroup) noteSharedOutputCounts(outputPages, outputLeafs uint64) {
+	if group == nil {
+		return
+	}
+	group.outputPages = outputPages
+	group.outputLeafs = outputLeafs
+}
+
 func (group *preparedRootApplyGroup) markInstalling() {
 	if group == nil {
 		return
@@ -257,18 +267,26 @@ func (stats *preparedRootApplyStats) observeGroup(group *preparedRootApplyGroup)
 			continue
 		}
 		groupStats.roots++
+		outputPages := apply.outputPages
+		outputLeafs := apply.outputLeafs
+		if apply.identity.kind == preparedRootIdentityData {
+			// Data roots in an ordered-root group share one prepared-output
+			// tracker. Count that shared output once at the group level below.
+			outputPages = 0
+			outputLeafs = 0
+		}
 		switch apply.state {
 		case preparedRootApplyStateInstalled:
 			groupStats.installed++
-			groupStats.installedPages += apply.outputPages
-			groupStats.installedLeafs += apply.outputLeafs
+			groupStats.installedPages += outputPages
+			groupStats.installedLeafs += outputLeafs
 		case preparedRootApplyStateAbandoned:
 			groupStats.abandoned++
-			groupStats.abandonedPages += apply.outputPages
-			groupStats.abandonedLeafs += apply.outputLeafs
+			groupStats.abandonedPages += outputPages
+			groupStats.abandonedLeafs += outputLeafs
 		}
-		groupStats.outputPages += apply.outputPages
-		groupStats.outputLeafs += apply.outputLeafs
+		groupStats.outputPages += outputPages
+		groupStats.outputLeafs += outputLeafs
 		plan := apply.plan
 		groupStats.entries += plan.entries
 		groupStats.tombstones += plan.tombstones
@@ -278,6 +296,16 @@ func (stats *preparedRootApplyStats) observeGroup(group *preparedRootApplyGroup)
 	}
 	if groupStats.roots == 0 {
 		return
+	}
+	groupStats.outputPages += group.outputPages
+	groupStats.outputLeafs += group.outputLeafs
+	switch group.state {
+	case preparedRootApplyStateInstalled:
+		groupStats.installedPages += group.outputPages
+		groupStats.installedLeafs += group.outputLeafs
+	case preparedRootApplyStateAbandoned:
+		groupStats.abandonedPages += group.outputPages
+		groupStats.abandonedLeafs += group.outputLeafs
 	}
 	groupStats.groups = 1
 	stats.groups += groupStats.groups
@@ -321,6 +349,8 @@ func clonePreparedRootApplyGroup(src preparedRootApplyGroup) preparedRootApplyGr
 	dst := preparedRootApplyGroup{
 		baseUserRootID:   src.baseUserRootID,
 		baseSystemRootID: src.baseSystemRootID,
+		outputPages:      src.outputPages,
+		outputLeafs:      src.outputLeafs,
 		state:            src.state,
 	}
 	for i := 0; i < src.applyCount; i++ {

@@ -65,8 +65,6 @@ type orderedRootDeltaBatchGroupApplyResult struct {
 	rootID              uint64
 	outputID            preparedOutputID
 	output              *preparedOutputSnapshot
-	outputPages         uint64
-	outputLeafs         uint64
 	pendingRetiredPages []uint64
 	metrics             adaptive.Metrics
 	err                 error
@@ -1471,9 +1469,6 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 		result.pendingRetiredPages = pendingRetiredPages
 		result.metrics = metrics
 		result.err = err
-		if outputTracker != nil {
-			result.outputPages, result.outputLeafs = outputTracker.PreparedOutputCounts()
-		}
 		if includeOutputSnapshot {
 			if outputTracker == nil {
 				return result
@@ -1557,7 +1552,7 @@ func recordOrderedRootDeltaBatchGroupApplyResults(
 			if result.output != nil {
 				preparedGroup.markPreparedOutput(orderedIdx, result.rootID, *result.output)
 			} else {
-				preparedGroup.markPreparedOutputCounts(orderedIdx, result.rootID, result.outputID, result.outputPages, result.outputLeafs)
+				preparedGroup.markPrepared(orderedIdx, result.rootID, result.outputID)
 			}
 		}
 		if rootsObserved != nil {
@@ -1696,6 +1691,8 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			}
 		}
 	}
+	outputPages, outputLeafs := rootTracker.PreparedOutputCounts()
+	preparedGroup.noteSharedOutputCounts(outputPages, outputLeafs)
 	if applyErr := recordOrderedRootDeltaBatchGroupApplyResults(&preparedGroup, rootIDs, rootApplyResults, &nonSystemPendingRetiredPages, &nonSystemMetrics, &phaseStats, &rootsObserved); applyErr != nil {
 		return 0, nil, false, applyErr
 	}
@@ -1911,6 +1908,8 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 			}
 		}
 	}
+	outputPages, outputLeafs := rootTracker.PreparedOutputCounts()
+	preparedGroup.noteSharedOutputCounts(outputPages, outputLeafs)
 	if applyErr := recordOrderedRootDeltaBatchGroupApplyResults(&preparedGroup, rootIDs, rootApplyResults, &pendingRetiredPages, &merged, &phaseStats, &rootsObserved); applyErr != nil {
 		return 0, nil, applyErr
 	}
