@@ -17,9 +17,12 @@ import (
 )
 
 type config struct {
-	RunRoot string
-	OutPath string
-	Title   string
+	RunRoot        string
+	CompareRunRoot string
+	OutPath        string
+	Title          string
+	CurrentLabel   string
+	BaselineLabel  string
 }
 
 type rawEngineRun struct {
@@ -154,7 +157,26 @@ type reportData struct {
 	MongoFullSweep        []mongoSummaryRow
 	MongoLoadModes        []loadModeRow
 	MongoScaling          map[int][]mongoSummaryRow
+	Comparison            *runComparison
 	Warnings              []string
+}
+
+type runComparison struct {
+	BaselineRoot       string
+	CurrentRoot        string
+	BaselineLabel      string
+	CurrentLabel       string
+	BaselineGit        []gitIdentity
+	MongoFullSweepRows []comparisonRow
+	MongoLoadModeRows  []comparisonRow
+	MongoScalingRows   []comparisonRow
+	CollectionRows     []comparisonRow
+	RawEngineRows      []comparisonRow
+}
+
+type comparisonRow struct {
+	Cells   []string
+	Classes map[int]string
 }
 
 func main() {
@@ -185,31 +207,32 @@ func run(args []string) error {
 }
 
 func parseConfig(args []string) (config, error) {
-	cfg := config{Title: "TreeDB Benchmark Run Report"}
+	cfg := config{Title: "TreeDB Benchmark Run Report", CurrentLabel: "current", BaselineLabel: "baseline"}
 	fs := flag.NewFlagSet("benchmark_run_report", flag.ContinueOnError)
 	fs.StringVar(&cfg.RunRoot, "run-root", "", "Root directory containing canonical benchmark run artifacts")
+	fs.StringVar(&cfg.CompareRunRoot, "compare-run-root", "", "Optional baseline run root to compare against -run-root")
+	fs.StringVar(&cfg.CompareRunRoot, "baseline-run-root", "", "Alias for -compare-run-root")
 	fs.StringVar(&cfg.OutPath, "out", "", "HTML report output path; defaults to <run-root>/deep_report.html")
 	fs.StringVar(&cfg.Title, "title", cfg.Title, "Report title")
+	fs.StringVar(&cfg.CurrentLabel, "current-label", cfg.CurrentLabel, "Label for -run-root when rendering comparison deltas")
+	fs.StringVar(&cfg.BaselineLabel, "baseline-label", cfg.BaselineLabel, "Label for -compare-run-root when rendering comparison deltas")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
 	if cfg.RunRoot == "" {
 		return config{}, errors.New("-run-root is required")
 	}
-	abs, err := filepath.Abs(cfg.RunRoot)
+	runRoot, err := validateRunRoot("-run-root", cfg.RunRoot)
 	if err != nil {
 		return config{}, err
 	}
-	cfg.RunRoot = abs
-	info, err := os.Stat(cfg.RunRoot)
-	if err != nil {
-		return config{}, fmt.Errorf("-run-root %q: %w", cfg.RunRoot, err)
-	}
-	if !info.IsDir() {
-		return config{}, fmt.Errorf("-run-root %q is not a directory", cfg.RunRoot)
-	}
-	if _, err := os.ReadDir(cfg.RunRoot); err != nil {
-		return config{}, fmt.Errorf("-run-root %q is not readable: %w", cfg.RunRoot, err)
+	cfg.RunRoot = runRoot
+	if cfg.CompareRunRoot != "" {
+		compareRoot, err := validateRunRoot("-compare-run-root", cfg.CompareRunRoot)
+		if err != nil {
+			return config{}, err
+		}
+		cfg.CompareRunRoot = compareRoot
 	}
 	if cfg.OutPath == "" {
 		cfg.OutPath = filepath.Join(cfg.RunRoot, "deep_report.html")
@@ -217,7 +240,44 @@ func parseConfig(args []string) (config, error) {
 	return cfg, nil
 }
 
+func validateRunRoot(flagName, path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", fmt.Errorf("%s %q: %w", flagName, abs, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%s %q is not a directory", flagName, abs)
+	}
+	if _, err := os.ReadDir(abs); err != nil {
+		return "", fmt.Errorf("%s %q is not readable: %w", flagName, abs, err)
+	}
+	return abs, nil
+}
+
 func loadReportData(cfg config) (reportData, error) {
+	data, err := loadSingleReportData(cfg)
+	if err != nil {
+		return reportData{}, err
+	}
+	if cfg.CompareRunRoot != "" {
+		baselineCfg := cfg
+		baselineCfg.RunRoot = cfg.CompareRunRoot
+		baselineCfg.CompareRunRoot = ""
+		baselineCfg.OutPath = ""
+		baseline, err := loadSingleReportData(baselineCfg)
+		if err != nil {
+			return reportData{}, err
+		}
+		data.Comparison = buildRunComparison(data, baseline)
+	}
+	return data, nil
+}
+
+func loadSingleReportData(cfg config) (reportData, error) {
 	data := reportData{
 		Config:       cfg,
 		GeneratedAt:  time.Now().UTC(),
@@ -830,6 +890,7 @@ func renderHTML(data reportData) string {
 		}
 		b.WriteString("</ul></section>\n")
 	}
+	renderRunComparison(&b, data.Comparison)
 	renderMongoFullSweep(&b, data.MongoFullSweep)
 	renderMongoLoadModes(&b, data.MongoLoadModes)
 	renderMongoScaling(&b, data.MongoScaling)
@@ -847,6 +908,9 @@ func reportNav(data reportData) string {
 	var items []navItem
 	if len(data.MongoFullSweep) > 0 {
 		items = append(items, navItem{Href: "#mongo-full", Label: "Mongo full sweep"})
+	}
+	if comparisonHasRows(data.Comparison) {
+		items = append(items, navItem{Href: "#compare", Label: "Compare runs"})
 	}
 	if len(data.MongoLoadModes) > 0 {
 		items = append(items, navItem{Href: "#mongo-load", Label: "Load modes"})
@@ -909,12 +973,334 @@ tr:hover td { background:#fafcff; }
 details { margin:12px 0; }
 summary { cursor:pointer; color:var(--blue); font-weight:700; }
 .warn { border-color:#e6c36a; background:#fff8e1; }
+.compare-card { border:1px solid var(--line); border-radius:8px; padding:12px; background:#fbfdff; }
+.compare-card strong { display:block; margin-bottom:4px; }
+.delta-good { color:#116329; font-weight:700; }
+.delta-bad { color:#a61b1b; font-weight:700; }
+.delta-flat { color:#475569; font-weight:700; }
 .legend { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; color:var(--muted); justify-content:flex-end; text-align:right; }
 .chart-head .legend { max-width:72%; }
 .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
 @media (max-width: 980px) { :root { --page-gutter:10px; } section { width:calc(100% - 20px); } .chart-grid { grid-template-columns:1fr; } header { position:static; } }
 </style>
 `
+}
+
+func buildRunComparison(current, baseline reportData) *runComparison {
+	comparison := &runComparison{
+		BaselineRoot:       baseline.Config.RunRoot,
+		CurrentRoot:        current.Config.RunRoot,
+		BaselineLabel:      current.Config.BaselineLabel,
+		CurrentLabel:       current.Config.CurrentLabel,
+		BaselineGit:        baseline.Git,
+		MongoFullSweepRows: compareMongoRows(current.MongoFullSweep, baseline.MongoFullSweep, false),
+		MongoLoadModeRows:  compareMongoLoadModes(current.MongoLoadModes, baseline.MongoLoadModes),
+		MongoScalingRows:   compareMongoRows(flattenMongoScaling(current.MongoScaling), flattenMongoScaling(baseline.MongoScaling), true),
+		CollectionRows:     compareCollections(current.Collections, baseline.Collections),
+		RawEngineRows:      compareRawEngine(current.RawEngine, baseline.RawEngine),
+	}
+	if !comparisonHasRows(comparison) {
+		return nil
+	}
+	return comparison
+}
+
+func comparisonHasRows(comparison *runComparison) bool {
+	return comparison != nil && (len(comparison.MongoFullSweepRows) > 0 ||
+		len(comparison.MongoLoadModeRows) > 0 ||
+		len(comparison.MongoScalingRows) > 0 ||
+		len(comparison.CollectionRows) > 0 ||
+		len(comparison.RawEngineRows) > 0)
+}
+
+func renderRunComparison(b *strings.Builder, comparison *runComparison) {
+	if !comparisonHasRows(comparison) {
+		return
+	}
+	b.WriteString("<section id=\"compare\"><h2>Run Comparison</h2>")
+	b.WriteString("<p class=\"subtle\">Comparing <code>" + esc(comparison.CurrentRoot) + "</code> against baseline <code>" + esc(comparison.BaselineRoot) + "</code>. Throughput deltas use higher-is-better coloring; bytes/doc deltas use lower-is-better coloring.</p>")
+	if len(comparison.BaselineGit) > 0 {
+		b.WriteString("<p class=\"subtle\">Baseline git identity:")
+		for _, item := range comparison.BaselineGit {
+			b.WriteString(" <code>" + esc(item.Label) + "=" + esc(item.Hash) + "</code>")
+		}
+		b.WriteString("</p>")
+	}
+	b.WriteString("<div class=\"grid\">")
+	renderComparisonCard(b, "Mongo full sweep", comparison.MongoFullSweepRows)
+	renderComparisonCard(b, "Load modes", comparison.MongoLoadModeRows)
+	renderComparisonCard(b, "Scaling", comparison.MongoScalingRows)
+	renderComparisonCard(b, "Collections", comparison.CollectionRows)
+	renderComparisonCard(b, "Raw engine", comparison.RawEngineRows)
+	b.WriteString("</div>")
+	if len(comparison.MongoFullSweepRows) > 0 {
+		b.WriteString("<details open><summary>Mongo full-sweep deltas</summary>")
+		writeComparisonTable(b, []string{"docs", "indexes", "TreeDB config", "Mongo config", "phase", comparison.BaselineLabel + " TreeDB ops/s", comparison.CurrentLabel + " TreeDB ops/s", "TreeDB delta", comparison.BaselineLabel + " ratio", comparison.CurrentLabel + " ratio", comparison.CurrentLabel + " TreeDB physical", comparison.CurrentLabel + " Mongo physical"}, comparison.MongoFullSweepRows, numericColumns(0, 1, 5, 6, 7, 8, 9, 10, 11))
+		b.WriteString("</details>")
+	}
+	if len(comparison.MongoLoadModeRows) > 0 {
+		b.WriteString("<details><summary>Load-mode deltas</summary>")
+		writeComparisonTable(b, []string{"indexes", "target", "config", comparison.BaselineLabel + " docs/s", comparison.CurrentLabel + " docs/s", "delta", comparison.BaselineLabel + " physical", comparison.CurrentLabel + " physical"}, comparison.MongoLoadModeRows, numericColumns(0, 3, 4, 5, 6, 7))
+		b.WriteString("</details>")
+	}
+	if len(comparison.MongoScalingRows) > 0 {
+		b.WriteString("<details open><summary>Dedicated scaling deltas</summary>")
+		writeComparisonTable(b, []string{"docs", "indexes", "TreeDB config", "Mongo config", "phase", comparison.BaselineLabel + " TreeDB ops/s", comparison.CurrentLabel + " TreeDB ops/s", "TreeDB delta", comparison.BaselineLabel + " ratio", comparison.CurrentLabel + " ratio", comparison.CurrentLabel + " TreeDB physical", comparison.CurrentLabel + " Mongo physical"}, comparison.MongoScalingRows, numericColumns(0, 1, 5, 6, 7, 8, 9, 10, 11))
+		b.WriteString("</details>")
+	}
+	if len(comparison.CollectionRows) > 0 {
+		b.WriteString("<details><summary>Collection deltas</summary>")
+		writeComparisonTable(b, []string{"indexes", "engine", "format", "phase", "maintenance", comparison.BaselineLabel + " docs/s", comparison.CurrentLabel + " docs/s", "docs delta", comparison.BaselineLabel + " B/doc", comparison.CurrentLabel + " B/doc", "B/doc delta"}, comparison.CollectionRows, numericColumns(0, 5, 6, 7, 8, 9, 10))
+		b.WriteString("</details>")
+	}
+	if len(comparison.RawEngineRows) > 0 {
+		b.WriteString("<details><summary>Raw engine deltas</summary>")
+		writeComparisonTable(b, []string{"profile", "checkpoint mode", "test", comparison.BaselineLabel + " ops/s", comparison.CurrentLabel + " ops/s", "delta"}, comparison.RawEngineRows, numericColumns(3, 4, 5))
+		b.WriteString("</details>")
+	}
+	b.WriteString("</section>\n")
+}
+
+func renderComparisonCard(b *strings.Builder, title string, rows []comparisonRow) {
+	if len(rows) == 0 {
+		return
+	}
+	good, flat, bad := comparisonDeltaCounts(rows)
+	total := good + flat + bad
+	b.WriteString("<div class=\"compare-card\"><strong>" + esc(title) + "</strong>")
+	b.WriteString("<span class=\"delta-good\">" + strconv.Itoa(good) + " better</span>")
+	b.WriteString(" / <span class=\"delta-flat\">" + strconv.Itoa(flat) + " flat</span>")
+	b.WriteString(" / <span class=\"delta-bad\">" + strconv.Itoa(bad) + " worse</span>")
+	b.WriteString("<p class=\"subtle\">" + strconv.Itoa(total) + " matched deltas across " + strconv.Itoa(len(rows)) + " rows</p></div>")
+}
+
+func comparisonDeltaCounts(rows []comparisonRow) (good, flat, bad int) {
+	for _, row := range rows {
+		for _, className := range row.Classes {
+			switch className {
+			case "delta-good":
+				good++
+			case "delta-bad":
+				bad++
+			case "delta-flat":
+				flat++
+			}
+		}
+	}
+	return good, flat, bad
+}
+
+func compareRawEngine(current, baseline []rawEngineRun) []comparisonRow {
+	base := make(map[string]rawEngineRun, len(baseline))
+	for _, run := range baseline {
+		base[rawRunKey(run)] = run
+	}
+	var rows []comparisonRow
+	for _, cur := range current {
+		prev, ok := base[rawRunKey(cur)]
+		if !ok {
+			continue
+		}
+		tests := make([]string, 0, len(cur.Results))
+		for test := range cur.Results {
+			if _, ok := prev.Results[test]; ok {
+				tests = append(tests, test)
+			}
+		}
+		sort.Slice(tests, func(i, j int) bool {
+			return rawTestOrder(tests[i]) < rawTestOrder(tests[j])
+		})
+		for _, test := range tests {
+			old, now := prev.Results[test], cur.Results[test]
+			rows = append(rows, comparisonRow{
+				Cells: []string{cur.Profile, cur.Checkpoint, test, fmtOps(old), fmtOps(now), fmtDelta(old, now)},
+				Classes: map[int]string{
+					5: deltaClass(old, now, true),
+				},
+			})
+		}
+	}
+	return rows
+}
+
+func rawRunKey(run rawEngineRun) string {
+	return run.Profile + "\x00" + run.Checkpoint
+}
+
+type mongoCompareKey struct {
+	Documents        int
+	SecondaryIndexes int
+	RangeIndex       bool
+	RangeMode        string
+	TreeDBConfig     string
+	MongoConfig      string
+	Phase            string
+}
+
+func compareMongoRows(current, baseline []mongoSummaryRow, anyScope bool) []comparisonRow {
+	base := make(map[mongoCompareKey]mongoSummaryRow, len(baseline))
+	for _, row := range baseline {
+		base[mongoComparisonKey(row, anyScope)] = row
+	}
+	var rows []comparisonRow
+	for _, cur := range current {
+		prev, ok := base[mongoComparisonKey(cur, anyScope)]
+		if !ok {
+			continue
+		}
+		rows = append(rows, comparisonRow{
+			Cells: []string{
+				strconv.Itoa(cur.Documents),
+				strconv.Itoa(cur.SecondaryIndexes),
+				cur.TreeDBConfig,
+				emptyDash(cur.MongoConfig),
+				cur.Phase,
+				fmtOps(prev.TreeDBOpsSec),
+				fmtOps(cur.TreeDBOpsSec),
+				fmtDelta(prev.TreeDBOpsSec, cur.TreeDBOpsSec),
+				fmtRatio(prev.TreeDBToMongoRatio),
+				fmtRatio(cur.TreeDBToMongoRatio),
+				fmtBytes(cur.TreeDBPhysicalBytes),
+				fmtBytes(cur.MongoPhysicalBytes),
+			},
+			Classes: map[int]string{
+				7: deltaClass(prev.TreeDBOpsSec, cur.TreeDBOpsSec, true),
+			},
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return strings.Join(rows[i].Cells[:5], "\x00") < strings.Join(rows[j].Cells[:5], "\x00")
+	})
+	return rows
+}
+
+func mongoComparisonKey(row mongoSummaryRow, anyScope bool) mongoCompareKey {
+	key := mongoCompareKey{
+		Documents:        row.Documents,
+		SecondaryIndexes: row.SecondaryIndexes,
+		RangeIndex:       row.RangeIndex,
+		RangeMode:        row.RangeMode,
+		TreeDBConfig:     row.TreeDBConfig,
+		MongoConfig:      row.MongoConfig,
+		Phase:            row.Phase,
+	}
+	if anyScope {
+		key.RangeIndex = false
+		key.RangeMode = ""
+	}
+	return key
+}
+
+func flattenMongoScaling(byIndex map[int][]mongoSummaryRow) []mongoSummaryRow {
+	var rows []mongoSummaryRow
+	indexes := make([]int, 0, len(byIndex))
+	for idx := range byIndex {
+		indexes = append(indexes, idx)
+	}
+	sort.Ints(indexes)
+	for _, idx := range indexes {
+		rows = append(rows, byIndex[idx]...)
+	}
+	return rows
+}
+
+func compareMongoLoadModes(current, baseline []loadModeRow) []comparisonRow {
+	base := make(map[string]loadModeRow, len(baseline))
+	for _, row := range baseline {
+		base[loadModeCompareKey(row)] = row
+	}
+	var rows []comparisonRow
+	for _, cur := range current {
+		prev, ok := base[loadModeCompareKey(cur)]
+		if !ok {
+			continue
+		}
+		rows = append(rows, comparisonRow{
+			Cells: []string{
+				strconv.Itoa(cur.Indexes),
+				cur.Target,
+				cur.Config,
+				fmtOps(prev.OpsPerSec),
+				fmtOps(cur.OpsPerSec),
+				fmtDelta(prev.OpsPerSec, cur.OpsPerSec),
+				fmtBytes(float64(prev.PhysicalBytes)),
+				fmtBytes(float64(cur.PhysicalBytes)),
+			},
+			Classes: map[int]string{
+				5: deltaClass(prev.OpsPerSec, cur.OpsPerSec, true),
+			},
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return strings.Join(rows[i].Cells[:3], "\x00") < strings.Join(rows[j].Cells[:3], "\x00")
+	})
+	return rows
+}
+
+func loadModeCompareKey(row loadModeRow) string {
+	return strconv.Itoa(row.Indexes) + "\x00" + row.Target + "\x00" + row.Config
+}
+
+type collectionCompareKey struct {
+	ConfigName      string
+	Engine          string
+	Format          string
+	IndexCount      int
+	Phase           string
+	MaintenanceMode string
+	MeasurementKind string
+}
+
+func compareCollections(current, baseline []collectionRow) []comparisonRow {
+	base := make(map[collectionCompareKey]collectionRow, len(baseline))
+	for _, row := range baseline {
+		base[collectionComparisonKey(row)] = row
+	}
+	var rows []comparisonRow
+	for _, cur := range current {
+		prev, ok := base[collectionComparisonKey(cur)]
+		if !ok {
+			continue
+		}
+		if prev.DocsPerSec == 0 && cur.DocsPerSec == 0 && prev.BytesPerDoc == 0 && cur.BytesPerDoc == 0 {
+			continue
+		}
+		row := comparisonRow{
+			Cells: []string{
+				strconv.Itoa(cur.IndexCount),
+				cur.Engine,
+				cur.Format,
+				cur.Phase,
+				emptyDash(cur.MaintenanceMode),
+				fmtOps(prev.DocsPerSec),
+				fmtOps(cur.DocsPerSec),
+				fmtDelta(prev.DocsPerSec, cur.DocsPerSec),
+				fmtFloat(prev.BytesPerDoc, 1),
+				fmtFloat(cur.BytesPerDoc, 1),
+				fmtDelta(prev.BytesPerDoc, cur.BytesPerDoc),
+			},
+			Classes: make(map[int]string),
+		}
+		row.Classes[7] = deltaClass(prev.DocsPerSec, cur.DocsPerSec, true)
+		row.Classes[10] = deltaClass(prev.BytesPerDoc, cur.BytesPerDoc, false)
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return strings.Join(rows[i].Cells[:5], "\x00") < strings.Join(rows[j].Cells[:5], "\x00")
+	})
+	return rows
+}
+
+func collectionComparisonKey(row collectionRow) collectionCompareKey {
+	return collectionCompareKey{
+		ConfigName:      row.ConfigName,
+		Engine:          row.Engine,
+		Format:          row.Format,
+		IndexCount:      row.IndexCount,
+		Phase:           row.Phase,
+		MaintenanceMode: row.MaintenanceMode,
+		MeasurementKind: row.MeasurementKind,
+	}
 }
 
 func renderRawEngine(b *strings.Builder, rows []rawEngineRun) {
@@ -2179,6 +2565,41 @@ func writeTable(b *strings.Builder, headers []string, rows [][]string, numeric m
 	b.WriteString("</tbody></table></div>")
 }
 
+func writeComparisonTable(b *strings.Builder, headers []string, rows []comparisonRow, numeric map[int]bool) {
+	b.WriteString("<div class=\"table-wrap\"><table><thead><tr>")
+	for i, h := range headers {
+		cls := ""
+		if numeric[i] {
+			cls = " class=\"num\""
+		}
+		b.WriteString("<th" + cls + ">" + esc(h) + "</th>")
+	}
+	b.WriteString("</tr></thead><tbody>")
+	for _, row := range rows {
+		b.WriteString("<tr>")
+		for i := range headers {
+			value := "-"
+			if i < len(row.Cells) {
+				value = row.Cells[i]
+			}
+			classes := []string{}
+			if numeric[i] {
+				classes = append(classes, "num")
+			}
+			if cls := row.Classes[i]; cls != "" {
+				classes = append(classes, cls)
+			}
+			classAttr := ""
+			if len(classes) > 0 {
+				classAttr = " class=\"" + esc(strings.Join(classes, " ")) + "\""
+			}
+			b.WriteString("<td" + classAttr + ">" + esc(value) + "</td>")
+		}
+		b.WriteString("</tr>")
+	}
+	b.WriteString("</tbody></table></div>")
+}
+
 func numericColumns(indexes ...int) map[int]bool {
 	out := make(map[int]bool)
 	if len(indexes) == 2 && indexes[0] <= indexes[1] {
@@ -2212,6 +2633,40 @@ func fmtRatio(v float64) string {
 		return "-"
 	}
 	return fmt.Sprintf("%.2fx", v)
+}
+
+func fmtDelta(old, current float64) string {
+	pct, ok := deltaPercent(old, current)
+	if !ok {
+		return "-"
+	}
+	return fmt.Sprintf("%+.1f%%", pct)
+}
+
+func deltaClass(old, current float64, higherIsBetter bool) string {
+	pct, ok := deltaPercent(old, current)
+	if !ok {
+		return ""
+	}
+	const threshold = 2.0
+	if math.Abs(pct) < threshold {
+		return "delta-flat"
+	}
+	improved := pct > 0
+	if !higherIsBetter {
+		improved = pct < 0
+	}
+	if improved {
+		return "delta-good"
+	}
+	return "delta-bad"
+}
+
+func deltaPercent(old, current float64) (float64, bool) {
+	if old == 0 || current == 0 {
+		return 0, false
+	}
+	return (current/old - 1) * 100, true
 }
 
 func fmtBytes(v float64) string {

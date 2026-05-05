@@ -195,6 +195,32 @@ For TreeDB runs, `benchprof_results.json` also preserves selected TreeDB stats
 under `runs[].treedb_stats`, including ordered-root/root-apply and cache
 counters used by raw-engine review gates.
 
+## Full Run HTML Reports
+
+`benchmark_run_report` assembles the canonical raw-engine, collection/SQLite,
+Mongo gateway, load-mode, and scaling artifacts from a run root into one HTML
+report:
+
+```bash
+go run ./cmd/benchmark_run_report \
+  -run-root /tmp/gomap_candidate_run \
+  -out /tmp/gomap_candidate_run/deep_report.html
+```
+
+To compare two complete run roots, pass the older or control run as
+`-compare-run-root`. The report adds a Run Comparison section with matched-row
+deltas for raw engine throughput, Mongo full sweep, Mongo load modes, dedicated
+reader/writer scaling, and collection disk/throughput rows:
+
+```bash
+go run ./cmd/benchmark_run_report \
+  -run-root /tmp/gomap_candidate_run \
+  -compare-run-root /tmp/gomap_control_run \
+  -current-label candidate \
+  -baseline-label control \
+  -out /tmp/gomap_candidate_run/deep_report.html
+```
+
 ## Notes
 
 TreeDB is a cached engine (memtable + background flush). If you run long write-heavy phases and then measure `random_read`/scans immediately, the results can be dominated by background flush work (“flush debt”).
