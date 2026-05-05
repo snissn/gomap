@@ -6318,6 +6318,7 @@ type DB struct {
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.
 	memtables                        atomic.Pointer[memtableView]
+	snapshotPool                     sync.Pool
 	rootDomainVersion                atomic.Uint64
 	rootPointStates                  []rootDomainState
 	rootSystemState                  rootDomainState

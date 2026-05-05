@@ -77,6 +77,25 @@ type backendSnapshotProvider interface {
 	AcquireSnapshot() *backenddb.Snapshot
 }
 
+func (db *DB) getSnapshotWrapper() *Snapshot {
+	if db == nil {
+		return &Snapshot{}
+	}
+	if v := db.snapshotPool.Get(); v != nil {
+		if snap, ok := v.(*Snapshot); ok && snap != nil {
+			return snap
+		}
+	}
+	return &Snapshot{}
+}
+
+func (db *DB) putSnapshotWrapper(snap *Snapshot) {
+	if db == nil || snap == nil {
+		return
+	}
+	db.snapshotPool.Put(snap)
+}
+
 // AcquireSnapshot returns a cached snapshot that includes queued memtable writes.
 func (db *DB) AcquireSnapshot() *Snapshot {
 	if db == nil || db.backend == nil || db.closing.Load() {
@@ -166,7 +185,10 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		return nil
 	}
 
-	snap := &Snapshot{db: db, view: view, backend: backendSnap}
+	snap := db.getSnapshotWrapper()
+	snap.db = db
+	snap.view = view
+	snap.backend = backendSnap
 	snap.backendRoot = backendSnapshotLookup{db: db, snapshot: backendSnap}
 	snap.backendRootOK = true
 	if state := backendSnap.State(); state != nil {
@@ -184,6 +206,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	if snap.publishedRoots == nil {
 		db.rootPublishStats.backendFallbacks.Add(1)
 	}
+	snap.closed.Store(false)
 	return snap
 }
 
@@ -209,6 +232,7 @@ func (s *Snapshot) Close() error {
 		return nil
 	}
 
+	db := s.db
 	var err error
 	if s.backend != nil {
 		err = s.backend.Close()
@@ -228,6 +252,7 @@ func (s *Snapshot) Close() error {
 	s.backendSystemOK = false
 	s.rootVersion = 0
 	s.db = nil
+	db.putSnapshotWrapper(s)
 	return err
 }
 

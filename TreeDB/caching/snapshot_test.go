@@ -207,8 +207,8 @@ func TestAcquireSnapshot_AllocsBoundedAfterWarmPath(t *testing.T) {
 			t.Fatalf("Close: %v", err)
 		}
 	})
-	if allocs > 1.1 {
-		t.Fatalf("AcquireSnapshot allocs/run=%f, want <= 1.1 after warm path", allocs)
+	if allocs > 0.1 {
+		t.Fatalf("AcquireSnapshot allocs/run=%f, want <= 0.1 after warm path", allocs)
 	}
 }
 
