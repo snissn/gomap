@@ -162,7 +162,9 @@ unique checks, and update/delete planning must merge write-domain state with
 newest-wins shadowing: current mutable runs, queued immutable flush units,
 active in-flight async publishing units, then persisted roots. The active async
 publish uses a coalesced flush batch that preserves original FIFO unit
-boundaries while using a mechanical merged view for ordered-root publish.
+boundaries. Ordered-root publish uses either the mechanical merged view or a
+safe semantic effective view for non-unique secondary-index update chains; raw
+FIFO units remain the source for visibility, ownership, and requeue behavior.
 
 `BufferedIndexedAsyncFlush` is a throughput feature, not a durable-at-ack
 mutation log. The current contract is flush-boundary durable: callers may treat

@@ -61,8 +61,10 @@ published by a background worker.
 
 The async worker may move queued immutable units into one active coalesced flush
 batch before root publication completes. The batch preserves the original FIFO
-unit boundaries and uses a mechanical merged view only for ordered-root publish.
-Active publishing units remain visible to reads, unique checks,
+unit boundaries. Ordered-root publish uses either the mechanical merged view or
+a narrower semantic effective view for proven-safe non-unique secondary-index
+update chains; raw FIFO units remain the visibility, ownership, and requeue
+source. Active publishing units remain visible to reads, unique checks,
 schema-change barriers, and explicit flush barriers.
 
 `BufferedIndexedAsyncFlushMaxQueuedUnits` bounds queued immutable flush units.
