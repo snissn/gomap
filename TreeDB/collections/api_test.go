@@ -4948,6 +4948,7 @@ func TestCollectionIndexedWriteMemtablesAsyncBackpressureWaitsForPublishingUnit(
 	}
 
 	backpressureDone := make(chan error, 1)
+	waitEntered, releaseWait := collectionWaitIndexedAsyncFlushGateForTest(t)
 	go func() {
 		col.writeDomain.mu.Lock()
 		_, _, _, err := col.flushBufferedIndexedAfterThresholdLocked(col.writeDomain, CollectionOptions{
@@ -4959,17 +4960,14 @@ func TestCollectionIndexedWriteMemtablesAsyncBackpressureWaitsForPublishingUnit(
 		col.writeDomain.mu.Unlock()
 		backpressureDone <- err
 	}()
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if mgr.StatsSnapshot().IndexedAsyncFlushBackpressure > 0 {
-			break
-		}
-		select {
-		case err := <-backpressureDone:
-			t.Fatalf("backpressure flush returned before in-flight async publish drained: %v", err)
-		case <-time.After(time.Millisecond):
-		}
+	select {
+	case <-waitEntered:
+	case err := <-backpressureDone:
+		t.Fatalf("backpressure flush returned before in-flight async publish drained: %v", err)
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("timed out waiting for backpressure flush to wait on in-flight async publish")
 	}
+	releaseWait()
 	if got := mgr.StatsSnapshot().IndexedAsyncFlushBackpressure; got == 0 {
 		t.Fatal("async backpressure did not wait for in-flight publishing unit")
 	}
