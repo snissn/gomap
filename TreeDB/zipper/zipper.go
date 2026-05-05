@@ -149,6 +149,8 @@ const (
 
 	mergeInternalMinParallelChildren         = 8
 	mergeInternalMinParallelOps              = 1024
+	mergeInternalMaintenanceMinParallelOps   = 4096
+	mergeInternalOuterLeafLogMinParallelOps  = 4096
 	mergeInternalHighPressureMinChildren     = 16
 	mergeInternalHighPressureMinOps          = 16 * 1024
 	mergeInternalCriticalPressureMinChildren = 32
@@ -758,7 +760,7 @@ func internalMergeParallelThresholds(maintenance bool, pressure ParallelMergePre
 	minChildren = mergeInternalMinParallelChildren
 	minOps = mergeInternalMinParallelOps
 	if maintenance {
-		return minChildren, minOps
+		return minChildren, mergeInternalMaintenanceMinParallelOps
 	}
 	switch pressure {
 	case ParallelMergePressureCritical:
@@ -2267,6 +2269,9 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			// extra recursive fan-out on the restore/fast path.
 			useParallel = shouldUseParallelInternalMerge(int(count), len(ops), gomaxprocs, maintenance, pressure)
 		}
+	}
+	if useParallel && z != nil && z.outerLeavesInValueLog && len(ops) < mergeInternalOuterLeafLogMinParallelOps {
+		useParallel = false
 	}
 
 	copyKeys := oldNode.InternalBaseDeltaEnabled()
