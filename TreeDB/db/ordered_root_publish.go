@@ -728,10 +728,17 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 		pooledResult = acquireOrderedRootReadOnlyPrepareResult()
 		applyOptions.ReadOnlyPrepare = pooledResult.ReuseOptions()
 	}
+	if opts.applyOptions.PrepareReadOnly && opts.readOnlyPrepareAttempted != nil {
+		*opts.readOnlyPrepareAttempted = true
+	}
 	newRoot, retired, metrics, readOnlyPrepare, readOnlyPrepareNs, err := applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, applyOptions)
 	if opts.applyOptions.PrepareReadOnly && opts.readOnlyPrepareSummary != nil {
 		summary := readOnlyPrepare.LeafSpanSummary()
 		*opts.readOnlyPrepareSummary = summary
+	}
+	if opts.applyOptions.PrepareReadOnly && opts.readOnlyPrepareWorkerSummary != nil {
+		summary := readOnlyPrepare.LeafSpanWorkerRangeSummary(opts.readOnlyPrepareWorkerCount)
+		*opts.readOnlyPrepareWorkerSummary = summary
 	}
 	if opts.readOnlyPrepareCallerResult != nil {
 		*opts.readOnlyPrepareCallerResult = readOnlyPrepare
