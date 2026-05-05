@@ -1599,6 +1599,71 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_SerializedColdB
 	}
 }
 
+func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_ColdSystemRootPreservesDeletes(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := delta.Set([]byte("doc/u1"), []byte("document")); err != nil {
+		t.Fatalf("set doc/u1: %v", err)
+	}
+	defer func() { _ = delta.Close() }()
+	systemDelta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := systemDelta.Delete([]byte("sys/collections/users/deleted")); err != nil {
+		t.Fatalf("delete system descriptor: %v", err)
+	}
+	defer func() { _ = systemDelta.Close() }()
+
+	idx := db.idx.Load()
+	oldState := db.state.Load()
+	if idx == nil || oldState == nil {
+		t.Fatal("expected initialized DB state")
+	}
+	// Open installs the normal format/system root. This regression targets the
+	// serialized batch-group cold system-root branch directly.
+	state := *oldState
+	state.SystemRootPageID = 0
+	db.mu.Lock()
+	db.meta.SystemRootPageID = 0
+	db.mu.Unlock()
+	db.state.Store(&state)
+	db.publishSnapshotView(idx, &state, db.valueLogManager)
+
+	newSystemRoot, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+		BaseRoot: 0,
+		Delta:    delta,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 || rootIDs[0] == 0 {
+			return nil, errors.New("unexpected cold root ID")
+		}
+		return newOrderedRootDeltaBatchIterator(systemDelta, true), nil
+	})
+	if err != nil {
+		t.Fatalf("publish cold system root tombstone: %v", err)
+	}
+	if newSystemRoot == 0 || len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("newSystemRoot=%d rootIDs=%v, want non-zero roots", newSystemRoot, rootIDs)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	it, err := snap.IteratorAtRootWithOptions(newSystemRoot, []byte("sys/collections/users/deleted"), nil, IteratorOptions{IncludeTombstones: true})
+	if err != nil {
+		t.Fatalf("IteratorAtRootWithOptions: %v", err)
+	}
+	defer func() { _ = it.Close() }()
+	if !it.Valid() || !bytes.Equal(it.UnsafeKey(), []byte("sys/collections/users/deleted")) || !it.IsDeleted() {
+		t.Fatalf("iterator valid/key/deleted=%v/%q/%v, want system tombstone", it.Valid(), it.UnsafeKey(), it.Valid() && it.IsDeleted())
+	}
+}
+
 type orderedRootDeltaBatchGroupTestAllocator struct {
 	delegate interface {
 		Alloc(uint64) (uint64, error)

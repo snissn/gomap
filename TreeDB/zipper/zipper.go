@@ -56,6 +56,12 @@ var outerLeafBuildPagePool = sync.Pool{
 	},
 }
 
+var clonedZipperApplyScratchPool = sync.Pool{
+	New: func() any {
+		return newMergeScratch()
+	},
+}
+
 func getLeafPageScratch() []byte {
 	buf, _ := leafPageScratchPool.Get().([]byte)
 	if cap(buf) != page.PageSize {
@@ -110,6 +116,8 @@ type Zipper struct {
 
 	scratchMu    sync.Mutex
 	applyScratch *mergeScratch
+
+	pooledApplyScratch bool
 }
 
 type ParallelMergePressureLevel uint8
@@ -606,6 +614,14 @@ func (z *Zipper) acquireApplyScratch() *mergeScratch {
 	if z == nil {
 		return newMergeScratch()
 	}
+	if z.pooledApplyScratch {
+		s, _ := clonedZipperApplyScratchPool.Get().(*mergeScratch)
+		if s == nil {
+			s = newMergeScratch()
+		}
+		s.reset()
+		return s
+	}
 	z.scratchMu.Lock()
 	s := z.applyScratch
 	z.applyScratch = nil
@@ -622,6 +638,10 @@ func (z *Zipper) releaseApplyScratch(s *mergeScratch) {
 		return
 	}
 	s.reset()
+	if z.pooledApplyScratch {
+		clonedZipperApplyScratchPool.Put(s)
+		return
+	}
 	z.scratchMu.Lock()
 	if z.applyScratch == nil {
 		z.applyScratch = s
@@ -650,6 +670,7 @@ func (z *Zipper) CloneWithAllocator(a PageAllocator) *Zipper {
 		adaptiveLeafEncoding:      z.adaptiveLeafEncoding,
 		maintenanceOpsPerCoalesce: z.maintenanceOpsPerCoalesce,
 		parallelMergePressure:     z.parallelMergePressure,
+		pooledApplyScratch:        true,
 	}
 }
 
