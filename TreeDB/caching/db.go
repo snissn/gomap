@@ -25858,19 +25858,75 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 
 type debugIterator struct {
 	merging.Iterator
-	queueLen    int
-	sourcesUsed int
+	queueLen     int
+	sourcesUsed  int
+	keyScratch   []byte
+	valueScratch []byte
+}
+
+type unsafeIteratorView interface {
+	// UnsafeKey and UnsafeValue return views owned by the iterator and valid
+	// only until the iterator moves or closes. Wrappers may return safe Key/Value
+	// copies when the wrapped iterator does not expose unsafe views.
+	UnsafeKey() []byte
+	UnsafeValue() []byte
+}
+
+func unsafeIteratorViewKey(it merging.Iterator, scratch *[]byte) []byte {
+	if it == nil {
+		return nil
+	}
+	if u, ok := it.(unsafeIteratorView); ok {
+		return u.UnsafeKey()
+	}
+	if scratch == nil {
+		return it.Key()
+	}
+	*scratch = it.KeyCopy((*scratch)[:0])
+	return *scratch
+}
+
+func unsafeIteratorViewValue(it merging.Iterator, scratch *[]byte) []byte {
+	if it == nil {
+		return nil
+	}
+	if u, ok := it.(unsafeIteratorView); ok {
+		return u.UnsafeValue()
+	}
+	if scratch == nil {
+		return it.Value()
+	}
+	*scratch = it.ValueCopy((*scratch)[:0])
+	return *scratch
 }
 
 func (it *debugIterator) DebugStats() (queueLen int, sourcesUsed int) {
 	return it.queueLen, it.sourcesUsed
 }
 
+func (it *debugIterator) UnsafeKey() []byte {
+	return unsafeIteratorViewKey(it.Iterator, &it.keyScratch)
+}
+
+func (it *debugIterator) UnsafeValue() []byte {
+	return unsafeIteratorViewValue(it.Iterator, &it.valueScratch)
+}
+
 type leasedMergingIterator struct {
 	merging.Iterator
-	closeOnce sync.Once
-	closeErr  error
-	release   func()
+	closeOnce    sync.Once
+	closeErr     error
+	release      func()
+	keyScratch   []byte
+	valueScratch []byte
+}
+
+func (it *leasedMergingIterator) UnsafeKey() []byte {
+	return unsafeIteratorViewKey(it.Iterator, &it.keyScratch)
+}
+
+func (it *leasedMergingIterator) UnsafeValue() []byte {
+	return unsafeIteratorViewValue(it.Iterator, &it.valueScratch)
 }
 
 func (it *leasedMergingIterator) Close() error {
@@ -25885,9 +25941,19 @@ func (it *leasedMergingIterator) Close() error {
 
 type foregroundTrackedIterator struct {
 	merging.Iterator
-	db        *DB
-	closeOnce sync.Once
-	closeErr  error
+	db           *DB
+	closeOnce    sync.Once
+	closeErr     error
+	keyScratch   []byte
+	valueScratch []byte
+}
+
+func (it *foregroundTrackedIterator) UnsafeKey() []byte {
+	return unsafeIteratorViewKey(it.Iterator, &it.keyScratch)
+}
+
+func (it *foregroundTrackedIterator) UnsafeValue() []byte {
+	return unsafeIteratorViewValue(it.Iterator, &it.valueScratch)
 }
 
 func (it *foregroundTrackedIterator) Close() error {
@@ -25982,6 +26048,20 @@ func (it *concatUnsafeIterator) Value() []byte {
 		panic("iterator invalid")
 	}
 	return it.cur.Value()
+}
+
+func (it *concatUnsafeIterator) UnsafeKey() []byte {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	return it.cur.UnsafeKey()
+}
+
+func (it *concatUnsafeIterator) UnsafeValue() []byte {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	return it.cur.UnsafeValue()
 }
 
 func (it *concatUnsafeIterator) KeyCopy(dst []byte) []byte {

@@ -1708,7 +1708,7 @@ func (domain *collectionWriteDomain) waitIndexedAsyncFlush() {
 	}
 	domain.indexedAsyncMu.Unlock()
 	if !waitStart.IsZero() {
-		domain.indexedAsyncFlushWaitTotalNs.Add(durationToAtomicNs(time.Since(waitStart)))
+		domain.indexedAsyncFlushWaitTotalNs.Add(durationToAtomicNs(collectionObservedElapsedSince(waitStart)))
 	}
 }
 
