@@ -194,9 +194,9 @@ func TestPreparedRootSetSystemRootSupersedesLatestActiveSystemApply(t *testing.T
 		state:            preparedRootApplyStatePlanned,
 	}
 	firstIdx := group.setSystemRoot(10, first, false)
-	group.markPrepared(firstIdx, 100, 1)
+	group.markPreparedOutput(firstIdx, 100, preparedOutputSnapshot{ID: 1, State: preparedOutputStatePrepared})
 	secondIdx := group.setSystemRoot(20, second, false)
-	group.markPrepared(secondIdx, 200, 2)
+	group.markPreparedOutput(secondIdx, 200, preparedOutputSnapshot{ID: 2, State: preparedOutputStatePrepared})
 	thirdIdx := group.setSystemRoot(30, third, false)
 
 	if firstIdx == secondIdx || secondIdx == thirdIdx || firstIdx == thirdIdx {
@@ -207,9 +207,13 @@ func TestPreparedRootSetSystemRootSupersedesLatestActiveSystemApply(t *testing.T
 	}
 	if firstApply := group.applyAt(firstIdx); firstApply == nil || firstApply.state != preparedRootApplyStateAbandoned {
 		t.Fatalf("first system apply=%+v want abandoned", firstApply)
+	} else if firstApply.output.State != preparedOutputStateAbandoned {
+		t.Fatalf("first system output state=%v want abandoned", firstApply.output.State)
 	}
 	if secondApply := group.applyAt(secondIdx); secondApply == nil || secondApply.state != preparedRootApplyStateAbandoned {
 		t.Fatalf("second system apply=%+v want abandoned", secondApply)
+	} else if secondApply.output.State != preparedOutputStateAbandoned {
+		t.Fatalf("second system output state=%v want abandoned", secondApply.output.State)
 	}
 	latest := group.applyAt(thirdIdx)
 	if latest == nil {
