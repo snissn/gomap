@@ -195,6 +195,8 @@ func BenchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_WarmSingle
 	ordered := []OrderedRootDeltaBatchPublishInput{{
 		StoragePolicy: OrderedRootStorageDefault,
 	}}
+	systemKey := []byte("sys/collections/users/primary")
+	var systemValueBuf [20]byte
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -205,9 +207,9 @@ func BenchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_WarmSingle
 		ordered[0].BaseRoot = baseRoot
 		ordered[0].Delta = delta
 		_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			value := strconv.AppendUint(make([]byte, 0, 20), rootIDs[0], 10)
+			value := strconv.AppendUint(systemValueBuf[:0], rootIDs[0], 10)
 			return &benchSingleKVIterator{
-				key:   []byte("sys/collections/users/primary"),
+				key:   systemKey,
 				value: value,
 				valid: true,
 			}, nil
