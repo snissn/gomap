@@ -1193,9 +1193,6 @@ func (r ReadOnlyPrepareResult) AppendLeafSpanWorkerRanges(dst []ReadOnlyLeafSpan
 }
 
 func readOnlyPrepareCeilDiv64(n, d int64) int64 {
-	if d <= 0 {
-		return 0
-	}
 	return (n + d - 1) / d
 }
 

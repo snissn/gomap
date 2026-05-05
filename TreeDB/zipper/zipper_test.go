@@ -925,14 +925,25 @@ func TestReadOnlyPrepareResultAppendLeafSpanWorkerRangesUsesDestination(t *testi
 			{FirstOpKey: []byte("b"), LastOpKey: []byte("b"), OpCount: 1},
 		},
 	}
-	dst := make([]ReadOnlyLeafSpanWorkerRange, 0, 2)
+	dst := make([]ReadOnlyLeafSpanWorkerRange, 1, 3)
+	dstBase := &dst[:cap(dst)][0]
+	dst = dst[:0]
 	ranges := prepared.AppendLeafSpanWorkerRanges(dst, 2)
 	requireLeafSpanWorkerRangesCoverPlan(t, prepared, ranges)
 	if len(ranges) != 2 {
 		t.Fatalf("ranges=%d want 2", len(ranges))
 	}
-	if cap(ranges) != cap(dst) {
-		t.Fatalf("ranges cap=%d want reused cap=%d", cap(ranges), cap(dst))
+	if &ranges[0] != dstBase {
+		t.Fatalf("ranges backing array was not reused")
+	}
+	allocs := testing.AllocsPerRun(1000, func() {
+		got := prepared.AppendLeafSpanWorkerRanges(dst, 2)
+		if len(got) != 2 {
+			t.Fatalf("ranges=%d want 2", len(got))
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("AppendLeafSpanWorkerRanges allocations=%v want 0", allocs)
 	}
 }
 
