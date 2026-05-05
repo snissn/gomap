@@ -194,9 +194,9 @@ func TestPreparedRootSetSystemRootSupersedesLatestActiveSystemApply(t *testing.T
 		state:            preparedRootApplyStatePlanned,
 	}
 	firstIdx := group.setSystemRoot(10, first, false)
-	group.markPrepared(firstIdx, 100)
+	group.markPrepared(firstIdx, 100, 1)
 	secondIdx := group.setSystemRoot(20, second, false)
-	group.markPrepared(secondIdx, 200)
+	group.markPrepared(secondIdx, 200, 2)
 	thirdIdx := group.setSystemRoot(30, third, false)
 
 	if firstIdx == secondIdx || secondIdx == thirdIdx || firstIdx == thirdIdx {
