@@ -614,3 +614,62 @@ func TestAcquireSnapshot_InstallsBackendLookupForPublishedPointRoots(t *testing.
 		t.Fatal("expected published lookup to retain parent db")
 	}
 }
+
+func TestAcquireSnapshot_InstalledPublishedPointRootAllocsBounded(t *testing.T) {
+	if testRaceEnabled {
+		t.Skip("AllocsPerRun is not stable under -race")
+	}
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	pointTable := newRootDomainTestTable(t, rootDomainTestOp{key: "published/k", value: "published-v"})
+	pointRootID, err := backend.PublishOrderedRootIterator(0, pointTable.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish point root: %v", err)
+	}
+	if pointRootID == backend.State().RootPageID {
+		t.Fatalf("test point root unexpectedly matches default root %d", pointRootID)
+	}
+
+	db := &DB{
+		backend:          backend,
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+	view := &memtableView{
+		rootSnapshotShards: []rootDomainSnapshot{{}},
+		publishedRoots: &publishedRootSet{
+			pointShards: []publishedRootRef{{rootID: pointRootID}},
+		},
+	}
+	view.refs.Store(1)
+	db.memtables.Store(view)
+
+	warm := db.AcquireSnapshot()
+	if warm == nil {
+		t.Fatal("warm AcquireSnapshot=nil")
+	}
+	if err := warm.Close(); err != nil {
+		t.Fatalf("warm Close: %v", err)
+	}
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		snap := db.AcquireSnapshot()
+		if snap == nil {
+			t.Fatal("AcquireSnapshot=nil")
+		}
+		if len(snap.backendPublishedLookups) != 1 {
+			t.Fatalf("backendPublishedLookups len=%d want 1", len(snap.backendPublishedLookups))
+		}
+		if err := snap.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	})
+	if allocs > 5.1 {
+		t.Fatalf("AcquireSnapshot allocs/run=%f, want <= 5.1 with installed published point root", allocs)
+	}
+}

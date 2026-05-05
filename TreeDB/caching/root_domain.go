@@ -926,7 +926,7 @@ func (s *Snapshot) backendSnapshotLookupForRoot(rootID uint64) rootDomainLookup 
 	return backendSnapshotLookup{db: s.db, snapshot: s.backend, rootID: rootID}
 }
 
-func (s *Snapshot) installBackendPublishedRootLookups() {
+func (s *Snapshot) installBackendPublishedRootLookups(publishedRootsOwned bool) {
 	if s == nil || s.backend == nil || s.publishedRoots == nil {
 		return
 	}
@@ -945,7 +945,10 @@ func (s *Snapshot) installBackendPublishedRootLookups() {
 		return
 	}
 
-	cloned := clonePublishedRootSet(s.publishedRoots)
+	cloned := s.publishedRoots
+	if !publishedRootsOwned {
+		cloned = clonePublishedRootSet(s.publishedRoots)
+	}
 	s.backendPublishedLookups = make([]backendSnapshotLookup, needed)
 	next := 0
 	installRef := func(ref *publishedRootRef) {

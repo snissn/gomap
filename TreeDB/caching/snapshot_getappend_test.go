@@ -18,9 +18,13 @@ type snapshotPublishedValueLookup struct {
 	getValueUnsafeCalls int
 }
 
+func snapshotGetAppendTestKey(key []byte) bool {
+	return len(key) == 1 && key[0] == 'k'
+}
+
 func (l *snapshotPublishedValueLookup) GetEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
 	l.getEntryCalls++
-	if string(key) != "k" {
+	if !snapshotGetAppendTestKey(key) {
 		return nil, page.ValuePtr{}, 0, false
 	}
 	return l.value, page.ValuePtr{}, node.FlagInline, true
@@ -28,7 +32,7 @@ func (l *snapshotPublishedValueLookup) GetEntry(key []byte) (val []byte, ptr pag
 
 func (l *snapshotPublishedValueLookup) GetValueAppend(key, dst []byte) ([]byte, error) {
 	l.getValueAppendCalls++
-	if string(key) != "k" {
+	if !snapshotGetAppendTestKey(key) {
 		return dst, tree.ErrKeyNotFound
 	}
 	return append(dst, l.value...), nil
@@ -36,7 +40,7 @@ func (l *snapshotPublishedValueLookup) GetValueAppend(key, dst []byte) ([]byte, 
 
 func (l *snapshotPublishedValueLookup) GetValueUnsafe(key []byte) ([]byte, error) {
 	l.getValueUnsafeCalls++
-	if string(key) != "k" {
+	if !snapshotGetAppendTestKey(key) {
 		return nil, tree.ErrKeyNotFound
 	}
 	return l.value, nil
@@ -50,7 +54,7 @@ type snapshotPublishedEntryOnlyLookup struct {
 
 func (l *snapshotPublishedEntryOnlyLookup) GetEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
 	l.getEntryCalls++
-	if string(key) != "k" {
+	if !snapshotGetAppendTestKey(key) {
 		return nil, page.ValuePtr{}, 0, false
 	}
 	flags = l.flags
@@ -71,7 +75,7 @@ type snapshotPublishedAppendMissLookup struct {
 
 func (l *snapshotPublishedAppendMissLookup) GetEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
 	l.getEntryCalls++
-	if string(key) != "k" {
+	if !snapshotGetAppendTestKey(key) {
 		return nil, page.ValuePtr{}, 0, false
 	}
 	flags = l.flags
@@ -109,6 +113,44 @@ func TestSnapshotGetAppendPublishedUsesValueAppendDirectly(t *testing.T) {
 	}
 	if lookup.getValueAppendCalls != 1 {
 		t.Fatalf("GetValueAppend calls=%d, want 1", lookup.getValueAppendCalls)
+	}
+	if lookup.getEntryCalls != 0 {
+		t.Fatalf("GetEntry calls=%d, want 0", lookup.getEntryCalls)
+	}
+	if lookup.getValueUnsafeCalls != 0 {
+		t.Fatalf("GetValueUnsafe calls=%d, want 0", lookup.getValueUnsafeCalls)
+	}
+}
+
+func TestSnapshotGetAppendPublishedValueAppendAllocs(t *testing.T) {
+	if testRaceEnabled {
+		t.Skip("AllocsPerRun is not stable under -race")
+	}
+	lookup := &snapshotPublishedValueLookup{value: []byte("published")}
+	snap := &Snapshot{
+		rootPointShards: []rootDomainSnapshot{{
+			published:       lookup,
+			publishedRootID: 1,
+		}},
+	}
+	key := []byte("k")
+	prefix := []byte("p:")
+	wantLen := len(prefix) + len(lookup.value)
+	buf := make([]byte, len(prefix), wantLen)
+	copy(buf, prefix)
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		dst := buf[:len(prefix)]
+		got, err := snap.GetAppend(key, dst)
+		if err != nil {
+			t.Fatalf("GetAppend: %v", err)
+		}
+		if len(got) != wantLen || got[0] != 'p' || got[1] != ':' || got[2] != 'p' {
+			t.Fatalf("unexpected GetAppend value %q", got)
+		}
+	})
+	if allocs > 0.5 {
+		t.Fatalf("GetAppend allocs/run=%f, want 0", allocs)
 	}
 	if lookup.getEntryCalls != 0 {
 		t.Fatalf("GetEntry calls=%d, want 0", lookup.getEntryCalls)
