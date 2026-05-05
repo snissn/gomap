@@ -41,6 +41,8 @@ const orderedRootOptimisticSystemDeltaRebaseMaxAttempts = 4
 
 const orderedRootDeltaBatchGroupParallelApplyMinRoots = 2
 
+const orderedRootReadOnlyPrepareResultPoolMaxLeafSpanCap = 4096
+
 var orderedRootReadOnlyPrepareResultPool = sync.Pool{
 	New: func() any {
 		return new(zipper.ReadOnlyPrepareResult)
@@ -58,6 +60,9 @@ func acquireOrderedRootReadOnlyPrepareResult() *zipper.ReadOnlyPrepareResult {
 func releaseOrderedRootReadOnlyPrepareResult(result *zipper.ReadOnlyPrepareResult) {
 	if result == nil {
 		return
+	}
+	if cap(result.LeafSpans) > orderedRootReadOnlyPrepareResultPoolMaxLeafSpanCap {
+		*result = zipper.ReadOnlyPrepareResult{}
 	}
 	orderedRootReadOnlyPrepareResultPool.Put(result)
 }
