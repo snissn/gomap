@@ -171,18 +171,23 @@ func BenchmarkPublishSystemRootIterator_WarmDenseDelta(b *testing.B) {
 }
 
 func BenchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_WarmSingleRoot(b *testing.B) {
-	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, false, false)
+	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, orderedRootBatchGroupWarmBenchOptions{})
 }
 
 func BenchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_WarmSingleRootReadOnlyPrepare(b *testing.B) {
-	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, true, false)
+	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, orderedRootBatchGroupWarmBenchOptions{prepareReadOnly: true})
 }
 
 func BenchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_WarmSingleRootReadOnlyPrepareReuse(b *testing.B) {
-	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, true, true)
+	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, orderedRootBatchGroupWarmBenchOptions{prepareReadOnly: true, reusePrepare: true})
 }
 
-func benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b *testing.B, prepareReadOnly, reusePrepare bool) {
+type orderedRootBatchGroupWarmBenchOptions struct {
+	prepareReadOnly bool
+	reusePrepare    bool
+}
+
+func benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b *testing.B, benchOpts orderedRootBatchGroupWarmBenchOptions) {
 	dir := b.TempDir()
 	db, err := Open(Options{Dir: dir})
 	if err != nil {
@@ -207,7 +212,7 @@ func benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleR
 
 	ordered := []OrderedRootDeltaBatchPublishInput{{
 		StoragePolicy:   OrderedRootStorageDefault,
-		PrepareReadOnly: prepareReadOnly,
+		PrepareReadOnly: benchOpts.prepareReadOnly,
 	}}
 	var prepared zipper.ReadOnlyPrepareResult
 	systemKey := []byte("sys/collections/users/primary")
@@ -215,7 +220,7 @@ func benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleR
 	publish := func(delta *batch.Batch) {
 		ordered[0].BaseRoot = baseRoot
 		ordered[0].Delta = delta
-		if prepareReadOnly && reusePrepare {
+		if benchOpts.prepareReadOnly && benchOpts.reusePrepare {
 			ordered[0].ReadOnlyPrepareResult = &prepared
 		}
 		_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -231,7 +236,7 @@ func benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleR
 		}
 		baseRoot = rootIDs[0]
 	}
-	if prepareReadOnly && reusePrepare {
+	if benchOpts.prepareReadOnly && benchOpts.reusePrepare {
 		publish(left)
 	}
 	b.ReportAllocs()

@@ -172,7 +172,7 @@ type OrderedRootDeltaBatchPublishInput struct {
 	// ReadOnlyPrepareResult, when non-nil, is both the reuse source and output
 	// destination for this root's optional preparation metadata. It must be
 	// owned by this input within the group; sharing one result pointer across
-	// group inputs is rejected.
+	// group inputs is rejected. It is ignored unless PrepareReadOnly is true.
 	ReadOnlyPrepareResult *zipper.ReadOnlyPrepareResult
 }
 
@@ -1557,6 +1557,8 @@ func orderedRootDeltaBatchGroupParallelApplyEligible(ordered []OrderedRootDeltaB
 }
 
 func validateOrderedRootReadOnlyPrepareResultOwnership(ordered []OrderedRootDeltaBatchPublishInput) error {
+	// Keep this validation allocation-free. Ordered root groups are expected to
+	// be small, and the read-only prepare reuse path is allocation-sensitive.
 	for idx := range ordered {
 		result := ordered[idx].ReadOnlyPrepareResult
 		if !ordered[idx].PrepareReadOnly || result == nil {
@@ -1575,6 +1577,9 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 	results := make([]orderedRootDeltaBatchGroupApplyResult, len(ordered))
 	if err := validateOrderedRootReadOnlyPrepareResultOwnership(ordered); err != nil {
 		if len(results) > 0 {
+			// recordOrderedRootDeltaBatchGroupApplyResults uses attempted to find
+			// terminal per-input errors. No root apply metrics are recorded for
+			// errored results.
 			results[0] = orderedRootDeltaBatchGroupApplyResult{idx: 0, err: err, attempted: true}
 		}
 		return results, false
