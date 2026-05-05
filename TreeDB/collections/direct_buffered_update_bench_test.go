@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/pprof"
 	"strconv"
 	"strings"
@@ -55,6 +56,31 @@ type collectionDirectBufferedBenchmarkOptions struct {
 	readOnlyPrepareWorkers int
 }
 
+func configureUpdateBatchTimedAllocsProfileRate(b *testing.B) func() {
+	b.Helper()
+	basePath := strings.TrimSpace(os.Getenv("TREEDB_COLLECTION_TIMED_ALLOCS_BASE_PROFILE_PATH"))
+	afterPath := strings.TrimSpace(os.Getenv("TREEDB_COLLECTION_TIMED_ALLOCS_AFTER_PROFILE_PATH"))
+	if basePath == "" && afterPath == "" {
+		return func() {}
+	}
+	if basePath == "" || afterPath == "" {
+		b.Fatalf("set both TREEDB_COLLECTION_TIMED_ALLOCS_BASE_PROFILE_PATH and TREEDB_COLLECTION_TIMED_ALLOCS_AFTER_PROFILE_PATH")
+	}
+	rate := 1
+	if raw := strings.TrimSpace(os.Getenv("TREEDB_COLLECTION_TIMED_ALLOCS_PROFILE_RATE")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			b.Fatalf("unsupported TREEDB_COLLECTION_TIMED_ALLOCS_PROFILE_RATE=%q", raw)
+		}
+		rate = n
+	}
+	prevRate := runtime.MemProfileRate
+	runtime.MemProfileRate = rate
+	return func() {
+		runtime.MemProfileRate = prevRate
+	}
+}
+
 func startUpdateBatchTimedCPUProfile(b *testing.B) func() {
 	b.Helper()
 	profilePath := strings.TrimSpace(os.Getenv("TREEDB_COLLECTION_TIMED_CPU_PROFILE_PATH"))
@@ -87,11 +113,44 @@ func startUpdateBatchTimedCPUProfile(b *testing.B) func() {
 	}
 }
 
+func writeUpdateBatchTimedAllocsSnapshot(b *testing.B, path string) {
+	b.Helper()
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return
+	}
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			b.Fatalf("create timed allocs profile dir: %v", err)
+		}
+	}
+	runtime.GC()
+	runtime.GC()
+	file, err := os.Create(path)
+	if err != nil {
+		b.Fatalf("create timed allocs profile: %v", err)
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			b.Errorf("close timed allocs profile: %v", err)
+		}
+	}()
+	prof := pprof.Lookup("allocs")
+	if prof == nil {
+		b.Fatalf("allocs profile unavailable")
+	}
+	if err := prof.WriteTo(file, 0); err != nil {
+		b.Fatalf("write timed allocs profile: %v", err)
+	}
+}
+
 func benchmarkCollectionUpdateBatchDirectBufferedTemplateV1NewShape(b *testing.B, batchSize int, opts collectionDirectBufferedBenchmarkOptions) {
 	b.Helper()
 	if batchSize <= 0 {
 		b.Fatalf("invalid batch size %d", batchSize)
 	}
+	restoreMemProfileRate := configureUpdateBatchTimedAllocsProfileRate(b)
+	defer restoreMemProfileRate()
 	docs := b.N
 	if docs <= 0 {
 		docs = 1
@@ -163,6 +222,7 @@ func benchmarkCollectionUpdateBatchDirectBufferedTemplateV1NewShape(b *testing.B
 	batch := make([]UpdateBatchItem, batchSize)
 	statsBefore := mgr.StatsSnapshot()
 	dbStatsBefore := d.Stats()
+	writeUpdateBatchTimedAllocsSnapshot(b, os.Getenv("TREEDB_COLLECTION_TIMED_ALLOCS_BASE_PROFILE_PATH"))
 	b.ReportAllocs()
 	b.ResetTimer()
 	stopProfile := startUpdateBatchTimedCPUProfile(b)
@@ -197,6 +257,7 @@ func benchmarkCollectionUpdateBatchDirectBufferedTemplateV1NewShape(b *testing.B
 	stopProfile()
 	profileActive = false
 	b.StopTimer()
+	writeUpdateBatchTimedAllocsSnapshot(b, os.Getenv("TREEDB_COLLECTION_TIMED_ALLOCS_AFTER_PROFILE_PATH"))
 
 	stats := collectionManagerStatsBenchmarkDelta(mgr.StatsSnapshot(), statsBefore)
 	dbStatsAfter := d.Stats()
