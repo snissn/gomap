@@ -763,6 +763,9 @@ func TestPublishOrderedRootDeltaGroupWithSystemBuilder_ReportsPublishStats(t *te
 	if got := stats["treedb.publish.ordered_root_delta_group.finalize_calls_total"]; got != "1" {
 		t.Fatalf("finalize calls stat=%q want 1", got)
 	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total"]; got != "0" {
+		t.Fatalf("readonly prepare calls stat=%q want 0 for default publish", got)
+	}
 	for _, key := range []string{
 		"treedb.publish.ordered_root_delta_group.preflight_ns_total",
 		"treedb.publish.ordered_root_delta_group.root_apply_ns_total",
@@ -786,6 +789,13 @@ func TestPublishOrderedRootDeltaGroupWithSystemBuilder_ReportsPublishStats(t *te
 		"treedb.publish.ordered_root_delta_group.root_apply_internal_page_child_refs_total",
 		"treedb.publish.ordered_root_delta_group.root_apply_internal_leaf_log_refs_total",
 		"treedb.publish.ordered_root_delta_group.root_apply_internal_leaf_log_ref_copies_total",
+		"treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ns_total",
+		"treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total",
+		"treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ops_total",
+		"treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_leaf_spans_total",
+		"treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_exact_plans_total",
+		"treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_maintenance_plans_total",
+		"treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_cold_build_plans_total",
 		"treedb.publish.ordered_root_delta_group.system_build_ns_total",
 		"treedb.publish.ordered_root_delta_group.system_apply_ns_total",
 		"treedb.publish.ordered_root_delta_group.system_apply_ops_total",
@@ -821,6 +831,174 @@ func TestPublishOrderedRootDeltaGroupWithSystemBuilder_ReportsPublishStats(t *te
 			t.Fatalf("missing ordered root delta phase stat %q", key)
 		}
 	}
+}
+
+func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptionalReadOnlyPrepareStats(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t,
+		"root/a", "va",
+		"root/m", "vm",
+		"root/z", "vz",
+	).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root: %v", err)
+	}
+
+	deltaTable := mustFrozenSystemMemtable(t,
+		"root/b", "vb",
+		"root/y", "vy",
+	)
+	deltaIter := deltaTable.NewIterator(nil, nil)
+	delta, err := OrderedRootDeltaBatchFromIterator(deltaIter)
+	_ = deltaIter.Close()
+	if err != nil {
+		t.Fatalf("OrderedRootDeltaBatchFromIterator: %v", err)
+	}
+	defer func() { _ = delta.Close() }()
+
+	_, _, err = db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+		BaseRoot:        baseRoot,
+		Delta:           delta,
+		PrepareReadOnly: true,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish ordered root delta batch group: %v", err)
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total"]; got != "1" {
+		t.Fatalf("readonly prepare calls=%q want 1", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ops_total"]; got != "2" {
+		t.Fatalf("readonly prepare ops=%q want 2", got)
+	}
+	if spans := requireUintStat(t, stats, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_leaf_spans_total"); spans == 0 {
+		t.Fatalf("readonly prepare leaf spans=%d want > 0", spans)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_exact_plans_total"]; got != "1" {
+		t.Fatalf("readonly prepare exact plans=%q want 1", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_maintenance_plans_total"]; got != "0" {
+		t.Fatalf("readonly prepare maintenance plans=%q want 0", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_cold_build_plans_total"]; got != "0" {
+		t.Fatalf("readonly prepare cold build plans=%q want 0", got)
+	}
+}
+
+func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_DefaultReadOnlyPrepareStatsZero(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "root/a", "va").NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root: %v", err)
+	}
+	delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := delta.Set([]byte("root/b"), []byte("vb")); err != nil {
+		t.Fatalf("set delta: %v", err)
+	}
+	defer func() { _ = delta.Close() }()
+
+	_, _, err = db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+		BaseRoot: baseRoot,
+		Delta:    delta,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish ordered root delta batch group: %v", err)
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total"]; got != "0" {
+		t.Fatalf("readonly prepare calls=%q want 0", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ops_total"]; got != "0" {
+		t.Fatalf("readonly prepare ops=%q want 0", got)
+	}
+}
+
+func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_ReadOnlyPreparePlanKindStats(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	cold := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := cold.Set([]byte("root/a"), []byte("va")); err != nil {
+		t.Fatalf("set cold delta: %v", err)
+	}
+	defer func() { _ = cold.Close() }()
+
+	_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+		BaseRoot:        0,
+		Delta:           cold,
+		PrepareReadOnly: true,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish cold ordered root delta batch group: %v", err)
+	}
+	if len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("cold rootIDs=%v want one non-zero root", rootIDs)
+	}
+
+	maintenance := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := maintenance.Delete([]byte("root/a")); err != nil {
+		t.Fatalf("delete maintenance delta: %v", err)
+	}
+	defer func() { _ = maintenance.Close() }()
+
+	_, _, err = db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+		BaseRoot:        rootIDs[0],
+		Delta:           maintenance,
+		PrepareReadOnly: true,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish maintenance ordered root delta batch group: %v", err)
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total"]; got != "2" {
+		t.Fatalf("readonly prepare calls=%q want 2", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_cold_build_plans_total"]; got != "1" {
+		t.Fatalf("readonly prepare cold build plans=%q want 1", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_maintenance_plans_total"]; got != "1" {
+		t.Fatalf("readonly prepare maintenance plans=%q want 1", got)
+	}
+}
+
+func requireUintStat(tb testing.TB, stats map[string]string, key string) uint64 {
+	tb.Helper()
+	raw, ok := stats[key]
+	if !ok {
+		tb.Fatalf("missing stat %q", key)
+	}
+	v, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		tb.Fatalf("stat %q=%q is not uint: %v", key, raw, err)
+	}
+	return v
 }
 
 func TestPublishOrderedRootDeltaGroupPreflightFailureDoesNotCountRoots(t *testing.T) {

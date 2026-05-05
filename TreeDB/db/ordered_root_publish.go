@@ -52,26 +52,33 @@ type orderedRootPublishStats struct {
 }
 
 type orderedRootPublishOptions struct {
-	maxWarmDeltaOps       int
-	leafPrefixCompression bool
-	leafColumnar          bool
-	packedValuePtr        bool
-	internalBaseDelta     bool
-	outerLeavesInValueLog bool
-	leafPageLog           bulk.LeafPageAppender
+	maxWarmDeltaOps          int
+	leafPrefixCompression    bool
+	leafColumnar             bool
+	packedValuePtr           bool
+	internalBaseDelta        bool
+	outerLeavesInValueLog    bool
+	leafPageLog              bulk.LeafPageAppender
+	applyOptions             zipper.ApplyOptions
+	readOnlyPrepareSummary   *zipper.ReadOnlyLeafSpanSummary
+	readOnlyPrepareNs        *uint64
+	readOnlyPrepareAttempted *bool
 }
 
 type orderedRootDeltaBatchGroupApplyResult struct {
-	idx                 int
-	rootID              uint64
-	outputID            preparedOutputID
-	output              *preparedOutputSnapshot
-	outputPages         uint64
-	outputLeafLogPtrs   uint64
-	pendingRetiredPages []uint64
-	metrics             adaptive.Metrics
-	err                 error
-	attempted           bool
+	idx                      int
+	rootID                   uint64
+	outputID                 preparedOutputID
+	output                   *preparedOutputSnapshot
+	outputPages              uint64
+	outputLeafLogPtrs        uint64
+	pendingRetiredPages      []uint64
+	metrics                  adaptive.Metrics
+	readOnlyPrepareSummary   zipper.ReadOnlyLeafSpanSummary
+	readOnlyPrepareNs        uint64
+	readOnlyPrepareAttempted bool
+	err                      error
+	attempted                bool
 }
 
 type preparedLeafLogOutputRecorder interface {
@@ -157,6 +164,10 @@ type OrderedRootDeltaBatchPublishInput struct {
 	// Callers should opt in only when root deltas are already materialized and
 	// benchmarked as large enough to amortize goroutine and shared backend costs.
 	ParallelApply bool
+	// PrepareReadOnly runs the read-only leaf-span preparation pass before warm
+	// root apply and records planning stats. It is observability/planning only;
+	// it does not change publish output or enable parallel leaf execution.
+	PrepareReadOnly bool
 }
 
 func closeUnconsumedOrderedRootPublishIterators(ordered []OrderedRootPublishInput, consumed []bool) {
@@ -676,7 +687,15 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 	if err != nil {
 		return 0, nil, metrics, err
 	}
-	return applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, zipper.ApplyOptions{})
+	newRoot, retired, metrics, readOnlyPrepare, readOnlyPrepareNs, err := applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, opts.applyOptions)
+	if opts.applyOptions.PrepareReadOnly && opts.readOnlyPrepareSummary != nil {
+		summary := readOnlyPrepare.LeafSpanSummary()
+		*opts.readOnlyPrepareSummary = summary
+	}
+	if opts.readOnlyPrepareNs != nil {
+		*opts.readOnlyPrepareNs = readOnlyPrepareNs
+	}
+	return newRoot, retired, metrics, err
 }
 
 func (db *DB) publishOrderedRootDeltaBatch(baseRoot uint64, delta *batch.Batch, opts orderedRootPublishOptions) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, err error) {
@@ -719,9 +738,19 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 		}
 	}
 	if delta.IsEmpty() {
+		if opts.applyOptions.PrepareReadOnly {
+			if err = db.runOrderedRootReadOnlyPrepare(idx, baseRoot, delta, opts, alloc); err != nil {
+				return 0, nil, metrics, err
+			}
+		}
 		return baseRoot, nil, metrics, nil
 	}
 	if baseRoot == 0 {
+		if opts.applyOptions.PrepareReadOnly {
+			if err = db.runOrderedRootReadOnlyPrepare(idx, baseRoot, delta, opts, alloc); err != nil {
+				return 0, nil, metrics, err
+			}
+		}
 		iter := newOrderedRootDeltaBatchIterator(delta, includeDeletedOnColdBuild)
 		defer func() { _ = iter.Close() }()
 		if coldBuildAlloc == nil {
@@ -745,7 +774,39 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 	if err != nil {
 		return 0, nil, metrics, err
 	}
-	return applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, zipper.ApplyOptions{})
+	if opts.applyOptions.PrepareReadOnly {
+		if err = runOrderedRootReadOnlyPrepare(rootZipper, baseRoot, delta, opts); err != nil {
+			return 0, nil, metrics, err
+		}
+		opts.applyOptions.PrepareReadOnly = false
+	}
+	newRoot, retired, metrics, _, _, err = applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, opts.applyOptions)
+	return newRoot, retired, metrics, err
+}
+
+func (db *DB) runOrderedRootReadOnlyPrepare(idx *indexGen, baseRoot uint64, delta *batch.Batch, opts orderedRootPublishOptions, alloc zipper.PageAllocator) error {
+	rootZipper, err := db.orderedRootZipperForOptionsWithAllocator(idx, opts, alloc)
+	if err != nil {
+		return err
+	}
+	return runOrderedRootReadOnlyPrepare(rootZipper, baseRoot, delta, opts)
+}
+
+func runOrderedRootReadOnlyPrepare(rootZipper *zipper.Zipper, baseRoot uint64, delta *batch.Batch, opts orderedRootPublishOptions) error {
+	if opts.readOnlyPrepareAttempted != nil {
+		*opts.readOnlyPrepareAttempted = true
+	}
+	prepareStart := time.Now()
+	prepared, err := rootZipper.PrepareReadOnly(baseRoot, delta, opts.applyOptions.ReadOnlyPrepare)
+	prepareNs := elapsedDurationNs(prepareStart)
+	if opts.readOnlyPrepareSummary != nil {
+		summary := prepared.LeafSpanSummary()
+		*opts.readOnlyPrepareSummary = summary
+	}
+	if opts.readOnlyPrepareNs != nil {
+		*opts.readOnlyPrepareNs = prepareNs
+	}
+	return err
 }
 
 func preparedOutputTrackerFromAlloc(alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator) preparedLeafLogOutputRecorder {
@@ -758,15 +819,15 @@ func preparedOutputTrackerFromAlloc(alloc zipper.PageAllocator, coldBuildAlloc b
 	return nil
 }
 
-func applyOrderedRootDeltaWithOptions(rootZipper *zipper.Zipper, baseRoot uint64, delta *batch.Batch, opts zipper.ApplyOptions) (uint64, []uint64, adaptive.Metrics, error) {
+func applyOrderedRootDeltaWithOptions(rootZipper *zipper.Zipper, baseRoot uint64, delta *batch.Batch, opts zipper.ApplyOptions) (uint64, []uint64, adaptive.Metrics, zipper.ReadOnlyPrepareResult, uint64, error) {
 	applyResult, err := rootZipper.ApplyWithOptions(baseRoot, delta, opts)
 	// ApplyWithOptions returns its result by value and may include partial
 	// metrics when err is non-nil; preserve metrics but do not return partial
 	// root IDs or retired-page ownership on failure.
 	if err != nil {
-		return 0, nil, applyResult.Metrics, err
+		return 0, nil, applyResult.Metrics, applyResult.ReadOnlyPrepare, applyResult.ReadOnlyPrepareNs, err
 	}
-	return applyResult.RootID, applyResult.PendingRetiredPages, applyResult.Metrics, nil
+	return applyResult.RootID, applyResult.PendingRetiredPages, applyResult.Metrics, applyResult.ReadOnlyPrepare, applyResult.ReadOnlyPrepareNs, nil
 }
 
 func buildOrderedRootDeltaBatch(baseIter, targetIter iterator.UnsafeIterator, trackRefs bool) (*batch.Batch, int, *valueLogRefDelta, error) {
@@ -969,7 +1030,7 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 					err = zipperErr
 					return
 				}
-				newRoot, retired, metrics, err = applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, zipper.ApplyOptions{})
+				newRoot, retired, metrics, _, _, err = applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, zipper.ApplyOptions{})
 				if err != nil {
 					return
 				}
@@ -1515,6 +1576,12 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 			result.err = err
 			return result
 		}
+		if ordered[orderedIdx].PrepareReadOnly {
+			opts.applyOptions.PrepareReadOnly = true
+			opts.readOnlyPrepareSummary = &result.readOnlyPrepareSummary
+			opts.readOnlyPrepareNs = &result.readOnlyPrepareNs
+			opts.readOnlyPrepareAttempted = &result.readOnlyPrepareAttempted
+		}
 		beforePages, beforeLeafLogPtrs := uint64(0), uint64(0)
 		if outputTracker != nil {
 			beforePages, beforeLeafLogPtrs = outputTracker.PreparedOutputCounts()
@@ -1650,6 +1717,22 @@ func recordOrderedRootDeltaBatchGroupApplyResults(
 		if phaseStats != nil {
 			phaseStats.rootApplyMetrics.add(result.metrics)
 			phaseStats.rootApplyCalls++
+			if result.readOnlyPrepareAttempted {
+				summary := result.readOnlyPrepareSummary
+				phaseStats.rootApplyReadOnlyPrepareNs += result.readOnlyPrepareNs
+				phaseStats.rootApplyReadOnlyPrepareCalls++
+				phaseStats.rootApplyReadOnlyPrepareOps += uint64(summary.Ops)
+				phaseStats.rootApplyReadOnlyPrepareLeafSpans += uint64(summary.Spans)
+				if summary.ExactLeafSpans {
+					phaseStats.rootApplyReadOnlyPrepareExactPlans++
+				}
+				if summary.Maintenance {
+					phaseStats.rootApplyReadOnlyPrepareMaintenance++
+				}
+				if summary.ColdBuild {
+					phaseStats.rootApplyReadOnlyPrepareColdBuilds++
+				}
+			}
 		}
 	}
 	return firstErr

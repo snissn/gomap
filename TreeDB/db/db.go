@@ -212,6 +212,13 @@ type DB struct {
 	orderedRootDeltaGroupRootApplyInternalLeafLogRefs           atomic.Uint64
 	orderedRootDeltaGroupRootApplyInternalLeafLogRefCopies      atomic.Uint64
 	orderedRootDeltaGroupRootApplyRootSplitLevels               atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareNs             atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareCalls          atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareOps            atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareLeafSpans      atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareExactPlans     atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareMaintenance    atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareColdBuilds     atomic.Uint64
 	orderedRootDeltaGroupSystemBuildNs                          atomic.Uint64
 	orderedRootDeltaGroupSystemApplyNs                          atomic.Uint64
 	orderedRootDeltaGroupSystemApplyCalls                       atomic.Uint64

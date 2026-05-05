@@ -10,6 +10,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -1054,6 +1055,9 @@ type ApplyResult struct {
 	// ReadOnlyPrepare is populated only when ApplyOptions.PrepareReadOnly is
 	// true. It is planning metadata only; it owns no pager or leaf-log output.
 	ReadOnlyPrepare ReadOnlyPrepareResult
+	// ReadOnlyPrepareNs is the time spent in the optional read-only preparation
+	// pass. It is zero when ApplyOptions.PrepareReadOnly is false.
+	ReadOnlyPrepareNs uint64
 }
 
 // ReadOnlyPrepareOptions configures a read-only root preparation pass. The zero
@@ -1327,6 +1331,14 @@ func (r *ReadOnlyPrepareResult) addLeafSpan(ref page.ChildRef, low, high []byte,
 	r.LeafSpans = append(r.LeafSpans, span)
 }
 
+func elapsedNsSince(start time.Time) uint64 {
+	elapsed := time.Since(start)
+	if elapsed <= 0 {
+		return 0
+	}
+	return uint64(elapsed.Nanoseconds())
+}
+
 // ApplyWithOptions applies the batch to the tree rooted at rootID and returns a
 // result object suitable for guarded install paths. When opts.PrepareReadOnly is
 // true, it first runs PrepareReadOnly and returns that planning metadata on the
@@ -1334,11 +1346,14 @@ func (r *ReadOnlyPrepareResult) addLeafSpan(ref page.ChildRef, low, high []byte,
 // partial ReadOnlyPrepare metadata and no root output.
 func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptions) (ApplyResult, error) {
 	var prepared ReadOnlyPrepareResult
+	var preparedNs uint64
 	if opts.PrepareReadOnly {
 		var err error
+		prepareStart := time.Now()
 		prepared, err = z.PrepareReadOnly(rootID, b, opts.ReadOnlyPrepare)
+		preparedNs = elapsedNsSince(prepareStart)
 		if err != nil {
-			return ApplyResult{ReadOnlyPrepare: prepared}, err
+			return ApplyResult{ReadOnlyPrepare: prepared, ReadOnlyPrepareNs: preparedNs}, err
 		}
 	}
 	newRoot, retired, metrics, err := z.Apply(rootID, b)
@@ -1347,6 +1362,7 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 		PendingRetiredPages: retired,
 		Metrics:             metrics,
 		ReadOnlyPrepare:     prepared,
+		ReadOnlyPrepareNs:   preparedNs,
 	}, err
 }
 

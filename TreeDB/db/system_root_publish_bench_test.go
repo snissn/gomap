@@ -170,6 +170,14 @@ func BenchmarkPublishSystemRootIterator_WarmDenseDelta(b *testing.B) {
 }
 
 func BenchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_WarmSingleRoot(b *testing.B) {
+	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, false)
+}
+
+func BenchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_WarmSingleRootReadOnlyPrepare(b *testing.B) {
+	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, true)
+}
+
+func benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b *testing.B, prepareReadOnly bool) {
 	dir := b.TempDir()
 	db, err := Open(Options{Dir: dir})
 	if err != nil {
@@ -193,7 +201,8 @@ func BenchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_WarmSingle
 	defer func() { _ = right.Close() }()
 
 	ordered := []OrderedRootDeltaBatchPublishInput{{
-		StoragePolicy: OrderedRootStorageDefault,
+		StoragePolicy:   OrderedRootStorageDefault,
+		PrepareReadOnly: prepareReadOnly,
 	}}
 	systemKey := []byte("sys/collections/users/primary")
 	var systemValueBuf [20]byte

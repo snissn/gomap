@@ -10,6 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
 func TestPreparedRootDeltaPlanSummaryFromBatch(t *testing.T) {
@@ -169,6 +170,42 @@ func TestPreparedRootApplyRecordsLaterSuccessBeforeEarlierApplyError(t *testing.
 	stats.observeGroup(&group)
 	if stats.roots != 1 || stats.abandoned != 1 || stats.entries != 2 {
 		t.Fatalf("stats roots=%d abandoned=%d entries=%d want 1/1/2", stats.roots, stats.abandoned, stats.entries)
+	}
+}
+
+func TestRecordOrderedRootDeltaBatchGroupApplyResultsCountsZeroReadOnlyPrepare(t *testing.T) {
+	var phaseStats orderedRootDeltaGroupPublishPhaseStats
+
+	err := recordOrderedRootDeltaBatchGroupApplyResults(
+		nil,
+		[]uint64{0},
+		[]orderedRootDeltaBatchGroupApplyResult{{
+			idx:                      0,
+			attempted:                true,
+			readOnlyPrepareAttempted: true,
+			readOnlyPrepareSummary: zipper.ReadOnlyLeafSpanSummary{
+				ExactLeafSpans: true,
+			},
+		}},
+		nil,
+		nil,
+		&phaseStats,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("record apply results: %v", err)
+	}
+	if phaseStats.rootApplyCalls != 1 {
+		t.Fatalf("root apply calls=%d want 1", phaseStats.rootApplyCalls)
+	}
+	if phaseStats.rootApplyReadOnlyPrepareCalls != 1 {
+		t.Fatalf("readonly prepare calls=%d want 1", phaseStats.rootApplyReadOnlyPrepareCalls)
+	}
+	if phaseStats.rootApplyReadOnlyPrepareOps != 0 || phaseStats.rootApplyReadOnlyPrepareLeafSpans != 0 || phaseStats.rootApplyReadOnlyPrepareNs != 0 {
+		t.Fatalf("readonly prepare ops/spans/ns=%d/%d/%d want 0/0/0", phaseStats.rootApplyReadOnlyPrepareOps, phaseStats.rootApplyReadOnlyPrepareLeafSpans, phaseStats.rootApplyReadOnlyPrepareNs)
+	}
+	if phaseStats.rootApplyReadOnlyPrepareExactPlans != 1 {
+		t.Fatalf("readonly prepare exact plans=%d want 1", phaseStats.rootApplyReadOnlyPrepareExactPlans)
 	}
 }
 
