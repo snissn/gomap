@@ -637,6 +637,8 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 		return 0, nil, metrics, err
 	}
 	applyResult, err := rootZipper.ApplyWithOptions(baseRoot, delta, zipper.ApplyOptions{})
+	// ApplyWithOptions returns its result by value and may include partial
+	// metrics when err is non-nil; preserve those metrics for failure stats.
 	newRoot = applyResult.RootID
 	retired = applyResult.PendingRetiredPages
 	metrics = applyResult.Metrics
@@ -918,6 +920,8 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 					return
 				}
 				applyResult, applyErr := rootZipper.ApplyWithOptions(baseRoot, delta, zipper.ApplyOptions{})
+				// ApplyWithOptions returns its result by value and may include
+				// partial metrics when applyErr is non-nil.
 				newRoot = applyResult.RootID
 				retired = applyResult.PendingRetiredPages
 				metrics = applyResult.Metrics
