@@ -59,6 +59,9 @@ type orderedRootPublishOptions struct {
 	internalBaseDelta     bool
 	outerLeavesInValueLog bool
 	leafPageLog           bulk.LeafPageAppender
+	applyOptions          zipper.ApplyOptions
+	readOnlyPrepareResult *zipper.ReadOnlyPrepareResult
+	readOnlyPrepareNs     *uint64
 }
 
 type orderedRootDeltaBatchGroupApplyResult struct {
@@ -70,6 +73,8 @@ type orderedRootDeltaBatchGroupApplyResult struct {
 	outputLeafLogPtrs   uint64
 	pendingRetiredPages []uint64
 	metrics             adaptive.Metrics
+	readOnlyPrepare     zipper.ReadOnlyPrepareResult
+	readOnlyPrepareNs   uint64
 	err                 error
 	attempted           bool
 }
@@ -157,6 +162,10 @@ type OrderedRootDeltaBatchPublishInput struct {
 	// Callers should opt in only when root deltas are already materialized and
 	// benchmarked as large enough to amortize goroutine and shared backend costs.
 	ParallelApply bool
+	// PrepareReadOnly runs the read-only leaf-span preparation pass before warm
+	// root apply and records planning stats. It is observability/planning only;
+	// it does not change publish output or enable parallel leaf execution.
+	PrepareReadOnly bool
 }
 
 func closeUnconsumedOrderedRootPublishIterators(ordered []OrderedRootPublishInput, consumed []bool) {
@@ -676,7 +685,14 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 	if err != nil {
 		return 0, nil, metrics, err
 	}
-	return applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, zipper.ApplyOptions{})
+	newRoot, retired, metrics, readOnlyPrepare, readOnlyPrepareNs, err := applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, opts.applyOptions)
+	if opts.readOnlyPrepareResult != nil {
+		*opts.readOnlyPrepareResult = readOnlyPrepare
+	}
+	if opts.readOnlyPrepareNs != nil {
+		*opts.readOnlyPrepareNs = readOnlyPrepareNs
+	}
+	return newRoot, retired, metrics, err
 }
 
 func (db *DB) publishOrderedRootDeltaBatch(baseRoot uint64, delta *batch.Batch, opts orderedRootPublishOptions) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, err error) {
@@ -745,7 +761,14 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 	if err != nil {
 		return 0, nil, metrics, err
 	}
-	return applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, zipper.ApplyOptions{})
+	newRoot, retired, metrics, readOnlyPrepare, readOnlyPrepareNs, err := applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, opts.applyOptions)
+	if opts.readOnlyPrepareResult != nil {
+		*opts.readOnlyPrepareResult = readOnlyPrepare
+	}
+	if opts.readOnlyPrepareNs != nil {
+		*opts.readOnlyPrepareNs = readOnlyPrepareNs
+	}
+	return newRoot, retired, metrics, err
 }
 
 func preparedOutputTrackerFromAlloc(alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator) preparedLeafLogOutputRecorder {
@@ -758,15 +781,15 @@ func preparedOutputTrackerFromAlloc(alloc zipper.PageAllocator, coldBuildAlloc b
 	return nil
 }
 
-func applyOrderedRootDeltaWithOptions(rootZipper *zipper.Zipper, baseRoot uint64, delta *batch.Batch, opts zipper.ApplyOptions) (uint64, []uint64, adaptive.Metrics, error) {
+func applyOrderedRootDeltaWithOptions(rootZipper *zipper.Zipper, baseRoot uint64, delta *batch.Batch, opts zipper.ApplyOptions) (uint64, []uint64, adaptive.Metrics, zipper.ReadOnlyPrepareResult, uint64, error) {
 	applyResult, err := rootZipper.ApplyWithOptions(baseRoot, delta, opts)
 	// ApplyWithOptions returns its result by value and may include partial
 	// metrics when err is non-nil; preserve metrics but do not return partial
 	// root IDs or retired-page ownership on failure.
 	if err != nil {
-		return 0, nil, applyResult.Metrics, err
+		return 0, nil, applyResult.Metrics, applyResult.ReadOnlyPrepare, applyResult.ReadOnlyPrepareNs, err
 	}
-	return applyResult.RootID, applyResult.PendingRetiredPages, applyResult.Metrics, nil
+	return applyResult.RootID, applyResult.PendingRetiredPages, applyResult.Metrics, applyResult.ReadOnlyPrepare, applyResult.ReadOnlyPrepareNs, nil
 }
 
 func buildOrderedRootDeltaBatch(baseIter, targetIter iterator.UnsafeIterator, trackRefs bool) (*batch.Batch, int, *valueLogRefDelta, error) {
@@ -969,7 +992,7 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 					err = zipperErr
 					return
 				}
-				newRoot, retired, metrics, err = applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, zipper.ApplyOptions{})
+				newRoot, retired, metrics, _, _, err = applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, zipper.ApplyOptions{})
 				if err != nil {
 					return
 				}
@@ -1515,6 +1538,11 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 			result.err = err
 			return result
 		}
+		if ordered[orderedIdx].PrepareReadOnly {
+			opts.applyOptions.PrepareReadOnly = true
+			opts.readOnlyPrepareResult = &result.readOnlyPrepare
+			opts.readOnlyPrepareNs = &result.readOnlyPrepareNs
+		}
 		beforePages, beforeLeafLogPtrs := uint64(0), uint64(0)
 		if outputTracker != nil {
 			beforePages, beforeLeafLogPtrs = outputTracker.PreparedOutputCounts()
@@ -1650,6 +1678,22 @@ func recordOrderedRootDeltaBatchGroupApplyResults(
 		if phaseStats != nil {
 			phaseStats.rootApplyMetrics.add(result.metrics)
 			phaseStats.rootApplyCalls++
+			if result.readOnlyPrepare.RootID != 0 || result.readOnlyPrepare.Ops != 0 || len(result.readOnlyPrepare.LeafSpans) != 0 || result.readOnlyPrepareNs != 0 {
+				summary := result.readOnlyPrepare.LeafSpanSummary()
+				phaseStats.rootApplyReadOnlyPrepareNs += result.readOnlyPrepareNs
+				phaseStats.rootApplyReadOnlyPrepareCalls++
+				phaseStats.rootApplyReadOnlyPrepareOps += uint64(summary.Ops)
+				phaseStats.rootApplyReadOnlyPrepareLeafSpans += uint64(summary.Spans)
+				if summary.ExactLeafSpans {
+					phaseStats.rootApplyReadOnlyPrepareExactPlans++
+				}
+				if summary.Maintenance {
+					phaseStats.rootApplyReadOnlyPrepareMaintenance++
+				}
+				if summary.ColdBuild {
+					phaseStats.rootApplyReadOnlyPrepareColdBuilds++
+				}
+			}
 		}
 	}
 	return firstErr
