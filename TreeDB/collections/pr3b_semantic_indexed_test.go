@@ -531,7 +531,6 @@ func pr3bRequireSemanticMetricKeys(tb testing.TB, mgr *CollectionManager) {
 		"treedb.collections.write_domain.indexed_semantic.fallback_records_total",
 		"treedb.collections.write_domain.indexed_semantic.effective_records_total",
 		"treedb.collections.write_domain.indexed_semantic.skipped_secondary_roots_total",
-		"treedb.collections.write_domain.indexed_semantic.duplicate_primary_ids_coalesced_total",
 		"treedb.collections.write_domain.coalesced_flush_batch.batches_total",
 		"treedb.collections.write_domain.coalesced_flush_batch.units_total",
 		"treedb.collections.write_domain.coalesced_flush_batch.docs_total",

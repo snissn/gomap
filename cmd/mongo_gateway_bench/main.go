@@ -2312,7 +2312,6 @@ func deriveTreeDBPhaseMetrics(delta map[string]float64, operations, driverCalls 
 	addPerOperationMetric(metrics, "squashed_root_delta_entries/doc", delta, "treedb.collections.write_domain.root_delta_plan.squashed_entries_total", operations)
 	addPerOperationMetric(metrics, "net_zero_root_plans/doc", delta, "treedb.collections.write_domain.root_delta_plan.net_zero_plans_total", operations)
 	addPerOperationMetric(metrics, "skipped_secondary_roots/doc", delta, "treedb.collections.write_domain.indexed_semantic.skipped_secondary_roots_total", operations)
-	addPerOperationMetric(metrics, "duplicate_primary_ids_coalesced/doc", delta, "treedb.collections.write_domain.indexed_semantic.duplicate_primary_ids_coalesced_total", operations)
 	addPerOperationMetric(metrics, "primary_root_publishes/doc", delta, "treedb.collections.write_domain.primary_only.root_publishes_total", operations)
 	addPerOperationMetric(metrics, "primary_root_delta_entries/doc", delta, "treedb.collections.write_domain.primary_only.root_delta_entries_total", operations)
 	if bytesTotal, ok := sumTreeDBMetricDeltas(delta, "treedb.collections.write_domain.primary_only.root_delta_key_bytes_total", "treedb.collections.write_domain.primary_only.root_delta_value_bytes_total"); ok {

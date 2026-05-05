@@ -403,120 +403,119 @@ type CollectionUpdateIndexStats struct {
 // CollectionManager. The counters are process-local observability; they are
 // not persisted with collection metadata.
 type CollectionManagerStats struct {
-	Domains                                     int
-	PendingDocuments                            int
-	PendingBytes                                int64
-	PendingRootRuns                             int
-	PendingIndexedFlushUnits                    int
-	PendingIndexedSemanticRecords               int
-	OverlayMutableDocuments                     int
-	OverlayQueuedIndexedFlushUnits              int
-	OverlayActiveIndexedFlushUnits              int
-	OverlayVisibleDepth                         int
-	IndexedAsyncFlushRunning                    int
-	MutationLockCalls                           uint64
-	MutationLockWait                            time.Duration
-	MutationLockHold                            time.Duration
-	IndexedStageBatches                         uint64
-	IndexedStageDocs                            uint64
-	IndexedStageBytes                           uint64
-	IndexedStageRootRuns                        uint64
-	IndexedSemanticRawRecords                   uint64
-	IndexedSemanticRawIndexDeltas               uint64
-	IndexedSemanticFallbackRecords              uint64
-	IndexedSemanticEffectiveRecords             uint64
-	IndexedSemanticSkippedSecondaryRoots        uint64
-	IndexedSemanticDuplicatePrimaryIDsCoalesced uint64
-	IndexedAutoFlushes                          uint64
-	IndexedAsyncFlushScheduled                  uint64
-	IndexedAsyncFlushBackpressure               uint64
-	IndexedAsyncFlushWait                       time.Duration
-	IndexedAsyncFlushErrors                     uint64
-	IndexedFlushCalls                           uint64
-	IndexedFlushErrors                          uint64
-	IndexedFlushForcedDrains                    uint64
-	IndexedFlushUnits                           uint64
-	IndexedFlushDocs                            uint64
-	IndexedFlushBytes                           uint64
-	IndexedFlushRootRuns                        uint64
-	IndexedFlushRoots                           uint64
-	IndexedFlushDuration                        time.Duration
-	IndexedFlushMaterialize                     time.Duration
-	IndexedFlushPublish                         time.Duration
-	CoalescedFlushBatches                       uint64
-	CoalescedFlushBatchUnits                    uint64
-	CoalescedFlushBatchDocs                     uint64
-	CoalescedFlushBatchBytes                    uint64
-	CoalescedFlushNetZeroBatches                uint64
-	RootDeltaPlanPrimaryRoots                   uint64
-	RootDeltaPlanTemplateRoots                  uint64
-	RootDeltaPlanIndexStateRoots                uint64
-	RootDeltaPlanSecondaryRoots                 uint64
-	RootDeltaPlanEntries                        uint64
-	RootDeltaPlanKeyBytes                       uint64
-	RootDeltaPlanValueBytes                     uint64
-	RootDeltaPlanTombstones                     uint64
-	RootDeltaPlanRawUnitPrimaryEntries          uint64
-	RootDeltaPlanRawUnitPrimaryBytes            uint64
-	RootDeltaPlanRawUnitPrimaryTombstones       uint64
-	RootDeltaPlanRawUnitTemplateEntries         uint64
-	RootDeltaPlanRawUnitTemplateBytes           uint64
-	RootDeltaPlanRawUnitTemplateTombstones      uint64
-	RootDeltaPlanRawUnitIndexStateEntries       uint64
-	RootDeltaPlanRawUnitIndexStateBytes         uint64
-	RootDeltaPlanRawUnitIndexStateTombstones    uint64
-	RootDeltaPlanRawUnitSecondaryEntries        uint64
-	RootDeltaPlanRawUnitSecondaryBytes          uint64
-	RootDeltaPlanRawUnitSecondaryTombstones     uint64
-	RootDeltaPlanFinalPrimaryEntries            uint64
-	RootDeltaPlanFinalPrimaryBytes              uint64
-	RootDeltaPlanFinalPrimaryTombstones         uint64
-	RootDeltaPlanFinalTemplateEntries           uint64
-	RootDeltaPlanFinalTemplateBytes             uint64
-	RootDeltaPlanFinalTemplateTombstones        uint64
-	RootDeltaPlanFinalIndexStateEntries         uint64
-	RootDeltaPlanFinalIndexStateBytes           uint64
-	RootDeltaPlanFinalIndexStateTombstones      uint64
-	RootDeltaPlanFinalSecondaryEntries          uint64
-	RootDeltaPlanFinalSecondaryBytes            uint64
-	RootDeltaPlanFinalSecondaryTombstones       uint64
-	RootDeltaPlanSquashedEntries                uint64
-	RootDeltaPlanNetZeroPlans                   uint64
-	PrimaryOnlyUpdateCalls                      uint64
-	PrimaryOnlyMatched                          uint64
-	PrimaryOnlyModified                         uint64
-	PrimaryOnlyBufferedCalls                    uint64
-	PrimaryOnlyRootPublishes                    uint64
-	PrimaryOnlyRootDeltaEntries                 uint64
-	PrimaryOnlyRootDeltaKeyBytes                uint64
-	PrimaryOnlyRootDeltaValueBytes              uint64
-	PrimaryOnlyCoalescedDocs                    uint64
-	PrimaryOnlyDuplicateIDsCoalesced            uint64
-	PrimaryOnlyDrainCalls                       uint64
-	PrimaryOnlyDrainDocs                        uint64
-	PrimaryOnlyDrainBytes                       uint64
-	PrimaryOnlyDrainDuration                    time.Duration
-	UpdateCombineRequests                       uint64
-	UpdateCombineBatches                        uint64
-	UpdateCombineBatchedRequests                uint64
-	UpdateCombineFallbackRequests               uint64
-	UpdateCombineQueueDepthMax                  uint64
-	UpdateBatchCalls                            uint64
-	UpdateBatchItems                            uint64
-	UpdateBatchMatched                          uint64
-	UpdateBatchModified                         uint64
-	UpdateBatchRuns                             uint64
-	UpdateBatchBufferedBatches                  uint64
-	UpdateBatchCurrentRead                      time.Duration
-	UpdateBatchCallback                         time.Duration
-	UpdateBatchPrepareDocuments                 time.Duration
-	UpdateBatchIndexStateExtract                time.Duration
-	UpdateBatchUniquePreflight                  time.Duration
-	UpdateBatchTemplateRunBuild                 time.Duration
-	UpdateBatchPrimaryRunBuild                  time.Duration
-	UpdateBatchIndexStateRunBuild               time.Duration
-	UpdateBatchSecondaryRunBuild                time.Duration
-	UpdateBatchBufferStage                      time.Duration
+	Domains                                  int
+	PendingDocuments                         int
+	PendingBytes                             int64
+	PendingRootRuns                          int
+	PendingIndexedFlushUnits                 int
+	PendingIndexedSemanticRecords            int
+	OverlayMutableDocuments                  int
+	OverlayQueuedIndexedFlushUnits           int
+	OverlayActiveIndexedFlushUnits           int
+	OverlayVisibleDepth                      int
+	IndexedAsyncFlushRunning                 int
+	MutationLockCalls                        uint64
+	MutationLockWait                         time.Duration
+	MutationLockHold                         time.Duration
+	IndexedStageBatches                      uint64
+	IndexedStageDocs                         uint64
+	IndexedStageBytes                        uint64
+	IndexedStageRootRuns                     uint64
+	IndexedSemanticRawRecords                uint64
+	IndexedSemanticRawIndexDeltas            uint64
+	IndexedSemanticFallbackRecords           uint64
+	IndexedSemanticEffectiveRecords          uint64
+	IndexedSemanticSkippedSecondaryRoots     uint64
+	IndexedAutoFlushes                       uint64
+	IndexedAsyncFlushScheduled               uint64
+	IndexedAsyncFlushBackpressure            uint64
+	IndexedAsyncFlushWait                    time.Duration
+	IndexedAsyncFlushErrors                  uint64
+	IndexedFlushCalls                        uint64
+	IndexedFlushErrors                       uint64
+	IndexedFlushForcedDrains                 uint64
+	IndexedFlushUnits                        uint64
+	IndexedFlushDocs                         uint64
+	IndexedFlushBytes                        uint64
+	IndexedFlushRootRuns                     uint64
+	IndexedFlushRoots                        uint64
+	IndexedFlushDuration                     time.Duration
+	IndexedFlushMaterialize                  time.Duration
+	IndexedFlushPublish                      time.Duration
+	CoalescedFlushBatches                    uint64
+	CoalescedFlushBatchUnits                 uint64
+	CoalescedFlushBatchDocs                  uint64
+	CoalescedFlushBatchBytes                 uint64
+	CoalescedFlushNetZeroBatches             uint64
+	RootDeltaPlanPrimaryRoots                uint64
+	RootDeltaPlanTemplateRoots               uint64
+	RootDeltaPlanIndexStateRoots             uint64
+	RootDeltaPlanSecondaryRoots              uint64
+	RootDeltaPlanEntries                     uint64
+	RootDeltaPlanKeyBytes                    uint64
+	RootDeltaPlanValueBytes                  uint64
+	RootDeltaPlanTombstones                  uint64
+	RootDeltaPlanRawUnitPrimaryEntries       uint64
+	RootDeltaPlanRawUnitPrimaryBytes         uint64
+	RootDeltaPlanRawUnitPrimaryTombstones    uint64
+	RootDeltaPlanRawUnitTemplateEntries      uint64
+	RootDeltaPlanRawUnitTemplateBytes        uint64
+	RootDeltaPlanRawUnitTemplateTombstones   uint64
+	RootDeltaPlanRawUnitIndexStateEntries    uint64
+	RootDeltaPlanRawUnitIndexStateBytes      uint64
+	RootDeltaPlanRawUnitIndexStateTombstones uint64
+	RootDeltaPlanRawUnitSecondaryEntries     uint64
+	RootDeltaPlanRawUnitSecondaryBytes       uint64
+	RootDeltaPlanRawUnitSecondaryTombstones  uint64
+	RootDeltaPlanFinalPrimaryEntries         uint64
+	RootDeltaPlanFinalPrimaryBytes           uint64
+	RootDeltaPlanFinalPrimaryTombstones      uint64
+	RootDeltaPlanFinalTemplateEntries        uint64
+	RootDeltaPlanFinalTemplateBytes          uint64
+	RootDeltaPlanFinalTemplateTombstones     uint64
+	RootDeltaPlanFinalIndexStateEntries      uint64
+	RootDeltaPlanFinalIndexStateBytes        uint64
+	RootDeltaPlanFinalIndexStateTombstones   uint64
+	RootDeltaPlanFinalSecondaryEntries       uint64
+	RootDeltaPlanFinalSecondaryBytes         uint64
+	RootDeltaPlanFinalSecondaryTombstones    uint64
+	RootDeltaPlanSquashedEntries             uint64
+	RootDeltaPlanNetZeroPlans                uint64
+	PrimaryOnlyUpdateCalls                   uint64
+	PrimaryOnlyMatched                       uint64
+	PrimaryOnlyModified                      uint64
+	PrimaryOnlyBufferedCalls                 uint64
+	PrimaryOnlyRootPublishes                 uint64
+	PrimaryOnlyRootDeltaEntries              uint64
+	PrimaryOnlyRootDeltaKeyBytes             uint64
+	PrimaryOnlyRootDeltaValueBytes           uint64
+	PrimaryOnlyCoalescedDocs                 uint64
+	PrimaryOnlyDuplicateIDsCoalesced         uint64
+	PrimaryOnlyDrainCalls                    uint64
+	PrimaryOnlyDrainDocs                     uint64
+	PrimaryOnlyDrainBytes                    uint64
+	PrimaryOnlyDrainDuration                 time.Duration
+	UpdateCombineRequests                    uint64
+	UpdateCombineBatches                     uint64
+	UpdateCombineBatchedRequests             uint64
+	UpdateCombineFallbackRequests            uint64
+	UpdateCombineQueueDepthMax               uint64
+	UpdateBatchCalls                         uint64
+	UpdateBatchItems                         uint64
+	UpdateBatchMatched                       uint64
+	UpdateBatchModified                      uint64
+	UpdateBatchRuns                          uint64
+	UpdateBatchBufferedBatches               uint64
+	UpdateBatchCurrentRead                   time.Duration
+	UpdateBatchCallback                      time.Duration
+	UpdateBatchPrepareDocuments              time.Duration
+	UpdateBatchIndexStateExtract             time.Duration
+	UpdateBatchUniquePreflight               time.Duration
+	UpdateBatchTemplateRunBuild              time.Duration
+	UpdateBatchPrimaryRunBuild               time.Duration
+	UpdateBatchIndexStateRunBuild            time.Duration
+	UpdateBatchSecondaryRunBuild             time.Duration
+	UpdateBatchBufferStage                   time.Duration
 	// Detailed buffer-stage aggregate timings are populated only when
 	// CollectionManager.SetUpdateBatchDetailedStatsEnabled(true) is enabled.
 	// UpdateBatchBufferLockHold is an enclosing domain mutex hold-time metric
@@ -864,141 +863,140 @@ type collectionWriteDomain struct {
 	rootRunCount     int
 	writeGeneration  uint64
 
-	mutationLockCalls                           atomic.Uint64
-	mutationLockWaitTotalNs                     atomic.Uint64
-	mutationLockHoldTotalNs                     atomic.Uint64
-	indexedStageBatches                         atomic.Uint64
-	indexedStageDocs                            atomic.Uint64
-	indexedStageBytes                           atomic.Uint64
-	indexedStageRootRuns                        atomic.Uint64
-	indexedSemanticRawRecords                   atomic.Uint64
-	indexedSemanticRawIndexDeltas               atomic.Uint64
-	indexedSemanticFallbackRecords              atomic.Uint64
-	indexedSemanticEffectiveRecords             atomic.Uint64
-	indexedSemanticSkippedSecondaryRoots        atomic.Uint64
-	indexedSemanticDuplicatePrimaryIDsCoalesced atomic.Uint64
-	indexedAutoFlushes                          atomic.Uint64
-	indexedAsyncFlushScheduled                  atomic.Uint64
-	indexedAsyncFlushBackpressure               atomic.Uint64
-	indexedAsyncFlushWaitTotalNs                atomic.Uint64
-	indexedAsyncFlushErrors                     atomic.Uint64
-	indexedFlushCalls                           atomic.Uint64
-	indexedFlushErrors                          atomic.Uint64
-	indexedFlushForcedDrains                    atomic.Uint64
-	indexedFlushUnitsTotal                      atomic.Uint64
-	indexedFlushRequeues                        atomic.Uint64
-	indexedFlushRequeuedUnits                   atomic.Uint64
-	indexedFlushLostOwnership                   atomic.Uint64
-	indexedFlushRootBaseMismatches              atomic.Uint64
-	indexedFlushDocs                            atomic.Uint64
-	indexedFlushBytes                           atomic.Uint64
-	indexedFlushRootRuns                        atomic.Uint64
-	indexedFlushRoots                           atomic.Uint64
-	indexedFlushDurationTotalNs                 atomic.Uint64
-	indexedFlushMaterializeTotalNs              atomic.Uint64
-	indexedFlushPublishTotalNs                  atomic.Uint64
-	coalescedFlushBatches                       atomic.Uint64
-	coalescedFlushBatchUnits                    atomic.Uint64
-	coalescedFlushBatchDocs                     atomic.Uint64
-	coalescedFlushBatchBytes                    atomic.Uint64
-	coalescedFlushNetZeroBatches                atomic.Uint64
-	rootDeltaPlanPrimaryRoots                   atomic.Uint64
-	rootDeltaPlanTemplateRoots                  atomic.Uint64
-	rootDeltaPlanIndexStateRoots                atomic.Uint64
-	rootDeltaPlanSecondaryRoots                 atomic.Uint64
-	rootDeltaPlanEntries                        atomic.Uint64
-	rootDeltaPlanKeyBytes                       atomic.Uint64
-	rootDeltaPlanValueBytes                     atomic.Uint64
-	rootDeltaPlanTombstones                     atomic.Uint64
-	rootDeltaPlanRawUnitPrimaryEntries          atomic.Uint64
-	rootDeltaPlanRawUnitPrimaryBytes            atomic.Uint64
-	rootDeltaPlanRawUnitPrimaryTombstones       atomic.Uint64
-	rootDeltaPlanRawUnitTemplateEntries         atomic.Uint64
-	rootDeltaPlanRawUnitTemplateBytes           atomic.Uint64
-	rootDeltaPlanRawUnitTemplateTombstones      atomic.Uint64
-	rootDeltaPlanRawUnitIndexStateEntries       atomic.Uint64
-	rootDeltaPlanRawUnitIndexStateBytes         atomic.Uint64
-	rootDeltaPlanRawUnitIndexStateTombstones    atomic.Uint64
-	rootDeltaPlanRawUnitSecondaryEntries        atomic.Uint64
-	rootDeltaPlanRawUnitSecondaryBytes          atomic.Uint64
-	rootDeltaPlanRawUnitSecondaryTombstones     atomic.Uint64
-	rootDeltaPlanFinalPrimaryEntries            atomic.Uint64
-	rootDeltaPlanFinalPrimaryBytes              atomic.Uint64
-	rootDeltaPlanFinalPrimaryTombstones         atomic.Uint64
-	rootDeltaPlanFinalTemplateEntries           atomic.Uint64
-	rootDeltaPlanFinalTemplateBytes             atomic.Uint64
-	rootDeltaPlanFinalTemplateTombstones        atomic.Uint64
-	rootDeltaPlanFinalIndexStateEntries         atomic.Uint64
-	rootDeltaPlanFinalIndexStateBytes           atomic.Uint64
-	rootDeltaPlanFinalIndexStateTombstones      atomic.Uint64
-	rootDeltaPlanFinalSecondaryEntries          atomic.Uint64
-	rootDeltaPlanFinalSecondaryBytes            atomic.Uint64
-	rootDeltaPlanFinalSecondaryTombstones       atomic.Uint64
-	rootDeltaPlanSquashedEntries                atomic.Uint64
-	rootDeltaPlanNetZeroPlans                   atomic.Uint64
-	primaryOnlyUpdateCalls                      atomic.Uint64
-	primaryOnlyMatched                          atomic.Uint64
-	primaryOnlyModified                         atomic.Uint64
-	primaryOnlyBufferedCalls                    atomic.Uint64
-	primaryOnlyRootPublishes                    atomic.Uint64
-	primaryOnlyRootDeltaEntries                 atomic.Uint64
-	primaryOnlyRootDeltaKeyBytes                atomic.Uint64
-	primaryOnlyRootDeltaValueBytes              atomic.Uint64
-	primaryOnlyCoalescedDocs                    atomic.Uint64
-	primaryOnlyDuplicateIDsCoalesced            atomic.Uint64
-	primaryOnlyDrainCalls                       atomic.Uint64
-	primaryOnlyDrainDocs                        atomic.Uint64
-	primaryOnlyDrainBytes                       atomic.Uint64
-	primaryOnlyDrainDurationTotalNs             atomic.Uint64
-	updateCombineRequests                       atomic.Uint64
-	updateCombineBatches                        atomic.Uint64
-	updateCombineBatchedRequests                atomic.Uint64
-	updateCombineFallbackRequests               atomic.Uint64
-	updateCombineQueueDepthMax                  atomic.Uint64
-	updateBatchCalls                            atomic.Uint64
-	updateBatchItems                            atomic.Uint64
-	updateBatchMatched                          atomic.Uint64
-	updateBatchModified                         atomic.Uint64
-	updateBatchRuns                             atomic.Uint64
-	updateBatchBufferedBatches                  atomic.Uint64
-	updateBatchCurrentReadNs                    atomic.Uint64
-	updateBatchCallbackNs                       atomic.Uint64
-	updateBatchPrepareNs                        atomic.Uint64
-	updateBatchIndexStateNs                     atomic.Uint64
-	updateBatchUniquePreflightNs                atomic.Uint64
-	updateBatchTemplateRunNs                    atomic.Uint64
-	updateBatchPrimaryRunNs                     atomic.Uint64
-	updateBatchIndexStateRunNs                  atomic.Uint64
-	updateBatchSecondaryRunNs                   atomic.Uint64
-	updateBatchBufferStageNs                    atomic.Uint64
-	updateBatchBufferPrecheckNs                 atomic.Uint64
-	updateBatchBufferLockWaitNs                 atomic.Uint64
-	updateBatchBufferLockHoldNs                 atomic.Uint64
-	updateBatchBufferValidationNs               atomic.Uint64
-	updateBatchBufferRootScanNs                 atomic.Uint64
-	updateBatchBufferDomainPrepareNs            atomic.Uint64
-	updateBatchBufferPrimaryIdxNs               atomic.Uint64
-	updateBatchBufferUniqueIdxNs                atomic.Uint64
-	updateBatchBufferRootAppendNs               atomic.Uint64
-	updateBatchBufferFlushNs                    atomic.Uint64
-	updateBatchPublishNs                        atomic.Uint64
-	updateBatchSecondaryDeletes                 atomic.Uint64
-	updateBatchSecondarySets                    atomic.Uint64
-	updateBatchSecondaryKeyBytes                atomic.Uint64
-	updateBatchIndexValueChanges                atomic.Uint64
-	updateBatchIndexValueUnchanged              atomic.Uint64
-	updateBatchMaskFallbacks                    atomic.Uint64
-	updateBatchUniqueChecks                     atomic.Uint64
-	updateBatchUniqueCheckSkips                 atomic.Uint64
-	updateBatchDetailedStats                    atomic.Bool
-	updateBatchIndexChanged                     [maxCollectionUpdateInlineIndexStats]atomic.Uint64
-	updateBatchIndexUnchanged                   [maxCollectionUpdateInlineIndexStats]atomic.Uint64
-	updateBatchIndexUniqueChecks                [maxCollectionUpdateInlineIndexStats]atomic.Uint64
-	updateBatchIndexUniqueSkips                 [maxCollectionUpdateInlineIndexStats]atomic.Uint64
-	updateBatchIndexSecondaryRuns               [maxCollectionUpdateInlineIndexStats]atomic.Uint64
-	updateBatchIndexSecondaryDeletes            [maxCollectionUpdateInlineIndexStats]atomic.Uint64
-	updateBatchIndexSecondarySets               [maxCollectionUpdateInlineIndexStats]atomic.Uint64
-	updateBatchIndexSecondaryBytes              [maxCollectionUpdateInlineIndexStats]atomic.Uint64
+	mutationLockCalls                        atomic.Uint64
+	mutationLockWaitTotalNs                  atomic.Uint64
+	mutationLockHoldTotalNs                  atomic.Uint64
+	indexedStageBatches                      atomic.Uint64
+	indexedStageDocs                         atomic.Uint64
+	indexedStageBytes                        atomic.Uint64
+	indexedStageRootRuns                     atomic.Uint64
+	indexedSemanticRawRecords                atomic.Uint64
+	indexedSemanticRawIndexDeltas            atomic.Uint64
+	indexedSemanticFallbackRecords           atomic.Uint64
+	indexedSemanticEffectiveRecords          atomic.Uint64
+	indexedSemanticSkippedSecondaryRoots     atomic.Uint64
+	indexedAutoFlushes                       atomic.Uint64
+	indexedAsyncFlushScheduled               atomic.Uint64
+	indexedAsyncFlushBackpressure            atomic.Uint64
+	indexedAsyncFlushWaitTotalNs             atomic.Uint64
+	indexedAsyncFlushErrors                  atomic.Uint64
+	indexedFlushCalls                        atomic.Uint64
+	indexedFlushErrors                       atomic.Uint64
+	indexedFlushForcedDrains                 atomic.Uint64
+	indexedFlushUnitsTotal                   atomic.Uint64
+	indexedFlushRequeues                     atomic.Uint64
+	indexedFlushRequeuedUnits                atomic.Uint64
+	indexedFlushLostOwnership                atomic.Uint64
+	indexedFlushRootBaseMismatches           atomic.Uint64
+	indexedFlushDocs                         atomic.Uint64
+	indexedFlushBytes                        atomic.Uint64
+	indexedFlushRootRuns                     atomic.Uint64
+	indexedFlushRoots                        atomic.Uint64
+	indexedFlushDurationTotalNs              atomic.Uint64
+	indexedFlushMaterializeTotalNs           atomic.Uint64
+	indexedFlushPublishTotalNs               atomic.Uint64
+	coalescedFlushBatches                    atomic.Uint64
+	coalescedFlushBatchUnits                 atomic.Uint64
+	coalescedFlushBatchDocs                  atomic.Uint64
+	coalescedFlushBatchBytes                 atomic.Uint64
+	coalescedFlushNetZeroBatches             atomic.Uint64
+	rootDeltaPlanPrimaryRoots                atomic.Uint64
+	rootDeltaPlanTemplateRoots               atomic.Uint64
+	rootDeltaPlanIndexStateRoots             atomic.Uint64
+	rootDeltaPlanSecondaryRoots              atomic.Uint64
+	rootDeltaPlanEntries                     atomic.Uint64
+	rootDeltaPlanKeyBytes                    atomic.Uint64
+	rootDeltaPlanValueBytes                  atomic.Uint64
+	rootDeltaPlanTombstones                  atomic.Uint64
+	rootDeltaPlanRawUnitPrimaryEntries       atomic.Uint64
+	rootDeltaPlanRawUnitPrimaryBytes         atomic.Uint64
+	rootDeltaPlanRawUnitPrimaryTombstones    atomic.Uint64
+	rootDeltaPlanRawUnitTemplateEntries      atomic.Uint64
+	rootDeltaPlanRawUnitTemplateBytes        atomic.Uint64
+	rootDeltaPlanRawUnitTemplateTombstones   atomic.Uint64
+	rootDeltaPlanRawUnitIndexStateEntries    atomic.Uint64
+	rootDeltaPlanRawUnitIndexStateBytes      atomic.Uint64
+	rootDeltaPlanRawUnitIndexStateTombstones atomic.Uint64
+	rootDeltaPlanRawUnitSecondaryEntries     atomic.Uint64
+	rootDeltaPlanRawUnitSecondaryBytes       atomic.Uint64
+	rootDeltaPlanRawUnitSecondaryTombstones  atomic.Uint64
+	rootDeltaPlanFinalPrimaryEntries         atomic.Uint64
+	rootDeltaPlanFinalPrimaryBytes           atomic.Uint64
+	rootDeltaPlanFinalPrimaryTombstones      atomic.Uint64
+	rootDeltaPlanFinalTemplateEntries        atomic.Uint64
+	rootDeltaPlanFinalTemplateBytes          atomic.Uint64
+	rootDeltaPlanFinalTemplateTombstones     atomic.Uint64
+	rootDeltaPlanFinalIndexStateEntries      atomic.Uint64
+	rootDeltaPlanFinalIndexStateBytes        atomic.Uint64
+	rootDeltaPlanFinalIndexStateTombstones   atomic.Uint64
+	rootDeltaPlanFinalSecondaryEntries       atomic.Uint64
+	rootDeltaPlanFinalSecondaryBytes         atomic.Uint64
+	rootDeltaPlanFinalSecondaryTombstones    atomic.Uint64
+	rootDeltaPlanSquashedEntries             atomic.Uint64
+	rootDeltaPlanNetZeroPlans                atomic.Uint64
+	primaryOnlyUpdateCalls                   atomic.Uint64
+	primaryOnlyMatched                       atomic.Uint64
+	primaryOnlyModified                      atomic.Uint64
+	primaryOnlyBufferedCalls                 atomic.Uint64
+	primaryOnlyRootPublishes                 atomic.Uint64
+	primaryOnlyRootDeltaEntries              atomic.Uint64
+	primaryOnlyRootDeltaKeyBytes             atomic.Uint64
+	primaryOnlyRootDeltaValueBytes           atomic.Uint64
+	primaryOnlyCoalescedDocs                 atomic.Uint64
+	primaryOnlyDuplicateIDsCoalesced         atomic.Uint64
+	primaryOnlyDrainCalls                    atomic.Uint64
+	primaryOnlyDrainDocs                     atomic.Uint64
+	primaryOnlyDrainBytes                    atomic.Uint64
+	primaryOnlyDrainDurationTotalNs          atomic.Uint64
+	updateCombineRequests                    atomic.Uint64
+	updateCombineBatches                     atomic.Uint64
+	updateCombineBatchedRequests             atomic.Uint64
+	updateCombineFallbackRequests            atomic.Uint64
+	updateCombineQueueDepthMax               atomic.Uint64
+	updateBatchCalls                         atomic.Uint64
+	updateBatchItems                         atomic.Uint64
+	updateBatchMatched                       atomic.Uint64
+	updateBatchModified                      atomic.Uint64
+	updateBatchRuns                          atomic.Uint64
+	updateBatchBufferedBatches               atomic.Uint64
+	updateBatchCurrentReadNs                 atomic.Uint64
+	updateBatchCallbackNs                    atomic.Uint64
+	updateBatchPrepareNs                     atomic.Uint64
+	updateBatchIndexStateNs                  atomic.Uint64
+	updateBatchUniquePreflightNs             atomic.Uint64
+	updateBatchTemplateRunNs                 atomic.Uint64
+	updateBatchPrimaryRunNs                  atomic.Uint64
+	updateBatchIndexStateRunNs               atomic.Uint64
+	updateBatchSecondaryRunNs                atomic.Uint64
+	updateBatchBufferStageNs                 atomic.Uint64
+	updateBatchBufferPrecheckNs              atomic.Uint64
+	updateBatchBufferLockWaitNs              atomic.Uint64
+	updateBatchBufferLockHoldNs              atomic.Uint64
+	updateBatchBufferValidationNs            atomic.Uint64
+	updateBatchBufferRootScanNs              atomic.Uint64
+	updateBatchBufferDomainPrepareNs         atomic.Uint64
+	updateBatchBufferPrimaryIdxNs            atomic.Uint64
+	updateBatchBufferUniqueIdxNs             atomic.Uint64
+	updateBatchBufferRootAppendNs            atomic.Uint64
+	updateBatchBufferFlushNs                 atomic.Uint64
+	updateBatchPublishNs                     atomic.Uint64
+	updateBatchSecondaryDeletes              atomic.Uint64
+	updateBatchSecondarySets                 atomic.Uint64
+	updateBatchSecondaryKeyBytes             atomic.Uint64
+	updateBatchIndexValueChanges             atomic.Uint64
+	updateBatchIndexValueUnchanged           atomic.Uint64
+	updateBatchMaskFallbacks                 atomic.Uint64
+	updateBatchUniqueChecks                  atomic.Uint64
+	updateBatchUniqueCheckSkips              atomic.Uint64
+	updateBatchDetailedStats                 atomic.Bool
+	updateBatchIndexChanged                  [maxCollectionUpdateInlineIndexStats]atomic.Uint64
+	updateBatchIndexUnchanged                [maxCollectionUpdateInlineIndexStats]atomic.Uint64
+	updateBatchIndexUniqueChecks             [maxCollectionUpdateInlineIndexStats]atomic.Uint64
+	updateBatchIndexUniqueSkips              [maxCollectionUpdateInlineIndexStats]atomic.Uint64
+	updateBatchIndexSecondaryRuns            [maxCollectionUpdateInlineIndexStats]atomic.Uint64
+	updateBatchIndexSecondaryDeletes         [maxCollectionUpdateInlineIndexStats]atomic.Uint64
+	updateBatchIndexSecondarySets            [maxCollectionUpdateInlineIndexStats]atomic.Uint64
+	updateBatchIndexSecondaryBytes           [maxCollectionUpdateInlineIndexStats]atomic.Uint64
 }
 
 func NewCollectionManager(database *backenddb.DB) *CollectionManager {
@@ -1190,7 +1188,6 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.indexed_semantic.fallback_records_total"] = fmt.Sprintf("%d", stats.IndexedSemanticFallbackRecords)
 	out["treedb.collections.write_domain.indexed_semantic.effective_records_total"] = fmt.Sprintf("%d", stats.IndexedSemanticEffectiveRecords)
 	out["treedb.collections.write_domain.indexed_semantic.skipped_secondary_roots_total"] = fmt.Sprintf("%d", stats.IndexedSemanticSkippedSecondaryRoots)
-	out["treedb.collections.write_domain.indexed_semantic.duplicate_primary_ids_coalesced_total"] = fmt.Sprintf("%d", stats.IndexedSemanticDuplicatePrimaryIDsCoalesced)
 	out["treedb.collections.write_domain.indexed_stage.auto_flushes_total"] = fmt.Sprintf("%d", stats.IndexedAutoFlushes)
 	out["treedb.collections.write_domain.indexed_async_flush.scheduled_total"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushScheduled)
 	out["treedb.collections.write_domain.indexed_async_flush.backpressure_sync_total"] = fmt.Sprintf("%d", stats.IndexedAsyncFlushBackpressure)
@@ -1433,7 +1430,6 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.IndexedSemanticFallbackRecords += other.IndexedSemanticFallbackRecords
 	s.IndexedSemanticEffectiveRecords += other.IndexedSemanticEffectiveRecords
 	s.IndexedSemanticSkippedSecondaryRoots += other.IndexedSemanticSkippedSecondaryRoots
-	s.IndexedSemanticDuplicatePrimaryIDsCoalesced += other.IndexedSemanticDuplicatePrimaryIDsCoalesced
 	s.IndexedAutoFlushes += other.IndexedAutoFlushes
 	s.IndexedAsyncFlushScheduled += other.IndexedAsyncFlushScheduled
 	s.IndexedAsyncFlushBackpressure += other.IndexedAsyncFlushBackpressure
@@ -1597,7 +1593,6 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.IndexedSemanticFallbackRecords = domain.indexedSemanticFallbackRecords.Load()
 	stats.IndexedSemanticEffectiveRecords = domain.indexedSemanticEffectiveRecords.Load()
 	stats.IndexedSemanticSkippedSecondaryRoots = domain.indexedSemanticSkippedSecondaryRoots.Load()
-	stats.IndexedSemanticDuplicatePrimaryIDsCoalesced = domain.indexedSemanticDuplicatePrimaryIDsCoalesced.Load()
 	stats.IndexedAutoFlushes = domain.indexedAutoFlushes.Load()
 	stats.IndexedAsyncFlushScheduled = domain.indexedAsyncFlushScheduled.Load()
 	stats.IndexedAsyncFlushBackpressure = domain.indexedAsyncFlushBackpressure.Load()
@@ -2228,9 +2223,6 @@ func (domain *collectionWriteDomain) observeRootDeltaPlanCoalescing(rawStats, fi
 	}
 	if rawStats.entries > finalStats.entries {
 		domain.rootDeltaPlanSquashedEntries.Add(rawStats.entries - finalStats.entries)
-	}
-	if rawStats.primaryDetail.entries > finalStats.primaryDetail.entries {
-		domain.indexedSemanticDuplicatePrimaryIDsCoalesced.Add(rawStats.primaryDetail.entries - finalStats.primaryDetail.entries)
 	}
 	if rawSecondaryRoots > finalSecondaryRoots {
 		domain.indexedSemanticSkippedSecondaryRoots.Add(rawSecondaryRoots - finalSecondaryRoots)
@@ -3394,6 +3386,14 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 		drainUniqueDocs = table.Len()
 	}
 	iter := table.NewIterator(nil, nil)
+	deltaStats, err := collectionRootDeltaPlanStatsFromCollectionRootRuns(meta.Name, []collectionRootRun{{
+		name:  rootName,
+		table: table,
+	}})
+	if err != nil {
+		_ = iter.Close()
+		return err
+	}
 
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
 		BaseRoot:      baseRoot,
@@ -3417,6 +3417,8 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	domain.baseSystemRoot = newSystemRoot
 	domain.primaryRoot = rootIDs[0]
 	domain.observePrimaryOnlyDrain(drainDocs, drainBytes, drainUniqueDocs, collectionObservedElapsedSince(drainStart))
+	domain.observeRootDeltaPlanFinal(deltaStats)
+	domain.observeRootDeltaPlan(deltaStats)
 	domain.table = newCollectionRunTable(0)
 	domain.count = 0
 	domain.mutableCount = 0
@@ -5791,6 +5793,35 @@ func collectionRootDeltaPlanStatsFromRootRuns(collectionName string, rootRuns ma
 	return stats, nil
 }
 
+func collectionRootDeltaPlanStatsFromCollectionRootRuns(collectionName string, runs []collectionRootRun) (collectionRootDeltaPlanStats, error) {
+	var stats collectionRootDeltaPlanStats
+	for _, run := range runs {
+		if run.table == nil {
+			continue
+		}
+		kind := stats.addRoot(collectionName, run.name)
+		iter := run.table.NewIterator(nil, nil)
+		stats.addIterator(kind, iter)
+		err := iter.Error()
+		closeErr := iter.Close()
+		if err != nil {
+			return stats, err
+		}
+		if closeErr != nil {
+			return stats, closeErr
+		}
+	}
+	return stats, nil
+}
+
+func collectionRootDeltaPlanStatsFromSystemTargetEntries(collectionName, rootName string, entries []systemTargetEntry) collectionRootDeltaPlanStats {
+	iter := &systemTargetIterator{entries: entries}
+	var stats collectionRootDeltaPlanStats
+	kind := stats.addRoot(collectionName, rootName)
+	stats.addIterator(kind, iter)
+	return stats
+}
+
 type collectionRootDeltaPlanKind uint8
 
 const (
@@ -6562,11 +6593,16 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 	defer func() { _ = snap.Close() }()
 
 	resultID := bytes.Clone(id)
-	iter := &systemTargetIterator{entries: []systemTargetEntry{{
+	entries := []systemTargetEntry{{
 		key:   resultID,
 		value: bytes.Clone(document),
-	}}}
+	}}
+	iter := &systemTargetIterator{entries: entries}
 	defer func() { _ = iter.Close() }()
+	var deltaStats collectionRootDeltaPlanStats
+	if c.writeDomain != nil {
+		deltaStats = collectionRootDeltaPlanStatsFromSystemTargetEntries(c.meta.Name, rootName, entries)
+	}
 
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
 		BaseRoot:      baseRoot,
@@ -6582,6 +6618,10 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 		return nil, unexpectedOrderedRootCountError(c.meta.Name, 1, len(rootIDs))
 	}
 	c.rememberCatalogAtSystemRoot(newSystemRoot, cloneCatalogWithRootUpdates(catalog, c.meta, []string{rootName}, rootIDs))
+	if c.writeDomain != nil {
+		c.writeDomain.observeRootDeltaPlanFinal(deltaStats)
+		c.writeDomain.observeRootDeltaPlan(deltaStats)
+	}
 	return resultID, nil
 }
 
@@ -6838,6 +6878,13 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 			StoragePolicy: run.storagePolicy,
 		})
 	}
+	var deltaStats collectionRootDeltaPlanStats
+	if c.writeDomain != nil {
+		deltaStats, err = collectionRootDeltaPlanStatsFromCollectionRootRuns(meta.Name, plan.runs)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	publishStart := time.Now()
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -6853,6 +6900,10 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 	nextCatalog := cloneCatalogWithRootUpdates(currentCatalog, meta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	if c.writeDomain != nil {
+		c.writeDomain.observeRootDeltaPlanFinal(deltaStats)
+		c.writeDomain.observeRootDeltaPlan(deltaStats)
+	}
 	c.setLastInsertStats(plan.stats.CollectionInsertStats)
 	return plan.resultIDs, nil
 }
@@ -7108,6 +7159,16 @@ func (c *Collection) insertBatchNoIndex(
 		_ = iter.Close()
 		resetCollectionRunTable(table)
 	}()
+	var deltaStats collectionRootDeltaPlanStats
+	if c.writeDomain != nil {
+		deltaStats, err = collectionRootDeltaPlanStatsFromCollectionRootRuns(c.meta.Name, []collectionRootRun{{
+			name:  rootName,
+			table: table,
+		}})
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	baseRootIDs := map[string]uint64{rootName: baseRoot}
 	publishStart := time.Now()
@@ -7129,6 +7190,10 @@ func (c *Collection) insertBatchNoIndex(
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, []string{rootName}, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	if c.writeDomain != nil {
+		c.writeDomain.observeRootDeltaPlanFinal(deltaStats)
+		c.writeDomain.observeRootDeltaPlan(deltaStats)
+	}
 	c.setLastInsertStats(stats)
 	return resultIDs, nil
 }

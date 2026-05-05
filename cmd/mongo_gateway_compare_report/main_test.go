@@ -1259,7 +1259,6 @@ func TestWriteSummaryTSVRendersTreeDBCoalescingColumns(t *testing.T) {
 			"net_zero_root_batches/doc":                0.01,
 			"net_zero_root_plans/doc":                  0.02,
 			"skipped_secondary_roots/doc":              0.5,
-			"duplicate_primary_ids_coalesced/doc":      0.75,
 			"primary_only_duplicate_ids_coalesced/doc": 0.125,
 			"primary_only_drains/doc":                  0.05,
 			"primary_only_drain_docs/drain":            20,
@@ -1303,7 +1302,6 @@ func TestWriteSummaryTSVRendersTreeDBCoalescingColumns(t *testing.T) {
 		"treedb_final_root_delta_entries_per_doc":             "2.500000",
 		"treedb_squashed_root_delta_entries_per_doc":          "1.500000",
 		"treedb_net_zero_root_batches_per_doc":                "0.010000",
-		"treedb_duplicate_primary_ids_coalesced_per_doc":      "0.750000",
 		"treedb_primary_only_duplicate_ids_coalesced_per_doc": "0.125000",
 		"treedb_primary_only_drains_per_doc":                  "0.050000",
 	} {
@@ -1411,7 +1409,6 @@ func TestRenderWriterSweepCounterTableUsesPhaseMetrics(t *testing.T) {
 			"net_zero_root_batches/doc":                   0.01,
 			"net_zero_root_plans/doc":                     0.02,
 			"skipped_secondary_roots/doc":                 0.44,
-			"duplicate_primary_ids_coalesced/doc":         0.55,
 			"primary_root_publishes/doc":                  0.5,
 			"primary_root_delta_entries/doc":              1,
 			"primary_root_delta_bytes/doc":                42,
@@ -1456,7 +1453,7 @@ func TestRenderWriterSweepCounterTableUsesPhaseMetrics(t *testing.T) {
 		"| 1000 | 0 | `treedb_0idx` | `mongo_baseline` | 8 | 1200 | 2400",
 		"3.00 | 96.0 | 8192",
 		"2.00 | 200 | 0.05 | 1.50 | 150 | 0.05 | 0.10 | 10.0 | 0 | 0.40 | 40.0 | 0 | 0.50 | 50.0 | 0 | 1.25 | 125 | 0 | 1.00 | 100 | 0 | 0.05 | 5.00 | 0 | 0.20 | 20.0 | 0 | 0.25 | 25.0 | 0",
-		"0.75 | 0.01 | 0.02 | 0.44 | 0.55",
+		"0.75 | 0.01 | 0.02 | 0.44 | 0.50 | 1.00 | 42.0",
 		"0.25 | 0.12 | 8.00 | `/tmp/treedb.json` |",
 	} {
 		if !strings.Contains(rendered, want) {
