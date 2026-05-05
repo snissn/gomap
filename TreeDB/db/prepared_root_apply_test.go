@@ -114,6 +114,64 @@ func TestPreparedRootApplyStatsCountsPreparedZeroRoot(t *testing.T) {
 	}
 }
 
+func TestPreparedRootApplyRecordsLaterSuccessBeforeEarlierApplyError(t *testing.T) {
+	sentinel := errors.New("root apply failed")
+	group := preparedRootApplyGroup{}
+	group.appendApply(preparedRootApply{
+		identity: preparedRootIdentity{kind: preparedRootIdentityData, ordinal: 0},
+		plan:     preparedRootDeltaPlanSummary{entries: 1},
+		state:    preparedRootApplyStatePlanned,
+	})
+	group.appendApply(preparedRootApply{
+		identity: preparedRootIdentity{kind: preparedRootIdentityData, ordinal: 1},
+		plan:     preparedRootDeltaPlanSummary{entries: 2},
+		state:    preparedRootApplyStatePlanned,
+	})
+	rootIDs := make([]uint64, 2)
+	var pendingRetired []uint64
+	var phaseStats orderedRootDeltaGroupPublishPhaseStats
+	rootsObserved := 0
+
+	err := recordOrderedRootDeltaBatchGroupApplyResults(
+		&group,
+		rootIDs,
+		[]orderedRootDeltaBatchGroupApplyResult{
+			{idx: 0, err: sentinel, attempted: true},
+			{idx: 1, rootID: 42, pendingRetiredPages: []uint64{7}, attempted: true},
+			{idx: 2},
+		},
+		&pendingRetired,
+		nil,
+		&phaseStats,
+		&rootsObserved,
+	)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("error=%v want sentinel", err)
+	}
+	if rootIDs[0] != 0 || rootIDs[1] != 42 {
+		t.Fatalf("root IDs=%v want [0 42]", rootIDs)
+	}
+	if rootsObserved != 1 || phaseStats.rootApplyCalls != 1 {
+		t.Fatalf("roots observed=%d root apply calls=%d want 1/1", rootsObserved, phaseStats.rootApplyCalls)
+	}
+	if len(pendingRetired) != 1 || pendingRetired[0] != 7 {
+		t.Fatalf("pending retired=%v want [7]", pendingRetired)
+	}
+	if failed := group.applyAt(0); failed == nil || failed.prepared || failed.state != preparedRootApplyStatePlanned {
+		t.Fatalf("failed apply=%+v want unprepared planned", failed)
+	}
+	later := group.applyAt(1)
+	if later == nil || !later.prepared || later.preparedRoot != 42 {
+		t.Fatalf("later apply=%+v want prepared root 42", later)
+	}
+	group.markAbandoned()
+	var stats preparedRootApplyStats
+	stats.observeGroup(&group)
+	if stats.roots != 1 || stats.abandoned != 1 || stats.entries != 2 {
+		t.Fatalf("stats roots=%d abandoned=%d entries=%d want 1/1/2", stats.roots, stats.abandoned, stats.entries)
+	}
+}
+
 func TestPreparedRootPrepareNsRecordedWithoutPreparedRoots(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {

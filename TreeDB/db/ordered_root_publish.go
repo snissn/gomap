@@ -66,6 +66,7 @@ type orderedRootDeltaBatchGroupApplyResult struct {
 	pendingRetiredPages []uint64
 	metrics             adaptive.Metrics
 	err                 error
+	attempted           bool
 }
 
 // OrderedRootStoragePolicy selects the physical storage policy for a published
@@ -1427,7 +1428,7 @@ func orderedRootDeltaBatchGroupParallelApplyEligible(ordered []OrderedRootDeltaB
 func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []OrderedRootDeltaBatchPublishInput, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator) ([]orderedRootDeltaBatchGroupApplyResult, bool) {
 	results := make([]orderedRootDeltaBatchGroupApplyResult, len(ordered))
 	applyOne := func(orderedIdx int) orderedRootDeltaBatchGroupApplyResult {
-		result := orderedRootDeltaBatchGroupApplyResult{idx: orderedIdx}
+		result := orderedRootDeltaBatchGroupApplyResult{idx: orderedIdx, attempted: true}
 		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[orderedIdx].StoragePolicy)
 		if err != nil {
 			result.err = err
@@ -1483,6 +1484,50 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 		}
 	}
 	return results, parallelRoots >= orderedRootDeltaBatchGroupParallelApplyMinRoots
+}
+
+func recordOrderedRootDeltaBatchGroupApplyResults(
+	preparedGroup *preparedRootApplyGroup,
+	rootIDs []uint64,
+	results []orderedRootDeltaBatchGroupApplyResult,
+	pendingRetiredPages *[]uint64,
+	mergedMetrics *adaptive.Metrics,
+	phaseStats *orderedRootDeltaGroupPublishPhaseStats,
+	rootsObserved *int,
+) error {
+	var firstErr error
+	for orderedIdx := range results {
+		result := results[orderedIdx]
+		if !result.attempted {
+			continue
+		}
+		if result.err != nil {
+			if firstErr == nil {
+				firstErr = result.err
+			}
+			continue
+		}
+		if orderedIdx < len(rootIDs) {
+			rootIDs[orderedIdx] = result.rootID
+		}
+		if preparedGroup != nil {
+			preparedGroup.markPrepared(orderedIdx, result.rootID)
+		}
+		if rootsObserved != nil {
+			(*rootsObserved)++
+		}
+		if pendingRetiredPages != nil {
+			*pendingRetiredPages = append(*pendingRetiredPages, result.pendingRetiredPages...)
+		}
+		if mergedMetrics != nil {
+			mergeOrderedRootPublishMetrics(mergedMetrics, result.metrics)
+		}
+		if phaseStats != nil {
+			phaseStats.rootApplyMetrics.add(result.metrics)
+			phaseStats.rootApplyCalls++
+		}
+	}
+	return firstErr
 }
 
 func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRootDeltaBatchPublishInput, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, retrySerialized bool, err error) {
@@ -1604,18 +1649,8 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			}
 		}
 	}
-	for orderedIdx := range rootApplyResults {
-		result := rootApplyResults[orderedIdx]
-		if result.err != nil {
-			return 0, nil, false, result.err
-		}
-		rootIDs[orderedIdx] = result.rootID
-		preparedGroup.markPrepared(orderedIdx, result.rootID)
-		rootsObserved++
-		nonSystemPendingRetiredPages = append(nonSystemPendingRetiredPages, result.pendingRetiredPages...)
-		mergeOrderedRootPublishMetrics(&nonSystemMetrics, result.metrics)
-		phaseStats.rootApplyMetrics.add(result.metrics)
-		phaseStats.rootApplyCalls++
+	if applyErr := recordOrderedRootDeltaBatchGroupApplyResults(&preparedGroup, rootIDs, rootApplyResults, &nonSystemPendingRetiredPages, &nonSystemMetrics, &phaseStats, &rootsObserved); applyErr != nil {
+		return 0, nil, false, applyErr
 	}
 
 	systemBaseRoot := baseSystemRoot
@@ -1822,18 +1857,8 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 			}
 		}
 	}
-	for orderedIdx := range rootApplyResults {
-		result := rootApplyResults[orderedIdx]
-		if result.err != nil {
-			return 0, nil, result.err
-		}
-		rootIDs[orderedIdx] = result.rootID
-		preparedGroup.markPrepared(orderedIdx, result.rootID)
-		rootsObserved++
-		pendingRetiredPages = append(pendingRetiredPages, result.pendingRetiredPages...)
-		mergeOrderedRootPublishMetrics(&merged, result.metrics)
-		phaseStats.rootApplyMetrics.add(result.metrics)
-		phaseStats.rootApplyCalls++
+	if applyErr := recordOrderedRootDeltaBatchGroupApplyResults(&preparedGroup, rootIDs, rootApplyResults, &pendingRetiredPages, &merged, &phaseStats, &rootsObserved); applyErr != nil {
+		return 0, nil, applyErr
 	}
 
 	phaseStart = time.Now()
