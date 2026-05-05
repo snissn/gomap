@@ -1155,9 +1155,10 @@ func (r ReadOnlyPrepareResult) LeafSpanSummary() ReadOnlyLeafSpanSummary {
 // to dst. It creates at most workers ranges and never creates empty ranges. The
 // returned ranges preserve span order and are suitable for future parallel
 // preparation steps that still need serial output append and assembly order.
+// No-op inputs return dst unchanged.
 func (r ReadOnlyPrepareResult) AppendLeafSpanWorkerRanges(dst []ReadOnlyLeafSpanWorkerRange, workers int) []ReadOnlyLeafSpanWorkerRange {
 	if workers <= 0 || len(r.LeafSpans) == 0 {
-		return dst[:0]
+		return dst
 	}
 	if workers > len(r.LeafSpans) {
 		workers = len(r.LeafSpans)

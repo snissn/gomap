@@ -941,8 +941,8 @@ func TestReadOnlyPrepareResultAppendLeafSpanWorkerRangesEmptyInputs(t *testing.T
 	dst := []ReadOnlyLeafSpanWorkerRange{{FirstSpan: 99, SpanCount: 1, Ops: 1}}
 	for _, workers := range []int{-1, 0, 1} {
 		ranges := prepared.AppendLeafSpanWorkerRanges(dst, workers)
-		if len(ranges) != 0 {
-			t.Fatalf("workers=%d ranges=%+v want empty", workers, ranges)
+		if len(ranges) != len(dst) || ranges[0] != dst[0] {
+			t.Fatalf("workers=%d ranges=%+v want dst unchanged", workers, ranges)
 		}
 	}
 }
