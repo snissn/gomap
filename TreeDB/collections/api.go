@@ -1092,7 +1092,7 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.pending_bytes"] = fmt.Sprintf("%d", stats.PendingBytes)
 	out["treedb.collections.write_domain.pending_root_runs"] = fmt.Sprintf("%d", stats.PendingRootRuns)
 	out["treedb.collections.write_domain.pending_indexed_flush_units"] = fmt.Sprintf("%d", stats.PendingIndexedFlushUnits)
-	out["treedb.collections.write_domain.pending_indexed_semantic_raw_records"] = fmt.Sprintf("%d", stats.PendingIndexedSemanticRecords)
+	out["treedb.collections.write_domain.pending_indexed_semantic_records"] = fmt.Sprintf("%d", stats.PendingIndexedSemanticRecords)
 	out["treedb.collections.write_domain.overlay.mutable_docs"] = fmt.Sprintf("%d", stats.OverlayMutableDocuments)
 	out["treedb.collections.write_domain.overlay.queued_indexed_flush_units"] = fmt.Sprintf("%d", stats.OverlayQueuedIndexedFlushUnits)
 	out["treedb.collections.write_domain.overlay.active_indexed_flush_units"] = fmt.Sprintf("%d", stats.OverlayActiveIndexedFlushUnits)
@@ -8208,7 +8208,9 @@ func appendIndexedSemanticRecordsLocked(domain *collectionWriteDomain, records [
 	if domain == nil || len(records) == 0 {
 		return
 	}
-	domain.indexedSemanticRecords = append(domain.indexedSemanticRecords, cloneIndexedSemanticRecords(records)...)
+	// buildIndexedSemanticUpdateRecords already owns cloned document IDs and
+	// value sets; staging transfers those records into the mutable domain.
+	domain.indexedSemanticRecords = append(domain.indexedSemanticRecords, records...)
 }
 
 func buildDirectBufferedSecondaryRootPlans(collectionName string, runtimes []indexRuntime, changed []preparedBatchUpdate, stats *CollectionUpdateStats) ([]directBufferedSecondaryRootPlan, int64, error) {
@@ -9369,7 +9371,10 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		success = true
 		plan := newUpdateBatchPlan()
 		stats = updateCollectionUpdateStatsCounts(stats, results, len(rootNames))
-		semanticRecords := buildIndexedSemanticUpdateRecords(meta.Name, runtimes, changed)
+		var semanticRecords []indexedSemanticRecord
+		if c.writeDomain != nil && canBufferIndexedUpdateBatch && meta.Options.BufferedIndexedWrites {
+			semanticRecords = buildIndexedSemanticUpdateRecords(meta.Name, runtimes, changed)
+		}
 		*plan = updateBatchPlan{
 			results:                     results,
 			stats:                       stats,
@@ -9570,7 +9575,10 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	success = true
 	plan := newUpdateBatchPlan()
 	stats = updateCollectionUpdateStatsCounts(stats, results, len(deltaTables))
-	semanticRecords := buildIndexedSemanticUpdateRecords(meta.Name, runtimes, changed)
+	var semanticRecords []indexedSemanticRecord
+	if c.writeDomain != nil && canBufferIndexedUpdateBatch && meta.Options.BufferedIndexedWrites {
+		semanticRecords = buildIndexedSemanticUpdateRecords(meta.Name, runtimes, changed)
+	}
 	*plan = updateBatchPlan{
 		results:                     results,
 		stats:                       stats,

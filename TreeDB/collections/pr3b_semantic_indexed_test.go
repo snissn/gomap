@@ -445,7 +445,7 @@ func pr3bRequireSemanticMetricKeys(tb testing.TB, mgr *CollectionManager) {
 	tb.Helper()
 	exported := mgr.Stats()
 	for _, key := range []string{
-		"treedb.collections.write_domain.pending_indexed_semantic_raw_records",
+		"treedb.collections.write_domain.pending_indexed_semantic_records",
 		"treedb.collections.write_domain.indexed_semantic.raw_records_total",
 		"treedb.collections.write_domain.indexed_semantic.raw_index_deltas_total",
 		"treedb.collections.write_domain.indexed_semantic.fallback_records_total",
