@@ -162,6 +162,56 @@ func TestPR3bRootDeltaCoalescingSkippedSecondaryRootsUseUniqueRoots(t *testing.T
 	}
 }
 
+func TestPR3bAsyncNetZeroCoalescingRecordsAcceptanceCounters(t *testing.T) {
+	d, mgr, col := pr3bSemanticTestCollection(t)
+	defer func() { _ = d.Close() }()
+	pr3bSeedSemanticUser(t, col)
+
+	const (
+		netZeroDocs  = 2
+		netZeroBytes = 32
+	)
+	before := mgr.StatsSnapshot()
+	col.writeDomain.mu.Lock()
+	col.writeDomain.indexedFlushUnits = []indexedFlushUnit{{
+		docCount:     netZeroDocs,
+		byteCount:    netZeroBytes,
+		rootRunCount: 1,
+	}}
+	col.writeDomain.count = netZeroDocs
+	col.writeDomain.bufferedBytes = netZeroBytes
+	col.writeDomain.mu.Unlock()
+
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare async net-zero publish: %v", err)
+	}
+	if work != nil {
+		collectionTestCloseIndexedFlushWork(work)
+		t.Fatal("prepare async net-zero publish returned work")
+	}
+
+	stats := mgr.StatsSnapshot()
+	if got := stats.PendingDocuments; got != 0 {
+		t.Fatalf("pending docs after async net-zero prepare=%d want 0", got)
+	}
+	if got := stats.CoalescedFlushBatches - before.CoalescedFlushBatches; got != 1 {
+		t.Fatalf("coalesced flush batches after async net-zero prepare=%d want 1", got)
+	}
+	if got := stats.CoalescedFlushBatchUnits - before.CoalescedFlushBatchUnits; got != 1 {
+		t.Fatalf("coalesced flush batch units after async net-zero prepare=%d want 1", got)
+	}
+	if got := stats.CoalescedFlushBatchDocs - before.CoalescedFlushBatchDocs; got != netZeroDocs {
+		t.Fatalf("coalesced flush batch docs after async net-zero prepare=%d want %d", got, netZeroDocs)
+	}
+	if got := stats.CoalescedFlushBatchBytes - before.CoalescedFlushBatchBytes; got != netZeroBytes {
+		t.Fatalf("coalesced flush batch bytes after async net-zero prepare=%d want %d", got, netZeroBytes)
+	}
+	if got := stats.CoalescedFlushNetZeroBatches - before.CoalescedFlushNetZeroBatches; got != 1 {
+		t.Fatalf("coalesced flush net-zero batches after async net-zero prepare=%d want 1", got)
+	}
+}
+
 func TestPR3bSemanticRepeatedSameDocumentUpdatesSerialEquivalent(t *testing.T) {
 	d, mgr, col := pr3bSemanticTestCollection(t)
 	defer func() { _ = d.Close() }()

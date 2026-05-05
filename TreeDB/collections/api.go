@@ -5469,6 +5469,9 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 	if len(batch.rootNames) == 0 {
 		_ = pin.Close()
 		work.pin = nil
+		domain.observeCoalescedFlushBatch(len(batch.units), batch.docCount, batch.byteCount, true)
+		domain.observeRootDeltaPlanRawUnit(batch.rawRootDeltaStats)
+		domain.observeRootDeltaPlanCoalescing(batch.rawRootDeltaStats, collectionRootDeltaPlanStats{})
 		domain.indexedFlushUnits = nil
 		domain.rootMutableRuns = nil
 		domain.rootValueArenas = nil
