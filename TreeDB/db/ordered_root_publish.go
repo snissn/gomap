@@ -636,16 +636,7 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 	if err != nil {
 		return 0, nil, metrics, err
 	}
-	applyResult, err := rootZipper.ApplyWithOptions(baseRoot, delta, zipper.ApplyOptions{})
-	// ApplyWithOptions returns its result by value and may include partial
-	// metrics when err is non-nil; preserve those metrics for failure stats.
-	newRoot = applyResult.RootID
-	retired = applyResult.PendingRetiredPages
-	metrics = applyResult.Metrics
-	if err != nil {
-		return 0, nil, metrics, err
-	}
-	return
+	return applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta)
 }
 
 func (db *DB) publishOrderedRootDeltaBatch(baseRoot uint64, delta *batch.Batch, opts orderedRootPublishOptions) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, err error) {
@@ -709,14 +700,18 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 	if err != nil {
 		return 0, nil, metrics, err
 	}
+	return applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta)
+}
+
+func applyOrderedRootDeltaWithOptions(rootZipper *zipper.Zipper, baseRoot uint64, delta *batch.Batch) (uint64, []uint64, adaptive.Metrics, error) {
 	applyResult, err := rootZipper.ApplyWithOptions(baseRoot, delta, zipper.ApplyOptions{})
-	newRoot = applyResult.RootID
-	retired = applyResult.PendingRetiredPages
-	metrics = applyResult.Metrics
+	// ApplyWithOptions returns its result by value and may include partial
+	// metrics when err is non-nil; preserve metrics but do not return partial
+	// root IDs or retired-page ownership on failure.
 	if err != nil {
-		return 0, nil, metrics, err
+		return 0, nil, applyResult.Metrics, err
 	}
-	return
+	return applyResult.RootID, applyResult.PendingRetiredPages, applyResult.Metrics, nil
 }
 
 func buildOrderedRootDeltaBatch(baseIter, targetIter iterator.UnsafeIterator, trackRefs bool) (*batch.Batch, int, *valueLogRefDelta, error) {
@@ -919,12 +914,8 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 					err = zipperErr
 					return
 				}
-				applyResult, applyErr := rootZipper.ApplyWithOptions(baseRoot, delta, zipper.ApplyOptions{})
-				// ApplyWithOptions returns its result by value and may include
-				// partial metrics when applyErr is non-nil.
-				newRoot = applyResult.RootID
-				retired = applyResult.PendingRetiredPages
-				metrics = applyResult.Metrics
+				var applyErr error
+				newRoot, retired, metrics, applyErr = applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta)
 				if applyErr != nil {
 					err = applyErr
 					return
