@@ -49,7 +49,7 @@ type preparedOutputLeafPageAppender interface {
 
 type preparedOutputLeafPageLog struct {
 	inner   preparedOutputLeafPageAppender
-	tracker *allocTracker
+	tracker preparedOutputRecorder
 }
 
 func (l preparedOutputLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
