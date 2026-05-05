@@ -245,18 +245,25 @@ func (s *Snapshot) lookupRootDomainSnapshotEntryWithError(key []byte) (snap root
 	return snap, val, ptr, flags, found, source, err
 }
 
-func (s *Snapshot) lookupCachedRootDomainEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+func (s *Snapshot) cachedRootDomainSnapshot(key []byte) rootDomainSnapshot {
 	if s == nil || len(s.rootPointShards) == 0 {
-		return nil, page.ValuePtr{}, 0, false
+		return rootDomainSnapshot{}
 	}
 	shardIdx := 0
 	if s.db != nil {
 		shardIdx = s.db.shardIndex(key)
 	}
 	if shardIdx < 0 || shardIdx >= len(s.rootPointShards) {
+		return rootDomainSnapshot{}
+	}
+	return s.rootPointShards[shardIdx]
+}
+
+func (s *Snapshot) lookupCachedRootDomainEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+	snap := s.cachedRootDomainSnapshot(key)
+	if !rootDomainSnapshotHasInMemoryState(snap) {
 		return nil, page.ValuePtr{}, 0, false
 	}
-	snap := s.rootPointShards[shardIdx]
 	snap.published = nil
 	snap.publishedRootID = 0
 	return snap.getEntry(key)
@@ -581,6 +588,17 @@ func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
 func (s *Snapshot) Has(key []byte) (bool, error) {
 	if s == nil {
 		return false, nil
+	}
+	cachedSnap := s.cachedRootDomainSnapshot(key)
+	if s.publishedRoots == nil && !rootDomainSnapshotHasPublishedState(cachedSnap) {
+		_, _, flags, found := s.lookupCachedRootDomainEntry(key)
+		if found {
+			return flags&node.FlagTombstone == 0, nil
+		}
+		if s.backend == nil {
+			return false, nil
+		}
+		return s.backend.Has(key)
 	}
 	snap, _, _, flags, found, _, err := s.lookupRootDomainSnapshotEntryWithError(key)
 	if err != nil {
