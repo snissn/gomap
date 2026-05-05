@@ -2,6 +2,7 @@ package collections
 
 import (
 	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -11,12 +12,46 @@ import (
 func BenchmarkCollectionUpdateBatchDirectBufferedTemplateV1NewShape(b *testing.B) {
 	for _, batchSize := range []int{80, 16000} {
 		b.Run(fmt.Sprintf("batch_%d", batchSize), func(b *testing.B) {
-			benchmarkCollectionUpdateBatchDirectBufferedTemplateV1NewShape(b, batchSize)
+			benchmarkCollectionUpdateBatchDirectBufferedTemplateV1NewShape(b, batchSize, collectionDirectBufferedBenchmarkOptions{})
 		})
 	}
 }
 
-func benchmarkCollectionUpdateBatchDirectBufferedTemplateV1NewShape(b *testing.B, batchSize int) {
+func BenchmarkCollectionUpdateBatchDirectBufferedTemplateV1NewShapeReadOnlyPrepare(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		opts collectionDirectBufferedBenchmarkOptions
+	}{
+		{
+			name: "prepare",
+			opts: collectionDirectBufferedBenchmarkOptions{
+				readOnlyPrepare: true,
+			},
+		},
+		{
+			name: "prepare_workers_4",
+			opts: collectionDirectBufferedBenchmarkOptions{
+				readOnlyPrepare:        true,
+				readOnlyPrepareWorkers: 4,
+			},
+		},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			for _, batchSize := range []int{80, 16000} {
+				b.Run(fmt.Sprintf("batch_%d", batchSize), func(b *testing.B) {
+					benchmarkCollectionUpdateBatchDirectBufferedTemplateV1NewShape(b, batchSize, tc.opts)
+				})
+			}
+		})
+	}
+}
+
+type collectionDirectBufferedBenchmarkOptions struct {
+	readOnlyPrepare        bool
+	readOnlyPrepareWorkers int
+}
+
+func benchmarkCollectionUpdateBatchDirectBufferedTemplateV1NewShape(b *testing.B, batchSize int, opts collectionDirectBufferedBenchmarkOptions) {
 	b.Helper()
 	if batchSize <= 0 {
 		b.Fatalf("invalid batch size %d", batchSize)
@@ -36,12 +71,14 @@ func benchmarkCollectionUpdateBatchDirectBufferedTemplateV1NewShape(b *testing.B
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "bench",
 		Options: CollectionOptions{
-			DocumentFormat:                          DocumentFormatTemplateV1,
-			BufferedIndexedWrites:                   true,
-			BufferedIndexedWriteMaxDocuments:        1 << 30,
-			BufferedIndexedWriteMaxBytes:            1 << 40,
-			BufferedIndexedWriteMaxRootRuns:         1 << 30,
-			BufferedIndexedAsyncFlushMaxQueuedUnits: 1 << 20,
+			DocumentFormat:                            DocumentFormatTemplateV1,
+			BufferedIndexedWrites:                     true,
+			BufferedIndexedWriteMaxDocuments:          1 << 30,
+			BufferedIndexedWriteMaxBytes:              1 << 40,
+			BufferedIndexedWriteMaxRootRuns:           1 << 30,
+			BufferedIndexedAsyncFlushMaxQueuedUnits:   1 << 20,
+			BufferedIndexedReadOnlyPrepare:            opts.readOnlyPrepare,
+			BufferedIndexedReadOnlyPrepareWorkerCount: opts.readOnlyPrepareWorkers,
 		},
 		Indexes: []IndexDefinition{
 			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
@@ -89,6 +126,7 @@ func benchmarkCollectionUpdateBatchDirectBufferedTemplateV1NewShape(b *testing.B
 
 	batch := make([]UpdateBatchItem, batchSize)
 	statsBefore := mgr.StatsSnapshot()
+	dbStatsBefore := d.Stats()
 	b.ReportAllocs()
 	b.ResetTimer()
 	startTime := time.Now()
@@ -116,9 +154,11 @@ func benchmarkCollectionUpdateBatchDirectBufferedTemplateV1NewShape(b *testing.B
 	b.StopTimer()
 
 	stats := collectionManagerStatsBenchmarkDelta(mgr.StatsSnapshot(), statsBefore)
+	dbStatsAfter := d.Stats()
 	b.ReportMetric(float64(docs)/elapsed.Seconds(), "docs/sec")
 	b.ReportMetric(float64(elapsed.Nanoseconds())/float64(docs), "ns/doc")
 	reportCollectionUpdateStatsForBenchmark(b, stats, docs)
+	reportCollectionReadOnlyPrepareDBStatsForBenchmark(b, dbStatsAfter, dbStatsBefore, docs)
 }
 
 func benchmarkTemplateV1UpdateDocID(n int) []byte {
@@ -272,4 +312,62 @@ func reportCollectionUpdateStatsForBenchmark(b *testing.B, stats CollectionManag
 	reportDurationPerDoc(stats.UpdateBatchBufferLockHold, "update_buffer_lock_hold_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchBufferRootAppend, "update_buffer_root_append_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchPublish, "update_publish_ns/doc")
+}
+
+func reportCollectionReadOnlyPrepareDBStatsForBenchmark(b *testing.B, after, before map[string]string, docs int) {
+	b.Helper()
+	if docs <= 0 {
+		return
+	}
+	calls := benchmarkDBStatDelta(b, after, before, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total")
+	if calls == 0 {
+		return
+	}
+	prepareNS := benchmarkDBStatDelta(b, after, before, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ns_total")
+	ops := benchmarkDBStatDelta(b, after, before, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ops_total")
+	leafSpans := benchmarkDBStatDelta(b, after, before, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_leaf_spans_total")
+	workerTargets := benchmarkDBStatDelta(b, after, before, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_targets_total")
+	workerRanges := benchmarkDBStatDelta(b, after, before, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_ranges_total")
+	workerMaxOps := benchmarkDBStatDelta(b, after, before, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_range_max_ops_total")
+
+	b.ReportMetric(float64(calls)/float64(docs), "read_only_prepare_calls/doc")
+	b.ReportMetric(float64(prepareNS)/float64(docs), "read_only_prepare_ns/doc")
+	b.ReportMetric(float64(prepareNS)/float64(calls), "read_only_prepare_ns/plan")
+	b.ReportMetric(float64(ops)/float64(docs), "read_only_prepare_ops/doc")
+	b.ReportMetric(float64(leafSpans)/float64(calls), "read_only_prepare_leaf_spans/plan")
+	if workerTargets > 0 {
+		b.ReportMetric(float64(workerTargets)/float64(calls), "read_only_prepare_worker_targets/plan")
+	}
+	if workerRanges > 0 {
+		b.ReportMetric(float64(workerRanges)/float64(calls), "read_only_prepare_worker_ranges/plan")
+	}
+	if workerMaxOps > 0 {
+		b.ReportMetric(float64(workerMaxOps)/float64(calls), "read_only_prepare_worker_max_ops/plan")
+	}
+}
+
+func benchmarkDBStatDelta(tb testing.TB, after, before map[string]string, key string) uint64 {
+	tb.Helper()
+	afterValue := benchmarkDBStatUint(tb, after, key)
+	beforeValue := benchmarkDBStatUint(tb, before, key)
+	if afterValue < beforeValue {
+		return 0
+	}
+	return afterValue - beforeValue
+}
+
+func benchmarkDBStatUint(tb testing.TB, stats map[string]string, key string) uint64 {
+	tb.Helper()
+	if stats == nil {
+		return 0
+	}
+	value, ok := stats[key]
+	if !ok || value == "" {
+		return 0
+	}
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		tb.Fatalf("parse db stat %s=%q: %v", key, value, err)
+	}
+	return parsed
 }
