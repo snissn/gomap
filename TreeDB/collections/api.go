@@ -4979,22 +4979,19 @@ func addBufferedPrimaryRunIndexEntries(index *bufferedPrimaryRunIndex, batchPrim
 	return nil
 }
 
-func addBufferedPrimaryRunIndexKeys(index *bufferedPrimaryRunIndex, keys [][]byte, table memtable.Table) {
-	if index == nil || table == nil || len(keys) == 0 {
+func addBufferedPrimaryRunIndexDirectEntries(index *bufferedPrimaryRunIndex, entries []directBufferedRootEntry, table memtable.Table) {
+	if index == nil || table == nil || len(entries) == 0 {
 		return
 	}
-	arena := make([]byte, 0, bufferedPrimaryIDArenaCap(len(keys)))
-	for _, key := range keys {
+	for _, entry := range entries {
+		key := entry.key
 		if len(key) == 0 {
 			continue
 		}
-		start := len(arena)
-		arena = append(arena, key...)
-		refKey := arena[start:len(arena)]
-		index.addRef(xxhash.Sum64(key), bufferedPrimaryRunRef{key: refKey, table: table})
-	}
-	if len(arena) > 0 {
-		index.arenas = append(index.arenas, arena)
+		// Direct buffered primary entries own cloned document IDs and the table
+		// stores the same stable key slices, so the lookup index can reference
+		// them without an additional key arena.
+		index.addRef(xxhash.Sum64(key), bufferedPrimaryRunRef{key: key, table: table})
 	}
 }
 
@@ -11313,20 +11310,11 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		}
 	}
 	primaryTable := directBufferedRootTable(plan.rootNames, rootTables, direct.primaryRootName)
-	var primaryIndexKeys [][]byte
-	if domain.primaryRunIndex != nil {
-		primaryIndexKeys = make([][]byte, 0, len(direct.primaryEntries))
-	}
 	if err := applyDirectBufferedRootEntries(primaryTable, direct.primaryEntries); err != nil {
 		return false, err
 	}
-	for _, entry := range direct.primaryEntries {
-		if primaryIndexKeys != nil {
-			primaryIndexKeys = append(primaryIndexKeys, entry.key)
-		}
-	}
-	if primaryIndexKeys != nil {
-		addBufferedPrimaryRunIndexKeys(domain.primaryRunIndex, primaryIndexKeys, primaryTable)
+	if domain.primaryRunIndex != nil {
+		addBufferedPrimaryRunIndexDirectEntries(domain.primaryRunIndex, direct.primaryEntries, primaryTable)
 	}
 	for _, secondaryPlan := range direct.secondaryRootPlans {
 		table := directBufferedRootTable(plan.rootNames, rootTables, secondaryPlan.rootName)
