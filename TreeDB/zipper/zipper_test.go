@@ -1326,6 +1326,14 @@ func BenchmarkZipperPrepareReadOnlyWarmSparse(b *testing.B) {
 }
 
 func BenchmarkZipperPrepareReadOnlyWarmSparseMultiLeaf(b *testing.B) {
+	benchmarkZipperPrepareReadOnlyWarmSparseMultiLeaf(b, 257)
+}
+
+func BenchmarkZipperPrepareReadOnlyWarmSparseManyLeaf(b *testing.B) {
+	benchmarkZipperPrepareReadOnlyWarmSparseMultiLeaf(b, 4)
+}
+
+func benchmarkZipperPrepareReadOnlyWarmSparseMultiLeaf(b *testing.B, step int) {
 	dir := b.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
 	if err != nil {
@@ -1335,7 +1343,6 @@ func BenchmarkZipperPrepareReadOnlyWarmSparseMultiLeaf(b *testing.B) {
 
 	const (
 		keyCount = 8192
-		step     = 257
 		workers  = 4
 	)
 	alloc := &MockAllocator{p: p}
