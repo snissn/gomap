@@ -622,6 +622,134 @@ func TestZipperPrepareReadOnlyNestedInternalBoundsInheritParentRange(t *testing.
 	}
 }
 
+func TestZipperApplyWithOptionsReturnsReadOnlyPrepare(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	rootID := buildOuterLeafInternalRoot(t, z)
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	delta.Set([]byte("key-001"), []byte("new-001"))
+	delta.Set([]byte("key-067"), []byte("new-067"))
+	delta.Set([]byte("key-133"), []byte("new-133"))
+
+	result, err := z.ApplyWithOptions(rootID, delta, ApplyOptions{
+		PrepareReadOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("ApplyWithOptions: %v", err)
+	}
+	if result.RootID == 0 || result.RootID == rootID {
+		t.Fatalf("result root=%d want new non-zero root different from %d", result.RootID, rootID)
+	}
+	if len(result.PendingRetiredPages) == 0 {
+		t.Fatal("expected pending retired pages from warm apply")
+	}
+	prepared := result.ReadOnlyPrepare
+	requireValidReadOnlyPrepare(t, prepared)
+	if prepared.RootID != rootID {
+		t.Fatalf("prepared root=%d want %d", prepared.RootID, rootID)
+	}
+	if prepared.Ops != 3 {
+		t.Fatalf("prepared ops=%d want 3", prepared.Ops)
+	}
+	if len(prepared.LeafSpans) == 0 {
+		t.Fatal("expected read-only leaf spans")
+	}
+	if prepared.ColdBuild || prepared.Maintenance || !prepared.ExactLeafSpans {
+		t.Fatalf("prepared flags cold/maintenance/exact=%v/%v/%v want false/false/true", prepared.ColdBuild, prepared.Maintenance, prepared.ExactLeafSpans)
+	}
+}
+
+func TestZipperApplyWithOptionsDefaultSkipsReadOnlyPrepare(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	rootID := buildOuterLeafInternalRoot(t, z)
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	delta.Set([]byte("key-001"), []byte("new-001"))
+
+	result, err := z.ApplyWithOptions(rootID, delta, ApplyOptions{})
+	if err != nil {
+		t.Fatalf("ApplyWithOptions: %v", err)
+	}
+	if result.RootID == 0 || result.RootID == rootID {
+		t.Fatalf("result root=%d want new non-zero root different from %d", result.RootID, rootID)
+	}
+	if result.ReadOnlyPrepare.RootID != 0 ||
+		result.ReadOnlyPrepare.Ops != 0 ||
+		len(result.ReadOnlyPrepare.LeafSpans) != 0 {
+		t.Fatalf("read-only prepare populated without opt-in: %+v", result.ReadOnlyPrepare)
+	}
+}
+
+func TestZipperApplyWithOptionsReusesReadOnlyPrepareBuffers(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	rootID := buildOuterLeafInternalRoot(t, z)
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	delta.Set([]byte("key-001"), []byte("new-001"))
+	delta.Set([]byte("key-067"), []byte("new-067"))
+
+	prepared, err := z.PrepareReadOnly(rootID, delta, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatalf("PrepareReadOnly: %v", err)
+	}
+	if len(prepared.LeafSpans) == 0 {
+		t.Fatal("expected initial read-only leaf spans")
+	}
+	opts := ApplyOptions{
+		PrepareReadOnly: true,
+		ReadOnlyPrepare: prepared.ReuseOptions(),
+	}
+	if cap(opts.ReadOnlyPrepare.leafSpans) == 0 {
+		t.Fatal("expected reusable leaf-span capacity")
+	}
+	if cap(opts.ReadOnlyPrepare.keyArena) == 0 {
+		t.Fatal("expected reusable key arena capacity")
+	}
+	leafSpanBase := &opts.ReadOnlyPrepare.leafSpans[:cap(opts.ReadOnlyPrepare.leafSpans)][0]
+	keyArenaBase := &opts.ReadOnlyPrepare.keyArena[:cap(opts.ReadOnlyPrepare.keyArena)][0]
+
+	result, err := z.ApplyWithOptions(rootID, delta, opts)
+	if err != nil {
+		t.Fatalf("ApplyWithOptions: %v", err)
+	}
+	if len(result.ReadOnlyPrepare.LeafSpans) == 0 {
+		t.Fatal("expected reused read-only leaf spans")
+	}
+	if &result.ReadOnlyPrepare.LeafSpans[0] != leafSpanBase {
+		t.Fatal("read-only prepare leaf-span buffer was not reused")
+	}
+	if len(result.ReadOnlyPrepare.keyArena) == 0 || &result.ReadOnlyPrepare.keyArena[0] != keyArenaBase {
+		t.Fatal("read-only prepare key arena was not reused")
+	}
+}
+
 func TestReadOnlyPrepareResultValidateLeafSpansRejectsInvalidPlans(t *testing.T) {
 	validSpan := ReadOnlyLeafSpan{
 		LowKey:     []byte("a"),

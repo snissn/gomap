@@ -1030,10 +1030,18 @@ func validateLoadedLeafLogNodeFrom(source string, data []byte) (node.Node, error
 	return n, nil
 }
 
-// ApplyOptions configures a root apply attempt. The first version is
-// intentionally empty so callers can move to the result-shaped API before
-// prepared-output options exist.
-type ApplyOptions struct{}
+// ApplyOptions configures a root apply attempt.
+type ApplyOptions struct {
+	// PrepareReadOnly asks ApplyWithOptions to run the read-only preparation
+	// pass before applying the delta. This is opt-in because it traverses the
+	// existing root in addition to the apply pass. It does not change apply
+	// output, root installation, or prepared-output ownership.
+	PrepareReadOnly bool
+
+	// ReadOnlyPrepare reuses buffers for the optional read-only preparation
+	// pass. It is ignored unless PrepareReadOnly is true.
+	ReadOnlyPrepare ReadOnlyPrepareOptions
+}
 
 // ApplyResult is the complete in-memory result of a root apply attempt. The
 // retired page list is pending until the caller's install guard succeeds and
@@ -1042,6 +1050,10 @@ type ApplyResult struct {
 	RootID              uint64
 	PendingRetiredPages []uint64
 	Metrics             adaptive.Metrics
+
+	// ReadOnlyPrepare is populated only when ApplyOptions.PrepareReadOnly is
+	// true. It is planning metadata only; it owns no pager or leaf-log output.
+	ReadOnlyPrepare ReadOnlyPrepareResult
 }
 
 // ReadOnlyPrepareOptions configures a read-only root preparation pass. The zero
@@ -1318,12 +1330,20 @@ func (r *ReadOnlyPrepareResult) addLeafSpan(ref page.ChildRef, low, high []byte,
 // ApplyWithOptions applies the batch to the tree rooted at rootID and returns
 // a result object suitable for guarded install paths.
 func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptions) (ApplyResult, error) {
-	_ = opts
+	var prepared ReadOnlyPrepareResult
+	if opts.PrepareReadOnly {
+		var err error
+		prepared, err = z.PrepareReadOnly(rootID, b, opts.ReadOnlyPrepare)
+		if err != nil {
+			return ApplyResult{ReadOnlyPrepare: prepared}, err
+		}
+	}
 	newRoot, retired, metrics, err := z.Apply(rootID, b)
 	return ApplyResult{
 		RootID:              newRoot,
 		PendingRetiredPages: retired,
 		Metrics:             metrics,
+		ReadOnlyPrepare:     prepared,
 	}, err
 }
 
