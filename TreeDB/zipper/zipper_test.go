@@ -1325,11 +1325,11 @@ func BenchmarkZipperPrepareReadOnlyWarmSparse(b *testing.B) {
 	}
 }
 
-func BenchmarkZipperPrepareReadOnlyWarmSparseMultiLeaf(b *testing.B) {
+func BenchmarkZipperPrepareReadOnlyWarmSparseMultiLeafReuse(b *testing.B) {
 	benchmarkZipperPrepareReadOnlyWarmSparseMultiLeaf(b, 257)
 }
 
-func BenchmarkZipperPrepareReadOnlyWarmSparseManyLeaf(b *testing.B) {
+func BenchmarkZipperPrepareReadOnlyWarmSparseManyLeafReuse(b *testing.B) {
 	benchmarkZipperPrepareReadOnlyWarmSparseMultiLeaf(b, 4)
 }
 
@@ -1371,6 +1371,7 @@ func benchmarkZipperPrepareReadOnlyWarmSparseMultiLeaf(b *testing.B, step int) {
 	}
 
 	opts := first.ReuseOptions()
+	last := first
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -1381,12 +1382,16 @@ func benchmarkZipperPrepareReadOnlyWarmSparseMultiLeaf(b *testing.B, step int) {
 		if len(prepared.LeafSpans) != summary.Spans || prepared.Ops != summary.Ops {
 			b.Fatalf("prepared spans/ops=%d/%d want %d/%d", len(prepared.LeafSpans), prepared.Ops, summary.Spans, summary.Ops)
 		}
+		last = prepared
 		opts = prepared.ReuseOptions()
 	}
-	b.ReportMetric(float64(summary.Spans), "leaf_spans/op")
-	b.ReportMetric(float64(summary.Ops), "ops/op")
-	b.ReportMetric(float64(workerSummary.Ranges), "worker_ranges/op")
-	b.ReportMetric(float64(workerSummary.MaxRangeOps), "max_worker_ops/op")
+	b.StopTimer()
+	lastSummary := last.LeafSpanSummary()
+	lastWorkerSummary := last.LeafSpanWorkerRangeSummary(workers)
+	b.ReportMetric(float64(lastSummary.Spans), "leaf_spans/op")
+	b.ReportMetric(float64(lastSummary.Ops), "ops/op")
+	b.ReportMetric(float64(lastWorkerSummary.Ranges), "worker_ranges/op")
+	b.ReportMetric(float64(lastWorkerSummary.MaxRangeOps), "max_worker_ops/op")
 }
 
 func TestZipperLeafRefCacheAvoidsUnflushedReads(t *testing.T) {
