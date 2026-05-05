@@ -52,31 +52,33 @@ type orderedRootPublishStats struct {
 }
 
 type orderedRootPublishOptions struct {
-	maxWarmDeltaOps       int
-	leafPrefixCompression bool
-	leafColumnar          bool
-	packedValuePtr        bool
-	internalBaseDelta     bool
-	outerLeavesInValueLog bool
-	leafPageLog           bulk.LeafPageAppender
-	applyOptions          zipper.ApplyOptions
-	readOnlyPrepareResult *zipper.ReadOnlyPrepareResult
-	readOnlyPrepareNs     *uint64
+	maxWarmDeltaOps          int
+	leafPrefixCompression    bool
+	leafColumnar             bool
+	packedValuePtr           bool
+	internalBaseDelta        bool
+	outerLeavesInValueLog    bool
+	leafPageLog              bulk.LeafPageAppender
+	applyOptions             zipper.ApplyOptions
+	readOnlyPrepareResult    *zipper.ReadOnlyPrepareResult
+	readOnlyPrepareNs        *uint64
+	readOnlyPrepareAttempted *bool
 }
 
 type orderedRootDeltaBatchGroupApplyResult struct {
-	idx                 int
-	rootID              uint64
-	outputID            preparedOutputID
-	output              *preparedOutputSnapshot
-	outputPages         uint64
-	outputLeafLogPtrs   uint64
-	pendingRetiredPages []uint64
-	metrics             adaptive.Metrics
-	readOnlyPrepare     zipper.ReadOnlyPrepareResult
-	readOnlyPrepareNs   uint64
-	err                 error
-	attempted           bool
+	idx                      int
+	rootID                   uint64
+	outputID                 preparedOutputID
+	output                   *preparedOutputSnapshot
+	outputPages              uint64
+	outputLeafLogPtrs        uint64
+	pendingRetiredPages      []uint64
+	metrics                  adaptive.Metrics
+	readOnlyPrepare          zipper.ReadOnlyPrepareResult
+	readOnlyPrepareNs        uint64
+	readOnlyPrepareAttempted bool
+	err                      error
+	attempted                bool
 }
 
 type preparedLeafLogOutputRecorder interface {
@@ -760,6 +762,9 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 	rootZipper, err := db.orderedRootZipperForOptionsWithAllocator(idx, opts, alloc)
 	if err != nil {
 		return 0, nil, metrics, err
+	}
+	if opts.applyOptions.PrepareReadOnly && opts.readOnlyPrepareAttempted != nil {
+		*opts.readOnlyPrepareAttempted = true
 	}
 	newRoot, retired, metrics, readOnlyPrepare, readOnlyPrepareNs, err := applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, opts.applyOptions)
 	if opts.readOnlyPrepareResult != nil {
@@ -1542,6 +1547,7 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 			opts.applyOptions.PrepareReadOnly = true
 			opts.readOnlyPrepareResult = &result.readOnlyPrepare
 			opts.readOnlyPrepareNs = &result.readOnlyPrepareNs
+			opts.readOnlyPrepareAttempted = &result.readOnlyPrepareAttempted
 		}
 		beforePages, beforeLeafLogPtrs := uint64(0), uint64(0)
 		if outputTracker != nil {
@@ -1678,7 +1684,7 @@ func recordOrderedRootDeltaBatchGroupApplyResults(
 		if phaseStats != nil {
 			phaseStats.rootApplyMetrics.add(result.metrics)
 			phaseStats.rootApplyCalls++
-			if result.readOnlyPrepare.RootID != 0 || result.readOnlyPrepare.Ops != 0 || len(result.readOnlyPrepare.LeafSpans) != 0 || result.readOnlyPrepareNs != 0 {
+			if result.readOnlyPrepareAttempted {
 				summary := result.readOnlyPrepare.LeafSpanSummary()
 				phaseStats.rootApplyReadOnlyPrepareNs += result.readOnlyPrepareNs
 				phaseStats.rootApplyReadOnlyPrepareCalls++
