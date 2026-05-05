@@ -260,6 +260,13 @@ func buildMultiLevelInternalRoot(tb testing.TB, z *Zipper) (uint64, int) {
 	return 0, 0
 }
 
+func requireValidReadOnlyPrepare(tb testing.TB, prepared ReadOnlyPrepareResult) {
+	tb.Helper()
+	if err := prepared.ValidateLeafSpans(); err != nil {
+		tb.Fatalf("ValidateLeafSpans: %v", err)
+	}
+}
+
 func TestZipperPrepareReadOnlyColdBuildDoesNotLoadOrWrite(t *testing.T) {
 	b := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
 	defer func() { _ = b.Close() }()
@@ -271,6 +278,7 @@ func TestZipperPrepareReadOnlyColdBuildDoesNotLoadOrWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareReadOnly: %v", err)
 	}
+	requireValidReadOnlyPrepare(t, prepared)
 	if !prepared.ColdBuild {
 		t.Fatal("ColdBuild=false want true")
 	}
@@ -314,6 +322,7 @@ func TestZipperPrepareReadOnlyEmptyBatchDoesNotTraverse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareReadOnly: %v", err)
 	}
+	requireValidReadOnlyPrepare(t, prepared)
 	if got := p.PageCount(); got != beforePages {
 		t.Fatalf("page count changed during empty read-only prepare: got %d want %d", got, beforePages)
 	}
@@ -355,6 +364,7 @@ func TestZipperPrepareReadOnlyExistingLeafRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareReadOnly: %v", err)
 	}
+	requireValidReadOnlyPrepare(t, prepared)
 	if prepared.ColdBuild || prepared.Maintenance || !prepared.ExactLeafSpans {
 		t.Fatalf("prepare cold/maintenance/exact=%v/%v/%v want false/false/true", prepared.ColdBuild, prepared.Maintenance, prepared.ExactLeafSpans)
 	}
@@ -392,6 +402,7 @@ func TestZipperPrepareReadOnlyDiscoversLeafSpansWithoutWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareReadOnly: %v", err)
 	}
+	requireValidReadOnlyPrepare(t, prepared)
 	if got := p.PageCount(); got != beforePages {
 		t.Fatalf("page count changed during read-only prepare: got %d want %d", got, beforePages)
 	}
@@ -446,6 +457,7 @@ func TestZipperPrepareReadOnlyReuseOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first PrepareReadOnly: %v", err)
 	}
+	requireValidReadOnlyPrepare(t, first)
 	if len(first.LeafSpans) == 0 {
 		t.Fatal("first prepare returned no spans")
 	}
@@ -459,6 +471,7 @@ func TestZipperPrepareReadOnlyReuseOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second PrepareReadOnly: %v", err)
 	}
+	requireValidReadOnlyPrepare(t, second)
 	if len(second.LeafSpans) != 1 {
 		t.Fatalf("second spans=%d want 1", len(second.LeafSpans))
 	}
@@ -490,6 +503,7 @@ func TestZipperPrepareReadOnlyMarksDeleteMaintenanceSpansNonExact(t *testing.T) 
 	if err != nil {
 		t.Fatalf("PrepareReadOnly: %v", err)
 	}
+	requireValidReadOnlyPrepare(t, prepared)
 	if got := p.PageCount(); got != beforePages {
 		t.Fatalf("page count changed during read-only prepare: got %d want %d", got, beforePages)
 	}
@@ -532,6 +546,7 @@ func TestZipperPrepareReadOnlyInternalBaseDeltaKeyBoundsAreStable(t *testing.T) 
 	if err != nil {
 		t.Fatalf("PrepareReadOnly: %v", err)
 	}
+	requireValidReadOnlyPrepare(t, prepared)
 	if got := p.PageCount(); got != beforePages {
 		t.Fatalf("page count changed during read-only prepare: got %d want %d", got, beforePages)
 	}
@@ -581,6 +596,7 @@ func TestZipperPrepareReadOnlyNestedInternalBoundsInheritParentRange(t *testing.
 	if err != nil {
 		t.Fatalf("PrepareReadOnly: %v", err)
 	}
+	requireValidReadOnlyPrepare(t, prepared)
 	if got := p.PageCount(); got != beforePages {
 		t.Fatalf("page count changed during read-only prepare: got %d want %d", got, beforePages)
 	}
@@ -604,6 +620,114 @@ func TestZipperPrepareReadOnlyNestedInternalBoundsInheritParentRange(t *testing.
 			t.Fatalf("span high bound %q is not after first op %q; span=%+v", span.HighKey, span.FirstOpKey, span)
 		}
 	}
+}
+
+func TestReadOnlyPrepareResultValidateLeafSpansRejectsInvalidPlans(t *testing.T) {
+	validSpan := ReadOnlyLeafSpan{
+		LowKey:     []byte("a"),
+		HighKey:    []byte("z"),
+		FirstOpKey: []byte("b"),
+		LastOpKey:  []byte("c"),
+		OpCount:    2,
+	}
+	tests := []struct {
+		name string
+		in   ReadOnlyPrepareResult
+	}{
+		{
+			name: "zero ops with span",
+			in: ReadOnlyPrepareResult{
+				Ops:       0,
+				LeafSpans: []ReadOnlyLeafSpan{validSpan},
+			},
+		},
+		{
+			name: "missing spans",
+			in:   ReadOnlyPrepareResult{Ops: 1},
+		},
+		{
+			name: "cold build multiple spans",
+			in: ReadOnlyPrepareResult{
+				Ops:       2,
+				ColdBuild: true,
+				LeafSpans: []ReadOnlyLeafSpan{
+					{FirstOpKey: []byte("a"), LastOpKey: []byte("a"), OpCount: 1},
+					{FirstOpKey: []byte("b"), LastOpKey: []byte("b"), OpCount: 1},
+				},
+			},
+		},
+		{
+			name: "empty op key",
+			in: ReadOnlyPrepareResult{
+				Ops:       1,
+				LeafSpans: []ReadOnlyLeafSpan{{LastOpKey: []byte("b"), OpCount: 1}},
+			},
+		},
+		{
+			name: "reversed op keys",
+			in: ReadOnlyPrepareResult{
+				Ops:       1,
+				LeafSpans: []ReadOnlyLeafSpan{{FirstOpKey: []byte("c"), LastOpKey: []byte("b"), OpCount: 1}},
+			},
+		},
+		{
+			name: "overlapping op key ranges",
+			in: ReadOnlyPrepareResult{
+				Ops: 2,
+				LeafSpans: []ReadOnlyLeafSpan{
+					{FirstOpKey: []byte("b"), LastOpKey: []byte("d"), OpCount: 1},
+					{FirstOpKey: []byte("d"), LastOpKey: []byte("e"), OpCount: 1},
+				},
+			},
+		},
+		{
+			name: "bad bounds",
+			in: ReadOnlyPrepareResult{
+				Ops:       1,
+				LeafSpans: []ReadOnlyLeafSpan{{LowKey: []byte("z"), HighKey: []byte("a"), FirstOpKey: []byte("m"), LastOpKey: []byte("m"), OpCount: 1}},
+			},
+		},
+		{
+			name: "op before low bound",
+			in: ReadOnlyPrepareResult{
+				Ops:       1,
+				LeafSpans: []ReadOnlyLeafSpan{{LowKey: []byte("c"), FirstOpKey: []byte("b"), LastOpKey: []byte("b"), OpCount: 1}},
+			},
+		},
+		{
+			name: "op at high bound",
+			in: ReadOnlyPrepareResult{
+				Ops:       1,
+				LeafSpans: []ReadOnlyLeafSpan{{HighKey: []byte("b"), FirstOpKey: []byte("b"), LastOpKey: []byte("b"), OpCount: 1}},
+			},
+		},
+		{
+			name: "op count mismatch",
+			in: ReadOnlyPrepareResult{
+				Ops:       3,
+				LeafSpans: []ReadOnlyLeafSpan{validSpan},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.in.ValidateLeafSpans(); err == nil {
+				t.Fatal("ValidateLeafSpans returned nil, want error")
+			}
+		})
+	}
+}
+
+func TestReadOnlyPrepareResultValidateLeafSpansAcceptsOpenBounds(t *testing.T) {
+	prepared := ReadOnlyPrepareResult{
+		Ops:            3,
+		ExactLeafSpans: true,
+		LeafSpans: []ReadOnlyLeafSpan{
+			{HighKey: []byte("m"), FirstOpKey: []byte("a"), LastOpKey: []byte("b"), OpCount: 2},
+			{LowKey: []byte("m"), FirstOpKey: []byte("m"), LastOpKey: []byte("m"), OpCount: 1},
+		},
+	}
+	requireValidReadOnlyPrepare(t, prepared)
 }
 
 func BenchmarkZipperPrepareReadOnlyWarmSparse(b *testing.B) {
