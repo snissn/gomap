@@ -4,14 +4,16 @@ import (
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 // allocTracker wraps the freelist allocator and remembers allocated pages so
 // they can be returned if a write attempt is abandoned.
 type allocTracker struct {
-	alloc *freelist.Allocator
-	mu    sync.Mutex
-	pages []uint64
+	alloc       *freelist.Allocator
+	mu          sync.Mutex
+	pages       []uint64
+	leafLogPtrs []page.LeafLogPtr
 
 	preparedOutputID    preparedOutputID
 	preparedOutputState preparedOutputState
@@ -65,10 +67,22 @@ func (t *allocTracker) PreparedOutputSnapshot() preparedOutputSnapshot {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return preparedOutputSnapshot{
-		ID:    t.preparedOutputID,
-		State: t.preparedOutputState,
-		Pages: append([]uint64(nil), t.pages...),
+		ID:          t.preparedOutputID,
+		State:       t.preparedOutputState,
+		Pages:       append([]uint64(nil), t.pages...),
+		LeafLogPtrs: append([]page.LeafLogPtr(nil), t.leafLogPtrs...),
 	}
+}
+
+func (t *allocTracker) notePreparedLeafLogPtr(ptr page.LeafLogPtr) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.preparedOutputID != 0 && t.preparedOutputState == preparedOutputStatePrepared {
+		t.leafLogPtrs = append(t.leafLogPtrs, ptr)
+	}
+	t.mu.Unlock()
 }
 
 func (t *allocTracker) MarkInstalled() {
@@ -97,7 +111,9 @@ func (t *allocTracker) FreeAll() error {
 	}
 	pages := append([]uint64(nil), t.pages...)
 	t.pages = nil
-	if t.preparedOutputID != 0 && len(pages) > 0 {
+	hadSideOutput := len(pages) > 0 || len(t.leafLogPtrs) > 0
+	t.leafLogPtrs = nil
+	if t.preparedOutputID != 0 && hadSideOutput {
 		t.preparedOutputState = preparedOutputStateAbandoned
 	}
 	t.mu.Unlock()

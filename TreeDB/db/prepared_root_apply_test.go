@@ -371,6 +371,71 @@ func TestOrderedRootDeltaBatchGroupPreparedRootMetadataRecordsInstall(t *testing
 	}
 }
 
+func TestOrderedRootDeltaBatchGroupPreparedRootMetadataTracksLeafLogOutput(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	db.SetLeafPageLog(&preparedOutputTestLeafLog{})
+
+	deltaTable := mustFrozenSystemMemtable(t, "root/a", "va", "root/b", "vb")
+	iter := deltaTable.NewIterator(nil, nil)
+	delta, err := OrderedRootDeltaBatchFromIterator(iter)
+	_ = iter.Close()
+	if err != nil {
+		t.Fatalf("OrderedRootDeltaBatchFromIterator: %v", err)
+	}
+	defer func() { _ = delta.Close() }()
+
+	var captured []preparedRootApplyGroup
+	db.testPreparedRootApplyHook = func(group preparedRootApplyGroup) {
+		captured = append(captured, group)
+	}
+	_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+		BaseRoot:      0,
+		Delta:         delta,
+		StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	db.testPreparedRootApplyHook = nil
+	if err != nil {
+		t.Fatalf("publish ordered root group: %v", err)
+	}
+	if len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("root IDs=%v want one nonzero root", rootIDs)
+	}
+	if len(captured) != 1 {
+		t.Fatalf("captured groups=%d want 1", len(captured))
+	}
+
+	data := captured[0].applyAt(0)
+	if data == nil {
+		t.Fatal("missing data prepared root apply")
+	}
+	if data.outputID == 0 || data.output.ID != data.outputID {
+		t.Fatalf("output ID=%d snapshot ID=%d", data.outputID, data.output.ID)
+	}
+	if data.output.State != preparedOutputStateInstalled {
+		t.Fatalf("output state=%v want installed", data.output.State)
+	}
+	if len(data.output.LeafLogPtrs) == 0 {
+		t.Fatalf("data prepared output did not record leaf-log pointers: %+v", data.output)
+	}
+	if len(data.output.Pages) == 0 {
+		t.Fatalf("data prepared output did not record root/internal pages: %+v", data.output)
+	}
+
+	system := captured[0].applyAt(1)
+	if system == nil {
+		t.Fatal("missing system prepared root apply")
+	}
+	if len(system.output.LeafLogPtrs) != 0 {
+		t.Fatalf("system prepared output recorded leaf-log pointers: %+v", system.output.LeafLogPtrs)
+	}
+}
+
 func TestOrderedRootDeltaBatchGroupPreparedRootMetadataRecordsOptimisticBuilderError(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {

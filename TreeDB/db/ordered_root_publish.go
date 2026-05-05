@@ -64,6 +64,7 @@ type orderedRootDeltaBatchGroupApplyResult struct {
 	idx                 int
 	rootID              uint64
 	outputID            preparedOutputID
+	output              *preparedOutputSnapshot
 	pendingRetiredPages []uint64
 	metrics             adaptive.Metrics
 	err                 error
@@ -674,6 +675,11 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 		err = errors.New("ordered root value-log leaf storage requires a leaf page log")
 		return
 	}
+	if opts.outerLeavesInValueLog {
+		if tracker := preparedOutputTrackerFromAlloc(alloc, coldBuildAlloc); tracker != nil {
+			opts.leafPageLog = preparedOutputLeafPageLog{inner: opts.leafPageLog, tracker: tracker}
+		}
+	}
 	if delta.IsEmpty() {
 		return baseRoot, nil, metrics, nil
 	}
@@ -702,6 +708,16 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 		return 0, nil, metrics, err
 	}
 	return applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta)
+}
+
+func preparedOutputTrackerFromAlloc(alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator) *allocTracker {
+	if tracker, ok := alloc.(*allocTracker); ok && tracker != nil && tracker.PreparedOutputID() != 0 {
+		return tracker
+	}
+	if tracker, ok := coldBuildAlloc.(*allocTracker); ok && tracker != nil && tracker.PreparedOutputID() != 0 {
+		return tracker
+	}
+	return nil
 }
 
 func applyOrderedRootDeltaWithOptions(rootZipper *zipper.Zipper, baseRoot uint64, delta *batch.Batch) (uint64, []uint64, adaptive.Metrics, error) {
@@ -1431,14 +1447,18 @@ func orderedRootDeltaBatchGroupParallelApplyEligible(ordered []OrderedRootDeltaB
 	return parallelActive >= orderedRootDeltaBatchGroupParallelApplyMinRoots
 }
 
-func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []OrderedRootDeltaBatchPublishInput, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator) ([]orderedRootDeltaBatchGroupApplyResult, bool) {
+func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []OrderedRootDeltaBatchPublishInput, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator, includeOutputSnapshot bool) ([]orderedRootDeltaBatchGroupApplyResult, bool) {
 	results := make([]orderedRootDeltaBatchGroupApplyResult, len(ordered))
 	var outputID preparedOutputID
 	if tracker, ok := alloc.(*allocTracker); ok {
 		outputID = tracker.PreparedOutputID()
 	}
 	applyOne := func(orderedIdx int) orderedRootDeltaBatchGroupApplyResult {
-		result := orderedRootDeltaBatchGroupApplyResult{idx: orderedIdx, outputID: outputID, attempted: true}
+		result := orderedRootDeltaBatchGroupApplyResult{
+			idx:       orderedIdx,
+			outputID:  outputID,
+			attempted: true,
+		}
 		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[orderedIdx].StoragePolicy)
 		if err != nil {
 			result.err = err
@@ -1449,6 +1469,15 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 		result.pendingRetiredPages = pendingRetiredPages
 		result.metrics = metrics
 		result.err = err
+		if includeOutputSnapshot {
+			tracker, _ := alloc.(*allocTracker)
+			if tracker == nil {
+				return result
+			}
+			output := tracker.PreparedOutputSnapshot()
+			result.output = &output
+			result.outputID = output.ID
+		}
 		return result
 	}
 
@@ -1521,7 +1550,11 @@ func recordOrderedRootDeltaBatchGroupApplyResults(
 			rootIDs[orderedIdx] = result.rootID
 		}
 		if preparedGroup != nil {
-			preparedGroup.markPrepared(orderedIdx, result.rootID, result.outputID)
+			if result.output != nil {
+				preparedGroup.markPreparedOutput(orderedIdx, result.rootID, *result.output)
+			} else {
+				preparedGroup.markPrepared(orderedIdx, result.rootID, result.outputID)
+			}
 		}
 		if rootsObserved != nil {
 			(*rootsObserved)++
@@ -1649,7 +1682,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 	var nonSystemPendingRetiredPages []uint64
 	var nonSystemMetrics adaptive.Metrics
 	phaseStart = time.Now()
-	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idx, ordered, rootTracker, rootTracker)
+	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idx, ordered, rootTracker, rootTracker, includePreparedChecksum)
 	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if parallelRootApply {
 		phaseStats.rootApplyParallelGroups++
@@ -1694,7 +1727,11 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			err = applyErr
 			return 0, nil, false, err
 		}
-		preparedGroup.markPrepared(systemPreparedIdx, rootID, systemTracker.PreparedOutputID())
+		if includePreparedChecksum {
+			preparedGroup.markPreparedOutput(systemPreparedIdx, rootID, systemTracker.PreparedOutputSnapshot())
+		} else {
+			preparedGroup.markPrepared(systemPreparedIdx, rootID, systemTracker.PreparedOutputID())
+		}
 		phaseStats.systemApplyMetrics.add(systemMetrics)
 
 		lockStart := time.Now()
@@ -1859,7 +1896,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	var pendingRetiredPages []uint64
 	var merged adaptive.Metrics
 	phaseStart = time.Now()
-	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, ordered, rootTracker, rootTracker)
+	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, ordered, rootTracker, rootTracker, includePreparedChecksum)
 	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if parallelRootApply {
 		phaseStats.rootApplyParallelGroups++
@@ -1898,7 +1935,11 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	if err != nil {
 		return 0, nil, err
 	}
-	preparedGroup.markPrepared(systemPreparedIdx, rootID, systemTracker.PreparedOutputID())
+	if includePreparedChecksum {
+		preparedGroup.markPreparedOutput(systemPreparedIdx, rootID, systemTracker.PreparedOutputSnapshot())
+	} else {
+		preparedGroup.markPrepared(systemPreparedIdx, rootID, systemTracker.PreparedOutputID())
+	}
 	newSystemRoot = rootID
 	pendingRetiredPages = append(pendingRetiredPages, systemPendingRetiredPages...)
 	mergeOrderedRootPublishMetrics(&merged, metrics)

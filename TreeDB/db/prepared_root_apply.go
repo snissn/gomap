@@ -43,6 +43,7 @@ type preparedRootApply struct {
 	baseRootID   uint64
 	preparedRoot uint64
 	outputID     preparedOutputID
+	output       preparedOutputSnapshot
 	prepared     bool
 	storage      OrderedRootStoragePolicy
 	plan         preparedRootDeltaPlanSummary
@@ -172,12 +173,17 @@ func (group *preparedRootApplyGroup) setSystemRoot(baseRootID uint64, delta *bat
 }
 
 func (group *preparedRootApplyGroup) markPrepared(idx int, rootID uint64, outputID preparedOutputID) {
+	group.markPreparedOutput(idx, rootID, preparedOutputSnapshot{ID: outputID})
+}
+
+func (group *preparedRootApplyGroup) markPreparedOutput(idx int, rootID uint64, output preparedOutputSnapshot) {
 	apply := group.applyAt(idx)
 	if apply == nil {
 		return
 	}
 	apply.preparedRoot = rootID
-	apply.outputID = outputID
+	apply.outputID = output.ID
+	apply.output = clonePreparedOutputSnapshot(output)
 	apply.prepared = true
 	apply.state = preparedRootApplyStatePrepared
 }
@@ -203,6 +209,7 @@ func (group *preparedRootApplyGroup) markInstalled() {
 	for i := 0; i < group.applyCount; i++ {
 		if apply := group.applyAt(i); apply != nil && apply.prepared && apply.state != preparedRootApplyStateAbandoned {
 			apply.state = preparedRootApplyStateInstalled
+			apply.output.State = preparedOutputStateInstalled
 		}
 	}
 }
@@ -216,6 +223,7 @@ func (group *preparedRootApplyGroup) markAbandoned() {
 		apply := group.applyAt(i)
 		if apply != nil && apply.prepared && apply.state != preparedRootApplyStateInstalled {
 			apply.state = preparedRootApplyStateAbandoned
+			apply.output.State = preparedOutputStateAbandoned
 		}
 	}
 }
@@ -293,9 +301,19 @@ func clonePreparedRootApplyGroup(src preparedRootApplyGroup) preparedRootApplyGr
 		apply := *srcApply
 		apply.plan.firstKey = append([]byte(nil), apply.plan.firstKey...)
 		apply.plan.lastKey = append([]byte(nil), apply.plan.lastKey...)
+		apply.output = clonePreparedOutputSnapshot(apply.output)
 		dst.appendApply(apply)
 	}
 	return dst
+}
+
+func clonePreparedOutputSnapshot(src preparedOutputSnapshot) preparedOutputSnapshot {
+	return preparedOutputSnapshot{
+		ID:          src.ID,
+		State:       src.State,
+		Pages:       append([]uint64(nil), src.Pages...),
+		LeafLogPtrs: append([]page.LeafLogPtr(nil), src.LeafLogPtrs...),
+	}
 }
 
 func preparedRootDeltaPlanSummaryFromBatch(delta *batch.Batch, includeChecksum bool) preparedRootDeltaPlanSummary {

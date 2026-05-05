@@ -43,6 +43,29 @@ type leafPageLogWithRecordLengthHints struct {
 	inner LeafPageLog
 }
 
+type preparedOutputLeafPageAppender interface {
+	AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error)
+}
+
+type preparedOutputLeafPageLog struct {
+	inner   preparedOutputLeafPageAppender
+	tracker *allocTracker
+}
+
+func (l preparedOutputLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	if l.inner == nil {
+		return page.LeafLogPtr{}, errors.New("leaf page log unavailable")
+	}
+	ptr, err := l.inner.AppendLeafPage(leafPage)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	if l.tracker != nil {
+		l.tracker.notePreparedLeafLogPtr(ptr)
+	}
+	return ptr, nil
+}
+
 func (l *leafPageLogWithRecordLengthHints) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if l == nil || l.inner == nil {
 		return page.LeafLogPtr{}, errors.New("leaf page log unavailable")
