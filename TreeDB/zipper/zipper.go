@@ -469,12 +469,20 @@ type childWork struct {
 	childStat adaptive.Metrics
 }
 
+type childWorkBuffer struct {
+	items []childWork
+}
+
 const (
 	maxChildWorkCap            = 1 << 14
 	maxChildWorkRetiredKeepCap = 8
 )
 
-var childWorkPool sync.Pool
+var childWorkPool = sync.Pool{
+	New: func() any {
+		return &childWorkBuffer{}
+	},
+}
 
 const maxInternalEntryCap = 1 << 15
 
@@ -558,24 +566,33 @@ func (b *maintenanceBudget) take(n int64) bool {
 	}
 }
 
-func getChildWorkSlice(capacity int) []childWork {
+func getChildWorkBuffer(capacity int) *childWorkBuffer {
 	if capacity < 0 {
 		capacity = 0
 	}
+	buf, _ := childWorkPool.Get().(*childWorkBuffer)
+	if buf == nil {
+		buf = &childWorkBuffer{}
+	}
 	if capacity > maxChildWorkCap {
-		return make([]childWork, 0, capacity)
+		buf.items = make([]childWork, 0, capacity)
+		return buf
 	}
-	if v := childWorkPool.Get(); v != nil {
-		s := v.([]childWork)
-		if cap(s) >= capacity {
-			return s[:0]
-		}
+	if cap(buf.items) >= capacity {
+		buf.items = buf.items[:0]
+		return buf
 	}
-	return make([]childWork, 0, capacity)
+	buf.items = make([]childWork, 0, capacity)
+	return buf
 }
 
-func putChildWorkSlice(children []childWork) {
+func putChildWorkBuffer(buf *childWorkBuffer) {
+	if buf == nil {
+		return
+	}
+	children := buf.items
 	if cap(children) > maxChildWorkCap {
+		buf.items = nil
 		return
 	}
 	for i := range children {
@@ -585,7 +602,8 @@ func putChildWorkSlice(children []childWork) {
 			children[i].retired = retired[:0]
 		}
 	}
-	childWorkPool.Put(children[:0])
+	buf.items = children[:0]
+	childWorkPool.Put(buf)
 }
 
 func appendChildRetiredPages(dst *[]uint64, children []childWork, total int) {
@@ -2461,9 +2479,11 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		return page.PageChildRef(builder.PageID()), splits, nil
 	}
 
-	children := getChildWorkSlice(int(count))
+	childBuf := getChildWorkBuffer(int(count))
+	children := childBuf.items
 	defer func() {
-		putChildWorkSlice(children)
+		childBuf.items = children
+		putChildWorkBuffer(childBuf)
 	}()
 
 	for i := uint16(0); i < count; i++ {
