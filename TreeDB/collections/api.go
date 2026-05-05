@@ -9233,6 +9233,21 @@ func buildIndexedSemanticUpdateRecords(collectionName string, runtimes []indexRu
 		return nil
 	}
 	records := make([]indexedSemanticRecord, 0, len(updates))
+	totalIndexDeltas := 0
+	if len(runtimes) > 0 {
+		for _, update := range updates {
+			if !update.indexStateChanged {
+				continue
+			}
+			for runtimeIdx := range runtimes {
+				if preparedBatchUpdateIndexChanged(update, runtimeIdx) {
+					totalIndexDeltas++
+				}
+			}
+		}
+	}
+	indexDeltas := make([]indexedSemanticIndexDelta, totalIndexDeltas)
+	indexDeltaPos := 0
 	for i, update := range updates {
 		var documentID []byte
 		if i < len(primaryEntries) && len(primaryEntries[i].key) > 0 {
@@ -9247,6 +9262,7 @@ func buildIndexedSemanticUpdateRecords(collectionName string, runtimes []indexRu
 			documentID: documentID,
 		}
 		if update.indexStateChanged && len(runtimes) > 0 {
+			indexDeltaStart := indexDeltaPos
 			for runtimeIdx, runtime := range runtimes {
 				if !preparedBatchUpdateIndexChanged(update, runtimeIdx) {
 					continue
@@ -9254,14 +9270,18 @@ func buildIndexedSemanticUpdateRecords(collectionName string, runtimes []indexRu
 				if runtime.def.unique {
 					record.fallback = indexedSemanticFallbackRawOnly
 				}
-				record.indexDeltas = append(record.indexDeltas, indexedSemanticIndexDelta{
+				indexDeltas[indexDeltaPos] = indexedSemanticIndexDelta{
 					indexName:  runtime.def.name,
 					rootName:   runtimeSecondaryRootName(collectionName, runtime),
 					runtimeIdx: runtimeIdx,
 					unique:     runtime.def.unique,
 					oldValues:  cloneIndexedSemanticValueSet(update.oldState.valuesAt(runtimeIdx)),
 					newValues:  cloneIndexedSemanticValueSet(update.newState.valuesAt(runtimeIdx)),
-				})
+				}
+				indexDeltaPos++
+			}
+			if indexDeltaPos > indexDeltaStart {
+				record.indexDeltas = indexDeltas[indexDeltaStart:indexDeltaPos:indexDeltaPos]
 			}
 		}
 		records = append(records, record)
