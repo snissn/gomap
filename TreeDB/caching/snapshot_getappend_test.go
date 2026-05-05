@@ -252,11 +252,18 @@ func TestSnapshotGetAppendBackendPublishedHitViaInstalledLookup(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = backend.Close() })
 
+	if err := backend.SetSync([]byte("k"), []byte("default-root")); err != nil {
+		t.Fatalf("backend set: %v", err)
+	}
+
 	// Publish a backend root that contains the key we want to read.
 	pubTable := newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "from-published-root"})
 	pointRootID, err := backend.PublishOrderedRootIterator(0, pubTable.NewIterator(nil, nil))
 	if err != nil {
 		t.Fatalf("publish root: %v", err)
+	}
+	if pointRootID == backend.State().RootPageID {
+		t.Fatalf("test point root unexpectedly matches default root %d", pointRootID)
 	}
 
 	db := &DB{
