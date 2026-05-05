@@ -194,12 +194,44 @@ func TestSnapshotGetAppendPublishedAppendMissPreservesTombstone(t *testing.T) {
 }
 
 func TestSnapshotGetAppendBackendPublishedMissDoesNotFallBackToDefaultRoot(t *testing.T) {
+	snap := newSnapshotWithBackendPublishedPointRootMissingKey(t)
+
+	got, err := snap.GetAppend([]byte("k"), []byte("p:"))
+	if !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("GetAppend err=%v, want ErrKeyNotFound", err)
+	}
+	if string(got) != "p:" {
+		t.Fatalf("value=%q, want unchanged prefix", got)
+	}
+}
+
+func TestSnapshotBackendPublishedMissConsistentAcrossReadAPIs(t *testing.T) {
+	snap := newSnapshotWithBackendPublishedPointRootMissingKey(t)
+
+	if _, err := snap.Get([]byte("k")); !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("Get err=%v, want ErrKeyNotFound", err)
+	}
+	if _, err := snap.GetUnsafe([]byte("k")); !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("GetUnsafe err=%v, want ErrKeyNotFound", err)
+	}
+	ok, err := snap.Has([]byte("k"))
+	if err != nil {
+		t.Fatalf("Has: %v", err)
+	}
+	if ok {
+		t.Fatal("Has=true, want false")
+	}
+}
+
+func newSnapshotWithBackendPublishedPointRootMissingKey(t *testing.T) *Snapshot {
+	t.Helper()
+
 	dir := t.TempDir()
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	defer backend.Close()
+	t.Cleanup(func() { _ = backend.Close() })
 
 	if err := backend.SetSync([]byte("k"), []byte("default")); err != nil {
 		t.Fatalf("backend set: %v", err)
@@ -217,22 +249,14 @@ func TestSnapshotGetAppendBackendPublishedMissDoesNotFallBackToDefaultRoot(t *te
 	if backendSnap == nil {
 		t.Fatal("expected backend snapshot")
 	}
-	defer backendSnap.Close()
+	t.Cleanup(func() { _ = backendSnap.Close() })
 
 	db := &DB{backend: backend, mutableShards: make([]memShard, 1)}
-	snap := &Snapshot{
+	return &Snapshot{
 		db:              db,
 		backend:         backendSnap,
 		rootPointShards: []rootDomainSnapshot{{publishedRootID: pointRootID}},
 		backendRoot:     backendSnapshotLookup{db: db, snapshot: backendSnap, rootID: backendSnap.State().RootPageID},
 		backendRootOK:   true,
-	}
-
-	got, err := snap.GetAppend([]byte("k"), []byte("p:"))
-	if !errors.Is(err, tree.ErrKeyNotFound) {
-		t.Fatalf("GetAppend err=%v, want ErrKeyNotFound", err)
-	}
-	if string(got) != "p:" {
-		t.Fatalf("value=%q, want unchanged prefix", got)
 	}
 }
