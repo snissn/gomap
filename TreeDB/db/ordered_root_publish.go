@@ -637,7 +637,7 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 	if err != nil {
 		return 0, nil, metrics, err
 	}
-	return applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta)
+	return applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, zipper.ApplyOptions{})
 }
 
 func (db *DB) publishOrderedRootDeltaBatch(baseRoot uint64, delta *batch.Batch, opts orderedRootPublishOptions) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, err error) {
@@ -701,11 +701,11 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 	if err != nil {
 		return 0, nil, metrics, err
 	}
-	return applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta)
+	return applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, zipper.ApplyOptions{})
 }
 
-func applyOrderedRootDeltaWithOptions(rootZipper *zipper.Zipper, baseRoot uint64, delta *batch.Batch) (uint64, []uint64, adaptive.Metrics, error) {
-	applyResult, err := rootZipper.ApplyWithOptions(baseRoot, delta, zipper.ApplyOptions{})
+func applyOrderedRootDeltaWithOptions(rootZipper *zipper.Zipper, baseRoot uint64, delta *batch.Batch, opts zipper.ApplyOptions) (uint64, []uint64, adaptive.Metrics, error) {
+	applyResult, err := rootZipper.ApplyWithOptions(baseRoot, delta, opts)
 	// ApplyWithOptions returns its result by value and may include partial
 	// metrics when err is non-nil; preserve metrics but do not return partial
 	// root IDs or retired-page ownership on failure.
@@ -915,10 +915,8 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 					err = zipperErr
 					return
 				}
-				var applyErr error
-				newRoot, retired, metrics, applyErr = applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta)
-				if applyErr != nil {
-					err = applyErr
+				newRoot, retired, metrics, err = applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, zipper.ApplyOptions{})
+				if err != nil {
 					return
 				}
 				// Avoid a full old-tree page scan on the warm apply path. The
