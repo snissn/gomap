@@ -1056,6 +1056,9 @@ type ReadOnlyPrepareOptions struct {
 type ReadOnlyLeafSpan struct {
 	Ref page.ChildRef
 
+	// LowKey is the inclusive lower bound for the leaf span. HighKey is the
+	// exclusive upper bound. A nil bound is open-ended. Non-nil bound slices and
+	// op-key slices are owned by ReadOnlyPrepareResult until ReuseOptions is used.
 	LowKey  []byte
 	HighKey []byte
 
@@ -1095,6 +1098,9 @@ func (r ReadOnlyPrepareResult) ReuseOptions() ReadOnlyPrepareOptions {
 }
 
 func (r *ReadOnlyPrepareResult) cloneKey(src []byte) []byte {
+	if src == nil {
+		return nil
+	}
 	if len(src) == 0 {
 		return []byte{}
 	}
@@ -1189,7 +1195,7 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 			if key == nil {
 				key = []byte{}
 			}
-			childLow := result.cloneKey(key)
+			useInheritedLow := len(key) == 0
 
 			var endKey []byte
 			if i+1 < count {
@@ -1200,7 +1206,7 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 				if nextKey == nil {
 					nextKey = []byte{}
 				}
-				endKey = result.cloneKey(nextKey)
+				endKey = nextKey
 			}
 
 			startOpIdx := opIdx
@@ -1215,9 +1221,20 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 				continue
 			}
 
+			childLow := low
 			childHigh := high
 			if endKey != nil {
-				childHigh = endKey
+				childHigh = result.cloneKey(endKey)
+			}
+			if !useInheritedLow {
+				key, _, err := oldNode.GetInternalEntryRefView(i)
+				if err != nil {
+					return err
+				}
+				if key == nil {
+					key = []byte{}
+				}
+				childLow = result.cloneKey(key)
 			}
 			if err := z.prepareReadOnlyRecursive(childRef, ops[startOpIdx:opIdx], childLow, childHigh, result, scratch); err != nil {
 				return err

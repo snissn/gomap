@@ -180,6 +180,85 @@ func buildOuterLeafInternalRoot(tb testing.TB, z *Zipper) uint64 {
 	return newRootID
 }
 
+func buildInternalRootWithKeys(tb testing.TB, z *Zipper, count int) uint64 {
+	tb.Helper()
+
+	rootID, err := z.pager.Alloc(1)
+	if err != nil {
+		tb.Fatalf("alloc root: %v", err)
+	}
+	data, err := z.pager.Get(rootID)
+	if err != nil {
+		tb.Fatalf("get root: %v", err)
+	}
+	n := node.NewNode(data)
+	n.SetPageID(rootID)
+	n.SetType(page.PageTypeLeaf)
+	n.UpdateChecksum()
+
+	b := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = b.Close() }()
+	value := bytes.Repeat([]byte("v"), 128)
+	for i := 0; i < count; i++ {
+		key := []byte(fmt.Sprintf("key-%06d", i))
+		b.Set(key, value)
+	}
+
+	newRootID, _, _, err := z.Apply(rootID, b)
+	if err != nil {
+		tb.Fatalf("build %d-key root apply: %v", count, err)
+	}
+	return newRootID
+}
+
+func rootHasInternalChild(tb testing.TB, z *Zipper, rootID uint64) bool {
+	tb.Helper()
+
+	scratch := z.acquireApplyScratch()
+	defer z.releaseApplyScratch(scratch)
+
+	root, _, leafScratch, leafScratchRef, _, err := z.loadNodeRef(page.PageChildRef(rootID), scratch)
+	if err != nil {
+		tb.Fatalf("load root: %v", err)
+	}
+	if leafScratchRef {
+		defer releaseLeafPageScratch(scratch, leafScratch)
+	}
+	if root.Type() != page.PageTypeInternal {
+		return false
+	}
+	for i := uint16(0); i < root.Count(); i++ {
+		_, childRef, err := root.GetInternalEntryRefView(i)
+		if err != nil {
+			tb.Fatalf("root child %d: %v", i, err)
+		}
+		child, _, childLeafScratch, childLeafScratchRef, _, err := z.loadNodeRef(childRef, scratch)
+		if err != nil {
+			tb.Fatalf("load child %d: %v", i, err)
+		}
+		if childLeafScratchRef {
+			releaseLeafPageScratch(scratch, childLeafScratch)
+		}
+		if child.Type() == page.PageTypeInternal {
+			return true
+		}
+	}
+	return false
+}
+
+func buildMultiLevelInternalRoot(tb testing.TB, z *Zipper) (uint64, int) {
+	tb.Helper()
+
+	for _, count := range []int{2048, 4096, 8192, 16384} {
+		rootID := buildInternalRootWithKeys(tb, z, count)
+		if rootHasInternalChild(tb, z, rootID) {
+			return rootID, count
+		}
+	}
+	tb.Fatal("failed to build a multi-level internal root")
+	return 0, 0
+}
+
 func TestZipperPrepareReadOnlyColdBuildDoesNotLoadOrWrite(t *testing.T) {
 	b := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
 	defer func() { _ = b.Close() }()
@@ -345,6 +424,61 @@ func TestZipperPrepareReadOnlyInternalBaseDeltaKeyBoundsAreStable(t *testing.T) 
 			t.Fatalf("span low bound %q is after first op %q; span=%+v", span.LowKey, span.FirstOpKey, span)
 		}
 		if len(span.HighKey) > 0 && bytes.Compare(span.FirstOpKey, span.HighKey) >= 0 {
+			t.Fatalf("span high bound %q is not after first op %q; span=%+v", span.HighKey, span.FirstOpKey, span)
+		}
+	}
+}
+
+func TestZipperPrepareReadOnlyNestedInternalBoundsInheritParentRange(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	z.SetIndexInternalBaseDelta(true)
+	rootID, count := buildMultiLevelInternalRoot(t, z)
+	beforePages := p.PageCount()
+
+	b := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = b.Close() }()
+	opKeys := [][]byte{
+		[]byte("key-000001"),
+		[]byte(fmt.Sprintf("key-%06d", count/4)),
+		[]byte(fmt.Sprintf("key-%06d", count/2)),
+		[]byte(fmt.Sprintf("key-%06d", count-2)),
+	}
+	for _, key := range opKeys {
+		b.Set(key, []byte("new"))
+	}
+
+	prepared, err := z.PrepareReadOnly(rootID, b, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatalf("PrepareReadOnly: %v", err)
+	}
+	if got := p.PageCount(); got != beforePages {
+		t.Fatalf("page count changed during read-only prepare: got %d want %d", got, beforePages)
+	}
+	if prepared.Maintenance || !prepared.ExactLeafSpans {
+		t.Fatalf("prepare maintenance/exact=%v/%v want false/true", prepared.Maintenance, prepared.ExactLeafSpans)
+	}
+	if len(prepared.LeafSpans) < 3 {
+		t.Fatalf("leaf spans=%d want at least 3 for sparse multi-level keys", len(prepared.LeafSpans))
+	}
+	for _, span := range prepared.LeafSpans {
+		if len(span.FirstOpKey) == 0 {
+			t.Fatalf("span missing first op key: %+v", span)
+		}
+		if bytes.Compare(span.FirstOpKey, []byte("key-000001")) > 0 && len(span.LowKey) == 0 {
+			t.Fatalf("span for non-leftmost op has empty inherited low bound: %+v", span)
+		}
+		if span.LowKey != nil && bytes.Compare(span.LowKey, span.FirstOpKey) > 0 {
+			t.Fatalf("span low bound %q is after first op %q; span=%+v", span.LowKey, span.FirstOpKey, span)
+		}
+		if span.HighKey != nil && bytes.Compare(span.FirstOpKey, span.HighKey) >= 0 {
 			t.Fatalf("span high bound %q is not after first op %q; span=%+v", span.HighKey, span.FirstOpKey, span)
 		}
 	}
