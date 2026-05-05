@@ -2,7 +2,11 @@ package collections
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime/pprof"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,6 +53,38 @@ func BenchmarkCollectionUpdateBatchDirectBufferedTemplateV1NewShapeReadOnlyPrepa
 type collectionDirectBufferedBenchmarkOptions struct {
 	readOnlyPrepare        bool
 	readOnlyPrepareWorkers int
+}
+
+func startUpdateBatchTimedCPUProfile(b *testing.B) func() {
+	b.Helper()
+	profilePath := strings.TrimSpace(os.Getenv("TREEDB_COLLECTION_TIMED_CPU_PROFILE_PATH"))
+	if profilePath == "" {
+		return func() {}
+	}
+	if dir := filepath.Dir(profilePath); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			b.Fatalf("create timed cpu profile dir: %v", err)
+		}
+	}
+	file, err := os.Create(profilePath)
+	if err != nil {
+		b.Fatalf("create timed cpu profile: %v", err)
+	}
+	if err := pprof.StartCPUProfile(file); err != nil {
+		_ = file.Close()
+		b.Fatalf("start timed cpu profile: %v; do not also pass go test -cpuprofile", err)
+	}
+	stopped := false
+	return func() {
+		if stopped {
+			return
+		}
+		pprof.StopCPUProfile()
+		stopped = true
+		if err := file.Close(); err != nil {
+			b.Errorf("close timed cpu profile: %v", err)
+		}
+	}
 }
 
 func benchmarkCollectionUpdateBatchDirectBufferedTemplateV1NewShape(b *testing.B, batchSize int, opts collectionDirectBufferedBenchmarkOptions) {
@@ -129,6 +165,13 @@ func benchmarkCollectionUpdateBatchDirectBufferedTemplateV1NewShape(b *testing.B
 	dbStatsBefore := d.Stats()
 	b.ReportAllocs()
 	b.ResetTimer()
+	stopProfile := startUpdateBatchTimedCPUProfile(b)
+	profileActive := true
+	defer func() {
+		if profileActive {
+			stopProfile()
+		}
+	}()
 	startTime := time.Now()
 	for start := 0; start < docs; start += batchSize {
 		n := batchSize
@@ -151,6 +194,8 @@ func benchmarkCollectionUpdateBatchDirectBufferedTemplateV1NewShape(b *testing.B
 		b.Fatalf("flush updates: %v", err)
 	}
 	elapsed := time.Since(startTime)
+	stopProfile()
+	profileActive = false
 	b.StopTimer()
 
 	stats := collectionManagerStatsBenchmarkDelta(mgr.StatsSnapshot(), statsBefore)
