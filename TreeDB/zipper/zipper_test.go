@@ -775,6 +775,19 @@ func TestReadOnlyPrepareResultLeafSpanSummary(t *testing.T) {
 	}
 }
 
+func TestReadOnlyPrepareResultLeafSpanSummaryEmptyPlan(t *testing.T) {
+	summary := (ReadOnlyPrepareResult{ExactLeafSpans: true}).LeafSpanSummary()
+	if summary.Ops != 0 || summary.Spans != 0 || !summary.ExactLeafSpans {
+		t.Fatalf("empty summary ops/spans/exact=%d/%d/%v want 0/0/true", summary.Ops, summary.Spans, summary.ExactLeafSpans)
+	}
+	if summary.MinSpanOps != 0 || summary.MaxSpanOps != 0 || summary.SingleOpSpans != 0 {
+		t.Fatalf("empty summary op distribution min/max/single=%d/%d/%d want 0/0/0", summary.MinSpanOps, summary.MaxSpanOps, summary.SingleOpSpans)
+	}
+	if summary.OpenLowSpans != 0 || summary.OpenHighSpans != 0 {
+		t.Fatalf("empty summary open bounds low/high=%d/%d want 0/0", summary.OpenLowSpans, summary.OpenHighSpans)
+	}
+}
+
 func TestZipperPrepareReadOnlyLeafSpanSummaryMatchesPlan(t *testing.T) {
 	dir := t.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
@@ -804,11 +817,29 @@ func TestZipperPrepareReadOnlyLeafSpanSummaryMatchesPlan(t *testing.T) {
 	if summary.Ops != prepared.Ops || summary.Spans != len(prepared.LeafSpans) {
 		t.Fatalf("summary ops/spans=%d/%d want %d/%d", summary.Ops, summary.Spans, prepared.Ops, len(prepared.LeafSpans))
 	}
-	if summary.MaxSpanOps < summary.MinSpanOps || summary.MinSpanOps <= 0 {
-		t.Fatalf("invalid summary span distribution: %+v", summary)
+	wantMin, wantMax, wantSingle, wantOpenLow, wantOpenHigh := 0, 0, 0, 0, 0
+	for i, span := range prepared.LeafSpans {
+		if i == 0 || span.OpCount < wantMin {
+			wantMin = span.OpCount
+		}
+		if i == 0 || span.OpCount > wantMax {
+			wantMax = span.OpCount
+		}
+		if span.OpCount == 1 {
+			wantSingle++
+		}
+		if span.LowKey == nil {
+			wantOpenLow++
+		}
+		if span.HighKey == nil {
+			wantOpenHigh++
+		}
 	}
-	if summary.OpenLowSpans == 0 || summary.OpenHighSpans == 0 {
-		t.Fatalf("summary open bounds low/high=%d/%d want both nonzero", summary.OpenLowSpans, summary.OpenHighSpans)
+	if summary.MinSpanOps != wantMin || summary.MaxSpanOps != wantMax || summary.SingleOpSpans != wantSingle {
+		t.Fatalf("summary op distribution min/max/single=%d/%d/%d want %d/%d/%d", summary.MinSpanOps, summary.MaxSpanOps, summary.SingleOpSpans, wantMin, wantMax, wantSingle)
+	}
+	if summary.OpenLowSpans != wantOpenLow || summary.OpenHighSpans != wantOpenHigh {
+		t.Fatalf("summary open bounds low/high=%d/%d want %d/%d", summary.OpenLowSpans, summary.OpenHighSpans, wantOpenLow, wantOpenHigh)
 	}
 }
 
