@@ -6035,7 +6035,8 @@ func buildIndexedSemanticPublishView(meta CollectionMeta, unit indexedFlushUnit,
 	if normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatTemplateV1 ||
 		len(unit.semanticRecords) == 0 ||
 		unit.docCount != len(unit.semanticRecords) ||
-		len(unit.uniqueValueRuns) != 0 {
+		len(unit.uniqueValueRuns) != 0 ||
+		(len(unit.semanticRecords) > 1 && !indexedSemanticRecordsHaveRepeatedDocumentID(unit.semanticRecords)) {
 		return view, nil
 	}
 	effectiveRuns, effectiveRecords, ok, err := buildIndexedSemanticEffectiveSecondaryRuns(unit.semanticRecords)
@@ -6078,6 +6079,26 @@ func resetIndexedSemanticPublishView(view indexedSemanticPublishView) {
 	for _, table := range view.ownedTables {
 		resetCollectionRunTable(table)
 	}
+}
+
+func indexedSemanticRecordsHaveRepeatedDocumentID(records []indexedSemanticRecord) bool {
+	if len(records) < 2 {
+		return false
+	}
+	seen := make(map[uint64][]byte, len(records))
+	for _, record := range records {
+		hash := xxhash.Sum64(record.documentID)
+		if prior, ok := seen[hash]; ok {
+			if bytes.Equal(prior, record.documentID) {
+				return true
+			}
+			// Hash collisions are vanishingly rare and only make us try the
+			// semantic planner conservatively; the planner still validates chains.
+			return true
+		}
+		seen[hash] = record.documentID
+	}
+	return false
 }
 
 type indexedSemanticDocumentRootState struct {
@@ -6147,34 +6168,75 @@ func buildIndexedSemanticEffectiveSecondaryRuns(records []indexedSemanticRecord)
 		sort.Strings(documentKeys)
 		for _, documentKey := range documentKeys {
 			state := states[documentKey]
-			deletes, sets := indexedSemanticValueSetDiff(state.baseValues, state.finalValues)
-			if len(deletes) == 0 && len(sets) == 0 {
-				continue
-			}
-			effectiveDocuments[documentKey] = struct{}{}
-			for _, encoded := range deletes {
-				if _, err := deleteCollectionSecondaryIndexEntry(table, encoded, state.documentID); err != nil {
-					resetCollectionRunTable(table)
-					for _, existing := range rootTables {
-						resetCollectionRunTable(existing)
-					}
-					return nil, 0, false, err
+			changed, err := applyIndexedSemanticValueSetDiff(table, state)
+			if err != nil {
+				resetCollectionRunTable(table)
+				for _, existing := range rootTables {
+					resetCollectionRunTable(existing)
 				}
+				return nil, 0, false, err
 			}
-			for _, encoded := range sets {
-				if _, err := setCollectionSecondaryIndexEntry(table, encoded, state.documentID); err != nil {
-					resetCollectionRunTable(table)
-					for _, existing := range rootTables {
-						resetCollectionRunTable(existing)
-					}
-					return nil, 0, false, err
-				}
+			if changed {
+				effectiveDocuments[documentKey] = struct{}{}
 			}
 		}
 		table.Freeze()
 		rootTables[rootName] = table
 	}
 	return rootTables, len(effectiveDocuments), true, nil
+}
+
+func applyIndexedSemanticValueSetDiff(table memtable.Table, state *indexedSemanticDocumentRootState) (bool, error) {
+	if state == nil {
+		return false, nil
+	}
+	base, final := state.baseValues, state.finalValues
+	if len(base) == 0 {
+		if len(final) == 0 {
+			return false, nil
+		}
+		for _, encoded := range final {
+			if _, err := setCollectionSecondaryIndexEntry(table, encoded, state.documentID); err != nil {
+				return false, err
+			}
+		}
+		return true, nil
+	}
+	if len(final) == 0 {
+		for _, encoded := range base {
+			if _, err := deleteCollectionSecondaryIndexEntry(table, encoded, state.documentID); err != nil {
+				return false, err
+			}
+		}
+		return true, nil
+	}
+	if len(base) == 1 && len(final) == 1 {
+		if bytes.Equal(base[0], final[0]) {
+			return false, nil
+		}
+		if _, err := deleteCollectionSecondaryIndexEntry(table, base[0], state.documentID); err != nil {
+			return false, err
+		}
+		if _, err := setCollectionSecondaryIndexEntry(table, final[0], state.documentID); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	deletes, sets := indexedSemanticValueSetDiff(base, final)
+	if len(deletes) == 0 && len(sets) == 0 {
+		return false, nil
+	}
+	for _, encoded := range deletes {
+		if _, err := deleteCollectionSecondaryIndexEntry(table, encoded, state.documentID); err != nil {
+			return false, err
+		}
+	}
+	for _, encoded := range sets {
+		if _, err := setCollectionSecondaryIndexEntry(table, encoded, state.documentID); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 func indexedSemanticValueSetsEqual(left, right [][]byte) bool {
