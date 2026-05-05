@@ -2093,8 +2093,22 @@ func TestCollectionSingleInsertBufferedNoIndexFlushPersistsAfterReopen(t *testin
 	if _, err := col.Insert([]byte("u1"), []byte(`{"name":"ada"}`)); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
+	beforeFlush := mgr.StatsSnapshot()
 	if err := col.Flush(); err != nil {
 		t.Fatalf("flush: %v", err)
+	}
+	afterFlush := mgr.StatsSnapshot()
+	if got, want := afterFlush.PrimaryOnlyDrainCalls-beforeFlush.PrimaryOnlyDrainCalls, uint64(1); got != want {
+		t.Fatalf("primary-only drain calls delta=%d want %d", got, want)
+	}
+	if got, want := afterFlush.RootDeltaPlanPrimaryRoots-beforeFlush.RootDeltaPlanPrimaryRoots, uint64(1); got != want {
+		t.Fatalf("root delta primary roots delta=%d want %d", got, want)
+	}
+	if got, want := afterFlush.RootDeltaPlanEntries-beforeFlush.RootDeltaPlanEntries, uint64(1); got != want {
+		t.Fatalf("root delta entries delta=%d want %d", got, want)
+	}
+	if got, want := afterFlush.RootDeltaPlanFinalPrimaryEntries-beforeFlush.RootDeltaPlanFinalPrimaryEntries, uint64(1); got != want {
+		t.Fatalf("final primary entries delta=%d want %d", got, want)
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("close db: %v", err)
@@ -2115,6 +2129,44 @@ func TestCollectionSingleInsertBufferedNoIndexFlushPersistsAfterReopen(t *testin
 	}
 	if want := []byte(`{"name":"ada"}`); !bytes.Equal(got, want) {
 		t.Fatalf("reopened doc=%q want %q", got, want)
+	}
+}
+
+func TestCollectionInsertBatchNoIndexRecordsRootDeltaPlanStats(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	before := mgr.StatsSnapshot()
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"name":"ada"}`), []byte(`{"name":"grace"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	after := mgr.StatsSnapshot()
+	if got, want := after.RootDeltaPlanPrimaryRoots-before.RootDeltaPlanPrimaryRoots, uint64(1); got != want {
+		t.Fatalf("root delta primary roots delta=%d want %d", got, want)
+	}
+	if got, want := after.RootDeltaPlanEntries-before.RootDeltaPlanEntries, uint64(2); got != want {
+		t.Fatalf("root delta entries delta=%d want %d", got, want)
+	}
+	if got, want := after.RootDeltaPlanFinalPrimaryEntries-before.RootDeltaPlanFinalPrimaryEntries, uint64(2); got != want {
+		t.Fatalf("final primary entries delta=%d want %d", got, want)
+	}
+	if got := after.RootDeltaPlanFinalPrimaryBytes - before.RootDeltaPlanFinalPrimaryBytes; got == 0 {
+		t.Fatal("final primary bytes delta=0 want positive")
 	}
 }
 

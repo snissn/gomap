@@ -132,6 +132,86 @@ func TestPR3bSemanticRawRecordsSurviveMutableQueuedActiveRequeued(t *testing.T) 
 	}
 }
 
+func TestPR3bRootDeltaCoalescingSkippedSecondaryRootsUseUniqueRoots(t *testing.T) {
+	raw := collectionRootDeltaPlanStats{
+		secondaryRoots:       2,
+		secondaryUniqueRoots: 1,
+		entries:              6,
+		secondaryDetail: collectionRootDeltaKindStats{
+			entries: 6,
+		},
+	}
+	final := collectionRootDeltaPlanStats{
+		secondaryRoots:       1,
+		secondaryUniqueRoots: 1,
+		entries:              4,
+		secondaryDetail: collectionRootDeltaKindStats{
+			entries: 4,
+		},
+	}
+
+	domain := &collectionWriteDomain{}
+	domain.observeRootDeltaPlanCoalescing(raw, final)
+	if got := domain.indexedSemanticSkippedSecondaryRoots.Load(); got != 0 {
+		t.Fatalf("skipped secondary roots=%d want 0 for repeated raw units that still publish the root", got)
+	}
+	domain = &collectionWriteDomain{}
+	domain.observeRootDeltaPlanCoalescing(raw, collectionRootDeltaPlanStats{})
+	if got := domain.indexedSemanticSkippedSecondaryRoots.Load(); got != 1 {
+		t.Fatalf("skipped secondary roots for net-zero plan=%d want 1 unique root", got)
+	}
+}
+
+func TestPR3bAsyncNetZeroCoalescingRecordsAcceptanceCounters(t *testing.T) {
+	d, mgr, col := pr3bSemanticTestCollection(t)
+	defer func() { _ = d.Close() }()
+	pr3bSeedSemanticUser(t, col)
+
+	const (
+		netZeroDocs  = 2
+		netZeroBytes = 32
+	)
+	before := mgr.StatsSnapshot()
+	col.writeDomain.mu.Lock()
+	col.writeDomain.indexedFlushUnits = []indexedFlushUnit{{
+		docCount:     netZeroDocs,
+		byteCount:    netZeroBytes,
+		rootRunCount: 1,
+	}}
+	col.writeDomain.count = netZeroDocs
+	col.writeDomain.bufferedBytes = netZeroBytes
+	col.writeDomain.mu.Unlock()
+
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare async net-zero publish: %v", err)
+	}
+	if work != nil {
+		collectionTestCloseIndexedFlushWork(work)
+		t.Fatal("prepare async net-zero publish returned work")
+	}
+
+	stats := mgr.StatsSnapshot()
+	if got := stats.PendingDocuments; got != 0 {
+		t.Fatalf("pending docs after async net-zero prepare=%d want 0", got)
+	}
+	if got := stats.CoalescedFlushBatches - before.CoalescedFlushBatches; got != 1 {
+		t.Fatalf("coalesced flush batches after async net-zero prepare=%d want 1", got)
+	}
+	if got := stats.CoalescedFlushBatchUnits - before.CoalescedFlushBatchUnits; got != 1 {
+		t.Fatalf("coalesced flush batch units after async net-zero prepare=%d want 1", got)
+	}
+	if got := stats.CoalescedFlushBatchDocs - before.CoalescedFlushBatchDocs; got != netZeroDocs {
+		t.Fatalf("coalesced flush batch docs after async net-zero prepare=%d want %d", got, netZeroDocs)
+	}
+	if got := stats.CoalescedFlushBatchBytes - before.CoalescedFlushBatchBytes; got != netZeroBytes {
+		t.Fatalf("coalesced flush batch bytes after async net-zero prepare=%d want %d", got, netZeroBytes)
+	}
+	if got := stats.CoalescedFlushNetZeroBatches - before.CoalescedFlushNetZeroBatches; got != 1 {
+		t.Fatalf("coalesced flush net-zero batches after async net-zero prepare=%d want 1", got)
+	}
+}
+
 func TestPR3bSemanticRepeatedSameDocumentUpdatesSerialEquivalent(t *testing.T) {
 	d, mgr, col := pr3bSemanticTestCollection(t)
 	defer func() { _ = d.Close() }()
@@ -217,6 +297,7 @@ func TestPR3bSemanticNonUniqueChangeChangeBackFallsBackRawOnly(t *testing.T) {
 	d, mgr, col := pr3bSemanticTestCollection(t)
 	defer func() { _ = d.Close() }()
 	pr3bSeedSemanticUser(t, col)
+	beforeStats := mgr.StatsSnapshot()
 
 	for _, city := range []string{"sea", "hnl"} {
 		if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
@@ -258,6 +339,14 @@ func TestPR3bSemanticNonUniqueChangeChangeBackFallsBackRawOnly(t *testing.T) {
 	}
 	if got := stats.IndexedSemanticEffectiveRecords; got != 0 {
 		t.Fatalf("effective semantic records=%d want 0", got)
+	}
+	rawSecondaryEntries := stats.RootDeltaPlanRawUnitSecondaryEntries - beforeStats.RootDeltaPlanRawUnitSecondaryEntries
+	finalSecondaryEntries := stats.RootDeltaPlanFinalSecondaryEntries - beforeStats.RootDeltaPlanFinalSecondaryEntries
+	if rawSecondaryEntries <= finalSecondaryEntries {
+		t.Fatalf("raw/final secondary entries after change-back=%d/%d want raw > final", rawSecondaryEntries, finalSecondaryEntries)
+	}
+	if got := stats.RootDeltaPlanSquashedEntries - beforeStats.RootDeltaPlanSquashedEntries; got == 0 {
+		t.Fatal("squashed root-delta entries did not increment for change-back batch")
 	}
 }
 
@@ -450,6 +539,18 @@ func pr3bRequireSemanticMetricKeys(tb testing.TB, mgr *CollectionManager) {
 		"treedb.collections.write_domain.indexed_semantic.raw_index_deltas_total",
 		"treedb.collections.write_domain.indexed_semantic.fallback_records_total",
 		"treedb.collections.write_domain.indexed_semantic.effective_records_total",
+		"treedb.collections.write_domain.indexed_semantic.skipped_secondary_roots_total",
+		"treedb.collections.write_domain.coalesced_flush_batch.batches_total",
+		"treedb.collections.write_domain.coalesced_flush_batch.units_total",
+		"treedb.collections.write_domain.coalesced_flush_batch.docs_total",
+		"treedb.collections.write_domain.coalesced_flush_batch.bytes_total",
+		"treedb.collections.write_domain.coalesced_flush_batch.net_zero_batches_total",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.primary.entries_total",
+		"treedb.collections.write_domain.root_delta_plan.final.primary.entries_total",
+		"treedb.collections.write_domain.root_delta_plan.squashed_entries_total",
+		"treedb.collections.write_domain.root_delta_plan.net_zero_plans_total",
+		"treedb.collections.write_domain.primary_only.duplicate_ids_coalesced_total",
+		"treedb.collections.write_domain.primary_only.drains_total",
 	} {
 		if exported[key] == "" {
 			tb.Fatalf("exported stats missing %s from %#v", key, exported)

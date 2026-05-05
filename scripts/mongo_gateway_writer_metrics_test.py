@@ -87,10 +87,57 @@ class WriterMetricsTests(unittest.TestCase):
                         "ops_per_sec": 1,
                         "sampled_ns_per_op": 2,
                         "driver_calls": 3,
+                        "treedb_drain_ms": 4.25,
+                        "treedb_drain_stats_delta": {
+                            "treedb.collections.write_domain.indexed_flush.calls_total": "1",
+                            "treedb.collections.write_domain.coalesced_flush_batch.batches_total": "1",
+                            "treedb.collections.write_domain.primary_only.drains_total": "0",
+                        },
+                        "treedb_metrics": {
+                            "coalesced_batch_units/batch": 2,
+                            "coalesced_batch_docs/batch": 50,
+                            "coalesced_batch_bytes/batch": 4096,
+                            "raw_root_delta_entries/doc": 6,
+                            "raw_primary_root_delta_entries/doc": 2,
+                            "raw_primary_root_delta_tombstones/doc": 0.1,
+                            "raw_template_root_delta_entries/doc": 0.25,
+                            "raw_template_root_delta_bytes/doc": 25,
+                            "raw_template_root_delta_tombstones/doc": 0,
+                            "raw_index_state_root_delta_entries/doc": 0.5,
+                            "raw_index_state_root_delta_bytes/doc": 50,
+                            "raw_index_state_root_delta_tombstones/doc": 0,
+                            "raw_secondary_root_delta_entries/doc": 4,
+                            "raw_secondary_root_delta_tombstones/doc": 0,
+                            "final_root_delta_entries/doc": 3,
+                            "final_primary_root_delta_entries/doc": 1,
+                            "final_primary_root_delta_tombstones/doc": 0,
+                            "final_template_root_delta_entries/doc": 0.125,
+                            "final_template_root_delta_bytes/doc": 12.5,
+                            "final_template_root_delta_tombstones/doc": 0,
+                            "final_index_state_root_delta_entries/doc": 0.25,
+                            "final_index_state_root_delta_bytes/doc": 25,
+                            "final_index_state_root_delta_tombstones/doc": 0,
+                            "final_secondary_root_delta_entries/doc": 2,
+                            "final_secondary_root_delta_tombstones/doc": 0,
+                            "squashed_root_delta_entries/doc": 3,
+                            "net_zero_root_batches/doc": 0,
+                            "net_zero_root_plans/doc": 0.25,
+                            "skipped_secondary_roots/doc": 2.5,
+                            "primary_only_duplicate_ids_coalesced/doc": 0.75,
+                            "primary_only_drains/doc": 0.125,
+                        },
                         "treedb_stats_delta": {
                             "treedb.collections.write_domain.indexed_async_flush.backpressure_sync_total": huge,
                             "treedb.collections.write_domain.collection_root_base_mismatch_total": "bad",
                             "treedb.collections.write_domain.indexed_flush.root_base_mismatch_total": "1",
+                            "treedb.collections.write_domain.root_delta_plan.raw_unit.primary.entries_total": huge,
+                            "treedb.collections.write_domain.root_delta_plan.raw_unit.secondary.entries_total": "11",
+                            "treedb.collections.write_domain.root_delta_plan.final.primary.entries_total": "7",
+                            "treedb.collections.write_domain.root_delta_plan.final.secondary.entries_total": "5",
+                            "treedb.collections.write_domain.root_delta_plan.squashed_entries_total": "9",
+                            "treedb.collections.write_domain.coalesced_flush_batch.net_zero_batches_total": "0",
+                            "treedb.collections.write_domain.primary_only.duplicate_ids_coalesced_total": "6",
+                            "treedb.collections.write_domain.primary_only.drains_total": "2",
                         },
                     }],
                 }),
@@ -111,8 +158,34 @@ class WriterMetricsTests(unittest.TestCase):
             with output.open(newline="") as out_file:
                 rows = list(csv.DictReader(out_file, delimiter="\t"))
             self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["treedb_drain_ms"], "4.25")
+            self.assertEqual(rows[0]["drain_indexed_flush_calls_total"], "1")
+            self.assertEqual(rows[0]["drain_coalesced_flush_batches_total"], "1")
+            self.assertEqual(rows[0]["drain_primary_only_drains_total"], "0")
+            self.assertEqual(rows[0]["coalesced_batch_units_per_batch"], "2")
+            self.assertEqual(rows[0]["raw_root_delta_entries_per_doc"], "6")
+            self.assertEqual(rows[0]["raw_primary_root_delta_entries_per_doc"], "2")
+            self.assertEqual(rows[0]["raw_primary_root_delta_tombstones_per_doc"], "0.1")
+            self.assertEqual(rows[0]["raw_template_root_delta_entries_per_doc"], "0.25")
+            self.assertEqual(rows[0]["raw_index_state_root_delta_bytes_per_doc"], "50")
+            self.assertEqual(rows[0]["raw_secondary_root_delta_entries_per_doc"], "4")
+            self.assertEqual(rows[0]["raw_secondary_root_delta_tombstones_per_doc"], "0")
+            self.assertEqual(rows[0]["final_root_delta_entries_per_doc"], "3")
+            self.assertEqual(rows[0]["final_template_root_delta_bytes_per_doc"], "12.5")
+            self.assertEqual(rows[0]["final_index_state_root_delta_tombstones_per_doc"], "0")
+            self.assertEqual(rows[0]["final_secondary_root_delta_tombstones_per_doc"], "0")
+            self.assertEqual(rows[0]["squashed_root_delta_entries_per_doc"], "3")
+            self.assertEqual(rows[0]["net_zero_root_batches_per_doc"], "0")
             self.assertEqual(rows[0]["backpressure_sync_total"], huge)
             self.assertEqual(rows[0]["root_mismatch_total"], "")
+            self.assertEqual(rows[0]["root_delta_plan_raw_unit_primary_entries_total"], huge)
+            self.assertEqual(rows[0]["root_delta_plan_raw_unit_secondary_entries_total"], "11")
+            self.assertEqual(rows[0]["root_delta_plan_final_primary_entries_total"], "7")
+            self.assertEqual(rows[0]["root_delta_plan_squashed_entries_total"], "9")
+            self.assertEqual(rows[0]["coalesced_flush_net_zero_batches_total"], "0")
+            self.assertEqual(rows[0]["primary_only_duplicate_ids_coalesced_total"], "6")
+            self.assertEqual(rows[0]["primary_only_drains_total"], "2")
+            self.assertIn("treedb_drain_ms", rows[0])
             self.assertIn("root_mismatch_total", stderr.getvalue())
 
 
