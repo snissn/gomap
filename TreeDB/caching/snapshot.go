@@ -403,17 +403,6 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 			return dst, tree.ErrKeyNotFound
 		}
 		if flags&node.FlagPointer != 0 {
-			if source == rootDomainEntrySourcePublished {
-				oldLen := len(dst)
-				out, ok, err := rootDomainPublishedGetAppend(snap, key, dst)
-				if ok {
-					if err != nil {
-						return dst, err
-					}
-					recordSnapshotRootDomainRead(source, true, len(out)-oldLen)
-					return out, nil
-				}
-			}
 			if s.db == nil {
 				return dst, errors.New("caching snapshot: value-log reader unavailable")
 			}
@@ -443,30 +432,29 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 		if !errors.Is(err, tree.ErrKeyNotFound) {
 			return dst, err
 		}
-	} else {
-		val, ptr, flags, found, source = snap.getPublishedEntryWithSource(key)
-		if found {
-			if flags&node.FlagTombstone != 0 {
-				return dst, tree.ErrKeyNotFound
-			}
-			if flags&node.FlagPointer != 0 {
-				if s.db == nil {
-					return dst, errors.New("caching snapshot: value-log reader unavailable")
-				}
-				out, err := s.db.readValueLogAppend(key, ptr, dst)
-				if err != nil {
-					return dst, err
-				}
-				recordSnapshotRootDomainRead(source, true, len(out)-oldLen)
-				return out, nil
-			}
-			if val == nil {
-				recordSnapshotRootDomainRead(source, false, 0)
-				return dst, nil
-			}
-			recordSnapshotRootDomainRead(source, false, len(val))
-			return append(dst, val...), nil
+	}
+	val, ptr, flags, found, source = snap.getPublishedEntryWithSource(key)
+	if found {
+		if flags&node.FlagTombstone != 0 {
+			return dst, tree.ErrKeyNotFound
 		}
+		if flags&node.FlagPointer != 0 {
+			if s.db == nil {
+				return dst, errors.New("caching snapshot: value-log reader unavailable")
+			}
+			out, err := s.db.readValueLogAppend(key, ptr, dst)
+			if err != nil {
+				return dst, err
+			}
+			recordSnapshotRootDomainRead(source, true, len(out)-oldLen)
+			return out, nil
+		}
+		if val == nil {
+			recordSnapshotRootDomainRead(source, false, 0)
+			return dst, nil
+		}
+		recordSnapshotRootDomainRead(source, false, len(val))
+		return append(dst, val...), nil
 	}
 
 	if s == nil || s.backend == nil || s.db == nil {
