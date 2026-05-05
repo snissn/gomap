@@ -450,6 +450,20 @@ func pr3bRequireSemanticMetricKeys(tb testing.TB, mgr *CollectionManager) {
 		"treedb.collections.write_domain.indexed_semantic.raw_index_deltas_total",
 		"treedb.collections.write_domain.indexed_semantic.fallback_records_total",
 		"treedb.collections.write_domain.indexed_semantic.effective_records_total",
+		"treedb.collections.write_domain.indexed_semantic.coalesced_noop_index_changes_total",
+		"treedb.collections.write_domain.indexed_semantic.skipped_secondary_roots_total",
+		"treedb.collections.write_domain.indexed_semantic.duplicate_primary_ids_coalesced_total",
+		"treedb.collections.write_domain.coalesced_flush_batch.batches_total",
+		"treedb.collections.write_domain.coalesced_flush_batch.units_total",
+		"treedb.collections.write_domain.coalesced_flush_batch.docs_total",
+		"treedb.collections.write_domain.coalesced_flush_batch.bytes_total",
+		"treedb.collections.write_domain.coalesced_flush_batch.net_zero_batches_total",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.primary.entries_total",
+		"treedb.collections.write_domain.root_delta_plan.final.primary.entries_total",
+		"treedb.collections.write_domain.root_delta_plan.squashed_entries_total",
+		"treedb.collections.write_domain.root_delta_plan.net_zero_plans_total",
+		"treedb.collections.write_domain.primary_only.duplicate_ids_coalesced_total",
+		"treedb.collections.write_domain.primary_only.drains_total",
 	} {
 		if exported[key] == "" {
 			tb.Fatalf("exported stats missing %s from %#v", key, exported)

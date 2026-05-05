@@ -16,6 +16,10 @@ COLUMNS = [
     "ops_per_sec",
     "sampled_ns_per_op",
     "driver_calls",
+    "treedb_drain_ms",
+    "drain_indexed_flush_calls_total",
+    "drain_coalesced_flush_batches_total",
+    "drain_primary_only_drains_total",
     "publish_delta_group_calls_per_doc",
     "root_apply_calls_per_doc",
     "roots_per_publish",
@@ -24,12 +28,63 @@ COLUMNS = [
     "primary_root_delta_bytes_per_doc",
     "indexed_flush_units_per_batch",
     "indexed_flush_docs_per_batch",
+    "coalesced_batch_units_per_batch",
+    "coalesced_batch_docs_per_batch",
+    "coalesced_batch_bytes_per_batch",
+    "raw_root_delta_entries_per_doc",
+    "raw_root_delta_bytes_per_doc",
+    "raw_root_delta_tombstones_per_doc",
+    "raw_primary_root_delta_entries_per_doc",
+    "raw_primary_root_delta_bytes_per_doc",
+    "raw_primary_root_delta_tombstones_per_doc",
+    "raw_template_root_delta_entries_per_doc",
+    "raw_template_root_delta_bytes_per_doc",
+    "raw_template_root_delta_tombstones_per_doc",
+    "raw_index_state_root_delta_entries_per_doc",
+    "raw_index_state_root_delta_bytes_per_doc",
+    "raw_index_state_root_delta_tombstones_per_doc",
+    "raw_secondary_root_delta_entries_per_doc",
+    "raw_secondary_root_delta_bytes_per_doc",
+    "raw_secondary_root_delta_tombstones_per_doc",
+    "final_root_delta_entries_per_doc",
+    "final_root_delta_bytes_per_doc",
+    "final_root_delta_tombstones_per_doc",
+    "final_primary_root_delta_entries_per_doc",
+    "final_primary_root_delta_bytes_per_doc",
+    "final_primary_root_delta_tombstones_per_doc",
+    "final_template_root_delta_entries_per_doc",
+    "final_template_root_delta_bytes_per_doc",
+    "final_template_root_delta_tombstones_per_doc",
+    "final_index_state_root_delta_entries_per_doc",
+    "final_index_state_root_delta_bytes_per_doc",
+    "final_index_state_root_delta_tombstones_per_doc",
+    "final_secondary_root_delta_entries_per_doc",
+    "final_secondary_root_delta_bytes_per_doc",
+    "final_secondary_root_delta_tombstones_per_doc",
+    "squashed_root_delta_entries_per_doc",
+    "net_zero_root_batches_per_doc",
+    "net_zero_root_plans_per_doc",
+    "coalesced_noop_index_changes_per_doc",
+    "skipped_secondary_roots_per_doc",
+    "duplicate_primary_ids_coalesced_per_doc",
+    "primary_only_duplicate_ids_coalesced_per_doc",
+    "primary_only_drains_per_doc",
+    "primary_only_drain_docs_per_drain",
+    "primary_only_publishes_per_drain",
     "leaf_log_node_loads_per_doc",
     "leaf_log_pages_written_per_doc",
     "leaf_log_read_bytes_per_doc",
     "leaf_log_write_bytes_per_doc",
     "backpressure_sync_total",
     "root_mismatch_total",
+    "root_delta_plan_raw_unit_primary_entries_total",
+    "root_delta_plan_raw_unit_secondary_entries_total",
+    "root_delta_plan_final_primary_entries_total",
+    "root_delta_plan_final_secondary_entries_total",
+    "root_delta_plan_squashed_entries_total",
+    "coalesced_flush_net_zero_batches_total",
+    "primary_only_duplicate_ids_coalesced_total",
+    "primary_only_drains_total",
     "raw_json",
 ]
 
@@ -42,6 +97,49 @@ METRIC_COLUMNS = {
     "primary_root_delta_bytes_per_doc": "primary_root_delta_bytes/doc",
     "indexed_flush_units_per_batch": "indexed_flush_units/batch",
     "indexed_flush_docs_per_batch": "indexed_flush_docs/batch",
+    "coalesced_batch_units_per_batch": "coalesced_batch_units/batch",
+    "coalesced_batch_docs_per_batch": "coalesced_batch_docs/batch",
+    "coalesced_batch_bytes_per_batch": "coalesced_batch_bytes/batch",
+    "raw_root_delta_entries_per_doc": "raw_root_delta_entries/doc",
+    "raw_root_delta_bytes_per_doc": "raw_root_delta_bytes/doc",
+    "raw_root_delta_tombstones_per_doc": "raw_root_delta_tombstones/doc",
+    "raw_primary_root_delta_entries_per_doc": "raw_primary_root_delta_entries/doc",
+    "raw_primary_root_delta_bytes_per_doc": "raw_primary_root_delta_bytes/doc",
+    "raw_primary_root_delta_tombstones_per_doc": "raw_primary_root_delta_tombstones/doc",
+    "raw_template_root_delta_entries_per_doc": "raw_template_root_delta_entries/doc",
+    "raw_template_root_delta_bytes_per_doc": "raw_template_root_delta_bytes/doc",
+    "raw_template_root_delta_tombstones_per_doc": "raw_template_root_delta_tombstones/doc",
+    "raw_index_state_root_delta_entries_per_doc": "raw_index_state_root_delta_entries/doc",
+    "raw_index_state_root_delta_bytes_per_doc": "raw_index_state_root_delta_bytes/doc",
+    "raw_index_state_root_delta_tombstones_per_doc": "raw_index_state_root_delta_tombstones/doc",
+    "raw_secondary_root_delta_entries_per_doc": "raw_secondary_root_delta_entries/doc",
+    "raw_secondary_root_delta_bytes_per_doc": "raw_secondary_root_delta_bytes/doc",
+    "raw_secondary_root_delta_tombstones_per_doc": "raw_secondary_root_delta_tombstones/doc",
+    "final_root_delta_entries_per_doc": "final_root_delta_entries/doc",
+    "final_root_delta_bytes_per_doc": "final_root_delta_bytes/doc",
+    "final_root_delta_tombstones_per_doc": "final_root_delta_tombstones/doc",
+    "final_primary_root_delta_entries_per_doc": "final_primary_root_delta_entries/doc",
+    "final_primary_root_delta_bytes_per_doc": "final_primary_root_delta_bytes/doc",
+    "final_primary_root_delta_tombstones_per_doc": "final_primary_root_delta_tombstones/doc",
+    "final_template_root_delta_entries_per_doc": "final_template_root_delta_entries/doc",
+    "final_template_root_delta_bytes_per_doc": "final_template_root_delta_bytes/doc",
+    "final_template_root_delta_tombstones_per_doc": "final_template_root_delta_tombstones/doc",
+    "final_index_state_root_delta_entries_per_doc": "final_index_state_root_delta_entries/doc",
+    "final_index_state_root_delta_bytes_per_doc": "final_index_state_root_delta_bytes/doc",
+    "final_index_state_root_delta_tombstones_per_doc": "final_index_state_root_delta_tombstones/doc",
+    "final_secondary_root_delta_entries_per_doc": "final_secondary_root_delta_entries/doc",
+    "final_secondary_root_delta_bytes_per_doc": "final_secondary_root_delta_bytes/doc",
+    "final_secondary_root_delta_tombstones_per_doc": "final_secondary_root_delta_tombstones/doc",
+    "squashed_root_delta_entries_per_doc": "squashed_root_delta_entries/doc",
+    "net_zero_root_batches_per_doc": "net_zero_root_batches/doc",
+    "net_zero_root_plans_per_doc": "net_zero_root_plans/doc",
+    "coalesced_noop_index_changes_per_doc": "coalesced_noop_index_changes/doc",
+    "skipped_secondary_roots_per_doc": "skipped_secondary_roots/doc",
+    "duplicate_primary_ids_coalesced_per_doc": "duplicate_primary_ids_coalesced/doc",
+    "primary_only_duplicate_ids_coalesced_per_doc": "primary_only_duplicate_ids_coalesced/doc",
+    "primary_only_drains_per_doc": "primary_only_drains/doc",
+    "primary_only_drain_docs_per_drain": "primary_only_drain_docs/drain",
+    "primary_only_publishes_per_drain": "primary_only_publishes/drain",
     "leaf_log_node_loads_per_doc": "leaf_log_node_loads/doc",
     "leaf_log_pages_written_per_doc": "leaf_log_pages_written/doc",
     "leaf_log_read_bytes_per_doc": "leaf_log_read_bytes/doc",
@@ -145,6 +243,9 @@ def write_writer_metrics(out_dir, matrix_path, writer_metrics_path):
                     delta = phase.get("treedb_stats_delta") or {}
                     if not isinstance(delta, dict):
                         delta = {}
+                    drain_delta = phase.get("treedb_drain_stats_delta") or {}
+                    if not isinstance(drain_delta, dict):
+                        drain_delta = {}
                     out = {
                         "target": target,
                         "config": config,
@@ -155,10 +256,20 @@ def write_writer_metrics(out_dir, matrix_path, writer_metrics_path):
                         "ops_per_sec": fmt(phase.get("ops_per_sec")),
                         "sampled_ns_per_op": fmt(phase.get("sampled_ns_per_op")),
                         "driver_calls": fmt(phase.get("driver_calls")),
+                        "treedb_drain_ms": fmt(phase.get("treedb_drain_ms")),
                         "raw_json": raw_json,
                     }
                     for column, metric_name in METRIC_COLUMNS.items():
                         out[column] = fmt(metrics.get(metric_name))
+                    out["drain_indexed_flush_calls_total"] = delta_count(drain_delta, [
+                        "treedb.collections.write_domain.indexed_flush.calls_total",
+                    ], "drain_indexed_flush_calls_total")
+                    out["drain_coalesced_flush_batches_total"] = delta_count(drain_delta, [
+                        "treedb.collections.write_domain.coalesced_flush_batch.batches_total",
+                    ], "drain_coalesced_flush_batches_total")
+                    out["drain_primary_only_drains_total"] = delta_count(drain_delta, [
+                        "treedb.collections.write_domain.primary_only.drains_total",
+                    ], "drain_primary_only_drains_total")
                     out["backpressure_sync_total"] = delta_count(delta, [
                         "treedb.collections.write_domain.indexed_async_flush.backpressure_sync_total",
                     ], "backpressure_sync_total")
@@ -167,6 +278,30 @@ def write_writer_metrics(out_dir, matrix_path, writer_metrics_path):
                         "treedb.collections.write_domain.indexed_flush.root_base_mismatch_total",
                         "treedb.collections.write_domain.coordinator_requeue_on_mismatch_total",
                     ], "root_mismatch_total")
+                    out["root_delta_plan_raw_unit_primary_entries_total"] = delta_count(delta, [
+                        "treedb.collections.write_domain.root_delta_plan.raw_unit.primary.entries_total",
+                    ], "root_delta_plan_raw_unit_primary_entries_total")
+                    out["root_delta_plan_raw_unit_secondary_entries_total"] = delta_count(delta, [
+                        "treedb.collections.write_domain.root_delta_plan.raw_unit.secondary.entries_total",
+                    ], "root_delta_plan_raw_unit_secondary_entries_total")
+                    out["root_delta_plan_final_primary_entries_total"] = delta_count(delta, [
+                        "treedb.collections.write_domain.root_delta_plan.final.primary.entries_total",
+                    ], "root_delta_plan_final_primary_entries_total")
+                    out["root_delta_plan_final_secondary_entries_total"] = delta_count(delta, [
+                        "treedb.collections.write_domain.root_delta_plan.final.secondary.entries_total",
+                    ], "root_delta_plan_final_secondary_entries_total")
+                    out["root_delta_plan_squashed_entries_total"] = delta_count(delta, [
+                        "treedb.collections.write_domain.root_delta_plan.squashed_entries_total",
+                    ], "root_delta_plan_squashed_entries_total")
+                    out["coalesced_flush_net_zero_batches_total"] = delta_count(delta, [
+                        "treedb.collections.write_domain.coalesced_flush_batch.net_zero_batches_total",
+                    ], "coalesced_flush_net_zero_batches_total")
+                    out["primary_only_duplicate_ids_coalesced_total"] = delta_count(delta, [
+                        "treedb.collections.write_domain.primary_only.duplicate_ids_coalesced_total",
+                    ], "primary_only_duplicate_ids_coalesced_total")
+                    out["primary_only_drains_total"] = delta_count(delta, [
+                        "treedb.collections.write_domain.primary_only.drains_total",
+                    ], "primary_only_drains_total")
                     writer.writerow(out)
 
 
