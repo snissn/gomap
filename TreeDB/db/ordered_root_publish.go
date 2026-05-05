@@ -61,11 +61,11 @@ type orderedRootPublishOptions struct {
 }
 
 type orderedRootDeltaBatchGroupApplyResult struct {
-	idx     int
-	rootID  uint64
-	retired []uint64
-	metrics adaptive.Metrics
-	err     error
+	idx                 int
+	rootID              uint64
+	pendingRetiredPages []uint64
+	metrics             adaptive.Metrics
+	err                 error
 }
 
 // OrderedRootStoragePolicy selects the physical storage policy for a published
@@ -1433,9 +1433,9 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 			result.err = err
 			return result
 		}
-		rootID, retired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, opts, alloc, coldBuildAlloc, ordered[orderedIdx].IncludeDeletedOnColdBuild)
+		rootID, pendingRetiredPages, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, opts, alloc, coldBuildAlloc, ordered[orderedIdx].IncludeDeletedOnColdBuild)
 		result.rootID = rootID
-		result.retired = retired
+		result.pendingRetiredPages = pendingRetiredPages
 		result.metrics = metrics
 		result.err = err
 		return result
@@ -1551,7 +1551,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 
 	rootIDs = make([]uint64, len(ordered))
 	systemOpts := systemRootOrderedPublishOptions(db)
-	var nonSystemRetired []uint64
+	var nonSystemPendingRetiredPages []uint64
 	var nonSystemMetrics adaptive.Metrics
 	phaseStart := time.Now()
 	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idx, ordered, rootTracker, rootTracker)
@@ -1571,7 +1571,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		}
 		rootIDs[orderedIdx] = result.rootID
 		rootsObserved++
-		nonSystemRetired = append(nonSystemRetired, result.retired...)
+		nonSystemPendingRetiredPages = append(nonSystemPendingRetiredPages, result.pendingRetiredPages...)
 		mergeOrderedRootPublishMetrics(&nonSystemMetrics, result.metrics)
 		phaseStats.rootApplyMetrics.add(result.metrics)
 		phaseStats.rootApplyCalls++
@@ -1597,7 +1597,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			return 0, nil, false, err
 		}
 		phaseStart = time.Now()
-		rootID, systemRetired, systemMetrics, applyErr := db.publishOrderedRootDeltaBatchWithAllocator(idx, systemBaseRoot, systemDelta, systemOpts, systemTracker, systemTracker, false)
+		rootID, systemPendingRetiredPages, systemMetrics, applyErr := db.publishOrderedRootDeltaBatchWithAllocator(idx, systemBaseRoot, systemDelta, systemOpts, systemTracker, systemTracker, false)
 		phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.systemApplyCalls++
 		_ = systemDelta.Close()
@@ -1633,8 +1633,8 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			curUserRoot = baseUserRoot
 		}
 
-		retired := append([]uint64(nil), nonSystemRetired...)
-		retired = append(retired, systemRetired...)
+		pendingRetiredPages := append([]uint64(nil), nonSystemPendingRetiredPages...)
+		pendingRetiredPages = append(pendingRetiredPages, systemPendingRetiredPages...)
 		merged := nonSystemMetrics
 		mergeOrderedRootPublishMetrics(&merged, systemMetrics)
 		newSystemRoot = rootID
@@ -1656,7 +1656,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		phaseStart = time.Now()
 		var post finalizeCommitPost
 		commitStarted = true
-		post, err = db.finalizeCommitLocked(curUserRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil)
+		post, err = db.finalizeCommitLocked(curUserRoot, newSystemRoot, pendingRetiredPages, false, merged, nil, true, vlogRefDelta, nil, nil)
 		phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.finalizeCalls++
 		hold := time.Since(holdStart)
@@ -1738,7 +1738,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 
 	rootIDs = make([]uint64, len(ordered))
 	systemOpts := systemRootOrderedPublishOptions(db)
-	var retired []uint64
+	var pendingRetiredPages []uint64
 	var merged adaptive.Metrics
 	phaseStart := time.Now()
 	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, ordered, rootTracker, rootTracker)
@@ -1758,7 +1758,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		}
 		rootIDs[orderedIdx] = result.rootID
 		rootsObserved++
-		retired = append(retired, result.retired...)
+		pendingRetiredPages = append(pendingRetiredPages, result.pendingRetiredPages...)
 		mergeOrderedRootPublishMetrics(&merged, result.metrics)
 		phaseStats.rootApplyMetrics.add(result.metrics)
 		phaseStats.rootApplyCalls++
@@ -1779,7 +1779,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		return 0, nil, err
 	}
 	phaseStart = time.Now()
-	rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idxGen, baseSystemRoot, systemDelta, systemOpts, systemTracker, systemTracker, false)
+	rootID, systemPendingRetiredPages, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idxGen, baseSystemRoot, systemDelta, systemOpts, systemTracker, systemTracker, false)
 	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.systemApplyCalls++
 	_ = systemDelta.Close()
@@ -1787,7 +1787,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		return 0, nil, err
 	}
 	newSystemRoot = rootID
-	retired = append(retired, rootRetired...)
+	pendingRetiredPages = append(pendingRetiredPages, systemPendingRetiredPages...)
 	mergeOrderedRootPublishMetrics(&merged, metrics)
 	phaseStats.systemApplyMetrics.add(metrics)
 
@@ -1806,7 +1806,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
 	commitStarted = true
-	err = db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil)
+	err = db.finalizeCommit(userRoot, newSystemRoot, pendingRetiredPages, false, merged, nil, true, vlogRefDelta, nil, nil)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
 	if err != nil {
