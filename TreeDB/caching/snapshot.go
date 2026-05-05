@@ -236,16 +236,6 @@ func (s *Snapshot) Close() error {
 	return err
 }
 
-func (s *Snapshot) lookupQueueEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
-	val, ptr, flags, found, _ = s.lookupRootDomainEntry(key)
-	return val, ptr, flags, found
-}
-
-func (s *Snapshot) lookupRootDomainSnapshotEntry(key []byte) (snap rootDomainSnapshot, val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
-	snap, val, ptr, flags, found, source, _ = s.lookupRootDomainSnapshotEntryWithError(key)
-	return snap, val, ptr, flags, found, source
-}
-
 func (s *Snapshot) lookupRootDomainSnapshotEntryWithError(key []byte) (snap rootDomainSnapshot, val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource, err error) {
 	if s == nil {
 		return rootDomainSnapshot{}, nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone, nil
@@ -253,11 +243,6 @@ func (s *Snapshot) lookupRootDomainSnapshotEntryWithError(key []byte) (snap root
 	snap = rootDomainSnapshotFromCachedSnapshot(s, key)
 	val, ptr, flags, found, source, err = snap.getEntryWithSourceError(key)
 	return snap, val, ptr, flags, found, source, err
-}
-
-func (s *Snapshot) lookupRootDomainEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
-	_, val, ptr, flags, found, source = s.lookupRootDomainSnapshotEntry(key)
-	return val, ptr, flags, found, source
 }
 
 func (s *Snapshot) lookupCachedRootDomainEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
