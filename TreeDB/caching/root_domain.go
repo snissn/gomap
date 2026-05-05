@@ -19,6 +19,10 @@ type rootDomainLookup interface {
 	GetEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool)
 }
 
+type rootDomainLookupWithError interface {
+	GetEntryWithError(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, err error)
+}
+
 type rootDomainIteratorFactory interface {
 	Iterator(start, end []byte) (iterator.UnsafeIterator, error)
 }
@@ -692,18 +696,17 @@ type backendSnapshotLookup struct {
 	rootID   uint64
 }
 
-func (l backendSnapshotLookup) GetEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+func (l backendSnapshotLookup) GetEntryWithError(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, err error) {
 	if l.snapshot == nil {
-		return nil, page.ValuePtr{}, 0, false
+		return nil, page.ValuePtr{}, 0, false, backenddb.ErrClosed
 	}
 	if l.db != nil {
 		if err := l.db.flushValueLogForBackendRead(); err != nil {
-			return nil, page.ValuePtr{}, 0, false
+			return nil, page.ValuePtr{}, 0, false, err
 		}
 	}
 	var (
 		entry node.LeafEntry
-		err   error
 	)
 	if l.rootID != 0 {
 		entry, err = l.snapshot.GetEntryAtRoot(l.rootID, key)
@@ -712,11 +715,16 @@ func (l backendSnapshotLookup) GetEntry(key []byte) (val []byte, ptr page.ValueP
 	}
 	if err != nil {
 		if errors.Is(err, tree.ErrKeyNotFound) {
-			return nil, page.ValuePtr{}, 0, false
+			return nil, page.ValuePtr{}, 0, false, nil
 		}
-		return nil, page.ValuePtr{}, 0, false
+		return nil, page.ValuePtr{}, 0, false, err
 	}
-	return entry.Value, entry.ValuePtr, entry.Flags, true
+	return entry.Value, entry.ValuePtr, entry.Flags, true, nil
+}
+
+func (l backendSnapshotLookup) GetEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+	val, ptr, flags, found, _ = l.GetEntryWithError(key)
+	return val, ptr, flags, found
 }
 
 func (l backendSnapshotLookup) GetValueAppend(key, dst []byte) ([]byte, error) {
@@ -1221,21 +1229,41 @@ func (s rootDomainSnapshot) getCachedEntryWithSource(key []byte) (val []byte, pt
 }
 
 func (s rootDomainSnapshot) getPublishedEntryWithSource(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
+	val, ptr, flags, found, source, _ = s.getPublishedEntryWithSourceError(key)
+	return val, ptr, flags, found, source
+}
+
+func (s rootDomainSnapshot) getPublishedEntryWithSourceError(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource, err error) {
 	if s.published == nil {
-		return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
+		return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone, nil
+	}
+	if lookup, ok := s.published.(rootDomainLookupWithError); ok {
+		val, ptr, flags, found, err = lookup.GetEntryWithError(key)
+		if err != nil {
+			return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone, err
+		}
+		if found {
+			return val, ptr, flags, true, rootDomainEntrySourcePublished, nil
+		}
+		return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone, nil
 	}
 	val, ptr, flags, found = s.published.GetEntry(key)
 	if found {
-		return val, ptr, flags, true, rootDomainEntrySourcePublished
+		return val, ptr, flags, true, rootDomainEntrySourcePublished, nil
 	}
-	return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
+	return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone, nil
 }
 
 func (s rootDomainSnapshot) getEntryWithSource(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
+	val, ptr, flags, found, source, _ = s.getEntryWithSourceError(key)
+	return val, ptr, flags, found, source
+}
+
+func (s rootDomainSnapshot) getEntryWithSourceError(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource, err error) {
 	if val, ptr, flags, found, source = s.getCachedEntryWithSource(key); found {
-		return val, ptr, flags, true, source
+		return val, ptr, flags, true, source, nil
 	}
-	return s.getPublishedEntryWithSource(key)
+	return s.getPublishedEntryWithSourceError(key)
 }
 
 func (s rootDomainSnapshot) visibleValue(key []byte) ([]byte, bool) {
