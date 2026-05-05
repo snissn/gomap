@@ -1701,8 +1701,8 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			}
 		}
 	}
-	outputPages, outputLeafs := rootTracker.PreparedOutputCounts()
-	preparedGroup.noteSharedOutputCounts(outputPages, outputLeafs)
+	outputPages, outputLeafLogPtrs := rootTracker.PreparedOutputCounts()
+	preparedGroup.noteSharedOutputCounts(outputPages, outputLeafLogPtrs)
 	if applyErr := recordOrderedRootDeltaBatchGroupApplyResults(&preparedGroup, rootIDs, rootApplyResults, &nonSystemPendingRetiredPages, &nonSystemMetrics, &phaseStats, &rootsObserved); applyErr != nil {
 		return 0, nil, false, applyErr
 	}
@@ -1741,8 +1741,8 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		if includePreparedChecksum {
 			preparedGroup.markPreparedOutput(systemPreparedIdx, rootID, systemTracker.PreparedOutputSnapshot())
 		} else {
-			outputPages, outputLeafs := systemTracker.PreparedOutputCounts()
-			preparedGroup.markPreparedOutputCounts(systemPreparedIdx, rootID, systemTracker.PreparedOutputID(), outputPages, outputLeafs)
+			outputPages, outputLeafLogPtrs := systemTracker.PreparedOutputCounts()
+			preparedGroup.markPreparedOutputCounts(systemPreparedIdx, rootID, systemTracker.PreparedOutputID(), outputPages, outputLeafLogPtrs)
 		}
 		phaseStats.systemApplyMetrics.add(systemMetrics)
 
@@ -1918,8 +1918,8 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 			}
 		}
 	}
-	outputPages, outputLeafs := rootTracker.PreparedOutputCounts()
-	preparedGroup.noteSharedOutputCounts(outputPages, outputLeafs)
+	outputPages, outputLeafLogPtrs := rootTracker.PreparedOutputCounts()
+	preparedGroup.noteSharedOutputCounts(outputPages, outputLeafLogPtrs)
 	if applyErr := recordOrderedRootDeltaBatchGroupApplyResults(&preparedGroup, rootIDs, rootApplyResults, &pendingRetiredPages, &merged, &phaseStats, &rootsObserved); applyErr != nil {
 		return 0, nil, applyErr
 	}
@@ -1952,8 +1952,8 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	if includePreparedChecksum {
 		preparedGroup.markPreparedOutput(systemPreparedIdx, rootID, systemTracker.PreparedOutputSnapshot())
 	} else {
-		outputPages, outputLeafs := systemTracker.PreparedOutputCounts()
-		preparedGroup.markPreparedOutputCounts(systemPreparedIdx, rootID, systemTracker.PreparedOutputID(), outputPages, outputLeafs)
+		outputPages, outputLeafLogPtrs := systemTracker.PreparedOutputCounts()
+		preparedGroup.markPreparedOutputCounts(systemPreparedIdx, rootID, systemTracker.PreparedOutputID(), outputPages, outputLeafLogPtrs)
 	}
 	newSystemRoot = rootID
 	pendingRetiredPages = append(pendingRetiredPages, systemPendingRetiredPages...)

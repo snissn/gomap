@@ -774,8 +774,8 @@ func (db *DB) Stats() map[string]string {
 	// optimistic attempts abandoned before retrying through serialized publish;
 	// they intentionally are not a strict subset of calls_total/roots_total.
 	// prepared_root.output_* counters count pager and leaf-log side output
-	// produced by those prepared roots. Leaf-log output remains persistent value
-	// log storage; these counters are inventory/ownership observability, not
+	// produced by those prepared roots. Leaf-log output remains persistent
+	// value-log storage; these counters are inventory/ownership observability, not
 	// reclamation.
 	stats["treedb.publish.ordered_root_delta_group.prepared_root.prepare_ns_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootPrepareNs)
 	stats["treedb.publish.ordered_root_delta_group.prepared_root.groups_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootGroups)
@@ -788,11 +788,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.publish.ordered_root_delta_group.prepared_root.installed_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootInstalled)
 	stats["treedb.publish.ordered_root_delta_group.prepared_root.abandoned_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootAbandoned)
 	stats["treedb.publish.ordered_root_delta_group.prepared_root.output_pages_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootOutputPages)
-	stats["treedb.publish.ordered_root_delta_group.prepared_root.output_leaf_log_ptrs_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootOutputLeafs)
+	stats["treedb.publish.ordered_root_delta_group.prepared_root.output_leaf_log_ptrs_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootOutputLeafLogPtrs)
 	stats["treedb.publish.ordered_root_delta_group.prepared_root.installed_output_pages_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootInstalledPages)
-	stats["treedb.publish.ordered_root_delta_group.prepared_root.installed_output_leaf_log_ptrs_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootInstalledLeafs)
+	stats["treedb.publish.ordered_root_delta_group.prepared_root.installed_output_leaf_log_ptrs_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootInstalledLeafLogPtrs)
 	stats["treedb.publish.ordered_root_delta_group.prepared_root.abandoned_output_pages_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootAbandonedPages)
-	stats["treedb.publish.ordered_root_delta_group.prepared_root.abandoned_output_leaf_log_ptrs_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootAbandonedLeafs)
+	stats["treedb.publish.ordered_root_delta_group.prepared_root.abandoned_output_leaf_log_ptrs_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootAbandonedLeafLogPtrs)
 	stats["treedb.publish.ordered_root_delta_group.finalize_ns_total"] = fmt.Sprintf("%d", orderedDeltaStats.finalizeNs)
 	stats["treedb.publish.ordered_root_delta_group.finalize_calls_total"] = fmt.Sprintf("%d", orderedDeltaStats.finalizeCalls)
 	stats["treedb.publish.ordered_root_delta_group.latency_p99_ms"] = fmt.Sprintf("%.3f", float64(orderedDeltaStats.latencyP99)/float64(time.Millisecond))

@@ -433,8 +433,8 @@ func TestOrderedRootDeltaBatchGroupPreparedRootMetadataTracksLeafLogOutput(t *te
 	if data.outputPages != uint64(len(data.output.Pages)) {
 		t.Fatalf("data output page count=%d want %d", data.outputPages, len(data.output.Pages))
 	}
-	if data.outputLeafs != uint64(len(data.output.LeafLogPtrs)) {
-		t.Fatalf("data output leaf-log count=%d want %d", data.outputLeafs, len(data.output.LeafLogPtrs))
+	if data.outputLeafLogPtrs != uint64(len(data.output.LeafLogPtrs)) {
+		t.Fatalf("data output leaf-log count=%d want %d", data.outputLeafLogPtrs, len(data.output.LeafLogPtrs))
 	}
 
 	system := captured[0].applyAt(1)
@@ -446,14 +446,21 @@ func TestOrderedRootDeltaBatchGroupPreparedRootMetadataTracksLeafLogOutput(t *te
 	}
 
 	stats := db.Stats()
-	if got := installGuardStatUint(t, stats, "treedb.publish.ordered_root_delta_group.prepared_root.output_pages_total"); got < data.outputPages+system.outputPages {
-		t.Fatalf("output pages total=%d want at least %d", got, data.outputPages+system.outputPages)
+	wantPages := data.outputPages + system.outputPages
+	if got := installGuardStatUint(t, stats, "treedb.publish.ordered_root_delta_group.prepared_root.output_pages_total"); got != wantPages {
+		t.Fatalf("output pages total=%d want %d", got, wantPages)
 	}
-	if got := installGuardStatUint(t, stats, "treedb.publish.ordered_root_delta_group.prepared_root.output_leaf_log_ptrs_total"); got != data.outputLeafs {
-		t.Fatalf("output leaf-log ptrs total=%d want %d", got, data.outputLeafs)
+	if got := installGuardStatUint(t, stats, "treedb.publish.ordered_root_delta_group.prepared_root.installed_output_pages_total"); got != wantPages {
+		t.Fatalf("installed output pages total=%d want %d", got, wantPages)
 	}
-	if got := installGuardStatUint(t, stats, "treedb.publish.ordered_root_delta_group.prepared_root.installed_output_leaf_log_ptrs_total"); got != data.outputLeafs {
-		t.Fatalf("installed output leaf-log ptrs total=%d want %d", got, data.outputLeafs)
+	if got := installGuardStatUint(t, stats, "treedb.publish.ordered_root_delta_group.prepared_root.abandoned_output_pages_total"); got != 0 {
+		t.Fatalf("abandoned output pages total=%d want 0", got)
+	}
+	if got := installGuardStatUint(t, stats, "treedb.publish.ordered_root_delta_group.prepared_root.output_leaf_log_ptrs_total"); got != data.outputLeafLogPtrs {
+		t.Fatalf("output leaf-log ptrs total=%d want %d", got, data.outputLeafLogPtrs)
+	}
+	if got := installGuardStatUint(t, stats, "treedb.publish.ordered_root_delta_group.prepared_root.installed_output_leaf_log_ptrs_total"); got != data.outputLeafLogPtrs {
+		t.Fatalf("installed output leaf-log ptrs total=%d want %d", got, data.outputLeafLogPtrs)
 	}
 	if got := installGuardStatUint(t, stats, "treedb.publish.ordered_root_delta_group.prepared_root.abandoned_output_leaf_log_ptrs_total"); got != 0 {
 		t.Fatalf("abandoned output leaf-log ptrs total=%d want 0", got)
@@ -528,6 +535,16 @@ func TestOrderedRootDeltaBatchGroupPreparedRootOutputStatsCountSharedTrackerOnce
 			t.Fatalf("%s decreased: before=%d after=%d", name, before, after)
 		}
 		return after - before
+	}
+	pageDelta := statDelta("treedb.publish.ordered_root_delta_group.prepared_root.output_pages_total")
+	if pageDelta == 0 {
+		t.Fatal("output pages delta=0 want prepared page output")
+	}
+	if got := statDelta("treedb.publish.ordered_root_delta_group.prepared_root.installed_output_pages_total"); got != pageDelta {
+		t.Fatalf("installed output pages delta=%d want output pages delta %d", got, pageDelta)
+	}
+	if got := statDelta("treedb.publish.ordered_root_delta_group.prepared_root.abandoned_output_pages_total"); got != 0 {
+		t.Fatalf("abandoned output pages delta=%d want 0", got)
 	}
 	wantLeafs := uint64(len(leafLog.ptrs))
 	if got := statDelta("treedb.publish.ordered_root_delta_group.prepared_root.output_leaf_log_ptrs_total"); got != wantLeafs {

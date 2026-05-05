@@ -193,11 +193,11 @@ type orderedRootDeltaGroupPublishStats struct {
 	preparedRootInstalled                  uint64
 	preparedRootAbandoned                  uint64
 	preparedRootOutputPages                uint64
-	preparedRootOutputLeafs                uint64
+	preparedRootOutputLeafLogPtrs          uint64
 	preparedRootInstalledPages             uint64
-	preparedRootInstalledLeafs             uint64
+	preparedRootInstalledLeafLogPtrs       uint64
 	preparedRootAbandonedPages             uint64
-	preparedRootAbandonedLeafs             uint64
+	preparedRootAbandonedLeafLogPtrs       uint64
 	finalizeNs                             uint64
 	finalizeCalls                          uint64
 	latencyP99                             time.Duration
@@ -411,11 +411,11 @@ func (db *DB) observeOrderedRootDeltaGroupPreparedRootApply(prepareNs uint64, st
 	db.orderedRootDeltaGroupPreparedRootInstalled.Add(stats.installed)
 	db.orderedRootDeltaGroupPreparedRootAbandoned.Add(stats.abandoned)
 	db.orderedRootDeltaGroupPreparedRootOutputPages.Add(stats.outputPages)
-	db.orderedRootDeltaGroupPreparedRootOutputLeafs.Add(stats.outputLeafs)
+	db.orderedRootDeltaGroupPreparedRootOutputLeafLogPtrs.Add(stats.outputLeafLogPtrs)
 	db.orderedRootDeltaGroupPreparedRootInstalledPages.Add(stats.installedPages)
-	db.orderedRootDeltaGroupPreparedRootInstalledLeafs.Add(stats.installedLeafs)
+	db.orderedRootDeltaGroupPreparedRootInstalledLeafLogPtrs.Add(stats.installedLeafLogPtrs)
 	db.orderedRootDeltaGroupPreparedRootAbandonedPages.Add(stats.abandonedPages)
-	db.orderedRootDeltaGroupPreparedRootAbandonedLeafs.Add(stats.abandonedLeafs)
+	db.orderedRootDeltaGroupPreparedRootAbandonedLeafLogPtrs.Add(stats.abandonedLeafLogPtrs)
 }
 
 func (db *DB) orderedRootDeltaGroupPublishStats() orderedRootDeltaGroupPublishStats {
@@ -484,11 +484,11 @@ func (db *DB) orderedRootDeltaGroupPublishStats() orderedRootDeltaGroupPublishSt
 		preparedRootInstalled:                  db.orderedRootDeltaGroupPreparedRootInstalled.Load(),
 		preparedRootAbandoned:                  db.orderedRootDeltaGroupPreparedRootAbandoned.Load(),
 		preparedRootOutputPages:                db.orderedRootDeltaGroupPreparedRootOutputPages.Load(),
-		preparedRootOutputLeafs:                db.orderedRootDeltaGroupPreparedRootOutputLeafs.Load(),
+		preparedRootOutputLeafLogPtrs:          db.orderedRootDeltaGroupPreparedRootOutputLeafLogPtrs.Load(),
 		preparedRootInstalledPages:             db.orderedRootDeltaGroupPreparedRootInstalledPages.Load(),
-		preparedRootInstalledLeafs:             db.orderedRootDeltaGroupPreparedRootInstalledLeafs.Load(),
+		preparedRootInstalledLeafLogPtrs:       db.orderedRootDeltaGroupPreparedRootInstalledLeafLogPtrs.Load(),
 		preparedRootAbandonedPages:             db.orderedRootDeltaGroupPreparedRootAbandonedPages.Load(),
-		preparedRootAbandonedLeafs:             db.orderedRootDeltaGroupPreparedRootAbandonedLeafs.Load(),
+		preparedRootAbandonedLeafLogPtrs:       db.orderedRootDeltaGroupPreparedRootAbandonedLeafLogPtrs.Load(),
 		finalizeNs:                             db.orderedRootDeltaGroupFinalizeNs.Load(),
 		finalizeCalls:                          db.orderedRootDeltaGroupFinalizeCalls.Load(),
 	}
