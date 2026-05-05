@@ -720,6 +720,70 @@ func TestZipperApplyWithOptionsDefaultSkipsReadOnlyPrepare(t *testing.T) {
 	}
 }
 
+func TestZipperApplyWarmSparseManyLeafPreservesValues(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	const (
+		keyCount = 8192
+		step     = 4
+	)
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	rootID := buildInternalRootWithKeys(t, z, keyCount)
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	for i := 0; i < keyCount; i += step {
+		key := []byte(fmt.Sprintf("key-%06d", i))
+		delta.Set(key, []byte("parallel"))
+	}
+
+	newRoot, retired, metrics, err := z.Apply(rootID, delta)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if newRoot == 0 || newRoot == rootID {
+		t.Fatalf("new root=%d old root=%d want changed non-zero root", newRoot, rootID)
+	}
+	if got := metrics.ZipperApplyOps; got != keyCount/step {
+		t.Fatalf("ZipperApplyOps=%d want %d", got, keyCount/step)
+	}
+	if got := metrics.ZipperLeafMerges; got < 2 {
+		t.Fatalf("ZipperLeafMerges=%d want multi-leaf apply", got)
+	}
+	if len(retired) == 0 {
+		t.Fatal("expected pending retired pages from warm apply")
+	}
+
+	tr := tree.New(p, panicValueReader{}, newRoot)
+	for _, i := range []int{0, 4, 2044, 4096, 8188} {
+		key := []byte(fmt.Sprintf("key-%06d", i))
+		got, err := tr.Get(key)
+		if err != nil {
+			t.Fatalf("Get(%q): %v", key, err)
+		}
+		if !bytes.Equal(got, []byte("parallel")) {
+			t.Fatalf("Get(%q)=%q want parallel", key, got)
+		}
+	}
+	originalValue := bytes.Repeat([]byte("v"), 128)
+	for _, i := range []int{1, 5, 2045, 4097, 8191} {
+		key := []byte(fmt.Sprintf("key-%06d", i))
+		got, err := tr.Get(key)
+		if err != nil {
+			t.Fatalf("Get(%q): %v", key, err)
+		}
+		if !bytes.Equal(got, originalValue) {
+			t.Fatalf("Get(%q)=%q want original value", key, got)
+		}
+	}
+}
+
 func TestZipperApplyWithOptionsReusesReadOnlyPrepareBuffers(t *testing.T) {
 	z, rootID := newTestZipperWithOuterLeafInternalRoot(t)
 

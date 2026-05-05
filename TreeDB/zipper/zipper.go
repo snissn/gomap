@@ -2426,7 +2426,9 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	}
 
 	children := getChildWorkSlice(int(count))
-	defer putChildWorkSlice(children)
+	defer func() {
+		putChildWorkSlice(children)
+	}()
 
 	for i := uint16(0); i < count; i++ {
 		key, childRef, err := oldNode.GetInternalEntryRefView(i)
