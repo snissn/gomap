@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"testing"
@@ -576,9 +577,49 @@ func TestGetMany_DuplicateHitsReuseSingleProbeWithoutResultAliasing(t *testing.T
 	if ct.iterCalls != 1 {
 		t.Fatalf("expected one iterator probe, got %d", ct.iterCalls)
 	}
+
+	beforeAppend := append([]byte(nil), got[1]...)
+	_ = append(got[0], []byte("-suffix")...)
+	if !bytes.Equal(got[1], beforeAppend) {
+		t.Fatalf("append to duplicate output corrupted another output: got=%q want=%q", got[1], beforeAppend)
+	}
 	got[0][0] = 'X'
 	if string(got[1]) != "value" || string(got[2]) != "value" {
 		t.Fatalf("duplicate outputs must not alias: %#v", got)
+	}
+}
+
+func TestGetMany_PublishedRootPointShardsPreservesEmptyValue(t *testing.T) {
+	db := &DB{
+		backend:          panicBackend{},
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+
+	mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new memtable: %v", err)
+	}
+	ct := &countingTable{inner: mt}
+	key := []byte("empty")
+	ct.SetEntry(key, []byte{}, page.ValuePtr{}, node.FlagInline)
+	db.memtables.Store(&memtableView{
+		rootPointShards: []rootDomainSnapshot{
+			{immutables: []memtable.Table{ct}},
+		},
+	})
+
+	got, err := db.GetMany([][]byte{key, key})
+	if err != nil {
+		t.Fatalf("GetMany: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(GetMany)=%d want 2", len(got))
+	}
+	for i := range got {
+		if got[i] == nil || len(got[i]) != 0 {
+			t.Fatalf("got[%d]=%q want empty non-nil value", i, got[i])
+		}
 	}
 }
 
@@ -614,6 +655,16 @@ func TestGetMany_DuplicateMissesCollapseToSingleBackendKey(t *testing.T) {
 	}
 	if len(backend.lastGetMany) != 1 || string(backend.lastGetMany[0]) != "missing" {
 		t.Fatalf("expected one deduped backend key, got %#v", backend.lastGetMany)
+	}
+
+	beforeAppend := append([]byte(nil), got[1]...)
+	_ = append(got[0], []byte("-suffix")...)
+	if !bytes.Equal(got[1], beforeAppend) {
+		t.Fatalf("append to duplicate backend output corrupted another output: got=%q want=%q", got[1], beforeAppend)
+	}
+	got[0][0] = 'X'
+	if string(got[1]) != "backend" || string(got[2]) != "backend" {
+		t.Fatalf("duplicate backend outputs must not alias: %#v", got)
 	}
 }
 
