@@ -1325,6 +1325,75 @@ func BenchmarkZipperPrepareReadOnlyWarmSparse(b *testing.B) {
 	}
 }
 
+func BenchmarkZipperPrepareReadOnlyWarmSparseMultiLeafReuse(b *testing.B) {
+	benchmarkZipperPrepareReadOnlyWarmSparseMultiLeaf(b, 257)
+}
+
+func BenchmarkZipperPrepareReadOnlyWarmSparseManyLeafReuse(b *testing.B) {
+	benchmarkZipperPrepareReadOnlyWarmSparseMultiLeaf(b, 4)
+}
+
+func benchmarkZipperPrepareReadOnlyWarmSparseMultiLeaf(b *testing.B, step int) {
+	dir := b.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer p.Close()
+
+	const (
+		keyCount = 8192
+		workers  = 4
+	)
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	rootID := buildInternalRootWithKeys(b, z, keyCount)
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	for i := 0; i < keyCount; i += step {
+		key := []byte(fmt.Sprintf("key-%06d", i))
+		delta.Set(key, []byte("new"))
+	}
+
+	first, err := z.PrepareReadOnly(rootID, delta, ReadOnlyPrepareOptions{})
+	if err != nil {
+		b.Fatalf("initial PrepareReadOnly: %v", err)
+	}
+	requireValidReadOnlyPrepare(b, first)
+	if first.Maintenance || !first.ExactLeafSpans {
+		b.Fatalf("initial prepare maintenance/exact=%v/%v want false/true", first.Maintenance, first.ExactLeafSpans)
+	}
+	summary := first.LeafSpanSummary()
+	workerSummary := first.LeafSpanWorkerRangeSummary(workers)
+	if summary.Spans < 2 || workerSummary.Ranges < 2 {
+		b.Fatalf("initial prepare spans/ranges=%d/%d want multi-leaf plan", summary.Spans, workerSummary.Ranges)
+	}
+
+	opts := first.ReuseOptions()
+	last := first
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		prepared, err := z.PrepareReadOnly(rootID, delta, opts)
+		if err != nil {
+			b.Fatalf("PrepareReadOnly: %v", err)
+		}
+		if len(prepared.LeafSpans) != summary.Spans || prepared.Ops != summary.Ops {
+			b.Fatalf("prepared spans/ops=%d/%d want %d/%d", len(prepared.LeafSpans), prepared.Ops, summary.Spans, summary.Ops)
+		}
+		last = prepared
+		opts = prepared.ReuseOptions()
+	}
+	b.StopTimer()
+	lastSummary := last.LeafSpanSummary()
+	lastWorkerSummary := last.LeafSpanWorkerRangeSummary(workers)
+	b.ReportMetric(float64(lastSummary.Spans), "leaf_spans/op")
+	b.ReportMetric(float64(lastSummary.Ops), "ops/op")
+	b.ReportMetric(float64(lastWorkerSummary.Ranges), "worker_ranges/op")
+	b.ReportMetric(float64(lastWorkerSummary.MaxRangeOps), "max_worker_ops/op")
+}
+
 func TestZipperLeafRefCacheAvoidsUnflushedReads(t *testing.T) {
 	dir := t.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
