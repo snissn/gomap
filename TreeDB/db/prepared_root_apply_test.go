@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"strconv"
 	"testing"
@@ -57,6 +58,79 @@ func TestPreparedRootDeltaPlanSummaryFromBatch(t *testing.T) {
 	}
 	if noSnapshotSummary.checksum != 0 {
 		t.Fatalf("non-hook checksum=%d want 0", noSnapshotSummary.checksum)
+	}
+}
+
+func TestPreparedRootDeltaPlanSummaryChecksumDistinguishesPointerAndInline(t *testing.T) {
+	ptr := page.ValuePtr{
+		FileID: page.ValueLogFileID(3),
+		Offset: 17,
+		Length: 41,
+	}
+	ptrDelta := batch.New(nil, 1<<20)
+	defer func() { _ = ptrDelta.Close() }()
+	if err := ptrDelta.SetPointer([]byte("k"), ptr); err != nil {
+		t.Fatalf("SetPointer: %v", err)
+	}
+
+	inlineValue := make([]byte, 24)
+	binary.LittleEndian.PutUint64(inlineValue[0:8], uint64(ptr.FileID))
+	binary.LittleEndian.PutUint64(inlineValue[8:16], ptr.Offset)
+	binary.LittleEndian.PutUint64(inlineValue[16:24], uint64(ptr.Length))
+	inlineDelta := batch.New(nil, 1<<20)
+	defer func() { _ = inlineDelta.Close() }()
+	if err := inlineDelta.Set([]byte("k"), inlineValue); err != nil {
+		t.Fatalf("Set inline: %v", err)
+	}
+
+	ptrSummary := preparedRootDeltaPlanSummaryFromBatch(ptrDelta, true)
+	inlineSummary := preparedRootDeltaPlanSummaryFromBatch(inlineDelta, true)
+	if ptrSummary.checksum == inlineSummary.checksum {
+		t.Fatalf("pointer and inline checksum both %d", ptrSummary.checksum)
+	}
+}
+
+func TestPreparedRootApplyStatsCountsPreparedZeroRoot(t *testing.T) {
+	group := preparedRootApplyGroup{}
+	group.appendApply(preparedRootApply{
+		identity: preparedRootIdentity{kind: preparedRootIdentityData},
+		plan: preparedRootDeltaPlanSummary{
+			entries:    1,
+			keyBytes:   3,
+			valueBytes: 5,
+		},
+		state: preparedRootApplyStatePlanned,
+	})
+	group.markPrepared(0, 0)
+	group.markInstalled()
+
+	var stats preparedRootApplyStats
+	stats.observeGroup(&group)
+	if stats.groups != 1 || stats.roots != 1 || stats.installed != 1 || stats.abandoned != 0 {
+		t.Fatalf("stats groups=%d roots=%d installed=%d abandoned=%d want 1,1,1,0", stats.groups, stats.roots, stats.installed, stats.abandoned)
+	}
+	if stats.entries != 1 || stats.keyBytes != 3 || stats.valueBytes != 5 {
+		t.Fatalf("stats entries/key/value=%d/%d/%d want 1/3/5", stats.entries, stats.keyBytes, stats.valueBytes)
+	}
+}
+
+func TestPreparedRootPrepareNsRecordedWithoutPreparedRoots(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	before := db.Stats()
+	db.observeOrderedRootDeltaGroupPreparedRootApply(123, preparedRootApplyStats{})
+	after := db.Stats()
+	beforePrepareNs := installGuardStatUint(t, before, "treedb.publish.ordered_root_delta_group.prepared_root.prepare_ns_total")
+	afterPrepareNs := installGuardStatUint(t, after, "treedb.publish.ordered_root_delta_group.prepared_root.prepare_ns_total")
+	if afterPrepareNs-beforePrepareNs != 123 {
+		t.Fatalf("prepare ns delta=%d want 123", afterPrepareNs-beforePrepareNs)
+	}
+	if got := installGuardStatUint(t, after, "treedb.publish.ordered_root_delta_group.prepared_root.groups_total"); got != installGuardStatUint(t, before, "treedb.publish.ordered_root_delta_group.prepared_root.groups_total") {
+		t.Fatalf("prepared groups changed: before=%s after=%d", before["treedb.publish.ordered_root_delta_group.prepared_root.groups_total"], got)
 	}
 }
 

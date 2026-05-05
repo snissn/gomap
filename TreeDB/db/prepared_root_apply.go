@@ -42,6 +42,7 @@ type preparedRootApply struct {
 	identity     preparedRootIdentity
 	baseRootID   uint64
 	preparedRoot uint64
+	prepared     bool
 	storage      OrderedRootStoragePolicy
 	plan         preparedRootDeltaPlanSummary
 	state        preparedRootApplyState
@@ -134,7 +135,7 @@ func (group *preparedRootApplyGroup) setSystemRoot(baseRootID uint64, delta *bat
 	for i := 0; i < group.applyCount; i++ {
 		apply := group.applyAt(i)
 		if apply != nil && apply.identity.kind == preparedRootIdentitySystem {
-			if apply.preparedRoot != 0 {
+			if apply.prepared {
 				if apply.state != preparedRootApplyStateInstalled {
 					apply.state = preparedRootApplyStateAbandoned
 				}
@@ -171,6 +172,7 @@ func (group *preparedRootApplyGroup) markPrepared(idx int, rootID uint64) {
 		return
 	}
 	apply.preparedRoot = rootID
+	apply.prepared = true
 	apply.state = preparedRootApplyStatePrepared
 }
 
@@ -181,7 +183,7 @@ func (group *preparedRootApplyGroup) markInstalling() {
 	group.state = preparedRootApplyStateInstalling
 	for i := 0; i < group.applyCount; i++ {
 		apply := group.applyAt(i)
-		if apply != nil && apply.state != preparedRootApplyStateAbandoned {
+		if apply != nil && apply.prepared && apply.state != preparedRootApplyStateAbandoned {
 			apply.state = preparedRootApplyStateInstalling
 		}
 	}
@@ -193,7 +195,7 @@ func (group *preparedRootApplyGroup) markInstalled() {
 	}
 	group.state = preparedRootApplyStateInstalled
 	for i := 0; i < group.applyCount; i++ {
-		if apply := group.applyAt(i); apply != nil && apply.state != preparedRootApplyStateAbandoned {
+		if apply := group.applyAt(i); apply != nil && apply.prepared && apply.state != preparedRootApplyStateAbandoned {
 			apply.state = preparedRootApplyStateInstalled
 		}
 	}
@@ -206,7 +208,7 @@ func (group *preparedRootApplyGroup) markAbandoned() {
 	group.state = preparedRootApplyStateAbandoned
 	for i := 0; i < group.applyCount; i++ {
 		apply := group.applyAt(i)
-		if apply != nil && apply.state != preparedRootApplyStateInstalled {
+		if apply != nil && apply.prepared && apply.state != preparedRootApplyStateInstalled {
 			apply.state = preparedRootApplyStateAbandoned
 		}
 	}
@@ -219,7 +221,7 @@ func (stats *preparedRootApplyStats) observeGroup(group *preparedRootApplyGroup)
 	groupStats := preparedRootApplyStats{}
 	for i := 0; i < group.applyCount; i++ {
 		apply := group.applyAt(i)
-		if apply == nil || apply.preparedRoot == 0 {
+		if apply == nil || !apply.prepared {
 			continue
 		}
 		groupStats.roots++
@@ -306,6 +308,9 @@ func preparedRootDeltaPlanSummaryFromBatch(delta *batch.Batch, includeChecksum b
 	}
 	if includeChecksum {
 		summary.checksum = preparedRootPlanChecksumOffset
+		// Key spans are part of hook/debug metadata. They are intentionally not
+		// captured on the normal hot path so prepared-root accounting stays
+		// allocation-free unless stable test metadata is requested.
 		summary.firstKey = append([]byte(nil), entries[0].Key...)
 		summary.lastKey = append([]byte(nil), entries[len(entries)-1].Key...)
 	}
@@ -324,6 +329,7 @@ func preparedRootDeltaPlanSummaryFromBatch(delta *batch.Batch, includeChecksum b
 			summary.pointerValues++
 			summary.valueBytes += uint64(page.ValuePtrSize)
 			if includeChecksum {
+				summary.checksum = preparedRootPlanChecksumAddByte(summary.checksum, 1)
 				summary.checksum = preparedRootPlanChecksumAddUint64(summary.checksum, uint64(entry.ValuePtr.FileID))
 				summary.checksum = preparedRootPlanChecksumAddUint64(summary.checksum, entry.ValuePtr.Offset)
 				summary.checksum = preparedRootPlanChecksumAddUint64(summary.checksum, uint64(entry.ValuePtr.Length))
@@ -332,6 +338,7 @@ func preparedRootDeltaPlanSummaryFromBatch(delta *batch.Batch, includeChecksum b
 		}
 		summary.valueBytes += uint64(len(entry.Value))
 		if includeChecksum {
+			summary.checksum = preparedRootPlanChecksumAddByte(summary.checksum, 0)
 			summary.checksum = preparedRootPlanChecksumAddBytes(summary.checksum, entry.Value)
 		}
 	}

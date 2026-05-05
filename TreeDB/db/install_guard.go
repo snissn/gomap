@@ -20,7 +20,7 @@ const (
 
 const (
 	dbInstallGuardFailureNone dbInstallGuardFailureCause = iota
-	dbInstallGuardFailureHook
+	dbInstallGuardFailureHook dbInstallGuardFailureCause = 1 << (iota - 1)
 	dbInstallGuardFailureUserRoot
 	dbInstallGuardFailureSystemRoot
 )
@@ -94,12 +94,13 @@ func (db *DB) runInstallGuard(guard dbInstallGuard) (uint64, error) {
 		db.publishInstallGuardNs.Add(elapsed)
 		if err != nil {
 			db.publishInstallGuardFailures.Add(1)
-			switch cause {
-			case dbInstallGuardFailureHook:
+			if cause&dbInstallGuardFailureHook != 0 {
 				db.publishInstallGuardHookFailures.Add(1)
-			case dbInstallGuardFailureUserRoot:
+			}
+			if cause&dbInstallGuardFailureUserRoot != 0 {
 				db.publishInstallGuardUserRootMismatches.Add(1)
-			case dbInstallGuardFailureSystemRoot:
+			}
+			if cause&dbInstallGuardFailureSystemRoot != 0 {
 				db.publishInstallGuardSystemRootMismatches.Add(1)
 			}
 		}
@@ -115,11 +116,23 @@ func (db *DB) checkInstallGuard(guard dbInstallGuard) (dbInstallGuardFailureCaus
 	currentUserRoot := db.meta.UserRootPageID
 	currentSystemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
-	if guard.checkUserRoot && currentUserRoot != guard.userRoot {
-		return dbInstallGuardFailureUserRoot, fmt.Errorf("%w: user root changed from %d to %d", ErrInstallGuardMismatch, guard.userRoot, currentUserRoot)
+	userMismatch := guard.checkUserRoot && currentUserRoot != guard.userRoot
+	systemMismatch := guard.checkSystemRoot && currentSystemRoot != guard.systemRoot
+	var cause dbInstallGuardFailureCause
+	if userMismatch {
+		cause |= dbInstallGuardFailureUserRoot
 	}
-	if guard.checkSystemRoot && currentSystemRoot != guard.systemRoot {
-		return dbInstallGuardFailureSystemRoot, fmt.Errorf("%w: system root changed from %d to %d", ErrInstallGuardMismatch, guard.systemRoot, currentSystemRoot)
+	if systemMismatch {
+		cause |= dbInstallGuardFailureSystemRoot
+	}
+	if userMismatch && systemMismatch {
+		return cause, fmt.Errorf("%w: user root changed from %d to %d; system root changed from %d to %d", ErrInstallGuardMismatch, guard.userRoot, currentUserRoot, guard.systemRoot, currentSystemRoot)
+	}
+	if userMismatch {
+		return cause, fmt.Errorf("%w: user root changed from %d to %d", ErrInstallGuardMismatch, guard.userRoot, currentUserRoot)
+	}
+	if systemMismatch {
+		return cause, fmt.Errorf("%w: system root changed from %d to %d", ErrInstallGuardMismatch, guard.systemRoot, currentSystemRoot)
 	}
 	return dbInstallGuardFailureNone, nil
 }

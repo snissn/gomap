@@ -389,10 +389,12 @@ func (db *DB) observeOrderedRootDeltaGroupPreparedRootApply(prepareNs uint64, st
 	if db == nil {
 		return
 	}
+	if prepareNs > 0 {
+		db.orderedRootDeltaGroupPreparedRootPrepareNs.Add(prepareNs)
+	}
 	if stats.groups == 0 || stats.roots == 0 {
 		return
 	}
-	db.orderedRootDeltaGroupPreparedRootPrepareNs.Add(prepareNs)
 	db.orderedRootDeltaGroupPreparedRootGroups.Add(stats.groups)
 	db.orderedRootDeltaGroupPreparedRootRoots.Add(stats.roots)
 	db.orderedRootDeltaGroupPreparedRootEntries.Add(stats.entries)

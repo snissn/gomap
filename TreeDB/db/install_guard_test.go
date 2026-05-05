@@ -216,6 +216,45 @@ func TestInstallGuardMismatchCauseCounters(t *testing.T) {
 	}
 }
 
+func TestInstallGuardCountsDualRootMismatchCauses(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	state := db.State()
+	if state == nil {
+		t.Fatal("state is nil")
+	}
+	before := db.Stats()
+	_, err = db.runInstallGuard(orderedRootDeltaGroupInstallGuard(
+		state.RootPageID+1,
+		state.SystemRootPageID+1,
+	))
+	if !errors.Is(err, ErrInstallGuardMismatch) {
+		t.Fatalf("install guard err=%v want mismatch", err)
+	}
+	after := db.Stats()
+	statDelta := func(name string) uint64 {
+		gotAfter := installGuardStatUint(t, after, name)
+		gotBefore := installGuardStatUint(t, before, name)
+		if gotAfter < gotBefore {
+			t.Fatalf("%s decreased: before=%d after=%d", name, gotBefore, gotAfter)
+		}
+		return gotAfter - gotBefore
+	}
+	if got := statDelta("treedb.publish.install_guard.failures_total"); got != 1 {
+		t.Fatalf("install guard failures delta=%d want 1", got)
+	}
+	if got := statDelta("treedb.publish.install_guard.user_root_mismatches_total"); got != 1 {
+		t.Fatalf("user-root mismatch delta=%d want 1", got)
+	}
+	if got := statDelta("treedb.publish.install_guard.system_root_mismatches_total"); got != 1 {
+		t.Fatalf("system-root mismatch delta=%d want 1", got)
+	}
+}
+
 func installGuardStatUint(tb testing.TB, stats map[string]string, key string) uint64 {
 	tb.Helper()
 	raw, ok := stats[key]
