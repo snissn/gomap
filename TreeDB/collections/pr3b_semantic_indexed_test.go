@@ -297,6 +297,7 @@ func TestPR3bSemanticNonUniqueChangeChangeBackFallsBackRawOnly(t *testing.T) {
 	d, mgr, col := pr3bSemanticTestCollection(t)
 	defer func() { _ = d.Close() }()
 	pr3bSeedSemanticUser(t, col)
+	beforeStats := mgr.StatsSnapshot()
 
 	for _, city := range []string{"sea", "hnl"} {
 		if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
@@ -338,6 +339,14 @@ func TestPR3bSemanticNonUniqueChangeChangeBackFallsBackRawOnly(t *testing.T) {
 	}
 	if got := stats.IndexedSemanticEffectiveRecords; got != 0 {
 		t.Fatalf("effective semantic records=%d want 0", got)
+	}
+	rawSecondaryEntries := stats.RootDeltaPlanRawUnitSecondaryEntries - beforeStats.RootDeltaPlanRawUnitSecondaryEntries
+	finalSecondaryEntries := stats.RootDeltaPlanFinalSecondaryEntries - beforeStats.RootDeltaPlanFinalSecondaryEntries
+	if rawSecondaryEntries <= finalSecondaryEntries {
+		t.Fatalf("raw/final secondary entries after change-back=%d/%d want raw > final", rawSecondaryEntries, finalSecondaryEntries)
+	}
+	if got := stats.RootDeltaPlanSquashedEntries - beforeStats.RootDeltaPlanSquashedEntries; got == 0 {
+		t.Fatal("squashed root-delta entries did not increment for change-back batch")
 	}
 }
 
