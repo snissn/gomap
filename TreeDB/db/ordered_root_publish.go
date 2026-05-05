@@ -1562,7 +1562,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			observePreparedGroup(preparedRootApplyStateAbandoned)
 		}
 		if err != nil && !publishObserved {
-			observePublish(0, 0, err)
+			db.observeOrderedRootDeltaGroupPreparedRootApply(phaseStats.preparedRootPrepareNs, phaseStats.preparedRootStats)
 			return
 		}
 		if retrySerialized && !publishObserved {

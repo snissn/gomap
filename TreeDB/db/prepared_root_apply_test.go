@@ -364,6 +364,12 @@ func TestOrderedRootDeltaBatchGroupPreparedRootMetadataRecordsOptimisticBuilderE
 	if got := statDelta("treedb.publish.ordered_root_delta_group.prepared_root.abandoned_total"); got != 1 {
 		t.Fatalf("prepared abandoned delta=%d want 1", got)
 	}
+	if got := statDelta("treedb.publish.ordered_root_delta_group.calls_total"); got != 0 {
+		t.Fatalf("ordered root publish calls delta=%d want 0 before write-lock publish", got)
+	}
+	if got := statDelta("treedb.publish.ordered_root_delta_group.errors_total"); got != 0 {
+		t.Fatalf("ordered root publish errors delta=%d want 0 before write-lock publish", got)
+	}
 }
 
 func TestOrderedRootDeltaBatchGroupPreparedRootMetadataRecordsOptimisticFallbackToSerialized(t *testing.T) {
