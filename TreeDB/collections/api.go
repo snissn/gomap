@@ -8234,7 +8234,8 @@ func (c *Collection) ensureWriteDomainOpen() error {
 }
 
 func validateUpdateBatchItems(items []UpdateBatchItem) error {
-	seen := make(map[string]struct{}, len(items))
+	seen := make(map[uint64]int, len(items))
+	var collisions map[uint64][]int
 	for i, item := range items {
 		if len(item.DocumentID) == 0 {
 			return fmt.Errorf("collections: document id cannot be empty at index %d", i)
@@ -8242,11 +8243,23 @@ func validateUpdateBatchItems(items []UpdateBatchItem) error {
 		if item.Update == nil {
 			return fmt.Errorf("collections: update function is nil at index %d", i)
 		}
-		key := string(item.DocumentID)
-		if _, ok := seen[key]; ok {
-			return fmt.Errorf("%w at index %d", ErrDuplicateDocumentID, i)
+		hash := xxhash.Sum64(item.DocumentID)
+		if firstIndexPlusOne := seen[hash]; firstIndexPlusOne != 0 {
+			if bytes.Equal(items[firstIndexPlusOne-1].DocumentID, item.DocumentID) {
+				return fmt.Errorf("%w at index %d", ErrDuplicateDocumentID, i)
+			}
+			for _, collisionIndex := range collisions[hash] {
+				if bytes.Equal(items[collisionIndex].DocumentID, item.DocumentID) {
+					return fmt.Errorf("%w at index %d", ErrDuplicateDocumentID, i)
+				}
+			}
+			if collisions == nil {
+				collisions = make(map[uint64][]int)
+			}
+			collisions[hash] = append(collisions[hash], i)
+			continue
 		}
-		seen[key] = struct{}{}
+		seen[hash] = i + 1
 	}
 	return nil
 }
@@ -8851,9 +8864,18 @@ func collectionUpdateCombineHasDuplicateIDs(batch []collectionUpdateCombineReque
 
 func cloneUpdateBatchItems(items []UpdateBatchItem) []UpdateBatchItem {
 	out := make([]UpdateBatchItem, len(items))
+	totalIDBytes := 0
+	for _, item := range items {
+		totalIDBytes += len(item.DocumentID)
+	}
+	idArena := make([]byte, totalIDBytes)
+	idOffset := 0
 	for i, item := range items {
 		out[i] = item
-		out[i].DocumentID = bytes.Clone(item.DocumentID)
+		idEnd := idOffset + len(item.DocumentID)
+		copy(idArena[idOffset:idEnd], item.DocumentID)
+		out[i].DocumentID = idArena[idOffset:idEnd:idEnd]
+		idOffset = idEnd
 	}
 	return out
 }
@@ -9453,12 +9475,26 @@ func applyDirectBufferedRootEntries(table memtable.Table, entries []directBuffer
 	})
 }
 
+func directBufferedRootTable(rootNames []string, tables []memtable.Table, rootName string) memtable.Table {
+	if rootName == "" || len(rootNames) != len(tables) {
+		return nil
+	}
+	for i, name := range rootNames {
+		if name == rootName {
+			return tables[i]
+		}
+	}
+	return nil
+}
+
 func buildIndexedSemanticUpdateRecords(collectionName string, runtimes []indexRuntime, updates []preparedBatchUpdate, primaryEntries []directBufferedRootEntry) []indexedSemanticRecord {
 	if len(updates) == 0 {
 		return nil
 	}
 	records := make([]indexedSemanticRecord, 0, len(updates))
 	totalIndexDeltas := 0
+	totalValueRefs := 0
+	totalValueBytes := 0
 	if len(runtimes) > 0 {
 		for _, update := range updates {
 			if !update.indexStateChanged {
@@ -9467,6 +9503,15 @@ func buildIndexedSemanticUpdateRecords(collectionName string, runtimes []indexRu
 			for runtimeIdx := range runtimes {
 				if preparedBatchUpdateIndexChanged(update, runtimeIdx) {
 					totalIndexDeltas++
+					oldValues := update.oldState.valuesAt(runtimeIdx)
+					newValues := update.newState.valuesAt(runtimeIdx)
+					totalValueRefs += len(oldValues) + len(newValues)
+					for _, value := range oldValues {
+						totalValueBytes += len(value)
+					}
+					for _, value := range newValues {
+						totalValueBytes += len(value)
+					}
 				}
 			}
 		}
@@ -9475,7 +9520,11 @@ func buildIndexedSemanticUpdateRecords(collectionName string, runtimes []indexRu
 		return nil
 	}
 	indexDeltas := make([]indexedSemanticIndexDelta, totalIndexDeltas)
+	valueRefs := make([][]byte, totalValueRefs)
+	valueArena := make([]byte, totalValueBytes)
 	indexDeltaPos := 0
+	valueRefPos := 0
+	valueArenaPos := 0
 	for i, update := range updates {
 		if !update.indexStateChanged || len(runtimes) == 0 {
 			continue
@@ -9505,8 +9554,8 @@ func buildIndexedSemanticUpdateRecords(collectionName string, runtimes []indexRu
 				rootName:   runtimeSecondaryRootName(collectionName, runtime),
 				runtimeIdx: runtimeIdx,
 				unique:     runtime.def.unique,
-				oldValues:  cloneIndexedSemanticValueSet(update.oldState.valuesAt(runtimeIdx)),
-				newValues:  cloneIndexedSemanticValueSet(update.newState.valuesAt(runtimeIdx)),
+				oldValues:  cloneIndexedSemanticValueSetToArena(update.oldState.valuesAt(runtimeIdx), valueRefs, &valueRefPos, valueArena, &valueArenaPos),
+				newValues:  cloneIndexedSemanticValueSetToArena(update.newState.valuesAt(runtimeIdx), valueRefs, &valueRefPos, valueArena, &valueArenaPos),
 			}
 			indexDeltaPos++
 		}
@@ -9517,6 +9566,27 @@ func buildIndexedSemanticUpdateRecords(collectionName string, runtimes []indexRu
 		records = append(records, record)
 	}
 	return records
+}
+
+func cloneIndexedSemanticValueSetToArena(in [][]byte, refs [][]byte, refPos *int, arena []byte, arenaPos *int) [][]byte {
+	if len(in) == 0 {
+		return nil
+	}
+	start := *refPos
+	end := start + len(in)
+	out := refs[start:end:end]
+	*refPos = end
+	for i, value := range in {
+		if value == nil {
+			continue
+		}
+		valueStart := *arenaPos
+		valueEnd := valueStart + len(value)
+		copy(arena[valueStart:valueEnd], value)
+		out[i] = arena[valueStart:valueEnd:valueEnd]
+		*arenaPos = valueEnd
+	}
+	return out
 }
 
 func appendIndexedSemanticRecordsLocked(domain *collectionWriteDomain, records []indexedSemanticRecord) {
@@ -10436,6 +10506,8 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		}
 		primaryReaderOK = true
 	}
+	validateBSONID := normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatBSON
+	primaryHasOverlays := len(catalog.overlayRootIDs(primaryRootName)) != 0
 
 	scratch := getUpdateBatchPlanScratch(len(items), len(runtimes))
 	scratchOwnedByPlan := false
@@ -10463,7 +10535,12 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	var currentScratch []byte
 	for i, item := range items {
 		phaseStart := updateBatchStatsNow(detailedStats)
-		current, err := readUpdateBatchCurrentDocumentAtCatalogRoot(snap, catalog, primaryRootName, &primaryReader, primaryReaderOK, i, item.DocumentID, bufferedRead, currentScratch[:0])
+		var current updateBatchCurrentDocument
+		if primaryHasOverlays {
+			current, err = readUpdateBatchCurrentDocumentAtCatalogRoot(snap, catalog, primaryRootName, &primaryReader, primaryReaderOK, i, item.DocumentID, bufferedRead, currentScratch[:0])
+		} else {
+			current, err = readUpdateBatchCurrentDocument(&primaryReader, primaryReaderOK, i, item.DocumentID, bufferedRead, currentScratch[:0])
+		}
 		stats.CurrentRead += updateBatchStatsSince(detailedStats, phaseStart)
 		if err != nil {
 			_ = snap.Close()
@@ -10473,12 +10550,15 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			continue
 		}
 		results[i].Matched = true
-		phaseStart = updateBatchStatsNow(detailedStats)
-		currentID, err := captureBSONIDSnapshot(current.value, plannerOptions)
-		stats.BSONIDValidation += updateBatchStatsSince(detailedStats, phaseStart)
-		if err != nil {
-			_ = snap.Close()
-			return nil, updateBatchItemError(i, err)
+		var currentID bsonIDSnapshot
+		if validateBSONID {
+			phaseStart = updateBatchStatsNow(detailedStats)
+			currentID, err = captureBSONIDSnapshot(current.value, plannerOptions)
+			stats.BSONIDValidation += updateBatchStatsSince(detailedStats, phaseStart)
+			if err != nil {
+				_ = snap.Close()
+				return nil, updateBatchItemError(i, err)
+			}
 		}
 		prepared := preparedBatchUpdate{
 			itemIndex:  i,
@@ -10510,13 +10590,15 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			_ = snap.Close()
 			return nil, updateBatchItemError(i, errors.New("changed replacement document cannot be empty"))
 		}
-		phaseStart = updateBatchStatsNow(detailedStats)
-		if err := validateBSONReplacementPreservesIDSnapshot(currentID, document, plannerOptions); err != nil {
+		if validateBSONID {
+			phaseStart = updateBatchStatsNow(detailedStats)
+			if err := validateBSONReplacementPreservesIDSnapshot(currentID, document, plannerOptions); err != nil {
+				stats.BSONIDValidation += updateBatchStatsSince(detailedStats, phaseStart)
+				_ = snap.Close()
+				return nil, updateBatchItemError(i, err)
+			}
 			stats.BSONIDValidation += updateBatchStatsSince(detailedStats, phaseStart)
-			_ = snap.Close()
-			return nil, updateBatchItemError(i, err)
 		}
-		stats.BSONIDValidation += updateBatchStatsSince(detailedStats, phaseStart)
 		phaseStart = updateBatchStatsNow(detailedStats)
 		changed = append(changed, prepared)
 		changedDocuments = append(changedDocuments, appendUpdateBatchPlanScratchDocument(scratch, document))
@@ -11120,7 +11202,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	plan.stats.BufferStageDomainPrepare += updateBatchStatsSince(detailedStats, phaseStart)
 
 	phaseStart = updateBatchStatsNow(detailedStats)
-	rootTables := make(map[string]memtable.Table, len(plan.rootNames))
+	rootTables := make([]memtable.Table, len(plan.rootNames))
 	actualRootRuns := 0
 	for i, rootName := range plan.rootNames {
 		baseRoot := plan.baseRootIDs[rootName]
@@ -11135,13 +11217,13 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		if table == nil {
 			return false, fmt.Errorf("collections: UpdateBatch collection %q failed to allocate direct root accumulator for %q", plan.meta.Name, rootName)
 		}
-		rootTables[rootName] = table
+		rootTables[i] = table
 		if created {
 			actualRootRuns = saturatingAddNonNegativeInt(actualRootRuns, 1)
 		}
 	}
 	if len(direct.templateEntries) > 0 {
-		templateTable := rootTables[direct.templateRootName]
+		templateTable := directBufferedRootTable(plan.rootNames, rootTables, direct.templateRootName)
 		if templateTable == nil {
 			return false, fmt.Errorf("collections: UpdateBatch collection %q missing direct template root accumulator for %q", plan.meta.Name, direct.templateRootName)
 		}
@@ -11149,7 +11231,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 			return false, err
 		}
 	}
-	primaryTable := rootTables[direct.primaryRootName]
+	primaryTable := directBufferedRootTable(plan.rootNames, rootTables, direct.primaryRootName)
 	var primaryIndexKeys [][]byte
 	if domain.primaryRunIndex != nil {
 		primaryIndexKeys = make([][]byte, 0, len(direct.primaryEntries))
@@ -11166,7 +11248,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		addBufferedPrimaryRunIndexKeys(domain.primaryRunIndex, primaryIndexKeys, primaryTable)
 	}
 	for _, secondaryPlan := range direct.secondaryRootPlans {
-		table := rootTables[secondaryPlan.rootName]
+		table := directBufferedRootTable(plan.rootNames, rootTables, secondaryPlan.rootName)
 		if table == nil {
 			continue
 		}
