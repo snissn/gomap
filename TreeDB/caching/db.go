@@ -22792,14 +22792,42 @@ type getManyProbeRef struct {
 	shard int
 }
 
-func copyGetManyValueToRefs(out [][]byte, refs []getManyProbeRef, val []byte) {
+const (
+	getManyValueGuessBytes         = 128
+	getManyMaxArenaInitialCapBytes = 1 << 20
+)
+
+var getManyEmptyValue = []byte{}
+
+type getManyValueCopyArena struct {
+	buf []byte
+}
+
+func newGetManyValueCopyArena(n int) getManyValueCopyArena {
+	arenaCap := n * getManyValueGuessBytes
+	if arenaCap < 0 {
+		arenaCap = 0
+	}
+	if arenaCap > getManyMaxArenaInitialCapBytes {
+		arenaCap = getManyMaxArenaInitialCapBytes
+	}
+	return getManyValueCopyArena{buf: make([]byte, 0, arenaCap)}
+}
+
+func (arena *getManyValueCopyArena) copyToRefs(out [][]byte, refs []getManyProbeRef, val []byte) {
 	if val == nil {
 		return
 	}
+	if len(val) == 0 {
+		for _, ref := range refs {
+			out[ref.idx] = getManyEmptyValue
+		}
+		return
+	}
 	for _, ref := range refs {
-		cpy := make([]byte, len(val))
-		copy(cpy, val)
-		out[ref.idx] = cpy
+		start := len(arena.buf)
+		arena.buf = append(arena.buf, val...)
+		out[ref.idx] = arena.buf[start:len(arena.buf):len(arena.buf)]
 	}
 }
 
@@ -22834,6 +22862,7 @@ func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]b
 	db.noteRootDomainGetManyNative(len(keys), len(unique))
 
 	results := make([]rootDomainProbeResult, len(unique))
+	arena := newGetManyValueCopyArena(len(keys))
 	start := 0
 	for start < len(unique) {
 		end := start + 1
@@ -22849,8 +22878,8 @@ func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]b
 		start = end
 	}
 
-	backendIdx := make([]int, 0, len(unique))
-	backendKeys := make([][]byte, 0, len(unique))
+	var backendIdx []int
+	var backendKeys [][]byte
 	for i, res := range results {
 		groupEnd := len(refs)
 		if i+1 < len(groupStarts) {
@@ -22859,23 +22888,28 @@ func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]b
 		groupRefs := refs[groupStarts[i]:groupEnd]
 		switch {
 		case !res.found:
+			if backendIdx == nil {
+				backendCap := len(unique) - i
+				backendIdx = make([]int, 0, backendCap)
+				backendKeys = make([][]byte, 0, backendCap)
+			}
 			backendIdx = append(backendIdx, i)
 			backendKeys = append(backendKeys, unique[i].key)
 		case res.flags&node.FlagTombstone != 0:
 		case res.flags&node.FlagPointer != 0:
 			if res.val != nil {
-				copyGetManyValueToRefs(out, groupRefs, res.val)
+				arena.copyToRefs(out, groupRefs, res.val)
 				break
 			}
 			readVal, err := db.readValueLog(unique[i].key, res.ptr)
 			if err != nil {
 				return nil, err
 			}
-			copyGetManyValueToRefs(out, groupRefs, readVal)
+			arena.copyToRefs(out, groupRefs, readVal)
 		case res.val == nil:
-			copyGetManyValueToRefs(out, groupRefs, []byte{})
+			arena.copyToRefs(out, groupRefs, getManyEmptyValue)
 		default:
-			copyGetManyValueToRefs(out, groupRefs, res.val)
+			arena.copyToRefs(out, groupRefs, res.val)
 		}
 	}
 	if len(backendKeys) > 0 {
@@ -22892,7 +22926,7 @@ func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]b
 			if uniqueIdx+1 < len(groupStarts) {
 				groupEnd = groupStarts[uniqueIdx+1]
 			}
-			copyGetManyValueToRefs(out, refs[groupStarts[uniqueIdx]:groupEnd], backendVals[i])
+			arena.copyToRefs(out, refs[groupStarts[uniqueIdx]:groupEnd], backendVals[i])
 		}
 	}
 	return out, nil
@@ -23152,22 +23186,10 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	// instead of allocating per key. The limit below bounds only the initial
 	// arena capacity; subsequent appends may still grow the backing array, so
 	// multiple underlying allocations may be retained.
-	const (
-		getManyValueGuessBytes         = 128
-		getManyMaxArenaInitialCapBytes = 1 << 20
-	)
-	arenaCap := len(keys) * getManyValueGuessBytes
-	if arenaCap < 0 {
-		arenaCap = 0
-	}
-	if arenaCap > getManyMaxArenaInitialCapBytes {
-		arenaCap = getManyMaxArenaInitialCapBytes
-	}
-	arena := make([]byte, 0, arenaCap)
-	emptyValue := []byte{}
+	arena := newGetManyValueCopyArena(len(keys))
 	for i, key := range keys {
-		start := len(arena)
-		nextArena, found, err := db.getMemtableAppend(key, arena)
+		start := len(arena.buf)
+		nextArena, found, err := db.getMemtableAppend(key, arena.buf)
 		if err != nil {
 			if err == tree.ErrKeyNotFound {
 				// Tombstone in cache layers: treat as a missing key and do not fall
@@ -23182,12 +23204,12 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 			}
 		}
 		if found {
-			arena = nextArena
-			if len(arena) == start {
-				out[i] = emptyValue
+			arena.buf = nextArena
+			if len(arena.buf) == start {
+				out[i] = getManyEmptyValue
 				continue
 			}
-			out[i] = arena[start:len(arena):len(arena)]
+			out[i] = arena.buf[start:len(arena.buf):len(arena.buf)]
 			continue
 		}
 		backendIdx = append(backendIdx, i)
