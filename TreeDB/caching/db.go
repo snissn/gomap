@@ -25863,9 +25863,38 @@ type debugIterator struct {
 	sourcesUsed int
 }
 
+type unsafeIteratorView interface {
+	UnsafeKey() []byte
+	UnsafeValue() []byte
+}
+
+func unsafeIteratorViewKey(it merging.Iterator) []byte {
+	if it == nil {
+		return nil
+	}
+	if u, ok := it.(unsafeIteratorView); ok {
+		return u.UnsafeKey()
+	}
+	return it.Key()
+}
+
+func unsafeIteratorViewValue(it merging.Iterator) []byte {
+	if it == nil {
+		return nil
+	}
+	if u, ok := it.(unsafeIteratorView); ok {
+		return u.UnsafeValue()
+	}
+	return it.Value()
+}
+
 func (it *debugIterator) DebugStats() (queueLen int, sourcesUsed int) {
 	return it.queueLen, it.sourcesUsed
 }
+
+func (it *debugIterator) UnsafeKey() []byte { return unsafeIteratorViewKey(it.Iterator) }
+
+func (it *debugIterator) UnsafeValue() []byte { return unsafeIteratorViewValue(it.Iterator) }
 
 type leasedMergingIterator struct {
 	merging.Iterator
@@ -25873,6 +25902,10 @@ type leasedMergingIterator struct {
 	closeErr  error
 	release   func()
 }
+
+func (it *leasedMergingIterator) UnsafeKey() []byte { return unsafeIteratorViewKey(it.Iterator) }
+
+func (it *leasedMergingIterator) UnsafeValue() []byte { return unsafeIteratorViewValue(it.Iterator) }
 
 func (it *leasedMergingIterator) Close() error {
 	it.closeOnce.Do(func() {
@@ -25889,6 +25922,12 @@ type foregroundTrackedIterator struct {
 	db        *DB
 	closeOnce sync.Once
 	closeErr  error
+}
+
+func (it *foregroundTrackedIterator) UnsafeKey() []byte { return unsafeIteratorViewKey(it.Iterator) }
+
+func (it *foregroundTrackedIterator) UnsafeValue() []byte {
+	return unsafeIteratorViewValue(it.Iterator)
 }
 
 func (it *foregroundTrackedIterator) Close() error {
@@ -25983,6 +26022,20 @@ func (it *concatUnsafeIterator) Value() []byte {
 		panic("iterator invalid")
 	}
 	return it.cur.Value()
+}
+
+func (it *concatUnsafeIterator) UnsafeKey() []byte {
+	if !it.valid {
+		return nil
+	}
+	return it.cur.UnsafeKey()
+}
+
+func (it *concatUnsafeIterator) UnsafeValue() []byte {
+	if !it.valid {
+		return nil
+	}
+	return it.cur.UnsafeValue()
 }
 
 func (it *concatUnsafeIterator) KeyCopy(dst []byte) []byte {
