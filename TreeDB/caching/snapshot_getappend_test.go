@@ -149,7 +149,7 @@ func TestSnapshotGetAppendPublishedValueAppendAllocs(t *testing.T) {
 			t.Fatalf("unexpected GetAppend value %q", got)
 		}
 	})
-	if allocs > 0.5 {
+	if allocs != 0 {
 		t.Fatalf("GetAppend allocs/run=%f, want 0", allocs)
 	}
 	if lookup.getEntryCalls != 0 {
