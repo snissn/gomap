@@ -5965,17 +5965,19 @@ func buildIndexedSemanticEffectiveSecondaryRuns(records []indexedSemanticRecord)
 			}
 			state := states[documentKey]
 			if state == nil {
+				// Unit semantic records are immutable during publish planning; keep
+				// transient references instead of cloning value sets again.
 				states[documentKey] = &indexedSemanticDocumentRootState{
 					documentID:  record.documentID,
-					baseValues:  cloneIndexedSemanticValueSet(delta.oldValues),
-					finalValues: cloneIndexedSemanticValueSet(delta.newValues),
+					baseValues:  delta.oldValues,
+					finalValues: delta.newValues,
 				}
 				continue
 			}
 			if !indexedSemanticValueSetsEqual(state.finalValues, delta.oldValues) {
 				return nil, 0, false, nil
 			}
-			state.finalValues = cloneIndexedSemanticValueSet(delta.newValues)
+			state.finalValues = delta.newValues
 		}
 	}
 	if len(rootStates) == 0 {
