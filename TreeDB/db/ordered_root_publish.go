@@ -52,17 +52,18 @@ type orderedRootPublishStats struct {
 }
 
 type orderedRootPublishOptions struct {
-	maxWarmDeltaOps          int
-	leafPrefixCompression    bool
-	leafColumnar             bool
-	packedValuePtr           bool
-	internalBaseDelta        bool
-	outerLeavesInValueLog    bool
-	leafPageLog              bulk.LeafPageAppender
-	applyOptions             zipper.ApplyOptions
-	readOnlyPrepareSummary   *zipper.ReadOnlyLeafSpanSummary
-	readOnlyPrepareNs        *uint64
-	readOnlyPrepareAttempted *bool
+	maxWarmDeltaOps               int
+	leafPrefixCompression         bool
+	leafColumnar                  bool
+	packedValuePtr                bool
+	internalBaseDelta             bool
+	outerLeavesInValueLog         bool
+	leafPageLog                   bulk.LeafPageAppender
+	applyOptions                  zipper.ApplyOptions
+	readOnlyPrepareSummary        *zipper.ReadOnlyLeafSpanSummary
+	readOnlyPrepareExternalResult *zipper.ReadOnlyPrepareResult
+	readOnlyPrepareNs             *uint64
+	readOnlyPrepareAttempted      *bool
 }
 
 type orderedRootDeltaBatchGroupApplyResult struct {
@@ -168,6 +169,15 @@ type OrderedRootDeltaBatchPublishInput struct {
 	// root apply and records planning stats. It is observability/planning only;
 	// it does not change publish output or enable parallel leaf execution.
 	PrepareReadOnly bool
+	// ReadOnlyPrepareOptions supplies optional reusable buffers for
+	// PrepareReadOnly. The zero value is valid. Callers that keep the matching
+	// ReadOnlyPrepareResult can pass result.ReuseOptions() on later publishes to
+	// reduce allocation churn.
+	ReadOnlyPrepareOptions zipper.ReadOnlyPrepareOptions
+	// ReadOnlyPrepareResult, when non-nil, receives the optional preparation
+	// metadata for this root. Do not share one result pointer across inputs that
+	// may be applied concurrently.
+	ReadOnlyPrepareResult *zipper.ReadOnlyPrepareResult
 }
 
 func closeUnconsumedOrderedRootPublishIterators(ordered []OrderedRootPublishInput, consumed []bool) {
@@ -692,6 +702,9 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 		summary := readOnlyPrepare.LeafSpanSummary()
 		*opts.readOnlyPrepareSummary = summary
 	}
+	if opts.readOnlyPrepareExternalResult != nil {
+		*opts.readOnlyPrepareExternalResult = readOnlyPrepare
+	}
 	if opts.readOnlyPrepareNs != nil {
 		*opts.readOnlyPrepareNs = readOnlyPrepareNs
 	}
@@ -802,6 +815,9 @@ func runOrderedRootReadOnlyPrepare(rootZipper *zipper.Zipper, baseRoot uint64, d
 	if opts.readOnlyPrepareSummary != nil {
 		summary := prepared.LeafSpanSummary()
 		*opts.readOnlyPrepareSummary = summary
+	}
+	if opts.readOnlyPrepareExternalResult != nil {
+		*opts.readOnlyPrepareExternalResult = prepared
 	}
 	if opts.readOnlyPrepareNs != nil {
 		*opts.readOnlyPrepareNs = prepareNs
@@ -1578,7 +1594,9 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 		}
 		if ordered[orderedIdx].PrepareReadOnly {
 			opts.applyOptions.PrepareReadOnly = true
+			opts.applyOptions.ReadOnlyPrepare = ordered[orderedIdx].ReadOnlyPrepareOptions
 			opts.readOnlyPrepareSummary = &result.readOnlyPrepareSummary
+			opts.readOnlyPrepareExternalResult = ordered[orderedIdx].ReadOnlyPrepareResult
 			opts.readOnlyPrepareNs = &result.readOnlyPrepareNs
 			opts.readOnlyPrepareAttempted = &result.readOnlyPrepareAttempted
 		}
