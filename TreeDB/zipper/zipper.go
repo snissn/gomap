@@ -1068,9 +1068,16 @@ type ReadOnlyLeafSpan struct {
 // safe to discard on root mismatch because it has not allocated or persisted
 // output pages.
 type ReadOnlyPrepareResult struct {
-	RootID    uint64
-	Ops       int
-	ColdBuild bool
+	RootID      uint64
+	Ops         int
+	ColdBuild   bool
+	Maintenance bool
+
+	// ExactLeafSpans is true when LeafSpans fully describe the existing leaves
+	// touched by the delta. Delete-containing maintenance can merge/rebalance
+	// adjacent leaves, so its direct key spans are useful planning hints but are
+	// not complete prepared-output ownership.
+	ExactLeafSpans bool
 
 	LeafSpans []ReadOnlyLeafSpan
 	Metrics   adaptive.Metrics
@@ -1138,10 +1145,15 @@ func (z *Zipper) PrepareReadOnly(rootID uint64, b *batch.Batch, opts ReadOnlyPre
 	result.RootID = rootID
 	result.Ops = len(ops)
 	if len(ops) == 0 {
+		result.ExactLeafSpans = true
 		return result, nil
 	}
+	maintenance, _ := z.shouldRunMaintenance(ops)
+	result.Maintenance = maintenance
+	result.ExactLeafSpans = !maintenance
 	if rootID == 0 {
 		result.ColdBuild = true
+		result.ExactLeafSpans = true
 		result.addLeafSpan(page.ChildRef{}, nil, nil, ops)
 		return result, nil
 	}
@@ -1177,6 +1189,7 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 			if key == nil {
 				key = []byte{}
 			}
+			childLow := result.cloneKey(key)
 
 			var endKey []byte
 			if i+1 < count {
@@ -1187,7 +1200,7 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 				if nextKey == nil {
 					nextKey = []byte{}
 				}
-				endKey = nextKey
+				endKey = result.cloneKey(nextKey)
 			}
 
 			startOpIdx := opIdx
@@ -1206,7 +1219,7 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 			if endKey != nil {
 				childHigh = endKey
 			}
-			if err := z.prepareReadOnlyRecursive(childRef, ops[startOpIdx:opIdx], key, childHigh, result, scratch); err != nil {
+			if err := z.prepareReadOnlyRecursive(childRef, ops[startOpIdx:opIdx], childLow, childHigh, result, scratch); err != nil {
 				return err
 			}
 		}

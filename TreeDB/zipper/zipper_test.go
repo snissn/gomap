@@ -194,6 +194,9 @@ func TestZipperPrepareReadOnlyColdBuildDoesNotLoadOrWrite(t *testing.T) {
 	if !prepared.ColdBuild {
 		t.Fatal("ColdBuild=false want true")
 	}
+	if prepared.Maintenance || !prepared.ExactLeafSpans {
+		t.Fatalf("cold prepare maintenance/exact=%v/%v want false/true", prepared.Maintenance, prepared.ExactLeafSpans)
+	}
 	if prepared.RootID != 0 || prepared.Ops != 2 {
 		t.Fatalf("prepared root/ops=%d/%d want 0/2", prepared.RootID, prepared.Ops)
 	}
@@ -237,6 +240,9 @@ func TestZipperPrepareReadOnlyDiscoversLeafSpansWithoutWrites(t *testing.T) {
 	if prepared.ColdBuild {
 		t.Fatal("ColdBuild=true for existing root")
 	}
+	if prepared.Maintenance || !prepared.ExactLeafSpans {
+		t.Fatalf("prepare maintenance/exact=%v/%v want false/true", prepared.Maintenance, prepared.ExactLeafSpans)
+	}
 	if prepared.RootID != rootID || prepared.Ops != 2 {
 		t.Fatalf("prepared root/ops=%d/%d want %d/2", prepared.RootID, prepared.Ops, rootID)
 	}
@@ -257,6 +263,89 @@ func TestZipperPrepareReadOnlyDiscoversLeafSpansWithoutWrites(t *testing.T) {
 		}
 		if len(span.FirstOpKey) == 0 || len(span.LastOpKey) == 0 {
 			t.Fatalf("span missing op bounds: %+v", span)
+		}
+	}
+}
+
+func TestZipperPrepareReadOnlyMarksDeleteMaintenanceSpansNonExact(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	rootID := buildOuterLeafInternalRoot(t, z)
+	beforePages := p.PageCount()
+
+	b := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = b.Close() }()
+	b.Delete([]byte("key-001"))
+	b.Delete([]byte("key-199"))
+
+	prepared, err := z.PrepareReadOnly(rootID, b, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatalf("PrepareReadOnly: %v", err)
+	}
+	if got := p.PageCount(); got != beforePages {
+		t.Fatalf("page count changed during read-only prepare: got %d want %d", got, beforePages)
+	}
+	if !prepared.Maintenance {
+		t.Fatal("Maintenance=false want true for delete-containing batch")
+	}
+	if prepared.ExactLeafSpans {
+		t.Fatal("ExactLeafSpans=true want false for delete maintenance")
+	}
+	if len(prepared.LeafSpans) == 0 {
+		t.Fatal("delete maintenance still should expose direct planning spans")
+	}
+	if prepared.Metrics.IndexWriteBytes != 0 ||
+		prepared.Metrics.ZipperLeafPagesWritten != 0 ||
+		prepared.Metrics.ZipperInternalPagesWritten != 0 {
+		t.Fatalf("delete read-only prepare wrote output metrics=%+v", prepared.Metrics)
+	}
+}
+
+func TestZipperPrepareReadOnlyInternalBaseDeltaKeyBoundsAreStable(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	z.SetIndexInternalBaseDelta(true)
+	rootID := buildOuterLeafInternalRoot(t, z)
+	beforePages := p.PageCount()
+
+	b := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = b.Close() }()
+	b.Set([]byte("key-001"), []byte("new-001"))
+	b.Set([]byte("key-199"), []byte("new-199"))
+
+	prepared, err := z.PrepareReadOnly(rootID, b, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatalf("PrepareReadOnly: %v", err)
+	}
+	if got := p.PageCount(); got != beforePages {
+		t.Fatalf("page count changed during read-only prepare: got %d want %d", got, beforePages)
+	}
+	if prepared.Maintenance || !prepared.ExactLeafSpans {
+		t.Fatalf("prepare maintenance/exact=%v/%v want false/true", prepared.Maintenance, prepared.ExactLeafSpans)
+	}
+	if len(prepared.LeafSpans) < 2 {
+		t.Fatalf("leaf spans=%d want at least 2", len(prepared.LeafSpans))
+	}
+	for _, span := range prepared.LeafSpans {
+		if len(span.LowKey) > 0 && bytes.Compare(span.LowKey, span.FirstOpKey) > 0 {
+			t.Fatalf("span low bound %q is after first op %q; span=%+v", span.LowKey, span.FirstOpKey, span)
+		}
+		if len(span.HighKey) > 0 && bytes.Compare(span.FirstOpKey, span.HighKey) >= 0 {
+			t.Fatalf("span high bound %q is not after first op %q; span=%+v", span.HighKey, span.FirstOpKey, span)
 		}
 	}
 }
