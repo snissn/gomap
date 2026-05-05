@@ -101,7 +101,7 @@ func TestPreparedRootApplyStatsCountsPreparedZeroRoot(t *testing.T) {
 		},
 		state: preparedRootApplyStatePlanned,
 	})
-	group.markPrepared(0, 0)
+	group.markPrepared(0, 0, 1)
 	group.markInstalled()
 
 	var stats preparedRootApplyStats
@@ -266,6 +266,9 @@ func TestOrderedRootDeltaBatchGroupPreparedRootMetadataRecordsInstall(t *testing
 	if data.preparedRoot != rootIDs[0] {
 		t.Fatalf("data prepared root=%d want %d", data.preparedRoot, rootIDs[0])
 	}
+	if data.outputID == 0 {
+		t.Fatal("data prepared output ID is zero")
+	}
 	if data.storage != OrderedRootStoragePagerLeaves {
 		t.Fatalf("data storage=%d want pager leaves", data.storage)
 	}
@@ -288,6 +291,12 @@ func TestOrderedRootDeltaBatchGroupPreparedRootMetadataRecordsInstall(t *testing
 	}
 	if system.preparedRoot != newSystemRoot {
 		t.Fatalf("system prepared root=%d want %d", system.preparedRoot, newSystemRoot)
+	}
+	if system.outputID == 0 {
+		t.Fatal("system prepared output ID is zero")
+	}
+	if system.outputID == data.outputID {
+		t.Fatalf("system/data prepared output IDs both %d, want distinct owners", system.outputID)
 	}
 	if system.state != preparedRootApplyStateInstalled {
 		t.Fatalf("system state=%v want installed", system.state)

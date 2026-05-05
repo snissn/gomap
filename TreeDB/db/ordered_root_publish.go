@@ -63,6 +63,7 @@ type orderedRootPublishOptions struct {
 type orderedRootDeltaBatchGroupApplyResult struct {
 	idx                 int
 	rootID              uint64
+	outputID            preparedOutputID
 	pendingRetiredPages []uint64
 	metrics             adaptive.Metrics
 	err                 error
@@ -1441,8 +1442,12 @@ func orderedRootDeltaBatchGroupParallelApplyEligible(ordered []OrderedRootDeltaB
 
 func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []OrderedRootDeltaBatchPublishInput, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator) ([]orderedRootDeltaBatchGroupApplyResult, bool) {
 	results := make([]orderedRootDeltaBatchGroupApplyResult, len(ordered))
+	var outputID preparedOutputID
+	if tracker, ok := alloc.(*allocTracker); ok {
+		outputID = tracker.PreparedOutputID()
+	}
 	applyOne := func(orderedIdx int) orderedRootDeltaBatchGroupApplyResult {
-		result := orderedRootDeltaBatchGroupApplyResult{idx: orderedIdx, attempted: true}
+		result := orderedRootDeltaBatchGroupApplyResult{idx: orderedIdx, outputID: outputID, attempted: true}
 		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[orderedIdx].StoragePolicy)
 		if err != nil {
 			result.err = err
@@ -1525,7 +1530,7 @@ func recordOrderedRootDeltaBatchGroupApplyResults(
 			rootIDs[orderedIdx] = result.rootID
 		}
 		if preparedGroup != nil {
-			preparedGroup.markPrepared(orderedIdx, result.rootID)
+			preparedGroup.markPrepared(orderedIdx, result.rootID, result.outputID)
 		}
 		if rootsObserved != nil {
 			(*rootsObserved)++
@@ -1629,7 +1634,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		}
 	}()
 
-	rootTracker := newAllocTracker(idx.allocator)
+	rootTracker := db.newPreparedOutputAllocTracker(idx.allocator)
 	var systemTracker *allocTracker
 	commitStarted := false
 	freeTrackedPages := func() {
@@ -1671,7 +1676,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 	var committedRootPages []uint64
 	var committedSystemPages []uint64
 	for attempt := 0; ; attempt++ {
-		systemTracker = newAllocTracker(idx.allocator)
+		systemTracker = db.newPreparedOutputAllocTracker(idx.allocator)
 		phaseStart := time.Now()
 		iter, err := buildSystemDeltaIter(append([]uint64(nil), rootIDs...))
 		phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
@@ -1698,7 +1703,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			err = applyErr
 			return 0, nil, false, err
 		}
-		preparedGroup.markPrepared(systemPreparedIdx, rootID)
+		preparedGroup.markPrepared(systemPreparedIdx, rootID, systemTracker.PreparedOutputID())
 		phaseStats.systemApplyMetrics.add(systemMetrics)
 
 		lockStart := time.Now()
@@ -1766,6 +1771,8 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			observePublish(wait, hold, err)
 			return 0, nil, false, err
 		}
+		rootTracker.MarkInstalled()
+		systemTracker.MarkInstalled()
 		db.invalidateLeafGenerationSubtreeStats(append(committedRootPages, committedSystemPages...))
 		db.finalizeCommitPostWork(post)
 		db.writeMu.RUnlock()
@@ -1846,8 +1853,8 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		}
 	}()
 
-	rootTracker := newAllocTracker(idxGen.allocator)
-	systemTracker := newAllocTracker(idxGen.allocator)
+	rootTracker := db.newPreparedOutputAllocTracker(idxGen.allocator)
+	systemTracker := db.newPreparedOutputAllocTracker(idxGen.allocator)
 	commitFinished := false
 	defer func() {
 		if err != nil && !commitFinished {
@@ -1900,7 +1907,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	if err != nil {
 		return 0, nil, err
 	}
-	preparedGroup.markPrepared(systemPreparedIdx, rootID)
+	preparedGroup.markPrepared(systemPreparedIdx, rootID, systemTracker.PreparedOutputID())
 	newSystemRoot = rootID
 	pendingRetiredPages = append(pendingRetiredPages, systemPendingRetiredPages...)
 	mergeOrderedRootPublishMetrics(&merged, metrics)
@@ -1930,6 +1937,8 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		return 0, nil, err
 	}
 	commitFinished = true
+	rootTracker.MarkInstalled()
+	systemTracker.MarkInstalled()
 	db.invalidateLeafGenerationSubtreeStats(append(committedRootPages, committedSystemPages...))
 	observePreparedGroup(preparedRootApplyStateInstalled)
 	return newSystemRoot, rootIDs, nil

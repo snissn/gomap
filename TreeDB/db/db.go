@@ -233,6 +233,7 @@ type DB struct {
 	orderedRootDeltaGroupPreparedRootPointerValues atomic.Uint64
 	orderedRootDeltaGroupPreparedRootInstalled     atomic.Uint64
 	orderedRootDeltaGroupPreparedRootAbandoned     atomic.Uint64
+	preparedOutputNextID                           atomic.Uint64
 
 	publishInstallGuardNs                   atomic.Uint64
 	publishInstallGuardCalls                atomic.Uint64
