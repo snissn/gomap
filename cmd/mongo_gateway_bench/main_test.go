@@ -991,6 +991,12 @@ func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
 	if cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 0 {
 		t.Fatalf("TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits=%d want 0", cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits)
 	}
+	if cfg.TreeDBBufferedIndexedReadOnlyPrepare {
+		t.Fatal("TreeDBBufferedIndexedReadOnlyPrepare=true want false by default")
+	}
+	if cfg.TreeDBBufferedIndexedReadOnlyPrepareWorkers != 0 {
+		t.Fatalf("TreeDBBufferedIndexedReadOnlyPrepareWorkers=%d want 0", cfg.TreeDBBufferedIndexedReadOnlyPrepareWorkers)
+	}
 	if cfg.InsertProducers != 1 {
 		t.Fatalf("InsertProducers=%d want 1", cfg.InsertProducers)
 	}
@@ -1032,6 +1038,8 @@ func TestParseConfigTreeDBBufferedIndexedWriteThresholds(t *testing.T) {
 		"-treedb-buffered-indexed-write-max-root-runs", "90",
 		"-treedb-buffered-indexed-async-flush",
 		"-treedb-buffered-indexed-async-flush-max-queued-units", "3",
+		"-treedb-buffered-indexed-read-only-prepare",
+		"-treedb-buffered-indexed-read-only-prepare-workers", "4",
 	})
 	if err != nil {
 		t.Fatalf("parse buffered indexed thresholds: %v", err)
@@ -1050,6 +1058,24 @@ func TestParseConfigTreeDBBufferedIndexedWriteThresholds(t *testing.T) {
 	}
 	if cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 3 {
 		t.Fatalf("TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits=%d want 3", cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits)
+	}
+	if !cfg.TreeDBBufferedIndexedReadOnlyPrepare {
+		t.Fatal("TreeDBBufferedIndexedReadOnlyPrepare=false want true")
+	}
+	if cfg.TreeDBBufferedIndexedReadOnlyPrepareWorkers != 4 {
+		t.Fatalf("TreeDBBufferedIndexedReadOnlyPrepareWorkers=%d want 4", cfg.TreeDBBufferedIndexedReadOnlyPrepareWorkers)
+	}
+}
+
+func TestParseConfigTreeDBBufferedIndexedReadOnlyPrepareWorkersRequirePrepare(t *testing.T) {
+	_, err := parseConfig([]string{"-treedb-buffered-indexed-read-only-prepare-workers", "4"})
+	if err == nil || !strings.Contains(err.Error(), "requires -treedb-buffered-indexed-read-only-prepare") {
+		t.Fatalf("parse workers without prepare err=%v want requires prepare", err)
+	}
+
+	_, err = parseConfig([]string{"-treedb-buffered-indexed-read-only-prepare-workers", "0"})
+	if err == nil || !strings.Contains(err.Error(), "requires -treedb-buffered-indexed-read-only-prepare") {
+		t.Fatalf("parse explicit zero workers without prepare err=%v want requires prepare", err)
 	}
 }
 
@@ -2078,6 +2104,8 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		TreeDBBufferedIndexedWriteMaxRootRuns:  90,
 		TreeDBBufferedIndexedAsyncFlush:        true,
 		TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits: 3,
+		TreeDBBufferedIndexedReadOnlyPrepare:          true,
+		TreeDBBufferedIndexedReadOnlyPrepareWorkers:   4,
 		TreeDBMaintenanceMode:                         "none",
 	}
 	var out bytes.Buffer
@@ -2091,6 +2119,8 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		"buffered_indexed_max_root_runs=90",
 		"buffered_indexed_async_flush=true",
 		"buffered_indexed_async_max_queued_units=3",
+		"buffered_indexed_read_only_prepare=true",
+		"buffered_indexed_read_only_prepare_workers=4",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("text output missing %s: %q", want, text)
@@ -2109,13 +2139,42 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		decoded.TreeDBBufferedIndexedWriteMaxBytes != 5678 ||
 		decoded.TreeDBBufferedIndexedWriteMaxRootRuns != 90 ||
 		!decoded.TreeDBBufferedIndexedAsyncFlush ||
-		decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 3 {
-		t.Fatalf("json thresholds docs=%d bytes=%d rootRuns=%d async=%t asyncMax=%d want 1234/5678/90/true/3",
+		decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 3 ||
+		!decoded.TreeDBBufferedIndexedReadOnlyPrepare ||
+		decoded.TreeDBBufferedIndexedReadOnlyPrepareWorkers != 4 {
+		t.Fatalf("json thresholds docs=%d bytes=%d rootRuns=%d async=%t asyncMax=%d readonly=%t readonlyWorkers=%d want 1234/5678/90/true/3/true/4",
 			decoded.TreeDBBufferedIndexedWriteMaxDocuments,
 			decoded.TreeDBBufferedIndexedWriteMaxBytes,
 			decoded.TreeDBBufferedIndexedWriteMaxRootRuns,
 			decoded.TreeDBBufferedIndexedAsyncFlush,
-			decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits)
+			decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
+			decoded.TreeDBBufferedIndexedReadOnlyPrepare,
+			decoded.TreeDBBufferedIndexedReadOnlyPrepareWorkers)
+	}
+}
+
+func TestWriteResultIncludesTreeDBBufferedIndexedReadOnlyPrepareDefaultsJSON(t *testing.T) {
+	result := &benchmarkResult{
+		Target:     "treedb",
+		Database:   "bench",
+		Collection: "docs",
+		Documents:  1,
+	}
+	var out bytes.Buffer
+	if err := writeResult(&out, "json", result); err != nil {
+		t.Fatalf("writeResult json: %v", err)
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("unmarshal json result: %v", err)
+	}
+	for _, key := range []string{
+		"treedb_buffered_indexed_read_only_prepare",
+		"treedb_buffered_indexed_read_only_prepare_workers",
+	} {
+		if _, ok := decoded[key]; !ok {
+			t.Fatalf("json result omitted %s: %s", key, out.String())
+		}
 	}
 }
 
@@ -2129,11 +2188,13 @@ func TestRecordEffectiveTreeDBCollectionOptionsUsesNormalizedMetadata(t *testing
 	if _, err := manager.CreateCollection(&collections.CollectionMeta{
 		Name: "bench.docs",
 		Options: collections.CollectionOptions{
-			BufferedIndexedWriteMaxDocuments:        0,
-			BufferedIndexedWriteMaxBytes:            777,
-			BufferedIndexedWriteMaxRootRuns:         0,
-			BufferedIndexedAsyncFlush:               true,
-			BufferedIndexedAsyncFlushMaxQueuedUnits: 3,
+			BufferedIndexedWriteMaxDocuments:          0,
+			BufferedIndexedWriteMaxBytes:              777,
+			BufferedIndexedWriteMaxRootRuns:           0,
+			BufferedIndexedAsyncFlush:                 true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits:   3,
+			BufferedIndexedReadOnlyPrepare:            true,
+			BufferedIndexedReadOnlyPrepareWorkerCount: 4,
 		},
 		Indexes: []collections.IndexDefinition{{Name: "email_1", Field: "email", ValueType: collections.IndexValueString, Unique: true}},
 	}); err != nil {
@@ -2157,13 +2218,17 @@ func TestRecordEffectiveTreeDBCollectionOptionsUsesNormalizedMetadata(t *testing
 		result.TreeDBBufferedIndexedWriteMaxBytes != 777 ||
 		result.TreeDBBufferedIndexedWriteMaxRootRuns != 0 ||
 		!result.TreeDBBufferedIndexedAsyncFlush ||
-		result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 3 {
-		t.Fatalf("effective thresholds docs=%d bytes=%d rootRuns=%d async=%t asyncMax=%d want %d/777/0/true/3",
+		result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 3 ||
+		!result.TreeDBBufferedIndexedReadOnlyPrepare ||
+		result.TreeDBBufferedIndexedReadOnlyPrepareWorkers != 4 {
+		t.Fatalf("effective thresholds docs=%d bytes=%d rootRuns=%d async=%t asyncMax=%d readonly=%t readonlyWorkers=%d want %d/777/0/true/3/true/4",
 			result.TreeDBBufferedIndexedWriteMaxDocuments,
 			result.TreeDBBufferedIndexedWriteMaxBytes,
 			result.TreeDBBufferedIndexedWriteMaxRootRuns,
 			result.TreeDBBufferedIndexedAsyncFlush,
 			result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
+			result.TreeDBBufferedIndexedReadOnlyPrepare,
+			result.TreeDBBufferedIndexedReadOnlyPrepareWorkers,
 			collections.DefaultIndexedWriteMemtableAsyncFlushMaxDocuments)
 	}
 }

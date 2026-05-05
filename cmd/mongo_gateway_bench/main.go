@@ -77,6 +77,8 @@ type config struct {
 	TreeDBBufferedIndexedWriteMaxRootRuns         int
 	TreeDBBufferedIndexedAsyncFlush               bool
 	TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits int
+	TreeDBBufferedIndexedReadOnlyPrepare          bool
+	TreeDBBufferedIndexedReadOnlyPrepareWorkers   int
 	TreeDBMaintenance                             string
 	PrebuildDocuments                             bool
 	ProfileDir                                    string
@@ -123,6 +125,8 @@ type benchmarkResult struct {
 	TreeDBBufferedIndexedWriteMaxRootRuns         int                 `json:"treedb_buffered_indexed_write_max_root_runs"`
 	TreeDBBufferedIndexedAsyncFlush               bool                `json:"treedb_buffered_indexed_async_flush,omitempty"`
 	TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits int                 `json:"treedb_buffered_indexed_async_flush_max_queued_units,omitempty"`
+	TreeDBBufferedIndexedReadOnlyPrepare          bool                `json:"treedb_buffered_indexed_read_only_prepare"`
+	TreeDBBufferedIndexedReadOnlyPrepareWorkers   int                 `json:"treedb_buffered_indexed_read_only_prepare_workers"`
 	TreeDBMaintenanceMode                         string              `json:"treedb_maintenance_mode,omitempty"`
 	PrebuildDocuments                             bool                `json:"prebuild_documents,omitempty"`
 	Phases                                        []phaseResult       `json:"phases"`
@@ -480,6 +484,8 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.TreeDBBufferedIndexedWriteMaxRootRuns, "treedb-buffered-indexed-write-max-root-runs", cfg.TreeDBBufferedIndexedWriteMaxRootRuns, "TreeDB indexed collection write-domain root-run auto-flush threshold; explicit 0 disables this trigger; omitted with docs/bytes override keeps the compatibility default")
 	fs.BoolVar(&cfg.TreeDBBufferedIndexedAsyncFlush, "treedb-buffered-indexed-async-flush", false, "TreeDB indexed collection threshold flushes publish in the background; explicit Flush/Close still drain before returning")
 	fs.IntVar(&cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits, "treedb-buffered-indexed-async-flush-max-queued-units", 0, "TreeDB indexed collection background flush unit queue limit; 0 uses the collection default when async flush is enabled")
+	fs.BoolVar(&cfg.TreeDBBufferedIndexedReadOnlyPrepare, "treedb-buffered-indexed-read-only-prepare", false, "TreeDB indexed collection flush publish runs read-only leaf-span preparation for observability; does not change publish output")
+	fs.IntVar(&cfg.TreeDBBufferedIndexedReadOnlyPrepareWorkers, "treedb-buffered-indexed-read-only-prepare-workers", 0, "TreeDB indexed collection read-only prepare worker target for range summaries; requires -treedb-buffered-indexed-read-only-prepare")
 	fs.StringVar(&cfg.TreeDBMaintenance, "treedb-maintenance", cfg.TreeDBMaintenance, "TreeDB final disk maintenance for -target treedb: full, checkpoint, or none")
 	fs.BoolVar(&cfg.PrebuildDocuments, "prebuild-documents", false, "prebuild benchmark documents before the timed load phase")
 	fs.StringVar(&cfg.ProfileDir, "profile-dir", "", "write per-phase pprof artifacts and a profile_manifest.json into an empty directory")
@@ -593,6 +599,12 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits < 0 {
 		return config{}, errors.New("treedb-buffered-indexed-async-flush-max-queued-units must be >= 0")
+	}
+	if cfg.TreeDBBufferedIndexedReadOnlyPrepareWorkers < 0 {
+		return config{}, errors.New("treedb-buffered-indexed-read-only-prepare-workers must be >= 0")
+	}
+	if seenFlags["treedb-buffered-indexed-read-only-prepare-workers"] && !cfg.TreeDBBufferedIndexedReadOnlyPrepare {
+		return config{}, errors.New("treedb-buffered-indexed-read-only-prepare-workers requires -treedb-buffered-indexed-read-only-prepare")
 	}
 	if cfg.Format != "text" && cfg.Format != "json" {
 		return config{}, fmt.Errorf("unknown format %q", cfg.Format)
@@ -796,14 +808,16 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 	server.Collections = manager
 	server.MaxFindScanDocuments = cfg.Documents
 	server.DefaultCollectionOptions = collections.CollectionOptions{
-		DocumentFormat:                          cfg.TreeDBDocumentFormat,
-		DataRootStoragePolicy:                   cfg.TreeDBDataRootStorage,
-		IndexStateStoragePolicy:                 cfg.TreeDBIndexStateRootStorage,
-		BufferedIndexedWriteMaxDocuments:        cfg.TreeDBBufferedIndexedWriteMaxDocuments,
-		BufferedIndexedWriteMaxBytes:            cfg.TreeDBBufferedIndexedWriteMaxBytes,
-		BufferedIndexedWriteMaxRootRuns:         cfg.TreeDBBufferedIndexedWriteMaxRootRuns,
-		BufferedIndexedAsyncFlush:               cfg.TreeDBBufferedIndexedAsyncFlush,
-		BufferedIndexedAsyncFlushMaxQueuedUnits: cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
+		DocumentFormat:                            cfg.TreeDBDocumentFormat,
+		DataRootStoragePolicy:                     cfg.TreeDBDataRootStorage,
+		IndexStateStoragePolicy:                   cfg.TreeDBIndexStateRootStorage,
+		BufferedIndexedWriteMaxDocuments:          cfg.TreeDBBufferedIndexedWriteMaxDocuments,
+		BufferedIndexedWriteMaxBytes:              cfg.TreeDBBufferedIndexedWriteMaxBytes,
+		BufferedIndexedWriteMaxRootRuns:           cfg.TreeDBBufferedIndexedWriteMaxRootRuns,
+		BufferedIndexedAsyncFlush:                 cfg.TreeDBBufferedIndexedAsyncFlush,
+		BufferedIndexedAsyncFlushMaxQueuedUnits:   cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
+		BufferedIndexedReadOnlyPrepare:            cfg.TreeDBBufferedIndexedReadOnlyPrepare,
+		BufferedIndexedReadOnlyPrepareWorkerCount: cfg.TreeDBBufferedIndexedReadOnlyPrepareWorkers,
 	}
 	server.DefaultIndexStoragePolicy = cfg.TreeDBIndexRootStorage
 
@@ -1122,6 +1136,8 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		result.TreeDBBufferedIndexedWriteMaxRootRuns = cfg.TreeDBBufferedIndexedWriteMaxRootRuns
 		result.TreeDBBufferedIndexedAsyncFlush = cfg.TreeDBBufferedIndexedAsyncFlush
 		result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits = cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits
+		result.TreeDBBufferedIndexedReadOnlyPrepare = cfg.TreeDBBufferedIndexedReadOnlyPrepare
+		result.TreeDBBufferedIndexedReadOnlyPrepareWorkers = cfg.TreeDBBufferedIndexedReadOnlyPrepareWorkers
 		result.TreeDBMaintenanceMode = cfg.TreeDBMaintenance
 	} else {
 		result.MongoURI = redactMongoURI(cfg.MongoURI)
@@ -1545,6 +1561,8 @@ func recordEffectiveTreeDBCollectionOptions(result *benchmarkResult, cfg config,
 	result.TreeDBBufferedIndexedWriteMaxRootRuns = meta.Options.BufferedIndexedWriteMaxRootRuns
 	result.TreeDBBufferedIndexedAsyncFlush = meta.Options.BufferedIndexedAsyncFlush
 	result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits = meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits
+	result.TreeDBBufferedIndexedReadOnlyPrepare = meta.Options.BufferedIndexedReadOnlyPrepare
+	result.TreeDBBufferedIndexedReadOnlyPrepareWorkers = meta.Options.BufferedIndexedReadOnlyPrepareWorkerCount
 	return nil
 }
 
@@ -3073,12 +3091,14 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 			fmt.Fprintf(out, "treedb_dir=%s\n", result.TreeDBDir)
 		}
 		if result.TreeDBProfile != "" {
-			fmt.Fprintf(out, "treedb_profile=%s document_format=%s data_root_storage=%s index_state_root_storage=%s index_root_storage=%s buffered_indexed_max_docs=%d buffered_indexed_max_bytes=%d buffered_indexed_max_root_runs=%d buffered_indexed_async_flush=%t buffered_indexed_async_max_queued_units=%d maintenance=%s\n",
+			fmt.Fprintf(out, "treedb_profile=%s document_format=%s data_root_storage=%s index_state_root_storage=%s index_root_storage=%s buffered_indexed_max_docs=%d buffered_indexed_max_bytes=%d buffered_indexed_max_root_runs=%d buffered_indexed_async_flush=%t buffered_indexed_async_max_queued_units=%d buffered_indexed_read_only_prepare=%t buffered_indexed_read_only_prepare_workers=%d maintenance=%s\n",
 				result.TreeDBProfile, result.TreeDBDocumentFormat, result.TreeDBDataRootStorage,
 				result.TreeDBIndexStateRootStorage, result.TreeDBIndexRootStorage,
 				result.TreeDBBufferedIndexedWriteMaxDocuments, result.TreeDBBufferedIndexedWriteMaxBytes,
 				result.TreeDBBufferedIndexedWriteMaxRootRuns, result.TreeDBBufferedIndexedAsyncFlush,
-				result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits, result.TreeDBMaintenanceMode)
+				result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
+				result.TreeDBBufferedIndexedReadOnlyPrepare, result.TreeDBBufferedIndexedReadOnlyPrepareWorkers,
+				result.TreeDBMaintenanceMode)
 		}
 		if result.MongoURI != "" {
 			fmt.Fprintf(out, "mongo_uri=%s\n", result.MongoURI)

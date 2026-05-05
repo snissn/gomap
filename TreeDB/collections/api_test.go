@@ -1311,6 +1311,131 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 	}
 }
 
+func TestCollectionIndexedFlushReadOnlyPrepareDefaultOff(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"email":"ada@example.com"}`),
+			[]byte(`{"email":"grace@example.com"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	before := d.Stats()
+	if err := mgr.FlushAll(); err != nil {
+		t.Fatalf("flush all: %v", err)
+	}
+	after := d.Stats()
+	if got := collectionDBUintStatDelta(t, before, after, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total"); got != 0 {
+		t.Fatalf("read-only prepare calls delta=%d want 0 by default", got)
+	}
+	if got := collectionDBUintStatDelta(t, before, after, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_ranges_total"); got != 0 {
+		t.Fatalf("read-only prepare worker ranges delta=%d want 0 by default", got)
+	}
+}
+
+func TestCollectionIndexedFlushReadOnlyPrepareOptInReportsDBStats(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedReadOnlyPrepare:            true,
+			BufferedIndexedReadOnlyPrepareWorkerCount: 4,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if !meta.Options.BufferedIndexedReadOnlyPrepare || meta.Options.BufferedIndexedReadOnlyPrepareWorkerCount != 4 {
+		t.Fatalf("normalized read-only prepare options=%+v want enabled/4", meta.Options)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2"), []byte("u3")},
+		[][]byte{
+			[]byte(`{"email":"ada@example.com"}`),
+			[]byte(`{"email":"grace@example.com"}`),
+			[]byte(`{"email":"katherine@example.com"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	before := d.Stats()
+	if err := mgr.FlushAll(); err != nil {
+		t.Fatalf("flush all: %v", err)
+	}
+	after := d.Stats()
+	calls := collectionDBUintStatDelta(t, before, after, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total")
+	if calls == 0 {
+		t.Fatal("read-only prepare calls delta=0 want positive")
+	}
+	if got := collectionDBUintStatDelta(t, before, after, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ops_total"); got == 0 {
+		t.Fatal("read-only prepare ops delta=0 want positive")
+	}
+	if got := collectionDBUintStatDelta(t, before, after, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_leaf_spans_total"); got == 0 {
+		t.Fatal("read-only prepare leaf spans delta=0 want positive")
+	}
+	targets := collectionDBUintStatDelta(t, before, after, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_targets_total")
+	if want := calls * 4; targets != want {
+		t.Fatalf("read-only prepare worker target delta=%d want calls*4=%d", targets, want)
+	}
+	if got := collectionDBUintStatDelta(t, before, after, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_ranges_total"); got == 0 {
+		t.Fatal("read-only prepare worker ranges delta=0 want positive")
+	}
+}
+
+func collectionDBUintStatDelta(tb testing.TB, before, after map[string]string, key string) uint64 {
+	tb.Helper()
+	beforeValue := collectionDBUintStat(tb, before, key)
+	afterValue := collectionDBUintStat(tb, after, key)
+	if afterValue < beforeValue {
+		tb.Fatalf("stat %s decreased from %d to %d", key, beforeValue, afterValue)
+	}
+	return afterValue - beforeValue
+}
+
+func collectionDBUintStat(tb testing.TB, stats map[string]string, key string) uint64 {
+	tb.Helper()
+	raw, ok := stats[key]
+	if !ok {
+		tb.Fatalf("stats missing %s", key)
+	}
+	value, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		tb.Fatalf("parse stat %s=%q: %v", key, raw, err)
+	}
+	return value
+}
+
 func TestCollectionRootDeltaPlanStatsCountsPointerValueBytes(t *testing.T) {
 	delta := batch.New(nil, 0)
 	defer func() { _ = delta.Close() }()
@@ -4465,7 +4590,7 @@ func TestBuildBufferedRootDeltaBatchPublishInputsParallelPreservesRootOrderAndTo
 		cityName:    backenddb.OrderedRootStoragePagerLeaves,
 	}
 
-	ordered, cleanup, err := buildBufferedRootDeltaBatchPublishInputs(rootNames, rootRuns, rootBaseIDs, rootPolicies)
+	ordered, cleanup, err := buildBufferedRootDeltaBatchPublishInputs(rootNames, rootRuns, rootBaseIDs, rootPolicies, false, 0)
 	if err != nil {
 		t.Fatalf("build buffered root deltas: %v", err)
 	}
@@ -4486,6 +4611,9 @@ func TestBuildBufferedRootDeltaBatchPublishInputsParallelPreservesRootOrderAndTo
 		}
 		if ordered[i].IncludeDeletedOnColdBuild {
 			t.Fatalf("ordered[%d] IncludeDeletedOnColdBuild=true want false", i)
+		}
+		if ordered[i].PrepareReadOnly || ordered[i].ReadOnlyPrepareWorkerCount != 0 {
+			t.Fatalf("ordered[%d] read-only prepare=%t/%d want false/0", i, ordered[i].PrepareReadOnly, ordered[i].ReadOnlyPrepareWorkerCount)
 		}
 	}
 
@@ -4538,7 +4666,7 @@ func TestBuildBufferedRootOverlayDeltaBatchPublishInputsPreservesColdTombstones(
 		cityName:    nil,
 	}
 
-	ordered, cleanup, err := buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames, rootRuns, rootPolicies, rootOverlays)
+	ordered, cleanup, err := buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames, rootRuns, rootPolicies, rootOverlays, false, 0)
 	if err != nil {
 		t.Fatalf("build overlay root deltas: %v", err)
 	}

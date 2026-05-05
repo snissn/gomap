@@ -623,6 +623,14 @@ type CollectionOptions struct {
 	// Maintenance can later compact overlay roots into base roots; reads merge
 	// overlay roots over base roots while they are pending.
 	BufferedIndexedOverlayRoots bool `json:"buffered_indexed_overlay_roots,omitempty"`
+	// BufferedIndexedReadOnlyPrepare asks indexed write-domain flush publish to
+	// run the DB read-only leaf-span preparation pass. This is
+	// observability/planning only and does not change publish output.
+	BufferedIndexedReadOnlyPrepare bool `json:"buffered_indexed_read_only_prepare,omitempty"`
+	// BufferedIndexedReadOnlyPrepareWorkerCount records deterministic leaf-span
+	// worker-range summaries for this target worker count when read-only prepare
+	// is enabled. Zero disables worker-range summaries.
+	BufferedIndexedReadOnlyPrepareWorkerCount int `json:"buffered_indexed_read_only_prepare_worker_count,omitempty"`
 	// BufferedIndexedAsyncFlushMaxQueuedUnits bounds immutable indexed flush
 	// units queued for the background publisher. Zero uses the native default
 	// when async flush is enabled on an indexed schema.
@@ -5531,7 +5539,7 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 			return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 		}
 		work.batch.rootOverlayFilters = rootOverlayFilters
-		ordered, cleanupDeltas, err := buildBufferedRootOverlayDeltaBatchPublishInputs(work.batch.rootNames, work.batch.mergedUnit.rootRuns, work.batch.mergedUnit.rootPolicies, work.batch.rootOverlays)
+		ordered, cleanupDeltas, err := buildBufferedRootOverlayDeltaBatchPublishInputs(work.batch.rootNames, work.batch.mergedUnit.rootRuns, work.batch.mergedUnit.rootPolicies, work.batch.rootOverlays, work.meta.Options.BufferedIndexedReadOnlyPrepare, work.meta.Options.BufferedIndexedReadOnlyPrepareWorkerCount)
 		if err != nil {
 			materializeElapsed := collectionObservedElapsedSince(materializeStart)
 			return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
@@ -5575,7 +5583,7 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	work.batch.rootBaseIDs = view.rootBaseIDs
 	work.batch.rootCount = len(view.rootNames)
 	work.batch.effectiveRecords = view.effectiveRecords
-	ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(view.rootNames, view.rootRuns, view.rootBaseIDs, view.rootPolicies)
+	ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(view.rootNames, view.rootRuns, view.rootBaseIDs, view.rootPolicies, work.meta.Options.BufferedIndexedReadOnlyPrepare, work.meta.Options.BufferedIndexedReadOnlyPrepareWorkerCount)
 	if err != nil {
 		materializeElapsed := collectionObservedElapsedSince(materializeStart)
 		return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
@@ -5615,15 +5623,17 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	return publishErr
 }
 
-func buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames []string, rootRuns map[string][]memtable.Table, rootPolicies map[string]backenddb.OrderedRootStoragePolicy, rootOverlays map[string][]uint64) ([]backenddb.OrderedRootDeltaBatchPublishInput, func(), error) {
+func buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames []string, rootRuns map[string][]memtable.Table, rootPolicies map[string]backenddb.OrderedRootStoragePolicy, rootOverlays map[string][]uint64, prepareReadOnly bool, readOnlyPrepareWorkerCount int) ([]backenddb.OrderedRootDeltaBatchPublishInput, func(), error) {
 	specs := make([]bufferedRootDeltaBatchSpec, len(rootNames))
 	for i, rootName := range rootNames {
 		specs[i] = bufferedRootDeltaBatchSpec{
-			rootName:                  rootName,
-			baseRoot:                  overlayDeltaBaseRoot(rootOverlays[rootName]),
-			storagePolicy:             rootPolicies[rootName],
-			includeDeletedOnColdBuild: true,
-			parallelApply:             true,
+			rootName:                   rootName,
+			baseRoot:                   overlayDeltaBaseRoot(rootOverlays[rootName]),
+			storagePolicy:              rootPolicies[rootName],
+			includeDeletedOnColdBuild:  true,
+			parallelApply:              true,
+			prepareReadOnly:            prepareReadOnly,
+			readOnlyPrepareWorkerCount: readOnlyPrepareWorkerCount,
 		}
 	}
 	return buildBufferedRootDeltaBatchPublishInputsFromSpecs(specs, rootRuns)
@@ -5636,7 +5646,7 @@ func overlayDeltaBaseRoot(overlays []uint64) uint64 {
 	return 0
 }
 
-func buildBufferedRootDeltaBatchPublishInputs(rootNames []string, rootRuns map[string][]memtable.Table, rootBaseIDs map[string]uint64, rootPolicies map[string]backenddb.OrderedRootStoragePolicy) ([]backenddb.OrderedRootDeltaBatchPublishInput, func(), error) {
+func buildBufferedRootDeltaBatchPublishInputs(rootNames []string, rootRuns map[string][]memtable.Table, rootBaseIDs map[string]uint64, rootPolicies map[string]backenddb.OrderedRootStoragePolicy, prepareReadOnly bool, readOnlyPrepareWorkerCount int) ([]backenddb.OrderedRootDeltaBatchPublishInput, func(), error) {
 	specs := make([]bufferedRootDeltaBatchSpec, 0, len(rootNames))
 	for _, rootName := range rootNames {
 		baseRoot, ok := rootBaseIDs[rootName]
@@ -5644,21 +5654,25 @@ func buildBufferedRootDeltaBatchPublishInputs(rootNames []string, rootRuns map[s
 			return nil, func() {}, fmt.Errorf("collections: buffered indexed flush missing base root for %q", rootName)
 		}
 		specs = append(specs, bufferedRootDeltaBatchSpec{
-			rootName:      rootName,
-			baseRoot:      baseRoot,
-			storagePolicy: rootPolicies[rootName],
-			parallelApply: true,
+			rootName:                   rootName,
+			baseRoot:                   baseRoot,
+			storagePolicy:              rootPolicies[rootName],
+			parallelApply:              true,
+			prepareReadOnly:            prepareReadOnly,
+			readOnlyPrepareWorkerCount: readOnlyPrepareWorkerCount,
 		})
 	}
 	return buildBufferedRootDeltaBatchPublishInputsFromSpecs(specs, rootRuns)
 }
 
 type bufferedRootDeltaBatchSpec struct {
-	rootName                  string
-	baseRoot                  uint64
-	storagePolicy             backenddb.OrderedRootStoragePolicy
-	includeDeletedOnColdBuild bool
-	parallelApply             bool
+	rootName                   string
+	baseRoot                   uint64
+	storagePolicy              backenddb.OrderedRootStoragePolicy
+	includeDeletedOnColdBuild  bool
+	parallelApply              bool
+	prepareReadOnly            bool
+	readOnlyPrepareWorkerCount int
 }
 
 func buildBufferedRootDeltaBatchPublishInputsFromSpecs(specs []bufferedRootDeltaBatchSpec, rootRuns map[string][]memtable.Table) ([]backenddb.OrderedRootDeltaBatchPublishInput, func(), error) {
@@ -5739,11 +5753,13 @@ func buildBufferedRootDeltaBatchPublishInput(spec bufferedRootDeltaBatchSpec, ro
 		return err
 	}
 	*ordered = backenddb.OrderedRootDeltaBatchPublishInput{
-		BaseRoot:                  spec.baseRoot,
-		Delta:                     delta,
-		StoragePolicy:             spec.storagePolicy,
-		IncludeDeletedOnColdBuild: spec.includeDeletedOnColdBuild,
-		ParallelApply:             spec.parallelApply,
+		BaseRoot:                   spec.baseRoot,
+		Delta:                      delta,
+		StoragePolicy:              spec.storagePolicy,
+		IncludeDeletedOnColdBuild:  spec.includeDeletedOnColdBuild,
+		ParallelApply:              spec.parallelApply,
+		PrepareReadOnly:            spec.prepareReadOnly,
+		ReadOnlyPrepareWorkerCount: spec.readOnlyPrepareWorkerCount,
 	}
 	return nil
 }
@@ -6421,7 +6437,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 			materializeElapsed = collectionObservedElapsedSince(materializeStart)
 			return err
 		}
-		ordered, cleanupDeltas, err := buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames, flushUnit.rootRuns, flushUnit.rootPolicies, rootOverlays)
+		ordered, cleanupDeltas, err := buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames, flushUnit.rootRuns, flushUnit.rootPolicies, rootOverlays, meta.Options.BufferedIndexedReadOnlyPrepare, meta.Options.BufferedIndexedReadOnlyPrepareWorkerCount)
 		if err != nil {
 			materializeElapsed = collectionObservedElapsedSince(materializeStart)
 			return err
@@ -6456,7 +6472,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 			return err
 		}
 		defer resetIndexedSemanticPublishView(view)
-		ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(view.rootNames, view.rootRuns, view.rootBaseIDs, view.rootPolicies)
+		ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(view.rootNames, view.rootRuns, view.rootBaseIDs, view.rootPolicies, meta.Options.BufferedIndexedReadOnlyPrepare, meta.Options.BufferedIndexedReadOnlyPrepareWorkerCount)
 		if err != nil {
 			materializeElapsed = collectionObservedElapsedSince(materializeStart)
 			return err
@@ -13653,6 +13669,9 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 	if meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits < 0 {
 		return CollectionMeta{}, errors.New("collections: buffered indexed async flush max queued units cannot be negative")
 	}
+	if meta.Options.BufferedIndexedReadOnlyPrepareWorkerCount < 0 {
+		return CollectionMeta{}, errors.New("collections: buffered indexed read-only prepare worker count cannot be negative")
+	}
 	documentFormat, err := normalizeDocumentFormat(meta.Options.DocumentFormat)
 	if err != nil {
 		return CollectionMeta{}, err
@@ -13695,9 +13714,13 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		meta.Options.BufferedIndexedWriteMaxRootRuns = 0
 		meta.Options.BufferedIndexedAsyncFlush = false
 		meta.Options.BufferedIndexedOverlayRoots = false
+		meta.Options.BufferedIndexedReadOnlyPrepare = false
+		meta.Options.BufferedIndexedReadOnlyPrepareWorkerCount = 0
 		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
 	} else if len(meta.Indexes) == 0 {
 		meta.Options.BufferedIndexedWrites = false
+		meta.Options.BufferedIndexedReadOnlyPrepare = false
+		meta.Options.BufferedIndexedReadOnlyPrepareWorkerCount = 0
 	} else {
 		meta.Options.BufferedIndexedWrites = true
 		defaultMaxDocuments := DefaultIndexedWriteMemtableMaxDocuments
@@ -13715,6 +13738,9 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		}
 		if meta.Options.BufferedIndexedAsyncFlush && meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits == 0 {
 			meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits
+		}
+		if !meta.Options.BufferedIndexedReadOnlyPrepare {
+			meta.Options.BufferedIndexedReadOnlyPrepareWorkerCount = 0
 		}
 	}
 	return meta, nil
