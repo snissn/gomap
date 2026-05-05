@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -112,6 +113,9 @@ func TestSnapshotGetAppendPublishedUsesValueAppendDirectly(t *testing.T) {
 	if lookup.getEntryCalls != 0 {
 		t.Fatalf("GetEntry calls=%d, want 0", lookup.getEntryCalls)
 	}
+	if lookup.getValueUnsafeCalls != 0 {
+		t.Fatalf("GetValueUnsafe calls=%d, want 0", lookup.getValueUnsafeCalls)
+	}
 }
 
 func TestSnapshotGetAppendPublishedFallsBackToEntryLookup(t *testing.T) {
@@ -157,6 +161,9 @@ func TestSnapshotGetAppendPublishedAppendMissFallsBackToEntryLookup(t *testing.T
 	if lookup.getEntryCalls != 1 {
 		t.Fatalf("GetEntry calls=%d, want 1", lookup.getEntryCalls)
 	}
+	if lookup.getValueUnsafeCalls != 0 {
+		t.Fatalf("GetValueUnsafe calls=%d, want 0", lookup.getValueUnsafeCalls)
+	}
 }
 
 func TestSnapshotGetAppendPublishedAppendMissPreservesTombstone(t *testing.T) {
@@ -180,5 +187,52 @@ func TestSnapshotGetAppendPublishedAppendMissPreservesTombstone(t *testing.T) {
 	}
 	if lookup.getEntryCalls != 1 {
 		t.Fatalf("GetEntry calls=%d, want 1", lookup.getEntryCalls)
+	}
+	if lookup.getValueUnsafeCalls != 0 {
+		t.Fatalf("GetValueUnsafe calls=%d, want 0", lookup.getValueUnsafeCalls)
+	}
+}
+
+func TestSnapshotGetAppendBackendPublishedMissDoesNotFallBackToDefaultRoot(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	if err := backend.SetSync([]byte("k"), []byte("default")); err != nil {
+		t.Fatalf("backend set: %v", err)
+	}
+	otherRoot := newRootDomainTestTable(t, rootDomainTestOp{key: "other", value: "published"})
+	pointRootID, err := backend.PublishOrderedRootIterator(0, otherRoot.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish point root: %v", err)
+	}
+	if pointRootID == backend.State().RootPageID {
+		t.Fatalf("test point root unexpectedly matches default root %d", pointRootID)
+	}
+
+	backendSnap := backend.AcquireSnapshot()
+	if backendSnap == nil {
+		t.Fatal("expected backend snapshot")
+	}
+	defer backendSnap.Close()
+
+	db := &DB{backend: backend, mutableShards: make([]memShard, 1)}
+	snap := &Snapshot{
+		db:              db,
+		backend:         backendSnap,
+		rootPointShards: []rootDomainSnapshot{{publishedRootID: pointRootID}},
+		backendRoot:     backendSnapshotLookup{db: db, snapshot: backendSnap, rootID: backendSnap.State().RootPageID},
+		backendRootOK:   true,
+	}
+
+	got, err := snap.GetAppend([]byte("k"), []byte("p:"))
+	if !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("GetAppend err=%v, want ErrKeyNotFound", err)
+	}
+	if string(got) != "p:" {
+		t.Fatalf("value=%q, want unchanged prefix", got)
 	}
 }
