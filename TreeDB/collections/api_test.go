@@ -9152,6 +9152,7 @@ func TestCollectionUpdateBatchDirectBufferedTemplateV1AccumulatesRootRuns(t *tes
 	primaryRuns := len(col.writeDomain.rootRuns[collectionPrimaryRootName("users")])
 	cityRuns := len(col.writeDomain.rootRuns[collectionSecondaryRootName("users", "city")])
 	rootMutableRuns := len(col.writeDomain.rootMutableRuns)
+	pendingSemanticRecords := pendingIndexedSemanticRecordCountLocked(col.writeDomain)
 	col.writeDomain.mu.RUnlock()
 	if rootRunCount != 3 {
 		t.Fatalf("rootRunCount=%d want 3 accumulated roots after two template-v1 update batches", rootRunCount)
@@ -9161,6 +9162,12 @@ func TestCollectionUpdateBatchDirectBufferedTemplateV1AccumulatesRootRuns(t *tes
 	}
 	if rootMutableRuns != 3 {
 		t.Fatalf("rootMutableRuns=%d want 3 active root-local accumulators", rootMutableRuns)
+	}
+	if pendingSemanticRecords != 0 {
+		t.Fatalf("pending template-v1 semantic records=%d want 0 mechanical fallback records", pendingSemanticRecords)
+	}
+	if got := mgr.StatsSnapshot().IndexedSemanticRawRecords; got != 0 {
+		t.Fatalf("template-v1 raw semantic records=%d want 0 mechanical fallback records", got)
 	}
 
 	seaIDs, err := col.FindByIndex("city", "sea")

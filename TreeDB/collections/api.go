@@ -10062,6 +10062,16 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 	return !persistIndexStateForOptions(opts)
 }
 
+func shouldBuildIndexedSemanticUpdateRecords(meta CollectionMeta, canBuffer bool) bool {
+	if !canBuffer || !meta.Options.BufferedIndexedWrites || len(meta.Indexes) == 0 {
+		return false
+	}
+	// The current semantic publish view only rewrites secondary roots. Template-v1
+	// publish still uses the mechanical root-run path because template root
+	// attribution is not part of this PR3b slice.
+	return normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatTemplateV1
+}
+
 func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMode, scaffoldStats CollectionUpdateStats) ([]UpdateBatchResult, error) {
 	if c.shouldPlanUpdateBatchWithBufferedWrites(mode) {
 		useBufferedRead := true
@@ -10857,7 +10867,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		plan := newUpdateBatchPlan()
 		stats = updateCollectionUpdateStatsCounts(stats, results, len(rootNames))
 		var semanticRecords []indexedSemanticRecord
-		if c.writeDomain != nil && canBufferIndexedUpdateBatch && meta.Options.BufferedIndexedWrites {
+		if c.writeDomain != nil && shouldBuildIndexedSemanticUpdateRecords(meta, canBufferIndexedUpdateBatch) {
 			phaseStart = updateBatchStatsNow(detailedStats)
 			semanticRecords = buildIndexedSemanticUpdateRecords(meta.Name, runtimes, changed, primaryEntries)
 			stats.SemanticRecordBuild += updateBatchStatsSince(detailedStats, phaseStart)
@@ -11063,7 +11073,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	plan := newUpdateBatchPlan()
 	stats = updateCollectionUpdateStatsCounts(stats, results, len(deltaTables))
 	var semanticRecords []indexedSemanticRecord
-	if c.writeDomain != nil && canBufferIndexedUpdateBatch && meta.Options.BufferedIndexedWrites {
+	if c.writeDomain != nil && shouldBuildIndexedSemanticUpdateRecords(meta, canBufferIndexedUpdateBatch) {
 		phaseStart = updateBatchStatsNow(detailedStats)
 		semanticRecords = buildIndexedSemanticUpdateRecords(meta.Name, runtimes, changed, nil)
 		stats.SemanticRecordBuild += updateBatchStatsSince(detailedStats, phaseStart)
