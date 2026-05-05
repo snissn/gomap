@@ -1333,6 +1333,73 @@ func BenchmarkZipperPrepareReadOnlyWarmSparseManyLeaf(b *testing.B) {
 	benchmarkZipperPrepareReadOnlyWarmSparseMultiLeaf(b, 4)
 }
 
+func BenchmarkZipperApplyWarmSparseManyLeaf(b *testing.B) {
+	dir := b.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer p.Close()
+
+	const (
+		keyCount = 8192
+		step     = 4
+		workers  = 4
+	)
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	rootID := buildInternalRootWithKeys(b, z, keyCount)
+
+	left := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = left.Close() }()
+	right := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = right.Close() }()
+	for i := 0; i < keyCount; i += step {
+		key := []byte(fmt.Sprintf("key-%06d", i))
+		left.Set(key, []byte("left"))
+		right.Set(key, []byte("right"))
+	}
+
+	prepared, err := z.PrepareReadOnly(rootID, left, ReadOnlyPrepareOptions{})
+	if err != nil {
+		b.Fatalf("PrepareReadOnly: %v", err)
+	}
+	requireValidReadOnlyPrepare(b, prepared)
+	summary := prepared.LeafSpanSummary()
+	workerSummary := prepared.LeafSpanWorkerRangeSummary(workers)
+	if summary.Spans < 2 || summary.Ops == 0 || workerSummary.Ranges < 2 {
+		b.Fatalf("prepare spans/ops/ranges=%d/%d/%d want many-leaf plan", summary.Spans, summary.Ops, workerSummary.Ranges)
+	}
+
+	var total adaptive.Metrics
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		delta := left
+		if i&1 == 1 {
+			delta = right
+		}
+		newRoot, _, metrics, err := z.Apply(rootID, delta)
+		if err != nil {
+			b.Fatalf("Apply: %v", err)
+		}
+		if newRoot == 0 || newRoot == rootID {
+			b.Fatalf("new root=%d old root=%d want changed non-zero root", newRoot, rootID)
+		}
+		rootID = newRoot
+		mergeMetrics(&total, &metrics)
+	}
+	b.ReportMetric(float64(summary.Spans), "leaf_spans/op")
+	b.ReportMetric(float64(summary.Ops), "ops/op")
+	b.ReportMetric(float64(workerSummary.Ranges), "worker_ranges/op")
+	b.ReportMetric(float64(workerSummary.MaxRangeOps), "max_worker_ops/op")
+	if b.N > 0 {
+		b.ReportMetric(float64(total.ZipperLeafMerges)/float64(b.N), "leaf_merges/op")
+		b.ReportMetric(float64(total.ZipperInternalMerges)/float64(b.N), "internal_merges/op")
+		b.ReportMetric(float64(total.IndexWriteBytes)/float64(b.N), "index_write_bytes/op")
+	}
+}
+
 func benchmarkZipperPrepareReadOnlyWarmSparseMultiLeaf(b *testing.B, step int) {
 	dir := b.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
