@@ -146,9 +146,12 @@ operation's snapshot.
 
 `TemplateV1Encoder` is a stateful helper for repeated shapes. It emits template
 records the first time a shape is seen and then emits hash-addressed `TD1H`
-insert documents for the same shape. Call `Reset` before reusing an encoder
-after a failed or abandoned publish attempt if the next batch cannot rely on the
-earlier template records having been persisted.
+insert documents for the same shape. `Collection.InsertBatchWithTemplateV1Encoder`
+teaches the encoder the numeric template IDs resolved by a successful insert, so
+later `EncodeDocument` calls can emit compact `TD1D` bytes directly when all
+templates in the document are already known. Call `Reset` before reusing an
+encoder after a failed or abandoned publish attempt if the next batch cannot
+rely on the earlier template records having been persisted.
 
 ### 2.5 Index extraction
 

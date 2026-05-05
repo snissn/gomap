@@ -197,6 +197,9 @@ Coverage:
 - `TreeDB/collections/template_v1_test.go`:
   - `TestTemplateV1CollectionInsertBatchIndexesAndTemplateRoot`
   - `TestTemplateV1CollectionReopenFindAndDelete`
+  - `TestTemplateV1EncoderLearnsIDsAfterInsertBatch`
+  - `TestTemplateV1EncoderLearnsExistingTemplateIDFromHashInsert`
+  - `TestTemplateV1EncoderLearnsBufferedTemplateIDs`
   - `TestTemplateV1EncoderReusesPersistedTemplateRoot`
   - `TestTemplateV1EncoderResetEmitsTemplateAgain`
   - `TestTemplateV1CreateIndexBackfillsFromTemplateRoot`

@@ -153,7 +153,7 @@ func TestTemplateV1StoredDocumentUsesVarintTemplateIDs(t *testing.T) {
 			"ada@example.com",
 		},
 	)
-	prepared, records, resolver, err := prepareTemplateV1InsertDocuments([][]byte{doc}, nil)
+	prepared, records, _, resolver, err := prepareTemplateV1InsertDocuments([][]byte{doc}, nil, false)
 	if err != nil {
 		t.Fatalf("prepare template-v1 document: %v", err)
 	}
@@ -350,7 +350,7 @@ func TestTemplateV1EncoderReusesPersistedTemplateRoot(t *testing.T) {
 		t.Fatal("template root missing after first insert")
 	}
 	resolver := &templateV1SnapshotResolver{snap: snap, rootID: templateRoot}
-	preparedDoc2, _, repeatResolver, err := prepareTemplateV1InsertDocuments([][]byte{doc2}, resolver)
+	preparedDoc2, _, _, repeatResolver, err := prepareTemplateV1InsertDocuments([][]byte{doc2}, resolver, false)
 	if err != nil {
 		_ = snap.Close()
 		t.Fatalf("prepare doc2: %v", err)
@@ -378,6 +378,159 @@ func TestTemplateV1EncoderReusesPersistedTemplateRoot(t *testing.T) {
 	}
 	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u2")) {
 		t.Fatalf("email ids=%q want u2", ids)
+	}
+}
+
+func TestTemplateV1EncoderLearnsIDsAfterInsertBatch(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatTemplateV1,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	var encoder TemplateV1Encoder
+	doc1, err := encoder.EncodeDocument([]string{"email", "city"}, []any{"ada@example.com", "hnl"})
+	if err != nil {
+		t.Fatalf("encode doc1: %v", err)
+	}
+	if !bytes.HasPrefix(doc1, []byte(templateV1InputMagic)) {
+		t.Fatalf("first encoded doc prefix=%q want input envelope", doc1[:min(len(doc1), len(templateV1InputMagic))])
+	}
+	if _, err := col.InsertBatchWithTemplateV1Encoder([][]byte{[]byte("u1")}, [][]byte{doc1}, &encoder); err != nil {
+		t.Fatalf("insert doc1 with encoder feedback: %v", err)
+	}
+
+	doc2, err := encoder.EncodeDocument([]string{"email", "city"}, []any{"grace@example.com", "sea"})
+	if err != nil {
+		t.Fatalf("encode doc2: %v", err)
+	}
+	if !bytes.HasPrefix(doc2, []byte(templateV1StoredMagic)) {
+		t.Fatalf("learned encoder doc2 prefix=%q want stored magic", doc2[:min(len(doc2), len(templateV1StoredMagic))])
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u2")}, [][]byte{doc2}); err != nil {
+		t.Fatalf("insert learned doc2: %v", err)
+	}
+	got, err := col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get u2: %v", err)
+	}
+	gotJSON, err := col.StoredDocumentJSON(got)
+	if err != nil {
+		t.Fatalf("materialize u2: %v", err)
+	}
+	if !bytes.Equal(gotJSON, []byte(`{"city":"sea","email":"grace@example.com"}`)) {
+		t.Fatalf("u2 json=%s", gotJSON)
+	}
+}
+
+func TestTemplateV1EncoderLearnsExistingTemplateIDFromHashInsert(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatTemplateV1,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	var encoder TemplateV1Encoder
+	doc1, err := encoder.EncodeDocument([]string{"email", "city"}, []any{"ada@example.com", "hnl"})
+	if err != nil {
+		t.Fatalf("encode doc1: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{doc1}); err != nil {
+		t.Fatalf("insert doc1 without feedback: %v", err)
+	}
+	doc2, err := encoder.EncodeDocument([]string{"email", "city"}, []any{"grace@example.com", "sea"})
+	if err != nil {
+		t.Fatalf("encode doc2: %v", err)
+	}
+	if !bytes.HasPrefix(doc2, []byte(templateV1InsertDocumentMagic)) {
+		t.Fatalf("doc2 prefix=%q want hash insert magic", doc2[:min(len(doc2), len(templateV1InsertDocumentMagic))])
+	}
+	if _, err := col.InsertBatchWithTemplateV1Encoder([][]byte{[]byte("u2")}, [][]byte{doc2}, &encoder); err != nil {
+		t.Fatalf("insert doc2 with feedback: %v", err)
+	}
+	doc3, err := encoder.EncodeDocument([]string{"email", "city"}, []any{"katherine@example.com", "koa"})
+	if err != nil {
+		t.Fatalf("encode doc3: %v", err)
+	}
+	if !bytes.HasPrefix(doc3, []byte(templateV1StoredMagic)) {
+		t.Fatalf("doc3 prefix=%q want stored magic", doc3[:min(len(doc3), len(templateV1StoredMagic))])
+	}
+}
+
+func TestTemplateV1EncoderLearnsBufferedTemplateIDs(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatTemplateV1,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	var encoder TemplateV1Encoder
+	doc1, err := encoder.EncodeDocument([]string{"email", "city"}, []any{"ada@example.com", "hnl"})
+	if err != nil {
+		t.Fatalf("encode doc1: %v", err)
+	}
+	if _, err := col.InsertBatchWithTemplateV1Encoder([][]byte{[]byte("u1")}, [][]byte{doc1}, &encoder); err != nil {
+		t.Fatalf("insert buffered doc1 with encoder feedback: %v", err)
+	}
+	doc2, err := encoder.EncodeDocument([]string{"email", "city"}, []any{"grace@example.com", "sea"})
+	if err != nil {
+		t.Fatalf("encode doc2: %v", err)
+	}
+	if !bytes.HasPrefix(doc2, []byte(templateV1StoredMagic)) {
+		t.Fatalf("learned buffered doc2 prefix=%q want stored magic", doc2[:min(len(doc2), len(templateV1StoredMagic))])
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u2")}, [][]byte{doc2}); err != nil {
+		t.Fatalf("insert buffered learned doc2: %v", err)
+	}
+	ids, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find city: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u2")) {
+		t.Fatalf("city ids=%q want [u2]", ids)
 	}
 }
 
@@ -431,7 +584,7 @@ func TestTemplateV1IndexedWriteMemtablesResolveBufferedTemplateAcrossBatches(t *
 		documentFormat:   DocumentFormatTemplateV1,
 		templateResolver: nil,
 	}, col.writeDomain, "users")
-	preparedDoc2, _, preparedResolver, err := prepareTemplateV1InsertDocuments([][]byte{doc2}, opts.templateResolver)
+	preparedDoc2, _, _, preparedResolver, err := prepareTemplateV1InsertDocuments([][]byte{doc2}, opts.templateResolver, false)
 	if err != nil {
 		t.Fatalf("prepare doc2 with buffered resolver: %v", err)
 	}
@@ -533,7 +686,7 @@ func TestPrepareTemplateV1InsertDocumentsSkipsFallbackTemplateRecord(t *testing.
 	if err != nil {
 		t.Fatalf("encode doc1: %v", err)
 	}
-	_, records, resolver, err := prepareTemplateV1InsertDocuments([][]byte{doc1}, nil)
+	_, records, _, resolver, err := prepareTemplateV1InsertDocuments([][]byte{doc1}, nil, false)
 	if err != nil {
 		t.Fatalf("prepare doc1: %v", err)
 	}
@@ -546,7 +699,7 @@ func TestPrepareTemplateV1InsertDocumentsSkipsFallbackTemplateRecord(t *testing.
 	if err != nil {
 		t.Fatalf("encode doc2: %v", err)
 	}
-	prepared, records, repeatResolver, err := prepareTemplateV1InsertDocuments([][]byte{doc2}, resolver)
+	prepared, records, _, repeatResolver, err := prepareTemplateV1InsertDocuments([][]byte{doc2}, resolver, false)
 	if err != nil {
 		t.Fatalf("prepare doc2 with fallback: %v", err)
 	}
@@ -566,7 +719,7 @@ func TestPrepareTemplateV1InsertDocumentsSkipsFallbackTemplateRecord(t *testing.
 	if err != nil {
 		t.Fatalf("encode doc3: %v", err)
 	}
-	_, records, _, err = prepareTemplateV1InsertDocuments([][]byte{doc3}, resolver)
+	_, records, _, _, err = prepareTemplateV1InsertDocuments([][]byte{doc3}, resolver, false)
 	if err != nil {
 		t.Fatalf("prepare doc3 with fallback: %v", err)
 	}
@@ -602,7 +755,7 @@ func TestPrepareTemplateV1InsertDocumentsDedupesBatchTemplateRecords(t *testing.
 		t.Fatalf("encode doc2: %v", err)
 	}
 	fallback := &countingMissingTemplateV1Resolver{}
-	_, records, _, err := prepareTemplateV1InsertDocuments([][]byte{doc1, doc2}, fallback)
+	_, records, _, _, err := prepareTemplateV1InsertDocuments([][]byte{doc1, doc2}, fallback, false)
 	if err != nil {
 		t.Fatalf("prepare duplicate template records: %v", err)
 	}
@@ -915,7 +1068,7 @@ func TestTemplateV1NestedIndexExtraction(t *testing.T) {
 			"ada@example.com",
 		},
 	)
-	prepared, _, resolver, err := prepareTemplateV1InsertDocuments([][]byte{doc}, nil)
+	prepared, _, _, resolver, err := prepareTemplateV1InsertDocuments([][]byte{doc}, nil, false)
 	if err != nil {
 		t.Fatalf("prepare template document: %v", err)
 	}
@@ -945,7 +1098,7 @@ func TestTemplateV1RootIndexExtraction(t *testing.T) {
 			"hnl",
 		},
 	)
-	prepared, _, resolver, err := prepareTemplateV1InsertDocuments([][]byte{doc}, nil)
+	prepared, _, _, resolver, err := prepareTemplateV1InsertDocuments([][]byte{doc}, nil, false)
 	if err != nil {
 		t.Fatalf("prepare template document: %v", err)
 	}

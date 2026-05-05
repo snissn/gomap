@@ -5897,7 +5897,18 @@ func (c *Collection) insertOneViaBatch(id, document []byte) ([]byte, error) {
 }
 
 func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
-	return c.insertBatch(ids, documents, false)
+	return c.insertBatch(ids, documents, false, nil)
+}
+
+// InsertBatchWithTemplateV1Encoder inserts template-v1 documents and teaches
+// encoder any numeric template IDs resolved by the successful insert. Later
+// EncodeDocument calls on the same encoder can then emit compact TD1D stored
+// documents directly instead of hash-addressed TD1H insert documents.
+func (c *Collection) InsertBatchWithTemplateV1Encoder(ids, documents [][]byte, encoder *TemplateV1Encoder) ([][]byte, error) {
+	if encoder == nil {
+		return nil, errors.New("collections: template-v1 encoder cannot be nil")
+	}
+	return c.insertBatch(ids, documents, false, encoder)
 }
 
 // InsertBatchValidatedBSON inserts native BSON documents that the caller has
@@ -5905,10 +5916,10 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 // BSON while parsing the request and need to avoid a duplicate full-document
 // validation pass on the insert hot path.
 func (c *Collection) InsertBatchValidatedBSON(ids, documents [][]byte) ([][]byte, error) {
-	return c.insertBatch(ids, documents, true)
+	return c.insertBatch(ids, documents, true, nil)
 }
 
-func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool) ([][]byte, error) {
+func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder) ([][]byte, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -5920,7 +5931,7 @@ func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool)
 	}
 
 	return retryInsertBatchMutation(func() ([][]byte, error) {
-		return c.insertBatchOnce(ids, documents, trustedValidBSON)
+		return c.insertBatchOnce(ids, documents, trustedValidBSON, templateEncoder)
 	})
 }
 
@@ -5938,7 +5949,7 @@ func retryInsertBatchMutation(run func() ([][]byte, error)) ([][]byte, error) {
 	return nil, collectionMutationRetryExhausted(lastErr)
 }
 
-func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON bool) ([][]byte, error) {
+func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder) ([][]byte, error) {
 	unlockMutation := c.lockMutation()
 	mutationLocked := true
 	unlockIfLocked := func() {
@@ -5995,6 +6006,11 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		closePlanningSnapshot()
 		return nil, err
 	}
+	if templateEncoder != nil && normalizedDocumentFormat(plannerOptions.documentFormat) != DocumentFormatTemplateV1 {
+		closePlanningSnapshot()
+		return nil, errors.New("collections: InsertBatchWithTemplateV1Encoder requires a template-v1 collection")
+	}
+	plannerOptions.learnTemplateIDs = templateEncoder != nil
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 	indexedMemtablesEnabled := c.shouldBufferIndexedInserts(meta)
 	bufferIndexedInserts := c.shouldBufferIndexedInsertBatch(meta, len(documents))
@@ -6032,6 +6048,11 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 			closePlanningSnapshot()
 			return nil, err
 		}
+		if templateEncoder != nil && normalizedDocumentFormat(plannerOptions.documentFormat) != DocumentFormatTemplateV1 {
+			closePlanningSnapshot()
+			return nil, errors.New("collections: InsertBatchWithTemplateV1Encoder requires a template-v1 collection")
+		}
+		plannerOptions.learnTemplateIDs = templateEncoder != nil
 		plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 		indexedMemtablesEnabled = c.shouldBufferIndexedInserts(meta)
 		bufferIndexedInserts = c.shouldBufferIndexedInsertBatch(meta, len(documents))
@@ -6076,6 +6097,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 	}
 	if len(plan.runs) == 0 {
 		closePlanningSnapshot()
+		templateEncoder.learnTemplateV1Templates(plan.templateLearned)
 		c.setLastInsertStats(plan.stats.CollectionInsertStats)
 		return plan.resultIDs, nil
 	}
@@ -6101,6 +6123,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 			return nil, err
 		}
 		plan.stats.Publish += bufferFlushElapsed
+		templateEncoder.learnTemplateV1Templates(plan.templateLearned)
 		c.setLastInsertStats(plan.stats.CollectionInsertStats)
 		return resultIDs, nil
 	}
@@ -6153,6 +6176,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 	nextCatalog := cloneCatalogWithRootUpdates(currentCatalog, meta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	templateEncoder.learnTemplateV1Templates(plan.templateLearned)
 	c.setLastInsertStats(plan.stats.CollectionInsertStats)
 	return plan.resultIDs, nil
 }
@@ -7608,7 +7632,7 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		return false, false, err
 	}
 	phaseStart = updateBatchStatsNow(detailedStats)
-	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments([][]byte{document}, plannerOptions)
+	preparedDocuments, templateRecords, _, templateResolver, err := prepareInsertDocuments([][]byte{document}, plannerOptions)
 	stats.PrepareDocuments += updateBatchStatsSince(detailedStats, phaseStart)
 	if err != nil {
 		_ = snap.Close()
@@ -8985,11 +9009,11 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	}
 
 	phaseStart := updateBatchStatsNow(detailedStats)
-	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments(changedDocuments, plannerOptions)
+	preparedDocuments, templateRecords, _, templateResolver, err := prepareInsertDocuments(changedDocuments, plannerOptions)
 	stats.PrepareDocuments += updateBatchStatsSince(detailedStats, phaseStart)
 	if err != nil {
 		for i, document := range changedDocuments {
-			if _, _, _, itemErr := prepareInsertDocuments([][]byte{document}, plannerOptions); itemErr != nil {
+			if _, _, _, _, itemErr := prepareInsertDocuments([][]byte{document}, plannerOptions); itemErr != nil {
 				_ = snap.Close()
 				return nil, updateBatchItemError(changed[i].itemIndex, itemErr)
 			}

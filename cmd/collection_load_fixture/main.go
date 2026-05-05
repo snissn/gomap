@@ -573,6 +573,7 @@ func runFixture(cfg config) (loadSummary, error) {
 	wallStart := time.Now()
 	batches := 0
 	lastProgress := time.Now()
+	var templateEncoder collections.TemplateV1Encoder
 
 	for inserted := 0; inserted < cfg.Docs; {
 		batchSize := cfg.BatchSize
@@ -580,14 +581,19 @@ func runFixture(cfg config) (loadSummary, error) {
 			batchSize = remaining
 		}
 		genStart := time.Now()
-		ids, docs, err := documentBatch(cfg, inserted, batchSize)
+		ids, docs, err := documentBatch(cfg, &templateEncoder, inserted, batchSize)
 		if err != nil {
 			return loadSummary{}, err
 		}
 		generationElapsed += time.Since(genStart)
 
 		insertStart := time.Now()
-		if _, err := collection.InsertBatch(ids, docs); err != nil {
+		if cfg.DocumentFormat == collections.DocumentFormatTemplateV1 {
+			_, err = collection.InsertBatchWithTemplateV1Encoder(ids, docs, &templateEncoder)
+		} else {
+			_, err = collection.InsertBatch(ids, docs)
+		}
+		if err != nil {
 			return loadSummary{}, fmt.Errorf("insert batch starting at document %d: %w", inserted, err)
 		}
 		insertElapsed += time.Since(insertStart)
@@ -896,14 +902,13 @@ func collectionShapeIndexes(indexCount int) []collections.IndexDefinition {
 	}
 }
 
-func documentBatch(cfg config, start, count int) ([][]byte, [][]byte, error) {
+func documentBatch(cfg config, templateEncoder *collections.TemplateV1Encoder, start, count int) ([][]byte, [][]byte, error) {
 	ids := make([][]byte, count)
 	docs := make([][]byte, count)
-	var templateEncoder collections.TemplateV1Encoder
 	for i := 0; i < count; i++ {
 		docNum := start + i
 		ids[i] = documentID(docNum)
-		doc, err := document(cfg, &templateEncoder, docNum)
+		doc, err := document(cfg, templateEncoder, docNum)
 		if err != nil {
 			return nil, nil, err
 		}
