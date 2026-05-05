@@ -2131,22 +2131,23 @@ type collectionRootDeltaKindStats struct {
 }
 
 type collectionRootDeltaPlanStats struct {
-	primaryRoots      uint64
-	templateRoots     uint64
-	indexStateRoots   uint64
-	secondaryRoots    uint64
-	entries           uint64
-	keyBytes          uint64
-	valueBytes        uint64
-	tombstones        uint64
-	primaryEntries    uint64
-	primaryKeyBytes   uint64
-	primaryValueBytes uint64
-	primaryTombstones uint64
-	primaryDetail     collectionRootDeltaKindStats
-	templateDetail    collectionRootDeltaKindStats
-	indexStateDetail  collectionRootDeltaKindStats
-	secondaryDetail   collectionRootDeltaKindStats
+	primaryRoots         uint64
+	templateRoots        uint64
+	indexStateRoots      uint64
+	secondaryRoots       uint64
+	secondaryUniqueRoots uint64
+	entries              uint64
+	keyBytes             uint64
+	valueBytes           uint64
+	tombstones           uint64
+	primaryEntries       uint64
+	primaryKeyBytes      uint64
+	primaryValueBytes    uint64
+	primaryTombstones    uint64
+	primaryDetail        collectionRootDeltaKindStats
+	templateDetail       collectionRootDeltaKindStats
+	indexStateDetail     collectionRootDeltaKindStats
+	secondaryDetail      collectionRootDeltaKindStats
 }
 
 func (domain *collectionWriteDomain) observeRootDeltaPlan(stats collectionRootDeltaPlanStats) {
@@ -2222,6 +2223,14 @@ func (domain *collectionWriteDomain) observeRootDeltaPlanCoalescing(rawStats, fi
 	if domain == nil {
 		return
 	}
+	rawSecondaryRoots := rawStats.secondaryUniqueRoots
+	if rawSecondaryRoots == 0 && rawStats.secondaryRoots > 0 {
+		rawSecondaryRoots = rawStats.secondaryRoots
+	}
+	finalSecondaryRoots := finalStats.secondaryUniqueRoots
+	if finalSecondaryRoots == 0 && finalStats.secondaryRoots > 0 {
+		finalSecondaryRoots = finalStats.secondaryRoots
+	}
 	if rawStats.entries > finalStats.entries {
 		domain.rootDeltaPlanSquashedEntries.Add(rawStats.entries - finalStats.entries)
 	}
@@ -2231,8 +2240,8 @@ func (domain *collectionWriteDomain) observeRootDeltaPlanCoalescing(rawStats, fi
 	if rawStats.secondaryDetail.entries > finalStats.secondaryDetail.entries {
 		domain.indexedSemanticCoalescedNoopIndexChanges.Add(rawStats.secondaryDetail.entries - finalStats.secondaryDetail.entries)
 	}
-	if rawStats.secondaryRoots > finalStats.secondaryRoots {
-		domain.indexedSemanticSkippedSecondaryRoots.Add(rawStats.secondaryRoots - finalStats.secondaryRoots)
+	if rawSecondaryRoots > finalSecondaryRoots {
+		domain.indexedSemanticSkippedSecondaryRoots.Add(rawSecondaryRoots - finalSecondaryRoots)
 	}
 	if rawStats.entries > 0 && finalStats.entries == 0 {
 		domain.rootDeltaPlanNetZeroPlans.Add(1)
@@ -5742,13 +5751,20 @@ func collectionRootDeltaPlanStatsFromOrdered(collectionName string, rootNames []
 
 func collectionRootDeltaPlanStatsFromIndexedFlushUnits(collectionName string, units []indexedFlushUnit) (collectionRootDeltaPlanStats, error) {
 	var stats collectionRootDeltaPlanStats
+	secondaryRootNames := make(map[string]struct{})
 	for _, unit := range units {
 		unitStats, err := collectionRootDeltaPlanStatsFromRootRuns(collectionName, unit.rootRuns)
 		if err != nil {
 			return stats, err
 		}
 		stats.add(unitStats)
+		for rootName, runs := range unit.rootRuns {
+			if len(runs) > 0 && strings.HasPrefix(rootName, collectionName+"/index/") {
+				secondaryRootNames[rootName] = struct{}{}
+			}
+		}
 	}
+	stats.secondaryUniqueRoots = uint64(len(secondaryRootNames))
 	return stats, nil
 }
 
@@ -5805,6 +5821,7 @@ func (stats *collectionRootDeltaPlanStats) add(other collectionRootDeltaPlanStat
 	stats.templateRoots += other.templateRoots
 	stats.indexStateRoots += other.indexStateRoots
 	stats.secondaryRoots += other.secondaryRoots
+	stats.secondaryUniqueRoots += other.secondaryUniqueRoots
 	stats.entries += other.entries
 	stats.keyBytes += other.keyBytes
 	stats.valueBytes += other.valueBytes
@@ -5844,6 +5861,7 @@ func (stats *collectionRootDeltaPlanStats) addRoot(collectionName, rootName stri
 		return collectionRootDeltaPlanIndexState
 	case strings.HasPrefix(rootName, collectionName+"/index/"):
 		stats.secondaryRoots++
+		stats.secondaryUniqueRoots++
 		return collectionRootDeltaPlanSecondary
 	}
 	return collectionRootDeltaPlanUnknown

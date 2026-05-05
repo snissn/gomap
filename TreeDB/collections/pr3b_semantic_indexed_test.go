@@ -132,6 +132,40 @@ func TestPR3bSemanticRawRecordsSurviveMutableQueuedActiveRequeued(t *testing.T) 
 	}
 }
 
+func TestPR3bRootDeltaCoalescingSkippedSecondaryRootsUseUniqueRoots(t *testing.T) {
+	raw := collectionRootDeltaPlanStats{
+		secondaryRoots:       2,
+		secondaryUniqueRoots: 1,
+		entries:              6,
+		secondaryDetail: collectionRootDeltaKindStats{
+			entries: 6,
+		},
+	}
+	final := collectionRootDeltaPlanStats{
+		secondaryRoots:       1,
+		secondaryUniqueRoots: 1,
+		entries:              4,
+		secondaryDetail: collectionRootDeltaKindStats{
+			entries: 4,
+		},
+	}
+
+	domain := &collectionWriteDomain{}
+	domain.observeRootDeltaPlanCoalescing(raw, final)
+	if got := domain.indexedSemanticSkippedSecondaryRoots.Load(); got != 0 {
+		t.Fatalf("skipped secondary roots=%d want 0 for repeated raw units that still publish the root", got)
+	}
+	if got := domain.indexedSemanticCoalescedNoopIndexChanges.Load(); got != 2 {
+		t.Fatalf("coalesced noop index changes=%d want 2", got)
+	}
+
+	domain = &collectionWriteDomain{}
+	domain.observeRootDeltaPlanCoalescing(raw, collectionRootDeltaPlanStats{})
+	if got := domain.indexedSemanticSkippedSecondaryRoots.Load(); got != 1 {
+		t.Fatalf("skipped secondary roots for net-zero plan=%d want 1 unique root", got)
+	}
+}
+
 func TestPR3bSemanticRepeatedSameDocumentUpdatesSerialEquivalent(t *testing.T) {
 	d, mgr, col := pr3bSemanticTestCollection(t)
 	defer func() { _ = d.Close() }()
