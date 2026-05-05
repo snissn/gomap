@@ -1063,6 +1063,60 @@ func TestReadOnlyPrepareResultAppendLeafSpanWorkerRangesUsesDestination(t *testi
 	}
 }
 
+func TestReadOnlyPrepareResultLeafSpanWorkerRangeSummaryMatchesRanges(t *testing.T) {
+	prepared := ReadOnlyPrepareResult{
+		Ops:            12,
+		ExactLeafSpans: true,
+		LeafSpans: []ReadOnlyLeafSpan{
+			{FirstOpKey: []byte("a"), LastOpKey: []byte("a"), OpCount: 1},
+			{FirstOpKey: []byte("b"), LastOpKey: []byte("b"), OpCount: 1},
+			{FirstOpKey: []byte("c"), LastOpKey: []byte("j"), OpCount: 8},
+			{FirstOpKey: []byte("k"), LastOpKey: []byte("k"), OpCount: 1},
+			{FirstOpKey: []byte("z"), LastOpKey: []byte("z"), OpCount: 1},
+		},
+	}
+	ranges := prepared.AppendLeafSpanWorkerRanges(nil, 3)
+	requireLeafSpanWorkerRangesCoverPlan(t, prepared, ranges)
+
+	summary := prepared.LeafSpanWorkerRangeSummary(3)
+	if summary.TargetWorkers != 3 || summary.Ranges != len(ranges) || summary.Ops != prepared.Ops {
+		t.Fatalf("summary target/ranges/ops=%d/%d/%d want 3/%d/%d", summary.TargetWorkers, summary.Ranges, summary.Ops, len(ranges), prepared.Ops)
+	}
+	wantMin, wantMax, wantSingle := 0, 0, 0
+	for i, r := range ranges {
+		if i == 0 || r.Ops < wantMin {
+			wantMin = r.Ops
+		}
+		if i == 0 || r.Ops > wantMax {
+			wantMax = r.Ops
+		}
+		if r.SpanCount == 1 {
+			wantSingle++
+		}
+	}
+	if summary.MinRangeOps != wantMin || summary.MaxRangeOps != wantMax || summary.SingleSpanRanges != wantSingle {
+		t.Fatalf("summary min/max/single=%d/%d/%d want %d/%d/%d", summary.MinRangeOps, summary.MaxRangeOps, summary.SingleSpanRanges, wantMin, wantMax, wantSingle)
+	}
+	allocs := testing.AllocsPerRun(1000, func() {
+		got := prepared.LeafSpanWorkerRangeSummary(3)
+		if got.Ranges != len(ranges) {
+			t.Fatalf("ranges=%d want %d", got.Ranges, len(ranges))
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("LeafSpanWorkerRangeSummary allocations=%v want 0", allocs)
+	}
+}
+
+func TestReadOnlyPrepareResultLeafSpanWorkerRangeSummaryEmptyInputs(t *testing.T) {
+	for _, workers := range []int{-1, 0, 1} {
+		summary := (ReadOnlyPrepareResult{}).LeafSpanWorkerRangeSummary(workers)
+		if summary.TargetWorkers != workers || summary.Ranges != 0 || summary.Ops != 0 {
+			t.Fatalf("workers=%d summary=%+v want empty", workers, summary)
+		}
+	}
+}
+
 func TestReadOnlyPrepareResultAppendLeafSpanWorkerRangesEmptyInputs(t *testing.T) {
 	prepared := ReadOnlyPrepareResult{}
 	dst := []ReadOnlyLeafSpanWorkerRange{{FirstSpan: 99, SpanCount: 1, Ops: 1}}
@@ -1127,6 +1181,7 @@ func BenchmarkReadOnlyPrepareResultLeafSpanSummary(b *testing.B) {
 }
 
 var readOnlyLeafSpanWorkerRangesBenchmarkSink []ReadOnlyLeafSpanWorkerRange
+var readOnlyLeafSpanWorkerRangeSummaryBenchmarkSink ReadOnlyLeafSpanWorkerRangeSummary
 
 func BenchmarkReadOnlyPrepareResultLeafSpanWorkerRanges(b *testing.B) {
 	prepared := ReadOnlyPrepareResult{
@@ -1147,6 +1202,25 @@ func BenchmarkReadOnlyPrepareResultLeafSpanWorkerRanges(b *testing.B) {
 		ranges = prepared.AppendLeafSpanWorkerRanges(ranges[:0], 3)
 	}
 	readOnlyLeafSpanWorkerRangesBenchmarkSink = ranges
+}
+
+func BenchmarkReadOnlyPrepareResultLeafSpanWorkerRangeSummary(b *testing.B) {
+	prepared := ReadOnlyPrepareResult{
+		Ops:            12,
+		ExactLeafSpans: true,
+		LeafSpans: []ReadOnlyLeafSpan{
+			{FirstOpKey: []byte("a"), LastOpKey: []byte("a"), OpCount: 1},
+			{FirstOpKey: []byte("b"), LastOpKey: []byte("b"), OpCount: 1},
+			{FirstOpKey: []byte("c"), LastOpKey: []byte("j"), OpCount: 8},
+			{FirstOpKey: []byte("k"), LastOpKey: []byte("k"), OpCount: 1},
+			{FirstOpKey: []byte("z"), LastOpKey: []byte("z"), OpCount: 1},
+		},
+	}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		readOnlyLeafSpanWorkerRangeSummaryBenchmarkSink = prepared.LeafSpanWorkerRangeSummary(3)
+	}
 }
 
 func BenchmarkZipperPrepareReadOnlyWarmSparse(b *testing.B) {

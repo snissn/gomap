@@ -1116,6 +1116,17 @@ type ReadOnlyLeafSpanWorkerRange struct {
 	Ops       int
 }
 
+// ReadOnlyLeafSpanWorkerRangeSummary is an allocation-free aggregate of the
+// deterministic worker ranges derived from a read-only leaf-span plan.
+type ReadOnlyLeafSpanWorkerRangeSummary struct {
+	TargetWorkers    int
+	Ranges           int
+	Ops              int
+	MinRangeOps      int
+	MaxRangeOps      int
+	SingleSpanRanges int
+}
+
 // ReadOnlyPrepareResult is the read-only portion of a root apply attempt. It is
 // safe to discard on root mismatch because it has not allocated or persisted
 // output pages.
@@ -1206,6 +1217,52 @@ func (r ReadOnlyPrepareResult) AppendLeafSpanWorkerRanges(dst []ReadOnlyLeafSpan
 		})
 	}
 	return dst
+}
+
+// LeafSpanWorkerRangeSummary returns an aggregate of the deterministic worker
+// ranges for workers without retaining the ranges themselves.
+func (r ReadOnlyPrepareResult) LeafSpanWorkerRangeSummary(workers int) ReadOnlyLeafSpanWorkerRangeSummary {
+	summary := ReadOnlyLeafSpanWorkerRangeSummary{TargetWorkers: workers}
+	if workers <= 0 || len(r.LeafSpans) == 0 {
+		return summary
+	}
+	if workers > len(r.LeafSpans) {
+		workers = len(r.LeafSpans)
+	}
+	summary.TargetWorkers = workers
+	summary.Ops = r.Ops
+	totalOps := int64(r.Ops)
+
+	spanIdx := 0
+	cumulativeOps := int64(0)
+	for rangeIdx := 0; rangeIdx < workers && spanIdx < len(r.LeafSpans); rangeIdx++ {
+		firstSpan := spanIdx
+		rangeOps := 0
+		remainingRanges := workers - rangeIdx - 1
+		lastAllowedSpan := len(r.LeafSpans) - remainingRanges
+		targetCumulativeOps := readOnlyPrepareCeilDiv64(totalOps*int64(rangeIdx+1), int64(workers))
+
+		for spanIdx < lastAllowedSpan {
+			spanOps := r.LeafSpans[spanIdx].OpCount
+			rangeOps += spanOps
+			cumulativeOps += int64(spanOps)
+			spanIdx++
+			if remainingRanges > 0 && cumulativeOps >= targetCumulativeOps {
+				break
+			}
+		}
+		summary.Ranges++
+		if summary.Ranges == 1 || rangeOps < summary.MinRangeOps {
+			summary.MinRangeOps = rangeOps
+		}
+		if summary.Ranges == 1 || rangeOps > summary.MaxRangeOps {
+			summary.MaxRangeOps = rangeOps
+		}
+		if spanIdx-firstSpan == 1 {
+			summary.SingleSpanRanges++
+		}
+	}
+	return summary
 }
 
 func readOnlyPrepareCeilDiv64(n, d int64) int64 {

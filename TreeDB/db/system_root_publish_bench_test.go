@@ -182,9 +182,14 @@ func BenchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_WarmSingle
 	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, orderedRootBatchGroupWarmBenchOptions{prepareReadOnly: true, reusePrepare: true})
 }
 
+func BenchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_WarmSingleRootReadOnlyPrepareWorkerStats(b *testing.B) {
+	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, orderedRootBatchGroupWarmBenchOptions{prepareReadOnly: true, prepareWorkerCount: 3})
+}
+
 type orderedRootBatchGroupWarmBenchOptions struct {
-	prepareReadOnly bool
-	reusePrepare    bool
+	prepareReadOnly    bool
+	reusePrepare       bool
+	prepareWorkerCount int
 }
 
 func benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b *testing.B, benchOpts orderedRootBatchGroupWarmBenchOptions) {
@@ -211,8 +216,9 @@ func benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleR
 	defer func() { _ = right.Close() }()
 
 	ordered := []OrderedRootDeltaBatchPublishInput{{
-		StoragePolicy:   OrderedRootStorageDefault,
-		PrepareReadOnly: benchOpts.prepareReadOnly,
+		StoragePolicy:              OrderedRootStorageDefault,
+		PrepareReadOnly:            benchOpts.prepareReadOnly,
+		ReadOnlyPrepareWorkerCount: benchOpts.prepareWorkerCount,
 	}}
 	var prepared zipper.ReadOnlyPrepareResult
 	systemKey := []byte("sys/collections/users/primary")
