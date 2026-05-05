@@ -206,6 +206,10 @@ type DB struct {
 	orderedRootDeltaGroupRootApplyLeafLogRecordHintBytesRead    atomic.Uint64
 	orderedRootDeltaGroupRootApplyLeafMerges                    atomic.Uint64
 	orderedRootDeltaGroupRootApplyInternalMerges                atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalParallelMerges        atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalParallelChildren      atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalParallelWorkers       atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalParallelOps           atomic.Uint64
 	orderedRootDeltaGroupRootApplyLeafPagesWritten              atomic.Uint64
 	orderedRootDeltaGroupRootApplyPagerLeafPagesWritten         atomic.Uint64
 	orderedRootDeltaGroupRootApplyLeafLogPagesWritten           atomic.Uint64

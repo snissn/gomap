@@ -1201,6 +1201,10 @@ func mergeOrderedRootPublishMetrics(dst *adaptive.Metrics, src adaptive.Metrics)
 	dst.ZipperLeafLogRecordHintBytesRead += src.ZipperLeafLogRecordHintBytesRead
 	dst.ZipperLeafMerges += src.ZipperLeafMerges
 	dst.ZipperInternalMerges += src.ZipperInternalMerges
+	dst.ZipperInternalParallelMerges += src.ZipperInternalParallelMerges
+	dst.ZipperInternalParallelChildren += src.ZipperInternalParallelChildren
+	dst.ZipperInternalParallelWorkers += src.ZipperInternalParallelWorkers
+	dst.ZipperInternalParallelOps += src.ZipperInternalParallelOps
 	dst.ZipperLeafPagesWritten += src.ZipperLeafPagesWritten
 	dst.ZipperPagerLeafPagesWritten += src.ZipperPagerLeafPagesWritten
 	dst.ZipperLeafLogPagesWritten += src.ZipperLeafLogPagesWritten

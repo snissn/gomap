@@ -1021,6 +1021,22 @@ func recordZipperInternalLeafLogRefCopy(metrics *adaptive.Metrics) {
 	metrics.ZipperInternalLeafLogRefCopies++
 }
 
+func recordZipperInternalParallelMerge(metrics *adaptive.Metrics, activeChildren, workers, ops int) {
+	if metrics == nil {
+		return
+	}
+	metrics.ZipperInternalParallelMerges++
+	if activeChildren > 0 {
+		metrics.ZipperInternalParallelChildren += activeChildren
+	}
+	if workers > 0 {
+		metrics.ZipperInternalParallelWorkers += workers
+	}
+	if ops > 0 {
+		metrics.ZipperInternalParallelOps += ops
+	}
+}
+
 func validateLoadedLeafLogNode(data []byte) (node.Node, error) {
 	if len(data) != page.PageSize {
 		return node.Node{}, errors.New("zipper: leaf page has invalid size")
@@ -2512,6 +2528,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		if maxParallel < 1 {
 			maxParallel = 1
 		}
+		recordZipperInternalParallelMerge(metrics, activeChildren, maxParallel, len(ops))
 		for i := range children {
 			if len(children[i].ops) == 0 {
 				children[i].newChild = children[i].child
@@ -2677,6 +2694,12 @@ func mergeMetrics(dst, src *adaptive.Metrics) {
 	dst.ZipperLeafLogRecordHintBytesRead += src.ZipperLeafLogRecordHintBytesRead
 	dst.ZipperLeafMerges += src.ZipperLeafMerges
 	dst.ZipperInternalMerges += src.ZipperInternalMerges
+	if src.ZipperInternalParallelMerges != 0 {
+		dst.ZipperInternalParallelMerges += src.ZipperInternalParallelMerges
+		dst.ZipperInternalParallelChildren += src.ZipperInternalParallelChildren
+		dst.ZipperInternalParallelWorkers += src.ZipperInternalParallelWorkers
+		dst.ZipperInternalParallelOps += src.ZipperInternalParallelOps
+	}
 	dst.ZipperLeafPagesWritten += src.ZipperLeafPagesWritten
 	dst.ZipperPagerLeafPagesWritten += src.ZipperPagerLeafPagesWritten
 	dst.ZipperLeafLogPagesWritten += src.ZipperLeafLogPagesWritten
