@@ -1883,12 +1883,15 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
 	commitStarted = true
+	committedRootPages := rootTracker.Pages()
+	committedSystemPages := systemTracker.Pages()
 	err = db.finalizeCommit(userRoot, newSystemRoot, pendingRetiredPages, false, merged, nil, true, vlogRefDelta, nil, nil)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
 	if err != nil {
 		return 0, nil, err
 	}
+	db.invalidateLeafGenerationSubtreeStats(append(committedRootPages, committedSystemPages...))
 	observePreparedGroup(preparedRootApplyStateInstalled)
 	return newSystemRoot, rootIDs, nil
 }
