@@ -1074,7 +1074,8 @@ type ReadOnlyLeafSpan struct {
 
 // ReadOnlyLeafSpanSummary is a compact, allocation-free summary of a read-only
 // leaf-span plan. It is intended for callers and benchmarks that need to
-// report span distribution without walking or retaining the span slice.
+// report span distribution without requiring each caller to walk or retain the
+// span slice.
 type ReadOnlyLeafSpanSummary struct {
 	Ops            int
 	Spans          int
@@ -1082,6 +1083,7 @@ type ReadOnlyLeafSpanSummary struct {
 	ColdBuild      bool
 	Maintenance    bool
 
+	// MinSpanOps and MaxSpanOps are zero when Spans is zero.
 	MinSpanOps    int
 	MaxSpanOps    int
 	SingleOpSpans int
