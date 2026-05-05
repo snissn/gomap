@@ -9,6 +9,39 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
+func TestIndexedSemanticValueSetDiffFastPathsMatchMultiValueSemantics(t *testing.T) {
+	empty := make([][]byte, 0)
+	deletes, sets := indexedSemanticValueSetDiff(nil, empty)
+	if deletes != nil || sets != nil {
+		t.Fatalf("nil/empty diff got deletes=%v sets=%v want nil/nil", deletes, sets)
+	}
+
+	base := [][]byte{[]byte("a")}
+	final := [][]byte{[]byte("b")}
+	deletes, sets = indexedSemanticValueSetDiff(base, final)
+	if got, want := string(deletes[0]), "a"; got != want {
+		t.Fatalf("delete value=%q want %q", got, want)
+	}
+	if got, want := string(sets[0]), "b"; got != want {
+		t.Fatalf("set value=%q want %q", got, want)
+	}
+
+	base[0] = []byte("base-replaced")
+	final[0] = []byte("final-replaced")
+	if got, want := string(deletes[0]), "a"; got != want {
+		t.Fatalf("delete alias changed after base replacement: got %q want %q", got, want)
+	}
+	if got, want := string(sets[0]), "b"; got != want {
+		t.Fatalf("set alias changed after final replacement: got %q want %q", got, want)
+	}
+
+	_, sets = indexedSemanticValueSetDiff(nil, final)
+	final[0] = []byte("second-replacement")
+	if got, want := string(sets[0]), "final-replaced"; got != want {
+		t.Fatalf("set-only alias changed after final replacement: got %q want %q", got, want)
+	}
+}
+
 func TestPR3bSemanticRawRecordsSurviveMutableQueuedActiveRequeued(t *testing.T) {
 	d, mgr, col := pr3bSemanticTestCollection(t)
 	defer func() { _ = d.Close() }()

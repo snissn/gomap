@@ -529,6 +529,20 @@ func TestPhaseResultJSONIncludesTreeDBStatsDelta(t *testing.T) {
 	}
 }
 
+func TestPhaseResultJSONIncludesZeroTreeDBDrainMillis(t *testing.T) {
+	phase := phaseResult{
+		Name:       "load",
+		Operations: 1,
+	}
+	raw, err := json.Marshal(phase)
+	if err != nil {
+		t.Fatalf("marshal phase: %v", err)
+	}
+	if !bytes.Contains(raw, []byte(`"treedb_drain_ms":0`)) {
+		t.Fatalf("phase JSON missing explicit zero treedb_drain_ms: %s", raw)
+	}
+}
+
 func TestAttachTreeDBDrainStatsPreservesPhaseLocalDelta(t *testing.T) {
 	phase := summarizePhase("concurrent_id_update_set_w2", 10, 10, time.Second, nil)
 	attachTreeDBDrainStats(&phase,

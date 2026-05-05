@@ -159,7 +159,7 @@ type phaseResult struct {
 	DriverMeanLatencyMicros float64            `json:"driver_mean_latency_us,omitempty"`
 	LatencyMicros           latencySummary     `json:"latency_micros"`
 	ProducerResults         []producerResult   `json:"producer_results,omitempty"`
-	TreeDBDrainMillis       float64            `json:"treedb_drain_ms,omitempty"`
+	TreeDBDrainMillis       float64            `json:"treedb_drain_ms"`
 	TreeDBDrainStatsDelta   map[string]string  `json:"treedb_drain_stats_delta,omitempty"`
 	TreeDBStatsDelta        map[string]string  `json:"treedb_stats_delta,omitempty"`
 	TreeDBMetrics           map[string]float64 `json:"treedb_metrics,omitempty"`
@@ -2170,9 +2170,7 @@ func attachTreeDBDrainStats(result *phaseResult, before, after map[string]string
 	if result == nil {
 		return
 	}
-	if elapsed > 0 {
-		result.TreeDBDrainMillis = float64(elapsed) / float64(time.Millisecond)
-	}
+	result.TreeDBDrainMillis = float64(elapsed) / float64(time.Millisecond)
 	delta, _ := treeDBStatsDelta(before, after)
 	if len(delta) > 0 {
 		result.TreeDBDrainStatsDelta = delta
