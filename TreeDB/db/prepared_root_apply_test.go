@@ -291,3 +291,157 @@ func TestOrderedRootDeltaBatchGroupPreparedRootMetadataRecordsOptimisticBuilderE
 		t.Fatalf("prepared abandoned delta=%d want 1", got)
 	}
 }
+
+func TestOrderedRootDeltaBatchGroupPreparedRootMetadataRecordsOptimisticFallbackToSerialized(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "root/a", "va").NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root: %v", err)
+	}
+	seedDeltaTable := mustFrozenSystemMemtable(t, "root/b", "vb")
+	seedIter := seedDeltaTable.NewIterator(nil, nil)
+	seedDelta, err := OrderedRootDeltaBatchFromIterator(seedIter)
+	_ = seedIter.Close()
+	if err != nil {
+		t.Fatalf("seed OrderedRootDeltaBatchFromIterator: %v", err)
+	}
+	defer func() { _ = seedDelta.Close() }()
+	_, seedRootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+		BaseRoot:      baseRoot,
+		Delta:         seedDelta,
+		StoragePolicy: OrderedRootStoragePagerLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, "sys/collections/users/primary", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("seed publish ordered root group: %v", err)
+	}
+	if len(seedRootIDs) != 1 || seedRootIDs[0] == 0 {
+		t.Fatalf("seed root IDs=%v want one nonzero root", seedRootIDs)
+	}
+
+	beforeStats := db.Stats()
+	targetDeltaTable := mustFrozenSystemMemtable(t, "root/c", "vc")
+	targetIter := targetDeltaTable.NewIterator(nil, nil)
+	targetDelta, err := OrderedRootDeltaBatchFromIterator(targetIter)
+	_ = targetIter.Close()
+	if err != nil {
+		t.Fatalf("target OrderedRootDeltaBatchFromIterator: %v", err)
+	}
+	defer func() { _ = targetDelta.Close() }()
+
+	builderCalls := 0
+	systemRoot, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+		BaseRoot:      seedRootIDs[0],
+		Delta:         targetDelta,
+		StoragePolicy: OrderedRootStoragePagerLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 || rootIDs[0] == 0 {
+			return nil, errors.New("unexpected target root IDs")
+		}
+		builderCalls++
+		if builderCalls <= orderedRootOptimisticSystemDeltaRebaseMaxAttempts {
+			if err := publishPreparedRootMetadataSystemRootChange(t, db, builderCalls); err != nil {
+				return nil, err
+			}
+		}
+		return mustFrozenSystemMemtable(t,
+			"sys/collections/users/primary",
+			strconv.FormatUint(rootIDs[0], 10),
+		).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish ordered root group after optimistic fallback: %v", err)
+	}
+	if systemRoot == 0 || len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("systemRoot=%d rootIDs=%v want nonzero roots", systemRoot, rootIDs)
+	}
+	if builderCalls != orderedRootOptimisticSystemDeltaRebaseMaxAttempts+1 {
+		t.Fatalf("builder calls=%d want %d", builderCalls, orderedRootOptimisticSystemDeltaRebaseMaxAttempts+1)
+	}
+
+	afterStats := db.Stats()
+	statDelta := func(name string) uint64 {
+		after := installGuardStatUint(t, afterStats, name)
+		before := installGuardStatUint(t, beforeStats, name)
+		if after < before {
+			t.Fatalf("%s decreased: before=%d after=%d", name, before, after)
+		}
+		return after - before
+	}
+
+	attempts := uint64(orderedRootOptimisticSystemDeltaRebaseMaxAttempts)
+	wantCalls := attempts + 1
+	if got := statDelta("treedb.publish.ordered_root_delta_group.calls_total"); got != wantCalls {
+		t.Fatalf("ordered root publish calls delta=%d want %d", got, wantCalls)
+	}
+	wantPreparedGroups := wantCalls + 1
+	if got := statDelta("treedb.publish.ordered_root_delta_group.prepared_root.groups_total"); got != wantPreparedGroups {
+		t.Fatalf("prepared groups delta=%d want %d", got, wantPreparedGroups)
+	}
+	wantAbandonedRoots := attempts + 1
+	if got := statDelta("treedb.publish.ordered_root_delta_group.prepared_root.abandoned_total"); got != wantAbandonedRoots {
+		t.Fatalf("prepared abandoned delta=%d want %d", got, wantAbandonedRoots)
+	}
+	wantInstalledRoots := attempts*2 + 2
+	if got := statDelta("treedb.publish.ordered_root_delta_group.prepared_root.installed_total"); got != wantInstalledRoots {
+		t.Fatalf("prepared installed delta=%d want %d", got, wantInstalledRoots)
+	}
+	wantPreparedRoots := wantAbandonedRoots + wantInstalledRoots
+	if got := statDelta("treedb.publish.ordered_root_delta_group.prepared_root.roots_total"); got != wantPreparedRoots {
+		t.Fatalf("prepared roots delta=%d want %d", got, wantPreparedRoots)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	entry, err := snap.GetEntryAtRoot(rootIDs[0], []byte("root/c"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(root/c): %v", err)
+	}
+	if got := string(entry.Value); got != "vc" {
+		t.Fatalf("root/c=%q want vc", got)
+	}
+}
+
+func publishPreparedRootMetadataSystemRootChange(t *testing.T, db *DB, ordinal int) error {
+	t.Helper()
+	deltaTable := mustFrozenSystemMemtable(t,
+		"root/concurrent/"+strconv.Itoa(ordinal),
+		"value-"+strconv.Itoa(ordinal),
+	)
+	iter := deltaTable.NewIterator(nil, nil)
+	delta, err := OrderedRootDeltaBatchFromIterator(iter)
+	_ = iter.Close()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = delta.Close() }()
+	_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{{
+		BaseRoot:      0,
+		Delta:         delta,
+		StoragePolicy: OrderedRootStoragePagerLeaves,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 || rootIDs[0] == 0 {
+			return nil, errors.New("unexpected concurrent root IDs")
+		}
+		return mustFrozenSystemMemtable(t,
+			"sys/concurrent/"+strconv.Itoa(ordinal),
+			strconv.FormatUint(rootIDs[0], 10),
+		).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		return err
+	}
+	if len(rootIDs) != 1 || rootIDs[0] == 0 {
+		return errors.New("concurrent publish returned invalid root IDs")
+	}
+	return nil
+}

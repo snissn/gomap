@@ -69,7 +69,7 @@ type preparedRootApplyStats struct {
 }
 
 const (
-	preparedRootPlanChecksumOffset = 1469598103934665603
+	preparedRootPlanChecksumOffset = 14695981039346656037
 	preparedRootPlanChecksumPrime  = 1099511628211
 )
 
