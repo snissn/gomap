@@ -39,36 +39,46 @@ type preparedRootDeltaPlanSummary struct {
 }
 
 type preparedRootApply struct {
-	identity     preparedRootIdentity
-	baseRootID   uint64
-	preparedRoot uint64
-	outputID     preparedOutputID
-	output       preparedOutputSnapshot
-	prepared     bool
-	storage      OrderedRootStoragePolicy
-	plan         preparedRootDeltaPlanSummary
-	state        preparedRootApplyState
+	identity          preparedRootIdentity
+	baseRootID        uint64
+	preparedRoot      uint64
+	outputID          preparedOutputID
+	output            preparedOutputSnapshot
+	outputPages       uint64
+	outputLeafLogPtrs uint64
+	prepared          bool
+	storage           OrderedRootStoragePolicy
+	plan              preparedRootDeltaPlanSummary
+	state             preparedRootApplyState
 }
 
 type preparedRootApplyGroup struct {
-	baseUserRootID   uint64
-	baseSystemRootID uint64
-	state            preparedRootApplyState
-	applyCount       int
-	inlineApplies    [4]preparedRootApply
-	overflowApplies  []preparedRootApply
+	baseUserRootID    uint64
+	baseSystemRootID  uint64
+	outputPages       uint64
+	outputLeafLogPtrs uint64
+	state             preparedRootApplyState
+	applyCount        int
+	inlineApplies     [4]preparedRootApply
+	overflowApplies   []preparedRootApply
 }
 
 type preparedRootApplyStats struct {
-	groups        uint64
-	roots         uint64
-	entries       uint64
-	tombstones    uint64
-	keyBytes      uint64
-	valueBytes    uint64
-	pointerValues uint64
-	installed     uint64
-	abandoned     uint64
+	groups               uint64
+	roots                uint64
+	entries              uint64
+	tombstones           uint64
+	keyBytes             uint64
+	valueBytes           uint64
+	pointerValues        uint64
+	installed            uint64
+	abandoned            uint64
+	outputPages          uint64
+	outputLeafLogPtrs    uint64
+	installedPages       uint64
+	installedLeafLogPtrs uint64
+	abandonedPages       uint64
+	abandonedLeafLogPtrs uint64
 }
 
 const (
@@ -174,19 +184,36 @@ func (group *preparedRootApplyGroup) setSystemRoot(baseRootID uint64, delta *bat
 }
 
 func (group *preparedRootApplyGroup) markPrepared(idx int, rootID uint64, outputID preparedOutputID) {
-	group.markPreparedOutput(idx, rootID, preparedOutputSnapshot{ID: outputID})
+	group.markPreparedOutputCounts(idx, rootID, outputID, 0, 0)
 }
 
 func (group *preparedRootApplyGroup) markPreparedOutput(idx int, rootID uint64, output preparedOutputSnapshot) {
+	group.markPreparedOutputCounts(idx, rootID, output.ID, uint64(len(output.Pages)), uint64(len(output.LeafLogPtrs)))
+	apply := group.applyAt(idx)
+	if apply != nil {
+		apply.output = clonePreparedOutputSnapshot(output)
+	}
+}
+
+func (group *preparedRootApplyGroup) markPreparedOutputCounts(idx int, rootID uint64, outputID preparedOutputID, outputPages, outputLeafLogPtrs uint64) {
 	apply := group.applyAt(idx)
 	if apply == nil {
 		return
 	}
 	apply.preparedRoot = rootID
-	apply.outputID = output.ID
-	apply.output = clonePreparedOutputSnapshot(output)
+	apply.outputID = outputID
+	apply.outputPages = outputPages
+	apply.outputLeafLogPtrs = outputLeafLogPtrs
 	apply.prepared = true
 	apply.state = preparedRootApplyStatePrepared
+}
+
+func (group *preparedRootApplyGroup) noteSharedOutputCounts(outputPages, outputLeafLogPtrs uint64) {
+	if group == nil {
+		return
+	}
+	group.outputPages = outputPages
+	group.outputLeafLogPtrs = outputLeafLogPtrs
 }
 
 func (group *preparedRootApplyGroup) markInstalling() {
@@ -240,12 +267,26 @@ func (stats *preparedRootApplyStats) observeGroup(group *preparedRootApplyGroup)
 			continue
 		}
 		groupStats.roots++
+		outputPages := apply.outputPages
+		outputLeafLogPtrs := apply.outputLeafLogPtrs
+		if apply.identity.kind == preparedRootIdentityData {
+			// Data roots in an ordered-root group share one prepared-output
+			// tracker. Count that shared output once at the group level below.
+			outputPages = 0
+			outputLeafLogPtrs = 0
+		}
 		switch apply.state {
 		case preparedRootApplyStateInstalled:
 			groupStats.installed++
+			groupStats.installedPages += outputPages
+			groupStats.installedLeafLogPtrs += outputLeafLogPtrs
 		case preparedRootApplyStateAbandoned:
 			groupStats.abandoned++
+			groupStats.abandonedPages += outputPages
+			groupStats.abandonedLeafLogPtrs += outputLeafLogPtrs
 		}
+		groupStats.outputPages += outputPages
+		groupStats.outputLeafLogPtrs += outputLeafLogPtrs
 		plan := apply.plan
 		groupStats.entries += plan.entries
 		groupStats.tombstones += plan.tombstones
@@ -255,6 +296,16 @@ func (stats *preparedRootApplyStats) observeGroup(group *preparedRootApplyGroup)
 	}
 	if groupStats.roots == 0 {
 		return
+	}
+	groupStats.outputPages += group.outputPages
+	groupStats.outputLeafLogPtrs += group.outputLeafLogPtrs
+	switch group.state {
+	case preparedRootApplyStateInstalled:
+		groupStats.installedPages += group.outputPages
+		groupStats.installedLeafLogPtrs += group.outputLeafLogPtrs
+	case preparedRootApplyStateAbandoned:
+		groupStats.abandonedPages += group.outputPages
+		groupStats.abandonedLeafLogPtrs += group.outputLeafLogPtrs
 	}
 	groupStats.groups = 1
 	stats.groups += groupStats.groups
@@ -266,6 +317,12 @@ func (stats *preparedRootApplyStats) observeGroup(group *preparedRootApplyGroup)
 	stats.pointerValues += groupStats.pointerValues
 	stats.installed += groupStats.installed
 	stats.abandoned += groupStats.abandoned
+	stats.outputPages += groupStats.outputPages
+	stats.outputLeafLogPtrs += groupStats.outputLeafLogPtrs
+	stats.installedPages += groupStats.installedPages
+	stats.installedLeafLogPtrs += groupStats.installedLeafLogPtrs
+	stats.abandonedPages += groupStats.abandonedPages
+	stats.abandonedLeafLogPtrs += groupStats.abandonedLeafLogPtrs
 }
 
 func observePreparedRootApplyGroup(db *DB, phases *orderedRootDeltaGroupPublishPhaseStats, group *preparedRootApplyGroup, state preparedRootApplyState) {
@@ -290,9 +347,11 @@ func observePreparedRootApplyGroup(db *DB, phases *orderedRootDeltaGroupPublishP
 
 func clonePreparedRootApplyGroup(src preparedRootApplyGroup) preparedRootApplyGroup {
 	dst := preparedRootApplyGroup{
-		baseUserRootID:   src.baseUserRootID,
-		baseSystemRootID: src.baseSystemRootID,
-		state:            src.state,
+		baseUserRootID:    src.baseUserRootID,
+		baseSystemRootID:  src.baseSystemRootID,
+		outputPages:       src.outputPages,
+		outputLeafLogPtrs: src.outputLeafLogPtrs,
+		state:             src.state,
 	}
 	for i := 0; i < src.applyCount; i++ {
 		srcApply := src.applyAt(i)

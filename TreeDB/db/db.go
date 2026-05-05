@@ -223,17 +223,23 @@ type DB struct {
 	orderedRootDeltaGroupFinalizeNs                             atomic.Uint64
 	orderedRootDeltaGroupFinalizeCalls                          atomic.Uint64
 
-	orderedRootDeltaGroupPreparedRootPrepareNs     atomic.Uint64
-	orderedRootDeltaGroupPreparedRootGroups        atomic.Uint64
-	orderedRootDeltaGroupPreparedRootRoots         atomic.Uint64
-	orderedRootDeltaGroupPreparedRootEntries       atomic.Uint64
-	orderedRootDeltaGroupPreparedRootTombstones    atomic.Uint64
-	orderedRootDeltaGroupPreparedRootKeyBytes      atomic.Uint64
-	orderedRootDeltaGroupPreparedRootValueBytes    atomic.Uint64
-	orderedRootDeltaGroupPreparedRootPointerValues atomic.Uint64
-	orderedRootDeltaGroupPreparedRootInstalled     atomic.Uint64
-	orderedRootDeltaGroupPreparedRootAbandoned     atomic.Uint64
-	preparedOutputNextID                           atomic.Uint64
+	orderedRootDeltaGroupPreparedRootPrepareNs            atomic.Uint64
+	orderedRootDeltaGroupPreparedRootGroups               atomic.Uint64
+	orderedRootDeltaGroupPreparedRootRoots                atomic.Uint64
+	orderedRootDeltaGroupPreparedRootEntries              atomic.Uint64
+	orderedRootDeltaGroupPreparedRootTombstones           atomic.Uint64
+	orderedRootDeltaGroupPreparedRootKeyBytes             atomic.Uint64
+	orderedRootDeltaGroupPreparedRootValueBytes           atomic.Uint64
+	orderedRootDeltaGroupPreparedRootPointerValues        atomic.Uint64
+	orderedRootDeltaGroupPreparedRootInstalled            atomic.Uint64
+	orderedRootDeltaGroupPreparedRootAbandoned            atomic.Uint64
+	orderedRootDeltaGroupPreparedRootOutputPages          atomic.Uint64
+	orderedRootDeltaGroupPreparedRootOutputLeafLogPtrs    atomic.Uint64
+	orderedRootDeltaGroupPreparedRootInstalledPages       atomic.Uint64
+	orderedRootDeltaGroupPreparedRootInstalledLeafLogPtrs atomic.Uint64
+	orderedRootDeltaGroupPreparedRootAbandonedPages       atomic.Uint64
+	orderedRootDeltaGroupPreparedRootAbandonedLeafLogPtrs atomic.Uint64
+	preparedOutputNextID                                  atomic.Uint64
 
 	publishInstallGuardNs                   atomic.Uint64
 	publishInstallGuardCalls                atomic.Uint64

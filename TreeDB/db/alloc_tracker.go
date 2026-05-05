@@ -74,6 +74,15 @@ func (t *allocTracker) PreparedOutputSnapshot() preparedOutputSnapshot {
 	}
 }
 
+func (t *allocTracker) PreparedOutputCounts() (pages, leafLogPtrs uint64) {
+	if t == nil {
+		return 0, 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return uint64(len(t.pages)), uint64(len(t.leafLogPtrs))
+}
+
 func (t *allocTracker) notePreparedLeafLogPtr(ptr page.LeafLogPtr) {
 	if t == nil {
 		return
