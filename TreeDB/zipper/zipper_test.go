@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -29,10 +30,13 @@ func (m *MockAllocator) Alloc(hint uint64) (uint64, error) {
 
 type recyclingMockAllocator struct {
 	p       *pager.Pager
+	mu      sync.Mutex
 	retired []uint64
 }
 
 func (m *recyclingMockAllocator) Alloc(hint uint64) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	n := len(m.retired)
 	if n > 0 {
 		id := m.retired[n-1]
@@ -43,6 +47,8 @@ func (m *recyclingMockAllocator) Alloc(hint uint64) (uint64, error) {
 }
 
 func (m *recyclingMockAllocator) Recycle(ids []uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.retired = append(m.retired, ids...)
 }
 
