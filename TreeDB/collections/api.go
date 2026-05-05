@@ -6034,6 +6034,12 @@ func indexedSemanticValueSetsEqual(left, right [][]byte) bool {
 	if len(left) != len(right) {
 		return false
 	}
+	switch len(left) {
+	case 0:
+		return true
+	case 1:
+		return bytes.Equal(left[0], right[0])
+	}
 	seen := make(map[string]int, len(left))
 	for _, value := range left {
 		seen[string(value)]++
@@ -6049,6 +6055,18 @@ func indexedSemanticValueSetsEqual(left, right [][]byte) bool {
 }
 
 func indexedSemanticValueSetDiff(base, final [][]byte) (deletes, sets [][]byte) {
+	if len(base) == 0 {
+		return nil, final
+	}
+	if len(final) == 0 {
+		return base, nil
+	}
+	if len(base) == 1 && len(final) == 1 {
+		if bytes.Equal(base[0], final[0]) {
+			return nil, nil
+		}
+		return base, final
+	}
 	baseCounts := make(map[string]int, len(base))
 	for _, value := range base {
 		baseCounts[string(value)]++
