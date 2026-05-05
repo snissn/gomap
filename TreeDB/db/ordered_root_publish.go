@@ -1730,9 +1730,9 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 
 	rootTracker := newAllocTracker(idxGen.allocator)
 	systemTracker := newAllocTracker(idxGen.allocator)
-	commitStarted := false
+	commitFinished := false
 	defer func() {
-		if err != nil && !commitStarted {
+		if err != nil && !commitFinished {
 			_ = rootTracker.FreeAll()
 			_ = systemTracker.FreeAll()
 		}
@@ -1807,7 +1807,6 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	// conservative by invalidating it after commit.
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
-	commitStarted = true
 	committedRootPages := rootTracker.Pages()
 	committedSystemPages := systemTracker.Pages()
 	err = db.finalizeCommit(userRoot, newSystemRoot, pendingRetiredPages, false, merged, nil, true, vlogRefDelta, nil, nil)
@@ -1816,6 +1815,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	if err != nil {
 		return 0, nil, err
 	}
+	commitFinished = true
 	db.invalidateLeafGenerationSubtreeStats(append(committedRootPages, committedSystemPages...))
 	return newSystemRoot, rootIDs, nil
 }
