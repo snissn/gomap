@@ -4967,10 +4967,10 @@ func TestCollectionIndexedWriteMemtablesAsyncBackpressureWaitsForPublishingUnit(
 	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
 		t.Fatal("timed out waiting for backpressure flush to wait on in-flight async publish")
 	}
-	releaseWait()
-	if got := mgr.StatsSnapshot().IndexedAsyncFlushBackpressure; got == 0 {
+	if got := col.writeDomain.indexedAsyncFlushBackpressure.Load(); got == 0 {
 		t.Fatal("async backpressure did not wait for in-flight publishing unit")
 	}
+	releaseWait()
 
 	publishDone := make(chan error, 1)
 	go func() {

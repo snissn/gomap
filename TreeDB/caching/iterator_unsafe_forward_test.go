@@ -167,9 +167,18 @@ func TestIteratorWrappersFallbackToSafeCopiesWithoutUnsafeViews(t *testing.T) {
 		}
 	}
 
-	if base.keyCalls != 3 || base.valueCalls != 3 || base.keyCopyCalls != 0 || base.valueCopyCalls != 0 {
+	if base.keyCalls != 0 || base.valueCalls != 0 {
 		t.Fatalf(
-			"safe iterator fallback calls: key=%d value=%d keyCopy=%d valueCopy=%d",
+			"safe iterator fallback used allocating accessors: key=%d value=%d keyCopy=%d valueCopy=%d",
+			base.keyCalls,
+			base.valueCalls,
+			base.keyCopyCalls,
+			base.valueCopyCalls,
+		)
+	}
+	if base.keyCopyCalls == 0 || base.valueCopyCalls == 0 {
+		t.Fatalf(
+			"safe iterator fallback did not use copy accessors: key=%d value=%d keyCopy=%d valueCopy=%d",
 			base.keyCalls,
 			base.valueCalls,
 			base.keyCopyCalls,
