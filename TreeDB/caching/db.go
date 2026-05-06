@@ -7471,12 +7471,26 @@ func (db *DB) releaseClosingEmptyMemtables() {
 		if view.refs.Load() > 0 {
 			view.closingEmptyMems = append(view.closingEmptyMems, view.mutables...)
 			db.releasePublishedMemtableView(view)
+		} else {
+			db.releaseClosingMemtableViewContents(view)
 		}
+		return
+	}
+	db.releaseClosingMemtableViewContents(view)
+}
+
+func (db *DB) releaseClosingMemtableViewContents(view *memtableView) {
+	if db == nil || view == nil {
 		return
 	}
 	for _, mt := range view.mutables {
 		db.releaseClosingEmptyMemtable(mt)
 	}
+	view.mutables = nil
+	for _, mt := range view.closingEmptyMems {
+		db.releaseClosingEmptyMemtable(mt)
+	}
+	view.closingEmptyMems = nil
 	db.recycleMemtables(view.retiredMems)
 	view.retiredMems = nil
 }
