@@ -11393,10 +11393,15 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		return false, err
 	}
 	semanticRecords := plan.semanticRecords
+	semanticRecordsObserved := false
 	if len(semanticRecords) > 0 {
 		phaseStart = updateBatchStatsNow(detailedStats)
 		appendIndexedSemanticRecordsLocked(domain, semanticRecords)
 		plan.stats.BufferStageSemanticAppend += updateBatchStatsSince(detailedStats, phaseStart)
+		if !shouldAutoFlushAfterAdding {
+			domain.observeIndexedSemanticRawRecords(semanticRecords)
+			semanticRecordsObserved = true
+		}
 	}
 	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
 		flushDuration, lockReleased, relockWait, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options)
@@ -11414,7 +11419,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		}
 	}
 	resetCollectionTables(compactedObsolete)
-	if len(semanticRecords) > 0 {
+	if len(semanticRecords) > 0 && !semanticRecordsObserved {
 		domain.observeIndexedSemanticRawRecords(semanticRecords)
 	}
 	plan.stats.BufferedBatches = 1
@@ -11650,10 +11655,15 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		return false, err
 	}
 	semanticRecords := plan.semanticRecords
+	semanticRecordsObserved := false
 	if len(semanticRecords) > 0 {
 		phaseStart = updateBatchStatsNow(detailedStats)
 		appendIndexedSemanticRecordsLocked(domain, semanticRecords)
 		plan.stats.BufferStageSemanticAppend += updateBatchStatsSince(detailedStats, phaseStart)
+		if !shouldAutoFlushAfterAdding {
+			domain.observeIndexedSemanticRawRecords(semanticRecords)
+			semanticRecordsObserved = true
+		}
 	}
 	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
 		flushDuration, lockReleased, relockWait, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options)
@@ -11671,7 +11681,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		}
 	}
 	resetCollectionTables(compactedObsolete)
-	if len(semanticRecords) > 0 {
+	if len(semanticRecords) > 0 && !semanticRecordsObserved {
 		domain.observeIndexedSemanticRawRecords(semanticRecords)
 	}
 	plan.stats.BufferedBatches = 1
