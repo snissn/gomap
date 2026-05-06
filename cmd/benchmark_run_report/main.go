@@ -1790,8 +1790,7 @@ func mongoSameScope(row, scope mongoSummaryRow) bool {
 	return row.Documents == scope.Documents &&
 		row.TreeDBConfig == scope.TreeDBConfig &&
 		row.MongoConfig == scope.MongoConfig &&
-		row.RangeIndex == scope.RangeIndex &&
-		row.RangeMode == scope.RangeMode
+		row.RangeIndex == scope.RangeIndex
 }
 
 func mongoSweepCounts(rows []mongoSummaryRow, idx int, prefix string) []int {
