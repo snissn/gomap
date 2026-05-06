@@ -174,6 +174,41 @@ func TestReleaseClosingEmptyMemtablesDefersCleanupForRetainedView(t *testing.T) 
 	}
 }
 
+func TestReleaseClosingEmptyMemtablesCleansZeroRefPublishedView(t *testing.T) {
+	db := &DB{}
+	mutable := &releaseTrackingMemtable{AppendOnly: memtable.NewAppendOnlyWithCapacity(0)}
+	retired := memtable.NewAppendOnlyWithCapacity(0)
+	retired.Set([]byte("retired"), []byte("value"))
+	retired.Freeze()
+
+	view := &memtableView{
+		mutables:    []memtable.Table{mutable},
+		retiredMems: []memtable.Table{retired},
+	}
+	db.memtables.Store(view)
+
+	db.releaseClosingEmptyMemtables()
+
+	if got := db.memtables.Load(); got != nil {
+		t.Fatalf("published view after close cleanup=%p want nil", got)
+	}
+	if refs := view.refs.Load(); refs != 0 {
+		t.Fatalf("view refs after closing cleanup=%d want=0", refs)
+	}
+	if !mutable.released {
+		t.Fatalf("mutable was not released")
+	}
+	if got := retired.Len(); got != 0 {
+		t.Fatalf("retired memtable len after cleanup=%d want=0", got)
+	}
+	if got := len(view.mutables); got != 0 {
+		t.Fatalf("mutable memtables not cleared len=%d", got)
+	}
+	if got := len(view.retiredMems); got != 0 {
+		t.Fatalf("retired memtables not cleared len=%d", got)
+	}
+}
+
 func TestPutAppendOnlyMemLease_RespectsCap(t *testing.T) {
 	db := &DB{}
 	for i := 0; i < maxAppendOnlyMemLeases+8; i++ {
