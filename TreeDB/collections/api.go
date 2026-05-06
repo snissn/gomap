@@ -6545,7 +6545,7 @@ func (it *collectionRootDeltaStatsIterator) observeCurrent() {
 	if it == nil || it.inner == nil || it.observed || !it.inner.Valid() {
 		return
 	}
-	key := it.inner.Key()
+	key := it.inner.UnsafeKey()
 	value, _, flags := it.inner.UnsafeEntry()
 	keyBytes := uint64(len(key))
 	valueBytes := uint64(0)
@@ -6646,6 +6646,42 @@ func (it *collectionRootDeltaStatsIterator) Domain() (start, end []byte) {
 		return nil, nil
 	}
 	return it.inner.Domain()
+}
+
+func (it *collectionRootDeltaStatsIterator) StableUnsafeIteratorSlices() bool {
+	if it == nil || it.inner == nil {
+		return false
+	}
+	type stableUnsafeIterator interface {
+		StableUnsafeIteratorSlices() bool
+	}
+	stable, ok := it.inner.(stableUnsafeIterator)
+	return ok && stable.StableUnsafeIteratorSlices()
+}
+
+func (it *collectionRootDeltaStatsIterator) OrderedUniqueUnsafeIterator() bool {
+	if it == nil || it.inner == nil {
+		return false
+	}
+	type orderedUniqueIterator interface {
+		OrderedUniqueUnsafeIterator() bool
+	}
+	trusted, ok := it.inner.(orderedUniqueIterator)
+	return ok && trusted.OrderedUniqueUnsafeIterator()
+}
+
+func (it *collectionRootDeltaStatsIterator) Len() int {
+	if it == nil || it.inner == nil || !it.inner.Valid() {
+		return 0
+	}
+	type lenHintIterator interface {
+		Len() int
+	}
+	hint, ok := it.inner.(lenHintIterator)
+	if !ok {
+		return 0
+	}
+	return hint.Len()
 }
 
 func (stats *collectionRootDeltaPlanStats) detailForKind(kind collectionRootDeltaPlanKind) *collectionRootDeltaKindStats {

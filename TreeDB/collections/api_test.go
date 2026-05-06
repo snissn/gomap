@@ -1480,6 +1480,60 @@ func TestCollectionRootDeltaPlanStatsCountsPointerValueBytes(t *testing.T) {
 	}
 }
 
+func TestCollectionRootDeltaStatsIteratorPreservesFastPathTraits(t *testing.T) {
+	table := newFreezeSortRunTable()
+	table.Set([]byte("u1"), []byte(`{"city":"hnl"}`))
+	table.Set([]byte("u2"), []byte(`{"city":"sea"}`))
+	table.Freeze()
+
+	var stats collectionRootDeltaPlanStats
+	iter := newCollectionRootDeltaStatsIterator("users", collectionPrimaryRootName("users"), table.NewIterator(nil, nil), &stats)
+	defer func() { _ = iter.Close() }()
+
+	stable, ok := iter.(interface {
+		StableUnsafeIteratorSlices() bool
+	})
+	if !ok {
+		t.Fatalf("stats iterator does not expose StableUnsafeIteratorSlices")
+	}
+	if !stable.StableUnsafeIteratorSlices() {
+		t.Fatalf("stats iterator did not preserve stable unsafe slices")
+	}
+	ordered, ok := iter.(interface {
+		OrderedUniqueUnsafeIterator() bool
+	})
+	if !ok {
+		t.Fatalf("stats iterator does not expose OrderedUniqueUnsafeIterator")
+	}
+	if !ordered.OrderedUniqueUnsafeIterator() {
+		t.Fatalf("stats iterator did not preserve ordered unique iterator trait")
+	}
+	lenHint, ok := iter.(interface {
+		Len() int
+	})
+	if !ok {
+		t.Fatalf("stats iterator does not expose Len hint")
+	}
+	if got, want := lenHint.Len(), 2; got != want {
+		t.Fatalf("stats iterator Len=%d want %d", got, want)
+	}
+
+	delta, err := backenddb.OrderedRootDeltaBatchFromIterator(iter)
+	if err != nil {
+		t.Fatalf("materialize delta: %v", err)
+	}
+	defer func() { _ = delta.Close() }()
+	if got, want := len(delta.SortedEntries()), 2; got != want {
+		t.Fatalf("delta entries=%d want %d", got, want)
+	}
+	if got, want := stats.entries, uint64(2); got != want {
+		t.Fatalf("stats entries=%d want %d", got, want)
+	}
+	if got, want := stats.primaryEntries, uint64(2); got != want {
+		t.Fatalf("primary stats entries=%d want %d", got, want)
+	}
+}
+
 func TestPrimaryOnlyNoIndexUpdateCounters(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
