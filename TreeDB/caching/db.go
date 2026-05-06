@@ -6340,15 +6340,22 @@ type DB struct {
 	appendOnlyDirectArenaLeaseMu     sync.Mutex
 	appendOnlyDirectArenaLeasesByMem map[memtable.Table]*appendOnlyDirectArenaLease
 	pendingRetiredMems               []memtable.Table
-	memtableViewTelemetry            memtableViewLifecycleTelemetry
-	retainedArenaTrimLastUnixNano    atomic.Int64
-	queueRanges                      []keyRange
-	queueWALPaths                    [][]string
-	queueValueLogPaths               [][]string
-	backendRange                     keyRange
-	backendRangeKnown                bool
-	backendRangeInit                 sync.Once
-	backendRangeErr                  error
+	// closingEmptyMemsMu guards closingEmptyByView. The map holds per-view
+	// lists of mutable memtables that should be released once the last reader
+	// drops the view, registered by releaseClosingEmptyMemtables at DB close.
+	// Keeping this in DB-owned state (rather than inside memtableView) ensures
+	// memtableView itself is never mutated after being published.
+	closingEmptyMemsMu            sync.Mutex
+	closingEmptyByView            map[*memtableView][]memtable.Table
+	memtableViewTelemetry         memtableViewLifecycleTelemetry
+	retainedArenaTrimLastUnixNano atomic.Int64
+	queueRanges                   []keyRange
+	queueWALPaths                 [][]string
+	queueValueLogPaths            [][]string
+	backendRange                  keyRange
+	backendRangeKnown             bool
+	backendRangeInit              sync.Once
+	backendRangeErr               error
 
 	// Durability
 	lanes         []lane
@@ -7243,7 +7250,6 @@ type memtableView struct {
 	retiredMems              []memtable.Table
 	deferredRetiredMemtables atomic.Int64
 	deferredRetiredBytes     atomic.Int64
-	closingEmptyMems         []memtable.Table
 }
 
 // appendOnlyEstimatedBytesPerEntryDefault tunes initial append-only memtable
@@ -7451,10 +7457,13 @@ func (db *DB) releaseMemtableViewRef(view *memtableView, leaseRelease bool) {
 	db.noteMemtableViewDeferredExit(view)
 	view.deferredRetiredMemtables.Store(0)
 	view.deferredRetiredBytes.Store(0)
-	for _, mt := range view.closingEmptyMems {
+	db.closingEmptyMemsMu.Lock()
+	closingMems := db.closingEmptyByView[view]
+	delete(db.closingEmptyByView, view)
+	db.closingEmptyMemsMu.Unlock()
+	for _, mt := range closingMems {
 		db.releaseClosingEmptyMemtable(mt)
 	}
-	view.closingEmptyMems = nil
 	db.recycleMemtables(view.retiredMems)
 	view.retiredMems = nil
 }
@@ -7469,7 +7478,12 @@ func (db *DB) releaseClosingEmptyMemtables() {
 	}
 	if !view.refs.CompareAndSwap(1, 0) {
 		if view.refs.Load() > 0 {
-			view.closingEmptyMems = append(view.closingEmptyMems, view.mutables...)
+			db.closingEmptyMemsMu.Lock()
+			if db.closingEmptyByView == nil {
+				db.closingEmptyByView = make(map[*memtableView][]memtable.Table)
+			}
+			db.closingEmptyByView[view] = append(db.closingEmptyByView[view], view.mutables...)
+			db.closingEmptyMemsMu.Unlock()
 			db.releasePublishedMemtableView(view)
 		} else {
 			db.releaseClosingMemtableViewContents(view)
@@ -7487,10 +7501,6 @@ func (db *DB) releaseClosingMemtableViewContents(view *memtableView) {
 		db.releaseClosingEmptyMemtable(mt)
 	}
 	view.mutables = nil
-	for _, mt := range view.closingEmptyMems {
-		db.releaseClosingEmptyMemtable(mt)
-	}
-	view.closingEmptyMems = nil
 	db.recycleMemtables(view.retiredMems)
 	view.retiredMems = nil
 }

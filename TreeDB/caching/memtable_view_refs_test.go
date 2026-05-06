@@ -154,6 +154,13 @@ func TestReleaseClosingEmptyMemtablesDefersCleanupForRetainedView(t *testing.T) 
 	if got := len(view.retiredMems); got != 1 {
 		t.Fatalf("retired memtables after closing cleanup=%d want=1", got)
 	}
+	// Closing-empty mems should be registered in the DB map (not on the view).
+	db.closingEmptyMemsMu.Lock()
+	pendingCount := len(db.closingEmptyByView[view])
+	db.closingEmptyMemsMu.Unlock()
+	if pendingCount != 1 {
+		t.Fatalf("pending closing-empty mems in DB map=%d want=1", pendingCount)
+	}
 
 	db.releaseMemtableView(held)
 
@@ -169,8 +176,11 @@ func TestReleaseClosingEmptyMemtablesDefersCleanupForRetainedView(t *testing.T) 
 	if got := len(view.retiredMems); got != 0 {
 		t.Fatalf("retired memtables not cleared len=%d", got)
 	}
-	if got := len(view.closingEmptyMems); got != 0 {
-		t.Fatalf("closing empty memtables not cleared len=%d", got)
+	db.closingEmptyMemsMu.Lock()
+	remainingCount := len(db.closingEmptyByView[view])
+	db.closingEmptyMemsMu.Unlock()
+	if remainingCount != 0 {
+		t.Fatalf("DB closing-empty map not cleared after final release: len=%d", remainingCount)
 	}
 }
 
