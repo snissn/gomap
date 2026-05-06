@@ -692,12 +692,62 @@ if [[ -n "$CONCURRENT_READER_SWEEP" ]]; then
   fi
   CONCURRENT_READER_SWEEP=$normalized_reader_sweep
 elif [[ "$CONCURRENT_READERS" -eq 0 && -n "$CONCURRENT_READS" && "$CONCURRENT_READS" != "0" ]]; then
-  echo "CONCURRENT_READERS or CONCURRENT_READER_SWEEP must be set when CONCURRENT_READS is set" >&2
-  exit 2
+	echo "CONCURRENT_READERS or CONCURRENT_READER_SWEEP must be set when CONCURRENT_READS is set" >&2
+	exit 2
 fi
-if [[ "$CONCURRENT_WRITERS" -eq 0 && -n "$CONCURRENT_WRITES" && "$CONCURRENT_WRITES" != "0" ]]; then
-  echo "CONCURRENT_WRITERS must be > 0 when CONCURRENT_WRITES is set" >&2
-  exit 2
+raw_concurrent_writer_sweep=$CONCURRENT_WRITER_SWEEP
+CONCURRENT_WRITER_SWEEP=$(trim_spaces "$CONCURRENT_WRITER_SWEEP")
+if [[ -n "$raw_concurrent_writer_sweep" && -z "$CONCURRENT_WRITER_SWEEP" ]]; then
+	echo "CONCURRENT_WRITER_SWEEP must contain at least one positive integer" >&2
+	exit 2
+fi
+if [[ -n "$CONCURRENT_WRITER_SWEEP" && "$CONCURRENT_WRITERS" -gt 0 ]]; then
+	echo "CONCURRENT_WRITER_SWEEP cannot be combined with CONCURRENT_WRITERS" >&2
+	exit 2
+fi
+if [[ -n "$CONCURRENT_WRITER_SWEEP" ]]; then
+	seen_writer_counts=""
+	normalized_writer_sweep=""
+	validated_writer_counts=0
+	for writer_count in ${CONCURRENT_WRITER_SWEEP//,/ }; do
+		if ! is_positive_decimal_string "$writer_count"; then
+			echo "invalid CONCURRENT_WRITER_SWEEP value: $writer_count" >&2
+			exit 2
+		fi
+		normalized_writer_count=$writer_count
+		while [[ "$normalized_writer_count" == 0* && ${#normalized_writer_count} -gt 1 ]]; do
+			normalized_writer_count=${normalized_writer_count#0}
+		done
+		if [[ " $seen_writer_counts " == *" $normalized_writer_count "* ]]; then
+			echo "duplicate CONCURRENT_WRITER_SWEEP value: $writer_count" >&2
+			exit 2
+		fi
+		seen_writer_counts="$seen_writer_counts $normalized_writer_count"
+		if [[ -z "$normalized_writer_sweep" ]]; then
+			normalized_writer_sweep=$normalized_writer_count
+		else
+			normalized_writer_sweep="$normalized_writer_sweep,$normalized_writer_count"
+		fi
+		validated_writer_counts=$((validated_writer_counts + 1))
+	done
+	if [[ "$validated_writer_counts" -eq 0 ]]; then
+		echo "CONCURRENT_WRITER_SWEEP must contain at least one positive integer" >&2
+		exit 2
+	fi
+	if [[ -n "$CONCURRENT_WRITES" && "$CONCURRENT_WRITES" == "0" ]]; then
+		echo "CONCURRENT_WRITER_SWEEP requires CONCURRENT_WRITES > 0 when CONCURRENT_WRITES is set" >&2
+		exit 2
+	fi
+	if [[ -n "$CONCURRENT_WRITES" ]]; then
+		if ! is_nonnegative_int "$CONCURRENT_WRITES"; then
+			echo "invalid CONCURRENT_WRITES=$CONCURRENT_WRITES (want non-negative integer)" >&2
+			exit 2
+		fi
+	fi
+	CONCURRENT_WRITER_SWEEP=$normalized_writer_sweep
+elif [[ "$CONCURRENT_WRITERS" -eq 0 && -n "$CONCURRENT_WRITES" && "$CONCURRENT_WRITES" != "0" ]]; then
+	echo "CONCURRENT_WRITERS or CONCURRENT_WRITER_SWEEP must be set when CONCURRENT_WRITES is set" >&2
+	exit 2
 fi
 
 {
