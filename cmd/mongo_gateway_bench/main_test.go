@@ -580,6 +580,7 @@ func TestParseConfigValidation(t *testing.T) {
 		"-mongo-max-connecting", "16",
 		"-secondary-indexes", "2",
 		"-format", "json",
+		"-concurrent-read-kinds", "id,email,range",
 		"-concurrent-readers", "4",
 		"-concurrent-reads", "20",
 		"-concurrent-writers", "2",
@@ -594,6 +595,7 @@ func TestParseConfigValidation(t *testing.T) {
 		cfg.ClientMode != clientModeDriver ||
 		cfg.BatchSize != 5 || cfg.InsertProducers != 4 ||
 		cfg.MongoMaxPoolSize != 32 || cfg.MongoMinPoolSize != 8 || cfg.MongoMaxConnecting != 16 ||
+		!reflect.DeepEqual(cfg.ConcurrentReadKinds, []string{concurrentReadKindID, concurrentReadKindEmail, concurrentReadKindRange}) ||
 		cfg.ConcurrentReaders != 4 || cfg.ConcurrentReads != 20 || cfg.ConcurrentWriters != 2 || cfg.ConcurrentWrites != 10 ||
 		!cfg.UpdateIndexedField || !cfg.RangeIndex {
 		t.Fatalf("unexpected config: %+v", cfg)
@@ -607,6 +609,27 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(sweepCfg.ConcurrentReaderSweep, []int{1, 2, 4}) || sweepCfg.ConcurrentReads != 30 {
 		t.Fatalf("unexpected concurrent reader sweep config: %+v", sweepCfg)
+	}
+	readKindsCfg, err := parseConfig([]string{
+		"-concurrent-read-kinds", "all",
+		"-concurrent-reader-sweep", "1,2",
+		"-concurrent-reads", "30",
+	})
+	if err != nil {
+		t.Fatalf("parse concurrent read kinds config: %v", err)
+	}
+	if !reflect.DeepEqual(readKindsCfg.ConcurrentReadKinds, []string{concurrentReadKindID, concurrentReadKindEmail, concurrentReadKindRange}) {
+		t.Fatalf("unexpected concurrent read kinds: %+v", readKindsCfg.ConcurrentReadKinds)
+	}
+	writerSweepCfg, err := parseConfig([]string{
+		"-concurrent-writer-sweep", "1,2 4",
+		"-concurrent-writes", "30",
+	})
+	if err != nil {
+		t.Fatalf("parse concurrent writer sweep config: %v", err)
+	}
+	if !reflect.DeepEqual(writerSweepCfg.ConcurrentWriterSweep, []int{1, 2, 4}) || writerSweepCfg.ConcurrentWrites != 30 {
+		t.Fatalf("unexpected concurrent writer sweep config: %+v", writerSweepCfg)
 	}
 	rawWireCfg, err := parseConfig([]string{"-target", "treedb", "-client-mode", "raw-wire"})
 	if err != nil {
@@ -692,6 +715,24 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 	if _, err := parseConfig([]string{"-concurrent-reader-sweep", "1,1", "-concurrent-reads", "10"}); err == nil {
 		t.Fatal("duplicate concurrent-reader-sweep value accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-read-kinds", "bad"}); err == nil {
+		t.Fatal("bad concurrent-read-kinds accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-read-kinds", "id,id"}); err == nil {
+		t.Fatal("duplicate concurrent-read-kinds value accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-writer-sweep", "1,2"}); err == nil {
+		t.Fatal("concurrent-writer-sweep without concurrent-writes accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-writer-sweep", "1,2", "-concurrent-writes", "10", "-concurrent-writers", "2"}); err == nil {
+		t.Fatal("concurrent-writer-sweep combined with concurrent-writers accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-writer-sweep", "1,0", "-concurrent-writes", "10"}); err == nil {
+		t.Fatal("invalid concurrent-writer-sweep accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-writer-sweep", "1,1", "-concurrent-writes", "10"}); err == nil {
+		t.Fatal("duplicate concurrent-writer-sweep value accepted")
 	}
 	if _, err := parseConfig([]string{"-insert-producers", "0"}); err == nil {
 		t.Fatal("zero insert-producers accepted")

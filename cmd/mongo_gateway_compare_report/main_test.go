@@ -223,15 +223,16 @@ func TestReportGroupsConcurrentReadSweepRows(t *testing.T) {
 	report := renderReport(config{Title: "test", MatrixPath: "matrix.tsv"}, cells, time.Unix(0, 0).UTC())
 	for _, want := range []string{
 		"## Concurrent Read Sweep",
-		"Serial `id_find_one` remains a separate single-in-flight latency phase.",
-		"| 100 | 0 | `treedb_bson` | `mongo` | 1 | 1000 | 1200 | 500 | 600 | 2.00x | 15.0 | 30.0 |",
-		"| 100 | 0 | `treedb_bson` | `mongo` | 4 | 4000 | 4200 | 2000 | 2200 | 2.00x | 10.0 | 20.0 |",
+		"Serial read phases remain separate single-in-flight latency phases.",
+		"| 100 | 0 | `treedb_bson` | `mongo` | `concurrent_id_find_one_r1` | 1 | 1000 | 1200 | 500 | 600 | 2.00x | 15.0 | 30.0 |",
+		"| 100 | 0 | `treedb_bson` | `mongo` | `concurrent_id_find_one_r4` | 4 | 4000 | 4200 | 2000 | 2200 | 2.00x | 10.0 | 20.0 |",
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q\n%s", want, report)
 		}
 	}
-	if strings.Index(report, "| 100 | 0 | `treedb_bson` | `mongo` | 1 |") > strings.Index(report, "| 100 | 0 | `treedb_bson` | `mongo` | 4 |") {
+	sweepSection := strings.Split(strings.Split(report, "## Concurrent Read Sweep")[1], "## Ops/Sec Summary")[0]
+	if strings.Index(sweepSection, "`concurrent_id_find_one_r1`") > strings.Index(sweepSection, "`concurrent_id_find_one_r4`") {
 		t.Fatalf("reader sweep rows should be ordered by reader count:\n%s", report)
 	}
 	opsSection := strings.Split(strings.Split(report, "## Ops/Sec Summary")[1], "## Raw Inputs")[0]
@@ -245,6 +246,9 @@ func TestReportGroupsConcurrentReadSweepRows(t *testing.T) {
 		ok      bool
 	}{
 		{name: "concurrent_id_find_one_r8", readers: 8, ok: true},
+		{name: "concurrent_email_find_one_r8", readers: 8, ok: true},
+		{name: "concurrent_age_range_indexed_limit_10_r8", readers: 8, ok: true},
+		{name: "concurrent_age_range_scan_limit_10_r8", readers: 8, ok: true},
 		{name: "concurrent_id_find_one_r0", ok: false},
 		{name: "id_find_one", ok: false},
 	} {

@@ -225,9 +225,10 @@ scripts/mongo_gateway_compare.sh \
   --range-reads 5000 \
   --range-index \
   --updates 5000 \
+  --concurrent-read-kinds "id,email,range" \
   --concurrent-reader-sweep "1,2,4,8,16" \
   --concurrent-reads 50000 \
-  --concurrent-writers 8 \
+  --concurrent-writer-sweep "1,2,4,8,16" \
   --concurrent-writes 10000 \
   --insert-producers 8 \
   --mongo-max-pool-size 128 \

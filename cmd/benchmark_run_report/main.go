@@ -1367,12 +1367,12 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 	for _, idx := range indexes {
 		indexLabel := indexCountLabel(idx)
 		b.WriteString("<div class=\"chart-group\"><h3>" + esc(indexLabel) + ": phase detail and reader fanout</h3>")
-		b.WriteString("<p class=\"subtle\">The phase chart keeps load out so point reads, range reads, and updates are easier to compare. The fanout chart shows concurrent `_id` reader scaling for the reader counts present in the run data.</p>")
+		b.WriteString("<p class=\"subtle\">The phase chart keeps load out so point reads, range reads, and updates are easier to compare. The fanout charts show concurrent reader scaling for the reader counts present in the run data.</p>")
 		b.WriteString("<div class=\"chart-grid\">")
 		categories := []string{}
 		tree := []float64{}
 		mongo := []float64{}
-		for _, phase := range []string{"id_find_one", "email_find_one", "age_range_indexed_limit_10", "id_update_set", "concurrent_id_update_set_w8"} {
+		for _, phase := range []string{"id_find_one", "email_find_one", "age_range_indexed_limit_10", "age_range_scan_limit_10", "id_update_set", "concurrent_id_update_set_w8", "concurrent_email_find_one_r8", "concurrent_age_range_indexed_limit_10_r8", "concurrent_age_range_scan_limit_10_r8"} {
 			row, ok := mongoRow(rows, idx, phase)
 			if !ok {
 				continue
@@ -1384,11 +1384,14 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 		if len(categories) > 0 {
 			b.WriteString(verticalBarChart("Full sweep non-load phases, "+indexLabel, categories, "phase", []chartSeries{{Name: "TreeDB", Values: tree, Color: "#2867c7"}, {Name: "MongoDB", Values: mongo, Color: "#1f8a5b"}}, "ops/sec"))
 		}
-		readerCounts := mongoSweepCountsInPrimaryScope(rows, idx, "concurrent_id_find_one_r")
-		if len(readerCounts) > 0 {
-			b.WriteString(lineChart("Full sweep reader fanout, "+indexLabel, countLabels(readerCounts), "reader count", "ops/sec", []chartSeries{
-				{Name: "TreeDB", Values: mongoSweep(rows, idx, "concurrent_id_find_one_r", "tree", readerCounts), Color: "#2867c7"},
-				{Name: "MongoDB", Values: mongoSweep(rows, idx, "concurrent_id_find_one_r", "mongo", readerCounts), Color: "#1f8a5b"},
+		for _, spec := range mongoConcurrentReadSweepSpecs() {
+			readerCounts := mongoSweepCountsInPrimaryScope(rows, idx, spec.Prefix)
+			if len(readerCounts) == 0 {
+				continue
+			}
+			b.WriteString(lineChart("Full sweep "+spec.Title+", "+indexLabel, countLabels(readerCounts), "reader count", "ops/sec", []chartSeries{
+				{Name: "TreeDB", Values: mongoSweep(rows, idx, spec.Prefix, "tree", readerCounts), Color: "#2867c7"},
+				{Name: "MongoDB", Values: mongoSweep(rows, idx, spec.Prefix, "mongo", readerCounts), Color: "#1f8a5b"},
 			}, "ops/sec"))
 		}
 		b.WriteString("</div></div>")
@@ -1461,11 +1464,14 @@ func renderMongoScaling(b *strings.Builder, byIndex map[int][]mongoSummaryRow) {
 				{Name: "MongoDB", Values: mongoSweepAny(rows, idx, "concurrent_id_update_set_w", "mongo", writerCounts), Color: "#1f8a5b"},
 			}, "ops/sec"))
 		}
-		readerCounts := mongoSweepCounts(rows, idx, "concurrent_id_find_one_r")
-		if len(readerCounts) > 0 {
-			b.WriteString(lineChart("Reader sweep, "+indexLabel, countLabels(readerCounts), "reader count", "ops/sec", []chartSeries{
-				{Name: "TreeDB", Values: mongoSweepAny(rows, idx, "concurrent_id_find_one_r", "tree", readerCounts), Color: "#2867c7"},
-				{Name: "MongoDB", Values: mongoSweepAny(rows, idx, "concurrent_id_find_one_r", "mongo", readerCounts), Color: "#1f8a5b"},
+		for _, spec := range mongoConcurrentReadSweepSpecs() {
+			readerCounts := mongoSweepCounts(rows, idx, spec.Prefix)
+			if len(readerCounts) == 0 {
+				continue
+			}
+			b.WriteString(lineChart(spec.Title+", "+indexLabel, countLabels(readerCounts), "reader count", "ops/sec", []chartSeries{
+				{Name: "TreeDB", Values: mongoSweepAny(rows, idx, spec.Prefix, "tree", readerCounts), Color: "#2867c7"},
+				{Name: "MongoDB", Values: mongoSweepAny(rows, idx, spec.Prefix, "mongo", readerCounts), Color: "#1f8a5b"},
 			}, "ops/sec"))
 		}
 		b.WriteString("</div></div>")
@@ -1536,6 +1542,20 @@ func mongoRowsForPhase(rows []mongoSummaryRow, phase string) []mongoSummaryRow {
 		out = append(out, row)
 	}
 	return out
+}
+
+type mongoReadSweepSpec struct {
+	Prefix string
+	Title  string
+}
+
+func mongoConcurrentReadSweepSpecs() []mongoReadSweepSpec {
+	return []mongoReadSweepSpec{
+		{Prefix: "concurrent_id_find_one_r", Title: "_id reader fanout"},
+		{Prefix: "concurrent_email_find_one_r", Title: "email reader fanout"},
+		{Prefix: "concurrent_age_range_indexed_limit_10_r", Title: "indexed age-range reader fanout"},
+		{Prefix: "concurrent_age_range_scan_limit_10_r", Title: "scan age-range reader fanout"},
+	}
 }
 
 func mongoRowIndexLabels(rows []mongoSummaryRow) []string {
