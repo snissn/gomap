@@ -192,6 +192,36 @@ func TestGoTestArgsIncludeSQLiteTagsOnlyForSQLiteCell(t *testing.T) {
 	}
 }
 
+func TestGoTestProfileArgsWritePprofArtifacts(t *testing.T) {
+	cfg, err := parseFlags([]string{
+		"-out-dir", t.TempDir(),
+		"-benchtime", "10x",
+		"-profile-cells",
+		"-profile-benchtime", "3x",
+		"-profile-count", "2",
+	})
+	if err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	cell := matrixCell{
+		BenchmarkPattern: "BenchmarkCollectionShapeInsertBatch",
+		ProfileDir:       filepath.Join(t.TempDir(), "profiles"),
+	}
+	args := strings.Join(goTestProfileArgs(cell, cfg), " ")
+	for _, want := range []string{
+		"-benchtime 3x",
+		"-count 2",
+		"-cpuprofile " + filepath.Join(cell.ProfileDir, "cpu.pprof"),
+		"-memprofile " + filepath.Join(cell.ProfileDir, "allocs.pprof"),
+		"-blockprofile " + filepath.Join(cell.ProfileDir, "block.pprof"),
+		"-mutexprofile " + filepath.Join(cell.ProfileDir, "mutex.pprof"),
+	} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("profile args missing %q: %s", want, args)
+		}
+	}
+}
+
 func TestSQLiteBenchmarkListHasSQLite(t *testing.T) {
 	if !sqliteBenchmarkListHasSQLite([]byte("BenchmarkSQLiteShapeInsertBatchJSON/indexes_0\nok package\n")) {
 		t.Fatal("sqliteBenchmarkListHasSQLite=false want true")

@@ -167,8 +167,9 @@ type reportData struct {
 }
 
 type profileReportData struct {
-	Benchprof []benchprofInsightSummary
-	Mongo     []mongoProfileSummary
+	Benchprof   []benchprofInsightSummary
+	Collections []collectionProfileSummary
+	Mongo       []mongoProfileSummary
 }
 
 type benchprofInsightSummary struct {
@@ -193,6 +194,32 @@ type profileInvestigationTarget struct {
 	Why      string  `json:"why"`
 	File     string  `json:"file"`
 	Line     int     `json:"line"`
+}
+
+type collectionProfileSummary struct {
+	Source           string
+	ProfileDir       string
+	Cell             string
+	ExecutionPath    string
+	Engine           string
+	DocumentFormat   string
+	StoragePolicy    string
+	BenchmarkPattern string
+	Benchtime        string
+	Count            int
+	DurationMillis   float64
+	Artifacts        []collectionProfileArtifact
+	RunError         string
+}
+
+type collectionProfileArtifact struct {
+	Phase         string
+	CPUProfile    string
+	AllocsProfile string
+	BlockProfile  string
+	MutexProfile  string
+	Output        string
+	Error         string
 }
 
 type mongoProfileSummary struct {
@@ -820,6 +847,14 @@ func loadProfiles(runRoot string) (profileReportData, []string) {
 		}
 		out.Benchprof = append(out.Benchprof, item)
 	}
+	for _, path := range walkProfileFiles(filepath.Join(runRoot, "collections_sqlite_canonical_1m"), "collection_profile_manifest.json", &warnings) {
+		item, err := readCollectionProfileSummary(runRoot, path)
+		if err != nil {
+			warnings = append(warnings, err.Error())
+			continue
+		}
+		out.Collections = append(out.Collections, item)
+	}
 	for _, root := range []string{
 		filepath.Join(runRoot, "mongo_gateway_full_sweep_1m_expanded", "profiles"),
 		filepath.Join(runRoot, "mongo_client_mode_load_matrix_1m", "profiles"),
@@ -835,6 +870,7 @@ func loadProfiles(runRoot string) (profileReportData, []string) {
 	}
 
 	sort.Slice(out.Benchprof, func(i, j int) bool { return out.Benchprof[i].Source < out.Benchprof[j].Source })
+	sort.Slice(out.Collections, func(i, j int) bool { return out.Collections[i].Source < out.Collections[j].Source })
 	sort.Slice(out.Mongo, func(i, j int) bool { return out.Mongo[i].Source < out.Mongo[j].Source })
 	return out, warnings
 }
@@ -901,6 +937,64 @@ func readBenchprofInsightSummary(runRoot, path string) (benchprofInsightSummary,
 		BlockProfiles: len(parsed.BlockProfiles),
 		MutexProfiles: len(parsed.MutexProfiles),
 	}, nil
+}
+
+func readCollectionProfileSummary(runRoot, path string) (collectionProfileSummary, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return collectionProfileSummary{}, err
+	}
+	var manifest struct {
+		ProfileDir       string  `json:"profile_dir"`
+		Cell             string  `json:"cell"`
+		ExecutionPath    string  `json:"execution_path"`
+		Engine           string  `json:"engine"`
+		DocumentFormat   string  `json:"document_format"`
+		StoragePolicy    string  `json:"storage_policy"`
+		BenchmarkPattern string  `json:"benchmark_pattern"`
+		Benchtime        string  `json:"benchtime"`
+		Count            int     `json:"count"`
+		DurationMillis   float64 `json:"duration_ms"`
+		RunError         string  `json:"run_error"`
+		Artifacts        []struct {
+			Phase         string `json:"phase"`
+			CPUProfile    string `json:"cpu_profile"`
+			AllocsProfile string `json:"allocs_profile"`
+			BlockProfile  string `json:"block_profile"`
+			MutexProfile  string `json:"mutex_profile"`
+			Output        string `json:"output"`
+			Error         string `json:"error"`
+		} `json:"artifacts"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return collectionProfileSummary{}, fmt.Errorf("%s: %w", path, err)
+	}
+	item := collectionProfileSummary{
+		Source:           relArtifact(runRoot, path),
+		ProfileDir:       manifest.ProfileDir,
+		Cell:             manifest.Cell,
+		ExecutionPath:    manifest.ExecutionPath,
+		Engine:           manifest.Engine,
+		DocumentFormat:   manifest.DocumentFormat,
+		StoragePolicy:    manifest.StoragePolicy,
+		BenchmarkPattern: manifest.BenchmarkPattern,
+		Benchtime:        manifest.Benchtime,
+		Count:            manifest.Count,
+		DurationMillis:   manifest.DurationMillis,
+		RunError:         manifest.RunError,
+	}
+	for _, artifact := range manifest.Artifacts {
+		item.Artifacts = append(item.Artifacts, collectionProfileArtifact{
+			Phase:         artifact.Phase,
+			CPUProfile:    artifact.CPUProfile,
+			AllocsProfile: artifact.AllocsProfile,
+			BlockProfile:  artifact.BlockProfile,
+			MutexProfile:  artifact.MutexProfile,
+			Output:        artifact.Output,
+			Error:         artifact.Error,
+		})
+	}
+	return item, nil
 }
 
 func readMongoProfileSummary(runRoot, path string) (mongoProfileSummary, error) {
@@ -1108,7 +1202,7 @@ func reportNav(data reportData) string {
 	if len(data.RawEngine) > 0 {
 		items = append(items, navItem{Href: "#raw-engine", Label: "Raw engine"})
 	}
-	if len(data.Profiles.Benchprof) > 0 || len(data.Profiles.Mongo) > 0 {
+	if len(data.Profiles.Benchprof) > 0 || len(data.Profiles.Collections) > 0 || len(data.Profiles.Mongo) > 0 {
 		items = append(items, navItem{Href: "#profiles", Label: "Profiles"})
 	}
 	if len(items) == 0 {
@@ -1218,11 +1312,11 @@ func renderRawEngineCharts(b *strings.Builder, rows []rawEngineRun, tests []stri
 }
 
 func renderProfiles(b *strings.Builder, data profileReportData) {
-	if len(data.Benchprof) == 0 && len(data.Mongo) == 0 {
+	if len(data.Benchprof) == 0 && len(data.Collections) == 0 && len(data.Mongo) == 0 {
 		return
 	}
 	b.WriteString("<section id=\"profiles\"><h2>Profiling Follow-Up</h2>")
-	b.WriteString("<p class=\"subtle\">Profile panels are generated from precomputed `benchprof` insights and Mongo gateway profile manifests. Report rendering does not rerun pprof; it links phase artifacts back to the benchmark bundle.</p>")
+	b.WriteString("<p class=\"subtle\">Profile panels are generated from precomputed `benchprof` insights, Collections/SQLite pprof manifests, and Mongo gateway profile manifests. Report rendering does not rerun pprof; it links phase artifacts back to the benchmark bundle.</p>")
 	if len(data.Benchprof) > 0 {
 		b.WriteString("<div class=\"chart-group\"><h3>Raw Engine Benchprof Insights</h3>")
 		for _, item := range data.Benchprof {
@@ -1254,6 +1348,52 @@ func renderProfiles(b *strings.Builder, data profileReportData) {
 				writeTable(b, []string{"test", "db", "category", "function", "flat %", "reference", "why"}, body, numericColumns(4))
 			}
 		}
+		b.WriteString("</div>")
+	}
+	if len(data.Collections) > 0 {
+		b.WriteString("<div class=\"chart-group\"><h3>Collections vs SQLite Profile Manifests</h3>")
+		b.WriteString("<p class=\"subtle\">These pprof captures are separate from the timed collection benchmark pass, so they are for attribution rather than the canonical throughput number.</p>")
+		var body [][]string
+		for _, item := range data.Collections {
+			if len(item.Artifacts) == 0 {
+				body = append(body, []string{
+					item.Source,
+					emptyDash(item.Cell),
+					emptyDash(item.Engine),
+					emptyDash(item.DocumentFormat),
+					emptyDash(item.Benchtime),
+					strconv.Itoa(item.Count),
+					fmtFloat(item.DurationMillis, 1),
+					"(run)",
+					"-",
+					"-",
+					"-",
+					"-",
+					"-",
+					firstNonEmpty(item.RunError, "no profile artifacts recorded"),
+				})
+				continue
+			}
+			for _, artifact := range item.Artifacts {
+				body = append(body, []string{
+					item.Source,
+					emptyDash(item.Cell),
+					emptyDash(item.Engine),
+					emptyDash(item.DocumentFormat),
+					emptyDash(item.Benchtime),
+					strconv.Itoa(item.Count),
+					fmtFloat(item.DurationMillis, 1),
+					emptyDash(artifact.Phase),
+					emptyDash(artifact.CPUProfile),
+					emptyDash(artifact.AllocsProfile),
+					emptyDash(artifact.BlockProfile),
+					emptyDash(artifact.MutexProfile),
+					emptyDash(artifact.Output),
+					emptyDash(firstNonEmpty(artifact.Error, item.RunError)),
+				})
+			}
+		}
+		writeTable(b, []string{"manifest", "cell", "engine", "format", "benchtime", "count", "profile ms", "phase", "cpu", "allocs", "block", "mutex", "output", "error"}, body, numericColumns(5, 6))
 		b.WriteString("</div>")
 	}
 	if len(data.Mongo) > 0 {

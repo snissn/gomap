@@ -73,6 +73,19 @@ func TestDeepReportFromRunRoot(t *testing.T) {
   "alloc_space_profiles": [{}],
   "investigation_targets": [{"db_tag":"treedb","test":"random_read","category":"decode/read I/O","function":"TreeDB/db.Get","flat_pct":12.5,"file":"TreeDB/db/db.go","line":123,"why":"hot read path"}]
 }`)
+	writeFile(t, filepath.Join(root, "collections_sqlite_canonical_1m", "indexes_0", "timed_matrix", "treedb_json", "profiles", "collection_profile_manifest.json"), `{
+  "profile_dir": "profiles/treedb_json",
+  "cell": "treedb_json",
+  "execution_path": "native-fastpath",
+  "engine": "production_fast",
+  "document_format": "json",
+  "storage_policy": "data_outer=true,index_outer=true",
+  "benchmark_pattern": "^BenchmarkCollectionShapeInsertBatch$",
+  "benchtime": "100x",
+  "count": 1,
+  "duration_ms": 42.5,
+  "artifacts": [{"phase":"benchmark_cell","cpu_profile":"cpu.pprof","allocs_profile":"allocs.pprof","block_profile":"block.pprof","mutex_profile":"mutex.pprof","output":"profile_go_test.txt"}]
+}`)
 	writeFile(t, filepath.Join(root, "mongo_gateway_full_sweep_1m_expanded", "profiles", "treedb_cell", "profile_manifest.json"), `{
   "profile_dir": "profiles/treedb_cell",
   "artifacts": [{"phase":"load_insert_many","prefix":"load_insert_many","duration_ms":12.3,"cpu_profile":"load_insert_many.cpu.pprof","allocs_profile":"load_insert_many.allocs.pprof"}]
@@ -142,8 +155,11 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"Compacted Size: SQLite Bytes/Doc Divided By TreeDB Bytes/Doc",
 		"Maintenance Evidence",
 		"Raw Engine Benchprof Insights",
+		"Collections vs SQLite Profile Manifests",
 		"Mongo Gateway Profile Manifests",
 		"decode/read I/O hotspot",
+		"cpu.pprof",
+		"profile_go_test.txt",
 		"load_insert_many.cpu.pprof",
 		"Client modes marked with <strong>*</strong>",
 		"Raw load-mode rows",

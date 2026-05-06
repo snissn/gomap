@@ -12,6 +12,11 @@ raw TreeDB engine profiles, TreeDB collections vs SQLite, Mongo API full sweep,
 Mongo client-mode load matrix, Mongo reader/writer scaling, and the final
 `deep_report.html`.
 
+The collections section runs a separate pprof capture pass for every
+TreeDB/SQLite timed-matrix cell by default. Those profiles are attribution
+artifacts; the canonical throughput rows still come from the unprofiled timed
+benchmark pass.
+
 ```sh
 scripts/treedb_benchmark_run_report.sh \
   --out /tmp/gomap_treedb_benchmark_run_$(date +%Y%m%d_%H%M%S) \
@@ -31,6 +36,7 @@ $RUN_ROOT/
   RUNBOOK.md
   raw_engine_full_matrix/
   collections_sqlite_canonical_1m/
+    indexes_*/timed_matrix/*/profiles/collection_profile_manifest.json
   mongo_gateway_full_sweep_1m_expanded/
   mongo_client_mode_load_matrix_1m/
   mongo_gateway_reader_writer_scaling_1m/
@@ -46,6 +52,10 @@ Size presets:
 Use `--skip-raw`, `--skip-collections`, `--skip-mongo`, `--skip-load-modes`, or
 `--skip-scaling` only for resumable/debug runs. Published reports should state
 any skipped section explicitly.
+
+Use `--skip-collection-profiles` only when validating non-profile report logic;
+it removes the collection pprof manifests from the final Profiling Follow-Up
+section.
 
 ## Principles
 

@@ -52,6 +52,9 @@ type config struct {
 	SkipOfflineRewrite        bool
 	SkipFullLeafgen           bool
 	SkipSQLite                bool
+	ProfileTimedMatrix        bool
+	ProfileBenchtime          string
+	ProfileCount              int
 	AllowIncomplete           bool
 }
 
@@ -87,6 +90,9 @@ type canonicalConfig struct {
 	FullLeafgenMaxGenerations int      `json:"full_leafgen_max_generations"`
 	FullLeafgenIndexVacuum    string   `json:"full_leafgen_index_vacuum"`
 	SkipSQLite                bool     `json:"skip_sqlite"`
+	ProfileTimedMatrix        bool     `json:"profile_timed_matrix"`
+	ProfileBenchtime          string   `json:"profile_benchtime,omitempty"`
+	ProfileCount              int      `json:"profile_count,omitempty"`
 }
 
 type commandRecord struct {
@@ -274,6 +280,9 @@ func run(argv []string) error {
 	if cfg.Benchtime == "" {
 		cfg.Benchtime = fmt.Sprintf("%dx", cfg.Docs)
 	}
+	if cfg.ProfileBenchtime == "" {
+		cfg.ProfileBenchtime = cfg.Benchtime
+	}
 	formats := canonicalFormatList(splitCSV(cfg.Formats))
 	if len(formats) == 0 {
 		return errors.New("-formats must contain at least one value")
@@ -316,6 +325,9 @@ func run(argv []string) error {
 			FullLeafgenMaxGenerations: cfg.FullLeafgenMaxGenerations,
 			FullLeafgenIndexVacuum:    cfg.FullLeafgenIndexVacuum,
 			SkipSQLite:                cfg.SkipSQLite,
+			ProfileTimedMatrix:        cfg.ProfileTimedMatrix,
+			ProfileBenchtime:          cfg.ProfileBenchtime,
+			ProfileCount:              cfg.ProfileCount,
 		},
 		Artifacts: map[string]string{},
 	}
@@ -436,6 +448,7 @@ func parseConfig(args []string) (config, error) {
 		FullLeafgenForce:          true,
 		FullLeafgenMaxGenerations: 0,
 		FullLeafgenIndexVacuum:    "offline",
+		ProfileCount:              1,
 	}
 	fs := flag.NewFlagSet("collection_canonical_bench", flag.ContinueOnError)
 	fs.StringVar(&cfg.RepoRoot, "repo-root", "", "Repository root; defaults to git rev-parse --show-toplevel")
@@ -458,6 +471,9 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.SkipOfflineRewrite, "skip-offline-rewrite", false, "Skip PR 1096-style offline rewrite matrix")
 	fs.BoolVar(&cfg.SkipFullLeafgen, "skip-full-leafgen", false, "Skip full leafgen pack/GC fixture")
 	fs.BoolVar(&cfg.SkipSQLite, "skip-sqlite", false, "Skip SQLite cells in timed matrix")
+	fs.BoolVar(&cfg.ProfileTimedMatrix, "profile-timed-matrix", cfg.ProfileTimedMatrix, "Run separate pprof capture pass for timed TreeDB/SQLite matrix cells")
+	fs.StringVar(&cfg.ProfileBenchtime, "profile-benchtime", cfg.ProfileBenchtime, "go test -benchtime for timed-matrix profile pass; defaults to -benchtime")
+	fs.IntVar(&cfg.ProfileCount, "profile-count", cfg.ProfileCount, "go test -count for timed-matrix profile pass")
 	fs.BoolVar(&cfg.AllowIncomplete, "allow-incomplete", false, "Write report even when guardrail checks fail")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
@@ -489,6 +505,9 @@ func parseConfig(args []string) (config, error) {
 	if cfg.FullLeafgenMaxGenerations < 0 {
 		return config{}, errors.New("-leafgen-pack-max-generations must be >= 0")
 	}
+	if cfg.ProfileCount <= 0 {
+		return config{}, errors.New("-profile-count must be > 0")
+	}
 	return cfg, nil
 }
 
@@ -517,10 +536,20 @@ func runTimedMatrix(cfg config, canon *canonicalRun) error {
 	if cfg.SkipSQLite {
 		args = append(args, "-skip-sqlite")
 	}
+	if cfg.ProfileTimedMatrix {
+		args = append(args,
+			"-profile-cells",
+			"-profile-benchtime", cfg.ProfileBenchtime,
+			"-profile-count", strconv.Itoa(cfg.ProfileCount),
+		)
+	}
 	if err := runLoggedCommand(cfg, canon, "timed_matrix", nil, "go", args...); err != nil {
 		return err
 	}
 	canon.Artifacts["timed_matrix_dir"] = matrixDir
+	if cfg.ProfileTimedMatrix {
+		canon.Artifacts["timed_matrix_profiles"] = filepath.Join(matrixDir, "*", "profiles", "collection_profile_manifest.json")
+	}
 	return parseTimedMatrixReports(canon, matrixDir, cfg)
 }
 
@@ -1218,6 +1247,9 @@ func renderMarkdownReport(canon *canonicalRun) string {
 		{"leafgen_pack_max_generations", strconv.Itoa(canon.Config.FullLeafgenMaxGenerations)},
 		{"leafgen_pack_frame_k", strconv.Itoa(canon.Config.LeafgenPackFrameK)},
 		{"index_vacuum", canon.Config.FullLeafgenIndexVacuum},
+		{"profile_timed_matrix", strconv.FormatBool(canon.Config.ProfileTimedMatrix)},
+		{"profile_benchtime", canon.Config.ProfileBenchtime},
+		{"profile_count", strconv.Itoa(canon.Config.ProfileCount)},
 	})
 	sb.WriteString("\n")
 

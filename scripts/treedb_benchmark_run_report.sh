@@ -13,6 +13,9 @@ RAW_KEYS="${RAW_KEYS:-}"
 COLLECTION_DOCS="${COLLECTION_DOCS:-}"
 MONGO_DOCS="${MONGO_DOCS:-}"
 COLLECTION_BATCH_SIZE="${COLLECTION_BATCH_SIZE:-16000}"
+COLLECTION_PROFILES="${COLLECTION_PROFILES:-true}"
+COLLECTION_PROFILE_BENCHTIME="${COLLECTION_PROFILE_BENCHTIME:-}"
+COLLECTION_PROFILE_COUNT="${COLLECTION_PROFILE_COUNT:-1}"
 MONGO_BATCH_SIZE="${MONGO_BATCH_SIZE:-10000}"
 INSERT_PRODUCERS="${INSERT_PRODUCERS:-8}"
 MONGO_MODE="${MONGO_MODE:-external}"
@@ -59,13 +62,16 @@ Options:
   --title TITLE          HTML report title.
   --skip-raw             Skip raw TreeDB engine profile matrix.
   --skip-collections     Skip TreeDB collections vs SQLite.
+  --skip-collection-profiles
+                          Skip pprof capture for TreeDB collections vs SQLite.
   --skip-mongo           Skip all Mongo-compatible sections.
   --skip-load-modes      Skip Mongo client-mode load matrix.
   --skip-scaling         Skip Mongo reader/writer scaling.
   --help                 Show this help.
 
 Environment overrides use the uppercase variable names in the script, including
-RUN_ROOT, TIER, INDEXES_LIST, RAW_KEYS, COLLECTION_DOCS, MONGO_DOCS,
+RUN_ROOT, TIER, INDEXES_LIST, RAW_KEYS, COLLECTION_DOCS,
+COLLECTION_PROFILES, COLLECTION_PROFILE_BENCHTIME, COLLECTION_PROFILE_COUNT, MONGO_DOCS,
 MONGO_MODE, MONGO_URI, MONGO_READERS, MONGO_WRITERS, TIMEOUT, and TITLE.
 EOF
 }
@@ -154,6 +160,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-collections)
       SKIP_COLLECTIONS=true
+      shift
+      ;;
+    --skip-collection-profiles)
+      COLLECTION_PROFILES=false
       shift
       ;;
     --skip-mongo)
@@ -270,6 +280,9 @@ write_metadata() {
     echo "- indexes: $INDEXES_LIST"
     echo "- raw_keys: $RAW_KEYS"
     echo "- collection_docs: $COLLECTION_DOCS"
+    echo "- collection_profiles: $COLLECTION_PROFILES"
+    echo "- collection_profile_benchtime: ${COLLECTION_PROFILE_BENCHTIME:-${COLLECTION_BENCHTIME:-${COLLECTION_DOCS}x}}"
+    echo "- collection_profile_count: $COLLECTION_PROFILE_COUNT"
     echo "- mongo_docs: $MONGO_DOCS"
     echo "- mongo_mode: $MONGO_MODE"
     echo "- mongo_uri: $MONGO_URI"
@@ -344,6 +357,14 @@ run_collections() {
   local root="$RUN_ROOT/collections_sqlite_canonical_1m"
   mkdir -p "$root"
   for indexes in $INDEXES_LIST; do
+    local profile_args=()
+    if bool_true "$COLLECTION_PROFILES"; then
+      profile_args=(
+        -profile-timed-matrix
+        -profile-benchtime "${COLLECTION_PROFILE_BENCHTIME:-${COLLECTION_BENCHTIME:-${COLLECTION_DOCS}x}}"
+        -profile-count "$COLLECTION_PROFILE_COUNT"
+      )
+    fi
     run_logged "collections_indexes_${indexes}" env USE_BUILT_BIN=1 ./scripts/bench_collections_canonical.sh \
       -out-dir "$root/indexes_${indexes}" \
       -docs "$COLLECTION_DOCS" \
@@ -351,7 +372,8 @@ run_collections() {
       -indexes "$indexes" \
       -formats template-v1,bson,json \
       -benchtime "${COLLECTION_BENCHTIME:-${COLLECTION_DOCS}x}" \
-      -count "${COLLECTION_COUNT:-1}"
+      -count "${COLLECTION_COUNT:-1}" \
+      "${profile_args[@]}"
   done
 }
 
