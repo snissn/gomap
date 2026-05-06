@@ -1345,7 +1345,7 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 		return
 	}
 	b.WriteString("<section id=\"mongo-full\"><h2>Mongo API Full Sweep</h2>")
-	b.WriteString("<p class=\"subtle\">Full BSON `driver-command-raw` TreeDB-vs-MongoDB phase comparison. All rows from `summary.tsv` are included.</p>")
+	b.WriteString("<p class=\"subtle\">Full BSON `driver-command-raw` TreeDB-vs-MongoDB phase comparison. Headline charts and summaries are shown first; raw `summary.tsv` rows are collapsed below.</p>")
 	b.WriteString("<div class=\"chart-group\"><h3>Index-count overview</h3>")
 	b.WriteString("<p class=\"subtle\">These two charts show the headline insert throughput and physical disk footprint as secondary indexes are added.</p>")
 	b.WriteString(fullSweepLoadNote(rows))
@@ -1389,11 +1389,17 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 		}
 		b.WriteString("</div>")
 		if len(throughputRows) > 0 {
-			writeMongoThroughputTable(b, throughputRows)
+			writeMongoThroughputSummary(b, throughputRows)
+		}
+		indexRows := mongoRowsForIndex(rows, idx)
+		if len(indexRows) > 0 {
+			b.WriteString("<details><summary>Raw full-sweep rows for " + esc(indexCountLowerLabel(idx)) + "</summary>")
+			writeMongoSummaryTable(b, indexRows)
+			b.WriteString("</details>")
 		}
 		b.WriteString("</div>")
 	}
-	b.WriteString("<details><summary>All full-sweep rows</summary>")
+	b.WriteString("<details><summary>All raw full-sweep rows</summary>")
 	writeMongoSummaryTable(b, rows)
 	b.WriteString("</details></section>\n")
 }
@@ -1420,7 +1426,7 @@ func renderMongoLoadModes(b *strings.Builder, rows []loadModeRow) {
 	for _, row := range rows {
 		body = append(body, []string{strconv.Itoa(row.Indexes), row.Target, row.Config, fmtOps(row.OpsPerSec), fmtBytes(float64(row.PhysicalBytes)), row.RawJSON})
 	}
-	b.WriteString("<details><summary>All load-mode rows</summary>")
+	b.WriteString("<details><summary>Raw load-mode rows</summary>")
 	writeTable(b, []string{"indexes", "target", "config", "load docs/sec", "physical bytes", "raw JSON"}, body, numericColumns(0, 3, 4))
 	b.WriteString("</details>")
 	b.WriteString("</section>\n")
@@ -1441,7 +1447,7 @@ func renderMongoScaling(b *strings.Builder, byIndex map[int][]mongoSummaryRow) {
 	if len(byIndex) == 0 {
 		return
 	}
-	b.WriteString("<section id=\"scaling\"><h2>Dedicated Reader/Writer Scaling</h2>")
+	b.WriteString("<section id=\"scaling\"><h2>Mongo API Reader/Writer Scaling</h2>")
 	b.WriteString("<p class=\"subtle\">Each scaling cell performs a fresh load before the measured concurrent phase. Writer and reader counts are explicit.</p>")
 	indexes := make([]int, 0, len(byIndex))
 	for idx := range byIndex {
@@ -1451,12 +1457,12 @@ func renderMongoScaling(b *strings.Builder, byIndex map[int][]mongoSummaryRow) {
 	for _, idx := range indexes {
 		rows := byIndex[idx]
 		indexLabel := indexCountLabel(idx)
-		b.WriteString("<div class=\"chart-group\"><h3>" + esc(indexLabel) + ": dedicated scaling</h3>")
+		b.WriteString("<div class=\"chart-group\"><h3>" + esc(indexLabel) + ": scaling summary</h3>")
 		b.WriteString("<p class=\"subtle\">Fresh 1M-document load per cell, then a focused writer or reader concurrency sweep for this index count.</p>")
 		b.WriteString("<div class=\"chart-grid\">")
 		writerCounts := mongoSweepCounts(rows, idx, "concurrent_id_update_set_w")
 		if len(writerCounts) > 0 {
-			b.WriteString(lineChart("Writer sweep, "+indexLabel, countLabels(writerCounts), "writer count", "ops/sec", []chartSeries{
+			b.WriteString(lineChart("Writer sweep, "+indexLabel, countLabels(writerCounts), "client count", "ops/sec", []chartSeries{
 				{Name: "TreeDB", Values: mongoSweepAny(rows, idx, "concurrent_id_update_set_w", "tree", writerCounts), Color: "#2867c7"},
 				{Name: "MongoDB", Values: mongoSweepAny(rows, idx, "concurrent_id_update_set_w", "mongo", writerCounts), Color: "#1f8a5b"},
 			}, "ops/sec"))
@@ -1466,15 +1472,20 @@ func renderMongoScaling(b *strings.Builder, byIndex map[int][]mongoSummaryRow) {
 			if len(readerCounts) == 0 {
 				continue
 			}
-			b.WriteString(lineChart(spec.Title+", "+indexLabel, countLabels(readerCounts), "reader count", "ops/sec", []chartSeries{
+			b.WriteString(lineChart(spec.Title+", "+indexLabel, countLabels(readerCounts), "client count", "ops/sec", []chartSeries{
 				{Name: "TreeDB", Values: mongoSweepAny(rows, idx, spec.Prefix, "tree", readerCounts), Color: "#2867c7"},
 				{Name: "MongoDB", Values: mongoSweepAny(rows, idx, spec.Prefix, "mongo", readerCounts), Color: "#1f8a5b"},
 			}, "ops/sec"))
 		}
-		b.WriteString("</div></div>")
+		b.WriteString("</div>")
+		summaryRows := mongoOperationThroughputRows(rows, idx)
+		if len(summaryRows) > 0 {
+			writeMongoThroughputSummary(b, summaryRows)
+		}
+		b.WriteString("</div>")
 	}
 	for _, idx := range indexes {
-		b.WriteString("<details><summary>All scaling rows for " + strconv.Itoa(idx) + " indexes</summary>")
+		b.WriteString("<details><summary>Raw scaling TSV rows, " + esc(indexCountLowerLabel(idx)) + "</summary>")
 		writeMongoSummaryTable(b, byIndex[idx])
 		b.WriteString("</details>")
 	}
@@ -1518,6 +1529,16 @@ func sortedMongoIndexes(rows []mongoSummaryRow) []int {
 		out = append(out, idx)
 	}
 	sort.Ints(out)
+	return out
+}
+
+func mongoRowsForIndex(rows []mongoSummaryRow, idx int) []mongoSummaryRow {
+	var out []mongoSummaryRow
+	for _, row := range rows {
+		if row.SecondaryIndexes == idx {
+			out = append(out, row)
+		}
+	}
 	return out
 }
 
@@ -1612,25 +1633,55 @@ func mongoFirstPhaseRow(rows []mongoSummaryRow, idx int, phases []string) (mongo
 	return mongoSummaryRow{}, false
 }
 
-func writeMongoThroughputTable(b *strings.Builder, rows []mongoThroughputOperationRow) {
-	var body [][]string
+func writeMongoThroughputSummary(b *strings.Builder, rows []mongoThroughputOperationRow) {
+	b.WriteString("<h4>Scaling summary</h4><div class=\"grid\">")
 	for _, row := range rows {
-		ratio := 0.0
-		if row.HasTreeBest && row.HasMongoBest && row.MongoBest.MongoOpsSec > 0 {
-			ratio = row.TreeBest.TreeDBOpsSec / row.MongoBest.MongoOpsSec
+		if !row.HasSingle && !row.HasTreeBest && !row.HasMongoBest {
+			continue
 		}
-		body = append(body, []string{
-			row.Label,
-			mongoSingleThreadedOps(row),
-			mongoBestOps(row, "tree"),
-			mongoBestCountLabel(row.TreeBestCount, row.CountUnit, row.HasTreeBest),
-			mongoBestOps(row, "mongo"),
-			mongoBestCountLabel(row.MongoBestCount, row.CountUnit, row.HasMongoBest),
-			fmtRatio(ratio),
-		})
+		b.WriteString("<div class=\"metric\"><div class=\"label\">" + esc(row.Label) + "</div>")
+		b.WriteString("<div class=\"value\">" + esc(mongoSummaryPrimaryValue(row)) + "</div>")
+		for _, line := range mongoThroughputSummaryLines(row) {
+			b.WriteString("<p class=\"subtle\">" + esc(line) + "</p>")
+		}
+		b.WriteString("</div>")
 	}
-	b.WriteString("<h4>Single threaded and peak rows</h4>")
-	writeTable(b, []string{"operation", "single threaded TreeDB", "TreeDB peak", "TreeDB clients", "MongoDB peak", "MongoDB clients", "TreeDB/Mongo peak"}, body, numericColumns(1, 2, 4, 6))
+	b.WriteString("</div>")
+}
+
+func mongoSummaryPrimaryValue(row mongoThroughputOperationRow) string {
+	if row.HasTreeBest {
+		return fmtOps(row.TreeBest.TreeDBOpsSec) + " TreeDB ops/sec"
+	}
+	if row.HasSingle {
+		return fmtOps(row.Single.TreeDBOpsSec) + " TreeDB ops/sec"
+	}
+	if row.HasMongoBest {
+		return fmtOps(row.MongoBest.MongoOpsSec) + " MongoDB ops/sec"
+	}
+	return "-"
+}
+
+func mongoThroughputSummaryLines(row mongoThroughputOperationRow) []string {
+	var lines []string
+	if row.HasTreeBest {
+		lines = append(lines, "TreeDB peak at "+mongoBestCountLabel(row.TreeBestCount, row.CountUnit, true)+".")
+	}
+	if row.HasMongoBest {
+		lines = append(lines, "MongoDB peak: "+fmtOps(row.MongoBest.MongoOpsSec)+" ops/sec at "+mongoBestCountLabel(row.MongoBestCount, row.CountUnit, true)+".")
+	}
+	if row.HasTreeBest && row.HasMongoBest && row.MongoBest.MongoOpsSec > 0 {
+		lines = append(lines, "Peak TreeDB/MongoDB: "+fmtRatio(row.TreeBest.TreeDBOpsSec/row.MongoBest.MongoOpsSec)+".")
+	}
+	if row.HasSingle {
+		line := "Single threaded TreeDB: " + fmtOps(row.Single.TreeDBOpsSec) + " ops/sec"
+		if row.HasTreeBest && row.Single.TreeDBOpsSec > 0 {
+			line += "; TreeDB scale-up: " + fmtRatio(row.TreeBest.TreeDBOpsSec/row.Single.TreeDBOpsSec)
+		}
+		line += "."
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 func mongoSingleThreadedOps(row mongoThroughputOperationRow) string {
@@ -1999,6 +2050,13 @@ func indexCountTitleLabel(indexes int) string {
 		return "1 Index"
 	}
 	return fmt.Sprintf("%d Indexes", indexes)
+}
+
+func indexCountLowerLabel(indexes int) string {
+	if indexes == 1 {
+		return "1 index"
+	}
+	return fmt.Sprintf("%d indexes", indexes)
 }
 
 type chartSeries struct {
