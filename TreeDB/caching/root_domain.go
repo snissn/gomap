@@ -19,6 +19,10 @@ type rootDomainLookup interface {
 	GetEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool)
 }
 
+type rootDomainLookupWithError interface {
+	GetEntryWithError(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, err error)
+}
+
 type rootDomainIteratorFactory interface {
 	Iterator(start, end []byte) (iterator.UnsafeIterator, error)
 }
@@ -692,18 +696,17 @@ type backendSnapshotLookup struct {
 	rootID   uint64
 }
 
-func (l backendSnapshotLookup) GetEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+func (l backendSnapshotLookup) GetEntryWithError(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, err error) {
 	if l.snapshot == nil {
-		return nil, page.ValuePtr{}, 0, false
+		return nil, page.ValuePtr{}, 0, false, backenddb.ErrClosed
 	}
 	if l.db != nil {
 		if err := l.db.flushValueLogForBackendRead(); err != nil {
-			return nil, page.ValuePtr{}, 0, false
+			return nil, page.ValuePtr{}, 0, false, err
 		}
 	}
 	var (
 		entry node.LeafEntry
-		err   error
 	)
 	if l.rootID != 0 {
 		entry, err = l.snapshot.GetEntryAtRoot(l.rootID, key)
@@ -712,11 +715,16 @@ func (l backendSnapshotLookup) GetEntry(key []byte) (val []byte, ptr page.ValueP
 	}
 	if err != nil {
 		if errors.Is(err, tree.ErrKeyNotFound) {
-			return nil, page.ValuePtr{}, 0, false
+			return nil, page.ValuePtr{}, 0, false, nil
 		}
-		return nil, page.ValuePtr{}, 0, false
+		return nil, page.ValuePtr{}, 0, false, err
 	}
-	return entry.Value, entry.ValuePtr, entry.Flags, true
+	return entry.Value, entry.ValuePtr, entry.Flags, true, nil
+}
+
+func (l backendSnapshotLookup) GetEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+	val, ptr, flags, found, _ = l.GetEntryWithError(key)
+	return val, ptr, flags, found
 }
 
 func (l backendSnapshotLookup) GetValueAppend(key, dst []byte) ([]byte, error) {
@@ -889,10 +897,140 @@ func rootDomainSystemSnapshotFromCachedSnapshot(s *Snapshot) rootDomainSnapshot 
 			snap.publishedRootID = rootID
 		}
 		if rootID != 0 {
-			snap.published = backendSnapshotLookup{db: s.db, snapshot: s.backend, rootID: rootID}
+			snap.published = s.backendSnapshotLookupForRoot(rootID)
 		}
 	}
 	return snap
+}
+
+func (s *Snapshot) staticBackendSnapshotLookupForRoot(rootID uint64) *backendSnapshotLookup {
+	if s == nil || s.backend == nil {
+		return nil
+	}
+	if s.backendRootOK && (s.backendRoot.rootID == rootID || rootID == 0) {
+		return &s.backendRoot
+	}
+	if s.backendSystemOK && s.backendSystem.rootID == rootID {
+		return &s.backendSystem
+	}
+	return nil
+}
+
+func (s *Snapshot) backendSnapshotLookupForRoot(rootID uint64) rootDomainLookup {
+	if s == nil || s.backend == nil {
+		return nil
+	}
+	if lookup := s.staticBackendSnapshotLookupForRoot(rootID); lookup != nil {
+		return lookup
+	}
+	return backendSnapshotLookup{db: s.db, snapshot: s.backend, rootID: rootID}
+}
+
+func (s *Snapshot) installBackendPublishedRootLookups(publishedRootsOwned bool) {
+	if s == nil || s.backend == nil {
+		return
+	}
+	needed := 0
+	directPointNeedsInstall := false
+	countRef := func(ref publishedRootRef) {
+		if ref.lookup == nil && ref.rootID != 0 && s.staticBackendSnapshotLookupForRoot(ref.rootID) == nil {
+			needed++
+		}
+	}
+	countSnapshot := func(snap rootDomainSnapshot) bool {
+		if snap.published != nil || snap.publishedRootID == 0 {
+			return false
+		}
+		if s.staticBackendSnapshotLookupForRoot(snap.publishedRootID) == nil {
+			needed++
+		}
+		return true
+	}
+	if s.publishedRoots != nil {
+		for _, ref := range s.publishedRoots.pointShards {
+			countRef(ref)
+		}
+		countRef(s.publishedRoots.system)
+		countRef(s.publishedRoots.iterator)
+	}
+	for _, snap := range s.rootPointShards {
+		if countSnapshot(snap) {
+			directPointNeedsInstall = true
+		}
+	}
+	countSnapshot(s.rootSystem)
+	countSnapshot(s.rootIterator)
+	if needed == 0 {
+		return
+	}
+
+	cloned := s.publishedRoots
+	if cloned != nil && !publishedRootsOwned {
+		cloned = clonePublishedRootSet(s.publishedRoots)
+	}
+	s.backendPublishedLookups = make([]backendSnapshotLookup, needed)
+	next := 0
+	installLookup := func(rootID uint64) rootDomainLookup {
+		if rootID == 0 {
+			return nil
+		}
+		if lookup := s.staticBackendSnapshotLookupForRoot(rootID); lookup != nil {
+			return lookup
+		}
+		s.backendPublishedLookups[next] = backendSnapshotLookup{db: s.db, snapshot: s.backend, rootID: rootID}
+		lookup := &s.backendPublishedLookups[next]
+		next++
+		return lookup
+	}
+	installRef := func(ref *publishedRootRef) {
+		if ref == nil || ref.lookup != nil || ref.rootID == 0 {
+			return
+		}
+		ref.lookup = installLookup(ref.rootID)
+	}
+	installSnapshot := func(snap *rootDomainSnapshot) {
+		if snap == nil || snap.published != nil || snap.publishedRootID == 0 {
+			return
+		}
+		snap.published = installLookup(snap.publishedRootID)
+	}
+	if cloned != nil {
+		for i := range cloned.pointShards {
+			installRef(&cloned.pointShards[i])
+		}
+		installRef(&cloned.system)
+		installRef(&cloned.iterator)
+	}
+	if directPointNeedsInstall {
+		s.rootPointShards = append([]rootDomainSnapshot(nil), s.rootPointShards...)
+	}
+	for i := range s.rootPointShards {
+		installSnapshot(&s.rootPointShards[i])
+	}
+	installSnapshot(&s.rootSystem)
+	installSnapshot(&s.rootIterator)
+	s.backendPublishedLookups = s.backendPublishedLookups[:next]
+	s.publishedRoots = cloned
+}
+
+func backendSnapshotLookupFromRootDomainLookup(lookup rootDomainLookup) (backendSnapshotLookup, bool) {
+	switch l := lookup.(type) {
+	case backendSnapshotLookup:
+		return l, true
+	case *backendSnapshotLookup:
+		if l != nil {
+			return *l, true
+		}
+	}
+	return backendSnapshotLookup{}, false
+}
+
+func (s *Snapshot) publishedLookupBackedByBackendSnapshot(snap rootDomainSnapshot) bool {
+	if s == nil || s.backend == nil {
+		return false
+	}
+	lookup, ok := backendSnapshotLookupFromRootDomainLookup(snap.published)
+	return ok && lookup.snapshot == s.backend
 }
 
 func rootDomainSnapshotBackendRootID(s *Snapshot, fallback uint64) uint64 {
@@ -934,7 +1072,7 @@ func rootDomainApplyPublishedRef(s *Snapshot, snap *rootDomainSnapshot, ref publ
 		return true
 	}
 	if s != nil && s.backend != nil && snap.publishedRootID != 0 {
-		snap.published = backendSnapshotLookup{db: s.db, snapshot: s.backend, rootID: snap.publishedRootID}
+		snap.published = s.backendSnapshotLookupForRoot(snap.publishedRootID)
 		return true
 	}
 	return false
@@ -948,7 +1086,7 @@ func rootDomainApplyBackendFallback(s *Snapshot, snap *rootDomainSnapshot) {
 	if rootID != 0 {
 		snap.publishedRootID = rootID
 	}
-	snap.published = backendSnapshotLookup{db: s.db, snapshot: s.backend, rootID: rootID}
+	snap.published = s.backendSnapshotLookupForRoot(rootID)
 }
 
 func rootDomainIteratorPublishedRef(set *publishedRootSet) publishedRootRef {
@@ -1120,7 +1258,7 @@ func (s rootDomainSnapshot) getEntry(key []byte) (val []byte, ptr page.ValuePtr,
 	return val, ptr, flags, found
 }
 
-func (s rootDomainSnapshot) getEntryWithSource(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
+func (s rootDomainSnapshot) getCachedEntryWithSource(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
 	if s.mutable != nil {
 		if val, ptr, flags, found = s.mutable.GetEntry(key); found {
 			return val, ptr, flags, true, rootDomainEntrySourceCached
@@ -1131,13 +1269,45 @@ func (s rootDomainSnapshot) getEntryWithSource(key []byte) (val []byte, ptr page
 			return val, ptr, flags, true, rootDomainEntrySourceCached
 		}
 	}
-	if s.published != nil {
-		val, ptr, flags, found = s.published.GetEntry(key)
-		if found {
-			return val, ptr, flags, true, rootDomainEntrySourcePublished
-		}
-	}
 	return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
+}
+
+func (s rootDomainSnapshot) getPublishedEntryWithSource(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
+	val, ptr, flags, found, source, _ = s.getPublishedEntryWithSourceError(key)
+	return val, ptr, flags, found, source
+}
+
+func (s rootDomainSnapshot) getPublishedEntryWithSourceError(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource, err error) {
+	if s.published == nil {
+		return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone, nil
+	}
+	if lookup, ok := s.published.(rootDomainLookupWithError); ok {
+		val, ptr, flags, found, err = lookup.GetEntryWithError(key)
+		if err != nil {
+			return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone, err
+		}
+		if found {
+			return val, ptr, flags, true, rootDomainEntrySourcePublished, nil
+		}
+		return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone, nil
+	}
+	val, ptr, flags, found = s.published.GetEntry(key)
+	if found {
+		return val, ptr, flags, true, rootDomainEntrySourcePublished, nil
+	}
+	return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone, nil
+}
+
+func (s rootDomainSnapshot) getEntryWithSource(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
+	val, ptr, flags, found, source, _ = s.getEntryWithSourceError(key)
+	return val, ptr, flags, found, source
+}
+
+func (s rootDomainSnapshot) getEntryWithSourceError(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource, err error) {
+	if val, ptr, flags, found, source = s.getCachedEntryWithSource(key); found {
+		return val, ptr, flags, true, source, nil
+	}
+	return s.getPublishedEntryWithSourceError(key)
 }
 
 func (s rootDomainSnapshot) visibleValue(key []byte) ([]byte, bool) {

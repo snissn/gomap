@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -40,6 +41,28 @@ const orderedRootOptimisticSystemDeltaRebaseMaxAttempts = 4
 
 const orderedRootDeltaBatchGroupParallelApplyMinRoots = 2
 
+var orderedRootReadOnlyPrepareResultPool = sync.Pool{
+	New: func() any {
+		return new(zipper.ReadOnlyPrepareResult)
+	},
+}
+
+func acquireOrderedRootReadOnlyPrepareResult() *zipper.ReadOnlyPrepareResult {
+	result, _ := orderedRootReadOnlyPrepareResultPool.Get().(*zipper.ReadOnlyPrepareResult)
+	if result == nil {
+		return new(zipper.ReadOnlyPrepareResult)
+	}
+	return result
+}
+
+func releaseOrderedRootReadOnlyPrepareResult(result *zipper.ReadOnlyPrepareResult) {
+	if result == nil {
+		return
+	}
+	result.ResetForReuse()
+	orderedRootReadOnlyPrepareResultPool.Put(result)
+}
+
 type orderedRootPublishStats struct {
 	warmAttempts                          uint64
 	warmNativeApplyAttempts               uint64
@@ -51,21 +74,72 @@ type orderedRootPublishStats struct {
 }
 
 type orderedRootPublishOptions struct {
-	maxWarmDeltaOps       int
-	leafPrefixCompression bool
-	leafColumnar          bool
-	packedValuePtr        bool
-	internalBaseDelta     bool
-	outerLeavesInValueLog bool
-	leafPageLog           bulk.LeafPageAppender
+	maxWarmDeltaOps              int
+	leafPrefixCompression        bool
+	leafColumnar                 bool
+	packedValuePtr               bool
+	internalBaseDelta            bool
+	outerLeavesInValueLog        bool
+	leafPageLog                  bulk.LeafPageAppender
+	applyOptions                 zipper.ApplyOptions
+	readOnlyPrepareSummary       *zipper.ReadOnlyLeafSpanSummary
+	readOnlyPrepareWorkerSummary *zipper.ReadOnlyLeafSpanWorkerRangeSummary
+	readOnlyPrepareCallerResult  *zipper.ReadOnlyPrepareResult
+	readOnlyPrepareNs            *uint64
+	readOnlyPrepareAttempted     *bool
+	readOnlyPrepareWorkerCount   int
 }
 
 type orderedRootDeltaBatchGroupApplyResult struct {
-	idx     int
-	rootID  uint64
-	retired []uint64
-	metrics adaptive.Metrics
-	err     error
+	idx                          int
+	rootID                       uint64
+	outputID                     preparedOutputID
+	output                       *preparedOutputSnapshot
+	outputPages                  uint64
+	outputLeafLogPtrs            uint64
+	pendingRetiredPages          []uint64
+	metrics                      adaptive.Metrics
+	readOnlyPrepareSummary       zipper.ReadOnlyLeafSpanSummary
+	readOnlyPrepareWorkerSummary zipper.ReadOnlyLeafSpanWorkerRangeSummary
+	readOnlyPrepareNs            uint64
+	readOnlyPrepareAttempted     bool
+	err                          error
+	attempted                    bool
+}
+
+type preparedLeafLogOutputRecorder interface {
+	notePreparedLeafLogPtr(page.LeafLogPtr)
+}
+
+type preparedRootApplyOutputCounter struct {
+	inner    zipper.PageAllocator
+	recorder preparedLeafLogOutputRecorder
+
+	pages       atomic.Uint64
+	leafLogPtrs atomic.Uint64
+}
+
+func (c *preparedRootApplyOutputCounter) Alloc(hint uint64) (uint64, error) {
+	id, err := c.inner.Alloc(hint)
+	if err != nil {
+		return 0, err
+	}
+	c.pages.Add(1)
+	return id, nil
+}
+
+func (c *preparedRootApplyOutputCounter) notePreparedLeafLogPtr(ptr page.LeafLogPtr) {
+	if c.recorder != nil {
+		c.recorder.notePreparedLeafLogPtr(ptr)
+	}
+	c.leafLogPtrs.Add(1)
+}
+
+func (c *preparedRootApplyOutputCounter) counts() (pages, leafLogPtrs uint64) {
+	if c == nil {
+		return 0, 0
+	}
+	return c.pages.Load(), c.leafLogPtrs.Load()
 }
 
 // OrderedRootStoragePolicy selects the physical storage policy for a published
@@ -116,6 +190,19 @@ type OrderedRootDeltaBatchPublishInput struct {
 	// Callers should opt in only when root deltas are already materialized and
 	// benchmarked as large enough to amortize goroutine and shared backend costs.
 	ParallelApply bool
+	// PrepareReadOnly runs the read-only leaf-span preparation pass before warm
+	// root apply and records planning stats. It is observability/planning only;
+	// it does not change publish output or enable parallel leaf execution.
+	PrepareReadOnly bool
+	// ReadOnlyPrepareResult, when non-nil, is both the reuse source and output
+	// destination for this root's optional preparation metadata. It must be
+	// owned by this input within the group; sharing one result pointer across
+	// group inputs is rejected. It is ignored unless PrepareReadOnly is true.
+	ReadOnlyPrepareResult *zipper.ReadOnlyPrepareResult
+	// ReadOnlyPrepareWorkerCount, when positive with PrepareReadOnly, records an
+	// allocation-free summary of deterministic leaf-span worker ranges for this
+	// target worker count. It is observability/planning only.
+	ReadOnlyPrepareWorkerCount int
 }
 
 func closeUnconsumedOrderedRootPublishIterators(ordered []OrderedRootPublishInput, consumed []bool) {
@@ -635,8 +722,35 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 	if err != nil {
 		return 0, nil, metrics, err
 	}
-	newRoot, retired, metrics, err = rootZipper.Apply(baseRoot, delta)
-	return
+	applyOptions := opts.applyOptions
+	var pooledResult *zipper.ReadOnlyPrepareResult
+	if applyOptions.PrepareReadOnly && opts.readOnlyPrepareCallerResult == nil {
+		pooledResult = acquireOrderedRootReadOnlyPrepareResult()
+		applyOptions.ReadOnlyPrepare = pooledResult.ReuseOptions()
+	}
+	if opts.applyOptions.PrepareReadOnly && opts.readOnlyPrepareAttempted != nil {
+		*opts.readOnlyPrepareAttempted = true
+	}
+	newRoot, retired, metrics, readOnlyPrepare, readOnlyPrepareNs, err := applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, applyOptions)
+	if opts.applyOptions.PrepareReadOnly && opts.readOnlyPrepareSummary != nil {
+		summary := readOnlyPrepare.LeafSpanSummary()
+		*opts.readOnlyPrepareSummary = summary
+	}
+	if opts.applyOptions.PrepareReadOnly && opts.readOnlyPrepareWorkerSummary != nil {
+		summary := readOnlyPrepare.LeafSpanWorkerRangeSummary(opts.readOnlyPrepareWorkerCount)
+		*opts.readOnlyPrepareWorkerSummary = summary
+	}
+	if opts.readOnlyPrepareCallerResult != nil {
+		*opts.readOnlyPrepareCallerResult = readOnlyPrepare
+	}
+	if opts.readOnlyPrepareNs != nil {
+		*opts.readOnlyPrepareNs = readOnlyPrepareNs
+	}
+	if pooledResult != nil {
+		*pooledResult = readOnlyPrepare
+		releaseOrderedRootReadOnlyPrepareResult(pooledResult)
+	}
+	return newRoot, retired, metrics, err
 }
 
 func (db *DB) publishOrderedRootDeltaBatch(baseRoot uint64, delta *batch.Batch, opts orderedRootPublishOptions) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, err error) {
@@ -673,10 +787,25 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 		err = errors.New("ordered root value-log leaf storage requires a leaf page log")
 		return
 	}
+	if opts.outerLeavesInValueLog {
+		if tracker := preparedOutputTrackerFromAlloc(alloc, coldBuildAlloc); tracker != nil {
+			opts.leafPageLog = preparedOutputLeafPageLog{inner: opts.leafPageLog, tracker: tracker}
+		}
+	}
 	if delta.IsEmpty() {
+		if opts.applyOptions.PrepareReadOnly {
+			if err = db.runOrderedRootReadOnlyPrepare(idx, baseRoot, delta, opts, alloc); err != nil {
+				return 0, nil, metrics, err
+			}
+		}
 		return baseRoot, nil, metrics, nil
 	}
 	if baseRoot == 0 {
+		if opts.applyOptions.PrepareReadOnly {
+			if err = db.runOrderedRootReadOnlyPrepare(idx, baseRoot, delta, opts, alloc); err != nil {
+				return 0, nil, metrics, err
+			}
+		}
 		iter := newOrderedRootDeltaBatchIterator(delta, includeDeletedOnColdBuild)
 		defer func() { _ = iter.Close() }()
 		if coldBuildAlloc == nil {
@@ -700,8 +829,77 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 	if err != nil {
 		return 0, nil, metrics, err
 	}
-	newRoot, retired, metrics, err = rootZipper.Apply(baseRoot, delta)
-	return
+	if opts.applyOptions.PrepareReadOnly {
+		if err = runOrderedRootReadOnlyPrepare(rootZipper, baseRoot, delta, opts); err != nil {
+			return 0, nil, metrics, err
+		}
+		opts.applyOptions.PrepareReadOnly = false
+	}
+	newRoot, retired, metrics, _, _, err = applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, opts.applyOptions)
+	return newRoot, retired, metrics, err
+}
+
+func (db *DB) runOrderedRootReadOnlyPrepare(idx *indexGen, baseRoot uint64, delta *batch.Batch, opts orderedRootPublishOptions, alloc zipper.PageAllocator) error {
+	rootZipper, err := db.orderedRootZipperForOptionsWithAllocator(idx, opts, alloc)
+	if err != nil {
+		return err
+	}
+	return runOrderedRootReadOnlyPrepare(rootZipper, baseRoot, delta, opts)
+}
+
+func runOrderedRootReadOnlyPrepare(rootZipper *zipper.Zipper, baseRoot uint64, delta *batch.Batch, opts orderedRootPublishOptions) error {
+	if opts.readOnlyPrepareAttempted != nil {
+		*opts.readOnlyPrepareAttempted = true
+	}
+	prepareOptions := opts.applyOptions.ReadOnlyPrepare
+	var pooledResult *zipper.ReadOnlyPrepareResult
+	if opts.readOnlyPrepareCallerResult == nil {
+		pooledResult = acquireOrderedRootReadOnlyPrepareResult()
+		prepareOptions = pooledResult.ReuseOptions()
+	}
+	prepareStart := time.Now()
+	prepared, err := rootZipper.PrepareReadOnly(baseRoot, delta, prepareOptions)
+	prepareNs := elapsedDurationNs(prepareStart)
+	if pooledResult != nil {
+		*pooledResult = prepared
+		defer releaseOrderedRootReadOnlyPrepareResult(pooledResult)
+	}
+	if opts.readOnlyPrepareSummary != nil {
+		summary := prepared.LeafSpanSummary()
+		*opts.readOnlyPrepareSummary = summary
+	}
+	if opts.readOnlyPrepareWorkerSummary != nil {
+		summary := prepared.LeafSpanWorkerRangeSummary(opts.readOnlyPrepareWorkerCount)
+		*opts.readOnlyPrepareWorkerSummary = summary
+	}
+	if opts.readOnlyPrepareCallerResult != nil {
+		*opts.readOnlyPrepareCallerResult = prepared
+	}
+	if opts.readOnlyPrepareNs != nil {
+		*opts.readOnlyPrepareNs = prepareNs
+	}
+	return err
+}
+
+func preparedOutputTrackerFromAlloc(alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator) preparedLeafLogOutputRecorder {
+	if tracker, ok := alloc.(preparedLeafLogOutputRecorder); ok && tracker != nil {
+		return tracker
+	}
+	if tracker, ok := coldBuildAlloc.(preparedLeafLogOutputRecorder); ok && tracker != nil {
+		return tracker
+	}
+	return nil
+}
+
+func applyOrderedRootDeltaWithOptions(rootZipper *zipper.Zipper, baseRoot uint64, delta *batch.Batch, opts zipper.ApplyOptions) (uint64, []uint64, adaptive.Metrics, zipper.ReadOnlyPrepareResult, uint64, error) {
+	applyResult, err := rootZipper.ApplyWithOptions(baseRoot, delta, opts)
+	// ApplyWithOptions returns its result by value and may include partial
+	// metrics when err is non-nil; preserve metrics but do not return partial
+	// root IDs or retired-page ownership on failure.
+	if err != nil {
+		return 0, nil, applyResult.Metrics, applyResult.ReadOnlyPrepare, applyResult.ReadOnlyPrepareNs, err
+	}
+	return applyResult.RootID, applyResult.PendingRetiredPages, applyResult.Metrics, applyResult.ReadOnlyPrepare, applyResult.ReadOnlyPrepareNs, nil
 }
 
 func buildOrderedRootDeltaBatch(baseIter, targetIter iterator.UnsafeIterator, trackRefs bool) (*batch.Batch, int, *valueLogRefDelta, error) {
@@ -904,7 +1102,7 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 					err = zipperErr
 					return
 				}
-				newRoot, retired, metrics, err = rootZipper.Apply(baseRoot, delta)
+				newRoot, retired, metrics, _, _, err = applyOrderedRootDeltaWithOptions(rootZipper, baseRoot, delta, zipper.ApplyOptions{})
 				if err != nil {
 					return
 				}
@@ -1003,6 +1201,10 @@ func mergeOrderedRootPublishMetrics(dst *adaptive.Metrics, src adaptive.Metrics)
 	dst.ZipperLeafLogRecordHintBytesRead += src.ZipperLeafLogRecordHintBytesRead
 	dst.ZipperLeafMerges += src.ZipperLeafMerges
 	dst.ZipperInternalMerges += src.ZipperInternalMerges
+	dst.ZipperInternalParallelMerges += src.ZipperInternalParallelMerges
+	dst.ZipperInternalParallelChildren += src.ZipperInternalParallelChildren
+	dst.ZipperInternalParallelWorkers += src.ZipperInternalParallelWorkers
+	dst.ZipperInternalParallelOps += src.ZipperInternalParallelOps
 	dst.ZipperLeafPagesWritten += src.ZipperLeafPagesWritten
 	dst.ZipperPagerLeafPagesWritten += src.ZipperPagerLeafPagesWritten
 	dst.ZipperLeafLogPagesWritten += src.ZipperLeafLogPagesWritten
@@ -1418,30 +1620,130 @@ func orderedRootDeltaBatchGroupParallelApplyEligible(ordered []OrderedRootDeltaB
 	return parallelActive >= orderedRootDeltaBatchGroupParallelApplyMinRoots
 }
 
-func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []OrderedRootDeltaBatchPublishInput, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator) ([]orderedRootDeltaBatchGroupApplyResult, bool) {
+func validateOrderedRootReadOnlyPrepareResultOwnership(ordered []OrderedRootDeltaBatchPublishInput) error {
+	// Keep this validation allocation-free. Ordered root groups are expected to
+	// be small, and the read-only prepare reuse path is allocation-sensitive.
+	for idx := range ordered {
+		result := ordered[idx].ReadOnlyPrepareResult
+		if !ordered[idx].PrepareReadOnly || result == nil {
+			continue
+		}
+		for otherIdx := idx + 1; otherIdx < len(ordered); otherIdx++ {
+			if ordered[otherIdx].PrepareReadOnly && ordered[otherIdx].ReadOnlyPrepareResult == result {
+				return errors.New("ordered root read-only prepare result reused by multiple inputs")
+			}
+		}
+	}
+	return nil
+}
+
+func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []OrderedRootDeltaBatchPublishInput, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator, includeOutputSnapshot bool) ([]orderedRootDeltaBatchGroupApplyResult, bool) {
 	results := make([]orderedRootDeltaBatchGroupApplyResult, len(ordered))
-	applyOne := func(orderedIdx int) orderedRootDeltaBatchGroupApplyResult {
-		result := orderedRootDeltaBatchGroupApplyResult{idx: orderedIdx}
+	if err := validateOrderedRootReadOnlyPrepareResultOwnership(ordered); err != nil {
+		if len(results) > 0 {
+			// recordOrderedRootDeltaBatchGroupApplyResults uses attempted to find
+			// terminal per-input errors. No root apply metrics are recorded for
+			// errored results.
+			results[0] = orderedRootDeltaBatchGroupApplyResult{idx: 0, err: err, attempted: true}
+		}
+		return results, false
+	}
+	var outputID preparedOutputID
+	var outputTracker *allocTracker
+	if tracker, ok := alloc.(*allocTracker); ok {
+		outputTracker = tracker
+		outputID = tracker.PreparedOutputID()
+	}
+	captureOutputSnapshot := func() {
+		if !includeOutputSnapshot || outputTracker == nil {
+			return
+		}
+		output := outputTracker.PreparedOutputSnapshot()
+		for resultIdx := range results {
+			if !results[resultIdx].attempted || results[resultIdx].err != nil {
+				continue
+			}
+			results[resultIdx].output = &output
+			results[resultIdx].outputID = output.ID
+		}
+	}
+	applyOne := func(orderedIdx int, isolateOutput bool) orderedRootDeltaBatchGroupApplyResult {
+		result := orderedRootDeltaBatchGroupApplyResult{
+			idx:       orderedIdx,
+			outputID:  outputID,
+			attempted: true,
+		}
 		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[orderedIdx].StoragePolicy)
 		if err != nil {
 			result.err = err
 			return result
 		}
-		rootID, retired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, opts, alloc, coldBuildAlloc, ordered[orderedIdx].IncludeDeletedOnColdBuild)
+		if ordered[orderedIdx].PrepareReadOnly {
+			opts.applyOptions.PrepareReadOnly = true
+			if resultOut := ordered[orderedIdx].ReadOnlyPrepareResult; resultOut != nil {
+				opts.applyOptions.ReadOnlyPrepare = resultOut.ReuseOptions()
+			}
+			opts.readOnlyPrepareSummary = &result.readOnlyPrepareSummary
+			if ordered[orderedIdx].ReadOnlyPrepareWorkerCount > 0 {
+				opts.readOnlyPrepareWorkerSummary = &result.readOnlyPrepareWorkerSummary
+				opts.readOnlyPrepareWorkerCount = ordered[orderedIdx].ReadOnlyPrepareWorkerCount
+			}
+			opts.readOnlyPrepareCallerResult = ordered[orderedIdx].ReadOnlyPrepareResult
+			opts.readOnlyPrepareNs = &result.readOnlyPrepareNs
+			opts.readOnlyPrepareAttempted = &result.readOnlyPrepareAttempted
+		}
+		beforePages, beforeLeafLogPtrs := uint64(0), uint64(0)
+		if outputTracker != nil {
+			beforePages, beforeLeafLogPtrs = outputTracker.PreparedOutputCounts()
+		}
+		rootAlloc := alloc
+		rootColdBuildAlloc := coldBuildAlloc
+		var counters []*preparedRootApplyOutputCounter
+		if isolateOutput && outputTracker != nil {
+			counter := &preparedRootApplyOutputCounter{inner: alloc, recorder: outputTracker}
+			rootAlloc = counter
+			counters = append(counters, counter)
+			if coldBuildAlloc == nil || coldBuildAlloc == alloc {
+				rootColdBuildAlloc = counter
+			} else {
+				coldCounter := &preparedRootApplyOutputCounter{inner: coldBuildAlloc, recorder: outputTracker}
+				rootColdBuildAlloc = coldCounter
+				counters = append(counters, coldCounter)
+			}
+		}
+		rootID, pendingRetiredPages, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, opts, rootAlloc, rootColdBuildAlloc, ordered[orderedIdx].IncludeDeletedOnColdBuild)
 		result.rootID = rootID
-		result.retired = retired
+		result.pendingRetiredPages = pendingRetiredPages
 		result.metrics = metrics
 		result.err = err
+		if err == nil {
+			if len(counters) == 0 {
+				afterPages, afterLeafLogPtrs := uint64(0), uint64(0)
+				if outputTracker != nil {
+					afterPages, afterLeafLogPtrs = outputTracker.PreparedOutputCounts()
+				}
+				result.outputPages = afterPages - beforePages
+				result.outputLeafLogPtrs = afterLeafLogPtrs - beforeLeafLogPtrs
+			} else {
+				for _, counter := range counters {
+					pages, leafLogPtrs := counter.counts()
+					result.outputPages += pages
+					result.outputLeafLogPtrs += leafLogPtrs
+				}
+			}
+		}
 		return result
 	}
 
 	if !orderedRootDeltaBatchGroupParallelApplyEligible(ordered) {
 		for orderedIdx := range ordered {
-			results[orderedIdx] = applyOne(orderedIdx)
+			results[orderedIdx] = applyOne(orderedIdx, false)
 			if results[orderedIdx].err != nil {
+				captureOutputSnapshot()
 				return results, false
 			}
 		}
+		captureOutputSnapshot()
 		return results, false
 	}
 
@@ -1460,23 +1762,108 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 		wg.Add(1)
 		go func(orderedIdx int) {
 			defer wg.Done()
-			results[orderedIdx] = applyOne(orderedIdx)
+			results[orderedIdx] = applyOne(orderedIdx, true)
 		}(orderedIdx)
 	}
 	wg.Wait()
 	for orderedIdx := range ordered {
 		if ordered[orderedIdx].ParallelApply && ordered[orderedIdx].Delta != nil && !ordered[orderedIdx].Delta.IsEmpty() {
 			if results[orderedIdx].err != nil {
+				captureOutputSnapshot()
 				return results, false
 			}
 			continue
 		}
-		results[orderedIdx] = applyOne(orderedIdx)
+		results[orderedIdx] = applyOne(orderedIdx, false)
 		if results[orderedIdx].err != nil {
+			captureOutputSnapshot()
 			return results, false
 		}
 	}
+	captureOutputSnapshot()
 	return results, parallelRoots >= orderedRootDeltaBatchGroupParallelApplyMinRoots
+}
+
+func recordOrderedRootDeltaBatchGroupApplyResults(
+	preparedGroup *preparedRootApplyGroup,
+	rootIDs []uint64,
+	results []orderedRootDeltaBatchGroupApplyResult,
+	pendingRetiredPages *[]uint64,
+	mergedMetrics *adaptive.Metrics,
+	phaseStats *orderedRootDeltaGroupPublishPhaseStats,
+	rootsObserved *int,
+) error {
+	var firstErr error
+	for orderedIdx := range results {
+		result := results[orderedIdx]
+		if !result.attempted {
+			continue
+		}
+		if result.err != nil {
+			if firstErr == nil {
+				firstErr = result.err
+			}
+			continue
+		}
+		if orderedIdx < len(rootIDs) {
+			rootIDs[orderedIdx] = result.rootID
+		}
+		if preparedGroup != nil {
+			if result.output != nil {
+				preparedGroup.markPreparedOutput(orderedIdx, result.rootID, *result.output)
+			} else {
+				preparedGroup.markPrepared(orderedIdx, result.rootID, result.outputID)
+			}
+		}
+		if rootsObserved != nil {
+			(*rootsObserved)++
+		}
+		if pendingRetiredPages != nil {
+			*pendingRetiredPages = append(*pendingRetiredPages, result.pendingRetiredPages...)
+		}
+		if mergedMetrics != nil {
+			mergeOrderedRootPublishMetrics(mergedMetrics, result.metrics)
+		}
+		if phaseStats != nil {
+			phaseStats.rootApplyMetrics.add(result.metrics)
+			phaseStats.rootApplyCalls++
+			if result.readOnlyPrepareAttempted {
+				summary := result.readOnlyPrepareSummary
+				phaseStats.rootApplyReadOnlyPrepareNs += result.readOnlyPrepareNs
+				phaseStats.rootApplyReadOnlyPrepareCalls++
+				phaseStats.rootApplyReadOnlyPrepareOps += uint64(summary.Ops)
+				phaseStats.rootApplyReadOnlyPrepareLeafSpans += uint64(summary.Spans)
+				workerSummary := result.readOnlyPrepareWorkerSummary
+				phaseStats.rootApplyReadOnlyPrepareWorker.targets += uint64(workerSummary.TargetWorkers)
+				phaseStats.rootApplyReadOnlyPrepareWorker.ranges += uint64(workerSummary.Ranges)
+				phaseStats.rootApplyReadOnlyPrepareWorker.minOps += uint64(workerSummary.MinRangeOps)
+				phaseStats.rootApplyReadOnlyPrepareWorker.maxOps += uint64(workerSummary.MaxRangeOps)
+				phaseStats.rootApplyReadOnlyPrepareWorker.singleSpan += uint64(workerSummary.SingleSpanRanges)
+				if summary.ExactLeafSpans {
+					phaseStats.rootApplyReadOnlyPrepareExactPlans++
+				}
+				if summary.Maintenance {
+					phaseStats.rootApplyReadOnlyPrepareMaintenance++
+				}
+				if summary.ColdBuild {
+					phaseStats.rootApplyReadOnlyPrepareColdBuilds++
+				}
+			}
+		}
+	}
+	return firstErr
+}
+
+func orderedRootDeltaBatchGroupPreparedOutputCounts(results []orderedRootDeltaBatchGroupApplyResult) (pages, leafLogPtrs uint64) {
+	for idx := range results {
+		result := results[idx]
+		if !result.attempted || result.err != nil {
+			continue
+		}
+		pages += result.outputPages
+		leafLogPtrs += result.outputLeafLogPtrs
+	}
+	return pages, leafLogPtrs
 }
 
 func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRootDeltaBatchPublishInput, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, retrySerialized bool, err error) {
@@ -1524,7 +1911,47 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		return 0, nil, retrySerialized, nil
 	}
 
-	rootTracker := newAllocTracker(idx.allocator)
+	phaseStart := time.Now()
+	var preparedGroup preparedRootApplyGroup
+	includePreparedChecksum := db.testPreparedRootApplyHook != nil
+	initPreparedRootApplyGroup(&preparedGroup, baseUserRoot, baseSystemRoot, ordered, includePreparedChecksum)
+	phaseStats.preparedRootPrepareNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	preparedGroupObserved := false
+	observePreparedGroup := func(state preparedRootApplyState) {
+		if preparedGroupObserved {
+			return
+		}
+		preparedGroupObserved = true
+		observePreparedRootApplyGroup(db, &phaseStats, &preparedGroup, state)
+	}
+	publishObserved := false
+	observePublish := func(wait, hold time.Duration, publishErr error) {
+		if publishObserved {
+			return
+		}
+		publishObserved = true
+		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, publishErr)
+	}
+	defer func() {
+		if err == nil && !retrySerialized {
+			return
+		}
+		// Optimistic attempts can prepare data/system roots before failing or
+		// falling back to the serialized path. Record those roots as abandoned
+		// before allocator cleanup discards the prepared output.
+		if !preparedGroupObserved {
+			observePreparedGroup(preparedRootApplyStateAbandoned)
+		}
+		if err != nil && !publishObserved {
+			db.observeOrderedRootDeltaGroupPreparedRootApply(phaseStats.preparedRootPrepareNs, phaseStats.preparedRootStats)
+			return
+		}
+		if retrySerialized && !publishObserved {
+			db.observeOrderedRootDeltaGroupPreparedRootApply(phaseStats.preparedRootPrepareNs, phaseStats.preparedRootStats)
+		}
+	}()
+
+	rootTracker := db.newPreparedOutputAllocTracker(idx.allocator)
 	var systemTracker *allocTracker
 	commitStarted := false
 	freeTrackedPages := func() {
@@ -1545,10 +1972,10 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 
 	rootIDs = make([]uint64, len(ordered))
 	systemOpts := systemRootOrderedPublishOptions(db)
-	var nonSystemRetired []uint64
+	var nonSystemPendingRetiredPages []uint64
 	var nonSystemMetrics adaptive.Metrics
-	phaseStart := time.Now()
-	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idx, ordered, rootTracker, rootTracker)
+	phaseStart = time.Now()
+	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idx, ordered, rootTracker, rootTracker, includePreparedChecksum)
 	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if parallelRootApply {
 		phaseStats.rootApplyParallelGroups++
@@ -1558,24 +1985,17 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			}
 		}
 	}
-	for orderedIdx := range rootApplyResults {
-		result := rootApplyResults[orderedIdx]
-		if result.err != nil {
-			return 0, nil, false, result.err
-		}
-		rootIDs[orderedIdx] = result.rootID
-		rootsObserved++
-		nonSystemRetired = append(nonSystemRetired, result.retired...)
-		mergeOrderedRootPublishMetrics(&nonSystemMetrics, result.metrics)
-		phaseStats.rootApplyMetrics.add(result.metrics)
-		phaseStats.rootApplyCalls++
+	outputPages, outputLeafLogPtrs := orderedRootDeltaBatchGroupPreparedOutputCounts(rootApplyResults)
+	preparedGroup.noteSharedOutputCounts(outputPages, outputLeafLogPtrs)
+	if applyErr := recordOrderedRootDeltaBatchGroupApplyResults(&preparedGroup, rootIDs, rootApplyResults, &nonSystemPendingRetiredPages, &nonSystemMetrics, &phaseStats, &rootsObserved); applyErr != nil {
+		return 0, nil, false, applyErr
 	}
 
 	systemBaseRoot := baseSystemRoot
 	var committedRootPages []uint64
 	var committedSystemPages []uint64
 	for attempt := 0; ; attempt++ {
-		systemTracker = newAllocTracker(idx.allocator)
+		systemTracker = db.newPreparedOutputAllocTracker(idx.allocator)
 		phaseStart := time.Now()
 		iter, err := buildSystemDeltaIter(append([]uint64(nil), rootIDs...))
 		phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
@@ -1591,13 +2011,22 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			return 0, nil, false, err
 		}
 		phaseStart = time.Now()
-		rootID, systemRetired, systemMetrics, applyErr := db.publishOrderedRootDeltaBatchWithAllocator(idx, systemBaseRoot, systemDelta, systemOpts, systemTracker, systemTracker, false)
+		systemPreparedIdx := preparedGroup.setSystemRoot(systemBaseRoot, systemDelta, includePreparedChecksum)
+		phaseStats.preparedRootPrepareNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+		phaseStart = time.Now()
+		rootID, systemPendingRetiredPages, systemMetrics, applyErr := db.publishOrderedRootDeltaBatchWithAllocator(idx, systemBaseRoot, systemDelta, systemOpts, systemTracker, systemTracker, systemBaseRoot == 0)
 		phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.systemApplyCalls++
 		_ = systemDelta.Close()
 		if applyErr != nil {
 			err = applyErr
 			return 0, nil, false, err
+		}
+		if includePreparedChecksum {
+			preparedGroup.markPreparedOutput(systemPreparedIdx, rootID, systemTracker.PreparedOutputSnapshot())
+		} else {
+			outputPages, outputLeafLogPtrs := systemTracker.PreparedOutputCounts()
+			preparedGroup.markPreparedOutputCounts(systemPreparedIdx, rootID, systemTracker.PreparedOutputID(), outputPages, outputLeafLogPtrs)
 		}
 		phaseStats.systemApplyMetrics.add(systemMetrics)
 
@@ -1627,8 +2056,8 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			curUserRoot = baseUserRoot
 		}
 
-		retired := append([]uint64(nil), nonSystemRetired...)
-		retired = append(retired, systemRetired...)
+		pendingRetiredPages := append([]uint64(nil), nonSystemPendingRetiredPages...)
+		pendingRetiredPages = append(pendingRetiredPages, systemPendingRetiredPages...)
 		merged := nonSystemMetrics
 		mergeOrderedRootPublishMetrics(&merged, systemMetrics)
 		newSystemRoot = rootID
@@ -1638,10 +2067,23 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		// delta can change collection descriptors. Keep the incremental ref tracker
 		// conservative by invalidating it after commit.
 		var vlogRefDelta *valueLogRefDelta
+		preparedGroup.markInstalling()
+		guardNs, guardErr := db.runInstallGuard(orderedRootDeltaGroupSystemInstallGuard(systemBaseRoot))
+		phaseStats.installGuardNs += guardNs
+		phaseStats.installGuardCalls++
+		if guardErr != nil {
+			phaseStats.installGuardFailures++
+			hold := time.Since(holdStart)
+			db.commitMu.Unlock()
+			observePreparedGroup(preparedRootApplyStateAbandoned)
+			observePublish(wait, hold, guardErr)
+			err = guardErr
+			return 0, nil, false, err
+		}
 		phaseStart = time.Now()
 		var post finalizeCommitPost
 		commitStarted = true
-		post, err = db.finalizeCommitLocked(curUserRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil)
+		post, err = db.finalizeCommitLocked(curUserRoot, newSystemRoot, pendingRetiredPages, false, merged, nil, true, vlogRefDelta, nil, nil)
 		phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.finalizeCalls++
 		hold := time.Since(holdStart)
@@ -1649,12 +2091,17 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		committedSystemPages = systemTracker.Pages()
 		db.commitMu.Unlock()
 		if err != nil {
+			observePreparedGroup(preparedRootApplyStateAbandoned)
+			observePublish(wait, hold, err)
 			return 0, nil, false, err
 		}
+		rootTracker.MarkInstalled()
+		systemTracker.MarkInstalled()
 		db.invalidateLeafGenerationSubtreeStats(append(committedRootPages, committedSystemPages...))
 		db.finalizeCommitPostWork(post)
 		db.writeMu.RUnlock()
-		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, nil)
+		observePreparedGroup(preparedRootApplyStateInstalled)
+		observePublish(wait, hold, nil)
 		return newSystemRoot, rootIDs, false, nil
 	}
 }
@@ -1711,30 +2158,57 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	}
 
+	phaseStart := time.Now()
+	var preparedGroup preparedRootApplyGroup
+	includePreparedChecksum := db.testPreparedRootApplyHook != nil
+	initPreparedRootApplyGroup(&preparedGroup, userRoot, baseSystemRoot, ordered, includePreparedChecksum)
+	phaseStats.preparedRootPrepareNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	preparedGroupObserved := false
+	observePreparedGroup := func(state preparedRootApplyState) {
+		if preparedGroupObserved {
+			return
+		}
+		preparedGroupObserved = true
+		observePreparedRootApplyGroup(db, &phaseStats, &preparedGroup, state)
+	}
+	defer func() {
+		if !preparedGroupObserved && err != nil {
+			observePreparedGroup(preparedRootApplyStateAbandoned)
+		}
+	}()
+
+	rootTracker := db.newPreparedOutputAllocTracker(idxGen.allocator)
+	systemTracker := db.newPreparedOutputAllocTracker(idxGen.allocator)
+	commitFinished := false
+	defer func() {
+		if err != nil && !commitFinished {
+			_ = rootTracker.FreeAll()
+			_ = systemTracker.FreeAll()
+		}
+	}()
+
 	rootIDs = make([]uint64, len(ordered))
 	systemOpts := systemRootOrderedPublishOptions(db)
-	var retired []uint64
+	var pendingRetiredPages []uint64
 	var merged adaptive.Metrics
-	for idx := range ordered {
-		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[idx].StoragePolicy)
-		if err != nil {
-			return 0, nil, err
+	phaseStart = time.Now()
+	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, ordered, rootTracker, rootTracker, includePreparedChecksum)
+	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	if parallelRootApply {
+		phaseStats.rootApplyParallelGroups++
+		for orderedIdx := range ordered {
+			if ordered[orderedIdx].ParallelApply && ordered[orderedIdx].Delta != nil && !ordered[orderedIdx].Delta.IsEmpty() {
+				phaseStats.rootApplyParallelRoots++
+			}
 		}
-		phaseStart := time.Now()
-		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idxGen, ordered[idx].BaseRoot, ordered[idx].Delta, opts, idxGen.allocator, &pagerAllocator{p: idxGen.pager}, ordered[idx].IncludeDeletedOnColdBuild)
-		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
-		phaseStats.rootApplyCalls++
-		if err != nil {
-			return 0, nil, err
-		}
-		rootIDs[idx] = rootID
-		rootsObserved++
-		retired = append(retired, rootRetired...)
-		mergeOrderedRootPublishMetrics(&merged, metrics)
-		phaseStats.rootApplyMetrics.add(metrics)
+	}
+	outputPages, outputLeafLogPtrs := orderedRootDeltaBatchGroupPreparedOutputCounts(rootApplyResults)
+	preparedGroup.noteSharedOutputCounts(outputPages, outputLeafLogPtrs)
+	if applyErr := recordOrderedRootDeltaBatchGroupApplyResults(&preparedGroup, rootIDs, rootApplyResults, &pendingRetiredPages, &merged, &phaseStats, &rootsObserved); applyErr != nil {
+		return 0, nil, applyErr
 	}
 
-	phaseStart := time.Now()
+	phaseStart = time.Now()
 	iter, err := buildSystemDeltaIter(append([]uint64(nil), rootIDs...))
 	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if err != nil {
@@ -1743,24 +2217,40 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	if iter == nil {
 		return 0, nil, errors.New("nil system root delta iterator")
 	}
-	phaseStart = time.Now()
-	rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(baseSystemRoot, iter, systemOpts)
-	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
-	phaseStats.systemApplyCalls++
+	systemDelta, err := orderedRootDeltaBatchFromIterator(iter)
+	_ = iter.Close()
 	if err != nil {
 		return 0, nil, err
 	}
+	phaseStart = time.Now()
+	systemPreparedIdx := preparedGroup.setSystemRoot(baseSystemRoot, systemDelta, includePreparedChecksum)
+	phaseStats.preparedRootPrepareNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	phaseStart = time.Now()
+	rootID, systemPendingRetiredPages, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idxGen, baseSystemRoot, systemDelta, systemOpts, systemTracker, systemTracker, baseSystemRoot == 0)
+	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	phaseStats.systemApplyCalls++
+	_ = systemDelta.Close()
+	if err != nil {
+		return 0, nil, err
+	}
+	if includePreparedChecksum {
+		preparedGroup.markPreparedOutput(systemPreparedIdx, rootID, systemTracker.PreparedOutputSnapshot())
+	} else {
+		outputPages, outputLeafLogPtrs := systemTracker.PreparedOutputCounts()
+		preparedGroup.markPreparedOutputCounts(systemPreparedIdx, rootID, systemTracker.PreparedOutputID(), outputPages, outputLeafLogPtrs)
+	}
 	newSystemRoot = rootID
-	retired = append(retired, rootRetired...)
+	pendingRetiredPages = append(pendingRetiredPages, systemPendingRetiredPages...)
 	mergeOrderedRootPublishMetrics(&merged, metrics)
 	phaseStats.systemApplyMetrics.add(metrics)
 
-	db.mu.RLock()
-	curUserRoot := db.meta.UserRootPageID
-	curSystemRoot := db.meta.SystemRootPageID
-	db.mu.RUnlock()
-	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
-		return 0, nil, errors.New("concurrent modification detected during ordered root group publish")
+	preparedGroup.markInstalling()
+	guardNs, guardErr := db.runInstallGuard(orderedRootDeltaGroupInstallGuard(userRoot, baseSystemRoot))
+	phaseStats.installGuardNs += guardNs
+	phaseStats.installGuardCalls++
+	if guardErr != nil {
+		phaseStats.installGuardFailures++
+		return 0, nil, guardErr
 	}
 
 	// Batch-based grouped deltas have the same value-log reachability shape as
@@ -1769,12 +2259,19 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	// conservative by invalidating it after commit.
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
-	err = db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta, nil, nil)
+	committedRootPages := rootTracker.Pages()
+	committedSystemPages := systemTracker.Pages()
+	err = db.finalizeCommit(userRoot, newSystemRoot, pendingRetiredPages, false, merged, nil, true, vlogRefDelta, nil, nil)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
 	if err != nil {
 		return 0, nil, err
 	}
+	commitFinished = true
+	rootTracker.MarkInstalled()
+	systemTracker.MarkInstalled()
+	db.invalidateLeafGenerationSubtreeStats(append(committedRootPages, committedSystemPages...))
+	observePreparedGroup(preparedRootApplyStateInstalled)
 	return newSystemRoot, rootIDs, nil
 }
 

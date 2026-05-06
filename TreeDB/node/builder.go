@@ -100,6 +100,7 @@ const (
 	leafColumnarEntriesPoolMaxCap  = 1024
 	internalBaseEntriesPoolInitCap = 256
 	internalBaseEntriesPoolMaxCap  = 1024
+	internalFenceScratchMaxCap     = page.PageSize
 )
 
 var leafColumnarV2EntriesPool = sync.Pool{
@@ -279,6 +280,8 @@ func NewBuilderWithOptions(data []byte, pType page.PageType, opts BuilderOptions
 
 // ResetWithOptions reinitializes an existing builder instance for reuse.
 func (b *Builder) ResetWithOptions(data []byte, pType page.PageType, opts BuilderOptions) {
+	internalFenceLow := keepInternalFenceScratch(b.internalFenceLow)
+	internalFenceHigh := keepInternalFenceScratch(b.internalFenceHigh)
 	b.ReleaseScratch()
 
 	leafPrefix := opts.LeafPrefixCompression
@@ -295,6 +298,8 @@ func (b *Builder) ResetWithOptions(data []byte, pType page.PageType, opts Builde
 		leafColumnarV2:        leafColumnarV2,
 		leafPackedValuePtr:    opts.PackedValuePtr,
 		internalBaseDelta:     opts.InternalBaseDelta,
+		internalFenceLow:      internalFenceLow,
+		internalFenceHigh:     internalFenceHigh,
 	}
 	if pType == page.PageTypeLeaf && opts.LeafColumnar {
 		if leafPrefix {
@@ -335,8 +340,15 @@ func (b *Builder) ResetWithOptions(data []byte, pType page.PageType, opts Builde
 	}
 }
 
+func keepInternalFenceScratch(buf []byte) []byte {
+	if cap(buf) > internalFenceScratchMaxCap {
+		return nil
+	}
+	return buf[:0]
+}
+
 // ReleaseScratch returns pooled scratch resources held by the builder and
-// drops references so the builder can be reused safely.
+// drops large references so the builder can be reused safely.
 func (b *Builder) ReleaseScratch() {
 	if b == nil {
 		return
@@ -346,8 +358,8 @@ func (b *Builder) ReleaseScratch() {
 	b.releaseInternalBaseDeltaScratch()
 	b.data = nil
 	b.leafPrevKey = nil
-	b.internalFenceLow = nil
-	b.internalFenceHigh = nil
+	b.internalFenceLow = keepInternalFenceScratch(b.internalFenceLow)
+	b.internalFenceHigh = keepInternalFenceScratch(b.internalFenceHigh)
 }
 
 // SetPageID sets the page ID (can be done at finish too).
@@ -372,12 +384,12 @@ func (b *Builder) SetInternalFenceBounds(low, high []byte) {
 	}
 	b.internalFenceBounds = true
 	if len(low) == 0 {
-		b.internalFenceLow = nil
+		b.internalFenceLow = b.internalFenceLow[:0]
 	} else {
 		b.internalFenceLow = append(b.internalFenceLow[:0], low...)
 	}
 	if len(high) == 0 {
-		b.internalFenceHigh = nil
+		b.internalFenceHigh = b.internalFenceHigh[:0]
 	} else {
 		b.internalFenceHigh = append(b.internalFenceHigh[:0], high...)
 	}

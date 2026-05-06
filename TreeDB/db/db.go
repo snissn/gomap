@@ -58,6 +58,14 @@ type snapshotView struct {
 	vlogManager *valuelog.Manager
 }
 
+type orderedRootDeltaGroupReadOnlyPrepareWorkerCounters struct {
+	targets    atomic.Uint64
+	ranges     atomic.Uint64
+	minOps     atomic.Uint64
+	maxOps     atomic.Uint64
+	singleSpan atomic.Uint64
+}
+
 type DB struct {
 	valueLogManager                *valuelog.Manager
 	snapshotViewRO                 atomic.Pointer[snapshotView]
@@ -198,6 +206,10 @@ type DB struct {
 	orderedRootDeltaGroupRootApplyLeafLogRecordHintBytesRead    atomic.Uint64
 	orderedRootDeltaGroupRootApplyLeafMerges                    atomic.Uint64
 	orderedRootDeltaGroupRootApplyInternalMerges                atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalParallelMerges        atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalParallelChildren      atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalParallelWorkers       atomic.Uint64
+	orderedRootDeltaGroupRootApplyInternalParallelOps           atomic.Uint64
 	orderedRootDeltaGroupRootApplyLeafPagesWritten              atomic.Uint64
 	orderedRootDeltaGroupRootApplyPagerLeafPagesWritten         atomic.Uint64
 	orderedRootDeltaGroupRootApplyLeafLogPagesWritten           atomic.Uint64
@@ -212,13 +224,49 @@ type DB struct {
 	orderedRootDeltaGroupRootApplyInternalLeafLogRefs           atomic.Uint64
 	orderedRootDeltaGroupRootApplyInternalLeafLogRefCopies      atomic.Uint64
 	orderedRootDeltaGroupRootApplyRootSplitLevels               atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareNs             atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareCalls          atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareOps            atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareLeafSpans      atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareWorker         orderedRootDeltaGroupReadOnlyPrepareWorkerCounters
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareExactPlans     atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareMaintenance    atomic.Uint64
+	orderedRootDeltaGroupRootApplyReadOnlyPrepareColdBuilds     atomic.Uint64
 	orderedRootDeltaGroupSystemBuildNs                          atomic.Uint64
 	orderedRootDeltaGroupSystemApplyNs                          atomic.Uint64
 	orderedRootDeltaGroupSystemApplyCalls                       atomic.Uint64
 	orderedRootDeltaGroupSystemApplyOps                         atomic.Uint64
 	orderedRootDeltaGroupSystemApplyNodeLoads                   atomic.Uint64
+	orderedRootDeltaGroupInstallGuardNs                         atomic.Uint64
+	orderedRootDeltaGroupInstallGuardCalls                      atomic.Uint64
+	orderedRootDeltaGroupInstallGuardFailures                   atomic.Uint64
 	orderedRootDeltaGroupFinalizeNs                             atomic.Uint64
 	orderedRootDeltaGroupFinalizeCalls                          atomic.Uint64
+
+	orderedRootDeltaGroupPreparedRootPrepareNs            atomic.Uint64
+	orderedRootDeltaGroupPreparedRootGroups               atomic.Uint64
+	orderedRootDeltaGroupPreparedRootRoots                atomic.Uint64
+	orderedRootDeltaGroupPreparedRootEntries              atomic.Uint64
+	orderedRootDeltaGroupPreparedRootTombstones           atomic.Uint64
+	orderedRootDeltaGroupPreparedRootKeyBytes             atomic.Uint64
+	orderedRootDeltaGroupPreparedRootValueBytes           atomic.Uint64
+	orderedRootDeltaGroupPreparedRootPointerValues        atomic.Uint64
+	orderedRootDeltaGroupPreparedRootInstalled            atomic.Uint64
+	orderedRootDeltaGroupPreparedRootAbandoned            atomic.Uint64
+	orderedRootDeltaGroupPreparedRootOutputPages          atomic.Uint64
+	orderedRootDeltaGroupPreparedRootOutputLeafLogPtrs    atomic.Uint64
+	orderedRootDeltaGroupPreparedRootInstalledPages       atomic.Uint64
+	orderedRootDeltaGroupPreparedRootInstalledLeafLogPtrs atomic.Uint64
+	orderedRootDeltaGroupPreparedRootAbandonedPages       atomic.Uint64
+	orderedRootDeltaGroupPreparedRootAbandonedLeafLogPtrs atomic.Uint64
+	preparedOutputNextID                                  atomic.Uint64
+
+	publishInstallGuardNs                   atomic.Uint64
+	publishInstallGuardCalls                atomic.Uint64
+	publishInstallGuardFailures             atomic.Uint64
+	publishInstallGuardHookFailures         atomic.Uint64
+	publishInstallGuardUserRootMismatches   atomic.Uint64
+	publishInstallGuardSystemRootMismatches atomic.Uint64
 
 	// R4 warm-publish counters. Warm native apply is used for bounded deltas;
 	// larger or ineligible deltas record an explicit rebuild fallback selection.
@@ -238,6 +286,8 @@ type DB struct {
 	testFailFinalizeCommit        atomic.Bool
 	testBatchCreateHook           func()
 	testOrderedRootPublishHook    func(baseRoot uint64)
+	testInstallGuardHook          func(dbInstallGuardHookEvent) error
+	testPreparedRootApplyHook     func(preparedRootApplyGroup)
 	testSystemRootWarmMaxDeltaOps int
 	// testFailWriteMeta forces writeMeta to fail before mutating the target meta
 	// page so tests can exercise pre-publish cleanup paths.

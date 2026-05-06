@@ -11,8 +11,8 @@ func TestInternalMergeParallelThresholds_Default(t *testing.T) {
 
 func TestInternalMergeParallelThresholds_MaintenanceIgnoresPressure(t *testing.T) {
 	minChildren, minOps := internalMergeParallelThresholds(true, ParallelMergePressureCritical)
-	if minChildren != mergeInternalMinParallelChildren || minOps != mergeInternalMinParallelOps {
-		t.Fatalf("maintenance thresholds=(children=%d ops=%d) want (%d,%d)", minChildren, minOps, mergeInternalMinParallelChildren, mergeInternalMinParallelOps)
+	if minChildren != mergeInternalMinParallelChildren || minOps != mergeInternalMaintenanceMinParallelOps {
+		t.Fatalf("maintenance thresholds=(children=%d ops=%d) want (%d,%d)", minChildren, minOps, mergeInternalMinParallelChildren, mergeInternalMaintenanceMinParallelOps)
 	}
 }
 

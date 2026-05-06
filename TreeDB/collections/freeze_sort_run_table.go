@@ -17,7 +17,7 @@ type freezeSortRunEntry struct {
 	key   []byte
 	value []byte
 	ptr   page.ValuePtr
-	seq   uint64
+	seq   uint32
 	flags byte
 }
 
@@ -28,8 +28,11 @@ type freezeSortRunTable struct {
 	latestDirty bool
 	frozen      bool
 	sizeBytes   int64
-	nextSeq     uint64
+	nextSeq     uint32
 }
+
+const freezeSortRunTablePreallocEntryThreshold = 1024
+const freezeSortRunTableGeometricGrowthEntryThreshold = 1 << 16
 
 // freezeSortRunTable is a collection-write-domain run table optimized for
 // root-local accumulation: writes append cheaply while mutable, and rotation to
@@ -101,6 +104,9 @@ func (t *freezeSortRunTable) ApplyStealEntryFunc(count int, emit func(i int) (ke
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if count >= freezeSortRunTablePreallocEntryThreshold && cap(t.entries)-len(t.entries) < count {
+		t.entries = growFreezeSortRunEntries(t.entries, count)
+	}
 	for i := 0; i < count; i++ {
 		key, value, ptr, flags, err := emit(i)
 		if err != nil {
@@ -128,6 +134,35 @@ func (t *freezeSortRunTable) ApplyStealEntryFunc(count int, emit func(i int) (ke
 		}
 	}
 	return nil
+}
+
+func growFreezeSortRunEntries(entries []freezeSortRunEntry, additional int) []freezeSortRunEntry {
+	if additional <= 0 || cap(entries)-len(entries) >= additional {
+		return entries
+	}
+	needed := len(entries) + additional
+	newCap := cap(entries)
+	if newCap < freezeSortRunTableGeometricGrowthEntryThreshold {
+		newCap = needed
+	} else {
+		for newCap < needed {
+			growth := newCap / 2
+			if growth <= 0 {
+				growth = additional
+			}
+			if growth <= 0 || newCap > maxCollectionInt-growth {
+				newCap = needed
+				break
+			}
+			newCap += growth
+		}
+	}
+	if newCap < needed {
+		newCap = needed
+	}
+	out := make([]freezeSortRunEntry, len(entries), newCap)
+	copy(out, entries)
+	return out
 }
 
 func (t *freezeSortRunTable) Delete(key []byte) {

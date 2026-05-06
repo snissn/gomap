@@ -128,7 +128,7 @@ func TestCollectionIndexedFlushGuardCounters(t *testing.T) {
 		col.writeDomain.mu.Lock()
 		col.writeDomain.indexedPublishingUnits = []indexedFlushUnit{{}}
 		col.writeDomain.mu.Unlock()
-		rootIDs := make([]uint64, len(work.rootNames))
+		rootIDs := make([]uint64, len(work.batch.rootNames))
 		for i := range rootIDs {
 			rootIDs[i] = uint64(1000 + i)
 		}

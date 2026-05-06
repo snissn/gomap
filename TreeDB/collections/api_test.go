@@ -609,13 +609,18 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 	if stats.SecondaryKeyBytes == 0 {
 		t.Fatal("stats secondary key bytes=0 want positive")
 	}
-	if stats.CurrentRead != 0 || stats.Callback != 0 || stats.BufferStage != 0 ||
+	if stats.BatchValidate != 0 || stats.BatchClone != 0 ||
+		stats.PlanSetup != 0 || stats.BufferedReadSnapshot != 0 ||
+		stats.CurrentRead != 0 || stats.BSONIDValidation != 0 ||
+		stats.Callback != 0 || stats.ReplacementStage != 0 ||
+		stats.IndexStateCompare != 0 || stats.BufferStage != 0 ||
 		stats.BufferStagePrecheck != 0 ||
 		stats.BufferStageLockWait != 0 || stats.BufferStageLockHold != 0 ||
 		stats.BufferStageValidation != 0 || stats.BufferStageRootScan != 0 ||
 		stats.BufferStageDomainPrepare != 0 ||
 		stats.BufferStagePrimaryIdx != 0 || stats.BufferStageUniqueIdx != 0 ||
-		stats.BufferStageRootAppend != 0 || stats.BufferStageFlush != 0 {
+		stats.BufferStageRootAppend != 0 || stats.BufferStageFlush != 0 ||
+		stats.PlanClose != 0 {
 		t.Fatalf("default update timings=%+v want zero unless detailed stats enabled", stats)
 	}
 
@@ -677,6 +682,16 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 		}
 	}
 	for _, key := range []string{
+		"treedb.collections.write_domain.update_batch.validate_items_ns_total",
+		"treedb.collections.write_domain.update_batch.clone_items_ns_total",
+		"treedb.collections.write_domain.update_batch.plan_setup_ns_total",
+		"treedb.collections.write_domain.update_batch.buffered_read_snapshot_ns_total",
+		"treedb.collections.write_domain.update_batch.bson_id_validation_ns_total",
+		"treedb.collections.write_domain.update_batch.replacement_stage_ns_total",
+		"treedb.collections.write_domain.update_batch.index_state_compare_ns_total",
+		"treedb.collections.write_domain.indexed_flush.preflight_ns_total",
+		"treedb.collections.write_domain.indexed_flush.rotate_ns_total",
+		"treedb.collections.write_domain.indexed_flush.merge_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_precheck_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_lock_wait_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_lock_hold_ns_total",
@@ -687,6 +702,7 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 		"treedb.collections.write_domain.update_batch.buffer_stage_unique_index_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_root_append_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_flush_ns_total",
+		"treedb.collections.write_domain.update_batch.plan_close_ns_total",
 	} {
 		if _, ok := exported[key]; !ok {
 			t.Fatalf("manager stats missing %s: keys=%v", key, exported)
@@ -842,6 +858,13 @@ func TestCollectionUpdateBufferBreakdownStatsSnapshotAndAdd(t *testing.T) {
 		set  func(*CollectionUpdateStats, time.Duration)
 		get  func(CollectionManagerStats) time.Duration
 	}{
+		{"validate_items", "treedb.collections.write_domain.update_batch.validate_items_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BatchValidate = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchValidate }},
+		{"clone_items", "treedb.collections.write_domain.update_batch.clone_items_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BatchClone = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchClone }},
+		{"plan_setup", "treedb.collections.write_domain.update_batch.plan_setup_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.PlanSetup = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchPlanSetup }},
+		{"buffered_read_snapshot", "treedb.collections.write_domain.update_batch.buffered_read_snapshot_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferedReadSnapshot = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferedReadSnapshot }},
+		{"bson_id_validation", "treedb.collections.write_domain.update_batch.bson_id_validation_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BSONIDValidation = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBSONIDValidation }},
+		{"replacement_stage", "treedb.collections.write_domain.update_batch.replacement_stage_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.ReplacementStage = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchReplacementStage }},
+		{"index_state_compare", "treedb.collections.write_domain.update_batch.index_state_compare_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.IndexStateCompare = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchIndexStateCompare }},
 		{"precheck", "treedb.collections.write_domain.update_batch.buffer_stage_precheck_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStagePrecheck = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferPrecheck }},
 		{"lock_wait", "treedb.collections.write_domain.update_batch.buffer_stage_lock_wait_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageLockWait = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferLockWait }},
 		{"lock_hold", "treedb.collections.write_domain.update_batch.buffer_stage_lock_hold_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageLockHold = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferLockHold }},
@@ -851,7 +874,9 @@ func TestCollectionUpdateBufferBreakdownStatsSnapshotAndAdd(t *testing.T) {
 		{"primary_index", "treedb.collections.write_domain.update_batch.buffer_stage_primary_index_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStagePrimaryIdx = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferPrimaryIdx }},
 		{"unique_index", "treedb.collections.write_domain.update_batch.buffer_stage_unique_index_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageUniqueIdx = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferUniqueIdx }},
 		{"root_append", "treedb.collections.write_domain.update_batch.buffer_stage_root_append_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageRootAppend = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferRootAppend }},
+		{"semantic_append", "treedb.collections.write_domain.update_batch.buffer_stage_semantic_append_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageSemanticAppend = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferSemanticAppend }},
 		{"flush", "treedb.collections.write_domain.update_batch.buffer_stage_flush_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageFlush = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferFlush }},
+		{"plan_close", "treedb.collections.write_domain.update_batch.plan_close_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.PlanClose = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchPlanClose }},
 	}
 
 	var updateStats CollectionUpdateStats
@@ -1311,6 +1336,131 @@ func TestCollectionManagerStatsExposeIndexedWriteDomainMetrics(t *testing.T) {
 	}
 }
 
+func TestCollectionIndexedFlushReadOnlyPrepareDefaultOff(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"email":"ada@example.com"}`),
+			[]byte(`{"email":"grace@example.com"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	before := d.Stats()
+	if err := mgr.FlushAll(); err != nil {
+		t.Fatalf("flush all: %v", err)
+	}
+	after := d.Stats()
+	if got := collectionDBUintStatDelta(t, before, after, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total"); got != 0 {
+		t.Fatalf("read-only prepare calls delta=%d want 0 by default", got)
+	}
+	if got := collectionDBUintStatDelta(t, before, after, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_ranges_total"); got != 0 {
+		t.Fatalf("read-only prepare worker ranges delta=%d want 0 by default", got)
+	}
+}
+
+func TestCollectionIndexedFlushReadOnlyPrepareOptInReportsDBStats(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedReadOnlyPrepare:            true,
+			BufferedIndexedReadOnlyPrepareWorkerCount: 4,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if !meta.Options.BufferedIndexedReadOnlyPrepare || meta.Options.BufferedIndexedReadOnlyPrepareWorkerCount != 4 {
+		t.Fatalf("normalized read-only prepare options=%+v want enabled/4", meta.Options)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2"), []byte("u3")},
+		[][]byte{
+			[]byte(`{"email":"ada@example.com"}`),
+			[]byte(`{"email":"grace@example.com"}`),
+			[]byte(`{"email":"katherine@example.com"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	before := d.Stats()
+	if err := mgr.FlushAll(); err != nil {
+		t.Fatalf("flush all: %v", err)
+	}
+	after := d.Stats()
+	calls := collectionDBUintStatDelta(t, before, after, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total")
+	if calls == 0 {
+		t.Fatal("read-only prepare calls delta=0 want positive")
+	}
+	if got := collectionDBUintStatDelta(t, before, after, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ops_total"); got == 0 {
+		t.Fatal("read-only prepare ops delta=0 want positive")
+	}
+	if got := collectionDBUintStatDelta(t, before, after, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_leaf_spans_total"); got == 0 {
+		t.Fatal("read-only prepare leaf spans delta=0 want positive")
+	}
+	targets := collectionDBUintStatDelta(t, before, after, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_targets_total")
+	if want := calls * 4; targets != want {
+		t.Fatalf("read-only prepare worker target delta=%d want calls*4=%d", targets, want)
+	}
+	if got := collectionDBUintStatDelta(t, before, after, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_ranges_total"); got == 0 {
+		t.Fatal("read-only prepare worker ranges delta=0 want positive")
+	}
+}
+
+func collectionDBUintStatDelta(tb testing.TB, before, after map[string]string, key string) uint64 {
+	tb.Helper()
+	beforeValue := collectionDBUintStat(tb, before, key)
+	afterValue := collectionDBUintStat(tb, after, key)
+	if afterValue < beforeValue {
+		tb.Fatalf("stat %s decreased from %d to %d", key, beforeValue, afterValue)
+	}
+	return afterValue - beforeValue
+}
+
+func collectionDBUintStat(tb testing.TB, stats map[string]string, key string) uint64 {
+	tb.Helper()
+	raw, ok := stats[key]
+	if !ok {
+		tb.Fatalf("stats missing %s", key)
+	}
+	value, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		tb.Fatalf("parse stat %s=%q: %v", key, raw, err)
+	}
+	return value
+}
+
 func TestCollectionRootDeltaPlanStatsCountsPointerValueBytes(t *testing.T) {
 	delta := batch.New(nil, 0)
 	defer func() { _ = delta.Close() }()
@@ -1327,6 +1477,60 @@ func TestCollectionRootDeltaPlanStatsCountsPointerValueBytes(t *testing.T) {
 	}
 	if got, want := stats.primaryValueBytes, uint64(page.ValuePtrSize); got != want {
 		t.Fatalf("primary root delta value bytes=%d want pointer payload %d", got, want)
+	}
+}
+
+func TestCollectionRootDeltaStatsIteratorPreservesFastPathTraits(t *testing.T) {
+	table := newFreezeSortRunTable()
+	table.Set([]byte("u1"), []byte(`{"city":"hnl"}`))
+	table.Set([]byte("u2"), []byte(`{"city":"sea"}`))
+	table.Freeze()
+
+	var stats collectionRootDeltaPlanStats
+	iter := newCollectionRootDeltaStatsIterator("users", collectionPrimaryRootName("users"), table.NewIterator(nil, nil), &stats)
+	defer func() { _ = iter.Close() }()
+
+	stable, ok := iter.(interface {
+		StableUnsafeIteratorSlices() bool
+	})
+	if !ok {
+		t.Fatalf("stats iterator does not expose StableUnsafeIteratorSlices")
+	}
+	if !stable.StableUnsafeIteratorSlices() {
+		t.Fatalf("stats iterator did not preserve stable unsafe slices")
+	}
+	ordered, ok := iter.(interface {
+		OrderedUniqueUnsafeIterator() bool
+	})
+	if !ok {
+		t.Fatalf("stats iterator does not expose OrderedUniqueUnsafeIterator")
+	}
+	if !ordered.OrderedUniqueUnsafeIterator() {
+		t.Fatalf("stats iterator did not preserve ordered unique iterator trait")
+	}
+	lenHint, ok := iter.(interface {
+		Len() int
+	})
+	if !ok {
+		t.Fatalf("stats iterator does not expose Len hint")
+	}
+	if got, want := lenHint.Len(), 2; got != want {
+		t.Fatalf("stats iterator Len=%d want %d", got, want)
+	}
+
+	delta, err := backenddb.OrderedRootDeltaBatchFromIterator(iter)
+	if err != nil {
+		t.Fatalf("materialize delta: %v", err)
+	}
+	defer func() { _ = delta.Close() }()
+	if got, want := len(delta.SortedEntries()), 2; got != want {
+		t.Fatalf("delta entries=%d want %d", got, want)
+	}
+	if got, want := stats.entries, uint64(2); got != want {
+		t.Fatalf("stats entries=%d want %d", got, want)
+	}
+	if got, want := stats.primaryEntries, uint64(2); got != want {
+		t.Fatalf("primary stats entries=%d want %d", got, want)
 	}
 }
 
@@ -2093,8 +2297,22 @@ func TestCollectionSingleInsertBufferedNoIndexFlushPersistsAfterReopen(t *testin
 	if _, err := col.Insert([]byte("u1"), []byte(`{"name":"ada"}`)); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
+	beforeFlush := mgr.StatsSnapshot()
 	if err := col.Flush(); err != nil {
 		t.Fatalf("flush: %v", err)
+	}
+	afterFlush := mgr.StatsSnapshot()
+	if got, want := afterFlush.PrimaryOnlyDrainCalls-beforeFlush.PrimaryOnlyDrainCalls, uint64(1); got != want {
+		t.Fatalf("primary-only drain calls delta=%d want %d", got, want)
+	}
+	if got, want := afterFlush.RootDeltaPlanPrimaryRoots-beforeFlush.RootDeltaPlanPrimaryRoots, uint64(1); got != want {
+		t.Fatalf("root delta primary roots delta=%d want %d", got, want)
+	}
+	if got, want := afterFlush.RootDeltaPlanEntries-beforeFlush.RootDeltaPlanEntries, uint64(1); got != want {
+		t.Fatalf("root delta entries delta=%d want %d", got, want)
+	}
+	if got, want := afterFlush.RootDeltaPlanFinalPrimaryEntries-beforeFlush.RootDeltaPlanFinalPrimaryEntries, uint64(1); got != want {
+		t.Fatalf("final primary entries delta=%d want %d", got, want)
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("close db: %v", err)
@@ -2115,6 +2333,44 @@ func TestCollectionSingleInsertBufferedNoIndexFlushPersistsAfterReopen(t *testin
 	}
 	if want := []byte(`{"name":"ada"}`); !bytes.Equal(got, want) {
 		t.Fatalf("reopened doc=%q want %q", got, want)
+	}
+}
+
+func TestCollectionInsertBatchNoIndexRecordsRootDeltaPlanStats(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	before := mgr.StatsSnapshot()
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"name":"ada"}`), []byte(`{"name":"grace"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	after := mgr.StatsSnapshot()
+	if got, want := after.RootDeltaPlanPrimaryRoots-before.RootDeltaPlanPrimaryRoots, uint64(1); got != want {
+		t.Fatalf("root delta primary roots delta=%d want %d", got, want)
+	}
+	if got, want := after.RootDeltaPlanEntries-before.RootDeltaPlanEntries, uint64(2); got != want {
+		t.Fatalf("root delta entries delta=%d want %d", got, want)
+	}
+	if got, want := after.RootDeltaPlanFinalPrimaryEntries-before.RootDeltaPlanFinalPrimaryEntries, uint64(2); got != want {
+		t.Fatalf("final primary entries delta=%d want %d", got, want)
+	}
+	if got := after.RootDeltaPlanFinalPrimaryBytes - before.RootDeltaPlanFinalPrimaryBytes; got == 0 {
+		t.Fatal("final primary bytes delta=0 want positive")
 	}
 }
 
@@ -3579,19 +3835,29 @@ func TestCollectionIndexedWriteMemtablesBypassDefaultLargeBatches(t *testing.T) 
 		},
 		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}
-	if !col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableDirectBatchDocuments-1) {
-		t.Fatal("default indexed memtable path bypassed a below-threshold batch")
-	}
 	if col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableDirectBatchDocuments) {
 		t.Fatal("default indexed memtable path buffered a large direct-publish batch")
 	}
+	if col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableLowFanoutDirectBatchDocuments) {
+		t.Fatal("default indexed memtable path buffered a low-fanout direct-publish batch")
+	}
+	if !col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableLowFanoutDirectBatchDocuments-1) {
+		t.Fatal("default indexed memtable path bypassed a below-threshold low-fanout batch")
+	}
 	meta.Options.BufferedIndexedAsyncFlush = true
 	meta.Options.BufferedIndexedWriteMaxDocuments = DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
-	if !col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableDirectBatchDocuments-1) {
-		t.Fatal("async default indexed memtable path bypassed a below-threshold batch")
-	}
 	if col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableDirectBatchDocuments) {
 		t.Fatal("async default indexed memtable path buffered a large direct-publish batch")
+	}
+	if col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableLowFanoutDirectBatchDocuments) {
+		t.Fatal("async default indexed memtable path buffered a low-fanout direct-publish batch")
+	}
+	meta.Indexes = append(meta.Indexes,
+		IndexDefinition{Name: "state", Field: "state", ValueType: IndexValueString},
+		IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString},
+	)
+	if !col.shouldBufferIndexedInsertBatch(meta, DefaultIndexedWriteMemtableLowFanoutDirectBatchDocuments) {
+		t.Fatal("default indexed memtable path bypassed a moderate three-index batch")
 	}
 	meta.Options.BufferedIndexedAsyncFlush = false
 	meta.Options.BufferedIndexedWriteMaxDocuments = 2
@@ -4413,7 +4679,7 @@ func TestBuildBufferedRootDeltaBatchPublishInputsParallelPreservesRootOrderAndTo
 		cityName:    backenddb.OrderedRootStoragePagerLeaves,
 	}
 
-	ordered, cleanup, err := buildBufferedRootDeltaBatchPublishInputs(rootNames, rootRuns, rootBaseIDs, rootPolicies)
+	ordered, cleanup, err := buildBufferedRootDeltaBatchPublishInputs(rootNames, rootRuns, rootBaseIDs, rootPolicies, false, 0)
 	if err != nil {
 		t.Fatalf("build buffered root deltas: %v", err)
 	}
@@ -4434,6 +4700,12 @@ func TestBuildBufferedRootDeltaBatchPublishInputsParallelPreservesRootOrderAndTo
 		}
 		if ordered[i].IncludeDeletedOnColdBuild {
 			t.Fatalf("ordered[%d] IncludeDeletedOnColdBuild=true want false", i)
+		}
+		if ordered[i].PrepareReadOnly || ordered[i].ReadOnlyPrepareWorkerCount != 0 {
+			t.Fatalf("ordered[%d] read-only prepare=%t/%d want false/0", i, ordered[i].PrepareReadOnly, ordered[i].ReadOnlyPrepareWorkerCount)
+		}
+		if ordered[i].ReadOnlyPrepareResult != nil {
+			t.Fatalf("ordered[%d] ReadOnlyPrepareResult=%p want nil by default", i, ordered[i].ReadOnlyPrepareResult)
 		}
 	}
 
@@ -4486,7 +4758,7 @@ func TestBuildBufferedRootOverlayDeltaBatchPublishInputsPreservesColdTombstones(
 		cityName:    nil,
 	}
 
-	ordered, cleanup, err := buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames, rootRuns, rootPolicies, rootOverlays)
+	ordered, cleanup, err := buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames, rootRuns, rootPolicies, rootOverlays, false, 0)
 	if err != nil {
 		t.Fatalf("build overlay root deltas: %v", err)
 	}
@@ -4524,6 +4796,56 @@ func TestBuildBufferedRootOverlayDeltaBatchPublishInputsPreservesColdTombstones(
 	}
 	if entry := cityEntries[0]; string(entry.Key) != "city:old/u1" || entry.Type != batch.OpDelete {
 		t.Fatalf("city entry[0]=%+v want tombstone city:old/u1", entry)
+	}
+}
+
+func TestBuildBufferedRootDeltaBatchPublishInputsReusesReadOnlyPrepareResults(t *testing.T) {
+	const collectionName = "users"
+	primaryName := collectionPrimaryRootName(collectionName)
+	cityName := collectionSecondaryRootName(collectionName, "city")
+
+	primaryTable := newCollectionRunTable(1)
+	setCollectionRunValue(primaryTable, []byte("u1"), []byte(`{"city":"hnl"}`))
+	primaryTable.Freeze()
+
+	cityTable := newCollectionRunTable(1)
+	setCollectionRunValue(cityTable, []byte("city:hnl/u1"), nil)
+	cityTable.Freeze()
+	defer resetCollectionTables([]memtable.Table{primaryTable, cityTable})
+
+	rootNames := []string{primaryName, cityName}
+	rootRuns := map[string][]memtable.Table{
+		primaryName: {primaryTable},
+		cityName:    {cityTable},
+	}
+	rootBaseIDs := map[string]uint64{
+		primaryName: 42,
+		cityName:    43,
+	}
+	rootPolicies := map[string]backenddb.OrderedRootStoragePolicy{
+		primaryName: backenddb.OrderedRootStorageValueLogLeaves,
+		cityName:    backenddb.OrderedRootStoragePagerLeaves,
+	}
+
+	ordered, cleanup, err := buildBufferedRootDeltaBatchPublishInputs(rootNames, rootRuns, rootBaseIDs, rootPolicies, true, 4)
+	if err != nil {
+		t.Fatalf("build buffered root deltas: %v", err)
+	}
+	defer cleanup()
+
+	if got, want := len(ordered), len(rootNames); got != want {
+		t.Fatalf("ordered roots=%d want %d", got, want)
+	}
+	for i := range ordered {
+		if !ordered[i].PrepareReadOnly || ordered[i].ReadOnlyPrepareWorkerCount != 4 {
+			t.Fatalf("ordered[%d] read-only prepare=%t/%d want true/4", i, ordered[i].PrepareReadOnly, ordered[i].ReadOnlyPrepareWorkerCount)
+		}
+		if ordered[i].ReadOnlyPrepareResult == nil {
+			t.Fatalf("ordered[%d] ReadOnlyPrepareResult=nil want reusable result", i)
+		}
+	}
+	if ordered[0].ReadOnlyPrepareResult == ordered[1].ReadOnlyPrepareResult {
+		t.Fatal("ordered roots share one ReadOnlyPrepareResult")
 	}
 }
 
@@ -4948,6 +5270,7 @@ func TestCollectionIndexedWriteMemtablesAsyncBackpressureWaitsForPublishingUnit(
 	}
 
 	backpressureDone := make(chan error, 1)
+	waitEntered, releaseWait := collectionWaitIndexedAsyncFlushGateForTest(t)
 	go func() {
 		col.writeDomain.mu.Lock()
 		_, _, _, err := col.flushBufferedIndexedAfterThresholdLocked(col.writeDomain, CollectionOptions{
@@ -4959,20 +5282,17 @@ func TestCollectionIndexedWriteMemtablesAsyncBackpressureWaitsForPublishingUnit(
 		col.writeDomain.mu.Unlock()
 		backpressureDone <- err
 	}()
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if mgr.StatsSnapshot().IndexedAsyncFlushBackpressure > 0 {
-			break
-		}
-		select {
-		case err := <-backpressureDone:
-			t.Fatalf("backpressure flush returned before in-flight async publish drained: %v", err)
-		case <-time.After(time.Millisecond):
-		}
+	select {
+	case <-waitEntered:
+	case err := <-backpressureDone:
+		t.Fatalf("backpressure flush returned before in-flight async publish drained: %v", err)
+	case <-time.After(collectionTestTimeout(t, 5*time.Second)):
+		t.Fatal("timed out waiting for backpressure flush to wait on in-flight async publish")
 	}
-	if got := mgr.StatsSnapshot().IndexedAsyncFlushBackpressure; got == 0 {
+	if got := col.writeDomain.indexedAsyncFlushBackpressure.Load(); got == 0 {
 		t.Fatal("async backpressure did not wait for in-flight publishing unit")
 	}
+	releaseWait()
 
 	publishDone := make(chan error, 1)
 	go func() {
@@ -5179,6 +5499,9 @@ func TestCollectionIndexedWriteMemtablesAsyncPublishingUnitsParticipateInReadsAn
 	}
 	if err := col.publishPreparedIndexedFlush(work); err != nil {
 		t.Fatalf("publish prepared async flush: %v", err)
+	}
+	if got := work.batch.state; got != coalescedFlushBatchPublished {
+		t.Fatalf("published batch state=%d want published", got)
 	}
 	if got := mgr.StatsSnapshot().PendingDocuments; got != 0 {
 		t.Fatalf("pending docs after publish=%d want 0", got)
@@ -8883,6 +9206,7 @@ func TestCollectionUpdateBatchDirectBufferedTemplateV1AccumulatesRootRuns(t *tes
 	primaryRuns := len(col.writeDomain.rootRuns[collectionPrimaryRootName("users")])
 	cityRuns := len(col.writeDomain.rootRuns[collectionSecondaryRootName("users", "city")])
 	rootMutableRuns := len(col.writeDomain.rootMutableRuns)
+	pendingSemanticRecords := pendingIndexedSemanticRecordCountLocked(col.writeDomain)
 	col.writeDomain.mu.RUnlock()
 	if rootRunCount != 3 {
 		t.Fatalf("rootRunCount=%d want 3 accumulated roots after two template-v1 update batches", rootRunCount)
@@ -8892,6 +9216,12 @@ func TestCollectionUpdateBatchDirectBufferedTemplateV1AccumulatesRootRuns(t *tes
 	}
 	if rootMutableRuns != 3 {
 		t.Fatalf("rootMutableRuns=%d want 3 active root-local accumulators", rootMutableRuns)
+	}
+	if pendingSemanticRecords != 0 {
+		t.Fatalf("pending template-v1 semantic records=%d want 0 mechanical fallback records", pendingSemanticRecords)
+	}
+	if got := mgr.StatsSnapshot().IndexedSemanticRawRecords; got != 0 {
+		t.Fatalf("template-v1 raw semantic records=%d want 0 mechanical fallback records", got)
 	}
 
 	seaIDs, err := col.FindByIndex("city", "sea")
@@ -9276,7 +9606,7 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleBuffere
 
 	plan, err := col.buildUpdateBatchPlan([]UpdateBatchItem{
 		{DocumentID: []byte("u1"), Update: setJSONCity("sfo")},
-	}, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+	}, updateBatchModeNoSecondaryUniqueIndexChanges, true, CollectionUpdateStats{})
 	if err != nil {
 		t.Fatalf("build stale plan: %v", err)
 	}
@@ -9328,7 +9658,7 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleZeroDel
 				return current, false, nil
 			},
 		},
-	}, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+	}, updateBatchModeNoSecondaryUniqueIndexChanges, true, CollectionUpdateStats{})
 	if err != nil {
 		t.Fatalf("build stale zero-delta plan: %v", err)
 	}

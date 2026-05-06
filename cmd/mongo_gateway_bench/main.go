@@ -77,6 +77,8 @@ type config struct {
 	TreeDBBufferedIndexedWriteMaxRootRuns         int
 	TreeDBBufferedIndexedAsyncFlush               bool
 	TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits int
+	TreeDBBufferedIndexedReadOnlyPrepare          bool
+	TreeDBBufferedIndexedReadOnlyPrepareWorkers   int
 	TreeDBMaintenance                             string
 	PrebuildDocuments                             bool
 	ProfileDir                                    string
@@ -123,6 +125,8 @@ type benchmarkResult struct {
 	TreeDBBufferedIndexedWriteMaxRootRuns         int                 `json:"treedb_buffered_indexed_write_max_root_runs"`
 	TreeDBBufferedIndexedAsyncFlush               bool                `json:"treedb_buffered_indexed_async_flush,omitempty"`
 	TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits int                 `json:"treedb_buffered_indexed_async_flush_max_queued_units,omitempty"`
+	TreeDBBufferedIndexedReadOnlyPrepare          bool                `json:"treedb_buffered_indexed_read_only_prepare"`
+	TreeDBBufferedIndexedReadOnlyPrepareWorkers   int                 `json:"treedb_buffered_indexed_read_only_prepare_workers"`
 	TreeDBMaintenanceMode                         string              `json:"treedb_maintenance_mode,omitempty"`
 	PrebuildDocuments                             bool                `json:"prebuild_documents,omitempty"`
 	Phases                                        []phaseResult       `json:"phases"`
@@ -155,6 +159,8 @@ type phaseResult struct {
 	DriverMeanLatencyMicros float64            `json:"driver_mean_latency_us,omitempty"`
 	LatencyMicros           latencySummary     `json:"latency_micros"`
 	ProducerResults         []producerResult   `json:"producer_results,omitempty"`
+	TreeDBDrainMillis       float64            `json:"treedb_drain_ms"`
+	TreeDBDrainStatsDelta   map[string]string  `json:"treedb_drain_stats_delta,omitempty"`
 	TreeDBStatsDelta        map[string]string  `json:"treedb_stats_delta,omitempty"`
 	TreeDBMetrics           map[string]float64 `json:"treedb_metrics,omitempty"`
 }
@@ -478,6 +484,8 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.TreeDBBufferedIndexedWriteMaxRootRuns, "treedb-buffered-indexed-write-max-root-runs", cfg.TreeDBBufferedIndexedWriteMaxRootRuns, "TreeDB indexed collection write-domain root-run auto-flush threshold; explicit 0 disables this trigger; omitted with docs/bytes override keeps the compatibility default")
 	fs.BoolVar(&cfg.TreeDBBufferedIndexedAsyncFlush, "treedb-buffered-indexed-async-flush", false, "TreeDB indexed collection threshold flushes publish in the background; explicit Flush/Close still drain before returning")
 	fs.IntVar(&cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits, "treedb-buffered-indexed-async-flush-max-queued-units", 0, "TreeDB indexed collection background flush unit queue limit; 0 uses the collection default when async flush is enabled")
+	fs.BoolVar(&cfg.TreeDBBufferedIndexedReadOnlyPrepare, "treedb-buffered-indexed-read-only-prepare", false, "TreeDB indexed collection flush publish runs read-only leaf-span preparation for observability; does not change publish output")
+	fs.IntVar(&cfg.TreeDBBufferedIndexedReadOnlyPrepareWorkers, "treedb-buffered-indexed-read-only-prepare-workers", 0, "TreeDB indexed collection read-only prepare worker target for range summaries; requires -treedb-buffered-indexed-read-only-prepare")
 	fs.StringVar(&cfg.TreeDBMaintenance, "treedb-maintenance", cfg.TreeDBMaintenance, "TreeDB final disk maintenance for -target treedb: full, checkpoint, or none")
 	fs.BoolVar(&cfg.PrebuildDocuments, "prebuild-documents", false, "prebuild benchmark documents before the timed load phase")
 	fs.StringVar(&cfg.ProfileDir, "profile-dir", "", "write per-phase pprof artifacts and a profile_manifest.json into an empty directory")
@@ -591,6 +599,12 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits < 0 {
 		return config{}, errors.New("treedb-buffered-indexed-async-flush-max-queued-units must be >= 0")
+	}
+	if cfg.TreeDBBufferedIndexedReadOnlyPrepareWorkers < 0 {
+		return config{}, errors.New("treedb-buffered-indexed-read-only-prepare-workers must be >= 0")
+	}
+	if seenFlags["treedb-buffered-indexed-read-only-prepare-workers"] && !cfg.TreeDBBufferedIndexedReadOnlyPrepare {
+		return config{}, errors.New("treedb-buffered-indexed-read-only-prepare-workers requires -treedb-buffered-indexed-read-only-prepare")
 	}
 	if cfg.Format != "text" && cfg.Format != "json" {
 		return config{}, fmt.Errorf("unknown format %q", cfg.Format)
@@ -794,14 +808,16 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 	server.Collections = manager
 	server.MaxFindScanDocuments = cfg.Documents
 	server.DefaultCollectionOptions = collections.CollectionOptions{
-		DocumentFormat:                          cfg.TreeDBDocumentFormat,
-		DataRootStoragePolicy:                   cfg.TreeDBDataRootStorage,
-		IndexStateStoragePolicy:                 cfg.TreeDBIndexStateRootStorage,
-		BufferedIndexedWriteMaxDocuments:        cfg.TreeDBBufferedIndexedWriteMaxDocuments,
-		BufferedIndexedWriteMaxBytes:            cfg.TreeDBBufferedIndexedWriteMaxBytes,
-		BufferedIndexedWriteMaxRootRuns:         cfg.TreeDBBufferedIndexedWriteMaxRootRuns,
-		BufferedIndexedAsyncFlush:               cfg.TreeDBBufferedIndexedAsyncFlush,
-		BufferedIndexedAsyncFlushMaxQueuedUnits: cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
+		DocumentFormat:                            cfg.TreeDBDocumentFormat,
+		DataRootStoragePolicy:                     cfg.TreeDBDataRootStorage,
+		IndexStateStoragePolicy:                   cfg.TreeDBIndexStateRootStorage,
+		BufferedIndexedWriteMaxDocuments:          cfg.TreeDBBufferedIndexedWriteMaxDocuments,
+		BufferedIndexedWriteMaxBytes:              cfg.TreeDBBufferedIndexedWriteMaxBytes,
+		BufferedIndexedWriteMaxRootRuns:           cfg.TreeDBBufferedIndexedWriteMaxRootRuns,
+		BufferedIndexedAsyncFlush:                 cfg.TreeDBBufferedIndexedAsyncFlush,
+		BufferedIndexedAsyncFlushMaxQueuedUnits:   cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
+		BufferedIndexedReadOnlyPrepare:            cfg.TreeDBBufferedIndexedReadOnlyPrepare,
+		BufferedIndexedReadOnlyPrepareWorkerCount: cfg.TreeDBBufferedIndexedReadOnlyPrepareWorkers,
 	}
 	server.DefaultIndexStoragePolicy = cfg.TreeDBIndexRootStorage
 
@@ -1120,6 +1136,8 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		result.TreeDBBufferedIndexedWriteMaxRootRuns = cfg.TreeDBBufferedIndexedWriteMaxRootRuns
 		result.TreeDBBufferedIndexedAsyncFlush = cfg.TreeDBBufferedIndexedAsyncFlush
 		result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits = cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits
+		result.TreeDBBufferedIndexedReadOnlyPrepare = cfg.TreeDBBufferedIndexedReadOnlyPrepare
+		result.TreeDBBufferedIndexedReadOnlyPrepareWorkers = cfg.TreeDBBufferedIndexedReadOnlyPrepareWorkers
 		result.TreeDBMaintenanceMode = cfg.TreeDBMaintenance
 	} else {
 		result.MongoURI = redactMongoURI(cfg.MongoURI)
@@ -1399,10 +1417,13 @@ func runTreeDBProfiledPhase(target *benchTarget, profiler *profileRecorder, name
 		if err != nil {
 			return result, err
 		}
+		drainBefore := collectLiveTreeDBStats(target)
 		drainElapsed, err := drainTreeDBCollectionsForPhase(target)
 		if err != nil {
 			return result, err
 		}
+		drainAfter := collectLiveTreeDBStats(target)
+		attachTreeDBDrainStats(&result, drainBefore, drainAfter, drainElapsed)
 		addPhaseDuration(&result, drainElapsed)
 		return result, nil
 	})
@@ -1540,6 +1561,8 @@ func recordEffectiveTreeDBCollectionOptions(result *benchmarkResult, cfg config,
 	result.TreeDBBufferedIndexedWriteMaxRootRuns = meta.Options.BufferedIndexedWriteMaxRootRuns
 	result.TreeDBBufferedIndexedAsyncFlush = meta.Options.BufferedIndexedAsyncFlush
 	result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits = meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits
+	result.TreeDBBufferedIndexedReadOnlyPrepare = meta.Options.BufferedIndexedReadOnlyPrepare
+	result.TreeDBBufferedIndexedReadOnlyPrepareWorkers = meta.Options.BufferedIndexedReadOnlyPrepareWorkerCount
 	return nil
 }
 
@@ -2143,6 +2166,17 @@ func attachTreeDBPhaseStats(result *phaseResult, before, after map[string]string
 	result.TreeDBMetrics = deriveTreeDBPhaseMetrics(numeric, result.Operations, result.DriverCalls)
 }
 
+func attachTreeDBDrainStats(result *phaseResult, before, after map[string]string, elapsed time.Duration) {
+	if result == nil {
+		return
+	}
+	result.TreeDBDrainMillis = float64(elapsed) / float64(time.Millisecond)
+	delta, _ := treeDBStatsDelta(before, after)
+	if len(delta) > 0 {
+		result.TreeDBDrainStatsDelta = delta
+	}
+}
+
 func treeDBStatsDelta(before, after map[string]string) (map[string]string, map[string]float64) {
 	if len(after) == 0 {
 		return nil, nil
@@ -2248,6 +2282,18 @@ func formatTreeDBStatNumber(value float64) string {
 	return strconv.FormatFloat(value, 'f', -1, 64)
 }
 
+type treeDBRootDeltaKindMetric struct {
+	metricToken string
+	statToken   string
+}
+
+var treeDBRootDeltaKindMetrics = [...]treeDBRootDeltaKindMetric{
+	{metricToken: "primary", statToken: "primary"},
+	{metricToken: "template", statToken: "template"},
+	{metricToken: "index_state", statToken: "index_state"},
+	{metricToken: "secondary", statToken: "secondary"},
+}
+
 func deriveTreeDBPhaseMetrics(delta map[string]float64, operations, driverCalls int) map[string]float64 {
 	if len(delta) == 0 {
 		return nil
@@ -2257,6 +2303,19 @@ func deriveTreeDBPhaseMetrics(delta map[string]float64, operations, driverCalls 
 	addPerOperationMetric(metrics, "root_apply_calls/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_calls_total", operations)
 	addRatioMetric(metrics, "roots/publish", delta, "treedb.publish.ordered_root_delta_group.roots_total", "treedb.publish.ordered_root_delta_group.calls_total")
 	addPerOperationMetric(metrics, "publish_delta_group_root_apply_ns/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_ns_total", operations)
+	addPerOperationMetric(metrics, "internal_parallel_merges/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_merges_total", operations)
+	addRatioMetric(metrics, "internal_parallel_children/merge", delta, "treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_children_total", "treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_merges_total")
+	addRatioMetric(metrics, "internal_parallel_workers/merge", delta, "treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_workers_total", "treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_merges_total")
+	addRatioMetric(metrics, "internal_parallel_ops/merge", delta, "treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_ops_total", "treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_merges_total")
+	addReadOnlyPrepareRootApplySplitMetrics(metrics, delta, operations)
+	addPerOperationMetric(metrics, "read_only_prepare_calls/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total", operations)
+	addPerOperationMetric(metrics, "read_only_prepare_ns/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ns_total", operations)
+	addRatioMetric(metrics, "read_only_prepare_ns/plan", delta, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ns_total", "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total")
+	addPerOperationMetric(metrics, "read_only_prepare_ops/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ops_total", operations)
+	addRatioMetric(metrics, "read_only_prepare_leaf_spans/plan", delta, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_leaf_spans_total", "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total")
+	addRatioMetric(metrics, "read_only_prepare_worker_targets/plan", delta, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_targets_total", "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total")
+	addRatioMetric(metrics, "read_only_prepare_worker_ranges/plan", delta, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_ranges_total", "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total")
+	addRatioMetric(metrics, "read_only_prepare_worker_max_ops/plan", delta, "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_range_max_ops_total", "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total")
 	addPerOperationMetric(metrics, "leaf_log_node_loads/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_loads_total", operations)
 	addPerOperationMetric(metrics, "leaf_log_pages_written/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_leaf_log_pages_written_total", operations)
 	addPerOperationMetric(metrics, "leaf_log_read_bytes/doc", delta, "treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total", operations)
@@ -2265,6 +2324,14 @@ func deriveTreeDBPhaseMetrics(delta map[string]float64, operations, driverCalls 
 	addRatioMetric(metrics, "indexed_flush_docs/batch", delta, "treedb.collections.write_domain.indexed_flush.docs_total", "treedb.collections.write_domain.indexed_flush.calls_total")
 	addRatioMetric(metrics, "indexed_flush_units/batch", delta, "treedb.collections.write_domain.indexed_flush.units_total", "treedb.collections.write_domain.indexed_flush.calls_total")
 	addPerOperationMetric(metrics, "indexed_flush_root_runs/doc", delta, "treedb.collections.write_domain.indexed_flush.root_runs_total", operations)
+	addPerOperationMetric(metrics, "indexed_flush_preflight_ns/doc", delta, "treedb.collections.write_domain.indexed_flush.preflight_ns_total", operations)
+	addPerOperationMetric(metrics, "indexed_flush_rotate_ns/doc", delta, "treedb.collections.write_domain.indexed_flush.rotate_ns_total", operations)
+	addPerOperationMetric(metrics, "indexed_flush_merge_ns/doc", delta, "treedb.collections.write_domain.indexed_flush.merge_ns_total", operations)
+	addPerOperationMetric(metrics, "indexed_flush_materialize_ns/doc", delta, "treedb.collections.write_domain.indexed_flush.materialize_ns_total", operations)
+	addPerOperationMetric(metrics, "indexed_flush_semantic_plan_ns/doc", delta, "treedb.collections.write_domain.indexed_flush.materialize_semantic_plan_ns_total", operations)
+	addPerOperationMetric(metrics, "indexed_flush_build_inputs_ns/doc", delta, "treedb.collections.write_domain.indexed_flush.materialize_build_inputs_ns_total", operations)
+	addPerOperationMetric(metrics, "indexed_flush_plan_stats_ns/doc", delta, "treedb.collections.write_domain.indexed_flush.materialize_plan_stats_ns_total", operations)
+	addPerOperationMetric(metrics, "indexed_flush_publish_ns/doc", delta, "treedb.collections.write_domain.indexed_flush.publish_ns_total", operations)
 	addPerOperationMetric(metrics, "root_delta_plan_entries/doc", delta, "treedb.collections.write_domain.root_delta_plan.entries_total", operations)
 	addPerOperationMetric(metrics, "root_delta_plan_key_bytes/doc", delta, "treedb.collections.write_domain.root_delta_plan.key_bytes_total", operations)
 	addPerOperationMetric(metrics, "root_delta_plan_value_bytes/doc", delta, "treedb.collections.write_domain.root_delta_plan.value_bytes_total", operations)
@@ -2273,12 +2340,58 @@ func deriveTreeDBPhaseMetrics(delta map[string]float64, operations, driverCalls 
 	addPerOperationMetric(metrics, "affected_template_roots/doc", delta, "treedb.collections.write_domain.root_delta_plan.roots.template_total", operations)
 	addPerOperationMetric(metrics, "affected_index_state_roots/doc", delta, "treedb.collections.write_domain.root_delta_plan.roots.index_state_total", operations)
 	addPerOperationMetric(metrics, "affected_secondary_roots/doc", delta, "treedb.collections.write_domain.root_delta_plan.roots.secondary_total", operations)
+	addRatioMetric(metrics, "coalesced_batch_units/batch", delta, "treedb.collections.write_domain.coalesced_flush_batch.units_total", "treedb.collections.write_domain.coalesced_flush_batch.batches_total")
+	addRatioMetric(metrics, "coalesced_batch_docs/batch", delta, "treedb.collections.write_domain.coalesced_flush_batch.docs_total", "treedb.collections.write_domain.coalesced_flush_batch.batches_total")
+	addRatioMetric(metrics, "coalesced_batch_bytes/batch", delta, "treedb.collections.write_domain.coalesced_flush_batch.bytes_total", "treedb.collections.write_domain.coalesced_flush_batch.batches_total")
+	addPerOperationMetric(metrics, "net_zero_root_batches/doc", delta, "treedb.collections.write_domain.coalesced_flush_batch.net_zero_batches_total", operations)
+	addRootDeltaKindMetrics(metrics, "root_delta_plan.raw_unit", "raw", delta, operations)
+	addRootDeltaKindMetrics(metrics, "root_delta_plan.final", "final", delta, operations)
+	addPerOperationMetric(metrics, "squashed_root_delta_entries/doc", delta, "treedb.collections.write_domain.root_delta_plan.squashed_entries_total", operations)
+	addPerOperationMetric(metrics, "net_zero_root_plans/doc", delta, "treedb.collections.write_domain.root_delta_plan.net_zero_plans_total", operations)
+	addPerOperationMetric(metrics, "skipped_secondary_roots/doc", delta, "treedb.collections.write_domain.indexed_semantic.skipped_secondary_roots_total", operations)
+	addPerOperationMetric(metrics, "update_validate_items_ns/doc", delta, "treedb.collections.write_domain.update_batch.validate_items_ns_total", operations)
+	addPerOperationMetric(metrics, "update_clone_items_ns/doc", delta, "treedb.collections.write_domain.update_batch.clone_items_ns_total", operations)
+	addPerOperationMetric(metrics, "update_plan_setup_ns/doc", delta, "treedb.collections.write_domain.update_batch.plan_setup_ns_total", operations)
+	addPerOperationMetric(metrics, "update_buffered_read_snapshot_ns/doc", delta, "treedb.collections.write_domain.update_batch.buffered_read_snapshot_ns_total", operations)
+	addPerOperationMetric(metrics, "update_current_read_ns/doc", delta, "treedb.collections.write_domain.update_batch.current_read_ns_total", operations)
+	addPerOperationMetric(metrics, "update_bson_id_validation_ns/doc", delta, "treedb.collections.write_domain.update_batch.bson_id_validation_ns_total", operations)
+	addPerOperationMetric(metrics, "update_callback_ns/doc", delta, "treedb.collections.write_domain.update_batch.callback_ns_total", operations)
+	addPerOperationMetric(metrics, "update_replacement_stage_ns/doc", delta, "treedb.collections.write_domain.update_batch.replacement_stage_ns_total", operations)
+	addPerOperationMetric(metrics, "update_prepare_ns/doc", delta, "treedb.collections.write_domain.update_batch.prepare_ns_total", operations)
+	addPerOperationMetric(metrics, "update_index_state_extract_ns/doc", delta, "treedb.collections.write_domain.update_batch.index_state_extract_ns_total", operations)
+	addPerOperationMetric(metrics, "update_index_state_compare_ns/doc", delta, "treedb.collections.write_domain.update_batch.index_state_compare_ns_total", operations)
+	addPerOperationMetric(metrics, "update_unique_preflight_ns/doc", delta, "treedb.collections.write_domain.update_batch.unique_preflight_ns_total", operations)
+	addPerOperationMetric(metrics, "update_template_run_build_ns/doc", delta, "treedb.collections.write_domain.update_batch.template_run_ns_total", operations)
+	addPerOperationMetric(metrics, "update_primary_run_build_ns/doc", delta, "treedb.collections.write_domain.update_batch.primary_run_ns_total", operations)
+	addPerOperationMetric(metrics, "update_index_state_run_build_ns/doc", delta, "treedb.collections.write_domain.update_batch.index_state_run_ns_total", operations)
+	addPerOperationMetric(metrics, "update_secondary_run_build_ns/doc", delta, "treedb.collections.write_domain.update_batch.secondary_runs_ns_total", operations)
+	addPerOperationMetric(metrics, "update_semantic_record_build_ns/doc", delta, "treedb.collections.write_domain.update_batch.semantic_record_build_ns_total", operations)
+	addPerOperationMetric(metrics, "update_buffer_stage_ns/doc", delta, "treedb.collections.write_domain.update_batch.buffer_stage_ns_total", operations)
+	addPerOperationMetric(metrics, "update_buffer_precheck_ns/doc", delta, "treedb.collections.write_domain.update_batch.buffer_stage_precheck_ns_total", operations)
+	addPerOperationMetric(metrics, "update_buffer_lock_wait_ns/doc", delta, "treedb.collections.write_domain.update_batch.buffer_stage_lock_wait_ns_total", operations)
+	addPerOperationMetric(metrics, "update_buffer_lock_hold_ns/doc", delta, "treedb.collections.write_domain.update_batch.buffer_stage_lock_hold_ns_total", operations)
+	addPerOperationMetric(metrics, "update_buffer_validation_ns/doc", delta, "treedb.collections.write_domain.update_batch.buffer_stage_validation_ns_total", operations)
+	addPerOperationMetric(metrics, "update_buffer_root_scan_ns/doc", delta, "treedb.collections.write_domain.update_batch.buffer_stage_root_scan_ns_total", operations)
+	addPerOperationMetric(metrics, "update_buffer_domain_prepare_ns/doc", delta, "treedb.collections.write_domain.update_batch.buffer_stage_domain_prepare_ns_total", operations)
+	addPerOperationMetric(metrics, "update_buffer_primary_index_ns/doc", delta, "treedb.collections.write_domain.update_batch.buffer_stage_primary_index_ns_total", operations)
+	addPerOperationMetric(metrics, "update_buffer_unique_index_ns/doc", delta, "treedb.collections.write_domain.update_batch.buffer_stage_unique_index_ns_total", operations)
+	addPerOperationMetric(metrics, "update_buffer_root_append_ns/doc", delta, "treedb.collections.write_domain.update_batch.buffer_stage_root_append_ns_total", operations)
+	addPerOperationMetric(metrics, "update_buffer_semantic_append_ns/doc", delta, "treedb.collections.write_domain.update_batch.buffer_stage_semantic_append_ns_total", operations)
+	addPerOperationMetric(metrics, "update_buffer_flush_ns/doc", delta, "treedb.collections.write_domain.update_batch.buffer_stage_flush_ns_total", operations)
+	addPerOperationMetric(metrics, "update_plan_close_ns/doc", delta, "treedb.collections.write_domain.update_batch.plan_close_ns_total", operations)
 	addPerOperationMetric(metrics, "primary_root_publishes/doc", delta, "treedb.collections.write_domain.primary_only.root_publishes_total", operations)
 	addPerOperationMetric(metrics, "primary_root_delta_entries/doc", delta, "treedb.collections.write_domain.primary_only.root_delta_entries_total", operations)
 	if bytesTotal, ok := sumTreeDBMetricDeltas(delta, "treedb.collections.write_domain.primary_only.root_delta_key_bytes_total", "treedb.collections.write_domain.primary_only.root_delta_value_bytes_total"); ok {
 		addPerOperationMetricValue(metrics, "primary_root_delta_bytes/doc", bytesTotal, operations)
 	}
 	addRatioMetric(metrics, "primary_only_coalesced_docs/publish", delta, "treedb.collections.write_domain.primary_only.coalesced_docs_total", "treedb.collections.write_domain.primary_only.root_publishes_total")
+	addPerOperationMetric(metrics, "primary_only_duplicate_ids_coalesced/doc", delta, "treedb.collections.write_domain.primary_only.duplicate_ids_coalesced_total", operations)
+	addPerOperationMetric(metrics, "primary_only_drains/doc", delta, "treedb.collections.write_domain.primary_only.drains_total", operations)
+	addRatioMetric(metrics, "primary_only_drain_docs/drain", delta, "treedb.collections.write_domain.primary_only.drain_docs_total", "treedb.collections.write_domain.primary_only.drains_total")
+	addPerOperationMetric(metrics, "primary_only_drain_bytes/doc", delta, "treedb.collections.write_domain.primary_only.drain_bytes_total", operations)
+	addPerOperationMetric(metrics, "primary_only_drain_ns/doc", delta, "treedb.collections.write_domain.primary_only.drain_ns_total", operations)
+	addPerDriverCallMetric(metrics, "primary_only_buffered_calls/driver_call", delta, "treedb.collections.write_domain.primary_only.buffered_calls_total", driverCalls)
+	addPerDriverCallMetric(metrics, "primary_only_publish_calls/driver_call", delta, "treedb.collections.write_domain.primary_only.root_publishes_total", driverCalls)
 	if uniqueEligible, ok := sumTreeDBMetricDeltas(delta, "treedb.collections.write_domain.update_batch.unique_checks_total", "treedb.collections.write_domain.update_batch.unique_check_skips_total"); ok {
 		addPerOperationMetricValue(metrics, "unique_eligible_checks/doc", uniqueEligible, operations)
 	}
@@ -2287,6 +2400,47 @@ func deriveTreeDBPhaseMetrics(delta map[string]float64, operations, driverCalls 
 		return nil
 	}
 	return metrics
+}
+
+func addReadOnlyPrepareRootApplySplitMetrics(metrics map[string]float64, delta map[string]float64, operations int) {
+	rootApplyNS, rootOK := delta["treedb.publish.ordered_root_delta_group.root_apply_ns_total"]
+	readOnlyPrepareNS, prepareOK := delta["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ns_total"]
+	if !rootOK || !prepareOK {
+		return
+	}
+	remainingNS := rootApplyNS - readOnlyPrepareNS
+	if remainingNS < 0 {
+		remainingNS = 0
+	}
+	addPerOperationMetricValue(metrics, "publish_delta_group_root_apply_excluding_read_only_prepare_ns/doc", remainingNS, operations)
+	addRatioMetricValue(metrics, "read_only_prepare_root_apply_share_pct", readOnlyPrepareNS*100, rootApplyNS)
+}
+
+func addRootDeltaKindMetrics(metrics map[string]float64, statPrefix, metricPrefix string, delta map[string]float64, operations int) {
+	entryKeys := make([]string, 0, len(treeDBRootDeltaKindMetrics))
+	byteKeys := make([]string, 0, len(treeDBRootDeltaKindMetrics))
+	tombstoneKeys := make([]string, 0, len(treeDBRootDeltaKindMetrics))
+	for _, kind := range treeDBRootDeltaKindMetrics {
+		base := "treedb.collections.write_domain." + statPrefix + "." + kind.statToken
+		entryKey := base + ".entries_total"
+		byteKey := base + ".bytes_total"
+		tombstoneKey := base + ".tombstones_total"
+		entryKeys = append(entryKeys, entryKey)
+		byteKeys = append(byteKeys, byteKey)
+		tombstoneKeys = append(tombstoneKeys, tombstoneKey)
+		addPerOperationMetric(metrics, metricPrefix+"_"+kind.metricToken+"_root_delta_entries/doc", delta, entryKey, operations)
+		addPerOperationMetric(metrics, metricPrefix+"_"+kind.metricToken+"_root_delta_bytes/doc", delta, byteKey, operations)
+		addPerOperationMetric(metrics, metricPrefix+"_"+kind.metricToken+"_root_delta_tombstones/doc", delta, tombstoneKey, operations)
+	}
+	if total, ok := sumTreeDBMetricDeltas(delta, entryKeys...); ok {
+		addPerOperationMetricValue(metrics, metricPrefix+"_root_delta_entries/doc", total, operations)
+	}
+	if total, ok := sumTreeDBMetricDeltas(delta, byteKeys...); ok {
+		addPerOperationMetricValue(metrics, metricPrefix+"_root_delta_bytes/doc", total, operations)
+	}
+	if total, ok := sumTreeDBMetricDeltas(delta, tombstoneKeys...); ok {
+		addPerOperationMetricValue(metrics, metricPrefix+"_root_delta_tombstones/doc", total, operations)
+	}
 }
 
 func addPerOperationMetric(metrics map[string]float64, name string, delta map[string]float64, key string, operations int) {
@@ -3000,12 +3154,14 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 			fmt.Fprintf(out, "treedb_dir=%s\n", result.TreeDBDir)
 		}
 		if result.TreeDBProfile != "" {
-			fmt.Fprintf(out, "treedb_profile=%s document_format=%s data_root_storage=%s index_state_root_storage=%s index_root_storage=%s buffered_indexed_max_docs=%d buffered_indexed_max_bytes=%d buffered_indexed_max_root_runs=%d buffered_indexed_async_flush=%t buffered_indexed_async_max_queued_units=%d maintenance=%s\n",
+			fmt.Fprintf(out, "treedb_profile=%s document_format=%s data_root_storage=%s index_state_root_storage=%s index_root_storage=%s buffered_indexed_max_docs=%d buffered_indexed_max_bytes=%d buffered_indexed_max_root_runs=%d buffered_indexed_async_flush=%t buffered_indexed_async_max_queued_units=%d buffered_indexed_read_only_prepare=%t buffered_indexed_read_only_prepare_workers=%d maintenance=%s\n",
 				result.TreeDBProfile, result.TreeDBDocumentFormat, result.TreeDBDataRootStorage,
 				result.TreeDBIndexStateRootStorage, result.TreeDBIndexRootStorage,
 				result.TreeDBBufferedIndexedWriteMaxDocuments, result.TreeDBBufferedIndexedWriteMaxBytes,
 				result.TreeDBBufferedIndexedWriteMaxRootRuns, result.TreeDBBufferedIndexedAsyncFlush,
-				result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits, result.TreeDBMaintenanceMode)
+				result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
+				result.TreeDBBufferedIndexedReadOnlyPrepare, result.TreeDBBufferedIndexedReadOnlyPrepareWorkers,
+				result.TreeDBMaintenanceMode)
 		}
 		if result.MongoURI != "" {
 			fmt.Fprintf(out, "mongo_uri=%s\n", result.MongoURI)
@@ -3019,15 +3175,22 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 			if phase.EffectiveProducers > 0 {
 				fmt.Fprintf(out, " effective_producers=%d", phase.EffectiveProducers)
 			}
-			fmt.Fprintf(out, " duration_ms=%.1f ops_sec=%.1f sampled_ops_sec=%.1f sampled_ns_op=%.1f driver_aggregate_ms=%.1f driver_mean_us=%.0f p50_us=%.0f p95_us=%.0f p99_us=%.0f\n",
+			fmt.Fprintf(out, " duration_ms=%.1f ops_sec=%.1f sampled_ops_sec=%.1f sampled_ns_op=%.1f driver_aggregate_ms=%.1f driver_mean_us=%.0f p50_us=%.0f p95_us=%.0f p99_us=%.0f",
 				phase.DurationMillis, phase.OpsPerSecond,
 				phase.SampledOpsPerSecond, phase.SampledNsPerOp, phase.DriverAggregateMillis, phase.DriverMeanLatencyMicros,
 				phase.LatencyMicros.P50, phase.LatencyMicros.P95, phase.LatencyMicros.P99)
+			if phase.TreeDBDrainMillis > 0 {
+				fmt.Fprintf(out, " treedb_drain_ms=%.3f", phase.TreeDBDrainMillis)
+			}
+			fmt.Fprintln(out)
 			for _, producer := range phase.ProducerResults {
 				fmt.Fprintf(out, "  producer=%d ops=%d calls=%d duration_ms=%.1f ops_sec=%.1f driver_aggregate_ms=%.1f driver_mean_us=%.0f p50_us=%.0f p95_us=%.0f p99_us=%.0f\n",
 					producer.Producer, producer.Operations, producer.DriverCalls, producer.DurationMillis, producer.OpsPerSecond,
 					producer.DriverAggregateMillis, producer.DriverMeanLatencyMicros,
 					producer.LatencyMicros.P50, producer.LatencyMicros.P95, producer.LatencyMicros.P99)
+			}
+			if len(phase.TreeDBDrainStatsDelta) > 0 {
+				writeTreeDBStats(out, "phase_treedb_drain_stats_delta."+phase.Name, phase.TreeDBDrainStatsDelta)
 			}
 			if len(phase.TreeDBStatsDelta) > 0 {
 				writeTreeDBStats(out, "phase_treedb_stats_delta."+phase.Name, phase.TreeDBStatsDelta)

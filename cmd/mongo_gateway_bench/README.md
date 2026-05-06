@@ -97,6 +97,8 @@ collection benchmark profile:
 - `-treedb-buffered-indexed-write-max-root-runs 0` (explicit `0` disables this
   trigger; when this flag is omitted while document or byte thresholds are
   overridden, the tool keeps the matching root-run compatibility default)
+- `-treedb-buffered-indexed-read-only-prepare=false`
+- `-treedb-buffered-indexed-read-only-prepare-workers=0`
 - `-treedb-maintenance full`
 - `-client-mode driver`
 
@@ -125,6 +127,35 @@ document or byte threshold is overridden and the root-run flag is omitted, the
 tool fills in the matching root-run default; pass
 `-treedb-buffered-indexed-write-max-root-runs 0` explicitly to keep root-run
 flushing disabled in that case.
+
+Use `-treedb-buffered-indexed-read-only-prepare` to run TreeDB's read-only
+leaf-span preparation pass during indexed collection flush publishes. This is
+an observability and planning mode: it records what existing leaf spans the
+root delta would touch, but it does not change root publish output, durability,
+read visibility, or enable parallel leaf execution. Pair it with
+`-treedb-buffered-indexed-read-only-prepare-workers N` to report deterministic
+worker-range summaries for an intended worker target. The worker flag is valid
+only when read-only prepare is enabled, including explicit `0`.
+
+JSON output always includes the effective
+`treedb_buffered_indexed_read_only_prepare` and
+`treedb_buffered_indexed_read_only_prepare_workers` fields so benchmark
+artifacts distinguish default-off runs from older runs that predate the mode.
+Per-phase `treedb_metrics` include:
+
+- `read_only_prepare_calls/doc`
+- `read_only_prepare_ns/doc`
+- `read_only_prepare_ns/plan`
+- `read_only_prepare_ops/doc`
+- `read_only_prepare_leaf_spans/plan`
+- `read_only_prepare_worker_targets/plan`
+- `read_only_prepare_worker_ranges/plan`
+- `read_only_prepare_worker_max_ops/plan`
+
+The raw TreeDB stat deltas remain in `treedb_stats_delta` under the
+`treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_*` keys.
+Use those raw counters when auditing exact totals; use `treedb_metrics` for
+normalized writer-sweep comparisons.
 
 The Go profile benchmarks in `profile_bench_test.go` keep their defaults stable,
 but can opt into the same indexed async flush mode for focused root-publish
@@ -242,6 +273,8 @@ The bundle contains:
 - `summary.tsv`: machine-readable per-phase comparison rows.
 - `matrix.tsv`: target/config/document/index/raw-json/physical-byte index.
 - `raw/*.json`: unmodified `mongo_gateway_bench -format json` output.
+- Writer-sweep read-only prepare columns in both `report.md` and `summary.tsv`
+  when the raw JSON contains the TreeDB read-only prepare metrics.
 - `profiles/`: per-phase TreeDB pprof artifacts when `--profile-treedb` is
   used.
 - `treedb_data/` and, in Docker mode, `mongodb_data/`: final data directories
@@ -258,6 +291,23 @@ GOWORK=off go run ./cmd/mongo_gateway_compare_report \
   -report /tmp/gomap_mongo_gateway_compare/report.md \
   -summary /tmp/gomap_mongo_gateway_compare/summary.tsv
 ```
+
+For a TreeDB-only writer metrics TSV from an existing bundle or hand-built
+matrix, use:
+
+```sh
+python3 scripts/mongo_gateway_writer_metrics.py \
+  /tmp/gomap_mongo_gateway_compare \
+  /tmp/gomap_mongo_gateway_compare/matrix.tsv \
+  /tmp/gomap_mongo_gateway_compare/writer_metrics.tsv
+```
+
+The writer metrics TSV exports the same normalized read-only prepare columns as
+the compare report, plus exact raw totals:
+
+- `read_only_prepare_calls_total`
+- `read_only_prepare_worker_targets_total`
+- `read_only_prepare_worker_ranges_total`
 
 Useful overrides:
 
