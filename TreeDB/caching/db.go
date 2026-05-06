@@ -15639,6 +15639,9 @@ func (db *DB) scheduleVlogGenerationRewriteStageConfirmation(observedAt int64) {
 	if db == nil || observedAt <= 0 || db.closing.Load() {
 		return
 	}
+	if envBool(envDisableVlogGenerationLoop) {
+		return
+	}
 	if db.vlogGenerationRewriteStageWakeObservedNS.Load() == observedAt {
 		return
 	}
