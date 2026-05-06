@@ -49,6 +49,7 @@ type templateV1Record struct {
 
 type templateV1Template struct {
 	id     [32]byte
+	raw    []byte
 	fields []string
 }
 
@@ -171,7 +172,7 @@ func prepareTemplateV1InsertDocuments(documents [][]byte, fallback templateV1Res
 	records := make([]templateV1Record, 0)
 	resolver := &templateV1MemoryResolver{}
 	for i, document := range documents {
-		stored, docRecords, err := parseTemplateV1InsertDocument(document)
+		stored, docRecords, err := parseTemplateV1InsertDocumentWithMemoryResolver(document, resolver)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -238,7 +239,18 @@ func parseTemplateV1InsertDocument(raw []byte) ([]byte, []templateV1Record, erro
 	return parseTemplateV1InsertEnvelope(raw)
 }
 
+func parseTemplateV1InsertDocumentWithMemoryResolver(raw []byte, resolver *templateV1MemoryResolver) ([]byte, []templateV1Record, error) {
+	if bytes.HasPrefix(raw, []byte(templateV1StoredMagic)) {
+		return raw, nil, nil
+	}
+	return parseTemplateV1InsertEnvelopeWithMemoryResolver(raw, resolver)
+}
+
 func parseTemplateV1InsertEnvelope(raw []byte) ([]byte, []templateV1Record, error) {
+	return parseTemplateV1InsertEnvelopeWithMemoryResolver(raw, nil)
+}
+
+func parseTemplateV1InsertEnvelopeWithMemoryResolver(raw []byte, resolver *templateV1MemoryResolver) ([]byte, []templateV1Record, error) {
 	pos := 0
 	if !consumeMagic(raw, &pos, templateV1InputMagic) {
 		return nil, nil, errors.New("collections: template-v1 insert requires template input envelope")
@@ -250,7 +262,7 @@ func parseTemplateV1InsertEnvelope(raw []byte) ([]byte, []templateV1Record, erro
 	if templateCount > uint64(len(raw)) {
 		return nil, nil, errors.New("collections: malformed template-v1 template count")
 	}
-	records := make([]templateV1Record, 0, int(templateCount))
+	var records []templateV1Record
 	for i := uint64(0); i < templateCount; i++ {
 		var id [32]byte
 		if len(raw)-pos < len(id) {
@@ -267,12 +279,20 @@ func parseTemplateV1InsertEnvelope(raw []byte) ([]byte, []templateV1Record, erro
 		}
 		recordRaw := raw[pos : pos+int(recordLen)]
 		pos += int(recordLen)
+		if resolver != nil {
+			if existing := resolver.templates[id]; existing != nil && bytes.Equal(existing.raw, recordRaw) {
+				continue
+			}
+		}
 		record, err := parseTemplateV1Record(recordRaw)
 		if err != nil {
 			return nil, nil, err
 		}
 		if record.id != id {
 			return nil, nil, errors.New("collections: template-v1 template id does not match record")
+		}
+		if records == nil {
+			records = make([]templateV1Record, 0, int(templateCount-i))
 		}
 		records = append(records, record)
 	}
@@ -900,10 +920,11 @@ func parseTemplateV1Record(raw []byte) (templateV1Record, error) {
 		return templateV1Record{}, errors.New("collections: trailing template-v1 template bytes")
 	}
 	id := sha256.Sum256(raw)
+	rawCopy := bytes.Clone(raw)
 	return templateV1Record{
 		id:  id,
-		raw: bytes.Clone(raw),
-		tpl: &templateV1Template{id: id, fields: fields},
+		raw: rawCopy,
+		tpl: &templateV1Template{id: id, raw: rawCopy, fields: fields},
 	}, nil
 }
 

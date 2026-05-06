@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -853,9 +854,8 @@ type bufferedUniqueValueIndex struct {
 }
 
 type bufferedPrimaryRunIndex struct {
-	values     map[uint64]bufferedPrimaryRunRef
-	collisions map[uint64][]bufferedPrimaryRunRef
-	arenas     [][]byte
+	values map[string]memtable.Table
+	arenas [][]byte
 }
 
 type bufferedPrimaryRunRef struct {
@@ -4890,50 +4890,22 @@ func newBufferedPrimaryRunIndex(capacity int) *bufferedPrimaryRunIndex {
 	if capacity < 0 {
 		capacity = 0
 	}
-	return &bufferedPrimaryRunIndex{values: make(map[uint64]bufferedPrimaryRunRef, capacity)}
+	return &bufferedPrimaryRunIndex{values: make(map[string]memtable.Table, capacity)}
 }
 
-func (index *bufferedPrimaryRunIndex) addRef(hash uint64, ref bufferedPrimaryRunRef) {
-	if index == nil || ref.table == nil {
+func (index *bufferedPrimaryRunIndex) addRef(ref bufferedPrimaryRunRef) {
+	if index == nil || ref.table == nil || len(ref.key) == 0 {
 		return
 	}
-	if existing, ok := index.values[hash]; !ok {
-		index.values[hash] = ref
-		return
-	} else if bytes.Equal(existing.key, ref.key) {
-		index.values[hash] = ref
-		return
-	}
-	collisions := index.collisions
-	if collisions == nil {
-		collisions = make(map[uint64][]bufferedPrimaryRunRef)
-		index.collisions = collisions
-	}
-	bucket := collisions[hash]
-	for i := len(bucket) - 1; i >= 0; i-- {
-		if bytes.Equal(bucket[i].key, ref.key) {
-			bucket[i] = ref
-			collisions[hash] = bucket
-			return
-		}
-	}
-	collisions[hash] = append(bucket, ref)
+	index.values[unsafe.String(&ref.key[0], len(ref.key))] = ref.table
 }
 
 func (index *bufferedPrimaryRunIndex) lookup(key []byte) (memtable.Table, bool) {
-	if index == nil {
+	if index == nil || len(key) == 0 {
 		return nil, false
 	}
-	hash := xxhash.Sum64(key)
-	if ref, ok := index.values[hash]; ok && bytes.Equal(ref.key, key) {
-		return ref.table, true
-	}
-	for _, ref := range index.collisions[hash] {
-		if bytes.Equal(ref.key, key) {
-			return ref.table, true
-		}
-	}
-	return nil, false
+	table, ok := index.values[unsafe.String(&key[0], len(key))]
+	return table, ok
 }
 
 func addBufferedPrimaryRunIndexEntries(index *bufferedPrimaryRunIndex, batchPrimary memtable.Table) error {
@@ -4949,29 +4921,27 @@ func addBufferedPrimaryRunIndexEntries(index *bufferedPrimaryRunIndex, batchPrim
 	if stableKeys {
 		for it.Valid() {
 			key := it.UnsafeKey()
-			index.addRef(xxhash.Sum64(key), bufferedPrimaryRunRef{key: key, table: batchPrimary})
+			index.addRef(bufferedPrimaryRunRef{key: key, table: batchPrimary})
 			it.Next()
 		}
 		return it.Error()
 	}
 	arena := make([]byte, 0, bufferedPrimaryIDArenaCap(batchPrimary.Len()))
 	refs := make([]bufferedPrimaryRunRef, 0, batchPrimary.Len())
-	hashes := make([]uint64, 0, batchPrimary.Len())
 	for it.Valid() {
 		key := it.UnsafeKey()
 		refKey := key
 		start := len(arena)
 		arena = append(arena, key...)
 		refKey = arena[start:len(arena)]
-		hashes = append(hashes, xxhash.Sum64(key))
 		refs = append(refs, bufferedPrimaryRunRef{key: refKey, table: batchPrimary})
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
 		return err
 	}
-	for i, ref := range refs {
-		index.addRef(hashes[i], ref)
+	for _, ref := range refs {
+		index.addRef(ref)
 	}
 	if len(arena) > 0 {
 		index.arenas = append(index.arenas, arena)
@@ -4991,7 +4961,7 @@ func addBufferedPrimaryRunIndexDirectEntries(index *bufferedPrimaryRunIndex, ent
 		// Direct buffered primary entries own cloned document IDs and the table
 		// stores the same stable key slices, so the lookup index can reference
 		// them without an additional key arena.
-		index.addRef(xxhash.Sum64(key), bufferedPrimaryRunRef{key: key, table: table})
+		index.addRef(bufferedPrimaryRunRef{key: key, table: table})
 	}
 }
 

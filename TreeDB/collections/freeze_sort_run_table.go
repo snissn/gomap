@@ -17,7 +17,7 @@ type freezeSortRunEntry struct {
 	key   []byte
 	value []byte
 	ptr   page.ValuePtr
-	seq   uint64
+	seq   uint32
 	flags byte
 }
 
@@ -28,7 +28,7 @@ type freezeSortRunTable struct {
 	latestDirty bool
 	frozen      bool
 	sizeBytes   int64
-	nextSeq     uint64
+	nextSeq     uint32
 }
 
 const freezeSortRunTablePreallocEntryThreshold = 1024
