@@ -720,7 +720,6 @@ type bufferedPrimaryRunRef struct {
 	key        []byte
 	table      memtable.Table
 	value      []byte
-	ptr        page.ValuePtr
 	flags      byte
 	entryValid bool
 }
@@ -4301,9 +4300,8 @@ func addBufferedPrimaryRunIndexEntries(index *bufferedPrimaryRunIndex, batchPrim
 			key := it.UnsafeKey()
 			ref := bufferedPrimaryRunRef{key: key, table: batchPrimary}
 			if index.directEntries {
-				value, ptr, flags := it.UnsafeEntry()
+				value, _, flags := it.UnsafeEntry()
 				ref.value = value
-				ref.ptr = ptr
 				ref.flags = flags
 				ref.entryValid = true
 			}
