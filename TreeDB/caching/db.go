@@ -7454,6 +7454,35 @@ func (db *DB) releaseMemtableViewRef(view *memtableView, leaseRelease bool) {
 	view.retiredMems = nil
 }
 
+func (db *DB) releaseClosingEmptyMemtables() {
+	if db == nil {
+		return
+	}
+	view := db.memtables.Swap(nil)
+	if view == nil {
+		return
+	}
+	if !view.refs.CompareAndSwap(1, 0) {
+		return
+	}
+	for _, mt := range view.mutables {
+		db.releaseClosingEmptyMemtable(mt)
+	}
+	db.recycleMemtables(view.retiredMems)
+	view.retiredMems = nil
+}
+
+func (db *DB) releaseClosingEmptyMemtable(mt memtable.Table) {
+	if db == nil || mt == nil || mt.Len() != 0 {
+		return
+	}
+	db.releaseBatchArenaLeasesForMemtable(mt)
+	db.releaseAppendOnlyDirectArenaLeaseForMemtable(mt)
+	if releaser, ok := mt.(interface{ Release() }); ok {
+		releaser.Release()
+	}
+}
+
 func cachedBatchWriteNeedsBatchArenaRetention(mt memtable.Table) bool {
 	// This helper is only used for the cached batch write path, where
 	// cachedBatchWriteUsesSteal governs whether a memtable receives borrowed
@@ -19271,6 +19300,7 @@ func (db *DB) Close() error {
 	db.writeMu.Unlock()
 	db.flushMu.Unlock()
 	db.wg.Wait()
+	db.releaseClosingEmptyMemtables()
 	// Drain any in-flight dict-profile publish callbacks before teardown.
 	// New callbacks will observe closing=true and return without touching stores.
 	db.valueLogDictApplyMu.Lock()
