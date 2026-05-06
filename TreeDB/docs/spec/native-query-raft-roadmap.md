@@ -1,0 +1,440 @@
+# Native Query and Raft Roadmap
+
+Status: draft proposal, non-normative.
+
+This document defines the proposed query feature roadmap for the TreeDB native
+protocol and explains when Raft/distributed execution should enter the stack.
+It assumes the native wire protocol described in
+`TreeDB/docs/spec/native-wire-protocol.md`.
+
+## 1. Recommendation
+
+Raft should be early in the architecture, but not first in implementation.
+
+TreeDB should first define and test:
+
+1. native wire framing,
+2. versioned command schemas,
+3. deterministic command-entry encoding,
+4. single-node native server behavior for the core collection surface.
+
+After that, Raft should be added for the small deterministic write surface before
+the system grows rich distributed query features such as fanout aggregation or
+server-side WASM callbacks.
+
+Raft should not wait until the full query roadmap is complete. Rich queries
+should be designed with distributed execution in mind, but the first distributed
+system should replicate boring, deterministic metadata and mutation commands.
+
+## 2. Design Principles
+
+1. The wire protocol is not the Raft log.
+2. Every replicated write command must have deterministic command-entry bytes.
+3. Reads are not Raft-log entries unless they mutate state.
+4. Query features should be organized by distributed complexity.
+5. Aggregations should expose partial-result formats before cross-node fanout is
+   implemented.
+6. Server-side callbacks must be bounded, deterministic where required, and
+   feature-gated.
+7. Cursor resources must be cancellable and budgeted from v1.
+
+## 3. Implementation Order
+
+### R0. Protocol Spec and Codecs
+
+Define:
+
+- frame header,
+- body sections,
+- command IDs,
+- command versions,
+- error model,
+- byte-vector encoding,
+- typed scalar encoding,
+- ack and consistency policies,
+- deterministic command-entry envelope.
+
+Acceptance:
+
+- codec package with golden byte fixtures,
+- fuzz tests for frame/section decoding,
+- unknown-section compatibility tests,
+- max-frame and malformed-frame tests.
+
+### R1. Single-Node Native Server MVP
+
+Implement the native server for:
+
+- `hello`,
+- `create_collection`,
+- `create_index`,
+- `insert_batch`,
+- `delete_batch`,
+- `get_many`,
+- `index_lookup`,
+- `index_range`,
+- `open_scan`,
+- `cursor_next`,
+- `cursor_close`,
+- `flush_collection`,
+- `checkpoint`,
+- `stats`.
+
+Acceptance:
+
+- parity tests against direct `TreeDB/collections` calls,
+- native-wire TCP and in-process benchmark modes,
+- clear benchmark separation from Mongo raw-wire modes,
+- cursor cancellation and resource-limit tests.
+
+### R2. Deterministic Command Entry v1
+
+Implement a canonical command-entry encoder for mutating commands:
+
+- collection metadata changes,
+- index metadata changes,
+- insert/replace/delete batches,
+- flush/checkpoint only if a cluster policy decides they are replicated
+  commands rather than local maintenance barriers.
+
+Acceptance:
+
+- deterministic encoding tests,
+- cross-process/cross-map-order stability tests,
+- idempotency-key tests,
+- rejection tests for non-deterministic sections.
+
+### R3. Raft MVP for Writes
+
+Add Raft around the deterministic write set only.
+
+Replicate:
+
+- collection create/drop metadata,
+- index create/drop metadata,
+- insert/replace/delete batches,
+- deterministic schema/catalog guards,
+- idempotency records.
+
+Do not replicate:
+
+- ordinary reads,
+- local cursor state,
+- tracing/deadlines,
+- physical maintenance commands unless the cluster policy explicitly requires
+  them.
+
+Acceptance:
+
+- leader writes commit and apply on followers,
+- duplicate client requests are deduplicated by `client_id + sequence` or a
+  stable idempotency key,
+- failed leadership changes do not double-apply mutations,
+- restart tests preserve Raft log, stable metadata, and applied collection state.
+
+### R4. Read Consistency Modes
+
+Implement explicit read policies:
+
+```text
+local_stale
+leader_read
+linearizable
+lease_read
+```
+
+`local_stale` may read from any node and may be behind the leader.
+
+`leader_read` routes to the current leader but does not necessarily perform a
+fresh read-index barrier.
+
+`linearizable` performs the consensus read barrier required by the selected Raft
+implementation before reading.
+
+`lease_read` is allowed only if leader leases are implemented and the server can
+prove the lease is valid.
+
+Acceptance:
+
+- response metadata reports the actual consistency mode used,
+- stale follower reads are explicitly labeled,
+- linearizable reads fail or redirect when the node cannot prove leadership or
+  freshness.
+
+### R5. Local Advanced Queries
+
+Implement richer single-node reads only after the core read/write and cursor
+model is stable:
+
+- projection,
+- server-side predicate filters over bounded candidate sets,
+- count-only index queries,
+- local `count`, `min`, `max`, `sum`, `avg`,
+- local group-by over indexed scalar fields,
+- local top-k over bounded/indexed ranges,
+- `explain` and query stats.
+
+Acceptance:
+
+- all advanced queries have resource limits,
+- all query plans can be explained,
+- aggregation responses can be encoded as partial results.
+
+### R6. Distributed Query Execution
+
+Add distributed query execution after Raft write replication and read consistency
+policies are working.
+
+Initial distributed query features:
+
+- scatter/gather get-many by partition routing,
+- scatter/gather index lookup,
+- fanout range scan with coordinator-side merge,
+- partial aggregation merge,
+- distributed cursor cancellation,
+- shard-level and coordinator-level memory/time budgets.
+
+Acceptance:
+
+- coordinator reports shard participation and partial failures,
+- global limits and ordering are correct,
+- canceled distributed cursors release shard resources,
+- partial aggregation merge is deterministic.
+
+### R7. Server-Side WASM or Callback Execution
+
+WASM should be last or feature-gated behind explicit experimental flags.
+
+Read-only callbacks may come first:
+
+- bounded map/filter over scan batches,
+- no host state mutation,
+- deterministic imports only,
+- fuel, time, memory, and result-size limits,
+- module hash in request metadata.
+
+Write-producing callbacks require a stricter policy:
+
+- callback execution must expand to deterministic mutation batches before Raft
+  commit, or
+- the Raft log must record a deterministic invocation plus module hash and all
+  deterministic inputs needed to replay exactly.
+
+The safer default is to log the expanded mutation batch, not arbitrary callback
+execution, until determinism and audit tooling are mature.
+
+## 4. Query Feature Tiers
+
+### Tier 0: Core Collection Surface
+
+These features are required before Raft:
+
+- collection metadata commands,
+- index metadata commands,
+- insert/replace/delete batches,
+- primary get/get-many,
+- secondary equality lookup,
+- secondary range lookup,
+- bounded primary scans,
+- cursor pagination,
+- cancellation,
+- flush/checkpoint barriers,
+- stats.
+
+These map directly onto current collection and ordered-root concepts.
+
+### Tier 1: Local Query Quality
+
+These features may be implemented before or after Raft, but they should not
+delay Raft MVP:
+
+- projection,
+- count-only queries,
+- bounded filters,
+- explain plans,
+- response-side query stats,
+- server-side limits for documents, bytes, time, and intermediate rows.
+
+Projection and count-only queries are high-value because they reduce network
+bytes without introducing hard distributed semantics.
+
+### Tier 2: Local Aggregations
+
+Local aggregation should use partial-result encodings from the start.
+
+Initial aggregations:
+
+- `count`,
+- `min`,
+- `max`,
+- `sum`,
+- `avg` as `sum + count`,
+- group by one indexed scalar,
+- top-k over an indexed range.
+
+Aggregation requests MUST include explicit limits for:
+
+- scanned candidates,
+- groups,
+- output bytes,
+- execution time.
+
+### Tier 3: Distributed Queries
+
+Distributed queries require a partition/shard policy. The roadmap should not
+pretend global queries are simple until that policy exists.
+
+Open design areas:
+
+- collection partitioning by primary key hash or range,
+- secondary-index partitioning,
+- coordinator selection,
+- shard-local cursor ownership,
+- global ordering,
+- partial failure semantics,
+- retry and resume tokens,
+- query admission control.
+
+Distributed aggregation should be implemented as:
+
+```text
+shard query -> typed partial result -> coordinator merge -> final response
+```
+
+The partial result format should be deterministic and independent of the wire
+transport frame.
+
+### Tier 4: Server-Side WASM and Callbacks
+
+Server-side callbacks are powerful but easy to make unsafe or non-deterministic.
+
+Required policy before enabling:
+
+- module hash and optional module registry,
+- deterministic import set,
+- no wall-clock, random, network, filesystem, or process-global access,
+- fuel limit,
+- memory limit,
+- result-size limit,
+- explicit read-only vs write-producing mode,
+- stable error and timeout behavior,
+- observability for callback CPU/memory/result bytes.
+
+For distributed mode:
+
+- read-only callbacks can run shard-local and return partial outputs,
+- write-producing callbacks must produce deterministic mutation batches before
+  consensus or be replayable byte-for-byte from the Raft log.
+
+## 5. Raft Policy Boundaries
+
+### 5.1 Writes
+
+The leader validates client mutation commands and appends deterministic command
+entries to Raft. Followers apply committed command entries to their local TreeDB
+state machine.
+
+The command entry should include:
+
+- command ID and version,
+- collection or metadata target,
+- mutation input bytes,
+- expected catalog/schema guard when applicable,
+- idempotency key,
+- deterministic command flags.
+
+The command entry should not include:
+
+- request ID,
+- stream ID,
+- connection-local collection handle,
+- tracing,
+- deadline,
+- negotiated compression,
+- response page size,
+- client socket metadata.
+
+### 5.2 Reads
+
+Reads are governed by consistency policy, not by command-entry replication.
+
+The server may satisfy `local_stale` reads from a follower. Stronger reads must
+be routed or proved according to the cluster policy.
+
+Read responses in cluster mode SHOULD include:
+
+- serving node ID,
+- leader ID if known,
+- applied log index,
+- consistency mode requested,
+- consistency mode actually used.
+
+### 5.3 Metadata
+
+Collection and index metadata changes are replicated writes. They should use the
+same deterministic command-entry path as document mutations.
+
+Open question: whether global metadata is one Raft group or whether each
+collection/shard has its own group plus a separate metadata group. The first
+Raft MVP SHOULD use the simplest model that can prove correctness.
+
+### 5.4 Maintenance
+
+Local physical maintenance, such as value-log rewrite, GC, leaf-generation pack,
+or index vacuum, should not become user-visible replicated commands by default.
+
+Cluster-visible maintenance policy is needed only when physical layout choices
+affect routing, snapshots, or catch-up behavior.
+
+## 6. TODO List
+
+### Protocol TODO
+
+- Assign command IDs and section IDs.
+- Define scalar binary encodings.
+- Define result-set and presence-bitmap encodings.
+- Define cursor resource limits.
+- Define error-code mapping from current collection errors.
+- Define authentication placeholder fields.
+- Define benchmark mode labels.
+
+### Query TODO
+
+- Specify projection syntax.
+- Specify bounded predicate filter syntax.
+- Specify count-only query response.
+- Specify local aggregation request/response.
+- Specify partial aggregation encoding.
+- Specify explain-plan format.
+- Specify query stats fields.
+
+### Raft TODO
+
+- Choose Raft library or implementation boundary.
+- Define `CommandEntryV1` bytes.
+- Define idempotency record storage.
+- Define stable store and log store mappings.
+- Define snapshot/export/restore format.
+- Define read-index or equivalent linearizable-read mechanism.
+- Define initial cluster metadata model.
+
+### WASM TODO
+
+- Decide whether WASM is needed before distributed query MVP.
+- Define deterministic host imports.
+- Define module hash and registry policy.
+- Define fuel/memory/result limits.
+- Define whether write callbacks log invocation or expanded mutations.
+
+## 7. Open Questions
+
+1. Should raw ordered-KV commands be part of the first native protocol, or should
+   v1 stay collection-only?
+2. Should Raft be single group for the first MVP, or should the protocol reserve
+   collection/shard group IDs immediately?
+3. Should `flush` and `checkpoint` be client-visible in cluster mode, or treated
+   as local maintenance/admin commands only?
+4. Should distributed query partial failures return partial results, fail the
+   entire query, or be policy-selectable?
+5. Should read-only WASM be allowed before distributed queries, or should it wait
+   until shard-local resource accounting exists?

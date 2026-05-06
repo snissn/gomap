@@ -94,6 +94,14 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 - `TreeDB/docs/spec/collections-native-fastpath-baseline-2026-04-25.md`
   - refreshed pre-`R0` baseline note for issue `#768`, including exact
     main/oracle SHAs, artifact dirs, commands, and benchmark baselines.
+- `TreeDB/docs/spec/native-wire-protocol.md`
+  - draft native binary network protocol for TreeDB collections, including
+    framing, command payloads, explicit ack/consistency policies, and the
+    boundary between wire requests and future deterministic Raft command
+    entries.
+- `TreeDB/docs/spec/native-query-raft-roadmap.md`
+  - draft query feature roadmap and distributed/Raft sequencing policy for the
+    native protocol.
 
 ## Relationship to Existing Docs
 
