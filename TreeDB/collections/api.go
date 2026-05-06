@@ -9406,7 +9406,7 @@ type directBufferedRootEntry struct {
 
 type directBufferedSecondaryRootPlan struct {
 	rootName   string
-	entries    []directBufferedSecondaryRootEntry
+	entries    []directBufferedSecondaryRootEntryRef
 	arena      []byte
 	deletes    int
 	sets       int
@@ -9414,9 +9414,24 @@ type directBufferedSecondaryRootPlan struct {
 	runtimeIdx int
 }
 
-type directBufferedSecondaryRootEntry struct {
-	key       []byte
+type directBufferedSecondaryRootEntryRef struct {
+	end       uint32
 	tombstone bool
+}
+
+func (plan directBufferedSecondaryRootPlan) entryKey(i int) []byte {
+	if i < 0 || i >= len(plan.entries) {
+		return nil
+	}
+	start := 0
+	if i > 0 {
+		start = int(plan.entries[i-1].end)
+	}
+	end := int(plan.entries[i].end)
+	if start < 0 || end < start || end > len(plan.arena) {
+		return nil
+	}
+	return plan.arena[start:end]
 }
 
 func collectionRootDeltaPlanStatsFromDirectBufferedUpdatePlan(collectionName string, plan *updateBatchPlan) collectionRootDeltaPlanStats {
@@ -9442,8 +9457,8 @@ func collectionRootDeltaPlanStatsFromDirectBufferedUpdatePlan(collectionName str
 			continue
 		}
 		kind := stats.addRoot(collectionName, secondaryPlan.rootName)
-		for _, entry := range secondaryPlan.entries {
-			stats.addEntry(kind, uint64(len(entry.key)), 0, entry.tombstone)
+		for i, entry := range secondaryPlan.entries {
+			stats.addEntry(kind, uint64(len(secondaryPlan.entryKey(i))), 0, entry.tombstone)
 		}
 	}
 	return stats
@@ -9665,7 +9680,7 @@ func buildDirectBufferedSecondaryRootPlans(collectionName string, runtimes []ind
 		}
 		plan := directBufferedSecondaryRootPlan{
 			rootName:   runtimeSecondaryRootName(collectionName, runtime),
-			entries:    make([]directBufferedSecondaryRootEntry, 0, entryCount),
+			entries:    make([]directBufferedSecondaryRootEntryRef, 0, entryCount),
 			arena:      make([]byte, 0, runStats.KeyBytes),
 			deletes:    runStats.Deletes,
 			sets:       runStats.Sets,
@@ -9683,16 +9698,21 @@ func buildDirectBufferedSecondaryRootPlans(collectionName string, runtimes []ind
 				if err != nil {
 					return nil, 0, err
 				}
-				plan.entries = append(plan.entries, directBufferedSecondaryRootEntry{key: key, tombstone: true})
+				if len(key) > 0 && len(plan.arena) > int(^uint32(0)) {
+					return nil, 0, errors.New("collections: direct buffered secondary root plan too large")
+				}
+				plan.entries = append(plan.entries, directBufferedSecondaryRootEntryRef{end: uint32(len(plan.arena)), tombstone: true})
 			}
 			for _, encoded := range item.newState.valuesAt(runtimeIdx) {
-				var key []byte
 				var err error
-				plan.arena, key, err = appendIndexEntryKey(plan.arena, encoded, item.documentID)
+				plan.arena, _, err = appendIndexEntryKey(plan.arena, encoded, item.documentID)
 				if err != nil {
 					return nil, 0, err
 				}
-				plan.entries = append(plan.entries, directBufferedSecondaryRootEntry{key: key})
+				if len(plan.arena) > int(^uint32(0)) {
+					return nil, 0, errors.New("collections: direct buffered secondary root plan too large")
+				}
+				plan.entries = append(plan.entries, directBufferedSecondaryRootEntryRef{end: uint32(len(plan.arena))})
 			}
 		}
 		stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, int64(runStats.KeyBytes))
@@ -11293,10 +11313,14 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		}
 		if err := applyCollectionRunEntriesWithFlags(table, len(secondaryPlan.entries), func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
 			entry := secondaryPlan.entries[i]
-			if entry.tombstone {
-				return entry.key, nil, page.ValuePtr{}, node.FlagTombstone, nil
+			key = secondaryPlan.entryKey(i)
+			if len(key) == 0 {
+				return nil, nil, page.ValuePtr{}, 0, errors.New("collections: empty direct buffered secondary root key")
 			}
-			return entry.key, nil, page.ValuePtr{}, node.FlagInline, nil
+			if entry.tombstone {
+				return key, nil, page.ValuePtr{}, node.FlagTombstone, nil
+			}
+			return key, nil, page.ValuePtr{}, node.FlagInline, nil
 		}); err != nil {
 			if shouldAutoFlushAfterAdding {
 				rollbackBufferedIndexedDomain(domain, checkpoint)
