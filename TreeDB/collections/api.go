@@ -9760,7 +9760,7 @@ var updateBatchPlanScratchPool sync.Pool
 
 const (
 	updateBatchPlanScratchMaxChangedCap           = 1 << 15
-	updateBatchPlanScratchDocumentBytes           = 256
+	updateBatchPlanScratchDocumentBytes           = 192
 	updateBatchPlanScratchMaxInitialDocumentArena = 4 << 20
 	updateBatchPlanScratchMaxDocumentArena        = 8 << 20
 	updateBatchPlanScratchMaxRootNameCap          = 64
