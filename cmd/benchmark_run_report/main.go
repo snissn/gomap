@@ -1634,54 +1634,27 @@ func mongoFirstPhaseRow(rows []mongoSummaryRow, idx int, phases []string) (mongo
 }
 
 func writeMongoThroughputSummary(b *strings.Builder, rows []mongoThroughputOperationRow) {
-	b.WriteString("<h4>Scaling summary</h4><div class=\"grid\">")
+	var body [][]string
 	for _, row := range rows {
 		if !row.HasSingle && !row.HasTreeBest && !row.HasMongoBest {
 			continue
 		}
-		b.WriteString("<div class=\"metric\"><div class=\"label\">" + esc(row.Label) + "</div>")
-		b.WriteString("<div class=\"value\">" + esc(mongoSummaryPrimaryValue(row)) + "</div>")
-		for _, line := range mongoThroughputSummaryLines(row) {
-			b.WriteString("<p class=\"subtle\">" + esc(line) + "</p>")
-		}
-		b.WriteString("</div>")
+		body = append(body, []string{
+			row.Label,
+			mongoBestOps(row, "tree"),
+			mongoBestCountLabel(row.TreeBestCount, row.CountUnit, row.HasTreeBest),
+			mongoBestOps(row, "mongo"),
+			mongoBestCountLabel(row.MongoBestCount, row.CountUnit, row.HasMongoBest),
+			mongoPeakRatio(row),
+			mongoScaleUpRatio(row),
+			mongoSingleThreadedOps(row),
+		})
 	}
-	b.WriteString("</div>")
-}
-
-func mongoSummaryPrimaryValue(row mongoThroughputOperationRow) string {
-	if row.HasTreeBest {
-		return fmtOps(row.TreeBest.TreeDBOpsSec) + " TreeDB ops/sec"
+	if len(body) == 0 {
+		return
 	}
-	if row.HasSingle {
-		return fmtOps(row.Single.TreeDBOpsSec) + " TreeDB ops/sec"
-	}
-	if row.HasMongoBest {
-		return fmtOps(row.MongoBest.MongoOpsSec) + " MongoDB ops/sec"
-	}
-	return "-"
-}
-
-func mongoThroughputSummaryLines(row mongoThroughputOperationRow) []string {
-	var lines []string
-	if row.HasTreeBest {
-		lines = append(lines, "TreeDB peak at "+mongoBestCountLabel(row.TreeBestCount, row.CountUnit, true)+".")
-	}
-	if row.HasMongoBest {
-		lines = append(lines, "MongoDB peak: "+fmtOps(row.MongoBest.MongoOpsSec)+" ops/sec at "+mongoBestCountLabel(row.MongoBestCount, row.CountUnit, true)+".")
-	}
-	if row.HasTreeBest && row.HasMongoBest && row.MongoBest.MongoOpsSec > 0 {
-		lines = append(lines, "Peak TreeDB/MongoDB: "+fmtRatio(row.TreeBest.TreeDBOpsSec/row.MongoBest.MongoOpsSec)+".")
-	}
-	if row.HasSingle {
-		line := "Single threaded TreeDB: " + fmtOps(row.Single.TreeDBOpsSec) + " ops/sec"
-		if row.HasTreeBest && row.Single.TreeDBOpsSec > 0 {
-			line += "; TreeDB scale-up: " + fmtRatio(row.TreeBest.TreeDBOpsSec/row.Single.TreeDBOpsSec)
-		}
-		line += "."
-		lines = append(lines, line)
-	}
-	return lines
+	b.WriteString("<h4>Scaling summary</h4>")
+	writeTable(b, []string{"workload", "TreeDB peak", "TreeDB clients", "MongoDB peak", "MongoDB clients", "peak ratio", "TreeDB scale-up", "single-thread TreeDB"}, body, numericColumns(1, 3, 5, 6, 7))
 }
 
 func mongoSingleThreadedOps(row mongoThroughputOperationRow) string {
@@ -1702,6 +1675,20 @@ func mongoBestOps(row mongoThroughputOperationRow, side string) string {
 		return "-"
 	}
 	return fmtOps(row.TreeBest.TreeDBOpsSec)
+}
+
+func mongoPeakRatio(row mongoThroughputOperationRow) string {
+	if !row.HasTreeBest || !row.HasMongoBest || row.MongoBest.MongoOpsSec <= 0 {
+		return "-"
+	}
+	return fmtRatio(row.TreeBest.TreeDBOpsSec / row.MongoBest.MongoOpsSec)
+}
+
+func mongoScaleUpRatio(row mongoThroughputOperationRow) string {
+	if !row.HasSingle || !row.HasTreeBest || row.Single.TreeDBOpsSec <= 0 {
+		return "-"
+	}
+	return fmtRatio(row.TreeBest.TreeDBOpsSec / row.Single.TreeDBOpsSec)
 }
 
 func mongoBestCountLabel(count int, unit string, ok bool) string {
