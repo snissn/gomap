@@ -710,14 +710,19 @@ type bufferedUniqueValueIndex struct {
 }
 
 type bufferedPrimaryRunIndex struct {
-	values     map[uint64]bufferedPrimaryRunRef
-	collisions map[uint64][]bufferedPrimaryRunRef
-	arenas     [][]byte
+	values        map[uint64]bufferedPrimaryRunRef
+	collisions    map[uint64][]bufferedPrimaryRunRef
+	arenas        [][]byte
+	directEntries bool
 }
 
 type bufferedPrimaryRunRef struct {
-	key   []byte
-	table memtable.Table
+	key        []byte
+	table      memtable.Table
+	value      []byte
+	ptr        page.ValuePtr
+	flags      byte
+	entryValid bool
 }
 
 type collectionWriteDomain struct {
@@ -4217,10 +4222,17 @@ func addBufferedPrimaryIDs(index *bufferedUniqueValueIndex, batchPrimary memtabl
 }
 
 func newBufferedPrimaryRunIndex(capacity int) *bufferedPrimaryRunIndex {
+	return newBufferedPrimaryRunIndexWithDirectEntries(capacity, false)
+}
+
+func newBufferedPrimaryRunIndexWithDirectEntries(capacity int, directEntries bool) *bufferedPrimaryRunIndex {
 	if capacity < 0 {
 		capacity = 0
 	}
-	return &bufferedPrimaryRunIndex{values: make(map[uint64]bufferedPrimaryRunRef, capacity)}
+	return &bufferedPrimaryRunIndex{
+		values:        make(map[uint64]bufferedPrimaryRunRef, capacity),
+		directEntries: directEntries,
+	}
 }
 
 func (index *bufferedPrimaryRunIndex) addRef(hash uint64, ref bufferedPrimaryRunRef) {
@@ -4250,20 +4262,28 @@ func (index *bufferedPrimaryRunIndex) addRef(hash uint64, ref bufferedPrimaryRun
 	collisions[hash] = append(bucket, ref)
 }
 
-func (index *bufferedPrimaryRunIndex) lookup(key []byte) (memtable.Table, bool) {
+func (index *bufferedPrimaryRunIndex) lookupRef(key []byte) (bufferedPrimaryRunRef, bool) {
 	if index == nil {
-		return nil, false
+		return bufferedPrimaryRunRef{}, false
 	}
 	hash := xxhash.Sum64(key)
 	if ref, ok := index.values[hash]; ok && bytes.Equal(ref.key, key) {
-		return ref.table, true
+		return ref, true
 	}
 	for _, ref := range index.collisions[hash] {
 		if bytes.Equal(ref.key, key) {
-			return ref.table, true
+			return ref, true
 		}
 	}
-	return nil, false
+	return bufferedPrimaryRunRef{}, false
+}
+
+func (index *bufferedPrimaryRunIndex) lookup(key []byte) (memtable.Table, bool) {
+	ref, ok := index.lookupRef(key)
+	if !ok {
+		return nil, false
+	}
+	return ref.table, true
 }
 
 func addBufferedPrimaryRunIndexEntries(index *bufferedPrimaryRunIndex, batchPrimary memtable.Table) error {
@@ -4279,7 +4299,15 @@ func addBufferedPrimaryRunIndexEntries(index *bufferedPrimaryRunIndex, batchPrim
 	if stableKeys {
 		for it.Valid() {
 			key := it.UnsafeKey()
-			index.addRef(xxhash.Sum64(key), bufferedPrimaryRunRef{key: key, table: batchPrimary})
+			ref := bufferedPrimaryRunRef{key: key, table: batchPrimary}
+			if index.directEntries {
+				value, ptr, flags := it.UnsafeEntry()
+				ref.value = value
+				ref.ptr = ptr
+				ref.flags = flags
+				ref.entryValid = true
+			}
+			index.addRef(xxhash.Sum64(key), ref)
 			it.Next()
 		}
 		return it.Error()
@@ -4347,7 +4375,7 @@ func rebuildBufferedPrimaryRunIndex(collectionName string, runs map[string][]mem
 	if len(tables) == 0 {
 		return nil, nil
 	}
-	index := newBufferedPrimaryRunIndex(bufferedRunLenHint(tables))
+	index := newBufferedPrimaryRunIndexWithDirectEntries(bufferedRunLenHint(tables), true)
 	for _, table := range tables {
 		if err := addBufferedPrimaryRunIndexEntries(index, table); err != nil {
 			return nil, err
@@ -8671,11 +8699,17 @@ func snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(index *bufferedPrimaryRu
 		return entries, buffer, nil
 	}
 	for i, item := range items {
-		table, ok := index.lookup(item.DocumentID)
-		if !ok || table == nil {
+		ref, ok := index.lookupRef(item.DocumentID)
+		if !ok {
 			continue
 		}
-		value, _, flags, found := table.GetEntry(item.DocumentID)
+		value, flags, found := ref.value, ref.flags, ref.entryValid
+		if !found {
+			if ref.table == nil {
+				continue
+			}
+			value, _, flags, found = ref.table.GetEntry(item.DocumentID)
+		}
 		if !found {
 			continue
 		}
@@ -11294,8 +11328,11 @@ func (c *Collection) getBufferedDocumentIntoLocked(domain *collectionWriteDomain
 		var value []byte
 		var flags byte
 		found := false
-		if table, ok := domain.primaryRunIndex.lookup(documentID); ok {
-			value, _, flags, found = table.GetEntry(documentID)
+		if ref, ok := domain.primaryRunIndex.lookupRef(documentID); ok {
+			value, flags, found = ref.value, ref.flags, ref.entryValid
+			if !found && ref.table != nil {
+				value, _, flags, found = ref.table.GetEntry(documentID)
+			}
 		} else if domain.primaryRunIndex == nil {
 			value, _, flags, found = getBufferedRunEntry(pendingIndexedRootRunsLocked(domain, name), documentID)
 		}

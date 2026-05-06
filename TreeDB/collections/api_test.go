@@ -5960,7 +5960,7 @@ func TestBufferedPrimaryRunIndexFindsNewestTable(t *testing.T) {
 	defer resetCollectionRunTable(older)
 	defer resetCollectionRunTable(newer)
 
-	index := newBufferedPrimaryRunIndex(0)
+	index := newBufferedPrimaryRunIndexWithDirectEntries(0, true)
 	if err := addBufferedPrimaryRunIndexEntries(index, older); err != nil {
 		t.Fatalf("add older table: %v", err)
 	}
@@ -5977,6 +5977,13 @@ func TestBufferedPrimaryRunIndexFindsNewestTable(t *testing.T) {
 	value, _, flags, found := table.GetEntry([]byte("u1"))
 	if !found || flags&node.FlagTombstone != 0 || !bytes.Equal(value, []byte("newer")) {
 		t.Fatalf("lookup found=%v flags=%d value=%q want newer live value", found, flags, value)
+	}
+	ref, ok := index.lookupRef([]byte("u1"))
+	if !ok {
+		t.Fatal("lookupRef u1 missing")
+	}
+	if !ref.entryValid || ref.table != newer || ref.flags&node.FlagTombstone != 0 || !bytes.Equal(ref.value, []byte("newer")) {
+		t.Fatalf("lookupRef entryValid=%v table=%p flags=%d value=%q want newer direct entry", ref.entryValid, ref.table, ref.flags, ref.value)
 	}
 }
 
