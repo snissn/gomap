@@ -26,7 +26,7 @@ func mustBuildValidDict(t *testing.T, samples [][]byte) []byte {
 	for _, s := range samples {
 		history = append(history, s...)
 	}
-	dict, err := buildAndValidateDict(42, samples, history, zstd.SpeedFastest)
+	dict, err := buildAndValidateDict(42, samples, history, zstd.SpeedFastest, nil, nil)
 	if err != nil {
 		t.Fatalf("build dict: %v", err)
 	}

@@ -64,6 +64,8 @@ type Trainer struct {
 	forceNextTrain      atomic.Bool
 	level               zstd.EncoderLevel
 	logged              atomic.Bool
+	buildDictWS         zstd.BuildDictWorkspace
+	dictEncodeWS        zstd.DictEncodeWorkspace
 
 	mu            sync.Mutex
 	sampleBytes   uint64
@@ -678,7 +680,7 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 		fromCache := ok
 		if !ok {
 			var err error
-			dict, err = buildAndValidateDict(dictID, validSamples, historyMax[:historyBytes], level)
+			dict, err = buildAndValidateDict(dictID, validSamples, historyMax[:historyBytes], level, &t.buildDictWS, &t.dictEncodeWS)
 			if err != nil || len(dict) == 0 {
 				continue
 			}
@@ -686,7 +688,7 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 			t.storeCachedDict(cacheKey, dictHash, dict)
 		}
 		for _, dictCandidateBytes := range dictCandidates {
-			shaped, err := shapeAndValidateDict(dict, dictCandidateBytes, level)
+			shaped, err := shapeAndValidateDict(dict, dictCandidateBytes, level, &t.dictEncodeWS)
 			if err != nil || len(shaped) == 0 {
 				continue
 			}
@@ -695,6 +697,7 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 				IoNsPerStoredByte:  ioNsPerStoredByte,
 				EncodeNsPerRawByte: t.encodeNsPerRawByte,
 				DecodeNsPerRawByte: t.decodeNsPerRawByte,
+				EncoderWorkspace:   &t.dictEncodeWS,
 			})
 			if profile == nil || len(profile.Dict) == 0 {
 				continue
@@ -838,21 +841,16 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 		}
 	}
 
-	enc, err := zstd.NewWriter(nil,
-		zstd.WithEncoderLevel(level),
-		zstd.WithEncoderCRC(false),
-		zstd.WithEncoderConcurrency(1),
-		zstd.WithEncoderDict(bestProfile.Dict),
-	)
-	if err != nil {
-		log.Printf("treedb: dict training encode setup failed stream=%d err=%v", slabID, err)
-		return
-	}
-	defer enc.Close()
-
 	storedTotal := 0
+	var encoded []byte
 	for _, sample := range validSamples {
-		storedTotal += len(enc.EncodeAll(sample, nil))
+		var err error
+		encoded, err = t.dictEncodeWS.EncodeAllWithDict(sample, encoded[:0], bestProfile.Dict, level)
+		if err != nil {
+			log.Printf("treedb: dict training encode setup failed stream=%d err=%v", slabID, err)
+			return
+		}
+		storedTotal += len(encoded)
 	}
 	ratio := 1.0
 	if rawTotal > 0 {
@@ -875,7 +873,7 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 	t.maybeAcceptProfile(bestProfile)
 }
 
-func buildAndValidateDict(dictID uint32, samples [][]byte, history []byte, level zstd.EncoderLevel) (dict []byte, err error) {
+func buildAndValidateDict(dictID uint32, samples [][]byte, history []byte, level zstd.EncoderLevel, buildWS *zstd.BuildDictWorkspace, encodeWS *zstd.DictEncodeWorkspace) (dict []byte, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			dict = nil
@@ -890,8 +888,9 @@ func buildAndValidateDict(dictID uint32, samples [][]byte, history []byte, level
 		// offsets when content is small/degenerate (it only updates offsets it
 		// observes). If we pass zero offsets, it can emit dictionaries that fail
 		// to load with "invalid offset in dictionary" (issue #117).
-		Offsets: [3]int{1, 4, 8},
-		Level:   level,
+		Offsets:   [3]int{1, 4, 8},
+		Level:     level,
+		Workspace: buildWS,
 	})
 	if err != nil || len(dict) == 0 {
 		if err != nil {
@@ -899,12 +898,12 @@ func buildAndValidateDict(dictID uint32, samples [][]byte, history []byte, level
 		}
 		return nil, err
 	}
-	if err := validateDict(dict, level); err != nil {
+	if err := validateDict(dict, level, encodeWS); err != nil {
 		// Retry with a smaller dict to avoid invalid offset failures.
 		reduced := dict
 		for i := 0; i < 3 && len(reduced) > 64; i++ {
 			reduced = reduced[:len(reduced)/2]
-			if err2 := validateDict(reduced, level); err2 == nil {
+			if err2 := validateDict(reduced, level, encodeWS); err2 == nil {
 				return reduced, nil
 			}
 		}
@@ -914,7 +913,7 @@ func buildAndValidateDict(dictID uint32, samples [][]byte, history []byte, level
 	return dict, nil
 }
 
-func shapeAndValidateDict(dict []byte, dictBytes int, level zstd.EncoderLevel) ([]byte, error) {
+func shapeAndValidateDict(dict []byte, dictBytes int, level zstd.EncoderLevel, encodeWS *zstd.DictEncodeWorkspace) ([]byte, error) {
 	if len(dict) == 0 {
 		return nil, fmt.Errorf("empty dict")
 	}
@@ -928,28 +927,20 @@ func shapeAndValidateDict(dict []byte, dictBytes int, level zstd.EncoderLevel) (
 		shaped = make([]byte, dictBytes)
 		copy(shaped, dict)
 	}
-	if err := validateDict(shaped, level); err != nil {
+	if err := validateDict(shaped, level, encodeWS); err != nil {
 		return nil, err
 	}
 	return shaped, nil
 }
 
-func validateDict(dict []byte, level zstd.EncoderLevel) error {
-	enc, err := zstd.NewWriter(nil,
-		zstd.WithEncoderLevel(level),
-		zstd.WithEncoderCRC(false),
-		zstd.WithEncoderConcurrency(1),
-		zstd.WithEncoderDict(dict),
-	)
-	if err != nil {
-		return err
-	}
-	defer enc.Close()
-
+func validateDict(dict []byte, level zstd.EncoderLevel, encodeWS *zstd.DictEncodeWorkspace) error {
 	// Verify the dictionary actually works for round-trip.
 	// We use a small dummy payload.
 	dummy := []byte("test_payload_validation")
-	compressed := enc.EncodeAll(dummy, nil)
+	compressed, err := encodeWS.EncodeAllWithDict(dummy, nil, dict, level)
+	if err != nil {
+		return err
+	}
 
 	dec, err := zstd.NewReader(nil, zstd.WithDecoderDicts(dict))
 	if err != nil {
