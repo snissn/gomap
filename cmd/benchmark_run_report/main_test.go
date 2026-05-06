@@ -94,7 +94,7 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"Collections vs SQLite",
 		"Raw TreeDB Engine",
 		"<svg",
-		"All raw full-sweep rows",
+		"All raw full-sweep TSV rows",
 		"sequential_write",
 		"Sequential</text>",
 		"Write</text>",
@@ -107,8 +107,8 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"4 Indexes: Mongo API Scaling",
 		"Single threaded client",
 		"ID Find One: Throughput Vs Reader Clients",
-		"Scaling summary",
-		"Raw full-sweep rows for 4 indexes",
+		"Best same-client comparison",
+		"Raw full-sweep TSV rows for 4 indexes",
 		"Raw scaling TSV rows, 4 indexes",
 		"TreeDB BSON",
 		"TreeDB JSON",
@@ -333,6 +333,42 @@ func TestMongoScalingCountsAcrossPerCountConfigs(t *testing.T) {
 	values := mongoSweepAny(rows, 0, "concurrent_id_find_one_r", "tree", counts)
 	if want := []float64{10, 160}; !reflect.DeepEqual(values, want) {
 		t.Fatalf("scaling values = %v, want %v", values, want)
+	}
+}
+
+func TestMongoThroughputSummaryUsesSameConcurrencyRatio(t *testing.T) {
+	rows := []mongoSummaryRow{
+		{SecondaryIndexes: 0, Phase: "id_find_one", TreeDBOpsSec: 10, MongoOpsSec: 8},
+		{SecondaryIndexes: 0, Phase: "concurrent_id_find_one_r1", TreeDBOpsSec: 100, MongoOpsSec: 80},
+		{SecondaryIndexes: 0, Phase: "concurrent_id_find_one_r16", TreeDBOpsSec: 500, MongoOpsSec: 250},
+		{SecondaryIndexes: 0, Phase: "concurrent_id_find_one_r32", TreeDBOpsSec: 200, MongoOpsSec: 40},
+	}
+	var b strings.Builder
+	writeMongoThroughputSummary(&b, mongoOperationThroughputRows(rows, 0))
+	html := b.String()
+	for _, want := range []string{
+		"class=\"summary-strip\"",
+		"best same-client ratio",
+		"5.00x",
+		"32 readers",
+		"TreeDB @ clients",
+		"200",
+		"MongoDB @ clients",
+		"40",
+		"TreeDB vs single @ clients",
+		"20.00x",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("summary missing %q\n%s", want, html)
+		}
+	}
+	if strings.Contains(html, "<div class=\"metric\"") {
+		t.Fatalf("summary should not render metric cards\n%s", html)
+	}
+	for _, unwanted := range []string{"TreeDB peak", "MongoDB peak", "peak ratio", "16 readers", "500", "250"} {
+		if strings.Contains(html, unwanted) {
+			t.Fatalf("summary still contains independent peak artifact %q\n%s", unwanted, html)
+		}
 	}
 }
 

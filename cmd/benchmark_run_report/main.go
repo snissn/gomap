@@ -891,6 +891,13 @@ code { background:#eef3f8; border:1px solid #dbe4ee; border-radius:4px; padding:
 .metric { border:1px solid var(--line); border-radius:8px; padding:14px; background:#fbfdff; }
 .metric .label { color:var(--muted); font-size:12px; }
 .metric .value { font-size:24px; font-weight:700; margin-top:4px; }
+.summary-strip { display:grid; margin:10px 0 18px; border:1px solid var(--line); border-radius:6px; background:#fff; overflow:hidden; }
+.summary-row { display:grid; grid-template-columns:minmax(100px,1.1fr) repeat(5,minmax(112px,1fr)); gap:10px; align-items:center; padding:8px 10px; border-top:1px solid var(--line); background:#fff; }
+.summary-row:first-child { border-top:0; }
+.summary-workload { color:#344256; font-weight:600; white-space:nowrap; }
+.summary-cell { min-width:0; }
+.summary-cell .label { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+.summary-cell .value { color:var(--ink); font-size:13px; font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .chart-group { margin-top:24px; padding-top:18px; border-top:1px solid var(--line); }
 .chart-group:first-of-type { margin-top:14px; padding-top:0; border-top:0; }
 .chart-group h3 { margin:0 0 4px; font-size:18px; }
@@ -912,7 +919,7 @@ summary { cursor:pointer; color:var(--blue); font-weight:700; }
 .legend { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; color:var(--muted); justify-content:flex-end; text-align:right; }
 .chart-head .legend { max-width:72%; }
 .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
-@media (max-width: 980px) { :root { --page-gutter:10px; } section { width:calc(100% - 20px); } .chart-grid { grid-template-columns:1fr; } header { position:static; } }
+@media (max-width: 980px) { :root { --page-gutter:10px; } section { width:calc(100% - 20px); } .chart-grid { grid-template-columns:1fr; } .summary-row { grid-template-columns:1fr 1fr; } .summary-workload { grid-column:1 / -1; } header { position:static; } }
 </style>
 `
 }
@@ -1393,13 +1400,13 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 		}
 		indexRows := mongoRowsForIndex(rows, idx)
 		if len(indexRows) > 0 {
-			b.WriteString("<details><summary>Raw full-sweep rows for " + esc(indexCountLowerLabel(idx)) + "</summary>")
+			b.WriteString("<details><summary>Raw full-sweep TSV rows for " + esc(indexCountLowerLabel(idx)) + "</summary>")
 			writeMongoSummaryTable(b, indexRows)
 			b.WriteString("</details>")
 		}
 		b.WriteString("</div>")
 	}
-	b.WriteString("<details><summary>All raw full-sweep rows</summary>")
+	b.WriteString("<details><summary>All raw full-sweep TSV rows</summary>")
 	writeMongoSummaryTable(b, rows)
 	b.WriteString("</details></section>\n")
 }
@@ -1457,12 +1464,12 @@ func renderMongoScaling(b *strings.Builder, byIndex map[int][]mongoSummaryRow) {
 	for _, idx := range indexes {
 		rows := byIndex[idx]
 		indexLabel := indexCountLabel(idx)
-		b.WriteString("<div class=\"chart-group\"><h3>" + esc(indexLabel) + ": scaling summary</h3>")
+		b.WriteString("<div class=\"chart-group\"><h3>" + esc(indexLabel) + ": throughput vs client count</h3>")
 		b.WriteString("<p class=\"subtle\">Fresh 1M-document load per cell, then a focused writer or reader concurrency sweep for this index count.</p>")
 		b.WriteString("<div class=\"chart-grid\">")
 		writerCounts := mongoSweepCounts(rows, idx, "concurrent_id_update_set_w")
 		if len(writerCounts) > 0 {
-			b.WriteString(lineChart("Writer sweep, "+indexLabel, countLabels(writerCounts), "client count", "ops/sec", []chartSeries{
+			b.WriteString(lineChart("_id update one: throughput vs writer client count, "+indexLabel, countLabels(writerCounts), "client count", "ops/sec", []chartSeries{
 				{Name: "TreeDB", Values: mongoSweepAny(rows, idx, "concurrent_id_update_set_w", "tree", writerCounts), Color: "#2867c7"},
 				{Name: "MongoDB", Values: mongoSweepAny(rows, idx, "concurrent_id_update_set_w", "mongo", writerCounts), Color: "#1f8a5b"},
 			}, "ops/sec"))
@@ -1573,12 +1580,9 @@ type mongoThroughputOperationRow struct {
 	Label          string
 	Single         mongoSummaryRow
 	HasSingle      bool
-	TreeBest       mongoSummaryRow
-	TreeBestCount  int
-	HasTreeBest    bool
-	MongoBest      mongoSummaryRow
-	MongoBestCount int
-	HasMongoBest   bool
+	RatioBest      mongoSummaryRow
+	RatioBestCount int
+	HasRatioBest   bool
 	CountUnit      string
 }
 
@@ -1613,9 +1617,8 @@ func mongoOperationThroughputRows(rows []mongoSummaryRow, idx int) []mongoThroug
 	for _, spec := range specs {
 		item := mongoThroughputOperationRow{Label: spec.Label, CountUnit: spec.CountUnit}
 		item.Single, item.HasSingle = mongoFirstPhaseRow(rows, idx, spec.SinglePhases)
-		item.TreeBest, item.TreeBestCount, item.HasTreeBest = mongoBestSweepRowBySide(rows, idx, spec.SweepPrefixes, "tree")
-		item.MongoBest, item.MongoBestCount, item.HasMongoBest = mongoBestSweepRowBySide(rows, idx, spec.SweepPrefixes, "mongo")
-		if !item.HasSingle && !item.HasTreeBest && !item.HasMongoBest {
+		item.RatioBest, item.RatioBestCount, item.HasRatioBest = mongoBestSweepRowByRatio(rows, idx, spec.SweepPrefixes)
+		if !item.HasSingle && !item.HasRatioBest {
 			continue
 		}
 		out = append(out, item)
@@ -1634,61 +1637,64 @@ func mongoFirstPhaseRow(rows []mongoSummaryRow, idx int, phases []string) (mongo
 }
 
 func writeMongoThroughputSummary(b *strings.Builder, rows []mongoThroughputOperationRow) {
-	var body [][]string
+	wrote := false
+	var inner strings.Builder
 	for _, row := range rows {
-		if !row.HasSingle && !row.HasTreeBest && !row.HasMongoBest {
+		if !row.HasRatioBest {
 			continue
 		}
-		body = append(body, []string{
-			row.Label,
-			mongoBestOps(row, "tree"),
-			mongoBestCountLabel(row.TreeBestCount, row.CountUnit, row.HasTreeBest),
-			mongoBestOps(row, "mongo"),
-			mongoBestCountLabel(row.MongoBestCount, row.CountUnit, row.HasMongoBest),
-			mongoPeakRatio(row),
-			mongoScaleUpRatio(row),
-			mongoSingleThreadedOps(row),
-		})
+		wrote = true
+		inner.WriteString("<div class=\"summary-row\">")
+		inner.WriteString("<div class=\"summary-workload\">" + esc(row.Label) + "</div>")
+		writeSummaryCell(&inner, "best same-client ratio", mongoBestRatio(row))
+		writeSummaryCell(&inner, "clients", mongoRatioCountLabel(row))
+		writeSummaryCell(&inner, "TreeDB @ clients", mongoRatioOps(row, "tree"))
+		writeSummaryCell(&inner, "MongoDB @ clients", mongoRatioOps(row, "mongo"))
+		writeSummaryCell(&inner, "TreeDB vs single @ clients", mongoScaleUpRatio(row))
+		inner.WriteString("</div>")
 	}
-	if len(body) == 0 {
+	if !wrote {
 		return
 	}
-	b.WriteString("<h4>Scaling summary</h4>")
-	writeTable(b, []string{"workload", "TreeDB peak", "TreeDB clients", "MongoDB peak", "MongoDB clients", "peak ratio", "TreeDB scale-up", "single-thread TreeDB"}, body, numericColumns(1, 3, 5, 6, 7))
+	b.WriteString("<h4>Best same-client comparison</h4>")
+	b.WriteString("<div class=\"summary-strip\">")
+	b.WriteString(inner.String())
+	b.WriteString("</div>")
 }
 
-func mongoSingleThreadedOps(row mongoThroughputOperationRow) string {
-	if !row.HasSingle {
+func writeSummaryCell(b *strings.Builder, label, value string) {
+	b.WriteString("<div class=\"summary-cell\"><div class=\"label\">" + esc(label) + "</div><div class=\"value\">" + esc(value) + "</div></div>")
+}
+
+func mongoRatioOps(row mongoThroughputOperationRow, side string) string {
+	if !row.HasRatioBest {
 		return "-"
 	}
-	return fmtOps(row.Single.TreeDBOpsSec)
-}
-
-func mongoBestOps(row mongoThroughputOperationRow, side string) string {
 	if side == "mongo" {
-		if !row.HasMongoBest {
-			return "-"
-		}
-		return fmtOps(row.MongoBest.MongoOpsSec)
+		return fmtOps(row.RatioBest.MongoOpsSec)
 	}
-	if !row.HasTreeBest {
-		return "-"
-	}
-	return fmtOps(row.TreeBest.TreeDBOpsSec)
+	return fmtOps(row.RatioBest.TreeDBOpsSec)
 }
 
-func mongoPeakRatio(row mongoThroughputOperationRow) string {
-	if !row.HasTreeBest || !row.HasMongoBest || row.MongoBest.MongoOpsSec <= 0 {
+func mongoBestRatio(row mongoThroughputOperationRow) string {
+	if !row.HasRatioBest || row.RatioBest.MongoOpsSec <= 0 {
 		return "-"
 	}
-	return fmtRatio(row.TreeBest.TreeDBOpsSec / row.MongoBest.MongoOpsSec)
+	return fmtRatio(row.RatioBest.TreeDBOpsSec / row.RatioBest.MongoOpsSec)
+}
+
+func mongoRatioCountLabel(row mongoThroughputOperationRow) string {
+	if !row.HasRatioBest {
+		return "-"
+	}
+	return mongoBestCountLabel(row.RatioBestCount, row.CountUnit, true)
 }
 
 func mongoScaleUpRatio(row mongoThroughputOperationRow) string {
-	if !row.HasSingle || !row.HasTreeBest || row.Single.TreeDBOpsSec <= 0 {
+	if !row.HasSingle || !row.HasRatioBest || row.Single.TreeDBOpsSec <= 0 {
 		return "-"
 	}
-	return fmtRatio(row.TreeBest.TreeDBOpsSec / row.Single.TreeDBOpsSec)
+	return fmtRatio(row.RatioBest.TreeDBOpsSec / row.Single.TreeDBOpsSec)
 }
 
 func mongoBestCountLabel(count int, unit string, ok bool) string {
@@ -1818,23 +1824,14 @@ func mongoSweepCountsInPrimaryScope(rows []mongoSummaryRow, idx int, prefix stri
 	})
 }
 
-func mongoBestSweepRowBySide(rows []mongoSummaryRow, idx int, prefixes []string, side string) (mongoSummaryRow, int, bool) {
-	return mongoBestSweepRowBySideFiltered(rows, idx, prefixes, side, nil)
+func mongoBestSweepRowByRatio(rows []mongoSummaryRow, idx int, prefixes []string) (mongoSummaryRow, int, bool) {
+	return mongoBestSweepRowByRatioFiltered(rows, idx, prefixes, nil)
 }
 
-func mongoBestSweepRowBySideInPrimaryScope(rows []mongoSummaryRow, idx int, prefixes []string, side string) (mongoSummaryRow, int, bool) {
-	scope, hasScope := mongoPrimaryScope(rows, idx)
-	if !hasScope {
-		return mongoBestSweepRowBySide(rows, idx, prefixes, side)
-	}
-	return mongoBestSweepRowBySideFiltered(rows, idx, prefixes, side, func(row mongoSummaryRow) bool {
-		return mongoSameScope(row, scope)
-	})
-}
-
-func mongoBestSweepRowBySideFiltered(rows []mongoSummaryRow, idx int, prefixes []string, side string, include func(mongoSummaryRow) bool) (mongoSummaryRow, int, bool) {
+func mongoBestSweepRowByRatioFiltered(rows []mongoSummaryRow, idx int, prefixes []string, include func(mongoSummaryRow) bool) (mongoSummaryRow, int, bool) {
 	var best mongoSummaryRow
 	var bestCount int
+	var bestRatio float64
 	var ok bool
 	for _, row := range rows {
 		prefix, hasPrefix := mongoSweepPrefix(row.Phase, prefixes)
@@ -1844,21 +1841,18 @@ func mongoBestSweepRowBySideFiltered(rows []mongoSummaryRow, idx int, prefixes [
 		if include != nil && !include(row) {
 			continue
 		}
+		if row.TreeDBOpsSec <= 0 || row.MongoOpsSec <= 0 {
+			continue
+		}
 		count, err := strconv.Atoi(strings.TrimPrefix(row.Phase, prefix))
 		if err != nil || count <= 0 {
 			continue
 		}
-		value := row.TreeDBOpsSec
-		if side == "mongo" {
-			value = row.MongoOpsSec
-		}
-		bestValue := best.TreeDBOpsSec
-		if side == "mongo" {
-			bestValue = best.MongoOpsSec
-		}
-		if !ok || value > bestValue {
+		ratio := row.TreeDBOpsSec / row.MongoOpsSec
+		if !ok || ratio > bestRatio || (ratio == bestRatio && count > bestCount) {
 			best = row
 			bestCount = count
+			bestRatio = ratio
 			ok = true
 		}
 	}
