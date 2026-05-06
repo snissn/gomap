@@ -23,6 +23,16 @@ import (
 	"go.mongodb.org/mongo-driver/v2/event"
 )
 
+const (
+	testReadOnlyPrepareCallsStat        = "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total"
+	testReadOnlyPrepareNSStat           = "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ns_total"
+	testReadOnlyPrepareOpsStat          = "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ops_total"
+	testReadOnlyPrepareLeafSpansStat    = "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_leaf_spans_total"
+	testReadOnlyPrepareWorkerTargetStat = "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_targets_total"
+	testReadOnlyPrepareWorkerRangesStat = "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_ranges_total"
+	testReadOnlyPrepareWorkerMaxOpsStat = "treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_range_max_ops_total"
+)
+
 func TestSummarizeLatencyNearestRank(t *testing.T) {
 	summary := summarizeLatency([]time.Duration{
 		10 * time.Microsecond,
@@ -174,50 +184,158 @@ func TestSelectedTreeDBStats(t *testing.T) {
 
 func TestTreeDBStatsDeltaAndPhaseMetrics(t *testing.T) {
 	before := map[string]string{
-		"treedb.publish.ordered_root_delta_group.calls_total":                                  "2",
-		"treedb.publish.ordered_root_delta_group.roots_total":                                  "6",
-		"treedb.publish.ordered_root_delta_group.root_apply_calls_total":                       "6",
-		"treedb.publish.ordered_root_delta_group.root_apply_ns_total":                          "1000",
-		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_loads_total":         "4",
-		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_pages_written_total":      "1",
-		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total":    "128",
-		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_page_bytes_written_total": "256",
-		"treedb.collections.write_domain.indexed_flush.calls_total":                            "1",
-		"treedb.collections.write_domain.indexed_flush.docs_total":                             "8",
-		"treedb.collections.write_domain.indexed_flush.units_total":                            "1",
-		"treedb.collections.write_domain.indexed_flush.root_runs_total":                        "4",
-		"treedb.collections.write_domain.root_delta_plan.entries_total":                        "10",
-		"treedb.collections.write_domain.root_delta_plan.key_bytes_total":                      "100",
-		"treedb.collections.write_domain.root_delta_plan.value_bytes_total":                    "200",
-		"treedb.collections.write_domain.root_delta_plan.tombstones_total":                     "1",
-		"treedb.collections.write_domain.root_delta_plan.roots.primary_total":                  "2",
-		"treedb.collections.write_domain.root_delta_plan.roots.template_total":                 "0",
-		"treedb.collections.write_domain.root_delta_plan.roots.index_state_total":              "1",
-		"treedb.collections.write_domain.root_delta_plan.roots.secondary_total":                "3",
-		"treedb.test.large_counter_total":                                                      "9007199254740993",
+		"treedb.publish.ordered_root_delta_group.calls_total":                                   "2",
+		"treedb.publish.ordered_root_delta_group.roots_total":                                   "6",
+		"treedb.publish.ordered_root_delta_group.root_apply_calls_total":                        "6",
+		"treedb.publish.ordered_root_delta_group.root_apply_ns_total":                           "1000",
+		"treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_merges_total":     "1",
+		"treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_children_total":   "8",
+		"treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_workers_total":    "4",
+		"treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_ops_total":        "1024",
+		testReadOnlyPrepareCallsStat:                                                            "1",
+		testReadOnlyPrepareNSStat:                                                               "100",
+		testReadOnlyPrepareOpsStat:                                                              "10",
+		testReadOnlyPrepareLeafSpansStat:                                                        "5",
+		testReadOnlyPrepareWorkerTargetStat:                                                     "4",
+		testReadOnlyPrepareWorkerRangesStat:                                                     "2",
+		testReadOnlyPrepareWorkerMaxOpsStat:                                                     "20",
+		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_loads_total":          "4",
+		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_pages_written_total":       "1",
+		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total":     "128",
+		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_page_bytes_written_total":  "256",
+		"treedb.collections.write_domain.indexed_flush.calls_total":                             "1",
+		"treedb.collections.write_domain.indexed_flush.docs_total":                              "8",
+		"treedb.collections.write_domain.indexed_flush.units_total":                             "1",
+		"treedb.collections.write_domain.indexed_flush.root_runs_total":                         "4",
+		"treedb.collections.write_domain.root_delta_plan.entries_total":                         "10",
+		"treedb.collections.write_domain.root_delta_plan.key_bytes_total":                       "100",
+		"treedb.collections.write_domain.root_delta_plan.value_bytes_total":                     "200",
+		"treedb.collections.write_domain.root_delta_plan.tombstones_total":                      "1",
+		"treedb.collections.write_domain.root_delta_plan.roots.primary_total":                   "2",
+		"treedb.collections.write_domain.root_delta_plan.roots.template_total":                  "0",
+		"treedb.collections.write_domain.root_delta_plan.roots.index_state_total":               "1",
+		"treedb.collections.write_domain.root_delta_plan.roots.secondary_total":                 "3",
+		"treedb.collections.write_domain.coalesced_flush_batch.batches_total":                   "1",
+		"treedb.collections.write_domain.coalesced_flush_batch.units_total":                     "2",
+		"treedb.collections.write_domain.coalesced_flush_batch.docs_total":                      "20",
+		"treedb.collections.write_domain.coalesced_flush_batch.bytes_total":                     "2000",
+		"treedb.collections.write_domain.coalesced_flush_batch.net_zero_batches_total":          "0",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.primary.entries_total":        "5",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.primary.bytes_total":          "50",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.primary.tombstones_total":     "0",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.template.entries_total":       "0",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.template.bytes_total":         "0",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.template.tombstones_total":    "0",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.index_state.entries_total":    "0",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.index_state.bytes_total":      "0",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.index_state.tombstones_total": "0",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.secondary.entries_total":      "3",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.secondary.bytes_total":        "30",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.secondary.tombstones_total":   "1",
+		"treedb.collections.write_domain.root_delta_plan.final.primary.entries_total":           "5",
+		"treedb.collections.write_domain.root_delta_plan.final.primary.bytes_total":             "50",
+		"treedb.collections.write_domain.root_delta_plan.final.primary.tombstones_total":        "0",
+		"treedb.collections.write_domain.root_delta_plan.final.template.entries_total":          "0",
+		"treedb.collections.write_domain.root_delta_plan.final.template.bytes_total":            "0",
+		"treedb.collections.write_domain.root_delta_plan.final.template.tombstones_total":       "0",
+		"treedb.collections.write_domain.root_delta_plan.final.index_state.entries_total":       "0",
+		"treedb.collections.write_domain.root_delta_plan.final.index_state.bytes_total":         "0",
+		"treedb.collections.write_domain.root_delta_plan.final.index_state.tombstones_total":    "0",
+		"treedb.collections.write_domain.root_delta_plan.final.secondary.entries_total":         "3",
+		"treedb.collections.write_domain.root_delta_plan.final.secondary.bytes_total":           "30",
+		"treedb.collections.write_domain.root_delta_plan.final.secondary.tombstones_total":      "1",
+		"treedb.collections.write_domain.root_delta_plan.squashed_entries_total":                "0",
+		"treedb.collections.write_domain.root_delta_plan.net_zero_plans_total":                  "0",
+		"treedb.collections.write_domain.indexed_semantic.skipped_secondary_roots_total":        "0",
+		"treedb.collections.write_domain.primary_only.root_publishes_total":                     "4",
+		"treedb.collections.write_domain.primary_only.root_delta_entries_total":                 "0",
+		"treedb.collections.write_domain.primary_only.root_delta_key_bytes_total":               "0",
+		"treedb.collections.write_domain.primary_only.root_delta_value_bytes_total":             "0",
+		"treedb.collections.write_domain.primary_only.coalesced_docs_total":                     "0",
+		"treedb.collections.write_domain.primary_only.duplicate_ids_coalesced_total":            "0",
+		"treedb.collections.write_domain.primary_only.drains_total":                             "1",
+		"treedb.collections.write_domain.primary_only.drain_docs_total":                         "10",
+		"treedb.collections.write_domain.primary_only.drain_bytes_total":                        "100",
+		"treedb.collections.write_domain.primary_only.drain_ns_total":                           "1000",
+		"treedb.collections.write_domain.primary_only.buffered_calls_total":                     "2",
+		"treedb.test.large_counter_total":                                                       "9007199254740993",
 	}
 	after := map[string]string{
-		"treedb.publish.ordered_root_delta_group.calls_total":                                  "5",
-		"treedb.publish.ordered_root_delta_group.roots_total":                                  "15",
-		"treedb.publish.ordered_root_delta_group.root_apply_calls_total":                       "15",
-		"treedb.publish.ordered_root_delta_group.root_apply_ns_total":                          "7000",
-		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_loads_total":         "10",
-		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_pages_written_total":      "4",
-		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total":    "640",
-		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_page_bytes_written_total": "1280",
-		"treedb.collections.write_domain.indexed_flush.calls_total":                            "3",
-		"treedb.collections.write_domain.indexed_flush.docs_total":                             "48",
-		"treedb.collections.write_domain.indexed_flush.units_total":                            "7",
-		"treedb.collections.write_domain.indexed_flush.root_runs_total":                        "16",
-		"treedb.collections.write_domain.root_delta_plan.entries_total":                        "50",
-		"treedb.collections.write_domain.root_delta_plan.key_bytes_total":                      "500",
-		"treedb.collections.write_domain.root_delta_plan.value_bytes_total":                    "1000",
-		"treedb.collections.write_domain.root_delta_plan.tombstones_total":                     "5",
-		"treedb.collections.write_domain.root_delta_plan.roots.primary_total":                  "6",
-		"treedb.collections.write_domain.root_delta_plan.roots.template_total":                 "2",
-		"treedb.collections.write_domain.root_delta_plan.roots.index_state_total":              "3",
-		"treedb.collections.write_domain.root_delta_plan.roots.secondary_total":                "9",
-		"treedb.test.large_counter_total":                                                      "9007199254741000",
+		"treedb.publish.ordered_root_delta_group.calls_total":                                   "5",
+		"treedb.publish.ordered_root_delta_group.roots_total":                                   "15",
+		"treedb.publish.ordered_root_delta_group.root_apply_calls_total":                        "15",
+		"treedb.publish.ordered_root_delta_group.root_apply_ns_total":                           "7000",
+		"treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_merges_total":     "5",
+		"treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_children_total":   "40",
+		"treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_workers_total":    "16",
+		"treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_ops_total":        "4096",
+		testReadOnlyPrepareCallsStat:                                                            "4",
+		testReadOnlyPrepareNSStat:                                                               "700",
+		testReadOnlyPrepareOpsStat:                                                              "70",
+		testReadOnlyPrepareLeafSpansStat:                                                        "20",
+		testReadOnlyPrepareWorkerTargetStat:                                                     "16",
+		testReadOnlyPrepareWorkerRangesStat:                                                     "11",
+		testReadOnlyPrepareWorkerMaxOpsStat:                                                     "110",
+		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_loads_total":          "10",
+		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_pages_written_total":       "4",
+		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total":     "640",
+		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_page_bytes_written_total":  "1280",
+		"treedb.collections.write_domain.indexed_flush.calls_total":                             "3",
+		"treedb.collections.write_domain.indexed_flush.docs_total":                              "48",
+		"treedb.collections.write_domain.indexed_flush.units_total":                             "7",
+		"treedb.collections.write_domain.indexed_flush.root_runs_total":                         "16",
+		"treedb.collections.write_domain.root_delta_plan.entries_total":                         "50",
+		"treedb.collections.write_domain.root_delta_plan.key_bytes_total":                       "500",
+		"treedb.collections.write_domain.root_delta_plan.value_bytes_total":                     "1000",
+		"treedb.collections.write_domain.root_delta_plan.tombstones_total":                      "5",
+		"treedb.collections.write_domain.root_delta_plan.roots.primary_total":                   "6",
+		"treedb.collections.write_domain.root_delta_plan.roots.template_total":                  "2",
+		"treedb.collections.write_domain.root_delta_plan.roots.index_state_total":               "3",
+		"treedb.collections.write_domain.root_delta_plan.roots.secondary_total":                 "9",
+		"treedb.collections.write_domain.coalesced_flush_batch.batches_total":                   "3",
+		"treedb.collections.write_domain.coalesced_flush_batch.units_total":                     "10",
+		"treedb.collections.write_domain.coalesced_flush_batch.docs_total":                      "100",
+		"treedb.collections.write_domain.coalesced_flush_batch.bytes_total":                     "10000",
+		"treedb.collections.write_domain.coalesced_flush_batch.net_zero_batches_total":          "1",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.primary.entries_total":        "45",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.primary.bytes_total":          "450",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.primary.tombstones_total":     "4",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.template.entries_total":       "4",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.template.bytes_total":         "40",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.template.tombstones_total":    "0",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.index_state.entries_total":    "6",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.index_state.bytes_total":      "60",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.index_state.tombstones_total": "1",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.secondary.entries_total":      "33",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.secondary.bytes_total":        "330",
+		"treedb.collections.write_domain.root_delta_plan.raw_unit.secondary.tombstones_total":   "4",
+		"treedb.collections.write_domain.root_delta_plan.final.primary.entries_total":           "25",
+		"treedb.collections.write_domain.root_delta_plan.final.primary.bytes_total":             "250",
+		"treedb.collections.write_domain.root_delta_plan.final.primary.tombstones_total":        "2",
+		"treedb.collections.write_domain.root_delta_plan.final.template.entries_total":          "2",
+		"treedb.collections.write_domain.root_delta_plan.final.template.bytes_total":            "20",
+		"treedb.collections.write_domain.root_delta_plan.final.template.tombstones_total":       "0",
+		"treedb.collections.write_domain.root_delta_plan.final.index_state.entries_total":       "4",
+		"treedb.collections.write_domain.root_delta_plan.final.index_state.bytes_total":         "40",
+		"treedb.collections.write_domain.root_delta_plan.final.index_state.tombstones_total":    "1",
+		"treedb.collections.write_domain.root_delta_plan.final.secondary.entries_total":         "23",
+		"treedb.collections.write_domain.root_delta_plan.final.secondary.bytes_total":           "230",
+		"treedb.collections.write_domain.root_delta_plan.final.secondary.tombstones_total":      "3",
+		"treedb.collections.write_domain.root_delta_plan.squashed_entries_total":                "34",
+		"treedb.collections.write_domain.root_delta_plan.net_zero_plans_total":                  "2",
+		"treedb.collections.write_domain.indexed_semantic.skipped_secondary_roots_total":        "12",
+		"treedb.collections.write_domain.primary_only.root_publishes_total":                     "12",
+		"treedb.collections.write_domain.primary_only.root_delta_entries_total":                 "20",
+		"treedb.collections.write_domain.primary_only.root_delta_key_bytes_total":               "100",
+		"treedb.collections.write_domain.primary_only.root_delta_value_bytes_total":             "300",
+		"treedb.collections.write_domain.primary_only.coalesced_docs_total":                     "32",
+		"treedb.collections.write_domain.primary_only.duplicate_ids_coalesced_total":            "6",
+		"treedb.collections.write_domain.primary_only.drains_total":                             "3",
+		"treedb.collections.write_domain.primary_only.drain_docs_total":                         "50",
+		"treedb.collections.write_domain.primary_only.drain_bytes_total":                        "500",
+		"treedb.collections.write_domain.primary_only.drain_ns_total":                           "5000",
+		"treedb.collections.write_domain.primary_only.buffered_calls_total":                     "10",
+		"treedb.test.large_counter_total":                                                       "9007199254741000",
 	}
 	phase := summarizePhase("concurrent_id_update_set_w8", 40, 20, time.Second, []time.Duration{time.Millisecond})
 	attachTreeDBPhaseStats(&phase, before, after)
@@ -228,27 +346,73 @@ func TestTreeDBStatsDeltaAndPhaseMetrics(t *testing.T) {
 		t.Fatalf("large counter delta=%q want 7; deltas=%v", got, phase.TreeDBStatsDelta)
 	}
 	for name, want := range map[string]float64{
-		"publish_delta_group_calls/doc":         0.075,
-		"root_apply_calls/doc":                  0.225,
-		"roots/publish":                         3,
-		"publish_delta_group_root_apply_ns/doc": 150,
-		"leaf_log_node_loads/doc":               0.15,
-		"leaf_log_pages_written/doc":            0.075,
-		"leaf_log_read_bytes/doc":               12.8,
-		"leaf_log_write_bytes/doc":              25.6,
-		"indexed_flush_calls/doc":               0.05,
-		"indexed_flush_docs/batch":              20,
-		"indexed_flush_units/batch":             3,
-		"indexed_flush_root_runs/doc":           0.3,
-		"root_delta_plan_entries/doc":           1,
-		"root_delta_plan_key_bytes/doc":         10,
-		"root_delta_plan_value_bytes/doc":       20,
-		"root_delta_plan_tombstones/doc":        0.1,
-		"affected_primary_roots/doc":            0.1,
-		"affected_template_roots/doc":           0.05,
-		"affected_index_state_roots/doc":        0.05,
-		"affected_secondary_roots/doc":          0.15,
-		"publish_delta_group_calls/driver_call": 0.15,
+		"publish_delta_group_calls/doc":                                     0.075,
+		"root_apply_calls/doc":                                              0.225,
+		"roots/publish":                                                     3,
+		"publish_delta_group_root_apply_ns/doc":                             150,
+		"internal_parallel_merges/doc":                                      0.1,
+		"internal_parallel_children/merge":                                  8,
+		"internal_parallel_workers/merge":                                   3,
+		"internal_parallel_ops/merge":                                       768,
+		"publish_delta_group_root_apply_excluding_read_only_prepare_ns/doc": 135,
+		"read_only_prepare_calls/doc":                                       0.075,
+		"read_only_prepare_ns/doc":                                          15,
+		"read_only_prepare_root_apply_share_pct":                            10,
+		"read_only_prepare_ns/plan":                                         200,
+		"read_only_prepare_ops/doc":                                         1.5,
+		"read_only_prepare_leaf_spans/plan":                                 5,
+		"read_only_prepare_worker_targets/plan":                             4,
+		"read_only_prepare_worker_ranges/plan":                              3,
+		"read_only_prepare_worker_max_ops/plan":                             30,
+		"leaf_log_node_loads/doc":                                           0.15,
+		"leaf_log_pages_written/doc":                                        0.075,
+		"leaf_log_read_bytes/doc":                                           12.8,
+		"leaf_log_write_bytes/doc":                                          25.6,
+		"indexed_flush_calls/doc":                                           0.05,
+		"indexed_flush_docs/batch":                                          20,
+		"indexed_flush_units/batch":                                         3,
+		"indexed_flush_root_runs/doc":                                       0.3,
+		"root_delta_plan_entries/doc":                                       1,
+		"root_delta_plan_key_bytes/doc":                                     10,
+		"root_delta_plan_value_bytes/doc":                                   20,
+		"root_delta_plan_tombstones/doc":                                    0.1,
+		"affected_primary_roots/doc":                                        0.1,
+		"affected_template_roots/doc":                                       0.05,
+		"affected_index_state_roots/doc":                                    0.05,
+		"affected_secondary_roots/doc":                                      0.15,
+		"coalesced_batch_units/batch":                                       4,
+		"coalesced_batch_docs/batch":                                        40,
+		"coalesced_batch_bytes/batch":                                       4000,
+		"net_zero_root_batches/doc":                                         0.025,
+		"raw_root_delta_entries/doc":                                        2,
+		"raw_root_delta_bytes/doc":                                          20,
+		"raw_root_delta_tombstones/doc":                                     0.2,
+		"raw_primary_root_delta_entries/doc":                                1,
+		"raw_primary_root_delta_bytes/doc":                                  10,
+		"raw_secondary_root_delta_entries/doc":                              0.75,
+		"raw_secondary_root_delta_bytes/doc":                                7.5,
+		"final_root_delta_entries/doc":                                      1.15,
+		"final_root_delta_bytes/doc":                                        11.5,
+		"final_root_delta_tombstones/doc":                                   0.125,
+		"final_primary_root_delta_entries/doc":                              0.5,
+		"final_primary_root_delta_bytes/doc":                                5,
+		"final_secondary_root_delta_entries/doc":                            0.5,
+		"final_secondary_root_delta_bytes/doc":                              5,
+		"squashed_root_delta_entries/doc":                                   0.85,
+		"net_zero_root_plans/doc":                                           0.05,
+		"skipped_secondary_roots/doc":                                       0.3,
+		"primary_root_publishes/doc":                                        0.2,
+		"primary_root_delta_entries/doc":                                    0.5,
+		"primary_root_delta_bytes/doc":                                      10,
+		"primary_only_coalesced_docs/publish":                               4,
+		"primary_only_duplicate_ids_coalesced/doc":                          0.15,
+		"primary_only_drains/doc":                                           0.05,
+		"primary_only_drain_docs/drain":                                     20,
+		"primary_only_drain_bytes/doc":                                      10,
+		"primary_only_drain_ns/doc":                                         100,
+		"primary_only_buffered_calls/driver_call":                           0.4,
+		"primary_only_publish_calls/driver_call":                            0.4,
+		"publish_delta_group_calls/driver_call":                             0.15,
 	} {
 		if got := phase.TreeDBMetrics[name]; math.Abs(got-want) > 1e-9 {
 			t.Fatalf("metric %s=%v want %v; metrics=%v", name, got, want, phase.TreeDBMetrics)
@@ -257,23 +421,70 @@ func TestTreeDBStatsDeltaAndPhaseMetrics(t *testing.T) {
 }
 
 func TestDeriveTreeDBPhaseMetricsEmitsZeroValues(t *testing.T) {
-	metrics := deriveTreeDBPhaseMetrics(map[string]float64{
-		"treedb.publish.ordered_root_delta_group.calls_total":                          2,
-		"treedb.publish.ordered_root_delta_group.roots_total":                          2,
-		"treedb.publish.ordered_root_delta_group.root_apply_calls_total":               2,
-		"treedb.publish.ordered_root_delta_group.root_apply_ns_total":                  20,
-		"treedb.collections.write_domain.indexed_flush.calls_total":                    2,
-		"treedb.collections.write_domain.indexed_flush.docs_total":                     20,
-		"treedb.collections.write_domain.indexed_flush.units_total":                    2,
-		"treedb.collections.write_domain.primary_only.root_publishes_total":            2,
-		"treedb.collections.write_domain.root_delta_plan.tombstones_total":             0,
-		"treedb.collections.write_domain.primary_only.coalesced_docs_total":            0,
-		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_loads_total": 0,
-	}, 10, 2)
+	delta := map[string]float64{
+		"treedb.publish.ordered_root_delta_group.calls_total":                                 2,
+		"treedb.publish.ordered_root_delta_group.roots_total":                                 2,
+		"treedb.publish.ordered_root_delta_group.root_apply_calls_total":                      2,
+		"treedb.publish.ordered_root_delta_group.root_apply_ns_total":                         20,
+		testReadOnlyPrepareCallsStat:                                                          0,
+		testReadOnlyPrepareNSStat:                                                             0,
+		testReadOnlyPrepareOpsStat:                                                            0,
+		testReadOnlyPrepareLeafSpansStat:                                                      0,
+		testReadOnlyPrepareWorkerTargetStat:                                                   0,
+		testReadOnlyPrepareWorkerRangesStat:                                                   0,
+		testReadOnlyPrepareWorkerMaxOpsStat:                                                   0,
+		"treedb.collections.write_domain.indexed_flush.calls_total":                           2,
+		"treedb.collections.write_domain.indexed_flush.docs_total":                            20,
+		"treedb.collections.write_domain.indexed_flush.units_total":                           2,
+		"treedb.collections.write_domain.coalesced_flush_batch.batches_total":                 2,
+		"treedb.collections.write_domain.coalesced_flush_batch.units_total":                   0,
+		"treedb.collections.write_domain.coalesced_flush_batch.docs_total":                    0,
+		"treedb.collections.write_domain.coalesced_flush_batch.bytes_total":                   0,
+		"treedb.collections.write_domain.coalesced_flush_batch.net_zero_batches_total":        0,
+		"treedb.collections.write_domain.primary_only.root_publishes_total":                   2,
+		"treedb.collections.write_domain.primary_only.drains_total":                           2,
+		"treedb.collections.write_domain.primary_only.drain_docs_total":                       0,
+		"treedb.collections.write_domain.primary_only.duplicate_ids_coalesced_total":          0,
+		"treedb.collections.write_domain.root_delta_plan.tombstones_total":                    0,
+		"treedb.collections.write_domain.root_delta_plan.squashed_entries_total":              0,
+		"treedb.collections.write_domain.root_delta_plan.net_zero_plans_total":                0,
+		"treedb.collections.write_domain.indexed_semantic.skipped_secondary_roots_total":      0,
+		"treedb.collections.write_domain.primary_only.coalesced_docs_total":                   0,
+		"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_loads_total":        0,
+		"treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_merges_total":   0,
+		"treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_children_total": 0,
+		"treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_workers_total":  0,
+		"treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_ops_total":      0,
+	}
+	for _, prefix := range []string{"raw_unit", "final"} {
+		for _, kind := range []string{"primary", "template", "index_state", "secondary"} {
+			for _, stat := range []string{"entries", "bytes", "tombstones"} {
+				delta["treedb.collections.write_domain.root_delta_plan."+prefix+"."+kind+"."+stat+"_total"] = 0
+			}
+		}
+	}
+	metrics := deriveTreeDBPhaseMetrics(delta, 10, 2)
 	for _, name := range []string{
 		"root_delta_plan_tombstones/doc",
 		"primary_only_coalesced_docs/publish",
 		"leaf_log_node_loads/doc",
+		"read_only_prepare_calls/doc",
+		"read_only_prepare_ns/doc",
+		"read_only_prepare_root_apply_share_pct",
+		"read_only_prepare_ops/doc",
+		"internal_parallel_merges/doc",
+		"coalesced_batch_units/batch",
+		"coalesced_batch_docs/batch",
+		"coalesced_batch_bytes/batch",
+		"net_zero_root_batches/doc",
+		"raw_root_delta_entries/doc",
+		"raw_primary_root_delta_entries/doc",
+		"final_root_delta_entries/doc",
+		"squashed_root_delta_entries/doc",
+		"net_zero_root_plans/doc",
+		"skipped_secondary_roots/doc",
+		"primary_only_duplicate_ids_coalesced/doc",
+		"primary_only_drain_docs/drain",
 	} {
 		got, ok := metrics[name]
 		if !ok {
@@ -287,8 +498,12 @@ func TestDeriveTreeDBPhaseMetricsEmitsZeroValues(t *testing.T) {
 
 func TestPhaseResultJSONIncludesTreeDBStatsDelta(t *testing.T) {
 	phase := phaseResult{
-		Name:       "concurrent_id_update_set_w4",
-		Operations: 10,
+		Name:              "concurrent_id_update_set_w4",
+		Operations:        10,
+		TreeDBDrainMillis: 1.25,
+		TreeDBDrainStatsDelta: map[string]string{
+			"treedb.collections.write_domain.indexed_flush.calls_total": "1",
+		},
 		TreeDBStatsDelta: map[string]string{
 			"treedb.publish.ordered_root_delta_group.calls_total": "10",
 		},
@@ -300,6 +515,12 @@ func TestPhaseResultJSONIncludesTreeDBStatsDelta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal phase: %v", err)
 	}
+	if !bytes.Contains(raw, []byte(`"treedb_drain_ms"`)) {
+		t.Fatalf("phase JSON missing treedb_drain_ms: %s", raw)
+	}
+	if !bytes.Contains(raw, []byte(`"treedb_drain_stats_delta"`)) {
+		t.Fatalf("phase JSON missing treedb_drain_stats_delta: %s", raw)
+	}
 	if !bytes.Contains(raw, []byte(`"treedb_stats_delta"`)) {
 		t.Fatalf("phase JSON missing treedb_stats_delta: %s", raw)
 	}
@@ -308,16 +529,57 @@ func TestPhaseResultJSONIncludesTreeDBStatsDelta(t *testing.T) {
 	}
 }
 
+func TestPhaseResultJSONIncludesZeroTreeDBDrainMillis(t *testing.T) {
+	phase := phaseResult{
+		Name:       "load",
+		Operations: 1,
+	}
+	raw, err := json.Marshal(phase)
+	if err != nil {
+		t.Fatalf("marshal phase: %v", err)
+	}
+	if !bytes.Contains(raw, []byte(`"treedb_drain_ms":0`)) {
+		t.Fatalf("phase JSON missing explicit zero treedb_drain_ms: %s", raw)
+	}
+}
+
+func TestAttachTreeDBDrainStatsPreservesPhaseLocalDelta(t *testing.T) {
+	phase := summarizePhase("concurrent_id_update_set_w2", 10, 10, time.Second, nil)
+	attachTreeDBDrainStats(&phase,
+		map[string]string{
+			"treedb.collections.write_domain.indexed_flush.calls_total":                      "7",
+			"treedb.collections.write_domain.root_delta_plan.raw_unit.primary.entries_total": "100",
+		},
+		map[string]string{
+			"treedb.collections.write_domain.indexed_flush.calls_total":                      "8",
+			"treedb.collections.write_domain.root_delta_plan.raw_unit.primary.entries_total": "125",
+		},
+		2500*time.Microsecond,
+	)
+	if got := phase.TreeDBDrainMillis; got != 2.5 {
+		t.Fatalf("drain millis=%v want 2.5", got)
+	}
+	if got := phase.TreeDBDrainStatsDelta["treedb.collections.write_domain.indexed_flush.calls_total"]; got != "1" {
+		t.Fatalf("drain indexed_flush calls delta=%q want 1; deltas=%v", got, phase.TreeDBDrainStatsDelta)
+	}
+	if got := phase.TreeDBDrainStatsDelta["treedb.collections.write_domain.root_delta_plan.raw_unit.primary.entries_total"]; got != "25" {
+		t.Fatalf("drain raw primary delta=%q want 25; deltas=%v", got, phase.TreeDBDrainStatsDelta)
+	}
+	if phase.TreeDBStatsDelta != nil || phase.TreeDBMetrics != nil {
+		t.Fatalf("drain stats should not populate phase stats/metrics: %+v", phase)
+	}
+}
+
 func TestTreeDBStatsDeltaPreservesHugeIntegerStrings(t *testing.T) {
 	delta, numeric := treeDBStatsDelta(
-		map[string]string{"treedb.test.huge_counter_total": "0"},
-		map[string]string{"treedb.test.huge_counter_total": "18446744073709551615"},
+		map[string]string{"treedb.collections.write_domain.root_delta_plan.raw_unit.primary.entries_total": "0"},
+		map[string]string{"treedb.collections.write_domain.root_delta_plan.raw_unit.primary.entries_total": "18446744073709551615"},
 	)
-	if got := delta["treedb.test.huge_counter_total"]; got != "18446744073709551615" {
-		t.Fatalf("huge counter delta=%q want exact uint64 max string", got)
+	if got := delta["treedb.collections.write_domain.root_delta_plan.raw_unit.primary.entries_total"]; got != "18446744073709551615" {
+		t.Fatalf("huge root-delta counter delta=%q want exact uint64 max string", got)
 	}
-	if _, ok := numeric["treedb.test.huge_counter_total"]; ok {
-		t.Fatalf("huge counter unexpectedly present in numeric deltas: %v", numeric)
+	if _, ok := numeric["treedb.collections.write_domain.root_delta_plan.raw_unit.primary.entries_total"]; ok {
+		t.Fatalf("huge root-delta counter unexpectedly present in numeric deltas: %v", numeric)
 	}
 }
 
@@ -407,6 +669,12 @@ func TestRunTreeDBProfiledPhaseDrainsBeforeStatsSnapshot(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("run phase: %v", err)
+	}
+	if got := phase.TreeDBDrainStatsDelta["treedb.collections.write_domain.indexed_flush.calls_total"]; got != "1" {
+		t.Fatalf("drain indexed flush calls delta=%q want 1; drain deltas=%v phase deltas=%v", got, phase.TreeDBDrainStatsDelta, phase.TreeDBStatsDelta)
+	}
+	if phase.TreeDBDrainMillis <= 0 {
+		t.Fatalf("drain millis=%v want positive", phase.TreeDBDrainMillis)
 	}
 	if got := phase.TreeDBStatsDelta["treedb.collections.write_domain.indexed_flush.calls_total"]; got != "1" {
 		t.Fatalf("indexed flush calls delta=%q want 1; deltas=%v", got, phase.TreeDBStatsDelta)
@@ -799,6 +1067,12 @@ func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
 	if cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 0 {
 		t.Fatalf("TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits=%d want 0", cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits)
 	}
+	if cfg.TreeDBBufferedIndexedReadOnlyPrepare {
+		t.Fatal("TreeDBBufferedIndexedReadOnlyPrepare=true want false by default")
+	}
+	if cfg.TreeDBBufferedIndexedReadOnlyPrepareWorkers != 0 {
+		t.Fatalf("TreeDBBufferedIndexedReadOnlyPrepareWorkers=%d want 0", cfg.TreeDBBufferedIndexedReadOnlyPrepareWorkers)
+	}
 	if cfg.InsertProducers != 1 {
 		t.Fatalf("InsertProducers=%d want 1", cfg.InsertProducers)
 	}
@@ -840,6 +1114,8 @@ func TestParseConfigTreeDBBufferedIndexedWriteThresholds(t *testing.T) {
 		"-treedb-buffered-indexed-write-max-root-runs", "90",
 		"-treedb-buffered-indexed-async-flush",
 		"-treedb-buffered-indexed-async-flush-max-queued-units", "3",
+		"-treedb-buffered-indexed-read-only-prepare",
+		"-treedb-buffered-indexed-read-only-prepare-workers", "4",
 	})
 	if err != nil {
 		t.Fatalf("parse buffered indexed thresholds: %v", err)
@@ -858,6 +1134,24 @@ func TestParseConfigTreeDBBufferedIndexedWriteThresholds(t *testing.T) {
 	}
 	if cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 3 {
 		t.Fatalf("TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits=%d want 3", cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits)
+	}
+	if !cfg.TreeDBBufferedIndexedReadOnlyPrepare {
+		t.Fatal("TreeDBBufferedIndexedReadOnlyPrepare=false want true")
+	}
+	if cfg.TreeDBBufferedIndexedReadOnlyPrepareWorkers != 4 {
+		t.Fatalf("TreeDBBufferedIndexedReadOnlyPrepareWorkers=%d want 4", cfg.TreeDBBufferedIndexedReadOnlyPrepareWorkers)
+	}
+}
+
+func TestParseConfigTreeDBBufferedIndexedReadOnlyPrepareWorkersRequirePrepare(t *testing.T) {
+	_, err := parseConfig([]string{"-treedb-buffered-indexed-read-only-prepare-workers", "4"})
+	if err == nil || !strings.Contains(err.Error(), "requires -treedb-buffered-indexed-read-only-prepare") {
+		t.Fatalf("parse workers without prepare err=%v want requires prepare", err)
+	}
+
+	_, err = parseConfig([]string{"-treedb-buffered-indexed-read-only-prepare-workers", "0"})
+	if err == nil || !strings.Contains(err.Error(), "requires -treedb-buffered-indexed-read-only-prepare") {
+		t.Fatalf("parse explicit zero workers without prepare err=%v want requires prepare", err)
 	}
 }
 
@@ -1886,6 +2180,8 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		TreeDBBufferedIndexedWriteMaxRootRuns:  90,
 		TreeDBBufferedIndexedAsyncFlush:        true,
 		TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits: 3,
+		TreeDBBufferedIndexedReadOnlyPrepare:          true,
+		TreeDBBufferedIndexedReadOnlyPrepareWorkers:   4,
 		TreeDBMaintenanceMode:                         "none",
 	}
 	var out bytes.Buffer
@@ -1899,6 +2195,8 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		"buffered_indexed_max_root_runs=90",
 		"buffered_indexed_async_flush=true",
 		"buffered_indexed_async_max_queued_units=3",
+		"buffered_indexed_read_only_prepare=true",
+		"buffered_indexed_read_only_prepare_workers=4",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("text output missing %s: %q", want, text)
@@ -1917,13 +2215,42 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		decoded.TreeDBBufferedIndexedWriteMaxBytes != 5678 ||
 		decoded.TreeDBBufferedIndexedWriteMaxRootRuns != 90 ||
 		!decoded.TreeDBBufferedIndexedAsyncFlush ||
-		decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 3 {
-		t.Fatalf("json thresholds docs=%d bytes=%d rootRuns=%d async=%t asyncMax=%d want 1234/5678/90/true/3",
+		decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 3 ||
+		!decoded.TreeDBBufferedIndexedReadOnlyPrepare ||
+		decoded.TreeDBBufferedIndexedReadOnlyPrepareWorkers != 4 {
+		t.Fatalf("json thresholds docs=%d bytes=%d rootRuns=%d async=%t asyncMax=%d readonly=%t readonlyWorkers=%d want 1234/5678/90/true/3/true/4",
 			decoded.TreeDBBufferedIndexedWriteMaxDocuments,
 			decoded.TreeDBBufferedIndexedWriteMaxBytes,
 			decoded.TreeDBBufferedIndexedWriteMaxRootRuns,
 			decoded.TreeDBBufferedIndexedAsyncFlush,
-			decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits)
+			decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
+			decoded.TreeDBBufferedIndexedReadOnlyPrepare,
+			decoded.TreeDBBufferedIndexedReadOnlyPrepareWorkers)
+	}
+}
+
+func TestWriteResultIncludesTreeDBBufferedIndexedReadOnlyPrepareDefaultsJSON(t *testing.T) {
+	result := &benchmarkResult{
+		Target:     "treedb",
+		Database:   "bench",
+		Collection: "docs",
+		Documents:  1,
+	}
+	var out bytes.Buffer
+	if err := writeResult(&out, "json", result); err != nil {
+		t.Fatalf("writeResult json: %v", err)
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("unmarshal json result: %v", err)
+	}
+	for _, key := range []string{
+		"treedb_buffered_indexed_read_only_prepare",
+		"treedb_buffered_indexed_read_only_prepare_workers",
+	} {
+		if _, ok := decoded[key]; !ok {
+			t.Fatalf("json result omitted %s: %s", key, out.String())
+		}
 	}
 }
 
@@ -1937,11 +2264,13 @@ func TestRecordEffectiveTreeDBCollectionOptionsUsesNormalizedMetadata(t *testing
 	if _, err := manager.CreateCollection(&collections.CollectionMeta{
 		Name: "bench.docs",
 		Options: collections.CollectionOptions{
-			BufferedIndexedWriteMaxDocuments:        0,
-			BufferedIndexedWriteMaxBytes:            777,
-			BufferedIndexedWriteMaxRootRuns:         0,
-			BufferedIndexedAsyncFlush:               true,
-			BufferedIndexedAsyncFlushMaxQueuedUnits: 3,
+			BufferedIndexedWriteMaxDocuments:          0,
+			BufferedIndexedWriteMaxBytes:              777,
+			BufferedIndexedWriteMaxRootRuns:           0,
+			BufferedIndexedAsyncFlush:                 true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits:   3,
+			BufferedIndexedReadOnlyPrepare:            true,
+			BufferedIndexedReadOnlyPrepareWorkerCount: 4,
 		},
 		Indexes: []collections.IndexDefinition{{Name: "email_1", Field: "email", ValueType: collections.IndexValueString, Unique: true}},
 	}); err != nil {
@@ -1965,13 +2294,17 @@ func TestRecordEffectiveTreeDBCollectionOptionsUsesNormalizedMetadata(t *testing
 		result.TreeDBBufferedIndexedWriteMaxBytes != 777 ||
 		result.TreeDBBufferedIndexedWriteMaxRootRuns != 0 ||
 		!result.TreeDBBufferedIndexedAsyncFlush ||
-		result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 3 {
-		t.Fatalf("effective thresholds docs=%d bytes=%d rootRuns=%d async=%t asyncMax=%d want %d/777/0/true/3",
+		result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 3 ||
+		!result.TreeDBBufferedIndexedReadOnlyPrepare ||
+		result.TreeDBBufferedIndexedReadOnlyPrepareWorkers != 4 {
+		t.Fatalf("effective thresholds docs=%d bytes=%d rootRuns=%d async=%t asyncMax=%d readonly=%t readonlyWorkers=%d want %d/777/0/true/3/true/4",
 			result.TreeDBBufferedIndexedWriteMaxDocuments,
 			result.TreeDBBufferedIndexedWriteMaxBytes,
 			result.TreeDBBufferedIndexedWriteMaxRootRuns,
 			result.TreeDBBufferedIndexedAsyncFlush,
 			result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
+			result.TreeDBBufferedIndexedReadOnlyPrepare,
+			result.TreeDBBufferedIndexedReadOnlyPrepareWorkers,
 			collections.DefaultIndexedWriteMemtableAsyncFlushMaxDocuments)
 	}
 }

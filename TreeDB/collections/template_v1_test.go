@@ -134,7 +134,7 @@ func TestTemplateV1CollectionInsertBatchIndexesAndTemplateRoot(t *testing.T) {
 		_ = snap.Close()
 		t.Fatalf("parse stored document: %v", err)
 	}
-	resolver := &templateV1SnapshotResolver{snap: snap, rootID: templateRoot, cache: make(map[string]*templateV1Template)}
+	resolver := &templateV1SnapshotResolver{snap: snap, rootID: templateRoot, cache: make(map[[32]byte]*templateV1Template)}
 	tpl, err := resolver.lookupTemplateV1(root.templateID)
 	_ = snap.Close()
 	if err != nil {
@@ -311,7 +311,7 @@ func TestTemplateV1EncoderReusesPersistedTemplateRoot(t *testing.T) {
 		_ = snap.Close()
 		t.Fatalf("parse doc2 root: %v", err)
 	}
-	resolver := &templateV1SnapshotResolver{snap: snap, rootID: templateRoot, cache: make(map[string]*templateV1Template)}
+	resolver := &templateV1SnapshotResolver{snap: snap, rootID: templateRoot, cache: make(map[[32]byte]*templateV1Template)}
 	if _, err := resolver.lookupTemplateV1(rootDoc2.templateID); err != nil {
 		_ = snap.Close()
 		t.Fatalf("lookup doc2 template after first insert: %v", err)
@@ -647,7 +647,7 @@ func TestTemplateV1UnbufferedSingleInsertUsesTemplateRoot(t *testing.T) {
 		_ = snap.Close()
 		t.Fatalf("parse stored doc: %v", err)
 	}
-	resolver := &templateV1SnapshotResolver{snap: snap, rootID: templateRoot, cache: make(map[string]*templateV1Template)}
+	resolver := &templateV1SnapshotResolver{snap: snap, rootID: templateRoot, cache: make(map[[32]byte]*templateV1Template)}
 	if _, err := resolver.lookupTemplateV1(stored.templateID); err != nil {
 		_ = snap.Close()
 		t.Fatalf("lookup template: %v", err)

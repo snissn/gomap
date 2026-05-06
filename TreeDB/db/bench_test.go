@@ -436,7 +436,7 @@ func BenchmarkLargeVal(b *testing.B) {
 			if closeErr := wb.Close(); err == nil {
 				err = closeErr
 			}
-			unlock()
+			unlock.Unlock()
 			if err != nil {
 				b.Errorf("SetPointer failed: %v", err)
 			}

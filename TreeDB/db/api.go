@@ -340,7 +340,7 @@ func (db *DB) Has(key []byte) (bool, error) {
 // Set sets the value for a key.
 func (db *DB) Set(key, value []byte) error {
 	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	defer unlock.Unlock()
 	return db.setPoint(key, value, false)
 }
 
@@ -354,14 +354,14 @@ func (db *DB) setPoint(key, value []byte, sync bool) error {
 // SetSync sets the value and syncs to disk.
 func (db *DB) SetSync(key, value []byte) error {
 	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	defer unlock.Unlock()
 	return db.setPoint(key, value, true)
 }
 
 // Delete removes a key.
 func (db *DB) Delete(key []byte) error {
 	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	defer unlock.Unlock()
 	return db.deletePoint(key, false)
 }
 
@@ -375,7 +375,7 @@ func (db *DB) deletePoint(key []byte, sync bool) error {
 // DeleteSync removes a key and syncs.
 func (db *DB) DeleteSync(key []byte) error {
 	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	defer unlock.Unlock()
 	return db.deletePoint(key, true)
 }
 
@@ -710,6 +710,12 @@ func (db *DB) Stats() map[string]string {
 	// Backend DB path currently doesn't track queue drift; emit a stable default
 	// for suite compatibility and fail-closed checks that require key presence.
 	stats["treedb.publish.watermark.lag_drift_bytes_per_sec"] = "0.000"
+	stats["treedb.publish.install_guard.ns_total"] = fmt.Sprintf("%d", db.publishInstallGuardNs.Load())
+	stats["treedb.publish.install_guard.calls_total"] = fmt.Sprintf("%d", db.publishInstallGuardCalls.Load())
+	stats["treedb.publish.install_guard.failures_total"] = fmt.Sprintf("%d", db.publishInstallGuardFailures.Load())
+	stats["treedb.publish.install_guard.hook_failures_total"] = fmt.Sprintf("%d", db.publishInstallGuardHookFailures.Load())
+	stats["treedb.publish.install_guard.user_root_mismatches_total"] = fmt.Sprintf("%d", db.publishInstallGuardUserRootMismatches.Load())
+	stats["treedb.publish.install_guard.system_root_mismatches_total"] = fmt.Sprintf("%d", db.publishInstallGuardSystemRootMismatches.Load())
 	orderedDeltaStats := db.orderedRootDeltaGroupPublishStats()
 	// Ordered-root delta group stats cover calls that entered the DB write
 	// lock, including failed calls. roots_total counts successfully published
@@ -740,6 +746,10 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.publish.ordered_root_delta_group.root_apply_leaf_log_record_hint_bytes_read_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyLeafLogRecordHintBytesRead)
 	stats["treedb.publish.ordered_root_delta_group.root_apply_leaf_merges_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyLeafMerges)
 	stats["treedb.publish.ordered_root_delta_group.root_apply_internal_merges_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyInternalMerges)
+	stats["treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_merges_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyInternalParallelMerges)
+	stats["treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_children_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyInternalParallelChildren)
+	stats["treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_workers_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyInternalParallelWorkers)
+	stats["treedb.publish.ordered_root_delta_group.root_apply_internal_parallel_ops_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyInternalParallelOps)
 	stats["treedb.publish.ordered_root_delta_group.root_apply_leaf_pages_written_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyLeafPagesWritten)
 	stats["treedb.publish.ordered_root_delta_group.root_apply_pager_leaf_pages_written_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyPagerLeafPagesWritten)
 	stats["treedb.publish.ordered_root_delta_group.root_apply_leaf_log_pages_written_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyLeafLogPagesWritten)
@@ -754,11 +764,51 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.publish.ordered_root_delta_group.root_apply_internal_leaf_log_refs_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyInternalLeafLogRefs)
 	stats["treedb.publish.ordered_root_delta_group.root_apply_internal_leaf_log_ref_copies_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyInternalLeafLogRefCopies)
 	stats["treedb.publish.ordered_root_delta_group.root_apply_root_split_levels_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyRootSplitLevels)
+	stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ns_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyReadOnlyPrepareNs)
+	stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_calls_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyReadOnlyPrepareCalls)
+	stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_ops_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyReadOnlyPrepareOps)
+	stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_leaf_spans_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyReadOnlyPrepareLeafSpans)
+	stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_targets_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyReadOnlyPrepareWorker.targets)
+	stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_ranges_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyReadOnlyPrepareWorker.ranges)
+	stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_range_min_ops_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyReadOnlyPrepareWorker.minOps)
+	stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_range_max_ops_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyReadOnlyPrepareWorker.maxOps)
+	stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_worker_range_single_span_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyReadOnlyPrepareWorker.singleSpan)
+	stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_exact_plans_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyReadOnlyPrepareExactPlans)
+	stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_maintenance_plans_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyReadOnlyPrepareMaintenance)
+	stats["treedb.publish.ordered_root_delta_group.root_apply_readonly_prepare_cold_build_plans_total"] = fmt.Sprintf("%d", orderedDeltaStats.rootApplyReadOnlyPrepareColdBuilds)
 	stats["treedb.publish.ordered_root_delta_group.system_build_ns_total"] = fmt.Sprintf("%d", orderedDeltaStats.systemBuildNs)
 	stats["treedb.publish.ordered_root_delta_group.system_apply_ns_total"] = fmt.Sprintf("%d", orderedDeltaStats.systemApplyNs)
 	stats["treedb.publish.ordered_root_delta_group.system_apply_calls_total"] = fmt.Sprintf("%d", orderedDeltaStats.systemApplyCalls)
 	stats["treedb.publish.ordered_root_delta_group.system_apply_ops_total"] = fmt.Sprintf("%d", orderedDeltaStats.systemApplyOps)
 	stats["treedb.publish.ordered_root_delta_group.system_apply_node_loads_total"] = fmt.Sprintf("%d", orderedDeltaStats.systemApplyNodeLoads)
+	stats["treedb.publish.ordered_root_delta_group.install_guard_ns_total"] = fmt.Sprintf("%d", orderedDeltaStats.installGuardNs)
+	stats["treedb.publish.ordered_root_delta_group.install_guard_calls_total"] = fmt.Sprintf("%d", orderedDeltaStats.installGuardCalls)
+	stats["treedb.publish.ordered_root_delta_group.install_guard_failures_total"] = fmt.Sprintf("%d", orderedDeltaStats.installGuardFailures)
+	// prepared_root.prepare_ns_total includes metadata planning time, including
+	// attempts that fail before any root reaches prepared state. Other
+	// prepared_root.* counters count roots that reached prepared state, including
+	// optimistic attempts abandoned before retrying through serialized publish;
+	// they intentionally are not a strict subset of calls_total/roots_total.
+	// prepared_root.output_* counters count pager and leaf-log side output
+	// produced by those prepared roots. Leaf-log output remains persistent
+	// value-log storage; these counters are inventory/ownership observability, not
+	// reclamation.
+	stats["treedb.publish.ordered_root_delta_group.prepared_root.prepare_ns_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootPrepareNs)
+	stats["treedb.publish.ordered_root_delta_group.prepared_root.groups_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootGroups)
+	stats["treedb.publish.ordered_root_delta_group.prepared_root.roots_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootRoots)
+	stats["treedb.publish.ordered_root_delta_group.prepared_root.entries_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootEntries)
+	stats["treedb.publish.ordered_root_delta_group.prepared_root.tombstones_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootTombstones)
+	stats["treedb.publish.ordered_root_delta_group.prepared_root.key_bytes_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootKeyBytes)
+	stats["treedb.publish.ordered_root_delta_group.prepared_root.value_bytes_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootValueBytes)
+	stats["treedb.publish.ordered_root_delta_group.prepared_root.pointer_values_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootPointerValues)
+	stats["treedb.publish.ordered_root_delta_group.prepared_root.installed_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootInstalled)
+	stats["treedb.publish.ordered_root_delta_group.prepared_root.abandoned_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootAbandoned)
+	stats["treedb.publish.ordered_root_delta_group.prepared_root.output_pages_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootOutputPages)
+	stats["treedb.publish.ordered_root_delta_group.prepared_root.output_leaf_log_ptrs_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootOutputLeafLogPtrs)
+	stats["treedb.publish.ordered_root_delta_group.prepared_root.installed_output_pages_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootInstalledPages)
+	stats["treedb.publish.ordered_root_delta_group.prepared_root.installed_output_leaf_log_ptrs_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootInstalledLeafLogPtrs)
+	stats["treedb.publish.ordered_root_delta_group.prepared_root.abandoned_output_pages_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootAbandonedPages)
+	stats["treedb.publish.ordered_root_delta_group.prepared_root.abandoned_output_leaf_log_ptrs_total"] = fmt.Sprintf("%d", orderedDeltaStats.preparedRootAbandonedLeafLogPtrs)
 	stats["treedb.publish.ordered_root_delta_group.finalize_ns_total"] = fmt.Sprintf("%d", orderedDeltaStats.finalizeNs)
 	stats["treedb.publish.ordered_root_delta_group.finalize_calls_total"] = fmt.Sprintf("%d", orderedDeltaStats.finalizeCalls)
 	stats["treedb.publish.ordered_root_delta_group.latency_p99_ms"] = fmt.Sprintf("%.3f", float64(orderedDeltaStats.latencyP99)/float64(time.Millisecond))

@@ -1,6 +1,84 @@
 package db
 
-import "testing"
+import (
+	"bytes"
+	"strconv"
+	"testing"
+
+	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/zipper"
+)
+
+type benchSingleKVIterator struct {
+	key   []byte
+	value []byte
+	valid bool
+}
+
+func (it *benchSingleKVIterator) Valid() bool { return it != nil && it.valid }
+
+func (it *benchSingleKVIterator) Next() { it.valid = false }
+
+func (it *benchSingleKVIterator) Seek(key []byte) {
+	if it == nil {
+		return
+	}
+	it.valid = bytes.Compare(key, it.key) <= 0
+}
+
+func (it *benchSingleKVIterator) UnsafeKey() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.key
+}
+
+func (it *benchSingleKVIterator) UnsafeValue() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.value
+}
+
+func (it *benchSingleKVIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	if !it.Valid() {
+		return nil, page.ValuePtr{}, node.FlagInline
+	}
+	return it.value, page.ValuePtr{}, node.FlagInline
+}
+
+func (it *benchSingleKVIterator) Key() []byte {
+	return append([]byte(nil), it.UnsafeKey()...)
+}
+
+func (it *benchSingleKVIterator) Value() []byte {
+	return append([]byte(nil), it.UnsafeValue()...)
+}
+
+func (it *benchSingleKVIterator) KeyCopy(dst []byte) []byte {
+	return append(dst[:0], it.UnsafeKey()...)
+}
+
+func (it *benchSingleKVIterator) ValueCopy(dst []byte) []byte {
+	return append(dst[:0], it.UnsafeValue()...)
+}
+
+func (it *benchSingleKVIterator) IsDeleted() bool { return false }
+func (it *benchSingleKVIterator) Error() error    { return nil }
+func (it *benchSingleKVIterator) Close() error    { it.valid = false; return nil }
+func (it *benchSingleKVIterator) Domain() ([]byte, []byte) {
+	return nil, nil
+}
+
+func (it *benchSingleKVIterator) Len() int {
+	if it.Valid() {
+		return 1
+	}
+	return 0
+}
 
 func BenchmarkPublishSystemRootIterator_WarmSparseDelta(b *testing.B) {
 	dir := b.TempDir()
@@ -90,4 +168,90 @@ func BenchmarkPublishSystemRootIterator_WarmDenseDelta(b *testing.B) {
 		b.Fatalf("warmRebuildFallbacks=%d want %d", fallbacks, b.N)
 	}
 	b.ReportMetric(float64(fallbacks), "warm_rebuild_fallback")
+}
+
+func BenchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_WarmSingleRoot(b *testing.B) {
+	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, orderedRootBatchGroupWarmBenchOptions{})
+}
+
+func BenchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_WarmSingleRootReadOnlyPrepare(b *testing.B) {
+	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, orderedRootBatchGroupWarmBenchOptions{prepareReadOnly: true})
+}
+
+func BenchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_WarmSingleRootReadOnlyPrepareReuse(b *testing.B) {
+	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, orderedRootBatchGroupWarmBenchOptions{prepareReadOnly: true, reusePrepare: true})
+}
+
+func BenchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_WarmSingleRootReadOnlyPrepareWorkerStats(b *testing.B) {
+	benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b, orderedRootBatchGroupWarmBenchOptions{prepareReadOnly: true, prepareWorkerCount: 3})
+}
+
+type orderedRootBatchGroupWarmBenchOptions struct {
+	prepareReadOnly    bool
+	reusePrepare       bool
+	prepareWorkerCount int
+}
+
+func benchmarkPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWarmSingleRoot(b *testing.B, benchOpts orderedRootBatchGroupWarmBenchOptions) {
+	dir := b.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		b.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(b, "root/a", "base").NewIterator(nil, nil))
+	if err != nil {
+		b.Fatalf("publish base root: %v", err)
+	}
+	left := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := left.Set([]byte("root/a"), []byte("left")); err != nil {
+		b.Fatalf("set left delta: %v", err)
+	}
+	defer func() { _ = left.Close() }()
+	right := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := right.Set([]byte("root/a"), []byte("right")); err != nil {
+		b.Fatalf("set right delta: %v", err)
+	}
+	defer func() { _ = right.Close() }()
+
+	ordered := []OrderedRootDeltaBatchPublishInput{{
+		StoragePolicy:              OrderedRootStorageDefault,
+		PrepareReadOnly:            benchOpts.prepareReadOnly,
+		ReadOnlyPrepareWorkerCount: benchOpts.prepareWorkerCount,
+	}}
+	var prepared zipper.ReadOnlyPrepareResult
+	systemKey := []byte("sys/collections/users/primary")
+	var systemValueBuf [20]byte
+	publish := func(delta *batch.Batch) {
+		ordered[0].BaseRoot = baseRoot
+		ordered[0].Delta = delta
+		if benchOpts.prepareReadOnly && benchOpts.reusePrepare {
+			ordered[0].ReadOnlyPrepareResult = &prepared
+		}
+		_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			value := strconv.AppendUint(systemValueBuf[:0], rootIDs[0], 10)
+			return &benchSingleKVIterator{
+				key:   systemKey,
+				value: value,
+				valid: true,
+			}, nil
+		})
+		if err != nil {
+			b.Fatalf("publish batch group: %v", err)
+		}
+		baseRoot = rootIDs[0]
+	}
+	if benchOpts.prepareReadOnly && benchOpts.reusePrepare {
+		publish(left)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		delta := left
+		if i&1 == 1 {
+			delta = right
+		}
+		publish(delta)
+	}
 }

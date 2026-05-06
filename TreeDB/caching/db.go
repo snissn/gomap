@@ -19428,7 +19428,7 @@ func (db *DB) Set(key, value []byte) error {
 	}
 	db.waitForCheckpoint()
 	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	defer unlock.Unlock()
 	return db.set(key, value, false)
 }
 
@@ -19441,7 +19441,7 @@ func (db *DB) SetSync(key, value []byte) error {
 	}
 	db.waitForCheckpoint()
 	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	defer unlock.Unlock()
 	return db.set(key, value, true)
 }
 
@@ -19469,7 +19469,7 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 	for {
 		unlock := db.lockUpdateKey(key)
 		old, err := db.getForUpdate(key)
-		unlock()
+		unlock.Unlock()
 		if err != nil {
 			return err
 		}
@@ -19489,28 +19489,28 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 		unlock = db.lockUpdateKey(key)
 		latest, err := db.getForUpdate(key)
 		if err != nil {
-			unlock()
+			unlock.Unlock()
 			return err
 		}
 		if !sameUpdateValue(observed, latest) {
-			unlock()
+			unlock.Unlock()
 			continue
 		}
 
 		switch result.Op {
 		case backenddb.UpdateNoop:
-			unlock()
+			unlock.Unlock()
 			return nil
 		case backenddb.UpdateSet:
 			err = db.set(key, result.Value, syncWrite)
-			unlock()
+			unlock.Unlock()
 			return err
 		case backenddb.UpdateDelete:
 			err = db.delete(key, syncWrite)
-			unlock()
+			unlock.Unlock()
 			return err
 		default:
-			unlock()
+			unlock.Unlock()
 			return fmt.Errorf("treedb: unknown update op %d", result.Op)
 		}
 	}
@@ -19781,7 +19781,7 @@ func (db *DB) Delete(key []byte) error {
 	}
 	db.waitForCheckpoint()
 	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	defer unlock.Unlock()
 	return db.delete(key, false)
 }
 
@@ -20395,13 +20395,13 @@ func (db *DB) DeleteSync(key []byte) error {
 	}
 	db.waitForCheckpoint()
 	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	defer unlock.Unlock()
 	return db.delete(key, true)
 }
 
-func (db *DB) lockUpdateKey(key []byte) func() {
+func (db *DB) lockUpdateKey(key []byte) keyupdate.Unlocker {
 	if db == nil {
-		return func() {}
+		return keyupdate.Unlocker{}
 	}
 	return db.updateLocks.Lock(key)
 }
@@ -22792,14 +22792,42 @@ type getManyProbeRef struct {
 	shard int
 }
 
-func copyGetManyValueToRefs(out [][]byte, refs []getManyProbeRef, val []byte) {
+const (
+	getManyValueGuessBytes         = 128
+	getManyMaxArenaInitialCapBytes = 1 << 20
+)
+
+var getManyEmptyValue = []byte{}
+
+type getManyValueCopyArena struct {
+	buf []byte
+}
+
+func newGetManyValueCopyArena(n int) getManyValueCopyArena {
+	arenaCap := n * getManyValueGuessBytes
+	if arenaCap < 0 {
+		arenaCap = 0
+	}
+	if arenaCap > getManyMaxArenaInitialCapBytes {
+		arenaCap = getManyMaxArenaInitialCapBytes
+	}
+	return getManyValueCopyArena{buf: make([]byte, 0, arenaCap)}
+}
+
+func (arena *getManyValueCopyArena) copyToRefs(out [][]byte, refs []getManyProbeRef, val []byte) {
 	if val == nil {
 		return
 	}
+	if len(val) == 0 {
+		for _, ref := range refs {
+			out[ref.idx] = getManyEmptyValue
+		}
+		return
+	}
 	for _, ref := range refs {
-		cpy := make([]byte, len(val))
-		copy(cpy, val)
-		out[ref.idx] = cpy
+		start := len(arena.buf)
+		arena.buf = append(arena.buf, val...)
+		out[ref.idx] = arena.buf[start:len(arena.buf):len(arena.buf)]
 	}
 }
 
@@ -22834,6 +22862,7 @@ func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]b
 	db.noteRootDomainGetManyNative(len(keys), len(unique))
 
 	results := make([]rootDomainProbeResult, len(unique))
+	arena := newGetManyValueCopyArena(len(unique))
 	start := 0
 	for start < len(unique) {
 		end := start + 1
@@ -22849,8 +22878,8 @@ func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]b
 		start = end
 	}
 
-	backendIdx := make([]int, 0, len(unique))
-	backendKeys := make([][]byte, 0, len(unique))
+	var backendIdx []int
+	var backendKeys [][]byte
 	for i, res := range results {
 		groupEnd := len(refs)
 		if i+1 < len(groupStarts) {
@@ -22859,23 +22888,28 @@ func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]b
 		groupRefs := refs[groupStarts[i]:groupEnd]
 		switch {
 		case !res.found:
+			if backendIdx == nil {
+				backendCap := len(unique) - i
+				backendIdx = make([]int, 0, backendCap)
+				backendKeys = make([][]byte, 0, backendCap)
+			}
 			backendIdx = append(backendIdx, i)
 			backendKeys = append(backendKeys, unique[i].key)
 		case res.flags&node.FlagTombstone != 0:
 		case res.flags&node.FlagPointer != 0:
 			if res.val != nil {
-				copyGetManyValueToRefs(out, groupRefs, res.val)
+				arena.copyToRefs(out, groupRefs, res.val)
 				break
 			}
 			readVal, err := db.readValueLog(unique[i].key, res.ptr)
 			if err != nil {
 				return nil, err
 			}
-			copyGetManyValueToRefs(out, groupRefs, readVal)
+			arena.copyToRefs(out, groupRefs, readVal)
 		case res.val == nil:
-			copyGetManyValueToRefs(out, groupRefs, []byte{})
+			arena.copyToRefs(out, groupRefs, getManyEmptyValue)
 		default:
-			copyGetManyValueToRefs(out, groupRefs, res.val)
+			arena.copyToRefs(out, groupRefs, res.val)
 		}
 	}
 	if len(backendKeys) > 0 {
@@ -22892,7 +22926,7 @@ func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]b
 			if uniqueIdx+1 < len(groupStarts) {
 				groupEnd = groupStarts[uniqueIdx+1]
 			}
-			copyGetManyValueToRefs(out, refs[groupStarts[uniqueIdx]:groupEnd], backendVals[i])
+			arena.copyToRefs(out, refs[groupStarts[uniqueIdx]:groupEnd], backendVals[i])
 		}
 	}
 	return out, nil
@@ -23149,25 +23183,13 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	//
 	// The cache layer may need to resolve value-log pointers for memtable hits;
 	// by using the append path, those decodes can write directly into this arena
-	// instead of allocating per key. The limit below bounds only the initial
-	// arena capacity; subsequent appends may still grow the backing array, so
-	// multiple underlying allocations may be retained.
-	const (
-		getManyValueGuessBytes         = 128
-		getManyMaxArenaInitialCapBytes = 1 << 20
-	)
-	arenaCap := len(keys) * getManyValueGuessBytes
-	if arenaCap < 0 {
-		arenaCap = 0
-	}
-	if arenaCap > getManyMaxArenaInitialCapBytes {
-		arenaCap = getManyMaxArenaInitialCapBytes
-	}
-	arena := make([]byte, 0, arenaCap)
-	emptyValue := []byte{}
+	// instead of allocating per key. newGetManyValueCopyArena caps only the
+	// initial arena capacity; subsequent appends may still grow the backing
+	// array, so multiple underlying allocations may be retained.
+	arena := newGetManyValueCopyArena(len(keys))
 	for i, key := range keys {
-		start := len(arena)
-		nextArena, found, err := db.getMemtableAppend(key, arena)
+		start := len(arena.buf)
+		nextArena, found, err := db.getMemtableAppend(key, arena.buf)
 		if err != nil {
 			if err == tree.ErrKeyNotFound {
 				// Tombstone in cache layers: treat as a missing key and do not fall
@@ -23182,12 +23204,12 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 			}
 		}
 		if found {
-			arena = nextArena
-			if len(arena) == start {
-				out[i] = emptyValue
+			arena.buf = nextArena
+			if len(arena.buf) == start {
+				out[i] = getManyEmptyValue
 				continue
 			}
-			out[i] = arena[start:len(arena):len(arena)]
+			out[i] = arena.buf[start:len(arena.buf):len(arena.buf)]
 			continue
 		}
 		backendIdx = append(backendIdx, i)
@@ -25836,19 +25858,75 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 
 type debugIterator struct {
 	merging.Iterator
-	queueLen    int
-	sourcesUsed int
+	queueLen     int
+	sourcesUsed  int
+	keyScratch   []byte
+	valueScratch []byte
+}
+
+type unsafeIteratorView interface {
+	// UnsafeKey and UnsafeValue return views owned by the iterator and valid
+	// only until the iterator moves or closes. Wrappers may return safe Key/Value
+	// copies when the wrapped iterator does not expose unsafe views.
+	UnsafeKey() []byte
+	UnsafeValue() []byte
+}
+
+func unsafeIteratorViewKey(it merging.Iterator, scratch *[]byte) []byte {
+	if it == nil {
+		return nil
+	}
+	if u, ok := it.(unsafeIteratorView); ok {
+		return u.UnsafeKey()
+	}
+	if scratch == nil {
+		return it.Key()
+	}
+	*scratch = it.KeyCopy((*scratch)[:0])
+	return *scratch
+}
+
+func unsafeIteratorViewValue(it merging.Iterator, scratch *[]byte) []byte {
+	if it == nil {
+		return nil
+	}
+	if u, ok := it.(unsafeIteratorView); ok {
+		return u.UnsafeValue()
+	}
+	if scratch == nil {
+		return it.Value()
+	}
+	*scratch = it.ValueCopy((*scratch)[:0])
+	return *scratch
 }
 
 func (it *debugIterator) DebugStats() (queueLen int, sourcesUsed int) {
 	return it.queueLen, it.sourcesUsed
 }
 
+func (it *debugIterator) UnsafeKey() []byte {
+	return unsafeIteratorViewKey(it.Iterator, &it.keyScratch)
+}
+
+func (it *debugIterator) UnsafeValue() []byte {
+	return unsafeIteratorViewValue(it.Iterator, &it.valueScratch)
+}
+
 type leasedMergingIterator struct {
 	merging.Iterator
-	closeOnce sync.Once
-	closeErr  error
-	release   func()
+	closeOnce    sync.Once
+	closeErr     error
+	release      func()
+	keyScratch   []byte
+	valueScratch []byte
+}
+
+func (it *leasedMergingIterator) UnsafeKey() []byte {
+	return unsafeIteratorViewKey(it.Iterator, &it.keyScratch)
+}
+
+func (it *leasedMergingIterator) UnsafeValue() []byte {
+	return unsafeIteratorViewValue(it.Iterator, &it.valueScratch)
 }
 
 func (it *leasedMergingIterator) Close() error {
@@ -25863,9 +25941,19 @@ func (it *leasedMergingIterator) Close() error {
 
 type foregroundTrackedIterator struct {
 	merging.Iterator
-	db        *DB
-	closeOnce sync.Once
-	closeErr  error
+	db           *DB
+	closeOnce    sync.Once
+	closeErr     error
+	keyScratch   []byte
+	valueScratch []byte
+}
+
+func (it *foregroundTrackedIterator) UnsafeKey() []byte {
+	return unsafeIteratorViewKey(it.Iterator, &it.keyScratch)
+}
+
+func (it *foregroundTrackedIterator) UnsafeValue() []byte {
+	return unsafeIteratorViewValue(it.Iterator, &it.valueScratch)
 }
 
 func (it *foregroundTrackedIterator) Close() error {
@@ -25960,6 +26048,20 @@ func (it *concatUnsafeIterator) Value() []byte {
 		panic("iterator invalid")
 	}
 	return it.cur.Value()
+}
+
+func (it *concatUnsafeIterator) UnsafeKey() []byte {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	return it.cur.UnsafeKey()
+}
+
+func (it *concatUnsafeIterator) UnsafeValue() []byte {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	return it.cur.UnsafeValue()
 }
 
 func (it *concatUnsafeIterator) KeyCopy(dst []byte) []byte {

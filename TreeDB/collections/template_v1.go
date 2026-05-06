@@ -49,6 +49,7 @@ type templateV1Record struct {
 
 type templateV1Template struct {
 	id     [32]byte
+	raw    []byte
 	fields []string
 }
 
@@ -57,7 +58,7 @@ type templateV1Resolver interface {
 }
 
 type templateV1MemoryResolver struct {
-	templates map[string]*templateV1Template
+	templates map[[32]byte]*templateV1Template
 }
 
 type templateV1CompositeResolver struct {
@@ -68,13 +69,13 @@ type templateV1CompositeResolver struct {
 type templateV1SnapshotResolver struct {
 	snap   *backenddb.Snapshot
 	rootID uint64
-	cache  map[string]*templateV1Template
+	cache  map[[32]byte]*templateV1Template
 }
 
 type templateV1BufferedRunsResolver struct {
 	runs     []memtable.Table
 	fallback templateV1Resolver
-	cache    map[string]*templateV1Template
+	cache    map[[32]byte]*templateV1Template
 }
 
 type templateV1ObjectRef struct {
@@ -135,7 +136,7 @@ func collectionOptionsWithTemplateV1Resolver(opts collectionOptions, snap *backe
 	opts.templateResolver = &templateV1SnapshotResolver{
 		snap:   snap,
 		rootID: catalog.rootID(collectionTemplateRootName(catalog.meta.Name)),
-		cache:  make(map[string]*templateV1Template),
+		cache:  make(map[[32]byte]*templateV1Template),
 	}
 	return opts
 }
@@ -161,7 +162,7 @@ func collectionOptionsWithBufferedTemplateV1RunsResolver(opts collectionOptions,
 	opts.templateResolver = &templateV1BufferedRunsResolver{
 		runs:     runs,
 		fallback: opts.templateResolver,
-		cache:    make(map[string]*templateV1Template),
+		cache:    make(map[[32]byte]*templateV1Template),
 	}
 	return opts
 }
@@ -171,7 +172,7 @@ func prepareTemplateV1InsertDocuments(documents [][]byte, fallback templateV1Res
 	records := make([]templateV1Record, 0)
 	resolver := &templateV1MemoryResolver{}
 	for i, document := range documents {
-		stored, docRecords, err := parseTemplateV1InsertDocument(document)
+		stored, docRecords, err := parseTemplateV1InsertDocumentWithMemoryResolver(document, resolver)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -238,7 +239,18 @@ func parseTemplateV1InsertDocument(raw []byte) ([]byte, []templateV1Record, erro
 	return parseTemplateV1InsertEnvelope(raw)
 }
 
+func parseTemplateV1InsertDocumentWithMemoryResolver(raw []byte, resolver *templateV1MemoryResolver) ([]byte, []templateV1Record, error) {
+	if bytes.HasPrefix(raw, []byte(templateV1StoredMagic)) {
+		return raw, nil, nil
+	}
+	return parseTemplateV1InsertEnvelopeWithMemoryResolver(raw, resolver)
+}
+
 func parseTemplateV1InsertEnvelope(raw []byte) ([]byte, []templateV1Record, error) {
+	return parseTemplateV1InsertEnvelopeWithMemoryResolver(raw, nil)
+}
+
+func parseTemplateV1InsertEnvelopeWithMemoryResolver(raw []byte, resolver *templateV1MemoryResolver) ([]byte, []templateV1Record, error) {
 	pos := 0
 	if !consumeMagic(raw, &pos, templateV1InputMagic) {
 		return nil, nil, errors.New("collections: template-v1 insert requires template input envelope")
@@ -250,7 +262,7 @@ func parseTemplateV1InsertEnvelope(raw []byte) ([]byte, []templateV1Record, erro
 	if templateCount > uint64(len(raw)) {
 		return nil, nil, errors.New("collections: malformed template-v1 template count")
 	}
-	records := make([]templateV1Record, 0, int(templateCount))
+	var records []templateV1Record
 	for i := uint64(0); i < templateCount; i++ {
 		var id [32]byte
 		if len(raw)-pos < len(id) {
@@ -267,12 +279,20 @@ func parseTemplateV1InsertEnvelope(raw []byte) ([]byte, []templateV1Record, erro
 		}
 		recordRaw := raw[pos : pos+int(recordLen)]
 		pos += int(recordLen)
+		if resolver != nil {
+			if existing := resolver.templates[id]; existing != nil && bytes.Equal(existing.raw, recordRaw) {
+				continue
+			}
+		}
 		record, err := parseTemplateV1Record(recordRaw)
 		if err != nil {
 			return nil, nil, err
 		}
 		if record.id != id {
 			return nil, nil, errors.New("collections: template-v1 template id does not match record")
+		}
+		if records == nil {
+			records = make([]templateV1Record, 0, int(templateCount-i))
 		}
 		records = append(records, record)
 	}
@@ -318,16 +338,15 @@ func validateTemplateV1StoredDocumentTemplates(document []byte, resolver templat
 
 func (r *templateV1MemoryResolver) addRecord(record templateV1Record) (bool, error) {
 	if r.templates == nil {
-		r.templates = make(map[string]*templateV1Template)
+		r.templates = make(map[[32]byte]*templateV1Template)
 	}
-	key := string(record.id[:])
-	if existing := r.templates[key]; existing != nil {
+	if existing := r.templates[record.id]; existing != nil {
 		if !equalStringSlices(existing.fields, record.tpl.fields) {
 			return false, errors.New("collections: template-v1 template id collision")
 		}
 		return false, nil
 	}
-	r.templates[key] = record.tpl
+	r.templates[record.id] = record.tpl
 	return true, nil
 }
 
@@ -335,7 +354,7 @@ func (r *templateV1MemoryResolver) lookupTemplateV1(id [32]byte) (*templateV1Tem
 	if r == nil {
 		return nil, errTemplateV1MissingResolver
 	}
-	tpl := r.templates[string(id[:])]
+	tpl := r.templates[id]
 	if tpl == nil {
 		return nil, errTemplateV1TemplateNotFound
 	}
@@ -347,7 +366,7 @@ func (r *templateV1CompositeResolver) lookupTemplateV1(id [32]byte) (*templateV1
 		return nil, errTemplateV1MissingResolver
 	}
 	if r.memory != nil && r.memory.templates != nil {
-		if tpl := r.memory.templates[string(id[:])]; tpl != nil {
+		if tpl := r.memory.templates[id]; tpl != nil {
 			return tpl, nil
 		}
 	}
@@ -361,8 +380,7 @@ func (r *templateV1SnapshotResolver) lookupTemplateV1(id [32]byte) (*templateV1T
 	if r == nil || r.snap == nil || r.rootID == 0 {
 		return nil, errTemplateV1MissingTemplateRoot
 	}
-	key := string(id[:])
-	if tpl := r.cache[key]; tpl != nil {
+	if tpl := r.cache[id]; tpl != nil {
 		return tpl, nil
 	}
 	entry, err := r.snap.GetEntryAtRoot(r.rootID, id[:])
@@ -380,9 +398,9 @@ func (r *templateV1SnapshotResolver) lookupTemplateV1(id [32]byte) (*templateV1T
 		return nil, errors.New("collections: template-v1 template id mismatch")
 	}
 	if r.cache == nil {
-		r.cache = make(map[string]*templateV1Template)
+		r.cache = make(map[[32]byte]*templateV1Template)
 	}
-	r.cache[key] = record.tpl
+	r.cache[id] = record.tpl
 	return record.tpl, nil
 }
 
@@ -390,8 +408,7 @@ func (r *templateV1BufferedRunsResolver) lookupTemplateV1(id [32]byte) (*templat
 	if r == nil {
 		return nil, errTemplateV1MissingResolver
 	}
-	key := string(id[:])
-	if tpl := r.cache[key]; tpl != nil {
+	if tpl := r.cache[id]; tpl != nil {
 		return tpl, nil
 	}
 	for i := len(r.runs) - 1; i >= 0; i-- {
@@ -411,9 +428,9 @@ func (r *templateV1BufferedRunsResolver) lookupTemplateV1(id [32]byte) (*templat
 			return nil, errors.New("collections: template-v1 template id mismatch")
 		}
 		if r.cache == nil {
-			r.cache = make(map[string]*templateV1Template)
+			r.cache = make(map[[32]byte]*templateV1Template)
 		}
-		r.cache[key] = record.tpl
+		r.cache[id] = record.tpl
 		return record.tpl, nil
 	}
 	if r.fallback != nil {
@@ -903,10 +920,11 @@ func parseTemplateV1Record(raw []byte) (templateV1Record, error) {
 		return templateV1Record{}, errors.New("collections: trailing template-v1 template bytes")
 	}
 	id := sha256.Sum256(raw)
+	rawCopy := bytes.Clone(raw)
 	return templateV1Record{
 		id:  id,
-		raw: bytes.Clone(raw),
-		tpl: &templateV1Template{id: id, fields: fields},
+		raw: rawCopy,
+		tpl: &templateV1Template{id: id, raw: rawCopy, fields: fields},
 	}, nil
 }
 

@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"errors"
+	"strconv"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -115,6 +116,9 @@ func TestCollectionIndexedAsyncPublishRootBaseMismatchRequeuesFIFOAndCounts(t *t
 	if work == nil {
 		t.Fatal("prepare left async publish returned nil work")
 	}
+	if got := work.batch.state; got != coalescedFlushBatchActive {
+		t.Fatalf("prepared batch state=%d want active", got)
+	}
 	defer collectionTestCloseIndexedFlushWork(work)
 
 	if _, err := left.InsertBatch(
@@ -152,8 +156,16 @@ func TestCollectionIndexedAsyncPublishRootBaseMismatchRequeuesFIFOAndCounts(t *t
 		t.Fatalf("flush right row: %v", err)
 	}
 
+	rootApplyCallsBeforeMismatch := orderedRootDeltaGroupRootApplyCallsForTest(t, d)
 	if err := left.publishPreparedIndexedFlush(work); !errors.Is(err, ErrConcurrentMutation) {
 		t.Fatalf("publish prepared left err=%v want ErrConcurrentMutation", err)
+	}
+	rootApplyCallsAfterMismatch := orderedRootDeltaGroupRootApplyCallsForTest(t, d)
+	if got := rootApplyCallsAfterMismatch - rootApplyCallsBeforeMismatch; got != 0 {
+		t.Fatalf("root apply calls during root-mismatched publish=%d want 0", got)
+	}
+	if got := work.batch.state; got != coalescedFlushBatchRequeued {
+		t.Fatalf("root-mismatched batch state=%d want requeued", got)
 	}
 
 	prefixA := indexedFlushRequeueEmailPrefix(t, "a@example.com")
@@ -190,4 +202,14 @@ func TestCollectionIndexedAsyncPublishRootBaseMismatchRequeuesFIFOAndCounts(t *t
 	if got := stats.IndexedFlushRequeuedUnits; got != 1 {
 		t.Fatalf("indexed flush requeued units=%d want 1", got)
 	}
+}
+
+func orderedRootDeltaGroupRootApplyCallsForTest(tb testing.TB, d *backenddb.DB) uint64 {
+	tb.Helper()
+	raw := d.Stats()["treedb.publish.ordered_root_delta_group.root_apply_calls_total"]
+	got, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		tb.Fatalf("parse root apply calls stat %q: %v", raw, err)
+	}
+	return got
 }

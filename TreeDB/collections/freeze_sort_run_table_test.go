@@ -136,6 +136,20 @@ func TestFreezeSortRunTableApplyStealEntryFunc(t *testing.T) {
 	}
 }
 
+func TestFreezeSortRunEntriesGrowGeometricallyForLargeAppends(t *testing.T) {
+	entries := make([]freezeSortRunEntry, freezeSortRunTableGeometricGrowthEntryThreshold)
+	previousLen := len(entries)
+	exactNeeded := len(entries) + previousLen
+
+	grown := growFreezeSortRunEntries(entries, previousLen)
+	if len(grown) != previousLen {
+		t.Fatalf("grown len=%d want %d", len(grown), previousLen)
+	}
+	if cap(grown) <= exactNeeded {
+		t.Fatalf("grown cap=%d want > exact needed %d", cap(grown), exactNeeded)
+	}
+}
+
 func requireFreezeSortRunIterator(t *testing.T, it interface {
 	Valid() bool
 	Next()

@@ -70,8 +70,26 @@ type phaseResult struct {
 	DriverAggregateMillis   float64            `json:"driver_aggregate_duration_ms,omitempty"`
 	DriverMeanLatencyMicros float64            `json:"driver_mean_latency_us,omitempty"`
 	LatencyMicros           latencySummary     `json:"latency_micros"`
+	TreeDBDrainMillis       float64            `json:"treedb_drain_ms,omitempty"`
+	TreeDBDrainMillisSet    bool               `json:"-"`
+	TreeDBDrainStatsDelta   map[string]string  `json:"treedb_drain_stats_delta,omitempty"`
 	TreeDBStatsDelta        map[string]string  `json:"treedb_stats_delta,omitempty"`
 	TreeDBMetrics           map[string]float64 `json:"treedb_metrics,omitempty"`
+}
+
+func (p *phaseResult) UnmarshalJSON(data []byte) error {
+	type phaseResultAlias phaseResult
+	var alias phaseResultAlias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+	*p = phaseResult(alias)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	_, p.TreeDBDrainMillisSet = raw["treedb_drain_ms"]
+	return nil
 }
 
 type latencySummary struct {
@@ -1069,8 +1087,42 @@ func renderWriterSweepCounterTable(b *strings.Builder, cells []cellComparison) {
 	}
 	b.WriteString("## 0-Index Writer Sweep Counters\n\n")
 	b.WriteString("These rows preserve TreeDB per-phase counter deltas for `concurrent_id_update_set_wN` phases. Values come from `phase.treedb_metrics` when present, so load counters and writer counters remain separate.\n\n")
-	b.WriteString("| docs | indexes | TreeDB config | MongoDB baseline config | writers | TreeDB ops/s | MongoDB ops/s | TreeDB p95 us | MongoDB p95 us | TreeDB driver calls | MongoDB driver calls | publish calls/doc | root apply calls/doc | roots/publish | root apply ns/doc | leaf-log loads/doc | leaf-log pages written/doc | leaf-log read bytes/doc | leaf-log write bytes/doc | indexed flush calls/doc | indexed flush units/batch | indexed flush docs/batch | indexed flush root-runs/doc | root-delta entries/doc | root-delta key bytes/doc | root-delta value bytes/doc | root-delta tombstones/doc | affected primary roots/doc | affected secondary roots/doc | primary root publishes/doc | primary root delta entries/doc | primary root delta bytes/doc | primary-only coalesced docs/publish | raw JSON |\n")
-	b.WriteString("| ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
+	headers := []string{
+		"docs", "indexes", "TreeDB config", "MongoDB baseline config", "writers",
+		"TreeDB ops/s", "MongoDB ops/s", "TreeDB p95 us", "MongoDB p95 us", "TreeDB driver calls", "MongoDB driver calls", "TreeDB drain ms",
+		"publish calls/doc", "root apply calls/doc", "roots/publish", "root apply ns/doc", "root apply excl. read-only prepare ns/doc",
+		"internal parallel merges/doc", "internal parallel children/merge", "internal parallel workers/merge", "internal parallel ops/merge",
+		"read-only prepare share %",
+		"read-only prepare calls/doc", "read-only prepare ns/doc", "read-only prepare ns/plan", "read-only prepare ops/doc", "read-only prepare leaf spans/plan",
+		"read-only worker targets/plan", "read-only worker ranges/plan", "read-only worker max ops/plan",
+		"leaf-log loads/doc", "leaf-log pages written/doc", "leaf-log read bytes/doc", "leaf-log write bytes/doc",
+		"indexed flush calls/doc", "indexed flush units/batch", "indexed flush docs/batch", "indexed flush root-runs/doc",
+		"coalesced batch units/batch", "coalesced batch docs/batch", "coalesced batch bytes/batch",
+		"root-delta entries/doc", "root-delta key bytes/doc", "root-delta value bytes/doc", "root-delta tombstones/doc",
+		"affected primary roots/doc", "affected secondary roots/doc",
+		"raw root-delta entries/doc", "raw root-delta bytes/doc", "raw root-delta tombstones/doc",
+		"raw primary entries/doc", "raw primary bytes/doc", "raw primary tombstones/doc",
+		"raw template entries/doc", "raw template bytes/doc", "raw template tombstones/doc",
+		"raw index-state entries/doc", "raw index-state bytes/doc", "raw index-state tombstones/doc",
+		"raw secondary entries/doc", "raw secondary bytes/doc", "raw secondary tombstones/doc",
+		"final root-delta entries/doc", "final root-delta bytes/doc", "final root-delta tombstones/doc",
+		"final primary entries/doc", "final primary bytes/doc", "final primary tombstones/doc",
+		"final template entries/doc", "final template bytes/doc", "final template tombstones/doc",
+		"final index-state entries/doc", "final index-state bytes/doc", "final index-state tombstones/doc",
+		"final secondary entries/doc", "final secondary bytes/doc", "final secondary tombstones/doc",
+		"squashed entries/doc", "net-zero root batches/doc", "net-zero root plans/doc", "skipped secondary roots/doc",
+		"primary root publishes/doc", "primary root delta entries/doc", "primary root delta bytes/doc", "primary-only coalesced docs/publish", "primary-only duplicate IDs coalesced/doc", "primary-only drains/doc", "primary-only drain docs/drain",
+		"raw JSON",
+	}
+	b.WriteString("| " + strings.Join(headers, " | ") + " |\n")
+	align := make([]string, len(headers))
+	for i := range align {
+		align[i] = "---:"
+	}
+	for _, idx := range []int{2, 3, len(headers) - 1} {
+		align[idx] = "---"
+	}
+	b.WriteString("| " + strings.Join(align, " | ") + " |\n")
 	for _, cmp := range rows {
 		writers, _ := concurrentUpdateWriters(cmp.Name)
 		cell := findCell(cells, cmp.Cell)
@@ -1086,10 +1138,25 @@ func renderWriterSweepCounterTable(b *strings.Builder, cells []cellComparison) {
 			formatPhaseLatency(cmp.HasMongo, cmp.MongoPhase.LatencyMicros.P95),
 			formatPhaseDriverCalls(cmp.HasTreeDB, cmp.TreeDBPhase.DriverCalls),
 			formatPhaseDriverCalls(cmp.HasMongo, cmp.MongoPhase.DriverCalls),
+			formatPhaseDrainMillis(cmp.HasTreeDB, cmp.TreeDBPhase),
 			formatPhaseMetric(cmp.TreeDBPhase, "publish_delta_group_calls/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "root_apply_calls/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "roots/publish"),
 			formatPhaseMetric(cmp.TreeDBPhase, "publish_delta_group_root_apply_ns/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "publish_delta_group_root_apply_excluding_read_only_prepare_ns/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "internal_parallel_merges/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "internal_parallel_children/merge"),
+			formatPhaseMetric(cmp.TreeDBPhase, "internal_parallel_workers/merge"),
+			formatPhaseMetric(cmp.TreeDBPhase, "internal_parallel_ops/merge"),
+			formatPhaseMetric(cmp.TreeDBPhase, "read_only_prepare_root_apply_share_pct"),
+			formatPhaseMetric(cmp.TreeDBPhase, "read_only_prepare_calls/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "read_only_prepare_ns/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "read_only_prepare_ns/plan"),
+			formatPhaseMetric(cmp.TreeDBPhase, "read_only_prepare_ops/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "read_only_prepare_leaf_spans/plan"),
+			formatPhaseMetric(cmp.TreeDBPhase, "read_only_prepare_worker_targets/plan"),
+			formatPhaseMetric(cmp.TreeDBPhase, "read_only_prepare_worker_ranges/plan"),
+			formatPhaseMetric(cmp.TreeDBPhase, "read_only_prepare_worker_max_ops/plan"),
 			formatPhaseMetric(cmp.TreeDBPhase, "leaf_log_node_loads/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "leaf_log_pages_written/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "leaf_log_read_bytes/doc"),
@@ -1098,16 +1165,56 @@ func renderWriterSweepCounterTable(b *strings.Builder, cells []cellComparison) {
 			formatPhaseMetric(cmp.TreeDBPhase, "indexed_flush_units/batch"),
 			formatPhaseMetric(cmp.TreeDBPhase, "indexed_flush_docs/batch"),
 			formatPhaseMetric(cmp.TreeDBPhase, "indexed_flush_root_runs/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "coalesced_batch_units/batch"),
+			formatPhaseMetric(cmp.TreeDBPhase, "coalesced_batch_docs/batch"),
+			formatPhaseMetric(cmp.TreeDBPhase, "coalesced_batch_bytes/batch"),
 			formatPhaseMetric(cmp.TreeDBPhase, "root_delta_plan_entries/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "root_delta_plan_key_bytes/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "root_delta_plan_value_bytes/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "root_delta_plan_tombstones/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "affected_primary_roots/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "affected_secondary_roots/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "raw_root_delta_entries/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "raw_root_delta_bytes/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "raw_root_delta_tombstones/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "raw_primary_root_delta_entries/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "raw_primary_root_delta_bytes/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "raw_primary_root_delta_tombstones/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "raw_template_root_delta_entries/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "raw_template_root_delta_bytes/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "raw_template_root_delta_tombstones/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "raw_index_state_root_delta_entries/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "raw_index_state_root_delta_bytes/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "raw_index_state_root_delta_tombstones/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "raw_secondary_root_delta_entries/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "raw_secondary_root_delta_bytes/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "raw_secondary_root_delta_tombstones/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "final_root_delta_entries/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "final_root_delta_bytes/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "final_root_delta_tombstones/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "final_primary_root_delta_entries/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "final_primary_root_delta_bytes/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "final_primary_root_delta_tombstones/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "final_template_root_delta_entries/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "final_template_root_delta_bytes/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "final_template_root_delta_tombstones/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "final_index_state_root_delta_entries/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "final_index_state_root_delta_bytes/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "final_index_state_root_delta_tombstones/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "final_secondary_root_delta_entries/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "final_secondary_root_delta_bytes/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "final_secondary_root_delta_tombstones/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "squashed_root_delta_entries/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "net_zero_root_batches/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "net_zero_root_plans/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "skipped_secondary_roots/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "primary_root_publishes/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "primary_root_delta_entries/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "primary_root_delta_bytes/doc"),
 			formatPhaseMetric(cmp.TreeDBPhase, "primary_only_coalesced_docs/publish"),
+			formatPhaseMetric(cmp.TreeDBPhase, "primary_only_duplicate_ids_coalesced/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "primary_only_drains/doc"),
+			formatPhaseMetric(cmp.TreeDBPhase, "primary_only_drain_docs/drain"),
 			"`" + cell.TreeDB.DisplayRawPath + "`",
 		}
 		b.WriteString("| " + strings.Join(row, " | ") + " |\n")
@@ -1357,6 +1464,62 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 		"mongo_physical_bytes",
 		"treedb_to_mongo_dbstats_total_ratio",
 		"treedb_to_mongo_physical_ratio",
+		"treedb_drain_ms",
+		"treedb_publish_delta_group_root_apply_ns_per_doc",
+		"treedb_publish_delta_group_root_apply_excluding_read_only_prepare_ns_per_doc",
+		"treedb_internal_parallel_merges_per_doc",
+		"treedb_internal_parallel_children_per_merge",
+		"treedb_internal_parallel_workers_per_merge",
+		"treedb_internal_parallel_ops_per_merge",
+		"treedb_read_only_prepare_root_apply_share_pct",
+		"treedb_read_only_prepare_calls_per_doc",
+		"treedb_read_only_prepare_ns_per_doc",
+		"treedb_read_only_prepare_ns_per_plan",
+		"treedb_read_only_prepare_ops_per_doc",
+		"treedb_read_only_prepare_leaf_spans_per_plan",
+		"treedb_read_only_prepare_worker_targets_per_plan",
+		"treedb_read_only_prepare_worker_ranges_per_plan",
+		"treedb_read_only_prepare_worker_max_ops_per_plan",
+		"treedb_coalesced_batch_units_per_batch",
+		"treedb_coalesced_batch_docs_per_batch",
+		"treedb_coalesced_batch_bytes_per_batch",
+		"treedb_raw_root_delta_entries_per_doc",
+		"treedb_raw_root_delta_bytes_per_doc",
+		"treedb_raw_root_delta_tombstones_per_doc",
+		"treedb_raw_primary_root_delta_entries_per_doc",
+		"treedb_raw_primary_root_delta_bytes_per_doc",
+		"treedb_raw_primary_root_delta_tombstones_per_doc",
+		"treedb_raw_template_root_delta_entries_per_doc",
+		"treedb_raw_template_root_delta_bytes_per_doc",
+		"treedb_raw_template_root_delta_tombstones_per_doc",
+		"treedb_raw_index_state_root_delta_entries_per_doc",
+		"treedb_raw_index_state_root_delta_bytes_per_doc",
+		"treedb_raw_index_state_root_delta_tombstones_per_doc",
+		"treedb_raw_secondary_root_delta_entries_per_doc",
+		"treedb_raw_secondary_root_delta_bytes_per_doc",
+		"treedb_raw_secondary_root_delta_tombstones_per_doc",
+		"treedb_final_root_delta_entries_per_doc",
+		"treedb_final_root_delta_bytes_per_doc",
+		"treedb_final_root_delta_tombstones_per_doc",
+		"treedb_final_primary_root_delta_entries_per_doc",
+		"treedb_final_primary_root_delta_bytes_per_doc",
+		"treedb_final_primary_root_delta_tombstones_per_doc",
+		"treedb_final_template_root_delta_entries_per_doc",
+		"treedb_final_template_root_delta_bytes_per_doc",
+		"treedb_final_template_root_delta_tombstones_per_doc",
+		"treedb_final_index_state_root_delta_entries_per_doc",
+		"treedb_final_index_state_root_delta_bytes_per_doc",
+		"treedb_final_index_state_root_delta_tombstones_per_doc",
+		"treedb_final_secondary_root_delta_entries_per_doc",
+		"treedb_final_secondary_root_delta_bytes_per_doc",
+		"treedb_final_secondary_root_delta_tombstones_per_doc",
+		"treedb_squashed_root_delta_entries_per_doc",
+		"treedb_net_zero_root_batches_per_doc",
+		"treedb_net_zero_root_plans_per_doc",
+		"treedb_skipped_secondary_roots_per_doc",
+		"treedb_primary_only_duplicate_ids_coalesced_per_doc",
+		"treedb_primary_only_drains_per_doc",
+		"treedb_primary_only_drain_docs_per_drain",
 	}
 	if err := writer.Write(header); err != nil {
 		return err
@@ -1404,6 +1567,62 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 			formatRawInt(hasMongo, mongoPhysical),
 			formatRawMeasuredRatio(treeOK && mongoTotalOK, treeBytes, mongoTotal),
 			formatRawRatio(safeRatio(float64(treePhysical), float64(mongoPhysical))),
+			formatRawDrainMillis(cmp.HasTreeDB, cmp.TreeDBPhase),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "publish_delta_group_root_apply_ns/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "publish_delta_group_root_apply_excluding_read_only_prepare_ns/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "internal_parallel_merges/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "internal_parallel_children/merge"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "internal_parallel_workers/merge"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "internal_parallel_ops/merge"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "read_only_prepare_root_apply_share_pct"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "read_only_prepare_calls/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "read_only_prepare_ns/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "read_only_prepare_ns/plan"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "read_only_prepare_ops/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "read_only_prepare_leaf_spans/plan"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "read_only_prepare_worker_targets/plan"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "read_only_prepare_worker_ranges/plan"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "read_only_prepare_worker_max_ops/plan"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "coalesced_batch_units/batch"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "coalesced_batch_docs/batch"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "coalesced_batch_bytes/batch"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "raw_root_delta_entries/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "raw_root_delta_bytes/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "raw_root_delta_tombstones/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "raw_primary_root_delta_entries/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "raw_primary_root_delta_bytes/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "raw_primary_root_delta_tombstones/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "raw_template_root_delta_entries/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "raw_template_root_delta_bytes/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "raw_template_root_delta_tombstones/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "raw_index_state_root_delta_entries/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "raw_index_state_root_delta_bytes/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "raw_index_state_root_delta_tombstones/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "raw_secondary_root_delta_entries/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "raw_secondary_root_delta_bytes/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "raw_secondary_root_delta_tombstones/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "final_root_delta_entries/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "final_root_delta_bytes/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "final_root_delta_tombstones/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "final_primary_root_delta_entries/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "final_primary_root_delta_bytes/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "final_primary_root_delta_tombstones/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "final_template_root_delta_entries/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "final_template_root_delta_bytes/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "final_template_root_delta_tombstones/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "final_index_state_root_delta_entries/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "final_index_state_root_delta_bytes/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "final_index_state_root_delta_tombstones/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "final_secondary_root_delta_entries/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "final_secondary_root_delta_bytes/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "final_secondary_root_delta_tombstones/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "squashed_root_delta_entries/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "net_zero_root_batches/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "net_zero_root_plans/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "skipped_secondary_roots/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "primary_only_duplicate_ids_coalesced/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "primary_only_drains/doc"),
+			formatRawPhaseMetric(cmp.TreeDBPhase, "primary_only_drain_docs/drain"),
 		}
 		if err := writer.Write(row); err != nil {
 			return err
@@ -1603,6 +1822,13 @@ func formatPhaseDriverCalls(ok bool, value int) string {
 	return fmt.Sprintf("%d", value)
 }
 
+func formatPhaseDrainMillis(ok bool, phase phaseResult) string {
+	if !ok || !phaseHasDrainMillis(phase) {
+		return "n/a"
+	}
+	return formatNumber(phase.TreeDBDrainMillis)
+}
+
 func formatPhaseMetric(phase phaseResult, name string) string {
 	value, ok := phase.TreeDBMetrics[name]
 	if !ok || math.IsNaN(value) || math.IsInf(value, 0) {
@@ -1613,6 +1839,25 @@ func formatPhaseMetric(phase phaseResult, name string) string {
 
 func formatRawFloat(ok bool, value float64) string {
 	if !ok {
+		return ""
+	}
+	return strconv.FormatFloat(value, 'f', 6, 64)
+}
+
+func formatRawDrainMillis(ok bool, phase phaseResult) string {
+	if !ok || !phaseHasDrainMillis(phase) {
+		return ""
+	}
+	return strconv.FormatFloat(phase.TreeDBDrainMillis, 'f', 6, 64)
+}
+
+func phaseHasDrainMillis(phase phaseResult) bool {
+	return phase.TreeDBDrainMillisSet || phase.TreeDBDrainMillis != 0
+}
+
+func formatRawPhaseMetric(phase phaseResult, name string) string {
+	value, ok := phase.TreeDBMetrics[name]
+	if !ok || math.IsNaN(value) || math.IsInf(value, 0) {
 		return ""
 	}
 	return strconv.FormatFloat(value, 'f', 6, 64)

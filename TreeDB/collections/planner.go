@@ -97,7 +97,8 @@ type insertBatchPlan struct {
 
 type insertBatchPlanStats struct {
 	CollectionInsertStats
-	payloadBuilds int
+	rootDeltaStats collectionRootDeltaPlanStats
+	payloadBuilds  int
 }
 
 type collectionRootRun struct {
@@ -671,12 +672,14 @@ func buildUniqueProbeRunsFromSorted(candidates []uniqueProbeCandidate, includeIn
 
 func (p insertBatchPlanner) emitPrimaryRun(plan *insertBatchPlan, items []insertBatchItem, order []int) error {
 	table := newCollectionRunTable(len(items))
+	kind := plan.stats.rootDeltaStats.addRoot(p.collection, p.primaryRoot)
 	if err := applyCollectionRunEntries(table, len(items), func(i int) (key, value []byte, err error) {
 		idx := orderedItemIndex(order, i)
 		value, err = p.buildPrimaryVal(items[idx].id, items[idx].document)
 		if err != nil {
 			return nil, nil, err
 		}
+		plan.stats.rootDeltaStats.addEntry(kind, uint64(len(items[idx].id)), uint64(len(value)), false)
 		plan.stats.payloadBuilds++
 		return items[idx].id, value, nil
 	}); err != nil {
@@ -702,11 +705,13 @@ func (p insertBatchPlanner) emitTemplateRun(plan *insertBatchPlan, records []tem
 		return err
 	}
 	table := newCollectionRunTable(len(records))
+	kind := plan.stats.rootDeltaStats.addRoot(p.collection, p.templateRoot)
 	if err := applyCollectionRunEntries(table, len(records), func(i int) (key, value []byte, err error) {
 		raw := records[i].raw
 		if p.cloneTemplateRunValues {
 			raw = bytes.Clone(raw)
 		}
+		plan.stats.rootDeltaStats.addEntry(kind, uint64(len(records[i].id)), uint64(len(raw)), false)
 		return records[i].id[:], raw, nil
 	}); err != nil {
 		return err
@@ -778,9 +783,11 @@ func (p insertBatchPlanner) emitIndexStateRun(plan *insertBatchPlan, items []ins
 	}
 	table := newCollectionRunTable(len(items))
 	valueArena := make([]byte, 0, valueBytes)
+	kind := plan.stats.rootDeltaStats.addRoot(p.collection, p.indexStateRoot)
 	if err := applyCollectionRunEntries(table, len(items), func(i int) (key, value []byte, err error) {
 		idx := orderedItemIndex(order, i)
 		valueArena, value = appendRuntimeOrderedDocumentIndexState(valueArena, items[idx].state, runtimes, counts[i])
+		plan.stats.rootDeltaStats.addEntry(kind, uint64(len(items[idx].id)), uint64(len(value)), false)
 		return items[idx].id, value, nil
 	}); err != nil {
 		return err
@@ -822,6 +829,7 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 			continue
 		}
 		if alreadySorted {
+			rootName := p.collection + "/index/" + runtime.def.name
 			table := newCollectionRunTable(entryCount)
 			keyArena := make([]byte, 0, keyBytes)
 			itemPos := 0
@@ -845,7 +853,7 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 			}
 			table.Freeze()
 			plan.runs = append(plan.runs, collectionRootRun{
-				name:           p.collection + "/index/" + runtime.def.name,
+				name:           rootName,
 				kind:           collectionRootSecondary,
 				indexName:      runtime.def.name,
 				indexValueType: runtime.def.valueType,
@@ -857,14 +865,17 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 			plan.stats.SecondaryEntries += entryCount
 			plan.stats.SecondaryKeyBytes += keyBytes
 			plan.stats.SecondarySortedRuns++
+			kind := plan.stats.rootDeltaStats.addRoot(p.collection, rootName)
+			plan.stats.rootDeltaStats.addEntries(kind, uint64(entryCount), uint64(keyBytes), 0, 0)
 			continue
 		}
 
 		if table, ok, err := p.emitGroupedSecondaryRunTable(items, runtimeIdx, runtime.def.name, documentIDOrder, entryCount, keyBytes); err != nil {
 			return err
 		} else if ok {
+			rootName := p.collection + "/index/" + runtime.def.name
 			plan.runs = append(plan.runs, collectionRootRun{
-				name:           p.collection + "/index/" + runtime.def.name,
+				name:           rootName,
 				kind:           collectionRootSecondary,
 				indexName:      runtime.def.name,
 				indexValueType: runtime.def.valueType,
@@ -876,6 +887,8 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 			plan.stats.SecondaryEntries += entryCount
 			plan.stats.SecondaryKeyBytes += keyBytes
 			plan.stats.SecondaryUnsortedRuns++
+			kind := plan.stats.rootDeltaStats.addRoot(p.collection, rootName)
+			plan.stats.rootDeltaStats.addEntries(kind, uint64(entryCount), uint64(keyBytes), 0, 0)
 			continue
 		}
 
@@ -905,8 +918,9 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 			return err
 		}
 		table.Freeze()
+		rootName := p.collection + "/index/" + runtime.def.name
 		plan.runs = append(plan.runs, collectionRootRun{
-			name:           p.collection + "/index/" + runtime.def.name,
+			name:           rootName,
 			kind:           collectionRootSecondary,
 			indexName:      runtime.def.name,
 			indexValueType: runtime.def.valueType,
@@ -918,6 +932,8 @@ func (p insertBatchPlanner) emitSecondaryRuns(plan *insertBatchPlan, items []ins
 		plan.stats.SecondaryEntries += entryCount
 		plan.stats.SecondaryKeyBytes += keyBytes
 		plan.stats.SecondaryUnsortedRuns++
+		kind := plan.stats.rootDeltaStats.addRoot(p.collection, rootName)
+		plan.stats.rootDeltaStats.addEntries(kind, uint64(entryCount), uint64(keyBytes), 0, 0)
 	}
 	return nil
 }

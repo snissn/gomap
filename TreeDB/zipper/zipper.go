@@ -10,6 +10,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -53,6 +54,12 @@ type outerLeafBuildPage struct {
 var outerLeafBuildPagePool = sync.Pool{
 	New: func() any {
 		return &outerLeafBuildPage{}
+	},
+}
+
+var clonedZipperApplyScratchPool = sync.Pool{
+	New: func() any {
+		return newMergeScratch()
 	},
 }
 
@@ -110,6 +117,8 @@ type Zipper struct {
 
 	scratchMu    sync.Mutex
 	applyScratch *mergeScratch
+
+	pooledApplyScratch bool
 }
 
 type ParallelMergePressureLevel uint8
@@ -139,7 +148,10 @@ const (
 	mergeNodeKeyScratchMaxCap = 1 << 20
 
 	mergeInternalMinParallelChildren         = 8
-	mergeInternalMinParallelOps              = 4096
+	mergeInternalMinParallelOps              = 1024
+	mergeInternalMaintenanceMinParallelOps   = 4096
+	mergeInternalOuterLeafLogMinParallelOps  = 4096
+	mergeInternalMaxParallelWorkers          = 4
 	mergeInternalHighPressureMinChildren     = 16
 	mergeInternalHighPressureMinOps          = 16 * 1024
 	mergeInternalCriticalPressureMinChildren = 32
@@ -457,9 +469,20 @@ type childWork struct {
 	childStat adaptive.Metrics
 }
 
-const maxChildWorkCap = 1 << 14
+type childWorkBuffer struct {
+	items []childWork
+}
 
-var childWorkPool sync.Pool
+const (
+	maxChildWorkCap            = 1 << 14
+	maxChildWorkRetiredKeepCap = 8
+)
+
+var childWorkPool = sync.Pool{
+	New: func() any {
+		return &childWorkBuffer{}
+	},
+}
 
 const maxInternalEntryCap = 1 << 15
 
@@ -543,30 +566,62 @@ func (b *maintenanceBudget) take(n int64) bool {
 	}
 }
 
-func getChildWorkSlice(capacity int) []childWork {
+func getChildWorkBuffer(capacity int) *childWorkBuffer {
 	if capacity < 0 {
 		capacity = 0
 	}
 	if capacity > maxChildWorkCap {
-		return make([]childWork, 0, capacity)
+		return &childWorkBuffer{items: make([]childWork, 0, capacity)}
 	}
-	if v := childWorkPool.Get(); v != nil {
-		s := v.([]childWork)
-		if cap(s) >= capacity {
-			return s[:0]
-		}
+	buf, _ := childWorkPool.Get().(*childWorkBuffer)
+	if buf == nil {
+		buf = &childWorkBuffer{}
 	}
-	return make([]childWork, 0, capacity)
+	if cap(buf.items) >= capacity {
+		buf.items = buf.items[:0]
+		return buf
+	}
+	buf.items = make([]childWork, 0, capacity)
+	return buf
 }
 
-func putChildWorkSlice(children []childWork) {
+func putChildWorkBuffer(buf *childWorkBuffer) {
+	if buf == nil {
+		return
+	}
+	children := buf.items
 	if cap(children) > maxChildWorkCap {
+		buf.items = nil
 		return
 	}
 	for i := range children {
+		retired := children[i].retired
 		children[i] = childWork{}
+		if cap(retired) <= maxChildWorkRetiredKeepCap {
+			children[i].retired = retired[:0]
+		}
 	}
-	childWorkPool.Put(children[:0])
+	buf.items = children[:0]
+	childWorkPool.Put(buf)
+}
+
+func appendChildRetiredPages(dst *[]uint64, children []childWork, total int) {
+	if dst == nil {
+		return
+	}
+	if total == 0 {
+		return
+	}
+	retired := *dst
+	if cap(retired)-len(retired) < total {
+		grown := make([]uint64, len(retired), len(retired)+total)
+		copy(grown, retired)
+		retired = grown
+	}
+	for i := range children {
+		retired = append(retired, children[i].retired...)
+	}
+	*dst = retired
 }
 
 func getInternalEntrySlice(capacity int) []internalEntry {
@@ -606,6 +661,14 @@ func (z *Zipper) acquireApplyScratch() *mergeScratch {
 	if z == nil {
 		return newMergeScratch()
 	}
+	if z.pooledApplyScratch {
+		s, _ := clonedZipperApplyScratchPool.Get().(*mergeScratch)
+		if s == nil {
+			s = newMergeScratch()
+		}
+		s.reset()
+		return s
+	}
 	z.scratchMu.Lock()
 	s := z.applyScratch
 	z.applyScratch = nil
@@ -622,6 +685,10 @@ func (z *Zipper) releaseApplyScratch(s *mergeScratch) {
 		return
 	}
 	s.reset()
+	if z.pooledApplyScratch {
+		clonedZipperApplyScratchPool.Put(s)
+		return
+	}
 	z.scratchMu.Lock()
 	if z.applyScratch == nil {
 		z.applyScratch = s
@@ -650,6 +717,7 @@ func (z *Zipper) CloneWithAllocator(a PageAllocator) *Zipper {
 		adaptiveLeafEncoding:      z.adaptiveLeafEncoding,
 		maintenanceOpsPerCoalesce: z.maintenanceOpsPerCoalesce,
 		parallelMergePressure:     z.parallelMergePressure,
+		pooledApplyScratch:        true,
 	}
 }
 
@@ -729,7 +797,7 @@ func internalMergeParallelThresholds(maintenance bool, pressure ParallelMergePre
 	minChildren = mergeInternalMinParallelChildren
 	minOps = mergeInternalMinParallelOps
 	if maintenance {
-		return minChildren, minOps
+		return minChildren, mergeInternalMaintenanceMinParallelOps
 	}
 	switch pressure {
 	case ParallelMergePressureCritical:
@@ -990,6 +1058,22 @@ func recordZipperInternalLeafLogRefCopy(metrics *adaptive.Metrics) {
 	metrics.ZipperInternalLeafLogRefCopies++
 }
 
+func recordZipperInternalParallelMerge(metrics *adaptive.Metrics, activeChildren, workers, ops int) {
+	if metrics == nil {
+		return
+	}
+	metrics.ZipperInternalParallelMerges++
+	if activeChildren > 0 {
+		metrics.ZipperInternalParallelChildren += activeChildren
+	}
+	if workers > 0 {
+		metrics.ZipperInternalParallelWorkers += workers
+	}
+	if ops > 0 {
+		metrics.ZipperInternalParallelOps += ops
+	}
+}
+
 func validateLoadedLeafLogNode(data []byte) (node.Node, error) {
 	if len(data) != page.PageSize {
 		return node.Node{}, errors.New("zipper: leaf page has invalid size")
@@ -1009,8 +1093,534 @@ func validateLoadedLeafLogNodeFrom(source string, data []byte) (node.Node, error
 	return n, nil
 }
 
+// ApplyOptions configures a root apply attempt.
+type ApplyOptions struct {
+	// PrepareReadOnly asks ApplyWithOptions to run the read-only preparation
+	// pass before applying the delta. This is opt-in because it traverses the
+	// existing root in addition to the apply pass. It does not change apply
+	// output, root installation, or prepared-output ownership.
+	PrepareReadOnly bool
+
+	// ReadOnlyPrepare reuses buffers for the optional read-only preparation
+	// pass. It is ignored unless PrepareReadOnly is true.
+	ReadOnlyPrepare ReadOnlyPrepareOptions
+}
+
+// ApplyResult is the complete in-memory result of a root apply attempt. The
+// retired page list is pending until the caller's install guard succeeds and
+// the new root is committed.
+type ApplyResult struct {
+	RootID              uint64
+	PendingRetiredPages []uint64
+	Metrics             adaptive.Metrics
+
+	// ReadOnlyPrepare is populated only when ApplyOptions.PrepareReadOnly is
+	// true. It is planning metadata only; it owns no pager or leaf-log output.
+	ReadOnlyPrepare ReadOnlyPrepareResult
+	// ReadOnlyPrepareNs is the time spent in the optional read-only preparation
+	// pass. It is zero when ApplyOptions.PrepareReadOnly is false.
+	ReadOnlyPrepareNs uint64
+}
+
+// ReadOnlyPrepareOptions configures a read-only root preparation pass. The zero
+// value is the normal caller-constructed form. Non-zero buffer reuse options are
+// produced by ReadOnlyPrepareResult.ReuseOptions.
+type ReadOnlyPrepareOptions struct {
+	leafSpans []ReadOnlyLeafSpan
+	keyArena  []byte
+}
+
+// ReadOnlyLeafSpan describes one existing leaf range touched by a sorted delta.
+// It contains only in-memory planning metadata; it does not own prepared pager
+// pages, leaf-log records, or pending retired pages.
+type ReadOnlyLeafSpan struct {
+	// Ref identifies the existing leaf that owns this span. When ColdBuild is
+	// true there is no existing leaf; Ref is the zero ChildRef and is not
+	// actionable.
+	Ref page.ChildRef
+
+	// LowKey is the inclusive lower bound for the leaf span. HighKey is the
+	// exclusive upper bound. A nil bound is open-ended. Non-nil bound slices and
+	// op-key slices are owned by ReadOnlyPrepareResult until ReuseOptions is used.
+	LowKey  []byte
+	HighKey []byte
+
+	FirstOpKey []byte
+	LastOpKey  []byte
+	OpCount    int
+}
+
+// ReadOnlyLeafSpanSummary is a compact, allocation-free summary of a read-only
+// leaf-span plan. It is intended for callers and benchmarks that need to
+// report span distribution without requiring each caller to walk or retain the
+// span slice.
+type ReadOnlyLeafSpanSummary struct {
+	Ops            int
+	Spans          int
+	ExactLeafSpans bool
+	ColdBuild      bool
+	Maintenance    bool
+
+	// MinSpanOps and MaxSpanOps are zero when Spans is zero.
+	MinSpanOps    int
+	MaxSpanOps    int
+	SingleOpSpans int
+	OpenLowSpans  int
+	OpenHighSpans int
+}
+
+// ReadOnlyLeafSpanWorkerRange assigns a contiguous range of read-only leaf
+// spans to one future worker. The range is a planning primitive only; it does
+// not imply parallel execution or prepared output ownership.
+type ReadOnlyLeafSpanWorkerRange struct {
+	FirstSpan int
+	SpanCount int
+	Ops       int
+}
+
+// ReadOnlyLeafSpanWorkerRangeSummary is an allocation-free aggregate of the
+// deterministic worker ranges derived from a read-only leaf-span plan.
+type ReadOnlyLeafSpanWorkerRangeSummary struct {
+	TargetWorkers    int
+	Ranges           int
+	Ops              int
+	MinRangeOps      int
+	MaxRangeOps      int
+	SingleSpanRanges int
+}
+
+// ReadOnlyPrepareResult is the read-only portion of a root apply attempt. It is
+// safe to discard on root mismatch because it has not allocated or persisted
+// output pages.
+type ReadOnlyPrepareResult struct {
+	RootID      uint64
+	Ops         int
+	ColdBuild   bool
+	Maintenance bool
+
+	// ExactLeafSpans is true when LeafSpans fully describe the existing leaves
+	// touched by the delta. Delete-containing maintenance can merge/rebalance
+	// adjacent leaves, so its direct key spans are useful planning hints but are
+	// not complete prepared-output ownership.
+	ExactLeafSpans bool
+
+	LeafSpans []ReadOnlyLeafSpan
+	Metrics   adaptive.Metrics
+
+	keyArena []byte
+}
+
+const (
+	readOnlyPrepareResultReuseLeafSpanKeepCap = 4096
+	readOnlyPrepareResultReuseKeyArenaKeepCap = 1 << 20
+)
+
+// LeafSpanSummary returns an allocation-free aggregate view of r's leaf spans.
+func (r ReadOnlyPrepareResult) LeafSpanSummary() ReadOnlyLeafSpanSummary {
+	summary := ReadOnlyLeafSpanSummary{
+		Ops:            r.Ops,
+		Spans:          len(r.LeafSpans),
+		ExactLeafSpans: r.ExactLeafSpans,
+		ColdBuild:      r.ColdBuild,
+		Maintenance:    r.Maintenance,
+	}
+	for i := range r.LeafSpans {
+		span := &r.LeafSpans[i]
+		if i == 0 || span.OpCount < summary.MinSpanOps {
+			summary.MinSpanOps = span.OpCount
+		}
+		if i == 0 || span.OpCount > summary.MaxSpanOps {
+			summary.MaxSpanOps = span.OpCount
+		}
+		if span.OpCount == 1 {
+			summary.SingleOpSpans++
+		}
+		if span.LowKey == nil {
+			summary.OpenLowSpans++
+		}
+		if span.HighKey == nil {
+			summary.OpenHighSpans++
+		}
+	}
+	return summary
+}
+
+// AppendLeafSpanWorkerRanges appends deterministic contiguous span partitions
+// to dst. It creates at most workers ranges and never creates empty ranges. The
+// returned ranges preserve span order and are suitable for future parallel
+// preparation steps that still need serial output append and assembly order.
+// No-op inputs return dst unchanged.
+func (r ReadOnlyPrepareResult) AppendLeafSpanWorkerRanges(dst []ReadOnlyLeafSpanWorkerRange, workers int) []ReadOnlyLeafSpanWorkerRange {
+	if workers <= 0 || len(r.LeafSpans) == 0 {
+		return dst
+	}
+	if workers > len(r.LeafSpans) {
+		workers = len(r.LeafSpans)
+	}
+	totalOps := int64(r.Ops)
+
+	spanIdx := 0
+	cumulativeOps := int64(0)
+	for rangeIdx := 0; rangeIdx < workers && spanIdx < len(r.LeafSpans); rangeIdx++ {
+		firstSpan := spanIdx
+		rangeOps := 0
+		remainingRanges := workers - rangeIdx - 1
+		lastAllowedSpan := len(r.LeafSpans) - remainingRanges
+		targetCumulativeOps := readOnlyPrepareCeilDiv64(totalOps*int64(rangeIdx+1), int64(workers))
+
+		for spanIdx < lastAllowedSpan {
+			spanOps := r.LeafSpans[spanIdx].OpCount
+			rangeOps += spanOps
+			cumulativeOps += int64(spanOps)
+			spanIdx++
+			if remainingRanges > 0 && cumulativeOps >= targetCumulativeOps {
+				break
+			}
+		}
+		dst = append(dst, ReadOnlyLeafSpanWorkerRange{
+			FirstSpan: firstSpan,
+			SpanCount: spanIdx - firstSpan,
+			Ops:       rangeOps,
+		})
+	}
+	return dst
+}
+
+// LeafSpanWorkerRangeSummary returns an aggregate of the deterministic worker
+// ranges for workers without retaining the ranges themselves.
+func (r ReadOnlyPrepareResult) LeafSpanWorkerRangeSummary(workers int) ReadOnlyLeafSpanWorkerRangeSummary {
+	summary := ReadOnlyLeafSpanWorkerRangeSummary{TargetWorkers: workers}
+	if workers <= 0 || len(r.LeafSpans) == 0 {
+		return summary
+	}
+	if workers > len(r.LeafSpans) {
+		workers = len(r.LeafSpans)
+	}
+	summary.Ops = r.Ops
+	totalOps := int64(r.Ops)
+
+	spanIdx := 0
+	cumulativeOps := int64(0)
+	for rangeIdx := 0; rangeIdx < workers && spanIdx < len(r.LeafSpans); rangeIdx++ {
+		firstSpan := spanIdx
+		rangeOps := 0
+		remainingRanges := workers - rangeIdx - 1
+		lastAllowedSpan := len(r.LeafSpans) - remainingRanges
+		targetCumulativeOps := readOnlyPrepareCeilDiv64(totalOps*int64(rangeIdx+1), int64(workers))
+
+		for spanIdx < lastAllowedSpan {
+			spanOps := r.LeafSpans[spanIdx].OpCount
+			rangeOps += spanOps
+			cumulativeOps += int64(spanOps)
+			spanIdx++
+			if remainingRanges > 0 && cumulativeOps >= targetCumulativeOps {
+				break
+			}
+		}
+		summary.Ranges++
+		if summary.Ranges == 1 || rangeOps < summary.MinRangeOps {
+			summary.MinRangeOps = rangeOps
+		}
+		if summary.Ranges == 1 || rangeOps > summary.MaxRangeOps {
+			summary.MaxRangeOps = rangeOps
+		}
+		if spanIdx-firstSpan == 1 {
+			summary.SingleSpanRanges++
+		}
+	}
+	return summary
+}
+
+func readOnlyPrepareCeilDiv64(n, d int64) int64 {
+	return (n + d - 1) / d
+}
+
+// ReuseOptions returns buffers from r for a later read-only preparation pass.
+// The returned options must not be used while r's LeafSpans are still needed.
+func (r ReadOnlyPrepareResult) ReuseOptions() ReadOnlyPrepareOptions {
+	return ReadOnlyPrepareOptions{
+		leafSpans: r.LeafSpans[:0],
+		keyArena:  r.keyArena[:0],
+	}
+}
+
+// ResetForReuse clears result metadata while retaining bounded reusable
+// leaf-span and key-arena buffers for a later ReuseOptions call. Oversized
+// buffers are dropped so temporary prepare pools do not retain one-off large
+// batch state indefinitely.
+func (r *ReadOnlyPrepareResult) ResetForReuse() {
+	if r == nil {
+		return
+	}
+	leafSpans := r.LeafSpans
+	keyArena := r.keyArena
+	*r = ReadOnlyPrepareResult{}
+	if cap(leafSpans) <= readOnlyPrepareResultReuseLeafSpanKeepCap {
+		r.LeafSpans = leafSpans[:0]
+	}
+	if cap(keyArena) <= readOnlyPrepareResultReuseKeyArenaKeepCap {
+		r.keyArena = keyArena[:0]
+	}
+}
+
+// ValidateLeafSpans checks the deterministic planning invariants for r's
+// read-only leaf-span view. It is intended for tests and future prepared-output
+// callers that want to assert a plan before using it; PrepareReadOnly itself
+// does not call this helper on the hot path.
+func (r ReadOnlyPrepareResult) ValidateLeafSpans() error {
+	if r.Ops < 0 {
+		return fmt.Errorf("zipper: read-only prepare has negative op count %d", r.Ops)
+	}
+	if r.Ops == 0 {
+		if len(r.LeafSpans) != 0 {
+			return fmt.Errorf("zipper: read-only prepare has %d spans for zero ops", len(r.LeafSpans))
+		}
+		return nil
+	}
+	if len(r.LeafSpans) == 0 {
+		return fmt.Errorf("zipper: read-only prepare has %d ops but no leaf spans", r.Ops)
+	}
+	if r.ColdBuild && len(r.LeafSpans) != 1 {
+		return fmt.Errorf("zipper: cold read-only prepare has %d leaf spans, want 1", len(r.LeafSpans))
+	}
+	totalOps := 0
+	var prevLastOp []byte
+	var prevHigh []byte
+	for i, span := range r.LeafSpans {
+		if span.OpCount <= 0 {
+			return readOnlyPrepareSpanError(i, "has non-positive op count %d", span.OpCount)
+		}
+		if len(span.FirstOpKey) == 0 {
+			return readOnlyPrepareSpanError(i, "has empty first op key")
+		}
+		if len(span.LastOpKey) == 0 {
+			return readOnlyPrepareSpanError(i, "has empty last op key")
+		}
+		if bytes.Compare(span.FirstOpKey, span.LastOpKey) > 0 {
+			return readOnlyPrepareSpanError(i, "first op key %s is after last op key %s", readOnlyPrepareKeyForError(span.FirstOpKey), readOnlyPrepareKeyForError(span.LastOpKey))
+		}
+		if prevLastOp != nil && bytes.Compare(prevLastOp, span.FirstOpKey) >= 0 {
+			return readOnlyPrepareSpanError(i, "first op key %s is not after previous last op key %s", readOnlyPrepareKeyForError(span.FirstOpKey), readOnlyPrepareKeyForError(prevLastOp))
+		}
+		if span.LowKey != nil && span.HighKey != nil && bytes.Compare(span.LowKey, span.HighKey) >= 0 {
+			return readOnlyPrepareSpanError(i, "low key %s is not before high key %s", readOnlyPrepareKeyForError(span.LowKey), readOnlyPrepareKeyForError(span.HighKey))
+		}
+		if i > 0 && span.LowKey == nil {
+			return readOnlyPrepareSpanError(i, "has open low key after earlier span")
+		}
+		if i > 0 && prevHigh == nil {
+			return readOnlyPrepareSpanError(i, "follows previous span with open high key")
+		}
+		if i > 0 && bytes.Compare(span.LowKey, prevHigh) < 0 {
+			return readOnlyPrepareSpanError(i, "low key %s is before previous high key %s", readOnlyPrepareKeyForError(span.LowKey), readOnlyPrepareKeyForError(prevHigh))
+		}
+		if span.LowKey != nil && bytes.Compare(span.FirstOpKey, span.LowKey) < 0 {
+			return readOnlyPrepareSpanError(i, "first op key %s is before low key %s", readOnlyPrepareKeyForError(span.FirstOpKey), readOnlyPrepareKeyForError(span.LowKey))
+		}
+		if span.HighKey != nil && bytes.Compare(span.LastOpKey, span.HighKey) >= 0 {
+			return readOnlyPrepareSpanError(i, "last op key %s is not before high key %s", readOnlyPrepareKeyForError(span.LastOpKey), readOnlyPrepareKeyForError(span.HighKey))
+		}
+		totalOps += span.OpCount
+		prevLastOp = span.LastOpKey
+		prevHigh = span.HighKey
+	}
+	if totalOps != r.Ops {
+		return fmt.Errorf("zipper: read-only leaf spans cover %d ops, want %d", totalOps, r.Ops)
+	}
+	return nil
+}
+
+func readOnlyPrepareSpanError(spanIdx int, format string, args ...any) error {
+	args = append([]any{spanIdx}, args...)
+	return fmt.Errorf("zipper: read-only leaf span %d "+format, args...)
+}
+
+func readOnlyPrepareKeyForError(key []byte) string {
+	const maxPrefix = 8
+	if key == nil {
+		return "nil"
+	}
+	if len(key) <= maxPrefix {
+		return fmt.Sprintf("len=%d hex=%x", len(key), key)
+	}
+	return fmt.Sprintf("len=%d hex_prefix=%x", len(key), key[:maxPrefix])
+}
+
+func (r *ReadOnlyPrepareResult) cloneKey(src []byte) []byte {
+	if src == nil {
+		return nil
+	}
+	if len(src) == 0 {
+		return []byte{}
+	}
+	start := len(r.keyArena)
+	r.keyArena = append(r.keyArena, src...)
+	return r.keyArena[start : start+len(src)]
+}
+
+func (r *ReadOnlyPrepareResult) addLeafSpan(ref page.ChildRef, low, high []byte, ops []batch.Entry) {
+	if len(ops) == 0 {
+		return
+	}
+	span := ReadOnlyLeafSpan{
+		Ref:        ref,
+		LowKey:     r.cloneKey(low),
+		HighKey:    r.cloneKey(high),
+		FirstOpKey: r.cloneKey(ops[0].Key),
+		LastOpKey:  r.cloneKey(ops[len(ops)-1].Key),
+		OpCount:    len(ops),
+	}
+	r.LeafSpans = append(r.LeafSpans, span)
+}
+
+func elapsedNsSince(start time.Time) uint64 {
+	elapsed := time.Since(start)
+	if elapsed <= 0 {
+		return 0
+	}
+	return uint64(elapsed.Nanoseconds())
+}
+
+// ApplyWithOptions applies the batch to the tree rooted at rootID and returns a
+// result object suitable for guarded install paths. When opts.PrepareReadOnly is
+// true, it first runs PrepareReadOnly and returns that planning metadata on the
+// result. If the read-only preparation fails, the returned result may contain
+// partial ReadOnlyPrepare metadata and no root output.
+func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptions) (ApplyResult, error) {
+	var prepared ReadOnlyPrepareResult
+	var preparedNs uint64
+	if opts.PrepareReadOnly {
+		var err error
+		prepareStart := time.Now()
+		prepared, err = z.PrepareReadOnly(rootID, b, opts.ReadOnlyPrepare)
+		preparedNs = elapsedNsSince(prepareStart)
+		if err != nil {
+			return ApplyResult{ReadOnlyPrepare: prepared, ReadOnlyPrepareNs: preparedNs}, err
+		}
+	}
+	newRoot, retired, metrics, err := z.Apply(rootID, b)
+	return ApplyResult{
+		RootID:              newRoot,
+		PendingRetiredPages: retired,
+		Metrics:             metrics,
+		ReadOnlyPrepare:     prepared,
+		ReadOnlyPrepareNs:   preparedNs,
+	}, err
+}
+
+// PrepareReadOnly discovers the existing leaf spans touched by b without
+// allocating or writing pager/leaf-log output. It is the safe preparation phase
+// that future prepared-output paths can run before the final install section.
+func (z *Zipper) PrepareReadOnly(rootID uint64, b *batch.Batch, opts ReadOnlyPrepareOptions) (ReadOnlyPrepareResult, error) {
+	result := ReadOnlyPrepareResult{
+		LeafSpans: opts.leafSpans[:0],
+		keyArena:  opts.keyArena[:0],
+	}
+	if b == nil {
+		return result, errors.New("zipper: nil batch")
+	}
+	ops := b.SortedEntries()
+	result.RootID = rootID
+	result.Ops = len(ops)
+	if len(ops) == 0 {
+		result.ExactLeafSpans = true
+		return result, nil
+	}
+	maintenance, _ := z.shouldRunMaintenance(ops)
+	result.Maintenance = maintenance
+	result.ExactLeafSpans = !maintenance
+	if rootID == 0 {
+		result.ColdBuild = true
+		result.ExactLeafSpans = true
+		result.addLeafSpan(page.ChildRef{}, nil, nil, ops)
+		return result, nil
+	}
+
+	scratch := z.acquireApplyScratch()
+	defer z.releaseApplyScratch(scratch)
+	err := z.prepareReadOnlyRecursive(page.PageChildRef(rootID), ops, nil, nil, &result, scratch)
+	return result, err
+}
+
+func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, low, high []byte, result *ReadOnlyPrepareResult, scratch *mergeScratch) error {
+	oldNode, _, leafScratch, leafScratchRef, loadSource, err := z.loadNodeRef(ref, scratch)
+	if err != nil {
+		return err
+	}
+	recordZipperNodeLoad(&result.Metrics, ref, oldNode, loadSource)
+	if leafScratchRef {
+		defer releaseLeafPageScratch(scratch, leafScratch)
+	}
+
+	switch oldNode.Type() {
+	case page.PageTypeLeaf, 0:
+		result.addLeafSpan(ref, low, high, ops)
+		return nil
+	case page.PageTypeInternal:
+		count := oldNode.Count()
+		opIdx := 0
+		for i := uint16(0); i < count; i++ {
+			key, childRef, err := oldNode.GetInternalEntryRefView(i)
+			if err != nil {
+				return err
+			}
+			if key == nil {
+				key = []byte{}
+			}
+			useInheritedLow := len(key) == 0
+
+			var endKey []byte
+			if i+1 < count {
+				nextKey, _, err := oldNode.GetInternalEntryRefView(i + 1)
+				if err != nil {
+					return err
+				}
+				if nextKey == nil {
+					nextKey = []byte{}
+				}
+				endKey = nextKey
+			}
+
+			startOpIdx := opIdx
+			for opIdx < len(ops) {
+				if endKey == nil || bytes.Compare(ops[opIdx].Key, endKey) < 0 {
+					opIdx++
+					continue
+				}
+				break
+			}
+			if startOpIdx == opIdx {
+				continue
+			}
+
+			childLow := low
+			childHigh := high
+			if endKey != nil {
+				childHigh = result.cloneKey(endKey)
+			}
+			if !useInheritedLow {
+				key, _, err := oldNode.GetInternalEntryRefView(i)
+				if err != nil {
+					return err
+				}
+				if key == nil {
+					key = []byte{}
+				}
+				childLow = result.cloneKey(key)
+			}
+			if err := z.prepareReadOnlyRecursive(childRef, ops[startOpIdx:opIdx], childLow, childHigh, result, scratch); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return page.ErrInvalidPageType
+	}
+}
+
 // Apply applies the batch to the tree rooted at rootID.
-// Returns the new root page ID, list of retired pages, and commit metrics.
+// Returns the new root page ID, list of pending retired pages, and commit
+// metrics.
 func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptive.Metrics, error) {
 	var metrics adaptive.Metrics
 	ops := b.SortedEntries()
@@ -1713,6 +2323,9 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			useParallel = shouldUseParallelInternalMerge(int(count), len(ops), gomaxprocs, maintenance, pressure)
 		}
 	}
+	if useParallel && z != nil && z.outerLeavesInValueLog && len(ops) < mergeInternalOuterLeafLogMinParallelOps {
+		useParallel = false
+	}
 
 	copyKeys := oldNode.InternalBaseDeltaEnabled()
 	var keyArena []byte
@@ -1865,8 +2478,12 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		return page.PageChildRef(builder.PageID()), splits, nil
 	}
 
-	children := getChildWorkSlice(int(count))
-	defer putChildWorkSlice(children)
+	childBuf := getChildWorkBuffer(int(count))
+	children := childBuf.items
+	defer func() {
+		childBuf.items = children
+		putChildWorkBuffer(childBuf)
+	}()
 
 	for i := uint16(0); i < count; i++ {
 		key, childRef, err := oldNode.GetInternalEntryRefView(i)
@@ -1877,11 +2494,17 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			key = []byte{}
 		}
 		keyCopy := cloneKey(key)
-		children = append(children, childWork{
+		children = children[:len(children)+1]
+		child := &children[len(children)-1]
+		retired := child.retired
+		*child = childWork{
 			key:   keyCopy,
 			low:   keyCopy,
 			child: childRef,
-		})
+		}
+		if cap(retired) <= maxChildWorkRetiredKeepCap {
+			child.retired = retired[:0]
+		}
 	}
 
 	for i := range children {
@@ -1915,7 +2538,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	if useParallel {
 		const (
 			minParallelActiveChildren = 2
-			minParallelOpsPerChild    = 256
+			minParallelOpsPerChild    = 4
 		)
 		if activeChildren < minParallelActiveChildren || len(ops)/activeChildren < minParallelOpsPerChild {
 			useParallel = false
@@ -1941,9 +2564,13 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		if activeChildren > 0 && maxParallel > activeChildren {
 			maxParallel = activeChildren
 		}
+		if maxParallel > mergeInternalMaxParallelWorkers {
+			maxParallel = mergeInternalMaxParallelWorkers
+		}
 		if maxParallel < 1 {
 			maxParallel = 1
 		}
+		recordZipperInternalParallelMerge(metrics, activeChildren, maxParallel, len(ops))
 		for i := range children {
 			if len(children[i].ops) == 0 {
 				children[i].newChild = children[i].child
@@ -1963,17 +2590,15 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 				if len(children[i].ops) == 0 {
 					continue
 				}
-				var childMetrics adaptive.Metrics
-				childRet := children[i].retired[:0]
-				ncID, cs, err := z.writeRecursive(children[i].child, children[i].ops, maintenance, budget, &childMetrics, children[i].low, children[i].high, &childRet, scratch)
+				children[i].childStat = adaptive.Metrics{}
+				children[i].retired = children[i].retired[:0]
+				ncID, cs, err := z.writeRecursive(children[i].child, children[i].ops, maintenance, budget, &children[i].childStat, children[i].low, children[i].high, &children[i].retired, scratch)
 				if err != nil {
 					errOnce.Do(func() { firstErr = err })
 					continue
 				}
 				children[i].newChild = ncID
 				children[i].splits = cs
-				children[i].retired = childRet
-				children[i].childStat = childMetrics
 			}
 		}
 		for i := 0; i < maxParallel; i++ {
@@ -1984,15 +2609,15 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		if firstErr != nil {
 			return page.ChildRef{}, nil, firstErr
 		}
+		totalRetired := 0
 		for i := range children {
 			if len(children[i].ops) == 0 {
 				continue
 			}
 			mergeMetrics(metrics, &children[i].childStat)
-			if retired != nil && len(children[i].retired) > 0 {
-				*retired = append(*retired, children[i].retired...)
-			}
+			totalRetired += len(children[i].retired)
 		}
+		appendChildRetiredPages(retired, children, totalRetired)
 	} else {
 		for i := range children {
 			if len(children[i].ops) > 0 {
@@ -2111,6 +2736,12 @@ func mergeMetrics(dst, src *adaptive.Metrics) {
 	dst.ZipperLeafLogRecordHintBytesRead += src.ZipperLeafLogRecordHintBytesRead
 	dst.ZipperLeafMerges += src.ZipperLeafMerges
 	dst.ZipperInternalMerges += src.ZipperInternalMerges
+	if src.ZipperInternalParallelMerges != 0 {
+		dst.ZipperInternalParallelMerges += src.ZipperInternalParallelMerges
+		dst.ZipperInternalParallelChildren += src.ZipperInternalParallelChildren
+		dst.ZipperInternalParallelWorkers += src.ZipperInternalParallelWorkers
+		dst.ZipperInternalParallelOps += src.ZipperInternalParallelOps
+	}
 	dst.ZipperLeafPagesWritten += src.ZipperLeafPagesWritten
 	dst.ZipperPagerLeafPagesWritten += src.ZipperPagerLeafPagesWritten
 	dst.ZipperLeafLogPagesWritten += src.ZipperLeafLogPagesWritten
