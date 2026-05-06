@@ -222,6 +222,32 @@ func TestGoTestProfileArgsWritePprofArtifacts(t *testing.T) {
 	}
 }
 
+func TestProfileCellEnvDisablesMaintenanceArtifacts(t *testing.T) {
+	env := profileCellEnv([]string{
+		"TREEDB_COLLECTION_REPORT_VLOG_REWRITE=true",
+		"TREEDB_COLLECTION_REPORT_SQLITE_VACUUM=true",
+	})
+	for _, want := range []string{
+		"TREEDB_COLLECTION_REPORT_DISK_USAGE=false",
+		"TREEDB_COLLECTION_REPORT_VLOG_REWRITE=false",
+		"TREEDB_COLLECTION_REPORT_LEAFGEN_PACK_GC=false",
+		"TREEDB_COLLECTION_REPORT_POST_MAINTENANCE_INDEX_VACUUM=false",
+		"TREEDB_COLLECTION_REPORT_SQLITE_VACUUM=false",
+	} {
+		if !containsEnv(env, want) {
+			t.Fatalf("profile env missing %q: %#v", want, env)
+		}
+	}
+	for _, unwanted := range []string{
+		"TREEDB_COLLECTION_REPORT_VLOG_REWRITE=true",
+		"TREEDB_COLLECTION_REPORT_SQLITE_VACUUM=true",
+	} {
+		if containsEnv(env, unwanted) {
+			t.Fatalf("profile env retained overridden value %q: %#v", unwanted, env)
+		}
+	}
+}
+
 func TestSQLiteBenchmarkListHasSQLite(t *testing.T) {
 	if !sqliteBenchmarkListHasSQLite([]byte("BenchmarkSQLiteShapeInsertBatchJSON/indexes_0\nok package\n")) {
 		t.Fatal("sqliteBenchmarkListHasSQLite=false want true")

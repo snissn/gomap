@@ -445,7 +445,10 @@ run_mongo_scaling() {
   local root="$RUN_ROOT/mongo_gateway_reader_writer_scaling_1m"
   mkdir -p "$root"
   for indexes in $INDEXES_LIST; do
-    run_logged "mongo_scaling_indexes_${indexes}" ./scripts/mongo_gateway_scaling_bench.sh \
+    run_logged "mongo_scaling_indexes_${indexes}" env \
+      MONGO_MAX_POOL_SIZE="$MONGO_MAX_POOL_SIZE" \
+      MONGO_MAX_CONNECTING="$MONGO_MAX_CONNECTING" \
+      ./scripts/mongo_gateway_scaling_bench.sh \
       --out "$root/indexes_${indexes}" \
       --docs "$MONGO_DOCS" \
       --indexes "$indexes" \

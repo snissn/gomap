@@ -2259,7 +2259,7 @@ func renderMongoScaling(b *strings.Builder, byIndex map[int][]mongoSummaryRow) {
 		rows := byIndex[idx]
 		indexLabel := indexCountLabel(idx)
 		b.WriteString("<div class=\"chart-group\"><h3>" + esc(indexLabel) + ": throughput vs client count</h3>")
-		b.WriteString("<p class=\"subtle\">Fresh 1M-document load per cell, then a focused writer or reader concurrency sweep for this index count.</p>")
+		b.WriteString("<p class=\"subtle\">Fresh " + esc(scalingDocumentLabel(rows)) + " load per cell, then a focused writer or reader concurrency sweep for this index count.</p>")
 		b.WriteString("<div class=\"chart-grid\">")
 		writerCounts := mongoSweepCounts(rows, idx, "concurrent_id_update_set_w")
 		if len(writerCounts) > 0 {
@@ -2291,6 +2291,15 @@ func renderMongoScaling(b *strings.Builder, byIndex map[int][]mongoSummaryRow) {
 		b.WriteString("</details>")
 	}
 	b.WriteString("</section>\n")
+}
+
+func scalingDocumentLabel(rows []mongoSummaryRow) string {
+	for _, row := range rows {
+		if row.Documents > 0 {
+			return commaInt(int64(row.Documents)) + "-document"
+		}
+	}
+	return "per-cell"
 }
 
 func writeMongoSummaryTable(b *strings.Builder, rows []mongoSummaryRow) {

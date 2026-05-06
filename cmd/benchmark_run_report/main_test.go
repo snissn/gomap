@@ -145,6 +145,7 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"ID Find One: Throughput Vs Reader Clients",
 		"Throughput summary",
 		"largest TreeDB/MongoDB",
+		"Fresh 100-document load per cell",
 		"Raw full-sweep TSV rows for 4 indexes",
 		"Raw scaling TSV rows, 4 indexes",
 		"TreeDB BSON",

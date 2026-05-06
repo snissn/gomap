@@ -305,11 +305,6 @@ func run(cfg config, commandLine []string) error {
 		if err := runCellReport(cfg, *cell, branch, commit); err != nil {
 			return err
 		}
-		if cfg.profileCells {
-			if err := runProfileCell(cfg, *cell); err != nil {
-				return err
-			}
-		}
 	}
 
 	matrixIndexPath := filepath.Join(cfg.outDir, "matrix_index.tsv")
@@ -321,6 +316,11 @@ func run(cfg config, commandLine []string) error {
 	if err := runMatrixSummary(cfg, matrixIndexPath); err != nil {
 		return err
 	}
+	if cfg.profileCells {
+		for _, err := range runProfileCells(cfg, cells) {
+			fmt.Fprintf(os.Stderr, "collection_bench_matrix: profile warning: %v\n", err)
+		}
+	}
 	if err := writeRunREADME(cfg, commandLine, cells, matrixIndexPath, branch, commit); err != nil {
 		return err
 	}
@@ -330,6 +330,16 @@ func run(cfg config, commandLine []string) error {
 	fmt.Printf("summary markdown: %s\n", filepath.Join(cfg.outDir, "collections_matrix_summary.md"))
 	fmt.Printf("summary html:     %s\n", filepath.Join(cfg.outDir, "collections_matrix_summary.html"))
 	return nil
+}
+
+func runProfileCells(cfg config, cells []matrixCell) []error {
+	var errs []error
+	for _, cell := range cells {
+		if err := runProfileCell(cfg, cell); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errs
 }
 
 func defaultOutputDir(now time.Time) string {
@@ -566,7 +576,7 @@ func runProfileCell(cfg config, cell matrixCell) error {
 	fmt.Printf("profiling %s: %s %s\n", cell.Name, cfg.goBinary, strings.Join(args, " "))
 	cmd := exec.Command(cfg.goBinary, args...)
 	cmd.Dir = cfg.repoRoot
-	cmd.Env = append(os.Environ(), cell.Env...)
+	cmd.Env = append(os.Environ(), profileCellEnv(cell.Env)...)
 	cmd.Stdout = out
 	cmd.Stderr = io.MultiWriter(os.Stderr, out)
 	start := time.Now()
@@ -589,7 +599,7 @@ func runProfileCell(cfg config, cell matrixCell) error {
 		Benchtime:        cfg.profileBenchtime,
 		Count:            cfg.profileCount,
 		Command:          append([]string{cfg.goBinary}, args...),
-		Env:              append([]string(nil), cell.Env...),
+		Env:              profileCellEnv(cell.Env),
 		DurationMillis:   float64(duration) / float64(time.Millisecond),
 		RunError:         errText,
 		Artifacts: []collectionProfileArtifact{{
@@ -609,6 +619,38 @@ func runProfileCell(cfg config, cell matrixCell) error {
 		return fmt.Errorf("profile benchmark cell %s: %w", cell.Name, runErr)
 	}
 	return nil
+}
+
+func profileCellEnv(env []string) []string {
+	return envWithOverrides(env,
+		"TREEDB_COLLECTION_REPORT_DISK_USAGE=false",
+		"TREEDB_COLLECTION_REPORT_VLOG_REWRITE=false",
+		"TREEDB_COLLECTION_REPORT_LEAFGEN_PACK_GC=false",
+		"TREEDB_COLLECTION_REPORT_POST_MAINTENANCE_INDEX_VACUUM=false",
+		"TREEDB_COLLECTION_REPORT_SQLITE_VACUUM=false",
+	)
+}
+
+func envWithOverrides(env []string, overrides ...string) []string {
+	keys := make(map[string]struct{}, len(overrides))
+	for _, item := range overrides {
+		key, _, ok := strings.Cut(item, "=")
+		if ok {
+			keys[key] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(env)+len(overrides))
+	for _, item := range env {
+		key, _, ok := strings.Cut(item, "=")
+		if ok {
+			if _, replace := keys[key]; replace {
+				continue
+			}
+		}
+		out = append(out, item)
+	}
+	out = append(out, overrides...)
+	return out
 }
 
 func goTestProfileArgs(cell matrixCell, cfg config) []string {
