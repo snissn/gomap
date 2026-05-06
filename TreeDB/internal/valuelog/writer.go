@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -32,10 +31,15 @@ const (
 	// boundaries, but trim larger transient spikes back down once the writer cools.
 	writerScratchKeepCap = defaultBufferSize
 	writerScratchTrimCap = writerScratchKeepCap * 2
+
+	// Keep a hard cap on retained multi-MiB append buffers. Unlike sync.Pool,
+	// this prevents a burst of short-lived writers from retaining unbounded
+	// defaultBufferSize slices between GC cycles.
+	writerAppendBufPoolEntries = 8
 )
 
 var syncDirFn = syncDir
-var writerAppendBufPool sync.Pool
+var writerAppendBufPool = make(chan []byte, writerAppendBufPoolEntries)
 
 func recordSizeExceedsMax(valueLen uint32) bool {
 	if limits.MaxRecordSize <= 0 {
@@ -205,10 +209,12 @@ func getWriterAppendBuf(capacity int) []byte {
 		return nil
 	}
 	if capacity == defaultBufferSize {
-		if v := writerAppendBufPool.Get(); v != nil {
-			if buf, ok := v.([]byte); ok && cap(buf) >= capacity {
+		select {
+		case buf := <-writerAppendBufPool:
+			if cap(buf) >= capacity {
 				return buf[:0]
 			}
+		default:
 		}
 	}
 	return make([]byte, 0, capacity)
@@ -218,7 +224,10 @@ func putWriterAppendBuf(buf []byte) {
 	if cap(buf) != defaultBufferSize {
 		return
 	}
-	writerAppendBufPool.Put(buf[:0])
+	select {
+	case writerAppendBufPool <- buf[:0]:
+	default:
+	}
 }
 
 func (w *Writer) releaseAppendBuf() {
@@ -233,9 +242,11 @@ func (w *Writer) ensureAppendBufCap(capacity int) {
 	if w == nil || capacity <= 0 || cap(w.appendBuf) >= capacity {
 		return
 	}
+	old := w.appendBuf
 	next := getWriterAppendBuf(capacity)
 	next = next[:len(w.appendBuf)]
 	copy(next, w.appendBuf)
+	putWriterAppendBuf(old)
 	w.appendBuf = next
 }
 

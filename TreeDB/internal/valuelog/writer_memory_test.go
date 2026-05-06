@@ -156,6 +156,38 @@ func TestWriterRotateToFromSink_LazyAppendBuffer(t *testing.T) {
 	}
 }
 
+func drainWriterAppendBufPoolForTest() {
+	for {
+		select {
+		case <-writerAppendBufPool:
+		default:
+			return
+		}
+	}
+}
+
+func TestWriterAppendBufPool_BoundedDefaultBuffers(t *testing.T) {
+	drainWriterAppendBufPoolForTest()
+	t.Cleanup(drainWriterAppendBufPoolForTest)
+
+	for i := 0; i < writerAppendBufPoolEntries+3; i++ {
+		putWriterAppendBuf(make([]byte, 0, defaultBufferSize))
+	}
+	if got := len(writerAppendBufPool); got != writerAppendBufPoolEntries {
+		t.Fatalf("writer append pool entries=%d want=%d", got, writerAppendBufPoolEntries)
+	}
+
+	for i := 0; i < writerAppendBufPoolEntries; i++ {
+		buf := getWriterAppendBuf(defaultBufferSize)
+		if cap(buf) != defaultBufferSize {
+			t.Fatalf("pooled append buffer cap=%d want=%d", cap(buf), defaultBufferSize)
+		}
+	}
+	if got := len(writerAppendBufPool); got != 0 {
+		t.Fatalf("writer append pool entries after get=%d want=0", got)
+	}
+}
+
 func TestWriterEnsureAppendBufCapPreservesPendingBytes(t *testing.T) {
 	writer := &Writer{
 		appendBuf: append(make([]byte, 0, 4), "pending"...),
@@ -168,6 +200,26 @@ func TestWriterEnsureAppendBufCapPreservesPendingBytes(t *testing.T) {
 	}
 	if cap(writer.appendBuf) < 64 {
 		t.Fatalf("cap(appendBuf)=%d want at least 64", cap(writer.appendBuf))
+	}
+}
+
+func TestWriterEnsureAppendBufCapReturnsDefaultBufferOnGrowth(t *testing.T) {
+	drainWriterAppendBufPoolForTest()
+	t.Cleanup(drainWriterAppendBufPoolForTest)
+
+	writer := &Writer{
+		appendBuf: append(make([]byte, 0, defaultBufferSize), "pending"...),
+	}
+	writer.ensureAppendBufCap(defaultBufferSize + 1)
+
+	if string(writer.appendBuf) != "pending" {
+		t.Fatalf("appendBuf=%q want pending bytes preserved", string(writer.appendBuf))
+	}
+	if cap(writer.appendBuf) < defaultBufferSize+1 {
+		t.Fatalf("cap(appendBuf)=%d want at least %d", cap(writer.appendBuf), defaultBufferSize+1)
+	}
+	if got := len(writerAppendBufPool); got != 1 {
+		t.Fatalf("writer append pool entries=%d want=1", got)
 	}
 }
 
