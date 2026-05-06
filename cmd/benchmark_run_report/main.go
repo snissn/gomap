@@ -1365,27 +1365,23 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 	}
 	b.WriteString("</div></div>")
 	for _, idx := range indexes {
-		indexLabel := indexCountLabel(idx)
-		b.WriteString("<div class=\"chart-group\"><h3>" + esc(indexLabel) + ": single-in-flight vs saturated phases</h3>")
-		b.WriteString("<p class=\"subtle\">Single-in-flight bars show one outstanding driver operation and are latency probes, not saturated throughput. The saturated bars and fanout charts use the same loaded database with explicit reader/writer counts, so they are the right place to identify remaining throughput bottlenecks.</p>")
-		b.WriteString("<div class=\"chart-grid\">")
-		singleCategories, singleTree, singleMongo := mongoPhaseChartData(rows, idx, []mongoPhaseSpec{
-			{Label: "_id read", Phase: "id_find_one"},
-			{Label: "email read", Phase: "email_find_one"},
-			{Label: "range indexed", Phase: "age_range_indexed_limit_10"},
-			{Label: "range scan", Phase: "age_range_scan_limit_10"},
-			{Label: "update", Phase: "id_update_set"},
-		})
-		if len(singleCategories) > 0 {
-			b.WriteString(verticalBarChart("Single-in-flight non-load phases, "+indexLabel, singleCategories, "phase", []chartSeries{{Name: "TreeDB", Values: singleTree, Color: "#2867c7"}, {Name: "MongoDB", Values: singleMongo, Color: "#1f8a5b"}}, "ops/sec"))
+		indexLabel := indexCountTitleLabel(idx)
+		throughputRows := mongoOperationThroughputRows(rows, idx)
+		b.WriteString("<div class=\"chart-group\"><h3>" + esc(indexLabel) + ": Mongo API Throughput</h3>")
+		b.WriteString("<p class=\"subtle\">Single threaded client rows are one-client request/response probes. Best-throughput rows use the highest observed reader/writer count from the fanout sweeps.</p>")
+		categories, treeBest, mongoBest := mongoBestThroughputChartData(throughputRows)
+		if len(categories) > 0 {
+			b.WriteString("<div class=\"chart-grid\">")
+			b.WriteString(verticalBarChart("Best Throughput By Operation", categories, "operation", []chartSeries{{Name: "TreeDB best", Values: treeBest, Color: "#2867c7"}, {Name: "MongoDB best", Values: mongoBest, Color: "#1f8a5b"}}, "ops/sec"))
+			b.WriteString("</div>")
 		}
-		saturatedCategories, saturatedTree, saturatedMongo := mongoBestSaturatedPhaseChartData(rows, idx)
-		if len(saturatedCategories) > 0 {
-			b.WriteString(verticalBarChart("Best saturated non-load phases, "+indexLabel, saturatedCategories, "phase", []chartSeries{{Name: "TreeDB", Values: saturatedTree, Color: "#2867c7"}, {Name: "MongoDB", Values: saturatedMongo, Color: "#1f8a5b"}}, "ops/sec"))
+		if len(throughputRows) > 0 {
+			writeMongoThroughputTable(b, throughputRows)
 		}
+		b.WriteString("<details><summary>Fanout Details</summary><div class=\"chart-grid\">")
 		writerCounts := mongoSweepCountsInPrimaryScope(rows, idx, "concurrent_id_update_set_w")
 		if len(writerCounts) > 0 {
-			b.WriteString(lineChart("Full sweep writer fanout, "+indexLabel, countLabels(writerCounts), "writer count", "ops/sec", []chartSeries{
+			b.WriteString(lineChart("Update Fanout", countLabels(writerCounts), "writer count", "ops/sec", []chartSeries{
 				{Name: "TreeDB", Values: mongoSweep(rows, idx, "concurrent_id_update_set_w", "tree", writerCounts), Color: "#2867c7"},
 				{Name: "MongoDB", Values: mongoSweep(rows, idx, "concurrent_id_update_set_w", "mongo", writerCounts), Color: "#1f8a5b"},
 			}, "ops/sec"))
@@ -1395,12 +1391,12 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 			if len(readerCounts) == 0 {
 				continue
 			}
-			b.WriteString(lineChart("Full sweep "+spec.Title+", "+indexLabel, countLabels(readerCounts), "reader count", "ops/sec", []chartSeries{
+			b.WriteString(lineChart(spec.Title, countLabels(readerCounts), "reader count", "ops/sec", []chartSeries{
 				{Name: "TreeDB", Values: mongoSweep(rows, idx, spec.Prefix, "tree", readerCounts), Color: "#2867c7"},
 				{Name: "MongoDB", Values: mongoSweep(rows, idx, spec.Prefix, "mongo", readerCounts), Color: "#1f8a5b"},
 			}, "ops/sec"))
 		}
-		b.WriteString("</div></div>")
+		b.WriteString("</div></details></div>")
 	}
 	b.WriteString("<details><summary>All full-sweep rows</summary>")
 	writeMongoSummaryTable(b, rows)
@@ -1550,58 +1546,148 @@ func mongoRowsForPhase(rows []mongoSummaryRow, phase string) []mongoSummaryRow {
 	return out
 }
 
-type mongoPhaseSpec struct {
-	Label string
-	Phase string
+type mongoThroughputOperationSpec struct {
+	Label         string
+	SinglePhases  []string
+	SweepPrefixes []string
+	CountUnit     string
 }
 
-func mongoPhaseChartData(rows []mongoSummaryRow, idx int, specs []mongoPhaseSpec) ([]string, []float64, []float64) {
-	categories := make([]string, 0, len(specs))
-	tree := make([]float64, 0, len(specs))
-	mongo := make([]float64, 0, len(specs))
+type mongoThroughputOperationRow struct {
+	Label          string
+	Single         mongoSummaryRow
+	HasSingle      bool
+	TreeBest       mongoSummaryRow
+	TreeBestCount  int
+	HasTreeBest    bool
+	MongoBest      mongoSummaryRow
+	MongoBestCount int
+	HasMongoBest   bool
+	CountUnit      string
+}
+
+func mongoOperationThroughputRows(rows []mongoSummaryRow, idx int) []mongoThroughputOperationRow {
+	specs := []mongoThroughputOperationSpec{
+		{
+			Label:         "_id read",
+			SinglePhases:  []string{"id_find_one"},
+			SweepPrefixes: []string{"concurrent_id_find_one_r"},
+			CountUnit:     "reader",
+		},
+		{
+			Label:         "email read",
+			SinglePhases:  []string{"email_find_one"},
+			SweepPrefixes: []string{"concurrent_email_find_one_r"},
+			CountUnit:     "reader",
+		},
+		{
+			Label:         "range read",
+			SinglePhases:  []string{"age_range_indexed_limit_10", "age_range_scan_limit_10"},
+			SweepPrefixes: []string{"concurrent_age_range_indexed_limit_10_r", "concurrent_age_range_scan_limit_10_r"},
+			CountUnit:     "reader",
+		},
+		{
+			Label:         "update",
+			SinglePhases:  []string{"id_update_set"},
+			SweepPrefixes: []string{"concurrent_id_update_set_w"},
+			CountUnit:     "writer",
+		},
+	}
+	out := make([]mongoThroughputOperationRow, 0, len(specs))
 	for _, spec := range specs {
-		row, ok := mongoRow(rows, idx, spec.Phase)
-		if !ok {
+		item := mongoThroughputOperationRow{Label: spec.Label, CountUnit: spec.CountUnit}
+		item.Single, item.HasSingle = mongoFirstPhaseRow(rows, idx, spec.SinglePhases)
+		item.TreeBest, item.TreeBestCount, item.HasTreeBest = mongoBestSweepRowBySideInPrimaryScope(rows, idx, spec.SweepPrefixes, "tree")
+		item.MongoBest, item.MongoBestCount, item.HasMongoBest = mongoBestSweepRowBySideInPrimaryScope(rows, idx, spec.SweepPrefixes, "mongo")
+		if !item.HasSingle && !item.HasTreeBest && !item.HasMongoBest {
 			continue
 		}
-		categories = append(categories, spec.Label)
-		tree = append(tree, row.TreeDBOpsSec)
-		mongo = append(mongo, row.MongoOpsSec)
+		out = append(out, item)
+	}
+	return out
+}
+
+func mongoFirstPhaseRow(rows []mongoSummaryRow, idx int, phases []string) (mongoSummaryRow, bool) {
+	for _, phase := range phases {
+		row, ok := mongoRow(rows, idx, phase)
+		if ok {
+			return row, true
+		}
+	}
+	return mongoSummaryRow{}, false
+}
+
+func mongoBestThroughputChartData(rows []mongoThroughputOperationRow) ([]string, []float64, []float64) {
+	categories := make([]string, 0, len(rows))
+	tree := make([]float64, 0, len(rows))
+	mongo := make([]float64, 0, len(rows))
+	for _, row := range rows {
+		if !row.HasTreeBest && !row.HasMongoBest {
+			continue
+		}
+		categories = append(categories, row.Label)
+		if row.HasTreeBest {
+			tree = append(tree, row.TreeBest.TreeDBOpsSec)
+		} else {
+			tree = append(tree, 0)
+		}
+		if row.HasMongoBest {
+			mongo = append(mongo, row.MongoBest.MongoOpsSec)
+		} else {
+			mongo = append(mongo, 0)
+		}
 	}
 	return categories, tree, mongo
 }
 
-func mongoBestSaturatedPhaseChartData(rows []mongoSummaryRow, idx int) ([]string, []float64, []float64) {
-	type sweepSpec struct {
-		Label  string
-		Prefix string
-		Marker string
-	}
-	specs := []sweepSpec{
-		{Label: "_id read", Prefix: "concurrent_id_find_one_r", Marker: "r"},
-		{Label: "email read", Prefix: "concurrent_email_find_one_r", Marker: "r"},
-		{Label: "range indexed", Prefix: "concurrent_age_range_indexed_limit_10_r", Marker: "r"},
-		{Label: "range scan", Prefix: "concurrent_age_range_scan_limit_10_r", Marker: "r"},
-		{Label: "update", Prefix: "concurrent_id_update_set_w", Marker: "w"},
-	}
-	categories := make([]string, 0, len(specs))
-	tree := make([]float64, 0, len(specs))
-	mongo := make([]float64, 0, len(specs))
-	for _, spec := range specs {
-		row, ok := mongoBestSweepRowInPrimaryScope(rows, idx, spec.Prefix)
-		if !ok {
-			continue
+func writeMongoThroughputTable(b *strings.Builder, rows []mongoThroughputOperationRow) {
+	var body [][]string
+	for _, row := range rows {
+		ratio := 0.0
+		if row.HasTreeBest && row.HasMongoBest && row.MongoBest.MongoOpsSec > 0 {
+			ratio = row.TreeBest.TreeDBOpsSec / row.MongoBest.MongoOpsSec
 		}
-		count := strings.TrimPrefix(row.Phase, spec.Prefix)
-		label := spec.Label
-		if count != "" {
-			label += " " + spec.Marker + count
-		}
-		categories = append(categories, label)
-		tree = append(tree, row.TreeDBOpsSec)
-		mongo = append(mongo, row.MongoOpsSec)
+		body = append(body, []string{
+			row.Label,
+			mongoSingleThreadedOps(row),
+			mongoBestOps(row, "tree"),
+			mongoBestCountLabel(row.TreeBestCount, row.CountUnit, row.HasTreeBest),
+			mongoBestOps(row, "mongo"),
+			mongoBestCountLabel(row.MongoBestCount, row.CountUnit, row.HasMongoBest),
+			fmtRatio(ratio),
+		})
 	}
-	return categories, tree, mongo
+	writeTable(b, []string{"operation", "single threaded TreeDB", "TreeDB best", "TreeDB count", "MongoDB best", "MongoDB count", "TreeDB/Mongo"}, body, numericColumns(1, 2, 4, 6))
+}
+
+func mongoSingleThreadedOps(row mongoThroughputOperationRow) string {
+	if !row.HasSingle {
+		return "-"
+	}
+	return fmtOps(row.Single.TreeDBOpsSec)
+}
+
+func mongoBestOps(row mongoThroughputOperationRow, side string) string {
+	if side == "mongo" {
+		if !row.HasMongoBest {
+			return "-"
+		}
+		return fmtOps(row.MongoBest.MongoOpsSec)
+	}
+	if !row.HasTreeBest {
+		return "-"
+	}
+	return fmtOps(row.TreeBest.TreeDBOpsSec)
+}
+
+func mongoBestCountLabel(count int, unit string, ok bool) string {
+	if !ok || count <= 0 {
+		return "-"
+	}
+	if count == 1 {
+		return "1 " + unit
+	}
+	return fmt.Sprintf("%d %ss", count, unit)
 }
 
 type mongoReadSweepSpec struct {
@@ -1611,10 +1697,10 @@ type mongoReadSweepSpec struct {
 
 func mongoConcurrentReadSweepSpecs() []mongoReadSweepSpec {
 	return []mongoReadSweepSpec{
-		{Prefix: "concurrent_id_find_one_r", Title: "_id reader fanout"},
-		{Prefix: "concurrent_email_find_one_r", Title: "email reader fanout"},
-		{Prefix: "concurrent_age_range_indexed_limit_10_r", Title: "indexed age-range reader fanout"},
-		{Prefix: "concurrent_age_range_scan_limit_10_r", Title: "scan age-range reader fanout"},
+		{Prefix: "concurrent_id_find_one_r", Title: "_id Read Fanout"},
+		{Prefix: "concurrent_email_find_one_r", Title: "Email Read Fanout"},
+		{Prefix: "concurrent_age_range_indexed_limit_10_r", Title: "Range Read Fanout"},
+		{Prefix: "concurrent_age_range_scan_limit_10_r", Title: "Range Scan Fanout"},
 	}
 }
 
@@ -1722,12 +1808,14 @@ func mongoSweepCountsInPrimaryScope(rows []mongoSummaryRow, idx int, prefix stri
 	})
 }
 
-func mongoBestSweepRowInPrimaryScope(rows []mongoSummaryRow, idx int, prefix string) (mongoSummaryRow, bool) {
+func mongoBestSweepRowBySideInPrimaryScope(rows []mongoSummaryRow, idx int, prefixes []string, side string) (mongoSummaryRow, int, bool) {
 	scope, hasScope := mongoPrimaryScope(rows, idx)
 	var best mongoSummaryRow
+	var bestCount int
 	var ok bool
 	for _, row := range rows {
-		if row.SecondaryIndexes != idx || !strings.HasPrefix(row.Phase, prefix) {
+		prefix, hasPrefix := mongoSweepPrefix(row.Phase, prefixes)
+		if row.SecondaryIndexes != idx || !hasPrefix {
 			continue
 		}
 		if hasScope && !mongoSameScope(row, scope) {
@@ -1737,12 +1825,30 @@ func mongoBestSweepRowInPrimaryScope(rows []mongoSummaryRow, idx int, prefix str
 		if err != nil || count <= 0 {
 			continue
 		}
-		if !ok || row.TreeDBOpsSec > best.TreeDBOpsSec {
+		value := row.TreeDBOpsSec
+		if side == "mongo" {
+			value = row.MongoOpsSec
+		}
+		bestValue := best.TreeDBOpsSec
+		if side == "mongo" {
+			bestValue = best.MongoOpsSec
+		}
+		if !ok || value > bestValue {
 			best = row
+			bestCount = count
 			ok = true
 		}
 	}
-	return best, ok
+	return best, bestCount, ok
+}
+
+func mongoSweepPrefix(phase string, prefixes []string) (string, bool) {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(phase, prefix) {
+			return prefix, true
+		}
+	}
+	return "", false
 }
 
 func mongoSweepCountsFiltered(rows []mongoSummaryRow, idx int, prefix string, include func(mongoSummaryRow) bool) []int {
@@ -1901,6 +2007,13 @@ func indexCountLabel(indexes int) string {
 		return "1 index"
 	}
 	return fmt.Sprintf("%d indexes", indexes)
+}
+
+func indexCountTitleLabel(indexes int) string {
+	if indexes == 1 {
+		return "1 Index"
+	}
+	return fmt.Sprintf("%d Indexes", indexes)
 }
 
 type chartSeries struct {
