@@ -37,6 +37,7 @@ $RUN_ROOT/
   raw_engine_full_matrix/
   collections_sqlite_canonical_1m/
     indexes_*/timed_matrix/*/profiles/collection_profile_manifest.json
+    indexes_*/timed_matrix/*/profiles/{cpu.pprof,allocs.pprof,block.pprof,mutex.pprof,profile_go_test.txt}
   mongo_gateway_full_sweep_1m_expanded/
   mongo_client_mode_load_matrix_1m/
   mongo_gateway_reader_writer_scaling_1m/
@@ -233,6 +234,12 @@ Collection report files to preserve:
 - `collections_maintenance_summary.tsv`
 - `<cell>/collections_report.md`
 - `<cell>/go_test.json`
+- `<cell>/profiles/collection_profile_manifest.json`
+- `<cell>/profiles/cpu.pprof`
+- `<cell>/profiles/allocs.pprof`
+- `<cell>/profiles/block.pprof`
+- `<cell>/profiles/mutex.pprof`
+- `<cell>/profiles/profile_go_test.txt`
 
 Use `CGO_ENABLED=1` when the SQLite cells or SQLite native-column baselines are
 part of the comparison.

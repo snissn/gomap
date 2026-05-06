@@ -1352,12 +1352,14 @@ func renderProfiles(b *strings.Builder, data profileReportData) {
 	}
 	if len(data.Collections) > 0 {
 		b.WriteString("<div class=\"chart-group\"><h3>Collections vs SQLite Profile Manifests</h3>")
-		b.WriteString("<p class=\"subtle\">These pprof captures are separate from the timed collection benchmark pass, so they are for attribution rather than the canonical throughput number.</p>")
+		b.WriteString("<p class=\"subtle\">These pprof captures are separate from the timed collection benchmark pass, so they are for attribution rather than the canonical throughput number. Artifact filenames are relative to the profile directory.</p>")
 		var body [][]string
 		for _, item := range data.Collections {
+			profileDir := filepath.ToSlash(filepath.Dir(item.Source))
 			if len(item.Artifacts) == 0 {
 				body = append(body, []string{
 					item.Source,
+					profileDir,
 					emptyDash(item.Cell),
 					emptyDash(item.Engine),
 					emptyDash(item.DocumentFormat),
@@ -1377,6 +1379,7 @@ func renderProfiles(b *strings.Builder, data profileReportData) {
 			for _, artifact := range item.Artifacts {
 				body = append(body, []string{
 					item.Source,
+					profileDir,
 					emptyDash(item.Cell),
 					emptyDash(item.Engine),
 					emptyDash(item.DocumentFormat),
@@ -1393,7 +1396,7 @@ func renderProfiles(b *strings.Builder, data profileReportData) {
 				})
 			}
 		}
-		writeTable(b, []string{"manifest", "cell", "engine", "format", "benchtime", "count", "profile ms", "phase", "cpu", "allocs", "block", "mutex", "output", "error"}, body, numericColumns(5, 6))
+		writeTable(b, []string{"manifest", "profile dir", "cell", "engine", "format", "benchtime", "count", "profile pass ms", "phase", "cpu", "allocs", "block", "mutex", "output", "error"}, body, numericColumns(6, 7))
 		b.WriteString("</div>")
 	}
 	if len(data.Mongo) > 0 {

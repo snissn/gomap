@@ -156,6 +156,8 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"Maintenance Evidence",
 		"Raw Engine Benchprof Insights",
 		"Collections vs SQLite Profile Manifests",
+		"Artifact filenames are relative to the profile directory",
+		"profile dir",
 		"Mongo Gateway Profile Manifests",
 		"decode/read I/O hotspot",
 		"cpu.pprof",
