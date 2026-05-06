@@ -847,7 +847,7 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 		var err error
 		encoded, err = t.dictEncodeWS.EncodeAllWithDict(sample, encoded[:0], bestProfile.Dict, level)
 		if err != nil {
-			log.Printf("treedb: dict training encode setup failed stream=%d err=%v", slabID, err)
+			log.Printf("treedb: dict training encode failed stream=%d err=%v", slabID, err)
 			return
 		}
 		storedTotal += len(encoded)
@@ -937,9 +937,25 @@ func validateDict(dict []byte, level zstd.EncoderLevel, encodeWS *zstd.DictEncod
 	// Verify the dictionary actually works for round-trip.
 	// We use a small dummy payload.
 	dummy := []byte("test_payload_validation")
-	compressed, err := encodeWS.EncodeAllWithDict(dummy, nil, dict, level)
-	if err != nil {
-		return err
+	var compressed []byte
+	if encodeWS != nil {
+		var err error
+		compressed, err = encodeWS.EncodeAllWithDict(dummy, nil, dict, level)
+		if err != nil {
+			return err
+		}
+	} else {
+		enc, err := zstd.NewWriter(nil,
+			zstd.WithEncoderLevel(level),
+			zstd.WithEncoderCRC(false),
+			zstd.WithEncoderConcurrency(1),
+			zstd.WithEncoderDict(dict),
+		)
+		if err != nil {
+			return err
+		}
+		defer enc.Close()
+		compressed = enc.EncodeAll(dummy, nil)
 	}
 
 	dec, err := zstd.NewReader(nil, zstd.WithDecoderDicts(dict))

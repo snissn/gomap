@@ -91,3 +91,56 @@ func TestBatchTotalsWithEncoder_MatchesBatchTotals_WithDict(t *testing.T) {
 		}
 	}
 }
+
+func TestBatchTotalsWithEncodeWorkspace_MatchesBatchTotals_WithDict(t *testing.T) {
+	samples := buildProfileSamples(256)
+	dict := mustBuildValidDict(t, samples)
+	encodeNsPerRawByte := 2.0
+	var ws zstd.DictEncodeWorkspace
+
+	for _, k := range []int{1, 2, 3, 6} {
+		wantPayload, wantMeta, wantRaw, wantEncodeNS := batchTotals(dict, samples, k, encodeNsPerRawByte)
+
+		var concatScratch []byte
+		var encodedScratch []byte
+		gotPayload, gotMeta, gotRaw, gotEncodeNS := batchTotalsWithEncodeWorkspace(&ws, dict, samples, k, encodeNsPerRawByte, &concatScratch, &encodedScratch)
+
+		if gotPayload != wantPayload || gotMeta != wantMeta || gotRaw != wantRaw || gotEncodeNS != wantEncodeNS {
+			t.Fatalf("k=%d mismatch got=(payload=%d meta=%d raw=%d encodeNs=%d) want=(payload=%d meta=%d raw=%d encodeNs=%d)",
+				k, gotPayload, gotMeta, gotRaw, gotEncodeNS, wantPayload, wantMeta, wantRaw, wantEncodeNS)
+		}
+	}
+}
+
+func TestChooseKForDictOptions_EncoderWorkspaceMatchesEncoderPath(t *testing.T) {
+	samples := buildProfileSamples(256)
+	dict := mustBuildValidDict(t, samples)
+	opts := ChooseKOptions{
+		CandidateK:         []int{1, 2, 4, 8, 16},
+		EncodeNsPerRawByte: 2.0,
+		DecodeNsPerRawByte: 1.0,
+	}
+	want := ChooseKForDictOptions(dict, samples, opts)
+	if want == nil {
+		t.Fatalf("profile without workspace is nil")
+	}
+
+	var ws zstd.DictEncodeWorkspace
+	opts.EncoderWorkspace = &ws
+	got := ChooseKForDictOptions(dict, samples, opts)
+	if got == nil {
+		t.Fatalf("profile with workspace is nil")
+	}
+
+	if got.K != want.K ||
+		got.DictHash != want.DictHash ||
+		got.DictBytes != want.DictBytes ||
+		got.PayloadRatio != want.PayloadRatio ||
+		got.TotalRatio != want.TotalRatio ||
+		got.DecodeNsEstimate != want.DecodeNsEstimate ||
+		got.EncodeNsEstimate != want.EncodeNsEstimate ||
+		got.AvgSampleBytes != want.AvgSampleBytes ||
+		got.Samples != want.Samples {
+		t.Fatalf("workspace profile mismatch\n got: %+v\nwant: %+v", got, want)
+	}
+}

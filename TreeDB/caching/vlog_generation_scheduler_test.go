@@ -2464,7 +2464,7 @@ func TestVlogGenerationMaintenance_PeriodicLeafPackDoesNotBlockOnScheduledRetain
 	db.lastForegroundReadUnixNano.Store(now.Add(-2 * vlogForegroundReadQuietWindow).UnixNano())
 	db.scheduleRetainedValueLogPrune()
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
 	for {
 		db.retainedPruneMu.Lock()
 		waiting := db.retainedPruneDone != nil

@@ -7243,6 +7243,7 @@ type memtableView struct {
 	retiredMems              []memtable.Table
 	deferredRetiredMemtables atomic.Int64
 	deferredRetiredBytes     atomic.Int64
+	closingEmptyMems         []memtable.Table
 }
 
 // appendOnlyEstimatedBytesPerEntryDefault tunes initial append-only memtable
@@ -7450,6 +7451,10 @@ func (db *DB) releaseMemtableViewRef(view *memtableView, leaseRelease bool) {
 	db.noteMemtableViewDeferredExit(view)
 	view.deferredRetiredMemtables.Store(0)
 	view.deferredRetiredBytes.Store(0)
+	for _, mt := range view.closingEmptyMems {
+		db.releaseClosingEmptyMemtable(mt)
+	}
+	view.closingEmptyMems = nil
 	db.recycleMemtables(view.retiredMems)
 	view.retiredMems = nil
 }
@@ -7463,6 +7468,10 @@ func (db *DB) releaseClosingEmptyMemtables() {
 		return
 	}
 	if !view.refs.CompareAndSwap(1, 0) {
+		if view.refs.Load() > 0 {
+			view.closingEmptyMems = append(view.closingEmptyMems, view.mutables...)
+			db.releasePublishedMemtableView(view)
+		}
 		return
 	}
 	for _, mt := range view.mutables {
@@ -15666,6 +15675,9 @@ func (db *DB) clearVlogGenerationRewriteStageConfirmation() {
 
 func (db *DB) scheduleVlogGenerationRewriteStageConfirmation(observedAt int64) {
 	if db == nil || observedAt <= 0 || db.closing.Load() {
+		return
+	}
+	if envBool(envDisableVlogGenerationLoop) {
 		return
 	}
 	if db.vlogGenerationRewriteStageWakeObservedNS.Load() == observedAt {
