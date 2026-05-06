@@ -32,21 +32,27 @@ type rawEngineRun struct {
 }
 
 type collectionRow struct {
-	ConfigName      string
-	Engine          string
-	Format          string
-	Shape           string
-	IndexCount      int
-	DocumentCount   int
-	Phase           string
-	MaintenanceMode string
-	TotalBytes      float64
-	BytesPerDoc     float64
-	DocsPerSec      float64
-	NsPerDoc        float64
-	MeasurementKind string
-	MeasurementNote string
-	Source          string
+	ConfigName       string
+	Engine           string
+	Format           string
+	Shape            string
+	IndexCount       int
+	DocumentCount    int
+	BenchmarkName    string
+	Phase            string
+	MaintenanceMode  string
+	TotalBytes       float64
+	BytesPerDoc      float64
+	DocsPerSec       float64
+	NsPerDoc         float64
+	BatchSize        int
+	BenchmarkTimed   bool
+	MeasurementKind  string
+	MeasurementNote  string
+	SourceArtifact   string
+	MaintenanceStats map[string]float64
+	Extra            map[string]string
+	Source           string
 }
 
 type collectionComparison struct {
@@ -110,6 +116,8 @@ type benchmarkResult struct {
 	SecondaryIndexes int           `json:"secondary_indexes"`
 	RangeIndex       bool          `json:"range_index"`
 	ClientMode       string        `json:"client_mode,omitempty"`
+	TreeDBProfile    string        `json:"treedb_profile,omitempty"`
+	DocumentFormat   string        `json:"treedb_document_format,omitempty"`
 	Phases           []phaseResult `json:"phases"`
 }
 
@@ -154,7 +162,66 @@ type reportData struct {
 	MongoFullSweep        []mongoSummaryRow
 	MongoLoadModes        []loadModeRow
 	MongoScaling          map[int][]mongoSummaryRow
+	Profiles              profileReportData
 	Warnings              []string
+}
+
+type profileReportData struct {
+	Benchprof []benchprofInsightSummary
+	Mongo     []mongoProfileSummary
+}
+
+type benchprofInsightSummary struct {
+	Source        string
+	ProfilesDir   string
+	OpsSource     string
+	Insights      []string
+	Warnings      []string
+	Targets       []profileInvestigationTarget
+	CPUProfiles   int
+	AllocProfiles int
+	BlockProfiles int
+	MutexProfiles int
+}
+
+type profileInvestigationTarget struct {
+	DBTag    string  `json:"db_tag"`
+	Test     string  `json:"test"`
+	Category string  `json:"category"`
+	Function string  `json:"function"`
+	FlatPct  float64 `json:"flat_pct"`
+	Why      string  `json:"why"`
+	File     string  `json:"file"`
+	Line     int     `json:"line"`
+}
+
+type mongoProfileSummary struct {
+	Source           string
+	ProfileDir       string
+	Target           string
+	ClientMode       string
+	DocumentFormat   string
+	TreeDBProfile    string
+	Documents        int
+	SecondaryIndexes int
+	HasResult        bool
+	Artifacts        []mongoProfileArtifact
+	RunError         string
+	ResultError      string
+}
+
+type mongoProfileArtifact struct {
+	Phase          string
+	Prefix         string
+	DurationMillis float64
+	OpsPerSecond   float64
+	P95US          float64
+	CPUProfile     string
+	AllocsProfile  string
+	BlockProfile   string
+	MutexProfile   string
+	Trace          string
+	Error          string
 }
 
 func main() {
@@ -248,6 +315,9 @@ func loadReportData(cfg config) (reportData, error) {
 		data.MongoScaling = scaling
 		data.Warnings = append(data.Warnings, warnings...)
 	}
+	profiles, warnings := loadProfiles(cfg.RunRoot)
+	data.Profiles = profiles
+	data.Warnings = append(data.Warnings, warnings...)
 	return data, nil
 }
 
@@ -435,20 +505,26 @@ func loadCollections(dir string) ([]collectionRow, []collectionComparison, []str
 
 func (r *collectionRow) UnmarshalJSON(raw []byte) error {
 	type alias struct {
-		ConfigName      string  `json:"config_name"`
-		Engine          string  `json:"engine"`
-		Format          string  `json:"format"`
-		Shape           string  `json:"shape"`
-		IndexCount      int     `json:"index_count"`
-		DocumentCount   int     `json:"document_count"`
-		Phase           string  `json:"phase"`
-		MaintenanceMode string  `json:"maintenance_mode"`
-		TotalBytes      float64 `json:"total_bytes"`
-		BytesPerDoc     float64 `json:"bytes_per_doc"`
-		DocsPerSec      float64 `json:"docs_per_sec"`
-		NsPerDoc        float64 `json:"ns_per_doc"`
-		MeasurementKind string  `json:"measurement_kind"`
-		MeasurementNote string  `json:"measurement_note"`
+		ConfigName       string             `json:"config_name"`
+		Engine           string             `json:"engine"`
+		Format           string             `json:"format"`
+		Shape            string             `json:"shape"`
+		IndexCount       int                `json:"index_count"`
+		DocumentCount    int                `json:"document_count"`
+		BenchmarkName    string             `json:"benchmark_name"`
+		Phase            string             `json:"phase"`
+		MaintenanceMode  string             `json:"maintenance_mode"`
+		TotalBytes       float64            `json:"total_bytes"`
+		BytesPerDoc      float64            `json:"bytes_per_doc"`
+		DocsPerSec       float64            `json:"docs_per_sec"`
+		NsPerDoc         float64            `json:"ns_per_doc"`
+		BatchSize        int                `json:"batch_size"`
+		BenchmarkTimed   bool               `json:"benchmark_timed"`
+		MeasurementKind  string             `json:"measurement_kind"`
+		MeasurementNote  string             `json:"measurement_note"`
+		SourceArtifact   string             `json:"source_artifact"`
+		MaintenanceStats map[string]float64 `json:"maintenance_stats"`
+		Extra            map[string]string  `json:"extra"`
 	}
 	var a alias
 	if err := json.Unmarshal(raw, &a); err != nil {
@@ -460,14 +536,20 @@ func (r *collectionRow) UnmarshalJSON(raw []byte) error {
 	r.Shape = a.Shape
 	r.IndexCount = a.IndexCount
 	r.DocumentCount = a.DocumentCount
+	r.BenchmarkName = a.BenchmarkName
 	r.Phase = a.Phase
 	r.MaintenanceMode = a.MaintenanceMode
 	r.TotalBytes = a.TotalBytes
 	r.BytesPerDoc = a.BytesPerDoc
 	r.DocsPerSec = a.DocsPerSec
 	r.NsPerDoc = a.NsPerDoc
+	r.BatchSize = a.BatchSize
+	r.BenchmarkTimed = a.BenchmarkTimed
 	r.MeasurementKind = a.MeasurementKind
 	r.MeasurementNote = a.MeasurementNote
+	r.SourceArtifact = a.SourceArtifact
+	r.MaintenanceStats = a.MaintenanceStats
+	r.Extra = a.Extra
 	return nil
 }
 
@@ -726,6 +808,171 @@ func indexDirCount(name string) (int, bool) {
 	return idx, true
 }
 
+func loadProfiles(runRoot string) (profileReportData, []string) {
+	var out profileReportData
+	var warnings []string
+
+	for _, path := range walkProfileFiles(filepath.Join(runRoot, "raw_engine_full_matrix"), "insights.json", &warnings) {
+		item, err := readBenchprofInsightSummary(runRoot, path)
+		if err != nil {
+			warnings = append(warnings, err.Error())
+			continue
+		}
+		out.Benchprof = append(out.Benchprof, item)
+	}
+	for _, root := range []string{
+		filepath.Join(runRoot, "mongo_gateway_full_sweep_1m_expanded", "profiles"),
+		filepath.Join(runRoot, "mongo_client_mode_load_matrix_1m", "profiles"),
+	} {
+		for _, path := range walkProfileFiles(root, "profile_manifest.json", &warnings) {
+			item, err := readMongoProfileSummary(runRoot, path)
+			if err != nil {
+				warnings = append(warnings, err.Error())
+				continue
+			}
+			out.Mongo = append(out.Mongo, item)
+		}
+	}
+
+	sort.Slice(out.Benchprof, func(i, j int) bool { return out.Benchprof[i].Source < out.Benchprof[j].Source })
+	sort.Slice(out.Mongo, func(i, j int) bool { return out.Mongo[i].Source < out.Mongo[j].Source })
+	return out, warnings
+}
+
+func walkProfileFiles(root, filename string, warnings *[]string) []string {
+	info, err := os.Stat(root)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		*warnings = append(*warnings, fmt.Sprintf("profiles: %s: %v", root, err))
+		return nil
+	}
+	if !info.IsDir() {
+		return nil
+	}
+	var paths []string
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			*warnings = append(*warnings, fmt.Sprintf("profiles: %s: %v", path, err))
+			return nil
+		}
+		if !entry.IsDir() && entry.Name() == filename {
+			paths = append(paths, path)
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		*warnings = append(*warnings, fmt.Sprintf("profiles: %s: %v", root, err))
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func readBenchprofInsightSummary(runRoot, path string) (benchprofInsightSummary, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return benchprofInsightSummary{}, err
+	}
+	var parsed struct {
+		ProfilesDir          string                       `json:"profiles_dir"`
+		OpsSource            string                       `json:"ops_source"`
+		Insights             []string                     `json:"insights"`
+		Warnings             []string                     `json:"warnings"`
+		InvestigationTargets []profileInvestigationTarget `json:"investigation_targets"`
+		CPUProfiles          []json.RawMessage            `json:"cpu_profiles"`
+		AllocSpace           []json.RawMessage            `json:"alloc_space_profiles"`
+		AllocObjects         []json.RawMessage            `json:"alloc_object_profiles"`
+		BlockProfiles        []json.RawMessage            `json:"block_profiles"`
+		MutexProfiles        []json.RawMessage            `json:"mutex_profiles"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return benchprofInsightSummary{}, fmt.Errorf("%s: %w", path, err)
+	}
+	return benchprofInsightSummary{
+		Source:        relArtifact(runRoot, path),
+		ProfilesDir:   parsed.ProfilesDir,
+		OpsSource:     parsed.OpsSource,
+		Insights:      parsed.Insights,
+		Warnings:      parsed.Warnings,
+		Targets:       parsed.InvestigationTargets,
+		CPUProfiles:   len(parsed.CPUProfiles),
+		AllocProfiles: len(parsed.AllocSpace) + len(parsed.AllocObjects),
+		BlockProfiles: len(parsed.BlockProfiles),
+		MutexProfiles: len(parsed.MutexProfiles),
+	}, nil
+}
+
+func readMongoProfileSummary(runRoot, path string) (mongoProfileSummary, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return mongoProfileSummary{}, err
+	}
+	var manifest struct {
+		ProfileDir string `json:"profile_dir"`
+		RunError   string `json:"run_error"`
+		Artifacts  []struct {
+			Phase          string  `json:"phase"`
+			Prefix         string  `json:"prefix"`
+			DurationMillis float64 `json:"duration_ms"`
+			CPUProfile     string  `json:"cpu_profile"`
+			AllocsProfile  string  `json:"allocs_profile"`
+			BlockProfile   string  `json:"block_profile"`
+			MutexProfile   string  `json:"mutex_profile"`
+			Trace          string  `json:"trace"`
+			Error          string  `json:"error"`
+		} `json:"artifacts"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return mongoProfileSummary{}, fmt.Errorf("%s: %w", path, err)
+	}
+	result, resultErr := readBenchmarkResult(filepath.Join(filepath.Dir(path), "benchmark_result.json"))
+	phaseByName := make(map[string]phaseResult, len(result.Phases))
+	for _, phase := range result.Phases {
+		phaseByName[phase.Name] = phase
+	}
+	item := mongoProfileSummary{
+		Source:           relArtifact(runRoot, path),
+		ProfileDir:       manifest.ProfileDir,
+		Target:           result.Target,
+		ClientMode:       result.ClientMode,
+		DocumentFormat:   result.DocumentFormat,
+		TreeDBProfile:    result.TreeDBProfile,
+		Documents:        result.Documents,
+		SecondaryIndexes: result.SecondaryIndexes,
+		HasResult:        resultErr == nil,
+		RunError:         manifest.RunError,
+	}
+	if resultErr != nil {
+		item.ResultError = resultErr.Error()
+	}
+	for _, artifact := range manifest.Artifacts {
+		phase := phaseByName[artifact.Phase]
+		item.Artifacts = append(item.Artifacts, mongoProfileArtifact{
+			Phase:          artifact.Phase,
+			Prefix:         artifact.Prefix,
+			DurationMillis: artifact.DurationMillis,
+			OpsPerSecond:   phase.OpsPerSecond,
+			P95US:          phase.LatencyMicros.P95,
+			CPUProfile:     artifact.CPUProfile,
+			AllocsProfile:  artifact.AllocsProfile,
+			BlockProfile:   artifact.BlockProfile,
+			MutexProfile:   artifact.MutexProfile,
+			Trace:          artifact.Trace,
+			Error:          artifact.Error,
+		})
+	}
+	return item, nil
+}
+
+func relArtifact(root, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return filepath.ToSlash(path)
+	}
+	return filepath.ToSlash(rel)
+}
+
 func readMatrix(path string) ([]matrixRow, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -835,6 +1082,7 @@ func renderHTML(data reportData) string {
 	renderMongoScaling(&b, data.MongoScaling)
 	renderCollections(&b, data.Collections, data.CollectionComparisons)
 	renderRawEngine(&b, data.RawEngine)
+	renderProfiles(&b, data.Profiles)
 	b.WriteString("</body>\n</html>\n")
 	return b.String()
 }
@@ -859,6 +1107,9 @@ func reportNav(data reportData) string {
 	}
 	if len(data.RawEngine) > 0 {
 		items = append(items, navItem{Href: "#raw-engine", Label: "Raw engine"})
+	}
+	if len(data.Profiles.Benchprof) > 0 || len(data.Profiles.Mongo) > 0 {
+		items = append(items, navItem{Href: "#profiles", Label: "Profiles"})
 	}
 	if len(items) == 0 {
 		return ""
@@ -966,6 +1217,105 @@ func renderRawEngineCharts(b *strings.Builder, rows []rawEngineRun, tests []stri
 	b.WriteString(rawEngineGroupedBarChart("Raw engine throughput by test", rows, tests, rawEnginePresentVariants(rows, rawEngineVariants())))
 }
 
+func renderProfiles(b *strings.Builder, data profileReportData) {
+	if len(data.Benchprof) == 0 && len(data.Mongo) == 0 {
+		return
+	}
+	b.WriteString("<section id=\"profiles\"><h2>Profiling Follow-Up</h2>")
+	b.WriteString("<p class=\"subtle\">Profile panels are generated from precomputed `benchprof` insights and Mongo gateway profile manifests. Report rendering does not rerun pprof; it links phase artifacts back to the benchmark bundle.</p>")
+	if len(data.Benchprof) > 0 {
+		b.WriteString("<div class=\"chart-group\"><h3>Raw Engine Benchprof Insights</h3>")
+		for _, item := range data.Benchprof {
+			b.WriteString("<h4>" + esc(item.Source) + "</h4>")
+			b.WriteString("<div class=\"summary-strip\"><div class=\"summary-row\">")
+			b.WriteString("<div class=\"summary-workload\">profiles</div>")
+			writeSummaryCell(b, "CPU", strconv.Itoa(item.CPUProfiles))
+			writeSummaryCell(b, "alloc", strconv.Itoa(item.AllocProfiles))
+			writeSummaryCell(b, "block", strconv.Itoa(item.BlockProfiles))
+			writeSummaryCell(b, "mutex", strconv.Itoa(item.MutexProfiles))
+			writeSummaryCell(b, "targets", strconv.Itoa(len(item.Targets)))
+			b.WriteString("</div></div>")
+			if len(item.Insights) > 0 {
+				b.WriteString("<ul>")
+				for _, insight := range firstStrings(item.Insights, 5) {
+					b.WriteString("<li>" + esc(insight) + "</li>")
+				}
+				b.WriteString("</ul>")
+			}
+			if len(item.Targets) > 0 {
+				var body [][]string
+				for _, target := range firstTargets(item.Targets, 10) {
+					ref := target.File
+					if target.Line > 0 {
+						ref += ":" + strconv.Itoa(target.Line)
+					}
+					body = append(body, []string{target.Test, target.DBTag, target.Category, target.Function, fmtFloat(target.FlatPct, 2), ref, target.Why})
+				}
+				writeTable(b, []string{"test", "db", "category", "function", "flat %", "reference", "why"}, body, numericColumns(4))
+			}
+		}
+		b.WriteString("</div>")
+	}
+	if len(data.Mongo) > 0 {
+		b.WriteString("<div class=\"chart-group\"><h3>Mongo Gateway Profile Manifests</h3>")
+		var body [][]string
+		for _, item := range data.Mongo {
+			if len(item.Artifacts) == 0 {
+				body = append(body, []string{
+					item.Source,
+					emptyDash(item.ClientMode),
+					emptyDash(item.DocumentFormat),
+					profileIndexesLabel(item),
+					"(run)",
+					"-",
+					"-",
+					"-",
+					"-",
+					"-",
+					"-",
+					"-",
+					firstNonEmpty(item.RunError, item.ResultError, "no profile artifacts recorded"),
+				})
+				continue
+			}
+			for _, artifact := range item.Artifacts {
+				body = append(body, []string{
+					item.Source,
+					emptyDash(item.ClientMode),
+					emptyDash(item.DocumentFormat),
+					profileIndexesLabel(item),
+					artifact.Phase,
+					fmtOps(artifact.OpsPerSecond),
+					fmtFloat(artifact.P95US, 1),
+					fmtFloat(artifact.DurationMillis, 1),
+					emptyDash(artifact.CPUProfile),
+					emptyDash(artifact.AllocsProfile),
+					emptyDash(artifact.BlockProfile),
+					emptyDash(artifact.MutexProfile),
+					emptyDash(firstNonEmpty(artifact.Error, item.RunError, item.ResultError)),
+				})
+			}
+		}
+		writeTable(b, []string{"manifest", "client mode", "format", "indexes", "phase", "ops/sec", "p95 us", "profile ms", "cpu", "allocs", "block", "mutex", "error"}, body, numericColumns(3, 5, 6, 7))
+		b.WriteString("</div>")
+	}
+	b.WriteString("</section>\n")
+}
+
+func firstStrings(values []string, limit int) []string {
+	if len(values) <= limit {
+		return values
+	}
+	return values[:limit]
+}
+
+func firstTargets(values []profileInvestigationTarget, limit int) []profileInvestigationTarget {
+	if len(values) <= limit {
+		return values
+	}
+	return values[:limit]
+}
+
 type rawEngineVariant struct {
 	Profile    string
 	Checkpoint string
@@ -1053,18 +1403,50 @@ func renderCollections(b *strings.Builder, rows []collectionRow, comps []collect
 		return
 	}
 	b.WriteString("<section id=\"collections\"><h2>Collections vs SQLite</h2>")
-	b.WriteString("<p class=\"subtle\">Charts show post-insert throughput and compacted bytes/doc for TreeDB collection formats and SQLite baselines. Disclosure tables preserve the parsed rows and compacted-state comparisons.</p>")
+	b.WriteString("<p class=\"subtle\">TreeDB collection formats and SQLite baselines, including post-insert throughput, storage lifecycle, compacted-state ratios, and maintenance evidence. Raw canonical rows stay collapsed below.</p>")
 	if len(rows) > 0 {
+		writeCollectionSummary(b, rows, comps)
+		b.WriteString("<div class=\"chart-group\"><h3>Index-count overview</h3>")
 		b.WriteString("<div class=\"chart-grid\">")
 		docsRows := collectionDocsRows(rows)
 		if len(docsRows.Categories) > 0 {
 			b.WriteString(compactVerticalBarChart("Post-insert throughput by index count", docsRows.Categories, "index count", docsRows.Series, "docs/sec"))
 		}
+		postDiskRows := collectionPostInsertDiskRows(rows)
+		if len(postDiskRows.Categories) > 0 {
+			b.WriteString(compactVerticalBarChart("Post-insert bytes/doc by index count", postDiskRows.Categories, "index count", postDiskRows.Series, "B/doc"))
+		}
 		diskRows := collectionDiskRows(rows)
 		if len(diskRows.Categories) > 0 {
 			b.WriteString(compactVerticalBarChart("Compacted bytes/doc by index count", diskRows.Categories, "index count", diskRows.Series, "B/doc"))
 		}
-		b.WriteString("</div>")
+		ratioRows := collectionComparisonRatioRows(comps)
+		if len(ratioRows.Categories) > 0 {
+			b.WriteString(compactVerticalBarChart("Compacted size: SQLite bytes/doc divided by TreeDB bytes/doc", ratioRows.Categories, "comparison", ratioRows.Series, "ratio"))
+		}
+		b.WriteString("</div></div>")
+		if len(ratioRows.Categories) > 0 {
+			b.WriteString("<p class=\"subtle\">For compacted-size ratio charts, higher means TreeDB is smaller; 1.00x means equal bytes/doc.</p>")
+		}
+		for _, idx := range sortedCollectionIndexes(rows) {
+			indexRows := collectionRowsForIndex(rows, idx)
+			if len(indexRows) == 0 {
+				continue
+			}
+			b.WriteString("<div class=\"chart-group\"><h3>" + esc(indexCountTitleLabel(idx)) + ": Storage Lifecycle</h3>")
+			b.WriteString("<p class=\"subtle\">Lifecycle charts compare post-insert storage with TreeDB maintenance phases and SQLite VACUUM where those rows are present.</p>")
+			lifecycle := collectionLifecycleRows(indexRows)
+			if len(lifecycle.Categories) > 0 {
+				b.WriteString("<div class=\"chart-grid\">")
+				b.WriteString(compactVerticalBarChart("Bytes/doc by lifecycle phase, "+indexCountLowerLabel(idx), lifecycle.Categories, "phase", lifecycle.Series, "B/doc"))
+				maintenance := collectionMaintenanceRows(indexRows)
+				if len(maintenance) > 0 {
+					b.WriteString(collectionMaintenanceTableChart("Maintenance evidence, "+indexCountLowerLabel(idx), maintenance))
+				}
+				b.WriteString("</div>")
+			}
+			b.WriteString("</div>")
+		}
 		b.WriteString("<details><summary>Collection highlight rows</summary>")
 		renderCollectionHighlight(b, rows)
 		b.WriteString("</details>")
@@ -1103,6 +1485,252 @@ func collectionDiskRows(rows []collectionRow) collectionChartRows {
 	return collectionChart(rows, "bytes")
 }
 
+func collectionPostInsertDiskRows(rows []collectionRow) collectionChartRows {
+	return collectionChart(rows, "post_bytes")
+}
+
+func collectionComparisonRatioRows(comps []collectionComparison) collectionChartRows {
+	if len(comps) == 0 {
+		return collectionChartRows{}
+	}
+	values := make(map[string][]float64)
+	labels := make([]string, 0, len(comps))
+	for _, comp := range comps {
+		label := collectionComparisonLabel(comp)
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+	labelPos := make(map[string]int, len(labels))
+	for i, label := range labels {
+		labelPos[label] = i
+	}
+	for _, comp := range comps {
+		key := displayConfig(comp.TreeDBConfig) + " vs " + displayConfig(comp.SQLiteConfig)
+		if _, ok := values[key]; !ok {
+			values[key] = make([]float64, len(labels))
+		}
+		values[key][labelPos[collectionComparisonLabel(comp)]] = comp.SmallerRatio
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var series []chartSeries
+	for _, key := range keys {
+		series = append(series, chartSeries{Name: key, Values: values[key], Color: collectionSeriesColor(key)})
+	}
+	return collectionChartRows{Categories: labels, Series: nonZeroSeries(series)}
+}
+
+func collectionComparisonLabel(comp collectionComparison) string {
+	idx := collectionIndexFromConfig(comp.TreeDBConfig)
+	if idx >= 0 {
+		return indexCountLabel(idx)
+	}
+	return comp.Name
+}
+
+func collectionIndexFromConfig(config string) int {
+	marker := "_indexes_"
+	pos := strings.LastIndex(config, marker)
+	if pos < 0 {
+		return -1
+	}
+	v, err := strconv.Atoi(config[pos+len(marker):])
+	if err != nil {
+		return -1
+	}
+	return v
+}
+
+func writeCollectionSummary(b *strings.Builder, rows []collectionRow, comps []collectionComparison) {
+	fast, hasFast := bestCollectionRow(rows, func(row collectionRow) bool {
+		return row.Phase == "post_insert" && row.DocsPerSec > 0
+	}, func(a, b collectionRow) bool {
+		return a.DocsPerSec > b.DocsPerSec
+	})
+	small, hasSmall := bestCollectionRow(rows, func(row collectionRow) bool {
+		return collectionEngineFamily(row) == "TreeDB" && row.BytesPerDoc > 0 && (row.Phase == "full_leafgen_pack_gc" || row.Phase == "offline_rewrite")
+	}, func(a, b collectionRow) bool {
+		return a.BytesPerDoc < b.BytesPerDoc
+	})
+	bestComp, hasComp := bestCollectionComparison(comps)
+	b.WriteString("<h4>Collection summary</h4><div class=\"summary-strip\">")
+	if hasFast {
+		b.WriteString("<div class=\"summary-row\"><div class=\"summary-workload\">fastest insert</div>")
+		writeSummaryCell(b, "config", displayConfig(fast.ConfigName))
+		writeSummaryCell(b, "indexes", indexCountLabel(fast.IndexCount))
+		writeSummaryCell(b, "docs/sec", fmtOps(fast.DocsPerSec))
+		writeSummaryCell(b, "format", displayFormat(fast.Format))
+		writeSummaryCell(b, "phase", fast.Phase)
+		b.WriteString("</div>")
+	}
+	if hasSmall {
+		b.WriteString("<div class=\"summary-row\"><div class=\"summary-workload\">smallest TreeDB compacted</div>")
+		writeSummaryCell(b, "config", displayConfig(small.ConfigName))
+		writeSummaryCell(b, "indexes", indexCountLabel(small.IndexCount))
+		writeSummaryCell(b, "B/doc", fmtFloat(small.BytesPerDoc, 1))
+		writeSummaryCell(b, "phase", small.Phase)
+		writeSummaryCell(b, "total", fmtBytes(small.TotalBytes))
+		b.WriteString("</div>")
+	}
+	if hasComp {
+		b.WriteString("<div class=\"summary-row\"><div class=\"summary-workload\">best SQLite/TreeDB ratio</div>")
+		writeSummaryCell(b, "TreeDB", displayConfig(bestComp.TreeDBConfig))
+		writeSummaryCell(b, "SQLite", displayConfig(bestComp.SQLiteConfig))
+		writeSummaryCell(b, "ratio", fmtRatio(bestComp.SmallerRatio))
+		writeSummaryCell(b, "TreeDB B/doc", fmtFloat(bestComp.TreeDBBytesPerDoc, 1))
+		writeSummaryCell(b, "SQLite B/doc", fmtFloat(bestComp.SQLiteBytesPerDoc, 1))
+		b.WriteString("</div>")
+	}
+	b.WriteString("</div>")
+}
+
+func bestCollectionRow(rows []collectionRow, include func(collectionRow) bool, better func(collectionRow, collectionRow) bool) (collectionRow, bool) {
+	var best collectionRow
+	var ok bool
+	for _, row := range rows {
+		if !include(row) {
+			continue
+		}
+		if !ok || better(row, best) {
+			best = row
+			ok = true
+		}
+	}
+	return best, ok
+}
+
+func bestCollectionComparison(comps []collectionComparison) (collectionComparison, bool) {
+	var best collectionComparison
+	var ok bool
+	for _, comp := range comps {
+		if comp.SmallerRatio <= 0 {
+			continue
+		}
+		if !ok || comp.SmallerRatio > best.SmallerRatio {
+			best = comp
+			ok = true
+		}
+	}
+	return best, ok
+}
+
+func collectionRowsForIndex(rows []collectionRow, idx int) []collectionRow {
+	out := make([]collectionRow, 0)
+	for _, row := range rows {
+		if row.IndexCount == idx {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func collectionLifecycleRows(rows []collectionRow) collectionChartRows {
+	phases := []string{"post_insert", "online_one_pass_maintenance", "offline_rewrite", "full_leafgen_pack_gc", "sqlite_vacuum"}
+	phaseLabels := []string{"post insert", "online maint", "offline rewrite", "leafgen GC", "SQLite VACUUM"}
+	values := make(map[string][]float64)
+	for _, row := range rows {
+		if row.BytesPerDoc <= 0 {
+			continue
+		}
+		pos := indexOf(phases, row.Phase)
+		if pos < 0 {
+			continue
+		}
+		key := displayConfig(row.ConfigName)
+		if _, ok := values[key]; !ok {
+			values[key] = make([]float64, len(phases))
+		}
+		values[key][pos] = row.BytesPerDoc
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var series []chartSeries
+	for _, key := range keys {
+		series = append(series, chartSeries{Name: key, Values: values[key], Color: collectionSeriesColor(key)})
+	}
+	return collectionChartRows{Categories: phaseLabels, Series: nonZeroSeries(series)}
+}
+
+func indexOf(values []string, value string) int {
+	for i, v := range values {
+		if v == value {
+			return i
+		}
+	}
+	return -1
+}
+
+func collectionMaintenanceRows(rows []collectionRow) [][]string {
+	var out [][]string
+	addBytes := func(row collectionRow, metric string, value float64) {
+		if value > 0 {
+			out = append(out, []string{displayConfig(row.ConfigName), row.Phase, metric, fmtBytes(value)})
+		}
+	}
+	addFloat := func(row collectionRow, metric string, value float64) {
+		if value > 0 {
+			out = append(out, []string{displayConfig(row.ConfigName), row.Phase, metric, fmtFloat(value, 1)})
+		}
+	}
+	addText := func(row collectionRow, metric, value string) {
+		if strings.TrimSpace(value) != "" {
+			out = append(out, []string{displayConfig(row.ConfigName), row.Phase, metric, value})
+		}
+	}
+	for _, row := range rows {
+		if len(row.MaintenanceStats) == 0 && len(row.Extra) == 0 {
+			continue
+		}
+		switch row.Phase {
+		case "full_leafgen_pack_gc":
+			addBytes(row, "leafgen candidate bytes", row.MaintenanceStats["leafgen_candidate_bytes_total"])
+			addBytes(row, "leafgen live bytes", row.MaintenanceStats["leafgen_candidate_bytes_live"])
+			addBytes(row, "leafgen dead bytes", row.MaintenanceStats["leafgen_candidate_bytes_dead"])
+			addBytes(row, "leafgen expected reclaim", row.MaintenanceStats["leafgen_expected_reclaim_bytes"])
+			addBytes(row, "index vacuum before", row.MaintenanceStats["index_vacuum_disk_bytes_before"])
+			addBytes(row, "index vacuum after", row.MaintenanceStats["index_vacuum_disk_bytes_after"])
+			addFloat(row, "index vacuum seconds", row.MaintenanceStats["index_vacuum_seconds"])
+		case "sqlite_vacuum":
+			addBytes(row, "VACUUM bytes before", row.MaintenanceStats["sqlite_vacuum_disk_total_bytes_before"])
+			addBytes(row, "VACUUM bytes after", row.MaintenanceStats["sqlite_vacuum_disk_total_bytes_after"])
+			addBytes(row, "VACUUM bytes delta", row.MaintenanceStats["sqlite_vacuum_disk_total_bytes_delta"])
+			addFloat(row, "VACUUM ops/sec", maintenanceStat(row.MaintenanceStats, "sqlite_vacuum_ops/sec", "sqlite_vacuum_ops_per_sec"))
+			addText(row, "VACUUM bytes before", row.Extra["sqlite_vacuum_bytes_before"])
+			addText(row, "VACUUM bytes after", row.Extra["sqlite_vacuum_bytes_after"])
+			addText(row, "VACUUM bytes delta", row.Extra["sqlite_vacuum_bytes_delta"])
+		case "offline_rewrite", "online_one_pass_maintenance":
+			addBytes(row, "total bytes", row.TotalBytes)
+			addFloat(row, "bytes/doc", row.BytesPerDoc)
+			addText(row, "index DB bytes", row.Extra["index_db_bytes"])
+			addText(row, "leaf vlog bytes", row.Extra["leaf_vlog_bytes"])
+		}
+	}
+	return out
+}
+
+func maintenanceStat(stats map[string]float64, names ...string) float64 {
+	for _, name := range names {
+		if value := stats[name]; value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func collectionMaintenanceTableChart(title string, rows [][]string) string {
+	var b strings.Builder
+	b.WriteString("<div class=\"chart\"><div class=\"chart-title\">" + esc(chartLabel(title)) + "</div>")
+	writeTable(&b, []string{"config", "phase", "metric", "value"}, rows, nil)
+	b.WriteString("</div>")
+	return b.String()
+}
+
 func collectionChart(rows []collectionRow, kind string) collectionChartRows {
 	indexes := sortedCollectionIndexes(rows)
 	categories := make([]string, 0, len(indexes))
@@ -1130,13 +1758,13 @@ func collectionChart(rows []collectionRow, kind string) collectionChartRows {
 		if !ok {
 			continue
 		}
-		key := family + "\x00" + canonicalFormat(row.Format)
+		key := family + "\x00" + canonicalFormat(row.Format) + "\x00" + row.ConfigName
 		if _, ok := values[key]; !ok {
 			values[key] = make([]float64, len(indexes))
-			labels[key] = collectionSeriesLabel(family, row.Format, kind)
-			orders[key] = collectionSeriesOrder(family, row.Format)
+			labels[key] = collectionSeriesLabel(family, row.Format, kind) + ": " + displayConfig(row.ConfigName)
+			orders[key] = collectionSeriesOrder(family, row.Format) + "_" + row.ConfigName
 		}
-		if kind == "bytes" {
+		if kind == "bytes" || kind == "post_bytes" {
 			values[key][pos] = row.BytesPerDoc
 		} else {
 			values[key][pos] = row.DocsPerSec
@@ -1176,6 +1804,9 @@ func collectionChartPhase(family, kind string) (string, bool) {
 	if kind == "docs" {
 		return "post_insert", true
 	}
+	if kind == "post_bytes" {
+		return "post_insert", true
+	}
 	if kind != "bytes" {
 		return "", false
 	}
@@ -1197,7 +1828,20 @@ func collectionSeriesLabel(family, format, kind string) string {
 			label += " VACUUM"
 		}
 	}
+	if kind == "post_bytes" {
+		label += " post-insert"
+	}
 	return label
+}
+
+func displayConfig(config string) string {
+	value := strings.TrimSpace(config)
+	value = strings.TrimPrefix(value, "treedb_")
+	value = strings.TrimPrefix(value, "sqlite_")
+	value = strings.ReplaceAll(value, "_collection", "")
+	value = strings.ReplaceAll(value, "_indexes_", " / i")
+	value = strings.ReplaceAll(value, "_", " ")
+	return chartLabel(value)
 }
 
 func displayFormat(format string) string {
@@ -1245,8 +1889,8 @@ func collectionSeriesOrder(family, format string) string {
 }
 
 func collectionSeriesColor(key string) string {
-	parts := strings.SplitN(key, "\x00", 2)
-	if len(parts) == 2 {
+	parts := strings.Split(key, "\x00")
+	if len(parts) >= 2 {
 		switch parts[0] + "\x00" + parts[1] {
 		case "TreeDB\x00template-v1":
 			return "#2867c7"
@@ -1373,25 +2017,28 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 	b.WriteString("</div></div>")
 	for _, idx := range indexes {
 		indexLabel := indexCountTitleLabel(idx)
-		throughputRows := mongoOperationThroughputRows(rows, idx)
+		throughputRows := mongoOperationThroughputRows(rows, idx, true)
 		b.WriteString("<div class=\"chart-group\"><h3>" + esc(indexLabel) + ": Mongo API Scaling</h3>")
 		b.WriteString("<p class=\"subtle\">These are the actual concurrency sweeps. Single threaded client rows are one-client request/response probes; higher client counts show where each operation saturates.</p>")
+		if scope, ok := mongoPrimaryScope(rows, idx); ok {
+			b.WriteString("<p class=\"subtle\"><strong>Scope:</strong> " + esc(mongoScopeText(scope)) + "</p>")
+		}
 		b.WriteString("<div class=\"chart-grid\">")
 		for _, spec := range mongoConcurrentReadSweepSpecs() {
-			readerCounts := mongoSweepCounts(rows, idx, spec.Prefix)
+			readerCounts := mongoSweepCountsInPrimaryScope(rows, idx, spec.Prefix)
 			if len(readerCounts) == 0 {
 				continue
 			}
 			b.WriteString(lineChart(spec.Title, countLabels(readerCounts), "client count", "ops/sec", []chartSeries{
-				{Name: "TreeDB", Values: mongoSweepAny(rows, idx, spec.Prefix, "tree", readerCounts), Color: "#2867c7"},
-				{Name: "MongoDB", Values: mongoSweepAny(rows, idx, spec.Prefix, "mongo", readerCounts), Color: "#1f8a5b"},
+				{Name: "TreeDB", Values: mongoSweep(rows, idx, spec.Prefix, "tree", readerCounts), Color: "#2867c7"},
+				{Name: "MongoDB", Values: mongoSweep(rows, idx, spec.Prefix, "mongo", readerCounts), Color: "#1f8a5b"},
 			}, "ops/sec"))
 		}
-		writerCounts := mongoSweepCounts(rows, idx, "concurrent_id_update_set_w")
+		writerCounts := mongoSweepCountsInPrimaryScope(rows, idx, "concurrent_id_update_set_w")
 		if len(writerCounts) > 0 {
 			b.WriteString(lineChart("_id update one: throughput vs writer clients", countLabels(writerCounts), "client count", "ops/sec", []chartSeries{
-				{Name: "TreeDB", Values: mongoSweepAny(rows, idx, "concurrent_id_update_set_w", "tree", writerCounts), Color: "#2867c7"},
-				{Name: "MongoDB", Values: mongoSweepAny(rows, idx, "concurrent_id_update_set_w", "mongo", writerCounts), Color: "#1f8a5b"},
+				{Name: "TreeDB", Values: mongoSweep(rows, idx, "concurrent_id_update_set_w", "tree", writerCounts), Color: "#2867c7"},
+				{Name: "MongoDB", Values: mongoSweep(rows, idx, "concurrent_id_update_set_w", "mongo", writerCounts), Color: "#1f8a5b"},
 			}, "ops/sec"))
 		}
 		b.WriteString("</div>")
@@ -1425,7 +2072,11 @@ func renderMongoLoadModes(b *strings.Builder, rows []loadModeRow) {
 		if len(cats) == 0 {
 			continue
 		}
-		b.WriteString(loadModeBarChart(fmt.Sprintf("Load throughput by client mode, %d indexes", idx), cats, tree, mongo))
+		b.WriteString(loadModeBarChart(fmt.Sprintf("Load throughput by client mode, %d indexes", idx), cats, tree, mongo, "docs/sec", "Docs/Sec"))
+		diskCats, treeDisk, mongoDisk := loadModeDiskChartRows(rows, idx)
+		if len(diskCats) > 0 {
+			b.WriteString(loadModeBarChart(fmt.Sprintf("Physical storage by client mode, %d indexes", idx), diskCats, treeDisk, mongoDisk, "bytes", "Physical Bytes"))
+		}
 	}
 	b.WriteString("</div>")
 	b.WriteString("<p class=\"subtle\"><strong>* Raw-wire modes:</strong> <code>raw-wire-tcp</code> still sends Mongo OP_MSG bytes over loopback TCP to the TreeDB gateway while bypassing the MongoDB Go driver. <code>raw-wire</code> removes the socket too and drives the same raw command/gateway path in process. These modes are TreeDB-only ingest ceiling probes, so each renders as one centered TreeDB bar instead of a paired MongoDB bar.</p>")
@@ -1485,7 +2136,7 @@ func renderMongoScaling(b *strings.Builder, byIndex map[int][]mongoSummaryRow) {
 			}, "ops/sec"))
 		}
 		b.WriteString("</div>")
-		summaryRows := mongoOperationThroughputRows(rows, idx)
+		summaryRows := mongoOperationThroughputRows(rows, idx, false)
 		if len(summaryRows) > 0 {
 			writeMongoThroughputSummary(b, summaryRows)
 		}
@@ -1583,10 +2234,16 @@ type mongoThroughputOperationRow struct {
 	RatioBest      mongoSummaryRow
 	RatioBestCount int
 	HasRatioBest   bool
+	TreePeak       mongoSummaryRow
+	TreePeakCount  int
+	HasTreePeak    bool
+	MongoPeak      mongoSummaryRow
+	MongoPeakCount int
+	HasMongoPeak   bool
 	CountUnit      string
 }
 
-func mongoOperationThroughputRows(rows []mongoSummaryRow, idx int) []mongoThroughputOperationRow {
+func mongoOperationThroughputRows(rows []mongoSummaryRow, idx int, primaryScopeOnly bool) []mongoThroughputOperationRow {
 	specs := []mongoThroughputOperationSpec{
 		{
 			Label:         "_id read",
@@ -1616,9 +2273,15 @@ func mongoOperationThroughputRows(rows []mongoSummaryRow, idx int) []mongoThroug
 	out := make([]mongoThroughputOperationRow, 0, len(specs))
 	for _, spec := range specs {
 		item := mongoThroughputOperationRow{Label: spec.Label, CountUnit: spec.CountUnit}
-		item.Single, item.HasSingle = mongoFirstPhaseRow(rows, idx, spec.SinglePhases)
-		item.RatioBest, item.RatioBestCount, item.HasRatioBest = mongoBestSweepRowByRatio(rows, idx, spec.SweepPrefixes)
-		if !item.HasSingle && !item.HasRatioBest {
+		scope, hasScope := mongoPrimaryScope(rows, idx)
+		include := func(row mongoSummaryRow) bool {
+			return !primaryScopeOnly || !hasScope || mongoSameScope(row, scope)
+		}
+		item.Single, item.HasSingle = mongoFirstPhaseRowFiltered(rows, idx, spec.SinglePhases, include)
+		item.RatioBest, item.RatioBestCount, item.HasRatioBest = mongoBestSweepRowByRatioFiltered(rows, idx, spec.SweepPrefixes, include)
+		item.TreePeak, item.TreePeakCount, item.HasTreePeak = mongoBestSweepRowBySide(rows, idx, spec.SweepPrefixes, "tree", include)
+		item.MongoPeak, item.MongoPeakCount, item.HasMongoPeak = mongoBestSweepRowBySide(rows, idx, spec.SweepPrefixes, "mongo", include)
+		if !item.HasSingle && !item.HasRatioBest && !item.HasTreePeak && !item.HasMongoPeak {
 			continue
 		}
 		out = append(out, item)
@@ -1627,9 +2290,18 @@ func mongoOperationThroughputRows(rows []mongoSummaryRow, idx int) []mongoThroug
 }
 
 func mongoFirstPhaseRow(rows []mongoSummaryRow, idx int, phases []string) (mongoSummaryRow, bool) {
+	return mongoFirstPhaseRowFiltered(rows, idx, phases, nil)
+}
+
+func mongoFirstPhaseRowFiltered(rows []mongoSummaryRow, idx int, phases []string, include func(mongoSummaryRow) bool) (mongoSummaryRow, bool) {
 	for _, phase := range phases {
-		row, ok := mongoRow(rows, idx, phase)
-		if ok {
+		for _, row := range rows {
+			if row.SecondaryIndexes != idx || row.Phase != phase {
+				continue
+			}
+			if include != nil && !include(row) {
+				continue
+			}
 			return row, true
 		}
 	}
@@ -1637,29 +2309,28 @@ func mongoFirstPhaseRow(rows []mongoSummaryRow, idx int, phases []string) (mongo
 }
 
 func writeMongoThroughputSummary(b *strings.Builder, rows []mongoThroughputOperationRow) {
-	wrote := false
-	var inner strings.Builder
+	var body [][]string
 	for _, row := range rows {
-		if !row.HasRatioBest {
-			continue
-		}
-		wrote = true
-		inner.WriteString("<div class=\"summary-row\">")
-		inner.WriteString("<div class=\"summary-workload\">" + esc(row.Label) + "</div>")
-		writeSummaryCell(&inner, "best same-client ratio", mongoBestRatio(row))
-		writeSummaryCell(&inner, "clients", mongoRatioCountLabel(row))
-		writeSummaryCell(&inner, "TreeDB @ clients", mongoRatioOps(row, "tree"))
-		writeSummaryCell(&inner, "MongoDB @ clients", mongoRatioOps(row, "mongo"))
-		writeSummaryCell(&inner, "TreeDB vs single @ clients", mongoScaleUpRatio(row))
-		inner.WriteString("</div>")
+		body = append(body, []string{
+			row.Label,
+			mongoSingleOps(row),
+			mongoPeakOps(row, "tree"),
+			mongoPeakCountLabel(row, "tree"),
+			mongoPeakOps(row, "mongo"),
+			mongoPeakCountLabel(row, "mongo"),
+			mongoBestRatio(row),
+			mongoRatioCountLabel(row),
+			mongoRatioOps(row, "tree"),
+			mongoRatioOps(row, "mongo"),
+			mongoScaleUpRatio(row),
+		})
 	}
-	if !wrote {
+	if len(body) == 0 {
 		return
 	}
-	b.WriteString("<h4>Best same-client comparison</h4>")
-	b.WriteString("<div class=\"summary-strip\">")
-	b.WriteString(inner.String())
-	b.WriteString("</div>")
+	b.WriteString("<h4>Throughput summary</h4>")
+	b.WriteString("<p class=\"subtle\">Peak columns show best observed throughput in the saturated sweep. The ratio columns show the largest same-client TreeDB/MongoDB ratio and the client count where that ratio occurred.</p>")
+	writeTable(b, []string{"operation", "single-threaded TreeDB", "peak TreeDB", "TreeDB clients", "peak MongoDB", "MongoDB clients", "largest TreeDB/MongoDB", "ratio clients", "TreeDB at ratio", "MongoDB at ratio", "TreeDB scale-up"}, body, numericColumns(1, 2, 4, 6, 8, 9, 10))
 }
 
 func writeSummaryCell(b *strings.Builder, label, value string) {
@@ -1674,6 +2345,33 @@ func mongoRatioOps(row mongoThroughputOperationRow, side string) string {
 		return fmtOps(row.RatioBest.MongoOpsSec)
 	}
 	return fmtOps(row.RatioBest.TreeDBOpsSec)
+}
+
+func mongoSingleOps(row mongoThroughputOperationRow) string {
+	if !row.HasSingle {
+		return "-"
+	}
+	return fmtOps(row.Single.TreeDBOpsSec)
+}
+
+func mongoPeakOps(row mongoThroughputOperationRow, side string) string {
+	if side == "mongo" {
+		if !row.HasMongoPeak {
+			return "-"
+		}
+		return fmtOps(row.MongoPeak.MongoOpsSec)
+	}
+	if !row.HasTreePeak {
+		return "-"
+	}
+	return fmtOps(row.TreePeak.TreeDBOpsSec)
+}
+
+func mongoPeakCountLabel(row mongoThroughputOperationRow, side string) string {
+	if side == "mongo" {
+		return mongoBestCountLabel(row.MongoPeakCount, row.CountUnit, row.HasMongoPeak)
+	}
+	return mongoBestCountLabel(row.TreePeakCount, row.CountUnit, row.HasTreePeak)
 }
 
 func mongoBestRatio(row mongoThroughputOperationRow) string {
@@ -1807,7 +2505,21 @@ func mongoSameScope(row, scope mongoSummaryRow) bool {
 	return row.Documents == scope.Documents &&
 		row.TreeDBConfig == scope.TreeDBConfig &&
 		row.MongoConfig == scope.MongoConfig &&
-		row.RangeIndex == scope.RangeIndex
+		row.RangeIndex == scope.RangeIndex &&
+		row.RangeMode == scope.RangeMode
+}
+
+func mongoScopeText(scope mongoSummaryRow) string {
+	parts := []string{
+		fmt.Sprintf("%s docs", commaInt(int64(scope.Documents))),
+		"TreeDB " + emptyDash(scope.TreeDBConfig),
+		"MongoDB " + emptyDash(scope.MongoConfig),
+		"range index=" + strconv.FormatBool(scope.RangeIndex),
+	}
+	if strings.TrimSpace(scope.RangeMode) != "" {
+		parts = append(parts, "range mode="+scope.RangeMode)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func mongoSweepCounts(rows []mongoSummaryRow, idx int, prefix string) []int {
@@ -1853,6 +2565,40 @@ func mongoBestSweepRowByRatioFiltered(rows []mongoSummaryRow, idx int, prefixes 
 			best = row
 			bestCount = count
 			bestRatio = ratio
+			ok = true
+		}
+	}
+	return best, bestCount, ok
+}
+
+func mongoBestSweepRowBySide(rows []mongoSummaryRow, idx int, prefixes []string, side string, include func(mongoSummaryRow) bool) (mongoSummaryRow, int, bool) {
+	var best mongoSummaryRow
+	var bestCount int
+	var bestOps float64
+	var ok bool
+	for _, row := range rows {
+		prefix, hasPrefix := mongoSweepPrefix(row.Phase, prefixes)
+		if row.SecondaryIndexes != idx || !hasPrefix {
+			continue
+		}
+		if include != nil && !include(row) {
+			continue
+		}
+		count, err := strconv.Atoi(strings.TrimPrefix(row.Phase, prefix))
+		if err != nil || count <= 0 {
+			continue
+		}
+		ops := row.TreeDBOpsSec
+		if side == "mongo" {
+			ops = row.MongoOpsSec
+		}
+		if ops <= 0 {
+			continue
+		}
+		if !ok || ops > bestOps || (ops == bestOps && count > bestCount) {
+			best = row
+			bestCount = count
+			bestOps = ops
 			ok = true
 		}
 	}
@@ -1921,7 +2667,7 @@ func mongoSweepWithLookup(rows []mongoSummaryRow, idx int, prefix, side string, 
 	for _, count := range counts {
 		row, ok := lookup(rows, idx, prefix+strconv.Itoa(count))
 		if !ok {
-			out = append(out, 0)
+			out = append(out, math.NaN())
 			continue
 		}
 		if side == "mongo" {
@@ -1947,6 +2693,14 @@ func sortedLoadModeIndexes(rows []loadModeRow) []int {
 }
 
 func loadModeChartRows(rows []loadModeRow, idx int) ([]string, []float64, []float64) {
+	return loadModeValueRows(rows, idx, func(row loadModeRow) float64 { return row.OpsPerSec })
+}
+
+func loadModeDiskChartRows(rows []loadModeRow, idx int) ([]string, []float64, []float64) {
+	return loadModeValueRows(rows, idx, func(row loadModeRow) float64 { return float64(row.PhysicalBytes) })
+}
+
+func loadModeValueRows(rows []loadModeRow, idx int, value func(loadModeRow) float64) ([]string, []float64, []float64) {
 	type pair struct {
 		TreeDB float64
 		Mongo  float64
@@ -1960,9 +2714,9 @@ func loadModeChartRows(rows []loadModeRow, idx int) ([]string, []float64, []floa
 		pair := pairs[mode]
 		switch row.Target {
 		case "treedb":
-			pair.TreeDB = row.OpsPerSec
+			pair.TreeDB = value(row)
 		case "mongo":
-			pair.Mongo = row.OpsPerSec
+			pair.Mongo = value(row)
 		}
 		pairs[mode] = pair
 	}
@@ -2150,6 +2904,9 @@ func lineChart(title string, labels []string, xAxisLabel, yAxisLabel string, ser
 	maxY := 0.0
 	for _, s := range series {
 		for _, v := range s.Values {
+			if !isFinite(v) {
+				continue
+			}
 			if v > maxY {
 				maxY = v
 			}
@@ -2185,11 +2942,24 @@ func lineChart(title string, labels []string, xAxisLabel, yAxisLabel string, ser
 	}
 	for _, s := range series {
 		points := make([]string, 0, len(s.Values))
+		flushPoints := func() {
+			if len(points) >= 2 {
+				b.WriteString("<polyline fill=\"none\" stroke=\"" + esc(s.Color) + "\" stroke-width=\"2.5\" points=\"" + strings.Join(points, " ") + "\"/>")
+			}
+			points = points[:0]
+		}
 		for i, v := range s.Values {
+			if !isFinite(v) {
+				flushPoints()
+				continue
+			}
 			points = append(points, fmt.Sprintf("%.1f,%.1f", x(i), y(v)))
 		}
-		b.WriteString("<polyline fill=\"none\" stroke=\"" + esc(s.Color) + "\" stroke-width=\"2.5\" points=\"" + strings.Join(points, " ") + "\"/>")
+		flushPoints()
 		for i, v := range s.Values {
+			if !isFinite(v) {
+				continue
+			}
 			b.WriteString(fmt.Sprintf("<circle cx=\"%.1f\" cy=\"%.1f\" r=\"3.2\" fill=\"%s\"><title>%s %s: %s</title></circle>", x(i), y(v), esc(s.Color), esc(s.Name), esc(labels[i]), esc(formatChartTooltipValue(v, unit))))
 		}
 	}
@@ -2208,7 +2978,7 @@ func compactVerticalBarChart(title string, categories []string, xAxisLabel strin
 	return verticalBarChartWithSize(title, categories, xAxisLabel, series, unit, 330, 86, 14, 2)
 }
 
-func loadModeBarChart(title string, categories []string, tree, mongo []float64) string {
+func loadModeBarChart(title string, categories []string, tree, mongo []float64, unit, yAxisLabel string) string {
 	if len(categories) == 0 {
 		return ""
 	}
@@ -2250,7 +3020,7 @@ func loadModeBarChart(title string, categories []string, tree, mongo []float64) 
 		{Name: "TreeDB", Color: "#2867c7"},
 		{Name: "MongoDB", Color: "#1f8a5b"},
 	}))
-	b.WriteString(fmt.Sprintf("<svg width=\"760\" height=\"430\" viewBox=\"0 0 760 430\" role=\"img\" aria-label=\"%s, x axis Client Mode, y axis Docs/Sec\">", esc(chartLabel(title))))
+	b.WriteString(fmt.Sprintf("<svg width=\"760\" height=\"430\" viewBox=\"0 0 760 430\" role=\"img\" aria-label=\"%s, x axis Client Mode, y axis %s\">", esc(chartLabel(title)), esc(chartLabel(yAxisLabel))))
 	for tick := 0; tick <= 4; tick++ {
 		value := maxV * float64(tick) / 4
 		yy := y(value)
@@ -2268,9 +3038,9 @@ func loadModeBarChart(title string, categories []string, tree, mongo []float64) 
 				barH := (v / maxV) * plotH
 				x := groupX + (groupW-soloBarW)/2
 				yy := axisY - barH
-				b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"#2867c7\"><title>%s TreeDB-only raw-wire ceiling: %s docs/sec</title></rect>", x, yy, soloBarW, barH, esc(cat), esc(formatChartValue(v, "docs/sec"))))
+				b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"#2867c7\"><title>%s TreeDB-only raw-wire ceiling: %s</title></rect>", x, yy, soloBarW, barH, esc(cat), esc(formatChartTooltipValue(v, unit))))
 				if soloBarW >= 10 {
-					b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"#344256\">%s</text>", x+soloBarW/2, math.Max(top+10, yy-5), esc(formatChartValue(v, "docs/sec"))))
+					b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"#344256\">%s</text>", x+soloBarW/2, math.Max(top+10, yy-5), esc(formatChartValue(v, unit))))
 				}
 			}
 		} else {
@@ -2279,9 +3049,9 @@ func loadModeBarChart(title string, categories []string, tree, mongo []float64) 
 				barH := (v / maxV) * plotH
 				x := groupX + innerPad
 				yy := axisY - barH
-				b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"#2867c7\"><title>%s TreeDB: %s docs/sec</title></rect>", x, yy, pairedBarW, barH, esc(cat), esc(formatChartValue(v, "docs/sec"))))
+				b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"#2867c7\"><title>%s TreeDB: %s</title></rect>", x, yy, pairedBarW, barH, esc(cat), esc(formatChartTooltipValue(v, unit))))
 				if pairedBarW >= 10 {
-					b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"#344256\">%s</text>", x+pairedBarW/2, math.Max(top+10, yy-5), esc(formatChartValue(v, "docs/sec"))))
+					b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"#344256\">%s</text>", x+pairedBarW/2, math.Max(top+10, yy-5), esc(formatChartValue(v, unit))))
 				}
 			}
 			if i < len(mongo) && mongo[i] > 0 {
@@ -2289,9 +3059,9 @@ func loadModeBarChart(title string, categories []string, tree, mongo []float64) 
 				barH := (v / maxV) * plotH
 				x := groupX + innerPad + pairedBarW + barGap
 				yy := axisY - barH
-				b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"#1f8a5b\"><title>%s MongoDB: %s docs/sec</title></rect>", x, yy, pairedBarW, barH, esc(cat), esc(formatChartValue(v, "docs/sec"))))
+				b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"#1f8a5b\"><title>%s MongoDB: %s</title></rect>", x, yy, pairedBarW, barH, esc(cat), esc(formatChartTooltipValue(v, unit))))
 				if pairedBarW >= 10 {
-					b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"#344256\">%s</text>", x+pairedBarW/2, math.Max(top+10, yy-5), esc(formatChartValue(v, "docs/sec"))))
+					b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"#344256\">%s</text>", x+pairedBarW/2, math.Max(top+10, yy-5), esc(formatChartValue(v, unit))))
 				}
 			}
 		}
@@ -2301,7 +3071,7 @@ func loadModeBarChart(title string, categories []string, tree, mongo []float64) 
 		}
 	}
 	b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"12\" font-weight=\"700\" fill=\"#344256\">Client Mode</text>", left+plotW/2, height-8))
-	b.WriteString(fmt.Sprintf("<text transform=\"translate(16 %.1f) rotate(-90)\" text-anchor=\"middle\" font-size=\"12\" font-weight=\"700\" fill=\"#344256\">Docs/Sec</text>", top+plotH/2))
+	b.WriteString(fmt.Sprintf("<text transform=\"translate(16 %.1f) rotate(-90)\" text-anchor=\"middle\" font-size=\"12\" font-weight=\"700\" fill=\"#344256\">%s</text>", top+plotH/2, esc(chartLabel(yAxisLabel))))
 	b.WriteString("</svg>")
 	b.WriteString("</div>")
 	return b.String()
@@ -2468,6 +3238,10 @@ func fmtBytes(v float64) string {
 		return fmt.Sprintf("%.2f KiB", v/1024)
 	}
 	return fmt.Sprintf("%.0f B", v)
+}
+
+func isFinite(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0)
 }
 
 func shortNumber(v float64) string {
@@ -2661,6 +3435,22 @@ func emptyDash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func profileIndexesLabel(item mongoProfileSummary) string {
+	if !item.HasResult {
+		return "-"
+	}
+	return strconv.Itoa(item.SecondaryIndexes)
 }
 
 func tsvHeader(path string, names []string, required []string) (map[string]int, error) {

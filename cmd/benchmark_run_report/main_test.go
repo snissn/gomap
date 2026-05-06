@@ -52,17 +52,39 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 	writeFile(t, filepath.Join(root, "collections_sqlite_canonical_1m", "indexes_0", "benchmark_results.json"), `{
   "results": [
     {"config_name":"treedb_template_v1_collection_0_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":0,"document_count":100,"phase":"post_insert","maintenance_mode":"none","total_bytes":1000,"bytes_per_doc":10,"docs_per_sec":10000,"measurement_kind":"go_benchmark"},
+    {"config_name":"treedb_template_v1_collection_0_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":0,"document_count":100,"phase":"offline_rewrite","maintenance_mode":"offline_rewrite","total_bytes":700,"bytes_per_doc":7,"measurement_kind":"fixture","extra":{"index_db_bytes":"400","leaf_vlog_bytes":"300"}},
     {"config_name":"treedb_template_v1_collection_0_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":0,"document_count":100,"phase":"full_leafgen_pack_gc","maintenance_mode":"full_leafgen_pack_gc","total_bytes":500,"bytes_per_doc":5,"measurement_kind":"fixture"},
     {"config_name":"treedb_bson_collection_0_indexes","engine":"treedb_fast","format":"bson","shape":"collection","index_count":0,"document_count":100,"phase":"post_insert","maintenance_mode":"none","total_bytes":800,"bytes_per_doc":8,"docs_per_sec":20000,"measurement_kind":"go_benchmark"},
     {"config_name":"treedb_bson_collection_0_indexes","engine":"treedb_fast","format":"bson","shape":"collection","index_count":0,"document_count":100,"phase":"full_leafgen_pack_gc","maintenance_mode":"full_leafgen_pack_gc","total_bytes":400,"bytes_per_doc":4,"measurement_kind":"fixture"},
     {"config_name":"treedb_json_collection_0_indexes","engine":"treedb_fast","format":"json","shape":"collection","index_count":0,"document_count":100,"phase":"post_insert","maintenance_mode":"none","total_bytes":1200,"bytes_per_doc":12,"docs_per_sec":8000,"measurement_kind":"go_benchmark"},
     {"config_name":"treedb_json_collection_0_indexes","engine":"treedb_fast","format":"json","shape":"collection","index_count":0,"document_count":100,"phase":"full_leafgen_pack_gc","maintenance_mode":"full_leafgen_pack_gc","total_bytes":600,"bytes_per_doc":6,"measurement_kind":"fixture"},
-    {"config_name":"sqlite_native_columns_0_indexes","engine":"sqlite_wal_normal","format":"native-columns","shape":"collection","index_count":0,"document_count":100,"phase":"sqlite_vacuum","maintenance_mode":"sqlite_vacuum","total_bytes":2000,"bytes_per_doc":20,"measurement_kind":"fixture"},
+    {"config_name":"sqlite_native_columns_0_indexes","engine":"sqlite_wal_normal","format":"native-columns","shape":"collection","index_count":0,"document_count":100,"phase":"sqlite_vacuum","maintenance_mode":"sqlite_vacuum","total_bytes":2000,"bytes_per_doc":20,"measurement_kind":"fixture","maintenance_stats":{"sqlite_vacuum_ops_per_sec":123},"extra":{"sqlite_vacuum_bytes_before":"2500","sqlite_vacuum_bytes_after":"2000","sqlite_vacuum_bytes_delta":"500"}},
     {"config_name":"sqlite_json_0_indexes","engine":"sqlite_wal_normal","format":"json","shape":"collection","index_count":0,"document_count":100,"phase":"sqlite_vacuum","maintenance_mode":"sqlite_vacuum","total_bytes":3000,"bytes_per_doc":30,"measurement_kind":"fixture"}
   ],
   "comparisons": [
     {"comparison_name":"tree_vs_sqlite","treedb_config_name":"treedb_template_v1_collection_0_indexes","treedb_phase":"full_leafgen_pack_gc","sqlite_config_name":"sqlite_native_columns_0_indexes","sqlite_phase":"sqlite_vacuum","treedb_bytes_per_doc":5,"sqlite_bytes_per_doc":20,"smaller_ratio":4,"comparison_basis":"test"}
   ]
+}`)
+	writeFile(t, filepath.Join(root, "raw_engine_full_matrix", "wal_on_fast_checkpoint_between_tests", "insights.json"), `{
+  "profiles_dir": "raw_engine_full_matrix/wal_on_fast_checkpoint_between_tests",
+  "ops_source": "benchprof_results.json",
+  "insights": ["random_read: decode/read I/O hotspot"],
+  "cpu_profiles": [{}],
+  "alloc_space_profiles": [{}],
+  "investigation_targets": [{"db_tag":"treedb","test":"random_read","category":"decode/read I/O","function":"TreeDB/db.Get","flat_pct":12.5,"file":"TreeDB/db/db.go","line":123,"why":"hot read path"}]
+}`)
+	writeFile(t, filepath.Join(root, "mongo_gateway_full_sweep_1m_expanded", "profiles", "treedb_cell", "profile_manifest.json"), `{
+  "profile_dir": "profiles/treedb_cell",
+  "artifacts": [{"phase":"load_insert_many","prefix":"load_insert_many","duration_ms":12.3,"cpu_profile":"load_insert_many.cpu.pprof","allocs_profile":"load_insert_many.allocs.pprof"}]
+}`)
+	writeFile(t, filepath.Join(root, "mongo_gateway_full_sweep_1m_expanded", "profiles", "treedb_cell", "benchmark_result.json"), `{
+  "target":"treedb",
+  "documents":100,
+  "secondary_indexes":0,
+  "client_mode":"driver-command-raw",
+  "treedb_document_format":"bson",
+  "treedb_profile":"wal_on_fast",
+  "phases":[{"name":"load_insert_many","ops_per_sec":12345,"latency_micros":{"p95":99}}]
 }`)
 	summary0 := mongoSummaryFixture(0)
 	summary4 := mongoSummaryFixture(4)
@@ -93,6 +115,7 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"Mongo API Reader/Writer Scaling",
 		"Collections vs SQLite",
 		"Raw TreeDB Engine",
+		"Profiling Follow-Up",
 		"<svg",
 		"All raw full-sweep TSV rows",
 		"sequential_write",
@@ -107,12 +130,21 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"4 Indexes: Mongo API Scaling",
 		"Single threaded client",
 		"ID Find One: Throughput Vs Reader Clients",
-		"Best same-client comparison",
+		"Throughput summary",
+		"largest TreeDB/MongoDB",
 		"Raw full-sweep TSV rows for 4 indexes",
 		"Raw scaling TSV rows, 4 indexes",
 		"TreeDB BSON",
 		"TreeDB JSON",
-		"SQLite native VACUUM: 20",
+		"SQLite native VACUUM: Native Columns",
+		"Collection summary",
+		"storage lifecycle",
+		"Compacted Size: SQLite Bytes/Doc Divided By TreeDB Bytes/Doc",
+		"Maintenance Evidence",
+		"Raw Engine Benchprof Insights",
+		"Mongo Gateway Profile Manifests",
+		"decode/read I/O hotspot",
+		"load_insert_many.cpu.pprof",
 		"Client modes marked with <strong>*</strong>",
 		"Raw load-mode rows",
 		"BSON Raw</text><text",
@@ -122,6 +154,7 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"bypassing the MongoDB Go driver",
 		"same raw command/gateway path in process",
 		"one centered TreeDB bar",
+		"Physical Storage By Client Mode",
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("report missing %q\n%s", want, html)
@@ -135,6 +168,9 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		if strings.Contains(html, unwanted) {
 			t.Fatalf("report still contains unwanted split/missing raw-wire marker %q\n%s", unwanted, html)
 		}
+	}
+	if strings.Contains(html, "<details open") {
+		t.Fatalf("raw tables should be hidden by default\n%s", html)
 	}
 }
 
@@ -334,6 +370,42 @@ func TestMongoScalingCountsAcrossPerCountConfigs(t *testing.T) {
 	if want := []float64{10, 160}; !reflect.DeepEqual(values, want) {
 		t.Fatalf("scaling values = %v, want %v", values, want)
 	}
+	summary := mongoOperationThroughputRows(rows, 0, false)
+	if len(summary) == 0 || !summary[0].HasTreePeak || summary[0].TreePeakCount != 16 || summary[0].TreePeak.TreeDBOpsSec != 160 {
+		t.Fatalf("scaling summary = %+v, want full per-count sweep peak", summary)
+	}
+	scoped := mongoOperationThroughputRows(rows, 0, true)
+	if len(scoped) == 0 || !scoped[0].HasTreePeak || scoped[0].TreePeakCount != 1 {
+		t.Fatalf("scoped summary = %+v, want primary-scope-only peak", scoped)
+	}
+}
+
+func TestMongoProfileMissingResultDoesNotLookLikeZeroIndexRun(t *testing.T) {
+	root := t.TempDir()
+	manifest := filepath.Join(root, "mongo_gateway_full_sweep_1m_expanded", "profiles", "treedb_cell", "profile_manifest.json")
+	writeFile(t, manifest, `{
+  "profile_dir": "profiles/treedb_cell",
+  "artifacts": [{"phase":"load_insert_many","duration_ms":12.3,"cpu_profile":"load.cpu.pprof"}]
+}`)
+	item, err := readMongoProfileSummary(root, manifest)
+	if err != nil {
+		t.Fatalf("read profile summary: %v", err)
+	}
+	if item.HasResult {
+		t.Fatalf("profile HasResult=true despite missing benchmark_result.json")
+	}
+	if got := profileIndexesLabel(item); got != "-" {
+		t.Fatalf("profile indexes label = %q, want dash for missing result", got)
+	}
+	var b strings.Builder
+	renderProfiles(&b, profileReportData{Mongo: []mongoProfileSummary{item}})
+	html := b.String()
+	if strings.Contains(html, "<td class=\"num\">0</td><td>load_insert_many") {
+		t.Fatalf("missing result rendered as 0-index run\n%s", html)
+	}
+	if !strings.Contains(html, "benchmark_result.json") {
+		t.Fatalf("missing result error not rendered\n%s", html)
+	}
 }
 
 func TestMongoThroughputSummaryUsesSameConcurrencyRatio(t *testing.T) {
@@ -344,18 +416,18 @@ func TestMongoThroughputSummaryUsesSameConcurrencyRatio(t *testing.T) {
 		{SecondaryIndexes: 0, Phase: "concurrent_id_find_one_r32", TreeDBOpsSec: 200, MongoOpsSec: 40},
 	}
 	var b strings.Builder
-	writeMongoThroughputSummary(&b, mongoOperationThroughputRows(rows, 0))
+	writeMongoThroughputSummary(&b, mongoOperationThroughputRows(rows, 0, true))
 	html := b.String()
 	for _, want := range []string{
-		"class=\"summary-strip\"",
-		"best same-client ratio",
+		"Throughput summary",
+		"single-threaded TreeDB",
+		"peak TreeDB",
+		"largest TreeDB/MongoDB",
 		"5.00x",
 		"32 readers",
-		"TreeDB @ clients",
 		"200",
-		"MongoDB @ clients",
 		"40",
-		"TreeDB vs single @ clients",
+		"TreeDB scale-up",
 		"20.00x",
 	} {
 		if !strings.Contains(html, want) {
@@ -365,7 +437,7 @@ func TestMongoThroughputSummaryUsesSameConcurrencyRatio(t *testing.T) {
 	if strings.Contains(html, "<div class=\"metric\"") {
 		t.Fatalf("summary should not render metric cards\n%s", html)
 	}
-	for _, unwanted := range []string{"TreeDB peak", "MongoDB peak", "peak ratio", "16 readers", "500", "250"} {
+	for _, unwanted := range []string{"<div class=\"metric\"", "peak ratio"} {
 		if strings.Contains(html, unwanted) {
 			t.Fatalf("summary still contains independent peak artifact %q\n%s", unwanted, html)
 		}
