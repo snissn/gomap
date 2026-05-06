@@ -60,7 +60,7 @@ func TestCollectionCheckpointDoesNotFlushPendingNoIndexInsert(t *testing.T) {
 	}
 }
 
-func TestCollectionCheckpointSeesSynchronousNoIndexUpdate(t *testing.T) {
+func TestCollectionCheckpointDoesNotFlushPendingNoIndexUpdate(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})
 	if err != nil {
@@ -82,6 +82,7 @@ func TestCollectionCheckpointSeesSynchronousNoIndexUpdate(t *testing.T) {
 		t.Fatalf("flush insert: %v", err)
 	}
 	beforeRoot := collectionCheckpointBoundaryPrimaryRootIDForTest(t, d, "users")
+	beforeStats := mgr.StatsSnapshot()
 
 	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
 		return []byte(`{"name":"ada","city":"sea"}`), true, nil
@@ -92,19 +93,50 @@ func TestCollectionCheckpointSeesSynchronousNoIndexUpdate(t *testing.T) {
 	if !matched || !modified {
 		t.Fatalf("update matched/modified=%v/%v want true/true", matched, modified)
 	}
-	updatedRoot := collectionCheckpointBoundaryPrimaryRootIDForTest(t, d, "users")
-	if updatedRoot == beforeRoot {
-		t.Fatalf("synchronous no-index update left primary root at %d", updatedRoot)
+	stagedRoot := collectionCheckpointBoundaryPrimaryRootIDForTest(t, d, "users")
+	if stagedRoot != beforeRoot {
+		t.Fatalf("staged no-index update changed primary root from %d to %d before flush", beforeRoot, stagedRoot)
 	}
-	if got := collectionCheckpointBoundaryPendingCountForTest(t, col); got != 0 {
-		t.Fatalf("pending count after synchronous no-index update=%d want 0", got)
+	if got := collectionCheckpointBoundaryPendingCountForTest(t, col); got != 1 {
+		t.Fatalf("pending count after staged no-index update=%d want 1", got)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get staged update before checkpoint: %v", err)
+	}
+	if want := []byte(`{"name":"ada","city":"sea"}`); !bytes.Equal(got, want) {
+		t.Fatalf("staged update before checkpoint=%q want %q", got, want)
 	}
 	if err := d.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
 	afterCheckpointRoot := collectionCheckpointBoundaryPrimaryRootIDForTest(t, d, "users")
-	if afterCheckpointRoot != updatedRoot {
-		t.Fatalf("checkpoint changed primary root from %d to %d after synchronous update", updatedRoot, afterCheckpointRoot)
+	if afterCheckpointRoot != beforeRoot {
+		t.Fatalf("checkpoint changed primary root from %d to %d for pending no-index update", beforeRoot, afterCheckpointRoot)
+	}
+	if got := collectionCheckpointBoundaryPendingCountForTest(t, col); got != 1 {
+		t.Fatalf("pending count after checkpoint=%d want 1", got)
+	}
+	afterCheckpointStats := mgr.StatsSnapshot()
+	if got := afterCheckpointStats.PrimaryOnlyRootPublishes - beforeStats.PrimaryOnlyRootPublishes; got != 0 {
+		t.Fatalf("checkpoint primary-only root publishes delta=%d want 0", got)
+	}
+	got, err = col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get staged update after checkpoint: %v", err)
+	}
+	if want := []byte(`{"name":"ada","city":"sea"}`); !bytes.Equal(got, want) {
+		t.Fatalf("staged update after checkpoint=%q want %q", got, want)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush staged update: %v", err)
+	}
+	flushedRoot := collectionCheckpointBoundaryPrimaryRootIDForTest(t, d, "users")
+	if flushedRoot == beforeRoot {
+		t.Fatalf("flush left primary root at %d, want published staged update", flushedRoot)
+	}
+	if got := collectionCheckpointBoundaryPendingCountForTest(t, col); got != 0 {
+		t.Fatalf("pending count after flush=%d want 0", got)
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("close db: %v", err)
@@ -119,7 +151,7 @@ func TestCollectionCheckpointSeesSynchronousNoIndexUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open reopened collection: %v", err)
 	}
-	got, err := reopenedCol.Get([]byte("u1"))
+	got, err = reopenedCol.Get([]byte("u1"))
 	if err != nil {
 		t.Fatalf("get reopened updated doc: %v", err)
 	}
