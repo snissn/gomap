@@ -115,6 +115,26 @@ func TestServerHandlesMsgPing(t *testing.T) {
 	assertOK(t, msg.Body)
 }
 
+func TestServerRejectsFindWithMoreToCome(t *testing.T) {
+	commandDoc := mustDocument(t, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	req, err := wire.AppendMsgMessage(nil, 201, 0, wire.MsgFlagMoreToCome, commandDoc)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage: %v", err)
+	}
+	rw := &readWriter{r: bytes.NewReader(req)}
+
+	err = NewServer().ServeOne(rw)
+	if !errors.Is(err, wire.ErrUnsupported) {
+		t.Fatalf("ServeOne err=%v want ErrUnsupported", err)
+	}
+	if rw.w.Len() != 0 {
+		t.Fatalf("unexpected response bytes=%d", rw.w.Len())
+	}
+}
+
 func TestServerInsertAndFindByID(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

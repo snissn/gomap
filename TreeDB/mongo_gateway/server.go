@@ -277,7 +277,7 @@ func (s *Server) handleMsg(h wire.Header, body []byte, cursorOwner int64) ([]byt
 
 	if name == "find" {
 		if msg.Flags&wire.MsgFlagMoreToCome != 0 {
-			return nil, nil
+			return nil, fmt.Errorf("%w: find with moreToCome flag", wire.ErrUnsupported)
 		}
 		responseID := s.nextID()
 		response, err := s.findMsgResponse(msg.Body, responseID, h.RequestID, cursorOwner)
