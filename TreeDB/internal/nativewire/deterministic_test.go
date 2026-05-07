@@ -516,6 +516,26 @@ func TestAppendDeterministicEntryWithLimitsHonorsNameLimit(t *testing.T) {
 	}
 }
 
+func TestAppendDeterministicEntryWithLimitsHonorsEnvelopeLimits(t *testing.T) {
+	registry := MustV1Registry()
+	cmd, err := registry.ValidateRequestSections(insertBatchDeterministicSections())
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	entry, err := AppendDeterministicEntryWithLimits(nil, cmd, DefaultLimits())
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntryWithLimits default limits: %v", err)
+	}
+	_, err = AppendDeterministicEntryWithLimits(nil, cmd, Limits{MaxSectionLen: 1})
+	if codeOf(err) != ErrResourceExhausted {
+		t.Fatalf("AppendDeterministicEntryWithLimits section err=%v code=%d want resource exhausted", err, codeOf(err))
+	}
+	_, err = AppendDeterministicEntryWithLimits(nil, cmd, Limits{MaxFrameSize: uint64(len(entry) - 1)})
+	if codeOf(err) != ErrResourceExhausted {
+		t.Fatalf("AppendDeterministicEntryWithLimits frame err=%v code=%d want resource exhausted", err, codeOf(err))
+	}
+}
+
 func TestDeterministicEntryRejectsInvalidEncodedIndexName(t *testing.T) {
 	registry := MustV1Registry()
 	limit := int(DefaultLimits().MaxDeterministicNameBytes)
