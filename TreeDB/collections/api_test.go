@@ -11759,6 +11759,111 @@ func TestCollectionFindDocumentsByIndexRangeTypedInt64(t *testing.T) {
 	}
 }
 
+func TestCollectionFindDocumentsByIndexRangeUsesBufferedPrimaryView(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "score", Field: "score", ValueType: IndexValueInt64}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"score":5,"name":"old-indexed"}`),
+			[]byte(`{"score":8,"name":"old-primary"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush persisted rows: %v", err)
+	}
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONField("score", int64(7))},
+		{DocumentID: []byte("u2"), Update: setJSONField("name", "fresh-primary")},
+	}); err != nil {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("batched=%v want buffered update batch", batched)
+	}
+
+	records, truncated, err := col.FindDocumentsByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(7), Inclusive: true},
+		Upper: IndexRangeBound{Value: int64(9), Inclusive: false},
+	})
+	if err != nil {
+		t.Fatalf("find documents range: %v", err)
+	}
+	if truncated || len(records) != 2 {
+		t.Fatalf("records len=%d truncated=%v want 2,false", len(records), truncated)
+	}
+	if !bytes.Equal(records[0].ID, []byte("u1")) || !bytes.Contains(records[0].Document, []byte(`"score":7`)) {
+		t.Fatalf("first record=%q/%s want buffered indexed score update", records[0].ID, records[0].Document)
+	}
+	if !bytes.Equal(records[1].ID, []byte("u2")) || !bytes.Contains(records[1].Document, []byte(`"name":"fresh-primary"`)) {
+		t.Fatalf("second record=%q/%s want buffered primary update", records[1].ID, records[1].Document)
+	}
+}
+
+func TestCollectionFindByIndexRangeDedupesPersistedOnlyMultiKeyRange(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		Indexes: []IndexDefinition{
+			{Name: "tag", Field: "tags", ValueType: IndexValueString, MultiKey: true},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("d1"), []byte("d2")},
+		[][]byte{
+			[]byte(`{"tags":["a","b"]}`),
+			[]byte(`{"tags":["c"]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	ids, truncated, err := col.FindByIndexRange("tag", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: "a", Inclusive: true},
+		Upper: IndexRangeBound{Value: "d", Inclusive: false},
+		Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("find range: %v", err)
+	}
+	if truncated || len(ids) != 2 || !bytes.Equal(ids[0], []byte("d1")) || !bytes.Equal(ids[1], []byte("d2")) {
+		t.Fatalf("ids=%q truncated=%v want d1,d2 false", ids, truncated)
+	}
+}
+
 func TestCollectionFindByIndexRangeMergesBufferedUpdates(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

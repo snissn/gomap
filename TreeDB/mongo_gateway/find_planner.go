@@ -226,8 +226,11 @@ func pureIndexedRangeLimitPlan(meta collections.CollectionMeta, plan findPlan, m
 			continue
 		}
 		opts, ok, empty, err := indexRangeOptionsForPredicates(plan.predicates, idx)
-		if err != nil || !ok {
-			return collections.IndexDefinition{}, collections.IndexRangeOptions{}, 0, ok, false, err
+		if err != nil {
+			return collections.IndexDefinition{}, collections.IndexRangeOptions{}, 0, false, false, err
+		}
+		if !ok {
+			continue
 		}
 		opts.Limit = limit
 		return idx, opts, limit, true, empty, nil
