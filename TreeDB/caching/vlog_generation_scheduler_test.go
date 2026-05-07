@@ -2464,7 +2464,7 @@ func TestVlogGenerationMaintenance_PeriodicLeafPackDoesNotBlockOnScheduledRetain
 	db.lastForegroundReadUnixNano.Store(now.Add(-2 * vlogForegroundReadQuietWindow).UnixNano())
 	db.scheduleRetainedValueLogPrune()
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(schedulerTestWait(t))
 	for {
 		db.retainedPruneMu.Lock()
 		waiting := db.retainedPruneDone != nil
@@ -4873,7 +4873,24 @@ func TestVlogGenerationRewriteQueue_AggressiveFlowBypassesCooledDebtAndReadmitsI
 	}
 }
 
-func TestVlogGenerationRewriteQueue_FreshBypassThenExpiredRetryPrefersImprovedStalePayoff(t *testing.T) {
+func TestAdmitVlogGenerationRewriteLedger_PrefersImprovedStalePayoff(t *testing.T) {
+	ledger := []backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.5},
+		{FileID: 22, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.5},
+	}
+	penalties := map[uint32]valueLogGenerationRewritePenalty{
+		11: {Attempts: 1, LastStaleBytes: 44},
+		22: {Attempts: 1, LastStaleBytes: 24},
+	}
+
+	ordered := prioritizeVlogGenerationRewriteLedger(ledger, nil, penalties)
+	admitted := admitVlogGenerationRewriteLedger(ordered, nil, penalties, 1)
+	if got, want := vlogGenerationRewriteLedgerIDs(admitted), []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("admitted ids=%v want=%v", got, want)
+	}
+}
+
+func TestVlogGenerationRewriteQueue_FreshBypassThenExpiredRetryDrainsQueuedDebt(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
 	dir := t.TempDir()
@@ -4921,6 +4938,17 @@ func TestVlogGenerationRewriteQueue_FreshBypassThenExpiredRetryPrefersImprovedSt
 				SourceBytesRequested:       64,
 				SourceBytesUnreferenced:    64,
 				SourceFileIDsUnreferenced:  []uint32{22},
+			}, nil
+		case len(opts.SourceFileIDs) == 1 && opts.SourceFileIDs[0] == 11:
+			return backenddb.ValueLogRewriteStats{
+				BytesBefore:                64,
+				BytesAfter:                 40,
+				RecordsCopied:              1,
+				SourceSegmentsRequested:    1,
+				SourceSegmentsUnreferenced: 1,
+				SourceBytesRequested:       64,
+				SourceBytesUnreferenced:    64,
+				SourceFileIDsUnreferenced:  []uint32{11},
 			}, nil
 		default:
 			t.Fatalf("unexpected rewrite source ids=%v", opts.SourceFileIDs)
@@ -4985,14 +5013,19 @@ func TestVlogGenerationRewriteQueue_FreshBypassThenExpiredRetryPrefersImprovedSt
 	if rewriteCalls != 2 {
 		t.Fatalf("rewrite calls after queued retry=%d want=2", rewriteCalls)
 	}
-	if got, want := rewriteOpts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
-		t.Fatalf("queued retry SourceFileIDs=%v want=%v", got, want)
+	if got := rewriteOpts.SourceFileIDs; len(got) != 1 || (got[0] != 11 && got[0] != 22) {
+		t.Fatalf("queued retry SourceFileIDs=%v want one of [11 22]", got)
 	}
+	drainedID := rewriteOpts.SourceFileIDs[0]
 	queue, err = db.currentVlogGenerationRewriteQueue()
 	if err != nil {
 		t.Fatalf("current queue after queued retry: %v", err)
 	}
-	if got, want := queue, []uint32{11}; len(got) != len(want) || got[0] != want[0] {
+	wantRemaining := uint32(11)
+	if drainedID == 11 {
+		wantRemaining = 22
+	}
+	if got, want := queue, []uint32{wantRemaining}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("queue after queued retry=%v want=%v", got, want)
 	}
 }
