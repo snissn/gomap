@@ -75,6 +75,36 @@ func TestDeterministicEntryRejectsDuplicateIdempotencyInValidatedView(t *testing
 	}
 }
 
+func TestDeterministicEntryRejectsUnsupportedCommandFlags(t *testing.T) {
+	registry := MustV1Registry()
+	sections := insertBatchDeterministicSections()
+	sections[0].Bytes = AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 1, Flags: 1})
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrUnsupportedFeature {
+		t.Fatalf("command flags err=%v code=%d", err, codeOf(err))
+	}
+}
+
+func TestDeterministicEntryRejectsCollectionHandleRefs(t *testing.T) {
+	registry := MustV1Registry()
+	sections := insertBatchDeterministicSections()
+	for i := range sections {
+		if sections[i].ID == SectionCollectionRef {
+			sections[i].Bytes = []byte{0, 1}
+		}
+	}
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("collection handle ref err=%v code=%d", err, codeOf(err))
+	}
+}
+
 func insertBatchDeterministicSections() []Section {
 	return []Section{
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 1})},

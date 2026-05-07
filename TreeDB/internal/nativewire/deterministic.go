@@ -18,6 +18,10 @@ func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) 
 	if cmd.Schema.RequiresCatalogGuard && !cmd.hasSection(SectionExpectedCatalogVersion) {
 		return nil, protocolError(ErrInvalidCommand, "missing catalog guard")
 	}
+	deterministicFlags := DeterministicCommandFlags(cmd.Header.Flags)
+	if deterministicFlags != 0 {
+		return nil, protocolError(ErrUnsupportedFeature, "unsupported deterministic command flags 0x%x", deterministicFlags)
+	}
 
 	var deterministicScratch [16]Section
 	deterministic, err := cmd.deterministicSectionsInto(deterministicScratch[:0])
@@ -30,7 +34,7 @@ func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) 
 	dst = appendUvarint(dst, DeterministicEntryVersion)
 	dst = appendUvarint(dst, uint64(cmd.Header.ID))
 	dst = appendUvarint(dst, cmd.Header.Version)
-	dst = appendUvarint(dst, cmd.Header.Flags)
+	dst = appendUvarint(dst, deterministicFlags)
 	dst = appendUvarint(dst, uint64(len(deterministic)))
 	for _, section := range deterministic {
 		dst = appendUvarint(dst, uint64(section.ID))
@@ -73,6 +77,9 @@ func (cmd ValidatedCommand) deterministicSectionsInto(dst []Section) ([]Section,
 				return nil, protocolError(ErrInvalidCommand, "duplicate deterministic singleton section %d", section.ID)
 			}
 		}
+		if section.ID == SectionCollectionRef && isConnectionLocalCollectionRef(section.Bytes) {
+			return nil, protocolError(ErrInvalidCommand, "collection handle ref is not deterministic")
+		}
 		out = append(out, Section{ID: section.ID, Bytes: section.Bytes})
 	}
 	return out, nil
@@ -87,4 +94,8 @@ func sortSectionsByID(sections []Section) {
 		}
 		sections[j+1] = section
 	}
+}
+
+func isConnectionLocalCollectionRef(raw []byte) bool {
+	return len(raw) > 0 && raw[0] == 0
 }
