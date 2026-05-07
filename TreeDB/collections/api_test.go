@@ -11732,6 +11732,13 @@ func TestCollectionFindDocumentsByIndexRangeTypedInt64(t *testing.T) {
 	if truncated || len(records) != 0 {
 		t.Fatalf("empty records len=%d truncated=%v want 0,false", len(records), truncated)
 	}
+
+	if _, truncated, err = col.FindDocumentsByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: "not-an-int", Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+	}); err == nil || truncated {
+		t.Fatalf("bad bound err=%v truncated=%v want error,false", err, truncated)
+	}
 }
 
 func TestCollectionFindDocumentsByIndexRangeUsesBufferedPrimaryView(t *testing.T) {
