@@ -616,6 +616,11 @@ func parseConfig(args []string) (config, error) {
 		return config{}, err
 	}
 	cfg.TreeDBReadState = readState
+	if cfg.Target == "treedb" && cfg.ClientMode == clientModeDirect &&
+		cfg.TreeDBReadState == treeDBReadStateUnsettled && !cfg.RangeIndex &&
+		(cfg.RangeReads > 0 || cfg.ConcurrentRangeReads > 0) {
+		return config{}, errors.New("direct scan range reads require -treedb-read-state settled; use -range-index for unsettled direct range reads")
+	}
 	if cfg.SecondaryIndexes < 0 || cfg.SecondaryIndexes > 3 {
 		return config{}, errors.New("secondary-indexes must be 0, 1, 2, or 3")
 	}
@@ -4491,12 +4496,12 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(result)
 	case "text":
-		fmt.Fprintf(out, "target=%s client_mode=%s database=%s collection=%s documents=%d batch_size=%d insert_producers=%d mongo_max_pool_size=%d mongo_min_pool_size=%d mongo_max_connecting=%d secondary_indexes=%d concurrent_readers=%d concurrent_reader_sweep=%v concurrent_reads=%d concurrent_range_readers=%d concurrent_range_reader_sweep=%v concurrent_range_reads=%d concurrent_writers=%d concurrent_writes=%d\n",
+		fmt.Fprintf(out, "target=%s client_mode=%s database=%s collection=%s documents=%d batch_size=%d insert_producers=%d mongo_max_pool_size=%d mongo_min_pool_size=%d mongo_max_connecting=%d secondary_indexes=%d concurrent_readers=%d concurrent_reader_sweep=%v concurrent_reads=%d concurrent_range_readers=%d concurrent_range_reader_sweep=%v concurrent_range_reads=%d concurrent_writers=%d concurrent_writes=%d treedb_read_state=%s\n",
 			result.Target, result.ClientMode, result.Database, result.Collection, result.Documents, result.BatchSize,
 			result.InsertProducers, result.MongoMaxPoolSize, result.MongoMinPoolSize, result.MongoMaxConnecting, result.SecondaryIndexes,
 			result.ConcurrentReaders, result.ConcurrentReaderSweep, result.ConcurrentReads,
 			result.ConcurrentRangeReaders, result.ConcurrentRangeReaderSweep, result.ConcurrentRangeReads,
-			result.ConcurrentWriters, result.ConcurrentWrites)
+			result.ConcurrentWriters, result.ConcurrentWrites, result.TreeDBReadState)
 		fmt.Fprintf(out, "update_indexed_field=%t\n", result.UpdateIndexedField)
 		fmt.Fprintf(out, "range_index=%t\n", result.RangeIndex)
 		if result.TreeDBDir != "" {
