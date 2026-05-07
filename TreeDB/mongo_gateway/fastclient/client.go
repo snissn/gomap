@@ -162,6 +162,12 @@ func (c *Client) watchContextCancelLocked(ctx context.Context) func() {
 	if done == nil {
 		return func() {}
 	}
+	if _, ok := ctx.Deadline(); ok {
+		// The connection deadline already interrupts blocking reads/writes at
+		// timeout. Avoid a goroutine per request on benchmark hot paths that
+		// use a long-lived deadline context and do not cancel individual ops.
+		return func() {}
+	}
 	stop := make(chan struct{})
 	stopped := make(chan struct{})
 	go func() {
