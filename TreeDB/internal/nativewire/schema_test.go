@@ -24,6 +24,14 @@ func TestCommandHeaderGolden(t *testing.T) {
 	}
 }
 
+func TestCommandHeaderRejectsNonMinimalUvarint(t *testing.T) {
+	// command_id 30 encoded as an overlong two-byte varint.
+	_, err := DecodeCommandHeader([]byte{0x9e, 0x00, 0x01, 0x00})
+	if codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("non-minimal command header err=%v code=%d", err, codeOf(err))
+	}
+}
+
 func TestRegistryValidatesRequestSections(t *testing.T) {
 	registry := MustV1Registry()
 	sections := insertBatchSections()
@@ -92,6 +100,20 @@ func TestRegistryCursorCommandsUseCursorSections(t *testing.T) {
 		{ID: SectionCursorRef, Bytes: []byte{1}},
 	}); err != nil {
 		t.Fatalf("cursor_close schema: %v", err)
+	}
+}
+
+func TestReplicatedV1CommandsRequireIdentityAndCatalogGuard(t *testing.T) {
+	for _, schema := range v1CommandSchemas() {
+		if !schema.Replicated || schema.LocalOnly {
+			continue
+		}
+		if !schema.RequiresIdempotency {
+			t.Fatalf("%s is replicated without idempotency guard", schema.Name)
+		}
+		if !schema.RequiresCatalogGuard {
+			t.Fatalf("%s is replicated without catalog guard", schema.Name)
+		}
 	}
 }
 
