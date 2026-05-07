@@ -1947,6 +1947,9 @@ func validateStoredBSONFrame(doc []byte) error {
 		return fmt.Errorf("stored BSON document too short: %d", len(doc))
 	}
 	size := int(int32(binary.LittleEndian.Uint32(doc[:4])))
+	if size < 5 {
+		return fmt.Errorf("stored BSON document length=%d below minimum", size)
+	}
 	if size != len(doc) {
 		return fmt.Errorf("stored BSON document length=%d available=%d", size, len(doc))
 	}
