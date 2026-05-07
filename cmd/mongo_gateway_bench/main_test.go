@@ -1976,6 +1976,48 @@ func TestRecordEffectiveTreeDBCollectionOptionsUsesNormalizedMetadata(t *testing
 	}
 }
 
+func TestEnsureNativeWireBenchmarkCollectionCreatesPrimaryOnlyCollection(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	cfg := config{
+		Database:                                      "bench",
+		Collection:                                    "docs",
+		TreeDBDocumentFormat:                          collections.DocumentFormatTemplateV1,
+		TreeDBDataRootStorage:                         collections.RootStorageCompressed,
+		TreeDBIndexStateRootStorage:                   collections.RootStorageCompressed,
+		TreeDBBufferedIndexedWriteMaxDocuments:        123,
+		TreeDBBufferedIndexedWriteMaxBytes:            456,
+		TreeDBBufferedIndexedWriteMaxRootRuns:         7,
+		TreeDBBufferedIndexedAsyncFlush:               true,
+		TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits: 2,
+	}
+	if err := ensureNativeWireBenchmarkCollection(cfg, &benchTarget{collections: manager}); err != nil {
+		t.Fatalf("ensureNativeWireBenchmarkCollection: %v", err)
+	}
+	col, err := manager.OpenCollection("bench.docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	meta := col.Meta()
+	if len(meta.Indexes) != 0 {
+		t.Fatalf("indexes=%+v want primary-only collection", meta.Indexes)
+	}
+	if meta.Options.DocumentFormat != collections.DocumentFormatTemplateV1 ||
+		meta.Options.DataRootStoragePolicy != collections.RootStorageCompressed ||
+		meta.Options.IndexStateStoragePolicy != collections.RootStorageCompressed ||
+		meta.Options.BufferedIndexedWriteMaxDocuments != 123 ||
+		meta.Options.BufferedIndexedWriteMaxBytes != 456 ||
+		meta.Options.BufferedIndexedWriteMaxRootRuns != 7 ||
+		!meta.Options.BufferedIndexedAsyncFlush ||
+		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits != 2 {
+		t.Fatalf("meta options=%+v", meta.Options)
+	}
+}
+
 func TestWriteResultKeepsTextHeaderStableForIndexedUpdateKnob(t *testing.T) {
 	result := &benchmarkResult{
 		Target:          "treedb",

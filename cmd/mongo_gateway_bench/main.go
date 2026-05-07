@@ -806,16 +806,7 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 	server := mongogateway.NewServer()
 	server.Collections = manager
 	server.MaxFindScanDocuments = cfg.Documents
-	server.DefaultCollectionOptions = collections.CollectionOptions{
-		DocumentFormat:                          cfg.TreeDBDocumentFormat,
-		DataRootStoragePolicy:                   cfg.TreeDBDataRootStorage,
-		IndexStateStoragePolicy:                 cfg.TreeDBIndexStateRootStorage,
-		BufferedIndexedWriteMaxDocuments:        cfg.TreeDBBufferedIndexedWriteMaxDocuments,
-		BufferedIndexedWriteMaxBytes:            cfg.TreeDBBufferedIndexedWriteMaxBytes,
-		BufferedIndexedWriteMaxRootRuns:         cfg.TreeDBBufferedIndexedWriteMaxRootRuns,
-		BufferedIndexedAsyncFlush:               cfg.TreeDBBufferedIndexedAsyncFlush,
-		BufferedIndexedAsyncFlushMaxQueuedUnits: cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
-	}
+	server.DefaultCollectionOptions = treeDBBenchmarkCollectionOptions(cfg)
 	server.DefaultIndexStoragePolicy = cfg.TreeDBIndexRootStorage
 	nativeServer := nativewire.NewServer(nativewire.ServerOptions{
 		Collections:      manager,
@@ -1574,6 +1565,19 @@ func createIndexes(ctx context.Context, db *mongo.Database, coll *mongo.Collecti
 	return nil
 }
 
+func treeDBBenchmarkCollectionOptions(cfg config) collections.CollectionOptions {
+	return collections.CollectionOptions{
+		DocumentFormat:                          cfg.TreeDBDocumentFormat,
+		DataRootStoragePolicy:                   cfg.TreeDBDataRootStorage,
+		IndexStateStoragePolicy:                 cfg.TreeDBIndexStateRootStorage,
+		BufferedIndexedWriteMaxDocuments:        cfg.TreeDBBufferedIndexedWriteMaxDocuments,
+		BufferedIndexedWriteMaxBytes:            cfg.TreeDBBufferedIndexedWriteMaxBytes,
+		BufferedIndexedWriteMaxRootRuns:         cfg.TreeDBBufferedIndexedWriteMaxRootRuns,
+		BufferedIndexedAsyncFlush:               cfg.TreeDBBufferedIndexedAsyncFlush,
+		BufferedIndexedAsyncFlushMaxQueuedUnits: cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
+	}
+}
+
 func treedbCreateIndexDocs(secondaryIndexes int, rangeIndex bool) bson.A {
 	indexDocs := make(bson.A, 0, secondaryIndexes+1)
 	if secondaryIndexes >= 1 {
@@ -1893,6 +1897,9 @@ func runTreeDBNativeWireInprocLoadPhase(ctx context.Context, cfg config, target 
 	if target == nil || target.nativeServer == nil {
 		return phaseResult{}, errors.New("native-wire-inproc client mode requires an in-process nativewire server")
 	}
+	if err := ensureNativeWireBenchmarkCollection(cfg, target); err != nil {
+		return phaseResult{}, err
+	}
 	producers := effectiveLoadProducers(cfg.Documents, cfg.BatchSize, cfg.InsertProducers)
 	clients := make([]*nativewire.Client, producers)
 	cleanups := make([]func() error, producers)
@@ -1930,6 +1937,9 @@ func runTreeDBNativeWireTCPLoadPhase(ctx context.Context, cfg config, target *be
 	if target == nil || target.nativeAddr == "" {
 		return phaseResult{}, errors.New("native-wire-tcp client mode requires a nativewire listener")
 	}
+	if err := ensureNativeWireBenchmarkCollection(cfg, target); err != nil {
+		return phaseResult{}, err
+	}
 	producers := effectiveLoadProducers(cfg.Documents, cfg.BatchSize, cfg.InsertProducers)
 	clients := make([]*nativewire.Client, producers)
 	for i := range clients {
@@ -1957,6 +1967,23 @@ func runTreeDBNativeWireTCPLoadPhase(ctx context.Context, cfg config, target *be
 		_, err = clients[producer].InsertBatch(batchCtx, cfg.Database+"."+cfg.Collection, cfg.TreeDBDocumentFormat, ids, docs, nativewire.AckVisible)
 		return err
 	})
+}
+
+func ensureNativeWireBenchmarkCollection(cfg config, target *benchTarget) error {
+	if target == nil || target.collections == nil {
+		return errors.New("native-wire client mode requires a TreeDB collection manager")
+	}
+	name := cfg.Database + "." + cfg.Collection
+	if _, err := target.collections.OpenCollection(name); err == nil {
+		return nil
+	} else if !errors.Is(err, collections.ErrCollectionNotFound) {
+		return err
+	}
+	_, err := target.collections.CreateCollection(&collections.CollectionMeta{
+		Name:    name,
+		Options: treeDBBenchmarkCollectionOptions(cfg),
+	})
+	return err
 }
 
 func nativeWireInsertBatch(cfg config, start, end int, prebuilt []bson.D, prebuiltRaw []bson.Raw) ([][]byte, [][]byte, error) {
