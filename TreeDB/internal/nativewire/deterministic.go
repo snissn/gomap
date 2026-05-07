@@ -227,13 +227,6 @@ func (cmd ValidatedCommand) deterministicSectionsInto(dst []Section) ([]Section,
 	out := dst[:0]
 	var seen sectionSeenSet
 	for _, section := range cmd.Known {
-		if section.ID == SectionIdempotencyKey {
-			if seen.add(section.ID) > 1 {
-				return nil, protocolError(ErrInvalidCommand, "duplicate deterministic singleton section %d", section.ID)
-			}
-			out = append(out, Section{ID: section.ID, Bytes: section.Bytes})
-			continue
-		}
 		rule := rules[section.ID]
 		if !rule.Deterministic {
 			continue
@@ -261,12 +254,6 @@ func validateDecodedDeterministicEntry(commandID CommandID, commandVersion uint6
 	rules := schema.ruleMap()
 	var seen sectionSeenSet
 	for _, section := range sections {
-		if section.ID == SectionIdempotencyKey {
-			if seen.add(section.ID) > 1 {
-				return nil, protocolError(ErrInvalidCommand, "duplicate deterministic singleton section %d", section.ID)
-			}
-			continue
-		}
 		rule, ok := rules[section.ID]
 		if !ok || !rule.Deterministic {
 			return nil, protocolError(ErrInvalidCommand, "section %d is not deterministic for command %s", section.ID, schema.Name)
