@@ -212,7 +212,7 @@ Invariant:
   section, command-schema, feature-negotiation, and deterministic command-entry
   rules from `TreeDB/docs/spec/native-wire-protocol.md`.
 - Protocol implementation work must keep schema IDs, codec constants, golden
-  vectors, fuzz targets, parity tests, deterministic-entry tests, benchmark
+  fixtures, fuzz targets, parity tests, deterministic-entry tests, benchmark
   labels, and observability counters aligned with
   `TreeDB/docs/spec/native-wire-implementation-guidelines.md`.
 

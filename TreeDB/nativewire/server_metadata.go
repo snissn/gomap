@@ -54,7 +54,7 @@ func (s *Server) handleCreateIndex(state *connState, sections []iwire.Section) (
 	if err != nil {
 		return nil, err
 	}
-	if err := ensureIndexName(def.Name); err != nil {
+	if err := normalizeClientIndexDefinition(def); err != nil {
 		return nil, err
 	}
 	collection, err := s.collections.OpenCollection(name)
@@ -122,7 +122,10 @@ func (s *Server) handleOpenCollection(state *connState, sections []iwire.Section
 	if _, err := s.collections.OpenCollection(name); err != nil {
 		return nil, metadataWrap(err)
 	}
-	handle := state.addCollectionHandle(name)
+	handle, err := state.addCollectionHandle(name, s.maxCollectionHandles)
+	if err != nil {
+		return nil, err
+	}
 	return []iwire.Section{{ID: iwire.SectionCollectionHandle, Bytes: encodeHandle(handle)}}, nil
 }
 

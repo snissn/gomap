@@ -94,10 +94,40 @@ func TestByteVectorRejectsLengthMismatch(t *testing.T) {
 		{2, 1, 2, 'a', 'b'},   // truncated payload.
 		{1, 1, 'a', 'x'},      // extra payload.
 		{1, 0xff, 0xff, 0xff}, // truncated/overflow varint.
+		{3, 0, 0},             // count exceeds available length table bytes.
 	} {
 		if _, err := DecodeByteVector(tc, Limits{}); codeOf(err) != ErrMalformedFrame {
 			t.Fatalf("DecodeByteVector(%x) err=%v code=%d", tc, err, codeOf(err))
 		}
+	}
+}
+
+func TestDecodeSectionsRejectsLimitsAndMalformed(t *testing.T) {
+	var body []byte
+	var err error
+	body, err = AppendSection(body, Section{ID: SectionCollectionRef})
+	if err != nil {
+		t.Fatalf("AppendSection 1: %v", err)
+	}
+	body, err = AppendSection(body, Section{ID: SectionDocumentIDs})
+	if err != nil {
+		t.Fatalf("AppendSection 2: %v", err)
+	}
+	if _, err := DecodeSections(body, Limits{MaxSections: 1}); codeOf(err) != ErrResourceExhausted {
+		t.Fatalf("MaxSections err=%v code=%d", err, codeOf(err))
+	}
+
+	tooLarge, err := AppendSection(nil, Section{ID: SectionCollectionRef, Bytes: []byte("ab")})
+	if err != nil {
+		t.Fatalf("AppendSection large: %v", err)
+	}
+	if _, err := DecodeSections(tooLarge, Limits{MaxSectionLen: 1}); codeOf(err) != ErrResourceExhausted {
+		t.Fatalf("MaxSectionLen err=%v code=%d", err, codeOf(err))
+	}
+
+	truncated := []byte{byte(SectionCollectionRef), 0, 2, 'a'}
+	if _, err := DecodeSections(truncated, Limits{}); codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("truncated section err=%v code=%d", err, codeOf(err))
 	}
 }
 
