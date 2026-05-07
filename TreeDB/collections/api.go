@@ -6564,7 +6564,6 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte) (int, error) {
 
 	type existingDelete struct {
 		id    []byte
-		value []byte
 		state documentIndexState
 	}
 	existing := make([]existingDelete, 0, len(documentIDs))
@@ -6580,7 +6579,7 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte) (int, error) {
 		if entry.Flags&node.FlagTombstone != 0 {
 			continue
 		}
-		item := existingDelete{id: documentID, value: entry.Value}
+		item := existingDelete{id: documentID}
 		if len(runtimes) > 0 {
 			item.state, err = loadDeleteIndexState(snap, catalog, documentID, entry.Value, runtimes, plannerOptions)
 			if err != nil {

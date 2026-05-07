@@ -34,17 +34,27 @@ func readFrame(r io.Reader, limits iwire.Limits) (iwire.Header, []byte, error) {
 
 func writeFrame(w io.Writer, header iwire.Header, body []byte) error {
 	header.BodyLen = uint64(len(body))
-	frame, err := iwire.AppendHeader(nil, header)
+	var headerBuf [iwire.FrameHeaderLenV1]byte
+	frameHeader, err := iwire.AppendHeader(headerBuf[:0], header)
 	if err != nil {
 		return err
 	}
-	frame = append(frame, body...)
-	for len(frame) > 0 {
-		n, err := w.Write(frame)
+	if err := writeAll(w, frameHeader); err != nil {
+		return err
+	}
+	return writeAll(w, body)
+}
+
+func writeAll(w io.Writer, p []byte) error {
+	for len(p) > 0 {
+		n, err := w.Write(p)
 		if err != nil {
 			return err
 		}
-		frame = frame[n:]
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		p = p[n:]
 	}
 	return nil
 }

@@ -43,6 +43,9 @@ func TestReadCommandsParity(t *testing.T) {
 	col := seedReadCollection(t, mgr)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
 
 	docs, present, err := client.GetMany(ctx, "users", [][]byte{[]byte("u2"), []byte("missing"), []byte("u1")})
 	if err != nil {
@@ -94,6 +97,9 @@ func TestIndexLookupWithoutLimitsReturnsAllMatches(t *testing.T) {
 	seedReadCollection(t, mgr)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
 
 	ids, truncated, err := client.IndexLookup(ctx, "users", "city", "hnl", CursorLimits{})
 	if err != nil {
@@ -104,11 +110,32 @@ func TestIndexLookupWithoutLimitsReturnsAllMatches(t *testing.T) {
 	}
 }
 
+func TestIndexLookupByteOnlyLimitTruncatesIDs(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	ids, truncated, err := client.IndexLookup(ctx, "users", "city", "hnl", CursorLimits{MaxBytes: 2})
+	if err != nil {
+		t.Fatalf("IndexLookup: %v", err)
+	}
+	if !truncated || len(ids) != 1 || string(ids[0]) != "u1" {
+		t.Fatalf("ids=%q truncated=%v want first ID with truncation", ids, truncated)
+	}
+}
+
 func TestIndexRangeOmittedBoundsAreUnbounded(t *testing.T) {
 	client, mgr, _ := serveCollectionPipe(t)
 	seedReadCollection(t, mgr)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
 
 	ids, truncated, err := client.IndexRange(ctx, "users", "city", IndexRange{
 		LowerUnbounded: true,
@@ -135,6 +162,9 @@ func TestOpenScanReportsTruncatedRetainedWindow(t *testing.T) {
 	seedReadCollection(t, mgr)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
 
 	first, err := client.OpenScan(ctx, "users", CursorLimits{MaxItems: 10})
 	if err != nil {
@@ -150,6 +180,9 @@ func TestOpenScanCursorLifecycle(t *testing.T) {
 	seedReadCollection(t, mgr)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
 
 	first, err := client.OpenScan(ctx, "users", CursorLimits{MaxItems: 1})
 	if err != nil {
@@ -176,6 +209,9 @@ func TestCursorClose(t *testing.T) {
 	seedReadCollection(t, mgr)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
 	first, err := client.OpenScan(ctx, "users", CursorLimits{MaxItems: 1})
 	if err != nil {
 		t.Fatalf("OpenScan: %v", err)

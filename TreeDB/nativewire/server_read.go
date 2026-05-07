@@ -81,10 +81,34 @@ func (s *Server) handleIndexLookup(state *connState, sections []iwire.Section) (
 			return nil, metadataWrap(err)
 		}
 	}
+	ids, truncated = applyIDByteLimit(ids, limits.MaxBytes, truncated)
 	return []iwire.Section{
 		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, ids...)},
 		{ID: iwire.SectionTruncated, Bytes: appendBool(nil, truncated)},
 	}, nil
+}
+
+func applyIDByteLimit(ids [][]byte, maxBytes int, truncated bool) ([][]byte, bool) {
+	if maxBytes <= 0 || len(ids) == 0 {
+		return ids, truncated
+	}
+	end := 0
+	bytes := 0
+	for end < len(ids) {
+		nextBytes := len(ids[end])
+		if end > 0 && bytes+nextBytes > maxBytes {
+			break
+		}
+		bytes += nextBytes
+		end++
+		if bytes >= maxBytes {
+			break
+		}
+	}
+	if end < len(ids) {
+		return ids[:end], true
+	}
+	return ids, truncated
 }
 
 func (s *Server) handleIndexRange(state *connState, sections []iwire.Section) ([]iwire.Section, error) {

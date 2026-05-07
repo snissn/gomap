@@ -16,6 +16,8 @@ const (
 	AckFlushed       AckPolicy = iwire.AckFlushed
 	AckSynced        AckPolicy = iwire.AckSynced
 	AckRaftCommitted AckPolicy = iwire.AckRaftCommitted
+
+	replacementModeExistingOnly uint64 = 1
 )
 
 func documentFormatSection(format collections.DocumentFormat) iwire.Section {
@@ -62,6 +64,24 @@ func ackPolicyFromSections(sections []iwire.Section, fallback AckPolicy) (AckPol
 	default:
 		return 0, protocolError(iwire.ErrInvalidCommand, "unsupported ack policy %d", value)
 	}
+}
+
+func validateReplacementMode(sections []iwire.Section) error {
+	raw, err := metadataSection(sections, iwire.SectionReplacementMode)
+	if err != nil {
+		return err
+	}
+	mode, n, err := readUvarint(raw)
+	if err != nil {
+		return err
+	}
+	if n != len(raw) {
+		return protocolError(iwire.ErrMalformedFrame, "replacement_mode has trailing bytes")
+	}
+	if mode != replacementModeExistingOnly {
+		return protocolError(iwire.ErrInvalidCommand, "unsupported replacement_mode %d", mode)
+	}
+	return nil
 }
 
 func decodeIDsAndDocuments(sections []iwire.Section, limits iwire.Limits) ([][]byte, [][]byte, error) {
@@ -156,8 +176,8 @@ func responseCount(sections []iwire.Section, key string) (int, error) {
 func updateBatchItems(ids, docs [][]byte) []collections.UpdateBatchItem {
 	items := make([]collections.UpdateBatchItem, len(ids))
 	for i := range ids {
-		id := append([]byte(nil), ids[i]...)
-		doc := append([]byte(nil), docs[i]...)
+		id := ids[i]
+		doc := docs[i]
 		items[i] = collections.UpdateBatchItem{
 			DocumentID: id,
 			Update: func(current []byte) ([]byte, bool, error) {
