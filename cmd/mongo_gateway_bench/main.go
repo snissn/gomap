@@ -567,7 +567,7 @@ func parseConfig(args []string) (config, error) {
 	if cfg.Reads < 0 || cfg.RangeReads < 0 || cfg.Updates < 0 || cfg.Deletes < 0 || cfg.ConcurrentReads < 0 || cfg.ConcurrentRangeReads < 0 || cfg.ConcurrentWrites < 0 {
 		return config{}, errors.New("operation counts cannot be negative")
 	}
-	if cfg.RawWireTCPPipelineDepth <= 0 {
+	if cfg.ClientMode == clientModeRawWireTCPPipeline && cfg.RawWireTCPPipelineDepth <= 0 {
 		return config{}, errors.New("raw-wire-tcp-pipeline-depth must be > 0")
 	}
 	concurrentRangeReaderSweepValues, err := parsePositiveIntList(concurrentRangeReaderSweep, "concurrent-range-reader-sweep")
@@ -3230,6 +3230,9 @@ func (c *rawWireTCPPipelineClient) Flush(ctx context.Context) error {
 }
 
 func (c *rawWireTCPPipelineClient) ReadFind(ctx context.Context, responseTo int32, minAge int64) error {
+	if c == nil || c.conn == nil || c.rd == nil {
+		return errors.New("raw-wire TCP pipeline client is closed")
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -3495,6 +3498,9 @@ func parseRawWireFindFirstBatchInto(response []byte, dst []bson.Raw) ([]bson.Raw
 	header, err := wire.ParseHeader(response[:wire.HeaderLen])
 	if err != nil {
 		return nil, err
+	}
+	if header.MessageLength < wire.HeaderLen {
+		return nil, fmt.Errorf("%w: response length=%d below header length", wire.ErrMalformed, header.MessageLength)
 	}
 	if int(header.MessageLength) > len(response) {
 		return nil, fmt.Errorf("%w: response length=%d available=%d", wire.ErrMessageTooShort, header.MessageLength, len(response))

@@ -723,8 +723,11 @@ func TestParseConfigValidation(t *testing.T) {
 	if _, err := parseConfig([]string{"-target", "mongo", "-client-mode", "direct"}); err == nil {
 		t.Fatal("direct client-mode accepted for mongo target")
 	}
-	if _, err := parseConfig([]string{"-raw-wire-tcp-pipeline-depth", "0"}); err == nil {
-		t.Fatal("raw-wire-tcp-pipeline-depth=0 accepted")
+	if _, err := parseConfig([]string{"-client-mode", "raw-wire-tcp-pipeline", "-raw-wire-tcp-pipeline-depth", "0"}); err == nil {
+		t.Fatal("raw-wire-tcp-pipeline-depth=0 accepted for pipeline mode")
+	}
+	if _, err := parseConfig([]string{"-raw-wire-tcp-pipeline-depth", "0"}); err != nil {
+		t.Fatalf("raw-wire-tcp-pipeline-depth=0 should be ignored outside pipeline mode: %v", err)
 	}
 	if _, err := parseConfig([]string{"-timeout", "0"}); err != nil {
 		t.Fatalf("timeout 0 should disable deadline: %v", err)
