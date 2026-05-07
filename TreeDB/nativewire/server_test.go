@@ -67,7 +67,7 @@ func TestServerControlHelloPingStatsGoaway(t *testing.T) {
 	}
 }
 
-func TestServerRequestUnsupportedCommandReturnsWireError(t *testing.T) {
+func TestServerReadCommandWithoutCollectionManagerReturnsWireError(t *testing.T) {
 	server := NewServer(ServerOptions{})
 	client, _ := servePipe(t, server)
 
@@ -82,8 +82,8 @@ func TestServerRequestUnsupportedCommandReturnsWireError(t *testing.T) {
 		t.Fatalf("append request: %v", err)
 	}
 	_, _, err = client.roundTrip(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
-	if !isRemoteError(err, iwire.ErrUnsupportedFeature) {
-		t.Fatalf("error=%v want unsupported feature", err)
+	if !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("error=%v want invalid command", err)
 	}
 }
 

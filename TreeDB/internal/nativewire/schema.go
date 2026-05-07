@@ -424,6 +424,33 @@ func v1CommandSchemas() []CommandSchema {
 			},
 		},
 		{
+			ID:                CommandIndexLookup,
+			Version:           1,
+			Name:              "index_lookup",
+			Kind:              CommandKindRead,
+			BenchmarkRequired: true,
+			Sections: []SectionRule{
+				{ID: SectionCollectionRef, Name: "collection_ref", Required: true},
+				{ID: SectionIndexName, Name: "index_name", Required: true},
+				{ID: SectionIndexValue, Name: "index_value", Required: true},
+				{ID: SectionCursorLimits, Name: "cursor_limits"},
+			},
+		},
+		{
+			ID:                CommandIndexRange,
+			Version:           1,
+			Name:              "index_range",
+			Kind:              CommandKindRead,
+			BenchmarkRequired: true,
+			Sections: []SectionRule{
+				{ID: SectionCollectionRef, Name: "collection_ref", Required: true},
+				{ID: SectionIndexName, Name: "index_name", Required: true},
+				{ID: SectionIndexLowerBound, Name: "index_lower_bound"},
+				{ID: SectionIndexUpperBound, Name: "index_upper_bound"},
+				{ID: SectionCursorLimits, Name: "cursor_limits"},
+			},
+		},
+		{
 			ID:                CommandOpenScan,
 			Version:           1,
 			Name:              "open_scan",
@@ -431,6 +458,7 @@ func v1CommandSchemas() []CommandSchema {
 			BenchmarkRequired: true,
 			Sections: []SectionRule{
 				{ID: SectionCollectionRef, Name: "collection_ref", Required: true},
+				{ID: SectionCursorLimits, Name: "cursor_limits"},
 			},
 		},
 		{
@@ -439,7 +467,8 @@ func v1CommandSchemas() []CommandSchema {
 			Name:    "cursor_next",
 			Kind:    CommandKindRead,
 			Sections: []SectionRule{
-				{ID: SectionCollectionRef, Name: "cursor_limits", Required: true},
+				{ID: SectionCursorRef, Name: "cursor_ref", Required: true},
+				{ID: SectionCursorLimits, Name: "cursor_limits", Required: true},
 			},
 		},
 		{
@@ -448,7 +477,7 @@ func v1CommandSchemas() []CommandSchema {
 			Name:    "cursor_close",
 			Kind:    CommandKindRead,
 			Sections: []SectionRule{
-				{ID: SectionCollectionRef, Name: "cursor_ref", Required: true},
+				{ID: SectionCursorRef, Name: "cursor_ref", Required: true},
 			},
 		},
 		{
