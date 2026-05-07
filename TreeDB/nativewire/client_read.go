@@ -93,7 +93,7 @@ func appendGetManyRequestBodyRef(dst []byte, collection string, handle Collectio
 		copy(next, dst)
 		dst = next
 	}
-	body, err := appendCommandHeaderSection(dst, iwire.CommandGetMany)
+	body, err := appendRawSection(dst, iwire.SectionCommandHeader, commandPayload)
 	if err != nil {
 		return nil, err
 	}

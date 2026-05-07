@@ -100,9 +100,12 @@ func (s *Server) insertBatchDecoded(collection *collections.Collection, format c
 }
 
 func (s *Server) decodeInsertBatchFastRequest(state *connState, sections []iwire.Section) (insertBatchFastRequest, bool, error) {
-	header, ok, err := insertBatchCommandHeader(sections)
-	if err != nil || !ok {
-		return insertBatchFastRequest{}, false, err
+	if len(sections) == 0 || sections[0].ID != iwire.SectionCommandHeader {
+		return insertBatchFastRequest{}, false, nil
+	}
+	header, err := iwire.DecodeCommandHeader(sections[0].Bytes)
+	if err != nil {
+		return insertBatchFastRequest{}, true, err
 	}
 	if header.ID != iwire.CommandInsertBatch {
 		return insertBatchFastRequest{}, false, nil
@@ -212,26 +215,6 @@ func (s *Server) decodeInsertBatchFastRequest(state *connState, sections []iwire
 		ack:              ack,
 		includeResultIDs: header.Flags&iwire.CommandFlagOmitResultIDs == 0,
 	}, true, nil
-}
-
-func insertBatchCommandHeader(sections []iwire.Section) (iwire.CommandHeader, bool, error) {
-	found := false
-	var header iwire.CommandHeader
-	for _, section := range sections {
-		if section.ID != iwire.SectionCommandHeader {
-			continue
-		}
-		if found {
-			return iwire.CommandHeader{}, true, protocolError(iwire.ErrInvalidCommand, "duplicate command_header section")
-		}
-		var err error
-		header, err = iwire.DecodeCommandHeader(section.Bytes)
-		if err != nil {
-			return iwire.CommandHeader{}, true, err
-		}
-		found = true
-	}
-	return header, found, nil
 }
 
 func markInsertBatchFastSection(seen *[128]bool, id iwire.SectionID) error {

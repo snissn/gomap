@@ -110,7 +110,7 @@ func appendInsertBatchRequestBodyRefFlags(dst []byte, collection string, handle 
 		copy(next, dst)
 		dst = next
 	}
-	body, err := appendCommandHeaderSectionFlags(dst, iwire.CommandInsertBatch, commandFlags)
+	body, err := appendRawSection(dst, iwire.SectionCommandHeader, commandPayload)
 	if err != nil {
 		return nil, err
 	}

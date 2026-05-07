@@ -30,22 +30,22 @@ GOWORK=off go test ./TreeDB/nativewire \
   -run '^$' \
   -bench 'BenchmarkNativewireCollection(InsertBatch|GetMany)' \
   -benchmem \
-  -benchtime=1000x \
-  -count=6
+  -benchtime=2000x \
+  -count=8
 ```
 
 Result on `linux/amd64`, Intel i5-11400F:
 
 | Benchmark | time/op | B/op | allocs/op |
 | --- | ---: | ---: | ---: |
-| `InsertBatch/direct_collection` | 38.32 us +/- 3% | 6.410 KiB | 49 |
-| `InsertBatch/native_wire_inproc` | 52.37 us +/- 1% | 8.020 KiB | 53 |
-| `InsertBatch/native_wire_inproc_no_result` | 50.70 us +/- 4% | 6.642 KiB | 51 |
-| `InsertBatch/native_wire_direct_dispatch` | 45.15 us +/- 3% | 7.304 KiB | 50 |
-| `InsertBatch/native_wire_direct_dispatch_no_result` | 43.77 us +/- 1% | 6.475 KiB | 49 |
-| `GetMany/direct_collection` | 34.24 us +/- 1% | 8.007 KiB | 128 |
-| `GetMany/native_wire_inproc` | 40.42 us +/- 2% | 14.43 KiB | 8 |
-| `GetMany/native_wire_direct_dispatch` | 35.95 us +/- 6% | 10.33 KiB | 5 |
+| `InsertBatch/direct_collection` | 38.77 us +/- 1% | 6.428 KiB | 50 |
+| `InsertBatch/native_wire_inproc` | 52.75 us +/- 6% | 7.951 KiB | 54 |
+| `InsertBatch/native_wire_inproc_no_result` | 51.24 us +/- 1% | 6.637 KiB | 52 |
+| `InsertBatch/native_wire_direct_dispatch` | 45.55 us +/- 2% | 7.356 KiB | 51 |
+| `InsertBatch/native_wire_direct_dispatch_no_result` | 44.49 us +/- 1% | 6.481 KiB | 50 |
+| `GetMany/direct_collection` | 34.05 us +/- 1% | 8.005 KiB | 128 |
+| `GetMany/native_wire_inproc` | 40.31 us +/- 1% | 14.42 KiB | 8 |
+| `GetMany/native_wire_direct_dispatch` | 35.33 us +/- 1% | 10.33 KiB | 5 |
 
 Interpretation:
 
@@ -57,9 +57,9 @@ Interpretation:
   requests ack-only/no-result response shaping.
 - Direct in-process dispatch, which keeps native request decode and response
   encode but removes `net.Pipe`, is about 1.18x direct for insert with returned
-  IDs and about 1.14x for ack-only insert.
+  IDs and about 1.15x for ack-only insert.
 - R1 native in-process get-many is about 1.18x direct collection latency for
-  this 64-document batch shape. Direct dispatch is about 1.05x direct, so the
+  this 64-document batch shape. Direct dispatch is about 1.04x direct, so the
   remaining read gap is mostly framed in-process transport overhead.
 - Insert allocation is now close to the direct collection baseline: native wire
   adds four allocations/op for request/response framing and response decode on
