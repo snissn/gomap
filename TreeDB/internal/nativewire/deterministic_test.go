@@ -517,6 +517,16 @@ func TestDeterministicEntryRejectsInvalidDocumentIDs(t *testing.T) {
 	}
 }
 
+func TestDeterministicEntryRejectsTooManyDocumentIDs(t *testing.T) {
+	raw := appendUvarint(nil, maxDeterministicDocumentIDs+1)
+	for i := 0; i < maxDeterministicDocumentIDs+1; i++ {
+		raw = append(raw, 0)
+	}
+	if err := validateDeterministicDocumentIDs(raw); codeOf(err) != ErrResourceExhausted {
+		t.Fatalf("validateDeterministicDocumentIDs err=%v code=%d want resource exhausted", err, codeOf(err))
+	}
+}
+
 func insertBatchDeterministicSections() []Section {
 	return []Section{
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 1})},

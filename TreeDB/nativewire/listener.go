@@ -3,6 +3,7 @@ package nativewire
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync/atomic"
@@ -10,8 +11,9 @@ import (
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
-// ErrNilListener is returned when Serve is called with a nil listener.
-var ErrNilListener = errors.New("nativewire: nil listener")
+// ErrNilListener is returned when Serve is called with a nil listener. It wraps
+// net.ErrClosed so callers that classify listener shutdown keep working.
+var ErrNilListener = fmt.Errorf("nativewire: nil listener: %w", net.ErrClosed)
 
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	if s == nil {
