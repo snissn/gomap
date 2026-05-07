@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -81,7 +82,7 @@ func TestServeUnixSocketAndDialContext(t *testing.T) {
 	server := NewServer(ServerOptions{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	path := filepath.Join(t.TempDir(), "nativewire.sock")
+	path := unixSocketPath(t)
 	ln, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatalf("listen unix: %v", err)
@@ -107,4 +108,14 @@ func TestServeUnixSocketAndDialContext(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Serve unix did not stop")
 	}
+}
+
+func unixSocketPath(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "nw")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return filepath.Join(dir, "s.sock")
 }
