@@ -63,11 +63,12 @@ type Server struct {
 }
 
 type serverCursor struct {
-	owner    uint64
-	records  []collections.DocumentRecord
-	pos      int
-	lastUsed time.Time
-	bytes    int
+	owner     uint64
+	records   []collections.DocumentRecord
+	pos       int
+	lastUsed  time.Time
+	bytes     int
+	truncated bool
 }
 
 type connState struct {
