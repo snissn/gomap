@@ -2106,6 +2106,9 @@ func runDirectTreeDBRangeQuery(cfg config, collection *collections.Collection, m
 		if err != nil {
 			return err
 		}
+		if len(records) == 0 {
+			return fmt.Errorf("direct indexed range returned no documents for minAge=%d", minAge)
+		}
 		for _, record := range records {
 			raw, err := directStoredDocumentToBSON(collection, materializer, record.Document)
 			if err != nil {
