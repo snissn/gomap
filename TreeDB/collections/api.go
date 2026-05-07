@@ -11475,7 +11475,7 @@ func (c *Collection) ScanBorrowedDocumentsByIndexRange(indexName string, opts In
 	return truncated, err
 }
 
-func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRangeOptions, fn func(BorrowedDocumentRecord) (bool, error)) (bool, bool, error) {
+func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRangeOptions, fn func(BorrowedDocumentRecord) (bool, error)) (truncated bool, found bool, err error) {
 	if c == nil {
 		return false, false, errCollectionNil
 	}
@@ -11562,10 +11562,10 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 	}
 	primaryRootName := collectionPrimaryRootName(catalog.meta.Name)
 	var scratch []byte
-	dedupeDocumentIDs := idx.MultiKey || catalog.meta.Options.AllowArrayValuesInIndex
+	dedupeDocumentIDs := shouldDedupeIndexDocumentIDs(idx, catalog.meta.Options)
 	documentCount := 0
 	documentTruncated := false
-	truncated, err := scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt, idx.ValueType, 0, dedupeDocumentIDs, func(id []byte) (bool, error) {
+	truncated, err = scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt, idx.ValueType, 0, dedupeDocumentIDs, func(id []byte) (bool, error) {
 		var value []byte
 		var buffered, found bool
 		if domainLocked {
@@ -11707,9 +11707,13 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 	if persistedIt != nil {
 		defer func() { _ = persistedIt.Close() }()
 	}
-	dedupeDocumentIDs := idx.MultiKey || catalog.meta.Options.AllowArrayValuesInIndex
+	dedupeDocumentIDs := shouldDedupeIndexDocumentIDs(idx, catalog.meta.Options)
 	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, opts.Limit, dedupeDocumentIDs, fn)
 	return truncated, true, err
+}
+
+func shouldDedupeIndexDocumentIDs(idx IndexDefinition, opts CollectionOptions) bool {
+	return idx.MultiKey || opts.AllowArrayValuesInIndex
 }
 
 func exactIndexRangePrefix(valueType IndexValueType, opts IndexRangeOptions) ([]byte, bool, error) {
