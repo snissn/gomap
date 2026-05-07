@@ -10,6 +10,8 @@ import (
 const (
 	DeterministicEntryMagic   = "TDC1"
 	DeterministicEntryVersion = uint64(1)
+
+	maxDeterministicDocumentIDs = 1 << 16
 )
 
 var deterministicEntryRegistry = MustV1Registry()
@@ -130,41 +132,43 @@ func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *Determinis
 	}
 	sectionCount := int(sectionCount64)
 	sections := deterministicEntrySectionsBuffer(sectionCount, scratch)
+	fail := func(err error) (DeterministicEntry, error) {
+		clearDeterministicEntryScratch(sections, scratch)
+		return DeterministicEntry{}, err
+	}
 	var previous SectionID
 	for i := 0; i < sectionCount; i++ {
 		id, err := readEntryUvarint(src, &off, "section_id")
 		if err != nil {
-			return DeterministicEntry{}, err
+			return fail(err)
 		}
 		sectionID := SectionID(id)
-		if i > 0 && sectionID <= previous {
-			return DeterministicEntry{}, protocolError(ErrMalformedFrame, "deterministic entry sections are not strictly sorted")
+		if i > 0 && sectionID < previous {
+			return fail(protocolError(ErrMalformedFrame, "deterministic entry sections are not sorted"))
 		}
 		previous = sectionID
 		sectionLen, err := readEntryUvarint(src, &off, "section_length")
 		if err != nil {
-			return DeterministicEntry{}, err
+			return fail(err)
 		}
 		if sectionLen > limits.MaxSectionLen {
-			return DeterministicEntry{}, protocolError(ErrResourceExhausted, "deterministic entry section %d length %d exceeds limit %d", sectionID, sectionLen, limits.MaxSectionLen)
+			return fail(protocolError(ErrResourceExhausted, "deterministic entry section %d length %d exceeds limit %d", sectionID, sectionLen, limits.MaxSectionLen))
 		}
 		if sectionLen > uint64(len(src)-off) {
-			return DeterministicEntry{}, protocolError(ErrMalformedFrame, "deterministic entry section %d length %d exceeds remaining %d", sectionID, sectionLen, len(src)-off)
+			return fail(protocolError(ErrMalformedFrame, "deterministic entry section %d length %d exceeds remaining %d", sectionID, sectionLen, len(src)-off))
 		}
 		section := Section{ID: sectionID, Bytes: src[off : off+int(sectionLen)]}
 		if err := validateDeterministicSectionPayload(section, limits); err != nil {
-			return DeterministicEntry{}, err
+			return fail(err)
 		}
 		sections[i] = section
 		off += int(sectionLen)
 	}
 	if off != len(src) {
-		clearDeterministicEntryScratch(sections, scratch)
-		return DeterministicEntry{}, protocolError(ErrMalformedFrame, "deterministic entry has %d trailing bytes", len(src)-off)
+		return fail(protocolError(ErrMalformedFrame, "deterministic entry has %d trailing bytes", len(src)-off))
 	}
 	if _, err := validateDecodedDeterministicEntry(CommandID(commandID), commandVersion, sections); err != nil {
-		clearDeterministicEntryScratch(sections, scratch)
-		return DeterministicEntry{}, err
+		return fail(err)
 	}
 	if scratch != nil {
 		scratch.Sections = sections
@@ -183,7 +187,7 @@ func deterministicEntrySectionsBuffer(count int, scratch *DeterministicEntryScra
 		return make([]Section, count)
 	}
 	if cap(scratch.Sections) < count {
-		scratch.Sections = make([]Section, count)
+		return make([]Section, count)
 	}
 	backing := scratch.Sections[:cap(scratch.Sections)]
 	clear(backing[count:])
@@ -241,10 +245,9 @@ func (cmd ValidatedCommand) deterministicSectionsInto(dst []Section) ([]Section,
 		if !rule.Deterministic {
 			continue
 		}
-		if !rule.Repeatable {
-			if seen.add(section.ID) > 1 {
-				return nil, protocolError(ErrInvalidCommand, "duplicate deterministic singleton section %d", section.ID)
-			}
+		seenCount := seen.add(section.ID)
+		if !rule.Repeatable && seenCount > 1 {
+			return nil, protocolError(ErrInvalidCommand, "duplicate deterministic singleton section %d", section.ID)
 		}
 		if err := validateDeterministicSectionPayload(section, Limits{}); err != nil {
 			return nil, err
@@ -314,7 +317,8 @@ func validateDecodedDeterministicEntry(commandID CommandID, commandVersion uint6
 		if !ok || !rule.Deterministic {
 			return nil, protocolError(ErrInvalidCommand, "section %d is not deterministic for command %s", section.ID, schema.Name)
 		}
-		if !rule.Repeatable && seen.add(section.ID) > 1 {
+		seenCount := seen.add(section.ID)
+		if !rule.Repeatable && seenCount > 1 {
 			return nil, protocolError(ErrInvalidCommand, "duplicate deterministic singleton section %d", section.ID)
 		}
 	}
@@ -447,6 +451,9 @@ func validateDeterministicDocumentIDs(raw []byte, limits Limits) error {
 	}
 	if count64 > uint64(maxInt) {
 		return protocolError(ErrResourceExhausted, "document_ids count exceeds int capacity")
+	}
+	if count64 > maxDeterministicDocumentIDs {
+		return protocolError(ErrResourceExhausted, "document_ids count %d exceeds deterministic limit %d", count64, maxDeterministicDocumentIDs)
 	}
 	count := int(count64)
 	var stackItems [256]deterministicIDItem
