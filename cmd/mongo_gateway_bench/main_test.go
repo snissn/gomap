@@ -638,6 +638,13 @@ func TestParseConfigValidation(t *testing.T) {
 	if rawWireTCPCfg.ClientMode != clientModeRawWireTCP {
 		t.Fatalf("ClientMode=%q want %q", rawWireTCPCfg.ClientMode, clientModeRawWireTCP)
 	}
+	defaultPipelineCfg, err := parseConfig([]string{"-target", "treedb", "-client-mode", "raw-wire-tcp-pipeline"})
+	if err != nil {
+		t.Fatalf("parse default raw-wire-tcp-pipeline config: %v", err)
+	}
+	if defaultPipelineCfg.RawWireTCPPipelineDepth != 128 {
+		t.Fatalf("default raw-wire-tcp-pipeline depth=%d want 128", defaultPipelineCfg.RawWireTCPPipelineDepth)
+	}
 	rawWireTCPPipelineCfg, err := parseConfig([]string{"-target", "treedb", "-client-mode", "raw-wire-tcp-pipeline", "-raw-wire-tcp-pipeline-depth", "16"})
 	if err != nil {
 		t.Fatalf("parse raw-wire-tcp-pipeline config: %v", err)

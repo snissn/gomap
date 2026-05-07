@@ -67,8 +67,11 @@ sequences. `-client-mode raw-wire-tcp` sends the same raw OP_MSG traffic over
 the gateway's loopback listener, isolating TreeDB gateway network/wire-server
 cost from Mongo Go driver cost. `-client-mode raw-wire-tcp-pipeline` uses the
 same raw TCP load path and pipelines age range `find` requests on one connection
-up to `-raw-wire-tcp-pipeline-depth`, which isolates single-connection
-request/response latency from server execution. Raw-wire modes use raw OP_MSG
+up to `-raw-wire-tcp-pipeline-depth` (default `128`), which isolates
+single-connection request/response latency from server execution. The gateway
+coalesces already-buffered pipelined responses before writing, so deeper
+pipelines can keep the socket full across server write cycles without changing
+the server's per-write coalescing cap. Raw-wire modes use raw OP_MSG
 document sequences for the insert load phase and raw OP_MSG `find` requests for
 the age range-read phase while keeping setup and non-range phases on the driver.
 `-client-mode direct` is a TreeDB-only path

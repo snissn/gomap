@@ -293,7 +293,9 @@ Interpret client modes as separate questions:
 - `raw-wire-tcp`: TreeDB-only raw OP_MSG load over loopback TCP.
 - `raw-wire-tcp-pipeline`: TreeDB-only raw TCP load plus pipelined age range
   `find` requests; use it to measure how much single-connection request/response
-  latency can be hidden without the official driver.
+  latency can be hidden without the official driver. The default pipeline depth
+  is `128`, which keeps enough requests queued for the gateway's buffered
+  response coalescing to amortize write syscalls.
 - `raw-wire`: TreeDB-only in-process raw OP_MSG load.
 
 Use `driver` for user-visible Mongo compatibility. Use `driver-find-raw` to

@@ -445,7 +445,7 @@ func parseConfig(args []string) (config, error) {
 		TreeDBMaintenance:           treeDBMaintenanceFull,
 		TreeDBReadState:             treeDBReadStateSettled,
 		ClientMode:                  clientModeDriver,
-		RawWireTCPPipelineDepth:     8,
+		RawWireTCPPipelineDepth:     128,
 		InsertProducers:             1,
 		ProfileBlockRate:            1,
 		ProfileMutexFraction:        5,
