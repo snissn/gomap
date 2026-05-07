@@ -23,7 +23,7 @@ func TestDeterministicEntryGoldenAndTransportIndependence(t *testing.T) {
 	sections := []Section{
 		{ID: 9000, Bytes: []byte("ignored")},
 		{ID: SectionTraceContext, Bytes: []byte("trace")},
-		{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte("{}"))},
+		{ID: SectionDocuments, Bytes: AppendByteVector(nil, deterministicBSONDocumentEmpty())},
 		{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
 		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
@@ -381,7 +381,7 @@ func TestDeterministicEntryStableAcrossTransportOnlySections(t *testing.T) {
 		{ID: SectionAckPolicy, Bytes: []byte{byte(AckFlushed)}},
 		{ID: SectionDeadline, Bytes: []byte("deadline")},
 		{ID: 9000, Bytes: []byte("ignored")},
-		{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte("{}"))},
+		{ID: SectionDocuments, Bytes: AppendByteVector(nil, deterministicBSONDocumentEmpty())},
 		{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
 		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
@@ -416,7 +416,7 @@ func TestDeterministicEntryDigestChangesWithLogicalMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppendDeterministicEntry base: %v", err)
 	}
-	changed := replaceSection(insertBatchDeterministicSections(), SectionDocuments, AppendByteVector(nil, []byte(`{"changed":true}`)))
+	changed := replaceSection(insertBatchDeterministicSections(), SectionDocuments, AppendByteVector(nil, deterministicBSONDocumentXInt32(2)))
 	cmd1, err := registry.ValidateRequestSections(changed)
 	if err != nil {
 		t.Fatalf("ValidateRequestSections changed: %v", err)
@@ -517,6 +517,30 @@ func TestDeterministicEntryRejectsInvalidEncodedIndexName(t *testing.T) {
 				t.Fatalf("AppendDeterministicEntry err=%v code=%d want %d", err, codeOf(err), tc.code)
 			}
 		})
+	}
+}
+
+func TestDecodeDeterministicEntryClearsScratchOnSchemaError(t *testing.T) {
+	scratch := &DeterministicEntryScratch{
+		Sections: make([]Section, 0, 4),
+	}
+	raw := deterministicEntryTestRaw(CommandInsertBatch,
+		Section{ID: SectionCollectionRef, Bytes: []byte("c")},
+		Section{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
+		Section{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
+		Section{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte("{}"))},
+	)
+	if _, err := DecodeDeterministicEntryInto(raw, Limits{}, scratch); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("DecodeDeterministicEntryInto err=%v code=%d want invalid command", err, codeOf(err))
+	}
+	if len(scratch.Sections) != 0 {
+		t.Fatalf("scratch len=%d want 0", len(scratch.Sections))
+	}
+	backing := scratch.Sections[:cap(scratch.Sections)]
+	for i, section := range backing {
+		if section.ID != 0 || section.Bytes != nil {
+			t.Fatalf("scratch backing[%d]=%+v want zero", i, section)
+		}
 	}
 }
 
@@ -746,7 +770,7 @@ func insertBatchDeterministicSections() []Section {
 		{ID: SectionCollectionRef, Bytes: []byte("c")},
 		{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
 		{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
-		{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte("{}"))},
+		{ID: SectionDocuments, Bytes: AppendByteVector(nil, deterministicBSONDocumentEmpty())},
 		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
 	}
 }
@@ -885,6 +909,10 @@ func deterministicBSONDocumentXInt32(value int32) []byte {
 		byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24),
 		0,
 	}
+}
+
+func deterministicBSONDocumentEmpty() []byte {
+	return []byte{5, 0, 0, 0, 0}
 }
 
 func appendDeterministicBool(dst []byte, value bool) []byte {
