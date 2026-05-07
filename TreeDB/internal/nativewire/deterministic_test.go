@@ -626,7 +626,7 @@ func deterministicEntryFixtureCases() []deterministicEntryFixtureCase {
 			fixture:   "drop_index_entry.hex",
 			sections: deterministicFixtureSections(CommandDropIndex, "client-a:drop-index:email",
 				Section{ID: SectionCollectionRef, Bytes: []byte("users")},
-				Section{ID: SectionIndexName, Bytes: []byte("email_1")},
+				Section{ID: SectionIndexName, Bytes: appendDeterministicString(nil, "email_1")},
 			),
 		},
 		{
@@ -643,7 +643,7 @@ func deterministicEntryFixtureCases() []deterministicEntryFixtureCase {
 				Section{ID: SectionCollectionRef, Bytes: []byte("c")},
 				Section{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
 				Section{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
-				Section{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte(`{"x":1}`))},
+				Section{ID: SectionDocuments, Bytes: AppendByteVector(nil, deterministicBSONDocumentXInt32(1))},
 				Section{ID: SectionReplacementMode, Bytes: deterministicUvarintPayload(deterministicReplacementModeExistingOnly)},
 			),
 		},
@@ -703,6 +703,15 @@ func deterministicIndexDefinitionPayload(name, field string, valueType uint64, u
 
 func deterministicUvarintPayload(value uint64) []byte {
 	return appendUvarint(nil, value)
+}
+
+func deterministicBSONDocumentXInt32(value int32) []byte {
+	return []byte{
+		12, 0, 0, 0,
+		0x10, 'x', 0,
+		byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24),
+		0,
+	}
 }
 
 func appendDeterministicString(dst []byte, value string) []byte {
