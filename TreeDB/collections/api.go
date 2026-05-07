@@ -517,7 +517,7 @@ type DocumentRecord struct {
 
 // borrowedDocumentRecord is one primary collection record borrowed during an
 // internal callback scan. ID and Document are valid only until the callback
-// returns.
+// returns and must not be retained or modified.
 type borrowedDocumentRecord struct {
 	ID       []byte
 	Document []byte
