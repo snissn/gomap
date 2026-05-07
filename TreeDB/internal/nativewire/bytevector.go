@@ -222,6 +222,49 @@ func DecodeByteVectorInto(src []byte, limits Limits, scratch *ByteVectorScratch)
 	}, nil
 }
 
+func validateByteVector(src []byte, limits Limits) error {
+	limits = limits.withDefaults()
+	count64, off, err := readUvarint(src)
+	if err != nil {
+		return err
+	}
+	if count64 > uint64(limits.MaxByteVectorItems) {
+		return protocolError(ErrResourceExhausted, "byte-vector count %d exceeds limit %d", count64, limits.MaxByteVectorItems)
+	}
+	if count64 > uint64(maxInt) {
+		return protocolError(ErrResourceExhausted, "byte-vector count exceeds int capacity")
+	}
+	if count64 > uint64(len(src)-off) {
+		return protocolError(ErrMalformedFrame, "byte-vector count %d exceeds remaining length table bytes %d", count64, len(src)-off)
+	}
+
+	total := uint64(0)
+	for i := 0; i < int(count64); i++ {
+		length, n, err := readUvarint(src[off:])
+		if err != nil {
+			return err
+		}
+		off += n
+		if length > limits.MaxByteVectorBytes {
+			return protocolError(ErrResourceExhausted, "byte-vector item %d length %d exceeds limit %d", i, length, limits.MaxByteVectorBytes)
+		}
+		if total+length < total {
+			return protocolError(ErrMalformedFrame, "byte-vector length overflow")
+		}
+		total += length
+		if total > limits.MaxByteVectorBytes {
+			return protocolError(ErrResourceExhausted, "byte-vector payload length %d exceeds limit %d", total, limits.MaxByteVectorBytes)
+		}
+		if length > uint64(maxInt) || total > uint64(maxInt) {
+			return protocolError(ErrResourceExhausted, "byte-vector payload length exceeds int capacity")
+		}
+	}
+	if total != uint64(len(src)-off) {
+		return protocolError(ErrMalformedFrame, "byte-vector declared payload %d does not match remaining %d", total, len(src)-off)
+	}
+	return nil
+}
+
 func byteVectorBuffers(count int, scratch *ByteVectorScratch) ([]int, []int) {
 	if scratch == nil {
 		return make([]int, count), make([]int, count)

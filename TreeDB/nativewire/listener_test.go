@@ -131,6 +131,48 @@ func TestServeContextCancelClosesListener(t *testing.T) {
 	_ = server.Close()
 }
 
+func TestServerCloseClosesListener(t *testing.T) {
+	server := NewServer(ServerOptions{})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen tcp: %v", err)
+	}
+	errCh := make(chan error, 1)
+	go func() { errCh <- server.Serve(context.Background(), ln) }()
+	waitForRegisteredListener(t, server)
+	if err := server.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Serve err=%v want nil after server close", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not stop after server close")
+	}
+}
+
+func waitForRegisteredListener(t *testing.T, server *Server) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		server.connMu.Lock()
+		registered := len(server.listeners)
+		server.connMu.Unlock()
+		if registered > 0 {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("listener was not registered")
+		case <-tick.C:
+		}
+	}
+}
+
 func TestNewInProcessClientRejectsNilServer(t *testing.T) {
 	client, cleanup, err := NewInProcessClient(context.Background(), nil)
 	if !errors.Is(err, ErrServerClosed) {

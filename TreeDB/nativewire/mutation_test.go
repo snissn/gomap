@@ -187,6 +187,30 @@ func TestInsertBatchFastDecodeErrorReturnsBeforeDispatch(t *testing.T) {
 	assertDocumentMissing(t, mgr, "users", "u1")
 }
 
+func TestMutationInvalidBSONRejectedBeforeTrustedInsert(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{
+		Name:    "users",
+		Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatBSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte{0x05, 0x00}},
+		AckVisible,
+	)
+	if !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("InsertBatch invalid BSON err=%v want invalid command", err)
+	}
+	assertDocumentMissing(t, mgr, "users", "u1")
+}
+
 func TestMutationRaftAckRejected(t *testing.T) {
 	client, mgr, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

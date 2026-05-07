@@ -80,11 +80,17 @@ func (c *Client) commandSections(ctx context.Context, commandID iwire.CommandID,
 	if err != nil {
 		return nil, err
 	}
-	_, response, err := c.roundTrip(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
+	if c == nil {
+		return nil, io.ErrClosedPipe
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, response, err := c.roundTripLocked(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
 	if err != nil {
 		return nil, err
 	}
-	return iwire.DecodeSections(response, c.limits)
+	stable := append([]byte(nil), response...)
+	return iwire.DecodeSections(stable, c.limits)
 }
 
 func (c *Client) roundTrip(ctx context.Context, typ iwire.FrameType, body []byte, want iwire.FrameType) (iwire.Header, []byte, error) {

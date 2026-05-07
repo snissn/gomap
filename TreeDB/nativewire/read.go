@@ -22,6 +22,7 @@ type IndexRange struct {
 	UpperInclusive bool
 	UpperUnbounded bool
 	Limit          int
+	MaxBytes       int
 }
 
 type CursorLimits struct {

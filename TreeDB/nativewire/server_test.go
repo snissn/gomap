@@ -122,6 +122,56 @@ func TestServerMalformedRequestReturnsWireError(t *testing.T) {
 	}
 }
 
+func TestServerClosesPostHandshakeUnsupportedVersion(t *testing.T) {
+	server := NewServer(ServerOptions{})
+	left, right := net.Pipe()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ServeConn(context.Background(), right)
+	}()
+	t.Cleanup(func() {
+		_ = left.Close()
+		_ = right.Close()
+		_ = server.Close()
+	})
+
+	if err := writeFrame(left, iwire.Header{Type: iwire.FrameHello, RequestID: 1}, nil); err != nil {
+		t.Fatalf("write hello: %v", err)
+	}
+	header, _, err := readFrame(left, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatalf("read hello_ok: %v", err)
+	}
+	if header.Type != iwire.FrameHelloOK {
+		t.Fatalf("hello response type=%d want hello_ok", header.Type)
+	}
+	if err := writeFrame(left, iwire.Header{
+		Version:   iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0 + 1},
+		Type:      iwire.FramePing,
+		RequestID: 2,
+	}, nil); err != nil {
+		t.Fatalf("write bad-version ping: %v", err)
+	}
+	header, body, err := readFrame(left, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatalf("read version error: %v", err)
+	}
+	if header.Type != iwire.FrameError {
+		t.Fatalf("bad-version response type=%d want error", header.Type)
+	}
+	if !isRemoteError(decodeWireError(body, iwire.DefaultLimits()), iwire.ErrUnsupportedVersion) {
+		t.Fatalf("bad-version body did not decode as unsupported version")
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("ServeConn returned %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ServeConn did not close after post-handshake version error")
+	}
+}
+
 func TestServerRejectsRequestBeforeHello(t *testing.T) {
 	server := NewServer(ServerOptions{})
 	client, _ := servePipe(t, server)
@@ -219,6 +269,52 @@ func TestClientDetectsErrorResponseRequestIDMismatch(t *testing.T) {
 	err := client.Ping(ctx)
 	if err == nil || !strings.Contains(err.Error(), "request_id") {
 		t.Fatalf("Ping error=%v want request_id mismatch", err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("server goroutine: %v", err)
+	}
+}
+
+func TestClientCommandSectionsKeepsStableResponseBytes(t *testing.T) {
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+	client := NewClient(left)
+	errCh := make(chan error, 1)
+	go func() {
+		for _, payload := range [][]byte{[]byte("first-response"), []byte("other-response")} {
+			header, _, err := readFrame(right, iwire.DefaultLimits())
+			if err != nil {
+				errCh <- err
+				return
+			}
+			body, err := iwire.AppendSection(nil, iwire.Section{ID: iwire.SectionResponseMeta, Bytes: payload})
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if err := writeFrame(right, iwire.Header{Type: iwire.FrameResponse, RequestID: header.RequestID}, body); err != nil {
+				errCh <- err
+				return
+			}
+		}
+		errCh <- nil
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	first, err := client.commandSections(ctx, iwire.CommandStats)
+	if err != nil {
+		t.Fatalf("first commandSections: %v", err)
+	}
+	second, err := client.commandSections(ctx, iwire.CommandStats)
+	if err != nil {
+		t.Fatalf("second commandSections: %v", err)
+	}
+	if got := string(first[0].Bytes); got != "first-response" {
+		t.Fatalf("first response bytes changed to %q", got)
+	}
+	if got := string(second[0].Bytes); got != "other-response" {
+		t.Fatalf("second response bytes=%q", got)
 	}
 	if err := <-errCh; err != nil {
 		t.Fatalf("server goroutine: %v", err)

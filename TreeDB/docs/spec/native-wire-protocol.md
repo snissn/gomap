@@ -108,6 +108,11 @@ Primitive payload encodings:
   validators may impose a narrower grammar, such as collection or index names.
 - `bytes`: `uvarint` byte length followed by exactly that many opaque bytes,
   except where a containing structure already supplies an explicit length.
+- Optional fields are represented by section or field presence, not by an
+  implicit null encoding. A section schema that contains optional scalar fields
+  MUST define an explicit presence mechanism, such as a field-count prefix,
+  fixed presence bitmap, or command-specific sentinel, and MUST define the
+  default value used when the field is absent.
 
 ```text
 offset  size  field
