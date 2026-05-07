@@ -868,6 +868,10 @@ func benchmarkDocumentOrdinal(operation int, stride uint64, documentCount int) i
 	return int((uint64(operation) * stride) % uint64(documentCount))
 }
 
+func rangeReadMinAge(operation int) int64 {
+	return int64(20 + (operation % 40))
+}
+
 func loadFixture(target *benchTarget, batchSize int) (int64, int64, error) {
 	docs := target.fixture.docs
 	ids := target.fixture.ids
@@ -949,11 +953,10 @@ func runEmailReads(target *benchTarget, total, workers int) (int64, int64, error
 func runAgeIndexedRangeReads(target *benchTarget, total, workers int) (int64, int64, error) {
 	buffers := make([][]byte, workerBufferCount(workers))
 	return runParallel(total, workers, func(op int, worker int) error {
-		ordinal := benchmarkDocumentOrdinal(op, 19, len(target.fixture.ids))
-		age := target.fixture.ages[ordinal]
+		minAge := rangeReadMinAge(op)
 		ids, _, err := target.col.FindByIndexRange("age", collections.IndexRangeOptions{
-			Lower: collections.IndexRangeBound{Value: age, Inclusive: true},
-			Upper: collections.IndexRangeBound{Value: age, Inclusive: true},
+			Lower: collections.IndexRangeBound{Value: minAge, Inclusive: true},
+			Upper: collections.IndexRangeBound{Unbounded: true},
 			Limit: 10,
 		})
 		if err != nil {
@@ -983,7 +986,7 @@ func runAgeScanRangeReads(target *benchTarget, total, workers int) (int64, int64
 	buffers := make([][]byte, workerBufferCount(workers))
 	return runParallel(total, workers, func(op int, worker int) error {
 		start := benchmarkDocumentOrdinal(op, 43, docs)
-		wantAge := target.fixture.ages[start]
+		minAge := rangeReadMinAge(op)
 		foundCount := 0
 		buf := buffers[worker]
 		for scanned := 0; scanned < docs && foundCount < 10; scanned++ {
@@ -996,7 +999,7 @@ func runAgeScanRangeReads(target *benchTarget, total, workers int) (int64, int64
 				continue
 			}
 			buf = value
-			if target.fixture.ages[ordinal] == wantAge {
+			if target.fixture.ages[ordinal] >= minAge {
 				foundCount++
 			}
 		}
