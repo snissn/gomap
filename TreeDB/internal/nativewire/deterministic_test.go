@@ -94,6 +94,21 @@ func TestDecodeDeterministicEntryGolden(t *testing.T) {
 	}
 }
 
+func TestDecodeDeterministicEntryHonorsMaxFrameSize(t *testing.T) {
+	registry := MustV1Registry()
+	cmd, err := registry.ValidateRequestSections(insertBatchDeterministicSections())
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	entry, err := AppendDeterministicEntry(nil, cmd)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry: %v", err)
+	}
+	if _, err := DecodeDeterministicEntry(entry, Limits{MaxFrameSize: uint64(len(entry) - 1)}); codeOf(err) != ErrResourceExhausted {
+		t.Fatalf("DecodeDeterministicEntry err=%v code=%d want resource exhausted", err, codeOf(err))
+	}
+}
+
 func TestDecodeDeterministicEntryRejectsMalformedEnvelope(t *testing.T) {
 	registry := MustV1Registry()
 	cmd, err := registry.ValidateRequestSections(insertBatchDeterministicSections())
@@ -801,7 +816,7 @@ func deterministicEntryFixtureCases() []deterministicEntryFixtureCase {
 				Section{ID: SectionCollectionRef, Bytes: []byte("c")},
 				Section{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
 				Section{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
-				Section{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte(`{"x":1}`))},
+				Section{ID: SectionDocuments, Bytes: AppendByteVector(nil, deterministicBSONDocumentXInt32(1))},
 				Section{ID: SectionReplacementMode, Bytes: deterministicUvarintPayload(deterministicReplacementModeExistingOnly)},
 			),
 		},
@@ -861,6 +876,15 @@ func deterministicIndexDefinitionPayload(name, field string, valueType uint64, u
 
 func deterministicUvarintPayload(value uint64) []byte {
 	return appendUvarint(nil, value)
+}
+
+func deterministicBSONDocumentXInt32(value int32) []byte {
+	return []byte{
+		12, 0, 0, 0,
+		0x10, 'x', 0,
+		byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24),
+		0,
+	}
 }
 
 func appendDeterministicBool(dst []byte, value bool) []byte {

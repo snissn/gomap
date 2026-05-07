@@ -85,6 +85,9 @@ func DecodeDeterministicEntry(src []byte, limits Limits) (DeterministicEntry, er
 // scratch must copy it.
 func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *DeterministicEntryScratch) (DeterministicEntry, error) {
 	limits = limits.withDefaults()
+	if uint64(len(src)) > limits.MaxFrameSize {
+		return DeterministicEntry{}, protocolError(ErrResourceExhausted, "deterministic entry length %d exceeds limit %d", len(src), limits.MaxFrameSize)
+	}
 	if len(src) < len(DeterministicEntryMagic) ||
 		src[0] != DeterministicEntryMagic[0] ||
 		src[1] != DeterministicEntryMagic[1] ||
