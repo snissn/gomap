@@ -211,6 +211,22 @@ The hot path should stay binary and vectorized:
 Benchmarks should keep native-wire results separate from direct collection calls,
 Mongo driver paths, and Mongo raw-wire paths.
 
+R0d codec benchmarks should land before the native server. They should:
+
+- use stable `BenchmarkNativewire...` names,
+- cover every command schema marked `BenchmarkRequired`,
+- benchmark allocating compatibility APIs separately from scratch/reuse APIs,
+- report `wire_B/item` for batch-shaped command bodies,
+- include allocation guard tests for warmed reusable frame/section, byte-vector,
+  schema-validation, and deterministic-entry paths,
+- keep benchmark fixtures representative of collection workloads without
+  pulling in the collections package or storage engine.
+
+When a benchmark exposes avoidable allocations in the codec or schema layer,
+prefer a reusable scratch API over hiding the cost in the benchmark harness. The
+native server should be able to use the same scratch APIs later for per-request
+parse state.
+
 ## 9. Observability
 
 The first server should expose enough counters to debug protocol behavior:

@@ -853,6 +853,25 @@ as a voting replica for that log lineage.
 
 ## 16. Benchmark and Observability Requirements
 
+R0d MUST establish codec-level nativewire microbenchmarks before native client
+server modes publish end-to-end numbers. These package benchmarks SHOULD use the
+`BenchmarkNativewire...` prefix and cover:
+
+- fixed frame-header encode/decode,
+- command-header encode/decode,
+- section-envelope encode/decode,
+- byte-vector encode/decode across ID and document-shaped batches,
+- request body decode plus schema validation for every command schema marked
+  `BenchmarkRequired`,
+- deterministic command-entry encoding for every replicated benchmark case.
+
+R0d benchmarks SHOULD report `B/op`, `allocs/op`, bytes processed per second,
+and `wire_B/item` where a command carries a batch. Reusable hot paths for
+section decoding, byte-vector decoding, schema validation, and deterministic
+entry encoding SHOULD have allocation guard tests proving zero allocations after
+scratch warmup. Allocating compatibility APIs MAY remain available, but
+benchmark labels MUST distinguish allocating and scratch/reuse paths.
+
 The first implementation MUST add native client modes beside the existing Mongo
 gateway client modes:
 

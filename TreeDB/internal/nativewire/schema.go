@@ -30,6 +30,9 @@ type CommandSchema struct {
 	RequiresCatalogGuard bool
 	BenchmarkRequired    bool
 	Sections             []SectionRule
+
+	rules    map[SectionID]SectionRule
+	required []SectionID
 }
 
 type Registry struct {
@@ -44,6 +47,12 @@ type commandKey struct {
 type ValidatedCommand struct {
 	Header  CommandHeader
 	Schema  *CommandSchema
+	Known   []Section
+	Ignored []Section
+}
+
+// CommandScratch carries reusable buffers for command-schema validation.
+type CommandScratch struct {
 	Known   []Section
 	Ignored []Section
 }
@@ -69,6 +78,7 @@ func NewRegistry(commands ...CommandSchema) (*Registry, error) {
 			}
 			ruleSeen[rule.ID] = struct{}{}
 		}
+		c.rules, c.required = compileCommandRules(c)
 		r.commands[key] = &c
 	}
 	return r, nil
@@ -91,6 +101,14 @@ func (r *Registry) LookupCommand(id CommandID, version uint64) (*CommandSchema, 
 }
 
 func (r *Registry) ValidateRequestSections(sections []Section) (ValidatedCommand, error) {
+	return r.ValidateRequestSectionsInto(sections, nil)
+}
+
+// ValidateRequestSectionsInto validates sections using scratch when provided.
+//
+// The returned command borrows section slices from sections and scratch. Callers
+// may reuse scratch after they are done with the validated command view.
+func (r *Registry) ValidateRequestSectionsInto(sections []Section, scratch *CommandScratch) (ValidatedCommand, error) {
 	header, err := findCommandHeader(sections)
 	if err != nil {
 		return ValidatedCommand{}, err
@@ -99,7 +117,7 @@ func (r *Registry) ValidateRequestSections(sections []Section) (ValidatedCommand
 	if !ok {
 		return ValidatedCommand{}, protocolError(ErrUnsupportedVersion, "unsupported command %d version %d", header.ID, header.Version)
 	}
-	known, ignored, err := schema.validateSections(sections)
+	known, ignored, err := schema.validateSections(sections, scratch)
 	if err != nil {
 		return ValidatedCommand{}, err
 	}
@@ -134,11 +152,18 @@ func findCommandHeader(sections []Section) (CommandHeader, error) {
 	return header, nil
 }
 
-func (c *CommandSchema) validateSections(sections []Section) ([]Section, []Section, error) {
+func (c *CommandSchema) validateSections(sections []Section, scratch *CommandScratch) ([]Section, []Section, error) {
 	rules := c.ruleMap()
-	seen := make(map[SectionID]int, len(sections))
-	known := make([]Section, 0, len(sections))
-	ignored := make([]Section, 0)
+	var seen sectionSeenSet
+	var known []Section
+	var ignored []Section
+	if scratch == nil {
+		known = make([]Section, 0, len(sections))
+		ignored = make([]Section, 0)
+	} else {
+		known = scratch.Known[:0]
+		ignored = scratch.Ignored[:0]
+	}
 
 	for _, section := range sections {
 		rule, ok := rules[section.ID]
@@ -149,22 +174,42 @@ func (c *CommandSchema) validateSections(sections []Section) ([]Section, []Secti
 			ignored = append(ignored, section)
 			continue
 		}
-		if !rule.Repeatable && seen[section.ID] > 0 {
+		count := seen.add(section.ID)
+		if !rule.Repeatable && count > 1 {
 			return nil, nil, protocolError(ErrInvalidCommand, "duplicate singleton section %d", section.ID)
 		}
-		seen[section.ID]++
 		known = append(known, section)
 	}
 
-	for _, rule := range rules {
-		if rule.Required && seen[rule.ID] == 0 {
-			return nil, nil, protocolError(ErrInvalidCommand, "missing required section %d", rule.ID)
+	for _, id := range c.requiredSections() {
+		if seen.get(id) == 0 {
+			return nil, nil, protocolError(ErrInvalidCommand, "missing required section %d", id)
 		}
+	}
+	if scratch != nil {
+		scratch.Known = known
+		scratch.Ignored = ignored
 	}
 	return known, ignored, nil
 }
 
 func (c *CommandSchema) ruleMap() map[SectionID]SectionRule {
+	if c.rules != nil {
+		return c.rules
+	}
+	rules, _ := compileCommandRules(*c)
+	return rules
+}
+
+func (c *CommandSchema) requiredSections() []SectionID {
+	if c.required != nil {
+		return c.required
+	}
+	_, required := compileCommandRules(*c)
+	return required
+}
+
+func compileCommandRules(c CommandSchema) (map[SectionID]SectionRule, []SectionID) {
 	rules := map[SectionID]SectionRule{
 		SectionCommandHeader:     {ID: SectionCommandHeader, Name: "command_header", Required: true},
 		SectionDeadline:          {ID: SectionDeadline, Name: "deadline"},
@@ -178,7 +223,57 @@ func (c *CommandSchema) ruleMap() map[SectionID]SectionRule {
 	for _, rule := range c.Sections {
 		rules[rule.ID] = rule
 	}
-	return rules
+	required := make([]SectionID, 0, len(rules))
+	for _, rule := range rules {
+		if rule.Required {
+			required = append(required, rule.ID)
+		}
+	}
+	return rules, required
+}
+
+type sectionSeenSet struct {
+	ids      [32]SectionID
+	counts   [32]int
+	n        int
+	overflow map[SectionID]int
+}
+
+func (s *sectionSeenSet) add(id SectionID) int {
+	if s.overflow != nil {
+		s.overflow[id]++
+		return s.overflow[id]
+	}
+	for i := 0; i < s.n; i++ {
+		if s.ids[i] == id {
+			s.counts[i]++
+			return s.counts[i]
+		}
+	}
+	if s.n < len(s.ids) {
+		s.ids[s.n] = id
+		s.counts[s.n] = 1
+		s.n++
+		return 1
+	}
+	s.overflow = make(map[SectionID]int, s.n+1)
+	for i := 0; i < s.n; i++ {
+		s.overflow[s.ids[i]] = s.counts[i]
+	}
+	s.overflow[id] = 1
+	return 1
+}
+
+func (s *sectionSeenSet) get(id SectionID) int {
+	if s.overflow != nil {
+		return s.overflow[id]
+	}
+	for i := 0; i < s.n; i++ {
+		if s.ids[i] == id {
+			return s.counts[i]
+		}
+	}
+	return 0
 }
 
 func v1CommandSchemas() []CommandSchema {

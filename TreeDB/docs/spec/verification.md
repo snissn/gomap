@@ -231,6 +231,15 @@ Coverage:
 - `TreeDB/internal/nativewire/deterministic_test.go`:
   - deterministic-entry golden fixture and transport-field independence,
   - deterministic-entry rejection for missing distributed guards.
+- `TreeDB/internal/nativewire/bench_test.go`:
+  - nativewire benchmark cases for every command schema marked
+    `BenchmarkRequired`,
+  - reusable section and byte-vector decode scratch tests,
+  - allocation guard tests for warmed frame, command-header, section,
+    byte-vector, schema-validation, and deterministic-entry paths,
+  - `BenchmarkNativewire...` coverage for frame headers, command headers, byte
+    vectors, request body section encoding/decoding, decode+validate, and
+    deterministic-entry encoding.
 
 The native-wire server does not exist yet. R0 follow-up work must add
 broader negative conformance fixtures, drift tests, and direct collection parity

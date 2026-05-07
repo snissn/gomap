@@ -9,6 +9,12 @@ type ByteVector struct {
 	payload []byte
 }
 
+// ByteVectorScratch carries reusable decode buffers for DecodeByteVectorInto.
+type ByteVectorScratch struct {
+	offsets []int
+	lengths []int
+}
+
 func AppendByteVector(dst []byte, items ...[]byte) []byte {
 	dst = appendUvarint(dst, uint64(len(items)))
 	for _, item := range items {
@@ -21,6 +27,12 @@ func AppendByteVector(dst []byte, items ...[]byte) []byte {
 }
 
 func DecodeByteVector(src []byte, limits Limits) (ByteVector, error) {
+	return DecodeByteVectorInto(src, limits, nil)
+}
+
+// DecodeByteVectorInto decodes a byte-vector using reusable buffers when
+// scratch is non-nil. The returned vector borrows from src and scratch.
+func DecodeByteVectorInto(src []byte, limits Limits, scratch *ByteVectorScratch) (ByteVector, error) {
 	limits = limits.withDefaults()
 	count64, off, err := readUvarint(src)
 	if err != nil {
@@ -30,8 +42,7 @@ func DecodeByteVector(src []byte, limits Limits) (ByteVector, error) {
 		return ByteVector{}, protocolError(ErrResourceExhausted, "byte-vector count %d exceeds limit %d", count64, limits.MaxByteVectorItems)
 	}
 	count := int(count64)
-	offsets := make([]int, count)
-	lengths := make([]int, count)
+	offsets, lengths := byteVectorBuffers(count, scratch)
 
 	total := uint64(0)
 	for i := 0; i < count; i++ {
@@ -72,6 +83,19 @@ func DecodeByteVector(src []byte, limits Limits) (ByteVector, error) {
 		lengths: lengths,
 		payload: src[off:],
 	}, nil
+}
+
+func byteVectorBuffers(count int, scratch *ByteVectorScratch) ([]int, []int) {
+	if scratch == nil {
+		return make([]int, count), make([]int, count)
+	}
+	if cap(scratch.offsets) < count {
+		scratch.offsets = make([]int, count)
+	}
+	if cap(scratch.lengths) < count {
+		scratch.lengths = make([]int, count)
+	}
+	return scratch.offsets[:count], scratch.lengths[:count]
 }
 
 func (v ByteVector) Len() int {

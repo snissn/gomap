@@ -22,8 +22,16 @@ func AppendSection(dst []byte, s Section) ([]byte, error) {
 }
 
 func DecodeSections(src []byte, limits Limits) ([]Section, error) {
+	return DecodeSectionsInto(nil, src, limits)
+}
+
+// DecodeSectionsInto decodes section envelopes into dst[:0].
+//
+// The returned sections borrow from src. Callers may reuse dst after they are
+// done with the decoded section view.
+func DecodeSectionsInto(dst []Section, src []byte, limits Limits) ([]Section, error) {
 	limits = limits.withDefaults()
-	var sections []Section
+	sections := dst[:0]
 	for off := 0; off < len(src); {
 		if len(sections) >= limits.MaxSections {
 			return nil, protocolError(ErrResourceExhausted, "section count exceeds limit %d", limits.MaxSections)

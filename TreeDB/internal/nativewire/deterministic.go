@@ -1,7 +1,5 @@
 package nativewire
 
-import "sort"
-
 const (
 	DeterministicEntryMagic   = "TDC1"
 	DeterministicEntryVersion = uint64(1)
@@ -21,13 +19,12 @@ func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) 
 		return nil, protocolError(ErrInvalidCommand, "missing catalog guard")
 	}
 
-	deterministic, err := cmd.deterministicSections()
+	var deterministicScratch [16]Section
+	deterministic, err := cmd.deterministicSectionsInto(deterministicScratch[:0])
 	if err != nil {
 		return nil, err
 	}
-	sort.SliceStable(deterministic, func(i, j int) bool {
-		return deterministic[i].ID < deterministic[j].ID
-	})
+	sortSectionsByID(deterministic)
 
 	dst = append(dst, DeterministicEntryMagic...)
 	dst = appendUvarint(dst, DeterministicEntryVersion)
@@ -52,15 +49,18 @@ func (cmd ValidatedCommand) hasSection(id SectionID) bool {
 	return false
 }
 
-func (cmd ValidatedCommand) deterministicSections() ([]Section, error) {
+func (cmd ValidatedCommand) deterministicSectionsInto(dst []Section) ([]Section, error) {
 	if cmd.Schema == nil {
 		return nil, protocolError(ErrInvalidCommand, "missing command schema")
 	}
 	rules := cmd.Schema.ruleMap()
-	out := make([]Section, 0, len(cmd.Known))
-	seen := make(map[SectionID]struct{}, len(cmd.Known))
+	out := dst[:0]
+	var seen sectionSeenSet
 	for _, section := range cmd.Known {
 		if section.ID == SectionIdempotencyKey {
+			if seen.add(section.ID) > 1 {
+				return nil, protocolError(ErrInvalidCommand, "duplicate deterministic singleton section %d", section.ID)
+			}
 			out = append(out, Section{ID: section.ID, Bytes: section.Bytes})
 			continue
 		}
@@ -69,12 +69,22 @@ func (cmd ValidatedCommand) deterministicSections() ([]Section, error) {
 			continue
 		}
 		if !rule.Repeatable {
-			if _, exists := seen[section.ID]; exists {
+			if seen.add(section.ID) > 1 {
 				return nil, protocolError(ErrInvalidCommand, "duplicate deterministic singleton section %d", section.ID)
 			}
-			seen[section.ID] = struct{}{}
 		}
 		out = append(out, Section{ID: section.ID, Bytes: section.Bytes})
 	}
 	return out, nil
+}
+
+func sortSectionsByID(sections []Section) {
+	for i := 1; i < len(sections); i++ {
+		section := sections[i]
+		j := i - 1
+		for ; j >= 0 && sections[j].ID > section.ID; j-- {
+			sections[j+1] = sections[j]
+		}
+		sections[j+1] = section
+	}
 }

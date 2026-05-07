@@ -60,7 +60,9 @@ Suggested slices:
 
 - R0a: protocol constants, schema registry, and golden byte fixtures,
 - R0b: frame/section codec, fuzzing, and malformed-frame tests,
-- R0c: deterministic-entry encoder for the mutation allowlist.
+- R0c: deterministic-entry encoder for the mutation allowlist,
+- R0d: nativewire codec/schema benchmark suite and reusable hot-path scratch
+  APIs.
 
 Acceptance:
 
@@ -74,7 +76,12 @@ Acceptance:
 - unknown-section and unknown-flag compatibility tests,
 - fuzz tests for frame, section, byte-vector, and command decoding,
 - deterministic-entry canonicalization and rejection tests,
-- max-frame, malformed-frame, and bounded-allocation tests.
+- max-frame, malformed-frame, and bounded-allocation tests,
+- nativewire microbenchmarks for fixed headers, command headers, section
+  envelopes, byte vectors, decode+validate, and deterministic-entry encoding,
+- benchmark coverage for every command schema marked `BenchmarkRequired`,
+- allocation guard tests proving reusable decode, validation, and canonical
+  entry paths stay allocation-free after scratch warmup.
 
 ### R1. Single-Node Native Server MVP
 
