@@ -111,7 +111,7 @@ func TestRunAndWriteEmitsPartialErrors(t *testing.T) {
 		t.Fatal("runAndWrite succeeded with unsafe treedb-dir")
 	}
 	got := out.String()
-	for _, want := range []string{"Native collection workload benchmark", "errors:", "refusing to delete non-empty treedb-dir"} {
+	for _, want := range []string{"Native collection workload benchmark", "errors:", "refusing to delete treedb-dir"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("output missing %q\n%s", want, got)
 		}
@@ -160,11 +160,22 @@ func TestResetTreeDBDirRefusesNonEmptyUnmarkedDir(t *testing.T) {
 	if err == nil {
 		t.Fatal("resetTreeDBDir succeeded for non-empty unmarked directory")
 	}
-	if !strings.Contains(err.Error(), "refusing to delete non-empty treedb-dir") {
+	if !strings.Contains(err.Error(), "refusing to delete treedb-dir") {
 		t.Fatalf("error=%v want refusal", err)
 	}
 	if got, statErr := os.ReadFile(important); statErr != nil || string(got) != "keep" {
 		t.Fatalf("important file changed, got=%q err=%v", got, statErr)
+	}
+}
+
+func TestResetTreeDBDirRefusesEmptyUnmarkedDir(t *testing.T) {
+	dir := t.TempDir()
+	err := resetTreeDBDir(dir)
+	if err == nil {
+		t.Fatal("resetTreeDBDir succeeded for empty unmarked directory")
+	}
+	if !strings.Contains(err.Error(), "refusing to delete treedb-dir") {
+		t.Fatalf("error=%v want refusal", err)
 	}
 }
 
