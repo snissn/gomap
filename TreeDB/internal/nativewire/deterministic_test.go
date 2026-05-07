@@ -321,6 +321,24 @@ func TestDecodeDeterministicEntryClearsScratchOnMidDecodeError(t *testing.T) {
 	}
 }
 
+func TestDecodeDeterministicEntryClearsScratchOnHeaderError(t *testing.T) {
+	scratch := &DeterministicEntryScratch{
+		Sections: []Section{
+			{ID: SectionDocuments, Bytes: bytes.Repeat([]byte("x"), 1024)},
+			{ID: SectionDocumentIDs, Bytes: []byte("stale")},
+		},
+	}
+	if _, err := DecodeDeterministicEntryInto([]byte("bad"), Limits{}, scratch); codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("DecodeDeterministicEntryInto err=%v code=%d want malformed", err, codeOf(err))
+	}
+	if len(scratch.Sections) != 0 {
+		t.Fatalf("scratch len=%d want 0", len(scratch.Sections))
+	}
+	if cap(scratch.Sections) != 0 {
+		t.Fatalf("scratch cap=%d want 0 after header failure", cap(scratch.Sections))
+	}
+}
+
 func TestDeterministicEntryRejectsMissingDistributedGuards(t *testing.T) {
 	registry := MustV1Registry()
 
