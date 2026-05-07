@@ -95,7 +95,7 @@ func (c *Client) FindRawBSON(ctx context.Context, command bson.Raw) ([]bson.Raw,
 		return nil, errors.New("mongo gateway fast client is closed")
 	}
 	if len(command) == 0 {
-		return nil, errors.New("FindRawBSON requires a command document")
+		return nil, errors.New("find raw bson requires a command document")
 	}
 	msg, err := wire.AppendMsgMessage(nil, c.nextRequestID.Add(1), 0, 0, wire.Document(command))
 	if err != nil {
@@ -109,13 +109,13 @@ func (c *Client) FindRawBSON(ctx context.Context, command bson.Raw) ([]bson.Raw,
 // hot paths that validate a response without retaining it.
 func (c *Client) FindRawBSONBorrowed(ctx context.Context, command bson.Raw, fn func([]bson.Raw) error) error {
 	if fn == nil {
-		return errors.New("FindRawBSONBorrowed requires a callback")
+		return errors.New("find raw bson borrowed requires a callback")
 	}
 	if c == nil || c.conn == nil {
 		return errors.New("mongo gateway fast client is closed")
 	}
 	if len(command) == 0 {
-		return errors.New("FindRawBSONBorrowed requires a command document")
+		return errors.New("find raw bson borrowed requires a command document")
 	}
 	msg, err := wire.AppendMsgMessage(nil, c.nextRequestID.Add(1), 0, 0, wire.Document(command))
 	if err != nil {
@@ -311,7 +311,7 @@ func rawDocumentsFromArray(batch bson.RawArray) ([]bson.Raw, error) {
 	}
 	rem = rem[:len(rem)-1]
 
-	docs := make([]bson.Raw, 0, 10)
+	docs := make([]bson.Raw, 0, rawArrayDocumentCapacityHint(len(rem)))
 	for len(rem) > 0 {
 		elem, next, ok := bsoncore.ReadElement(rem)
 		if !ok {
@@ -329,6 +329,22 @@ func rawDocumentsFromArray(batch bson.RawArray) ([]bson.Raw, error) {
 		rem = next
 	}
 	return docs, nil
+}
+
+func rawArrayDocumentCapacityHint(payloadBytes int) int {
+	if payloadBytes <= 0 {
+		return 0
+	}
+	const minElementOverhead = 8
+	const maxInitialCapacity = 1024
+	hint := payloadBytes / minElementOverhead
+	if hint < 1 {
+		return 1
+	}
+	if hint > maxInitialCapacity {
+		return maxInitialCapacity
+	}
+	return hint
 }
 
 func rawOK(raw bson.Raw) bool {
