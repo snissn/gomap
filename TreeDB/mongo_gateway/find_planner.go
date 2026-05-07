@@ -209,7 +209,7 @@ func (s *Server) findPureIndexedRangeLimitDocuments(col *collections.Collection,
 		return nil, true, nil
 	}
 	candidateLimit := candidateLimitWithOverflowSlot(s.maxFindScanDocuments())
-	docs, err := documentsForIndexedRange(col, materializer, idx, opts, candidateLimit, limit)
+	docs, err := documentsForIndexedRange(col, materializer, idx, opts, candidateLimit, limit, false)
 	return docs, true, err
 }
 
@@ -819,7 +819,7 @@ func documentsForIndexedFieldPredicates(col *collections.Collection, materialize
 	if limit, ok := indexedRangeCandidateLimit(plan, idx, maxDocuments); ok {
 		candidateLimit = limit
 	}
-	docs, err := documentsForIndexedRange(col, materializer, idx, opts, candidateLimit, maxDocuments)
+	docs, err := documentsForIndexedRange(col, materializer, idx, opts, candidateLimit, maxDocuments, true)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1046,7 +1046,7 @@ func compareFloat64IndexValues(left, right float64) int {
 	}
 }
 
-func documentsForIndexedRange(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, idx collections.IndexDefinition, opts collections.IndexRangeOptions, candidateLimit, maxDocuments int) ([]wire.Document, error) {
+func documentsForIndexedRange(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, idx collections.IndexDefinition, opts collections.IndexRangeOptions, candidateLimit, maxDocuments int, allowOverflow bool) ([]wire.Document, error) {
 	if candidateLimit <= 0 {
 		candidateLimit = candidateLimitWithOverflowSlot(maxDocuments)
 	}
@@ -1069,7 +1069,10 @@ func documentsForIndexedRange(col *collections.Collection, materializer *collect
 			return nil, err
 		}
 		out = append(out, doc)
-		if len(out) > maxDocuments {
+		if maxDocuments > 0 && len(out) >= maxDocuments {
+			if allowOverflow && len(out) == maxDocuments {
+				continue
+			}
 			return out, nil
 		}
 	}

@@ -2152,6 +2152,27 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 	}
 	server.MaxFindScanDocuments = oldMaxFindScanDocuments
 
+	limitedAgeRangeFind := serveCommand(t, server, 234041, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(36)}}}}},
+		{Key: "limit", Value: int32(2)},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, limitedAgeRangeFind)
+	firstBatch = cursorFirstBatch(t, limitedAgeRangeFind)
+	if len(firstBatch) != 2 {
+		t.Fatalf("limited indexed age range firstBatch len=%d want 2", len(firstBatch))
+	}
+	if cursorID := cursorIDFromResponse(t, limitedAgeRangeFind); cursorID != 0 {
+		t.Fatalf("limited indexed age range cursor id=%d want 0", cursorID)
+	}
+	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "katherine" {
+		t.Fatalf("limited indexed age range first name=%q ok=%v want katherine", got, ok)
+	}
+	if got, ok := firstBatch[1].Lookup("name").StringValueOK(); !ok || got != "ada" {
+		t.Fatalf("limited indexed age range second name=%q ok=%v want ada", got, ok)
+	}
+
 	wrongTypeIndexedFind := serveCommand(t, server, 2341, bson.D{
 		{Key: "find", Value: "users"},
 		{Key: "filter", Value: bson.D{{Key: "city", Value: int32(5)}}},
