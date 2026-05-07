@@ -17,13 +17,13 @@ import (
 )
 
 const (
-	commandCodeBadValue          int32 = 2
-	commandCodeFailedToParse     int32 = 9
-	commandCodeNamespaceNotFound int32 = 26
-	commandCodeIndexNotFound     int32 = 27
-	commandCodeCursorNotFound    int32 = 43
-	commandCodeDuplicateKey      int32 = 11000
-	maxWireMessageLengthInt32          = int64(1<<31 - 1)
+	commandCodeBadValue            int32 = 2
+	commandCodeFailedToParse       int32 = 9
+	commandCodeNamespaceNotFound   int32 = 26
+	commandCodeIndexNotFound       int32 = 27
+	commandCodeCursorNotFound      int32 = 43
+	commandCodeDuplicateKey        int32 = 11000
+	maxWireMessageLengthInt32Limit       = int64(1<<31 - 1)
 )
 
 const primaryKeyPrefixBSONValue byte = 1
@@ -1477,7 +1477,7 @@ func marshalCursorDocumentsMsgResponseWithIDInto(dst []byte, requestID, response
 		return nil, err
 	}
 	messageLength := len(msg) - base
-	if int64(messageLength) > maxWireMessageLengthInt32 {
+	if int64(messageLength) > maxWireMessageLengthInt32Limit {
 		return nil, fmt.Errorf("%w: length=%d", wire.ErrMessageTooLarge, messageLength)
 	}
 	if messageLength > wire.DefaultMaxMessageLength {
