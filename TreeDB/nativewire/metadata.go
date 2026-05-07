@@ -108,6 +108,18 @@ func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
 	if err != nil {
 		return collections.CollectionMeta{}, err
 	}
+	if err := ensureNonNegativeIntCapacity("buffered_indexed_write_max_documents", maxDocs); err != nil {
+		return collections.CollectionMeta{}, err
+	}
+	if err := ensureNoNegativeInt64("buffered_indexed_write_max_bytes", maxBytes); err != nil {
+		return collections.CollectionMeta{}, err
+	}
+	if err := ensureNonNegativeIntCapacity("buffered_indexed_write_max_root_runs", maxRootRuns); err != nil {
+		return collections.CollectionMeta{}, err
+	}
+	if err := ensureNonNegativeIntCapacity("buffered_indexed_async_flush_max_queued_units", maxQueued); err != nil {
+		return collections.CollectionMeta{}, err
+	}
 	indexCount, err := readEnum(src, &off)
 	if err != nil {
 		return collections.CollectionMeta{}, err
@@ -544,6 +556,16 @@ func ensureNoNegativeInt64(name string, value int64) error {
 	return nil
 }
 
+func ensureNonNegativeIntCapacity(name string, value int64) error {
+	if value < 0 {
+		return invalidMetadata("%s cannot be negative", name)
+	}
+	if value > int64(maxInt) {
+		return protocolError(iwire.ErrResourceExhausted, "%s exceeds int capacity", name)
+	}
+	return nil
+}
+
 func ensureKnownDocumentFormat(format collections.DocumentFormat) error {
 	switch format {
 	case collections.DocumentFormatDefault, collections.DocumentFormatJSON, collections.DocumentFormatBSON, collections.DocumentFormatTemplateV1:
@@ -553,6 +575,37 @@ func ensureKnownDocumentFormat(format collections.DocumentFormat) error {
 	}
 }
 
+func ensureKnownRootStoragePolicy(policy collections.RootStoragePolicy) error {
+	switch policy {
+	case collections.RootStorageDefault, collections.RootStorageFast, collections.RootStorageCompressed:
+		return nil
+	default:
+		return invalidMetadata("unsupported root storage policy %q", policy)
+	}
+}
+
+func ensureKnownIndexValueType(valueType collections.IndexValueType) error {
+	switch valueType {
+	case collections.IndexValueString, collections.IndexValueBool, collections.IndexValueInt64, collections.IndexValueDouble:
+		return nil
+	default:
+		return invalidMetadata("unsupported index value type %q", valueType)
+	}
+}
+
+func normalizeClientIndexDefinition(def collections.IndexDefinition) error {
+	if err := ensureIndexName(def.Name); err != nil {
+		return err
+	}
+	if err := collections.ValidateIndexPath(def.Field); err != nil {
+		return invalidMetadata("%v", err)
+	}
+	if err := ensureKnownIndexValueType(def.ValueType); err != nil {
+		return err
+	}
+	return ensureKnownRootStoragePolicy(def.StoragePolicy)
+}
+
 func normalizeClientCollectionMeta(meta collections.CollectionMeta) (collections.CollectionMeta, error) {
 	if err := collections.ValidateCollectionName(meta.Name); err != nil {
 		return collections.CollectionMeta{}, invalidMetadata("%v", err)
@@ -560,11 +613,26 @@ func normalizeClientCollectionMeta(meta collections.CollectionMeta) (collections
 	if err := ensureKnownDocumentFormat(meta.Options.DocumentFormat); err != nil {
 		return collections.CollectionMeta{}, err
 	}
+	if err := ensureKnownRootStoragePolicy(meta.Options.DataRootStoragePolicy); err != nil {
+		return collections.CollectionMeta{}, err
+	}
+	if err := ensureKnownRootStoragePolicy(meta.Options.IndexStateStoragePolicy); err != nil {
+		return collections.CollectionMeta{}, err
+	}
+	if err := ensureNonNegativeIntCapacity("buffered_indexed_write_max_documents", int64(meta.Options.BufferedIndexedWriteMaxDocuments)); err != nil {
+		return collections.CollectionMeta{}, err
+	}
 	if err := ensureNoNegativeInt64("buffered_indexed_write_max_bytes", meta.Options.BufferedIndexedWriteMaxBytes); err != nil {
 		return collections.CollectionMeta{}, err
 	}
+	if err := ensureNonNegativeIntCapacity("buffered_indexed_write_max_root_runs", int64(meta.Options.BufferedIndexedWriteMaxRootRuns)); err != nil {
+		return collections.CollectionMeta{}, err
+	}
+	if err := ensureNonNegativeIntCapacity("buffered_indexed_async_flush_max_queued_units", int64(meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits)); err != nil {
+		return collections.CollectionMeta{}, err
+	}
 	for _, def := range meta.Indexes {
-		if err := ensureIndexName(def.Name); err != nil {
+		if err := normalizeClientIndexDefinition(def); err != nil {
 			return collections.CollectionMeta{}, err
 		}
 	}
