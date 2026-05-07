@@ -111,8 +111,10 @@ func (c *Client) FindRawBSON(ctx context.Context, command bson.Raw) ([]bson.Raw,
 }
 
 // FindRawBSONBorrowed is like FindRawBSON, but the returned BSON documents are
-// borrowed and valid only for the duration of fn. It is intended for benchmark
-// hot paths that validate a response without retaining it.
+// borrowed and valid only for the duration of fn. The callback runs while the
+// client mutex is held, so it must not call back into the same client and must
+// not retain the batch or any bson.Raw after returning. It is intended for
+// benchmark hot paths that validate a response without retaining it.
 func (c *Client) FindRawBSONBorrowed(ctx context.Context, command bson.Raw, fn func([]bson.Raw) error) error {
 	if fn == nil {
 		return errors.New("find raw bson borrowed requires a callback")

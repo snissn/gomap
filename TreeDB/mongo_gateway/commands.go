@@ -1572,8 +1572,9 @@ func marshalIndexedRangeCursorMsgInto(dst []byte, requestID, responseTo int32, s
 	if int64(messageLength) > maxWireMessageLengthInt32 {
 		return nil, fmt.Errorf("%w: length=%d", wire.ErrMessageTooLarge, messageLength)
 	}
-	if messageLength > wire.DefaultMaxMessageLength {
-		return nil, fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, messageLength, wire.DefaultMaxMessageLength)
+	maxMessageLength := int(server.maxMessageLength())
+	if messageLength > maxMessageLength {
+		return nil, fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, messageLength, maxMessageLength)
 	}
 	binary.LittleEndian.PutUint32(msg[base:base+4], uint32(messageLength))
 	return msg, nil
