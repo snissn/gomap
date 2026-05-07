@@ -11864,6 +11864,62 @@ func TestCollectionFindByIndexRangeDedupesPersistedOnlyMultiKeyRange(t *testing.
 	}
 }
 
+func TestCollectionFindByIndexRangePersistedOnlyFastPathLimitAndClones(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "score", Field: "score", ValueType: IndexValueInt64}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2"), []byte("u3")},
+		[][]byte{
+			[]byte(`{"score":1}`),
+			[]byte(`{"score":2}`),
+			[]byte(`{"score":3}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	ids, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(1), Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+		Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("find range: %v", err)
+	}
+	if !truncated || len(ids) != 2 || !bytes.Equal(ids[0], []byte("u1")) || !bytes.Equal(ids[1], []byte("u2")) {
+		t.Fatalf("ids=%q truncated=%v want u1,u2 true", ids, truncated)
+	}
+	ids[0][0] = 'x'
+	again, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(1), Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+		Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("find range again: %v", err)
+	}
+	if !truncated || len(again) != 1 || !bytes.Equal(again[0], []byte("u1")) {
+		t.Fatalf("again ids=%q truncated=%v want u1 true", again, truncated)
+	}
+}
+
 func TestCollectionFindByIndexRangeMergesBufferedUpdates(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
