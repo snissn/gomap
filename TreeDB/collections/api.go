@@ -11521,7 +11521,7 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 	}
 	var bufferedTable memtable.Table
 	if exactPrefixScan {
-		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, idx.Unique, exactPrefix, opts.Limit)
+		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, idx.Unique, exactPrefix, 0)
 	} else {
 		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
 	}
