@@ -11839,6 +11839,54 @@ func TestCollectionFindByIndexRangeDedupesPersistedOnlyMultiKeyRange(t *testing.
 	}
 }
 
+func TestCollectionFindByIndexRangeDedupesAllowedArrayScalarIndex(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			AllowArrayValuesInIndex: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "tag", Field: "tags", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("d1"), []byte("d2")},
+		[][]byte{
+			[]byte(`{"tags":["a","b"]}`),
+			[]byte(`{"tags":["c"]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	ids, truncated, err := col.FindByIndexRange("tag", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: "a", Inclusive: true},
+		Upper: IndexRangeBound{Value: "d", Inclusive: false},
+		Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("find range: %v", err)
+	}
+	if truncated || len(ids) != 2 || !bytes.Equal(ids[0], []byte("d1")) || !bytes.Equal(ids[1], []byte("d2")) {
+		t.Fatalf("ids=%q truncated=%v want d1,d2 false", ids, truncated)
+	}
+}
+
 func TestCollectionFindByIndexRangePersistedOnlyFastPathLimitAndClones(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

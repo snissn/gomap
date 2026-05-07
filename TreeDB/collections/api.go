@@ -11545,7 +11545,8 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 	}
 	primaryRootName := collectionPrimaryRootName(catalog.meta.Name)
 	var scratch []byte
-	truncated, err := scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt, idx.ValueType, opts.Limit, idx.MultiKey, func(id []byte) (bool, error) {
+	dedupeIDs := idx.MultiKey || catalog.meta.Options.AllowArrayValuesInIndex
+	truncated, err := scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt, idx.ValueType, opts.Limit, dedupeIDs, func(id []byte) (bool, error) {
 		var value []byte
 		var buffered, found bool
 		if domainLocked {
@@ -11675,7 +11676,8 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 	if persistedIt != nil {
 		defer func() { _ = persistedIt.Close() }()
 	}
-	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, opts.Limit, idx.MultiKey, fn)
+	dedupeIDs := idx.MultiKey || catalog.meta.Options.AllowArrayValuesInIndex
+	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, opts.Limit, dedupeIDs, fn)
 	return truncated, true, err
 }
 
