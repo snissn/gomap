@@ -1,6 +1,7 @@
 package valuelog
 
 import (
+	"bytes"
 	"io"
 	"path/filepath"
 	"testing"
@@ -153,6 +154,37 @@ func TestWriterRotateToFromSink_LazyAppendBuffer(t *testing.T) {
 
 	if cap(writer.appendBuf) != 0 {
 		t.Fatalf("cap(appendBuf)=%d want 0", cap(writer.appendBuf))
+	}
+}
+
+func TestWriterCloseSinkFlushesAndReleasesBuffers(t *testing.T) {
+	var sink bytes.Buffer
+	writer := NewWriterWithSink(&sink, page.ValueLogFileID(1))
+	if err := writer.writeBytes([]byte("buffered")); err != nil {
+		t.Fatalf("writeBytes: %v", err)
+	}
+	writer.appendBuf = append(make([]byte, 0, defaultBufferSize), "append"...)
+	writer.scratch = make([]byte, 1, 16)
+	writer.rawScratch = make([]byte, 1, 16)
+	writer.encScratch = make([]byte, 1, 16)
+	writer.blockScratch = make([]byte, 1, 16)
+	writer.encLimiter.buf = writer.encScratch
+	writer.encLimiter.limit = 16
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got, want := sink.String(), "bufferedappend"; got != want {
+		t.Fatalf("sink contents=%q want %q", got, want)
+	}
+	if writer.appendBuf != nil {
+		t.Fatalf("appendBuf retained after Close: cap=%d", cap(writer.appendBuf))
+	}
+	if writer.scratch != nil || writer.rawScratch != nil || writer.encScratch != nil || writer.blockScratch != nil {
+		t.Fatalf("scratch buffers retained after Close")
+	}
+	if writer.encLimiter.buf != nil || writer.encLimiter.limit != 0 {
+		t.Fatalf("encLimiter retained after Close: buf=%v limit=%d", writer.encLimiter.buf != nil, writer.encLimiter.limit)
 	}
 }
 

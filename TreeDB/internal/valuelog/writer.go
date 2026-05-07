@@ -2200,14 +2200,19 @@ func (w *Writer) Sync() error {
 }
 
 func (w *Writer) Close() error {
-	if w == nil || w.f == nil {
+	if w == nil {
 		return nil
 	}
 	defer w.releaseAppendBuf()
 	defer w.releaseTransientScratchBuffers()
 	if err := w.flushNoTrim(); err != nil {
-		_ = w.f.Close()
+		if w.f != nil {
+			_ = w.f.Close()
+		}
 		return err
+	}
+	if w.f == nil {
+		return nil
 	}
 	if err := w.f.Close(); err != nil {
 		return err
