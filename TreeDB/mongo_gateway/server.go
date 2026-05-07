@@ -338,6 +338,9 @@ func (s *Server) handleMsgInto(dst []byte, h wire.Header, body []byte, cursorOwn
 	retainRequestBody := name != "insert"
 
 	if name == "find" {
+		// The find path builds a raw OP_MSG response directly, so reject OP_MSG
+		// features it does not preserve. Other commands go through
+		// commandResponse with parsed document sequences.
 		if msg.Flags&wire.MsgFlagMoreToCome != 0 {
 			return nil, retainRequestBody, fmt.Errorf("%w: find with moreToCome flag", wire.ErrUnsupported)
 		}
