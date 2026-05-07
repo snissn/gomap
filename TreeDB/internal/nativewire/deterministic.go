@@ -82,14 +82,47 @@ func (cmd ValidatedCommand) deterministicSections() ([]Section, error) {
 			}
 			seen[section.ID] = struct{}{}
 		}
-		if section.ID == SectionCollectionRef && isConnectionLocalCollectionRef(section.Bytes) {
-			return nil, protocolError(ErrInvalidCommand, "collection handle ref is not deterministic")
+		if err := validateDeterministicSectionPayload(section); err != nil {
+			return nil, err
 		}
 		out = append(out, Section{ID: section.ID, Bytes: section.Bytes})
 	}
 	return out, nil
 }
 
-func isConnectionLocalCollectionRef(raw []byte) bool {
-	return len(raw) > 0 && raw[0] == 0
+func validateDeterministicSectionPayload(section Section) error {
+	switch section.ID {
+	case SectionCollectionRef:
+		local, err := isConnectionLocalCollectionRef(section.Bytes)
+		if err != nil {
+			return err
+		}
+		if local {
+			return protocolError(ErrInvalidCommand, "collection handle ref is not deterministic")
+		}
+	case SectionDocumentIDs, SectionDocuments, SectionTemplateRecords:
+		if _, err := DecodeByteVector(section.Bytes, Limits{}); err != nil {
+			return err
+		}
+	case SectionExpectedCatalogVersion, SectionReplacementMode:
+		_, n, err := readUvarint(section.Bytes)
+		if err != nil {
+			return err
+		}
+		if n != len(section.Bytes) {
+			return protocolError(ErrInvalidCommand, "section %d has %d trailing bytes", section.ID, len(section.Bytes)-n)
+		}
+	}
+	return nil
+}
+
+func isConnectionLocalCollectionRef(raw []byte) (bool, error) {
+	if len(raw) == 0 {
+		return false, protocolError(ErrInvalidCommand, "empty collection_ref")
+	}
+	tag, _, err := readUvarint(raw)
+	if err != nil {
+		return false, err
+	}
+	return tag == 2, nil
 }
