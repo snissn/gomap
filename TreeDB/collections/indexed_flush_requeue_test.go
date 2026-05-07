@@ -48,6 +48,9 @@ func TestCollectionIndexedAsyncPublishFailureRequeuesUnitsAndPreservesUniqueRese
 	if work == nil {
 		t.Fatal("prepare async publish returned nil work")
 	}
+	if got := work.batch.state; got != coalescedFlushBatchActive {
+		t.Fatalf("prepared batch state=%d want active", got)
+	}
 	defer collectionTestCloseIndexedFlushWork(work)
 
 	if _, err := col.InsertBatch(
@@ -76,6 +79,9 @@ func TestCollectionIndexedAsyncPublishFailureRequeuesUnitsAndPreservesUniqueRese
 	injectedErr := errors.New("injected publish failure")
 	if err := col.completePreparedIndexedFlush(work, 0, nil, injectedErr, 0, 0, 0); !errors.Is(err, injectedErr) {
 		t.Fatalf("complete failure err=%v want injected publish failure", err)
+	}
+	if got := work.batch.state; got != coalescedFlushBatchRequeued {
+		t.Fatalf("failed batch state=%d want requeued", got)
 	}
 
 	col.writeDomain.mu.RLock()

@@ -26,12 +26,13 @@ escape hatch. It is not the production-mainline path.
 Pending indexed writes are visible through the collection manager that owns the
 write domain.
 
-Reads and checks MUST merge these layers with the following newest-to-oldest
-precedence:
+Reads and checks enumerate pending runs in active, queued, then mutable order.
+Lookups and merged iterators use newest-wins shadowing, so effective precedence
+is:
 
 1. current mutable indexed runs,
-2. queued immutable indexed flush units,
-3. in-flight async publishing units,
+2. queued immutable indexed flush units, in FIFO order,
+3. the active in-flight async publishing batch, in original FIFO unit order,
 4. persisted backend roots from the current collection catalog.
 
 This applies to:
@@ -58,9 +59,13 @@ separate durable log.
 `BufferedIndexedAsyncFlush` allows threshold-triggered indexed flush units to be
 published by a background worker.
 
-The async worker may move a queued immutable unit into the publishing state
-before root publication completes. Publishing units remain visible to reads,
-unique checks, schema-change barriers, and explicit flush barriers.
+The async worker may move queued immutable units into one active coalesced flush
+batch before root publication completes. The batch preserves the original FIFO
+unit boundaries. Ordered-root publish uses either the mechanical merged view or
+a narrower semantic effective view for proven-safe non-unique secondary-index
+update chains; raw FIFO units remain the visibility, ownership, and requeue
+source. Active publishing units remain visible to reads, unique checks,
+schema-change barriers, and explicit flush barriers.
 
 `BufferedIndexedAsyncFlushMaxQueuedUnits` bounds queued immutable flush units.
 When the queue is full and a publish is already in flight, writers MUST apply

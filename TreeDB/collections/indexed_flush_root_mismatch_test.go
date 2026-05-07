@@ -115,6 +115,9 @@ func TestCollectionIndexedAsyncPublishRootBaseMismatchRequeuesFIFOAndCounts(t *t
 	if work == nil {
 		t.Fatal("prepare left async publish returned nil work")
 	}
+	if got := work.batch.state; got != coalescedFlushBatchActive {
+		t.Fatalf("prepared batch state=%d want active", got)
+	}
 	defer collectionTestCloseIndexedFlushWork(work)
 
 	if _, err := left.InsertBatch(
@@ -154,6 +157,9 @@ func TestCollectionIndexedAsyncPublishRootBaseMismatchRequeuesFIFOAndCounts(t *t
 
 	if err := left.publishPreparedIndexedFlush(work); !errors.Is(err, ErrConcurrentMutation) {
 		t.Fatalf("publish prepared left err=%v want ErrConcurrentMutation", err)
+	}
+	if got := work.batch.state; got != coalescedFlushBatchRequeued {
+		t.Fatalf("root-mismatched batch state=%d want requeued", got)
 	}
 
 	prefixA := indexedFlushRequeueEmailPrefix(t, "a@example.com")

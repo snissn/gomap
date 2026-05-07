@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/csv"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1229,12 +1231,122 @@ func TestMissingTreeDBDiskSnapshotRendersNA(t *testing.T) {
 	}
 }
 
+func TestWriteSummaryTSVRendersTreeDBCoalescingColumns(t *testing.T) {
+	phase := phaseResult{
+		Name:              "concurrent_id_update_set_w4",
+		Operations:        400,
+		OpsPerSecond:      1000,
+		TreeDBDrainMillis: 3.75,
+		TreeDBMetrics: map[string]float64{
+			"coalesced_batch_units/batch":              2,
+			"coalesced_batch_docs/batch":               64,
+			"coalesced_batch_bytes/batch":              2048,
+			"raw_root_delta_entries/doc":               4,
+			"raw_root_delta_bytes/doc":                 400,
+			"raw_root_delta_tombstones/doc":            0.1,
+			"raw_primary_root_delta_entries/doc":       1.5,
+			"raw_primary_root_delta_bytes/doc":         150,
+			"raw_secondary_root_delta_entries/doc":     2.5,
+			"raw_secondary_root_delta_bytes/doc":       250,
+			"final_root_delta_entries/doc":             2.5,
+			"final_root_delta_bytes/doc":               250,
+			"final_root_delta_tombstones/doc":          0,
+			"final_primary_root_delta_entries/doc":     1,
+			"final_primary_root_delta_bytes/doc":       100,
+			"final_secondary_root_delta_entries/doc":   1.5,
+			"final_secondary_root_delta_bytes/doc":     150,
+			"squashed_root_delta_entries/doc":          1.5,
+			"net_zero_root_batches/doc":                0.01,
+			"net_zero_root_plans/doc":                  0.02,
+			"skipped_secondary_roots/doc":              0.5,
+			"primary_only_duplicate_ids_coalesced/doc": 0.125,
+			"primary_only_drains/doc":                  0.05,
+			"primary_only_drain_docs/drain":            20,
+		},
+	}
+	cells := []cellComparison{{
+		Key: cellKey{Documents: 100, SecondaryIndexes: 0, TreeDBConfig: "treedb_writers_4"},
+		TreeDB: &runRecord{
+			Row:      matrixRow{Target: "treedb", Config: "treedb_writers_4", Documents: 100, PhysicalBytes: 1000},
+			Result:   benchmarkResult{Target: "treedb", Documents: 100, Phases: []phaseResult{phase}, TreeDBDiskAfterCheckpoint: &diskSnapshot{TotalBytes: 500}},
+			PhaseMap: map[string]phaseResult{phase.Name: phase},
+		},
+		Mongo: &runRecord{
+			Row:      matrixRow{Target: "mongo", Config: "mongo_writers_4", Documents: 100, PhysicalBytes: 2000},
+			Result:   benchmarkResult{Target: "mongo", Documents: 100, Phases: []phaseResult{{Name: phase.Name, OpsPerSecond: 500}}, MongoDBStatsFinal: map[string]any{"totalSize": float64(1000)}},
+			PhaseMap: map[string]phaseResult{phase.Name: {Name: phase.Name, OpsPerSecond: 500}},
+		},
+	}}
+	summaryPath := filepath.Join(t.TempDir(), "summary.tsv")
+	if err := writeSummaryTSV(summaryPath, cells); err != nil {
+		t.Fatalf("write summary: %v", err)
+	}
+	r := csv.NewReader(strings.NewReader(readFile(t, summaryPath)))
+	r.Comma = '\t'
+	rows, err := r.ReadAll()
+	if err != nil {
+		t.Fatalf("read summary TSV: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("summary rows=%d want header+1: %#v", len(rows), rows)
+	}
+	values := make(map[string]string)
+	for i, column := range rows[0] {
+		values[column] = rows[1][i]
+	}
+	for column, want := range map[string]string{
+		"treedb_drain_ms":                                     "3.750000",
+		"treedb_coalesced_batch_units_per_batch":              "2.000000",
+		"treedb_raw_root_delta_entries_per_doc":               "4.000000",
+		"treedb_raw_primary_root_delta_entries_per_doc":       "1.500000",
+		"treedb_final_root_delta_entries_per_doc":             "2.500000",
+		"treedb_squashed_root_delta_entries_per_doc":          "1.500000",
+		"treedb_net_zero_root_batches_per_doc":                "0.010000",
+		"treedb_primary_only_duplicate_ids_coalesced_per_doc": "0.125000",
+		"treedb_primary_only_drains_per_doc":                  "0.050000",
+	} {
+		if got := values[column]; got != want {
+			t.Fatalf("summary column %s=%q want %q; values=%v", column, got, want, values)
+		}
+	}
+}
+
+func TestPhaseResultMissingDrainMillisRendersMissing(t *testing.T) {
+	var phase phaseResult
+	if err := json.Unmarshal([]byte(`{"name":"load","operations":1,"ops_per_sec":10}`), &phase); err != nil {
+		t.Fatalf("unmarshal phase: %v", err)
+	}
+	if phase.TreeDBDrainMillisSet {
+		t.Fatal("missing treedb_drain_ms marked present")
+	}
+	if got := formatPhaseDrainMillis(true, phase); got != "n/a" {
+		t.Fatalf("missing drain millis rendered as %q want n/a", got)
+	}
+	if got := formatRawDrainMillis(true, phase); got != "" {
+		t.Fatalf("missing raw drain millis rendered as %q want empty", got)
+	}
+
+	if err := json.Unmarshal([]byte(`{"name":"load","operations":1,"ops_per_sec":10,"treedb_drain_ms":0}`), &phase); err != nil {
+		t.Fatalf("unmarshal present zero phase: %v", err)
+	}
+	if !phase.TreeDBDrainMillisSet {
+		t.Fatal("present zero treedb_drain_ms was not marked present")
+	}
+	if got := formatPhaseDrainMillis(true, phase); got != "0" {
+		t.Fatalf("present zero drain millis rendered as %q want 0", got)
+	}
+	if got := formatRawDrainMillis(true, phase); got != "0.000000" {
+		t.Fatalf("present zero raw drain millis rendered as %q want 0.000000", got)
+	}
+}
+
 func TestRenderWriterSweepCounterTableUsesPhaseMetrics(t *testing.T) {
 	treePhase := phaseResult{
-		Name:         "concurrent_id_update_set_w8",
-		Operations:   800,
-		DriverCalls:  800,
-		OpsPerSecond: 1200,
+		Name:              "concurrent_id_update_set_w8",
+		Operations:        800,
+		DriverCalls:       800,
+		OpsPerSecond:      1200,
+		TreeDBDrainMillis: 2.5,
 		LatencyMicros: latencySummary{
 			P95: 750,
 		},
@@ -1242,28 +1354,68 @@ func TestRenderWriterSweepCounterTableUsesPhaseMetrics(t *testing.T) {
 			"treedb.publish.ordered_root_delta_group.calls_total": "400",
 		},
 		TreeDBMetrics: map[string]float64{
-			"publish_delta_group_calls/doc":         0.5,
-			"root_apply_calls/doc":                  0.5,
-			"roots/publish":                         1,
-			"publish_delta_group_root_apply_ns/doc": 2500,
-			"leaf_log_node_loads/doc":               2,
-			"leaf_log_pages_written/doc":            0.25,
-			"leaf_log_read_bytes/doc":               64,
-			"leaf_log_write_bytes/doc":              128,
-			"indexed_flush_calls/doc":               0.125,
-			"indexed_flush_units/batch":             4,
-			"indexed_flush_docs/batch":              32,
-			"indexed_flush_root_runs/doc":           0.75,
-			"root_delta_plan_entries/doc":           1,
-			"root_delta_plan_key_bytes/doc":         10,
-			"root_delta_plan_value_bytes/doc":       20,
-			"root_delta_plan_tombstones/doc":        0.1,
-			"affected_primary_roots/doc":            0.5,
-			"affected_secondary_roots/doc":          0,
-			"primary_root_publishes/doc":            0.5,
-			"primary_root_delta_entries/doc":        1,
-			"primary_root_delta_bytes/doc":          42,
-			"primary_only_coalesced_docs/publish":   0,
+			"publish_delta_group_calls/doc":               0.5,
+			"root_apply_calls/doc":                        0.5,
+			"roots/publish":                               1,
+			"publish_delta_group_root_apply_ns/doc":       2500,
+			"leaf_log_node_loads/doc":                     2,
+			"leaf_log_pages_written/doc":                  0.25,
+			"leaf_log_read_bytes/doc":                     64,
+			"leaf_log_write_bytes/doc":                    128,
+			"indexed_flush_calls/doc":                     0.125,
+			"indexed_flush_units/batch":                   4,
+			"indexed_flush_docs/batch":                    32,
+			"indexed_flush_root_runs/doc":                 0.75,
+			"coalesced_batch_units/batch":                 3,
+			"coalesced_batch_docs/batch":                  96,
+			"coalesced_batch_bytes/batch":                 8192,
+			"root_delta_plan_entries/doc":                 1,
+			"root_delta_plan_key_bytes/doc":               10,
+			"root_delta_plan_value_bytes/doc":             20,
+			"root_delta_plan_tombstones/doc":              0.1,
+			"affected_primary_roots/doc":                  0.5,
+			"affected_secondary_roots/doc":                0,
+			"raw_root_delta_entries/doc":                  2,
+			"raw_root_delta_bytes/doc":                    200,
+			"raw_root_delta_tombstones/doc":               0.05,
+			"raw_primary_root_delta_entries/doc":          1.5,
+			"raw_primary_root_delta_bytes/doc":            150,
+			"raw_primary_root_delta_tombstones/doc":       0.05,
+			"raw_template_root_delta_entries/doc":         0.1,
+			"raw_template_root_delta_bytes/doc":           10,
+			"raw_template_root_delta_tombstones/doc":      0,
+			"raw_index_state_root_delta_entries/doc":      0.4,
+			"raw_index_state_root_delta_bytes/doc":        40,
+			"raw_index_state_root_delta_tombstones/doc":   0,
+			"raw_secondary_root_delta_entries/doc":        0.5,
+			"raw_secondary_root_delta_bytes/doc":          50,
+			"raw_secondary_root_delta_tombstones/doc":     0,
+			"final_root_delta_entries/doc":                1.25,
+			"final_root_delta_bytes/doc":                  125,
+			"final_root_delta_tombstones/doc":             0,
+			"final_primary_root_delta_entries/doc":        1,
+			"final_primary_root_delta_bytes/doc":          100,
+			"final_primary_root_delta_tombstones/doc":     0,
+			"final_template_root_delta_entries/doc":       0.05,
+			"final_template_root_delta_bytes/doc":         5,
+			"final_template_root_delta_tombstones/doc":    0,
+			"final_index_state_root_delta_entries/doc":    0.2,
+			"final_index_state_root_delta_bytes/doc":      20,
+			"final_index_state_root_delta_tombstones/doc": 0,
+			"final_secondary_root_delta_entries/doc":      0.25,
+			"final_secondary_root_delta_bytes/doc":        25,
+			"final_secondary_root_delta_tombstones/doc":   0,
+			"squashed_root_delta_entries/doc":             0.75,
+			"net_zero_root_batches/doc":                   0.01,
+			"net_zero_root_plans/doc":                     0.02,
+			"skipped_secondary_roots/doc":                 0.44,
+			"primary_root_publishes/doc":                  0.5,
+			"primary_root_delta_entries/doc":              1,
+			"primary_root_delta_bytes/doc":                42,
+			"primary_only_coalesced_docs/publish":         0,
+			"primary_only_duplicate_ids_coalesced/doc":    0.25,
+			"primary_only_drains/doc":                     0.125,
+			"primary_only_drain_docs/drain":               8,
 		},
 	}
 	mongoPhase := phaseResult{
@@ -1294,7 +1446,15 @@ func TestRenderWriterSweepCounterTableUsesPhaseMetrics(t *testing.T) {
 	for _, want := range []string{
 		"## 0-Index Writer Sweep Counters",
 		"publish calls/doc",
-		"| 1000 | 0 | `treedb_0idx` | `mongo_baseline` | 8 | 1200 | 2400 | 750 | 500 | 800 | 800 | 0.50 | 0.50 | 1.00 | 2500 | 2.00 | 0.25 | 64.0 | 128 | 0.12 | 4.00 | 32.0 | 0.75 | 1.00 | 10.0 | 20.0 | 0.10 | 0.50 | 0 | 0.50 | 1.00 | 42.0 | 0 | `/tmp/treedb.json` |",
+		"TreeDB drain ms",
+		"raw root-delta entries/doc",
+		"final root-delta entries/doc",
+		"| 1000 | 0 | `treedb_0idx` | `mongo_baseline` | 8 | 1200 | 2400 | 750 | 500 | 800 | 800 | 2.50 |",
+		"| 1000 | 0 | `treedb_0idx` | `mongo_baseline` | 8 | 1200 | 2400",
+		"3.00 | 96.0 | 8192",
+		"2.00 | 200 | 0.05 | 1.50 | 150 | 0.05 | 0.10 | 10.0 | 0 | 0.40 | 40.0 | 0 | 0.50 | 50.0 | 0 | 1.25 | 125 | 0 | 1.00 | 100 | 0 | 0.05 | 5.00 | 0 | 0.20 | 20.0 | 0 | 0.25 | 25.0 | 0",
+		"0.75 | 0.01 | 0.02 | 0.44 | 0.50 | 1.00 | 42.0",
+		"0.25 | 0.12 | 8.00 | `/tmp/treedb.json` |",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("writer sweep table missing %q:\n%s", want, rendered)
