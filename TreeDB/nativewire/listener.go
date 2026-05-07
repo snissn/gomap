@@ -122,7 +122,7 @@ func (e *localEndpoint) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (e *localEndpoint) roundTrip(ctx context.Context, typ iwire.FrameType, requestID uint64, body []byte, want iwire.FrameType, limits iwire.Limits, responseDst []byte, copyResponse bool) (iwire.Header, []byte, error) {
+func (e *localEndpoint) roundTrip(ctx context.Context, typ iwire.FrameType, streamID, requestID uint64, body []byte, want iwire.FrameType, limits iwire.Limits, responseDst []byte, copyResponse bool) (iwire.Header, []byte, error) {
 	if e == nil || e.server == nil || e.closed.Load() {
 		return iwire.Header{}, nil, io.ErrClosedPipe
 	}
@@ -137,6 +137,7 @@ func (e *localEndpoint) roundTrip(ctx context.Context, typ iwire.FrameType, requ
 	request := iwire.Header{
 		Version:   iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0},
 		Type:      typ,
+		StreamID:  streamID,
 		RequestID: requestID,
 	}
 	err := e.server.handleFrame(ctx, e, e.state, request, body)

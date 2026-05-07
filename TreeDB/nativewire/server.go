@@ -520,9 +520,9 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	case iwire.CommandOpenScan:
 		responseSections, err = s.handleOpenScan(state, cmd.Known)
 	case iwire.CommandCursorNext:
-		responseSections, err = s.handleCursorNext(state, cmd.Known)
+		responseSections, err = s.handleCursorNext(state, header.StreamID, cmd.Known)
 	case iwire.CommandCursorClose:
-		responseSections, err = s.handleCursorClose(state, cmd.Known)
+		responseSections, err = s.handleCursorClose(state, header.StreamID, cmd.Known)
 	case iwire.CommandStats:
 		responseSections = []iwire.Section{{ID: iwire.SectionResponseMeta, Bytes: appendStringMap(nil, s.Stats())}}
 	default:

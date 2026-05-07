@@ -55,7 +55,11 @@ func ackPolicyFromSections(sections []iwire.Section, fallback AckPolicy) (AckPol
 	if !ok {
 		return fallback, nil
 	}
-	return ackPolicyFromPayload(raw)
+	ack, err := ackPolicyFromPayload(raw)
+	if err != nil || ack != 0 {
+		return ack, err
+	}
+	return fallback, nil
 }
 
 func ackPolicyFromPayload(raw []byte) (AckPolicy, error) {
@@ -67,6 +71,8 @@ func ackPolicyFromPayload(raw []byte) (AckPolicy, error) {
 		return 0, protocolError(iwire.ErrMalformedFrame, "ack_policy has trailing bytes")
 	}
 	switch AckPolicy(value) {
+	case 0:
+		return 0, nil
 	case iwire.AckVisible, iwire.AckFlushed, iwire.AckSynced, iwire.AckRaftCommitted:
 		return AckPolicy(value), nil
 	default:

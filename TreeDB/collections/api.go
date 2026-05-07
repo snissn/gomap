@@ -6602,7 +6602,7 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte) (int, error) {
 	baseRootIDs := map[string]uint64{primaryRootName: primaryRoot}
 	policies := []backenddb.OrderedRootStoragePolicy{plannerOptions.dataStoragePolicy}
 	deltaTables := make([]memtable.Table, 0, 2+len(runtimes))
-	deltaTables = append(deltaTables, buildDeleteRootDeltaTable(deleteIDs))
+	deltaTables = append(deltaTables, buildDeleteRootDeltaTableBorrowed(deleteIDs))
 
 	if len(runtimes) > 0 {
 		if persistIndexStateForOptions(plannerOptions) {
@@ -6612,7 +6612,7 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte) (int, error) {
 				rootNames = append(rootNames, stateRootName)
 				baseRootIDs[stateRootName] = stateRootID
 				policies = append(policies, plannerOptions.indexStateStoragePolicy)
-				deltaTables = append(deltaTables, buildDeleteRootDeltaTable(deleteIDs))
+				deltaTables = append(deltaTables, buildDeleteRootDeltaTableBorrowed(deleteIDs))
 			}
 		}
 		for _, runtime := range runtimes {
@@ -10676,6 +10676,15 @@ func buildDeleteRootDeltaTable(deleteKeys [][]byte) memtable.Table {
 	table := newCollectionRunTable(len(deleteKeys))
 	for _, key := range deleteKeys {
 		table.DeleteSteal(bytes.Clone(key))
+	}
+	table.Freeze()
+	return table
+}
+
+func buildDeleteRootDeltaTableBorrowed(deleteKeys [][]byte) memtable.Table {
+	table := newCollectionRunTable(len(deleteKeys))
+	for _, key := range deleteKeys {
+		table.DeleteSteal(key)
 	}
 	table.Freeze()
 	return table

@@ -39,7 +39,10 @@ func (s *Server) handleListCollections() ([]iwire.Section, error) {
 }
 
 func (s *Server) handleCreateIndex(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
-	_, collection, err := s.openCollectionRef(state, sections)
+	if err := managerRequired(s.collections); err != nil {
+		return nil, err
+	}
+	name, err := collectionNameFromSections(sections)
 	if err != nil {
 		return nil, err
 	}
@@ -53,6 +56,13 @@ func (s *Server) handleCreateIndex(state *connState, sections []iwire.Section) (
 	}
 	if err := normalizeClientIndexDefinition(def); err != nil {
 		return nil, err
+	}
+	collection, err := s.collections.OpenCollection(name)
+	if err != nil {
+		return nil, metadataWrap(err)
+	}
+	if state != nil {
+		state.cacheCollection(name, collection)
 	}
 	meta, err := collection.CreateIndex(def)
 	if err != nil {
@@ -81,7 +91,10 @@ func (s *Server) handleListIndexes(state *connState, sections []iwire.Section) (
 }
 
 func (s *Server) handleDropIndex(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
-	_, collection, err := s.openCollectionRef(state, sections)
+	if err := managerRequired(s.collections); err != nil {
+		return nil, err
+	}
+	name, err := collectionNameFromSections(sections)
 	if err != nil {
 		return nil, err
 	}
@@ -92,6 +105,13 @@ func (s *Server) handleDropIndex(state *connState, sections []iwire.Section) ([]
 	indexName, err := decodeIndexName(raw)
 	if err != nil {
 		return nil, err
+	}
+	collection, err := s.collections.OpenCollection(name)
+	if err != nil {
+		return nil, metadataWrap(err)
+	}
+	if state != nil {
+		state.cacheCollection(name, collection)
 	}
 	meta, err := collection.DropIndex(indexName)
 	if err != nil {
@@ -104,7 +124,7 @@ func (s *Server) handleOpenCollection(state *connState, sections []iwire.Section
 	if err := managerRequired(s.collections); err != nil {
 		return nil, err
 	}
-	name, _, err := collectionRefFromSections(state, sections)
+	name, err := collectionNameFromSections(sections)
 	if err != nil {
 		return nil, err
 	}

@@ -173,8 +173,7 @@ func (c *Client) OpenScan(ctx context.Context, collection string, limits CursorL
 }
 
 func (c *Client) CursorNext(ctx context.Context, cursorID uint64, limits CursorLimits) (DocumentsResult, error) {
-	sections, err := c.commandSections(ctx, iwire.CommandCursorNext,
-		iwire.Section{ID: iwire.SectionCursorRef, Bytes: encodeCursorRef(cursorID)},
+	sections, err := c.commandSectionsOnStream(ctx, cursorID, iwire.CommandCursorNext,
 		iwire.Section{ID: iwire.SectionCursorLimits, Bytes: encodeCursorLimits(limits)},
 	)
 	if err != nil {
@@ -184,7 +183,7 @@ func (c *Client) CursorNext(ctx context.Context, cursorID uint64, limits CursorL
 }
 
 func (c *Client) CursorClose(ctx context.Context, cursorID uint64) error {
-	_, err := c.commandSections(ctx, iwire.CommandCursorClose, iwire.Section{ID: iwire.SectionCursorRef, Bytes: encodeCursorRef(cursorID)})
+	_, err := c.commandSectionsOnStream(ctx, cursorID, iwire.CommandCursorClose)
 	return err
 }
 

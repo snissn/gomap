@@ -3,6 +3,7 @@ package nativewire
 import (
 	"bytes"
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -187,6 +188,69 @@ func TestInsertBatchFastDecodeErrorReturnsBeforeDispatch(t *testing.T) {
 	assertDocumentMissing(t, mgr, "users", "u1")
 }
 
+func TestInsertBatchFastRejectsEmptyIDBeforeDispatch(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("")},
+		[][]byte{[]byte(`{"x":1}`)},
+		AckVisible,
+	)
+	if !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("InsertBatch empty ID err=%v want invalid command", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	records, truncated, err := col.ScanDocuments(10)
+	if err != nil {
+		t.Fatalf("ScanDocuments: %v", err)
+	}
+	if truncated || len(records) != 0 {
+		t.Fatalf("records=%+v truncated=%v want empty collection", records, truncated)
+	}
+}
+
+func TestMutationExplicitZeroAckUsesDefault(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	sections, err := client.commandSections(ctx, iwire.CommandInsertBatch,
+		collectionNameRef("users"),
+		documentFormatSection(collections.DocumentFormatJSON),
+		iwire.Section{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("u1"))},
+		iwire.Section{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, []byte(`{"x":1}`))},
+		ackSection(0),
+	)
+	if err != nil {
+		t.Fatalf("InsertBatch explicit zero ack: %v", err)
+	}
+	if actual, err := responseAckPolicy(sections); err != nil || actual != AckVisible {
+		t.Fatalf("actual ack=%v err=%v want visible", actual, err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if doc, err := col.Get([]byte("u1")); err != nil || len(doc) == 0 {
+		t.Fatalf("Get u1 doc=%q err=%v", doc, err)
+	}
+}
+
 func TestMutationInvalidBSONRejectedBeforeTrustedInsert(t *testing.T) {
 	client, mgr, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -339,4 +403,23 @@ func assertDocumentMissing(t *testing.T, mgr *collections.CollectionManager, col
 	if doc != nil {
 		t.Fatalf("document %q exists after rejected mutation: %s", id, doc)
 	}
+}
+
+func responseAckPolicy(sections []iwire.Section) (AckPolicy, error) {
+	raw, ok, err := singletonSection(sections, iwire.SectionResponseMeta)
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
+		return 0, protocolError(iwire.ErrMalformedFrame, "missing response_meta")
+	}
+	values, err := decodeStringMap(raw)
+	if err != nil {
+		return 0, err
+	}
+	n, err := strconv.ParseUint(values["actual_ack_policy"], 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return AckPolicy(n), nil
 }

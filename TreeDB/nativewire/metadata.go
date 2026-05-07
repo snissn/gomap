@@ -335,6 +335,9 @@ func readBool(src []byte, off *int) (bool, error) {
 }
 
 func readEnum(src []byte, off *int) (uint64, error) {
+	if off == nil || *off > len(src) {
+		return 0, protocolError(iwire.ErrMalformedFrame, "invalid enum offset")
+	}
 	value, n, err := readUvarint(src[*off:])
 	if err != nil {
 		return 0, err
@@ -520,6 +523,24 @@ func collectionRefFromSections(state *connState, sections []iwire.Section) (stri
 		return "", false, protocolError(iwire.ErrInvalidCommand, "missing collection_ref")
 	}
 	return decodeCollectionRef(state, raw)
+}
+
+func collectionNameFromSections(sections []iwire.Section) (string, error) {
+	raw, ok, err := singletonSection(sections, iwire.SectionCollectionRef)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", protocolError(iwire.ErrInvalidCommand, "missing collection_ref")
+	}
+	if len(raw) > 0 && raw[0] == 0 {
+		return "", protocolError(iwire.ErrInvalidCommand, "collection handle is not valid for this command")
+	}
+	name := string(raw)
+	if err := collections.ValidateCollectionName(name); err != nil {
+		return "", protocolError(iwire.ErrInvalidCommand, "%v", err)
+	}
+	return name, nil
 }
 
 func metadataSection(sections []iwire.Section, id iwire.SectionID) ([]byte, error) {

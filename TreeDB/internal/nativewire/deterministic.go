@@ -1,5 +1,10 @@
 package nativewire
 
+import (
+	"strings"
+	"unicode/utf8"
+)
+
 const (
 	DeterministicEntryMagic   = "TDC1"
 	DeterministicEntryVersion = uint64(1)
@@ -99,12 +104,25 @@ func sortSectionsByID(sections []Section) {
 func validateDeterministicSectionPayload(section Section) error {
 	switch section.ID {
 	case SectionCollectionRef:
-		local, err := isConnectionLocalCollectionRef(section.Bytes)
+		local, err := validateDeterministicCollectionRef(section.Bytes)
 		if err != nil {
 			return err
 		}
 		if local {
 			return protocolError(ErrInvalidCommand, "collection handle ref is not deterministic")
+		}
+	case SectionDocumentFormat:
+		format, n, err := readUvarint(section.Bytes)
+		if err != nil {
+			return err
+		}
+		if n != len(section.Bytes) {
+			return protocolError(ErrInvalidCommand, "document_format has %d trailing bytes", len(section.Bytes)-n)
+		}
+		switch DocumentFormat(format) {
+		case DocumentFormatDefault, DocumentFormatJSON, DocumentFormatBSON, DocumentFormatTemplateV1:
+		default:
+			return protocolError(ErrInvalidCommand, "unsupported document_format %d", format)
 		}
 	case SectionDocumentIDs, SectionDocuments, SectionTemplateRecords:
 		return validateByteVector(section.Bytes, Limits{})
@@ -120,7 +138,7 @@ func validateDeterministicSectionPayload(section Section) error {
 	return nil
 }
 
-func isConnectionLocalCollectionRef(raw []byte) (bool, error) {
+func validateDeterministicCollectionRef(raw []byte) (bool, error) {
 	if len(raw) == 0 {
 		return false, protocolError(ErrInvalidCommand, "empty collection_ref")
 	}
@@ -128,5 +146,15 @@ func isConnectionLocalCollectionRef(raw []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return tag == 2, nil
+	if tag == 2 {
+		return true, nil
+	}
+	name := string(raw)
+	if len(name) > 128 {
+		return false, protocolError(ErrInvalidCommand, "collection name too long")
+	}
+	if strings.ContainsAny(name, "\x00/:") || strings.TrimSpace(name) != name || !utf8.ValidString(name) {
+		return false, protocolError(ErrInvalidCommand, "invalid collection name")
+	}
+	return false, nil
 }

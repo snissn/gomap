@@ -214,11 +214,17 @@ func (s *Server) decodeInsertBatchFastRequest(state *connState, sections []iwire
 	if len(ids) != len(docs) {
 		return insertBatchFastRequest{}, true, protocolError(iwire.ErrInvalidCommand, "document_ids length %d does not match documents length %d", len(ids), len(docs))
 	}
+	if err := rejectDuplicateIDs(ids); err != nil {
+		return insertBatchFastRequest{}, true, err
+	}
 	ack := s.defaultAckPolicy
 	if seen[iwire.SectionAckPolicy] {
-		ack, err = ackPolicyFromPayload(rawAck)
+		decodedAck, err := ackPolicyFromPayload(rawAck)
 		if err != nil {
 			return insertBatchFastRequest{}, true, err
+		}
+		if decodedAck != 0 {
+			ack = decodedAck
 		}
 	}
 	return insertBatchFastRequest{

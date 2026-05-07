@@ -76,6 +76,10 @@ func (c *Client) Stats(ctx context.Context) (map[string]string, error) {
 }
 
 func (c *Client) commandSections(ctx context.Context, commandID iwire.CommandID, sections ...iwire.Section) ([]iwire.Section, error) {
+	return c.commandSectionsOnStream(ctx, 0, commandID, sections...)
+}
+
+func (c *Client) commandSectionsOnStream(ctx context.Context, streamID uint64, commandID iwire.CommandID, sections ...iwire.Section) ([]iwire.Section, error) {
 	body, err := appendCommandRequestBody(nil, commandID, sections...)
 	if err != nil {
 		return nil, err
@@ -85,7 +89,7 @@ func (c *Client) commandSections(ctx context.Context, commandID iwire.CommandID,
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	_, response, err := c.roundTripLocked(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
+	_, response, err := c.roundTripLockedStream(ctx, streamID, iwire.FrameRequest, body, iwire.FrameResponse)
 	if err != nil {
 		return nil, err
 	}
@@ -94,20 +98,28 @@ func (c *Client) commandSections(ctx context.Context, commandID iwire.CommandID,
 }
 
 func (c *Client) roundTrip(ctx context.Context, typ iwire.FrameType, body []byte, want iwire.FrameType) (iwire.Header, []byte, error) {
+	return c.roundTripStream(ctx, 0, typ, body, want)
+}
+
+func (c *Client) roundTripStream(ctx context.Context, streamID uint64, typ iwire.FrameType, body []byte, want iwire.FrameType) (iwire.Header, []byte, error) {
 	if c == nil {
 		return iwire.Header{}, nil, io.ErrClosedPipe
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.roundTripLocked(ctx, typ, body, want)
+	return c.roundTripLockedStream(ctx, streamID, typ, body, want)
 }
 
 func (c *Client) roundTripLocked(ctx context.Context, typ iwire.FrameType, body []byte, want iwire.FrameType) (iwire.Header, []byte, error) {
+	return c.roundTripLockedStream(ctx, 0, typ, body, want)
+}
+
+func (c *Client) roundTripLockedStream(ctx context.Context, streamID uint64, typ iwire.FrameType, body []byte, want iwire.FrameType) (iwire.Header, []byte, error) {
 	if c == nil {
 		return iwire.Header{}, nil, io.ErrClosedPipe
 	}
 	if c.local != nil {
-		header, response, err := c.local.roundTrip(ctx, typ, c.nextReq.Add(1), body, want, c.limits, c.readBody, true)
+		header, response, err := c.local.roundTrip(ctx, typ, streamID, c.nextReq.Add(1), body, want, c.limits, c.readBody, true)
 		c.readBody = response[:0]
 		return header, response, err
 	}
@@ -122,14 +134,16 @@ func (c *Client) roundTripLocked(ctx context.Context, typ iwire.FrameType, body 
 		_ = c.conn.SetDeadline(deadline)
 		defer func() { _ = c.conn.SetDeadline(noDeadline) }()
 	}
+	stopCancel := c.closeOnContextCancel(ctx)
+	defer stopCancel()
 	var err error
-	c.writeBody, err = writeFrameBuffered(c.conn, iwire.Header{Type: typ, RequestID: requestID}, body, c.writeBody)
+	c.writeBody, err = writeFrameBuffered(c.conn, iwire.Header{Type: typ, StreamID: streamID, RequestID: requestID}, body, c.writeBody)
 	if err != nil {
-		return iwire.Header{}, nil, err
+		return iwire.Header{}, nil, errorOrContext(ctx, err)
 	}
 	header, response, err := readFrameInto(c.conn, c.limits, c.readBody)
 	if err != nil {
-		return iwire.Header{}, nil, err
+		return iwire.Header{}, nil, errorOrContext(ctx, err)
 	}
 	c.readBody = response[:0]
 	if err := iwire.ValidateHeaderVersion(header, iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0}); err != nil {
@@ -152,7 +166,7 @@ func (c *Client) roundTripLockedDiscardResponse(ctx context.Context, typ iwire.F
 		return io.ErrClosedPipe
 	}
 	if c.local != nil {
-		_, _, err := c.local.roundTrip(ctx, typ, c.nextReq.Add(1), body, want, c.limits, nil, false)
+		_, _, err := c.local.roundTrip(ctx, typ, 0, c.nextReq.Add(1), body, want, c.limits, nil, false)
 		return err
 	}
 	if c.conn == nil {
@@ -166,14 +180,16 @@ func (c *Client) roundTripLockedDiscardResponse(ctx context.Context, typ iwire.F
 		_ = c.conn.SetDeadline(deadline)
 		defer func() { _ = c.conn.SetDeadline(noDeadline) }()
 	}
+	stopCancel := c.closeOnContextCancel(ctx)
+	defer stopCancel()
 	var err error
 	c.writeBody, err = writeFrameBuffered(c.conn, iwire.Header{Type: typ, RequestID: requestID}, body, c.writeBody)
 	if err != nil {
-		return err
+		return errorOrContext(ctx, err)
 	}
 	header, response, err := readFrameInto(c.conn, c.limits, c.readBody)
 	if err != nil {
-		return err
+		return errorOrContext(ctx, err)
 	}
 	c.readBody = response[:0]
 	if err := iwire.ValidateHeaderVersion(header, iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0}); err != nil {
@@ -189,6 +205,28 @@ func (c *Client) roundTripLockedDiscardResponse(ctx context.Context, typ iwire.F
 		return protocolError(iwire.ErrMalformedFrame, "response frame type %d want %d", header.Type, want)
 	}
 	return nil
+}
+
+func (c *Client) closeOnContextCancel(ctx context.Context) func() {
+	if c == nil || c.conn == nil || ctx == nil || ctx.Done() == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = c.conn.Close()
+		case <-done:
+		}
+	}()
+	return func() { close(done) }
+}
+
+func errorOrContext(ctx context.Context, err error) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
 }
 
 func decodeWireError(body []byte, limits iwire.Limits) error {
