@@ -165,7 +165,7 @@ func (p findResponsePayload) marshalMsgIntoWithMaxLength(dst []byte, requestID, 
 		base := len(dst)
 		msg, err := wire.AppendMsgMessage(dst, requestID, responseTo, 0, p.document)
 		if err != nil {
-			return msg, err
+			return dst[:base], err
 		}
 		messageLength := len(msg) - base
 		if messageLength > maxMessageLength {
@@ -179,12 +179,19 @@ func (p findResponsePayload) documentPayload() (wire.Document, error) {
 	if p.document == nil {
 		return nil, errors.New("mongo gateway: find response payload missing document")
 	}
-	if p.raw.ns != "" || p.raw.batchKey != "" || p.raw.batch != nil ||
-		p.indexedRange.col != nil || p.indexedRange.server != nil || p.indexedRange.ns != "" || p.indexedRange.indexName != "" {
-		return nil, fmt.Errorf("mongo gateway: find response payload kind mismatch: kind=%d raw.ns=%q raw.batchKey=%q raw.batch=%t indexedRange.ns=%q indexedRange.indexName=%q indexedRange.col=%t indexedRange.server=%t",
-			p.kind, p.raw.ns, p.raw.batchKey, p.raw.batch != nil, p.indexedRange.ns, p.indexedRange.indexName, p.indexedRange.col != nil, p.indexedRange.server != nil)
+	if p.raw.ns != "" || p.raw.cursorID != 0 || p.raw.batchKey != "" || p.raw.batch != nil ||
+		p.indexedRange.col != nil || p.indexedRange.server != nil || p.indexedRange.ns != "" ||
+		p.indexedRange.indexName != "" || p.indexedRange.batchKey != "" || p.indexedRange.maxBatchBytes != 0 ||
+		p.indexedRange.cursorOwner != 0 || p.indexedRange.singleBatch || !zeroIndexRangeOptions(p.indexedRange.opts) {
+		return nil, fmt.Errorf("mongo gateway: find response payload kind mismatch: kind=%d raw.ns=%q raw.cursorID=%d raw.batchKey=%q raw.batch=%t indexedRange.ns=%q indexedRange.indexName=%q indexedRange.batchKey=%q indexedRange.maxBatchBytes=%d indexedRange.cursorOwner=%d indexedRange.singleBatch=%t indexedRange.optsSet=%t indexedRange.col=%t indexedRange.server=%t",
+			p.kind, p.raw.ns, p.raw.cursorID, p.raw.batchKey, p.raw.batch != nil, p.indexedRange.ns, p.indexedRange.indexName, p.indexedRange.batchKey, p.indexedRange.maxBatchBytes, p.indexedRange.cursorOwner, p.indexedRange.singleBatch, !zeroIndexRangeOptions(p.indexedRange.opts), p.indexedRange.col != nil, p.indexedRange.server != nil)
 	}
 	return p.document, nil
+}
+
+func zeroIndexRangeOptions(opts collections.IndexRangeOptions) bool {
+	return opts.Limit == 0 && !opts.Desc && opts.Lower.Value == nil && !opts.Lower.Inclusive && !opts.Lower.Unbounded &&
+		opts.Upper.Value == nil && !opts.Upper.Inclusive && !opts.Upper.Unbounded
 }
 
 func (s *Server) findResponse(command wire.Document, cursorOwner int64) (wire.Document, error) {

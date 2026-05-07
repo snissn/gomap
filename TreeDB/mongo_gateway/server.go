@@ -2,6 +2,7 @@ package mongogateway
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -435,7 +436,7 @@ func bufferedMessageCommandName(op wire.OpCode, body []byte) (string, bool) {
 					return "", false
 				}
 				size := int(int32(binary.LittleEndian.Uint32(rem[:4])))
-				if size < 4 || size > len(rem) {
+				if size <= 4 || size > len(rem) || bytes.IndexByte(rem[4:size], 0) < 0 {
 					return "", false
 				}
 				rem = rem[size:]
@@ -546,6 +547,9 @@ func (s *Server) handleMsgInto(dst []byte, h wire.Header, body []byte, cursorOwn
 	retainRequestBody := name != "insert"
 
 	if name == "find" {
+		// The find path builds a raw OP_MSG response directly, so reject OP_MSG
+		// features it does not preserve. Other commands go through
+		// commandResponse with parsed document sequences.
 		if msg.Flags&wire.MsgFlagMoreToCome != 0 {
 			return nil, retainRequestBody, fmt.Errorf("%w: find with moreToCome flag", wire.ErrUnsupported)
 		}
