@@ -11528,7 +11528,7 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 		}
 		scratch = value
 		out = append(out, DocumentRecord{
-			ID:       id,
+			ID:       bytes.Clone(id),
 			Document: bytes.Clone(value),
 		})
 		return true, nil
