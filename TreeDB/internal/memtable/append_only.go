@@ -20,27 +20,29 @@ const (
 	// appendOnlyEntry struct footprint. A lower estimate reduces growth/copy
 	// churn for pointer-heavy write paths.
 	appendOnlyEstimatedBytesPerEntryPointer = 24
-	appendOnlyMinInitialEntries             = 128
-	appendOnlyMaxInitialEntries             = 1 << 20
 	appendOnlyInlineKeyLen                  = 8
-	appendOnlyEntryPoolMaxCap               = 1 << 20
-	appendOnlyEntryPoolMinShift             = 7
-	appendOnlyEntryPoolMaxShift             = 20
-	appendOnlyEntryPoolClassCount           = appendOnlyEntryPoolMaxShift - appendOnlyEntryPoolMinShift + 1
-	appendOnlyIteratorPoolMaxCap            = 1 << 20
-	appendOnlyIteratorPtrPoolMaxCap         = 1 << 20
-	appendOnlyReusableKeyMaxCap             = 1 << 10
-	appendOnlyKeyArenaDefaultChunk          = 2 << 10
-	appendOnlyValueArenaMinShift            = 12
-	appendOnlyValueArenaMaxShift            = 20
-	appendOnlyValueArenaClassCount          = appendOnlyValueArenaMaxShift - appendOnlyValueArenaMinShift + 1
-	appendOnlyValueArenaDefaultChunk        = 32 << 10
-	appendOnlyValueArenaPoolMaxCap          = 1 << appendOnlyValueArenaMaxShift
-	appendOnlyValueArenaRetainMaxCap        = 4 << 20
-	appendOnlyValueArenaRetainChunks        = 128
-	appendOnlyReuseOversizeFactor           = 4
-	appendOnlyResetDropThresholdEntries     = 1 << 15
-	appendOnlyAggressiveGrowCutoff          = appendOnlyResetDropThresholdEntries * 2
+	// Pool size-class boundaries. Min/Max initial entries are derived from
+	// these shifts so the three constants can't drift out of sync.
+	appendOnlyEntryPoolMinShift         = 7
+	appendOnlyEntryPoolMaxShift         = 20
+	appendOnlyEntryPoolClassCount       = appendOnlyEntryPoolMaxShift - appendOnlyEntryPoolMinShift + 1
+	appendOnlyEntryPoolMaxCap           = 1 << appendOnlyEntryPoolMaxShift // 1 << 20
+	appendOnlyMinInitialEntries         = 1 << appendOnlyEntryPoolMinShift // 128
+	appendOnlyMaxInitialEntries         = 1 << appendOnlyEntryPoolMaxShift // 1 << 20
+	appendOnlyIteratorPoolMaxCap        = 1 << 20
+	appendOnlyIteratorPtrPoolMaxCap     = 1 << 20
+	appendOnlyReusableKeyMaxCap         = 1 << 10
+	appendOnlyKeyArenaDefaultChunk      = 2 << 10
+	appendOnlyValueArenaMinShift        = 12
+	appendOnlyValueArenaMaxShift        = 20
+	appendOnlyValueArenaClassCount      = appendOnlyValueArenaMaxShift - appendOnlyValueArenaMinShift + 1
+	appendOnlyValueArenaDefaultChunk    = 32 << 10
+	appendOnlyValueArenaPoolMaxCap      = 1 << appendOnlyValueArenaMaxShift
+	appendOnlyValueArenaRetainMaxCap    = 4 << 20
+	appendOnlyValueArenaRetainChunks    = 128
+	appendOnlyReuseOversizeFactor       = 4
+	appendOnlyResetDropThresholdEntries = 1 << 15
+	appendOnlyAggressiveGrowCutoff      = appendOnlyResetDropThresholdEntries * 2
 )
 
 var appendOnlyEntryPools [appendOnlyEntryPoolClassCount]sync.Pool
