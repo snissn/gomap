@@ -895,8 +895,24 @@ func benchmarkDocumentOrdinal(operation int, stride uint64, documentCount int) i
 	return int((uint64(operation) * stride) % uint64(documentCount))
 }
 
-func rangeReadMinAge(operation int) int64 {
-	return int64(20 + (operation % 40))
+func rangeReadMinAge(operation int, documentCount int) int64 {
+	if documentCount <= 0 {
+		return 20
+	}
+	ageSpan := documentCount
+	if ageSpan > 67 {
+		ageSpan = 67
+	}
+	maxAge := int64(18 + ageSpan - 1)
+	base := int64(20)
+	if maxAge < base {
+		return maxAge
+	}
+	span := maxAge - base + 1
+	if span > 40 {
+		span = 40
+	}
+	return base + int64(operation%int(span))
 }
 
 func loadFixture(target *benchTarget, batchSize int) (int64, int64, error) {
@@ -980,7 +996,7 @@ func runEmailReads(target *benchTarget, total, workers int) (int64, int64, error
 func runAgeIndexedRangeReads(target *benchTarget, total, workers int) (int64, int64, error) {
 	buffers := make([][]byte, workerBufferCount(workers))
 	return runParallel(total, workers, func(op int, worker int) error {
-		minAge := rangeReadMinAge(op)
+		minAge := rangeReadMinAge(op, len(target.fixture.ids))
 		ids, _, err := target.col.FindByIndexRange("age", collections.IndexRangeOptions{
 			Lower: collections.IndexRangeBound{Value: minAge, Inclusive: true},
 			Upper: collections.IndexRangeBound{Unbounded: true},
@@ -1017,7 +1033,7 @@ func runAgeScanRangeReads(target *benchTarget, total, workers int) (int64, int64
 		}
 	}()
 	return runParallel(total, workers, func(op int, worker int) error {
-		minAge := rangeReadMinAge(op)
+		minAge := rangeReadMinAge(op, len(target.fixture.ids))
 		foundCount := 0
 		materializer := materializers[worker]
 		_, err := target.col.ScanDocumentsFunc(docs, func(record collections.DocumentRecord) (bool, error) {
