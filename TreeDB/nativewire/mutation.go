@@ -150,6 +150,10 @@ func rejectDuplicateIDs(ids [][]byte) error {
 	if len(ids) <= maxSmallDuplicateIDs {
 		return rejectDuplicateIDsSmall(ids)
 	}
+	return rejectDuplicateIDsMap(ids)
+}
+
+func rejectDuplicateIDsMap(ids [][]byte) error {
 	seen := make(map[string]struct{}, len(ids))
 	for i, id := range ids {
 		if len(id) == 0 {
@@ -166,15 +170,15 @@ func rejectDuplicateIDs(ids [][]byte) error {
 
 func rejectDuplicateIDsSmall(ids [][]byte) error {
 	if len(ids) > maxSmallDuplicateIDs {
-		return rejectDuplicateIDs(ids)
+		return rejectDuplicateIDsMap(ids)
 	}
 	tableSize := 1
 	for tableSize < len(ids)*2 {
 		tableSize <<= 1
 	}
-	var heads [1024]uint16
+	var heads [maxSmallDuplicateIDs * 2]uint16
 	if tableSize > len(heads) {
-		return rejectDuplicateIDs(ids)
+		return rejectDuplicateIDsMap(ids)
 	}
 	var next [maxSmallDuplicateIDs]uint16
 	var hashes [maxSmallDuplicateIDs]uint64

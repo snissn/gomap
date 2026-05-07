@@ -174,7 +174,9 @@ func TestRejectDuplicateIDsSmallBatchAllocFree(t *testing.T) {
 		t.Fatalf("rejectDuplicateIDs: %v", err)
 	}
 	allocs := testing.AllocsPerRun(1000, func() {
-		_ = rejectDuplicateIDs(ids)
+		if err := rejectDuplicateIDs(ids); err != nil {
+			panic(err)
+		}
 	})
 	if allocs != 0 {
 		t.Fatalf("rejectDuplicateIDs allocs/run=%v want 0", allocs)
