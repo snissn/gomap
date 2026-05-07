@@ -2040,6 +2040,11 @@ func runDirectTreeDBRangeQuery(cfg config, collection *collections.Collection, m
 }
 
 func runDirectTreeDBUpdatePhase(ctx context.Context, cfg config, collection *collections.Collection, keys directBenchmarkKeySet, updatedCityValues []string) (phaseResult, error) {
+	materializer, err := directNewStoredDocumentMaterializer(collection)
+	if err != nil {
+		return phaseResult{}, err
+	}
+	defer func() { _ = materializer.Close() }()
 	return measurePhase("id_update_set", cfg.Updates, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.Updates; i++ {
 			if err := ctx.Err(); err != nil {
@@ -2047,7 +2052,7 @@ func runDirectTreeDBUpdatePhase(ctx context.Context, cfg config, collection *col
 			}
 			documentOrdinal := benchmarkDocumentOrdinal(i, 31, cfg.Documents)
 			key, id := keys.at(documentOrdinal)
-			if err := runDirectTreeDBUpdateOperation(collection, cfg, key, id, i, documentOrdinal, false, updatedCityValues, sample); err != nil {
+			if err := runDirectTreeDBUpdateOperation(collection, materializer, cfg, key, id, i, documentOrdinal, false, updatedCityValues, sample); err != nil {
 				return err
 			}
 		}
@@ -2087,16 +2092,84 @@ func runDirectTreeDBConcurrentIDFindPhase(ctx context.Context, cfg config, colle
 
 func runDirectTreeDBConcurrentUpdatePhase(ctx context.Context, cfg config, collection *collections.Collection, keys directBenchmarkKeySet, phaseName string, updatedCityValues []string) (phaseResult, error) {
 	return measurePhase(phaseName, cfg.ConcurrentWrites, func(sample func(time.Duration)) error {
-		return runConcurrentOperations(ctx, cfg.ConcurrentWriters, cfg.ConcurrentWrites, func(op int) error {
-			documentOrdinal := benchmarkDocumentOrdinal(op, 37, cfg.Documents)
-			key, id := keys.at(documentOrdinal)
-			return runDirectTreeDBUpdateOperation(collection, cfg, key, id, op, documentOrdinal, true, updatedCityValues, sample)
-		})
+		return runDirectTreeDBConcurrentUpdateOperations(ctx, cfg, collection, keys, updatedCityValues, sample)
 	})
+}
+
+func runDirectTreeDBConcurrentUpdateOperations(
+	ctx context.Context,
+	cfg config,
+	collection *collections.Collection,
+	keys directBenchmarkKeySet,
+	updatedCityValues []string,
+	sample func(time.Duration),
+) error {
+	workers := cfg.ConcurrentWriters
+	operations := cfg.ConcurrentWrites
+	if workers <= 0 || operations <= 0 {
+		return nil
+	}
+	if workers > operations {
+		workers = operations
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	var errOnce sync.Once
+	var firstErr error
+	recordErr := func(err error) {
+		if err == nil {
+			return
+		}
+		errOnce.Do(func() {
+			firstErr = err
+			cancel()
+		})
+	}
+
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			materializer, err := directNewStoredDocumentMaterializer(collection)
+			if err != nil {
+				recordErr(err)
+				return
+			}
+			defer func() {
+				if err := materializer.Close(); err != nil {
+					recordErr(err)
+				}
+			}()
+			for {
+				if err := runCtx.Err(); err != nil {
+					return
+				}
+				op := int(next.Add(1) - 1)
+				if op >= operations {
+					return
+				}
+				documentOrdinal := benchmarkDocumentOrdinal(op, 37, cfg.Documents)
+				key, id := keys.at(documentOrdinal)
+				if err := runDirectTreeDBUpdateOperation(collection, materializer, cfg, key, id, op, documentOrdinal, true, updatedCityValues, sample); err != nil {
+					recordErr(err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return firstErr
+	}
+	return ctx.Err()
 }
 
 func runDirectTreeDBUpdateOperation(
 	collection *collections.Collection,
+	materializer *collections.StoredDocumentJSONMaterializer,
 	cfg config,
 	key []byte,
 	id string,
@@ -2117,11 +2190,6 @@ func runDirectTreeDBUpdateOperation(
 	if err != nil {
 		return err
 	}
-	materializer, err := directNewStoredDocumentMaterializer(collection)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = materializer.Close() }()
 	begin := time.Now()
 	matched, _, err := collection.Update(key, func(stored []byte) ([]byte, bool, error) {
 		current, err := directStoredDocumentToBSON(collection, materializer, stored)
