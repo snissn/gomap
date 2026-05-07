@@ -13,12 +13,19 @@ import (
 
 func serveCollectionPipe(t *testing.T) (*Client, *collections.CollectionManager, *backenddb.DB) {
 	t.Helper()
+	return serveCollectionPipeWithOptions(t, ServerOptions{})
+}
+
+func serveCollectionPipeWithOptions(t *testing.T, opts ServerOptions) (*Client, *collections.CollectionManager, *backenddb.DB) {
+	t.Helper()
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
 	mgr := collections.NewCollectionManager(db)
-	server := NewServer(ServerOptions{Collections: mgr, Backend: db})
+	opts.Collections = mgr
+	opts.Backend = db
+	server := NewServer(opts)
 	client, _ := servePipe(t, server)
 	t.Cleanup(func() { _ = db.Close() })
 	return client, mgr, db
@@ -99,6 +106,9 @@ func TestMetadataHandleRefWorksForListIndexes(t *testing.T) {
 	client, _, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
 	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -116,6 +126,38 @@ func TestMetadataHandleRefWorksForListIndexes(t *testing.T) {
 	}
 	if len(indexes) != 0 {
 		t.Fatalf("indexes=%+v want none", indexes)
+	}
+	if _, err := client.CreateIndex(ctx, "users", collections.IndexDefinition{Name: "email", Field: "email", ValueType: collections.IndexValueString}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	sections, err = client.commandSections(ctx, iwire.CommandListIndexes, collectionHandleRef(handle))
+	if err != nil {
+		t.Fatalf("ListIndexes by handle after create: %v", err)
+	}
+	indexes, err = firstIndexVectorFromResponse(sections, client.limits)
+	if err != nil {
+		t.Fatalf("decode indexes after create: %v", err)
+	}
+	if len(indexes) != 1 || indexes[0].Name != "email" {
+		t.Fatalf("indexes after create=%+v want email", indexes)
+	}
+}
+
+func TestMetadataOpenCollectionHandleLimit(t *testing.T) {
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{MaxCollectionHandles: 1})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if _, err := client.OpenCollection(ctx, "users"); err != nil {
+		t.Fatalf("OpenCollection first: %v", err)
+	}
+	if _, err := client.OpenCollection(ctx, "users"); !isRemoteError(err, iwire.ErrResourceExhausted) {
+		t.Fatalf("OpenCollection second error=%v want resource exhausted", err)
 	}
 }
 
@@ -146,10 +188,115 @@ func TestDecodeCollectionMetaRejectsUnknownEnums(t *testing.T) {
 	}
 }
 
+func TestDecodeCollectionMetaRejectsInvalidCounterValues(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		maxDocs     int64
+		maxBytes    int64
+		maxRootRuns int64
+		maxQueued   int64
+	}{
+		{name: "max_documents", maxDocs: -1},
+		{name: "max_bytes", maxBytes: -1},
+		{name: "max_root_runs", maxRootRuns: -1},
+		{name: "max_queued", maxQueued: -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := testCollectionMetaPayloadWithCounters(0, 0, 0, tc.maxDocs, tc.maxBytes, tc.maxRootRuns, tc.maxQueued, 0)
+			if _, err := decodeCollectionMeta(payload); nativeCodeOf(err) != iwire.ErrInvalidCommand {
+				t.Fatalf("decodeCollectionMeta err=%v code=%d want invalid command", err, nativeCodeOf(err))
+			}
+		})
+	}
+}
+
+func TestNormalizeClientCollectionMetaRejectsInvalidOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		meta collections.CollectionMeta
+	}{
+		{
+			name: "data_root_storage",
+			meta: collections.CollectionMeta{
+				Name: "users",
+				Options: collections.CollectionOptions{
+					DataRootStoragePolicy: collections.RootStoragePolicy("mystery"),
+				},
+			},
+		},
+		{
+			name: "index_state_root_storage",
+			meta: collections.CollectionMeta{
+				Name: "users",
+				Options: collections.CollectionOptions{
+					IndexStateStoragePolicy: collections.RootStoragePolicy("mystery"),
+				},
+			},
+		},
+		{
+			name: "max_documents",
+			meta: collections.CollectionMeta{
+				Name: "users",
+				Options: collections.CollectionOptions{
+					BufferedIndexedWriteMaxDocuments: -1,
+				},
+			},
+		},
+		{
+			name: "max_root_runs",
+			meta: collections.CollectionMeta{
+				Name: "users",
+				Options: collections.CollectionOptions{
+					BufferedIndexedWriteMaxRootRuns: -1,
+				},
+			},
+		},
+		{
+			name: "max_queued",
+			meta: collections.CollectionMeta{
+				Name: "users",
+				Options: collections.CollectionOptions{
+					BufferedIndexedAsyncFlushMaxQueuedUnits: -1,
+				},
+			},
+		},
+		{
+			name: "index_field",
+			meta: collections.CollectionMeta{
+				Name:    "users",
+				Indexes: []collections.IndexDefinition{{Name: "email", Field: ".email", ValueType: collections.IndexValueString}},
+			},
+		},
+		{
+			name: "index_value_type",
+			meta: collections.CollectionMeta{
+				Name:    "users",
+				Indexes: []collections.IndexDefinition{{Name: "email", Field: "email", ValueType: collections.IndexValueType("dynamic")}},
+			},
+		},
+		{
+			name: "index_storage",
+			meta: collections.CollectionMeta{
+				Name:    "users",
+				Indexes: []collections.IndexDefinition{{Name: "email", Field: "email", ValueType: collections.IndexValueString, StoragePolicy: collections.RootStoragePolicy("mystery")}},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := normalizeClientCollectionMeta(tc.meta); nativeCodeOf(err) != iwire.ErrInvalidCommand {
+				t.Fatalf("normalizeClientCollectionMeta err=%v code=%d want invalid command", err, nativeCodeOf(err))
+			}
+		})
+	}
+}
+
 func TestDropCollectionReserved(t *testing.T) {
 	client, _, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
 	_, _, err := client.roundTrip(ctx, iwire.FrameRequest, mustCommandBody(t, iwire.CommandDropCollection, collectionNameRef("users")), iwire.FrameResponse)
 	if !isRemoteError(err, iwire.ErrUnsupportedFeature) {
 		t.Fatalf("drop_collection error=%v want unsupported feature", err)
@@ -157,6 +304,10 @@ func TestDropCollectionReserved(t *testing.T) {
 }
 
 func testCollectionMetaPayload(docFormat, dataPolicy, indexStatePolicy, indexCount uint64) []byte {
+	return testCollectionMetaPayloadWithCounters(docFormat, dataPolicy, indexStatePolicy, 0, 0, 0, 0, indexCount)
+}
+
+func testCollectionMetaPayloadWithCounters(docFormat, dataPolicy, indexStatePolicy uint64, maxDocs, maxBytes, maxRootRuns, maxQueued int64, indexCount uint64) []byte {
 	dst := binary.AppendUvarint(nil, 1)
 	dst = appendString(dst, "users")
 	dst = binary.AppendUvarint(dst, docFormat)
@@ -165,12 +316,12 @@ func testCollectionMetaPayload(docFormat, dataPolicy, indexStatePolicy, indexCou
 	dst = appendBool(dst, false)
 	dst = appendBool(dst, false)
 	dst = appendBool(dst, false)
-	dst = binary.AppendVarint(dst, 0)
-	dst = binary.AppendVarint(dst, 0)
-	dst = binary.AppendVarint(dst, 0)
+	dst = binary.AppendVarint(dst, maxDocs)
+	dst = binary.AppendVarint(dst, maxBytes)
+	dst = binary.AppendVarint(dst, maxRootRuns)
 	dst = appendBool(dst, false)
 	dst = appendBool(dst, false)
-	dst = binary.AppendVarint(dst, 0)
+	dst = binary.AppendVarint(dst, maxQueued)
 	return binary.AppendUvarint(dst, indexCount)
 }
 

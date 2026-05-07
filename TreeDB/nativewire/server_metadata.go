@@ -51,7 +51,7 @@ func (s *Server) handleCreateIndex(state *connState, sections []iwire.Section) (
 	if err != nil {
 		return nil, err
 	}
-	if err := ensureIndexName(def.Name); err != nil {
+	if err := normalizeClientIndexDefinition(def); err != nil {
 		return nil, err
 	}
 	meta, err := collection.CreateIndex(def)
@@ -62,9 +62,19 @@ func (s *Server) handleCreateIndex(state *connState, sections []iwire.Section) (
 }
 
 func (s *Server) handleListIndexes(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
-	_, collection, err := s.openCollectionRef(state, sections)
+	if err := managerRequired(s.collections); err != nil {
+		return nil, err
+	}
+	name, _, err := collectionRefFromSections(state, sections)
 	if err != nil {
 		return nil, err
+	}
+	collection, err := s.collections.OpenCollection(name)
+	if err != nil {
+		return nil, metadataWrap(err)
+	}
+	if state != nil {
+		state.cacheCollection(name, collection)
 	}
 	meta := collection.Meta()
 	return []iwire.Section{{ID: iwire.SectionIndexDefinition, Bytes: encodeIndexDefinitionVector(meta.Indexes)}}, nil
@@ -102,7 +112,10 @@ func (s *Server) handleOpenCollection(state *connState, sections []iwire.Section
 	if err != nil {
 		return nil, metadataWrap(err)
 	}
-	handle := state.addCollectionHandle(name, collection)
+	handle, err := state.addCollectionHandle(name, collection, s.maxCollectionHandles)
+	if err != nil {
+		return nil, err
+	}
 	return []iwire.Section{{ID: iwire.SectionCollectionHandle, Bytes: encodeHandle(handle)}}, nil
 }
 

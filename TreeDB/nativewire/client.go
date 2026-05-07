@@ -126,6 +126,9 @@ func (c *Client) roundTripLocked(ctx context.Context, typ iwire.FrameType, body 
 		return iwire.Header{}, nil, err
 	}
 	c.readBody = response[:0]
+	if err := iwire.ValidateHeaderVersion(header, iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0}); err != nil {
+		return header, response, err
+	}
 	if header.RequestID != requestID {
 		return header, response, protocolError(iwire.ErrMalformedFrame, "response request_id %d want %d", header.RequestID, requestID)
 	}
@@ -167,6 +170,9 @@ func (c *Client) roundTripLockedDiscardResponse(ctx context.Context, typ iwire.F
 		return err
 	}
 	c.readBody = response[:0]
+	if err := iwire.ValidateHeaderVersion(header, iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0}); err != nil {
+		return err
+	}
 	if header.RequestID != requestID {
 		return protocolError(iwire.ErrMalformedFrame, "response request_id %d want %d", header.RequestID, requestID)
 	}

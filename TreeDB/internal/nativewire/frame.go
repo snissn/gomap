@@ -45,7 +45,7 @@ func DecodeHeader(src []byte, limits Limits) (Header, error) {
 	if len(src) < int(FrameHeaderLenV1) {
 		return Header{}, protocolError(ErrMalformedFrame, "short frame header: %d", len(src))
 	}
-	if string(src[0:4]) != Magic {
+	if src[0] != Magic[0] || src[1] != Magic[1] || src[2] != Magic[2] || src[3] != Magic[3] {
 		return Header{}, protocolError(ErrMalformedFrame, "bad frame magic")
 	}
 

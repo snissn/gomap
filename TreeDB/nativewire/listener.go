@@ -17,6 +17,18 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	if ln == nil {
 		return net.ErrClosed
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = ln.Close()
+		case <-done:
+		}
+	}()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -51,6 +63,9 @@ func DialContext(ctx context.Context, network, address string) (*Client, error) 
 func NewInProcessClient(ctx context.Context, server *Server) (*Client, func() error, error) {
 	if server == nil || server.closed.Load() {
 		return nil, nil, ErrServerClosed
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	if ctx != nil && ctx.Err() != nil {
 		return nil, nil, ctx.Err()
@@ -103,7 +118,11 @@ func (e *localEndpoint) Write(p []byte) (int, error) {
 }
 
 func (e *localEndpoint) roundTrip(ctx context.Context, typ iwire.FrameType, requestID uint64, body []byte, want iwire.FrameType, limits iwire.Limits, responseDst []byte, copyResponse bool) (iwire.Header, []byte, error) {
-	if e == nil || e.server == nil || e.closed.Load() || e.server.closed.Load() {
+	if e == nil || e.server == nil || e.closed.Load() {
+		return iwire.Header{}, nil, io.ErrClosedPipe
+	}
+	if e.server.closed.Load() {
+		_ = e.close()
 		return iwire.Header{}, nil, io.ErrClosedPipe
 	}
 	if ctx != nil && ctx.Err() != nil {
@@ -129,6 +148,9 @@ func (e *localEndpoint) roundTrip(ctx context.Context, typ iwire.FrameType, requ
 	header, err := iwire.DecodeHeader(e.frame[:iwire.FrameHeaderLenV1], limits)
 	if err != nil {
 		return iwire.Header{}, nil, err
+	}
+	if err := iwire.ValidateHeaderVersion(header, iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0}); err != nil {
+		return header, nil, err
 	}
 	response := e.frame[iwire.FrameHeaderLenV1:]
 	if uint64(len(response)) != header.BodyLen {

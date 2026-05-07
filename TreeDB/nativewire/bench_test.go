@@ -84,7 +84,10 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 		defer cleanup()
 		server := NewServer(ServerOptions{Collections: mgr})
 		state := &connState{id: 1}
-		handle := state.addCollectionHandle("bench", col)
+		handle, err := state.addCollectionHandle("bench", col, server.maxCollectionHandles)
+		if err != nil {
+			b.Fatalf("add collection handle: %v", err)
+		}
 		var sink benchmarkFrameSink
 		var sectionBuf [4]iwire.Section
 		requestBody := make([]byte, 0, 4096)
@@ -122,7 +125,10 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 		defer cleanup()
 		server := NewServer(ServerOptions{Collections: mgr})
 		state := &connState{id: 1}
-		handle := state.addCollectionHandle("bench", col)
+		handle, err := state.addCollectionHandle("bench", col, server.maxCollectionHandles)
+		if err != nil {
+			b.Fatalf("add collection handle: %v", err)
+		}
 		var sink benchmarkFrameSink
 		requestBody := make([]byte, 0, 4096)
 		b.ReportAllocs()
@@ -194,7 +200,10 @@ func BenchmarkNativewireCollectionGetMany(b *testing.B) {
 		seedBenchmarkCollection(b, col, docs)
 		server := NewServer(ServerOptions{Collections: mgr})
 		state := &connState{id: 1}
-		handle := state.addCollectionHandle("bench", col)
+		handle, err := state.addCollectionHandle("bench", col, server.maxCollectionHandles)
+		if err != nil {
+			b.Fatalf("add collection handle: %v", err)
+		}
 		ids, _ := benchmarkStoredBatch(0, batchSize)
 		var sink benchmarkFrameSink
 		var sectionBuf [4]iwire.Section

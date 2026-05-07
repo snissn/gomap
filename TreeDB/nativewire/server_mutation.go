@@ -247,6 +247,9 @@ func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) 
 	if _, err := decodeDocumentFormatSection(sections); err != nil {
 		return nil, err
 	}
+	if err := validateReplacementMode(sections); err != nil {
+		return nil, err
+	}
 	var ids, docs [][]byte
 	if state != nil {
 		ids, docs, err = decodeIDsAndDocumentsInto(state.idsScratch, state.docsScratch, sections, s.limits)
@@ -326,14 +329,28 @@ func (s *Server) handleFlushCollection(state *connState, sections []iwire.Sectio
 	if err != nil {
 		return nil, err
 	}
+	ack, err := ackPolicyFromSections(sections, iwire.AckFlushed)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.admitBarrierAck(iwire.AckFlushed, ack); err != nil {
+		return nil, err
+	}
 	if err := collection.Flush(); err != nil {
 		return nil, metadataWrap(err)
 	}
 	return []iwire.Section{ackMeta(iwire.AckFlushed)}, nil
 }
 
-func (s *Server) handleFlushAll() ([]iwire.Section, error) {
+func (s *Server) handleFlushAll(sections []iwire.Section) ([]iwire.Section, error) {
 	if err := managerRequired(s.collections); err != nil {
+		return nil, err
+	}
+	ack, err := ackPolicyFromSections(sections, iwire.AckFlushed)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.admitBarrierAck(iwire.AckFlushed, ack); err != nil {
 		return nil, err
 	}
 	if err := s.collections.FlushAll(); err != nil {
@@ -342,9 +359,16 @@ func (s *Server) handleFlushAll() ([]iwire.Section, error) {
 	return []iwire.Section{ackMeta(iwire.AckFlushed)}, nil
 }
 
-func (s *Server) handleCheckpoint() ([]iwire.Section, error) {
+func (s *Server) handleCheckpoint(sections []iwire.Section) ([]iwire.Section, error) {
 	if s.backend == nil {
 		return nil, protocolError(iwire.ErrDurabilityUnavailable, "checkpoint requires a backend DB")
+	}
+	ack, err := ackPolicyFromSections(sections, iwire.AckSynced)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.admitBarrierAck(iwire.AckSynced, ack); err != nil {
+		return nil, err
 	}
 	if s.collections != nil {
 		if err := s.collections.FlushAll(); err != nil {
@@ -355,6 +379,20 @@ func (s *Server) handleCheckpoint() ([]iwire.Section, error) {
 		return nil, metadataWrap(err)
 	}
 	return []iwire.Section{ackMeta(iwire.AckSynced)}, nil
+}
+
+func (s *Server) admitBarrierAck(actual, requested iwire.AckPolicy) error {
+	switch requested {
+	case 0, iwire.AckVisible, iwire.AckFlushed, iwire.AckSynced:
+	case iwire.AckRaftCommitted:
+		return protocolError(iwire.ErrDurabilityUnavailable, "raft_committed ack is unavailable in single-node nativewire R1")
+	default:
+		return protocolError(iwire.ErrInvalidCommand, "unsupported ack policy %d", requested)
+	}
+	if requested == 0 || requested <= actual {
+		return nil
+	}
+	return protocolError(iwire.ErrDurabilityUnavailable, "requested ack policy %d cannot be satisfied by barrier ack policy %d", requested, actual)
 }
 
 func (s *Server) admitMutationAck(requested iwire.AckPolicy) error {

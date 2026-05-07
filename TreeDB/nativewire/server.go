@@ -17,6 +17,7 @@ import (
 
 const (
 	defaultMaxInFlight            = 1024
+	defaultMaxCollectionHandles   = 1024
 	defaultMaxOpenCursors         = 1024
 	defaultMaxCursorRetainedBytes = 64 << 20
 	defaultMaxScanDocuments       = 10000
@@ -27,6 +28,7 @@ const (
 type ServerOptions struct {
 	Limits                 iwire.Limits
 	MaxInFlight            int
+	MaxCollectionHandles   int
 	MaxOpenCursors         int
 	MaxCursorRetainedBytes int
 	MaxScanDocuments       int
@@ -40,6 +42,7 @@ type ServerOptions struct {
 type Server struct {
 	limits                 iwire.Limits
 	maxInFlight            int
+	maxCollectionHandles   int
 	maxOpenCursors         int
 	maxCursorRetainedBytes int
 	maxScanDocuments       int
@@ -74,6 +77,7 @@ type serverCursor struct {
 
 type connState struct {
 	id          uint64
+	hello       bool
 	mu          sync.Mutex
 	nextHandle  uint64
 	handles     map[CollectionHandle]string
@@ -88,14 +92,20 @@ type connState struct {
 	docsScratch    [][]byte
 }
 
-func (s *connState) addCollectionHandle(name string, collection *collections.Collection) CollectionHandle {
+func (s *connState) addCollectionHandle(name string, collection *collections.Collection, limit int) (CollectionHandle, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.nextHandle++
-	handle := CollectionHandle(s.nextHandle)
 	if s.handles == nil {
 		s.handles = make(map[CollectionHandle]string)
 	}
+	if limit > 0 && len(s.handles) >= limit {
+		return 0, protocolError(iwire.ErrResourceExhausted, "collection handle limit %d reached", limit)
+	}
+	s.nextHandle++
+	if s.nextHandle == 0 {
+		return 0, protocolError(iwire.ErrResourceExhausted, "collection handle space exhausted")
+	}
+	handle := CollectionHandle(s.nextHandle)
 	s.handles[handle] = name
 	if collection != nil {
 		if s.handleCols == nil {
@@ -107,7 +117,7 @@ func (s *connState) addCollectionHandle(name string, collection *collections.Col
 		}
 		s.collections[name] = collection
 	}
-	return handle
+	return handle, nil
 }
 
 func (s *connState) collectionForHandle(handle CollectionHandle) (string, bool) {
@@ -189,6 +199,10 @@ func NewServer(opts ServerOptions) *Server {
 	if maxInFlight <= 0 {
 		maxInFlight = defaultMaxInFlight
 	}
+	maxCollectionHandles := opts.MaxCollectionHandles
+	if maxCollectionHandles <= 0 {
+		maxCollectionHandles = defaultMaxCollectionHandles
+	}
 	maxOpenCursors := opts.MaxOpenCursors
 	if maxOpenCursors <= 0 {
 		maxOpenCursors = defaultMaxOpenCursors
@@ -219,6 +233,7 @@ func NewServer(opts ServerOptions) *Server {
 	return &Server{
 		limits:                 limits,
 		maxInFlight:            maxInFlight,
+		maxCollectionHandles:   maxCollectionHandles,
 		maxOpenCursors:         maxOpenCursors,
 		maxCursorRetainedBytes: maxCursorRetainedBytes,
 		maxScanDocuments:       maxScanDocuments,
@@ -355,6 +370,9 @@ func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState,
 		s.counters.inc("requests.canceled_total")
 		return nil
 	case iwire.FrameRequest:
+		if state != nil && !state.hello {
+			return s.writeError(w, header, protocolError(iwire.ErrInvalidCommand, "hello required before request"))
+		}
 		return s.handleRequest(ctx, w, state, header, body)
 	default:
 		return s.writeError(w, header, protocolError(iwire.ErrInvalidCommand, "unexpected frame type %d", header.Type))
@@ -449,9 +467,9 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	case iwire.CommandFlushCollection:
 		responseSections, err = s.handleFlushCollection(state, cmd.Known)
 	case iwire.CommandFlushAll:
-		responseSections, err = s.handleFlushAll()
+		responseSections, err = s.handleFlushAll(cmd.Known)
 	case iwire.CommandCheckpoint:
-		responseSections, err = s.handleCheckpoint()
+		responseSections, err = s.handleCheckpoint(cmd.Known)
 	case iwire.CommandGetMany:
 		responseBody, err = s.handleGetManyBody(state, cmd.Known, body[:0])
 		responseBodySet = true
@@ -492,11 +510,16 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 }
 
 func (s *Server) writeHelloOK(w io.Writer, header iwire.Header, state *connState) error {
+	var connectionID uint64
+	if state != nil {
+		state.hello = true
+		connectionID = state.id
+	}
 	caps := map[string]string{
 		"protocol":           "treedb-native-wire",
 		"protocol_major":     strconv.Itoa(int(iwire.ProtocolMajorV1)),
 		"protocol_minor":     strconv.Itoa(int(iwire.ProtocolMinorV0)),
-		"connection_id":      strconv.FormatUint(state.id, 10),
+		"connection_id":      strconv.FormatUint(connectionID, 10),
 		"default_ack_policy": strconv.FormatUint(uint64(s.defaultAckPolicy), 10),
 	}
 	body, err := iwire.AppendSection(nil, iwire.Section{ID: iwire.SectionCapabilitySet, Bytes: appendStringMap(nil, caps)})

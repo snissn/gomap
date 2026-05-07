@@ -2008,7 +2008,6 @@ func nativeWireMongoPrimaryID(i int) []byte {
 }
 
 func nativeWireStoredDocument(format collections.DocumentFormat, i int, prebuilt []bson.D, prebuiltRaw []bson.Raw) ([]byte, error) {
-	city := benchmarkCity(i)
 	switch format {
 	case collections.DocumentFormatBSON:
 		if prebuiltRaw != nil {
@@ -2022,16 +2021,27 @@ func nativeWireStoredDocument(format collections.DocumentFormat, i int, prebuilt
 		}
 		return bson.Marshal(doc)
 	case collections.DocumentFormatTemplateV1:
-		return collections.EncodeTemplateV1Document(
-			[]string{"_id", "email", "city", "age", "active", "score"},
-			[]any{benchmarkID(i), benchmarkEmail(i), city, int64(18 + (i % 67)), i%2 == 0, float64(i%1000) / 10.0},
-		)
+		return collections.EncodeTemplateV1DocumentJSON(nativeWireBenchmarkJSONDocument(i))
 	default:
-		return []byte(fmt.Sprintf(
-			`{"_id":%q,"email":%q,"city":%q,"age":%d,"active":%t,"score":%.1f}`,
-			benchmarkID(i), benchmarkEmail(i), city, int64(18+(i%67)), i%2 == 0, float64(i%1000)/10.0,
-		)), nil
+		return nativeWireBenchmarkJSONDocument(i), nil
 	}
+}
+
+func nativeWireBenchmarkJSONDocument(i int) []byte {
+	city := benchmarkCity(i)
+	return []byte(fmt.Sprintf(
+		`{"_id":%q,"email":%q,"city":%q,"age":%d,"active":%t,"score":%.1f,"tags":[%q,%q],"profile":{"rank":%d,"bio":%q}}`,
+		benchmarkID(i),
+		benchmarkEmail(i),
+		city,
+		int64(18+(i%67)),
+		i%2 == 0,
+		float64(i%1000)/10.0,
+		city,
+		fmt.Sprintf("bucket-%02d", i%32),
+		int32(i%1000),
+		strings.Repeat("x", 96),
+	))
 }
 
 func rawWireDocuments(start, end int, prebuilt []bson.D, prebuiltRaw []bson.Raw) ([]wire.Document, error) {

@@ -172,6 +172,12 @@ func DecodeByteVectorInto(src []byte, limits Limits, scratch *ByteVectorScratch)
 	if count64 > uint64(limits.MaxByteVectorItems) {
 		return ByteVector{}, protocolError(ErrResourceExhausted, "byte-vector count %d exceeds limit %d", count64, limits.MaxByteVectorItems)
 	}
+	if count64 > uint64(maxInt) {
+		return ByteVector{}, protocolError(ErrResourceExhausted, "byte-vector count exceeds int capacity")
+	}
+	if count64 > uint64(len(src)-off) {
+		return ByteVector{}, protocolError(ErrMalformedFrame, "byte-vector count %d exceeds remaining length table bytes %d", count64, len(src)-off)
+	}
 	count := int(count64)
 	offsets, lengths := byteVectorBuffers(count, scratch)
 
