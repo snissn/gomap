@@ -516,8 +516,8 @@ type DocumentRecord struct {
 }
 
 // BorrowedDocumentRecord is one primary collection record borrowed during a
-// callback scan. ID and Document are valid only until the callback returns and
-// must not be retained or modified.
+// callback scan. This is an unsafe performance type: ID and Document are valid
+// only until the callback returns and must not be retained or modified.
 type BorrowedDocumentRecord struct {
 	ID       []byte
 	Document []byte
@@ -11467,13 +11467,13 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 }
 
 // ScanBorrowedDocumentsByIndexRange calls fn with primary documents whose named
-// secondary index falls inside opts, preserving index order. This is a
-// performance-oriented internal integration API for the Mongo gateway: record
-// slices are borrowed, and fn runs while the collection write-domain read lock
-// may be held. The callback must not retain or modify slices, call back into
-// Collection, or perform blocking work. Missing indexes are treated as empty
-// scans. Descending scans are not supported, and opts.Limit must be positive.
-// General callers should use FindDocumentsByIndexRange.
+// secondary index falls inside opts, preserving index order. This is a borrowed
+// performance API for gateway integrations: record slices are valid only during
+// the callback, and fn may run while the collection write-domain read lock is
+// held. The callback must not retain or modify slices, call back into Collection,
+// or perform blocking work. Missing indexes are treated as empty scans.
+// Descending scans are not supported, and opts.Limit must be positive. General
+// callers should use FindDocumentsByIndexRange.
 func (c *Collection) ScanBorrowedDocumentsByIndexRange(indexName string, opts IndexRangeOptions, fn func(BorrowedDocumentRecord) (bool, error)) (bool, error) {
 	if fn == nil {
 		return false, errors.New("collections: nil borrowed index document range callback")
@@ -11548,6 +11548,9 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 	}
 	var bufferedTable memtable.Table
 	if exactPrefixScan {
+		// Exact document scans still need buffered tombstones for unique indexes.
+		// The unique reservation fast path only proves pending live values, so use
+		// the run-table path and cap it by the requested result limit.
 		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, false, exactPrefix, opts.Limit)
 	} else {
 		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
@@ -11720,6 +11723,9 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 	}
 	var bufferedTable memtable.Table
 	if exactPrefixScan {
+		// Exact scans still need buffered tombstones for unique indexes. The unique
+		// reservation fast path only proves pending live values, so use the
+		// run-table path and cap it by the requested result limit.
 		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, false, exactPrefix, opts.Limit)
 	} else {
 		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
@@ -11935,17 +11941,20 @@ func encodedDoubleComponentIsNaN(encoded []byte) bool {
 	return len(encoded) == 1 && encoded[0] == 0x00
 }
 
-func scanMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, dedupeDocumentIDs bool, fn func([]byte) (bool, error)) (bool, error) {
+func scanMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, dedupeDocumentID bool, fn func([]byte) (bool, error)) (bool, error) {
 	return scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt, valueType, maxResults, scanMergedCollectionIndexIDOptions{
 		CloneDocumentID:  true,
-		DedupeDocumentID: dedupeDocumentIDs,
+		DedupeDocumentID: dedupeDocumentID,
 	}, fn)
 }
 
-func scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, dedupeDocumentIDs bool, fn func([]byte) (bool, error)) (bool, error) {
+// scanMergedCollectionIndexIDsBorrowed calls fn with document IDs that may alias
+// iterator key memory. fn must not retain or mutate id after returning; clone it
+// first if the ID needs to outlive the callback.
+func scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, dedupeDocumentID bool, fn func([]byte) (bool, error)) (bool, error) {
 	return scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt, valueType, maxResults, scanMergedCollectionIndexIDOptions{
 		CloneDocumentID:  false,
-		DedupeDocumentID: dedupeDocumentIDs,
+		DedupeDocumentID: dedupeDocumentID,
 	}, fn)
 }
 
@@ -11970,7 +11979,7 @@ func scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt iterator.Un
 				continue
 			}
 			if maxResults > 0 && emitted >= maxResults {
-				return true, nil
+				return true, collectionIndexIteratorError(persistedIt)
 			}
 			id, err := indexKeyDocumentID(valueType, persistedKey)
 			if err != nil {
