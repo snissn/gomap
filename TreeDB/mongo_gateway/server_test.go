@@ -2700,6 +2700,19 @@ func TestServerFindRawBSONOPMsgResponseHonorsMaxMessageLength(t *testing.T) {
 	}
 }
 
+func TestFindResponsePayloadOPMsgHonorsMaxMessageLength(t *testing.T) {
+	payload := findResponsePayload{
+		document: mustDocument(t, bson.D{{Key: "ok", Value: 1.0}, {Key: "payload", Value: strings.Repeat("x", 256)}}),
+	}
+	if _, err := payload.marshalMsgIntoWithMaxLength(nil, 1, 250, wire.DefaultMaxMessageLength); err != nil {
+		t.Fatalf("marshal default max response: %v", err)
+	}
+	_, err := payload.marshalMsgIntoWithMaxLength(nil, 1, 250, 128)
+	if !errors.Is(err, wire.ErrMessageTooLarge) {
+		t.Fatalf("marshal small max err=%v want ErrMessageTooLarge", err)
+	}
+}
+
 func TestRawDocumentsBatchLimit(t *testing.T) {
 	docs := []wire.Document{
 		mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}),
