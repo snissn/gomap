@@ -40,6 +40,12 @@ type partialReadWriter struct {
 	maxWrite int
 }
 
+type timeoutNetError struct{}
+
+func (timeoutNetError) Error() string   { return "i/o timeout" }
+func (timeoutNetError) Timeout() bool   { return true }
+func (timeoutNetError) Temporary() bool { return true }
+
 func (rw *partialReadWriter) Read(p []byte) (int, error) {
 	return rw.r.Read(p)
 }
@@ -4598,6 +4604,17 @@ func TestServeConnCancellationInterruptsRead(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ServeConn did not return after context cancellation")
+	}
+}
+
+func TestServeConnContextErrorMapsCanceledTimeout(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := serveConnContextError(ctx, timeoutNetError{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("serveConnContextError canceled timeout=%v want context.Canceled", err)
+	}
+	if err := serveConnContextError(context.Background(), timeoutNetError{}); err != nil {
+		t.Fatalf("serveConnContextError active context=%v want nil", err)
 	}
 }
 

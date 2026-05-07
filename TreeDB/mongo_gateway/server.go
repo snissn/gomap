@@ -207,8 +207,8 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
-			if ctx.Err() != nil && (errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe)) {
-				return ctx.Err()
+			if ctxErr := serveConnContextError(ctx, err); ctxErr != nil {
+				return ctxErr
 			}
 			return err
 		}
@@ -218,8 +218,8 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 			if err != nil {
 				if len(writeBuf) > 0 {
 					if flushErr := writeFull(rw, writeBuf); flushErr != nil {
-						if ctx.Err() != nil && (errors.Is(flushErr, net.ErrClosed) || errors.Is(flushErr, io.ErrClosedPipe)) {
-							return ctx.Err()
+						if ctxErr := serveConnContextError(ctx, flushErr); ctxErr != nil {
+							return ctxErr
 						}
 						return flushErr
 					}
@@ -234,8 +234,8 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 			continue
 		}
 		if err := writeFull(rw, writeBuf); err != nil {
-			if ctx.Err() != nil && (errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe)) {
-				return ctx.Err()
+			if ctxErr := serveConnContextError(ctx, err); ctxErr != nil {
+				return ctxErr
 			}
 			return err
 		}
@@ -531,6 +531,24 @@ func writeFull(w io.Writer, p []byte) error {
 			return io.ErrShortWrite
 		}
 		p = p[n:]
+	}
+	return nil
+}
+
+func serveConnContextError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	ctxErr := ctx.Err()
+	if ctxErr == nil {
+		return nil
+	}
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
+		return ctxErr
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return ctxErr
 	}
 	return nil
 }

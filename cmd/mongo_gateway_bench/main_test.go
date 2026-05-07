@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -644,8 +645,8 @@ func TestParseConfigValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse default raw-wire-tcp-pipeline config: %v", err)
 	}
-	if defaultPipelineCfg.RawWireTCPPipelineDepth != 128 {
-		t.Fatalf("default raw-wire-tcp-pipeline depth=%d want 128", defaultPipelineCfg.RawWireTCPPipelineDepth)
+	if defaultPipelineCfg.RawWireTCPPipelineDepth != defaultRawWireTCPPipelineDepth {
+		t.Fatalf("default raw-wire-tcp-pipeline depth=%d want %d", defaultPipelineCfg.RawWireTCPPipelineDepth, defaultRawWireTCPPipelineDepth)
 	}
 	rawWireTCPPipelineCfg, err := parseConfig([]string{"-target", "treedb", "-client-mode", "raw-wire-tcp-pipeline", "-raw-wire-tcp-pipeline-depth", "16"})
 	if err != nil {
@@ -725,6 +726,9 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 	if _, err := parseConfig([]string{"-client-mode", "raw-wire-tcp-pipeline", "-raw-wire-tcp-pipeline-depth", "0"}); err == nil {
 		t.Fatal("raw-wire-tcp-pipeline-depth=0 accepted for pipeline mode")
+	}
+	if _, err := parseConfig([]string{"-client-mode", "raw-wire-tcp-pipeline", "-raw-wire-tcp-pipeline-depth", strconv.Itoa(maxRawWireTCPPipelineDepth + 1)}); err == nil {
+		t.Fatal("raw-wire-tcp-pipeline-depth above max accepted for pipeline mode")
 	}
 	if _, err := parseConfig([]string{"-raw-wire-tcp-pipeline-depth", "0"}); err != nil {
 		t.Fatalf("raw-wire-tcp-pipeline-depth=0 should be ignored outside pipeline mode: %v", err)

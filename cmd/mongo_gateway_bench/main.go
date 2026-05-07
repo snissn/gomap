@@ -39,7 +39,11 @@ import (
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
-const defaultMongoDriverMaxPoolSize = 100
+const (
+	defaultMongoDriverMaxPoolSize  = 100
+	defaultRawWireTCPPipelineDepth = 128
+	maxRawWireTCPPipelineDepth     = 4096
+)
 
 type config struct {
 	Target                                        string
@@ -446,7 +450,7 @@ func parseConfig(args []string) (config, error) {
 		TreeDBMaintenance:           treeDBMaintenanceFull,
 		TreeDBReadState:             treeDBReadStateSettled,
 		ClientMode:                  clientModeDriver,
-		RawWireTCPPipelineDepth:     128,
+		RawWireTCPPipelineDepth:     defaultRawWireTCPPipelineDepth,
 		InsertProducers:             1,
 		ProfileBlockRate:            1,
 		ProfileMutexFraction:        5,
@@ -569,6 +573,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.ClientMode == clientModeRawWireTCPPipeline && cfg.RawWireTCPPipelineDepth <= 0 {
 		return config{}, errors.New("raw-wire-tcp-pipeline-depth must be > 0")
+	}
+	if cfg.ClientMode == clientModeRawWireTCPPipeline && cfg.RawWireTCPPipelineDepth > maxRawWireTCPPipelineDepth {
+		return config{}, fmt.Errorf("raw-wire-tcp-pipeline-depth cannot exceed %d", maxRawWireTCPPipelineDepth)
 	}
 	concurrentRangeReaderSweepValues, err := parsePositiveIntList(concurrentRangeReaderSweep, "concurrent-range-reader-sweep")
 	if err != nil {
@@ -2926,13 +2933,14 @@ func runDriverDecodedRangeOperation(ctx context.Context, coll *mongo.Collection,
 		sample(time.Since(begin))
 		return err
 	}
-	sample(time.Since(begin))
 	for _, doc := range docs {
 		age, ok := int64Value(doc["age"])
 		if !ok || age < minAge {
+			sample(time.Since(begin))
 			return fmt.Errorf("range returned age=%v below %d", doc["age"], minAge)
 		}
 	}
+	sample(time.Since(begin))
 	return nil
 }
 
