@@ -72,7 +72,7 @@ func TestRunSmallNativeCollectionMatrix(t *testing.T) {
 		requirePhase(t, row, "id_find_one", false)
 		requirePhase(t, row, "email_find_one", false)
 		requirePhase(t, row, "age_range_indexed_limit_10", false)
-		requirePhase(t, row, "age_range_scan_limit_10", false)
+		requirePhase(t, row, "age_range_scan_limit_10", true)
 		requirePhase(t, row, "concurrent_id_find_one_r2", false)
 		requirePhase(t, row, "concurrent_email_find_one_r2", false)
 		requirePhase(t, row, "concurrent_age_range_indexed_limit_10_r2", false)
@@ -147,7 +147,7 @@ func TestIndexesZeroSkipsSecondaryNativePhases(t *testing.T) {
 	requirePhase(t, row, "id_find_one", false)
 	requirePhase(t, row, "email_find_one", true)
 	requirePhase(t, row, "age_range_indexed_limit_10", true)
-	requirePhase(t, row, "age_range_scan_limit_10", false)
+	requirePhase(t, row, "age_range_scan_limit_10", true)
 }
 
 func TestResetTreeDBDirRefusesNonEmptyUnmarkedDir(t *testing.T) {
