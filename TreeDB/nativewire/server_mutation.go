@@ -5,6 +5,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func (s *Server) handleInsertBatch(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
@@ -36,6 +37,9 @@ func (s *Server) handleInsertBatch(state *connState, sections []iwire.Section) (
 	}
 	var resultIDs [][]byte
 	if format == collections.DocumentFormatBSON {
+		if err := validateBSONDocuments(docs); err != nil {
+			return nil, err
+		}
 		resultIDs, err = collection.InsertBatchValidatedBSON(ids, docs)
 	} else {
 		resultIDs, err = collection.InsertBatch(ids, docs)
@@ -231,6 +235,15 @@ func (s *Server) admitMutationAck(requested iwire.AckPolicy) error {
 	default:
 		return protocolError(iwire.ErrInvalidCommand, "unsupported ack policy %d", requested)
 	}
+}
+
+func validateBSONDocuments(docs [][]byte) error {
+	for i, doc := range docs {
+		if err := bson.Raw(doc).Validate(); err != nil {
+			return protocolError(iwire.ErrInvalidCommand, "invalid BSON document at index %d: %v", i, err)
+		}
+	}
+	return nil
 }
 
 func (s *Server) satisfyAck(collection interface{ Flush() error }, requested iwire.AckPolicy) (iwire.AckPolicy, error) {
