@@ -516,7 +516,8 @@ type DocumentRecord struct {
 }
 
 // BorrowedDocumentRecord is one primary collection record borrowed during a
-// callback scan. ID and Document are valid only until the callback returns.
+// callback scan. ID and Document are valid only until the callback returns and
+// must not be retained or modified.
 type BorrowedDocumentRecord struct {
 	ID       []byte
 	Document []byte
@@ -11465,8 +11466,9 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 // secondary index falls inside opts, preserving index order. This is a
 // performance-oriented internal integration API for the Mongo gateway: record
 // slices are borrowed, and fn runs while the collection write-domain read lock
-// may be held. The callback must not retain slices, call back into Collection,
-// or perform blocking work. General callers should use FindDocumentsByIndexRange.
+// may be held. The callback must not retain or modify slices, call back into
+// Collection, or perform blocking work. General callers should use
+// FindDocumentsByIndexRange.
 func (c *Collection) ScanBorrowedDocumentsByIndexRange(indexName string, opts IndexRangeOptions, fn func(BorrowedDocumentRecord) (bool, error)) (bool, error) {
 	if fn == nil {
 		return false, errors.New("collections: nil borrowed index document range callback")

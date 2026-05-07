@@ -3601,6 +3601,9 @@ func rawCommandErrorMessage(raw bson.Raw) string {
 }
 
 func validateRawAgeBatch(batch []bson.Raw, minAge int64) error {
+	if len(batch) == 0 {
+		return errors.New("raw range returned no documents")
+	}
 	for _, doc := range batch {
 		if err := validateRawAgeDocument(doc, minAge); err != nil {
 			return err
