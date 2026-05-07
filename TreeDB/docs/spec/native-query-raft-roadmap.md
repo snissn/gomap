@@ -162,6 +162,9 @@ Acceptance:
   native-wire in-process, and native-wire TCP paths, including per-frame,
   decode, dispatch, encode, cursor, and collection-adapter overhead.
 
+R1 closeout evidence is recorded in
+`TreeDB/docs/spec/native-wire-r1-closeout.md`.
+
 ### R2. Deterministic Command Entry v1
 
 Implement a canonical command-entry encoder for mutating commands:
