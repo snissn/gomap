@@ -11494,8 +11494,9 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 	if exactPrefixScan {
 		// Exact document scans still need buffered tombstones for unique indexes.
 		// The unique reservation fast path only proves pending live values, so use
-		// the run-table path and cap it by the requested result limit.
-		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, false, exactPrefix, opts.Limit)
+		// the uncapped run-table path; tombstones can sort after the live entries
+		// that satisfy opts.Limit and still need to hide persisted index rows.
+		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, false, exactPrefix, 0)
 	} else {
 		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
 	}
@@ -11638,8 +11639,9 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 	if exactPrefixScan {
 		// Exact scans still need buffered tombstones for unique indexes. The unique
 		// reservation fast path only proves pending live values, so use the
-		// run-table path and cap it by the requested result limit.
-		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, false, exactPrefix, opts.Limit)
+		// uncapped run-table path; tombstones can sort after the live entries that
+		// satisfy opts.Limit and still need to hide persisted index rows.
+		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, false, exactPrefix, 0)
 	} else {
 		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
 	}
