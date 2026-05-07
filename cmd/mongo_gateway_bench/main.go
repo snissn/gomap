@@ -3148,6 +3148,9 @@ func rawCommandErrorMessage(raw bson.Raw) string {
 }
 
 func validateRawAgeBatch(batch []bson.Raw, minAge int64) error {
+	if len(batch) == 0 {
+		return errors.New("raw range returned no documents")
+	}
 	for _, doc := range batch {
 		age, ok := directBSONInt64Field(doc, "age")
 		if !ok || age < minAge {
