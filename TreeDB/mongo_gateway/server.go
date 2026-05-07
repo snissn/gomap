@@ -385,7 +385,7 @@ func (s *Server) appendBufferedMessageWithOwner(reader *bufio.Reader, cursorOwne
 	}
 	body := message[wire.HeaderLen:messageLength]
 	if !bufferedMessageCanRetainRequestBody(h, body) {
-		body = append([]byte(nil), body...)
+		return writeBuf, false, nil
 	}
 	response, _, err := s.handleMessageInto(writeBuf, h, body, cursorOwner)
 	if err != nil {
