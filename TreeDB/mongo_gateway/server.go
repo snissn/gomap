@@ -242,6 +242,29 @@ func (s *Server) ServeOneWithOwner(rw io.ReadWriter, cursorOwner int64) error {
 	return err
 }
 
+// ServeBuffers holds reusable per-connection buffers for callers that dispatch
+// individual wire messages without using ServeConn.
+//
+// ServeBuffers is not safe for concurrent use. Use one instance per logical
+// connection/worker.
+type ServeBuffers struct {
+	readBuf  []byte
+	writeBuf []byte
+}
+
+// ServeOneWithOwnerBuffered serves one MongoDB wire message with caller-owned
+// reusable buffers. It is intended for in-process dispatchers and benchmarks
+// that need the same buffer reuse behavior as ServeConn.
+func (s *Server) ServeOneWithOwnerBuffered(rw io.ReadWriter, cursorOwner int64, buffers *ServeBuffers) error {
+	if buffers == nil {
+		return s.ServeOneWithOwner(rw, cursorOwner)
+	}
+	readBuf, writeBuf, err := s.serveOneWithOwner(rw, cursorOwner, buffers.readBuf, buffers.writeBuf)
+	buffers.readBuf = readBuf
+	buffers.writeBuf = writeBuf
+	return err
+}
+
 func (s *Server) serveOneWithOwner(rw io.ReadWriter, cursorOwner int64, readBuf, writeBuf []byte) ([]byte, []byte, error) {
 	if s.isClosed() {
 		return readBuf, writeBuf, errServerClosed

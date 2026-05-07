@@ -2934,9 +2934,10 @@ func runTreeDBRawWireRangePhase(ctx context.Context, cfg config, target *benchTa
 		return phaseResult{}, errors.New("raw-wire client mode requires an in-process TreeDB gateway server")
 	}
 	var requestID atomic.Int32
+	var scratch rawWireInProcessScratch
 	return measureTreeDBProfiledPhase(target, profiler, rangePhaseName(cfg), cfg.RangeReads, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.RangeReads; i++ {
-			if err := runTreeDBRawWireRangeOperation(ctx, cfg, target, &requestID, 1, rangeReadMinAge(i), sample); err != nil {
+			if err := runTreeDBRawWireRangeOperation(ctx, cfg, target, &requestID, 1, rangeReadMinAge(i), sample, &scratch); err != nil {
 				return err
 			}
 		}
@@ -2944,7 +2945,7 @@ func runTreeDBRawWireRangePhase(ctx context.Context, cfg config, target *benchTa
 	})
 }
 
-func runTreeDBRawWireRangeOperation(ctx context.Context, cfg config, target *benchTarget, requestID *atomic.Int32, cursorOwner int64, minAge int64, sample func(time.Duration)) error {
+func runTreeDBRawWireRangeOperation(ctx context.Context, cfg config, target *benchTarget, requestID *atomic.Int32, cursorOwner int64, minAge int64, sample func(time.Duration), scratch *rawWireInProcessScratch) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -2953,7 +2954,7 @@ func runTreeDBRawWireRangeOperation(ctx context.Context, cfg config, target *ben
 		return err
 	}
 	begin := time.Now()
-	batch, err := serveRawWireFind(target.server, requestID.Add(1), cursorOwner, commandDoc)
+	batch, err := serveRawWireFind(target.server, requestID.Add(1), cursorOwner, commandDoc, scratch)
 	sample(time.Since(begin))
 	if err != nil {
 		return err
@@ -3000,9 +3001,10 @@ func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarge
 			return phaseResult{}, errors.New("raw-wire client mode requires an in-process TreeDB gateway server")
 		}
 		var requestID atomic.Int32
+		scratches := make([]rawWireInProcessScratch, readers)
 		return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentRangeReads, func(sample func(time.Duration)) error {
 			return runConcurrentOperationsByWorker(ctx, readers, cfg.ConcurrentRangeReads, func(worker, op int) error {
-				return runTreeDBRawWireRangeOperation(ctx, cfg, target, &requestID, int64(worker+1), rangeReadMinAge(op), sample)
+				return runTreeDBRawWireRangeOperation(ctx, cfg, target, &requestID, int64(worker+1), rangeReadMinAge(op), sample, &scratches[worker])
 			})
 		})
 	}
@@ -3082,34 +3084,65 @@ func rawFindAgeRangeCommand(database, collection string, minAge int64) (bson.Raw
 	return bson.Raw(doc), nil
 }
 
-func serveRawWireFind(server *mongogateway.Server, requestID int32, cursorOwner int64, commandDoc wire.Document) ([]bson.Raw, error) {
-	msg, err := wire.AppendMsgMessage(nil, requestID, 0, 0, commandDoc)
+type rawWireInProcessScratch struct {
+	requestBuf  []byte
+	serveBufs   mongogateway.ServeBuffers
+	rw          inMemoryReadWriter
+	responseBuf []bson.Raw
+}
+
+func serveRawWireFind(server *mongogateway.Server, requestID int32, cursorOwner int64, commandDoc wire.Document, scratch *rawWireInProcessScratch) ([]bson.Raw, error) {
+	if scratch == nil {
+		scratch = &rawWireInProcessScratch{}
+	}
+	msg, err := wire.AppendMsgMessage(scratch.requestBuf[:0], requestID, 0, 0, commandDoc)
 	if err != nil {
 		return nil, err
 	}
-	rw := inMemoryReadWriter{r: bytes.NewReader(msg)}
-	if err := server.ServeOneWithOwner(&rw, cursorOwner); err != nil {
+	scratch.requestBuf = msg
+	scratch.rw.Reset(msg)
+	if err := server.ServeOneWithOwnerBuffered(&scratch.rw, cursorOwner, &scratch.serveBufs); err != nil {
 		return nil, err
 	}
-	return parseRawWireFindFirstBatch(rw.w.Bytes())
+	batch, err := parseRawWireFindFirstBatchInto(scratch.rw.Bytes(), scratch.responseBuf)
+	if err != nil {
+		return nil, err
+	}
+	scratch.responseBuf = batch
+	return batch, nil
 }
 
 func parseRawWireFindFirstBatch(response []byte) ([]bson.Raw, error) {
-	header, body, err := wire.ReadMessage(bytes.NewReader(response), 0)
+	return parseRawWireFindFirstBatchInto(response, nil)
+}
+
+func parseRawWireFindFirstBatchInto(response []byte, dst []bson.Raw) ([]bson.Raw, error) {
+	if len(response) < wire.HeaderLen {
+		return nil, wire.ErrMessageTooShort
+	}
+	header, err := wire.ParseHeader(response[:wire.HeaderLen])
 	if err != nil {
 		return nil, err
+	}
+	if int(header.MessageLength) > len(response) {
+		return nil, fmt.Errorf("%w: response length=%d available=%d", wire.ErrMessageTooShort, header.MessageLength, len(response))
 	}
 	if header.OpCode != wire.OpMsg {
 		return nil, fmt.Errorf("raw-wire find response opcode=%d want %d", header.OpCode, wire.OpMsg)
 	}
+	body := response[wire.HeaderLen:int(header.MessageLength)]
 	msg, err := wire.ParseMsg(body)
 	if err != nil {
 		return nil, err
 	}
-	return parseFindFirstBatch(bson.Raw(msg.Body))
+	return parseFindFirstBatchInto(bson.Raw(msg.Body), dst)
 }
 
 func parseFindFirstBatch(raw bson.Raw) ([]bson.Raw, error) {
+	return parseFindFirstBatchInto(raw, nil)
+}
+
+func parseFindFirstBatchInto(raw bson.Raw, dst []bson.Raw) ([]bson.Raw, error) {
 	if !rawCommandOK(raw) {
 		return nil, fmt.Errorf("find failed: %s", rawCommandErrorMessage(raw))
 	}
@@ -3121,10 +3154,14 @@ func parseFindFirstBatch(raw bson.Raw) ([]bson.Raw, error) {
 	if !ok {
 		return nil, errors.New("find response missing cursor.firstBatch")
 	}
-	return rawDocumentsFromArray(batch)
+	return rawDocumentsFromArrayInto(batch, dst)
 }
 
 func rawDocumentsFromArray(batch bson.RawArray) ([]bson.Raw, error) {
+	return rawDocumentsFromArrayInto(batch, nil)
+}
+
+func rawDocumentsFromArrayInto(batch bson.RawArray, dst []bson.Raw) ([]bson.Raw, error) {
 	length, rem, ok := bsoncore.ReadLength(bsoncore.Array(batch))
 	if !ok || length < 5 || int(length) > len(batch) {
 		return nil, errors.New("malformed find cursor.firstBatch")
@@ -3135,7 +3172,7 @@ func rawDocumentsFromArray(batch bson.RawArray) ([]bson.Raw, error) {
 	}
 	rem = rem[:len(rem)-1]
 
-	docs := make([]bson.Raw, 0, 10)
+	docs := dst[:0]
 	for len(rem) > 0 {
 		elem, next, ok := bsoncore.ReadElement(rem)
 		if !ok {
@@ -3314,11 +3351,12 @@ func serveRawWireInsert(server *mongogateway.Server, requestID int32, cursorOwne
 	if err != nil {
 		return err
 	}
-	rw := inMemoryReadWriter{r: bytes.NewReader(msg)}
+	var rw inMemoryReadWriter
+	rw.Reset(msg)
 	if err := server.ServeOneWithOwner(&rw, cursorOwner); err != nil {
 		return err
 	}
-	return assertRawWireInsertOK(rw.w.Bytes(), len(docs))
+	return assertRawWireInsertOK(rw.Bytes(), len(docs))
 }
 
 func serveRawWireTCPInsert(conn net.Conn, requestID int32, commandDoc wire.Document, docs []wire.Document) error {
@@ -3354,8 +3392,17 @@ func writeFull(w io.Writer, buf []byte) error {
 }
 
 type inMemoryReadWriter struct {
-	r *bytes.Reader
-	w bytes.Buffer
+	r bytes.Reader
+	w []byte
+}
+
+func (rw *inMemoryReadWriter) Reset(request []byte) {
+	rw.r.Reset(request)
+	rw.w = rw.w[:0]
+}
+
+func (rw *inMemoryReadWriter) Bytes() []byte {
+	return rw.w
 }
 
 func (rw *inMemoryReadWriter) Read(p []byte) (int, error) {
@@ -3363,7 +3410,8 @@ func (rw *inMemoryReadWriter) Read(p []byte) (int, error) {
 }
 
 func (rw *inMemoryReadWriter) Write(p []byte) (int, error) {
-	return rw.w.Write(p)
+	rw.w = append(rw.w, p...)
+	return len(p), nil
 }
 
 func assertRawWireInsertOK(response []byte, wantN int) error {
