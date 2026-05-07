@@ -42,7 +42,7 @@ func (s *Server) handleCreateIndex(state *connState, sections []iwire.Section) (
 	if err := managerRequired(s.collections); err != nil {
 		return nil, err
 	}
-	name, _, err := collectionRefFromSections(state, sections)
+	name, err := collectionNameFromSections(sections)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +88,7 @@ func (s *Server) handleDropIndex(state *connState, sections []iwire.Section) ([]
 	if err := managerRequired(s.collections); err != nil {
 		return nil, err
 	}
-	name, _, err := collectionRefFromSections(state, sections)
+	name, err := collectionNameFromSections(sections)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +115,7 @@ func (s *Server) handleOpenCollection(state *connState, sections []iwire.Section
 	if err := managerRequired(s.collections); err != nil {
 		return nil, err
 	}
-	name, _, err := collectionRefFromSections(state, sections)
+	name, err := collectionNameFromSections(sections)
 	if err != nil {
 		return nil, err
 	}

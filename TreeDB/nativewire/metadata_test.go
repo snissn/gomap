@@ -129,6 +129,44 @@ func TestMetadataHandleRefWorksForListIndexes(t *testing.T) {
 	}
 }
 
+func TestMetadataHandleRefsRejectedForNameOnlyCommands(t *testing.T) {
+	client, _, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	handle, err := client.OpenCollection(ctx, "users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := client.commandSections(ctx, iwire.CommandOpenCollection, collectionHandleRef(handle)); !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("OpenCollection by handle err=%v want invalid command", err)
+	}
+	if _, err := client.commandSections(ctx, iwire.CommandCreateIndex,
+		collectionHandleRef(handle),
+		iwire.Section{ID: iwire.SectionIndexDefinition, Bytes: encodeIndexDefinition(collections.IndexDefinition{
+			Name:      "email",
+			Field:     "email",
+			ValueType: collections.IndexValueString,
+		})},
+	); !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("CreateIndex by handle err=%v want invalid command", err)
+	}
+	if _, err := client.CreateIndex(ctx, "users", collections.IndexDefinition{Name: "email", Field: "email", ValueType: collections.IndexValueString}); err != nil {
+		t.Fatalf("CreateIndex by name: %v", err)
+	}
+	if _, err := client.commandSections(ctx, iwire.CommandDropIndex,
+		collectionHandleRef(handle),
+		iwire.Section{ID: iwire.SectionIndexName, Bytes: encodeIndexName("email")},
+	); !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("DropIndex by handle err=%v want invalid command", err)
+	}
+}
+
 func TestMetadataOpenCollectionHandleLimit(t *testing.T) {
 	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{MaxCollectionHandles: 1})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -171,6 +209,19 @@ func TestDecodeCollectionMetaRejectsUnknownEnums(t *testing.T) {
 				t.Fatalf("decodeCollectionMeta err=%v code=%d want invalid command", err, nativeCodeOf(err))
 			}
 		})
+	}
+}
+
+func TestReadEnumRejectsInvalidOffset(t *testing.T) {
+	off := 2
+	if _, err := readEnum([]byte{1}, &off); nativeCodeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("readEnum err=%v code=%d want malformed", err, nativeCodeOf(err))
+	}
+}
+
+func TestDecodeCollectionRefRejectsHandleWithoutState(t *testing.T) {
+	if _, _, err := decodeCollectionRef(nil, collectionHandleRef(1).Bytes); nativeCodeOf(err) != iwire.ErrInvalidCommand {
+		t.Fatalf("decodeCollectionRef err=%v code=%d want invalid command", err, nativeCodeOf(err))
 	}
 }
 
