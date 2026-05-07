@@ -61,15 +61,20 @@ sequences. `-client-mode raw-wire-tcp` sends the same raw OP_MSG traffic over
 the gateway's loopback listener, isolating TreeDB gateway network/wire-server
 cost from Mongo Go driver cost. Raw-wire modes use raw OP_MSG
 document sequences for the insert load phase while keeping setup and later
-read/update phases on the driver. Use raw-wire mode to estimate the
-gateway/server ceiling without the driver's per-document marshal and `_id`
-discovery overhead; use driver mode for user-visible Mongo compatibility
-throughput.
+read/update phases on the driver. `-client-mode direct` is a BSON-only,
+TreeDB-only path that calls `collections.Collection` directly for the same
+phase names, bypassing the MongoDB Go driver, loopback sockets, and Mongo
+gateway command/response handling. Use direct mode to answer whether a slow
+Mongo API phase is already slow in the collection engine; use raw-wire mode to
+estimate the gateway/server ceiling without the driver's per-document marshal
+and `_id` discovery overhead; use driver mode for user-visible Mongo
+compatibility throughput.
 
 When `-prebuild-documents` is enabled, the harness builds both structured BSON
 documents and raw BSON bytes before the measured workload. `driver-command` and
 `raw-wire` reuse the raw bytes during the load phase so their insert-call timing
-does not include fixture BSON marshaling.
+does not include fixture BSON marshaling. Direct mode also reuses prebuilt raw
+BSON documents for direct collection inserts.
 
 Use `-insert-producers N` to split the insert load phase across producer
 goroutines. The effective producer count is capped at the number of insert
@@ -191,7 +196,7 @@ beside the normal MongoDB Go driver `InsertMany` path:
 
 ```sh
 TREEDB_DOCUMENT_FORMATS="bson" \
-TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack raw-wire-tcp raw-wire" \
+TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire" \
 scripts/mongo_gateway_compare.sh
 ```
 
@@ -263,7 +268,7 @@ Useful overrides:
 
 - `DOCS_LIST="1000 10000 100000"`
 - `INDEXES_LIST="0 1 2"`
-- `TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack raw-wire-tcp raw-wire"`
+- `TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire"`
 - `MONGO_CLIENT_MODES="driver driver-command driver-command-raw driver-unack"`
 - `READS=50000`, `RANGE_READS=5000`, `UPDATES=5000`
 - `DELETES=1000`
@@ -340,10 +345,10 @@ The initial workload phases are:
   on `client_mode`: `InsertMany` for `driver`, `RunCommand({insert,
   documents})` for `driver-command`, `RunCommand` with a prebuilt raw BSON
   command for `driver-command-raw`, unacknowledged `InsertMany` plus a post-load
-  visibility wait for `driver-unack`, and raw OP_MSG document sequences for
-  `raw-wire`/`raw-wire-tcp`. When `-insert-producers` is greater than 1, this
-  phase reports aggregate wall-clock throughput and per-producer call latency in
-  `producer_results`.
+  visibility wait for `driver-unack`, direct BSON `Collection.InsertBatch` for
+  `direct`, and raw OP_MSG document sequences for `raw-wire`/`raw-wire-tcp`.
+  When `-insert-producers` is greater than 1, this phase reports aggregate
+  wall-clock throughput and per-producer call latency in `producer_results`.
 - `id_find_one`: point lookup by `_id`.
 - `email_find_one`: point lookup by the `email` field; emitted only when the
   email secondary index is part of the cell.

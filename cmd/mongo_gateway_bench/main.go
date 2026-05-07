@@ -350,6 +350,7 @@ const (
 	clientModeDriverCommand    = "driver-command"
 	clientModeDriverCommandRaw = "driver-command-raw"
 	clientModeDriverUnack      = "driver-unack"
+	clientModeDirect           = "direct"
 	clientModeRawWire          = "raw-wire"
 	clientModeRawWireTCP       = "raw-wire-tcp"
 )
@@ -467,7 +468,7 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.UpdateIndexedField, "update-indexed-field", false, "include the city field in update phases; requires -secondary-indexes >= 2 so the city index exists")
 	fs.BoolVar(&cfg.RangeIndex, "range-index", false, "create an age_1 secondary index for the age range-read phase")
 	fs.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 2, "secondary indexes to create: 0, 1=email, 2=email+city, 3=email+city+active")
-	fs.StringVar(&cfg.ClientMode, "client-mode", cfg.ClientMode, "benchmark client path: driver, driver-command, driver-command-raw, driver-unack, raw-wire, or raw-wire-tcp; raw-wire modes are TreeDB-only and bypass the MongoDB Go driver for the insert load phase")
+	fs.StringVar(&cfg.ClientMode, "client-mode", cfg.ClientMode, "benchmark client path: driver, driver-command, driver-command-raw, driver-unack, direct, raw-wire, or raw-wire-tcp; direct and raw-wire modes are TreeDB-only")
 	fs.StringVar(&treeDBProfile, "treedb-profile", treeDBProfile, "TreeDB profile for -target treedb: fast, wal_on_fast, durable, or bench")
 	fs.StringVar(&treeDBDocumentFormat, "treedb-document-format", treeDBDocumentFormat, "TreeDB collection document format for -target treedb: json, template-v1, or bson")
 	fs.StringVar(&treeDBDataRootStorage, "treedb-data-root-storage", treeDBDataRootStorage, "TreeDB collection data root storage for -target treedb: default, fast, or compressed")
@@ -514,6 +515,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	cfg.ClientMode = clientMode
 	if cfg.Target != "treedb" && isRawWireClientMode(cfg.ClientMode) {
+		return config{}, fmt.Errorf("client-mode %q is only supported with -target treedb", cfg.ClientMode)
+	}
+	if cfg.Target != "treedb" && cfg.ClientMode == clientModeDirect {
 		return config{}, fmt.Errorf("client-mode %q is only supported with -target treedb", cfg.ClientMode)
 	}
 	if cfg.Documents <= 0 {
@@ -605,6 +609,9 @@ func parseConfig(args []string) (config, error) {
 		return config{}, err
 	}
 	cfg.TreeDBDocumentFormat = documentFormat
+	if cfg.ClientMode == clientModeDirect && cfg.TreeDBDocumentFormat != collections.DocumentFormatBSON {
+		return config{}, fmt.Errorf("client-mode %q currently requires -treedb-document-format bson", cfg.ClientMode)
+	}
 	dataRootStorage, err := parseTreeDBRootStoragePolicy(treeDBDataRootStorage)
 	if err != nil {
 		return config{}, fmt.Errorf("treedb-data-root-storage: %w", err)
@@ -695,6 +702,8 @@ func parseClientMode(raw string) (string, error) {
 		return clientModeDriverCommandRaw, nil
 	case clientModeDriverUnack:
 		return clientModeDriverUnack, nil
+	case clientModeDirect:
+		return clientModeDirect, nil
 	case clientModeRawWire:
 		return clientModeRawWire, nil
 	case clientModeRawWireTCP:
@@ -751,12 +760,60 @@ func isRawWireClientMode(mode string) bool {
 func openTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 	switch cfg.Target {
 	case "treedb":
+		if cfg.ClientMode == clientModeDirect {
+			return openTreeDBDirectTarget(ctx, cfg)
+		}
 		return openTreeDBTarget(ctx, cfg)
 	case "mongo":
 		return openMongoTarget(ctx, cfg)
 	default:
 		return nil, fmt.Errorf("unknown target %q", cfg.Target)
 	}
+}
+
+func openTreeDBDirectTarget(ctx context.Context, cfg config) (*benchTarget, error) {
+	_ = ctx
+	dir := cfg.TreeDBDir
+	removeDir := false
+	if dir == "" {
+		tmp, err := os.MkdirTemp("", "mongo-gateway-direct-bench-*")
+		if err != nil {
+			return nil, err
+		}
+		dir = tmp
+		removeDir = !cfg.KeepTreeDBDir
+	} else {
+		if err := resetTreeDBDir(dir); err != nil {
+			return nil, err
+		}
+	}
+
+	opts := treedb.OptionsFor(cfg.TreeDBProfile, dir)
+	opts.IndexOuterLeavesInValueLog = true
+	opts.IndexInternalBaseDelta = false
+	open := treedb.OpenBackend
+	if opts.IndexOuterLeavesInValueLog {
+		open = treedb.OpenBackendWithCachedLeafLog
+	}
+	db, backendCleanup, err := open(opts)
+	if err != nil {
+		if removeDir {
+			_ = os.RemoveAll(dir)
+		}
+		return nil, err
+	}
+	manager := collections.NewCollectionManager(db)
+	cleanup := func(cleanupCtx context.Context) error {
+		_ = cleanupCtx
+		return errors.Join(manager.FlushAll(), backendCleanup())
+	}
+	return &benchTarget{
+		db:              db,
+		collections:     manager,
+		treedbDir:       dir,
+		removeTreeDBDir: removeDir,
+		cleanup:         cleanup,
+	}, nil
 }
 
 func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
@@ -1083,6 +1140,9 @@ func serveLoop(ctx context.Context, ln net.Listener, server *mongogateway.Server
 }
 
 func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder) (*benchmarkResult, error) {
+	if cfg.Target == "treedb" && cfg.ClientMode == clientModeDirect {
+		return runDirectTreeDBBenchmark(ctx, cfg, target, profiler)
+	}
 	db := target.client.Database(cfg.Database)
 	coll := db.Collection(cfg.Collection)
 	result := &benchmarkResult{
@@ -1371,6 +1431,584 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		result.MongoPoolStatsFinal = target.poolStats.Snapshot()
 	}
 	return result, nil
+}
+
+func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder) (*benchmarkResult, error) {
+	result := &benchmarkResult{
+		Target:                                 cfg.Target,
+		Database:                               cfg.Database,
+		Collection:                             cfg.Collection,
+		Documents:                              cfg.Documents,
+		BatchSize:                              cfg.BatchSize,
+		InsertProducers:                        cfg.InsertProducers,
+		MongoMaxPoolSize:                       cfg.MongoMaxPoolSize,
+		MongoMinPoolSize:                       cfg.MongoMinPoolSize,
+		MongoMaxConnecting:                     cfg.MongoMaxConnecting,
+		SecondaryIndexes:                       cfg.SecondaryIndexes,
+		ClientMode:                             cfg.ClientMode,
+		ConcurrentReaders:                      cfg.ConcurrentReaders,
+		ConcurrentReaderSweep:                  append([]int(nil), cfg.ConcurrentReaderSweep...),
+		ConcurrentReads:                        cfg.ConcurrentReads,
+		ConcurrentWriters:                      cfg.ConcurrentWriters,
+		ConcurrentWrites:                       cfg.ConcurrentWrites,
+		UpdateIndexedField:                     cfg.UpdateIndexedField,
+		RangeIndex:                             cfg.RangeIndex,
+		PrebuildDocuments:                      cfg.PrebuildDocuments,
+		TreeDBProfile:                          string(cfg.TreeDBProfile),
+		TreeDBDocumentFormat:                   string(cfg.TreeDBDocumentFormat),
+		TreeDBDataRootStorage:                  string(cfg.TreeDBDataRootStorage),
+		TreeDBIndexStateRootStorage:            string(cfg.TreeDBIndexStateRootStorage),
+		TreeDBIndexRootStorage:                 string(cfg.TreeDBIndexRootStorage),
+		TreeDBBufferedIndexedWriteMaxDocuments: cfg.TreeDBBufferedIndexedWriteMaxDocuments,
+		TreeDBBufferedIndexedWriteMaxBytes:     cfg.TreeDBBufferedIndexedWriteMaxBytes,
+		TreeDBBufferedIndexedWriteMaxRootRuns:  cfg.TreeDBBufferedIndexedWriteMaxRootRuns,
+		TreeDBBufferedIndexedAsyncFlush:        cfg.TreeDBBufferedIndexedAsyncFlush,
+		TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits: cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
+		TreeDBMaintenanceMode:                         cfg.TreeDBMaintenance,
+	}
+	if cfg.TreeDBDir != "" || cfg.KeepTreeDBDir {
+		result.TreeDBDir = target.treedbDir
+	}
+	collection, err := createDirectTreeDBCollection(cfg, target)
+	if err != nil {
+		return nil, err
+	}
+	if err := recordEffectiveTreeDBCollectionOptions(result, cfg, target); err != nil {
+		return nil, err
+	}
+
+	var prebuiltIDs [][]byte
+	var prebuiltRaw []bson.Raw
+	if cfg.PrebuildDocuments {
+		prebuiltIDs = make([][]byte, cfg.Documents)
+		prebuiltRaw = make([]bson.Raw, cfg.Documents)
+		for i := range prebuiltRaw {
+			prebuiltIDs[i] = []byte(benchmarkID(i))
+			raw, err := bson.Marshal(benchmarkDocument(i))
+			if err != nil {
+				return nil, fmt.Errorf("prebuild direct document %d: %w", i, err)
+			}
+			prebuiltRaw[i] = bson.Raw(raw)
+		}
+	}
+
+	var updatedCityValues []string
+	updatedCityValuesForUpdate := func() []string {
+		if !cfg.UpdateIndexedField {
+			return nil
+		}
+		if updatedCityValues == nil {
+			updatedCityValues = buildBenchmarkUpdatedCityValues()
+		}
+		return updatedCityValues
+	}
+
+	loadPhase, err := runTreeDBProfiledPhase(target, profiler, "load_insert_many", func() (phaseResult, error) {
+		return runDirectTreeDBLoadPhase(ctx, cfg, collection, prebuiltIDs, prebuiltRaw)
+	})
+	if err != nil {
+		return nil, err
+	}
+	result.Phases = append(result.Phases, loadPhase)
+	if err := collectAfterLoadStats(ctx, cfg, target, result); err != nil {
+		return nil, err
+	}
+
+	idPhase, err := runTreeDBProfiledPhase(target, profiler, "id_find_one", func() (phaseResult, error) {
+		return runDirectTreeDBIDFindPhase(ctx, cfg, collection)
+	})
+	if err != nil {
+		return nil, err
+	}
+	result.Phases = append(result.Phases, idPhase)
+
+	if runEmailFindPhase(cfg) {
+		emailPhase, err := runTreeDBProfiledPhase(target, profiler, "email_find_one", func() (phaseResult, error) {
+			return runDirectTreeDBEmailFindPhase(ctx, cfg, collection)
+		})
+		if err != nil {
+			return nil, err
+		}
+		result.Phases = append(result.Phases, emailPhase)
+	}
+
+	rangePhase, err := runTreeDBProfiledPhase(target, profiler, rangePhaseName(cfg), func() (phaseResult, error) {
+		return runDirectTreeDBRangePhase(ctx, cfg, collection)
+	})
+	if err != nil {
+		return nil, err
+	}
+	result.Phases = append(result.Phases, rangePhase)
+
+	updatePhase, err := runTreeDBProfiledPhase(target, profiler, "id_update_set", func() (phaseResult, error) {
+		return runDirectTreeDBUpdatePhase(ctx, cfg, collection, updatedCityValuesForUpdate())
+	})
+	if err != nil {
+		return nil, err
+	}
+	result.Phases = append(result.Phases, updatePhase)
+
+	for _, concurrentReaders := range concurrentReaderCounts(cfg) {
+		phaseName := fmt.Sprintf("concurrent_id_find_one_r%d", concurrentReaders)
+		concurrentReadPhase, err := runTreeDBProfiledPhase(target, profiler, phaseName, func() (phaseResult, error) {
+			return runDirectTreeDBConcurrentIDFindPhase(ctx, cfg, collection, concurrentReaders, phaseName)
+		})
+		if err != nil {
+			return nil, err
+		}
+		result.Phases = append(result.Phases, concurrentReadPhase)
+	}
+
+	if cfg.ConcurrentWriters > 0 && cfg.ConcurrentWrites > 0 {
+		phaseName := fmt.Sprintf("concurrent_id_update_set_w%d", cfg.ConcurrentWriters)
+		concurrentWritePhase, err := runTreeDBProfiledPhase(target, profiler, phaseName, func() (phaseResult, error) {
+			return runDirectTreeDBConcurrentUpdatePhase(ctx, cfg, collection, phaseName, updatedCityValuesForUpdate())
+		})
+		if err != nil {
+			return nil, err
+		}
+		result.Phases = append(result.Phases, concurrentWritePhase)
+	}
+
+	if cfg.Deletes > 0 {
+		deletePhase, err := runTreeDBProfiledPhase(target, profiler, "id_delete_one", func() (phaseResult, error) {
+			return runDirectTreeDBDeletePhase(ctx, cfg, collection)
+		})
+		if err != nil {
+			return nil, err
+		}
+		result.Phases = append(result.Phases, deletePhase)
+	}
+
+	if err := collectFinalStats(ctx, cfg, target, result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func directTreeDBCollectionName(cfg config) string {
+	return cfg.Database + "." + cfg.Collection
+}
+
+func directTreeDBCollectionOptions(cfg config) collections.CollectionOptions {
+	return collections.CollectionOptions{
+		DocumentFormat:                          cfg.TreeDBDocumentFormat,
+		DataRootStoragePolicy:                   cfg.TreeDBDataRootStorage,
+		IndexStateStoragePolicy:                 cfg.TreeDBIndexStateRootStorage,
+		BufferedIndexedWriteMaxDocuments:        cfg.TreeDBBufferedIndexedWriteMaxDocuments,
+		BufferedIndexedWriteMaxBytes:            cfg.TreeDBBufferedIndexedWriteMaxBytes,
+		BufferedIndexedWriteMaxRootRuns:         cfg.TreeDBBufferedIndexedWriteMaxRootRuns,
+		BufferedIndexedAsyncFlush:               cfg.TreeDBBufferedIndexedAsyncFlush,
+		BufferedIndexedAsyncFlushMaxQueuedUnits: cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
+	}
+}
+
+func createDirectTreeDBCollection(cfg config, target *benchTarget) (*collections.Collection, error) {
+	if target == nil || target.collections == nil {
+		return nil, errors.New("direct TreeDB benchmark requires a collection manager")
+	}
+	name := directTreeDBCollectionName(cfg)
+	if _, err := target.collections.CreateCollection(&collections.CollectionMeta{
+		Name:    name,
+		Options: directTreeDBCollectionOptions(cfg),
+	}); err != nil {
+		return nil, err
+	}
+	collection, err := target.collections.OpenCollection(name)
+	if err != nil {
+		return nil, err
+	}
+	for _, index := range directTreeDBIndexDefinitions(cfg) {
+		if _, err := collection.CreateIndex(index); err != nil {
+			return nil, err
+		}
+	}
+	return collection, nil
+}
+
+func directTreeDBIndexDefinitions(cfg config) []collections.IndexDefinition {
+	indexes := make([]collections.IndexDefinition, 0, cfg.SecondaryIndexes+1)
+	if cfg.SecondaryIndexes >= 1 {
+		indexes = append(indexes, collections.IndexDefinition{
+			Name:          "email_1",
+			Field:         "email",
+			ValueType:     collections.IndexValueString,
+			Unique:        true,
+			StoragePolicy: cfg.TreeDBIndexRootStorage,
+		})
+	}
+	if cfg.SecondaryIndexes >= 2 {
+		indexes = append(indexes, collections.IndexDefinition{
+			Name:          "city_1",
+			Field:         "city",
+			ValueType:     collections.IndexValueString,
+			StoragePolicy: cfg.TreeDBIndexRootStorage,
+		})
+	}
+	if cfg.SecondaryIndexes >= 3 {
+		indexes = append(indexes, collections.IndexDefinition{
+			Name:          "active_1",
+			Field:         "active",
+			ValueType:     collections.IndexValueBool,
+			StoragePolicy: cfg.TreeDBIndexRootStorage,
+		})
+	}
+	if cfg.RangeIndex {
+		indexes = append(indexes, collections.IndexDefinition{
+			Name:          "age_1",
+			Field:         "age",
+			ValueType:     collections.IndexValueInt64,
+			StoragePolicy: cfg.TreeDBIndexRootStorage,
+		})
+	}
+	return indexes
+}
+
+func runDirectTreeDBLoadPhase(ctx context.Context, cfg config, collection *collections.Collection, prebuiltIDs [][]byte, prebuiltRaw []bson.Raw) (phaseResult, error) {
+	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
+		_ = producer
+		if err := batchCtx.Err(); err != nil {
+			return err
+		}
+		ids, docs, err := directTreeDBLoadBatch(start, end, prebuiltIDs, prebuiltRaw)
+		if err != nil {
+			return err
+		}
+		_, err = collection.InsertBatchValidatedBSON(ids, docs)
+		return err
+	})
+}
+
+func directTreeDBLoadBatch(start, end int, prebuiltIDs [][]byte, prebuiltRaw []bson.Raw) ([][]byte, [][]byte, error) {
+	ids := make([][]byte, end-start)
+	docs := make([][]byte, end-start)
+	for i := start; i < end; i++ {
+		out := i - start
+		if prebuiltIDs != nil {
+			ids[out] = prebuiltIDs[i]
+		} else {
+			ids[out] = []byte(benchmarkID(i))
+		}
+		if prebuiltRaw != nil {
+			docs[out] = prebuiltRaw[i]
+			continue
+		}
+		raw, err := bson.Marshal(benchmarkDocument(i))
+		if err != nil {
+			return nil, nil, err
+		}
+		docs[out] = raw
+	}
+	return ids, docs, nil
+}
+
+func runDirectTreeDBIDFindPhase(ctx context.Context, cfg config, collection *collections.Collection) (phaseResult, error) {
+	return measurePhase("id_find_one", cfg.Reads, func(sample func(time.Duration)) error {
+		for i := 0; i < cfg.Reads; i++ {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			id := benchmarkID(i % cfg.Documents)
+			begin := time.Now()
+			raw, err := collection.Get([]byte(id))
+			sample(time.Since(begin))
+			if err != nil {
+				return err
+			}
+			if got, ok := bson.Raw(raw).Lookup("_id").StringValueOK(); !ok || got != id {
+				return fmt.Errorf("direct id lookup returned _id=%v ok=%t want %s", got, ok, id)
+			}
+		}
+		return nil
+	})
+}
+
+func runDirectTreeDBEmailFindPhase(ctx context.Context, cfg config, collection *collections.Collection) (phaseResult, error) {
+	return measurePhase("email_find_one", cfg.Reads, func(sample func(time.Duration)) error {
+		for i := 0; i < cfg.Reads; i++ {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			email := benchmarkEmail((i * 17) % cfg.Documents)
+			begin := time.Now()
+			ids, truncated, err := collection.FindByIndexValueLimit("email_1", email, 1)
+			var raw []byte
+			if err == nil && len(ids) > 0 {
+				raw, err = collection.Get(ids[0])
+			}
+			sample(time.Since(begin))
+			if err != nil {
+				return err
+			}
+			if truncated || len(ids) != 1 {
+				return fmt.Errorf("direct email lookup ids=%d truncated=%t want one id", len(ids), truncated)
+			}
+			if got, ok := bson.Raw(raw).Lookup("email").StringValueOK(); !ok || got != email {
+				return fmt.Errorf("direct email lookup returned email=%v ok=%t want %s", got, ok, email)
+			}
+		}
+		return nil
+	})
+}
+
+func runDirectTreeDBRangePhase(ctx context.Context, cfg config, collection *collections.Collection) (phaseResult, error) {
+	name := rangePhaseName(cfg)
+	return measurePhase(name, cfg.RangeReads, func(sample func(time.Duration)) error {
+		for i := 0; i < cfg.RangeReads; i++ {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			minAge := int64(20 + (i % 40))
+			begin := time.Now()
+			err := runDirectTreeDBRangeQuery(cfg, collection, minAge)
+			sample(time.Since(begin))
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func runDirectTreeDBRangeQuery(cfg config, collection *collections.Collection, minAge int64) error {
+	if cfg.RangeIndex {
+		ids, _, err := collection.FindByIndexRange("age_1", collections.IndexRangeOptions{
+			Lower: collections.IndexRangeBound{Value: minAge, Inclusive: true},
+			Upper: collections.IndexRangeBound{Unbounded: true},
+			Limit: 10,
+		})
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			raw, err := collection.Get(id)
+			if err != nil {
+				return err
+			}
+			if age, ok := directBSONInt64Field(raw, "age"); !ok || age < minAge {
+				return fmt.Errorf("direct indexed range returned age=%v ok=%t below %d", age, ok, minAge)
+			}
+		}
+		return nil
+	}
+	matches := 0
+	_, err := collection.ScanDocumentsFunc(cfg.Documents, func(record collections.DocumentRecord) (bool, error) {
+		age, ok := directBSONInt64Field(record.Document, "age")
+		if !ok {
+			return false, errors.New("direct range scan document missing int64 age")
+		}
+		if age >= minAge {
+			matches++
+			if matches >= 10 {
+				return false, nil
+			}
+		}
+		return true, nil
+	})
+	return err
+}
+
+func runDirectTreeDBUpdatePhase(ctx context.Context, cfg config, collection *collections.Collection, updatedCityValues []string) (phaseResult, error) {
+	return measurePhase("id_update_set", cfg.Updates, func(sample func(time.Duration)) error {
+		for i := 0; i < cfg.Updates; i++ {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			documentOrdinal := benchmarkDocumentOrdinal(i, 31, cfg.Documents)
+			if err := runDirectTreeDBUpdateOperation(collection, cfg, i, documentOrdinal, false, updatedCityValues, sample); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func runDirectTreeDBConcurrentIDFindPhase(ctx context.Context, cfg config, collection *collections.Collection, readers int, phaseName string) (phaseResult, error) {
+	return measurePhase(phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
+		return runConcurrentOperations(ctx, readers, cfg.ConcurrentReads, func(op int) error {
+			id := benchmarkID(benchmarkDocumentOrdinal(op, 17, cfg.Documents))
+			begin := time.Now()
+			raw, err := collection.Get([]byte(id))
+			sample(time.Since(begin))
+			if err != nil {
+				return err
+			}
+			if got, ok := bson.Raw(raw).Lookup("_id").StringValueOK(); !ok || got != id {
+				return fmt.Errorf("direct concurrent id lookup returned _id=%v ok=%t want %s", got, ok, id)
+			}
+			return nil
+		})
+	})
+}
+
+func runDirectTreeDBConcurrentUpdatePhase(ctx context.Context, cfg config, collection *collections.Collection, phaseName string, updatedCityValues []string) (phaseResult, error) {
+	return measurePhase(phaseName, cfg.ConcurrentWrites, func(sample func(time.Duration)) error {
+		return runConcurrentOperations(ctx, cfg.ConcurrentWriters, cfg.ConcurrentWrites, func(op int) error {
+			documentOrdinal := benchmarkDocumentOrdinal(op, 37, cfg.Documents)
+			return runDirectTreeDBUpdateOperation(collection, cfg, op, documentOrdinal, true, updatedCityValues, sample)
+		})
+	})
+}
+
+func runDirectTreeDBUpdateOperation(
+	collection *collections.Collection,
+	cfg config,
+	operation int,
+	documentOrdinal int,
+	concurrent bool,
+	updatedCityValues []string,
+	sample func(time.Duration),
+) error {
+	id := benchmarkID(documentOrdinal)
+	updateRaw, err := bson.Marshal(benchmarkSetUpdate(benchmarkSetUpdateParams{
+		Operation:          operation,
+		DocumentOrdinal:    documentOrdinal,
+		DocumentCount:      cfg.Documents,
+		ConcurrentPhase:    concurrent,
+		UpdateIndexedField: cfg.UpdateIndexedField,
+		UpdatedCityValues:  updatedCityValues,
+	}))
+	if err != nil {
+		return err
+	}
+	begin := time.Now()
+	matched, _, err := collection.Update([]byte(id), func(stored []byte) ([]byte, bool, error) {
+		updated, changed, err := applyDirectBSONSetUpdate(bson.Raw(stored), bson.Raw(updateRaw))
+		if err != nil {
+			return nil, false, err
+		}
+		if got, ok := updated.Lookup("_id").StringValueOK(); !ok || got != id {
+			return nil, false, fmt.Errorf("direct update changed _id to %v ok=%t want %s", got, ok, id)
+		}
+		if !changed {
+			return nil, false, nil
+		}
+		return []byte(updated), true, nil
+	})
+	sample(time.Since(begin))
+	if err != nil {
+		return err
+	}
+	if !matched {
+		return fmt.Errorf("direct update missed document %s", id)
+	}
+	return nil
+}
+
+func runDirectTreeDBDeletePhase(ctx context.Context, cfg config, collection *collections.Collection) (phaseResult, error) {
+	return measurePhase("id_delete_one", cfg.Deletes, func(sample func(time.Duration)) error {
+		for i := 0; i < cfg.Deletes; i++ {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			id := benchmarkID(cfg.Documents - 1 - i)
+			begin := time.Now()
+			err := collection.Delete([]byte(id))
+			sample(time.Since(begin))
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func directBSONInt64Field(raw []byte, key string) (int64, bool) {
+	value := bson.Raw(raw).Lookup(key)
+	if value.Type == bson.TypeInt64 {
+		return value.Int64OK()
+	}
+	if value.Type == bson.TypeInt32 {
+		v, ok := value.Int32OK()
+		return int64(v), ok
+	}
+	return 0, false
+}
+
+func applyDirectBSONSetUpdate(doc bson.Raw, update bson.Raw) (bson.Raw, bool, error) {
+	updateElements, err := update.Elements()
+	if err != nil {
+		return nil, false, err
+	}
+	if len(updateElements) != 1 {
+		return nil, false, errors.New("direct TreeDB update currently supports exactly one $set operator")
+	}
+	operator, err := updateElements[0].KeyErr()
+	if err != nil {
+		return nil, false, err
+	}
+	if operator != "$set" {
+		return nil, false, errors.New("direct TreeDB update currently supports $set only")
+	}
+	setDoc, ok := updateElements[0].Value().DocumentOK()
+	if !ok {
+		return nil, false, errors.New("direct TreeDB $set value must be a document")
+	}
+	sets, setOrder, err := parseDirectBSONSetDocument(setDoc)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(sets) == 0 {
+		return doc, false, nil
+	}
+
+	elements, err := doc.Elements()
+	if err != nil {
+		return nil, false, err
+	}
+	out := make(bson.D, 0, len(elements)+len(sets))
+	used := make(map[string]struct{}, len(sets))
+	changed := false
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return nil, false, err
+		}
+		value := elem.Value()
+		if replacement, ok := sets[key]; ok {
+			if !replacement.Equal(value) {
+				changed = true
+			}
+			value = replacement
+			used[key] = struct{}{}
+		}
+		out = append(out, bson.E{Key: key, Value: value})
+	}
+	for _, key := range setOrder {
+		if _, ok := used[key]; ok {
+			continue
+		}
+		out = append(out, bson.E{Key: key, Value: sets[key]})
+		changed = true
+	}
+	raw, err := bson.Marshal(out)
+	if err != nil {
+		return nil, false, err
+	}
+	return bson.Raw(raw), changed, nil
+}
+
+func parseDirectBSONSetDocument(setDoc bson.Raw) (map[string]bson.RawValue, []string, error) {
+	elements, err := setDoc.Elements()
+	if err != nil {
+		return nil, nil, err
+	}
+	sets := make(map[string]bson.RawValue, len(elements))
+	order := make([]string, 0, len(elements))
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return nil, nil, err
+		}
+		if key == "_id" {
+			return nil, nil, errors.New("direct TreeDB update cannot modify _id")
+		}
+		if _, exists := sets[key]; !exists {
+			order = append(order, key)
+		}
+		sets[key] = elem.Value()
+	}
+	return sets, order, nil
 }
 
 func measureProfiledPhase(profiler *profileRecorder, name string, operations int, run func(func(time.Duration)) error) (phaseResult, error) {

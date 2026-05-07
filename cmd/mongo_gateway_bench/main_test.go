@@ -643,6 +643,13 @@ func TestParseConfigValidation(t *testing.T) {
 	if unackCfg.ClientMode != clientModeDriverUnack {
 		t.Fatalf("ClientMode=%q want %q", unackCfg.ClientMode, clientModeDriverUnack)
 	}
+	directCfg, err := parseConfig([]string{"-target", "treedb", "-client-mode", "direct", "-treedb-document-format", "bson"})
+	if err != nil {
+		t.Fatalf("parse direct config: %v", err)
+	}
+	if directCfg.ClientMode != clientModeDirect {
+		t.Fatalf("ClientMode=%q want %q", directCfg.ClientMode, clientModeDirect)
+	}
 	oneIndexCfg, err := parseConfig([]string{"-secondary-indexes", "1"})
 	if err != nil {
 		t.Fatalf("parse secondary-indexes=1 config: %v", err)
@@ -665,6 +672,12 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 	if _, err := parseConfig([]string{"-target", "mongo", "-client-mode", "raw-wire-tcp"}); err == nil {
 		t.Fatal("raw-wire-tcp client-mode accepted for mongo target")
+	}
+	if _, err := parseConfig([]string{"-target", "mongo", "-client-mode", "direct"}); err == nil {
+		t.Fatal("direct client-mode accepted for mongo target")
+	}
+	if _, err := parseConfig([]string{"-target", "treedb", "-client-mode", "direct", "-treedb-document-format", "json"}); err == nil {
+		t.Fatal("direct client-mode accepted for non-BSON TreeDB document format")
 	}
 	if _, err := parseConfig([]string{"-timeout", "0"}); err != nil {
 		t.Fatalf("timeout 0 should disable deadline: %v", err)
@@ -1228,11 +1241,87 @@ func TestTreeDBClientModeSmoke(t *testing.T) {
 	if testing.Short() {
 		t.Skip("client mode smoke benchmark skipped in short mode")
 	}
-	for _, mode := range []string{clientModeDriver, clientModeDriverCommand, clientModeDriverCommandRaw, clientModeDriverUnack, clientModeRawWire, clientModeRawWireTCP} {
+	for _, mode := range []string{clientModeDriver, clientModeDriverCommand, clientModeDriverCommandRaw, clientModeDriverUnack, clientModeDirect, clientModeRawWire, clientModeRawWireTCP} {
 		t.Run(mode, func(t *testing.T) {
 			opsPerSecond := runTreeDBClientModeSmoke(t, mode)
 			t.Logf("%s load_insert_many ops/sec=%.1f", mode, opsPerSecond)
 		})
+	}
+}
+
+func TestTreeDBDirectBenchmarkSmoke(t *testing.T) {
+	if testing.Short() {
+		t.Skip("direct benchmark smoke skipped in short mode")
+	}
+	cfg, err := parseConfig([]string{
+		"-target", "treedb",
+		"-client-mode", "direct",
+		"-treedb-document-format", "bson",
+		"-documents", "96",
+		"-batch-size", "24",
+		"-insert-producers", "2",
+		"-reads", "12",
+		"-range-reads", "6",
+		"-updates", "6",
+		"-deletes", "2",
+		"-secondary-indexes", "2",
+		"-range-index",
+		"-concurrent-reader-sweep", "1,2",
+		"-concurrent-reads", "12",
+		"-concurrent-writers", "2",
+		"-concurrent-writes", "8",
+		"-update-indexed-field",
+		"-prebuild-documents",
+		"-treedb-maintenance", treeDBMaintenanceNone,
+		"-timeout", "0",
+		"-format", "json",
+	})
+	if err != nil {
+		t.Fatalf("parse direct smoke config: %v", err)
+	}
+	target, err := openTarget(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("open direct target: %v", err)
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := closeBenchTarget(cleanupCtx, target); err != nil {
+			t.Errorf("cleanup direct target: %v", err)
+		}
+	}()
+	result, err := runBenchmark(context.Background(), cfg, target, nil)
+	if err != nil {
+		t.Fatalf("run direct benchmark: %v", err)
+	}
+	if result.ClientMode != clientModeDirect {
+		t.Fatalf("client mode=%q want %q", result.ClientMode, clientModeDirect)
+	}
+	phases := make(map[string]phaseResult, len(result.Phases))
+	for _, phase := range result.Phases {
+		phases[phase.Name] = phase
+	}
+	for _, name := range []string{
+		"load_insert_many",
+		"id_find_one",
+		"email_find_one",
+		"age_range_indexed_limit_10",
+		"id_update_set",
+		"concurrent_id_find_one_r1",
+		"concurrent_id_find_one_r2",
+		"concurrent_id_update_set_w2",
+		"id_delete_one",
+	} {
+		phase, ok := phases[name]
+		if !ok {
+			t.Fatalf("phase %q missing from direct result: %+v", name, result.Phases)
+		}
+		if phase.OpsPerSecond <= 0 {
+			t.Fatalf("phase %q ops/sec=%f", name, phase.OpsPerSecond)
+		}
+		if phase.SampledNsPerOp <= 0 {
+			t.Fatalf("phase %q sampled ns/op=%f", name, phase.SampledNsPerOp)
+		}
 	}
 }
 
@@ -1764,6 +1853,58 @@ func TestBenchmarkSetUpdateCanExerciseIndexedField(t *testing.T) {
 		if first, revisited := benchmarkUpdatedCity(op, documentOrdinal, documents), benchmarkUpdatedCity(op+documents, documentOrdinal, documents); first == revisited {
 			t.Fatalf("benchmarkUpdatedCity repeated value %q when revisiting document %d at op+documents for op=%d documents=%d", first, documentOrdinal, op, documents)
 		}
+	}
+}
+
+func TestApplyDirectBSONSetUpdate(t *testing.T) {
+	docRaw, err := bson.Marshal(bson.D{
+		{Key: "_id", Value: "user-000001"},
+		{Key: "name", Value: "Ada"},
+		{Key: "age", Value: int64(37)},
+	})
+	if err != nil {
+		t.Fatalf("marshal doc: %v", err)
+	}
+	updateRaw, err := bson.Marshal(bson.D{{Key: "$set", Value: bson.D{
+		{Key: "name", Value: "Grace"},
+		{Key: "city", Value: "honolulu"},
+	}}})
+	if err != nil {
+		t.Fatalf("marshal update: %v", err)
+	}
+	updated, changed, err := applyDirectBSONSetUpdate(bson.Raw(docRaw), bson.Raw(updateRaw))
+	if err != nil {
+		t.Fatalf("apply update: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed=false want true")
+	}
+	if got, ok := updated.Lookup("_id").StringValueOK(); !ok || got != "user-000001" {
+		t.Fatalf("_id=%q ok=%t want user-000001", got, ok)
+	}
+	if got, ok := updated.Lookup("name").StringValueOK(); !ok || got != "Grace" {
+		t.Fatalf("name=%q ok=%t want Grace", got, ok)
+	}
+	if got, ok := updated.Lookup("city").StringValueOK(); !ok || got != "honolulu" {
+		t.Fatalf("city=%q ok=%t want honolulu", got, ok)
+	}
+	updatedAgain, changed, err := applyDirectBSONSetUpdate(updated, bson.Raw(updateRaw))
+	if err != nil {
+		t.Fatalf("apply unchanged update: %v", err)
+	}
+	if changed {
+		t.Fatal("changed=true want false for idempotent $set")
+	}
+	if !bytes.Equal(updated, updatedAgain) {
+		t.Fatalf("unchanged update bytes changed:\nfirst=%v\nagain=%v", updated, updatedAgain)
+	}
+
+	idUpdateRaw, err := bson.Marshal(bson.D{{Key: "$set", Value: bson.D{{Key: "_id", Value: "other"}}}})
+	if err != nil {
+		t.Fatalf("marshal _id update: %v", err)
+	}
+	if _, _, err := applyDirectBSONSetUpdate(updated, bson.Raw(idUpdateRaw)); err == nil {
+		t.Fatal("_id update accepted")
 	}
 }
 

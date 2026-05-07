@@ -71,10 +71,12 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 	writeFile(t, filepath.Join(root, "mongo_gateway_reader_writer_scaling_1m", "indexes_4", "summary.tsv"), summary4)
 	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "matrix.tsv"), "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
 		"treedb\ttreedb_bson_driver\t100\t0\traw/treedb.json\t5000000000\n"+
+		"treedb\ttreedb_bson_direct\t100\t0\traw/treedb_direct.json\t2800\n"+
 		"treedb\ttreedb_bson_raw_wire_tcp\t100\t0\traw/treedb_raw_wire_tcp.json\t3000\n"+
 		"treedb\ttreedb_bson_raw_wire\t100\t0\traw/treedb_raw_wire.json\t2500\n"+
 		"mongo\tmongo_driver\t100\t0\traw/mongo.json\t5000\n")
 	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "raw", "treedb.json"), `{"target":"treedb","documents":100,"secondary_indexes":0,"phases":[{"name":"load_insert_many","ops_per_sec":1000}]}`)
+	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "raw", "treedb_direct.json"), `{"target":"treedb","documents":100,"secondary_indexes":0,"client_mode":"direct","phases":[{"name":"load_insert_many","ops_per_sec":1700}]}`)
 	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "raw", "treedb_raw_wire_tcp.json"), `{"target":"treedb","documents":100,"secondary_indexes":0,"phases":[{"name":"load_insert_many","ops_per_sec":1500}]}`)
 	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "raw", "treedb_raw_wire.json"), `{"target":"treedb","documents":100,"secondary_indexes":0,"phases":[{"name":"load_insert_many","ops_per_sec":1800}]}`)
 	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "raw", "mongo.json"), `{"target":"mongo","documents":100,"secondary_indexes":0,"phases":[{"name":"load_insert_many","ops_per_sec":500}]}`)
@@ -110,10 +112,12 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"TreeDB JSON",
 		"SQLite native VACUUM: 20",
 		"Client modes marked with <strong>*</strong>",
+		"BSON Direct</text><text",
 		"BSON Raw</text><text",
 		"Wire TCP *</text>",
 		"Wire *</text>",
-		"* Raw-wire modes:",
+		"* TreeDB-only modes:",
+		"calls the BSON collection API directly",
 		"bypassing the MongoDB Go driver",
 		"same raw command/gateway path in process",
 		"one centered TreeDB bar",
@@ -124,6 +128,7 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 	}
 	for _, unwanted := range []string{
 		"TreeDB Raw Wire Ceiling Modes",
+		"BSON direct MongoDB",
 		"BSON raw_wire_tcp MongoDB",
 		"BSON raw_wire MongoDB",
 	} {
