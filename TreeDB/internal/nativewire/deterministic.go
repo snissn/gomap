@@ -339,7 +339,17 @@ func validateDeterministicOpaquePayload(name string, raw []byte) error {
 }
 
 func validateDeterministicName(name string, raw []byte) error {
-	value := string(raw)
+	length, n, err := readUvarint(raw)
+	if err != nil {
+		return err
+	}
+	if length > uint64(len(raw)-n) {
+		return protocolError(ErrMalformedFrame, "%s length exceeds remaining payload", name)
+	}
+	value := string(raw[n : n+int(length)])
+	if n+int(length) != len(raw) {
+		return protocolError(ErrMalformedFrame, "%s has trailing bytes", name)
+	}
 	if value == "" {
 		return protocolError(ErrInvalidCommand, "%s cannot be empty", name)
 	}

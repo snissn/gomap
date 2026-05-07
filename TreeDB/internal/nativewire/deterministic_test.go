@@ -3,6 +3,7 @@ package nativewire
 import (
 	"bytes"
 	"encoding/hex"
+	"strings"
 	"testing"
 )
 
@@ -310,7 +311,7 @@ func TestDeterministicEntryRejectsAmbiguousCommandPayloads(t *testing.T) {
 		},
 		{
 			name:     "invalid_index_name",
-			sections: replaceSection(deterministicEntryFixtureCases()[2].sections, SectionIndexName, []byte("bad/name")),
+			sections: replaceSection(deterministicEntryFixtureCases()[2].sections, SectionIndexName, appendDeterministicString(nil, "bad/name")),
 			code:     ErrInvalidCommand,
 		},
 		{
@@ -333,6 +334,19 @@ func TestDeterministicEntryRejectsAmbiguousCommandPayloads(t *testing.T) {
 				t.Fatalf("AppendDeterministicEntry err=%v code=%d want %d", err, codeOf(err), tc.code)
 			}
 		})
+	}
+}
+
+func TestDeterministicEntryAcceptsMaxLengthEncodedIndexName(t *testing.T) {
+	registry := MustV1Registry()
+	sections := deterministicEntryFixtureCases()[2].sections
+	sections = replaceSection(sections, SectionIndexName, appendDeterministicString(nil, strings.Repeat("x", 128)))
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); err != nil {
+		t.Fatalf("AppendDeterministicEntry: %v", err)
 	}
 }
 
@@ -552,6 +566,11 @@ func replaceSection(sections []Section, id SectionID, raw []byte) []Section {
 	return append(out, Section{ID: id, Bytes: raw})
 }
 
+func appendDeterministicString(dst []byte, value string) []byte {
+	dst = appendUvarint(dst, uint64(len(value)))
+	return append(dst, value...)
+}
+
 type deterministicEntryFixtureCase struct {
 	name      string
 	commandID CommandID
@@ -592,7 +611,7 @@ func deterministicEntryFixtureCases() []deterministicEntryFixtureCase {
 				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandDropIndex, Version: 1})},
 				{ID: SectionIdempotencyKey, Bytes: []byte("client-a:drop-index:email")},
 				{ID: SectionCollectionRef, Bytes: []byte("users")},
-				{ID: SectionIndexName, Bytes: []byte("email_1")},
+				{ID: SectionIndexName, Bytes: appendDeterministicString(nil, "email_1")},
 				{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
 			},
 		},
