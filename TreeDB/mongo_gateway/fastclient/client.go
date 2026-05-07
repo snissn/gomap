@@ -1,6 +1,7 @@
 package fastclient
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -18,13 +19,17 @@ import (
 
 type Client struct {
 	conn          net.Conn
+	rd            *bufio.Reader
 	maxMessageLen int32
 	nextRequestID atomic.Int32
 	readBuf       []byte
 	mu            sync.Mutex
 }
 
-const maxRetainedReadBuffer = 1 << 20
+const (
+	defaultReadBufferSize = 32 * 1024
+	maxRetainedReadBuffer = 1 << 20
+)
 
 func Connect(ctx context.Context, address string) (*Client, error) {
 	var dialer net.Dialer
@@ -36,7 +41,11 @@ func Connect(ctx context.Context, address string) (*Client, error) {
 }
 
 func New(conn net.Conn) *Client {
-	return &Client{conn: conn, maxMessageLen: wire.DefaultMaxMessageLength}
+	c := &Client{conn: conn, maxMessageLen: wire.DefaultMaxMessageLength}
+	if conn != nil {
+		c.rd = bufio.NewReaderSize(conn, defaultReadBufferSize)
+	}
+	return c
 }
 
 func (c *Client) Close() error {
@@ -223,7 +232,11 @@ func (c *Client) readMessageLocked(retain bool) (wire.Header, []byte, error) {
 	if retain {
 		dst = c.readBuf
 	}
-	header, body, err := wire.ReadMessageInto(c.conn, dst, c.maxMessageLen)
+	reader := io.Reader(c.conn)
+	if c.rd != nil {
+		reader = c.rd
+	}
+	header, body, err := wire.ReadMessageInto(reader, dst, c.maxMessageLen)
 	if err != nil {
 		return wire.Header{}, nil, err
 	}

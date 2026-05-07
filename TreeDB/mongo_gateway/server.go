@@ -1,6 +1,7 @@
 package mongogateway
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -30,6 +31,7 @@ const (
 	defaultUpdateCoalescingIdleTTL = 30 * time.Second
 	maxRetainedWireReadBuffer      = 1 << 20
 	maxRetainedWireWriteBuffer     = 1 << 20
+	defaultWireReadBufferSize      = 32 * 1024
 )
 
 var errServerClosed = errors.New("mongo gateway server is closed")
@@ -174,6 +176,10 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 	defer conn.Close()
 	owner := s.nextConnectionID.Add(1)
 	defer s.killCursorsForOwner(owner)
+	rw := bufferedConnReadWriter{
+		reader: bufio.NewReaderSize(conn, defaultWireReadBufferSize),
+		writer: conn,
+	}
 
 	done := make(chan struct{})
 	defer close(done)
@@ -195,7 +201,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		}
 
 		var err error
-		readBuf, writeBuf, err = s.serveOneWithOwner(conn, owner, readBuf, writeBuf)
+		readBuf, writeBuf, err = s.serveOneWithOwner(rw, owner, readBuf, writeBuf)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
@@ -206,6 +212,19 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 			return err
 		}
 	}
+}
+
+type bufferedConnReadWriter struct {
+	reader *bufio.Reader
+	writer io.Writer
+}
+
+func (rw bufferedConnReadWriter) Read(p []byte) (int, error) {
+	return rw.reader.Read(p)
+}
+
+func (rw bufferedConnReadWriter) Write(p []byte) (int, error) {
+	return rw.writer.Write(p)
 }
 
 // ServeOne serves a single MongoDB wire message with a one-shot cursor owner.
