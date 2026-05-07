@@ -95,23 +95,24 @@ and now must mark their synthetic connection as already greeted. After fixing
 that, the run exposed an avoidable hot-path allocation in native-wire
 duplicate-ID validation. The R2e closeout replaces the small/normal batch path
 with a stack-backed bucket table using FNV-1a hashes and falls back to a map only
-for batches above 512 IDs.
+for batches above 512 IDs. The same pass moves hot request/frame counter updates
+onto direct typed atomics instead of the generic string-key counter dispatcher.
 
 Representative results after the fix:
 
 | Benchmark | time/op | B/op | allocs/op |
 | --- | ---: | ---: | ---: |
-| `InsertBatch/direct_collection` | 39.46 us +/- 1% | 6.433 KiB | 50 |
-| `InsertBatch/native_wire_inproc_no_result` | 44.49 us +/- 2% | 6.459 KiB | 50 |
-| `InsertBatch/native_wire_direct_dispatch_no_result` | 45.07 us +/- 1% | 6.477 KiB | 50 |
-| `RejectDuplicateIDs/32_ids` | 265.5 ns +/- 2% | 0 B | 0 |
-| `RejectDuplicateIDs/128_ids` | 906.2 ns +/- 2% | 0 B | 0 |
-| `RejectDuplicateIDs/512_ids` | 4.077 us +/- 2% | 0 B | 0 |
+| `InsertBatch/direct_collection` | 39.67 us +/- 2% | 6.419 KiB | 50 |
+| `InsertBatch/native_wire_inproc_no_result` | 44.38 us +/- 3% | 6.458 KiB | 50 |
+| `InsertBatch/native_wire_direct_dispatch_no_result` | 44.79 us +/- 1% | 6.467 KiB | 50 |
+| `RejectDuplicateIDs/32_ids` | 265.2 ns +/- 2% | 0 B | 0 |
+| `RejectDuplicateIDs/128_ids` | 915.5 ns +/- 1% | 0 B | 0 |
+| `RejectDuplicateIDs/512_ids` | 4.074 us +/- 1% | 0 B | 0 |
 
 The allocation regression before this fix was visible in the same benchmark
 shape: ack-only native insert used 85 allocs/op and about 8.75-8.79 KiB/op.
 After the fix, ack-only native insert returns to direct-collection allocation
-parity at 50 allocs/op and roughly 6.44 KiB/op. A focused CPU profile of
+parity at 50 allocs/op and roughly 6.46 KiB/op. A focused CPU profile of
 `native_wire_direct_dispatch_no_result` showed remaining protocol work as
 request encoding, fast request decode, and duplicate-ID validation in the
 sub-microsecond class per operation; collection insert/publish remains the

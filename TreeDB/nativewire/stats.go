@@ -56,6 +56,52 @@ func (c *counters) inc(key string) {
 	c.add(key, 1)
 }
 
+func (c *counters) incFramesIn() {
+	c.framesIn.Add(1)
+}
+
+func (c *counters) incFramesOut() {
+	c.framesOut.Add(1)
+}
+
+func (c *counters) addBytesIn(delta uint64) {
+	if delta != 0 {
+		c.bytesIn.Add(delta)
+	}
+}
+
+func (c *counters) addBytesOut(delta uint64) {
+	if delta != 0 {
+		c.bytesOut.Add(delta)
+	}
+}
+
+func (c *counters) incRequestsStarted() {
+	c.requestsStarted.Add(1)
+}
+
+func (c *counters) incRequestsCompleted() {
+	c.requestsCompleted.Add(1)
+}
+
+func (c *counters) incRequestsFailed() {
+	c.requestsFailed.Add(1)
+}
+
+func (c *counters) incRequestsCanceled() {
+	c.requestsCanceled.Add(1)
+}
+
+func (c *counters) addDispatchNanos(delta uint64) {
+	if delta != 0 {
+		c.dispatchNanos.Add(delta)
+	}
+}
+
+func (c *counters) incErrorsTotal() {
+	c.errorsTotal.Add(1)
+}
+
 func (c *counters) addHot(key string, delta uint64) bool {
 	switch key {
 	case "connections.opened_total":
