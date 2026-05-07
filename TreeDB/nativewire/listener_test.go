@@ -45,8 +45,12 @@ func TestServeTCPAndDialContext(t *testing.T) {
 
 func TestServeRejectsNilListener(t *testing.T) {
 	server := NewServer(ServerOptions{})
-	if err := server.Serve(context.Background(), nil); !errors.Is(err, ErrNilListener) {
+	err := server.Serve(context.Background(), nil)
+	if !errors.Is(err, ErrNilListener) {
 		t.Fatalf("Serve nil listener err=%v want ErrNilListener", err)
+	}
+	if !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Serve nil listener err=%v want net.ErrClosed-compatible", err)
 	}
 }
 
