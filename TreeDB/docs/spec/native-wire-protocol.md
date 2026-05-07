@@ -96,6 +96,19 @@ future authenticated transport wrapper. The frame format does not require HTTP.
 All fixed-width integers are little-endian. Variable-length integers use unsigned
 base-128 varints.
 
+Primitive payload encodings:
+
+- `uvarint`: unsigned base-128, least-significant 7-bit group first, high bit set
+  on every non-final byte. Senders MUST use the shortest encoding; receivers
+  MUST reject encodings that overflow `uint64` or exceed 10 bytes.
+- `varint`: signed `int64` encoded by zig-zag mapping to `uvarint`
+  (`n >= 0 => n*2`, `n < 0 => (-n*2)-1`).
+- `bool`: one byte, `0=false`, `1=true`; all other values are malformed.
+- `string`: `uvarint` byte length followed by UTF-8 bytes. Command-specific
+  validators may impose a narrower grammar, such as collection or index names.
+- `bytes`: `uvarint` byte length followed by exactly that many opaque bytes,
+  except where a containing structure already supplies an explicit length.
+
 ```text
 offset  size  field
 0       4     magic = "TDB1"
@@ -252,9 +265,11 @@ instead of allocating one object per element.
 
 Byte vectors do not encode nulls. Optional or missing results MUST use a
 separate presence bitmap or status vector whose item count exactly matches the
-byte-vector count required by the command. Decoders MUST reject length
-overflows, truncated payloads, extra bytes, and byte vectors whose declared
-lengths do not sum to the remaining payload size.
+byte-vector count required by the command. After a decoder reads `count` and
+then exactly `count` length varints, the remaining bytes in that same
+byte-vector payload are `payload_bytes`. Decoders MUST reject length overflows,
+truncated payloads, extra bytes, and any byte vector where `sum(lengths) !=
+len(payload_bytes)`.
 
 ### 5.6 Response Metadata
 

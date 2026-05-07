@@ -19,7 +19,7 @@ When behavior or format changes, update this spec and the test matrix in `TreeDB
 
 When native-wire protocol IDs, command schemas, feature gates, or deterministic
 entry formats change, update the native-wire spec, implementation guidelines,
-roadmap, schema registry or drift tests, golden vectors, and verification matrix
+roadmap, schema registry or drift tests, golden fixtures, and verification matrix
 in the same change.
 
 ## Scope

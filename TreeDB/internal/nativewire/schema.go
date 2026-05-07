@@ -360,7 +360,8 @@ func v1CommandSchemas() []CommandSchema {
 			Name:    "cursor_next",
 			Kind:    CommandKindRead,
 			Sections: []SectionRule{
-				{ID: SectionCollectionRef, Name: "cursor_limits", Required: true},
+				{ID: SectionCursorRef, Name: "cursor_ref", Required: true},
+				{ID: SectionCursorLimits, Name: "cursor_limits", Required: true},
 			},
 		},
 		{
@@ -369,7 +370,7 @@ func v1CommandSchemas() []CommandSchema {
 			Name:    "cursor_close",
 			Kind:    CommandKindRead,
 			Sections: []SectionRule{
-				{ID: SectionCollectionRef, Name: "cursor_ref", Required: true},
+				{ID: SectionCursorRef, Name: "cursor_ref", Required: true},
 			},
 		},
 		{
