@@ -3099,6 +3099,54 @@ func runRawWireTCPPipelineRangeBatches(ctx context.Context, cfg config, client *
 	return nil
 }
 
+func runRawWireTCPPipelineRangeStridedBatches(ctx context.Context, cfg config, client *rawWireTCPPipelineClient, start, stride, total int, minAges []int64, responseTo []int32, sample func(time.Duration)) error {
+	if start < 0 || stride <= 0 || total <= 0 || start >= total {
+		return nil
+	}
+	depth := cfg.RawWireTCPPipelineDepth
+	if depth <= 0 {
+		return errors.New("raw-wire-tcp-pipeline-depth must be > 0")
+	}
+	if len(minAges) < depth {
+		minAges = make([]int64, depth)
+	}
+	if len(responseTo) < depth {
+		responseTo = make([]int32, depth)
+	}
+	for op := start; op < total; {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		begin := time.Now()
+		batch := 0
+		for batch < depth && op < total {
+			minAge := rangeReadMinAge(op)
+			id, err := client.AppendFind(cfg.Database, cfg.Collection, minAge)
+			if err != nil {
+				return err
+			}
+			minAges[batch] = minAge
+			responseTo[batch] = id
+			batch++
+			op += stride
+		}
+		if err := client.Flush(ctx); err != nil {
+			return err
+		}
+		for i := 0; i < batch; i++ {
+			if err := client.ReadFind(ctx, responseTo[i], minAges[i]); err != nil {
+				return err
+			}
+		}
+		elapsed := time.Since(begin)
+		perOp := elapsed / time.Duration(batch)
+		for i := 0; i < batch; i++ {
+			sample(perOp)
+		}
+	}
+	return nil
+}
+
 type rawWireTCPPipelineClient struct {
 	conn        net.Conn
 	rd          *bufio.Reader
@@ -3299,7 +3347,6 @@ func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarge
 			stopCancelWatch := watchRawWireTCPPipelineClients(runCtx, clients...)
 			defer stopCancelWatch()
 
-			var next atomic.Int64
 			var wg sync.WaitGroup
 			var errOnce sync.Once
 			var firstErr error
@@ -3318,22 +3365,8 @@ func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarge
 					defer wg.Done()
 					minAges := make([]int64, cfg.RawWireTCPPipelineDepth)
 					responseTo := make([]int32, cfg.RawWireTCPPipelineDepth)
-					for {
-						if err := runCtx.Err(); err != nil {
-							return
-						}
-						start := int(next.Add(int64(cfg.RawWireTCPPipelineDepth)) - int64(cfg.RawWireTCPPipelineDepth))
-						if start >= cfg.ConcurrentRangeReads {
-							return
-						}
-						count := cfg.RawWireTCPPipelineDepth
-						if remaining := cfg.ConcurrentRangeReads - start; remaining < count {
-							count = remaining
-						}
-						if err := runRawWireTCPPipelineRangeBatches(runCtx, cfg, clients[worker], start, count, minAges, responseTo, sample); err != nil {
-							recordErr(err)
-							return
-						}
+					if err := runRawWireTCPPipelineRangeStridedBatches(runCtx, cfg, clients[worker], worker, readers, cfg.ConcurrentRangeReads, minAges, responseTo, sample); err != nil {
+						recordErr(err)
 					}
 				}(worker)
 			}
