@@ -249,7 +249,7 @@ Use a client-mode matrix when measuring driver overhead and gateway ceiling:
 
 ```sh
 TREEDB_DOCUMENT_FORMATS="bson" \
-TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire" \
+TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire" \
 MONGO_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack" \
 BATCH_SIZE=5000 \
 INSERT_PRODUCERS=8 \
@@ -291,6 +291,9 @@ Interpret client modes as separate questions:
   format. It emits the same phase names as the Mongo gateway benchmark while
   bypassing the MongoDB driver, sockets, and Mongo gateway command handling.
 - `raw-wire-tcp`: TreeDB-only raw OP_MSG load over loopback TCP.
+- `raw-wire-tcp-pipeline`: TreeDB-only raw TCP load plus pipelined age range
+  `find` requests; use it to measure how much single-connection request/response
+  latency can be hidden without the official driver.
 - `raw-wire`: TreeDB-only in-process raw OP_MSG load.
 
 Use `driver` for user-visible Mongo compatibility. Use `driver-find-raw` to

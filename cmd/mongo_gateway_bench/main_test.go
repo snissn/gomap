@@ -638,6 +638,13 @@ func TestParseConfigValidation(t *testing.T) {
 	if rawWireTCPCfg.ClientMode != clientModeRawWireTCP {
 		t.Fatalf("ClientMode=%q want %q", rawWireTCPCfg.ClientMode, clientModeRawWireTCP)
 	}
+	rawWireTCPPipelineCfg, err := parseConfig([]string{"-target", "treedb", "-client-mode", "raw-wire-tcp-pipeline", "-raw-wire-tcp-pipeline-depth", "16"})
+	if err != nil {
+		t.Fatalf("parse raw-wire-tcp-pipeline config: %v", err)
+	}
+	if rawWireTCPPipelineCfg.ClientMode != clientModeRawWireTCPPipeline || rawWireTCPPipelineCfg.RawWireTCPPipelineDepth != 16 {
+		t.Fatalf("raw-wire-tcp-pipeline config=%+v", rawWireTCPPipelineCfg)
+	}
 	commandCfg, err := parseConfig([]string{"-target", "mongo", "-client-mode", "driver-command"})
 	if err != nil {
 		t.Fatalf("parse driver-command config: %v", err)
@@ -701,8 +708,14 @@ func TestParseConfigValidation(t *testing.T) {
 	if _, err := parseConfig([]string{"-target", "mongo", "-client-mode", "raw-wire-tcp"}); err == nil {
 		t.Fatal("raw-wire-tcp client-mode accepted for mongo target")
 	}
+	if _, err := parseConfig([]string{"-target", "mongo", "-client-mode", "raw-wire-tcp-pipeline"}); err == nil {
+		t.Fatal("raw-wire-tcp-pipeline client-mode accepted for mongo target")
+	}
 	if _, err := parseConfig([]string{"-target", "mongo", "-client-mode", "direct"}); err == nil {
 		t.Fatal("direct client-mode accepted for mongo target")
+	}
+	if _, err := parseConfig([]string{"-raw-wire-tcp-pipeline-depth", "0"}); err == nil {
+		t.Fatal("raw-wire-tcp-pipeline-depth=0 accepted")
 	}
 	if _, err := parseConfig([]string{"-timeout", "0"}); err != nil {
 		t.Fatalf("timeout 0 should disable deadline: %v", err)
@@ -1297,7 +1310,7 @@ func TestTreeDBClientModeSmoke(t *testing.T) {
 	if testing.Short() {
 		t.Skip("client mode smoke benchmark skipped in short mode")
 	}
-	for _, mode := range []string{clientModeDriver, clientModeDriverFindRaw, clientModeDriverCommand, clientModeDriverCommandRaw, clientModeDriverUnack, clientModeDirect, clientModeRawWire, clientModeRawWireTCP} {
+	for _, mode := range []string{clientModeDriver, clientModeDriverFindRaw, clientModeDriverCommand, clientModeDriverCommandRaw, clientModeDriverUnack, clientModeDirect, clientModeRawWire, clientModeRawWireTCP, clientModeRawWireTCPPipeline} {
 		t.Run(mode, func(t *testing.T) {
 			opsPerSecond := runTreeDBClientModeSmoke(t, mode)
 			t.Logf("%s load_insert_many ops/sec=%.1f", mode, opsPerSecond)
@@ -1305,11 +1318,11 @@ func TestTreeDBClientModeSmoke(t *testing.T) {
 	}
 }
 
-func TestTreeDBDriverRawRangePhaseSmoke(t *testing.T) {
+func TestTreeDBRangeClientModeSmoke(t *testing.T) {
 	if testing.Short() {
-		t.Skip("driver raw range smoke skipped in short mode")
+		t.Skip("range client mode smoke skipped in short mode")
 	}
-	for _, mode := range []string{clientModeDriverFindRaw, clientModeDriverCommandRaw} {
+	for _, mode := range []string{clientModeDriverFindRaw, clientModeDriverCommandRaw, clientModeRawWireTCPPipeline} {
 		t.Run(mode, func(t *testing.T) {
 			cfg, err := parseConfig([]string{
 				"-target", "treedb",
@@ -1460,7 +1473,7 @@ func TestTreeDBDirectBenchmarkSmoke(t *testing.T) {
 }
 
 func TestTreeDBRawWireLoadPhaseHonorsCanceledContext(t *testing.T) {
-	for _, mode := range []string{clientModeRawWire, clientModeRawWireTCP} {
+	for _, mode := range []string{clientModeRawWire, clientModeRawWireTCP, clientModeRawWireTCPPipeline} {
 		t.Run(mode, func(t *testing.T) {
 			cfg, err := parseConfig([]string{
 				"-target", "treedb",

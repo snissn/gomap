@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -56,6 +57,7 @@ type config struct {
 	MongoMaxConnecting                            int
 	Reads                                         int
 	RangeReads                                    int
+	RawWireTCPPipelineDepth                       int
 	ConcurrentRangeReaders                        int
 	ConcurrentRangeReaderSweep                    []int
 	ConcurrentRangeReads                          int
@@ -112,6 +114,7 @@ type benchmarkResult struct {
 	ConcurrentRangeReaders     int    `json:"concurrent_range_readers,omitempty"`
 	ConcurrentRangeReaderSweep []int  `json:"concurrent_range_reader_sweep,omitempty"`
 	ConcurrentRangeReads       int    `json:"concurrent_range_reads,omitempty"`
+	RawWireTCPPipelineDepth    int    `json:"raw_wire_tcp_pipeline_depth,omitempty"`
 	ConcurrentWriters          int    `json:"concurrent_writers,omitempty"`
 	ConcurrentWrites           int    `json:"concurrent_writes,omitempty"`
 
@@ -357,14 +360,15 @@ const (
 	treeDBReadStateSettled   = "settled"
 	treeDBReadStateUnsettled = "unsettled"
 
-	clientModeDriver           = "driver"
-	clientModeDriverFindRaw    = "driver-find-raw"
-	clientModeDriverCommand    = "driver-command"
-	clientModeDriverCommandRaw = "driver-command-raw"
-	clientModeDriverUnack      = "driver-unack"
-	clientModeDirect           = "direct"
-	clientModeRawWire          = "raw-wire"
-	clientModeRawWireTCP       = "raw-wire-tcp"
+	clientModeDriver             = "driver"
+	clientModeDriverFindRaw      = "driver-find-raw"
+	clientModeDriverCommand      = "driver-command"
+	clientModeDriverCommandRaw   = "driver-command-raw"
+	clientModeDriverUnack        = "driver-unack"
+	clientModeDirect             = "direct"
+	clientModeRawWire            = "raw-wire"
+	clientModeRawWireTCP         = "raw-wire-tcp"
+	clientModeRawWireTCPPipeline = "raw-wire-tcp-pipeline"
 )
 
 func main() {
@@ -441,6 +445,7 @@ func parseConfig(args []string) (config, error) {
 		TreeDBMaintenance:           treeDBMaintenanceFull,
 		TreeDBReadState:             treeDBReadStateSettled,
 		ClientMode:                  clientModeDriver,
+		RawWireTCPPipelineDepth:     8,
 		InsertProducers:             1,
 		ProfileBlockRate:            1,
 		ProfileMutexFraction:        5,
@@ -485,7 +490,8 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.UpdateIndexedField, "update-indexed-field", false, "include the city field in update phases; requires -secondary-indexes >= 2 so the city index exists")
 	fs.BoolVar(&cfg.RangeIndex, "range-index", false, "create an age_1 secondary index for the age range-read phase")
 	fs.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 2, "secondary indexes to create: 0, 1=email, 2=email+city, 3=email+city+active")
-	fs.StringVar(&cfg.ClientMode, "client-mode", cfg.ClientMode, "benchmark client path: driver, driver-find-raw, driver-command, driver-command-raw, driver-unack, direct, raw-wire, or raw-wire-tcp; direct and raw-wire modes are TreeDB-only")
+	fs.StringVar(&cfg.ClientMode, "client-mode", cfg.ClientMode, "benchmark client path: driver, driver-find-raw, driver-command, driver-command-raw, driver-unack, direct, raw-wire, raw-wire-tcp, or raw-wire-tcp-pipeline; direct and raw-wire modes are TreeDB-only")
+	fs.IntVar(&cfg.RawWireTCPPipelineDepth, "raw-wire-tcp-pipeline-depth", cfg.RawWireTCPPipelineDepth, "number of raw-wire TCP find requests to pipeline on one connection when -client-mode raw-wire-tcp-pipeline")
 	fs.StringVar(&treeDBProfile, "treedb-profile", treeDBProfile, "TreeDB profile for -target treedb: fast, wal_on_fast, durable, or bench")
 	fs.StringVar(&treeDBDocumentFormat, "treedb-document-format", treeDBDocumentFormat, "TreeDB collection document format for -target treedb: json, template-v1/collections-v1, or bson")
 	fs.StringVar(&treeDBDataRootStorage, "treedb-data-root-storage", treeDBDataRootStorage, "TreeDB collection data root storage for -target treedb: default, fast, or compressed")
@@ -559,6 +565,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.Reads < 0 || cfg.RangeReads < 0 || cfg.Updates < 0 || cfg.Deletes < 0 || cfg.ConcurrentReads < 0 || cfg.ConcurrentRangeReads < 0 || cfg.ConcurrentWrites < 0 {
 		return config{}, errors.New("operation counts cannot be negative")
+	}
+	if cfg.RawWireTCPPipelineDepth <= 0 {
+		return config{}, errors.New("raw-wire-tcp-pipeline-depth must be > 0")
 	}
 	concurrentRangeReaderSweepValues, err := parsePositiveIntList(concurrentRangeReaderSweep, "concurrent-range-reader-sweep")
 	if err != nil {
@@ -756,6 +765,8 @@ func parseClientMode(raw string) (string, error) {
 		return clientModeRawWire, nil
 	case clientModeRawWireTCP:
 		return clientModeRawWireTCP, nil
+	case clientModeRawWireTCPPipeline:
+		return clientModeRawWireTCPPipeline, nil
 	default:
 		return "", fmt.Errorf("unknown client-mode %q", raw)
 	}
@@ -812,7 +823,7 @@ func concurrentRangeReaderCounts(cfg config) []int {
 }
 
 func isRawWireClientMode(mode string) bool {
-	return mode == clientModeRawWire || mode == clientModeRawWireTCP
+	return mode == clientModeRawWire || mode == clientModeRawWireTCP || mode == clientModeRawWireTCPPipeline
 }
 
 func openTarget(ctx context.Context, cfg config) (*benchTarget, error) {
@@ -1226,6 +1237,9 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		UpdateIndexedField:         cfg.UpdateIndexedField,
 		RangeIndex:                 cfg.RangeIndex,
 		PrebuildDocuments:          cfg.PrebuildDocuments,
+	}
+	if cfg.ClientMode == clientModeRawWireTCPPipeline {
+		result.RawWireTCPPipelineDepth = cfg.RawWireTCPPipelineDepth
 	}
 	if cfg.Target == "treedb" {
 		if cfg.TreeDBDir != "" || cfg.KeepTreeDBDir {
@@ -2616,7 +2630,7 @@ func runLoadPhase(ctx context.Context, cfg config, target *benchTarget, coll *mo
 	if cfg.Target == "treedb" && cfg.ClientMode == clientModeRawWire {
 		return runTreeDBRawWireLoadPhase(ctx, cfg, target, prebuilt, prebuiltRaw)
 	}
-	if cfg.Target == "treedb" && cfg.ClientMode == clientModeRawWireTCP {
+	if cfg.Target == "treedb" && (cfg.ClientMode == clientModeRawWireTCP || cfg.ClientMode == clientModeRawWireTCPPipeline) {
 		return runTreeDBRawWireTCPLoadPhase(ctx, cfg, target, prebuilt, prebuiltRaw)
 	}
 	if cfg.ClientMode == clientModeDriverCommand {
@@ -2803,6 +2817,9 @@ func runRangePhase(ctx context.Context, cfg config, target *benchTarget, profile
 	}
 	if cfg.Target == "treedb" && cfg.ClientMode == clientModeRawWireTCP {
 		return runTreeDBRawWireTCPRangePhase(ctx, cfg, target, profiler)
+	}
+	if cfg.Target == "treedb" && cfg.ClientMode == clientModeRawWireTCPPipeline {
+		return runTreeDBRawWireTCPPipelineRangePhase(ctx, cfg, target, profiler)
 	}
 	if cfg.ClientMode == clientModeDriverCommandRaw {
 		return runDriverCommandRawRangePhase(ctx, cfg, target, profiler)
@@ -2994,6 +3011,157 @@ func runTreeDBRawWireTCPRangeOperation(ctx context.Context, cfg config, client *
 	return err
 }
 
+func runTreeDBRawWireTCPPipelineRangePhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder) (phaseResult, error) {
+	if target == nil || target.mongoAddr == "" {
+		return phaseResult{}, errors.New("raw-wire-tcp-pipeline client mode requires a TreeDB gateway listener")
+	}
+	client, err := newRawWireTCPPipelineClient(ctx, target.mongoAddr)
+	if err != nil {
+		return phaseResult{}, err
+	}
+	defer func() { _ = client.Close() }()
+	return measureTreeDBProfiledPhase(target, profiler, rangePhaseName(cfg), cfg.RangeReads, func(sample func(time.Duration)) error {
+		minAges := make([]int64, cfg.RawWireTCPPipelineDepth)
+		responseTo := make([]int32, cfg.RawWireTCPPipelineDepth)
+		return runRawWireTCPPipelineRangeBatches(ctx, cfg, client, 0, cfg.RangeReads, minAges, responseTo, sample)
+	})
+}
+
+func runRawWireTCPPipelineRangeBatches(ctx context.Context, cfg config, client *rawWireTCPPipelineClient, start, count int, minAges []int64, responseTo []int32, sample func(time.Duration)) error {
+	if count <= 0 {
+		return nil
+	}
+	depth := cfg.RawWireTCPPipelineDepth
+	if depth <= 0 {
+		return errors.New("raw-wire-tcp-pipeline-depth must be > 0")
+	}
+	if len(minAges) < depth {
+		minAges = make([]int64, depth)
+	}
+	if len(responseTo) < depth {
+		responseTo = make([]int32, depth)
+	}
+	for offset := 0; offset < count; {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		batch := depth
+		if remaining := count - offset; remaining < batch {
+			batch = remaining
+		}
+		begin := time.Now()
+		for i := 0; i < batch; i++ {
+			minAge := rangeReadMinAge(start + offset + i)
+			id, err := client.AppendFind(cfg.Database, cfg.Collection, minAge)
+			if err != nil {
+				return err
+			}
+			minAges[i] = minAge
+			responseTo[i] = id
+		}
+		if err := client.Flush(); err != nil {
+			return err
+		}
+		for i := 0; i < batch; i++ {
+			if err := client.ReadFind(responseTo[i], minAges[i]); err != nil {
+				return err
+			}
+		}
+		elapsed := time.Since(begin)
+		perOp := elapsed / time.Duration(batch)
+		for i := 0; i < batch; i++ {
+			sample(perOp)
+		}
+		offset += batch
+	}
+	return nil
+}
+
+type rawWireTCPPipelineClient struct {
+	conn        net.Conn
+	rd          *bufio.Reader
+	nextID      atomic.Int32
+	writeBuf    []byte
+	readBuf     []byte
+	responseBuf []bson.Raw
+}
+
+const (
+	rawWireTCPReadBufferSize        = 32 * 1024
+	rawWireTCPMaxRetainedReadBuffer = 1 << 20
+)
+
+func newRawWireTCPPipelineClient(ctx context.Context, address string) (*rawWireTCPPipelineClient, error) {
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return nil, err
+	}
+	return &rawWireTCPPipelineClient{
+		conn: conn,
+		rd:   bufio.NewReaderSize(conn, rawWireTCPReadBufferSize),
+	}, nil
+}
+
+func (c *rawWireTCPPipelineClient) Close() error {
+	if c == nil || c.conn == nil {
+		return nil
+	}
+	return c.conn.Close()
+}
+
+func (c *rawWireTCPPipelineClient) AppendFind(database, collection string, minAge int64) (int32, error) {
+	if c == nil || c.conn == nil {
+		return 0, errors.New("raw-wire TCP pipeline client is closed")
+	}
+	commandDoc, err := rawWireFindAgeRangeCommand(database, collection, minAge)
+	if err != nil {
+		return 0, err
+	}
+	requestID := c.nextID.Add(1)
+	msg, err := wire.AppendMsgMessage(c.writeBuf, requestID, 0, 0, commandDoc)
+	if err != nil {
+		return 0, err
+	}
+	c.writeBuf = msg
+	return requestID, nil
+}
+
+func (c *rawWireTCPPipelineClient) Flush() error {
+	if c == nil || c.conn == nil {
+		return errors.New("raw-wire TCP pipeline client is closed")
+	}
+	if len(c.writeBuf) == 0 {
+		return nil
+	}
+	if err := writeFull(c.conn, c.writeBuf); err != nil {
+		return err
+	}
+	c.writeBuf = c.writeBuf[:0]
+	return nil
+}
+
+func (c *rawWireTCPPipelineClient) ReadFind(responseTo int32, minAge int64) error {
+	header, body, err := wire.ReadMessageInto(c.rd, c.readBuf, wire.DefaultMaxMessageLength)
+	if err != nil {
+		return err
+	}
+	if cap(body) <= rawWireTCPMaxRetainedReadBuffer {
+		c.readBuf = body
+	} else {
+		c.readBuf = nil
+	}
+	if header.ResponseTo != responseTo {
+		return fmt.Errorf("raw-wire TCP pipeline responseTo=%d want %d", header.ResponseTo, responseTo)
+	}
+	batch, err := parseRawWireFindFirstBatchMessageInto(header, body, c.responseBuf)
+	if err != nil {
+		return err
+	}
+	c.responseBuf = batch
+	return validateRawAgeBatch(batch, minAge)
+}
+
 func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder, coll *mongo.Collection, readers int) (phaseResult, error) {
 	phaseName := concurrentRangePhaseName(cfg, readers)
 	if cfg.Target == "treedb" && cfg.ClientMode == clientModeRawWire {
@@ -3034,6 +3202,77 @@ func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarge
 			return runConcurrentOperationsByWorker(ctx, readers, cfg.ConcurrentRangeReads, func(worker, op int) error {
 				return runTreeDBRawWireTCPRangeOperation(ctx, cfg, clients[worker], rangeReadMinAge(op), sample)
 			})
+		})
+	}
+	if cfg.Target == "treedb" && cfg.ClientMode == clientModeRawWireTCPPipeline {
+		if target == nil || target.mongoAddr == "" {
+			return phaseResult{}, errors.New("raw-wire-tcp-pipeline client mode requires a TreeDB gateway listener")
+		}
+		clients := make([]*rawWireTCPPipelineClient, readers)
+		for i := range clients {
+			client, err := newRawWireTCPPipelineClient(ctx, target.mongoAddr)
+			if err != nil {
+				for _, existing := range clients {
+					if existing != nil {
+						_ = existing.Close()
+					}
+				}
+				return phaseResult{}, err
+			}
+			clients[i] = client
+		}
+		defer func() {
+			for _, client := range clients {
+				_ = client.Close()
+			}
+		}()
+		return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentRangeReads, func(sample func(time.Duration)) error {
+			runCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+
+			var next atomic.Int64
+			var wg sync.WaitGroup
+			var errOnce sync.Once
+			var firstErr error
+			recordErr := func(err error) {
+				if err == nil {
+					return
+				}
+				errOnce.Do(func() {
+					firstErr = err
+					cancel()
+				})
+			}
+			for worker := 0; worker < readers; worker++ {
+				wg.Add(1)
+				go func(worker int) {
+					defer wg.Done()
+					minAges := make([]int64, cfg.RawWireTCPPipelineDepth)
+					responseTo := make([]int32, cfg.RawWireTCPPipelineDepth)
+					for {
+						if err := runCtx.Err(); err != nil {
+							return
+						}
+						start := int(next.Add(int64(cfg.RawWireTCPPipelineDepth)) - int64(cfg.RawWireTCPPipelineDepth))
+						if start >= cfg.ConcurrentRangeReads {
+							return
+						}
+						count := cfg.RawWireTCPPipelineDepth
+						if remaining := cfg.ConcurrentRangeReads - start; remaining < count {
+							count = remaining
+						}
+						if err := runRawWireTCPPipelineRangeBatches(runCtx, cfg, clients[worker], start, count, minAges, responseTo, sample); err != nil {
+							recordErr(err)
+							return
+						}
+					}
+				}(worker)
+			}
+			wg.Wait()
+			if firstErr != nil {
+				return firstErr
+			}
+			return ctx.Err()
 		})
 	}
 	if cfg.ClientMode == clientModeDriverCommandRaw {
@@ -3127,10 +3366,13 @@ func parseRawWireFindFirstBatchInto(response []byte, dst []bson.Raw) ([]bson.Raw
 	if int(header.MessageLength) > len(response) {
 		return nil, fmt.Errorf("%w: response length=%d available=%d", wire.ErrMessageTooShort, header.MessageLength, len(response))
 	}
+	return parseRawWireFindFirstBatchMessageInto(header, response[wire.HeaderLen:int(header.MessageLength)], dst)
+}
+
+func parseRawWireFindFirstBatchMessageInto(header wire.Header, body []byte, dst []bson.Raw) ([]bson.Raw, error) {
 	if header.OpCode != wire.OpMsg {
 		return nil, fmt.Errorf("raw-wire find response opcode=%d want %d", header.OpCode, wire.OpMsg)
 	}
-	body := response[wire.HeaderLen:int(header.MessageLength)]
 	msg, err := wire.ParseMsg(body)
 	if err != nil {
 		return nil, err

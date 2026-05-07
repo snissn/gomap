@@ -65,9 +65,12 @@ become visible before reporting wall ops/sec. `-client-mode raw-wire` is
 TreeDB-only and calls the in-process gateway directly with raw OP_MSG document
 sequences. `-client-mode raw-wire-tcp` sends the same raw OP_MSG traffic over
 the gateway's loopback listener, isolating TreeDB gateway network/wire-server
-cost from Mongo Go driver cost. Raw-wire modes use raw OP_MSG document
-sequences for the insert load phase and raw OP_MSG `find` requests for the age
-range-read phase while keeping setup and non-range phases on the driver.
+cost from Mongo Go driver cost. `-client-mode raw-wire-tcp-pipeline` uses the
+same raw TCP load path and pipelines age range `find` requests on one connection
+up to `-raw-wire-tcp-pipeline-depth`, which isolates single-connection
+request/response latency from server execution. Raw-wire modes use raw OP_MSG
+document sequences for the insert load phase and raw OP_MSG `find` requests for
+the age range-read phase while keeping setup and non-range phases on the driver.
 `-client-mode direct` is a TreeDB-only path
 that calls `collections.Collection` directly for the same phase names, using the
 selected `-treedb-document-format` (`json`, `template-v1`/`collections-v1`, or
@@ -91,8 +94,9 @@ batches so small runs do not open unused clients. Official-driver modes share on
 `-mongo-max-pool-size`, `-mongo-min-pool-size`, and `-mongo-max-connecting`
 control the driver pool used by those producers. When `-mongo-max-pool-size` is
 left unset, validation treats the driver default max pool size as 100 for
-`-mongo-min-pool-size` checks. `raw-wire-tcp` opens one fastclient connection per
-effective producer, and `raw-wire` uses one in-process wire owner per effective
+`-mongo-min-pool-size` checks. `raw-wire-tcp` and
+`raw-wire-tcp-pipeline` open one fastclient connection per effective producer
+for the load phase, and `raw-wire` uses one in-process wire owner per effective
 producer. JSON output includes `effective_producers` and `producer_results` for
 the load phase plus `mongo_pool_stats_after_load` and `mongo_pool_stats_final`
 when the official driver pool is involved.
@@ -204,7 +208,7 @@ beside the normal MongoDB Go driver `InsertMany` path:
 
 ```sh
 TREEDB_DOCUMENT_FORMATS="bson" \
-TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire" \
+TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire" \
 scripts/mongo_gateway_compare.sh
 ```
 
@@ -276,7 +280,7 @@ Useful overrides:
 
 - `DOCS_LIST="1000 10000 100000"`
 - `INDEXES_LIST="0 1 2"`
-- `TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire"`
+- `TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire"`
 - `MONGO_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack"`
 - `READS=50000`, `RANGE_READS=5000`, `UPDATES=5000`
 - `DELETES=1000`
@@ -359,7 +363,8 @@ The initial workload phases are:
   prebuilt raw BSON command for `driver-command-raw`, unacknowledged `InsertMany`
   plus a post-load visibility wait for `driver-unack`, direct
   `Collection.InsertBatch` in the selected storage format for `direct`, and raw
-  OP_MSG document sequences for `raw-wire`/`raw-wire-tcp`. When
+  OP_MSG document sequences for `raw-wire`/`raw-wire-tcp`/
+  `raw-wire-tcp-pipeline`. When
   `-insert-producers` is greater than 1, this
   phase reports aggregate wall-clock throughput and per-producer call latency in
   `producer_results`.
@@ -623,8 +628,10 @@ Use the official-driver row for user-visible Mongo compatibility throughput,
 `driver-find-raw` to remove range-read `bson.M` decode while keeping
 official-driver `Find`/cursor behavior, the driver-command rows to quantify the
 driver's CRUD-helper overhead, the raw-wire rows to estimate the gateway/server
-ceiling, and the direct collection row to estimate the storage-engine ceiling
-for the same document shape. For acknowledged high-throughput ingest through the
+ceiling, `raw-wire-tcp-pipeline` to measure how much single-connection TCP
+latency can be hidden by request pipelining, and the direct collection row to
+estimate the storage-engine ceiling for the same document shape. For
+acknowledged high-throughput ingest through the
 public MongoDB Go driver,
 `driver-command-raw` is the fastest current path because it keeps the official
 driver transport while bypassing `InsertMany`'s explicit-`_id` discovery and
