@@ -1604,6 +1604,7 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 	result.Phases = append(result.Phases, rangePhase)
 
 	for _, concurrentReaders := range concurrentRangeReaderCounts(cfg) {
+		concurrentReaders = effectiveConcurrentWorkers(concurrentReaders, cfg.ConcurrentRangeReads)
 		phaseName := concurrentRangePhaseName(cfg, concurrentReaders)
 		concurrentRangePhase, err := runTreeDBProfiledPhase(target, profiler, phaseName, func() (phaseResult, error) {
 			return runDirectTreeDBConcurrentRangePhase(ctx, cfg, collection, concurrentReaders, phaseName)
@@ -2067,6 +2068,7 @@ func runDirectTreeDBRangePhase(ctx context.Context, cfg config, collection *coll
 }
 
 func runDirectTreeDBConcurrentRangePhase(ctx context.Context, cfg config, collection *collections.Collection, readers int, phaseName string) (phaseResult, error) {
+	readers = effectiveConcurrentWorkers(readers, cfg.ConcurrentRangeReads)
 	materializers := make([]*collections.StoredDocumentJSONMaterializer, readers)
 	for i := range materializers {
 		materializer, err := directNewStoredDocumentMaterializer(collection)
@@ -2141,7 +2143,13 @@ func runDirectTreeDBRangeQuery(cfg config, collection *collections.Collection, m
 		}
 		return true, nil
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	if matches == 0 {
+		return fmt.Errorf("direct range scan found no documents for minAge=%d", minAge)
+	}
+	return nil
 }
 
 func runDirectTreeDBUpdatePhase(ctx context.Context, cfg config, collection *collections.Collection, keys directBenchmarkKeySet, updatedCityValues []string) (phaseResult, error) {
@@ -2534,6 +2542,16 @@ func rangePhaseName(cfg config) string {
 
 func concurrentRangePhaseName(cfg config, readers int) string {
 	return fmt.Sprintf("concurrent_%s_r%d", rangePhaseName(cfg), readers)
+}
+
+func effectiveConcurrentWorkers(workers, operations int) int {
+	if workers <= 0 || operations <= 0 {
+		return 0
+	}
+	if workers > operations {
+		return operations
+	}
+	return workers
 }
 
 func rangeReadMinAge(op int, documentCount int) int64 {
@@ -2989,6 +3007,7 @@ func runTreeDBRawWireTCPRangeOperation(ctx context.Context, cfg config, client *
 }
 
 func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder, coll *mongo.Collection, readers int) (phaseResult, error) {
+	readers = effectiveConcurrentWorkers(readers, cfg.ConcurrentRangeReads)
 	phaseName := concurrentRangePhaseName(cfg, readers)
 	if cfg.Target == "treedb" && cfg.ClientMode == clientModeRawWire {
 		if target == nil || target.server == nil {
@@ -4263,11 +4282,9 @@ func runConcurrentOperations(ctx context.Context, workers, operations int, run f
 }
 
 func runConcurrentOperationsByWorker(ctx context.Context, workers, operations int, run func(worker, op int) error) error {
-	if workers <= 0 || operations <= 0 {
+	workers = effectiveConcurrentWorkers(workers, operations)
+	if workers <= 0 {
 		return nil
-	}
-	if workers > operations {
-		workers = operations
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -4435,22 +4452,24 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(result)
 	case "text":
-		fmt.Fprintf(out, "target=%s client_mode=%s database=%s collection=%s documents=%d batch_size=%d insert_producers=%d mongo_max_pool_size=%d mongo_min_pool_size=%d mongo_max_connecting=%d secondary_indexes=%d concurrent_readers=%d concurrent_reader_sweep=%v concurrent_reads=%d concurrent_writers=%d concurrent_writes=%d\n",
+		fmt.Fprintf(out, "target=%s client_mode=%s database=%s collection=%s documents=%d batch_size=%d insert_producers=%d mongo_max_pool_size=%d mongo_min_pool_size=%d mongo_max_connecting=%d secondary_indexes=%d concurrent_readers=%d concurrent_reader_sweep=%v concurrent_reads=%d concurrent_range_readers=%d concurrent_range_reader_sweep=%v concurrent_range_reads=%d concurrent_writers=%d concurrent_writes=%d\n",
 			result.Target, result.ClientMode, result.Database, result.Collection, result.Documents, result.BatchSize,
 			result.InsertProducers, result.MongoMaxPoolSize, result.MongoMinPoolSize, result.MongoMaxConnecting, result.SecondaryIndexes,
-			result.ConcurrentReaders, result.ConcurrentReaderSweep, result.ConcurrentReads, result.ConcurrentWriters, result.ConcurrentWrites)
+			result.ConcurrentReaders, result.ConcurrentReaderSweep, result.ConcurrentReads,
+			result.ConcurrentRangeReaders, result.ConcurrentRangeReaderSweep, result.ConcurrentRangeReads,
+			result.ConcurrentWriters, result.ConcurrentWrites)
 		fmt.Fprintf(out, "update_indexed_field=%t\n", result.UpdateIndexedField)
 		fmt.Fprintf(out, "range_index=%t\n", result.RangeIndex)
 		if result.TreeDBDir != "" {
 			fmt.Fprintf(out, "treedb_dir=%s\n", result.TreeDBDir)
 		}
 		if result.TreeDBProfile != "" {
-			fmt.Fprintf(out, "treedb_profile=%s document_format=%s data_root_storage=%s index_state_root_storage=%s index_root_storage=%s buffered_indexed_max_docs=%d buffered_indexed_max_bytes=%d buffered_indexed_max_root_runs=%d buffered_indexed_async_flush=%t buffered_indexed_async_max_queued_units=%d maintenance=%s\n",
+			fmt.Fprintf(out, "treedb_profile=%s document_format=%s data_root_storage=%s index_state_root_storage=%s index_root_storage=%s buffered_indexed_max_docs=%d buffered_indexed_max_bytes=%d buffered_indexed_max_root_runs=%d buffered_indexed_async_flush=%t buffered_indexed_async_max_queued_units=%d maintenance=%s read_state=%s\n",
 				result.TreeDBProfile, result.TreeDBDocumentFormat, result.TreeDBDataRootStorage,
 				result.TreeDBIndexStateRootStorage, result.TreeDBIndexRootStorage,
 				result.TreeDBBufferedIndexedWriteMaxDocuments, result.TreeDBBufferedIndexedWriteMaxBytes,
 				result.TreeDBBufferedIndexedWriteMaxRootRuns, result.TreeDBBufferedIndexedAsyncFlush,
-				result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits, result.TreeDBMaintenanceMode)
+				result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits, result.TreeDBMaintenanceMode, result.TreeDBReadState)
 		}
 		if result.MongoURI != "" {
 			fmt.Fprintf(out, "mongo_uri=%s\n", result.MongoURI)
