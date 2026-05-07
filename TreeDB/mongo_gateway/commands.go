@@ -144,7 +144,7 @@ func (p findResponsePayload) marshalMsgIntoWithMaxLength(dst []byte, requestID, 
 		return marshalCursorDocumentsMsgResponseWithIDInto(dst, requestID, responseTo, p.raw.ns, p.raw.cursorID, p.raw.batchKey, p.raw.batch, maxMessageLength)
 	}
 	if p.indexedRange != nil {
-		return p.indexedRange.marshalMsgInto(dst, requestID, responseTo)
+		return p.indexedRange.marshalMsgIntoWithMaxLength(dst, requestID, responseTo, maxMessageLength)
 	}
 	if maxMessageLength <= 0 || maxMessageLength > wire.DefaultMaxMessageLength {
 		maxMessageLength = wire.DefaultMaxMessageLength
@@ -188,7 +188,7 @@ func (s *Server) findMsgResponseInto(dst []byte, command wire.Document, requestI
 		if docErr != nil {
 			return nil, docErr
 		}
-		return wire.AppendMsgMessage(dst[:0], requestID, responseTo, 0, doc)
+		return wire.AppendMsgMessage(dst, requestID, responseTo, 0, doc)
 	}
 	return msg, err
 }
@@ -1541,12 +1541,12 @@ func (r *indexedRangeCursorResponse) marshalDocument() (wire.Document, error) {
 	return marshalIndexedRangeCursorDocument(r.server, r.cursorOwner, r.singleBatch, r.col, materializer, r.ns, r.indexName, r.opts, r.batchKey, r.maxBatchBytes)
 }
 
-func (r *indexedRangeCursorResponse) marshalMsgInto(dst []byte, requestID, responseTo int32) ([]byte, error) {
+func (r *indexedRangeCursorResponse) marshalMsgIntoWithMaxLength(dst []byte, requestID, responseTo int32, maxMessageLength int) ([]byte, error) {
 	materializer, err := storedDocumentMaterializerForCollection(r.col)
 	if err != nil {
 		return nil, err
 	}
-	msg, err := marshalIndexedRangeCursorMsgInto(dst, requestID, responseTo, r.server, r.cursorOwner, r.singleBatch, r.col, materializer, r.ns, r.indexName, r.opts, r.batchKey, r.maxBatchBytes)
+	msg, err := marshalIndexedRangeCursorMsgInto(dst, requestID, responseTo, r.server, r.cursorOwner, r.singleBatch, r.col, materializer, r.ns, r.indexName, r.opts, r.batchKey, r.maxBatchBytes, maxMessageLength)
 	retry := shouldRetryBorrowedRangeMaterialization(materializer, err)
 	_ = materializer.Close()
 	if !retry {
@@ -1557,7 +1557,7 @@ func (r *indexedRangeCursorResponse) marshalMsgInto(dst []byte, requestID, respo
 		return nil, err
 	}
 	defer func() { _ = materializer.Close() }()
-	return marshalIndexedRangeCursorMsgInto(dst, requestID, responseTo, r.server, r.cursorOwner, r.singleBatch, r.col, materializer, r.ns, r.indexName, r.opts, r.batchKey, r.maxBatchBytes)
+	return marshalIndexedRangeCursorMsgInto(dst, requestID, responseTo, r.server, r.cursorOwner, r.singleBatch, r.col, materializer, r.ns, r.indexName, r.opts, r.batchKey, r.maxBatchBytes, maxMessageLength)
 }
 
 func shouldRetryBorrowedRangeMaterialization(materializer *collections.StoredDocumentJSONMaterializer, err error) bool {
@@ -1587,7 +1587,7 @@ func marshalIndexedRangeCursorDocument(server *Server, cursorOwner int64, single
 	return wire.Document(doc), nil
 }
 
-func marshalIndexedRangeCursorMsgInto(dst []byte, requestID, responseTo int32, server *Server, cursorOwner int64, singleBatch bool, col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, ns, indexName string, opts collections.IndexRangeOptions, batchKey string, maxBatchBytes int) ([]byte, error) {
+func marshalIndexedRangeCursorMsgInto(dst []byte, requestID, responseTo int32, server *Server, cursorOwner int64, singleBatch bool, col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, ns, indexName string, opts collections.IndexRangeOptions, batchKey string, maxBatchBytes int, maxMessageLength int) ([]byte, error) {
 	need := wire.HeaderLen + 5 + rawCursorResponseCapacityHint(ns, opts.Limit, maxBatchBytes)
 	if cap(dst)-len(dst) < need {
 		grown := make([]byte, len(dst), len(dst)+need)
@@ -1622,7 +1622,9 @@ func marshalIndexedRangeCursorMsgInto(dst []byte, requestID, responseTo int32, s
 	if int64(messageLength) > maxWireMessageLengthInt32Limit {
 		return nil, fmt.Errorf("%w: length=%d", wire.ErrMessageTooLarge, messageLength)
 	}
-	maxMessageLength := int(server.maxMessageLength())
+	if maxMessageLength <= 0 || maxMessageLength > wire.DefaultMaxMessageLength {
+		maxMessageLength = int(server.maxMessageLength())
+	}
 	if messageLength > maxMessageLength {
 		return nil, fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, messageLength, maxMessageLength)
 	}
