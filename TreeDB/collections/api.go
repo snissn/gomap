@@ -11477,7 +11477,7 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 	}
 	idx, ok := findIndex(catalog.meta.Indexes, indexName)
 	if !ok {
-		return make([]DocumentRecord, 0), false, nil
+		return nil, false, nil
 	}
 	start, end, empty, err := indexRangeScanBounds(idx.ValueType, opts)
 	if err != nil {
