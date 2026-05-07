@@ -122,6 +122,60 @@ func TestServerHandlesMsgPing(t *testing.T) {
 	assertOK(t, msg.Body)
 }
 
+func TestServerRetainsReadBufferForSafeCommands(t *testing.T) {
+	commandDoc := mustDocument(t, bson.D{
+		{Key: "ping", Value: int32(1)},
+		{Key: "$db", Value: "admin"},
+	})
+	req, err := wire.AppendMsgMessage(nil, 22001, 0, 0, commandDoc)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage: %v", err)
+	}
+	server := NewServer()
+	readBuf, _, err := server.serveOneWithOwner(&readWriter{r: bytes.NewReader(req)}, 1, make([]byte, 0, len(req)), nil)
+	if err != nil {
+		t.Fatalf("serveOneWithOwner: %v", err)
+	}
+	if readBuf == nil {
+		t.Fatal("read buffer was not retained for ping")
+	}
+}
+
+func TestServerDoesNotRetainReadBufferAfterBSONInsert(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	commandDoc := mustDocument(t, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "payload", Value: strings.Repeat("x", 128)},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	req, err := wire.AppendMsgMessage(nil, 22002, 0, 0, commandDoc)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage: %v", err)
+	}
+	rw := &readWriter{r: bytes.NewReader(req)}
+	readBuf, _, err := server.serveOneWithOwner(rw, 1, make([]byte, 0, len(req)), nil)
+	if err != nil {
+		t.Fatalf("serveOneWithOwner: %v", err)
+	}
+	if readBuf != nil {
+		t.Fatal("read buffer was retained after BSON insert")
+	}
+	assertOK(t, readMsgResponse(t, rw.w.Bytes(), 22002))
+}
+
 func TestServerRejectsFindWithMoreToCome(t *testing.T) {
 	commandDoc := mustDocument(t, bson.D{
 		{Key: "find", Value: "users"},

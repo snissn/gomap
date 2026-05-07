@@ -328,14 +328,14 @@ func (s *Server) appendOneWithOwner(rw io.Reader, cursorOwner int64, readBuf, wr
 		}
 		return readBuf, writeBuf, err
 	}
-	if cap(body) <= maxRetainedWireReadBuffer {
+	response, retainRequestBody, err := s.handleMessageInto(writeBuf[:0], h, body, cursorOwner)
+	if err != nil {
+		return nil, writeBuf, err
+	}
+	if retainRequestBody && cap(body) <= maxRetainedWireReadBuffer {
 		readBuf = body
 	} else {
 		readBuf = nil
-	}
-	response, err := s.handleMessageInto(writeBuf[:0], h, body, cursorOwner)
-	if err != nil {
-		return readBuf, writeBuf, err
 	}
 	if response == nil {
 		return readBuf, writeBuf, nil
@@ -392,12 +392,13 @@ func (s *Server) appendBufferedMessageWithOwner(reader *bufio.Reader, cursorOwne
 }
 
 func (s *Server) handleMessage(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
-	return s.handleMessageInto(nil, h, body, cursorOwner)
+	response, _, err := s.handleMessageInto(nil, h, body, cursorOwner)
+	return response, err
 }
 
-func (s *Server) handleMessageInto(dst []byte, h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
+func (s *Server) handleMessageInto(dst []byte, h wire.Header, body []byte, cursorOwner int64) ([]byte, bool, error) {
 	if s.isClosed() {
-		return nil, errServerClosed
+		return nil, false, errServerClosed
 	}
 	s.reapExpiredCursors()
 	switch h.OpCode {
@@ -406,70 +407,75 @@ func (s *Server) handleMessageInto(dst []byte, h wire.Header, body []byte, curso
 	case wire.OpMsg:
 		return s.handleMsgInto(dst, h, body, cursorOwner)
 	case wire.OpCompressed:
-		return nil, fmt.Errorf("%w: OP_COMPRESSED", wire.ErrUnsupported)
+		return nil, false, fmt.Errorf("%w: OP_COMPRESSED", wire.ErrUnsupported)
 	default:
-		return nil, fmt.Errorf("%w: opcode %d", wire.ErrUnsupported, h.OpCode)
+		return nil, false, fmt.Errorf("%w: opcode %d", wire.ErrUnsupported, h.OpCode)
 	}
 }
 
 func (s *Server) handleQuery(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
-	return s.handleQueryInto(nil, h, body, cursorOwner)
+	response, _, err := s.handleQueryInto(nil, h, body, cursorOwner)
+	return response, err
 }
 
-func (s *Server) handleQueryInto(dst []byte, h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
+func (s *Server) handleQueryInto(dst []byte, h wire.Header, body []byte, cursorOwner int64) ([]byte, bool, error) {
 	q, err := wire.ParseQuery(body)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	name, err := wire.CommandNameFromValidatedDocument(q.Query)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	response, err := s.commandResponse(name, q.Query, nil, cursorOwner)
 	if err != nil {
-		return nil, err
+		return nil, name != "insert", err
 	}
-	return wire.AppendReplyMessage(dst, s.nextID(), h.RequestID, 0, 0, 0, response)
+	reply, err := wire.AppendReplyMessage(dst, s.nextID(), h.RequestID, 0, 0, 0, response)
+	return reply, name != "insert", err
 }
 
 func (s *Server) handleMsg(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
-	return s.handleMsgInto(nil, h, body, cursorOwner)
+	response, _, err := s.handleMsgInto(nil, h, body, cursorOwner)
+	return response, err
 }
 
-func (s *Server) handleMsgInto(dst []byte, h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
+func (s *Server) handleMsgInto(dst []byte, h wire.Header, body []byte, cursorOwner int64) ([]byte, bool, error) {
 	msg, err := wire.ParseMsg(body)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	name, err := wire.CommandNameFromValidatedDocument(msg.Body)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
+	retainRequestBody := name != "insert"
 
 	if name == "find" {
 		if msg.Flags&wire.MsgFlagMoreToCome != 0 {
-			return nil, fmt.Errorf("%w: find with moreToCome flag", wire.ErrUnsupported)
+			return nil, retainRequestBody, fmt.Errorf("%w: find with moreToCome flag", wire.ErrUnsupported)
 		}
 		if len(msg.Sequences) > 0 {
-			return nil, fmt.Errorf("%w: find with document sequences", wire.ErrUnsupported)
+			return nil, retainRequestBody, fmt.Errorf("%w: find with document sequences", wire.ErrUnsupported)
 		}
 		responseID := s.nextID()
 		response, err := s.findMsgResponseInto(dst, msg.Body, responseID, h.RequestID, cursorOwner)
 		if err != nil {
-			return nil, err
+			return nil, retainRequestBody, err
 		}
-		return response, nil
+		return response, retainRequestBody, nil
 	}
 
 	response, err := s.commandResponse(name, msg.Body, msg.Sequences, cursorOwner)
 	if err != nil {
-		return nil, err
+		return nil, retainRequestBody, err
 	}
 	if msg.Flags&wire.MsgFlagMoreToCome != 0 {
-		return nil, nil
+		return nil, retainRequestBody, nil
 	}
-	return wire.AppendMsgMessage(dst, s.nextID(), h.RequestID, 0, response)
+	msgResponse, err := wire.AppendMsgMessage(dst, s.nextID(), h.RequestID, 0, response)
+	return msgResponse, retainRequestBody, err
 }
 
 func (s *Server) commandResponse(name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
