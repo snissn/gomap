@@ -431,13 +431,14 @@ affect routing, snapshots, or catch-up behavior.
 
 ### Protocol TODO
 
-- Assign command IDs and section IDs.
-- Define scalar binary encodings.
-- Define result-set and presence-bitmap encodings.
-- Define cursor resource limits.
+- Keep command IDs and section IDs synchronized between
+  `native-wire-protocol.md`, the schema registry, and drift tests.
+- Keep scalar, byte-vector, result-set, presence-bitmap, and cursor-limit
+  encodings covered by fixtures and conformance tests.
 - Define error-code mapping from current collection errors.
 - Define authentication placeholder fields.
-- Define benchmark mode labels.
+- Keep benchmark mode labels synchronized with the benchmark harness and report
+  renderers.
 
 ### Query TODO
 

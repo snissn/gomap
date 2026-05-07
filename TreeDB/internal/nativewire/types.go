@@ -63,6 +63,8 @@ const (
 	SectionTemplateRecords        SectionID = 104
 	SectionExpectedCatalogVersion SectionID = 105
 	SectionReplacementMode        SectionID = 106
+	SectionCursorRef              SectionID = 114
+	SectionCursorLimits           SectionID = 115
 )
 
 type CommandID uint64
