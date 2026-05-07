@@ -917,11 +917,18 @@ func deterministicEntryFixtureCases() []deterministicEntryFixtureCase {
 }
 
 const (
-	deterministicFixtureCommandVersion       = 1
-	deterministicFixtureCatalogVersion       = 7
-	deterministicReplacementModeExistingOnly = 1
-	deterministicCollectionMetaVersion       = 1
-	deterministicIndexDefinitionVersion      = 1
+	deterministicFixtureCommandVersion        = 1
+	deterministicFixtureCatalogVersion        = 7
+	deterministicReplacementModeExistingOnly  = 1
+	deterministicCollectionMetaVersion        = 1
+	deterministicIndexDefinitionVersion       = 1
+	deterministicCollectionDefaultRootPolicy  = 0
+	deterministicCollectionDefaultIndexPolicy = 0
+	deterministicCollectionDefaultMaxDocs     = int64(0)
+	deterministicCollectionDefaultMaxBytes    = int64(0)
+	deterministicCollectionDefaultMaxRootRuns = int64(0)
+	deterministicCollectionDefaultMaxQueued   = int64(0)
+	deterministicCollectionDefaultIndexCount  = 0
 )
 
 func deterministicFixtureSections(commandID CommandID, idempotency string, sections ...Section) []Section {
@@ -931,6 +938,7 @@ func deterministicFixtureSections(commandID CommandID, idempotency string, secti
 	}
 	out = append(out, sections...)
 	out = append(out, Section{ID: SectionExpectedCatalogVersion, Bytes: deterministicUvarintPayload(deterministicFixtureCatalogVersion)})
+	sortSectionsByID(out)
 	return out
 }
 
@@ -940,21 +948,21 @@ func deterministicCollectionMetaPayload(name string) []byte {
 	// allow_array_values_in_index, disable_indexed_write_memtables,
 	// buffered_indexed_writes, max_documents, max_bytes, max_root_runs,
 	// async_flush, overlay_roots, max_queued_units, and index definitions.
-	dst := deterministicUvarintPayload(deterministicCollectionMetaVersion)
-	dst = appendDeterministicString(dst, name)
-	dst = appendUvarint(dst, uint64(DocumentFormatDefault))
-	dst = appendUvarint(dst, 0)
-	dst = appendUvarint(dst, 0)
-	dst = appendDeterministicBool(dst, false)
-	dst = appendDeterministicBool(dst, false)
-	dst = appendDeterministicBool(dst, false)
-	dst = binary.AppendVarint(dst, 0)
-	dst = binary.AppendVarint(dst, 0)
-	dst = binary.AppendVarint(dst, 0)
-	dst = appendDeterministicBool(dst, false)
-	dst = appendDeterministicBool(dst, false)
-	dst = binary.AppendVarint(dst, 0)
-	dst = appendUvarint(dst, 0)
+	dst := deterministicUvarintPayload(deterministicCollectionMetaVersion)    // version
+	dst = appendDeterministicString(dst, name)                                // name
+	dst = appendUvarint(dst, uint64(DocumentFormatDefault))                   // document_format
+	dst = appendUvarint(dst, deterministicCollectionDefaultRootPolicy)        // data_root_storage_policy
+	dst = appendUvarint(dst, deterministicCollectionDefaultIndexPolicy)       // index_state_storage_policy
+	dst = appendDeterministicBool(dst, false)                                 // allow_array_values_in_index
+	dst = appendDeterministicBool(dst, false)                                 // disable_indexed_write_memtables
+	dst = appendDeterministicBool(dst, false)                                 // buffered_indexed_writes
+	dst = binary.AppendVarint(dst, deterministicCollectionDefaultMaxDocs)     // buffered_indexed_write_max_documents
+	dst = binary.AppendVarint(dst, deterministicCollectionDefaultMaxBytes)    // buffered_indexed_write_max_bytes
+	dst = binary.AppendVarint(dst, deterministicCollectionDefaultMaxRootRuns) // buffered_indexed_write_max_root_runs
+	dst = appendDeterministicBool(dst, false)                                 // buffered_indexed_async_flush
+	dst = appendDeterministicBool(dst, false)                                 // buffered_indexed_overlay_roots
+	dst = binary.AppendVarint(dst, deterministicCollectionDefaultMaxQueued)   // buffered_indexed_async_flush_max_queued_units
+	dst = appendUvarint(dst, deterministicCollectionDefaultIndexCount)        // index_count
 	return dst
 }
 
@@ -974,12 +982,14 @@ func deterministicUvarintPayload(value uint64) []byte {
 }
 
 func deterministicBSONDocumentXInt32(value int32) []byte {
-	return []byte{
+	out := []byte{
 		12, 0, 0, 0,
 		0x10, 'x', 0,
-		byte(value), byte(value >> 8), byte(value >> 16), byte(value >> 24),
+		0, 0, 0, 0,
 		0,
 	}
+	binary.LittleEndian.PutUint32(out[7:11], uint32(value))
+	return out
 }
 
 func deterministicBSONDocumentEmpty() []byte {
