@@ -534,6 +534,14 @@ func TestAppendDeterministicEntryWithLimitsHonorsEnvelopeLimits(t *testing.T) {
 	if codeOf(err) != ErrResourceExhausted {
 		t.Fatalf("AppendDeterministicEntryWithLimits sections err=%v code=%d want resource exhausted", err, codeOf(err))
 	}
+	prefix := []byte("prefix")
+	got, err := AppendDeterministicEntryWithLimits(append([]byte(nil), prefix...), cmd, Limits{MaxSections: 5})
+	if codeOf(err) != ErrResourceExhausted {
+		t.Fatalf("AppendDeterministicEntryWithLimits prefixed sections err=%v code=%d want resource exhausted", err, codeOf(err))
+	}
+	if !bytes.Equal(got, prefix) {
+		t.Fatalf("AppendDeterministicEntryWithLimits returned %q after error, want %q", got, prefix)
+	}
 	_, err = AppendDeterministicEntryWithLimits(nil, cmd, Limits{MaxFrameSize: uint64(len(entry) - 1)})
 	if codeOf(err) != ErrResourceExhausted {
 		t.Fatalf("AppendDeterministicEntryWithLimits frame err=%v code=%d want resource exhausted", err, codeOf(err))

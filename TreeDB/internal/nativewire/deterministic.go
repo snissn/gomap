@@ -3,7 +3,6 @@ package nativewire
 import (
 	"bytes"
 	"crypto/sha256"
-	"fmt"
 	"strings"
 	"unicode/utf8"
 )
@@ -39,42 +38,42 @@ func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) 
 // entry while validating deterministic payloads against caller-provided limits.
 func AppendDeterministicEntryWithLimits(dst []byte, cmd ValidatedCommand, limits Limits) ([]byte, error) {
 	limits = limits.withDefaults()
+	start := len(dst)
 	if cmd.Schema == nil {
-		return nil, protocolError(ErrInvalidCommand, "missing command schema")
+		return dst[:start], protocolError(ErrInvalidCommand, "missing command schema")
 	}
 	if !cmd.Schema.Replicated {
-		return nil, protocolError(ErrInvalidCommand, "command %s is not replicated", cmd.Schema.Name)
+		return dst[:start], protocolError(ErrInvalidCommand, "command %s is not replicated", cmd.Schema.Name)
 	}
 	if cmd.Schema.RequiresIdempotency && !cmd.hasSection(SectionIdempotencyKey) {
-		return nil, protocolError(ErrInvalidCommand, "missing idempotency identity")
+		return dst[:start], protocolError(ErrInvalidCommand, "missing idempotency identity")
 	}
 	if cmd.Schema.RequiresCatalogGuard && !cmd.hasSection(SectionExpectedCatalogVersion) {
-		return nil, protocolError(ErrInvalidCommand, "missing catalog guard")
+		return dst[:start], protocolError(ErrInvalidCommand, "missing catalog guard")
 	}
 	deterministicFlags := DeterministicCommandFlags(cmd.Header.Flags)
 	if deterministicFlags != 0 {
-		return nil, protocolError(ErrUnsupportedFeature, "unsupported deterministic command flags 0x%x", deterministicFlags)
+		return dst[:start], protocolError(ErrUnsupportedFeature, "unsupported deterministic command flags 0x%x", deterministicFlags)
 	}
 
 	var deterministicScratch [16]Section
 	deterministic, err := cmd.deterministicSectionsInto(deterministicScratch[:0], limits)
 	if err != nil {
-		return nil, err
+		return dst[:start], err
 	}
 	sortSectionsByID(deterministic)
 	if err := validateDeterministicCommand(cmd.Header.ID, deterministic); err != nil {
-		return nil, err
+		return dst[:start], err
 	}
 	if len(deterministic) > limits.MaxSections {
-		return nil, protocolError(ErrResourceExhausted, "deterministic entry section count %d exceeds limit %d", len(deterministic), limits.MaxSections)
+		return dst[:start], protocolError(ErrResourceExhausted, "deterministic entry section count %d exceeds limit %d", len(deterministic), limits.MaxSections)
 	}
 	for _, section := range deterministic {
 		if uint64(len(section.Bytes)) > limits.MaxSectionLen {
-			return nil, protocolError(ErrResourceExhausted, "deterministic entry section %d length %d exceeds limit %d", section.ID, len(section.Bytes), limits.MaxSectionLen)
+			return dst[:start], protocolError(ErrResourceExhausted, "deterministic entry section %d length %d exceeds limit %d", section.ID, len(section.Bytes), limits.MaxSectionLen)
 		}
 	}
 
-	start := len(dst)
 	dst = append(dst, DeterministicEntryMagic...)
 	dst = appendUvarint(dst, DeterministicEntryVersion)
 	dst = appendUvarint(dst, uint64(cmd.Header.ID))
@@ -301,7 +300,10 @@ func deterministicByteVectorCount(sections []Section, id SectionID) (int, error)
 		}
 		count64, _, err := readUvarint(section.Bytes)
 		if err != nil {
-			return 0, fmt.Errorf("deterministic section %d byte-vector count: %w", id, err)
+			if code, ok := ErrorCodeOf(err); ok {
+				return 0, protocolError(code, "deterministic section %d byte-vector count: %v", id, err)
+			}
+			return 0, err
 		}
 		if count64 > uint64(maxInt) {
 			return 0, protocolError(ErrResourceExhausted, "section %d byte-vector count exceeds int capacity", id)
@@ -434,6 +436,9 @@ func validateDeterministicName(name string, raw []byte, limits Limits) error {
 	}
 	if length > limits.MaxDeterministicNameBytes {
 		return protocolError(ErrResourceExhausted, "%s length %d exceeds limit %d", name, length, limits.MaxDeterministicNameBytes)
+	}
+	if length > uint64(maxInt) {
+		return protocolError(ErrResourceExhausted, "%s length exceeds int capacity", name)
 	}
 	valueLen := int(length)
 	if valueLen != remaining {
