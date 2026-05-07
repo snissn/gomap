@@ -26,6 +26,48 @@ func TestPutAppendOnlyEntriesClearsReferences(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyEntryPoolClassForLength(t *testing.T) {
+	tests := []struct {
+		name     string
+		length   int
+		wantCap  int
+		wantPool bool
+	}{
+		{name: "negative", length: -1, wantCap: appendOnlyMinInitialEntries, wantPool: true},
+		{name: "zero", length: 0, wantCap: appendOnlyMinInitialEntries, wantPool: true},
+		{name: "minimum", length: appendOnlyMinInitialEntries, wantCap: appendOnlyMinInitialEntries, wantPool: true},
+		{name: "round-up", length: appendOnlyMinInitialEntries + 1, wantCap: appendOnlyMinInitialEntries * 2, wantPool: true},
+		{name: "bench-sized", length: 16000, wantCap: 1 << 14, wantPool: true},
+		{name: "maximum", length: appendOnlyEntryPoolMaxCap, wantCap: appendOnlyEntryPoolMaxCap, wantPool: true},
+		{name: "too-large", length: appendOnlyEntryPoolMaxCap + 1, wantPool: false},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			_, gotCap, gotPool := appendOnlyEntryPoolClassForLength(tc.length)
+			if gotPool != tc.wantPool {
+				t.Fatalf("pooled=%v want %v", gotPool, tc.wantPool)
+			}
+			if gotPool && gotCap != tc.wantCap {
+				t.Fatalf("cap=%d want %d", gotCap, tc.wantCap)
+			}
+		})
+	}
+}
+
+func TestAppendOnlyEntryPoolClassForReusableCapacity(t *testing.T) {
+	if _, ok := appendOnlyEntryPoolClassForReusableCapacity(appendOnlyMinInitialEntries - 1); ok {
+		t.Fatalf("sub-minimum capacity should not be pooled")
+	}
+	if _, ok := appendOnlyEntryPoolClassForReusableCapacity(16000); !ok {
+		t.Fatalf("bench-sized capacity should be pooled")
+	}
+	if _, ok := appendOnlyEntryPoolClassForReusableCapacity(appendOnlyEntryPoolMaxCap + 1); ok {
+		t.Fatalf("oversized capacity should not be pooled")
+	}
+}
+
 func TestAppendOnlyIteratorCloseClearsPooledEntries(t *testing.T) {
 	entries := make([]appendOnlyEntry, 2)
 	entries[0].key = []byte("k0")
