@@ -172,7 +172,13 @@ func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState,
 	s.counters.inc("frames.in_total")
 	s.counters.add("bytes.in_total", uint64(iwire.FrameHeaderLenV1)+uint64(len(body)))
 	if err := iwire.ValidateHeaderVersion(header, iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0}); err != nil {
-		return s.writeError(w, header, err)
+		if writeErr := s.writeError(w, header, err); writeErr != nil {
+			return writeErr
+		}
+		if state != nil && state.hello {
+			return errGoaway
+		}
+		return nil
 	}
 	switch header.Type {
 	case iwire.FrameHello:

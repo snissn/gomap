@@ -122,6 +122,56 @@ func TestServerMalformedRequestReturnsWireError(t *testing.T) {
 	}
 }
 
+func TestServerClosesPostHandshakeUnsupportedVersion(t *testing.T) {
+	server := NewServer(ServerOptions{})
+	left, right := net.Pipe()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ServeConn(context.Background(), right)
+	}()
+	t.Cleanup(func() {
+		_ = left.Close()
+		_ = right.Close()
+		_ = server.Close()
+	})
+
+	if err := writeFrame(left, iwire.Header{Type: iwire.FrameHello, RequestID: 1}, nil); err != nil {
+		t.Fatalf("write hello: %v", err)
+	}
+	header, _, err := readFrame(left, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatalf("read hello_ok: %v", err)
+	}
+	if header.Type != iwire.FrameHelloOK {
+		t.Fatalf("hello response type=%d want hello_ok", header.Type)
+	}
+	if err := writeFrame(left, iwire.Header{
+		Version:   iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0 + 1},
+		Type:      iwire.FramePing,
+		RequestID: 2,
+	}, nil); err != nil {
+		t.Fatalf("write bad-version ping: %v", err)
+	}
+	header, body, err := readFrame(left, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatalf("read version error: %v", err)
+	}
+	if header.Type != iwire.FrameError {
+		t.Fatalf("bad-version response type=%d want error", header.Type)
+	}
+	if !isRemoteError(decodeWireError(body, iwire.DefaultLimits()), iwire.ErrUnsupportedVersion) {
+		t.Fatalf("bad-version body did not decode as unsupported version")
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("ServeConn returned %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ServeConn did not close after post-handshake version error")
+	}
+}
+
 func TestServerRejectsRequestBeforeHello(t *testing.T) {
 	server := NewServer(ServerOptions{})
 	client, _ := servePipe(t, server)
