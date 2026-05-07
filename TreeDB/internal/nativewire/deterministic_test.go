@@ -105,6 +105,23 @@ func TestDeterministicEntryRejectsCollectionHandleRefs(t *testing.T) {
 	}
 }
 
+func TestDeterministicEntryRejectsInvalidCollectionNames(t *testing.T) {
+	registry := MustV1Registry()
+	sections := insertBatchDeterministicSections()
+	for i := range sections {
+		if sections[i].ID == SectionCollectionRef {
+			sections[i].Bytes = []byte("bad/name")
+		}
+	}
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("invalid collection ref err=%v code=%d", err, codeOf(err))
+	}
+}
+
 func TestDeterministicEntryRejectsNonCanonicalSectionPayloads(t *testing.T) {
 	registry := MustV1Registry()
 	sections := insertBatchDeterministicSections()
@@ -133,6 +150,34 @@ func TestDeterministicEntryRejectsNonCanonicalSectionPayloads(t *testing.T) {
 	}
 	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrMalformedFrame {
 		t.Fatalf("non-canonical catalog guard err=%v code=%d", err, codeOf(err))
+	}
+
+	sections = insertBatchDeterministicSections()
+	for i := range sections {
+		if sections[i].ID == SectionDocumentFormat {
+			sections[i].Bytes = []byte{0x82, 0x00}
+		}
+	}
+	cmd, err = registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections document format: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("non-canonical document_format err=%v code=%d", err, codeOf(err))
+	}
+
+	sections = insertBatchDeterministicSections()
+	for i := range sections {
+		if sections[i].ID == SectionDocumentFormat {
+			sections[i].Bytes = []byte{99}
+		}
+	}
+	cmd, err = registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections unsupported document format: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("unsupported document_format err=%v code=%d", err, codeOf(err))
 	}
 }
 
