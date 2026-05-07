@@ -217,15 +217,16 @@ type diskSnapshot struct {
 }
 
 type benchTarget struct {
-	client          *mongo.Client
-	db              *backenddb.DB
-	collections     *collections.CollectionManager
-	server          *mongogateway.Server
-	mongoAddr       string
-	treedbDir       string
-	removeTreeDBDir bool
-	poolStats       *mongoPoolStats
-	cleanup         func(context.Context) error
+	client               *mongo.Client
+	db                   *backenddb.DB
+	collections          *collections.CollectionManager
+	server               *mongogateway.Server
+	mongoAddr            string
+	treedbDir            string
+	removeTreeDBDir      bool
+	skipDrainAfterPhases bool
+	poolStats            *mongoPoolStats
+	cleanup              func(context.Context) error
 }
 
 type mongoPoolStats struct {
@@ -877,11 +878,12 @@ func openTreeDBDirectTarget(ctx context.Context, cfg config) (*benchTarget, erro
 		return errors.Join(manager.FlushAll(), backendCleanup())
 	}
 	return &benchTarget{
-		db:              db,
-		collections:     manager,
-		treedbDir:       dir,
-		removeTreeDBDir: removeDir,
-		cleanup:         cleanup,
+		db:                   db,
+		collections:          manager,
+		treedbDir:            dir,
+		removeTreeDBDir:      removeDir,
+		skipDrainAfterPhases: cfg.TreeDBReadState == treeDBReadStateUnsettled,
+		cleanup:              cleanup,
 	}, nil
 }
 
@@ -983,15 +985,16 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		return errors.Join(errs...)
 	}
 	return &benchTarget{
-		client:          client,
-		db:              db,
-		collections:     manager,
-		server:          server,
-		mongoAddr:       ln.Addr().String(),
-		treedbDir:       dir,
-		removeTreeDBDir: removeDir,
-		poolStats:       poolStats,
-		cleanup:         cleanup,
+		client:               client,
+		db:                   db,
+		collections:          manager,
+		server:               server,
+		mongoAddr:            ln.Addr().String(),
+		treedbDir:            dir,
+		removeTreeDBDir:      removeDir,
+		skipDrainAfterPhases: cfg.TreeDBReadState == treeDBReadStateUnsettled,
+		poolStats:            poolStats,
+		cleanup:              cleanup,
 	}, nil
 }
 
@@ -2464,7 +2467,11 @@ func runProfiledPhase(profiler *profileRecorder, name string, run func() (phaseR
 }
 
 func runTreeDBProfiledPhase(target *benchTarget, profiler *profileRecorder, name string, run func() (phaseResult, error)) (phaseResult, error) {
-	return runTreeDBProfiledPhaseWithDrain(target, profiler, name, true, run)
+	drainAfter := true
+	if target != nil && target.skipDrainAfterPhases {
+		drainAfter = false
+	}
+	return runTreeDBProfiledPhaseWithDrain(target, profiler, name, drainAfter, run)
 }
 
 func runTreeDBProfiledPhaseWithDrain(target *benchTarget, profiler *profileRecorder, name string, drainAfter bool, run func() (phaseResult, error)) (phaseResult, error) {
