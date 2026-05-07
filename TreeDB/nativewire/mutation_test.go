@@ -10,6 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestMutationCommandsRoundTrip(t *testing.T) {
@@ -273,6 +274,55 @@ func TestMutationInvalidBSONRejectedBeforeTrustedInsert(t *testing.T) {
 		t.Fatalf("InsertBatch invalid BSON err=%v want invalid command", err)
 	}
 	assertDocumentMissing(t, mgr, "users", "u1")
+}
+
+func TestMutationReplaceValidatesBSONBeforeSkippingMissingIDs(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{
+		Name:    "users",
+		Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	original, err := bson.Marshal(bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}})
+	if err != nil {
+		t.Fatalf("marshal original: %v", err)
+	}
+	changed, err := bson.Marshal(bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Changed"}})
+	if err != nil {
+		t.Fatalf("marshal changed: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatBSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{original},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	_, _, err = client.ReplaceBatch(ctx, "users", collections.DocumentFormatBSON,
+		[][]byte{[]byte("missing"), []byte("u1")},
+		[][]byte{{0x05, 0x00}, changed},
+		AckVisible,
+	)
+	if !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("ReplaceBatch invalid BSON err=%v want invalid command", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get u1: %v", err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("u1 changed after rejected replace: got %v want %v", got, original)
+	}
 }
 
 func TestMutationRaftAckRejected(t *testing.T) {

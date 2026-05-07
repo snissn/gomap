@@ -58,13 +58,14 @@ type Server struct {
 	conns     map[net.Conn]struct{}
 	listeners map[net.Listener]struct{}
 
-	inFlight    atomic.Int64
-	nextConn    atomic.Int64
-	nextCursor  atomic.Uint64
-	cursorCount atomic.Int64
-	cursorMu    sync.Mutex
-	cursors     map[uint64]*serverCursor
-	counters    counters
+	inFlight               atomic.Int64
+	nextConn               atomic.Int64
+	nextCursor             atomic.Uint64
+	cursorCount            atomic.Int64
+	nextCursorReapUnixNano atomic.Int64
+	cursorMu               sync.Mutex
+	cursors                map[uint64]*serverCursor
+	counters               counters
 }
 
 type serverCursor struct {
@@ -442,7 +443,13 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	}
 	if err != nil {
 		s.counters.inc("requests.failed_total")
-		return s.writeError(w, header, err)
+		if writeErr := s.writeError(w, header, err); writeErr != nil {
+			return writeErr
+		}
+		if isMalformedProtocolError(err) {
+			return errGoaway
+		}
+		return nil
 	}
 	if req, ok, err := s.decodeInsertBatchFastRequest(state, sections); ok {
 		if err != nil {

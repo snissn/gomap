@@ -110,7 +110,7 @@ func TestServerReadCommandWithoutCollectionManagerReturnsWireError(t *testing.T)
 
 func TestServerMalformedRequestReturnsWireError(t *testing.T) {
 	server := NewServer(ServerOptions{})
-	client, _ := servePipe(t, server)
+	client, errCh := servePipe(t, server)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -120,6 +120,17 @@ func TestServerMalformedRequestReturnsWireError(t *testing.T) {
 	_, _, err := client.roundTrip(ctx, iwire.FrameRequest, []byte{0xff}, iwire.FrameResponse)
 	if !isRemoteError(err, iwire.ErrMalformedFrame) {
 		t.Fatalf("error=%v want malformed frame", err)
+	}
+	if err := client.Ping(ctx); err == nil {
+		t.Fatal("Ping after malformed request succeeded; connection should be closed")
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("ServeConn returned %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ServeConn did not close after malformed request")
 	}
 }
 

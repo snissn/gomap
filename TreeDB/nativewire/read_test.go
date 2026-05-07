@@ -164,6 +164,45 @@ func TestIndexRangeByteOnlyLimitTruncatesIDs(t *testing.T) {
 	}
 }
 
+func TestGetManyResponseRespectsFrameLimit(t *testing.T) {
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{Limits: iwire.Limits{MaxFrameSize: 256}})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{bytes.Repeat([]byte("x"), 512)}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if _, _, err := client.GetMany(ctx, "users", [][]byte{[]byte("u1")}); !isRemoteError(err, iwire.ErrResourceExhausted) {
+		t.Fatalf("GetMany err=%v want resource exhausted", err)
+	}
+}
+
+func TestDecodeReadResultsRejectsTrailingTruncatedBytes(t *testing.T) {
+	sections := []iwire.Section{
+		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("u1"))},
+		{ID: iwire.SectionTruncated, Bytes: []byte{1, 0}},
+	}
+	if _, _, err := decodeIDsAndTruncated(sections, iwire.DefaultLimits()); nativeCodeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("decodeIDsAndTruncated err=%v code=%d want malformed", err, nativeCodeOf(err))
+	}
+	sections = []iwire.Section{
+		{ID: iwire.SectionCursorMeta, Bytes: encodeCursorMeta(CursorMeta{})},
+		{ID: iwire.SectionTruncated, Bytes: []byte{1, 0}},
+	}
+	if _, err := decodeDocumentsResult(sections, iwire.DefaultLimits()); nativeCodeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("decodeDocumentsResult err=%v code=%d want malformed", err, nativeCodeOf(err))
+	}
+}
+
 func TestIndexRangeOmittedBoundsAreUnbounded(t *testing.T) {
 	client, mgr, _ := serveCollectionPipe(t)
 	seedReadCollection(t, mgr)
@@ -183,6 +222,107 @@ func TestIndexRangeOmittedBoundsAreUnbounded(t *testing.T) {
 	}
 	if truncated || len(ids) != 2 {
 		t.Fatalf("ids=%q truncated=%v want full unbounded range", ids, truncated)
+	}
+}
+
+func TestCursorOwnerIsolation(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	server := NewServer(ServerOptions{Collections: mgr, Backend: db})
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = db.Close()
+	})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	clientA, cleanupA, err := NewInProcessClient(ctx, server)
+	if err != nil {
+		t.Fatalf("NewInProcessClient A: %v", err)
+	}
+	defer func() { _ = cleanupA() }()
+	clientB, cleanupB, err := NewInProcessClient(ctx, server)
+	if err != nil {
+		t.Fatalf("NewInProcessClient B: %v", err)
+	}
+	defer func() { _ = cleanupB() }()
+
+	first, err := clientA.OpenScan(ctx, "users", CursorLimits{MaxItems: 1})
+	if err != nil {
+		t.Fatalf("OpenScan: %v", err)
+	}
+	if first.Cursor.CursorID == 0 {
+		t.Fatalf("first=%+v want cursor", first)
+	}
+	if _, err := clientB.CursorNext(ctx, first.Cursor.CursorID, CursorLimits{MaxItems: 1}); !isRemoteError(err, iwire.ErrCursorNotFound) {
+		t.Fatalf("CursorNext by other connection err=%v want cursor_not_found", err)
+	}
+}
+
+func TestCursorCleanupOnConnectionClose(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	server := NewServer(ServerOptions{Collections: mgr, Backend: db})
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = db.Close()
+	})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client, cleanup, err := NewInProcessClient(ctx, server)
+	if err != nil {
+		t.Fatalf("NewInProcessClient: %v", err)
+	}
+	first, err := client.OpenScan(ctx, "users", CursorLimits{MaxItems: 1})
+	if err != nil {
+		t.Fatalf("OpenScan: %v", err)
+	}
+	if first.Cursor.CursorID == 0 || server.openCursorCount() != 1 {
+		t.Fatalf("cursor id=%d count=%d want one open cursor", first.Cursor.CursorID, server.openCursorCount())
+	}
+	if err := cleanup(); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	if got := server.openCursorCount(); got != 0 {
+		t.Fatalf("openCursorCount=%d want 0 after connection close", got)
+	}
+}
+
+func TestCursorIdleTimeoutReap(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	server := NewServer(ServerOptions{Collections: mgr, Backend: db, CursorIdleTimeout: time.Millisecond})
+	client, _ := servePipe(t, server)
+	t.Cleanup(func() { _ = db.Close() })
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	first, err := client.OpenScan(ctx, "users", CursorLimits{MaxItems: 1})
+	if err != nil {
+		t.Fatalf("OpenScan: %v", err)
+	}
+	if first.Cursor.CursorID == 0 || server.openCursorCount() != 1 {
+		t.Fatalf("cursor id=%d count=%d want one open cursor", first.Cursor.CursorID, server.openCursorCount())
+	}
+	time.Sleep(5 * time.Millisecond)
+	if _, err := client.Stats(ctx); err != nil {
+		t.Fatalf("Stats after idle timeout: %v", err)
+	}
+	if got := server.openCursorCount(); got != 0 {
+		t.Fatalf("openCursorCount=%d want 0 after idle timeout reap", got)
 	}
 }
 
@@ -304,6 +444,42 @@ func TestCursorClose(t *testing.T) {
 	_, err = client.CursorNext(ctx, first.Cursor.CursorID, CursorLimits{MaxItems: 1})
 	if !isRemoteError(err, iwire.ErrCursorNotFound) {
 		t.Fatalf("CursorNext after close error=%v want cursor_not_found", err)
+	}
+}
+
+func TestOpenScanEnforcesMaxOpenCursors(t *testing.T) {
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{MaxOpenCursors: 1})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	first, err := client.OpenScan(ctx, "users", CursorLimits{MaxItems: 1})
+	if err != nil {
+		t.Fatalf("OpenScan first: %v", err)
+	}
+	if first.Cursor.CursorID == 0 {
+		t.Fatalf("first=%+v want cursor", first)
+	}
+	if _, err := client.OpenScan(ctx, "users", CursorLimits{MaxItems: 1}); !isRemoteError(err, iwire.ErrResourceExhausted) {
+		t.Fatalf("OpenScan second err=%v want resource exhausted", err)
+	}
+	if err := client.CursorClose(ctx, first.Cursor.CursorID); err != nil {
+		t.Fatalf("CursorClose cleanup: %v", err)
+	}
+}
+
+func TestCursorCloseRequiresStreamID(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if err := client.CursorClose(ctx, 0); !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("CursorClose zero err=%v want invalid command", err)
 	}
 }
 

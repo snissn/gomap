@@ -254,7 +254,8 @@ func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) 
 	if err != nil {
 		return nil, err
 	}
-	if _, err := decodeDocumentFormatSection(sections); err != nil {
+	format, err := decodeDocumentFormatSection(sections)
+	if err != nil {
 		return nil, err
 	}
 	if err := validateReplacementMode(sections); err != nil {
@@ -270,6 +271,11 @@ func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) 
 	}
 	if err != nil {
 		return nil, err
+	}
+	if format == collections.DocumentFormatBSON {
+		if err := validateBSONDocuments(docs); err != nil {
+			return nil, err
+		}
 	}
 	ack, err := ackPolicyFromSections(sections, s.defaultAckPolicy)
 	if err != nil {

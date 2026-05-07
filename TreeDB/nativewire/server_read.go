@@ -59,6 +59,17 @@ func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, d
 	if err != nil {
 		return nil, err
 	}
+	if err := s.checkResponseSectionLen("presence_bitmap", len(presence)); err != nil {
+		return nil, err
+	}
+	if err := s.checkResponseSectionLen("documents", docSectionLen); err != nil {
+		return nil, err
+	}
+	bodyLen := iwire.SectionHeaderEncodedLen(iwire.SectionPresenceBitmap, 0, len(presence)) + len(presence)
+	bodyLen += iwire.SectionHeaderEncodedLen(iwire.SectionDocuments, 0, docSectionLen) + docSectionLen
+	if err := s.checkResponseBodyLen(bodyLen); err != nil {
+		return nil, err
+	}
 	body, err := iwire.AppendSectionHeader(dst, iwire.SectionPresenceBitmap, 0, len(presence))
 	if err != nil {
 		return nil, err
@@ -69,6 +80,27 @@ func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, d
 		return nil, err
 	}
 	return iwire.AppendByteVectorPayload(body, lengths, payload)
+}
+
+func (s *Server) checkResponseSectionLen(name string, sectionLen int) error {
+	if sectionLen < 0 {
+		return protocolError(iwire.ErrMalformedFrame, "%s section length is negative", name)
+	}
+	if uint64(sectionLen) > s.limits.MaxSectionLen {
+		return protocolError(iwire.ErrResourceExhausted, "%s section length %d exceeds limit %d", name, sectionLen, s.limits.MaxSectionLen)
+	}
+	return nil
+}
+
+func (s *Server) checkResponseBodyLen(bodyLen int) error {
+	if bodyLen < 0 {
+		return protocolError(iwire.ErrMalformedFrame, "response body length is negative")
+	}
+	frameLen := uint64(iwire.FrameHeaderLenV1) + uint64(bodyLen)
+	if frameLen > s.limits.MaxFrameSize {
+		return protocolError(iwire.ErrResourceExhausted, "response frame length %d exceeds limit %d", frameLen, s.limits.MaxFrameSize)
+	}
+	return nil
 }
 
 func getManyPayloadCapacityHint(count int, limits iwire.Limits) int {
@@ -144,7 +176,7 @@ func (s *Server) handleIndexRange(state *connState, sections []iwire.Section) ([
 	if err != nil {
 		return nil, err
 	}
-	indexName, opts, limits, err := indexRangeRequest(sections)
+	indexName, opts, limits, err := s.indexRangeRequest(sections)
 	if err != nil {
 		return nil, err
 	}
@@ -174,14 +206,14 @@ func (s *Server) handleOpenScan(state *connState, sections []iwire.Section) ([]i
 	}
 	end, bytes := splitCursorBatch(records, 0, limits, s.defaultCursorBatchSize)
 	if end < len(records) && documentRecordsBytes(records[end:]) > s.maxCursorRetainedBytes {
-		return responseForRecords(records[:end], CursorMeta{Items: end, Bytes: bytes, Truncated: true})
+		return responseForRecords(records[:end], CursorMeta{Items: end, Bytes: bytes}, true)
 	}
 	cursorID, err := s.storeCursor(state.id, records, end, truncated)
 	if err != nil {
 		return nil, err
 	}
 	hasMore := cursorID != 0
-	return responseForRecords(records[:end], CursorMeta{CursorID: cursorID, Items: end, Bytes: bytes, HasMore: hasMore, Truncated: truncated})
+	return responseForRecords(records[:end], CursorMeta{CursorID: cursorID, Items: end, Bytes: bytes, HasMore: hasMore}, truncated)
 }
 
 func (s *Server) handleCursorNext(state *connState, cursorID uint64, sections []iwire.Section) ([]iwire.Section, error) {
@@ -214,11 +246,11 @@ func (s *Server) handleCursorNext(state *connState, cursorID uint64, sections []
 		s.counters.inc("cursors.closed_total")
 	}
 	s.cursorMu.Unlock()
-	meta := CursorMeta{CursorID: cursorID, Items: len(batch), Bytes: bytes, HasMore: hasMore, Truncated: truncated}
+	meta := CursorMeta{CursorID: cursorID, Items: len(batch), Bytes: bytes, HasMore: hasMore}
 	if !hasMore {
 		meta.CursorID = 0
 	}
-	return responseForRecords(batch, meta)
+	return responseForRecords(batch, meta, truncated)
 }
 
 func (s *Server) handleCursorClose(state *connState, cursorID uint64, sections []iwire.Section) ([]iwire.Section, error) {
@@ -277,7 +309,7 @@ func indexLookupRequest(sections []iwire.Section) (string, any, error) {
 	return indexName, value, err
 }
 
-func indexRangeRequest(sections []iwire.Section) (string, collections.IndexRangeOptions, CursorLimits, error) {
+func (s *Server) indexRangeRequest(sections []iwire.Section) (string, collections.IndexRangeOptions, CursorLimits, error) {
 	raw, err := metadataSection(sections, iwire.SectionIndexName)
 	if err != nil {
 		return "", collections.IndexRangeOptions{}, CursorLimits{}, err
@@ -313,6 +345,9 @@ func indexRangeRequest(sections []iwire.Section) (string, collections.IndexRange
 	opts.Limit = limits.MaxItems
 	if opts.Limit <= 0 && limits.MaxBytes > 0 && limits.MaxBytes < maxInt {
 		opts.Limit = limits.MaxBytes + 1
+		if s != nil && s.maxScanDocuments > 0 && opts.Limit > s.maxScanDocuments {
+			opts.Limit = s.maxScanDocuments
+		}
 	}
 	if opts.Limit < 0 {
 		return "", collections.IndexRangeOptions{}, CursorLimits{}, errors.New("negative range limit")

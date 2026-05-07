@@ -10,12 +10,14 @@ import (
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
+var ErrNilListener = errors.New("nativewire: nil listener")
+
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	if s == nil {
 		return ErrServerClosed
 	}
 	if ln == nil {
-		return net.ErrClosed
+		return ErrNilListener
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -52,6 +54,9 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 }
 
 func DialContext(ctx context.Context, network, address string) (*Client, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var dialer net.Dialer
 	conn, err := dialer.DialContext(ctx, network, address)
 	if err != nil {

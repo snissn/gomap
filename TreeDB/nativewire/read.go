@@ -31,11 +31,10 @@ type CursorLimits struct {
 }
 
 type CursorMeta struct {
-	CursorID  uint64
-	Items     int
-	Bytes     int
-	HasMore   bool
-	Truncated bool
+	CursorID uint64
+	Items    int
+	Bytes    int
+	HasMore  bool
 }
 
 func encodeScalar(value any) ([]byte, error) {
@@ -276,7 +275,7 @@ func splitCursorBatch(records []collections.DocumentRecord, start int, limits Cu
 	return end, bytes
 }
 
-func responseForRecords(records []collections.DocumentRecord, meta CursorMeta) ([]iwire.Section, error) {
+func responseForRecords(records []collections.DocumentRecord, meta CursorMeta, truncated bool) ([]iwire.Section, error) {
 	ids := make([][]byte, len(records))
 	docs := make([][]byte, len(records))
 	for i := range records {
@@ -288,7 +287,7 @@ func responseForRecords(records []collections.DocumentRecord, meta CursorMeta) (
 		{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, docs...)},
 		{ID: iwire.SectionCursorMeta, Bytes: encodeCursorMeta(meta)},
 	}
-	if meta.Truncated {
+	if truncated {
 		sections = append(sections, iwire.Section{ID: iwire.SectionTruncated, Bytes: appendBool(nil, true)})
 	}
 	return sections, nil
@@ -299,6 +298,15 @@ func (s *Server) reapExpiredCursors() {
 		return
 	}
 	now := time.Now()
+	interval := cursorReapInterval(s.cursorIdleTimeout)
+	next := s.nextCursorReapUnixNano.Load()
+	nowUnix := now.UnixNano()
+	if next > nowUnix {
+		return
+	}
+	if !s.nextCursorReapUnixNano.CompareAndSwap(next, now.Add(interval).UnixNano()) {
+		return
+	}
 	s.cursorMu.Lock()
 	expired := 0
 	for id, cursor := range s.cursors {
@@ -312,6 +320,17 @@ func (s *Server) reapExpiredCursors() {
 	if expired > 0 {
 		s.cursorCount.Add(-int64(expired))
 	}
+}
+
+func cursorReapInterval(idleTimeout time.Duration) time.Duration {
+	if idleTimeout <= time.Second {
+		return idleTimeout
+	}
+	interval := idleTimeout / 4
+	if interval < time.Second {
+		return time.Second
+	}
+	return interval
 }
 
 func (s *Server) openCursorCount() int {

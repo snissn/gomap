@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"bytes"
 	"strings"
 	"unicode/utf8"
 )
@@ -125,6 +126,9 @@ func validateDeterministicSectionPayload(section Section) error {
 			return protocolError(ErrInvalidCommand, "unsupported document_format %d", format)
 		}
 	case SectionDocumentIDs, SectionDocuments, SectionTemplateRecords:
+		if section.ID == SectionDocumentIDs {
+			return validateDeterministicDocumentIDs(section.Bytes)
+		}
 		return validateByteVector(section.Bytes, Limits{})
 	case SectionExpectedCatalogVersion, SectionReplacementMode:
 		_, n, err := readUvarint(section.Bytes)
@@ -133,6 +137,61 @@ func validateDeterministicSectionPayload(section Section) error {
 		}
 		if n != len(section.Bytes) {
 			return protocolError(ErrInvalidCommand, "section %d has %d trailing bytes", section.ID, len(section.Bytes)-n)
+		}
+	}
+	return nil
+}
+
+func validateDeterministicDocumentIDs(raw []byte) error {
+	if err := validateByteVector(raw, Limits{}); err != nil {
+		return err
+	}
+	count64, off, err := readUvarint(raw)
+	if err != nil {
+		return err
+	}
+	if count64 > uint64(maxInt) {
+		return protocolError(ErrResourceExhausted, "document_ids count exceeds int capacity")
+	}
+	count := int(count64)
+	var stackOffsets [256]int
+	var stackLengths [256]int
+	offsets := stackOffsets[:0]
+	lengths := stackLengths[:0]
+	if count > cap(offsets) {
+		offsets = make([]int, count)
+		lengths = make([]int, count)
+	} else {
+		offsets = offsets[:count]
+		lengths = lengths[:count]
+	}
+	payloadLen := 0
+	for i := 0; i < count; i++ {
+		length, n, err := readUvarint(raw[off:])
+		if err != nil {
+			return err
+		}
+		off += n
+		if length == 0 {
+			return protocolError(ErrInvalidCommand, "empty document id at index %d", i)
+		}
+		if length > uint64(maxInt) || payloadLen > maxInt-int(length) {
+			return protocolError(ErrResourceExhausted, "document_ids payload length exceeds int capacity")
+		}
+		offsets[i] = payloadLen
+		lengths[i] = int(length)
+		payloadLen += int(length)
+	}
+	payload := raw[off:]
+	for i := 0; i < count; i++ {
+		start := offsets[i]
+		item := payload[start : start+lengths[i]]
+		for j := 0; j < i; j++ {
+			prevStart := offsets[j]
+			prev := payload[prevStart : prevStart+lengths[j]]
+			if bytes.Equal(item, prev) {
+				return protocolError(ErrDuplicateDocumentID, "duplicate document id at index %d", i)
+			}
 		}
 	}
 	return nil

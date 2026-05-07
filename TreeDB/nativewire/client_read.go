@@ -56,6 +56,9 @@ func (c *Client) getMany(ctx context.Context, collection string, handle Collecti
 	if err != nil {
 		return nil, nil, err
 	}
+	if len(docs) != len(ids) {
+		return nil, nil, protocolError(iwire.ErrMalformedFrame, "get_many documents length %d does not match requested ids length %d", len(docs), len(ids))
+	}
 	rawPresence, ok, err := singletonSection(sections, iwire.SectionPresenceBitmap)
 	if err != nil {
 		return nil, nil, err
@@ -203,8 +206,7 @@ func decodeIDsAndTruncated(sections []iwire.Section, limits iwire.Limits) ([][]b
 	if raw, ok, err := singletonSection(sections, iwire.SectionTruncated); err != nil {
 		return nil, false, err
 	} else if ok {
-		off := 0
-		truncated, err = readBool(raw, &off)
+		truncated, err = decodeBoolPayload(raw, "truncated")
 		if err != nil {
 			return nil, false, err
 		}
@@ -247,13 +249,24 @@ func decodeDocumentsResult(sections []iwire.Section, limits iwire.Limits) (Docum
 	if raw, ok, err := singletonSection(sections, iwire.SectionTruncated); err != nil {
 		return out, err
 	} else if ok {
-		off := 0
-		out.Truncated, err = readBool(raw, &off)
+		out.Truncated, err = decodeBoolPayload(raw, "truncated")
 		if err != nil {
 			return out, err
 		}
 	}
 	return out, nil
+}
+
+func decodeBoolPayload(raw []byte, name string) (bool, error) {
+	off := 0
+	value, err := readBool(raw, &off)
+	if err != nil {
+		return false, err
+	}
+	if off != len(raw) {
+		return false, protocolError(iwire.ErrMalformedFrame, "%s bool has %d trailing bytes", name, len(raw)-off)
+	}
+	return value, nil
 }
 
 func scalarFromIndexValueType(valueType collections.IndexValueType, value any) Scalar {

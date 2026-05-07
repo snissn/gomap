@@ -143,6 +143,25 @@ func TestMetadataHandleRefWorksForListIndexes(t *testing.T) {
 	}
 }
 
+func TestMetadataDuplicateIndexReturnsInvalidCommand(t *testing.T) {
+	client, _, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	def := collections.IndexDefinition{Name: "email", Field: "email", ValueType: collections.IndexValueString}
+	if _, err := client.CreateIndex(ctx, "users", def); err != nil {
+		t.Fatalf("CreateIndex first: %v", err)
+	}
+	if _, err := client.CreateIndex(ctx, "users", def); !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("CreateIndex duplicate err=%v want invalid command", err)
+	}
+}
+
 func TestMetadataHandleRefsRejectedForNameOnlyCommands(t *testing.T) {
 	client, _, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

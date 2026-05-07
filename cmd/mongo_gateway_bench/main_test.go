@@ -2018,12 +2018,43 @@ func TestEnsureNativeWireBenchmarkCollectionCreatesPrimaryOnlyCollection(t *test
 	}
 }
 
+func TestEnsureNativeWireBenchmarkCollectionRejectsExistingDrift(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{
+		Name: "bench.docs",
+		Indexes: []collections.IndexDefinition{{
+			Name:      "email_1",
+			Field:     "email",
+			ValueType: collections.IndexValueString,
+			Unique:    true,
+		}},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	cfg := config{
+		Database:             "bench",
+		Collection:           "docs",
+		TreeDBDocumentFormat: collections.DocumentFormatJSON,
+	}
+	if err := ensureNativeWireBenchmarkCollection(cfg, &benchTarget{collections: manager}); err == nil {
+		t.Fatal("ensureNativeWireBenchmarkCollection accepted existing indexed collection for primary-only config")
+	}
+}
+
 func TestNativeWireStoredDocumentPreservesFullBenchmarkShape(t *testing.T) {
 	rawJSON, err := nativeWireStoredDocument(collections.DocumentFormatJSON, 7, nil, nil)
 	if err != nil {
 		t.Fatalf("nativeWireStoredDocument JSON: %v", err)
 	}
 	assertNativeWireBenchmarkJSONShape(t, rawJSON)
+	if !bytes.Contains(rawJSON, []byte(`"$numberLong"`)) || !bytes.Contains(rawJSON, []byte(`"$numberDouble"`)) {
+		t.Fatalf("nativeWireStoredDocument JSON did not preserve Extended JSON numeric types: %s", rawJSON)
+	}
 
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

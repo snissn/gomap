@@ -220,6 +220,34 @@ func TestDeterministicEntryRejectsNonCanonicalSectionPayloads(t *testing.T) {
 	}
 }
 
+func TestDeterministicEntryRejectsInvalidDocumentIDs(t *testing.T) {
+	registry := MustV1Registry()
+	for _, tc := range []struct {
+		name string
+		ids  [][]byte
+		code ErrorCode
+	}{
+		{name: "empty", ids: [][]byte{[]byte("a"), nil}, code: ErrInvalidCommand},
+		{name: "duplicate", ids: [][]byte{[]byte("a"), []byte("a")}, code: ErrDuplicateDocumentID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sections := insertBatchDeterministicSections()
+			for i := range sections {
+				if sections[i].ID == SectionDocumentIDs {
+					sections[i].Bytes = AppendByteVector(nil, tc.ids...)
+				}
+			}
+			cmd, err := registry.ValidateRequestSections(sections)
+			if err != nil {
+				t.Fatalf("ValidateRequestSections: %v", err)
+			}
+			if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != tc.code {
+				t.Fatalf("AppendDeterministicEntry err=%v code=%d want %d", err, codeOf(err), tc.code)
+			}
+		})
+	}
+}
+
 func insertBatchDeterministicSections() []Section {
 	return []Section{
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 1})},

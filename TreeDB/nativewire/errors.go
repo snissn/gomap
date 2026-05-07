@@ -62,6 +62,8 @@ func errorCodeFor(err error) iwire.ErrorCode {
 		return iwire.ErrInvalidCommand
 	case strings.Contains(msg, "duplicate document id"):
 		return iwire.ErrDuplicateDocumentID
+	case strings.Contains(msg, "duplicate index"):
+		return iwire.ErrInvalidCommand
 	case strings.Contains(msg, "document already exists"):
 		return iwire.ErrDocumentExists
 	case strings.Contains(msg, "unique index conflict"):
@@ -72,6 +74,11 @@ func errorCodeFor(err error) iwire.ErrorCode {
 		return iwire.ErrIndexNotFound
 	}
 	return iwire.ErrInternal
+}
+
+func isMalformedProtocolError(err error) bool {
+	code, ok := iwire.ErrorCodeOf(err)
+	return ok && code == iwire.ErrMalformedFrame
 }
 
 func retryableError(code iwire.ErrorCode) bool {
