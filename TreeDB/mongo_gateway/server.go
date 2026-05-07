@@ -225,6 +225,9 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 						return flushErr
 					}
 				}
+				if ctxErr := serveConnContextError(ctx, err); ctxErr != nil {
+					return ctxErr
+				}
 				return err
 			}
 			if !appended {

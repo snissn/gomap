@@ -137,7 +137,7 @@ func (p findResponsePayload) marshalDocument() (wire.Document, error) {
 	case findResponsePayloadIndexedRange:
 		return p.indexedRange.marshalDocument()
 	default:
-		return p.document, nil
+		return p.documentPayload()
 	}
 }
 
@@ -156,6 +156,9 @@ func (p findResponsePayload) marshalMsgIntoWithMaxLength(dst []byte, requestID, 
 	case findResponsePayloadIndexedRange:
 		return p.indexedRange.marshalMsgIntoWithMaxLength(dst, requestID, responseTo, maxMessageLength)
 	default:
+		if _, err := p.documentPayload(); err != nil {
+			return dst, err
+		}
 		if maxMessageLength <= 0 || maxMessageLength > wire.DefaultMaxMessageLength {
 			maxMessageLength = wire.DefaultMaxMessageLength
 		}
@@ -170,6 +173,17 @@ func (p findResponsePayload) marshalMsgIntoWithMaxLength(dst []byte, requestID, 
 		}
 		return msg, nil
 	}
+}
+
+func (p findResponsePayload) documentPayload() (wire.Document, error) {
+	if p.document == nil {
+		return nil, errors.New("mongo gateway: find response payload missing document")
+	}
+	if p.raw.ns != "" || p.raw.batchKey != "" || p.raw.batch != nil ||
+		p.indexedRange.col != nil || p.indexedRange.server != nil || p.indexedRange.ns != "" || p.indexedRange.indexName != "" {
+		return nil, errors.New("mongo gateway: find response payload kind mismatch")
+	}
+	return p.document, nil
 }
 
 func (s *Server) findResponse(command wire.Document, cursorOwner int64) (wire.Document, error) {
