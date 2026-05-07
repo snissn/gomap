@@ -3027,6 +3027,8 @@ func runTreeDBRawWireTCPPipelineRangePhase(ctx context.Context, cfg config, targ
 		return phaseResult{}, err
 	}
 	defer func() { _ = client.Close() }()
+	stopCancelWatch := watchRawWireTCPPipelineClients(ctx, client)
+	defer stopCancelWatch()
 	return measureTreeDBProfiledPhase(target, profiler, rangePhaseName(cfg), cfg.RangeReads, func(sample func(time.Duration)) error {
 		minAges := make([]int64, cfg.RawWireTCPPipelineDepth)
 		responseTo := make([]int32, cfg.RawWireTCPPipelineDepth)
@@ -3146,12 +3148,6 @@ func (c *rawWireTCPPipelineClient) Flush(ctx context.Context) error {
 	if len(c.writeBuf) == 0 {
 		return nil
 	}
-	stopCancelWatch := c.watchContextCancel(ctx)
-	defer func() {
-		if stopCancelWatch() {
-			_ = c.conn.SetDeadline(time.Time{})
-		}
-	}()
 	if err := writeFull(c.conn, c.writeBuf); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -3166,12 +3162,6 @@ func (c *rawWireTCPPipelineClient) ReadFind(ctx context.Context, responseTo int3
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	stopCancelWatch := c.watchContextCancel(ctx)
-	defer func() {
-		if stopCancelWatch() {
-			_ = c.conn.SetDeadline(time.Time{})
-		}
-	}()
 	header, body, err := wire.ReadMessageInto(c.rd, c.readBuf, wire.DefaultMaxMessageLength)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -3195,22 +3185,31 @@ func (c *rawWireTCPPipelineClient) ReadFind(ctx context.Context, responseTo int3
 	return validateRawAgeBatch(batch, minAge)
 }
 
-func (c *rawWireTCPPipelineClient) watchContextCancel(ctx context.Context) func() bool {
+func watchRawWireTCPPipelineClients(ctx context.Context, clients ...*rawWireTCPPipelineClient) func() {
 	done := ctx.Done()
 	if done == nil {
-		return func() bool { return false }
+		return func() {}
 	}
 	fired := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() {
 		defer close(fired)
-		_ = c.conn.SetDeadline(time.Now())
+		now := time.Now()
+		for _, client := range clients {
+			if client != nil && client.conn != nil {
+				_ = client.conn.SetDeadline(now)
+			}
+		}
 	})
-	return func() bool {
+	return func() {
 		if stop() {
-			return false
+			return
 		}
 		<-fired
-		return true
+		for _, client := range clients {
+			if client != nil && client.conn != nil {
+				_ = client.conn.SetDeadline(time.Time{})
+			}
+		}
 	}
 }
 
@@ -3284,6 +3283,8 @@ func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarge
 		return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentRangeReads, func(sample func(time.Duration)) error {
 			runCtx, cancel := context.WithCancel(ctx)
 			defer cancel()
+			stopCancelWatch := watchRawWireTCPPipelineClients(runCtx, clients...)
+			defer stopCancelWatch()
 
 			var next atomic.Int64
 			var wg sync.WaitGroup

@@ -862,6 +862,8 @@ func TestRawWireTCPPipelineClientReadFindHonorsContextCancel(t *testing.T) {
 		rd:   bufio.NewReaderSize(clientConn, rawWireTCPReadBufferSize),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	stopCancelWatch := watchRawWireTCPPipelineClients(ctx, client)
+	defer stopCancelWatch()
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- client.ReadFind(ctx, 1, 0)
@@ -890,6 +892,8 @@ func TestRawWireTCPPipelineClientFlushHonorsContextCancel(t *testing.T) {
 		writeBuf: bytes.Repeat([]byte("x"), 1024),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	stopCancelWatch := watchRawWireTCPPipelineClients(ctx, client)
+	defer stopCancelWatch()
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- client.Flush(ctx)
