@@ -362,17 +362,13 @@ func v1CommandSchemas() []CommandSchema {
 			},
 		},
 		{
-			ID:                   CommandDropCollection,
-			Version:              1,
-			Name:                 "drop_collection",
-			Kind:                 CommandKindMutation,
-			Replicated:           true,
-			RequiresIdempotency:  true,
-			RequiresCatalogGuard: true,
-			LocalOnly:            false,
+			ID:        CommandDropCollection,
+			Version:   1,
+			Name:      "drop_collection",
+			Kind:      CommandKindMutation,
+			LocalOnly: true,
 			Sections: []SectionRule{
-				{ID: SectionCollectionRef, Name: "collection_ref", Required: true, Deterministic: true},
-				{ID: SectionExpectedCatalogVersion, Name: "expected_catalog_version", Deterministic: true},
+				{ID: SectionCollectionRef, Name: "collection_ref", Required: true},
 			},
 		},
 		{
@@ -506,7 +502,6 @@ func v1CommandSchemas() []CommandSchema {
 			Name:    "cursor_next",
 			Kind:    CommandKindRead,
 			Sections: []SectionRule{
-				{ID: SectionCursorRef, Name: "cursor_ref", Required: true},
 				{ID: SectionCursorLimits, Name: "cursor_limits", Required: true},
 			},
 		},
@@ -515,9 +510,6 @@ func v1CommandSchemas() []CommandSchema {
 			Version: 1,
 			Name:    "cursor_close",
 			Kind:    CommandKindRead,
-			Sections: []SectionRule{
-				{ID: SectionCursorRef, Name: "cursor_ref", Required: true},
-			},
 		},
 		{
 			ID:      CommandStats,

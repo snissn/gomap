@@ -61,11 +61,15 @@ func (c *Client) Stats(ctx context.Context) (map[string]string, error) {
 }
 
 func (c *Client) commandSections(ctx context.Context, commandID iwire.CommandID, sections ...iwire.Section) ([]iwire.Section, error) {
+	return c.commandSectionsOnStream(ctx, 0, commandID, sections...)
+}
+
+func (c *Client) commandSectionsOnStream(ctx context.Context, streamID uint64, commandID iwire.CommandID, sections ...iwire.Section) ([]iwire.Section, error) {
 	body, err := appendCommandRequestBody(nil, commandID, sections...)
 	if err != nil {
 		return nil, err
 	}
-	_, response, err := c.roundTrip(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
+	_, response, err := c.roundTripStream(ctx, streamID, iwire.FrameRequest, body, iwire.FrameResponse)
 	if err != nil {
 		return nil, err
 	}
@@ -73,6 +77,10 @@ func (c *Client) commandSections(ctx context.Context, commandID iwire.CommandID,
 }
 
 func (c *Client) roundTrip(ctx context.Context, typ iwire.FrameType, body []byte, want iwire.FrameType) (iwire.Header, []byte, error) {
+	return c.roundTripStream(ctx, 0, typ, body, want)
+}
+
+func (c *Client) roundTripStream(ctx context.Context, streamID uint64, typ iwire.FrameType, body []byte, want iwire.FrameType) (iwire.Header, []byte, error) {
 	if c == nil || c.conn == nil {
 		return iwire.Header{}, nil, io.ErrClosedPipe
 	}
@@ -86,12 +94,14 @@ func (c *Client) roundTrip(ctx context.Context, typ iwire.FrameType, body []byte
 		_ = c.conn.SetDeadline(deadline)
 		defer func() { _ = c.conn.SetDeadline(noDeadline) }()
 	}
-	if err := writeFrame(c.conn, iwire.Header{Type: typ, RequestID: requestID}, body); err != nil {
-		return iwire.Header{}, nil, err
+	stopCancel := c.closeOnContextCancel(ctx)
+	defer stopCancel()
+	if err := writeFrame(c.conn, iwire.Header{Type: typ, StreamID: streamID, RequestID: requestID}, body); err != nil {
+		return iwire.Header{}, nil, errorOrContext(ctx, err)
 	}
 	header, response, err := readFrame(c.conn, c.limits)
 	if err != nil {
-		return iwire.Header{}, nil, err
+		return iwire.Header{}, nil, errorOrContext(ctx, err)
 	}
 	if err := iwire.ValidateHeaderVersion(header, iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0}); err != nil {
 		return header, response, err
@@ -106,6 +116,28 @@ func (c *Client) roundTrip(ctx context.Context, typ iwire.FrameType, body []byte
 		return header, response, protocolError(iwire.ErrMalformedFrame, "response frame type %d want %d", header.Type, want)
 	}
 	return header, response, nil
+}
+
+func (c *Client) closeOnContextCancel(ctx context.Context) func() {
+	if c == nil || c.conn == nil || ctx == nil || ctx.Done() == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = c.conn.Close()
+		case <-done:
+		}
+	}()
+	return func() { close(done) }
+}
+
+func errorOrContext(ctx context.Context, err error) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
 }
 
 func decodeWireError(body []byte, limits iwire.Limits) error {
