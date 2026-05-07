@@ -752,6 +752,25 @@ func TestRawInsertCommandBuildsBSONCommand(t *testing.T) {
 	}
 }
 
+func TestValidateNativeWireBenchmarkCollectionAllowsIndexOrderDrift(t *testing.T) {
+	expected := collections.CollectionMeta{
+		Name: "bench",
+		Indexes: []collections.IndexDefinition{
+			{Name: "email", Field: "email", ValueType: collections.IndexValueString, Unique: true},
+			{Name: "active", Field: "active", ValueType: collections.IndexValueBool},
+		},
+	}
+	actual := expected
+	actual.Indexes = []collections.IndexDefinition{expected.Indexes[1], expected.Indexes[0]}
+	if err := validateNativeWireBenchmarkCollection(actual, expected); err != nil {
+		t.Fatalf("validateNativeWireBenchmarkCollection reordered indexes: %v", err)
+	}
+	actual.Indexes[0].MultiKey = true
+	if err := validateNativeWireBenchmarkCollection(actual, expected); err == nil {
+		t.Fatal("validateNativeWireBenchmarkCollection accepted changed index")
+	}
+}
+
 func mustTestBSON(t *testing.T, doc bson.D) bson.Raw {
 	t.Helper()
 	raw, err := bson.Marshal(doc)
