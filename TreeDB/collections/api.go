@@ -11371,6 +11371,8 @@ type IndexRangeOptions struct {
 	Desc  bool
 }
 
+const defaultIndexRangeResultCap = 16
+
 // FindByIndexValue returns document IDs whose named secondary index equals
 // value. Query values must match the index value type. If indexName does not
 // exist, it returns nil, nil.
@@ -11393,7 +11395,7 @@ func (c *Collection) FindByIndexRange(indexName string, opts IndexRangeOptions) 
 	if opts.Limit < 0 {
 		return nil, false, errors.New("collections: index range limit cannot be negative")
 	}
-	capHint := 16
+	capHint := defaultIndexRangeResultCap
 	if opts.Limit > 0 && opts.Limit < capHint {
 		capHint = opts.Limit
 	}
@@ -11470,7 +11472,7 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 	}
 	idx, ok := findIndex(catalog.meta.Indexes, indexName)
 	if !ok {
-		return nil, false, nil
+		return make([]DocumentRecord, 0), false, nil
 	}
 	start, end, empty, err := indexRangeScanBounds(idx.ValueType, opts)
 	if err != nil {
@@ -11490,7 +11492,7 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
 	}
 	if err != nil {
-		return nil, true, err
+		return nil, false, err
 	}
 	if bufferedTable != nil {
 		defer resetCollectionRunTable(bufferedTable)
@@ -11502,12 +11504,12 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 	}
 	persistedIt, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true)
 	if err != nil {
-		return nil, true, err
+		return nil, false, err
 	}
 	if persistedIt != nil {
 		defer func() { _ = persistedIt.Close() }()
 	}
-	capHint := 16
+	capHint := defaultIndexRangeResultCap
 	if opts.Limit > 0 && opts.Limit < capHint {
 		capHint = opts.Limit
 	}
