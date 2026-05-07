@@ -1758,7 +1758,7 @@ func loadModeChartRows(rows []loadModeRow, idx int) ([]string, []float64, []floa
 }
 
 func isTreeDBOnlyLoadMode(mode string) bool {
-	return mode == "BSON direct" || mode == "BSON raw_wire_tcp" || mode == "BSON raw_wire"
+	return loadModeKind(mode) != ""
 }
 
 func loadModeDisplayLabel(mode string) string {
@@ -1791,7 +1791,30 @@ func loadModeOrder(mode string) string {
 	if idx, ok := order[mode]; ok {
 		return fmt.Sprintf("%02d_%s", idx, mode)
 	}
+	switch loadModeKind(mode) {
+	case "direct":
+		return "04_" + mode
+	case "raw_wire_tcp":
+		return "05_" + mode
+	case "raw_wire":
+		return "06_" + mode
+	}
 	return "99_" + mode
+}
+
+func loadModeKind(mode string) string {
+	normalized := strings.ToLower(strings.TrimSpace(mode))
+	normalized = strings.TrimPrefix(normalized, "bson ")
+	switch {
+	case normalized == "direct" || strings.HasSuffix(normalized, "_direct"):
+		return "direct"
+	case normalized == "raw_wire_tcp" || strings.HasSuffix(normalized, "_raw_wire_tcp"):
+		return "raw_wire_tcp"
+	case normalized == "raw_wire" || strings.HasSuffix(normalized, "_raw_wire"):
+		return "raw_wire"
+	default:
+		return ""
+	}
 }
 
 func indexCountLabel(indexes int) string {
