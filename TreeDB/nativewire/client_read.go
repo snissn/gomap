@@ -87,8 +87,11 @@ func (c *Client) IndexRange(ctx context.Context, collection, index string, opts 
 		}
 		req = append(req, iwire.Section{ID: iwire.SectionIndexUpperBound, Bytes: raw})
 	}
-	if opts.Limit > 0 {
-		req = append(req, iwire.Section{ID: iwire.SectionCursorLimits, Bytes: encodeCursorLimits(CursorLimits{MaxItems: opts.Limit})})
+	if opts.Limit > 0 || opts.MaxBytes > 0 {
+		req = append(req, iwire.Section{ID: iwire.SectionCursorLimits, Bytes: encodeCursorLimits(CursorLimits{
+			MaxItems: opts.Limit,
+			MaxBytes: opts.MaxBytes,
+		})})
 	}
 	sections, err := c.commandSections(ctx, iwire.CommandIndexRange, req...)
 	if err != nil {

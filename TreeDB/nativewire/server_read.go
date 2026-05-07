@@ -119,7 +119,7 @@ func (s *Server) handleIndexRange(state *connState, sections []iwire.Section) ([
 	if err != nil {
 		return nil, err
 	}
-	indexName, opts, err := indexRangeRequest(sections)
+	indexName, opts, limits, err := indexRangeRequest(sections)
 	if err != nil {
 		return nil, err
 	}
@@ -131,6 +131,7 @@ func (s *Server) handleIndexRange(state *connState, sections []iwire.Section) ([
 	if err != nil {
 		return nil, metadataWrap(err)
 	}
+	ids, truncated = applyIDByteLimit(ids, limits.MaxBytes, truncated)
 	return []iwire.Section{
 		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, ids...)},
 		{ID: iwire.SectionTruncated, Bytes: appendBool(nil, truncated)},
@@ -264,42 +265,42 @@ func indexLookupRequest(sections []iwire.Section) (string, any, error) {
 	return indexName, value, err
 }
 
-func indexRangeRequest(sections []iwire.Section) (string, collections.IndexRangeOptions, error) {
+func indexRangeRequest(sections []iwire.Section) (string, collections.IndexRangeOptions, CursorLimits, error) {
 	raw, err := metadataSection(sections, iwire.SectionIndexName)
 	if err != nil {
-		return "", collections.IndexRangeOptions{}, err
+		return "", collections.IndexRangeOptions{}, CursorLimits{}, err
 	}
 	indexName, err := decodeIndexName(raw)
 	if err != nil {
-		return "", collections.IndexRangeOptions{}, err
+		return "", collections.IndexRangeOptions{}, CursorLimits{}, err
 	}
 	opts := collections.IndexRangeOptions{
 		Lower: collections.IndexRangeBound{Unbounded: true},
 		Upper: collections.IndexRangeBound{Unbounded: true},
 	}
 	if raw, ok, err := singletonSection(sections, iwire.SectionIndexLowerBound); err != nil {
-		return "", collections.IndexRangeOptions{}, err
+		return "", collections.IndexRangeOptions{}, CursorLimits{}, err
 	} else if ok {
 		opts.Lower, err = decodeIndexBound(raw)
 		if err != nil {
-			return "", collections.IndexRangeOptions{}, err
+			return "", collections.IndexRangeOptions{}, CursorLimits{}, err
 		}
 	}
 	if raw, ok, err := singletonSection(sections, iwire.SectionIndexUpperBound); err != nil {
-		return "", collections.IndexRangeOptions{}, err
+		return "", collections.IndexRangeOptions{}, CursorLimits{}, err
 	} else if ok {
 		opts.Upper, err = decodeIndexBound(raw)
 		if err != nil {
-			return "", collections.IndexRangeOptions{}, err
+			return "", collections.IndexRangeOptions{}, CursorLimits{}, err
 		}
 	}
 	limits, err := optionalCursorLimits(sections)
 	if err != nil {
-		return "", collections.IndexRangeOptions{}, err
+		return "", collections.IndexRangeOptions{}, CursorLimits{}, err
 	}
 	opts.Limit = limits.MaxItems
 	if opts.Limit < 0 {
-		return "", collections.IndexRangeOptions{}, errors.New("negative range limit")
+		return "", collections.IndexRangeOptions{}, CursorLimits{}, errors.New("negative range limit")
 	}
-	return indexName, opts, nil
+	return indexName, opts, limits, nil
 }

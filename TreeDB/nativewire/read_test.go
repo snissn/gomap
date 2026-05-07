@@ -128,6 +128,28 @@ func TestIndexLookupByteOnlyLimitTruncatesIDs(t *testing.T) {
 	}
 }
 
+func TestIndexRangeByteOnlyLimitTruncatesIDs(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	ids, truncated, err := client.IndexRange(ctx, "users", "city", IndexRange{
+		LowerUnbounded: true,
+		UpperUnbounded: true,
+		MaxBytes:       2,
+	})
+	if err != nil {
+		t.Fatalf("IndexRange: %v", err)
+	}
+	if !truncated || len(ids) != 1 || string(ids[0]) != "u1" {
+		t.Fatalf("ids=%q truncated=%v want first ID with truncation", ids, truncated)
+	}
+}
+
 func TestIndexRangeOmittedBoundsAreUnbounded(t *testing.T) {
 	client, mgr, _ := serveCollectionPipe(t)
 	seedReadCollection(t, mgr)
