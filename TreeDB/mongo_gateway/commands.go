@@ -181,7 +181,8 @@ func (p findResponsePayload) documentPayload() (wire.Document, error) {
 	}
 	if p.raw.ns != "" || p.raw.batchKey != "" || p.raw.batch != nil ||
 		p.indexedRange.col != nil || p.indexedRange.server != nil || p.indexedRange.ns != "" || p.indexedRange.indexName != "" {
-		return nil, errors.New("mongo gateway: find response payload kind mismatch")
+		return nil, fmt.Errorf("mongo gateway: find response payload kind mismatch: kind=%d raw.ns=%q raw.batchKey=%q raw.batch=%t indexedRange.ns=%q indexedRange.indexName=%q indexedRange.col=%t indexedRange.server=%t",
+			p.kind, p.raw.ns, p.raw.batchKey, p.raw.batch != nil, p.indexedRange.ns, p.indexedRange.indexName, p.indexedRange.col != nil, p.indexedRange.server != nil)
 	}
 	return p.document, nil
 }

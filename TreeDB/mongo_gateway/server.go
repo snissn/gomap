@@ -409,7 +409,12 @@ func bufferedMessageCanRetainRequestBody(h wire.Header, body []byte) bool {
 	if !ok {
 		return false
 	}
-	return name != "insert"
+	switch name {
+	case "find", "getMore", "hello", "isMaster", "ismaster", "killCursors", "listCollections", "listIndexes", "ping":
+		return true
+	default:
+		return false
+	}
 }
 
 func bufferedMessageCommandName(op wire.OpCode, body []byte) (string, bool) {
