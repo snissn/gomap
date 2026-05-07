@@ -1420,9 +1420,10 @@ func marshalCursorDocumentsMsgResponseWithID(requestID, responseTo int32, ns str
 }
 
 func appendWireInt32(dst []byte, v int32) []byte {
-	var buf [4]byte
-	binary.LittleEndian.PutUint32(buf[:], uint32(v))
-	return append(dst, buf[:]...)
+	n := len(dst)
+	dst = append(dst, 0, 0, 0, 0)
+	binary.LittleEndian.PutUint32(dst[n:], uint32(v))
+	return dst
 }
 
 func bsonArrayIndexKey(index int) string {
