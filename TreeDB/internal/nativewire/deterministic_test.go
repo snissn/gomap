@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"testing"
 )
@@ -173,6 +174,9 @@ func TestDeterministicEntryReplicatedGoldenFixtures(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ValidateRequestSections: %v", err)
 			}
+			if cmd.Header.ID != tc.commandID {
+				t.Fatalf("fixture command header=%d want %d", cmd.Header.ID, tc.commandID)
+			}
 			entry, err := AppendDeterministicEntry(nil, cmd)
 			if err != nil {
 				t.Fatalf("AppendDeterministicEntry: %v", err)
@@ -317,6 +321,14 @@ func TestDeterministicEntryRejectsLocalAndReadCommands(t *testing.T) {
 			sections: []Section{
 				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandFlushCollection, Version: 1})},
 				{ID: SectionCollectionRef, Bytes: []byte("users")},
+			},
+		},
+		{
+			name: "get_many",
+			sections: []Section{
+				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandGetMany, Version: 1})},
+				{ID: SectionCollectionRef, Bytes: []byte("users")},
+				{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
 			},
 		},
 	} {
@@ -580,36 +592,27 @@ func deterministicEntryFixtureCases() []deterministicEntryFixtureCase {
 			name:      "create_collection",
 			commandID: CommandCreateCollection,
 			fixture:   "create_collection_entry.hex",
-			sections: []Section{
-				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateCollection, Version: 1})},
-				{ID: SectionIdempotencyKey, Bytes: []byte("client-a:create:users")},
-				{ID: SectionCollectionMeta, Bytes: []byte("meta:users:v1")},
-				{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
-			},
+			sections: deterministicFixtureSections(CommandCreateCollection, "client-a:create:users",
+				Section{ID: SectionCollectionMeta, Bytes: deterministicCollectionMetaPayload("users")},
+			),
 		},
 		{
 			name:      "create_index",
 			commandID: CommandCreateIndex,
 			fixture:   "create_index_entry.hex",
-			sections: []Section{
-				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateIndex, Version: 1})},
-				{ID: SectionIdempotencyKey, Bytes: []byte("client-a:create-index:email")},
-				{ID: SectionCollectionRef, Bytes: []byte("users")},
-				{ID: SectionIndexDefinition, Bytes: []byte("index:email_1:email:string:unique")},
-				{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
-			},
+			sections: deterministicFixtureSections(CommandCreateIndex, "client-a:create-index:email",
+				Section{ID: SectionCollectionRef, Bytes: []byte("users")},
+				Section{ID: SectionIndexDefinition, Bytes: deterministicIndexDefinitionPayload("email_1", "email", 1, true, false, 0)},
+			),
 		},
 		{
 			name:      "drop_index",
 			commandID: CommandDropIndex,
 			fixture:   "drop_index_entry.hex",
-			sections: []Section{
-				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandDropIndex, Version: 1})},
-				{ID: SectionIdempotencyKey, Bytes: []byte("client-a:drop-index:email")},
-				{ID: SectionCollectionRef, Bytes: []byte("users")},
-				{ID: SectionIndexName, Bytes: []byte("email_1")},
-				{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
-			},
+			sections: deterministicFixtureSections(CommandDropIndex, "client-a:drop-index:email",
+				Section{ID: SectionCollectionRef, Bytes: []byte("users")},
+				Section{ID: SectionIndexName, Bytes: []byte("email_1")},
+			),
 		},
 		{
 			name:      "insert_batch",
@@ -621,28 +624,80 @@ func deterministicEntryFixtureCases() []deterministicEntryFixtureCase {
 			name:      "replace_batch",
 			commandID: CommandReplaceBatch,
 			fixture:   "replace_batch_entry.hex",
-			sections: []Section{
-				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandReplaceBatch, Version: 1})},
-				{ID: SectionIdempotencyKey, Bytes: []byte("client-a:replace:1")},
-				{ID: SectionCollectionRef, Bytes: []byte("c")},
-				{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
-				{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
-				{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte(`{"x":1}`))},
-				{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
-				{ID: SectionReplacementMode, Bytes: []byte{1}},
-			},
+			sections: deterministicFixtureSections(CommandReplaceBatch, "client-a:replace:1",
+				Section{ID: SectionCollectionRef, Bytes: []byte("c")},
+				Section{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
+				Section{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
+				Section{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte(`{"x":1}`))},
+				Section{ID: SectionReplacementMode, Bytes: deterministicUvarintPayload(deterministicReplacementModeExistingOnly)},
+			),
 		},
 		{
 			name:      "delete_batch",
 			commandID: CommandDeleteBatch,
 			fixture:   "delete_batch_entry.hex",
-			sections: []Section{
-				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandDeleteBatch, Version: 1})},
-				{ID: SectionIdempotencyKey, Bytes: []byte("client-a:delete:1")},
-				{ID: SectionCollectionRef, Bytes: []byte("c")},
-				{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"), []byte("b"))},
-				{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
-			},
+			sections: deterministicFixtureSections(CommandDeleteBatch, "client-a:delete:1",
+				Section{ID: SectionCollectionRef, Bytes: []byte("c")},
+				Section{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"), []byte("b"))},
+			),
 		},
 	}
+}
+
+const deterministicReplacementModeExistingOnly = 1
+
+func deterministicFixtureSections(commandID CommandID, idempotency string, sections ...Section) []Section {
+	out := []Section{
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: commandID, Version: 1})},
+		{ID: SectionIdempotencyKey, Bytes: []byte(idempotency)},
+	}
+	out = append(out, sections...)
+	out = append(out, Section{ID: SectionExpectedCatalogVersion, Bytes: deterministicUvarintPayload(7)})
+	return out
+}
+
+func deterministicCollectionMetaPayload(name string) []byte {
+	dst := deterministicUvarintPayload(1)
+	dst = appendDeterministicString(dst, name)
+	dst = appendUvarint(dst, uint64(DocumentFormatDefault))
+	dst = appendUvarint(dst, 0)
+	dst = appendUvarint(dst, 0)
+	dst = appendDeterministicBool(dst, false)
+	dst = appendDeterministicBool(dst, false)
+	dst = appendDeterministicBool(dst, false)
+	dst = binary.AppendVarint(dst, 0)
+	dst = binary.AppendVarint(dst, 0)
+	dst = binary.AppendVarint(dst, 0)
+	dst = appendDeterministicBool(dst, false)
+	dst = appendDeterministicBool(dst, false)
+	dst = binary.AppendVarint(dst, 0)
+	dst = appendUvarint(dst, 0)
+	return dst
+}
+
+func deterministicIndexDefinitionPayload(name, field string, valueType uint64, unique, multiKey bool, storagePolicy uint64) []byte {
+	dst := deterministicUvarintPayload(1)
+	dst = appendDeterministicString(dst, name)
+	dst = appendDeterministicString(dst, field)
+	dst = appendUvarint(dst, valueType)
+	dst = appendDeterministicBool(dst, unique)
+	dst = appendDeterministicBool(dst, multiKey)
+	dst = appendUvarint(dst, storagePolicy)
+	return dst
+}
+
+func deterministicUvarintPayload(value uint64) []byte {
+	return appendUvarint(nil, value)
+}
+
+func appendDeterministicString(dst []byte, value string) []byte {
+	dst = appendUvarint(dst, uint64(len(value)))
+	return append(dst, value...)
+}
+
+func appendDeterministicBool(dst []byte, value bool) []byte {
+	if value {
+		return append(dst, 1)
+	}
+	return append(dst, 0)
 }
