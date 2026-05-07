@@ -11509,17 +11509,32 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 		// buffered primary documents come from one write-domain view. Releasing
 		// here would require copying the pending primary view up front, which is
 		// too much work for the common small-limit range probe.
-		defer func() {
-			if domainLocked {
-				domain.mu.RUnlock()
-			}
-		}()
 	}
-	snap := c.db.AcquireSnapshot()
+	var snap *backenddb.Snapshot
+	var bufferedTable memtable.Table
+	var bufferedIt iterator.UnsafeIterator
+	var persistedIt iterator.UnsafeIterator
+	defer func() {
+		if domainLocked {
+			domain.mu.RUnlock()
+		}
+		if persistedIt != nil {
+			_ = persistedIt.Close()
+		}
+		if bufferedIt != nil {
+			_ = bufferedIt.Close()
+		}
+		if bufferedTable != nil {
+			resetCollectionRunTable(bufferedTable)
+		}
+		if snap != nil {
+			_ = snap.Close()
+		}
+	}()
+	snap = c.db.AcquireSnapshot()
 	if snap == nil {
 		return false, false, backenddb.ErrClosed
 	}
-	defer func() { _ = snap.Close() }()
 	catalog, err := c.catalogForSnapshotWithWriteDomainLocked(snap)
 	if err != nil {
 		return false, false, err
@@ -11542,7 +11557,6 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 	if err != nil {
 		return false, false, err
 	}
-	var bufferedTable memtable.Table
 	if exactPrefixScan {
 		// Exact document scans still need buffered tombstones for unique indexes.
 		// The unique reservation fast path only proves pending live values, so use
@@ -11556,19 +11570,11 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 		return false, false, err
 	}
 	if bufferedTable != nil {
-		defer resetCollectionRunTable(bufferedTable)
-	}
-	var bufferedIt iterator.UnsafeIterator
-	if bufferedTable != nil {
 		bufferedIt = bufferedTable.NewIterator(start, end)
-		defer func() { _ = bufferedIt.Close() }()
 	}
-	persistedIt, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true)
+	persistedIt, err = collectionIteratorAtCatalogRoot(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true)
 	if err != nil {
 		return false, false, err
-	}
-	if persistedIt != nil {
-		defer func() { _ = persistedIt.Close() }()
 	}
 	primaryRootName := collectionPrimaryRootName(catalog.meta.Name)
 	var scratch []byte
