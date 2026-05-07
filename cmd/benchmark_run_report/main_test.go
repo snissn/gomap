@@ -117,7 +117,7 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"Wire TCP *</text>",
 		"Wire *</text>",
 		"* TreeDB-only modes:",
-		"calls the BSON collection API directly",
+		"calls the collection API directly",
 		"bypassing the MongoDB Go driver",
 		"same raw command/gateway path in process",
 		"one centered TreeDB bar",

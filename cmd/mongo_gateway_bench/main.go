@@ -609,9 +609,6 @@ func parseConfig(args []string) (config, error) {
 		return config{}, err
 	}
 	cfg.TreeDBDocumentFormat = documentFormat
-	if cfg.ClientMode == clientModeDirect && cfg.TreeDBDocumentFormat != collections.DocumentFormatBSON {
-		return config{}, fmt.Errorf("client-mode %q currently requires -treedb-document-format bson", cfg.ClientMode)
-	}
 	dataRootStorage, err := parseTreeDBRootStoragePolicy(treeDBDataRootStorage)
 	if err != nil {
 		return config{}, fmt.Errorf("treedb-data-root-storage: %w", err)
@@ -1478,17 +1475,17 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 	}
 
 	var prebuiltIDs [][]byte
-	var prebuiltRaw []bson.Raw
+	var prebuiltDocuments [][]byte
 	if cfg.PrebuildDocuments {
 		prebuiltIDs = make([][]byte, cfg.Documents)
-		prebuiltRaw = make([]bson.Raw, cfg.Documents)
-		for i := range prebuiltRaw {
-			prebuiltIDs[i] = []byte(benchmarkID(i))
-			raw, err := bson.Marshal(benchmarkDocument(i))
+		prebuiltDocuments = make([][]byte, cfg.Documents)
+		for i := range prebuiltDocuments {
+			id, document, err := directTreeDBBenchmarkDocument(i, cfg.TreeDBDocumentFormat)
 			if err != nil {
 				return nil, fmt.Errorf("prebuild direct document %d: %w", i, err)
 			}
-			prebuiltRaw[i] = bson.Raw(raw)
+			prebuiltIDs[i] = id
+			prebuiltDocuments[i] = document
 		}
 	}
 
@@ -1504,7 +1501,7 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 	}
 
 	loadPhase, err := runTreeDBProfiledPhase(target, profiler, "load_insert_many", func() (phaseResult, error) {
-		return runDirectTreeDBLoadPhase(ctx, cfg, collection, prebuiltIDs, prebuiltRaw)
+		return runDirectTreeDBLoadPhase(ctx, cfg, collection, prebuiltIDs, prebuiltDocuments)
 	})
 	if err != nil {
 		return nil, err
@@ -1664,53 +1661,229 @@ func directTreeDBIndexDefinitions(cfg config) []collections.IndexDefinition {
 	return indexes
 }
 
-func runDirectTreeDBLoadPhase(ctx context.Context, cfg config, collection *collections.Collection, prebuiltIDs [][]byte, prebuiltRaw []bson.Raw) (phaseResult, error) {
+const directPrimaryKeyPrefixBSONValue byte = 1
+
+func directTreeDBBenchmarkDocument(i int, format collections.DocumentFormat) ([]byte, []byte, error) {
+	raw, err := bson.Marshal(benchmarkDocument(i))
+	if err != nil {
+		return nil, nil, err
+	}
+	return directPrepareTreeDBDocument(bson.Raw(raw), format)
+}
+
+func directPrepareTreeDBDocument(raw bson.Raw, format collections.DocumentFormat) ([]byte, []byte, error) {
+	id := raw.Lookup("_id")
+	key, err := directEncodePrimaryKey(id)
+	if err != nil {
+		return nil, nil, err
+	}
+	stored, err := directEncodeStoredDocument(raw, format)
+	if err != nil {
+		return nil, nil, err
+	}
+	return key, stored, nil
+}
+
+func directEncodeStoredDocument(raw bson.Raw, format collections.DocumentFormat) ([]byte, error) {
+	switch format {
+	case collections.DocumentFormatBSON:
+		if err := raw.Validate(); err != nil {
+			return nil, err
+		}
+		return bytes.Clone(raw), nil
+	case collections.DocumentFormatDefault, collections.DocumentFormatJSON:
+		return bson.MarshalExtJSON(raw, true, false)
+	case collections.DocumentFormatTemplateV1:
+		stored, err := bson.MarshalExtJSON(raw, true, false)
+		if err != nil {
+			return nil, err
+		}
+		return collections.EncodeTemplateV1DocumentJSON(stored)
+	default:
+		return nil, fmt.Errorf("direct TreeDB benchmark unsupported document format %q", format)
+	}
+}
+
+func directBenchmarkDocumentKey(i int) ([]byte, string, error) {
+	id := benchmarkID(i)
+	typ, value, err := bson.MarshalValue(id)
+	if err != nil {
+		return nil, "", err
+	}
+	key, err := directEncodePrimaryKey(bson.RawValue{Type: typ, Value: value})
+	if err != nil {
+		return nil, "", err
+	}
+	return key, id, nil
+}
+
+func directEncodePrimaryKey(value bson.RawValue) ([]byte, error) {
+	if value.IsZero() {
+		return nil, errors.New("direct TreeDB benchmark document _id is required")
+	}
+	if value.Type == bson.TypeArray {
+		return nil, errors.New("direct TreeDB benchmark document _id cannot be an array")
+	}
+	if err := value.Validate(); err != nil {
+		return nil, err
+	}
+	key := make([]byte, 0, 2+len(value.Value))
+	key = append(key, directPrimaryKeyPrefixBSONValue, byte(value.Type))
+	key = append(key, value.Value...)
+	return key, nil
+}
+
+func directNewStoredDocumentMaterializer(collection *collections.Collection) (*collections.StoredDocumentJSONMaterializer, error) {
+	if collection == nil {
+		return nil, errors.New("direct TreeDB benchmark requires a collection")
+	}
+	return collection.NewStoredDocumentJSONMaterializer()
+}
+
+type directTreeDBMaterializerPool struct {
+	collection    *collections.Collection
+	pool          sync.Pool
+	mu            sync.Mutex
+	materializers []*collections.StoredDocumentJSONMaterializer
+}
+
+func newDirectTreeDBMaterializerPool(collection *collections.Collection) *directTreeDBMaterializerPool {
+	return &directTreeDBMaterializerPool{collection: collection}
+}
+
+func (p *directTreeDBMaterializerPool) get() (*collections.StoredDocumentJSONMaterializer, error) {
+	if p == nil {
+		return nil, errors.New("direct TreeDB benchmark materializer pool is nil")
+	}
+	if v := p.pool.Get(); v != nil {
+		return v.(*collections.StoredDocumentJSONMaterializer), nil
+	}
+	materializer, err := directNewStoredDocumentMaterializer(p.collection)
+	if err != nil {
+		return nil, err
+	}
+	p.mu.Lock()
+	p.materializers = append(p.materializers, materializer)
+	p.mu.Unlock()
+	return materializer, nil
+}
+
+func (p *directTreeDBMaterializerPool) put(materializer *collections.StoredDocumentJSONMaterializer) {
+	if p == nil || materializer == nil {
+		return
+	}
+	p.pool.Put(materializer)
+}
+
+func (p *directTreeDBMaterializerPool) close() error {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	materializers := p.materializers
+	p.materializers = nil
+	p.mu.Unlock()
+	var err error
+	for _, materializer := range materializers {
+		err = errors.Join(err, materializer.Close())
+	}
+	return err
+}
+
+func directStoredDocumentToBSON(collection *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, stored []byte) (bson.Raw, error) {
+	if materializer == nil {
+		return nil, errors.New("direct TreeDB benchmark requires a document materializer")
+	}
+	if materializer.DocumentFormat() == collections.DocumentFormatBSON {
+		raw := bson.Raw(stored)
+		if err := raw.Validate(); err != nil {
+			return nil, err
+		}
+		return raw, nil
+	}
+	materialized, err := materializer.StoredDocumentJSON(stored)
+	if err != nil {
+		// A reused template-v1 resolver can lag a concurrently fetched document.
+		// Retry once with a fresh snapshot before surfacing the original error.
+		if collection != nil {
+			if fresh, freshErr := collection.StoredDocumentJSON(stored); freshErr == nil {
+				materialized = fresh
+				err = nil
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	var raw bson.Raw
+	if err := bson.UnmarshalExtJSON(materialized, true, &raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func runDirectTreeDBLoadPhase(ctx context.Context, cfg config, collection *collections.Collection, prebuiltIDs [][]byte, prebuiltDocuments [][]byte) (phaseResult, error) {
 	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
 		_ = producer
 		if err := batchCtx.Err(); err != nil {
 			return err
 		}
-		ids, docs, err := directTreeDBLoadBatch(start, end, prebuiltIDs, prebuiltRaw)
+		ids, docs, err := directTreeDBLoadBatch(start, end, cfg.TreeDBDocumentFormat, prebuiltIDs, prebuiltDocuments)
 		if err != nil {
 			return err
 		}
-		_, err = collection.InsertBatchValidatedBSON(ids, docs)
+		if cfg.TreeDBDocumentFormat == collections.DocumentFormatBSON {
+			_, err = collection.InsertBatchValidatedBSON(ids, docs)
+		} else {
+			_, err = collection.InsertBatch(ids, docs)
+		}
 		return err
 	})
 }
 
-func directTreeDBLoadBatch(start, end int, prebuiltIDs [][]byte, prebuiltRaw []bson.Raw) ([][]byte, [][]byte, error) {
+func directTreeDBLoadBatch(start, end int, format collections.DocumentFormat, prebuiltIDs [][]byte, prebuiltDocuments [][]byte) ([][]byte, [][]byte, error) {
 	ids := make([][]byte, end-start)
 	docs := make([][]byte, end-start)
 	for i := start; i < end; i++ {
 		out := i - start
-		if prebuiltIDs != nil {
+		if prebuiltIDs != nil && prebuiltDocuments != nil {
 			ids[out] = prebuiltIDs[i]
-		} else {
-			ids[out] = []byte(benchmarkID(i))
-		}
-		if prebuiltRaw != nil {
-			docs[out] = prebuiltRaw[i]
+			docs[out] = prebuiltDocuments[i]
 			continue
+		} else {
+			id, document, err := directTreeDBBenchmarkDocument(i, format)
+			if err != nil {
+				return nil, nil, err
+			}
+			ids[out] = id
+			docs[out] = document
 		}
-		raw, err := bson.Marshal(benchmarkDocument(i))
-		if err != nil {
-			return nil, nil, err
-		}
-		docs[out] = raw
 	}
 	return ids, docs, nil
 }
 
 func runDirectTreeDBIDFindPhase(ctx context.Context, cfg config, collection *collections.Collection) (phaseResult, error) {
+	materializer, err := directNewStoredDocumentMaterializer(collection)
+	if err != nil {
+		return phaseResult{}, err
+	}
+	defer func() { _ = materializer.Close() }()
 	return measurePhase("id_find_one", cfg.Reads, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.Reads; i++ {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			id := benchmarkID(i % cfg.Documents)
+			key, id, err := directBenchmarkDocumentKey(i % cfg.Documents)
+			if err != nil {
+				return err
+			}
 			begin := time.Now()
-			raw, err := collection.Get([]byte(id))
+			stored, err := collection.Get(key)
+			if err != nil {
+				sample(time.Since(begin))
+				return err
+			}
+			raw, err := directStoredDocumentToBSON(collection, materializer, stored)
 			sample(time.Since(begin))
 			if err != nil {
 				return err
@@ -1724,6 +1897,11 @@ func runDirectTreeDBIDFindPhase(ctx context.Context, cfg config, collection *col
 }
 
 func runDirectTreeDBEmailFindPhase(ctx context.Context, cfg config, collection *collections.Collection) (phaseResult, error) {
+	materializer, err := directNewStoredDocumentMaterializer(collection)
+	if err != nil {
+		return phaseResult{}, err
+	}
+	defer func() { _ = materializer.Close() }()
 	return measurePhase("email_find_one", cfg.Reads, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.Reads; i++ {
 			if err := ctx.Err(); err != nil {
@@ -1732,9 +1910,13 @@ func runDirectTreeDBEmailFindPhase(ctx context.Context, cfg config, collection *
 			email := benchmarkEmail((i * 17) % cfg.Documents)
 			begin := time.Now()
 			ids, truncated, err := collection.FindByIndexValueLimit("email_1", email, 1)
-			var raw []byte
+			var raw bson.Raw
 			if err == nil && len(ids) > 0 {
-				raw, err = collection.Get(ids[0])
+				var stored []byte
+				stored, err = collection.Get(ids[0])
+				if err == nil {
+					raw, err = directStoredDocumentToBSON(collection, materializer, stored)
+				}
 			}
 			sample(time.Since(begin))
 			if err != nil {
@@ -1753,6 +1935,11 @@ func runDirectTreeDBEmailFindPhase(ctx context.Context, cfg config, collection *
 
 func runDirectTreeDBRangePhase(ctx context.Context, cfg config, collection *collections.Collection) (phaseResult, error) {
 	name := rangePhaseName(cfg)
+	materializer, err := directNewStoredDocumentMaterializer(collection)
+	if err != nil {
+		return phaseResult{}, err
+	}
+	defer func() { _ = materializer.Close() }()
 	return measurePhase(name, cfg.RangeReads, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.RangeReads; i++ {
 			if err := ctx.Err(); err != nil {
@@ -1760,7 +1947,7 @@ func runDirectTreeDBRangePhase(ctx context.Context, cfg config, collection *coll
 			}
 			minAge := int64(20 + (i % 40))
 			begin := time.Now()
-			err := runDirectTreeDBRangeQuery(cfg, collection, minAge)
+			err := runDirectTreeDBRangeQuery(cfg, collection, materializer, minAge)
 			sample(time.Since(begin))
 			if err != nil {
 				return err
@@ -1770,7 +1957,7 @@ func runDirectTreeDBRangePhase(ctx context.Context, cfg config, collection *coll
 	})
 }
 
-func runDirectTreeDBRangeQuery(cfg config, collection *collections.Collection, minAge int64) error {
+func runDirectTreeDBRangeQuery(cfg config, collection *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, minAge int64) error {
 	if cfg.RangeIndex {
 		ids, _, err := collection.FindByIndexRange("age_1", collections.IndexRangeOptions{
 			Lower: collections.IndexRangeBound{Value: minAge, Inclusive: true},
@@ -1781,7 +1968,11 @@ func runDirectTreeDBRangeQuery(cfg config, collection *collections.Collection, m
 			return err
 		}
 		for _, id := range ids {
-			raw, err := collection.Get(id)
+			stored, err := collection.Get(id)
+			if err != nil {
+				return err
+			}
+			raw, err := directStoredDocumentToBSON(collection, materializer, stored)
 			if err != nil {
 				return err
 			}
@@ -1793,7 +1984,11 @@ func runDirectTreeDBRangeQuery(cfg config, collection *collections.Collection, m
 	}
 	matches := 0
 	_, err := collection.ScanDocumentsFunc(cfg.Documents, func(record collections.DocumentRecord) (bool, error) {
-		age, ok := directBSONInt64Field(record.Document, "age")
+		raw, err := directStoredDocumentToBSON(collection, materializer, record.Document)
+		if err != nil {
+			return false, err
+		}
+		age, ok := directBSONInt64Field(raw, "age")
 		if !ok {
 			return false, errors.New("direct range scan document missing int64 age")
 		}
@@ -1824,11 +2019,26 @@ func runDirectTreeDBUpdatePhase(ctx context.Context, cfg config, collection *col
 }
 
 func runDirectTreeDBConcurrentIDFindPhase(ctx context.Context, cfg config, collection *collections.Collection, readers int, phaseName string) (phaseResult, error) {
+	materializers := newDirectTreeDBMaterializerPool(collection)
+	defer func() { _ = materializers.close() }()
 	return measurePhase(phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
 		return runConcurrentOperations(ctx, readers, cfg.ConcurrentReads, func(op int) error {
-			id := benchmarkID(benchmarkDocumentOrdinal(op, 17, cfg.Documents))
+			key, id, err := directBenchmarkDocumentKey(benchmarkDocumentOrdinal(op, 17, cfg.Documents))
+			if err != nil {
+				return err
+			}
+			materializer, err := materializers.get()
+			if err != nil {
+				return err
+			}
+			defer materializers.put(materializer)
 			begin := time.Now()
-			raw, err := collection.Get([]byte(id))
+			stored, err := collection.Get(key)
+			if err != nil {
+				sample(time.Since(begin))
+				return err
+			}
+			raw, err := directStoredDocumentToBSON(collection, materializer, stored)
 			sample(time.Since(begin))
 			if err != nil {
 				return err
@@ -1859,7 +2069,10 @@ func runDirectTreeDBUpdateOperation(
 	updatedCityValues []string,
 	sample func(time.Duration),
 ) error {
-	id := benchmarkID(documentOrdinal)
+	key, id, err := directBenchmarkDocumentKey(documentOrdinal)
+	if err != nil {
+		return err
+	}
 	updateRaw, err := bson.Marshal(benchmarkSetUpdate(benchmarkSetUpdateParams{
 		Operation:          operation,
 		DocumentOrdinal:    documentOrdinal,
@@ -1871,9 +2084,18 @@ func runDirectTreeDBUpdateOperation(
 	if err != nil {
 		return err
 	}
+	materializer, err := directNewStoredDocumentMaterializer(collection)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = materializer.Close() }()
 	begin := time.Now()
-	matched, _, err := collection.Update([]byte(id), func(stored []byte) ([]byte, bool, error) {
-		updated, changed, err := applyDirectBSONSetUpdate(bson.Raw(stored), bson.Raw(updateRaw))
+	matched, _, err := collection.Update(key, func(stored []byte) ([]byte, bool, error) {
+		current, err := directStoredDocumentToBSON(collection, materializer, stored)
+		if err != nil {
+			return nil, false, err
+		}
+		updated, changed, err := applyDirectBSONSetUpdate(current, bson.Raw(updateRaw))
 		if err != nil {
 			return nil, false, err
 		}
@@ -1883,7 +2105,14 @@ func runDirectTreeDBUpdateOperation(
 		if !changed {
 			return nil, false, nil
 		}
-		return []byte(updated), true, nil
+		updatedKey, encoded, err := directPrepareTreeDBDocument(updated, cfg.TreeDBDocumentFormat)
+		if err != nil {
+			return nil, false, err
+		}
+		if !bytes.Equal(updatedKey, key) {
+			return nil, false, fmt.Errorf("direct update changed primary key for %s", id)
+		}
+		return encoded, true, nil
 	})
 	sample(time.Since(begin))
 	if err != nil {
@@ -1901,9 +2130,12 @@ func runDirectTreeDBDeletePhase(ctx context.Context, cfg config, collection *col
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			id := benchmarkID(cfg.Documents - 1 - i)
+			key, _, err := directBenchmarkDocumentKey(cfg.Documents - 1 - i)
+			if err != nil {
+				return err
+			}
 			begin := time.Now()
-			err := collection.Delete([]byte(id))
+			err = collection.Delete(key)
 			sample(time.Since(begin))
 			if err != nil {
 				return err
