@@ -11474,14 +11474,14 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 	}
 	start, end, empty, err := indexRangeScanBounds(idx.ValueType, opts)
 	if err != nil {
-		return nil, true, err
+		return nil, false, err
 	}
 	if empty {
 		return make([]DocumentRecord, 0), false, nil
 	}
 	exactPrefix, exactPrefixScan, err := exactIndexRangePrefix(idx.ValueType, opts)
 	if err != nil {
-		return nil, true, err
+		return nil, false, err
 	}
 	var bufferedTable memtable.Table
 	if exactPrefixScan {
@@ -11514,8 +11514,9 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 	out := make([]DocumentRecord, 0, capHint)
 	primaryRootName := collectionPrimaryRootName(catalog.meta.Name)
 	var scratch []byte
-	dedupeIDs := idx.MultiKey || catalog.meta.Options.AllowArrayValuesInIndex
-	truncated, err := scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt, idx.ValueType, opts.Limit, dedupeIDs, func(id []byte) (bool, error) {
+	dedupeDocumentIDs := idx.MultiKey || catalog.meta.Options.AllowArrayValuesInIndex
+	documentTruncated := false
+	truncated, err := scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt, idx.ValueType, 0, dedupeDocumentIDs, func(id []byte) (bool, error) {
 		var value []byte
 		var buffered, found bool
 		if domainLocked {
@@ -11531,6 +11532,10 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 		if !found {
 			return true, nil
 		}
+		if opts.Limit > 0 && len(out) >= opts.Limit {
+			documentTruncated = true
+			return false, nil
+		}
 		scratch = value
 		out = append(out, DocumentRecord{
 			ID:       bytes.Clone(id),
@@ -11540,6 +11545,9 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 	})
 	if err != nil {
 		return nil, false, err
+	}
+	if documentTruncated {
+		return out, true, nil
 	}
 	return out, truncated, nil
 }
@@ -11646,8 +11654,8 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 	if persistedIt != nil {
 		defer func() { _ = persistedIt.Close() }()
 	}
-	dedupeIDs := idx.MultiKey || catalog.meta.Options.AllowArrayValuesInIndex
-	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, opts.Limit, dedupeIDs, fn)
+	dedupeDocumentIDs := idx.MultiKey || catalog.meta.Options.AllowArrayValuesInIndex
+	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, opts.Limit, dedupeDocumentIDs, fn)
 	return truncated, true, err
 }
 
@@ -11830,19 +11838,19 @@ func encodedDoubleComponentIsNaN(encoded []byte) bool {
 	return len(encoded) == 1 && encoded[0] == 0x00
 }
 
-func scanMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, dedupeIDs bool, fn func([]byte) (bool, error)) (bool, error) {
-	return scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt, valueType, maxResults, true, dedupeIDs, fn)
+func scanMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, dedupeDocumentIDs bool, fn func([]byte) (bool, error)) (bool, error) {
+	return scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt, valueType, maxResults, true, dedupeDocumentIDs, fn)
 }
 
-func scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, dedupeIDs bool, fn func([]byte) (bool, error)) (bool, error) {
-	return scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt, valueType, maxResults, false, dedupeIDs, fn)
+func scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, dedupeDocumentIDs bool, fn func([]byte) (bool, error)) (bool, error) {
+	return scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt, valueType, maxResults, false, dedupeDocumentIDs, fn)
 }
 
-func scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, cloneID bool, dedupeIDs bool, fn func([]byte) (bool, error)) (bool, error) {
+func scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, cloneID bool, dedupeDocumentIDs bool, fn func([]byte) (bool, error)) (bool, error) {
 	if maxResults < 0 {
 		return false, errors.New("collections: max index results cannot be negative")
 	}
-	if bufferedIt == nil && !dedupeIDs {
+	if bufferedIt == nil && !dedupeDocumentIDs {
 		emitted := 0
 		for {
 			persistedKey, persistedOK := collectionIndexIteratorKey(persistedIt)
@@ -11873,7 +11881,7 @@ func scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt iterator.Un
 		return false, collectionIndexIteratorError(persistedIt)
 	}
 	var seen map[string]struct{}
-	if dedupeIDs {
+	if dedupeDocumentIDs {
 		seen = make(map[string]struct{})
 	}
 	emitted := 0
@@ -11882,7 +11890,7 @@ func scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt iterator.Un
 		if err != nil {
 			return false, false, err
 		}
-		if dedupeIDs {
+		if dedupeDocumentIDs {
 			idKey := string(id)
 			if _, ok := seen[idKey]; ok {
 				return true, false, nil

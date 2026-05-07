@@ -2487,6 +2487,25 @@ func TestRawDocumentsBatchLimit(t *testing.T) {
 	}
 }
 
+func TestValidateStoredBSONFrame(t *testing.T) {
+	valid := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}})
+	if err := validateStoredBSONFrame(valid); err != nil {
+		t.Fatalf("valid frame: %v", err)
+	}
+	for name, doc := range map[string][]byte{
+		"too_short":            {1, 0, 0, 0},
+		"declared_too_small":   {4, 0, 0, 0, 0},
+		"length_mismatch":      {6, 0, 0, 0, 0},
+		"missing_terminator":   {5, 0, 0, 0, 1},
+		"negative_length":      {0xff, 0xff, 0xff, 0xff, 0},
+		"zero_declared_length": {0, 0, 0, 0, 0},
+	} {
+		if err := validateStoredBSONFrame(doc); err == nil {
+			t.Fatalf("%s accepted invalid frame %v", name, doc)
+		}
+	}
+}
+
 func TestServeOneCleansUpOneShotCursors(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

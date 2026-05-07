@@ -276,16 +276,13 @@ func (s *Server) handleMsg(h wire.Header, body []byte, cursorOwner int64) ([]byt
 	}
 
 	if name == "find" {
-		var responseID int32
-		if msg.Flags&wire.MsgFlagMoreToCome == 0 {
-			responseID = s.nextID()
+		if msg.Flags&wire.MsgFlagMoreToCome != 0 {
+			return nil, nil
 		}
+		responseID := s.nextID()
 		response, err := s.findMsgResponse(msg.Body, responseID, h.RequestID, cursorOwner)
 		if err != nil {
 			return nil, err
-		}
-		if msg.Flags&wire.MsgFlagMoreToCome != 0 {
-			return nil, nil
 		}
 		return response, nil
 	}
