@@ -413,6 +413,30 @@ func v1CommandSchemas() []CommandSchema {
 			},
 		},
 		{
+			ID:        CommandFlushCollection,
+			Version:   1,
+			Name:      "flush_collection",
+			Kind:      CommandKindMutation,
+			LocalOnly: true,
+			Sections: []SectionRule{
+				{ID: SectionCollectionRef, Name: "collection_ref", Required: true},
+			},
+		},
+		{
+			ID:        CommandFlushAll,
+			Version:   1,
+			Name:      "flush_all",
+			Kind:      CommandKindMutation,
+			LocalOnly: true,
+		},
+		{
+			ID:        CommandCheckpoint,
+			Version:   1,
+			Name:      "checkpoint",
+			Kind:      CommandKindMutation,
+			LocalOnly: true,
+		},
+		{
 			ID:                CommandGetMany,
 			Version:           1,
 			Name:              "get_many",
