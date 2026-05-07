@@ -1,30 +1,36 @@
 package nativewire
 
 const (
-	defaultMaxFrameSize       = uint64(64 << 20)
-	defaultMaxSections        = 1024
-	defaultMaxSectionLen      = uint64(16 << 20)
-	defaultMaxByteVectorItems = 1 << 20
-	defaultMaxByteVectorBytes = uint64(64 << 20)
+	defaultMaxFrameSize                       = uint64(64 << 20)
+	defaultMaxSections                        = 1024
+	defaultMaxSectionLen                      = uint64(16 << 20)
+	defaultMaxByteVectorItems                 = 1 << 20
+	defaultMaxByteVectorBytes                 = uint64(64 << 20)
+	defaultMaxDeterministicOpaquePayloadBytes = uint64(1 << 20)
+	defaultMaxDeterministicNameBytes          = uint64(128)
 )
 
 type Limits struct {
-	MaxFrameSize       uint64
-	MaxHeaderLen       uint16
-	MaxSections        int
-	MaxSectionLen      uint64
-	MaxByteVectorItems int
-	MaxByteVectorBytes uint64
+	MaxFrameSize                       uint64
+	MaxHeaderLen                       uint16
+	MaxSections                        int
+	MaxSectionLen                      uint64
+	MaxByteVectorItems                 int
+	MaxByteVectorBytes                 uint64
+	MaxDeterministicOpaquePayloadBytes uint64
+	MaxDeterministicNameBytes          uint64
 }
 
 func DefaultLimits() Limits {
 	return Limits{
-		MaxFrameSize:       defaultMaxFrameSize,
-		MaxHeaderLen:       MaxFrameHeaderLen,
-		MaxSections:        defaultMaxSections,
-		MaxSectionLen:      defaultMaxSectionLen,
-		MaxByteVectorItems: defaultMaxByteVectorItems,
-		MaxByteVectorBytes: defaultMaxByteVectorBytes,
+		MaxFrameSize:                       defaultMaxFrameSize,
+		MaxHeaderLen:                       MaxFrameHeaderLen,
+		MaxSections:                        defaultMaxSections,
+		MaxSectionLen:                      defaultMaxSectionLen,
+		MaxByteVectorItems:                 defaultMaxByteVectorItems,
+		MaxByteVectorBytes:                 defaultMaxByteVectorBytes,
+		MaxDeterministicOpaquePayloadBytes: defaultMaxDeterministicOpaquePayloadBytes,
+		MaxDeterministicNameBytes:          defaultMaxDeterministicNameBytes,
 	}
 }
 
@@ -47,6 +53,12 @@ func (l Limits) withDefaults() Limits {
 	}
 	if l.MaxByteVectorBytes == 0 {
 		l.MaxByteVectorBytes = d.MaxByteVectorBytes
+	}
+	if l.MaxDeterministicOpaquePayloadBytes == 0 {
+		l.MaxDeterministicOpaquePayloadBytes = d.MaxDeterministicOpaquePayloadBytes
+	}
+	if l.MaxDeterministicNameBytes == 0 {
+		l.MaxDeterministicNameBytes = d.MaxDeterministicNameBytes
 	}
 	return l
 }

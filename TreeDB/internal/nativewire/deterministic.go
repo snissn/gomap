@@ -10,10 +10,9 @@ import (
 const (
 	DeterministicEntryMagic   = "TDC1"
 	DeterministicEntryVersion = uint64(1)
-
-	deterministicOpaquePayloadMaxLen = 1 << 20
-	deterministicNameMaxLen          = 128
 )
+
+var deterministicEntryRegistry = MustV1Registry()
 
 type DeterministicEntry struct {
 	Version        uint64
@@ -159,6 +158,9 @@ func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *Determinis
 	if off != len(src) {
 		return DeterministicEntry{}, protocolError(ErrMalformedFrame, "deterministic entry has %d trailing bytes", len(src)-off)
 	}
+	if _, err := validateDecodedDeterministicEntry(CommandID(commandID), commandVersion, sections); err != nil {
+		return DeterministicEntry{}, err
+	}
 	if scratch != nil {
 		scratch.Sections = sections
 	}
@@ -178,14 +180,13 @@ func deterministicEntrySectionsBuffer(count int, scratch *DeterministicEntryScra
 	if cap(scratch.Sections) < count {
 		scratch.Sections = make([]Section, count)
 	}
-	if len(scratch.Sections) > count {
-		clear(scratch.Sections[count:])
-	}
-	return scratch.Sections[:count]
+	backing := scratch.Sections[:cap(scratch.Sections)]
+	clear(backing[count:])
+	return backing[:count]
 }
 
 func readEntryUvarint(src []byte, off *int, field string) (uint64, error) {
-	if off == nil || *off > len(src) {
+	if off == nil || *off >= len(src) {
 		return 0, protocolError(ErrMalformedFrame, "invalid deterministic entry offset for %s", field)
 	}
 	value, n, err := readUvarint(src[*off:])
@@ -279,6 +280,52 @@ func deterministicByteVectorCount(sections []Section, id SectionID) (int, error)
 	return 0, protocolError(ErrInvalidCommand, "missing deterministic section %d", id)
 }
 
+func validateDecodedDeterministicEntry(commandID CommandID, commandVersion uint64, sections []Section) (*CommandSchema, error) {
+	schema, ok := deterministicEntryRegistry.LookupCommand(commandID, commandVersion)
+	if !ok {
+		return nil, protocolError(ErrUnsupportedVersion, "unsupported deterministic command %d version %d", commandID, commandVersion)
+	}
+	if !schema.Replicated || schema.LocalOnly {
+		return nil, protocolError(ErrInvalidCommand, "command %s is not replicated", schema.Name)
+	}
+	rules := schema.ruleMap()
+	var seen sectionSeenSet
+	for _, section := range sections {
+		if section.ID == SectionIdempotencyKey {
+			if seen.add(section.ID) > 1 {
+				return nil, protocolError(ErrInvalidCommand, "duplicate deterministic singleton section %d", section.ID)
+			}
+			continue
+		}
+		rule, ok := rules[section.ID]
+		if !ok || !rule.Deterministic {
+			return nil, protocolError(ErrInvalidCommand, "section %d is not deterministic for command %s", section.ID, schema.Name)
+		}
+		if !rule.Repeatable && seen.add(section.ID) > 1 {
+			return nil, protocolError(ErrInvalidCommand, "duplicate deterministic singleton section %d", section.ID)
+		}
+	}
+	if schema.RequiresIdempotency && seen.get(SectionIdempotencyKey) == 0 {
+		return nil, protocolError(ErrInvalidCommand, "missing idempotency identity")
+	}
+	if schema.RequiresCatalogGuard && seen.get(SectionExpectedCatalogVersion) == 0 {
+		return nil, protocolError(ErrInvalidCommand, "missing catalog guard")
+	}
+	for _, rule := range schema.Sections {
+		if rule.Required && rule.Deterministic && seen.get(rule.ID) == 0 {
+			return nil, protocolError(ErrInvalidCommand, "missing deterministic section %d", rule.ID)
+		}
+	}
+	if err := validateDeterministicCommand(ValidatedCommand{
+		Header: CommandHeader{ID: commandID, Version: commandVersion},
+		Schema: schema,
+		Known:  sections,
+	}, sections); err != nil {
+		return nil, err
+	}
+	return schema, nil
+}
+
 func sortSectionsByID(sections []Section) {
 	for i := 1; i < len(sections); i++ {
 		section := sections[i]
@@ -291,9 +338,10 @@ func sortSectionsByID(sections []Section) {
 }
 
 func validateDeterministicSectionPayload(section Section, limits Limits) error {
+	limits = limits.withDefaults()
 	switch section.ID {
 	case SectionIdempotencyKey:
-		return validateDeterministicOpaquePayload("idempotency_key", section.Bytes)
+		return validateDeterministicOpaquePayload("idempotency_key", section.Bytes, limits)
 	case SectionCollectionRef:
 		local, err := validateDeterministicCollectionRef(section.Bytes)
 		if err != nil {
@@ -321,11 +369,11 @@ func validateDeterministicSectionPayload(section Section, limits Limits) error {
 		}
 		return validateByteVector(section.Bytes, limits)
 	case SectionCollectionMeta:
-		return validateDeterministicOpaquePayload("collection_meta", section.Bytes)
+		return validateDeterministicOpaquePayload("collection_meta", section.Bytes, limits)
 	case SectionIndexDefinition:
-		return validateDeterministicOpaquePayload("index_definition", section.Bytes)
+		return validateDeterministicOpaquePayload("index_definition", section.Bytes, limits)
 	case SectionIndexName:
-		return validateDeterministicName("index_name", section.Bytes)
+		return validateDeterministicName("index_name", section.Bytes, limits)
 	case SectionExpectedCatalogVersion, SectionReplacementMode:
 		_, n, err := readUvarint(section.Bytes)
 		if err != nil {
@@ -338,17 +386,17 @@ func validateDeterministicSectionPayload(section Section, limits Limits) error {
 	return nil
 }
 
-func validateDeterministicOpaquePayload(name string, raw []byte) error {
+func validateDeterministicOpaquePayload(name string, raw []byte, limits Limits) error {
 	if len(raw) == 0 {
 		return protocolError(ErrInvalidCommand, "%s cannot be empty", name)
 	}
-	if len(raw) > deterministicOpaquePayloadMaxLen {
-		return protocolError(ErrResourceExhausted, "%s length %d exceeds limit", name, len(raw))
+	if uint64(len(raw)) > limits.MaxDeterministicOpaquePayloadBytes {
+		return protocolError(ErrResourceExhausted, "%s length %d exceeds limit %d", name, len(raw), limits.MaxDeterministicOpaquePayloadBytes)
 	}
 	return nil
 }
 
-func validateDeterministicName(name string, raw []byte) error {
+func validateDeterministicName(name string, raw []byte, limits Limits) error {
 	length, n, err := readUvarint(raw)
 	if err != nil {
 		return err
@@ -359,8 +407,8 @@ func validateDeterministicName(name string, raw []byte) error {
 	if length == 0 {
 		return protocolError(ErrInvalidCommand, "%s cannot be empty", name)
 	}
-	if length > deterministicNameMaxLen {
-		return protocolError(ErrInvalidCommand, "%s too long", name)
+	if length > limits.MaxDeterministicNameBytes {
+		return protocolError(ErrInvalidCommand, "%s length %d exceeds limit %d", name, length, limits.MaxDeterministicNameBytes)
 	}
 	if n+int(length) != len(raw) {
 		return protocolError(ErrMalformedFrame, "%s has trailing bytes", name)

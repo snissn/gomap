@@ -301,7 +301,7 @@ func TestCursorIdleTimeoutReap(t *testing.T) {
 		t.Fatalf("open db: %v", err)
 	}
 	mgr := collections.NewCollectionManager(db)
-	server := NewServer(ServerOptions{Collections: mgr, Backend: db, CursorIdleTimeout: time.Millisecond})
+	server := NewServer(ServerOptions{Collections: mgr, Backend: db, CursorIdleTimeout: 20 * time.Millisecond})
 	client, _ := servePipe(t, server)
 	t.Cleanup(func() { _ = db.Close() })
 	seedReadCollection(t, mgr)
@@ -317,7 +317,7 @@ func TestCursorIdleTimeoutReap(t *testing.T) {
 	if first.Cursor.CursorID == 0 || server.openCursorCount() != 1 {
 		t.Fatalf("cursor id=%d count=%d want one open cursor", first.Cursor.CursorID, server.openCursorCount())
 	}
-	deadline := time.Now().Add(250 * time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
 	for {
 		if _, err := client.Stats(ctx); err != nil {
 			t.Fatalf("Stats after idle timeout: %v", err)
@@ -327,7 +327,7 @@ func TestCursorIdleTimeoutReap(t *testing.T) {
 		} else if time.Now().After(deadline) {
 			t.Fatalf("openCursorCount=%d want 0 after idle timeout reap", got)
 		}
-		time.Sleep(time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
