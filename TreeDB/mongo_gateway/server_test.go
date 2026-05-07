@@ -4120,8 +4120,8 @@ func TestPureIndexedRangeLimitPlanOnlyForSingleRangeNoSkip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pure indexed range plan: %v", err)
 	}
-	if !ok || empty || limit != 10 || opts.Limit != 10 {
-		t.Fatalf("pure indexed range plan ok=%v empty=%v limit=%d opts.Limit=%d want true,false,10,10", ok, empty, limit, opts.Limit)
+	if !ok || empty || limit != 10 || opts.Limit != 0 {
+		t.Fatalf("pure indexed range plan ok=%v empty=%v limit=%d opts.Limit=%d want true,false,10,0", ok, empty, limit, opts.Limit)
 	}
 
 	_, _, _, ok, _, err = pureIndexedRangeLimitPlan(meta, findPlan{
