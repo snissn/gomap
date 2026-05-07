@@ -20,8 +20,11 @@ type Client struct {
 	conn          net.Conn
 	maxMessageLen int32
 	nextRequestID atomic.Int32
+	readBuf       []byte
 	mu            sync.Mutex
 }
+
+const maxRetainedReadBuffer = 1 << 20
 
 func Connect(ctx context.Context, address string) (*Client, error) {
 	var dialer net.Dialer
@@ -115,7 +118,7 @@ func (c *Client) roundTripInsert(ctx context.Context, msg []byte, wantN int) (in
 		}
 		return 0, err
 	}
-	header, body, err := wire.ReadMessage(c.conn, c.maxMessageLen)
+	header, body, err := c.readMessageLocked()
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return 0, ctxErr
@@ -148,7 +151,7 @@ func (c *Client) roundTripFind(ctx context.Context, msg []byte) ([]bson.Raw, err
 		}
 		return nil, err
 	}
-	header, body, err := wire.ReadMessage(c.conn, c.maxMessageLen)
+	header, body, err := c.readMessageLocked()
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
@@ -156,6 +159,19 @@ func (c *Client) roundTripFind(ctx context.Context, msg []byte) ([]bson.Raw, err
 		return nil, err
 	}
 	return parseFindResponse(header, body)
+}
+
+func (c *Client) readMessageLocked() (wire.Header, []byte, error) {
+	header, body, err := wire.ReadMessageInto(c.conn, c.readBuf, c.maxMessageLen)
+	if err != nil {
+		return wire.Header{}, nil, err
+	}
+	if cap(body) <= maxRetainedReadBuffer {
+		c.readBuf = body
+	} else {
+		c.readBuf = nil
+	}
+	return header, body, nil
 }
 
 func (c *Client) watchContextCancelLocked(ctx context.Context) func() {

@@ -28,6 +28,7 @@ const (
 	defaultUpdateCoalescingBatch   = 256
 	maxUpdateCoalescingBatch       = 4096
 	defaultUpdateCoalescingIdleTTL = 30 * time.Second
+	maxRetainedWireReadBuffer      = 1 << 20
 )
 
 var errServerClosed = errors.New("mongo gateway server is closed")
@@ -181,6 +182,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		}
 	}()
 
+	var readBuf []byte
 	for {
 		select {
 		case <-ctx.Done():
@@ -188,7 +190,9 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		default:
 		}
 
-		if err := s.ServeOneWithOwner(conn, owner); err != nil {
+		var err error
+		readBuf, err = s.serveOneWithOwner(conn, owner, readBuf)
+		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
@@ -211,24 +215,34 @@ func (s *Server) ServeOne(rw io.ReadWriter) error {
 }
 
 func (s *Server) ServeOneWithOwner(rw io.ReadWriter, cursorOwner int64) error {
+	_, err := s.serveOneWithOwner(rw, cursorOwner, nil)
+	return err
+}
+
+func (s *Server) serveOneWithOwner(rw io.ReadWriter, cursorOwner int64, readBuf []byte) ([]byte, error) {
 	if s.isClosed() {
-		return errServerClosed
+		return readBuf, errServerClosed
 	}
-	h, body, err := wire.ReadMessage(rw, s.maxMessageLength())
+	h, body, err := wire.ReadMessageInto(rw, readBuf, s.maxMessageLength())
 	if err != nil {
 		if s.isClosed() {
-			return errServerClosed
+			return readBuf, errServerClosed
 		}
-		return err
+		return readBuf, err
+	}
+	if cap(body) <= maxRetainedWireReadBuffer {
+		readBuf = body
+	} else {
+		readBuf = nil
 	}
 	response, err := s.handleMessage(h, body, cursorOwner)
 	if err != nil {
-		return err
+		return readBuf, err
 	}
 	if response == nil {
-		return nil
+		return readBuf, nil
 	}
-	return writeFull(rw, response)
+	return readBuf, writeFull(rw, response)
 }
 
 func (s *Server) handleMessage(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {

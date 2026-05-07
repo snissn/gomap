@@ -90,6 +90,10 @@ func AppendMessage(dst []byte, requestID, responseTo int32, opCode OpCode, body 
 }
 
 func ReadMessage(r io.Reader, maxMessageLength int32) (Header, []byte, error) {
+	return ReadMessageInto(r, nil, maxMessageLength)
+}
+
+func ReadMessageInto(r io.Reader, dst []byte, maxMessageLength int32) (Header, []byte, error) {
 	if maxMessageLength <= 0 {
 		maxMessageLength = DefaultMaxMessageLength
 	}
@@ -105,11 +109,15 @@ func ReadMessage(r io.Reader, maxMessageLength int32) (Header, []byte, error) {
 		return Header{}, nil, fmt.Errorf("%w: length=%d max=%d", ErrMessageTooLarge, h.MessageLength, maxMessageLength)
 	}
 	bodyLen := int(h.MessageLength) - HeaderLen
-	body := make([]byte, bodyLen)
-	if _, err := io.ReadFull(r, body); err != nil {
+	if cap(dst) < bodyLen {
+		dst = make([]byte, bodyLen)
+	} else {
+		dst = dst[:bodyLen]
+	}
+	if _, err := io.ReadFull(r, dst); err != nil {
 		return Header{}, nil, err
 	}
-	return h, body, nil
+	return h, dst, nil
 }
 
 func ValidateDocument(doc Document) error {
