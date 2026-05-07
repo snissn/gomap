@@ -2109,6 +2109,9 @@ func runDirectTreeDBRangeQuery(cfg config, collection *collections.Collection, m
 		}
 		return nil
 	}
+	if cfg.TreeDBReadState == treeDBReadStateUnsettled {
+		return errors.New("direct range scan uses ScanDocumentsFunc, which flushes unsettled buffered writes before scanning")
+	}
 	matches := 0
 	_, err := collection.ScanDocumentsFunc(cfg.Documents, func(record collections.DocumentRecord) (bool, error) {
 		raw, err := directStoredDocumentToBSON(collection, materializer, record.Document)
