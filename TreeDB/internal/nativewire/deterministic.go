@@ -31,6 +31,13 @@ type DeterministicEntryScratch struct {
 }
 
 func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) {
+	return AppendDeterministicEntryWithLimits(dst, cmd, Limits{})
+}
+
+// AppendDeterministicEntryWithLimits appends a canonical replicated command
+// entry while validating deterministic payloads against caller-provided limits.
+func AppendDeterministicEntryWithLimits(dst []byte, cmd ValidatedCommand, limits Limits) ([]byte, error) {
+	limits = limits.withDefaults()
 	if cmd.Schema == nil {
 		return nil, protocolError(ErrInvalidCommand, "missing command schema")
 	}
@@ -49,7 +56,7 @@ func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) 
 	}
 
 	var deterministicScratch [16]Section
-	deterministic, err := cmd.deterministicSectionsInto(deterministicScratch[:0])
+	deterministic, err := cmd.deterministicSectionsInto(deterministicScratch[:0], limits)
 	if err != nil {
 		return nil, err
 	}
@@ -227,7 +234,7 @@ func (cmd ValidatedCommand) hasSection(id SectionID) bool {
 	return false
 }
 
-func (cmd ValidatedCommand) deterministicSectionsInto(dst []Section) ([]Section, error) {
+func (cmd ValidatedCommand) deterministicSectionsInto(dst []Section, limits Limits) ([]Section, error) {
 	if cmd.Schema == nil {
 		return nil, protocolError(ErrInvalidCommand, "missing command schema")
 	}
@@ -239,7 +246,7 @@ func (cmd ValidatedCommand) deterministicSectionsInto(dst []Section) ([]Section,
 			if seen.add(section.ID) > 1 {
 				return nil, protocolError(ErrInvalidCommand, "duplicate deterministic singleton section %d", section.ID)
 			}
-			if err := validateDeterministicSectionPayload(section, Limits{}); err != nil {
+			if err := validateDeterministicSectionPayload(section, limits); err != nil {
 				return nil, err
 			}
 			out = append(out, Section{ID: section.ID, Bytes: section.Bytes})
@@ -253,7 +260,7 @@ func (cmd ValidatedCommand) deterministicSectionsInto(dst []Section) ([]Section,
 		if !rule.Repeatable && seenCount > 1 {
 			return nil, protocolError(ErrInvalidCommand, "duplicate deterministic singleton section %d", section.ID)
 		}
-		if err := validateDeterministicSectionPayload(section, Limits{}); err != nil {
+		if err := validateDeterministicSectionPayload(section, limits); err != nil {
 			return nil, err
 		}
 		out = append(out, Section{ID: section.ID, Bytes: section.Bytes})
