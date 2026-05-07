@@ -2156,15 +2156,16 @@ func nativeWireStoredDocument(format collections.DocumentFormat, i int, prebuilt
 	switch format {
 	case collections.DocumentFormatBSON:
 		return raw, nil
+	case collections.DocumentFormatDefault, collections.DocumentFormatJSON:
+		return nativeWireBenchmarkJSONDocument(i), nil
 	case collections.DocumentFormatTemplateV1:
 		stored, err := bson.MarshalExtJSON(raw, true, false)
 		if err != nil {
 			return nil, err
 		}
 		return collections.EncodeTemplateV1DocumentJSON(stored)
-	default:
-		return bson.MarshalExtJSON(raw, true, false)
 	}
+	return nativeWireBenchmarkJSONDocument(i), nil
 }
 
 func benchmarkBSONRaw(i int, prebuilt []bson.D, prebuiltRaw []bson.Raw) (bson.Raw, error) {
