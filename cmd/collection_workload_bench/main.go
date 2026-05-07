@@ -405,7 +405,7 @@ func run(cfg config) (result, error) {
 		Notes: []string{
 			"Native collection benchmark: no Mongo driver, gateway, wire protocol, cursor materialization, or BSON _id primary-key encoding.",
 			"Index-count shapes are native: 0=primary only, 1=email, 2=email+age, 3=email+age+city.",
-			"age_range_scan_limit_10 uses deterministic native IDs and primary GetInto calls as the unindexed scan floor.",
+			"age_range_scan_limit_10 uses the collection primary scan API and filters materialized document age values.",
 		},
 	}
 	for _, format := range cfg.Formats {
@@ -983,32 +983,80 @@ func runAgeIndexedRangeReads(target *benchTarget, total, workers int) (int64, in
 
 func runAgeScanRangeReads(target *benchTarget, total, workers int) (int64, int64, error) {
 	docs := len(target.fixture.ids)
-	buffers := make([][]byte, workerBufferCount(workers))
+	materializers := make([]*collections.StoredDocumentJSONMaterializer, workerBufferCount(workers))
+	defer func() {
+		for _, materializer := range materializers {
+			_ = materializer.Close()
+		}
+	}()
 	return runParallel(total, workers, func(op int, worker int) error {
-		start := benchmarkDocumentOrdinal(op, 43, docs)
 		minAge := rangeReadMinAge(op)
 		foundCount := 0
-		buf := buffers[worker]
-		for scanned := 0; scanned < docs && foundCount < 10; scanned++ {
-			ordinal := (start + scanned) % docs
-			value, found, err := target.col.GetInto(target.fixture.ids[ordinal], buf[:0])
+		materializer := materializers[worker]
+		_, err := target.col.ScanDocumentsFunc(docs, func(record collections.DocumentRecord) (bool, error) {
+			if materializer == nil && target.fixture.format == collections.DocumentFormatTemplateV1 {
+				var err error
+				materializer, err = target.col.NewStoredDocumentJSONMaterializer()
+				if err != nil {
+					return false, err
+				}
+				materializers[worker] = materializer
+			}
+			age, err := storedDocumentAge(target, materializer, record.Document)
 			if err != nil {
-				return err
+				return false, err
 			}
-			if !found {
-				continue
-			}
-			buf = value
-			if target.fixture.ages[ordinal] >= minAge {
+			if age >= minAge {
 				foundCount++
 			}
+			return foundCount < 10, nil
+		})
+		if err != nil {
+			return err
 		}
-		buffers[worker] = buf
 		if foundCount == 0 {
 			return fmt.Errorf("age scan found no documents")
 		}
 		return nil
 	})
+}
+
+func storedDocumentAge(target *benchTarget, materializer *collections.StoredDocumentJSONMaterializer, document []byte) (int64, error) {
+	if target == nil || target.fixture == nil {
+		return 0, errors.New("missing benchmark fixture")
+	}
+	switch target.fixture.format {
+	case collections.DocumentFormatBSON:
+		value := bson.Raw(document).Lookup("age")
+		if age, ok := value.Int64OK(); ok {
+			return age, nil
+		}
+		if age, ok := value.Int32OK(); ok {
+			return int64(age), nil
+		}
+		return 0, errors.New("BSON document missing numeric age")
+	case collections.DocumentFormatJSON:
+		return jsonDocumentAge(document)
+	default:
+		if materializer == nil {
+			return 0, errors.New("missing document materializer")
+		}
+		jsonDoc, err := materializer.StoredDocumentJSON(document)
+		if err != nil {
+			return 0, err
+		}
+		return jsonDocumentAge(jsonDoc)
+	}
+}
+
+func jsonDocumentAge(document []byte) (int64, error) {
+	var decoded struct {
+		Age int64 `json:"age"`
+	}
+	if err := json.Unmarshal(document, &decoded); err != nil {
+		return 0, err
+	}
+	return decoded.Age, nil
 }
 
 func workerBufferCount(workers int) int {
