@@ -92,6 +92,21 @@ func TestDecodeDeterministicEntryGolden(t *testing.T) {
 	}
 }
 
+func TestDecodeDeterministicEntryHonorsMaxFrameSize(t *testing.T) {
+	registry := MustV1Registry()
+	cmd, err := registry.ValidateRequestSections(insertBatchDeterministicSections())
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	entry, err := AppendDeterministicEntry(nil, cmd)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry: %v", err)
+	}
+	if _, err := DecodeDeterministicEntry(entry, Limits{MaxFrameSize: uint64(len(entry) - 1)}); codeOf(err) != ErrResourceExhausted {
+		t.Fatalf("DecodeDeterministicEntry err=%v code=%d want resource exhausted", err, codeOf(err))
+	}
+}
+
 func TestDecodeDeterministicEntryRejectsMalformedEnvelope(t *testing.T) {
 	registry := MustV1Registry()
 	cmd, err := registry.ValidateRequestSections(insertBatchDeterministicSections())
