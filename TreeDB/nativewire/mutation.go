@@ -167,11 +167,8 @@ func rejectDuplicateIDsSmall(ids [][]byte) error {
 	for tableSize < len(ids)*2 {
 		tableSize <<= 1
 	}
-	var heads [1024]int16
-	for i := 0; i < tableSize; i++ {
-		heads[i] = -1
-	}
-	var next [512]int16
+	var heads [1024]uint16
+	var next [512]uint16
 	var hashes [512]uint64
 	hashesView := hashes[:len(ids)]
 	mask := uint64(tableSize - 1)
@@ -181,8 +178,8 @@ func rejectDuplicateIDsSmall(ids [][]byte) error {
 		}
 		hash := hashDocumentID(id)
 		bucket := int(hash & mask)
-		for prev := heads[bucket]; prev >= 0; prev = next[prev] {
-			j := int(prev)
+		for prev := heads[bucket]; prev != 0; prev = next[int(prev)-1] {
+			j := int(prev) - 1
 			if hashesView[j] != hash || len(ids[j]) != len(id) {
 				continue
 			}
@@ -192,7 +189,7 @@ func rejectDuplicateIDsSmall(ids [][]byte) error {
 		}
 		hashesView[i] = hash
 		next[i] = heads[bucket]
-		heads[bucket] = int16(i)
+		heads[bucket] = uint16(i + 1)
 	}
 	return nil
 }

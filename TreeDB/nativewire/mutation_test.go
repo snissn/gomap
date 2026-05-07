@@ -170,10 +170,11 @@ func TestRejectDuplicateIDsSmallBatchAllocFree(t *testing.T) {
 	for i := range ids {
 		ids[i] = []byte("doc-" + strconv.Itoa(i))
 	}
+	if err := rejectDuplicateIDs(ids); err != nil {
+		t.Fatalf("rejectDuplicateIDs: %v", err)
+	}
 	allocs := testing.AllocsPerRun(1000, func() {
-		if err := rejectDuplicateIDs(ids); err != nil {
-			t.Fatalf("rejectDuplicateIDs: %v", err)
-		}
+		_ = rejectDuplicateIDs(ids)
 	})
 	if allocs != 0 {
 		t.Fatalf("rejectDuplicateIDs allocs/run=%v want 0", allocs)
