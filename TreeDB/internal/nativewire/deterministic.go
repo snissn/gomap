@@ -151,9 +151,11 @@ func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *Determinis
 		off += int(sectionLen)
 	}
 	if off != len(src) {
+		clearDeterministicEntryScratch(sections, scratch)
 		return DeterministicEntry{}, protocolError(ErrMalformedFrame, "deterministic entry has %d trailing bytes", len(src)-off)
 	}
 	if _, err := validateDecodedDeterministicEntry(CommandID(commandID), commandVersion, sections); err != nil {
+		clearDeterministicEntryScratch(sections, scratch)
 		return DeterministicEntry{}, err
 	}
 	if scratch != nil {
@@ -178,6 +180,14 @@ func deterministicEntrySectionsBuffer(count int, scratch *DeterministicEntryScra
 	backing := scratch.Sections[:cap(scratch.Sections)]
 	clear(backing[count:])
 	return backing[:count]
+}
+
+func clearDeterministicEntryScratch(sections []Section, scratch *DeterministicEntryScratch) {
+	if scratch == nil {
+		return
+	}
+	clear(sections)
+	scratch.Sections = sections[:0]
 }
 
 func readEntryUvarint(src []byte, off *int, field string) (uint64, error) {
