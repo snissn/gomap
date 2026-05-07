@@ -144,8 +144,10 @@ func decodeIDVectorInto(dst [][]byte, sections []iwire.Section, limits iwire.Lim
 	return ids, nil
 }
 
+const maxSmallDuplicateIDs = 512
+
 func rejectDuplicateIDs(ids [][]byte) error {
-	if len(ids) <= 512 {
+	if len(ids) <= maxSmallDuplicateIDs {
 		return rejectDuplicateIDsSmall(ids)
 	}
 	seen := make(map[string]struct{}, len(ids))
@@ -163,13 +165,19 @@ func rejectDuplicateIDs(ids [][]byte) error {
 }
 
 func rejectDuplicateIDsSmall(ids [][]byte) error {
+	if len(ids) > maxSmallDuplicateIDs {
+		return rejectDuplicateIDs(ids)
+	}
 	tableSize := 1
 	for tableSize < len(ids)*2 {
 		tableSize <<= 1
 	}
 	var heads [1024]uint16
-	var next [512]uint16
-	var hashes [512]uint64
+	if tableSize > len(heads) {
+		return rejectDuplicateIDs(ids)
+	}
+	var next [maxSmallDuplicateIDs]uint16
+	var hashes [maxSmallDuplicateIDs]uint64
 	hashesView := hashes[:len(ids)]
 	mask := uint64(tableSize - 1)
 	for i, id := range ids {
