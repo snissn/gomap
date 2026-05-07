@@ -217,7 +217,19 @@ Invariant:
   `TreeDB/docs/spec/native-wire-implementation-guidelines.md`.
 
 Coverage:
-- No shipped native-wire server or codec exists yet. R0 implementation must add
-  the conformance fixtures, fuzz targets, and drift tests described in
-  `TreeDB/docs/spec/native-wire-implementation-guidelines.md` before claiming
-  native-wire v1 support.
+- `TreeDB/internal/nativewire/nativewire_test.go`:
+  - frame-header golden fixture and malformed/unsupported header rejection,
+  - section and byte-vector round trips,
+  - byte-vector length-mismatch rejection,
+  - command-schema validation for required sections, duplicate singleton
+    sections, unknown critical sections, and unsupported command versions,
+  - deterministic-entry golden fixture and transport-field independence,
+  - deterministic-entry rejection for missing distributed guards.
+- `TreeDB/internal/nativewire/fuzz_test.go`:
+  - fuzz targets for frame-header, section-envelope, byte-vector decoding, and
+    command-schema validation.
+
+The native-wire server does not exist yet. R0 follow-up work must add fuzz
+coverage for deterministic-entry canonicalization, broader negative conformance
+fixtures, drift tests, and direct collection parity tests before claiming
+native-wire v1 server support.
