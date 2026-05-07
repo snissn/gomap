@@ -11516,7 +11516,7 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 	out := make([]DocumentRecord, 0, capHint)
 	primaryRootName := collectionPrimaryRootName(catalog.meta.Name)
 	var scratch []byte
-	dedupeDocumentIDs := idx.MultiKey || catalog.meta.Options.AllowArrayValuesInIndex
+	dedupeDocumentIDs := shouldDedupeIndexDocumentIDs(idx, catalog.meta.Options)
 	documentTruncated := false
 	truncated, err := scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt, idx.ValueType, 0, dedupeDocumentIDs, func(id []byte) (bool, error) {
 		var value []byte
@@ -11656,9 +11656,13 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 	if persistedIt != nil {
 		defer func() { _ = persistedIt.Close() }()
 	}
-	dedupeDocumentIDs := idx.MultiKey || catalog.meta.Options.AllowArrayValuesInIndex
+	dedupeDocumentIDs := shouldDedupeIndexDocumentIDs(idx, catalog.meta.Options)
 	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, opts.Limit, dedupeDocumentIDs, fn)
 	return truncated, true, err
+}
+
+func shouldDedupeIndexDocumentIDs(idx IndexDefinition, opts CollectionOptions) bool {
+	return idx.MultiKey || opts.AllowArrayValuesInIndex
 }
 
 func exactIndexRangePrefix(valueType IndexValueType, opts IndexRangeOptions) ([]byte, bool, error) {

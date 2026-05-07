@@ -11966,6 +11966,9 @@ func TestCollectionFindByIndexRangePersistedOnlyFastPathLimitAndClones(t *testin
 		t.Fatalf("ids=%q truncated=%v want u1,u2 true", ids, truncated)
 	}
 	ids[0][0] = 'x'
+	if !bytes.Equal(ids[1], []byte("u2")) {
+		t.Fatalf("ids[1]=%q changed after mutating ids[0]", ids[1])
+	}
 	again, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
 		Lower: IndexRangeBound{Value: int64(1), Inclusive: true},
 		Upper: IndexRangeBound{Unbounded: true},
