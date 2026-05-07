@@ -362,17 +362,13 @@ func v1CommandSchemas() []CommandSchema {
 			},
 		},
 		{
-			ID:                   CommandDropCollection,
-			Version:              1,
-			Name:                 "drop_collection",
-			Kind:                 CommandKindMutation,
-			Replicated:           true,
-			RequiresIdempotency:  true,
-			RequiresCatalogGuard: true,
-			LocalOnly:            false,
+			ID:        CommandDropCollection,
+			Version:   1,
+			Name:      "drop_collection",
+			Kind:      CommandKindMutation,
+			LocalOnly: true,
 			Sections: []SectionRule{
-				{ID: SectionCollectionRef, Name: "collection_ref", Required: true, Deterministic: true},
-				{ID: SectionExpectedCatalogVersion, Name: "expected_catalog_version", Deterministic: true},
+				{ID: SectionCollectionRef, Name: "collection_ref", Required: true},
 			},
 		},
 		{
