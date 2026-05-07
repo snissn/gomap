@@ -91,10 +91,10 @@ func TestSectionAndByteVectorRoundTrip(t *testing.T) {
 
 func TestByteVectorRejectsLengthMismatch(t *testing.T) {
 	for _, tc := range [][]byte{
-		{2, 1, 2, 'a', 'b'},   // truncated payload.
-		{1, 1, 'a', 'x'},      // extra payload.
-		{1, 0xff, 0xff, 0xff}, // truncated/overflow varint.
-		{3, 0, 0},             // count exceeds available length table bytes.
+		{2, 1, 2, 'a', 'b'},       // truncated payload.
+		{1, 1, 'a', 'x'},          // extra payload.
+		{1, 0xff, 0xff, 0xff},     // truncated/overflow varint.
+		appendUvarint(nil, 1<<20), // count exceeds available length table bytes.
 	} {
 		if _, err := DecodeByteVector(tc, Limits{}); codeOf(err) != ErrMalformedFrame {
 			t.Fatalf("DecodeByteVector(%x) err=%v code=%d", tc, err, codeOf(err))
@@ -128,6 +128,16 @@ func TestDecodeSectionsRejectsLimitsAndMalformed(t *testing.T) {
 	truncated := []byte{byte(SectionCollectionRef), 0, 2, 'a'}
 	if _, err := DecodeSections(truncated, Limits{}); codeOf(err) != ErrMalformedFrame {
 		t.Fatalf("truncated section err=%v code=%d", err, codeOf(err))
+	}
+
+	for _, tc := range [][]byte{
+		{0xe4, 0x00, 0, 0},                       // non-minimal section_id 100.
+		{byte(SectionCollectionRef), 0x80, 0, 0}, // non-minimal flags 0.
+		{byte(SectionCollectionRef), 0, 0x80, 0}, // non-minimal length 0.
+	} {
+		if _, err := DecodeSections(tc, Limits{}); codeOf(err) != ErrMalformedFrame {
+			t.Fatalf("DecodeSections(%x) err=%v code=%d", tc, err, codeOf(err))
+		}
 	}
 }
 

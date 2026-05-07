@@ -24,6 +24,14 @@ func TestCommandHeaderGolden(t *testing.T) {
 	}
 }
 
+func TestCommandHeaderRejectsNonMinimalUvarint(t *testing.T) {
+	// command_id 30 encoded as an overlong two-byte varint.
+	_, err := DecodeCommandHeader([]byte{0x9e, 0x00, 0x01, 0x00})
+	if codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("non-minimal command header err=%v code=%d", err, codeOf(err))
+	}
+}
+
 func TestRegistryValidatesRequestSections(t *testing.T) {
 	registry := MustV1Registry()
 	sections := insertBatchSections()

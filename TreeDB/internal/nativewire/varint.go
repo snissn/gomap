@@ -10,6 +10,9 @@ func readUvarint(src []byte) (uint64, int, error) {
 	v, n := binary.Uvarint(src)
 	switch {
 	case n > 0:
+		if !isMinimalUvarint(src, v, n) {
+			return 0, 0, protocolError(ErrMalformedFrame, "non-minimal uvarint")
+		}
 		return v, n, nil
 	case n == 0:
 		return 0, 0, protocolError(ErrMalformedFrame, "truncated uvarint")
