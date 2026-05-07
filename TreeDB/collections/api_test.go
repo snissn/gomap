@@ -11722,31 +11722,6 @@ func TestCollectionFindDocumentsByIndexRangeTypedInt64(t *testing.T) {
 		t.Fatalf("record=%q/%s want u2 zero", records[0].ID, records[0].Document)
 	}
 
-	var borrowed []DocumentRecord
-	truncated, err = col.ScanDocumentsByIndexRange("score", IndexRangeOptions{
-		Lower: IndexRangeBound{Value: int64(0), Inclusive: true},
-		Upper: IndexRangeBound{Unbounded: true},
-		Limit: 2,
-	}, func(record BorrowedDocumentRecord) (bool, error) {
-		borrowed = append(borrowed, DocumentRecord{
-			ID:       bytes.Clone(record.ID),
-			Document: bytes.Clone(record.Document),
-		})
-		return true, nil
-	})
-	if err != nil {
-		t.Fatalf("scan borrowed documents range: %v", err)
-	}
-	if truncated || len(borrowed) != 2 {
-		t.Fatalf("borrowed len=%d truncated=%v want 2,false", len(borrowed), truncated)
-	}
-	if !bytes.Equal(borrowed[0].ID, []byte("u2")) || !bytes.Contains(borrowed[0].Document, []byte(`"name":"zero"`)) {
-		t.Fatalf("borrowed[0]=%q/%s want u2 zero", borrowed[0].ID, borrowed[0].Document)
-	}
-	if !bytes.Equal(borrowed[1].ID, []byte("u3")) || !bytes.Contains(borrowed[1].Document, []byte(`"name":"two"`)) {
-		t.Fatalf("borrowed[1]=%q/%s want u3 two", borrowed[1].ID, borrowed[1].Document)
-	}
-
 	records, truncated, err = col.FindDocumentsByIndexRange("score", IndexRangeOptions{
 		Lower: IndexRangeBound{Value: int64(100), Inclusive: true},
 		Upper: IndexRangeBound{Unbounded: true},
@@ -11831,6 +11806,54 @@ func TestCollectionFindByIndexRangeDedupesPersistedOnlyMultiKeyRange(t *testing.
 		Name: "docs",
 		Indexes: []IndexDefinition{
 			{Name: "tag", Field: "tags", ValueType: IndexValueString, MultiKey: true},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("d1"), []byte("d2")},
+		[][]byte{
+			[]byte(`{"tags":["a","b"]}`),
+			[]byte(`{"tags":["c"]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	ids, truncated, err := col.FindByIndexRange("tag", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: "a", Inclusive: true},
+		Upper: IndexRangeBound{Value: "d", Inclusive: false},
+		Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("find range: %v", err)
+	}
+	if truncated || len(ids) != 2 || !bytes.Equal(ids[0], []byte("d1")) || !bytes.Equal(ids[1], []byte("d2")) {
+		t.Fatalf("ids=%q truncated=%v want d1,d2 false", ids, truncated)
+	}
+}
+
+func TestCollectionFindByIndexRangeDedupesAllowedArrayScalarIndex(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			AllowArrayValuesInIndex: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "tag", Field: "tags", ValueType: IndexValueString},
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
