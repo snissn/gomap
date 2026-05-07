@@ -45,7 +45,39 @@ type Server struct {
 }
 
 type connState struct {
-	id uint64
+	id         uint64
+	mu         sync.Mutex
+	nextHandle uint64
+	handles    map[CollectionHandle]string
+}
+
+func (s *connState) addCollectionHandle(name string) CollectionHandle {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nextHandle++
+	handle := CollectionHandle(s.nextHandle)
+	if s.handles == nil {
+		s.handles = make(map[CollectionHandle]string)
+	}
+	s.handles[handle] = name
+	return handle
+}
+
+func (s *connState) collectionForHandle(handle CollectionHandle) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	name, ok := s.handles[handle]
+	return name, ok
+}
+
+func (s *connState) closeCollectionHandle(handle CollectionHandle) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.handles[handle]; !ok {
+		return false
+	}
+	delete(s.handles, handle)
+	return true
 }
 
 func NewServer(opts ServerOptions) *Server {
@@ -187,13 +219,13 @@ func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState,
 		s.counters.inc("requests.canceled_total")
 		return nil
 	case iwire.FrameRequest:
-		return s.handleRequest(ctx, w, header, body)
+		return s.handleRequest(ctx, w, state, header, body)
 	default:
 		return s.writeError(w, header, protocolError(iwire.ErrInvalidCommand, "unexpected frame type %d", header.Type))
 	}
 }
 
-func (s *Server) handleRequest(ctx context.Context, w io.Writer, header iwire.Header, body []byte) error {
+func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connState, header iwire.Header, body []byte) error {
 	if ctx.Err() != nil {
 		return s.writeError(w, header, ctx.Err())
 	}
@@ -218,6 +250,22 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, header iwire.He
 	s.counters.inc("commands." + cmd.Schema.Name + ".requests_total")
 	var responseSections []iwire.Section
 	switch cmd.Header.ID {
+	case iwire.CommandCreateCollection:
+		responseSections, err = s.handleCreateCollection(cmd.Known)
+	case iwire.CommandListCollections:
+		responseSections, err = s.handleListCollections()
+	case iwire.CommandCreateIndex:
+		responseSections, err = s.handleCreateIndex(state, cmd.Known)
+	case iwire.CommandListIndexes:
+		responseSections, err = s.handleListIndexes(state, cmd.Known)
+	case iwire.CommandDropIndex:
+		responseSections, err = s.handleDropIndex(state, cmd.Known)
+	case iwire.CommandOpenCollection:
+		responseSections, err = s.handleOpenCollection(state, cmd.Known)
+	case iwire.CommandCloseCollection:
+		responseSections, err = s.handleCloseCollection(state, cmd.Known)
+	case iwire.CommandDropCollection:
+		err = unsupportedDropCollection()
 	case iwire.CommandStats:
 		responseSections = []iwire.Section{{ID: iwire.SectionResponseMeta, Bytes: appendStringMap(nil, s.Stats())}}
 	default:
