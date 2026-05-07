@@ -64,11 +64,12 @@ type Server struct {
 }
 
 type serverCursor struct {
-	owner    uint64
-	records  []collections.DocumentRecord
-	pos      int
-	lastUsed time.Time
-	bytes    int
+	owner     uint64
+	records   []collections.DocumentRecord
+	pos       int
+	lastUsed  time.Time
+	bytes     int
+	truncated bool
 }
 
 type connState struct {
@@ -342,7 +343,11 @@ func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState,
 	case iwire.FramePing:
 		return s.writeSimpleFrame(w, iwire.Header{Type: iwire.FramePong, StreamID: header.StreamID, RequestID: header.RequestID}, nil)
 	case iwire.FrameGoaway:
-		if err := s.writeSimpleFrame(w, iwire.Header{Type: iwire.FrameGoaway, StreamID: header.StreamID, RequestID: header.RequestID}, nil); err != nil {
+		body, err := appendGoawayBody(nil, header.RequestID)
+		if err != nil {
+			return err
+		}
+		if err := s.writeSimpleFrame(w, iwire.Header{Type: iwire.FrameGoaway, StreamID: header.StreamID, RequestID: header.RequestID}, body); err != nil {
 			return err
 		}
 		return errGoaway
@@ -382,6 +387,11 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 		return s.writeError(w, header, err)
 	}
 	if req, ok, err := s.decodeInsertBatchFastRequest(state, sections); ok {
+		if err != nil {
+			s.counters.inc("requests.failed_total")
+			s.counters.incCommandError(iwire.CommandInsertBatch, "insert_batch")
+			return s.writeError(w, header, err)
+		}
 		s.counters.incCommandRequest(iwire.CommandInsertBatch, "insert_batch")
 		responseBody, err := s.handleInsertBatchFastBody(req, body[:0])
 		s.counters.add("dispatch_nanos_total", uint64(time.Since(start).Nanoseconds()))
@@ -494,6 +504,15 @@ func (s *Server) writeHelloOK(w io.Writer, header iwire.Header, state *connState
 		return err
 	}
 	return s.writeSimpleFrame(w, iwire.Header{Type: iwire.FrameHelloOK, StreamID: header.StreamID, RequestID: header.RequestID}, body)
+}
+
+func appendGoawayBody(dst []byte, lastAcceptedRequestID uint64) ([]byte, error) {
+	return iwire.AppendSection(dst, iwire.Section{
+		ID: iwire.SectionResponseMeta,
+		Bytes: appendStringMap(nil, map[string]string{
+			"last_accepted_request_id": strconv.FormatUint(lastAcceptedRequestID, 10),
+		}),
+	})
 }
 
 func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error {

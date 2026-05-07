@@ -30,10 +30,11 @@ type CursorLimits struct {
 }
 
 type CursorMeta struct {
-	CursorID uint64
-	Items    int
-	Bytes    int
-	HasMore  bool
+	CursorID  uint64
+	Items     int
+	Bytes     int
+	HasMore   bool
+	Truncated bool
 }
 
 func encodeScalar(value any) ([]byte, error) {
@@ -305,11 +306,15 @@ func responseForRecords(records []collections.DocumentRecord, meta CursorMeta) (
 		ids[i] = records[i].ID
 		docs[i] = records[i].Document
 	}
-	return []iwire.Section{
+	sections := []iwire.Section{
 		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, ids...)},
 		{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, docs...)},
 		{ID: iwire.SectionCursorMeta, Bytes: encodeCursorMeta(meta)},
-	}, nil
+	}
+	if meta.Truncated {
+		sections = append(sections, iwire.Section{ID: iwire.SectionTruncated, Bytes: appendBool(nil, true)})
+	}
+	return sections, nil
 }
 
 func (s *Server) reapExpiredCursors() {
@@ -357,7 +362,7 @@ func (s *Server) killCursorsForOwner(owner uint64) {
 	}
 }
 
-func (s *Server) storeCursor(owner uint64, records []collections.DocumentRecord, pos int) (uint64, error) {
+func (s *Server) storeCursor(owner uint64, records []collections.DocumentRecord, pos int, truncated bool) (uint64, error) {
 	if len(records) <= pos {
 		return 0, nil
 	}
@@ -374,7 +379,7 @@ func (s *Server) storeCursor(owner uint64, records []collections.DocumentRecord,
 	if s.cursors == nil {
 		s.cursors = make(map[uint64]*serverCursor)
 	}
-	s.cursors[id] = &serverCursor{owner: owner, records: records, pos: pos, lastUsed: time.Now(), bytes: bytes}
+	s.cursors[id] = &serverCursor{owner: owner, records: records, pos: pos, lastUsed: time.Now(), bytes: bytes, truncated: truncated}
 	s.cursorCount.Add(1)
 	s.counters.inc("cursors.opened_total")
 	return id, nil

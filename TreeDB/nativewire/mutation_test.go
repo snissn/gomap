@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
@@ -155,8 +156,30 @@ func TestMutationDuplicateIDRejected(t *testing.T) {
 	}
 }
 
+func TestInsertBatchFastDecodeErrorReturnsBeforeDispatch(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	body, err := appendInsertBatchRequestBody(nil, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		nil,
+		AckVisible,
+	)
+	if err != nil {
+		t.Fatalf("append request: %v", err)
+	}
+	_, _, err = client.roundTrip(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
+	if !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("InsertBatch malformed err=%v want invalid command", err)
+	}
+	assertDocumentMissing(t, mgr, "users", "u1")
+}
+
 func TestMutationRaftAckRejected(t *testing.T) {
-	client, _, _ := serveCollectionPipe(t)
+	client, mgr, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
@@ -169,5 +192,46 @@ func TestMutationRaftAckRejected(t *testing.T) {
 	)
 	if !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
 		t.Fatalf("InsertBatch raft ack err=%v want durability unavailable", err)
+	}
+	assertDocumentMissing(t, mgr, "users", "u1")
+}
+
+func TestMutationSyncedAckWithoutBackendRejectedBeforeWrite(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	server := NewServer(ServerOptions{Collections: mgr})
+	client, _ := servePipe(t, server)
+	t.Cleanup(func() { _ = db.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	_, err = client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"x":1}`)},
+		AckSynced,
+	)
+	if !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
+		t.Fatalf("InsertBatch synced ack err=%v want durability unavailable", err)
+	}
+	assertDocumentMissing(t, mgr, "users", "u1")
+}
+
+func assertDocumentMissing(t *testing.T, mgr *collections.CollectionManager, collectionName, id string) {
+	t.Helper()
+	col, err := mgr.OpenCollection(collectionName)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	doc, err := col.Get([]byte(id))
+	if err != nil {
+		t.Fatalf("get %s: %v", id, err)
+	}
+	if doc != nil {
+		t.Fatalf("document %q exists after rejected mutation: %s", id, doc)
 	}
 }

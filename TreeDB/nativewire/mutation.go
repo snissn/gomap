@@ -38,7 +38,7 @@ func decodeDocumentFormatPayload(raw []byte) (collections.DocumentFormat, error)
 	if n != len(raw) {
 		return "", protocolError(iwire.ErrMalformedFrame, "document_format has trailing bytes")
 	}
-	return decodeDocumentFormat(iwire.DocumentFormat(format)), nil
+	return decodeDocumentFormatStrict(format)
 }
 
 func ackSection(policy AckPolicy) iwire.Section {

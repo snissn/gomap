@@ -143,9 +143,18 @@ func (s *Server) handleIndexLookup(state *connState, sections []iwire.Section) (
 	if err != nil {
 		return nil, err
 	}
-	ids, truncated, err := collection.FindByIndexValueLimit(indexName, value, max(1, limits.MaxItems))
-	if err != nil {
-		return nil, metadataWrap(err)
+	var ids [][]byte
+	truncated := false
+	if limits.MaxItems > 0 {
+		ids, truncated, err = collection.FindByIndexValueLimit(indexName, value, limits.MaxItems)
+		if err != nil {
+			return nil, metadataWrap(err)
+		}
+	} else {
+		ids, err = collection.FindByIndexValue(indexName, value)
+		if err != nil {
+			return nil, metadataWrap(err)
+		}
 	}
 	return []iwire.Section{
 		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, ids...)},
@@ -186,15 +195,12 @@ func (s *Server) handleOpenScan(state *connState, sections []iwire.Section) ([]i
 		return nil, metadataWrap(err)
 	}
 	end, bytes := splitCursorBatch(records, 0, limits, s.defaultCursorBatchSize)
-	cursorID, err := s.storeCursor(state.id, records, end)
+	cursorID, err := s.storeCursor(state.id, records, end, truncated)
 	if err != nil {
 		return nil, err
 	}
 	hasMore := cursorID != 0
-	if truncated && !hasMore {
-		hasMore = false
-	}
-	return responseForRecords(records[:end], CursorMeta{CursorID: cursorID, Items: end, Bytes: bytes, HasMore: hasMore})
+	return responseForRecords(records[:end], CursorMeta{CursorID: cursorID, Items: end, Bytes: bytes, HasMore: hasMore, Truncated: truncated})
 }
 
 func (s *Server) handleCursorNext(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
@@ -218,13 +224,14 @@ func (s *Server) handleCursorNext(state *connState, sections []iwire.Section) ([
 	cursor.pos = end
 	cursor.lastUsed = time.Now()
 	hasMore := cursor.pos < len(cursor.records)
+	truncated := cursor.truncated
 	if !hasMore {
 		delete(s.cursors, cursorID)
 		s.cursorCount.Add(-1)
 		s.counters.inc("cursors.closed_total")
 	}
 	s.cursorMu.Unlock()
-	meta := CursorMeta{CursorID: cursorID, Items: len(batch), Bytes: bytes, HasMore: hasMore}
+	meta := CursorMeta{CursorID: cursorID, Items: len(batch), Bytes: bytes, HasMore: hasMore, Truncated: truncated}
 	if !hasMore {
 		meta.CursorID = 0
 	}
@@ -305,7 +312,10 @@ func indexRangeRequest(sections []iwire.Section) (string, collections.IndexRange
 	if err != nil {
 		return "", collections.IndexRangeOptions{}, err
 	}
-	var opts collections.IndexRangeOptions
+	opts := collections.IndexRangeOptions{
+		Lower: collections.IndexRangeBound{Unbounded: true},
+		Upper: collections.IndexRangeBound{Unbounded: true},
+	}
 	if raw, ok, err := singletonSection(sections, iwire.SectionIndexLowerBound); err != nil {
 		return "", collections.IndexRangeOptions{}, err
 	} else if ok {

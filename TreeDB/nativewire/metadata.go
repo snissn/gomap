@@ -11,6 +11,11 @@ import (
 
 type CollectionHandle uint64
 
+const (
+	maxCollectionMetaIndexDefinitions = 1 << 16
+	minEncodedIndexDefinitionLen      = 6
+)
+
 func collectionNameRef(name string) iwire.Section {
 	return iwire.Section{ID: iwire.SectionCollectionRef, Bytes: []byte(name)}
 }
@@ -113,12 +118,30 @@ func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
 	if indexCount > uint64(maxInt) {
 		return collections.CollectionMeta{}, protocolError(iwire.ErrResourceExhausted, "index count exceeds int capacity")
 	}
+	if indexCount > maxCollectionMetaIndexDefinitions {
+		return collections.CollectionMeta{}, protocolError(iwire.ErrResourceExhausted, "index count %d exceeds limit %d", indexCount, maxCollectionMetaIndexDefinitions)
+	}
+	if indexCount > uint64((len(src)-off)/minEncodedIndexDefinitionLen) {
+		return collections.CollectionMeta{}, protocolError(iwire.ErrMalformedFrame, "index count %d exceeds remaining collection_meta payload", indexCount)
+	}
+	documentFormat, err := decodeDocumentFormatStrict(docFormat)
+	if err != nil {
+		return collections.CollectionMeta{}, err
+	}
+	dataRootStorage, err := decodeRootStorageStrict(dataPolicy)
+	if err != nil {
+		return collections.CollectionMeta{}, err
+	}
+	indexStateRootStorage, err := decodeRootStorageStrict(indexStatePolicy)
+	if err != nil {
+		return collections.CollectionMeta{}, err
+	}
 	meta := collections.CollectionMeta{
 		Name: name,
 		Options: collections.CollectionOptions{
-			DocumentFormat:                          decodeDocumentFormat(iwire.DocumentFormat(docFormat)),
-			DataRootStoragePolicy:                   decodeRootStorage(dataPolicy),
-			IndexStateStoragePolicy:                 decodeRootStorage(indexStatePolicy),
+			DocumentFormat:                          documentFormat,
+			DataRootStoragePolicy:                   dataRootStorage,
+			IndexStateStoragePolicy:                 indexStateRootStorage,
 			AllowArrayValuesInIndex:                 allowArray,
 			DisableIndexedWriteMemtables:            disableMemtables,
 			BufferedIndexedWrites:                   bufferedWrites,
@@ -208,13 +231,21 @@ func decodeIndexDefinitionAt(src []byte, off int, withVersion bool) (collections
 	if err != nil {
 		return collections.IndexDefinition{}, 0, err
 	}
+	decodedValueType, err := decodeIndexValueTypeStrict(valueType)
+	if err != nil {
+		return collections.IndexDefinition{}, 0, err
+	}
+	decodedStoragePolicy, err := decodeRootStorageStrict(storagePolicy)
+	if err != nil {
+		return collections.IndexDefinition{}, 0, err
+	}
 	return collections.IndexDefinition{
 		Name:          name,
 		Field:         field,
-		ValueType:     decodeIndexValueType(valueType),
+		ValueType:     decodedValueType,
 		Unique:        unique,
 		MultiKey:      multiKey,
-		StoragePolicy: decodeRootStorage(storagePolicy),
+		StoragePolicy: decodedStoragePolicy,
 	}, off, nil
 }
 
@@ -337,6 +368,21 @@ func decodeDocumentFormat(format iwire.DocumentFormat) collections.DocumentForma
 	}
 }
 
+func decodeDocumentFormatStrict(format uint64) (collections.DocumentFormat, error) {
+	switch iwire.DocumentFormat(format) {
+	case iwire.DocumentFormatDefault:
+		return collections.DocumentFormatDefault, nil
+	case iwire.DocumentFormatJSON:
+		return collections.DocumentFormatJSON, nil
+	case iwire.DocumentFormatBSON:
+		return collections.DocumentFormatBSON, nil
+	case iwire.DocumentFormatTemplateV1:
+		return collections.DocumentFormatTemplateV1, nil
+	default:
+		return "", protocolError(iwire.ErrInvalidCommand, "unsupported document_format enum %d", format)
+	}
+}
+
 func encodeRootStorage(policy collections.RootStoragePolicy) uint64 {
 	switch policy {
 	case collections.RootStorageFast:
@@ -356,6 +402,19 @@ func decodeRootStorage(policy uint64) collections.RootStoragePolicy {
 		return collections.RootStorageCompressed
 	default:
 		return collections.RootStorageDefault
+	}
+}
+
+func decodeRootStorageStrict(policy uint64) (collections.RootStoragePolicy, error) {
+	switch policy {
+	case 0:
+		return collections.RootStorageDefault, nil
+	case 1:
+		return collections.RootStorageFast, nil
+	case 2:
+		return collections.RootStorageCompressed, nil
+	default:
+		return "", protocolError(iwire.ErrInvalidCommand, "unsupported root_storage enum %d", policy)
 	}
 }
 
@@ -386,6 +445,21 @@ func decodeIndexValueType(valueType uint64) collections.IndexValueType {
 		return collections.IndexValueDouble
 	default:
 		return ""
+	}
+}
+
+func decodeIndexValueTypeStrict(valueType uint64) (collections.IndexValueType, error) {
+	switch valueType {
+	case 1:
+		return collections.IndexValueString, nil
+	case 2:
+		return collections.IndexValueBool, nil
+	case 3:
+		return collections.IndexValueInt64, nil
+	case 4:
+		return collections.IndexValueDouble, nil
+	default:
+		return "", protocolError(iwire.ErrInvalidCommand, "unsupported index_value_type enum %d", valueType)
 	}
 }
 

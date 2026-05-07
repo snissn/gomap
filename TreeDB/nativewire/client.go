@@ -126,14 +126,14 @@ func (c *Client) roundTripLocked(ctx context.Context, typ iwire.FrameType, body 
 		return iwire.Header{}, nil, err
 	}
 	c.readBody = response[:0]
+	if header.RequestID != requestID {
+		return header, response, protocolError(iwire.ErrMalformedFrame, "response request_id %d want %d", header.RequestID, requestID)
+	}
 	if header.Type == iwire.FrameError {
 		return header, response, decodeWireError(response, c.limits)
 	}
 	if header.Type != want {
 		return header, response, protocolError(iwire.ErrMalformedFrame, "response frame type %d want %d", header.Type, want)
-	}
-	if header.RequestID != requestID {
-		return header, response, protocolError(iwire.ErrMalformedFrame, "response request_id %d want %d", header.RequestID, requestID)
 	}
 	return header, response, nil
 }
@@ -167,14 +167,14 @@ func (c *Client) roundTripLockedDiscardResponse(ctx context.Context, typ iwire.F
 		return err
 	}
 	c.readBody = response[:0]
+	if header.RequestID != requestID {
+		return protocolError(iwire.ErrMalformedFrame, "response request_id %d want %d", header.RequestID, requestID)
+	}
 	if header.Type == iwire.FrameError {
 		return decodeWireError(response, c.limits)
 	}
 	if header.Type != want {
 		return protocolError(iwire.ErrMalformedFrame, "response frame type %d want %d", header.Type, want)
-	}
-	if header.RequestID != requestID {
-		return protocolError(iwire.ErrMalformedFrame, "response request_id %d want %d", header.RequestID, requestID)
 	}
 	return nil
 }
