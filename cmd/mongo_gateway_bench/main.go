@@ -1294,7 +1294,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	if target.poolStats != nil {
 		target.poolStats.Reset()
 	}
-	loadPhase, err := runTreeDBProfiledPhase(target, profiler, "load_insert_many", func() (phaseResult, error) {
+	loadPhase, err := runTreeDBProfiledPhaseWithDrain(target, profiler, "load_insert_many", cfg.TreeDBReadState == treeDBReadStateSettled, func() (phaseResult, error) {
 		return runLoadPhase(ctx, cfg, target, coll, prebuilt, prebuiltRaw)
 	})
 	if err != nil {
@@ -1570,7 +1570,7 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 		return updatedCityValues
 	}
 
-	loadPhase, err := runTreeDBProfiledPhase(target, profiler, "load_insert_many", func() (phaseResult, error) {
+	loadPhase, err := runTreeDBProfiledPhaseWithDrain(target, profiler, "load_insert_many", cfg.TreeDBReadState == treeDBReadStateSettled, func() (phaseResult, error) {
 		return runDirectTreeDBLoadPhase(ctx, cfg, collection, prebuiltIDs, prebuiltDocuments)
 	})
 	if err != nil {
@@ -2464,17 +2464,23 @@ func runProfiledPhase(profiler *profileRecorder, name string, run func() (phaseR
 }
 
 func runTreeDBProfiledPhase(target *benchTarget, profiler *profileRecorder, name string, run func() (phaseResult, error)) (phaseResult, error) {
+	return runTreeDBProfiledPhaseWithDrain(target, profiler, name, true, run)
+}
+
+func runTreeDBProfiledPhaseWithDrain(target *benchTarget, profiler *profileRecorder, name string, drainAfter bool, run func() (phaseResult, error)) (phaseResult, error) {
 	before := collectLiveTreeDBStats(target)
 	result, err := runProfiledPhase(profiler, name, func() (phaseResult, error) {
 		result, err := run()
 		if err != nil {
 			return result, err
 		}
-		drainElapsed, err := drainTreeDBCollectionsForPhase(target)
-		if err != nil {
-			return result, err
+		if drainAfter {
+			drainElapsed, err := drainTreeDBCollectionsForPhase(target)
+			if err != nil {
+				return result, err
+			}
+			addPhaseDuration(&result, drainElapsed)
 		}
-		addPhaseDuration(&result, drainElapsed)
 		return result, nil
 	})
 	if err != nil {
