@@ -107,17 +107,25 @@ func TestDecodeDeterministicEntryRejectsMalformedEnvelope(t *testing.T) {
 	entryWithFlags = appendUvarint(entryWithFlags, 1)
 	entryWithFlags = appendUvarint(entryWithFlags, 1)
 	entryWithFlags = appendUvarint(entryWithFlags, 0)
+	unsupportedVersion := []byte("TDC1")
+	unsupportedVersion = appendUvarint(unsupportedVersion, 2)
+	sectionCountLimit := []byte("TDC1")
+	sectionCountLimit = appendUvarint(sectionCountLimit, DeterministicEntryVersion)
+	sectionCountLimit = appendUvarint(sectionCountLimit, uint64(CommandInsertBatch))
+	sectionCountLimit = appendUvarint(sectionCountLimit, 1)
+	sectionCountLimit = appendUvarint(sectionCountLimit, 0)
+	sectionCountLimit = appendUvarint(sectionCountLimit, 2)
 	for _, tc := range []struct {
 		name string
 		raw  []byte
 		code ErrorCode
 	}{
 		{name: "bad_magic", raw: []byte("bad"), code: ErrMalformedFrame},
-		{name: "unsupported_version", raw: append([]byte("TDC1"), 2), code: ErrUnsupportedVersion},
+		{name: "unsupported_version", raw: unsupportedVersion, code: ErrUnsupportedVersion},
 		{name: "unsupported_flags", raw: entryWithFlags, code: ErrUnsupportedFeature},
 		{name: "trailing", raw: append(append([]byte(nil), entry...), 0), code: ErrMalformedFrame},
 		{name: "truncated_section", raw: append([]byte(nil), entry[:len(entry)-1]...), code: ErrMalformedFrame},
-		{name: "section_count_limit", raw: append([]byte("TDC1"), 1, byte(CommandInsertBatch), 1, 0, 2), code: ErrResourceExhausted},
+		{name: "section_count_limit", raw: sectionCountLimit, code: ErrResourceExhausted},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			limits := Limits{}
@@ -205,6 +213,40 @@ func TestDecodeDeterministicEntryRejectsInvalidSectionPayload(t *testing.T) {
 	}
 }
 
+func TestDecodeDeterministicEntryRejectsInvalidCommandSet(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		commandID CommandID
+		sections  []Section
+	}{
+		{
+			name:      "read_command",
+			commandID: CommandGetMany,
+			sections: []Section{
+				{ID: SectionCollectionRef, Bytes: []byte("c")},
+				{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
+			},
+		},
+		{
+			name:      "missing_idempotency",
+			commandID: CommandInsertBatch,
+			sections:  deterministicEntrySectionsOnly(removeSection(insertBatchDeterministicSections(), SectionIdempotencyKey)),
+		},
+		{
+			name:      "missing_catalog_guard",
+			commandID: CommandInsertBatch,
+			sections:  deterministicEntrySectionsOnly(removeSection(insertBatchDeterministicSections(), SectionExpectedCatalogVersion)),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := deterministicEntryTestRaw(tc.commandID, tc.sections...)
+			if _, err := DecodeDeterministicEntry(raw, Limits{}); codeOf(err) != ErrInvalidCommand {
+				t.Fatalf("DecodeDeterministicEntry err=%v code=%d want invalid command", err, codeOf(err))
+			}
+		})
+	}
+}
+
 func TestDecodeDeterministicEntryPreservesPayloadLimits(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -233,9 +275,20 @@ func TestDecodeDeterministicEntryClearsScratchTail(t *testing.T) {
 		Sections: []Section{
 			{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
 			{ID: SectionDocuments, Bytes: []byte("stale")},
+			{ID: SectionDocumentIDs, Bytes: []byte("stale")},
+			{ID: SectionExpectedCatalogVersion, Bytes: []byte("stale")},
+			{ID: SectionCollectionRef, Bytes: []byte("stale")},
+			{ID: SectionIdempotencyKey, Bytes: []byte("stale")},
 		},
 	}
-	raw := deterministicEntryTestRaw(CommandInsertBatch, Section{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}})
+	sections := []Section{
+		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
+		{ID: SectionCollectionRef, Bytes: []byte("c")},
+		{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
+		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+	}
+	sortSectionsByID(sections)
+	raw := deterministicEntryTestRaw(CommandDeleteBatch, sections...)
 	if _, err := DecodeDeterministicEntryInto(raw, Limits{}, scratch); err != nil {
 		t.Fatalf("DecodeDeterministicEntryInto: %v", err)
 	}
@@ -318,6 +371,17 @@ func deterministicEntryTestRaw(commandID CommandID, sections ...Section) []byte 
 		raw = append(raw, section.Bytes...)
 	}
 	return raw
+}
+
+func deterministicEntrySectionsOnly(sections []Section) []Section {
+	out := sections[:0]
+	for _, section := range sections {
+		if section.ID != SectionCommandHeader {
+			out = append(out, section)
+		}
+	}
+	sortSectionsByID(out)
+	return out
 }
 
 func TestDeterministicEntryRejectsDuplicateIdempotencyInValidatedView(t *testing.T) {

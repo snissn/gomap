@@ -11,6 +11,8 @@ const (
 	DeterministicEntryVersion = uint64(1)
 )
 
+var deterministicEntryRegistry = MustV1Registry()
+
 type DeterministicEntry struct {
 	Version        uint64
 	CommandID      CommandID
@@ -148,6 +150,9 @@ func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *Determinis
 	if off != len(src) {
 		return DeterministicEntry{}, protocolError(ErrMalformedFrame, "deterministic entry has %d trailing bytes", len(src)-off)
 	}
+	if _, err := validateDecodedDeterministicEntry(CommandID(commandID), commandVersion, sections); err != nil {
+		return DeterministicEntry{}, err
+	}
 	if scratch != nil {
 		scratch.Sections = sections
 	}
@@ -167,14 +172,13 @@ func deterministicEntrySectionsBuffer(count int, scratch *DeterministicEntryScra
 	if cap(scratch.Sections) < count {
 		scratch.Sections = make([]Section, count)
 	}
-	if len(scratch.Sections) > count {
-		clear(scratch.Sections[count:])
-	}
-	return scratch.Sections[:count]
+	backing := scratch.Sections[:cap(scratch.Sections)]
+	clear(backing[count:])
+	return backing[:count]
 }
 
 func readEntryUvarint(src []byte, off *int, field string) (uint64, error) {
-	if off == nil || *off > len(src) {
+	if off == nil || *off >= len(src) {
 		return 0, protocolError(ErrMalformedFrame, "invalid deterministic entry offset for %s", field)
 	}
 	value, n, err := readUvarint(src[*off:])
@@ -224,6 +228,45 @@ func (cmd ValidatedCommand) deterministicSectionsInto(dst []Section) ([]Section,
 		out = append(out, Section{ID: section.ID, Bytes: section.Bytes})
 	}
 	return out, nil
+}
+
+func validateDecodedDeterministicEntry(commandID CommandID, commandVersion uint64, sections []Section) (*CommandSchema, error) {
+	schema, ok := deterministicEntryRegistry.LookupCommand(commandID, commandVersion)
+	if !ok {
+		return nil, protocolError(ErrUnsupportedVersion, "unsupported deterministic command %d version %d", commandID, commandVersion)
+	}
+	if !schema.Replicated || schema.LocalOnly {
+		return nil, protocolError(ErrInvalidCommand, "command %s is not replicated", schema.Name)
+	}
+	rules := schema.ruleMap()
+	var seen sectionSeenSet
+	for _, section := range sections {
+		if section.ID == SectionIdempotencyKey {
+			if seen.add(section.ID) > 1 {
+				return nil, protocolError(ErrInvalidCommand, "duplicate deterministic singleton section %d", section.ID)
+			}
+			continue
+		}
+		rule, ok := rules[section.ID]
+		if !ok || !rule.Deterministic {
+			return nil, protocolError(ErrInvalidCommand, "section %d is not deterministic for command %s", section.ID, schema.Name)
+		}
+		if !rule.Repeatable && seen.add(section.ID) > 1 {
+			return nil, protocolError(ErrInvalidCommand, "duplicate deterministic singleton section %d", section.ID)
+		}
+	}
+	if schema.RequiresIdempotency && seen.get(SectionIdempotencyKey) == 0 {
+		return nil, protocolError(ErrInvalidCommand, "missing idempotency identity")
+	}
+	if schema.RequiresCatalogGuard && seen.get(SectionExpectedCatalogVersion) == 0 {
+		return nil, protocolError(ErrInvalidCommand, "missing catalog guard")
+	}
+	for _, rule := range schema.Sections {
+		if rule.Required && rule.Deterministic && seen.get(rule.ID) == 0 {
+			return nil, protocolError(ErrInvalidCommand, "missing deterministic section %d", rule.ID)
+		}
+	}
+	return schema, nil
 }
 
 func sortSectionsByID(sections []Section) {

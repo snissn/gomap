@@ -10,6 +10,7 @@ import (
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
+// ErrNilListener is returned when Serve is called with a nil listener.
 var ErrNilListener = errors.New("nativewire: nil listener")
 
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {

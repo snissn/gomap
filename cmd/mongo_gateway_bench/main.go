@@ -2041,6 +2041,9 @@ func nativeWireBenchmarkIndexes(cfg config) []collections.IndexDefinition {
 func validateNativeWireBenchmarkCollection(actual, expected collections.CollectionMeta) error {
 	actual = normalizeNativeWireBenchmarkCollectionMeta(actual)
 	expected = normalizeNativeWireBenchmarkCollectionMeta(expected)
+	if actual.Name != expected.Name {
+		return fmt.Errorf("native-wire benchmark collection name drifted: got %q want %q", actual.Name, expected.Name)
+	}
 	if actual.Options != expected.Options {
 		return fmt.Errorf("native-wire benchmark collection %q options drifted: got %+v want %+v", actual.Name, actual.Options, expected.Options)
 	}
