@@ -600,7 +600,7 @@ func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error 
 		return sectionErr
 	}
 	s.counters.incErrorsTotal()
-	s.counters.inc("errors.code." + strconv.FormatUint(uint64(code), 10))
+	s.counters.incErrorCode(code)
 	return s.writeSimpleFrame(w, iwire.Header{Type: iwire.FrameError, StreamID: request.StreamID, RequestID: request.RequestID}, body)
 }
 

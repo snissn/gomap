@@ -251,7 +251,11 @@ func BenchmarkNativewireRejectDuplicateIDs(b *testing.B) {
 	for _, count := range []int{32, 128, 512} {
 		ids := benchmarkStoredIDs(0, count)
 		b.Run(fmt.Sprintf("%d_ids", count), func(b *testing.B) {
+			if err := rejectDuplicateIDs(ids); err != nil {
+				b.Fatalf("warm rejectDuplicateIDs: %v", err)
+			}
 			b.ReportAllocs()
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				if err := rejectDuplicateIDs(ids); err != nil {
 					b.Fatalf("rejectDuplicateIDs: %v", err)

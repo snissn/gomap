@@ -2,6 +2,7 @@ package nativewire
 
 import (
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -9,6 +10,7 @@ import (
 )
 
 const nativeStatsPrefix = "treedb.native_wire."
+const maxTrackedErrorCode = int(iwire.ErrIdempotencyConflict)
 
 type Stats map[string]string
 
@@ -27,9 +29,10 @@ type counters struct {
 	errorsTotal       atomic.Uint64
 	dispatchNanos     atomic.Uint64
 
-	commands [64]commandCounters
-	mu       sync.Mutex
-	values   map[string]uint64
+	errorCodes [maxTrackedErrorCode + 1]atomic.Uint64
+	commands   [64]commandCounters
+	mu         sync.Mutex
+	values     map[string]uint64
 }
 
 type commandCounters struct {
@@ -94,6 +97,17 @@ func (c *counters) addDispatchNanos(delta uint64) {
 
 func (c *counters) incErrorsTotal() {
 	c.errorsTotal.Add(1)
+}
+
+func (c *counters) incErrorCode(code iwire.ErrorCode) {
+	if c == nil {
+		return
+	}
+	if code > 0 && code <= iwire.ErrorCode(maxTrackedErrorCode) {
+		c.errorCodes[code].Add(1)
+		return
+	}
+	c.add("errors.code."+strconv.FormatUint(uint64(code), 10), 1)
 }
 
 func (c *counters) addHot(key string, delta uint64) bool {
@@ -179,6 +193,9 @@ func (c *counters) snapshot() map[string]uint64 {
 	addIfNonZero("requests.canceled_total", c.requestsCanceled.Load())
 	addIfNonZero("errors.total", c.errorsTotal.Load())
 	addIfNonZero("dispatch_nanos_total", c.dispatchNanos.Load())
+	for code := iwire.ErrorCode(1); code <= iwire.ErrorCode(maxTrackedErrorCode); code++ {
+		addIfNonZero("errors.code."+strconv.FormatUint(uint64(code), 10), c.errorCodes[code].Load())
+	}
 	for id := range c.commands {
 		name := commandCounterName(iwire.CommandID(id))
 		if name == "" {

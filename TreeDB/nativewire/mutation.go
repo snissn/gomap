@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"strconv"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
@@ -146,11 +147,23 @@ func decodeIDVectorInto(dst [][]byte, sections []iwire.Section, limits iwire.Lim
 
 const maxSmallDuplicateIDs = 512
 
+type duplicateIDScratch struct {
+	heads  [maxSmallDuplicateIDs * 2]uint16
+	next   [maxSmallDuplicateIDs]uint16
+	hashes [maxSmallDuplicateIDs]uint64
+}
+
+var duplicateIDScratchPool = sync.Pool{
+	New: func() any { return new(duplicateIDScratch) },
+}
+
 func rejectDuplicateIDs(ids [][]byte) error {
-	if len(ids) <= maxSmallDuplicateIDs {
-		return rejectDuplicateIDsSmall(ids)
+	if len(ids) > maxSmallDuplicateIDs {
+		return rejectDuplicateIDsMap(ids)
 	}
-	return rejectDuplicateIDsMap(ids)
+	scratch := duplicateIDScratchPool.Get().(*duplicateIDScratch)
+	defer duplicateIDScratchPool.Put(scratch)
+	return rejectDuplicateIDsSmall(ids, scratch)
 }
 
 func rejectDuplicateIDsMap(ids [][]byte) error {
@@ -168,21 +181,15 @@ func rejectDuplicateIDsMap(ids [][]byte) error {
 	return nil
 }
 
-func rejectDuplicateIDsSmall(ids [][]byte) error {
-	if len(ids) > maxSmallDuplicateIDs {
-		return rejectDuplicateIDsMap(ids)
-	}
+func rejectDuplicateIDsSmall(ids [][]byte, scratch *duplicateIDScratch) error {
 	tableSize := 1
 	for tableSize < len(ids)*2 {
 		tableSize <<= 1
 	}
-	var heads [maxSmallDuplicateIDs * 2]uint16
-	if tableSize > len(heads) {
-		return rejectDuplicateIDsMap(ids)
-	}
-	var next [maxSmallDuplicateIDs]uint16
-	var hashes [maxSmallDuplicateIDs]uint64
-	hashesView := hashes[:len(ids)]
+	heads := scratch.heads[:tableSize]
+	clear(heads)
+	next := scratch.next[:len(ids)]
+	hashesView := scratch.hashes[:len(ids)]
 	mask := uint64(tableSize - 1)
 	for i, id := range ids {
 		if len(id) == 0 {
