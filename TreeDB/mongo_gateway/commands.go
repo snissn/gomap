@@ -1464,11 +1464,7 @@ func marshalCursorDocumentsMsgResponseWithIDInto(dst []byte, requestID, response
 		batchBytes += findBatchDocumentBytes(doc, i)
 	}
 	need := 16 + 5 + len(ns) + batchBytes + 96
-	if cap(dst)-len(dst) < need {
-		grown := make([]byte, len(dst), len(dst)+need)
-		copy(grown, dst)
-		dst = grown
-	}
+	dst = ensureWireAppendCapacity(dst, need)
 	msg := dst
 	base := len(msg)
 	msg = appendWireInt32(msg, 0)
@@ -1559,11 +1555,7 @@ func marshalIndexedRangeCursorDocument(server *Server, cursorOwner int64, single
 
 func marshalIndexedRangeCursorMsgInto(dst []byte, requestID, responseTo int32, server *Server, cursorOwner int64, singleBatch bool, col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, ns, indexName string, opts collections.IndexRangeOptions, batchKey string, maxBatchBytes int) ([]byte, error) {
 	need := wire.HeaderLen + 5 + rawCursorResponseCapacityHint(ns, opts.Limit, maxBatchBytes)
-	if cap(dst)-len(dst) < need {
-		grown := make([]byte, len(dst), len(dst)+need)
-		copy(grown, dst)
-		dst = grown
-	}
+	dst = ensureWireAppendCapacity(dst, need)
 	msg := dst
 	base := len(msg)
 	msg = appendWireInt32(msg, 0)
@@ -1708,6 +1700,23 @@ func appendWireInt32(dst []byte, v int32) []byte {
 	var buf [4]byte
 	binary.LittleEndian.PutUint32(buf[:], uint32(v))
 	return append(dst, buf[:]...)
+}
+
+func ensureWireAppendCapacity(dst []byte, need int) []byte {
+	if need <= 0 || cap(dst)-len(dst) >= need {
+		return dst
+	}
+	minCap := len(dst) + need
+	newCap := cap(dst) * 2
+	if newCap < minCap {
+		newCap = minCap
+	}
+	if minCap <= maxRetainedWireWriteBuffer && newCap > maxRetainedWireWriteBuffer {
+		newCap = maxRetainedWireWriteBuffer
+	}
+	grown := make([]byte, len(dst), newCap)
+	copy(grown, dst)
+	return grown
 }
 
 func bsonArrayIndexKey(index int) string {
