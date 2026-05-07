@@ -18,6 +18,11 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if !s.registerListener(ln) {
+		_ = ln.Close()
+		return ErrServerClosed
+	}
+	defer s.unregisterListener(ln)
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
