@@ -30,6 +30,9 @@ const (
 	defaultRangeReads     = 10000
 	defaultUpdates        = 10000
 	defaultDeletes        = 1000
+
+	treedbBenchDirMarkerName = ".collection-workload-bench"
+	treedbBenchDirMarkerBody = "created by cmd/collection_workload_bench\n"
 )
 
 type config struct {
@@ -585,6 +588,12 @@ func openTarget(cfg config, format collections.DocumentFormat, indexes int) (*be
 		}
 		dir = tmp
 		removeDir = !cfg.KeepTreeDBDir
+		if err := writeTreeDBBenchDirMarker(dir); err != nil {
+			if removeDir {
+				_ = os.RemoveAll(dir)
+			}
+			return nil, err
+		}
 	} else if err := resetTreeDBDir(dir); err != nil {
 		return nil, err
 	}
@@ -676,10 +685,55 @@ func resetTreeDBDir(dir string) error {
 	if abs == string(os.PathSeparator) || filepath.Dir(abs) == string(os.PathSeparator) {
 		return fmt.Errorf("unsafe treedb-dir %q", dir)
 	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.MkdirAll(abs, 0o700); err != nil {
+			return err
+		}
+		return writeTreeDBBenchDirMarker(abs)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("treedb-dir %q is not a directory", dir)
+	}
+	if err := requireResettableTreeDBBenchDir(abs); err != nil {
+		return err
+	}
 	if err := os.RemoveAll(abs); err != nil {
 		return err
 	}
-	return os.MkdirAll(abs, 0o700)
+	if err := os.MkdirAll(abs, 0o700); err != nil {
+		return err
+	}
+	return writeTreeDBBenchDirMarker(abs)
+}
+
+func requireResettableTreeDBBenchDir(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	if hasTreeDBBenchDirMarker(dir) {
+		return nil
+	}
+	return fmt.Errorf("refusing to delete non-empty treedb-dir %q without %s marker", dir, treedbBenchDirMarkerName)
+}
+
+func hasTreeDBBenchDirMarker(dir string) bool {
+	data, err := os.ReadFile(filepath.Join(dir, treedbBenchDirMarkerName))
+	if err != nil {
+		return false
+	}
+	return string(data) == treedbBenchDirMarkerBody
+}
+
+func writeTreeDBBenchDirMarker(dir string) error {
+	return os.WriteFile(filepath.Join(dir, treedbBenchDirMarkerName), []byte(treedbBenchDirMarkerBody), 0o600)
 }
 
 func indexDefinitions(count int, storage collections.RootStoragePolicy) []collections.IndexDefinition {

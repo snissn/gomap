@@ -1,6 +1,10 @@
 package main
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -99,6 +103,44 @@ func TestIndexesZeroSkipsSecondaryNativePhases(t *testing.T) {
 	requirePhase(t, row, "email_find_one", true)
 	requirePhase(t, row, "age_range_indexed_limit_10", true)
 	requirePhase(t, row, "age_range_scan_limit_10", false)
+}
+
+func TestResetTreeDBDirRefusesNonEmptyUnmarkedDir(t *testing.T) {
+	dir := t.TempDir()
+	important := filepath.Join(dir, "important.txt")
+	if err := os.WriteFile(important, []byte("keep"), 0o600); err != nil {
+		t.Fatalf("write important file: %v", err)
+	}
+	err := resetTreeDBDir(dir)
+	if err == nil {
+		t.Fatal("resetTreeDBDir succeeded for non-empty unmarked directory")
+	}
+	if !strings.Contains(err.Error(), "refusing to delete non-empty treedb-dir") {
+		t.Fatalf("error=%v want refusal", err)
+	}
+	if got, statErr := os.ReadFile(important); statErr != nil || string(got) != "keep" {
+		t.Fatalf("important file changed, got=%q err=%v", got, statErr)
+	}
+}
+
+func TestResetTreeDBDirAllowsMarkedBenchmarkDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeTreeDBBenchDirMarker(dir); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	oldFile := filepath.Join(dir, "old.db")
+	if err := os.WriteFile(oldFile, []byte("old"), 0o600); err != nil {
+		t.Fatalf("write old file: %v", err)
+	}
+	if err := resetTreeDBDir(dir); err != nil {
+		t.Fatalf("resetTreeDBDir: %v", err)
+	}
+	if _, err := os.Stat(oldFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old file still exists or unexpected stat err: %v", err)
+	}
+	if !hasTreeDBBenchDirMarker(dir) {
+		t.Fatal("benchmark marker missing after reset")
+	}
 }
 
 func requirePhase(t *testing.T, row rowResult, name string, skipped bool) {
