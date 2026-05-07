@@ -132,12 +132,16 @@ func (p findResponsePayload) marshalDocument() (wire.Document, error) {
 }
 
 func (p findResponsePayload) marshalMsg(requestID, responseTo int32) ([]byte, error) {
-	return p.marshalMsgInto(nil, requestID, responseTo)
+	return p.marshalMsgIntoWithMaxLength(nil, requestID, responseTo, wire.DefaultMaxMessageLength)
 }
 
 func (p findResponsePayload) marshalMsgInto(dst []byte, requestID, responseTo int32) ([]byte, error) {
+	return p.marshalMsgIntoWithMaxLength(dst, requestID, responseTo, wire.DefaultMaxMessageLength)
+}
+
+func (p findResponsePayload) marshalMsgIntoWithMaxLength(dst []byte, requestID, responseTo int32, maxMessageLength int) ([]byte, error) {
 	if p.raw != nil {
-		return marshalCursorDocumentsMsgResponseWithIDInto(dst, requestID, responseTo, p.raw.ns, p.raw.cursorID, p.raw.batchKey, p.raw.batch, wire.DefaultMaxMessageLength)
+		return marshalCursorDocumentsMsgResponseWithIDInto(dst, requestID, responseTo, p.raw.ns, p.raw.cursorID, p.raw.batchKey, p.raw.batch, maxMessageLength)
 	}
 	if p.indexedRange != nil {
 		return p.indexedRange.marshalMsgInto(dst, requestID, responseTo)
@@ -169,7 +173,7 @@ func (s *Server) findMsgResponseInto(dst []byte, command wire.Document, requestI
 	if payload.raw != nil {
 		return marshalCursorDocumentsMsgResponseWithIDInto(dst, requestID, responseTo, payload.raw.ns, payload.raw.cursorID, payload.raw.batchKey, payload.raw.batch, int(s.maxMessageLength()))
 	}
-	msg, err := payload.marshalMsgInto(dst, requestID, responseTo)
+	msg, err := payload.marshalMsgIntoWithMaxLength(dst, requestID, responseTo, int(s.maxMessageLength()))
 	if err != nil && payload.indexedRange != nil {
 		doc, docErr := commandError(commandCodeBadValue, "BadValue", err.Error())
 		if docErr != nil {
