@@ -1916,13 +1916,18 @@ func TestMongoPoolStatsCapsCheckoutSamples(t *testing.T) {
 
 func TestWriteResultSupportsGenericWriter(t *testing.T) {
 	result := &benchmarkResult{
-		Target:           "treedb",
-		Database:         "bench",
-		Collection:       "docs",
-		Documents:        1,
-		BatchSize:        1,
-		InsertProducers:  2,
-		SecondaryIndexes: 1,
+		Target:                     "treedb",
+		Database:                   "bench",
+		Collection:                 "docs",
+		Documents:                  1,
+		BatchSize:                  1,
+		InsertProducers:            2,
+		SecondaryIndexes:           1,
+		ConcurrentRangeReaders:     4,
+		ConcurrentRangeReaderSweep: []int{1, 4},
+		ConcurrentRangeReads:       8,
+		TreeDBProfile:              "wal-on-fast",
+		TreeDBReadState:            treeDBReadStateUnsettled,
 		Phases: []phaseResult{{
 			Name:           "load_insert_many",
 			Operations:     1,
@@ -1947,6 +1952,12 @@ func TestWriteResultSupportsGenericWriter(t *testing.T) {
 	}
 	if !bytes.Contains(out.Bytes(), []byte("insert_producers=2")) || !bytes.Contains(out.Bytes(), []byte("producer=0")) {
 		t.Fatalf("text output missing producer metadata: %q", out.String())
+	}
+	if !bytes.Contains(out.Bytes(), []byte("concurrent_range_readers=4")) ||
+		!bytes.Contains(out.Bytes(), []byte("concurrent_range_reader_sweep=[1 4]")) ||
+		!bytes.Contains(out.Bytes(), []byte("concurrent_range_reads=8")) ||
+		!bytes.Contains(out.Bytes(), []byte("read_state=unsettled")) {
+		t.Fatalf("text output missing range/read-state metadata: %q", out.String())
 	}
 }
 
