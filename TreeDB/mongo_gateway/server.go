@@ -3,6 +3,7 @@ package mongogateway
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -378,7 +379,11 @@ func (s *Server) appendBufferedMessageWithOwner(reader *bufio.Reader, cursorOwne
 		}
 		return writeBuf, false, err
 	}
-	response, err := s.handleMessageInto(writeBuf, h, message[wire.HeaderLen:messageLength], cursorOwner)
+	body := message[wire.HeaderLen:messageLength]
+	if !bufferedMessageCanRetainRequestBody(h, body) {
+		body = append([]byte(nil), body...)
+	}
+	response, _, err := s.handleMessageInto(writeBuf, h, body, cursorOwner)
 	if err != nil {
 		return writeBuf, false, err
 	}
@@ -394,6 +399,86 @@ func (s *Server) appendBufferedMessageWithOwner(reader *bufio.Reader, cursorOwne
 func (s *Server) handleMessage(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
 	response, _, err := s.handleMessageInto(nil, h, body, cursorOwner)
 	return response, err
+}
+
+func bufferedMessageCanRetainRequestBody(h wire.Header, body []byte) bool {
+	name, ok := bufferedMessageCommandName(h.OpCode, body)
+	if !ok {
+		return false
+	}
+	return name != "insert"
+}
+
+func bufferedMessageCommandName(op wire.OpCode, body []byte) (string, bool) {
+	switch op {
+	case wire.OpMsg:
+		if len(body) < 5 {
+			return "", false
+		}
+		rem := body[4:]
+		for len(rem) > 0 {
+			kind := rem[0]
+			rem = rem[1:]
+			switch kind {
+			case wire.MsgSectionBody:
+				return bsonDocumentCommandName(rem)
+			case wire.MsgSectionDocumentSequence:
+				if len(rem) < 4 {
+					return "", false
+				}
+				size := int(int32(binary.LittleEndian.Uint32(rem[:4])))
+				if size < 4 || size > len(rem) {
+					return "", false
+				}
+				rem = rem[size:]
+			default:
+				return "", false
+			}
+		}
+		return "", false
+	case wire.OpQuery:
+		if len(body) < 4 {
+			return "", false
+		}
+		rem := body[4:]
+		i := 0
+		for i < len(rem) && rem[i] != 0 {
+			i++
+		}
+		if i == len(rem) {
+			return "", false
+		}
+		rem = rem[i+1:]
+		if len(rem) < 8 {
+			return "", false
+		}
+		return bsonDocumentCommandName(rem[8:])
+	default:
+		return "", false
+	}
+}
+
+func bsonDocumentCommandName(doc []byte) (string, bool) {
+	if len(doc) < 5 {
+		return "", false
+	}
+	size := int(int32(binary.LittleEndian.Uint32(doc[:4])))
+	if size < 5 || size > len(doc) || doc[size-1] != 0 {
+		return "", false
+	}
+	if size == 5 || doc[4] == 0 {
+		return "", false
+	}
+	key := doc[5:size]
+	for i, b := range key {
+		if b == 0 {
+			if i == 0 {
+				return "", false
+			}
+			return string(key[:i]), true
+		}
+	}
+	return "", false
 }
 
 func (s *Server) handleMessageInto(dst []byte, h wire.Header, body []byte, cursorOwner int64) ([]byte, bool, error) {

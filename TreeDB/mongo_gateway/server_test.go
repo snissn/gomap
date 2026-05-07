@@ -176,6 +176,33 @@ func TestServerDoesNotRetainReadBufferAfterBSONInsert(t *testing.T) {
 	assertOK(t, readMsgResponse(t, rw.w.Bytes(), 22002))
 }
 
+func TestBufferedMessageCanRetainRequestBody(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		doc  bson.D
+		want bool
+	}{
+		{name: "ping", doc: bson.D{{Key: "ping", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
+		{name: "find", doc: bson.D{{Key: "find", Value: "users"}, {Key: "$db", Value: "app"}}, want: true},
+		{name: "insert", doc: bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}}}}, {Key: "$db", Value: "app"}}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			commandDoc := mustDocument(t, tc.doc)
+			req, err := wire.AppendMsgMessage(nil, 22003, 0, 0, commandDoc)
+			if err != nil {
+				t.Fatalf("AppendMsgMessage: %v", err)
+			}
+			header, err := wire.ParseHeader(req[:wire.HeaderLen])
+			if err != nil {
+				t.Fatalf("ParseHeader: %v", err)
+			}
+			if got := bufferedMessageCanRetainRequestBody(header, req[wire.HeaderLen:]); got != tc.want {
+				t.Fatalf("retain=%v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestServerRejectsFindWithMoreToCome(t *testing.T) {
 	commandDoc := mustDocument(t, bson.D{
 		{Key: "find", Value: "users"},
