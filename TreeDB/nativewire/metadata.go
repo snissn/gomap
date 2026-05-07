@@ -390,18 +390,15 @@ func decodeIndexValueType(valueType uint64) collections.IndexValueType {
 }
 
 func decodeCollectionRef(state *connState, raw []byte) (string, bool, error) {
-	if len(raw) > 0 && raw[0] == 0 {
+	handle, isHandle, err := decodeCollectionHandleRefPayload(raw)
+	if err != nil {
+		return "", isHandle, err
+	}
+	if isHandle {
 		if state == nil {
 			return "", true, protocolError(iwire.ErrInvalidCommand, "collection handle requires connection state")
 		}
-		handle, n, err := readUvarint(raw[1:])
-		if err != nil {
-			return "", true, err
-		}
-		if n+1 != len(raw) {
-			return "", true, protocolError(iwire.ErrMalformedFrame, "collection handle ref has trailing bytes")
-		}
-		name, ok := state.collectionForHandle(CollectionHandle(handle))
+		name, ok := state.collectionForHandle(handle)
 		if !ok {
 			return "", true, protocolError(iwire.ErrCollectionNotFound, "collection handle %d not found", handle)
 		}
@@ -412,6 +409,20 @@ func decodeCollectionRef(state *connState, raw []byte) (string, bool, error) {
 		return "", false, protocolError(iwire.ErrInvalidCommand, "%v", err)
 	}
 	return name, false, nil
+}
+
+func decodeCollectionHandleRefPayload(raw []byte) (CollectionHandle, bool, error) {
+	if len(raw) == 0 || raw[0] != 0 {
+		return 0, false, nil
+	}
+	handle, n, err := readUvarint(raw[1:])
+	if err != nil {
+		return 0, true, err
+	}
+	if n+1 != len(raw) {
+		return 0, true, protocolError(iwire.ErrMalformedFrame, "collection handle ref has trailing bytes")
+	}
+	return CollectionHandle(handle), true, nil
 }
 
 func collectionRefFromSections(state *connState, sections []iwire.Section) (string, bool, error) {
@@ -447,10 +458,44 @@ func (s *Server) openCollectionRef(state *connState, sections []iwire.Section) (
 	if err := managerRequired(s.collections); err != nil {
 		return "", nil, err
 	}
-	name, _, err := collectionRefFromSections(state, sections)
+	raw, ok, err := singletonSection(sections, iwire.SectionCollectionRef)
 	if err != nil {
 		return "", nil, err
 	}
+	if !ok {
+		return "", nil, protocolError(iwire.ErrInvalidCommand, "missing collection_ref")
+	}
+	return s.openCollectionRawRef(state, raw)
+}
+
+func (s *Server) openCollectionRawRef(state *connState, raw []byte) (string, *collections.Collection, error) {
+	if err := managerRequired(s.collections); err != nil {
+		return "", nil, err
+	}
+	if handle, isHandle, err := decodeCollectionHandleRefPayload(raw); isHandle || err != nil {
+		if err != nil {
+			return "", nil, err
+		}
+		if state == nil {
+			return "", nil, protocolError(iwire.ErrInvalidCommand, "collection handle requires connection state")
+		}
+		name, collection, ok := state.collectionForHandleRef(handle)
+		if !ok {
+			return "", nil, protocolError(iwire.ErrCollectionNotFound, "collection handle %d not found", handle)
+		}
+		if collection != nil {
+			return name, collection, nil
+		}
+		return s.openNamedCollectionRef(state, name)
+	}
+	name, _, err := decodeCollectionRef(state, raw)
+	if err != nil {
+		return "", nil, err
+	}
+	return s.openNamedCollectionRef(state, name)
+}
+
+func (s *Server) openNamedCollectionRef(state *connState, name string) (string, *collections.Collection, error) {
 	if state != nil {
 		if collection, ok := state.cachedCollection(name); ok {
 			return name, collection, nil

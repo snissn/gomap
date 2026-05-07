@@ -6,6 +6,18 @@ type CommandHeader struct {
 	Flags   uint64
 }
 
+const (
+	// CommandFlagOmitResultIDs asks mutation responses to omit result ID vectors
+	// when the command can otherwise report success through response_meta.
+	CommandFlagOmitResultIDs uint64 = 1 << iota
+)
+
+const commandResponseShapingFlagsMask = CommandFlagOmitResultIDs
+
+func DeterministicCommandFlags(flags uint64) uint64 {
+	return flags &^ commandResponseShapingFlagsMask
+}
+
 func AppendCommandHeader(dst []byte, h CommandHeader) []byte {
 	dst = appendUvarint(dst, uint64(h.ID))
 	dst = appendUvarint(dst, h.Version)

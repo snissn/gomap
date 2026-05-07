@@ -105,7 +105,7 @@ func appendGetManyRequestBodyRef(dst []byte, collection string, handle Collectio
 	if err != nil {
 		return nil, err
 	}
-	return appendByteVectorSection(body, iwire.SectionDocumentIDs, ids)
+	return appendByteVectorSectionKnownLen(body, iwire.SectionDocumentIDs, idsLen, ids)
 }
 
 func (c *Client) IndexLookup(ctx context.Context, collection, index string, value any, limits CursorLimits) ([][]byte, bool, error) {

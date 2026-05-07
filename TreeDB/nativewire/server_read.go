@@ -220,6 +220,7 @@ func (s *Server) handleCursorNext(state *connState, sections []iwire.Section) ([
 	hasMore := cursor.pos < len(cursor.records)
 	if !hasMore {
 		delete(s.cursors, cursorID)
+		s.cursorCount.Add(-1)
 		s.counters.inc("cursors.closed_total")
 	}
 	s.cursorMu.Unlock()
@@ -243,6 +244,7 @@ func (s *Server) handleCursorClose(state *connState, sections []iwire.Section) (
 	}
 	delete(s.cursors, cursorID)
 	s.cursorMu.Unlock()
+	s.cursorCount.Add(-1)
 	s.counters.inc("cursors.closed_total")
 	return nil, nil
 }

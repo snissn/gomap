@@ -63,6 +63,45 @@ func TestMutationCommandsRoundTrip(t *testing.T) {
 	if len(handleIDs) != 1 || string(handleIDs[0]) != "u3" {
 		t.Fatalf("handle insert ids=%q", handleIDs)
 	}
+	if err := client.InsertBatchHandleNoResult(ctx, handle, collections.DocumentFormatJSON,
+		[][]byte{[]byte("u4")},
+		[][]byte{[]byte(`{"email":"dorothy@example.com","name":"Dorothy"}`)},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("InsertBatchHandleNoResult: %v", err)
+	}
+	noResultDoc, err := col.Get([]byte("u4"))
+	if err != nil {
+		t.Fatalf("direct get no-result insert: %v", err)
+	}
+	if !bytes.Contains(noResultDoc, []byte(`"Dorothy"`)) {
+		t.Fatalf("u4 doc=%s", noResultDoc)
+	}
+	noIDsBody, err := appendInsertBatchRequestBodyRefFlags(nil, "users", 0, false, collections.DocumentFormatJSON,
+		[][]byte{[]byte("u5")},
+		[][]byte{[]byte(`{"email":"mary@example.com","name":"Mary"}`)},
+		AckVisible,
+		iwire.CommandFlagOmitResultIDs,
+	)
+	if err != nil {
+		t.Fatalf("append no-result insert: %v", err)
+	}
+	_, noIDsResponse, err := client.roundTrip(ctx, iwire.FrameRequest, noIDsBody, iwire.FrameResponse)
+	if err != nil {
+		t.Fatalf("roundTrip no-result insert: %v", err)
+	}
+	noIDsSections, err := iwire.DecodeSections(noIDsResponse, client.limits)
+	if err != nil {
+		t.Fatalf("decode no-result response: %v", err)
+	}
+	if _, ok, err := singletonSection(noIDsSections, iwire.SectionDocumentIDs); err != nil {
+		t.Fatalf("no-result document_ids section: %v", err)
+	} else if ok {
+		t.Fatalf("no-result response unexpectedly included document_ids")
+	}
+	if inserted, err := responseCount(noIDsSections, "inserted_count"); err != nil || inserted != 1 {
+		t.Fatalf("no-result inserted_count=%d err=%v want 1", inserted, err)
+	}
 
 	matched, modified, err := client.ReplaceBatch(ctx, "users", collections.DocumentFormatJSON,
 		[][]byte{[]byte("u1"), []byte("missing")},

@@ -39,6 +39,20 @@ func TestDeterministicEntryGoldenAndTransportIndependence(t *testing.T) {
 	if hex.EncodeToString(entry1) != hex.EncodeToString(entry0) {
 		t.Fatalf("deterministic entries differ:\n%s\n%s", hex.EncodeToString(entry0), hex.EncodeToString(entry1))
 	}
+
+	withResponseFlag := insertBatchDeterministicSections()
+	withResponseFlag[0].Bytes = AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 1, Flags: CommandFlagOmitResultIDs})
+	cmd2, err := registry.ValidateRequestSections(withResponseFlag)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections response flag: %v", err)
+	}
+	entry2, err := AppendDeterministicEntry(nil, cmd2)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry response flag: %v", err)
+	}
+	if hex.EncodeToString(entry2) != hex.EncodeToString(entry0) {
+		t.Fatalf("response-shaping flag changed deterministic entry:\n%s\n%s", hex.EncodeToString(entry0), hex.EncodeToString(entry2))
+	}
 }
 
 func TestDeterministicEntryRejectsMissingDistributedGuards(t *testing.T) {

@@ -30,7 +30,7 @@ func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) 
 	dst = appendUvarint(dst, DeterministicEntryVersion)
 	dst = appendUvarint(dst, uint64(cmd.Header.ID))
 	dst = appendUvarint(dst, cmd.Header.Version)
-	dst = appendUvarint(dst, cmd.Header.Flags)
+	dst = appendUvarint(dst, DeterministicCommandFlags(cmd.Header.Flags))
 	dst = appendUvarint(dst, uint64(len(deterministic)))
 	for _, section := range deterministic {
 		dst = appendUvarint(dst, uint64(section.ID))

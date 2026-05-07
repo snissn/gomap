@@ -16,7 +16,11 @@ type ByteVectorScratch struct {
 }
 
 func AppendByteVector(dst []byte, items ...[]byte) []byte {
-	dst = growBytes(dst, ByteVectorEncodedLen(items))
+	return AppendByteVectorWithEncodedLen(dst, ByteVectorEncodedLen(items), items...)
+}
+
+func AppendByteVectorWithEncodedLen(dst []byte, encodedLen int, items ...[]byte) []byte {
+	dst = growBytes(dst, encodedLen)
 	dst = appendUvarint(dst, uint64(len(items)))
 	for _, item := range items {
 		dst = appendUvarint(dst, uint64(len(item)))

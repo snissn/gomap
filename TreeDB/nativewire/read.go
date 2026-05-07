@@ -313,28 +313,30 @@ func responseForRecords(records []collections.DocumentRecord, meta CursorMeta) (
 }
 
 func (s *Server) reapExpiredCursors() {
-	if s == nil || s.cursorIdleTimeout == 0 {
+	if s == nil || s.cursorIdleTimeout == 0 || s.cursorCount.Load() == 0 {
 		return
 	}
 	now := time.Now()
 	s.cursorMu.Lock()
+	expired := 0
 	for id, cursor := range s.cursors {
 		if now.Sub(cursor.lastUsed) > s.cursorIdleTimeout {
 			delete(s.cursors, id)
+			expired++
 			s.counters.inc("cursors.timeouts_total")
 		}
 	}
 	s.cursorMu.Unlock()
+	if expired > 0 {
+		s.cursorCount.Add(-int64(expired))
+	}
 }
 
 func (s *Server) openCursorCount() int {
 	if s == nil {
 		return 0
 	}
-	s.cursorMu.Lock()
-	n := len(s.cursors)
-	s.cursorMu.Unlock()
-	return n
+	return int(s.cursorCount.Load())
 }
 
 func (s *Server) killCursorsForOwner(owner uint64) {
@@ -342,12 +344,17 @@ func (s *Server) killCursorsForOwner(owner uint64) {
 		return
 	}
 	s.cursorMu.Lock()
+	closed := 0
 	for id, cursor := range s.cursors {
 		if cursor.owner == owner {
 			delete(s.cursors, id)
+			closed++
 		}
 	}
 	s.cursorMu.Unlock()
+	if closed > 0 {
+		s.cursorCount.Add(-int64(closed))
+	}
 }
 
 func (s *Server) storeCursor(owner uint64, records []collections.DocumentRecord, pos int) (uint64, error) {
@@ -368,6 +375,7 @@ func (s *Server) storeCursor(owner uint64, records []collections.DocumentRecord,
 		s.cursors = make(map[uint64]*serverCursor)
 	}
 	s.cursors[id] = &serverCursor{owner: owner, records: records, pos: pos, lastUsed: time.Now(), bytes: bytes}
+	s.cursorCount.Add(1)
 	s.counters.inc("cursors.opened_total")
 	return id, nil
 }

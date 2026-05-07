@@ -54,12 +54,13 @@ type Server struct {
 	connMu sync.Mutex
 	conns  map[net.Conn]struct{}
 
-	inFlight   atomic.Int64
-	nextConn   atomic.Int64
-	nextCursor atomic.Uint64
-	cursorMu   sync.Mutex
-	cursors    map[uint64]*serverCursor
-	counters   counters
+	inFlight    atomic.Int64
+	nextConn    atomic.Int64
+	nextCursor  atomic.Uint64
+	cursorCount atomic.Int64
+	cursorMu    sync.Mutex
+	cursors     map[uint64]*serverCursor
+	counters    counters
 }
 
 type serverCursor struct {
@@ -75,6 +76,7 @@ type connState struct {
 	mu          sync.Mutex
 	nextHandle  uint64
 	handles     map[CollectionHandle]string
+	handleCols  map[CollectionHandle]*collections.Collection
 	collections map[string]*collections.Collection
 
 	readBody       []byte
@@ -95,6 +97,10 @@ func (s *connState) addCollectionHandle(name string, collection *collections.Col
 	}
 	s.handles[handle] = name
 	if collection != nil {
+		if s.handleCols == nil {
+			s.handleCols = make(map[CollectionHandle]*collections.Collection)
+		}
+		s.handleCols[handle] = collection
 		if s.collections == nil {
 			s.collections = make(map[string]*collections.Collection)
 		}
@@ -110,6 +116,23 @@ func (s *connState) collectionForHandle(handle CollectionHandle) (string, bool) 
 	return name, ok
 }
 
+func (s *connState) collectionForHandleRef(handle CollectionHandle) (string, *collections.Collection, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	name, ok := s.handles[handle]
+	if !ok {
+		return "", nil, false
+	}
+	var collection *collections.Collection
+	if s.handleCols != nil {
+		collection = s.handleCols[handle]
+	}
+	if collection == nil && s.collections != nil {
+		collection = s.collections[name]
+	}
+	return name, collection, true
+}
+
 func (s *connState) closeCollectionHandle(handle CollectionHandle) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -117,6 +140,7 @@ func (s *connState) closeCollectionHandle(handle CollectionHandle) bool {
 		return false
 	}
 	delete(s.handles, handle)
+	delete(s.handleCols, handle)
 	return true
 }
 
@@ -341,6 +365,21 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 		s.counters.inc("requests.failed_total")
 		return s.writeError(w, header, err)
 	}
+	if req, ok, err := s.decodeInsertBatchFastRequest(state, sections); ok {
+		s.counters.incCommandRequest(iwire.CommandInsertBatch, "insert_batch")
+		responseBody, err := s.handleInsertBatchFastBody(req, body[:0])
+		s.counters.add("dispatch_nanos_total", uint64(time.Since(start).Nanoseconds()))
+		if err != nil {
+			s.counters.inc("requests.failed_total")
+			s.counters.incCommandError(iwire.CommandInsertBatch, "insert_batch")
+			return s.writeError(w, header, err)
+		}
+		s.counters.inc("requests.completed_total")
+		return s.writeSimpleFrameBuffered(w, state, iwire.Header{Type: iwire.FrameResponse, StreamID: header.StreamID, RequestID: header.RequestID}, responseBody)
+	} else if err != nil {
+		s.counters.inc("requests.failed_total")
+		return s.writeError(w, header, err)
+	}
 	var cmd iwire.ValidatedCommand
 	if state != nil {
 		cmd, err = s.registry.ValidateRequestSectionsInto(sections, &state.commandScratch)
@@ -351,7 +390,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 		s.counters.inc("requests.failed_total")
 		return s.writeError(w, header, err)
 	}
-	s.counters.inc("commands." + cmd.Schema.Name + ".requests_total")
+	s.counters.incCommandRequest(cmd.Header.ID, cmd.Schema.Name)
 	var responseSections []iwire.Section
 	var responseBody []byte
 	responseBodySet := false
@@ -373,7 +412,8 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	case iwire.CommandDropCollection:
 		err = unsupportedDropCollection()
 	case iwire.CommandInsertBatch:
-		responseBody, err = s.handleInsertBatchBody(state, cmd.Known, body[:0])
+		includeResultIDs := cmd.Header.Flags&iwire.CommandFlagOmitResultIDs == 0
+		responseBody, err = s.handleInsertBatchBody(state, cmd.Known, body[:0], includeResultIDs)
 		responseBodySet = true
 	case iwire.CommandReplaceBatch:
 		responseSections, err = s.handleReplaceBatch(state, cmd.Known)
@@ -406,7 +446,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	s.counters.add("dispatch_nanos_total", uint64(time.Since(start).Nanoseconds()))
 	if err != nil {
 		s.counters.inc("requests.failed_total")
-		s.counters.inc("commands." + cmd.Schema.Name + ".errors_total")
+		s.counters.incCommandError(cmd.Header.ID, cmd.Schema.Name)
 		return s.writeError(w, header, err)
 	}
 	if responseBodySet {

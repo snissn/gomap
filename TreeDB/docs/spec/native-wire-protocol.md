@@ -340,6 +340,17 @@ affect mutation semantics MUST be part of deterministic command-entry encoding.
 Flags that only affect response shaping, tracing, or pagination MUST NOT be
 replicated.
 
+Initial response-shaping flags:
+
+```text
+bit 0 omit_result_ids
+```
+
+`omit_result_ids` asks successful mutation responses to omit result ID vectors
+when the command can otherwise report success through `response_meta`. Servers
+MAY still return result IDs to older clients or for commands that require them;
+clients that set this flag MUST NOT depend on IDs being present.
+
 ## 8. Document Formats
 
 Document format codes:
@@ -506,7 +517,7 @@ matched_count optional
 modified_count optional
 inserted_count optional
 deleted_count optional
-result_ids optional byte_vector
+result_ids optional byte_vector, omitted when omit_result_ids is honored
 per_item_status optional status_vector
 response_meta optional
 ```

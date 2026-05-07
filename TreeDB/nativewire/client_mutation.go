@@ -17,13 +17,21 @@ func (c *Client) InsertBatchHandle(ctx context.Context, handle CollectionHandle,
 	return c.insertBatch(ctx, "", handle, true, format, ids, docs, ack)
 }
 
+func (c *Client) InsertBatchNoResult(ctx context.Context, collection string, format collections.DocumentFormat, ids, docs [][]byte, ack AckPolicy) error {
+	return c.insertBatchNoResult(ctx, collection, 0, false, format, ids, docs, ack)
+}
+
+func (c *Client) InsertBatchHandleNoResult(ctx context.Context, handle CollectionHandle, format collections.DocumentFormat, ids, docs [][]byte, ack AckPolicy) error {
+	return c.insertBatchNoResult(ctx, "", handle, true, format, ids, docs, ack)
+}
+
 func (c *Client) insertBatch(ctx context.Context, collection string, handle CollectionHandle, useHandle bool, format collections.DocumentFormat, ids, docs [][]byte, ack AckPolicy) ([][]byte, error) {
 	if c == nil {
 		return nil, io.ErrClosedPipe
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	body, err := appendInsertBatchRequestBodyRef(c.requestBody[:0], collection, handle, useHandle, format, ids, docs, ack)
+	body, err := appendInsertBatchRequestBodyRefFlags(c.requestBody[:0], collection, handle, useHandle, format, ids, docs, ack, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -47,13 +55,32 @@ func (c *Client) insertBatch(ctx context.Context, collection string, handle Coll
 	return decodeByteVectorBorrowed(rawIDs, c.limits)
 }
 
+func (c *Client) insertBatchNoResult(ctx context.Context, collection string, handle CollectionHandle, useHandle bool, format collections.DocumentFormat, ids, docs [][]byte, ack AckPolicy) error {
+	if c == nil {
+		return io.ErrClosedPipe
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	body, err := appendInsertBatchRequestBodyRefFlags(c.requestBody[:0], collection, handle, useHandle, format, ids, docs, ack, iwire.CommandFlagOmitResultIDs)
+	if err != nil {
+		return err
+	}
+	err = c.roundTripLockedDiscardResponse(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
+	c.requestBody = body[:0]
+	return err
+}
+
 func appendInsertBatchRequestBody(dst []byte, collection string, format collections.DocumentFormat, ids, docs [][]byte, ack AckPolicy) ([]byte, error) {
 	return appendInsertBatchRequestBodyRef(dst, collection, 0, false, format, ids, docs, ack)
 }
 
 func appendInsertBatchRequestBodyRef(dst []byte, collection string, handle CollectionHandle, useHandle bool, format collections.DocumentFormat, ids, docs [][]byte, ack AckPolicy) ([]byte, error) {
+	return appendInsertBatchRequestBodyRefFlags(dst, collection, handle, useHandle, format, ids, docs, ack, 0)
+}
+
+func appendInsertBatchRequestBodyRefFlags(dst []byte, collection string, handle CollectionHandle, useHandle bool, format collections.DocumentFormat, ids, docs [][]byte, ack AckPolicy, commandFlags uint64) ([]byte, error) {
 	var commandHeader [16]byte
-	commandPayload := iwire.AppendCommandHeader(commandHeader[:0], iwire.CommandHeader{ID: iwire.CommandInsertBatch, Version: 1})
+	commandPayload := iwire.AppendCommandHeader(commandHeader[:0], iwire.CommandHeader{ID: iwire.CommandInsertBatch, Version: 1, Flags: commandFlags})
 	var refBuf [1 + binary.MaxVarintLen64]byte
 	var refPayload []byte
 	refLen := len(collection)
@@ -83,7 +110,7 @@ func appendInsertBatchRequestBodyRef(dst []byte, collection string, handle Colle
 		copy(next, dst)
 		dst = next
 	}
-	body, err := appendCommandHeaderSection(dst, iwire.CommandInsertBatch)
+	body, err := appendCommandHeaderSectionFlags(dst, iwire.CommandInsertBatch, commandFlags)
 	if err != nil {
 		return nil, err
 	}
@@ -99,11 +126,11 @@ func appendInsertBatchRequestBodyRef(dst []byte, collection string, handle Colle
 	if err != nil {
 		return nil, err
 	}
-	body, err = appendByteVectorSection(body, iwire.SectionDocumentIDs, ids)
+	body, err = appendByteVectorSectionKnownLen(body, iwire.SectionDocumentIDs, idsLen, ids)
 	if err != nil {
 		return nil, err
 	}
-	body, err = appendByteVectorSection(body, iwire.SectionDocuments, docs)
+	body, err = appendByteVectorSectionKnownLen(body, iwire.SectionDocuments, docsLen, docs)
 	if err != nil {
 		return nil, err
 	}

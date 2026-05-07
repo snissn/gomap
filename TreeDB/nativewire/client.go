@@ -19,6 +19,7 @@ type Client struct {
 	mu          sync.Mutex
 	requestBody []byte
 	writeBody   []byte
+	readBody    []byte
 }
 
 func NewClient(conn net.Conn) *Client {
@@ -114,6 +115,40 @@ func (c *Client) roundTripLocked(ctx context.Context, typ iwire.FrameType, body 
 		return header, response, protocolError(iwire.ErrMalformedFrame, "response request_id %d want %d", header.RequestID, requestID)
 	}
 	return header, response, nil
+}
+
+func (c *Client) roundTripLockedDiscardResponse(ctx context.Context, typ iwire.FrameType, body []byte, want iwire.FrameType) error {
+	if c == nil || c.conn == nil {
+		return io.ErrClosedPipe
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	requestID := c.nextReq.Add(1)
+	if deadline, ok := ctxDeadline(ctx); ok {
+		_ = c.conn.SetDeadline(deadline)
+		defer func() { _ = c.conn.SetDeadline(noDeadline) }()
+	}
+	var err error
+	c.writeBody, err = writeFrameBuffered(c.conn, iwire.Header{Type: typ, RequestID: requestID}, body, c.writeBody)
+	if err != nil {
+		return err
+	}
+	header, response, err := readFrameInto(c.conn, c.limits, c.readBody)
+	if err != nil {
+		return err
+	}
+	c.readBody = response[:0]
+	if header.Type == iwire.FrameError {
+		return decodeWireError(response, c.limits)
+	}
+	if header.Type != want {
+		return protocolError(iwire.ErrMalformedFrame, "response frame type %d want %d", header.Type, want)
+	}
+	if header.RequestID != requestID {
+		return protocolError(iwire.ErrMalformedFrame, "response request_id %d want %d", header.RequestID, requestID)
+	}
+	return nil
 }
 
 func decodeWireError(body []byte, limits iwire.Limits) error {

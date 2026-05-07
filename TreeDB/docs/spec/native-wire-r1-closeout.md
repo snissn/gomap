@@ -27,39 +27,51 @@ Command:
 
 ```sh
 GOWORK=off go test ./TreeDB/nativewire \
-  -run Test \
+  -run '^$' \
   -bench 'BenchmarkNativewireCollection(InsertBatch|GetMany)' \
   -benchmem \
   -benchtime=1000x \
-  -count=5
+  -count=6
 ```
 
 Result on `linux/amd64`, Intel i5-11400F:
 
 | Benchmark | time/op | B/op | allocs/op |
 | --- | ---: | ---: | ---: |
-| `InsertBatch/direct_collection` | 39.14 us | 6.444 KiB | 49 |
-| `InsertBatch/native_wire_inproc` | 54.31 us | 8.116 KiB | 54 |
-| `GetMany/direct_collection` | 34.64 us | 8.007 KiB | 128 |
-| `GetMany/native_wire_inproc` | 42.31 us | 14.46 KiB | 9 |
+| `InsertBatch/direct_collection` | 38.32 us +/- 3% | 6.410 KiB | 49 |
+| `InsertBatch/native_wire_inproc` | 52.37 us +/- 1% | 8.020 KiB | 53 |
+| `InsertBatch/native_wire_inproc_no_result` | 50.70 us +/- 4% | 6.642 KiB | 51 |
+| `InsertBatch/native_wire_direct_dispatch` | 45.15 us +/- 3% | 7.304 KiB | 50 |
+| `InsertBatch/native_wire_direct_dispatch_no_result` | 43.77 us +/- 1% | 6.475 KiB | 49 |
+| `GetMany/direct_collection` | 34.24 us +/- 1% | 8.007 KiB | 128 |
+| `GetMany/native_wire_inproc` | 40.42 us +/- 2% | 14.43 KiB | 8 |
+| `GetMany/native_wire_direct_dispatch` | 35.95 us +/- 6% | 10.33 KiB | 5 |
 
 Interpretation:
 
 - The native in-process benchmark opens a collection handle before timing and
   uses handle-based hot commands. This is the intended steady-state path for
   long-lived clients.
-- R1 native in-process insert is about 1.39x direct collection latency for this
-  32-document batch shape.
-- R1 native in-process get-many is about 1.22x direct collection latency for
-  this 64-document batch shape.
+- R1 native in-process insert is about 1.37x direct collection latency for this
+  32-document batch shape when IDs are returned, and about 1.32x when the client
+  requests ack-only/no-result response shaping.
+- Direct in-process dispatch, which keeps native request decode and response
+  encode but removes `net.Pipe`, is about 1.18x direct for insert with returned
+  IDs and about 1.14x for ack-only insert.
+- R1 native in-process get-many is about 1.18x direct collection latency for
+  this 64-document batch shape. Direct dispatch is about 1.05x direct, so the
+  remaining read gap is mostly framed in-process transport overhead.
 - Insert allocation is now close to the direct collection baseline: native wire
-  adds five allocations/op for request/response framing and response decode.
+  adds four allocations/op for request/response framing and response decode on
+  the ID-returning path. Ack-only direct dispatch matches the direct allocation
+  count for this benchmark shape.
 - Get-many allocates less often than the direct `Collection.Get` loop because
   the server materializes documents with `GetInto` into one response payload and
   the client returns borrowed frame views.
-- This is materially closer, but it is not throughput/speed parity yet. The
-  remaining latency gap is mostly frame/transport synchronization,
-  request/response copies, and generic request parsing around small batches.
+- This is materially closer, but it is not strict throughput/speed parity yet.
+  Read dispatch is effectively at parity once `net.Pipe` is removed. Insert
+  still pays unavoidable request serialization/decode plus response shaping cost;
+  ack-only response shaping narrows that gap but does not eliminate it.
 
 ## Workload Profiles
 
@@ -146,15 +158,21 @@ the R1f optimization pass:
 
 - Added direct-vs-native package benchmarks for insert and get-many so
   native-wire overhead is visible without the Mongo gateway benchmark harness.
+- Added direct-dispatch benchmark lanes that exercise native request parsing,
+  server dispatch, response encoding, and frame validation without `net.Pipe`,
+  making protocol overhead and framed-transport overhead separable.
 - Kept insert benchmark fixture generation outside the timed section so the
   benchmark reports collection/protocol work instead of document construction.
 - Changed `writeFrame` to write a stack-built frame header and the body as
   separate writes, avoiding a combined per-frame allocation.
 - Pre-sized byte-vector, section, and command-request encoders to avoid growth
   churn while preserving the existing wire bytes.
+- Reused known byte-vector encoded lengths while appending sections so hot
+  request/response builders do not recompute the same length table multiple
+  times.
 - Added reusable connection/client scratch for server frame reads, server
   section/schema validation, server byte-vector views, client request bodies,
-  and small combined frame writes.
+  client discard-response reads, and small combined frame writes.
 - Replaced the previous byte-vector clone decode on hot response/read paths with
   borrowed immutable frame views.
 - Added `DecodeByteVectorItems`, a borrowed two-pass decoder that avoids
@@ -170,15 +188,27 @@ the R1f optimization pass:
   codes for duplicate and empty IDs.
 - Cached opened collections per connection so repeated handle/name requests do
   not reopen collection objects on every command.
+- Added a direct handle-to-collection cache for connection-local handles so hot
+  handle requests avoid the second name-keyed cache lookup.
 - Added handle-based `InsertBatchHandle` and `GetManyHandle` client methods and
   moved the steady-state benchmarks to open the collection handle once before
   timing.
+- Added `InsertBatchNoResult` and `InsertBatchHandleNoResult` for ack-oriented
+  callers that do not need echoed result IDs; the wire representation uses a
+  response-shaping command flag and keeps the existing ID-returning insert API
+  intact.
 - Encoded `get_many` responses directly from `Collection.GetInto` into a single
   payload plus presence bitmap, avoiding one document allocation per returned
   document.
 - Added direct hot request/response body encoders for `InsertBatch` and
   `GetMany`, including deterministic ack metadata encoding without a temporary
   string map.
+- Added an insert fast-validation path that captures hot `insert_batch` section
+  payloads in one command-specific pass while preserving generic registry
+  validation for the rest of the protocol.
+- Moved core frame/request counters to atomic hot counters and skipped cursor
+  expiry scans when no cursors are open, keeping observability available without
+  a mutex-protected string map on every hot request.
 - Fixed native-wire benchmark load IDs in R1e to use the Mongo gateway's encoded
   primary-key format, so later Mongo-driver read/update phases exercise the
   documents inserted through native wire.
@@ -189,14 +219,16 @@ R1f should not be treated as the final performance signoff. To target parity,
 the next performance sprint should plan against these items before moving the
 native-wire path into a Raft/distributed baseline:
 
-- add a benchmark split that separates direct collection, direct in-process
+- keep the benchmark split that separates direct collection, direct in-process
   dispatch without `net.Pipe`, in-process framed transport, TCP loopback, and
-  Mongo gateway paths,
-- add an explicit acceptance target, for example native in-process steady-state
-  latency within 1.05x direct collection for the chosen batch shapes or a
-  documented reason the remaining delta is unavoidable transport cost,
-- implement a lower-overhead in-process transport or dispatch path if
-  `net.Pipe` is confirmed as the dominant non-collection gap,
+  Mongo gateway paths for every benchmark report and PR closeout,
+- set the strict parity gate against direct-dispatch native wire rather than
+  `net.Pipe`, or implement a production lower-overhead in-process transport and
+  make that transport the embedded-client parity lane,
+- add an explicit acceptance target, for example direct-dispatch native steady-
+  state latency within 1.05x direct collection for read shapes and within 1.10x
+  for ack-only insert unless a profile-backed note identifies the remaining
+  request serialization cost as intentional protocol overhead,
 - evaluate pipelined/asynchronous client requests for throughput parity when
   many independent operations can be in flight,
 - consider an immutable-borrow contract for client result bytes so APIs can
@@ -205,8 +237,8 @@ native-wire path into a Raft/distributed baseline:
   not require copying larger response bodies,
 - decide whether the client should expose an owned-result mode for callers that
   want response buffers reused across calls,
-- consider an ack-only insert mode for caller-supplied IDs so workloads that do
-  not need echoed IDs avoid response byte-vector encoding and decode,
+- extend no-result response shaping to other mutation/read forms only where the
+  result payload is genuinely optional for the caller,
 - add per-command native-wire latency histograms so decode, dispatch, collection
   execution, and encode costs can be separated without pprof inference,
 - add longer steady-state TCP benchmarks that isolate transport cost from

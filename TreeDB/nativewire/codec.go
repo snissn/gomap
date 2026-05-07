@@ -124,8 +124,12 @@ func appendCommandRequestBody(dst []byte, commandID iwire.CommandID, sections ..
 }
 
 func appendCommandHeaderSection(dst []byte, commandID iwire.CommandID) ([]byte, error) {
+	return appendCommandHeaderSectionFlags(dst, commandID, 0)
+}
+
+func appendCommandHeaderSectionFlags(dst []byte, commandID iwire.CommandID, flags uint64) ([]byte, error) {
 	var commandHeader [16]byte
-	payload := iwire.AppendCommandHeader(commandHeader[:0], iwire.CommandHeader{ID: commandID, Version: 1})
+	payload := iwire.AppendCommandHeader(commandHeader[:0], iwire.CommandHeader{ID: commandID, Version: 1, Flags: flags})
 	body, err := iwire.AppendSectionHeader(dst, iwire.SectionCommandHeader, 0, len(payload))
 	if err != nil {
 		return nil, err
@@ -150,11 +154,15 @@ func appendCollectionNameRefSection(dst []byte, collection string) ([]byte, erro
 }
 
 func appendByteVectorSection(dst []byte, id iwire.SectionID, items [][]byte) ([]byte, error) {
-	body, err := iwire.AppendSectionHeader(dst, id, 0, iwire.ByteVectorEncodedLen(items))
+	return appendByteVectorSectionKnownLen(dst, id, iwire.ByteVectorEncodedLen(items), items)
+}
+
+func appendByteVectorSectionKnownLen(dst []byte, id iwire.SectionID, encodedLen int, items [][]byte) ([]byte, error) {
+	body, err := iwire.AppendSectionHeader(dst, id, 0, encodedLen)
 	if err != nil {
 		return nil, err
 	}
-	return iwire.AppendByteVector(body, items...), nil
+	return iwire.AppendByteVectorWithEncodedLen(body, encodedLen, items...), nil
 }
 
 func appendString(dst []byte, s string) []byte {

@@ -5,6 +5,15 @@ import (
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
+type insertBatchFastRequest struct {
+	collection       *collections.Collection
+	format           collections.DocumentFormat
+	ids              [][]byte
+	docs             [][]byte
+	ack              AckPolicy
+	includeResultIDs bool
+}
+
 func (s *Server) handleInsertBatch(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
 	resultIDs, actualAck, err := s.insertBatch(state, sections)
 	if err != nil {
@@ -16,16 +25,32 @@ func (s *Server) handleInsertBatch(state *connState, sections []iwire.Section) (
 	}, nil
 }
 
-func (s *Server) handleInsertBatchBody(state *connState, sections []iwire.Section, dst []byte) ([]byte, error) {
+func (s *Server) handleInsertBatchBody(state *connState, sections []iwire.Section, dst []byte, includeResultIDs bool) ([]byte, error) {
 	resultIDs, actualAck, err := s.insertBatch(state, sections)
 	if err != nil {
 		return nil, err
 	}
-	body, err := iwire.AppendSectionHeader(dst, iwire.SectionDocumentIDs, 0, iwire.ByteVectorEncodedLen(resultIDs))
+	return appendInsertBatchResponseBody(dst, resultIDs, actualAck, includeResultIDs)
+}
+
+func (s *Server) handleInsertBatchFastBody(req insertBatchFastRequest, dst []byte) ([]byte, error) {
+	resultIDs, actualAck, err := s.insertBatchDecoded(req.collection, req.format, req.ids, req.docs, req.ack)
 	if err != nil {
 		return nil, err
 	}
-	body = iwire.AppendByteVector(body, resultIDs...)
+	return appendInsertBatchResponseBody(dst, resultIDs, actualAck, req.includeResultIDs)
+}
+
+func appendInsertBatchResponseBody(dst []byte, resultIDs [][]byte, actualAck iwire.AckPolicy, includeResultIDs bool) ([]byte, error) {
+	if !includeResultIDs {
+		return appendAckMetaSection(dst, actualAck, responseMetaCount{key: "inserted_count", value: len(resultIDs)})
+	}
+	idsLen := iwire.ByteVectorEncodedLen(resultIDs)
+	body, err := iwire.AppendSectionHeader(dst, iwire.SectionDocumentIDs, 0, idsLen)
+	if err != nil {
+		return nil, err
+	}
+	body = iwire.AppendByteVectorWithEncodedLen(body, idsLen, resultIDs...)
 	return appendAckMetaSection(body, actualAck, responseMetaCount{key: "inserted_count", value: len(resultIDs)})
 }
 
@@ -53,6 +78,11 @@ func (s *Server) insertBatch(state *connState, sections []iwire.Section) ([][]by
 	if err != nil {
 		return nil, 0, err
 	}
+	return s.insertBatchDecoded(collection, format, ids, docs, ack)
+}
+
+func (s *Server) insertBatchDecoded(collection *collections.Collection, format collections.DocumentFormat, ids, docs [][]byte, ack AckPolicy) ([][]byte, iwire.AckPolicy, error) {
+	var err error
 	var resultIDs [][]byte
 	if format == collections.DocumentFormatBSON {
 		resultIDs, err = collection.InsertBatchValidatedBSON(ids, docs)
@@ -67,6 +97,152 @@ func (s *Server) insertBatch(state *connState, sections []iwire.Section) ([][]by
 		return nil, 0, err
 	}
 	return resultIDs, actualAck, nil
+}
+
+func (s *Server) decodeInsertBatchFastRequest(state *connState, sections []iwire.Section) (insertBatchFastRequest, bool, error) {
+	header, ok, err := insertBatchCommandHeader(sections)
+	if err != nil || !ok {
+		return insertBatchFastRequest{}, false, err
+	}
+	if header.ID != iwire.CommandInsertBatch {
+		return insertBatchFastRequest{}, false, nil
+	}
+	if header.Version != 1 {
+		return insertBatchFastRequest{}, true, protocolError(iwire.ErrUnsupportedVersion, "unsupported command %d version %d", header.ID, header.Version)
+	}
+
+	var seen [128]bool
+	var rawCollection, rawFormat, rawIDs, rawDocs, rawAck []byte
+	for _, section := range sections {
+		switch section.ID {
+		case iwire.SectionCommandHeader,
+			iwire.SectionDeadline,
+			iwire.SectionTraceContext,
+			iwire.SectionAckPolicy,
+			iwire.SectionConsistencyPolicy,
+			iwire.SectionIdempotencyKey,
+			iwire.SectionChecksum,
+			iwire.SectionCompression,
+			iwire.SectionCollectionRef,
+			iwire.SectionDocumentFormat,
+			iwire.SectionDocumentIDs,
+			iwire.SectionDocuments,
+			iwire.SectionTemplateRecords,
+			iwire.SectionExpectedCatalogVersion:
+			if err := markInsertBatchFastSection(&seen, section.ID); err != nil {
+				return insertBatchFastRequest{}, true, err
+			}
+		default:
+			if section.Critical() {
+				return insertBatchFastRequest{}, true, protocolError(iwire.ErrUnsupportedFeature, "unknown critical section %d", section.ID)
+			}
+			continue
+		}
+
+		switch section.ID {
+		case iwire.SectionCollectionRef:
+			rawCollection = section.Bytes
+		case iwire.SectionDocumentFormat:
+			rawFormat = section.Bytes
+		case iwire.SectionDocumentIDs:
+			rawIDs = section.Bytes
+		case iwire.SectionDocuments:
+			rawDocs = section.Bytes
+		case iwire.SectionAckPolicy:
+			rawAck = section.Bytes
+		}
+	}
+	if !seen[iwire.SectionCommandHeader] {
+		return insertBatchFastRequest{}, true, protocolError(iwire.ErrInvalidCommand, "missing required section %d", iwire.SectionCommandHeader)
+	}
+	if !seen[iwire.SectionCollectionRef] {
+		return insertBatchFastRequest{}, true, protocolError(iwire.ErrInvalidCommand, "missing required section %d", iwire.SectionCollectionRef)
+	}
+	if !seen[iwire.SectionDocumentFormat] {
+		return insertBatchFastRequest{}, true, protocolError(iwire.ErrInvalidCommand, "missing required section %d", iwire.SectionDocumentFormat)
+	}
+	if !seen[iwire.SectionDocumentIDs] {
+		return insertBatchFastRequest{}, true, protocolError(iwire.ErrInvalidCommand, "missing required section %d", iwire.SectionDocumentIDs)
+	}
+	if !seen[iwire.SectionDocuments] {
+		return insertBatchFastRequest{}, true, protocolError(iwire.ErrInvalidCommand, "missing required section %d", iwire.SectionDocuments)
+	}
+	_, collection, err := s.openCollectionRawRef(state, rawCollection)
+	if err != nil {
+		return insertBatchFastRequest{}, true, err
+	}
+	format, err := decodeDocumentFormatPayload(rawFormat)
+	if err != nil {
+		return insertBatchFastRequest{}, true, err
+	}
+	var ids, docs [][]byte
+	if state != nil {
+		ids, err = decodeByteVectorBorrowedInto(state.idsScratch, rawIDs, s.limits)
+		state.idsScratch = ids
+	} else {
+		ids, err = decodeByteVectorBorrowed(rawIDs, s.limits)
+	}
+	if err != nil {
+		return insertBatchFastRequest{}, true, err
+	}
+	if state != nil {
+		docs, err = decodeByteVectorBorrowedInto(state.docsScratch, rawDocs, s.limits)
+		state.docsScratch = docs
+	} else {
+		docs, err = decodeByteVectorBorrowed(rawDocs, s.limits)
+	}
+	if err != nil {
+		return insertBatchFastRequest{}, true, err
+	}
+	if len(ids) != len(docs) {
+		return insertBatchFastRequest{}, true, protocolError(iwire.ErrInvalidCommand, "document_ids length %d does not match documents length %d", len(ids), len(docs))
+	}
+	ack := s.defaultAckPolicy
+	if seen[iwire.SectionAckPolicy] {
+		ack, err = ackPolicyFromPayload(rawAck)
+		if err != nil {
+			return insertBatchFastRequest{}, true, err
+		}
+	}
+	return insertBatchFastRequest{
+		collection:       collection,
+		format:           format,
+		ids:              ids,
+		docs:             docs,
+		ack:              ack,
+		includeResultIDs: header.Flags&iwire.CommandFlagOmitResultIDs == 0,
+	}, true, nil
+}
+
+func insertBatchCommandHeader(sections []iwire.Section) (iwire.CommandHeader, bool, error) {
+	found := false
+	var header iwire.CommandHeader
+	for _, section := range sections {
+		if section.ID != iwire.SectionCommandHeader {
+			continue
+		}
+		if found {
+			return iwire.CommandHeader{}, true, protocolError(iwire.ErrInvalidCommand, "duplicate command_header section")
+		}
+		var err error
+		header, err = iwire.DecodeCommandHeader(section.Bytes)
+		if err != nil {
+			return iwire.CommandHeader{}, true, err
+		}
+		found = true
+	}
+	return header, found, nil
+}
+
+func markInsertBatchFastSection(seen *[128]bool, id iwire.SectionID) error {
+	if id >= iwire.SectionID(len(seen)) {
+		return nil
+	}
+	if seen[id] {
+		return protocolError(iwire.ErrInvalidCommand, "duplicate singleton section %d", id)
+	}
+	seen[id] = true
+	return nil
 }
 
 func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) ([]iwire.Section, error) {

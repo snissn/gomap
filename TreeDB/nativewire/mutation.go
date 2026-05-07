@@ -27,6 +27,10 @@ func decodeDocumentFormatSection(sections []iwire.Section) (collections.Document
 	if err != nil {
 		return "", err
 	}
+	return decodeDocumentFormatPayload(raw)
+}
+
+func decodeDocumentFormatPayload(raw []byte) (collections.DocumentFormat, error) {
 	format, n, err := readUvarint(raw)
 	if err != nil {
 		return "", err
@@ -49,6 +53,10 @@ func ackPolicyFromSections(sections []iwire.Section, fallback AckPolicy) (AckPol
 	if !ok {
 		return fallback, nil
 	}
+	return ackPolicyFromPayload(raw)
+}
+
+func ackPolicyFromPayload(raw []byte) (AckPolicy, error) {
 	value, n, err := readUvarint(raw)
 	if err != nil {
 		return 0, err
