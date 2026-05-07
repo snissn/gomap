@@ -2,6 +2,7 @@ package nativewire
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"strings"
 	"unicode/utf8"
 )
@@ -49,6 +50,9 @@ func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) 
 		return nil, err
 	}
 	sortSectionsByID(deterministic)
+	if err := validateDeterministicCommand(cmd, deterministic); err != nil {
+		return nil, err
+	}
 
 	dst = append(dst, DeterministicEntryMagic...)
 	dst = appendUvarint(dst, DeterministicEntryVersion)
@@ -62,6 +66,10 @@ func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) 
 		dst = append(dst, section.Bytes...)
 	}
 	return dst, nil
+}
+
+func DeterministicEntryDigest(entry []byte) [32]byte {
+	return sha256.Sum256(entry)
 }
 
 func DecodeDeterministicEntry(src []byte, limits Limits) (DeterministicEntry, error) {
@@ -196,6 +204,9 @@ func (cmd ValidatedCommand) deterministicSectionsInto(dst []Section) ([]Section,
 			if seen.add(section.ID) > 1 {
 				return nil, protocolError(ErrInvalidCommand, "duplicate deterministic singleton section %d", section.ID)
 			}
+			if err := validateDeterministicSectionPayload(section); err != nil {
+				return nil, err
+			}
 			out = append(out, Section{ID: section.ID, Bytes: section.Bytes})
 			continue
 		}
@@ -216,6 +227,45 @@ func (cmd ValidatedCommand) deterministicSectionsInto(dst []Section) ([]Section,
 	return out, nil
 }
 
+func validateDeterministicCommand(cmd ValidatedCommand, deterministic []Section) error {
+	switch cmd.Header.ID {
+	case CommandInsertBatch, CommandReplaceBatch:
+		idCount, err := deterministicByteVectorCount(deterministic, SectionDocumentIDs)
+		if err != nil {
+			return err
+		}
+		docCount, err := deterministicByteVectorCount(deterministic, SectionDocuments)
+		if err != nil {
+			return err
+		}
+		if idCount != docCount {
+			return protocolError(ErrInvalidCommand, "document_ids length %d does not match documents length %d", idCount, docCount)
+		}
+	case CommandDeleteBatch:
+		if _, err := deterministicByteVectorCount(deterministic, SectionDocumentIDs); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func deterministicByteVectorCount(sections []Section, id SectionID) (int, error) {
+	for _, section := range sections {
+		if section.ID != id {
+			continue
+		}
+		count64, _, err := readUvarint(section.Bytes)
+		if err != nil {
+			return 0, err
+		}
+		if count64 > uint64(maxInt) {
+			return 0, protocolError(ErrResourceExhausted, "section %d byte-vector count exceeds int capacity", id)
+		}
+		return int(count64), nil
+	}
+	return 0, protocolError(ErrInvalidCommand, "missing deterministic section %d", id)
+}
+
 func sortSectionsByID(sections []Section) {
 	for i := 1; i < len(sections); i++ {
 		section := sections[i]
@@ -229,6 +279,8 @@ func sortSectionsByID(sections []Section) {
 
 func validateDeterministicSectionPayload(section Section) error {
 	switch section.ID {
+	case SectionIdempotencyKey:
+		return validateDeterministicOpaquePayload("idempotency_key", section.Bytes)
 	case SectionCollectionRef:
 		local, err := validateDeterministicCollectionRef(section.Bytes)
 		if err != nil {
@@ -255,6 +307,12 @@ func validateDeterministicSectionPayload(section Section) error {
 			return validateDeterministicDocumentIDs(section.Bytes)
 		}
 		return validateByteVector(section.Bytes, Limits{})
+	case SectionCollectionMeta:
+		return validateDeterministicOpaquePayload("collection_meta", section.Bytes)
+	case SectionIndexDefinition:
+		return validateDeterministicOpaquePayload("index_definition", section.Bytes)
+	case SectionIndexName:
+		return validateDeterministicName("index_name", section.Bytes)
 	case SectionExpectedCatalogVersion, SectionReplacementMode:
 		_, n, err := readUvarint(section.Bytes)
 		if err != nil {
@@ -263,6 +321,30 @@ func validateDeterministicSectionPayload(section Section) error {
 		if n != len(section.Bytes) {
 			return protocolError(ErrInvalidCommand, "section %d has %d trailing bytes", section.ID, len(section.Bytes)-n)
 		}
+	}
+	return nil
+}
+
+func validateDeterministicOpaquePayload(name string, raw []byte) error {
+	if len(raw) == 0 {
+		return protocolError(ErrInvalidCommand, "%s cannot be empty", name)
+	}
+	if len(raw) > 1<<20 {
+		return protocolError(ErrResourceExhausted, "%s length %d exceeds limit", name, len(raw))
+	}
+	return nil
+}
+
+func validateDeterministicName(name string, raw []byte) error {
+	value := string(raw)
+	if value == "" {
+		return protocolError(ErrInvalidCommand, "%s cannot be empty", name)
+	}
+	if len(value) > 128 {
+		return protocolError(ErrInvalidCommand, "%s too long", name)
+	}
+	if strings.ContainsAny(value, "\x00/:") || strings.TrimSpace(value) != value || !utf8.ValidString(value) {
+		return protocolError(ErrInvalidCommand, "invalid %s", name)
 	}
 	return nil
 }

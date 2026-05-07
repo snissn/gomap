@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"bytes"
 	"encoding/hex"
 	"testing"
 )
@@ -210,6 +211,124 @@ func TestDeterministicEntryRejectsLocalAndReadCommands(t *testing.T) {
 	}
 }
 
+func TestDeterministicEntryStableAcrossTransportOnlySections(t *testing.T) {
+	registry := MustV1Registry()
+	cmd0, err := registry.ValidateRequestSections(insertBatchDeterministicSections())
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	entry0, err := AppendDeterministicEntry(nil, cmd0)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry: %v", err)
+	}
+	variant := []Section{
+		{ID: SectionCompression, Bytes: []byte{1}},
+		{ID: SectionTraceContext, Bytes: []byte("trace")},
+		{ID: SectionAckPolicy, Bytes: []byte{byte(AckFlushed)}},
+		{ID: SectionDeadline, Bytes: []byte("deadline")},
+		{ID: 9000, Bytes: []byte("ignored")},
+		{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte("{}"))},
+		{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
+		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
+		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 1, Flags: CommandFlagOmitResultIDs | CommandFlagOmitResponseMeta})},
+		{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
+		{ID: SectionCollectionRef, Bytes: []byte("c")},
+	}
+	cmd1, err := registry.ValidateRequestSections(variant)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections variant: %v", err)
+	}
+	entry1, err := AppendDeterministicEntry(nil, cmd1)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry variant: %v", err)
+	}
+	if !bytes.Equal(entry0, entry1) {
+		t.Fatalf("transport-only sections changed entry\ngot  %s\nwant %s", hex.EncodeToString(entry1), hex.EncodeToString(entry0))
+	}
+	if DeterministicEntryDigest(entry0) != DeterministicEntryDigest(entry1) {
+		t.Fatal("same deterministic entry produced different digest")
+	}
+}
+
+func TestDeterministicEntryDigestChangesWithLogicalMutation(t *testing.T) {
+	registry := MustV1Registry()
+	base := insertBatchDeterministicSections()
+	cmd0, err := registry.ValidateRequestSections(base)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections base: %v", err)
+	}
+	entry0, err := AppendDeterministicEntry(nil, cmd0)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry base: %v", err)
+	}
+	changed := replaceSection(insertBatchDeterministicSections(), SectionDocuments, AppendByteVector(nil, []byte(`{"changed":true}`)))
+	cmd1, err := registry.ValidateRequestSections(changed)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections changed: %v", err)
+	}
+	entry1, err := AppendDeterministicEntry(nil, cmd1)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry changed: %v", err)
+	}
+	if bytes.Equal(entry0, entry1) {
+		t.Fatal("logical mutation change did not change deterministic entry")
+	}
+	if DeterministicEntryDigest(entry0) == DeterministicEntryDigest(entry1) {
+		t.Fatal("logical mutation change did not change deterministic entry digest")
+	}
+}
+
+func TestDeterministicEntryRejectsAmbiguousCommandPayloads(t *testing.T) {
+	registry := MustV1Registry()
+	for _, tc := range []struct {
+		name     string
+		sections []Section
+		code     ErrorCode
+	}{
+		{
+			name:     "empty_idempotency",
+			sections: replaceSection(insertBatchDeterministicSections(), SectionIdempotencyKey, nil),
+			code:     ErrInvalidCommand,
+		},
+		{
+			name: "empty_collection_meta",
+			sections: []Section{
+				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateCollection, Version: 1})},
+				{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
+				{ID: SectionCollectionMeta, Bytes: nil},
+				{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+			},
+			code: ErrInvalidCommand,
+		},
+		{
+			name:     "invalid_index_name",
+			sections: replaceSection(deterministicEntryFixtureCases()[2].sections, SectionIndexName, []byte("bad/name")),
+			code:     ErrInvalidCommand,
+		},
+		{
+			name:     "insert_ids_docs_mismatch",
+			sections: replaceSection(insertBatchDeterministicSections(), SectionDocuments, AppendByteVector(nil, []byte("{}"), []byte("{}"))),
+			code:     ErrInvalidCommand,
+		},
+		{
+			name:     "replace_ids_docs_mismatch",
+			sections: replaceSection(deterministicEntryFixtureCases()[4].sections, SectionDocuments, AppendByteVector(nil, []byte("{}"), []byte("{}"))),
+			code:     ErrInvalidCommand,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, err := registry.ValidateRequestSections(tc.sections)
+			if err != nil {
+				t.Fatalf("ValidateRequestSections: %v", err)
+			}
+			if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != tc.code {
+				t.Fatalf("AppendDeterministicEntry err=%v code=%d want %d", err, codeOf(err), tc.code)
+			}
+		})
+	}
+}
+
 func TestDeterministicEntryRejectsMissingDistributedGuards(t *testing.T) {
 	registry := MustV1Registry()
 
@@ -413,6 +532,17 @@ func insertBatchDeterministicSections() []Section {
 		{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte("{}"))},
 		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
 	}
+}
+
+func replaceSection(sections []Section, id SectionID, raw []byte) []Section {
+	out := append([]Section(nil), sections...)
+	for i := range out {
+		if out[i].ID == id {
+			out[i].Bytes = raw
+			return out
+		}
+	}
+	return append(out, Section{ID: id, Bytes: raw})
 }
 
 type deterministicEntryFixtureCase struct {
