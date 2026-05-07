@@ -15,6 +15,9 @@ func TestMutationCommandsRoundTrip(t *testing.T) {
 	client, mgr, db := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
 	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{
 		Name: "users",
 		Options: collections.CollectionOptions{
@@ -89,6 +92,9 @@ func TestMutationDuplicateIDRejected(t *testing.T) {
 	client, _, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
 	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -106,6 +112,9 @@ func TestMutationRaftAckRejected(t *testing.T) {
 	client, mgr, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
 	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -131,6 +140,9 @@ func TestMutationSyncedAckWithoutBackendRejectedBeforeWrite(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
 	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -143,6 +155,72 @@ func TestMutationSyncedAckWithoutBackendRejectedBeforeWrite(t *testing.T) {
 		t.Fatalf("InsertBatch synced ack err=%v want durability unavailable", err)
 	}
 	assertDocumentMissing(t, mgr, "users", "u1")
+}
+
+func TestMutationReplaceRejectsUnsupportedReplacementModeBeforeWrite(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"name":"Ada"}`)},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	_, err := client.commandSections(ctx, iwire.CommandReplaceBatch,
+		collectionNameRef("users"),
+		documentFormatSection(collections.DocumentFormatJSON),
+		iwire.Section{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("u1"))},
+		iwire.Section{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, []byte(`{"name":"Ada Changed"}`))},
+		iwire.Section{ID: iwire.SectionReplacementMode, Bytes: []byte{2}},
+		ackSection(AckVisible),
+	)
+	if !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("ReplaceBatch invalid replacement_mode err=%v want invalid command", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	doc, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get u1: %v", err)
+	}
+	if !bytes.Contains(doc, []byte(`"Ada"`)) || bytes.Contains(doc, []byte(`Changed`)) {
+		t.Fatalf("u1 changed after rejected replace: %s", doc)
+	}
+}
+
+func TestMutationBarrierRejectsUnsatisfiedAckPolicy(t *testing.T) {
+	client, _, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	_, err := client.commandSections(ctx, iwire.CommandFlushCollection, collectionNameRef("users"), ackSection(AckSynced))
+	if !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
+		t.Fatalf("FlushCollection synced ack err=%v want durability unavailable", err)
+	}
+	_, err = client.commandSections(ctx, iwire.CommandFlushAll, ackSection(AckSynced))
+	if !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
+		t.Fatalf("FlushAll synced ack err=%v want durability unavailable", err)
+	}
+	_, err = client.commandSections(ctx, iwire.CommandCheckpoint, ackSection(AckRaftCommitted))
+	if !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
+		t.Fatalf("Checkpoint raft ack err=%v want durability unavailable", err)
+	}
 }
 
 func assertDocumentMissing(t *testing.T, mgr *collections.CollectionManager, collectionName, id string) {

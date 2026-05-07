@@ -354,9 +354,9 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	case iwire.CommandFlushCollection:
 		responseSections, err = s.handleFlushCollection(state, cmd.Known)
 	case iwire.CommandFlushAll:
-		responseSections, err = s.handleFlushAll()
+		responseSections, err = s.handleFlushAll(cmd.Known)
 	case iwire.CommandCheckpoint:
-		responseSections, err = s.handleCheckpoint()
+		responseSections, err = s.handleCheckpoint(cmd.Known)
 	case iwire.CommandGetMany:
 		responseSections, err = s.handleGetMany(state, cmd.Known)
 	case iwire.CommandIndexLookup:
