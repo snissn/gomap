@@ -89,6 +89,9 @@ func (c *Client) roundTrip(ctx context.Context, typ iwire.FrameType, body []byte
 	if err != nil {
 		return iwire.Header{}, nil, err
 	}
+	if err := iwire.ValidateHeaderVersion(header, iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0}); err != nil {
+		return header, response, err
+	}
 	if header.RequestID != requestID {
 		return header, response, protocolError(iwire.ErrMalformedFrame, "response request_id %d want %d", header.RequestID, requestID)
 	}

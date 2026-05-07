@@ -45,7 +45,8 @@ type Server struct {
 }
 
 type connState struct {
-	id uint64
+	id    uint64
+	hello bool
 }
 
 func NewServer(opts ServerOptions) *Server {
@@ -191,6 +192,9 @@ func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState,
 		s.counters.inc("requests.canceled_total")
 		return nil
 	case iwire.FrameRequest:
+		if state != nil && !state.hello {
+			return s.writeError(w, header, protocolError(iwire.ErrInvalidCommand, "hello required before request"))
+		}
 		return s.handleRequest(ctx, w, header, body)
 	default:
 		return s.writeError(w, header, protocolError(iwire.ErrInvalidCommand, "unexpected frame type %d", header.Type))
@@ -245,11 +249,16 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, header iwire.He
 }
 
 func (s *Server) writeHelloOK(w io.Writer, header iwire.Header, state *connState) error {
+	var connectionID uint64
+	if state != nil {
+		state.hello = true
+		connectionID = state.id
+	}
 	caps := map[string]string{
 		"protocol":           "treedb-native-wire",
 		"protocol_major":     strconv.Itoa(int(iwire.ProtocolMajorV1)),
 		"protocol_minor":     strconv.Itoa(int(iwire.ProtocolMinorV0)),
-		"connection_id":      strconv.FormatUint(state.id, 10),
+		"connection_id":      strconv.FormatUint(connectionID, 10),
 		"default_ack_policy": strconv.FormatUint(uint64(s.defaultAckPolicy), 10),
 	}
 	body, err := iwire.AppendSection(nil, iwire.Section{ID: iwire.SectionCapabilitySet, Bytes: appendStringMap(nil, caps)})

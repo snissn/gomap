@@ -113,13 +113,32 @@ func TestServerMalformedRequestReturnsWireError(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
 	_, _, err := client.roundTrip(ctx, iwire.FrameRequest, []byte{0xff}, iwire.FrameResponse)
 	if !isRemoteError(err, iwire.ErrMalformedFrame) {
 		t.Fatalf("error=%v want malformed frame", err)
 	}
 }
 
-func TestClientDetectsUnexpectedResponseType(t *testing.T) {
+func TestServerRejectsRequestBeforeHello(t *testing.T) {
+	server := NewServer(ServerOptions{})
+	client, _ := servePipe(t, server)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	body, err := appendCommandRequestBody(nil, iwire.CommandStats)
+	if err != nil {
+		t.Fatalf("append request: %v", err)
+	}
+	_, _, err = client.roundTrip(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
+	if !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("error=%v want invalid command", err)
+	}
+}
+
+func TestClientDetectsResponseRequestIDMismatch(t *testing.T) {
 	left, right := net.Pipe()
 	defer left.Close()
 	defer right.Close()
@@ -138,6 +157,35 @@ func TestClientDetectsUnexpectedResponseType(t *testing.T) {
 	err := client.Ping(ctx)
 	if err == nil || !strings.Contains(err.Error(), "request_id") {
 		t.Fatalf("Ping error=%v want request_id mismatch", err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("server goroutine: %v", err)
+	}
+}
+
+func TestClientRejectsUnsupportedResponseVersion(t *testing.T) {
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+	client := NewClient(left)
+	errCh := make(chan error, 1)
+	go func() {
+		header, _, err := readFrame(right, iwire.DefaultLimits())
+		if err != nil {
+			errCh <- err
+			return
+		}
+		errCh <- writeFrame(right, iwire.Header{
+			Version:   iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0 + 1},
+			Type:      iwire.FramePong,
+			RequestID: header.RequestID,
+		}, nil)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := client.Ping(ctx)
+	if code, ok := iwire.ErrorCodeOf(err); !ok || code != iwire.ErrUnsupportedVersion {
+		t.Fatalf("Ping error=%v want unsupported version", err)
 	}
 	if err := <-errCh; err != nil {
 		t.Fatalf("server goroutine: %v", err)
