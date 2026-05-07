@@ -11536,6 +11536,11 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 	if err != nil {
 		return false, true, err
 	}
+	// Match the buffered-primary visibility decision to the same domain snapshot
+	// used to materialize buffered secondary index entries above. Settled scans
+	// skip per-result domain probes; concurrent later writes are not mixed into
+	// an already-started persisted index scan.
+	bufferedDocumentsVisible := domain != nil && domain.count > 0
 	if domainLocked {
 		domain.mu.RUnlock()
 		domainLocked = false
@@ -11576,7 +11581,12 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 	}
 	var scratch []byte
 	truncated, err := scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt, idx.ValueType, opts.Limit, func(id []byte) (bool, error) {
-		value, buffered, found := c.getBufferedDocumentInto(id, scratch[:0])
+		var value []byte
+		buffered := false
+		found := false
+		if bufferedDocumentsVisible {
+			value, buffered, found = c.getBufferedDocumentInto(id, scratch[:0])
+		}
 		if !buffered {
 			if primaryReaderOK {
 				var err error
