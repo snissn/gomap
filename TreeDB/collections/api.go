@@ -11417,6 +11417,128 @@ func (c *Collection) FindByIndexRange(indexName string, opts IndexRangeOptions) 
 	return out, truncated, nil
 }
 
+// FindDocumentsByIndexRange returns primary documents whose named secondary
+// index falls inside opts, preserving index order. Persisted index and primary
+// reads share one snapshot/catalog; same-manager buffered documents are still
+// consulted before the persisted primary root so pending indexed writes remain
+// visible.
+func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRangeOptions) ([]DocumentRecord, bool, error) {
+	if c == nil {
+		return nil, false, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, false, errCollectionDBNil
+	}
+	if err := ValidateIndexName(indexName); err != nil {
+		return nil, false, err
+	}
+	if opts.Limit < 0 {
+		return nil, false, errors.New("collections: index range limit cannot be negative")
+	}
+	if opts.Desc {
+		return nil, false, errors.New("collections: descending index range scans are not supported")
+	}
+	if err := c.flushBufferedNoIndex(); err != nil {
+		return nil, false, err
+	}
+	domain := c.writeDomain
+	domainLocked := false
+	if domain != nil {
+		domain.mu.RLock()
+		domainLocked = true
+		defer func() {
+			if domainLocked {
+				domain.mu.RUnlock()
+			}
+		}()
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, false, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshotWithWriteDomainLocked(snap)
+	if err != nil {
+		return nil, false, err
+	}
+	if catalog == nil {
+		return nil, false, errCollectionNotFound
+	}
+	idx, ok := findIndex(catalog.meta.Indexes, indexName)
+	if !ok {
+		return nil, false, nil
+	}
+	start, end, empty, err := indexRangeScanBounds(idx.ValueType, opts)
+	if err != nil {
+		return nil, true, err
+	}
+	if empty {
+		return make([]DocumentRecord, 0), false, nil
+	}
+	exactPrefix, exactPrefixScan, err := exactIndexRangePrefix(idx.ValueType, opts)
+	if err != nil {
+		return nil, true, err
+	}
+	var bufferedTable memtable.Table
+	if exactPrefixScan {
+		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, idx.Unique, exactPrefix, opts.Limit)
+	} else {
+		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
+	}
+	if err != nil {
+		return nil, true, err
+	}
+	if domainLocked {
+		domain.mu.RUnlock()
+		domainLocked = false
+	}
+	if bufferedTable != nil {
+		defer resetCollectionRunTable(bufferedTable)
+	}
+	var bufferedIt iterator.UnsafeIterator
+	if bufferedTable != nil {
+		bufferedIt = bufferedTable.NewIterator(start, end)
+		defer func() { _ = bufferedIt.Close() }()
+	}
+	persistedIt, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true)
+	if err != nil {
+		return nil, true, err
+	}
+	if persistedIt != nil {
+		defer func() { _ = persistedIt.Close() }()
+	}
+	capHint := 16
+	if opts.Limit > 0 && opts.Limit < capHint {
+		capHint = opts.Limit
+	}
+	out := make([]DocumentRecord, 0, capHint)
+	primaryRootName := collectionPrimaryRootName(catalog.meta.Name)
+	var scratch []byte
+	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, opts.Limit, func(id []byte) (bool, error) {
+		value, buffered, found := c.getBufferedDocumentInto(id, scratch[:0])
+		if !buffered {
+			var err error
+			value, found, err = collectionGetAppendAtCatalogRoot(snap, catalog, primaryRootName, id, scratch[:0])
+			if err != nil {
+				return false, err
+			}
+		}
+		if !found {
+			return true, nil
+		}
+		scratch = value
+		out = append(out, DocumentRecord{
+			ID:       bytes.Clone(id),
+			Document: bytes.Clone(value),
+		})
+		return true, nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return out, truncated, nil
+}
+
 func (c *Collection) ScanIndexRange(indexName string, opts IndexRangeOptions, fn func(id []byte) (bool, error)) (bool, error) {
 	if fn == nil {
 		return false, errors.New("collections: nil index range callback")

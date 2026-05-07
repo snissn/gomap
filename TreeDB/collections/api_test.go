@@ -11678,6 +11678,62 @@ func TestCollectionFindByIndexRangeTypedInt64(t *testing.T) {
 	}
 }
 
+func TestCollectionFindDocumentsByIndexRangeTypedInt64(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "score", Field: "score", ValueType: IndexValueInt64}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2"), []byte("u3")},
+		[][]byte{
+			[]byte(`{"score":-10,"name":"low"}`),
+			[]byte(`{"score":0,"name":"zero"}`),
+			[]byte(`{"score":2,"name":"two"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	records, truncated, err := col.FindDocumentsByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(0), Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+		Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("find documents range: %v", err)
+	}
+	if !truncated || len(records) != 1 {
+		t.Fatalf("records len=%d truncated=%v want 1,true", len(records), truncated)
+	}
+	if !bytes.Equal(records[0].ID, []byte("u2")) || !bytes.Contains(records[0].Document, []byte(`"name":"zero"`)) {
+		t.Fatalf("record=%q/%s want u2 zero", records[0].ID, records[0].Document)
+	}
+
+	records, truncated, err = col.FindDocumentsByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(100), Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+	})
+	if err != nil {
+		t.Fatalf("find empty documents range: %v", err)
+	}
+	if truncated || len(records) != 0 {
+		t.Fatalf("empty records len=%d truncated=%v want 0,false", len(records), truncated)
+	}
+}
+
 func TestCollectionFindByIndexRangeMergesBufferedUpdates(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
