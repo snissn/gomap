@@ -88,6 +88,31 @@ func TestDeterministicEntryRejectsUnsupportedCommandFlags(t *testing.T) {
 	}
 }
 
+func TestDeterministicEntryRequiresMetadataCatalogGuard(t *testing.T) {
+	registry := MustV1Registry()
+	sections := []Section{
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateCollection, Version: 1})},
+		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
+		{ID: SectionCollectionMeta, Bytes: []byte("users")},
+	}
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("missing metadata catalog guard err=%v code=%d", err, codeOf(err))
+	}
+
+	sections = append(sections, Section{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}})
+	cmd, err = registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections guarded: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); err != nil {
+		t.Fatalf("AppendDeterministicEntry guarded: %v", err)
+	}
+}
+
 func TestDeterministicEntryRejectsCollectionHandleRefs(t *testing.T) {
 	registry := MustV1Registry()
 	sections := insertBatchDeterministicSections()

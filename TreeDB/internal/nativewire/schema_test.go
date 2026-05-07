@@ -103,6 +103,20 @@ func TestRegistryCursorCommandsUseCursorSections(t *testing.T) {
 	}
 }
 
+func TestReplicatedV1CommandsRequireIdentityAndCatalogGuard(t *testing.T) {
+	for _, schema := range v1CommandSchemas() {
+		if !schema.Replicated || schema.LocalOnly {
+			continue
+		}
+		if !schema.RequiresIdempotency {
+			t.Fatalf("%s is replicated without idempotency guard", schema.Name)
+		}
+		if !schema.RequiresCatalogGuard {
+			t.Fatalf("%s is replicated without catalog guard", schema.Name)
+		}
+	}
+}
+
 func insertBatchSections() []Section {
 	return []Section{
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 1})},
