@@ -131,15 +131,11 @@ func (c *Client) roundTripInsert(ctx context.Context, msg []byte, wantN int) (in
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if deadline, ok := ctx.Deadline(); ok {
-		if err := c.conn.SetDeadline(deadline); err != nil {
-			return 0, err
-		}
-	}
 	stopCancelWatch := c.watchContextCancelLocked(ctx)
 	defer func() {
-		stopCancelWatch()
-		_ = c.conn.SetDeadline(time.Time{})
+		if stopCancelWatch() {
+			_ = c.conn.SetDeadline(time.Time{})
+		}
 	}()
 	if err := writeFull(c.conn, msg); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -164,15 +160,11 @@ func (c *Client) roundTripFind(ctx context.Context, msg []byte) ([]bson.Raw, err
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if deadline, ok := ctx.Deadline(); ok {
-		if err := c.conn.SetDeadline(deadline); err != nil {
-			return nil, err
-		}
-	}
 	stopCancelWatch := c.watchContextCancelLocked(ctx)
 	defer func() {
-		stopCancelWatch()
-		_ = c.conn.SetDeadline(time.Time{})
+		if stopCancelWatch() {
+			_ = c.conn.SetDeadline(time.Time{})
+		}
 	}()
 	if err := writeFull(c.conn, msg); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -197,15 +189,11 @@ func (c *Client) roundTripFindBorrowed(ctx context.Context, msg []byte, fn func(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if deadline, ok := ctx.Deadline(); ok {
-		if err := c.conn.SetDeadline(deadline); err != nil {
-			return err
-		}
-	}
 	stopCancelWatch := c.watchContextCancelLocked(ctx)
 	defer func() {
-		stopCancelWatch()
-		_ = c.conn.SetDeadline(time.Time{})
+		if stopCancelWatch() {
+			_ = c.conn.SetDeadline(time.Time{})
+		}
 	}()
 	if err := writeFull(c.conn, msg); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -248,20 +236,22 @@ func (c *Client) readMessageLocked(retain bool) (wire.Header, []byte, error) {
 	return header, body, nil
 }
 
-func (c *Client) watchContextCancelLocked(ctx context.Context) func() {
+func (c *Client) watchContextCancelLocked(ctx context.Context) func() bool {
 	done := ctx.Done()
 	if done == nil {
-		return func() {}
+		return func() bool { return false }
 	}
 	fired := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() {
 		defer close(fired)
 		_ = c.conn.SetDeadline(time.Now())
 	})
-	return func() {
-		if !stop() {
-			<-fired
+	return func() bool {
+		if stop() {
+			return false
 		}
+		<-fired
+		return true
 	}
 }
 

@@ -265,6 +265,45 @@ func TestClientInsertManyRawBSONCanceledDeadlineContextInterruptsRead(t *testing
 	}
 }
 
+func TestClientInsertManyRawBSONDeadlineInterruptsRead(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer func() { _ = serverConn.Close() }()
+	client := New(clientConn)
+	defer func() { _ = client.Close() }()
+
+	rawDocs := []bson.Raw{mustBSON(t, bson.D{{Key: "_id", Value: "u1"}})}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := client.InsertManyRawBSON(ctx, "app", "users", rawDocs)
+		errCh <- err
+	}()
+
+	readDone := make(chan error, 1)
+	go func() {
+		_, _, err := wire.ReadMessage(serverConn, 0)
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatalf("server read request: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not receive request")
+	}
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("InsertManyRawBSON err=%v want context.DeadlineExceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("InsertManyRawBSON did not return after deadline")
+	}
+}
+
 func mustBSON(t *testing.T, doc bson.D) bson.Raw {
 	t.Helper()
 	raw, err := bson.Marshal(doc)
