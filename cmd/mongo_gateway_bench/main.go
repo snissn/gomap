@@ -3030,7 +3030,7 @@ func runTreeDBRawWireRangeOperation(ctx context.Context, cfg config, target *ben
 
 func runTreeDBRawWireTCPRangePhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder) (phaseResult, error) {
 	if target == nil || target.mongoAddr == "" {
-		return phaseResult{}, errors.New("raw-wire-tcp client mode requires a TreeDB gateway listener")
+		return phaseResult{}, errors.New("raw-wire TCP client modes require a TreeDB gateway listener")
 	}
 	client, err := fastclient.Connect(ctx, target.mongoAddr)
 	if err != nil {
@@ -3192,6 +3192,8 @@ type rawWireTCPPipelineClient struct {
 	readBuf     []byte
 	commandBuf  []byte
 	responseBuf []bson.Raw
+	beforeFlush func()
+	beforeRead  func()
 }
 
 const (
@@ -3246,6 +3248,9 @@ func (c *rawWireTCPPipelineClient) Flush(ctx context.Context) error {
 	if len(c.writeBuf) == 0 {
 		return nil
 	}
+	if c.beforeFlush != nil {
+		c.beforeFlush()
+	}
 	if err := writeFull(c.conn, c.writeBuf); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -3262,6 +3267,9 @@ func (c *rawWireTCPPipelineClient) ReadFind(ctx context.Context, responseTo int3
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if c.beforeRead != nil {
+		c.beforeRead()
 	}
 	header, body, err := wire.ReadMessageInto(c.rd, c.readBuf, wire.DefaultMaxMessageLength)
 	if err != nil {
@@ -3287,8 +3295,7 @@ func (c *rawWireTCPPipelineClient) ReadFind(ctx context.Context, responseTo int3
 }
 
 func watchRawWireTCPPipelineClients(ctx context.Context, clients ...*rawWireTCPPipelineClient) func() {
-	done := ctx.Done()
-	if done == nil {
+	if ctx.Done() == nil {
 		return func() {}
 	}
 	fired := make(chan struct{})
@@ -3330,7 +3337,7 @@ func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarge
 	}
 	if cfg.Target == "treedb" && cfg.ClientMode == clientModeRawWireTCP {
 		if target == nil || target.mongoAddr == "" {
-			return phaseResult{}, errors.New("raw-wire-tcp client mode requires a TreeDB gateway listener")
+			return phaseResult{}, errors.New("raw-wire TCP client modes require a TreeDB gateway listener")
 		}
 		clients := make([]*fastclient.Client, readers)
 		commandBufs := make([][]byte, readers)
@@ -3689,7 +3696,7 @@ func runTreeDBRawWireLoadPhase(ctx context.Context, cfg config, target *benchTar
 
 func runTreeDBRawWireTCPLoadPhase(ctx context.Context, cfg config, target *benchTarget, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
 	if target == nil || target.mongoAddr == "" {
-		return phaseResult{}, errors.New("raw-wire-tcp client mode requires a TreeDB gateway listener")
+		return phaseResult{}, errors.New("raw-wire TCP client modes require a TreeDB gateway listener")
 	}
 	producers := effectiveLoadProducers(cfg.Documents, cfg.BatchSize, cfg.InsertProducers)
 	clients := make([]*fastclient.Client, producers)

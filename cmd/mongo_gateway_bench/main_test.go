@@ -860,9 +860,11 @@ func TestRawWireTCPPipelineClientReadFindHonorsContextCancel(t *testing.T) {
 	defer serverConn.Close()
 	defer clientConn.Close()
 
+	readStarted := make(chan struct{})
 	client := &rawWireTCPPipelineClient{
-		conn: clientConn,
-		rd:   bufio.NewReaderSize(clientConn, rawWireTCPReadBufferSize),
+		conn:       clientConn,
+		rd:         bufio.NewReaderSize(clientConn, rawWireTCPReadBufferSize),
+		beforeRead: func() { close(readStarted) },
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	stopCancelWatch := watchRawWireTCPPipelineClients(ctx, client)
@@ -872,7 +874,11 @@ func TestRawWireTCPPipelineClientReadFindHonorsContextCancel(t *testing.T) {
 		errCh <- client.ReadFind(ctx, 1, 0)
 	}()
 
-	time.Sleep(10 * time.Millisecond)
+	select {
+	case <-readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("ReadFind did not start read")
+	}
 	cancel()
 
 	select {
@@ -890,9 +896,11 @@ func TestRawWireTCPPipelineClientFlushHonorsContextCancel(t *testing.T) {
 	defer serverConn.Close()
 	defer clientConn.Close()
 
+	flushStarted := make(chan struct{})
 	client := &rawWireTCPPipelineClient{
-		conn:     clientConn,
-		writeBuf: bytes.Repeat([]byte("x"), 1024),
+		conn:        clientConn,
+		writeBuf:    bytes.Repeat([]byte("x"), 1024),
+		beforeFlush: func() { close(flushStarted) },
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	stopCancelWatch := watchRawWireTCPPipelineClients(ctx, client)
@@ -902,7 +910,11 @@ func TestRawWireTCPPipelineClientFlushHonorsContextCancel(t *testing.T) {
 		errCh <- client.Flush(ctx)
 	}()
 
-	time.Sleep(10 * time.Millisecond)
+	select {
+	case <-flushStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Flush did not start write")
+	}
 	cancel()
 
 	select {
