@@ -19,6 +19,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	mongogateway "github.com/snissn/gomap/TreeDB/mongo_gateway"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/event"
 )
@@ -2024,6 +2025,24 @@ func TestRangePhaseNameDistinguishesScanAndIndexedRuns(t *testing.T) {
 	}
 }
 
+func TestDirectBenchmarkDocumentKeyUsesGatewayEncoding(t *testing.T) {
+	key, id, err := directBenchmarkDocumentKey(7)
+	if err != nil {
+		t.Fatalf("directBenchmarkDocumentKey: %v", err)
+	}
+	typ, value, err := bson.MarshalValue(id)
+	if err != nil {
+		t.Fatalf("MarshalValue: %v", err)
+	}
+	want, err := mongogateway.EncodePrimaryKey(bson.RawValue{Type: typ, Value: value})
+	if err != nil {
+		t.Fatalf("EncodePrimaryKey: %v", err)
+	}
+	if !bytes.Equal(key, want) {
+		t.Fatalf("direct key=%x want gateway key=%x", key, want)
+	}
+}
+
 func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 	result := &benchmarkResult{
 		Target:                                 "treedb",
@@ -2110,7 +2129,8 @@ func TestRecordEffectiveTreeDBCollectionOptionsUsesNormalizedMetadata(t *testing
 		Target:           "treedb",
 		Database:         "bench",
 		Collection:       "docs",
-		SecondaryIndexes: 1,
+		SecondaryIndexes: 0,
+		RangeIndex:       true,
 	}
 	if err := recordEffectiveTreeDBCollectionOptions(result, cfg, &benchTarget{collections: manager}); err != nil {
 		t.Fatalf("record effective options: %v", err)

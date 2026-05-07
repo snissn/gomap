@@ -1473,6 +1473,10 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 	if err := recordEffectiveTreeDBCollectionOptions(result, cfg, target); err != nil {
 		return nil, err
 	}
+	directKeys, err := buildDirectBenchmarkKeySet(cfg.Documents)
+	if err != nil {
+		return nil, err
+	}
 
 	var prebuiltIDs [][]byte
 	var prebuiltDocuments [][]byte
@@ -1512,7 +1516,7 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 	}
 
 	idPhase, err := runTreeDBProfiledPhase(target, profiler, "id_find_one", func() (phaseResult, error) {
-		return runDirectTreeDBIDFindPhase(ctx, cfg, collection)
+		return runDirectTreeDBIDFindPhase(ctx, cfg, collection, directKeys)
 	})
 	if err != nil {
 		return nil, err
@@ -1538,7 +1542,7 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 	result.Phases = append(result.Phases, rangePhase)
 
 	updatePhase, err := runTreeDBProfiledPhase(target, profiler, "id_update_set", func() (phaseResult, error) {
-		return runDirectTreeDBUpdatePhase(ctx, cfg, collection, updatedCityValuesForUpdate())
+		return runDirectTreeDBUpdatePhase(ctx, cfg, collection, directKeys, updatedCityValuesForUpdate())
 	})
 	if err != nil {
 		return nil, err
@@ -1548,7 +1552,7 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 	for _, concurrentReaders := range concurrentReaderCounts(cfg) {
 		phaseName := fmt.Sprintf("concurrent_id_find_one_r%d", concurrentReaders)
 		concurrentReadPhase, err := runTreeDBProfiledPhase(target, profiler, phaseName, func() (phaseResult, error) {
-			return runDirectTreeDBConcurrentIDFindPhase(ctx, cfg, collection, concurrentReaders, phaseName)
+			return runDirectTreeDBConcurrentIDFindPhase(ctx, cfg, collection, directKeys, concurrentReaders, phaseName)
 		})
 		if err != nil {
 			return nil, err
@@ -1559,7 +1563,7 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 	if cfg.ConcurrentWriters > 0 && cfg.ConcurrentWrites > 0 {
 		phaseName := fmt.Sprintf("concurrent_id_update_set_w%d", cfg.ConcurrentWriters)
 		concurrentWritePhase, err := runTreeDBProfiledPhase(target, profiler, phaseName, func() (phaseResult, error) {
-			return runDirectTreeDBConcurrentUpdatePhase(ctx, cfg, collection, phaseName, updatedCityValuesForUpdate())
+			return runDirectTreeDBConcurrentUpdatePhase(ctx, cfg, collection, directKeys, phaseName, updatedCityValuesForUpdate())
 		})
 		if err != nil {
 			return nil, err
@@ -1569,7 +1573,7 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 
 	if cfg.Deletes > 0 {
 		deletePhase, err := runTreeDBProfiledPhase(target, profiler, "id_delete_one", func() (phaseResult, error) {
-			return runDirectTreeDBDeletePhase(ctx, cfg, collection)
+			return runDirectTreeDBDeletePhase(ctx, cfg, collection, directKeys)
 		})
 		if err != nil {
 			return nil, err
@@ -1661,8 +1665,6 @@ func directTreeDBIndexDefinitions(cfg config) []collections.IndexDefinition {
 	return indexes
 }
 
-const directPrimaryKeyPrefixBSONValue byte = 1
-
 func directTreeDBBenchmarkDocument(i int, format collections.DocumentFormat) ([]byte, []byte, error) {
 	raw, err := bson.Marshal(benchmarkDocument(i))
 	if err != nil {
@@ -1673,7 +1675,7 @@ func directTreeDBBenchmarkDocument(i int, format collections.DocumentFormat) ([]
 
 func directPrepareTreeDBDocument(raw bson.Raw, format collections.DocumentFormat) ([]byte, []byte, error) {
 	id := raw.Lookup("_id")
-	key, err := directEncodePrimaryKey(id)
+	key, err := mongogateway.EncodePrimaryKey(id)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1710,27 +1712,43 @@ func directBenchmarkDocumentKey(i int) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	key, err := directEncodePrimaryKey(bson.RawValue{Type: typ, Value: value})
+	key, err := mongogateway.EncodePrimaryKey(bson.RawValue{Type: typ, Value: value})
 	if err != nil {
 		return nil, "", err
 	}
 	return key, id, nil
 }
 
-func directEncodePrimaryKey(value bson.RawValue) ([]byte, error) {
-	if value.IsZero() {
-		return nil, errors.New("direct TreeDB benchmark document _id is required")
+type directBenchmarkKeySet struct {
+	keys [][]byte
+	ids  []string
+}
+
+func buildDirectBenchmarkKeySet(documents int) (directBenchmarkKeySet, error) {
+	out := directBenchmarkKeySet{
+		keys: make([][]byte, documents),
+		ids:  make([]string, documents),
 	}
-	if value.Type == bson.TypeArray {
-		return nil, errors.New("direct TreeDB benchmark document _id cannot be an array")
+	for i := 0; i < documents; i++ {
+		key, id, err := directBenchmarkDocumentKey(i)
+		if err != nil {
+			return directBenchmarkKeySet{}, err
+		}
+		out.keys[i] = key
+		out.ids[i] = id
 	}
-	if err := value.Validate(); err != nil {
-		return nil, err
+	return out, nil
+}
+
+func (s directBenchmarkKeySet) at(ordinal int) ([]byte, string) {
+	if len(s.keys) == 0 {
+		return nil, ""
 	}
-	key := make([]byte, 0, 2+len(value.Value))
-	key = append(key, directPrimaryKeyPrefixBSONValue, byte(value.Type))
-	key = append(key, value.Value...)
-	return key, nil
+	ordinal %= len(s.keys)
+	if ordinal < 0 {
+		ordinal += len(s.keys)
+	}
+	return s.keys[ordinal], s.ids[ordinal]
 }
 
 func directNewStoredDocumentMaterializer(collection *collections.Collection) (*collections.StoredDocumentJSONMaterializer, error) {
@@ -1823,12 +1841,17 @@ func directStoredDocumentToBSON(collection *collections.Collection, materializer
 }
 
 func runDirectTreeDBLoadPhase(ctx context.Context, cfg config, collection *collections.Collection, prebuiltIDs [][]byte, prebuiltDocuments [][]byte) (phaseResult, error) {
+	producers := effectiveLoadProducers(cfg.Documents, cfg.BatchSize, cfg.InsertProducers)
+	scratch := make([]directTreeDBLoadScratch, producers)
+	for i := range scratch {
+		scratch[i].ids = make([][]byte, 0, cfg.BatchSize)
+		scratch[i].docs = make([][]byte, 0, cfg.BatchSize)
+	}
 	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
-		_ = producer
 		if err := batchCtx.Err(); err != nil {
 			return err
 		}
-		ids, docs, err := directTreeDBLoadBatch(start, end, cfg.TreeDBDocumentFormat, prebuiltIDs, prebuiltDocuments)
+		ids, docs, err := directTreeDBLoadBatch(producerScratch(scratch, producer), start, end, cfg.TreeDBDocumentFormat, prebuiltIDs, prebuiltDocuments)
 		if err != nil {
 			return err
 		}
@@ -1841,28 +1864,44 @@ func runDirectTreeDBLoadPhase(ctx context.Context, cfg config, collection *colle
 	})
 }
 
-func directTreeDBLoadBatch(start, end int, format collections.DocumentFormat, prebuiltIDs [][]byte, prebuiltDocuments [][]byte) ([][]byte, [][]byte, error) {
-	ids := make([][]byte, end-start)
-	docs := make([][]byte, end-start)
+type directTreeDBLoadScratch struct {
+	ids  [][]byte
+	docs [][]byte
+}
+
+func producerScratch(scratch []directTreeDBLoadScratch, producer int) *directTreeDBLoadScratch {
+	if producer < 0 || producer >= len(scratch) {
+		return &directTreeDBLoadScratch{}
+	}
+	return &scratch[producer]
+}
+
+func directTreeDBLoadBatch(scratch *directTreeDBLoadScratch, start, end int, format collections.DocumentFormat, prebuiltIDs [][]byte, prebuiltDocuments [][]byte) ([][]byte, [][]byte, error) {
+	if scratch == nil {
+		scratch = &directTreeDBLoadScratch{}
+	}
+	ids := scratch.ids[:0]
+	docs := scratch.docs[:0]
 	for i := start; i < end; i++ {
-		out := i - start
 		if prebuiltIDs != nil && prebuiltDocuments != nil {
-			ids[out] = prebuiltIDs[i]
-			docs[out] = prebuiltDocuments[i]
+			ids = append(ids, prebuiltIDs[i])
+			docs = append(docs, prebuiltDocuments[i])
 			continue
 		} else {
 			id, document, err := directTreeDBBenchmarkDocument(i, format)
 			if err != nil {
 				return nil, nil, err
 			}
-			ids[out] = id
-			docs[out] = document
+			ids = append(ids, id)
+			docs = append(docs, document)
 		}
 	}
+	scratch.ids = ids
+	scratch.docs = docs
 	return ids, docs, nil
 }
 
-func runDirectTreeDBIDFindPhase(ctx context.Context, cfg config, collection *collections.Collection) (phaseResult, error) {
+func runDirectTreeDBIDFindPhase(ctx context.Context, cfg config, collection *collections.Collection, keys directBenchmarkKeySet) (phaseResult, error) {
 	materializer, err := directNewStoredDocumentMaterializer(collection)
 	if err != nil {
 		return phaseResult{}, err
@@ -1873,10 +1912,7 @@ func runDirectTreeDBIDFindPhase(ctx context.Context, cfg config, collection *col
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			key, id, err := directBenchmarkDocumentKey(i % cfg.Documents)
-			if err != nil {
-				return err
-			}
+			key, id := keys.at(i % cfg.Documents)
 			begin := time.Now()
 			stored, err := collection.Get(key)
 			if err != nil {
@@ -2003,14 +2039,15 @@ func runDirectTreeDBRangeQuery(cfg config, collection *collections.Collection, m
 	return err
 }
 
-func runDirectTreeDBUpdatePhase(ctx context.Context, cfg config, collection *collections.Collection, updatedCityValues []string) (phaseResult, error) {
+func runDirectTreeDBUpdatePhase(ctx context.Context, cfg config, collection *collections.Collection, keys directBenchmarkKeySet, updatedCityValues []string) (phaseResult, error) {
 	return measurePhase("id_update_set", cfg.Updates, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.Updates; i++ {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			documentOrdinal := benchmarkDocumentOrdinal(i, 31, cfg.Documents)
-			if err := runDirectTreeDBUpdateOperation(collection, cfg, i, documentOrdinal, false, updatedCityValues, sample); err != nil {
+			key, id := keys.at(documentOrdinal)
+			if err := runDirectTreeDBUpdateOperation(collection, cfg, key, id, i, documentOrdinal, false, updatedCityValues, sample); err != nil {
 				return err
 			}
 		}
@@ -2018,15 +2055,12 @@ func runDirectTreeDBUpdatePhase(ctx context.Context, cfg config, collection *col
 	})
 }
 
-func runDirectTreeDBConcurrentIDFindPhase(ctx context.Context, cfg config, collection *collections.Collection, readers int, phaseName string) (phaseResult, error) {
+func runDirectTreeDBConcurrentIDFindPhase(ctx context.Context, cfg config, collection *collections.Collection, keys directBenchmarkKeySet, readers int, phaseName string) (phaseResult, error) {
 	materializers := newDirectTreeDBMaterializerPool(collection)
 	defer func() { _ = materializers.close() }()
 	return measurePhase(phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
 		return runConcurrentOperations(ctx, readers, cfg.ConcurrentReads, func(op int) error {
-			key, id, err := directBenchmarkDocumentKey(benchmarkDocumentOrdinal(op, 17, cfg.Documents))
-			if err != nil {
-				return err
-			}
+			key, id := keys.at(benchmarkDocumentOrdinal(op, 17, cfg.Documents))
 			materializer, err := materializers.get()
 			if err != nil {
 				return err
@@ -2051,11 +2085,12 @@ func runDirectTreeDBConcurrentIDFindPhase(ctx context.Context, cfg config, colle
 	})
 }
 
-func runDirectTreeDBConcurrentUpdatePhase(ctx context.Context, cfg config, collection *collections.Collection, phaseName string, updatedCityValues []string) (phaseResult, error) {
+func runDirectTreeDBConcurrentUpdatePhase(ctx context.Context, cfg config, collection *collections.Collection, keys directBenchmarkKeySet, phaseName string, updatedCityValues []string) (phaseResult, error) {
 	return measurePhase(phaseName, cfg.ConcurrentWrites, func(sample func(time.Duration)) error {
 		return runConcurrentOperations(ctx, cfg.ConcurrentWriters, cfg.ConcurrentWrites, func(op int) error {
 			documentOrdinal := benchmarkDocumentOrdinal(op, 37, cfg.Documents)
-			return runDirectTreeDBUpdateOperation(collection, cfg, op, documentOrdinal, true, updatedCityValues, sample)
+			key, id := keys.at(documentOrdinal)
+			return runDirectTreeDBUpdateOperation(collection, cfg, key, id, op, documentOrdinal, true, updatedCityValues, sample)
 		})
 	})
 }
@@ -2063,16 +2098,14 @@ func runDirectTreeDBConcurrentUpdatePhase(ctx context.Context, cfg config, colle
 func runDirectTreeDBUpdateOperation(
 	collection *collections.Collection,
 	cfg config,
+	key []byte,
+	id string,
 	operation int,
 	documentOrdinal int,
 	concurrent bool,
 	updatedCityValues []string,
 	sample func(time.Duration),
 ) error {
-	key, id, err := directBenchmarkDocumentKey(documentOrdinal)
-	if err != nil {
-		return err
-	}
 	updateRaw, err := bson.Marshal(benchmarkSetUpdate(benchmarkSetUpdateParams{
 		Operation:          operation,
 		DocumentOrdinal:    documentOrdinal,
@@ -2124,21 +2157,21 @@ func runDirectTreeDBUpdateOperation(
 	return nil
 }
 
-func runDirectTreeDBDeletePhase(ctx context.Context, cfg config, collection *collections.Collection) (phaseResult, error) {
+func runDirectTreeDBDeletePhase(ctx context.Context, cfg config, collection *collections.Collection, keys directBenchmarkKeySet) (phaseResult, error) {
 	return measurePhase("id_delete_one", cfg.Deletes, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.Deletes; i++ {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			key, _, err := directBenchmarkDocumentKey(cfg.Documents - 1 - i)
-			if err != nil {
-				return err
-			}
+			key, id := keys.at(cfg.Documents - 1 - i)
 			begin := time.Now()
-			err = collection.Delete(key)
+			deleted, err := collection.DeleteDocument(key)
 			sample(time.Since(begin))
 			if err != nil {
 				return err
+			}
+			if !deleted {
+				return fmt.Errorf("direct delete missed document %s", id)
 			}
 		}
 		return nil
@@ -2397,7 +2430,7 @@ func treedbCreateIndexDocs(secondaryIndexes int, rangeIndex bool) bson.A {
 }
 
 func recordEffectiveTreeDBCollectionOptions(result *benchmarkResult, cfg config, target *benchTarget) error {
-	if result == nil || cfg.Target != "treedb" || target == nil || target.collections == nil || cfg.SecondaryIndexes == 0 {
+	if result == nil || cfg.Target != "treedb" || target == nil || target.collections == nil || !cfgHasAnySecondaryIndex(cfg) {
 		return nil
 	}
 	col, err := target.collections.OpenCollection(cfg.Database + "." + cfg.Collection)
@@ -2411,6 +2444,10 @@ func recordEffectiveTreeDBCollectionOptions(result *benchmarkResult, cfg config,
 	result.TreeDBBufferedIndexedAsyncFlush = meta.Options.BufferedIndexedAsyncFlush
 	result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits = meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits
 	return nil
+}
+
+func cfgHasAnySecondaryIndex(cfg config) bool {
+	return cfg.SecondaryIndexes > 0 || cfg.RangeIndex
 }
 
 func runLoadPhase(ctx context.Context, cfg config, target *benchTarget, coll *mongo.Collection, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
