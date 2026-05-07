@@ -13,6 +13,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
 type Client struct {
@@ -226,17 +227,36 @@ func parseFindResponse(header wire.Header, body []byte) ([]bson.Raw, error) {
 	if !ok {
 		return nil, errors.New("find response missing cursor.firstBatch")
 	}
-	values, err := batch.Values()
-	if err != nil {
-		return nil, err
+	return rawDocumentsFromArray(batch)
+}
+
+func rawDocumentsFromArray(batch bson.RawArray) ([]bson.Raw, error) {
+	length, rem, ok := bsoncore.ReadLength(bsoncore.Array(batch))
+	if !ok || length < 5 || int(length) > len(batch) {
+		return nil, errors.New("malformed find cursor.firstBatch")
 	}
-	docs := make([]bson.Raw, 0, len(values))
-	for _, value := range values {
+	rem = rem[:int(length)-4]
+	if len(rem) == 0 || rem[len(rem)-1] != 0x00 {
+		return nil, errors.New("malformed find cursor.firstBatch")
+	}
+	rem = rem[:len(rem)-1]
+
+	docs := make([]bson.Raw, 0, 10)
+	for len(rem) > 0 {
+		elem, next, ok := bsoncore.ReadElement(rem)
+		if !ok {
+			return nil, errors.New("malformed find cursor.firstBatch")
+		}
+		value, err := elem.ValueErr()
+		if err != nil {
+			return nil, err
+		}
 		doc, ok := value.DocumentOK()
 		if !ok {
 			return nil, errors.New("find firstBatch entry is not a document")
 		}
 		docs = append(docs, bson.Raw(doc))
+		rem = next
 	}
 	return docs, nil
 }
