@@ -48,6 +48,12 @@ func TestRegistryValidatesRequestSections(t *testing.T) {
 	if _, err := registry.ValidateRequestSections(sections); codeOf(err) != ErrUnsupportedFeature {
 		t.Fatalf("critical unknown err=%v code=%d", err, codeOf(err))
 	}
+
+	sections = insertBatchSections()
+	sections[1].Flags = 2
+	if _, err := registry.ValidateRequestSections(sections); codeOf(err) != ErrUnsupportedFeature {
+		t.Fatalf("unknown section flag err=%v code=%d", err, codeOf(err))
+	}
 }
 
 func TestRegistryRejectsInvalidCommandShape(t *testing.T) {

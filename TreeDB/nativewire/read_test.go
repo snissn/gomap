@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
@@ -85,6 +86,62 @@ func TestReadCommandsParity(t *testing.T) {
 	}
 	if rangeTruncated || len(rangeIDs) != 2 {
 		t.Fatalf("range ids=%q truncated=%v", rangeIDs, rangeTruncated)
+	}
+}
+
+func TestIndexLookupWithoutLimitsReturnsAllMatches(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	ids, truncated, err := client.IndexLookup(ctx, "users", "city", "hnl", CursorLimits{})
+	if err != nil {
+		t.Fatalf("IndexLookup: %v", err)
+	}
+	if truncated || len(ids) != 2 {
+		t.Fatalf("ids=%q truncated=%v want two untruncated matches", ids, truncated)
+	}
+}
+
+func TestIndexRangeOmittedBoundsAreUnbounded(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	ids, truncated, err := client.IndexRange(ctx, "users", "city", IndexRange{
+		LowerUnbounded: true,
+		UpperUnbounded: true,
+		Limit:          10,
+	})
+	if err != nil {
+		t.Fatalf("IndexRange: %v", err)
+	}
+	if truncated || len(ids) != 2 {
+		t.Fatalf("ids=%q truncated=%v want full unbounded range", ids, truncated)
+	}
+}
+
+func TestOpenScanReportsTruncatedRetainedWindow(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	server := NewServer(ServerOptions{Collections: mgr, Backend: db, MaxScanDocuments: 1})
+	client, _ := servePipe(t, server)
+	t.Cleanup(func() { _ = db.Close() })
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	first, err := client.OpenScan(ctx, "users", CursorLimits{MaxItems: 10})
+	if err != nil {
+		t.Fatalf("OpenScan: %v", err)
+	}
+	if len(first.IDs) != 1 || first.Cursor.CursorID != 0 || first.Cursor.HasMore || !first.Truncated {
+		t.Fatalf("first=%+v want one truncated terminal batch", first)
 	}
 }
 

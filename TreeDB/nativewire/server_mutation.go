@@ -27,6 +27,9 @@ func (s *Server) handleInsertBatch(state *connState, sections []iwire.Section) (
 	if err != nil {
 		return nil, err
 	}
+	if err := s.admitMutationAck(ack); err != nil {
+		return nil, err
+	}
 	collection, err := s.collections.OpenCollection(name)
 	if err != nil {
 		return nil, metadataWrap(err)
@@ -67,6 +70,9 @@ func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) 
 	}
 	ack, err := ackPolicyFromSections(sections, s.defaultAckPolicy)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.admitMutationAck(ack); err != nil {
 		return nil, err
 	}
 	collection, err := s.collections.OpenCollection(name)
@@ -110,6 +116,9 @@ func (s *Server) handleDeleteBatch(state *connState, sections []iwire.Section) (
 	}
 	ack, err := ackPolicyFromSections(sections, s.defaultAckPolicy)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.admitMutationAck(ack); err != nil {
 		return nil, err
 	}
 	collection, err := s.collections.OpenCollection(name)
@@ -168,6 +177,22 @@ func (s *Server) handleCheckpoint() ([]iwire.Section, error) {
 		return nil, metadataWrap(err)
 	}
 	return []iwire.Section{ackMeta(iwire.AckSynced)}, nil
+}
+
+func (s *Server) admitMutationAck(requested iwire.AckPolicy) error {
+	switch requested {
+	case 0, iwire.AckVisible, iwire.AckFlushed:
+		return nil
+	case iwire.AckSynced:
+		if s.backend == nil {
+			return protocolError(iwire.ErrDurabilityUnavailable, "synced ack requires a backend DB")
+		}
+		return nil
+	case iwire.AckRaftCommitted:
+		return protocolError(iwire.ErrDurabilityUnavailable, "raft_committed ack is unavailable in single-node nativewire R1")
+	default:
+		return protocolError(iwire.ErrInvalidCommand, "unsupported ack policy %d", requested)
+	}
 }
 
 func (s *Server) satisfyAck(collection interface{ Flush() error }, requested iwire.AckPolicy) (iwire.AckPolicy, error) {

@@ -2,6 +2,7 @@ package nativewire
 
 import (
 	"context"
+	"encoding/binary"
 	"testing"
 	"time"
 
@@ -118,6 +119,33 @@ func TestMetadataHandleRefWorksForListIndexes(t *testing.T) {
 	}
 }
 
+func TestDecodeCollectionMetaRejectsOversizedIndexCount(t *testing.T) {
+	payload := testCollectionMetaPayload(0, 0, 0, maxCollectionMetaIndexDefinitions+1)
+	if _, err := decodeCollectionMeta(payload); nativeCodeOf(err) != iwire.ErrResourceExhausted {
+		t.Fatalf("decodeCollectionMeta err=%v code=%d want resource exhausted", err, nativeCodeOf(err))
+	}
+}
+
+func TestDecodeCollectionMetaRejectsUnknownEnums(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		docFormat   uint64
+		dataPolicy  uint64
+		indexPolicy uint64
+	}{
+		{name: "document_format", docFormat: 99},
+		{name: "data_root_storage", dataPolicy: 99},
+		{name: "index_state_root_storage", indexPolicy: 99},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := testCollectionMetaPayload(tc.docFormat, tc.dataPolicy, tc.indexPolicy, 0)
+			if _, err := decodeCollectionMeta(payload); nativeCodeOf(err) != iwire.ErrInvalidCommand {
+				t.Fatalf("decodeCollectionMeta err=%v code=%d want invalid command", err, nativeCodeOf(err))
+			}
+		})
+	}
+}
+
 func TestDropCollectionReserved(t *testing.T) {
 	client, _, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -126,6 +154,29 @@ func TestDropCollectionReserved(t *testing.T) {
 	if !isRemoteError(err, iwire.ErrUnsupportedFeature) {
 		t.Fatalf("drop_collection error=%v want unsupported feature", err)
 	}
+}
+
+func testCollectionMetaPayload(docFormat, dataPolicy, indexStatePolicy, indexCount uint64) []byte {
+	dst := binary.AppendUvarint(nil, 1)
+	dst = appendString(dst, "users")
+	dst = binary.AppendUvarint(dst, docFormat)
+	dst = binary.AppendUvarint(dst, dataPolicy)
+	dst = binary.AppendUvarint(dst, indexStatePolicy)
+	dst = appendBool(dst, false)
+	dst = appendBool(dst, false)
+	dst = appendBool(dst, false)
+	dst = binary.AppendVarint(dst, 0)
+	dst = binary.AppendVarint(dst, 0)
+	dst = binary.AppendVarint(dst, 0)
+	dst = appendBool(dst, false)
+	dst = appendBool(dst, false)
+	dst = binary.AppendVarint(dst, 0)
+	return binary.AppendUvarint(dst, indexCount)
+}
+
+func nativeCodeOf(err error) iwire.ErrorCode {
+	code, _ := iwire.ErrorCodeOf(err)
+	return code
 }
 
 func mustCommandBody(t *testing.T, commandID iwire.CommandID, sections ...iwire.Section) []byte {
