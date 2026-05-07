@@ -165,13 +165,14 @@ func (s *Server) findMsgResponseInto(dst []byte, command wire.Document, requestI
 	if err != nil {
 		return nil, err
 	}
+	base := len(dst)
 	msg, err := payload.marshalMsgInto(dst, requestID, responseTo)
 	if err != nil && payload.indexedRange != nil {
 		doc, docErr := commandError(commandCodeBadValue, "BadValue", err.Error())
 		if docErr != nil {
 			return nil, docErr
 		}
-		return wire.AppendMsgMessage(dst[:0], requestID, responseTo, 0, doc)
+		return wire.AppendMsgMessage(dst[:base], requestID, responseTo, 0, doc)
 	}
 	return msg, err
 }
