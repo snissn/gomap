@@ -11680,8 +11680,10 @@ func TestCollectionFindByIndexRangeTypedInt64(t *testing.T) {
 
 func requireJSONFieldValue(t *testing.T, document []byte, field string, want any) {
 	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(document))
+	decoder.UseNumber()
 	var decoded map[string]any
-	if err := json.Unmarshal(document, &decoded); err != nil {
+	if err := decoder.Decode(&decoded); err != nil {
 		t.Fatalf("decode document %s: %v", document, err)
 	}
 	got, ok := decoded[field]
@@ -11695,8 +11697,12 @@ func requireJSONFieldValue(t *testing.T, document []byte, field string, want any
 			t.Fatalf("document %s field %q=%v want %q", document, field, got, want)
 		}
 	case int64:
-		gotFloat, ok := got.(float64)
-		if !ok || int64(gotFloat) != want || gotFloat != float64(want) {
+		gotNumber, ok := got.(json.Number)
+		if !ok {
+			t.Fatalf("document %s field %q=%v want JSON number %d", document, field, got, want)
+		}
+		gotInt, err := gotNumber.Int64()
+		if err != nil || gotInt != want {
 			t.Fatalf("document %s field %q=%v want %d", document, field, got, want)
 		}
 	default:
