@@ -228,8 +228,10 @@ Coverage:
 - `TreeDB/internal/nativewire/fuzz_test.go`:
   - fuzz targets for frame-header, section-envelope, byte-vector decoding, and
     command-schema validation.
+- `TreeDB/internal/nativewire/deterministic_test.go`:
+  - deterministic-entry golden fixture and transport-field independence,
+  - deterministic-entry rejection for missing distributed guards.
 
 The native-wire server does not exist yet. R0 follow-up work must add
-deterministic-entry coverage, broader negative conformance fixtures, drift
-tests, and direct collection parity tests before claiming native-wire v1 server
-support.
+broader negative conformance fixtures, drift tests, and direct collection parity
+tests before claiming native-wire v1 server support.
