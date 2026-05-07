@@ -583,10 +583,13 @@ func TestParseConfigValidation(t *testing.T) {
 		"-format", "json",
 		"-concurrent-readers", "4",
 		"-concurrent-reads", "20",
+		"-concurrent-range-readers", "3",
+		"-concurrent-range-reads", "18",
 		"-concurrent-writers", "2",
 		"-concurrent-writes", "10",
 		"-update-indexed-field",
 		"-range-index",
+		"-treedb-read-state", "unsettled",
 	})
 	if err != nil {
 		t.Fatalf("parse valid config: %v", err)
@@ -595,8 +598,10 @@ func TestParseConfigValidation(t *testing.T) {
 		cfg.ClientMode != clientModeDriver ||
 		cfg.BatchSize != 5 || cfg.InsertProducers != 4 ||
 		cfg.MongoMaxPoolSize != 32 || cfg.MongoMinPoolSize != 8 || cfg.MongoMaxConnecting != 16 ||
-		cfg.ConcurrentReaders != 4 || cfg.ConcurrentReads != 20 || cfg.ConcurrentWriters != 2 || cfg.ConcurrentWrites != 10 ||
-		!cfg.UpdateIndexedField || !cfg.RangeIndex {
+		cfg.ConcurrentReaders != 4 || cfg.ConcurrentReads != 20 ||
+		cfg.ConcurrentRangeReaders != 3 || cfg.ConcurrentRangeReads != 18 ||
+		cfg.ConcurrentWriters != 2 || cfg.ConcurrentWrites != 10 ||
+		!cfg.UpdateIndexedField || !cfg.RangeIndex || cfg.TreeDBReadState != treeDBReadStateUnsettled {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 	sweepCfg, err := parseConfig([]string{
@@ -608,6 +613,16 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(sweepCfg.ConcurrentReaderSweep, []int{1, 2, 4}) || sweepCfg.ConcurrentReads != 30 {
 		t.Fatalf("unexpected concurrent reader sweep config: %+v", sweepCfg)
+	}
+	rangeSweepCfg, err := parseConfig([]string{
+		"-concurrent-range-reader-sweep", "1,2 4",
+		"-concurrent-range-reads", "30",
+	})
+	if err != nil {
+		t.Fatalf("parse concurrent range reader sweep config: %v", err)
+	}
+	if !reflect.DeepEqual(rangeSweepCfg.ConcurrentRangeReaderSweep, []int{1, 2, 4}) || rangeSweepCfg.ConcurrentRangeReads != 30 {
+		t.Fatalf("unexpected concurrent range reader sweep config: %+v", rangeSweepCfg)
 	}
 	rawWireCfg, err := parseConfig([]string{"-target", "treedb", "-client-mode", "raw-wire"})
 	if err != nil {
@@ -708,6 +723,37 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 	if _, err := parseConfig([]string{"-concurrent-reader-sweep", "1,1", "-concurrent-reads", "10"}); err == nil {
 		t.Fatal("duplicate concurrent-reader-sweep value accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-range-readers", "-1"}); err == nil {
+		t.Fatal("negative concurrent-range-readers accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-range-readers", "1"}); err == nil {
+		t.Fatal("concurrent-range-readers without concurrent-range-reads accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-range-reads", "1"}); err == nil {
+		t.Fatal("concurrent-range-reads without concurrent-range-readers accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-range-reader-sweep", "1,2"}); err == nil {
+		t.Fatal("concurrent-range-reader-sweep without concurrent-range-reads accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-range-reader-sweep", "1,2", "-concurrent-range-reads", "10", "-concurrent-range-readers", "2"}); err == nil {
+		t.Fatal("concurrent-range-reader-sweep combined with concurrent-range-readers accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-range-reader-sweep", "1,0", "-concurrent-range-reads", "10"}); err == nil {
+		t.Fatal("invalid concurrent-range-reader-sweep accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-range-reader-sweep", "1,1", "-concurrent-range-reads", "10"}); err == nil {
+		t.Fatal("duplicate concurrent-range-reader-sweep value accepted")
+	}
+	if _, err := parseConfig([]string{"-treedb-read-state", "bad"}); err == nil {
+		t.Fatal("bad treedb-read-state accepted")
+	}
+	legacyFlushedCfg, err := parseConfig([]string{"-treedb-read-state", "flushed"})
+	if err != nil {
+		t.Fatalf("legacy flushed treedb-read-state rejected: %v", err)
+	}
+	if legacyFlushedCfg.TreeDBReadState != treeDBReadStateSettled {
+		t.Fatalf("legacy flushed read state normalized to %q want %q", legacyFlushedCfg.TreeDBReadState, treeDBReadStateSettled)
 	}
 	if _, err := parseConfig([]string{"-insert-producers", "0"}); err == nil {
 		t.Fatal("zero insert-producers accepted")
@@ -1252,6 +1298,65 @@ func TestTreeDBClientModeSmoke(t *testing.T) {
 	}
 }
 
+func TestTreeDBDriverCommandRawRangePhaseSmoke(t *testing.T) {
+	if testing.Short() {
+		t.Skip("driver-command-raw range smoke skipped in short mode")
+	}
+	cfg, err := parseConfig([]string{
+		"-target", "treedb",
+		"-client-mode", clientModeDriverCommandRaw,
+		"-documents", "96",
+		"-batch-size", "24",
+		"-reads", "0",
+		"-range-reads", "8",
+		"-updates", "0",
+		"-secondary-indexes", "2",
+		"-range-index",
+		"-concurrent-range-reader-sweep", "1,2",
+		"-concurrent-range-reads", "8",
+		"-treedb-document-format", string(collections.DocumentFormatBSON),
+		"-treedb-maintenance", treeDBMaintenanceNone,
+		"-prebuild-documents",
+		"-timeout", "0",
+		"-format", "json",
+	})
+	if err != nil {
+		t.Fatalf("parse driver-command-raw range config: %v", err)
+	}
+	target, err := openTarget(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("open target: %v", err)
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := closeBenchTarget(cleanupCtx, target); err != nil {
+			t.Errorf("cleanup target: %v", err)
+		}
+	}()
+	result, err := runBenchmark(context.Background(), cfg, target, nil)
+	if err != nil {
+		t.Fatalf("run benchmark: %v", err)
+	}
+	phases := make(map[string]phaseResult, len(result.Phases))
+	for _, phase := range result.Phases {
+		phases[phase.Name] = phase
+	}
+	for _, name := range []string{
+		"age_range_indexed_limit_10",
+		"concurrent_age_range_indexed_limit_10_r1",
+		"concurrent_age_range_indexed_limit_10_r2",
+	} {
+		phase, ok := phases[name]
+		if !ok {
+			t.Fatalf("phase %q missing from result: %+v", name, result.Phases)
+		}
+		if phase.SampledNsPerOp <= 0 || phase.OpsPerSecond <= 0 {
+			t.Fatalf("phase %q metrics missing: %+v", name, phase)
+		}
+	}
+}
+
 func TestTreeDBDirectBenchmarkSmoke(t *testing.T) {
 	if testing.Short() {
 		t.Skip("direct benchmark smoke skipped in short mode")
@@ -1277,6 +1382,8 @@ func TestTreeDBDirectBenchmarkSmoke(t *testing.T) {
 				"-range-index",
 				"-concurrent-reader-sweep", "1,2",
 				"-concurrent-reads", "12",
+				"-concurrent-range-reader-sweep", "1,2",
+				"-concurrent-range-reads", "10",
 				"-concurrent-writers", "2",
 				"-concurrent-writes", "8",
 				"-update-indexed-field",
@@ -1318,6 +1425,8 @@ func TestTreeDBDirectBenchmarkSmoke(t *testing.T) {
 				"id_find_one",
 				"email_find_one",
 				"age_range_indexed_limit_10",
+				"concurrent_age_range_indexed_limit_10_r1",
+				"concurrent_age_range_indexed_limit_10_r2",
 				"id_update_set",
 				"concurrent_id_find_one_r1",
 				"concurrent_id_find_one_r2",
@@ -2022,6 +2131,9 @@ func TestRangePhaseNameDistinguishesScanAndIndexedRuns(t *testing.T) {
 	}
 	if got := rangePhaseName(config{RangeIndex: true}); got != "age_range_indexed_limit_10" {
 		t.Fatalf("indexed range phase name=%q want indexed", got)
+	}
+	if got := concurrentRangePhaseName(config{RangeIndex: true}, 16); got != "concurrent_age_range_indexed_limit_10_r16" {
+		t.Fatalf("concurrent indexed range phase name=%q", got)
 	}
 }
 

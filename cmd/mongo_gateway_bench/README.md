@@ -52,16 +52,19 @@ driver's `InsertMany` `_id` discovery and `InsertedIDs` bookkeeping. It is usefu
 for isolating driver CRUD-helper overhead and works against both TreeDB and
 MongoDB targets. `-client-mode driver-command-raw` also uses `RunCommand`, but
 passes a prebuilt raw BSON insert command to reduce driver-side command encoding
-when `-prebuild-documents` is enabled. `-client-mode driver-unack` uses official-driver
+when `-prebuild-documents` is enabled; its age range-read phase also uses a raw
+`find` command and parses `cursor.firstBatch` as raw BSON instead of decoding
+documents into `bson.M`. `-client-mode driver-unack` uses official-driver
 `InsertMany` with unacknowledged write concern; its sampled load metric is
 client enqueue cost, while the phase waits for the final inserted `_id` to
 become visible before reporting wall ops/sec. `-client-mode raw-wire` is
 TreeDB-only and calls the in-process gateway directly with raw OP_MSG document
 sequences. `-client-mode raw-wire-tcp` sends the same raw OP_MSG traffic over
 the gateway's loopback listener, isolating TreeDB gateway network/wire-server
-cost from Mongo Go driver cost. Raw-wire modes use raw OP_MSG
-document sequences for the insert load phase while keeping setup and later
-read/update phases on the driver. `-client-mode direct` is a TreeDB-only path
+cost from Mongo Go driver cost. Raw-wire modes use raw OP_MSG document
+sequences for the insert load phase and raw OP_MSG `find` requests for the age
+range-read phase while keeping setup and non-range phases on the driver.
+`-client-mode direct` is a TreeDB-only path
 that calls `collections.Collection` directly for the same phase names, using the
 selected `-treedb-document-format` (`json`, `template-v1`/`collections-v1`, or
 `bson`) while bypassing the MongoDB Go driver, loopback sockets, and Mongo gateway
@@ -279,6 +282,8 @@ Useful overrides:
   TreeDB cell and retain per-phase profiles under the bundle's `profiles/`
   directory.
 - `CONCURRENT_READERS=16`, `CONCURRENT_READS=50000`
+- `CONCURRENT_RANGE_READER_SWEEP="1,2,4,8,16"`,
+  `CONCURRENT_RANGE_READS=5000`
 - `CONCURRENT_WRITERS=8`, `CONCURRENT_WRITES=10000`
 - `BATCH_SIZE=1000`
 - `MONGO_IMAGE=mongo:8`
@@ -297,6 +302,8 @@ BATCH_SIZE=5000 scripts/mongo_gateway_compare.sh \
   --updates 5000 \
   --concurrent-reader-sweep "1,2,4,8,16" \
   --concurrent-reads 50000 \
+  --concurrent-range-reader-sweep "1,2,4,8,16" \
+  --concurrent-range-reads 5000 \
   --concurrent-writers 8 \
   --concurrent-writes 10000 \
   --timeout 120m
@@ -357,6 +364,12 @@ The initial workload phases are:
 - `age_range_scan_limit_10` / `age_range_indexed_limit_10`: bounded range query
   with `limit: 10`; operations count range queries, not returned documents. The
   indexed variant is emitted when `-range-index` creates `age_1`.
+- `concurrent_age_range_scan_limit_10_rN` /
+  `concurrent_age_range_indexed_limit_10_rN`: total age range queries split
+  across `N` goroutines. Use `-concurrent-range-reader-sweep 1,2,4,8,16` with
+  `-concurrent-range-reads` to emit multiple range-reader fanout phases from one
+  loaded database. The legacy `-concurrent-range-readers N` flag emits one
+  fanout phase and cannot be combined with `-concurrent-range-reader-sweep`.
 - `id_update_set`: `$set` update by `_id`.
 - `concurrent_id_find_one_rN`: total `_id` point reads split across `N`
   goroutines. Use `-concurrent-reader-sweep 1,2,4,8,16` with
@@ -617,6 +630,13 @@ adds `active_1`. The age range phase is a bounded scan unless `-range-index` is
 set; benchmark output names the phase `age_range_scan_limit_10` or
 `age_range_indexed_limit_10` so reports can separate fallback cost from indexed
 range-search cost.
+
+For TreeDB targets, `-treedb-read-state settled` (the default) calls
+`CollectionManager.FlushAll` after load and before read phases, so reads measure
+settled collection roots rather than mutable write-domain state. Use
+`-treedb-read-state unsettled` to leave post-load memtables/write-domain state in
+place for read phases when you want to compare settled and unsettled visibility
+costs.
 
 For TreeDB, prefer `treedb_disk_after_maintenance.total_bytes` when present, and
 use `treedb_disk_after_checkpoint.total_bytes` for checkpoint-only runs. The
