@@ -482,7 +482,7 @@ func TestCachedRewriteLeafRefs_RemainReopenableAfterLaterCheckpoint(t *testing.T
 	if hits := countLeafRefHits(postPackCounts, sourceIDs); hits != 0 {
 		t.Fatalf("pack+gc left %d leafrefs on packed source files", hits)
 	}
-	if gcStats.GenerationsDeleted == 0 && gcStats.BytesDeleted == 0 {
+	if gcStats.GenerationsDeleted == 0 && gcStats.BytesDeleted == 0 && gcStats.GenerationsRetiring == 0 {
 		t.Fatalf("expected leaf generation gc to delete or at least tombstone packed generations, got %+v", gcStats)
 	}
 
