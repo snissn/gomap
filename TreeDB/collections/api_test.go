@@ -12087,6 +12087,81 @@ func TestCollectionFindDocumentsByIndexRangeUniqueExactBufferedTombstone(t *test
 	requireJSONFieldValue(t, records[0].Document, "email", "grace@example.com")
 }
 
+func TestCollectionFindDocumentsByIndexRangeExactBufferedTombstoneAfterLimit(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{[]byte(`{"email":"ada@example.com","name":"stale"}`)},
+	); err != nil {
+		t.Fatalf("insert persisted row: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush persisted row: %v", err)
+	}
+
+	email, err := encodeIndexScalar(IndexValueString, "ada@example.com")
+	if err != nil {
+		t.Fatalf("encode email: %v", err)
+	}
+	primaryTable := newCollectionRunTable(1)
+	setCollectionRunValue(primaryTable, []byte("u0"), []byte(`{"email":"ada@example.com","name":"live"}`))
+	primaryTable.Freeze()
+	defer resetCollectionRunTable(primaryTable)
+
+	emailTable := newCollectionRunTable(2)
+	if _, err := setCollectionSecondaryIndexEntry(emailTable, email, []byte("u0")); err != nil {
+		t.Fatalf("set live email index entry: %v", err)
+	}
+	if _, err := deleteCollectionSecondaryIndexEntry(emailTable, email, []byte("u2")); err != nil {
+		t.Fatalf("delete stale email index entry: %v", err)
+	}
+	emailTable.Freeze()
+	defer resetCollectionRunTable(emailTable)
+
+	domain := col.writeDomain
+	domain.mu.Lock()
+	domain.count = 1
+	domain.meta = col.Meta()
+	domain.rootRuns = map[string][]memtable.Table{
+		collectionPrimaryRootName("users"):            {primaryTable},
+		collectionSecondaryRootName("users", "email"): {emailTable},
+	}
+	domain.rootRunCount = 2
+	domain.mu.Unlock()
+
+	records, truncated, err := col.FindDocumentsByIndexRange("email", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: "ada@example.com", Inclusive: true},
+		Upper: IndexRangeBound{Value: "ada@example.com", Inclusive: true},
+		Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("find exact email range: %v", err)
+	}
+	if truncated || len(records) != 1 || !bytes.Equal(records[0].ID, []byte("u0")) {
+		t.Fatalf("records=%+v truncated=%v want u0 false", records, truncated)
+	}
+	requireJSONFieldValue(t, records[0].Document, "name", "live")
+}
+
 func TestCollectionFindByIndexRangeMergesBufferedUpdates(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
