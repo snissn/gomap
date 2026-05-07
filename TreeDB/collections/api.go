@@ -11556,14 +11556,46 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 		defer func() { _ = persistedIt.Close() }()
 	}
 	primaryRootName := collectionPrimaryRootName(catalog.meta.Name)
+	var primaryReader backenddb.SnapshotRootReader
+	primaryReaderOK := false
+	primaryRootMissing := false
+	if len(catalog.overlayRootIDs(primaryRootName)) == 0 {
+		primaryRootID := catalog.rootID(primaryRootName)
+		if primaryRootID == 0 {
+			primaryRootMissing = true
+		} else {
+			primaryReader, err = snap.ReaderAtRoot(primaryRootID)
+			if errors.Is(err, tree.ErrKeyNotFound) {
+				primaryRootMissing = true
+			} else if err != nil {
+				return false, true, err
+			} else {
+				primaryReaderOK = true
+			}
+		}
+	}
 	var scratch []byte
 	truncated, err := scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt, idx.ValueType, opts.Limit, func(id []byte) (bool, error) {
 		value, buffered, found := c.getBufferedDocumentInto(id, scratch[:0])
 		if !buffered {
-			var err error
-			value, found, err = collectionGetAppendAtCatalogRoot(snap, catalog, primaryRootName, id, scratch[:0])
-			if err != nil {
-				return false, err
+			if primaryReaderOK {
+				var err error
+				value, err = primaryReader.GetAppend(id, scratch[:0])
+				if errors.Is(err, tree.ErrKeyNotFound) {
+					found = false
+				} else if err != nil {
+					return false, err
+				} else {
+					found = true
+				}
+			} else if primaryRootMissing {
+				found = false
+			} else {
+				var err error
+				value, found, err = collectionGetAppendAtCatalogRoot(snap, catalog, primaryRootName, id, scratch[:0])
+				if err != nil {
+					return false, err
+				}
 			}
 		}
 		if !found {
