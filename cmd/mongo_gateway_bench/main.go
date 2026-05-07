@@ -2039,6 +2039,8 @@ func nativeWireBenchmarkIndexes(cfg config) []collections.IndexDefinition {
 }
 
 func validateNativeWireBenchmarkCollection(actual, expected collections.CollectionMeta) error {
+	actual = normalizeNativeWireBenchmarkCollectionMeta(actual)
+	expected = normalizeNativeWireBenchmarkCollectionMeta(expected)
 	if actual.Options != expected.Options {
 		return fmt.Errorf("native-wire benchmark collection %q options drifted: got %+v want %+v", actual.Name, actual.Options, expected.Options)
 	}
@@ -2063,6 +2065,45 @@ func validateNativeWireBenchmarkCollection(actual, expected collections.Collecti
 
 func nativeWireBenchmarkIndexSortKey(index collections.IndexDefinition) string {
 	return fmt.Sprintf("%s\x00%s\x00%s\x00%t\x00%t\x00%s", index.Name, index.Field, index.ValueType, index.Unique, index.MultiKey, index.StoragePolicy)
+}
+
+func normalizeNativeWireBenchmarkCollectionMeta(meta collections.CollectionMeta) collections.CollectionMeta {
+	meta.Indexes = append([]collections.IndexDefinition(nil), meta.Indexes...)
+	sort.SliceStable(meta.Indexes, func(i, j int) bool {
+		return meta.Indexes[i].Name < meta.Indexes[j].Name
+	})
+	if meta.Options.DisableIndexedWriteMemtables {
+		meta.Options.BufferedIndexedWrites = false
+		meta.Options.BufferedIndexedWriteMaxDocuments = 0
+		meta.Options.BufferedIndexedWriteMaxBytes = 0
+		meta.Options.BufferedIndexedWriteMaxRootRuns = 0
+		meta.Options.BufferedIndexedAsyncFlush = false
+		meta.Options.BufferedIndexedOverlayRoots = false
+		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
+		return meta
+	}
+	if len(meta.Indexes) == 0 {
+		meta.Options.BufferedIndexedWrites = false
+		return meta
+	}
+	meta.Options.BufferedIndexedWrites = true
+	defaultMaxDocuments := collections.DefaultIndexedWriteMemtableMaxDocuments
+	defaultMaxRootRuns := collections.DefaultIndexedWriteMemtableMaxRootRuns
+	if meta.Options.BufferedIndexedAsyncFlush {
+		defaultMaxDocuments = collections.DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
+		defaultMaxRootRuns = collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns
+	}
+	useNativeDocumentDefault := meta.Options.BufferedIndexedWriteMaxDocuments == 0
+	if useNativeDocumentDefault {
+		meta.Options.BufferedIndexedWriteMaxDocuments = defaultMaxDocuments
+	}
+	if useNativeDocumentDefault && meta.Options.BufferedIndexedWriteMaxBytes == 0 && meta.Options.BufferedIndexedWriteMaxRootRuns == 0 {
+		meta.Options.BufferedIndexedWriteMaxRootRuns = defaultMaxRootRuns
+	}
+	if meta.Options.BufferedIndexedAsyncFlush && meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits == 0 {
+		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = collections.DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits
+	}
+	return meta
 }
 
 func nativeWireInsertBatch(cfg config, start, end int, prebuilt []bson.D, prebuiltRaw []bson.Raw) ([][]byte, [][]byte, error) {
