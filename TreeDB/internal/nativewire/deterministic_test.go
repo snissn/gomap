@@ -133,24 +133,21 @@ func TestDecodeDeterministicEntryRejectsMalformedEnvelope(t *testing.T) {
 	sectionCountLimit = appendUvarint(sectionCountLimit, 0)
 	sectionCountLimit = appendUvarint(sectionCountLimit, 2)
 	for _, tc := range []struct {
-		name string
-		raw  []byte
-		code ErrorCode
+		name   string
+		raw    []byte
+		limits Limits
+		code   ErrorCode
 	}{
 		{name: "bad_magic", raw: []byte("bad"), code: ErrMalformedFrame},
 		{name: "unsupported_version", raw: unsupportedVersion, code: ErrUnsupportedVersion},
 		{name: "unsupported_flags", raw: entryWithFlags, code: ErrUnsupportedFeature},
 		{name: "trailing", raw: append(append([]byte(nil), entry...), 0), code: ErrMalformedFrame},
 		{name: "truncated_section", raw: append([]byte(nil), entry[:len(entry)-1]...), code: ErrMalformedFrame},
-		{name: "section_count_limit", raw: sectionCountLimit, code: ErrResourceExhausted},
+		{name: "section_count_limit", raw: sectionCountLimit, limits: Limits{MaxSections: 1}, code: ErrResourceExhausted},
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			limits := Limits{}
-			if tc.name == "section_count_limit" {
-				limits.MaxSections = 1
-			}
-			if _, err := DecodeDeterministicEntry(tc.raw, limits); codeOf(err) != tc.code {
+			if _, err := DecodeDeterministicEntry(tc.raw, tc.limits); codeOf(err) != tc.code {
 				t.Fatalf("DecodeDeterministicEntry err=%v code=%d want %d", err, codeOf(err), tc.code)
 			}
 		})
@@ -471,7 +468,7 @@ func deterministicEntryTestRaw(commandID CommandID, sections ...Section) []byte 
 }
 
 func deterministicEntrySectionsOnly(sections []Section) []Section {
-	out := sections[:0]
+	out := make([]Section, 0, len(sections))
 	for _, section := range sections {
 		if section.ID != SectionCommandHeader {
 			out = append(out, section)
