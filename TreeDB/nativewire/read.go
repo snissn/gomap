@@ -299,14 +299,13 @@ func (s *Server) reapExpiredCursors() {
 	}
 	now := time.Now()
 	interval := cursorReapInterval(s.cursorIdleTimeout)
-	next := s.nextCursorReapUnixNano.Load()
-	nowUnix := now.UnixNano()
-	if next > nowUnix {
+	s.cursorReapMu.Lock()
+	if !s.nextCursorReap.IsZero() && now.Before(s.nextCursorReap) {
+		s.cursorReapMu.Unlock()
 		return
 	}
-	if !s.nextCursorReapUnixNano.CompareAndSwap(next, now.Add(interval).UnixNano()) {
-		return
-	}
+	s.nextCursorReap = now.Add(interval)
+	s.cursorReapMu.Unlock()
 	s.cursorMu.Lock()
 	expired := 0
 	for id, cursor := range s.cursors {
