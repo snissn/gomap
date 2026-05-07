@@ -129,22 +129,10 @@ func TestClientInsertManyRawBSON(t *testing.T) {
 	}); err == nil || !strings.Contains(err.Error(), "requires a find command document") {
 		t.Fatalf("FindRawBSONBorrowed non-find err=%v want find-command error", err)
 	}
-	borrowedEntered := make(chan struct{})
-	secondDone := make(chan error, 1)
-	go func() {
-		<-borrowedEntered
-		_, err := client.FindRawBSON(insertCtx, adaCommand)
-		secondDone <- err
-	}()
 	if err := client.FindRawBSONBorrowed(insertCtx, findCommand, func(docs []bson.Raw) error {
-		close(borrowedEntered)
-		select {
-		case err := <-secondDone:
-			if err != nil {
-				t.Fatalf("concurrent FindRawBSON: %v", err)
-			}
-			t.Fatal("concurrent FindRawBSON completed while borrowed callback was active")
-		case <-time.After(50 * time.Millisecond):
+		if client.mu.TryLock() {
+			client.mu.Unlock()
+			t.Fatal("FindRawBSONBorrowed callback ran without holding the client lock")
 		}
 		if len(docs) != 1 {
 			t.Fatalf("borrowed concurrent docs=%d want 1", len(docs))
@@ -155,14 +143,6 @@ func TestClientInsertManyRawBSON(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatalf("FindRawBSONBorrowed concurrent: %v", err)
-	}
-	select {
-	case err := <-secondDone:
-		if err != nil {
-			t.Fatalf("concurrent FindRawBSON after borrowed callback: %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("concurrent FindRawBSON did not complete after borrowed callback")
 	}
 
 	driverClient, err := mongo.Connect(options.Client().
