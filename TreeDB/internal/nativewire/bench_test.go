@@ -11,6 +11,8 @@ var (
 	benchSectionsSink  []Section
 	benchVectorSink    ByteVector
 	benchValidatedSink ValidatedCommand
+	benchEntrySink     DeterministicEntry
+	benchDigestSink    [32]byte
 	benchBytesSink     []byte
 )
 
@@ -198,6 +200,19 @@ func TestNativewireCodecAllocationGuards(t *testing.T) {
 		if err != nil {
 			t.Fatalf("AppendDeterministicEntry: %v", err)
 		}
+	})
+	var entryScratch DeterministicEntryScratch
+	if _, err := DecodeDeterministicEntryInto(entry, Limits{}, &entryScratch); err != nil {
+		t.Fatalf("DecodeDeterministicEntryInto warm: %v", err)
+	}
+	assertMaxAllocs(t, "DecodeDeterministicEntryInto/warm-scratch", 0, func() {
+		benchEntrySink, err = DecodeDeterministicEntryInto(entry, Limits{}, &entryScratch)
+		if err != nil {
+			t.Fatalf("DecodeDeterministicEntryInto: %v", err)
+		}
+	})
+	assertMaxAllocs(t, "DeterministicEntryDigest", 0, func() {
+		benchDigestSink = DeterministicEntryDigest(entry)
 	})
 
 	vecBytes := AppendByteVector(nil, makeBenchmarkItems("doc", 128, 64)...)
@@ -465,6 +480,53 @@ func BenchmarkNativewireDeterministicEntry(b *testing.B) {
 				if err != nil {
 					b.Fatalf("AppendDeterministicEntry: %v", err)
 				}
+			}
+		})
+	}
+}
+
+func BenchmarkNativewireDeterministicEntryReplicatedCommands(b *testing.B) {
+	registry := MustV1Registry()
+	for _, tc := range deterministicEntryFixtureCases() {
+		cmd, err := registry.ValidateRequestSections(tc.sections)
+		if err != nil {
+			b.Fatalf("%s ValidateRequestSections: %v", tc.name, err)
+		}
+		entry, err := AppendDeterministicEntry(nil, cmd)
+		if err != nil {
+			b.Fatalf("%s AppendDeterministicEntry: %v", tc.name, err)
+		}
+		b.Run(tc.name+"/append/preallocated", func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(entry)))
+			dst := make([]byte, 0, len(entry))
+			for i := 0; i < b.N; i++ {
+				dst = dst[:0]
+				benchBytesSink, err = AppendDeterministicEntry(dst, cmd)
+				if err != nil {
+					b.Fatalf("AppendDeterministicEntry: %v", err)
+				}
+			}
+		})
+		b.Run(tc.name+"/decode/warm_scratch", func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(entry)))
+			var scratch DeterministicEntryScratch
+			if _, err := DecodeDeterministicEntryInto(entry, Limits{}, &scratch); err != nil {
+				b.Fatalf("DecodeDeterministicEntryInto warm: %v", err)
+			}
+			for i := 0; i < b.N; i++ {
+				benchEntrySink, err = DecodeDeterministicEntryInto(entry, Limits{}, &scratch)
+				if err != nil {
+					b.Fatalf("DecodeDeterministicEntryInto: %v", err)
+				}
+			}
+		})
+		b.Run(tc.name+"/digest", func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(entry)))
+			for i := 0; i < b.N; i++ {
+				benchDigestSink = DeterministicEntryDigest(entry)
 			}
 		})
 	}

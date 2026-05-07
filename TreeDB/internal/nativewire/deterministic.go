@@ -363,14 +363,18 @@ func validateDeterministicDocumentIDs(raw []byte) error {
 	count := int(count64)
 	var stackOffsets [256]int
 	var stackLengths [256]int
+	var stackHashes [256]uint64
 	offsets := stackOffsets[:0]
 	lengths := stackLengths[:0]
+	hashes := stackHashes[:0]
 	if count > cap(offsets) {
 		offsets = make([]int, count)
 		lengths = make([]int, count)
+		hashes = make([]uint64, count)
 	} else {
 		offsets = offsets[:count]
 		lengths = lengths[:count]
+		hashes = hashes[:count]
 	}
 	payloadLen := 0
 	for i := 0; i < count; i++ {
@@ -393,7 +397,11 @@ func validateDeterministicDocumentIDs(raw []byte) error {
 	for i := 0; i < count; i++ {
 		start := offsets[i]
 		item := payload[start : start+lengths[i]]
+		hashes[i] = deterministicIDHash(item)
 		for j := 0; j < i; j++ {
+			if hashes[j] != hashes[i] || lengths[j] != lengths[i] {
+				continue
+			}
 			prevStart := offsets[j]
 			prev := payload[prevStart : prevStart+lengths[j]]
 			if bytes.Equal(item, prev) {
@@ -402,6 +410,19 @@ func validateDeterministicDocumentIDs(raw []byte) error {
 		}
 	}
 	return nil
+}
+
+func deterministicIDHash(raw []byte) uint64 {
+	const (
+		offset = 14695981039346656037
+		prime  = 1099511628211
+	)
+	hash := uint64(offset)
+	for _, b := range raw {
+		hash ^= uint64(b)
+		hash *= prime
+	}
+	return hash
 }
 
 func validateDeterministicCollectionRef(raw []byte) (bool, error) {

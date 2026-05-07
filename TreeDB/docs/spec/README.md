@@ -115,6 +115,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - R1 single-node native server performance closeout, including direct vs
     native microbenchmarks, workload profile commands, artifacts, findings, and
     deferred optimization targets.
+- `TreeDB/docs/spec/native-wire-r2-closeout.md`
+  - R2 deterministic command-entry closeout, including replicated-command
+    fixtures, canonical validation, digest stability, benchmarks, and deferred
+    Raft apply work.
 
 ## Relationship to Existing Docs
 
