@@ -2050,10 +2050,10 @@ func validateNativeWireBenchmarkCollection(actual, expected collections.Collecti
 	actualIndexes := append([]collections.IndexDefinition(nil), actual.Indexes...)
 	expectedIndexes := append([]collections.IndexDefinition(nil), expected.Indexes...)
 	sort.Slice(actualIndexes, func(i, j int) bool {
-		return nativeWireBenchmarkIndexSortKey(actualIndexes[i]) < nativeWireBenchmarkIndexSortKey(actualIndexes[j])
+		return nativeWireBenchmarkIndexLess(actualIndexes[i], actualIndexes[j])
 	})
 	sort.Slice(expectedIndexes, func(i, j int) bool {
-		return nativeWireBenchmarkIndexSortKey(expectedIndexes[i]) < nativeWireBenchmarkIndexSortKey(expectedIndexes[j])
+		return nativeWireBenchmarkIndexLess(expectedIndexes[i], expectedIndexes[j])
 	})
 	for i := range expectedIndexes {
 		if actualIndexes[i] != expectedIndexes[i] {
@@ -2063,8 +2063,23 @@ func validateNativeWireBenchmarkCollection(actual, expected collections.Collecti
 	return nil
 }
 
-func nativeWireBenchmarkIndexSortKey(index collections.IndexDefinition) string {
-	return fmt.Sprintf("%s\x00%s\x00%s\x00%t\x00%t\x00%s", index.Name, index.Field, index.ValueType, index.Unique, index.MultiKey, index.StoragePolicy)
+func nativeWireBenchmarkIndexLess(left, right collections.IndexDefinition) bool {
+	if left.Name != right.Name {
+		return left.Name < right.Name
+	}
+	if left.Field != right.Field {
+		return left.Field < right.Field
+	}
+	if left.ValueType != right.ValueType {
+		return left.ValueType < right.ValueType
+	}
+	if left.Unique != right.Unique {
+		return !left.Unique && right.Unique
+	}
+	if left.MultiKey != right.MultiKey {
+		return !left.MultiKey && right.MultiKey
+	}
+	return left.StoragePolicy < right.StoragePolicy
 }
 
 func normalizeNativeWireBenchmarkCollectionMeta(meta collections.CollectionMeta) collections.CollectionMeta {
@@ -2134,7 +2149,7 @@ func nativeWireStoredDocument(format collections.DocumentFormat, i int, prebuilt
 	}
 	switch format {
 	case collections.DocumentFormatBSON:
-		return append([]byte(nil), raw...), nil
+		return raw, nil
 	case collections.DocumentFormatTemplateV1:
 		stored, err := bson.MarshalExtJSON(raw, true, false)
 		if err != nil {
