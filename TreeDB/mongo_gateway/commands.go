@@ -1516,7 +1516,7 @@ func (r *indexedRangeCursorResponse) marshalMsgInto(dst []byte, requestID, respo
 
 func marshalIndexedRangeCursorDocument(server *Server, cursorOwner int64, singleBatch bool, col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, ns, indexName string, opts collections.IndexRangeOptions, batchKey string, maxBatchBytes int) (wire.Document, error) {
 	builder := newRawCursorDocumentBuilder(make([]byte, 0, rawCursorResponseCapacityHint(ns, opts.Limit, maxBatchBytes)), ns, batchKey, maxBatchBytes)
-	retainedDocs, err := collectIndexedRangeCursorDocs(col, materializer, indexName, opts, builder, singleBatch)
+	retainedDocs, err := collectIndexedRangeCursorDocs(col, materializer, indexName, opts, &builder, singleBatch)
 	if err != nil {
 		return nil, err
 	}
@@ -1550,7 +1550,7 @@ func marshalIndexedRangeCursorMsgInto(dst []byte, requestID, responseTo int32, s
 	msg = appendWireInt32(msg, 0)
 	msg = append(msg, wire.MsgSectionBody)
 	builder := newRawCursorDocumentBuilder(msg, ns, batchKey, maxBatchBytes)
-	retainedDocs, err := collectIndexedRangeCursorDocs(col, materializer, indexName, opts, builder, singleBatch)
+	retainedDocs, err := collectIndexedRangeCursorDocs(col, materializer, indexName, opts, &builder, singleBatch)
 	if err != nil {
 		return nil, err
 	}
@@ -1610,14 +1610,14 @@ type rawCursorDocumentBuilder struct {
 	maxBatchBytes int
 }
 
-func newRawCursorDocumentBuilder(dst []byte, ns, batchKey string, maxBatchBytes int) *rawCursorDocumentBuilder {
+func newRawCursorDocumentBuilder(dst []byte, ns, batchKey string, maxBatchBytes int) rawCursorDocumentBuilder {
 	docIdx, dst := bsoncore.AppendDocumentStart(dst)
 	cursorIdx, dst := bsoncore.AppendDocumentElementStart(dst, "cursor")
 	cursorIDIdx := len(dst) + 1 + len("id") + 1
 	dst = bsoncore.AppendInt64Element(dst, "id", 0)
 	dst = bsoncore.AppendStringElement(dst, "ns", ns)
 	batchIdx, dst := bsoncore.AppendArrayElementStart(dst, batchKey)
-	return &rawCursorDocumentBuilder{
+	return rawCursorDocumentBuilder{
 		buf:           dst,
 		docIdx:        docIdx,
 		cursorIdx:     cursorIdx,
