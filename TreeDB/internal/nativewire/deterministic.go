@@ -9,6 +9,8 @@ import (
 const (
 	DeterministicEntryMagic   = "TDC1"
 	DeterministicEntryVersion = uint64(1)
+
+	maxDeterministicDocumentIDs = 1 << 16
 )
 
 func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) {
@@ -152,6 +154,9 @@ func validateDeterministicDocumentIDs(raw []byte) error {
 	}
 	if count64 > uint64(maxInt) {
 		return protocolError(ErrResourceExhausted, "document_ids count exceeds int capacity")
+	}
+	if count64 > maxDeterministicDocumentIDs {
+		return protocolError(ErrResourceExhausted, "document_ids count %d exceeds deterministic limit %d", count64, maxDeterministicDocumentIDs)
 	}
 	count := int(count64)
 	var stackItems [256]deterministicIDItem
