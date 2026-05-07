@@ -1540,9 +1540,21 @@ type indexedRangeCursorResponse struct {
 	singleBatch   bool
 }
 
+var errBorrowedRangeMaterialization = errors.New("mongo gateway: borrowed range materialization")
+
 func (r *indexedRangeCursorResponse) marshalDocument() (wire.Document, error) {
 	materializer, err := storedDocumentMaterializerForCollection(r.col)
 	if err != nil {
+		return nil, err
+	}
+	doc, err := marshalIndexedRangeCursorDocument(r.server, r.cursorOwner, r.singleBatch, r.col, materializer, r.ns, r.indexName, r.opts, r.batchKey, r.maxBatchBytes)
+	retry := shouldRetryBorrowedRangeMaterialization(materializer, err)
+	_ = materializer.Close()
+	if !retry {
+		return doc, err
+	}
+	materializer, materializerErr := storedDocumentMaterializerForCollection(r.col)
+	if materializerErr != nil {
 		return nil, err
 	}
 	defer func() { _ = materializer.Close() }()
@@ -1554,8 +1566,25 @@ func (r *indexedRangeCursorResponse) marshalMsgInto(dst []byte, requestID, respo
 	if err != nil {
 		return nil, err
 	}
+	msg, err := marshalIndexedRangeCursorMsgInto(dst, requestID, responseTo, r.server, r.cursorOwner, r.singleBatch, r.col, materializer, r.ns, r.indexName, r.opts, r.batchKey, r.maxBatchBytes)
+	retry := shouldRetryBorrowedRangeMaterialization(materializer, err)
+	_ = materializer.Close()
+	if !retry {
+		return msg, err
+	}
+	materializer, materializerErr := storedDocumentMaterializerForCollection(r.col)
+	if materializerErr != nil {
+		return nil, err
+	}
 	defer func() { _ = materializer.Close() }()
 	return marshalIndexedRangeCursorMsgInto(dst, requestID, responseTo, r.server, r.cursorOwner, r.singleBatch, r.col, materializer, r.ns, r.indexName, r.opts, r.batchKey, r.maxBatchBytes)
+}
+
+func shouldRetryBorrowedRangeMaterialization(materializer *collections.StoredDocumentJSONMaterializer, err error) bool {
+	return err != nil &&
+		errors.Is(err, errBorrowedRangeMaterialization) &&
+		materializer != nil &&
+		materializer.DocumentFormat() == collections.DocumentFormatTemplateV1
 }
 
 func marshalIndexedRangeCursorDocument(server *Server, cursorOwner int64, singleBatch bool, col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, ns, indexName string, opts collections.IndexRangeOptions, batchKey string, maxBatchBytes int) (wire.Document, error) {
@@ -1626,7 +1655,7 @@ func collectIndexedRangeCursorDocs(col *collections.Collection, materializer *co
 		}
 		doc, err := borrowedStoredDocumentToBSON(materializer, record.Document)
 		if err != nil {
-			return false, err
+			return false, fmt.Errorf("%w: %w", errBorrowedRangeMaterialization, err)
 		}
 		if retainOnly {
 			retainedDocs = append(retainedDocs, append(wire.Document(nil), doc...))
