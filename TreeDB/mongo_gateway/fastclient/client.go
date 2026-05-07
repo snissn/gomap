@@ -141,6 +141,9 @@ func (c *Client) roundTripInsert(ctx context.Context, msg []byte, wantN int) (in
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 
 	stopCancelWatch := c.watchContextCancelLocked(ctx)
 	defer func() {
@@ -170,6 +173,9 @@ func (c *Client) roundTripFind(ctx context.Context, msg []byte) ([]bson.Raw, err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	stopCancelWatch := c.watchContextCancelLocked(ctx)
 	defer func() {
@@ -199,6 +205,9 @@ func (c *Client) roundTripFindBorrowed(ctx context.Context, msg []byte, fn func(
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	stopCancelWatch := c.watchContextCancelLocked(ctx)
 	defer func() {
