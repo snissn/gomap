@@ -352,7 +352,10 @@ func (s *Server) appendBufferedMessageWithOwner(reader *bufio.Reader, cursorOwne
 	}
 	headerBytes, err := reader.Peek(wire.HeaderLen)
 	if err != nil {
-		return writeBuf, false, nil
+		if errors.Is(err, bufio.ErrBufferFull) {
+			return writeBuf, false, nil
+		}
+		return writeBuf, false, err
 	}
 	h, err := wire.ParseHeader(headerBytes)
 	if err != nil {
@@ -370,7 +373,10 @@ func (s *Server) appendBufferedMessageWithOwner(reader *bufio.Reader, cursorOwne
 	}
 	message, err := reader.Peek(messageLength)
 	if err != nil {
-		return writeBuf, false, nil
+		if errors.Is(err, bufio.ErrBufferFull) {
+			return writeBuf, false, nil
+		}
+		return writeBuf, false, err
 	}
 	response, err := s.handleMessageInto(writeBuf, h, message[wire.HeaderLen:messageLength], cursorOwner)
 	if err != nil {

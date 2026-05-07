@@ -2933,6 +2933,10 @@ func runDriverDecodedRangeOperation(ctx context.Context, coll *mongo.Collection,
 		sample(time.Since(begin))
 		return err
 	}
+	if len(docs) == 0 {
+		sample(time.Since(begin))
+		return errors.New("range returned no documents")
+	}
 	for _, doc := range docs {
 		age, ok := int64Value(doc["age"])
 		if !ok || age < minAge {
@@ -2973,7 +2977,9 @@ func runDriverFindRawRangeOperation(ctx context.Context, coll *mongo.Collection,
 			_ = cursor.Close(ctx)
 		}
 	}()
+	seen := false
 	for cursor.Next(ctx) {
+		seen = true
 		if err := validateRawAgeDocument(cursor.Current, minAge); err != nil {
 			sample(time.Since(begin))
 			return err
@@ -2982,6 +2988,10 @@ func runDriverFindRawRangeOperation(ctx context.Context, coll *mongo.Collection,
 	if err := cursor.Err(); err != nil {
 		sample(time.Since(begin))
 		return err
+	}
+	if !seen {
+		sample(time.Since(begin))
+		return errors.New("raw range returned no documents")
 	}
 	if err := cursor.Close(ctx); err != nil {
 		sample(time.Since(begin))
