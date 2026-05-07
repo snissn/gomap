@@ -771,6 +771,22 @@ func TestValidateNativeWireBenchmarkCollectionAllowsIndexOrderDrift(t *testing.T
 	}
 }
 
+func TestValidateNativeWireBenchmarkCollectionNormalizesExpectedMeta(t *testing.T) {
+	expected := collections.CollectionMeta{
+		Name: "bench",
+		Indexes: []collections.IndexDefinition{
+			{Name: "email", Field: "email", ValueType: collections.IndexValueString, Unique: true},
+		},
+	}
+	actual := expected
+	actual.Options.BufferedIndexedWrites = true
+	actual.Options.BufferedIndexedWriteMaxDocuments = collections.DefaultIndexedWriteMemtableMaxDocuments
+	actual.Options.BufferedIndexedWriteMaxRootRuns = collections.DefaultIndexedWriteMemtableMaxRootRuns
+	if err := validateNativeWireBenchmarkCollection(actual, expected); err != nil {
+		t.Fatalf("validateNativeWireBenchmarkCollection normalized expected metadata: %v", err)
+	}
+}
+
 func mustTestBSON(t *testing.T, doc bson.D) bson.Raw {
 	t.Helper()
 	raw, err := bson.Marshal(doc)
