@@ -63,8 +63,8 @@ cost from Mongo Go driver cost. Raw-wire modes use raw OP_MSG
 document sequences for the insert load phase while keeping setup and later
 read/update phases on the driver. `-client-mode direct` is a TreeDB-only path
 that calls `collections.Collection` directly for the same phase names, using the
-selected `-treedb-document-format` (`json`, `template-v1`, or `bson`) while
-bypassing the MongoDB Go driver, loopback sockets, and Mongo gateway
+selected `-treedb-document-format` (`json`, `template-v1`/`collections-v1`, or
+`bson`) while bypassing the MongoDB Go driver, loopback sockets, and Mongo gateway
 command/response handling. Use direct mode to answer whether a slow Mongo API
 phase is already slow in the collection engine and selected storage format; use
 raw-wire mode to estimate the gateway/server ceiling without the driver's
@@ -116,7 +116,7 @@ vacuum. The final vacuum closes the benchmark gateway before rewriting
 `-treedb-maintenance checkpoint` to reproduce the older checkpoint-only disk
 metric, or `none` to skip final TreeDB disk reporting.
 
-`-treedb-document-format` accepts `json`, `template-v1`, and `bson`. BSON mode
+`-treedb-document-format` accepts `json`, `template-v1`/`collections-v1`, and `bson`. BSON mode
 stores Mongo wire documents as native BSON collection records, avoiding the
 canonical Extended JSON bridge used by the JSON/template-v1 gateway paths.
 Use `-treedb-buffered-indexed-write-max-documents`,

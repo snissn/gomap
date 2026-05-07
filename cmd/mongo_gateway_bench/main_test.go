@@ -650,7 +650,7 @@ func TestParseConfigValidation(t *testing.T) {
 	if directCfg.ClientMode != clientModeDirect {
 		t.Fatalf("ClientMode=%q want %q", directCfg.ClientMode, clientModeDirect)
 	}
-	for _, format := range []string{"json", "template-v1", "bson"} {
+	for _, format := range []string{"json", "template-v1", "collections-v1", "bson"} {
 		if _, err := parseConfig([]string{"-target", "treedb", "-client-mode", "direct", "-treedb-document-format", format}); err != nil {
 			t.Fatalf("parse direct %s config: %v", format, err)
 		}

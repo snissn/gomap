@@ -470,7 +470,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 2, "secondary indexes to create: 0, 1=email, 2=email+city, 3=email+city+active")
 	fs.StringVar(&cfg.ClientMode, "client-mode", cfg.ClientMode, "benchmark client path: driver, driver-command, driver-command-raw, driver-unack, direct, raw-wire, or raw-wire-tcp; direct and raw-wire modes are TreeDB-only")
 	fs.StringVar(&treeDBProfile, "treedb-profile", treeDBProfile, "TreeDB profile for -target treedb: fast, wal_on_fast, durable, or bench")
-	fs.StringVar(&treeDBDocumentFormat, "treedb-document-format", treeDBDocumentFormat, "TreeDB collection document format for -target treedb: json, template-v1, or bson")
+	fs.StringVar(&treeDBDocumentFormat, "treedb-document-format", treeDBDocumentFormat, "TreeDB collection document format for -target treedb: json, template-v1/collections-v1, or bson")
 	fs.StringVar(&treeDBDataRootStorage, "treedb-data-root-storage", treeDBDataRootStorage, "TreeDB collection data root storage for -target treedb: default, fast, or compressed")
 	fs.StringVar(&treeDBIndexStateRootStorage, "treedb-index-state-root-storage", treeDBIndexStateRootStorage, "TreeDB collection index-state root storage for -target treedb: default, fast, or compressed")
 	fs.StringVar(&treeDBIndexRootStorage, "treedb-index-root-storage", treeDBIndexRootStorage, "TreeDB secondary index root storage for -target treedb: default, fast, or compressed")
@@ -652,7 +652,7 @@ func parseTreeDBProfile(raw string) (treedb.Profile, error) {
 
 func parseTreeDBDocumentFormat(raw string) (collections.DocumentFormat, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "", string(collections.DocumentFormatTemplateV1):
+	case "", string(collections.DocumentFormatTemplateV1), "collections-v1":
 		return collections.DocumentFormatTemplateV1, nil
 	case string(collections.DocumentFormatJSON):
 		return collections.DocumentFormatJSON, nil
