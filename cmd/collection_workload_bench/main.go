@@ -147,15 +147,19 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
+	if err := runAndWrite(os.Stdout, cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func runAndWrite(w io.Writer, cfg config) error {
 	res, err := run(cfg)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+	writeErr := writeResult(w, cfg.OutputFormat, res)
+	if err != nil || writeErr != nil {
+		return errors.Join(err, writeErr)
 	}
-	if err := writeResult(os.Stdout, cfg.OutputFormat, res); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
+	return nil
 }
 
 func parseConfig(args []string) (config, error) {
@@ -313,10 +317,15 @@ func parsePositiveInts(raw, label string) ([]int, error) {
 	if err != nil {
 		return nil, err
 	}
+	seen := make(map[int]struct{}, len(out))
 	for _, n := range out {
 		if n <= 0 {
 			return nil, fmt.Errorf("%s values must be positive", label)
 		}
+		if _, ok := seen[n]; ok {
+			return nil, fmt.Errorf("%s contains duplicate value %d", label, n)
+		}
+		seen[n] = struct{}{}
 	}
 	return out, nil
 }
@@ -410,15 +419,23 @@ func run(cfg config) (result, error) {
 						ReadState: string(state),
 						Error:     err.Error(),
 					})
+					finishResult(&res, started)
 					return res, err
 				}
 				res.Rows = append(res.Rows, row)
 			}
 		}
 	}
+	finishResult(&res, started)
+	return res, nil
+}
+
+func finishResult(res *result, started time.Time) {
+	if res == nil {
+		return
+	}
 	res.FinishedAt = time.Now().Format(time.RFC3339Nano)
 	res.DurationMS = float64(time.Since(started).Nanoseconds()) / 1e6
-	return res, nil
 }
 
 func runRow(cfg config, format collections.DocumentFormat, indexes int, state readState) (rowResult, error) {

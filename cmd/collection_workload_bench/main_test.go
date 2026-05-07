@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -28,6 +29,14 @@ func TestParseFormatsAcceptsCollectionsV1Alias(t *testing.T) {
 		if formats[i] != want[i] {
 			t.Fatalf("formats[%d]=%q want %q", i, formats[i], want[i])
 		}
+	}
+}
+
+func TestParsePositiveIntsRejectsDuplicates(t *testing.T) {
+	if _, err := parsePositiveInts("1,2,2", "reader-sweep"); err == nil {
+		t.Fatal("parsePositiveInts accepted duplicate reader-sweep value")
+	} else if !strings.Contains(err.Error(), "duplicate value 2") {
+		t.Fatalf("error=%v want duplicate value", err)
 	}
 }
 
@@ -70,6 +79,42 @@ func TestRunSmallNativeCollectionMatrix(t *testing.T) {
 		requirePhase(t, row, "id_update_set", false)
 		requirePhase(t, row, "concurrent_id_update_set_w2", false)
 		requirePhase(t, row, "id_delete_one", false)
+	}
+}
+
+func TestRunAndWriteEmitsPartialErrors(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "important.txt"), []byte("keep"), 0o600); err != nil {
+		t.Fatalf("write important file: %v", err)
+	}
+	cfg := config{
+		TreeDBDir:             dir,
+		Documents:             8,
+		BatchSize:             8,
+		Reads:                 1,
+		RangeReads:            1,
+		Updates:               0,
+		Deletes:               0,
+		Formats:               []collections.DocumentFormat{collections.DocumentFormatJSON},
+		IndexCounts:           []int{0},
+		ReadStates:            []readState{readStateBuffered},
+		ReaderSweep:           []int{1},
+		OutputFormat:          "text",
+		TreeDBProfile:         treedb.ProfileBench,
+		DataRootStorage:       collections.RootStorageDefault,
+		IndexStateRootStorage: collections.RootStorageDefault,
+		IndexRootStorage:      collections.RootStorageDefault,
+	}
+	var out bytes.Buffer
+	err := runAndWrite(&out, cfg)
+	if err == nil {
+		t.Fatal("runAndWrite succeeded with unsafe treedb-dir")
+	}
+	got := out.String()
+	for _, want := range []string{"Native collection workload benchmark", "errors:", "refusing to delete non-empty treedb-dir"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q\n%s", want, got)
+		}
 	}
 }
 
