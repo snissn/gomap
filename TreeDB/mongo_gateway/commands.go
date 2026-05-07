@@ -1531,16 +1531,16 @@ func marshalIndexedRangeCursorDocument(server *Server, cursorOwner int64, single
 	if err != nil {
 		return nil, err
 	}
+	doc, err := builder.finish()
+	if err != nil {
+		return nil, err
+	}
 	if len(retainedDocs) > 0 {
 		cursorID, err := server.openRetainedCursor(ns, retainedDocs, compiledProjection{}, cursorOwner)
 		if err != nil {
 			return nil, err
 		}
 		builder.setCursorID(cursorID)
-	}
-	doc, err := builder.finish()
-	if err != nil {
-		return nil, err
 	}
 	return wire.Document(doc), nil
 }
@@ -1565,16 +1565,16 @@ func marshalIndexedRangeCursorMsgInto(dst []byte, requestID, responseTo int32, s
 	if err != nil {
 		return nil, err
 	}
+	msg, err = builder.finish()
+	if err != nil {
+		return nil, err
+	}
 	if len(retainedDocs) > 0 {
 		cursorID, err := server.openRetainedCursor(ns, retainedDocs, compiledProjection{}, cursorOwner)
 		if err != nil {
 			return nil, err
 		}
 		builder.setCursorID(cursorID)
-	}
-	msg, err = builder.finish()
-	if err != nil {
-		return nil, err
 	}
 	messageLength := len(msg) - base
 	if int64(messageLength) > maxWireMessageLengthInt32Limit {

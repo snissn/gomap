@@ -3149,7 +3149,7 @@ func rawDocumentsFromArray(batch bson.RawArray) ([]bson.Raw, error) {
 	}
 	rem = rem[:len(rem)-1]
 
-	docs := make([]bson.Raw, 0, 10)
+	docs := make([]bson.Raw, 0, rawArrayDocumentCapacityHint(len(rem)))
 	for len(rem) > 0 {
 		elem, next, ok := bsoncore.ReadElement(rem)
 		if !ok {
@@ -3167,6 +3167,22 @@ func rawDocumentsFromArray(batch bson.RawArray) ([]bson.Raw, error) {
 		rem = next
 	}
 	return docs, nil
+}
+
+func rawArrayDocumentCapacityHint(payloadBytes int) int {
+	if payloadBytes <= 0 {
+		return 0
+	}
+	const minElementOverhead = 8
+	const maxInitialCapacity = 1024
+	hint := payloadBytes / minElementOverhead
+	if hint < 1 {
+		return 1
+	}
+	if hint > maxInitialCapacity {
+		return maxInitialCapacity
+	}
+	return hint
 }
 
 func rawCommandOK(raw bson.Raw) bool {
