@@ -110,6 +110,9 @@ func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *Determinis
 	if err != nil {
 		return DeterministicEntry{}, err
 	}
+	if commandFlags != 0 {
+		return DeterministicEntry{}, protocolError(ErrUnsupportedFeature, "unsupported deterministic command flags 0x%x", commandFlags)
+	}
 	sectionCount64, err := readEntryUvarint(src, &off, "section_count")
 	if err != nil {
 		return DeterministicEntry{}, err
@@ -361,16 +364,12 @@ func validateDeterministicDocumentIDs(raw []byte) error {
 		return protocolError(ErrResourceExhausted, "document_ids count exceeds int capacity")
 	}
 	count := int(count64)
-	var stackOffsets [256]int
-	var stackLengths [256]int
-	offsets := stackOffsets[:0]
-	lengths := stackLengths[:0]
-	if count > cap(offsets) {
-		offsets = make([]int, count)
-		lengths = make([]int, count)
+	var stackItems [256]deterministicIDItem
+	items := stackItems[:0]
+	if count > cap(items) {
+		items = make([]deterministicIDItem, count)
 	} else {
-		offsets = offsets[:count]
-		lengths = lengths[:count]
+		items = items[:count]
 	}
 	payloadLen := 0
 	for i := 0; i < count; i++ {
@@ -385,23 +384,64 @@ func validateDeterministicDocumentIDs(raw []byte) error {
 		if length > uint64(maxInt) || payloadLen > maxInt-int(length) {
 			return protocolError(ErrResourceExhausted, "document_ids payload length exceeds int capacity")
 		}
-		offsets[i] = payloadLen
-		lengths[i] = int(length)
+		items[i] = deterministicIDItem{offset: payloadLen, length: int(length)}
 		payloadLen += int(length)
 	}
 	payload := raw[off:]
-	for i := 0; i < count; i++ {
-		start := offsets[i]
-		item := payload[start : start+lengths[i]]
-		for j := 0; j < i; j++ {
-			prevStart := offsets[j]
-			prev := payload[prevStart : prevStart+lengths[j]]
-			if bytes.Equal(item, prev) {
-				return protocolError(ErrDuplicateDocumentID, "duplicate document id at index %d", i)
-			}
+	sortDeterministicIDItems(payload, items)
+	for i := 1; i < count; i++ {
+		left := payload[items[i-1].offset : items[i-1].offset+items[i-1].length]
+		right := payload[items[i].offset : items[i].offset+items[i].length]
+		if bytes.Equal(left, right) {
+			return protocolError(ErrDuplicateDocumentID, "duplicate document id")
 		}
 	}
 	return nil
+}
+
+type deterministicIDItem struct {
+	offset int
+	length int
+}
+
+func deterministicIDItemLess(payload []byte, items []deterministicIDItem, i, j int) bool {
+	leftItem := items[i]
+	rightItem := items[j]
+	left := payload[leftItem.offset : leftItem.offset+leftItem.length]
+	right := payload[rightItem.offset : rightItem.offset+rightItem.length]
+	return bytes.Compare(left, right) < 0
+}
+
+func sortDeterministicIDItems(payload []byte, items []deterministicIDItem) {
+	n := len(items)
+	for start := n/2 - 1; start >= 0; start-- {
+		siftDownDeterministicIDItems(payload, items, start, n)
+	}
+	for end := n - 1; end > 0; end-- {
+		items[0], items[end] = items[end], items[0]
+		siftDownDeterministicIDItems(payload, items, 0, end)
+	}
+}
+
+func siftDownDeterministicIDItems(payload []byte, items []deterministicIDItem, root, end int) {
+	for {
+		child := root*2 + 1
+		if child >= end {
+			return
+		}
+		swap := root
+		if deterministicIDItemLess(payload, items, swap, child) {
+			swap = child
+		}
+		if child+1 < end && deterministicIDItemLess(payload, items, swap, child+1) {
+			swap = child + 1
+		}
+		if swap == root {
+			return
+		}
+		items[root], items[swap] = items[swap], items[root]
+		root = swap
+	}
 }
 
 func validateDeterministicCollectionRef(raw []byte) (bool, error) {
