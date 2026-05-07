@@ -87,48 +87,52 @@ func DecodeDeterministicEntry(src []byte, limits Limits) (DeterministicEntry, er
 // scratch must copy it.
 func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *DeterministicEntryScratch) (DeterministicEntry, error) {
 	limits = limits.withDefaults()
+	failBeforeSections := func(err error) (DeterministicEntry, error) {
+		clearDeterministicEntryScratch(nil, scratch)
+		return DeterministicEntry{}, err
+	}
 	if uint64(len(src)) > limits.MaxFrameSize {
-		return DeterministicEntry{}, protocolError(ErrResourceExhausted, "deterministic entry length %d exceeds limit %d", len(src), limits.MaxFrameSize)
+		return failBeforeSections(protocolError(ErrResourceExhausted, "deterministic entry length %d exceeds limit %d", len(src), limits.MaxFrameSize))
 	}
 	if len(src) < len(DeterministicEntryMagic) ||
 		src[0] != DeterministicEntryMagic[0] ||
 		src[1] != DeterministicEntryMagic[1] ||
 		src[2] != DeterministicEntryMagic[2] ||
 		src[3] != DeterministicEntryMagic[3] {
-		return DeterministicEntry{}, protocolError(ErrMalformedFrame, "bad deterministic entry magic")
+		return failBeforeSections(protocolError(ErrMalformedFrame, "bad deterministic entry magic"))
 	}
 	off := len(DeterministicEntryMagic)
 	version, err := readEntryUvarint(src, &off, "entry_version")
 	if err != nil {
-		return DeterministicEntry{}, err
+		return failBeforeSections(err)
 	}
 	if version != DeterministicEntryVersion {
-		return DeterministicEntry{}, protocolError(ErrUnsupportedVersion, "deterministic entry version %d", version)
+		return failBeforeSections(protocolError(ErrUnsupportedVersion, "deterministic entry version %d", version))
 	}
 	commandID, err := readEntryUvarint(src, &off, "command_id")
 	if err != nil {
-		return DeterministicEntry{}, err
+		return failBeforeSections(err)
 	}
 	commandVersion, err := readEntryUvarint(src, &off, "command_version")
 	if err != nil {
-		return DeterministicEntry{}, err
+		return failBeforeSections(err)
 	}
 	commandFlags, err := readEntryUvarint(src, &off, "command_flags")
 	if err != nil {
-		return DeterministicEntry{}, err
+		return failBeforeSections(err)
 	}
 	if commandFlags != 0 {
-		return DeterministicEntry{}, protocolError(ErrUnsupportedFeature, "unsupported deterministic command flags 0x%x", commandFlags)
+		return failBeforeSections(protocolError(ErrUnsupportedFeature, "unsupported deterministic command flags 0x%x", commandFlags))
 	}
 	sectionCount64, err := readEntryUvarint(src, &off, "section_count")
 	if err != nil {
-		return DeterministicEntry{}, err
+		return failBeforeSections(err)
 	}
 	if sectionCount64 > uint64(limits.MaxSections) {
-		return DeterministicEntry{}, protocolError(ErrResourceExhausted, "deterministic entry section count %d exceeds limit %d", sectionCount64, limits.MaxSections)
+		return failBeforeSections(protocolError(ErrResourceExhausted, "deterministic entry section count %d exceeds limit %d", sectionCount64, limits.MaxSections))
 	}
 	if sectionCount64 > uint64(maxInt) {
-		return DeterministicEntry{}, protocolError(ErrResourceExhausted, "deterministic entry section count exceeds int capacity")
+		return failBeforeSections(protocolError(ErrResourceExhausted, "deterministic entry section count exceeds int capacity"))
 	}
 	sectionCount := int(sectionCount64)
 	sections := deterministicEntrySectionsBuffer(sectionCount, scratch)
