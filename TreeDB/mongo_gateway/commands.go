@@ -1588,8 +1588,9 @@ func marshalIndexedRangeCursorMsgInto(dst []byte, requestID, responseTo int32, s
 	if int64(messageLength) > maxWireMessageLengthInt32 {
 		return nil, fmt.Errorf("%w: length=%d", wire.ErrMessageTooLarge, messageLength)
 	}
-	if messageLength > wire.DefaultMaxMessageLength {
-		return nil, fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, messageLength, wire.DefaultMaxMessageLength)
+	maxMessageLength := int(server.maxMessageLength())
+	if messageLength > maxMessageLength {
+		return nil, fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, messageLength, maxMessageLength)
 	}
 	binary.LittleEndian.PutUint32(msg[base:base+4], uint32(messageLength))
 	return msg, nil
@@ -1704,9 +1705,10 @@ func rawCursorResponseCapacityHint(ns string, limit int, maxBatchBytes int) int 
 }
 
 func appendWireInt32(dst []byte, v int32) []byte {
-	var buf [4]byte
-	binary.LittleEndian.PutUint32(buf[:], uint32(v))
-	return append(dst, buf[:]...)
+	n := len(dst)
+	dst = append(dst, 0, 0, 0, 0)
+	binary.LittleEndian.PutUint32(dst[n:], uint32(v))
+	return dst
 }
 
 func ensureWireAppendCapacity(dst []byte, need int) []byte {
@@ -2396,6 +2398,9 @@ func validateStoredBSONFrame(doc []byte) error {
 		return fmt.Errorf("stored BSON document too short: %d", len(doc))
 	}
 	size := int(int32(binary.LittleEndian.Uint32(doc[:4])))
+	if size < 5 {
+		return fmt.Errorf("stored BSON document length=%d below minimum", size)
+	}
 	if size != len(doc) {
 		return fmt.Errorf("stored BSON document length=%d available=%d", size, len(doc))
 	}

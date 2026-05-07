@@ -90,12 +90,18 @@ func (c *Client) InsertManyRawBSON(ctx context.Context, database, collection str
 	return c.roundTripInsert(ctx, msg, len(docs))
 }
 
+// FindRawBSON sends a find command and returns the cursor.firstBatch documents
+// from the response. Non-find commands are rejected because this helper only
+// understands find-style cursor replies.
 func (c *Client) FindRawBSON(ctx context.Context, command bson.Raw) ([]bson.Raw, error) {
 	if c == nil || c.conn == nil {
 		return nil, errors.New("mongo gateway fast client is closed")
 	}
 	if len(command) == 0 {
 		return nil, errors.New("find raw bson requires a command document")
+	}
+	if _, ok := command.Lookup("find").StringValueOK(); !ok {
+		return nil, errors.New("FindRawBSON requires a find command document")
 	}
 	msg, err := wire.AppendMsgMessage(nil, c.nextRequestID.Add(1), 0, 0, wire.Document(command))
 	if err != nil {
@@ -105,8 +111,10 @@ func (c *Client) FindRawBSON(ctx context.Context, command bson.Raw) ([]bson.Raw,
 }
 
 // FindRawBSONBorrowed is like FindRawBSON, but the returned BSON documents are
-// borrowed and valid only for the duration of fn. It is intended for benchmark
-// hot paths that validate a response without retaining it.
+// borrowed and valid only for the duration of fn. The callback runs while the
+// client mutex is held, so it must not call back into the same client and must
+// not retain the batch or any bson.Raw after returning. It is intended for
+// benchmark hot paths that validate a response without retaining it.
 func (c *Client) FindRawBSONBorrowed(ctx context.Context, command bson.Raw, fn func([]bson.Raw) error) error {
 	if fn == nil {
 		return errors.New("find raw bson borrowed requires a callback")

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"testing"
+	"unsafe"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -46,7 +47,8 @@ func TestReadMessageIntoReusesBodyBuffer(t *testing.T) {
 		t.Fatalf("AppendMessage: %v", err)
 	}
 
-	reuse := make([]byte, 0, 64)
+	reuse := make([]byte, 1, 64)
+	reuseStart := unsafe.SliceData(reuse)
 	h, gotBody, err := ReadMessageInto(bytes.NewReader(wireBytes), reuse, 0)
 	if err != nil {
 		t.Fatalf("ReadMessageInto: %v", err)
@@ -57,8 +59,11 @@ func TestReadMessageIntoReusesBodyBuffer(t *testing.T) {
 	if !bytes.Equal(gotBody, body) {
 		t.Fatalf("body=%v want %v", gotBody, body)
 	}
-	if cap(gotBody) != cap(reuse) {
-		t.Fatalf("ReadMessageInto did not reuse buffer: cap=%d want %d", cap(gotBody), cap(reuse))
+	if len(gotBody) == 0 {
+		t.Fatalf("empty body prevents reuse assertion")
+	}
+	if unsafe.SliceData(gotBody) != reuseStart {
+		t.Fatalf("ReadMessageInto did not reuse buffer")
 	}
 }
 

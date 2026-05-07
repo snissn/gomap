@@ -263,17 +263,24 @@ func parseFormats(raw string) ([]collections.DocumentFormat, error) {
 		return nil, errors.New("formats cannot be empty")
 	}
 	out := make([]collections.DocumentFormat, 0, len(parts))
+	seen := make(map[collections.DocumentFormat]struct{}, len(parts))
 	for _, part := range parts {
+		var format collections.DocumentFormat
 		switch strings.ToLower(part) {
 		case "json":
-			out = append(out, collections.DocumentFormatJSON)
+			format = collections.DocumentFormatJSON
 		case "", "template-v1", "collections-v1":
-			out = append(out, collections.DocumentFormatTemplateV1)
+			format = collections.DocumentFormatTemplateV1
 		case "bson":
-			out = append(out, collections.DocumentFormatBSON)
+			format = collections.DocumentFormatBSON
 		default:
 			return nil, fmt.Errorf("unknown format %q", part)
 		}
+		if _, ok := seen[format]; ok {
+			return nil, fmt.Errorf("formats contains duplicate value %q", format)
+		}
+		seen[format] = struct{}{}
+		out = append(out, format)
 	}
 	return out, nil
 }
@@ -288,6 +295,9 @@ func parseIndexCounts(raw string) ([]int, error) {
 			return nil, fmt.Errorf("indexes=%d unsupported by native workload harness; max is 3", n)
 		}
 	}
+	if err := rejectDuplicateInts(out, "indexes"); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -297,17 +307,24 @@ func parseReadStates(raw string) ([]readState, error) {
 		return nil, errors.New("read-states cannot be empty")
 	}
 	out := make([]readState, 0, len(parts))
+	seen := make(map[readState]struct{}, len(parts))
 	for _, part := range parts {
+		var state readState
 		switch strings.ToLower(part) {
 		case string(readStateBuffered):
-			out = append(out, readStateBuffered)
+			state = readStateBuffered
 		case string(readStateFlushed):
-			out = append(out, readStateFlushed)
+			state = readStateFlushed
 		case string(readStateCheckpointed):
-			out = append(out, readStateCheckpointed)
+			state = readStateCheckpointed
 		default:
 			return nil, fmt.Errorf("unknown read-state %q", part)
 		}
+		if _, ok := seen[state]; ok {
+			return nil, fmt.Errorf("read-states contains duplicate value %q", state)
+		}
+		seen[state] = struct{}{}
+		out = append(out, state)
 	}
 	return out, nil
 }
@@ -317,17 +334,23 @@ func parsePositiveInts(raw, label string) ([]int, error) {
 	if err != nil {
 		return nil, err
 	}
-	seen := make(map[int]struct{}, len(out))
 	for _, n := range out {
 		if n <= 0 {
 			return nil, fmt.Errorf("%s values must be positive", label)
 		}
+	}
+	return out, rejectDuplicateInts(out, label)
+}
+
+func rejectDuplicateInts(values []int, label string) error {
+	seen := make(map[int]struct{}, len(values))
+	for _, n := range values {
 		if _, ok := seen[n]; ok {
-			return nil, fmt.Errorf("%s contains duplicate value %d", label, n)
+			return fmt.Errorf("%s contains duplicate value %d", label, n)
 		}
 		seen[n] = struct{}{}
 	}
-	return out, nil
+	return nil
 }
 
 func parsePositiveOrZeroInts(raw, label string) ([]int, error) {
