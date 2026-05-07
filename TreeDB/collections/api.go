@@ -11440,7 +11440,7 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 		capHint = opts.Limit
 	}
 	var out []DocumentRecord
-	truncated, found, err := c.scanDocumentsByIndexRange(indexName, opts, func(record BorrowedDocumentRecord) (bool, error) {
+	truncated, indexFound, err := c.scanDocumentsByIndexRange(indexName, opts, func(record BorrowedDocumentRecord) (bool, error) {
 		if out == nil {
 			out = make([]DocumentRecord, 0, capHint)
 		}
@@ -11453,7 +11453,7 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 	if err != nil {
 		return nil, false, err
 	}
-	if !found {
+	if !indexFound {
 		return make([]DocumentRecord, 0), false, nil
 	}
 	if out == nil {
@@ -11467,8 +11467,9 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 // performance-oriented internal integration API for the Mongo gateway: record
 // slices are borrowed, and fn runs while the collection write-domain read lock
 // may be held. The callback must not retain or modify slices, call back into
-// Collection, or perform blocking work. General callers should use
-// FindDocumentsByIndexRange.
+// Collection, or perform blocking work. Missing indexes are treated as empty
+// scans. Descending scans are not supported, and opts.Limit must be positive.
+// General callers should use FindDocumentsByIndexRange.
 func (c *Collection) ScanBorrowedDocumentsByIndexRange(indexName string, opts IndexRangeOptions, fn func(BorrowedDocumentRecord) (bool, error)) (bool, error) {
 	if fn == nil {
 		return false, errors.New("collections: nil borrowed index document range callback")
@@ -11477,7 +11478,7 @@ func (c *Collection) ScanBorrowedDocumentsByIndexRange(indexName string, opts In
 	return truncated, err
 }
 
-func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRangeOptions, fn func(BorrowedDocumentRecord) (bool, error)) (truncated bool, found bool, err error) {
+func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRangeOptions, fn func(BorrowedDocumentRecord) (bool, error)) (truncated bool, indexFound bool, err error) {
 	if c == nil {
 		return false, false, errCollectionNil
 	}
@@ -11491,7 +11492,7 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 		return false, false, errors.New("collections: index range limit cannot be negative")
 	}
 	if opts.Limit == 0 {
-		return nil, false, errors.New("collections: document index range reads require a positive limit")
+		return false, false, errors.New("collections: document index range reads require a positive limit")
 	}
 	if opts.Desc {
 		return false, false, errors.New("collections: descending index range scans are not supported")
