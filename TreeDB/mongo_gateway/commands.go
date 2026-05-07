@@ -1599,7 +1599,7 @@ func collectIndexedRangeCursorDocs(col *collections.Collection, materializer *co
 		if len(record.Document) == 0 {
 			return true, nil
 		}
-		doc, err := storedDocumentToBSON(col, materializer, record.Document)
+		doc, err := borrowedStoredDocumentToBSON(materializer, record.Document)
 		if err != nil {
 			return false, err
 		}
@@ -1655,7 +1655,7 @@ func newRawCursorDocumentBuilder(dst []byte, ns, batchKey string, maxBatchBytes 
 func (b *rawCursorDocumentBuilder) appendDocument(doc wire.Document) (bool, error) {
 	docBytes := findBatchDocumentBytes(doc, b.count)
 	if findBatchOverheadBytes+docBytes > b.maxBatchBytes {
-		return false, fmt.Errorf("Mongo gateway cursor document exceeds max message size: docBytes=%d maxBytes=%d", docBytes, b.maxBatchBytes)
+		return false, fmt.Errorf("mongo gateway cursor document exceeds max batch bytes: docBytes=%d maxBatchBytes=%d", docBytes, b.maxBatchBytes)
 	}
 	if b.count > 0 && findBatchOverheadBytes+b.batchBytes+docBytes > b.maxBatchBytes {
 		return false, nil
@@ -1977,7 +1977,7 @@ func documentsBatchWithLimit(docs []wire.Document, projection compiledProjection
 		}
 		docBytes := findBatchDocumentBytes(doc, len(out))
 		if findBatchOverheadBytes+docBytes > maxBytes {
-			return nil, 0, fmt.Errorf("Mongo gateway cursor document exceeds max message size: docBytes=%d maxBytes=%d", docBytes, maxBytes)
+			return nil, 0, fmt.Errorf("mongo gateway cursor document exceeds max batch bytes: docBytes=%d maxBatchBytes=%d", docBytes, maxBytes)
 		}
 		if len(out) > 0 && findBatchOverheadBytes+batchBytes+docBytes > maxBytes {
 			break
@@ -2001,7 +2001,7 @@ func rawDocumentsBatchLimit(docs []wire.Document, maxDocs int, maxBytes int) (in
 	for consumed < maxDocs {
 		docBytes := findBatchDocumentBytes(docs[consumed], consumed)
 		if findBatchOverheadBytes+docBytes > maxBytes {
-			return 0, fmt.Errorf("Mongo gateway cursor document exceeds max message size: docBytes=%d maxBytes=%d", docBytes, maxBytes)
+			return 0, fmt.Errorf("mongo gateway cursor document exceeds max batch bytes: docBytes=%d maxBatchBytes=%d", docBytes, maxBytes)
 		}
 		if consumed > 0 && findBatchOverheadBytes+batchBytes+docBytes > maxBytes {
 			break
@@ -2330,6 +2330,13 @@ func storedDocumentMaterializerForCollection(col *collections.Collection) (*coll
 	default:
 		return col.NewStoredDocumentJSONMaterializer()
 	}
+}
+
+func borrowedStoredDocumentToBSON(materializer *collections.StoredDocumentJSONMaterializer, stored []byte) (wire.Document, error) {
+	// Borrowed scan callbacks already run under the collection's captured read
+	// state. Do not call back into Collection here; doing so can block behind a
+	// writer while the callback still holds the borrowed scan lock.
+	return storedDocumentToBSON(nil, materializer, stored)
 }
 
 func storedDocumentToBSON(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, stored []byte) (wire.Document, error) {
