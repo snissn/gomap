@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"bytes"
 	"encoding/hex"
 	"testing"
 )
@@ -155,28 +156,28 @@ func TestDecodeDeterministicEntryRejectsMalformedEnvelope(t *testing.T) {
 }
 
 func TestDecodeDeterministicEntryRejectsUnsortedSections(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		sections []SectionID
-	}{
-		{name: "decreasing", sections: []SectionID{SectionDocuments, SectionDocumentIDs}},
-		{name: "duplicate", sections: []SectionID{SectionDocumentIDs, SectionDocumentIDs}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			raw := []byte("TDC1")
-			raw = appendUvarint(raw, DeterministicEntryVersion)
-			raw = appendUvarint(raw, uint64(CommandInsertBatch))
-			raw = appendUvarint(raw, 1)
-			raw = appendUvarint(raw, 0)
-			raw = appendUvarint(raw, uint64(len(tc.sections)))
-			for _, id := range tc.sections {
-				raw = appendUvarint(raw, uint64(id))
-				raw = appendUvarint(raw, 0)
-			}
-			if _, err := DecodeDeterministicEntry(raw, Limits{}); codeOf(err) != ErrMalformedFrame {
-				t.Fatalf("DecodeDeterministicEntry err=%v code=%d want malformed", err, codeOf(err))
-			}
-		})
+	raw := []byte("TDC1")
+	raw = appendUvarint(raw, DeterministicEntryVersion)
+	raw = appendUvarint(raw, uint64(CommandInsertBatch))
+	raw = appendUvarint(raw, 1)
+	raw = appendUvarint(raw, 0)
+	raw = appendUvarint(raw, 2)
+	for _, id := range []SectionID{SectionDocuments, SectionDocumentIDs} {
+		raw = appendUvarint(raw, uint64(id))
+		raw = appendUvarint(raw, 0)
+	}
+	if _, err := DecodeDeterministicEntry(raw, Limits{}); codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("DecodeDeterministicEntry err=%v code=%d want malformed", err, codeOf(err))
+	}
+}
+
+func TestDecodeDeterministicEntryRejectsDuplicateSingletonSections(t *testing.T) {
+	raw := deterministicEntryTestRaw(CommandInsertBatch,
+		Section{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
+		Section{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("b"))},
+	)
+	if _, err := DecodeDeterministicEntry(raw, Limits{}); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("DecodeDeterministicEntry err=%v code=%d want invalid command", err, codeOf(err))
 	}
 }
 
@@ -286,6 +287,28 @@ func TestDecodeDeterministicEntryClearsScratchOnSchemaError(t *testing.T) {
 	)
 	if _, err := DecodeDeterministicEntryInto(raw, Limits{}, scratch); codeOf(err) != ErrInvalidCommand {
 		t.Fatalf("DecodeDeterministicEntryInto err=%v code=%d want invalid command", err, codeOf(err))
+	}
+	if len(scratch.Sections) != 0 {
+		t.Fatalf("scratch len=%d want 0", len(scratch.Sections))
+	}
+	backing := scratch.Sections[:cap(scratch.Sections)]
+	for i, section := range backing {
+		if section.ID != 0 || section.Bytes != nil {
+			t.Fatalf("scratch backing[%d]=%+v want zero", i, section)
+		}
+	}
+}
+
+func TestDecodeDeterministicEntryClearsScratchOnMidDecodeError(t *testing.T) {
+	scratch := &DeterministicEntryScratch{
+		Sections: make([]Section, 0, 1),
+	}
+	raw := deterministicEntryTestRaw(CommandInsertBatch,
+		Section{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, bytes.Repeat([]byte("x"), 1024))},
+		Section{ID: SectionDocuments, Bytes: []byte{1, 0x81, 0x00}},
+	)
+	if _, err := DecodeDeterministicEntryInto(raw, Limits{}, scratch); codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("DecodeDeterministicEntryInto err=%v code=%d want malformed", err, codeOf(err))
 	}
 	if len(scratch.Sections) != 0 {
 		t.Fatalf("scratch len=%d want 0", len(scratch.Sections))
@@ -522,7 +545,7 @@ func TestDeterministicEntryRejectsTooManyDocumentIDs(t *testing.T) {
 	for i := 0; i < maxDeterministicDocumentIDs+1; i++ {
 		raw = append(raw, 0)
 	}
-	if err := validateDeterministicDocumentIDs(raw); codeOf(err) != ErrResourceExhausted {
+	if err := validateDeterministicDocumentIDs(raw, Limits{}); codeOf(err) != ErrResourceExhausted {
 		t.Fatalf("validateDeterministicDocumentIDs err=%v code=%d want resource exhausted", err, codeOf(err))
 	}
 }
