@@ -451,10 +451,18 @@ func runRow(cfg config, format collections.DocumentFormat, indexes int, state re
 		return rowResult{}, err
 	}
 
-	row.Phases = append(row.Phases, runReadPhases(target, cfg, indexes)...)
+	readPhases, err := runReadPhases(target, cfg, indexes)
+	if err != nil {
+		return rowResult{}, err
+	}
+	row.Phases = append(row.Phases, readPhases...)
 	if cfg.Updates > 0 {
+		updateWorkload, err := prepareUpdateSet(target, cfg.Updates)
+		if err != nil {
+			return rowResult{}, err
+		}
 		phase, err := timedPhase(target, "id_update_set", func() (int64, int64, error) {
-			return runUpdateSet(target, cfg.Updates, 1)
+			return runUpdateSet(target, updateWorkload, 1)
 		})
 		if err != nil {
 			return rowResult{}, err
@@ -462,7 +470,7 @@ func runRow(cfg config, format collections.DocumentFormat, indexes int, state re
 		row.Phases = append(row.Phases, phase)
 		for _, writers := range cfg.ReaderSweep {
 			phase, err := timedPhase(target, fmt.Sprintf("concurrent_id_update_set_w%d", writers), func() (int64, int64, error) {
-				return runUpdateSet(target, cfg.Updates, writers)
+				return runUpdateSet(target, updateWorkload, writers)
 			})
 			if err != nil {
 				return rowResult{}, err
@@ -471,7 +479,7 @@ func runRow(cfg config, format collections.DocumentFormat, indexes int, state re
 		}
 	}
 	if cfg.Deletes > 0 {
-		phase, err := timedPhase(target, "id_delete", func() (int64, int64, error) {
+		phase, err := timedPhase(target, "id_delete_one", func() (int64, int64, error) {
 			return runDeletes(target, cfg.Deletes)
 		})
 		if err != nil {
@@ -483,36 +491,44 @@ func runRow(cfg config, format collections.DocumentFormat, indexes int, state re
 	return row, nil
 }
 
-func runReadPhases(target *benchTarget, cfg config, indexes int) []phaseResult {
+func runReadPhases(target *benchTarget, cfg config, indexes int) ([]phaseResult, error) {
 	var phases []phaseResult
-	appendPhase := func(phase phaseResult, err error) {
+	appendPhase := func(phase phaseResult, err error) error {
 		if err != nil {
-			phases = append(phases, phaseResult{Name: phase.Name, Skipped: true, SkipReason: err.Error()})
-			return
+			return fmt.Errorf("%s: %w", phase.Name, err)
 		}
 		phases = append(phases, phase)
+		return nil
 	}
 	if cfg.Reads > 0 {
 		phase, err := timedPhase(target, "id_find_one", func() (int64, int64, error) {
 			return runIDReads(target, cfg.Reads, 1)
 		})
-		appendPhase(phase, err)
+		if err := appendPhase(phase, err); err != nil {
+			return nil, err
+		}
 		for _, readers := range cfg.ReaderSweep {
 			phase, err := timedPhase(target, fmt.Sprintf("concurrent_id_find_one_r%d", readers), func() (int64, int64, error) {
 				return runIDReads(target, cfg.Reads, readers)
 			})
-			appendPhase(phase, err)
+			if err := appendPhase(phase, err); err != nil {
+				return nil, err
+			}
 		}
 		if indexes >= 1 {
 			phase, err = timedPhase(target, "email_find_one", func() (int64, int64, error) {
 				return runEmailReads(target, cfg.Reads, 1)
 			})
-			appendPhase(phase, err)
+			if err := appendPhase(phase, err); err != nil {
+				return nil, err
+			}
 			for _, readers := range cfg.ReaderSweep {
 				phase, err := timedPhase(target, fmt.Sprintf("concurrent_email_find_one_r%d", readers), func() (int64, int64, error) {
 					return runEmailReads(target, cfg.Reads, readers)
 				})
-				appendPhase(phase, err)
+				if err := appendPhase(phase, err); err != nil {
+					return nil, err
+				}
 			}
 		} else {
 			phases = append(phases, skippedPhase("email_find_one", "email index is absent for indexes_0"))
@@ -523,12 +539,16 @@ func runReadPhases(target *benchTarget, cfg config, indexes int) []phaseResult {
 			phase, err := timedPhase(target, "age_range_indexed_limit_10", func() (int64, int64, error) {
 				return runAgeIndexedRangeReads(target, cfg.RangeReads, 1)
 			})
-			appendPhase(phase, err)
+			if err := appendPhase(phase, err); err != nil {
+				return nil, err
+			}
 			for _, readers := range cfg.ReaderSweep {
 				phase, err := timedPhase(target, fmt.Sprintf("concurrent_age_range_indexed_limit_10_r%d", readers), func() (int64, int64, error) {
 					return runAgeIndexedRangeReads(target, cfg.RangeReads, readers)
 				})
-				appendPhase(phase, err)
+				if err := appendPhase(phase, err); err != nil {
+					return nil, err
+				}
 			}
 		} else {
 			phases = append(phases, skippedPhase("age_range_indexed_limit_10", "age index is absent until indexes_2"))
@@ -536,15 +556,19 @@ func runReadPhases(target *benchTarget, cfg config, indexes int) []phaseResult {
 		phase, err := timedPhase(target, "age_range_scan_limit_10", func() (int64, int64, error) {
 			return runAgeScanRangeReads(target, cfg.RangeReads, 1)
 		})
-		appendPhase(phase, err)
+		if err := appendPhase(phase, err); err != nil {
+			return nil, err
+		}
 		for _, readers := range cfg.ReaderSweep {
 			phase, err := timedPhase(target, fmt.Sprintf("concurrent_age_range_scan_limit_10_r%d", readers), func() (int64, int64, error) {
 				return runAgeScanRangeReads(target, cfg.RangeReads, readers)
 			})
-			appendPhase(phase, err)
+			if err := appendPhase(phase, err); err != nil {
+				return nil, err
+			}
 		}
 	}
-	return phases
+	return phases, nil
 }
 
 func skippedPhase(name, reason string) phaseResult {
@@ -854,7 +878,8 @@ func runEmailReads(target *benchTarget, total, workers int) (int64, int64, error
 func runAgeIndexedRangeReads(target *benchTarget, total, workers int) (int64, int64, error) {
 	buffers := make([][]byte, workerBufferCount(workers))
 	return runParallel(total, workers, func(op int, worker int) error {
-		age := int64(18 + (op % 67))
+		ordinal := benchmarkDocumentOrdinal(op, 19, len(target.fixture.ids))
+		age := target.fixture.ages[ordinal]
 		ids, _, err := target.col.FindByIndexRange("age", collections.IndexRangeOptions{
 			Lower: collections.IndexRangeBound{Value: age, Inclusive: true},
 			Upper: collections.IndexRangeBound{Value: age, Inclusive: true},
@@ -886,8 +911,8 @@ func runAgeScanRangeReads(target *benchTarget, total, workers int) (int64, int64
 	docs := len(target.fixture.ids)
 	buffers := make([][]byte, workerBufferCount(workers))
 	return runParallel(total, workers, func(op int, worker int) error {
-		wantAge := int64(18 + (op % 67))
 		start := benchmarkDocumentOrdinal(op, 43, docs)
+		wantAge := target.fixture.ages[start]
 		foundCount := 0
 		buf := buffers[worker]
 		for scanned := 0; scanned < docs && foundCount < 10; scanned++ {
@@ -919,21 +944,33 @@ func workerBufferCount(workers int) int {
 	return workers
 }
 
-func runUpdateSet(target *benchTarget, total, workers int) (int64, int64, error) {
-	replacements := make([][]byte, total)
-	ordinals := make([]int, total)
+type updateSetWorkload struct {
+	ordinals     []int
+	replacements [][]byte
+}
+
+func prepareUpdateSet(target *benchTarget, total int) (updateSetWorkload, error) {
+	workload := updateSetWorkload{
+		ordinals:     make([]int, total),
+		replacements: make([][]byte, total),
+	}
 	for i := 0; i < total; i++ {
 		ordinal := benchmarkDocumentOrdinal(i, 37, len(target.fixture.ids))
-		ordinals[i] = ordinal
+		workload.ordinals[i] = ordinal
 		doc, err := target.fixture.encodeDocument(ordinal, true, i)
 		if err != nil {
-			return 0, 0, err
+			return updateSetWorkload{}, err
 		}
-		replacements[i] = doc
+		workload.replacements[i] = doc
 	}
+	return workload, nil
+}
+
+func runUpdateSet(target *benchTarget, workload updateSetWorkload, workers int) (int64, int64, error) {
+	total := len(workload.replacements)
 	return runParallel(total, workers, func(op int, worker int) error {
-		id := target.fixture.ids[ordinals[op]]
-		replacement := replacements[op]
+		id := target.fixture.ids[workload.ordinals[op]]
+		replacement := workload.replacements[op]
 		_, _, err := target.col.Update(id, func(current []byte) ([]byte, bool, error) {
 			if current == nil {
 				return nil, false, fmt.Errorf("update id %q missing", id)
@@ -958,14 +995,18 @@ func runParallel(total, workers int, fn func(op int, worker int) error) (int64, 
 		return 0, 0, nil
 	}
 	if workers <= 1 {
+		var completed int64
 		for i := 0; i < total; i++ {
 			if err := fn(i, 0); err != nil {
-				return int64(i), int64(i), err
+				return completed, completed, err
 			}
+			completed++
 		}
 		return int64(total), int64(total), nil
 	}
 	var next atomic.Int64
+	var completed atomic.Int64
+	var stopped atomic.Bool
 	errCh := make(chan error, workers)
 	var wg sync.WaitGroup
 	for worker := 0; worker < workers; worker++ {
@@ -974,24 +1015,30 @@ func runParallel(total, workers int, fn func(op int, worker int) error) (int64, 
 		go func() {
 			defer wg.Done()
 			for {
+				if stopped.Load() {
+					return
+				}
 				op := int(next.Add(1) - 1)
 				if op >= total {
 					return
 				}
 				if err := fn(op, worker); err != nil {
+					stopped.Store(true)
 					select {
 					case errCh <- err:
 					default:
 					}
 					return
 				}
+				completed.Add(1)
 			}
 		}()
 	}
 	wg.Wait()
 	select {
 	case err := <-errCh:
-		return next.Load(), next.Load(), err
+		n := completed.Load()
+		return n, n, err
 	default:
 		return int64(total), int64(total), nil
 	}

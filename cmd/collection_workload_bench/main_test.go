@@ -65,7 +65,7 @@ func TestRunSmallNativeCollectionMatrix(t *testing.T) {
 		requirePhase(t, row, "concurrent_age_range_indexed_limit_10_r2", false)
 		requirePhase(t, row, "id_update_set", false)
 		requirePhase(t, row, "concurrent_id_update_set_w2", false)
-		requirePhase(t, row, "id_delete", false)
+		requirePhase(t, row, "id_delete_one", false)
 	}
 }
 
