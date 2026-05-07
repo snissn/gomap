@@ -3,6 +3,7 @@ package nativewire
 import (
 	"context"
 	"net"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -54,8 +55,27 @@ func TestServerControlHelloPingStatsGoaway(t *testing.T) {
 			t.Fatalf("stats missing %s in %#v", key, stats)
 		}
 	}
-	if err := client.Goaway(ctx); err != nil {
+	goawayHeader, goawayBody, err := client.roundTrip(ctx, iwire.FrameGoaway, nil, iwire.FrameGoaway)
+	if err != nil {
 		t.Fatalf("Goaway: %v", err)
+	}
+	sections, err := iwire.DecodeSections(goawayBody, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatalf("decode goaway body: %v", err)
+	}
+	rawMeta, ok, err := singletonSection(sections, iwire.SectionResponseMeta)
+	if err != nil {
+		t.Fatalf("goaway response_meta: %v", err)
+	}
+	if !ok {
+		t.Fatal("goaway missing response_meta")
+	}
+	meta, err := decodeStringMap(rawMeta)
+	if err != nil {
+		t.Fatalf("decode goaway response_meta: %v", err)
+	}
+	if got, want := meta["last_accepted_request_id"], strconv.FormatUint(goawayHeader.RequestID, 10); got != want {
+		t.Fatalf("last_accepted_request_id=%q want %q", got, want)
 	}
 	select {
 	case err := <-errCh:
@@ -112,6 +132,39 @@ func TestClientDetectsUnexpectedResponseType(t *testing.T) {
 			return
 		}
 		errCh <- writeFrame(right, iwire.Header{Type: iwire.FramePong, RequestID: header.RequestID + 1}, nil)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := client.Ping(ctx)
+	if err == nil || !strings.Contains(err.Error(), "request_id") {
+		t.Fatalf("Ping error=%v want request_id mismatch", err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("server goroutine: %v", err)
+	}
+}
+
+func TestClientDetectsErrorResponseRequestIDMismatch(t *testing.T) {
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+	client := NewClient(left)
+	errCh := make(chan error, 1)
+	go func() {
+		header, _, err := readFrame(right, iwire.DefaultLimits())
+		if err != nil {
+			errCh <- err
+			return
+		}
+		body, err := iwire.AppendSection(nil, iwire.Section{
+			ID:    iwire.SectionError,
+			Bytes: appendErrorPayload(nil, iwire.ErrInvalidCommand, false, "wrong request"),
+		})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		errCh <- writeFrame(right, iwire.Header{Type: iwire.FrameError, RequestID: header.RequestID + 1}, body)
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
