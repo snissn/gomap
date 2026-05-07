@@ -1,6 +1,7 @@
 package mongogateway
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -4200,6 +4201,79 @@ func TestServerRejectsCompressedMessages(t *testing.T) {
 	}
 	if rw.w.Len() != 0 {
 		t.Fatalf("unexpected response bytes=%d", rw.w.Len())
+	}
+}
+
+func TestServeConnBufferedMessageCoalescingAppendsResponses(t *testing.T) {
+	firstCommand := mustDocument(t, bson.D{
+		{Key: "ping", Value: int32(1)},
+		{Key: "$db", Value: "admin"},
+	})
+	firstReq, err := wire.AppendMsgMessage(nil, 401, 0, 0, firstCommand)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage first: %v", err)
+	}
+	secondCommand := mustDocument(t, bson.D{
+		{Key: "ping", Value: int32(1)},
+		{Key: "$db", Value: "admin"},
+	})
+	secondReq, err := wire.AppendMsgMessage(nil, 402, 0, 0, secondCommand)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage second: %v", err)
+	}
+	requests := append(firstReq, secondReq...)
+	reader := bufio.NewReaderSize(bytes.NewReader(requests), len(requests))
+	if _, err := reader.Peek(len(requests)); err != nil {
+		t.Fatalf("prime buffered reader: %v", err)
+	}
+
+	server := NewServer()
+	var writeBuf []byte
+	writeBuf, appended, err := server.appendBufferedMessageWithOwner(reader, 1, writeBuf)
+	if err != nil {
+		t.Fatalf("append first buffered message: %v", err)
+	}
+	if !appended {
+		t.Fatal("first buffered message was not appended")
+	}
+	writeBuf, appended, err = server.appendBufferedMessageWithOwner(reader, 1, writeBuf)
+	if err != nil {
+		t.Fatalf("append second buffered message: %v", err)
+	}
+	if !appended {
+		t.Fatal("second buffered message was not appended")
+	}
+	if reader.Buffered() != 0 {
+		t.Fatalf("reader buffered bytes=%d want 0", reader.Buffered())
+	}
+
+	responseReader := bytes.NewReader(writeBuf)
+	firstHeader, firstBody, err := wire.ReadMessage(responseReader, 0)
+	if err != nil {
+		t.Fatalf("read first response: %v", err)
+	}
+	if firstHeader.OpCode != wire.OpMsg || firstHeader.ResponseTo != 401 {
+		t.Fatalf("first response header=%+v", firstHeader)
+	}
+	firstMsg, err := wire.ParseMsg(firstBody)
+	if err != nil {
+		t.Fatalf("parse first response: %v", err)
+	}
+	assertOK(t, firstMsg.Body)
+	secondHeader, secondBody, err := wire.ReadMessage(responseReader, 0)
+	if err != nil {
+		t.Fatalf("read second response: %v", err)
+	}
+	if secondHeader.OpCode != wire.OpMsg || secondHeader.ResponseTo != 402 {
+		t.Fatalf("second response header=%+v", secondHeader)
+	}
+	secondMsg, err := wire.ParseMsg(secondBody)
+	if err != nil {
+		t.Fatalf("parse second response: %v", err)
+	}
+	assertOK(t, secondMsg.Body)
+	if responseReader.Len() != 0 {
+		t.Fatalf("trailing response bytes=%d", responseReader.Len())
 	}
 }
 

@@ -32,6 +32,7 @@ const (
 	maxRetainedWireReadBuffer      = 1 << 20
 	maxRetainedWireWriteBuffer     = 1 << 20
 	defaultWireReadBufferSize      = 32 * 1024
+	maxCoalescedWireResponses      = 64
 )
 
 var errServerClosed = errors.New("mongo gateway server is closed")
@@ -201,7 +202,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		}
 
 		var err error
-		readBuf, writeBuf, err = s.serveOneWithOwner(rw, owner, readBuf, writeBuf)
+		readBuf, writeBuf, err = s.appendOneWithOwner(rw, owner, readBuf, writeBuf[:0])
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
@@ -210,6 +211,30 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 				return ctx.Err()
 			}
 			return err
+		}
+		for coalesced := 1; coalesced < maxCoalescedWireResponses && len(writeBuf) < maxRetainedWireWriteBuffer; coalesced++ {
+			var appended bool
+			writeBuf, appended, err = s.appendBufferedMessageWithOwner(rw.reader, owner, writeBuf)
+			if err != nil {
+				return err
+			}
+			if !appended {
+				break
+			}
+		}
+		if len(writeBuf) == 0 {
+			continue
+		}
+		if err := writeFull(rw, writeBuf); err != nil {
+			if ctx.Err() != nil && (errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe)) {
+				return ctx.Err()
+			}
+			return err
+		}
+		if cap(writeBuf) <= maxRetainedWireWriteBuffer {
+			writeBuf = writeBuf[:0]
+		} else {
+			writeBuf = nil
 		}
 	}
 }
@@ -266,6 +291,25 @@ func (s *Server) ServeOneWithOwnerBuffered(rw io.ReadWriter, cursorOwner int64, 
 }
 
 func (s *Server) serveOneWithOwner(rw io.ReadWriter, cursorOwner int64, readBuf, writeBuf []byte) ([]byte, []byte, error) {
+	readBuf, writeBuf, err := s.appendOneWithOwner(rw, cursorOwner, readBuf, writeBuf[:0])
+	if err != nil {
+		return readBuf, writeBuf, err
+	}
+	if len(writeBuf) == 0 {
+		return readBuf, writeBuf, nil
+	}
+	if err := writeFull(rw, writeBuf); err != nil {
+		return readBuf, writeBuf, err
+	}
+	if cap(writeBuf) <= maxRetainedWireWriteBuffer {
+		writeBuf = writeBuf[:0]
+	} else {
+		writeBuf = nil
+	}
+	return readBuf, writeBuf, nil
+}
+
+func (s *Server) appendOneWithOwner(rw io.Reader, cursorOwner int64, readBuf, writeBuf []byte) ([]byte, []byte, error) {
 	if s.isClosed() {
 		return readBuf, writeBuf, errServerClosed
 	}
@@ -288,15 +332,51 @@ func (s *Server) serveOneWithOwner(rw io.ReadWriter, cursorOwner int64, readBuf,
 	if response == nil {
 		return readBuf, writeBuf, nil
 	}
-	if err := writeFull(rw, response); err != nil {
-		return readBuf, writeBuf, err
-	}
 	if cap(response) <= maxRetainedWireWriteBuffer {
-		writeBuf = response[:0]
+		writeBuf = response
 	} else {
-		writeBuf = nil
+		writeBuf = response
 	}
 	return readBuf, writeBuf, nil
+}
+
+func (s *Server) appendBufferedMessageWithOwner(reader *bufio.Reader, cursorOwner int64, writeBuf []byte) ([]byte, bool, error) {
+	if s.isClosed() {
+		return writeBuf, false, errServerClosed
+	}
+	if reader == nil || reader.Buffered() < wire.HeaderLen {
+		return writeBuf, false, nil
+	}
+	headerBytes, err := reader.Peek(wire.HeaderLen)
+	if err != nil {
+		return writeBuf, false, nil
+	}
+	h, err := wire.ParseHeader(headerBytes)
+	if err != nil {
+		return writeBuf, false, err
+	}
+	if h.MessageLength > s.maxMessageLength() {
+		return writeBuf, false, fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, h.MessageLength, s.maxMessageLength())
+	}
+	messageLength := int(h.MessageLength)
+	if reader.Buffered() < messageLength {
+		return writeBuf, false, nil
+	}
+	message, err := reader.Peek(messageLength)
+	if err != nil {
+		return writeBuf, false, nil
+	}
+	response, err := s.handleMessageInto(writeBuf, h, message[wire.HeaderLen:messageLength], cursorOwner)
+	if err != nil {
+		return writeBuf, false, err
+	}
+	if _, err := reader.Discard(messageLength); err != nil {
+		return writeBuf, false, err
+	}
+	if response != nil {
+		writeBuf = response
+	}
+	return writeBuf, true, nil
 }
 
 func (s *Server) handleMessage(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
