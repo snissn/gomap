@@ -25,7 +25,8 @@ func DecodeSections(src []byte, limits Limits) ([]Section, error) {
 	return DecodeSectionsInto(nil, src, limits)
 }
 
-// DecodeSectionsInto decodes section envelopes into dst[:0].
+// DecodeSectionsInto decodes section envelopes, reusing dst[:0] when capacity
+// allows and allocating a larger backing array when needed.
 //
 // The returned sections borrow from src. Callers may reuse dst after they are
 // done with the decoded section view.

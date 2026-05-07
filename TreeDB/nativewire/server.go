@@ -16,24 +16,27 @@ import (
 )
 
 const (
-	defaultMaxInFlight = 1024
+	defaultMaxInFlight          = 1024
+	defaultMaxCollectionHandles = 1024
 )
 
 type ServerOptions struct {
-	Limits           iwire.Limits
-	MaxInFlight      int
-	DefaultAckPolicy iwire.AckPolicy
-	Collections      *collections.CollectionManager
-	Backend          *backenddb.DB
+	Limits               iwire.Limits
+	MaxInFlight          int
+	MaxCollectionHandles int
+	DefaultAckPolicy     iwire.AckPolicy
+	Collections          *collections.CollectionManager
+	Backend              *backenddb.DB
 }
 
 type Server struct {
-	limits           iwire.Limits
-	maxInFlight      int
-	defaultAckPolicy iwire.AckPolicy
-	registry         *iwire.Registry
-	collections      *collections.CollectionManager
-	backend          *backenddb.DB
+	limits               iwire.Limits
+	maxInFlight          int
+	maxCollectionHandles int
+	defaultAckPolicy     iwire.AckPolicy
+	registry             *iwire.Registry
+	collections          *collections.CollectionManager
+	backend              *backenddb.DB
 
 	closed atomic.Bool
 	connMu sync.Mutex
@@ -46,21 +49,28 @@ type Server struct {
 
 type connState struct {
 	id         uint64
+	hello      bool
 	mu         sync.Mutex
 	nextHandle uint64
 	handles    map[CollectionHandle]string
 }
 
-func (s *connState) addCollectionHandle(name string) CollectionHandle {
+func (s *connState) addCollectionHandle(name string, limit int) (CollectionHandle, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.nextHandle++
-	handle := CollectionHandle(s.nextHandle)
 	if s.handles == nil {
 		s.handles = make(map[CollectionHandle]string)
 	}
+	if limit > 0 && len(s.handles) >= limit {
+		return 0, protocolError(iwire.ErrResourceExhausted, "collection handle limit %d reached", limit)
+	}
+	s.nextHandle++
+	if s.nextHandle == 0 {
+		return 0, protocolError(iwire.ErrResourceExhausted, "collection handle space exhausted")
+	}
+	handle := CollectionHandle(s.nextHandle)
 	s.handles[handle] = name
-	return handle
+	return handle, nil
 }
 
 func (s *connState) collectionForHandle(handle CollectionHandle) (string, bool) {
@@ -89,17 +99,22 @@ func NewServer(opts ServerOptions) *Server {
 	if maxInFlight <= 0 {
 		maxInFlight = defaultMaxInFlight
 	}
+	maxCollectionHandles := opts.MaxCollectionHandles
+	if maxCollectionHandles <= 0 {
+		maxCollectionHandles = defaultMaxCollectionHandles
+	}
 	defaultAck := opts.DefaultAckPolicy
 	if defaultAck == 0 {
 		defaultAck = iwire.AckVisible
 	}
 	return &Server{
-		limits:           limits,
-		maxInFlight:      maxInFlight,
-		defaultAckPolicy: defaultAck,
-		registry:         iwire.MustV1Registry(),
-		collections:      opts.Collections,
-		backend:          opts.Backend,
+		limits:               limits,
+		maxInFlight:          maxInFlight,
+		maxCollectionHandles: maxCollectionHandles,
+		defaultAckPolicy:     defaultAck,
+		registry:             iwire.MustV1Registry(),
+		collections:          opts.Collections,
+		backend:              opts.Backend,
 	}
 }
 
@@ -223,6 +238,9 @@ func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState,
 		s.counters.inc("requests.canceled_total")
 		return nil
 	case iwire.FrameRequest:
+		if state != nil && !state.hello {
+			return s.writeError(w, header, protocolError(iwire.ErrInvalidCommand, "hello required before request"))
+		}
 		return s.handleRequest(ctx, w, state, header, body)
 	default:
 		return s.writeError(w, header, protocolError(iwire.ErrInvalidCommand, "unexpected frame type %d", header.Type))
@@ -293,11 +311,16 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 }
 
 func (s *Server) writeHelloOK(w io.Writer, header iwire.Header, state *connState) error {
+	var connectionID uint64
+	if state != nil {
+		state.hello = true
+		connectionID = state.id
+	}
 	caps := map[string]string{
 		"protocol":           "treedb-native-wire",
 		"protocol_major":     strconv.Itoa(int(iwire.ProtocolMajorV1)),
 		"protocol_minor":     strconv.Itoa(int(iwire.ProtocolMinorV0)),
-		"connection_id":      strconv.FormatUint(state.id, 10),
+		"connection_id":      strconv.FormatUint(connectionID, 10),
 		"default_ack_policy": strconv.FormatUint(uint64(s.defaultAckPolicy), 10),
 	}
 	body, err := iwire.AppendSection(nil, iwire.Section{ID: iwire.SectionCapabilitySet, Bytes: appendStringMap(nil, caps)})
