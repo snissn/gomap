@@ -11849,17 +11849,20 @@ func encodedDoubleComponentIsNaN(encoded []byte) bool {
 	return len(encoded) == 1 && encoded[0] == 0x00
 }
 
-func scanMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, dedupeDocumentIDs bool, fn func([]byte) (bool, error)) (bool, error) {
+func scanMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, dedupeDocumentID bool, fn func([]byte) (bool, error)) (bool, error) {
 	return scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt, valueType, maxResults, scanMergedCollectionIndexIDOptions{
 		CloneDocumentID:  true,
-		DedupeDocumentID: dedupeDocumentIDs,
+		DedupeDocumentID: dedupeDocumentID,
 	}, fn)
 }
 
-func scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, dedupeDocumentIDs bool, fn func([]byte) (bool, error)) (bool, error) {
+// scanMergedCollectionIndexIDsBorrowed calls fn with document IDs that may alias
+// iterator key memory. fn must not retain or mutate id after returning; clone it
+// first if the ID needs to outlive the callback.
+func scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, dedupeDocumentID bool, fn func([]byte) (bool, error)) (bool, error) {
 	return scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt, valueType, maxResults, scanMergedCollectionIndexIDOptions{
 		CloneDocumentID:  false,
-		DedupeDocumentID: dedupeDocumentIDs,
+		DedupeDocumentID: dedupeDocumentID,
 	}, fn)
 }
 
@@ -11884,7 +11887,7 @@ func scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt iterator.Un
 				continue
 			}
 			if maxResults > 0 && emitted >= maxResults {
-				return true, nil
+				return true, collectionIndexIteratorError(persistedIt)
 			}
 			id, err := indexKeyDocumentID(valueType, persistedKey)
 			if err != nil {
