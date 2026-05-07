@@ -860,7 +860,9 @@ func openTreeDBDirectTarget(ctx context.Context, cfg config) (*benchTarget, erro
 	}
 	manager := collections.NewCollectionManager(db)
 	cleanup := func(cleanupCtx context.Context) error {
-		_ = cleanupCtx
+		if err := cleanupCtx.Err(); err != nil {
+			return errors.Join(err, backendCleanup())
+		}
 		return errors.Join(manager.FlushAll(), backendCleanup())
 	}
 	return &benchTarget{
@@ -2998,6 +3000,9 @@ func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarge
 		})
 	}
 	if cfg.ClientMode == clientModeDriverCommandRaw {
+		if target == nil || target.client == nil {
+			return phaseResult{}, errors.New("driver-command-raw range phase requires a Mongo driver client")
+		}
 		db := target.client.Database(cfg.Database)
 		return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentRangeReads, func(sample func(time.Duration)) error {
 			return runConcurrentOperations(ctx, readers, cfg.ConcurrentRangeReads, func(op int) error {
@@ -3116,7 +3121,7 @@ func rawCommandErrorMessage(raw bson.Raw) string {
 	if len(raw) == 0 {
 		return "missing ok field"
 	}
-	return string(raw)
+	return fmt.Sprintf("raw=%x", []byte(raw))
 }
 
 func validateRawAgeBatch(batch []bson.Raw, minAge int64) error {

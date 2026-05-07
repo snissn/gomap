@@ -11474,14 +11474,14 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 	}
 	start, end, empty, err := indexRangeScanBounds(idx.ValueType, opts)
 	if err != nil {
-		return nil, true, err
+		return nil, false, err
 	}
 	if empty {
 		return make([]DocumentRecord, 0), false, nil
 	}
 	exactPrefix, exactPrefixScan, err := exactIndexRangePrefix(idx.ValueType, opts)
 	if err != nil {
-		return nil, true, err
+		return nil, false, err
 	}
 	var bufferedTable memtable.Table
 	if exactPrefixScan {
@@ -11514,7 +11514,8 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 	out := make([]DocumentRecord, 0, capHint)
 	primaryRootName := collectionPrimaryRootName(catalog.meta.Name)
 	var scratch []byte
-	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, opts.Limit, func(id []byte) (bool, error) {
+	documentTruncated := false
+	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, 0, func(id []byte) (bool, error) {
 		var value []byte
 		var buffered, found bool
 		if domainLocked {
@@ -11530,6 +11531,10 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 		if !found {
 			return true, nil
 		}
+		if opts.Limit > 0 && len(out) >= opts.Limit {
+			documentTruncated = true
+			return false, nil
+		}
 		scratch = value
 		out = append(out, DocumentRecord{
 			ID:       id,
@@ -11539,6 +11544,9 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 	})
 	if err != nil {
 		return nil, false, err
+	}
+	if documentTruncated {
+		return out, true, nil
 	}
 	return out, truncated, nil
 }

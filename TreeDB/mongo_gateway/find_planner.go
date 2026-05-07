@@ -160,6 +160,9 @@ func bsonArrayElementOverhead(index int) int {
 }
 
 func bsonArrayIndexDigitCount(index int) int {
+	if index < 0 {
+		return len(strconv.Itoa(index))
+	}
 	if index < 10 {
 		return 1
 	}
