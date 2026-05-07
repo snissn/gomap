@@ -15,19 +15,42 @@ func AppendSection(dst []byte, s Section) ([]byte, error) {
 		return nil, err
 	}
 	dst = growBytes(dst, SectionEncodedLen(s))
-	dst = appendUvarint(dst, uint64(s.ID))
-	dst = appendUvarint(dst, s.Flags)
-	dst = appendUvarint(dst, uint64(len(s.Bytes)))
+	dst = appendSectionHeaderUnchecked(dst, s.ID, s.Flags, len(s.Bytes))
 	dst = append(dst, s.Bytes...)
 	return dst, nil
 }
 
+func AppendSectionHeader(dst []byte, id SectionID, flags uint64, sectionLen int) ([]byte, error) {
+	if err := validateSectionFlags(flags); err != nil {
+		return nil, err
+	}
+	if sectionLen < 0 {
+		return nil, protocolError(ErrMalformedFrame, "negative section length")
+	}
+	dst = growBytes(dst, SectionHeaderEncodedLen(id, flags, sectionLen))
+	return appendSectionHeaderUnchecked(dst, id, flags, sectionLen), nil
+}
+
+func appendSectionHeaderUnchecked(dst []byte, id SectionID, flags uint64, sectionLen int) []byte {
+	dst = appendUvarint(dst, uint64(id))
+	dst = appendUvarint(dst, flags)
+	dst = appendUvarint(dst, uint64(sectionLen))
+	return dst
+}
+
 func SectionEncodedLen(s Section) int {
-	n := uvarintLen(uint64(s.ID)) + uvarintLen(s.Flags) + uvarintLen(uint64(len(s.Bytes)))
+	n := SectionHeaderEncodedLen(s.ID, s.Flags, len(s.Bytes))
 	if len(s.Bytes) > maxInt-n {
 		return maxInt
 	}
 	return n + len(s.Bytes)
+}
+
+func SectionHeaderEncodedLen(id SectionID, flags uint64, sectionLen int) int {
+	if sectionLen < 0 {
+		sectionLen = 0
+	}
+	return uvarintLen(uint64(id)) + uvarintLen(flags) + uvarintLen(uint64(sectionLen))
 }
 
 func DecodeSections(src []byte, limits Limits) ([]Section, error) {

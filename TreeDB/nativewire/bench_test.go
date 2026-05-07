@@ -35,13 +35,17 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 			b.Fatalf("NewInProcessClient: %v", err)
 		}
 		defer func() { _ = clientCleanup() }()
+		handle, err := client.OpenCollection(context.Background(), "bench")
+		if err != nil {
+			b.Fatalf("OpenCollection: %v", err)
+		}
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			b.StopTimer()
 			ids, docs := benchmarkStoredBatch(i*batchSize, batchSize)
 			b.StartTimer()
-			if _, err := client.InsertBatch(context.Background(), "bench", collections.DocumentFormatJSON, ids, docs, AckVisible); err != nil {
+			if _, err := client.InsertBatchHandle(context.Background(), handle, collections.DocumentFormatJSON, ids, docs, AckVisible); err != nil {
 				b.Fatalf("InsertBatch native: %v", err)
 			}
 		}
@@ -80,11 +84,15 @@ func BenchmarkNativewireCollectionGetMany(b *testing.B) {
 			b.Fatalf("NewInProcessClient: %v", err)
 		}
 		defer func() { _ = clientCleanup() }()
+		handle, err := client.OpenCollection(context.Background(), "bench")
+		if err != nil {
+			b.Fatalf("OpenCollection: %v", err)
+		}
 		ids, _ := benchmarkStoredBatch(0, batchSize)
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			if _, _, err := client.GetMany(context.Background(), "bench", ids); err != nil {
+			if _, _, err := client.GetManyHandle(context.Background(), handle, ids); err != nil {
 				b.Fatalf("GetMany native: %v", err)
 			}
 		}

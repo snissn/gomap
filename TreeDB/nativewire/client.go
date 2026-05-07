@@ -13,10 +13,12 @@ import (
 )
 
 type Client struct {
-	conn    net.Conn
-	limits  iwire.Limits
-	nextReq atomic.Uint64
-	mu      sync.Mutex
+	conn        net.Conn
+	limits      iwire.Limits
+	nextReq     atomic.Uint64
+	mu          sync.Mutex
+	requestBody []byte
+	writeBody   []byte
 }
 
 func NewClient(conn net.Conn) *Client {
@@ -73,20 +75,29 @@ func (c *Client) commandSections(ctx context.Context, commandID iwire.CommandID,
 }
 
 func (c *Client) roundTrip(ctx context.Context, typ iwire.FrameType, body []byte, want iwire.FrameType) (iwire.Header, []byte, error) {
+	if c == nil {
+		return iwire.Header{}, nil, io.ErrClosedPipe
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.roundTripLocked(ctx, typ, body, want)
+}
+
+func (c *Client) roundTripLocked(ctx context.Context, typ iwire.FrameType, body []byte, want iwire.FrameType) (iwire.Header, []byte, error) {
 	if c == nil || c.conn == nil {
 		return iwire.Header{}, nil, io.ErrClosedPipe
 	}
 	if ctx != nil && ctx.Err() != nil {
 		return iwire.Header{}, nil, ctx.Err()
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	requestID := c.nextReq.Add(1)
 	if deadline, ok := ctxDeadline(ctx); ok {
 		_ = c.conn.SetDeadline(deadline)
 		defer func() { _ = c.conn.SetDeadline(noDeadline) }()
 	}
-	if err := writeFrame(c.conn, iwire.Header{Type: typ, RequestID: requestID}, body); err != nil {
+	var err error
+	c.writeBody, err = writeFrameBuffered(c.conn, iwire.Header{Type: typ, RequestID: requestID}, body, c.writeBody)
+	if err != nil {
 		return iwire.Header{}, nil, err
 	}
 	header, response, err := readFrame(c.conn, c.limits)

@@ -40,6 +40,18 @@ func TestDecodeSectionsIntoAndDecodeByteVectorIntoReuseBuffers(t *testing.T) {
 	}
 
 	vecBytes := AppendByteVector(nil, makeBenchmarkItems("doc", 8, 32)...)
+	itemsScratch := make([][]byte, 0, 8)
+	items, err := DecodeByteVectorItemsInto(itemsScratch, vecBytes, Limits{})
+	if err != nil {
+		t.Fatalf("DecodeByteVectorItemsInto: %v", err)
+	}
+	if len(items) != 8 {
+		t.Fatalf("items len=%d want 8", len(items))
+	}
+	if cap(items) != cap(itemsScratch) {
+		t.Fatalf("DecodeByteVectorItemsInto did not reuse caller capacity")
+	}
+
 	var scratch ByteVectorScratch
 	vec, err := DecodeByteVectorInto(vecBytes, Limits{}, &scratch)
 	if err != nil {

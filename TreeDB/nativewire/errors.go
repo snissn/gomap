@@ -58,6 +58,8 @@ func errorCodeFor(err error) iwire.ErrorCode {
 	}
 	msg := strings.ToLower(err.Error())
 	switch {
+	case strings.Contains(msg, "document id cannot be empty"):
+		return iwire.ErrInvalidCommand
 	case strings.Contains(msg, "duplicate document id"):
 		return iwire.ErrDuplicateDocumentID
 	case strings.Contains(msg, "document already exists"):

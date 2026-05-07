@@ -71,13 +71,21 @@ type serverCursor struct {
 }
 
 type connState struct {
-	id         uint64
-	mu         sync.Mutex
-	nextHandle uint64
-	handles    map[CollectionHandle]string
+	id          uint64
+	mu          sync.Mutex
+	nextHandle  uint64
+	handles     map[CollectionHandle]string
+	collections map[string]*collections.Collection
+
+	readBody       []byte
+	writeBody      []byte
+	sections       []iwire.Section
+	commandScratch iwire.CommandScratch
+	idsScratch     [][]byte
+	docsScratch    [][]byte
 }
 
-func (s *connState) addCollectionHandle(name string) CollectionHandle {
+func (s *connState) addCollectionHandle(name string, collection *collections.Collection) CollectionHandle {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.nextHandle++
@@ -86,6 +94,12 @@ func (s *connState) addCollectionHandle(name string) CollectionHandle {
 		s.handles = make(map[CollectionHandle]string)
 	}
 	s.handles[handle] = name
+	if collection != nil {
+		if s.collections == nil {
+			s.collections = make(map[string]*collections.Collection)
+		}
+		s.collections[name] = collection
+	}
 	return handle
 }
 
@@ -104,6 +118,25 @@ func (s *connState) closeCollectionHandle(handle CollectionHandle) bool {
 	}
 	delete(s.handles, handle)
 	return true
+}
+
+func (s *connState) cachedCollection(name string) (*collections.Collection, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	collection, ok := s.collections[name]
+	return collection, ok
+}
+
+func (s *connState) cacheCollection(name string, collection *collections.Collection) {
+	if collection == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.collections == nil {
+		s.collections = make(map[string]*collections.Collection)
+	}
+	s.collections[name] = collection
 }
 
 func NewServer(opts ServerOptions) *Server {
@@ -202,7 +235,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		if s.closed.Load() {
 			return ErrServerClosed
 		}
-		header, body, err := readFrame(conn, s.limits)
+		header, body, err := readFrameInto(conn, s.limits, state.readBody)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
@@ -221,6 +254,9 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 				return ctx.Err()
 			}
 			return err
+		}
+		if body != nil {
+			state.readBody = body[:0]
 		}
 	}
 }
@@ -293,18 +329,32 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 
 	s.counters.inc("requests.started_total")
 	start := time.Now()
-	sections, err := iwire.DecodeSections(body, s.limits)
+	var sections []iwire.Section
+	var err error
+	if state != nil {
+		sections, err = iwire.DecodeSectionsInto(state.sections, body, s.limits)
+		state.sections = sections
+	} else {
+		sections, err = iwire.DecodeSections(body, s.limits)
+	}
 	if err != nil {
 		s.counters.inc("requests.failed_total")
 		return s.writeError(w, header, err)
 	}
-	cmd, err := s.registry.ValidateRequestSections(sections)
+	var cmd iwire.ValidatedCommand
+	if state != nil {
+		cmd, err = s.registry.ValidateRequestSectionsInto(sections, &state.commandScratch)
+	} else {
+		cmd, err = s.registry.ValidateRequestSections(sections)
+	}
 	if err != nil {
 		s.counters.inc("requests.failed_total")
 		return s.writeError(w, header, err)
 	}
 	s.counters.inc("commands." + cmd.Schema.Name + ".requests_total")
 	var responseSections []iwire.Section
+	var responseBody []byte
+	responseBodySet := false
 	switch cmd.Header.ID {
 	case iwire.CommandCreateCollection:
 		responseSections, err = s.handleCreateCollection(cmd.Known)
@@ -323,7 +373,8 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	case iwire.CommandDropCollection:
 		err = unsupportedDropCollection()
 	case iwire.CommandInsertBatch:
-		responseSections, err = s.handleInsertBatch(state, cmd.Known)
+		responseBody, err = s.handleInsertBatchBody(state, cmd.Known, body[:0])
+		responseBodySet = true
 	case iwire.CommandReplaceBatch:
 		responseSections, err = s.handleReplaceBatch(state, cmd.Known)
 	case iwire.CommandDeleteBatch:
@@ -335,7 +386,8 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	case iwire.CommandCheckpoint:
 		responseSections, err = s.handleCheckpoint()
 	case iwire.CommandGetMany:
-		responseSections, err = s.handleGetMany(state, cmd.Known)
+		responseBody, err = s.handleGetManyBody(state, cmd.Known, body[:0])
+		responseBodySet = true
 	case iwire.CommandIndexLookup:
 		responseSections, err = s.handleIndexLookup(state, cmd.Known)
 	case iwire.CommandIndexRange:
@@ -357,15 +409,19 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 		s.counters.inc("commands." + cmd.Schema.Name + ".errors_total")
 		return s.writeError(w, header, err)
 	}
-	body = body[:0]
-	for _, section := range responseSections {
-		body, err = iwire.AppendSection(body, section)
-		if err != nil {
-			return err
+	if responseBodySet {
+		body = responseBody
+	} else {
+		body = body[:0]
+		for _, section := range responseSections {
+			body, err = iwire.AppendSection(body, section)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	s.counters.inc("requests.completed_total")
-	return s.writeSimpleFrame(w, iwire.Header{Type: iwire.FrameResponse, StreamID: header.StreamID, RequestID: header.RequestID}, body)
+	return s.writeSimpleFrameBuffered(w, state, iwire.Header{Type: iwire.FrameResponse, StreamID: header.StreamID, RequestID: header.RequestID}, body)
 }
 
 func (s *Server) writeHelloOK(w io.Writer, header iwire.Header, state *connState) error {
@@ -403,6 +459,21 @@ func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error 
 
 func (s *Server) writeSimpleFrame(w io.Writer, header iwire.Header, body []byte) error {
 	if err := writeFrame(w, header, body); err != nil {
+		return err
+	}
+	s.counters.inc("frames.out_total")
+	s.counters.add("bytes.out_total", uint64(iwire.FrameHeaderLenV1)+uint64(len(body)))
+	return nil
+}
+
+func (s *Server) writeSimpleFrameBuffered(w io.Writer, state *connState, header iwire.Header, body []byte) error {
+	var err error
+	if state != nil {
+		state.writeBody, err = writeFrameBuffered(w, header, body, state.writeBody)
+	} else {
+		err = writeFrame(w, header, body)
+	}
+	if err != nil {
 		return err
 	}
 	s.counters.inc("frames.out_total")

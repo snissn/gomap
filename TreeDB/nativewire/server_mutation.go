@@ -1,35 +1,57 @@
 package nativewire
 
 import (
-	"strconv"
-
 	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
 func (s *Server) handleInsertBatch(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
-	if err := managerRequired(s.collections); err != nil {
-		return nil, err
-	}
-	name, _, err := collectionRefFromSections(state, sections)
+	resultIDs, actualAck, err := s.insertBatch(state, sections)
 	if err != nil {
 		return nil, err
+	}
+	return []iwire.Section{
+		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, resultIDs...)},
+		ackMetaCounts(actualAck, responseMetaCount{key: "inserted_count", value: len(resultIDs)}),
+	}, nil
+}
+
+func (s *Server) handleInsertBatchBody(state *connState, sections []iwire.Section, dst []byte) ([]byte, error) {
+	resultIDs, actualAck, err := s.insertBatch(state, sections)
+	if err != nil {
+		return nil, err
+	}
+	body, err := iwire.AppendSectionHeader(dst, iwire.SectionDocumentIDs, 0, iwire.ByteVectorEncodedLen(resultIDs))
+	if err != nil {
+		return nil, err
+	}
+	body = iwire.AppendByteVector(body, resultIDs...)
+	return appendAckMetaSection(body, actualAck, responseMetaCount{key: "inserted_count", value: len(resultIDs)})
+}
+
+func (s *Server) insertBatch(state *connState, sections []iwire.Section) ([][]byte, iwire.AckPolicy, error) {
+	_, collection, err := s.openCollectionRef(state, sections)
+	if err != nil {
+		return nil, 0, err
 	}
 	format, err := decodeDocumentFormatSection(sections)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	ids, docs, err := decodeIDsAndDocuments(sections, s.limits)
+	var ids, docs [][]byte
+	if state != nil {
+		ids, docs, err = decodeIDsAndDocumentsInto(state.idsScratch, state.docsScratch, sections, s.limits)
+		state.idsScratch = ids
+		state.docsScratch = docs
+	} else {
+		ids, docs, err = decodeIDsAndDocuments(sections, s.limits)
+	}
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	ack, err := ackPolicyFromSections(sections, s.defaultAckPolicy)
 	if err != nil {
-		return nil, err
-	}
-	collection, err := s.collections.OpenCollection(name)
-	if err != nil {
-		return nil, metadataWrap(err)
+		return nil, 0, err
 	}
 	var resultIDs [][]byte
 	if format == collections.DocumentFormatBSON {
@@ -38,40 +60,37 @@ func (s *Server) handleInsertBatch(state *connState, sections []iwire.Section) (
 		resultIDs, err = collection.InsertBatch(ids, docs)
 	}
 	if err != nil {
-		return nil, metadataWrap(err)
+		return nil, 0, metadataWrap(err)
 	}
 	actualAck, err := s.satisfyAck(collection, ack)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return []iwire.Section{
-		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, resultIDs...)},
-		ackMeta(actualAck, "inserted_count", strconv.Itoa(len(resultIDs))),
-	}, nil
+	return resultIDs, actualAck, nil
 }
 
 func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
-	if err := managerRequired(s.collections); err != nil {
-		return nil, err
-	}
-	name, _, err := collectionRefFromSections(state, sections)
+	_, collection, err := s.openCollectionRef(state, sections)
 	if err != nil {
 		return nil, err
 	}
 	if _, err := decodeDocumentFormatSection(sections); err != nil {
 		return nil, err
 	}
-	ids, docs, err := decodeIDsAndDocuments(sections, s.limits)
+	var ids, docs [][]byte
+	if state != nil {
+		ids, docs, err = decodeIDsAndDocumentsInto(state.idsScratch, state.docsScratch, sections, s.limits)
+		state.idsScratch = ids
+		state.docsScratch = docs
+	} else {
+		ids, docs, err = decodeIDsAndDocuments(sections, s.limits)
+	}
 	if err != nil {
 		return nil, err
 	}
 	ack, err := ackPolicyFromSections(sections, s.defaultAckPolicy)
 	if err != nil {
 		return nil, err
-	}
-	collection, err := s.collections.OpenCollection(name)
-	if err != nil {
-		return nil, metadataWrap(err)
 	}
 	results, err := collection.UpdateBatch(updateBatchItems(ids, docs))
 	if err != nil {
@@ -90,31 +109,30 @@ func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) 
 	if err != nil {
 		return nil, err
 	}
-	return []iwire.Section{ackMeta(actualAck,
-		"matched_count", strconv.Itoa(matched),
-		"modified_count", strconv.Itoa(modified),
+	return []iwire.Section{ackMetaCounts(actualAck,
+		responseMetaCount{key: "matched_count", value: matched},
+		responseMetaCount{key: "modified_count", value: modified},
 	)}, nil
 }
 
 func (s *Server) handleDeleteBatch(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
-	if err := managerRequired(s.collections); err != nil {
-		return nil, err
-	}
-	name, _, err := collectionRefFromSections(state, sections)
+	_, collection, err := s.openCollectionRef(state, sections)
 	if err != nil {
 		return nil, err
 	}
-	ids, err := decodeIDVector(sections, s.limits)
+	var ids [][]byte
+	if state != nil {
+		ids, err = decodeIDVectorInto(state.idsScratch, sections, s.limits)
+		state.idsScratch = ids
+	} else {
+		ids, err = decodeIDVector(sections, s.limits)
+	}
 	if err != nil {
 		return nil, err
 	}
 	ack, err := ackPolicyFromSections(sections, s.defaultAckPolicy)
 	if err != nil {
 		return nil, err
-	}
-	collection, err := s.collections.OpenCollection(name)
-	if err != nil {
-		return nil, metadataWrap(err)
 	}
 	deleted, err := collection.DeleteBatch(ids)
 	if err != nil {
@@ -124,20 +142,13 @@ func (s *Server) handleDeleteBatch(state *connState, sections []iwire.Section) (
 	if err != nil {
 		return nil, err
 	}
-	return []iwire.Section{ackMeta(actualAck, "deleted_count", strconv.Itoa(deleted))}, nil
+	return []iwire.Section{ackMetaCounts(actualAck, responseMetaCount{key: "deleted_count", value: deleted})}, nil
 }
 
 func (s *Server) handleFlushCollection(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
-	if err := managerRequired(s.collections); err != nil {
-		return nil, err
-	}
-	name, _, err := collectionRefFromSections(state, sections)
+	_, collection, err := s.openCollectionRef(state, sections)
 	if err != nil {
 		return nil, err
-	}
-	collection, err := s.collections.OpenCollection(name)
-	if err != nil {
-		return nil, metadataWrap(err)
 	}
 	if err := collection.Flush(); err != nil {
 		return nil, metadataWrap(err)

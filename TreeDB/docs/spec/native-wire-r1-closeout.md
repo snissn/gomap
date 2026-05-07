@@ -30,7 +30,7 @@ GOWORK=off go test ./TreeDB/nativewire \
   -run Test \
   -bench 'BenchmarkNativewireCollection(InsertBatch|GetMany)' \
   -benchmem \
-  -benchtime=100x \
+  -benchtime=1000x \
   -count=5
 ```
 
@@ -38,20 +38,28 @@ Result on `linux/amd64`, Intel i5-11400F:
 
 | Benchmark | time/op | B/op | allocs/op |
 | --- | ---: | ---: | ---: |
-| `InsertBatch/direct_collection` | 37.91 us | 6.399 KiB | 48 |
-| `InsertBatch/native_wire_inproc` | 64.17 us | 24.27 KiB | 114 |
-| `GetMany/direct_collection` | 34.75 us | 8.018 KiB | 128 |
-| `GetMany/native_wire_inproc` | 49.01 us | 30.65 KiB | 154 |
+| `InsertBatch/direct_collection` | 39.14 us | 6.444 KiB | 49 |
+| `InsertBatch/native_wire_inproc` | 54.31 us | 8.116 KiB | 54 |
+| `GetMany/direct_collection` | 34.64 us | 8.007 KiB | 128 |
+| `GetMany/native_wire_inproc` | 42.31 us | 14.46 KiB | 9 |
 
 Interpretation:
 
-- R1 native in-process insert is about 1.69x direct collection latency for this
+- The native in-process benchmark opens a collection handle before timing and
+  uses handle-based hot commands. This is the intended steady-state path for
+  long-lived clients.
+- R1 native in-process insert is about 1.39x direct collection latency for this
   32-document batch shape.
-- R1 native in-process get-many is about 1.41x direct collection latency for
+- R1 native in-process get-many is about 1.22x direct collection latency for
   this 64-document batch shape.
-- The main remaining native-wire overhead is allocation and copying around frame
-  body reads, request-body construction, byte-vector construction, duplicate-ID
-  checks, and materialized result batches.
+- Insert allocation is now close to the direct collection baseline: native wire
+  adds five allocations/op for request/response framing and response decode.
+- Get-many allocates less often than the direct `Collection.Get` loop because
+  the server materializes documents with `GetInto` into one response payload and
+  the client returns borrowed frame views.
+- This is materially closer, but it is not throughput/speed parity yet. The
+  remaining latency gap is mostly frame/transport synchronization,
+  request/response copies, and generic request parsing around small batches.
 
 ## Workload Profiles
 
@@ -124,12 +132,12 @@ dominant protocol bottleneck.
 The load allocation profiles show the clearest R2/R3 follow-up targets after
 the R1f optimization pass:
 
-- `nativewire.appendCommandRequestBody` and `internal/nativewire.growBytes`
-  remain visible because R1 still allocates fresh request bodies and
-  byte-vector section payloads.
-- `internal/nativewire.DecodeByteVectorItems` remains visible because borrowed
-  views still need one `[][]byte` slice header array per decoded vector.
-- `nativewire.readFrame` still allocates a complete frame body per request.
+- The hot in-process path now reuses client request buffers, server read/write
+  buffers, section validation scratch, and byte-vector `[][]byte` scratch.
+- Native-wire allocation is no longer dominated by duplicate-ID string
+  conversion, section decode, or materialized get-many document batches.
+- Remaining protocol allocation is concentrated in client response frame bodies
+  whose returned slices intentionally borrow from the response backing array.
 - Collection planning, memtable entry buffers, root publish, and value-log open
   costs remain larger than any single native-wire server function in the full
   workload.
@@ -144,31 +152,66 @@ the R1f optimization pass:
   separate writes, avoiding a combined per-frame allocation.
 - Pre-sized byte-vector, section, and command-request encoders to avoid growth
   churn while preserving the existing wire bytes.
+- Added reusable connection/client scratch for server frame reads, server
+  section/schema validation, server byte-vector views, client request bodies,
+  and small combined frame writes.
 - Replaced the previous byte-vector clone decode on hot response/read paths with
   borrowed immutable frame views.
 - Added `DecodeByteVectorItems`, a borrowed two-pass decoder that avoids
   offset/length table allocations when callers only need a transient `[][]byte`
   view.
+- Added `DecodeByteVectorItemsInto` and direct byte-vector payload encoding so
+  server hot paths can reuse slice-header arrays and encode response payloads
+  without first materializing per-section byte-vector buffers.
 - Switched server mutation input decode to borrowed frame views; collections
   still owns the copies needed for persistent state and update/delete planning.
+- Removed the redundant native-wire insert duplicate-ID map; insert now relies
+  on the collection planner's sorted duplicate check while preserving wire error
+  codes for duplicate and empty IDs.
+- Cached opened collections per connection so repeated handle/name requests do
+  not reopen collection objects on every command.
+- Added handle-based `InsertBatchHandle` and `GetManyHandle` client methods and
+  moved the steady-state benchmarks to open the collection handle once before
+  timing.
+- Encoded `get_many` responses directly from `Collection.GetInto` into a single
+  payload plus presence bitmap, avoiding one document allocation per returned
+  document.
+- Added direct hot request/response body encoders for `InsertBatch` and
+  `GetMany`, including deterministic ack metadata encoding without a temporary
+  string map.
 - Fixed native-wire benchmark load IDs in R1e to use the Mongo gateway's encoded
   primary-key format, so later Mongo-driver read/update phases exercise the
   documents inserted through native wire.
 
-## Deferred Follow-Ups
+## Parity Follow-Ups
 
-These are deliberately left for the next performance closeout or a focused
-native-wire optimization PR:
+R1f should not be treated as the final performance signoff. To target parity,
+the next performance sprint should plan against these items before moving the
+native-wire path into a Raft/distributed baseline:
 
-- add reusable client request builders for byte-vector sections,
-- add server read buffers and parse scratch scoped to a connection or request,
+- add a benchmark split that separates direct collection, direct in-process
+  dispatch without `net.Pipe`, in-process framed transport, TCP loopback, and
+  Mongo gateway paths,
+- add an explicit acceptance target, for example native in-process steady-state
+  latency within 1.05x direct collection for the chosen batch shapes or a
+  documented reason the remaining delta is unavoidable transport cost,
+- implement a lower-overhead in-process transport or dispatch path if
+  `net.Pipe` is confirmed as the dominant non-collection gap,
+- evaluate pipelined/asynchronous client requests for throughput parity when
+  many independent operations can be in flight,
 - consider an immutable-borrow contract for client result bytes so APIs can
   document when returned slices share a response-frame backing array,
+- evaluate `writev`/gather-write support for TCP so small-frame coalescing does
+  not require copying larger response bodies,
+- decide whether the client should expose an owned-result mode for callers that
+  want response buffers reused across calls,
+- consider an ack-only insert mode for caller-supplied IDs so workloads that do
+  not need echoed IDs avoid response byte-vector encoding and decode,
 - add per-command native-wire latency histograms so decode, dispatch, collection
   execution, and encode costs can be separated without pprof inference,
 - add longer steady-state TCP benchmarks that isolate transport cost from
   benchmark document generation and collection flush behavior.
 
-R1 is acceptable to advance to R2 because the measured overhead is concentrated
-in known allocation/copy points and the protocol path has no unexplained
-dominant CPU hotspot.
+R1f is close enough to identify the remaining blockers, but the parity target is
+not closed. If parity is required before Raft work, add a focused R1g
+performance sprint before advancing the native-wire stack into R2.

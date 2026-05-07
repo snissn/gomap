@@ -16,9 +16,12 @@ func collectionNameRef(name string) iwire.Section {
 }
 
 func collectionHandleRef(handle CollectionHandle) iwire.Section {
-	payload := []byte{0}
-	payload = binary.AppendUvarint(payload, uint64(handle))
-	return iwire.Section{ID: iwire.SectionCollectionRef, Bytes: payload}
+	return iwire.Section{ID: iwire.SectionCollectionRef, Bytes: appendCollectionHandleRefPayload(nil, handle)}
+}
+
+func appendCollectionHandleRefPayload(dst []byte, handle CollectionHandle) []byte {
+	dst = append(dst, 0)
+	return binary.AppendUvarint(dst, uint64(handle))
 }
 
 func encodeCollectionMeta(meta collections.CollectionMeta) []byte {
@@ -388,6 +391,9 @@ func decodeIndexValueType(valueType uint64) collections.IndexValueType {
 
 func decodeCollectionRef(state *connState, raw []byte) (string, bool, error) {
 	if len(raw) > 0 && raw[0] == 0 {
+		if state == nil {
+			return "", true, protocolError(iwire.ErrInvalidCommand, "collection handle requires connection state")
+		}
 		handle, n, err := readUvarint(raw[1:])
 		if err != nil {
 			return "", true, err
@@ -435,6 +441,29 @@ func managerRequired(m *collections.CollectionManager) error {
 		return protocolError(iwire.ErrInvalidCommand, "nativewire server has no collection manager")
 	}
 	return nil
+}
+
+func (s *Server) openCollectionRef(state *connState, sections []iwire.Section) (string, *collections.Collection, error) {
+	if err := managerRequired(s.collections); err != nil {
+		return "", nil, err
+	}
+	name, _, err := collectionRefFromSections(state, sections)
+	if err != nil {
+		return "", nil, err
+	}
+	if state != nil {
+		if collection, ok := state.cachedCollection(name); ok {
+			return name, collection, nil
+		}
+	}
+	collection, err := s.collections.OpenCollection(name)
+	if err != nil {
+		return "", nil, metadataWrap(err)
+	}
+	if state != nil {
+		state.cacheCollection(name, collection)
+	}
+	return name, collection, nil
 }
 
 func unsupportedDropCollection() error {

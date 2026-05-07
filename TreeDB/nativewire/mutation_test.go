@@ -48,6 +48,21 @@ func TestMutationCommandsRoundTrip(t *testing.T) {
 	if !bytes.Contains(doc, []byte(`"Ada"`)) {
 		t.Fatalf("u1 doc=%s", doc)
 	}
+	handle, err := client.OpenCollection(ctx, "users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	handleIDs, err := client.InsertBatchHandle(ctx, handle, collections.DocumentFormatJSON,
+		[][]byte{[]byte("u3")},
+		[][]byte{[]byte(`{"email":"katherine@example.com","name":"Katherine"}`)},
+		AckVisible,
+	)
+	if err != nil {
+		t.Fatalf("InsertBatchHandle: %v", err)
+	}
+	if len(handleIDs) != 1 || string(handleIDs[0]) != "u3" {
+		t.Fatalf("handle insert ids=%q", handleIDs)
+	}
 
 	matched, modified, err := client.ReplaceBatch(ctx, "users", collections.DocumentFormatJSON,
 		[][]byte{[]byte("u1"), []byte("missing")},

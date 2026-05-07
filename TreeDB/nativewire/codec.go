@@ -10,7 +10,13 @@ import (
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
+const maxBufferedWriteFrameBody = 32 << 10
+
 func readFrame(r io.Reader, limits iwire.Limits) (iwire.Header, []byte, error) {
+	return readFrameInto(r, limits, nil)
+}
+
+func readFrameInto(r io.Reader, limits iwire.Limits, dst []byte) (iwire.Header, []byte, error) {
 	var headerBuf [iwire.FrameHeaderLenV1]byte
 	if _, err := io.ReadFull(r, headerBuf[:]); err != nil {
 		return iwire.Header{}, nil, err
@@ -25,7 +31,13 @@ func readFrame(r io.Reader, limits iwire.Limits) (iwire.Header, []byte, error) {
 	if header.BodyLen > uint64(maxInt) {
 		return iwire.Header{}, nil, protocolError(iwire.ErrResourceExhausted, "frame body exceeds int capacity")
 	}
-	body := make([]byte, int(header.BodyLen))
+	bodyLen := int(header.BodyLen)
+	var body []byte
+	if bodyLen <= cap(dst) {
+		body = dst[:bodyLen]
+	} else {
+		body = make([]byte, bodyLen)
+	}
 	if _, err := io.ReadFull(r, body); err != nil {
 		return iwire.Header{}, nil, err
 	}
@@ -43,6 +55,27 @@ func writeFrame(w io.Writer, header iwire.Header, body []byte) error {
 		return err
 	}
 	return writeAll(w, body)
+}
+
+func writeFrameBuffered(w io.Writer, header iwire.Header, body []byte, dst []byte) ([]byte, error) {
+	if len(body) > maxBufferedWriteFrameBody {
+		return dst[:0], writeFrame(w, header, body)
+	}
+	header.BodyLen = uint64(len(body))
+	var headerBuf [iwire.FrameHeaderLenV1]byte
+	frameHeader, err := iwire.AppendHeader(headerBuf[:0], header)
+	if err != nil {
+		return dst, err
+	}
+	total := len(frameHeader) + len(body)
+	if total <= cap(dst) {
+		dst = dst[:0]
+	} else {
+		dst = make([]byte, 0, total)
+	}
+	dst = append(dst, frameHeader...)
+	dst = append(dst, body...)
+	return dst[:0], writeAll(w, dst)
 }
 
 func writeAll(w io.Writer, p []byte) error {
@@ -88,6 +121,40 @@ func appendCommandRequestBody(dst []byte, commandID iwire.CommandID, sections ..
 		}
 	}
 	return body, nil
+}
+
+func appendCommandHeaderSection(dst []byte, commandID iwire.CommandID) ([]byte, error) {
+	var commandHeader [16]byte
+	payload := iwire.AppendCommandHeader(commandHeader[:0], iwire.CommandHeader{ID: commandID, Version: 1})
+	body, err := iwire.AppendSectionHeader(dst, iwire.SectionCommandHeader, 0, len(payload))
+	if err != nil {
+		return nil, err
+	}
+	return append(body, payload...), nil
+}
+
+func appendRawSection(dst []byte, id iwire.SectionID, payload []byte) ([]byte, error) {
+	body, err := iwire.AppendSectionHeader(dst, id, 0, len(payload))
+	if err != nil {
+		return nil, err
+	}
+	return append(body, payload...), nil
+}
+
+func appendCollectionNameRefSection(dst []byte, collection string) ([]byte, error) {
+	body, err := iwire.AppendSectionHeader(dst, iwire.SectionCollectionRef, 0, len(collection))
+	if err != nil {
+		return nil, err
+	}
+	return append(body, collection...), nil
+}
+
+func appendByteVectorSection(dst []byte, id iwire.SectionID, items [][]byte) ([]byte, error) {
+	body, err := iwire.AppendSectionHeader(dst, id, 0, iwire.ByteVectorEncodedLen(items))
+	if err != nil {
+		return nil, err
+	}
+	return iwire.AppendByteVector(body, items...), nil
 }
 
 func appendString(dst []byte, s string) []byte {

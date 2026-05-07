@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"bytes"
 	"encoding/hex"
 	"testing"
 )
@@ -93,6 +94,13 @@ func TestSectionAndByteVectorRoundTrip(t *testing.T) {
 	}
 	if len(items) != 2 || string(items[0]) != "a" || string(items[1]) != "bc" {
 		t.Fatalf("DecodeByteVectorItems=%q", items)
+	}
+	payloadVec, err := AppendByteVectorPayload(nil, []int{1, 2}, []byte("abc"))
+	if err != nil {
+		t.Fatalf("AppendByteVectorPayload: %v", err)
+	}
+	if !bytes.Equal(payloadVec, vecBytes) {
+		t.Fatalf("AppendByteVectorPayload=%x want %x", payloadVec, vecBytes)
 	}
 }
 
