@@ -2020,8 +2020,11 @@ func storedDocumentToBSON(col *collections.Collection, materializer *collections
 	if materializer != nil {
 		if materializer.DocumentFormat() == collections.DocumentFormatBSON {
 			// Stored BSON bytes are validated when the gateway accepts or builds
-			// the document. Avoid repeating full BSON validation on every hot
-			// read response.
+			// the document. Keep a cheap frame check but avoid repeating full BSON
+			// validation on every hot read response.
+			if err := validateStoredBSONFrame(stored); err != nil {
+				return nil, err
+			}
 			return wire.Document(stored), nil
 		}
 		materialized, err := materializer.StoredDocumentJSON(stored)
@@ -2045,6 +2048,20 @@ func storedDocumentToBSON(col *collections.Collection, materializer *collections
 		return nil, err
 	}
 	return wire.Document(raw), nil
+}
+
+func validateStoredBSONFrame(doc []byte) error {
+	if len(doc) < 5 {
+		return fmt.Errorf("stored BSON document too short: %d", len(doc))
+	}
+	size := int(int32(binary.LittleEndian.Uint32(doc[:4])))
+	if size != len(doc) {
+		return fmt.Errorf("stored BSON document length=%d available=%d", size, len(doc))
+	}
+	if doc[len(doc)-1] != 0 {
+		return errors.New("stored BSON document missing terminator")
+	}
+	return nil
 }
 
 func applySetUpdate(doc wire.Document, update wire.Document) (wire.Document, bool, error) {

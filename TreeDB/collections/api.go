@@ -11488,10 +11488,6 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 	if err != nil {
 		return nil, true, err
 	}
-	if domainLocked {
-		domain.mu.RUnlock()
-		domainLocked = false
-	}
 	if bufferedTable != nil {
 		defer resetCollectionRunTable(bufferedTable)
 	}
@@ -11515,7 +11511,11 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 	primaryRootName := collectionPrimaryRootName(catalog.meta.Name)
 	var scratch []byte
 	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, opts.Limit, func(id []byte) (bool, error) {
-		value, buffered, found := c.getBufferedDocumentInto(id, scratch[:0])
+		var value []byte
+		var buffered, found bool
+		if domainLocked {
+			value, buffered, found = c.getBufferedDocumentIntoLocked(domain, id, scratch[:0])
+		}
 		if !buffered {
 			var err error
 			value, found, err = collectionGetAppendAtCatalogRoot(snap, catalog, primaryRootName, id, scratch[:0])
@@ -11528,7 +11528,7 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 		}
 		scratch = value
 		out = append(out, DocumentRecord{
-			ID:       bytes.Clone(id),
+			ID:       id,
 			Document: bytes.Clone(value),
 		})
 		return true, nil
