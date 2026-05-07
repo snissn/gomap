@@ -2932,12 +2932,11 @@ func runTreeDBRawWireTCPRangeOperation(ctx context.Context, cfg config, client *
 		return err
 	}
 	begin := time.Now()
-	batch, err := client.FindRawBSON(ctx, commandDoc)
+	err = client.FindRawBSONBorrowed(ctx, commandDoc, func(batch []bson.Raw) error {
+		return validateRawAgeBatch(batch, minAge)
+	})
 	sample(time.Since(begin))
-	if err != nil {
-		return err
-	}
-	return validateRawAgeBatch(batch, minAge)
+	return err
 }
 
 func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder, coll *mongo.Collection, readers int) (phaseResult, error) {

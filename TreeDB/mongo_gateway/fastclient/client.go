@@ -92,7 +92,31 @@ func (c *Client) FindRawBSON(ctx context.Context, command bson.Raw) ([]bson.Raw,
 	if err != nil {
 		return nil, err
 	}
-	return c.roundTripFind(ctx, msg)
+	return c.roundTripFind(ctx, msg, false)
+}
+
+// FindRawBSONBorrowed is like FindRawBSON, but the returned BSON documents are
+// borrowed and valid only for the duration of fn. It is intended for benchmark
+// hot paths that validate a response without retaining it.
+func (c *Client) FindRawBSONBorrowed(ctx context.Context, command bson.Raw, fn func([]bson.Raw) error) error {
+	if fn == nil {
+		return errors.New("FindRawBSONBorrowed requires a callback")
+	}
+	if c == nil || c.conn == nil {
+		return errors.New("mongo gateway fast client is closed")
+	}
+	if len(command) == 0 {
+		return errors.New("FindRawBSONBorrowed requires a command document")
+	}
+	msg, err := wire.AppendMsgMessage(nil, c.nextRequestID.Add(1), 0, 0, wire.Document(command))
+	if err != nil {
+		return err
+	}
+	docs, err := c.roundTripFind(ctx, msg, true)
+	if err != nil {
+		return err
+	}
+	return fn(docs)
 }
 
 func (c *Client) roundTripInsert(ctx context.Context, msg []byte, wantN int) (int, error) {
@@ -118,7 +142,7 @@ func (c *Client) roundTripInsert(ctx context.Context, msg []byte, wantN int) (in
 		}
 		return 0, err
 	}
-	header, body, err := c.readMessageLocked()
+	header, body, err := c.readMessageLocked(true)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return 0, ctxErr
@@ -128,7 +152,7 @@ func (c *Client) roundTripInsert(ctx context.Context, msg []byte, wantN int) (in
 	return parseInsertResponse(header, body, wantN)
 }
 
-func (c *Client) roundTripFind(ctx context.Context, msg []byte) ([]bson.Raw, error) {
+func (c *Client) roundTripFind(ctx context.Context, msg []byte, borrowed bool) ([]bson.Raw, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -151,7 +175,7 @@ func (c *Client) roundTripFind(ctx context.Context, msg []byte) ([]bson.Raw, err
 		}
 		return nil, err
 	}
-	header, body, err := c.readMessageLocked()
+	header, body, err := c.readMessageLocked(borrowed)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
@@ -161,14 +185,18 @@ func (c *Client) roundTripFind(ctx context.Context, msg []byte) ([]bson.Raw, err
 	return parseFindResponse(header, body)
 }
 
-func (c *Client) readMessageLocked() (wire.Header, []byte, error) {
-	header, body, err := wire.ReadMessageInto(c.conn, c.readBuf, c.maxMessageLen)
+func (c *Client) readMessageLocked(retain bool) (wire.Header, []byte, error) {
+	var dst []byte
+	if retain {
+		dst = c.readBuf
+	}
+	header, body, err := wire.ReadMessageInto(c.conn, dst, c.maxMessageLen)
 	if err != nil {
 		return wire.Header{}, nil, err
 	}
-	if cap(body) <= maxRetainedReadBuffer {
+	if retain && cap(body) <= maxRetainedReadBuffer {
 		c.readBuf = body
-	} else {
+	} else if retain {
 		c.readBuf = nil
 	}
 	return header, body, nil
@@ -179,25 +207,15 @@ func (c *Client) watchContextCancelLocked(ctx context.Context) func() {
 	if done == nil {
 		return func() {}
 	}
-	if _, ok := ctx.Deadline(); ok {
-		// The connection deadline already interrupts blocking reads/writes at
-		// timeout. Avoid a goroutine per request on benchmark hot paths that
-		// use a long-lived deadline context and do not cancel individual ops.
-		return func() {}
-	}
-	stop := make(chan struct{})
-	stopped := make(chan struct{})
-	go func() {
-		defer close(stopped)
-		select {
-		case <-done:
-			_ = c.conn.SetDeadline(time.Now())
-		case <-stop:
-		}
-	}()
+	fired := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		defer close(fired)
+		_ = c.conn.SetDeadline(time.Now())
+	})
 	return func() {
-		close(stop)
-		<-stopped
+		if !stop() {
+			<-fired
+		}
 	}
 }
 
