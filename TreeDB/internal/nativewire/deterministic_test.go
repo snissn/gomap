@@ -3,6 +3,7 @@ package nativewire
 import (
 	"bytes"
 	"encoding/hex"
+	"strings"
 	"testing"
 )
 
@@ -102,6 +103,12 @@ func TestDecodeDeterministicEntryRejectsMalformedEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppendDeterministicEntry: %v", err)
 	}
+	entryWithFlags := []byte("TDC1")
+	entryWithFlags = appendUvarint(entryWithFlags, DeterministicEntryVersion)
+	entryWithFlags = appendUvarint(entryWithFlags, uint64(CommandInsertBatch))
+	entryWithFlags = appendUvarint(entryWithFlags, 1)
+	entryWithFlags = appendUvarint(entryWithFlags, 1)
+	entryWithFlags = appendUvarint(entryWithFlags, 0)
 	for _, tc := range []struct {
 		name string
 		raw  []byte
@@ -109,6 +116,7 @@ func TestDecodeDeterministicEntryRejectsMalformedEnvelope(t *testing.T) {
 	}{
 		{name: "bad_magic", raw: []byte("bad"), code: ErrMalformedFrame},
 		{name: "unsupported_version", raw: append([]byte("TDC1"), 2), code: ErrUnsupportedVersion},
+		{name: "unsupported_flags", raw: entryWithFlags, code: ErrUnsupportedFeature},
 		{name: "trailing", raw: append(append([]byte(nil), entry...), 0), code: ErrMalformedFrame},
 		{name: "truncated_section", raw: append([]byte(nil), entry[:len(entry)-1]...), code: ErrMalformedFrame},
 		{name: "section_count_limit", raw: append([]byte("TDC1"), 1, byte(CommandInsertBatch), 1, 0, 2), code: ErrResourceExhausted},
@@ -303,7 +311,7 @@ func TestDeterministicEntryRejectsAmbiguousCommandPayloads(t *testing.T) {
 		},
 		{
 			name:     "invalid_index_name",
-			sections: replaceSection(deterministicEntryFixtureCases()[2].sections, SectionIndexName, []byte("bad/name")),
+			sections: replaceSection(deterministicEntryFixtureCases()[2].sections, SectionIndexName, appendDeterministicString(nil, "bad/name")),
 			code:     ErrInvalidCommand,
 		},
 		{
@@ -326,6 +334,19 @@ func TestDeterministicEntryRejectsAmbiguousCommandPayloads(t *testing.T) {
 				t.Fatalf("AppendDeterministicEntry err=%v code=%d want %d", err, codeOf(err), tc.code)
 			}
 		})
+	}
+}
+
+func TestDeterministicEntryAcceptsMaxLengthEncodedIndexName(t *testing.T) {
+	registry := MustV1Registry()
+	sections := deterministicEntryFixtureCases()[2].sections
+	sections = replaceSection(sections, SectionIndexName, appendDeterministicString(nil, strings.Repeat("x", 128)))
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); err != nil {
+		t.Fatalf("AppendDeterministicEntry: %v", err)
 	}
 }
 
@@ -545,6 +566,11 @@ func replaceSection(sections []Section, id SectionID, raw []byte) []Section {
 	return append(out, Section{ID: id, Bytes: raw})
 }
 
+func appendDeterministicString(dst []byte, value string) []byte {
+	dst = appendUvarint(dst, uint64(len(value)))
+	return append(dst, value...)
+}
+
 type deterministicEntryFixtureCase struct {
 	name      string
 	commandID CommandID
@@ -585,7 +611,7 @@ func deterministicEntryFixtureCases() []deterministicEntryFixtureCase {
 				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandDropIndex, Version: 1})},
 				{ID: SectionIdempotencyKey, Bytes: []byte("client-a:drop-index:email")},
 				{ID: SectionCollectionRef, Bytes: []byte("users")},
-				{ID: SectionIndexName, Bytes: []byte("email_1")},
+				{ID: SectionIndexName, Bytes: appendDeterministicString(nil, "email_1")},
 				{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
 			},
 		},
