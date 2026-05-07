@@ -279,6 +279,9 @@ func (s *Server) handleMsg(h wire.Header, body []byte, cursorOwner int64) ([]byt
 		if msg.Flags&wire.MsgFlagMoreToCome != 0 {
 			return nil, fmt.Errorf("%w: find with moreToCome flag", wire.ErrUnsupported)
 		}
+		if len(msg.Sequences) > 0 {
+			return nil, fmt.Errorf("%w: find with document sequences", wire.ErrUnsupported)
+		}
 		responseID := s.nextID()
 		response, err := s.findMsgResponse(msg.Body, responseID, h.RequestID, cursorOwner)
 		if err != nil {
