@@ -445,6 +445,13 @@ index_multi_key
 index_storage_policy
 ```
 
+In v1 metadata payloads, `index_name` is encoded as a canonical
+uvarint-length-prefixed UTF-8 string, matching the metadata string encoding used
+inside `IndexDefinition`. It is not encoded as a raw byte string. Producers MUST
+reject empty names, names over the negotiated deterministic-name limit, trailing
+bytes after the encoded string, and names containing NUL, `/`, `:`, or leading or
+trailing whitespace.
+
 Metadata mutation responses SHOULD include the resulting catalog version or
 equivalent schema guard. Later mutation requests MAY use
 `expected_catalog_version` to fail fast when a client planned against stale

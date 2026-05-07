@@ -58,14 +58,15 @@ type Server struct {
 	conns     map[net.Conn]struct{}
 	listeners map[net.Listener]struct{}
 
-	inFlight               atomic.Int64
-	nextConn               atomic.Int64
-	nextCursor             atomic.Uint64
-	cursorCount            atomic.Int64
-	nextCursorReapUnixNano atomic.Int64
-	cursorMu               sync.Mutex
-	cursors                map[uint64]*serverCursor
-	counters               counters
+	inFlight       atomic.Int64
+	nextConn       atomic.Int64
+	nextCursor     atomic.Uint64
+	cursorCount    atomic.Int64
+	cursorReapMu   sync.Mutex
+	nextCursorReap time.Time
+	cursorMu       sync.Mutex
+	cursors        map[uint64]*serverCursor
+	counters       counters
 }
 
 type serverCursor struct {

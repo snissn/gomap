@@ -769,6 +769,11 @@ func TestValidateNativeWireBenchmarkCollectionAllowsIndexOrderDrift(t *testing.T
 	if err := validateNativeWireBenchmarkCollection(actual, expected); err == nil {
 		t.Fatal("validateNativeWireBenchmarkCollection accepted changed index")
 	}
+	actual = expected
+	actual.Name = "other"
+	if err := validateNativeWireBenchmarkCollection(actual, expected); err == nil {
+		t.Fatal("validateNativeWireBenchmarkCollection accepted changed name")
+	}
 }
 
 func TestValidateNativeWireBenchmarkCollectionNormalizesExpectedMeta(t *testing.T) {

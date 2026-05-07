@@ -2,6 +2,7 @@ package nativewire
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"strings"
 	"testing"
@@ -109,17 +110,25 @@ func TestDecodeDeterministicEntryRejectsMalformedEnvelope(t *testing.T) {
 	entryWithFlags = appendUvarint(entryWithFlags, 1)
 	entryWithFlags = appendUvarint(entryWithFlags, 1)
 	entryWithFlags = appendUvarint(entryWithFlags, 0)
+	unsupportedVersion := []byte("TDC1")
+	unsupportedVersion = appendUvarint(unsupportedVersion, 2)
+	sectionCountLimit := []byte("TDC1")
+	sectionCountLimit = appendUvarint(sectionCountLimit, DeterministicEntryVersion)
+	sectionCountLimit = appendUvarint(sectionCountLimit, uint64(CommandInsertBatch))
+	sectionCountLimit = appendUvarint(sectionCountLimit, 1)
+	sectionCountLimit = appendUvarint(sectionCountLimit, 0)
+	sectionCountLimit = appendUvarint(sectionCountLimit, 2)
 	for _, tc := range []struct {
 		name string
 		raw  []byte
 		code ErrorCode
 	}{
 		{name: "bad_magic", raw: []byte("bad"), code: ErrMalformedFrame},
-		{name: "unsupported_version", raw: append([]byte("TDC1"), 2), code: ErrUnsupportedVersion},
+		{name: "unsupported_version", raw: unsupportedVersion, code: ErrUnsupportedVersion},
 		{name: "unsupported_flags", raw: entryWithFlags, code: ErrUnsupportedFeature},
 		{name: "trailing", raw: append(append([]byte(nil), entry...), 0), code: ErrMalformedFrame},
 		{name: "truncated_section", raw: append([]byte(nil), entry[:len(entry)-1]...), code: ErrMalformedFrame},
-		{name: "section_count_limit", raw: append([]byte("TDC1"), 1, byte(CommandInsertBatch), 1, 0, 2), code: ErrResourceExhausted},
+		{name: "section_count_limit", raw: sectionCountLimit, code: ErrResourceExhausted},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			limits := Limits{}
@@ -167,6 +176,9 @@ func TestDeterministicEntryReplicatedGoldenFixtures(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ValidateRequestSections: %v", err)
 			}
+			if cmd.Header.ID != tc.commandID {
+				t.Fatalf("fixture command header=%d want %d", cmd.Header.ID, tc.commandID)
+			}
 			entry, err := AppendDeterministicEntry(nil, cmd)
 			if err != nil {
 				t.Fatalf("AppendDeterministicEntry: %v", err)
@@ -207,6 +219,40 @@ func TestDecodeDeterministicEntryRejectsInvalidSectionPayload(t *testing.T) {
 	}
 }
 
+func TestDecodeDeterministicEntryRejectsInvalidCommandSet(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		commandID CommandID
+		sections  []Section
+	}{
+		{
+			name:      "read_command",
+			commandID: CommandGetMany,
+			sections: []Section{
+				{ID: SectionCollectionRef, Bytes: []byte("c")},
+				{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
+			},
+		},
+		{
+			name:      "missing_idempotency",
+			commandID: CommandInsertBatch,
+			sections:  deterministicEntrySectionsOnly(removeSection(insertBatchDeterministicSections(), SectionIdempotencyKey)),
+		},
+		{
+			name:      "missing_catalog_guard",
+			commandID: CommandInsertBatch,
+			sections:  deterministicEntrySectionsOnly(removeSection(insertBatchDeterministicSections(), SectionExpectedCatalogVersion)),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := deterministicEntryTestRaw(tc.commandID, tc.sections...)
+			if _, err := DecodeDeterministicEntry(raw, Limits{}); codeOf(err) != ErrInvalidCommand {
+				t.Fatalf("DecodeDeterministicEntry err=%v code=%d want invalid command", err, codeOf(err))
+			}
+		})
+	}
+}
+
 func TestDecodeDeterministicEntryPreservesPayloadLimits(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -235,9 +281,20 @@ func TestDecodeDeterministicEntryClearsScratchTail(t *testing.T) {
 		Sections: []Section{
 			{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
 			{ID: SectionDocuments, Bytes: []byte("stale")},
+			{ID: SectionDocumentIDs, Bytes: []byte("stale")},
+			{ID: SectionExpectedCatalogVersion, Bytes: []byte("stale")},
+			{ID: SectionCollectionRef, Bytes: []byte("stale")},
+			{ID: SectionIdempotencyKey, Bytes: []byte("stale")},
 		},
 	}
-	raw := deterministicEntryTestRaw(CommandInsertBatch, Section{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}})
+	sections := []Section{
+		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
+		{ID: SectionCollectionRef, Bytes: []byte("c")},
+		{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
+		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+	}
+	sortSectionsByID(sections)
+	raw := deterministicEntryTestRaw(CommandDeleteBatch, sections...)
 	if _, err := DecodeDeterministicEntryInto(raw, Limits{}, scratch); err != nil {
 		t.Fatalf("DecodeDeterministicEntryInto: %v", err)
 	}
@@ -266,6 +323,14 @@ func TestDeterministicEntryRejectsLocalAndReadCommands(t *testing.T) {
 			sections: []Section{
 				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandFlushCollection, Version: 1})},
 				{ID: SectionCollectionRef, Bytes: []byte("users")},
+			},
+		},
+		{
+			name: "get_many",
+			sections: []Section{
+				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandGetMany, Version: 1})},
+				{ID: SectionCollectionRef, Bytes: []byte("users")},
+				{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
 			},
 		},
 	} {
@@ -416,6 +481,30 @@ func TestDeterministicEntryAcceptsMaxLengthEncodedIndexName(t *testing.T) {
 	}
 }
 
+func TestDeterministicEntryRejectsInvalidEncodedIndexName(t *testing.T) {
+	registry := MustV1Registry()
+	for _, tc := range []struct {
+		name string
+		raw  []byte
+		code ErrorCode
+	}{
+		{name: "too_long", raw: appendDeterministicString(nil, strings.Repeat("x", 129)), code: ErrInvalidCommand},
+		{name: "trailing", raw: append(appendDeterministicString(nil, "email_1"), 0), code: ErrMalformedFrame},
+		{name: "raw_string", raw: []byte("email_1"), code: ErrMalformedFrame},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sections := replaceSection(deterministicEntryFixtureCases()[2].sections, SectionIndexName, tc.raw)
+			cmd, err := registry.ValidateRequestSections(sections)
+			if err != nil {
+				t.Fatalf("ValidateRequestSections: %v", err)
+			}
+			if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != tc.code {
+				t.Fatalf("AppendDeterministicEntry err=%v code=%d want %d", err, codeOf(err), tc.code)
+			}
+		})
+	}
+}
+
 func TestDeterministicEntryRejectsMissingDistributedGuards(t *testing.T) {
 	registry := MustV1Registry()
 
@@ -451,6 +540,17 @@ func deterministicEntryTestRaw(commandID CommandID, sections ...Section) []byte 
 		raw = append(raw, section.Bytes...)
 	}
 	return raw
+}
+
+func deterministicEntrySectionsOnly(sections []Section) []Section {
+	out := sections[:0]
+	for _, section := range sections {
+		if section.ID != SectionCommandHeader {
+			out = append(out, section)
+		}
+	}
+	sortSectionsByID(out)
+	return out
 }
 
 func TestDeterministicEntryRejectsDuplicateIdempotencyInValidatedView(t *testing.T) {
@@ -665,36 +765,27 @@ func deterministicEntryFixtureCases() []deterministicEntryFixtureCase {
 			name:      "create_collection",
 			commandID: CommandCreateCollection,
 			fixture:   "create_collection_entry.hex",
-			sections: []Section{
-				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateCollection, Version: 1})},
-				{ID: SectionIdempotencyKey, Bytes: []byte("client-a:create:users")},
-				{ID: SectionCollectionMeta, Bytes: []byte("meta:users:v1")},
-				{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
-			},
+			sections: deterministicFixtureSections(CommandCreateCollection, "client-a:create:users",
+				Section{ID: SectionCollectionMeta, Bytes: deterministicCollectionMetaPayload("users")},
+			),
 		},
 		{
 			name:      "create_index",
 			commandID: CommandCreateIndex,
 			fixture:   "create_index_entry.hex",
-			sections: []Section{
-				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateIndex, Version: 1})},
-				{ID: SectionIdempotencyKey, Bytes: []byte("client-a:create-index:email")},
-				{ID: SectionCollectionRef, Bytes: []byte("users")},
-				{ID: SectionIndexDefinition, Bytes: []byte("index:email_1:email:string:unique")},
-				{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
-			},
+			sections: deterministicFixtureSections(CommandCreateIndex, "client-a:create-index:email",
+				Section{ID: SectionCollectionRef, Bytes: []byte("users")},
+				Section{ID: SectionIndexDefinition, Bytes: deterministicIndexDefinitionPayload("email_1", "email", 1, true, false, 0)},
+			),
 		},
 		{
 			name:      "drop_index",
 			commandID: CommandDropIndex,
 			fixture:   "drop_index_entry.hex",
-			sections: []Section{
-				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandDropIndex, Version: 1})},
-				{ID: SectionIdempotencyKey, Bytes: []byte("client-a:drop-index:email")},
-				{ID: SectionCollectionRef, Bytes: []byte("users")},
-				{ID: SectionIndexName, Bytes: appendDeterministicString(nil, "email_1")},
-				{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
-			},
+			sections: deterministicFixtureSections(CommandDropIndex, "client-a:drop-index:email",
+				Section{ID: SectionCollectionRef, Bytes: []byte("users")},
+				Section{ID: SectionIndexName, Bytes: appendDeterministicString(nil, "email_1")},
+			),
 		},
 		{
 			name:      "insert_batch",
@@ -706,28 +797,75 @@ func deterministicEntryFixtureCases() []deterministicEntryFixtureCase {
 			name:      "replace_batch",
 			commandID: CommandReplaceBatch,
 			fixture:   "replace_batch_entry.hex",
-			sections: []Section{
-				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandReplaceBatch, Version: 1})},
-				{ID: SectionIdempotencyKey, Bytes: []byte("client-a:replace:1")},
-				{ID: SectionCollectionRef, Bytes: []byte("c")},
-				{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
-				{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
-				{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte(`{"x":1}`))},
-				{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
-				{ID: SectionReplacementMode, Bytes: []byte{1}},
-			},
+			sections: deterministicFixtureSections(CommandReplaceBatch, "client-a:replace:1",
+				Section{ID: SectionCollectionRef, Bytes: []byte("c")},
+				Section{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
+				Section{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
+				Section{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte(`{"x":1}`))},
+				Section{ID: SectionReplacementMode, Bytes: deterministicUvarintPayload(deterministicReplacementModeExistingOnly)},
+			),
 		},
 		{
 			name:      "delete_batch",
 			commandID: CommandDeleteBatch,
 			fixture:   "delete_batch_entry.hex",
-			sections: []Section{
-				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandDeleteBatch, Version: 1})},
-				{ID: SectionIdempotencyKey, Bytes: []byte("client-a:delete:1")},
-				{ID: SectionCollectionRef, Bytes: []byte("c")},
-				{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"), []byte("b"))},
-				{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
-			},
+			sections: deterministicFixtureSections(CommandDeleteBatch, "client-a:delete:1",
+				Section{ID: SectionCollectionRef, Bytes: []byte("c")},
+				Section{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"), []byte("b"))},
+			),
 		},
 	}
+}
+
+const deterministicReplacementModeExistingOnly = 1
+
+func deterministicFixtureSections(commandID CommandID, idempotency string, sections ...Section) []Section {
+	out := []Section{
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: commandID, Version: 1})},
+		{ID: SectionIdempotencyKey, Bytes: []byte(idempotency)},
+	}
+	out = append(out, sections...)
+	out = append(out, Section{ID: SectionExpectedCatalogVersion, Bytes: deterministicUvarintPayload(7)})
+	return out
+}
+
+func deterministicCollectionMetaPayload(name string) []byte {
+	dst := deterministicUvarintPayload(1)
+	dst = appendDeterministicString(dst, name)
+	dst = appendUvarint(dst, uint64(DocumentFormatDefault))
+	dst = appendUvarint(dst, 0)
+	dst = appendUvarint(dst, 0)
+	dst = appendDeterministicBool(dst, false)
+	dst = appendDeterministicBool(dst, false)
+	dst = appendDeterministicBool(dst, false)
+	dst = binary.AppendVarint(dst, 0)
+	dst = binary.AppendVarint(dst, 0)
+	dst = binary.AppendVarint(dst, 0)
+	dst = appendDeterministicBool(dst, false)
+	dst = appendDeterministicBool(dst, false)
+	dst = binary.AppendVarint(dst, 0)
+	dst = appendUvarint(dst, 0)
+	return dst
+}
+
+func deterministicIndexDefinitionPayload(name, field string, valueType uint64, unique, multiKey bool, storagePolicy uint64) []byte {
+	dst := deterministicUvarintPayload(1)
+	dst = appendDeterministicString(dst, name)
+	dst = appendDeterministicString(dst, field)
+	dst = appendUvarint(dst, valueType)
+	dst = appendDeterministicBool(dst, unique)
+	dst = appendDeterministicBool(dst, multiKey)
+	dst = appendUvarint(dst, storagePolicy)
+	return dst
+}
+
+func deterministicUvarintPayload(value uint64) []byte {
+	return appendUvarint(nil, value)
+}
+
+func appendDeterministicBool(dst []byte, value bool) []byte {
+	if value {
+		return append(dst, 1)
+	}
+	return append(dst, 0)
 }
