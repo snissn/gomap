@@ -2760,9 +2760,7 @@ func TestServerBackgroundCursorReapIsThrottled(t *testing.T) {
 	server := NewServer()
 	server.CursorIdleTimeout = time.Nanosecond
 	server.cursorMu.Lock()
-	server.cursors = map[int64]*serverCursor{
-		1: {ns: "app.users", owner: 1, lastUsed: time.Now().Add(-time.Minute)},
-	}
+	server.addCursorLocked(1, &serverCursor{ns: "app.users", owner: 1, lastUsed: time.Now().Add(-time.Minute)})
 	server.lastCursorReap = time.Now()
 	server.cursorMu.Unlock()
 
@@ -2781,6 +2779,23 @@ func TestServerBackgroundCursorReapIsThrottled(t *testing.T) {
 	server.cursorMu.Unlock()
 	if stillPresent {
 		t.Fatal("cursor not reaped after throttle interval")
+	}
+}
+
+func TestServerBackgroundCursorReapSkipsEmptyCursorMap(t *testing.T) {
+	server := NewServer()
+	server.CursorIdleTimeout = time.Nanosecond
+	lastReap := time.Now().Add(-2 * defaultCursorReapInterval)
+	server.cursorMu.Lock()
+	server.lastCursorReap = lastReap
+	server.cursorMu.Unlock()
+
+	server.reapExpiredCursors()
+
+	server.cursorMu.Lock()
+	defer server.cursorMu.Unlock()
+	if !server.lastCursorReap.Equal(lastReap) {
+		t.Fatalf("lastCursorReap changed to %v want %v", server.lastCursorReap, lastReap)
 	}
 }
 

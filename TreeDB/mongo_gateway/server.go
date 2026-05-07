@@ -57,6 +57,7 @@ type Server struct {
 	nextResponseID   atomic.Int32
 	nextConnectionID atomic.Int64
 	nextCursorID     atomic.Int64
+	cursorCount      atomic.Int64
 	connMu           sync.Mutex
 	conns            map[net.Conn]struct{}
 	cursorMu         sync.Mutex
@@ -96,6 +97,7 @@ func (s *Server) Close() error {
 	s.closeUpdateCoalescers()
 	s.cursorMu.Lock()
 	s.cursors = nil
+	s.cursorCount.Store(0)
 	s.cursorMu.Unlock()
 	return nil
 }

@@ -1503,7 +1503,7 @@ func (s *Server) openCursor(ns string, docs []wire.Document, projection compiled
 	if len(s.cursors) >= s.maxOpenCursors() {
 		return 0, nil, errors.New("Mongo gateway cursor limit exceeded")
 	}
-	s.cursors[cursorID] = &serverCursor{ns: ns, owner: owner, docs: retainedDocs, projection: projection, pos: 0, lastUsed: now}
+	s.addCursorLocked(cursorID, &serverCursor{ns: ns, owner: owner, docs: retainedDocs, projection: projection, pos: 0, lastUsed: now})
 	return cursorID, firstBatch, nil
 }
 
@@ -1540,7 +1540,7 @@ func (s *Server) getMore(cursorID int64, ns string, owner int64, batchSize int, 
 			s.cursorMu.Lock()
 			current := s.cursors[cursorID]
 			if current == cursor && current.ns == ns && current.owner == owner && current.pos == startPos {
-				delete(s.cursors, cursorID)
+				s.deleteCursorLocked(cursorID)
 			}
 			s.cursorMu.Unlock()
 			return 0, nil, false, err
@@ -1559,7 +1559,7 @@ func (s *Server) getMore(cursorID int64, ns string, owner int64, batchSize int, 
 		current.pos += consumed
 		current.lastUsed = time.Now()
 		if current.pos >= len(current.docs) {
-			delete(s.cursors, cursorID)
+			s.deleteCursorLocked(cursorID)
 			s.cursorMu.Unlock()
 			return 0, batch, true, nil
 		}
@@ -1576,7 +1576,7 @@ func (s *Server) killCursorsForOwner(owner int64) {
 	defer s.cursorMu.Unlock()
 	for cursorID, cursor := range s.cursors {
 		if cursor.owner == owner {
-			delete(s.cursors, cursorID)
+			s.deleteCursorLocked(cursorID)
 		}
 	}
 }
@@ -1593,7 +1593,7 @@ func (s *Server) killCursors(ns string, owner int64, cursorIDs []int64) ([]int64
 			notFound = append(notFound, cursorID)
 			continue
 		}
-		delete(s.cursors, cursorID)
+		s.deleteCursorLocked(cursorID)
 		killed = append(killed, cursorID)
 	}
 	return killed, notFound
@@ -1601,7 +1601,7 @@ func (s *Server) killCursors(ns string, owner int64, cursorIDs []int64) ([]int64
 
 func (s *Server) reapExpiredCursors() {
 	timeout := s.cursorIdleTimeout()
-	if timeout <= 0 {
+	if timeout <= 0 || s.cursorCount.Load() == 0 {
 		return
 	}
 	now := time.Now()
@@ -1622,9 +1622,34 @@ func (s *Server) reapExpiredCursorsLocked(now time.Time) {
 	cutoff := now.Add(-timeout)
 	for cursorID, cursor := range s.cursors {
 		if !cursor.lastUsed.IsZero() && !cursor.lastUsed.After(cutoff) {
-			delete(s.cursors, cursorID)
+			s.deleteCursorLocked(cursorID)
 		}
 	}
+}
+
+func (s *Server) addCursorLocked(cursorID int64, cursor *serverCursor) {
+	if cursor == nil {
+		return
+	}
+	if s.cursors == nil {
+		s.cursors = make(map[int64]*serverCursor)
+	}
+	if s.cursors[cursorID] == nil {
+		s.cursorCount.Add(1)
+	}
+	s.cursors[cursorID] = cursor
+}
+
+func (s *Server) deleteCursorLocked(cursorID int64) bool {
+	if s.cursors == nil {
+		return false
+	}
+	if _, ok := s.cursors[cursorID]; !ok {
+		return false
+	}
+	delete(s.cursors, cursorID)
+	s.cursorCount.Add(-1)
+	return true
 }
 
 func normalizeBatchSize(batchSize int, explicit bool, defaultBatchSize int) (int, error) {
