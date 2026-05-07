@@ -2085,24 +2085,21 @@ func runDirectTreeDBConcurrentRangePhase(ctx context.Context, cfg config, collec
 
 func runDirectTreeDBRangeQuery(cfg config, collection *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, minAge int64) error {
 	if cfg.RangeIndex {
-		records, _, err := collection.FindDocumentsByIndexRange("age_1", collections.IndexRangeOptions{
+		_, err := collection.ScanDocumentsByIndexRange("age_1", collections.IndexRangeOptions{
 			Lower: collections.IndexRangeBound{Value: minAge, Inclusive: true},
 			Upper: collections.IndexRangeBound{Unbounded: true},
 			Limit: 10,
-		})
-		if err != nil {
-			return err
-		}
-		for _, record := range records {
+		}, func(record collections.BorrowedDocumentRecord) (bool, error) {
 			raw, err := directStoredDocumentToBSON(collection, materializer, record.Document)
 			if err != nil {
-				return err
+				return false, err
 			}
 			if age, ok := directBSONInt64Field(raw, "age"); !ok || age < minAge {
-				return fmt.Errorf("direct indexed range returned age=%v ok=%t below %d", age, ok, minAge)
+				return false, fmt.Errorf("direct indexed range returned age=%v ok=%t below %d", age, ok, minAge)
 			}
-		}
-		return nil
+			return true, nil
+		})
+		return err
 	}
 	matches := 0
 	_, err := collection.ScanDocumentsFunc(cfg.Documents, func(record collections.DocumentRecord) (bool, error) {

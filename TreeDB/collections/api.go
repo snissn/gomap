@@ -515,6 +515,14 @@ type DocumentRecord struct {
 	Document []byte
 }
 
+// BorrowedDocumentRecord is one primary collection record borrowed during a
+// callback scan. ID and Document are valid only until the callback returns.
+// Callers must clone any slice they need to retain.
+type BorrowedDocumentRecord struct {
+	ID       []byte
+	Document []byte
+}
+
 type RootStoragePolicy string
 
 const (
@@ -11423,23 +11431,63 @@ func (c *Collection) FindByIndexRange(indexName string, opts IndexRangeOptions) 
 // consulted before the persisted primary root so pending indexed writes remain
 // visible.
 func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRangeOptions) ([]DocumentRecord, bool, error) {
+	capHint := 16
+	if opts.Limit > 0 && opts.Limit < capHint {
+		capHint = opts.Limit
+	}
+	var out []DocumentRecord
+	truncated, found, err := c.scanDocumentsByIndexRange(indexName, opts, func(record BorrowedDocumentRecord) (bool, error) {
+		if out == nil {
+			out = make([]DocumentRecord, 0, capHint)
+		}
+		out = append(out, DocumentRecord{
+			ID:       bytes.Clone(record.ID),
+			Document: bytes.Clone(record.Document),
+		})
+		return true, nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if !found {
+		return nil, false, nil
+	}
+	if out == nil {
+		out = make([]DocumentRecord, 0)
+	}
+	return out, truncated, nil
+}
+
+// ScanDocumentsByIndexRange calls fn with primary documents whose named
+// secondary index falls inside opts, preserving index order. The record slices
+// are borrowed and valid only until fn returns. The returned boolean is true
+// when additional index matches were present beyond opts.Limit.
+func (c *Collection) ScanDocumentsByIndexRange(indexName string, opts IndexRangeOptions, fn func(BorrowedDocumentRecord) (bool, error)) (bool, error) {
+	if fn == nil {
+		return false, errors.New("collections: nil index document range callback")
+	}
+	truncated, _, err := c.scanDocumentsByIndexRange(indexName, opts, fn)
+	return truncated, err
+}
+
+func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRangeOptions, fn func(BorrowedDocumentRecord) (bool, error)) (bool, bool, error) {
 	if c == nil {
-		return nil, false, errCollectionNil
+		return false, false, errCollectionNil
 	}
 	if c.db == nil {
-		return nil, false, errCollectionDBNil
+		return false, false, errCollectionDBNil
 	}
 	if err := ValidateIndexName(indexName); err != nil {
-		return nil, false, err
+		return false, false, err
 	}
 	if opts.Limit < 0 {
-		return nil, false, errors.New("collections: index range limit cannot be negative")
+		return false, false, errors.New("collections: index range limit cannot be negative")
 	}
 	if opts.Desc {
-		return nil, false, errors.New("collections: descending index range scans are not supported")
+		return false, false, errors.New("collections: descending index range scans are not supported")
 	}
 	if err := c.flushBufferedNoIndex(); err != nil {
-		return nil, false, err
+		return false, false, err
 	}
 	domain := c.writeDomain
 	domainLocked := false
@@ -11454,30 +11502,30 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
-		return nil, false, backenddb.ErrClosed
+		return false, false, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
 	catalog, err := c.catalogForSnapshotWithWriteDomainLocked(snap)
 	if err != nil {
-		return nil, false, err
+		return false, false, err
 	}
 	if catalog == nil {
-		return nil, false, errCollectionNotFound
+		return false, false, errCollectionNotFound
 	}
 	idx, ok := findIndex(catalog.meta.Indexes, indexName)
 	if !ok {
-		return nil, false, nil
+		return false, false, nil
 	}
 	start, end, empty, err := indexRangeScanBounds(idx.ValueType, opts)
 	if err != nil {
-		return nil, true, err
+		return false, true, err
 	}
 	if empty {
-		return make([]DocumentRecord, 0), false, nil
+		return false, true, nil
 	}
 	exactPrefix, exactPrefixScan, err := exactIndexRangePrefix(idx.ValueType, opts)
 	if err != nil {
-		return nil, true, err
+		return false, true, err
 	}
 	var bufferedTable memtable.Table
 	if exactPrefixScan {
@@ -11486,7 +11534,7 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
 	}
 	if err != nil {
-		return nil, true, err
+		return false, true, err
 	}
 	if domainLocked {
 		domain.mu.RUnlock()
@@ -11502,16 +11550,11 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 	}
 	persistedIt, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true)
 	if err != nil {
-		return nil, true, err
+		return false, true, err
 	}
 	if persistedIt != nil {
 		defer func() { _ = persistedIt.Close() }()
 	}
-	capHint := 16
-	if opts.Limit > 0 && opts.Limit < capHint {
-		capHint = opts.Limit
-	}
-	out := make([]DocumentRecord, 0, capHint)
 	primaryRootName := collectionPrimaryRootName(catalog.meta.Name)
 	var scratch []byte
 	truncated, err := scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt, idx.ValueType, opts.Limit, func(id []byte) (bool, error) {
@@ -11527,16 +11570,15 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 			return true, nil
 		}
 		scratch = value
-		out = append(out, DocumentRecord{
-			ID:       bytes.Clone(id),
-			Document: bytes.Clone(value),
+		return fn(BorrowedDocumentRecord{
+			ID:       id,
+			Document: value,
 		})
-		return true, nil
 	})
 	if err != nil {
-		return nil, false, err
+		return false, true, err
 	}
-	return out, truncated, nil
+	return truncated, true, nil
 }
 
 func (c *Collection) ScanIndexRange(indexName string, opts IndexRangeOptions, fn func(id []byte) (bool, error)) (bool, error) {
