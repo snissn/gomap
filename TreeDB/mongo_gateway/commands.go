@@ -1597,7 +1597,7 @@ func marshalIndexedRangeCursorMsgInto(dst []byte, requestID, responseTo int32, s
 
 func collectIndexedRangeCursorDocs(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, indexName string, opts collections.IndexRangeOptions, builder *rawCursorDocumentBuilder, singleBatch bool) ([]wire.Document, error) {
 	var retainedDocs []wire.Document
-	_, err := col.ScanDocumentsByIndexRange(indexName, opts, func(record collections.BorrowedDocumentRecord) (bool, error) {
+	_, err := col.ScanBorrowedDocumentsByIndexRange(indexName, opts, func(record collections.BorrowedDocumentRecord) (bool, error) {
 		if len(record.Document) == 0 {
 			return true, nil
 		}
