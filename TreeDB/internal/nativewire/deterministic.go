@@ -102,6 +102,9 @@ func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *Determinis
 	if err != nil {
 		return DeterministicEntry{}, err
 	}
+	if commandFlags != 0 {
+		return DeterministicEntry{}, protocolError(ErrUnsupportedFeature, "unsupported deterministic command flags 0x%x", commandFlags)
+	}
 	sectionCount64, err := readEntryUvarint(src, &off, "section_count")
 	if err != nil {
 		return DeterministicEntry{}, err

@@ -101,6 +101,12 @@ func TestDecodeDeterministicEntryRejectsMalformedEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppendDeterministicEntry: %v", err)
 	}
+	entryWithFlags := []byte("TDC1")
+	entryWithFlags = appendUvarint(entryWithFlags, DeterministicEntryVersion)
+	entryWithFlags = appendUvarint(entryWithFlags, uint64(CommandInsertBatch))
+	entryWithFlags = appendUvarint(entryWithFlags, 1)
+	entryWithFlags = appendUvarint(entryWithFlags, 1)
+	entryWithFlags = appendUvarint(entryWithFlags, 0)
 	for _, tc := range []struct {
 		name string
 		raw  []byte
@@ -108,6 +114,7 @@ func TestDecodeDeterministicEntryRejectsMalformedEnvelope(t *testing.T) {
 	}{
 		{name: "bad_magic", raw: []byte("bad"), code: ErrMalformedFrame},
 		{name: "unsupported_version", raw: append([]byte("TDC1"), 2), code: ErrUnsupportedVersion},
+		{name: "unsupported_flags", raw: entryWithFlags, code: ErrUnsupportedFeature},
 		{name: "trailing", raw: append(append([]byte(nil), entry...), 0), code: ErrMalformedFrame},
 		{name: "truncated_section", raw: append([]byte(nil), entry[:len(entry)-1]...), code: ErrMalformedFrame},
 		{name: "section_count_limit", raw: append([]byte("TDC1"), 1, byte(CommandInsertBatch), 1, 0, 2), code: ErrResourceExhausted},
