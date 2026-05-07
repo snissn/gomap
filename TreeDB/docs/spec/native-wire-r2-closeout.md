@@ -120,6 +120,14 @@ dominant sampled work. The remaining latency gap is therefore tracked as
 intentional framed-command overhead unless a later profile finds a single
 dominant protocol cost.
 
+A final full collection check on the same top-of-stack branch kept read parity:
+`GetMany/direct_collection` measured 33.41 us +/- 1%, while
+`GetMany/native_wire_inproc` measured 34.38 us +/- 6% and
+`GetMany/native_wire_direct_dispatch` measured 34.53 us +/- 7%. The native read
+lanes still allocate only 5 times/op in this shape because returned document
+views borrow from the response frame, while the direct `Collection.Get` loop
+allocates 128 times/op.
+
 ## Deferred To R3
 
 - Raft log storage and apply are still unimplemented.
