@@ -1114,6 +1114,9 @@ func concurrentRangeReadSweepComparisons(cells []cellComparison) []phaseComparis
 		if left.Cell.TreeDBConfig != right.Cell.TreeDBConfig {
 			return left.Cell.TreeDBConfig < right.Cell.TreeDBConfig
 		}
+		if leftMode, rightMode := rangeMode(left.Name), rangeMode(right.Name); leftMode != rightMode {
+			return leftMode < rightMode
+		}
 		leftReaders, _ := concurrentRangeReadReaders(left.Name)
 		rightReaders, _ := concurrentRangeReadReaders(right.Name)
 		return leftReaders < rightReaders
