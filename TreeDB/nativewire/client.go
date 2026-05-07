@@ -93,14 +93,14 @@ func (c *Client) roundTrip(ctx context.Context, typ iwire.FrameType, body []byte
 	if err != nil {
 		return iwire.Header{}, nil, err
 	}
+	if header.RequestID != requestID {
+		return header, response, protocolError(iwire.ErrMalformedFrame, "response request_id %d want %d", header.RequestID, requestID)
+	}
 	if header.Type == iwire.FrameError {
 		return header, response, decodeWireError(response, c.limits)
 	}
 	if header.Type != want {
 		return header, response, protocolError(iwire.ErrMalformedFrame, "response frame type %d want %d", header.Type, want)
-	}
-	if header.RequestID != requestID {
-		return header, response, protocolError(iwire.ErrMalformedFrame, "response request_id %d want %d", header.RequestID, requestID)
 	}
 	return header, response, nil
 }

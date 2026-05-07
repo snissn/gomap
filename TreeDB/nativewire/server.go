@@ -266,7 +266,11 @@ func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState,
 	case iwire.FramePing:
 		return s.writeSimpleFrame(w, iwire.Header{Type: iwire.FramePong, StreamID: header.StreamID, RequestID: header.RequestID}, nil)
 	case iwire.FrameGoaway:
-		if err := s.writeSimpleFrame(w, iwire.Header{Type: iwire.FrameGoaway, StreamID: header.StreamID, RequestID: header.RequestID}, nil); err != nil {
+		body, err := appendGoawayBody(nil, header.RequestID)
+		if err != nil {
+			return err
+		}
+		if err := s.writeSimpleFrame(w, iwire.Header{Type: iwire.FrameGoaway, StreamID: header.StreamID, RequestID: header.RequestID}, body); err != nil {
 			return err
 		}
 		return errGoaway
@@ -369,6 +373,15 @@ func (s *Server) writeHelloOK(w io.Writer, header iwire.Header, state *connState
 		return err
 	}
 	return s.writeSimpleFrame(w, iwire.Header{Type: iwire.FrameHelloOK, StreamID: header.StreamID, RequestID: header.RequestID}, body)
+}
+
+func appendGoawayBody(dst []byte, lastAcceptedRequestID uint64) ([]byte, error) {
+	return iwire.AppendSection(dst, iwire.Section{
+		ID: iwire.SectionResponseMeta,
+		Bytes: appendStringMap(nil, map[string]string{
+			"last_accepted_request_id": strconv.FormatUint(lastAcceptedRequestID, 10),
+		}),
+	})
 }
 
 func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error {
