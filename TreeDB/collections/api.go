@@ -11454,7 +11454,7 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 		return nil, false, err
 	}
 	if !indexFound {
-		return make([]DocumentRecord, 0), false, nil
+		return nil, false, nil
 	}
 	if out == nil {
 		out = make([]DocumentRecord, 0)
@@ -11606,8 +11606,11 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 			ID:       id,
 			Document: value,
 		})
-		if err != nil || !cont {
-			return cont, err
+		if err != nil {
+			return false, err
+		}
+		if !cont {
+			return false, nil
 		}
 		documentCount++
 		return true, nil
