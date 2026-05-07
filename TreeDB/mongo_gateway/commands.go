@@ -23,6 +23,7 @@ const (
 	commandCodeIndexNotFound     int32 = 27
 	commandCodeCursorNotFound    int32 = 43
 	commandCodeDuplicateKey      int32 = 11000
+	maxWireMessageLengthInt32          = int64(1<<31 - 1)
 )
 
 const primaryKeyPrefixBSONValue byte = 1
@@ -1408,6 +1409,9 @@ func marshalCursorDocumentsMsgResponseWithID(requestID, responseTo int32, ns str
 		return nil, err
 	}
 	messageLength := len(msg) - base
+	if int64(messageLength) > maxWireMessageLengthInt32 {
+		return nil, fmt.Errorf("%w: length=%d", wire.ErrMessageTooLarge, messageLength)
+	}
 	if messageLength > wire.DefaultMaxMessageLength {
 		return nil, fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, messageLength, wire.DefaultMaxMessageLength)
 	}
