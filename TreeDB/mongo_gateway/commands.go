@@ -294,13 +294,15 @@ func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (
 			doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
 			return findResponsePayload{document: doc}, err
 		}
-		consumed, err := rawDocumentsBatchLimit(results.docs, normalizedBatchSize, s.maxFindBatchBytes())
-		if err != nil {
-			doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
-			return findResponsePayload{document: doc}, err
-		}
-		if consumed >= len(results.docs) {
-			return findResponsePayload{raw: &rawCursorDocumentsResponse{ns: ns, cursorID: 0, batchKey: "firstBatch", batch: results.docs}}, nil
+		if normalizedBatchSize >= len(results.docs) {
+			consumed, err := rawDocumentsBatchLimit(results.docs, normalizedBatchSize, s.maxFindBatchBytes())
+			if err != nil {
+				doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+				return findResponsePayload{document: doc}, err
+			}
+			if consumed >= len(results.docs) {
+				return findResponsePayload{raw: &rawCursorDocumentsResponse{ns: ns, cursorID: 0, batchKey: "firstBatch", batch: results.docs}}, nil
+			}
 		}
 	}
 	cursorID, firstBatch, err := s.openCursor(ns, results.docs, results.projection, int(batchSize), batchSizeSet, defaultCursorBatchSize, cursorOwner)
@@ -1707,31 +1709,19 @@ func appendWireInt32(dst []byte, v int32) []byte {
 	return dst
 }
 
-func bsonArrayIndexKey(index int) string {
-	switch index {
-	case 0:
-		return "0"
-	case 1:
-		return "1"
-	case 2:
-		return "2"
-	case 3:
-		return "3"
-	case 4:
-		return "4"
-	case 5:
-		return "5"
-	case 6:
-		return "6"
-	case 7:
-		return "7"
-	case 8:
-		return "8"
-	case 9:
-		return "9"
-	default:
-		return strconv.Itoa(index)
+var bsonArrayIndexKeyCache = func() [128]string {
+	var keys [128]string
+	for i := range keys {
+		keys[i] = strconv.Itoa(i)
 	}
+	return keys
+}()
+
+func bsonArrayIndexKey(index int) string {
+	if index >= 0 && index < len(bsonArrayIndexKeyCache) {
+		return bsonArrayIndexKeyCache[index]
+	}
+	return strconv.Itoa(index)
 }
 
 func (s *Server) openCursor(ns string, docs []wire.Document, projection compiledProjection, batchSize int, explicitBatchSize bool, defaultBatchSize int, owner int64) (int64, bson.A, error) {
@@ -2377,6 +2367,9 @@ func validateStoredBSONFrame(doc []byte) error {
 		return fmt.Errorf("stored BSON document too short: %d", len(doc))
 	}
 	size := int(int32(binary.LittleEndian.Uint32(doc[:4])))
+	if size < 0 {
+		return fmt.Errorf("stored BSON document has negative length header: %d", size)
+	}
 	if size < 5 {
 		return fmt.Errorf("stored BSON document length=%d below minimum", size)
 	}
