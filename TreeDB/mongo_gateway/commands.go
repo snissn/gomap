@@ -114,20 +114,30 @@ type rawCursorDocumentsResponse struct {
 	batch    []wire.Document
 }
 
+type findResponsePayloadKind uint8
+
+const (
+	findResponsePayloadDocument findResponsePayloadKind = iota
+	findResponsePayloadRaw
+	findResponsePayloadIndexedRange
+)
+
 type findResponsePayload struct {
+	kind         findResponsePayloadKind
 	document     wire.Document
-	raw          *rawCursorDocumentsResponse
-	indexedRange *indexedRangeCursorResponse
+	raw          rawCursorDocumentsResponse
+	indexedRange indexedRangeCursorResponse
 }
 
 func (p findResponsePayload) marshalDocument() (wire.Document, error) {
-	if p.raw != nil {
+	switch p.kind {
+	case findResponsePayloadRaw:
 		return marshalCursorDocumentsResponseWithID(p.raw.ns, p.raw.cursorID, p.raw.batchKey, p.raw.batch)
-	}
-	if p.indexedRange != nil {
+	case findResponsePayloadIndexedRange:
 		return p.indexedRange.marshalDocument()
+	default:
+		return p.document, nil
 	}
-	return p.document, nil
 }
 
 func (p findResponsePayload) marshalMsg(requestID, responseTo int32) ([]byte, error) {
@@ -135,13 +145,14 @@ func (p findResponsePayload) marshalMsg(requestID, responseTo int32) ([]byte, er
 }
 
 func (p findResponsePayload) marshalMsgInto(dst []byte, requestID, responseTo int32) ([]byte, error) {
-	if p.raw != nil {
+	switch p.kind {
+	case findResponsePayloadRaw:
 		return marshalCursorDocumentsMsgResponseWithIDInto(dst, requestID, responseTo, p.raw.ns, p.raw.cursorID, p.raw.batchKey, p.raw.batch)
-	}
-	if p.indexedRange != nil {
+	case findResponsePayloadIndexedRange:
 		return p.indexedRange.marshalMsgInto(dst, requestID, responseTo)
+	default:
+		return wire.AppendMsgMessage(dst, requestID, responseTo, 0, p.document)
 	}
-	return wire.AppendMsgMessage(dst, requestID, responseTo, 0, p.document)
 }
 
 func (s *Server) findResponse(command wire.Document, cursorOwner int64) (wire.Document, error) {
@@ -150,7 +161,7 @@ func (s *Server) findResponse(command wire.Document, cursorOwner int64) (wire.Do
 		return nil, err
 	}
 	doc, err := payload.marshalDocument()
-	if err != nil && payload.indexedRange != nil {
+	if err != nil && payload.kind == findResponsePayloadIndexedRange {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	return doc, err
@@ -167,7 +178,7 @@ func (s *Server) findMsgResponseInto(dst []byte, command wire.Document, requestI
 	}
 	base := len(dst)
 	msg, err := payload.marshalMsgInto(dst, requestID, responseTo)
-	if err != nil && payload.indexedRange != nil {
+	if err != nil && payload.kind == findResponsePayloadIndexedRange {
 		doc, docErr := commandError(commandCodeBadValue, "BadValue", err.Error())
 		if docErr != nil {
 			return nil, docErr
@@ -240,21 +251,27 @@ func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (
 				return findResponsePayload{document: doc}, err
 			}
 			if empty || limit == 0 {
-				return findResponsePayload{raw: &rawCursorDocumentsResponse{ns: ns, cursorID: 0, batchKey: "firstBatch"}}, nil
+				return findResponsePayload{
+					kind: findResponsePayloadRaw,
+					raw:  rawCursorDocumentsResponse{ns: ns, cursorID: 0, batchKey: "firstBatch"},
+				}, nil
 			}
 			if normalizedBatchSize >= limit {
 				opts.Limit = limit
-				return findResponsePayload{indexedRange: &indexedRangeCursorResponse{
-					col:           col,
-					server:        s,
-					ns:            ns,
-					indexName:     idx.Name,
-					opts:          opts,
-					batchKey:      "firstBatch",
-					maxBatchBytes: s.maxFindBatchBytes(),
-					cursorOwner:   cursorOwner,
-					singleBatch:   singleBatch,
-				}}, nil
+				return findResponsePayload{
+					kind: findResponsePayloadIndexedRange,
+					indexedRange: indexedRangeCursorResponse{
+						col:           col,
+						server:        s,
+						ns:            ns,
+						indexName:     idx.Name,
+						opts:          opts,
+						batchKey:      "firstBatch",
+						maxBatchBytes: s.maxFindBatchBytes(),
+						cursorOwner:   cursorOwner,
+						singleBatch:   singleBatch,
+					},
+				}, nil
 			}
 		}
 	}
@@ -275,7 +292,10 @@ func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (
 				doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
 				return findResponsePayload{document: doc}, err
 			}
-			return findResponsePayload{raw: &rawCursorDocumentsResponse{ns: ns, cursorID: 0, batchKey: "firstBatch", batch: results.docs[:consumed]}}, nil
+			return findResponsePayload{
+				kind: findResponsePayloadRaw,
+				raw:  rawCursorDocumentsResponse{ns: ns, cursorID: 0, batchKey: "firstBatch", batch: results.docs[:consumed]},
+			}, nil
 		}
 		firstBatch, _, err := documentsBatchWithLimit(results.docs, results.projection, normalizedBatchSize, s.maxFindBatchBytes())
 		if err != nil {
@@ -297,7 +317,10 @@ func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (
 			return findResponsePayload{document: doc}, err
 		}
 		if consumed >= len(results.docs) {
-			return findResponsePayload{raw: &rawCursorDocumentsResponse{ns: ns, cursorID: 0, batchKey: "firstBatch", batch: results.docs}}, nil
+			return findResponsePayload{
+				kind: findResponsePayloadRaw,
+				raw:  rawCursorDocumentsResponse{ns: ns, cursorID: 0, batchKey: "firstBatch", batch: results.docs},
+			}, nil
 		}
 	}
 	cursorID, firstBatch, err := s.openCursor(ns, results.docs, results.projection, int(batchSize), batchSizeSet, defaultCursorBatchSize, cursorOwner)
