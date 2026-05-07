@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -125,7 +126,7 @@ func TestClientInsertManyRawBSON(t *testing.T) {
 	if err := client.FindRawBSONBorrowed(insertCtx, mustBSON(t, bson.D{{Key: "ping", Value: 1}, {Key: "$db", Value: "admin"}}), func([]bson.Raw) error {
 		t.Fatal("borrowed callback should not run for non-find command")
 		return nil
-	}); err == nil || err.Error() != "FindRawBSONBorrowed requires a find command document" {
+	}); err == nil || !strings.Contains(err.Error(), "requires a find command document") {
 		t.Fatalf("FindRawBSONBorrowed non-find err=%v want find-command error", err)
 	}
 	borrowedEntered := make(chan struct{})

@@ -93,6 +93,11 @@ func ReadMessage(r io.Reader, maxMessageLength int32) (Header, []byte, error) {
 	return ReadMessageInto(r, nil, maxMessageLength)
 }
 
+// ReadMessageInto reads one wire message and uses dst as reusable storage for
+// the returned body when dst has enough capacity. Callers that pass a reusable
+// dst must treat the returned body as borrowed: it may alias dst and remains
+// valid only until dst is reused or modified. Clone the body before retaining it
+// across subsequent reads.
 func ReadMessageInto(r io.Reader, dst []byte, maxMessageLength int32) (Header, []byte, error) {
 	if maxMessageLength <= 0 {
 		maxMessageLength = DefaultMaxMessageLength

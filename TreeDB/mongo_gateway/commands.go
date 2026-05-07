@@ -1845,7 +1845,7 @@ func (s *Server) openRetainedCursor(ns string, docs []wire.Document, projection 
 	}
 	retainedBytes := documentsBytes(docs)
 	if maxBytes := s.maxCursorRetainedBytes(); retainedBytes > maxBytes {
-		return 0, fmt.Errorf("Mongo gateway cursor retained bytes exceeds limit: retainedBytes=%d maxBytes=%d", retainedBytes, maxBytes)
+		return 0, fmt.Errorf("mongo gateway cursor retained bytes exceeds limit: retainedBytes=%d maxBytes=%d", retainedBytes, maxBytes)
 	}
 	cursorID := s.nextCursorID.Add(1)
 	if cursorID == 0 {
