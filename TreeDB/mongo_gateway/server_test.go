@@ -4499,6 +4499,26 @@ func TestServeConnBufferedMessageCoalescingAppendsResponses(t *testing.T) {
 	}
 }
 
+func TestServeConnBufferedMessageRejectsShortMessageLength(t *testing.T) {
+	req := wire.AppendHeader(nil, wire.Header{
+		MessageLength: wire.HeaderLen - 1,
+		RequestID:     401,
+		OpCode:        wire.OpMsg,
+	})
+	reader := bufio.NewReaderSize(bytes.NewReader(req), len(req))
+	if _, err := reader.Peek(len(req)); err != nil {
+		t.Fatalf("prime buffered reader: %v", err)
+	}
+
+	_, appended, err := NewServer().appendBufferedMessageWithOwner(reader, 1, nil)
+	if !errors.Is(err, wire.ErrMalformed) {
+		t.Fatalf("append buffered message err=%v want ErrMalformed", err)
+	}
+	if appended {
+		t.Fatal("malformed buffered message was appended")
+	}
+}
+
 func TestServeConnFlushesBufferedResponseBeforeCoalescedError(t *testing.T) {
 	firstCommand := mustDocument(t, bson.D{
 		{Key: "ping", Value: int32(1)},

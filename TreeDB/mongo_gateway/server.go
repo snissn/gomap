@@ -358,6 +358,9 @@ func (s *Server) appendBufferedMessageWithOwner(reader *bufio.Reader, cursorOwne
 	if err != nil {
 		return writeBuf, false, err
 	}
+	if h.MessageLength < wire.HeaderLen {
+		return writeBuf, false, fmt.Errorf("%w: message length %d below header length", wire.ErrMalformed, h.MessageLength)
+	}
 	if h.MessageLength > s.maxMessageLength() {
 		return writeBuf, false, fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, h.MessageLength, s.maxMessageLength())
 	}
