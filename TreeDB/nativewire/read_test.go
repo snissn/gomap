@@ -197,6 +197,31 @@ func TestOpenScanReportsTruncatedRetainedWindow(t *testing.T) {
 	}
 }
 
+func TestOpenScanReportsTruncatedWhenCursorRetentionExceeded(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	server := NewServer(ServerOptions{Collections: mgr, Backend: db, MaxCursorRetainedBytes: 1})
+	client, _ := servePipe(t, server)
+	t.Cleanup(func() { _ = db.Close() })
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	first, err := client.OpenScan(ctx, "users", CursorLimits{MaxItems: 1})
+	if err != nil {
+		t.Fatalf("OpenScan: %v", err)
+	}
+	if len(first.IDs) != 1 || first.Cursor.CursorID != 0 || first.Cursor.HasMore || !first.Truncated {
+		t.Fatalf("first=%+v want one truncated terminal batch", first)
+	}
+}
+
 func TestOpenScanCursorLifecycle(t *testing.T) {
 	client, mgr, _ := serveCollectionPipe(t)
 	seedReadCollection(t, mgr)
@@ -223,6 +248,27 @@ func TestOpenScanCursorLifecycle(t *testing.T) {
 	_, err = client.CursorNext(ctx, first.Cursor.CursorID, CursorLimits{MaxItems: 1})
 	if !isRemoteError(err, iwire.ErrCursorNotFound) {
 		t.Fatalf("CursorNext exhausted error=%v want cursor_not_found", err)
+	}
+}
+
+func TestCursorNextRequiresStreamID(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	first, err := client.OpenScan(ctx, "users", CursorLimits{MaxItems: 1})
+	if err != nil {
+		t.Fatalf("OpenScan: %v", err)
+	}
+	_, err = client.commandSections(ctx, iwire.CommandCursorNext, iwire.Section{ID: iwire.SectionCursorLimits, Bytes: encodeCursorLimits(CursorLimits{MaxItems: 1})})
+	if !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("CursorNext without stream err=%v want invalid command", err)
+	}
+	if err := client.CursorClose(ctx, first.Cursor.CursorID); err != nil {
+		t.Fatalf("CursorClose cleanup: %v", err)
 	}
 }
 
