@@ -255,7 +255,7 @@ func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (
 				doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
 				return findResponsePayload{document: doc}, err
 			}
-			if empty || limit == 0 {
+			if empty {
 				return findResponsePayload{raw: &rawCursorDocumentsResponse{ns: ns, cursorID: 0, batchKey: "firstBatch"}}, nil
 			}
 			if normalizedBatchSize >= limit {
@@ -1605,28 +1605,28 @@ func marshalIndexedRangeCursorMsgInto(dst []byte, requestID, responseTo int32, s
 	builder := newRawCursorDocumentBuilder(msg, ns, batchKey, maxBatchBytes)
 	retainedDocs, err := collectIndexedRangeCursorDocs(col, materializer, indexName, opts, builder, singleBatch)
 	if err != nil {
-		return nil, err
+		return msg[:base], err
 	}
 	msg, err = builder.finish()
 	if err != nil {
-		return nil, err
+		return msg[:base], err
 	}
 	if len(retainedDocs) > 0 {
 		cursorID, err := server.openRetainedCursor(ns, retainedDocs, compiledProjection{}, cursorOwner)
 		if err != nil {
-			return nil, err
+			return msg[:base], err
 		}
 		builder.setCursorID(cursorID)
 	}
 	messageLength := len(msg) - base
 	if int64(messageLength) > maxWireMessageLengthInt32Limit {
-		return nil, fmt.Errorf("%w: length=%d", wire.ErrMessageTooLarge, messageLength)
+		return msg[:base], fmt.Errorf("%w: length=%d", wire.ErrMessageTooLarge, messageLength)
 	}
 	if maxMessageLength <= 0 || maxMessageLength > wire.DefaultMaxMessageLength {
 		maxMessageLength = int(server.maxMessageLength())
 	}
 	if messageLength > maxMessageLength {
-		return nil, fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, messageLength, maxMessageLength)
+		return msg[:base], fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, messageLength, maxMessageLength)
 	}
 	binary.LittleEndian.PutUint32(msg[base:base+4], uint32(messageLength))
 	return msg, nil
@@ -1947,7 +1947,7 @@ func (s *Server) addCursorLocked(cursorID int64, cursor *serverCursor) {
 	if s.cursors == nil {
 		s.cursors = make(map[int64]*serverCursor)
 	}
-	if s.cursors[cursorID] == nil {
+	if _, ok := s.cursors[cursorID]; !ok {
 		s.cursorCount.Add(1)
 	}
 	s.cursors[cursorID] = cursor
