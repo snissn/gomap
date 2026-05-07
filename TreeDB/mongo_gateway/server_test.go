@@ -2449,6 +2449,44 @@ func TestServerFindSingleBatchClosesCursor(t *testing.T) {
 	}
 }
 
+func TestMarshalCursorDocumentsResponseWithRawBatch(t *testing.T) {
+	rawDoc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}})
+	response, err := marshalCursorDocumentsResponseWithID("app.users", 0, "firstBatch", []wire.Document{rawDoc})
+	if err != nil {
+		t.Fatalf("marshal raw cursor response: %v", err)
+	}
+	assertOK(t, response)
+	if cursorID := cursorIDFromResponse(t, response); cursorID != 0 {
+		t.Fatalf("cursor id=%d want 0", cursorID)
+	}
+	batch := cursorFirstBatch(t, response)
+	if len(batch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(batch))
+	}
+	if !bytes.Equal(batch[0], bson.Raw(rawDoc)) {
+		t.Fatalf("firstBatch[0]=%v want raw doc %v", batch[0], bson.Raw(rawDoc))
+	}
+}
+
+func TestRawDocumentsBatchLimit(t *testing.T) {
+	docs := []wire.Document{
+		mustDocument(t, bson.D{{Key: "_id", Value: "u1"}}),
+		mustDocument(t, bson.D{{Key: "_id", Value: "u2"}}),
+		mustDocument(t, bson.D{{Key: "_id", Value: "u3"}}),
+	}
+	consumed, err := rawDocumentsBatchLimit(docs, 2, maxInt)
+	if err != nil {
+		t.Fatalf("raw batch limit: %v", err)
+	}
+	if consumed != 2 {
+		t.Fatalf("consumed=%d want 2", consumed)
+	}
+	tooSmall := findBatchOverheadBytes + findBatchDocumentBytes(docs[0], 0) - 1
+	if _, err := rawDocumentsBatchLimit(docs[:1], 1, tooSmall); err == nil {
+		t.Fatal("raw batch limit accepted oversized single document")
+	}
+}
+
 func TestServeOneCleansUpOneShotCursors(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -3741,6 +3779,52 @@ func TestIndexedRangeCandidateLimitOnlyForPureSameFieldRange(t *testing.T) {
 	}
 	if got := candidateLimitWithOverflowSlot(100); got != 101 {
 		t.Fatalf("candidateLimitWithOverflowSlot(100)=%d want 101", got)
+	}
+}
+
+func TestPureIndexedRangeLimitPlanOnlyForSingleRangeNoSkip(t *testing.T) {
+	meta := collections.CollectionMeta{Indexes: []collections.IndexDefinition{
+		{Name: "age_1", Field: "age", ValueType: collections.IndexValueInt64},
+	}}
+	_, opts, limit, ok, empty, err := pureIndexedRangeLimitPlan(meta, findPlan{
+		predicates: []findPredicate{
+			{field: "age", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, int64(40))}},
+		},
+		limit: 10,
+	}, 100)
+	if err != nil {
+		t.Fatalf("pure indexed range plan: %v", err)
+	}
+	if !ok || empty || limit != 10 || opts.Limit != 10 {
+		t.Fatalf("pure indexed range plan ok=%v empty=%v limit=%d opts.Limit=%d want true,false,10,10", ok, empty, limit, opts.Limit)
+	}
+
+	_, _, _, ok, _, err = pureIndexedRangeLimitPlan(meta, findPlan{
+		predicates: []findPredicate{
+			{field: "age", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, int64(40))}},
+		},
+		skip:  1,
+		limit: 10,
+	}, 100)
+	if err != nil {
+		t.Fatalf("skipped pure indexed range plan: %v", err)
+	}
+	if ok {
+		t.Fatal("pure indexed range plan accepted skip")
+	}
+
+	_, _, _, ok, _, err = pureIndexedRangeLimitPlan(meta, findPlan{
+		predicates: []findPredicate{
+			{field: "age", op: findPredicateGTE, values: []bson.RawValue{mustRawValue(t, int64(40))}},
+			{field: "city", op: findPredicateEq, values: []bson.RawValue{mustRawValue(t, "hnl")}},
+		},
+		limit: 10,
+	}, 100)
+	if err != nil {
+		t.Fatalf("mixed pure indexed range plan: %v", err)
+	}
+	if ok {
+		t.Fatal("pure indexed range plan accepted mixed predicates")
 	}
 }
 

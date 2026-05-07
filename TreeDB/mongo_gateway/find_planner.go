@@ -98,6 +98,12 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 		}
 		return findResultSet{docs: docs, projection: plan.projection}, nil
 	}
+	if docs, ok, err := s.findPureIndexedRangeLimitDocuments(col, materializer, plan); ok || err != nil {
+		if err != nil {
+			return findResultSet{}, err
+		}
+		return findResultSet{docs: docs, projection: plan.projection}, nil
+	}
 	docs, err := s.findCandidateDocuments(col, materializer, plan)
 	if err != nil {
 		return findResultSet{}, err
@@ -150,7 +156,19 @@ func findBatchDocumentBytes(doc wire.Document, index int) int {
 }
 
 func bsonArrayElementOverhead(index int) int {
-	return 1 + len(strconv.Itoa(index)) + 1
+	return 1 + bsonArrayIndexDigitCount(index) + 1
+}
+
+func bsonArrayIndexDigitCount(index int) int {
+	if index < 10 {
+		return 1
+	}
+	digits := 1
+	for index >= 10 {
+		index /= 10
+		digits++
+	}
+	return digits
 }
 
 func validateFindCommandOptions(command wire.Document, filter wire.Document) error {
@@ -177,6 +195,44 @@ func (s *Server) maxFindBatchBytes() int {
 		return 0
 	}
 	return max
+}
+
+func (s *Server) findPureIndexedRangeLimitDocuments(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan) ([]wire.Document, bool, error) {
+	idx, opts, limit, ok, empty, err := pureIndexedRangeLimitPlan(col.Meta(), plan, s.maxFindScanDocuments())
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	if empty || limit == 0 {
+		return nil, true, nil
+	}
+	docs, err := documentsForIndexedRange(col, materializer, idx, opts, limit, limit)
+	return docs, true, err
+}
+
+func pureIndexedRangeLimitPlan(meta collections.CollectionMeta, plan findPlan, maxDocuments int) (collections.IndexDefinition, collections.IndexRangeOptions, int, bool, bool, error) {
+	if plan.limit <= 0 || plan.skip != 0 || plan.sort.field != "" || len(plan.predicates) != 1 {
+		return collections.IndexDefinition{}, collections.IndexRangeOptions{}, 0, false, false, nil
+	}
+	limit := int(plan.limit)
+	if maxDocuments > 0 && limit > maxDocuments {
+		return collections.IndexDefinition{}, collections.IndexRangeOptions{}, 0, false, false, nil
+	}
+	pred := plan.predicates[0]
+	if !isRangePredicate(pred.op) {
+		return collections.IndexDefinition{}, collections.IndexRangeOptions{}, 0, false, false, nil
+	}
+	for _, idx := range meta.Indexes {
+		if idx.Field != pred.field {
+			continue
+		}
+		opts, ok, empty, err := indexRangeOptionsForPredicates(plan.predicates, idx)
+		if err != nil || !ok {
+			return collections.IndexDefinition{}, collections.IndexRangeOptions{}, 0, ok, false, err
+		}
+		opts.Limit = limit
+		return idx, opts, limit, true, empty, nil
+	}
+	return collections.IndexDefinition{}, collections.IndexRangeOptions{}, 0, false, false, nil
 }
 
 func (s *Server) findCandidateDocuments(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan) ([]wire.Document, error) {

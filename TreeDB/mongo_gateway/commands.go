@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
 const (
@@ -135,10 +137,6 @@ func (s *Server) findResponse(command wire.Document, cursorOwner int64) (wire.Do
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	results, err := s.executeFind(col, plan)
-	if err != nil {
-		return commandError(commandCodeBadValue, "BadValue", err.Error())
-	}
 	batchSize, batchSizeSet, err := optionalInt32FieldWithPresence(command, "batchSize")
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
@@ -148,16 +146,40 @@ func (s *Server) findResponse(command wire.Document, cursorOwner int64) (wire.Do
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
 	ns := db + "." + collection
+	results, err := s.executeFind(col, plan)
+	if err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
 	if singleBatch {
 		normalizedBatchSize, err := normalizeBatchSize(int(batchSize), batchSizeSet, defaultCursorBatchSize)
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
+		}
+		if !results.projection.present {
+			consumed, err := rawDocumentsBatchLimit(results.docs, normalizedBatchSize, s.maxFindBatchBytes())
+			if err != nil {
+				return commandError(commandCodeBadValue, "BadValue", err.Error())
+			}
+			return marshalCursorDocumentsResponseWithID(ns, 0, "firstBatch", results.docs[:consumed])
 		}
 		firstBatch, _, err := documentsBatchWithLimit(results.docs, results.projection, normalizedBatchSize, s.maxFindBatchBytes())
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
 		return marshalCursorResponseWithID(ns, 0, "firstBatch", firstBatch)
+	}
+	if !results.projection.present {
+		normalizedBatchSize, err := normalizeBatchSize(int(batchSize), batchSizeSet, defaultCursorBatchSize)
+		if err != nil {
+			return commandError(commandCodeBadValue, "BadValue", err.Error())
+		}
+		consumed, err := rawDocumentsBatchLimit(results.docs, normalizedBatchSize, s.maxFindBatchBytes())
+		if err != nil {
+			return commandError(commandCodeBadValue, "BadValue", err.Error())
+		}
+		if consumed >= len(results.docs) {
+			return marshalCursorDocumentsResponseWithID(ns, 0, "firstBatch", results.docs)
+		}
 	}
 	cursorID, firstBatch, err := s.openCursor(ns, results.docs, results.projection, int(batchSize), batchSizeSet, defaultCursorBatchSize, cursorOwner)
 	if err != nil {
@@ -1258,6 +1280,65 @@ func marshalCursorResponseWithID(ns string, cursorID int64, batchKey string, bat
 	})
 }
 
+func marshalCursorDocumentsResponseWithID(ns string, cursorID int64, batchKey string, batch []wire.Document) (wire.Document, error) {
+	batchBytes := findBatchOverheadBytes
+	for i, doc := range batch {
+		batchBytes += findBatchDocumentBytes(doc, i)
+	}
+	cursorIdx, cursorDoc := bsoncore.AppendDocumentStart(make([]byte, 0, len(ns)+batchBytes+64))
+	cursorDoc = bsoncore.AppendInt64Element(cursorDoc, "id", cursorID)
+	cursorDoc = bsoncore.AppendStringElement(cursorDoc, "ns", ns)
+	batchIdx, cursorDoc := bsoncore.AppendArrayElementStart(cursorDoc, batchKey)
+	for i, doc := range batch {
+		cursorDoc = bsoncore.AppendDocumentElement(cursorDoc, bsonArrayIndexKey(i), doc)
+	}
+	var err error
+	cursorDoc, err = bsoncore.AppendArrayEnd(cursorDoc, batchIdx)
+	if err != nil {
+		return nil, err
+	}
+	cursorDoc, err = bsoncore.AppendDocumentEnd(cursorDoc, cursorIdx)
+	if err != nil {
+		return nil, err
+	}
+
+	docIdx, doc := bsoncore.AppendDocumentStart(make([]byte, 0, len(cursorDoc)+32))
+	doc = bsoncore.AppendDocumentElement(doc, "cursor", cursorDoc)
+	doc = bsoncore.AppendDoubleElement(doc, "ok", 1.0)
+	doc, err = bsoncore.AppendDocumentEnd(doc, docIdx)
+	if err != nil {
+		return nil, err
+	}
+	return wire.Document(doc), nil
+}
+
+func bsonArrayIndexKey(index int) string {
+	switch index {
+	case 0:
+		return "0"
+	case 1:
+		return "1"
+	case 2:
+		return "2"
+	case 3:
+		return "3"
+	case 4:
+		return "4"
+	case 5:
+		return "5"
+	case 6:
+		return "6"
+	case 7:
+		return "7"
+	case 8:
+		return "8"
+	case 9:
+		return "9"
+	default:
+		return strconv.Itoa(index)
+	}
+}
+
 func (s *Server) openCursor(ns string, docs []wire.Document, projection compiledProjection, batchSize int, explicitBatchSize bool, defaultBatchSize int, owner int64) (int64, bson.A, error) {
 	if s.isClosed() {
 		return 0, nil, errServerClosed
@@ -1481,6 +1562,29 @@ func documentsBatchWithLimit(docs []wire.Document, projection compiledProjection
 		consumed++
 	}
 	return out, consumed, nil
+}
+
+func rawDocumentsBatchLimit(docs []wire.Document, maxDocs int, maxBytes int) (int, error) {
+	if maxDocs < 0 || maxDocs > len(docs) {
+		maxDocs = len(docs)
+	}
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+	batchBytes := 0
+	consumed := 0
+	for consumed < maxDocs {
+		docBytes := findBatchDocumentBytes(docs[consumed], consumed)
+		if findBatchOverheadBytes+docBytes > maxBytes {
+			return 0, fmt.Errorf("Mongo gateway cursor document exceeds max message size: docBytes=%d maxBytes=%d", docBytes, maxBytes)
+		}
+		if consumed > 0 && findBatchOverheadBytes+batchBytes+docBytes > maxBytes {
+			break
+		}
+		batchBytes += docBytes
+		consumed++
+	}
+	return consumed, nil
 }
 
 func (s *Server) openOrCreateCollection(name string) (*collections.Collection, error) {
@@ -1806,11 +1910,10 @@ func storedDocumentMaterializerForCollection(col *collections.Collection) (*coll
 func storedDocumentToBSON(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, stored []byte) (wire.Document, error) {
 	if materializer != nil {
 		if materializer.DocumentFormat() == collections.DocumentFormatBSON {
-			raw := bson.Raw(stored)
-			if err := raw.Validate(); err != nil {
-				return nil, err
-			}
-			return wire.Document(raw), nil
+			// Stored BSON bytes are validated when the gateway accepts or builds
+			// the document. Avoid repeating full BSON validation on every hot
+			// read response.
+			return wire.Document(stored), nil
 		}
 		materialized, err := materializer.StoredDocumentJSON(stored)
 		if err != nil {
