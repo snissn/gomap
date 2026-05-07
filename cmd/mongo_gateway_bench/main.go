@@ -2083,6 +2083,9 @@ func nativeWireBenchmarkIndexLess(left, right collections.IndexDefinition) bool 
 }
 
 func normalizeNativeWireBenchmarkCollectionMeta(meta collections.CollectionMeta) collections.CollectionMeta {
+	if meta.Options.DocumentFormat == collections.DocumentFormatJSON {
+		meta.Options.DocumentFormat = collections.DocumentFormatDefault
+	}
 	meta.Indexes = append([]collections.IndexDefinition(nil), meta.Indexes...)
 	sort.SliceStable(meta.Indexes, func(i, j int) bool {
 		return meta.Indexes[i].Name < meta.Indexes[j].Name

@@ -150,7 +150,7 @@ func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *Determinis
 			return DeterministicEntry{}, protocolError(ErrMalformedFrame, "deterministic entry section %d length %d exceeds remaining %d", sectionID, sectionLen, len(src)-off)
 		}
 		section := Section{ID: sectionID, Bytes: src[off : off+int(sectionLen)]}
-		if err := validateDeterministicSectionPayload(section); err != nil {
+		if err := validateDeterministicSectionPayload(section, limits); err != nil {
 			return DeterministicEntry{}, err
 		}
 		sections[i] = section
@@ -217,7 +217,7 @@ func (cmd ValidatedCommand) deterministicSectionsInto(dst []Section) ([]Section,
 			if seen.add(section.ID) > 1 {
 				return nil, protocolError(ErrInvalidCommand, "duplicate deterministic singleton section %d", section.ID)
 			}
-			if err := validateDeterministicSectionPayload(section); err != nil {
+			if err := validateDeterministicSectionPayload(section, Limits{}); err != nil {
 				return nil, err
 			}
 			out = append(out, Section{ID: section.ID, Bytes: section.Bytes})
@@ -232,7 +232,7 @@ func (cmd ValidatedCommand) deterministicSectionsInto(dst []Section) ([]Section,
 				return nil, protocolError(ErrInvalidCommand, "duplicate deterministic singleton section %d", section.ID)
 			}
 		}
-		if err := validateDeterministicSectionPayload(section); err != nil {
+		if err := validateDeterministicSectionPayload(section, Limits{}); err != nil {
 			return nil, err
 		}
 		out = append(out, Section{ID: section.ID, Bytes: section.Bytes})
@@ -290,7 +290,7 @@ func sortSectionsByID(sections []Section) {
 	}
 }
 
-func validateDeterministicSectionPayload(section Section) error {
+func validateDeterministicSectionPayload(section Section, limits Limits) error {
 	switch section.ID {
 	case SectionIdempotencyKey:
 		return validateDeterministicOpaquePayload("idempotency_key", section.Bytes)
@@ -317,9 +317,9 @@ func validateDeterministicSectionPayload(section Section) error {
 		}
 	case SectionDocumentIDs, SectionDocuments, SectionTemplateRecords:
 		if section.ID == SectionDocumentIDs {
-			return validateDeterministicDocumentIDs(section.Bytes)
+			return validateDeterministicDocumentIDs(section.Bytes, limits)
 		}
-		return validateByteVector(section.Bytes, Limits{})
+		return validateByteVector(section.Bytes, limits)
 	case SectionCollectionMeta:
 		return validateDeterministicOpaquePayload("collection_meta", section.Bytes)
 	case SectionIndexDefinition:
@@ -376,8 +376,8 @@ func validateDeterministicName(name string, raw []byte) error {
 	return nil
 }
 
-func validateDeterministicDocumentIDs(raw []byte) error {
-	if err := validateByteVector(raw, Limits{}); err != nil {
+func validateDeterministicDocumentIDs(raw []byte, limits Limits) error {
+	if err := validateByteVector(raw, limits); err != nil {
 		return err
 	}
 	count64, off, err := readUvarint(raw)

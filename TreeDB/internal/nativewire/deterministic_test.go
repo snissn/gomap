@@ -207,6 +207,29 @@ func TestDecodeDeterministicEntryRejectsInvalidSectionPayload(t *testing.T) {
 	}
 }
 
+func TestDecodeDeterministicEntryPreservesPayloadLimits(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		section Section
+	}{
+		{
+			name:    "document_ids",
+			section: Section{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"), []byte("b"))},
+		},
+		{
+			name:    "documents",
+			section: Section{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte("{}"), []byte("{}"))},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := deterministicEntryTestRaw(CommandInsertBatch, tc.section)
+			if _, err := DecodeDeterministicEntry(raw, Limits{MaxByteVectorItems: 1}); codeOf(err) != ErrResourceExhausted {
+				t.Fatalf("DecodeDeterministicEntry err=%v code=%d want resource exhausted", err, codeOf(err))
+			}
+		})
+	}
+}
+
 func TestDecodeDeterministicEntryClearsScratchTail(t *testing.T) {
 	scratch := &DeterministicEntryScratch{
 		Sections: []Section{

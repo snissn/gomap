@@ -787,6 +787,24 @@ func TestValidateNativeWireBenchmarkCollectionNormalizesExpectedMeta(t *testing.
 	}
 }
 
+func TestValidateNativeWireBenchmarkCollectionNormalizesJSONDocumentFormat(t *testing.T) {
+	expected := collections.CollectionMeta{
+		Name:    "bench",
+		Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON},
+		Indexes: []collections.IndexDefinition{
+			{Name: "email", Field: "email", ValueType: collections.IndexValueString},
+		},
+	}
+	actual := expected
+	actual.Options.DocumentFormat = collections.DocumentFormatDefault
+	actual.Options.BufferedIndexedWrites = true
+	actual.Options.BufferedIndexedWriteMaxDocuments = collections.DefaultIndexedWriteMemtableMaxDocuments
+	actual.Options.BufferedIndexedWriteMaxRootRuns = collections.DefaultIndexedWriteMemtableMaxRootRuns
+	if err := validateNativeWireBenchmarkCollection(actual, expected); err != nil {
+		t.Fatalf("validateNativeWireBenchmarkCollection normalized JSON document format: %v", err)
+	}
+}
+
 func mustTestBSON(t *testing.T, doc bson.D) bson.Raw {
 	t.Helper()
 	raw, err := bson.Marshal(doc)
