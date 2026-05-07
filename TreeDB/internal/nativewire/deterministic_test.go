@@ -157,6 +157,32 @@ func TestDecodeDeterministicEntryRejectsUnsortedSections(t *testing.T) {
 	}
 }
 
+func TestDecodeDeterministicEntryRejectsInvalidSectionPayload(t *testing.T) {
+	raw := deterministicEntryTestRaw(CommandInsertBatch, Section{ID: SectionDocumentFormat, Bytes: []byte{99}})
+	if _, err := DecodeDeterministicEntry(raw, Limits{}); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("DecodeDeterministicEntry err=%v code=%d want invalid command", err, codeOf(err))
+	}
+}
+
+func TestDecodeDeterministicEntryClearsScratchTail(t *testing.T) {
+	scratch := &DeterministicEntryScratch{
+		Sections: []Section{
+			{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
+			{ID: SectionDocuments, Bytes: []byte("stale")},
+		},
+	}
+	raw := deterministicEntryTestRaw(CommandInsertBatch, Section{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}})
+	if _, err := DecodeDeterministicEntryInto(raw, Limits{}, scratch); err != nil {
+		t.Fatalf("DecodeDeterministicEntryInto: %v", err)
+	}
+	backing := scratch.Sections[:cap(scratch.Sections)]
+	for i := len(scratch.Sections); i < len(backing); i++ {
+		if backing[i].ID != 0 || backing[i].Bytes != nil {
+			t.Fatalf("scratch tail[%d]=%+v want zero", i, backing[i])
+		}
+	}
+}
+
 func TestDeterministicEntryRejectsMissingDistributedGuards(t *testing.T) {
 	registry := MustV1Registry()
 
@@ -177,6 +203,21 @@ func TestDeterministicEntryRejectsMissingDistributedGuards(t *testing.T) {
 	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
 		t.Fatalf("missing catalog guard err=%v code=%d", err, codeOf(err))
 	}
+}
+
+func deterministicEntryTestRaw(commandID CommandID, sections ...Section) []byte {
+	raw := []byte("TDC1")
+	raw = appendUvarint(raw, DeterministicEntryVersion)
+	raw = appendUvarint(raw, uint64(commandID))
+	raw = appendUvarint(raw, 1)
+	raw = appendUvarint(raw, 0)
+	raw = appendUvarint(raw, uint64(len(sections)))
+	for _, section := range sections {
+		raw = appendUvarint(raw, uint64(section.ID))
+		raw = appendUvarint(raw, uint64(len(section.Bytes)))
+		raw = append(raw, section.Bytes...)
+	}
+	return raw
 }
 
 func TestDeterministicEntryRejectsDuplicateIdempotencyInValidatedView(t *testing.T) {
