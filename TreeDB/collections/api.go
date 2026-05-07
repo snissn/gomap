@@ -2157,7 +2157,9 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 	collection := &Collection{
 		db:          m.db,
 		writeDomain: m.writeDomainForCollection(catalog.meta.Name),
-		meta:        copyCollectionMeta(catalog.meta),
+		// Collection catalogs are immutable once loaded; public Meta returns a
+		// defensive copy, so handles can keep the catalog meta value directly.
+		meta: catalog.meta,
 	}
 	if collection.writeDomain == nil {
 		return nil, backenddb.ErrClosed
@@ -2192,7 +2194,9 @@ func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Co
 	collection := &Collection{
 		db:          m.db,
 		writeDomain: domain,
-		meta:        copyCollectionMeta(catalog.meta),
+		// Collection catalogs are immutable once loaded; public Meta returns a
+		// defensive copy, so handles can keep the catalog meta value directly.
+		meta: catalog.meta,
 	}
 	collection.rememberCatalogAtSystemRoot(state.SystemRootPageID, catalog)
 	return collection, true
