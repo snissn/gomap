@@ -11431,7 +11431,9 @@ func (c *Collection) FindByIndexRange(indexName string, opts IndexRangeOptions) 
 // index falls inside opts, preserving index order. Persisted index and primary
 // reads share one snapshot/catalog; same-manager buffered documents are still
 // consulted before the persisted primary root so pending indexed writes remain
-// visible.
+// visible. Descending scans are not supported. Because this API holds a
+// write-domain read lock while pairing secondary IDs with buffered primary
+// documents, callers must provide a positive Limit.
 func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRangeOptions) ([]DocumentRecord, bool, error) {
 	capHint := defaultIndexRangeResultCap
 	if opts.Limit > 0 && opts.Limit < capHint {
@@ -11488,6 +11490,9 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 	if opts.Limit < 0 {
 		return false, false, errors.New("collections: index range limit cannot be negative")
 	}
+	if opts.Limit == 0 {
+		return nil, false, errors.New("collections: document index range reads require a positive limit")
+	}
 	if opts.Desc {
 		return false, false, errors.New("collections: descending index range scans are not supported")
 	}
@@ -11538,7 +11543,7 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 	}
 	var bufferedTable memtable.Table
 	if exactPrefixScan {
-		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, idx.Unique, exactPrefix, 0)
+		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, false, exactPrefix, opts.Limit)
 	} else {
 		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
 	}
@@ -11680,7 +11685,7 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 	}
 	var bufferedTable memtable.Table
 	if exactPrefixScan {
-		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, idx.Unique, exactPrefix, opts.Limit)
+		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, false, exactPrefix, opts.Limit)
 	} else {
 		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
 	}
