@@ -122,6 +122,41 @@ func TestClientInsertManyRawBSON(t *testing.T) {
 	if borrowedCount != 1 {
 		t.Fatalf("FindRawBSONBorrowed docs=%d want 1", borrowedCount)
 	}
+	borrowedEntered := make(chan struct{})
+	secondDone := make(chan error, 1)
+	go func() {
+		<-borrowedEntered
+		_, err := client.FindRawBSON(insertCtx, adaCommand)
+		secondDone <- err
+	}()
+	if err := client.FindRawBSONBorrowed(insertCtx, findCommand, func(docs []bson.Raw) error {
+		close(borrowedEntered)
+		select {
+		case err := <-secondDone:
+			if err != nil {
+				t.Fatalf("concurrent FindRawBSON: %v", err)
+			}
+			t.Fatal("concurrent FindRawBSON completed while borrowed callback was active")
+		case <-time.After(50 * time.Millisecond):
+		}
+		if len(docs) != 1 {
+			t.Fatalf("borrowed concurrent docs=%d want 1", len(docs))
+		}
+		if got, ok := docs[0].Lookup("name").StringValueOK(); !ok || got != "grace" {
+			t.Fatalf("borrowed doc changed while callback active: name=%q ok=%t want grace", got, ok)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("FindRawBSONBorrowed concurrent: %v", err)
+	}
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("concurrent FindRawBSON after borrowed callback: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("concurrent FindRawBSON did not complete after borrowed callback")
+	}
 
 	driverClient, err := mongo.Connect(options.Client().
 		ApplyURI("mongodb://" + ln.Addr().String()).

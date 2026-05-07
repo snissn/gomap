@@ -92,7 +92,7 @@ func (c *Client) FindRawBSON(ctx context.Context, command bson.Raw) ([]bson.Raw,
 	if err != nil {
 		return nil, err
 	}
-	return c.roundTripFind(ctx, msg, false)
+	return c.roundTripFind(ctx, msg)
 }
 
 // FindRawBSONBorrowed is like FindRawBSON, but the returned BSON documents are
@@ -112,11 +112,7 @@ func (c *Client) FindRawBSONBorrowed(ctx context.Context, command bson.Raw, fn f
 	if err != nil {
 		return err
 	}
-	docs, err := c.roundTripFind(ctx, msg, true)
-	if err != nil {
-		return err
-	}
-	return fn(docs)
+	return c.roundTripFindBorrowed(ctx, msg, fn)
 }
 
 func (c *Client) roundTripInsert(ctx context.Context, msg []byte, wantN int) (int, error) {
@@ -152,7 +148,7 @@ func (c *Client) roundTripInsert(ctx context.Context, msg []byte, wantN int) (in
 	return parseInsertResponse(header, body, wantN)
 }
 
-func (c *Client) roundTripFind(ctx context.Context, msg []byte, borrowed bool) ([]bson.Raw, error) {
+func (c *Client) roundTripFind(ctx context.Context, msg []byte) ([]bson.Raw, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -175,7 +171,7 @@ func (c *Client) roundTripFind(ctx context.Context, msg []byte, borrowed bool) (
 		}
 		return nil, err
 	}
-	header, body, err := c.readMessageLocked(borrowed)
+	header, body, err := c.readMessageLocked(false)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
@@ -183,6 +179,43 @@ func (c *Client) roundTripFind(ctx context.Context, msg []byte, borrowed bool) (
 		return nil, err
 	}
 	return parseFindResponse(header, body)
+}
+
+func (c *Client) roundTripFindBorrowed(ctx context.Context, msg []byte, fn func([]bson.Raw) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := c.conn.SetDeadline(deadline); err != nil {
+			return err
+		}
+	}
+	stopCancelWatch := c.watchContextCancelLocked(ctx)
+	defer func() {
+		stopCancelWatch()
+		_ = c.conn.SetDeadline(time.Time{})
+	}()
+	if err := writeFull(c.conn, msg); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return err
+	}
+	header, body, err := c.readMessageLocked(true)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return err
+	}
+	docs, err := parseFindResponse(header, body)
+	if err != nil {
+		return err
+	}
+	return fn(docs)
 }
 
 func (c *Client) readMessageLocked(retain bool) (wire.Header, []byte, error) {
