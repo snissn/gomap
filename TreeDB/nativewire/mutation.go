@@ -145,6 +145,9 @@ func decodeIDVectorInto(dst [][]byte, sections []iwire.Section, limits iwire.Lim
 }
 
 func rejectDuplicateIDs(ids [][]byte) error {
+	if len(ids) <= 512 {
+		return rejectDuplicateIDsSmall(ids)
+	}
 	seen := make(map[string]struct{}, len(ids))
 	for i, id := range ids {
 		if len(id) == 0 {
@@ -157,6 +160,54 @@ func rejectDuplicateIDs(ids [][]byte) error {
 		seen[key] = struct{}{}
 	}
 	return nil
+}
+
+func rejectDuplicateIDsSmall(ids [][]byte) error {
+	tableSize := 1
+	for tableSize < len(ids)*2 {
+		tableSize <<= 1
+	}
+	var heads [1024]int16
+	for i := 0; i < tableSize; i++ {
+		heads[i] = -1
+	}
+	var next [512]int16
+	var hashes [512]uint64
+	hashesView := hashes[:len(ids)]
+	mask := uint64(tableSize - 1)
+	for i, id := range ids {
+		if len(id) == 0 {
+			return protocolError(iwire.ErrInvalidCommand, "document id cannot be empty at index %d", i)
+		}
+		hash := hashDocumentID(id)
+		bucket := int(hash & mask)
+		for prev := heads[bucket]; prev >= 0; prev = next[prev] {
+			j := int(prev)
+			if hashesView[j] != hash || len(ids[j]) != len(id) {
+				continue
+			}
+			if bytes.Equal(ids[j], id) {
+				return protocolError(iwire.ErrDuplicateDocumentID, "duplicate document id at index %d", i)
+			}
+		}
+		hashesView[i] = hash
+		next[i] = heads[bucket]
+		heads[bucket] = int16(i)
+	}
+	return nil
+}
+
+func hashDocumentID(id []byte) uint64 {
+	const (
+		offset = 14695981039346656037
+		prime  = 1099511628211
+	)
+	hash := uint64(offset)
+	for _, b := range id {
+		hash ^= uint64(b)
+		hash *= prime
+	}
+	return hash
 }
 
 type responseMetaCount struct {

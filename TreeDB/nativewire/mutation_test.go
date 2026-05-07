@@ -3,6 +3,7 @@ package nativewire
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strconv"
 	"testing"
 	"time"
@@ -161,6 +162,36 @@ func TestMutationDuplicateIDRejected(t *testing.T) {
 	)
 	if !isRemoteError(err, iwire.ErrDuplicateDocumentID) {
 		t.Fatalf("InsertBatch duplicate err=%v want duplicate document id", err)
+	}
+}
+
+func TestRejectDuplicateIDsSmallBatchAllocFree(t *testing.T) {
+	ids := make([][]byte, 128)
+	for i := range ids {
+		ids[i] = []byte("doc-" + strconv.Itoa(i))
+	}
+	allocs := testing.AllocsPerRun(1000, func() {
+		if err := rejectDuplicateIDs(ids); err != nil {
+			t.Fatalf("rejectDuplicateIDs: %v", err)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("rejectDuplicateIDs allocs/run=%v want 0", allocs)
+	}
+}
+
+func TestRejectDuplicateIDsDetectsSmallAndLargeDuplicates(t *testing.T) {
+	for _, count := range []int{512, 513} {
+		ids := make([][]byte, count)
+		for i := range ids {
+			ids[i] = []byte("doc-" + strconv.Itoa(i))
+		}
+		ids[count-1] = ids[17]
+		err := rejectDuplicateIDs(ids)
+		var protocolErr *iwire.ProtocolError
+		if !errors.As(err, &protocolErr) || protocolErr.Code != iwire.ErrDuplicateDocumentID {
+			t.Fatalf("rejectDuplicateIDs(%d) err=%v want duplicate document id", count, err)
+		}
 	}
 }
 

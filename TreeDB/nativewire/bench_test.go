@@ -83,7 +83,7 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 		mgr, col, cleanup := benchmarkCollection(b)
 		defer cleanup()
 		server := NewServer(ServerOptions{Collections: mgr})
-		state := &connState{id: 1}
+		state := benchmarkConnState()
 		handle, err := state.addCollectionHandle("bench", col, server.maxCollectionHandles)
 		if err != nil {
 			b.Fatalf("add collection handle: %v", err)
@@ -124,7 +124,7 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 		mgr, col, cleanup := benchmarkCollection(b)
 		defer cleanup()
 		server := NewServer(ServerOptions{Collections: mgr})
-		state := &connState{id: 1}
+		state := benchmarkConnState()
 		handle, err := state.addCollectionHandle("bench", col, server.maxCollectionHandles)
 		if err != nil {
 			b.Fatalf("add collection handle: %v", err)
@@ -199,7 +199,7 @@ func BenchmarkNativewireCollectionGetMany(b *testing.B) {
 		defer cleanup()
 		seedBenchmarkCollection(b, col, docs)
 		server := NewServer(ServerOptions{Collections: mgr})
-		state := &connState{id: 1}
+		state := benchmarkConnState()
 		handle, err := state.addCollectionHandle("bench", col, server.maxCollectionHandles)
 		if err != nil {
 			b.Fatalf("add collection handle: %v", err)
@@ -247,8 +247,26 @@ func BenchmarkNativewireCollectionGetMany(b *testing.B) {
 	})
 }
 
+func BenchmarkNativewireRejectDuplicateIDs(b *testing.B) {
+	for _, count := range []int{32, 128, 512} {
+		ids, _ := benchmarkStoredBatch(0, count)
+		b.Run(fmt.Sprintf("%d_ids", count), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if err := rejectDuplicateIDs(ids); err != nil {
+					b.Fatalf("rejectDuplicateIDs: %v", err)
+				}
+			}
+		})
+	}
+}
+
 type benchmarkFrameSink struct {
 	frame []byte
+}
+
+func benchmarkConnState() *connState {
+	return &connState{id: 1, hello: true}
 }
 
 func (w *benchmarkFrameSink) Write(p []byte) (int, error) {
