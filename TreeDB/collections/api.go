@@ -11570,9 +11570,7 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 			primaryRootMissing = true
 		} else {
 			primaryReader, err = snap.ReaderAtRoot(primaryRootID)
-			if errors.Is(err, tree.ErrKeyNotFound) {
-				primaryRootMissing = true
-			} else if err != nil {
+			if err != nil {
 				return false, true, err
 			} else {
 				primaryReaderOK = true

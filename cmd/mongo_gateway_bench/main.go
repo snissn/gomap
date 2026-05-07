@@ -3066,11 +3066,11 @@ func runRawWireTCPPipelineRangeBatches(ctx context.Context, cfg config, client *
 			minAges[i] = minAge
 			responseTo[i] = id
 		}
-		if err := client.Flush(); err != nil {
+		if err := client.Flush(ctx); err != nil {
 			return err
 		}
 		for i := 0; i < batch; i++ {
-			if err := client.ReadFind(responseTo[i], minAges[i]); err != nil {
+			if err := client.ReadFind(ctx, responseTo[i], minAges[i]); err != nil {
 				return err
 			}
 		}
@@ -3136,23 +3136,47 @@ func (c *rawWireTCPPipelineClient) AppendFind(database, collection string, minAg
 	return requestID, nil
 }
 
-func (c *rawWireTCPPipelineClient) Flush() error {
+func (c *rawWireTCPPipelineClient) Flush(ctx context.Context) error {
 	if c == nil || c.conn == nil {
 		return errors.New("raw-wire TCP pipeline client is closed")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if len(c.writeBuf) == 0 {
 		return nil
 	}
+	stopCancelWatch := c.watchContextCancel(ctx)
+	defer func() {
+		if stopCancelWatch() {
+			_ = c.conn.SetDeadline(time.Time{})
+		}
+	}()
 	if err := writeFull(c.conn, c.writeBuf); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return err
 	}
 	c.writeBuf = c.writeBuf[:0]
 	return nil
 }
 
-func (c *rawWireTCPPipelineClient) ReadFind(responseTo int32, minAge int64) error {
+func (c *rawWireTCPPipelineClient) ReadFind(ctx context.Context, responseTo int32, minAge int64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	stopCancelWatch := c.watchContextCancel(ctx)
+	defer func() {
+		if stopCancelWatch() {
+			_ = c.conn.SetDeadline(time.Time{})
+		}
+	}()
 	header, body, err := wire.ReadMessageInto(c.rd, c.readBuf, wire.DefaultMaxMessageLength)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return err
 	}
 	if cap(body) <= rawWireTCPMaxRetainedReadBuffer {
@@ -3169,6 +3193,25 @@ func (c *rawWireTCPPipelineClient) ReadFind(responseTo int32, minAge int64) erro
 	}
 	c.responseBuf = batch
 	return validateRawAgeBatch(batch, minAge)
+}
+
+func (c *rawWireTCPPipelineClient) watchContextCancel(ctx context.Context) func() bool {
+	done := ctx.Done()
+	if done == nil {
+		return func() bool { return false }
+	}
+	fired := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		defer close(fired)
+		_ = c.conn.SetDeadline(time.Now())
+	})
+	return func() bool {
+		if stop() {
+			return false
+		}
+		<-fired
+		return true
+	}
 }
 
 func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder, coll *mongo.Collection, readers int) (phaseResult, error) {

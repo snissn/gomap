@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"math"
 	"math/bits"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -848,6 +850,62 @@ func mustTestBSON(t *testing.T, doc bson.D) bson.Raw {
 		t.Fatalf("marshal test BSON: %v", err)
 	}
 	return raw
+}
+
+func TestRawWireTCPPipelineClientReadFindHonorsContextCancel(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	client := &rawWireTCPPipelineClient{
+		conn: clientConn,
+		rd:   bufio.NewReaderSize(clientConn, rawWireTCPReadBufferSize),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.ReadFind(ctx, 1, 0)
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("ReadFind err=%v want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ReadFind did not return after context cancellation")
+	}
+}
+
+func TestRawWireTCPPipelineClientFlushHonorsContextCancel(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	client := &rawWireTCPPipelineClient{
+		conn:     clientConn,
+		writeBuf: bytes.Repeat([]byte("x"), 1024),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.Flush(ctx)
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Flush err=%v want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Flush did not return after context cancellation")
+	}
 }
 
 func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {

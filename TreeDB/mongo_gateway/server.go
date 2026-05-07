@@ -216,6 +216,14 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 			var appended bool
 			writeBuf, appended, err = s.appendBufferedMessageWithOwner(rw.reader, owner, writeBuf)
 			if err != nil {
+				if len(writeBuf) > 0 {
+					if flushErr := writeFull(rw, writeBuf); flushErr != nil {
+						if ctx.Err() != nil && (errors.Is(flushErr, net.ErrClosed) || errors.Is(flushErr, io.ErrClosedPipe)) {
+							return ctx.Err()
+						}
+						return flushErr
+					}
+				}
 				return err
 			}
 			if !appended {

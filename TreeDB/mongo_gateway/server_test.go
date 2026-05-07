@@ -4277,6 +4277,67 @@ func TestServeConnBufferedMessageCoalescingAppendsResponses(t *testing.T) {
 	}
 }
 
+func TestServeConnFlushesBufferedResponseBeforeCoalescedError(t *testing.T) {
+	firstCommand := mustDocument(t, bson.D{
+		{Key: "ping", Value: int32(1)},
+		{Key: "$db", Value: "admin"},
+	})
+	firstReq, err := wire.AppendMsgMessage(nil, 501, 0, 0, firstCommand)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage first: %v", err)
+	}
+	badReq, err := wire.AppendMessage(nil, 502, 0, wire.OpCompressed, nil)
+	if err != nil {
+		t.Fatalf("AppendMessage bad: %v", err)
+	}
+	requests := append(firstReq, badReq...)
+
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+	if err := clientConn.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("SetDeadline: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- NewServer().ServeConn(context.Background(), serverConn)
+	}()
+	writeErrCh := make(chan error, 1)
+	go func() {
+		writeErrCh <- writeFull(clientConn, requests)
+	}()
+
+	header, body, err := wire.ReadMessage(clientConn, 0)
+	if err != nil {
+		t.Fatalf("read flushed response: %v", err)
+	}
+	if header.OpCode != wire.OpMsg || header.ResponseTo != 501 {
+		t.Fatalf("response header=%+v", header)
+	}
+	msg, err := wire.ParseMsg(body)
+	if err != nil {
+		t.Fatalf("ParseMsg: %v", err)
+	}
+	assertOK(t, msg.Body)
+
+	select {
+	case err := <-writeErrCh:
+		if err != nil {
+			t.Fatalf("write requests: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("request write did not finish")
+	}
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, wire.ErrUnsupported) {
+			t.Fatalf("ServeConn err=%v want ErrUnsupported", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ServeConn did not return after coalesced error")
+	}
+}
+
 func TestServeConnCancellationInterruptsRead(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer clientConn.Close()
