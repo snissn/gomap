@@ -11514,7 +11514,7 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 	out := make([]DocumentRecord, 0, capHint)
 	primaryRootName := collectionPrimaryRootName(catalog.meta.Name)
 	var scratch []byte
-	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, opts.Limit, func(id []byte) (bool, error) {
+	truncated, err := scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt, idx.ValueType, opts.Limit, func(id []byte) (bool, error) {
 		value, buffered, found := c.getBufferedDocumentInto(id, scratch[:0])
 		if !buffered {
 			var err error
@@ -11825,8 +11825,46 @@ func encodedDoubleComponentIsNaN(encoded []byte) bool {
 }
 
 func scanMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, fn func([]byte) (bool, error)) (bool, error) {
+	return scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt, valueType, maxResults, true, fn)
+}
+
+func scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, fn func([]byte) (bool, error)) (bool, error) {
+	return scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt, valueType, maxResults, false, fn)
+}
+
+func scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, cloneID bool, fn func([]byte) (bool, error)) (bool, error) {
 	if maxResults < 0 {
 		return false, errors.New("collections: max index results cannot be negative")
+	}
+	if bufferedIt == nil {
+		emitted := 0
+		for {
+			persistedKey, persistedOK := collectionIndexIteratorKey(persistedIt)
+			if !persistedOK {
+				break
+			}
+			if persistedIt.IsDeleted() {
+				persistedIt.Next()
+				continue
+			}
+			id, err := indexKeyDocumentID(valueType, persistedKey)
+			if err != nil {
+				return false, err
+			}
+			if maxResults > 0 && emitted >= maxResults {
+				return true, nil
+			}
+			if cloneID {
+				id = bytes.Clone(id)
+			}
+			cont, err := fn(id)
+			if err != nil || !cont {
+				return false, err
+			}
+			emitted++
+			persistedIt.Next()
+		}
+		return false, collectionIndexIteratorError(persistedIt)
 	}
 	seen := make(map[string]struct{})
 	emitted := 0
@@ -11843,7 +11881,10 @@ func scanMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterato
 		if maxResults > 0 && emitted >= maxResults {
 			return false, true, nil
 		}
-		cont, err := fn(bytes.Clone(id))
+		if cloneID {
+			id = bytes.Clone(id)
+		}
+		cont, err := fn(id)
 		if err != nil {
 			return false, false, err
 		}
