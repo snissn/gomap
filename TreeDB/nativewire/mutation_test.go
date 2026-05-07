@@ -185,15 +185,20 @@ func TestRejectDuplicateIDsSmallBatchAllocFree(t *testing.T) {
 
 func TestRejectDuplicateIDsDetectsSmallAndLargeDuplicates(t *testing.T) {
 	for _, count := range []int{512, 513} {
-		ids := make([][]byte, count)
-		for i := range ids {
-			ids[i] = []byte("doc-" + strconv.Itoa(i))
-		}
-		ids[count-1] = ids[17]
-		err := rejectDuplicateIDs(ids)
-		var protocolErr *iwire.ProtocolError
-		if !errors.As(err, &protocolErr) || protocolErr.Code != iwire.ErrDuplicateDocumentID {
-			t.Fatalf("rejectDuplicateIDs(%d) err=%v want duplicate document id", count, err)
+		for _, copied := range []bool{false, true} {
+			ids := make([][]byte, count)
+			for i := range ids {
+				ids[i] = []byte("doc-" + strconv.Itoa(i))
+			}
+			ids[count-1] = ids[17]
+			if copied {
+				ids[count-1] = append([]byte(nil), ids[17]...)
+			}
+			err := rejectDuplicateIDs(ids)
+			var protocolErr *iwire.ProtocolError
+			if !errors.As(err, &protocolErr) || protocolErr.Code != iwire.ErrDuplicateDocumentID {
+				t.Fatalf("rejectDuplicateIDs(%d, copied=%v) err=%v want duplicate document id", count, copied, err)
+			}
 		}
 	}
 }

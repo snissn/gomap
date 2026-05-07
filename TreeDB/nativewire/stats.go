@@ -65,15 +65,11 @@ func (c *counters) incFramesOut() {
 }
 
 func (c *counters) addBytesIn(delta uint64) {
-	if delta != 0 {
-		c.bytesIn.Add(delta)
-	}
+	c.bytesIn.Add(delta)
 }
 
 func (c *counters) addBytesOut(delta uint64) {
-	if delta != 0 {
-		c.bytesOut.Add(delta)
-	}
+	c.bytesOut.Add(delta)
 }
 
 func (c *counters) incRequestsStarted() {
@@ -93,9 +89,7 @@ func (c *counters) incRequestsCanceled() {
 }
 
 func (c *counters) addDispatchNanos(delta uint64) {
-	if delta != 0 {
-		c.dispatchNanos.Add(delta)
-	}
+	c.dispatchNanos.Add(delta)
 }
 
 func (c *counters) incErrorsTotal() {
