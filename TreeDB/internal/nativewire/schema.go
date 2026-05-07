@@ -141,6 +141,9 @@ func (c *CommandSchema) validateSections(sections []Section) ([]Section, []Secti
 	ignored := make([]Section, 0)
 
 	for _, section := range sections {
+		if section.Flags&^knownSectionFlags != 0 {
+			return nil, nil, protocolError(ErrUnsupportedFeature, "unknown section flags 0x%x", section.Flags&^knownSectionFlags)
+		}
 		rule, ok := rules[section.ID]
 		if !ok {
 			if section.Critical() {
