@@ -2162,7 +2162,9 @@ func validateSetFieldName(key string) error {
 	return nil
 }
 
-func encodePrimaryKey(value bson.RawValue) ([]byte, error) {
+// EncodePrimaryKey encodes a MongoDB _id value into the canonical TreeDB
+// collection primary key used by the Mongo gateway.
+func EncodePrimaryKey(value bson.RawValue) ([]byte, error) {
 	if value.IsZero() {
 		return nil, errors.New("Mongo document _id is required")
 	}
@@ -2176,6 +2178,10 @@ func encodePrimaryKey(value bson.RawValue) ([]byte, error) {
 	key = append(key, primaryKeyPrefixBSONValue, byte(value.Type))
 	key = append(key, value.Value...)
 	return key, nil
+}
+
+func encodePrimaryKey(value bson.RawValue) ([]byte, error) {
+	return EncodePrimaryKey(value)
 }
 
 func validateSupportedDocument(doc bson.Raw) error {

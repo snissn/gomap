@@ -249,7 +249,7 @@ Use a client-mode matrix when measuring driver overhead and gateway ceiling:
 
 ```sh
 TREEDB_DOCUMENT_FORMATS="bson" \
-TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack raw-wire-tcp raw-wire" \
+TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire" \
 MONGO_CLIENT_MODES="driver driver-command driver-command-raw driver-unack" \
 BATCH_SIZE=5000 \
 INSERT_PRODUCERS=8 \
@@ -285,12 +285,17 @@ Interpret client modes as separate questions:
 - `driver-command-raw`: official driver `RunCommand` with prebuilt raw BSON.
 - `driver-unack`: official driver unacknowledged insert enqueue path plus
   post-load visibility wait.
+- `direct`: TreeDB-only collection API path in the selected TreeDB document
+  format. It emits the same phase names as the Mongo gateway benchmark while
+  bypassing the MongoDB driver, sockets, and Mongo gateway command handling.
 - `raw-wire-tcp`: TreeDB-only raw OP_MSG load over loopback TCP.
 - `raw-wire`: TreeDB-only in-process raw OP_MSG load.
 
 Use `driver` for user-visible Mongo compatibility. Use `driver-command-raw` for
-the fastest current acknowledged official-driver load path. Use raw-wire modes
-only to estimate TreeDB gateway/server ceiling.
+the fastest current acknowledged official-driver load path. Use `direct` to
+separate collection-engine and storage-format bottlenecks from Mongo
+compatibility overhead. Use raw-wire modes only to estimate TreeDB
+gateway/server ceiling.
 
 ## Reader and Writer Scaling
 
