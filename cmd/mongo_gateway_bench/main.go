@@ -2106,6 +2106,9 @@ func runDirectTreeDBRangeQuery(cfg config, collection *collections.Collection, m
 		if err != nil {
 			return err
 		}
+		if len(ids) == 0 {
+			return fmt.Errorf("direct indexed range returned no ids for minAge=%d", minAge)
+		}
 		for _, id := range ids {
 			stored, err := collection.Get(id)
 			if err != nil {
