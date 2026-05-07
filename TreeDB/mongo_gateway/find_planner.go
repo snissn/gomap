@@ -208,7 +208,7 @@ func (s *Server) findPureIndexedRangeLimitDocuments(col *collections.Collection,
 	if empty || limit == 0 {
 		return nil, true, nil
 	}
-	candidateLimit := candidateLimitWithOverflowSlot(s.maxFindScanDocuments())
+	candidateLimit := candidateLimitWithOverflowSlot(limit)
 	docs, err := documentsForIndexedRange(col, materializer, idx, opts, candidateLimit, limit, false)
 	return docs, true, err
 }
@@ -239,7 +239,6 @@ func pureIndexedRangeLimitPlan(meta collections.CollectionMeta, plan findPlan, m
 		if !ok {
 			continue
 		}
-		opts.Limit = limit
 		return idx, opts, limit, true, empty, nil
 	}
 	return collections.IndexDefinition{}, collections.IndexRangeOptions{}, 0, false, false, nil
