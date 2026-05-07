@@ -211,6 +211,23 @@ The hot path should stay binary and vectorized:
 Benchmarks should keep native-wire results separate from direct collection calls,
 Mongo driver paths, and Mongo raw-wire paths.
 
+Every native-wire roadmap round should close with a benchmark/profile sprint.
+This sprint should freeze the current feature surface, run the relevant
+microbenchmarks and workload-coupled benchmarks, capture CPU, allocation, block,
+mutex, and trace profiles, and optimize the dominant costs before the next
+roadmap round begins. It should not add new protocol features except
+instrumentation, benchmark labels, or small optimizations directly justified by
+the profile.
+
+The closeout report for that sprint should name:
+
+- the exact benchmark commands and baseline commit or previous roadmap slice,
+- artifact directories for raw output and profiles,
+- top CPU and allocation sources,
+- throughput, latency, bytes/op, `B/op`, `allocs/op`, and wire-overhead deltas,
+- optimizations made during the sprint,
+- regressions accepted with rationale and follow-up issue or PR target.
+
 R0d codec benchmarks should land before the native server. They should:
 
 - use stable `BenchmarkNativewire...` names,
@@ -256,7 +273,9 @@ Every protocol implementation PR should answer:
 6. Which deterministic-entry tests are needed now or deferred with a clear
    reason?
 7. Which benchmark labels, profile captures, or report parsers changed?
-8. Did the roadmap need an update because implementation reality changed?
+8. If this is a phase-close sprint, what benchmark/profile artifacts and
+   optimization decisions close the phase?
+9. Did the roadmap need an update because implementation reality changed?
 
 Do not merge a new replicated command version without a canonical fixture,
 append-time rejection tests, and a replay determinism test.

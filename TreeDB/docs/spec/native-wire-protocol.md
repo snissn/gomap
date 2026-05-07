@@ -872,6 +872,13 @@ entry encoding SHOULD have allocation guard tests proving zero allocations after
 scratch warmup. Allocating compatibility APIs MAY remain available, but
 benchmark labels MUST distinguish allocating and scratch/reuse paths.
 
+Every later native-wire implementation round MUST close with a benchmark and
+profile pass before publishing the next feature round. R1 closeout MUST compare
+direct collection calls, native-wire in-process dispatch, and native-wire TCP
+dispatch. Later closeouts MUST benchmark the primary feature path introduced by
+that round, capture profiles for the dominant workload, and document any
+material regression, optimization, or deferred performance follow-up.
+
 The first implementation MUST add native client modes beside the existing Mongo
 gateway client modes:
 
