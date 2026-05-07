@@ -2,6 +2,7 @@ package nativewire
 
 import (
 	"context"
+	"errors"
 	"net"
 	"strconv"
 	"strings"
@@ -239,6 +240,45 @@ func TestClientRejectsUnsupportedResponseVersion(t *testing.T) {
 	}
 	if err := <-errCh; err != nil {
 		t.Fatalf("server goroutine: %v", err)
+	}
+}
+
+func TestClientRoundTripHonorsCancellationWithoutDeadline(t *testing.T) {
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+	client := NewClient(left)
+	started := make(chan struct{})
+	serverDone := make(chan struct{})
+	serverErr := make(chan error, 1)
+	go func() {
+		_, _, err := readFrame(right, iwire.DefaultLimits())
+		close(started)
+		<-serverDone
+		serverErr <- err
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.Ping(ctx)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("server did not receive ping")
+	}
+	cancel()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Ping err=%v want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Ping did not return after cancel")
+	}
+	close(serverDone)
+	if err := <-serverErr; err != nil {
+		t.Fatalf("server read: %v", err)
 	}
 }
 
