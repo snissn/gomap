@@ -11494,6 +11494,10 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 	if domain != nil {
 		domain.mu.RLock()
 		domainLocked = true
+		// Keep the read lock through the scan so buffered secondary IDs and
+		// buffered primary documents come from one write-domain view. Releasing
+		// here would require copying the pending primary view up front, which is
+		// too much work for the common small-limit range probe.
 		defer func() {
 			if domainLocked {
 				domain.mu.RUnlock()
