@@ -2018,6 +2018,65 @@ func TestEnsureNativeWireBenchmarkCollectionCreatesPrimaryOnlyCollection(t *test
 	}
 }
 
+func TestNativeWireStoredDocumentPreservesFullBenchmarkShape(t *testing.T) {
+	rawJSON, err := nativeWireStoredDocument(collections.DocumentFormatJSON, 7, nil, nil)
+	if err != nil {
+		t.Fatalf("nativeWireStoredDocument JSON: %v", err)
+	}
+	assertNativeWireBenchmarkJSONShape(t, rawJSON)
+
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{
+		Name:    "bench.docs",
+		Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatTemplateV1},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := manager.OpenCollection("bench.docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	rawTemplate, err := nativeWireStoredDocument(collections.DocumentFormatTemplateV1, 7, nil, nil)
+	if err != nil {
+		t.Fatalf("nativeWireStoredDocument template-v1: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("d7")}, [][]byte{rawTemplate}); err != nil {
+		t.Fatalf("InsertBatch template-v1: %v", err)
+	}
+	got, err := col.Get([]byte("d7"))
+	if err != nil {
+		t.Fatalf("Get template-v1: %v", err)
+	}
+	gotJSON, err := col.StoredDocumentJSON(got)
+	if err != nil {
+		t.Fatalf("StoredDocumentJSON: %v", err)
+	}
+	assertNativeWireBenchmarkJSONShape(t, gotJSON)
+}
+
+func assertNativeWireBenchmarkJSONShape(t *testing.T, raw []byte) {
+	t.Helper()
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal benchmark JSON: %v raw=%s", err, raw)
+	}
+	if _, ok := doc["tags"].([]any); !ok {
+		t.Fatalf("document missing tags array: %s", raw)
+	}
+	profile, ok := doc["profile"].(map[string]any)
+	if !ok {
+		t.Fatalf("document missing profile object: %s", raw)
+	}
+	if bio, ok := profile["bio"].(string); !ok || bio == "" {
+		t.Fatalf("profile.bio=%v want non-empty string", profile["bio"])
+	}
+}
+
 func TestWriteResultKeepsTextHeaderStableForIndexedUpdateKnob(t *testing.T) {
 	result := &benchmarkResult{
 		Target:          "treedb",

@@ -3,7 +3,9 @@ package nativewire
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
+	"sync"
 )
 
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
@@ -13,6 +15,18 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	if ln == nil {
 		return net.ErrClosed
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = ln.Close()
+		case <-done:
+		}
+	}()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -45,27 +59,34 @@ func DialContext(ctx context.Context, network, address string) (*Client, error) 
 }
 
 func NewInProcessClient(ctx context.Context, server *Server) (*Client, func() error, error) {
+	if server == nil || server.closed.Load() {
+		return nil, nil, ErrServerClosed
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	left, right := net.Pipe()
 	done := make(chan error, 1)
 	go func() {
 		done <- server.ServeConn(ctx, right)
 	}()
 	client := NewClient(left)
-	if err := client.Hello(ctx); err != nil {
-		_ = left.Close()
-		_ = right.Close()
-		return nil, nil, err
-	}
+	var cleanupOnce sync.Once
+	var cleanupErr error
 	cleanup := func() error {
-		err := client.Close()
-		select {
-		case serveErr := <-done:
-			if serveErr != nil && ctx.Err() == nil {
+		cleanupOnce.Do(func() {
+			err := client.Close()
+			err = errors.Join(err, right.Close())
+			serveErr := <-done
+			if serveErr != nil && ctx.Err() == nil && !errors.Is(serveErr, net.ErrClosed) && !errors.Is(serveErr, io.ErrClosedPipe) {
 				err = errors.Join(err, serveErr)
 			}
-		default:
-		}
-		return err
+			cleanupErr = err
+		})
+		return cleanupErr
+	}
+	if err := client.Hello(ctx); err != nil {
+		return nil, nil, errors.Join(err, cleanup())
 	}
 	return client, cleanup, nil
 }

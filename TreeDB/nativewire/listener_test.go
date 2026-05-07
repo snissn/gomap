@@ -77,6 +77,57 @@ func TestServeUnixSocketAndDialContext(t *testing.T) {
 	}
 }
 
+func TestServeContextCancelClosesListener(t *testing.T) {
+	server := NewServer(ServerOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen tcp: %v", err)
+	}
+	errCh := make(chan error, 1)
+	go func() { errCh <- server.Serve(ctx, ln) }()
+	cancel()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Serve err=%v want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not stop after context cancel")
+	}
+	_ = server.Close()
+}
+
+func TestNewInProcessClientRejectsNilServer(t *testing.T) {
+	client, cleanup, err := NewInProcessClient(context.Background(), nil)
+	if !errors.Is(err, ErrServerClosed) {
+		t.Fatalf("NewInProcessClient err=%v want server closed", err)
+	}
+	if client != nil || cleanup != nil {
+		t.Fatal("expected nil client and cleanup")
+	}
+}
+
+func TestNewInProcessClientCleanupIsIdempotent(t *testing.T) {
+	server := NewServer(ServerOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client, cleanup, err := NewInProcessClient(ctx, server)
+	if err != nil {
+		t.Fatalf("NewInProcessClient: %v", err)
+	}
+	if err := client.Ping(ctx); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatalf("cleanup first: %v", err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatalf("cleanup second: %v", err)
+	}
+	_ = server.Close()
+}
+
 func unixSocketPath(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "nw")
