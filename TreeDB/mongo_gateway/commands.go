@@ -115,13 +115,17 @@ type rawCursorDocumentsResponse struct {
 }
 
 type findResponsePayload struct {
-	document wire.Document
-	raw      *rawCursorDocumentsResponse
+	document     wire.Document
+	raw          *rawCursorDocumentsResponse
+	indexedRange *indexedRangeCursorResponse
 }
 
 func (p findResponsePayload) marshalDocument() (wire.Document, error) {
 	if p.raw != nil {
 		return marshalCursorDocumentsResponseWithID(p.raw.ns, p.raw.cursorID, p.raw.batchKey, p.raw.batch)
+	}
+	if p.indexedRange != nil {
+		return p.indexedRange.marshalDocument()
 	}
 	return p.document, nil
 }
@@ -134,6 +138,9 @@ func (p findResponsePayload) marshalMsgInto(dst []byte, requestID, responseTo in
 	if p.raw != nil {
 		return marshalCursorDocumentsMsgResponseWithIDInto(dst, requestID, responseTo, p.raw.ns, p.raw.cursorID, p.raw.batchKey, p.raw.batch)
 	}
+	if p.indexedRange != nil {
+		return p.indexedRange.marshalMsgInto(dst, requestID, responseTo)
+	}
 	return wire.AppendMsgMessage(dst, requestID, responseTo, 0, p.document)
 }
 
@@ -142,7 +149,11 @@ func (s *Server) findResponse(command wire.Document, cursorOwner int64) (wire.Do
 	if err != nil {
 		return nil, err
 	}
-	return payload.marshalDocument()
+	doc, err := payload.marshalDocument()
+	if err != nil && payload.indexedRange != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	return doc, err
 }
 
 func (s *Server) findMsgResponse(command wire.Document, requestID, responseTo int32, cursorOwner int64) ([]byte, error) {
@@ -154,7 +165,15 @@ func (s *Server) findMsgResponseInto(dst []byte, command wire.Document, requestI
 	if err != nil {
 		return nil, err
 	}
-	return payload.marshalMsgInto(dst, requestID, responseTo)
+	msg, err := payload.marshalMsgInto(dst, requestID, responseTo)
+	if err != nil && payload.indexedRange != nil {
+		doc, docErr := commandError(commandCodeBadValue, "BadValue", err.Error())
+		if docErr != nil {
+			return nil, docErr
+		}
+		return wire.AppendMsgMessage(dst[:0], requestID, responseTo, 0, doc)
+	}
+	return msg, err
 }
 
 func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (findResponsePayload, error) {
@@ -207,6 +226,34 @@ func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (
 		return findResponsePayload{document: doc}, err
 	}
 	ns := db + "." + collection
+	if !plan.projection.present {
+		idx, opts, limit, ok, empty, err := pureIndexedRangeLimitPlan(col.Meta(), plan, s.maxFindScanDocuments())
+		if err != nil {
+			doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+			return findResponsePayload{document: doc}, err
+		}
+		if ok {
+			normalizedBatchSize, err := normalizeBatchSize(int(batchSize), batchSizeSet, defaultCursorBatchSize)
+			if err != nil {
+				doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+				return findResponsePayload{document: doc}, err
+			}
+			if empty || limit == 0 {
+				return findResponsePayload{raw: &rawCursorDocumentsResponse{ns: ns, cursorID: 0, batchKey: "firstBatch"}}, nil
+			}
+			if normalizedBatchSize >= limit {
+				opts.Limit = limit
+				return findResponsePayload{indexedRange: &indexedRangeCursorResponse{
+					col:           col,
+					ns:            ns,
+					indexName:     idx.Name,
+					opts:          opts,
+					batchKey:      "firstBatch",
+					maxBatchBytes: s.maxFindBatchBytes(),
+				}}, nil
+			}
+		}
+	}
 	results, err := s.executeFind(col, plan)
 	if err != nil {
 		doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
@@ -1431,6 +1478,168 @@ func marshalCursorDocumentsMsgResponseWithIDInto(dst []byte, requestID, response
 	}
 	binary.LittleEndian.PutUint32(msg[base:base+4], uint32(messageLength))
 	return msg, nil
+}
+
+type indexedRangeCursorResponse struct {
+	col           *collections.Collection
+	ns            string
+	indexName     string
+	opts          collections.IndexRangeOptions
+	batchKey      string
+	maxBatchBytes int
+}
+
+func (r *indexedRangeCursorResponse) marshalDocument() (wire.Document, error) {
+	materializer, err := storedDocumentMaterializerForCollection(r.col)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = materializer.Close() }()
+	return marshalIndexedRangeCursorDocument(r.col, materializer, r.ns, r.indexName, r.opts, r.batchKey, r.maxBatchBytes)
+}
+
+func (r *indexedRangeCursorResponse) marshalMsgInto(dst []byte, requestID, responseTo int32) ([]byte, error) {
+	materializer, err := storedDocumentMaterializerForCollection(r.col)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = materializer.Close() }()
+	return marshalIndexedRangeCursorMsgInto(dst, requestID, responseTo, r.col, materializer, r.ns, r.indexName, r.opts, r.batchKey, r.maxBatchBytes)
+}
+
+func marshalIndexedRangeCursorDocument(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, ns, indexName string, opts collections.IndexRangeOptions, batchKey string, maxBatchBytes int) (wire.Document, error) {
+	builder := newRawCursorDocumentBuilder(make([]byte, 0, rawCursorResponseCapacityHint(ns, opts.Limit, maxBatchBytes)), ns, batchKey, maxBatchBytes)
+	_, err := col.ScanDocumentsByIndexRange(indexName, opts, func(record collections.BorrowedDocumentRecord) (bool, error) {
+		if len(record.Document) == 0 {
+			return true, nil
+		}
+		doc, err := storedDocumentToBSON(col, materializer, record.Document)
+		if err != nil {
+			return false, err
+		}
+		return builder.appendDocument(doc)
+	})
+	if err != nil {
+		return nil, err
+	}
+	doc, err := builder.finish()
+	if err != nil {
+		return nil, err
+	}
+	return wire.Document(doc), nil
+}
+
+func marshalIndexedRangeCursorMsgInto(dst []byte, requestID, responseTo int32, col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, ns, indexName string, opts collections.IndexRangeOptions, batchKey string, maxBatchBytes int) ([]byte, error) {
+	need := wire.HeaderLen + 5 + rawCursorResponseCapacityHint(ns, opts.Limit, maxBatchBytes)
+	if cap(dst)-len(dst) < need {
+		grown := make([]byte, len(dst), len(dst)+need)
+		copy(grown, dst)
+		dst = grown
+	}
+	msg := dst
+	base := len(msg)
+	msg = appendWireInt32(msg, 0)
+	msg = appendWireInt32(msg, requestID)
+	msg = appendWireInt32(msg, responseTo)
+	msg = appendWireInt32(msg, int32(wire.OpMsg))
+	msg = appendWireInt32(msg, 0)
+	msg = append(msg, wire.MsgSectionBody)
+	builder := newRawCursorDocumentBuilder(msg, ns, batchKey, maxBatchBytes)
+	_, err := col.ScanDocumentsByIndexRange(indexName, opts, func(record collections.BorrowedDocumentRecord) (bool, error) {
+		if len(record.Document) == 0 {
+			return true, nil
+		}
+		doc, err := storedDocumentToBSON(col, materializer, record.Document)
+		if err != nil {
+			return false, err
+		}
+		return builder.appendDocument(doc)
+	})
+	if err != nil {
+		return nil, err
+	}
+	msg, err = builder.finish()
+	if err != nil {
+		return nil, err
+	}
+	messageLength := len(msg) - base
+	if messageLength > wire.DefaultMaxMessageLength {
+		return nil, fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, messageLength, wire.DefaultMaxMessageLength)
+	}
+	binary.LittleEndian.PutUint32(msg[base:base+4], uint32(messageLength))
+	return msg, nil
+}
+
+type rawCursorDocumentBuilder struct {
+	buf           []byte
+	docIdx        int32
+	cursorIdx     int32
+	batchIdx      int32
+	batchBytes    int
+	count         int
+	maxBatchBytes int
+}
+
+func newRawCursorDocumentBuilder(dst []byte, ns, batchKey string, maxBatchBytes int) *rawCursorDocumentBuilder {
+	docIdx, dst := bsoncore.AppendDocumentStart(dst)
+	cursorIdx, dst := bsoncore.AppendDocumentElementStart(dst, "cursor")
+	dst = bsoncore.AppendInt64Element(dst, "id", 0)
+	dst = bsoncore.AppendStringElement(dst, "ns", ns)
+	batchIdx, dst := bsoncore.AppendArrayElementStart(dst, batchKey)
+	return &rawCursorDocumentBuilder{
+		buf:           dst,
+		docIdx:        docIdx,
+		cursorIdx:     cursorIdx,
+		batchIdx:      batchIdx,
+		maxBatchBytes: maxBatchBytes,
+	}
+}
+
+func (b *rawCursorDocumentBuilder) appendDocument(doc wire.Document) (bool, error) {
+	docBytes := findBatchDocumentBytes(doc, b.count)
+	if findBatchOverheadBytes+docBytes > b.maxBatchBytes {
+		return false, fmt.Errorf("Mongo gateway cursor document exceeds max message size: docBytes=%d maxBytes=%d", docBytes, b.maxBatchBytes)
+	}
+	if b.count > 0 && findBatchOverheadBytes+b.batchBytes+docBytes > b.maxBatchBytes {
+		return false, nil
+	}
+	b.buf = bsoncore.AppendDocumentElement(b.buf, bsonArrayIndexKey(b.count), doc)
+	b.batchBytes += docBytes
+	b.count++
+	return true, nil
+}
+
+func (b *rawCursorDocumentBuilder) finish() ([]byte, error) {
+	var err error
+	b.buf, err = bsoncore.AppendArrayEnd(b.buf, b.batchIdx)
+	if err != nil {
+		return nil, err
+	}
+	b.buf, err = bsoncore.AppendDocumentEnd(b.buf, b.cursorIdx)
+	if err != nil {
+		return nil, err
+	}
+	b.buf = bsoncore.AppendDoubleElement(b.buf, "ok", 1.0)
+	b.buf, err = bsoncore.AppendDocumentEnd(b.buf, b.docIdx)
+	if err != nil {
+		return nil, err
+	}
+	return b.buf, nil
+}
+
+func rawCursorResponseCapacityHint(ns string, limit int, maxBatchBytes int) int {
+	const estimatedIndexedRangeDocumentBytes = 1024
+	need := len(ns) + 96 + findBatchOverheadBytes
+	if limit > 0 {
+		need += limit * estimatedIndexedRangeDocumentBytes
+	}
+	if maxBatchBytes > 0 && need > maxBatchBytes+len(ns)+96 {
+		need = maxBatchBytes + len(ns) + 96
+	}
+	if need > maxRetainedWireWriteBuffer {
+		return maxRetainedWireWriteBuffer
+	}
+	return need
 }
 
 func appendWireInt32(dst []byte, v int32) []byte {
