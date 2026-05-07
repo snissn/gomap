@@ -11513,14 +11513,38 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 	}
 	out := make([]DocumentRecord, 0, capHint)
 	primaryRootName := collectionPrimaryRootName(catalog.meta.Name)
+	var primaryReader backenddb.SnapshotRootReader
+	primaryReaderOK := false
+	if len(catalog.overlayRootIDs(primaryRootName)) == 0 {
+		rootID := catalog.rootID(primaryRootName)
+		if rootID != 0 {
+			primaryReader, err = snap.ReaderAtRoot(rootID)
+			if err != nil {
+				return nil, false, err
+			}
+			primaryReaderOK = true
+		}
+	}
 	var scratch []byte
 	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, opts.Limit, func(id []byte) (bool, error) {
 		value, buffered, found := c.getBufferedDocumentInto(id, scratch[:0])
 		if !buffered {
-			var err error
-			value, found, err = collectionGetAppendAtCatalogRoot(snap, catalog, primaryRootName, id, scratch[:0])
-			if err != nil {
-				return false, err
+			if primaryReaderOK {
+				nextScratch, err := primaryReader.GetAppend(id, scratch[:0])
+				if errors.Is(err, tree.ErrKeyNotFound) {
+					found = false
+				} else if err != nil {
+					return false, err
+				} else {
+					value = nextScratch
+					found = true
+				}
+			} else {
+				var err error
+				value, found, err = collectionGetAppendAtCatalogRoot(snap, catalog, primaryRootName, id, scratch[:0])
+				if err != nil {
+					return false, err
+				}
 			}
 		}
 		if !found {
