@@ -2110,9 +2110,10 @@ func TestNativeWireStoredDocumentPreservesFullBenchmarkShape(t *testing.T) {
 		t.Fatalf("nativeWireStoredDocument JSON: %v", err)
 	}
 	assertNativeWireBenchmarkJSONShape(t, rawJSON)
-	if !bytes.Contains(rawJSON, []byte(`"$numberLong"`)) || !bytes.Contains(rawJSON, []byte(`"$numberDouble"`)) {
-		t.Fatalf("nativeWireStoredDocument JSON did not preserve Extended JSON numeric types: %s", rawJSON)
+	if bytes.Contains(rawJSON, []byte(`"$numberLong"`)) || bytes.Contains(rawJSON, []byte(`"$numberDouble"`)) {
+		t.Fatalf("nativeWireStoredDocument JSON used Extended JSON numeric wrappers: %s", rawJSON)
 	}
+	assertNativeWireBenchmarkPlainJSONNumbers(t, rawJSON)
 
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -2163,6 +2164,20 @@ func assertNativeWireBenchmarkJSONShape(t *testing.T, raw []byte) {
 	}
 	if bio, ok := profile["bio"].(string); !ok || bio == "" {
 		t.Fatalf("profile.bio=%v want non-empty string", profile["bio"])
+	}
+}
+
+func assertNativeWireBenchmarkPlainJSONNumbers(t *testing.T, raw []byte) {
+	t.Helper()
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal benchmark JSON: %v raw=%s", err, raw)
+	}
+	if _, ok := doc["age"].(float64); !ok {
+		t.Fatalf("age=%v want JSON number", doc["age"])
+	}
+	if _, ok := doc["score"].(float64); !ok {
+		t.Fatalf("score=%v want JSON number", doc["score"])
 	}
 }
 
