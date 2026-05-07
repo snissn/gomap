@@ -127,10 +127,14 @@ func (p findResponsePayload) marshalDocument() (wire.Document, error) {
 }
 
 func (p findResponsePayload) marshalMsg(requestID, responseTo int32) ([]byte, error) {
+	return p.marshalMsgInto(nil, requestID, responseTo)
+}
+
+func (p findResponsePayload) marshalMsgInto(dst []byte, requestID, responseTo int32) ([]byte, error) {
 	if p.raw != nil {
-		return marshalCursorDocumentsMsgResponseWithID(requestID, responseTo, p.raw.ns, p.raw.cursorID, p.raw.batchKey, p.raw.batch)
+		return marshalCursorDocumentsMsgResponseWithIDInto(dst, requestID, responseTo, p.raw.ns, p.raw.cursorID, p.raw.batchKey, p.raw.batch)
 	}
-	return wire.AppendMsgMessage(nil, requestID, responseTo, 0, p.document)
+	return wire.AppendMsgMessage(dst, requestID, responseTo, 0, p.document)
 }
 
 func (s *Server) findResponse(command wire.Document, cursorOwner int64) (wire.Document, error) {
@@ -142,11 +146,15 @@ func (s *Server) findResponse(command wire.Document, cursorOwner int64) (wire.Do
 }
 
 func (s *Server) findMsgResponse(command wire.Document, requestID, responseTo int32, cursorOwner int64) ([]byte, error) {
+	return s.findMsgResponseInto(nil, command, requestID, responseTo, cursorOwner)
+}
+
+func (s *Server) findMsgResponseInto(dst []byte, command wire.Document, requestID, responseTo int32, cursorOwner int64) ([]byte, error) {
 	payload, err := s.findResponsePayload(command, cursorOwner)
 	if err != nil {
 		return nil, err
 	}
-	return payload.marshalMsg(requestID, responseTo)
+	return payload.marshalMsgInto(dst, requestID, responseTo)
 }
 
 func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (findResponsePayload, error) {
@@ -1373,11 +1381,21 @@ func marshalCursorDocumentsResponseWithID(ns string, cursorID int64, batchKey st
 }
 
 func marshalCursorDocumentsMsgResponseWithID(requestID, responseTo int32, ns string, cursorID int64, batchKey string, batch []wire.Document) ([]byte, error) {
+	return marshalCursorDocumentsMsgResponseWithIDInto(nil, requestID, responseTo, ns, cursorID, batchKey, batch)
+}
+
+func marshalCursorDocumentsMsgResponseWithIDInto(dst []byte, requestID, responseTo int32, ns string, cursorID int64, batchKey string, batch []wire.Document) ([]byte, error) {
 	batchBytes := findBatchOverheadBytes
 	for i, doc := range batch {
 		batchBytes += findBatchDocumentBytes(doc, i)
 	}
-	msg := make([]byte, 0, 16+5+len(ns)+batchBytes+96)
+	need := 16 + 5 + len(ns) + batchBytes + 96
+	if cap(dst)-len(dst) < need {
+		grown := make([]byte, len(dst), len(dst)+need)
+		copy(grown, dst)
+		dst = grown
+	}
+	msg := dst
 	base := len(msg)
 	msg = appendWireInt32(msg, 0)
 	msg = appendWireInt32(msg, requestID)

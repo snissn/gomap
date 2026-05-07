@@ -29,6 +29,7 @@ const (
 	maxUpdateCoalescingBatch       = 4096
 	defaultUpdateCoalescingIdleTTL = 30 * time.Second
 	maxRetainedWireReadBuffer      = 1 << 20
+	maxRetainedWireWriteBuffer     = 1 << 20
 )
 
 var errServerClosed = errors.New("mongo gateway server is closed")
@@ -183,6 +184,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 	}()
 
 	var readBuf []byte
+	var writeBuf []byte
 	for {
 		select {
 		case <-ctx.Done():
@@ -191,7 +193,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		}
 
 		var err error
-		readBuf, err = s.serveOneWithOwner(conn, owner, readBuf)
+		readBuf, writeBuf, err = s.serveOneWithOwner(conn, owner, readBuf, writeBuf)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
@@ -215,46 +217,58 @@ func (s *Server) ServeOne(rw io.ReadWriter) error {
 }
 
 func (s *Server) ServeOneWithOwner(rw io.ReadWriter, cursorOwner int64) error {
-	_, err := s.serveOneWithOwner(rw, cursorOwner, nil)
+	_, _, err := s.serveOneWithOwner(rw, cursorOwner, nil, nil)
 	return err
 }
 
-func (s *Server) serveOneWithOwner(rw io.ReadWriter, cursorOwner int64, readBuf []byte) ([]byte, error) {
+func (s *Server) serveOneWithOwner(rw io.ReadWriter, cursorOwner int64, readBuf, writeBuf []byte) ([]byte, []byte, error) {
 	if s.isClosed() {
-		return readBuf, errServerClosed
+		return readBuf, writeBuf, errServerClosed
 	}
 	h, body, err := wire.ReadMessageInto(rw, readBuf, s.maxMessageLength())
 	if err != nil {
 		if s.isClosed() {
-			return readBuf, errServerClosed
+			return readBuf, writeBuf, errServerClosed
 		}
-		return readBuf, err
+		return readBuf, writeBuf, err
 	}
 	if cap(body) <= maxRetainedWireReadBuffer {
 		readBuf = body
 	} else {
 		readBuf = nil
 	}
-	response, err := s.handleMessage(h, body, cursorOwner)
+	response, err := s.handleMessageInto(writeBuf[:0], h, body, cursorOwner)
 	if err != nil {
-		return readBuf, err
+		return readBuf, writeBuf, err
 	}
 	if response == nil {
-		return readBuf, nil
+		return readBuf, writeBuf, nil
 	}
-	return readBuf, writeFull(rw, response)
+	if err := writeFull(rw, response); err != nil {
+		return readBuf, writeBuf, err
+	}
+	if cap(response) <= maxRetainedWireWriteBuffer {
+		writeBuf = response[:0]
+	} else {
+		writeBuf = nil
+	}
+	return readBuf, writeBuf, nil
 }
 
 func (s *Server) handleMessage(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
+	return s.handleMessageInto(nil, h, body, cursorOwner)
+}
+
+func (s *Server) handleMessageInto(dst []byte, h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
 	if s.isClosed() {
 		return nil, errServerClosed
 	}
 	s.reapExpiredCursors()
 	switch h.OpCode {
 	case wire.OpQuery:
-		return s.handleQuery(h, body, cursorOwner)
+		return s.handleQueryInto(dst, h, body, cursorOwner)
 	case wire.OpMsg:
-		return s.handleMsg(h, body, cursorOwner)
+		return s.handleMsgInto(dst, h, body, cursorOwner)
 	case wire.OpCompressed:
 		return nil, fmt.Errorf("%w: OP_COMPRESSED", wire.ErrUnsupported)
 	default:
@@ -263,6 +277,10 @@ func (s *Server) handleMessage(h wire.Header, body []byte, cursorOwner int64) ([
 }
 
 func (s *Server) handleQuery(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
+	return s.handleQueryInto(nil, h, body, cursorOwner)
+}
+
+func (s *Server) handleQueryInto(dst []byte, h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
 	q, err := wire.ParseQuery(body)
 	if err != nil {
 		return nil, err
@@ -276,10 +294,14 @@ func (s *Server) handleQuery(h wire.Header, body []byte, cursorOwner int64) ([]b
 	if err != nil {
 		return nil, err
 	}
-	return wire.AppendReplyMessage(nil, s.nextID(), h.RequestID, 0, 0, 0, response)
+	return wire.AppendReplyMessage(dst, s.nextID(), h.RequestID, 0, 0, 0, response)
 }
 
 func (s *Server) handleMsg(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
+	return s.handleMsgInto(nil, h, body, cursorOwner)
+}
+
+func (s *Server) handleMsgInto(dst []byte, h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
 	msg, err := wire.ParseMsg(body)
 	if err != nil {
 		return nil, err
@@ -294,7 +316,7 @@ func (s *Server) handleMsg(h wire.Header, body []byte, cursorOwner int64) ([]byt
 		if msg.Flags&wire.MsgFlagMoreToCome == 0 {
 			responseID = s.nextID()
 		}
-		response, err := s.findMsgResponse(msg.Body, responseID, h.RequestID, cursorOwner)
+		response, err := s.findMsgResponseInto(dst, msg.Body, responseID, h.RequestID, cursorOwner)
 		if err != nil {
 			return nil, err
 		}
@@ -311,7 +333,7 @@ func (s *Server) handleMsg(h wire.Header, body []byte, cursorOwner int64) ([]byt
 	if msg.Flags&wire.MsgFlagMoreToCome != 0 {
 		return nil, nil
 	}
-	return wire.AppendMsgMessage(nil, s.nextID(), h.RequestID, 0, response)
+	return wire.AppendMsgMessage(dst, s.nextID(), h.RequestID, 0, response)
 }
 
 func (s *Server) commandResponse(name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
