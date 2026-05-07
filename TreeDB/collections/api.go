@@ -11379,6 +11379,8 @@ type IndexRangeOptions struct {
 	Desc  bool
 }
 
+const defaultIndexRangeResultCap = 16
+
 // FindByIndexValue returns document IDs whose named secondary index equals
 // value. Query values must match the index value type. If indexName does not
 // exist, it returns nil, nil.
@@ -11401,7 +11403,7 @@ func (c *Collection) FindByIndexRange(indexName string, opts IndexRangeOptions) 
 	if opts.Limit < 0 {
 		return nil, false, errors.New("collections: index range limit cannot be negative")
 	}
-	capHint := 16
+	capHint := defaultIndexRangeResultCap
 	if opts.Limit > 0 && opts.Limit < capHint {
 		capHint = opts.Limit
 	}
@@ -11431,7 +11433,7 @@ func (c *Collection) FindByIndexRange(indexName string, opts IndexRangeOptions) 
 // consulted before the persisted primary root so pending indexed writes remain
 // visible.
 func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRangeOptions) ([]DocumentRecord, bool, error) {
-	capHint := 16
+	capHint := defaultIndexRangeResultCap
 	if opts.Limit > 0 && opts.Limit < capHint {
 		capHint = opts.Limit
 	}
@@ -11450,7 +11452,7 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 		return nil, false, err
 	}
 	if !found {
-		return nil, false, nil
+		return make([]DocumentRecord, 0), false, nil
 	}
 	if out == nil {
 		out = make([]DocumentRecord, 0)
@@ -11526,7 +11528,7 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
 	}
 	if err != nil {
-		return false, true, err
+		return false, false, err
 	}
 	if bufferedTable != nil {
 		defer resetCollectionRunTable(bufferedTable)
@@ -11538,7 +11540,7 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 	}
 	persistedIt, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true)
 	if err != nil {
-		return false, true, err
+		return false, false, err
 	}
 	if persistedIt != nil {
 		defer func() { _ = persistedIt.Close() }()
@@ -11580,7 +11582,7 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 		return true, nil
 	})
 	if err != nil {
-		return false, true, err
+		return false, false, err
 	}
 	if documentTruncated {
 		return true, true, nil
