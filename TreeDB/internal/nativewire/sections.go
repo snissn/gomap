@@ -14,11 +14,20 @@ func AppendSection(dst []byte, s Section) ([]byte, error) {
 	if err := validateSectionFlags(s.Flags); err != nil {
 		return nil, err
 	}
+	dst = growBytes(dst, SectionEncodedLen(s))
 	dst = appendUvarint(dst, uint64(s.ID))
 	dst = appendUvarint(dst, s.Flags)
 	dst = appendUvarint(dst, uint64(len(s.Bytes)))
 	dst = append(dst, s.Bytes...)
 	return dst, nil
+}
+
+func SectionEncodedLen(s Section) int {
+	n := uvarintLen(uint64(s.ID)) + uvarintLen(s.Flags) + uvarintLen(uint64(len(s.Bytes)))
+	if len(s.Bytes) > maxInt-n {
+		return maxInt
+	}
+	return n + len(s.Bytes)
 }
 
 func DecodeSections(src []byte, limits Limits) ([]Section, error) {

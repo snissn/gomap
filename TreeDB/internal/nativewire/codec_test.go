@@ -87,6 +87,13 @@ func TestSectionAndByteVectorRoundTrip(t *testing.T) {
 	}
 	assertItem(t, vec, 0, "a")
 	assertItem(t, vec, 1, "bc")
+	items, err := DecodeByteVectorItems(vecBytes, Limits{})
+	if err != nil {
+		t.Fatalf("DecodeByteVectorItems: %v", err)
+	}
+	if len(items) != 2 || string(items[0]) != "a" || string(items[1]) != "bc" {
+		t.Fatalf("DecodeByteVectorItems=%q", items)
+	}
 }
 
 func TestByteVectorRejectsLengthMismatch(t *testing.T) {

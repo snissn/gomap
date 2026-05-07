@@ -31,27 +31,27 @@ GOWORK=off go test ./TreeDB/nativewire \
   -bench 'BenchmarkNativewireCollection(InsertBatch|GetMany)' \
   -benchmem \
   -benchtime=100x \
-  -count=1
+  -count=5
 ```
 
 Result on `linux/amd64`, Intel i5-11400F:
 
-| Benchmark | ns/op | B/op | allocs/op |
+| Benchmark | time/op | B/op | allocs/op |
 | --- | ---: | ---: | ---: |
-| `InsertBatch/direct_collection` | 38,484 | 6,574 | 48 |
-| `InsertBatch/native_wire_inproc` | 66,768 | 33,935 | 242 |
-| `GetMany/direct_collection` | 36,086 | 8,211 | 128 |
-| `GetMany/native_wire_inproc` | 55,659 | 48,162 | 308 |
+| `InsertBatch/direct_collection` | 37.91 us | 6.399 KiB | 48 |
+| `InsertBatch/native_wire_inproc` | 64.17 us | 24.27 KiB | 114 |
+| `GetMany/direct_collection` | 34.75 us | 8.018 KiB | 128 |
+| `GetMany/native_wire_inproc` | 49.01 us | 30.65 KiB | 154 |
 
 Interpretation:
 
-- R1 native in-process insert is about 1.74x direct collection latency for this
+- R1 native in-process insert is about 1.69x direct collection latency for this
   32-document batch shape.
-- R1 native in-process get-many is about 1.54x direct collection latency for
+- R1 native in-process get-many is about 1.41x direct collection latency for
   this 64-document batch shape.
-- The main remaining native-wire overhead is allocation and copying around
-  request/response frame bodies, byte-vector construction, byte-vector clone
-  decode, and materialized result batches.
+- The main remaining native-wire overhead is allocation and copying around frame
+  body reads, request-body construction, byte-vector construction, duplicate-ID
+  checks, and materialized result batches.
 
 ## Workload Profiles
 
@@ -69,7 +69,7 @@ GOWORK=off go run ./cmd/mongo_gateway_bench \
   -deletes 0 \
   -secondary-indexes 1 \
   -treedb-document-format json \
-  -profile-dir /tmp/nativewire_r1f_inproc_long_current \
+  -profile-dir /tmp/nativewire_r1f_inproc_opt \
   -profile-heap-gc \
   -format json
 ```
@@ -86,7 +86,7 @@ GOWORK=off go run ./cmd/mongo_gateway_bench \
   -deletes 0 \
   -secondary-indexes 1 \
   -treedb-document-format json \
-  -profile-dir /tmp/nativewire_r1f_tcp_long_current \
+  -profile-dir /tmp/nativewire_r1f_tcp_opt \
   -profile-heap-gc \
   -format json
 ```
@@ -95,13 +95,13 @@ Load phase results:
 
 | Mode | docs | batches | duration ms | docs/sec | sampled ns/doc | mean batch us |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `native-wire-inproc` | 50,000 | 500 | 206.251 | 242,423 | 3,547 | 354.712 |
-| `native-wire-tcp` | 50,000 | 500 | 223.532 | 223,681 | 3,942 | 394.202 |
+| `native-wire-inproc` | 50,000 | 500 | 203.262 | 245,987 | 3,473 | 347.258 |
+| `native-wire-tcp` | 50,000 | 500 | 217.336 | 230,058 | 3,834 | 383.374 |
 
 Profile artifacts:
 
-- `/tmp/nativewire_r1f_inproc_long_current`
-- `/tmp/nativewire_r1f_tcp_long_current`
+- `/tmp/nativewire_r1f_inproc_opt`
+- `/tmp/nativewire_r1f_tcp_opt`
 
 Each directory contains `benchmark_result.json`, `profile_manifest.json`, and
 CPU, allocation, heap, block, mutex, and goroutine profiles for:
@@ -121,13 +121,14 @@ publish work, and runtime allocation/GC. Native-wire CPU appears as frame
 dispatch, byte-vector decode, and frame write overhead rather than a single
 dominant protocol bottleneck.
 
-The load allocation profiles show the clearest R2/R3 follow-up targets:
+The load allocation profiles show the clearest R2/R3 follow-up targets after
+the R1f optimization pass:
 
-- `internal/nativewire.AppendByteVector` is one of the largest protocol-side
-  allocators during client request construction.
-- `nativewire.decodeByteVectorCloned` is the main server-side protocol
-  allocation source because R1 mutation handlers clone IDs and documents before
-  handing them to collections.
+- `nativewire.appendCommandRequestBody` and `internal/nativewire.growBytes`
+  remain visible because R1 still allocates fresh request bodies and
+  byte-vector section payloads.
+- `internal/nativewire.DecodeByteVectorItems` remains visible because borrowed
+  views still need one `[][]byte` slice header array per decoded vector.
 - `nativewire.readFrame` still allocates a complete frame body per request.
 - Collection planning, memtable entry buffers, root publish, and value-log open
   costs remain larger than any single native-wire server function in the full
@@ -141,6 +142,15 @@ The load allocation profiles show the clearest R2/R3 follow-up targets:
   benchmark reports collection/protocol work instead of document construction.
 - Changed `writeFrame` to write a stack-built frame header and the body as
   separate writes, avoiding a combined per-frame allocation.
+- Pre-sized byte-vector, section, and command-request encoders to avoid growth
+  churn while preserving the existing wire bytes.
+- Replaced the previous byte-vector clone decode on hot response/read paths with
+  borrowed immutable frame views.
+- Added `DecodeByteVectorItems`, a borrowed two-pass decoder that avoids
+  offset/length table allocations when callers only need a transient `[][]byte`
+  view.
+- Switched server mutation input decode to borrowed frame views; collections
+  still owns the copies needed for persistent state and update/delete planning.
 - Fixed native-wire benchmark load IDs in R1e to use the Mongo gateway's encoded
   primary-key format, so later Mongo-driver read/update phases exercise the
   documents inserted through native wire.
@@ -152,8 +162,8 @@ native-wire optimization PR:
 
 - add reusable client request builders for byte-vector sections,
 - add server read buffers and parse scratch scoped to a connection or request,
-- provide a zero-copy mutation path once collection ownership rules can accept
-  borrowed frame slices safely,
+- consider an immutable-borrow contract for client result bytes so APIs can
+  document when returned slices share a response-frame backing array,
 - add per-command native-wire latency histograms so decode, dispatch, collection
   execution, and encode costs can be separated without pprof inference,
 - add longer steady-state TCP benchmarks that isolate transport cost from

@@ -30,7 +30,7 @@ func (c *Client) GetMany(ctx context.Context, collection string, ids [][]byte) (
 	if !ok {
 		return nil, nil, protocolError(iwire.ErrMalformedFrame, "get_many missing documents")
 	}
-	docs, err := decodeByteVectorCloned(rawDocs, c.limits)
+	docs, err := decodeByteVectorBorrowed(rawDocs, c.limits)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -133,7 +133,7 @@ func decodeIDsAndTruncated(sections []iwire.Section, limits iwire.Limits) ([][]b
 	if !ok {
 		return nil, false, protocolError(iwire.ErrMalformedFrame, "missing document_ids")
 	}
-	ids, err := decodeByteVectorCloned(rawIDs, limits)
+	ids, err := decodeByteVectorBorrowed(rawIDs, limits)
 	if err != nil {
 		return nil, false, err
 	}
@@ -157,7 +157,7 @@ func decodeDocumentsResult(sections []iwire.Section, limits iwire.Limits) (Docum
 		return out, err
 	}
 	if ok {
-		out.IDs, err = decodeByteVectorCloned(rawIDs, limits)
+		out.IDs, err = decodeByteVectorBorrowed(rawIDs, limits)
 		if err != nil {
 			return out, err
 		}
@@ -167,7 +167,7 @@ func decodeDocumentsResult(sections []iwire.Section, limits iwire.Limits) (Docum
 		return out, err
 	}
 	if ok {
-		out.Docs, err = decodeByteVectorCloned(rawDocs, limits)
+		out.Docs, err = decodeByteVectorBorrowed(rawDocs, limits)
 		if err != nil {
 			return out, err
 		}

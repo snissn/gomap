@@ -20,7 +20,7 @@ func (s *Server) handleGetMany(state *connState, sections []iwire.Section) ([]iw
 	if err != nil {
 		return nil, err
 	}
-	ids, err := decodeByteVectorCloned(rawIDs, s.limits)
+	ids, err := decodeByteVectorBorrowed(rawIDs, s.limits)
 	if err != nil {
 		return nil, err
 	}

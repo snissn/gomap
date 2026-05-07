@@ -244,6 +244,10 @@ func decodeByteVectorCloned(src []byte, limits iwire.Limits) ([][]byte, error) {
 	return out, nil
 }
 
+func decodeByteVectorBorrowed(src []byte, limits iwire.Limits) ([][]byte, error) {
+	return iwire.DecodeByteVectorItems(src, limits)
+}
+
 func documentRecordsBytes(records []collections.DocumentRecord) int {
 	total := 0
 	for _, record := range records {

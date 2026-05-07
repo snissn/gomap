@@ -19,8 +19,12 @@ func readUvarint(src []byte) (uint64, int, error) {
 }
 
 func uvarintLen(v uint64) int {
-	var buf [binary.MaxVarintLen64]byte
-	return binary.PutUvarint(buf[:], v)
+	n := 1
+	for v >= 0x80 {
+		v >>= 7
+		n++
+	}
+	return n
 }
 
 func isMinimalUvarint(src []byte, v uint64, n int) bool {

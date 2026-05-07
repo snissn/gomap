@@ -16,6 +16,7 @@ type ByteVectorScratch struct {
 }
 
 func AppendByteVector(dst []byte, items ...[]byte) []byte {
+	dst = growBytes(dst, byteVectorEncodedLen(items))
 	dst = appendUvarint(dst, uint64(len(items)))
 	for _, item := range items {
 		dst = appendUvarint(dst, uint64(len(item)))
@@ -26,8 +27,80 @@ func AppendByteVector(dst []byte, items ...[]byte) []byte {
 	return dst
 }
 
+func byteVectorEncodedLen(items [][]byte) int {
+	n := uvarintLen(uint64(len(items)))
+	for _, item := range items {
+		add := uvarintLen(uint64(len(item))) + len(item)
+		if add > maxInt-n {
+			return maxInt
+		}
+		n += add
+	}
+	return n
+}
+
 func DecodeByteVector(src []byte, limits Limits) (ByteVector, error) {
 	return DecodeByteVectorInto(src, limits, nil)
+}
+
+// DecodeByteVectorItems decodes a byte-vector into item slices that borrow from
+// src. It avoids offset/length table allocation for callers that only need a
+// transient [][]byte view.
+func DecodeByteVectorItems(src []byte, limits Limits) ([][]byte, error) {
+	limits = limits.withDefaults()
+	count64, lengthsOff, err := readUvarint(src)
+	if err != nil {
+		return nil, err
+	}
+	if count64 > uint64(limits.MaxByteVectorItems) {
+		return nil, protocolError(ErrResourceExhausted, "byte-vector count %d exceeds limit %d", count64, limits.MaxByteVectorItems)
+	}
+	if count64 > uint64(maxInt) {
+		return nil, protocolError(ErrResourceExhausted, "byte-vector count exceeds int capacity")
+	}
+	count := int(count64)
+
+	off := lengthsOff
+	total := uint64(0)
+	for i := 0; i < count; i++ {
+		length, n, err := readUvarint(src[off:])
+		if err != nil {
+			return nil, err
+		}
+		off += n
+		if length > limits.MaxByteVectorBytes {
+			return nil, protocolError(ErrResourceExhausted, "byte-vector item %d length %d exceeds limit %d", i, length, limits.MaxByteVectorBytes)
+		}
+		if total+length < total {
+			return nil, protocolError(ErrMalformedFrame, "byte-vector length overflow")
+		}
+		total += length
+		if total > limits.MaxByteVectorBytes {
+			return nil, protocolError(ErrResourceExhausted, "byte-vector payload length %d exceeds limit %d", total, limits.MaxByteVectorBytes)
+		}
+		if length > uint64(maxInt) || total > uint64(maxInt) {
+			return nil, protocolError(ErrResourceExhausted, "byte-vector payload length exceeds int capacity")
+		}
+	}
+	if total != uint64(len(src)-off) {
+		return nil, protocolError(ErrMalformedFrame, "byte-vector declared payload %d does not match remaining %d", total, len(src)-off)
+	}
+
+	out := make([][]byte, count)
+	payloadOff := off
+	next := 0
+	off = lengthsOff
+	for i := 0; i < count; i++ {
+		length, n, err := readUvarint(src[off:])
+		if err != nil {
+			return nil, err
+		}
+		off += n
+		start := payloadOff + next
+		next += int(length)
+		out[i] = src[start : payloadOff+next]
+	}
+	return out, nil
 }
 
 // DecodeByteVectorInto decodes a byte-vector using reusable buffers when

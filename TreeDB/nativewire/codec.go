@@ -60,9 +60,23 @@ func writeAll(w io.Writer, p []byte) error {
 }
 
 func appendCommandRequestBody(dst []byte, commandID iwire.CommandID, sections ...iwire.Section) ([]byte, error) {
-	body, err := iwire.AppendSection(dst, iwire.Section{
+	var commandHeader [16]byte
+	headerSection := iwire.Section{
 		ID:    iwire.SectionCommandHeader,
-		Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: commandID, Version: 1}),
+		Bytes: iwire.AppendCommandHeader(commandHeader[:0], iwire.CommandHeader{ID: commandID, Version: 1}),
+	}
+	total := iwire.SectionEncodedLen(headerSection)
+	for _, section := range sections {
+		total += iwire.SectionEncodedLen(section)
+	}
+	if cap(dst)-len(dst) < total {
+		next := make([]byte, len(dst), len(dst)+total)
+		copy(next, dst)
+		dst = next
+	}
+	body, err := iwire.AppendSection(dst, iwire.Section{
+		ID:    headerSection.ID,
+		Bytes: headerSection.Bytes,
 	})
 	if err != nil {
 		return nil, err

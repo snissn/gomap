@@ -28,7 +28,7 @@ func (c *Client) InsertBatch(ctx context.Context, collection string, format coll
 	if !ok {
 		return nil, protocolError(iwire.ErrMalformedFrame, "insert_batch missing result document_ids")
 	}
-	return decodeByteVectorCloned(rawIDs, c.limits)
+	return decodeByteVectorBorrowed(rawIDs, c.limits)
 }
 
 func (c *Client) ReplaceBatch(ctx context.Context, collection string, format collections.DocumentFormat, ids, docs [][]byte, ack AckPolicy) (matched, modified int, err error) {

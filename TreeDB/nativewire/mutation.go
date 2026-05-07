@@ -69,7 +69,7 @@ func decodeIDsAndDocuments(sections []iwire.Section, limits iwire.Limits) ([][]b
 	if err != nil {
 		return nil, nil, err
 	}
-	ids, err := decodeByteVectorCloned(rawIDs, limits)
+	ids, err := decodeByteVectorBorrowed(rawIDs, limits)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -77,7 +77,7 @@ func decodeIDsAndDocuments(sections []iwire.Section, limits iwire.Limits) ([][]b
 	if err != nil {
 		return nil, nil, err
 	}
-	docs, err := decodeByteVectorCloned(rawDocs, limits)
+	docs, err := decodeByteVectorBorrowed(rawDocs, limits)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -95,7 +95,7 @@ func decodeIDVector(sections []iwire.Section, limits iwire.Limits) ([][]byte, er
 	if err != nil {
 		return nil, err
 	}
-	ids, err := decodeByteVectorCloned(rawIDs, limits)
+	ids, err := decodeByteVectorBorrowed(rawIDs, limits)
 	if err != nil {
 		return nil, err
 	}
