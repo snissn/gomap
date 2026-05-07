@@ -3,6 +3,7 @@ package nativewire
 import (
 	"bytes"
 	"crypto/sha256"
+	"fmt"
 	"strings"
 	"unicode/utf8"
 )
@@ -88,6 +89,7 @@ func AppendDeterministicEntryWithLimits(dst []byte, cmd ValidatedCommand, limits
 	return dst, nil
 }
 
+// DeterministicEntryDigest returns the SHA-256 digest of canonical deterministic entry bytes.
 func DeterministicEntryDigest(entry []byte) [32]byte {
 	return sha256.Sum256(entry)
 }
@@ -296,7 +298,7 @@ func deterministicByteVectorCount(sections []Section, id SectionID) (int, error)
 		}
 		count64, _, err := readUvarint(section.Bytes)
 		if err != nil {
-			return 0, err
+			return 0, fmt.Errorf("deterministic section %d byte-vector count: %w", id, err)
 		}
 		if count64 > uint64(maxInt) {
 			return 0, protocolError(ErrResourceExhausted, "section %d byte-vector count exceeds int capacity", id)
@@ -417,7 +419,11 @@ func validateDeterministicName(name string, raw []byte, limits Limits) error {
 	if err != nil {
 		return err
 	}
-	if length > uint64(len(raw)-n) {
+	if n > len(raw) {
+		return protocolError(ErrMalformedFrame, "%s length prefix exceeds payload", name)
+	}
+	remaining := len(raw) - n
+	if length > uint64(remaining) {
 		return protocolError(ErrMalformedFrame, "%s length exceeds remaining payload", name)
 	}
 	if length == 0 {
@@ -426,10 +432,11 @@ func validateDeterministicName(name string, raw []byte, limits Limits) error {
 	if length > limits.MaxDeterministicNameBytes {
 		return protocolError(ErrResourceExhausted, "%s length %d exceeds limit %d", name, length, limits.MaxDeterministicNameBytes)
 	}
-	if n+int(length) != len(raw) {
+	valueLen := int(length)
+	if valueLen != remaining {
 		return protocolError(ErrMalformedFrame, "%s has trailing bytes", name)
 	}
-	valueBytes := raw[n : n+int(length)]
+	valueBytes := raw[n : n+valueLen]
 	if !utf8.Valid(valueBytes) {
 		return protocolError(ErrInvalidCommand, "invalid %s", name)
 	}
