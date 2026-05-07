@@ -132,8 +132,8 @@ func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *Determinis
 			return DeterministicEntry{}, err
 		}
 		sectionID := SectionID(id)
-		if i > 0 && sectionID < previous {
-			return DeterministicEntry{}, protocolError(ErrMalformedFrame, "deterministic entry sections are not sorted")
+		if i > 0 && sectionID <= previous {
+			return DeterministicEntry{}, protocolError(ErrMalformedFrame, "deterministic entry sections are not strictly sorted")
 		}
 		previous = sectionID
 		sectionLen, err := readEntryUvarint(src, &off, "section_length")

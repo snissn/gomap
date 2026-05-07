@@ -134,18 +134,28 @@ func TestDecodeDeterministicEntryRejectsMalformedEnvelope(t *testing.T) {
 }
 
 func TestDecodeDeterministicEntryRejectsUnsortedSections(t *testing.T) {
-	raw := []byte("TDC1")
-	raw = appendUvarint(raw, DeterministicEntryVersion)
-	raw = appendUvarint(raw, uint64(CommandInsertBatch))
-	raw = appendUvarint(raw, 1)
-	raw = appendUvarint(raw, 0)
-	raw = appendUvarint(raw, 2)
-	raw = appendUvarint(raw, uint64(SectionDocuments))
-	raw = appendUvarint(raw, 0)
-	raw = appendUvarint(raw, uint64(SectionDocumentIDs))
-	raw = appendUvarint(raw, 0)
-	if _, err := DecodeDeterministicEntry(raw, Limits{}); codeOf(err) != ErrMalformedFrame {
-		t.Fatalf("DecodeDeterministicEntry err=%v code=%d want malformed", err, codeOf(err))
+	for _, tc := range []struct {
+		name     string
+		sections []SectionID
+	}{
+		{name: "decreasing", sections: []SectionID{SectionDocuments, SectionDocumentIDs}},
+		{name: "duplicate", sections: []SectionID{SectionDocumentIDs, SectionDocumentIDs}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := []byte("TDC1")
+			raw = appendUvarint(raw, DeterministicEntryVersion)
+			raw = appendUvarint(raw, uint64(CommandInsertBatch))
+			raw = appendUvarint(raw, 1)
+			raw = appendUvarint(raw, 0)
+			raw = appendUvarint(raw, uint64(len(tc.sections)))
+			for _, id := range tc.sections {
+				raw = appendUvarint(raw, uint64(id))
+				raw = appendUvarint(raw, 0)
+			}
+			if _, err := DecodeDeterministicEntry(raw, Limits{}); codeOf(err) != ErrMalformedFrame {
+				t.Fatalf("DecodeDeterministicEntry err=%v code=%d want malformed", err, codeOf(err))
+			}
+		})
 	}
 }
 
