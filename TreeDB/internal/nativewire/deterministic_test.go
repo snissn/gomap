@@ -389,8 +389,8 @@ func TestDeterministicEntryStableAcrossTransportOnlySections(t *testing.T) {
 		{ID: SectionDocuments, Bytes: AppendByteVector(nil, deterministicBSONDocumentEmpty())},
 		{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
-		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
-		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 1, Flags: CommandFlagOmitResultIDs | CommandFlagOmitResponseMeta})},
+		{ID: SectionExpectedCatalogVersion, Bytes: deterministicUvarintPayload(deterministicFixtureCatalogVersion)},
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: deterministicFixtureCommandVersion, Flags: CommandFlagOmitResultIDs | CommandFlagOmitResponseMeta})},
 		{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
 		{ID: SectionCollectionRef, Bytes: []byte("c")},
 	}
@@ -453,10 +453,10 @@ func TestDeterministicEntryRejectsAmbiguousCommandPayloads(t *testing.T) {
 		{
 			name: "empty_collection_meta",
 			sections: []Section{
-				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateCollection, Version: 1})},
+				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateCollection, Version: deterministicFixtureCommandVersion})},
 				{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
 				{ID: SectionCollectionMeta, Bytes: nil},
-				{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+				{ID: SectionExpectedCatalogVersion, Bytes: deterministicUvarintPayload(deterministicFixtureCatalogVersion)},
 			},
 			code: ErrInvalidCommand,
 		},
@@ -476,6 +476,7 @@ func TestDeterministicEntryRejectsAmbiguousCommandPayloads(t *testing.T) {
 			code:     ErrInvalidCommand,
 		},
 	} {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cmd, err := registry.ValidateRequestSections(tc.sections)
 			if err != nil {
@@ -490,8 +491,9 @@ func TestDeterministicEntryRejectsAmbiguousCommandPayloads(t *testing.T) {
 
 func TestDeterministicEntryAcceptsMaxLengthEncodedIndexName(t *testing.T) {
 	registry := MustV1Registry()
+	limit := int(DefaultLimits().MaxDeterministicNameBytes)
 	sections := deterministicEntryFixtureCases()[2].sections
-	sections = replaceSection(sections, SectionIndexName, appendDeterministicString(nil, strings.Repeat("x", 128)))
+	sections = replaceSection(sections, SectionIndexName, appendDeterministicString(nil, strings.Repeat("x", limit)))
 	cmd, err := registry.ValidateRequestSections(sections)
 	if err != nil {
 		t.Fatalf("ValidateRequestSections: %v", err)
@@ -503,15 +505,17 @@ func TestDeterministicEntryAcceptsMaxLengthEncodedIndexName(t *testing.T) {
 
 func TestDeterministicEntryRejectsInvalidEncodedIndexName(t *testing.T) {
 	registry := MustV1Registry()
+	limit := int(DefaultLimits().MaxDeterministicNameBytes)
 	for _, tc := range []struct {
 		name string
 		raw  []byte
 		code ErrorCode
 	}{
-		{name: "too_long", raw: appendDeterministicString(nil, strings.Repeat("x", 129)), code: ErrInvalidCommand},
+		{name: "too_long", raw: appendDeterministicString(nil, strings.Repeat("x", limit+1)), code: ErrResourceExhausted},
 		{name: "trailing", raw: append(appendDeterministicString(nil, "email_1"), 0), code: ErrMalformedFrame},
 		{name: "raw_string", raw: []byte("email_1"), code: ErrMalformedFrame},
 	} {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			sections := replaceSection(deterministicEntryFixtureCases()[2].sections, SectionIndexName, tc.raw)
 			cmd, err := registry.ValidateRequestSections(sections)

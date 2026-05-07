@@ -425,7 +425,7 @@ func validateDeterministicName(name string, raw []byte, limits Limits) error {
 		return protocolError(ErrInvalidCommand, "%s cannot be empty", name)
 	}
 	if length > limits.MaxDeterministicNameBytes {
-		return protocolError(ErrInvalidCommand, "%s length %d exceeds limit %d", name, length, limits.MaxDeterministicNameBytes)
+		return protocolError(ErrResourceExhausted, "%s length %d exceeds limit %d", name, length, limits.MaxDeterministicNameBytes)
 	}
 	if n+int(length) != len(raw) {
 		return protocolError(ErrMalformedFrame, "%s has trailing bytes", name)
