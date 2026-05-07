@@ -12,6 +12,7 @@ type insertBatchFastRequest struct {
 	docs             [][]byte
 	ack              AckPolicy
 	includeResultIDs bool
+	includeMeta      bool
 }
 
 func (s *Server) handleInsertBatch(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
@@ -25,12 +26,12 @@ func (s *Server) handleInsertBatch(state *connState, sections []iwire.Section) (
 	}, nil
 }
 
-func (s *Server) handleInsertBatchBody(state *connState, sections []iwire.Section, dst []byte, includeResultIDs bool) ([]byte, error) {
+func (s *Server) handleInsertBatchBody(state *connState, sections []iwire.Section, dst []byte, includeResultIDs, includeMeta bool) ([]byte, error) {
 	resultIDs, actualAck, err := s.insertBatch(state, sections)
 	if err != nil {
 		return nil, err
 	}
-	return appendInsertBatchResponseBody(dst, resultIDs, actualAck, includeResultIDs)
+	return appendInsertBatchResponseBody(dst, resultIDs, actualAck, includeResultIDs, includeMeta)
 }
 
 func (s *Server) handleInsertBatchFastBody(req insertBatchFastRequest, dst []byte) ([]byte, error) {
@@ -38,11 +39,14 @@ func (s *Server) handleInsertBatchFastBody(req insertBatchFastRequest, dst []byt
 	if err != nil {
 		return nil, err
 	}
-	return appendInsertBatchResponseBody(dst, resultIDs, actualAck, req.includeResultIDs)
+	return appendInsertBatchResponseBody(dst, resultIDs, actualAck, req.includeResultIDs, req.includeMeta)
 }
 
-func appendInsertBatchResponseBody(dst []byte, resultIDs [][]byte, actualAck iwire.AckPolicy, includeResultIDs bool) ([]byte, error) {
+func appendInsertBatchResponseBody(dst []byte, resultIDs [][]byte, actualAck iwire.AckPolicy, includeResultIDs, includeMeta bool) ([]byte, error) {
 	if !includeResultIDs {
+		if !includeMeta {
+			return dst[:0], nil
+		}
 		return appendAckMetaSection(dst, actualAck, responseMetaCount{key: "inserted_count", value: len(resultIDs)})
 	}
 	idsLen := iwire.ByteVectorEncodedLen(resultIDs)
@@ -51,6 +55,9 @@ func appendInsertBatchResponseBody(dst []byte, resultIDs [][]byte, actualAck iwi
 		return nil, err
 	}
 	body = iwire.AppendByteVectorWithEncodedLen(body, idsLen, resultIDs...)
+	if !includeMeta {
+		return body, nil
+	}
 	return appendAckMetaSection(body, actualAck, responseMetaCount{key: "inserted_count", value: len(resultIDs)})
 }
 
@@ -214,6 +221,7 @@ func (s *Server) decodeInsertBatchFastRequest(state *connState, sections []iwire
 		docs:             docs,
 		ack:              ack,
 		includeResultIDs: header.Flags&iwire.CommandFlagOmitResultIDs == 0,
+		includeMeta:      header.Flags&iwire.CommandFlagOmitResponseMeta == 0,
 	}, true, nil
 }
 

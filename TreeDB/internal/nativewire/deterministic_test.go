@@ -41,7 +41,7 @@ func TestDeterministicEntryGoldenAndTransportIndependence(t *testing.T) {
 	}
 
 	withResponseFlag := insertBatchDeterministicSections()
-	withResponseFlag[0].Bytes = AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 1, Flags: CommandFlagOmitResultIDs})
+	withResponseFlag[0].Bytes = AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 1, Flags: CommandFlagOmitResultIDs | CommandFlagOmitResponseMeta})
 	cmd2, err := registry.ValidateRequestSections(withResponseFlag)
 	if err != nil {
 		t.Fatalf("ValidateRequestSections response flag: %v", err)

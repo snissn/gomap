@@ -3,7 +3,11 @@ package nativewire
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
+	"sync/atomic"
+
+	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
@@ -45,27 +49,108 @@ func DialContext(ctx context.Context, network, address string) (*Client, error) 
 }
 
 func NewInProcessClient(ctx context.Context, server *Server) (*Client, func() error, error) {
-	left, right := net.Pipe()
-	done := make(chan error, 1)
-	go func() {
-		done <- server.ServeConn(ctx, right)
-	}()
-	client := NewClient(left)
+	if server == nil || server.closed.Load() {
+		return nil, nil, ErrServerClosed
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return nil, nil, ctx.Err()
+	}
+	local := newLocalEndpoint(server)
+	client := &Client{local: local, limits: iwire.DefaultLimits()}
 	if err := client.Hello(ctx); err != nil {
-		_ = left.Close()
-		_ = right.Close()
+		_ = local.close()
 		return nil, nil, err
 	}
 	cleanup := func() error {
-		err := client.Close()
-		select {
-		case serveErr := <-done:
-			if serveErr != nil && ctx.Err() == nil {
-				err = errors.Join(err, serveErr)
-			}
-		default:
-		}
-		return err
+		return client.Close()
 	}
 	return client, cleanup, nil
+}
+
+type localEndpoint struct {
+	server *Server
+	state  *connState
+	closed atomic.Bool
+	frame  []byte
+}
+
+func newLocalEndpoint(server *Server) *localEndpoint {
+	state := &connState{id: uint64(server.nextConn.Add(1))}
+	server.counters.inc("connections.opened_total")
+	return &localEndpoint{server: server, state: state}
+}
+
+func (e *localEndpoint) close() error {
+	if e == nil {
+		return nil
+	}
+	if !e.closed.CompareAndSwap(false, true) {
+		return nil
+	}
+	if e.server != nil {
+		e.server.killCursorsForOwner(e.state.id)
+		e.server.counters.inc("connections.closed_total")
+	}
+	return nil
+}
+
+func (e *localEndpoint) Write(p []byte) (int, error) {
+	if e == nil || e.closed.Load() {
+		return 0, io.ErrClosedPipe
+	}
+	e.frame = append(e.frame, p...)
+	return len(p), nil
+}
+
+func (e *localEndpoint) roundTrip(ctx context.Context, typ iwire.FrameType, requestID uint64, body []byte, want iwire.FrameType, limits iwire.Limits, responseDst []byte, copyResponse bool) (iwire.Header, []byte, error) {
+	if e == nil || e.server == nil || e.closed.Load() || e.server.closed.Load() {
+		return iwire.Header{}, nil, io.ErrClosedPipe
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return iwire.Header{}, nil, ctx.Err()
+	}
+	e.frame = e.frame[:0]
+	request := iwire.Header{
+		Version:   iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0},
+		Type:      typ,
+		RequestID: requestID,
+	}
+	err := e.server.handleFrame(ctx, e, e.state, request, body)
+	if errors.Is(err, errGoaway) {
+		_ = e.close()
+		err = nil
+	}
+	if err != nil {
+		return iwire.Header{}, nil, err
+	}
+	if len(e.frame) < int(iwire.FrameHeaderLenV1) {
+		return iwire.Header{}, nil, protocolError(iwire.ErrMalformedFrame, "response frame too short: %d", len(e.frame))
+	}
+	header, err := iwire.DecodeHeader(e.frame[:iwire.FrameHeaderLenV1], limits)
+	if err != nil {
+		return iwire.Header{}, nil, err
+	}
+	response := e.frame[iwire.FrameHeaderLenV1:]
+	if uint64(len(response)) != header.BodyLen {
+		return header, nil, protocolError(iwire.ErrMalformedFrame, "response body len %d want %d", len(response), header.BodyLen)
+	}
+	if copyResponse && len(response) > 0 {
+		if len(response) <= cap(responseDst) {
+			responseDst = responseDst[:len(response)]
+		} else {
+			responseDst = make([]byte, len(response))
+		}
+		copy(responseDst, response)
+		response = responseDst
+	}
+	if header.Type == iwire.FrameError {
+		return header, response, decodeWireError(response, limits)
+	}
+	if header.Type != want {
+		return header, response, protocolError(iwire.ErrMalformedFrame, "response frame type %d want %d", header.Type, want)
+	}
+	if header.RequestID != requestID {
+		return header, response, protocolError(iwire.ErrMalformedFrame, "response request_id %d want %d", header.RequestID, requestID)
+	}
+	return header, response, nil
 }

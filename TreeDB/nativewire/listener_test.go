@@ -3,6 +3,7 @@ package nativewire
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"path/filepath"
 	"runtime"
@@ -38,6 +39,38 @@ func TestServeTCPAndDialContext(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Serve did not stop")
+	}
+}
+
+func TestNewInProcessClientLocalEndpoint(t *testing.T) {
+	server := NewServer(ServerOptions{})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	client, cleanup, err := NewInProcessClient(ctx, server)
+	if err != nil {
+		t.Fatalf("NewInProcessClient: %v", err)
+	}
+	if err := client.Ping(ctx); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+	stats, err := client.Stats(ctx)
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if got := stats["treedb.native_wire.connections.opened_total"]; got != "1" {
+		t.Fatalf("opened_total=%q want 1", got)
+	}
+	if err := client.Goaway(ctx); err != nil {
+		t.Fatalf("Goaway: %v", err)
+	}
+	if err := client.Ping(ctx); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Ping after Goaway err=%v want closed pipe", err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	if got := server.Stats()["treedb.native_wire.connections.closed_total"]; got != "1" {
+		t.Fatalf("closed_total=%q want 1", got)
 	}
 }
 

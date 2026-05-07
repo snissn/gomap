@@ -12,8 +12,14 @@ import (
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
+// Client serializes requests on one native-wire connection.
+//
+// Byte slices returned by result APIs are immutable views into the client's
+// response buffer. They remain valid until the next round trip on the same
+// client; callers that need to keep them longer must copy them.
 type Client struct {
 	conn        net.Conn
+	local       *localEndpoint
 	limits      iwire.Limits
 	nextReq     atomic.Uint64
 	mu          sync.Mutex
@@ -27,7 +33,13 @@ func NewClient(conn net.Conn) *Client {
 }
 
 func (c *Client) Close() error {
-	if c == nil || c.conn == nil {
+	if c == nil {
+		return nil
+	}
+	if c.local != nil {
+		return c.local.close()
+	}
+	if c.conn == nil {
 		return nil
 	}
 	return c.conn.Close()
@@ -85,7 +97,15 @@ func (c *Client) roundTrip(ctx context.Context, typ iwire.FrameType, body []byte
 }
 
 func (c *Client) roundTripLocked(ctx context.Context, typ iwire.FrameType, body []byte, want iwire.FrameType) (iwire.Header, []byte, error) {
-	if c == nil || c.conn == nil {
+	if c == nil {
+		return iwire.Header{}, nil, io.ErrClosedPipe
+	}
+	if c.local != nil {
+		header, response, err := c.local.roundTrip(ctx, typ, c.nextReq.Add(1), body, want, c.limits, c.readBody, true)
+		c.readBody = response[:0]
+		return header, response, err
+	}
+	if c.conn == nil {
 		return iwire.Header{}, nil, io.ErrClosedPipe
 	}
 	if ctx != nil && ctx.Err() != nil {
@@ -101,10 +121,11 @@ func (c *Client) roundTripLocked(ctx context.Context, typ iwire.FrameType, body 
 	if err != nil {
 		return iwire.Header{}, nil, err
 	}
-	header, response, err := readFrame(c.conn, c.limits)
+	header, response, err := readFrameInto(c.conn, c.limits, c.readBody)
 	if err != nil {
 		return iwire.Header{}, nil, err
 	}
+	c.readBody = response[:0]
 	if header.Type == iwire.FrameError {
 		return header, response, decodeWireError(response, c.limits)
 	}
@@ -118,7 +139,14 @@ func (c *Client) roundTripLocked(ctx context.Context, typ iwire.FrameType, body 
 }
 
 func (c *Client) roundTripLockedDiscardResponse(ctx context.Context, typ iwire.FrameType, body []byte, want iwire.FrameType) error {
-	if c == nil || c.conn == nil {
+	if c == nil {
+		return io.ErrClosedPipe
+	}
+	if c.local != nil {
+		_, _, err := c.local.roundTrip(ctx, typ, c.nextReq.Add(1), body, want, c.limits, nil, false)
+		return err
+	}
+	if c.conn == nil {
 		return io.ErrClosedPipe
 	}
 	if ctx != nil && ctx.Err() != nil {

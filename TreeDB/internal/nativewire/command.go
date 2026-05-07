@@ -10,9 +10,12 @@ const (
 	// CommandFlagOmitResultIDs asks mutation responses to omit result ID vectors
 	// when the command can otherwise report success through response_meta.
 	CommandFlagOmitResultIDs uint64 = 1 << iota
+	// CommandFlagOmitResponseMeta asks success responses to omit response_meta
+	// when the client only needs success/error signaling.
+	CommandFlagOmitResponseMeta
 )
 
-const commandResponseShapingFlagsMask = CommandFlagOmitResultIDs
+const commandResponseShapingFlagsMask = CommandFlagOmitResultIDs | CommandFlagOmitResponseMeta
 
 func DeterministicCommandFlags(flags uint64) uint64 {
 	return flags &^ commandResponseShapingFlagsMask

@@ -31,12 +31,13 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 		mgr, _, cleanup := benchmarkCollection(b)
 		defer cleanup()
 		server := NewServer(ServerOptions{Collections: mgr})
-		client, clientCleanup, err := NewInProcessClient(context.Background(), server)
+		ctx := context.Background()
+		client, clientCleanup, err := NewInProcessClient(ctx, server)
 		if err != nil {
 			b.Fatalf("NewInProcessClient: %v", err)
 		}
 		defer func() { _ = clientCleanup() }()
-		handle, err := client.OpenCollection(context.Background(), "bench")
+		handle, err := client.OpenCollection(ctx, "bench")
 		if err != nil {
 			b.Fatalf("OpenCollection: %v", err)
 		}
@@ -46,7 +47,7 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 			b.StopTimer()
 			ids, docs := benchmarkStoredBatch(i*batchSize, batchSize)
 			b.StartTimer()
-			if _, err := client.InsertBatchHandle(context.Background(), handle, collections.DocumentFormatJSON, ids, docs, AckVisible); err != nil {
+			if _, err := client.InsertBatchHandle(ctx, handle, collections.DocumentFormatJSON, ids, docs, AckVisible); err != nil {
 				b.Fatalf("InsertBatch native: %v", err)
 			}
 		}
@@ -56,12 +57,13 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 		mgr, _, cleanup := benchmarkCollection(b)
 		defer cleanup()
 		server := NewServer(ServerOptions{Collections: mgr})
-		client, clientCleanup, err := NewInProcessClient(context.Background(), server)
+		ctx := context.Background()
+		client, clientCleanup, err := NewInProcessClient(ctx, server)
 		if err != nil {
 			b.Fatalf("NewInProcessClient: %v", err)
 		}
 		defer func() { _ = clientCleanup() }()
-		handle, err := client.OpenCollection(context.Background(), "bench")
+		handle, err := client.OpenCollection(ctx, "bench")
 		if err != nil {
 			b.Fatalf("OpenCollection: %v", err)
 		}
@@ -71,7 +73,7 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 			b.StopTimer()
 			ids, docs := benchmarkStoredBatch(i*batchSize, batchSize)
 			b.StartTimer()
-			if err := client.InsertBatchHandleNoResult(context.Background(), handle, collections.DocumentFormatJSON, ids, docs, AckVisible); err != nil {
+			if err := client.InsertBatchHandleNoResult(ctx, handle, collections.DocumentFormatJSON, ids, docs, AckVisible); err != nil {
 				b.Fatalf("InsertBatch native no-result: %v", err)
 			}
 		}
@@ -130,7 +132,7 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 			ids, docs := benchmarkStoredBatch(i*batchSize, batchSize)
 			b.StartTimer()
 			var err error
-			requestBody, err = appendInsertBatchRequestBodyRefFlags(requestBody[:0], "", handle, true, collections.DocumentFormatJSON, ids, docs, AckVisible, iwire.CommandFlagOmitResultIDs)
+			requestBody, err = appendInsertBatchRequestBodyRefFlags(requestBody[:0], "", handle, true, collections.DocumentFormatJSON, ids, docs, AckVisible, iwire.CommandFlagOmitResultIDs|iwire.CommandFlagOmitResponseMeta)
 			if err != nil {
 				b.Fatalf("append insert request: %v", err)
 			}
@@ -166,12 +168,13 @@ func BenchmarkNativewireCollectionGetMany(b *testing.B) {
 		defer cleanup()
 		seedBenchmarkCollection(b, col, docs)
 		server := NewServer(ServerOptions{Collections: mgr})
-		client, clientCleanup, err := NewInProcessClient(context.Background(), server)
+		ctx := context.Background()
+		client, clientCleanup, err := NewInProcessClient(ctx, server)
 		if err != nil {
 			b.Fatalf("NewInProcessClient: %v", err)
 		}
 		defer func() { _ = clientCleanup() }()
-		handle, err := client.OpenCollection(context.Background(), "bench")
+		handle, err := client.OpenCollection(ctx, "bench")
 		if err != nil {
 			b.Fatalf("OpenCollection: %v", err)
 		}
@@ -179,7 +182,7 @@ func BenchmarkNativewireCollectionGetMany(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			if _, _, err := client.GetManyHandle(context.Background(), handle, ids); err != nil {
+			if _, _, err := client.GetManyHandle(ctx, handle, ids); err != nil {
 				b.Fatalf("GetMany native: %v", err)
 			}
 		}

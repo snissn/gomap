@@ -61,7 +61,7 @@ func (c *Client) insertBatchNoResult(ctx context.Context, collection string, han
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	body, err := appendInsertBatchRequestBodyRefFlags(c.requestBody[:0], collection, handle, useHandle, format, ids, docs, ack, iwire.CommandFlagOmitResultIDs)
+	body, err := appendInsertBatchRequestBodyRefFlags(c.requestBody[:0], collection, handle, useHandle, format, ids, docs, ack, iwire.CommandFlagOmitResultIDs|iwire.CommandFlagOmitResponseMeta)
 	if err != nil {
 		return err
 	}

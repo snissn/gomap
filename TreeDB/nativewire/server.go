@@ -165,8 +165,24 @@ func (s *connState) cacheCollection(name string, collection *collections.Collect
 
 func NewServer(opts ServerOptions) *Server {
 	limits := opts.Limits
+	defaultLimits := iwire.DefaultLimits()
 	if limits.MaxFrameSize == 0 {
-		limits = iwire.DefaultLimits()
+		limits.MaxFrameSize = defaultLimits.MaxFrameSize
+	}
+	if limits.MaxHeaderLen == 0 {
+		limits.MaxHeaderLen = defaultLimits.MaxHeaderLen
+	}
+	if limits.MaxSections == 0 {
+		limits.MaxSections = defaultLimits.MaxSections
+	}
+	if limits.MaxSectionLen == 0 {
+		limits.MaxSectionLen = defaultLimits.MaxSectionLen
+	}
+	if limits.MaxByteVectorItems == 0 {
+		limits.MaxByteVectorItems = defaultLimits.MaxByteVectorItems
+	}
+	if limits.MaxByteVectorBytes == 0 {
+		limits.MaxByteVectorBytes = defaultLimits.MaxByteVectorBytes
 	}
 	maxInFlight := opts.MaxInFlight
 	if maxInFlight <= 0 {
@@ -413,7 +429,8 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 		err = unsupportedDropCollection()
 	case iwire.CommandInsertBatch:
 		includeResultIDs := cmd.Header.Flags&iwire.CommandFlagOmitResultIDs == 0
-		responseBody, err = s.handleInsertBatchBody(state, cmd.Known, body[:0], includeResultIDs)
+		includeMeta := cmd.Header.Flags&iwire.CommandFlagOmitResponseMeta == 0
+		responseBody, err = s.handleInsertBatchBody(state, cmd.Known, body[:0], includeResultIDs, includeMeta)
 		responseBodySet = true
 	case iwire.CommandReplaceBatch:
 		responseSections, err = s.handleReplaceBatch(state, cmd.Known)

@@ -38,40 +38,38 @@ Result on `linux/amd64`, Intel i5-11400F:
 
 | Benchmark | time/op | B/op | allocs/op |
 | --- | ---: | ---: | ---: |
-| `InsertBatch/direct_collection` | 38.77 us +/- 1% | 6.428 KiB | 50 |
-| `InsertBatch/native_wire_inproc` | 52.75 us +/- 6% | 7.951 KiB | 54 |
-| `InsertBatch/native_wire_inproc_no_result` | 51.24 us +/- 1% | 6.637 KiB | 52 |
-| `InsertBatch/native_wire_direct_dispatch` | 45.55 us +/- 2% | 7.356 KiB | 51 |
-| `InsertBatch/native_wire_direct_dispatch_no_result` | 44.49 us +/- 1% | 6.481 KiB | 50 |
-| `GetMany/direct_collection` | 34.05 us +/- 1% | 8.005 KiB | 128 |
-| `GetMany/native_wire_inproc` | 40.31 us +/- 1% | 14.42 KiB | 8 |
-| `GetMany/native_wire_direct_dispatch` | 35.33 us +/- 1% | 10.33 KiB | 5 |
+| `InsertBatch/direct_collection` | 39.30 us +/- 1% | 6.428 KiB | 50 |
+| `InsertBatch/native_wire_inproc` | 45.14 us +/- 2% | 7.331 KiB | 51 |
+| `InsertBatch/native_wire_inproc_no_result` | 43.28 us +/- 1% | 6.456 KiB | 50 |
+| `InsertBatch/native_wire_direct_dispatch` | 45.90 us +/- 1% | 7.356 KiB | 51 |
+| `InsertBatch/native_wire_direct_dispatch_no_result` | 44.12 us +/- 2% | 6.478 KiB | 50 |
+| `GetMany/direct_collection` | 33.95 us +/- 5% | 8.005 KiB | 128 |
+| `GetMany/native_wire_inproc` | 34.70 us +/- 2% | 10.33 KiB | 5 |
+| `GetMany/native_wire_direct_dispatch` | 35.56 us +/- 1% | 10.33 KiB | 5 |
 
 Interpretation:
 
 - The native in-process benchmark opens a collection handle before timing and
-  uses handle-based hot commands. This is the intended steady-state path for
-  long-lived clients.
-- R1 native in-process insert is about 1.37x direct collection latency for this
-  32-document batch shape when IDs are returned, and about 1.32x when the client
+  uses handle-based hot commands over the direct local endpoint. This is the
+  intended steady-state path for long-lived embedded clients.
+- R1 native in-process insert is about 1.15x direct collection latency for this
+  32-document batch shape when IDs are returned, and about 1.10x when the client
   requests ack-only/no-result response shaping.
 - Direct in-process dispatch, which keeps native request decode and response
-  encode but removes `net.Pipe`, is about 1.18x direct for insert with returned
-  IDs and about 1.15x for ack-only insert.
-- R1 native in-process get-many is about 1.18x direct collection latency for
-  this 64-document batch shape. Direct dispatch is about 1.04x direct, so the
-  remaining read gap is mostly framed in-process transport overhead.
+  encode while bypassing the public client, is about 1.17x direct for insert
+  with returned IDs and about 1.12x for ack-only insert.
+- R1 native in-process get-many is about 1.02x direct collection latency for
+  this 64-document batch shape. This is effectively at parity for the current
+  benchmark shape.
 - Insert allocation is now close to the direct collection baseline: native wire
-  adds four allocations/op for request/response framing and response decode on
-  the ID-returning path. Ack-only direct dispatch matches the direct allocation
-  count for this benchmark shape.
+  adds one allocation/op for result-returning insert and matches the direct
+  allocation count for ack-only insert in this benchmark shape.
 - Get-many allocates less often than the direct `Collection.Get` loop because
   the server materializes documents with `GetInto` into one response payload and
   the client returns borrowed frame views.
-- This is materially closer, but it is not strict throughput/speed parity yet.
-  Read dispatch is effectively at parity once `net.Pipe` is removed. Insert
-  still pays unavoidable request serialization/decode plus response shaping cost;
-  ack-only response shaping narrows that gap but does not eliminate it.
+- This is close enough for read parity. Insert still pays request
+  serialization/decode plus response shaping cost; ack-only response shaping
+  narrows that gap but does not eliminate it.
 
 ## Workload Profiles
 
@@ -161,6 +159,9 @@ the R1f optimization pass:
 - Added direct-dispatch benchmark lanes that exercise native request parsing,
   server dispatch, response encoding, and frame validation without `net.Pipe`,
   making protocol overhead and framed-transport overhead separable.
+- Replaced the in-process client benchmark transport with a direct local
+  endpoint that calls the same server frame handler without `net.Pipe`
+  goroutine scheduling and pipe I/O overhead.
 - Kept insert benchmark fixture generation outside the timed section so the
   benchmark reports collection/protocol work instead of document construction.
 - Changed `writeFrame` to write a stack-built frame header and the body as
@@ -195,14 +196,20 @@ the R1f optimization pass:
   timing.
 - Added `InsertBatchNoResult` and `InsertBatchHandleNoResult` for ack-oriented
   callers that do not need echoed result IDs; the wire representation uses a
-  response-shaping command flag and keeps the existing ID-returning insert API
-  intact.
+  response-shaping command flag pair and keeps the existing ID-returning insert
+  API intact.
+- Added `omit_response_meta` response shaping for success responses where the
+  caller only needs success/error signaling. Requested ack policy is still
+  satisfied before success is returned.
 - Encoded `get_many` responses directly from `Collection.GetInto` into a single
   payload plus presence bitmap, avoiding one document allocation per returned
   document.
 - Added direct hot request/response body encoders for `InsertBatch` and
   `GetMany`, including deterministic ack metadata encoding without a temporary
   string map.
+- Reused client response-frame storage on result-returning round trips so the
+  hot read/insert APIs return borrowed frame views without allocating a fresh
+  response body for every call.
 - Added an insert fast-validation path that captures hot `insert_batch` section
   payloads in one command-specific pass while preserving generic registry
   validation for the rest of the protocol.
@@ -222,17 +229,17 @@ native-wire path into a Raft/distributed baseline:
 - keep the benchmark split that separates direct collection, direct in-process
   dispatch without `net.Pipe`, in-process framed transport, TCP loopback, and
   Mongo gateway paths for every benchmark report and PR closeout,
-- set the strict parity gate against direct-dispatch native wire rather than
-  `net.Pipe`, or implement a production lower-overhead in-process transport and
-  make that transport the embedded-client parity lane,
+- keep the direct local endpoint as the embedded-client parity lane and continue
+  to report TCP/Unix transports separately,
 - add an explicit acceptance target, for example direct-dispatch native steady-
   state latency within 1.05x direct collection for read shapes and within 1.10x
   for ack-only insert unless a profile-backed note identifies the remaining
   request serialization cost as intentional protocol overhead,
 - evaluate pipelined/asynchronous client requests for throughput parity when
   many independent operations can be in flight,
-- consider an immutable-borrow contract for client result bytes so APIs can
-  document when returned slices share a response-frame backing array,
+- document the client result-byte lifetime contract in public API comments:
+  returned slices are immutable borrowed views and are only valid until the next
+  call on the same client unless the caller copies them,
 - evaluate `writev`/gather-write support for TCP so small-frame coalescing does
   not require copying larger response bodies,
 - decide whether the client should expose an owned-result mode for callers that
