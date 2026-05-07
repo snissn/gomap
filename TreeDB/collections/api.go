@@ -11851,12 +11851,12 @@ func scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt iterator.Un
 				persistedIt.Next()
 				continue
 			}
+			if maxResults > 0 && emitted >= maxResults {
+				return true, nil
+			}
 			id, err := indexKeyDocumentID(valueType, persistedKey)
 			if err != nil {
 				return false, err
-			}
-			if maxResults > 0 && emitted >= maxResults {
-				return true, nil
 			}
 			if cloneID {
 				id = bytes.Clone(id)
@@ -11870,18 +11870,23 @@ func scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt iterator.Un
 		}
 		return false, collectionIndexIteratorError(persistedIt)
 	}
-	seen := make(map[string]struct{})
+	var seen map[string]struct{}
+	if dedupeIDs {
+		seen = make(map[string]struct{})
+	}
 	emitted := 0
 	emit := func(key []byte) (bool, bool, error) {
 		id, err := indexKeyDocumentID(valueType, key)
 		if err != nil {
 			return false, false, err
 		}
-		idKey := string(id)
-		if _, ok := seen[idKey]; ok {
-			return true, false, nil
+		if dedupeIDs {
+			idKey := string(id)
+			if _, ok := seen[idKey]; ok {
+				return true, false, nil
+			}
+			seen[idKey] = struct{}{}
 		}
-		seen[idKey] = struct{}{}
 		if maxResults > 0 && emitted >= maxResults {
 			return false, true, nil
 		}
