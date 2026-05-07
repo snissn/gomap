@@ -868,9 +868,9 @@ as a voting replica for that log lineage.
 
 ## 16. Benchmark and Observability Requirements
 
-R0d MUST establish codec-level nativewire microbenchmarks before native client
-server modes publish end-to-end numbers. These package benchmarks SHOULD use the
-`BenchmarkNativewire...` prefix and cover:
+R0d MUST establish codec-level nativewire microbenchmarks before native
+client/server modes publish end-to-end numbers. These package benchmarks SHOULD
+use the `BenchmarkNativewire...` prefix and cover:
 
 - fixed frame-header encode/decode,
 - command-header encode/decode,
