@@ -208,12 +208,16 @@ func (s *Server) findPureIndexedRangeLimitDocuments(col *collections.Collection,
 	if empty || limit == 0 {
 		return nil, true, nil
 	}
-	docs, err := documentsForIndexedRange(col, materializer, idx, opts, limit, limit)
+	candidateLimit := candidateLimitWithOverflowSlot(s.maxFindScanDocuments())
+	docs, err := documentsForIndexedRange(col, materializer, idx, opts, candidateLimit, limit)
 	return docs, true, err
 }
 
 func pureIndexedRangeLimitPlan(meta collections.CollectionMeta, plan findPlan, maxDocuments int) (collections.IndexDefinition, collections.IndexRangeOptions, int, bool, bool, error) {
 	if plan.limit <= 0 || plan.skip != 0 || plan.sort.field != "" || len(plan.predicates) != 1 {
+		return collections.IndexDefinition{}, collections.IndexRangeOptions{}, 0, false, false, nil
+	}
+	if int64(plan.limit) > int64(maxInt) {
 		return collections.IndexDefinition{}, collections.IndexRangeOptions{}, 0, false, false, nil
 	}
 	limit := int(plan.limit)
