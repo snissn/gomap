@@ -20,6 +20,10 @@ func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) 
 	if cmd.Schema.RequiresCatalogGuard && !cmd.hasSection(SectionExpectedCatalogVersion) {
 		return nil, protocolError(ErrInvalidCommand, "missing catalog guard")
 	}
+	deterministicFlags := DeterministicCommandFlags(cmd.Header.Flags)
+	if deterministicFlags != 0 {
+		return nil, protocolError(ErrUnsupportedFeature, "unsupported deterministic command flags 0x%x", deterministicFlags)
+	}
 
 	deterministic, err := cmd.deterministicSections()
 	if err != nil {
@@ -33,7 +37,7 @@ func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) 
 	dst = appendUvarint(dst, DeterministicEntryVersion)
 	dst = appendUvarint(dst, uint64(cmd.Header.ID))
 	dst = appendUvarint(dst, cmd.Header.Version)
-	dst = appendUvarint(dst, cmd.Header.Flags)
+	dst = appendUvarint(dst, deterministicFlags)
 	dst = appendUvarint(dst, uint64(len(deterministic)))
 	for _, section := range deterministic {
 		dst = appendUvarint(dst, uint64(section.ID))
@@ -61,6 +65,10 @@ func (cmd ValidatedCommand) deterministicSections() ([]Section, error) {
 	seen := make(map[SectionID]struct{}, len(cmd.Known))
 	for _, section := range cmd.Known {
 		if section.ID == SectionIdempotencyKey {
+			if _, exists := seen[section.ID]; exists {
+				return nil, protocolError(ErrInvalidCommand, "duplicate deterministic singleton section %d", section.ID)
+			}
+			seen[section.ID] = struct{}{}
 			out = append(out, Section{ID: section.ID, Bytes: section.Bytes})
 			continue
 		}
@@ -74,7 +82,14 @@ func (cmd ValidatedCommand) deterministicSections() ([]Section, error) {
 			}
 			seen[section.ID] = struct{}{}
 		}
+		if section.ID == SectionCollectionRef && isConnectionLocalCollectionRef(section.Bytes) {
+			return nil, protocolError(ErrInvalidCommand, "collection handle ref is not deterministic")
+		}
 		out = append(out, Section{ID: section.ID, Bytes: section.Bytes})
 	}
 	return out, nil
+}
+
+func isConnectionLocalCollectionRef(raw []byte) bool {
+	return len(raw) > 0 && raw[0] == 0
 }
