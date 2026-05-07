@@ -440,7 +440,7 @@ func (s *Server) handleMsgInto(dst []byte, h wire.Header, body []byte, cursorOwn
 
 	if name == "find" {
 		if msg.Flags&wire.MsgFlagMoreToCome != 0 {
-			return nil, nil
+			return nil, fmt.Errorf("%w: find with moreToCome flag", wire.ErrUnsupported)
 		}
 		responseID := s.nextID()
 		response, err := s.findMsgResponseInto(dst, msg.Body, responseID, h.RequestID, cursorOwner)
