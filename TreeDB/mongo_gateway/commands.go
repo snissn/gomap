@@ -128,8 +128,12 @@ func (p findResponsePayload) marshalDocument() (wire.Document, error) {
 }
 
 func (p findResponsePayload) marshalMsg(requestID, responseTo int32) ([]byte, error) {
+	return p.marshalMsgWithMaxLength(requestID, responseTo, wire.DefaultMaxMessageLength)
+}
+
+func (p findResponsePayload) marshalMsgWithMaxLength(requestID, responseTo int32, maxMessageLength int) ([]byte, error) {
 	if p.raw != nil {
-		return marshalCursorDocumentsMsgResponseWithID(requestID, responseTo, p.raw.ns, p.raw.cursorID, p.raw.batchKey, p.raw.batch, wire.DefaultMaxMessageLength)
+		return marshalCursorDocumentsMsgResponseWithID(requestID, responseTo, p.raw.ns, p.raw.cursorID, p.raw.batchKey, p.raw.batch, maxMessageLength)
 	}
 	return wire.AppendMsgMessage(nil, requestID, responseTo, 0, p.document)
 }
@@ -150,7 +154,7 @@ func (s *Server) findMsgResponse(command wire.Document, requestID, responseTo in
 	if payload.raw != nil {
 		return marshalCursorDocumentsMsgResponseWithID(requestID, responseTo, payload.raw.ns, payload.raw.cursorID, payload.raw.batchKey, payload.raw.batch, int(s.maxMessageLength()))
 	}
-	return payload.marshalMsg(requestID, responseTo)
+	return payload.marshalMsgWithMaxLength(requestID, responseTo, int(s.maxMessageLength()))
 }
 
 func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (findResponsePayload, error) {
