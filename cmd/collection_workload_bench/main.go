@@ -494,7 +494,7 @@ func runRow(cfg config, format collections.DocumentFormat, indexes int, state re
 		return rowResult{}, err
 	}
 
-	readPhases, err := runReadPhases(target, cfg, indexes)
+	readPhases, err := runReadPhases(target, cfg, indexes, state)
 	if err != nil {
 		return rowResult{}, err
 	}
@@ -534,7 +534,7 @@ func runRow(cfg config, format collections.DocumentFormat, indexes int, state re
 	return row, nil
 }
 
-func runReadPhases(target *benchTarget, cfg config, indexes int) ([]phaseResult, error) {
+func runReadPhases(target *benchTarget, cfg config, indexes int, state readState) ([]phaseResult, error) {
 	var phases []phaseResult
 	appendPhase := func(phase phaseResult, err error) error {
 		if err != nil {
@@ -596,18 +596,22 @@ func runReadPhases(target *benchTarget, cfg config, indexes int) ([]phaseResult,
 		} else {
 			phases = append(phases, skippedPhase("age_range_indexed_limit_10", "age index is absent until indexes_2"))
 		}
-		phase, err := timedPhase(target, "age_range_scan_limit_10", func() (int64, int64, error) {
-			return runAgeScanRangeReads(target, cfg.RangeReads, 1)
-		})
-		if err := appendPhase(phase, err); err != nil {
-			return nil, err
-		}
-		for _, readers := range cfg.ReaderSweep {
-			phase, err := timedPhase(target, fmt.Sprintf("concurrent_age_range_scan_limit_10_r%d", readers), func() (int64, int64, error) {
-				return runAgeScanRangeReads(target, cfg.RangeReads, readers)
+		if state == readStateBuffered {
+			phases = append(phases, skippedPhase("age_range_scan_limit_10", "primary scan API flushes buffered writes before scanning"))
+		} else {
+			phase, err := timedPhase(target, "age_range_scan_limit_10", func() (int64, int64, error) {
+				return runAgeScanRangeReads(target, cfg.RangeReads, 1)
 			})
 			if err := appendPhase(phase, err); err != nil {
 				return nil, err
+			}
+			for _, readers := range cfg.ReaderSweep {
+				phase, err := timedPhase(target, fmt.Sprintf("concurrent_age_range_scan_limit_10_r%d", readers), func() (int64, int64, error) {
+					return runAgeScanRangeReads(target, cfg.RangeReads, readers)
+				})
+				if err := appendPhase(phase, err); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
