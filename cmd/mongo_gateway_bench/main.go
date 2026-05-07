@@ -2966,10 +2966,14 @@ func runTreeDBRawWireRangeOperation(ctx context.Context, cfg config, target *ben
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	commandDoc, err := rawWireFindAgeRangeCommand(cfg.Database, cfg.Collection, minAge)
+	if scratch == nil {
+		scratch = &rawWireInProcessScratch{}
+	}
+	commandDoc, err := appendRawWireFindAgeRangeCommand(scratch.commandBuf[:0], cfg.Database, cfg.Collection, minAge)
 	if err != nil {
 		return err
 	}
+	scratch.commandBuf = commandDoc
 	begin := time.Now()
 	batch, err := serveRawWireFind(target.server, requestID.Add(1), cursorOwner, commandDoc, scratch)
 	sample(time.Since(begin))
@@ -2988,9 +2992,12 @@ func runTreeDBRawWireTCPRangePhase(ctx context.Context, cfg config, target *benc
 		return phaseResult{}, err
 	}
 	defer func() { _ = client.Close() }()
+	var commandBuf []byte
 	return measureTreeDBProfiledPhase(target, profiler, rangePhaseName(cfg), cfg.RangeReads, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.RangeReads; i++ {
-			if err := runTreeDBRawWireTCPRangeOperation(ctx, cfg, client, rangeReadMinAge(i), sample); err != nil {
+			var err error
+			commandBuf, err = runTreeDBRawWireTCPRangeOperation(ctx, cfg, client, rangeReadMinAge(i), sample, commandBuf)
+			if err != nil {
 				return err
 			}
 		}
@@ -2998,17 +3005,17 @@ func runTreeDBRawWireTCPRangePhase(ctx context.Context, cfg config, target *benc
 	})
 }
 
-func runTreeDBRawWireTCPRangeOperation(ctx context.Context, cfg config, client *fastclient.Client, minAge int64, sample func(time.Duration)) error {
-	commandDoc, err := rawWireFindAgeRangeCommand(cfg.Database, cfg.Collection, minAge)
+func runTreeDBRawWireTCPRangeOperation(ctx context.Context, cfg config, client *fastclient.Client, minAge int64, sample func(time.Duration), commandBuf []byte) ([]byte, error) {
+	commandDoc, err := appendRawWireFindAgeRangeCommand(commandBuf[:0], cfg.Database, cfg.Collection, minAge)
 	if err != nil {
-		return err
+		return commandBuf, err
 	}
 	begin := time.Now()
 	err = client.FindRawBSONBorrowed(ctx, commandDoc, func(batch []bson.Raw) error {
 		return validateRawAgeBatch(batch, minAge)
 	})
 	sample(time.Since(begin))
-	return err
+	return commandDoc, err
 }
 
 func runTreeDBRawWireTCPPipelineRangePhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder) (phaseResult, error) {
@@ -3083,6 +3090,7 @@ type rawWireTCPPipelineClient struct {
 	nextID      atomic.Int32
 	writeBuf    []byte
 	readBuf     []byte
+	commandBuf  []byte
 	responseBuf []bson.Raw
 }
 
@@ -3114,10 +3122,11 @@ func (c *rawWireTCPPipelineClient) AppendFind(database, collection string, minAg
 	if c == nil || c.conn == nil {
 		return 0, errors.New("raw-wire TCP pipeline client is closed")
 	}
-	commandDoc, err := rawWireFindAgeRangeCommand(database, collection, minAge)
+	commandDoc, err := appendRawWireFindAgeRangeCommand(c.commandBuf[:0], database, collection, minAge)
 	if err != nil {
 		return 0, err
 	}
+	c.commandBuf = commandDoc
 	requestID := c.nextID.Add(1)
 	msg, err := wire.AppendMsgMessage(c.writeBuf, requestID, 0, 0, commandDoc)
 	if err != nil {
@@ -3181,6 +3190,7 @@ func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarge
 			return phaseResult{}, errors.New("raw-wire-tcp client mode requires a TreeDB gateway listener")
 		}
 		clients := make([]*fastclient.Client, readers)
+		commandBufs := make([][]byte, readers)
 		for i := range clients {
 			client, err := fastclient.Connect(ctx, target.mongoAddr)
 			if err != nil {
@@ -3200,7 +3210,9 @@ func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarge
 		}()
 		return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentRangeReads, func(sample func(time.Duration)) error {
 			return runConcurrentOperationsByWorker(ctx, readers, cfg.ConcurrentRangeReads, func(worker, op int) error {
-				return runTreeDBRawWireTCPRangeOperation(ctx, cfg, clients[worker], rangeReadMinAge(op), sample)
+				var err error
+				commandBufs[worker], err = runTreeDBRawWireTCPRangeOperation(ctx, cfg, clients[worker], rangeReadMinAge(op), sample, commandBufs[worker])
+				return err
 			})
 		})
 	}
@@ -3302,21 +3314,38 @@ func rawDriverFindAgeRangeCommand(collection string, minAge int64) (bson.Raw, er
 }
 
 func rawWireFindAgeRangeCommand(database, collection string, minAge int64) (wire.Document, error) {
-	raw, err := rawFindAgeRangeCommand(database, collection, minAge)
-	return wire.Document(raw), err
+	return appendRawWireFindAgeRangeCommand(nil, database, collection, minAge)
 }
 
 func rawFindAgeRangeCommand(database, collection string, minAge int64) (bson.Raw, error) {
-	agePredicate := bsoncore.BuildDocument(nil, bsoncore.AppendInt64Element(nil, "$gte", minAge))
-	filter := bsoncore.BuildDocument(nil, bsoncore.AppendDocumentElement(nil, "age", agePredicate))
-	idx, doc := bsoncore.AppendDocumentStart(nil)
+	return appendRawFindAgeRangeCommand(nil, database, collection, minAge)
+}
+
+func appendRawWireFindAgeRangeCommand(dst []byte, database, collection string, minAge int64) (wire.Document, error) {
+	raw, err := appendRawFindAgeRangeCommand(dst, database, collection, minAge)
+	return wire.Document(raw), err
+}
+
+func appendRawFindAgeRangeCommand(dst []byte, database, collection string, minAge int64) (bson.Raw, error) {
+	idx, doc := bsoncore.AppendDocumentStart(dst[:0])
 	doc = bsoncore.AppendStringElement(doc, "find", collection)
-	doc = bsoncore.AppendDocumentElement(doc, "filter", filter)
+	filterIdx, doc := bsoncore.AppendDocumentElementStart(doc, "filter")
+	ageIdx, doc := bsoncore.AppendDocumentElementStart(doc, "age")
+	doc = bsoncore.AppendInt64Element(doc, "$gte", minAge)
+	var err error
+	doc, err = bsoncore.AppendDocumentEnd(doc, ageIdx)
+	if err != nil {
+		return nil, err
+	}
+	doc, err = bsoncore.AppendDocumentEnd(doc, filterIdx)
+	if err != nil {
+		return nil, err
+	}
 	doc = bsoncore.AppendInt32Element(doc, "limit", 10)
 	if database != "" {
 		doc = bsoncore.AppendStringElement(doc, "$db", database)
 	}
-	doc, err := bsoncore.AppendDocumentEnd(doc, idx)
+	doc, err = bsoncore.AppendDocumentEnd(doc, idx)
 	if err != nil {
 		return nil, err
 	}
@@ -3324,6 +3353,7 @@ func rawFindAgeRangeCommand(database, collection string, minAge int64) (bson.Raw
 }
 
 type rawWireInProcessScratch struct {
+	commandBuf  []byte
 	requestBuf  []byte
 	serveBufs   mongogateway.ServeBuffers
 	rw          inMemoryReadWriter
