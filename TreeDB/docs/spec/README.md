@@ -17,6 +17,11 @@ TreeDB is pre-alpha.
 
 When behavior or format changes, update this spec and the test matrix in `TreeDB/docs/spec/verification.md` in the same change.
 
+When native-wire protocol IDs, command schemas, feature gates, or deterministic
+entry formats change, update the native-wire spec, implementation guidelines,
+roadmap, schema registry or drift tests, golden vectors, and verification matrix
+in the same change.
+
 ## Scope
 
 This spec covers the public `treedb` engine and its backend/index implementation:
@@ -99,6 +104,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     framing, command payloads, explicit ack/consistency policies, and the
     boundary between wire requests and future deterministic Raft command
     entries.
+- `TreeDB/docs/spec/native-wire-implementation-guidelines.md`
+  - implementation playbook for keeping codecs, schema IDs, validation,
+    conformance tests, benchmarks, and future Raft entry handling aligned with
+    the native wire protocol.
 - `TreeDB/docs/spec/native-query-raft-roadmap.md`
   - draft query feature roadmap and distributed/Raft sequencing policy for the
     native protocol.

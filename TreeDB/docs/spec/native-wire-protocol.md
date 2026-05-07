@@ -7,6 +7,13 @@ shape for TreeDB collections and raw ordered-key operations. It is intended to
 guide implementation, benchmark work, and the future Raft/distributed database
 surface. It does not describe current shipped server behavior.
 
+Normative keywords are conformance requirements for code that advertises
+native-wire v1. Until a phase lands, unmatched requirements are design
+constraints. Any PR that changes frame layout, command IDs, section IDs,
+deterministic encoding, benchmark labels, or observability keys MUST update this
+document, the roadmap, relevant codec/golden tests, and benchmark documentation
+in the same change.
+
 ## 1. Decision
 
 TreeDB SHOULD use a native binary protocol for its production data plane.
@@ -172,6 +179,15 @@ unbounded unsolicited frames.
 Its body MUST include `last_accepted_request_id` and an optional error code.
 Clients MAY retry requests with IDs greater than `last_accepted_request_id`
 when the command and idempotency policy allow retry.
+
+Each request moves through frame decode, schema validation, admission, dispatch,
+engine execution, response encode, and terminal cleanup. A request MUST emit at
+most one terminal response or error. Cursor-open commands create server-owned
+cursor state only after admission succeeds. EOF, `cursor_close`, cancel, idle
+timeout, connection close, or terminal cursor error MUST release that state.
+Mutation dispatch MUST resolve connection-local handles and catalog guards before
+execution. Distributed mode MUST canonicalize and admit deterministic command
+bytes before applying the mutation.
 
 ### 5.3 Body Sections
 
@@ -741,7 +757,101 @@ inputs needed to reproduce the same writes.
 Raft implementations MAY store deterministic entries directly or wrap them in a
 larger consensus-layer entry that also carries term/index metadata.
 
-## 15. Benchmark Requirements
+## 15. Implementation Conformance
+
+Implementation guidance is expanded in
+`TreeDB/docs/spec/native-wire-implementation-guidelines.md`. The rules below are
+part of the protocol contract for code that advertises native-wire v1.
+
+### 15.1 Append-Time Determinism Gate
+
+In distributed mode, the leader MUST pass every mutating request through an
+append-time determinism gate before Raft append:
+
+1. decode the wire request using the negotiated command schema,
+2. reject unsupported command versions, unknown required sections, duplicate
+   singleton sections, and non-deterministic sections,
+3. resolve connection-local handles and client names to committed stable catalog
+   identities,
+4. verify that the command is in the deterministic command allowlist,
+5. require an idempotency identity and catalog guard,
+6. encode the command with the canonical command-entry encoder,
+7. compute the canonical command digest over the exact entry bytes,
+8. append only those canonical bytes to Raft.
+
+Followers MUST apply committed command-entry bytes directly. They MUST NOT
+reconstruct entries from wire frames, negotiated connection features, local
+defaults, map iteration order, timestamps, handles, or transport metadata.
+
+### 15.2 Canonical Encoder Registry
+
+Each replicated `command_id + command_version` MUST have exactly one canonical
+encoder and decoder. Generic section copying is not sufficient for Raft entry
+construction.
+
+The command schema MUST define deterministic sections, field order inside each
+section, optional-field defaults, repeated-section ordering, scalar encoding,
+and rejection rules. A command version MUST NOT accept both omitted and
+explicit-default encodings for the same logical value.
+
+Canonical encoders MUST reject inputs that cannot be represented with one stable
+byte form. Any future replicated scalar that admits multiple encodings, such as
+floating NaN values, MUST either define a canonical representation or be
+rejected.
+
+### 15.3 Catalog Guards and Stable IDs
+
+Catalog guards are evaluated by the state machine at apply time. Leader-side
+validation is only a preflight optimization. A committed command whose guard
+does not match the applied catalog state MUST produce the same deterministic
+failure on every replica and MUST still update idempotency state for that
+command identity.
+
+Create/drop collection and create/drop index commands MUST encode deterministic
+existence guards, stable names, and any stable IDs assigned by committed catalog
+state. Replicas MUST NOT allocate catalog IDs from local randomness, wall-clock
+time, process-local counters outside the log, or map iteration order.
+
+### 15.4 State-Machine Boundary
+
+Raft entries replicate logical state-machine input only. Applying an entry may
+derive secondary-index postings, index-state deltas, value-log writes, backend
+roots, flush artifacts, and physical file layout locally. Those derived
+artifacts MUST NOT influence later logical command results except through
+committed logical state.
+
+The apply path MUST NOT depend on wall-clock time, process-global randomness,
+goroutine scheduling, map iteration order, local value-log offsets, local flush
+timing, or local maintenance decisions. Snapshots MUST include logical catalog
+state, collection contents, index definitions, and idempotency records; they
+need not preserve byte-identical local storage layout.
+
+### 15.5 Local-Only Commands
+
+`open_collection`, `close_collection`, cursors, reads, `explain`, `stats`,
+`flush_collection`, `flush_all`, `checkpoint`, value-log GC, value-log rewrite,
+and physical maintenance commands are local-only in v1.
+
+Cluster servers MUST NOT satisfy `ack_policy=raft_committed` by appending these
+commands to Raft. They MUST either execute them as local operations with
+response metadata naming the serving node, reject them as `invalid_command`, or
+define a future deterministic distributed barrier command with explicit
+consensus semantics.
+
+### 15.6 Mixed-Version Cluster Admission
+
+In cluster mode, `hello_ok` MUST distinguish locally implemented command
+versions from cluster-admitted command versions. A leader MUST only admit
+deterministic entries whose `entry_version`, `command_id`, `command_version`,
+and required feature bits can be decoded and applied by every current voting
+replica for the Raft group.
+
+Rolling upgrades MUST keep new deterministic command versions disabled until the
+membership and feature floor prove that all voting replicas can replay them. A
+node that cannot decode an already committed entry version MUST refuse to join
+as a voting replica for that log lineage.
+
+## 16. Benchmark and Observability Requirements
 
 The first implementation MUST add native client modes beside the existing Mongo
 gateway client modes:
@@ -765,9 +875,24 @@ Native-wire benchmarks SHOULD include:
 - cursor scan throughput,
 - allocation profile,
 - per-frame byte overhead,
-- server decode/dispatch overhead.
+- server encode/decode/dispatch overhead,
+- frames and bytes in/out,
+- request count and item count,
+- cursor count,
+- error and cancellation totals.
 
-## 16. Open Questions
+Native-wire benchmark PRs MUST update `cmd/unified_bench` labels and tests before
+publishing native-wire results. Native-wire TCP and in-process results MUST NOT
+be reported under `native-fastpath`.
+
+The native server SHOULD expose stable `treedb.native_wire.*` stats through the
+same stats path consumed by `unified-bench` and `benchprof`. Minimum counters are
+connections opened/closed, frames in/out, bytes in/out, malformed frames,
+requests started/completed/failed/canceled/timed out, in-flight requests, open
+cursors, cursor closes/timeouts, per-command request/error counts, and
+encode/decode/dispatch nanoseconds.
+
+## 17. Open Questions
 
 1. Whether v1 should support raw ordered-KV commands alongside collection
    commands, or keep raw-KV access as a later capability.

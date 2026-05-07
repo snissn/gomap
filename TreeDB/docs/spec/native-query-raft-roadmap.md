@@ -5,7 +5,8 @@ Status: draft proposal, non-normative.
 This document defines the proposed query feature roadmap for the TreeDB native
 protocol and explains when Raft/distributed execution should enter the stack.
 It assumes the native wire protocol described in
-`TreeDB/docs/spec/native-wire-protocol.md`.
+`TreeDB/docs/spec/native-wire-protocol.md` and the implementation discipline in
+`TreeDB/docs/spec/native-wire-implementation-guidelines.md`.
 
 ## 1. Recommendation
 
@@ -40,7 +41,7 @@ system should replicate boring, deterministic metadata and mutation commands.
 
 ## 3. Implementation Order
 
-### R0. Protocol Spec and Codecs
+### R0. Protocol Spec, Registry, and Codecs
 
 Define:
 
@@ -48,18 +49,32 @@ Define:
 - body sections,
 - command IDs,
 - command versions,
+- schema registry and drift-test policy,
 - error model,
 - byte-vector encoding,
 - typed scalar encoding,
 - ack and consistency policies,
 - deterministic command-entry envelope.
 
+Suggested slices:
+
+- R0a: protocol constants, schema registry, and golden byte fixtures,
+- R0b: frame/section codec, fuzzing, and malformed-frame tests,
+- R0c: deterministic-entry encoder for the mutation allowlist.
+
 Acceptance:
 
+- versioned schema registry for frame, section, command, feature, policy, and
+  error-code allocations,
+- generated Go constants or drift tests proving constants match the registry,
 - codec package with golden byte fixtures,
-- fuzz tests for frame/section decoding,
-- unknown-section compatibility tests,
-- max-frame and malformed-frame tests.
+- schema-validator tests for required, optional, repeated, ordered, and
+  deterministic sections,
+- feature-negotiation rejection tests,
+- unknown-section and unknown-flag compatibility tests,
+- fuzz tests for frame, section, byte-vector, and command decoding,
+- deterministic-entry canonicalization and rejection tests,
+- max-frame, malformed-frame, and bounded-allocation tests.
 
 ### R1. Single-Node Native Server MVP
 
@@ -80,6 +95,16 @@ Implement the native server for:
 - `checkpoint`,
 - `stats`.
 
+Suggested slices:
+
+- R1a: server lifecycle, `hello`/`hello_ok`, `ping`/`pong`, `goaway`, and
+  `stats`,
+- R1b: collection metadata commands and connection-local handles,
+- R1c: read commands and pull-cursor lifecycle,
+- R1d: mutation commands with ack-policy handling,
+- R1e: TCP, Unix socket, and in-process benchmark transports over the same
+  dispatch path.
+
 Acceptance:
 
 - parity tests against direct `TreeDB/collections` calls,
@@ -99,10 +124,15 @@ Implement a canonical command-entry encoder for mutating commands:
 
 Acceptance:
 
+- golden canonical-entry byte fixtures for every replicated command version,
 - deterministic encoding tests,
 - cross-process/cross-map-order stability tests,
 - idempotency-key tests,
-- rejection tests for non-deterministic sections.
+- same logical mutation encoded from shuffled sections, different request IDs,
+  deadlines, compression choices, and trace metadata produces the same canonical
+  entry digest,
+- rejection tests for non-deterministic sections, duplicate singleton sections,
+  unsupported command versions, local handles, and missing guards.
 
 ### R3. Raft MVP for Writes
 
@@ -129,8 +159,19 @@ Acceptance:
 - leader writes commit and apply on followers,
 - duplicate client requests are deduplicated by `client_id + sequence` or a
   stable idempotency key,
+- duplicate idempotency identity with the same digest returns the original
+  outcome,
+- duplicate idempotency identity with a different digest fails deterministically,
+- catalog guard races commit in one log order and replay to the same success or
+  guard-failure results on every replica,
 - failed leadership changes do not double-apply mutations,
-- restart tests preserve Raft log, stable metadata, and applied collection state.
+- restart tests preserve Raft log, stable metadata, and applied collection state,
+- the same committed entry sequence applied to fresh DBs in separate processes
+  produces the same logical state digest,
+- snapshot restore plus log-tail replay produces the same logical state digest
+  as full log replay,
+- mixed-version clusters refuse to advertise or append command versions that any
+  voting replica cannot decode and apply.
 
 ### R4. Read Consistency Modes
 
