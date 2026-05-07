@@ -64,7 +64,13 @@ func AppendDeterministicEntryWithLimits(dst []byte, cmd ValidatedCommand, limits
 	if err := validateDeterministicCommand(cmd.Header.ID, deterministic); err != nil {
 		return nil, err
 	}
+	for _, section := range deterministic {
+		if uint64(len(section.Bytes)) > limits.MaxSectionLen {
+			return nil, protocolError(ErrResourceExhausted, "deterministic entry section %d length %d exceeds limit %d", section.ID, len(section.Bytes), limits.MaxSectionLen)
+		}
+	}
 
+	start := len(dst)
 	dst = append(dst, DeterministicEntryMagic...)
 	dst = appendUvarint(dst, DeterministicEntryVersion)
 	dst = appendUvarint(dst, uint64(cmd.Header.ID))
@@ -75,6 +81,9 @@ func AppendDeterministicEntryWithLimits(dst []byte, cmd ValidatedCommand, limits
 		dst = appendUvarint(dst, uint64(section.ID))
 		dst = appendUvarint(dst, uint64(len(section.Bytes)))
 		dst = append(dst, section.Bytes...)
+	}
+	if uint64(len(dst)-start) > limits.MaxFrameSize {
+		return dst[:start], protocolError(ErrResourceExhausted, "deterministic entry length %d exceeds limit %d", len(dst)-start, limits.MaxFrameSize)
 	}
 	return dst, nil
 }
