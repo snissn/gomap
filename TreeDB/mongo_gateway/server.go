@@ -340,12 +340,7 @@ func (s *Server) appendOneWithOwner(rw io.Reader, cursorOwner int64, readBuf, wr
 	if response == nil {
 		return readBuf, writeBuf, nil
 	}
-	if cap(response) <= maxRetainedWireWriteBuffer {
-		writeBuf = response
-	} else {
-		writeBuf = response
-	}
-	return readBuf, writeBuf, nil
+	return readBuf, response, nil
 }
 
 func (s *Server) appendBufferedMessageWithOwner(reader *bufio.Reader, cursorOwner int64, writeBuf []byte) ([]byte, bool, error) {
