@@ -146,7 +146,11 @@ func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *Determinis
 		if sectionLen > uint64(len(src)-off) {
 			return DeterministicEntry{}, protocolError(ErrMalformedFrame, "deterministic entry section %d length %d exceeds remaining %d", sectionID, sectionLen, len(src)-off)
 		}
-		sections[i] = Section{ID: sectionID, Bytes: src[off : off+int(sectionLen)]}
+		section := Section{ID: sectionID, Bytes: src[off : off+int(sectionLen)]}
+		if err := validateDeterministicSectionPayload(section); err != nil {
+			return DeterministicEntry{}, err
+		}
+		sections[i] = section
 		off += int(sectionLen)
 	}
 	if off != len(src) {
@@ -170,6 +174,9 @@ func deterministicEntrySectionsBuffer(count int, scratch *DeterministicEntryScra
 	}
 	if cap(scratch.Sections) < count {
 		scratch.Sections = make([]Section, count)
+	}
+	if len(scratch.Sections) > count {
+		clear(scratch.Sections[count:])
 	}
 	return scratch.Sections[:count]
 }
