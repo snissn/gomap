@@ -11678,6 +11678,32 @@ func TestCollectionFindByIndexRangeTypedInt64(t *testing.T) {
 	}
 }
 
+func requireJSONFieldValue(t *testing.T, document []byte, field string, want any) {
+	t.Helper()
+	var decoded map[string]any
+	if err := json.Unmarshal(document, &decoded); err != nil {
+		t.Fatalf("decode document %s: %v", document, err)
+	}
+	got, ok := decoded[field]
+	if !ok {
+		t.Fatalf("document %s missing field %q", document, field)
+	}
+	switch want := want.(type) {
+	case string:
+		gotString, ok := got.(string)
+		if !ok || gotString != want {
+			t.Fatalf("document %s field %q=%v want %q", document, field, got, want)
+		}
+	case int64:
+		gotFloat, ok := got.(float64)
+		if !ok || int64(gotFloat) != want || gotFloat != float64(want) {
+			t.Fatalf("document %s field %q=%v want %d", document, field, got, want)
+		}
+	default:
+		t.Fatalf("unsupported expected JSON field type %T", want)
+	}
+}
+
 func TestCollectionFindDocumentsByIndexRangeTypedInt64(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -11718,9 +11744,10 @@ func TestCollectionFindDocumentsByIndexRangeTypedInt64(t *testing.T) {
 	if !truncated || len(records) != 1 {
 		t.Fatalf("records len=%d truncated=%v want 1,true", len(records), truncated)
 	}
-	if !bytes.Equal(records[0].ID, []byte("u2")) || !bytes.Contains(records[0].Document, []byte(`"name":"zero"`)) {
-		t.Fatalf("record=%q/%s want u2 zero", records[0].ID, records[0].Document)
+	if !bytes.Equal(records[0].ID, []byte("u2")) {
+		t.Fatalf("record id=%q want u2", records[0].ID)
 	}
+	requireJSONFieldValue(t, records[0].Document, "name", "zero")
 
 	records, truncated, err = col.FindDocumentsByIndexRange("score", IndexRangeOptions{
 		Lower: IndexRangeBound{Value: int64(100), Inclusive: true},
@@ -11793,12 +11820,14 @@ func TestCollectionFindDocumentsByIndexRangeUsesBufferedPrimaryView(t *testing.T
 	if truncated || len(records) != 2 {
 		t.Fatalf("records len=%d truncated=%v want 2,false", len(records), truncated)
 	}
-	if !bytes.Equal(records[0].ID, []byte("u1")) || !bytes.Contains(records[0].Document, []byte(`"score":7`)) {
-		t.Fatalf("first record=%q/%s want buffered indexed score update", records[0].ID, records[0].Document)
+	if !bytes.Equal(records[0].ID, []byte("u1")) {
+		t.Fatalf("first record id=%q want u1", records[0].ID)
 	}
-	if !bytes.Equal(records[1].ID, []byte("u2")) || !bytes.Contains(records[1].Document, []byte(`"name":"fresh-primary"`)) {
-		t.Fatalf("second record=%q/%s want buffered primary update", records[1].ID, records[1].Document)
+	requireJSONFieldValue(t, records[0].Document, "score", int64(7))
+	if !bytes.Equal(records[1].ID, []byte("u2")) {
+		t.Fatalf("second record id=%q want u2", records[1].ID)
 	}
+	requireJSONFieldValue(t, records[1].Document, "name", "fresh-primary")
 }
 
 func TestCollectionFindByIndexRangeDedupesPersistedOnlyMultiKeyRange(t *testing.T) {
