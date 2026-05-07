@@ -727,21 +727,26 @@ post-handshake versions are connection-fatal. The server MAY send `goaway` or an
 
 ## 14. Deterministic Command Entry v1
 
-Future Raft log entries SHOULD use a deterministic command-entry envelope:
+Future Raft log entries SHOULD use a deterministic command-entry envelope. R2
+implements the v1 envelope encoder/decoder in
+`TreeDB/internal/nativewire.AppendDeterministicEntry` and
+`TreeDB/internal/nativewire.DecodeDeterministicEntry`.
 
 ```text
-entry_magic = "TDC1"
-entry_version
-command_id
-command_version
-client_id optional
-client_sequence optional
-deterministic_sections
+entry_magic[4] = "TDC1"
+entry_version = uvarint(1)
+command_id = uvarint
+command_version = uvarint
+command_flags = uvarint
+section_count = uvarint
+repeat section_count:
+  section_id = uvarint
+  section_len = uvarint
+  section_payload[section_len]
 ```
 
 Deterministic entries MUST use one canonical encoding:
 
-- little-endian fixed-width integers,
 - minimal unsigned base-128 varints for variable integers,
 - sections sorted by `section_id`,
 - command-defined ordering for repeated sections,
@@ -749,6 +754,10 @@ Deterministic entries MUST use one canonical encoding:
 - exact bytes for document IDs, document payloads, template records, and scalar
   query values,
 - no map iteration order.
+
+The v1 envelope itself carries only deterministic command flags. Response
+shaping flags such as omitted result IDs or omitted response metadata are
+stripped before entry encoding because they do not change logical state.
 
 Unknown, ignored, transport-only, or non-critical convenience sections MUST NOT
 be copied into the deterministic entry. Optional fields MUST either be omitted

@@ -11,6 +11,20 @@ const (
 	DeterministicEntryVersion = uint64(1)
 )
 
+type DeterministicEntry struct {
+	Version        uint64
+	CommandID      CommandID
+	CommandVersion uint64
+	CommandFlags   uint64
+	Sections       []Section
+}
+
+// DeterministicEntryScratch carries reusable buffers for
+// DecodeDeterministicEntryInto.
+type DeterministicEntryScratch struct {
+	Sections []Section
+}
+
 func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) {
 	if cmd.Schema == nil {
 		return nil, protocolError(ErrInvalidCommand, "missing command schema")
@@ -48,6 +62,117 @@ func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) 
 		dst = append(dst, section.Bytes...)
 	}
 	return dst, nil
+}
+
+func DecodeDeterministicEntry(src []byte, limits Limits) (DeterministicEntry, error) {
+	return DecodeDeterministicEntryInto(src, limits, nil)
+}
+
+// DecodeDeterministicEntryInto decodes a deterministic command-entry envelope.
+//
+// The returned section payloads borrow from src and the section slice may borrow
+// from scratch. Callers that need to retain the entry after reusing src or
+// scratch must copy it.
+func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *DeterministicEntryScratch) (DeterministicEntry, error) {
+	limits = limits.withDefaults()
+	if len(src) < len(DeterministicEntryMagic) ||
+		src[0] != DeterministicEntryMagic[0] ||
+		src[1] != DeterministicEntryMagic[1] ||
+		src[2] != DeterministicEntryMagic[2] ||
+		src[3] != DeterministicEntryMagic[3] {
+		return DeterministicEntry{}, protocolError(ErrMalformedFrame, "bad deterministic entry magic")
+	}
+	off := len(DeterministicEntryMagic)
+	version, err := readEntryUvarint(src, &off, "entry_version")
+	if err != nil {
+		return DeterministicEntry{}, err
+	}
+	if version != DeterministicEntryVersion {
+		return DeterministicEntry{}, protocolError(ErrUnsupportedVersion, "deterministic entry version %d", version)
+	}
+	commandID, err := readEntryUvarint(src, &off, "command_id")
+	if err != nil {
+		return DeterministicEntry{}, err
+	}
+	commandVersion, err := readEntryUvarint(src, &off, "command_version")
+	if err != nil {
+		return DeterministicEntry{}, err
+	}
+	commandFlags, err := readEntryUvarint(src, &off, "command_flags")
+	if err != nil {
+		return DeterministicEntry{}, err
+	}
+	sectionCount64, err := readEntryUvarint(src, &off, "section_count")
+	if err != nil {
+		return DeterministicEntry{}, err
+	}
+	if sectionCount64 > uint64(limits.MaxSections) {
+		return DeterministicEntry{}, protocolError(ErrResourceExhausted, "deterministic entry section count %d exceeds limit %d", sectionCount64, limits.MaxSections)
+	}
+	if sectionCount64 > uint64(maxInt) {
+		return DeterministicEntry{}, protocolError(ErrResourceExhausted, "deterministic entry section count exceeds int capacity")
+	}
+	sectionCount := int(sectionCount64)
+	sections := deterministicEntrySectionsBuffer(sectionCount, scratch)
+	var previous SectionID
+	for i := 0; i < sectionCount; i++ {
+		id, err := readEntryUvarint(src, &off, "section_id")
+		if err != nil {
+			return DeterministicEntry{}, err
+		}
+		sectionID := SectionID(id)
+		if i > 0 && sectionID < previous {
+			return DeterministicEntry{}, protocolError(ErrMalformedFrame, "deterministic entry sections are not sorted")
+		}
+		previous = sectionID
+		sectionLen, err := readEntryUvarint(src, &off, "section_length")
+		if err != nil {
+			return DeterministicEntry{}, err
+		}
+		if sectionLen > limits.MaxSectionLen {
+			return DeterministicEntry{}, protocolError(ErrResourceExhausted, "deterministic entry section %d length %d exceeds limit %d", sectionID, sectionLen, limits.MaxSectionLen)
+		}
+		if sectionLen > uint64(len(src)-off) {
+			return DeterministicEntry{}, protocolError(ErrMalformedFrame, "deterministic entry section %d length %d exceeds remaining %d", sectionID, sectionLen, len(src)-off)
+		}
+		sections[i] = Section{ID: sectionID, Bytes: src[off : off+int(sectionLen)]}
+		off += int(sectionLen)
+	}
+	if off != len(src) {
+		return DeterministicEntry{}, protocolError(ErrMalformedFrame, "deterministic entry has %d trailing bytes", len(src)-off)
+	}
+	if scratch != nil {
+		scratch.Sections = sections
+	}
+	return DeterministicEntry{
+		Version:        version,
+		CommandID:      CommandID(commandID),
+		CommandVersion: commandVersion,
+		CommandFlags:   commandFlags,
+		Sections:       sections,
+	}, nil
+}
+
+func deterministicEntrySectionsBuffer(count int, scratch *DeterministicEntryScratch) []Section {
+	if scratch == nil {
+		return make([]Section, count)
+	}
+	if cap(scratch.Sections) < count {
+		scratch.Sections = make([]Section, count)
+	}
+	return scratch.Sections[:count]
+}
+
+func readEntryUvarint(src []byte, off *int, field string) (uint64, error) {
+	if off == nil || *off > len(src) {
+		return 0, protocolError(ErrMalformedFrame, "invalid deterministic entry offset for %s", field)
+	}
+	value, n, err := readUvarint(src[*off:])
+	if err != nil {
+		return 0, err
+	}
+	*off += n
+	return value, nil
 }
 
 func (cmd ValidatedCommand) hasSection(id SectionID) bool {

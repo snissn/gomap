@@ -55,6 +55,91 @@ func TestDeterministicEntryGoldenAndTransportIndependence(t *testing.T) {
 	}
 }
 
+func TestDecodeDeterministicEntryGolden(t *testing.T) {
+	registry := MustV1Registry()
+	cmd, err := registry.ValidateRequestSections(insertBatchDeterministicSections())
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	entryBytes, err := AppendDeterministicEntry(nil, cmd)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry: %v", err)
+	}
+	var scratch DeterministicEntryScratch
+	entry, err := DecodeDeterministicEntryInto(entryBytes, Limits{}, &scratch)
+	if err != nil {
+		t.Fatalf("DecodeDeterministicEntryInto: %v", err)
+	}
+	if entry.Version != DeterministicEntryVersion || entry.CommandID != CommandInsertBatch || entry.CommandVersion != 1 || entry.CommandFlags != 0 {
+		t.Fatalf("decoded entry header=%+v", entry)
+	}
+	if len(entry.Sections) != 6 || len(scratch.Sections) != 6 {
+		t.Fatalf("decoded sections=%d scratch=%d want 6", len(entry.Sections), len(scratch.Sections))
+	}
+	wantIDs := []SectionID{
+		SectionIdempotencyKey,
+		SectionCollectionRef,
+		SectionDocumentFormat,
+		SectionDocumentIDs,
+		SectionDocuments,
+		SectionExpectedCatalogVersion,
+	}
+	for i, want := range wantIDs {
+		if entry.Sections[i].ID != want {
+			t.Fatalf("section %d id=%d want %d", i, entry.Sections[i].ID, want)
+		}
+	}
+}
+
+func TestDecodeDeterministicEntryRejectsMalformedEnvelope(t *testing.T) {
+	registry := MustV1Registry()
+	cmd, err := registry.ValidateRequestSections(insertBatchDeterministicSections())
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	entry, err := AppendDeterministicEntry(nil, cmd)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		raw  []byte
+		code ErrorCode
+	}{
+		{name: "bad_magic", raw: []byte("bad"), code: ErrMalformedFrame},
+		{name: "unsupported_version", raw: append([]byte("TDC1"), 2), code: ErrUnsupportedVersion},
+		{name: "trailing", raw: append(append([]byte(nil), entry...), 0), code: ErrMalformedFrame},
+		{name: "truncated_section", raw: append(append([]byte(nil), entry[:len(entry)-1]...)), code: ErrMalformedFrame},
+		{name: "section_count_limit", raw: append([]byte("TDC1"), 1, byte(CommandInsertBatch), 1, 0, 2), code: ErrResourceExhausted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			limits := Limits{}
+			if tc.name == "section_count_limit" {
+				limits.MaxSections = 1
+			}
+			if _, err := DecodeDeterministicEntry(tc.raw, limits); codeOf(err) != tc.code {
+				t.Fatalf("DecodeDeterministicEntry err=%v code=%d want %d", err, codeOf(err), tc.code)
+			}
+		})
+	}
+}
+
+func TestDecodeDeterministicEntryRejectsUnsortedSections(t *testing.T) {
+	raw := []byte("TDC1")
+	raw = appendUvarint(raw, DeterministicEntryVersion)
+	raw = appendUvarint(raw, uint64(CommandInsertBatch))
+	raw = appendUvarint(raw, 1)
+	raw = appendUvarint(raw, 0)
+	raw = appendUvarint(raw, 2)
+	raw = appendUvarint(raw, uint64(SectionDocuments))
+	raw = appendUvarint(raw, 0)
+	raw = appendUvarint(raw, uint64(SectionDocumentIDs))
+	raw = appendUvarint(raw, 0)
+	if _, err := DecodeDeterministicEntry(raw, Limits{}); codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("DecodeDeterministicEntry err=%v code=%d want malformed", err, codeOf(err))
+	}
+}
+
 func TestDeterministicEntryRejectsMissingDistributedGuards(t *testing.T) {
 	registry := MustV1Registry()
 
