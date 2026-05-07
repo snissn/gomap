@@ -2045,12 +2045,24 @@ func validateNativeWireBenchmarkCollection(actual, expected collections.Collecti
 	if len(actual.Indexes) != len(expected.Indexes) {
 		return fmt.Errorf("native-wire benchmark collection %q index count %d want %d", actual.Name, len(actual.Indexes), len(expected.Indexes))
 	}
-	for i := range expected.Indexes {
-		if actual.Indexes[i] != expected.Indexes[i] {
-			return fmt.Errorf("native-wire benchmark collection %q index %d drifted: got %+v want %+v", actual.Name, i, actual.Indexes[i], expected.Indexes[i])
+	actualIndexes := append([]collections.IndexDefinition(nil), actual.Indexes...)
+	expectedIndexes := append([]collections.IndexDefinition(nil), expected.Indexes...)
+	sort.Slice(actualIndexes, func(i, j int) bool {
+		return nativeWireBenchmarkIndexSortKey(actualIndexes[i]) < nativeWireBenchmarkIndexSortKey(actualIndexes[j])
+	})
+	sort.Slice(expectedIndexes, func(i, j int) bool {
+		return nativeWireBenchmarkIndexSortKey(expectedIndexes[i]) < nativeWireBenchmarkIndexSortKey(expectedIndexes[j])
+	})
+	for i := range expectedIndexes {
+		if actualIndexes[i] != expectedIndexes[i] {
+			return fmt.Errorf("native-wire benchmark collection %q index %d drifted: got %+v want %+v", actual.Name, i, actualIndexes[i], expectedIndexes[i])
 		}
 	}
 	return nil
+}
+
+func nativeWireBenchmarkIndexSortKey(index collections.IndexDefinition) string {
+	return fmt.Sprintf("%s\x00%s\x00%s\x00%t\x00%t\x00%s", index.Name, index.Field, index.ValueType, index.Unique, index.MultiKey, index.StoragePolicy)
 }
 
 func nativeWireInsertBatch(cfg config, start, end int, prebuilt []bson.D, prebuiltRaw []bson.Raw) ([][]byte, [][]byte, error) {
