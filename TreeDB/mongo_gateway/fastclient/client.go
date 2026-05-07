@@ -125,6 +125,9 @@ func (c *Client) FindRawBSONBorrowed(ctx context.Context, command bson.Raw, fn f
 	if len(command) == 0 {
 		return errors.New("find raw bson borrowed requires a command document")
 	}
+	if _, ok := command.Lookup("find").StringValueOK(); !ok {
+		return errors.New("FindRawBSONBorrowed requires a find command document")
+	}
 	msg, err := wire.AppendMsgMessage(nil, c.nextRequestID.Add(1), 0, 0, wire.Document(command))
 	if err != nil {
 		return err

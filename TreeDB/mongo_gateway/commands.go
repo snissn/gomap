@@ -1598,6 +1598,7 @@ func marshalIndexedRangeCursorMsgInto(dst []byte, requestID, responseTo int32, s
 
 func collectIndexedRangeCursorDocs(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, indexName string, opts collections.IndexRangeOptions, builder *rawCursorDocumentBuilder, singleBatch bool) ([]wire.Document, error) {
 	var retainedDocs []wire.Document
+	retainOnly := false
 	_, err := col.ScanBorrowedDocumentsByIndexRange(indexName, opts, func(record collections.BorrowedDocumentRecord) (bool, error) {
 		if len(record.Document) == 0 {
 			return true, nil
@@ -1606,6 +1607,10 @@ func collectIndexedRangeCursorDocs(col *collections.Collection, materializer *co
 		if err != nil {
 			return false, err
 		}
+		if retainOnly {
+			retainedDocs = append(retainedDocs, append(wire.Document(nil), doc...))
+			return true, nil
+		}
 		appended, err := builder.appendDocument(doc)
 		if err != nil || appended {
 			return appended, err
@@ -1613,6 +1618,7 @@ func collectIndexedRangeCursorDocs(col *collections.Collection, materializer *co
 		if singleBatch {
 			return false, nil
 		}
+		retainOnly = true
 		retainedDocs = append(retainedDocs, append(wire.Document(nil), doc...))
 		return true, nil
 	})
