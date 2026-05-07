@@ -2948,10 +2948,15 @@ func runTreeDBRawWireTCPRangeOperation(ctx context.Context, cfg config, client *
 		return err
 	}
 	begin := time.Now()
+	sampled := false
 	err = client.FindRawBSONBorrowed(ctx, commandDoc, func(batch []bson.Raw) error {
+		sample(time.Since(begin))
+		sampled = true
 		return validateRawAgeBatch(batch, minAge)
 	})
-	sample(time.Since(begin))
+	if !sampled {
+		sample(time.Since(begin))
+	}
 	return err
 }
 

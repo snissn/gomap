@@ -515,10 +515,9 @@ type DocumentRecord struct {
 	Document []byte
 }
 
-// borrowedDocumentRecord is one primary collection record borrowed during an
-// internal callback scan. ID and Document are valid only until the callback
-// returns.
-type borrowedDocumentRecord struct {
+// BorrowedDocumentRecord is one primary collection record borrowed during a
+// callback scan. ID and Document are valid only until the callback returns.
+type BorrowedDocumentRecord struct {
 	ID       []byte
 	Document []byte
 }
@@ -11436,7 +11435,7 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 		capHint = opts.Limit
 	}
 	var out []DocumentRecord
-	truncated, found, err := c.scanDocumentsByIndexRange(indexName, opts, func(record borrowedDocumentRecord) (bool, error) {
+	truncated, found, err := c.scanDocumentsByIndexRange(indexName, opts, func(record BorrowedDocumentRecord) (bool, error) {
 		if out == nil {
 			out = make([]DocumentRecord, 0, capHint)
 		}
@@ -11458,7 +11457,21 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 	return out, truncated, nil
 }
 
-func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRangeOptions, fn func(borrowedDocumentRecord) (bool, error)) (bool, bool, error) {
+// ScanBorrowedDocumentsByIndexRange calls fn with primary documents whose named
+// secondary index falls inside opts, preserving index order. This is a
+// performance-oriented internal integration API for the Mongo gateway: record
+// slices are borrowed, and fn runs while the collection write-domain read lock
+// may be held. The callback must not retain slices, call back into Collection,
+// or perform blocking work. General callers should use FindDocumentsByIndexRange.
+func (c *Collection) ScanBorrowedDocumentsByIndexRange(indexName string, opts IndexRangeOptions, fn func(BorrowedDocumentRecord) (bool, error)) (bool, error) {
+	if fn == nil {
+		return false, errors.New("collections: nil borrowed index document range callback")
+	}
+	truncated, _, err := c.scanDocumentsByIndexRange(indexName, opts, fn)
+	return truncated, err
+}
+
+func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRangeOptions, fn func(BorrowedDocumentRecord) (bool, error)) (bool, bool, error) {
 	if c == nil {
 		return false, false, errCollectionNil
 	}
@@ -11563,7 +11576,7 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 			return true, nil
 		}
 		scratch = value
-		return fn(borrowedDocumentRecord{
+		return fn(BorrowedDocumentRecord{
 			ID:       id,
 			Document: value,
 		})
