@@ -11509,6 +11509,17 @@ func TestCollectionFindByMissingIndexReturnsNil(t *testing.T) {
 	if ids != nil || truncated {
 		t.Fatalf("missing index range ids=%q truncated=%v want nil/false", ids, truncated)
 	}
+	records, truncated, err := col.FindDocumentsByIndexRange("missing", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: "hnl", Inclusive: true},
+		Upper: IndexRangeBound{Value: "hnl", Inclusive: true},
+		Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("find documents missing index range: %v", err)
+	}
+	if records != nil || truncated {
+		t.Fatalf("missing index document range records=%v truncated=%v want nil/false", records, truncated)
+	}
 }
 
 func TestCollectionFindByIndexValueMatchesLargeJSONInteger(t *testing.T) {
