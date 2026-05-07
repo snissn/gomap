@@ -65,8 +65,18 @@ func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, d
 	if err := s.checkResponseSectionLen("documents", docSectionLen); err != nil {
 		return nil, err
 	}
-	bodyLen := iwire.SectionHeaderEncodedLen(iwire.SectionPresenceBitmap, 0, len(presence)) + len(presence)
-	bodyLen += iwire.SectionHeaderEncodedLen(iwire.SectionDocuments, 0, docSectionLen) + docSectionLen
+	presenceBodyLen, err := responseSectionBodyLen(iwire.SectionPresenceBitmap, len(presence))
+	if err != nil {
+		return nil, err
+	}
+	docBodyLen, err := responseSectionBodyLen(iwire.SectionDocuments, docSectionLen)
+	if err != nil {
+		return nil, err
+	}
+	bodyLen := presenceBodyLen + docBodyLen
+	if bodyLen < presenceBodyLen {
+		return nil, protocolError(iwire.ErrResourceExhausted, "response body length overflow")
+	}
 	if err := s.checkResponseBodyLen(bodyLen); err != nil {
 		return nil, err
 	}
@@ -92,11 +102,19 @@ func (s *Server) checkResponseSectionLen(name string, sectionLen int) error {
 	return nil
 }
 
-func (s *Server) checkResponseBodyLen(bodyLen int) error {
-	if bodyLen < 0 {
-		return protocolError(iwire.ErrMalformedFrame, "response body length is negative")
+func responseSectionBodyLen(id iwire.SectionID, sectionLen int) (uint64, error) {
+	if sectionLen < 0 {
+		return 0, protocolError(iwire.ErrMalformedFrame, "response section length is negative")
 	}
-	frameLen := uint64(iwire.FrameHeaderLenV1) + uint64(bodyLen)
+	headerLen := iwire.SectionHeaderEncodedLen(id, 0, sectionLen)
+	return uint64(headerLen) + uint64(sectionLen), nil
+}
+
+func (s *Server) checkResponseBodyLen(bodyLen uint64) error {
+	frameLen := uint64(iwire.FrameHeaderLenV1) + bodyLen
+	if frameLen < bodyLen {
+		return protocolError(iwire.ErrResourceExhausted, "response frame length overflow")
+	}
 	if frameLen > s.limits.MaxFrameSize {
 		return protocolError(iwire.ErrResourceExhausted, "response frame length %d exceeds limit %d", frameLen, s.limits.MaxFrameSize)
 	}
