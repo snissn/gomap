@@ -2198,7 +2198,7 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 
 	limitedAgeRangeFind := serveCommand(t, server, 234041, bson.D{
 		{Key: "find", Value: "users"},
-		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(37)}}}}},
+		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(36)}}}}},
 		{Key: "limit", Value: int32(2)},
 		{Key: "batchSize", Value: int32(2)},
 		{Key: "$db", Value: "app"},
@@ -2211,11 +2211,11 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 	if cursorID := cursorIDFromResponse(t, limitedAgeRangeFind); cursorID != 0 {
 		t.Fatalf("limited indexed age range cursor id=%d want 0", cursorID)
 	}
-	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "ada" {
-		t.Fatalf("limited indexed age range first name=%q ok=%v want ada", got, ok)
+	if got, ok := firstBatch[0].Lookup("name").StringValueOK(); !ok || got != "katherine" {
+		t.Fatalf("limited indexed age range first name=%q ok=%v want katherine", got, ok)
 	}
-	if got, ok := firstBatch[1].Lookup("name").StringValueOK(); !ok || got != "grace" {
-		t.Fatalf("limited indexed age range second name=%q ok=%v want grace", got, ok)
+	if got, ok := firstBatch[1].Lookup("name").StringValueOK(); !ok || got != "ada" {
+		t.Fatalf("limited indexed age range second name=%q ok=%v want ada", got, ok)
 	}
 
 	wrongTypeIndexedFind := serveCommand(t, server, 2341, bson.D{

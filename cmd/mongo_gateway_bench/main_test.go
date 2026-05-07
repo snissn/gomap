@@ -780,6 +780,9 @@ func TestParseConfigValidation(t *testing.T) {
 	if _, err := parseConfig([]string{"-treedb-read-state", "bad"}); err == nil {
 		t.Fatal("bad treedb-read-state accepted")
 	}
+	if _, err := parseConfig([]string{"-target", "treedb", "-client-mode", "direct", "-treedb-read-state", "unsettled", "-range-reads", "1"}); err == nil {
+		t.Fatal("direct unsettled scan range reads accepted")
+	}
 	legacyFlushedCfg, err := parseConfig([]string{"-treedb-read-state", "flushed"})
 	if err != nil {
 		t.Fatalf("legacy flushed treedb-read-state rejected: %v", err)
@@ -1956,6 +1959,7 @@ func TestWriteResultSupportsGenericWriter(t *testing.T) {
 	if !bytes.Contains(out.Bytes(), []byte("concurrent_range_readers=4")) ||
 		!bytes.Contains(out.Bytes(), []byte("concurrent_range_reader_sweep=[1 4]")) ||
 		!bytes.Contains(out.Bytes(), []byte("concurrent_range_reads=8")) ||
+		!bytes.Contains(out.Bytes(), []byte("treedb_read_state=unsettled")) ||
 		!bytes.Contains(out.Bytes(), []byte("read_state=unsettled")) {
 		t.Fatalf("text output missing range/read-state metadata: %q", out.String())
 	}
