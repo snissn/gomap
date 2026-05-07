@@ -61,7 +61,7 @@ func AppendDeterministicEntryWithLimits(dst []byte, cmd ValidatedCommand, limits
 		return nil, err
 	}
 	sortSectionsByID(deterministic)
-	if err := validateDeterministicCommand(cmd, deterministic); err != nil {
+	if err := validateDeterministicCommand(cmd.Header.ID, deterministic); err != nil {
 		return nil, err
 	}
 
@@ -258,8 +258,8 @@ func (cmd ValidatedCommand) deterministicSectionsInto(dst []Section, limits Limi
 	return out, nil
 }
 
-func validateDeterministicCommand(cmd ValidatedCommand, deterministic []Section) error {
-	switch cmd.Header.ID {
+func validateDeterministicCommand(commandID CommandID, deterministic []Section) error {
+	switch commandID {
 	case CommandInsertBatch, CommandReplaceBatch:
 		idCount, err := deterministicByteVectorCount(deterministic, SectionDocumentIDs)
 		if err != nil {
@@ -328,11 +328,7 @@ func validateDecodedDeterministicEntry(commandID CommandID, commandVersion uint6
 			return nil, protocolError(ErrInvalidCommand, "missing deterministic section %d", rule.ID)
 		}
 	}
-	if err := validateDeterministicCommand(ValidatedCommand{
-		Header: CommandHeader{ID: commandID, Version: commandVersion},
-		Schema: schema,
-		Known:  sections,
-	}, sections); err != nil {
+	if err := validateDeterministicCommand(commandID, sections); err != nil {
 		return nil, err
 	}
 	return schema, nil
@@ -350,7 +346,6 @@ func sortSectionsByID(sections []Section) {
 }
 
 func validateDeterministicSectionPayload(section Section, limits Limits) error {
-	limits = limits.withDefaults()
 	switch section.ID {
 	case SectionIdempotencyKey:
 		return validateDeterministicOpaquePayload("idempotency_key", section.Bytes, limits)
