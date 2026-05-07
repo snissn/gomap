@@ -140,6 +140,76 @@ func TestDecodeDeterministicEntryRejectsUnsortedSections(t *testing.T) {
 	}
 }
 
+func TestDeterministicEntryReplicatedGoldenFixtures(t *testing.T) {
+	registry := MustV1Registry()
+	for _, tc := range deterministicEntryFixtureCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, err := registry.ValidateRequestSections(tc.sections)
+			if err != nil {
+				t.Fatalf("ValidateRequestSections: %v", err)
+			}
+			entry, err := AppendDeterministicEntry(nil, cmd)
+			if err != nil {
+				t.Fatalf("AppendDeterministicEntry: %v", err)
+			}
+			assertHexFixture(t, tc.fixture, entry)
+			if decoded, err := DecodeDeterministicEntry(entry, Limits{}); err != nil {
+				t.Fatalf("DecodeDeterministicEntry: %v", err)
+			} else if decoded.CommandID != tc.commandID || decoded.CommandVersion != 1 {
+				t.Fatalf("decoded header=%+v want command %d v1", decoded, tc.commandID)
+			}
+		})
+	}
+}
+
+func TestDeterministicEntryFixturesCoverReplicatedCommands(t *testing.T) {
+	covered := make(map[CommandID]string)
+	for _, tc := range deterministicEntryFixtureCases() {
+		covered[tc.commandID] = tc.name
+	}
+	for _, schema := range v1CommandSchemas() {
+		_, ok := covered[schema.ID]
+		if schema.Replicated && !schema.LocalOnly && !ok {
+			t.Fatalf("%s is replicated without deterministic-entry fixture", schema.Name)
+		}
+		if ok && (!schema.Replicated || schema.LocalOnly) {
+			t.Fatalf("%s has deterministic-entry fixture but is not replicated", schema.Name)
+		}
+	}
+}
+
+func TestDeterministicEntryRejectsLocalAndReadCommands(t *testing.T) {
+	registry := MustV1Registry()
+	for _, tc := range []struct {
+		name     string
+		sections []Section
+	}{
+		{
+			name: "stats",
+			sections: []Section{
+				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandStats, Version: 1})},
+			},
+		},
+		{
+			name: "flush_collection",
+			sections: []Section{
+				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandFlushCollection, Version: 1})},
+				{ID: SectionCollectionRef, Bytes: []byte("users")},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, err := registry.ValidateRequestSections(tc.sections)
+			if err != nil {
+				t.Fatalf("ValidateRequestSections: %v", err)
+			}
+			if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+				t.Fatalf("AppendDeterministicEntry err=%v code=%d want invalid command", err, codeOf(err))
+			}
+		})
+	}
+}
+
 func TestDeterministicEntryRejectsMissingDistributedGuards(t *testing.T) {
 	registry := MustV1Registry()
 
@@ -342,5 +412,85 @@ func insertBatchDeterministicSections() []Section {
 		{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
 		{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte("{}"))},
 		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+	}
+}
+
+type deterministicEntryFixtureCase struct {
+	name      string
+	commandID CommandID
+	fixture   string
+	sections  []Section
+}
+
+func deterministicEntryFixtureCases() []deterministicEntryFixtureCase {
+	return []deterministicEntryFixtureCase{
+		{
+			name:      "create_collection",
+			commandID: CommandCreateCollection,
+			fixture:   "create_collection_entry.hex",
+			sections: []Section{
+				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateCollection, Version: 1})},
+				{ID: SectionIdempotencyKey, Bytes: []byte("client-a:create:users")},
+				{ID: SectionCollectionMeta, Bytes: []byte("meta:users:v1")},
+				{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+			},
+		},
+		{
+			name:      "create_index",
+			commandID: CommandCreateIndex,
+			fixture:   "create_index_entry.hex",
+			sections: []Section{
+				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateIndex, Version: 1})},
+				{ID: SectionIdempotencyKey, Bytes: []byte("client-a:create-index:email")},
+				{ID: SectionCollectionRef, Bytes: []byte("users")},
+				{ID: SectionIndexDefinition, Bytes: []byte("index:email_1:email:string:unique")},
+				{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+			},
+		},
+		{
+			name:      "drop_index",
+			commandID: CommandDropIndex,
+			fixture:   "drop_index_entry.hex",
+			sections: []Section{
+				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandDropIndex, Version: 1})},
+				{ID: SectionIdempotencyKey, Bytes: []byte("client-a:drop-index:email")},
+				{ID: SectionCollectionRef, Bytes: []byte("users")},
+				{ID: SectionIndexName, Bytes: []byte("email_1")},
+				{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+			},
+		},
+		{
+			name:      "insert_batch",
+			commandID: CommandInsertBatch,
+			fixture:   "insert_batch_entry.hex",
+			sections:  insertBatchDeterministicSections(),
+		},
+		{
+			name:      "replace_batch",
+			commandID: CommandReplaceBatch,
+			fixture:   "replace_batch_entry.hex",
+			sections: []Section{
+				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandReplaceBatch, Version: 1})},
+				{ID: SectionIdempotencyKey, Bytes: []byte("client-a:replace:1")},
+				{ID: SectionCollectionRef, Bytes: []byte("c")},
+				{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
+				{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
+				{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte(`{"x":1}`))},
+				{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+				{ID: SectionReplacementMode, Bytes: []byte{1}},
+			},
+		},
+		{
+			name:      "delete_batch",
+			commandID: CommandDeleteBatch,
+			fixture:   "delete_batch_entry.hex",
+			sections: []Section{
+				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandDeleteBatch, Version: 1})},
+				{ID: SectionIdempotencyKey, Bytes: []byte("client-a:delete:1")},
+				{ID: SectionCollectionRef, Bytes: []byte("c")},
+				{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"), []byte("b"))},
+				{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+			},
+		},
 	}
 }
