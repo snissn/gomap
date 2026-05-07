@@ -2979,6 +2979,72 @@ func TestServerFindFirstBatchOverflowOpensCursor(t *testing.T) {
 	}
 }
 
+func TestServerFindIndexedRangeStreamingFirstBatchOverflowOpensCursor(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.MaxMessageLength = 6 * 1024
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	assertOK(t, serveCommand(t, server, 2521, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "name", Value: "age_1"},
+			{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}},
+			{Key: "treedbValueType", Value: "int64"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	largeValue := strings.Repeat("x", 1400)
+	assertOK(t, serveCommand(t, server, 2522, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "a"}, {Key: "age", Value: int64(37)}, {Key: "payload", Value: largeValue}},
+			bson.D{{Key: "_id", Value: "b"}, {Key: "age", Value: int64(42)}, {Key: "payload", Value: largeValue}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	findResponse := serveCommand(t, server, 2523, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(37)}}}}},
+		{Key: "limit", Value: int32(2)},
+		{Key: "batchSize", Value: int32(2)},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch := cursorFirstBatch(t, findResponse)
+	if len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	if got, ok := firstBatch[0].Lookup("_id").StringValueOK(); !ok || got != "a" {
+		t.Fatalf("firstBatch _id=%q ok=%v want a", got, ok)
+	}
+	cursorID := cursorIDFromResponse(t, findResponse)
+	if cursorID == 0 {
+		t.Fatal("cursor id=0 want open cursor")
+	}
+	getMoreResponse := serveCommand(t, server, 2524, bson.D{
+		{Key: "getMore", Value: cursorID},
+		{Key: "collection", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	nextBatch := cursorNextBatch(t, getMoreResponse)
+	if len(nextBatch) != 1 {
+		t.Fatalf("nextBatch len=%d want 1", len(nextBatch))
+	}
+	if got, ok := nextBatch[0].Lookup("_id").StringValueOK(); !ok || got != "b" {
+		t.Fatalf("nextBatch _id=%q ok=%v want b", got, ok)
+	}
+	if nextID := cursorIDFromResponse(t, getMoreResponse); nextID != 0 {
+		t.Fatalf("cursor id after getMore=%d want 0", nextID)
+	}
+}
+
 func TestServerGetMoreDropsCursorOnOversizedNextDocument(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
