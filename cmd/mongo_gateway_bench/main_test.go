@@ -645,6 +645,13 @@ func TestParseConfigValidation(t *testing.T) {
 	if commandCfg.ClientMode != clientModeDriverCommand {
 		t.Fatalf("ClientMode=%q want %q", commandCfg.ClientMode, clientModeDriverCommand)
 	}
+	findRawCfg, err := parseConfig([]string{"-target", "mongo", "-client-mode", "driver-find-raw"})
+	if err != nil {
+		t.Fatalf("parse driver-find-raw config: %v", err)
+	}
+	if findRawCfg.ClientMode != clientModeDriverFindRaw {
+		t.Fatalf("ClientMode=%q want %q", findRawCfg.ClientMode, clientModeDriverFindRaw)
+	}
 	commandRawCfg, err := parseConfig([]string{"-target", "mongo", "-client-mode", "driver-command-raw"})
 	if err != nil {
 		t.Fatalf("parse driver-command-raw config: %v", err)
@@ -1290,7 +1297,7 @@ func TestTreeDBClientModeSmoke(t *testing.T) {
 	if testing.Short() {
 		t.Skip("client mode smoke benchmark skipped in short mode")
 	}
-	for _, mode := range []string{clientModeDriver, clientModeDriverCommand, clientModeDriverCommandRaw, clientModeDriverUnack, clientModeDirect, clientModeRawWire, clientModeRawWireTCP} {
+	for _, mode := range []string{clientModeDriver, clientModeDriverFindRaw, clientModeDriverCommand, clientModeDriverCommandRaw, clientModeDriverUnack, clientModeDirect, clientModeRawWire, clientModeRawWireTCP} {
 		t.Run(mode, func(t *testing.T) {
 			opsPerSecond := runTreeDBClientModeSmoke(t, mode)
 			t.Logf("%s load_insert_many ops/sec=%.1f", mode, opsPerSecond)
@@ -1298,62 +1305,66 @@ func TestTreeDBClientModeSmoke(t *testing.T) {
 	}
 }
 
-func TestTreeDBDriverCommandRawRangePhaseSmoke(t *testing.T) {
+func TestTreeDBDriverRawRangePhaseSmoke(t *testing.T) {
 	if testing.Short() {
-		t.Skip("driver-command-raw range smoke skipped in short mode")
+		t.Skip("driver raw range smoke skipped in short mode")
 	}
-	cfg, err := parseConfig([]string{
-		"-target", "treedb",
-		"-client-mode", clientModeDriverCommandRaw,
-		"-documents", "96",
-		"-batch-size", "24",
-		"-reads", "0",
-		"-range-reads", "8",
-		"-updates", "0",
-		"-secondary-indexes", "2",
-		"-range-index",
-		"-concurrent-range-reader-sweep", "1,2",
-		"-concurrent-range-reads", "8",
-		"-treedb-document-format", string(collections.DocumentFormatBSON),
-		"-treedb-maintenance", treeDBMaintenanceNone,
-		"-prebuild-documents",
-		"-timeout", "0",
-		"-format", "json",
-	})
-	if err != nil {
-		t.Fatalf("parse driver-command-raw range config: %v", err)
-	}
-	target, err := openTarget(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("open target: %v", err)
-	}
-	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := closeBenchTarget(cleanupCtx, target); err != nil {
-			t.Errorf("cleanup target: %v", err)
-		}
-	}()
-	result, err := runBenchmark(context.Background(), cfg, target, nil)
-	if err != nil {
-		t.Fatalf("run benchmark: %v", err)
-	}
-	phases := make(map[string]phaseResult, len(result.Phases))
-	for _, phase := range result.Phases {
-		phases[phase.Name] = phase
-	}
-	for _, name := range []string{
-		"age_range_indexed_limit_10",
-		"concurrent_age_range_indexed_limit_10_r1",
-		"concurrent_age_range_indexed_limit_10_r2",
-	} {
-		phase, ok := phases[name]
-		if !ok {
-			t.Fatalf("phase %q missing from result: %+v", name, result.Phases)
-		}
-		if phase.SampledNsPerOp <= 0 || phase.OpsPerSecond <= 0 {
-			t.Fatalf("phase %q metrics missing: %+v", name, phase)
-		}
+	for _, mode := range []string{clientModeDriverFindRaw, clientModeDriverCommandRaw} {
+		t.Run(mode, func(t *testing.T) {
+			cfg, err := parseConfig([]string{
+				"-target", "treedb",
+				"-client-mode", mode,
+				"-documents", "96",
+				"-batch-size", "24",
+				"-reads", "0",
+				"-range-reads", "8",
+				"-updates", "0",
+				"-secondary-indexes", "2",
+				"-range-index",
+				"-concurrent-range-reader-sweep", "1,2",
+				"-concurrent-range-reads", "8",
+				"-treedb-document-format", string(collections.DocumentFormatBSON),
+				"-treedb-maintenance", treeDBMaintenanceNone,
+				"-prebuild-documents",
+				"-timeout", "0",
+				"-format", "json",
+			})
+			if err != nil {
+				t.Fatalf("parse %s range config: %v", mode, err)
+			}
+			target, err := openTarget(context.Background(), cfg)
+			if err != nil {
+				t.Fatalf("open target: %v", err)
+			}
+			defer func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := closeBenchTarget(cleanupCtx, target); err != nil {
+					t.Errorf("cleanup target: %v", err)
+				}
+			}()
+			result, err := runBenchmark(context.Background(), cfg, target, nil)
+			if err != nil {
+				t.Fatalf("run benchmark: %v", err)
+			}
+			phases := make(map[string]phaseResult, len(result.Phases))
+			for _, phase := range result.Phases {
+				phases[phase.Name] = phase
+			}
+			for _, name := range []string{
+				"age_range_indexed_limit_10",
+				"concurrent_age_range_indexed_limit_10_r1",
+				"concurrent_age_range_indexed_limit_10_r2",
+			} {
+				phase, ok := phases[name]
+				if !ok {
+					t.Fatalf("phase %q missing from result: %+v", name, result.Phases)
+				}
+				if phase.SampledNsPerOp <= 0 || phase.OpsPerSecond <= 0 {
+					t.Fatalf("phase %q metrics missing: %+v", name, phase)
+				}
+			}
+		})
 	}
 }
 

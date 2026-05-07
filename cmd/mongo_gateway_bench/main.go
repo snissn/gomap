@@ -358,6 +358,7 @@ const (
 	treeDBReadStateUnsettled = "unsettled"
 
 	clientModeDriver           = "driver"
+	clientModeDriverFindRaw    = "driver-find-raw"
 	clientModeDriverCommand    = "driver-command"
 	clientModeDriverCommandRaw = "driver-command-raw"
 	clientModeDriverUnack      = "driver-unack"
@@ -484,7 +485,7 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.UpdateIndexedField, "update-indexed-field", false, "include the city field in update phases; requires -secondary-indexes >= 2 so the city index exists")
 	fs.BoolVar(&cfg.RangeIndex, "range-index", false, "create an age_1 secondary index for the age range-read phase")
 	fs.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 2, "secondary indexes to create: 0, 1=email, 2=email+city, 3=email+city+active")
-	fs.StringVar(&cfg.ClientMode, "client-mode", cfg.ClientMode, "benchmark client path: driver, driver-command, driver-command-raw, driver-unack, direct, raw-wire, or raw-wire-tcp; direct and raw-wire modes are TreeDB-only")
+	fs.StringVar(&cfg.ClientMode, "client-mode", cfg.ClientMode, "benchmark client path: driver, driver-find-raw, driver-command, driver-command-raw, driver-unack, direct, raw-wire, or raw-wire-tcp; direct and raw-wire modes are TreeDB-only")
 	fs.StringVar(&treeDBProfile, "treedb-profile", treeDBProfile, "TreeDB profile for -target treedb: fast, wal_on_fast, durable, or bench")
 	fs.StringVar(&treeDBDocumentFormat, "treedb-document-format", treeDBDocumentFormat, "TreeDB collection document format for -target treedb: json, template-v1/collections-v1, or bson")
 	fs.StringVar(&treeDBDataRootStorage, "treedb-data-root-storage", treeDBDataRootStorage, "TreeDB collection data root storage for -target treedb: default, fast, or compressed")
@@ -741,6 +742,8 @@ func parseClientMode(raw string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "", clientModeDriver:
 		return clientModeDriver, nil
+	case clientModeDriverFindRaw:
+		return clientModeDriverFindRaw, nil
 	case clientModeDriverCommand:
 		return clientModeDriverCommand, nil
 	case clientModeDriverCommandRaw:
@@ -2804,6 +2807,9 @@ func runRangePhase(ctx context.Context, cfg config, target *benchTarget, profile
 	if cfg.ClientMode == clientModeDriverCommandRaw {
 		return runDriverCommandRawRangePhase(ctx, cfg, target, profiler)
 	}
+	if cfg.ClientMode == clientModeDriverFindRaw {
+		return runDriverFindRawRangePhase(ctx, cfg, target, profiler, coll)
+	}
 	return runDriverDecodedRangePhase(ctx, cfg, target, profiler, coll)
 }
 
@@ -2839,6 +2845,54 @@ func runDriverDecodedRangeOperation(ctx context.Context, coll *mongo.Collection,
 			return fmt.Errorf("range returned age=%v below %d", doc["age"], minAge)
 		}
 	}
+	return nil
+}
+
+func runDriverFindRawRangePhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder, coll *mongo.Collection) (phaseResult, error) {
+	if coll == nil {
+		return phaseResult{}, errors.New("driver-find-raw range phase requires a Mongo driver collection")
+	}
+	return measureTreeDBProfiledPhase(target, profiler, rangePhaseName(cfg), cfg.RangeReads, func(sample func(time.Duration)) error {
+		for i := 0; i < cfg.RangeReads; i++ {
+			if err := runDriverFindRawRangeOperation(ctx, coll, rangeReadMinAge(i), sample); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func runDriverFindRawRangeOperation(ctx context.Context, coll *mongo.Collection, minAge int64, sample func(time.Duration)) error {
+	begin := time.Now()
+	cursor, err := coll.Find(ctx,
+		bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: minAge}}}},
+		options.Find().SetLimit(10))
+	if err != nil {
+		sample(time.Since(begin))
+		return err
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = cursor.Close(ctx)
+		}
+	}()
+	for cursor.Next(ctx) {
+		if err := validateRawAgeDocument(cursor.Current, minAge); err != nil {
+			sample(time.Since(begin))
+			return err
+		}
+	}
+	if err := cursor.Err(); err != nil {
+		sample(time.Since(begin))
+		return err
+	}
+	if err := cursor.Close(ctx); err != nil {
+		sample(time.Since(begin))
+		return err
+	}
+	closed = true
+	sample(time.Since(begin))
 	return nil
 }
 
@@ -2988,6 +3042,13 @@ func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarge
 			})
 		})
 	}
+	if cfg.ClientMode == clientModeDriverFindRaw {
+		return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentRangeReads, func(sample func(time.Duration)) error {
+			return runConcurrentOperations(ctx, readers, cfg.ConcurrentRangeReads, func(op int) error {
+				return runDriverFindRawRangeOperation(ctx, coll, rangeReadMinAge(op), sample)
+			})
+		})
+	}
 	return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentRangeReads, func(sample func(time.Duration)) error {
 		return runConcurrentOperations(ctx, readers, cfg.ConcurrentRangeReads, func(op int) error {
 			return runDriverDecodedRangeOperation(ctx, coll, rangeReadMinAge(op), sample)
@@ -3123,10 +3184,17 @@ func rawCommandErrorMessage(raw bson.Raw) string {
 
 func validateRawAgeBatch(batch []bson.Raw, minAge int64) error {
 	for _, doc := range batch {
-		age, ok := directBSONInt64Field(doc, "age")
-		if !ok || age < minAge {
-			return fmt.Errorf("raw range returned age=%v ok=%t below %d", age, ok, minAge)
+		if err := validateRawAgeDocument(doc, minAge); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+func validateRawAgeDocument(doc bson.Raw, minAge int64) error {
+	age, ok := directBSONInt64Field(doc, "age")
+	if !ok || age < minAge {
+		return fmt.Errorf("raw range returned age=%v ok=%t below %d", age, ok, minAge)
 	}
 	return nil
 }

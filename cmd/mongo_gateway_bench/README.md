@@ -45,8 +45,12 @@ checkout, the temp directory itself, a home directory, or an immediate child of
 a home directory are rejected.
 
 The default `-client-mode driver` uses the official MongoDB Go driver
-`Collection.InsertMany` path for the load phase and all later phases.
-`-client-mode driver-command` still uses the official driver but sends the load
+`Collection.InsertMany` path for the load phase and app-style decoded read
+phases. `-client-mode driver-find-raw` still uses official-driver
+`Collection.Find` for range reads, but iterates `cursor.Current` as raw BSON
+instead of decoding documents into `bson.M`; use it to isolate official-driver
+find/cursor overhead from application decode overhead. `-client-mode
+driver-command` still uses the official driver but sends the load
 phase as a raw `insert` command through `Database.RunCommand`, avoiding the
 driver's `InsertMany` `_id` discovery and `InsertedIDs` bookkeeping. It is useful
 for isolating driver CRUD-helper overhead and works against both TreeDB and
@@ -200,7 +204,7 @@ beside the normal MongoDB Go driver `InsertMany` path:
 
 ```sh
 TREEDB_DOCUMENT_FORMATS="bson" \
-TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire" \
+TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire" \
 scripts/mongo_gateway_compare.sh
 ```
 
@@ -209,8 +213,8 @@ mode:
 
 ```sh
 TREEDB_DOCUMENT_FORMATS="bson" \
-TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack" \
-MONGO_CLIENT_MODES="driver driver-command driver-command-raw driver-unack" \
+TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack" \
+MONGO_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack" \
 scripts/mongo_gateway_compare.sh
 ```
 
@@ -272,8 +276,8 @@ Useful overrides:
 
 - `DOCS_LIST="1000 10000 100000"`
 - `INDEXES_LIST="0 1 2"`
-- `TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire"`
-- `MONGO_CLIENT_MODES="driver driver-command driver-command-raw driver-unack"`
+- `TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire"`
+- `MONGO_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack"`
 - `READS=50000`, `RANGE_READS=5000`, `UPDATES=5000`
 - `DELETES=1000`
 - `RANGE_INDEX=true` or `--range-index` to create `age_1` and report
@@ -350,12 +354,13 @@ done
 The initial workload phases are:
 
 - `load_insert_many`: batched document inserts. The exact client call depends
-  on `client_mode`: `InsertMany` for `driver`, `RunCommand({insert,
-  documents})` for `driver-command`, `RunCommand` with a prebuilt raw BSON
-  command for `driver-command-raw`, unacknowledged `InsertMany` plus a post-load
-  visibility wait for `driver-unack`, direct `Collection.InsertBatch` in the
-  selected storage format for `direct`, and raw OP_MSG document sequences for
-  `raw-wire`/`raw-wire-tcp`. When `-insert-producers` is greater than 1, this
+  on `client_mode`: `InsertMany` for `driver` and `driver-find-raw`,
+  `RunCommand({insert, documents})` for `driver-command`, `RunCommand` with a
+  prebuilt raw BSON command for `driver-command-raw`, unacknowledged `InsertMany`
+  plus a post-load visibility wait for `driver-unack`, direct
+  `Collection.InsertBatch` in the selected storage format for `direct`, and raw
+  OP_MSG document sequences for `raw-wire`/`raw-wire-tcp`. When
+  `-insert-producers` is greater than 1, this
   phase reports aggregate wall-clock throughput and per-producer call latency in
   `producer_results`.
 - `id_find_one`: point lookup by `_id`.
@@ -614,11 +619,13 @@ The benchmark-only helpers accept these optional environment variables:
 `MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS` for
 focused indexed async-flush experiments.
 
-Use the official-driver row for user-visible Mongo compatibility throughput, the
-driver-command rows to quantify the driver's CRUD-helper overhead, the raw-wire
-rows to estimate the gateway/server ceiling, and the direct collection row to
-estimate the storage-engine ceiling for the same document shape. For
-acknowledged high-throughput ingest through the public MongoDB Go driver,
+Use the official-driver row for user-visible Mongo compatibility throughput,
+`driver-find-raw` to remove range-read `bson.M` decode while keeping
+official-driver `Find`/cursor behavior, the driver-command rows to quantify the
+driver's CRUD-helper overhead, the raw-wire rows to estimate the gateway/server
+ceiling, and the direct collection row to estimate the storage-engine ceiling
+for the same document shape. For acknowledged high-throughput ingest through the
+public MongoDB Go driver,
 `driver-command-raw` is the fastest current path because it keeps the official
 driver transport while bypassing `InsertMany`'s explicit-`_id` discovery and
 `InsertedIDs` bookkeeping.

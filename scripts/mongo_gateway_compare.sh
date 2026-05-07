@@ -108,11 +108,11 @@ Options:
   --mongo-uri URI       MongoDB URI for --mongo-mode external.
   --mongo-image IMAGE   Docker image for --mongo-mode docker. Default: mongo:7.
   --mongo-client-mode MODE
-                        Single MongoDB client mode: driver, driver-command,
-                        driver-command-raw, or driver-unack.
+                        Single MongoDB client mode: driver, driver-find-raw,
+                        driver-command, driver-command-raw, or driver-unack.
   --mongo-client-modes LIST
                         Space-separated MongoDB client modes. Example:
-                        "driver driver-command driver-command-raw driver-unack".
+                        "driver driver-find-raw driver-command driver-command-raw driver-unack".
   --timeout DURATION    Per-run benchmark timeout. Default: 20m.
   --treedb-profile NAME TreeDB profile. Default: wal_on_fast.
   --treedb-document-format FORMAT
@@ -120,9 +120,9 @@ Options:
   --treedb-document-formats LIST
                         Space-separated TreeDB formats. Example: "json template-v1 bson".
   --treedb-client-mode MODE
-                        Single TreeDB client mode: driver, driver-command, driver-command-raw, driver-unack, direct, raw-wire-tcp, or raw-wire.
+                        Single TreeDB client mode: driver, driver-find-raw, driver-command, driver-command-raw, driver-unack, direct, raw-wire-tcp, or raw-wire.
   --treedb-client-modes LIST
-                        Space-separated TreeDB client modes. Example: "driver driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire".
+                        Space-separated TreeDB client modes. Example: "driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire".
   --treedb-maintenance MODE
                         TreeDB final maintenance: full, checkpoint, or none.
   --treedb-read-state STATE
@@ -455,10 +455,10 @@ validate_mongo_client_modes() {
   local mode
   for mode in $1; do
     case "$mode" in
-      driver|driver-command|driver-command-raw|driver-unack)
+      driver|driver-find-raw|driver-command|driver-command-raw|driver-unack)
         ;;
       *)
-        echo "invalid MONGO_CLIENT_MODES value: $mode (want driver, driver-command, driver-command-raw, or driver-unack)" >&2
+        echo "invalid MONGO_CLIENT_MODES value: $mode (want driver, driver-find-raw, driver-command, driver-command-raw, or driver-unack)" >&2
         exit 2
         ;;
     esac
