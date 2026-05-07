@@ -148,7 +148,7 @@ func (p findResponsePayload) marshalMsg(requestID, responseTo int32) ([]byte, er
 func (p findResponsePayload) marshalMsgInto(dst []byte, requestID, responseTo int32) ([]byte, error) {
 	switch p.kind {
 	case findResponsePayloadRaw:
-		return marshalCursorDocumentsMsgResponseWithIDInto(dst, requestID, responseTo, p.raw.ns, p.raw.cursorID, p.raw.batchKey, p.raw.batch)
+		return marshalCursorDocumentsMsgResponseWithIDInto(dst, requestID, responseTo, p.raw.ns, p.raw.cursorID, p.raw.batchKey, p.raw.batch, wire.DefaultMaxMessageLength)
 	case findResponsePayloadIndexedRange:
 		return p.indexedRange.marshalMsgInto(dst, requestID, responseTo)
 	default:
@@ -178,6 +178,9 @@ func (s *Server) findMsgResponseInto(dst []byte, command wire.Document, requestI
 		return nil, err
 	}
 	base := len(dst)
+	if payload.kind == findResponsePayloadRaw {
+		return marshalCursorDocumentsMsgResponseWithIDInto(dst, requestID, responseTo, payload.raw.ns, payload.raw.cursorID, payload.raw.batchKey, payload.raw.batch, int(s.maxMessageLength()))
+	}
 	msg, err := payload.marshalMsgInto(dst, requestID, responseTo)
 	if err != nil && payload.kind == findResponsePayloadIndexedRange {
 		doc, docErr := commandError(commandCodeBadValue, "BadValue", err.Error())
@@ -1456,10 +1459,13 @@ func marshalCursorDocumentsResponseWithID(ns string, cursorID int64, batchKey st
 }
 
 func marshalCursorDocumentsMsgResponseWithID(requestID, responseTo int32, ns string, cursorID int64, batchKey string, batch []wire.Document) ([]byte, error) {
-	return marshalCursorDocumentsMsgResponseWithIDInto(nil, requestID, responseTo, ns, cursorID, batchKey, batch)
+	return marshalCursorDocumentsMsgResponseWithIDInto(nil, requestID, responseTo, ns, cursorID, batchKey, batch, wire.DefaultMaxMessageLength)
 }
 
-func marshalCursorDocumentsMsgResponseWithIDInto(dst []byte, requestID, responseTo int32, ns string, cursorID int64, batchKey string, batch []wire.Document) ([]byte, error) {
+func marshalCursorDocumentsMsgResponseWithIDInto(dst []byte, requestID, responseTo int32, ns string, cursorID int64, batchKey string, batch []wire.Document, maxMessageLength int) ([]byte, error) {
+	if maxMessageLength <= 0 || maxMessageLength > wire.DefaultMaxMessageLength {
+		maxMessageLength = wire.DefaultMaxMessageLength
+	}
 	batchBytes := findBatchOverheadBytes
 	for i, doc := range batch {
 		batchBytes += findBatchDocumentBytes(doc, i)
@@ -1500,8 +1506,8 @@ func marshalCursorDocumentsMsgResponseWithIDInto(dst []byte, requestID, response
 	if int64(messageLength) > maxWireMessageLengthInt32Limit {
 		return nil, fmt.Errorf("%w: length=%d", wire.ErrMessageTooLarge, messageLength)
 	}
-	if messageLength > wire.DefaultMaxMessageLength {
-		return nil, fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, messageLength, wire.DefaultMaxMessageLength)
+	if messageLength > maxMessageLength {
+		return nil, fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, messageLength, maxMessageLength)
 	}
 	binary.LittleEndian.PutUint32(msg[base:base+4], uint32(messageLength))
 	return msg, nil
