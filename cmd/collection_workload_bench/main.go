@@ -755,17 +755,13 @@ func resetTreeDBDir(dir string) error {
 }
 
 func requireResettableTreeDBBenchDir(dir string) error {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
+	if _, err := os.ReadDir(dir); err != nil {
 		return err
-	}
-	if len(entries) == 0 {
-		return nil
 	}
 	if hasTreeDBBenchDirMarker(dir) {
 		return nil
 	}
-	return fmt.Errorf("refusing to delete non-empty treedb-dir %q without %s marker", dir, treedbBenchDirMarkerName)
+	return fmt.Errorf("refusing to delete treedb-dir %q without %s marker", dir, treedbBenchDirMarkerName)
 }
 
 func hasTreeDBBenchDirMarker(dir string) bool {
