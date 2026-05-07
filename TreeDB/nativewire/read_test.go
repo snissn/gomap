@@ -317,12 +317,17 @@ func TestCursorIdleTimeoutReap(t *testing.T) {
 	if first.Cursor.CursorID == 0 || server.openCursorCount() != 1 {
 		t.Fatalf("cursor id=%d count=%d want one open cursor", first.Cursor.CursorID, server.openCursorCount())
 	}
-	time.Sleep(5 * time.Millisecond)
-	if _, err := client.Stats(ctx); err != nil {
-		t.Fatalf("Stats after idle timeout: %v", err)
-	}
-	if got := server.openCursorCount(); got != 0 {
-		t.Fatalf("openCursorCount=%d want 0 after idle timeout reap", got)
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for {
+		if _, err := client.Stats(ctx); err != nil {
+			t.Fatalf("Stats after idle timeout: %v", err)
+		}
+		if got := server.openCursorCount(); got == 0 {
+			break
+		} else if time.Now().After(deadline) {
+			t.Fatalf("openCursorCount=%d want 0 after idle timeout reap", got)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
