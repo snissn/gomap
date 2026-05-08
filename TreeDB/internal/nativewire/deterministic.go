@@ -13,7 +13,7 @@ const (
 	DeterministicEntryMagic   = "TDC1"
 	DeterministicEntryVersion = uint64(1)
 
-	maxDeterministicDocumentIDs = 1 << 16
+	maxDeterministicDocumentIDs = defaultMaxByteVectorItems
 
 	deterministicSectionScratchCapacity = sectionSeenInlineCapacity
 
@@ -200,7 +200,7 @@ func validateDeterministicSectionPayload(section Section) error {
 	case SectionIndexDefinition:
 		return validateDeterministicIndexDefinition(section.Bytes, true)
 	case SectionIndexName:
-		return validateDeterministicName(section.Bytes, "index_name")
+		return validateDeterministicEncodedName(section.Bytes, "index_name")
 	}
 	return nil
 }
@@ -306,6 +306,19 @@ func validateDeterministicName(raw []byte, field string) error {
 	return nil
 }
 
+func validateDeterministicIndexPath(path string, field string) error {
+	if len(path) == 0 {
+		return protocolError(ErrInvalidCommand, "%s cannot be empty", field)
+	}
+	if strings.Contains(path, "\x00") {
+		return protocolError(ErrInvalidCommand, "%s cannot contain NUL", field)
+	}
+	if strings.HasPrefix(path, ".") || strings.HasSuffix(path, ".") || strings.Contains(path, "..") {
+		return protocolError(ErrInvalidCommand, "%s cannot contain empty segments", field)
+	}
+	return nil
+}
+
 func validateDeterministicCollectionMeta(raw []byte) error {
 	off := 0
 	version, err := readDeterministicUvarintField(raw, &off, "collection_meta.version")
@@ -388,7 +401,11 @@ func validateDeterministicIndexDefinitionAt(raw []byte, off int, withVersion boo
 	if err := readDeterministicNameField(raw, &off, "index name"); err != nil {
 		return 0, err
 	}
-	if _, err := readDeterministicStringField(raw, &off, "index field"); err != nil {
+	field, err := readDeterministicStringField(raw, &off, "index field")
+	if err != nil {
+		return 0, err
+	}
+	if err := validateDeterministicIndexPath(field, "index field"); err != nil {
 		return 0, err
 	}
 	if _, err := readDeterministicUvarintField(raw, &off, "index value type"); err != nil {
@@ -404,6 +421,17 @@ func validateDeterministicIndexDefinitionAt(raw []byte, off int, withVersion boo
 		return 0, err
 	}
 	return off, nil
+}
+
+func validateDeterministicEncodedName(raw []byte, field string) error {
+	off := 0
+	if err := readDeterministicNameField(raw, &off, field); err != nil {
+		return err
+	}
+	if off != len(raw) {
+		return protocolError(ErrMalformedFrame, "%s has %d trailing bytes", field, len(raw)-off)
+	}
+	return nil
 }
 
 func readDeterministicNameField(raw []byte, off *int, field string) error {
