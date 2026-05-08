@@ -83,11 +83,16 @@ func TestMutationCommandsRoundTrip(t *testing.T) {
 	if !bytes.Contains(noResultDoc, []byte(`"Dorothy"`)) {
 		t.Fatalf("u4 doc=%s", noResultDoc)
 	}
+	guard, err := client.replicatedMutationGuard(ctx, "insert_batch_no_ids")
+	if err != nil {
+		t.Fatalf("mutation guard: %v", err)
+	}
 	noIDsBody, err := appendInsertBatchRequestBodyRefFlags(nil, "users", 0, false, collections.DocumentFormatJSON,
 		[][]byte{[]byte("u5")},
 		[][]byte{[]byte(`{"email":"mary@example.com","name":"Mary"}`)},
 		AckVisible,
 		iwire.CommandFlagOmitResultIDs,
+		guard,
 	)
 	if err != nil {
 		t.Fatalf("append no-result insert: %v", err)
@@ -174,13 +179,18 @@ func TestMutationExplicitZeroAckUsesDefault(t *testing.T) {
 	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
-	sections, err := client.commandSections(ctx, iwire.CommandInsertBatch,
+	guard, err := client.replicatedMutationGuard(ctx, "insert_batch_zero_ack")
+	if err != nil {
+		t.Fatalf("mutation guard: %v", err)
+	}
+	req := append(guard,
 		collectionNameRef("users"),
 		documentFormatSection(collections.DocumentFormatJSON),
 		iwire.Section{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("u1"))},
 		iwire.Section{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, []byte(`{"x":1}`))},
 		ackSection(0),
 	)
+	sections, err := client.commandSections(ctx, iwire.CommandInsertBatch, req...)
 	if err != nil {
 		t.Fatalf("InsertBatch explicit zero ack: %v", err)
 	}
@@ -290,7 +300,7 @@ func TestMutationRaftAckRejected(t *testing.T) {
 	assertDocumentMissing(t, mgr, "users", "u1")
 }
 
-func TestMutationSyncedAckWithoutBackendRejectedBeforeWrite(t *testing.T) {
+func TestMutationGuardWithoutBackendRejectedBeforeWrite(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -304,16 +314,16 @@ func TestMutationSyncedAckWithoutBackendRejectedBeforeWrite(t *testing.T) {
 	if err := client.Hello(ctx); err != nil {
 		t.Fatalf("Hello: %v", err)
 	}
-	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
-		t.Fatalf("CreateCollection: %v", err)
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection direct: %v", err)
 	}
 	_, err = client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
 		[][]byte{[]byte("u1")},
 		[][]byte{[]byte(`{"x":1}`)},
 		AckSynced,
 	)
-	if !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
-		t.Fatalf("InsertBatch synced ack err=%v want durability unavailable", err)
+	if nativeCodeOf(err) != iwire.ErrInvalidCommand {
+		t.Fatalf("InsertBatch guard err=%v code=%d want invalid command", err, nativeCodeOf(err))
 	}
 	assertDocumentMissing(t, mgr, "users", "u1")
 }
@@ -336,7 +346,11 @@ func TestMutationReplaceRejectsUnsupportedReplacementModeBeforeWrite(t *testing.
 		t.Fatalf("InsertBatch: %v", err)
 	}
 
-	_, err := client.commandSections(ctx, iwire.CommandReplaceBatch,
+	guard, err := client.replicatedMutationGuard(ctx, "replace_batch_invalid_mode")
+	if err != nil {
+		t.Fatalf("mutation guard: %v", err)
+	}
+	req := append(guard,
 		collectionNameRef("users"),
 		documentFormatSection(collections.DocumentFormatJSON),
 		iwire.Section{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("u1"))},
@@ -344,6 +358,7 @@ func TestMutationReplaceRejectsUnsupportedReplacementModeBeforeWrite(t *testing.
 		iwire.Section{ID: iwire.SectionReplacementMode, Bytes: []byte{2}},
 		ackSection(AckVisible),
 	)
+	_, err = client.commandSections(ctx, iwire.CommandReplaceBatch, req...)
 	if !isRemoteError(err, iwire.ErrInvalidCommand) {
 		t.Fatalf("ReplaceBatch invalid replacement_mode err=%v want invalid command", err)
 	}

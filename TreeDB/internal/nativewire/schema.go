@@ -196,6 +196,12 @@ func (c *CommandSchema) validateSections(sections []Section, scratch *CommandScr
 			return nil, nil, protocolError(ErrInvalidCommand, "missing required section %d", id)
 		}
 	}
+	if c.RequiresIdempotency && seen.get(SectionIdempotencyKey) == 0 {
+		return nil, nil, protocolError(ErrInvalidCommand, "missing idempotency identity")
+	}
+	if c.RequiresCatalogGuard && seen.get(SectionExpectedCatalogVersion) == 0 {
+		return nil, nil, protocolError(ErrInvalidCommand, "missing catalog guard")
+	}
 	if scratch != nil {
 		scratch.Known = known
 		scratch.Ignored = ignored

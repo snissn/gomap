@@ -376,20 +376,12 @@ func TestDeterministicEntryRejectsMissingDistributedGuards(t *testing.T) {
 	registry := MustV1Registry()
 
 	sections := removeSection(insertBatchDeterministicSections(), SectionIdempotencyKey)
-	cmd, err := registry.ValidateRequestSections(sections)
-	if err != nil {
-		t.Fatalf("ValidateRequestSections without idempotency: %v", err)
-	}
-	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+	if _, err := registry.ValidateRequestSections(sections); codeOf(err) != ErrInvalidCommand {
 		t.Fatalf("missing idempotency err=%v code=%d", err, codeOf(err))
 	}
 
 	sections = removeSection(insertBatchDeterministicSections(), SectionExpectedCatalogVersion)
-	cmd, err = registry.ValidateRequestSections(sections)
-	if err != nil {
-		t.Fatalf("ValidateRequestSections without catalog guard: %v", err)
-	}
-	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+	if _, err := registry.ValidateRequestSections(sections); codeOf(err) != ErrInvalidCommand {
 		t.Fatalf("missing catalog guard err=%v code=%d", err, codeOf(err))
 	}
 }
@@ -440,16 +432,12 @@ func TestDeterministicEntryRequiresMetadataCatalogGuard(t *testing.T) {
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
 		{ID: SectionCollectionMeta, Bytes: []byte("users")},
 	}
-	cmd, err := registry.ValidateRequestSections(sections)
-	if err != nil {
-		t.Fatalf("ValidateRequestSections: %v", err)
-	}
-	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+	if _, err := registry.ValidateRequestSections(sections); codeOf(err) != ErrInvalidCommand {
 		t.Fatalf("missing metadata catalog guard err=%v code=%d", err, codeOf(err))
 	}
 
 	sections = append(sections, Section{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}})
-	cmd, err = registry.ValidateRequestSections(sections)
+	cmd, err := registry.ValidateRequestSections(sections)
 	if err != nil {
 		t.Fatalf("ValidateRequestSections guarded: %v", err)
 	}
