@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"testing"
 )
@@ -753,10 +754,11 @@ func makeBenchmarkItems(prefix string, count, size int) [][]byte {
 }
 
 func makeBenchmarkTemplateDocuments(prefix string, count, size int) [][]byte {
-	if size < len(deterministicTemplateV1StoredMagic) {
-		size = len(deterministicTemplateV1StoredMagic)
+	headerLen := len(deterministicTemplateV1StoredMagic) + sha256.Size
+	if size < headerLen {
+		size = headerLen
 	}
-	items := makeBenchmarkItems(prefix, count, size-len(deterministicTemplateV1StoredMagic))
+	items := makeBenchmarkItems(prefix, count, size-headerLen)
 	for i := range items {
 		items[i] = deterministicTemplateStoredDocument(items[i])
 	}

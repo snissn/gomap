@@ -33,12 +33,16 @@ const (
 var (
 	deterministicEntryRegistryOnce sync.Once
 	deterministicEntryRegistry     *Registry
+	deterministicEntryRegistryErr  error
 )
 
 func deterministicRegistry() *Registry {
 	deterministicEntryRegistryOnce.Do(func() {
-		deterministicEntryRegistry = MustV1Registry()
+		deterministicEntryRegistry, deterministicEntryRegistryErr = NewRegistry(v1CommandSchemas()...)
 	})
+	if deterministicEntryRegistryErr != nil {
+		panic(deterministicEntryRegistryErr)
+	}
 	return deterministicEntryRegistry
 }
 
@@ -238,17 +242,16 @@ func DecodeDeterministicEntryIntoWithRegistry(src []byte, limits Limits, scratch
 		if sectionLen > uint64(len(src)-off) {
 			return fail(protocolError(ErrMalformedFrame, "deterministic entry section %d length %d exceeds remaining %d", sectionID, sectionLen, len(src)-off))
 		}
-		section := Section{ID: sectionID, Bytes: src[off : off+int(sectionLen)]}
-		if err := validateDeterministicSectionPayload(section, limits); err != nil {
-			return fail(err)
-		}
-		sections[i] = section
+		sections[i] = Section{ID: sectionID, Bytes: src[off : off+int(sectionLen)]}
 		off += int(sectionLen)
 	}
 	if off != len(src) {
 		return fail(protocolError(ErrMalformedFrame, "deterministic entry has %d trailing bytes", len(src)-off))
 	}
 	if _, err := validateDecodedDeterministicEntry(registry, CommandID(commandID), commandVersion, sections); err != nil {
+		return fail(err)
+	}
+	if err := validateDeterministicSectionPayloads(sections, limits); err != nil {
 		return fail(err)
 	}
 	if scratch != nil {
@@ -261,6 +264,15 @@ func DecodeDeterministicEntryIntoWithRegistry(src []byte, limits Limits, scratch
 		CommandFlags:   commandFlags,
 		Sections:       sections,
 	}, nil
+}
+
+func validateDeterministicSectionPayloads(sections []Section, limits Limits) error {
+	for _, section := range sections {
+		if err := validateDeterministicSectionPayload(section, limits); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func deterministicEntrySectionsBuffer(count int, scratch *DeterministicEntryScratch) ([]Section, bool) {
@@ -479,10 +491,10 @@ func validateDeterministicTemplateRecordVector(raw []byte) error {
 
 func validateDeterministicTemplateDocuments(raw []byte) error {
 	return walkDeterministicByteVector(raw, "documents", func(i int, doc []byte) error {
-		if hasDeterministicPrefix(doc, deterministicTemplateV1InputMagic) || hasDeterministicPrefix(doc, deterministicTemplateV1StoredMagic) {
-			return nil
+		if err := validateDeterministicTemplateDocument(doc); err != nil {
+			return protocolError(ErrInvalidCommand, "template-v1 document %d: %v", i, err)
 		}
-		return protocolError(ErrInvalidCommand, "template-v1 document %d is not TD1I or TD1D", i)
+		return nil
 	})
 }
 
@@ -529,16 +541,58 @@ func walkDeterministicByteVector(raw []byte, name string, fn func(int, []byte) e
 	return nil
 }
 
-func hasDeterministicPrefix(raw []byte, prefix string) bool {
-	if len(raw) < len(prefix) {
-		return false
+func validateDeterministicTemplateDocument(raw []byte) error {
+	pos := 0
+	if consumeDeterministicTemplateMagic(raw, &pos, deterministicTemplateV1StoredMagic) {
+		return validateDeterministicTemplateStoredDocument(raw, &pos)
 	}
-	for i := 0; i < len(prefix); i++ {
-		if raw[i] != prefix[i] {
-			return false
+	pos = 0
+	if !consumeDeterministicTemplateMagic(raw, &pos, deterministicTemplateV1InputMagic) {
+		return protocolError(ErrMalformedFrame, "document is not TD1I or TD1D")
+	}
+	templateCount, err := readDeterministicTemplateUvarint(raw, &pos, "template count")
+	if err != nil {
+		return err
+	}
+	if templateCount > uint64(len(raw)) {
+		return protocolError(ErrMalformedFrame, "malformed template-v1 template count")
+	}
+	for i := uint64(0); i < templateCount; i++ {
+		var id [sha256.Size]byte
+		if len(raw)-pos < len(id) {
+			return protocolError(ErrMalformedFrame, "malformed template-v1 template id")
+		}
+		copy(id[:], raw[pos:pos+len(id)])
+		pos += len(id)
+		recordLen, err := readDeterministicTemplateUvarint(raw, &pos, "template record length")
+		if err != nil {
+			return err
+		}
+		if recordLen > uint64(len(raw)-pos) {
+			return protocolError(ErrMalformedFrame, "malformed template-v1 template record length")
+		}
+		record := raw[pos : pos+int(recordLen)]
+		pos += int(recordLen)
+		if err := validateDeterministicTemplateRecord(record); err != nil {
+			return err
+		}
+		if recordID := sha256.Sum256(record); recordID != id {
+			return protocolError(ErrMalformedFrame, "template-v1 template id does not match record")
 		}
 	}
-	return true
+	if !consumeDeterministicTemplateMagic(raw, &pos, deterministicTemplateV1StoredMagic) {
+		return protocolError(ErrMalformedFrame, "malformed template-v1 stored document")
+	}
+	return validateDeterministicTemplateStoredDocument(raw, &pos)
+}
+
+func validateDeterministicTemplateStoredDocument(raw []byte, pos *int) error {
+	var id [sha256.Size]byte
+	if pos == nil || *pos < 0 || len(raw)-*pos < len(id) {
+		return protocolError(ErrMalformedFrame, "malformed template-v1 root template id")
+	}
+	*pos += len(id)
+	return nil
 }
 
 func validateDeterministicTemplateRecord(raw []byte) error {
@@ -585,8 +639,10 @@ func consumeDeterministicTemplateMagic(raw []byte, pos *int, magic string) bool 
 	if pos == nil || *pos < 0 || len(raw)-*pos < len(magic) {
 		return false
 	}
-	if string(raw[*pos:*pos+len(magic)]) != magic {
-		return false
+	for i := 0; i < len(magic); i++ {
+		if raw[*pos+i] != magic[i] {
+			return false
+		}
 	}
 	*pos += len(magic)
 	return true
@@ -746,6 +802,9 @@ func validateDeterministicDocumentIDs(raw []byte, limits Limits) error {
 		payloadLen += int(length)
 	}
 	payload := raw[off:]
+	if payloadLen != len(payload) {
+		return protocolError(ErrMalformedFrame, "document_ids payload length %d does not match declared lengths %d", len(payload), payloadLen)
+	}
 	sortDeterministicIDItems(payload, items)
 	for i := 1; i < count; i++ {
 		left := payload[items[i-1].offset : items[i-1].offset+items[i-1].length]

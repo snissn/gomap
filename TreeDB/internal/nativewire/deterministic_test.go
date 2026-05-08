@@ -2,6 +2,7 @@ package nativewire
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"strings"
@@ -389,7 +390,19 @@ func TestDecodeDeterministicEntryPreservesPayloadLimits(t *testing.T) {
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			raw := deterministicEntryTestRaw(CommandInsertBatch, tc.section)
+			sections := deterministicEntrySectionsOnly(insertBatchDeterministicSections())
+			for i := range sections {
+				if sections[i].ID == tc.section.ID {
+					sections[i] = tc.section
+				}
+				if tc.section.ID == SectionDocumentIDs && sections[i].ID == SectionDocuments {
+					sections[i].Bytes = AppendByteVector(nil, []byte("{}"), []byte("{}"))
+				}
+				if tc.section.ID == SectionDocuments && sections[i].ID == SectionDocumentIDs {
+					sections[i].Bytes = AppendByteVector(nil, []byte("a"), []byte("b"))
+				}
+			}
+			raw := deterministicEntryTestRaw(CommandInsertBatch, sections...)
 			if _, err := DecodeDeterministicEntry(raw, Limits{MaxByteVectorItems: 1}); codeOf(err) != ErrResourceExhausted {
 				t.Fatalf("DecodeDeterministicEntry err=%v code=%d want resource exhausted", err, codeOf(err))
 			}
@@ -697,10 +710,16 @@ func TestDecodeDeterministicEntryClearsScratchOnMidDecodeError(t *testing.T) {
 	scratch := &DeterministicEntryScratch{
 		Sections: make([]Section, 0, 1),
 	}
-	raw := deterministicEntryTestRaw(CommandInsertBatch,
-		Section{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, bytes.Repeat([]byte("x"), 1024))},
-		Section{ID: SectionDocuments, Bytes: []byte{1, 0x81, 0x00}},
-	)
+	sections := deterministicEntrySectionsOnly(insertBatchDeterministicSections())
+	for i := range sections {
+		switch sections[i].ID {
+		case SectionDocumentIDs:
+			sections[i].Bytes = AppendByteVector(nil, bytes.Repeat([]byte("x"), 1024))
+		case SectionDocuments:
+			sections[i].Bytes = []byte{1, 0x81, 0x00}
+		}
+	}
+	raw := deterministicEntryTestRaw(CommandInsertBatch, sections...)
 	if _, err := DecodeDeterministicEntryInto(raw, Limits{}, scratch); codeOf(err) != ErrMalformedFrame {
 		t.Fatalf("DecodeDeterministicEntryInto err=%v code=%d want malformed", err, codeOf(err))
 	}
@@ -1210,6 +1229,23 @@ func TestDecodeDeterministicEntryRejectsUnappliableTemplateRecords(t *testing.T)
 	}
 }
 
+func TestDecodeDeterministicEntryRejectsMalformedTemplateDocuments(t *testing.T) {
+	sections := insertBatchDeterministicSections()
+	for i := range sections {
+		if sections[i].ID == SectionDocumentFormat {
+			sections[i].Bytes = []byte{byte(DocumentFormatTemplateV1)}
+		}
+		if sections[i].ID == SectionDocuments {
+			sections[i].Bytes = AppendByteVector(nil, []byte(deterministicTemplateV1StoredMagic))
+		}
+	}
+	sections = append(sections, Section{ID: SectionTemplateRecords, Bytes: AppendByteVector(nil, deterministicTemplateRecord("email"))})
+	raw := deterministicEntryTestRaw(CommandInsertBatch, deterministicEntrySectionsOnly(sections)...)
+	if _, err := DecodeDeterministicEntry(raw, Limits{}); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("DecodeDeterministicEntry err=%v code=%d want invalid command", err, codeOf(err))
+	}
+}
+
 func TestDeterministicEntryRejectsUnsupportedReplacementMode(t *testing.T) {
 	registry := MustV1Registry()
 	sections := replaceBatchDeterministicSections()
@@ -1487,7 +1523,7 @@ func deterministicCollectionMetaPayloadWithOptions(name string, opts determinist
 	// data_root_storage_policy, index_state_storage_policy,
 	// allow_array_values_in_index, disable_indexed_write_memtables,
 	// buffered_indexed_writes, max_documents, max_bytes, max_root_runs,
-	// async_flush, overlay_roots, max_queued_units, and index definitions.
+	// async_flush, overlay_roots, max_queued_units, and index_count.
 	dst := deterministicUvarintPayload(deterministicCollectionMetaVersion) // version
 	dst = appendDeterministicString(dst, name)                             // name
 	dst = appendUvarint(dst, opts.documentFormat)                          // document_format
@@ -1550,6 +1586,7 @@ func deterministicTemplateRecord(fields ...string) []byte {
 
 func deterministicTemplateStoredDocument(payload []byte) []byte {
 	dst := []byte(deterministicTemplateV1StoredMagic)
+	dst = append(dst, make([]byte, sha256.Size)...)
 	return append(dst, payload...)
 }
 
