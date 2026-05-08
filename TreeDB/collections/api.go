@@ -668,23 +668,45 @@ type indexedFlushUnit struct {
 	rootRunCount    int
 }
 
-type indexedFlushPublishWork struct {
-	pin                *backenddb.Snapshot
-	meta               CollectionMeta
-	catalog            *collectionCatalog
-	baseSystemRoot     uint64
-	baseCommitSeq      uint64
-	units              []indexedFlushUnit
-	flushUnit          indexedFlushUnit
+type coalescedFlushBatchState uint8
+
+const (
+	coalescedFlushBatchQueued coalescedFlushBatchState = iota
+	coalescedFlushBatchActive
+	coalescedFlushBatchMaterializing
+	coalescedFlushBatchPublishing
+	coalescedFlushBatchPublished
+	coalescedFlushBatchRequeued
+	coalescedFlushBatchLostOwnership
+)
+
+type coalescedFlushBatch struct {
+	state coalescedFlushBatchState
+
+	// Original immutable units, in FIFO order. The merged unit is only the
+	// mechanical publish view for the current DB ordered-root API.
+	units      []indexedFlushUnit
+	mergedUnit indexedFlushUnit
+
 	rootNames          []string
 	rootBaseIDs        map[string]uint64
 	rootOverlays       map[string][]uint64
 	rootOverlayFilters map[string]collectionRootOverlayFilter
-	docCount           int
-	byteCount          int64
-	rootRunCount       int
-	rootCount          int
-	rootDeltaStats     collectionRootDeltaPlanStats
+
+	docCount       int
+	byteCount      int64
+	rootRunCount   int
+	rootCount      int
+	rootDeltaStats collectionRootDeltaPlanStats
+}
+
+type indexedFlushPublishWork struct {
+	pin            *backenddb.Snapshot
+	meta           CollectionMeta
+	catalog        *collectionCatalog
+	baseSystemRoot uint64
+	baseCommitSeq  uint64
+	batch          coalescedFlushBatch
 }
 
 type bufferedIndexedCheckpoint struct {
@@ -4960,6 +4982,9 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 	if c == nil || c.db == nil || domain == nil || domain.count == 0 || !hasBufferedIndexedRootRuns(domain) {
 		return nil, nil
 	}
+	if len(domain.indexedPublishingUnits) != 0 {
+		return nil, errors.New("collections: indexed async publish still in flight")
+	}
 	if len(domain.indexedFlushUnits) == 0 && len(domain.rootRuns) == 0 {
 		return nil, nil
 	}
@@ -5012,9 +5037,11 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 
 	rotateIndexedMutableToFlushUnitLocked(domain)
 	units := domain.indexedFlushUnits
-	flushUnit := mergedIndexedFlushUnits(units)
-	rootNames := orderedBufferedRootNames(meta, flushUnit.rootRuns)
-	if len(rootNames) == 0 {
+	batch, err := buildCoalescedFlushBatchFromUnits(meta, catalog, units)
+	if err != nil {
+		return nil, err
+	}
+	if len(batch.rootNames) == 0 {
 		_ = pin.Close()
 		work.pin = nil
 		domain.indexedFlushUnits = nil
@@ -5026,30 +5053,12 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 		domain.mutableBytes = 0
 		return nil, nil
 	}
-	rootBaseIDs := make(map[string]uint64, len(rootNames))
-	rootOverlays := make(map[string][]uint64, len(rootNames))
-	for _, rootName := range rootNames {
-		baseRoot, ok := flushUnit.rootBaseIDs[rootName]
-		if !ok {
-			err = fmt.Errorf("collections: buffered indexed flush missing base root for %q", rootName)
-			return nil, err
-		}
-		rootBaseIDs[rootName] = baseRoot
-		rootOverlays[rootName] = append([]uint64(nil), catalog.overlayRootIDs(rootName)...)
-	}
+	batch.state = coalescedFlushBatchActive
 	work.baseSystemRoot = snapshotSystemRoot(pin)
 	work.baseCommitSeq = snapshotCommitSeq(pin)
-	work.units = units
-	work.flushUnit = flushUnit
-	work.rootNames = rootNames
-	work.rootBaseIDs = rootBaseIDs
-	work.rootOverlays = rootOverlays
-	work.docCount = flushUnit.docCount
-	work.byteCount = flushUnit.byteCount
-	work.rootRunCount = indexedFlushUnitRootRunCount(flushUnit)
-	work.rootCount = len(rootNames)
+	work.batch = batch
 
-	domain.indexedPublishingUnits = append(domain.indexedPublishingUnits, units...)
+	domain.indexedPublishingUnits = append([]indexedFlushUnit(nil), units...)
 	domain.indexedFlushUnits = nil
 	domain.writeGeneration++
 	return work, nil
@@ -5067,27 +5076,29 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	}()
 	if collectionMetaUsesIndexedOverlayRoots(work.meta) {
 		materializeStart := time.Now()
-		rootOverlayFilters, err := buildCollectionRootOverlayFilters(work.rootNames, work.flushUnit.rootRuns, work.rootOverlays, work.catalog.rootOverlayFilters)
+		work.batch.state = coalescedFlushBatchMaterializing
+		rootOverlayFilters, err := buildCollectionRootOverlayFilters(work.batch.rootNames, work.batch.mergedUnit.rootRuns, work.batch.rootOverlays, work.catalog.rootOverlayFilters)
 		if err != nil {
 			materializeElapsed := collectionObservedElapsedSince(materializeStart)
 			return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 		}
-		work.rootOverlayFilters = rootOverlayFilters
-		ordered, cleanupDeltas, err := buildBufferedRootOverlayDeltaBatchPublishInputs(work.rootNames, work.flushUnit.rootRuns, work.flushUnit.rootPolicies, work.rootOverlays)
+		work.batch.rootOverlayFilters = rootOverlayFilters
+		ordered, cleanupDeltas, err := buildBufferedRootOverlayDeltaBatchPublishInputs(work.batch.rootNames, work.batch.mergedUnit.rootRuns, work.batch.mergedUnit.rootPolicies, work.batch.rootOverlays)
 		if err != nil {
 			materializeElapsed := collectionObservedElapsedSince(materializeStart)
 			return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 		}
-		work.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, work.rootNames, ordered)
+		work.batch.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, work.batch.rootNames, ordered)
 		materializeElapsed := collectionObservedElapsedSince(materializeStart)
 		publishStart := time.Now()
+		work.batch.state = coalescedFlushBatchPublishing
 		newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, work.rootOverlays, rootIDs)
+			return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.batch.rootNames, work.batch.rootBaseIDs, work.batch.rootOverlays, rootIDs)
 		})
 		publishElapsed := collectionObservedElapsedSince(publishStart)
 		cleanupDeltas()
-		if publishErr == nil && len(rootIDs) != len(work.rootNames) {
-			publishErr = unexpectedOrderedRootCountError(work.meta.Name, len(work.rootNames), len(rootIDs))
+		if publishErr == nil && len(rootIDs) != len(work.batch.rootNames) {
+			publishErr = unexpectedOrderedRootCountError(work.meta.Name, len(work.batch.rootNames), len(rootIDs))
 		}
 		completeErr := c.completePreparedIndexedFlush(work, newSystemRoot, rootIDs, publishErr, materializeElapsed+publishElapsed, materializeElapsed, publishElapsed)
 		if completeErr != nil {
@@ -5096,21 +5107,23 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		return publishErr
 	}
 	materializeStart := time.Now()
-	ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(work.rootNames, work.flushUnit.rootRuns, work.rootBaseIDs, work.flushUnit.rootPolicies)
+	work.batch.state = coalescedFlushBatchMaterializing
+	ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(work.batch.rootNames, work.batch.mergedUnit.rootRuns, work.batch.rootBaseIDs, work.batch.mergedUnit.rootPolicies)
 	if err != nil {
 		materializeElapsed := collectionObservedElapsedSince(materializeStart)
 		return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 	}
-	work.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, work.rootNames, ordered)
+	work.batch.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, work.batch.rootNames, ordered)
 	materializeElapsed := collectionObservedElapsedSince(materializeStart)
 	publishStart := time.Now()
+	work.batch.state = coalescedFlushBatchPublishing
 	newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-		return c.buildRootDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, rootIDs)
+		return c.buildRootDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.batch.rootNames, work.batch.rootBaseIDs, rootIDs)
 	})
 	publishElapsed := collectionObservedElapsedSince(publishStart)
 	cleanupDeltas()
-	if publishErr == nil && len(rootIDs) != len(work.rootNames) {
-		publishErr = unexpectedOrderedRootCountError(work.meta.Name, len(work.rootNames), len(rootIDs))
+	if publishErr == nil && len(rootIDs) != len(work.batch.rootNames) {
+		publishErr = unexpectedOrderedRootCountError(work.meta.Name, len(work.batch.rootNames), len(rootIDs))
 	}
 	completeErr := c.completePreparedIndexedFlush(work, newSystemRoot, rootIDs, publishErr, materializeElapsed+publishElapsed, materializeElapsed, publishElapsed)
 	if completeErr != nil {
@@ -5378,20 +5391,22 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 		if errors.Is(publishErr, ErrConcurrentMutation) {
 			domain.indexedFlushRootBaseMismatches.Add(1)
 		}
-		removed, owned := removeIndexedPublishingWorkUnitsLocked(domain, work.units)
+		removed, owned := removeIndexedPublishingWorkUnitsLocked(domain, work.batch.units)
 		if !owned {
 			err := errors.Join(errIndexedFlushLostOwnership, publishErr)
+			work.batch.state = coalescedFlushBatchLostOwnership
 			domain.indexedFlushLostOwnership.Add(1)
-			domain.observeIndexedFlush(len(work.units), work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, err)
+			domain.observeIndexedFlush(len(work.batch.units), work.batch.docCount, work.batch.byteCount, work.batch.rootRunCount, work.batch.rootCount, observedElapsed(), materializeElapsed, publishElapsed, err)
 			return err
 		}
 		if len(removed) > 0 {
 			domain.indexedFlushRequeues.Add(1)
 			domain.indexedFlushRequeuedUnits.Add(uint64(len(removed)))
 		}
+		work.batch.state = coalescedFlushBatchRequeued
 		domain.indexedFlushUnits = append(removed, domain.indexedFlushUnits...)
 		rebuildBufferedPendingIndexesLocked(domain, work.meta.Name, preservePrimaryRunIndex)
-		domain.observeIndexedFlush(len(work.units), work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, publishErr)
+		domain.observeIndexedFlush(len(work.batch.units), work.batch.docCount, work.batch.byteCount, work.batch.rootRunCount, work.batch.rootCount, observedElapsed(), materializeElapsed, publishElapsed, publishErr)
 		return publishErr
 	}
 	baseCatalog := domain.catalog
@@ -5399,35 +5414,37 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 		baseCatalog = work.catalog
 	}
 	overlayPublish := collectionMetaUsesIndexedOverlayRoots(work.meta)
-	nextCatalog := cloneCatalogWithRootUpdates(baseCatalog, work.meta, work.rootNames, rootIDs)
+	nextCatalog := cloneCatalogWithRootUpdates(baseCatalog, work.meta, work.batch.rootNames, rootIDs)
 	if overlayPublish {
-		nextCatalog = cloneCatalogWithRootOverlays(baseCatalog, work.meta, work.rootNames, rootIDs)
-		nextCatalog = cloneCatalogWithRootOverlayFilters(nextCatalog, work.rootNames, rootIDs, work.rootOverlayFilters)
+		nextCatalog = cloneCatalogWithRootOverlays(baseCatalog, work.meta, work.batch.rootNames, rootIDs)
+		nextCatalog = cloneCatalogWithRootOverlayFilters(nextCatalog, work.batch.rootNames, rootIDs, work.batch.rootOverlayFilters)
 	}
-	oldPublishing, owned := removeIndexedPublishingWorkUnitsLocked(domain, work.units)
+	oldPublishing, owned := removeIndexedPublishingWorkUnitsLocked(domain, work.batch.units)
 	if !owned {
+		work.batch.state = coalescedFlushBatchLostOwnership
 		domain.indexedFlushLostOwnership.Add(1)
-		domain.observeIndexedFlush(len(work.units), work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, errIndexedFlushLostOwnership)
+		domain.observeIndexedFlush(len(work.batch.units), work.batch.docCount, work.batch.byteCount, work.batch.rootRunCount, work.batch.rootCount, observedElapsed(), materializeElapsed, publishElapsed, errIndexedFlushLostOwnership)
 		return errIndexedFlushLostOwnership
 	}
+	work.batch.state = coalescedFlushBatchPublished
 	domain.loaded = true
 	domain.meta = work.meta
 	domain.catalog = nextCatalog
 	domain.baseCommitSeq = c.commitSeqForSystemRoot(newSystemRoot)
 	domain.baseSystemRoot = newSystemRoot
 	domain.primaryRoot = nextCatalog.rootID(collectionPrimaryRootName(work.meta.Name))
-	domain.count = subtractNonNegativeInt(domain.count, work.docCount)
-	domain.bufferedBytes = subtractNonNegativeInt64(domain.bufferedBytes, work.byteCount)
+	domain.count = subtractNonNegativeInt(domain.count, work.batch.docCount)
+	domain.bufferedBytes = subtractNonNegativeInt64(domain.bufferedBytes, work.batch.byteCount)
 	domain.clearIndexedAsyncFlushError()
 	if !overlayPublish {
-		retargetPendingIndexedRootBaseIDsLocked(domain, work.rootNames, work.rootBaseIDs, rootIDs)
+		retargetPendingIndexedRootBaseIDsLocked(domain, work.batch.rootNames, work.batch.rootBaseIDs, rootIDs)
 	}
 	rebuildBufferedPendingIndexesLocked(domain, work.meta.Name, preservePrimaryRunIndex)
 	c.meta = work.meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	resetIndexedFlushUnits(oldPublishing)
-	domain.observeIndexedFlush(len(work.units), work.docCount, work.byteCount, work.rootRunCount, work.rootCount, observedElapsed(), materializeElapsed, publishElapsed, nil)
-	domain.observeRootDeltaPlan(work.rootDeltaStats)
+	domain.observeIndexedFlush(len(work.batch.units), work.batch.docCount, work.batch.byteCount, work.batch.rootRunCount, work.batch.rootCount, observedElapsed(), materializeElapsed, publishElapsed, nil)
+	domain.observeRootDeltaPlan(work.batch.rootDeltaStats)
 	return nil
 }
 
@@ -5637,7 +5654,7 @@ func removeIndexedPublishingUnitsLocked(domain *collectionWriteDomain, n int) []
 	if n > len(domain.indexedPublishingUnits) {
 		n = len(domain.indexedPublishingUnits)
 	}
-	removed := domain.indexedPublishingUnits[:n]
+	removed := append([]indexedFlushUnit(nil), domain.indexedPublishingUnits[:n]...)
 	remaining := domain.indexedPublishingUnits[n:]
 	if len(remaining) == 0 {
 		domain.indexedPublishingUnits = nil
@@ -5651,7 +5668,7 @@ func removeIndexedPublishingWorkUnitsLocked(domain *collectionWriteDomain, units
 	if len(units) == 0 {
 		return nil, true
 	}
-	if domain == nil || len(domain.indexedPublishingUnits) < len(units) {
+	if domain == nil || len(domain.indexedPublishingUnits) != len(units) {
 		return nil, false
 	}
 	for i := range units {
@@ -5706,6 +5723,38 @@ func retargetPendingIndexedRootBaseIDsLocked(domain *collectionWriteDomain, root
 		retarget(domain.indexedFlushUnits[i].rootBaseIDs)
 	}
 	retarget(domain.rootBaseIDs)
+}
+
+func buildCoalescedFlushBatchFromUnits(meta CollectionMeta, catalog *collectionCatalog, units []indexedFlushUnit) (coalescedFlushBatch, error) {
+	merged := mergedIndexedFlushUnits(units)
+	rootNames := orderedBufferedRootNames(meta, merged.rootRuns)
+	batch := coalescedFlushBatch{
+		state:        coalescedFlushBatchQueued,
+		units:        append([]indexedFlushUnit(nil), units...),
+		mergedUnit:   merged,
+		rootNames:    rootNames,
+		docCount:     merged.docCount,
+		byteCount:    merged.byteCount,
+		rootRunCount: indexedFlushUnitRootRunCount(merged),
+		rootCount:    len(rootNames),
+	}
+	if len(rootNames) == 0 {
+		return batch, nil
+	}
+	if catalog == nil {
+		return coalescedFlushBatch{}, errCollectionNotFound
+	}
+	batch.rootBaseIDs = make(map[string]uint64, len(rootNames))
+	batch.rootOverlays = make(map[string][]uint64, len(rootNames))
+	for _, rootName := range rootNames {
+		baseRoot, ok := merged.rootBaseIDs[rootName]
+		if !ok {
+			return coalescedFlushBatch{}, fmt.Errorf("collections: buffered indexed flush missing base root for %q", rootName)
+		}
+		batch.rootBaseIDs[rootName] = baseRoot
+		batch.rootOverlays[rootName] = append([]uint64(nil), catalog.overlayRootIDs(rootName)...)
+	}
+	return batch, nil
 }
 
 func mergedIndexedFlushUnits(units []indexedFlushUnit) indexedFlushUnit {

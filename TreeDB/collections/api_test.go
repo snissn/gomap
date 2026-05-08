@@ -5215,6 +5215,9 @@ func TestCollectionIndexedWriteMemtablesAsyncPublishingUnitsParticipateInReadsAn
 	if err := col.publishPreparedIndexedFlush(work); err != nil {
 		t.Fatalf("publish prepared async flush: %v", err)
 	}
+	if got := work.batch.state; got != coalescedFlushBatchPublished {
+		t.Fatalf("published batch state=%d want published", got)
+	}
 	if got := mgr.StatsSnapshot().PendingDocuments; got != 0 {
 		t.Fatalf("pending docs after publish=%d want 0", got)
 	}
