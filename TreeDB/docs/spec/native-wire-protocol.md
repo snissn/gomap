@@ -170,17 +170,21 @@ Clients MUST match responses by `request_id`.
 
 `stream_id` identifies a logical stream or cursor. Non-streaming requests and
 initial cursor-open requests use `stream_id=0`. For v1 cursors,
-`cursor_next`/`cursor_close` requests name the server-assigned cursor ID in
-`stream_id`, and responses MAY echo it. Negotiated push-streaming extensions MAY
-use the same `request_id` with a non-zero `stream_id`.
+`cursor_next`/`cursor_close` requests MUST carry the server-assigned cursor ID
+in a `cursor_ref` section. Clients SHOULD also set `stream_id` to the same
+cursor ID for transport observability; servers MUST reject a request where a
+non-zero `stream_id` disagrees with `cursor_ref`. Responses MAY echo the cursor
+ID in `stream_id`. Negotiated push-streaming extensions MAY use the same
+`request_id` with a non-zero `stream_id`.
 
 v1 cursor delivery is pull-based. `open_scan` returns a server-assigned cursor
 ID in `cursor_meta.stream_id` and MAY return an initial batch. Each
-`cursor_next` or `cursor_close` is a new request with a new `request_id` and the
-cursor ID in `stream_id`. The server returns at most one batch per
-`cursor_next`. EOF, `cursor_close`, idle timeout, cancel, or any terminal cursor
-error releases the cursor. The `data` frame type is reserved for a separately
-negotiated push-streaming extension and MUST NOT be used for v1 cursors.
+`cursor_next` or `cursor_close` is a new request with a new `request_id`, a
+`cursor_ref` body section, and normally the cursor ID in `stream_id`. The server
+returns at most one batch per `cursor_next`. EOF, `cursor_close`, idle timeout,
+cancel, or any terminal cursor error releases the cursor. The `data` frame type
+is reserved for a separately negotiated push-streaming extension and MUST NOT be
+used for v1 cursors.
 
 A `cancel` frame targets the `request_id` in its header. `stream_id=0` cancels
 the whole request; non-zero `stream_id` cancels that cursor or stream. Cancel is
@@ -587,8 +591,10 @@ has_more
 server_cursor_deadline optional
 ```
 
-`cursor_next` requests MUST include a maximum item count, maximum response bytes,
-or both. Servers MAY return fewer results than requested. A response with
+`cursor_next` requests MUST include `cursor_ref` and `cursor_limits` sections.
+The `cursor_limits` section MUST include a maximum item count, maximum response
+bytes, or both. `cursor_close` requests MUST include `cursor_ref`. Servers MAY
+return fewer results than requested. A response with
 `has_more=false` is terminal and releases the cursor. A `cursor_not_found` error
 is terminal for the named cursor but not for the connection.
 
