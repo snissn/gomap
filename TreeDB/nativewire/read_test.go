@@ -271,6 +271,45 @@ func TestGetManyResponseRespectsByteVectorLimit(t *testing.T) {
 	}
 }
 
+func TestGetManyResponseByteVectorLimitIgnoresLengthTableOverhead(t *testing.T) {
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{Limits: iwire.Limits{MaxByteVectorBytes: 64}})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+
+	ids := make([][]byte, 40)
+	docs := make([][]byte, 40)
+	for i := range ids {
+		ids[i] = []byte{byte(i + 1)}
+		docs[i] = []byte("x")
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	got, present, err := client.GetMany(ctx, "users", ids)
+	if err != nil {
+		t.Fatalf("GetMany: %v", err)
+	}
+	if len(got) != len(ids) || len(present) != len(ids) {
+		t.Fatalf("GetMany lengths docs=%d present=%d want %d", len(got), len(present), len(ids))
+	}
+	for i := range ids {
+		if !present[i] || !bytes.Equal(got[i], docs[i]) {
+			t.Fatalf("GetMany[%d]=%q present=%v want %q present=true", i, got[i], present[i], docs[i])
+		}
+	}
+}
+
 func TestDecodeReadResultsRejectsTrailingTruncatedBytes(t *testing.T) {
 	sections := []iwire.Section{
 		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("u1"))},
