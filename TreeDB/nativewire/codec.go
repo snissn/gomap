@@ -4,8 +4,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math/bits"
 	"sort"
-	"strconv"
 
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
@@ -93,9 +93,9 @@ func readString(src []byte, off *int) (string, error) {
 	if off == nil || *off > len(src) {
 		return "", protocolError(iwire.ErrMalformedFrame, "invalid string offset")
 	}
-	n, read := binary.Uvarint(src[*off:])
-	if read <= 0 {
-		return "", protocolError(iwire.ErrMalformedFrame, "invalid string length")
+	n, read, err := readUvarint(src[*off:])
+	if err != nil {
+		return "", err
 	}
 	*off += read
 	if n > uint64(len(src)-*off) {
@@ -151,10 +151,24 @@ func decodeStringMap(src []byte) (map[string]string, error) {
 
 func readUvarint(src []byte) (uint64, int, error) {
 	value, n := binary.Uvarint(src)
-	if n <= 0 {
+	switch {
+	case n > 0:
+		if n != uvarintLen(value) {
+			return 0, 0, protocolError(iwire.ErrMalformedFrame, "non-minimal uvarint")
+		}
+		return value, n, nil
+	case n == 0:
 		return 0, 0, protocolError(iwire.ErrMalformedFrame, "invalid uvarint")
+	default:
+		return 0, 0, protocolError(iwire.ErrMalformedFrame, "uvarint overflow")
 	}
-	return value, n, nil
+}
+
+func uvarintLen(v uint64) int {
+	if v == 0 {
+		return 1
+	}
+	return (bits.Len64(v) + 6) / 7
 }
 
 func appendErrorPayload(dst []byte, code iwire.ErrorCode, retryable bool, message string) []byte {
@@ -175,7 +189,15 @@ func decodeErrorPayload(src []byte) (iwire.ErrorCode, bool, string, error) {
 	if off >= len(src) {
 		return 0, false, "", protocolError(iwire.ErrMalformedFrame, "missing error retryable flag")
 	}
-	retryable := src[off] != 0
+	var retryable bool
+	switch src[off] {
+	case 0:
+		retryable = false
+	case 1:
+		retryable = true
+	default:
+		return 0, false, "", protocolError(iwire.ErrMalformedFrame, "invalid error retryable flag %d", src[off])
+	}
 	off++
 	message, err := readString(src, &off)
 	if err != nil {
@@ -211,10 +233,6 @@ func singletonSection(sections []iwire.Section, id iwire.SectionID) ([]byte, boo
 		found = true
 	}
 	return out, found, nil
-}
-
-func statsString(key string, value uint64) (string, string) {
-	return key, strconv.FormatUint(value, 10)
 }
 
 func protocolError(code iwire.ErrorCode, format string, args ...any) error {

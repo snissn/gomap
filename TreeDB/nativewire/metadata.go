@@ -124,7 +124,7 @@ func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
 	if err := ensureNonNegativeIntCapacity("buffered_indexed_async_flush_max_queued_units", maxQueued); err != nil {
 		return collections.CollectionMeta{}, err
 	}
-	indexCount, err := readEnum(src, &off)
+	indexCount, err := readUvarintField(src, &off, "index_count")
 	if err != nil {
 		return collections.CollectionMeta{}, err
 	}
@@ -336,8 +336,12 @@ func readBool(src []byte, off *int) (bool, error) {
 }
 
 func readEnum(src []byte, off *int) (uint64, error) {
+	return readUvarintField(src, off, "enum")
+}
+
+func readUvarintField(src []byte, off *int, field string) (uint64, error) {
 	if off == nil || *off > len(src) {
-		return 0, protocolError(iwire.ErrMalformedFrame, "invalid enum offset")
+		return 0, protocolError(iwire.ErrMalformedFrame, "invalid %s offset", field)
 	}
 	value, n, err := readUvarint(src[*off:])
 	if err != nil {
@@ -510,7 +514,11 @@ func decodeCollectionRef(state *connState, raw []byte) (string, bool, error) {
 		}
 		return name, true, nil
 	default:
-		return "", false, protocolError(iwire.ErrInvalidCommand, "unsupported collection_ref tag %d", raw[0])
+		name := string(raw)
+		if err := collections.ValidateCollectionName(name); err != nil {
+			return "", false, protocolError(iwire.ErrInvalidCommand, "%v", err)
+		}
+		return name, false, nil
 	}
 }
 
