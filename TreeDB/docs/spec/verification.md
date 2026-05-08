@@ -204,3 +204,20 @@ Coverage:
 - `TreeDB/collections/overhead_bench_test.go`:
   - `BenchmarkCollectionOverheadPlanIndexedTemplateV1`
   - `BenchmarkCollectionOverheadIndexStateTemplateV1Extraction`
+
+## 13. Native Wire Protocol
+
+Invariant:
+- Native-wire v1 code that advertises protocol support must enforce frame,
+  section, command-schema, feature-negotiation, and deterministic command-entry
+  rules from `TreeDB/docs/spec/native-wire-protocol.md`.
+- Protocol implementation work must keep schema IDs, codec constants, golden
+  fixtures, fuzz targets, parity tests, deterministic-entry tests, benchmark
+  labels, and observability counters aligned with
+  `TreeDB/docs/spec/native-wire-implementation-guidelines.md`.
+
+Coverage:
+- No shipped native-wire server or codec exists yet. R0 implementation must add
+  the conformance fixtures, fuzz targets, and drift tests described in
+  `TreeDB/docs/spec/native-wire-implementation-guidelines.md` before claiming
+  native-wire v1 support.
