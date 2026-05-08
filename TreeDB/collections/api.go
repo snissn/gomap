@@ -8883,10 +8883,9 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 					}
 					if plan.bufferedBase && !c.bufferedUpdateBatchPlanStillCurrent(plan) {
 						if useBufferedRead {
-							if err := c.flushBufferedWrites(); err != nil {
-								return err
-							}
-							useBufferedRead = false
+							// A buffered snapshot can go stale while update callbacks run
+							// before the mutation lock. Replan against the newer buffered
+							// domain instead of turning that race into a publish boundary.
 							replan = true
 							return nil
 						}
@@ -8902,10 +8901,9 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 				buffered, bufferErr := c.bufferUpdateBatchPlanLocked(plan)
 				if bufferErr != nil {
 					if errors.Is(bufferErr, ErrConcurrentMutation) && useBufferedRead {
-						if err := c.flushBufferedWrites(); err != nil {
-							return err
-						}
-						useBufferedRead = false
+						// The buffered domain moved between planning and staging. Keep
+						// the update in the buffered layer by replanning with a fresh
+						// buffered snapshot.
 						replan = true
 						return nil
 					}
