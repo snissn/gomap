@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -17,6 +18,12 @@ const (
 	collectionRefTagName              = 1
 	collectionRefTagHandle            = 2
 )
+
+type metadataIdempotencyEntry struct {
+	commandID iwire.CommandID
+	signature []byte
+	response  []iwire.Section
+}
 
 func collectionNameRef(name string) iwire.Section {
 	return iwire.Section{ID: iwire.SectionCollectionRef, Bytes: appendCollectionNameRefPayload(nil, name)}
@@ -645,6 +652,94 @@ func (s *Server) checkCatalogGuard(sections []iwire.Section) error {
 	return nil
 }
 
+func (s *Server) beginMetadataIdempotency(commandID iwire.CommandID, sections []iwire.Section) ([]iwire.Section, func([]iwire.Section) []iwire.Section, error) {
+	key, err := metadataIdempotencyKey(sections)
+	if err != nil {
+		return nil, nil, err
+	}
+	signature, err := metadataMutationSignature(commandID, sections)
+	if err != nil {
+		return nil, nil, err
+	}
+	if s.metadataIdempotency == nil {
+		s.metadataIdempotency = make(map[string]metadataIdempotencyEntry)
+	}
+	if entry, ok := s.metadataIdempotency[key]; ok {
+		if entry.commandID != commandID || !bytes.Equal(entry.signature, signature) {
+			return nil, nil, protocolError(iwire.ErrIdempotencyConflict, "idempotency key reused for different metadata mutation")
+		}
+		return cloneSections(entry.response), nil, nil
+	}
+	remember := func(response []iwire.Section) []iwire.Section {
+		copied := cloneSections(response)
+		s.metadataIdempotency[key] = metadataIdempotencyEntry{
+			commandID: commandID,
+			signature: append([]byte(nil), signature...),
+			response:  copied,
+		}
+		return cloneSections(copied)
+	}
+	return nil, remember, nil
+}
+
+func metadataIdempotencyKey(sections []iwire.Section) (string, error) {
+	raw, ok, err := singletonSection(sections, iwire.SectionIdempotencyKey)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", protocolError(iwire.ErrInvalidCommand, "missing idempotency key")
+	}
+	if len(raw) == 0 {
+		return "", protocolError(iwire.ErrInvalidCommand, "idempotency key cannot be empty")
+	}
+	return string(raw), nil
+}
+
+func metadataMutationSignature(commandID iwire.CommandID, sections []iwire.Section) ([]byte, error) {
+	dst := binary.AppendUvarint(nil, uint64(commandID))
+	for _, id := range metadataMutationSignatureSections(commandID) {
+		raw, ok, err := singletonSection(sections, id)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, protocolError(iwire.ErrInvalidCommand, "missing section %d", id)
+		}
+		var appendErr error
+		dst, appendErr = iwire.AppendSection(dst, iwire.Section{ID: id, Bytes: raw})
+		if appendErr != nil {
+			return nil, appendErr
+		}
+	}
+	return dst, nil
+}
+
+func metadataMutationSignatureSections(commandID iwire.CommandID) []iwire.SectionID {
+	switch commandID {
+	case iwire.CommandCreateCollection:
+		return []iwire.SectionID{iwire.SectionCollectionMeta}
+	case iwire.CommandCreateIndex:
+		return []iwire.SectionID{iwire.SectionCollectionRef, iwire.SectionIndexDefinition}
+	case iwire.CommandDropIndex:
+		return []iwire.SectionID{iwire.SectionCollectionRef, iwire.SectionIndexName}
+	default:
+		return nil
+	}
+}
+
+func cloneSections(sections []iwire.Section) []iwire.Section {
+	if len(sections) == 0 {
+		return nil
+	}
+	out := make([]iwire.Section, len(sections))
+	for i := range sections {
+		out[i] = sections[i]
+		out[i].Bytes = append([]byte(nil), sections[i].Bytes...)
+	}
+	return out
+}
+
 func metadataSection(sections []iwire.Section, id iwire.SectionID) ([]byte, error) {
 	raw, ok, err := singletonSection(sections, id)
 	if err != nil {
@@ -737,6 +832,13 @@ func collectionNotFound(name string) error {
 
 func invalidMetadata(format string, args ...any) error {
 	return protocolError(iwire.ErrInvalidCommand, format, args...)
+}
+
+func ensureCollectionName(name string) error {
+	if err := collections.ValidateCollectionName(name); err != nil {
+		return invalidMetadata("%v", err)
+	}
+	return nil
 }
 
 func ensureIndexName(name string) error {
