@@ -1,6 +1,7 @@
 package mongogateway
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -38,6 +39,12 @@ type partialReadWriter struct {
 	w        bytes.Buffer
 	maxWrite int
 }
+
+type timeoutNetError struct{}
+
+func (timeoutNetError) Error() string   { return "i/o timeout" }
+func (timeoutNetError) Timeout() bool   { return true }
+func (timeoutNetError) Temporary() bool { return true }
 
 func (rw *partialReadWriter) Read(p []byte) (int, error) {
 	return rw.r.Read(p)
@@ -167,6 +174,34 @@ func TestServerDoesNotRetainReadBufferAfterBSONInsert(t *testing.T) {
 		t.Fatal("read buffer was retained after BSON insert")
 	}
 	assertOK(t, readMsgResponse(t, rw.w.Bytes(), 22002))
+}
+
+func TestBufferedMessageCanRetainRequestBody(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		doc  bson.D
+		want bool
+	}{
+		{name: "ping", doc: bson.D{{Key: "ping", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
+		{name: "find", doc: bson.D{{Key: "find", Value: "users"}, {Key: "$db", Value: "app"}}, want: true},
+		{name: "update", doc: bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{}}, {Key: "$db", Value: "app"}}, want: false},
+		{name: "insert", doc: bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}}}}, {Key: "$db", Value: "app"}}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			commandDoc := mustDocument(t, tc.doc)
+			req, err := wire.AppendMsgMessage(nil, 22003, 0, 0, commandDoc)
+			if err != nil {
+				t.Fatalf("AppendMsgMessage: %v", err)
+			}
+			header, err := wire.ParseHeader(req[:wire.HeaderLen])
+			if err != nil {
+				t.Fatalf("ParseHeader: %v", err)
+			}
+			if got := bufferedMessageCanRetainRequestBody(header, req[wire.HeaderLen:]); got != tc.want {
+				t.Fatalf("retain=%v want %v", got, tc.want)
+			}
+		})
+	}
 }
 
 func TestServerRejectsFindWithMoreToCome(t *testing.T) {
@@ -3334,6 +3369,65 @@ func TestServerFindIndexedRangeStreamingFirstBatchOverflowOpensCursor(t *testing
 	}
 }
 
+func TestMarshalIndexedRangeCursorMsgDoesNotRejectCapacityHint(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	assertOK(t, serveCommand(t, server, 2525, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "name", Value: "age_1"},
+			{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}},
+			{Key: "treedbValueType", Value: "int64"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 2526, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "a"}, {Key: "age", Value: int64(37)}, {Key: "payload", Value: strings.Repeat("x", 64)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	col, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush collection: %v", err)
+	}
+	materializer, err := storedDocumentMaterializerForCollection(col)
+	if err != nil {
+		t.Fatalf("open materializer: %v", err)
+	}
+	defer func() { _ = materializer.Close() }()
+
+	opts := collections.IndexRangeOptions{
+		Lower: collections.IndexRangeBound{Value: int64(37), Inclusive: true},
+		Upper: collections.IndexRangeBound{Unbounded: true},
+		Limit: 10_000,
+	}
+	msg, err := marshalIndexedRangeCursorMsgInto(nil, 1, 2526, server, 1, false, col, materializer, "app.users", "age_1", opts, "firstBatch", server.maxFindBatchBytes(), 64*1024)
+	if err != nil {
+		t.Fatalf("marshal indexed range cursor msg: %v", err)
+	}
+	firstBatch := cursorFirstBatch(t, readMsgResponse(t, msg, 2526))
+	if len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	if got, ok := firstBatch[0].Lookup("_id").StringValueOK(); !ok || got != "a" {
+		t.Fatalf("firstBatch _id=%q ok=%v want a", got, ok)
+	}
+}
+
 func TestServerGetMoreDropsCursorOnOversizedNextDocument(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -4492,6 +4586,160 @@ func TestServerRejectsCompressedMessages(t *testing.T) {
 	}
 }
 
+func TestServeConnBufferedMessageCoalescingAppendsResponses(t *testing.T) {
+	firstCommand := mustDocument(t, bson.D{
+		{Key: "ping", Value: int32(1)},
+		{Key: "$db", Value: "admin"},
+	})
+	firstReq, err := wire.AppendMsgMessage(nil, 401, 0, 0, firstCommand)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage first: %v", err)
+	}
+	secondCommand := mustDocument(t, bson.D{
+		{Key: "ping", Value: int32(1)},
+		{Key: "$db", Value: "admin"},
+	})
+	secondReq, err := wire.AppendMsgMessage(nil, 402, 0, 0, secondCommand)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage second: %v", err)
+	}
+	requests := append(firstReq, secondReq...)
+	reader := bufio.NewReaderSize(bytes.NewReader(requests), len(requests))
+	if _, err := reader.Peek(len(requests)); err != nil {
+		t.Fatalf("prime buffered reader: %v", err)
+	}
+
+	server := NewServer()
+	var writeBuf []byte
+	writeBuf, appended, err := server.appendBufferedMessageWithOwner(reader, 1, writeBuf)
+	if err != nil {
+		t.Fatalf("append first buffered message: %v", err)
+	}
+	if !appended {
+		t.Fatal("first buffered message was not appended")
+	}
+	writeBuf, appended, err = server.appendBufferedMessageWithOwner(reader, 1, writeBuf)
+	if err != nil {
+		t.Fatalf("append second buffered message: %v", err)
+	}
+	if !appended {
+		t.Fatal("second buffered message was not appended")
+	}
+	if reader.Buffered() != 0 {
+		t.Fatalf("reader buffered bytes=%d want 0", reader.Buffered())
+	}
+
+	responseReader := bytes.NewReader(writeBuf)
+	firstHeader, firstBody, err := wire.ReadMessage(responseReader, 0)
+	if err != nil {
+		t.Fatalf("read first response: %v", err)
+	}
+	if firstHeader.OpCode != wire.OpMsg || firstHeader.ResponseTo != 401 {
+		t.Fatalf("first response header=%+v", firstHeader)
+	}
+	firstMsg, err := wire.ParseMsg(firstBody)
+	if err != nil {
+		t.Fatalf("parse first response: %v", err)
+	}
+	assertOK(t, firstMsg.Body)
+	secondHeader, secondBody, err := wire.ReadMessage(responseReader, 0)
+	if err != nil {
+		t.Fatalf("read second response: %v", err)
+	}
+	if secondHeader.OpCode != wire.OpMsg || secondHeader.ResponseTo != 402 {
+		t.Fatalf("second response header=%+v", secondHeader)
+	}
+	secondMsg, err := wire.ParseMsg(secondBody)
+	if err != nil {
+		t.Fatalf("parse second response: %v", err)
+	}
+	assertOK(t, secondMsg.Body)
+	if responseReader.Len() != 0 {
+		t.Fatalf("trailing response bytes=%d", responseReader.Len())
+	}
+}
+
+func TestServeConnBufferedMessageRejectsShortMessageLength(t *testing.T) {
+	req := wire.AppendHeader(nil, wire.Header{
+		MessageLength: wire.HeaderLen - 1,
+		RequestID:     401,
+		OpCode:        wire.OpMsg,
+	})
+	reader := bufio.NewReaderSize(bytes.NewReader(req), len(req))
+	if _, err := reader.Peek(len(req)); err != nil {
+		t.Fatalf("prime buffered reader: %v", err)
+	}
+
+	_, appended, err := NewServer().appendBufferedMessageWithOwner(reader, 1, nil)
+	if !errors.Is(err, wire.ErrMalformed) {
+		t.Fatalf("append buffered message err=%v want ErrMalformed", err)
+	}
+	if appended {
+		t.Fatal("malformed buffered message was appended")
+	}
+}
+
+func TestServeConnFlushesBufferedResponseBeforeCoalescedError(t *testing.T) {
+	firstCommand := mustDocument(t, bson.D{
+		{Key: "ping", Value: int32(1)},
+		{Key: "$db", Value: "admin"},
+	})
+	firstReq, err := wire.AppendMsgMessage(nil, 501, 0, 0, firstCommand)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage first: %v", err)
+	}
+	badReq, err := wire.AppendMessage(nil, 502, 0, wire.OpCompressed, nil)
+	if err != nil {
+		t.Fatalf("AppendMessage bad: %v", err)
+	}
+	requests := append(firstReq, badReq...)
+
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+	if err := clientConn.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("SetDeadline: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- NewServer().ServeConn(context.Background(), serverConn)
+	}()
+	writeErrCh := make(chan error, 1)
+	go func() {
+		writeErrCh <- writeFull(clientConn, requests)
+	}()
+
+	header, body, err := wire.ReadMessage(clientConn, 0)
+	if err != nil {
+		t.Fatalf("read flushed response: %v", err)
+	}
+	if header.OpCode != wire.OpMsg || header.ResponseTo != 501 {
+		t.Fatalf("response header=%+v", header)
+	}
+	msg, err := wire.ParseMsg(body)
+	if err != nil {
+		t.Fatalf("ParseMsg: %v", err)
+	}
+	assertOK(t, msg.Body)
+
+	select {
+	case err := <-writeErrCh:
+		if err != nil {
+			t.Fatalf("write requests: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("request write did not finish")
+	}
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, wire.ErrUnsupported) {
+			t.Fatalf("ServeConn err=%v want ErrUnsupported", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ServeConn did not return after coalesced error")
+	}
+}
+
 func TestServeConnCancellationInterruptsRead(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer clientConn.Close()
@@ -4510,6 +4758,17 @@ func TestServeConnCancellationInterruptsRead(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ServeConn did not return after context cancellation")
+	}
+}
+
+func TestServeConnContextErrorMapsCanceledTimeout(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := serveConnContextError(ctx, timeoutNetError{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("serveConnContextError canceled timeout=%v want context.Canceled", err)
+	}
+	if err := serveConnContextError(context.Background(), timeoutNetError{}); err != nil {
+		t.Fatalf("serveConnContextError active context=%v want nil", err)
 	}
 }
 

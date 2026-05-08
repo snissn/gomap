@@ -91,6 +91,41 @@ func TestCollectionManagerOpenCollectionCacheRejectsClosedDB(t *testing.T) {
 	}
 }
 
+func TestCollectionMetaReturnsDefensiveIndexCopyAcrossHandles(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	left, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open left collection: %v", err)
+	}
+	right, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open right collection: %v", err)
+	}
+
+	meta := left.Meta()
+	meta.Indexes[0].Name = "mutated"
+	if got := left.Meta().Indexes[0].Name; got != "email" {
+		t.Fatalf("left Meta leaked mutation: got index %q want email", got)
+	}
+	if got := right.Meta().Indexes[0].Name; got != "email" {
+		t.Fatalf("right Meta leaked mutation: got index %q want email", got)
+	}
+}
+
 func TestCollectionInsertBatchBridge_RoundTripWithSecondaryIndexes(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

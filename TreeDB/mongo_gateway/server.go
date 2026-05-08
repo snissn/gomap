@@ -2,7 +2,9 @@ package mongogateway
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -32,6 +34,7 @@ const (
 	maxRetainedWireReadBuffer      = 1 << 20
 	maxRetainedWireWriteBuffer     = 1 << 20
 	defaultWireReadBufferSize      = 32 * 1024
+	maxCoalescedWireResponses      = 64
 )
 
 var errServerClosed = errors.New("mongo gateway server is closed")
@@ -201,15 +204,50 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		}
 
 		var err error
-		readBuf, writeBuf, err = s.serveOneWithOwner(rw, owner, readBuf, writeBuf)
+		readBuf, writeBuf, err = s.appendOneWithOwner(rw, owner, readBuf, writeBuf[:0])
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
-			if ctx.Err() != nil && (errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe)) {
-				return ctx.Err()
+			if ctxErr := serveConnContextError(ctx, err); ctxErr != nil {
+				return ctxErr
 			}
 			return err
+		}
+		for coalesced := 1; coalesced < maxCoalescedWireResponses && len(writeBuf) < maxRetainedWireWriteBuffer; coalesced++ {
+			var appended bool
+			writeBuf, appended, err = s.appendBufferedMessageWithOwner(rw.reader, owner, writeBuf)
+			if err != nil {
+				if len(writeBuf) > 0 {
+					if flushErr := writeFull(rw, writeBuf); flushErr != nil {
+						if ctxErr := serveConnContextError(ctx, flushErr); ctxErr != nil {
+							return ctxErr
+						}
+						return flushErr
+					}
+				}
+				if ctxErr := serveConnContextError(ctx, err); ctxErr != nil {
+					return ctxErr
+				}
+				return err
+			}
+			if !appended {
+				break
+			}
+		}
+		if len(writeBuf) == 0 {
+			continue
+		}
+		if err := writeFull(rw, writeBuf); err != nil {
+			if ctxErr := serveConnContextError(ctx, err); ctxErr != nil {
+				return ctxErr
+			}
+			return err
+		}
+		if cap(writeBuf) <= maxRetainedWireWriteBuffer {
+			writeBuf = writeBuf[:0]
+		} else {
+			writeBuf = nil
 		}
 	}
 }
@@ -242,7 +280,49 @@ func (s *Server) ServeOneWithOwner(rw io.ReadWriter, cursorOwner int64) error {
 	return err
 }
 
+// ServeBuffers holds reusable per-connection buffers for callers that dispatch
+// individual wire messages without using ServeConn.
+//
+// ServeBuffers is not safe for concurrent use. Use one instance per logical
+// connection/worker.
+type ServeBuffers struct {
+	readBuf  []byte
+	writeBuf []byte
+}
+
+// ServeOneWithOwnerBuffered serves one MongoDB wire message with caller-owned
+// reusable buffers. It is intended for in-process dispatchers and benchmarks
+// that need the same buffer reuse behavior as ServeConn.
+func (s *Server) ServeOneWithOwnerBuffered(rw io.ReadWriter, cursorOwner int64, buffers *ServeBuffers) error {
+	if buffers == nil {
+		return s.ServeOneWithOwner(rw, cursorOwner)
+	}
+	readBuf, writeBuf, err := s.serveOneWithOwner(rw, cursorOwner, buffers.readBuf, buffers.writeBuf)
+	buffers.readBuf = readBuf
+	buffers.writeBuf = writeBuf
+	return err
+}
+
 func (s *Server) serveOneWithOwner(rw io.ReadWriter, cursorOwner int64, readBuf, writeBuf []byte) ([]byte, []byte, error) {
+	readBuf, writeBuf, err := s.appendOneWithOwner(rw, cursorOwner, readBuf, writeBuf[:0])
+	if err != nil {
+		return readBuf, writeBuf, err
+	}
+	if len(writeBuf) == 0 {
+		return readBuf, writeBuf, nil
+	}
+	if err := writeFull(rw, writeBuf); err != nil {
+		return readBuf, writeBuf, err
+	}
+	if cap(writeBuf) <= maxRetainedWireWriteBuffer {
+		writeBuf = writeBuf[:0]
+	} else {
+		writeBuf = nil
+	}
+	return readBuf, writeBuf, nil
+}
+
+func (s *Server) appendOneWithOwner(rw io.Reader, cursorOwner int64, readBuf, writeBuf []byte) ([]byte, []byte, error) {
 	if s.isClosed() {
 		return readBuf, writeBuf, errServerClosed
 	}
@@ -265,20 +345,149 @@ func (s *Server) serveOneWithOwner(rw io.ReadWriter, cursorOwner int64, readBuf,
 	if response == nil {
 		return readBuf, writeBuf, nil
 	}
-	if err := writeFull(rw, response); err != nil {
-		return readBuf, writeBuf, err
+	return readBuf, response, nil
+}
+
+func (s *Server) appendBufferedMessageWithOwner(reader *bufio.Reader, cursorOwner int64, writeBuf []byte) ([]byte, bool, error) {
+	if s.isClosed() {
+		return writeBuf, false, errServerClosed
 	}
-	if cap(response) <= maxRetainedWireWriteBuffer {
-		writeBuf = response[:0]
-	} else {
-		writeBuf = nil
+	if reader == nil || reader.Buffered() < wire.HeaderLen {
+		return writeBuf, false, nil
 	}
-	return readBuf, writeBuf, nil
+	headerBytes, err := reader.Peek(wire.HeaderLen)
+	if err != nil {
+		if errors.Is(err, bufio.ErrBufferFull) {
+			return writeBuf, false, nil
+		}
+		return writeBuf, false, err
+	}
+	h, err := wire.ParseHeader(headerBytes)
+	if err != nil {
+		return writeBuf, false, err
+	}
+	if h.MessageLength < wire.HeaderLen {
+		return writeBuf, false, fmt.Errorf("%w: message length %d below header length", wire.ErrMalformed, h.MessageLength)
+	}
+	if h.MessageLength > s.maxMessageLength() {
+		return writeBuf, false, fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, h.MessageLength, s.maxMessageLength())
+	}
+	messageLength := int(h.MessageLength)
+	if reader.Buffered() < messageLength {
+		return writeBuf, false, nil
+	}
+	message, err := reader.Peek(messageLength)
+	if err != nil {
+		if errors.Is(err, bufio.ErrBufferFull) {
+			return writeBuf, false, nil
+		}
+		return writeBuf, false, err
+	}
+	body := message[wire.HeaderLen:messageLength]
+	if !bufferedMessageCanRetainRequestBody(h, body) {
+		return writeBuf, false, nil
+	}
+	response, _, err := s.handleMessageInto(writeBuf, h, body, cursorOwner)
+	if err != nil {
+		return writeBuf, false, err
+	}
+	if _, err := reader.Discard(messageLength); err != nil {
+		return writeBuf, false, err
+	}
+	if response != nil {
+		writeBuf = response
+	}
+	return writeBuf, true, nil
 }
 
 func (s *Server) handleMessage(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
 	response, _, err := s.handleMessageInto(nil, h, body, cursorOwner)
 	return response, err
+}
+
+func bufferedMessageCanRetainRequestBody(h wire.Header, body []byte) bool {
+	name, ok := bufferedMessageCommandName(h.OpCode, body)
+	if !ok {
+		return false
+	}
+	switch name {
+	case "find", "getMore", "hello", "isMaster", "ismaster", "killCursors", "listCollections", "listIndexes", "ping":
+		return true
+	default:
+		return false
+	}
+}
+
+func bufferedMessageCommandName(op wire.OpCode, body []byte) (string, bool) {
+	switch op {
+	case wire.OpMsg:
+		if len(body) < 5 {
+			return "", false
+		}
+		rem := body[4:]
+		for len(rem) > 0 {
+			kind := rem[0]
+			rem = rem[1:]
+			switch kind {
+			case wire.MsgSectionBody:
+				return bsonDocumentCommandName(rem)
+			case wire.MsgSectionDocumentSequence:
+				if len(rem) < 4 {
+					return "", false
+				}
+				size := int(int32(binary.LittleEndian.Uint32(rem[:4])))
+				if size <= 4 || size > len(rem) || bytes.IndexByte(rem[4:size], 0) < 0 {
+					return "", false
+				}
+				rem = rem[size:]
+			default:
+				return "", false
+			}
+		}
+		return "", false
+	case wire.OpQuery:
+		if len(body) < 4 {
+			return "", false
+		}
+		rem := body[4:]
+		i := 0
+		for i < len(rem) && rem[i] != 0 {
+			i++
+		}
+		if i == len(rem) {
+			return "", false
+		}
+		rem = rem[i+1:]
+		if len(rem) < 8 {
+			return "", false
+		}
+		return bsonDocumentCommandName(rem[8:])
+	default:
+		return "", false
+	}
+}
+
+func bsonDocumentCommandName(doc []byte) (string, bool) {
+	if len(doc) < 5 {
+		return "", false
+	}
+	size := int(int32(binary.LittleEndian.Uint32(doc[:4])))
+	if size < 5 || size > len(doc) || doc[size-1] != 0 {
+		return "", false
+	}
+	if size == 5 || doc[4] == 0 {
+		return "", false
+	}
+	key := doc[5:size]
+	for i, b := range key {
+		if b == 0 {
+			if i == 0 {
+				return "", false
+			}
+			return string(key[:i]), true
+		}
+	}
+	return "", false
 }
 
 func (s *Server) handleMessageInto(dst []byte, h wire.Header, body []byte, cursorOwner int64) ([]byte, bool, error) {
@@ -431,6 +640,24 @@ func writeFull(w io.Writer, p []byte) error {
 			return io.ErrShortWrite
 		}
 		p = p[n:]
+	}
+	return nil
+}
+
+func serveConnContextError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	ctxErr := ctx.Err()
+	if ctxErr == nil {
+		return nil
+	}
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
+		return ctxErr
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return ctxErr
 	}
 	return nil
 }

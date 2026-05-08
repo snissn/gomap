@@ -2157,7 +2157,9 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 	collection := &Collection{
 		db:          m.db,
 		writeDomain: m.writeDomainForCollection(catalog.meta.Name),
-		meta:        copyCollectionMeta(catalog.meta),
+		// Collection catalogs are immutable once loaded; public Meta returns a
+		// defensive copy, so handles can keep the catalog meta value directly.
+		meta: catalog.meta,
 	}
 	if collection.writeDomain == nil {
 		return nil, backenddb.ErrClosed
@@ -2192,7 +2194,9 @@ func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Co
 	collection := &Collection{
 		db:          m.db,
 		writeDomain: domain,
-		meta:        copyCollectionMeta(catalog.meta),
+		// Collection catalogs are immutable once loaded; public Meta returns a
+		// defensive copy, so handles can keep the catalog meta value directly.
+		meta: catalog.meta,
 	}
 	collection.rememberCatalogAtSystemRoot(state.SystemRootPageID, catalog)
 	return collection, true
@@ -11577,6 +11581,22 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 		return false, false, err
 	}
 	primaryRootName := collectionPrimaryRootName(catalog.meta.Name)
+	var primaryReader backenddb.SnapshotRootReader
+	primaryReaderOK := false
+	primaryRootMissing := false
+	if len(catalog.overlayRootIDs(primaryRootName)) == 0 {
+		primaryRootID := catalog.rootID(primaryRootName)
+		if primaryRootID == 0 {
+			primaryRootMissing = true
+		} else {
+			primaryReader, err = snap.ReaderAtRoot(primaryRootID)
+			if err != nil {
+				return false, true, err
+			} else {
+				primaryReaderOK = true
+			}
+		}
+	}
 	var scratch []byte
 	dedupeDocumentIDs := shouldDedupeIndexDocumentIDs(idx, catalog.meta.Options)
 	documentCount := 0
@@ -11588,10 +11608,24 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 			value, buffered, found = c.getBufferedDocumentIntoLocked(domain, id, scratch[:0])
 		}
 		if !buffered {
-			var err error
-			value, found, err = collectionGetAppendAtCatalogRoot(snap, catalog, primaryRootName, id, scratch[:0])
-			if err != nil {
-				return false, err
+			if primaryReaderOK {
+				var err error
+				value, err = primaryReader.GetAppend(id, scratch[:0])
+				if errors.Is(err, tree.ErrKeyNotFound) {
+					found = false
+				} else if err != nil {
+					return false, err
+				} else {
+					found = true
+				}
+			} else if primaryRootMissing {
+				found = false
+			} else {
+				var err error
+				value, found, err = collectionGetAppendAtCatalogRoot(snap, catalog, primaryRootName, id, scratch[:0])
+				if err != nil {
+					return false, err
+				}
 			}
 		}
 		if !found {

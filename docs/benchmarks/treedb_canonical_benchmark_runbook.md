@@ -249,8 +249,8 @@ Use a client-mode matrix when measuring driver overhead and gateway ceiling:
 
 ```sh
 TREEDB_DOCUMENT_FORMATS="bson" \
-TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire" \
-MONGO_CLIENT_MODES="driver driver-command driver-command-raw driver-unack" \
+TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire" \
+MONGO_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack" \
 BATCH_SIZE=5000 \
 INSERT_PRODUCERS=8 \
 MONGO_MAX_POOL_SIZE=128 \
@@ -281,6 +281,8 @@ new client-mode bundles remain readable side by side.
 Interpret client modes as separate questions:
 
 - `driver`: ordinary official MongoDB Go driver CRUD-helper path.
+- `driver-find-raw`: official driver `Collection.Find` range-read path using
+  `cursor.Current` raw BSON instead of decoding documents into `bson.M`.
 - `driver-command`: official driver `RunCommand` insert path.
 - `driver-command-raw`: official driver `RunCommand` with prebuilt raw BSON.
 - `driver-unack`: official driver unacknowledged insert enqueue path plus
@@ -289,13 +291,19 @@ Interpret client modes as separate questions:
   format. It emits the same phase names as the Mongo gateway benchmark while
   bypassing the MongoDB driver, sockets, and Mongo gateway command handling.
 - `raw-wire-tcp`: TreeDB-only raw OP_MSG load over loopback TCP.
+- `raw-wire-tcp-pipeline`: TreeDB-only raw TCP load plus pipelined age range
+  `find` requests; use it to measure how much single-connection request/response
+  latency can be hidden without the official driver. The default pipeline depth
+  is `128`, which keeps enough requests queued for the gateway's buffered
+  response coalescing to amortize write syscalls.
 - `raw-wire`: TreeDB-only in-process raw OP_MSG load.
 
-Use `driver` for user-visible Mongo compatibility. Use `driver-command-raw` for
-the fastest current acknowledged official-driver load path. Use `direct` to
-separate collection-engine and storage-format bottlenecks from Mongo
-compatibility overhead. Use raw-wire modes only to estimate TreeDB
-gateway/server ceiling.
+Use `driver` for user-visible Mongo compatibility. Use `driver-find-raw` to
+separate official-driver find/cursor overhead from application `bson.M` decode.
+Use `driver-command-raw` for the fastest current acknowledged official-driver
+load path. Use `direct` to separate collection-engine and storage-format
+bottlenecks from Mongo compatibility overhead. Use raw-wire modes only to
+estimate TreeDB gateway/server ceiling.
 
 ## Reader and Writer Scaling
 
