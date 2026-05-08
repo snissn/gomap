@@ -249,6 +249,28 @@ func TestGetManyResponseRespectsFrameLimit(t *testing.T) {
 	}
 }
 
+func TestGetManyResponseRespectsByteVectorLimit(t *testing.T) {
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{Limits: iwire.Limits{MaxByteVectorBytes: 64}})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{bytes.Repeat([]byte("x"), 128)}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if _, _, err := client.GetMany(ctx, "users", [][]byte{[]byte("u1")}); !isRemoteError(err, iwire.ErrResourceExhausted) {
+		t.Fatalf("GetMany err=%v want resource exhausted", err)
+	}
+}
+
 func TestDecodeReadResultsRejectsTrailingTruncatedBytes(t *testing.T) {
 	sections := []iwire.Section{
 		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("u1"))},
