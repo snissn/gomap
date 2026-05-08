@@ -799,9 +799,12 @@ Deterministic entries MUST use one canonical encoding:
   query values,
 - no map iteration order.
 
-The v1 envelope itself carries only deterministic command flags. Response
-shaping flags such as omitted result IDs or omitted response metadata are
-stripped before entry encoding because they do not change logical state.
+The v1 envelope itself carries only deterministic command flags. R2/v1 defines
+no deterministic command flags yet; compatible v1 encoders MUST write
+`command_flags = 0`, and v1 decoders MUST reject non-zero `command_flags` as
+reserved for future versions. Response shaping flags such as omitted result IDs
+or omitted response metadata are stripped before entry encoding because they do
+not change logical state.
 
 Unknown, ignored, transport-only, or non-critical convenience sections MUST NOT
 be copied into the deterministic entry. Optional fields MUST either be omitted
