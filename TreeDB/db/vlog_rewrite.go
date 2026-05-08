@@ -3353,6 +3353,22 @@ func (w *rewriteWriter) ConfigureLeafLog(leafDir string, lane, startSeq uint32) 
 	w.leafSeq = startSeq
 }
 
+func (w *rewriteWriter) resetLeafLogSeqAtLeast(seq uint32) error {
+	if w == nil || w.leafDir == "" || seq <= w.leafSeq {
+		return nil
+	}
+	if w.leafW != nil {
+		if err := w.leafW.Close(); err != nil {
+			return err
+		}
+		w.leafW = nil
+	}
+	w.leafSeq = seq
+	w.leafCurrentPath = ""
+	w.leafCurrentFileID = 0
+	return nil
+}
+
 func (w *rewriteWriter) noteCreatedSegment(path string, fileID uint32) {
 	if w == nil || path == "" || fileID == 0 {
 		return

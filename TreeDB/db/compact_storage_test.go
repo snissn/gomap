@@ -568,7 +568,7 @@ func TestCompactStorageRIDAllocatorIsSharedAcrossOfflineWriters(t *testing.T) {
 		t.Fatalf("rid start scans=%d want 1", scanCalls)
 	}
 
-	cleanup, err := d.installCompactStorageLeafPageLog(opts)
+	_, cleanup, err := d.installCompactStorageLeafPageLog(opts)
 	if err != nil {
 		t.Fatalf("installCompactStorageLeafPageLog: %v", err)
 	}
@@ -586,6 +586,58 @@ func TestCompactStorageRIDAllocatorIsSharedAcrossOfflineWriters(t *testing.T) {
 	}
 	if start != 501 {
 		t.Fatalf("ReserveRIDs start=%d want 501 after leaf writer consumed rid 500", start)
+	}
+}
+
+func TestCompactStorageRefreshesInstalledLeafWriterAfterPack(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(ValueLogDirPath(dir), 0755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	if err := os.MkdirAll(LeafLogDirPath(dir), 0755); err != nil {
+		t.Fatalf("mkdir leaf_vlog: %v", err)
+	}
+
+	d := &DB{
+		dir:                        dir,
+		indexOuterLeavesInValueLog: true,
+		valueLogCompression:        ValueLogCompressionOff,
+	}
+	opts := CompactStorageOptions{ReserveRIDs: newRewriteRIDAllocator(1, nil).Reserve}
+	installed, cleanup, err := d.installCompactStorageLeafPageLog(opts)
+	if err != nil {
+		t.Fatalf("installCompactStorageLeafPageLog: %v", err)
+	}
+	defer cleanup()
+	if installed == nil {
+		t.Fatal("expected installed compact leaf writer")
+	}
+
+	packWriter := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 0)
+	packWriter.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	if _, err := packWriter.AppendLeafPage(bytes.Repeat([]byte("p"), page.PageSize)); err != nil {
+		_ = packWriter.Close()
+		t.Fatalf("pack writer AppendLeafPage: %v", err)
+	}
+	if err := packWriter.Close(); err != nil {
+		t.Fatalf("close pack writer: %v", err)
+	}
+
+	if err := d.refreshCompactStorageLeafPageLog(installed); err != nil {
+		t.Fatalf("refreshCompactStorageLeafPageLog: %v", err)
+	}
+	if _, err := installed.AppendLeafPage(bytes.Repeat([]byte("v"), page.PageSize)); err != nil {
+		t.Fatalf("installed AppendLeafPage: %v", err)
+	}
+	gotPath, _, ok := installed.CurrentValueLogSegment()
+	if !ok {
+		t.Fatal("installed writer did not report current leaf segment")
+	}
+	if got := filepath.Base(gotPath); got != "value-l255-000002.log" {
+		t.Fatalf("installed writer segment=%s, want value-l255-000002.log", got)
+	}
+	if _, err := os.Stat(filepath.Join(LeafLogDirPath(dir), "value-l255-000001.log")); err != nil {
+		t.Fatalf("expected packed leaf segment to remain: %v", err)
 	}
 }
 

@@ -189,7 +189,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		return stats, err
 	}
 
-	cleanupLeafLog, err := db.installCompactStorageLeafPageLog(opts)
+	compactLeafLog, cleanupLeafLog, err := db.installCompactStorageLeafPageLog(opts)
 	if err != nil {
 		return stats, err
 	}
@@ -253,6 +253,9 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 				stats.Phases[len(stats.Phases)-1].SkipReason = pack.SkipReason
 			}
 			break
+		}
+		if err := db.refreshCompactStorageLeafPageLog(compactLeafLog); err != nil {
+			return stats, err
 		}
 		if err := db.runCompactStoragePhase(&stats, fmt.Sprintf("checkpoint-after-%s", phaseName), func() error {
 			return db.Checkpoint()
@@ -767,13 +770,13 @@ func compactStorageValueLogFileID(name string) (uint32, bool) {
 	return fileID, true
 }
 
-func (db *DB) installCompactStorageLeafPageLog(opts CompactStorageOptions) (func(), error) {
+func (db *DB) installCompactStorageLeafPageLog(opts CompactStorageOptions) (*rewriteWriter, func(), error) {
 	if db == nil || !db.indexOuterLeavesInValueLog || db.leafPageLog != nil {
-		return func() {}, nil
+		return nil, func() {}, nil
 	}
 	segments, err := listValueLogSegments(db.dir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	leafStartSeq := maxRewriteLaneSeq(segments, rewriteLeafLogLaneID)
 	writer := newRewriteWriter(ValueLogDirPath(db.dir), 0, 0, 0)
@@ -783,7 +786,7 @@ func (db *DB) installCompactStorageLeafPageLog(opts CompactStorageOptions) (func
 		nextRID, err = rewriteRIDStartScanner(segments)
 		if err != nil {
 			_ = writer.Close()
-			return nil, fmt.Errorf("scan rewrite rid start in %s: %w", db.dir, err)
+			return nil, nil, fmt.Errorf("scan rewrite rid start in %s: %w", db.dir, err)
 		}
 	}
 	writer.ridAlloc = newRewriteRIDAllocator(nextRID, opts.ReserveRIDs)
@@ -795,7 +798,7 @@ func (db *DB) installCompactStorageLeafPageLog(opts CompactStorageOptions) (func
 			leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(db, state, db.valueLogDictCurrentForClass, db.valueLogDictLeafPayloadMode, db.valueLogDictLookup, db.valueLogDictPut, db.valueLogDictSetCurrentForClass, db.valueLogDictSetLeafPayloadMode, compression.TrainConfig{})
 			if err != nil {
 				_ = writer.Close()
-				return nil, err
+				return nil, nil, err
 			}
 			if leafDictID != 0 && len(leafDictBytes) > 0 {
 				writer.SetLeafDictMode(leafDictID, leafDictBytes, leafDictUseRawPages)
@@ -803,8 +806,20 @@ func (db *DB) installCompactStorageLeafPageLog(opts CompactStorageOptions) (func
 		}
 	}
 	db.SetLeafPageLog(writer)
-	return func() {
+	return writer, func() {
 		db.SetLeafPageLog(nil)
 		_ = writer.Close()
 	}, nil
+}
+
+func (db *DB) refreshCompactStorageLeafPageLog(writer *rewriteWriter) error {
+	if db == nil || writer == nil || writer.leafDir == "" {
+		return nil
+	}
+	segments, err := listValueLogSegments(db.dir)
+	if err != nil {
+		return err
+	}
+	leafSeq := maxRewriteLaneSeq(segments, rewriteLeafLogLaneID)
+	return writer.resetLeafLogSeqAtLeast(leafSeq)
 }
