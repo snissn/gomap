@@ -203,10 +203,7 @@ func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState,
 		if writeErr := s.writeError(w, header, err); writeErr != nil {
 			return writeErr
 		}
-		if state != nil && state.hello {
-			return errGoaway
-		}
-		return nil
+		return errGoaway
 	}
 	switch header.Type {
 	case iwire.FrameHello:
@@ -271,15 +268,15 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, header iwire.He
 		s.counters.inc("commands." + cmd.Schema.Name + ".errors_total")
 		return s.writeError(w, header, err)
 	}
-	body = body[:0]
+	var responseBody []byte
 	for _, section := range responseSections {
-		body, err = iwire.AppendSection(body, section)
+		responseBody, err = iwire.AppendSection(responseBody, section)
 		if err != nil {
 			return err
 		}
 	}
 	s.counters.inc("requests.completed_total")
-	return s.writeSimpleFrame(w, iwire.Header{Type: iwire.FrameResponse, StreamID: header.StreamID, RequestID: header.RequestID}, body)
+	return s.writeSimpleFrame(w, iwire.Header{Type: iwire.FrameResponse, StreamID: header.StreamID, RequestID: header.RequestID}, responseBody)
 }
 
 func (s *Server) writeHelloOK(w io.Writer, header iwire.Header, state *connState) error {
