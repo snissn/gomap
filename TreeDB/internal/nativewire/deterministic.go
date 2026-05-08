@@ -918,10 +918,6 @@ func validateDeterministicSectionPayload(section Section, limits Limits) error {
 		if n != len(section.Bytes) {
 			return protocolError(ErrMalformedFrame, "section %d has %d trailing bytes", section.ID, len(section.Bytes)-n)
 		}
-	case SectionIdempotencyKey:
-		if len(section.Bytes) == 0 {
-			return protocolError(ErrInvalidCommand, "idempotency key cannot be empty")
-		}
 	case SectionReplacementMode:
 		mode, n, err := readUvarint(section.Bytes)
 		if err != nil {
