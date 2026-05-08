@@ -351,6 +351,55 @@ func TestDeterministicEntryRejectsEmptyDocumentIDs(t *testing.T) {
 	}
 }
 
+func TestDeterministicDropIndexValidatesEncodedIndexName(t *testing.T) {
+	registry := MustV1Registry()
+	sections := []Section{
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandDropIndex, Version: 1})},
+		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
+		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+		{ID: SectionCollectionRef, Bytes: append([]byte{deterministicCollectionRefTagName}, []byte("users")...)},
+		{ID: SectionIndexName, Bytes: []byte{1, 'e', 'x'}},
+	}
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("malformed encoded index name err=%v code=%d", err, codeOf(err))
+	}
+
+	for i := range sections {
+		if sections[i].ID == SectionIndexName {
+			sections[i].Bytes = appendDeterministicTestString(nil, "email")
+		}
+	}
+	cmd, err = registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections valid: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); err != nil {
+		t.Fatalf("AppendDeterministicEntry valid: %v", err)
+	}
+}
+
+func TestDeterministicIndexDefinitionRejectsInvalidIndexPaths(t *testing.T) {
+	registry := MustV1Registry()
+	sections := []Section{
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateIndex, Version: 1})},
+		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
+		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+		{ID: SectionCollectionRef, Bytes: append([]byte{deterministicCollectionRefTagName}, []byte("users")...)},
+		{ID: SectionIndexDefinition, Bytes: deterministicIndexDefinitionPayload("email", ".email")},
+	}
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("invalid index path err=%v code=%d", err, codeOf(err))
+	}
+}
+
 func registryWithInsertBatchAllowedFlags(flags uint64) *Registry {
 	schemas := v1CommandSchemas()
 	for i := range schemas {
