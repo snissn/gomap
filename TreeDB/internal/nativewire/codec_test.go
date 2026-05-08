@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"bytes"
 	"encoding/hex"
 	"testing"
 )
@@ -117,6 +118,46 @@ func TestSectionAndByteVectorRoundTrip(t *testing.T) {
 	}
 	assertItem(t, vec, 0, "a")
 	assertItem(t, vec, 1, "bc")
+	items, err := DecodeByteVectorItems(vecBytes, Limits{})
+	if err != nil {
+		t.Fatalf("DecodeByteVectorItems: %v", err)
+	}
+	if len(items) != 2 || string(items[0]) != "a" || string(items[1]) != "bc" {
+		t.Fatalf("DecodeByteVectorItems=%q", items)
+	}
+	payloadVec, err := AppendByteVectorPayload(nil, []int{1, 2}, []byte("abc"))
+	if err != nil {
+		t.Fatalf("AppendByteVectorPayload: %v", err)
+	}
+	if !bytes.Equal(payloadVec, vecBytes) {
+		t.Fatalf("AppendByteVectorPayload=%x want %x", payloadVec, vecBytes)
+	}
+}
+
+func TestDecodeByteVectorItemsIntoClearsReusedTail(t *testing.T) {
+	large := AppendByteVector(nil, []byte("a"), []byte("bb"), []byte("ccc"))
+	items, err := DecodeByteVectorItemsInto(make([][]byte, 0, 3), large, Limits{})
+	if err != nil {
+		t.Fatalf("DecodeByteVectorItemsInto large: %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("large len=%d want 3", len(items))
+	}
+
+	small := AppendByteVector(nil, []byte("z"))
+	items, err = DecodeByteVectorItemsInto(items, small, Limits{})
+	if err != nil {
+		t.Fatalf("DecodeByteVectorItemsInto small: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("small len=%d want 1", len(items))
+	}
+	backing := items[:cap(items)]
+	for i, item := range backing[1:] {
+		if item != nil {
+			t.Fatalf("reused tail entry %d retained %q", i+1, item)
+		}
+	}
 }
 
 func TestAppendSectionPreservesDstOnValidationError(t *testing.T) {
@@ -127,6 +168,22 @@ func TestAppendSectionPreservesDstOnValidationError(t *testing.T) {
 	}
 	if string(got) != string(prefix) {
 		t.Fatalf("AppendSection returned %q want original prefix %q", got, prefix)
+	}
+
+	got, err = AppendSectionHeader(prefix, SectionCollectionRef, 1<<63, 0)
+	if codeOf(err) != ErrUnsupportedFeature {
+		t.Fatalf("AppendSectionHeader flags err=%v code=%d want unsupported feature", err, codeOf(err))
+	}
+	if string(got) != string(prefix) {
+		t.Fatalf("AppendSectionHeader flags returned %q want original prefix %q", got, prefix)
+	}
+
+	got, err = AppendSectionHeader(prefix, SectionCollectionRef, 0, -1)
+	if codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("AppendSectionHeader length err=%v code=%d want malformed frame", err, codeOf(err))
+	}
+	if string(got) != string(prefix) {
+		t.Fatalf("AppendSectionHeader length returned %q want original prefix %q", got, prefix)
 	}
 }
 
@@ -140,6 +197,44 @@ func TestByteVectorRejectsLengthMismatch(t *testing.T) {
 		if _, err := DecodeByteVector(tc, Limits{}); codeOf(err) != ErrMalformedFrame {
 			t.Fatalf("DecodeByteVector(%x) err=%v code=%d", tc, err, codeOf(err))
 		}
+	}
+}
+
+func TestValidateByteVectorRejectsMalformedVectors(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		raw    []byte
+		limits Limits
+		code   ErrorCode
+	}{
+		{
+			name: "truncated_length_varint",
+			raw:  []byte{1, 0x80},
+			code: ErrMalformedFrame,
+		},
+		{
+			name: "declared_payload_mismatch",
+			raw:  []byte{1, 2, 'a'},
+			code: ErrMalformedFrame,
+		},
+		{
+			name:   "count_limit",
+			raw:    AppendByteVector(nil, []byte("a"), []byte("b")),
+			limits: Limits{MaxByteVectorItems: 1},
+			code:   ErrResourceExhausted,
+		},
+		{
+			name:   "payload_byte_limit",
+			raw:    AppendByteVector(nil, []byte("abc")),
+			limits: Limits{MaxByteVectorBytes: 2},
+			code:   ErrResourceExhausted,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateByteVector(tc.raw, tc.limits); codeOf(err) != tc.code {
+				t.Fatalf("validateByteVector(%x) err=%v code=%d want %d", tc.raw, err, codeOf(err), tc.code)
+			}
+		})
 	}
 }
 

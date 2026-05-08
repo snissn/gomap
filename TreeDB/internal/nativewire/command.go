@@ -6,6 +6,17 @@ type CommandHeader struct {
 	Flags   uint64
 }
 
+const (
+	// CommandFlagOmitResultIDs asks mutation responses to omit result ID vectors
+	// when the command can otherwise report success through response_meta.
+	CommandFlagOmitResultIDs uint64 = 1 << iota
+	// CommandFlagOmitResponseMeta asks success responses to omit response_meta
+	// when the client only needs success/error signaling.
+	CommandFlagOmitResponseMeta
+)
+
+const commandResponseShapingFlagsMask = CommandFlagOmitResultIDs | CommandFlagOmitResponseMeta
+
 // Deterministic entries intentionally include no command flags in R0c. Response
 // shaping flags are transport-only until a future replicated command version
 // explicitly defines deterministic flag semantics.
@@ -16,7 +27,7 @@ func DeterministicCommandFlags(flags uint64) uint64 {
 }
 
 func UnsupportedDeterministicCommandFlags(flags uint64) uint64 {
-	return flags &^ deterministicCommandFlagsMask
+	return flags &^ (commandResponseShapingFlagsMask | deterministicCommandFlagsMask)
 }
 
 func AppendCommandHeader(dst []byte, h CommandHeader) []byte {

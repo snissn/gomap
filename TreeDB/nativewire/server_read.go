@@ -8,10 +8,18 @@ import (
 )
 
 func (s *Server) handleGetMany(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
-	if err := managerRequired(s.collections); err != nil {
+	_, docs, present, err := s.getManyDocuments(state, sections)
+	if err != nil {
 		return nil, err
 	}
-	name, _, err := collectionRefFromSections(state, sections)
+	return []iwire.Section{
+		{ID: iwire.SectionPresenceBitmap, Bytes: encodePresenceBitmap(present)},
+		{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, docs...)},
+	}, nil
+}
+
+func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, dst []byte) ([]byte, error) {
+	_, collection, err := s.openCollectionRef(state, sections)
 	if err != nil {
 		return nil, err
 	}
@@ -19,20 +27,104 @@ func (s *Server) handleGetMany(state *connState, sections []iwire.Section) ([]iw
 	if err != nil {
 		return nil, err
 	}
-	ids, err := decodeByteVectorCloned(rawIDs, s.limits)
+	var ids [][]byte
+	if state != nil {
+		ids, err = decodeByteVectorBorrowedInto(state.idsScratch, rawIDs, s.limits)
+		state.idsScratch = ids
+	} else {
+		ids, err = decodeByteVectorBorrowed(rawIDs, s.limits)
+	}
 	if err != nil {
 		return nil, err
 	}
-	collection, err := s.collections.OpenCollection(name)
+
+	lengths := make([]int, len(ids))
+	presence := make([]byte, (len(ids)+7)/8)
+	payload := make([]byte, 0, getManyPayloadCapacityHint(len(ids), s.limits))
+	for i, id := range ids {
+		start := len(payload)
+		doc, found, err := collection.GetInto(id, payload[start:start])
+		if err != nil {
+			return nil, metadataWrap(err)
+		}
+		if !found {
+			continue
+		}
+		presence[i/8] |= 1 << uint(i%8)
+		lengths[i] = len(doc)
+		if len(doc) == 0 {
+			continue
+		}
+		if end, ok := addPayloadLen(start, len(doc)); ok && cap(payload) >= end {
+			next := payload[:end]
+			if &doc[0] == &next[start] {
+				payload = next
+				continue
+			}
+		}
+		payload = append(payload, doc...)
+	}
+
+	docSectionLen, err := iwire.ByteVectorPayloadEncodedLen(lengths, len(payload))
 	if err != nil {
-		return nil, metadataWrap(err)
+		return nil, err
+	}
+	body, err := iwire.AppendSectionHeader(dst, iwire.SectionPresenceBitmap, 0, len(presence))
+	if err != nil {
+		return nil, err
+	}
+	body = append(body, presence...)
+	body, err = iwire.AppendSectionHeader(body, iwire.SectionDocuments, 0, docSectionLen)
+	if err != nil {
+		return nil, err
+	}
+	return iwire.AppendByteVectorPayload(body, lengths, payload)
+}
+
+func addPayloadLen(start, n int) (int, bool) {
+	if n < 0 || start < 0 || start > maxInt-n {
+		return 0, false
+	}
+	return start + n, true
+}
+
+func getManyPayloadCapacityHint(count int, limits iwire.Limits) int {
+	if count <= 0 || count > maxInt/64 {
+		return 0
+	}
+	hint := count * 64
+	maxBytes := limits.MaxByteVectorBytes
+	if maxBytes > 0 && uint64(hint) > maxBytes {
+		return int(maxBytes)
+	}
+	return hint
+}
+
+func (s *Server) getManyDocuments(state *connState, sections []iwire.Section) ([][]byte, [][]byte, []bool, error) {
+	_, collection, err := s.openCollectionRef(state, sections)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	rawIDs, err := metadataSection(sections, iwire.SectionDocumentIDs)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	var ids [][]byte
+	if state != nil {
+		ids, err = decodeByteVectorBorrowedInto(state.idsScratch, rawIDs, s.limits)
+		state.idsScratch = ids
+	} else {
+		ids, err = decodeByteVectorBorrowed(rawIDs, s.limits)
+	}
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	docs := make([][]byte, len(ids))
 	present := make([]bool, len(ids))
 	for i, id := range ids {
 		doc, err := collection.Get(id)
 		if err != nil {
-			return nil, metadataWrap(err)
+			return nil, nil, nil, metadataWrap(err)
 		}
 		if doc != nil {
 			docs[i] = doc
@@ -41,17 +133,11 @@ func (s *Server) handleGetMany(state *connState, sections []iwire.Section) ([]iw
 			docs[i] = []byte{}
 		}
 	}
-	return []iwire.Section{
-		{ID: iwire.SectionPresenceBitmap, Bytes: encodePresenceBitmap(present)},
-		{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, docs...)},
-	}, nil
+	return ids, docs, present, nil
 }
 
 func (s *Server) handleIndexLookup(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
-	if err := managerRequired(s.collections); err != nil {
-		return nil, err
-	}
-	name, _, err := collectionRefFromSections(state, sections)
+	_, collection, err := s.openCollectionRef(state, sections)
 	if err != nil {
 		return nil, err
 	}
@@ -62,10 +148,6 @@ func (s *Server) handleIndexLookup(state *connState, sections []iwire.Section) (
 	limits, err := optionalCursorLimits(sections)
 	if err != nil {
 		return nil, err
-	}
-	collection, err := s.collections.OpenCollection(name)
-	if err != nil {
-		return nil, metadataWrap(err)
 	}
 	var ids [][]byte
 	truncated := false
@@ -139,20 +221,13 @@ func applyIDByteLimit(ids [][]byte, maxBytes int, truncated bool) ([][]byte, boo
 }
 
 func (s *Server) handleIndexRange(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
-	if err := managerRequired(s.collections); err != nil {
-		return nil, err
-	}
-	name, _, err := collectionRefFromSections(state, sections)
+	_, collection, err := s.openCollectionRef(state, sections)
 	if err != nil {
 		return nil, err
 	}
 	indexName, opts, limits, err := indexRangeRequest(sections)
 	if err != nil {
 		return nil, err
-	}
-	collection, err := s.collections.OpenCollection(name)
-	if err != nil {
-		return nil, metadataWrap(err)
 	}
 	opts.Limit = s.indexRangeResultLimit(limits)
 	ids, truncated, err := collection.FindByIndexRange(indexName, opts)
@@ -167,20 +242,13 @@ func (s *Server) handleIndexRange(state *connState, sections []iwire.Section) ([
 }
 
 func (s *Server) handleOpenScan(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
-	if err := managerRequired(s.collections); err != nil {
-		return nil, err
-	}
-	name, _, err := collectionRefFromSections(state, sections)
-	if err != nil {
-		return nil, err
-	}
 	limits, err := optionalCursorLimits(sections)
 	if err != nil {
 		return nil, err
 	}
-	collection, err := s.collections.OpenCollection(name)
+	_, collection, err := s.openCollectionRef(state, sections)
 	if err != nil {
-		return nil, metadataWrap(err)
+		return nil, err
 	}
 	records, truncated, err := collection.ScanDocuments(s.maxScanDocuments)
 	if err != nil {
@@ -224,26 +292,30 @@ func (s *Server) handleCursorNext(state *connState, cursorID uint64, sections []
 		s.cursorMu.Unlock()
 		return nil, protocolError(iwire.ErrCursorNotFound, "cursor %d not found", cursorID)
 	}
+	delete(s.cursors, cursorID)
 	start := cursor.pos
+	records := cursor.records
+	truncated := cursor.truncated
+	s.cursorMu.Unlock()
+
 	end, bytes, err := s.splitCursorBatchForWire(cursor.records, start, limits)
 	if err != nil {
-		s.cursorMu.Unlock()
+		s.restoreCursor(cursorID, cursor)
 		return nil, err
 	}
-	batch := append([]collections.DocumentRecord(nil), cursor.records[start:end]...)
+	batch := append([]collections.DocumentRecord(nil), records[start:end]...)
 	cursor.lastUsed = time.Now()
-	hasMore := end < len(cursor.records)
-	truncated := cursor.truncated
+	hasMore := end < len(records)
 	if !hasMore {
-		delete(s.cursors, cursorID)
+		s.cursorCount.Add(-1)
 		s.counters.inc("cursors.closed_total")
 	} else {
-		clear(cursor.records[:end])
-		cursor.records = cursor.records[end:]
+		clear(records[:end])
+		cursor.records = records[end:]
 		cursor.pos = 0
 		cursor.bytes = documentRecordsBytes(cursor.records)
+		s.restoreCursor(cursorID, cursor)
 	}
-	s.cursorMu.Unlock()
 	meta := CursorMeta{CursorID: cursorID, Items: len(batch), Bytes: bytes, HasMore: hasMore, Truncated: truncated}
 	if !hasMore {
 		meta.CursorID = 0
@@ -271,8 +343,21 @@ func (s *Server) handleCursorClose(state *connState, cursorID uint64, sections [
 	}
 	delete(s.cursors, cursorID)
 	s.cursorMu.Unlock()
+	s.cursorCount.Add(-1)
 	s.counters.inc("cursors.closed_total")
 	return nil, nil
+}
+
+func (s *Server) restoreCursor(cursorID uint64, cursor *serverCursor) {
+	if s == nil || cursor == nil {
+		return
+	}
+	s.cursorMu.Lock()
+	if s.cursors == nil {
+		s.cursors = make(map[uint64]*serverCursor)
+	}
+	s.cursors[cursorID] = cursor
+	s.cursorMu.Unlock()
 }
 
 func cursorRefFromSections(sections []iwire.Section) (uint64, error) {

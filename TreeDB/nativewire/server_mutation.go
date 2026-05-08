@@ -1,77 +1,319 @@
 package nativewire
 
 import (
-	"strconv"
-
 	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+type insertBatchFastRequest struct {
+	collection       *collections.Collection
+	sections         []iwire.Section
+	format           collections.DocumentFormat
+	ids              [][]byte
+	docs             [][]byte
+	ack              AckPolicy
+	includeResultIDs bool
+	includeMeta      bool
+}
+
 func (s *Server) handleInsertBatch(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
-	if err := managerRequired(s.collections); err != nil {
-		return nil, err
-	}
-	if err := s.checkCatalogGuard(sections); err != nil {
-		return nil, err
-	}
-	name, _, err := collectionRefFromSections(state, sections)
+	resultIDs, actualAck, catalogVersion, hasCatalogVersion, err := s.insertBatch(state, sections)
 	if err != nil {
 		return nil, err
+	}
+	return []iwire.Section{
+		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, resultIDs...)},
+		ackMetaCountsVersion(actualAck, catalogVersion, hasCatalogVersion, responseMetaCount{key: "inserted_count", value: len(resultIDs)}),
+	}, nil
+}
+
+func (s *Server) handleInsertBatchBody(state *connState, sections []iwire.Section, dst []byte, includeResultIDs, includeMeta bool) ([]byte, error) {
+	resultIDs, actualAck, catalogVersion, hasCatalogVersion, err := s.insertBatch(state, sections)
+	if err != nil {
+		return nil, err
+	}
+	return appendInsertBatchResponseBody(dst, resultIDs, actualAck, catalogVersion, hasCatalogVersion, includeResultIDs, includeMeta)
+}
+
+func (s *Server) handleInsertBatchFastBody(req insertBatchFastRequest, dst []byte) ([]byte, error) {
+	s.metadataMu.Lock()
+	defer s.metadataMu.Unlock()
+	if err := s.checkCatalogGuard(req.sections); err != nil {
+		return nil, err
+	}
+	resultIDs, actualAck, catalogVersion, hasCatalogVersion, err := s.insertBatchDecoded(req.collection, req.format, req.ids, req.docs, req.ack)
+	if err != nil {
+		return nil, err
+	}
+	return appendInsertBatchResponseBody(dst, resultIDs, actualAck, catalogVersion, hasCatalogVersion, req.includeResultIDs, req.includeMeta)
+}
+
+func appendInsertBatchResponseBody(dst []byte, resultIDs [][]byte, actualAck iwire.AckPolicy, catalogVersion uint64, hasCatalogVersion, includeResultIDs, includeMeta bool) ([]byte, error) {
+	if !includeResultIDs {
+		if !includeMeta {
+			return dst[:0], nil
+		}
+		return appendAckMetaSectionVersion(dst, actualAck, catalogVersion, hasCatalogVersion, responseMetaCount{key: "inserted_count", value: len(resultIDs)})
+	}
+	idsLen := iwire.ByteVectorEncodedLen(resultIDs)
+	body, err := iwire.AppendSectionHeader(dst, iwire.SectionDocumentIDs, 0, idsLen)
+	if err != nil {
+		return nil, err
+	}
+	body = iwire.AppendByteVectorWithEncodedLen(body, idsLen, resultIDs...)
+	if !includeMeta {
+		return body, nil
+	}
+	return appendAckMetaSectionVersion(body, actualAck, catalogVersion, hasCatalogVersion, responseMetaCount{key: "inserted_count", value: len(resultIDs)})
+}
+
+func (s *Server) insertBatch(state *connState, sections []iwire.Section) ([][]byte, iwire.AckPolicy, uint64, bool, error) {
+	if err := managerRequired(s.collections); err != nil {
+		return nil, 0, 0, false, err
+	}
+	s.metadataMu.Lock()
+	defer s.metadataMu.Unlock()
+	if err := s.checkCatalogGuard(sections); err != nil {
+		return nil, 0, 0, false, err
+	}
+	_, collection, err := s.openCollectionRef(state, sections)
+	if err != nil {
+		return nil, 0, 0, false, err
 	}
 	format, err := decodeDocumentFormatSection(sections)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, false, err
 	}
-	ids, docs, err := decodeIDsAndDocuments(sections, s.limits)
+	var ids, docs [][]byte
+	if state != nil {
+		ids, docs, err = decodeIDsAndDocumentsInto(state.idsScratch, state.docsScratch, sections, s.limits)
+		state.idsScratch = ids
+		state.docsScratch = docs
+	} else {
+		ids, docs, err = decodeIDsAndDocuments(sections, s.limits)
+	}
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, false, err
 	}
 	docs, err = applyTemplateRecords(format, sections, docs, s.limits)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, false, err
 	}
 	ack, err := ackPolicyFromSections(sections, s.defaultAckPolicy)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, false, err
 	}
 	if err := s.admitMutationAck(ack); err != nil {
-		return nil, err
+		return nil, 0, 0, false, err
 	}
-	collection, err := s.collections.OpenCollection(name)
-	if err != nil {
-		return nil, metadataWrap(err)
-	}
+	return s.insertBatchDecoded(collection, format, ids, docs, ack)
+}
+
+func (s *Server) insertBatchDecoded(collection *collections.Collection, format collections.DocumentFormat, ids, docs [][]byte, ack AckPolicy) ([][]byte, iwire.AckPolicy, uint64, bool, error) {
+	var err error
 	var resultIDs [][]byte
 	if format == collections.DocumentFormatBSON {
 		if err := validateBSONDocuments(docs); err != nil {
-			return nil, err
+			return nil, 0, 0, false, err
 		}
 		resultIDs, err = collection.InsertBatchValidatedBSON(ids, docs)
 	} else {
 		resultIDs, err = collection.InsertBatch(ids, docs)
 	}
 	if err != nil {
-		return nil, metadataWrap(err)
+		return nil, 0, 0, false, metadataWrap(err)
 	}
 	actualAck, err := s.satisfyAck(collection, ack)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, false, err
 	}
-	return []iwire.Section{
-		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, resultIDs...)},
-		ackMeta(actualAck, "inserted_count", strconv.Itoa(len(resultIDs))),
-	}, nil
+	catalogVersion, hasCatalogVersion := s.mutationCatalogVersion()
+	return resultIDs, actualAck, catalogVersion, hasCatalogVersion, nil
+}
+
+func (s *Server) mutationCatalogVersion() (uint64, bool) {
+	version, err := s.currentCatalogVersion()
+	return version, err == nil
+}
+
+func (s *Server) decodeInsertBatchFastRequest(state *connState, sections []iwire.Section) (insertBatchFastRequest, bool, error) {
+	if len(sections) == 0 || sections[0].ID != iwire.SectionCommandHeader {
+		return insertBatchFastRequest{}, false, nil
+	}
+	header, err := iwire.DecodeCommandHeader(sections[0].Bytes)
+	if err != nil {
+		return insertBatchFastRequest{}, true, err
+	}
+	if header.ID != iwire.CommandInsertBatch {
+		return insertBatchFastRequest{}, false, nil
+	}
+	if header.Version != 1 {
+		return insertBatchFastRequest{}, true, protocolError(iwire.ErrUnsupportedVersion, "unsupported command %d version %d", header.ID, header.Version)
+	}
+	if unsupported := header.Flags &^ (iwire.CommandFlagOmitResultIDs | iwire.CommandFlagOmitResponseMeta); unsupported != 0 {
+		return insertBatchFastRequest{}, true, protocolError(iwire.ErrUnsupportedFeature, "unsupported insert_batch command flags 0x%x", unsupported)
+	}
+
+	var seen insertBatchFastSections
+	var rawCollection, rawFormat, rawIDs, rawDocs, rawAck []byte
+	for _, section := range sections {
+		switch section.ID {
+		case iwire.SectionCommandHeader,
+			iwire.SectionDeadline,
+			iwire.SectionTraceContext,
+			iwire.SectionAckPolicy,
+			iwire.SectionConsistencyPolicy,
+			iwire.SectionIdempotencyKey,
+			iwire.SectionChecksum,
+			iwire.SectionCompression,
+			iwire.SectionCollectionRef,
+			iwire.SectionDocumentFormat,
+			iwire.SectionDocumentIDs,
+			iwire.SectionDocuments,
+			iwire.SectionTemplateRecords,
+			iwire.SectionExpectedCatalogVersion:
+			if err := seen.mark(section.ID); err != nil {
+				return insertBatchFastRequest{}, true, err
+			}
+		default:
+			if section.Critical() {
+				return insertBatchFastRequest{}, true, protocolError(iwire.ErrUnsupportedFeature, "unknown critical section %d", section.ID)
+			}
+			continue
+		}
+
+		switch section.ID {
+		case iwire.SectionCollectionRef:
+			rawCollection = section.Bytes
+		case iwire.SectionDocumentFormat:
+			rawFormat = section.Bytes
+		case iwire.SectionDocumentIDs:
+			rawIDs = section.Bytes
+		case iwire.SectionDocuments:
+			rawDocs = section.Bytes
+		case iwire.SectionAckPolicy:
+			rawAck = section.Bytes
+		}
+	}
+	if !seen.has(iwire.SectionCommandHeader) {
+		return insertBatchFastRequest{}, true, protocolError(iwire.ErrInvalidCommand, "missing required section %d", iwire.SectionCommandHeader)
+	}
+	if !seen.has(iwire.SectionCollectionRef) {
+		return insertBatchFastRequest{}, true, protocolError(iwire.ErrInvalidCommand, "missing required section %d", iwire.SectionCollectionRef)
+	}
+	if !seen.has(iwire.SectionDocumentFormat) {
+		return insertBatchFastRequest{}, true, protocolError(iwire.ErrInvalidCommand, "missing required section %d", iwire.SectionDocumentFormat)
+	}
+	if !seen.has(iwire.SectionDocumentIDs) {
+		return insertBatchFastRequest{}, true, protocolError(iwire.ErrInvalidCommand, "missing required section %d", iwire.SectionDocumentIDs)
+	}
+	if !seen.has(iwire.SectionDocuments) {
+		return insertBatchFastRequest{}, true, protocolError(iwire.ErrInvalidCommand, "missing required section %d", iwire.SectionDocuments)
+	}
+	if !seen.has(iwire.SectionIdempotencyKey) {
+		return insertBatchFastRequest{}, true, protocolError(iwire.ErrInvalidCommand, "missing required section %d", iwire.SectionIdempotencyKey)
+	}
+	if !seen.has(iwire.SectionExpectedCatalogVersion) {
+		return insertBatchFastRequest{}, true, protocolError(iwire.ErrInvalidCommand, "missing required section %d", iwire.SectionExpectedCatalogVersion)
+	}
+	_, collection, err := s.openCollectionRawRef(state, rawCollection)
+	if err != nil {
+		return insertBatchFastRequest{}, true, err
+	}
+	format, err := decodeDocumentFormatPayload(rawFormat)
+	if err != nil {
+		return insertBatchFastRequest{}, true, err
+	}
+	var ids, docs [][]byte
+	if state != nil {
+		ids, err = decodeByteVectorBorrowedInto(state.idsScratch, rawIDs, s.limits)
+		state.idsScratch = ids
+	} else {
+		ids, err = decodeByteVectorBorrowed(rawIDs, s.limits)
+	}
+	if err != nil {
+		return insertBatchFastRequest{}, true, err
+	}
+	if state != nil {
+		docs, err = decodeByteVectorBorrowedInto(state.docsScratch, rawDocs, s.limits)
+		state.docsScratch = docs
+	} else {
+		docs, err = decodeByteVectorBorrowed(rawDocs, s.limits)
+	}
+	if err != nil {
+		return insertBatchFastRequest{}, true, err
+	}
+	if len(ids) != len(docs) {
+		return insertBatchFastRequest{}, true, protocolError(iwire.ErrInvalidCommand, "document_ids length %d does not match documents length %d", len(ids), len(docs))
+	}
+	if err := rejectDuplicateIDs(ids); err != nil {
+		return insertBatchFastRequest{}, true, err
+	}
+	docs, err = applyTemplateRecords(format, sections, docs, s.limits)
+	if err != nil {
+		return insertBatchFastRequest{}, true, err
+	}
+	ack := s.defaultAckPolicy
+	if seen.has(iwire.SectionAckPolicy) {
+		ack, err = ackPolicyFromPayload(rawAck, s.defaultAckPolicy)
+		if err != nil {
+			return insertBatchFastRequest{}, true, err
+		}
+	}
+	if err := s.admitMutationAck(ack); err != nil {
+		return insertBatchFastRequest{}, true, err
+	}
+	return insertBatchFastRequest{
+		collection:       collection,
+		sections:         sections,
+		format:           format,
+		ids:              ids,
+		docs:             docs,
+		ack:              ack,
+		includeResultIDs: header.Flags&iwire.CommandFlagOmitResultIDs == 0,
+		includeMeta:      header.Flags&iwire.CommandFlagOmitResponseMeta == 0,
+	}, true, nil
+}
+
+type insertBatchFastSections struct {
+	small    [128]bool
+	overflow map[iwire.SectionID]struct{}
+}
+
+func (s *insertBatchFastSections) mark(id iwire.SectionID) error {
+	if s.has(id) {
+		return protocolError(iwire.ErrInvalidCommand, "duplicate singleton section %d", id)
+	}
+	if id < iwire.SectionID(len(s.small)) {
+		s.small[id] = true
+		return nil
+	}
+	if s.overflow == nil {
+		s.overflow = make(map[iwire.SectionID]struct{}, 4)
+	}
+	s.overflow[id] = struct{}{}
+	return nil
+}
+
+func (s *insertBatchFastSections) has(id iwire.SectionID) bool {
+	if id < iwire.SectionID(len(s.small)) {
+		return s.small[id]
+	}
+	_, ok := s.overflow[id]
+	return ok
 }
 
 func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
 	if err := managerRequired(s.collections); err != nil {
 		return nil, err
 	}
+	s.metadataMu.Lock()
+	defer s.metadataMu.Unlock()
 	if err := s.checkCatalogGuard(sections); err != nil {
 		return nil, err
 	}
-	name, _, err := collectionRefFromSections(state, sections)
+	_, collection, err := s.openCollectionRef(state, sections)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +324,14 @@ func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) 
 	if err := validateReplacementMode(sections); err != nil {
 		return nil, err
 	}
-	ids, docs, err := decodeIDsAndDocuments(sections, s.limits)
+	var ids, docs [][]byte
+	if state != nil {
+		ids, docs, err = decodeIDsAndDocumentsInto(state.idsScratch, state.docsScratch, sections, s.limits)
+		state.idsScratch = ids
+		state.docsScratch = docs
+	} else {
+		ids, docs, err = decodeIDsAndDocuments(sections, s.limits)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -101,10 +350,6 @@ func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) 
 	}
 	if err := s.admitMutationAck(ack); err != nil {
 		return nil, err
-	}
-	collection, err := s.collections.OpenCollection(name)
-	if err != nil {
-		return nil, metadataWrap(err)
 	}
 	results, err := collection.UpdateBatch(updateBatchItems(ids, docs))
 	if err != nil {
@@ -123,9 +368,10 @@ func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) 
 	if err != nil {
 		return nil, err
 	}
-	return []iwire.Section{ackMeta(actualAck,
-		"matched_count", strconv.Itoa(matched),
-		"modified_count", strconv.Itoa(modified),
+	catalogVersion, hasCatalogVersion := s.mutationCatalogVersion()
+	return []iwire.Section{ackMetaCountsVersion(actualAck, catalogVersion, hasCatalogVersion,
+		responseMetaCount{key: "matched_count", value: matched},
+		responseMetaCount{key: "modified_count", value: modified},
 	)}, nil
 }
 
@@ -133,14 +379,22 @@ func (s *Server) handleDeleteBatch(state *connState, sections []iwire.Section) (
 	if err := managerRequired(s.collections); err != nil {
 		return nil, err
 	}
+	s.metadataMu.Lock()
+	defer s.metadataMu.Unlock()
 	if err := s.checkCatalogGuard(sections); err != nil {
 		return nil, err
 	}
-	name, _, err := collectionRefFromSections(state, sections)
+	_, collection, err := s.openCollectionRef(state, sections)
 	if err != nil {
 		return nil, err
 	}
-	ids, err := decodeIDVector(sections, s.limits)
+	var ids [][]byte
+	if state != nil {
+		ids, err = decodeIDVectorInto(state.idsScratch, sections, s.limits)
+		state.idsScratch = ids
+	} else {
+		ids, err = decodeIDVector(sections, s.limits)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -151,10 +405,6 @@ func (s *Server) handleDeleteBatch(state *connState, sections []iwire.Section) (
 	if err := s.admitMutationAck(ack); err != nil {
 		return nil, err
 	}
-	collection, err := s.collections.OpenCollection(name)
-	if err != nil {
-		return nil, metadataWrap(err)
-	}
 	deleted, err := collection.DeleteBatch(ids)
 	if err != nil {
 		return nil, metadataWrap(err)
@@ -163,14 +413,12 @@ func (s *Server) handleDeleteBatch(state *connState, sections []iwire.Section) (
 	if err != nil {
 		return nil, err
 	}
-	return []iwire.Section{ackMeta(actualAck, "deleted_count", strconv.Itoa(deleted))}, nil
+	catalogVersion, hasCatalogVersion := s.mutationCatalogVersion()
+	return []iwire.Section{ackMetaCountsVersion(actualAck, catalogVersion, hasCatalogVersion, responseMetaCount{key: "deleted_count", value: deleted})}, nil
 }
 
 func (s *Server) handleFlushCollection(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
-	if err := managerRequired(s.collections); err != nil {
-		return nil, err
-	}
-	name, _, err := collectionRefFromSections(state, sections)
+	_, collection, err := s.openCollectionRef(state, sections)
 	if err != nil {
 		return nil, err
 	}
@@ -181,14 +429,10 @@ func (s *Server) handleFlushCollection(state *connState, sections []iwire.Sectio
 	if err := s.admitBarrierAck(iwire.AckFlushed, ack); err != nil {
 		return nil, err
 	}
-	collection, err := s.collections.OpenCollection(name)
-	if err != nil {
-		return nil, metadataWrap(err)
-	}
 	if err := collection.Flush(); err != nil {
 		return nil, metadataWrap(err)
 	}
-	return []iwire.Section{ackMeta(iwire.AckFlushed)}, nil
+	return []iwire.Section{s.ackMeta(iwire.AckFlushed)}, nil
 }
 
 func (s *Server) handleFlushAll(sections []iwire.Section) ([]iwire.Section, error) {
@@ -205,7 +449,7 @@ func (s *Server) handleFlushAll(sections []iwire.Section) ([]iwire.Section, erro
 	if err := s.collections.FlushAll(); err != nil {
 		return nil, metadataWrap(err)
 	}
-	return []iwire.Section{ackMeta(iwire.AckFlushed)}, nil
+	return []iwire.Section{s.ackMeta(iwire.AckFlushed)}, nil
 }
 
 func (s *Server) handleCheckpoint(sections []iwire.Section) ([]iwire.Section, error) {
@@ -227,7 +471,7 @@ func (s *Server) handleCheckpoint(sections []iwire.Section) ([]iwire.Section, er
 	if err := s.backend.Checkpoint(); err != nil {
 		return nil, metadataWrap(err)
 	}
-	return []iwire.Section{ackMeta(iwire.AckSynced)}, nil
+	return []iwire.Section{s.ackMeta(iwire.AckSynced)}, nil
 }
 
 func (s *Server) admitBarrierAck(actual, requested iwire.AckPolicy) error {

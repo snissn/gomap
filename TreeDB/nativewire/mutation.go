@@ -34,6 +34,10 @@ func decodeDocumentFormatSection(sections []iwire.Section) (collections.Document
 	if err != nil {
 		return "", err
 	}
+	return decodeDocumentFormatPayload(raw)
+}
+
+func decodeDocumentFormatPayload(raw []byte) (collections.DocumentFormat, error) {
 	format, n, err := readUvarint(raw)
 	if err != nil {
 		return "", err
@@ -56,6 +60,10 @@ func ackPolicyFromSections(sections []iwire.Section, fallback AckPolicy) (AckPol
 	if !ok {
 		return fallback, nil
 	}
+	return ackPolicyFromPayload(raw, fallback)
+}
+
+func ackPolicyFromPayload(raw []byte, fallback AckPolicy) (AckPolicy, error) {
 	value, n, err := readUvarint(raw)
 	if err != nil {
 		return 0, err
@@ -92,11 +100,15 @@ func validateReplacementMode(sections []iwire.Section) error {
 }
 
 func decodeIDsAndDocuments(sections []iwire.Section, limits iwire.Limits) ([][]byte, [][]byte, error) {
+	return decodeIDsAndDocumentsInto(nil, nil, sections, limits)
+}
+
+func decodeIDsAndDocumentsInto(idDst, docDst [][]byte, sections []iwire.Section, limits iwire.Limits) ([][]byte, [][]byte, error) {
 	rawIDs, err := metadataSection(sections, iwire.SectionDocumentIDs)
 	if err != nil {
 		return nil, nil, err
 	}
-	ids, err := decodeByteVectorCloned(rawIDs, limits)
+	ids, err := decodeByteVectorBorrowedInto(idDst, rawIDs, limits)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -104,7 +116,7 @@ func decodeIDsAndDocuments(sections []iwire.Section, limits iwire.Limits) ([][]b
 	if err != nil {
 		return nil, nil, err
 	}
-	docs, err := decodeByteVectorCloned(rawDocs, limits)
+	docs, err := decodeByteVectorBorrowedInto(docDst, rawDocs, limits)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -212,11 +224,15 @@ func consumeTemplateMagic(raw []byte, pos *int, magic string) bool {
 }
 
 func decodeIDVector(sections []iwire.Section, limits iwire.Limits) ([][]byte, error) {
+	return decodeIDVectorInto(nil, sections, limits)
+}
+
+func decodeIDVectorInto(dst [][]byte, sections []iwire.Section, limits iwire.Limits) ([][]byte, error) {
 	rawIDs, err := metadataSection(sections, iwire.SectionDocumentIDs)
 	if err != nil {
 		return nil, err
 	}
-	ids, err := decodeByteVectorCloned(rawIDs, limits)
+	ids, err := decodeByteVectorBorrowedInto(dst, rawIDs, limits)
 	if err != nil {
 		return nil, err
 	}
@@ -241,25 +257,97 @@ func rejectDuplicateIDs(ids [][]byte) error {
 	return nil
 }
 
-func ackMeta(policy AckPolicy, pairs ...string) iwire.Section {
-	values := map[string]string{
-		"actual_ack_policy": strconv.FormatUint(uint64(policy), 10),
+type responseMetaCount struct {
+	key   string
+	value int
+}
+
+func ackMeta(policy AckPolicy) iwire.Section {
+	return iwire.Section{ID: iwire.SectionResponseMeta, Bytes: appendAckMetaPayload(nil, policy)}
+}
+
+func ackMetaCounts(policy AckPolicy, counts ...responseMetaCount) iwire.Section {
+	return iwire.Section{ID: iwire.SectionResponseMeta, Bytes: appendAckMetaPayload(nil, policy, counts...)}
+}
+
+func ackMetaCountsVersion(policy AckPolicy, catalogVersion uint64, hasCatalogVersion bool, counts ...responseMetaCount) iwire.Section {
+	return iwire.Section{ID: iwire.SectionResponseMeta, Bytes: appendAckMetaPayloadVersion(nil, policy, catalogVersion, hasCatalogVersion, counts...)}
+}
+
+func appendAckMetaSection(dst []byte, policy AckPolicy, counts ...responseMetaCount) ([]byte, error) {
+	var payloadBuf [128]byte
+	payload := appendAckMetaPayload(payloadBuf[:0], policy, counts...)
+	body, err := iwire.AppendSectionHeader(dst, iwire.SectionResponseMeta, 0, len(payload))
+	if err != nil {
+		return nil, err
 	}
-	for i := 0; i+1 < len(pairs); i += 2 {
-		values[pairs[i]] = pairs[i+1]
+	return append(body, payload...), nil
+}
+
+func appendAckMetaSectionVersion(dst []byte, policy AckPolicy, catalogVersion uint64, hasCatalogVersion bool, counts ...responseMetaCount) ([]byte, error) {
+	var payloadBuf [160]byte
+	payload := appendAckMetaPayloadVersion(payloadBuf[:0], policy, catalogVersion, hasCatalogVersion, counts...)
+	body, err := iwire.AppendSectionHeader(dst, iwire.SectionResponseMeta, 0, len(payload))
+	if err != nil {
+		return nil, err
 	}
-	return iwire.Section{ID: iwire.SectionResponseMeta, Bytes: appendStringMap(nil, values)}
+	return append(body, payload...), nil
+}
+
+func appendAckMetaPayload(dst []byte, policy AckPolicy, counts ...responseMetaCount) []byte {
+	return appendAckMetaPayloadVersion(dst, policy, 0, false, counts...)
+}
+
+func appendAckMetaPayloadVersion(dst []byte, policy AckPolicy, catalogVersion uint64, hasCatalogVersion bool, counts ...responseMetaCount) []byte {
+	fieldCount := 1 + len(counts)
+	if hasCatalogVersion {
+		fieldCount++
+	}
+	dst = binary.AppendUvarint(dst, uint64(fieldCount))
+	dst = appendStringUint(dst, "actual_ack_policy", uint64(policy))
+	if hasCatalogVersion {
+		dst = appendStringUint(dst, "catalog_version", catalogVersion)
+	}
+	for _, count := range counts {
+		dst = appendStringInt(dst, count.key, count.value)
+	}
+	return dst
+}
+
+func appendStringUint(dst []byte, key string, value uint64) []byte {
+	dst = appendString(dst, key)
+	var valueBuf [20]byte
+	valueBytes := strconv.AppendUint(valueBuf[:0], value, 10)
+	dst = binary.AppendUvarint(dst, uint64(len(valueBytes)))
+	return append(dst, valueBytes...)
+}
+
+func appendStringInt(dst []byte, key string, value int) []byte {
+	dst = appendString(dst, key)
+	var valueBuf [20]byte
+	valueBytes := strconv.AppendInt(valueBuf[:0], int64(value), 10)
+	dst = binary.AppendUvarint(dst, uint64(len(valueBytes)))
+	return append(dst, valueBytes...)
+}
+
+func (s *Server) ackMeta(policy AckPolicy) iwire.Section {
+	catalogVersion, hasCatalogVersion := s.mutationCatalogVersion()
+	return ackMetaCountsVersion(policy, catalogVersion, hasCatalogVersion)
+}
+
+func responseMetaMap(sections []iwire.Section) (map[string]string, error) {
+	raw, ok, err := singletonSection(sections, iwire.SectionResponseMeta)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, protocolError(iwire.ErrMalformedFrame, "missing response_meta")
+	}
+	return decodeStringMap(raw)
 }
 
 func responseCount(sections []iwire.Section, key string) (int, error) {
-	raw, ok, err := singletonSection(sections, iwire.SectionResponseMeta)
-	if err != nil {
-		return 0, err
-	}
-	if !ok {
-		return 0, protocolError(iwire.ErrMalformedFrame, "missing response_meta")
-	}
-	values, err := decodeStringMap(raw)
+	values, err := responseMetaMap(sections)
 	if err != nil {
 		return 0, err
 	}
@@ -272,6 +360,22 @@ func responseCount(sections []iwire.Section, key string) (int, error) {
 		return 0, protocolError(iwire.ErrMalformedFrame, "response_meta %s is not an integer", key)
 	}
 	return n, nil
+}
+
+func responseCatalogVersion(sections []iwire.Section) (uint64, bool, error) {
+	values, err := responseMetaMap(sections)
+	if err != nil {
+		return 0, false, err
+	}
+	value, ok := values["catalog_version"]
+	if !ok {
+		return 0, false, nil
+	}
+	version, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return 0, true, protocolError(iwire.ErrMalformedFrame, "response_meta catalog_version is not a uint64")
+	}
+	return version, true, nil
 }
 
 func updateBatchItems(ids, docs [][]byte) []collections.UpdateBatchItem {

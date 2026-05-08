@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -18,16 +19,32 @@ const (
 	collectionRefTagHandle            = 2
 )
 
+type metadataIdempotencyEntry struct {
+	commandID iwire.CommandID
+	signature [sha256.Size]byte
+	response  []iwire.Section
+}
+
 func collectionNameRef(name string) iwire.Section {
-	payload := []byte{collectionRefTagName}
-	payload = append(payload, name...)
-	return iwire.Section{ID: iwire.SectionCollectionRef, Bytes: payload}
+	return iwire.Section{ID: iwire.SectionCollectionRef, Bytes: appendCollectionNameRefPayload(nil, name)}
+}
+
+func collectionNameRefPayloadLen(name string) int {
+	return 1 + len(name)
+}
+
+func appendCollectionNameRefPayload(dst []byte, name string) []byte {
+	dst = append(dst, collectionRefTagName)
+	return append(dst, name...)
 }
 
 func collectionHandleRef(handle CollectionHandle) iwire.Section {
-	payload := []byte{collectionRefTagHandle}
-	payload = binary.AppendUvarint(payload, uint64(handle))
-	return iwire.Section{ID: iwire.SectionCollectionRef, Bytes: payload}
+	return iwire.Section{ID: iwire.SectionCollectionRef, Bytes: appendCollectionHandleRefPayload(nil, handle)}
+}
+
+func appendCollectionHandleRefPayload(dst []byte, handle CollectionHandle) []byte {
+	dst = append(dst, collectionRefTagHandle)
+	return binary.AppendUvarint(dst, uint64(handle))
 }
 
 func encodeCollectionMeta(meta collections.CollectionMeta) []byte {
@@ -522,6 +539,20 @@ func decodeCollectionRef(state *connState, raw []byte) (string, bool, error) {
 	}
 }
 
+func decodeCollectionHandleRefPayload(raw []byte) (CollectionHandle, bool, error) {
+	if len(raw) == 0 || raw[0] != collectionRefTagHandle {
+		return 0, false, nil
+	}
+	handle, n, err := readUvarint(raw[1:])
+	if err != nil {
+		return 0, true, err
+	}
+	if n+1 != len(raw) {
+		return 0, true, protocolError(iwire.ErrMalformedFrame, "collection handle ref has trailing bytes")
+	}
+	return CollectionHandle(handle), true, nil
+}
+
 func collectionRefFromSections(state *connState, sections []iwire.Section) (string, bool, error) {
 	raw, ok, err := singletonSection(sections, iwire.SectionCollectionRef)
 	if err != nil {
@@ -562,20 +593,17 @@ func collectionHandleFromSections(state *connState, sections []iwire.Section) (C
 	if !ok {
 		return 0, protocolError(iwire.ErrInvalidCommand, "missing collection_ref")
 	}
-	if len(raw) == 0 || raw[0] != collectionRefTagHandle {
+	handle, isHandle, err := decodeCollectionHandleRefPayload(raw)
+	if err != nil {
+		return 0, err
+	}
+	if !isHandle {
 		return 0, protocolError(iwire.ErrInvalidCommand, "close_collection requires a collection handle")
 	}
 	if state == nil {
 		return 0, protocolError(iwire.ErrInvalidCommand, "collection handle requires connection state")
 	}
-	handle, n, err := readUvarint(raw[1:])
-	if err != nil {
-		return 0, err
-	}
-	if n+1 != len(raw) {
-		return 0, protocolError(iwire.ErrMalformedFrame, "collection handle ref has trailing bytes")
-	}
-	return CollectionHandle(handle), nil
+	return handle, nil
 }
 
 func expectedCatalogVersionFromSections(sections []iwire.Section) (uint64, bool, error) {
@@ -624,6 +652,110 @@ func (s *Server) checkCatalogGuard(sections []iwire.Section) error {
 	return nil
 }
 
+func (s *Server) beginMetadataIdempotency(commandID iwire.CommandID, sections []iwire.Section) ([]iwire.Section, func([]iwire.Section) []iwire.Section, error) {
+	key, err := metadataIdempotencyKey(sections)
+	if err != nil {
+		return nil, nil, err
+	}
+	signature, err := metadataMutationSignature(commandID, sections)
+	if err != nil {
+		return nil, nil, err
+	}
+	signatureHash := sha256.Sum256(signature)
+	if s.metadataIdempotency == nil {
+		s.metadataIdempotency = make(map[string]metadataIdempotencyEntry)
+	}
+	if entry, ok := s.metadataIdempotency[key]; ok {
+		if entry.commandID != commandID || entry.signature != signatureHash {
+			return nil, nil, protocolError(iwire.ErrIdempotencyConflict, "idempotency key reused for different metadata mutation")
+		}
+		return cloneSections(entry.response), nil, nil
+	}
+	remember := func(response []iwire.Section) []iwire.Section {
+		copied := cloneSections(response)
+		s.metadataIdempotency[key] = metadataIdempotencyEntry{
+			commandID: commandID,
+			signature: signatureHash,
+			response:  copied,
+		}
+		s.metadataIdemOrder = append(s.metadataIdemOrder, key)
+		s.trimMetadataIdempotencyLocked()
+		return cloneSections(copied)
+	}
+	return nil, remember, nil
+}
+
+func (s *Server) trimMetadataIdempotencyLocked() {
+	if s.maxMetadataIdempotencyEntries < 0 {
+		return
+	}
+	for len(s.metadataIdemOrder) > s.maxMetadataIdempotencyEntries {
+		key := s.metadataIdemOrder[0]
+		copy(s.metadataIdemOrder, s.metadataIdemOrder[1:])
+		s.metadataIdemOrder[len(s.metadataIdemOrder)-1] = ""
+		s.metadataIdemOrder = s.metadataIdemOrder[:len(s.metadataIdemOrder)-1]
+		delete(s.metadataIdempotency, key)
+	}
+}
+
+func metadataIdempotencyKey(sections []iwire.Section) (string, error) {
+	raw, ok, err := singletonSection(sections, iwire.SectionIdempotencyKey)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", protocolError(iwire.ErrInvalidCommand, "missing idempotency key")
+	}
+	if len(raw) == 0 {
+		return "", protocolError(iwire.ErrInvalidCommand, "idempotency key cannot be empty")
+	}
+	return string(raw), nil
+}
+
+func metadataMutationSignature(commandID iwire.CommandID, sections []iwire.Section) ([]byte, error) {
+	dst := binary.AppendUvarint(nil, uint64(commandID))
+	for _, id := range metadataMutationSignatureSections(commandID) {
+		raw, ok, err := singletonSection(sections, id)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, protocolError(iwire.ErrInvalidCommand, "missing section %d", id)
+		}
+		var appendErr error
+		dst, appendErr = iwire.AppendSection(dst, iwire.Section{ID: id, Bytes: raw})
+		if appendErr != nil {
+			return nil, appendErr
+		}
+	}
+	return dst, nil
+}
+
+func metadataMutationSignatureSections(commandID iwire.CommandID) []iwire.SectionID {
+	switch commandID {
+	case iwire.CommandCreateCollection:
+		return []iwire.SectionID{iwire.SectionCollectionMeta}
+	case iwire.CommandCreateIndex:
+		return []iwire.SectionID{iwire.SectionCollectionRef, iwire.SectionIndexDefinition}
+	case iwire.CommandDropIndex:
+		return []iwire.SectionID{iwire.SectionCollectionRef, iwire.SectionIndexName}
+	default:
+		return nil
+	}
+}
+
+func cloneSections(sections []iwire.Section) []iwire.Section {
+	if len(sections) == 0 {
+		return nil
+	}
+	out := make([]iwire.Section, len(sections))
+	for i := range sections {
+		out[i] = sections[i]
+		out[i].Bytes = append([]byte(nil), sections[i].Bytes...)
+	}
+	return out
+}
+
 func metadataSection(sections []iwire.Section, id iwire.SectionID) ([]byte, error) {
 	raw, ok, err := singletonSection(sections, id)
 	if err != nil {
@@ -640,6 +772,63 @@ func managerRequired(m *collections.CollectionManager) error {
 		return protocolError(iwire.ErrInvalidCommand, "nativewire server has no collection manager")
 	}
 	return nil
+}
+
+func (s *Server) openCollectionRef(state *connState, sections []iwire.Section) (string, *collections.Collection, error) {
+	if err := managerRequired(s.collections); err != nil {
+		return "", nil, err
+	}
+	raw, ok, err := singletonSection(sections, iwire.SectionCollectionRef)
+	if err != nil {
+		return "", nil, err
+	}
+	if !ok {
+		return "", nil, protocolError(iwire.ErrInvalidCommand, "missing collection_ref")
+	}
+	return s.openCollectionRawRef(state, raw)
+}
+
+func (s *Server) openCollectionRawRef(state *connState, raw []byte) (string, *collections.Collection, error) {
+	if err := managerRequired(s.collections); err != nil {
+		return "", nil, err
+	}
+	if handle, isHandle, err := decodeCollectionHandleRefPayload(raw); isHandle || err != nil {
+		if err != nil {
+			return "", nil, err
+		}
+		if state == nil {
+			return "", nil, protocolError(iwire.ErrInvalidCommand, "collection handle requires connection state")
+		}
+		name, collection, ok := state.collectionForHandleRef(handle)
+		if !ok {
+			return "", nil, protocolError(iwire.ErrCollectionNotFound, "collection handle %d not found", handle)
+		}
+		if collection != nil {
+			return name, collection, nil
+		}
+		return s.openNamedCollectionRef(state, name)
+	}
+	name, _, err := decodeCollectionRef(state, raw)
+	if err != nil {
+		return "", nil, err
+	}
+	return s.openNamedCollectionRef(state, name)
+}
+
+func (s *Server) openNamedCollectionRef(state *connState, name string) (string, *collections.Collection, error) {
+	if state != nil {
+		if collection, ok := state.cachedCollection(name); ok {
+			return name, collection, nil
+		}
+	}
+	collection, err := s.collections.OpenCollection(name)
+	if err != nil {
+		return "", nil, metadataWrap(err)
+	}
+	if state != nil {
+		state.cacheCollection(name, collection, s.maxCachedCollections)
+	}
+	return name, collection, nil
 }
 
 func unsupportedDropCollection() error {
@@ -659,6 +848,13 @@ func collectionNotFound(name string) error {
 
 func invalidMetadata(format string, args ...any) error {
 	return protocolError(iwire.ErrInvalidCommand, format, args...)
+}
+
+func ensureCollectionName(name string) error {
+	if err := collections.ValidateCollectionName(name); err != nil {
+		return invalidMetadata("%v", err)
+	}
+	return nil
 }
 
 func ensureIndexName(name string) error {

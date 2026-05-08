@@ -40,6 +40,18 @@ func TestDecodeSectionsIntoAndDecodeByteVectorIntoReuseBuffers(t *testing.T) {
 	}
 
 	vecBytes := AppendByteVector(nil, makeBenchmarkItems("doc", 8, 32)...)
+	itemsScratch := make([][]byte, 0, 8)
+	items, err := DecodeByteVectorItemsInto(itemsScratch, vecBytes, Limits{})
+	if err != nil {
+		t.Fatalf("DecodeByteVectorItemsInto: %v", err)
+	}
+	if len(items) != 8 {
+		t.Fatalf("items len=%d want 8", len(items))
+	}
+	if cap(items) != cap(itemsScratch) {
+		t.Fatalf("DecodeByteVectorItemsInto did not reuse caller capacity")
+	}
+
 	var scratch ByteVectorScratch
 	vec, err := DecodeByteVectorInto(vecBytes, Limits{}, &scratch)
 	if err != nil {
@@ -60,6 +72,27 @@ func TestDecodeSectionsIntoAndDecodeByteVectorIntoReuseBuffers(t *testing.T) {
 	}
 	if intBacking(scratch.offsets) != firstOffsets || intBacking(scratch.lengths) != firstLengths {
 		t.Fatalf("DecodeByteVectorInto did not reuse scratch backing arrays")
+	}
+}
+
+func TestDecodeSectionsIntoClearsStaleReferences(t *testing.T) {
+	cases := nativewireBenchmarkCases()
+	largeBody := cases[0].body
+	smallBody := benchmarkRequestBody([]Section{benchmarkCommandSection(CommandStats)})
+	sections, err := DecodeSectionsInto(nil, largeBody, Limits{})
+	if err != nil {
+		t.Fatalf("DecodeSectionsInto large: %v", err)
+	}
+	largeLen := len(sections)
+	sections, err = DecodeSectionsInto(sections, smallBody, Limits{})
+	if err != nil {
+		t.Fatalf("DecodeSectionsInto small: %v", err)
+	}
+	backing := sections[:largeLen]
+	for i := len(sections); i < largeLen; i++ {
+		if backing[i].ID != 0 || backing[i].Flags != 0 || backing[i].Bytes != nil {
+			t.Fatalf("stale section at index %d: %#v", i, backing[i])
+		}
 	}
 }
 

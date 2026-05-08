@@ -222,6 +222,20 @@ func encodePresenceBitmap(present []bool) []byte {
 	return out
 }
 
+func appendPresenceBitmap(dst []byte, present []bool) []byte {
+	n := (len(present) + 7) / 8
+	start := len(dst)
+	for i := 0; i < n; i++ {
+		dst = append(dst, 0)
+	}
+	for i, ok := range present {
+		if ok {
+			dst[start+i/8] |= 1 << uint(i%8)
+		}
+	}
+	return dst
+}
+
 func decodePresenceBitmap(src []byte, count int) ([]bool, error) {
 	if len(src) != (count+7)/8 {
 		return nil, protocolError(iwire.ErrMalformedFrame, "presence bitmap length %d want %d", len(src), (count+7)/8)
@@ -244,6 +258,14 @@ func decodeByteVectorCloned(src []byte, limits iwire.Limits) ([][]byte, error) {
 		out[i] = append([]byte(nil), item...)
 	}
 	return out, nil
+}
+
+func decodeByteVectorBorrowed(src []byte, limits iwire.Limits) ([][]byte, error) {
+	return iwire.DecodeByteVectorItems(src, limits)
+}
+
+func decodeByteVectorBorrowedInto(dst [][]byte, src []byte, limits iwire.Limits) ([][]byte, error) {
+	return iwire.DecodeByteVectorItemsInto(dst, src, limits)
 }
 
 func documentRecordsBytes(records []collections.DocumentRecord) int {
@@ -434,7 +456,7 @@ func responseForRecords(records []collections.DocumentRecord, meta CursorMeta) (
 }
 
 func (s *Server) reapExpiredCursors() {
-	if s == nil || s.cursorIdleTimeout == 0 {
+	if s == nil || s.cursorIdleTimeout == 0 || s.cursorCount.Load() == 0 {
 		return
 	}
 	now := time.Now()
@@ -447,13 +469,44 @@ func (s *Server) reapExpiredCursors() {
 	s.nextReap = now.Add(interval)
 	s.reapMu.Unlock()
 	s.cursorMu.Lock()
+	expired := 0
 	for id, cursor := range s.cursors {
 		if now.Sub(cursor.lastUsed) > s.cursorIdleTimeout {
 			delete(s.cursors, id)
+			expired++
 			s.counters.inc("cursors.timeouts_total")
+			s.counters.inc("cursors.closed_total")
 		}
 	}
 	s.cursorMu.Unlock()
+	if expired > 0 {
+		s.cursorCount.Add(-int64(expired))
+	}
+}
+
+func (s *Server) startCursorReaper() {
+	if s == nil || s.cursorIdleTimeout == 0 {
+		return
+	}
+	s.cursorReaperOnce.Do(func() {
+		done := s.cursorReaperDone
+		if done == nil {
+			done = make(chan struct{})
+			s.cursorReaperDone = done
+		}
+		go s.reapExpiredCursorsUntilDone(done)
+	})
+}
+
+func (s *Server) stopCursorReaper() {
+	if s == nil {
+		return
+	}
+	s.cursorReaperStopOnce.Do(func() {
+		if s.cursorReaperDone != nil {
+			close(s.cursorReaperDone)
+		}
+	})
 }
 
 func (s *Server) reapExpiredCursorsUntilDone(done <-chan struct{}) {
@@ -491,23 +544,28 @@ func (s *Server) openCursorCount() int {
 	if s == nil {
 		return 0
 	}
-	s.cursorMu.Lock()
-	n := len(s.cursors)
-	s.cursorMu.Unlock()
-	return n
+	return int(s.cursorCount.Load())
 }
 
 func (s *Server) killCursorsForOwner(owner uint64) {
 	if s == nil {
 		return
 	}
+	closed := 0
 	s.cursorMu.Lock()
 	for id, cursor := range s.cursors {
 		if cursor.owner == owner {
 			delete(s.cursors, id)
+			closed++
 		}
 	}
 	s.cursorMu.Unlock()
+	if closed > 0 {
+		s.cursorCount.Add(-int64(closed))
+	}
+	for i := 0; i < closed; i++ {
+		s.counters.inc("cursors.closed_total")
+	}
 }
 
 func (s *Server) storeCursor(owner uint64, records []collections.DocumentRecord, pos int, truncated bool) (uint64, error) {
@@ -530,6 +588,7 @@ func (s *Server) storeCursor(owner uint64, records []collections.DocumentRecord,
 		s.cursors = make(map[uint64]*serverCursor)
 	}
 	s.cursors[id] = &serverCursor{owner: owner, records: tail, lastUsed: time.Now(), bytes: bytes, truncated: truncated}
+	s.cursorCount.Add(1)
 	s.counters.inc("cursors.opened_total")
 	return id, nil
 }

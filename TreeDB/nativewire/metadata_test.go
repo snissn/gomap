@@ -264,6 +264,82 @@ func TestMetadataClientRejectsEmptyCallerIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestMetadataClientRejectsInvalidCollectionNamesBeforeSend(t *testing.T) {
+	client := &Client{}
+	ctx := context.Background()
+	if _, err := client.OpenCollection(ctx, "bad/name"); nativeCodeOf(err) != iwire.ErrInvalidCommand {
+		t.Fatalf("OpenCollection err=%v code=%d want invalid command", err, nativeCodeOf(err))
+	}
+	if _, err := client.CreateIndex(ctx, "bad/name", collections.IndexDefinition{Name: "email", Field: "email", ValueType: collections.IndexValueString}); nativeCodeOf(err) != iwire.ErrInvalidCommand {
+		t.Fatalf("CreateIndex err=%v code=%d want invalid command", err, nativeCodeOf(err))
+	}
+	if _, err := client.ListIndexes(ctx, "bad/name"); nativeCodeOf(err) != iwire.ErrInvalidCommand {
+		t.Fatalf("ListIndexes err=%v code=%d want invalid command", err, nativeCodeOf(err))
+	}
+	if _, err := client.DropIndex(ctx, "bad/name", "email"); nativeCodeOf(err) != iwire.ErrInvalidCommand {
+		t.Fatalf("DropIndex err=%v code=%d want invalid command", err, nativeCodeOf(err))
+	}
+}
+
+func TestMetadataIdempotencyReplayPrecedesCatalogGuard(t *testing.T) {
+	client, _, db := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	guardedCtx := WithExpectedCatalogVersion(WithIdempotencyKey(ctx, []byte("create-users-once")), catalogVersion(t, db))
+	first, err := client.CreateCollection(guardedCtx, collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("CreateCollection first: %v", err)
+	}
+	if got, want := catalogVersion(t, db), guardedCatalogVersion(t, guardedCtx)+1; got != want {
+		t.Fatalf("catalog version after first=%d want %d", got, want)
+	}
+	second, err := client.CreateCollection(guardedCtx, collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("CreateCollection replay with stale guard: %v", err)
+	}
+	if second.Name != first.Name {
+		t.Fatalf("replayed meta=%+v want %+v", second, first)
+	}
+
+	if _, err := client.CreateIndex(guardedCtx, "users", collections.IndexDefinition{Name: "email", Field: "email", ValueType: collections.IndexValueString}); !isRemoteError(err, iwire.ErrIdempotencyConflict) {
+		t.Fatalf("CreateIndex reused idempotency key err=%v want idempotency conflict", err)
+	}
+}
+
+func TestMetadataIdempotencyCacheEvictsOldestEntry(t *testing.T) {
+	server := NewServer(ServerOptions{MaxMetadataIdempotencyEntries: 2})
+	for i := 0; i < 3; i++ {
+		key := string([]byte{'k', byte('0' + i)})
+		sections := []iwire.Section{
+			{ID: iwire.SectionIdempotencyKey, Bytes: []byte(key)},
+			{ID: iwire.SectionCollectionMeta, Bytes: []byte{byte(i)}},
+		}
+		replay, remember, err := server.beginMetadataIdempotency(iwire.CommandCreateCollection, sections)
+		if err != nil {
+			t.Fatalf("beginMetadataIdempotency[%d]: %v", i, err)
+		}
+		if replay != nil {
+			t.Fatalf("beginMetadataIdempotency[%d] replay=%v want nil", i, replay)
+		}
+		remember([]iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: []byte{byte('r'), byte(i)}}})
+	}
+	if got := len(server.metadataIdempotency); got != 2 {
+		t.Fatalf("metadata idempotency cache len=%d want 2", got)
+	}
+	if _, ok := server.metadataIdempotency["k0"]; ok {
+		t.Fatal("oldest idempotency key was not evicted")
+	}
+	for _, key := range []string{"k1", "k2"} {
+		if _, ok := server.metadataIdempotency[key]; !ok {
+			t.Fatalf("idempotency key %q missing after eviction", key)
+		}
+	}
+}
+
 func replicatedTestGuard(id string, version uint64) []iwire.Section {
 	return []iwire.Section{
 		{ID: iwire.SectionIdempotencyKey, Bytes: []byte(id)},
@@ -291,6 +367,15 @@ func catalogVersion(t *testing.T, db *backenddb.DB) uint64 {
 	}
 	defer func() { _ = snap.Close() }()
 	return snap.State().CommitSeq
+}
+
+func guardedCatalogVersion(t *testing.T, ctx context.Context) uint64 {
+	t.Helper()
+	opts := metadataGuardOptionsFromContext(ctx)
+	if !opts.hasExpectedCatalogVersion {
+		t.Fatal("missing expected catalog version")
+	}
+	return opts.expectedCatalogVersion
 }
 
 func TestReadVarintRejectsInvalidOffsets(t *testing.T) {
@@ -336,6 +421,69 @@ func TestMetadataOpenCollectionHandleLimit(t *testing.T) {
 	}
 	if _, err := client.OpenCollection(ctx, "users"); !isRemoteError(err, iwire.ErrResourceExhausted) {
 		t.Fatalf("OpenCollection second error=%v want resource exhausted", err)
+	}
+}
+
+func TestMetadataCachedCollectionLimitIsIndependentOfHandles(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	mgr := collections.NewCollectionManager(db)
+	for _, name := range []string{"users", "orders"} {
+		if _, err := mgr.CreateCollection(&collections.CollectionMeta{Name: name}); err != nil {
+			t.Fatalf("CreateCollection %s: %v", name, err)
+		}
+	}
+	server := NewServer(ServerOptions{
+		Collections:          mgr,
+		Backend:              db,
+		MaxCollectionHandles: 2,
+		MaxCachedCollections: 1,
+	})
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client, cleanup, err := NewInProcessClient(ctx, server)
+	if err != nil {
+		t.Fatalf("NewInProcessClient: %v", err)
+	}
+	defer func() { _ = cleanup() }()
+	if _, err := client.OpenCollection(ctx, "users"); err != nil {
+		t.Fatalf("OpenCollection users: %v", err)
+	}
+	if _, err := client.OpenCollection(ctx, "orders"); err != nil {
+		t.Fatalf("OpenCollection orders: %v", err)
+	}
+	state := client.local.state
+	state.mu.Lock()
+	cached := len(state.collections)
+	handles := len(state.handles)
+	state.mu.Unlock()
+	if cached > 1 {
+		t.Fatalf("cached collections=%d want <=1", cached)
+	}
+	if handles != 2 {
+		t.Fatalf("handles=%d want 2", handles)
+	}
+}
+
+func TestMetadataOpenCollectionNegativeHandleLimitIsUnlimited(t *testing.T) {
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{MaxCollectionHandles: -1})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if _, err := client.OpenCollection(ctx, "users"); err != nil {
+		t.Fatalf("OpenCollection first: %v", err)
+	}
+	if _, err := client.OpenCollection(ctx, "users"); err != nil {
+		t.Fatalf("OpenCollection second: %v", err)
 	}
 }
 

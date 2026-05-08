@@ -55,6 +55,65 @@ func TestMutationCommandsRoundTrip(t *testing.T) {
 	if !bytes.Contains(doc, []byte(`"Ada"`)) {
 		t.Fatalf("u1 doc=%s", doc)
 	}
+	handle, err := client.OpenCollection(ctx, "users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	handleIDs, err := client.InsertBatchHandle(ctx, handle, collections.DocumentFormatJSON,
+		[][]byte{[]byte("u3")},
+		[][]byte{[]byte(`{"email":"katherine@example.com","name":"Katherine"}`)},
+		AckVisible,
+	)
+	if err != nil {
+		t.Fatalf("InsertBatchHandle: %v", err)
+	}
+	if len(handleIDs) != 1 || string(handleIDs[0]) != "u3" {
+		t.Fatalf("handle insert ids=%q", handleIDs)
+	}
+	if err := client.InsertBatchHandleNoResult(ctx, handle, collections.DocumentFormatJSON,
+		[][]byte{[]byte("u4")},
+		[][]byte{[]byte(`{"email":"dorothy@example.com","name":"Dorothy"}`)},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("InsertBatchHandleNoResult: %v", err)
+	}
+	noResultDoc, err := col.Get([]byte("u4"))
+	if err != nil {
+		t.Fatalf("direct get no-result insert: %v", err)
+	}
+	if !bytes.Contains(noResultDoc, []byte(`"Dorothy"`)) {
+		t.Fatalf("u4 doc=%s", noResultDoc)
+	}
+	guard, err := client.replicatedMutationGuard(ctx, "insert_batch_no_ids")
+	if err != nil {
+		t.Fatalf("mutation guard: %v", err)
+	}
+	noIDsBody, err := appendInsertBatchRequestBodyRefFlags(nil, "users", 0, false, collections.DocumentFormatJSON,
+		[][]byte{[]byte("u5")},
+		[][]byte{[]byte(`{"email":"mary@example.com","name":"Mary"}`)},
+		AckVisible,
+		iwire.CommandFlagOmitResultIDs,
+		guard,
+	)
+	if err != nil {
+		t.Fatalf("append no-result insert: %v", err)
+	}
+	_, noIDsResponse, err := client.roundTrip(ctx, iwire.FrameRequest, noIDsBody, iwire.FrameResponse)
+	if err != nil {
+		t.Fatalf("roundTrip no-result insert: %v", err)
+	}
+	noIDsSections, err := iwire.DecodeSections(noIDsResponse, client.limits)
+	if err != nil {
+		t.Fatalf("decode no-result response: %v", err)
+	}
+	if _, ok, err := singletonSection(noIDsSections, iwire.SectionDocumentIDs); err != nil {
+		t.Fatalf("no-result document_ids section: %v", err)
+	} else if ok {
+		t.Fatalf("no-result response unexpectedly included document_ids")
+	}
+	if inserted, err := responseCount(noIDsSections, "inserted_count"); err != nil || inserted != 1 {
+		t.Fatalf("no-result inserted_count=%d err=%v want 1", inserted, err)
+	}
 
 	matched, modified, err := client.ReplaceBatch(ctx, "users", collections.DocumentFormatJSON,
 		[][]byte{[]byte("u1"), []byte("missing")},
@@ -91,7 +150,7 @@ func TestMutationCommandsRoundTrip(t *testing.T) {
 	}
 }
 
-func TestMutationDuplicateIDRejected(t *testing.T) {
+func TestMutationInsertResponseShapingFlags(t *testing.T) {
 	client, _, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -101,13 +160,124 @@ func TestMutationDuplicateIDRejected(t *testing.T) {
 	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
-	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
-		[][]byte{[]byte("u1"), []byte("u1")},
-		[][]byte{[]byte(`{"x":1}`), []byte(`{"x":2}`)},
+
+	guard, err := client.replicatedMutationGuard(ctx, "insert_omit_meta")
+	if err != nil {
+		t.Fatalf("mutation guard omit meta: %v", err)
+	}
+	body, err := appendInsertBatchRequestBodyRefFlags(nil, "users", 0, false, collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"x":1}`)},
 		AckVisible,
+		iwire.CommandFlagOmitResponseMeta,
+		guard,
 	)
-	if !isRemoteError(err, iwire.ErrDuplicateDocumentID) {
-		t.Fatalf("InsertBatch duplicate err=%v want duplicate document id", err)
+	if err != nil {
+		t.Fatalf("append omit meta insert: %v", err)
+	}
+	_, response, err := client.roundTrip(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
+	if err != nil {
+		t.Fatalf("roundTrip omit meta insert: %v", err)
+	}
+	client.clearCatalogVersionAfterOpaqueMutation()
+	sections, err := iwire.DecodeSections(response, client.limits)
+	if err != nil {
+		t.Fatalf("decode omit meta response: %v", err)
+	}
+	if _, ok, err := singletonSection(sections, iwire.SectionDocumentIDs); err != nil {
+		t.Fatalf("document_ids section: %v", err)
+	} else if !ok {
+		t.Fatal("omit meta response missing document_ids")
+	}
+	if _, ok, err := singletonSection(sections, iwire.SectionResponseMeta); err != nil {
+		t.Fatalf("response_meta section: %v", err)
+	} else if ok {
+		t.Fatal("omit meta response unexpectedly included response_meta")
+	}
+
+	guard, err = client.replicatedMutationGuard(ctx, "insert_empty_response")
+	if err != nil {
+		t.Fatalf("mutation guard empty response: %v", err)
+	}
+	body, err = appendInsertBatchRequestBodyRefFlags(nil, "users", 0, false, collections.DocumentFormatJSON,
+		[][]byte{[]byte("u2")},
+		[][]byte{[]byte(`{"x":2}`)},
+		AckVisible,
+		iwire.CommandFlagOmitResultIDs|iwire.CommandFlagOmitResponseMeta,
+		guard,
+	)
+	if err != nil {
+		t.Fatalf("append empty response insert: %v", err)
+	}
+	_, response, err = client.roundTrip(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
+	if err != nil {
+		t.Fatalf("roundTrip empty response insert: %v", err)
+	}
+	client.clearCatalogVersionAfterOpaqueMutation()
+	if len(response) != 0 {
+		t.Fatalf("combined omit flags response len=%d want 0", len(response))
+	}
+}
+
+func TestMutationInsertRejectsUnsupportedFastFlags(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	guard, err := client.replicatedMutationGuard(ctx, "insert_bad_flags")
+	if err != nil {
+		t.Fatalf("mutation guard: %v", err)
+	}
+	body, err := appendInsertBatchRequestBodyRefFlags(nil, "users", 0, false, collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"x":1}`)},
+		AckVisible,
+		1<<12,
+		guard,
+	)
+	if err != nil {
+		t.Fatalf("append insert: %v", err)
+	}
+	_, _, err = client.roundTrip(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
+	if !isRemoteError(err, iwire.ErrUnsupportedFeature) {
+		t.Fatalf("InsertBatch unsupported flags err=%v want unsupported feature", err)
+	}
+	assertDocumentMissing(t, mgr, "users", "u1")
+}
+
+func TestMutationInvalidIDRejected(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ids  [][]byte
+		code iwire.ErrorCode
+	}{
+		{name: "duplicate", ids: [][]byte{[]byte("u1"), []byte("u1")}, code: iwire.ErrDuplicateDocumentID},
+		{name: "empty", ids: [][]byte{[]byte("u1"), []byte{}}, code: iwire.ErrInvalidCommand},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, _, _ := serveCollectionPipe(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := client.Hello(ctx); err != nil {
+				t.Fatalf("Hello: %v", err)
+			}
+			if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+				t.Fatalf("CreateCollection: %v", err)
+			}
+			_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+				tc.ids,
+				[][]byte{[]byte(`{"x":1}`), []byte(`{"x":2}`)},
+				AckVisible,
+			)
+			if !isRemoteError(err, tc.code) {
+				t.Fatalf("InsertBatch err=%v want code %d", err, tc.code)
+			}
+		})
 	}
 }
 
@@ -409,6 +579,30 @@ func TestMutationBarrierDefaultAckPolicyHonored(t *testing.T) {
 	}
 }
 
+func TestMutationBarrierAckAPIs(t *testing.T) {
+	client, _, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if err := client.FlushCollectionWithAck(ctx, "users", AckFlushed); err != nil {
+		t.Fatalf("FlushCollectionWithAck flushed: %v", err)
+	}
+	if err := client.FlushAllWithAck(ctx, AckFlushed); err != nil {
+		t.Fatalf("FlushAllWithAck flushed: %v", err)
+	}
+	if err := client.CheckpointWithAck(ctx, AckSynced); err != nil {
+		t.Fatalf("CheckpointWithAck synced: %v", err)
+	}
+	if err := client.FlushCollectionWithAck(ctx, "users", AckSynced); !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
+		t.Fatalf("FlushCollectionWithAck synced err=%v want durability unavailable", err)
+	}
+}
+
 func TestMutationCatalogVersionCacheSurvivesSuccessfulDataMutation(t *testing.T) {
 	client, _, db := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -421,15 +615,19 @@ func TestMutationCatalogVersionCacheSurvivesSuccessfulDataMutation(t *testing.T)
 	}
 	version := catalogVersion(t, db)
 	client.catalogVersionPlusOne.Store(version + 1)
-	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
-		[][]byte{[]byte("u1")},
-		[][]byte{[]byte(`{"x":1}`)},
-		AckVisible,
-	); err != nil {
-		t.Fatalf("InsertBatch: %v", err)
+	deleted, err := client.DeleteBatch(ctx, "users", [][]byte{[]byte("missing")}, AckVisible)
+	if err != nil {
+		t.Fatalf("DeleteBatch missing: %v", err)
 	}
-	if got := client.catalogVersionPlusOne.Load(); got != version+2 {
-		t.Fatalf("catalogVersionPlusOne=%d want %d", got, version+2)
+	if deleted != 0 {
+		t.Fatalf("deleted=%d want 0", deleted)
+	}
+	after := catalogVersion(t, db)
+	if got := client.catalogVersionPlusOne.Load(); got != after+1 {
+		t.Fatalf("catalogVersionPlusOne=%d want %d", got, after+1)
+	}
+	if after != version {
+		t.Fatalf("missing delete changed catalog version from %d to %d", version, after)
 	}
 }
 

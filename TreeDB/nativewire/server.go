@@ -16,62 +16,76 @@ import (
 )
 
 const (
-	defaultMaxInFlight            = 1024
-	defaultMaxConnections         = 1024
-	defaultMaxCollectionHandles   = 1024
-	defaultMaxOpenCursors         = 1024
-	defaultMaxCursorRetainedBytes = 64 << 20
-	defaultMaxScanDocuments       = 10000
-	defaultCursorBatchSize        = 101
-	defaultCursorIdleTimeout      = 10 * time.Minute
+	defaultMaxInFlight                   = 1024
+	defaultMaxConnections                = 1024
+	defaultMaxCollectionHandles          = 1024
+	defaultMaxCachedCollections          = 1024
+	defaultMaxOpenCursors                = 1024
+	defaultMaxCursorRetainedBytes        = 64 << 20
+	defaultMaxScanDocuments              = 10000
+	defaultCursorBatchSize               = 101
+	defaultCursorIdleTimeout             = 10 * time.Minute
+	defaultMaxMetadataIdempotencyEntries = 1024
 )
 
 // ServerOptions configures a native-wire server.
 type ServerOptions struct {
-	Limits                 iwire.Limits
-	MaxInFlight            int
-	MaxConnections         int
-	MaxCollectionHandles   int
-	MaxOpenCursors         int
-	MaxCursorRetainedBytes int
-	MaxScanDocuments       int
-	DefaultCursorBatchSize int
-	CursorIdleTimeout      time.Duration
-	DefaultAckPolicy       iwire.AckPolicy
-	Collections            *collections.CollectionManager
-	Backend                *backenddb.DB
+	Limits                        iwire.Limits
+	MaxInFlight                   int
+	MaxConnections                int
+	MaxCollectionHandles          int
+	MaxCachedCollections          int
+	MaxOpenCursors                int
+	MaxCursorRetainedBytes        int
+	MaxScanDocuments              int
+	DefaultCursorBatchSize        int
+	CursorIdleTimeout             time.Duration
+	DefaultAckPolicy              iwire.AckPolicy
+	MaxMetadataIdempotencyEntries int
+	Collections                   *collections.CollectionManager
+	Backend                       *backenddb.DB
 }
 
 // Server serves native-wire control and command frames for TreeDB.
 type Server struct {
-	limits                 iwire.Limits
-	maxInFlight            int
-	maxConnections         int
-	maxCollectionHandles   int
-	maxOpenCursors         int
-	maxCursorRetainedBytes int
-	maxScanDocuments       int
-	defaultCursorBatchSize int
-	cursorIdleTimeout      time.Duration
-	defaultAckPolicy       iwire.AckPolicy
-	registry               *iwire.Registry
-	collections            *collections.CollectionManager
-	backend                *backenddb.DB
+	limits                        iwire.Limits
+	maxInFlight                   int
+	maxConnections                int
+	maxCollectionHandles          int
+	maxCachedCollections          int
+	maxOpenCursors                int
+	maxCursorRetainedBytes        int
+	maxScanDocuments              int
+	defaultCursorBatchSize        int
+	cursorIdleTimeout             time.Duration
+	defaultAckPolicy              iwire.AckPolicy
+	maxMetadataIdempotencyEntries int
+	registry                      *iwire.Registry
+	collections                   *collections.CollectionManager
+	backend                       *backenddb.DB
 
-	closed     atomic.Bool
-	connMu     sync.Mutex
-	conns      map[net.Conn]struct{}
-	listeners  map[net.Listener]struct{}
-	metadataMu sync.Mutex
+	closed              atomic.Bool
+	connMu              sync.Mutex
+	conns               map[net.Conn]struct{}
+	listeners           map[net.Listener]struct{}
+	locals              map[*localEndpoint]struct{}
+	metadataMu          sync.Mutex
+	metadataIdempotency map[string]metadataIdempotencyEntry
+	metadataIdemOrder   []string
 
-	inFlight   atomic.Int64
-	nextConn   atomic.Int64
-	nextCursor atomic.Uint64
-	reapMu     sync.Mutex
-	nextReap   time.Time
-	cursorMu   sync.Mutex
-	cursors    map[uint64]*serverCursor
-	counters   counters
+	inFlight    atomic.Int64
+	nextConn    atomic.Int64
+	nextCursor  atomic.Uint64
+	cursorCount atomic.Int64
+	reapMu      sync.Mutex
+	nextReap    time.Time
+	cursorMu    sync.Mutex
+	cursors     map[uint64]*serverCursor
+	counters    counters
+
+	cursorReaperOnce     sync.Once
+	cursorReaperStopOnce sync.Once
+	cursorReaperDone     chan struct{}
 }
 
 type serverCursor struct {
@@ -84,21 +98,31 @@ type serverCursor struct {
 }
 
 type connState struct {
-	id         uint64
-	hello      bool
-	mu         sync.Mutex
-	nextHandle uint64
-	handles    map[CollectionHandle]string
+	id          uint64
+	hello       bool
+	mu          sync.Mutex
+	nextHandle  uint64
+	handles     map[CollectionHandle]string
+	handleCols  map[CollectionHandle]*collections.Collection
+	collections map[string]*collections.Collection
+
+	readBody       []byte
+	writeBody      []byte
+	responseBody   []byte
+	sections       []iwire.Section
+	commandScratch iwire.CommandScratch
+	idsScratch     [][]byte
+	docsScratch    [][]byte
 }
 
-func (s *connState) addCollectionHandle(name string, limit int) (CollectionHandle, error) {
+func (s *connState) addCollectionHandle(name string, collection *collections.Collection, handleLimit, cacheLimit int) (CollectionHandle, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.handles == nil {
 		s.handles = make(map[CollectionHandle]string)
 	}
-	if limit > 0 && len(s.handles) >= limit {
-		return 0, protocolError(iwire.ErrResourceExhausted, "collection handle limit %d reached", limit)
+	if handleLimit > 0 && len(s.handles) >= handleLimit {
+		return 0, protocolError(iwire.ErrResourceExhausted, "collection handle limit %d reached", handleLimit)
 	}
 	s.nextHandle++
 	if s.nextHandle == 0 {
@@ -106,6 +130,18 @@ func (s *connState) addCollectionHandle(name string, limit int) (CollectionHandl
 	}
 	handle := CollectionHandle(s.nextHandle)
 	s.handles[handle] = name
+	if collection != nil {
+		if s.handleCols == nil {
+			s.handleCols = make(map[CollectionHandle]*collections.Collection)
+		}
+		s.handleCols[handle] = collection
+		if s.collections == nil {
+			s.collections = make(map[string]*collections.Collection)
+		}
+		if cacheLimit <= 0 || len(s.collections) < cacheLimit {
+			s.collections[name] = collection
+		}
+	}
 	return handle, nil
 }
 
@@ -116,6 +152,23 @@ func (s *connState) collectionForHandle(handle CollectionHandle) (string, bool) 
 	return name, ok
 }
 
+func (s *connState) collectionForHandleRef(handle CollectionHandle) (string, *collections.Collection, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	name, ok := s.handles[handle]
+	if !ok {
+		return "", nil, false
+	}
+	var collection *collections.Collection
+	if s.handleCols != nil {
+		collection = s.handleCols[handle]
+	}
+	if collection == nil && s.collections != nil {
+		collection = s.collections[name]
+	}
+	return name, collection, true
+}
+
 func (s *connState) closeCollectionHandle(handle CollectionHandle) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -123,7 +176,39 @@ func (s *connState) closeCollectionHandle(handle CollectionHandle) bool {
 		return false
 	}
 	delete(s.handles, handle)
+	delete(s.handleCols, handle)
 	return true
+}
+
+func (s *connState) cachedCollection(name string) (*collections.Collection, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	collection, ok := s.collections[name]
+	return collection, ok
+}
+
+func (s *connState) cacheCollection(name string, collection *collections.Collection, limit int) {
+	if collection == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.collections == nil {
+		s.collections = make(map[string]*collections.Collection)
+	}
+	if limit > 0 && len(s.collections) >= limit {
+		if _, ok := s.collections[name]; !ok {
+			return
+		}
+	}
+	s.collections[name] = collection
+}
+
+func (s *connState) responseScratch() []byte {
+	if s == nil {
+		return nil
+	}
+	return s.responseBody[:0]
 }
 
 // NewServer creates a native-wire server with defaulted limits and policies.
@@ -157,8 +242,12 @@ func NewServer(opts ServerOptions) *Server {
 		maxConnections = defaultMaxConnections
 	}
 	maxCollectionHandles := opts.MaxCollectionHandles
-	if maxCollectionHandles <= 0 {
+	if maxCollectionHandles == 0 {
 		maxCollectionHandles = defaultMaxCollectionHandles
+	}
+	maxCachedCollections := opts.MaxCachedCollections
+	if maxCachedCollections <= 0 {
+		maxCachedCollections = defaultMaxCachedCollections
 	}
 	maxOpenCursors := opts.MaxOpenCursors
 	if maxOpenCursors <= 0 {
@@ -187,20 +276,27 @@ func NewServer(opts ServerOptions) *Server {
 	if defaultAck == 0 {
 		defaultAck = iwire.AckVisible
 	}
+	maxMetadataIdempotencyEntries := opts.MaxMetadataIdempotencyEntries
+	if maxMetadataIdempotencyEntries == 0 {
+		maxMetadataIdempotencyEntries = defaultMaxMetadataIdempotencyEntries
+	}
 	return &Server{
-		limits:                 limits,
-		maxInFlight:            maxInFlight,
-		maxConnections:         maxConnections,
-		maxCollectionHandles:   maxCollectionHandles,
-		maxOpenCursors:         maxOpenCursors,
-		maxCursorRetainedBytes: maxCursorRetainedBytes,
-		maxScanDocuments:       maxScanDocuments,
-		defaultCursorBatchSize: cursorBatchSize,
-		cursorIdleTimeout:      cursorIdleTimeout,
-		defaultAckPolicy:       defaultAck,
-		registry:               iwire.MustV1Registry(),
-		collections:            opts.Collections,
-		backend:                opts.Backend,
+		limits:                        limits,
+		maxInFlight:                   maxInFlight,
+		maxConnections:                maxConnections,
+		maxCollectionHandles:          maxCollectionHandles,
+		maxCachedCollections:          maxCachedCollections,
+		maxOpenCursors:                maxOpenCursors,
+		maxCursorRetainedBytes:        maxCursorRetainedBytes,
+		maxScanDocuments:              maxScanDocuments,
+		defaultCursorBatchSize:        cursorBatchSize,
+		cursorIdleTimeout:             cursorIdleTimeout,
+		defaultAckPolicy:              defaultAck,
+		maxMetadataIdempotencyEntries: maxMetadataIdempotencyEntries,
+		registry:                      iwire.MustV1Registry(),
+		collections:                   opts.Collections,
+		backend:                       opts.Backend,
+		cursorReaperDone:              make(chan struct{}),
 	}
 }
 
@@ -210,6 +306,7 @@ func (s *Server) Close() error {
 		return nil
 	}
 	s.closed.Store(true)
+	s.stopCursorReaper()
 	s.connMu.Lock()
 	conns := make([]net.Conn, 0, len(s.conns))
 	for conn := range s.conns {
@@ -219,14 +316,22 @@ func (s *Server) Close() error {
 	for ln := range s.listeners {
 		listeners = append(listeners, ln)
 	}
+	locals := make([]*localEndpoint, 0, len(s.locals))
+	for local := range s.locals {
+		locals = append(locals, local)
+	}
 	s.conns = nil
 	s.listeners = nil
+	s.locals = nil
 	s.connMu.Unlock()
 	for _, ln := range listeners {
 		_ = ln.Close()
 	}
 	for _, conn := range conns {
 		_ = conn.Close()
+	}
+	for _, local := range locals {
+		_ = local.close()
 	}
 	return nil
 }
@@ -243,6 +348,10 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		_ = conn.Close()
 		return ErrServerClosed
 	}
+	return s.serveRegisteredConn(ctx, conn)
+}
+
+func (s *Server) serveRegisteredConn(ctx context.Context, conn net.Conn) error {
 	defer s.unregisterConn(conn)
 	defer conn.Close()
 
@@ -257,15 +366,13 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		case <-done:
 		}
 	}()
-	if s.cursorIdleTimeout > 0 {
-		go s.reapExpiredCursorsUntilDone(done)
-	}
+	s.startCursorReaper()
 
 	for {
 		if s.closed.Load() {
 			return ErrServerClosed
 		}
-		header, body, err := readFrame(conn, s.limits)
+		header, body, err := readFrameInto(conn, s.limits, state.readBody)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
@@ -289,6 +396,9 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 			}
 			return err
 		}
+		if body != nil {
+			state.readBody = body[:0]
+		}
 	}
 }
 
@@ -301,6 +411,11 @@ func (s *Server) registerConn(conn net.Conn) bool {
 	s.connMu.Lock()
 	defer s.connMu.Unlock()
 	if s.closed.Load() {
+		return false
+	}
+	active := len(s.conns) + len(s.locals)
+	if s.maxConnections > 0 && active >= s.maxConnections {
+		s.counters.inc("connections.rejected_total")
 		return false
 	}
 	if s.conns == nil {
@@ -346,6 +461,38 @@ func (s *Server) unregisterListener(ln net.Listener) {
 	s.connMu.Unlock()
 }
 
+func (s *Server) registerLocalEndpoint(endpoint *localEndpoint) bool {
+	if s == nil || endpoint == nil || s.closed.Load() {
+		return false
+	}
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if s.closed.Load() {
+		return false
+	}
+	active := len(s.conns) + len(s.locals)
+	if s.maxConnections > 0 && active >= s.maxConnections {
+		s.counters.inc("connections.rejected_total")
+		return false
+	}
+	if s.locals == nil {
+		s.locals = make(map[*localEndpoint]struct{})
+	}
+	s.locals[endpoint] = struct{}{}
+	s.counters.inc("connections.opened_total")
+	return true
+}
+
+func (s *Server) unregisterLocalEndpoint(endpoint *localEndpoint) {
+	if s == nil || endpoint == nil {
+		return
+	}
+	s.connMu.Lock()
+	delete(s.locals, endpoint)
+	s.connMu.Unlock()
+	s.counters.inc("connections.closed_total")
+}
+
 func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState, header iwire.Header, body []byte) error {
 	s.counters.inc("frames.in_total")
 	s.counters.add("bytes.in_total", uint64(iwire.FrameHeaderLenV1)+uint64(len(body)))
@@ -357,6 +504,9 @@ func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState,
 	}
 	switch header.Type {
 	case iwire.FrameHello:
+		if err := s.validateHelloBody(body); err != nil {
+			return s.writeError(w, header, err)
+		}
 		return s.writeHelloOK(w, header, state)
 	case iwire.FramePing:
 		return s.writeSimpleFrame(w, iwire.Header{Type: iwire.FramePong, StreamID: header.StreamID, RequestID: header.RequestID}, nil)
@@ -383,6 +533,9 @@ func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState,
 }
 
 func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connState, header iwire.Header, body []byte) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if ctx.Err() != nil {
 		return s.writeError(w, header, ctx.Err())
 	}
@@ -395,18 +548,56 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 
 	s.counters.inc("requests.started_total")
 	start := time.Now()
-	sections, err := iwire.DecodeSections(body, s.limits)
+	var sections []iwire.Section
+	var err error
+	if state != nil {
+		sections, err = iwire.DecodeSectionsInto(state.sections, body, s.limits)
+		state.sections = sections
+	} else {
+		sections, err = iwire.DecodeSections(body, s.limits)
+	}
 	if err != nil {
 		s.counters.inc("requests.failed_total")
 		return s.writeError(w, header, err)
 	}
-	cmd, err := s.registry.ValidateRequestSections(sections)
+	if req, ok, err := s.decodeInsertBatchFastRequest(state, sections); ok {
+		s.counters.incCommandRequest(iwire.CommandInsertBatch, "insert_batch")
+		if err != nil {
+			s.counters.add("dispatch_nanos_total", uint64(time.Since(start).Nanoseconds()))
+			s.counters.inc("requests.failed_total")
+			s.counters.incCommandError(iwire.CommandInsertBatch, "insert_batch")
+			return s.writeError(w, header, err)
+		}
+		responseBody, err := s.handleInsertBatchFastBody(req, state.responseScratch())
+		s.counters.add("dispatch_nanos_total", uint64(time.Since(start).Nanoseconds()))
+		if err != nil {
+			s.counters.inc("requests.failed_total")
+			s.counters.incCommandError(iwire.CommandInsertBatch, "insert_batch")
+			return s.writeError(w, header, err)
+		}
+		s.counters.inc("requests.completed_total")
+		if state != nil {
+			state.responseBody = responseBody[:0]
+		}
+		return s.writeSimpleFrameBuffered(w, state, iwire.Header{Type: iwire.FrameResponse, StreamID: header.StreamID, RequestID: header.RequestID}, responseBody)
+	} else if err != nil {
+		s.counters.inc("requests.failed_total")
+		return s.writeError(w, header, err)
+	}
+	var cmd iwire.ValidatedCommand
+	if state != nil {
+		cmd, err = s.registry.ValidateRequestSectionsInto(sections, &state.commandScratch)
+	} else {
+		cmd, err = s.registry.ValidateRequestSections(sections)
+	}
 	if err != nil {
 		s.counters.inc("requests.failed_total")
 		return s.writeError(w, header, err)
 	}
-	s.counters.inc("commands." + cmd.Schema.Name + ".requests_total")
+	s.counters.incCommandRequest(cmd.Header.ID, cmd.Schema.Name)
 	var responseSections []iwire.Section
+	var responseBody []byte
+	responseBodySet := false
 	switch cmd.Header.ID {
 	case iwire.CommandCreateCollection:
 		responseSections, err = s.handleCreateCollection(cmd.Known)
@@ -425,7 +616,10 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	case iwire.CommandDropCollection:
 		err = unsupportedDropCollection()
 	case iwire.CommandInsertBatch:
-		responseSections, err = s.handleInsertBatch(state, cmd.Known)
+		includeResultIDs := cmd.Header.Flags&iwire.CommandFlagOmitResultIDs == 0
+		includeMeta := cmd.Header.Flags&iwire.CommandFlagOmitResponseMeta == 0
+		responseBody, err = s.handleInsertBatchBody(state, cmd.Known, state.responseScratch(), includeResultIDs, includeMeta)
+		responseBodySet = true
 	case iwire.CommandReplaceBatch:
 		responseSections, err = s.handleReplaceBatch(state, cmd.Known)
 	case iwire.CommandDeleteBatch:
@@ -437,7 +631,8 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	case iwire.CommandCheckpoint:
 		responseSections, err = s.handleCheckpoint(cmd.Known)
 	case iwire.CommandGetMany:
-		responseSections, err = s.handleGetMany(state, cmd.Known)
+		responseBody, err = s.handleGetManyBody(state, cmd.Known, state.responseScratch())
+		responseBodySet = true
 	case iwire.CommandIndexLookup:
 		responseSections, err = s.handleIndexLookup(state, cmd.Known)
 	case iwire.CommandIndexRange:
@@ -456,18 +651,23 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	s.counters.add("dispatch_nanos_total", uint64(time.Since(start).Nanoseconds()))
 	if err != nil {
 		s.counters.inc("requests.failed_total")
-		s.counters.inc("commands." + cmd.Schema.Name + ".errors_total")
+		s.counters.incCommandError(cmd.Header.ID, cmd.Schema.Name)
 		return s.writeError(w, header, err)
 	}
-	var responseBody []byte
-	for _, section := range responseSections {
-		responseBody, err = iwire.AppendSection(responseBody, section)
-		if err != nil {
-			return err
+	if !responseBodySet {
+		responseBody = state.responseScratch()
+		for _, section := range responseSections {
+			responseBody, err = iwire.AppendSection(responseBody, section)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	s.counters.inc("requests.completed_total")
-	return s.writeSimpleFrame(w, iwire.Header{Type: iwire.FrameResponse, StreamID: header.StreamID, RequestID: header.RequestID}, responseBody)
+	if state != nil {
+		state.responseBody = responseBody[:0]
+	}
+	return s.writeSimpleFrameBuffered(w, state, iwire.Header{Type: iwire.FrameResponse, StreamID: header.StreamID, RequestID: header.RequestID}, responseBody)
 }
 
 func (s *Server) writeHelloOK(w io.Writer, header iwire.Header, state *connState) error {
@@ -490,6 +690,29 @@ func (s *Server) writeHelloOK(w io.Writer, header iwire.Header, state *connState
 	return s.writeSimpleFrame(w, iwire.Header{Type: iwire.FrameHelloOK, StreamID: header.StreamID, RequestID: header.RequestID}, body)
 }
 
+func (s *Server) validateHelloBody(body []byte) error {
+	if len(body) == 0 {
+		return nil
+	}
+	sections, err := iwire.DecodeSections(body, s.limits)
+	if err != nil {
+		return err
+	}
+	for _, section := range sections {
+		switch section.ID {
+		case iwire.SectionCapabilitySet,
+			iwire.SectionTraceContext,
+			iwire.SectionCompression:
+			continue
+		default:
+			if section.Critical() {
+				return protocolError(iwire.ErrUnsupportedFeature, "unknown critical hello section %d", section.ID)
+			}
+		}
+	}
+	return nil
+}
+
 func appendGoawayBody(dst []byte, lastAcceptedRequestID uint64) ([]byte, error) {
 	return iwire.AppendSection(dst, iwire.Section{
 		ID: iwire.SectionResponseMeta,
@@ -504,10 +727,7 @@ func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error 
 	if code == 0 {
 		code = iwire.ErrInternal
 	}
-	message := err.Error()
-	if code == iwire.ErrInternal {
-		message = "internal error"
-	}
+	message := wireErrorMessage(code, err)
 	body, sectionErr := iwire.AppendSection(nil, iwire.Section{
 		ID:    iwire.SectionError,
 		Bytes: appendErrorPayload(nil, code, retryableError(code), message),
@@ -520,9 +740,77 @@ func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error 
 	return s.writeSimpleFrame(w, iwire.Header{Type: iwire.FrameError, StreamID: request.StreamID, RequestID: request.RequestID}, body)
 }
 
+func wireErrorMessage(code iwire.ErrorCode, err error) string {
+	var protocolErr *iwire.ProtocolError
+	if errors.As(err, &protocolErr) && protocolErr.Reason != "" {
+		return protocolErr.Reason
+	}
+	switch code {
+	case iwire.ErrMalformedFrame:
+		return "malformed frame"
+	case iwire.ErrUnsupportedVersion:
+		return "unsupported version"
+	case iwire.ErrUnsupportedFeature:
+		return "unsupported feature"
+	case iwire.ErrAuthRequired:
+		return "auth required"
+	case iwire.ErrPermissionDenied:
+		return "permission denied"
+	case iwire.ErrInvalidCommand:
+		return "invalid command"
+	case iwire.ErrCollectionNotFound:
+		return "collection not found"
+	case iwire.ErrIndexNotFound:
+		return "index not found"
+	case iwire.ErrDuplicateDocumentID:
+		return "duplicate document id"
+	case iwire.ErrDocumentExists:
+		return "document exists"
+	case iwire.ErrUniqueIndexConflict:
+		return "unique index conflict"
+	case iwire.ErrCatalogVersionMismatch:
+		return "catalog version mismatch"
+	case iwire.ErrReadOnly:
+		return "read only"
+	case iwire.ErrTimeout:
+		return "timeout"
+	case iwire.ErrCanceled:
+		return "canceled"
+	case iwire.ErrResourceExhausted:
+		return "resource exhausted"
+	case iwire.ErrDurabilityUnavailable:
+		return "durability unavailable"
+	case iwire.ErrConsistencyUnavailable:
+		return "consistency unavailable"
+	case iwire.ErrCursorNotFound:
+		return "cursor not found"
+	case iwire.ErrCatalogChanged:
+		return "catalog changed"
+	case iwire.ErrIdempotencyConflict:
+		return "idempotency conflict"
+	default:
+		return "internal error"
+	}
+}
+
 func (s *Server) writeSimpleFrame(w io.Writer, header iwire.Header, body []byte) error {
 	header.Version = iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0}
 	if err := writeFrame(w, header, body); err != nil {
+		return err
+	}
+	s.counters.inc("frames.out_total")
+	s.counters.add("bytes.out_total", uint64(iwire.FrameHeaderLenV1)+uint64(len(body)))
+	return nil
+}
+
+func (s *Server) writeSimpleFrameBuffered(w io.Writer, state *connState, header iwire.Header, body []byte) error {
+	var err error
+	if state != nil {
+		state.writeBody, err = writeFrameBuffered(w, header, body, state.writeBody)
+	} else {
+		err = writeFrame(w, header, body)
+	}
+	if err != nil {
 		return err
 	}
 	s.counters.inc("frames.out_total")
@@ -536,6 +824,7 @@ func (s *Server) Stats() map[string]string {
 	for _, key := range []string{
 		"connections.opened_total",
 		"connections.closed_total",
+		"connections.rejected_total",
 		"frames.in_total",
 		"frames.out_total",
 		"bytes.in_total",
@@ -548,8 +837,20 @@ func (s *Server) Stats() map[string]string {
 		"errors.total",
 		"transport_errors_total",
 		"dispatch_nanos_total",
+		"cursors.opened_total",
+		"cursors.closed_total",
+		"cursors.timeouts_total",
 	} {
 		out[nativeStatsPrefix+key] = "0"
+	}
+	if s.registry != nil {
+		for _, schema := range s.registry.Schemas() {
+			out[nativeStatsPrefix+"commands."+schema.Name+".requests_total"] = "0"
+			out[nativeStatsPrefix+"commands."+schema.Name+".errors_total"] = "0"
+		}
+	}
+	for code := iwire.ErrorCode(1); code <= iwire.MaxErrorCode; code++ {
+		out[nativeStatsPrefix+"errors.code."+strconv.FormatUint(uint64(code), 10)] = "0"
 	}
 	for key, value := range s.counters.snapshot() {
 		out[nativeStatsPrefix+key] = strconv.FormatUint(value, 10)

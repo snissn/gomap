@@ -2,11 +2,15 @@ package nativewire
 
 import (
 	"context"
+	"encoding/binary"
+	"io"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
+// DocumentsResult is a batched read result. ID and document slices returned by
+// client APIs borrow the client's response buffer unless documented otherwise.
 type DocumentsResult struct {
 	IDs       [][]byte
 	Docs      [][]byte
@@ -15,11 +19,36 @@ type DocumentsResult struct {
 	Truncated bool
 }
 
+// GetMany fetches documents by ID. Returned document slices borrow the client's
+// response buffer and remain valid until the next round trip on this client.
 func (c *Client) GetMany(ctx context.Context, collection string, ids [][]byte) ([][]byte, []bool, error) {
-	sections, err := c.commandSections(ctx, iwire.CommandGetMany,
-		collectionNameRef(collection),
-		iwire.Section{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, ids...)},
-	)
+	return c.getMany(ctx, collection, 0, false, ids)
+}
+
+// GetManyHandle fetches documents by ID through an open collection handle.
+// Returned document slices borrow the client's response buffer and remain valid
+// until the next round trip on this client.
+func (c *Client) GetManyHandle(ctx context.Context, handle CollectionHandle, ids [][]byte) ([][]byte, []bool, error) {
+	return c.getMany(ctx, "", handle, true, ids)
+}
+
+func (c *Client) getMany(ctx context.Context, collection string, handle CollectionHandle, useHandle bool, ids [][]byte) ([][]byte, []bool, error) {
+	if c == nil {
+		return nil, nil, io.ErrClosedPipe
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	body, err := appendGetManyRequestBodyRef(c.requestBody[:0], collection, handle, useHandle, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	_, response, err := c.roundTripLocked(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
+	c.requestBody = body[:0]
+	if err != nil {
+		return nil, nil, err
+	}
+	var sectionBuf [4]iwire.Section
+	sections, err := iwire.DecodeSectionsInto(sectionBuf[:0], response, c.limits)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -30,12 +59,12 @@ func (c *Client) GetMany(ctx context.Context, collection string, ids [][]byte) (
 	if !ok {
 		return nil, nil, protocolError(iwire.ErrMalformedFrame, "get_many missing documents")
 	}
-	docs, err := decodeByteVectorCloned(rawDocs, c.limits)
+	docs, err := decodeByteVectorBorrowed(rawDocs, c.limits)
 	if err != nil {
 		return nil, nil, err
 	}
 	if len(docs) != len(ids) {
-		return nil, nil, protocolError(iwire.ErrMalformedFrame, "get_many documents length %d does not match requested ids length %d", len(docs), len(ids))
+		return nil, nil, protocolError(iwire.ErrMalformedFrame, "documents length %d does not match request document_ids length %d", len(docs), len(ids))
 	}
 	rawPresence, ok, err := singletonSection(sections, iwire.SectionPresenceBitmap)
 	if err != nil {
@@ -51,6 +80,52 @@ func (c *Client) GetMany(ctx context.Context, collection string, ids [][]byte) (
 	return docs, present, nil
 }
 
+func appendGetManyRequestBody(dst []byte, collection string, ids [][]byte) ([]byte, error) {
+	return appendGetManyRequestBodyRef(dst, collection, 0, false, ids)
+}
+
+func appendGetManyRequestBodyRef(dst []byte, collection string, handle CollectionHandle, useHandle bool, ids [][]byte) ([]byte, error) {
+	var commandHeader [16]byte
+	commandPayload := iwire.AppendCommandHeader(commandHeader[:0], iwire.CommandHeader{ID: iwire.CommandGetMany, Version: 1})
+	var refBuf [1 + binary.MaxVarintLen64]byte
+	var refPayload []byte
+	refLen := collectionNameRefPayloadLen(collection)
+	if useHandle {
+		refPayload = appendCollectionHandleRefPayload(refBuf[:0], handle)
+		refLen = len(refPayload)
+	}
+	idsLen := iwire.ByteVectorEncodedLen(ids)
+	total := iwire.SectionHeaderEncodedLen(iwire.SectionCommandHeader, 0, len(commandPayload)) + len(commandPayload)
+	var err error
+	total, err = addRequestBodyLen(total, iwire.SectionHeaderEncodedLen(iwire.SectionCollectionRef, 0, refLen)+refLen)
+	if err != nil {
+		return nil, err
+	}
+	total, err = addRequestBodyLen(total, iwire.SectionHeaderEncodedLen(iwire.SectionDocumentIDs, 0, idsLen)+idsLen)
+	if err != nil {
+		return nil, err
+	}
+	dst, err = growRequestBody(dst, total)
+	if err != nil {
+		return nil, err
+	}
+	body, err := appendRawSection(dst, iwire.SectionCommandHeader, commandPayload)
+	if err != nil {
+		return nil, err
+	}
+	if useHandle {
+		body, err = appendRawSection(body, iwire.SectionCollectionRef, refPayload)
+	} else {
+		body, err = appendCollectionNameRefSection(body, collection)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return appendByteVectorSectionKnownLen(body, iwire.SectionDocumentIDs, idsLen, ids)
+}
+
+// IndexLookup returns IDs matching an index value. Returned ID slices borrow the
+// client's response buffer and remain valid until the next round trip.
 func (c *Client) IndexLookup(ctx context.Context, collection, index string, value any, limits CursorLimits) ([][]byte, bool, error) {
 	scalar, err := encodeScalar(value)
 	if err != nil {
@@ -71,6 +146,8 @@ func (c *Client) IndexLookup(ctx context.Context, collection, index string, valu
 	return decodeIDsAndTruncated(sections, c.limits)
 }
 
+// IndexRange returns IDs within an index range. Returned ID slices borrow the
+// client's response buffer and remain valid until the next round trip.
 func (c *Client) IndexRange(ctx context.Context, collection, index string, opts IndexRange) ([][]byte, bool, error) {
 	req := []iwire.Section{
 		collectionNameRef(collection),
@@ -103,6 +180,8 @@ func (c *Client) IndexRange(ctx context.Context, collection, index string, opts 
 	return decodeIDsAndTruncated(sections, c.limits)
 }
 
+// OpenScan starts a collection scan. Returned ID and document slices borrow the
+// client's response buffer and remain valid until the next round trip.
 func (c *Client) OpenScan(ctx context.Context, collection string, limits CursorLimits) (DocumentsResult, error) {
 	req := []iwire.Section{collectionNameRef(collection)}
 	if limits.MaxItems > 0 || limits.MaxBytes > 0 {
@@ -115,6 +194,8 @@ func (c *Client) OpenScan(ctx context.Context, collection string, limits CursorL
 	return decodeDocumentsResult(sections, c.limits)
 }
 
+// CursorNext fetches the next cursor batch. Returned ID and document slices
+// borrow the client's response buffer and remain valid until the next round trip.
 func (c *Client) CursorNext(ctx context.Context, cursorID uint64, limits CursorLimits) (DocumentsResult, error) {
 	sections, err := c.commandSectionsOnStream(ctx, cursorID, iwire.CommandCursorNext,
 		iwire.Section{ID: iwire.SectionCursorRef, Bytes: encodeCursorRef(cursorID)},
@@ -141,7 +222,7 @@ func decodeIDsAndTruncated(sections []iwire.Section, limits iwire.Limits) ([][]b
 	if !ok {
 		return nil, false, protocolError(iwire.ErrMalformedFrame, "missing document_ids")
 	}
-	ids, err := decodeByteVectorCloned(rawIDs, limits)
+	ids, err := decodeByteVectorBorrowed(rawIDs, limits)
 	if err != nil {
 		return nil, false, err
 	}
@@ -168,7 +249,7 @@ func decodeDocumentsResult(sections []iwire.Section, limits iwire.Limits) (Docum
 		return out, err
 	}
 	if ok {
-		out.IDs, err = decodeByteVectorCloned(rawIDs, limits)
+		out.IDs, err = decodeByteVectorBorrowed(rawIDs, limits)
 		if err != nil {
 			return out, err
 		}
@@ -178,7 +259,7 @@ func decodeDocumentsResult(sections []iwire.Section, limits iwire.Limits) (Docum
 		return out, err
 	}
 	if ok {
-		out.Docs, err = decodeByteVectorCloned(rawDocs, limits)
+		out.Docs, err = decodeByteVectorBorrowed(rawDocs, limits)
 		if err != nil {
 			return out, err
 		}

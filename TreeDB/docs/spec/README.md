@@ -111,6 +111,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 - `TreeDB/docs/spec/native-query-raft-roadmap.md`
   - draft query feature roadmap and distributed/Raft sequencing policy for the
     native protocol.
+- `TreeDB/docs/spec/native-wire-r1-closeout.md`
+  - R1 single-node native server performance closeout, including direct vs
+    native microbenchmarks, workload profile commands, artifacts, findings, and
+    deferred optimization targets.
 
 ## Relationship to Existing Docs
 

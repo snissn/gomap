@@ -83,6 +83,9 @@ func TestServerControlHelloPingStatsGoaway(t *testing.T) {
 		"treedb.native_wire.requests.started_total",
 		"treedb.native_wire.requests.completed_total",
 		"treedb.native_wire.commands.stats.requests_total",
+		"treedb.native_wire.commands.stats.errors_total",
+		"treedb.native_wire.errors.code.1",
+		"treedb.native_wire.errors.code.22",
 	} {
 		if _, ok := stats[key]; !ok {
 			t.Fatalf("stats missing %s in %#v", key, stats)
@@ -152,6 +155,71 @@ func TestServerMalformedRequestReturnsWireError(t *testing.T) {
 	_, _, err := client.roundTrip(ctx, iwire.FrameRequest, []byte{0xff}, iwire.FrameResponse)
 	if !isRemoteError(err, iwire.ErrMalformedFrame) {
 		t.Fatalf("error=%v want malformed frame", err)
+	}
+}
+
+func TestServerRejectsMalformedHelloBody(t *testing.T) {
+	server := NewServer(ServerOptions{})
+	left, right := net.Pipe()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ServeConn(context.Background(), right)
+	}()
+	t.Cleanup(func() {
+		_ = left.Close()
+		_ = right.Close()
+		_ = server.Close()
+	})
+
+	body := []byte{0x80}
+	if err := writeFrame(left, iwire.Header{Type: iwire.FrameHello, RequestID: 1}, body); err != nil {
+		t.Fatalf("write malformed hello: %v", err)
+	}
+	header, response, err := readFrame(left, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatalf("read hello error: %v", err)
+	}
+	if header.Type != iwire.FrameError {
+		t.Fatalf("malformed hello response type=%d want error", header.Type)
+	}
+	if !isRemoteError(decodeWireError(response, iwire.DefaultLimits()), iwire.ErrMalformedFrame) {
+		t.Fatalf("malformed hello body did not decode as malformed frame")
+	}
+
+	request, err := appendCommandRequestBody(nil, iwire.CommandStats)
+	if err != nil {
+		t.Fatalf("append stats request: %v", err)
+	}
+	if err := writeFrame(left, iwire.Header{Type: iwire.FrameRequest, RequestID: 2}, request); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	header, response, err = readFrame(left, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatalf("read request error: %v", err)
+	}
+	if header.Type != iwire.FrameError || !isRemoteError(decodeWireError(response, iwire.DefaultLimits()), iwire.ErrInvalidCommand) {
+		t.Fatalf("request after bad hello response type=%d body=%x", header.Type, response)
+	}
+	_ = left.Close()
+	select {
+	case <-errCh:
+	case <-time.After(time.Second):
+		t.Fatal("ServeConn did not return after client close")
+	}
+}
+
+func TestServerRejectsCriticalUnknownHelloSection(t *testing.T) {
+	server := NewServer(ServerOptions{})
+	client, _ := servePipe(t, server)
+	body, err := iwire.AppendSection(nil, iwire.Section{ID: 9000, Flags: iwire.SectionFlagCritical})
+	if err != nil {
+		t.Fatalf("append hello section: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, _, err = client.roundTrip(ctx, iwire.FrameHello, body, iwire.FrameHelloOK)
+	if !isRemoteError(err, iwire.ErrUnsupportedFeature) {
+		t.Fatalf("critical hello err=%v want unsupported feature", err)
 	}
 }
 
@@ -256,6 +324,61 @@ func TestClientDetectsResponseRequestIDMismatch(t *testing.T) {
 	err := client.Ping(ctx)
 	if err == nil || !strings.Contains(err.Error(), "request_id") {
 		t.Fatalf("Ping error=%v want request_id mismatch", err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("server goroutine: %v", err)
+	}
+}
+
+func TestClientPingAllowsNilContext(t *testing.T) {
+	server := NewServer(ServerOptions{})
+	client, _ := servePipe(t, server)
+	if err := client.Hello(nil); err != nil {
+		t.Fatalf("Hello nil context: %v", err)
+	}
+	if err := client.Ping(nil); err != nil {
+		t.Fatalf("Ping nil context: %v", err)
+	}
+}
+
+func TestClientClosesAfterProtocolReadError(t *testing.T) {
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+	client := NewClient(left)
+	client.limits.MaxFrameSize = 64
+	errCh := make(chan error, 1)
+	go func() {
+		header, _, err := readFrame(right, iwire.DefaultLimits())
+		if err != nil {
+			errCh <- err
+			return
+		}
+		var headerBuf [iwire.FrameHeaderLenV1]byte
+		frameHeader, err := iwire.AppendHeader(headerBuf[:0], iwire.Header{
+			Type:      iwire.FramePong,
+			RequestID: header.RequestID,
+			BodyLen:   client.limits.MaxFrameSize + 1,
+		})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if err := writeAll(right, frameHeader); err != nil {
+			errCh <- err
+			return
+		}
+		_, _, err = readFrame(right, iwire.DefaultLimits())
+		if err == nil {
+			errCh <- errors.New("client connection remained open after protocol read error")
+			return
+		}
+		errCh <- nil
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := client.Ping(ctx); codeOf(err) != iwire.ErrResourceExhausted {
+		t.Fatalf("Ping err=%v code=%d want resource exhausted", err, codeOf(err))
 	}
 	if err := <-errCh; err != nil {
 		t.Fatalf("server goroutine: %v", err)
@@ -367,6 +490,15 @@ func TestClientDetectsErrorResponseRequestIDMismatch(t *testing.T) {
 	}
 	if err := <-errCh; err != nil {
 		t.Fatalf("server goroutine: %v", err)
+	}
+}
+
+func TestRequestBodySizingRejectsIntOverflow(t *testing.T) {
+	if _, err := addRequestBodyLen(1, maxInt); codeOf(err) != iwire.ErrResourceExhausted {
+		t.Fatalf("addRequestBodyLen err=%v want %d", err, iwire.ErrResourceExhausted)
+	}
+	if _, err := growRequestBody(make([]byte, 1), maxInt); codeOf(err) != iwire.ErrResourceExhausted {
+		t.Fatalf("growRequestBody err=%v want %d", err, iwire.ErrResourceExhausted)
 	}
 }
 

@@ -118,7 +118,7 @@ func TestRegistryRejectsInvalidCommandShape(t *testing.T) {
 	}
 
 	sections = insertBatchSections()
-	sections[0].Bytes = AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 1, Flags: 1})
+	sections[0].Bytes = AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 1, Flags: 1 << 32})
 	if _, err := registry.ValidateRequestSections(sections); codeOf(err) != ErrUnsupportedFeature {
 		t.Fatalf("unsupported command flags err=%v code=%d", err, codeOf(err))
 	}
@@ -141,7 +141,6 @@ func TestRegistryCursorCommandsUseLimitSections(t *testing.T) {
 	}
 	if _, err := registry.ValidateRequestSections([]Section{
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCursorNext, Version: 1})},
-		{ID: SectionCursorRef, Bytes: []byte{1}},
 	}); codeOf(err) != ErrInvalidCommand {
 		t.Fatalf("cursor_next missing limits err=%v code=%d", err, codeOf(err))
 	}
