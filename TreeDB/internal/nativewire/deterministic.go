@@ -1,6 +1,8 @@
 package nativewire
 
 import (
+	"cmp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -149,12 +151,7 @@ func validateDeterministicCollectionRef(raw []byte) (bool, error) {
 }
 
 func sortSectionsByID(sections []Section) {
-	for i := 1; i < len(sections); i++ {
-		section := sections[i]
-		j := i - 1
-		for ; j >= 0 && sections[j].ID > section.ID; j-- {
-			sections[j+1] = sections[j]
-		}
-		sections[j+1] = section
-	}
+	slices.SortFunc(sections, func(a, b Section) int {
+		return cmp.Compare(a.ID, b.ID)
+	})
 }
