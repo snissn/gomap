@@ -129,6 +129,24 @@ func TestIndexLookupByteOnlyLimitTruncatesIDs(t *testing.T) {
 	}
 }
 
+func TestIndexLookupByteLimitCanReturnEmptyBatch(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	ids, truncated, err := client.IndexLookup(ctx, "users", "city", "hnl", CursorLimits{MaxBytes: 1})
+	if err != nil {
+		t.Fatalf("IndexLookup: %v", err)
+	}
+	if !truncated || len(ids) != 0 {
+		t.Fatalf("ids=%q truncated=%v want empty truncated batch", ids, truncated)
+	}
+}
+
 func TestIndexLookupDefaultResultBoundUsesWireLimit(t *testing.T) {
 	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{
 		Limits: iwire.Limits{MaxByteVectorItems: 1},
@@ -146,6 +164,30 @@ func TestIndexLookupDefaultResultBoundUsesWireLimit(t *testing.T) {
 	}
 	if !truncated || len(ids) != 1 {
 		t.Fatalf("ids=%q truncated=%v want one bounded match with truncation", ids, truncated)
+	}
+}
+
+func TestIndexRangeDefaultResultBoundUsesWireLimit(t *testing.T) {
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{
+		Limits: iwire.Limits{MaxByteVectorItems: 1},
+	})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	ids, truncated, err := client.IndexRange(ctx, "users", "city", IndexRange{
+		LowerUnbounded: true,
+		UpperUnbounded: true,
+		Limit:          10,
+	})
+	if err != nil {
+		t.Fatalf("IndexRange: %v", err)
+	}
+	if !truncated || len(ids) != 1 {
+		t.Fatalf("ids=%q truncated=%v want one bounded range result with truncation", ids, truncated)
 	}
 }
 
@@ -363,6 +405,7 @@ func TestOpenScanCursorLifecycle(t *testing.T) {
 	if len(first.IDs) != 1 || first.Cursor.CursorID == 0 || !first.Cursor.HasMore {
 		t.Fatalf("first=%+v", first)
 	}
+	assertDocumentsResult(t, first, []string{"u1"}, []string{`{"email":"ada@example.com","city":"hnl","name":"Ada"}`})
 	second, err := client.CursorNext(ctx, first.Cursor.CursorID, CursorLimits{MaxItems: 10})
 	if err != nil {
 		t.Fatalf("CursorNext: %v", err)
@@ -370,9 +413,44 @@ func TestOpenScanCursorLifecycle(t *testing.T) {
 	if len(second.IDs) != 1 || second.Cursor.HasMore {
 		t.Fatalf("second=%+v", second)
 	}
+	assertDocumentsResult(t, second, []string{"u2"}, []string{`{"email":"grace@example.com","city":"hnl","name":"Grace"}`})
 	_, err = client.CursorNext(ctx, first.Cursor.CursorID, CursorLimits{MaxItems: 1})
 	if !isRemoteError(err, iwire.ErrCursorNotFound) {
 		t.Fatalf("CursorNext exhausted error=%v want cursor_not_found", err)
+	}
+}
+
+func TestCursorIdleReaperRunsWithoutFollowupRequest(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	seedReadCollection(t, mgr)
+	server := NewServer(ServerOptions{
+		Collections:       mgr,
+		Backend:           db,
+		CursorIdleTimeout: 20 * time.Millisecond,
+	})
+	client, _ := servePipe(t, server)
+	t.Cleanup(func() { _ = db.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	first, err := client.OpenScan(ctx, "users", CursorLimits{MaxItems: 1})
+	if err != nil {
+		t.Fatalf("OpenScan: %v", err)
+	}
+	if first.Cursor.CursorID == 0 {
+		t.Fatalf("first=%+v want open cursor", first)
+	}
+	waitForOpenCursorCount(t, server, 0)
+	_, err = client.CursorNext(ctx, first.Cursor.CursorID, CursorLimits{MaxItems: 1})
+	if !isRemoteError(err, iwire.ErrCursorNotFound) {
+		t.Fatalf("CursorNext after idle reap error=%v want cursor_not_found", err)
 	}
 }
 
@@ -447,4 +525,31 @@ func byteMatrixEqual(a, b [][]byte) bool {
 		}
 	}
 	return true
+}
+
+func assertDocumentsResult(t *testing.T, result DocumentsResult, wantIDs []string, wantDocs []string) {
+	t.Helper()
+	if len(result.IDs) != len(wantIDs) || len(result.Docs) != len(wantDocs) {
+		t.Fatalf("result lens ids=%d docs=%d want ids=%d docs=%d result=%+v", len(result.IDs), len(result.Docs), len(wantIDs), len(wantDocs), result)
+	}
+	for i := range wantIDs {
+		if string(result.IDs[i]) != wantIDs[i] {
+			t.Fatalf("id[%d]=%q want %q", i, result.IDs[i], wantIDs[i])
+		}
+		if string(result.Docs[i]) != wantDocs[i] {
+			t.Fatalf("doc[%d]=%q want %q", i, result.Docs[i], wantDocs[i])
+		}
+	}
+}
+
+func waitForOpenCursorCount(t *testing.T, server *Server, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if got := server.openCursorCount(); got == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("openCursorCount=%d want %d", server.openCursorCount(), want)
 }

@@ -167,7 +167,7 @@ func findCommandHeader(sections []Section) (CommandHeader, error) {
 func (c *CommandSchema) validateSections(sections []Section, scratch *CommandScratch) ([]Section, []Section, error) {
 	rules := c.ruleMap()
 	var seen sectionSeenSet
-	if scratch != nil {
+	if scratch != nil && len(sections) > sectionSeenInlineCapacity {
 		seen.reuseOverflow(scratch.seenOverflow)
 	}
 	var known []Section
@@ -213,7 +213,9 @@ func (c *CommandSchema) validateSections(sections []Section, scratch *CommandScr
 	if scratch != nil {
 		scratch.Known = known
 		scratch.Ignored = ignored
-		scratch.seenOverflow = seen.overflow
+		if seen.overflow != nil {
+			scratch.seenOverflow = seen.overflow
+		}
 	}
 	return known, ignored, nil
 }
@@ -438,6 +440,7 @@ func v1CommandSchemas() []CommandSchema {
 				{ID: SectionDocuments, Name: "documents", Required: true, Deterministic: true},
 				{ID: SectionTemplateRecords, Name: "template_records", Deterministic: true},
 				{ID: SectionExpectedCatalogVersion, Name: "expected_catalog_version", Deterministic: true},
+				{ID: SectionAckPolicy, Name: "ack_policy"},
 			},
 		},
 		{
@@ -457,6 +460,7 @@ func v1CommandSchemas() []CommandSchema {
 				{ID: SectionTemplateRecords, Name: "template_records", Deterministic: true},
 				{ID: SectionExpectedCatalogVersion, Name: "expected_catalog_version", Deterministic: true},
 				{ID: SectionReplacementMode, Name: "replacement_mode", Required: true, Deterministic: true},
+				{ID: SectionAckPolicy, Name: "ack_policy"},
 			},
 		},
 		{
@@ -472,6 +476,7 @@ func v1CommandSchemas() []CommandSchema {
 				{ID: SectionCollectionRef, Name: "collection_ref", Required: true, Deterministic: true},
 				{ID: SectionDocumentIDs, Name: "document_ids", Required: true, Deterministic: true},
 				{ID: SectionExpectedCatalogVersion, Name: "expected_catalog_version", Deterministic: true},
+				{ID: SectionAckPolicy, Name: "ack_policy"},
 			},
 		},
 		{
@@ -482,6 +487,7 @@ func v1CommandSchemas() []CommandSchema {
 			LocalOnly: true,
 			Sections: []SectionRule{
 				{ID: SectionCollectionRef, Name: "collection_ref", Required: true},
+				{ID: SectionAckPolicy, Name: "ack_policy"},
 			},
 		},
 		{
@@ -490,6 +496,9 @@ func v1CommandSchemas() []CommandSchema {
 			Name:      "flush_all",
 			Kind:      CommandKindMutation,
 			LocalOnly: true,
+			Sections: []SectionRule{
+				{ID: SectionAckPolicy, Name: "ack_policy"},
+			},
 		},
 		{
 			ID:        CommandCheckpoint,
@@ -497,6 +506,9 @@ func v1CommandSchemas() []CommandSchema {
 			Name:      "checkpoint",
 			Kind:      CommandKindMutation,
 			LocalOnly: true,
+			Sections: []SectionRule{
+				{ID: SectionAckPolicy, Name: "ack_policy"},
+			},
 		},
 		{
 			ID:                CommandGetMany,

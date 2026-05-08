@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strings"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -57,19 +56,6 @@ func errorCodeFor(err error) iwire.ErrorCode {
 		return iwire.ErrUniqueIndexConflict
 	case errors.Is(err, backenddb.ErrClosed), errors.Is(err, ErrServerClosed), errors.Is(err, net.ErrClosed), errors.Is(err, io.ErrClosedPipe):
 		return iwire.ErrCanceled
-	}
-	msg := strings.ToLower(err.Error())
-	switch {
-	case strings.Contains(msg, "duplicate document id"):
-		return iwire.ErrDuplicateDocumentID
-	case strings.Contains(msg, "document already exists"):
-		return iwire.ErrDocumentExists
-	case strings.Contains(msg, "unique index conflict"):
-		return iwire.ErrUniqueIndexConflict
-	case strings.Contains(msg, "collection not found"):
-		return iwire.ErrCollectionNotFound
-	case strings.Contains(msg, "index not found"):
-		return iwire.ErrIndexNotFound
 	}
 	return iwire.ErrInternal
 }
