@@ -18,7 +18,7 @@ type metadataGuardOptions struct {
 	hasExpectedCatalogVersion bool
 }
 
-// WithIdempotencyKey attaches a caller-controlled idempotency key to metadata
+// WithIdempotencyKey attaches a caller-controlled idempotency key to replicated
 // mutations issued with ctx. This lets callers retry the same logical mutation
 // without the client generating a different key on each attempt.
 func WithIdempotencyKey(ctx context.Context, key []byte) context.Context {
@@ -28,9 +28,9 @@ func WithIdempotencyKey(ctx context.Context, key []byte) context.Context {
 	return contextWithMetadataGuardOptions(ctx, opts)
 }
 
-// WithExpectedCatalogVersion attaches the catalog version guard to metadata
-// mutations issued with ctx. When unset, the client reads the current version
-// immediately before sending the mutation.
+// WithExpectedCatalogVersion attaches the catalog version guard to replicated
+// mutations issued with ctx. When unset, the client reads or reuses the current
+// version immediately before sending the mutation.
 func WithExpectedCatalogVersion(ctx context.Context, version uint64) context.Context {
 	opts := metadataGuardOptionsFromContext(ctx)
 	opts.expectedCatalogVersion = version
@@ -50,8 +50,10 @@ func (c *Client) CreateCollection(ctx context.Context, meta collections.Collecti
 	req := append(guard, iwire.Section{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(meta)})
 	sections, err := c.commandSections(ctx, iwire.CommandCreateCollection, req...)
 	if err != nil {
+		c.clearCatalogVersionOnMismatch(err)
 		return collections.CollectionMeta{}, err
 	}
+	c.catalogVersionPlusOne.Store(0)
 	return firstMetaFromResponse(sections)
 }
 
@@ -90,8 +92,10 @@ func (c *Client) CreateIndex(ctx context.Context, collection string, def collect
 	)
 	sections, err := c.commandSections(ctx, iwire.CommandCreateIndex, req...)
 	if err != nil {
+		c.clearCatalogVersionOnMismatch(err)
 		return collections.CollectionMeta{}, err
 	}
+	c.catalogVersionPlusOne.Store(0)
 	return firstMetaFromResponse(sections)
 }
 
@@ -117,8 +121,10 @@ func (c *Client) DropIndex(ctx context.Context, collection, index string) (colle
 	)
 	sections, err := c.commandSections(ctx, iwire.CommandDropIndex, req...)
 	if err != nil {
+		c.clearCatalogVersionOnMismatch(err)
 		return collections.CollectionMeta{}, err
 	}
+	c.catalogVersionPlusOne.Store(0)
 	return firstMetaFromResponse(sections)
 }
 
@@ -137,6 +143,7 @@ func (c *Client) CurrentCatalogVersion(ctx context.Context) (uint64, error) {
 	if err != nil {
 		return 0, protocolError(iwire.ErrMalformedFrame, "invalid catalog version %q", raw)
 	}
+	c.catalogVersionPlusOne.Store(version + 1)
 	return version, nil
 }
 
@@ -150,19 +157,61 @@ func (c *Client) replicatedMetadataGuard(ctx context.Context, command string) ([
 			return nil, err
 		}
 	}
-	var key []byte
-	if opts.hasIdempotencyKey {
-		if len(opts.idempotencyKey) == 0 {
-			return nil, protocolError(iwire.ErrInvalidCommand, "idempotency key cannot be empty")
+	return c.replicatedGuardForVersion(command, version, opts)
+}
+
+func (c *Client) replicatedMutationGuard(ctx context.Context, command string) ([]iwire.Section, error) {
+	opts := metadataGuardOptionsFromContext(ctx)
+	version := opts.expectedCatalogVersion
+	if !opts.hasExpectedCatalogVersion {
+		versionPlusOne := c.catalogVersionPlusOne.Load()
+		if versionPlusOne != 0 {
+			version = versionPlusOne - 1
+		} else {
+			var err error
+			version, err = c.CurrentCatalogVersion(ctx)
+			if err != nil {
+				return nil, err
+			}
 		}
-		key = append([]byte(nil), opts.idempotencyKey...)
-	} else {
-		key = []byte("client/" + command + "/" + strconv.FormatUint(c.nextReq.Add(1), 10))
+	}
+	return c.replicatedGuardForVersion(command, version, opts)
+}
+
+func (c *Client) replicatedGuardForVersion(command string, version uint64, opts metadataGuardOptions) ([]iwire.Section, error) {
+	key, err := c.idempotencyKeyForCommand(command, opts)
+	if err != nil {
+		return nil, err
 	}
 	return []iwire.Section{
 		{ID: iwire.SectionIdempotencyKey, Bytes: key},
 		{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, version)},
 	}, nil
+}
+
+func (c *Client) idempotencyKeyForCommand(command string, opts metadataGuardOptions) ([]byte, error) {
+	if opts.hasIdempotencyKey {
+		if len(opts.idempotencyKey) == 0 {
+			return nil, protocolError(iwire.ErrInvalidCommand, "idempotency key cannot be empty")
+		}
+		return append([]byte(nil), opts.idempotencyKey...), nil
+	}
+	return []byte("client/" + command + "/" + strconv.FormatUint(c.nextReq.Add(1), 10)), nil
+}
+
+func (c *Client) clearCatalogVersionOnMismatch(err error) {
+	if isRemoteError(err, iwire.ErrCatalogVersionMismatch) {
+		c.catalogVersionPlusOne.Store(0)
+	}
+}
+
+func (c *Client) advanceCatalogVersionAfterMutation(guard []iwire.Section) {
+	expected, ok, err := expectedCatalogVersionFromSections(guard)
+	if err != nil || !ok || expected > ^uint64(0)-2 {
+		c.catalogVersionPlusOne.Store(0)
+		return
+	}
+	c.catalogVersionPlusOne.Store(expected + 2)
 }
 
 func metadataGuardOptionsFromContext(ctx context.Context) metadataGuardOptions {

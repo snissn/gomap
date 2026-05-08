@@ -382,6 +382,18 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 		responseSections, err = s.handleCloseCollection(state, cmd.Known)
 	case iwire.CommandDropCollection:
 		err = unsupportedDropCollection()
+	case iwire.CommandInsertBatch:
+		responseSections, err = s.handleInsertBatch(state, cmd.Known)
+	case iwire.CommandReplaceBatch:
+		responseSections, err = s.handleReplaceBatch(state, cmd.Known)
+	case iwire.CommandDeleteBatch:
+		responseSections, err = s.handleDeleteBatch(state, cmd.Known)
+	case iwire.CommandFlushCollection:
+		responseSections, err = s.handleFlushCollection(state, cmd.Known)
+	case iwire.CommandFlushAll:
+		responseSections, err = s.handleFlushAll(cmd.Known)
+	case iwire.CommandCheckpoint:
+		responseSections, err = s.handleCheckpoint(cmd.Known)
 	case iwire.CommandGetMany:
 		responseSections, err = s.handleGetMany(state, cmd.Known)
 	case iwire.CommandIndexLookup:

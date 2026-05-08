@@ -465,6 +465,7 @@ func v1CommandSchemas() []CommandSchema {
 				{ID: SectionDocuments, Name: "documents", Required: true, Deterministic: true},
 				{ID: SectionTemplateRecords, Name: "template_records", Deterministic: true},
 				{ID: SectionExpectedCatalogVersion, Name: "expected_catalog_version", Deterministic: true},
+				{ID: SectionAckPolicy, Name: "ack_policy"},
 			},
 		},
 		{
@@ -484,6 +485,7 @@ func v1CommandSchemas() []CommandSchema {
 				{ID: SectionTemplateRecords, Name: "template_records", Deterministic: true},
 				{ID: SectionExpectedCatalogVersion, Name: "expected_catalog_version", Deterministic: true},
 				{ID: SectionReplacementMode, Name: "replacement_mode", Required: true, Deterministic: true},
+				{ID: SectionAckPolicy, Name: "ack_policy"},
 			},
 		},
 		{
@@ -499,6 +501,38 @@ func v1CommandSchemas() []CommandSchema {
 				{ID: SectionCollectionRef, Name: "collection_ref", Required: true, Deterministic: true},
 				{ID: SectionDocumentIDs, Name: "document_ids", Required: true, Deterministic: true},
 				{ID: SectionExpectedCatalogVersion, Name: "expected_catalog_version", Deterministic: true},
+				{ID: SectionAckPolicy, Name: "ack_policy"},
+			},
+		},
+		{
+			ID:        CommandFlushCollection,
+			Version:   1,
+			Name:      "flush_collection",
+			Kind:      CommandKindMutation,
+			LocalOnly: true,
+			Sections: []SectionRule{
+				{ID: SectionCollectionRef, Name: "collection_ref", Required: true},
+				{ID: SectionAckPolicy, Name: "ack_policy"},
+			},
+		},
+		{
+			ID:        CommandFlushAll,
+			Version:   1,
+			Name:      "flush_all",
+			Kind:      CommandKindMutation,
+			LocalOnly: true,
+			Sections: []SectionRule{
+				{ID: SectionAckPolicy, Name: "ack_policy"},
+			},
+		},
+		{
+			ID:        CommandCheckpoint,
+			Version:   1,
+			Name:      "checkpoint",
+			Kind:      CommandKindMutation,
+			LocalOnly: true,
+			Sections: []SectionRule{
+				{ID: SectionAckPolicy, Name: "ack_policy"},
 			},
 		},
 		{

@@ -14,10 +14,11 @@ import (
 
 // Client sends native-wire requests over a single connection.
 type Client struct {
-	conn    net.Conn
-	limits  iwire.Limits
-	nextReq atomic.Uint64
-	mu      sync.Mutex
+	conn                  net.Conn
+	limits                iwire.Limits
+	nextReq               atomic.Uint64
+	catalogVersionPlusOne atomic.Uint64
+	mu                    sync.Mutex
 }
 
 // NewClient returns a native-wire client that owns conn until Close.
