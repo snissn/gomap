@@ -75,6 +75,27 @@ func TestDecodeSectionsIntoAndDecodeByteVectorIntoReuseBuffers(t *testing.T) {
 	}
 }
 
+func TestDecodeSectionsIntoClearsStaleReferences(t *testing.T) {
+	cases := nativewireBenchmarkCases()
+	largeBody := cases[0].body
+	smallBody := benchmarkRequestBody([]Section{benchmarkCommandSection(CommandStats)})
+	sections, err := DecodeSectionsInto(nil, largeBody, Limits{})
+	if err != nil {
+		t.Fatalf("DecodeSectionsInto large: %v", err)
+	}
+	largeLen := len(sections)
+	sections, err = DecodeSectionsInto(sections, smallBody, Limits{})
+	if err != nil {
+		t.Fatalf("DecodeSectionsInto small: %v", err)
+	}
+	backing := sections[:largeLen]
+	for i := len(sections); i < largeLen; i++ {
+		if backing[i].ID != 0 || backing[i].Flags != 0 || backing[i].Bytes != nil {
+			t.Fatalf("stale section at index %d: %#v", i, backing[i])
+		}
+	}
+}
+
 func sectionBacking(sections []Section) *Section {
 	if cap(sections) == 0 {
 		return nil
