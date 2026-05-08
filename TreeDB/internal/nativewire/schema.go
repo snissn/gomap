@@ -57,8 +57,9 @@ type ValidatedCommand struct {
 
 // CommandScratch carries reusable buffers for command-schema validation.
 type CommandScratch struct {
-	Known   []Section
-	Ignored []Section
+	Known        []Section
+	Ignored      []Section
+	seenOverflow map[SectionID]int
 }
 
 func NewRegistry(commands ...CommandSchema) (*Registry, error) {
@@ -162,6 +163,9 @@ func findCommandHeader(sections []Section) (CommandHeader, error) {
 func (c *CommandSchema) validateSections(sections []Section, scratch *CommandScratch) ([]Section, []Section, error) {
 	rules := c.ruleMap()
 	var seen sectionSeenSet
+	if scratch != nil {
+		seen.reuseOverflow(scratch.seenOverflow)
+	}
 	var known []Section
 	var ignored []Section
 	if scratch == nil {
@@ -205,6 +209,7 @@ func (c *CommandSchema) validateSections(sections []Section, scratch *CommandScr
 	if scratch != nil {
 		scratch.Known = known
 		scratch.Ignored = ignored
+		scratch.seenOverflow = seen.overflow
 	}
 	return known, ignored, nil
 }
@@ -249,11 +254,21 @@ func compileCommandRules(c CommandSchema) (map[SectionID]SectionRule, []SectionI
 	return rules, required
 }
 
+const sectionSeenInlineCapacity = 64
+
 type sectionSeenSet struct {
-	ids      [32]SectionID
-	counts   [32]int
+	ids      [sectionSeenInlineCapacity]SectionID
+	counts   [sectionSeenInlineCapacity]int
 	n        int
 	overflow map[SectionID]int
+}
+
+func (s *sectionSeenSet) reuseOverflow(overflow map[SectionID]int) {
+	if overflow == nil {
+		return
+	}
+	clear(overflow)
+	s.overflow = overflow
 }
 
 func (s *sectionSeenSet) add(id SectionID) int {
