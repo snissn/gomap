@@ -26,6 +26,7 @@ The desired end state is a TreeDB collection type that can:
   unique/nonunique secondary indexes for column-store collections;
 - write updates as replacement column-store data, not as a permanent row-store
   overlay;
+- require fixed schemas for column-store collections in `TCS1`;
 - expose ClickHouse-style fast filters and haystack search algorithms through
   reusable collection-level interfaces, so row-store, template-v1, BSON, and
   column-store collections can all use them where their data layout can supply
@@ -97,7 +98,11 @@ separate storage engine.
 10. Make fast filters and byte-haystack search algorithms reusable across
    collection types through small adapters, not hard-coded to the column-store
    scan path.
-11. Provide a roadmap where every PR has correctness tests and explicit
+11. Use fixed schemas for column-store collections. Flexible/lazy schemas are a
+   future collection mode, not part of `TCS1`.
+12. Align column-store compression with TreeDB's existing compression system
+   instead of creating a disconnected codec stack.
+13. Provide a roadmap where every PR has correctness tests and explicit
    performance gates.
 
 ## 4. Non-Goals
@@ -114,6 +119,11 @@ separate storage engine.
 - Do not keep a permanent row-document overlay for column-store collections.
   A transient row object may exist while computing an update, but the durable
   representation of changed rows must be column-store data.
+- Do not lazily create columns for undeclared fields in `TCS1`. Flexible
+  schemas may be designed later as a separate format or compatibility layer.
+- Do not require a new physical column-file folder in PR1. The format should
+  make such a folder possible, but the first implementation can use the
+  existing persistent value log with a column-part payload class.
 - Do not require every ClickHouse codec in PR1. The format should allow them,
   but implementation should be staged.
 
@@ -131,6 +141,12 @@ const (
     CollectionStorageColumnar CollectionStorageLayout = "columnar-v1"
 )
 
+type ColumnSchemaMode string
+
+const (
+    ColumnSchemaFixed ColumnSchemaMode = "fixed"
+)
+
 type CollectionOptions struct {
     // existing fields...
     StorageLayout CollectionStorageLayout `json:"storage_layout,omitempty"`
@@ -144,6 +160,7 @@ ingested from JSON/BSON/template-v1:
 ```go
 type ColumnStoreOptions struct {
     SchemaVersion uint32
+    SchemaMode    ColumnSchemaMode
     Columns       []ColumnDefinition
     PrimaryOrder  []string
     PartPolicy    ColumnPartPolicy
@@ -158,9 +175,23 @@ type ColumnDefinition struct {
     Type         ColumnType
     Nullable     bool
     Default      ColumnDefault
-    Codec        []ColumnCodecSpec
+    Compression  ColumnCompressionBinding
     IndexHints   ColumnIndexHints
 }
+
+type ColumnCompressionBinding struct {
+    Mode       ColumnCompressionMode // auto, pinned, off
+    Pinned     []ColumnCodecSpec
+    Candidates []ColumnCodecSpec
+}
+
+type ColumnCompressionMode string
+
+const (
+    ColumnCompressionAuto   ColumnCompressionMode = "auto"
+    ColumnCompressionPinned ColumnCompressionMode = "pinned"
+    ColumnCompressionOff    ColumnCompressionMode = "off"
+)
 
 type ColumnUpdatePolicy struct {
     MaxDeltaPartRows      int
@@ -177,6 +208,24 @@ type FastFilterDefinition struct {
     Args        map[string]uint64
 }
 ```
+
+`SchemaMode` must be `fixed` for `TCS1`. Every stored column must be declared
+up front with a stable column id, type, nullability, default, compression
+binding, and index hints. Row ingestion may ignore undeclared fields or reject
+them according to collection options, but it must not create new physical
+columns lazily.
+
+`Compression.Mode` defaults to `auto`. Auto mode lets the column-store codec
+selector choose per-column and per-block pipelines from the collection/profile
+candidate set. `pinned` mode restricts the column to the explicitly listed
+pipeline(s), and `off` stores raw blocks except for mandatory structural
+encodings such as bitmaps. This gives schemas good defaults while still
+allowing a column owner to pin `LZ4`, `ZSTD`, a zstd dictionary profile, or a
+typed transform pipeline when benchmarks justify it.
+
+Flexible schemas are deliberately deferred. If TreeDB later supports lazily
+created columns, that should be a separate schema mode with explicit migration,
+query, and storage-compatibility rules.
 
 The collection can still accept row documents through `InsertBatch`, but the
 preferred high-throughput API is direct column ingestion:
@@ -350,6 +399,8 @@ ColumnPartDescriptor {
     PartKind         uint8 // base, insert delta, update delta, compacted
     SchemaVersion    uint32
     RowCount         uint32
+    VisibleRowCount  uint32
+    DeletedRowCount  uint32
     IDLower          []byte
     IDUpperExclusive []byte
     CreatedCommitSeq uint64
@@ -367,6 +418,8 @@ Granules are row ranges within a part:
 GranuleDescriptor {
     FirstRow      uint32
     RowCount      uint32
+    VisibleRows   uint32
+    DeletedRows   uint32
     IDLower       []byte
     IDUpper       []byte
     MarkOrdinal   uint32
@@ -393,6 +446,30 @@ ColumnPartColumnDescriptor {
 Each column part writes one or more value-log records. The preferred first
 format is a single `TCS1` record per column substream per part. Large columns
 may split into multiple records by granule range.
+
+Columns are logically distinct streams, but they are not required to be
+distinct operating-system files in PR1. For a schema such as
+`{primary key, metric_1, metric_2}`, `metric_1` and `metric_2` should have
+separate column stream descriptors and may have separate value-log records, but
+those records may live in the same value-log segment file. The descriptor and
+marks, not the file name, define the column boundary.
+
+This keeps PR1 aligned with TreeDB's existing persistent value-log, pointer,
+GC, rewrite, and recovery machinery. The format should still reserve a
+column-part payload class so TreeDB can later split column parts into a
+dedicated folder or file class, for example `Dir/maindb/columns/col-*.log`,
+without changing logical collection semantics.
+
+Requirements for any later dedicated column file/folder:
+
+- use the same reachability model as value-log pointers;
+- integrate with value-log GC/rewrite or provide equivalent segment GC;
+- expose bytes-by-class stats for column payloads, filters, marks, and
+  tombstones;
+- preserve WAL/recovery ordering: no root may publish a pointer to unreadable
+  column bytes;
+- keep `TCS1` payload compression independent from outer frame compression
+  unless a benchmark proves a class-specific outer dictionary is beneficial.
 
 Envelope:
 
@@ -473,10 +550,45 @@ Borrow these ClickHouse defaults unless benchmark evidence changes them:
   record, but mature parts should favor independent column records;
 - marks record row range plus compressed offset and decoded offset.
 
-A granule is the smallest unit for skipping. A codec block is the smallest unit
-for decompression. They should usually align, but the format must allow one
+Chunking has four separate units:
+
+- part: the immutable maintenance and publication unit;
+- granule: the smallest unit for metadata skipping and row-count accounting;
+- codec block: the smallest unit for decompression;
+- value-log record: the physical IO/pointer unit.
+
+Granules and codec blocks should usually align, but the format must allow one
 granule to contain multiple codec blocks for very wide strings and one codec
 block to contain several tiny granules for narrow booleans.
+
+Initial chunk builder policy:
+
+```go
+type ColumnPartPolicy struct {
+    TargetPartRows       int
+    MaxPartRows          int
+    TargetGranuleRows    int
+    MinCodecBlockRawBytes int
+    MaxCodecBlockRawBytes int
+    UpdateDeltaMaxRows   int
+    UpdateDeltaMaxBytes  int64
+}
+```
+
+Suggested defaults:
+
+- `TargetGranuleRows = 8192`;
+- `MinCodecBlockRawBytes = 64 KiB`;
+- `MaxCodecBlockRawBytes = 1 MiB`;
+- update-delta parts use smaller limits and are compacted sooner.
+
+The builder should close a granule when it reaches `TargetGranuleRows` or when
+wide-column raw bytes would exceed the maximum codec block target. It should
+coalesce very narrow columns until the minimum raw-byte target where doing so
+does not harm skipping. Too-small chunks waste marks and compression ratio;
+too-large chunks hurt point reads, update-followed-by-read latency, and
+predicate exclusion. These tradeoffs must be benchmarked rather than treated
+as fixed constants.
 
 ### 6.5 Substreams
 
@@ -606,6 +718,36 @@ Deletes are the same visibility mechanism without replacement rows: publish
 tombstones/delete bitmap updates, remove secondary index entries, and leave
 the old column bytes to snapshot-safe GC/rewrite after compaction.
 
+`Visibility changes` means root-level metadata changes, not a read-time pointer
+diff chain. The primary root should map each id directly to its newest visible
+row locator. Delete bitmaps/tombstones hide old locators during scans and
+snapshot reads. A reader should not have to chase an unbounded list of pointer
+diffs to reconstruct the current row.
+
+The update design needs an explicit experimental gate. There are at least
+three plausible physical strategies:
+
+1. update-delta parts for changed rows only;
+2. rewrite the affected column granule(s) and publish new locators;
+3. hybrid: use update-delta parts for scattered writes and granule rewrite for
+   dense updates.
+
+The RFC chooses update-delta parts as the first implementation because it
+keeps foreground writes bounded and preserves immutable base parts. Milestone 6
+must benchmark this choice against granule rewrite on:
+
+- random point update throughput;
+- dense range update throughput;
+- point read immediately after update;
+- projected scan after 1 percent, 10 percent, and 30 percent churn;
+- secondary-index update cost;
+- compaction catch-up time and reclaimed bytes;
+- delta-part count and maximum visible part fan-in per id range.
+
+If update-delta parts make read amplification unacceptable before compaction,
+the implementation should switch to the hybrid policy rather than hard-coding
+delta parts forever.
+
 ### 6.8 Schema Evolution
 
 Schema changes create new schema versions. A part is always written with one
@@ -688,8 +830,10 @@ method bytes as persistent identifiers unless the payload is byte-compatible.
 | ID | Codec | Stage | PR target |
 |---:|---|---|---|
 | `0x00` | `NONE` | generic/raw | PR1 |
-| `0x01` | `LZ4` | generic | PR2 |
-| `0x02` | `ZSTD` | generic | PR2 |
+| `0x01` | `SNAPPY` | generic | PR2 |
+| `0x02` | `LZ4` | generic | PR2 |
+| `0x03` | `ZSTD` | generic | PR2 |
+| `0x04` | `ZSTD_DICT` | generic with dictionary id | PR2/PR3 |
 | `0x10` | `BITPACK` | typed/structural | PR3 |
 | `0x11` | `RLE` | typed/structural | PR3 |
 | `0x12` | `DELTA` | numeric transform | PR3 |
@@ -701,6 +845,22 @@ method bytes as persistent identifiers unless the payload is byte-compatible.
 | `0x22` | `ALP` | experimental float transform | PR6 |
 | `0x30` | `DICT_STRING` | string transform | PR3 |
 | `0x31` | `SPARSE_DEFAULT` | sparse/default transform | PR3 |
+
+These codec ids should map onto a canonical TreeDB compression registry, not a
+one-off column-store implementation. TreeDB already has production paths for
+snappy, lz4, zstd, zstd dictionaries, dictionary persistence in `dictdb/`,
+no-expansion admission, and autotune/backoff. The column-store implementation
+should initially wrap those routines behind the `TCS1` codec interface, then
+promote the shared pieces into a single internal compression package that can
+serve value-log frames, column parts, outer leaves, and future collection
+filters.
+
+Dictionary compression is especially important to keep unified. A `ZSTD_DICT`
+codec must persist enough dictionary identity to decode after reopen. The
+dictionary bytes should live in the existing dictionary store or a compatible
+successor, and dictionary selection should support payload classes such as
+`column/<collection>/<column_id>/<substream>` rather than only one global
+value-log class.
 
 ### 7.3 ClickHouse Codec Application
 
@@ -717,6 +877,10 @@ Apply these ClickHouse techniques directly:
   ClickHouse's `0.9375` default ratio as a candidate, then tune.
 - `ZSTD`: for cold/compacted parts or columns with high ratio wins.
 - `LZ4`: default low-CPU generic codec for hot parts.
+- `SNAPPY`: compatible with current TreeDB value-log block-compression
+  defaults and useful as a low-risk hot-ingest baseline.
+- `ZSTD_DICT`: for repeated strings, template-like values, marks/descriptors,
+  or columns whose samples train a stable dictionary.
 
 TreeDB should not blindly port every algorithm before the storage format is
 stable. The staged path should first prove the codec pipeline and block
@@ -727,7 +891,7 @@ and sparse/default encoding.
 
 Selection priority:
 
-1. Column-level codec in `ColumnDefinition`.
+1. Column-level `Compression` binding in `ColumnDefinition`.
 2. Collection-level `ColumnCompressionPolicy`.
 3. Profile default (`fast`, `wal_on_fast`, `durable`, `bench`).
 4. Engine default.
@@ -748,6 +912,26 @@ Selection should be block-local but policy-driven:
 - maintenance can rewrite old parts with stronger candidate pipelines;
 - a high-entropy block can bypass compression without changing the column's
   configured default.
+
+The selector should combine TreeDB's current value-log compression chooser with
+a ClickHouse-inspired exploration/exploitation model:
+
+- keep the existing no-expansion admission, minimum-size checks,
+  high-entropy probes, and PAUSED/probe state;
+- treat candidate pipelines as arms with observed encode ns, decode ns,
+  compressed bytes, and kept/attempted ratio;
+- score an arm by estimated saved IO time minus encode/decode CPU cost, with
+  profile-specific weights for hot ingest versus cold storage;
+- reserve a small exploration budget so the selector can detect data-shape
+  changes;
+- never explore outside a column's pinned pipeline list;
+- persist selector stats at part or collection scope only when doing so
+  improves reopen behavior in benchmarks.
+
+Do not decide upfront whether the existing TreeDB chooser or the bandit-style
+selector is the final architecture. Milestone 2 should ship the simpler shared
+TreeDB chooser. Milestone 4 or 8 should compare it against the bandit-style
+selector with deterministic fixtures before making it canonical.
 
 Maintenance should support recompression:
 
@@ -804,13 +988,28 @@ Point lookup by id:
 5. Materialize a row document only if the caller used row APIs.
 
 The first implementation may decode a whole column block to return one row.
-That is acceptable if point lookup remains guarded by benchmarks. Later
-optimizations:
+That is acceptable if point lookup remains guarded by benchmarks, but it should
+not be the only planned path. ClickHouse gets much of its selective-read
+performance from sparse primary indexes, marks, mark caches, and uncompressed
+block caches; TreeDB should combine those ideas with KV-specific locators.
+
+Point-read optimization ladder:
 
 - decoded block cache keyed by `(part_id, column_id, block_ordinal)`;
 - single-row fast paths for uncompressed fixed-width blocks;
+- direct offset reads for fixed-width raw blocks without decoding neighboring
+  rows;
+- small row-group blocks for update-delta parts and point-read-heavy
+  collections;
+- optional row mini-cache keyed by `(part_id, row_ordinal, projection_hash)`;
 - row materialization cache for hot point reads;
-- optional small-row inline cache in primary locator value.
+- optional small-row inline cache in primary locator value;
+- adaptive part policy that reduces block size when point-read and
+  update-followed-by-read benchmarks regress.
+
+The point-read benchmark suite must report cold point reads, warm point reads,
+update-followed-by-read, and mixed point/scan workloads. A projected scan win
+is not enough if `Get` becomes too slow for collection users.
 
 ### 8.2 Column Scan
 
@@ -879,6 +1078,18 @@ algorithms, not as SQL-only features:
   `MultiVolnitsky` style of precomputing search state and scanning many
   haystacks with low per-row overhead.
 
+The `set` filter should start as a distinct-value membership index, not a
+histogram. Store enough metadata to make it operationally useful:
+
+- `row_count`;
+- `distinct_count`;
+- `null_count`;
+- `truncated/unknown` flag when distinct values exceed the configured maximum.
+
+Per-value counts are not required for PR1. If workloads need count estimates,
+add a separate count-min sketch, top-k, or posting-list/bitmap index rather
+than overloading the set filter.
+
 TreeDB should expose these through a reusable internal filter/search package
 that can serve every collection layout:
 
@@ -932,6 +1143,29 @@ Recommended implementation sequence:
 The important design point is that filter building and batch evaluation should
 consume typed vectors when available, but fall back to row extraction or byte
 haystack adapters without changing the algorithm implementation.
+
+### 8.5 Fast Counts
+
+TreeDB should support a fast exact `count(*)` path for column-store
+collections. The design should not depend on scanning a hidden column.
+
+Maintain count metadata at multiple levels:
+
+- collection root aggregate: visible row count for the snapshot root;
+- part descriptor: physical rows, visible rows, deleted rows;
+- granule descriptor: row count and deleted count;
+- optional secondary/filter metadata: exact posting counts only when the index
+  format can prove exactness.
+
+For `count(*)` with no predicate, a reader should use the snapshot's collection
+aggregate or sum visible rows from part descriptors. Inserts increment the
+aggregate, deletes decrement it, updates leave it unchanged, and compaction
+must preserve it. For simple predicates, min/max, set, bloom, and secondary
+indexes may prune work, but approximate filters must not return an exact count
+without verifying rows or using an exact posting/bitmap index.
+
+This is analogous to ClickHouse's ability to answer trivial counts from part
+metadata, but it must respect TreeDB snapshots and delete bitmaps.
 
 ## 9. Write Path
 
@@ -1000,6 +1234,38 @@ Borrow ClickHouse's ordered parallel compression pattern:
 
 Use TreeDB's existing benchmark and backpressure style. Do not start with
 unbounded goroutine-per-column behavior.
+
+### 9.5 WAL and Durability Integration
+
+Column-store writes must follow TreeDB's existing durability model: WAL/journal
+and value-log storage are decoupled, and value-log pointers remain persistent
+storage references.
+
+WAL-on write ordering:
+
+1. Build column parts, filters, marks, and descriptors.
+2. Append `TCS1` payloads to the value log or future column-part file class.
+3. Append the commit-log batch that describes root mutations, primary locator
+   changes, secondary index changes, delete/tombstone changes, and part
+   descriptor additions.
+4. Publish the root group only after the column bytes are readable at the
+   required durability boundary.
+5. On recovery, replay either the complete root group or none of it.
+
+WAL-off relaxed mode may acknowledge writes according to current TreeDB
+semantics, but it must not weaken pointer safety: a visible root must never
+reference missing column bytes after normal reopen within that mode's existing
+guarantees.
+
+This is likely a longer epic for collection WAL integration. The column-store
+roadmap must still reserve tests for:
+
+- crash before root publish after writing column bytes;
+- crash after commit-log append before root publish;
+- crash during update-delta publish with secondary index changes;
+- crash during compaction publish;
+- recovery with WAL enabled and WAL disabled profiles;
+- value-log GC/rewrite while old snapshots still reference old column parts.
 
 ## 10. Caches and Metadata
 
@@ -1080,6 +1346,9 @@ Required collection tests:
 - secondary unique and nonunique index parity;
 - delete bitmap and update-delta-part correctness;
 - secondary index correctness after column-store updates and deletes;
+- WAL/recovery correctness for column-part publishes;
+- exact count metadata correctness across insert, update, delete, compaction,
+  reopen, and active snapshots;
 - compaction while snapshots are open;
 - value-log GC does not remove reachable column parts;
 - offline rewrite preserves column locators;
@@ -1108,13 +1377,19 @@ Required output:
 - docs/sec;
 - ns/doc;
 - scan rows/sec by projection;
+- point reads/sec, cold and warm;
+- update ops/sec;
+- update-followed-by-read ops/sec;
+- exact count latency;
 - encoded bytes/doc;
 - raw bytes/doc;
 - compression ratio;
+- kept/attempted compression blocks by codec;
 - encode MB/sec;
 - decode MB/sec;
 - allocations/op;
 - part count and granule count;
+- update-delta part count and maximum visible fan-in;
 - maintenance rewrite stats.
 
 Extend canonical collections:
@@ -1130,12 +1405,44 @@ with new rows:
 - `treedb_columnstore_collection_2_indexes`
 - `treedb_columnstore_collection_3_indexes`
 - `treedb_columnstore_direct_vectors`
+- `treedb_columnstore_update_then_get`
+- `treedb_columnstore_count_star`
+
+### 12.5 Completeness Audit
+
+Every implementation PR should update a traceability checklist that connects
+design text to tests and gates. The checklist should answer:
+
+- which RFC sections the PR implements or changes;
+- which exact tests cover those sections;
+- which benchmark rows/gates changed;
+- whether secondary indexes, WAL/recovery, compression stats, and count
+  metadata are affected;
+- whether the change introduces a new on-disk format byte or only new policy;
+- whether old snapshots, value-log GC/rewrite, and compaction remain safe.
+
+No milestone should be considered complete unless every deliverable has at
+least one correctness test and every risky performance claim has a benchmark
+row.
 
 ## 13. Roadmap and Gates
 
 All gates are relative to the same host and same run unless explicitly marked
 deterministic. Use `benchstat` with `-count=5` for Go microbenchmarks and
 machine-readable validation for deterministic suites.
+
+Traceability matrix:
+
+| Design area | RFC sections | Milestones | Required evidence |
+|---|---|---|---|
+| Fixed schema and APIs | 5.1, 6.8 | M1, M3 | schema golden tests, row/direct ingestion parity |
+| Physical layout and chunking | 6.2-6.6 | M1, M2, M3 | descriptor golden tests, chunk-size benchmarks |
+| Compression registry and chooser | 7.1-7.5 | M2, M4, M8 | codec tests, chooser stats, ratio/throughput gates |
+| Point reads and scans | 8.1-8.3 | M5 | point-read, scan, allocation, cache gates |
+| Fast filters and haystack search | 8.4 | M5 | false-negative tests, adapter parity, search benchmarks |
+| Fast counts | 8.5 | M5, M6 | exact count tests and count latency gates |
+| Writes, updates, WAL | 6.7, 9.1-9.5 | M6 | recovery tests, update/read churn benchmarks |
+| Maintenance and GC | 11 | M6, M8 | snapshot compaction tests, reclaimed-byte gates |
 
 ### Milestone 0: Baseline and Fixtures
 
@@ -1148,6 +1455,8 @@ Deliverables:
   - sparse nullable fields;
   - high-entropy strings;
   - update/delete churn shape;
+  - update-followed-by-read shape;
+  - count-star shape;
 - add `cmd/columnstore_bench` skeleton with row-store/template-v1 baselines;
 - add machine-readable result schema and guardrail checks.
 
@@ -1162,12 +1471,15 @@ Performance gates:
 - no product gate yet;
 - benchmark runner overhead under 1 percent on a no-op fixture;
 - results include bytes/doc and docs/sec for every configured row.
+- results include point-read, update, update-followed-by-read, and count
+  latency placeholders even before product gates turn on.
 
 ### Milestone 1: On-Disk Descriptor and Raw Column Parts
 
 Deliverables:
 
 - `TCS1` envelope and part descriptor structs;
+- fixed schema metadata with explicit rejection of lazy column creation;
 - raw `NONE` fixed-width scalar columns;
 - primary `id -> row_locator` root;
 - part descriptor root;
@@ -1176,6 +1488,7 @@ Deliverables:
 Tests:
 
 - exact-byte descriptor golden tests;
+- fixed-schema validation tests;
 - scalar round trips for bool/int64/float64/string-id placeholders;
 - reopen parity;
 - value-log GC reachable-part protection.
@@ -1194,7 +1507,9 @@ Gates:
 Deliverables:
 
 - codec pipeline registry;
-- `NONE`, `LZ4`, and `ZSTD`;
+- `NONE`, `SNAPPY`, `LZ4`, `ZSTD`, and `ZSTD_DICT` wrappers around the shared
+  TreeDB compression registry where possible;
+- simple TreeDB-style compression chooser with no-expansion admission;
 - block directory, per-block checksums, min/max raw/compressed accounting;
 - direct decode into caller-owned vector buffers;
 - no-expansion admission.
@@ -1206,6 +1521,7 @@ Tests:
 - unknown codec tests;
 - generic-only structural stream validation;
 - direct decode buffer reuse tests.
+- zstd dictionary id persists and decodes after reopen.
 
 Gates:
 
@@ -1213,6 +1529,9 @@ Gates:
   bounded under 10 percent after warmup;
 - compressible fixed-width fixture achieves compressed/raw ratio <= 0.55 with
   LZ4 and <= 0.40 with ZSTD;
+- snappy hot-ingest throughput is measured as a baseline against LZ4 and raw;
+- zstd dictionary fixture beats non-dictionary zstd by >= 10 percent bytes/doc
+  without losing more than 15 percent decode throughput;
 - decode projected fixed-width scan remains at least 1.5x faster than
   row-document scan;
 - compression-off ceiling loses no more than 10 percent insert throughput from
@@ -1256,6 +1575,8 @@ Deliverables:
 - GCD;
 - T64 byte mode;
 - codec selection heuristics by column stats;
+- experimental bandit-style selector behind a feature flag or benchmark-only
+  path;
 - maintenance recompression from hot defaults to cold codecs.
 
 Tests:
@@ -1265,6 +1586,7 @@ Tests:
 - overflow/wrap tests;
 - structural-stream rejection tests;
 - recompression preserves query results.
+- selector comparison report against the Milestone 2 TreeDB-style chooser.
 
 Gates:
 
@@ -1275,6 +1597,9 @@ Gates:
 - encode throughput for these transforms at least 250 MB/sec per core on the
   deterministic microbench fixture or no worse than 25 percent below generic
   compression for the same ratio class.
+- bandit-style selector is not promoted unless it improves weighted
+  ratio/throughput score on at least two deterministic fixtures without
+  regressing high-entropy fallback.
 
 ### Milestone 5: Projection and Predicate Pushdown
 
@@ -1288,6 +1613,7 @@ Deliverables:
 - set and exact bloom filters;
 - token and ngram bloom filters for byte-haystack predicates;
 - compiled single-needle and multi-needle byte searchers;
+- exact fast `count(*)` from snapshot/part metadata;
 - decoded block cache;
 - mark cache.
 
@@ -1305,6 +1631,8 @@ Tests:
 - limit behavior;
 - borrowed-slice lifetime tests;
 - cache hit/miss accounting tests.
+- exact count tests across insert, update, delete, compaction, reopen, and
+  active snapshots.
 
 Gates:
 
@@ -1317,6 +1645,8 @@ Gates:
   fixture;
 - multi-needle byte search over a batch is at least 2.0x faster than compiling
   per row for the same haystacks and needles;
+- unfiltered `count(*)` is O(visible parts) or better and at least 20x faster
+  than scanning one projected column on the count-star fixture;
 - projected scan allocations <= 0.25 allocations per 1000 rows in borrowed API
   steady state.
 
@@ -1325,6 +1655,8 @@ Gates:
 Deliverables:
 
 - update-delta column parts;
+- experimental granule-rewrite and hybrid update benchmarks, even if not
+  productized;
 - delete bitmap handling;
 - compaction from base parts, delta parts, and delete bitmaps into new base
   parts;
@@ -1340,6 +1672,7 @@ Tests:
 - crash/reopen around compaction publish;
 - value-log GC/rewrite after compaction;
 - unique secondary correctness after updates.
+- crash/reopen around update-delta publish with secondary index changes.
 
 Gates:
 
@@ -1347,6 +1680,10 @@ Gates:
   70 percent of current row-store update path for the same indexed shape;
 - update-delta part count is bounded by the configured micro-batch policy and
   does not grow one durable part per row under the default bulk-update path;
+- point read immediately after update is no worse than 2.0x clean-dataset point
+  read p50 and p95 on the deterministic churn fixture;
+- projected scan after 10 percent churn is no worse than 1.5x clean-dataset
+  scan p50 before compaction, and returns to within 1.15x after compaction;
 - compacted bytes/doc after 30 percent churn no more than 1.20x compacted
   insert-only bytes/doc;
 - compaction reclaims at least 80 percent of bytes made unreachable in a
@@ -1427,19 +1764,29 @@ Gates:
     storage-layout adapters.
 17. Use set, bloom, token bloom, ngram bloom, and text/posting-list filters as
     staged pruning layers before decoding full column blocks.
+18. Reuse and improve TreeDB's canonical compression machinery rather than
+    building an isolated column-store codec stack.
+19. Keep exact row-count metadata in descriptors so trivial counts avoid data
+    scans.
+20. Treat WAL/recovery ordering as part of the storage format, not an
+    integration afterthought.
 
 ## 15. Risks and Mitigations
 
 | Risk | Mitigation |
 |---|---|
 | Point lookup becomes slower because a whole block is decoded for one row. | Primary locator root, decoded block cache, optional inline hot-row cache, and explicit point-read gates. |
-| Random updates cause write amplification. | Write changed rows into bounded update-delta column parts, batch scattered point updates where allowed, and compact asynchronously. |
+| Random updates cause write amplification or read amplification. | Write changed rows into bounded update-delta column parts, batch scattered point updates where allowed, benchmark against granule rewrite/hybrid strategies, and compact asynchronously. |
 | Compression burns CPU on incompressible data. | No-expansion admission, high-entropy probes, PAUSED/probe autotune, and per-column stats. |
+| Column-store compression diverges from existing TreeDB compression. | Start with wrappers around TreeDB's snappy/lz4/zstd/zstd-dict routines and migrate toward one canonical compression registry. |
+| WAL integration is underspecified. | Require root-group publish ordering, recovery tests, and pointer-safety tests before update/delete milestones are complete. |
 | Schema evolution makes old parts hard to read. | Version every part and use schema adapters with golden tests. |
+| Flexible schemas create unpredictable columns and compression choices. | Keep `TCS1` fixed-schema only; defer lazy/flexible schema mode to a separate design. |
 | Secondary indexes duplicate too much data. | Keep current secondary root format first; later consider optional row-locator payloads, compressed posting-list values, or bitmap payloads for low-cardinality shapes. |
 | Secondary indexes drift from column-store visibility after updates. | Publish secondary deletes/inserts, primary locator changes, part descriptors, and delete bitmaps in the same root group; test crash/reopen and active snapshots. |
 | Fast filters produce wrong answers. | Treat filters as pruning only, use tri-state `MayMatch`, forbid false negatives in property tests, and always verify matches on decoded rows or exact secondary entries. |
 | Haystack search semantics become confusing for non-string types. | Require explicit byte-haystack adapters; use typed filters for numeric equality/range and reserve encoded-byte substring search for explicit predicates. |
+| Fast count metadata becomes stale. | Publish count deltas in the same root group as inserts/deletes and verify across update, compaction, reopen, and snapshots. |
 | Value-log GC deletes live column parts. | Descriptors and locators are normal roots; GC reachability must scan their ValuePtrs, with tests. |
 | Borrowed vector API is unsafe for general users. | Provide safe materializing APIs and document borrowed lifetime like existing borrowed APIs. |
 | ClickHouse codecs are overfit for analytical time series. | Stage codecs and keep generic compression as the baseline; require dataset-specific gates before enabling selectors. |
@@ -1466,6 +1813,13 @@ Gates:
    `filters/<name>` roots used by non-column collection layouts?
 9. Which byte-haystack adapters should be enabled by default for BSON and
    template-v1: field-only, whole-document, or both behind explicit options?
+10. When should column parts move from ordinary value-log records to a dedicated
+    column file/folder class?
+11. Should the canonical compression registry live under the existing value-log
+    compression packages, the existing internal compression package, or a new
+    shared package consumed by both?
+12. What churn threshold should switch updates from delta parts to granule
+    rewrite or hybrid rewrite?
 
 ## 17. Adversarial Review and Applied Fixes
 
@@ -1540,6 +1894,31 @@ bad semantics if numeric values are searched as decimal strings by accident.
 Fix: Haystack adapters are explicit. String/bytes/document/token predicates
 use byte searchers; numeric equality and range use typed filters.
 
+Finding: A fixed-schema column store could drift into flexible schema behavior
+if row ingestion silently creates columns for new paths.
+Fix: `TCS1` now requires fixed schemas and declares flexible/lazy schemas
+out-of-scope for this format.
+
+Finding: A separate physical column folder could delay the first useful
+implementation and duplicate value-log lifecycle machinery.
+Fix: PR1 stores logical column streams as value-log payload records while
+reserving a column-part payload class for future file/folder separation.
+
+Finding: Update-delta parts may be correct but too slow for update-heavy
+workloads.
+Fix: Milestone 6 now requires experiments against granule rewrite and hybrid
+rewrite, plus update-followed-by-read and churned-scan gates.
+
+Finding: A new column compression system could fork away from TreeDB's existing
+snappy/lz4/zstd/zstd-dictionary work.
+Fix: The RFC now requires a shared TreeDB compression registry path and treats
+the bandit-style selector as an experiment against the current TreeDB chooser.
+
+Finding: Fast filters and part row counts could be approximate but accidentally
+used for exact answers.
+Fix: Approximate filters remain pruning-only, while `count(*)` uses exact
+snapshot/part/granule metadata or verifies rows.
+
 ## 18. Completion Criteria for the Proposal
 
 This RFC is complete when a reviewer can answer:
@@ -1548,11 +1927,14 @@ This RFC is complete when a reviewer can answer:
 - how the B-tree remains central;
 - where column bytes are stored;
 - how compression is represented and selected;
+- how fixed schemas, auto compression, and pinned per-column compression work;
 - how ClickHouse practices are mapped into TreeDB;
 - how secondary indexes work with column-store inserts, scans, updates,
   deletes, and compaction;
 - how reusable fast filters and byte-haystack searchers apply to column-store
   and other collection layouts;
+- how fast counts are maintained without scanning data;
+- how WAL/recovery ordering protects column-part pointers;
 - how reads, writes, updates, deletes, compaction, and GC work;
 - what tests are required;
 - what performance and compression gates apply to every milestone.
