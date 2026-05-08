@@ -44,6 +44,13 @@ func TestFrameHeaderRejectsMalformedAndUnsupported(t *testing.T) {
 	}
 
 	header[12] = 0
+	header[10] = 0 // frame_type = 0 is outside the v1 frame set.
+	if _, err := DecodeHeader(header, Limits{}); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("unknown frame type err=%v code=%d", err, codeOf(err))
+	}
+
+	header[10] = byte(FrameRequest)
+	header[12] = 0
 	header[14] = 1 // unknown advisory frame flag; must be ignored.
 	if _, err := DecodeHeader(header, Limits{}); err != nil {
 		t.Fatalf("advisory flag should decode: %v", err)

@@ -27,6 +27,38 @@ func servePipe(t *testing.T, server *Server) (*Client, <-chan error) {
 	return NewClient(left), errCh
 }
 
+func TestServerServeConnNormalizesNilContext(t *testing.T) {
+	server := NewServer(ServerOptions{})
+	left, right := net.Pipe()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ServeConn(nil, right)
+	}()
+	t.Cleanup(func() {
+		_ = left.Close()
+		_ = right.Close()
+		_ = server.Close()
+	})
+
+	client := NewClient(left)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if err := client.Goaway(ctx); err != nil {
+		t.Fatalf("Goaway: %v", err)
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("ServeConn returned %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ServeConn did not return after goaway")
+	}
+}
+
 func TestServerControlHelloPingStatsGoaway(t *testing.T) {
 	server := NewServer(ServerOptions{})
 	client, errCh := servePipe(t, server)
