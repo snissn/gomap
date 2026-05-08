@@ -13,10 +13,11 @@ import (
 )
 
 type Client struct {
-	conn    net.Conn
-	limits  iwire.Limits
-	nextReq atomic.Uint64
-	mu      sync.Mutex
+	conn                  net.Conn
+	limits                iwire.Limits
+	nextReq               atomic.Uint64
+	catalogVersionPlusOne atomic.Uint64
+	mu                    sync.Mutex
 }
 
 func NewClient(conn net.Conn) *Client {

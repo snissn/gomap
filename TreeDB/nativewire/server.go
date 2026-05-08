@@ -53,10 +53,11 @@ type Server struct {
 	collections            *collections.CollectionManager
 	backend                *backenddb.DB
 
-	closed    atomic.Bool
-	connMu    sync.Mutex
-	conns     map[net.Conn]struct{}
-	listeners map[net.Listener]struct{}
+	closed     atomic.Bool
+	connMu     sync.Mutex
+	conns      map[net.Conn]struct{}
+	listeners  map[net.Listener]struct{}
+	metadataMu sync.Mutex
 
 	inFlight   atomic.Int64
 	nextConn   atomic.Int64
@@ -221,6 +222,9 @@ func (s *Server) Close() error {
 func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 	if s == nil || conn == nil {
 		return ErrServerClosed
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	if !s.registerConn(conn) {
 		_ = conn.Close()
@@ -538,6 +542,9 @@ func (s *Server) Stats() map[string]string {
 	}
 	out[nativeStatsPrefix+"requests.in_flight"] = strconv.FormatInt(s.inFlight.Load(), 10)
 	out[nativeStatsPrefix+"cursors.open"] = strconv.Itoa(s.openCursorCount())
+	if version, err := s.currentCatalogVersion(); err == nil {
+		out[nativeStatsPrefix+"catalog.version"] = strconv.FormatUint(version, 10)
+	}
 	if s.collections != nil {
 		for key, value := range s.collections.Stats() {
 			out[key] = value

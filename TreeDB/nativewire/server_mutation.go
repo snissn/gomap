@@ -12,6 +12,9 @@ func (s *Server) handleInsertBatch(state *connState, sections []iwire.Section) (
 	if err := managerRequired(s.collections); err != nil {
 		return nil, err
 	}
+	if err := s.checkCatalogGuard(sections); err != nil {
+		return nil, err
+	}
 	name, _, err := collectionRefFromSections(state, sections)
 	if err != nil {
 		return nil, err
@@ -59,6 +62,9 @@ func (s *Server) handleInsertBatch(state *connState, sections []iwire.Section) (
 
 func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
 	if err := managerRequired(s.collections); err != nil {
+		return nil, err
+	}
+	if err := s.checkCatalogGuard(sections); err != nil {
 		return nil, err
 	}
 	name, _, err := collectionRefFromSections(state, sections)
@@ -117,6 +123,9 @@ func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) 
 
 func (s *Server) handleDeleteBatch(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
 	if err := managerRequired(s.collections); err != nil {
+		return nil, err
+	}
+	if err := s.checkCatalogGuard(sections); err != nil {
 		return nil, err
 	}
 	name, _, err := collectionRefFromSections(state, sections)

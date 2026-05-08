@@ -34,6 +34,9 @@ func (c *Client) GetMany(ctx context.Context, collection string, ids [][]byte) (
 	if err != nil {
 		return nil, nil, err
 	}
+	if len(docs) != len(ids) {
+		return nil, nil, protocolError(iwire.ErrMalformedFrame, "get_many documents length %d does not match requested ids length %d", len(docs), len(ids))
+	}
 	rawPresence, ok, err := singletonSection(sections, iwire.SectionPresenceBitmap)
 	if err != nil {
 		return nil, nil, err
@@ -201,6 +204,9 @@ func decodeDocumentsResult(sections []iwire.Section, limits iwire.Limits) (Docum
 		if off != len(raw) {
 			return out, protocolError(iwire.ErrMalformedFrame, "truncated section has trailing bytes")
 		}
+	}
+	if out.IDs != nil && out.Docs != nil && len(out.IDs) != len(out.Docs) {
+		return out, protocolError(iwire.ErrMalformedFrame, "document_ids length %d does not match documents length %d", len(out.IDs), len(out.Docs))
 	}
 	return out, nil
 }
