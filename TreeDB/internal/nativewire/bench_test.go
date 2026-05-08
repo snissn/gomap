@@ -594,12 +594,13 @@ func BenchmarkNativewireDeterministicEntry(b *testing.B) {
 
 func nativewireBenchmarkCases() []nativewireBenchmarkCase {
 	insertIDs := AppendByteVector(nil, makeBenchmarkItems("ins_id", 64, 16)...)
-	insertDocs := AppendByteVector(nil, makeBenchmarkTemplateDocuments("ins_doc", 64, 256)...)
+	templateRecord := deterministicTemplateRecord("active", "age", "city", "email")
+	insertDocs := AppendByteVector(nil, makeBenchmarkTemplateDocuments("ins_doc", 64, 256, templateRecord, 4)...)
 	replaceIDs := AppendByteVector(nil, makeBenchmarkItems("rep_id", 64, 16)...)
-	replaceDocs := AppendByteVector(nil, makeBenchmarkTemplateDocuments("rep_doc", 64, 256)...)
+	replaceDocs := AppendByteVector(nil, makeBenchmarkTemplateDocuments("rep_doc", 64, 256, templateRecord, 4)...)
 	deleteIDs := AppendByteVector(nil, makeBenchmarkItems("del_id", 128, 16)...)
 	getIDs := AppendByteVector(nil, makeBenchmarkItems("get_id", 128, 16)...)
-	templateRecords := AppendByteVector(nil, deterministicTemplateRecord("active", "age", "city", "email"))
+	templateRecords := AppendByteVector(nil, templateRecord)
 	indexName := benchmarkString("city")
 	indexValue := benchmarkScalarString("hnl")
 	indexLower := benchmarkIndexBound("h", true, false)
@@ -774,16 +775,48 @@ func makeBenchmarkItems(prefix string, count, size int) [][]byte {
 	return items
 }
 
-func makeBenchmarkTemplateDocuments(prefix string, count, size int) [][]byte {
+func makeBenchmarkTemplateDocuments(prefix string, count, size int, record []byte, fields int) [][]byte {
 	headerLen := len(deterministicTemplateV1StoredMagic) + sha256.Size
 	if size < headerLen {
 		size = headerLen
 	}
-	items := makeBenchmarkItems(prefix, count, size-headerLen)
+	payloadLen := size - headerLen
+	if fields <= 0 {
+		fields = 1
+	}
+	items := make([][]byte, count)
 	for i := range items {
-		items[i] = deterministicTemplateStoredDocument(items[i])
+		payload := benchmarkTemplateValuePayload(prefix, i, payloadLen, fields)
+		items[i] = deterministicTemplateStoredDocumentForRecord(record, payload)
 	}
 	return items
+}
+
+func benchmarkTemplateValuePayload(prefix string, i, payloadLen, fields int) []byte {
+	if payloadLen < fields {
+		payloadLen = fields
+	}
+	payload := make([]byte, 0, payloadLen)
+	for field := 0; field < fields-1; field++ {
+		payload = append(payload, deterministicTemplateV1KindNull)
+	}
+	label := []byte(fmt.Sprintf("%s_%06d", prefix, i))
+	maxStringLen := payloadLen - len(payload) - 1
+	if maxStringLen < 0 {
+		maxStringLen = 0
+	}
+	for maxStringLen > 0 && 1+uvarintLen(uint64(maxStringLen))+maxStringLen > payloadLen-len(payload) {
+		maxStringLen--
+	}
+	value := make([]byte, maxStringLen)
+	copy(value, label)
+	for j := len(label); j < len(value); j++ {
+		value[j] = byte('a' + (i+j)%26)
+	}
+	payload = append(payload, deterministicTemplateV1KindString)
+	payload = appendUvarint(payload, uint64(len(value)))
+	payload = append(payload, value...)
+	return payload
 }
 
 func reportCommandMetrics(b *testing.B, tc nativewireBenchmarkCase) {
