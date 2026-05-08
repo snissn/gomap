@@ -1,6 +1,7 @@
 package treedb_test
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
@@ -91,5 +92,40 @@ func TestCompactStorageFullPacksLeafGenerationDebtOffline(t *testing.T) {
 	}
 	if closeErr != nil {
 		t.Fatalf("close reopened: %v", closeErr)
+	}
+}
+
+func TestCompactStorageCachedRefreshesProtectedPathsAcrossPhases(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.MaxWALBytes = -1
+	opts.DisableSideStores = true
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.SetSync([]byte("k"), bytes.Repeat([]byte("v"), 256)); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+
+	calls := 0
+	if _, err := db.CompactStorage(context.Background(), treedb.CompactStorageOptions{
+		ValueLogProtectedPathsFunc: func() []string {
+			calls++
+			return []string{"user-protected-path"}
+		},
+	}); err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if calls < 3 {
+		t.Fatalf("protected path callback calls=%d want at least 3", calls)
 	}
 }

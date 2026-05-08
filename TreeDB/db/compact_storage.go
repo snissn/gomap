@@ -39,6 +39,11 @@ type CompactStorageOptions struct {
 	ValueLogRewriteBatchSize       int
 	ValueLogRewriteMaxSegmentBytes int64
 	ValueLogProtectedPaths         []string
+	// ValueLogProtectedPathsFunc refreshes online protected paths before each
+	// value-log rewrite/GC audit or applied phase. Live cached-mode callers use
+	// this so foreground writer rotations that happen during a multi-phase
+	// compaction cannot leave newly queued value-log segments unprotected.
+	ValueLogProtectedPathsFunc func() []string
 
 	// Leaf-generation pack knobs. Defaults are intentionally bounded to keep a
 	// single compaction request finite while still draining ordinary debt.
@@ -190,13 +195,14 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	}
 	defer cleanupLeafLog()
 	if err := db.runCompactStoragePhase(&stats, "value-log-rewrite", func() error {
+		protectedPaths := compactStorageValueLogProtectedPaths(opts)
 		rewrite, err := db.ValueLogRewriteOnline(ctx, ValueLogRewriteOnlineOptions{
 			BatchSize:       opts.ValueLogRewriteBatchSize,
 			SyncEachBatch:   opts.SyncEachPhase,
 			MaxSegmentBytes: opts.ValueLogRewriteMaxSegmentBytes,
 			LocalityPolicy:  ValueLogRewriteLocalityGrouped,
 			ReserveRIDs:     opts.ReserveRIDs,
-			ProtectedPaths:  opts.ValueLogProtectedPaths,
+			ProtectedPaths:  protectedPaths,
 		})
 		stats.ValueLogRewrite = rewrite
 		return err
@@ -210,7 +216,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	}
 
 	if err := db.runCompactStoragePhase(&stats, "value-log-gc", func() error {
-		gc, err := db.ValueLogGC(ctx, ValueLogGCOptions{ProtectedPaths: opts.ValueLogProtectedPaths})
+		gc, err := db.ValueLogGC(ctx, ValueLogGCOptions{ProtectedPaths: compactStorageValueLogProtectedPaths(opts)})
 		stats.ValueLogGC = gc
 		return err
 	}); err != nil {
@@ -346,7 +352,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 		if debt.ValueLogGCSegments > 0 {
 			phaseName := fmt.Sprintf("settle-value-log-gc-%d", pass+1)
 			if err := db.runCompactStoragePhase(stats, phaseName, func() error {
-				gc, err := db.ValueLogGC(ctx, ValueLogGCOptions{ProtectedPaths: opts.ValueLogProtectedPaths})
+				gc, err := db.ValueLogGC(ctx, ValueLogGCOptions{ProtectedPaths: compactStorageValueLogProtectedPaths(opts)})
 				stats.ValueLogGC = gc
 				return err
 			}); err != nil {
@@ -435,16 +441,17 @@ func normalizeCompactStorageOptions(opts CompactStorageOptions) CompactStorageOp
 	return opts
 }
 
-func compactStorageRewritePlanOptions(opts CompactStorageOptions) ValueLogRewriteOnlineOptions {
+func compactStorageRewritePlanOptions(protectedPaths []string) ValueLogRewriteOnlineOptions {
 	return ValueLogRewriteOnlineOptions{
 		MinSegmentStaleBytes: 1,
-		ProtectedPaths:       opts.ValueLogProtectedPaths,
+		ProtectedPaths:       protectedPaths,
 	}
 }
 
 func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats) (CompactStorageDebt, error) {
 	var debt CompactStorageDebt
-	rewritePlan, err := db.ValueLogRewritePlan(ctx, compactStorageRewritePlanOptions(opts))
+	protectedPaths := compactStorageValueLogProtectedPaths(opts)
+	rewritePlan, err := db.ValueLogRewritePlan(ctx, compactStorageRewritePlanOptions(protectedPaths))
 	if err != nil {
 		return debt, err
 	}
@@ -455,7 +462,7 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 		debt.ValueLogRewriteBytes = rewritePlan.SelectedBytesTotal
 	}
 
-	valueGC, err := db.ValueLogGC(ctx, ValueLogGCOptions{DryRun: true, ProtectedPaths: opts.ValueLogProtectedPaths})
+	valueGC, err := db.ValueLogGC(ctx, ValueLogGCOptions{DryRun: true, ProtectedPaths: protectedPaths})
 	if err != nil {
 		return debt, err
 	}
@@ -587,6 +594,36 @@ func zeroByteValueLogFilesFromUsage(usage []CompactStorageUsage) int {
 	return 0
 }
 
+func compactStorageValueLogProtectedPaths(opts CompactStorageOptions) []string {
+	if opts.ValueLogProtectedPathsFunc == nil {
+		return opts.ValueLogProtectedPaths
+	}
+	dynamic := opts.ValueLogProtectedPathsFunc()
+	if len(opts.ValueLogProtectedPaths) == 0 {
+		return dynamic
+	}
+	if len(dynamic) == 0 {
+		return opts.ValueLogProtectedPaths
+	}
+	seen := make(map[string]struct{}, len(opts.ValueLogProtectedPaths)+len(dynamic))
+	out := make([]string, 0, len(opts.ValueLogProtectedPaths)+len(dynamic))
+	for _, path := range opts.ValueLogProtectedPaths {
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	for _, path := range dynamic {
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	return out
+}
+
 func (db *DB) pruneZeroByteValueLogFiles() (int, error) {
 	layout := resolveStorageLayout(db.dir)
 	entries, err := os.ReadDir(layout.valueVLogDir)
@@ -615,10 +652,22 @@ func (db *DB) pruneZeroByteValueLogFiles() (int, error) {
 		}
 		if db.valueLogManager != nil {
 			if fileID, ok := compactStorageValueLogFileID(name); ok && db.valueLogManager.HasSegment(fileID) {
-				if err := db.valueLogManager.RemoveSegment(fileID); err != nil {
+				if err := db.valueLogManager.MarkZombie(fileID); err != nil {
 					return deleted, err
 				}
-				deleted++
+				if err := db.publishValueLogSetNoRefresh(); err != nil {
+					return deleted, err
+				}
+				if _, err := db.valueLogManager.RemoveSegmentIfUnpinned(fileID); err != nil {
+					return deleted, err
+				}
+				if _, err := os.Stat(path); err != nil {
+					if os.IsNotExist(err) {
+						deleted++
+						continue
+					}
+					return deleted, err
+				}
 				continue
 			}
 		}

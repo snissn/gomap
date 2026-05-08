@@ -1747,7 +1747,7 @@ func (m *Manager) EvictSegment(id uint32) error {
 	}
 	if f.RefCount.Load() != 0 {
 		m.mu.Unlock()
-		return fmt.Errorf("cannot evict valuelog file %d: still pinned", id)
+		return &filePinnedError{id: id, op: "evict"}
 	}
 	delete(m.files, id)
 	m.mu.Unlock()
@@ -2080,13 +2080,34 @@ func (m *Manager) RemoveSegment(id uint32) error {
 	}
 	if f.RefCount.Load() != 0 {
 		m.mu.Unlock()
-		return fmt.Errorf("cannot remove valuelog file %d: still pinned", id)
+		return &filePinnedError{id: id, op: "remove"}
 	}
 	delete(m.files, id)
 	m.mu.Unlock()
 
 	_ = f.Close()
 	return removeSegmentFileWithRetry(f.Path)
+}
+
+// RemoveSegmentIfUnpinned removes a tracked segment only when no live snapshot
+// pins it. It returns false with no error when the segment is absent or still
+// pinned.
+func (m *Manager) RemoveSegmentIfUnpinned(id uint32) (bool, error) {
+	m.mu.Lock()
+	f, ok := m.files[id]
+	if !ok {
+		m.mu.Unlock()
+		return false, nil
+	}
+	if f.RefCount.Load() != 0 {
+		m.mu.Unlock()
+		return false, nil
+	}
+	delete(m.files, id)
+	m.mu.Unlock()
+
+	_ = f.Close()
+	return true, removeSegmentFileWithRetry(f.Path)
 }
 
 // RemoveSegmentForce removes a segment without refcount checks.

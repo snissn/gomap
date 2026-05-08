@@ -7,6 +7,10 @@ import (
 
 var ErrFileNotFound = errors.New("valuelog: file not found")
 
+// ErrFilePinned reports that a value-log segment is still pinned by a live
+// snapshot and cannot be removed yet.
+var ErrFilePinned = errors.New("valuelog: file pinned")
+
 type fileNotFoundError struct {
 	id         uint32
 	inSnapshot bool
@@ -24,4 +28,23 @@ func (e *fileNotFoundError) Error() string {
 
 func (e *fileNotFoundError) Is(target error) bool {
 	return target == ErrFileNotFound
+}
+
+type filePinnedError struct {
+	id uint32
+	op string
+}
+
+func (e *filePinnedError) Error() string {
+	if e == nil {
+		return ErrFilePinned.Error()
+	}
+	if e.op == "" {
+		return fmt.Sprintf("valuelog file %d still pinned", e.id)
+	}
+	return fmt.Sprintf("cannot %s valuelog file %d: still pinned", e.op, e.id)
+}
+
+func (e *filePinnedError) Is(target error) bool {
+	return target == ErrFilePinned
 }

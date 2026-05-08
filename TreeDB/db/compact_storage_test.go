@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -55,6 +56,99 @@ func TestCompactStorageDeletesZeroByteValueLogFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(emptyPath); !os.IsNotExist(err) {
 		t.Fatalf("empty value-log file still exists or stat failed: %v", err)
+	}
+	if !stats.FullyCompacted {
+		t.Fatalf("FullyCompacted=false remaining debt=%+v", stats.RemainingDebt)
+	}
+}
+
+func TestCompactStorageDeletesManagerPinnedZeroByteValueLogFiles(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+			ForcePointers:    true,
+		},
+	}
+	d, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	valueLogDir := ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	livePath := filepath.Join(valueLogDir, "value-l0-000001.log")
+	liveID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("live file id: %v", err)
+	}
+	liveWriter, err := valuelog.NewWriter(livePath, liveID)
+	if err != nil {
+		t.Fatalf("live writer: %v", err)
+	}
+	livePtr, err := liveWriter.Append(0, nil, 1, bytes.Repeat([]byte("v"), 256))
+	if err != nil {
+		_ = liveWriter.Close()
+		t.Fatalf("append live value: %v", err)
+	}
+	if err := liveWriter.Close(); err != nil {
+		t.Fatalf("close live writer: %v", err)
+	}
+	batch := d.NewBatch()
+	ptrBatch, ok := batch.(interface {
+		SetPointer(key []byte, ptr page.ValuePtr) error
+	})
+	if !ok {
+		t.Fatalf("missing SetPointer on batch %T", batch)
+	}
+	if err := ptrBatch.SetPointer([]byte("k"), livePtr); err != nil {
+		t.Fatalf("SetPointer: %v", err)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatalf("batch write: %v", err)
+	}
+	if err := batch.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	const emptyName = "value-l42-000001.log"
+	emptyPath := filepath.Join(valueLogDir, emptyName)
+	if err := os.WriteFile(emptyPath, nil, 0644); err != nil {
+		t.Fatalf("write empty value log: %v", err)
+	}
+	fileID, ok := compactStorageValueLogFileID(emptyName)
+	if !ok {
+		t.Fatalf("parse %s failed", emptyName)
+	}
+
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if reopened.valueLogManager == nil || !reopened.valueLogManager.HasSegment(fileID) {
+		t.Fatalf("expected empty segment %d to be manager-registered", fileID)
+	}
+	state := reopened.State()
+	if state == nil || state.ValueLogSet == nil {
+		t.Fatal("expected state value-log set")
+	}
+	if _, ok := state.ValueLogSet.Files[fileID]; !ok {
+		t.Fatalf("expected empty segment %d to be pinned by state value-log set", fileID)
+	}
+
+	stats, err := reopened.CompactStorage(context.Background(), CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if _, err := os.Stat(emptyPath); !os.IsNotExist(err) {
+		t.Fatalf("manager-pinned empty value-log file still exists or stat failed: %v", err)
 	}
 	if !stats.FullyCompacted {
 		t.Fatalf("FullyCompacted=false remaining debt=%+v", stats.RemainingDebt)

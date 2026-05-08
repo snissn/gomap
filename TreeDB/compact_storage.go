@@ -84,18 +84,42 @@ func (db *DB) applyCachedCompactStorageOptions(opts *CompactStorageOptions, chec
 			return err
 		}
 	}
-	if len(opts.ValueLogProtectedPaths) == 0 {
-		opts.ValueLogProtectedPaths = db.cached.ValueLogProtectedPaths()
+	explicitProtectedPaths := append([]string(nil), opts.ValueLogProtectedPaths...)
+	userProtectedPathsFunc := opts.ValueLogProtectedPathsFunc
+	opts.ValueLogProtectedPathsFunc = func() []string {
+		var out []string
+		if userProtectedPathsFunc != nil {
+			out = appendCompactStorageProtectedPaths(out, userProtectedPathsFunc())
+		}
+		out = appendCompactStorageProtectedPaths(out, db.cached.ValueLogProtectedPaths())
+		if len(out) == 0 && len(explicitProtectedPaths) == 0 {
+			// Cached-mode callers may have concurrent writers even when there
+			// are no protected paths yet; pass a non-empty slice to activate
+			// the backend rewrite/GC active-segment protection.
+			out = append(out, "")
+		}
+		return out
 	}
-	if len(opts.ValueLogProtectedPaths) == 0 {
-		// Cached-mode callers may have concurrent writers even when there are no
-		// protected paths yet; pass a non-empty slice to activate the backend
-		// rewrite/GC active-segment protection.
-		opts.ValueLogProtectedPaths = []string{""}
-	}
+	opts.ValueLogProtectedPaths = explicitProtectedPaths
 	if opts.ReserveRIDs == nil {
 		opts.ReserveRIDs = db.cached.ReserveValueLogRIDs
 	}
 	opts.DisableZeroByteValueLogCleanup = true
 	return nil
+}
+
+func appendCompactStorageProtectedPaths(dst []string, src []string) []string {
+	for _, path := range src {
+		seen := false
+		for _, existing := range dst {
+			if existing == path {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			dst = append(dst, path)
+		}
+	}
+	return dst
 }
