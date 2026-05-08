@@ -211,6 +211,30 @@ func decodeCursorMeta(src []byte) (CursorMeta, error) {
 	return CursorMeta{CursorID: cursorID, Items: int(items), Bytes: int(bytes), HasMore: hasMore}, nil
 }
 
+func encodePresenceBitmap(present []bool) []byte {
+	out := make([]byte, (len(present)+7)/8)
+	for i, ok := range present {
+		if ok {
+			out[i/8] |= 1 << uint(i%8)
+		}
+	}
+	return out
+}
+
+func appendPresenceBitmap(dst []byte, present []bool) []byte {
+	n := (len(present) + 7) / 8
+	start := len(dst)
+	for i := 0; i < n; i++ {
+		dst = append(dst, 0)
+	}
+	for i, ok := range present {
+		if ok {
+			dst[start+i/8] |= 1 << uint(i%8)
+		}
+	}
+	return dst
+}
+
 func decodePresenceBitmap(src []byte, count int) ([]bool, error) {
 	if len(src) != (count+7)/8 {
 		return nil, protocolError(iwire.ErrMalformedFrame, "presence bitmap length %d want %d", len(src), (count+7)/8)

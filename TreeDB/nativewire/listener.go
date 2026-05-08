@@ -77,9 +77,6 @@ func NewInProcessClient(ctx context.Context, server *Server) (*Client, func() er
 	if server == nil || server.closed.Load() {
 		return nil, nil, ErrServerClosed
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	if ctx != nil && ctx.Err() != nil {
 		return nil, nil, ctx.Err()
 	}
@@ -130,12 +127,8 @@ func (e *localEndpoint) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (e *localEndpoint) roundTrip(ctx context.Context, typ iwire.FrameType, streamID, requestID uint64, body []byte, want iwire.FrameType, limits iwire.Limits, responseDst []byte, copyResponse bool) (iwire.Header, []byte, error) {
-	if e == nil || e.server == nil || e.closed.Load() {
-		return iwire.Header{}, nil, io.ErrClosedPipe
-	}
-	if e.server.closed.Load() {
-		_ = e.close()
+func (e *localEndpoint) roundTrip(ctx context.Context, streamID uint64, typ iwire.FrameType, requestID uint64, body []byte, want iwire.FrameType, limits iwire.Limits, responseDst []byte, copyResponse bool) (iwire.Header, []byte, error) {
+	if e == nil || e.server == nil || e.closed.Load() || e.server.closed.Load() {
 		return iwire.Header{}, nil, io.ErrClosedPipe
 	}
 	if ctx != nil && ctx.Err() != nil {
@@ -163,9 +156,6 @@ func (e *localEndpoint) roundTrip(ctx context.Context, typ iwire.FrameType, stre
 	if err != nil {
 		return iwire.Header{}, nil, err
 	}
-	if err := iwire.ValidateHeaderVersion(header, iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0}); err != nil {
-		return header, nil, err
-	}
 	response := e.frame[iwire.FrameHeaderLenV1:]
 	if uint64(len(response)) != header.BodyLen {
 		return header, nil, protocolError(iwire.ErrMalformedFrame, "response body len %d want %d", len(response), header.BodyLen)
@@ -179,14 +169,14 @@ func (e *localEndpoint) roundTrip(ctx context.Context, typ iwire.FrameType, stre
 		copy(responseDst, response)
 		response = responseDst
 	}
-	if header.RequestID != requestID {
-		return header, response, protocolError(iwire.ErrMalformedFrame, "response request_id %d want %d", header.RequestID, requestID)
-	}
 	if header.Type == iwire.FrameError {
 		return header, response, decodeWireError(response, limits)
 	}
 	if header.Type != want {
 		return header, response, protocolError(iwire.ErrMalformedFrame, "response frame type %d want %d", header.Type, want)
+	}
+	if header.RequestID != requestID {
+		return header, response, protocolError(iwire.ErrMalformedFrame, "response request_id %d want %d", header.RequestID, requestID)
 	}
 	return header, response, nil
 }

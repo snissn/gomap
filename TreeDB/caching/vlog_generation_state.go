@@ -1403,10 +1403,28 @@ func (db *DB) consumeVlogGenerationRewriteQueueChunk(processed []uint32) error {
 		}
 		if match {
 			remaining = append([]uint32(nil), remaining[len(processed):]...)
-			if len(remainingLedger) >= len(processed) {
+			ledgerPrefixMatch := len(remainingLedger) >= len(processed)
+			for i := range processed {
+				if !ledgerPrefixMatch || remainingLedger[i].FileID != processed[i] {
+					ledgerPrefixMatch = false
+					break
+				}
+			}
+			if ledgerPrefixMatch {
 				remainingLedger = append([]backenddb.ValueLogRewritePlanSegment(nil), remainingLedger[len(processed):]...)
-			} else {
-				remainingLedger = nil
+			} else if len(remainingLedger) > 0 {
+				processedSet := make(map[uint32]struct{}, len(processed))
+				for _, id := range processed {
+					processedSet[id] = struct{}{}
+				}
+				filteredLedger := make([]backenddb.ValueLogRewritePlanSegment, 0, len(remainingLedger))
+				for _, seg := range remainingLedger {
+					if _, ok := processedSet[seg.FileID]; ok {
+						continue
+					}
+					filteredLedger = append(filteredLedger, seg)
+				}
+				remainingLedger = filteredLedger
 			}
 		} else {
 			processedSet := make(map[uint32]struct{}, len(processed))
