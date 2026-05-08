@@ -16,50 +16,53 @@ import (
 )
 
 const (
-	defaultMaxInFlight            = 1024
-	defaultMaxConnections         = 1024
-	defaultMaxCollectionHandles   = 1024
-	defaultMaxCachedCollections   = 1024
-	defaultMaxOpenCursors         = 1024
-	defaultMaxCursorRetainedBytes = 64 << 20
-	defaultMaxScanDocuments       = 10000
-	defaultCursorBatchSize        = 101
-	defaultCursorIdleTimeout      = 10 * time.Minute
+	defaultMaxInFlight                   = 1024
+	defaultMaxConnections                = 1024
+	defaultMaxCollectionHandles          = 1024
+	defaultMaxCachedCollections          = 1024
+	defaultMaxOpenCursors                = 1024
+	defaultMaxCursorRetainedBytes        = 64 << 20
+	defaultMaxScanDocuments              = 10000
+	defaultCursorBatchSize               = 101
+	defaultCursorIdleTimeout             = 10 * time.Minute
+	defaultMaxMetadataIdempotencyEntries = 1024
 )
 
 // ServerOptions configures a native-wire server.
 type ServerOptions struct {
-	Limits                 iwire.Limits
-	MaxInFlight            int
-	MaxConnections         int
-	MaxCollectionHandles   int
-	MaxCachedCollections   int
-	MaxOpenCursors         int
-	MaxCursorRetainedBytes int
-	MaxScanDocuments       int
-	DefaultCursorBatchSize int
-	CursorIdleTimeout      time.Duration
-	DefaultAckPolicy       iwire.AckPolicy
-	Collections            *collections.CollectionManager
-	Backend                *backenddb.DB
+	Limits                        iwire.Limits
+	MaxInFlight                   int
+	MaxConnections                int
+	MaxCollectionHandles          int
+	MaxCachedCollections          int
+	MaxOpenCursors                int
+	MaxCursorRetainedBytes        int
+	MaxScanDocuments              int
+	DefaultCursorBatchSize        int
+	CursorIdleTimeout             time.Duration
+	DefaultAckPolicy              iwire.AckPolicy
+	MaxMetadataIdempotencyEntries int
+	Collections                   *collections.CollectionManager
+	Backend                       *backenddb.DB
 }
 
 // Server serves native-wire control and command frames for TreeDB.
 type Server struct {
-	limits                 iwire.Limits
-	maxInFlight            int
-	maxConnections         int
-	maxCollectionHandles   int
-	maxCachedCollections   int
-	maxOpenCursors         int
-	maxCursorRetainedBytes int
-	maxScanDocuments       int
-	defaultCursorBatchSize int
-	cursorIdleTimeout      time.Duration
-	defaultAckPolicy       iwire.AckPolicy
-	registry               *iwire.Registry
-	collections            *collections.CollectionManager
-	backend                *backenddb.DB
+	limits                        iwire.Limits
+	maxInFlight                   int
+	maxConnections                int
+	maxCollectionHandles          int
+	maxCachedCollections          int
+	maxOpenCursors                int
+	maxCursorRetainedBytes        int
+	maxScanDocuments              int
+	defaultCursorBatchSize        int
+	cursorIdleTimeout             time.Duration
+	defaultAckPolicy              iwire.AckPolicy
+	maxMetadataIdempotencyEntries int
+	registry                      *iwire.Registry
+	collections                   *collections.CollectionManager
+	backend                       *backenddb.DB
 
 	closed              atomic.Bool
 	connMu              sync.Mutex
@@ -68,6 +71,7 @@ type Server struct {
 	locals              map[*localEndpoint]struct{}
 	metadataMu          sync.Mutex
 	metadataIdempotency map[string]metadataIdempotencyEntry
+	metadataIdemOrder   []string
 
 	inFlight    atomic.Int64
 	nextConn    atomic.Int64
@@ -272,22 +276,27 @@ func NewServer(opts ServerOptions) *Server {
 	if defaultAck == 0 {
 		defaultAck = iwire.AckVisible
 	}
+	maxMetadataIdempotencyEntries := opts.MaxMetadataIdempotencyEntries
+	if maxMetadataIdempotencyEntries == 0 {
+		maxMetadataIdempotencyEntries = defaultMaxMetadataIdempotencyEntries
+	}
 	return &Server{
-		limits:                 limits,
-		maxInFlight:            maxInFlight,
-		maxConnections:         maxConnections,
-		maxCollectionHandles:   maxCollectionHandles,
-		maxCachedCollections:   maxCachedCollections,
-		maxOpenCursors:         maxOpenCursors,
-		maxCursorRetainedBytes: maxCursorRetainedBytes,
-		maxScanDocuments:       maxScanDocuments,
-		defaultCursorBatchSize: cursorBatchSize,
-		cursorIdleTimeout:      cursorIdleTimeout,
-		defaultAckPolicy:       defaultAck,
-		registry:               iwire.MustV1Registry(),
-		collections:            opts.Collections,
-		backend:                opts.Backend,
-		cursorReaperDone:       make(chan struct{}),
+		limits:                        limits,
+		maxInFlight:                   maxInFlight,
+		maxConnections:                maxConnections,
+		maxCollectionHandles:          maxCollectionHandles,
+		maxCachedCollections:          maxCachedCollections,
+		maxOpenCursors:                maxOpenCursors,
+		maxCursorRetainedBytes:        maxCursorRetainedBytes,
+		maxScanDocuments:              maxScanDocuments,
+		defaultCursorBatchSize:        cursorBatchSize,
+		cursorIdleTimeout:             cursorIdleTimeout,
+		defaultAckPolicy:              defaultAck,
+		maxMetadataIdempotencyEntries: maxMetadataIdempotencyEntries,
+		registry:                      iwire.MustV1Registry(),
+		collections:                   opts.Collections,
+		backend:                       opts.Backend,
+		cursorReaperDone:              make(chan struct{}),
 	}
 }
 
@@ -339,6 +348,10 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		_ = conn.Close()
 		return ErrServerClosed
 	}
+	return s.serveRegisteredConn(ctx, conn)
+}
+
+func (s *Server) serveRegisteredConn(ctx context.Context, conn net.Conn) error {
 	defer s.unregisterConn(conn)
 	defer conn.Close()
 

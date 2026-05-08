@@ -45,8 +45,15 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 			}
 			return err
 		}
+		if !s.registerConn(conn) {
+			_ = conn.Close()
+			if s.closed.Load() {
+				return nil
+			}
+			continue
+		}
 		go func(conn net.Conn) {
-			_ = s.ServeConn(ctx, conn)
+			_ = s.serveRegisteredConn(ctx, conn)
 		}(conn)
 	}
 }
