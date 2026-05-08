@@ -456,6 +456,26 @@ func (s *Server) reapExpiredCursors() {
 	s.cursorMu.Unlock()
 }
 
+func (s *Server) reapExpiredCursorsUntilDone(done <-chan struct{}) {
+	if s == nil || s.cursorIdleTimeout == 0 {
+		return
+	}
+	interval := cursorReapInterval(s.cursorIdleTimeout)
+	if interval <= 0 {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			s.reapExpiredCursors()
+		case <-done:
+			return
+		}
+	}
+}
+
 func cursorReapInterval(idleTimeout time.Duration) time.Duration {
 	if idleTimeout <= time.Second {
 		return idleTimeout

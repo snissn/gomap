@@ -23,9 +23,10 @@ func (c *Client) InsertBatch(ctx context.Context, collection string, format coll
 	}
 	sections, err := c.commandSections(ctx, iwire.CommandInsertBatch, req...)
 	if err != nil {
+		c.clearCatalogVersionOnMismatch(err)
 		return nil, err
 	}
-	c.catalogVersionPlusOne.Store(0)
+	c.advanceCatalogVersionAfterMutation(guard)
 	rawIDs, ok, err := singletonSection(sections, iwire.SectionDocumentIDs)
 	if err != nil {
 		return nil, err
@@ -53,9 +54,10 @@ func (c *Client) ReplaceBatch(ctx context.Context, collection string, format col
 	}
 	sections, err := c.commandSections(ctx, iwire.CommandReplaceBatch, req...)
 	if err != nil {
+		c.clearCatalogVersionOnMismatch(err)
 		return 0, 0, err
 	}
-	c.catalogVersionPlusOne.Store(0)
+	c.advanceCatalogVersionAfterMutation(guard)
 	matched, err = responseCount(sections, "matched_count")
 	if err != nil {
 		return 0, 0, err
@@ -78,9 +80,10 @@ func (c *Client) DeleteBatch(ctx context.Context, collection string, ids [][]byt
 	}
 	sections, err := c.commandSections(ctx, iwire.CommandDeleteBatch, req...)
 	if err != nil {
+		c.clearCatalogVersionOnMismatch(err)
 		return 0, err
 	}
-	c.catalogVersionPlusOne.Store(0)
+	c.advanceCatalogVersionAfterMutation(guard)
 	return responseCount(sections, "deleted_count")
 }
 

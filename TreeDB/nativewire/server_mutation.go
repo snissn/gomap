@@ -27,6 +27,10 @@ func (s *Server) handleInsertBatch(state *connState, sections []iwire.Section) (
 	if err != nil {
 		return nil, err
 	}
+	docs, err = applyTemplateRecords(format, sections, docs, s.limits)
+	if err != nil {
+		return nil, err
+	}
 	ack, err := ackPolicyFromSections(sections, s.defaultAckPolicy)
 	if err != nil {
 		return nil, err
@@ -79,6 +83,10 @@ func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) 
 		return nil, err
 	}
 	ids, docs, err := decodeIDsAndDocuments(sections, s.limits)
+	if err != nil {
+		return nil, err
+	}
+	docs, err = applyTemplateRecords(format, sections, docs, s.limits)
 	if err != nil {
 		return nil, err
 	}
