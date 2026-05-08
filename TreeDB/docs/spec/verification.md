@@ -221,8 +221,15 @@ Coverage:
   - command-header golden fixture,
   - command-schema validation for required sections, duplicate singleton
     sections, unknown critical sections, and unsupported command versions.
+- `TreeDB/internal/nativewire/codec_test.go`:
+  - frame-header golden fixture and malformed/unsupported header rejection,
+  - section and byte-vector round trips,
+  - byte-vector length-mismatch rejection.
+- `TreeDB/internal/nativewire/fuzz_test.go`:
+  - fuzz targets for frame-header, section-envelope, byte-vector decoding, and
+    command-schema validation.
 
-The native-wire server does not exist yet. R0 follow-up work must add frame and
-section codecs, fuzz targets, broader negative conformance fixtures,
-deterministic-entry coverage, drift tests, and direct collection parity tests
-before claiming native-wire v1 server support.
+The native-wire server does not exist yet. R0 follow-up work must add
+deterministic-entry coverage, broader negative conformance fixtures, drift
+tests, and direct collection parity tests before claiming native-wire v1 server
+support.
