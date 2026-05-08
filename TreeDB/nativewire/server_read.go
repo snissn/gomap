@@ -1,7 +1,6 @@
 package nativewire
 
 import (
-	"errors"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -461,14 +460,5 @@ func (s *Server) indexRangeRequest(sections []iwire.Section) (string, collection
 		return "", collections.IndexRangeOptions{}, CursorLimits{}, err
 	}
 	opts.Limit = limits.MaxItems
-	if opts.Limit <= 0 && limits.MaxBytes > 0 && limits.MaxBytes < maxInt {
-		opts.Limit = limits.MaxBytes + 1
-		if s != nil && s.maxScanDocuments > 0 && opts.Limit > s.maxScanDocuments {
-			opts.Limit = s.maxScanDocuments
-		}
-	}
-	if opts.Limit < 0 {
-		return "", collections.IndexRangeOptions{}, CursorLimits{}, errors.New("negative range limit")
-	}
 	return indexName, opts, limits, nil
 }

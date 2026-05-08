@@ -1,7 +1,6 @@
 package nativewire
 
 import (
-	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -12,6 +11,7 @@ import (
 const nativeStatsPrefix = "treedb.native_wire."
 const maxTrackedErrorCode = int(iwire.MaxErrorCode)
 
+// Stats is a string-valued snapshot of native-wire and TreeDB counters.
 type Stats map[string]string
 
 type counters struct {
@@ -241,16 +241,6 @@ func (c *counters) snapshot() map[string]uint64 {
 	c.mu.Unlock()
 	return out
 }
-
-func sortedStatsKeys(stats map[string]string) []string {
-	keys := make([]string, 0, len(stats))
-	for key := range stats {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
 func commandCounterName(id iwire.CommandID) string {
 	switch id {
 	case iwire.CommandCreateCollection:
