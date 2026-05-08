@@ -2,6 +2,7 @@ package nativewire
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"testing"
 
@@ -13,7 +14,7 @@ import (
 func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 	const batchSize = 32
 	b.Run("direct_collection", func(b *testing.B) {
-		_, col, cleanup := benchmarkCollection(b)
+		_, col, _, cleanup := benchmarkCollection(b)
 		defer cleanup()
 		b.ReportAllocs()
 		b.ResetTimer()
@@ -28,9 +29,9 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 		b.ReportMetric(float64(b.N*batchSize), "docs_total")
 	})
 	b.Run("native_wire_inproc", func(b *testing.B) {
-		mgr, _, cleanup := benchmarkCollection(b)
+		mgr, _, db, cleanup := benchmarkCollection(b)
 		defer cleanup()
-		server := NewServer(ServerOptions{Collections: mgr})
+		server := NewServer(ServerOptions{Collections: mgr, Backend: db})
 		ctx := context.Background()
 		client, clientCleanup, err := NewInProcessClient(ctx, server)
 		if err != nil {
@@ -54,9 +55,9 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 		b.ReportMetric(float64(b.N*batchSize), "docs_total")
 	})
 	b.Run("native_wire_inproc_no_result", func(b *testing.B) {
-		mgr, _, cleanup := benchmarkCollection(b)
+		mgr, _, db, cleanup := benchmarkCollection(b)
 		defer cleanup()
-		server := NewServer(ServerOptions{Collections: mgr})
+		server := NewServer(ServerOptions{Collections: mgr, Backend: db})
 		ctx := context.Background()
 		client, clientCleanup, err := NewInProcessClient(ctx, server)
 		if err != nil {
@@ -80,9 +81,9 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 		b.ReportMetric(float64(b.N*batchSize), "docs_total")
 	})
 	b.Run("native_wire_direct_dispatch", func(b *testing.B) {
-		mgr, col, cleanup := benchmarkCollection(b)
+		mgr, col, db, cleanup := benchmarkCollection(b)
 		defer cleanup()
-		server := NewServer(ServerOptions{Collections: mgr})
+		server := NewServer(ServerOptions{Collections: mgr, Backend: db})
 		state := &connState{id: 1}
 		handle := benchmarkAddCollectionHandle(b, state, server, "bench", col)
 		var sink benchmarkFrameSink
@@ -93,9 +94,10 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			b.StopTimer()
 			ids, docs := benchmarkStoredBatch(i*batchSize, batchSize)
+			guard := benchmarkMutationGuard(b, server, "insert_batch", i)
 			b.StartTimer()
 			var err error
-			requestBody, err = appendInsertBatchRequestBodyRef(requestBody[:0], "", handle, true, collections.DocumentFormatJSON, ids, docs, AckVisible)
+			requestBody, err = appendInsertBatchRequestBodyRefFlags(requestBody[:0], "", handle, true, collections.DocumentFormatJSON, ids, docs, AckVisible, 0, guard)
 			if err != nil {
 				b.Fatalf("append insert request: %v", err)
 			}
@@ -118,9 +120,9 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 		b.ReportMetric(float64(b.N*batchSize), "docs_total")
 	})
 	b.Run("native_wire_direct_dispatch_no_result", func(b *testing.B) {
-		mgr, col, cleanup := benchmarkCollection(b)
+		mgr, col, db, cleanup := benchmarkCollection(b)
 		defer cleanup()
-		server := NewServer(ServerOptions{Collections: mgr})
+		server := NewServer(ServerOptions{Collections: mgr, Backend: db})
 		state := &connState{id: 1}
 		handle := benchmarkAddCollectionHandle(b, state, server, "bench", col)
 		var sink benchmarkFrameSink
@@ -130,9 +132,10 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			b.StopTimer()
 			ids, docs := benchmarkStoredBatch(i*batchSize, batchSize)
+			guard := benchmarkMutationGuard(b, server, "insert_batch", i)
 			b.StartTimer()
 			var err error
-			requestBody, err = appendInsertBatchRequestBodyRefFlags(requestBody[:0], "", handle, true, collections.DocumentFormatJSON, ids, docs, AckVisible, iwire.CommandFlagOmitResultIDs|iwire.CommandFlagOmitResponseMeta)
+			requestBody, err = appendInsertBatchRequestBodyRefFlags(requestBody[:0], "", handle, true, collections.DocumentFormatJSON, ids, docs, AckVisible, iwire.CommandFlagOmitResultIDs|iwire.CommandFlagOmitResponseMeta, guard)
 			if err != nil {
 				b.Fatalf("append insert request: %v", err)
 			}
@@ -148,7 +151,7 @@ func BenchmarkNativewireCollectionGetMany(b *testing.B) {
 		batchSize = 64
 	)
 	b.Run("direct_collection", func(b *testing.B) {
-		_, col, cleanup := benchmarkCollection(b)
+		_, col, _, cleanup := benchmarkCollection(b)
 		defer cleanup()
 		seedBenchmarkCollection(b, col, docs)
 		ids, _ := benchmarkStoredBatch(0, batchSize)
@@ -164,10 +167,10 @@ func BenchmarkNativewireCollectionGetMany(b *testing.B) {
 		b.ReportMetric(float64(b.N*batchSize), "docs_total")
 	})
 	b.Run("native_wire_inproc", func(b *testing.B) {
-		mgr, col, cleanup := benchmarkCollection(b)
+		mgr, col, db, cleanup := benchmarkCollection(b)
 		defer cleanup()
 		seedBenchmarkCollection(b, col, docs)
-		server := NewServer(ServerOptions{Collections: mgr})
+		server := NewServer(ServerOptions{Collections: mgr, Backend: db})
 		ctx := context.Background()
 		client, clientCleanup, err := NewInProcessClient(ctx, server)
 		if err != nil {
@@ -189,10 +192,10 @@ func BenchmarkNativewireCollectionGetMany(b *testing.B) {
 		b.ReportMetric(float64(b.N*batchSize), "docs_total")
 	})
 	b.Run("native_wire_direct_dispatch", func(b *testing.B) {
-		mgr, col, cleanup := benchmarkCollection(b)
+		mgr, col, db, cleanup := benchmarkCollection(b)
 		defer cleanup()
 		seedBenchmarkCollection(b, col, docs)
-		server := NewServer(ServerOptions{Collections: mgr})
+		server := NewServer(ServerOptions{Collections: mgr, Backend: db})
 		state := &connState{id: 1}
 		handle := benchmarkAddCollectionHandle(b, state, server, "bench", col)
 		ids, _ := benchmarkStoredBatch(0, batchSize)
@@ -287,7 +290,7 @@ func benchmarkAddCollectionHandle(tb testing.TB, state *connState, server *Serve
 	return handle
 }
 
-func benchmarkCollection(tb testing.TB) (*collections.CollectionManager, *collections.Collection, func()) {
+func benchmarkCollection(tb testing.TB) (*collections.CollectionManager, *collections.Collection, *backenddb.DB, func()) {
 	tb.Helper()
 	db, err := backenddb.Open(backenddb.Options{Dir: tb.TempDir()})
 	if err != nil {
@@ -308,7 +311,19 @@ func benchmarkCollection(tb testing.TB) (*collections.CollectionManager, *collec
 		_ = db.Close()
 		tb.Fatalf("open collection: %v", err)
 	}
-	return mgr, col, func() { _ = db.Close() }
+	return mgr, col, db, func() { _ = db.Close() }
+}
+
+func benchmarkMutationGuard(tb testing.TB, server *Server, command string, seq int) []iwire.Section {
+	tb.Helper()
+	version, err := server.currentCatalogVersion()
+	if err != nil {
+		tb.Fatalf("current catalog version: %v", err)
+	}
+	return []iwire.Section{
+		{ID: iwire.SectionIdempotencyKey, Bytes: []byte(fmt.Sprintf("bench/%s/%d", command, seq))},
+		{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, version)},
+	}
 }
 
 func seedBenchmarkCollection(tb testing.TB, col *collections.Collection, docs int) {

@@ -4143,16 +4143,20 @@ func nativeWireMongoPrimaryID(i int) []byte {
 }
 
 func nativeWireStoredDocument(format collections.DocumentFormat, i int, prebuilt []bson.D, prebuiltRaw []bson.Raw) ([]byte, error) {
-	raw, err := benchmarkBSONRaw(i, prebuilt, prebuiltRaw)
-	if err != nil {
-		return nil, err
-	}
 	switch format {
 	case collections.DocumentFormatBSON:
+		raw, err := benchmarkBSONRaw(i, prebuilt, prebuiltRaw)
+		if err != nil {
+			return nil, err
+		}
 		return raw, nil
 	case collections.DocumentFormatDefault, collections.DocumentFormatJSON:
 		return nativeWireBenchmarkJSONDocument(i), nil
 	case collections.DocumentFormatTemplateV1:
+		raw, err := benchmarkBSONRaw(i, prebuilt, prebuiltRaw)
+		if err != nil {
+			return nil, err
+		}
 		stored, err := bson.MarshalExtJSON(raw, false, false)
 		if err != nil {
 			return nil, err

@@ -257,6 +257,9 @@ func decodeDocumentsResult(sections []iwire.Section, limits iwire.Limits) (Docum
 			return out, err
 		}
 	}
+	if out.IDs != nil && out.Docs != nil && len(out.IDs) != len(out.Docs) {
+		return out, protocolError(iwire.ErrMalformedFrame, "document_ids length %d does not match documents length %d", len(out.IDs), len(out.Docs))
+	}
 	return out, nil
 }
 
