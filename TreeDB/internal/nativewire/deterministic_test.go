@@ -2,6 +2,7 @@ package nativewire
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"testing"
 )
@@ -97,7 +98,7 @@ func TestDeterministicEntryPreservesRepeatableSectionOrder(t *testing.T) {
 }
 
 func TestDeterministicEntryRejectsUnsupportedCommandFlags(t *testing.T) {
-	registry := MustV1Registry()
+	registry := registryWithInsertBatchAllowedFlags(1)
 	sections := insertBatchDeterministicSections()
 	sections[0].Bytes = AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 1, Flags: 1})
 	cmd, err := registry.ValidateRequestSections(sections)
@@ -114,7 +115,7 @@ func TestDeterministicEntryRequiresMetadataCatalogGuard(t *testing.T) {
 	sections := []Section{
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateCollection, Version: 1})},
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
-		{ID: SectionCollectionMeta, Bytes: []byte("users")},
+		{ID: SectionCollectionMeta, Bytes: deterministicCollectionMetaPayload("users")},
 	}
 	if _, err := registry.ValidateRequestSections(sections); codeOf(err) != ErrInvalidCommand {
 		t.Fatalf("missing metadata catalog guard err=%v code=%d", err, codeOf(err))
@@ -127,6 +128,65 @@ func TestDeterministicEntryRequiresMetadataCatalogGuard(t *testing.T) {
 	}
 	if _, err := AppendDeterministicEntry(nil, cmd); err != nil {
 		t.Fatalf("AppendDeterministicEntry guarded: %v", err)
+	}
+}
+
+func TestDeterministicEntryRejectsMalformedMetadataPayloads(t *testing.T) {
+	registry := MustV1Registry()
+	sections := []Section{
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateCollection, Version: 1})},
+		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
+		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+		{ID: SectionCollectionMeta, Bytes: nil},
+	}
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("malformed collection_meta err=%v code=%d", err, codeOf(err))
+	}
+}
+
+func TestDeterministicMetadataRequiresTaggedCollectionName(t *testing.T) {
+	registry := MustV1Registry()
+	sections := []Section{
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateIndex, Version: 1})},
+		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
+		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+		{ID: SectionCollectionRef, Bytes: []byte("users")},
+		{ID: SectionIndexDefinition, Bytes: deterministicIndexDefinitionPayload("email", "email")},
+	}
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("raw metadata collection_ref err=%v code=%d", err, codeOf(err))
+	}
+	for i := range sections {
+		if sections[i].ID == SectionCollectionRef {
+			sections[i].Bytes = append([]byte{deterministicCollectionRefTagName}, []byte("users")...)
+		}
+	}
+	cmd, err = registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections tagged: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); err != nil {
+		t.Fatalf("AppendDeterministicEntry tagged: %v", err)
+	}
+}
+
+func TestDeterministicEntryRejectsDuplicateIdempotencyInValidatedView(t *testing.T) {
+	registry := MustV1Registry()
+	cmd, err := registry.ValidateRequestSections(insertBatchDeterministicSections())
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	cmd.Known = append(cmd.Known, Section{ID: SectionIdempotencyKey, Bytes: []byte("id2")})
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("duplicate idempotency err=%v code=%d", err, codeOf(err))
 	}
 }
 
@@ -161,6 +221,23 @@ func TestDeterministicEntryRejectsInvalidCollectionNames(t *testing.T) {
 	}
 	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
 		t.Fatalf("invalid collection ref err=%v code=%d", err, codeOf(err))
+	}
+}
+
+func TestDeterministicEntryAcceptsUTF8CollectionNames(t *testing.T) {
+	registry := MustV1Registry()
+	sections := insertBatchDeterministicSections()
+	for i := range sections {
+		if sections[i].ID == SectionCollectionRef {
+			sections[i].Bytes = []byte("用户")
+		}
+	}
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); err != nil {
+		t.Fatalf("AppendDeterministicEntry: %v", err)
 	}
 }
 
@@ -211,6 +288,20 @@ func TestDeterministicEntryRejectsNonCanonicalSectionPayloads(t *testing.T) {
 	sections = insertBatchDeterministicSections()
 	for i := range sections {
 		if sections[i].ID == SectionDocumentFormat {
+			sections[i].Bytes = []byte{byte(DocumentFormatBSON), 0}
+		}
+	}
+	cmd, err = registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections document format trailing: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("trailing document_format err=%v code=%d", err, codeOf(err))
+	}
+
+	sections = insertBatchDeterministicSections()
+	for i := range sections {
+		if sections[i].ID == SectionDocumentFormat {
 			sections[i].Bytes = []byte{99}
 		}
 	}
@@ -220,18 +311,6 @@ func TestDeterministicEntryRejectsNonCanonicalSectionPayloads(t *testing.T) {
 	}
 	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
 		t.Fatalf("unsupported document_format err=%v code=%d", err, codeOf(err))
-	}
-}
-
-func TestDeterministicEntryRejectsDuplicateIdempotencyInValidatedView(t *testing.T) {
-	registry := MustV1Registry()
-	cmd, err := registry.ValidateRequestSections(insertBatchDeterministicSections())
-	if err != nil {
-		t.Fatalf("ValidateRequestSections: %v", err)
-	}
-	cmd.Known = append(cmd.Known, Section{ID: SectionIdempotencyKey, Bytes: []byte("id2")})
-	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
-		t.Fatalf("duplicate idempotency err=%v code=%d", err, codeOf(err))
 	}
 }
 
@@ -252,6 +331,20 @@ func TestDeterministicEntryRejectsBatchVectorArityMismatch(t *testing.T) {
 	}
 }
 
+func registryWithInsertBatchAllowedFlags(flags uint64) *Registry {
+	schemas := v1CommandSchemas()
+	for i := range schemas {
+		if schemas[i].ID == CommandInsertBatch {
+			schemas[i].AllowedCommandFlags = flags
+		}
+	}
+	r, err := NewRegistry(schemas...)
+	if err != nil {
+		panic(err)
+	}
+	return r
+}
+
 func insertBatchDeterministicSections() []Section {
 	return []Section{
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 1})},
@@ -262,4 +355,35 @@ func insertBatchDeterministicSections() []Section {
 		{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte("{}"))},
 		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
 	}
+}
+
+func deterministicCollectionMetaPayload(name string) []byte {
+	dst := appendUvarint(nil, 1)
+	dst = appendDeterministicTestString(dst, name)
+	dst = appendUvarint(dst, uint64(DocumentFormatDefault))
+	dst = appendUvarint(dst, 0)
+	dst = appendUvarint(dst, 0)
+	dst = append(dst, 0, 0, 0)
+	dst = binary.AppendVarint(dst, 0)
+	dst = binary.AppendVarint(dst, 0)
+	dst = binary.AppendVarint(dst, 0)
+	dst = append(dst, 0, 0)
+	dst = binary.AppendVarint(dst, 0)
+	dst = appendUvarint(dst, 0)
+	return dst
+}
+
+func deterministicIndexDefinitionPayload(name, field string) []byte {
+	dst := appendUvarint(nil, 1)
+	dst = appendDeterministicTestString(dst, name)
+	dst = appendDeterministicTestString(dst, field)
+	dst = appendUvarint(dst, 1)
+	dst = append(dst, 0, 0)
+	dst = appendUvarint(dst, 0)
+	return dst
+}
+
+func appendDeterministicTestString(dst []byte, value string) []byte {
+	dst = appendUvarint(dst, uint64(len(value)))
+	return append(dst, value...)
 }
