@@ -50,6 +50,10 @@ func TestFrameHeaderRejectsMalformedAndUnsupported(t *testing.T) {
 	}
 
 	header[10] = byte(FrameRequest)
+	if _, err := DecodeHeader(header, Limits{MaxHeaderLen: FrameHeaderLenV1 - 1}); codeOf(err) != ErrResourceExhausted {
+		t.Fatalf("header length limit err=%v code=%d", err, codeOf(err))
+	}
+
 	header[12] = 0
 	header[14] = 1 // unknown advisory frame flag; must be ignored.
 	if _, err := DecodeHeader(header, Limits{}); err != nil {
@@ -68,7 +72,15 @@ func TestFrameHeaderRejectsMalformedAndUnsupported(t *testing.T) {
 
 func TestAppendHeaderPreservesDstOnValidationError(t *testing.T) {
 	prefix := []byte("prefix")
-	got, err := AppendHeader(prefix, Header{Type: FrameRequest, Flags: 1})
+	got, err := AppendHeader(prefix, Header{Flags: 0})
+	if codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("AppendHeader invalid type err=%v code=%d want invalid command", err, codeOf(err))
+	}
+	if string(got) != string(prefix) {
+		t.Fatalf("AppendHeader invalid type returned %q want original prefix %q", got, prefix)
+	}
+
+	got, err = AppendHeader(prefix, Header{Type: FrameRequest, Flags: 1})
 	if codeOf(err) != ErrUnsupportedFeature {
 		t.Fatalf("AppendHeader err=%v code=%d want unsupported feature", err, codeOf(err))
 	}
