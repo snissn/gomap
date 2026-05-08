@@ -8901,9 +8901,17 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 				buffered, bufferErr := c.bufferUpdateBatchPlanLocked(plan)
 				if bufferErr != nil {
 					if errors.Is(bufferErr, ErrConcurrentMutation) && useBufferedRead {
-						// The buffered domain moved between planning and staging. Keep
-						// the update in the buffered layer by replanning with a fresh
-						// buffered snapshot.
+						if plan.bufferedBase && c.bufferedUpdateBatchPlanCanStillRead(plan) {
+							// The buffered domain moved between planning and staging. Keep
+							// the update in the buffered layer by replanning with a fresh
+							// buffered snapshot.
+							replan = true
+							return nil
+						}
+						if err := c.flushBufferedWrites(); err != nil {
+							return err
+						}
+						useBufferedRead = false
 						replan = true
 						return nil
 					}
@@ -9029,6 +9037,19 @@ func (c *Collection) bufferedUpdateBatchPlanStillCurrent(plan *updateBatchPlan) 
 	}
 	return updateBatchCanReadBufferedDomainLocked(domain, plan.meta, plan.baseSystemRoot) &&
 		plan.bufferedReadGeneration == domain.writeGeneration
+}
+
+func (c *Collection) bufferedUpdateBatchPlanCanStillRead(plan *updateBatchPlan) bool {
+	if plan == nil || !plan.bufferedBase {
+		return false
+	}
+	domain := c.writeDomain
+	if domain == nil {
+		return false
+	}
+	domain.mu.RLock()
+	defer domain.mu.RUnlock()
+	return updateBatchCanReadBufferedDomainLocked(domain, plan.meta, plan.baseSystemRoot)
 }
 
 func (c *Collection) withMutationLock(fn func() error) error {
