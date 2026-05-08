@@ -167,7 +167,7 @@ func findCommandHeader(sections []Section) (CommandHeader, error) {
 func (c *CommandSchema) validateSections(sections []Section, scratch *CommandScratch) ([]Section, []Section, error) {
 	rules := c.ruleMap()
 	var seen sectionSeenSet
-	if scratch != nil {
+	if scratch != nil && len(sections) > sectionSeenInlineCapacity {
 		seen.reuseOverflow(scratch.seenOverflow)
 	}
 	var known []Section
@@ -213,7 +213,9 @@ func (c *CommandSchema) validateSections(sections []Section, scratch *CommandScr
 	if scratch != nil {
 		scratch.Known = known
 		scratch.Ignored = ignored
-		scratch.seenOverflow = seen.overflow
+		if seen.overflow != nil {
+			scratch.seenOverflow = seen.overflow
+		}
 	}
 	return known, ignored, nil
 }
