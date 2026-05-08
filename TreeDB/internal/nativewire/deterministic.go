@@ -17,9 +17,11 @@ const (
 	maxDeterministicDocumentIDs = defaultMaxByteVectorItems
 
 	deterministicSectionScratchCapacity = sectionSeenInlineCapacity
+	maxDeterministicEntrySections       = defaultMaxSections
 
 	deterministicCollectionRefTagName   = 1
 	deterministicCollectionRefTagHandle = 2
+	deterministicReplacementExisting    = 1
 	minDeterministicIndexDefinitionLen  = 6
 )
 
@@ -147,6 +149,9 @@ func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *Determinis
 	if sectionCount64 > uint64(limits.MaxSections) {
 		return failBeforeSections(protocolError(ErrResourceExhausted, "deterministic entry section count %d exceeds limit %d", sectionCount64, limits.MaxSections))
 	}
+	if sectionCount64 > maxDeterministicEntrySections {
+		return failBeforeSections(protocolError(ErrResourceExhausted, "deterministic entry section count %d exceeds deterministic limit %d", sectionCount64, maxDeterministicEntrySections))
+	}
 	if sectionCount64 > uint64(maxInt) {
 		return failBeforeSections(protocolError(ErrResourceExhausted, "deterministic entry section count exceeds int capacity"))
 	}
@@ -176,6 +181,9 @@ func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *Determinis
 		}
 		if sectionLen > limits.MaxSectionLen {
 			return fail(protocolError(ErrResourceExhausted, "deterministic entry section %d length %d exceeds limit %d", sectionID, sectionLen, limits.MaxSectionLen))
+		}
+		if sectionLen > uint64(maxInt) {
+			return fail(protocolError(ErrResourceExhausted, "deterministic entry section %d length exceeds int capacity", sectionID))
 		}
 		if sectionLen > uint64(len(src)-off) {
 			return fail(protocolError(ErrMalformedFrame, "deterministic entry section %d length %d exceeds remaining %d", sectionID, sectionLen, len(src)-off))
@@ -400,13 +408,24 @@ func validateDeterministicSectionPayload(section Section, limits Limits) error {
 			return validateDeterministicDocumentIDs(section.Bytes, limits)
 		}
 		return validateByteVector(section.Bytes, limits)
-	case SectionExpectedCatalogVersion, SectionReplacementMode:
+	case SectionExpectedCatalogVersion:
 		_, n, err := readUvarint(section.Bytes)
 		if err != nil {
 			return err
 		}
 		if n != len(section.Bytes) {
 			return protocolError(ErrMalformedFrame, "section %d has %d trailing bytes", section.ID, len(section.Bytes)-n)
+		}
+	case SectionReplacementMode:
+		mode, n, err := readUvarint(section.Bytes)
+		if err != nil {
+			return err
+		}
+		if n != len(section.Bytes) {
+			return protocolError(ErrMalformedFrame, "section %d has %d trailing bytes", section.ID, len(section.Bytes)-n)
+		}
+		if mode != deterministicReplacementExisting {
+			return protocolError(ErrInvalidCommand, "unsupported replacement_mode %d", mode)
 		}
 	case SectionCollectionMeta:
 		return validateDeterministicCollectionMeta(section.Bytes)
