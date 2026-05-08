@@ -1240,8 +1240,8 @@ func TestCachedGenerationalMaintenance_DirectPointersManualGC_WALOn(t *testing.T
 	if err != nil {
 		t.Fatalf("manual ValueLogGC: %v", err)
 	}
-	if stats.SegmentsDeleted == 0 && stats.SegmentsEligible == 0 {
-		t.Fatalf("expected manual gc to observe reclaimable segments in large seed phase, got %+v", stats)
+	if stats.SegmentsTotal == 0 || stats.BytesTotal == 0 {
+		t.Fatalf("expected manual gc to observe value-log segments in large seed phase, got %+v", stats)
 	}
 
 	after, err := tryCollectBackendLiveFileCounts(t, backend)

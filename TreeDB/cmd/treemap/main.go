@@ -594,6 +594,25 @@ func printCompactStorageStats(stats treedb.CompactStorageStats, jsonOut bool) {
 		stats.RemainingDebt.LeafGCBytes,
 		stats.RemainingDebt.ZeroByteValueLogFiles,
 	)
+	if !stats.FullyCompacted {
+		if stats.DryRun {
+			fmt.Fprintln(os.Stderr, "warning: compact storage plan found remaining debt; inspect remaining-debt")
+		} else {
+			fmt.Fprintln(os.Stderr, "warning: compact storage finished with remaining debt; inspect remaining-debt")
+		}
+	}
+	for _, usage := range stats.Before {
+		if usage.Name == "total" {
+			continue
+		}
+		fmt.Printf("storage-domain-before: name=%s bytes=%d files=%d zero_byte_files=%d path=%s\n",
+			usage.Name,
+			usage.Bytes,
+			usage.Files,
+			usage.ZeroByteFiles,
+			usage.Path,
+		)
+	}
 	for _, usage := range stats.After {
 		if usage.Name == "total" {
 			continue

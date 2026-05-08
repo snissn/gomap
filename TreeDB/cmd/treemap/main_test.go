@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -120,6 +122,84 @@ func TestImportJSONLInvalidBase64(t *testing.T) {
 	if _, err := importJSONL(db, f, "auto", 0); err == nil {
 		t.Fatalf("expected invalid base64 import to fail")
 	}
+}
+
+func TestCompactCommandsExposeFullStoragePath(t *testing.T) {
+	if !strings.Contains(usageText, "compact-plan    Preview full storage compaction debt") {
+		t.Fatalf("usageText missing compact-plan full-storage wording: %q", usageText)
+	}
+	if !strings.Contains(usageText, "compact         Run full storage compaction") {
+		t.Fatalf("usageText missing compact full-storage wording: %q", usageText)
+	}
+	if !strings.Contains(usageText, "vlog-gc         Advanced:") || !strings.Contains(usageText, "leafgen-gc      Advanced:") {
+		t.Fatalf("usageText does not mark low-level maintenance advanced: %q", usageText)
+	}
+
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.MaxWALBytes = -1
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.SetSync([]byte("k"), bytes.Repeat([]byte("v"), 256)); err != nil {
+		_ = db.Close()
+		t.Fatalf("set: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	planOut := captureStdout(t, func() {
+		runCompactPlan(dir, nil)
+	})
+	if !strings.Contains(planOut, "compact-storage (plan):") ||
+		!strings.Contains(planOut, "remaining-debt:") ||
+		!strings.Contains(planOut, "storage-domain-before: name=value_vlog") ||
+		!strings.Contains(planOut, "storage-domain: name=value_vlog") {
+		t.Fatalf("compact-plan output missing full-storage report:\n%s", planOut)
+	}
+
+	compactOut := captureStdout(t, func() {
+		runCompact(dir, []string{"-rw"})
+	})
+	if !strings.Contains(compactOut, "compact-storage (applied):") ||
+		!strings.Contains(compactOut, "remaining-debt:") ||
+		!strings.Contains(compactOut, "storage-domain-before: name=value_vlog") ||
+		!strings.Contains(compactOut, "storage-domain: name=value_vlog") {
+		t.Fatalf("compact output missing full-storage report:\n%s", compactOut)
+	}
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = w
+	defer func() {
+		os.Stdout = old
+	}()
+
+	fn()
+	if err := w.Close(); err != nil {
+		t.Fatalf("close stdout pipe writer: %v", err)
+	}
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatalf("read stdout pipe: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("close stdout pipe reader: %v", err)
+	}
+	return buf.String()
 }
 
 func writeDB(t *testing.T, dir string, entries []kv) {

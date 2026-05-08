@@ -172,3 +172,99 @@ func TestCompactStorageCachedPlanReportsZeroByteValueLogDebt(t *testing.T) {
 		t.Fatalf("plan mutated empty value-log file: %v", err)
 	}
 }
+
+func TestCachedValueLogWritersAreLazy(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.MaxWALBytes = -1
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if total, zero, _ := countValueLogSegmentFiles(t, dir); total != 0 || zero != 0 {
+		_ = db.Close()
+		t.Fatalf("fresh read/write open created value-log files: total=%d zero=%d", total, zero)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close fresh open: %v", err)
+	}
+	if total, zero, _ := countValueLogSegmentFiles(t, dir); total != 0 || zero != 0 {
+		t.Fatalf("fresh close left value-log files: total=%d zero=%d", total, zero)
+	}
+
+	db, err = treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen for write: %v", err)
+	}
+	if err := db.SetSync([]byte("large"), bytes.Repeat([]byte("v"), 256)); err != nil {
+		_ = db.Close()
+		t.Fatalf("set large value: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close after write: %v", err)
+	}
+	total, zero, nonzero := countValueLogSegmentFiles(t, dir)
+	if nonzero == 0 {
+		t.Fatalf("expected one written value-log segment, total=%d zero=%d nonzero=%d", total, zero, nonzero)
+	}
+	if zero != 0 {
+		t.Fatalf("write created inactive zero-byte value-log files: total=%d zero=%d nonzero=%d", total, zero, nonzero)
+	}
+	if total > 4 {
+		t.Fatalf("write created unexpected value-log fan-out: total=%d zero=%d nonzero=%d", total, zero, nonzero)
+	}
+
+	db, err = treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("maintenance-style reopen: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close maintenance-style reopen: %v", err)
+	}
+	afterTotal, afterZero, afterNonzero := countValueLogSegmentFiles(t, dir)
+	if afterTotal != total || afterZero != 0 || afterNonzero != nonzero {
+		t.Fatalf("read/write reopen changed value-log files: before total=%d nonzero=%d after total=%d zero=%d nonzero=%d",
+			total, nonzero, afterTotal, afterZero, afterNonzero)
+	}
+}
+
+func countValueLogSegmentFiles(t *testing.T, rootDir string) (total, zero, nonzero int) {
+	t.Helper()
+	valueLogDir := filepath.Join(rootDir, "maindb", "value_vlog")
+	entries, err := os.ReadDir(valueLogDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, 0, 0
+		}
+		t.Fatalf("read value_vlog dir: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		matched, err := filepath.Match("value-l*.log", entry.Name())
+		if err != nil {
+			t.Fatalf("match value-log name: %v", err)
+		}
+		if !matched {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			t.Fatalf("stat value-log segment: %v", err)
+		}
+		total++
+		if info.Size() == 0 {
+			zero++
+		} else {
+			nonzero++
+		}
+	}
+	return total, zero, nonzero
+}

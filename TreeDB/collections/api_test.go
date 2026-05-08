@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"sort"
@@ -3663,6 +3664,112 @@ func TestCollectionCompactRootOverlaysFoldsIntoBaseRoots(t *testing.T) {
 	}
 	if len(reopenedIDs) != 1 || !bytes.Equal(reopenedIDs[0], []byte("u1")) {
 		t.Fatalf("reopened city ids=%q want [u1]", reopenedIDs)
+	}
+}
+
+func TestCollectionCompactStorageFoldsRootsAndCleansStorage(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
+	opts.DisableSideStores = true
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.MaxWALBytes = -1
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+
+	db, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = cleanup() }()
+
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedOverlayRoots:      true,
+			BufferedIndexedWriteMaxDocuments: 1,
+			BufferedIndexedWriteMaxRootRuns:  1,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	doc := []byte(`{"city":"hnl","payload":"` + strings.Repeat("x", 512) + `"}`)
+	if _, err := col.Insert([]byte("u1"), doc); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if _, _, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			return []byte(`{"city":"sea","payload":"` + strings.Repeat("y", 512) + `"}`), true, nil
+		},
+	}}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush overlays: %v", err)
+	}
+
+	valueLogDir := backenddb.ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	emptyPath := filepath.Join(valueLogDir, "value-l42-000001.log")
+	if err := os.WriteFile(emptyPath, nil, 0o644); err != nil {
+		t.Fatalf("write empty value-log file: %v", err)
+	}
+
+	stats, err := col.CompactStorage(context.Background(), CompactStorageOptions{
+		LeafPackMinExpectedReclaimBytes: 1,
+		LeafPackMinReclaimPerCopyPPM:    1,
+	})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if rootStats, ok := stats.RootOverlays["users"]; !ok || rootStats.OverlayRoots == 0 {
+		t.Fatalf("root overlay compaction stats=%+v", stats.RootOverlays)
+	}
+	if !stats.Storage.FullyCompacted {
+		t.Fatalf("storage FullyCompacted=false debt=%+v", stats.Storage.RemainingDebt)
+	}
+	if _, err := os.Stat(emptyPath); !os.IsNotExist(err) {
+		t.Fatalf("empty value-log file remains or stat failed: %v", err)
+	}
+
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get after compact storage: %v", err)
+	}
+	want := []byte(`{"city":"sea","payload":"` + strings.Repeat("y", 512) + `"}`)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("doc after compact storage=%q want %q", got, want)
+	}
+	ids, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find by index after compact storage: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("ids after compact storage=%q want [u1]", ids)
+	}
+
+	again, err := col.CompactStoragePlan(context.Background(), CompactStorageOptions{
+		LeafPackMinExpectedReclaimBytes: 1,
+		LeafPackMinReclaimPerCopyPPM:    1,
+	})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan after: %v", err)
+	}
+	if !again.Storage.FullyCompacted {
+		t.Fatalf("post-compact plan FullyCompacted=false debt=%+v", again.Storage.RemainingDebt)
 	}
 }
 

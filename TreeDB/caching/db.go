@@ -3919,7 +3919,7 @@ func (db *DB) flushValueLogLaneWithSize(l *lane) (int64, error) {
 		w := l.vlog
 		if w == nil {
 			l.vlogMu.Unlock()
-			return -1, errWALUnavailable
+			return -1, nil
 		}
 		// Always take vlogMu first so flush acts as a write barrier for in-flight appends.
 		if !l.vlogDirty.Load() {
@@ -3985,7 +3985,7 @@ func (db *DB) syncValueLogLane(l *lane) error {
 		w := l.vlog
 		if w == nil {
 			l.vlogMu.Unlock()
-			return errWALUnavailable
+			return nil
 		}
 		start := time.Now()
 		err := w.Sync()
@@ -9171,36 +9171,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		outerLeafPageLogSetter = setter
 	}
 
-	// Open initial value-log segments (if enabled) and journal/commit log
-	// segments (if enabled). Journal and value log are decoupled.
-	if db.valueLogEnabled() {
-		for i := range db.lanes {
-			if err := db.rotateValueLogLocked(&db.lanes[i]); err != nil {
-				if db.valueLogReader != nil {
-					_ = db.valueLogReader.Close()
-					db.valueLogReader = nil
-				}
-				for j := 0; j <= i && j < len(db.lanes); j++ {
-					db.cleanupLaneWALWriters(&db.lanes[j])
-				}
-				db.cleanupLaneWALWriters(&db.leafLog)
-				return nil, err
-			}
-		}
-		if opts.IndexOuterLeavesInValueLog {
-			if err := db.rotateValueLogLocked(&db.leafLog); err != nil {
-				if db.valueLogReader != nil {
-					_ = db.valueLogReader.Close()
-					db.valueLogReader = nil
-				}
-				for i := range db.lanes {
-					db.cleanupLaneWALWriters(&db.lanes[i])
-				}
-				db.cleanupLaneWALWriters(&db.leafLog)
-				return nil, err
-			}
-		}
-	}
+	// Open journal/commit log segments eagerly, but leave value-log segment
+	// writers lazy. Opening every value-log lane here creates many zero-byte
+	// value_vlog files during read/write maintenance opens even when those lanes
+	// never receive values. Value-log appends allocate the current lane segment
+	// on first write instead.
 	if !db.disableJournal {
 		for i := range db.lanes {
 			if err := db.rotateWALLocked(&db.lanes[i]); err != nil {
@@ -12065,6 +12040,20 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	)
 
 	l.vlogMu.Lock()
+	if err := db.ensureValueLogWriterMuHeld(l); err != nil {
+		l.vlogMu.Unlock()
+		for i := range requests {
+			ack := requests[i].ack
+			if ack == nil {
+				continue
+			}
+			ack.ptr = page.ValuePtr{}
+			ack.retainPath = ""
+			ack.err = err
+			ack.wg.Done()
+		}
+		return
+	}
 	w := l.vlog
 	if w == nil {
 		l.vlogMu.Unlock()
@@ -13086,6 +13075,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 
 	l.vlogMu.Lock()
+	if err := db.ensureValueLogWriterMuHeld(l); err != nil {
+		l.vlogMu.Unlock()
+		return nil, err
+	}
 	w := l.vlog
 	if w == nil {
 		l.vlogMu.Unlock()
@@ -13670,6 +13663,10 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 
 	if allowQueue && db.shouldQueueValueLogOne(l, dictID, len(value), durability, finalWriteMode, wallStart) {
 		if dictID == 0 && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
+			if err := db.ensureValueLogWriterMuHeld(l); err != nil {
+				l.vlogMu.Unlock()
+				return page.ValuePtr{}, "", err
+			}
 			w := l.vlog
 			if w == nil {
 				l.vlogMu.Unlock()
@@ -13842,6 +13839,10 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	}
 
 	l.vlogMu.Lock()
+	if err := db.ensureValueLogWriterMuHeld(l); err != nil {
+		l.vlogMu.Unlock()
+		return page.ValuePtr{}, "", err
+	}
 	w := l.vlog
 	if w == nil {
 		l.vlogMu.Unlock()
@@ -21030,6 +21031,19 @@ func (db *DB) rotateValueLogLocked(l *lane) error {
 
 func (db *DB) rotateValueLogMuHeld(l *lane) error {
 	return db.rotateValueLogMuHeldToSeq(l, l.vlogSeq+1)
+}
+
+func (db *DB) ensureValueLogWriterMuHeld(l *lane) error {
+	if !db.splitValueLogEnabled() {
+		return nil
+	}
+	if l == nil {
+		return errWALUnavailable
+	}
+	if l.vlog != nil {
+		return nil
+	}
+	return db.rotateValueLogMuHeld(l)
 }
 
 func (db *DB) rotateValueLogMuHeldToSeq(l *lane, nextSeq int) error {
