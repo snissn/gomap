@@ -115,6 +115,49 @@ func TestServerHandlesMsgPing(t *testing.T) {
 	assertOK(t, msg.Body)
 }
 
+func TestServerRejectsFindWithMoreToCome(t *testing.T) {
+	commandDoc := mustDocument(t, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	req, err := wire.AppendMsgMessage(nil, 201, 0, wire.MsgFlagMoreToCome, commandDoc)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage: %v", err)
+	}
+	rw := &readWriter{r: bytes.NewReader(req)}
+
+	err = NewServer().ServeOne(rw)
+	if !errors.Is(err, wire.ErrUnsupported) {
+		t.Fatalf("ServeOne err=%v want ErrUnsupported", err)
+	}
+	if rw.w.Len() != 0 {
+		t.Fatalf("unexpected response bytes=%d", rw.w.Len())
+	}
+}
+
+func TestServerRejectsFindWithDocumentSequences(t *testing.T) {
+	commandDoc := mustDocument(t, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	req, err := wire.AppendMsgMessageWithSequences(nil, 202, 0, 0, commandDoc, []wire.DocumentSequence{{
+		Identifier: "ignored",
+		Documents:  []wire.Document{mustDocument(t, bson.D{{Key: "x", Value: 1}})},
+	}})
+	if err != nil {
+		t.Fatalf("AppendMsgMessageWithSequences: %v", err)
+	}
+	rw := &readWriter{r: bytes.NewReader(req)}
+
+	err = NewServer().ServeOne(rw)
+	if !errors.Is(err, wire.ErrUnsupported) {
+		t.Fatalf("ServeOne err=%v want ErrUnsupported", err)
+	}
+	if rw.w.Len() != 0 {
+		t.Fatalf("unexpected response bytes=%d", rw.w.Len())
+	}
+}
+
 func TestServerInsertAndFindByID(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -2486,6 +2529,87 @@ func TestMarshalCursorDocumentsResponseWithRawBatch(t *testing.T) {
 	}
 	if !bytes.Equal(batch[0], bson.Raw(rawDoc)) {
 		t.Fatalf("firstBatch[0]=%v want raw doc %v", batch[0], bson.Raw(rawDoc))
+	}
+}
+
+func TestServerFindRawBSONOPMsgResponse(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 249, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "age", Value: int64(41)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	findDoc := mustDocument(t, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(40)}}}}},
+		{Key: "limit", Value: int32(1)},
+		{Key: "singleBatch", Value: true},
+		{Key: "$db", Value: "app"},
+	})
+	req, err := wire.AppendMsgMessage(nil, 250, 0, 0, findDoc)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage: %v", err)
+	}
+	rw := &readWriter{r: bytes.NewReader(req)}
+	if err := server.ServeOne(rw); err != nil {
+		t.Fatalf("ServeOne: %v", err)
+	}
+	h, body, err := wire.ReadMessage(bytes.NewReader(rw.w.Bytes()), 0)
+	if err != nil {
+		t.Fatalf("ReadMessage response: %v", err)
+	}
+	if h.OpCode != wire.OpMsg || h.ResponseTo != 250 || h.MessageLength != int32(len(rw.w.Bytes())) {
+		t.Fatalf("response header=%+v len=%d", h, len(rw.w.Bytes()))
+	}
+	msg, err := wire.ParseMsg(body)
+	if err != nil {
+		t.Fatalf("ParseMsg response: %v", err)
+	}
+	assertOK(t, msg.Body)
+	if cursorID := cursorIDFromResponse(t, msg.Body); cursorID != 0 {
+		t.Fatalf("cursor id=%d want 0", cursorID)
+	}
+	batch := cursorFirstBatch(t, msg.Body)
+	if len(batch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(batch))
+	}
+	if age, ok := batch[0].Lookup("age").Int64OK(); !ok || age != 41 {
+		t.Fatalf("firstBatch age=%d ok=%v want 41", age, ok)
+	}
+}
+
+func TestServerFindRawBSONOPMsgResponseHonorsMaxMessageLength(t *testing.T) {
+	rawDoc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "payload", Value: strings.Repeat("x", 256)}})
+	if _, err := marshalCursorDocumentsMsgResponseWithID(1, 250, "app.users", 0, "firstBatch", []wire.Document{rawDoc}, wire.DefaultMaxMessageLength); err != nil {
+		t.Fatalf("marshal default max response: %v", err)
+	}
+	_, err := marshalCursorDocumentsMsgResponseWithID(1, 250, "app.users", 0, "firstBatch", []wire.Document{rawDoc}, 128)
+	if !errors.Is(err, wire.ErrMessageTooLarge) {
+		t.Fatalf("marshal small max err=%v want ErrMessageTooLarge", err)
+	}
+}
+
+func TestFindResponsePayloadOPMsgHonorsMaxMessageLength(t *testing.T) {
+	payload := findResponsePayload{
+		document: mustDocument(t, bson.D{{Key: "ok", Value: 1.0}, {Key: "payload", Value: strings.Repeat("x", 256)}}),
+	}
+	if _, err := payload.marshalMsgWithMaxLength(1, 250, wire.DefaultMaxMessageLength); err != nil {
+		t.Fatalf("marshal default max response: %v", err)
+	}
+	_, err := payload.marshalMsgWithMaxLength(1, 250, 128)
+	if !errors.Is(err, wire.ErrMessageTooLarge) {
+		t.Fatalf("marshal small max err=%v want ErrMessageTooLarge", err)
 	}
 }
 

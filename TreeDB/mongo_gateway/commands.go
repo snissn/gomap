@@ -17,12 +17,13 @@ import (
 )
 
 const (
-	commandCodeBadValue          int32 = 2
-	commandCodeFailedToParse     int32 = 9
-	commandCodeNamespaceNotFound int32 = 26
-	commandCodeIndexNotFound     int32 = 27
-	commandCodeCursorNotFound    int32 = 43
-	commandCodeDuplicateKey      int32 = 11000
+	commandCodeBadValue            int32 = 2
+	commandCodeFailedToParse       int32 = 9
+	commandCodeNamespaceNotFound   int32 = 26
+	commandCodeIndexNotFound       int32 = 27
+	commandCodeCursorNotFound      int32 = 43
+	commandCodeDuplicateKey        int32 = 11000
+	maxWireMessageLengthInt32Limit       = int64(1<<31 - 1)
 )
 
 const primaryKeyPrefixBSONValue byte = 1
@@ -107,88 +108,163 @@ func prepareInsertDocuments(documents []wire.Document, format collections.Docume
 	return ids, stored, nil
 }
 
+type rawCursorDocumentsResponse struct {
+	ns       string
+	cursorID int64
+	batchKey string
+	batch    []wire.Document
+}
+
+type findResponsePayload struct {
+	document wire.Document
+	raw      *rawCursorDocumentsResponse
+}
+
+func (p findResponsePayload) marshalDocument() (wire.Document, error) {
+	if p.raw != nil {
+		return marshalCursorDocumentsResponseWithID(p.raw.ns, p.raw.cursorID, p.raw.batchKey, p.raw.batch)
+	}
+	return p.document, nil
+}
+
+func (p findResponsePayload) marshalMsg(requestID, responseTo int32) ([]byte, error) {
+	return p.marshalMsgWithMaxLength(requestID, responseTo, wire.DefaultMaxMessageLength)
+}
+
+func (p findResponsePayload) marshalMsgWithMaxLength(requestID, responseTo int32, maxMessageLength int) ([]byte, error) {
+	if p.raw != nil {
+		return marshalCursorDocumentsMsgResponseWithID(requestID, responseTo, p.raw.ns, p.raw.cursorID, p.raw.batchKey, p.raw.batch, maxMessageLength)
+	}
+	if maxMessageLength <= 0 || maxMessageLength > wire.DefaultMaxMessageLength {
+		maxMessageLength = wire.DefaultMaxMessageLength
+	}
+	msg, err := wire.AppendMsgMessage(nil, requestID, responseTo, 0, p.document)
+	if err != nil {
+		return nil, err
+	}
+	if len(msg) > maxMessageLength {
+		return nil, fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, len(msg), maxMessageLength)
+	}
+	return msg, nil
+}
+
 func (s *Server) findResponse(command wire.Document, cursorOwner int64) (wire.Document, error) {
+	payload, err := s.findResponsePayload(command, cursorOwner)
+	if err != nil {
+		return nil, err
+	}
+	return payload.marshalDocument()
+}
+
+func (s *Server) findMsgResponse(command wire.Document, requestID, responseTo int32, cursorOwner int64) ([]byte, error) {
+	payload, err := s.findResponsePayload(command, cursorOwner)
+	if err != nil {
+		return nil, err
+	}
+	return payload.marshalMsgWithMaxLength(requestID, responseTo, int(s.maxMessageLength()))
+}
+
+func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (findResponsePayload, error) {
 	if s.Collections == nil {
-		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+		doc, err := commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+		return findResponsePayload{document: doc}, err
 	}
 	collection, err := commandString(command, "find")
 	if err != nil {
-		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+		doc, err := commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+		return findResponsePayload{document: doc}, err
 	}
 	db, err := commandString(command, "$db")
 	if err != nil {
-		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+		doc, err := commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+		return findResponsePayload{document: doc}, err
 	}
 	name, err := gatewayCollectionName(db, collection)
 	if err != nil {
-		return commandError(commandCodeBadValue, "BadValue", err.Error())
+		doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+		return findResponsePayload{document: doc}, err
 	}
 	filter, err := commandOptionalDocument(command, "filter")
 	if err != nil {
-		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+		doc, err := commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+		return findResponsePayload{document: doc}, err
 	}
 	plan, err := parseFindPlan(command, filter)
 	if err != nil {
-		return commandError(commandCodeBadValue, "BadValue", err.Error())
+		doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+		return findResponsePayload{document: doc}, err
 	}
 	col, err := s.Collections.OpenCollection(name)
 	if errors.Is(err, collections.ErrCollectionNotFound) {
-		return marshalCursorResponse(db, collection, bson.A{})
+		doc, err := marshalCursorResponse(db, collection, bson.A{})
+		return findResponsePayload{document: doc}, err
 	}
 	if err != nil {
-		return commandError(commandCodeBadValue, "BadValue", err.Error())
+		doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+		return findResponsePayload{document: doc}, err
 	}
 	batchSize, batchSizeSet, err := optionalInt32FieldWithPresence(command, "batchSize")
 	if err != nil {
-		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+		doc, err := commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+		return findResponsePayload{document: doc}, err
 	}
 	singleBatch, err := optionalBoolField(command, "singleBatch")
 	if err != nil {
-		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+		doc, err := commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+		return findResponsePayload{document: doc}, err
 	}
 	ns := db + "." + collection
 	results, err := s.executeFind(col, plan)
 	if err != nil {
-		return commandError(commandCodeBadValue, "BadValue", err.Error())
+		doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+		return findResponsePayload{document: doc}, err
 	}
 	if singleBatch {
 		normalizedBatchSize, err := normalizeBatchSize(int(batchSize), batchSizeSet, defaultCursorBatchSize)
 		if err != nil {
-			return commandError(commandCodeBadValue, "BadValue", err.Error())
+			doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+			return findResponsePayload{document: doc}, err
 		}
 		if !results.projection.present {
 			consumed, err := rawDocumentsBatchLimit(results.docs, normalizedBatchSize, s.maxFindBatchBytes())
 			if err != nil {
-				return commandError(commandCodeBadValue, "BadValue", err.Error())
+				doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+				return findResponsePayload{document: doc}, err
 			}
-			return marshalCursorDocumentsResponseWithID(ns, 0, "firstBatch", results.docs[:consumed])
+			return findResponsePayload{raw: &rawCursorDocumentsResponse{ns: ns, cursorID: 0, batchKey: "firstBatch", batch: results.docs[:consumed]}}, nil
 		}
 		firstBatch, _, err := documentsBatchWithLimit(results.docs, results.projection, normalizedBatchSize, s.maxFindBatchBytes())
 		if err != nil {
-			return commandError(commandCodeBadValue, "BadValue", err.Error())
+			doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+			return findResponsePayload{document: doc}, err
 		}
-		return marshalCursorResponseWithID(ns, 0, "firstBatch", firstBatch)
+		doc, err := marshalCursorResponseWithID(ns, 0, "firstBatch", firstBatch)
+		return findResponsePayload{document: doc}, err
 	}
 	if !results.projection.present {
 		normalizedBatchSize, err := normalizeBatchSize(int(batchSize), batchSizeSet, defaultCursorBatchSize)
 		if err != nil {
-			return commandError(commandCodeBadValue, "BadValue", err.Error())
+			doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+			return findResponsePayload{document: doc}, err
 		}
 		if normalizedBatchSize >= len(results.docs) {
 			consumed, err := rawDocumentsBatchLimit(results.docs, normalizedBatchSize, s.maxFindBatchBytes())
 			if err != nil {
-				return commandError(commandCodeBadValue, "BadValue", err.Error())
+				doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+				return findResponsePayload{document: doc}, err
 			}
 			if consumed >= len(results.docs) {
-				return marshalCursorDocumentsResponseWithID(ns, 0, "firstBatch", results.docs)
+				return findResponsePayload{raw: &rawCursorDocumentsResponse{ns: ns, cursorID: 0, batchKey: "firstBatch", batch: results.docs}}, nil
 			}
 		}
 	}
 	cursorID, firstBatch, err := s.openCursor(ns, results.docs, results.projection, int(batchSize), batchSizeSet, defaultCursorBatchSize, cursorOwner)
 	if err != nil {
-		return commandError(commandCodeBadValue, "BadValue", err.Error())
+		doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+		return findResponsePayload{document: doc}, err
 	}
-	return marshalCursorResponseWithID(ns, cursorID, "firstBatch", firstBatch)
+	doc, err := marshalCursorResponseWithID(ns, cursorID, "firstBatch", firstBatch)
+	return findResponsePayload{document: doc}, err
 }
 
 func (s *Server) updateResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
@@ -1288,31 +1364,85 @@ func marshalCursorDocumentsResponseWithID(ns string, cursorID int64, batchKey st
 	for i, doc := range batch {
 		batchBytes += findBatchDocumentBytes(doc, i)
 	}
-	cursorIdx, cursorDoc := bsoncore.AppendDocumentStart(make([]byte, 0, len(ns)+batchBytes+64))
-	cursorDoc = bsoncore.AppendInt64Element(cursorDoc, "id", cursorID)
-	cursorDoc = bsoncore.AppendStringElement(cursorDoc, "ns", ns)
-	batchIdx, cursorDoc := bsoncore.AppendArrayElementStart(cursorDoc, batchKey)
-	for i, doc := range batch {
-		cursorDoc = bsoncore.AppendDocumentElement(cursorDoc, bsonArrayIndexKey(i), doc)
+	docIdx, doc := bsoncore.AppendDocumentStart(make([]byte, 0, len(ns)+batchBytes+96))
+	cursorIdx, doc := bsoncore.AppendDocumentElementStart(doc, "cursor")
+	doc = bsoncore.AppendInt64Element(doc, "id", cursorID)
+	doc = bsoncore.AppendStringElement(doc, "ns", ns)
+	batchIdx, doc := bsoncore.AppendArrayElementStart(doc, batchKey)
+	for i, batchDoc := range batch {
+		doc = bsoncore.AppendDocumentElement(doc, bsonArrayIndexKey(i), batchDoc)
 	}
 	var err error
-	cursorDoc, err = bsoncore.AppendArrayEnd(cursorDoc, batchIdx)
+	doc, err = bsoncore.AppendArrayEnd(doc, batchIdx)
 	if err != nil {
 		return nil, err
 	}
-	cursorDoc, err = bsoncore.AppendDocumentEnd(cursorDoc, cursorIdx)
+	doc, err = bsoncore.AppendDocumentEnd(doc, cursorIdx)
 	if err != nil {
 		return nil, err
 	}
-
-	docIdx, doc := bsoncore.AppendDocumentStart(make([]byte, 0, len(cursorDoc)+32))
-	doc = bsoncore.AppendDocumentElement(doc, "cursor", cursorDoc)
 	doc = bsoncore.AppendDoubleElement(doc, "ok", 1.0)
 	doc, err = bsoncore.AppendDocumentEnd(doc, docIdx)
 	if err != nil {
 		return nil, err
 	}
 	return wire.Document(doc), nil
+}
+
+func marshalCursorDocumentsMsgResponseWithID(requestID, responseTo int32, ns string, cursorID int64, batchKey string, batch []wire.Document, maxMessageLength int) ([]byte, error) {
+	if maxMessageLength <= 0 || maxMessageLength > wire.DefaultMaxMessageLength {
+		maxMessageLength = wire.DefaultMaxMessageLength
+	}
+	batchBytes := findBatchOverheadBytes
+	for i, doc := range batch {
+		batchBytes += findBatchDocumentBytes(doc, i)
+	}
+	msg := make([]byte, 0, 16+5+len(ns)+batchBytes+96)
+	base := len(msg)
+	msg = appendWireInt32(msg, 0)
+	msg = appendWireInt32(msg, requestID)
+	msg = appendWireInt32(msg, responseTo)
+	msg = appendWireInt32(msg, int32(wire.OpMsg))
+	msg = appendWireInt32(msg, 0)
+	msg = append(msg, wire.MsgSectionBody)
+	docIdx, msg := bsoncore.AppendDocumentStart(msg)
+	cursorIdx, msg := bsoncore.AppendDocumentElementStart(msg, "cursor")
+	msg = bsoncore.AppendInt64Element(msg, "id", cursorID)
+	msg = bsoncore.AppendStringElement(msg, "ns", ns)
+	batchIdx, msg := bsoncore.AppendArrayElementStart(msg, batchKey)
+	for i, batchDoc := range batch {
+		msg = bsoncore.AppendDocumentElement(msg, bsonArrayIndexKey(i), batchDoc)
+	}
+	var err error
+	msg, err = bsoncore.AppendArrayEnd(msg, batchIdx)
+	if err != nil {
+		return nil, err
+	}
+	msg, err = bsoncore.AppendDocumentEnd(msg, cursorIdx)
+	if err != nil {
+		return nil, err
+	}
+	msg = bsoncore.AppendDoubleElement(msg, "ok", 1.0)
+	msg, err = bsoncore.AppendDocumentEnd(msg, docIdx)
+	if err != nil {
+		return nil, err
+	}
+	messageLength := len(msg) - base
+	if int64(messageLength) > maxWireMessageLengthInt32Limit {
+		return nil, fmt.Errorf("%w: length=%d", wire.ErrMessageTooLarge, messageLength)
+	}
+	if messageLength > maxMessageLength {
+		return nil, fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, messageLength, maxMessageLength)
+	}
+	binary.LittleEndian.PutUint32(msg[base:base+4], uint32(messageLength))
+	return msg, nil
+}
+
+func appendWireInt32(dst []byte, v int32) []byte {
+	n := len(dst)
+	dst = append(dst, 0, 0, 0, 0)
+	binary.LittleEndian.PutUint32(dst[n:], uint32(v))
+	return dst
 }
 
 var bsonArrayIndexKeyCache = func() [128]string {

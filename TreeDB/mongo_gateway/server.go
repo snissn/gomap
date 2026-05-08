@@ -275,6 +275,24 @@ func (s *Server) handleMsg(h wire.Header, body []byte, cursorOwner int64) ([]byt
 		return nil, err
 	}
 
+	if name == "find" {
+		// The find path builds a raw OP_MSG response directly, so reject OP_MSG
+		// features it does not preserve. Other commands go through
+		// commandResponse with parsed document sequences.
+		if msg.Flags&wire.MsgFlagMoreToCome != 0 {
+			return nil, fmt.Errorf("%w: find with moreToCome flag", wire.ErrUnsupported)
+		}
+		if len(msg.Sequences) > 0 {
+			return nil, fmt.Errorf("%w: find with document sequences", wire.ErrUnsupported)
+		}
+		responseID := s.nextID()
+		response, err := s.findMsgResponse(msg.Body, responseID, h.RequestID, cursorOwner)
+		if err != nil {
+			return nil, err
+		}
+		return response, nil
+	}
+
 	response, err := s.commandResponse(name, msg.Body, msg.Sequences, cursorOwner)
 	if err != nil {
 		return nil, err

@@ -1050,20 +1050,16 @@ func documentsForIndexedRange(col *collections.Collection, materializer *collect
 		candidateLimit = candidateLimitWithOverflowSlot(maxDocuments)
 	}
 	opts.Limit = candidateLimit
-	ids, _, err := col.FindByIndexRange(idx.Name, opts)
+	records, _, err := col.FindDocumentsByIndexRange(idx.Name, opts)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]wire.Document, 0, len(ids))
-	for _, id := range ids {
-		stored, err := col.Get(id)
-		if err != nil {
-			return nil, err
-		}
-		if len(stored) == 0 {
+	out := make([]wire.Document, 0, len(records))
+	for _, record := range records {
+		if len(record.Document) == 0 {
 			continue
 		}
-		doc, err := storedDocumentToBSON(col, materializer, stored)
+		doc, err := storedDocumentToBSON(col, materializer, record.Document)
 		if err != nil {
 			return nil, err
 		}
