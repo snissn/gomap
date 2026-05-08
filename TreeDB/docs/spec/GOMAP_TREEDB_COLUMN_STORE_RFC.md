@@ -1318,17 +1318,25 @@ collections. The design should not depend on scanning a hidden column.
 Maintain count metadata at multiple levels:
 
 - collection root aggregate: visible row count for the snapshot root;
-- part descriptor: physical rows, visible rows, deleted rows;
+- part descriptor: physical rows, rows visible when the part was published or
+  compacted, deleted rows;
 - granule descriptor: row count and deleted count;
 - optional secondary/filter metadata: exact posting counts only when the index
   format can prove exactness.
 
 For `count(*)` with no predicate, a reader should use the snapshot's collection
-aggregate or sum visible rows from part descriptors. Inserts increment the
-aggregate, deletes decrement it, updates leave it unchanged, and compaction
-must preserve it. For simple predicates, min/max, set, bloom, and secondary
-indexes may prune work, but approximate filters must not return an exact count
-without verifying rows or using an exact posting/bitmap index.
+aggregate. A part-derived exact count is allowed only when the reader applies
+the same snapshot visibility state as a row scan: the active part set, delete
+or tombstone roots, update-delta tombstones, and the snapshot watermark. Raw
+immutable part `VisibleRowCount` totals are exact only for snapshots whose
+manifest proves no external visibility state can hide rows from those parts.
+Otherwise they are diagnostic metadata or an upper bound, not an exact answer.
+
+Inserts increment the aggregate, deletes decrement it, one-row replacement
+updates leave it unchanged, and compaction must preserve it. For simple
+predicates, min/max, set, bloom, and secondary indexes may prune work, but
+approximate filters must not return an exact count without verifying rows or
+using an exact posting/bitmap index.
 
 This is analogous to ClickHouse's ability to answer trivial counts from part
 metadata, but it must respect TreeDB snapshots and delete bitmaps.
@@ -1894,7 +1902,8 @@ Tests:
 - borrowed-slice lifetime tests;
 - cache hit/miss accounting tests.
 - exact count tests across insert, update, delete, compaction, reopen, and
-  active snapshots.
+  active snapshots, including uncompacted delete roots and update-delta
+  tombstones.
 
 Gates:
 
@@ -1909,6 +1918,8 @@ Gates:
   per row for the same haystacks and needles;
 - unfiltered `count(*)` is O(visible parts) or better and at least 20x faster
   than scanning one projected column on the count-star fixture;
+- stale immutable part descriptor totals are never used as exact `count(*)`
+  results when snapshot delete or update-delta visibility can hide rows;
 - projected scan allocations <= 0.25 allocations per 1000 rows in borrowed API
   steady state.
 
@@ -2177,8 +2188,10 @@ the bandit-style selector as an experiment against the current TreeDB chooser.
 
 Finding: Fast filters and part row counts could be approximate but accidentally
 used for exact answers.
-Fix: Approximate filters remain pruning-only, while `count(*)` uses exact
-snapshot/part/granule metadata or verifies rows.
+Fix: Approximate filters remain pruning-only, while `count(*)` uses the exact
+snapshot aggregate, visibility-adjusted part/granule metadata, or verifies
+rows. Raw immutable part totals are not exact when delete or update-delta
+visibility can hide rows.
 
 ## 18. Completion Criteria for the Proposal
 
