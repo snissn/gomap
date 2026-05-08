@@ -34,7 +34,6 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		case <-done:
 		}
 	}()
-	connSlots := make(chan struct{}, s.maxConnections)
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -46,17 +45,9 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 			}
 			return err
 		}
-		select {
-		case connSlots <- struct{}{}:
-		default:
-			s.counters.inc("connections.rejected_total")
-			_ = conn.Close()
-			continue
-		}
-		go func() {
-			defer func() { <-connSlots }()
+		go func(conn net.Conn) {
 			_ = s.ServeConn(ctx, conn)
-		}()
+		}(conn)
 	}
 }
 

@@ -198,7 +198,57 @@ func TestServerCloseClosesListener(t *testing.T) {
 	}
 }
 
+func TestServeMaxConnectionsAppliesAcrossListeners(t *testing.T) {
+	server := NewServer(ServerOptions{MaxConnections: 1})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ln1, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen tcp 1: %v", err)
+	}
+	ln2, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen tcp 2: %v", err)
+	}
+	errCh := make(chan error, 2)
+	go func() { errCh <- server.Serve(ctx, ln1) }()
+	go func() { errCh <- server.Serve(ctx, ln2) }()
+	waitForRegisteredListenerCount(t, server, 2)
+
+	client, err := DialContext(ctx, "tcp", ln1.Addr().String())
+	if err != nil {
+		t.Fatalf("DialContext first: %v", err)
+	}
+	defer client.Close()
+
+	secondCtx, secondCancel := context.WithTimeout(ctx, time.Second)
+	defer secondCancel()
+	if second, err := DialContext(secondCtx, "tcp", ln2.Addr().String()); err == nil {
+		_ = second.Close()
+		t.Fatal("DialContext second succeeded despite MaxConnections=1")
+	}
+	waitForCounter(t, server, "connections.rejected_total", 1)
+
+	cancel()
+	_ = server.Close()
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-errCh:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				t.Fatalf("Serve[%d] err=%v", i, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("Serve[%d] did not stop", i)
+		}
+	}
+}
+
 func waitForRegisteredListener(t *testing.T, server *Server) {
+	t.Helper()
+	waitForRegisteredListenerCount(t, server, 1)
+}
+
+func waitForRegisteredListenerCount(t *testing.T, server *Server, want int) {
 	t.Helper()
 	deadline := time.After(time.Second)
 	tick := time.NewTicker(time.Millisecond)
@@ -207,12 +257,12 @@ func waitForRegisteredListener(t *testing.T, server *Server) {
 		server.connMu.Lock()
 		registered := len(server.listeners)
 		server.connMu.Unlock()
-		if registered > 0 {
+		if registered >= want {
 			return
 		}
 		select {
 		case <-deadline:
-			t.Fatal("listener was not registered")
+			t.Fatalf("registered listeners=%d want %d", registered, want)
 		case <-tick.C:
 		}
 	}

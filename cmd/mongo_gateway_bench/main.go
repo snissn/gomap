@@ -3994,7 +3994,7 @@ func ensureNativeWireBenchmarkCollection(cfg config, target *benchTarget) error 
 	if col, err := target.collections.OpenCollection(name); err == nil {
 		meta := col.Meta()
 		wantOptions := treeDBBenchmarkCollectionOptions(cfg)
-		if !sameNativeWireBenchmarkOptions(meta.Options, wantOptions) {
+		if !sameNativeWireBenchmarkOptions(meta.Options, wantOptions, len(meta.Indexes) > 0) {
 			return fmt.Errorf("native-wire benchmark collection %q has options %+v, want %+v", name, meta.Options, wantOptions)
 		}
 		if !cfgHasAnySecondaryIndex(cfg) && len(meta.Indexes) != 0 {
@@ -4011,15 +4011,46 @@ func ensureNativeWireBenchmarkCollection(cfg config, target *benchTarget) error 
 	return err
 }
 
-func sameNativeWireBenchmarkOptions(got, want collections.CollectionOptions) bool {
-	return got.DocumentFormat == want.DocumentFormat &&
-		got.DataRootStoragePolicy == want.DataRootStoragePolicy &&
-		got.IndexStateStoragePolicy == want.IndexStateStoragePolicy &&
-		got.BufferedIndexedWriteMaxDocuments == want.BufferedIndexedWriteMaxDocuments &&
-		got.BufferedIndexedWriteMaxBytes == want.BufferedIndexedWriteMaxBytes &&
-		got.BufferedIndexedWriteMaxRootRuns == want.BufferedIndexedWriteMaxRootRuns &&
-		got.BufferedIndexedAsyncFlush == want.BufferedIndexedAsyncFlush &&
-		got.BufferedIndexedAsyncFlushMaxQueuedUnits == want.BufferedIndexedAsyncFlushMaxQueuedUnits
+func sameNativeWireBenchmarkOptions(got, want collections.CollectionOptions, indexed bool) bool {
+	return normalizeNativeWireBenchmarkOptions(got, indexed) == normalizeNativeWireBenchmarkOptions(want, indexed)
+}
+
+func normalizeNativeWireBenchmarkOptions(opts collections.CollectionOptions, indexed bool) collections.CollectionOptions {
+	if opts.DocumentFormat == collections.DocumentFormatJSON {
+		opts.DocumentFormat = collections.DocumentFormatDefault
+	}
+	if opts.DisableIndexedWriteMemtables {
+		opts.BufferedIndexedWrites = false
+		opts.BufferedIndexedWriteMaxDocuments = 0
+		opts.BufferedIndexedWriteMaxBytes = 0
+		opts.BufferedIndexedWriteMaxRootRuns = 0
+		opts.BufferedIndexedAsyncFlush = false
+		opts.BufferedIndexedOverlayRoots = false
+		opts.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
+		return opts
+	}
+	if !indexed {
+		opts.BufferedIndexedWrites = false
+		return opts
+	}
+	opts.BufferedIndexedWrites = true
+	defaultMaxDocuments := collections.DefaultIndexedWriteMemtableMaxDocuments
+	defaultMaxRootRuns := collections.DefaultIndexedWriteMemtableMaxRootRuns
+	if opts.BufferedIndexedAsyncFlush {
+		defaultMaxDocuments = collections.DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
+		defaultMaxRootRuns = collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns
+	}
+	useNativeDocumentDefault := opts.BufferedIndexedWriteMaxDocuments == 0
+	if useNativeDocumentDefault {
+		opts.BufferedIndexedWriteMaxDocuments = defaultMaxDocuments
+	}
+	if useNativeDocumentDefault && opts.BufferedIndexedWriteMaxBytes == 0 && opts.BufferedIndexedWriteMaxRootRuns == 0 {
+		opts.BufferedIndexedWriteMaxRootRuns = defaultMaxRootRuns
+	}
+	if opts.BufferedIndexedAsyncFlush && opts.BufferedIndexedAsyncFlushMaxQueuedUnits == 0 {
+		opts.BufferedIndexedAsyncFlushMaxQueuedUnits = collections.DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits
+	}
+	return opts
 }
 
 func nativeWireInsertBatchWithRetry(ctx context.Context, client *nativewire.Client, collection string, format collections.DocumentFormat, ids, docs [][]byte) error {

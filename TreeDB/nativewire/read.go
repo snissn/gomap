@@ -475,12 +475,38 @@ func (s *Server) reapExpiredCursors() {
 			delete(s.cursors, id)
 			expired++
 			s.counters.inc("cursors.timeouts_total")
+			s.counters.inc("cursors.closed_total")
 		}
 	}
 	s.cursorMu.Unlock()
 	if expired > 0 {
 		s.cursorCount.Add(-int64(expired))
 	}
+}
+
+func (s *Server) startCursorReaper() {
+	if s == nil || s.cursorIdleTimeout == 0 {
+		return
+	}
+	s.cursorReaperOnce.Do(func() {
+		done := s.cursorReaperDone
+		if done == nil {
+			done = make(chan struct{})
+			s.cursorReaperDone = done
+		}
+		go s.reapExpiredCursorsUntilDone(done)
+	})
+}
+
+func (s *Server) stopCursorReaper() {
+	if s == nil {
+		return
+	}
+	s.cursorReaperStopOnce.Do(func() {
+		if s.cursorReaperDone != nil {
+			close(s.cursorReaperDone)
+		}
+	})
 }
 
 func (s *Server) reapExpiredCursorsUntilDone(done <-chan struct{}) {
@@ -525,8 +551,8 @@ func (s *Server) killCursorsForOwner(owner uint64) {
 	if s == nil {
 		return
 	}
-	s.cursorMu.Lock()
 	closed := 0
+	s.cursorMu.Lock()
 	for id, cursor := range s.cursors {
 		if cursor.owner == owner {
 			delete(s.cursors, id)
@@ -536,6 +562,9 @@ func (s *Server) killCursorsForOwner(owner uint64) {
 	s.cursorMu.Unlock()
 	if closed > 0 {
 		s.cursorCount.Add(-int64(closed))
+	}
+	for i := 0; i < closed; i++ {
+		s.counters.inc("cursors.closed_total")
 	}
 }
 

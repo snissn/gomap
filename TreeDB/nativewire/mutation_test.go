@@ -579,6 +579,30 @@ func TestMutationBarrierDefaultAckPolicyHonored(t *testing.T) {
 	}
 }
 
+func TestMutationBarrierAckAPIs(t *testing.T) {
+	client, _, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if err := client.FlushCollectionWithAck(ctx, "users", AckFlushed); err != nil {
+		t.Fatalf("FlushCollectionWithAck flushed: %v", err)
+	}
+	if err := client.FlushAllWithAck(ctx, AckFlushed); err != nil {
+		t.Fatalf("FlushAllWithAck flushed: %v", err)
+	}
+	if err := client.CheckpointWithAck(ctx, AckSynced); err != nil {
+		t.Fatalf("CheckpointWithAck synced: %v", err)
+	}
+	if err := client.FlushCollectionWithAck(ctx, "users", AckSynced); !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
+		t.Fatalf("FlushCollectionWithAck synced err=%v want durability unavailable", err)
+	}
+}
+
 func TestMutationCatalogVersionCacheSurvivesSuccessfulDataMutation(t *testing.T) {
 	client, _, db := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -591,16 +615,19 @@ func TestMutationCatalogVersionCacheSurvivesSuccessfulDataMutation(t *testing.T)
 	}
 	version := catalogVersion(t, db)
 	client.catalogVersionPlusOne.Store(version + 1)
-	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
-		[][]byte{[]byte("u1")},
-		[][]byte{[]byte(`{"x":1}`)},
-		AckVisible,
-	); err != nil {
-		t.Fatalf("InsertBatch: %v", err)
+	deleted, err := client.DeleteBatch(ctx, "users", [][]byte{[]byte("missing")}, AckVisible)
+	if err != nil {
+		t.Fatalf("DeleteBatch missing: %v", err)
 	}
-	want := catalogVersion(t, db) + 1
-	if got := client.catalogVersionPlusOne.Load(); got != want {
-		t.Fatalf("catalogVersionPlusOne=%d want %d", got, want)
+	if deleted != 0 {
+		t.Fatalf("deleted=%d want 0", deleted)
+	}
+	after := catalogVersion(t, db)
+	if got := client.catalogVersionPlusOne.Load(); got != after+1 {
+		t.Fatalf("catalogVersionPlusOne=%d want %d", got, after+1)
+	}
+	if after != version {
+		t.Fatalf("missing delete changed catalog version from %d to %d", version, after)
 	}
 }
 
