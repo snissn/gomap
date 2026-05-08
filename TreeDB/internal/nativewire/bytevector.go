@@ -139,6 +139,9 @@ func DecodeByteVectorItemsInto(dst [][]byte, src []byte, limits Limits) ([][]byt
 
 	var out [][]byte
 	if count <= cap(dst) {
+		if count < len(dst) {
+			clear(dst[count:])
+		}
 		out = dst[:count]
 	} else {
 		out = make([][]byte, count)

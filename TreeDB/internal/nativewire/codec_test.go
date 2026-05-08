@@ -134,6 +134,32 @@ func TestSectionAndByteVectorRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDecodeByteVectorItemsIntoClearsReusedTail(t *testing.T) {
+	large := AppendByteVector(nil, []byte("a"), []byte("bb"), []byte("ccc"))
+	items, err := DecodeByteVectorItemsInto(make([][]byte, 0, 3), large, Limits{})
+	if err != nil {
+		t.Fatalf("DecodeByteVectorItemsInto large: %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("large len=%d want 3", len(items))
+	}
+
+	small := AppendByteVector(nil, []byte("z"))
+	items, err = DecodeByteVectorItemsInto(items, small, Limits{})
+	if err != nil {
+		t.Fatalf("DecodeByteVectorItemsInto small: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("small len=%d want 1", len(items))
+	}
+	backing := items[:cap(items)]
+	for i, item := range backing[1:] {
+		if item != nil {
+			t.Fatalf("reused tail entry %d retained %q", i+1, item)
+		}
+	}
+}
+
 func TestAppendSectionPreservesDstOnValidationError(t *testing.T) {
 	prefix := []byte("prefix")
 	got, err := AppendSection(prefix, Section{ID: SectionCollectionRef, Flags: 1 << 63})
