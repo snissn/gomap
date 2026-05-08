@@ -169,6 +169,21 @@ func TestNewInProcessClientMirrorsServerLimits(t *testing.T) {
 	}
 }
 
+func TestInProcessRoundTripRejectsOversizedRequestFrame(t *testing.T) {
+	maxFrameSize := uint64(iwire.FrameHeaderLenV1) + 128
+	server := NewServer(ServerOptions{Limits: iwire.Limits{MaxFrameSize: maxFrameSize}})
+	client, cleanup, err := NewInProcessClient(context.Background(), server)
+	if err != nil {
+		t.Fatalf("NewInProcessClient: %v", err)
+	}
+	defer func() { _ = cleanup() }()
+
+	_, _, err = client.roundTrip(context.Background(), iwire.FrameRequest, make([]byte, 129), iwire.FrameResponse)
+	if got := codeOf(err); got != iwire.ErrResourceExhausted {
+		t.Fatalf("roundTrip code=%d err=%v want %d", got, err, iwire.ErrResourceExhausted)
+	}
+}
+
 func TestServeUnixSocketAndDialContext(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("unix sockets are not available on windows")

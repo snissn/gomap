@@ -80,7 +80,10 @@ func writeFrameBuffered(w io.Writer, header iwire.Header, body []byte, dst []byt
 	var headerBuf [iwire.FrameHeaderLenV1]byte
 	frameHeader, err := iwire.AppendHeader(headerBuf[:0], header)
 	if err != nil {
-		return dst, err
+		return dst[:0], err
+	}
+	if len(body) > maxInt-len(frameHeader) {
+		return dst[:0], protocolError(iwire.ErrResourceExhausted, "frame length exceeds int capacity")
 	}
 	total := len(frameHeader) + len(body)
 	if total <= cap(dst) {
@@ -115,12 +118,16 @@ func appendCommandRequestBody(dst []byte, commandID iwire.CommandID, sections ..
 	}
 	total := iwire.SectionEncodedLen(headerSection)
 	for _, section := range sections {
-		total += iwire.SectionEncodedLen(section)
+		var err error
+		total, err = addRequestBodyLen(total, iwire.SectionEncodedLen(section))
+		if err != nil {
+			return nil, err
+		}
 	}
-	if cap(dst)-len(dst) < total {
-		next := make([]byte, len(dst), len(dst)+total)
-		copy(next, dst)
-		dst = next
+	var err error
+	dst, err = growRequestBody(dst, total)
+	if err != nil {
+		return nil, err
 	}
 	body, err := iwire.AppendSection(dst, iwire.Section{
 		ID:    headerSection.ID,
@@ -136,6 +143,25 @@ func appendCommandRequestBody(dst []byte, commandID iwire.CommandID, sections ..
 		}
 	}
 	return body, nil
+}
+
+func addRequestBodyLen(total, add int) (int, error) {
+	if add < 0 || add == maxInt || total > maxInt-add {
+		return 0, protocolError(iwire.ErrResourceExhausted, "request body length exceeds int capacity")
+	}
+	return total + add, nil
+}
+
+func growRequestBody(dst []byte, extra int) ([]byte, error) {
+	if extra < 0 || extra > maxInt-len(dst) {
+		return nil, protocolError(iwire.ErrResourceExhausted, "request body length exceeds int capacity")
+	}
+	if cap(dst)-len(dst) >= extra {
+		return dst, nil
+	}
+	next := make([]byte, len(dst), len(dst)+extra)
+	copy(next, dst)
+	return next, nil
 }
 
 func appendCommandHeaderSection(dst []byte, commandID iwire.CommandID) ([]byte, error) {
