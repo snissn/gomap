@@ -1651,7 +1651,87 @@ with new rows:
 - `treedb_columnstore_update_then_get`
 - `treedb_columnstore_count_star`
 
-### 12.5 Completeness Audit
+### 12.5 JSONBench Integration
+
+Add a TreeDB column-store lane to the external JSONBench TreeDB harness
+(`~/dev/snissn/JSONBench/treedb`) once the column-store scan API can express the
+five Bluesky analytics queries. This is a comparison benchmark, not the first
+correctness gate, and it must follow JSONBench rules.
+
+The comparison target is benchmark-shape compatibility with the ClickHouse JSON
+store setup in `clickhouse/ddl.sql` and `clickhouse/queries.sql`, not
+byte-for-byte ClickHouse storage compatibility. TreeDB should include a declared
+column-store schema mode that mirrors the ClickHouse-declared JSON paths:
+
+- `kind`;
+- `commit.operation`;
+- `commit.collection`;
+- `did`;
+- `time_us`;
+- the original JSON document, or a reconstructable equivalent, so the result can
+  be labeled as retaining JSON structure.
+
+Required harness changes:
+
+- extend `treedb/run_matrix.sh` and `treedb/cmd/jsonbench_treedb` with a
+  `columnstore` format or storage mode in addition to the existing `json` and
+  `template-v1` modes;
+- load the same NDJSON rows used by JSONBench at `1m`, `10m`, `100m`, and
+  optionally `1000m` scales;
+- run full-document row-store/template-v1 baselines and the column-store
+  fixed-schema mode from the same harness;
+- label the column-store schema, primary/sort order, secondary indexes, codec
+  profile, granule settings, durability profile, and query-cache policy in the
+  result JSON;
+- disable query result caching and document any block/mark cache warmup policy;
+- write one `result.json` per TreeDB cell and a machine-readable `report.json`
+  that can import local DuckDB and ClickHouse result directories.
+
+The column-store lane must implement the five canonical JSONBench queries:
+
+- `q1`: count by `commit.collection`;
+- `q2`: filtered count plus exact distinct `did` by collection for
+  `kind = commit` and `operation = create`;
+- `q3`: filtered hourly count for post, repost, and like collections using
+  `time_us`;
+- `q4`: first post timestamp per user;
+- `q5`: activity span per user.
+
+Required result fields:
+
+- system, engine/layout, scale, requested rows, loaded rows, and source dataset;
+- query attempts, best seconds, median seconds, rows scanned, result row count,
+  and deterministic result hash;
+- total bytes, data bytes, index bytes, bytes per row, file count, part count,
+  granule count, and retained JSON structure flag;
+- codec choices and compression stats for every declared column;
+- load time, checkpoint time, optional compaction time, and maintenance stats;
+- imported DuckDB and ClickHouse rows in the aggregate report when local result
+  directories are supplied.
+
+Correctness gates:
+
+- `DATA_DIR=./testdata/bluesky SUBSET_ROWS=6 TRIES=1 ./run_matrix.sh` continues
+  to pass as a smoke fixture;
+- `SCALES=1m DATA_DIR="$HOME/data/bluesky" TRIES=3 ./run_matrix.sh` writes
+  TreeDB column-store results for `q1` through `q5`;
+- column-store result hashes match the existing TreeDB row-store/template-v1
+  query implementations for every query and scale being compared;
+- imported local DuckDB and ClickHouse result rows produce the same ordered
+  answer sets on the `1m` fixture before performance numbers are interpreted.
+
+Performance gates:
+
+- no ClickHouse-relative product gate in the first column-store release;
+- each JSONBench query must report TreeDB row-store/template-v1 and TreeDB
+  column-store timings from the same run so the column-store delta is visible;
+- projected column-store queries that only need declared paths should beat the
+  TreeDB full-document row-store baseline on `1m` and `10m`;
+- storage reporting must distinguish retained JSON bytes from declared-column
+  bytes so projection-only results are not mistaken for a full JSON storage
+  comparison.
+
+### 12.6 Completeness Audit
 
 Every implementation PR should update a traceability checklist that connects
 design text to tests and gates. The checklist should answer:
@@ -1687,6 +1767,7 @@ Traceability matrix:
 | Collection durability | 2, 9.5 | M0.5, M1, M6 | row/column recovery tests, pointer-safety tests |
 | Writes, updates, WAL | 6.7, 9.1-9.5 | M0.5, M6 | recovery tests, update/read churn benchmarks |
 | Maintenance and GC | 11 | M6, M8 | snapshot compaction tests, reclaimed-byte gates |
+| JSONBench analytics | 12.5 | M0, M8 | JSONBench TreeDB lane, result parity, imported ClickHouse/DuckDB reports |
 
 ### Milestone 0: Baseline and Fixtures
 
@@ -1702,6 +1783,9 @@ Deliverables:
   - update-followed-by-read shape;
   - count-star shape;
 - add `cmd/columnstore_bench` skeleton with row-store/template-v1 baselines;
+- inventory the existing `~/dev/snissn/JSONBench/treedb` harness and define the
+  column-store result fields needed to compare with local ClickHouse/DuckDB
+  JSONBench runs;
 - add machine-readable result schema and guardrail checks.
 
 Tests:
@@ -1709,6 +1793,8 @@ Tests:
 - runner config parsing;
 - result schema validation;
 - guardrail failures for missing baseline rows.
+- JSONBench smoke fixture remains runnable through
+  `DATA_DIR=./testdata/bluesky SUBSET_ROWS=6 TRIES=1 ./run_matrix.sh`.
 
 Performance gates:
 
@@ -2014,6 +2100,7 @@ Deliverables:
 - profile defaults for durable/fast/wal_on_fast/bench;
 - persisted `format.json` extension for column-store format knobs;
 - canonical benchmark integration;
+- JSONBench TreeDB column-store lane in `~/dev/snissn/JSONBench/treedb`;
 - operational docs.
 
 Tests:
@@ -2021,7 +2108,10 @@ Tests:
 - profile normalization;
 - env override conflict checks;
 - format config load/apply;
-- canonical report guardrails.
+- canonical report guardrails;
+- JSONBench `q1` through `q5` result-hash parity against existing TreeDB
+  row-store/template-v1 query implementations;
+- JSONBench local report import for DuckDB and ClickHouse result directories.
 
 Gates:
 
@@ -2032,7 +2122,12 @@ Gates:
 - compacted bytes/doc <= 75 percent of template-v1 compacted bytes/doc on the
   typed benchmark fixture;
 - projected analytical scans >= 3x row-store scans;
-- high-entropy fixture compacted bytes/doc <= 1.10x row-store bytes/doc.
+- high-entropy fixture compacted bytes/doc <= 1.10x row-store bytes/doc;
+- JSONBench `1m` column-store run completes for `q1` through `q5`, writes
+  machine-readable `result.json` and `report.json`, and reports row-store and
+  column-store timings from the same run;
+- JSONBench projected column-store queries that only need declared paths beat
+  the TreeDB full-document row-store baseline on `1m` and `10m`.
 
 ## 14. Best Practices to Import from ClickHouse
 
@@ -2230,6 +2325,8 @@ This RFC is complete when a reviewer can answer:
 - how reusable fast filters and byte-haystack searchers apply to column-store
   and other collection layouts;
 - how fast counts are maintained without scanning data;
+- how the column-store plan is tested through the JSONBench Bluesky workload and
+  compared with local ClickHouse/DuckDB JSONBench result files;
 - how WAL/recovery ordering protects column-part pointers;
 - how reads, writes, updates, deletes, compaction, and GC work;
 - what tests are required;
