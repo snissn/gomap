@@ -1170,6 +1170,13 @@ func TestDecodeDeterministicEntryRejectsUnappliableTemplateRecords(t *testing.T)
 			code:   ErrMalformedFrame,
 		},
 		{
+			name:   "td1i_requires_embedded_template",
+			format: DocumentFormatTemplateV1,
+			record: record,
+			doc:    append(deterministicTemplateInputWithCount(0), deterministicTemplateStoredDocumentForRecord(record, []byte{deterministicTemplateV1KindNull})...),
+			code:   ErrInvalidCommand,
+		},
+		{
 			name:   "template_count_exceeds_limit",
 			format: DocumentFormatTemplateV1,
 			record: record,
