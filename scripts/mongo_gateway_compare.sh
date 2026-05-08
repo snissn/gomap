@@ -120,9 +120,9 @@ Options:
   --treedb-document-formats LIST
                         Space-separated TreeDB formats. Example: "json template-v1 bson".
   --treedb-client-mode MODE
-                        Single TreeDB client mode: driver, driver-find-raw, driver-command, driver-command-raw, driver-unack, direct, raw-wire-tcp, raw-wire-tcp-pipeline, or raw-wire.
+                        Single TreeDB client mode: driver, driver-find-raw, driver-command, driver-command-raw, driver-unack, direct, raw-wire-tcp, raw-wire-tcp-pipeline, raw-wire, native-wire-tcp, or native-wire-inproc.
   --treedb-client-modes LIST
-                        Space-separated TreeDB client modes. Example: "driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire".
+                        Space-separated TreeDB client modes. Example: "driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire native-wire-tcp native-wire-inproc".
   --treedb-maintenance MODE
                         TreeDB final maintenance: full, checkpoint, or none.
   --treedb-read-state STATE

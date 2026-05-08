@@ -84,6 +84,12 @@ raw-wire mode to estimate the gateway/server ceiling without the driver's
 per-document marshal and `_id` discovery overhead; use driver mode for
 user-visible Mongo compatibility throughput.
 
+`-client-mode native-wire-inproc` and `-client-mode native-wire-tcp` are
+TreeDB-only native protocol load paths. They use TreeDB collection IDs and
+stored document bytes over the native-wire server/client instead of Mongo OP_MSG,
+then keep setup and later read/update phases on the Mongo compatibility driver
+so they remain comparable with the existing benchmark sweep.
+
 When `-prebuild-documents` is enabled, the harness builds both structured BSON
 documents and raw BSON bytes before the measured workload. `driver-command` and
 `raw-wire` reuse the raw bytes during the load phase so their insert-call timing
@@ -211,7 +217,7 @@ beside the normal MongoDB Go driver `InsertMany` path:
 
 ```sh
 TREEDB_DOCUMENT_FORMATS="bson" \
-TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire" \
+TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire native-wire-tcp native-wire-inproc" \
 scripts/mongo_gateway_compare.sh
 ```
 
@@ -283,7 +289,7 @@ Useful overrides:
 
 - `DOCS_LIST="1000 10000 100000"`
 - `INDEXES_LIST="0 1 2"`
-- `TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire"`
+- `TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire native-wire-tcp native-wire-inproc"`
 - `MONGO_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack"`
 - `READS=50000`, `RANGE_READS=5000`, `UPDATES=5000`
 - `DELETES=1000`

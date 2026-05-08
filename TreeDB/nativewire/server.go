@@ -17,6 +17,7 @@ import (
 
 const (
 	defaultMaxInFlight            = 1024
+	defaultMaxConnections         = 1024
 	defaultMaxCollectionHandles   = 1024
 	defaultMaxOpenCursors         = 1024
 	defaultMaxCursorRetainedBytes = 64 << 20
@@ -29,6 +30,7 @@ const (
 type ServerOptions struct {
 	Limits                 iwire.Limits
 	MaxInFlight            int
+	MaxConnections         int
 	MaxCollectionHandles   int
 	MaxOpenCursors         int
 	MaxCursorRetainedBytes int
@@ -44,6 +46,7 @@ type ServerOptions struct {
 type Server struct {
 	limits                 iwire.Limits
 	maxInFlight            int
+	maxConnections         int
 	maxCollectionHandles   int
 	maxOpenCursors         int
 	maxCursorRetainedBytes int
@@ -58,6 +61,7 @@ type Server struct {
 	closed     atomic.Bool
 	connMu     sync.Mutex
 	conns      map[net.Conn]struct{}
+	listeners  map[net.Listener]struct{}
 	metadataMu sync.Mutex
 
 	inFlight   atomic.Int64
@@ -148,6 +152,10 @@ func NewServer(opts ServerOptions) *Server {
 	if maxInFlight <= 0 {
 		maxInFlight = defaultMaxInFlight
 	}
+	maxConnections := opts.MaxConnections
+	if maxConnections <= 0 {
+		maxConnections = defaultMaxConnections
+	}
 	maxCollectionHandles := opts.MaxCollectionHandles
 	if maxCollectionHandles <= 0 {
 		maxCollectionHandles = defaultMaxCollectionHandles
@@ -182,6 +190,7 @@ func NewServer(opts ServerOptions) *Server {
 	return &Server{
 		limits:                 limits,
 		maxInFlight:            maxInFlight,
+		maxConnections:         maxConnections,
 		maxCollectionHandles:   maxCollectionHandles,
 		maxOpenCursors:         maxOpenCursors,
 		maxCursorRetainedBytes: maxCursorRetainedBytes,
@@ -206,8 +215,16 @@ func (s *Server) Close() error {
 	for conn := range s.conns {
 		conns = append(conns, conn)
 	}
+	listeners := make([]net.Listener, 0, len(s.listeners))
+	for ln := range s.listeners {
+		listeners = append(listeners, ln)
+	}
 	s.conns = nil
+	s.listeners = nil
 	s.connMu.Unlock()
+	for _, ln := range listeners {
+		_ = ln.Close()
+	}
 	for _, conn := range conns {
 		_ = conn.Close()
 	}
@@ -302,6 +319,31 @@ func (s *Server) unregisterConn(conn net.Conn) {
 	delete(s.conns, conn)
 	s.connMu.Unlock()
 	s.counters.inc("connections.closed_total")
+}
+
+func (s *Server) registerListener(ln net.Listener) bool {
+	if s == nil || ln == nil || s.closed.Load() {
+		return false
+	}
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if s.closed.Load() {
+		return false
+	}
+	if s.listeners == nil {
+		s.listeners = make(map[net.Listener]struct{})
+	}
+	s.listeners[ln] = struct{}{}
+	return true
+}
+
+func (s *Server) unregisterListener(ln net.Listener) {
+	if s == nil || ln == nil {
+		return
+	}
+	s.connMu.Lock()
+	delete(s.listeners, ln)
+	s.connMu.Unlock()
 }
 
 func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState, header iwire.Header, body []byte) error {
