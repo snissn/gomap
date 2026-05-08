@@ -262,6 +262,26 @@ func TestDeterministicEntryRejectsBatchVectorArityMismatch(t *testing.T) {
 	}
 }
 
+func TestDeterministicEntryRejectsEmptyDocumentIDs(t *testing.T) {
+	registry := MustV1Registry()
+	sections := insertBatchDeterministicSections()
+	for i := range sections {
+		if sections[i].ID == SectionDocumentIDs {
+			sections[i].Bytes = AppendByteVector(nil, []byte("a"), nil)
+		}
+		if sections[i].ID == SectionDocuments {
+			sections[i].Bytes = AppendByteVector(nil, []byte("{}"), []byte("{}"))
+		}
+	}
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("empty document id err=%v code=%d", err, codeOf(err))
+	}
+}
+
 func registryWithInsertBatchAllowedFlags(flags uint64) *Registry {
 	schemas := v1CommandSchemas()
 	for i := range schemas {

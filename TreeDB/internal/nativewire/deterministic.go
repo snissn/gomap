@@ -154,7 +154,25 @@ func validateDeterministicSectionPayload(section Section) error {
 			return protocolError(ErrInvalidCommand, "unsupported document_format %d", format)
 		}
 	case SectionDocumentIDs, SectionDocuments, SectionTemplateRecords:
-		return validateByteVector(section.Bytes, Limits{})
+		if err := validateByteVector(section.Bytes, Limits{}); err != nil {
+			return err
+		}
+		if section.ID == SectionDocumentIDs {
+			count, off, err := readUvarint(section.Bytes)
+			if err != nil {
+				return err
+			}
+			for i := uint64(0); i < count; i++ {
+				length, n, err := readUvarint(section.Bytes[off:])
+				if err != nil {
+					return err
+				}
+				if length == 0 {
+					return protocolError(ErrInvalidCommand, "empty document id at index %d", i)
+				}
+				off += n
+			}
+		}
 	case SectionExpectedCatalogVersion, SectionReplacementMode:
 		_, n, err := readUvarint(section.Bytes)
 		if err != nil {
