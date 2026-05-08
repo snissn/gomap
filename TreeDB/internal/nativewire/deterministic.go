@@ -40,6 +40,9 @@ func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) 
 		return nil, err
 	}
 	sortSectionsByID(deterministic)
+	if err := validateDeterministicCommand(cmd.Header.ID, deterministic); err != nil {
+		return nil, err
+	}
 
 	dst = append(dst, DeterministicEntryMagic...)
 	dst = appendUvarint(dst, DeterministicEntryVersion)
@@ -94,6 +97,45 @@ func (cmd ValidatedCommand) deterministicSectionsInto(dst []Section) ([]Section,
 		out = append(out, Section{ID: section.ID, Bytes: section.Bytes})
 	}
 	return out, nil
+}
+
+func validateDeterministicCommand(commandID CommandID, deterministic []Section) error {
+	switch commandID {
+	case CommandInsertBatch, CommandReplaceBatch:
+		idCount, err := deterministicByteVectorCount(deterministic, SectionDocumentIDs)
+		if err != nil {
+			return err
+		}
+		docCount, err := deterministicByteVectorCount(deterministic, SectionDocuments)
+		if err != nil {
+			return err
+		}
+		if idCount != docCount {
+			return protocolError(ErrInvalidCommand, "document_ids length %d does not match documents length %d", idCount, docCount)
+		}
+	case CommandDeleteBatch:
+		if _, err := deterministicByteVectorCount(deterministic, SectionDocumentIDs); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func deterministicByteVectorCount(sections []Section, id SectionID) (int, error) {
+	for _, section := range sections {
+		if section.ID != id {
+			continue
+		}
+		count64, _, err := readUvarint(section.Bytes)
+		if err != nil {
+			return 0, err
+		}
+		if count64 > uint64(maxInt) {
+			return 0, protocolError(ErrResourceExhausted, "section %d byte-vector count exceeds int capacity", id)
+		}
+		return int(count64), nil
+	}
+	return 0, protocolError(ErrInvalidCommand, "missing deterministic section %d", id)
 }
 
 func validateDeterministicSectionPayload(section Section) error {

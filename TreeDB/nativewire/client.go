@@ -18,14 +18,15 @@ import (
 // response buffer. They remain valid until the next round trip on the same
 // client; callers that need to keep them longer must copy them.
 type Client struct {
-	conn        net.Conn
-	local       *localEndpoint
-	limits      iwire.Limits
-	nextReq     atomic.Uint64
-	mu          sync.Mutex
-	requestBody []byte
-	writeBody   []byte
-	readBody    []byte
+	conn                  net.Conn
+	local                 *localEndpoint
+	limits                iwire.Limits
+	nextReq               atomic.Uint64
+	catalogVersionPlusOne atomic.Uint64
+	mu                    sync.Mutex
+	requestBody           []byte
+	writeBody             []byte
+	readBody              []byte
 }
 
 func NewClient(conn net.Conn) *Client {
