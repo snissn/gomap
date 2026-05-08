@@ -218,16 +218,43 @@ func (c *Client) DeleteBatch(ctx context.Context, collection string, ids [][]byt
 }
 
 func (c *Client) FlushCollection(ctx context.Context, collection string) error {
-	_, err := c.commandSections(ctx, iwire.CommandFlushCollection, collectionNameRef(collection))
+	return c.FlushCollectionWithAck(ctx, collection, 0)
+}
+
+func (c *Client) FlushCollectionWithAck(ctx context.Context, collection string, ack AckPolicy) error {
+	if err := ensureCollectionName(collection); err != nil {
+		return err
+	}
+	req := []iwire.Section{collectionNameRef(collection)}
+	if ack != 0 {
+		req = append(req, ackSection(ack))
+	}
+	_, err := c.commandSections(ctx, iwire.CommandFlushCollection, req...)
 	return err
 }
 
 func (c *Client) FlushAll(ctx context.Context) error {
-	_, err := c.commandSections(ctx, iwire.CommandFlushAll)
+	return c.FlushAllWithAck(ctx, 0)
+}
+
+func (c *Client) FlushAllWithAck(ctx context.Context, ack AckPolicy) error {
+	var req []iwire.Section
+	if ack != 0 {
+		req = append(req, ackSection(ack))
+	}
+	_, err := c.commandSections(ctx, iwire.CommandFlushAll, req...)
 	return err
 }
 
 func (c *Client) Checkpoint(ctx context.Context) error {
-	_, err := c.commandSections(ctx, iwire.CommandCheckpoint)
+	return c.CheckpointWithAck(ctx, 0)
+}
+
+func (c *Client) CheckpointWithAck(ctx context.Context, ack AckPolicy) error {
+	var req []iwire.Section
+	if ack != 0 {
+		req = append(req, ackSection(ack))
+	}
+	_, err := c.commandSections(ctx, iwire.CommandCheckpoint, req...)
 	return err
 }

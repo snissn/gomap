@@ -2541,6 +2541,87 @@ func TestEnsureNativeWireBenchmarkCollectionRejectsExistingIndexDrift(t *testing
 	}
 }
 
+func TestEnsureNativeWireBenchmarkCollectionRejectsMismatchedBehaviorOptions(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{
+		Name: "bench.docs",
+		Options: collections.CollectionOptions{
+			DocumentFormat:          collections.DocumentFormatTemplateV1,
+			AllowArrayValuesInIndex: true,
+		},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	cfg := config{
+		Database:             "bench",
+		Collection:           "docs",
+		TreeDBDocumentFormat: collections.DocumentFormatTemplateV1,
+	}
+	if err := ensureNativeWireBenchmarkCollection(cfg, &benchTarget{collections: manager}); err == nil || !strings.Contains(err.Error(), "options drifted") {
+		t.Fatalf("ensureNativeWireBenchmarkCollection err=%v want option mismatch", err)
+	}
+}
+
+func TestSameNativeWireBenchmarkOptionsNormalizesIndexedDefaults(t *testing.T) {
+	got := collections.CollectionOptions{
+		DocumentFormat:                          collections.DocumentFormatDefault,
+		BufferedIndexedWrites:                   true,
+		BufferedIndexedWriteMaxDocuments:        collections.DefaultIndexedWriteMemtableAsyncFlushMaxDocuments,
+		BufferedIndexedWriteMaxRootRuns:         collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns,
+		BufferedIndexedAsyncFlush:               true,
+		BufferedIndexedAsyncFlushMaxQueuedUnits: collections.DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits,
+	}
+	want := collections.CollectionOptions{
+		DocumentFormat:            collections.DocumentFormatJSON,
+		BufferedIndexedAsyncFlush: true,
+	}
+	if !sameNativeWireBenchmarkOptions(got, want, true) {
+		t.Fatalf("sameNativeWireBenchmarkOptions returned false for normalized options got=%+v want=%+v", got, want)
+	}
+}
+
+func TestEqualNativeWireBenchmarkCollectionOptionsComparesBehaviorFields(t *testing.T) {
+	expected := collections.CollectionOptions{
+		DocumentFormat:               collections.DocumentFormatTemplateV1,
+		DisableIndexedWriteMemtables: true,
+		BufferedIndexedOverlayRoots:  true,
+	}
+	tests := []struct {
+		name   string
+		mutate func(*collections.CollectionOptions)
+	}{
+		{name: "allow arrays", mutate: func(opts *collections.CollectionOptions) { opts.AllowArrayValuesInIndex = true }},
+		{name: "disable memtables", mutate: func(opts *collections.CollectionOptions) { opts.DisableIndexedWriteMemtables = false }},
+		{name: "buffered writes", mutate: func(opts *collections.CollectionOptions) { opts.BufferedIndexedWrites = true }},
+		{name: "overlay roots", mutate: func(opts *collections.CollectionOptions) { opts.BufferedIndexedOverlayRoots = false }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			actual := expected
+			tc.mutate(&actual)
+			if equalNativeWireBenchmarkCollectionOptions(actual, expected) {
+				t.Fatalf("equalNativeWireBenchmarkCollectionOptions ignored %s drift", tc.name)
+			}
+		})
+	}
+}
+
+func TestBenchmarkBSONRawReturnsPrebuiltRawWithoutClone(t *testing.T) {
+	raw := mustTestBSON(t, bson.D{{Key: "_id", Value: "u1"}})
+	got, err := benchmarkBSONRaw(0, nil, []bson.Raw{raw})
+	if err != nil {
+		t.Fatalf("benchmarkBSONRaw: %v", err)
+	}
+	if len(got) == 0 || len(raw) == 0 || &got[0] != &raw[0] {
+		t.Fatalf("benchmarkBSONRaw cloned prebuilt raw")
+	}
+}
+
 func TestNativeWirePrebuildStoredDocumentsFeedsLoadBatch(t *testing.T) {
 	cfg := config{
 		Documents:             1,
