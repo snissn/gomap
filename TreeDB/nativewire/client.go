@@ -81,14 +81,21 @@ func (c *Client) roundTrip(ctx context.Context, typ iwire.FrameType, body []byte
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if ctx != nil && ctx.Err() != nil {
+		return iwire.Header{}, nil, ctx.Err()
+	}
 	requestID := c.nextReq.Add(1)
 	if deadline, ok := ctxDeadline(ctx); ok {
 		_ = c.conn.SetDeadline(deadline)
 		defer func() { _ = c.conn.SetDeadline(noDeadline) }()
 	}
-	stopCancel := c.closeOnContextCancel(ctx)
+	stopCancel := c.interruptDeadlineOnContextCancel(ctx)
 	defer stopCancel()
-	if err := writeFrame(c.conn, iwire.Header{Type: typ, RequestID: requestID}, body); err != nil {
+	if err := writeFrame(c.conn, iwire.Header{
+		Version:   iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0},
+		Type:      typ,
+		RequestID: requestID,
+	}, body); err != nil {
 		return iwire.Header{}, nil, errorOrContext(ctx, err)
 	}
 	header, response, err := readFrame(c.conn, c.limits)
@@ -110,7 +117,7 @@ func (c *Client) roundTrip(ctx context.Context, typ iwire.FrameType, body []byte
 	return header, response, nil
 }
 
-func (c *Client) closeOnContextCancel(ctx context.Context) func() {
+func (c *Client) interruptDeadlineOnContextCancel(ctx context.Context) func() {
 	if c == nil || c.conn == nil || ctx == nil || ctx.Done() == nil {
 		return func() {}
 	}
@@ -118,7 +125,7 @@ func (c *Client) closeOnContextCancel(ctx context.Context) func() {
 	go func() {
 		select {
 		case <-ctx.Done():
-			_ = c.conn.Close()
+			_ = c.conn.SetDeadline(time.Now())
 		case <-done:
 		}
 	}()

@@ -10,6 +10,8 @@ import (
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
+const maxStringMapEntries = 4096
+
 func readFrame(r io.Reader, limits iwire.Limits) (iwire.Header, []byte, error) {
 	var headerBuf [iwire.FrameHeaderLenV1]byte
 	if _, err := io.ReadFull(r, headerBuf[:]); err != nil {
@@ -33,6 +35,12 @@ func readFrame(r io.Reader, limits iwire.Limits) (iwire.Header, []byte, error) {
 }
 
 func writeFrame(w io.Writer, header iwire.Header, body []byte) error {
+	if header.Version.Major == 0 {
+		header.Version.Major = iwire.ProtocolMajorV1
+	}
+	if header.Version.Minor == 0 {
+		header.Version.Minor = iwire.ProtocolMinorV0
+	}
 	header.BodyLen = uint64(len(body))
 	var headerBuf [iwire.FrameHeaderLenV1]byte
 	frameHeader, err := iwire.AppendHeader(headerBuf[:0], header)
@@ -119,6 +127,9 @@ func decodeStringMap(src []byte) (map[string]string, error) {
 	}
 	if count > uint64(maxInt) {
 		return nil, protocolError(iwire.ErrResourceExhausted, "string map count exceeds int capacity")
+	}
+	if count > maxStringMapEntries {
+		return nil, protocolError(iwire.ErrResourceExhausted, "string map count %d exceeds limit %d", count, maxStringMapEntries)
 	}
 	out := make(map[string]string, int(count))
 	for i := uint64(0); i < count; i++ {
