@@ -6,9 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"slices"
-	"strings"
 	"sync"
 	"unicode/utf8"
+
+	"github.com/snissn/gomap/TreeDB/collections"
 )
 
 const (
@@ -94,7 +95,7 @@ func AppendDeterministicEntryWithLimits(dst []byte, cmd ValidatedCommand, limits
 	if cmd.Schema.RequiresCatalogGuard && deterministicSectionCount(deterministic, SectionExpectedCatalogVersion) == 0 {
 		return dst[:start], protocolError(ErrInvalidCommand, "missing deterministic catalog guard")
 	}
-	if err := validateDeterministicCommand(cmd.Header.ID, deterministic); err != nil {
+	if err := validateDeterministicCommand(cmd.Header.ID, deterministic, limits); err != nil {
 		return dst[:start], err
 	}
 	if len(deterministic) > limits.MaxSections {
@@ -108,6 +109,17 @@ func AppendDeterministicEntryWithLimits(dst []byte, cmd ValidatedCommand, limits
 			return dst[:start], protocolError(ErrResourceExhausted, "deterministic entry section %d length %d exceeds limit %d", section.ID, len(section.Bytes), limits.MaxSectionLen)
 		}
 	}
+	encodedLen, err := deterministicEntryEncodedLen(cmd.Header.ID, cmd.Header.Version, deterministicFlags, deterministic)
+	if err != nil {
+		return dst[:start], err
+	}
+	if encodedLen > limits.MaxFrameSize {
+		return dst[:start], protocolError(ErrResourceExhausted, "deterministic entry length %d exceeds limit %d", encodedLen, limits.MaxFrameSize)
+	}
+	if encodedLen > uint64(maxInt-start) {
+		return dst[:start], protocolError(ErrResourceExhausted, "deterministic entry length exceeds int capacity")
+	}
+	dst = growBytes(dst, int(encodedLen))
 
 	dst = append(dst, DeterministicEntryMagic...)
 	dst = appendUvarint(dst, DeterministicEntryVersion)
@@ -120,10 +132,35 @@ func AppendDeterministicEntryWithLimits(dst []byte, cmd ValidatedCommand, limits
 		dst = appendUvarint(dst, uint64(len(section.Bytes)))
 		dst = append(dst, section.Bytes...)
 	}
-	if uint64(len(dst)-start) > limits.MaxFrameSize {
-		return dst[:start], protocolError(ErrResourceExhausted, "deterministic entry length %d exceeds limit %d", len(dst)-start, limits.MaxFrameSize)
-	}
 	return dst, nil
+}
+
+func deterministicEntryEncodedLen(commandID CommandID, commandVersion, commandFlags uint64, sections []Section) (uint64, error) {
+	total := uint64(len(DeterministicEntryMagic))
+	add := func(n uint64) error {
+		if total > ^uint64(0)-n {
+			return protocolError(ErrResourceExhausted, "deterministic entry length overflows uint64")
+		}
+		total += n
+		return nil
+	}
+	for _, value := range []uint64{DeterministicEntryVersion, uint64(commandID), commandVersion, commandFlags, uint64(len(sections))} {
+		if err := add(uint64(uvarintLen(value))); err != nil {
+			return 0, err
+		}
+	}
+	for _, section := range sections {
+		if err := add(uint64(uvarintLen(uint64(section.ID)))); err != nil {
+			return 0, err
+		}
+		if err := add(uint64(uvarintLen(uint64(len(section.Bytes))))); err != nil {
+			return 0, err
+		}
+		if err := add(uint64(len(section.Bytes))); err != nil {
+			return 0, err
+		}
+	}
+	return total, nil
 }
 
 // DeterministicEntryDigest returns the SHA-256 digest of canonical deterministic entry bytes.
@@ -248,10 +285,10 @@ func DecodeDeterministicEntryIntoWithRegistry(src []byte, limits Limits, scratch
 	if off != len(src) {
 		return fail(protocolError(ErrMalformedFrame, "deterministic entry has %d trailing bytes", len(src)-off))
 	}
-	if _, err := validateDecodedDeterministicEntry(registry, CommandID(commandID), commandVersion, sections); err != nil {
+	if err := validateDeterministicSectionPayloads(sections, limits); err != nil {
 		return fail(err)
 	}
-	if err := validateDeterministicSectionPayloads(sections, limits); err != nil {
+	if _, err := validateDecodedDeterministicEntry(registry, CommandID(commandID), commandVersion, sections, limits); err != nil {
 		return fail(err)
 	}
 	if scratch != nil {
@@ -282,8 +319,11 @@ func deterministicEntrySectionsBuffer(count int, scratch *DeterministicEntryScra
 	if cap(scratch.Sections) < count {
 		return make([]Section, count), false
 	}
+	previousUsed := len(scratch.Sections)
 	backing := scratch.Sections[:cap(scratch.Sections)]
-	clear(backing[count:])
+	if previousUsed > count {
+		clear(backing[count:previousUsed])
+	}
 	return backing[:count], true
 }
 
@@ -296,7 +336,7 @@ func clearDeterministicEntryScratch(sections []Section, scratch *DeterministicEn
 		scratch.Sections = sections[:0]
 		return
 	}
-	clear(scratch.Sections[:cap(scratch.Sections)])
+	clear(scratch.Sections)
 	scratch.Sections = scratch.Sections[:0]
 }
 
@@ -345,7 +385,7 @@ func (cmd ValidatedCommand) deterministicSectionsInto(dst []Section, limits Limi
 	return out, nil
 }
 
-func validateDeterministicCommand(commandID CommandID, deterministic []Section) error {
+func validateDeterministicCommand(commandID CommandID, deterministic []Section, limits Limits) error {
 	switch commandID {
 	case CommandInsertBatch, CommandReplaceBatch:
 		idCount, err := deterministicByteVectorCount(deterministic, SectionDocumentIDs)
@@ -371,7 +411,7 @@ func validateDeterministicCommand(commandID CommandID, deterministic []Section) 
 		if !ok {
 			return protocolError(ErrInvalidCommand, "missing deterministic section %d", SectionCollectionRef)
 		}
-		local, err := validateDeterministicCollectionRef(raw, Limits{})
+		local, err := validateDeterministicCollectionRef(raw, limits)
 		if err != nil {
 			return err
 		}
@@ -430,7 +470,7 @@ func deterministicSectionCount(sections []Section, id SectionID) int {
 	return count
 }
 
-func validateDecodedDeterministicEntry(registry *Registry, commandID CommandID, commandVersion uint64, sections []Section) (*CommandSchema, error) {
+func validateDecodedDeterministicEntry(registry *Registry, commandID CommandID, commandVersion uint64, sections []Section, limits Limits) (*CommandSchema, error) {
 	if registry == nil {
 		registry = deterministicRegistry()
 	}
@@ -464,7 +504,7 @@ func validateDecodedDeterministicEntry(registry *Registry, commandID CommandID, 
 			return nil, protocolError(ErrInvalidCommand, "missing deterministic section %d", rule.ID)
 		}
 	}
-	if err := validateDeterministicCommand(commandID, sections); err != nil {
+	if err := validateDeterministicCommand(commandID, sections, limits); err != nil {
 		return nil, err
 	}
 	return schema, nil
@@ -502,7 +542,7 @@ func validateDeterministicTemplateRecords(sections []Section) error {
 func validateDeterministicTemplateRecordVector(raw []byte) error {
 	return walkDeterministicByteVector(raw, "template_records", func(i int, record []byte) error {
 		if err := validateDeterministicTemplateRecord(record); err != nil {
-			return protocolError(ErrInvalidCommand, "template_records[%d]: %v", i, err)
+			return deterministicContextError(err, ErrInvalidCommand, "template_records[%d]", i)
 		}
 		return nil
 	})
@@ -511,10 +551,22 @@ func validateDeterministicTemplateRecordVector(raw []byte) error {
 func validateDeterministicTemplateDocuments(raw []byte) error {
 	return walkDeterministicByteVector(raw, "documents", func(i int, doc []byte) error {
 		if err := validateDeterministicTemplateDocument(doc); err != nil {
-			return protocolError(ErrInvalidCommand, "template-v1 document %d: %v", i, err)
+			return deterministicContextError(err, ErrInvalidCommand, "template-v1 document %d", i)
 		}
 		return nil
 	})
+}
+
+func deterministicContextError(err error, fallback ErrorCode, format string, args ...any) error {
+	if err == nil {
+		return nil
+	}
+	code := fallback
+	if wrappedCode, ok := ErrorCodeOf(err); ok {
+		code = wrappedCode
+	}
+	args = append(args, err)
+	return protocolError(code, format+": %v", args...)
 }
 
 func walkDeterministicByteVector(raw []byte, name string, fn func(int, []byte) error) error {
@@ -698,16 +750,23 @@ func validateDeterministicSectionPayload(section Section, limits Limits) error {
 		if n != len(section.Bytes) {
 			return protocolError(ErrMalformedFrame, "document_format has %d trailing bytes", len(section.Bytes)-n)
 		}
-		switch DocumentFormat(format) {
-		case DocumentFormatDefault, DocumentFormatJSON, DocumentFormatBSON, DocumentFormatTemplateV1:
-		default:
-			return protocolError(ErrInvalidCommand, "unsupported document_format %d", format)
-		}
+		return validateDeterministicDocumentFormatEnum(format)
 	case SectionDocumentIDs, SectionDocuments, SectionTemplateRecords:
 		if section.ID == SectionDocumentIDs {
 			return validateDeterministicDocumentIDs(section.Bytes, limits)
 		}
 		return validateByteVector(section.Bytes, limits)
+	case SectionAckPolicy:
+		policy, n, err := readUvarint(section.Bytes)
+		if err != nil {
+			return err
+		}
+		if n != len(section.Bytes) {
+			return protocolError(ErrMalformedFrame, "section %d has %d trailing bytes", section.ID, len(section.Bytes)-n)
+		}
+		if err := validateDeterministicAckPolicyEnum(policy); err != nil {
+			return err
+		}
 	case SectionCollectionMeta:
 		if err := validateDeterministicOpaquePayload("collection_meta", section.Bytes, limits); err != nil {
 			return err
@@ -864,23 +923,63 @@ func validateDeterministicNameValue(field string, raw []byte, limits Limits) err
 		return protocolError(ErrResourceExhausted, "%s length %d exceeds limit %d", field, len(raw), limits.MaxDeterministicNameBytes)
 	}
 	name := string(raw)
-	if strings.ContainsAny(name, "\x00/:") || strings.TrimSpace(name) != name || !utf8.ValidString(name) {
+	if !utf8.ValidString(name) {
 		return protocolError(ErrInvalidCommand, "invalid %s", field)
+	}
+	switch field {
+	case "collection name":
+		if err := collections.ValidateCollectionName(name); err != nil {
+			return protocolError(ErrInvalidCommand, "%v", err)
+		}
+	default:
+		if err := collections.ValidateIndexName(name); err != nil {
+			return protocolError(ErrInvalidCommand, "%v", err)
+		}
 	}
 	return nil
 }
 
 func validateDeterministicIndexPath(path string, field string) error {
-	if len(path) == 0 {
-		return protocolError(ErrInvalidCommand, "%s cannot be empty", field)
-	}
-	if strings.Contains(path, "\x00") {
-		return protocolError(ErrInvalidCommand, "%s cannot contain NUL", field)
-	}
-	if strings.HasPrefix(path, ".") || strings.HasSuffix(path, ".") || strings.Contains(path, "..") {
-		return protocolError(ErrInvalidCommand, "%s cannot contain empty segments", field)
+	if err := collections.ValidateIndexPath(path); err != nil {
+		return protocolError(ErrInvalidCommand, "%v", err)
 	}
 	return nil
+}
+
+func validateDeterministicDocumentFormatEnum(value uint64) error {
+	switch DocumentFormat(value) {
+	case DocumentFormatDefault, DocumentFormatJSON, DocumentFormatBSON, DocumentFormatTemplateV1:
+		return nil
+	default:
+		return protocolError(ErrInvalidCommand, "unsupported document_format enum %d", value)
+	}
+}
+
+func validateDeterministicRootStorageEnum(value uint64) error {
+	switch value {
+	case 0, 1, 2:
+		return nil
+	default:
+		return protocolError(ErrInvalidCommand, "unsupported root_storage enum %d", value)
+	}
+}
+
+func validateDeterministicIndexValueTypeEnum(value uint64) error {
+	switch value {
+	case 1, 2, 3, 4:
+		return nil
+	default:
+		return protocolError(ErrInvalidCommand, "unsupported index_value_type enum %d", value)
+	}
+}
+
+func validateDeterministicAckPolicyEnum(value uint64) error {
+	switch AckPolicy(value) {
+	case 0, AckVisible, AckFlushed, AckSynced, AckRaftCommitted:
+		return nil
+	default:
+		return protocolError(ErrInvalidCommand, "unsupported ack_policy enum %d", value)
+	}
 }
 
 func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
@@ -895,21 +994,26 @@ func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
 	if err := readDeterministicNameField(raw, &off, "collection name", limits); err != nil {
 		return err
 	}
-	format, err := readDeterministicUvarintField(raw, &off, "document_format")
+	documentFormat, err := readDeterministicUvarintField(raw, &off, "document_format")
 	if err != nil {
 		return err
 	}
-	if err := validateDeterministicDocumentFormat(format); err != nil {
+	if err := validateDeterministicDocumentFormatEnum(documentFormat); err != nil {
 		return err
 	}
-	for _, field := range []string{"data_root_storage", "index_state_storage"} {
-		value, err := readDeterministicUvarintField(raw, &off, field)
-		if err != nil {
-			return err
-		}
-		if err := validateDeterministicRootStorage(field, value); err != nil {
-			return err
-		}
+	dataRootStorage, err := readDeterministicUvarintField(raw, &off, "data_root_storage")
+	if err != nil {
+		return err
+	}
+	if err := validateDeterministicRootStorageEnum(dataRootStorage); err != nil {
+		return err
+	}
+	indexStateStorage, err := readDeterministicUvarintField(raw, &off, "index_state_storage")
+	if err != nil {
+		return err
+	}
+	if err := validateDeterministicRootStorageEnum(indexStateStorage); err != nil {
+		return err
 	}
 	for _, field := range []string{"allow_array_values_in_index", "disable_indexed_write_memtables", "buffered_indexed_writes"} {
 		if err := readDeterministicBoolField(raw, &off, field); err != nil {
@@ -1054,7 +1158,7 @@ func validateDeterministicIndexDefinitionAt(raw []byte, off int, withVersion boo
 	if err != nil {
 		return 0, err
 	}
-	if err := validateDeterministicIndexValueType(valueType); err != nil {
+	if err := validateDeterministicIndexValueTypeEnum(valueType); err != nil {
 		return 0, err
 	}
 	if err := readDeterministicBoolField(raw, &off, "unique"); err != nil {
@@ -1067,7 +1171,7 @@ func validateDeterministicIndexDefinitionAt(raw []byte, off int, withVersion boo
 	if err != nil {
 		return 0, err
 	}
-	if err := validateDeterministicRootStorage("index storage policy", storagePolicy); err != nil {
+	if err := validateDeterministicRootStorageEnum(storagePolicy); err != nil {
 		return 0, err
 	}
 	return off, nil

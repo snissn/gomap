@@ -407,15 +407,24 @@ func appendStringInt(dst []byte, key string, value int) []byte {
 	return append(dst, valueBytes...)
 }
 
-func responseCount(sections []iwire.Section, key string) (int, error) {
+func (s *Server) ackMeta(policy AckPolicy) iwire.Section {
+	catalogVersion, hasCatalogVersion := s.mutationCatalogVersion()
+	return ackMetaCountsVersion(policy, catalogVersion, hasCatalogVersion)
+}
+
+func responseMetaMap(sections []iwire.Section) (map[string]string, error) {
 	raw, ok, err := singletonSection(sections, iwire.SectionResponseMeta)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	if !ok {
-		return 0, protocolError(iwire.ErrMalformedFrame, "missing response_meta")
+		return nil, protocolError(iwire.ErrMalformedFrame, "missing response_meta")
 	}
-	values, err := decodeStringMap(raw)
+	return decodeStringMap(raw)
+}
+
+func responseCount(sections []iwire.Section, key string) (int, error) {
+	values, err := responseMetaMap(sections)
 	if err != nil {
 		return 0, err
 	}
@@ -428,6 +437,22 @@ func responseCount(sections []iwire.Section, key string) (int, error) {
 		return 0, protocolError(iwire.ErrMalformedFrame, "response_meta %s is not an integer", key)
 	}
 	return n, nil
+}
+
+func responseCatalogVersion(sections []iwire.Section) (uint64, bool, error) {
+	values, err := responseMetaMap(sections)
+	if err != nil {
+		return 0, false, err
+	}
+	value, ok := values["catalog_version"]
+	if !ok {
+		return 0, false, nil
+	}
+	version, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return 0, true, protocolError(iwire.ErrMalformedFrame, "response_meta catalog_version is not a uint64")
+	}
+	return version, true, nil
 }
 
 func updateBatchItems(ids, docs [][]byte) []collections.UpdateBatchItem {
