@@ -4099,12 +4099,16 @@ func validateNativeWireBenchmarkCollection(actual, expected collections.Collecti
 
 func equalNativeWireBenchmarkCollectionOptions(actual, expected collections.CollectionOptions) bool {
 	return actual.DocumentFormat == expected.DocumentFormat &&
+		actual.AllowArrayValuesInIndex == expected.AllowArrayValuesInIndex &&
 		actual.DataRootStoragePolicy == expected.DataRootStoragePolicy &&
 		actual.IndexStateStoragePolicy == expected.IndexStateStoragePolicy &&
+		actual.DisableIndexedWriteMemtables == expected.DisableIndexedWriteMemtables &&
+		actual.BufferedIndexedWrites == expected.BufferedIndexedWrites &&
 		actual.BufferedIndexedWriteMaxDocuments == expected.BufferedIndexedWriteMaxDocuments &&
 		actual.BufferedIndexedWriteMaxBytes == expected.BufferedIndexedWriteMaxBytes &&
 		actual.BufferedIndexedWriteMaxRootRuns == expected.BufferedIndexedWriteMaxRootRuns &&
 		actual.BufferedIndexedAsyncFlush == expected.BufferedIndexedAsyncFlush &&
+		actual.BufferedIndexedOverlayRoots == expected.BufferedIndexedOverlayRoots &&
 		actual.BufferedIndexedAsyncFlushMaxQueuedUnits == expected.BufferedIndexedAsyncFlushMaxQueuedUnits
 }
 
@@ -4169,15 +4173,46 @@ func normalizeNativeWireBenchmarkCollectionMeta(meta collections.CollectionMeta)
 	return meta
 }
 
-func sameNativeWireBenchmarkOptions(got, want collections.CollectionOptions) bool {
-	return got.DocumentFormat == want.DocumentFormat &&
-		got.DataRootStoragePolicy == want.DataRootStoragePolicy &&
-		got.IndexStateStoragePolicy == want.IndexStateStoragePolicy &&
-		got.BufferedIndexedWriteMaxDocuments == want.BufferedIndexedWriteMaxDocuments &&
-		got.BufferedIndexedWriteMaxBytes == want.BufferedIndexedWriteMaxBytes &&
-		got.BufferedIndexedWriteMaxRootRuns == want.BufferedIndexedWriteMaxRootRuns &&
-		got.BufferedIndexedAsyncFlush == want.BufferedIndexedAsyncFlush &&
-		got.BufferedIndexedAsyncFlushMaxQueuedUnits == want.BufferedIndexedAsyncFlushMaxQueuedUnits
+func sameNativeWireBenchmarkOptions(got, want collections.CollectionOptions, indexed bool) bool {
+	return normalizeNativeWireBenchmarkOptions(got, indexed) == normalizeNativeWireBenchmarkOptions(want, indexed)
+}
+
+func normalizeNativeWireBenchmarkOptions(opts collections.CollectionOptions, indexed bool) collections.CollectionOptions {
+	if opts.DocumentFormat == collections.DocumentFormatJSON {
+		opts.DocumentFormat = collections.DocumentFormatDefault
+	}
+	if opts.DisableIndexedWriteMemtables {
+		opts.BufferedIndexedWrites = false
+		opts.BufferedIndexedWriteMaxDocuments = 0
+		opts.BufferedIndexedWriteMaxBytes = 0
+		opts.BufferedIndexedWriteMaxRootRuns = 0
+		opts.BufferedIndexedAsyncFlush = false
+		opts.BufferedIndexedOverlayRoots = false
+		opts.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
+		return opts
+	}
+	if !indexed {
+		opts.BufferedIndexedWrites = false
+		return opts
+	}
+	opts.BufferedIndexedWrites = true
+	defaultMaxDocuments := collections.DefaultIndexedWriteMemtableMaxDocuments
+	defaultMaxRootRuns := collections.DefaultIndexedWriteMemtableMaxRootRuns
+	if opts.BufferedIndexedAsyncFlush {
+		defaultMaxDocuments = collections.DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
+		defaultMaxRootRuns = collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns
+	}
+	useNativeDocumentDefault := opts.BufferedIndexedWriteMaxDocuments == 0
+	if useNativeDocumentDefault {
+		opts.BufferedIndexedWriteMaxDocuments = defaultMaxDocuments
+	}
+	if useNativeDocumentDefault && opts.BufferedIndexedWriteMaxBytes == 0 && opts.BufferedIndexedWriteMaxRootRuns == 0 {
+		opts.BufferedIndexedWriteMaxRootRuns = defaultMaxRootRuns
+	}
+	if opts.BufferedIndexedAsyncFlush && opts.BufferedIndexedAsyncFlushMaxQueuedUnits == 0 {
+		opts.BufferedIndexedAsyncFlushMaxQueuedUnits = collections.DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits
+	}
+	return opts
 }
 
 func nativeWireInsertBatchWithRetry(ctx context.Context, client *nativewire.Client, collection string, format collections.DocumentFormat, ids, docs [][]byte) error {
@@ -4271,7 +4306,7 @@ func nativeWireStoredDocument(format collections.DocumentFormat, i int, prebuilt
 
 func benchmarkBSONRaw(i int, prebuilt []bson.D, prebuiltRaw []bson.Raw) (bson.Raw, error) {
 	if prebuiltRaw != nil {
-		return bson.Raw(append([]byte(nil), prebuiltRaw[i]...)), nil
+		return prebuiltRaw[i], nil
 	}
 	var doc bson.D
 	if prebuilt != nil {
