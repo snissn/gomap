@@ -23,6 +23,7 @@ const (
 	deterministicCollectionRefTagName   = 1
 	deterministicCollectionRefTagHandle = 2
 	deterministicReplacementExisting    = 1
+	deterministicTemplateV1RecordMagic  = "TD1T"
 	minDeterministicIndexDefinitionLen  = 6
 	maxDeterministicCollectionIndexes   = 1 << 16
 )
@@ -341,6 +342,9 @@ func validateDeterministicCommand(commandID CommandID, deterministic []Section) 
 		if idCount != docCount {
 			return protocolError(ErrInvalidCommand, "document_ids length %d does not match documents length %d", idCount, docCount)
 		}
+		if err := validateDeterministicTemplateRecords(deterministic); err != nil {
+			return err
+		}
 	case CommandDeleteBatch:
 		if _, err := deterministicByteVectorCount(deterministic, SectionDocumentIDs); err != nil {
 			return err
@@ -430,6 +434,133 @@ func validateDecodedDeterministicEntry(registry *Registry, commandID CommandID, 
 	return schema, nil
 }
 
+func validateDeterministicTemplateRecords(sections []Section) error {
+	raw, ok := deterministicSectionPayload(sections, SectionTemplateRecords)
+	if !ok {
+		return nil
+	}
+	formatRaw, ok := deterministicSectionPayload(sections, SectionDocumentFormat)
+	if !ok {
+		return protocolError(ErrInvalidCommand, "missing deterministic section %d", SectionDocumentFormat)
+	}
+	format, n, err := readUvarint(formatRaw)
+	if err != nil {
+		return err
+	}
+	if n != len(formatRaw) {
+		return protocolError(ErrMalformedFrame, "document_format has %d trailing bytes", len(formatRaw)-n)
+	}
+	if DocumentFormat(format) != DocumentFormatTemplateV1 {
+		return protocolError(ErrInvalidCommand, "template_records require template-v1 document format")
+	}
+	return validateDeterministicTemplateRecordVector(raw)
+}
+
+func validateDeterministicTemplateRecordVector(raw []byte) error {
+	count64, lengthsOff, err := readUvarint(raw)
+	if err != nil {
+		return err
+	}
+	if count64 > uint64(maxInt) {
+		return protocolError(ErrResourceExhausted, "template_records count exceeds int capacity")
+	}
+	count := int(count64)
+	lengthsPos := lengthsOff
+	payloadLen := 0
+	for i := 0; i < count; i++ {
+		length64, n, err := readUvarint(raw[lengthsPos:])
+		if err != nil {
+			return err
+		}
+		if length64 > uint64(maxInt) || int(length64) > maxInt-payloadLen {
+			return protocolError(ErrResourceExhausted, "template_records payload length exceeds int capacity")
+		}
+		payloadLen += int(length64)
+		lengthsPos += n
+	}
+	if payloadLen != len(raw)-lengthsPos {
+		return protocolError(ErrMalformedFrame, "template_records payload length %d does not match declared lengths %d", len(raw)-lengthsPos, payloadLen)
+	}
+	payloadPos := lengthsPos
+	lengthsPos = lengthsOff
+	for i := 0; i < count; i++ {
+		length64, n, err := readUvarint(raw[lengthsPos:])
+		if err != nil {
+			return err
+		}
+		lengthsPos += n
+		length := int(length64)
+		record := raw[payloadPos : payloadPos+length]
+		if err := validateDeterministicTemplateRecord(record); err != nil {
+			return protocolError(ErrInvalidCommand, "template_records[%d]: %v", i, err)
+		}
+		payloadPos += length
+	}
+	return nil
+}
+
+func validateDeterministicTemplateRecord(raw []byte) error {
+	pos := 0
+	if !consumeDeterministicTemplateMagic(raw, &pos, deterministicTemplateV1RecordMagic) {
+		return protocolError(ErrMalformedFrame, "malformed template-v1 template record")
+	}
+	fieldCount, err := readDeterministicTemplateUvarint(raw, &pos, "template field count")
+	if err != nil {
+		return err
+	}
+	if fieldCount > uint64(len(raw)) {
+		return protocolError(ErrMalformedFrame, "malformed template-v1 field count")
+	}
+	var previous []byte
+	for i := uint64(0); i < fieldCount; i++ {
+		fieldLen, err := readDeterministicTemplateUvarint(raw, &pos, "template field length")
+		if err != nil {
+			return err
+		}
+		if fieldLen > uint64(len(raw)-pos) {
+			return protocolError(ErrMalformedFrame, "malformed template-v1 field length")
+		}
+		field := raw[pos : pos+int(fieldLen)]
+		pos += int(fieldLen)
+		if len(field) == 0 || bytes.IndexAny(field, "\x00.") >= 0 {
+			return protocolError(ErrInvalidCommand, "invalid template-v1 field %q", field)
+		}
+		if !utf8.Valid(field) {
+			return protocolError(ErrInvalidCommand, "invalid template-v1 field %q", field)
+		}
+		if i > 0 && bytes.Compare(previous, field) >= 0 {
+			return protocolError(ErrInvalidCommand, "template-v1 fields are not strictly sorted")
+		}
+		previous = field
+	}
+	if pos != len(raw) {
+		return protocolError(ErrMalformedFrame, "trailing template-v1 template bytes")
+	}
+	return nil
+}
+
+func consumeDeterministicTemplateMagic(raw []byte, pos *int, magic string) bool {
+	if pos == nil || *pos < 0 || len(raw)-*pos < len(magic) {
+		return false
+	}
+	if string(raw[*pos:*pos+len(magic)]) != magic {
+		return false
+	}
+	*pos += len(magic)
+	return true
+}
+
+func readDeterministicTemplateUvarint(raw []byte, pos *int, field string) (uint64, error) {
+	if pos == nil || *pos < 0 || *pos > len(raw) {
+		return 0, protocolError(ErrMalformedFrame, "invalid %s offset", field)
+	}
+	value, n, err := readUvarint(raw[*pos:])
+	if err != nil {
+		return 0, err
+	}
+	*pos += n
+	return value, nil
+}
 func validateDeterministicSectionPayload(section Section, limits Limits) error {
 	switch section.ID {
 	case SectionIdempotencyKey:

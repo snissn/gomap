@@ -643,7 +643,7 @@ func nativewireBenchmarkCases() []nativewireBenchmarkCase {
 	replaceDocs := AppendByteVector(nil, makeBenchmarkItems("rep_doc", 64, 256)...)
 	deleteIDs := AppendByteVector(nil, makeBenchmarkItems("del_id", 128, 16)...)
 	getIDs := AppendByteVector(nil, makeBenchmarkItems("get_id", 128, 16)...)
-	templateRecords := AppendByteVector(nil, []byte("template:orders:v1"))
+	templateRecords := AppendByteVector(nil, deterministicTemplateRecord("active", "age", "city", "email"))
 	indexName := benchmarkString("city")
 	indexValue := benchmarkScalarString("hnl")
 	indexLower := benchmarkIndexBound("h", true, false)
