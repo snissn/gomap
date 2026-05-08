@@ -24,6 +24,7 @@ const (
 	deterministicCollectionRefTagHandle = 2
 	deterministicReplacementExisting    = 1
 	minDeterministicIndexDefinitionLen  = 6
+	maxDeterministicCollectionIndexes   = 1 << 16
 )
 
 var (
@@ -637,8 +638,19 @@ func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
 	if err := readDeterministicNameField(raw, &off, "collection name", limits); err != nil {
 		return err
 	}
-	for _, field := range []string{"document_format", "data_root_storage", "index_state_storage"} {
-		if _, err := readDeterministicUvarintField(raw, &off, field); err != nil {
+	format, err := readDeterministicUvarintField(raw, &off, "document_format")
+	if err != nil {
+		return err
+	}
+	if err := validateDeterministicDocumentFormat(format); err != nil {
+		return err
+	}
+	for _, field := range []string{"data_root_storage", "index_state_storage"} {
+		value, err := readDeterministicUvarintField(raw, &off, field)
+		if err != nil {
+			return err
+		}
+		if err := validateDeterministicRootStorage(field, value); err != nil {
 			return err
 		}
 	}
@@ -647,17 +659,37 @@ func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
 			return err
 		}
 	}
-	for _, field := range []string{"buffered_indexed_write_max_documents", "buffered_indexed_write_max_bytes", "buffered_indexed_write_max_root_runs"} {
-		if _, err := readDeterministicVarintField(raw, &off, field); err != nil {
-			return err
-		}
+	maxDocs, err := readDeterministicVarintField(raw, &off, "buffered_indexed_write_max_documents")
+	if err != nil {
+		return err
+	}
+	if err := validateDeterministicNonNegativeIntCapacity("buffered_indexed_write_max_documents", maxDocs); err != nil {
+		return err
+	}
+	maxBytes, err := readDeterministicVarintField(raw, &off, "buffered_indexed_write_max_bytes")
+	if err != nil {
+		return err
+	}
+	if err := validateDeterministicNonNegativeInt64("buffered_indexed_write_max_bytes", maxBytes); err != nil {
+		return err
+	}
+	maxRootRuns, err := readDeterministicVarintField(raw, &off, "buffered_indexed_write_max_root_runs")
+	if err != nil {
+		return err
+	}
+	if err := validateDeterministicNonNegativeIntCapacity("buffered_indexed_write_max_root_runs", maxRootRuns); err != nil {
+		return err
 	}
 	for _, field := range []string{"buffered_indexed_async_flush", "buffered_indexed_overlay_roots"} {
 		if err := readDeterministicBoolField(raw, &off, field); err != nil {
 			return err
 		}
 	}
-	if _, err := readDeterministicVarintField(raw, &off, "buffered_indexed_async_flush_max_queued_units"); err != nil {
+	maxQueued, err := readDeterministicVarintField(raw, &off, "buffered_indexed_async_flush_max_queued_units")
+	if err != nil {
+		return err
+	}
+	if err := validateDeterministicNonNegativeIntCapacity("buffered_indexed_async_flush_max_queued_units", maxQueued); err != nil {
 		return err
 	}
 	indexCount, err := readDeterministicUvarintField(raw, &off, "index_count")
@@ -666,6 +698,9 @@ func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
 	}
 	if indexCount > uint64(maxInt) {
 		return protocolError(ErrResourceExhausted, "index count exceeds int capacity")
+	}
+	if indexCount > maxDeterministicCollectionIndexes {
+		return protocolError(ErrResourceExhausted, "index count %d exceeds limit %d", indexCount, maxDeterministicCollectionIndexes)
 	}
 	if indexCount > uint64((len(raw)-off)/minDeterministicIndexDefinitionLen) {
 		return protocolError(ErrMalformedFrame, "index count %d exceeds remaining collection_meta payload", indexCount)
@@ -679,6 +714,50 @@ func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
 	}
 	if off != len(raw) {
 		return protocolError(ErrMalformedFrame, "collection_meta has %d trailing bytes", len(raw)-off)
+	}
+	return nil
+}
+
+func validateDeterministicDocumentFormat(format uint64) error {
+	switch DocumentFormat(format) {
+	case DocumentFormatDefault, DocumentFormatJSON, DocumentFormatBSON, DocumentFormatTemplateV1:
+		return nil
+	default:
+		return protocolError(ErrInvalidCommand, "unsupported document_format %d", format)
+	}
+}
+
+func validateDeterministicRootStorage(field string, policy uint64) error {
+	switch policy {
+	case 0, 1, 2:
+		return nil
+	default:
+		return protocolError(ErrInvalidCommand, "unsupported %s enum %d", field, policy)
+	}
+}
+
+func validateDeterministicIndexValueType(valueType uint64) error {
+	switch valueType {
+	case 1, 2, 3, 4:
+		return nil
+	default:
+		return protocolError(ErrInvalidCommand, "unsupported index_value_type enum %d", valueType)
+	}
+}
+
+func validateDeterministicNonNegativeInt64(field string, value int64) error {
+	if value < 0 {
+		return protocolError(ErrInvalidCommand, "%s cannot be negative", field)
+	}
+	return nil
+}
+
+func validateDeterministicNonNegativeIntCapacity(field string, value int64) error {
+	if err := validateDeterministicNonNegativeInt64(field, value); err != nil {
+		return err
+	}
+	if value > int64(maxInt) {
+		return protocolError(ErrResourceExhausted, "%s exceeds int capacity", field)
 	}
 	return nil
 }
@@ -714,7 +793,11 @@ func validateDeterministicIndexDefinitionAt(raw []byte, off int, withVersion boo
 	if err := validateDeterministicIndexPath(field, "index field"); err != nil {
 		return 0, err
 	}
-	if _, err := readDeterministicUvarintField(raw, &off, "index value type"); err != nil {
+	valueType, err := readDeterministicUvarintField(raw, &off, "index value type")
+	if err != nil {
+		return 0, err
+	}
+	if err := validateDeterministicIndexValueType(valueType); err != nil {
 		return 0, err
 	}
 	if err := readDeterministicBoolField(raw, &off, "unique"); err != nil {
@@ -723,7 +806,11 @@ func validateDeterministicIndexDefinitionAt(raw []byte, off int, withVersion boo
 	if err := readDeterministicBoolField(raw, &off, "multi_key"); err != nil {
 		return 0, err
 	}
-	if _, err := readDeterministicUvarintField(raw, &off, "index storage policy"); err != nil {
+	storagePolicy, err := readDeterministicUvarintField(raw, &off, "index storage policy")
+	if err != nil {
+		return 0, err
+	}
+	if err := validateDeterministicRootStorage("index storage policy", storagePolicy); err != nil {
 		return 0, err
 	}
 	return off, nil
