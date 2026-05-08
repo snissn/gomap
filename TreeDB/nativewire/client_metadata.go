@@ -217,13 +217,13 @@ func (c *Client) clearCatalogVersionOnMismatch(err error) {
 	}
 }
 
-func (c *Client) advanceCatalogVersionAfterMutation(guard []iwire.Section) {
-	expected, ok, err := expectedCatalogVersionFromSections(guard)
-	if err != nil || !ok || expected > ^uint64(0)-2 {
+func (c *Client) updateCatalogVersionAfterMutation(sections []iwire.Section) {
+	version, ok, err := responseCatalogVersion(sections)
+	if err != nil || !ok || version == ^uint64(0) {
 		c.catalogVersionPlusOne.Store(0)
 		return
 	}
-	c.catalogVersionPlusOne.Store(expected + 2)
+	c.catalogVersionPlusOne.Store(version + 1)
 }
 
 func metadataGuardOptionsFromContext(ctx context.Context) metadataGuardOptions {

@@ -472,7 +472,7 @@ func v1CommandSchemas() []CommandSchema {
 				{ID: SectionDocuments, Name: "documents", Required: true, Deterministic: true},
 				{ID: SectionTemplateRecords, Name: "template_records", Deterministic: true},
 				{ID: SectionExpectedCatalogVersion, Name: "expected_catalog_version", Deterministic: true},
-				{ID: SectionAckPolicy, Name: "ack_policy"},
+				{ID: SectionAckPolicy, Name: "ack_policy", Deterministic: true},
 			},
 		},
 		{
@@ -492,7 +492,7 @@ func v1CommandSchemas() []CommandSchema {
 				{ID: SectionTemplateRecords, Name: "template_records", Deterministic: true},
 				{ID: SectionExpectedCatalogVersion, Name: "expected_catalog_version", Deterministic: true},
 				{ID: SectionReplacementMode, Name: "replacement_mode", Required: true, Deterministic: true},
-				{ID: SectionAckPolicy, Name: "ack_policy"},
+				{ID: SectionAckPolicy, Name: "ack_policy", Deterministic: true},
 			},
 		},
 		{
@@ -508,7 +508,7 @@ func v1CommandSchemas() []CommandSchema {
 				{ID: SectionCollectionRef, Name: "collection_ref", Required: true, Deterministic: true},
 				{ID: SectionDocumentIDs, Name: "document_ids", Required: true, Deterministic: true},
 				{ID: SectionExpectedCatalogVersion, Name: "expected_catalog_version", Deterministic: true},
-				{ID: SectionAckPolicy, Name: "ack_policy"},
+				{ID: SectionAckPolicy, Name: "ack_policy", Deterministic: true},
 			},
 		},
 		{

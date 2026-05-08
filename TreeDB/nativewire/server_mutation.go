@@ -12,6 +12,8 @@ func (s *Server) handleInsertBatch(state *connState, sections []iwire.Section) (
 	if err := managerRequired(s.collections); err != nil {
 		return nil, err
 	}
+	s.metadataMu.Lock()
+	defer s.metadataMu.Unlock()
 	if err := s.checkCatalogGuard(sections); err != nil {
 		return nil, err
 	}
@@ -60,7 +62,7 @@ func (s *Server) handleInsertBatch(state *connState, sections []iwire.Section) (
 	}
 	return []iwire.Section{
 		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, resultIDs...)},
-		ackMeta(actualAck, "inserted_count", strconv.Itoa(len(resultIDs))),
+		s.ackMeta(actualAck, "inserted_count", strconv.Itoa(len(resultIDs))),
 	}, nil
 }
 
@@ -68,6 +70,8 @@ func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) 
 	if err := managerRequired(s.collections); err != nil {
 		return nil, err
 	}
+	s.metadataMu.Lock()
+	defer s.metadataMu.Unlock()
 	if err := s.checkCatalogGuard(sections); err != nil {
 		return nil, err
 	}
@@ -123,7 +127,7 @@ func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) 
 	if err != nil {
 		return nil, err
 	}
-	return []iwire.Section{ackMeta(actualAck,
+	return []iwire.Section{s.ackMeta(actualAck,
 		"matched_count", strconv.Itoa(matched),
 		"modified_count", strconv.Itoa(modified),
 	)}, nil
@@ -133,6 +137,8 @@ func (s *Server) handleDeleteBatch(state *connState, sections []iwire.Section) (
 	if err := managerRequired(s.collections); err != nil {
 		return nil, err
 	}
+	s.metadataMu.Lock()
+	defer s.metadataMu.Unlock()
 	if err := s.checkCatalogGuard(sections); err != nil {
 		return nil, err
 	}
@@ -163,7 +169,7 @@ func (s *Server) handleDeleteBatch(state *connState, sections []iwire.Section) (
 	if err != nil {
 		return nil, err
 	}
-	return []iwire.Section{ackMeta(actualAck, "deleted_count", strconv.Itoa(deleted))}, nil
+	return []iwire.Section{s.ackMeta(actualAck, "deleted_count", strconv.Itoa(deleted))}, nil
 }
 
 func (s *Server) handleFlushCollection(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
@@ -188,7 +194,7 @@ func (s *Server) handleFlushCollection(state *connState, sections []iwire.Sectio
 	if err := collection.Flush(); err != nil {
 		return nil, metadataWrap(err)
 	}
-	return []iwire.Section{ackMeta(iwire.AckFlushed)}, nil
+	return []iwire.Section{s.ackMeta(iwire.AckFlushed)}, nil
 }
 
 func (s *Server) handleFlushAll(sections []iwire.Section) ([]iwire.Section, error) {
@@ -205,7 +211,7 @@ func (s *Server) handleFlushAll(sections []iwire.Section) ([]iwire.Section, erro
 	if err := s.collections.FlushAll(); err != nil {
 		return nil, metadataWrap(err)
 	}
-	return []iwire.Section{ackMeta(iwire.AckFlushed)}, nil
+	return []iwire.Section{s.ackMeta(iwire.AckFlushed)}, nil
 }
 
 func (s *Server) handleCheckpoint(sections []iwire.Section) ([]iwire.Section, error) {
@@ -227,7 +233,7 @@ func (s *Server) handleCheckpoint(sections []iwire.Section) ([]iwire.Section, er
 	if err := s.backend.Checkpoint(); err != nil {
 		return nil, metadataWrap(err)
 	}
-	return []iwire.Section{ackMeta(iwire.AckSynced)}, nil
+	return []iwire.Section{s.ackMeta(iwire.AckSynced)}, nil
 }
 
 func (s *Server) admitBarrierAck(actual, requested iwire.AckPolicy) error {
