@@ -99,14 +99,19 @@ func NewInProcessClient(ctx context.Context, server *Server) (*Client, func() er
 type localEndpoint struct {
 	server *Server
 	state  *connState
+	done   chan struct{}
 	closed atomic.Bool
 	frame  []byte
 }
 
 func newLocalEndpoint(server *Server) *localEndpoint {
 	state := &connState{id: uint64(server.nextConn.Add(1))}
+	done := make(chan struct{})
 	server.counters.inc("connections.opened_total")
-	return &localEndpoint{server: server, state: state}
+	if server.cursorIdleTimeout > 0 {
+		go server.reapExpiredCursorsUntilDone(done)
+	}
+	return &localEndpoint{server: server, state: state, done: done}
 }
 
 func (e *localEndpoint) close() error {
@@ -115,6 +120,9 @@ func (e *localEndpoint) close() error {
 	}
 	if !e.closed.CompareAndSwap(false, true) {
 		return nil
+	}
+	if e.done != nil {
+		close(e.done)
 	}
 	if e.server != nil {
 		e.server.killCursorsForOwner(e.state.id)
