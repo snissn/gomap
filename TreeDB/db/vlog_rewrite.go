@@ -1519,6 +1519,10 @@ func selectRewriteSourceSegmentsWithStats(opts ValueLogRewriteOnlineOptions, fil
 // ValueLogRewriteOnline rewrites pointer-backed values in bounded commit
 // batches, then atomically swaps keys to rewritten pointers.
 func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnlineOptions) (stats ValueLogRewriteStats, err error) {
+	return db.valueLogRewriteOnline(ctx, opts, true)
+}
+
+func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnlineOptions, lockMaintenance bool) (stats ValueLogRewriteStats, err error) {
 	if db == nil {
 		return stats, fmt.Errorf("missing db")
 	}
@@ -1528,8 +1532,10 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if db.valueLogManager == nil {
 		return stats, fmt.Errorf("value log manager unavailable")
 	}
-	db.maintenanceMu.Lock()
-	defer db.maintenanceMu.Unlock()
+	if lockMaintenance {
+		db.maintenanceMu.Lock()
+		defer db.maintenanceMu.Unlock()
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}

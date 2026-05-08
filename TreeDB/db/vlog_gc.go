@@ -94,6 +94,10 @@ type ValueLogGCStats struct {
 //   - not the currently-active segment per lane,
 //   - and not pinned by active snapshots.
 func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogGCStats, error) {
+	return db.valueLogGC(ctx, opts, true)
+}
+
+func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMaintenance bool) (ValueLogGCStats, error) {
 	var stats ValueLogGCStats
 	if db == nil {
 		return stats, fmt.Errorf("missing db")
@@ -101,8 +105,10 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 	if db.readOnly && !opts.DryRun {
 		return stats, ErrReadOnly
 	}
-	db.maintenanceMu.Lock()
-	defer db.maintenanceMu.Unlock()
+	if lockMaintenance {
+		db.maintenanceMu.Lock()
+		defer db.maintenanceMu.Unlock()
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}

@@ -691,6 +691,38 @@ func TestRegisterLeafPageLogSegmentsForPublishRegistersRewriteSegments(t *testin
 	}
 }
 
+func TestCompactStorageHoldsMaintenanceLockAcrossPhases(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	if err := d.SetSync([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+
+	phaseChecks := 0
+	d.compactStorageAfterPhase = func(name string) {
+		phaseChecks++
+		if d.maintenanceMu.TryLock() {
+			d.maintenanceMu.Unlock()
+			t.Fatalf("maintenance lock was not held after compact phase %q", name)
+		}
+	}
+	t.Cleanup(func() {
+		d.compactStorageAfterPhase = nil
+	})
+
+	if _, err := d.CompactStorage(context.Background(), CompactStorageOptions{}); err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if phaseChecks == 0 {
+		t.Fatal("expected compact storage phase hook to run")
+	}
+}
+
 func TestCompactStorageSettlesLeafGenerationGCAfterPinnedRetiring(t *testing.T) {
 	d, leafLog, dir := openLeafGenerationPackTestDB(t)
 

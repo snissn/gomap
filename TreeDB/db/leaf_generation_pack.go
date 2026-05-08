@@ -91,7 +91,7 @@ func (db *DB) LeafGenerationPack(ctx context.Context, opts LeafGenerationPackOpt
 	return db.leafGenerationPackLocked(ctx, opts, selectedPlan, stats)
 }
 
-func (db *DB) leafGenerationPackSelected(ctx context.Context, opts LeafGenerationPackOptions, selectedPlan LeafGenerationPlan) (stats LeafGenerationPackStats, err error) {
+func (db *DB) leafGenerationPackSelected(ctx context.Context, opts LeafGenerationPackOptions, selectedPlan LeafGenerationPlan, lockMaintenance bool) (stats LeafGenerationPackStats, err error) {
 	if db == nil {
 		return stats, fmt.Errorf("missing db")
 	}
@@ -111,8 +111,10 @@ func (db *DB) leafGenerationPackSelected(ctx context.Context, opts LeafGeneratio
 	stats.GenerationsRequested = len(opts.GenerationIDs)
 	opts = normalizeLeafGenerationPackOptions(opts)
 
-	db.maintenanceMu.Lock()
-	defer db.maintenanceMu.Unlock()
+	if lockMaintenance {
+		db.maintenanceMu.Lock()
+		defer db.maintenanceMu.Unlock()
+	}
 	stats.SourceGenerationIDs = append(stats.SourceGenerationIDs, selectedPlan.CandidateGenerationIDs...)
 	stats.SourceBytesTotal = selectedPlan.CandidateBytesTotal
 	stats.SourceBytesLive = selectedPlan.CandidateBytesLive

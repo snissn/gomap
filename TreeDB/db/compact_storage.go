@@ -60,8 +60,8 @@ type CompactStorageOptions struct {
 	ReserveRIDs func(count int) (start uint64, err error)
 
 	// DisableZeroByteValueLogCleanup leaves zero-byte value_vlog segment files in
-	// place. Live cached-mode wrappers use this because their current writer
-	// files may be open even when empty.
+	// place. This is intended for specialty diagnostics that need to inspect
+	// empty segment files after compaction.
 	DisableZeroByteValueLogCleanup bool
 }
 
@@ -162,6 +162,12 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	if db.readOnly && !opts.DryRun {
 		return stats, ErrReadOnly
 	}
+	maintenanceLocked := false
+	if !opts.DryRun {
+		db.maintenanceMu.Lock()
+		maintenanceLocked = true
+		defer db.maintenanceMu.Unlock()
+	}
 
 	before, err := compactStorageUsage(db.dir)
 	if err != nil {
@@ -169,7 +175,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	}
 	stats.Before = before
 
-	initialDebt, err := db.populateCompactStorageAudit(ctx, opts, &stats)
+	initialDebt, err := db.populateCompactStorageAudit(ctx, opts, &stats, !maintenanceLocked)
 	if err != nil {
 		return stats, err
 	}
@@ -202,7 +208,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		rewriteOpts.MaxSegmentBytes = opts.ValueLogRewriteMaxSegmentBytes
 		rewriteOpts.LocalityPolicy = ValueLogRewriteLocalityGrouped
 		rewriteOpts.ReserveRIDs = opts.ReserveRIDs
-		rewrite, err := db.ValueLogRewriteOnline(ctx, rewriteOpts)
+		rewrite, err := db.valueLogRewriteOnline(ctx, rewriteOpts, !maintenanceLocked)
 		stats.ValueLogRewrite = rewrite
 		return err
 	}); err != nil {
@@ -215,7 +221,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	}
 
 	if err := db.runCompactStoragePhase(&stats, "value-log-gc", func() error {
-		gc, err := db.ValueLogGC(ctx, ValueLogGCOptions{ProtectedPaths: compactStorageValueLogProtectedPaths(opts)})
+		gc, err := db.valueLogGC(ctx, ValueLogGCOptions{ProtectedPaths: compactStorageValueLogProtectedPaths(opts)}, !maintenanceLocked)
 		stats.ValueLogGC = gc
 		return err
 	}); err != nil {
@@ -232,7 +238,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		phaseName := fmt.Sprintf("leaf-generation-pack-%d", pass+1)
 		if err := db.runCompactStoragePhase(&stats, phaseName, func() error {
 			var err error
-			pack, err = db.LeafGenerationPackRunOnce(ctx, LeafGenerationPackFromPlanOptions{
+			pack, err = db.leafGenerationPackRunOnce(ctx, LeafGenerationPackFromPlanOptions{
 				Sync:                       opts.SyncEachPhase,
 				MinExpectedReclaimBytes:    opts.LeafPackMinExpectedReclaimBytes,
 				MinExpectedReclaimRatioPPM: opts.LeafPackMinExpectedReclaimRatioPPM,
@@ -241,7 +247,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 				MaxBytesToCopy:             opts.LeafPackMaxBytesToCopyPerPass,
 				ReserveRIDs:                opts.ReserveRIDs,
 				LeafFrameK:                 opts.LeafPackLeafFrameK,
-			})
+			}, !maintenanceLocked)
 			return err
 		}); err != nil {
 			return stats, err
@@ -265,7 +271,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	}
 
 	if err := db.runCompactStoragePhase(&stats, "leaf-generation-gc", func() error {
-		gc, err := db.LeafGenerationGC(ctx, LeafGenerationGCOptions{})
+		gc, err := db.leafGenerationGC(ctx, LeafGenerationGCOptions{}, !maintenanceLocked)
 		stats.LeafGenerationGC = gc
 		return err
 	}); err != nil {
@@ -280,7 +286,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	indexVacuumSkipped := false
 	if err := db.runCompactStoragePhase(&stats, "index-vacuum", func() error {
 		indexVacuumSkipped = false
-		err := db.VacuumIndexOnline(ctx)
+		err := db.vacuumIndexOnline(ctx, !maintenanceLocked)
 		if errors.Is(err, ErrVacuumUnsupported) {
 			indexVacuumSkipped = true
 			return nil
@@ -300,7 +306,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		return stats, err
 	}
 
-	if err := db.settleCompactStorageGC(ctx, opts, &stats); err != nil {
+	if err := db.settleCompactStorageGC(ctx, opts, &stats, !maintenanceLocked); err != nil {
 		return stats, err
 	}
 
@@ -327,7 +333,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	stats.After = after
 
 	var finalAudit CompactStorageStats
-	finalDebt, err := db.populateCompactStorageAudit(ctx, opts, &finalAudit)
+	finalDebt, err := db.populateCompactStorageAudit(ctx, opts, &finalAudit, !maintenanceLocked)
 	if err != nil {
 		return stats, err
 	}
@@ -338,11 +344,11 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	return stats, nil
 }
 
-func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats) error {
+func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool) error {
 	const maxSettlePasses = 4
 	for pass := 0; pass < maxSettlePasses; pass++ {
 		var audit CompactStorageStats
-		debt, err := db.populateCompactStorageAudit(ctx, opts, &audit)
+		debt, err := db.populateCompactStorageAudit(ctx, opts, &audit, lockMaintenance)
 		if err != nil {
 			return err
 		}
@@ -352,7 +358,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 		if debt.ValueLogGCSegments > 0 {
 			phaseName := fmt.Sprintf("settle-value-log-gc-%d", pass+1)
 			if err := db.runCompactStoragePhase(stats, phaseName, func() error {
-				gc, err := db.ValueLogGC(ctx, ValueLogGCOptions{ProtectedPaths: compactStorageValueLogProtectedPaths(opts)})
+				gc, err := db.valueLogGC(ctx, ValueLogGCOptions{ProtectedPaths: compactStorageValueLogProtectedPaths(opts)}, lockMaintenance)
 				stats.ValueLogGC = gc
 				return err
 			}); err != nil {
@@ -367,7 +373,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 		if debt.LeafGCSegments > 0 {
 			phaseName := fmt.Sprintf("settle-leaf-generation-gc-%d", pass+1)
 			if err := db.runCompactStoragePhase(stats, phaseName, func() error {
-				gc, err := db.LeafGenerationGC(ctx, LeafGenerationGCOptions{})
+				gc, err := db.leafGenerationGC(ctx, LeafGenerationGCOptions{}, lockMaintenance)
 				stats.LeafGenerationGC = gc
 				return err
 			}); err != nil {
@@ -448,7 +454,7 @@ func compactStorageRewritePlanOptions(protectedPaths []string) ValueLogRewriteOn
 	}
 }
 
-func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats) (CompactStorageDebt, error) {
+func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool) (CompactStorageDebt, error) {
 	var debt CompactStorageDebt
 	protectedPaths := compactStorageValueLogProtectedPaths(opts)
 	rewritePlan, err := db.ValueLogRewritePlan(ctx, compactStorageRewritePlanOptions(protectedPaths))
@@ -462,7 +468,7 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 		debt.ValueLogRewriteBytes = rewritePlan.SelectedBytesTotal
 	}
 
-	valueGC, err := db.ValueLogGC(ctx, ValueLogGCOptions{DryRun: true, ProtectedPaths: protectedPaths})
+	valueGC, err := db.valueLogGC(ctx, ValueLogGCOptions{DryRun: true, ProtectedPaths: protectedPaths}, lockMaintenance)
 	if err != nil {
 		return debt, err
 	}
@@ -484,7 +490,7 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 		debt.LeafPackBytes = leafPlan.ExpectedReclaimBytes
 	}
 
-	leafGC, err := db.LeafGenerationGC(ctx, LeafGenerationGCOptions{DryRun: true})
+	leafGC, err := db.leafGenerationGC(ctx, LeafGenerationGCOptions{DryRun: true}, lockMaintenance)
 	if err != nil {
 		return debt, err
 	}
@@ -528,7 +534,7 @@ func compactStorageUsage(dir string) ([]CompactStorageUsage, error) {
 		name string
 		path string
 	}{
-		{name: "index", path: filepath.Join(dir, "index.db")},
+		{name: "index", path: filepath.Join(dir, indexFileName)},
 		{name: "wal", path: layout.walDir},
 		{name: "value_vlog", path: layout.valueVLogDir},
 		{name: "leaf_vlog", path: layout.leafVLogDir},

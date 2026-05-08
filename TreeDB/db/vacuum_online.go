@@ -120,6 +120,10 @@ func (r *vacuumRecorder) Drain() map[string]batch.Entry {
 // generation until readers drain; disk space is reclaimed once the old mmap is
 // closed.
 func (db *DB) VacuumIndexOnline(ctx context.Context) error {
+	return db.vacuumIndexOnline(ctx, true)
+}
+
+func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -129,8 +133,10 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	if runtime.GOOS == "windows" {
 		return ErrVacuumUnsupported
 	}
-	db.maintenanceMu.Lock()
-	defer db.maintenanceMu.Unlock()
+	if lockMaintenance {
+		db.maintenanceMu.Lock()
+		defer db.maintenanceMu.Unlock()
+	}
 
 	if !db.vacuumInProgress.CompareAndSwap(false, true) {
 		return ErrVacuumInProgress
