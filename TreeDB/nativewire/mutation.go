@@ -243,9 +243,10 @@ func decodeIDVectorInto(dst [][]byte, sections []iwire.Section, limits iwire.Lim
 }
 
 const (
-	maxSmallDuplicateIDs           = 512
-	duplicateIDSmallLoadFactor     = 2
-	duplicateIDSmallHashTableSlots = maxSmallDuplicateIDs * duplicateIDSmallLoadFactor
+	maxSmallDuplicateIDs                  = 512
+	duplicateIDSmallLoadFactor            = 2
+	duplicateIDSmallHashTableSlots        = maxSmallDuplicateIDs * duplicateIDSmallLoadFactor
+	_                              uint16 = maxSmallDuplicateIDs + 1
 )
 
 type duplicateIDScratch struct {

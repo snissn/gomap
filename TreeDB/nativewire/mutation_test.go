@@ -283,6 +283,9 @@ func TestMutationInvalidIDRejected(t *testing.T) {
 }
 
 func TestRejectDuplicateIDsSmallBatchAllocFree(t *testing.T) {
+	if raceEnabled {
+		t.Skip("allocation guard is noisy under -race")
+	}
 	ids := make([][]byte, 128)
 	for i := range ids {
 		ids[i] = []byte("doc-" + strconv.Itoa(i))
