@@ -833,6 +833,39 @@ func TestDeterministicEntryRejectsBatchVectorArityMismatch(t *testing.T) {
 	}
 }
 
+func TestDecodeDeterministicEntryRejectsUnappliableTemplateRecords(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		format DocumentFormat
+		record []byte
+	}{
+		{
+			name:   "non_template_format",
+			format: DocumentFormatBSON,
+			record: deterministicTemplateRecord("email"),
+		},
+		{
+			name:   "malformed_record",
+			format: DocumentFormatTemplateV1,
+			record: []byte("not-a-template-record"),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sections := insertBatchDeterministicSections()
+			for i := range sections {
+				if sections[i].ID == SectionDocumentFormat {
+					sections[i].Bytes = []byte{byte(tc.format)}
+				}
+			}
+			sections = append(sections, Section{ID: SectionTemplateRecords, Bytes: AppendByteVector(nil, tc.record)})
+			raw := deterministicEntryTestRaw(CommandInsertBatch, deterministicEntrySectionsOnly(sections)...)
+			if _, err := DecodeDeterministicEntry(raw, Limits{}); codeOf(err) != ErrInvalidCommand {
+				t.Fatalf("DecodeDeterministicEntry err=%v code=%d want invalid command", err, codeOf(err))
+			}
+		})
+	}
+}
+
 func TestDeterministicEntryRejectsUnsupportedReplacementMode(t *testing.T) {
 	registry := MustV1Registry()
 	sections := replaceBatchDeterministicSections()
@@ -1021,6 +1054,16 @@ func deterministicIndexDefinitionPayloadWithOptions(name, field string, valueTyp
 	dst = appendUvarint(dst, valueType)
 	dst = append(dst, 0, 0)
 	dst = appendUvarint(dst, storagePolicy)
+	return dst
+}
+
+func deterministicTemplateRecord(fields ...string) []byte {
+	dst := []byte(deterministicTemplateV1RecordMagic)
+	dst = appendUvarint(dst, uint64(len(fields)))
+	for _, field := range fields {
+		dst = appendUvarint(dst, uint64(len(field)))
+		dst = append(dst, field...)
+	}
 	return dst
 }
 
