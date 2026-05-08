@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"hash/maphash"
 	"strconv"
 	"strings"
 
@@ -250,8 +251,10 @@ const (
 )
 
 var (
-	_ [duplicateIDSmallHashTableSlots - maxSmallDuplicateIDs*duplicateIDSmallLoadFactor]struct{}
+	_ [0]struct{} = [duplicateIDSmallHashTableSlots - maxSmallDuplicateIDs*duplicateIDSmallLoadFactor]struct{}{}
 	_ [0]struct{} = [duplicateIDSmallHashTableSlots & (duplicateIDSmallHashTableSlots - 1)]struct{}{}
+
+	duplicateIDHashSeed = maphash.MakeSeed()
 )
 
 type duplicateIDScratch struct {
@@ -322,16 +325,7 @@ func rejectDuplicateIDsSmall(ids [][]byte, scratch *duplicateIDScratch) error {
 }
 
 func hashDocumentID(id []byte) uint64 {
-	const (
-		offset = 14695981039346656037
-		prime  = 1099511628211
-	)
-	hash := uint64(offset)
-	for _, b := range id {
-		hash ^= uint64(b)
-		hash *= prime
-	}
-	return hash
+	return maphash.Bytes(duplicateIDHashSeed, id)
 }
 
 type responseMetaCount struct {

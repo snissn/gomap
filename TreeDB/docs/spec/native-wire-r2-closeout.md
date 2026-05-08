@@ -84,8 +84,8 @@ Representative R2e results on `linux/amd64`, Intel i5-11400F:
 
 The first R2e benchmark pass exposed an avoidable duplicate-ID validation cost
 in larger ID batches. The closeout replaces the repeated byte comparison scan
-with stack-backed FNV-1a hashes and byte compares only on matching hash/length
-pairs, reducing the 128-ID deterministic delete append path from roughly
+with stack-backed hash buckets and byte compares only on matching `hash/maphash`
+digest/length pairs, reducing the 128-ID deterministic delete append path from roughly
 26 us/op to roughly 6.3 us/op while preserving zero allocations.
 
 The R2 top-stack parity check also re-ran the native collection insert lanes
@@ -94,8 +94,8 @@ benchmark harness drift: the direct-dispatch lanes bypassed the client handshake
 and now must mark their synthetic connection as already greeted. After fixing
 that, the run exposed an avoidable hot-path allocation in native-wire
 duplicate-ID validation. The R2e closeout replaces the small/normal batch path
-with a stack-backed bucket table using FNV-1a hashes and falls back to a map only
-for batches above 512 IDs. The same pass moves hot request/frame counter updates
+with a stack-backed bucket table using a process-local `hash/maphash` seed and
+falls back to a map only for batches above 512 IDs. The same pass moves hot request/frame counter updates
 onto direct typed atomics instead of the generic string-key counter dispatcher.
 
 Representative results after the fix:
