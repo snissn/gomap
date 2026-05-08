@@ -2,8 +2,10 @@ package nativewire
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"strconv"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
@@ -18,6 +20,9 @@ const (
 	AckRaftCommitted AckPolicy = iwire.AckRaftCommitted
 
 	replacementModeExistingOnly uint64 = 1
+	templateV1InputMagic               = "TD1I"
+	templateV1StoredMagic              = "TD1D"
+	templateV1RecordMagic              = "TD1T"
 )
 
 func documentFormatSection(format collections.DocumentFormat) iwire.Section {
@@ -118,7 +123,104 @@ func decodeIDsAndDocumentsInto(idDst, docDst [][]byte, sections []iwire.Section,
 	if len(ids) != len(docs) {
 		return nil, nil, protocolError(iwire.ErrInvalidCommand, "document_ids length %d does not match documents length %d", len(ids), len(docs))
 	}
+	if err := rejectDuplicateIDs(ids); err != nil {
+		return nil, nil, err
+	}
 	return ids, docs, nil
+}
+
+func applyTemplateRecords(format collections.DocumentFormat, sections []iwire.Section, docs [][]byte, limits iwire.Limits) ([][]byte, error) {
+	raw, ok, err := singletonSection(sections, iwire.SectionTemplateRecords)
+	if err != nil || !ok {
+		return docs, err
+	}
+	if format != collections.DocumentFormatTemplateV1 {
+		return nil, protocolError(iwire.ErrInvalidCommand, "template_records require template-v1 document format")
+	}
+	records, err := decodeByteVectorCloned(raw, limits)
+	if err != nil {
+		return nil, err
+	}
+	if len(records) == 0 {
+		return docs, nil
+	}
+	for i, record := range records {
+		if err := validateTemplateRecord(record); err != nil {
+			return nil, protocolError(iwire.ErrInvalidCommand, "template_records[%d]: %v", i, err)
+		}
+	}
+	out := make([][]byte, len(docs))
+	for i, doc := range docs {
+		switch {
+		case bytes.HasPrefix(doc, []byte(templateV1InputMagic)):
+			out[i] = doc
+		case bytes.HasPrefix(doc, []byte(templateV1StoredMagic)):
+			out[i] = appendTemplateRecordEnvelope(nil, records, doc)
+		default:
+			return nil, protocolError(iwire.ErrInvalidCommand, "template-v1 document %d is not TD1I or TD1D", i)
+		}
+	}
+	return out, nil
+}
+
+func appendTemplateRecordEnvelope(dst []byte, records [][]byte, stored []byte) []byte {
+	dst = append(dst, templateV1InputMagic...)
+	dst = binary.AppendUvarint(dst, uint64(len(records)))
+	for _, record := range records {
+		id := sha256.Sum256(record)
+		dst = append(dst, id[:]...)
+		dst = binary.AppendUvarint(dst, uint64(len(record)))
+		dst = append(dst, record...)
+	}
+	return append(dst, stored...)
+}
+
+func validateTemplateRecord(raw []byte) error {
+	pos := 0
+	if !consumeTemplateMagic(raw, &pos, templateV1RecordMagic) {
+		return protocolError(iwire.ErrMalformedFrame, "malformed template-v1 template record")
+	}
+	fieldCount, err := readUvarintField(raw, &pos, "template field count")
+	if err != nil {
+		return err
+	}
+	if fieldCount > uint64(len(raw)) {
+		return protocolError(iwire.ErrMalformedFrame, "malformed template-v1 field count")
+	}
+	var previous string
+	for i := uint64(0); i < fieldCount; i++ {
+		fieldLen, err := readUvarintField(raw, &pos, "template field length")
+		if err != nil {
+			return err
+		}
+		if fieldLen > uint64(len(raw)-pos) {
+			return protocolError(iwire.ErrMalformedFrame, "malformed template-v1 field length")
+		}
+		field := string(raw[pos : pos+int(fieldLen)])
+		pos += int(fieldLen)
+		if field == "" || strings.ContainsAny(field, "\x00.") {
+			return protocolError(iwire.ErrInvalidCommand, "invalid template-v1 field %q", field)
+		}
+		if i > 0 && previous >= field {
+			return protocolError(iwire.ErrInvalidCommand, "template-v1 fields are not strictly sorted")
+		}
+		previous = field
+	}
+	if pos != len(raw) {
+		return protocolError(iwire.ErrMalformedFrame, "trailing template-v1 template bytes")
+	}
+	return nil
+}
+
+func consumeTemplateMagic(raw []byte, pos *int, magic string) bool {
+	if pos == nil || *pos < 0 || len(raw)-*pos < len(magic) {
+		return false
+	}
+	if string(raw[*pos:*pos+len(magic)]) != magic {
+		return false
+	}
+	*pos += len(magic)
+	return true
 }
 
 func decodeIDVector(sections []iwire.Section, limits iwire.Limits) ([][]byte, error) {
@@ -140,10 +242,14 @@ func decodeIDVectorInto(dst [][]byte, sections []iwire.Section, limits iwire.Lim
 	return ids, nil
 }
 
-const maxSmallDuplicateIDs = 512
+const (
+	maxSmallDuplicateIDs           = 512
+	duplicateIDSmallLoadFactor     = 2
+	duplicateIDSmallHashTableSlots = maxSmallDuplicateIDs * duplicateIDSmallLoadFactor
+)
 
 type duplicateIDScratch struct {
-	heads  [maxSmallDuplicateIDs * 2]uint16
+	heads  [duplicateIDSmallHashTableSlots]uint16
 	next   [maxSmallDuplicateIDs]uint16
 	hashes [maxSmallDuplicateIDs]uint64
 }
@@ -172,9 +278,15 @@ func rejectDuplicateIDsMap(ids [][]byte) error {
 }
 
 func rejectDuplicateIDsSmall(ids [][]byte, scratch *duplicateIDScratch) error {
+	if scratch == nil || len(ids) > len(scratch.next) || len(ids) > len(scratch.hashes) {
+		return rejectDuplicateIDsMap(ids)
+	}
 	tableSize := 1
-	for tableSize < len(ids)*2 {
+	for tableSize < len(ids)*duplicateIDSmallLoadFactor {
 		tableSize <<= 1
+	}
+	if tableSize > len(scratch.heads) {
+		return rejectDuplicateIDsMap(ids)
 	}
 	heads := scratch.heads[:tableSize]
 	clear(heads)
@@ -229,6 +341,10 @@ func ackMetaCounts(policy AckPolicy, counts ...responseMetaCount) iwire.Section 
 	return iwire.Section{ID: iwire.SectionResponseMeta, Bytes: appendAckMetaPayload(nil, policy, counts...)}
 }
 
+func ackMetaCountsVersion(policy AckPolicy, catalogVersion uint64, hasCatalogVersion bool, counts ...responseMetaCount) iwire.Section {
+	return iwire.Section{ID: iwire.SectionResponseMeta, Bytes: appendAckMetaPayloadVersion(nil, policy, catalogVersion, hasCatalogVersion, counts...)}
+}
+
 func appendAckMetaSection(dst []byte, policy AckPolicy, counts ...responseMetaCount) ([]byte, error) {
 	var payloadBuf [128]byte
 	payload := appendAckMetaPayload(payloadBuf[:0], policy, counts...)
@@ -239,9 +355,30 @@ func appendAckMetaSection(dst []byte, policy AckPolicy, counts ...responseMetaCo
 	return append(body, payload...), nil
 }
 
+func appendAckMetaSectionVersion(dst []byte, policy AckPolicy, catalogVersion uint64, hasCatalogVersion bool, counts ...responseMetaCount) ([]byte, error) {
+	var payloadBuf [160]byte
+	payload := appendAckMetaPayloadVersion(payloadBuf[:0], policy, catalogVersion, hasCatalogVersion, counts...)
+	body, err := iwire.AppendSectionHeader(dst, iwire.SectionResponseMeta, 0, len(payload))
+	if err != nil {
+		return nil, err
+	}
+	return append(body, payload...), nil
+}
+
 func appendAckMetaPayload(dst []byte, policy AckPolicy, counts ...responseMetaCount) []byte {
-	dst = binary.AppendUvarint(dst, uint64(1+len(counts)))
+	return appendAckMetaPayloadVersion(dst, policy, 0, false, counts...)
+}
+
+func appendAckMetaPayloadVersion(dst []byte, policy AckPolicy, catalogVersion uint64, hasCatalogVersion bool, counts ...responseMetaCount) []byte {
+	fieldCount := 1 + len(counts)
+	if hasCatalogVersion {
+		fieldCount++
+	}
+	dst = binary.AppendUvarint(dst, uint64(fieldCount))
 	dst = appendStringUint(dst, "actual_ack_policy", uint64(policy))
+	if hasCatalogVersion {
+		dst = appendStringUint(dst, "catalog_version", catalogVersion)
+	}
 	for _, count := range counts {
 		dst = appendStringInt(dst, count.key, count.value)
 	}
@@ -282,7 +419,7 @@ func responseCount(sections []iwire.Section, key string) (int, error) {
 	}
 	n, err := strconv.Atoi(value)
 	if err != nil {
-		return 0, err
+		return 0, protocolError(iwire.ErrMalformedFrame, "response_meta %s is not an integer", key)
 	}
 	return n, nil
 }

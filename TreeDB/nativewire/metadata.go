@@ -330,7 +330,7 @@ func appendBool(dst []byte, value bool) []byte {
 }
 
 func readBool(src []byte, off *int) (bool, error) {
-	if off == nil || *off >= len(src) {
+	if off == nil || *off < 0 || *off >= len(src) {
 		return false, protocolError(iwire.ErrMalformedFrame, "missing bool")
 	}
 	value := src[*off]
@@ -350,7 +350,7 @@ func readEnum(src []byte, off *int) (uint64, error) {
 }
 
 func readUvarintField(src []byte, off *int, field string) (uint64, error) {
-	if off == nil || *off > len(src) {
+	if off == nil || *off < 0 || *off > len(src) {
 		return 0, protocolError(iwire.ErrMalformedFrame, "invalid %s offset", field)
 	}
 	value, n, err := readUvarint(src[*off:])
@@ -568,8 +568,14 @@ func collectionNameFromSections(sections []iwire.Section) (string, error) {
 	if len(raw) > 0 && raw[0] == collectionRefTagHandle {
 		return "", protocolError(iwire.ErrInvalidCommand, "collection handle is not valid for this command")
 	}
-	name, _, err := decodeCollectionRef(nil, raw)
-	return name, err
+	name, wasHandle, err := decodeCollectionRef(nil, raw)
+	if err != nil {
+		return "", err
+	}
+	if wasHandle {
+		return "", protocolError(iwire.ErrInvalidCommand, "collection handle is not valid for this command")
+	}
+	return name, nil
 }
 
 func collectionHandleFromSections(state *connState, sections []iwire.Section) (CollectionHandle, error) {
@@ -709,7 +715,7 @@ func (s *Server) openNamedCollectionRef(state *connState, name string) (string, 
 		return "", nil, metadataWrap(err)
 	}
 	if state != nil {
-		state.cacheCollection(name, collection, s.maxCollectionHandles)
+		state.cacheCollection(name, collection, s.maxCachedCollections)
 	}
 	return name, collection, nil
 }

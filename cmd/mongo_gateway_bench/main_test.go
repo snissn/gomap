@@ -2489,7 +2489,30 @@ func TestEnsureNativeWireBenchmarkCollectionCreatesPrimaryOnlyCollection(t *test
 	}
 }
 
-func TestEnsureNativeWireBenchmarkCollectionRejectsExistingDrift(t *testing.T) {
+func TestEnsureNativeWireBenchmarkCollectionRejectsMismatchedExistingOptions(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{
+		Name:    "bench.docs",
+		Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	cfg := config{
+		Database:             "bench",
+		Collection:           "docs",
+		TreeDBDocumentFormat: collections.DocumentFormatTemplateV1,
+	}
+	if err := ensureNativeWireBenchmarkCollection(cfg, &benchTarget{collections: manager}); err == nil || !strings.Contains(err.Error(), "options drifted") {
+		t.Fatalf("ensureNativeWireBenchmarkCollection err=%v want option mismatch", err)
+	}
+}
+
+func TestEnsureNativeWireBenchmarkCollectionRejectsExistingIndexDrift(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -2499,7 +2522,7 @@ func TestEnsureNativeWireBenchmarkCollectionRejectsExistingDrift(t *testing.T) {
 	if _, err := manager.CreateCollection(&collections.CollectionMeta{
 		Name: "bench.docs",
 		Indexes: []collections.IndexDefinition{{
-			Name:      "email_1",
+			Name:      "wrong_1",
 			Field:     "email",
 			ValueType: collections.IndexValueString,
 			Unique:    true,
@@ -2511,14 +2534,52 @@ func TestEnsureNativeWireBenchmarkCollectionRejectsExistingDrift(t *testing.T) {
 		Database:             "bench",
 		Collection:           "docs",
 		TreeDBDocumentFormat: collections.DocumentFormatJSON,
+		SecondaryIndexes:     1,
 	}
-	if err := ensureNativeWireBenchmarkCollection(cfg, &benchTarget{collections: manager}); err == nil {
-		t.Fatal("ensureNativeWireBenchmarkCollection accepted existing indexed collection for primary-only config")
+	if err := ensureNativeWireBenchmarkCollection(cfg, &benchTarget{collections: manager}); err == nil || !strings.Contains(err.Error(), "missing index") {
+		t.Fatalf("ensureNativeWireBenchmarkCollection err=%v want index drift", err)
+	}
+}
+
+func TestNativeWirePrebuildStoredDocumentsFeedsLoadBatch(t *testing.T) {
+	cfg := config{
+		Documents:             1,
+		PrebuildDocuments:     true,
+		TreeDBDocumentFormat:  collections.DocumentFormatJSON,
+		TreeDBDataRootStorage: collections.RootStorageFast,
+	}
+	prebuilt := []bson.D{{
+		{Key: "_id", Value: "custom-id"},
+		{Key: "email", Value: "custom@example.com"},
+		{Key: "city", Value: "hnl"},
+		{Key: "age", Value: int64(42)},
+		{Key: "active", Value: true},
+		{Key: "score", Value: 9.5},
+		{Key: "tags", Value: bson.A{"hnl", "custom"}},
+		{Key: "profile", Value: bson.D{{Key: "rank", Value: int32(7)}, {Key: "bio", Value: "prebuilt"}}},
+	}}
+	raw, err := bson.Marshal(prebuilt[0])
+	if err != nil {
+		t.Fatalf("marshal prebuilt: %v", err)
+	}
+	prebuiltNative, err := nativeWirePrebuildStoredDocuments(cfg, prebuilt, []bson.Raw{raw})
+	if err != nil {
+		t.Fatalf("nativeWirePrebuildStoredDocuments: %v", err)
+	}
+	if !bytes.Contains(prebuiltNative[0], []byte("custom@example.com")) {
+		t.Fatalf("prebuilt native doc=%s want custom prebuilt content", prebuiltNative[0])
+	}
+	_, docs, err := nativeWireInsertBatch(cfg, 0, 1, prebuilt, []bson.Raw{raw}, prebuiltNative)
+	if err != nil {
+		t.Fatalf("nativeWireInsertBatch: %v", err)
+	}
+	if !bytes.Equal(docs[0], prebuiltNative[0]) {
+		t.Fatalf("batch doc did not reuse prebuilt native doc")
 	}
 }
 
 func TestNativeWireStoredDocumentPreservesFullBenchmarkShape(t *testing.T) {
-	rawJSON, err := nativeWireStoredDocument(collections.DocumentFormatJSON, 7, nil, nil)
+	rawJSON, err := nativeWireStoredDocument(collections.DocumentFormatJSON, 7, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("nativeWireStoredDocument JSON: %v", err)
 	}
@@ -2544,7 +2605,7 @@ func TestNativeWireStoredDocumentPreservesFullBenchmarkShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
 	}
-	rawTemplate, err := nativeWireStoredDocument(collections.DocumentFormatTemplateV1, 7, nil, nil)
+	rawTemplate, err := nativeWireStoredDocument(collections.DocumentFormatTemplateV1, 7, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("nativeWireStoredDocument template-v1: %v", err)
 	}

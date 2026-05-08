@@ -305,7 +305,7 @@ func benchmarkDispatchRequest(tb testing.TB, server *Server, state *connState, s
 
 func benchmarkAddCollectionHandle(tb testing.TB, state *connState, server *Server, name string, col *collections.Collection) CollectionHandle {
 	tb.Helper()
-	handle, err := state.addCollectionHandle(name, col, server.maxCollectionHandles)
+	handle, err := state.addCollectionHandle(name, col, server.maxCollectionHandles, server.maxCachedCollections)
 	if err != nil {
 		tb.Fatalf("add collection handle: %v", err)
 	}

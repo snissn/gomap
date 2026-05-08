@@ -6524,6 +6524,11 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return 0, err
 	}
+	for i, id := range documentIDs {
+		if len(id) == 0 {
+			return 0, fmt.Errorf("collections: document id cannot be empty at index %d", i)
+		}
+	}
 	ids, err := cloneBatchDocumentIDs(documentIDs)
 	if err != nil {
 		return 0, err

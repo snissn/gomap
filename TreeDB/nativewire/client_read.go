@@ -9,6 +9,8 @@ import (
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
+// DocumentsResult is a batched read result. ID and document slices returned by
+// client APIs borrow the client's response buffer unless documented otherwise.
 type DocumentsResult struct {
 	IDs       [][]byte
 	Docs      [][]byte
@@ -17,10 +19,15 @@ type DocumentsResult struct {
 	Truncated bool
 }
 
+// GetMany fetches documents by ID. Returned document slices borrow the client's
+// response buffer and remain valid until the next round trip on this client.
 func (c *Client) GetMany(ctx context.Context, collection string, ids [][]byte) ([][]byte, []bool, error) {
 	return c.getMany(ctx, collection, 0, false, ids)
 }
 
+// GetManyHandle fetches documents by ID through an open collection handle.
+// Returned document slices borrow the client's response buffer and remain valid
+// until the next round trip on this client.
 func (c *Client) GetManyHandle(ctx context.Context, handle CollectionHandle, ids [][]byte) ([][]byte, []bool, error) {
 	return c.getMany(ctx, "", handle, true, ids)
 }
@@ -111,6 +118,8 @@ func appendGetManyRequestBodyRef(dst []byte, collection string, handle Collectio
 	return appendByteVectorSectionKnownLen(body, iwire.SectionDocumentIDs, idsLen, ids)
 }
 
+// IndexLookup returns IDs matching an index value. Returned ID slices borrow the
+// client's response buffer and remain valid until the next round trip.
 func (c *Client) IndexLookup(ctx context.Context, collection, index string, value any, limits CursorLimits) ([][]byte, bool, error) {
 	scalar, err := encodeScalar(value)
 	if err != nil {
@@ -131,6 +140,8 @@ func (c *Client) IndexLookup(ctx context.Context, collection, index string, valu
 	return decodeIDsAndTruncated(sections, c.limits)
 }
 
+// IndexRange returns IDs within an index range. Returned ID slices borrow the
+// client's response buffer and remain valid until the next round trip.
 func (c *Client) IndexRange(ctx context.Context, collection, index string, opts IndexRange) ([][]byte, bool, error) {
 	req := []iwire.Section{
 		collectionNameRef(collection),
@@ -163,6 +174,8 @@ func (c *Client) IndexRange(ctx context.Context, collection, index string, opts 
 	return decodeIDsAndTruncated(sections, c.limits)
 }
 
+// OpenScan starts a collection scan. Returned ID and document slices borrow the
+// client's response buffer and remain valid until the next round trip.
 func (c *Client) OpenScan(ctx context.Context, collection string, limits CursorLimits) (DocumentsResult, error) {
 	req := []iwire.Section{collectionNameRef(collection)}
 	if limits.MaxItems > 0 || limits.MaxBytes > 0 {
@@ -175,6 +188,8 @@ func (c *Client) OpenScan(ctx context.Context, collection string, limits CursorL
 	return decodeDocumentsResult(sections, c.limits)
 }
 
+// CursorNext fetches the next cursor batch. Returned ID and document slices
+// borrow the client's response buffer and remain valid until the next round trip.
 func (c *Client) CursorNext(ctx context.Context, cursorID uint64, limits CursorLimits) (DocumentsResult, error) {
 	sections, err := c.commandSectionsOnStream(ctx, cursorID, iwire.CommandCursorNext,
 		iwire.Section{ID: iwire.SectionCursorRef, Bytes: encodeCursorRef(cursorID)},

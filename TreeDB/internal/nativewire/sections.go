@@ -22,10 +22,10 @@ func AppendSection(dst []byte, s Section) ([]byte, error) {
 
 func AppendSectionHeader(dst []byte, id SectionID, flags uint64, sectionLen int) ([]byte, error) {
 	if err := validateSectionFlags(flags); err != nil {
-		return nil, err
+		return dst, err
 	}
 	if sectionLen < 0 {
-		return nil, protocolError(ErrMalformedFrame, "negative section length")
+		return dst, protocolError(ErrMalformedFrame, "negative section length")
 	}
 	dst = growBytes(dst, SectionHeaderEncodedLen(id, flags, sectionLen))
 	return appendSectionHeaderUnchecked(dst, id, flags, sectionLen), nil

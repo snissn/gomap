@@ -224,7 +224,10 @@ func (c *counters) snapshot() map[string]uint64 {
 	addIfNonZero("errors.total", c.errorsTotal.Load())
 	addIfNonZero("dispatch_nanos_total", c.dispatchNanos.Load())
 	for code := iwire.ErrorCode(1); code <= iwire.ErrorCode(maxTrackedErrorCode); code++ {
-		addIfNonZero("errors.code."+strconv.FormatUint(uint64(code), 10), c.errorCodes[code].Load())
+		value := c.errorCodes[code].Load()
+		if value != 0 {
+			out["errors.code."+strconv.FormatUint(uint64(code), 10)] = value
+		}
 	}
 	for id := range c.commands {
 		name := commandCounterName(iwire.CommandID(id))

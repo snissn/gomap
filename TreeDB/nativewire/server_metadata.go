@@ -71,12 +71,17 @@ func (s *Server) handleCreateIndex(state *connState, sections []iwire.Section) (
 	if err != nil {
 		return nil, metadataWrap(err)
 	}
+	for _, existing := range collection.Meta().Indexes {
+		if existing.Name == def.Name {
+			return nil, protocolError(iwire.ErrInvalidCommand, "duplicate index %q", def.Name)
+		}
+	}
 	meta, err := collection.CreateIndex(def)
 	if err != nil {
 		return nil, metadataWrap(err)
 	}
 	if state != nil {
-		state.cacheCollection(name, collection, s.maxCollectionHandles)
+		state.cacheCollection(name, collection, s.maxCachedCollections)
 	}
 	return []iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(*meta)}}, nil
 }
@@ -120,7 +125,7 @@ func (s *Server) handleDropIndex(state *connState, sections []iwire.Section) ([]
 		return nil, metadataWrap(err)
 	}
 	if state != nil {
-		state.cacheCollection(name, collection, s.maxCollectionHandles)
+		state.cacheCollection(name, collection, s.maxCachedCollections)
 	}
 	return []iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(*meta)}}, nil
 }
@@ -137,7 +142,7 @@ func (s *Server) handleOpenCollection(state *connState, sections []iwire.Section
 	if err != nil {
 		return nil, metadataWrap(err)
 	}
-	handle, err := state.addCollectionHandle(name, collection, s.maxCollectionHandles)
+	handle, err := state.addCollectionHandle(name, collection, s.maxCollectionHandles, s.maxCachedCollections)
 	if err != nil {
 		return nil, err
 	}
