@@ -319,7 +319,7 @@ func TestCommandScratchKeepsInlinePathAfterWideRequest(t *testing.T) {
 	if scratch.seenOverflow == nil {
 		t.Fatal("wide validation did not retain overflow scratch")
 	}
-	scratch.seenOverflow[sectionStart] = 99
+	scratch.seenOverflow[sectionStart] = sectionSeenEntry{generation: scratch.seenGeneration, count: 99}
 	if _, err := registry.ValidateRequestSectionsInto(smallSections, &scratch); err != nil {
 		t.Fatalf("ValidateRequestSectionsInto small after wide: %v", err)
 	}
