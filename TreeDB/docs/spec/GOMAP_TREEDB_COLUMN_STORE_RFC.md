@@ -839,8 +839,12 @@ Update model:
    locators as invisible.
 7. Maintenance compacts base parts, insert deltas, update deltas, and delete
    bitmaps into new base parts.
-8. Old parts become unreachable and are reclaimed by column file GC or rewrite
-   after snapshots release them.
+8. The compaction publish removes or supersedes the compacted source part
+   descriptors and their superseded delete/mark metadata from the new active
+   descriptor roots, while old snapshot roots keep those descriptors reachable
+   for existing readers.
+9. Old parts become unreachable from active roots and are reclaimed by column
+   file GC or rewrite after snapshots release them.
 
 Small foreground updates can batch in memory briefly to amortize part-builder
 overhead, but the crash-recoverable representation must be columnar. A row
@@ -1530,10 +1534,20 @@ compact_column_parts(snapshot, source_parts, target_policy):
     build merge iterator over base parts, delta parts, and delete bitmaps
     emit new row-aligned ColumnBatch chunks
     encode chunks into new parts using target codec policy
-    publish new descriptors, primary locators, deletes, and system root
-    leave old parts reachable until no snapshots reference old roots
+    publish new descriptors, primary locators, delete metadata, and system root
+    remove/supersede source part descriptors and obsolete delete/mark metadata
+        from the new active descriptor roots in the same root group
+    keep source parts reachable through old snapshot roots only
     let column file GC/rewrite reclaim old files or packed containers
 ```
+
+The compaction publish must make the active descriptor roots a replacement
+manifest for the affected key ranges, not an append-only list of all historical
+parts. New scans must enumerate the new compacted descriptors and must not also
+enumerate the source base/delta descriptors that fed the compaction. Existing
+snapshots remain safe because they still reference the old roots that contain
+the source descriptors; GC/rewrite can reclaim source files only after those
+snapshot roots drain.
 
 A part descriptor must record enough source stats to make maintenance
 observable:
@@ -1936,6 +1950,8 @@ Deliverables:
 - delete bitmap handling;
 - compaction from base parts, delta parts, and delete bitmaps into new base
   parts;
+- active descriptor-root deletion/supersession of compacted source parts and
+  obsolete delete/mark metadata;
 - snapshot-safe publish and GC integration;
 - online and offline maintenance hooks.
 
@@ -1945,6 +1961,8 @@ Tests:
 - updated rows are durably stored in column parts after reopen, with no
   permanent row-overlay dependency;
 - compaction with active snapshots;
+- post-compaction scans do not return duplicate rows from both compacted parts
+  and source parts;
 - crash/reopen around compaction publish;
 - column file GC/rewrite after compaction;
 - unique secondary correctness after updates.
@@ -2060,6 +2078,7 @@ Gates:
 | Flexible schemas create unpredictable columns and compression choices. | Keep `TCS1` fixed-schema only; defer lazy/flexible schema mode to a separate design. |
 | Secondary indexes duplicate too much data. | Keep current secondary root format first; later consider optional row-locator payloads, compressed posting-list values, or bitmap payloads for low-cardinality shapes. |
 | Secondary indexes drift from column-store visibility after updates. | Publish secondary deletes/inserts, primary locator changes, part descriptors, and delete bitmaps in the same root group; test crash/reopen and active snapshots. |
+| Compaction leaves source parts active. | Publish compacted descriptors and descriptor-root deletes/supersession for all source parts in one root group; test post-compaction scans for duplicate/stale rows and delayed GC with active snapshots. |
 | Fast filters produce wrong answers. | Treat filters as pruning only, use tri-state `MayMatch`, forbid false negatives in property tests, and always verify matches on decoded rows or exact secondary entries. |
 | Haystack search semantics become confusing for non-string types. | Require explicit byte-haystack adapters; use typed filters for numeric equality/range and reserve encoded-byte substring search for explicit predicates. |
 | Fast count metadata becomes stale. | Publish count deltas in the same root group as inserts/deletes and verify across update, compaction, reopen, and snapshots. |
