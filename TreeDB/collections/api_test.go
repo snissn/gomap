@@ -11474,6 +11474,17 @@ func TestCollectionFindByMissingIndexReturnsNil(t *testing.T) {
 	if ids != nil || truncated {
 		t.Fatalf("missing index range ids=%q truncated=%v want nil/false", ids, truncated)
 	}
+	records, truncated, err := col.FindDocumentsByIndexRange("missing", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: "hnl", Inclusive: true},
+		Upper: IndexRangeBound{Value: "hnl", Inclusive: true},
+		Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("find documents missing index range: %v", err)
+	}
+	if records != nil || truncated {
+		t.Fatalf("missing index document range records=%v truncated=%v want nil/false", records, truncated)
+	}
 }
 
 func TestCollectionFindByIndexValueMatchesLargeJSONInteger(t *testing.T) {
@@ -11779,6 +11790,76 @@ func TestCollectionFindDocumentsByIndexRangeTypedInt64(t *testing.T) {
 		Upper: IndexRangeBound{Unbounded: true},
 	}); err == nil || !strings.Contains(err.Error(), "positive limit") {
 		t.Fatalf("unlimited document range err=%v want positive limit", err)
+	}
+}
+
+func TestCollectionScanBorrowedDocumentsByIndexRangeContracts(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "score", Field: "score", ValueType: IndexValueInt64}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"score":1,"name":"one"}`),
+			[]byte(`{"score":2,"name":"two"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush rows: %v", err)
+	}
+	opts := IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(1), Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+		Limit: 2,
+	}
+	if _, err := col.ScanBorrowedDocumentsByIndexRange("score", opts, nil); err == nil || !strings.Contains(err.Error(), "nil borrowed") {
+		t.Fatalf("nil borrowed callback err=%v want nil-callback error", err)
+	}
+	called := false
+	truncated, err := col.ScanBorrowedDocumentsByIndexRange("missing", opts, func(BorrowedDocumentRecord) (bool, error) {
+		called = true
+		return true, nil
+	})
+	if err != nil || truncated || called {
+		t.Fatalf("missing index truncated=%v called=%v err=%v want false,false,nil", truncated, called, err)
+	}
+	if _, err := col.ScanBorrowedDocumentsByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(1), Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+	}, func(BorrowedDocumentRecord) (bool, error) { return true, nil }); err == nil || !strings.Contains(err.Error(), "positive limit") {
+		t.Fatalf("zero limit borrowed err=%v want positive limit", err)
+	}
+	if _, err := col.ScanBorrowedDocumentsByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(1), Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+		Limit: 1,
+		Desc:  true,
+	}, func(BorrowedDocumentRecord) (bool, error) { return true, nil }); err == nil || !strings.Contains(err.Error(), "descending") {
+		t.Fatalf("descending borrowed err=%v want descending error", err)
+	}
+	var ids [][]byte
+	truncated, err = col.ScanBorrowedDocumentsByIndexRange("score", opts, func(record BorrowedDocumentRecord) (bool, error) {
+		ids = append(ids, bytes.Clone(record.ID))
+		return false, nil
+	})
+	if err != nil || truncated || len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("early stop ids=%q truncated=%v err=%v want u1,false,nil", ids, truncated, err)
 	}
 }
 
