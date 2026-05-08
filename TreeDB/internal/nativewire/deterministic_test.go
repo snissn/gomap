@@ -2,6 +2,7 @@ package nativewire
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"testing"
 )
@@ -114,7 +115,7 @@ func TestDeterministicEntryRequiresMetadataCatalogGuard(t *testing.T) {
 	sections := []Section{
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateCollection, Version: 1})},
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
-		{ID: SectionCollectionMeta, Bytes: []byte("users")},
+		{ID: SectionCollectionMeta, Bytes: deterministicCollectionMetaPayload("users")},
 	}
 	if _, err := registry.ValidateRequestSections(sections); codeOf(err) != ErrInvalidCommand {
 		t.Fatalf("missing metadata catalog guard err=%v code=%d", err, codeOf(err))
@@ -127,6 +128,53 @@ func TestDeterministicEntryRequiresMetadataCatalogGuard(t *testing.T) {
 	}
 	if _, err := AppendDeterministicEntry(nil, cmd); err != nil {
 		t.Fatalf("AppendDeterministicEntry guarded: %v", err)
+	}
+}
+
+func TestDeterministicEntryRejectsMalformedMetadataPayloads(t *testing.T) {
+	registry := MustV1Registry()
+	sections := []Section{
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateCollection, Version: 1})},
+		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
+		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+		{ID: SectionCollectionMeta, Bytes: nil},
+	}
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("malformed collection_meta err=%v code=%d", err, codeOf(err))
+	}
+}
+
+func TestDeterministicMetadataRequiresTaggedCollectionName(t *testing.T) {
+	registry := MustV1Registry()
+	sections := []Section{
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateIndex, Version: 1})},
+		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
+		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+		{ID: SectionCollectionRef, Bytes: []byte("users")},
+		{ID: SectionIndexDefinition, Bytes: deterministicIndexDefinitionPayload("email", "email")},
+	}
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("raw metadata collection_ref err=%v code=%d", err, codeOf(err))
+	}
+	for i := range sections {
+		if sections[i].ID == SectionCollectionRef {
+			sections[i].Bytes = append([]byte{deterministicCollectionRefTagName}, []byte("users")...)
+		}
+	}
+	cmd, err = registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections tagged: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); err != nil {
+		t.Fatalf("AppendDeterministicEntry tagged: %v", err)
 	}
 }
 
@@ -307,4 +355,35 @@ func insertBatchDeterministicSections() []Section {
 		{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte("{}"))},
 		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
 	}
+}
+
+func deterministicCollectionMetaPayload(name string) []byte {
+	dst := appendUvarint(nil, 1)
+	dst = appendDeterministicTestString(dst, name)
+	dst = appendUvarint(dst, uint64(DocumentFormatDefault))
+	dst = appendUvarint(dst, 0)
+	dst = appendUvarint(dst, 0)
+	dst = append(dst, 0, 0, 0)
+	dst = binary.AppendVarint(dst, 0)
+	dst = binary.AppendVarint(dst, 0)
+	dst = binary.AppendVarint(dst, 0)
+	dst = append(dst, 0, 0)
+	dst = binary.AppendVarint(dst, 0)
+	dst = appendUvarint(dst, 0)
+	return dst
+}
+
+func deterministicIndexDefinitionPayload(name, field string) []byte {
+	dst := appendUvarint(nil, 1)
+	dst = appendDeterministicTestString(dst, name)
+	dst = appendDeterministicTestString(dst, field)
+	dst = appendUvarint(dst, 1)
+	dst = append(dst, 0, 0)
+	dst = appendUvarint(dst, 0)
+	return dst
+}
+
+func appendDeterministicTestString(dst []byte, value string) []byte {
+	dst = appendUvarint(dst, uint64(len(value)))
+	return append(dst, value...)
 }
