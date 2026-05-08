@@ -32,6 +32,18 @@ func TestCommandHeaderRejectsNonMinimalUvarint(t *testing.T) {
 	}
 }
 
+func TestCommandHeaderRejectsTruncatedAndOverflowUvarints(t *testing.T) {
+	if _, err := DecodeCommandHeader(nil); codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("empty command header err=%v code=%d", err, codeOf(err))
+	}
+	if _, err := DecodeCommandHeader([]byte{0x80}); codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("truncated command id err=%v code=%d", err, codeOf(err))
+	}
+	if _, err := DecodeCommandHeader([]byte{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00}); codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("overflow command id err=%v code=%d", err, codeOf(err))
+	}
+}
+
 func TestRegistryValidatesRequestSections(t *testing.T) {
 	registry := MustV1Registry()
 	sections := insertBatchSections()
@@ -61,6 +73,14 @@ func TestRegistryValidatesRequestSections(t *testing.T) {
 	sections[1].Flags = 2
 	if _, err := registry.ValidateRequestSections(sections); codeOf(err) != ErrUnsupportedFeature {
 		t.Fatalf("unknown section flag err=%v code=%d", err, codeOf(err))
+	}
+}
+
+func TestNilRegistryRejectsValidation(t *testing.T) {
+	var registry *Registry
+	_, err := registry.ValidateRequestSections(insertBatchSections())
+	if codeOf(err) != ErrUnsupportedVersion {
+		t.Fatalf("nil registry err=%v code=%d", err, codeOf(err))
 	}
 }
 
@@ -124,6 +144,17 @@ func TestRegistryCursorCommandsUseLimitSections(t *testing.T) {
 		{ID: SectionCursorRef, Bytes: []byte{1}},
 	}); codeOf(err) != ErrInvalidCommand {
 		t.Fatalf("cursor_next missing limits err=%v code=%d", err, codeOf(err))
+	}
+	if _, err := registry.ValidateRequestSections([]Section{
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCursorNext, Version: 1})},
+		{ID: SectionCursorLimits, Bytes: []byte{10, 0}},
+	}); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("cursor_next missing cursor_ref err=%v code=%d", err, codeOf(err))
+	}
+	if _, err := registry.ValidateRequestSections([]Section{
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCursorClose, Version: 1})},
+	}); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("cursor_close missing cursor_ref err=%v code=%d", err, codeOf(err))
 	}
 }
 
