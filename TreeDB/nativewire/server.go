@@ -55,10 +55,11 @@ type Server struct {
 	collections            *collections.CollectionManager
 	backend                *backenddb.DB
 
-	closed     atomic.Bool
-	connMu     sync.Mutex
-	conns      map[net.Conn]struct{}
-	metadataMu sync.Mutex
+	closed              atomic.Bool
+	connMu              sync.Mutex
+	conns               map[net.Conn]struct{}
+	metadataMu          sync.Mutex
+	metadataIdempotency map[string]metadataIdempotencyEntry
 
 	inFlight   atomic.Int64
 	nextConn   atomic.Int64
@@ -149,7 +150,7 @@ func NewServer(opts ServerOptions) *Server {
 		maxInFlight = defaultMaxInFlight
 	}
 	maxCollectionHandles := opts.MaxCollectionHandles
-	if maxCollectionHandles <= 0 {
+	if maxCollectionHandles == 0 {
 		maxCollectionHandles = defaultMaxCollectionHandles
 	}
 	maxOpenCursors := opts.MaxOpenCursors
@@ -315,6 +316,9 @@ func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState,
 	}
 	switch header.Type {
 	case iwire.FrameHello:
+		if err := s.validateHelloBody(body); err != nil {
+			return s.writeError(w, header, err)
+		}
 		return s.writeHelloOK(w, header, state)
 	case iwire.FramePing:
 		return s.writeSimpleFrame(w, iwire.Header{Type: iwire.FramePong, StreamID: header.StreamID, RequestID: header.RequestID}, nil)
@@ -436,6 +440,29 @@ func (s *Server) writeHelloOK(w io.Writer, header iwire.Header, state *connState
 	return s.writeSimpleFrame(w, iwire.Header{Type: iwire.FrameHelloOK, StreamID: header.StreamID, RequestID: header.RequestID}, body)
 }
 
+func (s *Server) validateHelloBody(body []byte) error {
+	if len(body) == 0 {
+		return nil
+	}
+	sections, err := iwire.DecodeSections(body, s.limits)
+	if err != nil {
+		return err
+	}
+	for _, section := range sections {
+		switch section.ID {
+		case iwire.SectionCapabilitySet,
+			iwire.SectionTraceContext,
+			iwire.SectionCompression:
+			continue
+		default:
+			if section.Critical() {
+				return protocolError(iwire.ErrUnsupportedFeature, "unknown critical hello section %d", section.ID)
+			}
+		}
+	}
+	return nil
+}
+
 func appendGoawayBody(dst []byte, lastAcceptedRequestID uint64) ([]byte, error) {
 	return iwire.AppendSection(dst, iwire.Section{
 		ID: iwire.SectionResponseMeta,
@@ -450,10 +477,7 @@ func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error 
 	if code == 0 {
 		code = iwire.ErrInternal
 	}
-	message := err.Error()
-	if code == iwire.ErrInternal {
-		message = "internal error"
-	}
+	message := wireErrorMessage(code, err)
 	body, sectionErr := iwire.AppendSection(nil, iwire.Section{
 		ID:    iwire.SectionError,
 		Bytes: appendErrorPayload(nil, code, retryableError(code), message),
@@ -464,6 +488,59 @@ func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error 
 	s.counters.inc("errors.total")
 	s.counters.inc("errors.code." + strconv.FormatUint(uint64(code), 10))
 	return s.writeSimpleFrame(w, iwire.Header{Type: iwire.FrameError, StreamID: request.StreamID, RequestID: request.RequestID}, body)
+}
+
+func wireErrorMessage(code iwire.ErrorCode, err error) string {
+	var protocolErr *iwire.ProtocolError
+	if errors.As(err, &protocolErr) && protocolErr.Reason != "" {
+		return protocolErr.Reason
+	}
+	switch code {
+	case iwire.ErrMalformedFrame:
+		return "malformed frame"
+	case iwire.ErrUnsupportedVersion:
+		return "unsupported version"
+	case iwire.ErrUnsupportedFeature:
+		return "unsupported feature"
+	case iwire.ErrAuthRequired:
+		return "auth required"
+	case iwire.ErrPermissionDenied:
+		return "permission denied"
+	case iwire.ErrInvalidCommand:
+		return "invalid command"
+	case iwire.ErrCollectionNotFound:
+		return "collection not found"
+	case iwire.ErrIndexNotFound:
+		return "index not found"
+	case iwire.ErrDuplicateDocumentID:
+		return "duplicate document id"
+	case iwire.ErrDocumentExists:
+		return "document exists"
+	case iwire.ErrUniqueIndexConflict:
+		return "unique index conflict"
+	case iwire.ErrCatalogVersionMismatch:
+		return "catalog version mismatch"
+	case iwire.ErrReadOnly:
+		return "read only"
+	case iwire.ErrTimeout:
+		return "timeout"
+	case iwire.ErrCanceled:
+		return "canceled"
+	case iwire.ErrResourceExhausted:
+		return "resource exhausted"
+	case iwire.ErrDurabilityUnavailable:
+		return "durability unavailable"
+	case iwire.ErrConsistencyUnavailable:
+		return "consistency unavailable"
+	case iwire.ErrCursorNotFound:
+		return "cursor not found"
+	case iwire.ErrCatalogChanged:
+		return "catalog changed"
+	case iwire.ErrIdempotencyConflict:
+		return "idempotency conflict"
+	default:
+		return "internal error"
+	}
 }
 
 func (s *Server) writeSimpleFrame(w io.Writer, header iwire.Header, body []byte) error {
@@ -496,6 +573,15 @@ func (s *Server) Stats() map[string]string {
 		"dispatch_nanos_total",
 	} {
 		out[nativeStatsPrefix+key] = "0"
+	}
+	if s.registry != nil {
+		for _, schema := range s.registry.Schemas() {
+			out[nativeStatsPrefix+"commands."+schema.Name+".requests_total"] = "0"
+			out[nativeStatsPrefix+"commands."+schema.Name+".errors_total"] = "0"
+		}
+	}
+	for code := iwire.ErrorCode(1); code <= iwire.MaxErrorCode; code++ {
+		out[nativeStatsPrefix+"errors.code."+strconv.FormatUint(uint64(code), 10)] = "0"
 	}
 	for key, value := range s.counters.snapshot() {
 		out[nativeStatsPrefix+key] = strconv.FormatUint(value, 10)

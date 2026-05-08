@@ -264,6 +264,52 @@ func TestMetadataClientRejectsEmptyCallerIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestMetadataClientRejectsInvalidCollectionNamesBeforeSend(t *testing.T) {
+	client := &Client{}
+	ctx := context.Background()
+	if _, err := client.OpenCollection(ctx, "bad/name"); nativeCodeOf(err) != iwire.ErrInvalidCommand {
+		t.Fatalf("OpenCollection err=%v code=%d want invalid command", err, nativeCodeOf(err))
+	}
+	if _, err := client.CreateIndex(ctx, "bad/name", collections.IndexDefinition{Name: "email", Field: "email", ValueType: collections.IndexValueString}); nativeCodeOf(err) != iwire.ErrInvalidCommand {
+		t.Fatalf("CreateIndex err=%v code=%d want invalid command", err, nativeCodeOf(err))
+	}
+	if _, err := client.ListIndexes(ctx, "bad/name"); nativeCodeOf(err) != iwire.ErrInvalidCommand {
+		t.Fatalf("ListIndexes err=%v code=%d want invalid command", err, nativeCodeOf(err))
+	}
+	if _, err := client.DropIndex(ctx, "bad/name", "email"); nativeCodeOf(err) != iwire.ErrInvalidCommand {
+		t.Fatalf("DropIndex err=%v code=%d want invalid command", err, nativeCodeOf(err))
+	}
+}
+
+func TestMetadataIdempotencyReplayPrecedesCatalogGuard(t *testing.T) {
+	client, _, db := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	guardedCtx := WithExpectedCatalogVersion(WithIdempotencyKey(ctx, []byte("create-users-once")), catalogVersion(t, db))
+	first, err := client.CreateCollection(guardedCtx, collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("CreateCollection first: %v", err)
+	}
+	if got, want := catalogVersion(t, db), guardedCatalogVersion(t, guardedCtx)+1; got != want {
+		t.Fatalf("catalog version after first=%d want %d", got, want)
+	}
+	second, err := client.CreateCollection(guardedCtx, collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("CreateCollection replay with stale guard: %v", err)
+	}
+	if second.Name != first.Name {
+		t.Fatalf("replayed meta=%+v want %+v", second, first)
+	}
+
+	if _, err := client.CreateIndex(guardedCtx, "users", collections.IndexDefinition{Name: "email", Field: "email", ValueType: collections.IndexValueString}); !isRemoteError(err, iwire.ErrIdempotencyConflict) {
+		t.Fatalf("CreateIndex reused idempotency key err=%v want idempotency conflict", err)
+	}
+}
+
 func replicatedTestGuard(id string, version uint64) []iwire.Section {
 	return []iwire.Section{
 		{ID: iwire.SectionIdempotencyKey, Bytes: []byte(id)},
@@ -291,6 +337,15 @@ func catalogVersion(t *testing.T, db *backenddb.DB) uint64 {
 	}
 	defer func() { _ = snap.Close() }()
 	return snap.State().CommitSeq
+}
+
+func guardedCatalogVersion(t *testing.T, ctx context.Context) uint64 {
+	t.Helper()
+	opts := metadataGuardOptionsFromContext(ctx)
+	if !opts.hasExpectedCatalogVersion {
+		t.Fatal("missing expected catalog version")
+	}
+	return opts.expectedCatalogVersion
 }
 
 func TestReadVarintRejectsInvalidOffsets(t *testing.T) {
@@ -336,6 +391,24 @@ func TestMetadataOpenCollectionHandleLimit(t *testing.T) {
 	}
 	if _, err := client.OpenCollection(ctx, "users"); !isRemoteError(err, iwire.ErrResourceExhausted) {
 		t.Fatalf("OpenCollection second error=%v want resource exhausted", err)
+	}
+}
+
+func TestMetadataOpenCollectionNegativeHandleLimitIsUnlimited(t *testing.T) {
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{MaxCollectionHandles: -1})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if _, err := client.OpenCollection(ctx, "users"); err != nil {
+		t.Fatalf("OpenCollection first: %v", err)
+	}
+	if _, err := client.OpenCollection(ctx, "users"); err != nil {
+		t.Fatalf("OpenCollection second: %v", err)
 	}
 }
 
