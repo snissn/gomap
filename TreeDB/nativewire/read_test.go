@@ -267,7 +267,7 @@ func TestDecodeReadResultsRejectsTrailingTruncatedBytes(t *testing.T) {
 }
 
 func TestIndexRangeByteOnlyLimitDoesNotBecomeQueryLimit(t *testing.T) {
-	server := &Server{}
+	server := NewServer(ServerOptions{})
 	_, opts, limits, err := server.indexRangeRequest([]iwire.Section{
 		{ID: iwire.SectionIndexName, Bytes: encodeIndexName("city")},
 		{ID: iwire.SectionCursorLimits, Bytes: encodeCursorLimits(CursorLimits{MaxBytes: 1 << 20})},
@@ -596,6 +596,41 @@ func TestCursorIdleReaperRunsWithoutFollowupRequest(t *testing.T) {
 	if err := client.Hello(ctx); err != nil {
 		t.Fatalf("Hello: %v", err)
 	}
+
+	first, err := client.OpenScan(ctx, "users", CursorLimits{MaxItems: 1})
+	if err != nil {
+		t.Fatalf("OpenScan: %v", err)
+	}
+	if first.Cursor.CursorID == 0 {
+		t.Fatalf("first=%+v want open cursor", first)
+	}
+	waitForOpenCursorCount(t, server, 0)
+	_, err = client.CursorNext(ctx, first.Cursor.CursorID, CursorLimits{MaxItems: 1})
+	if !isRemoteError(err, iwire.ErrCursorNotFound) {
+		t.Fatalf("CursorNext after idle reap error=%v want cursor_not_found", err)
+	}
+}
+
+func TestInProcessClientCursorIdleReaperRunsWithoutFollowupRequest(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	seedReadCollection(t, mgr)
+	server := NewServer(ServerOptions{
+		Collections:       mgr,
+		Backend:           db,
+		CursorIdleTimeout: 20 * time.Millisecond,
+	})
+	t.Cleanup(func() { _ = db.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client, cleanup, err := NewInProcessClient(ctx, server)
+	if err != nil {
+		t.Fatalf("NewInProcessClient: %v", err)
+	}
+	defer cleanup()
 
 	first, err := client.OpenScan(ctx, "users", CursorLimits{MaxItems: 1})
 	if err != nil {
