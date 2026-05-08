@@ -1155,8 +1155,15 @@ func TestServerUpdateCoalescesConcurrentDistinctIDs(t *testing.T) {
 		assertInt32(t, response.doc, "nModified", 1)
 	}
 	after := db.State()
-	if after.CommitSeq != before.CommitSeq+1 {
-		t.Fatalf("coalesced updates advanced commit seq by %d, want 1", after.CommitSeq-before.CommitSeq)
+	if after.CommitSeq != before.CommitSeq {
+		t.Fatalf("coalesced updates advanced commit seq by %d before flush, want 0", after.CommitSeq-before.CommitSeq)
+	}
+	if err := server.Collections.FlushAll(); err != nil {
+		t.Fatalf("flush coalesced updates: %v", err)
+	}
+	flushed := db.State()
+	if flushed.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("flushed coalesced updates advanced commit seq by %d, want 1", flushed.CommitSeq-before.CommitSeq)
 	}
 }
 

@@ -74,3 +74,58 @@ func TestCollectionManagerCloseDrainsQueuedIndexedFlushUnit(t *testing.T) {
 		t.Fatalf("reopened email ids=%q want [u1]", ids)
 	}
 }
+
+func TestCollectionManagerCloseDrainsPendingPrimaryOnlyNoIndexUpdate(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"name":"ada","city":"hnl"}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert: %v", err)
+	}
+	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"name":"ada","city":"sea"}`), true, nil
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("update matched/modified=%v/%v want true/true", matched, modified)
+	}
+	if got := collectionCheckpointBoundaryPendingCountForTest(t, col); got != 1 {
+		t.Fatalf("pending count before close=%d want 1", got)
+	}
+
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	got, err := reopenedCol.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get reopened document: %v", err)
+	}
+	if want := []byte(`{"name":"ada","city":"sea"}`); !bytes.Equal(got, want) {
+		t.Fatalf("reopened document=%q want %q", got, want)
+	}
+}

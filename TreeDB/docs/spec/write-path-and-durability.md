@@ -104,6 +104,12 @@ Current behavior:
 
 In backend-only mode, checkpoint is implemented as an empty sync batch write.
 
+Collection-local write domains are a separate layer above backend checkpoint.
+`DB.Checkpoint()` does not drain collection-local staged no-index primary
+updates or queued/active indexed write memtables. Collection callers that need
+those staged writes to reach persisted collection roots must use
+`Collection.Flush`, `CollectionManager.FlushAll`, or backend `DB.Close`.
+
 ## 7. Auto-Checkpoint Defaults (Cached Mode)
 
 When WAL is enabled, public `treedb.Open` defaults to:
