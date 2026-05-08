@@ -64,10 +64,11 @@ func AppendDeterministicEntryWithLimits(dst []byte, cmd ValidatedCommand, limits
 	if cmd.Schema.RequiresCatalogGuard && !cmd.hasSection(SectionExpectedCatalogVersion) {
 		return dst[:start], protocolError(ErrInvalidCommand, "missing catalog guard")
 	}
-	deterministicFlags := DeterministicCommandFlags(cmd.Header.Flags)
-	if deterministicFlags != 0 {
-		return dst[:start], protocolError(ErrUnsupportedFeature, "unsupported deterministic command flags 0x%x", deterministicFlags)
+	unsupportedFlags := UnsupportedDeterministicCommandFlags(cmd.Header.Flags)
+	if unsupportedFlags != 0 {
+		return dst[:start], protocolError(ErrUnsupportedFeature, "unsupported deterministic command flags 0x%x", unsupportedFlags)
 	}
+	deterministicFlags := DeterministicCommandFlags(cmd.Header.Flags)
 
 	var deterministicScratch [16]Section
 	deterministic, err := cmd.deterministicSectionsInto(deterministicScratch[:0], limits)
@@ -166,6 +167,9 @@ func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *Determinis
 	}
 	if sectionCount64 > uint64(maxInt) {
 		return failBeforeSections(protocolError(ErrResourceExhausted, "deterministic entry section count exceeds int capacity"))
+	}
+	if sectionCount64 > uint64((len(src)-off)/2) {
+		return failBeforeSections(protocolError(ErrMalformedFrame, "deterministic entry section count %d exceeds remaining header bytes %d", sectionCount64, len(src)-off))
 	}
 	sectionCount := int(sectionCount64)
 	sections, borrowedScratch := deterministicEntrySectionsBuffer(sectionCount, scratch)

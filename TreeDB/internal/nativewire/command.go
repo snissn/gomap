@@ -16,9 +16,14 @@ const (
 )
 
 const commandResponseShapingFlagsMask = CommandFlagOmitResultIDs | CommandFlagOmitResponseMeta
+const deterministicCommandFlagsMask uint64 = 0
 
 func DeterministicCommandFlags(flags uint64) uint64 {
-	return flags &^ commandResponseShapingFlagsMask
+	return flags & deterministicCommandFlagsMask
+}
+
+func UnsupportedDeterministicCommandFlags(flags uint64) uint64 {
+	return flags &^ (commandResponseShapingFlagsMask | deterministicCommandFlagsMask)
 }
 
 func AppendCommandHeader(dst []byte, h CommandHeader) []byte {
