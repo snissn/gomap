@@ -608,6 +608,39 @@ func TestAppendDeterministicEntryWithLimitsHonorsEnvelopeLimits(t *testing.T) {
 	}
 }
 
+func TestAppendDeterministicEntryEnforcesHardSectionCap(t *testing.T) {
+	const (
+		commandID    = CommandID(9200)
+		sectionStart = SectionID(1300)
+	)
+	rules := make([]SectionRule, 0, maxDeterministicEntrySections+1)
+	sections := []Section{{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: commandID, Version: 1})}}
+	for i := 0; i < maxDeterministicEntrySections+1; i++ {
+		id := sectionStart + SectionID(i)
+		rules = append(rules, SectionRule{ID: id, Name: "deterministic", Required: true, Deterministic: true})
+		sections = append(sections, Section{ID: id, Bytes: []byte{byte(i)}})
+	}
+	registry, err := NewRegistry(CommandSchema{
+		ID:         commandID,
+		Version:    1,
+		Name:       "too_many_deterministic_sections",
+		Kind:       CommandKindMutation,
+		Replicated: true,
+		Sections:   rules,
+	})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	_, err = AppendDeterministicEntryWithLimits(nil, cmd, Limits{MaxSections: maxDeterministicEntrySections + 1})
+	if codeOf(err) != ErrResourceExhausted {
+		t.Fatalf("AppendDeterministicEntryWithLimits err=%v code=%d want resource exhausted", err, codeOf(err))
+	}
+}
+
 func TestDeterministicEntryRejectsInvalidEncodedIndexName(t *testing.T) {
 	registry := MustV1Registry()
 	limit := int(DefaultLimits().MaxDeterministicNameBytes)
