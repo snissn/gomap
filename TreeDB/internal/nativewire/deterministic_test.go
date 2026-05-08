@@ -24,7 +24,7 @@ func TestDeterministicEntryGoldenAndTransportIndependence(t *testing.T) {
 	sections := []Section{
 		{ID: 9000, Bytes: []byte("ignored")},
 		{ID: SectionTraceContext, Bytes: []byte("trace")},
-		{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte("{}"))},
+		{ID: SectionDocuments, Bytes: AppendByteVector(nil, deterministicBSONEmptyDocument())},
 		{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
 		{ID: SectionExpectedCatalogVersion, Bytes: deterministicUvarintPayload(deterministicFixtureCatalogVersion)},
@@ -1655,7 +1655,7 @@ func insertBatchDeterministicSections() []Section {
 		Section{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("c")},
 		Section{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
 		Section{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
-		Section{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte("{}"))},
+		Section{ID: SectionDocuments, Bytes: AppendByteVector(nil, deterministicBSONEmptyDocument())},
 	)
 }
 
@@ -1868,6 +1868,10 @@ func deterministicBSONDocumentXInt32(value int32) []byte {
 	}
 	binary.LittleEndian.PutUint32(out[:4], uint32(len(out)))
 	return out
+}
+
+func deterministicBSONEmptyDocument() []byte {
+	return []byte{5, 0, 0, 0, 0}
 }
 
 func deterministicTemplateRecord(fields ...string) []byte {
