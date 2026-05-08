@@ -13,8 +13,10 @@ import (
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
+// ErrServerClosed reports that the server is closed or refusing connections.
 var ErrServerClosed = errors.New("nativewire: server is closed")
 
+// WireError is an error response decoded from a remote native-wire peer.
 type WireError struct {
 	Code      iwire.ErrorCode
 	Retryable bool

@@ -96,9 +96,15 @@ func TestRegistryRejectsInvalidCommandShape(t *testing.T) {
 	if _, err := registry.ValidateRequestSections(sections); codeOf(err) != ErrUnsupportedVersion {
 		t.Fatalf("unsupported command version err=%v code=%d", err, codeOf(err))
 	}
+
+	sections = insertBatchSections()
+	sections[0].Bytes = AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 1, Flags: 1})
+	if _, err := registry.ValidateRequestSections(sections); codeOf(err) != ErrUnsupportedFeature {
+		t.Fatalf("unsupported command flags err=%v code=%d", err, codeOf(err))
+	}
 }
 
-func TestRegistryCursorCommandsUseStreamIDAndLimitSections(t *testing.T) {
+func TestRegistryCursorCommandsUseLimitSections(t *testing.T) {
 	registry := MustV1Registry()
 	if _, err := registry.ValidateRequestSections([]Section{
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCursorNext, Version: 1})},
@@ -129,6 +135,90 @@ func TestReplicatedV1CommandsRequireIdentityAndCatalogGuard(t *testing.T) {
 		if !schema.RequiresCatalogGuard {
 			t.Fatalf("%s is replicated without catalog guard", schema.Name)
 		}
+	}
+}
+
+func TestNewRegistryValidatesSchemaDefinitions(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		commands []CommandSchema
+	}{
+		{
+			name: "zero_version",
+			commands: []CommandSchema{{
+				ID:   9000,
+				Name: "zero_version",
+			}},
+		},
+		{
+			name: "duplicate_command_version",
+			commands: []CommandSchema{
+				{ID: 9000, Version: 1, Name: "a"},
+				{ID: 9000, Version: 1, Name: "b"},
+			},
+		},
+		{
+			name: "invalid_section_id",
+			commands: []CommandSchema{{
+				ID:      9000,
+				Version: 1,
+				Name:    "invalid_section",
+				Sections: []SectionRule{
+					{ID: 0, Name: "zero"},
+				},
+			}},
+		},
+		{
+			name: "duplicate_section_rule",
+			commands: []CommandSchema{{
+				ID:      9000,
+				Version: 1,
+				Name:    "duplicate_section",
+				Sections: []SectionRule{
+					{ID: SectionCollectionRef, Name: "collection_ref"},
+					{ID: SectionCollectionRef, Name: "collection_ref_again"},
+				},
+			}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := NewRegistry(tc.commands...); err == nil {
+				t.Fatalf("NewRegistry succeeded for invalid schema")
+			}
+		})
+	}
+}
+
+func TestNewRegistryAllowsPerCommandSharedSectionRules(t *testing.T) {
+	registry, err := NewRegistry(CommandSchema{
+		ID:      9000,
+		Version: 1,
+		Name:    "requires_deadline",
+		Kind:    CommandKindRead,
+		Sections: []SectionRule{
+			{ID: SectionDeadline, Name: "deadline", Required: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	sections := []Section{
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: 9000, Version: 1})},
+	}
+	if _, err := registry.ValidateRequestSections(sections); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("missing shared deadline err=%v code=%d", err, codeOf(err))
+	}
+	sections = append(sections, Section{ID: SectionDeadline, Bytes: []byte{1}})
+	if _, err := registry.ValidateRequestSections(sections); err != nil {
+		t.Fatalf("ValidateRequestSections with deadline: %v", err)
+	}
+}
+
+func TestProtocolErrorStringIncludesCodeAndReason(t *testing.T) {
+	err := protocolError(ErrInvalidCommand, "bad command")
+	got := err.Error()
+	if !strings.Contains(got, "error code") || !strings.Contains(got, "bad command") {
+		t.Fatalf("ProtocolError.Error()=%q", got)
 	}
 }
 
