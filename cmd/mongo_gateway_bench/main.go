@@ -4017,7 +4017,7 @@ func nativeWireBenchmarkCollectionMeta(cfg config, name string) collections.Coll
 }
 
 func nativeWireBenchmarkIndexes(cfg config) []collections.IndexDefinition {
-	indexes := make([]collections.IndexDefinition, 0, cfg.SecondaryIndexes+1)
+	indexes := make([]collections.IndexDefinition, 0, benchmarkIndexCapacity(cfg.SecondaryIndexes, cfg.RangeIndex))
 	storage := cfg.TreeDBIndexRootStorage
 	if cfg.SecondaryIndexes >= 1 {
 		indexes = append(indexes, collections.IndexDefinition{
@@ -4055,13 +4055,24 @@ func nativeWireBenchmarkIndexes(cfg config) []collections.IndexDefinition {
 	return indexes
 }
 
+func benchmarkIndexCapacity(secondaryIndexes int, rangeIndex bool) int {
+	if secondaryIndexes < 0 {
+		secondaryIndexes = 0
+	}
+	capacity := secondaryIndexes
+	if rangeIndex {
+		capacity++
+	}
+	return capacity
+}
+
 func validateNativeWireBenchmarkCollection(actual, expected collections.CollectionMeta) error {
 	actual = normalizeNativeWireBenchmarkCollectionMeta(actual)
 	expected = normalizeNativeWireBenchmarkCollectionMeta(expected)
 	if actual.Name != expected.Name {
 		return fmt.Errorf("native-wire benchmark collection name drifted: got %q want %q", actual.Name, expected.Name)
 	}
-	if actual.Options != expected.Options {
+	if !equalNativeWireBenchmarkCollectionOptions(actual.Options, expected.Options) {
 		return fmt.Errorf("native-wire benchmark collection %q options drifted: got %+v want %+v", actual.Name, actual.Options, expected.Options)
 	}
 	if len(actual.Indexes) != len(expected.Indexes) {
@@ -4084,6 +4095,17 @@ func validateNativeWireBenchmarkCollection(actual, expected collections.Collecti
 		}
 	}
 	return nil
+}
+
+func equalNativeWireBenchmarkCollectionOptions(actual, expected collections.CollectionOptions) bool {
+	return actual.DocumentFormat == expected.DocumentFormat &&
+		actual.DataRootStoragePolicy == expected.DataRootStoragePolicy &&
+		actual.IndexStateStoragePolicy == expected.IndexStateStoragePolicy &&
+		actual.BufferedIndexedWriteMaxDocuments == expected.BufferedIndexedWriteMaxDocuments &&
+		actual.BufferedIndexedWriteMaxBytes == expected.BufferedIndexedWriteMaxBytes &&
+		actual.BufferedIndexedWriteMaxRootRuns == expected.BufferedIndexedWriteMaxRootRuns &&
+		actual.BufferedIndexedAsyncFlush == expected.BufferedIndexedAsyncFlush &&
+		actual.BufferedIndexedAsyncFlushMaxQueuedUnits == expected.BufferedIndexedAsyncFlushMaxQueuedUnits
 }
 
 func nativeWireBenchmarkIndexLess(left, right collections.IndexDefinition) bool {

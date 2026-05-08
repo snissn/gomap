@@ -668,6 +668,9 @@ func validateDeterministicDocumentIDs(raw []byte, limits Limits) error {
 		payloadLen += int(length)
 	}
 	payload := raw[off:]
+	if payloadLen != len(payload) {
+		return protocolError(ErrMalformedFrame, "document_ids payload length %d does not match declared lengths %d", len(payload), payloadLen)
+	}
 	sortDeterministicIDItems(payload, items)
 	for i := 1; i < count; i++ {
 		left := payload[items[i-1].offset : items[i-1].offset+items[i-1].length]
