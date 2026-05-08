@@ -75,7 +75,7 @@ func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, d
 	if err := s.checkResponseSectionLen("documents", docSectionLen); err != nil {
 		return nil, err
 	}
-	if err := s.checkResponseByteVectorLen("documents", docSectionLen); err != nil {
+	if err := s.checkResponseByteVectorLen("documents", len(payload)); err != nil {
 		return nil, err
 	}
 	presenceBodyLen, err := responseSectionBodyLen(iwire.SectionPresenceBitmap, len(presence))
@@ -115,12 +115,12 @@ func (s *Server) checkResponseSectionLen(name string, sectionLen int) error {
 	return nil
 }
 
-func (s *Server) checkResponseByteVectorLen(name string, encodedLen int) error {
-	if encodedLen < 0 {
+func (s *Server) checkResponseByteVectorLen(name string, payloadLen int) error {
+	if payloadLen < 0 {
 		return protocolError(iwire.ErrResourceExhausted, "%s byte-vector length is negative", name)
 	}
-	if uint64(encodedLen) > s.limits.MaxByteVectorBytes {
-		return protocolError(iwire.ErrResourceExhausted, "%s byte-vector length %d exceeds limit %d", name, encodedLen, s.limits.MaxByteVectorBytes)
+	if uint64(payloadLen) > s.limits.MaxByteVectorBytes {
+		return protocolError(iwire.ErrResourceExhausted, "%s byte-vector length %d exceeds limit %d", name, payloadLen, s.limits.MaxByteVectorBytes)
 	}
 	return nil
 }
