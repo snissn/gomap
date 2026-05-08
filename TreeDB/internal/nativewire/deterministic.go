@@ -15,12 +15,14 @@ const (
 	DeterministicEntryMagic   = "TDC1"
 	DeterministicEntryVersion = uint64(1)
 
-	maxDeterministicDocumentIDs = 1 << 16
+	maxDeterministicDocumentIDs = defaultMaxByteVectorItems
 
 	deterministicSectionScratchCapacity = sectionSeenInlineCapacity
+	maxDeterministicEntrySections       = defaultMaxSections
 
 	deterministicCollectionRefTagName   = 1
 	deterministicCollectionRefTagHandle = 2
+	deterministicReplacementExisting    = 1
 	minDeterministicIndexDefinitionLen  = 6
 )
 
@@ -56,6 +58,7 @@ func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) 
 
 // AppendDeterministicEntryWithLimits appends a canonical replicated command
 // entry while validating deterministic payloads against caller-provided limits.
+// On error it returns dst truncated to its original length.
 func AppendDeterministicEntryWithLimits(dst []byte, cmd ValidatedCommand, limits Limits) ([]byte, error) {
 	limits = limits.withDefaults()
 	start := len(dst)
@@ -172,6 +175,9 @@ func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *Determinis
 	if sectionCount64 > uint64(limits.MaxSections) {
 		return failBeforeSections(protocolError(ErrResourceExhausted, "deterministic entry section count %d exceeds limit %d", sectionCount64, limits.MaxSections))
 	}
+	if sectionCount64 > maxDeterministicEntrySections {
+		return failBeforeSections(protocolError(ErrResourceExhausted, "deterministic entry section count %d exceeds deterministic limit %d", sectionCount64, maxDeterministicEntrySections))
+	}
 	if sectionCount64 > uint64(maxInt) {
 		return failBeforeSections(protocolError(ErrResourceExhausted, "deterministic entry section count exceeds int capacity"))
 	}
@@ -201,6 +207,9 @@ func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *Determinis
 		}
 		if sectionLen > limits.MaxSectionLen {
 			return fail(protocolError(ErrResourceExhausted, "deterministic entry section %d length %d exceeds limit %d", sectionID, sectionLen, limits.MaxSectionLen))
+		}
+		if sectionLen > uint64(maxInt) {
+			return fail(protocolError(ErrResourceExhausted, "deterministic entry section %d length exceeds int capacity", sectionID))
 		}
 		if sectionLen > uint64(len(src)-off) {
 			return fail(protocolError(ErrMalformedFrame, "deterministic entry section %d length %d exceeds remaining %d", sectionID, sectionLen, len(src)-off))
@@ -323,7 +332,7 @@ func validateDeterministicCommand(commandID CommandID, deterministic []Section) 
 		if !ok {
 			return protocolError(ErrInvalidCommand, "missing deterministic section %d", SectionCollectionRef)
 		}
-		local, err := validateDeterministicCollectionRef(raw)
+		local, err := validateDeterministicCollectionRef(raw, Limits{})
 		if err != nil {
 			return err
 		}
@@ -405,7 +414,7 @@ func validateDeterministicSectionPayload(section Section, limits Limits) error {
 	case SectionIdempotencyKey:
 		return validateDeterministicOpaquePayload("idempotency_key", section.Bytes, limits)
 	case SectionCollectionRef:
-		local, err := validateDeterministicCollectionRef(section.Bytes)
+		local, err := validateDeterministicCollectionRef(section.Bytes, limits)
 		if err != nil {
 			return err
 		}
@@ -441,14 +450,25 @@ func validateDeterministicSectionPayload(section Section, limits Limits) error {
 		}
 		return validateDeterministicIndexDefinition(section.Bytes, true, limits)
 	case SectionIndexName:
-		return validateDeterministicName("index_name", section.Bytes, limits)
-	case SectionExpectedCatalogVersion, SectionReplacementMode:
+		return validateDeterministicEncodedNameField("index_name", section.Bytes, limits)
+	case SectionExpectedCatalogVersion:
 		_, n, err := readUvarint(section.Bytes)
 		if err != nil {
 			return err
 		}
 		if n != len(section.Bytes) {
 			return protocolError(ErrMalformedFrame, "section %d has %d trailing bytes", section.ID, len(section.Bytes)-n)
+		}
+	case SectionReplacementMode:
+		mode, n, err := readUvarint(section.Bytes)
+		if err != nil {
+			return err
+		}
+		if n != len(section.Bytes) {
+			return protocolError(ErrMalformedFrame, "section %d has %d trailing bytes", section.ID, len(section.Bytes)-n)
+		}
+		if mode != deterministicReplacementExisting {
+			return protocolError(ErrInvalidCommand, "unsupported replacement_mode %d", mode)
 		}
 	}
 	return nil
@@ -464,16 +484,14 @@ func validateDeterministicOpaquePayload(name string, raw []byte, limits Limits) 
 	return nil
 }
 
-func validateDeterministicName(name string, raw []byte, limits Limits) error {
+func validateDeterministicEncodedNameField(name string, raw []byte, limits Limits) error {
+	limits = limits.withDefaults()
 	if len(raw) == 0 {
 		return protocolError(ErrInvalidCommand, "%s cannot be empty", name)
 	}
 	length, n, err := readUvarint(raw)
 	if err != nil {
-		return err
-	}
-	if n > len(raw) {
-		return protocolError(ErrMalformedFrame, "%s length prefix exceeds payload", name)
+		return protocolError(ErrMalformedFrame, "invalid %s length: %v", name, err)
 	}
 	remaining := len(raw) - n
 	if length > uint64(remaining) {
@@ -492,15 +510,7 @@ func validateDeterministicName(name string, raw []byte, limits Limits) error {
 	if valueLen != remaining {
 		return protocolError(ErrMalformedFrame, "%s has trailing bytes", name)
 	}
-	valueBytes := raw[n : n+valueLen]
-	if !utf8.Valid(valueBytes) {
-		return protocolError(ErrInvalidCommand, "invalid %s", name)
-	}
-	value := string(valueBytes)
-	if strings.ContainsAny(value, "\x00/:") || strings.TrimSpace(value) != value {
-		return protocolError(ErrInvalidCommand, "invalid %s", name)
-	}
-	return nil
+	return validateDeterministicNameValue(name, raw[n:n+valueLen], limits)
 }
 
 func validateDeterministicDocumentIDs(raw []byte, limits Limits) error {
@@ -566,13 +576,13 @@ func sortDeterministicIDItems(payload []byte, items []deterministicIDItem) {
 	})
 }
 
-func validateDeterministicCollectionRef(raw []byte) (bool, error) {
+func validateDeterministicCollectionRef(raw []byte, limits Limits) (bool, error) {
 	if len(raw) == 0 {
 		return false, protocolError(ErrInvalidCommand, "empty collection_ref")
 	}
 	switch raw[0] {
 	case deterministicCollectionRefTagName:
-		return false, validateDeterministicNameValue("collection name", raw[1:], Limits{})
+		return false, validateDeterministicNameValue("collection name", raw[1:], limits)
 	case deterministicCollectionRefTagHandle:
 		_, n, err := readUvarint(raw[1:])
 		if err != nil {
@@ -598,6 +608,19 @@ func validateDeterministicNameValue(field string, raw []byte, limits Limits) err
 	name := string(raw)
 	if strings.ContainsAny(name, "\x00/:") || strings.TrimSpace(name) != name || !utf8.ValidString(name) {
 		return protocolError(ErrInvalidCommand, "invalid %s", field)
+	}
+	return nil
+}
+
+func validateDeterministicIndexPath(path string, field string) error {
+	if len(path) == 0 {
+		return protocolError(ErrInvalidCommand, "%s cannot be empty", field)
+	}
+	if strings.Contains(path, "\x00") {
+		return protocolError(ErrInvalidCommand, "%s cannot contain NUL", field)
+	}
+	if strings.HasPrefix(path, ".") || strings.HasSuffix(path, ".") || strings.Contains(path, "..") {
+		return protocolError(ErrInvalidCommand, "%s cannot contain empty segments", field)
 	}
 	return nil
 }
@@ -684,7 +707,11 @@ func validateDeterministicIndexDefinitionAt(raw []byte, off int, withVersion boo
 	if err := readDeterministicNameField(raw, &off, "index name", limits); err != nil {
 		return 0, err
 	}
-	if _, err := readDeterministicStringField(raw, &off, "index field"); err != nil {
+	field, err := readDeterministicStringField(raw, &off, "index field")
+	if err != nil {
+		return 0, err
+	}
+	if err := validateDeterministicIndexPath(field, "index field"); err != nil {
 		return 0, err
 	}
 	if _, err := readDeterministicUvarintField(raw, &off, "index value type"); err != nil {
@@ -703,11 +730,23 @@ func validateDeterministicIndexDefinitionAt(raw []byte, off int, withVersion boo
 }
 
 func readDeterministicNameField(raw []byte, off *int, field string, limits Limits) error {
-	value, err := readDeterministicStringField(raw, off, field)
+	limits = limits.withDefaults()
+	length, err := readDeterministicUvarintField(raw, off, field+".length")
 	if err != nil {
 		return err
 	}
-	return validateDeterministicNameValue(field, []byte(value), limits)
+	if length > uint64(len(raw)-*off) {
+		return protocolError(ErrMalformedFrame, "%s length exceeds remaining payload", field)
+	}
+	if length > limits.MaxDeterministicNameBytes {
+		return protocolError(ErrResourceExhausted, "%s length %d exceeds limit %d", field, length, limits.MaxDeterministicNameBytes)
+	}
+	if length > uint64(maxInt) {
+		return protocolError(ErrResourceExhausted, "%s length exceeds int capacity", field)
+	}
+	start := *off
+	*off += int(length)
+	return validateDeterministicNameValue(field, raw[start:*off], limits)
 }
 
 func readDeterministicStringField(raw []byte, off *int, field string) (string, error) {
