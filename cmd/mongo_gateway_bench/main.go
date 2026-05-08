@@ -2974,7 +2974,9 @@ func runDriverFindRawRangeOperation(ctx context.Context, coll *mongo.Collection,
 	closed := false
 	defer func() {
 		if !closed {
-			_ = cursor.Close(ctx)
+			closeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_ = cursor.Close(closeCtx)
 		}
 	}()
 	seen := false

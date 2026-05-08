@@ -1630,7 +1630,13 @@ func marshalIndexedRangeCursorDocument(server *Server, cursorOwner int64, single
 }
 
 func marshalIndexedRangeCursorMsgInto(dst []byte, requestID, responseTo int32, server *Server, cursorOwner int64, singleBatch bool, col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, ns, indexName string, opts collections.IndexRangeOptions, batchKey string, maxBatchBytes int, maxMessageLength int) ([]byte, error) {
+	if maxMessageLength <= 0 || maxMessageLength > wire.DefaultMaxMessageLength {
+		maxMessageLength = int(server.maxMessageLength())
+	}
 	need := wire.HeaderLen + 5 + rawCursorResponseCapacityHint(ns, opts.Limit, maxBatchBytes)
+	if need > maxMessageLength {
+		return dst, fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, need, maxMessageLength)
+	}
 	dst = ensureWireAppendCapacity(dst, need)
 	msg := dst
 	base := len(msg)
@@ -1659,9 +1665,6 @@ func marshalIndexedRangeCursorMsgInto(dst []byte, requestID, responseTo int32, s
 	messageLength := len(msg) - base
 	if int64(messageLength) > maxWireMessageLengthInt32Limit {
 		return msg[:base], fmt.Errorf("%w: length=%d", wire.ErrMessageTooLarge, messageLength)
-	}
-	if maxMessageLength <= 0 || maxMessageLength > wire.DefaultMaxMessageLength {
-		maxMessageLength = int(server.maxMessageLength())
 	}
 	if messageLength > maxMessageLength {
 		return msg[:base], fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, messageLength, maxMessageLength)
