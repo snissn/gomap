@@ -1447,6 +1447,16 @@ Option d leaves a known sharp edge under a feature that adds more side files.
 Option a is acceptable only if it is treated as the first column-store
 milestone, not as unrelated work.
 
+Project-management hard gate: Milestone 0.5 blocks most column-store
+implementation. Before the shared collection durability story is resolved, the
+project may proceed with documentation, benchmark fixtures, pure codec packages,
+filter/search packages, and isolated `TCS1` encode/decode experiments that do
+not publish collection roots. It should not merge production or public-facing
+column-store collection behavior that writes persistent column files, publishes
+part descriptors, exposes mutable column-store collection APIs, wires secondary
+indexes to column-store rows, or claims crash/reopen safety. Those pieces must
+land on top of the shared collection commit/recovery protocol.
+
 The column-store roadmap must reserve tests for:
 
 - crash before root publish after writing column bytes;
@@ -1664,7 +1674,12 @@ Performance gates:
 - results include point-read, update, update-followed-by-read, and count
   latency placeholders even before product gates turn on.
 
-### Milestone 0.5: Collection Durability Prerequisite
+### Milestone 0.5: Blocking Collection Durability Prerequisite
+
+This milestone is a hard boundary for project planning. Milestone 1 and later
+may be designed in parallel, but production implementation of persistent
+column-store collection behavior should not proceed past isolated format,
+codec, filter, and benchmark work until this milestone passes.
 
 Deliverables:
 
@@ -1693,6 +1708,9 @@ Tests:
 
 Gates:
 
+- production column-store collection implementation is blocked until this
+  milestone passes, except for isolated format/codec/filter/benchmark work that
+  does not publish collection roots;
 - column-store mutable writes remain experimental until this milestone passes;
 - WAL-on collection write throughput regression is measured against the current
   row-store indexed path before optimizing the column format around it.
