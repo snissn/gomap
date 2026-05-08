@@ -11,4 +11,7 @@ Deterministic entry fixtures use the v1 envelope:
   section_id section_len section_payload ...
 ```
 
-All integer fields after the magic are minimal unsigned base-128 varints.
+Envelope fields after the magic (`entry_version`, `command_id`,
+`command_version`, `command_flags`, `section_count`, `section_id`, and
+`section_len`) are minimal unsigned base-128 varints. Section payload bytes use
+the encoding owned by each section schema.
