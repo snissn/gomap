@@ -96,7 +96,7 @@ func BenchmarkBSONSetUpdateApplyCity(b *testing.B) {
 	}
 	b.ReportAllocs()
 	b.SetBytes(int64(len(doc)))
-	for b.Loop() {
+	for i := 0; i < b.N; i++ {
 		replacement, changed, err := update.apply(doc)
 		if err != nil {
 			b.Fatal(err)
@@ -126,7 +126,7 @@ func BenchmarkBSONSetUpdateAppendReplacementCity(b *testing.B) {
 	arena := make([]byte, 0, len(doc)+64)
 	b.ReportAllocs()
 	b.SetBytes(int64(len(doc)))
-	for b.Loop() {
+	for i := 0; i < b.N; i++ {
 		var replacement []byte
 		var changed bool
 		arena, replacement, changed, err = update.appendReplacement(arena[:0], doc)
