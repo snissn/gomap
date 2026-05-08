@@ -611,6 +611,93 @@ func TestDeterministicEntryRejectsMalformedMetadataPayloads(t *testing.T) {
 	}
 }
 
+func TestDecodeDeterministicEntryRejectsCollectionMetaApplyDecoderConstraints(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		meta []byte
+		code ErrorCode
+	}{
+		{
+			name: "unsupported_document_format",
+			meta: deterministicCollectionMetaPayloadWithOptions("users", deterministicCollectionMetaOptions{
+				documentFormat: 99,
+			}),
+			code: ErrInvalidCommand,
+		},
+		{
+			name: "unsupported_root_storage",
+			meta: deterministicCollectionMetaPayloadWithOptions("users", deterministicCollectionMetaOptions{
+				dataRootStorage: 99,
+			}),
+			code: ErrInvalidCommand,
+		},
+		{
+			name: "negative_max_documents",
+			meta: deterministicCollectionMetaPayloadWithOptions("users", deterministicCollectionMetaOptions{
+				maxDocuments: -1,
+			}),
+			code: ErrInvalidCommand,
+		},
+		{
+			name: "negative_max_bytes",
+			meta: deterministicCollectionMetaPayloadWithOptions("users", deterministicCollectionMetaOptions{
+				maxBytes: -1,
+			}),
+			code: ErrInvalidCommand,
+		},
+		{
+			name: "too_many_indexes",
+			meta: deterministicCollectionMetaPayloadWithOptions("users", deterministicCollectionMetaOptions{
+				indexCount: maxDeterministicCollectionIndexes + 1,
+			}),
+			code: ErrResourceExhausted,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := deterministicMetadataEntryRaw(CommandCreateCollection, SectionCollectionMeta, tc.meta)
+			if _, err := DecodeDeterministicEntry(raw, Limits{}); codeOf(err) != tc.code {
+				t.Fatalf("DecodeDeterministicEntry err=%v code=%d want %d", err, codeOf(err), tc.code)
+			}
+		})
+	}
+}
+
+func TestDecodeDeterministicEntryRejectsIndexDefinitionApplyDecoderConstraints(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		index []byte
+	}{
+		{
+			name:  "unsupported_value_type",
+			index: deterministicIndexDefinitionPayload("email", "email", 99, false, false, 0),
+		},
+		{
+			name:  "unsupported_storage_policy",
+			index: deterministicIndexDefinitionPayload("email", "email", deterministicIndexValueString, false, false, 99),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := deterministicMetadataEntryRaw(CommandCreateIndex, SectionIndexDefinition, tc.index)
+			if _, err := DecodeDeterministicEntry(raw, Limits{}); codeOf(err) != ErrInvalidCommand {
+				t.Fatalf("DecodeDeterministicEntry err=%v code=%d want invalid command", err, codeOf(err))
+			}
+		})
+	}
+}
+
+func deterministicMetadataEntryRaw(command CommandID, sectionID SectionID, payload []byte) []byte {
+	sections := []Section{
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: command, Version: 1})},
+		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
+		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+		{ID: sectionID, Bytes: payload},
+	}
+	if command == CommandCreateIndex {
+		sections = append(sections, Section{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("users")})
+	}
+	return deterministicEntryTestRaw(command, deterministicEntrySectionsOnly(sections)...)
+}
+
 func TestDeterministicMetadataRequiresTaggedCollectionName(t *testing.T) {
 	registry := MustV1Registry()
 	sections := []Section{
@@ -1041,27 +1128,51 @@ func deterministicFixtureSections(commandID CommandID, idempotency string, secti
 	return out
 }
 
+type deterministicCollectionMetaOptions struct {
+	documentFormat   uint64
+	dataRootStorage  uint64
+	indexRootStorage uint64
+	maxDocuments     int64
+	maxBytes         int64
+	maxRootRuns      int64
+	maxQueuedUnits   int64
+	indexCount       uint64
+}
+
 func deterministicCollectionMetaPayload(name string) []byte {
+	return deterministicCollectionMetaPayloadWithOptions(name, deterministicCollectionMetaOptions{
+		documentFormat:   uint64(DocumentFormatDefault),
+		dataRootStorage:  deterministicCollectionDefaultRootPolicy,
+		indexRootStorage: deterministicCollectionDefaultIndexPolicy,
+		maxDocuments:     deterministicCollectionDefaultMaxDocs,
+		maxBytes:         deterministicCollectionDefaultMaxBytes,
+		maxRootRuns:      deterministicCollectionDefaultMaxRootRuns,
+		maxQueuedUnits:   deterministicCollectionDefaultMaxQueued,
+		indexCount:       deterministicCollectionDefaultIndexCount,
+	})
+}
+
+func deterministicCollectionMetaPayloadWithOptions(name string, opts deterministicCollectionMetaOptions) []byte {
 	// Field order mirrors encodeCollectionMeta: version, name, document_format,
 	// data_root_storage_policy, index_state_storage_policy,
 	// allow_array_values_in_index, disable_indexed_write_memtables,
 	// buffered_indexed_writes, max_documents, max_bytes, max_root_runs,
 	// async_flush, overlay_roots, max_queued_units, and index definitions.
-	dst := deterministicUvarintPayload(deterministicCollectionMetaVersion)    // version
-	dst = appendDeterministicString(dst, name)                                // name
-	dst = appendUvarint(dst, uint64(DocumentFormatDefault))                   // document_format
-	dst = appendUvarint(dst, deterministicCollectionDefaultRootPolicy)        // data_root_storage_policy
-	dst = appendUvarint(dst, deterministicCollectionDefaultIndexPolicy)       // index_state_storage_policy
-	dst = appendDeterministicBool(dst, false)                                 // allow_array_values_in_index
-	dst = appendDeterministicBool(dst, false)                                 // disable_indexed_write_memtables
-	dst = appendDeterministicBool(dst, false)                                 // buffered_indexed_writes
-	dst = binary.AppendVarint(dst, deterministicCollectionDefaultMaxDocs)     // buffered_indexed_write_max_documents
-	dst = binary.AppendVarint(dst, deterministicCollectionDefaultMaxBytes)    // buffered_indexed_write_max_bytes
-	dst = binary.AppendVarint(dst, deterministicCollectionDefaultMaxRootRuns) // buffered_indexed_write_max_root_runs
-	dst = appendDeterministicBool(dst, false)                                 // buffered_indexed_async_flush
-	dst = appendDeterministicBool(dst, false)                                 // buffered_indexed_overlay_roots
-	dst = binary.AppendVarint(dst, deterministicCollectionDefaultMaxQueued)   // buffered_indexed_async_flush_max_queued_units
-	dst = appendUvarint(dst, deterministicCollectionDefaultIndexCount)        // index_count
+	dst := deterministicUvarintPayload(deterministicCollectionMetaVersion) // version
+	dst = appendDeterministicString(dst, name)                             // name
+	dst = appendUvarint(dst, opts.documentFormat)                          // document_format
+	dst = appendUvarint(dst, opts.dataRootStorage)                         // data_root_storage_policy
+	dst = appendUvarint(dst, opts.indexRootStorage)                        // index_state_storage_policy
+	dst = appendDeterministicBool(dst, false)                              // allow_array_values_in_index
+	dst = appendDeterministicBool(dst, false)                              // disable_indexed_write_memtables
+	dst = appendDeterministicBool(dst, false)                              // buffered_indexed_writes
+	dst = binary.AppendVarint(dst, opts.maxDocuments)                      // buffered_indexed_write_max_documents
+	dst = binary.AppendVarint(dst, opts.maxBytes)                          // buffered_indexed_write_max_bytes
+	dst = binary.AppendVarint(dst, opts.maxRootRuns)                       // buffered_indexed_write_max_root_runs
+	dst = appendDeterministicBool(dst, false)                              // buffered_indexed_async_flush
+	dst = appendDeterministicBool(dst, false)                              // buffered_indexed_overlay_roots
+	dst = binary.AppendVarint(dst, opts.maxQueuedUnits)                    // buffered_indexed_async_flush_max_queued_units
+	dst = appendUvarint(dst, opts.indexCount)                              // index_count
 	return dst
 }
 
