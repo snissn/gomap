@@ -11918,20 +11918,20 @@ func encodedDoubleComponentIsNaN(encoded []byte) bool {
 	return len(encoded) == 1 && encoded[0] == 0x00
 }
 
-func scanMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, dedupeDocumentID bool, fn func([]byte) (bool, error)) (bool, error) {
+func scanMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, dedupeDocumentIDs bool, fn func([]byte) (bool, error)) (bool, error) {
 	return scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt, valueType, maxResults, scanMergedCollectionIndexIDOptions{
 		CloneDocumentID:  true,
-		DedupeDocumentID: dedupeDocumentID,
+		DedupeDocumentID: dedupeDocumentIDs,
 	}, fn)
 }
 
 // scanMergedCollectionIndexIDsBorrowed calls fn with document IDs that may alias
 // iterator key memory. fn must not retain or mutate id after returning; clone it
 // first if the ID needs to outlive the callback.
-func scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, dedupeDocumentID bool, fn func([]byte) (bool, error)) (bool, error) {
+func scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, dedupeDocumentIDs bool, fn func([]byte) (bool, error)) (bool, error) {
 	return scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt, valueType, maxResults, scanMergedCollectionIndexIDOptions{
 		CloneDocumentID:  false,
-		DedupeDocumentID: dedupeDocumentID,
+		DedupeDocumentID: dedupeDocumentIDs,
 	}, fn)
 }
 
@@ -11976,7 +11976,11 @@ func scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt iterator.Un
 	}
 	var seen map[string]struct{}
 	if opts.DedupeDocumentID {
-		seen = make(map[string]struct{})
+		if maxResults > 0 {
+			seen = make(map[string]struct{}, maxResults)
+		} else {
+			seen = make(map[string]struct{})
+		}
 	}
 	emitted := 0
 	emit := func(key []byte) (bool, bool, error) {
