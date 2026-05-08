@@ -435,6 +435,16 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 				return err
 			}
 		}
+		leafPageLogSegmentsRegistered := true
+		if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
+			var err error
+			leafPageLogSegmentsRegistered, err = db.registerLeafPageLogSegmentsForPublish(nextMeta.CommitSeq)
+			if err != nil {
+				db.writeMu.Unlock()
+				cleanupNewPager()
+				return err
+			}
+		}
 
 		// Write redundant Meta pages (0/1) to the new file and sync it.
 		if err := writeMetaToPager(newPager, MetaPage0ID, nextMeta); err != nil {
@@ -504,11 +514,21 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		db.idx.Store(newGen)
 		db.meta = nextMeta
 		db.metaPageID = MetaPage0ID
+		valueLogSet := db.valueLogManager.CurrentSetNoRefresh()
+		if !leafPageLogSegmentsRegistered {
+			if err := db.valueLogManager.Refresh(); err != nil {
+				db.mu.Unlock()
+				db.writeMu.Unlock()
+				cleanupNewPager()
+				return err
+			}
+			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
+		}
 		newState := &DBState{
 			CommitSeq:                  nextMeta.CommitSeq,
 			RootPageID:                 nextMeta.UserRootPageID,
 			SystemRootPageID:           nextMeta.SystemRootPageID,
-			ValueLogSet:                db.valueLogManager.CurrentSetNoRefresh(),
+			ValueLogSet:                valueLogSet,
 			LeafGenerations:            oldState.LeafGenerations,
 			LeafGenerationStateVersion: oldState.LeafGenerationStateVersion,
 		}

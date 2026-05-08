@@ -641,6 +641,56 @@ func TestCompactStorageRefreshesInstalledLeafWriterAfterPack(t *testing.T) {
 	}
 }
 
+func TestRegisterLeafPageLogSegmentsForPublishRegistersRewriteSegments(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{
+		Dir:                        dir,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 0)
+	leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	d.SetLeafPageLog(leafLog)
+	defer func() { _ = leafLog.Close() }()
+
+	if _, err := leafLog.AppendLeafPage(bytes.Repeat([]byte("v"), page.PageSize)); err != nil {
+		t.Fatalf("AppendLeafPage: %v", err)
+	}
+	createdSegments, err := leafLog.createdSegmentsSnapshot()
+	if err != nil {
+		t.Fatalf("createdSegmentsSnapshot: %v", err)
+	}
+	if len(createdSegments) != 1 {
+		t.Fatalf("created segments=%d want 1", len(createdSegments))
+	}
+	if d.valueLogManager.HasSegment(createdSegments[0].fileID) {
+		t.Fatalf("segment %d was registered before publish helper", createdSegments[0].fileID)
+	}
+
+	registered, err := d.registerLeafPageLogSegmentsForPublish(7)
+	if err != nil {
+		t.Fatalf("registerLeafPageLogSegmentsForPublish: %v", err)
+	}
+	if !registered {
+		t.Fatal("current leaf segment was not registered")
+	}
+	if !d.valueLogManager.HasSegment(createdSegments[0].fileID) {
+		t.Fatalf("segment %d was not registered", createdSegments[0].fileID)
+	}
+	set := d.valueLogManager.CurrentSetNoRefresh()
+	defer func() { _ = d.valueLogManager.Release(set) }()
+	if set == nil {
+		t.Fatal("missing value-log set")
+	}
+	if _, ok := set.Files[createdSegments[0].fileID]; !ok {
+		t.Fatalf("published value-log set missing segment %d", createdSegments[0].fileID)
+	}
+}
+
 func TestCompactStorageSettlesLeafGenerationGCAfterPinnedRetiring(t *testing.T) {
 	d, leafLog, dir := openLeafGenerationPackTestDB(t)
 
