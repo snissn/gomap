@@ -61,6 +61,8 @@ type DeterministicEntryScratch struct {
 	Sections []Section
 }
 
+// AppendDeterministicEntry appends a canonical replicated command entry using
+// default limits. On error it returns dst truncated to its original length.
 func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) {
 	return AppendDeterministicEntryWithLimits(dst, cmd, Limits{})
 }
@@ -822,7 +824,7 @@ func validateDeterministicEncodedNameField(name string, raw []byte, limits Limit
 		return err
 	}
 	if off != len(raw) {
-		return protocolError(ErrMalformedFrame, "%s has trailing bytes", name)
+		return protocolError(ErrMalformedFrame, "%s has %d trailing bytes", name, len(raw)-off)
 	}
 	return nil
 }
