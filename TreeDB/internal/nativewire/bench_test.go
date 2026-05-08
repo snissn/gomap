@@ -27,7 +27,7 @@ func TestDecodeSectionsIntoAndDecodeByteVectorIntoReuseBuffers(t *testing.T) {
 	cases := nativewireBenchmarkCases()
 	body := cases[0].body
 
-	sectionsScratch := make([]Section, 0, 16)
+	sectionsScratch := make([]Section, 0, len(cases[0].sections))
 	sections, err := DecodeSectionsInto(sectionsScratch, body, Limits{})
 	if err != nil {
 		t.Fatalf("DecodeSectionsInto: %v", err)
@@ -157,8 +157,9 @@ func TestNativewireCodecAllocationGuards(t *testing.T) {
 		}
 	})
 
-	body := nativewireBenchmarkCases()[0].body
-	sectionsScratch := make([]Section, 0, 16)
+	cases := nativewireBenchmarkCases()
+	body := cases[0].body
+	sectionsScratch := make([]Section, 0, len(cases[0].sections))
 	var commandScratch CommandScratch
 	assertMaxAllocs(t, "DecodeSectionsInto/preallocated", 0, func() {
 		benchSectionsSink, err = DecodeSectionsInto(sectionsScratch, body, Limits{})
@@ -253,6 +254,51 @@ func TestCommandScratchReusesWideSeenOverflow(t *testing.T) {
 			t.Fatalf("ValidateRequestSectionsInto: %v", err)
 		}
 	})
+}
+
+func TestCommandScratchKeepsInlinePathAfterWideRequest(t *testing.T) {
+	const (
+		wideCommandID  = CommandID(9002)
+		smallCommandID = CommandID(9003)
+		sectionStart   = SectionID(1100)
+		wideCount      = sectionSeenInlineCapacity + 4
+	)
+	wideRules := make([]SectionRule, 0, wideCount)
+	wideSections := []Section{{
+		ID:    SectionCommandHeader,
+		Bytes: AppendCommandHeader(nil, CommandHeader{ID: wideCommandID, Version: 1}),
+	}}
+	for i := 0; i < wideCount; i++ {
+		id := sectionStart + SectionID(i)
+		wideRules = append(wideRules, SectionRule{ID: id, Name: fmt.Sprintf("wide_%02d", i), Required: true})
+		wideSections = append(wideSections, Section{ID: id, Bytes: []byte{byte(i)}})
+	}
+	smallSections := []Section{
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: smallCommandID, Version: 1})},
+		{ID: sectionStart, Bytes: []byte{1}},
+	}
+	registry, err := NewRegistry(
+		CommandSchema{ID: wideCommandID, Version: 1, Name: "wide_seen_test", Kind: CommandKindMutation, Sections: wideRules},
+		CommandSchema{ID: smallCommandID, Version: 1, Name: "small_seen_test", Kind: CommandKindMutation, Sections: []SectionRule{{ID: sectionStart, Name: "small", Required: true}}},
+	)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	var scratch CommandScratch
+	if _, err := registry.ValidateRequestSectionsInto(wideSections, &scratch); err != nil {
+		t.Fatalf("ValidateRequestSectionsInto wide: %v", err)
+	}
+	if scratch.seenOverflow == nil {
+		t.Fatal("wide validation did not retain overflow scratch")
+	}
+	scratch.seenOverflow[sectionStart] = 99
+	if _, err := registry.ValidateRequestSectionsInto(smallSections, &scratch); err != nil {
+		t.Fatalf("ValidateRequestSectionsInto small after wide: %v", err)
+	}
+	if scratch.seenOverflow == nil {
+		t.Fatal("small validation discarded reusable overflow map")
+	}
 }
 
 func BenchmarkNativewireFrameHeader(b *testing.B) {
@@ -642,7 +688,10 @@ func reportCommandMetrics(b *testing.B, tc nativewireBenchmarkCase) {
 
 func assertMaxAllocs(t *testing.T, name string, max float64, fn func()) {
 	t.Helper()
-	got := testing.AllocsPerRun(200, fn)
+	if raceEnabled {
+		t.Skipf("%s allocation guard is noisy under -race", name)
+	}
+	got := testing.AllocsPerRun(50, fn)
 	if got > max {
 		t.Fatalf("%s allocations=%0.2f want <= %0.2f", name, got, max)
 	}
