@@ -1,7 +1,8 @@
 package nativewire
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -9,6 +10,8 @@ import (
 const (
 	DeterministicEntryMagic   = "TDC1"
 	DeterministicEntryVersion = uint64(1)
+
+	deterministicSectionScratchCapacity = sectionSeenInlineCapacity
 )
 
 func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) {
@@ -24,13 +27,12 @@ func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) 
 	}
 	deterministicFlags := DeterministicCommandFlags(cmd.Header.Flags)
 
-	deterministic, err := cmd.deterministicSections()
+	var deterministicScratch [deterministicSectionScratchCapacity]Section
+	deterministic, err := cmd.deterministicSectionsInto(deterministicScratch[:0])
 	if err != nil {
 		return nil, err
 	}
-	sort.SliceStable(deterministic, func(i, j int) bool {
-		return deterministic[i].ID < deterministic[j].ID
-	})
+	sortSectionsByID(deterministic)
 	if cmd.Schema.RequiresIdempotency && deterministicSectionCount(deterministic, SectionIdempotencyKey) == 0 {
 		return nil, protocolError(ErrInvalidCommand, "missing deterministic idempotency key")
 	}
@@ -64,23 +66,22 @@ func (cmd ValidatedCommand) hasSection(id SectionID) bool {
 	return false
 }
 
-func (cmd ValidatedCommand) deterministicSections() ([]Section, error) {
+func (cmd ValidatedCommand) deterministicSectionsInto(dst []Section) ([]Section, error) {
 	if cmd.Schema == nil {
 		return nil, protocolError(ErrInvalidCommand, "missing command schema")
 	}
 	rules := cmd.Schema.ruleMap()
-	out := make([]Section, 0, len(cmd.Known))
-	seen := make(map[SectionID]struct{}, len(cmd.Known))
+	out := dst[:0]
+	var seen sectionSeenSet
 	for _, section := range cmd.Known {
 		rule := rules[section.ID]
 		if !rule.Deterministic {
 			continue
 		}
 		if !rule.Repeatable {
-			if _, exists := seen[section.ID]; exists {
+			if seen.add(section.ID) > 1 {
 				return nil, protocolError(ErrInvalidCommand, "duplicate deterministic singleton section %d", section.ID)
 			}
-			seen[section.ID] = struct{}{}
 		}
 		if err := validateDeterministicSectionPayload(section); err != nil {
 			return nil, err
@@ -122,12 +123,15 @@ func deterministicByteVectorCount(sections []Section, id SectionID) (int, error)
 		if found {
 			return 0, protocolError(ErrInvalidCommand, "duplicate deterministic section %d", id)
 		}
-		vec, err := DecodeByteVector(section.Bytes, Limits{})
+		count64, _, err := readUvarint(section.Bytes)
 		if err != nil {
 			return 0, err
 		}
+		if count64 > uint64(maxInt) {
+			return 0, protocolError(ErrResourceExhausted, "section %d byte-vector count exceeds int capacity", id)
+		}
 		found = true
-		count = vec.Len()
+		count = int(count64)
 	}
 	if found {
 		return count, nil
@@ -169,16 +173,23 @@ func validateDeterministicSectionPayload(section Section) error {
 			return protocolError(ErrInvalidCommand, "unsupported document_format %d", format)
 		}
 	case SectionDocumentIDs, SectionDocuments, SectionTemplateRecords:
-		vec, err := DecodeByteVector(section.Bytes, Limits{})
-		if err != nil {
+		if err := validateByteVector(section.Bytes, Limits{}); err != nil {
 			return err
 		}
 		if section.ID == SectionDocumentIDs {
-			for i := 0; i < vec.Len(); i++ {
-				item, _ := vec.Item(i)
-				if len(item) == 0 {
+			count, off, err := readUvarint(section.Bytes)
+			if err != nil {
+				return err
+			}
+			for i := uint64(0); i < count; i++ {
+				length, n, err := readUvarint(section.Bytes[off:])
+				if err != nil {
+					return err
+				}
+				if length == 0 {
 					return protocolError(ErrInvalidCommand, "empty document id at index %d", i)
 				}
+				off += n
 			}
 		}
 	case SectionExpectedCatalogVersion, SectionReplacementMode:
@@ -208,4 +219,10 @@ func validateDeterministicCollectionRef(raw []byte) (bool, error) {
 		return false, protocolError(ErrInvalidCommand, "invalid collection name")
 	}
 	return false, nil
+}
+
+func sortSectionsByID(sections []Section) {
+	slices.SortStableFunc(sections, func(a, b Section) int {
+		return cmp.Compare(a.ID, b.ID)
+	})
 }

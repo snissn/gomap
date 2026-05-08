@@ -56,6 +56,14 @@ type ValidatedCommand struct {
 	Ignored []Section
 }
 
+// CommandScratch carries reusable buffers for command-schema validation.
+type CommandScratch struct {
+	Known          []Section
+	Ignored        []Section
+	seenOverflow   map[SectionID]sectionSeenEntry
+	seenGeneration uint64
+}
+
 func NewRegistry(commands ...CommandSchema) (*Registry, error) {
 	r := &Registry{
 		commands: make(map[commandKey]*CommandSchema, len(commands)),
@@ -103,6 +111,14 @@ func (r *Registry) LookupCommand(id CommandID, version uint64) (*CommandSchema, 
 }
 
 func (r *Registry) ValidateRequestSections(sections []Section) (ValidatedCommand, error) {
+	return r.ValidateRequestSectionsInto(sections, nil)
+}
+
+// ValidateRequestSectionsInto validates sections using scratch when provided.
+//
+// The returned command borrows section slices from sections and scratch. Callers
+// may reuse scratch after they are done with the validated command view.
+func (r *Registry) ValidateRequestSectionsInto(sections []Section, scratch *CommandScratch) (ValidatedCommand, error) {
 	if r == nil {
 		return ValidatedCommand{}, protocolError(ErrUnsupportedVersion, "nil command registry")
 	}
@@ -117,7 +133,7 @@ func (r *Registry) ValidateRequestSections(sections []Section) (ValidatedCommand
 	if unsupported := header.Flags &^ schema.AllowedCommandFlags; unsupported != 0 {
 		return ValidatedCommand{}, protocolError(ErrUnsupportedFeature, "unsupported command flags 0x%x", unsupported)
 	}
-	known, ignored, err := schema.validateSections(sections)
+	known, ignored, err := schema.validateSections(sections, scratch)
 	if err != nil {
 		return ValidatedCommand{}, err
 	}
@@ -152,11 +168,26 @@ func findCommandHeader(sections []Section) (CommandHeader, error) {
 	return header, nil
 }
 
-func (c *CommandSchema) validateSections(sections []Section) ([]Section, []Section, error) {
+func (c *CommandSchema) validateSections(sections []Section, scratch *CommandScratch) ([]Section, []Section, error) {
 	rules := c.ruleMap()
-	seen := make(map[SectionID]int, len(sections))
-	known := make([]Section, 0, len(sections))
-	ignored := make([]Section, 0)
+	var seen sectionSeenSet
+	if scratch != nil && len(sections) > sectionSeenInlineCapacity {
+		scratch.seenGeneration++
+		if scratch.seenGeneration == 0 {
+			clear(scratch.seenOverflow)
+			scratch.seenGeneration = 1
+		}
+		seen.reuseOverflow(scratch.seenOverflow, scratch.seenGeneration)
+	}
+	var known []Section
+	var ignored []Section
+	if scratch == nil {
+		known = make([]Section, 0, len(sections))
+		ignored = make([]Section, 0)
+	} else {
+		known = scratch.Known[:0]
+		ignored = scratch.Ignored[:0]
+	}
 
 	for _, section := range sections {
 		if section.Flags&^knownSectionFlags != 0 {
@@ -170,24 +201,31 @@ func (c *CommandSchema) validateSections(sections []Section) ([]Section, []Secti
 			ignored = append(ignored, section)
 			continue
 		}
-		if !rule.Repeatable && seen[section.ID] > 0 {
+		count := seen.add(section.ID)
+		if !rule.Repeatable && count > 1 {
 			return nil, nil, protocolError(ErrInvalidCommand, "command %s duplicate singleton section %s (%d)", c.Name, rule.Name, section.ID)
 		}
-		seen[section.ID]++
 		known = append(known, section)
 	}
 
 	for _, id := range c.requiredSections() {
-		if seen[id] == 0 {
+		if seen.get(id) == 0 {
 			rule := rules[id]
 			return nil, nil, protocolError(ErrInvalidCommand, "command %s missing required section %s (%d)", c.Name, rule.Name, id)
 		}
 	}
-	if c.RequiresIdempotency && seen[SectionIdempotencyKey] == 0 {
+	if c.RequiresIdempotency && seen.get(SectionIdempotencyKey) == 0 {
 		return nil, nil, protocolError(ErrInvalidCommand, "command %s missing idempotency key", c.Name)
 	}
-	if c.RequiresCatalogGuard && seen[SectionExpectedCatalogVersion] == 0 {
+	if c.RequiresCatalogGuard && seen.get(SectionExpectedCatalogVersion) == 0 {
 		return nil, nil, protocolError(ErrInvalidCommand, "command %s missing catalog guard", c.Name)
+	}
+	if scratch != nil {
+		scratch.Known = known
+		scratch.Ignored = ignored
+		if seen.overflow != nil {
+			scratch.seenOverflow = seen.overflow
+		}
 	}
 	return known, ignored, nil
 }
@@ -230,6 +268,75 @@ func compileCommandRules(c CommandSchema) (map[SectionID]SectionRule, []SectionI
 	}
 	sort.Slice(required, func(i, j int) bool { return required[i] < required[j] })
 	return rules, required
+}
+
+const sectionSeenInlineCapacity = 64
+
+type sectionSeenSet struct {
+	ids        [sectionSeenInlineCapacity]SectionID
+	counts     [sectionSeenInlineCapacity]int
+	n          int
+	overflow   map[SectionID]sectionSeenEntry
+	generation uint64
+}
+
+type sectionSeenEntry struct {
+	generation uint64
+	count      int
+}
+
+func (s *sectionSeenSet) reuseOverflow(overflow map[SectionID]sectionSeenEntry, generation uint64) {
+	if overflow == nil {
+		return
+	}
+	s.overflow = overflow
+	s.generation = generation
+}
+
+func (s *sectionSeenSet) add(id SectionID) int {
+	if s.overflow != nil {
+		entry := s.overflow[id]
+		if entry.generation != s.generation {
+			entry = sectionSeenEntry{generation: s.generation}
+		}
+		entry.count++
+		s.overflow[id] = entry
+		return entry.count
+	}
+	for i := 0; i < s.n; i++ {
+		if s.ids[i] == id {
+			s.counts[i]++
+			return s.counts[i]
+		}
+	}
+	if s.n < len(s.ids) {
+		s.ids[s.n] = id
+		s.counts[s.n] = 1
+		s.n++
+		return 1
+	}
+	s.overflow = make(map[SectionID]sectionSeenEntry, s.n+1)
+	for i := 0; i < s.n; i++ {
+		s.overflow[s.ids[i]] = sectionSeenEntry{generation: s.generation, count: s.counts[i]}
+	}
+	s.overflow[id] = sectionSeenEntry{generation: s.generation, count: 1}
+	return 1
+}
+
+func (s *sectionSeenSet) get(id SectionID) int {
+	if s.overflow != nil {
+		entry := s.overflow[id]
+		if entry.generation == s.generation {
+			return entry.count
+		}
+		return 0
+	}
+	for i := 0; i < s.n; i++ {
+		if s.ids[i] == id {
+			return s.counts[i]
+		}
+	}
+	return 0
 }
 
 func validSchemaSectionID(id SectionID) bool {

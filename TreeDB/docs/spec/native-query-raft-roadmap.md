@@ -38,8 +38,46 @@ system should replicate boring, deterministic metadata and mutation commands.
 6. Server-side callbacks must be bounded, deterministic where required, and
    feature-gated.
 7. Cursor resources must be cancellable and budgeted from v1.
+8. Every roadmap round must end with a dedicated performance pass before the
+   next round starts.
 
-## 3. Implementation Order
+## 3. Phase-Close Performance Passes
+
+Each roadmap round, such as R0, R1, R2, and R3, MUST reserve its final sprint
+slice for aggressive benchmarking, profiling, and optimization. This final slice
+is not a feature-expansion sprint. It exists to measure the new surface, isolate
+regressions, profile the dominant costs, optimize the hot path where the data is
+clear, and leave behind benchmark artifacts that future rounds can compare
+against.
+
+The expected benchmark hierarchy is:
+
+1. fast local microbenchmarks for codec, parser, dispatch, state-machine, or
+   query hot paths;
+2. workload-coupled benchmarks that exercise the feature through its real
+   product path;
+3. periodic larger-system validation runs once a phase touches storage,
+   transport, or distributed execution behavior.
+
+A phase-close performance pass SHOULD include:
+
+- before/after benchmark runs against the previous phase or agreed baseline,
+- CPU, allocation, block, mutex, and trace profiles for the dominant workload,
+- pprof/inlining/escape-analysis review when a hot path is unclear,
+- allocation guard tests or regression tests for optimized hot paths,
+- explicit native-wire benchmark labels that do not overlap with direct
+  collection, Mongo driver, or Mongo raw-wire labels,
+- a short report or PR note listing commands, artifact directories, benchmark
+  deltas, profile bottlenecks, optimizations made, and intentionally deferred
+  follow-ups.
+
+A roadmap round SHOULD NOT advance to the next round while its phase-close pass
+has unexplained material regressions in the primary benchmark family.
+Prerequisite-only rounds may close with no optimization, but they still need
+benchmark evidence proving the new scaffolding did not introduce avoidable hot
+path cost.
+
+## 4. Implementation Order
 
 ### R0. Protocol Spec, Registry, and Codecs
 
@@ -60,7 +98,9 @@ Suggested slices:
 
 - R0a: protocol constants, schema registry, and golden byte fixtures,
 - R0b: frame/section codec, fuzzing, and malformed-frame tests,
-- R0c: deterministic-entry encoder for the mutation allowlist.
+- R0c: deterministic-entry encoder for the mutation allowlist,
+- R0d: nativewire codec/schema benchmark suite and reusable hot-path scratch
+  APIs.
 
 Acceptance:
 
@@ -74,7 +114,12 @@ Acceptance:
 - unknown-section and unknown-flag compatibility tests,
 - fuzz tests for frame, section, byte-vector, and command decoding,
 - deterministic-entry canonicalization and rejection tests,
-- max-frame, malformed-frame, and bounded-allocation tests.
+- max-frame, malformed-frame, and bounded-allocation tests,
+- nativewire microbenchmarks for fixed headers, command headers, section
+  envelopes, byte vectors, decode+validate, and deterministic-entry encoding,
+- benchmark coverage for every command schema marked `BenchmarkRequired`,
+- allocation guard tests proving reusable decode, validation, and canonical
+  entry paths stay allocation-free after scratch warmup.
 
 ### R1. Single-Node Native Server MVP
 
@@ -103,14 +148,19 @@ Suggested slices:
 - R1c: read commands and pull-cursor lifecycle,
 - R1d: mutation commands with ack-policy handling,
 - R1e: TCP, Unix socket, and in-process benchmark transports over the same
-  dispatch path.
+  dispatch path,
+- R1f: phase-close native server benchmarking, profiling, and hot-path
+  optimization.
 
 Acceptance:
 
 - parity tests against direct `TreeDB/collections` calls,
 - native-wire TCP and in-process benchmark modes,
 - clear benchmark separation from Mongo raw-wire modes,
-- cursor cancellation and resource-limit tests.
+- cursor cancellation and resource-limit tests,
+- a phase-close benchmark/profile report comparing direct collection,
+  native-wire in-process, and native-wire TCP paths, including per-frame,
+  decode, dispatch, encode, cursor, and collection-adapter overhead.
 
 ### R2. Deterministic Command Entry v1
 
@@ -264,7 +314,7 @@ Write-producing callbacks require a stricter policy:
 The safer default is to log the expanded mutation batch, not arbitrary callback
 execution, until determinism and audit tooling are mature.
 
-## 4. Query Feature Tiers
+## 5. Query Feature Tiers
 
 ### Tier 0: Core Collection Surface
 
@@ -367,9 +417,9 @@ For distributed mode:
 - write-producing callbacks must produce deterministic mutation batches before
   consensus or be replayable byte-for-byte from the Raft log.
 
-## 5. Raft Policy Boundaries
+## 6. Raft Policy Boundaries
 
-### 5.1 Writes
+### 6.1 Writes
 
 The leader validates client mutation commands and appends deterministic command
 entries to Raft. Followers apply committed command entries to their local TreeDB
@@ -395,7 +445,7 @@ The command entry should not include:
 - response page size,
 - client socket metadata.
 
-### 5.2 Reads
+### 6.2 Reads
 
 Reads are governed by consistency policy, not by command-entry replication.
 
@@ -410,7 +460,7 @@ Read responses in cluster mode SHOULD include:
 - consistency mode requested,
 - consistency mode actually used.
 
-### 5.3 Metadata
+### 6.3 Metadata
 
 Collection and index metadata changes are replicated writes. They should use the
 same deterministic command-entry path as document mutations.
@@ -419,7 +469,7 @@ Open question: whether global metadata is one Raft group or whether each
 collection/shard has its own group plus a separate metadata group. The first
 Raft MVP SHOULD use the simplest model that can prove correctness.
 
-### 5.4 Maintenance
+### 6.4 Maintenance
 
 Local physical maintenance, such as value-log rewrite, GC, leaf-generation pack,
 or index vacuum, should not become user-visible replicated commands by default.
@@ -427,7 +477,7 @@ or index vacuum, should not become user-visible replicated commands by default.
 Cluster-visible maintenance policy is needed only when physical layout choices
 affect routing, snapshots, or catch-up behavior.
 
-## 6. TODO List
+## 7. TODO List
 
 ### Protocol TODO
 
@@ -468,7 +518,7 @@ affect routing, snapshots, or catch-up behavior.
 - Define fuel/memory/result limits.
 - Define whether write callbacks log invocation or expanded mutations.
 
-## 7. Open Questions
+## 8. Open Questions
 
 1. Should raw ordered-KV commands be part of the first native protocol, or should
    v1 stay collection-only?
