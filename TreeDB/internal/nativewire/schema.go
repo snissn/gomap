@@ -1,6 +1,9 @@
 package nativewire
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 type CommandKind uint8
 
@@ -219,7 +222,7 @@ func compileCommandRules(c CommandSchema) (map[SectionID]SectionRule, []SectionI
 		SectionTraceContext:      {ID: SectionTraceContext, Name: "trace_context"},
 		SectionAckPolicy:         {ID: SectionAckPolicy, Name: "ack_policy"},
 		SectionConsistencyPolicy: {ID: SectionConsistencyPolicy, Name: "consistency_policy"},
-		SectionIdempotencyKey:    {ID: SectionIdempotencyKey, Name: "idempotency_key"},
+		SectionIdempotencyKey:    {ID: SectionIdempotencyKey, Name: "idempotency_key", Deterministic: true},
 		SectionChecksum:          {ID: SectionChecksum, Name: "checksum"},
 		SectionCompression:       {ID: SectionCompression, Name: "compression"},
 	}
@@ -232,6 +235,7 @@ func compileCommandRules(c CommandSchema) (map[SectionID]SectionRule, []SectionI
 			required = append(required, rule.ID)
 		}
 	}
+	sort.Slice(required, func(i, j int) bool { return required[i] < required[j] })
 	return rules, required
 }
 
@@ -502,6 +506,7 @@ func v1CommandSchemas() []CommandSchema {
 			Name:    "cursor_next",
 			Kind:    CommandKindRead,
 			Sections: []SectionRule{
+				{ID: SectionCursorRef, Name: "cursor_ref", Required: true},
 				{ID: SectionCursorLimits, Name: "cursor_limits", Required: true},
 			},
 		},
@@ -510,6 +515,9 @@ func v1CommandSchemas() []CommandSchema {
 			Version: 1,
 			Name:    "cursor_close",
 			Kind:    CommandKindRead,
+			Sections: []SectionRule{
+				{ID: SectionCursorRef, Name: "cursor_ref", Required: true},
+			},
 		},
 		{
 			ID:      CommandStats,

@@ -98,7 +98,7 @@ func TestServerReadCommandWithoutCollectionManagerReturnsWireError(t *testing.T)
 		t.Fatalf("Hello: %v", err)
 	}
 
-	body, err := appendCommandRequestBody(nil, iwire.CommandOpenScan, iwire.Section{ID: iwire.SectionCollectionRef, Bytes: []byte("orders")})
+	body, err := appendCommandRequestBody(nil, iwire.CommandOpenScan, collectionNameRef("orders"))
 	if err != nil {
 		t.Fatalf("append request: %v", err)
 	}

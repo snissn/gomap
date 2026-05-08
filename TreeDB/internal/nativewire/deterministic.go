@@ -2,6 +2,8 @@ package nativewire
 
 import (
 	"bytes"
+	"cmp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -188,44 +190,12 @@ type deterministicIDItem struct {
 	length int
 }
 
-func deterministicIDItemLess(payload []byte, items []deterministicIDItem, i, j int) bool {
-	leftItem := items[i]
-	rightItem := items[j]
-	left := payload[leftItem.offset : leftItem.offset+leftItem.length]
-	right := payload[rightItem.offset : rightItem.offset+rightItem.length]
-	return bytes.Compare(left, right) < 0
-}
-
 func sortDeterministicIDItems(payload []byte, items []deterministicIDItem) {
-	n := len(items)
-	for start := n/2 - 1; start >= 0; start-- {
-		siftDownDeterministicIDItems(payload, items, start, n)
-	}
-	for end := n - 1; end > 0; end-- {
-		items[0], items[end] = items[end], items[0]
-		siftDownDeterministicIDItems(payload, items, 0, end)
-	}
-}
-
-func siftDownDeterministicIDItems(payload []byte, items []deterministicIDItem, root, end int) {
-	for {
-		child := root*2 + 1
-		if child >= end {
-			return
-		}
-		swap := root
-		if deterministicIDItemLess(payload, items, swap, child) {
-			swap = child
-		}
-		if child+1 < end && deterministicIDItemLess(payload, items, swap, child+1) {
-			swap = child + 1
-		}
-		if swap == root {
-			return
-		}
-		items[root], items[swap] = items[swap], items[root]
-		root = swap
-	}
+	slices.SortFunc(items, func(leftItem, rightItem deterministicIDItem) int {
+		left := payload[leftItem.offset : leftItem.offset+leftItem.length]
+		right := payload[rightItem.offset : rightItem.offset+rightItem.length]
+		return bytes.Compare(left, right)
+	})
 }
 
 func validateDeterministicCollectionRef(raw []byte) (bool, error) {
@@ -250,12 +220,7 @@ func validateDeterministicCollectionRef(raw []byte) (bool, error) {
 }
 
 func sortSectionsByID(sections []Section) {
-	for i := 1; i < len(sections); i++ {
-		section := sections[i]
-		j := i - 1
-		for ; j >= 0 && sections[j].ID > section.ID; j-- {
-			sections[j+1] = sections[j]
-		}
-		sections[j+1] = section
-	}
+	slices.SortFunc(sections, func(a, b Section) int {
+		return cmp.Compare(a.ID, b.ID)
+	})
 }

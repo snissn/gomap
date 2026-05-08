@@ -384,6 +384,32 @@ func TestMutationBarrierRejectsUnsatisfiedAckPolicy(t *testing.T) {
 	}
 }
 
+func TestMutationBarrierDefaultAckPolicyHonored(t *testing.T) {
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{DefaultAckPolicy: AckSynced})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if err := client.FlushCollection(ctx, "users"); !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
+		t.Fatalf("FlushCollection default synced err=%v want durability unavailable", err)
+	}
+	_, err := client.commandSections(ctx, iwire.CommandFlushAll)
+	if !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
+		t.Fatalf("FlushAll default synced err=%v want durability unavailable", err)
+	}
+}
+
+func TestResponseCountRequiresKey(t *testing.T) {
+	_, err := responseCount([]iwire.Section{ackMeta(AckVisible)}, "deleted_count")
+	if nativeCodeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("responseCount err=%v code=%d want malformed", err, nativeCodeOf(err))
+	}
+}
+
 func assertDocumentMissing(t *testing.T, mgr *collections.CollectionManager, collectionName, id string) {
 	t.Helper()
 	col, err := mgr.OpenCollection(collectionName)
