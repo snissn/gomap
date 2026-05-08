@@ -17,6 +17,7 @@ import (
 
 const (
 	defaultMaxInFlight            = 1024
+	defaultMaxConnections         = 1024
 	defaultMaxCollectionHandles   = 1024
 	defaultMaxOpenCursors         = 1024
 	defaultMaxCursorRetainedBytes = 64 << 20
@@ -29,6 +30,7 @@ const (
 type ServerOptions struct {
 	Limits                 iwire.Limits
 	MaxInFlight            int
+	MaxConnections         int
 	MaxCollectionHandles   int
 	MaxOpenCursors         int
 	MaxCursorRetainedBytes int
@@ -44,6 +46,7 @@ type ServerOptions struct {
 type Server struct {
 	limits                 iwire.Limits
 	maxInFlight            int
+	maxConnections         int
 	maxCollectionHandles   int
 	maxOpenCursors         int
 	maxCursorRetainedBytes int
@@ -149,6 +152,10 @@ func NewServer(opts ServerOptions) *Server {
 	if maxInFlight <= 0 {
 		maxInFlight = defaultMaxInFlight
 	}
+	maxConnections := opts.MaxConnections
+	if maxConnections <= 0 {
+		maxConnections = defaultMaxConnections
+	}
 	maxCollectionHandles := opts.MaxCollectionHandles
 	if maxCollectionHandles <= 0 {
 		maxCollectionHandles = defaultMaxCollectionHandles
@@ -183,6 +190,7 @@ func NewServer(opts ServerOptions) *Server {
 	return &Server{
 		limits:                 limits,
 		maxInFlight:            maxInFlight,
+		maxConnections:         maxConnections,
 		maxCollectionHandles:   maxCollectionHandles,
 		maxOpenCursors:         maxOpenCursors,
 		maxCursorRetainedBytes: maxCursorRetainedBytes,

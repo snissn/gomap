@@ -32,6 +32,12 @@ func (e *WireError) Error() string {
 	return fmt.Sprintf("nativewire: remote error code %d: %s", e.Code, e.Message)
 }
 
+// IsCatalogVersionMismatch reports whether err is a remote catalog-version
+// guard failure.
+func IsCatalogVersionMismatch(err error) bool {
+	return isRemoteError(err, iwire.ErrCatalogVersionMismatch)
+}
+
 func errorCodeFor(err error) iwire.ErrorCode {
 	if err == nil {
 		return 0

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -172,10 +171,5 @@ func TestNewInProcessClientCleanupIsIdempotent(t *testing.T) {
 
 func unixSocketPath(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "nw")
-	if err != nil {
-		t.Fatalf("MkdirTemp: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	return filepath.Join(dir, "s.sock")
+	return filepath.Join(t.TempDir(), "s.sock")
 }
