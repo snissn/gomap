@@ -557,6 +557,8 @@ func validateDeterministicTemplateDocument(raw []byte, templates deterministicTe
 	if templateCount > uint64((len(raw)-pos)/(sha256.Size+1)) {
 		return protocolError(ErrMalformedFrame, "malformed template-v1 template count")
 	}
+	var embeddedScratch [8]deterministicTemplate
+	embeddedTemplates := embeddedScratch[:0]
 	for i := uint64(0); i < templateCount; i++ {
 		var id [sha256.Size]byte
 		if len(raw)-pos < len(id) {
@@ -580,13 +582,13 @@ func validateDeterministicTemplateDocument(raw []byte, templates deterministicTe
 		if recordID := sha256.Sum256(record); recordID != id {
 			return protocolError(ErrMalformedFrame, "template-v1 template id does not match record")
 		} else {
-			templates = append(templates, deterministicTemplate{id: id, fieldCount: fieldCount})
+			embeddedTemplates = append(embeddedTemplates, deterministicTemplate{id: id, fieldCount: fieldCount})
 		}
 	}
 	if !consumeDeterministicTemplateMagic(raw, &pos, deterministicTemplateV1StoredMagic) {
 		return protocolError(ErrMalformedFrame, "malformed template-v1 stored document")
 	}
-	return validateDeterministicTemplateStoredDocument(raw, &pos, templates)
+	return validateDeterministicTemplateStoredDocument(raw, &pos, embeddedTemplates)
 }
 
 func validateDeterministicTemplateStoredDocument(raw []byte, pos *int, templates deterministicTemplateSet) error {
