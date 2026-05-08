@@ -1269,7 +1269,7 @@ func deterministicCollectionMetaPayloadWithOptions(name string, opts determinist
 	// data_root_storage_policy, index_state_storage_policy,
 	// allow_array_values_in_index, disable_indexed_write_memtables,
 	// buffered_indexed_writes, max_documents, max_bytes, max_root_runs,
-	// async_flush, overlay_roots, max_queued_units, and index definitions.
+	// async_flush, overlay_roots, max_queued_units, and index_count.
 	dst := deterministicUvarintPayload(deterministicCollectionMetaVersion) // version
 	dst = appendDeterministicString(dst, name)                             // name
 	dst = appendUvarint(dst, opts.documentFormat)                          // document_format
