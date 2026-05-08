@@ -58,6 +58,36 @@ func TestDeterministicEntryRejectsMissingDistributedGuards(t *testing.T) {
 	}
 }
 
+func TestDeterministicEntryRequiresGuardsInCanonicalSections(t *testing.T) {
+	registry, err := NewRegistry(CommandSchema{
+		ID:                   CommandInsertBatch,
+		Version:              1,
+		Name:                 "insert_batch",
+		Kind:                 CommandKindMutation,
+		Replicated:           true,
+		RequiresIdempotency:  true,
+		RequiresCatalogGuard: true,
+		Sections: []SectionRule{
+			{ID: SectionCollectionRef, Name: "collection_ref", Required: true, Deterministic: true},
+			{ID: SectionDocumentFormat, Name: "document_format", Required: true, Deterministic: true},
+			{ID: SectionDocumentIDs, Name: "document_ids", Required: true, Deterministic: true},
+			{ID: SectionDocuments, Name: "documents", Required: true, Deterministic: true},
+			{ID: SectionExpectedCatalogVersion, Name: "expected_catalog_version", Required: true},
+			{ID: SectionIdempotencyKey, Name: "idempotency_key", Required: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	cmd, err := registry.ValidateRequestSections(insertBatchDeterministicSections())
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("non-deterministic guards err=%v code=%d", err, codeOf(err))
+	}
+}
+
 func TestDeterministicEntryPreservesRepeatableSectionOrder(t *testing.T) {
 	const (
 		commandID = CommandID(9000)
@@ -118,6 +148,16 @@ func TestDeterministicEntryRejectsDuplicateIdempotencyInValidatedView(t *testing
 	cmd.Known = append(cmd.Known, Section{ID: SectionIdempotencyKey, Bytes: []byte("id2")})
 	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
 		t.Fatalf("duplicate idempotency err=%v code=%d", err, codeOf(err))
+	}
+}
+
+func TestDeterministicByteVectorCountRejectsDuplicateSections(t *testing.T) {
+	sections := []Section{
+		{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
+		{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("b"))},
+	}
+	if _, err := deterministicByteVectorCount(sections, SectionDocumentIDs); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("duplicate deterministic vector err=%v code=%d", err, codeOf(err))
 	}
 }
 
