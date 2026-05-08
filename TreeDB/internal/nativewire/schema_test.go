@@ -80,6 +80,18 @@ func TestRegistryRejectsInvalidCommandShape(t *testing.T) {
 	}
 
 	sections = insertBatchSections()
+	sections = removeSection(sections, SectionIdempotencyKey)
+	if _, err := registry.ValidateRequestSections(sections); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("missing idempotency err=%v code=%d", err, codeOf(err))
+	}
+
+	sections = insertBatchSections()
+	sections = removeSection(sections, SectionExpectedCatalogVersion)
+	if _, err := registry.ValidateRequestSections(sections); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("missing catalog guard err=%v code=%d", err, codeOf(err))
+	}
+
+	sections = insertBatchSections()
 	sections[0].Bytes = AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 99})
 	if _, err := registry.ValidateRequestSections(sections); codeOf(err) != ErrUnsupportedVersion {
 		t.Fatalf("unsupported command version err=%v code=%d", err, codeOf(err))
