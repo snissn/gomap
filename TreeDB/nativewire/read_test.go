@@ -3,6 +3,7 @@ package nativewire
 import (
 	"bytes"
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -452,6 +453,37 @@ func TestCursorIdleReaperRunsWithoutFollowupRequest(t *testing.T) {
 	if !isRemoteError(err, iwire.ErrCursorNotFound) {
 		t.Fatalf("CursorNext after idle reap error=%v want cursor_not_found", err)
 	}
+	waitForCounter(t, server, "cursors.closed_total", 1)
+	waitForCounter(t, server, "cursors.timeouts_total", 1)
+}
+
+func TestCursorConnectionCloseIncrementsClosedCounter(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	seedReadCollection(t, mgr)
+	server := NewServer(ServerOptions{Collections: mgr, Backend: db})
+	client, _ := servePipe(t, server)
+	t.Cleanup(func() { _ = db.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	first, err := client.OpenScan(ctx, "users", CursorLimits{MaxItems: 1})
+	if err != nil {
+		t.Fatalf("OpenScan: %v", err)
+	}
+	if first.Cursor.CursorID == 0 {
+		t.Fatalf("first=%+v want open cursor", first)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("client close: %v", err)
+	}
+	waitForOpenCursorCount(t, server, 0)
+	waitForCounter(t, server, "cursors.closed_total", 1)
 }
 
 func TestCursorNextRequiresCursorRef(t *testing.T) {
@@ -552,4 +584,20 @@ func waitForOpenCursorCount(t *testing.T, server *Server, want int) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("openCursorCount=%d want %d", server.openCursorCount(), want)
+}
+
+func waitForCounter(t *testing.T, server *Server, key string, want int) {
+	t.Helper()
+	fullKey := nativeStatsPrefix + key
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		stats := server.Stats()
+		got, err := strconv.Atoi(stats[fullKey])
+		if err == nil && got == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stats := server.Stats()
+	t.Fatalf("%s=%q want %d", fullKey, stats[fullKey], want)
 }

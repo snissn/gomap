@@ -69,6 +69,10 @@ type Server struct {
 	cursorMu   sync.Mutex
 	cursors    map[uint64]*serverCursor
 	counters   counters
+
+	cursorReaperOnce     sync.Once
+	cursorReaperStopOnce sync.Once
+	cursorReaperDone     chan struct{}
 }
 
 type serverCursor struct {
@@ -193,6 +197,7 @@ func NewServer(opts ServerOptions) *Server {
 		registry:               iwire.MustV1Registry(),
 		collections:            opts.Collections,
 		backend:                opts.Backend,
+		cursorReaperDone:       make(chan struct{}),
 	}
 }
 
@@ -202,6 +207,7 @@ func (s *Server) Close() error {
 		return nil
 	}
 	s.closed.Store(true)
+	s.stopCursorReaper()
 	s.connMu.Lock()
 	conns := make([]net.Conn, 0, len(s.conns))
 	for conn := range s.conns {
@@ -241,9 +247,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		case <-done:
 		}
 	}()
-	if s.cursorIdleTimeout > 0 {
-		go s.reapExpiredCursorsUntilDone(done)
-	}
+	s.startCursorReaper()
 
 	for {
 		if s.closed.Load() {
@@ -571,6 +575,9 @@ func (s *Server) Stats() map[string]string {
 		"errors.total",
 		"transport_errors_total",
 		"dispatch_nanos_total",
+		"cursors.opened_total",
+		"cursors.closed_total",
+		"cursors.timeouts_total",
 	} {
 		out[nativeStatsPrefix+key] = "0"
 	}
