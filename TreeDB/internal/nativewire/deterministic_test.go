@@ -1475,6 +1475,42 @@ func TestDecodeDeterministicEntryRejectsUnappliableTemplateRecords(t *testing.T)
 	}
 }
 
+func TestDecodeDeterministicEntryAllowsStoredTemplateReferencesOutsideSidecar(t *testing.T) {
+	sidecarRecord := deterministicTemplateRecord("email")
+	persistedRecord := deterministicTemplateRecord("name")
+	for _, tc := range []struct {
+		name string
+		doc  []byte
+	}{
+		{
+			name: "root",
+			doc:  deterministicTemplateStoredDocumentForRecord(persistedRecord, []byte{deterministicTemplateV1KindNull}),
+		},
+		{
+			name: "nested_object",
+			doc: deterministicTemplateStoredDocumentForRecord(sidecarRecord,
+				deterministicTemplateObjectPayload(persistedRecord, []byte{deterministicTemplateV1KindNull})),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sections := insertBatchDeterministicSections()
+			for i := range sections {
+				if sections[i].ID == SectionDocumentFormat {
+					sections[i].Bytes = []byte{byte(DocumentFormatTemplateV1)}
+				}
+				if sections[i].ID == SectionDocuments {
+					sections[i].Bytes = AppendByteVector(nil, tc.doc)
+				}
+			}
+			sections = append(sections, Section{ID: SectionTemplateRecords, Bytes: AppendByteVector(nil, sidecarRecord)})
+			raw := deterministicEntryTestRaw(CommandInsertBatch, deterministicEntrySectionsOnly(sections)...)
+			if _, err := DecodeDeterministicEntry(raw, Limits{}); err != nil {
+				t.Fatalf("DecodeDeterministicEntry: %v", err)
+			}
+		})
+	}
+}
+
 func TestDecodeDeterministicEntryRejectsMalformedTemplateDocuments(t *testing.T) {
 	sections := insertBatchDeterministicSections()
 	for i := range sections {
@@ -1868,10 +1904,20 @@ func deterministicTemplateNestedObjectPayload(record []byte, depth int) []byte {
 	id := sha256.Sum256(record)
 	var dst []byte
 	for i := 0; i < depth; i++ {
-		dst = append(dst, deterministicTemplateV1KindObject)
-		dst = append(dst, id[:]...)
+		dst = appendDeterministicTemplateObjectHeader(dst, id)
 	}
 	return append(dst, deterministicTemplateV1KindNull)
+}
+
+func deterministicTemplateObjectPayload(record []byte, payload []byte) []byte {
+	id := sha256.Sum256(record)
+	dst := appendDeterministicTemplateObjectHeader(nil, id)
+	return append(dst, payload...)
+}
+
+func appendDeterministicTemplateObjectHeader(dst []byte, id [sha256.Size]byte) []byte {
+	dst = append(dst, deterministicTemplateV1KindObject)
+	return append(dst, id[:]...)
 }
 
 func appendDeterministicString(dst []byte, value string) []byte {
