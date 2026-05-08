@@ -1449,18 +1449,18 @@ func deterministicUvarintPayload(value uint64) []byte {
 
 func deterministicBSONDocumentXInt32(value int32) []byte {
 	const (
-		documentLength = 12
 		valueTypeInt32 = 0x10
 		valueKey       = 'x'
 	)
 	var valueBytes [4]byte
 	binary.LittleEndian.PutUint32(valueBytes[:], uint32(value))
 	out := []byte{
-		documentLength, 0, 0, 0,
+		0, 0, 0, 0,
 		valueTypeInt32, valueKey, 0,
 		valueBytes[0], valueBytes[1], valueBytes[2], valueBytes[3],
 		0,
 	}
+	binary.LittleEndian.PutUint32(out[:4], uint32(len(out)))
 	return out
 }
 
