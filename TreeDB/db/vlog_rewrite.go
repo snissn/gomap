@@ -3270,6 +3270,7 @@ type rewriteWriter struct {
 	leafLane uint32
 	leafSeq  uint32
 	nextRID  uint64
+	ridAlloc *rewriteRIDAllocator
 	// currentPath/currentFileID cache the active writer segment identity so
 	// CurrentValueLogSegment can avoid per-call path/fileID recomputation.
 	currentPath       string
@@ -3522,13 +3523,9 @@ func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error)
 	if w == nil {
 		return page.LeafLogPtr{}, errors.New("vlog-rewrite: nil writer")
 	}
-	if w.nextRID == 0 {
-		w.nextRID = 1
-	}
-	rid := w.nextRID
-	w.nextRID++
-	if w.nextRID == 0 {
-		return page.LeafLogPtr{}, fmt.Errorf("value-log rid space exhausted")
+	rid, err := w.nextRecordRID()
+	if err != nil {
+		return page.LeafLogPtr{}, err
 	}
 	return w.appendLeafPageWithRID(rid, leafPage)
 }
@@ -3540,18 +3537,42 @@ func (w *rewriteWriter) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, 
 	if len(leafPages) == 0 {
 		return nil, nil
 	}
+	startRID, err := w.reserveRecordRIDs(len(leafPages))
+	if err != nil {
+		return nil, err
+	}
+	return w.appendLeafPagesWithRIDStart(startRID, leafPages)
+}
+
+func (w *rewriteWriter) nextRecordRID() (uint64, error) {
+	if w == nil {
+		return 0, errors.New("vlog-rewrite: nil writer")
+	}
+	if w.ridAlloc != nil {
+		return w.ridAlloc.Next()
+	}
+	return w.reserveRecordRIDs(1)
+}
+
+func (w *rewriteWriter) reserveRecordRIDs(count int) (uint64, error) {
+	if w == nil {
+		return 0, errors.New("vlog-rewrite: nil writer")
+	}
+	if w.ridAlloc != nil {
+		return w.ridAlloc.Reserve(count)
+	}
 	if w.nextRID == 0 {
 		w.nextRID = 1
 	}
 	startRID := w.nextRID
-	if uint64(len(leafPages)) > ^uint64(0)-startRID {
-		return nil, fmt.Errorf("value-log rid space exhausted")
+	if uint64(count) > ^uint64(0)-startRID {
+		return 0, fmt.Errorf("value-log rid space exhausted")
 	}
-	w.nextRID += uint64(len(leafPages))
+	w.nextRID += uint64(count)
 	if w.nextRID == 0 {
-		return nil, fmt.Errorf("value-log rid space exhausted")
+		return 0, fmt.Errorf("value-log rid space exhausted")
 	}
-	return w.appendLeafPagesWithRIDStart(startRID, leafPages)
+	return startRID, nil
 }
 
 func (w *rewriteWriter) LastLeafPageRecordLength() uint32 {

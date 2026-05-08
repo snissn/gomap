@@ -44,6 +44,7 @@ func (db *DB) CompactStoragePlan(ctx context.Context, opts CompactStorageOptions
 	if db.backend == nil {
 		return out, ErrClosed
 	}
+	db.applyCachedCompactStorageOptions(&opts, false)
 	return db.backend.CompactStoragePlan(ctx, treedbdb.CompactStorageOptions(opts))
 }
 
@@ -63,14 +64,8 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	success := false
 	defer func() { finishMaintenance(success) }()
 
-	if db.cached != nil {
-		if err := db.Checkpoint(); err != nil {
-			return out, err
-		}
-		if opts.ReserveRIDs == nil {
-			opts.ReserveRIDs = db.cached.ReserveValueLogRIDs
-		}
-		opts.DisableZeroByteValueLogCleanup = true
+	if err := db.applyCachedCompactStorageOptions(&opts, true); err != nil {
+		return out, err
 	}
 	stats, err := db.backend.CompactStorage(ctx, treedbdb.CompactStorageOptions(opts))
 	if err != nil {
@@ -78,4 +73,29 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	}
 	success = true
 	return CompactStorageStats(stats), nil
+}
+
+func (db *DB) applyCachedCompactStorageOptions(opts *CompactStorageOptions, checkpoint bool) error {
+	if db == nil || db.cached == nil || opts == nil {
+		return nil
+	}
+	if checkpoint {
+		if err := db.Checkpoint(); err != nil {
+			return err
+		}
+	}
+	if len(opts.ValueLogProtectedPaths) == 0 {
+		opts.ValueLogProtectedPaths = db.cached.ValueLogRetainedPaths()
+	}
+	if len(opts.ValueLogProtectedPaths) == 0 {
+		// Cached-mode callers may have concurrent writers even when there are no
+		// retained paths yet; pass a non-empty slice to activate the backend
+		// rewrite/GC active-segment protection.
+		opts.ValueLogProtectedPaths = []string{""}
+	}
+	if opts.ReserveRIDs == nil {
+		opts.ReserveRIDs = db.cached.ReserveValueLogRIDs
+	}
+	opts.DisableZeroByteValueLogCleanup = true
+	return nil
 }

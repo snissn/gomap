@@ -38,6 +38,7 @@ type CompactStorageOptions struct {
 	// Value-log rewrite knobs.
 	ValueLogRewriteBatchSize       int
 	ValueLogRewriteMaxSegmentBytes int64
+	ValueLogProtectedPaths         []string
 
 	// Leaf-generation pack knobs. Defaults are intentionally bounded to keep a
 	// single compaction request finite while still draining ordinary debt.
@@ -180,7 +181,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		return stats, err
 	}
 
-	cleanupLeafLog, err := db.installCompactStorageLeafPageLog()
+	cleanupLeafLog, err := db.installCompactStorageLeafPageLog(opts)
 	if err != nil {
 		return stats, err
 	}
@@ -192,6 +193,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 			MaxSegmentBytes: opts.ValueLogRewriteMaxSegmentBytes,
 			LocalityPolicy:  ValueLogRewriteLocalityGrouped,
 			ReserveRIDs:     opts.ReserveRIDs,
+			ProtectedPaths:  opts.ValueLogProtectedPaths,
 		})
 		stats.ValueLogRewrite = rewrite
 		return err
@@ -205,7 +207,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	}
 
 	if err := db.runCompactStoragePhase(&stats, "value-log-gc", func() error {
-		gc, err := db.ValueLogGC(ctx, ValueLogGCOptions{})
+		gc, err := db.ValueLogGC(ctx, ValueLogGCOptions{ProtectedPaths: opts.ValueLogProtectedPaths})
 		stats.ValueLogGC = gc
 		return err
 	}); err != nil {
@@ -341,7 +343,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 		if debt.ValueLogGCSegments > 0 {
 			phaseName := fmt.Sprintf("settle-value-log-gc-%d", pass+1)
 			if err := db.runCompactStoragePhase(stats, phaseName, func() error {
-				gc, err := db.ValueLogGC(ctx, ValueLogGCOptions{})
+				gc, err := db.ValueLogGC(ctx, ValueLogGCOptions{ProtectedPaths: opts.ValueLogProtectedPaths})
 				stats.ValueLogGC = gc
 				return err
 			}); err != nil {
@@ -393,18 +395,36 @@ func normalizeCompactStorageOptions(opts CompactStorageOptions) CompactStorageOp
 	if opts.LeafPackMaxGenerationsPerPass < 0 {
 		opts.LeafPackMaxGenerationsPerPass = 0
 	}
+	if opts.LeafPackMaxGenerationsPerPass == 0 {
+		if opts.Mode == CompactStorageQuick {
+			opts.LeafPackMaxGenerationsPerPass = 8
+		} else {
+			opts.LeafPackMaxGenerationsPerPass = 64
+		}
+	}
+	if opts.LeafPackMaxBytesToCopyPerPass < 0 {
+		opts.LeafPackMaxBytesToCopyPerPass = 0
+	}
+	if opts.LeafPackMaxBytesToCopyPerPass == 0 {
+		if opts.Mode == CompactStorageQuick {
+			opts.LeafPackMaxBytesToCopyPerPass = 256 << 20
+		} else {
+			opts.LeafPackMaxBytesToCopyPerPass = 1 << 30
+		}
+	}
 	return opts
 }
 
-func compactStorageRewritePlanOptions() ValueLogRewriteOnlineOptions {
+func compactStorageRewritePlanOptions(opts CompactStorageOptions) ValueLogRewriteOnlineOptions {
 	return ValueLogRewriteOnlineOptions{
 		MinSegmentStaleBytes: 1,
+		ProtectedPaths:       opts.ValueLogProtectedPaths,
 	}
 }
 
 func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats) (CompactStorageDebt, error) {
 	var debt CompactStorageDebt
-	rewritePlan, err := db.ValueLogRewritePlan(ctx, compactStorageRewritePlanOptions())
+	rewritePlan, err := db.ValueLogRewritePlan(ctx, compactStorageRewritePlanOptions(opts))
 	if err != nil {
 		return debt, err
 	}
@@ -415,7 +435,7 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 		debt.ValueLogRewriteBytes = rewritePlan.SelectedBytesTotal
 	}
 
-	valueGC, err := db.ValueLogGC(ctx, ValueLogGCOptions{DryRun: true})
+	valueGC, err := db.ValueLogGC(ctx, ValueLogGCOptions{DryRun: true, ProtectedPaths: opts.ValueLogProtectedPaths})
 	if err != nil {
 		return debt, err
 	}
@@ -449,7 +469,9 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 	if err != nil {
 		return debt, err
 	}
-	debt.ZeroByteValueLogFiles = zeroByteValueLogFilesFromUsage(usage)
+	if !opts.DisableZeroByteValueLogCleanup {
+		debt.ZeroByteValueLogFiles = zeroByteValueLogFilesFromUsage(usage)
+	}
 	return debt, nil
 }
 
@@ -580,8 +602,11 @@ func (db *DB) pruneZeroByteValueLogFiles() (int, error) {
 				continue
 			}
 		}
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return deleted, err
+		if err := os.Remove(path); err != nil {
+			if !os.IsNotExist(err) {
+				return deleted, err
+			}
+			continue
 		}
 		deleted++
 	}
@@ -608,7 +633,7 @@ func compactStorageValueLogFileID(name string) (uint32, bool) {
 	return fileID, true
 }
 
-func (db *DB) installCompactStorageLeafPageLog() (func(), error) {
+func (db *DB) installCompactStorageLeafPageLog(opts CompactStorageOptions) (func(), error) {
 	if db == nil || !db.indexOuterLeavesInValueLog || db.leafPageLog != nil {
 		return func() {}, nil
 	}
@@ -619,6 +644,15 @@ func (db *DB) installCompactStorageLeafPageLog() (func(), error) {
 	leafStartSeq := maxRewriteLaneSeq(segments, rewriteLeafLogLaneID)
 	writer := newRewriteWriter(ValueLogDirPath(db.dir), 0, 0, 0)
 	writer.ConfigureLeafLog(LeafLogDirPath(db.dir), rewriteLeafLogLaneID, leafStartSeq)
+	nextRID := uint64(0)
+	if opts.ReserveRIDs == nil {
+		nextRID, err = rewriteRIDStartScanner(segments)
+		if err != nil {
+			_ = writer.Close()
+			return nil, fmt.Errorf("scan rewrite rid start in %s: %w", db.dir, err)
+		}
+	}
+	writer.ridAlloc = newRewriteRIDAllocator(nextRID, opts.ReserveRIDs)
 	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
 	writer.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)

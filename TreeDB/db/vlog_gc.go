@@ -139,7 +139,9 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		if set != nil {
 			_ = vm.Release(set)
 		}
-		db.persistValueLogRefTrackerBestEffort()
+		if !opts.DryRun && !db.readOnly {
+			db.persistValueLogRefTrackerBestEffort()
+		}
 		return stats, nil
 	}
 	valueSet := &valuelog.Set{Files: files}
@@ -378,9 +380,6 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 	if opts.DryRun {
 		if set != nil {
 			_ = vm.Release(set)
-		}
-		if !db.readOnly {
-			db.persistValueLogRefTrackerBestEffort()
 		}
 		return stats, nil
 	}

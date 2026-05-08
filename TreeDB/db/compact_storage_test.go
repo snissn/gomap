@@ -102,6 +102,48 @@ func TestCompactStoragePlanReadOnlyDoesNotDeleteZeroByteValueLogFiles(t *testing
 	}
 }
 
+func TestCompactStoragePlanIgnoresZeroByteValueLogFilesWhenCleanupDisabled(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := d.SetSync([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	valueLogDir := ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	emptyPath := filepath.Join(valueLogDir, "value-l8-000001.log")
+	if err := os.WriteFile(emptyPath, nil, 0644); err != nil {
+		t.Fatalf("write empty value log: %v", err)
+	}
+
+	reopened, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+
+	stats, err := reopened.CompactStoragePlan(context.Background(), CompactStorageOptions{
+		DisableZeroByteValueLogCleanup: true,
+	})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan: %v", err)
+	}
+	if got := stats.RemainingDebt.ZeroByteValueLogFiles; got != 0 {
+		t.Fatalf("zero-byte debt=%d want 0 when cleanup is disabled", got)
+	}
+	if _, err := os.Stat(emptyPath); err != nil {
+		t.Fatalf("plan mutated empty value-log file: %v", err)
+	}
+}
+
 func TestCompactStorageSettlesLeafGenerationGCAfterPinnedRetiring(t *testing.T) {
 	d, leafLog, dir := openLeafGenerationPackTestDB(t)
 

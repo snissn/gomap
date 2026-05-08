@@ -16,6 +16,13 @@ type CompactStorageStats struct {
 	Storage      backenddb.CompactStorageStats                   `json:"storage"`
 }
 
+// CompactStoragePlan reports collection-aware storage compaction debt without
+// folding root overlays or mutating storage.
+func (c *Collection) CompactStoragePlan(ctx context.Context, opts CompactStorageOptions) (CompactStorageStats, error) {
+	opts.DryRun = true
+	return c.CompactStorage(ctx, opts)
+}
+
 // CompactStorage folds this collection's root overlays and then runs the
 // recommended full TreeDB storage compaction sequence.
 func (c *Collection) CompactStorage(ctx context.Context, opts CompactStorageOptions) (CompactStorageStats, error) {
@@ -28,6 +35,11 @@ func (c *Collection) CompactStorage(ctx context.Context, opts CompactStorageOpti
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if opts.DryRun {
+		storage, err := c.db.CompactStoragePlan(ctx, backenddb.CompactStorageOptions(opts))
+		stats.Storage = storage
+		return stats, err
 	}
 	rootStats, err := c.CompactRootOverlays(ctx)
 	if err != nil {
@@ -44,6 +56,13 @@ func (c *Collection) CompactStorage(ctx context.Context, opts CompactStorageOpti
 	return stats, nil
 }
 
+// CompactStoragePlan reports collection-manager storage compaction debt without
+// folding root overlays or mutating storage.
+func (m *CollectionManager) CompactStoragePlan(ctx context.Context, opts CompactStorageOptions) (CompactStorageStats, error) {
+	opts.DryRun = true
+	return m.CompactStorage(ctx, opts)
+}
+
 // CompactStorage folds root overlays for all known collections and then runs
 // the recommended full TreeDB storage compaction sequence.
 func (m *CollectionManager) CompactStorage(ctx context.Context, opts CompactStorageOptions) (CompactStorageStats, error) {
@@ -56,6 +75,11 @@ func (m *CollectionManager) CompactStorage(ctx context.Context, opts CompactStor
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if opts.DryRun {
+		storage, err := m.db.CompactStoragePlan(ctx, backenddb.CompactStorageOptions(opts))
+		stats.Storage = storage
+		return stats, err
 	}
 	metas, err := m.ListCollections()
 	if err != nil {

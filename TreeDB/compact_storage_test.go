@@ -76,4 +76,20 @@ func TestCompactStorageFullPacksLeafGenerationDebtOffline(t *testing.T) {
 		t.Fatalf("cleanup: %v", err)
 	}
 	cleanupDone = true
+
+	reopened, err := treedb.Open(treedb.Options{Dir: dir, DisableSideStores: true})
+	if err != nil {
+		t.Fatalf("reopen after CompactStorage: %v", err)
+	}
+	value, err := reopened.Get([]byte("k00000000"))
+	closeErr := reopened.Close()
+	if err != nil {
+		t.Fatalf("get after CompactStorage reopen: %v", err)
+	}
+	if len(value) == 0 {
+		t.Fatal("empty value after CompactStorage reopen")
+	}
+	if closeErr != nil {
+		t.Fatalf("close reopened: %v", closeErr)
+	}
 }

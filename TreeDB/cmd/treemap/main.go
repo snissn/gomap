@@ -519,7 +519,7 @@ func runCompact(dir string, args []string) {
 	defer func() { _ = cleanup() }()
 
 	stats, err := backend.CompactStorage(context.Background(), treedbdb.CompactStorageOptions{
-		Mode:                           treedbdb.CompactStorageMode(strings.TrimSpace(*mode)),
+		Mode:                           parseCompactStorageModeFlag("compact", *mode),
 		SyncEachPhase:                  *syncEachPhase,
 		ValueLogRewriteBatchSize:       *batchSize,
 		ValueLogRewriteMaxSegmentBytes: *maxSegmentBytes,
@@ -542,12 +542,24 @@ func runCompactPlan(dir string, args []string) {
 	defer closeTreeDB(db)
 
 	stats, err := db.CompactStoragePlan(context.Background(), treedb.CompactStorageOptions{
-		Mode: treedb.CompactStorageMode(strings.TrimSpace(*mode)),
+		Mode: treedb.CompactStorageMode(parseCompactStorageModeFlag("compact-plan", *mode)),
 	})
 	if err != nil {
 		fatalf("CompactStoragePlan error: %v", err)
 	}
 	printCompactStorageStats(stats, *jsonOut)
+}
+
+func parseCompactStorageModeFlag(command, raw string) treedbdb.CompactStorageMode {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "full":
+		return treedbdb.CompactStorageFull
+	case "quick":
+		return treedbdb.CompactStorageQuick
+	default:
+		fatalf("%s -mode must be full or quick", command)
+		return treedbdb.CompactStorageFull
+	}
 }
 
 func printCompactStorageStats(stats treedb.CompactStorageStats, jsonOut bool) {
