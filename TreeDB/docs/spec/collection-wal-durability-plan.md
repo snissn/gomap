@@ -1,6 +1,6 @@
 # SPEC: Collection WAL Durability and Root-Group Recovery
 
-Status: proposal, non-normative
+Status: draft proposal, non-normative.
 Target repository studied: `https://github.com/snissn/gomap/tree/7431ba92f7a1a456c15f70ac019314090e22af31`
 Primary code paths studied: `TreeDB/collections`, `TreeDB/db`,
 `TreeDB/caching`, `TreeDB/internal/commitlog`, `TreeDB/internal/valuelog`  
@@ -394,19 +394,34 @@ Segment rules:
 The system root must store collection WAL progress:
 
 ```text
-treedb/collection-wal/global-applied-txn-id -> uint64
-treedb/collection-wal/collection/<collection-id>/applied-txn-id -> uint64 optional
+treedb/collection-wal/global-contiguous-applied-txn-id -> uint64 optional
+treedb/collection-wal/collection/<collection-id>/applied-txn-id -> uint64
 ```
 
-PR1 can use one global monotonic transaction id. Per-collection watermarks can
-be added later if recovery or cleanup needs more concurrency.
+PR1 can use one global monotonic transaction id for transaction identity. It
+must not use a single global applied high-watermark unless publication and
+watermark advancement are strictly contiguous in `TxnID` order across all
+collection write domains.
+
+Safe choices:
+
+1. Enforce one ordered global publisher, so transaction `N+1` cannot advance an
+   applied watermark before transaction `N` is applied.
+2. Track per-collection applied watermarks and advance a separate global
+   contiguous watermark only when every lower `TxnID` is known applied.
+
+The second choice is preferred if async publishers can run independently per
+collection or write domain. Recovery may skip a transaction only when that
+transaction is covered by its collection watermark or by a global contiguous
+watermark. It must never skip transaction `N` merely because transaction `N+1`
+from another collection was published first.
 
 When a collection root group is published, the same backend commit that updates
 collection root descriptors must also advance the applied watermark. This is the
 atomic marker that makes WAL cleanup safe.
 
-Recovery skips transactions at or below the applied watermark. Transactions
-above the watermark are candidates for replay.
+Recovery skips transactions covered by a safe applied watermark. Transactions
+not covered by a safe watermark are candidates for replay.
 
 ### 7.5 Side-File Fences
 
@@ -434,6 +449,25 @@ If a required side ref is missing during recovery:
 - durable mode should surface an error unless the missing ref is in a clearly
   incomplete tail transaction that can be ignored by the same rules as existing
   commit-log tails.
+
+Collection WAL side refs are also retention roots. Value-log GC, value-log
+rewrite, column-file cleanup, and future side-file maintenance must treat every
+required side ref in an unapplied or not-yet-cleanable collection WAL
+transaction as reachable until the transaction is covered by a safe applied
+watermark and the checkpoint/meta boundary needed for cleanup is durable.
+
+Implementation options:
+
+1. GC/rewrite scans collection WAL segments and includes required `SideRefs` in
+   its reachability set.
+2. WAL append/update maintains a protected side-ref index that GC/rewrite scans
+   with the normal root reachability set.
+
+PR1 should prefer protection over rewrite: if a value-log segment or column file
+is referenced only by pending collection WAL, maintenance should keep it in
+place rather than moving it and trying to patch WAL records. A future rewrite
+mode may rewrite protected refs only if it publishes replacement side refs and
+collection WAL metadata atomically under an explicit crash-tested protocol.
 
 ### 7.6 Native Wire and Raft Layering
 
@@ -599,7 +633,8 @@ the current invariant that side-store scans run before cached commit-log replay:
    - validate required side refs;
    - validate collection catalog identity and schema epoch;
    - verify each named root's current id matches the transaction's `BaseRootID`,
-     unless the transaction is already covered by the applied watermark;
+     unless the transaction is covered by a replay accumulator as described
+     below;
    - materialize `OrderedRootDeltaBatchPublishInput` values;
    - publish the root group with a system-root delta that updates collection
      root descriptors and advances the applied watermark.
@@ -611,11 +646,52 @@ the current invariant that side-store scans run before cached commit-log replay:
 Recovery must be deterministic. Replaying the same directory twice must produce
 the same collection roots and applied watermark.
 
+### 9.1 Buffered Transaction Replay and Rebasing
+
+Buffered collection writes can create several acknowledged WAL transactions
+whose root deltas all name the same persisted `BaseRootID`. That is valid if
+the write domain recorded each pending mutation relative to the persisted
+catalog root and planned to publish the merged flush unit later. It is not safe
+for recovery to publish transaction 1, update the root id, and then reject
+transaction 2 solely because transaction 2 still names the old persisted base.
+
+The implementation must choose one of these replay-safe models:
+
+1. Log only merged flush-unit transactions, so every transaction's `BaseRootID`
+   is the backend root id expected at replay time.
+2. Give each later WAL transaction a logical base that includes earlier pending
+   WAL deltas for that root.
+3. Rebase/accumulate during recovery.
+
+The recommended PR1 model is replay-side accumulation. Recovery should process
+unapplied transactions in `TxnID` order, grouped by collection and root. For
+each root, it maintains a virtual replay base seeded from the current catalog
+root and a pending delta accumulator:
+
+- if a transaction's `BaseRootID` equals the current persisted root, recovery
+  may start or extend the accumulator for that root;
+- if a transaction's `BaseRootID` equals the original buffered base already
+  covered by the accumulator, recovery appends the transaction's root delta to
+  the accumulator instead of treating the root-id mismatch as corruption;
+- if a transaction's `BaseRootID` is neither the current persisted root nor a
+  known buffered base for that accumulator, recovery must block or fail rather
+  than publish an ambiguous delta;
+- recovery publishes accumulated root deltas in one deterministic root group or
+  in a sequence whose later `BaseRootID` values are explicitly rebased to the
+  roots produced by earlier publishes;
+- applied watermarks may advance only for the exact transactions covered by the
+  successful accumulated publish.
+
+This rule applies to no-index buffered writes, indexed mutable runs, queued
+flush units, and async publishing states. It is also the rule future
+column-store delta-part descriptors must follow if several acknowledged deltas
+share one persisted base part-descriptor root.
+
 ## 10. Cleanup and Retention
 
 Collection WAL cleanup is safe only when both are true:
 
-1. every transaction in the segment is at or below the applied watermark;
+1. every transaction in the segment is covered by a safe applied watermark;
 2. the backend checkpoint/meta boundary containing that watermark is durable for
    the selected mode.
 
@@ -629,6 +705,12 @@ prepared side file -> no committed transaction -> quarantine or delete
 Column-store files should use the same lifecycle when they are introduced. A
 root descriptor must never be published before the referenced file bytes are
 readable at the required durability boundary.
+
+Value-log and side-file GC must include collection WAL side refs in the
+reachability set before deleting, truncating, rewriting, or moving any protected
+bytes. Cleanup may stop protecting a side ref only after the transaction is
+covered by a safe applied watermark and the durable checkpoint/meta boundary
+makes the published roots or the discarded incomplete transaction authoritative.
 
 ## 11. Test Plan
 
@@ -665,8 +747,14 @@ Crash/fault points:
 7. after applied watermark before WAL cleanup;
 8. during overlay compaction;
 9. during column-file prepare once column store exists.
-10. after Raft commit before local collection WAL append once Raft apply exists.
-11. after local collection WAL append before Raft applied-index/idempotency
+10. after two or more acknowledged buffered transactions with the same
+    persisted `BaseRootID`;
+11. after a higher `TxnID` from another collection publishes before a lower
+    `TxnID`;
+12. after value-log GC/rewrite is requested while an unapplied collection WAL
+    transaction is the only owner of a side ref;
+13. after Raft commit before local collection WAL append once Raft apply exists.
+14. after local collection WAL append before Raft applied-index/idempotency
     metadata advancement once Raft apply exists.
 
 Required assertions:
@@ -679,6 +767,12 @@ Required assertions:
 - roots never reference missing value-log or column-file bytes;
 - collection WAL files are cleaned only after safe watermark/checkpoint
   boundaries.
+- buffered transactions with shared persisted bases replay by accumulation or
+  rebasing without losing acknowledged writes;
+- a higher applied `TxnID` never causes recovery to skip a lower unapplied
+  transaction from another collection;
+- value-log GC/rewrite cannot remove or move bytes referenced only by pending
+  collection WAL side refs;
 - future Raft apply cannot report an applied index whose logical mutation is
   neither locally recoverable nor guaranteed to be replayed from the Raft log.
 
@@ -727,9 +821,9 @@ Traceability matrix:
 |---|---|---|---|
 | Current contract | 2, 6 | M0 | existing behavior tests and docs |
 | WAL format | 7.2, 7.3 | M1 | golden, fuzz, corrupt-tail tests |
-| Side-file fences | 7.5, 10 | M2 | missing-ref recovery tests |
+| Side-file fences | 7.5, 10 | M2 | missing-ref and GC protection tests |
 | Write-domain integration | 8 | M3, M4 | insert/update/delete recovery tests |
-| Recovery replay | 9 | M4 | crash matrix and deterministic replay tests |
+| Recovery replay | 9 | M4 | crash matrix, rebasing, and deterministic replay tests |
 | Checkpoint/cleanup | 10 | M5 | watermark and segment cleanup tests |
 | Performance | 12 | M6 | benchstat gates and artifacts |
 | Column-store unblock | 6.3, 10 | M7 | side-file fence and root-group recovery proof |
@@ -782,13 +876,16 @@ Deliverables:
 - root-delta batch serialization;
 - inline and side-payload modes;
 - side-ref availability checker;
-- value-log and leaf-log side-ref integration.
+- value-log and leaf-log side-ref integration;
+- value-log GC/rewrite protection for unapplied collection WAL side refs.
 
 Tests:
 
 - missing side refs skip or fail safely;
 - no root can be published with missing side bytes;
-- large delta side-payload round trips.
+- large delta side-payload round trips;
+- GC/rewrite cannot delete or move bytes referenced only by unapplied
+  collection WAL side refs.
 
 Gate:
 
@@ -819,14 +916,18 @@ Deliverables:
 - indexed insert root-group WAL;
 - update/delete root-group WAL;
 - async flush publish uses existing durable transactions;
-- unique helper rebuild after recovery.
+- unique helper rebuild after recovery;
+- replay accumulator or merged-transaction path for multiple buffered
+  transactions that share one persisted root base.
 
 Tests:
 
 - crash after ack before async publish;
 - crash during async publish;
 - unique secondary correctness after recovery;
-- update/delete secondary roots recover atomically.
+- update/delete secondary roots recover atomically;
+- two acknowledged buffered writes against one persisted base both survive
+  crash/reopen.
 
 Gate:
 
@@ -839,6 +940,8 @@ Gate:
 Deliverables:
 
 - applied watermark in system root;
+- per-collection or global-contiguous watermark safety for out-of-order async
+  publishers;
 - collection WAL replay in open path;
 - segment cleanup after safe checkpoint;
 - prepared side-file quarantine/delete.
@@ -847,6 +950,8 @@ Tests:
 
 - crash after root page build or watermark commit before cleanup does not
   double-apply;
+- out-of-order async publish cannot advance a watermark that hides a lower
+  unapplied transaction;
 - older segments remain when watermark is not durable;
 - cleanup removes only fully applied segments;
 - prepared side files without committed transactions do not become visible.
@@ -938,6 +1043,9 @@ Gate:
 | Root-delta WAL duplicates data already in memtables. | Start with simple encoding, then move large deltas to side payloads when benchmarks require it. |
 | Replaying old transactions double-applies after crash. | Store applied watermark in the same system-root commit as root descriptor updates. |
 | Side-file ordering creates dangling pointers. | Require side refs to be readable before WAL commit is replayable; never publish roots until side refs pass. |
+| Value-log GC/rewrite removes bytes referenced only by pending collection WAL. | Treat required collection WAL side refs as GC/rewrite roots until safe applied watermark and checkpoint cleanup. |
+| A global applied watermark skips lower unapplied transactions. | Enforce contiguous global publication or use per-collection watermarks plus a global contiguous watermark. |
+| Buffered transactions share an old persisted `BaseRootID`. | Log merged flush units, make later transactions depend on earlier pending deltas, or rebase/accumulate deltas during recovery. |
 | Async flush races with WAL cleanup. | Treat async flush as publish-only; cleanup requires applied watermark and checkpoint boundary. |
 | Unique index helpers are lost on crash. | Rebuild helpers from durable root deltas or persisted roots during recovery. |
 | WAL-on throughput regresses too much. | Benchmark each milestone, use side payloads, batching, and async publish before relaxing durability. |
@@ -963,10 +1071,14 @@ Gate:
    checkpoint collection WAL without forcing root publication?
 8. What metric names should expose pending collection WAL bytes, applied
    watermark lag, replay count, skipped/fenced transactions, and cleanup debt?
-9. For Raft R3, should applied-index/idempotency metadata live in TreeDB system
+9. Should PR1 use merged flush-unit WAL records or replay-side accumulation for
+   buffered writes that share one persisted base root?
+10. Should side-ref GC protection scan collection WAL segments directly or
+    maintain a separate protected side-ref index?
+11. For Raft R3, should applied-index/idempotency metadata live in TreeDB system
    roots, in a Raft library stable store, or in both with an explicit ordering
    rule?
-10. Should native-wire `ack_policy` remain purely transport/local durability
+12. Should native-wire `ack_policy` remain purely transport/local durability
     control for deterministic entries, or should a future command version define
     an explicit logical barrier flag? This must be resolved before
     `raft_committed` writes are exposed.
