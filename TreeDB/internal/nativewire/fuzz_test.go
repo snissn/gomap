@@ -47,10 +47,14 @@ func FuzzDecodeByteVector(f *testing.F) {
 
 func FuzzDecodeAndValidateRequestSections(f *testing.F) {
 	var body []byte
-	body, _ = AppendSection(body, Section{
+	var err error
+	body, err = AppendSection(body, Section{
 		ID:    SectionCommandHeader,
 		Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandStats, Version: 1}),
 	})
+	if err != nil {
+		f.Fatalf("AppendSection: %v", err)
+	}
 	f.Add(body)
 	f.Add([]byte{1, 0, 0})
 	f.Add([]byte{1, 0, 3, 30, 1, 0})
