@@ -31,9 +31,15 @@ const (
 	// boundaries, but trim larger transient spikes back down once the writer cools.
 	writerScratchKeepCap = defaultBufferSize
 	writerScratchTrimCap = writerScratchKeepCap * 2
+
+	// Keep a hard cap on retained multi-MiB append buffers. Unlike sync.Pool,
+	// this prevents a burst of short-lived writers from retaining unbounded
+	// defaultBufferSize slices between GC cycles.
+	writerAppendBufPoolEntries = 8
 )
 
 var syncDirFn = syncDir
+var writerAppendBufPool = make(chan []byte, writerAppendBufPoolEntries)
 
 func recordSizeExceedsMax(valueLen uint32) bool {
 	if limits.MaxRecordSize <= 0 {
@@ -198,6 +204,52 @@ func (w *Writer) releaseTransientScratchBuffers() {
 	w.encLimiter.limit = 0
 }
 
+func getWriterAppendBuf(capacity int) []byte {
+	if capacity <= 0 {
+		return nil
+	}
+	if capacity == defaultBufferSize {
+		select {
+		case buf := <-writerAppendBufPool:
+			if cap(buf) >= capacity {
+				return buf[:0]
+			}
+		default:
+		}
+	}
+	return make([]byte, 0, capacity)
+}
+
+func putWriterAppendBuf(buf []byte) {
+	if cap(buf) != defaultBufferSize {
+		return
+	}
+	select {
+	case writerAppendBufPool <- buf[:0]:
+	default:
+	}
+}
+
+func (w *Writer) releaseAppendBuf() {
+	if w == nil || cap(w.appendBuf) == 0 {
+		return
+	}
+	putWriterAppendBuf(w.appendBuf)
+	w.appendBuf = nil
+}
+
+func (w *Writer) ensureAppendBufCap(capacity int) {
+	if w == nil || capacity <= 0 || cap(w.appendBuf) >= capacity {
+		return
+	}
+	old := w.appendBuf
+	next := getWriterAppendBuf(capacity)
+	next = next[:len(w.appendBuf)]
+	copy(next, w.appendBuf)
+	putWriterAppendBuf(old)
+	w.appendBuf = next
+}
+
 func (w *Writer) writeBytes(buf []byte) error {
 	if w == nil {
 		return errors.New("valuelog: nil writer")
@@ -238,6 +290,9 @@ func (w *Writer) writeBytes(buf []byte) error {
 			return w.writeAllToFile(buf)
 		}
 	}
+	if cap(w.appendBuf) < max {
+		w.ensureAppendBufCap(max)
+	}
 	w.appendBuf = append(w.appendBuf, buf...)
 	if len(w.appendBuf) >= max {
 		return w.flushAppendBuf()
@@ -273,6 +328,9 @@ func (w *Writer) writeBytesBuffered(buf []byte) error {
 		avail := max - len(w.appendBuf)
 		if avail <= 0 {
 			continue
+		}
+		if cap(w.appendBuf) < max {
+			w.ensureAppendBufCap(max)
 		}
 		if len(buf) <= avail {
 			w.appendBuf = append(w.appendBuf, buf...)
@@ -421,7 +479,6 @@ func NewWriter(path string, fileID uint32) (*Writer, error) {
 		appendMax:             defaultBufferSize,
 		rawWritevMinAvgBytes:  defaultRawWritevMinAvgBytes,
 		rawWritevMinBatchRecs: defaultRawWritevMinBatchRecords,
-		appendBuf:             make([]byte, 0, defaultBufferSize),
 		prefixBuf:             make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
 		dictFrameEncodeLevel:  zstd.SpeedFastest,
 		blockCodec:            BlockCodecSnappy,
@@ -690,11 +747,7 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 		w.size = info.Size()
 		w.fileID = fileID
 		w.appendMax = defaultBufferSize
-		if cap(w.appendBuf) < defaultBufferSize {
-			w.appendBuf = make([]byte, 0, defaultBufferSize)
-		} else {
-			w.appendBuf = w.appendBuf[:0]
-		}
+		w.appendBuf = w.appendBuf[:0]
 		w.trimTransientScratchBuffers()
 		return nil
 	}
@@ -815,7 +868,7 @@ func (w *Writer) Append(dictID uint64, dict []byte, rid uint64, value []byte) (p
 				}
 			}
 			if cap(w.appendBuf) < max {
-				w.appendBuf = make([]byte, len(w.appendBuf), max)
+				w.ensureAppendBufCap(max)
 			}
 			base := len(w.appendBuf)
 			w.appendBuf = w.appendBuf[:base+recordLen]
@@ -1194,7 +1247,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				}
 			}
 			if cap(w.appendBuf) < max {
-				w.appendBuf = make([]byte, len(w.appendBuf), max)
+				w.ensureAppendBufCap(max)
 			}
 			base := len(w.appendBuf)
 			w.appendBuf = w.appendBuf[:base+totalLen]
@@ -1432,9 +1485,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				}
 			}
 			if cap(w.appendBuf) < max {
-				newBuf := make([]byte, len(w.appendBuf), max)
-				copy(newBuf, w.appendBuf)
-				w.appendBuf = newBuf
+				w.ensureAppendBufCap(max)
 			}
 
 			recordStart := len(w.appendBuf)
@@ -2002,7 +2053,7 @@ func (w *Writer) appendRawFrameWithDictID(dictID uint64, records []Record, offse
 			}
 		}
 		if cap(w.appendBuf) < max {
-			w.appendBuf = make([]byte, len(w.appendBuf), max)
+			w.ensureAppendBufCap(max)
 		}
 		base := len(w.appendBuf)
 		w.appendBuf = w.appendBuf[:base+totalLen]
@@ -2149,16 +2200,22 @@ func (w *Writer) Sync() error {
 }
 
 func (w *Writer) Close() error {
-	if w == nil || w.f == nil {
+	if w == nil {
 		return nil
 	}
+	defer w.releaseAppendBuf()
+	defer w.releaseTransientScratchBuffers()
 	if err := w.flushNoTrim(); err != nil {
-		_ = w.f.Close()
+		if w.f != nil {
+			_ = w.f.Close()
+		}
 		return err
+	}
+	if w.f == nil {
+		return nil
 	}
 	if err := w.f.Close(); err != nil {
 		return err
 	}
-	w.releaseTransientScratchBuffers()
 	return nil
 }

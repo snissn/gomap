@@ -39,6 +39,33 @@ func TestReadMessageRoundTrip(t *testing.T) {
 	}
 }
 
+func TestReadMessageIntoReusesBodyBuffer(t *testing.T) {
+	body := []byte{1, 2, 3, 4}
+	wireBytes, err := AppendMessage(nil, 42, 7, OpMsg, body)
+	if err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	reuse := make([]byte, 1, 64)
+	reuseStart := &reuse[:cap(reuse)][0]
+	h, gotBody, err := ReadMessageInto(bytes.NewReader(wireBytes), reuse, 0)
+	if err != nil {
+		t.Fatalf("ReadMessageInto: %v", err)
+	}
+	if h.MessageLength != int32(HeaderLen+len(body)) {
+		t.Fatalf("message length=%d want %d", h.MessageLength, HeaderLen+len(body))
+	}
+	if !bytes.Equal(gotBody, body) {
+		t.Fatalf("body=%v want %v", gotBody, body)
+	}
+	if len(gotBody) == 0 {
+		t.Fatalf("empty body prevents reuse assertion")
+	}
+	if &gotBody[0] != reuseStart {
+		t.Fatalf("ReadMessageInto did not reuse buffer")
+	}
+}
+
 func TestReadMessageRejectsOversized(t *testing.T) {
 	wireBytes, err := AppendMessage(nil, 1, 0, OpMsg, []byte{1, 2, 3, 4})
 	if err != nil {
