@@ -74,6 +74,9 @@ func DecodeHeader(src []byte, limits Limits) (Header, error) {
 		RequestID: binary.LittleEndian.Uint64(src[24:32]),
 		BodyLen:   binary.LittleEndian.Uint64(src[32:40]),
 	}
+	if !validFrameType(h.Type) {
+		return Header{}, protocolError(ErrInvalidCommand, "unknown frame type %d", h.Type)
+	}
 	if err := validateFrameFlags(h.Flags); err != nil {
 		return Header{}, err
 	}
@@ -95,6 +98,10 @@ func ValidateHeaderVersion(h Header, selected Version) error {
 		return protocolError(ErrUnsupportedVersion, "minor version %d is not selected minor %d", h.Version.Minor, selected.Minor)
 	}
 	return nil
+}
+
+func validFrameType(typ FrameType) bool {
+	return typ >= FrameHello && typ <= FrameGoaway
 }
 
 func validateFrameFlags(flags uint32) error {
