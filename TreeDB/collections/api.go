@@ -3491,14 +3491,55 @@ func pointerizeInsertBatchPlanDataRuns(db *backenddb.DB, plan *insertBatchPlan) 
 	return obsolete, nil
 }
 
+func collectionDataRootNameSet(meta CollectionMeta) map[string]struct{} {
+	return map[string]struct{}{
+		collectionPrimaryRootName(meta.Name):  {},
+		collectionTemplateRootName(meta.Name): {},
+	}
+}
+
+func pointerizeCollectionDataRootDeltaTables(db *backenddb.DB, meta CollectionMeta, rootNames []string, tables []memtable.Table) ([]memtable.Table, func(), error) {
+	if db == nil || !db.HasValueLogAppender() || len(rootNames) == 0 || len(tables) == 0 {
+		return tables, func() {}, nil
+	}
+	if len(rootNames) != len(tables) {
+		return nil, nil, fmt.Errorf("collections: invalid delta table lengths roots=%d tables=%d", len(rootNames), len(tables))
+	}
+	dataRoots := collectionDataRootNameSet(meta)
+	var out []memtable.Table
+	var pointerizedTables []memtable.Table
+	cleanup := func() {
+		resetCollectionTables(pointerizedTables)
+	}
+	for i, rootName := range rootNames {
+		if _, ok := dataRoots[rootName]; !ok {
+			continue
+		}
+		pointerizedTable, pointerized, err := pointerizeCollectionRunTableValues(db, tables[i])
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		if !pointerized {
+			continue
+		}
+		if out == nil {
+			out = append([]memtable.Table(nil), tables...)
+		}
+		out[i] = pointerizedTable
+		pointerizedTables = append(pointerizedTables, pointerizedTable)
+	}
+	if out == nil {
+		return tables, func() {}, nil
+	}
+	return out, cleanup, nil
+}
+
 func pointerizeCollectionDataRootRunMapValues(db *backenddb.DB, meta CollectionMeta, rootRuns map[string][]memtable.Table) (map[string][]memtable.Table, func(), error) {
 	if db == nil || !db.HasValueLogAppender() || len(rootRuns) == 0 {
 		return rootRuns, func() {}, nil
 	}
-	dataRoots := map[string]struct{}{
-		collectionPrimaryRootName(meta.Name):  {},
-		collectionTemplateRootName(meta.Name): {},
-	}
+	dataRoots := collectionDataRootNameSet(meta)
 	var out map[string][]memtable.Table
 	var clonedSlices map[string]bool
 	var pointerizedTables []memtable.Table
@@ -9624,7 +9665,12 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]Upda
 		return nil, fmt.Errorf("collections: UpdateBatch collection %q invalid plan lengths roots=%d deltas=%d policies=%d", plan.meta.Name, len(plan.rootNames), len(plan.deltaTables), len(plan.policies))
 	}
 
-	ordered, cleanupDeltas, err := buildRootDeltaBatchPublishInputsFromTables(plan.meta.Name, plan.rootNames, plan.deltaTables, plan.baseRootIDs, plan.policies)
+	publishTables, cleanupPointerized, err := pointerizeCollectionDataRootDeltaTables(c.db, plan.meta, plan.rootNames, plan.deltaTables)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanupPointerized()
+	ordered, cleanupDeltas, err := buildRootDeltaBatchPublishInputsFromTables(plan.meta.Name, plan.rootNames, publishTables, plan.baseRootIDs, plan.policies)
 	if err != nil {
 		return nil, err
 	}

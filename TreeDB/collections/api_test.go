@@ -593,6 +593,71 @@ func TestCollectionFastJSONBufferedIndexedLargeDocumentsUseValueLogPointers(t *t
 	requireCollectionPrimaryEntryPointer(t, d, "bluesky", ids[documents-1])
 }
 
+func TestCollectionFastJSONUpdateBatchLargeDocumentsUseValueLogPointers(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileFast, t.TempDir())
+	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	closeDB := collectionMaintenanceCloseOnce(cleanup)
+	t.Cleanup(func() { _ = closeDB() })
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "bluesky",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatJSON,
+			DataRootStoragePolicy: RootStorageFast,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("bluesky")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	const documents = 32
+	ids := make([][]byte, documents)
+	initialDocs := make([][]byte, documents)
+	updatedDocs := make([][]byte, documents)
+	items := make([]UpdateBatchItem, documents)
+	for i := 0; i < documents; i++ {
+		id := []byte(fmt.Sprintf("at://did:example:%06d", i))
+		updated := collectionLargeJSONDocumentForTest(i, 8<<10)
+		ids[i] = id
+		initialDocs[i] = []byte(fmt.Sprintf(`{"id":%d,"commit":{"collection":"app.bsky.feed.post"}}`, i))
+		updatedDocs[i] = updated
+		items[i] = UpdateBatchItem{
+			DocumentID: id,
+			Update: func([]byte) ([]byte, bool, error) {
+				return bytes.Clone(updated), true, nil
+			},
+		}
+	}
+	if _, err := col.InsertBatch(ids, initialDocs); err != nil {
+		t.Fatalf("insert initial JSON batch: %v", err)
+	}
+	results, err := col.UpdateBatch(items)
+	if err != nil {
+		t.Fatalf("UpdateBatch large JSON documents: %v", err)
+	}
+	if len(results) != documents {
+		t.Fatalf("UpdateBatch results=%d want %d", len(results), documents)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	got, err := col.Get(ids[documents-1])
+	if err != nil {
+		t.Fatalf("get updated large JSON doc: %v", err)
+	}
+	if !bytes.Equal(got, updatedDocs[documents-1]) {
+		t.Fatalf("updated large JSON doc mismatch: got %d bytes want %d", len(got), len(updatedDocs[documents-1]))
+	}
+	requireCollectionPrimaryEntryPointer(t, d, "bluesky", ids[documents-1])
+}
+
 func TestCollectionFastJSONMaintenanceVacuumUsesValueLogLeaves(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")
