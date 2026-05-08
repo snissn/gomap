@@ -1,6 +1,9 @@
 package nativewire
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 type CommandKind uint8
 
@@ -219,7 +222,7 @@ func compileCommandRules(c CommandSchema) (map[SectionID]SectionRule, []SectionI
 		SectionTraceContext:      {ID: SectionTraceContext, Name: "trace_context"},
 		SectionAckPolicy:         {ID: SectionAckPolicy, Name: "ack_policy"},
 		SectionConsistencyPolicy: {ID: SectionConsistencyPolicy, Name: "consistency_policy"},
-		SectionIdempotencyKey:    {ID: SectionIdempotencyKey, Name: "idempotency_key"},
+		SectionIdempotencyKey:    {ID: SectionIdempotencyKey, Name: "idempotency_key", Deterministic: true},
 		SectionChecksum:          {ID: SectionChecksum, Name: "checksum"},
 		SectionCompression:       {ID: SectionCompression, Name: "compression"},
 	}
@@ -232,6 +235,7 @@ func compileCommandRules(c CommandSchema) (map[SectionID]SectionRule, []SectionI
 			required = append(required, rule.ID)
 		}
 	}
+	sort.Slice(required, func(i, j int) bool { return required[i] < required[j] })
 	return rules, required
 }
 

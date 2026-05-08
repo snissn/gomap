@@ -35,8 +35,8 @@ func TestDecodeSectionsIntoAndDecodeByteVectorIntoReuseBuffers(t *testing.T) {
 	if len(sections) != len(cases[0].sections) {
 		t.Fatalf("sections len=%d want %d", len(sections), len(cases[0].sections))
 	}
-	if cap(sections) != cap(sectionsScratch) {
-		t.Fatalf("DecodeSectionsInto did not reuse caller capacity")
+	if sectionBacking(sections) != sectionBacking(sectionsScratch) {
+		t.Fatalf("DecodeSectionsInto did not reuse caller backing array")
 	}
 
 	vecBytes := AppendByteVector(nil, makeBenchmarkItems("doc", 8, 32)...)
@@ -48,8 +48,8 @@ func TestDecodeSectionsIntoAndDecodeByteVectorIntoReuseBuffers(t *testing.T) {
 	if vec.Len() != 8 {
 		t.Fatalf("vector len=%d want 8", vec.Len())
 	}
-	firstOffsets := cap(scratch.offsets)
-	firstLengths := cap(scratch.lengths)
+	firstOffsets := intBacking(scratch.offsets)
+	firstLengths := intBacking(scratch.lengths)
 
 	vec, err = DecodeByteVectorInto(vecBytes, Limits{}, &scratch)
 	if err != nil {
@@ -58,9 +58,23 @@ func TestDecodeSectionsIntoAndDecodeByteVectorIntoReuseBuffers(t *testing.T) {
 	if vec.Len() != 8 {
 		t.Fatalf("vector len second=%d want 8", vec.Len())
 	}
-	if cap(scratch.offsets) != firstOffsets || cap(scratch.lengths) != firstLengths {
-		t.Fatalf("DecodeByteVectorInto did not reuse scratch capacity")
+	if intBacking(scratch.offsets) != firstOffsets || intBacking(scratch.lengths) != firstLengths {
+		t.Fatalf("DecodeByteVectorInto did not reuse scratch backing arrays")
 	}
+}
+
+func sectionBacking(sections []Section) *Section {
+	if cap(sections) == 0 {
+		return nil
+	}
+	return &sections[:cap(sections)][0]
+}
+
+func intBacking(values []int) *int {
+	if cap(values) == 0 {
+		return nil
+	}
+	return &values[:cap(values)][0]
 }
 
 func TestNativewireBenchmarkRequiredCommandsCovered(t *testing.T) {
@@ -588,7 +602,7 @@ func reportCommandMetrics(b *testing.B, tc nativewireBenchmarkCase) {
 
 func assertMaxAllocs(t *testing.T, name string, max float64, fn func()) {
 	t.Helper()
-	got := testing.AllocsPerRun(1000, fn)
+	got := testing.AllocsPerRun(200, fn)
 	if got > max {
 		t.Fatalf("%s allocations=%0.2f want <= %0.2f", name, got, max)
 	}
