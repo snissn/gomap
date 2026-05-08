@@ -27,6 +27,14 @@ const (
 	deterministicTemplateV1InputMagic   = "TD1I"
 	deterministicTemplateV1StoredMagic  = "TD1D"
 	deterministicTemplateV1RecordMagic  = "TD1T"
+	deterministicTemplateV1KindNull     = byte(0)
+	deterministicTemplateV1KindFalse    = byte(1)
+	deterministicTemplateV1KindTrue     = byte(2)
+	deterministicTemplateV1KindFloat64  = byte(3)
+	deterministicTemplateV1KindString   = byte(4)
+	deterministicTemplateV1KindObject   = byte(5)
+	deterministicTemplateV1KindArray    = byte(6)
+	deterministicTemplateV1MaxArray     = 1 << 20
 	minDeterministicIndexDefinitionLen  = 6
 	maxDeterministicCollectionIndexes   = 1 << 16
 )
@@ -531,28 +539,53 @@ func validateDeterministicTemplateRecords(sections []Section) error {
 	if DocumentFormat(format) != DocumentFormatTemplateV1 {
 		return protocolError(ErrInvalidCommand, "template_records require template-v1 document format")
 	}
-	if err := validateDeterministicTemplateRecordVector(raw); err != nil {
+	var templateScratch [8]deterministicTemplate
+	templates, err := validateDeterministicTemplateRecordVectorInto(templateScratch[:0], raw)
+	if err != nil {
 		return err
 	}
 	docsRaw, ok := deterministicSectionPayload(sections, SectionDocuments)
 	if !ok {
 		return protocolError(ErrInvalidCommand, "missing deterministic section %d", SectionDocuments)
 	}
-	return validateDeterministicTemplateDocuments(docsRaw)
+	return validateDeterministicTemplateDocuments(docsRaw, templates)
 }
 
-func validateDeterministicTemplateRecordVector(raw []byte) error {
-	return walkDeterministicByteVector(raw, "template_records", func(i int, record []byte) error {
-		if err := validateDeterministicTemplateRecord(record); err != nil {
+type deterministicTemplate struct {
+	id         [sha256.Size]byte
+	fieldCount int
+}
+
+type deterministicTemplateSet []deterministicTemplate
+
+func validateDeterministicTemplateRecordVectorInto(dst deterministicTemplateSet, raw []byte) (deterministicTemplateSet, error) {
+	templates := dst[:0]
+	err := walkDeterministicByteVector(raw, "template_records", func(i int, record []byte) error {
+		fieldCount, err := deterministicTemplateRecordFieldCount(record)
+		if err != nil {
 			return deterministicContextError(err, ErrInvalidCommand, "template_records[%d]", i)
 		}
+		templates = append(templates, deterministicTemplate{id: sha256.Sum256(record), fieldCount: fieldCount})
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return templates, nil
 }
 
-func validateDeterministicTemplateDocuments(raw []byte) error {
+func (templates deterministicTemplateSet) lookup(id [sha256.Size]byte) (int, bool) {
+	for i := len(templates) - 1; i >= 0; i-- {
+		if templates[i].id == id {
+			return templates[i].fieldCount, true
+		}
+	}
+	return 0, false
+}
+
+func validateDeterministicTemplateDocuments(raw []byte, templates deterministicTemplateSet) error {
 	return walkDeterministicByteVector(raw, "documents", func(i int, doc []byte) error {
-		if err := validateDeterministicTemplateDocument(doc); err != nil {
+		if err := validateDeterministicTemplateDocument(doc, templates); err != nil {
 			return deterministicContextError(err, ErrInvalidCommand, "template-v1 document %d", i)
 		}
 		return nil
@@ -614,10 +647,10 @@ func walkDeterministicByteVector(raw []byte, name string, fn func(int, []byte) e
 	return nil
 }
 
-func validateDeterministicTemplateDocument(raw []byte) error {
+func validateDeterministicTemplateDocument(raw []byte, templates deterministicTemplateSet) error {
 	pos := 0
 	if consumeDeterministicTemplateMagic(raw, &pos, deterministicTemplateV1StoredMagic) {
-		return validateDeterministicTemplateStoredDocument(raw, &pos)
+		return validateDeterministicTemplateStoredDocument(raw, &pos, templates)
 	}
 	pos = 0
 	if !consumeDeterministicTemplateMagic(raw, &pos, deterministicTemplateV1InputMagic) {
@@ -646,66 +679,151 @@ func validateDeterministicTemplateDocument(raw []byte) error {
 		}
 		record := raw[pos : pos+int(recordLen)]
 		pos += int(recordLen)
-		if err := validateDeterministicTemplateRecord(record); err != nil {
+		fieldCount, err := deterministicTemplateRecordFieldCount(record)
+		if err != nil {
 			return err
 		}
 		if recordID := sha256.Sum256(record); recordID != id {
 			return protocolError(ErrMalformedFrame, "template-v1 template id does not match record")
+		} else {
+			templates = append(templates, deterministicTemplate{id: id, fieldCount: fieldCount})
 		}
 	}
 	if !consumeDeterministicTemplateMagic(raw, &pos, deterministicTemplateV1StoredMagic) {
 		return protocolError(ErrMalformedFrame, "malformed template-v1 stored document")
 	}
-	return validateDeterministicTemplateStoredDocument(raw, &pos)
+	return validateDeterministicTemplateStoredDocument(raw, &pos, templates)
 }
 
-func validateDeterministicTemplateStoredDocument(raw []byte, pos *int) error {
+func validateDeterministicTemplateStoredDocument(raw []byte, pos *int, templates deterministicTemplateSet) error {
 	var id [sha256.Size]byte
 	if pos == nil || *pos < 0 || len(raw)-*pos < len(id) {
 		return protocolError(ErrMalformedFrame, "malformed template-v1 root template id")
 	}
+	copy(id[:], raw[*pos:*pos+len(id)])
 	*pos += len(id)
+	fieldCount, ok := templates.lookup(id)
+	if !ok {
+		return protocolError(ErrInvalidCommand, "template-v1 template id is not included")
+	}
+	for i := 0; i < fieldCount; i++ {
+		if err := skipDeterministicTemplateValue(raw, pos, templates); err != nil {
+			return err
+		}
+	}
+	if *pos != len(raw) {
+		return protocolError(ErrMalformedFrame, "trailing template-v1 object values")
+	}
 	return nil
 }
 
 func validateDeterministicTemplateRecord(raw []byte) error {
+	_, err := deterministicTemplateRecordFieldCount(raw)
+	return err
+}
+
+func deterministicTemplateRecordFieldCount(raw []byte) (int, error) {
 	pos := 0
 	if !consumeDeterministicTemplateMagic(raw, &pos, deterministicTemplateV1RecordMagic) {
-		return protocolError(ErrMalformedFrame, "malformed template-v1 template record")
+		return 0, protocolError(ErrMalformedFrame, "malformed template-v1 template record")
 	}
 	fieldCount, err := readDeterministicTemplateUvarint(raw, &pos, "template field count")
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if fieldCount > uint64(len(raw)) {
-		return protocolError(ErrMalformedFrame, "malformed template-v1 field count")
+		return 0, protocolError(ErrMalformedFrame, "malformed template-v1 field count")
+	}
+	if fieldCount > uint64(maxInt) {
+		return 0, protocolError(ErrResourceExhausted, "template-v1 field count exceeds int capacity")
 	}
 	var previous []byte
 	for i := uint64(0); i < fieldCount; i++ {
 		fieldLen, err := readDeterministicTemplateUvarint(raw, &pos, "template field length")
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if fieldLen > uint64(len(raw)-pos) {
-			return protocolError(ErrMalformedFrame, "malformed template-v1 field length")
+			return 0, protocolError(ErrMalformedFrame, "malformed template-v1 field length")
 		}
 		field := raw[pos : pos+int(fieldLen)]
 		pos += int(fieldLen)
 		if len(field) == 0 || bytes.IndexAny(field, "\x00.") >= 0 {
-			return protocolError(ErrInvalidCommand, "invalid template-v1 field %q", field)
+			return 0, protocolError(ErrInvalidCommand, "invalid template-v1 field %q", field)
 		}
 		if !utf8.Valid(field) {
-			return protocolError(ErrInvalidCommand, "invalid template-v1 field %q", field)
+			return 0, protocolError(ErrInvalidCommand, "invalid template-v1 field %q", field)
 		}
 		if i > 0 && bytes.Compare(previous, field) >= 0 {
-			return protocolError(ErrInvalidCommand, "template-v1 fields are not strictly sorted")
+			return 0, protocolError(ErrInvalidCommand, "template-v1 fields are not strictly sorted")
 		}
 		previous = field
 	}
 	if pos != len(raw) {
-		return protocolError(ErrMalformedFrame, "trailing template-v1 template bytes")
+		return 0, protocolError(ErrMalformedFrame, "trailing template-v1 template bytes")
 	}
-	return nil
+	return int(fieldCount), nil
+}
+
+func skipDeterministicTemplateValue(raw []byte, pos *int, templates deterministicTemplateSet) error {
+	if pos == nil || *pos < 0 || *pos >= len(raw) {
+		return protocolError(ErrMalformedFrame, "malformed template-v1 value")
+	}
+	kind := raw[*pos]
+	*pos = *pos + 1
+	switch kind {
+	case deterministicTemplateV1KindNull, deterministicTemplateV1KindFalse, deterministicTemplateV1KindTrue:
+		return nil
+	case deterministicTemplateV1KindFloat64:
+		if len(raw)-*pos < 8 {
+			return protocolError(ErrMalformedFrame, "malformed template-v1 number")
+		}
+		*pos += 8
+		return nil
+	case deterministicTemplateV1KindString:
+		n, err := readDeterministicTemplateUvarint(raw, pos, "template string length")
+		if err != nil {
+			return err
+		}
+		if n > uint64(len(raw)-*pos) {
+			return protocolError(ErrMalformedFrame, "malformed template-v1 string")
+		}
+		*pos += int(n)
+		return nil
+	case deterministicTemplateV1KindArray:
+		count, err := readDeterministicTemplateUvarint(raw, pos, "template array count")
+		if err != nil {
+			return err
+		}
+		if count > deterministicTemplateV1MaxArray || count > uint64(len(raw)-*pos) {
+			return protocolError(ErrMalformedFrame, "malformed template-v1 array")
+		}
+		for i := uint64(0); i < count; i++ {
+			if err := skipDeterministicTemplateValue(raw, pos, templates); err != nil {
+				return err
+			}
+		}
+		return nil
+	case deterministicTemplateV1KindObject:
+		var id [sha256.Size]byte
+		if len(raw)-*pos < len(id) {
+			return protocolError(ErrMalformedFrame, "malformed template-v1 object")
+		}
+		copy(id[:], raw[*pos:*pos+len(id)])
+		*pos += len(id)
+		fieldCount, ok := templates.lookup(id)
+		if !ok {
+			return protocolError(ErrInvalidCommand, "template-v1 object template id is not included")
+		}
+		for i := 0; i < fieldCount; i++ {
+			if err := skipDeterministicTemplateValue(raw, pos, templates); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return protocolError(ErrMalformedFrame, "unknown template-v1 value kind %d", kind)
+	}
 }
 
 func consumeDeterministicTemplateMagic(raw []byte, pos *int, magic string) bool {
