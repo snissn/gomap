@@ -29,9 +29,11 @@ func DecodeSections(src []byte, limits Limits) ([]Section, error) {
 // allows and allocating a larger backing array when needed.
 //
 // The returned sections borrow from src. Callers may reuse dst after they are
-// done with the decoded section view.
+// done with the decoded section view. Callers that want reuse across calls must
+// retain the returned slice; a grow will not update the caller's dst variable.
 func DecodeSectionsInto(dst []Section, src []byte, limits Limits) ([]Section, error) {
 	limits = limits.withDefaults()
+	clear(dst)
 	sections := dst[:0]
 	for off := 0; off < len(src); {
 		if len(sections) >= limits.MaxSections {

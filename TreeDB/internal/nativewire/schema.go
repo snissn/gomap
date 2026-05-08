@@ -110,6 +110,13 @@ func (r *Registry) LookupCommand(id CommandID, version uint64) (*CommandSchema, 
 	return c, ok
 }
 
+func (r *Registry) Schemas() []CommandSchema {
+	if r == nil || len(r.schemas) == 0 {
+		return nil
+	}
+	return append([]CommandSchema(nil), r.schemas...)
+}
+
 func (r *Registry) ValidateRequestSections(sections []Section) (ValidatedCommand, error) {
 	return r.ValidateRequestSectionsInto(sections, nil)
 }
