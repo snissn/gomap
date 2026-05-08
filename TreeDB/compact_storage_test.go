@@ -14,6 +14,7 @@ func TestCompactStorageFullPacksLeafGenerationDebtOffline(t *testing.T) {
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1
 	opts.MaxWALBytes = -1
+	opts.DisableSideStores = true
 	opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
 	opts.ValueLog.Generational.LeafSegmentTargetBytes = 64 << 10
 	opts.ValueLog.Generational.HotSegmentTargetBytes = 64 << 10
@@ -30,11 +31,16 @@ func TestCompactStorageFullPacksLeafGenerationDebtOffline(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir})
+	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir, DisableSideStores: true})
 	if err != nil {
 		t.Fatalf("OpenBackend: %v", err)
 	}
-	defer func() { _ = cleanup() }()
+	cleanupDone := false
+	defer func() {
+		if !cleanupDone {
+			_ = cleanup()
+		}
+	}()
 
 	compactOpts := treedb.CompactStorageOptions{
 		LeafPackMinExpectedReclaimBytes: 1,
@@ -66,4 +72,8 @@ func TestCompactStorageFullPacksLeafGenerationDebtOffline(t *testing.T) {
 	if again.RemainingDebt.LeafPackGenerations != 0 || again.RemainingDebt.LeafPackBytes != 0 {
 		t.Fatalf("leaf-pack debt remains after compaction, debt=%+v", again.RemainingDebt)
 	}
+	if err := cleanup(); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	cleanupDone = true
 }
