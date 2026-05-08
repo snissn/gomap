@@ -119,6 +119,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - R2 deterministic command-entry closeout, including replicated-command
     fixtures, canonical validation, digest stability, benchmarks, and deferred
     Raft apply work.
+- `TreeDB/docs/spec/collection-wal-durability-plan.md`
+  - proposal and implementation plan for collection WAL/root-group durability,
+    recovery replay, side-file fences, and the hard prerequisite gate for
+    persistent column-store collection writes.
 
 ## Relationship to Existing Docs
 
