@@ -36,13 +36,13 @@ func (l Limits) withDefaults() Limits {
 	if l.MaxHeaderLen == 0 {
 		l.MaxHeaderLen = d.MaxHeaderLen
 	}
-	if l.MaxSections == 0 {
+	if l.MaxSections <= 0 {
 		l.MaxSections = d.MaxSections
 	}
 	if l.MaxSectionLen == 0 {
 		l.MaxSectionLen = d.MaxSectionLen
 	}
-	if l.MaxByteVectorItems == 0 {
+	if l.MaxByteVectorItems <= 0 {
 		l.MaxByteVectorItems = d.MaxByteVectorItems
 	}
 	if l.MaxByteVectorBytes == 0 {
