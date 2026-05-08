@@ -523,7 +523,9 @@ func (s *Server) storeCursor(owner uint64, records []collections.DocumentRecord,
 	if len(records) <= pos {
 		return 0, nil
 	}
-	bytes := documentRecordsBytes(records[pos:])
+	tail := append([]collections.DocumentRecord(nil), records[pos:]...)
+	clear(records[:pos])
+	bytes := documentRecordsBytes(tail)
 	if bytes > s.maxCursorRetainedBytes {
 		return 0, protocolError(iwire.ErrResourceExhausted, "cursor retained bytes %d exceeds limit %d", bytes, s.maxCursorRetainedBytes)
 	}
@@ -536,7 +538,7 @@ func (s *Server) storeCursor(owner uint64, records []collections.DocumentRecord,
 	if s.cursors == nil {
 		s.cursors = make(map[uint64]*serverCursor)
 	}
-	s.cursors[id] = &serverCursor{owner: owner, records: records, pos: pos, lastUsed: time.Now(), bytes: bytes, truncated: truncated}
+	s.cursors[id] = &serverCursor{owner: owner, records: tail, lastUsed: time.Now(), bytes: bytes, truncated: truncated}
 	s.cursorCount.Add(1)
 	s.counters.inc("cursors.opened_total")
 	return id, nil

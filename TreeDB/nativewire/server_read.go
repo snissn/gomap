@@ -145,22 +145,36 @@ func (s *Server) handleIndexLookup(state *connState, sections []iwire.Section) (
 	}
 	var ids [][]byte
 	truncated := false
-	if limits.MaxItems > 0 {
-		ids, truncated, err = collection.FindByIndexValueLimit(indexName, value, limits.MaxItems)
-		if err != nil {
-			return nil, metadataWrap(err)
-		}
-	} else {
-		ids, err = collection.FindByIndexValue(indexName, value)
-		if err != nil {
-			return nil, metadataWrap(err)
-		}
+	queryLimit := s.indexLookupResultLimit(limits)
+	ids, truncated, err = collection.FindByIndexValueLimit(indexName, value, queryLimit)
+	if err != nil {
+		return nil, metadataWrap(err)
 	}
 	ids, truncated = applyIDByteLimit(ids, limits.MaxBytes, truncated)
 	return []iwire.Section{
 		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, ids...)},
 		{ID: iwire.SectionTruncated, Bytes: appendBool(nil, truncated)},
 	}, nil
+}
+
+func (s *Server) indexLookupResultLimit(limits CursorLimits) int {
+	limit := s.limits.MaxByteVectorItems
+	if limit <= 0 {
+		limit = iwire.DefaultLimits().MaxByteVectorItems
+	}
+	if limits.MaxItems > 0 && limits.MaxItems < limit {
+		limit = limits.MaxItems
+	}
+	if limits.MaxBytes > 0 && limits.MaxBytes < maxInt {
+		byteBound := limits.MaxBytes + 1
+		if byteBound < limit {
+			limit = byteBound
+		}
+	}
+	if limit <= 0 {
+		return 1
+	}
+	return limit
 }
 
 func applyIDByteLimit(ids [][]byte, maxBytes int, truncated bool) ([][]byte, bool) {
@@ -263,14 +277,18 @@ func (s *Server) handleCursorNext(state *connState, cursorID uint64, sections []
 		return nil, err
 	}
 	batch := append([]collections.DocumentRecord(nil), cursor.records[start:end]...)
-	cursor.pos = end
 	cursor.lastUsed = time.Now()
-	hasMore := cursor.pos < len(cursor.records)
+	hasMore := end < len(cursor.records)
 	truncated := cursor.truncated
 	if !hasMore {
 		delete(s.cursors, cursorID)
 		s.cursorCount.Add(-1)
 		s.counters.inc("cursors.closed_total")
+	} else {
+		clear(cursor.records[:end])
+		cursor.records = cursor.records[end:]
+		cursor.pos = 0
+		cursor.bytes = documentRecordsBytes(cursor.records)
 	}
 	s.cursorMu.Unlock()
 	meta := CursorMeta{CursorID: cursorID, Items: len(batch), Bytes: bytes, HasMore: hasMore, Truncated: truncated}

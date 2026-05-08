@@ -63,6 +63,9 @@ func appendInsertBatchResponseBody(dst []byte, resultIDs [][]byte, actualAck iwi
 }
 
 func (s *Server) insertBatch(state *connState, sections []iwire.Section) ([][]byte, iwire.AckPolicy, error) {
+	if err := s.checkCatalogGuard(sections); err != nil {
+		return nil, 0, err
+	}
 	_, collection, err := s.openCollectionRef(state, sections)
 	if err != nil {
 		return nil, 0, err
@@ -184,6 +187,15 @@ func (s *Server) decodeInsertBatchFastRequest(state *connState, sections []iwire
 	if !seen[iwire.SectionDocuments] {
 		return insertBatchFastRequest{}, true, protocolError(iwire.ErrInvalidCommand, "missing required section %d", iwire.SectionDocuments)
 	}
+	if !seen[iwire.SectionIdempotencyKey] {
+		return insertBatchFastRequest{}, true, protocolError(iwire.ErrInvalidCommand, "missing required section %d", iwire.SectionIdempotencyKey)
+	}
+	if !seen[iwire.SectionExpectedCatalogVersion] {
+		return insertBatchFastRequest{}, true, protocolError(iwire.ErrInvalidCommand, "missing required section %d", iwire.SectionExpectedCatalogVersion)
+	}
+	if err := s.checkCatalogGuard(sections); err != nil {
+		return insertBatchFastRequest{}, true, err
+	}
 	_, collection, err := s.openCollectionRawRef(state, rawCollection)
 	if err != nil {
 		return insertBatchFastRequest{}, true, err
@@ -247,6 +259,9 @@ func markInsertBatchFastSection(seen *[128]bool, id iwire.SectionID) error {
 }
 
 func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
+	if err := s.checkCatalogGuard(sections); err != nil {
+		return nil, err
+	}
 	_, collection, err := s.openCollectionRef(state, sections)
 	if err != nil {
 		return nil, err
@@ -305,6 +320,9 @@ func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) 
 }
 
 func (s *Server) handleDeleteBatch(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
+	if err := s.checkCatalogGuard(sections); err != nil {
+		return nil, err
+	}
 	_, collection, err := s.openCollectionRef(state, sections)
 	if err != nil {
 		return nil, err
