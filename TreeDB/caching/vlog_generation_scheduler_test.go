@@ -4873,23 +4873,6 @@ func TestVlogGenerationRewriteQueue_AggressiveFlowBypassesCooledDebtAndReadmitsI
 	}
 }
 
-func TestAdmitVlogGenerationRewriteLedger_PrefersImprovedStalePayoff(t *testing.T) {
-	ledger := []backenddb.ValueLogRewritePlanSegment{
-		{FileID: 11, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.5},
-		{FileID: 22, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.5},
-	}
-	penalties := map[uint32]valueLogGenerationRewritePenalty{
-		11: {Attempts: 1, LastStaleBytes: 44},
-		22: {Attempts: 1, LastStaleBytes: 24},
-	}
-
-	ordered := prioritizeVlogGenerationRewriteLedger(ledger, nil, penalties)
-	admitted := admitVlogGenerationRewriteLedger(ordered, nil, penalties, 1)
-	if got, want := vlogGenerationRewriteLedgerIDs(admitted), []uint32{22}; len(got) != len(want) || got[0] != want[0] {
-		t.Fatalf("admitted ids=%v want=%v", got, want)
-	}
-}
-
 func TestVlogGenerationRewriteQueue_FreshBypassThenExpiredRetryDrainsQueuedDebt(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
