@@ -9814,7 +9814,13 @@ func TestDirectBufferedRootEntriesOwnKeysAndRetainDocumentArena(t *testing.T) {
 	}
 }
 
-func newBufferedUsersUpdateCollection(t *testing.T) (*backenddb.DB, *Collection) {
+type bufferedUsersUpdateDoc struct {
+	id    string
+	email string
+	city  string
+}
+
+func newBufferedUsersUpdateCollectionWithDocs(t *testing.T, opts CollectionOptions, docs []bufferedUsersUpdateDoc) (*backenddb.DB, *CollectionManager, *Collection) {
 	t.Helper()
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -9824,7 +9830,8 @@ func newBufferedUsersUpdateCollection(t *testing.T) (*backenddb.DB, *Collection)
 
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
-		Name: "users",
+		Name:    "users",
+		Options: opts,
 		Indexes: []IndexDefinition{
 			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
 			{Name: "city", Field: "city", ValueType: IndexValueString},
@@ -9836,15 +9843,28 @@ func newBufferedUsersUpdateCollection(t *testing.T) (*backenddb.DB, *Collection)
 	if err != nil {
 		t.Fatalf("open collection: %v", err)
 	}
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("u1")},
-		[][]byte{[]byte(`{"email":"a@example.com","city":"hnl"}`)},
-	); err != nil {
-		t.Fatalf("insert: %v", err)
+	if len(docs) > 0 {
+		ids := make([][]byte, len(docs))
+		values := make([][]byte, len(docs))
+		for i, doc := range docs {
+			ids[i] = []byte(doc.id)
+			values[i] = []byte(fmt.Sprintf(`{"email":%q,"city":%q}`, doc.email, doc.city))
+		}
+		if _, err := col.InsertBatch(ids, values); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
 	}
 	if err := col.Flush(); err != nil {
 		t.Fatalf("flush insert buffer: %v", err)
 	}
+	return d, mgr, col
+}
+
+func newBufferedUsersUpdateCollection(t *testing.T) (*backenddb.DB, *Collection) {
+	t.Helper()
+	d, _, col := newBufferedUsersUpdateCollectionWithDocs(t, CollectionOptions{}, []bufferedUsersUpdateDoc{
+		{id: "u1", email: "a@example.com", city: "hnl"},
+	})
 	return d, col
 }
 
@@ -9933,6 +9953,143 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleZeroDel
 	}
 	if col.bufferedUpdateBatchPlanStillCurrent(plan) {
 		t.Fatalf("stale zero-delta plan still appeared current")
+	}
+}
+
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReplansStaleBufferedPlanWithoutFlush(t *testing.T) {
+	_, mgr, col := newBufferedUsersUpdateCollectionWithDocs(t,
+		CollectionOptions{
+			BufferedIndexedWriteMaxDocuments:        1 << 20,
+			BufferedIndexedWriteMaxBytes:            1 << 40,
+			BufferedIndexedWriteMaxRootRuns:         1 << 20,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 1 << 20,
+		},
+		[]bufferedUsersUpdateDoc{
+			{id: "u1", email: "a@example.com", city: "hnl"},
+			{id: "u2", email: "b@example.com", city: "hnl"},
+		},
+	)
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sea")},
+	}); err != nil {
+		t.Fatalf("first UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("first batch was declined")
+	}
+
+	before := mgr.StatsSnapshot()
+	var injected atomic.Bool
+	setSFO := setJSONCity("sfo")
+	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			if !injected.Swap(true) {
+				if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+					{DocumentID: []byte("u2"), Update: setJSONCity("oak")},
+				}); err != nil {
+					return nil, false, err
+				} else if !batched {
+					return nil, false, errors.New("nested batch was declined")
+				}
+			}
+			return setSFO(current)
+		},
+	}})
+	if err != nil {
+		t.Fatalf("stale-replan UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	}
+	if !batched {
+		t.Fatalf("stale-replan batch was declined")
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("results=%+v want one modified row", results)
+	}
+	if !injected.Load() {
+		t.Fatalf("nested batch did not run")
+	}
+	after := mgr.StatsSnapshot()
+	if got := after.IndexedFlushCalls - before.IndexedFlushCalls; got != 0 {
+		t.Fatalf("indexed flush calls delta=%d want 0 for stale buffered replan", got)
+	}
+	if got := after.IndexedFlushForcedDrains - before.IndexedFlushForcedDrains; got != 0 {
+		t.Fatalf("indexed forced drain delta=%d want 0 for stale buffered replan", got)
+	}
+
+	sfoIDs, err := col.FindByIndex("city", "sfo")
+	if err != nil {
+		t.Fatalf("find sfo city: %v", err)
+	}
+	if len(sfoIDs) != 1 || !bytes.Equal(sfoIDs[0], []byte("u1")) {
+		t.Fatalf("sfo ids=%q want [u1]", sfoIDs)
+	}
+	oakIDs, err := col.FindByIndex("city", "oak")
+	if err != nil {
+		t.Fatalf("find oak city: %v", err)
+	}
+	if len(oakIDs) != 1 || !bytes.Equal(oakIDs[0], []byte("u2")) {
+		t.Fatalf("oak ids=%q want [u2]", oakIDs)
+	}
+}
+
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesBatchOneDoesNotFlushBeforeThreshold(t *testing.T) {
+	_, mgr, col := newBufferedUsersUpdateCollectionWithDocs(t,
+		CollectionOptions{
+			BufferedIndexedWriteMaxDocuments:        1 << 20,
+			BufferedIndexedWriteMaxBytes:            1 << 40,
+			BufferedIndexedWriteMaxRootRuns:         1 << 20,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 1 << 20,
+		},
+		[]bufferedUsersUpdateDoc{
+			{id: "u1", email: "a@example.com", city: "hnl"},
+			{id: "u2", email: "b@example.com", city: "hnl"},
+			{id: "u3", email: "c@example.com", city: "hnl"},
+		},
+	)
+
+	before := mgr.StatsSnapshot()
+	for _, update := range []struct {
+		id   string
+		city string
+	}{
+		{id: "u1", city: "sea"},
+		{id: "u2", city: "sfo"},
+		{id: "u3", city: "oak"},
+	} {
+		results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+			{DocumentID: []byte(update.id), Update: setJSONCity(update.city)},
+		})
+		if err != nil {
+			t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges %s: %v", update.id, err)
+		}
+		if !batched {
+			t.Fatalf("batch for %s was declined", update.id)
+		}
+		if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+			t.Fatalf("results for %s=%+v want one modified row", update.id, results)
+		}
+	}
+	after := mgr.StatsSnapshot()
+	if got := after.IndexedFlushCalls - before.IndexedFlushCalls; got != 0 {
+		t.Fatalf("indexed flush calls delta=%d want 0 before explicit Flush", got)
+	}
+	if got := after.IndexedFlushForcedDrains - before.IndexedFlushForcedDrains; got != 0 {
+		t.Fatalf("indexed forced drain delta=%d want 0 before explicit Flush", got)
+	}
+	if got := after.PendingDocuments; got == 0 {
+		t.Fatalf("pending documents=%d want buffered batch-one updates", got)
+	}
+
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered updates: %v", err)
+	}
+	flushed := mgr.StatsSnapshot()
+	if got := flushed.IndexedFlushCalls - before.IndexedFlushCalls; got == 0 {
+		t.Fatalf("indexed flush calls delta=%d want explicit Flush to publish buffered updates", got)
+	}
+	if got := flushed.PendingDocuments; got != 0 {
+		t.Fatalf("pending documents after Flush=%d want 0", got)
 	}
 }
 
