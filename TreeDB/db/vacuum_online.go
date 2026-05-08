@@ -522,6 +522,10 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 		db.metaPageID = MetaPage0ID
 		valueLogSet := db.valueLogManager.CurrentSetNoRefresh()
 		if !leafPageLogSegmentsRegistered {
+			if valueLogSet != nil {
+				_ = db.valueLogManager.Release(valueLogSet)
+				valueLogSet = nil
+			}
 			if err := db.valueLogManager.Refresh(); err != nil {
 				db.mu.Unlock()
 				db.writeMu.Unlock()
