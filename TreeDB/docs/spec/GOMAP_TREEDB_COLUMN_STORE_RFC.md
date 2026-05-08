@@ -57,6 +57,10 @@ design:
   primary, templates, optional index-state, and secondary indexes.
 - Collection writes already publish root groups with one system-root descriptor
   update.
+- The current indexed collection write-domain is flush-boundary durable, not
+  durable-at-ack. Pending mutable, queued, or publishing collection writes are
+  visible in-process, but crash durability is established by `Collection.Flush`,
+  `CollectionManager.FlushAll`, close, or a synchronous publish path.
 - Collection storage policies already distinguish fast pager leaves from
   compressed value-log leaves:
   `RootStorageFast` and `RootStorageCompressed`.
@@ -316,6 +320,7 @@ collections, with additional roots:
 ```text
 <collection>/primary          existing primary root semantics
 <collection>/columns/parts    immutable part descriptors
+<collection>/columns/granules optional part/granule range marks
 <collection>/columns/locator  optional primary-id to row-locator map
 <collection>/columns/deletes  tombstones and delete bitmaps
 <collection>/columns/schema   schema evolution descriptors
@@ -330,16 +335,47 @@ The first implementation should keep the existing primary root as
 
 ```text
 row_locator :=
-    format_version u8
-    part_id        u64
-    row_ordinal    u32 or u64
-    flags          u8
+    format_version  u8
+    part_id         u64
+    row_ordinal     u32 or u64
+    granule_ordinal u32 optional, derivable from the part descriptor
+    flags           u8
 ```
 
 The primary root preserves point lookup, uniqueness checks, and ordered id
 range scans without scanning part manifests. Later, if primary ids are dense
 and append-ordered, the locator root can be made optional by deriving ranges
 from part descriptors.
+
+The authoritative key-to-row mapping is the primary B-tree entry
+`id -> row_locator`. The row locator names the immutable part and row ordinal.
+The part descriptor maps row ordinals to logical granules through its
+`Granules` array. A reader can derive `granule_ordinal` by binary-searching that
+array when the locator does not store the optional cached ordinal.
+
+The optional `columns/granules` root is a scan accelerator, not the visibility
+authority. It stores coarse mark entries such as:
+
+```text
+column_granule_mark_key :=
+    collection name prefix
+    id_lower
+    part_id u64 big-endian
+    granule_ordinal u32 big-endian
+
+column_granule_mark_value :=
+    id_upper_exclusive
+    first_row
+    row_count
+    created_commit_seq
+    visible_row_count
+```
+
+Because update-delta parts can overlap base-part key ranges, scan plans that use
+`columns/granules` must still apply primary-locator visibility, tombstones, or
+commit-sequence rules before returning rows. PR1 may start with primary-root
+range scans grouped by `(part_id, granule_ordinal)` for correctness, then add
+`columns/granules` when dense scans need fewer primary-root reads.
 
 ### 6.1.1 Secondary Index Contract
 
@@ -560,6 +596,8 @@ Block directory:
 ColumnBlockDirectoryEntry {
     FirstRow          uint32
     RowCount          uint32
+    FirstGranule      uint32
+    GranuleCount      uint32
     PipelineID        uint16
     Reserved          uint16
     CodecOffset       uint64
@@ -604,17 +642,41 @@ Granules and codec blocks should usually align, but the format must allow one
 granule to contain multiple codec blocks for very wide strings and one codec
 block to contain several tiny granules for narrow booleans.
 
+Logical granules are part-wide and row-aligned across all columns. For granule
+ordinal `g` in a part, every column and substream refers to the same
+`FirstRow`, `RowCount`, `IDLower`, and `IDUpper` from the part descriptor. This
+lets one row mask, delete bitmap, secondary-index result, or fast-filter result
+apply across all projected columns.
+
+Codec blocks are different: they are per-column-substream physical decode
+units. `MinCodecBlockRawBytes` and `MaxCodecBlockRawBytes` are targets for one
+substream's raw bytes, not a global constraint across every column in the row
+granule. A narrow bool substream may encode one block that covers many logical
+granules. A large string `chars` substream may split one logical granule across
+several codec blocks. The block directory's row range and granule range map each
+physical block back to the part-wide logical granules.
+
+The minimum block size is an efficiency target, not a correctness invariant. A
+small bool column does not force a large string column to wait, and a huge
+string column does not force the bool column to split. The maximum block size is
+a stronger latency and memory guard for a single substream; when one wide
+substream would exceed it, only that substream splits its codec blocks. The
+logical granule boundary can remain stable for the other columns.
+
 Initial chunk builder policy:
 
 ```go
 type ColumnPartPolicy struct {
-    TargetPartRows       int
-    MaxPartRows          int
-    TargetGranuleRows    int
-    MinCodecBlockRawBytes int
-    MaxCodecBlockRawBytes int
-    UpdateDeltaMaxRows   int
-    UpdateDeltaMaxBytes  int64
+    TargetPartRows                  int
+    MaxPartRows                     int
+    TargetGranuleRows               int
+    MinCodecBlockRawBytes           int
+    MaxCodecBlockRawBytes           int
+    UpdateDeltaTargetGranuleRows    int
+    UpdateDeltaMinCodecBlockRawBytes int
+    UpdateDeltaMaxCodecBlockRawBytes int
+    UpdateDeltaMaxRows              int
+    UpdateDeltaMaxBytes             int64
 }
 ```
 
@@ -625,13 +687,30 @@ Suggested defaults:
 - `MaxCodecBlockRawBytes = 1 MiB`;
 - update-delta parts use smaller limits and are compacted sooner.
 
-The builder should close a granule when it reaches `TargetGranuleRows` or when
-wide-column raw bytes would exceed the maximum codec block target. It should
-coalesce very narrow columns until the minimum raw-byte target where doing so
-does not harm skipping. Too-small chunks waste marks and compression ratio;
-too-large chunks hurt point reads, update-followed-by-read latency, and
-predicate exclusion. These tradeoffs must be benchmarked rather than treated
-as fixed constants.
+For update-delta parts, smaller limits means smaller logical row granules and
+smaller per-substream codec-block ceilings so `Get` immediately after an update
+does not routinely decode an 8192-row or 1 MiB block. The minimum block target
+is advisory and may be ignored for tiny deltas. Initial experimental defaults:
+
+- `UpdateDeltaTargetGranuleRows = 512`;
+- `UpdateDeltaMinCodecBlockRawBytes = 0` or `16 KiB`, selected by benchmarks;
+- `UpdateDeltaMaxCodecBlockRawBytes = 128 KiB`;
+- `UpdateDeltaMaxRows = 4096`;
+- `UpdateDeltaMaxBytes = 8 MiB`.
+
+Compaction should trigger on delta age, total bytes, part fan-in for an id
+range, or update-followed-by-read regression, not only on raw size.
+
+The builder should close a logical granule when it reaches `TargetGranuleRows`
+or when a row-aligned granule would make projected reads too coarse for a wide
+column. It should close or split codec blocks independently per substream when
+that substream reaches its byte targets. It may coalesce very narrow substreams
+across several logical granules until the minimum raw-byte target where doing so
+does not harm skipping, because the logical granule metadata still exists.
+
+Too-small chunks waste marks and compression ratio; too-large chunks hurt point
+reads, update-followed-by-read latency, and predicate exclusion. These tradeoffs
+must be benchmarked rather than treated as fixed constants.
 
 ### 6.5 Substreams
 
@@ -706,12 +785,37 @@ update must still rewrite the changed rows into column-store format immediately.
 The durable update representation is a replacement column delta part plus
 visibility changes, not a permanent row-oriented overlay.
 
+An update-delta part is a normal immutable column part with a short lifecycle.
+`Delta` describes why the part exists and how aggressively maintenance should
+compact it; it does not mean a field-level patch, a row-oriented overlay, or a
+read-time pointer diff.
+
+PR1 update-delta parts must contain complete replacement rows for the changed
+primary ids:
+
+- write every declared column for each changed row, including columns whose
+  values did not change;
+- use the same fixed schema, substreams, codecs, checksums, granules, block
+  directory, and part descriptor shape as insert/base parts;
+- sort rows by primary id inside the part;
+- update the primary root so each changed id points directly to the replacement
+  row locator;
+- hide old locators with tombstones/delete bitmaps;
+- update secondary indexes in the same root group.
+
+Partial-column deltas can be studied later, but they are out of scope for the
+first format because they complicate row reconstruction, secondary-index
+updates, compaction, and crash recovery. If an update API receives a partial
+mutation, the writer must read the old row's declared columns and build a
+complete replacement `ColumnBatch` before publishing.
+
 Update model:
 
 1. Insert batches build immutable base or insert-delta parts.
-2. An update resolves current `id -> row_locator` entries and reads only the
-   columns needed by the update expression plus indexed columns whose values
-   may change.
+2. An update resolves current `id -> row_locator` entries and reads the old
+   declared-column values needed to produce complete replacement rows. An
+   optimizer may first read only predicate/update columns to identify changed
+   rows, but it must fetch all declared columns for rows it actually rewrites.
 3. The updater builds a replacement `ColumnBatch` for changed rows.
 4. The part builder writes that batch as one or more update-delta column parts
    using the same `TCS1` substreams, codecs, checksums, marks, and statistics
@@ -737,7 +841,7 @@ Update pseudocode:
 
 ```text
 update_rows(snapshot, ids, update_fn):
-    old_rows = read_projected_columns(snapshot, ids, update_fn.required_columns)
+    old_rows = read_all_declared_columns(snapshot, ids)
     new_rows = apply_update_fn(old_rows)
     changed = filter_rows_where_new_row_differs(old_rows, new_rows)
     if changed.empty:
@@ -1240,7 +1344,7 @@ For `Update` or callback-based mutation APIs:
    indexes.
 3. Apply the mutation and build a replacement `ColumnBatch` for rows that
    actually changed.
-4. Write the replacement rows as update-delta column parts.
+4. Write the complete replacement rows as update-delta column parts.
 5. Publish primary locator updates, delete tombstones for old locators,
    secondary index deletes, secondary index puts, and part descriptors in one
    root group.
@@ -1281,9 +1385,30 @@ unbounded goroutine-per-column behavior.
 
 ### 9.5 WAL and Durability Integration
 
-Column-store writes must follow TreeDB's existing durability model: WAL/journal
-and payload storage are decoupled. Column file references should follow the
-same durable-pointer rules as value-log pointers.
+Durability decision: the column-store buildout should make collection WAL
+semantics work for both column-store and non-column-store collections. Do not
+build a column-store-only WAL, and do not defer this until after mutable
+column-store writes are advertised as production-ready.
+
+The current collection write-domain contract is flush-boundary durable:
+acknowledged writes that remain in mutable, queued, or publishing collection
+state are visible in-process but are not crash-durable until `Flush`,
+`FlushAll`, close, or a synchronous publish barrier succeeds. That may be a
+documented contract today, but it is too easy to misuse once column-store writes
+also create external column files. A root that references missing column bytes,
+or a recovered column file with no reachable root, is worse than a simple lost
+buffered row write.
+
+The prerequisite is a shared collection commit protocol. It can be implemented
+as a replayable collection mutation log, by moving collection root-group
+publication onto the existing backend WAL/commit-log path, or by an equivalent
+manifest protocol. The protocol must cover row-store and column-store
+collections so secondary indexes, primary roots, template/index-state roots,
+delete roots, and column file references have one recovery story.
+
+Column-store writes still follow TreeDB's lower-level durability model:
+WAL/journal and payload storage are decoupled. Column file references should
+follow the same durable-pointer rules as value-log pointers.
 
 WAL-on write ordering:
 
@@ -1301,8 +1426,28 @@ semantics, but it must not weaken pointer safety: a visible root must never
 reference missing column bytes after normal reopen within that mode's existing
 guarantees.
 
-This is likely a longer epic for collection WAL integration. The column-store
-roadmap must still reserve tests for:
+Minimum shared collection durability deliverables:
+
+- an explicit durable boundary for collection writes in API docs and tests;
+- a commit record or manifest entry that names every root mutation in the
+  collection root group;
+- external file references in the same commit record when column files are
+  involved;
+- recovery that replays complete committed root groups and ignores incomplete
+  ones;
+- cleanup of prepared but unpublished column files;
+- row-store indexed insert/update/delete recovery tests with secondary indexes;
+- column-store insert/update/delete recovery tests with secondary indexes and
+  column files.
+
+The recommended sequencing is option c from the planning discussion: make WAL
+semantics work for both column-store and non-column-store collections as part of
+this buildout. Option b creates a second durability model for collections.
+Option d leaves a known sharp edge under a feature that adds more side files.
+Option a is acceptable only if it is treated as the first column-store
+milestone, not as unrelated work.
+
+The column-store roadmap must reserve tests for:
 
 - crash before root publish after writing column bytes;
 - crash after commit-log append before root publish;
@@ -1485,7 +1630,8 @@ Traceability matrix:
 | Point reads and scans | 8.1-8.3 | M5 | point-read, scan, allocation, cache gates |
 | Fast filters and haystack search | 8.4 | M5 | false-negative tests, adapter parity, search benchmarks |
 | Fast counts | 8.5 | M5, M6 | exact count tests and count latency gates |
-| Writes, updates, WAL | 6.7, 9.1-9.5 | M6 | recovery tests, update/read churn benchmarks |
+| Collection durability | 2, 9.5 | M0.5, M1, M6 | row/column recovery tests, pointer-safety tests |
+| Writes, updates, WAL | 6.7, 9.1-9.5 | M0.5, M6 | recovery tests, update/read churn benchmarks |
 | Maintenance and GC | 11 | M6, M8 | snapshot compaction tests, reclaimed-byte gates |
 
 ### Milestone 0: Baseline and Fixtures
@@ -1518,6 +1664,39 @@ Performance gates:
 - results include point-read, update, update-followed-by-read, and count
   latency placeholders even before product gates turn on.
 
+### Milestone 0.5: Collection Durability Prerequisite
+
+Deliverables:
+
+- current collection flush-boundary durability contract captured as executable
+  tests;
+- shared collection commit protocol for root-group publication, or an explicit
+  integration with the existing backend WAL/commit-log path;
+- commit metadata that can include primary roots, secondary roots,
+  template/index-state roots, delete roots, part descriptors, and external file
+  references;
+- recovery path that replays complete committed collection root groups and
+  ignores incomplete ones;
+- cleanup path for prepared but unpublished column files.
+
+Tests:
+
+- checkpoint does not accidentally promise durability for unflushed
+  collection-local writes;
+- close and reopen preserves flushed row-store collection writes with secondary
+  indexes;
+- crash/reopen replays or discards a row-store indexed insert/update/delete as
+  one root group;
+- crash/reopen never exposes a root that references a missing external file;
+- prepared but unpublished column files are reclaimed or quarantined after
+  recovery.
+
+Gates:
+
+- column-store mutable writes remain experimental until this milestone passes;
+- WAL-on collection write throughput regression is measured against the current
+  row-store indexed path before optimizing the column format around it.
+
 ### Milestone 1: On-Disk Descriptor and Raw Column Parts
 
 Deliverables:
@@ -1526,8 +1705,8 @@ Deliverables:
 - `Dir/maindb/columns/` file class with manifest-driven part layout;
 - fixed schema metadata with explicit rejection of lazy column creation;
 - raw `NONE` fixed-width scalar columns;
-- primary `id -> row_locator` root;
-- part descriptor root;
+- primary `id -> row_locator` root with row-ordinal to granule mapping;
+- part descriptor root and optional granule-mark root contract;
 - reopen support.
 
 Tests:
@@ -1535,6 +1714,7 @@ Tests:
 - exact-byte descriptor golden tests;
 - fixed-schema validation tests;
 - scalar round trips for bool/int64/float64/string-id placeholders;
+- locator-to-granule mapping tests across projected columns;
 - reopen parity;
 - column file GC reachable-part protection.
 
