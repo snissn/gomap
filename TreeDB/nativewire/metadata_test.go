@@ -148,6 +148,16 @@ func TestMetadataDuplicateIndexReturnsInvalidCommand(t *testing.T) {
 	}
 }
 
+func TestDecodeCollectionRefPreservesRawNameCompatibility(t *testing.T) {
+	name, wasHandle, err := decodeCollectionRef(nil, []byte("users"))
+	if err != nil {
+		t.Fatalf("decodeCollectionRef raw: %v", err)
+	}
+	if wasHandle || name != "users" {
+		t.Fatalf("decodeCollectionRef raw name=%q handle=%v", name, wasHandle)
+	}
+}
+
 func TestMetadataHandleRefsWorkForIndexMetadata(t *testing.T) {
 	client, _, db := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
