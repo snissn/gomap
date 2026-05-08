@@ -14,6 +14,8 @@ const (
 	DeterministicEntryVersion = uint64(1)
 
 	maxDeterministicDocumentIDs = 1 << 16
+
+	deterministicSectionScratchCapacity = sectionSeenInlineCapacity
 )
 
 var (
@@ -61,7 +63,7 @@ func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) 
 	}
 	deterministicFlags := DeterministicCommandFlags(cmd.Header.Flags)
 
-	var deterministicScratch [16]Section
+	var deterministicScratch [deterministicSectionScratchCapacity]Section
 	deterministic, err := cmd.deterministicSectionsInto(deterministicScratch[:0])
 	if err != nil {
 		return nil, err
@@ -472,7 +474,7 @@ func validateDeterministicCollectionRef(raw []byte) (bool, error) {
 }
 
 func sortSectionsByID(sections []Section) {
-	slices.SortFunc(sections, func(a, b Section) int {
+	slices.SortStableFunc(sections, func(a, b Section) int {
 		return cmp.Compare(a.ID, b.ID)
 	})
 }
