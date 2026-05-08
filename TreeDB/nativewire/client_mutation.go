@@ -83,7 +83,7 @@ func appendInsertBatchRequestBodyRefFlags(dst []byte, collection string, handle 
 	commandPayload := iwire.AppendCommandHeader(commandHeader[:0], iwire.CommandHeader{ID: iwire.CommandInsertBatch, Version: 1, Flags: commandFlags})
 	var refBuf [1 + binary.MaxVarintLen64]byte
 	var refPayload []byte
-	refLen := len(collection)
+	refLen := collectionNameRefPayloadLen(collection)
 	if useHandle {
 		refPayload = appendCollectionHandleRefPayload(refBuf[:0], handle)
 		refLen = len(refPayload)

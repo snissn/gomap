@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"strconv"
-	"sync"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
@@ -149,17 +148,12 @@ type duplicateIDScratch struct {
 	hashes [maxSmallDuplicateIDs]uint64
 }
 
-var duplicateIDScratchPool = sync.Pool{
-	New: func() any { return new(duplicateIDScratch) },
-}
-
 func rejectDuplicateIDs(ids [][]byte) error {
 	if len(ids) > maxSmallDuplicateIDs {
 		return rejectDuplicateIDsMap(ids)
 	}
-	scratch := duplicateIDScratchPool.Get().(*duplicateIDScratch)
-	defer duplicateIDScratchPool.Put(scratch)
-	return rejectDuplicateIDsSmall(ids, scratch)
+	var scratch duplicateIDScratch
+	return rejectDuplicateIDsSmall(ids, &scratch)
 }
 
 func rejectDuplicateIDsMap(ids [][]byte) error {
@@ -282,9 +276,9 @@ func responseCount(sections []iwire.Section, key string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	value := values[key]
-	if value == "" {
-		return 0, nil
+	value, ok := values[key]
+	if !ok {
+		return 0, protocolError(iwire.ErrMalformedFrame, "response_meta missing %s", key)
 	}
 	n, err := strconv.Atoi(value)
 	if err != nil {

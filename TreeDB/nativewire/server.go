@@ -118,7 +118,9 @@ func (s *connState) addCollectionHandle(name string, collection *collections.Col
 		if s.collections == nil {
 			s.collections = make(map[string]*collections.Collection)
 		}
-		s.collections[name] = collection
+		if limit <= 0 || len(s.collections) < limit {
+			s.collections[name] = collection
+		}
 	}
 	return handle, nil
 }
@@ -165,7 +167,7 @@ func (s *connState) cachedCollection(name string) (*collections.Collection, bool
 	return collection, ok
 }
 
-func (s *connState) cacheCollection(name string, collection *collections.Collection) {
+func (s *connState) cacheCollection(name string, collection *collections.Collection, limit int) {
 	if collection == nil {
 		return
 	}
@@ -173,6 +175,11 @@ func (s *connState) cacheCollection(name string, collection *collections.Collect
 	defer s.mu.Unlock()
 	if s.collections == nil {
 		s.collections = make(map[string]*collections.Collection)
+	}
+	if limit > 0 && len(s.collections) >= limit {
+		if _, ok := s.collections[name]; !ok {
+			return
+		}
 	}
 	s.collections[name] = collection
 }
@@ -310,7 +317,11 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 			if ctx.Err() != nil && (errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe)) {
 				return ctx.Err()
 			}
-			s.counters.inc("malformed_frames_total")
+			if _, ok := iwire.ErrorCodeOf(err); ok {
+				s.counters.inc("malformed_frames_total")
+			} else {
+				s.counters.inc("transport_errors_total")
+			}
 			return err
 		}
 		if err := s.handleFrame(ctx, conn, state, header, body); err != nil {
@@ -593,6 +604,9 @@ func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error 
 		code = iwire.ErrInternal
 	}
 	message := err.Error()
+	if code == iwire.ErrInternal {
+		message = "internal error"
+	}
 	body, sectionErr := iwire.AppendSection(nil, iwire.Section{
 		ID:    iwire.SectionError,
 		Bytes: appendErrorPayload(nil, code, retryableError(code), message),
@@ -606,6 +620,7 @@ func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error 
 }
 
 func (s *Server) writeSimpleFrame(w io.Writer, header iwire.Header, body []byte) error {
+	header.Version = iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0}
 	if err := writeFrame(w, header, body); err != nil {
 		return err
 	}
@@ -644,6 +659,7 @@ func (s *Server) Stats() map[string]string {
 		"requests.failed_total",
 		"requests.canceled_total",
 		"errors.total",
+		"transport_errors_total",
 		"dispatch_nanos_total",
 	} {
 		out[nativeStatsPrefix+key] = "0"

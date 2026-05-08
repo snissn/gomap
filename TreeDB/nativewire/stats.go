@@ -60,42 +60,72 @@ func (c *counters) inc(key string) {
 }
 
 func (c *counters) incFramesIn() {
+	if c == nil {
+		return
+	}
 	c.framesIn.Add(1)
 }
 
 func (c *counters) incFramesOut() {
+	if c == nil {
+		return
+	}
 	c.framesOut.Add(1)
 }
 
 func (c *counters) addBytesIn(delta uint64) {
+	if c == nil || delta == 0 {
+		return
+	}
 	c.bytesIn.Add(delta)
 }
 
 func (c *counters) addBytesOut(delta uint64) {
+	if c == nil || delta == 0 {
+		return
+	}
 	c.bytesOut.Add(delta)
 }
 
 func (c *counters) incRequestsStarted() {
+	if c == nil {
+		return
+	}
 	c.requestsStarted.Add(1)
 }
 
 func (c *counters) incRequestsCompleted() {
+	if c == nil {
+		return
+	}
 	c.requestsCompleted.Add(1)
 }
 
 func (c *counters) incRequestsFailed() {
+	if c == nil {
+		return
+	}
 	c.requestsFailed.Add(1)
 }
 
 func (c *counters) incRequestsCanceled() {
+	if c == nil {
+		return
+	}
 	c.requestsCanceled.Add(1)
 }
 
 func (c *counters) addDispatchNanos(delta uint64) {
+	if c == nil || delta == 0 {
+		return
+	}
 	c.dispatchNanos.Add(delta)
 }
 
 func (c *counters) incErrorsTotal() {
+	if c == nil {
+		return
+	}
 	c.errorsTotal.Add(1)
 }
 

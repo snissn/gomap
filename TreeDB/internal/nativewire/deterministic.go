@@ -2,8 +2,11 @@ package nativewire
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
+	"slices"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -14,7 +17,17 @@ const (
 	maxDeterministicDocumentIDs = 1 << 16
 )
 
-var deterministicEntryRegistry = MustV1Registry()
+var (
+	deterministicEntryRegistryOnce sync.Once
+	deterministicEntryRegistry     *Registry
+)
+
+func deterministicRegistry() *Registry {
+	deterministicEntryRegistryOnce.Do(func() {
+		deterministicEntryRegistry = MustV1Registry()
+	})
+	return deterministicEntryRegistry
+}
 
 type DeterministicEntry struct {
 	Version        uint64
@@ -108,7 +121,7 @@ func DecodeDeterministicEntry(src []byte, limits Limits) (DeterministicEntry, er
 func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *DeterministicEntryScratch) (DeterministicEntry, error) {
 	limits = limits.withDefaults()
 	failBeforeSections := func(err error) (DeterministicEntry, error) {
-		clearDeterministicEntryScratch(nil, scratch)
+		clearDeterministicEntryScratch(nil, scratch, true)
 		return DeterministicEntry{}, err
 	}
 	if uint64(len(src)) > limits.MaxFrameSize {
@@ -155,9 +168,9 @@ func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *Determinis
 		return failBeforeSections(protocolError(ErrResourceExhausted, "deterministic entry section count exceeds int capacity"))
 	}
 	sectionCount := int(sectionCount64)
-	sections := deterministicEntrySectionsBuffer(sectionCount, scratch)
+	sections, borrowedScratch := deterministicEntrySectionsBuffer(sectionCount, scratch)
 	fail := func(err error) (DeterministicEntry, error) {
-		clearDeterministicEntryScratch(sections, scratch)
+		clearDeterministicEntryScratch(sections, scratch, borrowedScratch)
 		return DeterministicEntry{}, err
 	}
 	var previous SectionID
@@ -206,24 +219,29 @@ func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *Determinis
 	}, nil
 }
 
-func deterministicEntrySectionsBuffer(count int, scratch *DeterministicEntryScratch) []Section {
+func deterministicEntrySectionsBuffer(count int, scratch *DeterministicEntryScratch) ([]Section, bool) {
 	if scratch == nil {
-		return make([]Section, count)
+		return make([]Section, count), false
 	}
 	if cap(scratch.Sections) < count {
-		return make([]Section, count)
+		return make([]Section, count), false
 	}
 	backing := scratch.Sections[:cap(scratch.Sections)]
 	clear(backing[count:])
-	return backing[:count]
+	return backing[:count], true
 }
 
-func clearDeterministicEntryScratch(sections []Section, scratch *DeterministicEntryScratch) {
+func clearDeterministicEntryScratch(sections []Section, scratch *DeterministicEntryScratch, borrowedScratch bool) {
 	if scratch == nil {
 		return
 	}
-	clear(sections)
-	scratch.Sections = sections[:0]
+	if borrowedScratch {
+		clear(sections)
+		scratch.Sections = sections[:0]
+		return
+	}
+	clear(scratch.Sections[:cap(scratch.Sections)])
+	scratch.Sections = scratch.Sections[:0]
 }
 
 func readEntryUvarint(src []byte, off *int, field string) (uint64, error) {
@@ -314,7 +332,7 @@ func deterministicByteVectorCount(sections []Section, id SectionID) (int, error)
 }
 
 func validateDecodedDeterministicEntry(commandID CommandID, commandVersion uint64, sections []Section) (*CommandSchema, error) {
-	schema, ok := deterministicEntryRegistry.LookupCommand(commandID, commandVersion)
+	schema, ok := deterministicRegistry().LookupCommand(commandID, commandVersion)
 	if !ok {
 		return nil, protocolError(ErrUnsupportedVersion, "unsupported deterministic command %d version %d", commandID, commandVersion)
 	}
@@ -409,6 +427,9 @@ func validateDeterministicOpaquePayload(name string, raw []byte, limits Limits) 
 }
 
 func validateDeterministicName(name string, raw []byte, limits Limits) error {
+	if len(raw) == 0 {
+		return protocolError(ErrInvalidCommand, "%s cannot be empty", name)
+	}
 	length, n, err := readUvarint(raw)
 	if err != nil {
 		return err
@@ -459,20 +480,12 @@ func validateDeterministicDocumentIDs(raw []byte, limits Limits) error {
 		return protocolError(ErrResourceExhausted, "document_ids count %d exceeds deterministic limit %d", count64, maxDeterministicDocumentIDs)
 	}
 	count := int(count64)
-	var stackOffsets [256]int
-	var stackLengths [256]int
-	var stackHashes [256]uint64
-	offsets := stackOffsets[:0]
-	lengths := stackLengths[:0]
-	hashes := stackHashes[:0]
-	if count > cap(offsets) {
-		offsets = make([]int, count)
-		lengths = make([]int, count)
-		hashes = make([]uint64, count)
+	var stackItems [256]deterministicIDItem
+	items := stackItems[:0]
+	if count > cap(items) {
+		items = make([]deterministicIDItem, count)
 	} else {
-		offsets = offsets[:count]
-		lengths = lengths[:count]
-		hashes = hashes[:count]
+		items = items[:count]
 	}
 	payloadLen := 0
 	for i := 0; i < count; i++ {
@@ -487,40 +500,32 @@ func validateDeterministicDocumentIDs(raw []byte, limits Limits) error {
 		if length > uint64(maxInt) || payloadLen > maxInt-int(length) {
 			return protocolError(ErrResourceExhausted, "document_ids payload length exceeds int capacity")
 		}
-		offsets[i] = payloadLen
-		lengths[i] = int(length)
+		items[i] = deterministicIDItem{offset: payloadLen, length: int(length)}
 		payloadLen += int(length)
 	}
 	payload := raw[off:]
-	for i := 0; i < count; i++ {
-		start := offsets[i]
-		item := payload[start : start+lengths[i]]
-		hashes[i] = deterministicIDHash(item)
-		for j := 0; j < i; j++ {
-			if hashes[j] != hashes[i] || lengths[j] != lengths[i] {
-				continue
-			}
-			prevStart := offsets[j]
-			prev := payload[prevStart : prevStart+lengths[j]]
-			if bytes.Equal(item, prev) {
-				return protocolError(ErrDuplicateDocumentID, "duplicate document id at index %d", i)
-			}
+	sortDeterministicIDItems(payload, items)
+	for i := 1; i < count; i++ {
+		left := payload[items[i-1].offset : items[i-1].offset+items[i-1].length]
+		right := payload[items[i].offset : items[i].offset+items[i].length]
+		if bytes.Equal(left, right) {
+			return protocolError(ErrDuplicateDocumentID, "duplicate document id")
 		}
 	}
 	return nil
 }
 
-func deterministicIDHash(raw []byte) uint64 {
-	const (
-		offset = 14695981039346656037
-		prime  = 1099511628211
-	)
-	hash := uint64(offset)
-	for _, b := range raw {
-		hash ^= uint64(b)
-		hash *= prime
-	}
-	return hash
+type deterministicIDItem struct {
+	offset int
+	length int
+}
+
+func sortDeterministicIDItems(payload []byte, items []deterministicIDItem) {
+	slices.SortFunc(items, func(leftItem, rightItem deterministicIDItem) int {
+		left := payload[leftItem.offset : leftItem.offset+leftItem.length]
+		right := payload[rightItem.offset : rightItem.offset+rightItem.length]
+		return bytes.Compare(left, right)
+	})
 }
 
 func validateDeterministicCollectionRef(raw []byte) (bool, error) {
@@ -545,12 +550,7 @@ func validateDeterministicCollectionRef(raw []byte) (bool, error) {
 }
 
 func sortSectionsByID(sections []Section) {
-	for i := 1; i < len(sections); i++ {
-		section := sections[i]
-		j := i - 1
-		for ; j >= 0 && sections[j].ID > section.ID; j-- {
-			sections[j+1] = sections[j]
-		}
-		sections[j+1] = section
-	}
+	slices.SortFunc(sections, func(a, b Section) int {
+		return cmp.Compare(a.ID, b.ID)
+	})
 }

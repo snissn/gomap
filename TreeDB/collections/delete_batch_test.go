@@ -2,6 +2,7 @@ package collections
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -71,5 +72,24 @@ func TestCollectionDeleteBatchRejectsDuplicateIDs(t *testing.T) {
 	}
 	if _, err := col.DeleteBatch([][]byte{[]byte("u1"), []byte("u1")}); !errors.Is(err, ErrDuplicateDocumentID) {
 		t.Fatalf("DeleteBatch duplicate err=%v want ErrDuplicateDocumentID", err)
+	}
+}
+
+func TestCollectionDeleteBatchRejectsEmptyIDs(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.DeleteBatch([][]byte{[]byte("")}); err == nil || !strings.Contains(err.Error(), "document id cannot be empty") {
+		t.Fatalf("DeleteBatch empty id err=%v want empty-id rejection", err)
 	}
 }

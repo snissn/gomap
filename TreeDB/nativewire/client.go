@@ -128,10 +128,15 @@ func (c *Client) roundTripLockedStream(ctx context.Context, streamID uint64, typ
 		_ = c.conn.SetDeadline(deadline)
 		defer func() { _ = c.conn.SetDeadline(noDeadline) }()
 	}
-	stopCancel := c.closeOnContextCancel(ctx)
+	stopCancel := c.interruptDeadlineOnContextCancel(ctx)
 	defer stopCancel()
 	var err error
-	c.writeBody, err = writeFrameBuffered(c.conn, iwire.Header{Type: typ, StreamID: streamID, RequestID: requestID}, body, c.writeBody)
+	c.writeBody, err = writeFrameBuffered(c.conn, iwire.Header{
+		Version:   iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0},
+		Type:      typ,
+		StreamID:  streamID,
+		RequestID: requestID,
+	}, body, c.writeBody)
 	if err != nil {
 		return iwire.Header{}, nil, errorOrContext(ctx, err)
 	}
@@ -174,10 +179,14 @@ func (c *Client) roundTripLockedDiscardResponse(ctx context.Context, typ iwire.F
 		_ = c.conn.SetDeadline(deadline)
 		defer func() { _ = c.conn.SetDeadline(noDeadline) }()
 	}
-	stopCancel := c.closeOnContextCancel(ctx)
+	stopCancel := c.interruptDeadlineOnContextCancel(ctx)
 	defer stopCancel()
 	var err error
-	c.writeBody, err = writeFrameBuffered(c.conn, iwire.Header{Type: typ, RequestID: requestID}, body, c.writeBody)
+	c.writeBody, err = writeFrameBuffered(c.conn, iwire.Header{
+		Version:   iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0},
+		Type:      typ,
+		RequestID: requestID,
+	}, body, c.writeBody)
 	if err != nil {
 		return errorOrContext(ctx, err)
 	}
@@ -201,7 +210,7 @@ func (c *Client) roundTripLockedDiscardResponse(ctx context.Context, typ iwire.F
 	return nil
 }
 
-func (c *Client) closeOnContextCancel(ctx context.Context) func() {
+func (c *Client) interruptDeadlineOnContextCancel(ctx context.Context) func() {
 	if c == nil || c.conn == nil || ctx == nil || ctx.Done() == nil {
 		return func() {}
 	}
@@ -209,7 +218,7 @@ func (c *Client) closeOnContextCancel(ctx context.Context) func() {
 	go func() {
 		select {
 		case <-ctx.Done():
-			_ = c.conn.Close()
+			_ = c.conn.SetDeadline(time.Now())
 		case <-done:
 		}
 	}()
