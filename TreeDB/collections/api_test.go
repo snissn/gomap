@@ -11846,11 +11846,11 @@ func TestCollectionFindDocumentsByIndexRangeUsesBufferedPrimaryView(t *testing.T
 }
 
 func TestCollectionFindByIndexRangeDedupesPersistedOnlyMultiKeyRange(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer func() { _ = d.Close() }()
 
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
@@ -11877,7 +11877,19 @@ func TestCollectionFindByIndexRangeDedupesPersistedOnlyMultiKeyRange(t *testing.
 	if err := col.Flush(); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	ids, truncated, err := col.FindByIndexRange("tag", IndexRangeOptions{
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	ids, truncated, err := reopenedCol.FindByIndexRange("tag", IndexRangeOptions{
 		Lower: IndexRangeBound{Value: "a", Inclusive: true},
 		Upper: IndexRangeBound{Value: "d", Inclusive: false},
 		Limit: 2,
