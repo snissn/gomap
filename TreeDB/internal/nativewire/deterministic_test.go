@@ -518,6 +518,93 @@ func TestDeterministicEntryRejectsMalformedMetadataPayloads(t *testing.T) {
 	}
 }
 
+func TestDecodeDeterministicEntryRejectsCollectionMetaApplyDecoderConstraints(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		meta []byte
+		code ErrorCode
+	}{
+		{
+			name: "unsupported_document_format",
+			meta: deterministicCollectionMetaPayloadWithOptions("users", deterministicCollectionMetaOptions{
+				documentFormat: 99,
+			}),
+			code: ErrInvalidCommand,
+		},
+		{
+			name: "unsupported_root_storage",
+			meta: deterministicCollectionMetaPayloadWithOptions("users", deterministicCollectionMetaOptions{
+				dataRootStorage: 99,
+			}),
+			code: ErrInvalidCommand,
+		},
+		{
+			name: "negative_max_documents",
+			meta: deterministicCollectionMetaPayloadWithOptions("users", deterministicCollectionMetaOptions{
+				maxDocuments: -1,
+			}),
+			code: ErrInvalidCommand,
+		},
+		{
+			name: "negative_max_bytes",
+			meta: deterministicCollectionMetaPayloadWithOptions("users", deterministicCollectionMetaOptions{
+				maxBytes: -1,
+			}),
+			code: ErrInvalidCommand,
+		},
+		{
+			name: "too_many_indexes",
+			meta: deterministicCollectionMetaPayloadWithOptions("users", deterministicCollectionMetaOptions{
+				indexCount: maxDeterministicCollectionIndexes + 1,
+			}),
+			code: ErrResourceExhausted,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := deterministicMetadataEntryRaw(CommandCreateCollection, SectionCollectionMeta, tc.meta)
+			if _, err := DecodeDeterministicEntry(raw, Limits{}); codeOf(err) != tc.code {
+				t.Fatalf("DecodeDeterministicEntry err=%v code=%d want %d", err, codeOf(err), tc.code)
+			}
+		})
+	}
+}
+
+func TestDecodeDeterministicEntryRejectsIndexDefinitionApplyDecoderConstraints(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		index []byte
+	}{
+		{
+			name:  "unsupported_value_type",
+			index: deterministicIndexDefinitionPayloadWithOptions("email", "email", 99, 0),
+		},
+		{
+			name:  "unsupported_storage_policy",
+			index: deterministicIndexDefinitionPayloadWithOptions("email", "email", 1, 99),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := deterministicMetadataEntryRaw(CommandCreateIndex, SectionIndexDefinition, tc.index)
+			if _, err := DecodeDeterministicEntry(raw, Limits{}); codeOf(err) != ErrInvalidCommand {
+				t.Fatalf("DecodeDeterministicEntry err=%v code=%d want invalid command", err, codeOf(err))
+			}
+		})
+	}
+}
+
+func deterministicMetadataEntryRaw(command CommandID, sectionID SectionID, payload []byte) []byte {
+	sections := []Section{
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: command, Version: 1})},
+		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
+		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+		{ID: sectionID, Bytes: payload},
+	}
+	if command == CommandCreateIndex {
+		sections = append(sections, Section{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("users")})
+	}
+	return deterministicEntryTestRaw(command, deterministicEntrySectionsOnly(sections)...)
+}
+
 func TestDeterministicMetadataRequiresTaggedCollectionName(t *testing.T) {
 	registry := MustV1Registry()
 	sections := []Section{
@@ -857,29 +944,48 @@ func deterministicCollectionNameRef(name string) []byte {
 	return append([]byte{1}, name...)
 }
 
+type deterministicCollectionMetaOptions struct {
+	documentFormat   uint64
+	dataRootStorage  uint64
+	indexRootStorage uint64
+	maxDocuments     int64
+	maxBytes         int64
+	maxRootRuns      int64
+	maxQueuedUnits   int64
+	indexCount       uint64
+}
+
 func deterministicCollectionMetaPayload(name string) []byte {
+	return deterministicCollectionMetaPayloadWithOptions(name, deterministicCollectionMetaOptions{})
+}
+
+func deterministicCollectionMetaPayloadWithOptions(name string, opts deterministicCollectionMetaOptions) []byte {
 	dst := appendUvarint(nil, 1)
 	dst = appendDeterministicTestString(dst, name)
-	dst = appendUvarint(dst, uint64(DocumentFormatDefault))
-	dst = appendUvarint(dst, 0)
-	dst = appendUvarint(dst, 0)
+	dst = appendUvarint(dst, opts.documentFormat)
+	dst = appendUvarint(dst, opts.dataRootStorage)
+	dst = appendUvarint(dst, opts.indexRootStorage)
 	dst = append(dst, 0, 0, 0)
-	dst = binary.AppendVarint(dst, 0)
-	dst = binary.AppendVarint(dst, 0)
-	dst = binary.AppendVarint(dst, 0)
+	dst = binary.AppendVarint(dst, opts.maxDocuments)
+	dst = binary.AppendVarint(dst, opts.maxBytes)
+	dst = binary.AppendVarint(dst, opts.maxRootRuns)
 	dst = append(dst, 0, 0)
-	dst = binary.AppendVarint(dst, 0)
-	dst = appendUvarint(dst, 0)
+	dst = binary.AppendVarint(dst, opts.maxQueuedUnits)
+	dst = appendUvarint(dst, opts.indexCount)
 	return dst
 }
 
 func deterministicIndexDefinitionPayload(name, field string) []byte {
+	return deterministicIndexDefinitionPayloadWithOptions(name, field, 1, 0)
+}
+
+func deterministicIndexDefinitionPayloadWithOptions(name, field string, valueType, storagePolicy uint64) []byte {
 	dst := appendUvarint(nil, 1)
 	dst = appendDeterministicTestString(dst, name)
 	dst = appendDeterministicTestString(dst, field)
-	dst = appendUvarint(dst, 1)
+	dst = appendUvarint(dst, valueType)
 	dst = append(dst, 0, 0)
-	dst = appendUvarint(dst, 0)
+	dst = appendUvarint(dst, storagePolicy)
 	return dst
 }
 
