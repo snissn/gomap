@@ -1,6 +1,9 @@
 package nativewire
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"math/bits"
+)
 
 func appendUvarint(dst []byte, v uint64) []byte {
 	return binary.AppendUvarint(dst, v)
@@ -22,8 +25,10 @@ func readUvarint(src []byte) (uint64, int, error) {
 }
 
 func uvarintLen(v uint64) int {
-	var buf [binary.MaxVarintLen64]byte
-	return binary.PutUvarint(buf[:], v)
+	if v == 0 {
+		return 1
+	}
+	return (bits.Len64(v) + 6) / 7
 }
 
 func isMinimalUvarint(v uint64, n int) bool {
