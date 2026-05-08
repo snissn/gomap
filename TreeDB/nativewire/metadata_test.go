@@ -246,6 +246,43 @@ func TestMetadataCatalogGuard(t *testing.T) {
 	}
 }
 
+func TestMetadataClientAllowsCallerSuppliedGuards(t *testing.T) {
+	client, _, db := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	key := []byte("stable-create-users")
+	guardedCtx := WithExpectedCatalogVersion(WithIdempotencyKey(ctx, key), catalogVersion(t, db))
+	key[0] = 'X'
+	if _, err := client.CreateCollection(guardedCtx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection guarded: %v", err)
+	}
+
+	sections, err := client.replicatedMetadataGuard(guardedCtx, "create_collection")
+	if err != nil {
+		t.Fatalf("replicatedMetadataGuard: %v", err)
+	}
+	if got := string(sectionBytes(t, sections, iwire.SectionIdempotencyKey)); got != "stable-create-users" {
+		t.Fatalf("idempotency key=%q", got)
+	}
+	rawVersion := sectionBytes(t, sections, iwire.SectionExpectedCatalogVersion)
+	version, n := binary.Uvarint(rawVersion)
+	if n != len(rawVersion) || version+1 != catalogVersion(t, db) {
+		t.Fatalf("expected version raw=%v decoded=%d n=%d current=%d", rawVersion, version, n, catalogVersion(t, db))
+	}
+}
+
+func TestMetadataClientRejectsEmptyCallerIdempotencyKey(t *testing.T) {
+	client := &Client{}
+	ctx := WithExpectedCatalogVersion(WithIdempotencyKey(context.Background(), nil), 7)
+	if _, err := client.replicatedMetadataGuard(ctx, "create_collection"); nativeCodeOf(err) != iwire.ErrInvalidCommand {
+		t.Fatalf("replicatedMetadataGuard err=%v code=%d want invalid command", err, nativeCodeOf(err))
+	}
+}
+
 func replicatedTestGuard(id string, version uint64) []iwire.Section {
 	return []iwire.Section{
 		{ID: iwire.SectionIdempotencyKey, Bytes: []byte(id)},
@@ -289,6 +326,20 @@ func TestReadVarintRejectsInvalidOffsets(t *testing.T) {
 	}
 }
 
+func TestReadBoolRejectsInvalidOffsets(t *testing.T) {
+	if _, err := readBool(nil, nil); nativeCodeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("nil offset err=%v code=%d", err, nativeCodeOf(err))
+	}
+	off := -1
+	if _, err := readBool([]byte{0}, &off); nativeCodeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("negative offset err=%v code=%d", err, nativeCodeOf(err))
+	}
+	off = 1
+	if _, err := readBool([]byte{0}, &off); nativeCodeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("oversized offset err=%v code=%d", err, nativeCodeOf(err))
+	}
+}
+
 func TestMetadataOpenCollectionHandleLimit(t *testing.T) {
 	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{MaxCollectionHandles: 1})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -307,35 +358,48 @@ func TestMetadataOpenCollectionHandleLimit(t *testing.T) {
 	}
 }
 
-func TestMetadataCollectionCacheBounded(t *testing.T) {
+func TestMetadataCachedCollectionLimitIsIndependentOfHandles(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	defer db.Close()
 	mgr := collections.NewCollectionManager(db)
-	server := NewServer(ServerOptions{Collections: mgr, Backend: db, MaxCollectionHandles: 1})
+	for _, name := range []string{"users", "orders"} {
+		if _, err := mgr.CreateCollection(&collections.CollectionMeta{Name: name}); err != nil {
+			t.Fatalf("CreateCollection %s: %v", name, err)
+		}
+	}
+	server := NewServer(ServerOptions{
+		Collections:          mgr,
+		Backend:              db,
+		MaxCollectionHandles: 2,
+		MaxCachedCollections: 1,
+	})
+	defer server.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	client, cleanup, err := NewInProcessClient(ctx, server)
 	if err != nil {
 		t.Fatalf("NewInProcessClient: %v", err)
 	}
-	t.Cleanup(func() { _ = cleanup() })
-	t.Cleanup(func() { _ = db.Close() })
-	for _, name := range []string{"users_a", "users_b", "users_c"} {
-		if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: name}); err != nil {
-			t.Fatalf("CreateCollection %s: %v", name, err)
-		}
-		if _, err := client.ListIndexes(ctx, name); err != nil {
-			t.Fatalf("ListIndexes %s: %v", name, err)
-		}
+	defer func() { _ = cleanup() }()
+	if _, err := client.OpenCollection(ctx, "users"); err != nil {
+		t.Fatalf("OpenCollection users: %v", err)
+	}
+	if _, err := client.OpenCollection(ctx, "orders"); err != nil {
+		t.Fatalf("OpenCollection orders: %v", err)
 	}
 	state := client.local.state
 	state.mu.Lock()
 	cached := len(state.collections)
+	handles := len(state.handles)
 	state.mu.Unlock()
 	if cached > 1 {
-		t.Fatalf("cached collections=%d want <= 1", cached)
+		t.Fatalf("cached collections=%d want <=1", cached)
+	}
+	if handles != 2 {
+		t.Fatalf("handles=%d want 2", handles)
 	}
 }
 
@@ -367,9 +431,23 @@ func TestDecodeCollectionMetaRejectsUnknownEnums(t *testing.T) {
 }
 
 func TestReadEnumRejectsInvalidOffset(t *testing.T) {
-	off := 2
+	off := -1
+	if _, err := readEnum([]byte{1}, &off); nativeCodeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("readEnum negative err=%v code=%d want malformed", err, nativeCodeOf(err))
+	}
+	off = 2
 	if _, err := readEnum([]byte{1}, &off); nativeCodeOf(err) != iwire.ErrMalformedFrame {
 		t.Fatalf("readEnum err=%v code=%d want malformed", err, nativeCodeOf(err))
+	}
+}
+
+func TestCollectionNameFromSectionsRejectsHandleRefBeforeStateDecode(t *testing.T) {
+	_, err := collectionNameFromSections([]iwire.Section{collectionHandleRef(1)})
+	if nativeCodeOf(err) != iwire.ErrInvalidCommand {
+		t.Fatalf("collectionNameFromSections err=%v code=%d want invalid command", err, nativeCodeOf(err))
+	}
+	if got := err.Error(); got != "nativewire: error code 6: collection handle is not valid for this command" {
+		t.Fatalf("collectionNameFromSections err=%q", got)
 	}
 }
 
@@ -496,6 +574,17 @@ func TestDropCollectionReserved(t *testing.T) {
 
 func testCollectionMetaPayload(docFormat, dataPolicy, indexStatePolicy, indexCount uint64) []byte {
 	return testCollectionMetaPayloadWithCounters(docFormat, dataPolicy, indexStatePolicy, 0, 0, 0, 0, indexCount)
+}
+
+func sectionBytes(t *testing.T, sections []iwire.Section, id iwire.SectionID) []byte {
+	t.Helper()
+	for _, section := range sections {
+		if section.ID == id {
+			return section.Bytes
+		}
+	}
+	t.Fatalf("missing section %d", id)
+	return nil
 }
 
 func testCollectionMetaPayloadWithCounters(docFormat, dataPolicy, indexStatePolicy uint64, maxDocs, maxBytes, maxRootRuns, maxQueued int64, indexCount uint64) []byte {

@@ -17,7 +17,9 @@ import (
 
 const (
 	defaultMaxInFlight            = 1024
+	defaultMaxConnections         = 1024
 	defaultMaxCollectionHandles   = 1024
+	defaultMaxCachedCollections   = 1024
 	defaultMaxOpenCursors         = 1024
 	defaultMaxCursorRetainedBytes = 64 << 20
 	defaultMaxScanDocuments       = 10000
@@ -29,7 +31,9 @@ const (
 type ServerOptions struct {
 	Limits                 iwire.Limits
 	MaxInFlight            int
+	MaxConnections         int
 	MaxCollectionHandles   int
+	MaxCachedCollections   int
 	MaxOpenCursors         int
 	MaxCursorRetainedBytes int
 	MaxScanDocuments       int
@@ -44,7 +48,9 @@ type ServerOptions struct {
 type Server struct {
 	limits                 iwire.Limits
 	maxInFlight            int
+	maxConnections         int
 	maxCollectionHandles   int
+	maxCachedCollections   int
 	maxOpenCursors         int
 	maxCursorRetainedBytes int
 	maxScanDocuments       int
@@ -93,20 +99,21 @@ type connState struct {
 
 	readBody       []byte
 	writeBody      []byte
+	responseBody   []byte
 	sections       []iwire.Section
 	commandScratch iwire.CommandScratch
 	idsScratch     [][]byte
 	docsScratch    [][]byte
 }
 
-func (s *connState) addCollectionHandle(name string, collection *collections.Collection, limit int) (CollectionHandle, error) {
+func (s *connState) addCollectionHandle(name string, collection *collections.Collection, handleLimit, cacheLimit int) (CollectionHandle, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.handles == nil {
 		s.handles = make(map[CollectionHandle]string)
 	}
-	if limit > 0 && len(s.handles) >= limit {
-		return 0, protocolError(iwire.ErrResourceExhausted, "collection handle limit %d reached", limit)
+	if handleLimit > 0 && len(s.handles) >= handleLimit {
+		return 0, protocolError(iwire.ErrResourceExhausted, "collection handle limit %d reached", handleLimit)
 	}
 	s.nextHandle++
 	if s.nextHandle == 0 {
@@ -122,7 +129,7 @@ func (s *connState) addCollectionHandle(name string, collection *collections.Col
 		if s.collections == nil {
 			s.collections = make(map[string]*collections.Collection)
 		}
-		if limit <= 0 || len(s.collections) < limit {
+		if cacheLimit <= 0 || len(s.collections) < cacheLimit {
 			s.collections[name] = collection
 		}
 	}
@@ -188,6 +195,13 @@ func (s *connState) cacheCollection(name string, collection *collections.Collect
 	s.collections[name] = collection
 }
 
+func (s *connState) responseScratch() []byte {
+	if s == nil {
+		return nil
+	}
+	return s.responseBody[:0]
+}
+
 // NewServer creates a native-wire server with defaulted limits and policies.
 func NewServer(opts ServerOptions) *Server {
 	limits := opts.Limits
@@ -214,9 +228,17 @@ func NewServer(opts ServerOptions) *Server {
 	if maxInFlight <= 0 {
 		maxInFlight = defaultMaxInFlight
 	}
+	maxConnections := opts.MaxConnections
+	if maxConnections <= 0 {
+		maxConnections = defaultMaxConnections
+	}
 	maxCollectionHandles := opts.MaxCollectionHandles
 	if maxCollectionHandles <= 0 {
 		maxCollectionHandles = defaultMaxCollectionHandles
+	}
+	maxCachedCollections := opts.MaxCachedCollections
+	if maxCachedCollections <= 0 {
+		maxCachedCollections = defaultMaxCachedCollections
 	}
 	maxOpenCursors := opts.MaxOpenCursors
 	if maxOpenCursors <= 0 {
@@ -248,7 +270,9 @@ func NewServer(opts ServerOptions) *Server {
 	return &Server{
 		limits:                 limits,
 		maxInFlight:            maxInFlight,
+		maxConnections:         maxConnections,
 		maxCollectionHandles:   maxCollectionHandles,
+		maxCachedCollections:   maxCachedCollections,
 		maxOpenCursors:         maxOpenCursors,
 		maxCursorRetainedBytes: maxCursorRetainedBytes,
 		maxScanDocuments:       maxScanDocuments,
@@ -314,6 +338,9 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		case <-done:
 		}
 	}()
+	if s.cursorIdleTimeout > 0 {
+		go s.reapExpiredCursorsUntilDone(done)
+	}
 
 	for {
 		if s.closed.Load() {
@@ -410,10 +437,7 @@ func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState,
 		if writeErr := s.writeError(w, header, err); writeErr != nil {
 			return writeErr
 		}
-		if state != nil && state.hello {
-			return errGoaway
-		}
-		return nil
+		return errGoaway
 	}
 	switch header.Type {
 	case iwire.FrameHello:
@@ -443,6 +467,9 @@ func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState,
 }
 
 func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connState, header iwire.Header, body []byte) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if ctx.Err() != nil {
 		return s.writeError(w, header, ctx.Err())
 	}
@@ -481,7 +508,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 			s.counters.incCommandError(iwire.CommandInsertBatch, "insert_batch")
 			return s.writeError(w, header, err)
 		}
-		responseBody, err := s.handleInsertBatchFastBody(req, body[:0])
+		responseBody, err := s.handleInsertBatchFastBody(req, state.responseScratch())
 		s.counters.add("dispatch_nanos_total", uint64(time.Since(start).Nanoseconds()))
 		if err != nil {
 			s.counters.inc("requests.failed_total")
@@ -489,6 +516,9 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 			return s.writeError(w, header, err)
 		}
 		s.counters.inc("requests.completed_total")
+		if state != nil {
+			state.responseBody = responseBody[:0]
+		}
 		return s.writeSimpleFrameBuffered(w, state, iwire.Header{Type: iwire.FrameResponse, StreamID: header.StreamID, RequestID: header.RequestID}, responseBody)
 	} else if err != nil {
 		s.counters.inc("requests.failed_total")
@@ -528,7 +558,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	case iwire.CommandInsertBatch:
 		includeResultIDs := cmd.Header.Flags&iwire.CommandFlagOmitResultIDs == 0
 		includeMeta := cmd.Header.Flags&iwire.CommandFlagOmitResponseMeta == 0
-		responseBody, err = s.handleInsertBatchBody(state, cmd.Known, body[:0], includeResultIDs, includeMeta)
+		responseBody, err = s.handleInsertBatchBody(state, cmd.Known, state.responseScratch(), includeResultIDs, includeMeta)
 		responseBodySet = true
 	case iwire.CommandReplaceBatch:
 		responseSections, err = s.handleReplaceBatch(state, cmd.Known)
@@ -541,7 +571,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	case iwire.CommandCheckpoint:
 		responseSections, err = s.handleCheckpoint(cmd.Known)
 	case iwire.CommandGetMany:
-		responseBody, err = s.handleGetManyBody(state, cmd.Known, body[:0])
+		responseBody, err = s.handleGetManyBody(state, cmd.Known, state.responseScratch())
 		responseBodySet = true
 	case iwire.CommandIndexLookup:
 		responseSections, err = s.handleIndexLookup(state, cmd.Known)
@@ -564,19 +594,20 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 		s.counters.incCommandError(cmd.Header.ID, cmd.Schema.Name)
 		return s.writeError(w, header, err)
 	}
-	if responseBodySet {
-		body = responseBody
-	} else {
-		body = body[:0]
+	if !responseBodySet {
+		responseBody = state.responseScratch()
 		for _, section := range responseSections {
-			body, err = iwire.AppendSection(body, section)
+			responseBody, err = iwire.AppendSection(responseBody, section)
 			if err != nil {
 				return err
 			}
 		}
 	}
 	s.counters.inc("requests.completed_total")
-	return s.writeSimpleFrameBuffered(w, state, iwire.Header{Type: iwire.FrameResponse, StreamID: header.StreamID, RequestID: header.RequestID}, body)
+	if state != nil {
+		state.responseBody = responseBody[:0]
+	}
+	return s.writeSimpleFrameBuffered(w, state, iwire.Header{Type: iwire.FrameResponse, StreamID: header.StreamID, RequestID: header.RequestID}, responseBody)
 }
 
 func (s *Server) writeHelloOK(w io.Writer, header iwire.Header, state *connState) error {

@@ -143,6 +143,22 @@ func TestAppendSectionPreservesDstOnValidationError(t *testing.T) {
 	if string(got) != string(prefix) {
 		t.Fatalf("AppendSection returned %q want original prefix %q", got, prefix)
 	}
+
+	got, err = AppendSectionHeader(prefix, SectionCollectionRef, 1<<63, 0)
+	if codeOf(err) != ErrUnsupportedFeature {
+		t.Fatalf("AppendSectionHeader flags err=%v code=%d want unsupported feature", err, codeOf(err))
+	}
+	if string(got) != string(prefix) {
+		t.Fatalf("AppendSectionHeader flags returned %q want original prefix %q", got, prefix)
+	}
+
+	got, err = AppendSectionHeader(prefix, SectionCollectionRef, 0, -1)
+	if codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("AppendSectionHeader length err=%v code=%d want malformed frame", err, codeOf(err))
+	}
+	if string(got) != string(prefix) {
+		t.Fatalf("AppendSectionHeader length returned %q want original prefix %q", got, prefix)
+	}
 }
 
 func TestByteVectorRejectsLengthMismatch(t *testing.T) {

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strings"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -33,6 +32,12 @@ func (e *WireError) Error() string {
 	return fmt.Sprintf("nativewire: remote error code %d: %s", e.Code, e.Message)
 }
 
+// IsCatalogVersionMismatch reports whether err is a remote catalog-version
+// guard failure.
+func IsCatalogVersionMismatch(err error) bool {
+	return isRemoteError(err, iwire.ErrCatalogVersionMismatch)
+}
+
 func errorCodeFor(err error) iwire.ErrorCode {
 	if err == nil {
 		return 0
@@ -57,23 +62,6 @@ func errorCodeFor(err error) iwire.ErrorCode {
 		return iwire.ErrUniqueIndexConflict
 	case errors.Is(err, backenddb.ErrClosed), errors.Is(err, ErrServerClosed), errors.Is(err, net.ErrClosed), errors.Is(err, io.ErrClosedPipe):
 		return iwire.ErrCanceled
-	}
-	msg := strings.ToLower(err.Error())
-	switch {
-	case strings.Contains(msg, "document id cannot be empty"):
-		return iwire.ErrInvalidCommand
-	case strings.Contains(msg, "duplicate document id"):
-		return iwire.ErrDuplicateDocumentID
-	case strings.Contains(msg, "duplicate index"):
-		return iwire.ErrInvalidCommand
-	case strings.Contains(msg, "document already exists"):
-		return iwire.ErrDocumentExists
-	case strings.Contains(msg, "unique index conflict"):
-		return iwire.ErrUniqueIndexConflict
-	case strings.Contains(msg, "collection not found"):
-		return iwire.ErrCollectionNotFound
-	case strings.Contains(msg, "index not found"):
-		return iwire.ErrIndexNotFound
 	}
 	return iwire.ErrInternal
 }
