@@ -24,6 +24,7 @@ type CommandSchema struct {
 	Version              uint64
 	Name                 string
 	Kind                 CommandKind
+	AllowedCommandFlags  uint64
 	Replicated           bool
 	LocalOnly            bool
 	RequiresIdempotency  bool
@@ -65,8 +66,8 @@ func NewRegistry(commands ...CommandSchema) (*Registry, error) {
 		}
 		ruleSeen := make(map[SectionID]struct{}, len(c.Sections))
 		for _, rule := range c.Sections {
-			if rule.ID < CommandSpecificSectionStart {
-				return nil, fmt.Errorf("nativewire: command %s uses non-command section %d", c.Name, rule.ID)
+			if !validSchemaSectionID(rule.ID) {
+				return nil, fmt.Errorf("nativewire: command %s uses invalid section %d", c.Name, rule.ID)
 			}
 			if _, exists := ruleSeen[rule.ID]; exists {
 				return nil, fmt.Errorf("nativewire: command %s duplicates section rule %d", c.Name, rule.ID)
@@ -102,6 +103,9 @@ func (r *Registry) ValidateRequestSections(sections []Section) (ValidatedCommand
 	schema, ok := r.LookupCommand(header.ID, header.Version)
 	if !ok {
 		return ValidatedCommand{}, protocolError(ErrUnsupportedVersion, "unsupported command %d version %d", header.ID, header.Version)
+	}
+	if unsupported := header.Flags &^ schema.AllowedCommandFlags; unsupported != 0 {
+		return ValidatedCommand{}, protocolError(ErrUnsupportedFeature, "unsupported command flags 0x%x", unsupported)
 	}
 	known, ignored, err := schema.validateSections(sections)
 	if err != nil {
@@ -169,7 +173,7 @@ func (c *CommandSchema) validateSections(sections []Section) ([]Section, []Secti
 		}
 	}
 	if c.RequiresIdempotency && seen[SectionIdempotencyKey] == 0 {
-		return nil, nil, protocolError(ErrInvalidCommand, "missing idempotency identity")
+		return nil, nil, protocolError(ErrInvalidCommand, "missing idempotency key")
 	}
 	if c.RequiresCatalogGuard && seen[SectionExpectedCatalogVersion] == 0 {
 		return nil, nil, protocolError(ErrInvalidCommand, "missing catalog guard")
@@ -192,6 +196,24 @@ func (c *CommandSchema) ruleMap() map[SectionID]SectionRule {
 		rules[rule.ID] = rule
 	}
 	return rules
+}
+
+func validSchemaSectionID(id SectionID) bool {
+	if id >= CommandSpecificSectionStart {
+		return true
+	}
+	switch id {
+	case SectionDeadline,
+		SectionTraceContext,
+		SectionAckPolicy,
+		SectionConsistencyPolicy,
+		SectionIdempotencyKey,
+		SectionChecksum,
+		SectionCompression:
+		return true
+	default:
+		return false
+	}
 }
 
 func v1CommandSchemas() []CommandSchema {

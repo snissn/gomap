@@ -33,7 +33,7 @@ func DecodeByteVector(src []byte, limits Limits) (ByteVector, error) {
 		return ByteVector{}, protocolError(ErrResourceExhausted, "byte-vector count exceeds int capacity")
 	}
 	if count64 > uint64(len(src)-off) {
-		return ByteVector{}, protocolError(ErrMalformedFrame, "byte-vector count %d exceeds remaining length table bytes %d", count64, len(src)-off)
+		return ByteVector{}, protocolError(ErrMalformedFrame, "byte-vector count %d exceeds remaining bytes %d", count64, len(src)-off)
 	}
 	count := int(count64)
 	offsets := make([]int, count)
