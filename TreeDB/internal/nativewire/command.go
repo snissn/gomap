@@ -6,6 +6,19 @@ type CommandHeader struct {
 	Flags   uint64
 }
 
+// Deterministic entries intentionally include no command flags in R0c. Response
+// shaping flags are transport-only until a future replicated command version
+// explicitly defines deterministic flag semantics.
+const deterministicCommandFlagsMask uint64 = 0
+
+func DeterministicCommandFlags(flags uint64) uint64 {
+	return flags & deterministicCommandFlagsMask
+}
+
+func UnsupportedDeterministicCommandFlags(flags uint64) uint64 {
+	return flags &^ deterministicCommandFlagsMask
+}
+
 func AppendCommandHeader(dst []byte, h CommandHeader) []byte {
 	dst = appendUvarint(dst, uint64(h.ID))
 	dst = appendUvarint(dst, h.Version)
