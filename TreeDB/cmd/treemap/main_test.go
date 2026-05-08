@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -174,6 +175,77 @@ func TestCompactCommandsExposeFullStoragePath(t *testing.T) {
 		!strings.Contains(compactOut, "storage-domain: name=value_vlog") {
 		t.Fatalf("compact output missing full-storage report:\n%s", compactOut)
 	}
+}
+
+func TestCompactCommandReplaysCachedWALBeforeCompaction(t *testing.T) {
+	dir := t.TempDir()
+	runCompactPendingWALWriter(t, dir)
+
+	_ = captureStdout(t, func() {
+		runCompact(dir, []string{"-rw"})
+	})
+
+	db, err := treedb.Open(treedb.Options{Dir: dir, ReadOnly: true})
+	if err != nil {
+		t.Fatalf("open read-only after compact: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	got, err := db.Get([]byte("pending-after-crash"))
+	if err != nil {
+		t.Fatalf("get replayed key: %v", err)
+	}
+	if want := bytes.Repeat([]byte("p"), 8192); !bytes.Equal(got, want) {
+		t.Fatalf("replayed value mismatch: got=%dB want=%dB", len(got), len(want))
+	}
+}
+
+func runCompactPendingWALWriter(t *testing.T, dir string) {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	cmd := exec.Command(exe, "-test.run=^TestHelperTreemapCompactPendingWALWriter$", "-test.v")
+	cmd.Env = append(os.Environ(),
+		"TREEMAP_COMPACT_WAL_HELPER=1",
+		"TREEMAP_COMPACT_WAL_DIR="+dir,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("compact pending WAL helper failed: %v\n%s", err, out)
+	}
+}
+
+func TestHelperTreemapCompactPendingWALWriter(t *testing.T) {
+	if os.Getenv("TREEMAP_COMPACT_WAL_HELPER") != "1" {
+		t.Skip("helper")
+	}
+	dir := os.Getenv("TREEMAP_COMPACT_WAL_DIR")
+	if dir == "" {
+		t.Fatalf("missing TREEMAP_COMPACT_WAL_DIR")
+	}
+
+	opts := treedb.OptionsFor(treedb.ProfileWALOnFast, dir)
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.FlushThreshold = 1 << 30
+	opts.JournalLanes = 1
+	opts.MaxWALBytes = -1
+	opts.ValueLog.ForcePointers = true
+	opts.ValueLog.PointerThreshold = 1
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := db.SetSync([]byte("pending-after-crash"), bytes.Repeat([]byte("p"), 8192)); err != nil {
+		t.Fatalf("SetSync: %v", err)
+	}
+
+	// Simulate a process crash with cached WAL present and no clean close/checkpoint.
+	os.Exit(0)
 }
 
 func captureStdout(t *testing.T, fn func()) string {

@@ -82,7 +82,7 @@ type CompactStorageDebt struct {
 	ValueLogGCBytes         int64 `json:"value_log_gc_bytes"`
 	LeafPackGenerations     int   `json:"leaf_pack_generations"`
 	LeafPackBytes           int64 `json:"leaf_pack_bytes"`
-	LeafGCSegments          int   `json:"leaf_gc_generations"`
+	LeafGCGenerations       int   `json:"leaf_gc_generations"`
 	LeafGCBytes             int64 `json:"leaf_gc_bytes"`
 	ZeroByteValueLogFiles   int   `json:"zero_byte_value_log_files"`
 }
@@ -95,7 +95,7 @@ func (d CompactStorageDebt) Empty() bool {
 		d.ValueLogGCBytes == 0 &&
 		d.LeafPackGenerations == 0 &&
 		d.LeafPackBytes == 0 &&
-		d.LeafGCSegments == 0 &&
+		d.LeafGCGenerations == 0 &&
 		d.LeafGCBytes == 0 &&
 		d.ZeroByteValueLogFiles == 0
 }
@@ -352,7 +352,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 		if err != nil {
 			return err
 		}
-		if debt.ValueLogGCSegments == 0 && debt.LeafGCSegments == 0 {
+		if debt.ValueLogGCSegments == 0 && debt.LeafGCGenerations == 0 {
 			return nil
 		}
 		if debt.ValueLogGCSegments > 0 {
@@ -370,7 +370,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 				return err
 			}
 		}
-		if debt.LeafGCSegments > 0 {
+		if debt.LeafGCGenerations > 0 {
 			phaseName := fmt.Sprintf("settle-leaf-generation-gc-%d", pass+1)
 			if err := db.runCompactStoragePhase(stats, phaseName, func() error {
 				gc, err := db.leafGenerationGC(ctx, LeafGenerationGCOptions{}, lockMaintenance)
@@ -495,7 +495,7 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 		return debt, err
 	}
 	stats.LeafGenerationGC = leafGC
-	debt.LeafGCSegments = leafGC.GenerationsEligible
+	debt.LeafGCGenerations = leafGC.GenerationsEligible
 	debt.LeafGCBytes = leafGC.BytesEligible
 
 	usage, err := compactStorageUsage(db.dir)

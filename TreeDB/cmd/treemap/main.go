@@ -512,14 +512,11 @@ func runCompact(dir string, args []string) {
 		fatalf("compact -scope must be all or index")
 	}
 
-	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir, ReadOnly: false})
-	if err != nil {
-		fatalf("Failed to open DB: %v", err)
-	}
-	defer func() { _ = cleanup() }()
+	db := openTreeDB(dir, true)
+	defer closeTreeDB(db)
 
-	stats, err := backend.CompactStorage(context.Background(), treedbdb.CompactStorageOptions{
-		Mode:                           parseCompactStorageModeFlag("compact", *mode),
+	stats, err := db.CompactStorage(context.Background(), treedb.CompactStorageOptions{
+		Mode:                           treedb.CompactStorageMode(parseCompactStorageModeFlag("compact", *mode)),
 		SyncEachPhase:                  *syncEachPhase,
 		ValueLogRewriteBatchSize:       *batchSize,
 		ValueLogRewriteMaxSegmentBytes: *maxSegmentBytes,
@@ -590,7 +587,7 @@ func printCompactStorageStats(stats treedb.CompactStorageStats, jsonOut bool) {
 		stats.RemainingDebt.ValueLogGCBytes,
 		stats.RemainingDebt.LeafPackGenerations,
 		stats.RemainingDebt.LeafPackBytes,
-		stats.RemainingDebt.LeafGCSegments,
+		stats.RemainingDebt.LeafGCGenerations,
 		stats.RemainingDebt.LeafGCBytes,
 		stats.RemainingDebt.ZeroByteValueLogFiles,
 	)
