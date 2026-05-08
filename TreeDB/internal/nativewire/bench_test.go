@@ -566,6 +566,11 @@ func nativewireBenchmarkCases() []nativewireBenchmarkCase {
 	deleteIDs := AppendByteVector(nil, makeBenchmarkItems("del_id", 128, 16)...)
 	getIDs := AppendByteVector(nil, makeBenchmarkItems("get_id", 128, 16)...)
 	templateRecords := AppendByteVector(nil, []byte("template:orders:v1"))
+	indexName := benchmarkString("city")
+	indexValue := benchmarkScalarString("hnl")
+	indexLower := benchmarkIndexBound("h", true, false)
+	indexUpper := benchmarkIndexBound("z", true, false)
+	cursorLimits := benchmarkCursorLimits(128, 0)
 
 	cases := []nativewireBenchmarkCase{
 		{
@@ -625,6 +630,31 @@ func nativewireBenchmarkCases() []nativewireBenchmarkCase {
 			},
 		},
 		{
+			name:      "index_lookup_128_limit",
+			commandID: CommandIndexLookup,
+			items:     128,
+			sections: []Section{
+				benchmarkCommandSection(CommandIndexLookup),
+				{ID: SectionCollectionRef, Bytes: []byte("orders")},
+				{ID: SectionIndexName, Bytes: indexName},
+				{ID: SectionIndexValue, Bytes: indexValue},
+				{ID: SectionCursorLimits, Bytes: cursorLimits},
+			},
+		},
+		{
+			name:      "index_range_bounded_128_limit",
+			commandID: CommandIndexRange,
+			items:     128,
+			sections: []Section{
+				benchmarkCommandSection(CommandIndexRange),
+				{ID: SectionCollectionRef, Bytes: []byte("orders")},
+				{ID: SectionIndexName, Bytes: indexName},
+				{ID: SectionIndexLowerBound, Bytes: indexLower},
+				{ID: SectionIndexUpperBound, Bytes: indexUpper},
+				{ID: SectionCursorLimits, Bytes: cursorLimits},
+			},
+		},
+		{
 			name:      "open_scan_primary",
 			commandID: CommandOpenScan,
 			items:     1,
@@ -645,6 +675,39 @@ func benchmarkCommandSection(id CommandID) Section {
 		ID:    SectionCommandHeader,
 		Bytes: AppendCommandHeader(nil, CommandHeader{ID: id, Version: 1}),
 	}
+}
+
+func benchmarkString(s string) []byte {
+	dst := appendUvarint(nil, uint64(len(s)))
+	return append(dst, s...)
+}
+
+func benchmarkScalarString(s string) []byte {
+	dst := appendUvarint(nil, 1)
+	return append(dst, benchmarkString(s)...)
+}
+
+func benchmarkIndexBound(s string, inclusive, unbounded bool) []byte {
+	var dst []byte
+	if unbounded {
+		dst = append(dst, 1)
+	} else {
+		dst = append(dst, 0)
+	}
+	if inclusive {
+		dst = append(dst, 1)
+	} else {
+		dst = append(dst, 0)
+	}
+	if unbounded {
+		return dst
+	}
+	return append(dst, benchmarkScalarString(s)...)
+}
+
+func benchmarkCursorLimits(maxItems, maxBytes uint64) []byte {
+	dst := appendUvarint(nil, maxItems)
+	return appendUvarint(dst, maxBytes)
 }
 
 func benchmarkRequestBody(sections []Section) []byte {

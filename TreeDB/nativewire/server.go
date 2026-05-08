@@ -16,38 +16,67 @@ import (
 )
 
 const (
-	defaultMaxInFlight          = 1024
-	defaultMaxCollectionHandles = 1024
+	defaultMaxInFlight            = 1024
+	defaultMaxCollectionHandles   = 1024
+	defaultMaxOpenCursors         = 1024
+	defaultMaxCursorRetainedBytes = 64 << 20
+	defaultMaxScanDocuments       = 10000
+	defaultCursorBatchSize        = 101
+	defaultCursorIdleTimeout      = 10 * time.Minute
 )
 
 // ServerOptions configures a native-wire server.
 type ServerOptions struct {
-	Limits               iwire.Limits
-	MaxInFlight          int
-	MaxCollectionHandles int
-	DefaultAckPolicy     iwire.AckPolicy
-	Collections          *collections.CollectionManager
-	Backend              *backenddb.DB
+	Limits                 iwire.Limits
+	MaxInFlight            int
+	MaxCollectionHandles   int
+	MaxOpenCursors         int
+	MaxCursorRetainedBytes int
+	MaxScanDocuments       int
+	DefaultCursorBatchSize int
+	CursorIdleTimeout      time.Duration
+	DefaultAckPolicy       iwire.AckPolicy
+	Collections            *collections.CollectionManager
+	Backend                *backenddb.DB
 }
 
 // Server serves native-wire control and command frames for TreeDB.
 type Server struct {
-	limits               iwire.Limits
-	maxInFlight          int
-	maxCollectionHandles int
-	defaultAckPolicy     iwire.AckPolicy
-	registry             *iwire.Registry
-	collections          *collections.CollectionManager
-	backend              *backenddb.DB
+	limits                 iwire.Limits
+	maxInFlight            int
+	maxCollectionHandles   int
+	maxOpenCursors         int
+	maxCursorRetainedBytes int
+	maxScanDocuments       int
+	defaultCursorBatchSize int
+	cursorIdleTimeout      time.Duration
+	defaultAckPolicy       iwire.AckPolicy
+	registry               *iwire.Registry
+	collections            *collections.CollectionManager
+	backend                *backenddb.DB
 
 	closed     atomic.Bool
 	connMu     sync.Mutex
 	conns      map[net.Conn]struct{}
 	metadataMu sync.Mutex
 
-	inFlight atomic.Int64
-	nextConn atomic.Int64
-	counters counters
+	inFlight   atomic.Int64
+	nextConn   atomic.Int64
+	nextCursor atomic.Uint64
+	reapMu     sync.Mutex
+	nextReap   time.Time
+	cursorMu   sync.Mutex
+	cursors    map[uint64]*serverCursor
+	counters   counters
+}
+
+type serverCursor struct {
+	owner     uint64
+	records   []collections.DocumentRecord
+	pos       int
+	lastUsed  time.Time
+	bytes     int
+	truncated bool
 }
 
 type connState struct {
@@ -123,18 +152,46 @@ func NewServer(opts ServerOptions) *Server {
 	if maxCollectionHandles <= 0 {
 		maxCollectionHandles = defaultMaxCollectionHandles
 	}
+	maxOpenCursors := opts.MaxOpenCursors
+	if maxOpenCursors <= 0 {
+		maxOpenCursors = defaultMaxOpenCursors
+	}
+	maxCursorRetainedBytes := opts.MaxCursorRetainedBytes
+	if maxCursorRetainedBytes <= 0 {
+		maxCursorRetainedBytes = defaultMaxCursorRetainedBytes
+	}
+	maxScanDocuments := opts.MaxScanDocuments
+	if maxScanDocuments <= 0 {
+		maxScanDocuments = defaultMaxScanDocuments
+	}
+	cursorBatchSize := opts.DefaultCursorBatchSize
+	if cursorBatchSize <= 0 {
+		cursorBatchSize = defaultCursorBatchSize
+	}
+	cursorIdleTimeout := opts.CursorIdleTimeout
+	if cursorIdleTimeout == 0 {
+		cursorIdleTimeout = defaultCursorIdleTimeout
+	}
+	if cursorIdleTimeout < 0 {
+		cursorIdleTimeout = 0
+	}
 	defaultAck := opts.DefaultAckPolicy
 	if defaultAck == 0 {
 		defaultAck = iwire.AckVisible
 	}
 	return &Server{
-		limits:               limits,
-		maxInFlight:          maxInFlight,
-		maxCollectionHandles: maxCollectionHandles,
-		defaultAckPolicy:     defaultAck,
-		registry:             iwire.MustV1Registry(),
-		collections:          opts.Collections,
-		backend:              opts.Backend,
+		limits:                 limits,
+		maxInFlight:            maxInFlight,
+		maxCollectionHandles:   maxCollectionHandles,
+		maxOpenCursors:         maxOpenCursors,
+		maxCursorRetainedBytes: maxCursorRetainedBytes,
+		maxScanDocuments:       maxScanDocuments,
+		defaultCursorBatchSize: cursorBatchSize,
+		cursorIdleTimeout:      cursorIdleTimeout,
+		defaultAckPolicy:       defaultAck,
+		registry:               iwire.MustV1Registry(),
+		collections:            opts.Collections,
+		backend:                opts.Backend,
 	}
 }
 
@@ -173,6 +230,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 	defer conn.Close()
 
 	state := &connState{id: uint64(s.nextConn.Add(1))}
+	defer s.killCursorsForOwner(state.id)
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
@@ -182,6 +240,9 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		case <-done:
 		}
 	}()
+	if s.cursorIdleTimeout > 0 {
+		go s.reapExpiredCursorsUntilDone(done)
+	}
 
 	for {
 		if s.closed.Load() {
@@ -283,6 +344,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	if ctx.Err() != nil {
 		return s.writeError(w, header, ctx.Err())
 	}
+	s.reapExpiredCursors()
 	if s.inFlight.Add(1) > int64(s.maxInFlight) {
 		s.inFlight.Add(-1)
 		return s.writeError(w, header, protocolError(iwire.ErrResourceExhausted, "too many in-flight requests"))
@@ -320,6 +382,18 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 		responseSections, err = s.handleCloseCollection(state, cmd.Known)
 	case iwire.CommandDropCollection:
 		err = unsupportedDropCollection()
+	case iwire.CommandGetMany:
+		responseSections, err = s.handleGetMany(state, cmd.Known)
+	case iwire.CommandIndexLookup:
+		responseSections, err = s.handleIndexLookup(state, cmd.Known)
+	case iwire.CommandIndexRange:
+		responseSections, err = s.handleIndexRange(state, cmd.Known)
+	case iwire.CommandOpenScan:
+		responseSections, err = s.handleOpenScan(state, cmd.Known)
+	case iwire.CommandCursorNext:
+		responseSections, err = s.handleCursorNext(state, header.StreamID, cmd.Known)
+	case iwire.CommandCursorClose:
+		responseSections, err = s.handleCursorClose(state, header.StreamID, cmd.Known)
 	case iwire.CommandStats:
 		responseSections = []iwire.Section{{ID: iwire.SectionResponseMeta, Bytes: appendStringMap(nil, s.Stats())}}
 	default:
@@ -427,6 +501,7 @@ func (s *Server) Stats() map[string]string {
 		out[nativeStatsPrefix+key] = strconv.FormatUint(value, 10)
 	}
 	out[nativeStatsPrefix+"requests.in_flight"] = strconv.FormatInt(s.inFlight.Load(), 10)
+	out[nativeStatsPrefix+"cursors.open"] = strconv.Itoa(s.openCursorCount())
 	if version, err := s.currentCatalogVersion(); err == nil {
 		out[nativeStatsPrefix+"catalog.version"] = strconv.FormatUint(version, 10)
 	}
