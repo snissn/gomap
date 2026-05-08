@@ -70,7 +70,7 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		return out, err
 	}
 	stats, err := db.backend.CompactStorage(ctx, treedbdb.CompactStorageOptions(opts))
-	if err != nil {
+	if err = db.reconcileCachedBackendMaintenance(err); err != nil {
 		return out, err
 	}
 	success = true

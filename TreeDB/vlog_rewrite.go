@@ -89,7 +89,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 	}
 	stats, err := db.backend.ValueLogRewriteOnline(ctx, backendOpts)
-	if err != nil {
+	if err = db.reconcileCachedBackendMaintenance(err); err != nil {
 		return ValueLogRewriteStats{}, err
 	}
 	success = true

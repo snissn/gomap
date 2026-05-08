@@ -5734,6 +5734,13 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 	return reconcileErr
 }
 
+// ReconcileAfterBackendMaintenance refreshes cached-mode value-log readers and
+// advances split value-log writers past segments created directly by backend
+// maintenance.
+func (db *DB) ReconcileAfterBackendMaintenance() error {
+	return db.reconcileSplitValueLogWritersAfterBackendMaintenance()
+}
+
 func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenance() error {
 	if db == nil || db.closing.Load() {
 		return nil
