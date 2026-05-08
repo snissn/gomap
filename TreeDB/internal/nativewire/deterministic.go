@@ -725,6 +725,7 @@ func validateDeterministicSectionPayload(section Section, limits Limits) error {
 }
 
 func validateDeterministicOpaquePayload(name string, raw []byte, limits Limits) error {
+	limits = limits.withDefaults()
 	if len(raw) == 0 {
 		return protocolError(ErrInvalidCommand, "%s cannot be empty", name)
 	}
@@ -735,32 +736,17 @@ func validateDeterministicOpaquePayload(name string, raw []byte, limits Limits) 
 }
 
 func validateDeterministicEncodedNameField(name string, raw []byte, limits Limits) error {
-	limits = limits.withDefaults()
 	if len(raw) == 0 {
 		return protocolError(ErrInvalidCommand, "%s cannot be empty", name)
 	}
-	length, n, err := readUvarint(raw)
-	if err != nil {
-		return protocolError(ErrMalformedFrame, "invalid %s length: %v", name, err)
+	off := 0
+	if err := readDeterministicNameField(raw, &off, name, limits); err != nil {
+		return err
 	}
-	remaining := len(raw) - n
-	if length > uint64(remaining) {
-		return protocolError(ErrMalformedFrame, "%s length exceeds remaining payload", name)
-	}
-	if length == 0 {
-		return protocolError(ErrInvalidCommand, "%s cannot be empty", name)
-	}
-	if length > limits.MaxDeterministicNameBytes {
-		return protocolError(ErrResourceExhausted, "%s length %d exceeds limit %d", name, length, limits.MaxDeterministicNameBytes)
-	}
-	if length > uint64(maxInt) {
-		return protocolError(ErrResourceExhausted, "%s length exceeds int capacity", name)
-	}
-	valueLen := int(length)
-	if valueLen != remaining {
+	if off != len(raw) {
 		return protocolError(ErrMalformedFrame, "%s has trailing bytes", name)
 	}
-	return validateDeterministicNameValue(name, raw[n:n+valueLen], limits)
+	return nil
 }
 
 func validateDeterministicDocumentIDs(raw []byte, limits Limits) error {
