@@ -114,19 +114,38 @@ func appendInsertBatchRequestBodyRefFlags(dst []byte, collection string, handle 
 	docsLen := iwire.ByteVectorEncodedLen(docs)
 	total := iwire.SectionHeaderEncodedLen(iwire.SectionCommandHeader, 0, len(commandPayload)) + len(commandPayload)
 	for _, section := range guard {
-		total += iwire.SectionEncodedLen(section)
+		var err error
+		total, err = addRequestBodyLen(total, iwire.SectionEncodedLen(section))
+		if err != nil {
+			return nil, err
+		}
 	}
-	total += iwire.SectionHeaderEncodedLen(iwire.SectionCollectionRef, 0, refLen) + refLen
-	total += iwire.SectionHeaderEncodedLen(iwire.SectionDocumentFormat, 0, len(formatPayload)) + len(formatPayload)
-	total += iwire.SectionHeaderEncodedLen(iwire.SectionDocumentIDs, 0, idsLen) + idsLen
-	total += iwire.SectionHeaderEncodedLen(iwire.SectionDocuments, 0, docsLen) + docsLen
+	var err error
+	total, err = addRequestBodyLen(total, iwire.SectionHeaderEncodedLen(iwire.SectionCollectionRef, 0, refLen)+refLen)
+	if err != nil {
+		return nil, err
+	}
+	total, err = addRequestBodyLen(total, iwire.SectionHeaderEncodedLen(iwire.SectionDocumentFormat, 0, len(formatPayload))+len(formatPayload))
+	if err != nil {
+		return nil, err
+	}
+	total, err = addRequestBodyLen(total, iwire.SectionHeaderEncodedLen(iwire.SectionDocumentIDs, 0, idsLen)+idsLen)
+	if err != nil {
+		return nil, err
+	}
+	total, err = addRequestBodyLen(total, iwire.SectionHeaderEncodedLen(iwire.SectionDocuments, 0, docsLen)+docsLen)
+	if err != nil {
+		return nil, err
+	}
 	if ack != 0 {
-		total += iwire.SectionHeaderEncodedLen(iwire.SectionAckPolicy, 0, len(ackPayload)) + len(ackPayload)
+		total, err = addRequestBodyLen(total, iwire.SectionHeaderEncodedLen(iwire.SectionAckPolicy, 0, len(ackPayload))+len(ackPayload))
+		if err != nil {
+			return nil, err
+		}
 	}
-	if cap(dst)-len(dst) < total {
-		next := make([]byte, len(dst), len(dst)+total)
-		copy(next, dst)
-		dst = next
+	dst, err = growRequestBody(dst, total)
+	if err != nil {
+		return nil, err
 	}
 	body, err := appendRawSection(dst, iwire.SectionCommandHeader, commandPayload)
 	if err != nil {
