@@ -76,6 +76,26 @@ func TestNewInProcessClientLocalEndpoint(t *testing.T) {
 	}
 }
 
+func TestServerCloseClosesInProcessClient(t *testing.T) {
+	server := NewServer(ServerOptions{})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	client, cleanup, err := NewInProcessClient(ctx, server)
+	if err != nil {
+		t.Fatalf("NewInProcessClient: %v", err)
+	}
+	defer func() { _ = cleanup() }()
+	if err := server.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := client.Ping(ctx); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Ping after server close err=%v want closed pipe", err)
+	}
+	if got := server.Stats()["treedb.native_wire.connections.closed_total"]; got != "1" {
+		t.Fatalf("closed_total=%q want 1", got)
+	}
+}
+
 func TestNewInProcessClientNormalizesNilContext(t *testing.T) {
 	server := NewServer(ServerOptions{})
 	client, cleanup, err := NewInProcessClient(nil, server)

@@ -84,7 +84,10 @@ func NewInProcessClient(ctx context.Context, server *Server) (*Client, func() er
 	if ctx != nil && ctx.Err() != nil {
 		return nil, nil, ctx.Err()
 	}
-	local := newLocalEndpoint(server)
+	local, ok := newLocalEndpoint(server)
+	if !ok {
+		return nil, nil, ErrServerClosed
+	}
 	client := &Client{local: local, limits: server.limits}
 	if err := client.Hello(ctx); err != nil {
 		_ = local.close()
@@ -104,14 +107,19 @@ type localEndpoint struct {
 	frame  []byte
 }
 
-func newLocalEndpoint(server *Server) *localEndpoint {
+func newLocalEndpoint(server *Server) (*localEndpoint, bool) {
 	state := &connState{id: uint64(server.nextConn.Add(1))}
 	done := make(chan struct{})
-	server.counters.inc("connections.opened_total")
+	endpoint := &localEndpoint{server: server, state: state, done: done}
+	if !server.registerLocalEndpoint(endpoint) {
+		close(done)
+		endpoint.closed.Store(true)
+		return nil, false
+	}
 	if server.cursorIdleTimeout > 0 {
 		go server.reapExpiredCursorsUntilDone(done)
 	}
-	return &localEndpoint{server: server, state: state, done: done}
+	return endpoint, true
 }
 
 func (e *localEndpoint) close() error {
@@ -126,7 +134,7 @@ func (e *localEndpoint) close() error {
 	}
 	if e.server != nil {
 		e.server.killCursorsForOwner(e.state.id)
-		e.server.counters.inc("connections.closed_total")
+		e.server.unregisterLocalEndpoint(e)
 	}
 	return nil
 }
