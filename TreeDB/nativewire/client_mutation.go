@@ -42,14 +42,15 @@ func (c *Client) insertBatch(ctx context.Context, collection string, handle Coll
 	_, response, err := c.roundTripLocked(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
 	c.requestBody = body[:0]
 	if err != nil {
+		c.clearCatalogVersionOnMismatch(err)
 		return nil, err
 	}
-	c.catalogVersionPlusOne.Store(0)
 	var sectionBuf [4]iwire.Section
 	sections, err := iwire.DecodeSectionsInto(sectionBuf[:0], response, c.limits)
 	if err != nil {
 		return nil, err
 	}
+	c.updateCatalogVersionFromMutationResponse(sections)
 	rawIDs, ok, err := singletonSection(sections, iwire.SectionDocumentIDs)
 	if err != nil {
 		return nil, err
@@ -76,10 +77,12 @@ func (c *Client) insertBatchNoResult(ctx context.Context, collection string, han
 	}
 	err = c.roundTripLockedDiscardResponse(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
 	c.requestBody = body[:0]
-	if err == nil {
-		c.catalogVersionPlusOne.Store(0)
+	if err != nil {
+		c.clearCatalogVersionOnMismatch(err)
+		return err
 	}
-	return err
+	c.clearCatalogVersionAfterOpaqueMutation()
+	return nil
 }
 
 func appendInsertBatchRequestBody(dst []byte, collection string, format collections.DocumentFormat, ids, docs [][]byte, ack AckPolicy) ([]byte, error) {
@@ -181,9 +184,10 @@ func (c *Client) ReplaceBatch(ctx context.Context, collection string, format col
 	}
 	sections, err := c.commandSections(ctx, iwire.CommandReplaceBatch, req...)
 	if err != nil {
+		c.clearCatalogVersionOnMismatch(err)
 		return 0, 0, err
 	}
-	c.catalogVersionPlusOne.Store(0)
+	c.updateCatalogVersionFromMutationResponse(sections)
 	matched, err = responseCount(sections, "matched_count")
 	if err != nil {
 		return 0, 0, err
@@ -206,9 +210,10 @@ func (c *Client) DeleteBatch(ctx context.Context, collection string, ids [][]byt
 	}
 	sections, err := c.commandSections(ctx, iwire.CommandDeleteBatch, req...)
 	if err != nil {
+		c.clearCatalogVersionOnMismatch(err)
 		return 0, err
 	}
-	c.catalogVersionPlusOne.Store(0)
+	c.updateCatalogVersionFromMutationResponse(sections)
 	return responseCount(sections, "deleted_count")
 }
 

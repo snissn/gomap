@@ -34,6 +34,7 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		case <-done:
 		}
 	}()
+	connSlots := make(chan struct{}, s.maxConnections)
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -45,7 +46,15 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 			}
 			return err
 		}
+		select {
+		case connSlots <- struct{}{}:
+		default:
+			s.counters.inc("connections.rejected_total")
+			_ = conn.Close()
+			continue
+		}
 		go func() {
+			defer func() { <-connSlots }()
 			_ = s.ServeConn(ctx, conn)
 		}()
 	}
@@ -76,7 +85,7 @@ func NewInProcessClient(ctx context.Context, server *Server) (*Client, func() er
 		return nil, nil, ctx.Err()
 	}
 	local := newLocalEndpoint(server)
-	client := &Client{local: local, limits: iwire.DefaultLimits()}
+	client := &Client{local: local, limits: server.limits}
 	if err := client.Hello(ctx); err != nil {
 		_ = local.close()
 		return nil, nil, err
@@ -125,6 +134,9 @@ func (e *localEndpoint) Write(p []byte) (int, error) {
 func (e *localEndpoint) roundTrip(ctx context.Context, streamID uint64, typ iwire.FrameType, requestID uint64, body []byte, want iwire.FrameType, limits iwire.Limits, responseDst []byte, copyResponse bool) (iwire.Header, []byte, error) {
 	if e == nil || e.server == nil || e.closed.Load() || e.server.closed.Load() {
 		return iwire.Header{}, nil, io.ErrClosedPipe
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	if ctx != nil && ctx.Err() != nil {
 		return iwire.Header{}, nil, ctx.Err()

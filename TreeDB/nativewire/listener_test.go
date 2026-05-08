@@ -5,11 +5,12 @@ import (
 	"errors"
 	"io"
 	"net"
-	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
+
+	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
 func TestServeTCPAndDialContext(t *testing.T) {
@@ -72,6 +73,30 @@ func TestNewInProcessClientLocalEndpoint(t *testing.T) {
 	}
 	if got := server.Stats()["treedb.native_wire.connections.closed_total"]; got != "1" {
 		t.Fatalf("closed_total=%q want 1", got)
+	}
+}
+
+func TestNewInProcessClientNormalizesNilContext(t *testing.T) {
+	server := NewServer(ServerOptions{})
+	client, cleanup, err := NewInProcessClient(nil, server)
+	if err != nil {
+		t.Fatalf("NewInProcessClient nil context: %v", err)
+	}
+	defer func() { _ = cleanup() }()
+	if err := client.Ping(nil); err != nil {
+		t.Fatalf("Ping nil context: %v", err)
+	}
+}
+
+func TestNewInProcessClientMirrorsServerLimits(t *testing.T) {
+	server := NewServer(ServerOptions{Limits: iwire.Limits{MaxSections: 7}})
+	client, cleanup, err := NewInProcessClient(context.Background(), server)
+	if err != nil {
+		t.Fatalf("NewInProcessClient: %v", err)
+	}
+	defer func() { _ = cleanup() }()
+	if client.limits.MaxSections != server.limits.MaxSections {
+		t.Fatalf("client MaxSections=%d want server limit %d", client.limits.MaxSections, server.limits.MaxSections)
 	}
 }
 
@@ -205,10 +230,5 @@ func TestNewInProcessClientCleanupIsIdempotent(t *testing.T) {
 
 func unixSocketPath(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "nw")
-	if err != nil {
-		t.Fatalf("MkdirTemp: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	return filepath.Join(dir, "s.sock")
+	return filepath.Join(t.TempDir(), "s.sock")
 }
