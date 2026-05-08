@@ -89,11 +89,21 @@ Coverage:
 
 Invariant:
 - Index rewrite/vacuum paths preserve data and handle pinned snapshots safely.
+- Full storage compaction preserves value visibility, removes reachable debt only
+  through the documented lifecycle, serializes backend maintenance phases, and
+  keeps cached-mode value-log writers from reusing backend-created segments.
 
 Coverage:
 - `TreeDB/db/compact_index_test.go`
 - `TreeDB/db/compact_index_sequential_alloc_test.go`
 - `TreeDB/db/vacuum_online_swap_test.go`
+- `TreeDB/db/compact_storage_test.go`
+  - `TestCompactStorageHoldsMaintenanceLockAcrossPhases`
+- `TreeDB/compact_storage_test.go`
+  - `TestCompactStorageFullPacksLeafGenerationDebtOffline`
+  - `TestCompactStorageCachedDeletesZeroByteValueLogFiles`
+- `TreeDB/compact_storage_cached_internal_test.go`
+  - `TestCompactStorageCachedAdvancesWritersPastBackendSegments`
 
 ## 8. Required Checks for Format/Behavior Changes
 
