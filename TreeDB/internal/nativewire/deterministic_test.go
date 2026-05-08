@@ -25,7 +25,7 @@ func TestDeterministicEntryGoldenAndTransportIndependence(t *testing.T) {
 		{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte("{}"))},
 		{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
-		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+		{ID: SectionExpectedCatalogVersion, Bytes: deterministicUvarintPayload(deterministicFixtureCatalogVersion)},
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 1})},
 		{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
 		{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("c")},
@@ -411,7 +411,7 @@ func TestDecodeDeterministicEntryClearsScratchTail(t *testing.T) {
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
 		{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("c")},
 		{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
-		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+		{ID: SectionExpectedCatalogVersion, Bytes: deterministicUvarintPayload(deterministicFixtureCatalogVersion)},
 	}
 	sortSectionsByID(sections)
 	raw := deterministicEntryTestRaw(CommandDeleteBatch, sections...)
@@ -619,7 +619,7 @@ func TestDeterministicEntryRequiresMetadataCatalogGuard(t *testing.T) {
 		t.Fatalf("missing metadata catalog guard err=%v code=%d", err, codeOf(err))
 	}
 
-	sections = append(sections, Section{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}})
+	sections = append(sections, Section{ID: SectionExpectedCatalogVersion, Bytes: deterministicUvarintPayload(deterministicFixtureCatalogVersion)})
 	cmd, err := registry.ValidateRequestSections(sections)
 	if err != nil {
 		t.Fatalf("ValidateRequestSections guarded: %v", err)
@@ -634,7 +634,7 @@ func TestDeterministicEntryRejectsMalformedMetadataPayloads(t *testing.T) {
 	sections := []Section{
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateCollection, Version: 1})},
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
-		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+		{ID: SectionExpectedCatalogVersion, Bytes: deterministicUvarintPayload(deterministicFixtureCatalogVersion)},
 		{ID: SectionCollectionMeta, Bytes: nil},
 	}
 	cmd, err := registry.ValidateRequestSections(sections)
@@ -724,7 +724,7 @@ func deterministicMetadataEntryRaw(command CommandID, sectionID SectionID, paylo
 	sections := []Section{
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: command, Version: 1})},
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
-		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+		{ID: SectionExpectedCatalogVersion, Bytes: deterministicUvarintPayload(deterministicFixtureCatalogVersion)},
 		{ID: sectionID, Bytes: payload},
 	}
 	if command == CommandCreateIndex {
@@ -738,7 +738,7 @@ func TestDeterministicMetadataRequiresTaggedCollectionName(t *testing.T) {
 	sections := []Section{
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateIndex, Version: 1})},
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
-		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+		{ID: SectionExpectedCatalogVersion, Bytes: deterministicUvarintPayload(deterministicFixtureCatalogVersion)},
 		{ID: SectionCollectionRef, Bytes: []byte("users")},
 		{ID: SectionIndexDefinition, Bytes: deterministicIndexDefinitionPayload("email", "email", deterministicIndexValueString, false, false, 0)},
 	}
@@ -1033,7 +1033,7 @@ func TestDeterministicDropIndexValidatesEncodedIndexName(t *testing.T) {
 	sections := []Section{
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandDropIndex, Version: 1})},
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
-		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+		{ID: SectionExpectedCatalogVersion, Bytes: deterministicUvarintPayload(deterministicFixtureCatalogVersion)},
 		{ID: SectionCollectionRef, Bytes: append([]byte{deterministicCollectionRefTagName}, []byte("users")...)},
 		{ID: SectionIndexName, Bytes: []byte{1, 'e', 'x'}},
 	}
@@ -1064,7 +1064,7 @@ func TestDeterministicIndexDefinitionRejectsInvalidIndexPaths(t *testing.T) {
 	sections := []Section{
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateIndex, Version: 1})},
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
-		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+		{ID: SectionExpectedCatalogVersion, Bytes: deterministicUvarintPayload(deterministicFixtureCatalogVersion)},
 		{ID: SectionCollectionRef, Bytes: append([]byte{deterministicCollectionRefTagName}, []byte("users")...)},
 		{ID: SectionIndexDefinition, Bytes: deterministicIndexDefinitionPayload("email", ".email", deterministicIndexValueString, false, false, 0)},
 	}
