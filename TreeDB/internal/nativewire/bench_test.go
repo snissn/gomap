@@ -638,9 +638,9 @@ func BenchmarkNativewireDeterministicEntryReplicatedCommands(b *testing.B) {
 
 func nativewireBenchmarkCases() []nativewireBenchmarkCase {
 	insertIDs := AppendByteVector(nil, makeBenchmarkItems("ins_id", 64, 16)...)
-	insertDocs := AppendByteVector(nil, makeBenchmarkItems("ins_doc", 64, 256)...)
+	insertDocs := AppendByteVector(nil, makeBenchmarkTemplateDocuments("ins_doc", 64, 256)...)
 	replaceIDs := AppendByteVector(nil, makeBenchmarkItems("rep_id", 64, 16)...)
-	replaceDocs := AppendByteVector(nil, makeBenchmarkItems("rep_doc", 64, 256)...)
+	replaceDocs := AppendByteVector(nil, makeBenchmarkTemplateDocuments("rep_doc", 64, 256)...)
 	deleteIDs := AppendByteVector(nil, makeBenchmarkItems("del_id", 128, 16)...)
 	getIDs := AppendByteVector(nil, makeBenchmarkItems("get_id", 128, 16)...)
 	templateRecords := AppendByteVector(nil, deterministicTemplateRecord("active", "age", "city", "email"))
@@ -814,6 +814,17 @@ func makeBenchmarkItems(prefix string, count, size int) [][]byte {
 			item[j] = byte('a' + (i+j)%26)
 		}
 		items[i] = item
+	}
+	return items
+}
+
+func makeBenchmarkTemplateDocuments(prefix string, count, size int) [][]byte {
+	if size < len(deterministicTemplateV1StoredMagic) {
+		size = len(deterministicTemplateV1StoredMagic)
+	}
+	items := makeBenchmarkItems(prefix, count, size-len(deterministicTemplateV1StoredMagic))
+	for i := range items {
+		items[i] = deterministicTemplateStoredDocument(items[i])
 	}
 	return items
 }
