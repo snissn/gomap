@@ -1535,7 +1535,7 @@ func (r *indexedRangeCursorResponse) marshalDocument() (wire.Document, error) {
 	}
 	materializer, materializerErr := storedDocumentMaterializerForCollection(r.col)
 	if materializerErr != nil {
-		return nil, err
+		return nil, materializerErr
 	}
 	defer func() { _ = materializer.Close() }()
 	return marshalIndexedRangeCursorDocument(r.server, r.cursorOwner, r.singleBatch, r.col, materializer, r.ns, r.indexName, r.opts, r.batchKey, r.maxBatchBytes)
@@ -1554,7 +1554,7 @@ func (r *indexedRangeCursorResponse) marshalMsgIntoWithMaxLength(dst []byte, req
 	}
 	materializer, materializerErr := storedDocumentMaterializerForCollection(r.col)
 	if materializerErr != nil {
-		return nil, err
+		return nil, materializerErr
 	}
 	defer func() { _ = materializer.Close() }()
 	return marshalIndexedRangeCursorMsgInto(dst, requestID, responseTo, r.server, r.cursorOwner, r.singleBatch, r.col, materializer, r.ns, r.indexName, r.opts, r.batchKey, r.maxBatchBytes, maxMessageLength)
