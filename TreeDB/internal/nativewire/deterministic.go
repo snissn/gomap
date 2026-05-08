@@ -532,21 +532,24 @@ func validateDeterministicCollectionRef(raw []byte) (bool, error) {
 	if len(raw) == 0 {
 		return false, protocolError(ErrInvalidCommand, "empty collection_ref")
 	}
-	tag, _, err := readUvarint(raw)
-	if err != nil {
-		return false, err
-	}
-	if tag == 2 {
+	switch raw[0] {
+	case 1:
+		name := string(raw[1:])
+		if name == "" {
+			return false, protocolError(ErrInvalidCommand, "collection name cannot be empty")
+		}
+		if len(name) > 128 {
+			return false, protocolError(ErrInvalidCommand, "collection name too long")
+		}
+		if strings.ContainsAny(name, "\x00/:") || strings.TrimSpace(name) != name || !utf8.ValidString(name) {
+			return false, protocolError(ErrInvalidCommand, "invalid collection name")
+		}
+		return false, nil
+	case 2:
 		return true, nil
+	default:
+		return false, protocolError(ErrInvalidCommand, "unsupported collection_ref tag %d", raw[0])
 	}
-	name := string(raw)
-	if len(name) > 128 {
-		return false, protocolError(ErrInvalidCommand, "collection name too long")
-	}
-	if strings.ContainsAny(name, "\x00/:") || strings.TrimSpace(name) != name || !utf8.ValidString(name) {
-		return false, protocolError(ErrInvalidCommand, "invalid collection name")
-	}
-	return false, nil
 }
 
 func sortSectionsByID(sections []Section) {

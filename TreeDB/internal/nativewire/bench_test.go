@@ -569,7 +569,7 @@ func nativewireBenchmarkCases() []nativewireBenchmarkCase {
 			sections: []Section{
 				benchmarkCommandSection(CommandInsertBatch),
 				{ID: SectionIdempotencyKey, Bytes: []byte("client-a:insert:1")},
-				{ID: SectionCollectionRef, Bytes: []byte("orders")},
+				{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("orders")},
 				{ID: SectionDocumentFormat, Bytes: benchmarkUvarint(uint64(DocumentFormatTemplateV1))},
 				{ID: SectionDocumentIDs, Bytes: insertIDs},
 				{ID: SectionDocuments, Bytes: insertDocs},
@@ -585,7 +585,7 @@ func nativewireBenchmarkCases() []nativewireBenchmarkCase {
 			sections: []Section{
 				benchmarkCommandSection(CommandReplaceBatch),
 				{ID: SectionIdempotencyKey, Bytes: []byte("client-a:replace:1")},
-				{ID: SectionCollectionRef, Bytes: []byte("orders")},
+				{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("orders")},
 				{ID: SectionDocumentFormat, Bytes: benchmarkUvarint(uint64(DocumentFormatTemplateV1))},
 				{ID: SectionDocumentIDs, Bytes: replaceIDs},
 				{ID: SectionDocuments, Bytes: replaceDocs},
@@ -602,7 +602,7 @@ func nativewireBenchmarkCases() []nativewireBenchmarkCase {
 			sections: []Section{
 				benchmarkCommandSection(CommandDeleteBatch),
 				{ID: SectionIdempotencyKey, Bytes: []byte("client-a:delete:1")},
-				{ID: SectionCollectionRef, Bytes: []byte("orders")},
+				{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("orders")},
 				{ID: SectionDocumentIDs, Bytes: deleteIDs},
 				{ID: SectionExpectedCatalogVersion, Bytes: benchmarkUvarint(7)},
 			},
@@ -613,7 +613,7 @@ func nativewireBenchmarkCases() []nativewireBenchmarkCase {
 			items:     128,
 			sections: []Section{
 				benchmarkCommandSection(CommandGetMany),
-				{ID: SectionCollectionRef, Bytes: []byte("orders")},
+				{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("orders")},
 				{ID: SectionDocumentIDs, Bytes: getIDs},
 			},
 		},
@@ -623,7 +623,7 @@ func nativewireBenchmarkCases() []nativewireBenchmarkCase {
 			items:     128,
 			sections: []Section{
 				benchmarkCommandSection(CommandIndexLookup),
-				{ID: SectionCollectionRef, Bytes: []byte("orders")},
+				{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("orders")},
 				{ID: SectionIndexName, Bytes: indexName},
 				{ID: SectionIndexValue, Bytes: indexValue},
 				{ID: SectionCursorLimits, Bytes: cursorLimits},
@@ -635,7 +635,7 @@ func nativewireBenchmarkCases() []nativewireBenchmarkCase {
 			items:     128,
 			sections: []Section{
 				benchmarkCommandSection(CommandIndexRange),
-				{ID: SectionCollectionRef, Bytes: []byte("orders")},
+				{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("orders")},
 				{ID: SectionIndexName, Bytes: indexName},
 				{ID: SectionIndexLowerBound, Bytes: indexLower},
 				{ID: SectionIndexUpperBound, Bytes: indexUpper},
@@ -648,7 +648,7 @@ func nativewireBenchmarkCases() []nativewireBenchmarkCase {
 			items:     1,
 			sections: []Section{
 				benchmarkCommandSection(CommandOpenScan),
-				{ID: SectionCollectionRef, Bytes: []byte("orders")},
+				{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("orders")},
 			},
 		},
 	}
