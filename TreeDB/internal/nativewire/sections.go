@@ -12,7 +12,7 @@ func (s Section) Critical() bool {
 
 func AppendSection(dst []byte, s Section) ([]byte, error) {
 	if err := validateSectionFlags(s.Flags); err != nil {
-		return nil, err
+		return dst, err
 	}
 	dst = appendUvarint(dst, uint64(s.ID))
 	dst = appendUvarint(dst, s.Flags)

@@ -36,8 +36,10 @@ func TestDeterministicEntryGoldenAndTransportIndependence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppendDeterministicEntry shuffled: %v", err)
 	}
-	if hex.EncodeToString(entry1) != hex.EncodeToString(entry0) {
-		t.Fatalf("deterministic entries differ:\n%s\n%s", hex.EncodeToString(entry0), hex.EncodeToString(entry1))
+	entry0Hex := hex.EncodeToString(entry0)
+	entry1Hex := hex.EncodeToString(entry1)
+	if entry1Hex != entry0Hex {
+		t.Fatalf("deterministic entries differ:\n%s\n%s", entry0Hex, entry1Hex)
 	}
 }
 

@@ -24,10 +24,11 @@ func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) 
 	if cmd.Schema.RequiresCatalogGuard && !cmd.hasSection(SectionExpectedCatalogVersion) {
 		return nil, protocolError(ErrInvalidCommand, "missing catalog guard")
 	}
-	deterministicFlags := DeterministicCommandFlags(cmd.Header.Flags)
-	if deterministicFlags != 0 {
-		return nil, protocolError(ErrUnsupportedFeature, "unsupported deterministic command flags 0x%x", deterministicFlags)
+	unsupportedFlags := UnsupportedDeterministicCommandFlags(cmd.Header.Flags)
+	if unsupportedFlags != 0 {
+		return nil, protocolError(ErrUnsupportedFeature, "unsupported deterministic command flags 0x%x", unsupportedFlags)
 	}
+	deterministicFlags := DeterministicCommandFlags(cmd.Header.Flags)
 
 	deterministic, err := cmd.deterministicSections()
 	if err != nil {

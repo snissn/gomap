@@ -34,6 +34,7 @@ type CommandSchema struct {
 
 type Registry struct {
 	commands map[commandKey]*CommandSchema
+	schemas  []CommandSchema
 }
 
 type commandKey struct {
@@ -49,9 +50,12 @@ type ValidatedCommand struct {
 }
 
 func NewRegistry(commands ...CommandSchema) (*Registry, error) {
-	r := &Registry{commands: make(map[commandKey]*CommandSchema, len(commands))}
-	for i := range commands {
-		c := commands[i]
+	r := &Registry{
+		commands: make(map[commandKey]*CommandSchema, len(commands)),
+		schemas:  append([]CommandSchema(nil), commands...),
+	}
+	for i := range r.schemas {
+		c := &r.schemas[i]
 		if c.Version == 0 {
 			return nil, fmt.Errorf("nativewire: command %s has zero version", c.Name)
 		}
@@ -69,7 +73,7 @@ func NewRegistry(commands ...CommandSchema) (*Registry, error) {
 			}
 			ruleSeen[rule.ID] = struct{}{}
 		}
-		r.commands[key] = &c
+		r.commands[key] = c
 	}
 	return r, nil
 }
