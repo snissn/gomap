@@ -487,7 +487,7 @@ func TestCollectionFastJSONLargeDocumentsUseValueLogPointers(t *testing.T) {
 		t.Fatalf("open collection: %v", err)
 	}
 
-	const documents = 32
+	const documents = collectionPointerizeBatchMaxValues + 7
 	ids := make([][]byte, documents)
 	docs := make([][]byte, documents)
 	for i := 0; i < documents; i++ {

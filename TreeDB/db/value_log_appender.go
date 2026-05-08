@@ -6,6 +6,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+var ErrValueLogAppenderUnavailable = errors.New("value-log appender unavailable")
+
 // ValueLogAppender appends user values to the persistent value log and returns
 // stable ValuePtr references that may be stored by native-root callers.
 type ValueLogAppender interface {
@@ -15,6 +17,10 @@ type ValueLogAppender interface {
 	CurrentValueLogSegment() (path string, fileID uint32, ok bool)
 }
 
+type valueLogAppenderHolder struct {
+	appender ValueLogAppender
+}
+
 // SetValueLogAppender installs the appender used by native-root APIs that need
 // to create persistent value-log pointers. Cached mode wires this to its normal
 // value-log writer.
@@ -22,21 +28,28 @@ func (db *DB) SetValueLogAppender(appender ValueLogAppender) {
 	if db == nil {
 		return
 	}
-	db.writeMu.Lock()
-	db.valueLogAppender = appender
-	db.writeMu.Unlock()
+	if appender == nil {
+		db.valueLogAppender.Store(nil)
+		return
+	}
+	db.valueLogAppender.Store(&valueLogAppenderHolder{appender: appender})
+}
+
+func (db *DB) currentValueLogAppender() ValueLogAppender {
+	if db == nil {
+		return nil
+	}
+	holder := db.valueLogAppender.Load()
+	if holder == nil {
+		return nil
+	}
+	return holder.appender
 }
 
 // HasValueLogAppender reports whether native-root callers can append user
 // values to the persistent value log.
 func (db *DB) HasValueLogAppender() bool {
-	if db == nil {
-		return false
-	}
-	db.writeMu.RLock()
-	ok := db.valueLogAppender != nil
-	db.writeMu.RUnlock()
-	return ok
+	return db.currentValueLogAppender() != nil
 }
 
 // AppendValueLogValues appends values through the configured persistent value
@@ -48,11 +61,9 @@ func (db *DB) AppendValueLogValues(values [][]byte) ([]page.ValuePtr, error) {
 	if db == nil {
 		return nil, ErrClosed
 	}
-	db.writeMu.RLock()
-	appender := db.valueLogAppender
-	db.writeMu.RUnlock()
+	appender := db.currentValueLogAppender()
 	if appender == nil {
-		return nil, errors.New("value-log appender unavailable")
+		return nil, ErrValueLogAppenderUnavailable
 	}
 	return appender.AppendValues(values)
 }

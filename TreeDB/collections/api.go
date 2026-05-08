@@ -568,8 +568,12 @@ const (
 )
 
 type CollectionOptions struct {
-	AllowArrayValuesInIndex bool              `json:"allow_array_values_in_index,omitempty"`
-	DocumentFormat          DocumentFormat    `json:"document_format,omitempty"`
+	AllowArrayValuesInIndex bool           `json:"allow_array_values_in_index,omitempty"`
+	DocumentFormat          DocumentFormat `json:"document_format,omitempty"`
+	// DataRootStoragePolicy selects the requested collection data-root layout.
+	// Cached TreeDB backends with a persistent value-log appender promote
+	// default/fast data roots to value-log leaf roots at runtime so large
+	// documents can be stored through stable value pointers.
 	DataRootStoragePolicy   RootStoragePolicy `json:"data_root_storage_policy,omitempty"`
 	IndexStateStoragePolicy RootStoragePolicy `json:"index_state_storage_policy,omitempty"`
 	// DisableIndexedWriteMemtables opts an indexed collection out of the native
@@ -3384,12 +3388,16 @@ func compactTableRuns(runs []memtable.Table) (memtable.Table, error) {
 }
 
 type collectionPointerizedRunEntry struct {
-	key          []byte
-	value        []byte
-	ptr          page.ValuePtr
-	flags        byte
-	pointerIndex int
+	key   []byte
+	value []byte
+	ptr   page.ValuePtr
+	flags byte
 }
+
+const (
+	collectionPointerizeBatchMaxValues = 1024
+	collectionPointerizeBatchMaxBytes  = 4 << 20
+)
 
 func pointerizeCollectionRunTableValues(db *backenddb.DB, table memtable.Table) (memtable.Table, bool, error) {
 	if db == nil || table == nil || !db.HasValueLogAppender() {
@@ -3417,49 +3425,78 @@ func pointerizeCollectionRunTableValues(db *backenddb.DB, table memtable.Table) 
 	}
 
 	entries := make([]collectionPointerizedRunEntry, 0, table.Len())
-	values := make([][]byte, 0)
+	batchValues := make([][]byte, 0, collectionPointerizeBatchMaxValues)
+	batchEntryIndexes := make([]int, 0, collectionPointerizeBatchMaxValues)
+	batchBytes := 0
+	pointerized := false
+	flushBatch := func() error {
+		if len(batchValues) == 0 {
+			return nil
+		}
+		ptrs, err := db.AppendValueLogValues(batchValues)
+		if err != nil {
+			return err
+		}
+		if len(ptrs) != len(batchValues) {
+			return fmt.Errorf("collections: value-log appender returned %d ptrs for %d values", len(ptrs), len(batchValues))
+		}
+		for i, ptr := range ptrs {
+			entryIndex := batchEntryIndexes[i]
+			entries[entryIndex].value = nil
+			entries[entryIndex].ptr = ptr
+			entries[entryIndex].flags = (entries[entryIndex].flags &^ node.FlagTombstone) | node.FlagPointer
+		}
+		for i := range batchValues {
+			batchValues[i] = nil
+		}
+		batchValues = batchValues[:0]
+		batchEntryIndexes = batchEntryIndexes[:0]
+		batchBytes = 0
+		pointerized = true
+		return nil
+	}
 	it := table.NewIterator(nil, nil)
 	defer func() { _ = it.Close() }()
 	for it.Valid() {
 		value, ptr, flags := it.UnsafeEntry()
 		entry := collectionPointerizedRunEntry{
-			key:          bytes.Clone(it.UnsafeKey()),
-			ptr:          ptr,
-			flags:        flags,
-			pointerIndex: -1,
+			key:   bytes.Clone(it.UnsafeKey()),
+			ptr:   ptr,
+			flags: flags,
 		}
 		if flags&node.FlagTombstone == 0 &&
 			flags&node.FlagPointer == 0 &&
 			len(value) > db.InlineThresholdForKey(entry.key) {
-			entry.pointerIndex = len(values)
-			values = append(values, bytes.Clone(value))
+			entries = append(entries, entry)
+			valueCopy := bytes.Clone(value)
+			batchValues = append(batchValues, valueCopy)
+			batchEntryIndexes = append(batchEntryIndexes, len(entries)-1)
+			batchBytes += len(valueCopy)
+			if len(batchValues) >= collectionPointerizeBatchMaxValues || batchBytes >= collectionPointerizeBatchMaxBytes {
+				if err := flushBatch(); err != nil {
+					return table, false, err
+				}
+			}
 		} else if value != nil {
 			entry.value = bytes.Clone(value)
+			entries = append(entries, entry)
+		} else {
+			entries = append(entries, entry)
 		}
-		entries = append(entries, entry)
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
 		return table, false, err
 	}
-	if len(values) == 0 {
-		return table, false, nil
-	}
-	ptrs, err := db.AppendValueLogValues(values)
-	if err != nil {
+	if err := flushBatch(); err != nil {
 		return table, false, err
 	}
-	if len(ptrs) != len(values) {
-		return table, false, fmt.Errorf("collections: value-log appender returned %d ptrs for %d values", len(ptrs), len(values))
+	if !pointerized {
+		return table, false, nil
 	}
 	out := newCollectionRunTable(len(entries))
 	for i := range entries {
 		entry := entries[i]
-		if entry.pointerIndex >= 0 {
-			entry.value = nil
-			entry.ptr = ptrs[entry.pointerIndex]
-			entry.flags = (entry.flags &^ node.FlagTombstone) | node.FlagPointer
-		}
 		out.SetEntrySteal(entry.key, entry.value, entry.ptr, entry.flags)
 	}
 	out.Freeze()
