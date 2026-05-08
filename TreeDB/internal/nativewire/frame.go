@@ -109,7 +109,7 @@ func validFrameType(typ FrameType) bool {
 
 func validateFrameFlags(flags uint32) error {
 	if flags&frameRequiredFlagsMask != 0 {
-		return protocolError(ErrUnsupportedFeature, "unknown required frame flags 0x%04x", flags&frameRequiredFlagsMask)
+		return protocolError(ErrUnsupportedFeature, "unknown required frame flags 0x%08x", flags&frameRequiredFlagsMask)
 	}
 	return nil
 }
