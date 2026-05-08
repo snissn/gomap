@@ -10,7 +10,7 @@ import (
 )
 
 const nativeStatsPrefix = "treedb.native_wire."
-const maxTrackedErrorCode = int(iwire.ErrIdempotencyConflict)
+const maxTrackedErrorCode = int(iwire.MaxErrorCode)
 
 type Stats map[string]string
 

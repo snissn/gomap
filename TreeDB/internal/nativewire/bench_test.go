@@ -488,6 +488,7 @@ func BenchmarkNativewireDeterministicEntry(b *testing.B) {
 			b.SetBytes(int64(len(entry)))
 			reportCommandMetrics(b, tc)
 			dst := make([]byte, 0, len(entry))
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				dst = dst[:0]
 				benchBytesSink, err = AppendDeterministicEntry(dst, cmd)
@@ -514,6 +515,7 @@ func BenchmarkNativewireDeterministicEntryReplicatedCommands(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(len(entry)))
 			dst := make([]byte, 0, len(entry))
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				dst = dst[:0]
 				benchBytesSink, err = AppendDeterministicEntry(dst, cmd)
@@ -529,6 +531,7 @@ func BenchmarkNativewireDeterministicEntryReplicatedCommands(b *testing.B) {
 			if _, err := DecodeDeterministicEntryInto(entry, Limits{}, &scratch); err != nil {
 				b.Fatalf("DecodeDeterministicEntryInto warm: %v", err)
 			}
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				benchEntrySink, err = DecodeDeterministicEntryInto(entry, Limits{}, &scratch)
 				if err != nil {
@@ -539,6 +542,7 @@ func BenchmarkNativewireDeterministicEntryReplicatedCommands(b *testing.B) {
 		b.Run(tc.name+"/digest", func(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(len(entry)))
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				benchDigestSink = DeterministicEntryDigest(entry)
 			}

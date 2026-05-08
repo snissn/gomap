@@ -159,6 +159,10 @@ const (
 	ErrIdempotencyConflict
 )
 
+// MaxErrorCode is the highest native-wire error code currently assigned by
+// this protocol version.
+const MaxErrorCode = ErrIdempotencyConflict
+
 type ProtocolError struct {
 	Code   ErrorCode
 	Reason string

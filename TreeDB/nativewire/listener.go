@@ -77,6 +77,9 @@ func NewInProcessClient(ctx context.Context, server *Server) (*Client, func() er
 	if server == nil || server.closed.Load() {
 		return nil, nil, ErrServerClosed
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if ctx != nil && ctx.Err() != nil {
 		return nil, nil, ctx.Err()
 	}
