@@ -1,6 +1,9 @@
 package nativewire
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 type CommandKind uint8
 
@@ -31,6 +34,9 @@ type CommandSchema struct {
 	RequiresCatalogGuard bool
 	BenchmarkRequired    bool
 	Sections             []SectionRule
+
+	rules    map[SectionID]SectionRule
+	required []SectionID
 }
 
 type Registry struct {
@@ -74,6 +80,7 @@ func NewRegistry(commands ...CommandSchema) (*Registry, error) {
 			}
 			ruleSeen[rule.ID] = struct{}{}
 		}
+		c.rules, c.required = compileCommandRules(*c)
 		r.commands[key] = c
 	}
 	return r, nil
@@ -96,6 +103,9 @@ func (r *Registry) LookupCommand(id CommandID, version uint64) (*CommandSchema, 
 }
 
 func (r *Registry) ValidateRequestSections(sections []Section) (ValidatedCommand, error) {
+	if r == nil {
+		return ValidatedCommand{}, protocolError(ErrUnsupportedVersion, "nil command registry")
+	}
 	header, err := findCommandHeader(sections)
 	if err != nil {
 		return ValidatedCommand{}, err
@@ -161,27 +171,44 @@ func (c *CommandSchema) validateSections(sections []Section) ([]Section, []Secti
 			continue
 		}
 		if !rule.Repeatable && seen[section.ID] > 0 {
-			return nil, nil, protocolError(ErrInvalidCommand, "duplicate singleton section %d", section.ID)
+			return nil, nil, protocolError(ErrInvalidCommand, "command %s duplicate singleton section %s (%d)", c.Name, rule.Name, section.ID)
 		}
 		seen[section.ID]++
 		known = append(known, section)
 	}
 
-	for _, rule := range rules {
-		if rule.Required && seen[rule.ID] == 0 {
-			return nil, nil, protocolError(ErrInvalidCommand, "missing required section %d", rule.ID)
+	for _, id := range c.requiredSections() {
+		if seen[id] == 0 {
+			rule := rules[id]
+			return nil, nil, protocolError(ErrInvalidCommand, "command %s missing required section %s (%d)", c.Name, rule.Name, id)
 		}
 	}
 	if c.RequiresIdempotency && seen[SectionIdempotencyKey] == 0 {
-		return nil, nil, protocolError(ErrInvalidCommand, "missing idempotency key")
+		return nil, nil, protocolError(ErrInvalidCommand, "command %s missing idempotency key", c.Name)
 	}
 	if c.RequiresCatalogGuard && seen[SectionExpectedCatalogVersion] == 0 {
-		return nil, nil, protocolError(ErrInvalidCommand, "missing catalog guard")
+		return nil, nil, protocolError(ErrInvalidCommand, "command %s missing catalog guard", c.Name)
 	}
 	return known, ignored, nil
 }
 
 func (c *CommandSchema) ruleMap() map[SectionID]SectionRule {
+	if c.rules != nil {
+		return c.rules
+	}
+	rules, _ := compileCommandRules(*c)
+	return rules
+}
+
+func (c *CommandSchema) requiredSections() []SectionID {
+	if c.required != nil {
+		return c.required
+	}
+	_, required := compileCommandRules(*c)
+	return required
+}
+
+func compileCommandRules(c CommandSchema) (map[SectionID]SectionRule, []SectionID) {
 	rules := map[SectionID]SectionRule{
 		SectionCommandHeader:     {ID: SectionCommandHeader, Name: "command_header", Required: true},
 		SectionDeadline:          {ID: SectionDeadline, Name: "deadline"},
@@ -195,7 +222,14 @@ func (c *CommandSchema) ruleMap() map[SectionID]SectionRule {
 	for _, rule := range c.Sections {
 		rules[rule.ID] = rule
 	}
-	return rules
+	required := make([]SectionID, 0, len(rules))
+	for _, rule := range rules {
+		if rule.Required {
+			required = append(required, rule.ID)
+		}
+	}
+	sort.Slice(required, func(i, j int) bool { return required[i] < required[j] })
+	return rules, required
 }
 
 func validSchemaSectionID(id SectionID) bool {
@@ -297,6 +331,7 @@ func v1CommandSchemas() []CommandSchema {
 			Name:    "cursor_next",
 			Kind:    CommandKindRead,
 			Sections: []SectionRule{
+				{ID: SectionCursorRef, Name: "cursor_ref", Required: true},
 				{ID: SectionCursorLimits, Name: "cursor_limits", Required: true},
 			},
 		},
@@ -305,6 +340,9 @@ func v1CommandSchemas() []CommandSchema {
 			Version: 1,
 			Name:    "cursor_close",
 			Kind:    CommandKindRead,
+			Sections: []SectionRule{
+				{ID: SectionCursorRef, Name: "cursor_ref", Required: true},
+			},
 		},
 		{
 			ID:      CommandStats,
