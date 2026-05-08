@@ -122,7 +122,14 @@ func DeterministicEntryDigest(entry []byte) [32]byte {
 }
 
 func DecodeDeterministicEntry(src []byte, limits Limits) (DeterministicEntry, error) {
-	return DecodeDeterministicEntryInto(src, limits, nil)
+	return DecodeDeterministicEntryWithRegistry(src, limits, nil)
+}
+
+// DecodeDeterministicEntryWithRegistry decodes a deterministic command-entry
+// envelope using registry for command validation. A nil registry uses the v1
+// native-wire registry.
+func DecodeDeterministicEntryWithRegistry(src []byte, limits Limits, registry *Registry) (DeterministicEntry, error) {
+	return DecodeDeterministicEntryIntoWithRegistry(src, limits, nil, registry)
 }
 
 // DecodeDeterministicEntryInto decodes a deterministic command-entry envelope.
@@ -131,7 +138,17 @@ func DecodeDeterministicEntry(src []byte, limits Limits) (DeterministicEntry, er
 // from scratch. Callers that need to retain the entry after reusing src or
 // scratch must copy it.
 func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *DeterministicEntryScratch) (DeterministicEntry, error) {
+	return DecodeDeterministicEntryIntoWithRegistry(src, limits, scratch, nil)
+}
+
+// DecodeDeterministicEntryIntoWithRegistry is DecodeDeterministicEntryInto with
+// caller-supplied command registry validation. A nil registry uses the v1
+// native-wire registry.
+func DecodeDeterministicEntryIntoWithRegistry(src []byte, limits Limits, scratch *DeterministicEntryScratch, registry *Registry) (DeterministicEntry, error) {
 	limits = limits.withDefaults()
+	if registry == nil {
+		registry = deterministicRegistry()
+	}
 	failBeforeSections := func(err error) (DeterministicEntry, error) {
 		clearDeterministicEntryScratch(nil, scratch, true)
 		return DeterministicEntry{}, err
@@ -225,7 +242,7 @@ func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *Determinis
 	if off != len(src) {
 		return fail(protocolError(ErrMalformedFrame, "deterministic entry has %d trailing bytes", len(src)-off))
 	}
-	if _, err := validateDecodedDeterministicEntry(CommandID(commandID), commandVersion, sections); err != nil {
+	if _, err := validateDecodedDeterministicEntry(registry, CommandID(commandID), commandVersion, sections); err != nil {
 		return fail(err)
 	}
 	if scratch != nil {
@@ -373,8 +390,11 @@ func deterministicByteVectorCount(sections []Section, id SectionID) (int, error)
 	return 0, protocolError(ErrInvalidCommand, "missing deterministic section %d", id)
 }
 
-func validateDecodedDeterministicEntry(commandID CommandID, commandVersion uint64, sections []Section) (*CommandSchema, error) {
-	schema, ok := deterministicRegistry().LookupCommand(commandID, commandVersion)
+func validateDecodedDeterministicEntry(registry *Registry, commandID CommandID, commandVersion uint64, sections []Section) (*CommandSchema, error) {
+	if registry == nil {
+		registry = deterministicRegistry()
+	}
+	schema, ok := registry.LookupCommand(commandID, commandVersion)
 	if !ok {
 		return nil, protocolError(ErrUnsupportedVersion, "unsupported deterministic command %d version %d", commandID, commandVersion)
 	}

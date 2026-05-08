@@ -96,6 +96,41 @@ func TestDecodeDeterministicEntryGolden(t *testing.T) {
 	}
 }
 
+func TestDecodeDeterministicEntryWithRegistryUsesCallerRegistry(t *testing.T) {
+	const (
+		commandID = CommandID(9100)
+		sectionID = SectionID(1200)
+	)
+	registry, err := NewRegistry(CommandSchema{
+		ID:                  commandID,
+		Version:             1,
+		Name:                "custom_replicated",
+		Kind:                CommandKindMutation,
+		Replicated:          true,
+		RequiresIdempotency: true,
+		Sections: []SectionRule{
+			{ID: sectionID, Name: "custom", Required: true, Deterministic: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	raw := deterministicEntryTestRaw(commandID,
+		Section{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
+		Section{ID: sectionID, Bytes: []byte("payload")},
+	)
+	if _, err := DecodeDeterministicEntry(raw, Limits{}); codeOf(err) != ErrUnsupportedVersion {
+		t.Fatalf("DecodeDeterministicEntry default err=%v code=%d want unsupported version", err, codeOf(err))
+	}
+	entry, err := DecodeDeterministicEntryWithRegistry(raw, Limits{}, registry)
+	if err != nil {
+		t.Fatalf("DecodeDeterministicEntryWithRegistry: %v", err)
+	}
+	if entry.CommandID != commandID || len(entry.Sections) != 2 {
+		t.Fatalf("entry=%+v", entry)
+	}
+}
+
 func TestDecodeDeterministicEntryHonorsMaxFrameSize(t *testing.T) {
 	registry := MustV1Registry()
 	cmd, err := registry.ValidateRequestSections(insertBatchDeterministicSections())
