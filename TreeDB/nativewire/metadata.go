@@ -1,7 +1,7 @@
 package nativewire
 
 import (
-	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -21,7 +21,7 @@ const (
 
 type metadataIdempotencyEntry struct {
 	commandID iwire.CommandID
-	signature []byte
+	signature [sha256.Size]byte
 	response  []iwire.Section
 }
 
@@ -661,11 +661,12 @@ func (s *Server) beginMetadataIdempotency(commandID iwire.CommandID, sections []
 	if err != nil {
 		return nil, nil, err
 	}
+	signatureHash := sha256.Sum256(signature)
 	if s.metadataIdempotency == nil {
 		s.metadataIdempotency = make(map[string]metadataIdempotencyEntry)
 	}
 	if entry, ok := s.metadataIdempotency[key]; ok {
-		if entry.commandID != commandID || !bytes.Equal(entry.signature, signature) {
+		if entry.commandID != commandID || entry.signature != signatureHash {
 			return nil, nil, protocolError(iwire.ErrIdempotencyConflict, "idempotency key reused for different metadata mutation")
 		}
 		return cloneSections(entry.response), nil, nil
@@ -674,12 +675,27 @@ func (s *Server) beginMetadataIdempotency(commandID iwire.CommandID, sections []
 		copied := cloneSections(response)
 		s.metadataIdempotency[key] = metadataIdempotencyEntry{
 			commandID: commandID,
-			signature: append([]byte(nil), signature...),
+			signature: signatureHash,
 			response:  copied,
 		}
+		s.metadataIdemOrder = append(s.metadataIdemOrder, key)
+		s.trimMetadataIdempotencyLocked()
 		return cloneSections(copied)
 	}
 	return nil, remember, nil
+}
+
+func (s *Server) trimMetadataIdempotencyLocked() {
+	if s.maxMetadataIdempotencyEntries < 0 {
+		return
+	}
+	for len(s.metadataIdemOrder) > s.maxMetadataIdempotencyEntries {
+		key := s.metadataIdemOrder[0]
+		copy(s.metadataIdemOrder, s.metadataIdemOrder[1:])
+		s.metadataIdemOrder[len(s.metadataIdemOrder)-1] = ""
+		s.metadataIdemOrder = s.metadataIdemOrder[:len(s.metadataIdemOrder)-1]
+		delete(s.metadataIdempotency, key)
+	}
 }
 
 func metadataIdempotencyKey(sections []iwire.Section) (string, error) {
