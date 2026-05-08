@@ -18,12 +18,6 @@ func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) 
 	if !cmd.Schema.Replicated {
 		return nil, protocolError(ErrInvalidCommand, "command %s is not replicated", cmd.Schema.Name)
 	}
-	if cmd.Schema.RequiresIdempotency && !cmd.hasSection(SectionIdempotencyKey) {
-		return nil, protocolError(ErrInvalidCommand, "missing idempotency key")
-	}
-	if cmd.Schema.RequiresCatalogGuard && !cmd.hasSection(SectionExpectedCatalogVersion) {
-		return nil, protocolError(ErrInvalidCommand, "missing catalog guard")
-	}
 	unsupportedFlags := UnsupportedDeterministicCommandFlags(cmd.Header.Flags)
 	if unsupportedFlags != 0 {
 		return nil, protocolError(ErrUnsupportedFeature, "unsupported deterministic command flags 0x%x", unsupportedFlags)
@@ -37,6 +31,12 @@ func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) 
 	sort.SliceStable(deterministic, func(i, j int) bool {
 		return deterministic[i].ID < deterministic[j].ID
 	})
+	if cmd.Schema.RequiresIdempotency && deterministicSectionCount(deterministic, SectionIdempotencyKey) == 0 {
+		return nil, protocolError(ErrInvalidCommand, "missing deterministic idempotency key")
+	}
+	if cmd.Schema.RequiresCatalogGuard && deterministicSectionCount(deterministic, SectionExpectedCatalogVersion) == 0 {
+		return nil, protocolError(ErrInvalidCommand, "missing deterministic catalog guard")
+	}
 	if err := validateDeterministicCommand(cmd.Header.ID, deterministic); err != nil {
 		return nil, err
 	}
@@ -113,17 +113,36 @@ func validateDeterministicCommand(commandID CommandID, deterministic []Section) 
 }
 
 func deterministicByteVectorCount(sections []Section, id SectionID) (int, error) {
+	found := false
+	var count int
 	for _, section := range sections {
 		if section.ID != id {
 			continue
+		}
+		if found {
+			return 0, protocolError(ErrInvalidCommand, "duplicate deterministic section %d", id)
 		}
 		vec, err := DecodeByteVector(section.Bytes, Limits{})
 		if err != nil {
 			return 0, err
 		}
-		return vec.Len(), nil
+		found = true
+		count = vec.Len()
+	}
+	if found {
+		return count, nil
 	}
 	return 0, protocolError(ErrInvalidCommand, "missing deterministic section %d", id)
+}
+
+func deterministicSectionCount(sections []Section, id SectionID) int {
+	count := 0
+	for _, section := range sections {
+		if section.ID == id {
+			count++
+		}
+	}
+	return count
 }
 
 func validateDeterministicSectionPayload(section Section) error {
