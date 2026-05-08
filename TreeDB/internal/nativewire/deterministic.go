@@ -76,12 +76,6 @@ func AppendDeterministicEntryWithLimits(dst []byte, cmd ValidatedCommand, limits
 	if !cmd.Schema.Replicated {
 		return dst[:start], protocolError(ErrInvalidCommand, "command %s is not replicated", cmd.Schema.Name)
 	}
-	if cmd.Schema.RequiresIdempotency && !cmd.hasSection(SectionIdempotencyKey) {
-		return dst[:start], protocolError(ErrInvalidCommand, "missing idempotency key")
-	}
-	if cmd.Schema.RequiresCatalogGuard && !cmd.hasSection(SectionExpectedCatalogVersion) {
-		return dst[:start], protocolError(ErrInvalidCommand, "missing catalog guard")
-	}
 	unsupportedFlags := UnsupportedDeterministicCommandFlags(cmd.Header.Flags)
 	if unsupportedFlags != 0 {
 		return dst[:start], protocolError(ErrUnsupportedFeature, "unsupported deterministic command flags 0x%x", unsupportedFlags)
@@ -94,6 +88,12 @@ func AppendDeterministicEntryWithLimits(dst []byte, cmd ValidatedCommand, limits
 		return dst[:start], err
 	}
 	sortSectionsByID(deterministic)
+	if cmd.Schema.RequiresIdempotency && deterministicSectionCount(deterministic, SectionIdempotencyKey) == 0 {
+		return dst[:start], protocolError(ErrInvalidCommand, "missing deterministic idempotency key")
+	}
+	if cmd.Schema.RequiresCatalogGuard && deterministicSectionCount(deterministic, SectionExpectedCatalogVersion) == 0 {
+		return dst[:start], protocolError(ErrInvalidCommand, "missing deterministic catalog guard")
+	}
 	if err := validateDeterministicCommand(cmd.Header.ID, deterministic); err != nil {
 		return dst[:start], err
 	}
@@ -392,9 +392,14 @@ func deterministicSectionPayload(sections []Section, id SectionID) ([]byte, bool
 }
 
 func deterministicByteVectorCount(sections []Section, id SectionID) (int, error) {
+	found := false
+	var count int
 	for _, section := range sections {
 		if section.ID != id {
 			continue
+		}
+		if found {
+			return 0, protocolError(ErrInvalidCommand, "duplicate deterministic section %d", id)
 		}
 		count64, _, err := readUvarint(section.Bytes)
 		if err != nil {
@@ -406,9 +411,23 @@ func deterministicByteVectorCount(sections []Section, id SectionID) (int, error)
 		if count64 > uint64(maxInt) {
 			return 0, protocolError(ErrResourceExhausted, "section %d byte-vector count exceeds int capacity", id)
 		}
-		return int(count64), nil
+		found = true
+		count = int(count64)
+	}
+	if found {
+		return count, nil
 	}
 	return 0, protocolError(ErrInvalidCommand, "missing deterministic section %d", id)
+}
+
+func deterministicSectionCount(sections []Section, id SectionID) int {
+	count := 0
+	for _, section := range sections {
+		if section.ID == id {
+			count++
+		}
+	}
+	return count
 }
 
 func validateDecodedDeterministicEntry(registry *Registry, commandID CommandID, commandVersion uint64, sections []Section) (*CommandSchema, error) {

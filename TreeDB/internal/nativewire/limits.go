@@ -10,6 +10,10 @@ const (
 	defaultMaxDeterministicNameBytes          = uint64(128)
 )
 
+// maxInt is the maximum int value on the current platform. Decoders use it
+// before converting wire uint64 lengths and counts to int.
+const maxInt = int(^uint(0) >> 1)
+
 type Limits struct {
 	MaxFrameSize                       uint64
 	MaxHeaderLen                       uint16
