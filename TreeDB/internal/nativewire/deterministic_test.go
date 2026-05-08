@@ -28,7 +28,7 @@ func TestDeterministicEntryGoldenAndTransportIndependence(t *testing.T) {
 		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 1})},
 		{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
-		{ID: SectionCollectionRef, Bytes: []byte("c")},
+		{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("c")},
 	}
 	cmd1, err := registry.ValidateRequestSections(sections)
 	if err != nil {
@@ -240,7 +240,7 @@ func TestDecodeDeterministicEntryRejectsInvalidCommandSet(t *testing.T) {
 			name:      "read_command",
 			commandID: CommandGetMany,
 			sections: []Section{
-				{ID: SectionCollectionRef, Bytes: []byte("c")},
+				{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("c")},
 				{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
 			},
 		},
@@ -280,14 +280,14 @@ func TestDeterministicEntryRejectsLocalAndReadCommands(t *testing.T) {
 			name: "flush_collection",
 			sections: []Section{
 				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandFlushCollection, Version: 1})},
-				{ID: SectionCollectionRef, Bytes: []byte("users")},
+				{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("users")},
 			},
 		},
 		{
 			name: "get_many",
 			sections: []Section{
 				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandGetMany, Version: 1})},
-				{ID: SectionCollectionRef, Bytes: []byte("users")},
+				{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("users")},
 				{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
 			},
 		},
@@ -344,7 +344,7 @@ func TestDecodeDeterministicEntryClearsScratchTail(t *testing.T) {
 	}
 	sections := []Section{
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
-		{ID: SectionCollectionRef, Bytes: []byte("c")},
+		{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("c")},
 		{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
 		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
 	}
@@ -366,7 +366,7 @@ func TestDecodeDeterministicEntryClearsScratchOnSchemaError(t *testing.T) {
 		Sections: make([]Section, 0, 4),
 	}
 	raw := deterministicEntryTestRaw(CommandInsertBatch,
-		Section{ID: SectionCollectionRef, Bytes: []byte("c")},
+		Section{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("c")},
 		Section{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
 		Section{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
 		Section{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte("{}"))},
@@ -557,7 +557,7 @@ func TestDeterministicEntryRejectsInvalidCollectionNames(t *testing.T) {
 	sections := insertBatchDeterministicSections()
 	for i := range sections {
 		if sections[i].ID == SectionCollectionRef {
-			sections[i].Bytes = []byte("bad/name")
+			sections[i].Bytes = deterministicCollectionNameRef("bad/name")
 		}
 	}
 	cmd, err := registry.ValidateRequestSections(sections)
@@ -682,12 +682,16 @@ func insertBatchDeterministicSections() []Section {
 	return []Section{
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 1})},
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
-		{ID: SectionCollectionRef, Bytes: []byte("c")},
+		{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("c")},
 		{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
 		{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
 		{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte("{}"))},
 		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
 	}
+}
+
+func deterministicCollectionNameRef(name string) []byte {
+	return append([]byte{1}, name...)
 }
 
 type deterministicEntryFixtureCase struct {
@@ -712,7 +716,7 @@ func deterministicEntryFixtureCases() []deterministicEntryFixtureCase {
 			commandID: CommandCreateIndex,
 			fixture:   "create_index_entry.hex",
 			sections: deterministicFixtureSections(CommandCreateIndex, "client-a:create-index:email",
-				Section{ID: SectionCollectionRef, Bytes: []byte("users")},
+				Section{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("users")},
 				Section{ID: SectionIndexDefinition, Bytes: deterministicIndexDefinitionPayload("email_1", "email", 1, true, false, 0)},
 			),
 		},
@@ -721,7 +725,7 @@ func deterministicEntryFixtureCases() []deterministicEntryFixtureCase {
 			commandID: CommandDropIndex,
 			fixture:   "drop_index_entry.hex",
 			sections: deterministicFixtureSections(CommandDropIndex, "client-a:drop-index:email",
-				Section{ID: SectionCollectionRef, Bytes: []byte("users")},
+				Section{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("users")},
 				Section{ID: SectionIndexName, Bytes: appendDeterministicString(nil, "email_1")},
 			),
 		},
@@ -736,7 +740,7 @@ func deterministicEntryFixtureCases() []deterministicEntryFixtureCase {
 			commandID: CommandReplaceBatch,
 			fixture:   "replace_batch_entry.hex",
 			sections: deterministicFixtureSections(CommandReplaceBatch, "client-a:replace:1",
-				Section{ID: SectionCollectionRef, Bytes: []byte("c")},
+				Section{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("c")},
 				Section{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
 				Section{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
 				Section{ID: SectionDocuments, Bytes: AppendByteVector(nil, deterministicBSONDocumentXInt32(1))},
@@ -748,7 +752,7 @@ func deterministicEntryFixtureCases() []deterministicEntryFixtureCase {
 			commandID: CommandDeleteBatch,
 			fixture:   "delete_batch_entry.hex",
 			sections: deterministicFixtureSections(CommandDeleteBatch, "client-a:delete:1",
-				Section{ID: SectionCollectionRef, Bytes: []byte("c")},
+				Section{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("c")},
 				Section{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"), []byte("b"))},
 			),
 		},
