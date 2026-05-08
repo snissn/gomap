@@ -236,6 +236,25 @@ func (db *DB) ensureLeafPageLogSegmentRegisteredAt(path string, fileID uint32, c
 	return true, nil
 }
 
+func (db *DB) ensureValueLogSegmentRegisteredAt(path string, fileID uint32) (bool, error) {
+	if db == nil || db.valueLogManager == nil || path == "" || fileID == 0 {
+		return false, nil
+	}
+	if db.valueLogManager.HasSegment(fileID) {
+		if err := db.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if err := db.RegisterValueLogSegment(path, fileID); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 func (db *DB) isLeafGenerationSegmentPath(path string) bool {
 	if db == nil || path == "" || db.leafGenerationManifest == nil {
 		return false

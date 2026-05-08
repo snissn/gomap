@@ -9275,6 +9275,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if outerLeafPageLogSetter != nil {
 		outerLeafPageLogSetter.SetLeafPageLog(newCachingLeafPageLog(db, &db.leafLog))
 	}
+	if setter, ok := backend.(interface {
+		SetValueLogAppender(backenddb.ValueLogAppender)
+	}); ok && len(db.lanes) > 0 {
+		setter.SetValueLogAppender(newCachingValueLogAppender(db, &db.lanes[0]))
+	}
 	if opts.DisableWAL {
 		// Stage the adaptive gate on the fastest cached profile first. WAL-on
 		// modes keep the legacy zipper fan-out policy until benchmark data shows

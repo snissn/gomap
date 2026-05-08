@@ -165,12 +165,30 @@ func backendRootStoragePolicy(policy RootStoragePolicy) (backenddb.OrderedRootSt
 	}
 }
 
+func backendCollectionDataRootStoragePolicy(db *backenddb.DB, policy RootStoragePolicy) (backenddb.OrderedRootStoragePolicy, error) {
+	base, err := backendRootStoragePolicy(policy)
+	if err != nil {
+		return base, err
+	}
+	if base == backenddb.OrderedRootStoragePagerLeaves && db != nil && db.HasValueLogAppender() {
+		return backenddb.OrderedRootStorageValueLogLeaves, nil
+	}
+	if policy == RootStorageDefault && db != nil && db.HasValueLogAppender() {
+		return backenddb.OrderedRootStorageValueLogLeaves, nil
+	}
+	return base, nil
+}
+
 func collectionPlannerOptions(meta CollectionMeta) (collectionOptions, error) {
+	return collectionPlannerOptionsForDB(nil, meta)
+}
+
+func collectionPlannerOptionsForDB(db *backenddb.DB, meta CollectionMeta) (collectionOptions, error) {
 	documentFormat, err := normalizeDocumentFormat(meta.Options.DocumentFormat)
 	if err != nil {
 		return collectionOptions{}, err
 	}
-	dataPolicy, err := backendRootStoragePolicy(meta.Options.DataRootStoragePolicy)
+	dataPolicy, err := backendCollectionDataRootStoragePolicy(db, meta.Options.DataRootStoragePolicy)
 	if err != nil {
 		return collectionOptions{}, err
 	}
@@ -2322,7 +2340,7 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 
 	baseMeta := catalog.meta
 	c.meta = baseMeta
-	baseOptions, err := collectionPlannerOptions(baseMeta)
+	baseOptions, err := collectionPlannerOptionsForDB(c.db, baseMeta)
 	if err != nil {
 		_ = snap.Close()
 		return nil, err
@@ -2611,7 +2629,7 @@ func (c *Collection) compactRootOverlaysLocked(ctx context.Context) (CollectionR
 		if len(overlays) == 0 {
 			continue
 		}
-		policy, err := collectionRootStoragePolicy(catalog.meta, rootName)
+		policy, err := collectionRootStoragePolicyForDB(c.db, catalog.meta, rootName)
 		if err != nil {
 			cleanupIters()
 			return stats, err
@@ -2719,7 +2737,7 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 		if err := rejectCatalogRootOverlaysForIndexedBufferWrite(catalog); err != nil {
 			return nil, collectionOptions{}, false, err
 		}
-		options, err := collectionPlannerOptions(catalog.meta)
+		options, err := collectionPlannerOptionsForDB(c.db, catalog.meta)
 		if err != nil {
 			return nil, collectionOptions{}, false, err
 		}
@@ -2729,7 +2747,7 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 		if err := rejectCatalogRootOverlaysForIndexedBufferWrite(domain.catalog); err != nil {
 			return nil, collectionOptions{}, false, err
 		}
-		options, err := collectionPlannerOptions(domain.meta)
+		options, err := collectionPlannerOptionsForDB(c.db, domain.meta)
 		if err != nil {
 			return nil, collectionOptions{}, false, err
 		}
@@ -2749,7 +2767,7 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 		}
 		c.rememberCatalog(snap, catalog)
 		_ = snap.Close()
-		options, err := collectionPlannerOptions(catalog.meta)
+		options, err := collectionPlannerOptionsForDB(c.db, catalog.meta)
 		if err != nil {
 			return nil, collectionOptions{}, false, err
 		}
@@ -2775,7 +2793,7 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 	c.rememberCatalog(snap, catalog)
 	_ = snap.Close()
 
-	options, err := collectionPlannerOptions(catalog.meta)
+	options, err := collectionPlannerOptionsForDB(c.db, catalog.meta)
 	if err != nil {
 		return nil, collectionOptions{}, false, err
 	}
@@ -2849,7 +2867,7 @@ func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWrite
 			return nil, errConcurrentRootModification(domain.meta.Name, primaryRootName)
 		}
 	}
-	options, err := collectionPlannerOptions(catalog.meta)
+	options, err := collectionPlannerOptionsForDB(c.db, catalog.meta)
 	if err != nil {
 		return nil, err
 	}
@@ -2974,7 +2992,14 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	baseCommitSeq := snapshotCommitSeq(pin)
 	baseRootIDs := map[string]uint64{rootName: baseRoot}
 	table := domain.table
-	iter := table.NewIterator(nil, nil)
+	publishTable, pointerized, err := pointerizeCollectionRunTableValues(c.db, table)
+	if err != nil {
+		return err
+	}
+	if pointerized {
+		defer resetCollectionRunTable(publishTable)
+	}
+	iter := publishTable.NewIterator(nil, nil)
 
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
 		BaseRoot:      baseRoot,
@@ -3356,6 +3381,166 @@ func compactTableRuns(runs []memtable.Table) (memtable.Table, error) {
 	}
 	table.Freeze()
 	return table, nil
+}
+
+type collectionPointerizedRunEntry struct {
+	key          []byte
+	value        []byte
+	ptr          page.ValuePtr
+	flags        byte
+	pointerIndex int
+}
+
+func pointerizeCollectionRunTableValues(db *backenddb.DB, table memtable.Table) (memtable.Table, bool, error) {
+	if db == nil || table == nil || !db.HasValueLogAppender() {
+		return table, false, nil
+	}
+	needsPointer := false
+	probe := table.NewIterator(nil, nil)
+	for probe.Valid() {
+		value, _, flags := probe.UnsafeEntry()
+		if flags&node.FlagTombstone == 0 &&
+			flags&node.FlagPointer == 0 &&
+			len(value) > db.InlineThresholdForKey(probe.UnsafeKey()) {
+			needsPointer = true
+			break
+		}
+		probe.Next()
+	}
+	probeErr := probe.Error()
+	_ = probe.Close()
+	if probeErr != nil {
+		return table, false, probeErr
+	}
+	if !needsPointer {
+		return table, false, nil
+	}
+
+	entries := make([]collectionPointerizedRunEntry, 0, table.Len())
+	values := make([][]byte, 0)
+	it := table.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	for it.Valid() {
+		value, ptr, flags := it.UnsafeEntry()
+		entry := collectionPointerizedRunEntry{
+			key:          bytes.Clone(it.UnsafeKey()),
+			ptr:          ptr,
+			flags:        flags,
+			pointerIndex: -1,
+		}
+		if flags&node.FlagTombstone == 0 &&
+			flags&node.FlagPointer == 0 &&
+			len(value) > db.InlineThresholdForKey(entry.key) {
+			entry.pointerIndex = len(values)
+			values = append(values, bytes.Clone(value))
+		} else if value != nil {
+			entry.value = bytes.Clone(value)
+		}
+		entries = append(entries, entry)
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return table, false, err
+	}
+	if len(values) == 0 {
+		return table, false, nil
+	}
+	ptrs, err := db.AppendValueLogValues(values)
+	if err != nil {
+		return table, false, err
+	}
+	if len(ptrs) != len(values) {
+		return table, false, fmt.Errorf("collections: value-log appender returned %d ptrs for %d values", len(ptrs), len(values))
+	}
+	out := newCollectionRunTable(len(entries))
+	for i := range entries {
+		entry := entries[i]
+		if entry.pointerIndex >= 0 {
+			entry.value = nil
+			entry.ptr = ptrs[entry.pointerIndex]
+			entry.flags = (entry.flags &^ node.FlagTombstone) | node.FlagPointer
+		}
+		out.SetEntrySteal(entry.key, entry.value, entry.ptr, entry.flags)
+	}
+	out.Freeze()
+	return out, true, nil
+}
+
+func pointerizeInsertBatchPlanDataRuns(db *backenddb.DB, plan *insertBatchPlan) ([]memtable.Table, error) {
+	if plan == nil || db == nil || !db.HasValueLogAppender() {
+		return nil, nil
+	}
+	var obsolete []memtable.Table
+	for i := range plan.runs {
+		switch plan.runs[i].kind {
+		case collectionRootPrimary, collectionRootTemplate:
+		default:
+			continue
+		}
+		pointerizedTable, pointerized, err := pointerizeCollectionRunTableValues(db, plan.runs[i].table)
+		if err != nil {
+			resetCollectionTables(obsolete)
+			return nil, err
+		}
+		if !pointerized {
+			continue
+		}
+		obsolete = append(obsolete, plan.runs[i].table)
+		plan.runs[i].table = pointerizedTable
+	}
+	return obsolete, nil
+}
+
+func pointerizeCollectionDataRootRunMapValues(db *backenddb.DB, meta CollectionMeta, rootRuns map[string][]memtable.Table) (map[string][]memtable.Table, func(), error) {
+	if db == nil || !db.HasValueLogAppender() || len(rootRuns) == 0 {
+		return rootRuns, func() {}, nil
+	}
+	dataRoots := map[string]struct{}{
+		collectionPrimaryRootName(meta.Name):  {},
+		collectionTemplateRootName(meta.Name): {},
+	}
+	var out map[string][]memtable.Table
+	var clonedSlices map[string]bool
+	var pointerizedTables []memtable.Table
+	cleanup := func() {
+		resetCollectionTables(pointerizedTables)
+	}
+	ensureOut := func() {
+		if out != nil {
+			return
+		}
+		out = make(map[string][]memtable.Table, len(rootRuns))
+		for name, runs := range rootRuns {
+			out[name] = runs
+		}
+		clonedSlices = make(map[string]bool, 2)
+	}
+	for rootName, runs := range rootRuns {
+		if _, ok := dataRoots[rootName]; !ok {
+			continue
+		}
+		for i, run := range runs {
+			pointerizedTable, pointerized, err := pointerizeCollectionRunTableValues(db, run)
+			if err != nil {
+				cleanup()
+				return nil, nil, err
+			}
+			if !pointerized {
+				continue
+			}
+			ensureOut()
+			if !clonedSlices[rootName] {
+				out[rootName] = append([]memtable.Table(nil), runs...)
+				clonedSlices[rootName] = true
+			}
+			out[rootName][i] = pointerizedTable
+			pointerizedTables = append(pointerizedTables, pointerizedTable)
+		}
+	}
+	if out == nil {
+		return rootRuns, func() {}, nil
+	}
+	return out, cleanup, nil
 }
 
 func mutableRootRunLocked(domain *collectionWriteDomain, rootName string) (memtable.Table, bool) {
@@ -5065,6 +5250,11 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 			work.pin = nil
 		}
 	}()
+	publishRootRuns, cleanupPointerizedRuns, err := pointerizeCollectionDataRootRunMapValues(c.db, work.meta, work.flushUnit.rootRuns)
+	if err != nil {
+		return c.completePreparedIndexedFlush(work, 0, nil, err, 0, 0, 0)
+	}
+	defer cleanupPointerizedRuns()
 	if collectionMetaUsesIndexedOverlayRoots(work.meta) {
 		materializeStart := time.Now()
 		rootOverlayFilters, err := buildCollectionRootOverlayFilters(work.rootNames, work.flushUnit.rootRuns, work.rootOverlays, work.catalog.rootOverlayFilters)
@@ -5073,7 +5263,7 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 			return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 		}
 		work.rootOverlayFilters = rootOverlayFilters
-		ordered, cleanupDeltas, err := buildBufferedRootOverlayDeltaBatchPublishInputs(work.rootNames, work.flushUnit.rootRuns, work.flushUnit.rootPolicies, work.rootOverlays)
+		ordered, cleanupDeltas, err := buildBufferedRootOverlayDeltaBatchPublishInputs(work.rootNames, publishRootRuns, work.flushUnit.rootPolicies, work.rootOverlays)
 		if err != nil {
 			materializeElapsed := collectionObservedElapsedSince(materializeStart)
 			return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
@@ -5096,7 +5286,7 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		return publishErr
 	}
 	materializeStart := time.Now()
-	ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(work.rootNames, work.flushUnit.rootRuns, work.rootBaseIDs, work.flushUnit.rootPolicies)
+	ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(work.rootNames, publishRootRuns, work.rootBaseIDs, work.flushUnit.rootPolicies)
 	if err != nil {
 		materializeElapsed := collectionObservedElapsedSince(materializeStart)
 		return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
@@ -5510,6 +5700,11 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		baseRootIDs[rootName] = baseRoot
 		rootOverlays[rootName] = append([]uint64(nil), catalog.overlayRootIDs(rootName)...)
 	}
+	publishRootRuns, cleanupPointerizedRuns, err := pointerizeCollectionDataRootRunMapValues(c.db, meta, flushUnit.rootRuns)
+	if err != nil {
+		return err
+	}
+	defer cleanupPointerizedRuns()
 	var newSystemRoot uint64
 	var rootIDs []uint64
 	var rootOverlayFilters map[string]collectionRootOverlayFilter
@@ -5520,7 +5715,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 			materializeElapsed = collectionObservedElapsedSince(materializeStart)
 			return err
 		}
-		ordered, cleanupDeltas, err := buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames, flushUnit.rootRuns, flushUnit.rootPolicies, rootOverlays)
+		ordered, cleanupDeltas, err := buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames, publishRootRuns, flushUnit.rootPolicies, rootOverlays)
 		if err != nil {
 			materializeElapsed = collectionObservedElapsedSince(materializeStart)
 			return err
@@ -5538,7 +5733,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		}
 	} else {
 		materializeStart := time.Now()
-		ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(rootNames, flushUnit.rootRuns, flushUnit.rootBaseIDs, flushUnit.rootPolicies)
+		ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(rootNames, publishRootRuns, flushUnit.rootBaseIDs, flushUnit.rootPolicies)
 		if err != nil {
 			materializeElapsed = collectionObservedElapsedSince(materializeStart)
 			return err
@@ -5871,7 +6066,7 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 		_ = snap.Close()
 		return c.insertOneViaBatch(id, document)
 	}
-	plannerOptions, err := collectionPlannerOptions(c.meta)
+	plannerOptions, err := collectionPlannerOptionsForDB(c.db, c.meta)
 	if err != nil {
 		_ = snap.Close()
 		return nil, err
@@ -5900,11 +6095,22 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 	defer func() { _ = snap.Close() }()
 
 	resultID := bytes.Clone(id)
-	iter := &systemTargetIterator{entries: []systemTargetEntry{{
-		key:   resultID,
-		value: bytes.Clone(document),
-	}}}
-	defer func() { _ = iter.Close() }()
+	table := newCollectionRunTable(1)
+	setCollectionRunValue(table, resultID, bytes.Clone(document))
+	table.Freeze()
+	publishTable, pointerized, err := pointerizeCollectionRunTableValues(c.db, table)
+	if err != nil {
+		resetCollectionRunTable(table)
+		return nil, err
+	}
+	if pointerized {
+		defer resetCollectionRunTable(publishTable)
+	}
+	iter := publishTable.NewIterator(nil, nil)
+	defer func() {
+		_ = iter.Close()
+		resetCollectionRunTable(table)
+	}()
 
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
 		BaseRoot:      baseRoot,
@@ -6023,7 +6229,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 	}
 	meta := catalog.meta
 	c.meta = meta
-	plannerOptions, err := collectionPlannerOptions(meta)
+	plannerOptions, err := collectionPlannerOptionsForDB(c.db, meta)
 	if err != nil {
 		closePlanningSnapshot()
 		return nil, err
@@ -6060,7 +6266,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		}
 		meta = catalog.meta
 		c.meta = meta
-		plannerOptions, err = collectionPlannerOptions(meta)
+		plannerOptions, err = collectionPlannerOptionsForDB(c.db, meta)
 		if err != nil {
 			closePlanningSnapshot()
 			return nil, err
@@ -6158,6 +6364,11 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
 	// base roots before stale-root validation rejects concurrent modifications.
 	defer func() { _ = pin.Close() }()
+	obsoletePointerizedTables, err := pointerizeInsertBatchPlanDataRuns(c.db, plan)
+	if err != nil {
+		return nil, err
+	}
+	defer resetCollectionTables(obsoletePointerizedTables)
 
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(plan.runs))
 	iterators := make([]iterator.UnsafeIterator, 0, len(plan.runs))
@@ -6441,7 +6652,14 @@ func (c *Collection) insertBatchNoIndex(
 	}
 	table.Freeze()
 	stats.PrimaryRunBuild = time.Since(phaseStart)
-	iter := table.NewIterator(nil, nil)
+	publishTable, pointerized, err := pointerizeCollectionRunTableValues(c.db, table)
+	if err != nil {
+		return nil, err
+	}
+	if pointerized {
+		defer resetCollectionRunTable(publishTable)
+	}
+	iter := publishTable.NewIterator(nil, nil)
 	defer func() {
 		_ = iter.Close()
 		resetCollectionRunTable(table)
@@ -6529,7 +6747,7 @@ func (c *Collection) deleteDocumentOnce(documentID []byte) (bool, error) {
 		return false, err
 	}
 	c.meta = catalog.meta
-	plannerOptions, err := collectionPlannerOptions(c.meta)
+	plannerOptions, err := collectionPlannerOptionsForDB(c.db, c.meta)
 	if err != nil {
 		_ = snap.Close()
 		return false, err
@@ -7565,7 +7783,7 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 		return false, false, err
 	}
 	c.meta = catalog.meta
-	plannerOptions, err := collectionPlannerOptions(c.meta)
+	plannerOptions, err := collectionPlannerOptionsForDB(c.db, c.meta)
 	if err != nil {
 		_ = snap.Close()
 		return false, false, err
@@ -7741,7 +7959,17 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	primaryTable := newCollectionRunTable(1)
 	setCollectionRunValue(primaryTable, bytes.Clone(documentID), document)
 	primaryTable.Freeze()
-	deltaTables = append(deltaTables, primaryTable)
+	if pointerizedPrimaryTable, pointerized, err := pointerizeCollectionRunTableValues(c.db, primaryTable); err != nil {
+		_ = snap.Close()
+		resetCollectionTables(append(deltaTables, primaryTable))
+		return false, false, err
+	} else if pointerized {
+		deltaTables = append(deltaTables, pointerizedPrimaryTable)
+		resetCollectionRunTable(primaryTable)
+		primaryTable = nil
+	} else {
+		deltaTables = append(deltaTables, primaryTable)
+	}
 	stats.PrimaryRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
 
 	if indexStateChanged {
@@ -8831,7 +9059,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		(!collectionMetaHasSecondaryUniqueIndex(meta) ||
 			mode == updateBatchModeNoSecondaryUniqueIndexes ||
 			mode == updateBatchModeNoSecondaryUniqueIndexChanges)
-	plannerOptions, err := collectionPlannerOptions(meta)
+	plannerOptions, err := collectionPlannerOptionsForDB(c.db, meta)
 	if err != nil {
 		_ = snap.Close()
 		return nil, err
@@ -10244,7 +10472,7 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 	if domain.count != 0 {
 		return
 	}
-	options, err := collectionPlannerOptions(catalog.meta)
+	options, err := collectionPlannerOptionsForDB(c.db, catalog.meta)
 	if err != nil {
 		domain.loaded = false
 		return
@@ -11208,7 +11436,7 @@ func (c *Collection) NewStoredDocumentJSONMaterializer() (*StoredDocumentJSONMat
 		if catalog == nil {
 			return nil, errCollectionNotFound
 		}
-		plannerOptions, err := collectionPlannerOptions(c.meta)
+		plannerOptions, err := collectionPlannerOptionsForDB(c.db, c.meta)
 		if err != nil {
 			return nil, err
 		}
@@ -12428,9 +12656,13 @@ func (c *collectionCatalog) anyOverlayRootMayContainKey(rootName string, key []b
 }
 
 func collectionRootStoragePolicy(meta CollectionMeta, rootName string) (backenddb.OrderedRootStoragePolicy, error) {
+	return collectionRootStoragePolicyForDB(nil, meta, rootName)
+}
+
+func collectionRootStoragePolicyForDB(db *backenddb.DB, meta CollectionMeta, rootName string) (backenddb.OrderedRootStoragePolicy, error) {
 	switch rootName {
 	case collectionPrimaryRootName(meta.Name), collectionTemplateRootName(meta.Name):
-		return backendRootStoragePolicy(meta.Options.DataRootStoragePolicy)
+		return backendCollectionDataRootStoragePolicy(db, meta.Options.DataRootStoragePolicy)
 	case collectionIndexStateRootName(meta.Name):
 		return backendRootStoragePolicy(meta.Options.IndexStateStoragePolicy)
 	}

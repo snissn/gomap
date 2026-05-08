@@ -63,6 +63,7 @@ type DB struct {
 	snapshotViewRO                 atomic.Pointer[snapshotView]
 	snapshotAcquireRO              [snapshotAcquireShardCount]atomic.Int32
 	valueLogRefTracker             *valueLogRefTracker
+	valueLogAppender               ValueLogAppender
 	leafPageLog                    LeafPageLog
 	leafPageReadCache              *leafPageReadCache
 	leafGenerationManifest         *leafGenerationManifest
@@ -1873,6 +1874,17 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 			}
 		}
 	}
+	if db.valueLogAppender != nil {
+		if sync {
+			if err := db.valueLogAppender.Sync(); err != nil {
+				return post, prePublishErr(err)
+			}
+		} else {
+			if err := db.valueLogAppender.Flush(); err != nil {
+				return post, prePublishErr(err)
+			}
+		}
+	}
 	debugTiming := commitTimingEnabled()
 	var (
 		start    time.Time
@@ -1917,6 +1929,8 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 
 	leafPageSegmentRegistered := false
 	leafPageSegmentFileID := uint32(0)
+	valueLogSegmentRegistered := false
+	valueLogSegmentRegistrationAttempted := false
 	if db.testFailFinalizeCommit.Load() {
 		return post, prePublishErr(errTestFinalizeCommitFailpoint)
 	}
@@ -1930,6 +1944,17 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 			return post, prePublishErr(err)
 		}
 		leafPageSegmentRegistered = registered
+		if db.valueLogAppender != nil {
+			path, fileID, ok := db.valueLogAppender.CurrentValueLogSegment()
+			if ok && path != "" && fileID != 0 {
+				valueLogSegmentRegistrationAttempted = true
+				registered, err := db.ensureValueLogSegmentRegisteredAt(path, fileID)
+				if err != nil {
+					return post, prePublishErr(err)
+				}
+				valueLogSegmentRegistered = registered
+			}
+		}
 	}
 
 	// 3. Write Meta - No DB Lock
@@ -1972,7 +1997,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 				}
 			}
 		}
-		if forceValueLogRefresh && !leafPageSegmentRegistered {
+		if forceValueLogRefresh && (!leafPageSegmentRegistered || (valueLogSegmentRegistrationAttempted && !valueLogSegmentRegistered)) {
 			// If no registration path is available, force one refresh as a
 			// safety fallback before publishing the new state.
 			needRefresh = true
