@@ -96,12 +96,18 @@ func appendGetManyRequestBodyRef(dst []byte, collection string, handle Collectio
 	}
 	idsLen := iwire.ByteVectorEncodedLen(ids)
 	total := iwire.SectionHeaderEncodedLen(iwire.SectionCommandHeader, 0, len(commandPayload)) + len(commandPayload)
-	total += iwire.SectionHeaderEncodedLen(iwire.SectionCollectionRef, 0, refLen) + refLen
-	total += iwire.SectionHeaderEncodedLen(iwire.SectionDocumentIDs, 0, idsLen) + idsLen
-	if cap(dst)-len(dst) < total {
-		next := make([]byte, len(dst), len(dst)+total)
-		copy(next, dst)
-		dst = next
+	var err error
+	total, err = addRequestBodyLen(total, iwire.SectionHeaderEncodedLen(iwire.SectionCollectionRef, 0, refLen)+refLen)
+	if err != nil {
+		return nil, err
+	}
+	total, err = addRequestBodyLen(total, iwire.SectionHeaderEncodedLen(iwire.SectionDocumentIDs, 0, idsLen)+idsLen)
+	if err != nil {
+		return nil, err
+	}
+	dst, err = growRequestBody(dst, total)
+	if err != nil {
+		return nil, err
 	}
 	body, err := appendRawSection(dst, iwire.SectionCommandHeader, commandPayload)
 	if err != nil {
