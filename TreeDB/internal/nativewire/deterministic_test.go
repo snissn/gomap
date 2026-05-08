@@ -47,20 +47,12 @@ func TestDeterministicEntryRejectsMissingDistributedGuards(t *testing.T) {
 	registry := MustV1Registry()
 
 	sections := removeSection(insertBatchDeterministicSections(), SectionIdempotencyKey)
-	cmd, err := registry.ValidateRequestSections(sections)
-	if err != nil {
-		t.Fatalf("ValidateRequestSections without idempotency: %v", err)
-	}
-	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+	if _, err := registry.ValidateRequestSections(sections); codeOf(err) != ErrInvalidCommand {
 		t.Fatalf("missing idempotency err=%v code=%d", err, codeOf(err))
 	}
 
 	sections = removeSection(insertBatchDeterministicSections(), SectionExpectedCatalogVersion)
-	cmd, err = registry.ValidateRequestSections(sections)
-	if err != nil {
-		t.Fatalf("ValidateRequestSections without catalog guard: %v", err)
-	}
-	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+	if _, err := registry.ValidateRequestSections(sections); codeOf(err) != ErrInvalidCommand {
 		t.Fatalf("missing catalog guard err=%v code=%d", err, codeOf(err))
 	}
 }
@@ -180,6 +172,23 @@ func TestDeterministicEntryRejectsDuplicateIdempotencyInValidatedView(t *testing
 	cmd.Known = append(cmd.Known, Section{ID: SectionIdempotencyKey, Bytes: []byte("id2")})
 	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
 		t.Fatalf("duplicate idempotency err=%v code=%d", err, codeOf(err))
+	}
+}
+
+func TestDeterministicEntryRejectsBatchVectorArityMismatch(t *testing.T) {
+	registry := MustV1Registry()
+	sections := insertBatchDeterministicSections()
+	for i := range sections {
+		if sections[i].ID == SectionDocuments {
+			sections[i].Bytes = AppendByteVector(nil, []byte("{}"), []byte("{}"))
+		}
+	}
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("arity mismatch err=%v code=%d", err, codeOf(err))
 	}
 }
 

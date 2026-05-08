@@ -110,6 +110,9 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 	if s == nil || conn == nil {
 		return ErrServerClosed
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if !s.registerConn(conn) {
 		_ = conn.Close()
 		return ErrServerClosed
