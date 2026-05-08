@@ -727,10 +727,9 @@ post-handshake versions are connection-fatal. The server MAY send `goaway` or an
 
 ## 14. Deterministic Command Entry v1
 
-Future Raft log entries SHOULD use a deterministic command-entry envelope. R2
-implements the v1 envelope encoder/decoder in
-`TreeDB/internal/nativewire.AppendDeterministicEntry` and
-`TreeDB/internal/nativewire.DecodeDeterministicEntry`.
+Future Raft log entries SHOULD use a deterministic command-entry envelope. The
+R2 implementation includes a v1 encoder/decoder, and compatible implementations
+MUST follow the byte layout below.
 
 ```text
 entry_magic[4] = "TDC1"

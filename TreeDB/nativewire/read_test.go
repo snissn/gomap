@@ -3,6 +3,7 @@ package nativewire
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -378,6 +379,52 @@ func TestOpenScanReportsTruncatedWhenCursorRetentionExceeded(t *testing.T) {
 	}
 	if len(first.IDs) != 1 || first.Cursor.CursorID != 0 || first.Cursor.HasMore || !first.Truncated {
 		t.Fatalf("first=%+v want one truncated terminal batch", first)
+	}
+}
+
+func TestOpenScanDefaultBatchHonorsFrameLimit(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{
+		Name:    "users",
+		Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	doc := []byte(`{"payload":"` + strings.Repeat("x", 512) + `"}`)
+	if _, err := col.InsertBatch([][]byte{[]byte("u1"), []byte("u2")}, [][]byte{doc, doc}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	server := NewServer(ServerOptions{
+		Collections:            mgr,
+		Backend:                db,
+		DefaultCursorBatchSize: 10,
+		Limits:                 iwire.Limits{MaxFrameSize: 700},
+	})
+	client, _ := servePipe(t, server)
+	t.Cleanup(func() { _ = db.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	first, err := client.OpenScan(ctx, "users", CursorLimits{})
+	if err != nil {
+		t.Fatalf("OpenScan: %v", err)
+	}
+	if len(first.IDs) != 1 || first.Cursor.CursorID == 0 || !first.Cursor.HasMore {
+		t.Fatalf("first=%+v want one frame-limited cursor batch", first)
+	}
+	if err := client.CursorClose(ctx, first.Cursor.CursorID); err != nil {
+		t.Fatalf("CursorClose cleanup: %v", err)
 	}
 }
 

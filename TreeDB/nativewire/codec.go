@@ -10,7 +10,10 @@ import (
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
-const maxBufferedWriteFrameBody = 32 << 10
+const (
+	maxBufferedWriteFrameBody = 32 << 10
+	maxStringMapEntries       = 4096
+)
 
 func readFrame(r io.Reader, limits iwire.Limits) (iwire.Header, []byte, error) {
 	return readFrameInto(r, limits, nil)
@@ -45,6 +48,12 @@ func readFrameInto(r io.Reader, limits iwire.Limits, dst []byte) (iwire.Header, 
 }
 
 func writeFrame(w io.Writer, header iwire.Header, body []byte) error {
+	if header.Version.Major == 0 {
+		header.Version.Major = iwire.ProtocolMajorV1
+	}
+	if header.Version.Minor == 0 {
+		header.Version.Minor = iwire.ProtocolMinorV0
+	}
 	header.BodyLen = uint64(len(body))
 	var headerBuf [iwire.FrameHeaderLenV1]byte
 	frame, err := iwire.AppendHeader(headerBuf[:0], header)
@@ -60,6 +69,12 @@ func writeFrame(w io.Writer, header iwire.Header, body []byte) error {
 func writeFrameBuffered(w io.Writer, header iwire.Header, body []byte, dst []byte) ([]byte, error) {
 	if len(body) > maxBufferedWriteFrameBody {
 		return dst[:0], writeFrame(w, header, body)
+	}
+	if header.Version.Major == 0 {
+		header.Version.Major = iwire.ProtocolMajorV1
+	}
+	if header.Version.Minor == 0 {
+		header.Version.Minor = iwire.ProtocolMinorV0
 	}
 	header.BodyLen = uint64(len(body))
 	var headerBuf [iwire.FrameHeaderLenV1]byte
@@ -146,11 +161,11 @@ func appendRawSection(dst []byte, id iwire.SectionID, payload []byte) ([]byte, e
 }
 
 func appendCollectionNameRefSection(dst []byte, collection string) ([]byte, error) {
-	body, err := iwire.AppendSectionHeader(dst, iwire.SectionCollectionRef, 0, len(collection))
+	body, err := iwire.AppendSectionHeader(dst, iwire.SectionCollectionRef, 0, collectionNameRefPayloadLen(collection))
 	if err != nil {
 		return nil, err
 	}
-	return append(body, collection...), nil
+	return appendCollectionNameRefPayload(body, collection), nil
 }
 
 func appendByteVectorSection(dst []byte, id iwire.SectionID, items [][]byte) ([]byte, error) {
@@ -208,6 +223,9 @@ func decodeStringMap(src []byte) (map[string]string, error) {
 	}
 	if count > uint64(maxInt) {
 		return nil, protocolError(iwire.ErrResourceExhausted, "string map count exceeds int capacity")
+	}
+	if count > maxStringMapEntries {
+		return nil, protocolError(iwire.ErrResourceExhausted, "string map count %d exceeds limit %d", count, maxStringMapEntries)
 	}
 	out := make(map[string]string, int(count))
 	for i := uint64(0); i < count; i++ {

@@ -82,7 +82,7 @@ func appendGetManyRequestBodyRef(dst []byte, collection string, handle Collectio
 	commandPayload := iwire.AppendCommandHeader(commandHeader[:0], iwire.CommandHeader{ID: iwire.CommandGetMany, Version: 1})
 	var refBuf [1 + binary.MaxVarintLen64]byte
 	var refPayload []byte
-	refLen := len(collection)
+	refLen := collectionNameRefPayloadLen(collection)
 	if useHandle {
 		refPayload = appendCollectionHandleRefPayload(refBuf[:0], handle)
 		refLen = len(refPayload)
@@ -177,6 +177,7 @@ func (c *Client) OpenScan(ctx context.Context, collection string, limits CursorL
 
 func (c *Client) CursorNext(ctx context.Context, cursorID uint64, limits CursorLimits) (DocumentsResult, error) {
 	sections, err := c.commandSectionsOnStream(ctx, cursorID, iwire.CommandCursorNext,
+		iwire.Section{ID: iwire.SectionCursorRef, Bytes: encodeCursorRef(cursorID)},
 		iwire.Section{ID: iwire.SectionCursorLimits, Bytes: encodeCursorLimits(limits)},
 	)
 	if err != nil {
@@ -186,7 +187,9 @@ func (c *Client) CursorNext(ctx context.Context, cursorID uint64, limits CursorL
 }
 
 func (c *Client) CursorClose(ctx context.Context, cursorID uint64) error {
-	_, err := c.commandSectionsOnStream(ctx, cursorID, iwire.CommandCursorClose)
+	_, err := c.commandSectionsOnStream(ctx, cursorID, iwire.CommandCursorClose,
+		iwire.Section{ID: iwire.SectionCursorRef, Bytes: encodeCursorRef(cursorID)},
+	)
 	return err
 }
 

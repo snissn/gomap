@@ -44,7 +44,7 @@ func (c *Client) CloseCollection(ctx context.Context, handle CollectionHandle) e
 }
 
 func (c *Client) CreateIndex(ctx context.Context, collection string, def collections.IndexDefinition) (collections.CollectionMeta, error) {
-	if err := ensureIndexName(def.Name); err != nil {
+	if err := normalizeClientIndexDefinition(def); err != nil {
 		return collections.CollectionMeta{}, err
 	}
 	sections, err := c.commandSections(ctx, iwire.CommandCreateIndex,

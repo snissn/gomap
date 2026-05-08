@@ -2548,10 +2548,11 @@ func TestNativeWireStoredDocumentPreservesFullBenchmarkShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("nativeWireStoredDocument template-v1: %v", err)
 	}
-	if _, err := col.InsertBatch([][]byte{[]byte("d7")}, [][]byte{rawTemplate}); err != nil {
+	primaryID := nativeWireMongoPrimaryID(7)
+	if _, err := col.InsertBatch([][]byte{primaryID}, [][]byte{rawTemplate}); err != nil {
 		t.Fatalf("InsertBatch template-v1: %v", err)
 	}
-	got, err := col.Get([]byte("d7"))
+	got, err := col.Get(primaryID)
 	if err != nil {
 		t.Fatalf("Get template-v1: %v", err)
 	}
