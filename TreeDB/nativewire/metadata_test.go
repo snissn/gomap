@@ -130,7 +130,7 @@ func TestMetadataHandleRefWorksForListIndexes(t *testing.T) {
 }
 
 func TestMetadataHandleRefsWorkForIndexMetadata(t *testing.T) {
-	client, _, _ := serveCollectionPipe(t)
+	client, _, db := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := client.Hello(ctx); err != nil {
@@ -146,20 +146,26 @@ func TestMetadataHandleRefsWorkForIndexMetadata(t *testing.T) {
 	if _, err := client.commandSections(ctx, iwire.CommandOpenCollection, collectionHandleRef(handle)); !isRemoteError(err, iwire.ErrInvalidCommand) {
 		t.Fatalf("OpenCollection by handle err=%v want invalid command", err)
 	}
-	if _, err := client.commandSections(ctx, iwire.CommandCreateIndex,
+
+	version := catalogVersion(t, db)
+	createIndexReq := append(replicatedTestGuard("create_index_handle", version),
 		collectionHandleRef(handle),
 		iwire.Section{ID: iwire.SectionIndexDefinition, Bytes: encodeIndexDefinition(collections.IndexDefinition{
 			Name:      "email",
 			Field:     "email",
 			ValueType: collections.IndexValueString,
 		})},
-	); err != nil {
+	)
+	if _, err := client.commandSections(ctx, iwire.CommandCreateIndex, createIndexReq...); err != nil {
 		t.Fatalf("CreateIndex by handle: %v", err)
 	}
-	if _, err := client.commandSections(ctx, iwire.CommandDropIndex,
+
+	version = catalogVersion(t, db)
+	dropIndexReq := append(replicatedTestGuard("drop_index_handle", version),
 		collectionHandleRef(handle),
 		iwire.Section{ID: iwire.SectionIndexName, Bytes: encodeIndexName("email")},
-	); err != nil {
+	)
+	if _, err := client.commandSections(ctx, iwire.CommandDropIndex, dropIndexReq...); err != nil {
 		t.Fatalf("DropIndex by handle: %v", err)
 	}
 }
@@ -173,41 +179,60 @@ func TestMetadataCatalogGuard(t *testing.T) {
 	}
 
 	version := catalogVersion(t, db)
-	if _, err := client.commandSections(ctx, iwire.CommandCreateCollection,
+	createStaleReq := append(replicatedTestGuard("create_collection_stale", version+1),
 		iwire.Section{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(collections.CollectionMeta{Name: "users"})},
-		iwire.Section{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, version+1)},
-	); !isRemoteError(err, iwire.ErrCatalogVersionMismatch) {
+	)
+	if _, err := client.commandSections(ctx, iwire.CommandCreateCollection, createStaleReq...); !isRemoteError(err, iwire.ErrCatalogVersionMismatch) {
 		t.Fatalf("CreateCollection stale guard err=%v want catalog mismatch", err)
 	}
-	if _, err := client.commandSections(ctx, iwire.CommandCreateCollection,
+	createReq := append(replicatedTestGuard("create_collection", version),
 		iwire.Section{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(collections.CollectionMeta{Name: "users"})},
-		iwire.Section{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, version)},
-	); err != nil {
+	)
+	if _, err := client.commandSections(ctx, iwire.CommandCreateCollection, createReq...); err != nil {
 		t.Fatalf("CreateCollection guarded: %v", err)
 	}
 
 	version = catalogVersion(t, db)
-	if _, err := client.commandSections(ctx, iwire.CommandCreateIndex,
+	indexStaleReq := append(replicatedTestGuard("create_index_stale", version+1),
 		collectionNameRef("users"),
 		iwire.Section{ID: iwire.SectionIndexDefinition, Bytes: encodeIndexDefinition(collections.IndexDefinition{
 			Name:      "email",
 			Field:     "email",
 			ValueType: collections.IndexValueString,
 		})},
-		iwire.Section{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, version+1)},
-	); !isRemoteError(err, iwire.ErrCatalogVersionMismatch) {
+	)
+	if _, err := client.commandSections(ctx, iwire.CommandCreateIndex, indexStaleReq...); !isRemoteError(err, iwire.ErrCatalogVersionMismatch) {
 		t.Fatalf("CreateIndex stale guard err=%v want catalog mismatch", err)
 	}
-	if _, err := client.commandSections(ctx, iwire.CommandCreateIndex,
+	indexReq := append(replicatedTestGuard("create_index", version),
 		collectionNameRef("users"),
 		iwire.Section{ID: iwire.SectionIndexDefinition, Bytes: encodeIndexDefinition(collections.IndexDefinition{
 			Name:      "email",
 			Field:     "email",
 			ValueType: collections.IndexValueString,
 		})},
-		iwire.Section{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, version)},
-	); err != nil {
+	)
+	if _, err := client.commandSections(ctx, iwire.CommandCreateIndex, indexReq...); err != nil {
 		t.Fatalf("CreateIndex guarded: %v", err)
+	}
+}
+
+func replicatedTestGuard(id string, version uint64) []iwire.Section {
+	return []iwire.Section{
+		{ID: iwire.SectionIdempotencyKey, Bytes: []byte(id)},
+		{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, version)},
+	}
+}
+
+func TestMetadataCloseUnknownHandle(t *testing.T) {
+	client, _, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if err := client.CloseCollection(ctx, CollectionHandle(99)); !isRemoteError(err, iwire.ErrCollectionNotFound) {
+		t.Fatalf("CloseCollection unknown handle err=%v want collection not found", err)
 	}
 }
 
@@ -219,6 +244,20 @@ func catalogVersion(t *testing.T, db *backenddb.DB) uint64 {
 	}
 	defer func() { _ = snap.Close() }()
 	return snap.State().CommitSeq
+}
+
+func TestReadVarintRejectsInvalidOffsets(t *testing.T) {
+	if _, err := readVarint(nil, nil); nativeCodeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("nil offset err=%v code=%d", err, nativeCodeOf(err))
+	}
+	off := -1
+	if _, err := readVarint([]byte{0}, &off); nativeCodeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("negative offset err=%v code=%d", err, nativeCodeOf(err))
+	}
+	off = 2
+	if _, err := readVarint([]byte{0}, &off); nativeCodeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("oversized offset err=%v code=%d", err, nativeCodeOf(err))
+	}
 }
 
 func TestMetadataOpenCollectionHandleLimit(t *testing.T) {

@@ -8,12 +8,16 @@ import (
 )
 
 func (c *Client) InsertBatch(ctx context.Context, collection string, format collections.DocumentFormat, ids, docs [][]byte, ack AckPolicy) ([][]byte, error) {
-	req := []iwire.Section{
+	guard, err := c.replicatedMutationGuard(ctx, "insert_batch")
+	if err != nil {
+		return nil, err
+	}
+	req := append(guard,
 		collectionNameRef(collection),
 		documentFormatSection(format),
-		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, ids...)},
-		{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, docs...)},
-	}
+		iwire.Section{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, ids...)},
+		iwire.Section{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, docs...)},
+	)
 	if ack != 0 {
 		req = append(req, ackSection(ack))
 	}
@@ -21,6 +25,7 @@ func (c *Client) InsertBatch(ctx context.Context, collection string, format coll
 	if err != nil {
 		return nil, err
 	}
+	c.catalogVersionPlusOne.Store(0)
 	rawIDs, ok, err := singletonSection(sections, iwire.SectionDocumentIDs)
 	if err != nil {
 		return nil, err
@@ -32,13 +37,17 @@ func (c *Client) InsertBatch(ctx context.Context, collection string, format coll
 }
 
 func (c *Client) ReplaceBatch(ctx context.Context, collection string, format collections.DocumentFormat, ids, docs [][]byte, ack AckPolicy) (matched, modified int, err error) {
-	req := []iwire.Section{
+	guard, err := c.replicatedMutationGuard(ctx, "replace_batch")
+	if err != nil {
+		return 0, 0, err
+	}
+	req := append(guard,
 		collectionNameRef(collection),
 		documentFormatSection(format),
-		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, ids...)},
-		{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, docs...)},
-		{ID: iwire.SectionReplacementMode, Bytes: []byte{1}},
-	}
+		iwire.Section{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, ids...)},
+		iwire.Section{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, docs...)},
+		iwire.Section{ID: iwire.SectionReplacementMode, Bytes: []byte{1}},
+	)
 	if ack != 0 {
 		req = append(req, ackSection(ack))
 	}
@@ -46,6 +55,7 @@ func (c *Client) ReplaceBatch(ctx context.Context, collection string, format col
 	if err != nil {
 		return 0, 0, err
 	}
+	c.catalogVersionPlusOne.Store(0)
 	matched, err = responseCount(sections, "matched_count")
 	if err != nil {
 		return 0, 0, err
@@ -55,10 +65,14 @@ func (c *Client) ReplaceBatch(ctx context.Context, collection string, format col
 }
 
 func (c *Client) DeleteBatch(ctx context.Context, collection string, ids [][]byte, ack AckPolicy) (int, error) {
-	req := []iwire.Section{
-		collectionNameRef(collection),
-		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, ids...)},
+	guard, err := c.replicatedMutationGuard(ctx, "delete_batch")
+	if err != nil {
+		return 0, err
 	}
+	req := append(guard,
+		collectionNameRef(collection),
+		iwire.Section{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, ids...)},
+	)
 	if ack != 0 {
 		req = append(req, ackSection(ack))
 	}
@@ -66,6 +80,7 @@ func (c *Client) DeleteBatch(ctx context.Context, collection string, ids [][]byt
 	if err != nil {
 		return 0, err
 	}
+	c.catalogVersionPlusOne.Store(0)
 	return responseCount(sections, "deleted_count")
 }
 

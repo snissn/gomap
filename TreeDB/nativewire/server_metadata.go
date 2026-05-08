@@ -8,6 +8,8 @@ func (s *Server) handleCreateCollection(sections []iwire.Section) ([]iwire.Secti
 	if err := managerRequired(s.collections); err != nil {
 		return nil, err
 	}
+	s.metadataMu.Lock()
+	defer s.metadataMu.Unlock()
 	if err := s.checkCatalogGuard(sections); err != nil {
 		return nil, err
 	}
@@ -45,6 +47,8 @@ func (s *Server) handleCreateIndex(state *connState, sections []iwire.Section) (
 	if err := managerRequired(s.collections); err != nil {
 		return nil, err
 	}
+	s.metadataMu.Lock()
+	defer s.metadataMu.Unlock()
 	if err := s.checkCatalogGuard(sections); err != nil {
 		return nil, err
 	}
@@ -94,6 +98,8 @@ func (s *Server) handleDropIndex(state *connState, sections []iwire.Section) ([]
 	if err := managerRequired(s.collections); err != nil {
 		return nil, err
 	}
+	s.metadataMu.Lock()
+	defer s.metadataMu.Unlock()
 	if err := s.checkCatalogGuard(sections); err != nil {
 		return nil, err
 	}
