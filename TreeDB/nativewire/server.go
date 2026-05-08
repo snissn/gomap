@@ -494,8 +494,8 @@ func (s *Server) unregisterLocalEndpoint(endpoint *localEndpoint) {
 }
 
 func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState, header iwire.Header, body []byte) error {
-	s.counters.inc("frames.in_total")
-	s.counters.add("bytes.in_total", uint64(iwire.FrameHeaderLenV1)+uint64(len(body)))
+	s.counters.incFramesIn()
+	s.counters.addBytesIn(uint64(iwire.FrameHeaderLenV1) + uint64(len(body)))
 	if err := iwire.ValidateHeaderVersion(header, iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0}); err != nil {
 		if writeErr := s.writeError(w, header, err); writeErr != nil {
 			return writeErr
@@ -520,7 +520,7 @@ func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState,
 		}
 		return errGoaway
 	case iwire.FrameCancel:
-		s.counters.inc("requests.canceled_total")
+		s.counters.incRequestsCanceled()
 		return nil
 	case iwire.FrameRequest:
 		if state != nil && !state.hello {
@@ -546,7 +546,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	}
 	defer s.inFlight.Add(-1)
 
-	s.counters.inc("requests.started_total")
+	s.counters.incRequestsStarted()
 	start := time.Now()
 	var sections []iwire.Section
 	var err error
@@ -557,7 +557,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 		sections, err = iwire.DecodeSections(body, s.limits)
 	}
 	if err != nil {
-		s.counters.inc("requests.failed_total")
+		s.counters.incRequestsFailed()
 		if writeErr := s.writeError(w, header, err); writeErr != nil {
 			return writeErr
 		}
@@ -569,25 +569,25 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	if req, ok, err := s.decodeInsertBatchFastRequest(state, sections); ok {
 		s.counters.incCommandRequest(iwire.CommandInsertBatch, "insert_batch")
 		if err != nil {
-			s.counters.add("dispatch_nanos_total", uint64(time.Since(start).Nanoseconds()))
-			s.counters.inc("requests.failed_total")
+			s.counters.addDispatchNanos(uint64(time.Since(start).Nanoseconds()))
+			s.counters.incRequestsFailed()
 			s.counters.incCommandError(iwire.CommandInsertBatch, "insert_batch")
 			return s.writeError(w, header, err)
 		}
 		responseBody, err := s.handleInsertBatchFastBody(req, state.responseScratch())
-		s.counters.add("dispatch_nanos_total", uint64(time.Since(start).Nanoseconds()))
+		s.counters.addDispatchNanos(uint64(time.Since(start).Nanoseconds()))
 		if err != nil {
-			s.counters.inc("requests.failed_total")
+			s.counters.incRequestsFailed()
 			s.counters.incCommandError(iwire.CommandInsertBatch, "insert_batch")
 			return s.writeError(w, header, err)
 		}
-		s.counters.inc("requests.completed_total")
+		s.counters.incRequestsCompleted()
 		if state != nil {
 			state.responseBody = responseBody[:0]
 		}
 		return s.writeSimpleFrameBuffered(w, state, iwire.Header{Type: iwire.FrameResponse, StreamID: header.StreamID, RequestID: header.RequestID}, responseBody)
 	} else if err != nil {
-		s.counters.inc("requests.failed_total")
+		s.counters.incRequestsFailed()
 		return s.writeError(w, header, err)
 	}
 	var cmd iwire.ValidatedCommand
@@ -597,7 +597,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 		cmd, err = s.registry.ValidateRequestSections(sections)
 	}
 	if err != nil {
-		s.counters.inc("requests.failed_total")
+		s.counters.incRequestsFailed()
 		return s.writeError(w, header, err)
 	}
 	s.counters.incCommandRequest(cmd.Header.ID, cmd.Schema.Name)
@@ -654,9 +654,9 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	default:
 		err = protocolError(iwire.ErrUnsupportedFeature, "command %s is not implemented", cmd.Schema.Name)
 	}
-	s.counters.add("dispatch_nanos_total", uint64(time.Since(start).Nanoseconds()))
+	s.counters.addDispatchNanos(uint64(time.Since(start).Nanoseconds()))
 	if err != nil {
-		s.counters.inc("requests.failed_total")
+		s.counters.incRequestsFailed()
 		s.counters.incCommandError(cmd.Header.ID, cmd.Schema.Name)
 		return s.writeError(w, header, err)
 	}
@@ -669,7 +669,7 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 			}
 		}
 	}
-	s.counters.inc("requests.completed_total")
+	s.counters.incRequestsCompleted()
 	if state != nil {
 		state.responseBody = responseBody[:0]
 	}
@@ -741,8 +741,8 @@ func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error 
 	if sectionErr != nil {
 		return sectionErr
 	}
-	s.counters.inc("errors.total")
-	s.counters.inc("errors.code." + strconv.FormatUint(uint64(code), 10))
+	s.counters.incErrorsTotal()
+	s.counters.incErrorCode(code)
 	return s.writeSimpleFrame(w, iwire.Header{Type: iwire.FrameError, StreamID: request.StreamID, RequestID: request.RequestID}, body)
 }
 
@@ -804,8 +804,8 @@ func (s *Server) writeSimpleFrame(w io.Writer, header iwire.Header, body []byte)
 	if err := writeFrame(w, header, body); err != nil {
 		return err
 	}
-	s.counters.inc("frames.out_total")
-	s.counters.add("bytes.out_total", uint64(iwire.FrameHeaderLenV1)+uint64(len(body)))
+	s.counters.incFramesOut()
+	s.counters.addBytesOut(uint64(iwire.FrameHeaderLenV1) + uint64(len(body)))
 	return nil
 }
 
@@ -819,8 +819,8 @@ func (s *Server) writeSimpleFrameBuffered(w io.Writer, state *connState, header 
 	if err != nil {
 		return err
 	}
-	s.counters.inc("frames.out_total")
-	s.counters.add("bytes.out_total", uint64(iwire.FrameHeaderLenV1)+uint64(len(body)))
+	s.counters.incFramesOut()
+	s.counters.addBytesOut(uint64(iwire.FrameHeaderLenV1) + uint64(len(body)))
 	return nil
 }
 

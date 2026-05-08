@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -8,6 +9,7 @@ import (
 )
 
 const nativeStatsPrefix = "treedb.native_wire."
+const maxTrackedErrorCode = int(iwire.MaxErrorCode)
 
 // Stats is a string-valued snapshot of native-wire and TreeDB counters.
 type Stats map[string]string
@@ -27,9 +29,10 @@ type counters struct {
 	errorsTotal       atomic.Uint64
 	dispatchNanos     atomic.Uint64
 
-	commands [64]commandCounters
-	mu       sync.Mutex
-	values   map[string]uint64
+	errorCodes [maxTrackedErrorCode + 1]atomic.Uint64
+	commands   [64]commandCounters
+	mu         sync.Mutex
+	values     map[string]uint64
 }
 
 type commandCounters struct {
@@ -54,6 +57,87 @@ func (c *counters) add(key string, delta uint64) {
 
 func (c *counters) inc(key string) {
 	c.add(key, 1)
+}
+
+func (c *counters) incFramesIn() {
+	if c == nil {
+		return
+	}
+	c.framesIn.Add(1)
+}
+
+func (c *counters) incFramesOut() {
+	if c == nil {
+		return
+	}
+	c.framesOut.Add(1)
+}
+
+func (c *counters) addBytesIn(delta uint64) {
+	if c == nil || delta == 0 {
+		return
+	}
+	c.bytesIn.Add(delta)
+}
+
+func (c *counters) addBytesOut(delta uint64) {
+	if c == nil || delta == 0 {
+		return
+	}
+	c.bytesOut.Add(delta)
+}
+
+func (c *counters) incRequestsStarted() {
+	if c == nil {
+		return
+	}
+	c.requestsStarted.Add(1)
+}
+
+func (c *counters) incRequestsCompleted() {
+	if c == nil {
+		return
+	}
+	c.requestsCompleted.Add(1)
+}
+
+func (c *counters) incRequestsFailed() {
+	if c == nil {
+		return
+	}
+	c.requestsFailed.Add(1)
+}
+
+func (c *counters) incRequestsCanceled() {
+	if c == nil {
+		return
+	}
+	c.requestsCanceled.Add(1)
+}
+
+func (c *counters) addDispatchNanos(delta uint64) {
+	if c == nil || delta == 0 {
+		return
+	}
+	c.dispatchNanos.Add(delta)
+}
+
+func (c *counters) incErrorsTotal() {
+	if c == nil {
+		return
+	}
+	c.errorsTotal.Add(1)
+}
+
+func (c *counters) incErrorCode(code iwire.ErrorCode) {
+	if c == nil {
+		return
+	}
+	if code > 0 && code <= iwire.ErrorCode(maxTrackedErrorCode) {
+		c.errorCodes[code].Add(1)
+		return
+	}
+	c.add("errors.code."+strconv.FormatUint(uint64(code), 10), 1)
 }
 
 func (c *counters) addHot(key string, delta uint64) bool {
@@ -139,6 +223,12 @@ func (c *counters) snapshot() map[string]uint64 {
 	addIfNonZero("requests.canceled_total", c.requestsCanceled.Load())
 	addIfNonZero("errors.total", c.errorsTotal.Load())
 	addIfNonZero("dispatch_nanos_total", c.dispatchNanos.Load())
+	for code := iwire.ErrorCode(1); code <= iwire.ErrorCode(maxTrackedErrorCode); code++ {
+		value := c.errorCodes[code].Load()
+		if value != 0 {
+			out["errors.code."+strconv.FormatUint(uint64(code), 10)] = value
+		}
+	}
 	for id := range c.commands {
 		name := commandCounterName(iwire.CommandID(id))
 		if name == "" {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"hash/maphash"
 	"strconv"
 	"strings"
 
@@ -242,7 +243,35 @@ func decodeIDVectorInto(dst [][]byte, sections []iwire.Section, limits iwire.Lim
 	return ids, nil
 }
 
+const (
+	maxSmallDuplicateIDs                  = 512
+	duplicateIDSmallLoadFactor            = 2
+	duplicateIDSmallHashTableSlots        = maxSmallDuplicateIDs * duplicateIDSmallLoadFactor
+	_                              uint16 = maxSmallDuplicateIDs + 1
+)
+
+var (
+	_ [0]struct{} = [duplicateIDSmallHashTableSlots - maxSmallDuplicateIDs*duplicateIDSmallLoadFactor]struct{}{}
+	_ [0]struct{} = [duplicateIDSmallHashTableSlots & (duplicateIDSmallHashTableSlots - 1)]struct{}{}
+
+	duplicateIDHashSeed = maphash.MakeSeed()
+)
+
+type duplicateIDScratch struct {
+	heads  [duplicateIDSmallHashTableSlots]uint16
+	next   [maxSmallDuplicateIDs]uint16
+	hashes [maxSmallDuplicateIDs]uint64
+}
+
 func rejectDuplicateIDs(ids [][]byte) error {
+	if len(ids) > maxSmallDuplicateIDs {
+		return rejectDuplicateIDsMap(ids)
+	}
+	var scratch duplicateIDScratch
+	return rejectDuplicateIDsSmall(ids, &scratch)
+}
+
+func rejectDuplicateIDsMap(ids [][]byte) error {
 	seen := make(map[string]struct{}, len(ids))
 	for i, id := range ids {
 		if len(id) == 0 {
@@ -255,6 +284,48 @@ func rejectDuplicateIDs(ids [][]byte) error {
 		seen[key] = struct{}{}
 	}
 	return nil
+}
+
+func rejectDuplicateIDsSmall(ids [][]byte, scratch *duplicateIDScratch) error {
+	if scratch == nil || len(ids) > len(scratch.next) || len(ids) > len(scratch.hashes) {
+		return rejectDuplicateIDsMap(ids)
+	}
+	tableSize := 1
+	for tableSize < len(ids)*duplicateIDSmallLoadFactor {
+		tableSize <<= 1
+	}
+	if tableSize > len(scratch.heads) {
+		return rejectDuplicateIDsMap(ids)
+	}
+	heads := scratch.heads[:tableSize]
+	clear(heads)
+	next := scratch.next[:len(ids)]
+	hashesView := scratch.hashes[:len(ids)]
+	mask := uint64(tableSize - 1)
+	for i, id := range ids {
+		if len(id) == 0 {
+			return protocolError(iwire.ErrInvalidCommand, "document id cannot be empty at index %d", i)
+		}
+		hash := hashDocumentID(id)
+		bucket := int(hash & mask)
+		for prev := heads[bucket]; prev != 0; prev = next[int(prev)-1] {
+			j := int(prev) - 1
+			if hashesView[j] != hash || len(ids[j]) != len(id) {
+				continue
+			}
+			if bytes.Equal(ids[j], id) {
+				return protocolError(iwire.ErrDuplicateDocumentID, "duplicate document id at index %d", i)
+			}
+		}
+		hashesView[i] = hash
+		next[i] = heads[bucket]
+		heads[bucket] = uint16(i + 1)
+	}
+	return nil
+}
+
+func hashDocumentID(id []byte) uint64 {
+	return maphash.Bytes(duplicateIDHashSeed, id)
 }
 
 type responseMetaCount struct {

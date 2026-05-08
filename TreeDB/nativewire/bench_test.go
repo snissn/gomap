@@ -84,7 +84,7 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 		mgr, col, db, cleanup := benchmarkCollection(b)
 		defer cleanup()
 		server := NewServer(ServerOptions{Collections: mgr, Backend: db})
-		state := &connState{id: 1}
+		state := benchmarkConnState()
 		handle := benchmarkAddCollectionHandle(b, state, server, "bench", col)
 		var sink benchmarkFrameSink
 		var sectionBuf [4]iwire.Section
@@ -123,7 +123,7 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 		mgr, col, db, cleanup := benchmarkCollection(b)
 		defer cleanup()
 		server := NewServer(ServerOptions{Collections: mgr, Backend: db})
-		state := &connState{id: 1}
+		state := benchmarkConnState()
 		handle := benchmarkAddCollectionHandle(b, state, server, "bench", col)
 		var sink benchmarkFrameSink
 		requestBody := make([]byte, 0, 4096)
@@ -154,7 +154,7 @@ func BenchmarkNativewireCollectionGetMany(b *testing.B) {
 		_, col, _, cleanup := benchmarkCollection(b)
 		defer cleanup()
 		seedBenchmarkCollection(b, col, docs)
-		ids, _ := benchmarkStoredBatch(0, batchSize)
+		ids := benchmarkStoredIDs(0, batchSize)
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
@@ -181,7 +181,7 @@ func BenchmarkNativewireCollectionGetMany(b *testing.B) {
 		if err != nil {
 			b.Fatalf("OpenCollection: %v", err)
 		}
-		ids, _ := benchmarkStoredBatch(0, batchSize)
+		ids := benchmarkStoredIDs(0, batchSize)
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
@@ -196,9 +196,9 @@ func BenchmarkNativewireCollectionGetMany(b *testing.B) {
 		defer cleanup()
 		seedBenchmarkCollection(b, col, docs)
 		server := NewServer(ServerOptions{Collections: mgr, Backend: db})
-		state := &connState{id: 1}
+		state := benchmarkConnState()
 		handle := benchmarkAddCollectionHandle(b, state, server, "bench", col)
-		ids, _ := benchmarkStoredBatch(0, batchSize)
+		ids := benchmarkStoredIDs(0, batchSize)
 		var sink benchmarkFrameSink
 		var sectionBuf [4]iwire.Section
 		requestBody := make([]byte, 0, 1024)
@@ -241,8 +241,30 @@ func BenchmarkNativewireCollectionGetMany(b *testing.B) {
 	})
 }
 
+func BenchmarkNativewireRejectDuplicateIDs(b *testing.B) {
+	for _, count := range []int{32, 128, 512} {
+		ids := benchmarkStoredIDs(0, count)
+		b.Run(fmt.Sprintf("%d_ids", count), func(b *testing.B) {
+			if err := rejectDuplicateIDs(ids); err != nil {
+				b.Fatalf("warm rejectDuplicateIDs: %v", err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := rejectDuplicateIDs(ids); err != nil {
+					b.Fatalf("rejectDuplicateIDs: %v", err)
+				}
+			}
+		})
+	}
+}
+
 type benchmarkFrameSink struct {
 	frame []byte
+}
+
+func benchmarkConnState() *connState {
+	return &connState{id: 1, hello: true}
 }
 
 func (w *benchmarkFrameSink) Write(p []byte) (int, error) {
@@ -348,9 +370,21 @@ func benchmarkStoredBatch(start, count int) ([][]byte, [][]byte) {
 	ids := make([][]byte, count)
 	docs := make([][]byte, count)
 	for i := 0; i < count; i++ {
-		id := fmt.Sprintf("doc-%08d", start+i)
+		id := benchmarkStoredID(start + i)
 		ids[i] = []byte(id)
 		docs[i] = []byte(fmt.Sprintf(`{"email":"%s@example.com","city":"hnl","age":%d}`, id, 18+((start+i)%67)))
 	}
 	return ids, docs
+}
+
+func benchmarkStoredIDs(start, count int) [][]byte {
+	ids := make([][]byte, count)
+	for i := 0; i < count; i++ {
+		ids[i] = []byte(benchmarkStoredID(start + i))
+	}
+	return ids
+}
+
+func benchmarkStoredID(n int) string {
+	return fmt.Sprintf("doc-%08d", n)
 }

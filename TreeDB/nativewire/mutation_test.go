@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"strconv"
 	"testing"
 	"time"
@@ -278,6 +279,103 @@ func TestMutationInvalidIDRejected(t *testing.T) {
 				t.Fatalf("InsertBatch err=%v want code %d", err, tc.code)
 			}
 		})
+	}
+}
+
+func TestRejectDuplicateIDsSmallBatchAllocFree(t *testing.T) {
+	if raceEnabled {
+		t.Skip("allocation guard is noisy under -race")
+	}
+	ids := make([][]byte, 128)
+	for i := range ids {
+		ids[i] = []byte("doc-" + strconv.Itoa(i))
+	}
+	if err := rejectDuplicateIDs(ids); err != nil {
+		t.Fatalf("rejectDuplicateIDs: %v", err)
+	}
+	allocs := testing.AllocsPerRun(1000, func() {
+		if err := rejectDuplicateIDs(ids); err != nil {
+			panic(err)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("rejectDuplicateIDs allocs/run=%v want 0", allocs)
+	}
+}
+
+func TestRejectDuplicateIDsDetectsSmallAndLargeDuplicates(t *testing.T) {
+	for _, count := range []int{512, 513} {
+		for _, copied := range []bool{false, true} {
+			ids := make([][]byte, count)
+			for i := range ids {
+				ids[i] = []byte("doc-" + strconv.Itoa(i))
+			}
+			ids[count-1] = ids[17]
+			if copied {
+				ids[count-1] = append([]byte(nil), ids[17]...)
+			}
+			err := rejectDuplicateIDs(ids)
+			var protocolErr *iwire.ProtocolError
+			if !errors.As(err, &protocolErr) || protocolErr.Code != iwire.ErrDuplicateDocumentID {
+				t.Fatalf("rejectDuplicateIDs(%d, copied=%v) err=%v want duplicate document id", count, copied, err)
+			}
+		}
+	}
+}
+
+func TestInsertBatchFastDecodeErrorReturnsBeforeDispatch(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	body, err := appendInsertBatchRequestBody(nil, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		nil,
+		AckVisible,
+	)
+	if err != nil {
+		t.Fatalf("append request: %v", err)
+	}
+	_, _, err = client.roundTrip(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
+	if !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("InsertBatch malformed err=%v want invalid command", err)
+	}
+	assertDocumentMissing(t, mgr, "users", "u1")
+}
+
+func TestInsertBatchFastRejectsEmptyIDBeforeDispatch(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("")},
+		[][]byte{[]byte(`{"x":1}`)},
+		AckVisible,
+	)
+	if !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("InsertBatch empty ID err=%v want invalid command", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	records, truncated, err := col.ScanDocuments(10)
+	if err != nil {
+		t.Fatalf("ScanDocuments: %v", err)
+	}
+	if truncated || len(records) != 0 {
+		t.Fatalf("records=%+v truncated=%v want empty collection", records, truncated)
 	}
 }
 
