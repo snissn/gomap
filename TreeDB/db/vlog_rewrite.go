@@ -38,6 +38,8 @@ const defaultValueLogRewriteSegmentBytes = 128 << 20
 
 const rewriteDictMinPayloadBytes = 32 << 10
 const rewriteDictBatchMaxK = 64
+const rewriteBlockBatchMaxK = valuelog.MaxFrameK
+const rewriteBlockBatchMaxRawBytes = 4 << 20
 const rewriteReadScratchMaxCap = 1 << 20 // 1MiB cap to avoid retaining oversized decode buffers
 const rewriteKeyArenaMaxCap = 1 << 20    // 1MiB cap to avoid retaining oversized key arenas
 
@@ -3052,7 +3054,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		// Pointer mappings returned while grouped dict batches are still pending
 		// rely on batch-flush offset stability; flush here so record-count stats
 		// and subsequent tree builds observe committed batches.
-		if err := writer.flushPendingDictBatch(); err != nil {
+		if err := writer.flushPendingBatches(); err != nil {
 			return 0, err
 		}
 		stats.RecordsCopied = writer.records
@@ -3312,6 +3314,13 @@ type rewriteWriter struct {
 	createdIDs                []uint32
 	createdSegments           []rewriteCreatedSegment
 
+	pendingBlockStart   int64
+	pendingBlockRaw     int
+	pendingBlockArena   []byte
+	pendingBlockRecords []valuelog.Record
+	pendingBlockPtrs    []page.ValuePtr
+	pendingBlockDst     []page.ValuePtr
+
 	pendingDictID      uint64
 	pendingDict        []byte
 	pendingDictStart   int64
@@ -3366,6 +3375,25 @@ func (w *rewriteWriter) hasPendingDictBatch() bool {
 	return w != nil && len(w.pendingDictRecords) > 0
 }
 
+func (w *rewriteWriter) hasPendingBlockBatch() bool {
+	return w != nil && len(w.pendingBlockRecords) > 0
+}
+
+func (w *rewriteWriter) resetPendingBlockBatch() {
+	if w == nil {
+		return
+	}
+	w.pendingBlockStart = 0
+	w.pendingBlockRaw = 0
+	if cap(w.pendingBlockArena) > rewriteBlockBatchMaxRawBytes*2 {
+		w.pendingBlockArena = nil
+	} else {
+		w.pendingBlockArena = w.pendingBlockArena[:0]
+	}
+	w.pendingBlockRecords = w.pendingBlockRecords[:0]
+	w.pendingBlockPtrs = w.pendingBlockPtrs[:0]
+}
+
 func (w *rewriteWriter) resetPendingDictBatch() {
 	if w == nil {
 		return
@@ -3376,6 +3404,48 @@ func (w *rewriteWriter) resetPendingDictBatch() {
 	w.pendingDictRaw = 0
 	w.pendingDictRecords = w.pendingDictRecords[:0]
 	w.pendingDictPtrs = w.pendingDictPtrs[:0]
+}
+
+func (w *rewriteWriter) flushPendingBlockBatch() error {
+	if w == nil || !w.hasPendingBlockBatch() {
+		return nil
+	}
+	if w.w == nil {
+		return errors.New("vlog-rewrite: nil writer")
+	}
+	n := len(w.pendingBlockRecords)
+	if cap(w.pendingBlockDst) < n {
+		w.pendingBlockDst = make([]page.ValuePtr, n)
+	}
+	dst := w.pendingBlockDst[:n]
+	ptrs, _, err := w.w.AppendFrameWithStatsInto(0, nil, w.pendingBlockRecords, dst)
+	if err != nil {
+		return err
+	}
+	if len(ptrs) != n {
+		return fmt.Errorf("vlog-rewrite: block batch pointer count mismatch got=%d want=%d", len(ptrs), n)
+	}
+	if len(w.pendingBlockPtrs) == n {
+		for i := range ptrs {
+			if ptrs[i].FileID != w.pendingBlockPtrs[i].FileID ||
+				ptrs[i].Offset != w.pendingBlockPtrs[i].Offset ||
+				page.ValuePtrSubIndex(ptrs[i]) != page.ValuePtrSubIndex(w.pendingBlockPtrs[i]) {
+				return fmt.Errorf(
+					"vlog-rewrite: block batch pointer mismatch idx=%d got=(file=%d,off=%d,sub=%d) want=(file=%d,off=%d,sub=%d)",
+					i,
+					ptrs[i].FileID,
+					ptrs[i].Offset,
+					page.ValuePtrSubIndex(ptrs[i]),
+					w.pendingBlockPtrs[i].FileID,
+					w.pendingBlockPtrs[i].Offset,
+					page.ValuePtrSubIndex(w.pendingBlockPtrs[i]),
+				)
+			}
+		}
+	}
+	w.records += n
+	w.resetPendingBlockBatch()
+	return nil
 }
 
 func (w *rewriteWriter) maybeRotateForEstimate(estimate int64) error {
@@ -3436,6 +3506,16 @@ func (w *rewriteWriter) flushPendingDictBatch() error {
 	w.records += n
 	w.resetPendingDictBatch()
 	return nil
+}
+
+func (w *rewriteWriter) flushPendingBatches() error {
+	if w == nil {
+		return nil
+	}
+	if err := w.flushPendingBlockBatch(); err != nil {
+		return err
+	}
+	return w.flushPendingDictBatch()
 }
 
 func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
@@ -3696,8 +3776,8 @@ func (w *rewriteWriter) ensureWriter() error {
 }
 
 func (w *rewriteWriter) rotate() error {
-	if w.hasPendingDictBatch() {
-		if err := w.flushPendingDictBatch(); err != nil {
+	if w.hasPendingBlockBatch() || w.hasPendingDictBatch() {
+		if err := w.flushPendingBatches(); err != nil {
 			return err
 		}
 	}
@@ -3991,7 +4071,7 @@ func (w *rewriteWriter) appendRaw(raw []byte, length uint32) (page.ValuePtr, err
 	if err := w.ensureWriter(); err != nil {
 		return page.ValuePtr{}, err
 	}
-	if err := w.flushPendingDictBatch(); err != nil {
+	if err := w.flushPendingBatches(); err != nil {
 		return page.ValuePtr{}, err
 	}
 	if w.maxSize > 0 && w.w.Size()+int64(len(raw)) > w.maxSize {
@@ -4020,7 +4100,7 @@ func (w *rewriteWriter) appendSingleValueWithDictClass(class rewriteTemplateClas
 		return page.ValuePtr{}, err
 	}
 	dictID, dict, value = w.applyTemplateCompression(class, dictID, dict, value)
-	if err := w.flushPendingDictBatch(); err != nil {
+	if err := w.flushPendingBatches(); err != nil {
 		return page.ValuePtr{}, err
 	}
 	if err := w.maybeRotateForEstimate(rewriteDictFrameRecordLen(len(value), 1)); err != nil {
@@ -4038,12 +4118,80 @@ func (w *rewriteWriter) appendValueWithDict(dictID uint64, dict []byte, rid uint
 	return w.appendValueWithDictClass(rewriteTemplateClassPointerValue, dictID, dict, rid, value)
 }
 
+func (w *rewriteWriter) appendBlockValue(rid uint64, value []byte) (page.ValuePtr, error) {
+	if err := w.flushPendingDictBatch(); err != nil {
+		return page.ValuePtr{}, err
+	}
+	maxK := rewriteBlockBatchMaxK
+	if maxK < 1 {
+		maxK = 1
+	}
+	if maxK > valuelog.MaxFrameK {
+		maxK = valuelog.MaxFrameK
+	}
+	if w.hasPendingBlockBatch() &&
+		(len(w.pendingBlockRecords) >= maxK || w.pendingBlockRaw+len(value) > rewriteBlockBatchMaxRawBytes) {
+		if err := w.flushPendingBlockBatch(); err != nil {
+			return page.ValuePtr{}, err
+		}
+	}
+	if !w.hasPendingBlockBatch() {
+		if err := w.maybeRotateForEstimate(rewriteDictFrameRecordLen(len(value), 1)); err != nil {
+			return page.ValuePtr{}, err
+		}
+		w.pendingBlockStart = w.w.Size()
+		w.pendingBlockRaw = 0
+		w.pendingBlockRecords = w.pendingBlockRecords[:0]
+		w.pendingBlockPtrs = w.pendingBlockPtrs[:0]
+	}
+
+	projectedK := len(w.pendingBlockRecords) + 1
+	projectedRaw := w.pendingBlockRaw + len(value)
+	if w.maxSize > 0 &&
+		w.pendingBlockStart+rewriteDictFrameRecordLen(projectedRaw, projectedK) > w.maxSize &&
+		len(w.pendingBlockRecords) > 0 {
+		if err := w.flushPendingBlockBatch(); err != nil {
+			return page.ValuePtr{}, err
+		}
+		if err := w.maybeRotateForEstimate(rewriteDictFrameRecordLen(len(value), 1)); err != nil {
+			return page.ValuePtr{}, err
+		}
+		w.pendingBlockStart = w.w.Size()
+		w.pendingBlockRaw = 0
+	}
+
+	valueStart := len(w.pendingBlockArena)
+	w.pendingBlockArena = append(w.pendingBlockArena, value...)
+	ownedValue := w.pendingBlockArena[valueStart:]
+	w.pendingBlockRecords = append(w.pendingBlockRecords, valuelog.Record{
+		RID:   rid,
+		Value: ownedValue,
+	})
+	w.pendingBlockRaw += len(ownedValue)
+	subIndex := len(w.pendingBlockRecords) - 1
+	ptr := page.ValuePtr{
+		Offset: uint64(w.pendingBlockStart + 4),
+		Length: page.ValuePtrMarkGrouped(0, uint8(subIndex)),
+		FileID: w.w.FileID(),
+	}
+	w.pendingBlockPtrs = append(w.pendingBlockPtrs, ptr)
+	if len(w.pendingBlockRecords) >= maxK || w.pendingBlockRaw >= rewriteBlockBatchMaxRawBytes {
+		if err := w.flushPendingBlockBatch(); err != nil {
+			return page.ValuePtr{}, err
+		}
+	}
+	return ptr, nil
+}
+
 func (w *rewriteWriter) appendValueWithDictClass(class rewriteTemplateClass, dictID uint64, dict []byte, rid uint64, value []byte) (page.ValuePtr, error) {
 	if err := w.ensureWriter(); err != nil {
 		return page.ValuePtr{}, err
 	}
 	dictID, dict, value = w.applyTemplateCompression(class, dictID, dict, value)
 	if dictID == 0 || len(dict) == 0 {
+		if w.blockCompression {
+			return w.appendBlockValue(rid, value)
+		}
 		if err := w.flushPendingDictBatch(); err != nil {
 			return page.ValuePtr{}, err
 		}
@@ -4058,6 +4206,9 @@ func (w *rewriteWriter) appendValueWithDictClass(class rewriteTemplateClass, dic
 		return ptr, nil
 	}
 
+	if err := w.flushPendingBlockBatch(); err != nil {
+		return page.ValuePtr{}, err
+	}
 	// Flush when dict stream changes or when the pending batch has reached the
 	// target grouped-frame width.
 	if w.hasPendingDictBatch() && w.pendingDictID != dictID {
@@ -4133,7 +4284,7 @@ func (w *rewriteWriter) Sync() error {
 	if w == nil {
 		return nil
 	}
-	if err := w.flushPendingDictBatch(); err != nil {
+	if err := w.flushPendingBatches(); err != nil {
 		return err
 	}
 	if w.w == nil {
@@ -4155,7 +4306,7 @@ func (w *rewriteWriter) Flush() error {
 	if w == nil {
 		return nil
 	}
-	if err := w.flushPendingDictBatch(); err != nil {
+	if err := w.flushPendingBatches(); err != nil {
 		return err
 	}
 	if w.w == nil {
@@ -4178,7 +4329,7 @@ func (w *rewriteWriter) Close() error {
 		return nil
 	}
 	defer w.closeTemplateCompression()
-	if err := w.flushPendingDictBatch(); err != nil {
+	if err := w.flushPendingBatches(); err != nil {
 		return err
 	}
 	var err error
@@ -4193,7 +4344,7 @@ func (w *rewriteWriter) Close() error {
 
 func (w *rewriteWriter) createdFileIDs() ([]uint32, error) {
 	if w != nil {
-		if err := w.flushPendingDictBatch(); err != nil {
+		if err := w.flushPendingBatches(); err != nil {
 			return nil, err
 		}
 	}
@@ -4205,7 +4356,7 @@ func (w *rewriteWriter) createdFileIDs() ([]uint32, error) {
 
 func (w *rewriteWriter) createdSegmentsSnapshot() ([]rewriteCreatedSegment, error) {
 	if w != nil {
-		if err := w.flushPendingDictBatch(); err != nil {
+		if err := w.flushPendingBatches(); err != nil {
 			return nil, err
 		}
 	}
@@ -4575,25 +4726,7 @@ func (it *rewriteIterator) reencodeSingleRecord(ptr page.ValuePtr, frameHeader v
 		return newPtr, true, nil
 	}
 
-	// For large single-record block frames, reuse the segment's observed dict
-	// (when available) to increase post-rewrite dict coverage. This runs only in
-	// rewrite, not on the ingest hot path. Treat 4KiB outer-leaf payloads as
-	// eligible even though they are below the generic large-payload threshold.
 	if frameHeader.DictID != 0 || it.readValue == nil {
-		return page.ValuePtr{}, false, nil
-	}
-	if int(end-start) < page.PageSize {
-		return page.ValuePtr{}, false, nil
-	}
-	dictID, err := it.preferredDictID(ptr.FileID)
-	if err != nil {
-		return page.ValuePtr{}, false, err
-	}
-	if dictID == 0 {
-		return page.ValuePtr{}, false, nil
-	}
-	dict, ok := it.dictBytesForID(dictID)
-	if !ok || len(dict) == 0 {
 		return page.ValuePtr{}, false, nil
 	}
 	value, err := it.readValue(ptr)
@@ -4603,14 +4736,36 @@ func (it *rewriteIterator) reencodeSingleRecord(ptr page.ValuePtr, frameHeader v
 		}
 		return page.ValuePtr{}, false, err
 	}
-	if len(value) < rewriteDictMinPayloadBytes && !rewriteAllowDictForSmallPayload(value) {
-		return page.ValuePtr{}, false, nil
-	}
-	newPtr, err := it.writer.appendValueWithDict(dictID, dict, rids[0], value)
-	if err != nil {
-		if errors.Is(err, valuelog.ErrMissingDict) {
-			return page.ValuePtr{}, false, nil
+
+	// For large single-record block frames, reuse the segment's observed dict
+	// (when available) to increase post-rewrite dict coverage. This runs only in
+	// rewrite, not on the ingest hot path. Treat 4KiB outer-leaf payloads as
+	// eligible even though they are below the generic large-payload threshold.
+	if int(end-start) >= page.PageSize {
+		dictID, err := it.preferredDictID(ptr.FileID)
+		if err != nil {
+			return page.ValuePtr{}, false, err
 		}
+		if dictID != 0 {
+			if dict, ok := it.dictBytesForID(dictID); ok && len(dict) > 0 &&
+				(len(value) >= rewriteDictMinPayloadBytes || rewriteAllowDictForSmallPayload(value)) {
+				newPtr, err := it.writer.appendValueWithDict(dictID, dict, rids[0], value)
+				if err != nil {
+					if errors.Is(err, valuelog.ErrMissingDict) {
+						return page.ValuePtr{}, false, nil
+					}
+					return page.ValuePtr{}, false, err
+				}
+				return newPtr, true, nil
+			}
+		}
+	}
+
+	// Single-record block frames were often produced by the live write path when
+	// values arrived one at a time. Rewrite can see neighboring live records, so
+	// decode and regroup them instead of preserving weak k=1 frames.
+	newPtr, err := it.writer.appendValue(rids[0], value)
+	if err != nil {
 		return page.ValuePtr{}, false, err
 	}
 	return newPtr, true, nil
