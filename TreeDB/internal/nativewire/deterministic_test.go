@@ -467,6 +467,27 @@ func TestDeterministicEntryRejectsMissingDistributedGuards(t *testing.T) {
 	}
 }
 
+func TestDeterministicEntryRejectsEmptyIdempotencyKey(t *testing.T) {
+	registry := MustV1Registry()
+	sections := insertBatchDeterministicSections()
+	for i := range sections {
+		if sections[i].ID == SectionIdempotencyKey {
+			sections[i].Bytes = nil
+		}
+	}
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("AppendDeterministicEntry err=%v code=%d want invalid command", err, codeOf(err))
+	}
+	raw := deterministicEntryTestRaw(CommandInsertBatch, deterministicEntrySectionsOnly(sections)...)
+	if _, err := DecodeDeterministicEntry(raw, Limits{}); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("DecodeDeterministicEntry err=%v code=%d want invalid command", err, codeOf(err))
+	}
+}
+
 func TestDeterministicEntryRequiresGuardsInCanonicalSections(t *testing.T) {
 	registry, err := NewRegistry(CommandSchema{
 		ID:                   CommandInsertBatch,
@@ -1055,6 +1076,27 @@ func TestDecodeDeterministicEntryRejectsUnappliableTemplateRecords(t *testing.T)
 			doc:    deterministicTemplateStoredDocumentForRecord(record, []byte{deterministicTemplateV1KindNull, deterministicTemplateV1KindNull}),
 			code:   ErrMalformedFrame,
 		},
+		{
+			name:   "template_count_exceeds_limit",
+			format: DocumentFormatTemplateV1,
+			record: record,
+			doc:    deterministicTemplateInputWithCount(deterministicTemplateV1MaxTemplates + 1),
+			code:   ErrResourceExhausted,
+		},
+		{
+			name:   "template_count_exceeds_remaining",
+			format: DocumentFormatTemplateV1,
+			record: record,
+			doc:    deterministicTemplateInputWithCount(1),
+			code:   ErrMalformedFrame,
+		},
+		{
+			name:   "nested_depth",
+			format: DocumentFormatTemplateV1,
+			record: record,
+			doc:    deterministicTemplateStoredDocumentForRecord(record, deterministicTemplateNestedObjectPayload(record, deterministicTemplateV1MaxDepth+1)),
+			code:   ErrResourceExhausted,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sections := insertBatchDeterministicSections()
@@ -1316,6 +1358,21 @@ func deterministicTemplateStoredDocumentForRecord(record, payload []byte) []byte
 	id := sha256.Sum256(record)
 	dst = append(dst, id[:]...)
 	return append(dst, payload...)
+}
+
+func deterministicTemplateInputWithCount(count uint64) []byte {
+	dst := []byte(deterministicTemplateV1InputMagic)
+	return appendUvarint(dst, count)
+}
+
+func deterministicTemplateNestedObjectPayload(record []byte, depth int) []byte {
+	id := sha256.Sum256(record)
+	var dst []byte
+	for i := 0; i < depth; i++ {
+		dst = append(dst, deterministicTemplateV1KindObject)
+		dst = append(dst, id[:]...)
+	}
+	return append(dst, deterministicTemplateV1KindNull)
 }
 
 func appendDeterministicTestString(dst []byte, value string) []byte {
