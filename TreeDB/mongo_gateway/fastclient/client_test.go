@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -93,6 +94,56 @@ func TestClientInsertManyRawBSON(t *testing.T) {
 	if got, ok := found[0].Lookup("name").StringValueOK(); !ok || got != "grace" {
 		t.Fatalf("FindRawBSON name=%q ok=%t want grace", got, ok)
 	}
+	adaCommand := mustBSON(t, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "name", Value: "ada"}}},
+		{Key: "limit", Value: 1},
+		{Key: "$db", Value: "app"},
+	})
+	adaFound, err := client.FindRawBSON(insertCtx, adaCommand)
+	if err != nil {
+		t.Fatalf("FindRawBSON ada: %v", err)
+	}
+	if len(adaFound) != 1 {
+		t.Fatalf("FindRawBSON ada docs=%d want 1", len(adaFound))
+	}
+	if got, ok := adaFound[0].Lookup("name").StringValueOK(); !ok || got != "ada" {
+		t.Fatalf("FindRawBSON ada name=%q ok=%t want ada", got, ok)
+	}
+	if got, ok := found[0].Lookup("name").StringValueOK(); !ok || got != "grace" {
+		t.Fatalf("first FindRawBSON result changed after second query: name=%q ok=%t want grace", got, ok)
+	}
+	var borrowedCount int
+	if err := client.FindRawBSONBorrowed(insertCtx, findCommand, func(docs []bson.Raw) error {
+		borrowedCount = len(docs)
+		return nil
+	}); err != nil {
+		t.Fatalf("FindRawBSONBorrowed: %v", err)
+	}
+	if borrowedCount != 1 {
+		t.Fatalf("FindRawBSONBorrowed docs=%d want 1", borrowedCount)
+	}
+	if err := client.FindRawBSONBorrowed(insertCtx, mustBSON(t, bson.D{{Key: "ping", Value: 1}, {Key: "$db", Value: "admin"}}), func([]bson.Raw) error {
+		t.Fatal("borrowed callback should not run for non-find command")
+		return nil
+	}); err == nil || !strings.Contains(err.Error(), "requires a find command document") {
+		t.Fatalf("FindRawBSONBorrowed non-find err=%v want find-command error", err)
+	}
+	if err := client.FindRawBSONBorrowed(insertCtx, findCommand, func(docs []bson.Raw) error {
+		if client.mu.TryLock() {
+			client.mu.Unlock()
+			t.Fatal("FindRawBSONBorrowed callback ran without holding the client lock")
+		}
+		if len(docs) != 1 {
+			t.Fatalf("borrowed concurrent docs=%d want 1", len(docs))
+		}
+		if got, ok := docs[0].Lookup("name").StringValueOK(); !ok || got != "grace" {
+			t.Fatalf("borrowed doc changed while callback active: name=%q ok=%t want grace", got, ok)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("FindRawBSONBorrowed concurrent: %v", err)
+	}
 
 	driverClient, err := mongo.Connect(options.Client().
 		ApplyURI("mongodb://" + ln.Addr().String()).
@@ -158,6 +209,85 @@ func TestClientInsertManyRawBSONCancellationWithoutDeadlineInterruptsRead(t *tes
 		}
 	case <-time.After(time.Second):
 		t.Fatal("InsertManyRawBSON did not return after cancellation")
+	}
+}
+
+func TestClientInsertManyRawBSONCanceledDeadlineContextInterruptsRead(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer func() { _ = serverConn.Close() }()
+	client := New(clientConn)
+	defer func() { _ = client.Close() }()
+
+	rawDocs := []bson.Raw{mustBSON(t, bson.D{{Key: "_id", Value: "u1"}})}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := client.InsertManyRawBSON(ctx, "app", "users", rawDocs)
+		errCh <- err
+	}()
+
+	readDone := make(chan error, 1)
+	go func() {
+		_, _, err := wire.ReadMessage(serverConn, 0)
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatalf("server read request: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not receive request")
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("InsertManyRawBSON err=%v want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("InsertManyRawBSON did not return after cancellation")
+	}
+}
+
+func TestClientInsertManyRawBSONDeadlineInterruptsRead(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer func() { _ = serverConn.Close() }()
+	client := New(clientConn)
+	defer func() { _ = client.Close() }()
+
+	rawDocs := []bson.Raw{mustBSON(t, bson.D{{Key: "_id", Value: "u1"}})}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := client.InsertManyRawBSON(ctx, "app", "users", rawDocs)
+		errCh <- err
+	}()
+
+	readDone := make(chan error, 1)
+	go func() {
+		_, _, err := wire.ReadMessage(serverConn, 0)
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatalf("server read request: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not receive request")
+	}
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("InsertManyRawBSON err=%v want context.DeadlineExceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("InsertManyRawBSON did not return after deadline")
 	}
 }
 

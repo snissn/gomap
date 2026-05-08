@@ -3003,12 +3003,16 @@ func runTreeDBRawWireTCPRangeOperation(ctx context.Context, cfg config, client *
 		return err
 	}
 	begin := time.Now()
-	batch, err := client.FindRawBSON(ctx, commandDoc)
-	sample(time.Since(begin))
-	if err != nil {
-		return err
+	sampled := false
+	err = client.FindRawBSONBorrowed(ctx, commandDoc, func(batch []bson.Raw) error {
+		sample(time.Since(begin))
+		sampled = true
+		return validateRawAgeBatch(batch, minAge)
+	})
+	if !sampled {
+		sample(time.Since(begin))
 	}
-	return validateRawAgeBatch(batch, minAge)
+	return err
 }
 
 func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder, coll *mongo.Collection, readers int) (phaseResult, error) {
@@ -3136,19 +3140,54 @@ func parseFindFirstBatch(raw bson.Raw) ([]bson.Raw, error) {
 	if !ok {
 		return nil, errors.New("find response missing cursor.firstBatch")
 	}
-	values, err := batch.Values()
-	if err != nil {
-		return nil, err
+	return rawDocumentsFromArray(batch)
+}
+
+func rawDocumentsFromArray(batch bson.RawArray) ([]bson.Raw, error) {
+	length, rem, ok := bsoncore.ReadLength(bsoncore.Array(batch))
+	if !ok || length < 5 || int(length) > len(batch) {
+		return nil, errors.New("malformed find cursor.firstBatch")
 	}
-	docs := make([]bson.Raw, 0, len(values))
-	for _, value := range values {
+	rem = rem[:int(length)-4]
+	if len(rem) == 0 || rem[len(rem)-1] != 0x00 {
+		return nil, errors.New("malformed find cursor.firstBatch")
+	}
+	rem = rem[:len(rem)-1]
+
+	docs := make([]bson.Raw, 0, rawArrayDocumentCapacityHint(len(rem)))
+	for len(rem) > 0 {
+		elem, next, ok := bsoncore.ReadElement(rem)
+		if !ok {
+			return nil, errors.New("malformed find cursor.firstBatch")
+		}
+		value, err := elem.ValueErr()
+		if err != nil {
+			return nil, err
+		}
 		doc, ok := value.DocumentOK()
 		if !ok {
 			return nil, errors.New("find firstBatch entry is not a document")
 		}
 		docs = append(docs, bson.Raw(doc))
+		rem = next
 	}
 	return docs, nil
+}
+
+func rawArrayDocumentCapacityHint(payloadBytes int) int {
+	if payloadBytes <= 0 {
+		return 0
+	}
+	const minElementOverhead = 8
+	const maxInitialCapacity = 1024
+	hint := payloadBytes / minElementOverhead
+	if hint < 1 {
+		return 1
+	}
+	if hint > maxInitialCapacity {
+		return maxInitialCapacity
+	}
+	return hint
 }
 
 func rawCommandOK(raw bson.Raw) bool {

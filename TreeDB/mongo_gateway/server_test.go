@@ -115,6 +115,60 @@ func TestServerHandlesMsgPing(t *testing.T) {
 	assertOK(t, msg.Body)
 }
 
+func TestServerRetainsReadBufferForSafeCommands(t *testing.T) {
+	commandDoc := mustDocument(t, bson.D{
+		{Key: "ping", Value: int32(1)},
+		{Key: "$db", Value: "admin"},
+	})
+	req, err := wire.AppendMsgMessage(nil, 22001, 0, 0, commandDoc)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage: %v", err)
+	}
+	server := NewServer()
+	readBuf, _, err := server.serveOneWithOwner(&readWriter{r: bytes.NewReader(req)}, 1, make([]byte, 0, len(req)), nil)
+	if err != nil {
+		t.Fatalf("serveOneWithOwner: %v", err)
+	}
+	if readBuf == nil {
+		t.Fatal("read buffer was not retained for ping")
+	}
+}
+
+func TestServerDoesNotRetainReadBufferAfterBSONInsert(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	commandDoc := mustDocument(t, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "payload", Value: strings.Repeat("x", 128)},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	req, err := wire.AppendMsgMessage(nil, 22002, 0, 0, commandDoc)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage: %v", err)
+	}
+	rw := &readWriter{r: bytes.NewReader(req)}
+	readBuf, _, err := server.serveOneWithOwner(rw, 1, make([]byte, 0, len(req)), nil)
+	if err != nil {
+		t.Fatalf("serveOneWithOwner: %v", err)
+	}
+	if readBuf != nil {
+		t.Fatal("read buffer was retained after BSON insert")
+	}
+	assertOK(t, readMsgResponse(t, rw.w.Bytes(), 22002))
+}
+
 func TestServerRejectsFindWithMoreToCome(t *testing.T) {
 	commandDoc := mustDocument(t, bson.D{
 		{Key: "find", Value: "users"},
@@ -2199,6 +2253,7 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 		{Key: "find", Value: "users"},
 		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(36)}}}}},
 		{Key: "limit", Value: int32(2)},
+		{Key: "batchSize", Value: int32(2)},
 		{Key: "$db", Value: "app"},
 	})
 	assertOK(t, limitedAgeRangeFind)
@@ -2347,6 +2402,98 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 	assertOK(t, nonIndexableValue)
 	if batch := cursorFirstBatch(t, nonIndexableValue); len(batch) != 0 {
 		t.Fatalf("non-indexable value firstBatch len=%d want 0", len(batch))
+	}
+}
+
+func TestServerPureIndexedRangeKeepsCursorWhenByteCapped(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 260, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{
+				{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}},
+				{Key: "name", Value: "age_1"}, {Key: "treedbValueType", Value: "int64"},
+			},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	docA := bson.D{{Key: "_id", Value: "a"}, {Key: "age", Value: int64(10)}, {Key: "payload", Value: strings.Repeat("a", 24)}}
+	docB := bson.D{{Key: "_id", Value: "b"}, {Key: "age", Value: int64(11)}, {Key: "payload", Value: strings.Repeat("b", 24)}}
+	docC := bson.D{{Key: "_id", Value: "c"}, {Key: "age", Value: int64(12)}, {Key: "payload", Value: strings.Repeat("c", 24)}}
+	assertOK(t, serveCommand(t, server, 261, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{docA, docB, docC}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	rawA, err := bson.Marshal(docA)
+	if err != nil {
+		t.Fatalf("marshal docA: %v", err)
+	}
+	oneDocBatchBytes := findBatchOverheadBytes + findBatchDocumentBytes(rawA, 0)
+	server.MaxMessageLength = int32(findBatchResponseReserveBytes + oneDocBatchBytes)
+	findResponse := serveCommand(t, server, 262, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(10)}}}}},
+		{Key: "limit", Value: int32(3)},
+		{Key: "batchSize", Value: int32(3)},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, findResponse)
+	firstBatch := cursorFirstBatch(t, findResponse)
+	if len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	if got, ok := firstBatch[0].Lookup("_id").StringValueOK(); !ok || got != "a" {
+		t.Fatalf("firstBatch[0]._id=%q ok=%t want a", got, ok)
+	}
+	cursorID := cursorIDFromResponse(t, findResponse)
+	if cursorID == 0 {
+		t.Fatal("cursor id is 0 after byte-capped first batch, want retained cursor")
+	}
+
+	getMoreResponse := serveCommand(t, server, 263, bson.D{
+		{Key: "getMore", Value: cursorID},
+		{Key: "collection", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, getMoreResponse)
+	nextBatch := cursorNextBatch(t, getMoreResponse)
+	if len(nextBatch) != 1 {
+		t.Fatalf("nextBatch len=%d want 1", len(nextBatch))
+	}
+	if got, ok := nextBatch[0].Lookup("_id").StringValueOK(); !ok || got != "b" {
+		t.Fatalf("nextBatch[0]._id=%q ok=%t want b", got, ok)
+	}
+	nextID := cursorIDFromResponse(t, getMoreResponse)
+	if nextID != cursorID {
+		t.Fatalf("cursor id after first getMore=%d want %d", nextID, cursorID)
+	}
+
+	finalResponse := serveCommand(t, server, 264, bson.D{
+		{Key: "getMore", Value: cursorID},
+		{Key: "collection", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, finalResponse)
+	finalBatch := cursorNextBatch(t, finalResponse)
+	if len(finalBatch) != 1 {
+		t.Fatalf("final nextBatch len=%d want 1", len(finalBatch))
+	}
+	if got, ok := finalBatch[0].Lookup("_id").StringValueOK(); !ok || got != "c" {
+		t.Fatalf("finalBatch[0]._id=%q ok=%t want c", got, ok)
+	}
+	if finalID := cursorIDFromResponse(t, finalResponse); finalID != 0 {
+		t.Fatalf("cursor id after final getMore=%d want 0", finalID)
 	}
 }
 
@@ -2591,10 +2738,10 @@ func TestServerFindRawBSONOPMsgResponse(t *testing.T) {
 
 func TestServerFindRawBSONOPMsgResponseHonorsMaxMessageLength(t *testing.T) {
 	rawDoc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "payload", Value: strings.Repeat("x", 256)}})
-	if _, err := marshalCursorDocumentsMsgResponseWithID(1, 250, "app.users", 0, "firstBatch", []wire.Document{rawDoc}, wire.DefaultMaxMessageLength); err != nil {
+	if _, err := marshalCursorDocumentsMsgResponseWithIDInto(nil, 1, 250, "app.users", 0, "firstBatch", []wire.Document{rawDoc}, wire.DefaultMaxMessageLength); err != nil {
 		t.Fatalf("marshal default max response: %v", err)
 	}
-	_, err := marshalCursorDocumentsMsgResponseWithID(1, 250, "app.users", 0, "firstBatch", []wire.Document{rawDoc}, 128)
+	_, err := marshalCursorDocumentsMsgResponseWithIDInto(nil, 1, 250, "app.users", 0, "firstBatch", []wire.Document{rawDoc}, 128)
 	if !errors.Is(err, wire.ErrMessageTooLarge) {
 		t.Fatalf("marshal small max err=%v want ErrMessageTooLarge", err)
 	}
@@ -2604,10 +2751,10 @@ func TestFindResponsePayloadOPMsgHonorsMaxMessageLength(t *testing.T) {
 	payload := findResponsePayload{
 		document: mustDocument(t, bson.D{{Key: "ok", Value: 1.0}, {Key: "payload", Value: strings.Repeat("x", 256)}}),
 	}
-	if _, err := payload.marshalMsgWithMaxLength(1, 250, wire.DefaultMaxMessageLength); err != nil {
+	if _, err := payload.marshalMsgIntoWithMaxLength(nil, 1, 250, wire.DefaultMaxMessageLength); err != nil {
 		t.Fatalf("marshal default max response: %v", err)
 	}
-	_, err := payload.marshalMsgWithMaxLength(1, 250, 128)
+	_, err := payload.marshalMsgIntoWithMaxLength(nil, 1, 250, 128)
 	if !errors.Is(err, wire.ErrMessageTooLarge) {
 		t.Fatalf("marshal small max err=%v want ErrMessageTooLarge", err)
 	}
@@ -2924,9 +3071,7 @@ func TestServerBackgroundCursorReapIsThrottled(t *testing.T) {
 	server := NewServer()
 	server.CursorIdleTimeout = time.Nanosecond
 	server.cursorMu.Lock()
-	server.cursors = map[int64]*serverCursor{
-		1: {ns: "app.users", owner: 1, lastUsed: time.Now().Add(-time.Minute)},
-	}
+	server.addCursorLocked(1, &serverCursor{ns: "app.users", owner: 1, lastUsed: time.Now().Add(-time.Minute)})
 	server.lastCursorReap = time.Now()
 	server.cursorMu.Unlock()
 
@@ -2945,6 +3090,23 @@ func TestServerBackgroundCursorReapIsThrottled(t *testing.T) {
 	server.cursorMu.Unlock()
 	if stillPresent {
 		t.Fatal("cursor not reaped after throttle interval")
+	}
+}
+
+func TestServerBackgroundCursorReapSkipsEmptyCursorMap(t *testing.T) {
+	server := NewServer()
+	server.CursorIdleTimeout = time.Nanosecond
+	lastReap := time.Now().Add(-2 * defaultCursorReapInterval)
+	server.cursorMu.Lock()
+	server.lastCursorReap = lastReap
+	server.cursorMu.Unlock()
+
+	server.reapExpiredCursors()
+
+	server.cursorMu.Lock()
+	defer server.cursorMu.Unlock()
+	if !server.lastCursorReap.Equal(lastReap) {
+		t.Fatalf("lastCursorReap changed to %v want %v", server.lastCursorReap, lastReap)
 	}
 }
 
@@ -3100,6 +3262,72 @@ func TestServerFindFirstBatchOverflowOpensCursor(t *testing.T) {
 	nextBatch := cursorNextBatch(t, getMoreResponse)
 	if len(nextBatch) != 1 {
 		t.Fatalf("nextBatch len=%d want 1", len(nextBatch))
+	}
+	if nextID := cursorIDFromResponse(t, getMoreResponse); nextID != 0 {
+		t.Fatalf("cursor id after getMore=%d want 0", nextID)
+	}
+}
+
+func TestServerFindIndexedRangeStreamingFirstBatchOverflowOpensCursor(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.MaxMessageLength = 6 * 1024
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	assertOK(t, serveCommand(t, server, 2521, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "name", Value: "age_1"},
+			{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}},
+			{Key: "treedbValueType", Value: "int64"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	largeValue := strings.Repeat("x", 1400)
+	assertOK(t, serveCommand(t, server, 2522, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "a"}, {Key: "age", Value: int64(37)}, {Key: "payload", Value: largeValue}},
+			bson.D{{Key: "_id", Value: "b"}, {Key: "age", Value: int64(42)}, {Key: "payload", Value: largeValue}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	findResponse := serveCommand(t, server, 2523, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(37)}}}}},
+		{Key: "limit", Value: int32(2)},
+		{Key: "batchSize", Value: int32(2)},
+		{Key: "$db", Value: "app"},
+	})
+	firstBatch := cursorFirstBatch(t, findResponse)
+	if len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	if got, ok := firstBatch[0].Lookup("_id").StringValueOK(); !ok || got != "a" {
+		t.Fatalf("firstBatch _id=%q ok=%v want a", got, ok)
+	}
+	cursorID := cursorIDFromResponse(t, findResponse)
+	if cursorID == 0 {
+		t.Fatal("cursor id=0 want open cursor")
+	}
+	getMoreResponse := serveCommand(t, server, 2524, bson.D{
+		{Key: "getMore", Value: cursorID},
+		{Key: "collection", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	nextBatch := cursorNextBatch(t, getMoreResponse)
+	if len(nextBatch) != 1 {
+		t.Fatalf("nextBatch len=%d want 1", len(nextBatch))
+	}
+	if got, ok := nextBatch[0].Lookup("_id").StringValueOK(); !ok || got != "b" {
+		t.Fatalf("nextBatch _id=%q ok=%v want b", got, ok)
 	}
 	if nextID := cursorIDFromResponse(t, getMoreResponse); nextID != 0 {
 		t.Fatalf("cursor id after getMore=%d want 0", nextID)
