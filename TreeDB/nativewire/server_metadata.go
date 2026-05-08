@@ -8,6 +8,9 @@ func (s *Server) handleCreateCollection(sections []iwire.Section) ([]iwire.Secti
 	if err := managerRequired(s.collections); err != nil {
 		return nil, err
 	}
+	if err := s.checkCatalogGuard(sections); err != nil {
+		return nil, err
+	}
 	raw, err := metadataSection(sections, iwire.SectionCollectionMeta)
 	if err != nil {
 		return nil, err
@@ -42,7 +45,10 @@ func (s *Server) handleCreateIndex(state *connState, sections []iwire.Section) (
 	if err := managerRequired(s.collections); err != nil {
 		return nil, err
 	}
-	name, err := collectionNameFromSections(sections)
+	if err := s.checkCatalogGuard(sections); err != nil {
+		return nil, err
+	}
+	name, _, err := collectionRefFromSections(state, sections)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +94,10 @@ func (s *Server) handleDropIndex(state *connState, sections []iwire.Section) ([]
 	if err := managerRequired(s.collections); err != nil {
 		return nil, err
 	}
-	name, err := collectionNameFromSections(sections)
+	if err := s.checkCatalogGuard(sections); err != nil {
+		return nil, err
+	}
+	name, _, err := collectionRefFromSections(state, sections)
 	if err != nil {
 		return nil, err
 	}
@@ -130,22 +139,11 @@ func (s *Server) handleOpenCollection(state *connState, sections []iwire.Section
 }
 
 func (s *Server) handleCloseCollection(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
-	_, wasHandle, err := collectionRefFromSections(state, sections)
+	handle, err := collectionHandleFromSections(state, sections)
 	if err != nil {
 		return nil, err
 	}
-	if !wasHandle {
-		return nil, protocolError(iwire.ErrInvalidCommand, "close_collection requires a collection handle")
-	}
-	raw, _, err := singletonSection(sections, iwire.SectionCollectionRef)
-	if err != nil {
-		return nil, err
-	}
-	handle, _, err := readUvarint(raw[1:])
-	if err != nil {
-		return nil, err
-	}
-	if !state.closeCollectionHandle(CollectionHandle(handle)) {
+	if !state.closeCollectionHandle(handle) {
 		return nil, protocolError(iwire.ErrCollectionNotFound, "collection handle %d not found", handle)
 	}
 	return nil, nil
