@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"crypto/sha256"
+	"encoding/binary"
 	"slices"
 	"strings"
 	"sync"
@@ -17,6 +18,10 @@ const (
 	maxDeterministicDocumentIDs = 1 << 16
 
 	deterministicSectionScratchCapacity = sectionSeenInlineCapacity
+
+	deterministicCollectionRefTagName   = 1
+	deterministicCollectionRefTagHandle = 2
+	minDeterministicIndexDefinitionLen  = 6
 )
 
 var (
@@ -61,7 +66,7 @@ func AppendDeterministicEntryWithLimits(dst []byte, cmd ValidatedCommand, limits
 		return dst[:start], protocolError(ErrInvalidCommand, "command %s is not replicated", cmd.Schema.Name)
 	}
 	if cmd.Schema.RequiresIdempotency && !cmd.hasSection(SectionIdempotencyKey) {
-		return dst[:start], protocolError(ErrInvalidCommand, "missing idempotency identity")
+		return dst[:start], protocolError(ErrInvalidCommand, "missing idempotency key")
 	}
 	if cmd.Schema.RequiresCatalogGuard && !cmd.hasSection(SectionExpectedCatalogVersion) {
 		return dst[:start], protocolError(ErrInvalidCommand, "missing catalog guard")
@@ -313,8 +318,29 @@ func validateDeterministicCommand(commandID CommandID, deterministic []Section) 
 		if _, err := deterministicByteVectorCount(deterministic, SectionDocumentIDs); err != nil {
 			return err
 		}
+	case CommandCreateIndex, CommandDropIndex:
+		raw, ok := deterministicSectionPayload(deterministic, SectionCollectionRef)
+		if !ok {
+			return protocolError(ErrInvalidCommand, "missing deterministic section %d", SectionCollectionRef)
+		}
+		local, err := validateDeterministicCollectionRef(raw)
+		if err != nil {
+			return err
+		}
+		if local {
+			return protocolError(ErrInvalidCommand, "collection handle ref is not deterministic")
+		}
 	}
 	return nil
+}
+
+func deterministicSectionPayload(sections []Section, id SectionID) ([]byte, bool) {
+	for _, section := range sections {
+		if section.ID == id {
+			return section.Bytes, true
+		}
+	}
+	return nil, false
 }
 
 func deterministicByteVectorCount(sections []Section, id SectionID) (int, error) {
@@ -358,7 +384,7 @@ func validateDecodedDeterministicEntry(commandID CommandID, commandVersion uint6
 		}
 	}
 	if schema.RequiresIdempotency && seen.get(SectionIdempotencyKey) == 0 {
-		return nil, protocolError(ErrInvalidCommand, "missing idempotency identity")
+		return nil, protocolError(ErrInvalidCommand, "missing idempotency key")
 	}
 	if schema.RequiresCatalogGuard && seen.get(SectionExpectedCatalogVersion) == 0 {
 		return nil, protocolError(ErrInvalidCommand, "missing catalog guard")
@@ -392,7 +418,7 @@ func validateDeterministicSectionPayload(section Section, limits Limits) error {
 			return err
 		}
 		if n != len(section.Bytes) {
-			return protocolError(ErrInvalidCommand, "document_format has %d trailing bytes", len(section.Bytes)-n)
+			return protocolError(ErrMalformedFrame, "document_format has %d trailing bytes", len(section.Bytes)-n)
 		}
 		switch DocumentFormat(format) {
 		case DocumentFormatDefault, DocumentFormatJSON, DocumentFormatBSON, DocumentFormatTemplateV1:
@@ -405,9 +431,15 @@ func validateDeterministicSectionPayload(section Section, limits Limits) error {
 		}
 		return validateByteVector(section.Bytes, limits)
 	case SectionCollectionMeta:
-		return validateDeterministicOpaquePayload("collection_meta", section.Bytes, limits)
+		if err := validateDeterministicOpaquePayload("collection_meta", section.Bytes, limits); err != nil {
+			return err
+		}
+		return validateDeterministicCollectionMeta(section.Bytes, limits)
 	case SectionIndexDefinition:
-		return validateDeterministicOpaquePayload("index_definition", section.Bytes, limits)
+		if err := validateDeterministicOpaquePayload("index_definition", section.Bytes, limits); err != nil {
+			return err
+		}
+		return validateDeterministicIndexDefinition(section.Bytes, true, limits)
 	case SectionIndexName:
 		return validateDeterministicName("index_name", section.Bytes, limits)
 	case SectionExpectedCatalogVersion, SectionReplacementMode:
@@ -416,7 +448,7 @@ func validateDeterministicSectionPayload(section Section, limits Limits) error {
 			return err
 		}
 		if n != len(section.Bytes) {
-			return protocolError(ErrInvalidCommand, "section %d has %d trailing bytes", section.ID, len(section.Bytes)-n)
+			return protocolError(ErrMalformedFrame, "section %d has %d trailing bytes", section.ID, len(section.Bytes)-n)
 		}
 	}
 	return nil
@@ -539,22 +571,201 @@ func validateDeterministicCollectionRef(raw []byte) (bool, error) {
 		return false, protocolError(ErrInvalidCommand, "empty collection_ref")
 	}
 	switch raw[0] {
-	case 1:
-		name := string(raw[1:])
-		if name == "" {
-			return false, protocolError(ErrInvalidCommand, "collection name cannot be empty")
+	case deterministicCollectionRefTagName:
+		return false, validateDeterministicNameValue("collection name", raw[1:], Limits{})
+	case deterministicCollectionRefTagHandle:
+		_, n, err := readUvarint(raw[1:])
+		if err != nil {
+			return true, err
 		}
-		if len(name) > 128 {
-			return false, protocolError(ErrInvalidCommand, "collection name too long")
+		if n+1 != len(raw) {
+			return true, protocolError(ErrMalformedFrame, "collection handle ref has trailing bytes")
 		}
-		if strings.ContainsAny(name, "\x00/:") || strings.TrimSpace(name) != name || !utf8.ValidString(name) {
-			return false, protocolError(ErrInvalidCommand, "invalid collection name")
-		}
-		return false, nil
-	case 2:
 		return true, nil
 	default:
-		return false, protocolError(ErrInvalidCommand, "unsupported collection_ref tag %d", raw[0])
+		return false, protocolError(ErrMalformedFrame, "collection_ref must use tagged collection name")
+	}
+}
+
+func validateDeterministicNameValue(field string, raw []byte, limits Limits) error {
+	limits = limits.withDefaults()
+	if len(raw) == 0 {
+		return protocolError(ErrInvalidCommand, "%s cannot be empty", field)
+	}
+	if uint64(len(raw)) > limits.MaxDeterministicNameBytes {
+		return protocolError(ErrResourceExhausted, "%s length %d exceeds limit %d", field, len(raw), limits.MaxDeterministicNameBytes)
+	}
+	name := string(raw)
+	if strings.ContainsAny(name, "\x00/:") || strings.TrimSpace(name) != name || !utf8.ValidString(name) {
+		return protocolError(ErrInvalidCommand, "invalid %s", field)
+	}
+	return nil
+}
+
+func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
+	off := 0
+	version, err := readDeterministicUvarintField(raw, &off, "collection_meta.version")
+	if err != nil {
+		return err
+	}
+	if version != 1 {
+		return protocolError(ErrUnsupportedVersion, "collection_meta version %d", version)
+	}
+	if err := readDeterministicNameField(raw, &off, "collection name", limits); err != nil {
+		return err
+	}
+	for _, field := range []string{"document_format", "data_root_storage", "index_state_storage"} {
+		if _, err := readDeterministicUvarintField(raw, &off, field); err != nil {
+			return err
+		}
+	}
+	for _, field := range []string{"allow_array_values_in_index", "disable_indexed_write_memtables", "buffered_indexed_writes"} {
+		if err := readDeterministicBoolField(raw, &off, field); err != nil {
+			return err
+		}
+	}
+	for _, field := range []string{"buffered_indexed_write_max_documents", "buffered_indexed_write_max_bytes", "buffered_indexed_write_max_root_runs"} {
+		if _, err := readDeterministicVarintField(raw, &off, field); err != nil {
+			return err
+		}
+	}
+	for _, field := range []string{"buffered_indexed_async_flush", "buffered_indexed_overlay_roots"} {
+		if err := readDeterministicBoolField(raw, &off, field); err != nil {
+			return err
+		}
+	}
+	if _, err := readDeterministicVarintField(raw, &off, "buffered_indexed_async_flush_max_queued_units"); err != nil {
+		return err
+	}
+	indexCount, err := readDeterministicUvarintField(raw, &off, "index_count")
+	if err != nil {
+		return err
+	}
+	if indexCount > uint64(maxInt) {
+		return protocolError(ErrResourceExhausted, "index count exceeds int capacity")
+	}
+	if indexCount > uint64((len(raw)-off)/minDeterministicIndexDefinitionLen) {
+		return protocolError(ErrMalformedFrame, "index count %d exceeds remaining collection_meta payload", indexCount)
+	}
+	for i := uint64(0); i < indexCount; i++ {
+		next, err := validateDeterministicIndexDefinitionAt(raw, off, false, limits)
+		if err != nil {
+			return err
+		}
+		off = next
+	}
+	if off != len(raw) {
+		return protocolError(ErrMalformedFrame, "collection_meta has %d trailing bytes", len(raw)-off)
+	}
+	return nil
+}
+
+func validateDeterministicIndexDefinition(raw []byte, withVersion bool, limits Limits) error {
+	off, err := validateDeterministicIndexDefinitionAt(raw, 0, withVersion, limits)
+	if err != nil {
+		return err
+	}
+	if off != len(raw) {
+		return protocolError(ErrMalformedFrame, "index_definition has %d trailing bytes", len(raw)-off)
+	}
+	return nil
+}
+
+func validateDeterministicIndexDefinitionAt(raw []byte, off int, withVersion bool, limits Limits) (int, error) {
+	if withVersion {
+		version, err := readDeterministicUvarintField(raw, &off, "index_definition.version")
+		if err != nil {
+			return 0, err
+		}
+		if version != 1 {
+			return 0, protocolError(ErrUnsupportedVersion, "index_definition version %d", version)
+		}
+	}
+	if err := readDeterministicNameField(raw, &off, "index name", limits); err != nil {
+		return 0, err
+	}
+	if _, err := readDeterministicStringField(raw, &off, "index field"); err != nil {
+		return 0, err
+	}
+	if _, err := readDeterministicUvarintField(raw, &off, "index value type"); err != nil {
+		return 0, err
+	}
+	if err := readDeterministicBoolField(raw, &off, "unique"); err != nil {
+		return 0, err
+	}
+	if err := readDeterministicBoolField(raw, &off, "multi_key"); err != nil {
+		return 0, err
+	}
+	if _, err := readDeterministicUvarintField(raw, &off, "index storage policy"); err != nil {
+		return 0, err
+	}
+	return off, nil
+}
+
+func readDeterministicNameField(raw []byte, off *int, field string, limits Limits) error {
+	value, err := readDeterministicStringField(raw, off, field)
+	if err != nil {
+		return err
+	}
+	return validateDeterministicNameValue(field, []byte(value), limits)
+}
+
+func readDeterministicStringField(raw []byte, off *int, field string) (string, error) {
+	length, err := readDeterministicUvarintField(raw, off, field+".length")
+	if err != nil {
+		return "", err
+	}
+	if length > uint64(len(raw)-*off) {
+		return "", protocolError(ErrMalformedFrame, "%s length exceeds remaining payload", field)
+	}
+	start := *off
+	*off += int(length)
+	return string(raw[start:*off]), nil
+}
+
+func readDeterministicUvarintField(raw []byte, off *int, field string) (uint64, error) {
+	if off == nil || *off < 0 || *off > len(raw) {
+		return 0, protocolError(ErrMalformedFrame, "invalid %s offset", field)
+	}
+	value, n, err := readUvarint(raw[*off:])
+	if err != nil {
+		return 0, err
+	}
+	*off += n
+	return value, nil
+}
+
+func readDeterministicVarintField(raw []byte, off *int, field string) (int64, error) {
+	if off == nil || *off < 0 || *off > len(raw) {
+		return 0, protocolError(ErrMalformedFrame, "invalid %s offset", field)
+	}
+	value, n := binary.Varint(raw[*off:])
+	if n <= 0 {
+		return 0, protocolError(ErrMalformedFrame, "invalid %s", field)
+	}
+	if !isMinimalVarint(value, n) {
+		return 0, protocolError(ErrMalformedFrame, "non-minimal %s", field)
+	}
+	*off += n
+	return value, nil
+}
+
+func isMinimalVarint(value int64, n int) bool {
+	var buf [binary.MaxVarintLen64]byte
+	return n == binary.PutVarint(buf[:], value)
+}
+
+func readDeterministicBoolField(raw []byte, off *int, field string) error {
+	if off == nil || *off < 0 || *off >= len(raw) {
+		return protocolError(ErrMalformedFrame, "missing %s", field)
+	}
+	value := raw[*off]
+	*off = *off + 1
+	switch value {
+	case 0, 1:
+		return nil
+	default:
+		return protocolError(ErrMalformedFrame, "invalid %s bool %d", field, value)
 	}
 }
 

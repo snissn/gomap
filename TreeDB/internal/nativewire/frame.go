@@ -23,6 +23,9 @@ func AppendHeader(dst []byte, h Header) ([]byte, error) {
 	if h.Version.Minor == 0 {
 		h.Version.Minor = ProtocolMinorV0
 	}
+	if !validFrameType(h.Type) {
+		return dst, protocolError(ErrInvalidCommand, "unknown frame type %d", h.Type)
+	}
 	if err := validateFrameFlags(h.Flags); err != nil {
 		return dst, err
 	}
@@ -54,7 +57,7 @@ func DecodeHeader(src []byte, limits Limits) (Header, error) {
 		return Header{}, protocolError(ErrMalformedFrame, "invalid header length %d", headerLen)
 	}
 	if headerLen > limits.MaxHeaderLen {
-		return Header{}, protocolError(ErrMalformedFrame, "header length %d exceeds limit %d", headerLen, limits.MaxHeaderLen)
+		return Header{}, protocolError(ErrResourceExhausted, "header length %d exceeds limit %d", headerLen, limits.MaxHeaderLen)
 	}
 	if len(src) < int(headerLen) {
 		return Header{}, protocolError(ErrMalformedFrame, "truncated extended header: %d < %d", len(src), headerLen)
