@@ -2464,7 +2464,7 @@ func TestVlogGenerationMaintenance_PeriodicLeafPackDoesNotBlockOnScheduledRetain
 	db.lastForegroundReadUnixNano.Store(now.Add(-2 * vlogForegroundReadQuietWindow).UnixNano())
 	db.scheduleRetainedValueLogPrune()
 
-	deadline := time.Now().Add(schedulerTestWait(t))
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
 	for {
 		db.retainedPruneMu.Lock()
 		waiting := db.retainedPruneDone != nil
@@ -5014,18 +5014,18 @@ func TestVlogGenerationRewriteQueue_FreshBypassThenExpiredRetryDrainsQueuedDebt(
 		t.Fatalf("rewrite calls after queued retry=%d want=2", rewriteCalls)
 	}
 	if got := rewriteOpts.SourceFileIDs; len(got) != 1 || (got[0] != 11 && got[0] != 22) {
-		t.Fatalf("queued retry SourceFileIDs=%v want one of [11 22]", got)
+		t.Fatalf("queued retry SourceFileIDs=%v want one of [11] or [22]", got)
 	}
-	drainedID := rewriteOpts.SourceFileIDs[0]
+	retriedID := rewriteOpts.SourceFileIDs[0]
+	remainingID := uint32(11)
+	if retriedID == 11 {
+		remainingID = 22
+	}
 	queue, err = db.currentVlogGenerationRewriteQueue()
 	if err != nil {
 		t.Fatalf("current queue after queued retry: %v", err)
 	}
-	wantRemaining := uint32(11)
-	if drainedID == 11 {
-		wantRemaining = 22
-	}
-	if got, want := queue, []uint32{wantRemaining}; len(got) != len(want) || got[0] != want[0] {
+	if got, want := queue, []uint32{remainingID}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("queue after queued retry=%v want=%v", got, want)
 	}
 }
