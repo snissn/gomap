@@ -77,6 +77,22 @@ func TestClientInsertManyRawBSON(t *testing.T) {
 	if n != len(rawDocs) {
 		t.Fatalf("inserted=%d want %d", n, len(rawDocs))
 	}
+	findCommand := mustBSON(t, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "name", Value: "grace"}}},
+		{Key: "limit", Value: 1},
+		{Key: "$db", Value: "app"},
+	})
+	found, err := client.FindRawBSON(insertCtx, findCommand)
+	if err != nil {
+		t.Fatalf("FindRawBSON: %v", err)
+	}
+	if len(found) != 1 {
+		t.Fatalf("FindRawBSON docs=%d want 1", len(found))
+	}
+	if got, ok := found[0].Lookup("name").StringValueOK(); !ok || got != "grace" {
+		t.Fatalf("FindRawBSON name=%q ok=%t want grace", got, ok)
+	}
 
 	driverClient, err := mongo.Connect(options.Client().
 		ApplyURI("mongodb://" + ln.Addr().String()).

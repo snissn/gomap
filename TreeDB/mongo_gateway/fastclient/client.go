@@ -77,6 +77,26 @@ func (c *Client) InsertManyRawBSON(ctx context.Context, database, collection str
 	return c.roundTripInsert(ctx, msg, len(docs))
 }
 
+// FindRawBSON sends a find command and returns the cursor.firstBatch documents
+// from the response. Non-find commands are rejected because this helper only
+// understands find-style cursor replies.
+func (c *Client) FindRawBSON(ctx context.Context, command bson.Raw) ([]bson.Raw, error) {
+	if c == nil || c.conn == nil {
+		return nil, errors.New("mongo gateway fast client is closed")
+	}
+	if len(command) == 0 {
+		return nil, errors.New("FindRawBSON requires a command document")
+	}
+	if _, ok := command.Lookup("find").StringValueOK(); !ok {
+		return nil, errors.New("FindRawBSON requires a find command document")
+	}
+	msg, err := wire.AppendMsgMessage(nil, c.nextRequestID.Add(1), 0, 0, wire.Document(command))
+	if err != nil {
+		return nil, err
+	}
+	return c.roundTripFind(ctx, msg)
+}
+
 func (c *Client) roundTripInsert(ctx context.Context, msg []byte, wantN int) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -108,6 +128,39 @@ func (c *Client) roundTripInsert(ctx context.Context, msg []byte, wantN int) (in
 		return 0, err
 	}
 	return parseInsertResponse(header, body, wantN)
+}
+
+func (c *Client) roundTripFind(ctx context.Context, msg []byte) ([]bson.Raw, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := c.conn.SetDeadline(deadline); err != nil {
+			return nil, err
+		}
+	}
+	stopCancelWatch := c.watchContextCancelLocked(ctx)
+	defer func() {
+		stopCancelWatch()
+		_ = c.conn.SetDeadline(time.Time{})
+	}()
+	if err := writeFull(c.conn, msg); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, err
+	}
+	header, body, err := wire.ReadMessage(c.conn, c.maxMessageLen)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, err
+	}
+	return parseFindResponse(header, body)
 }
 
 func (c *Client) watchContextCancelLocked(ctx context.Context) func() {
@@ -151,6 +204,41 @@ func parseInsertResponse(header wire.Header, body []byte, wantN int) (int, error
 		return 0, fmt.Errorf("insert response n=%d want %d", n, wantN)
 	}
 	return n, nil
+}
+
+func parseFindResponse(header wire.Header, body []byte) ([]bson.Raw, error) {
+	if header.OpCode != wire.OpMsg {
+		return nil, fmt.Errorf("find response opcode=%d want %d", header.OpCode, wire.OpMsg)
+	}
+	msg, err := wire.ParseMsg(body)
+	if err != nil {
+		return nil, err
+	}
+	raw := bson.Raw(msg.Body)
+	if !rawOK(raw) {
+		return nil, fmt.Errorf("find failed: %s", commandErrorMessage(raw))
+	}
+	cursor, ok := raw.Lookup("cursor").DocumentOK()
+	if !ok {
+		return nil, errors.New("find response missing cursor")
+	}
+	batch, ok := cursor.Lookup("firstBatch").ArrayOK()
+	if !ok {
+		return nil, errors.New("find response missing cursor.firstBatch")
+	}
+	values, err := batch.Values()
+	if err != nil {
+		return nil, err
+	}
+	docs := make([]bson.Raw, 0, len(values))
+	for _, value := range values {
+		doc, ok := value.DocumentOK()
+		if !ok {
+			return nil, errors.New("find firstBatch entry is not a document")
+		}
+		docs = append(docs, bson.Raw(doc))
+	}
+	return docs, nil
 }
 
 func rawOK(raw bson.Raw) bool {
