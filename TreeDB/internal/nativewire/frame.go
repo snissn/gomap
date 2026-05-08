@@ -24,7 +24,7 @@ func AppendHeader(dst []byte, h Header) ([]byte, error) {
 		h.Version.Minor = ProtocolMinorV0
 	}
 	if err := validateFrameFlags(h.Flags); err != nil {
-		return nil, err
+		return dst, err
 	}
 
 	var buf [FrameHeaderLenV1]byte
