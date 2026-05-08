@@ -168,6 +168,12 @@ func (c *CommandSchema) validateSections(sections []Section) ([]Section, []Secti
 			return nil, nil, protocolError(ErrInvalidCommand, "missing required section %d", rule.ID)
 		}
 	}
+	if c.RequiresIdempotency && seen[SectionIdempotencyKey] == 0 {
+		return nil, nil, protocolError(ErrInvalidCommand, "missing idempotency identity")
+	}
+	if c.RequiresCatalogGuard && seen[SectionExpectedCatalogVersion] == 0 {
+		return nil, nil, protocolError(ErrInvalidCommand, "missing catalog guard")
+	}
 	return known, ignored, nil
 }
 
