@@ -16,30 +16,34 @@ import (
 )
 
 const (
-	defaultMaxInFlight = 1024
+	defaultMaxInFlight          = 1024
+	defaultMaxCollectionHandles = 1024
 )
 
 // ServerOptions configures a native-wire server.
 type ServerOptions struct {
-	Limits           iwire.Limits
-	MaxInFlight      int
-	DefaultAckPolicy iwire.AckPolicy
-	Collections      *collections.CollectionManager
-	Backend          *backenddb.DB
+	Limits               iwire.Limits
+	MaxInFlight          int
+	MaxCollectionHandles int
+	DefaultAckPolicy     iwire.AckPolicy
+	Collections          *collections.CollectionManager
+	Backend              *backenddb.DB
 }
 
 // Server serves native-wire control and command frames for TreeDB.
 type Server struct {
-	limits           iwire.Limits
-	maxInFlight      int
-	defaultAckPolicy iwire.AckPolicy
-	registry         *iwire.Registry
-	collections      *collections.CollectionManager
-	backend          *backenddb.DB
+	limits               iwire.Limits
+	maxInFlight          int
+	maxCollectionHandles int
+	defaultAckPolicy     iwire.AckPolicy
+	registry             *iwire.Registry
+	collections          *collections.CollectionManager
+	backend              *backenddb.DB
 
-	closed atomic.Bool
-	connMu sync.Mutex
-	conns  map[net.Conn]struct{}
+	closed     atomic.Bool
+	connMu     sync.Mutex
+	conns      map[net.Conn]struct{}
+	metadataMu sync.Mutex
 
 	inFlight atomic.Int64
 	nextConn atomic.Int64
@@ -47,8 +51,46 @@ type Server struct {
 }
 
 type connState struct {
-	id    uint64
-	hello bool
+	id         uint64
+	hello      bool
+	mu         sync.Mutex
+	nextHandle uint64
+	handles    map[CollectionHandle]string
+}
+
+func (s *connState) addCollectionHandle(name string, limit int) (CollectionHandle, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.handles == nil {
+		s.handles = make(map[CollectionHandle]string)
+	}
+	if limit > 0 && len(s.handles) >= limit {
+		return 0, protocolError(iwire.ErrResourceExhausted, "collection handle limit %d reached", limit)
+	}
+	s.nextHandle++
+	if s.nextHandle == 0 {
+		return 0, protocolError(iwire.ErrResourceExhausted, "collection handle space exhausted")
+	}
+	handle := CollectionHandle(s.nextHandle)
+	s.handles[handle] = name
+	return handle, nil
+}
+
+func (s *connState) collectionForHandle(handle CollectionHandle) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	name, ok := s.handles[handle]
+	return name, ok
+}
+
+func (s *connState) closeCollectionHandle(handle CollectionHandle) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.handles[handle]; !ok {
+		return false
+	}
+	delete(s.handles, handle)
+	return true
 }
 
 // NewServer creates a native-wire server with defaulted limits and policies.
@@ -77,17 +119,22 @@ func NewServer(opts ServerOptions) *Server {
 	if maxInFlight <= 0 {
 		maxInFlight = defaultMaxInFlight
 	}
+	maxCollectionHandles := opts.MaxCollectionHandles
+	if maxCollectionHandles <= 0 {
+		maxCollectionHandles = defaultMaxCollectionHandles
+	}
 	defaultAck := opts.DefaultAckPolicy
 	if defaultAck == 0 {
 		defaultAck = iwire.AckVisible
 	}
 	return &Server{
-		limits:           limits,
-		maxInFlight:      maxInFlight,
-		defaultAckPolicy: defaultAck,
-		registry:         iwire.MustV1Registry(),
-		collections:      opts.Collections,
-		backend:          opts.Backend,
+		limits:               limits,
+		maxInFlight:          maxInFlight,
+		maxCollectionHandles: maxCollectionHandles,
+		defaultAckPolicy:     defaultAck,
+		registry:             iwire.MustV1Registry(),
+		collections:          opts.Collections,
+		backend:              opts.Backend,
 	}
 }
 
@@ -226,13 +273,13 @@ func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState,
 		if state != nil && !state.hello {
 			return s.writeError(w, header, protocolError(iwire.ErrInvalidCommand, "hello required before request"))
 		}
-		return s.handleRequest(ctx, w, header, body)
+		return s.handleRequest(ctx, w, state, header, body)
 	default:
 		return s.writeError(w, header, protocolError(iwire.ErrInvalidCommand, "unexpected frame type %d", header.Type))
 	}
 }
 
-func (s *Server) handleRequest(ctx context.Context, w io.Writer, header iwire.Header, body []byte) error {
+func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connState, header iwire.Header, body []byte) error {
 	if ctx.Err() != nil {
 		return s.writeError(w, header, ctx.Err())
 	}
@@ -257,6 +304,22 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, header iwire.He
 	s.counters.inc("commands." + cmd.Schema.Name + ".requests_total")
 	var responseSections []iwire.Section
 	switch cmd.Header.ID {
+	case iwire.CommandCreateCollection:
+		responseSections, err = s.handleCreateCollection(cmd.Known)
+	case iwire.CommandListCollections:
+		responseSections, err = s.handleListCollections()
+	case iwire.CommandCreateIndex:
+		responseSections, err = s.handleCreateIndex(state, cmd.Known)
+	case iwire.CommandListIndexes:
+		responseSections, err = s.handleListIndexes(state, cmd.Known)
+	case iwire.CommandDropIndex:
+		responseSections, err = s.handleDropIndex(state, cmd.Known)
+	case iwire.CommandOpenCollection:
+		responseSections, err = s.handleOpenCollection(state, cmd.Known)
+	case iwire.CommandCloseCollection:
+		responseSections, err = s.handleCloseCollection(state, cmd.Known)
+	case iwire.CommandDropCollection:
+		err = unsupportedDropCollection()
 	case iwire.CommandStats:
 		responseSections = []iwire.Section{{ID: iwire.SectionResponseMeta, Bytes: appendStringMap(nil, s.Stats())}}
 	default:
@@ -364,6 +427,9 @@ func (s *Server) Stats() map[string]string {
 		out[nativeStatsPrefix+key] = strconv.FormatUint(value, 10)
 	}
 	out[nativeStatsPrefix+"requests.in_flight"] = strconv.FormatInt(s.inFlight.Load(), 10)
+	if version, err := s.currentCatalogVersion(); err == nil {
+		out[nativeStatsPrefix+"catalog.version"] = strconv.FormatUint(version, 10)
+	}
 	if s.collections != nil {
 		for key, value := range s.collections.Stats() {
 			out[key] = value

@@ -53,15 +53,7 @@ func (c *Client) Goaway(ctx context.Context) error {
 
 // Stats fetches the server stats map over the native-wire stats command.
 func (c *Client) Stats(ctx context.Context) (map[string]string, error) {
-	body, err := appendCommandRequestBody(nil, iwire.CommandStats)
-	if err != nil {
-		return nil, err
-	}
-	_, response, err := c.roundTrip(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
-	if err != nil {
-		return nil, err
-	}
-	sections, err := iwire.DecodeSections(response, c.limits)
+	sections, err := c.commandSections(ctx, iwire.CommandStats)
 	if err != nil {
 		return nil, err
 	}
@@ -73,6 +65,18 @@ func (c *Client) Stats(ctx context.Context) (map[string]string, error) {
 		return nil, protocolError(iwire.ErrMalformedFrame, "stats response missing response_meta")
 	}
 	return decodeStringMap(payload)
+}
+
+func (c *Client) commandSections(ctx context.Context, commandID iwire.CommandID, sections ...iwire.Section) ([]iwire.Section, error) {
+	body, err := appendCommandRequestBody(nil, commandID, sections...)
+	if err != nil {
+		return nil, err
+	}
+	_, response, err := c.roundTrip(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
+	if err != nil {
+		return nil, err
+	}
+	return iwire.DecodeSections(response, c.limits)
 }
 
 func (c *Client) roundTrip(ctx context.Context, typ iwire.FrameType, body []byte, want iwire.FrameType) (iwire.Header, []byte, error) {

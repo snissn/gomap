@@ -63,8 +63,17 @@ const (
 	SectionTemplateRecords        SectionID = 104
 	SectionExpectedCatalogVersion SectionID = 105
 	SectionReplacementMode        SectionID = 106
+	SectionCollectionMeta         SectionID = 107
+	SectionIndexDefinition        SectionID = 108
+	SectionIndexName              SectionID = 109
+	SectionCollectionHandle       SectionID = 110
+	SectionIndexValue             SectionID = 111
+	SectionIndexLowerBound        SectionID = 112
+	SectionIndexUpperBound        SectionID = 113
 	SectionCursorRef              SectionID = 114
 	SectionCursorLimits           SectionID = 115
+	SectionPresenceBitmap         SectionID = 116
+	SectionTruncated              SectionID = 117
 )
 
 type CommandID uint64

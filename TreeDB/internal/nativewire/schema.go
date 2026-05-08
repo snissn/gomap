@@ -360,6 +360,96 @@ func validSchemaSectionID(id SectionID) bool {
 func v1CommandSchemas() []CommandSchema {
 	return []CommandSchema{
 		{
+			ID:                   CommandCreateCollection,
+			Version:              1,
+			Name:                 "create_collection",
+			Kind:                 CommandKindMutation,
+			Replicated:           true,
+			RequiresIdempotency:  true,
+			RequiresCatalogGuard: true,
+			LocalOnly:            false,
+			Sections: []SectionRule{
+				{ID: SectionCollectionMeta, Name: "collection_meta", Required: true, Deterministic: true},
+				{ID: SectionExpectedCatalogVersion, Name: "expected_catalog_version", Deterministic: true},
+			},
+		},
+		{
+			ID:        CommandListCollections,
+			Version:   1,
+			Name:      "list_collections",
+			Kind:      CommandKindRead,
+			LocalOnly: true,
+		},
+		{
+			ID:                   CommandCreateIndex,
+			Version:              1,
+			Name:                 "create_index",
+			Kind:                 CommandKindMutation,
+			Replicated:           true,
+			RequiresIdempotency:  true,
+			RequiresCatalogGuard: true,
+			LocalOnly:            false,
+			Sections: []SectionRule{
+				{ID: SectionCollectionRef, Name: "collection_ref", Required: true, Deterministic: true},
+				{ID: SectionIndexDefinition, Name: "index_definition", Required: true, Deterministic: true},
+				{ID: SectionExpectedCatalogVersion, Name: "expected_catalog_version", Deterministic: true},
+			},
+		},
+		{
+			ID:      CommandListIndexes,
+			Version: 1,
+			Name:    "list_indexes",
+			Kind:    CommandKindRead,
+			Sections: []SectionRule{
+				{ID: SectionCollectionRef, Name: "collection_ref", Required: true},
+			},
+		},
+		{
+			ID:                   CommandDropIndex,
+			Version:              1,
+			Name:                 "drop_index",
+			Kind:                 CommandKindMutation,
+			Replicated:           true,
+			RequiresIdempotency:  true,
+			RequiresCatalogGuard: true,
+			LocalOnly:            false,
+			Sections: []SectionRule{
+				{ID: SectionCollectionRef, Name: "collection_ref", Required: true, Deterministic: true},
+				{ID: SectionIndexName, Name: "index_name", Required: true, Deterministic: true},
+				{ID: SectionExpectedCatalogVersion, Name: "expected_catalog_version", Deterministic: true},
+			},
+		},
+		{
+			ID:        CommandOpenCollection,
+			Version:   1,
+			Name:      "open_collection",
+			Kind:      CommandKindRead,
+			LocalOnly: true,
+			Sections: []SectionRule{
+				{ID: SectionCollectionRef, Name: "collection_ref", Required: true},
+			},
+		},
+		{
+			ID:        CommandCloseCollection,
+			Version:   1,
+			Name:      "close_collection",
+			Kind:      CommandKindRead,
+			LocalOnly: true,
+			Sections: []SectionRule{
+				{ID: SectionCollectionRef, Name: "collection_ref", Required: true},
+			},
+		},
+		{
+			ID:        CommandDropCollection,
+			Version:   1,
+			Name:      "drop_collection",
+			Kind:      CommandKindMutation,
+			LocalOnly: true,
+			Sections: []SectionRule{
+				{ID: SectionCollectionRef, Name: "collection_ref", Required: true},
+			},
+		},
+		{
 			ID:                   CommandInsertBatch,
 			Version:              1,
 			Name:                 "insert_batch",
