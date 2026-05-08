@@ -215,6 +215,46 @@ func TestNativewireCodecAllocationGuards(t *testing.T) {
 	})
 }
 
+func TestCommandScratchReusesWideSeenOverflow(t *testing.T) {
+	const (
+		commandID    = CommandID(9001)
+		sectionStart = SectionID(1000)
+		sectionCount = sectionSeenInlineCapacity + 16
+	)
+	rules := make([]SectionRule, 0, sectionCount)
+	sections := make([]Section, 0, sectionCount+1)
+	sections = append(sections, Section{
+		ID:    SectionCommandHeader,
+		Bytes: AppendCommandHeader(nil, CommandHeader{ID: commandID, Version: 1}),
+	})
+	for i := 0; i < sectionCount; i++ {
+		id := sectionStart + SectionID(i)
+		rules = append(rules, SectionRule{ID: id, Name: fmt.Sprintf("section_%02d", i), Required: true})
+		sections = append(sections, Section{ID: id, Bytes: []byte{byte(i)}})
+	}
+	registry, err := NewRegistry(CommandSchema{
+		ID:       commandID,
+		Version:  1,
+		Name:     "wide_seen_test",
+		Kind:     CommandKindMutation,
+		Sections: rules,
+	})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	var scratch CommandScratch
+	if _, err := registry.ValidateRequestSectionsInto(sections, &scratch); err != nil {
+		t.Fatalf("ValidateRequestSectionsInto warm: %v", err)
+	}
+	assertMaxAllocs(t, "ValidateRequestSectionsInto/wide-warm-scratch", 0, func() {
+		benchValidatedSink, err = registry.ValidateRequestSectionsInto(sections, &scratch)
+		if err != nil {
+			t.Fatalf("ValidateRequestSectionsInto: %v", err)
+		}
+	})
+}
+
 func BenchmarkNativewireFrameHeader(b *testing.B) {
 	header, err := AppendHeader(nil, Header{
 		Type:      FrameRequest,
