@@ -197,7 +197,7 @@ func (u bsonSetUpdate) appendReplacement(dst, current []byte) ([]byte, []byte, b
 	if err != nil {
 		return dst[:start], nil, false, err
 	}
-	return raw, bson.Raw(raw[start:len(raw):len(raw)]), true, nil
+	return raw, raw[start:len(raw):len(raw)], true, nil
 }
 
 func bsonCoreValueEqualRawValue(left bsoncore.Value, right bson.RawValue) bool {
