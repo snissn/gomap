@@ -75,6 +75,9 @@ type DB struct {
 	adaptive                       *adaptive.Controller
 	pruner                         pruneWorker
 	leafGenerationPins             leafGenerationPinTracker
+	// Test hook used to release synthetic snapshot pins at exact compaction
+	// phase boundaries.
+	compactStorageAfterPhase func(string)
 
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	idx atomic.Pointer[indexGen]

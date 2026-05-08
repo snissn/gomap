@@ -1,9 +1,22 @@
 # TreeDB Generational Value-Log Runbook
 
 ## Goals
-- Keep steady-state `maindb/wal` bounded under churn.
+- Keep steady-state `maindb/value_vlog`, `maindb/leaf_vlog`, and `maindb/wal` bounded under churn.
 - Avoid full-stop rewrite passes; use incremental rewrite + frequent GC.
 - Keep index maintenance policy-linked but independent from value-log GC.
+
+For manual final-footprint maintenance, prefer:
+
+```sh
+treemap compact <db-dir> -rw
+```
+
+Use `treemap compact-plan <db-dir>` for a read-only preview. The individual
+`vlog-*` and `leafgen-*` commands below are advanced diagnostics and scheduler
+building blocks, not the recommended path for benchmark storage accounting.
+When online index vacuum is unsupported on a platform, `treemap compact` reports
+that phase as skipped and still performs the value-log, leaf-log, and cleanup
+phases.
 
 ## Recommended Defaults
 - `-treedb-maintenance-mode normal` (default)

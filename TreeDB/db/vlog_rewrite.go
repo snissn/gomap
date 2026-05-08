@@ -1519,6 +1519,10 @@ func selectRewriteSourceSegmentsWithStats(opts ValueLogRewriteOnlineOptions, fil
 // ValueLogRewriteOnline rewrites pointer-backed values in bounded commit
 // batches, then atomically swaps keys to rewritten pointers.
 func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnlineOptions) (stats ValueLogRewriteStats, err error) {
+	return db.valueLogRewriteOnline(ctx, opts, true)
+}
+
+func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnlineOptions, lockMaintenance bool) (stats ValueLogRewriteStats, err error) {
 	if db == nil {
 		return stats, fmt.Errorf("missing db")
 	}
@@ -1528,8 +1532,10 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if db.valueLogManager == nil {
 		return stats, fmt.Errorf("value log manager unavailable")
 	}
-	db.maintenanceMu.Lock()
-	defer db.maintenanceMu.Unlock()
+	if lockMaintenance {
+		db.maintenanceMu.Lock()
+		defer db.maintenanceMu.Unlock()
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -3270,6 +3276,7 @@ type rewriteWriter struct {
 	leafLane uint32
 	leafSeq  uint32
 	nextRID  uint64
+	ridAlloc *rewriteRIDAllocator
 	// currentPath/currentFileID cache the active writer segment identity so
 	// CurrentValueLogSegment can avoid per-call path/fileID recomputation.
 	currentPath       string
@@ -3350,6 +3357,22 @@ func (w *rewriteWriter) ConfigureLeafLog(leafDir string, lane, startSeq uint32) 
 	w.leafDir = leafDir
 	w.leafLane = lane
 	w.leafSeq = startSeq
+}
+
+func (w *rewriteWriter) resetLeafLogSeqAtLeast(seq uint32) error {
+	if w == nil || w.leafDir == "" || seq <= w.leafSeq {
+		return nil
+	}
+	if w.leafW != nil {
+		if err := w.leafW.Close(); err != nil {
+			return err
+		}
+		w.leafW = nil
+	}
+	w.leafSeq = seq
+	w.leafCurrentPath = ""
+	w.leafCurrentFileID = 0
+	return nil
 }
 
 func (w *rewriteWriter) noteCreatedSegment(path string, fileID uint32) {
@@ -3522,13 +3545,9 @@ func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error)
 	if w == nil {
 		return page.LeafLogPtr{}, errors.New("vlog-rewrite: nil writer")
 	}
-	if w.nextRID == 0 {
-		w.nextRID = 1
-	}
-	rid := w.nextRID
-	w.nextRID++
-	if w.nextRID == 0 {
-		return page.LeafLogPtr{}, fmt.Errorf("value-log rid space exhausted")
+	rid, err := w.nextRecordRID()
+	if err != nil {
+		return page.LeafLogPtr{}, err
 	}
 	return w.appendLeafPageWithRID(rid, leafPage)
 }
@@ -3540,18 +3559,48 @@ func (w *rewriteWriter) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, 
 	if len(leafPages) == 0 {
 		return nil, nil
 	}
+	startRID, err := w.reserveRecordRIDs(len(leafPages))
+	if err != nil {
+		return nil, err
+	}
+	return w.appendLeafPagesWithRIDStart(startRID, leafPages)
+}
+
+func (w *rewriteWriter) nextRecordRID() (uint64, error) {
+	if w == nil {
+		return 0, errors.New("vlog-rewrite: nil writer")
+	}
+	if w.ridAlloc != nil {
+		return w.ridAlloc.Next()
+	}
+	return w.reserveRecordRIDs(1)
+}
+
+func (w *rewriteWriter) reserveRecordRIDs(count int) (uint64, error) {
+	if w == nil {
+		return 0, errors.New("vlog-rewrite: nil writer")
+	}
+	if count < 0 {
+		return 0, fmt.Errorf("value-log rid reserve count must be non-negative")
+	}
+	if count == 0 {
+		return 0, nil
+	}
+	if w.ridAlloc != nil {
+		return w.ridAlloc.Reserve(count)
+	}
 	if w.nextRID == 0 {
 		w.nextRID = 1
 	}
 	startRID := w.nextRID
-	if uint64(len(leafPages)) > ^uint64(0)-startRID {
-		return nil, fmt.Errorf("value-log rid space exhausted")
+	if uint64(count) > ^uint64(0)-startRID {
+		return 0, fmt.Errorf("value-log rid space exhausted")
 	}
-	w.nextRID += uint64(len(leafPages))
+	w.nextRID += uint64(count)
 	if w.nextRID == 0 {
-		return nil, fmt.Errorf("value-log rid space exhausted")
+		return 0, fmt.Errorf("value-log rid space exhausted")
 	}
-	return w.appendLeafPagesWithRIDStart(startRID, leafPages)
+	return startRID, nil
 }
 
 func (w *rewriteWriter) LastLeafPageRecordLength() uint32 {

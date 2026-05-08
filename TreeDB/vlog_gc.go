@@ -87,8 +87,8 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 				return out, err
 			}
 		case ValueLogGCModeOnline:
-			backendOpts.ProtectedPaths = db.cached.ValueLogRetainedPaths()
-			// Fail closed when online mode has no retained-path protection data.
+			backendOpts.ProtectedPaths = db.cached.ValueLogProtectedPaths()
+			// Fail closed when online mode has no protected-path data.
 			if !backendOpts.DryRun && len(backendOpts.ProtectedPaths) == 0 {
 				backendOpts.DryRun = true
 				out.FailClosedToDryRun = true

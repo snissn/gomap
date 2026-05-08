@@ -72,17 +72,33 @@ Checkpoint and retention pruning:
 - drop only paths no longer live/retained,
 - refresh manager segment set after changes.
 
-## 6. Rewrite/Compaction (`ValueLogRewriteOffline`)
+Backend maintenance that creates new value-log or split leaf-log segments must
+reconcile cached-mode split writers after the backend operation. Reconciliation
+refreshes the value-log reader and advances each cached writer lane past the
+maximum observed on-disk segment sequence, preventing later cached writes from
+reusing segment filenames created by compaction, rewrite, leaf packing, or index
+vacuum.
+
+## 6. Rewrite/Compaction
+
+### 6.1 Online rewrite (`DB.ValueLogRewriteOnline`)
+
+Online rewrite copies live pointer-backed values into fresh value-log segments
+and updates keys in bounded commit batches. Cached-mode callers must checkpoint
+first, protect cached value-log paths, and allocate rewrite RIDs from the shared
+cached allocator.
+
+### 6.2 Offline rewrite (`ValueLogRewriteOffline`)
 
 Offline rewrite rewrites live pointer records into fresh segments and swaps index.
 
-### 6.1 Preconditions
+#### Preconditions
 
 - exclusive DB lock,
 - clean commit log (no pending `commit-*.log`),
 - readable existing value-log segments.
 
-### 6.2 Procedure
+#### Procedure
 
 1. Open DB read-only under exclusive lock.
 2. Build new value-log segments by iterating current trees and copying referenced records.
@@ -92,11 +108,33 @@ Offline rewrite rewrites live pointer records into fresh segments and swaps inde
 6. Remove obsolete value-log segments.
 7. Report before/after size and segment counts.
 
-### 6.3 Safety properties
+#### Safety properties
 
 - Only referenced records are copied.
 - Pointer map deduplicates source record copies when needed.
 - Old segments are removed only after index swap succeeds.
+
+### 6.3 Full storage compaction (`DB.CompactStorage`)
+
+`DB.CompactStorage` is the preferred online operator path for reclaiming TreeDB
+storage. It composes:
+
+1. checkpoint,
+2. value-log rewrite,
+3. value-log GC,
+4. split leaf-generation pack,
+5. split leaf-generation GC,
+6. index vacuum,
+7. settle GC passes,
+8. zero-byte value-log cleanup,
+9. final debt audit.
+
+Applied full storage compaction holds backend maintenance serialization for the
+whole sequence. Plan mode computes the same debt model without mutating storage.
+
+Value-log deletion in this lifecycle remains reachability-based. Zero-byte
+cleanup is limited to untracked `value_vlog` segment files and must honor
+cached-mode protected paths.
 
 ## 7. Read Integrity Options
 
@@ -110,7 +148,10 @@ Template and dictionary lookup failures for encoded/compressed records are treat
 ## 8. Operational Guidance
 
 - Use `ValueLogGC` regularly to reclaim fully unreachable segments.
-- Use `ValueLogRewriteOffline` for deeper space reclaim/locality rewrite.
+- Prefer `DB.CompactStorage` for explicit online "make this DB compact"
+  maintenance across value logs, split leaf logs, and `index.db`.
+- Use `ValueLogRewriteOffline` only when an exclusive offline rewrite is
+  intentionally required.
 - Monitor retained bytes and optional guardrails:
   - `ValueLog.MaxRetainedBytes` (warning threshold),
   - `ValueLog.MaxRetainedBytesHard` (pointer admission cap).
