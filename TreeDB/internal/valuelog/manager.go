@@ -2109,6 +2109,9 @@ func (m *Manager) RemoveSegment(id uint32) error {
 // pins it. It returns false with no error when the segment is absent or still
 // pinned.
 func (m *Manager) RemoveSegmentIfUnpinned(id uint32) (bool, error) {
+	if m == nil {
+		return false, nil
+	}
 	m.mu.Lock()
 	f, ok := m.files[id]
 	if !ok {
