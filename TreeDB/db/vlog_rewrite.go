@@ -3558,6 +3558,12 @@ func (w *rewriteWriter) reserveRecordRIDs(count int) (uint64, error) {
 	if w == nil {
 		return 0, errors.New("vlog-rewrite: nil writer")
 	}
+	if count < 0 {
+		return 0, fmt.Errorf("value-log rid reserve count must be non-negative")
+	}
+	if count == 0 {
+		return 0, nil
+	}
 	if w.ridAlloc != nil {
 		return w.ridAlloc.Reserve(count)
 	}

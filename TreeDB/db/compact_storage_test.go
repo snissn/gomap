@@ -155,6 +155,77 @@ func TestCompactStorageDeletesManagerPinnedZeroByteValueLogFiles(t *testing.T) {
 	}
 }
 
+func TestCompactStorageKeepsPinnedZombieZeroByteValueLogFiles(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{Dir: dir}
+	d, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := d.SetSync([]byte("live"), []byte("v")); err != nil {
+		_ = d.Close()
+		t.Fatalf("set live: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	valueLogDir := ValueLogDirPath(dir)
+	const emptyName = "value-l42-000001.log"
+	emptyPath := filepath.Join(valueLogDir, emptyName)
+	if err := os.WriteFile(emptyPath, nil, 0644); err != nil {
+		t.Fatalf("write empty value log: %v", err)
+	}
+	fileID, ok := compactStorageValueLogFileID(emptyName)
+	if !ok {
+		t.Fatalf("parse %s failed", emptyName)
+	}
+
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if reopened.valueLogManager == nil || !reopened.valueLogManager.HasSegment(fileID) {
+		t.Fatalf("expected empty segment %d to be manager-registered", fileID)
+	}
+	pinned := reopened.AcquireSnapshot()
+	if pinned == nil {
+		t.Fatal("expected pinned snapshot")
+	}
+	pinnedClosed := false
+	defer func() {
+		if !pinnedClosed {
+			_ = pinned.Close()
+		}
+	}()
+
+	if _, err := reopened.CompactStorage(context.Background(), CompactStorageOptions{}); err != nil {
+		t.Fatalf("CompactStorage first: %v", err)
+	}
+	if _, err := os.Stat(emptyPath); err != nil {
+		t.Fatalf("pinned zombie empty value-log file removed on first prune: %v", err)
+	}
+	if reopened.valueLogManager.HasSegment(fileID) {
+		t.Fatalf("expected segment %d to be zombie after first prune", fileID)
+	}
+
+	if _, err := reopened.CompactStorage(context.Background(), CompactStorageOptions{}); err != nil {
+		t.Fatalf("CompactStorage second: %v", err)
+	}
+	if _, err := os.Stat(emptyPath); err != nil {
+		t.Fatalf("pinned zombie empty value-log file removed on second prune: %v", err)
+	}
+
+	if err := pinned.Close(); err != nil {
+		t.Fatalf("close pinned snapshot: %v", err)
+	}
+	pinnedClosed = true
+	if _, err := os.Stat(emptyPath); !os.IsNotExist(err) {
+		t.Fatalf("expected pinned zombie file to delete after release, stat err=%v", err)
+	}
+}
+
 func TestCompactStorageKeepsProtectedZeroByteValueLogFiles(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir})

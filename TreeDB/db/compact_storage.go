@@ -665,24 +665,30 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 			continue
 		}
 		if db.valueLogManager != nil {
-			if fileID, ok := compactStorageValueLogFileID(name); ok && db.valueLogManager.HasSegment(fileID) {
-				if err := db.valueLogManager.MarkZombie(fileID); err != nil {
+			if fileID, ok := compactStorageValueLogFileID(name); ok {
+				tracked, _, err := db.valueLogManager.MarkZombieIfTracked(fileID)
+				if err != nil {
 					return deleted, err
 				}
-				if err := db.publishValueLogSetNoRefresh(); err != nil {
-					return deleted, err
-				}
-				if _, err := db.valueLogManager.RemoveSegmentIfUnpinned(fileID); err != nil {
-					return deleted, err
-				}
-				if _, err := os.Stat(path); err != nil {
-					if os.IsNotExist(err) {
+				if tracked {
+					if err := db.publishValueLogSetNoRefresh(); err != nil {
+						return deleted, err
+					}
+					if removed, err := db.valueLogManager.RemoveSegmentIfUnpinned(fileID); err != nil {
+						return deleted, err
+					} else if removed {
 						deleted++
 						continue
 					}
-					return deleted, err
+					if _, err := os.Stat(path); err != nil {
+						if os.IsNotExist(err) {
+							deleted++
+							continue
+						}
+						return deleted, err
+					}
+					continue
 				}
-				continue
 			}
 		}
 		if err := os.Remove(path); err != nil {
