@@ -55,8 +55,10 @@ separate durable log.
 
 ## Async Indexed Flush
 
-`BufferedIndexedAsyncFlush` allows threshold-triggered indexed flush units to be
-published by a background worker.
+Indexed schemas enable `BufferedIndexedAsyncFlush` by default, so
+threshold-triggered indexed flush units are normally published by a background
+worker. `DisableBufferedIndexedAsyncFlush` opts a collection back into
+foreground threshold publish for debugging and baseline comparisons.
 
 The async worker may move a queued immutable unit into the publishing state
 before root publication completes. Publishing units remain visible to reads,
@@ -70,7 +72,8 @@ rotating new immutable units while the background publisher is busy.
 
 ## Durability Boundary
 
-The current async indexed write-domain contract is flush-boundary durable.
+The current indexed write-domain contract is flush-boundary durable regardless
+of whether threshold publish is foreground or background.
 
 An acknowledged collection write that is still only in mutable, queued, or
 publishing write-domain state is visible in-process through the owning manager,

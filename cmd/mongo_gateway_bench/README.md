@@ -113,7 +113,8 @@ collection benchmark profile:
 - `-treedb-index-state-root-storage compressed`
 - `-treedb-index-root-storage compressed`
 - `-treedb-buffered-indexed-write-max-documents 0` (use the collection default:
-  96000 for synchronous flushing, 256000 when async flush is enabled)
+  256000 for default async threshold publish; 96000 when async flush is
+  disabled)
 - `-treedb-buffered-indexed-write-max-root-runs 0` (explicit `0` disables this
   trigger; when this flag is omitted while document or byte thresholds are
   overridden, the tool keeps the matching root-run compatibility default)
@@ -146,9 +147,9 @@ tool fills in the matching root-run default; pass
 `-treedb-buffered-indexed-write-max-root-runs 0` explicitly to keep root-run
 flushing disabled in that case.
 
-The Go profile benchmarks in `profile_bench_test.go` keep their defaults stable,
-but can opt into the same indexed async flush mode for focused root-publish
-experiments:
+The Go profile benchmarks in `profile_bench_test.go` use the collection default
+indexed async flush mode. They can still override queue limits for focused
+root-publish experiments:
 
 ```sh
 MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH=true \

@@ -2798,6 +2798,7 @@ func TestCollectionIndexedOverlayRootFlushSupportsReadsUpdatesAndUniqueChecks(t 
 			BufferedIndexedOverlayRoots:      true,
 			BufferedIndexedWriteMaxDocuments: 1,
 			BufferedIndexedWriteMaxRootRuns:  1,
+			DisableBufferedIndexedAsyncFlush: true,
 		},
 		Indexes: []IndexDefinition{
 			{Name: "city", Field: "city", ValueType: IndexValueString},
@@ -3071,6 +3072,7 @@ func TestCollectionIndexedOverlayRootFilterUnionsDeltaBase(t *testing.T) {
 			BufferedIndexedOverlayRoots:      true,
 			BufferedIndexedWriteMaxDocuments: 1,
 			BufferedIndexedWriteMaxRootRuns:  1,
+			DisableBufferedIndexedAsyncFlush: true,
 		},
 		Indexes: []IndexDefinition{
 			{Name: "city", Field: "city", ValueType: IndexValueString},
@@ -3500,14 +3502,20 @@ func TestCollectionIndexedWriteMemtablesDefaultForIndexedSchemas(t *testing.T) {
 	if !meta.Options.BufferedIndexedWrites {
 		t.Fatal("indexed collection did not enable native write memtables by default")
 	}
-	if got := meta.Options.BufferedIndexedWriteMaxDocuments; got != DefaultIndexedWriteMemtableMaxDocuments {
-		t.Fatalf("default max docs=%d want %d", got, DefaultIndexedWriteMemtableMaxDocuments)
+	if !meta.Options.BufferedIndexedAsyncFlush {
+		t.Fatal("indexed collection did not enable async threshold publish by default")
+	}
+	if got := meta.Options.BufferedIndexedWriteMaxDocuments; got != DefaultIndexedWriteMemtableAsyncFlushMaxDocuments {
+		t.Fatalf("default max docs=%d want %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxDocuments)
 	}
 	if got := meta.Options.BufferedIndexedWriteMaxBytes; got != 0 {
 		t.Fatalf("default max bytes=%d want 0", got)
 	}
-	if got := meta.Options.BufferedIndexedWriteMaxRootRuns; got != DefaultIndexedWriteMemtableMaxRootRuns {
-		t.Fatalf("default max root runs=%d want %d", got, DefaultIndexedWriteMemtableMaxRootRuns)
+	if got := meta.Options.BufferedIndexedWriteMaxRootRuns; got != DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns {
+		t.Fatalf("default max root runs=%d want %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns)
+	}
+	if got := meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits; got != DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits {
+		t.Fatalf("default async max queued units=%d want %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits)
 	}
 
 	col, err := mgr.OpenCollection("users")
@@ -3574,8 +3582,8 @@ func TestCollectionIndexedWriteMemtablesPreserveDocumentDefaultWithRootRunLimit(
 	if err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
-	if got := meta.Options.BufferedIndexedWriteMaxDocuments; got != DefaultIndexedWriteMemtableMaxDocuments {
-		t.Fatalf("max documents=%d want default %d", got, DefaultIndexedWriteMemtableMaxDocuments)
+	if got := meta.Options.BufferedIndexedWriteMaxDocuments; got != DefaultIndexedWriteMemtableAsyncFlushMaxDocuments {
+		t.Fatalf("max documents=%d want default %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxDocuments)
 	}
 	if got := meta.Options.BufferedIndexedWriteMaxRootRuns; got != 8 {
 		t.Fatalf("max root runs=%d want 8", got)
@@ -3610,6 +3618,37 @@ func TestCollectionIndexedWriteMemtablesAsyncFlushDefaultsQueueLimit(t *testing.
 	}
 	if got := meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits; got != DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits {
 		t.Fatalf("async max queued units=%d want %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesCanDisableDefaultAsyncFlush(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	meta, err := NewCollectionManager(d).CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if meta.Options.BufferedIndexedAsyncFlush {
+		t.Fatal("disabled async indexed flush was enabled")
+	}
+	if got := meta.Options.BufferedIndexedWriteMaxDocuments; got != DefaultIndexedWriteMemtableMaxDocuments {
+		t.Fatalf("foreground max documents=%d want %d", got, DefaultIndexedWriteMemtableMaxDocuments)
+	}
+	if got := meta.Options.BufferedIndexedWriteMaxRootRuns; got != DefaultIndexedWriteMemtableMaxRootRuns {
+		t.Fatalf("foreground max root runs=%d want %d", got, DefaultIndexedWriteMemtableMaxRootRuns)
+	}
+	if got := meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits; got != 0 {
+		t.Fatalf("disabled async max queued units=%d want 0", got)
 	}
 }
 
@@ -4848,6 +4887,7 @@ func TestCollectionIndexedWriteMemtablesAutoFlushMaxDocuments(t *testing.T) {
 		Options: CollectionOptions{
 			BufferedIndexedWrites:            true,
 			BufferedIndexedWriteMaxDocuments: 2,
+			DisableBufferedIndexedAsyncFlush: true,
 		},
 		Indexes: []IndexDefinition{
 			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
@@ -5900,8 +5940,9 @@ func TestCollectionIndexedWriteMemtablesAutoFlushMaxBytes(t *testing.T) {
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Options: CollectionOptions{
-			BufferedIndexedWrites:        true,
-			BufferedIndexedWriteMaxBytes: 1,
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxBytes:     1,
+			DisableBufferedIndexedAsyncFlush: true,
 		},
 		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
@@ -5966,6 +6007,7 @@ func TestCollectionIndexedWriteMemtablesCompactRootRunsBeforeDocumentFlush(t *te
 			BufferedIndexedWrites:            true,
 			BufferedIndexedWriteMaxDocuments: 5,
 			BufferedIndexedWriteMaxRootRuns:  6,
+			DisableBufferedIndexedAsyncFlush: true,
 		},
 		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
@@ -6051,8 +6093,9 @@ func TestCollectionIndexedWriteMemtablesAutoFlushMaxRootRuns(t *testing.T) {
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Options: CollectionOptions{
-			BufferedIndexedWrites:           true,
-			BufferedIndexedWriteMaxRootRuns: 2,
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxRootRuns:  2,
+			DisableBufferedIndexedAsyncFlush: true,
 		},
 		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {

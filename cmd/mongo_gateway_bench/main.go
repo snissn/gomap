@@ -84,6 +84,7 @@ type config struct {
 	TreeDBBufferedIndexedWriteMaxDocuments        int
 	TreeDBBufferedIndexedWriteMaxBytes            int64
 	TreeDBBufferedIndexedWriteMaxRootRuns         int
+	TreeDBDisableBufferedIndexedAsyncFlush        bool
 	TreeDBBufferedIndexedAsyncFlush               bool
 	TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits int
 	TreeDBMaintenance                             string
@@ -505,7 +506,8 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.TreeDBBufferedIndexedWriteMaxDocuments, "treedb-buffered-indexed-write-max-documents", cfg.TreeDBBufferedIndexedWriteMaxDocuments, "TreeDB indexed collection write-domain document auto-flush threshold; 0 uses the collection default")
 	fs.Int64Var(&cfg.TreeDBBufferedIndexedWriteMaxBytes, "treedb-buffered-indexed-write-max-bytes", cfg.TreeDBBufferedIndexedWriteMaxBytes, "TreeDB indexed collection write-domain byte auto-flush threshold; 0 disables this trigger")
 	fs.IntVar(&cfg.TreeDBBufferedIndexedWriteMaxRootRuns, "treedb-buffered-indexed-write-max-root-runs", cfg.TreeDBBufferedIndexedWriteMaxRootRuns, "TreeDB indexed collection write-domain root-run auto-flush threshold; explicit 0 disables this trigger; omitted with docs/bytes override keeps the compatibility default")
-	fs.BoolVar(&cfg.TreeDBBufferedIndexedAsyncFlush, "treedb-buffered-indexed-async-flush", false, "TreeDB indexed collection threshold flushes publish in the background; explicit Flush/Close still drain before returning")
+	fs.BoolVar(&cfg.TreeDBBufferedIndexedAsyncFlush, "treedb-buffered-indexed-async-flush", false, "TreeDB indexed collection threshold flushes publish in the background; indexed schemas enable this by default")
+	fs.BoolVar(&cfg.TreeDBDisableBufferedIndexedAsyncFlush, "treedb-disable-buffered-indexed-async-flush", false, "disable TreeDB indexed collection background threshold publish for foreground-publish baseline comparisons")
 	fs.IntVar(&cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits, "treedb-buffered-indexed-async-flush-max-queued-units", 0, "TreeDB indexed collection background flush unit queue limit; 0 uses the collection default when async flush is enabled")
 	fs.StringVar(&cfg.TreeDBMaintenance, "treedb-maintenance", cfg.TreeDBMaintenance, "TreeDB final disk maintenance for -target treedb: full, checkpoint, or none")
 	fs.StringVar(&cfg.TreeDBReadState, "treedb-read-state", cfg.TreeDBReadState, "TreeDB state before read phases: settled forces collection FlushAll after load; unsettled leaves post-load memtables/write-domain state visible")
@@ -531,9 +533,12 @@ func parseConfig(args []string) (config, error) {
 		(seenFlags["treedb-buffered-indexed-write-max-documents"] || seenFlags["treedb-buffered-indexed-write-max-bytes"]) &&
 		(cfg.TreeDBBufferedIndexedWriteMaxDocuments != 0 || cfg.TreeDBBufferedIndexedWriteMaxBytes != 0) {
 		cfg.TreeDBBufferedIndexedWriteMaxRootRuns = collections.DefaultIndexedWriteMemtableMaxRootRuns
-		if cfg.TreeDBBufferedIndexedAsyncFlush {
+		if !cfg.TreeDBDisableBufferedIndexedAsyncFlush || cfg.TreeDBBufferedIndexedAsyncFlush {
 			cfg.TreeDBBufferedIndexedWriteMaxRootRuns = collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns
 		}
+	}
+	if cfg.TreeDBDisableBufferedIndexedAsyncFlush && cfg.TreeDBBufferedIndexedAsyncFlush {
+		return config{}, errors.New("cannot set both -treedb-buffered-indexed-async-flush and -treedb-disable-buffered-indexed-async-flush")
 	}
 	if cfg.Target != "treedb" && cfg.Target != "mongo" {
 		return config{}, fmt.Errorf("unknown target %q", cfg.Target)
@@ -950,6 +955,7 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		BufferedIndexedWriteMaxDocuments:        cfg.TreeDBBufferedIndexedWriteMaxDocuments,
 		BufferedIndexedWriteMaxBytes:            cfg.TreeDBBufferedIndexedWriteMaxBytes,
 		BufferedIndexedWriteMaxRootRuns:         cfg.TreeDBBufferedIndexedWriteMaxRootRuns,
+		DisableBufferedIndexedAsyncFlush:        cfg.TreeDBDisableBufferedIndexedAsyncFlush,
 		BufferedIndexedAsyncFlush:               cfg.TreeDBBufferedIndexedAsyncFlush,
 		BufferedIndexedAsyncFlushMaxQueuedUnits: cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
 	}
@@ -1702,6 +1708,7 @@ func directTreeDBCollectionOptions(cfg config) collections.CollectionOptions {
 		BufferedIndexedWriteMaxDocuments:        cfg.TreeDBBufferedIndexedWriteMaxDocuments,
 		BufferedIndexedWriteMaxBytes:            cfg.TreeDBBufferedIndexedWriteMaxBytes,
 		BufferedIndexedWriteMaxRootRuns:         cfg.TreeDBBufferedIndexedWriteMaxRootRuns,
+		DisableBufferedIndexedAsyncFlush:        cfg.TreeDBDisableBufferedIndexedAsyncFlush,
 		BufferedIndexedAsyncFlush:               cfg.TreeDBBufferedIndexedAsyncFlush,
 		BufferedIndexedAsyncFlushMaxQueuedUnits: cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
 	}

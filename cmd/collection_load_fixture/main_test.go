@@ -62,16 +62,16 @@ func TestParseConfigPartialBufferedIndexedThresholdKeepsRootRunDefault(t *testin
 	if cfg.BufferedIndexedWriteMaxDocs != 1234 {
 		t.Fatalf("buffered indexed max docs=%d want 1234", cfg.BufferedIndexedWriteMaxDocs)
 	}
-	if cfg.BufferedIndexedWriteMaxRuns != collections.DefaultIndexedWriteMemtableMaxRootRuns {
-		t.Fatalf("buffered indexed max root runs=%d want %d", cfg.BufferedIndexedWriteMaxRuns, collections.DefaultIndexedWriteMemtableMaxRootRuns)
+	if cfg.BufferedIndexedWriteMaxRuns != collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns {
+		t.Fatalf("buffered indexed max root runs=%d want %d", cfg.BufferedIndexedWriteMaxRuns, collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns)
 	}
 
-	asyncCfg, err := parseConfig([]string{"-buffered-indexed-async-flush", "-buffered-indexed-write-max-docs", "1234"}, io.Discard)
+	syncCfg, err := parseConfig([]string{"-disable-buffered-indexed-async-flush", "-buffered-indexed-write-max-docs", "1234"}, io.Discard)
 	if err != nil {
-		t.Fatalf("parse async docs threshold: %v", err)
+		t.Fatalf("parse foreground docs threshold: %v", err)
 	}
-	if asyncCfg.BufferedIndexedWriteMaxRuns != collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns {
-		t.Fatalf("async buffered indexed max root runs=%d want %d", asyncCfg.BufferedIndexedWriteMaxRuns, collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns)
+	if syncCfg.BufferedIndexedWriteMaxRuns != collections.DefaultIndexedWriteMemtableMaxRootRuns {
+		t.Fatalf("foreground buffered indexed max root runs=%d want %d", syncCfg.BufferedIndexedWriteMaxRuns, collections.DefaultIndexedWriteMemtableMaxRootRuns)
 	}
 
 	explicitZeroCfg, err := parseConfig([]string{"-buffered-indexed-write-max-docs", "1234", "-buffered-indexed-write-max-root-runs", "0"}, io.Discard)

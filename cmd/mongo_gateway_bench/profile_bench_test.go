@@ -93,6 +93,7 @@ func TestProfileBenchUpdateIDStrideCoversDocumentSet(t *testing.T) {
 
 func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH", "")
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_DISABLE_BUFFERED_INDEXED_ASYNC_FLUSH", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_DOCUMENTS", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_BYTES", "")
@@ -101,6 +102,9 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_COMPACT_OVERLAY_ROOTS_AFTER_FLUSH", "")
 	if profileBenchBufferedIndexedAsyncFlush(t) {
 		t.Fatal("async flush default=true want false")
+	}
+	if profileBenchDisableBufferedIndexedAsyncFlush(t) {
+		t.Fatal("disable async flush default=true want false")
 	}
 	if profileBenchBufferedIndexedOverlayRoots(t) {
 		t.Fatal("overlay roots default=true want false")
@@ -123,6 +127,10 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH", "true")
 	if !profileBenchBufferedIndexedAsyncFlush(t) {
 		t.Fatal("async flush env=true want true")
+	}
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_DISABLE_BUFFERED_INDEXED_ASYNC_FLUSH", "true")
+	if !profileBenchDisableBufferedIndexedAsyncFlush(t) {
+		t.Fatal("disable async flush env=true want true")
 	}
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS", "6")
 	if got := profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(t); got != 6 {
@@ -2495,6 +2503,10 @@ func profileBenchBufferedIndexedAsyncFlush(tb testing.TB) bool {
 	return profileBenchBoolEnv(tb, "MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH", false)
 }
 
+func profileBenchDisableBufferedIndexedAsyncFlush(tb testing.TB) bool {
+	return profileBenchBoolEnv(tb, "MONGO_GATEWAY_PROFILE_BENCH_DISABLE_BUFFERED_INDEXED_ASYNC_FLUSH", false)
+}
+
 func profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(tb testing.TB) int {
 	return profileBenchNonNegativeEnvInt(tb, "MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS", 0)
 }
@@ -2528,6 +2540,7 @@ func profileBenchCollectionOptions(tb testing.TB, format collections.DocumentFor
 		BufferedIndexedWriteMaxDocuments:        profileBenchBufferedIndexedWriteMaxDocuments(tb),
 		BufferedIndexedWriteMaxBytes:            profileBenchBufferedIndexedWriteMaxBytes(tb),
 		BufferedIndexedWriteMaxRootRuns:         profileBenchBufferedIndexedWriteMaxRootRuns(tb),
+		DisableBufferedIndexedAsyncFlush:        profileBenchDisableBufferedIndexedAsyncFlush(tb),
 		BufferedIndexedAsyncFlush:               profileBenchBufferedIndexedAsyncFlush(tb),
 		BufferedIndexedOverlayRoots:             profileBenchBufferedIndexedOverlayRoots(tb),
 		BufferedIndexedAsyncFlushMaxQueuedUnits: profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(tb),

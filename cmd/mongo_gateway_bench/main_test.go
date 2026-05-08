@@ -985,16 +985,16 @@ func TestParseConfigTreeDBPartialBufferedIndexedThresholdKeepsRootRunDefault(t *
 	if cfg.TreeDBBufferedIndexedWriteMaxDocuments != 1234 {
 		t.Fatalf("TreeDBBufferedIndexedWriteMaxDocuments=%d want 1234", cfg.TreeDBBufferedIndexedWriteMaxDocuments)
 	}
-	if cfg.TreeDBBufferedIndexedWriteMaxRootRuns != collections.DefaultIndexedWriteMemtableMaxRootRuns {
-		t.Fatalf("TreeDBBufferedIndexedWriteMaxRootRuns=%d want %d", cfg.TreeDBBufferedIndexedWriteMaxRootRuns, collections.DefaultIndexedWriteMemtableMaxRootRuns)
+	if cfg.TreeDBBufferedIndexedWriteMaxRootRuns != collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns {
+		t.Fatalf("TreeDBBufferedIndexedWriteMaxRootRuns=%d want %d", cfg.TreeDBBufferedIndexedWriteMaxRootRuns, collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns)
 	}
 
-	asyncCfg, err := parseConfig([]string{"-treedb-buffered-indexed-async-flush", "-treedb-buffered-indexed-write-max-documents", "1234"})
+	syncCfg, err := parseConfig([]string{"-treedb-disable-buffered-indexed-async-flush", "-treedb-buffered-indexed-write-max-documents", "1234"})
 	if err != nil {
-		t.Fatalf("parse async docs threshold: %v", err)
+		t.Fatalf("parse foreground docs threshold: %v", err)
 	}
-	if asyncCfg.TreeDBBufferedIndexedWriteMaxRootRuns != collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns {
-		t.Fatalf("async TreeDBBufferedIndexedWriteMaxRootRuns=%d want %d", asyncCfg.TreeDBBufferedIndexedWriteMaxRootRuns, collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns)
+	if syncCfg.TreeDBBufferedIndexedWriteMaxRootRuns != collections.DefaultIndexedWriteMemtableMaxRootRuns {
+		t.Fatalf("foreground TreeDBBufferedIndexedWriteMaxRootRuns=%d want %d", syncCfg.TreeDBBufferedIndexedWriteMaxRootRuns, collections.DefaultIndexedWriteMemtableMaxRootRuns)
 	}
 
 	explicitZeroCfg, err := parseConfig([]string{"-treedb-buffered-indexed-write-max-documents", "1234", "-treedb-buffered-indexed-write-max-root-runs", "0"})
@@ -1031,6 +1031,15 @@ func TestParseConfigTreeDBBufferedIndexedWriteThresholds(t *testing.T) {
 	}
 	if cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 3 {
 		t.Fatalf("TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits=%d want 3", cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits)
+	}
+}
+
+func TestParseConfigRejectsConflictingTreeDBBufferedIndexedAsyncFlags(t *testing.T) {
+	if _, err := parseConfig([]string{
+		"-treedb-buffered-indexed-async-flush",
+		"-treedb-disable-buffered-indexed-async-flush",
+	}); err == nil {
+		t.Fatal("parse conflicting async flags succeeded")
 	}
 }
 

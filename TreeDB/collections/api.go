@@ -54,7 +54,7 @@ const (
 	// well-amortized InsertBatch calls on the immediate publish path. Smaller
 	// batches use the indexed write-domain memtable path by default.
 	DefaultIndexedWriteMemtableDirectBatchDocuments = 16000
-	// DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits bounds opt-in
+	// DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits bounds default
 	// background indexed flush work. When the queue reaches this many immutable
 	// flush units, the triggering writer publishes synchronously to cap memory
 	// and visibility lag.
@@ -576,6 +576,12 @@ type CollectionOptions struct {
 	// write-domain memtable path. It is intended for debugging and baseline
 	// comparisons; indexed collections use memtables by default.
 	DisableIndexedWriteMemtables bool `json:"disable_indexed_write_memtables,omitempty"`
+	// DisableBufferedIndexedAsyncFlush opts an indexed collection out of the
+	// default background threshold-publish path. It is intended for debugging,
+	// baseline comparisons, and workloads that explicitly prefer foreground
+	// threshold publish. This is a publish policy, not a per-update durability
+	// boundary.
+	DisableBufferedIndexedAsyncFlush bool `json:"disable_buffered_indexed_async_flush,omitempty"`
 	// BufferedIndexedWrites is normalized metadata describing whether indexed
 	// inserts and safe update root deltas are staged in the collection write
 	// domain before Flush/Close or auto-flush. Staged writes are visible to
@@ -598,9 +604,10 @@ type CollectionOptions struct {
 	// defaults.
 	BufferedIndexedWriteMaxRootRuns int `json:"buffered_indexed_write_max_root_runs,omitempty"`
 	// BufferedIndexedAsyncFlush lets threshold-triggered indexed memtable flushes
-	// publish from a background goroutine. This is an opt-in performance mode:
-	// Flush, FlushAll, and backend Close still drain pending indexed writes before
-	// returning, but auto-flush thresholds no longer imply immediate durability.
+	// publish from a background goroutine. Indexed schemas enable this by
+	// default unless DisableBufferedIndexedAsyncFlush is set. Flush, FlushAll,
+	// and backend Close still drain pending indexed writes before returning, but
+	// auto-flush thresholds do not imply per-update durability.
 	BufferedIndexedAsyncFlush bool `json:"buffered_indexed_async_flush,omitempty"`
 	// BufferedIndexedOverlayRoots publishes indexed memtable flush units as
 	// durable overlay roots instead of immediately applying them into base roots.
@@ -13315,6 +13322,9 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 	if meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits < 0 {
 		return CollectionMeta{}, errors.New("collections: buffered indexed async flush max queued units cannot be negative")
 	}
+	if meta.Options.DisableBufferedIndexedAsyncFlush && meta.Options.BufferedIndexedAsyncFlush {
+		return CollectionMeta{}, errors.New("collections: buffered indexed async flush cannot be both enabled and disabled")
+	}
 	documentFormat, err := normalizeDocumentFormat(meta.Options.DocumentFormat)
 	if err != nil {
 		return CollectionMeta{}, err
@@ -13362,6 +13372,12 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		meta.Options.BufferedIndexedWrites = false
 	} else {
 		meta.Options.BufferedIndexedWrites = true
+		if meta.Options.DisableBufferedIndexedAsyncFlush {
+			meta.Options.BufferedIndexedAsyncFlush = false
+			meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
+		} else {
+			meta.Options.BufferedIndexedAsyncFlush = true
+		}
 		defaultMaxDocuments := DefaultIndexedWriteMemtableMaxDocuments
 		defaultMaxRootRuns := DefaultIndexedWriteMemtableMaxRootRuns
 		if meta.Options.BufferedIndexedAsyncFlush {
