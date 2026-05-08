@@ -90,17 +90,20 @@ func TestRegistryCursorCommandsUseStreamIDAndLimitSections(t *testing.T) {
 	registry := MustV1Registry()
 	if _, err := registry.ValidateRequestSections([]Section{
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCursorNext, Version: 1})},
+		{ID: SectionCursorRef, Bytes: []byte{1}},
 		{ID: SectionCursorLimits, Bytes: []byte{10, 0}},
 	}); err != nil {
 		t.Fatalf("cursor_next schema: %v", err)
 	}
 	if _, err := registry.ValidateRequestSections([]Section{
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCursorClose, Version: 1})},
+		{ID: SectionCursorRef, Bytes: []byte{1}},
 	}); err != nil {
 		t.Fatalf("cursor_close schema: %v", err)
 	}
 	if _, err := registry.ValidateRequestSections([]Section{
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCursorNext, Version: 1})},
+		{ID: SectionCursorRef, Bytes: []byte{1}},
 	}); codeOf(err) != ErrInvalidCommand {
 		t.Fatalf("cursor_next missing limits err=%v code=%d", err, codeOf(err))
 	}
