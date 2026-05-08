@@ -14,10 +14,21 @@ type CollectionHandle uint64
 const (
 	maxCollectionMetaIndexDefinitions = 1 << 16
 	minEncodedIndexDefinitionLen      = 6
+	collectionRefTagName              = 1
+	collectionRefTagHandle            = 2
 )
 
 func collectionNameRef(name string) iwire.Section {
-	return iwire.Section{ID: iwire.SectionCollectionRef, Bytes: []byte(name)}
+	return iwire.Section{ID: iwire.SectionCollectionRef, Bytes: appendCollectionNameRefPayload(nil, name)}
+}
+
+func collectionNameRefPayloadLen(name string) int {
+	return 1 + len(name)
+}
+
+func appendCollectionNameRefPayload(dst []byte, name string) []byte {
+	dst = append(dst, collectionRefTagName)
+	return append(dst, name...)
 }
 
 func collectionHandleRef(handle CollectionHandle) iwire.Section {
@@ -25,7 +36,7 @@ func collectionHandleRef(handle CollectionHandle) iwire.Section {
 }
 
 func appendCollectionHandleRefPayload(dst []byte, handle CollectionHandle) []byte {
-	dst = append(dst, 0)
+	dst = append(dst, collectionRefTagHandle)
 	return binary.AppendUvarint(dst, uint64(handle))
 }
 
@@ -479,29 +490,39 @@ func decodeIndexValueTypeStrict(valueType uint64) (collections.IndexValueType, e
 }
 
 func decodeCollectionRef(state *connState, raw []byte) (string, bool, error) {
-	handle, isHandle, err := decodeCollectionHandleRefPayload(raw)
-	if err != nil {
-		return "", isHandle, err
+	if len(raw) == 0 {
+		return "", false, protocolError(iwire.ErrInvalidCommand, "empty collection_ref")
 	}
-	if isHandle {
+	switch raw[0] {
+	case collectionRefTagName:
+		name := string(raw[1:])
+		if err := collections.ValidateCollectionName(name); err != nil {
+			return "", false, protocolError(iwire.ErrInvalidCommand, "%v", err)
+		}
+		return name, false, nil
+	case collectionRefTagHandle:
+		handle, n, err := readUvarint(raw[1:])
+		if err != nil {
+			return "", true, err
+		}
+		if n+1 != len(raw) {
+			return "", true, protocolError(iwire.ErrMalformedFrame, "collection handle ref has trailing bytes")
+		}
 		if state == nil {
 			return "", true, protocolError(iwire.ErrInvalidCommand, "collection handle requires connection state")
 		}
-		name, ok := state.collectionForHandle(handle)
+		name, ok := state.collectionForHandle(CollectionHandle(handle))
 		if !ok {
 			return "", true, protocolError(iwire.ErrCollectionNotFound, "collection handle %d not found", handle)
 		}
 		return name, true, nil
+	default:
+		return "", false, protocolError(iwire.ErrInvalidCommand, "unsupported collection_ref tag %d", raw[0])
 	}
-	name := string(raw)
-	if err := collections.ValidateCollectionName(name); err != nil {
-		return "", false, protocolError(iwire.ErrInvalidCommand, "%v", err)
-	}
-	return name, false, nil
 }
 
 func decodeCollectionHandleRefPayload(raw []byte) (CollectionHandle, bool, error) {
-	if len(raw) == 0 || raw[0] != 0 {
+	if len(raw) == 0 || raw[0] != collectionRefTagHandle {
 		return 0, false, nil
 	}
 	handle, n, err := readUvarint(raw[1:])
@@ -533,14 +554,78 @@ func collectionNameFromSections(sections []iwire.Section) (string, error) {
 	if !ok {
 		return "", protocolError(iwire.ErrInvalidCommand, "missing collection_ref")
 	}
-	if len(raw) > 0 && raw[0] == 0 {
+	if len(raw) > 0 && raw[0] == collectionRefTagHandle {
 		return "", protocolError(iwire.ErrInvalidCommand, "collection handle is not valid for this command")
 	}
-	name := string(raw)
-	if err := collections.ValidateCollectionName(name); err != nil {
-		return "", protocolError(iwire.ErrInvalidCommand, "%v", err)
+	name, _, err := decodeCollectionRef(nil, raw)
+	return name, err
+}
+
+func collectionHandleFromSections(state *connState, sections []iwire.Section) (CollectionHandle, error) {
+	raw, ok, err := singletonSection(sections, iwire.SectionCollectionRef)
+	if err != nil {
+		return 0, err
 	}
-	return name, nil
+	if !ok {
+		return 0, protocolError(iwire.ErrInvalidCommand, "missing collection_ref")
+	}
+	handle, isHandle, err := decodeCollectionHandleRefPayload(raw)
+	if err != nil {
+		return 0, err
+	}
+	if !isHandle {
+		return 0, protocolError(iwire.ErrInvalidCommand, "close_collection requires a collection handle")
+	}
+	if state == nil {
+		return 0, protocolError(iwire.ErrInvalidCommand, "collection handle requires connection state")
+	}
+	return handle, nil
+}
+
+func expectedCatalogVersionFromSections(sections []iwire.Section) (uint64, bool, error) {
+	raw, ok, err := singletonSection(sections, iwire.SectionExpectedCatalogVersion)
+	if err != nil || !ok {
+		return 0, ok, err
+	}
+	version, n, err := readUvarint(raw)
+	if err != nil {
+		return 0, true, err
+	}
+	if n != len(raw) {
+		return 0, true, protocolError(iwire.ErrMalformedFrame, "expected_catalog_version has trailing bytes")
+	}
+	return version, true, nil
+}
+
+func (s *Server) currentCatalogVersion() (uint64, error) {
+	if s == nil || s.backend == nil {
+		return 0, protocolError(iwire.ErrInvalidCommand, "catalog version guard requires a backend")
+	}
+	snap := s.backend.AcquireSnapshot()
+	if snap == nil {
+		return 0, protocolError(iwire.ErrInternal, "catalog snapshot unavailable")
+	}
+	defer func() { _ = snap.Close() }()
+	state := snap.State()
+	if state == nil {
+		return 0, protocolError(iwire.ErrInternal, "catalog snapshot state unavailable")
+	}
+	return state.CommitSeq, nil
+}
+
+func (s *Server) checkCatalogGuard(sections []iwire.Section) error {
+	expected, ok, err := expectedCatalogVersionFromSections(sections)
+	if err != nil || !ok {
+		return err
+	}
+	actual, err := s.currentCatalogVersion()
+	if err != nil {
+		return err
+	}
+	if actual != expected {
+		return protocolError(iwire.ErrCatalogVersionMismatch, "catalog version %d does not match expected %d", actual, expected)
+	}
+	return nil
 }
 
 func metadataSection(sections []iwire.Section, id iwire.SectionID) ([]byte, error) {
@@ -613,7 +698,7 @@ func (s *Server) openNamedCollectionRef(state *connState, name string) (string, 
 		return "", nil, metadataWrap(err)
 	}
 	if state != nil {
-		state.cacheCollection(name, collection)
+		state.cacheCollection(name, collection, s.maxCollectionHandles)
 	}
 	return name, collection, nil
 }

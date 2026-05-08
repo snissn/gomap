@@ -318,6 +318,30 @@ func TestDecodeDeterministicEntryClearsScratchOnMidDecodeError(t *testing.T) {
 	}
 }
 
+func TestDecodeDeterministicEntryDoesNotRetainAllocatedScratchOnDecodeError(t *testing.T) {
+	scratch := &DeterministicEntryScratch{
+		Sections: []Section{{ID: SectionDocuments, Bytes: bytes.Repeat([]byte("x"), 1024)}},
+	}
+	raw := []byte("TDC1")
+	raw = appendUvarint(raw, DeterministicEntryVersion)
+	raw = appendUvarint(raw, uint64(CommandInsertBatch))
+	raw = appendUvarint(raw, 1)
+	raw = appendUvarint(raw, 0)
+	raw = appendUvarint(raw, 128)
+	if _, err := DecodeDeterministicEntryInto(raw, Limits{}, scratch); codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("DecodeDeterministicEntryInto err=%v code=%d want malformed", err, codeOf(err))
+	}
+	if len(scratch.Sections) != 0 {
+		t.Fatalf("scratch len=%d want 0", len(scratch.Sections))
+	}
+	if cap(scratch.Sections) != 1 {
+		t.Fatalf("scratch cap=%d want original cap 1", cap(scratch.Sections))
+	}
+	if section := scratch.Sections[:cap(scratch.Sections)][0]; section.ID != 0 || section.Bytes != nil {
+		t.Fatalf("scratch backing retained stale section: %+v", section)
+	}
+}
+
 func TestDecodeDeterministicEntryClearsScratchOnHeaderError(t *testing.T) {
 	scratch := &DeterministicEntryScratch{
 		Sections: []Section{

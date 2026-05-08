@@ -1075,7 +1075,7 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		collections:          manager,
 		server:               server,
 		nativeServer:         nativeServer,
-		nativeAddr:           nativeAddr(nativeLn),
+		nativeAddr:           listenerAddrString(nativeLn),
 		mongoAddr:            ln.Addr().String(),
 		treedbDir:            dir,
 		removeTreeDBDir:      removeDir,
@@ -1117,7 +1117,7 @@ func closeBenchTargetKeepDir(ctx context.Context, target *benchTarget) error {
 	return err
 }
 
-func nativeAddr(ln net.Listener) string {
+func listenerAddrString(ln net.Listener) string {
 	if ln == nil {
 		return ""
 	}
@@ -1879,7 +1879,7 @@ func directEncodeStoredDocument(raw bson.Raw, format collections.DocumentFormat)
 	case collections.DocumentFormatDefault, collections.DocumentFormatJSON:
 		return bson.MarshalExtJSON(raw, true, false)
 	case collections.DocumentFormatTemplateV1:
-		stored, err := bson.MarshalExtJSON(raw, true, false)
+		stored, err := bson.MarshalExtJSON(raw, false, false)
 		if err != nil {
 			return nil, err
 		}
@@ -4136,6 +4136,8 @@ func nativeWireInsertBatch(cfg config, start, end int, prebuilt []bson.D, prebui
 func nativeWireMongoPrimaryID(i int) []byte {
 	id := benchmarkID(i)
 	key := make([]byte, 0, 2+4+len(id)+1)
+	// Template-v1 primary keys encode the BSON _id path followed by the raw BSON
+	// string value so native inserts use the same key layout as the Mongo gateway.
 	key = append(key, 1, byte(bson.TypeString))
 	return bsoncore.AppendString(key, id)
 }
@@ -4151,7 +4153,7 @@ func nativeWireStoredDocument(format collections.DocumentFormat, i int, prebuilt
 	case collections.DocumentFormatDefault, collections.DocumentFormatJSON:
 		return nativeWireBenchmarkJSONDocument(i), nil
 	case collections.DocumentFormatTemplateV1:
-		stored, err := bson.MarshalExtJSON(raw, true, false)
+		stored, err := bson.MarshalExtJSON(raw, false, false)
 		if err != nil {
 			return nil, err
 		}
