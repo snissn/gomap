@@ -27,7 +27,7 @@ func TestDeterministicEntryGoldenAndTransportIndependence(t *testing.T) {
 		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 1})},
 		{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
-		{ID: SectionCollectionRef, Bytes: []byte("c")},
+		{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("c")},
 	}
 	cmd1, err := registry.ValidateRequestSections(sections)
 	if err != nil {
@@ -37,8 +37,10 @@ func TestDeterministicEntryGoldenAndTransportIndependence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppendDeterministicEntry shuffled: %v", err)
 	}
-	if hex.EncodeToString(entry1) != hex.EncodeToString(entry0) {
-		t.Fatalf("deterministic entries differ:\n%s\n%s", hex.EncodeToString(entry0), hex.EncodeToString(entry1))
+	entry0Hex := hex.EncodeToString(entry0)
+	entry1Hex := hex.EncodeToString(entry1)
+	if entry1Hex != entry0Hex {
+		t.Fatalf("deterministic entries differ:\n%s\n%s", entry0Hex, entry1Hex)
 	}
 
 	withResponseFlag := insertBatchDeterministicSections()
@@ -131,6 +133,12 @@ func TestDecodeDeterministicEntryRejectsMalformedEnvelope(t *testing.T) {
 	sectionCountLimit = appendUvarint(sectionCountLimit, 1)
 	sectionCountLimit = appendUvarint(sectionCountLimit, 0)
 	sectionCountLimit = appendUvarint(sectionCountLimit, 2)
+	sectionCountImpossible := []byte("TDC1")
+	sectionCountImpossible = appendUvarint(sectionCountImpossible, DeterministicEntryVersion)
+	sectionCountImpossible = appendUvarint(sectionCountImpossible, uint64(CommandInsertBatch))
+	sectionCountImpossible = appendUvarint(sectionCountImpossible, 1)
+	sectionCountImpossible = appendUvarint(sectionCountImpossible, 0)
+	sectionCountImpossible = appendUvarint(sectionCountImpossible, 128)
 	for _, tc := range []struct {
 		name   string
 		raw    []byte
@@ -143,6 +151,7 @@ func TestDecodeDeterministicEntryRejectsMalformedEnvelope(t *testing.T) {
 		{name: "trailing", raw: append(append([]byte(nil), entry...), 0), code: ErrMalformedFrame},
 		{name: "truncated_section", raw: append([]byte(nil), entry[:len(entry)-1]...), code: ErrMalformedFrame},
 		{name: "section_count_limit", raw: sectionCountLimit, limits: Limits{MaxSections: 1}, code: ErrResourceExhausted},
+		{name: "section_count_impossible", raw: sectionCountImpossible, code: ErrMalformedFrame},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := DecodeDeterministicEntry(tc.raw, tc.limits); codeOf(err) != tc.code {
@@ -195,7 +204,7 @@ func TestDecodeDeterministicEntryRejectsInvalidCommandSet(t *testing.T) {
 			name:      "read_command",
 			commandID: CommandGetMany,
 			sections: []Section{
-				{ID: SectionCollectionRef, Bytes: []byte("c")},
+				{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("c")},
 				{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
 			},
 		},
@@ -255,7 +264,7 @@ func TestDecodeDeterministicEntryClearsScratchTail(t *testing.T) {
 	}
 	sections := []Section{
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
-		{ID: SectionCollectionRef, Bytes: []byte("c")},
+		{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("c")},
 		{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
 		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
 	}
@@ -277,7 +286,7 @@ func TestDecodeDeterministicEntryClearsScratchOnSchemaError(t *testing.T) {
 		Sections: make([]Section, 0, 4),
 	}
 	raw := deterministicEntryTestRaw(CommandInsertBatch,
-		Section{ID: SectionCollectionRef, Bytes: []byte("c")},
+		Section{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("c")},
 		Section{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
 		Section{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
 		Section{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte("{}"))},
@@ -327,7 +336,10 @@ func TestDecodeDeterministicEntryDoesNotRetainAllocatedScratchOnDecodeError(t *t
 	raw = appendUvarint(raw, uint64(CommandInsertBatch))
 	raw = appendUvarint(raw, 1)
 	raw = appendUvarint(raw, 0)
-	raw = appendUvarint(raw, 128)
+	raw = appendUvarint(raw, 2)
+	raw = appendUvarint(raw, uint64(SectionDocumentIDs))
+	raw = appendUvarint(raw, 1)
+	raw = append(raw, 0, 0)
 	if _, err := DecodeDeterministicEntryInto(raw, Limits{}, scratch); codeOf(err) != ErrMalformedFrame {
 		t.Fatalf("DecodeDeterministicEntryInto err=%v code=%d want malformed", err, codeOf(err))
 	}
@@ -465,18 +477,25 @@ func TestDeterministicEntryRejectsCollectionHandleRefs(t *testing.T) {
 
 func TestDeterministicEntryRejectsInvalidCollectionNames(t *testing.T) {
 	registry := MustV1Registry()
-	sections := insertBatchDeterministicSections()
-	for i := range sections {
-		if sections[i].ID == SectionCollectionRef {
-			sections[i].Bytes = []byte("bad/name")
+	for _, raw := range [][]byte{
+		[]byte("bad/name"),
+		{3, 'c'},
+		{1},
+		deterministicCollectionNameRef(" c"),
+	} {
+		sections := insertBatchDeterministicSections()
+		for i := range sections {
+			if sections[i].ID == SectionCollectionRef {
+				sections[i].Bytes = raw
+			}
 		}
-	}
-	cmd, err := registry.ValidateRequestSections(sections)
-	if err != nil {
-		t.Fatalf("ValidateRequestSections: %v", err)
-	}
-	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
-		t.Fatalf("invalid collection ref err=%v code=%d", err, codeOf(err))
+		cmd, err := registry.ValidateRequestSections(sections)
+		if err != nil {
+			t.Fatalf("ValidateRequestSections: %v", err)
+		}
+		if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+			t.Fatalf("invalid collection ref %x err=%v code=%d", raw, err, codeOf(err))
+		}
 	}
 }
 
@@ -593,10 +612,14 @@ func insertBatchDeterministicSections() []Section {
 	return []Section{
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 1})},
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
-		{ID: SectionCollectionRef, Bytes: []byte("c")},
+		{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("c")},
 		{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
 		{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
 		{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte("{}"))},
 		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
 	}
+}
+
+func deterministicCollectionNameRef(name string) []byte {
+	return append([]byte{1}, name...)
 }

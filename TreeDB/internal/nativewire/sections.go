@@ -12,7 +12,7 @@ func (s Section) Critical() bool {
 
 func AppendSection(dst []byte, s Section) ([]byte, error) {
 	if err := validateSectionFlags(s.Flags); err != nil {
-		return nil, err
+		return dst, err
 	}
 	dst = growBytes(dst, SectionEncodedLen(s))
 	dst = appendSectionHeaderUnchecked(dst, s.ID, s.Flags, len(s.Bytes))

@@ -55,10 +55,11 @@ func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) 
 	if cmd.Schema.RequiresCatalogGuard && !cmd.hasSection(SectionExpectedCatalogVersion) {
 		return nil, protocolError(ErrInvalidCommand, "missing catalog guard")
 	}
-	deterministicFlags := DeterministicCommandFlags(cmd.Header.Flags)
-	if deterministicFlags != 0 {
-		return nil, protocolError(ErrUnsupportedFeature, "unsupported deterministic command flags 0x%x", deterministicFlags)
+	unsupportedFlags := UnsupportedDeterministicCommandFlags(cmd.Header.Flags)
+	if unsupportedFlags != 0 {
+		return nil, protocolError(ErrUnsupportedFeature, "unsupported deterministic command flags 0x%x", unsupportedFlags)
 	}
+	deterministicFlags := DeterministicCommandFlags(cmd.Header.Flags)
 
 	var deterministicScratch [16]Section
 	deterministic, err := cmd.deterministicSectionsInto(deterministicScratch[:0])
@@ -138,6 +139,9 @@ func DecodeDeterministicEntryInto(src []byte, limits Limits, scratch *Determinis
 	}
 	if sectionCount64 > uint64(maxInt) {
 		return failBeforeSections(protocolError(ErrResourceExhausted, "deterministic entry section count exceeds int capacity"))
+	}
+	if sectionCount64 > uint64((len(src)-off)/2) {
+		return failBeforeSections(protocolError(ErrMalformedFrame, "deterministic entry section count %d exceeds remaining header bytes %d", sectionCount64, len(src)-off))
 	}
 	sectionCount := int(sectionCount64)
 	sections, borrowedScratch := deterministicEntrySectionsBuffer(sectionCount, scratch)
@@ -402,21 +406,24 @@ func validateDeterministicCollectionRef(raw []byte) (bool, error) {
 	if len(raw) == 0 {
 		return false, protocolError(ErrInvalidCommand, "empty collection_ref")
 	}
-	tag, _, err := readUvarint(raw)
-	if err != nil {
-		return false, err
-	}
-	if tag == 2 {
+	switch raw[0] {
+	case 1:
+		name := string(raw[1:])
+		if name == "" {
+			return false, protocolError(ErrInvalidCommand, "collection name cannot be empty")
+		}
+		if len(name) > 128 {
+			return false, protocolError(ErrInvalidCommand, "collection name too long")
+		}
+		if strings.ContainsAny(name, "\x00/:") || strings.TrimSpace(name) != name || !utf8.ValidString(name) {
+			return false, protocolError(ErrInvalidCommand, "invalid collection name")
+		}
+		return false, nil
+	case 2:
 		return true, nil
+	default:
+		return false, protocolError(ErrInvalidCommand, "unsupported collection_ref tag %d", raw[0])
 	}
-	name := string(raw)
-	if len(name) > 128 {
-		return false, protocolError(ErrInvalidCommand, "collection name too long")
-	}
-	if strings.ContainsAny(name, "\x00/:") || strings.TrimSpace(name) != name || !utf8.ValidString(name) {
-		return false, protocolError(ErrInvalidCommand, "invalid collection name")
-	}
-	return false, nil
 }
 
 func sortSectionsByID(sections []Section) {
