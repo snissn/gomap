@@ -1361,16 +1361,18 @@ func TestDeterministicEntryRejectsBatchVectorArityMismatch(t *testing.T) {
 }
 
 func TestDecodeDeterministicEntryRejectsUnappliableTemplateRecords(t *testing.T) {
+	record := deterministicTemplateRecord("email")
 	for _, tc := range []struct {
 		name   string
 		format DocumentFormat
 		record []byte
+		doc    []byte
 		code   ErrorCode
 	}{
 		{
 			name:   "non_template_format",
 			format: DocumentFormatBSON,
-			record: deterministicTemplateRecord("email"),
+			record: record,
 			code:   ErrInvalidCommand,
 		},
 		{
@@ -1382,7 +1384,29 @@ func TestDecodeDeterministicEntryRejectsUnappliableTemplateRecords(t *testing.T)
 		{
 			name:   "raw_document",
 			format: DocumentFormatTemplateV1,
-			record: deterministicTemplateRecord("email"),
+			record: record,
+			doc:    []byte("{}"),
+			code:   ErrMalformedFrame,
+		},
+		{
+			name:   "unknown_value_kind",
+			format: DocumentFormatTemplateV1,
+			record: record,
+			doc:    deterministicTemplateStoredDocumentForRecord(record, []byte{99}),
+			code:   ErrMalformedFrame,
+		},
+		{
+			name:   "missing_value",
+			format: DocumentFormatTemplateV1,
+			record: record,
+			doc:    deterministicTemplateStoredDocumentForRecord(record, nil),
+			code:   ErrMalformedFrame,
+		},
+		{
+			name:   "extra_value",
+			format: DocumentFormatTemplateV1,
+			record: record,
+			doc:    deterministicTemplateStoredDocumentForRecord(record, []byte{deterministicTemplateV1KindNull, deterministicTemplateV1KindNull}),
 			code:   ErrMalformedFrame,
 		},
 	} {
@@ -1392,8 +1416,8 @@ func TestDecodeDeterministicEntryRejectsUnappliableTemplateRecords(t *testing.T)
 				if sections[i].ID == SectionDocumentFormat {
 					sections[i].Bytes = []byte{byte(tc.format)}
 				}
-				if tc.name == "raw_document" && sections[i].ID == SectionDocuments {
-					sections[i].Bytes = AppendByteVector(nil, []byte("{}"))
+				if tc.doc != nil && sections[i].ID == SectionDocuments {
+					sections[i].Bytes = AppendByteVector(nil, tc.doc)
 				}
 			}
 			sections = append(sections, Section{ID: SectionTemplateRecords, Bytes: AppendByteVector(nil, tc.record)})
@@ -1779,6 +1803,13 @@ func deterministicTemplateRecord(fields ...string) []byte {
 func deterministicTemplateStoredDocument(payload []byte) []byte {
 	dst := []byte(deterministicTemplateV1StoredMagic)
 	dst = append(dst, make([]byte, sha256.Size)...)
+	return append(dst, payload...)
+}
+
+func deterministicTemplateStoredDocumentForRecord(record, payload []byte) []byte {
+	dst := []byte(deterministicTemplateV1StoredMagic)
+	id := sha256.Sum256(record)
+	dst = append(dst, id[:]...)
 	return append(dst, payload...)
 }
 
