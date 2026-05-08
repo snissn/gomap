@@ -178,6 +178,36 @@ func TestDeterministicEntryRejectsMalformedMetadataPayloads(t *testing.T) {
 	}
 }
 
+func TestDeterministicCollectionMetaRejectsUnknownScalarEnums(t *testing.T) {
+	registry := MustV1Registry()
+	for _, tc := range []struct {
+		name        string
+		docFormat   uint64
+		dataStorage uint64
+		indexState  uint64
+	}{
+		{name: "document_format", docFormat: 99},
+		{name: "data_root_storage", dataStorage: 99},
+		{name: "index_state_storage", indexState: 99},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sections := []Section{
+				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateCollection, Version: 1})},
+				{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
+				{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+				{ID: SectionCollectionMeta, Bytes: deterministicCollectionMetaPayloadWithScalars("users", tc.docFormat, tc.dataStorage, tc.indexState)},
+			}
+			cmd, err := registry.ValidateRequestSections(sections)
+			if err != nil {
+				t.Fatalf("ValidateRequestSections: %v", err)
+			}
+			if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+				t.Fatalf("unknown scalar enum err=%v code=%d want invalid command", err, codeOf(err))
+			}
+		})
+	}
+}
+
 func TestDeterministicMetadataRequiresTaggedCollectionName(t *testing.T) {
 	registry := MustV1Registry()
 	sections := []Section{
@@ -205,6 +235,35 @@ func TestDeterministicMetadataRequiresTaggedCollectionName(t *testing.T) {
 	}
 	if _, err := AppendDeterministicEntry(nil, cmd); err != nil {
 		t.Fatalf("AppendDeterministicEntry tagged: %v", err)
+	}
+}
+
+func TestDeterministicIndexDefinitionRejectsUnknownEnums(t *testing.T) {
+	registry := MustV1Registry()
+	for _, tc := range []struct {
+		name        string
+		valueType   uint64
+		storageEnum uint64
+	}{
+		{name: "index_value_type", valueType: 99},
+		{name: "storage_policy", valueType: 1, storageEnum: 99},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sections := []Section{
+				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateIndex, Version: 1})},
+				{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
+				{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+				{ID: SectionCollectionRef, Bytes: append([]byte{deterministicCollectionRefTagName}, []byte("users")...)},
+				{ID: SectionIndexDefinition, Bytes: deterministicIndexDefinitionPayloadWithEnums("email", "email", tc.valueType, tc.storageEnum)},
+			}
+			cmd, err := registry.ValidateRequestSections(sections)
+			if err != nil {
+				t.Fatalf("ValidateRequestSections: %v", err)
+			}
+			if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+				t.Fatalf("unknown index enum err=%v code=%d want invalid command", err, codeOf(err))
+			}
+		})
 	}
 }
 
@@ -354,6 +413,44 @@ func TestDeterministicEntryRejectsNonCanonicalSectionPayloads(t *testing.T) {
 	}
 }
 
+func TestDeterministicEntryIncludesAckPolicy(t *testing.T) {
+	registry := MustV1Registry()
+	sections := append(insertBatchDeterministicSections(), Section{ID: SectionAckPolicy, Bytes: []byte{byte(AckVisible)}})
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections visible ack: %v", err)
+	}
+	visible, err := AppendDeterministicEntry(nil, cmd)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry visible ack: %v", err)
+	}
+
+	sections[len(sections)-1].Bytes = []byte{byte(AckFlushed)}
+	cmd, err = registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections flushed ack: %v", err)
+	}
+	flushed, err := AppendDeterministicEntry(nil, cmd)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry flushed ack: %v", err)
+	}
+	if bytes.Equal(visible, flushed) {
+		t.Fatalf("deterministic entry did not include ack_policy")
+	}
+}
+
+func TestDeterministicEntryRejectsUnsupportedAckPolicy(t *testing.T) {
+	registry := MustV1Registry()
+	sections := append(insertBatchDeterministicSections(), Section{ID: SectionAckPolicy, Bytes: []byte{99}})
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("unsupported ack_policy err=%v code=%d want invalid command", err, codeOf(err))
+	}
+}
+
 func TestDeterministicEntryRejectsBatchVectorArityMismatch(t *testing.T) {
 	registry := MustV1Registry()
 	sections := insertBatchDeterministicSections()
@@ -467,11 +564,15 @@ func insertBatchDeterministicSections() []Section {
 }
 
 func deterministicCollectionMetaPayload(name string) []byte {
+	return deterministicCollectionMetaPayloadWithScalars(name, uint64(DocumentFormatDefault), 0, 0)
+}
+
+func deterministicCollectionMetaPayloadWithScalars(name string, docFormat, dataRootStorage, indexStateStorage uint64) []byte {
 	dst := appendUvarint(nil, 1)
 	dst = appendDeterministicTestString(dst, name)
-	dst = appendUvarint(dst, uint64(DocumentFormatDefault))
-	dst = appendUvarint(dst, 0)
-	dst = appendUvarint(dst, 0)
+	dst = appendUvarint(dst, docFormat)
+	dst = appendUvarint(dst, dataRootStorage)
+	dst = appendUvarint(dst, indexStateStorage)
 	dst = append(dst, 0, 0, 0)
 	dst = binary.AppendVarint(dst, 0)
 	dst = binary.AppendVarint(dst, 0)
@@ -483,12 +584,16 @@ func deterministicCollectionMetaPayload(name string) []byte {
 }
 
 func deterministicIndexDefinitionPayload(name, field string) []byte {
+	return deterministicIndexDefinitionPayloadWithEnums(name, field, 1, 0)
+}
+
+func deterministicIndexDefinitionPayloadWithEnums(name, field string, valueType, storagePolicy uint64) []byte {
 	dst := appendUvarint(nil, 1)
 	dst = appendDeterministicTestString(dst, name)
 	dst = appendDeterministicTestString(dst, field)
-	dst = appendUvarint(dst, 1)
+	dst = appendUvarint(dst, valueType)
 	dst = append(dst, 0, 0)
-	dst = appendUvarint(dst, 0)
+	dst = appendUvarint(dst, storagePolicy)
 	return dst
 }
 

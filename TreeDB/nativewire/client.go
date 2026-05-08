@@ -92,6 +92,9 @@ func (c *Client) roundTripStream(ctx context.Context, streamID uint64, typ iwire
 	if c == nil || c.conn == nil {
 		return iwire.Header{}, nil, io.ErrClosedPipe
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if ctx != nil && ctx.Err() != nil {
 		return iwire.Header{}, nil, ctx.Err()
 	}
@@ -120,19 +123,19 @@ func (c *Client) roundTripStream(ctx context.Context, streamID uint64, typ iwire
 	}
 	header, response, err := readFrame(c.conn, c.limits)
 	if err != nil {
-		return iwire.Header{}, nil, c.errorOrCanceledOnWire(ctx, onWire, err)
+		return iwire.Header{}, nil, c.closeOnProtocolError(c.errorOrCanceledOnWire(ctx, onWire, err))
 	}
 	if err := iwire.ValidateHeaderVersion(header, iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0}); err != nil {
-		return header, response, err
+		return header, response, c.closeOnProtocolError(err)
 	}
 	if header.RequestID != requestID {
-		return header, response, protocolError(iwire.ErrMalformedFrame, "response request_id %d want %d", header.RequestID, requestID)
+		return header, response, c.closeOnProtocolError(protocolError(iwire.ErrMalformedFrame, "response request_id %d want %d", header.RequestID, requestID))
 	}
 	if header.Type == iwire.FrameError {
-		return header, response, decodeWireError(response, c.limits)
+		return header, response, c.closeOnProtocolError(decodeWireError(response, c.limits))
 	}
 	if header.Type != want {
-		return header, response, protocolError(iwire.ErrMalformedFrame, "response frame type %d want %d", header.Type, want)
+		return header, response, c.closeOnProtocolError(protocolError(iwire.ErrMalformedFrame, "response frame type %d want %d", header.Type, want))
 	}
 	return header, response, nil
 }
@@ -153,6 +156,16 @@ func (c *Client) errorOrCanceledOnWire(ctx context.Context, onWire bool, err err
 			_ = c.conn.Close()
 		}
 		return ctx.Err()
+	}
+	return err
+}
+
+func (c *Client) closeOnProtocolError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, ok := iwire.ErrorCodeOf(err); ok && c != nil && c.conn != nil {
+		_ = c.conn.Close()
 	}
 	return err
 }

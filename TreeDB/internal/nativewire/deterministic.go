@@ -4,8 +4,8 @@ import (
 	"cmp"
 	"encoding/binary"
 	"slices"
-	"strings"
-	"unicode/utf8"
+
+	"github.com/snissn/gomap/TreeDB/collections"
 )
 
 const (
@@ -193,11 +193,7 @@ func validateDeterministicSectionPayload(section Section) error {
 		if n != len(section.Bytes) {
 			return protocolError(ErrMalformedFrame, "document_format has %d trailing bytes", len(section.Bytes)-n)
 		}
-		switch DocumentFormat(format) {
-		case DocumentFormatDefault, DocumentFormatJSON, DocumentFormatBSON, DocumentFormatTemplateV1:
-		default:
-			return protocolError(ErrInvalidCommand, "unsupported document_format %d", format)
-		}
+		return validateDeterministicDocumentFormatEnum(format)
 	case SectionDocumentIDs, SectionDocuments, SectionTemplateRecords:
 		if err := validateByteVector(section.Bytes, Limits{}); err != nil {
 			return err
@@ -217,6 +213,17 @@ func validateDeterministicSectionPayload(section Section) error {
 				}
 				off += n
 			}
+		}
+	case SectionAckPolicy:
+		policy, n, err := readUvarint(section.Bytes)
+		if err != nil {
+			return err
+		}
+		if n != len(section.Bytes) {
+			return protocolError(ErrMalformedFrame, "section %d has %d trailing bytes", section.ID, len(section.Bytes)-n)
+		}
+		if err := validateDeterministicAckPolicyEnum(policy); err != nil {
+			return err
 		}
 	case SectionExpectedCatalogVersion, SectionReplacementMode:
 		_, n, err := readUvarint(section.Bytes)
@@ -261,30 +268,61 @@ func validateDeterministicCollectionRef(raw []byte, requireTaggedName bool) (boo
 }
 
 func validateDeterministicName(raw []byte, field string) error {
-	if len(raw) == 0 {
-		return protocolError(ErrInvalidCommand, "%s cannot be empty", field)
-	}
 	name := string(raw)
-	if strings.ContainsAny(name, "\x00/:") || strings.TrimSpace(name) != name || !utf8.ValidString(name) {
-		return protocolError(ErrInvalidCommand, "invalid %s", field)
-	}
-	if len(name) > 128 {
-		return protocolError(ErrInvalidCommand, "%s too long", field)
+	switch field {
+	case "collection name":
+		if err := collections.ValidateCollectionName(name); err != nil {
+			return protocolError(ErrInvalidCommand, "%v", err)
+		}
+	default:
+		if err := collections.ValidateIndexName(name); err != nil {
+			return protocolError(ErrInvalidCommand, "%v", err)
+		}
 	}
 	return nil
 }
 
 func validateDeterministicIndexPath(path string, field string) error {
-	if len(path) == 0 {
-		return protocolError(ErrInvalidCommand, "%s cannot be empty", field)
-	}
-	if strings.Contains(path, "\x00") {
-		return protocolError(ErrInvalidCommand, "%s cannot contain NUL", field)
-	}
-	if strings.HasPrefix(path, ".") || strings.HasSuffix(path, ".") || strings.Contains(path, "..") {
-		return protocolError(ErrInvalidCommand, "%s cannot contain empty segments", field)
+	if err := collections.ValidateIndexPath(path); err != nil {
+		return protocolError(ErrInvalidCommand, "%v", err)
 	}
 	return nil
+}
+
+func validateDeterministicDocumentFormatEnum(value uint64) error {
+	switch DocumentFormat(value) {
+	case DocumentFormatDefault, DocumentFormatJSON, DocumentFormatBSON, DocumentFormatTemplateV1:
+		return nil
+	default:
+		return protocolError(ErrInvalidCommand, "unsupported document_format enum %d", value)
+	}
+}
+
+func validateDeterministicRootStorageEnum(value uint64) error {
+	switch value {
+	case 0, 1, 2:
+		return nil
+	default:
+		return protocolError(ErrInvalidCommand, "unsupported root_storage enum %d", value)
+	}
+}
+
+func validateDeterministicIndexValueTypeEnum(value uint64) error {
+	switch value {
+	case 1, 2, 3, 4:
+		return nil
+	default:
+		return protocolError(ErrInvalidCommand, "unsupported index_value_type enum %d", value)
+	}
+}
+
+func validateDeterministicAckPolicyEnum(value uint64) error {
+	switch AckPolicy(value) {
+	case 0, AckVisible, AckFlushed, AckSynced, AckRaftCommitted:
+		return nil
+	default:
+		return protocolError(ErrInvalidCommand, "unsupported ack_policy enum %d", value)
+	}
 }
 
 func validateDeterministicCollectionMeta(raw []byte) error {
@@ -299,10 +337,26 @@ func validateDeterministicCollectionMeta(raw []byte) error {
 	if err := readDeterministicNameField(raw, &off, "collection name"); err != nil {
 		return err
 	}
-	for _, field := range []string{"document_format", "data_root_storage", "index_state_storage"} {
-		if _, err := readDeterministicUvarintField(raw, &off, field); err != nil {
-			return err
-		}
+	documentFormat, err := readDeterministicUvarintField(raw, &off, "document_format")
+	if err != nil {
+		return err
+	}
+	if err := validateDeterministicDocumentFormatEnum(documentFormat); err != nil {
+		return err
+	}
+	dataRootStorage, err := readDeterministicUvarintField(raw, &off, "data_root_storage")
+	if err != nil {
+		return err
+	}
+	if err := validateDeterministicRootStorageEnum(dataRootStorage); err != nil {
+		return err
+	}
+	indexStateStorage, err := readDeterministicUvarintField(raw, &off, "index_state_storage")
+	if err != nil {
+		return err
+	}
+	if err := validateDeterministicRootStorageEnum(indexStateStorage); err != nil {
+		return err
 	}
 	for _, field := range []string{"allow_array_values_in_index", "disable_indexed_write_memtables", "buffered_indexed_writes"} {
 		if err := readDeterministicBoolField(raw, &off, field); err != nil {
@@ -376,7 +430,11 @@ func validateDeterministicIndexDefinitionAt(raw []byte, off int, withVersion boo
 	if err := validateDeterministicIndexPath(field, "index field"); err != nil {
 		return 0, err
 	}
-	if _, err := readDeterministicUvarintField(raw, &off, "index value type"); err != nil {
+	valueType, err := readDeterministicUvarintField(raw, &off, "index value type")
+	if err != nil {
+		return 0, err
+	}
+	if err := validateDeterministicIndexValueTypeEnum(valueType); err != nil {
 		return 0, err
 	}
 	if err := readDeterministicBoolField(raw, &off, "unique"); err != nil {
@@ -385,7 +443,11 @@ func validateDeterministicIndexDefinitionAt(raw []byte, off int, withVersion boo
 	if err := readDeterministicBoolField(raw, &off, "multi_key"); err != nil {
 		return 0, err
 	}
-	if _, err := readDeterministicUvarintField(raw, &off, "index storage policy"); err != nil {
+	storagePolicy, err := readDeterministicUvarintField(raw, &off, "index storage policy")
+	if err != nil {
+		return 0, err
+	}
+	if err := validateDeterministicRootStorageEnum(storagePolicy); err != nil {
 		return 0, err
 	}
 	return off, nil
@@ -407,7 +469,17 @@ func readDeterministicNameField(raw []byte, off *int, field string) error {
 	if err != nil {
 		return err
 	}
-	return validateDeterministicName([]byte(value), field)
+	switch field {
+	case "collection name":
+		if err := collections.ValidateCollectionName(value); err != nil {
+			return protocolError(ErrInvalidCommand, "%v", err)
+		}
+	default:
+		if err := collections.ValidateIndexName(value); err != nil {
+			return protocolError(ErrInvalidCommand, "%v", err)
+		}
+	}
+	return nil
 }
 
 func readDeterministicStringField(raw []byte, off *int, field string) (string, error) {

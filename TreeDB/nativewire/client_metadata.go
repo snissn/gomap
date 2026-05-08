@@ -66,6 +66,9 @@ func (c *Client) ListCollections(ctx context.Context) ([]collections.CollectionM
 }
 
 func (c *Client) OpenCollection(ctx context.Context, name string) (CollectionHandle, error) {
+	if err := ensureCollectionName(name); err != nil {
+		return 0, err
+	}
 	sections, err := c.commandSections(ctx, iwire.CommandOpenCollection, collectionNameRef(name))
 	if err != nil {
 		return 0, err
@@ -79,6 +82,9 @@ func (c *Client) CloseCollection(ctx context.Context, handle CollectionHandle) e
 }
 
 func (c *Client) CreateIndex(ctx context.Context, collection string, def collections.IndexDefinition) (collections.CollectionMeta, error) {
+	if err := ensureCollectionName(collection); err != nil {
+		return collections.CollectionMeta{}, err
+	}
 	if err := normalizeClientIndexDefinition(def); err != nil {
 		return collections.CollectionMeta{}, err
 	}
@@ -100,6 +106,9 @@ func (c *Client) CreateIndex(ctx context.Context, collection string, def collect
 }
 
 func (c *Client) ListIndexes(ctx context.Context, collection string) ([]collections.IndexDefinition, error) {
+	if err := ensureCollectionName(collection); err != nil {
+		return nil, err
+	}
 	sections, err := c.commandSections(ctx, iwire.CommandListIndexes, collectionNameRef(collection))
 	if err != nil {
 		return nil, err
@@ -108,6 +117,9 @@ func (c *Client) ListIndexes(ctx context.Context, collection string) ([]collecti
 }
 
 func (c *Client) DropIndex(ctx context.Context, collection, index string) (collections.CollectionMeta, error) {
+	if err := ensureCollectionName(collection); err != nil {
+		return collections.CollectionMeta{}, err
+	}
 	if err := ensureIndexName(index); err != nil {
 		return collections.CollectionMeta{}, err
 	}
@@ -205,13 +217,13 @@ func (c *Client) clearCatalogVersionOnMismatch(err error) {
 	}
 }
 
-func (c *Client) advanceCatalogVersionAfterMutation(guard []iwire.Section) {
-	expected, ok, err := expectedCatalogVersionFromSections(guard)
-	if err != nil || !ok || expected > ^uint64(0)-2 {
+func (c *Client) updateCatalogVersionAfterMutation(sections []iwire.Section) {
+	version, ok, err := responseCatalogVersion(sections)
+	if err != nil || !ok || version == ^uint64(0) {
 		c.catalogVersionPlusOne.Store(0)
 		return
 	}
-	c.catalogVersionPlusOne.Store(expected + 2)
+	c.catalogVersionPlusOne.Store(version + 1)
 }
 
 func metadataGuardOptionsFromContext(ctx context.Context) metadataGuardOptions {

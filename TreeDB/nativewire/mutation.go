@@ -216,12 +216,17 @@ func decodeIDVector(sections []iwire.Section, limits iwire.Limits) ([][]byte, er
 	if err != nil {
 		return nil, err
 	}
-	ids, err := decodeByteVectorCloned(rawIDs, limits)
+	vec, err := iwire.DecodeByteVector(rawIDs, limits)
 	if err != nil {
 		return nil, err
 	}
-	if err := rejectDuplicateIDs(ids); err != nil {
+	if err := rejectDuplicateByteVectorIDs(vec); err != nil {
 		return nil, err
+	}
+	ids := make([][]byte, vec.Len())
+	for i := 0; i < vec.Len(); i++ {
+		item, _ := vec.Item(i)
+		ids[i] = append([]byte(nil), item...)
 	}
 	return ids, nil
 }
@@ -229,6 +234,22 @@ func decodeIDVector(sections []iwire.Section, limits iwire.Limits) ([][]byte, er
 func rejectDuplicateIDs(ids [][]byte) error {
 	seen := make(map[string]struct{}, len(ids))
 	for i, id := range ids {
+		if len(id) == 0 {
+			return protocolError(iwire.ErrInvalidCommand, "document id cannot be empty at index %d", i)
+		}
+		key := string(id)
+		if _, ok := seen[key]; ok {
+			return protocolError(iwire.ErrDuplicateDocumentID, "duplicate document id at index %d", i)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+func rejectDuplicateByteVectorIDs(vec iwire.ByteVector) error {
+	seen := make(map[string]struct{}, vec.Len())
+	for i := 0; i < vec.Len(); i++ {
+		id, _ := vec.Item(i)
 		if len(id) == 0 {
 			return protocolError(iwire.ErrInvalidCommand, "document id cannot be empty at index %d", i)
 		}
@@ -251,15 +272,26 @@ func ackMeta(policy AckPolicy, pairs ...string) iwire.Section {
 	return iwire.Section{ID: iwire.SectionResponseMeta, Bytes: appendStringMap(nil, values)}
 }
 
-func responseCount(sections []iwire.Section, key string) (int, error) {
+func (s *Server) ackMeta(policy AckPolicy, pairs ...string) iwire.Section {
+	if version, err := s.currentCatalogVersion(); err == nil {
+		pairs = append(pairs, "catalog_version", strconv.FormatUint(version, 10))
+	}
+	return ackMeta(policy, pairs...)
+}
+
+func responseMetaMap(sections []iwire.Section) (map[string]string, error) {
 	raw, ok, err := singletonSection(sections, iwire.SectionResponseMeta)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	if !ok {
-		return 0, protocolError(iwire.ErrMalformedFrame, "missing response_meta")
+		return nil, protocolError(iwire.ErrMalformedFrame, "missing response_meta")
 	}
-	values, err := decodeStringMap(raw)
+	return decodeStringMap(raw)
+}
+
+func responseCount(sections []iwire.Section, key string) (int, error) {
+	values, err := responseMetaMap(sections)
 	if err != nil {
 		return 0, err
 	}
@@ -272,6 +304,22 @@ func responseCount(sections []iwire.Section, key string) (int, error) {
 		return 0, protocolError(iwire.ErrMalformedFrame, "response_meta %s is not an integer", key)
 	}
 	return n, nil
+}
+
+func responseCatalogVersion(sections []iwire.Section) (uint64, bool, error) {
+	values, err := responseMetaMap(sections)
+	if err != nil {
+		return 0, false, err
+	}
+	value, ok := values["catalog_version"]
+	if !ok {
+		return 0, false, nil
+	}
+	version, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return 0, true, protocolError(iwire.ErrMalformedFrame, "response_meta catalog_version is not a uint64")
+	}
+	return version, true, nil
 }
 
 func updateBatchItems(ids, docs [][]byte) []collections.UpdateBatchItem {

@@ -143,6 +143,44 @@ func TestByteVectorRejectsLengthMismatch(t *testing.T) {
 	}
 }
 
+func TestValidateByteVectorRejectsMalformedVectors(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		raw    []byte
+		limits Limits
+		code   ErrorCode
+	}{
+		{
+			name: "truncated_length_varint",
+			raw:  []byte{1, 0x80},
+			code: ErrMalformedFrame,
+		},
+		{
+			name: "declared_payload_mismatch",
+			raw:  []byte{1, 2, 'a'},
+			code: ErrMalformedFrame,
+		},
+		{
+			name:   "count_limit",
+			raw:    AppendByteVector(nil, []byte("a"), []byte("b")),
+			limits: Limits{MaxByteVectorItems: 1},
+			code:   ErrResourceExhausted,
+		},
+		{
+			name:   "payload_byte_limit",
+			raw:    AppendByteVector(nil, []byte("abc")),
+			limits: Limits{MaxByteVectorBytes: 2},
+			code:   ErrResourceExhausted,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateByteVector(tc.raw, tc.limits); codeOf(err) != tc.code {
+				t.Fatalf("validateByteVector(%x) err=%v code=%d want %d", tc.raw, err, codeOf(err), tc.code)
+			}
+		})
+	}
+}
+
 func TestNegativeIntegerLimitsUseDefaults(t *testing.T) {
 	var body []byte
 	var err error
