@@ -40,10 +40,11 @@ type Server struct {
 	collections          *collections.CollectionManager
 	backend              *backenddb.DB
 
-	closed     atomic.Bool
-	connMu     sync.Mutex
-	conns      map[net.Conn]struct{}
-	metadataMu sync.Mutex
+	closed              atomic.Bool
+	connMu              sync.Mutex
+	conns               map[net.Conn]struct{}
+	metadataMu          sync.Mutex
+	metadataIdempotency map[string]metadataIdempotencyEntry
 
 	inFlight atomic.Int64
 	nextConn atomic.Int64
@@ -120,7 +121,7 @@ func NewServer(opts ServerOptions) *Server {
 		maxInFlight = defaultMaxInFlight
 	}
 	maxCollectionHandles := opts.MaxCollectionHandles
-	if maxCollectionHandles <= 0 {
+	if maxCollectionHandles == 0 {
 		maxCollectionHandles = defaultMaxCollectionHandles
 	}
 	defaultAck := opts.DefaultAckPolicy

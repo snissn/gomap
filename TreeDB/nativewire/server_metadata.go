@@ -10,6 +10,10 @@ func (s *Server) handleCreateCollection(sections []iwire.Section) ([]iwire.Secti
 	}
 	s.metadataMu.Lock()
 	defer s.metadataMu.Unlock()
+	replay, remember, err := s.beginMetadataIdempotency(iwire.CommandCreateCollection, sections)
+	if err != nil || replay != nil {
+		return replay, err
+	}
 	if err := s.checkCatalogGuard(sections); err != nil {
 		return nil, err
 	}
@@ -29,7 +33,7 @@ func (s *Server) handleCreateCollection(sections []iwire.Section) ([]iwire.Secti
 	if err != nil {
 		return nil, metadataWrap(err)
 	}
-	return []iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(*created)}}, nil
+	return remember([]iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(*created)}}), nil
 }
 
 func (s *Server) handleListCollections() ([]iwire.Section, error) {
@@ -49,6 +53,10 @@ func (s *Server) handleCreateIndex(state *connState, sections []iwire.Section) (
 	}
 	s.metadataMu.Lock()
 	defer s.metadataMu.Unlock()
+	replay, remember, err := s.beginMetadataIdempotency(iwire.CommandCreateIndex, sections)
+	if err != nil || replay != nil {
+		return replay, err
+	}
 	if err := s.checkCatalogGuard(sections); err != nil {
 		return nil, err
 	}
@@ -75,7 +83,7 @@ func (s *Server) handleCreateIndex(state *connState, sections []iwire.Section) (
 	if err != nil {
 		return nil, metadataWrap(err)
 	}
-	return []iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(*meta)}}, nil
+	return remember([]iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(*meta)}}), nil
 }
 
 func (s *Server) handleListIndexes(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
@@ -100,6 +108,10 @@ func (s *Server) handleDropIndex(state *connState, sections []iwire.Section) ([]
 	}
 	s.metadataMu.Lock()
 	defer s.metadataMu.Unlock()
+	replay, remember, err := s.beginMetadataIdempotency(iwire.CommandDropIndex, sections)
+	if err != nil || replay != nil {
+		return replay, err
+	}
 	if err := s.checkCatalogGuard(sections); err != nil {
 		return nil, err
 	}
@@ -123,7 +135,7 @@ func (s *Server) handleDropIndex(state *connState, sections []iwire.Section) ([]
 	if err != nil {
 		return nil, metadataWrap(err)
 	}
-	return []iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(*meta)}}, nil
+	return remember([]iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(*meta)}}), nil
 }
 
 func (s *Server) handleOpenCollection(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
