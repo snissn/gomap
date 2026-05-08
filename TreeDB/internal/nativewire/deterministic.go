@@ -22,6 +22,8 @@ const (
 	deterministicCollectionRefTagName   = 1
 	deterministicCollectionRefTagHandle = 2
 	deterministicReplacementExisting    = 1
+	deterministicTemplateV1InputMagic   = "TD1I"
+	deterministicTemplateV1StoredMagic  = "TD1D"
 	deterministicTemplateV1RecordMagic  = "TD1T"
 	minDeterministicIndexDefinitionLen  = 6
 	maxDeterministicCollectionIndexes   = 1 << 16
@@ -398,16 +400,41 @@ func validateDeterministicTemplateRecords(sections []Section) error {
 	if DocumentFormat(format) != DocumentFormatTemplateV1 {
 		return protocolError(ErrInvalidCommand, "template_records require template-v1 document format")
 	}
-	return validateDeterministicTemplateRecordVector(raw)
+	if err := validateDeterministicTemplateRecordVector(raw); err != nil {
+		return err
+	}
+	docsRaw, ok := deterministicSectionPayload(sections, SectionDocuments)
+	if !ok {
+		return protocolError(ErrInvalidCommand, "missing deterministic section %d", SectionDocuments)
+	}
+	return validateDeterministicTemplateDocuments(docsRaw)
 }
 
 func validateDeterministicTemplateRecordVector(raw []byte) error {
+	return walkDeterministicByteVector(raw, "template_records", func(i int, record []byte) error {
+		if err := validateDeterministicTemplateRecord(record); err != nil {
+			return protocolError(ErrInvalidCommand, "template_records[%d]: %v", i, err)
+		}
+		return nil
+	})
+}
+
+func validateDeterministicTemplateDocuments(raw []byte) error {
+	return walkDeterministicByteVector(raw, "documents", func(i int, doc []byte) error {
+		if hasDeterministicPrefix(doc, deterministicTemplateV1InputMagic) || hasDeterministicPrefix(doc, deterministicTemplateV1StoredMagic) {
+			return nil
+		}
+		return protocolError(ErrInvalidCommand, "template-v1 document %d is not TD1I or TD1D", i)
+	})
+}
+
+func walkDeterministicByteVector(raw []byte, name string, fn func(int, []byte) error) error {
 	count64, lengthsOff, err := readUvarint(raw)
 	if err != nil {
 		return err
 	}
 	if count64 > uint64(maxInt) {
-		return protocolError(ErrResourceExhausted, "template_records count exceeds int capacity")
+		return protocolError(ErrResourceExhausted, "%s count exceeds int capacity", name)
 	}
 	count := int(count64)
 	lengthsPos := lengthsOff
@@ -418,13 +445,13 @@ func validateDeterministicTemplateRecordVector(raw []byte) error {
 			return err
 		}
 		if length64 > uint64(maxInt) || int(length64) > maxInt-payloadLen {
-			return protocolError(ErrResourceExhausted, "template_records payload length exceeds int capacity")
+			return protocolError(ErrResourceExhausted, "%s payload length exceeds int capacity", name)
 		}
 		payloadLen += int(length64)
 		lengthsPos += n
 	}
 	if payloadLen != len(raw)-lengthsPos {
-		return protocolError(ErrMalformedFrame, "template_records payload length %d does not match declared lengths %d", len(raw)-lengthsPos, payloadLen)
+		return protocolError(ErrMalformedFrame, "%s payload length %d does not match declared lengths %d", name, len(raw)-lengthsPos, payloadLen)
 	}
 	payloadPos := lengthsPos
 	lengthsPos = lengthsOff
@@ -435,13 +462,25 @@ func validateDeterministicTemplateRecordVector(raw []byte) error {
 		}
 		lengthsPos += n
 		length := int(length64)
-		record := raw[payloadPos : payloadPos+length]
-		if err := validateDeterministicTemplateRecord(record); err != nil {
-			return protocolError(ErrInvalidCommand, "template_records[%d]: %v", i, err)
+		item := raw[payloadPos : payloadPos+length]
+		if err := fn(i, item); err != nil {
+			return err
 		}
 		payloadPos += length
 	}
 	return nil
+}
+
+func hasDeterministicPrefix(raw []byte, prefix string) bool {
+	if len(raw) < len(prefix) {
+		return false
+	}
+	for i := 0; i < len(prefix); i++ {
+		if raw[i] != prefix[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func validateDeterministicTemplateRecord(raw []byte) error {
