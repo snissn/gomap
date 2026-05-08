@@ -22,7 +22,7 @@ func TestCollectValueLogAudit_WiresDictLookupFromRoot(t *testing.T) {
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)
 
-	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
+	report, err := collectValueLogAudit(dir, true, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
 	if err != nil {
 		t.Fatalf("collectValueLogAudit(root): %v", err)
 	}
@@ -50,7 +50,7 @@ func TestCollectValueLogAudit_AcceptsMainDBDir(t *testing.T) {
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)
 
-	report, err := collectValueLogAudit(filepath.Join(dir, "maindb"), treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
+	report, err := collectValueLogAudit(filepath.Join(dir, "maindb"), true, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
 	if err != nil {
 		t.Fatalf("collectValueLogAudit(maindb): %v", err)
 	}
@@ -77,7 +77,7 @@ func TestCollectValueLogAuditDoesNotCreateEmptyValueLogLaneFiles(t *testing.T) {
 	valueLogDir := filepath.Join(dir, "maindb", "value_vlog")
 	beforeFiles, beforeZero := countValueLogFilesForTest(t, valueLogDir)
 
-	if _, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{}); err != nil {
+	if _, err := collectValueLogAudit(dir, true, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{}); err != nil {
 		t.Fatalf("collectValueLogAudit: %v", err)
 	}
 
@@ -108,7 +108,7 @@ func TestCollectValueLogAudit_IncludesLeafLogSegments(t *testing.T) {
 		t.Fatalf("Close(leaf log): %v", err)
 	}
 
-	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
+	report, err := collectValueLogAudit(dir, true, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
 	if err != nil {
 		t.Fatalf("collectValueLogAudit(with leaf_vlog): %v", err)
 	}
@@ -258,7 +258,7 @@ func TestCollectValueLogAudit_FrameScanIncludesModeAndLengthBreakdown(t *testing
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)
 
-	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{
+	report, err := collectValueLogAudit(dir, true, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{
 		Enabled:    true,
 		TopLengths: 8,
 	})

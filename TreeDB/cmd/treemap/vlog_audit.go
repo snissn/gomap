@@ -108,7 +108,7 @@ const recordFlagGroupedAudit byte = 1 << 0
 
 func runVlogAudit(dir string, args []string) {
 	fs := flag.NewFlagSet("vlog-audit", flag.ExitOnError)
-	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
+	rw := fs.Bool("rw", false, "Open read-write to allow recovery before auditing")
 	asJSON := fs.Bool("json", false, "Emit machine-readable JSON")
 	frameStats := fs.Bool("frame-stats", false, "Scan value-log records and report frame-mode + record-length stats")
 	frameTopLengths := fs.Int("frame-top-lengths", 12, "Number of top record lengths (by retained bytes) to report with -frame-stats")
@@ -120,11 +120,7 @@ func runVlogAudit(dir string, args []string) {
 	maxTrackedRIDs := fs.Int("rid-scan-max-tracked", 0, "Maximum distinct RIDs to track in-memory during RID scan (0=unbounded exact mode; may use high memory)")
 	_ = fs.Parse(args)
 
-	if !*rw {
-		fatalf("vlog-audit requires -rw")
-	}
-
-	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{
+	report, err := collectValueLogAudit(dir, !*rw, treedbdb.ValueLogRewriteOnlineOptions{
 		MaxSourceSegments:    *maxSegments,
 		MaxSourceBytes:       *maxBytes,
 		MinSegmentStaleRatio: *minStaleRatio,
@@ -278,7 +274,7 @@ func runVlogAudit(dir string, args []string) {
 	}
 }
 
-func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnlineOptions, ridOpts valueLogRIDAuditOptions, frameOpts valueLogFrameScanAuditOptions) (report valueLogAuditReport, err error) {
+func collectValueLogAudit(dir string, readOnly bool, rewriteOpts treedbdb.ValueLogRewriteOnlineOptions, ridOpts valueLogRIDAuditOptions, frameOpts valueLogFrameScanAuditOptions) (report valueLogAuditReport, err error) {
 	report = valueLogAuditReport{Dir: dir}
 	mainDir, err := resolveTreemapMainDir(dir)
 	if err != nil {
@@ -307,7 +303,7 @@ func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnline
 		}
 	}
 
-	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: rootDir, ReadOnly: true})
+	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: rootDir, ReadOnly: readOnly})
 	if err != nil {
 		return report, err
 	}

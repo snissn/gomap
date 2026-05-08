@@ -4311,6 +4311,13 @@ func (db *DB) valueLogProtectedPaths() []string {
 	return merged
 }
 
+// ValueLogProtectedPaths returns value-log segment paths that online backend
+// maintenance must protect while this cached DB is live. The set includes
+// retained pointer-lifecycle paths plus current/queued in-use writer paths.
+func (db *DB) ValueLogProtectedPaths() []string {
+	return db.valueLogProtectedPaths()
+}
+
 func (db *DB) valueLogGCOptions(dryRun bool) backenddb.ValueLogGCOptions {
 	retained, inUse, merged := db.valueLogGCProtectedPathSets()
 	return backenddb.ValueLogGCOptions{

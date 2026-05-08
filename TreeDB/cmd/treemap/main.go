@@ -41,7 +41,7 @@ Commands:
   compact-plan    Preview full storage compaction debt without mutating storage
   compact         Run full storage compaction (requires -rw; use -scope=index for legacy index-only compaction)
   vacuum          Rebuild index.db via swap (shrinks file; requires -rw)
-  vlog-audit      Advanced: audit value-log filesystem, GC, and rewrite-plan state
+  vlog-audit      Advanced: audit value-log filesystem, GC, and rewrite-plan state (read-only by default)
   vlog-gc         Advanced: delete unreferenced value-log segments only (requires -rw)
   vlog-rewrite    Advanced: rewrite value-log segments only (requires -rw)
   leafgen-plan    Advanced: print explicit leaf-generation pack plan

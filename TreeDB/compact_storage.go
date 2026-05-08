@@ -85,11 +85,11 @@ func (db *DB) applyCachedCompactStorageOptions(opts *CompactStorageOptions, chec
 		}
 	}
 	if len(opts.ValueLogProtectedPaths) == 0 {
-		opts.ValueLogProtectedPaths = db.cached.ValueLogRetainedPaths()
+		opts.ValueLogProtectedPaths = db.cached.ValueLogProtectedPaths()
 	}
 	if len(opts.ValueLogProtectedPaths) == 0 {
 		// Cached-mode callers may have concurrent writers even when there are no
-		// retained paths yet; pass a non-empty slice to activate the backend
+		// protected paths yet; pass a non-empty slice to activate the backend
 		// rewrite/GC active-segment protection.
 		opts.ValueLogProtectedPaths = []string{""}
 	}
