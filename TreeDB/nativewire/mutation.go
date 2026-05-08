@@ -249,6 +249,11 @@ const (
 	_                              uint16 = maxSmallDuplicateIDs + 1
 )
 
+var (
+	_ [duplicateIDSmallHashTableSlots - maxSmallDuplicateIDs*duplicateIDSmallLoadFactor]struct{}
+	_ [0]struct{} = [duplicateIDSmallHashTableSlots & (duplicateIDSmallHashTableSlots - 1)]struct{}{}
+)
+
 type duplicateIDScratch struct {
 	heads  [duplicateIDSmallHashTableSlots]uint16
 	next   [maxSmallDuplicateIDs]uint16

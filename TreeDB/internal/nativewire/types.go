@@ -157,11 +157,12 @@ const (
 	ErrCursorNotFound
 	ErrCatalogChanged
 	ErrIdempotencyConflict
+	errCodeSentinel
 )
 
 // MaxErrorCode is the highest native-wire error code currently assigned by
 // this protocol version.
-const MaxErrorCode = ErrIdempotencyConflict
+const MaxErrorCode = errCodeSentinel - 1
 
 type ProtocolError struct {
 	Code   ErrorCode
