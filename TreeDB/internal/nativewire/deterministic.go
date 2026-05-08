@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"slices"
 	"sync"
 	"unicode/utf8"
@@ -45,6 +46,8 @@ var (
 	deterministicEntryRegistryOnce sync.Once
 	deterministicEntryRegistry     *Registry
 	deterministicEntryRegistryErr  error
+
+	errDeterministicTemplateUnresolved = errors.New("deterministic template requires storage resolver")
 )
 
 func deterministicRegistry() *Registry {
@@ -538,7 +541,7 @@ func walkDeterministicByteVector(raw []byte, name string, fn func(int, []byte) e
 func validateDeterministicTemplateDocument(raw []byte, templates deterministicTemplateSet) error {
 	pos := 0
 	if consumeDeterministicTemplateMagic(raw, &pos, deterministicTemplateV1StoredMagic) {
-		return validateDeterministicTemplateStoredDocument(raw, &pos, templates)
+		return validateDeterministicTemplateStoredDocument(raw, &pos, templates, true)
 	}
 	pos = 0
 	if !consumeDeterministicTemplateMagic(raw, &pos, deterministicTemplateV1InputMagic) {
@@ -588,10 +591,10 @@ func validateDeterministicTemplateDocument(raw []byte, templates deterministicTe
 	if !consumeDeterministicTemplateMagic(raw, &pos, deterministicTemplateV1StoredMagic) {
 		return protocolError(ErrMalformedFrame, "malformed template-v1 stored document")
 	}
-	return validateDeterministicTemplateStoredDocument(raw, &pos, embeddedTemplates)
+	return validateDeterministicTemplateStoredDocument(raw, &pos, embeddedTemplates, false)
 }
 
-func validateDeterministicTemplateStoredDocument(raw []byte, pos *int, templates deterministicTemplateSet) error {
+func validateDeterministicTemplateStoredDocument(raw []byte, pos *int, templates deterministicTemplateSet, allowUnresolved bool) error {
 	var id [sha256.Size]byte
 	if pos == nil || *pos < 0 || len(raw)-*pos < len(id) {
 		return protocolError(ErrMalformedFrame, "malformed template-v1 root template id")
@@ -600,10 +603,18 @@ func validateDeterministicTemplateStoredDocument(raw []byte, pos *int, templates
 	*pos += len(id)
 	fieldCount, ok := templates.lookup(id)
 	if !ok {
+		if allowUnresolved {
+			*pos = len(raw)
+			return nil
+		}
 		return protocolError(ErrInvalidCommand, "template-v1 template id is not included")
 	}
 	for i := 0; i < fieldCount; i++ {
-		if err := skipDeterministicTemplateValue(raw, pos, templates, 0); err != nil {
+		if err := skipDeterministicTemplateValue(raw, pos, templates, 0, allowUnresolved); err != nil {
+			if allowUnresolved && err == errDeterministicTemplateUnresolved {
+				*pos = len(raw)
+				return nil
+			}
 			return err
 		}
 	}
@@ -661,7 +672,7 @@ func deterministicTemplateRecordFieldCount(raw []byte) (int, error) {
 	return int(fieldCount), nil
 }
 
-func skipDeterministicTemplateValue(raw []byte, pos *int, templates deterministicTemplateSet, depth int) error {
+func skipDeterministicTemplateValue(raw []byte, pos *int, templates deterministicTemplateSet, depth int, allowUnresolved bool) error {
 	if pos == nil || *pos < 0 || *pos >= len(raw) {
 		return protocolError(ErrMalformedFrame, "malformed template-v1 value")
 	}
@@ -698,7 +709,7 @@ func skipDeterministicTemplateValue(raw []byte, pos *int, templates deterministi
 			return protocolError(ErrMalformedFrame, "malformed template-v1 array")
 		}
 		for i := uint64(0); i < count; i++ {
-			if err := skipDeterministicTemplateValue(raw, pos, templates, depth+1); err != nil {
+			if err := skipDeterministicTemplateValue(raw, pos, templates, depth+1, allowUnresolved); err != nil {
 				return err
 			}
 		}
@@ -712,10 +723,13 @@ func skipDeterministicTemplateValue(raw []byte, pos *int, templates deterministi
 		*pos += len(id)
 		fieldCount, ok := templates.lookup(id)
 		if !ok {
+			if allowUnresolved {
+				return errDeterministicTemplateUnresolved
+			}
 			return protocolError(ErrInvalidCommand, "template-v1 object template id is not included")
 		}
 		for i := 0; i < fieldCount; i++ {
-			if err := skipDeterministicTemplateValue(raw, pos, templates, depth+1); err != nil {
+			if err := skipDeterministicTemplateValue(raw, pos, templates, depth+1, allowUnresolved); err != nil {
 				return err
 			}
 		}
