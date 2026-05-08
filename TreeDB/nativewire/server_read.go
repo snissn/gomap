@@ -224,26 +224,29 @@ func (s *Server) handleCursorNext(state *connState, cursorID uint64, sections []
 		s.cursorMu.Unlock()
 		return nil, protocolError(iwire.ErrCursorNotFound, "cursor %d not found", cursorID)
 	}
+	delete(s.cursors, cursorID)
 	start := cursor.pos
+	records := cursor.records
+	truncated := cursor.truncated
+	s.cursorMu.Unlock()
+
 	end, bytes, err := s.splitCursorBatchForWire(cursor.records, start, limits)
 	if err != nil {
-		s.cursorMu.Unlock()
+		s.restoreCursor(cursorID, cursor)
 		return nil, err
 	}
-	batch := append([]collections.DocumentRecord(nil), cursor.records[start:end]...)
+	batch := append([]collections.DocumentRecord(nil), records[start:end]...)
 	cursor.lastUsed = time.Now()
-	hasMore := end < len(cursor.records)
-	truncated := cursor.truncated
+	hasMore := end < len(records)
 	if !hasMore {
-		delete(s.cursors, cursorID)
 		s.counters.inc("cursors.closed_total")
 	} else {
-		clear(cursor.records[:end])
-		cursor.records = cursor.records[end:]
+		clear(records[:end])
+		cursor.records = records[end:]
 		cursor.pos = 0
 		cursor.bytes = documentRecordsBytes(cursor.records)
+		s.restoreCursor(cursorID, cursor)
 	}
-	s.cursorMu.Unlock()
 	meta := CursorMeta{CursorID: cursorID, Items: len(batch), Bytes: bytes, HasMore: hasMore, Truncated: truncated}
 	if !hasMore {
 		meta.CursorID = 0
@@ -273,6 +276,18 @@ func (s *Server) handleCursorClose(state *connState, cursorID uint64, sections [
 	s.cursorMu.Unlock()
 	s.counters.inc("cursors.closed_total")
 	return nil, nil
+}
+
+func (s *Server) restoreCursor(cursorID uint64, cursor *serverCursor) {
+	if s == nil || cursor == nil {
+		return
+	}
+	s.cursorMu.Lock()
+	if s.cursors == nil {
+		s.cursors = make(map[uint64]*serverCursor)
+	}
+	s.cursors[cursorID] = cursor
+	s.cursorMu.Unlock()
 }
 
 func cursorRefFromSections(sections []iwire.Section) (uint64, error) {
