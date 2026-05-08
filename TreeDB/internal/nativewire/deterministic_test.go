@@ -1185,12 +1185,20 @@ func TestDecodeDeterministicEntryRejectsUnappliableTemplateRecords(t *testing.T)
 			format: DocumentFormatTemplateV1,
 			record: []byte("not-a-template-record"),
 		},
+		{
+			name:   "raw_document",
+			format: DocumentFormatTemplateV1,
+			record: deterministicTemplateRecord("email"),
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sections := insertBatchDeterministicSections()
 			for i := range sections {
 				if sections[i].ID == SectionDocumentFormat {
 					sections[i].Bytes = []byte{byte(tc.format)}
+				}
+				if tc.name == "raw_document" && sections[i].ID == SectionDocuments {
+					sections[i].Bytes = AppendByteVector(nil, []byte("{}"))
 				}
 			}
 			sections = append(sections, Section{ID: SectionTemplateRecords, Bytes: AppendByteVector(nil, tc.record)})
@@ -1538,6 +1546,11 @@ func deterministicTemplateRecord(fields ...string) []byte {
 		dst = append(dst, field...)
 	}
 	return dst
+}
+
+func deterministicTemplateStoredDocument(payload []byte) []byte {
+	dst := []byte(deterministicTemplateV1StoredMagic)
+	return append(dst, payload...)
 }
 
 func appendDeterministicString(dst []byte, value string) []byte {
