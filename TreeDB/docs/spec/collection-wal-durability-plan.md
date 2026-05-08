@@ -1,7 +1,7 @@
 # SPEC: Collection WAL Durability and Root-Group Recovery
 
-Status: proposal  
-Target repository studied: `/Users/michaelseiler/dev/snissn/gomap`  
+Status: proposal, non-normative
+Target repository studied: `https://github.com/snissn/gomap/tree/7431ba92f7a1a456c15f70ac019314090e22af31`
 Primary code paths studied: `TreeDB/collections`, `TreeDB/db`,
 `TreeDB/caching`, `TreeDB/internal/commitlog`, `TreeDB/internal/valuelog`  
 Related specs:
@@ -465,16 +465,20 @@ mode:
 
 ## 9. Recovery Algorithm
 
-Startup recovery should extend the existing recovery order:
+Startup recovery should extend the existing recovery order while preserving
+the current invariant that side-store scans run before cached commit-log replay:
 
 1. Recover backend index metadata and choose the valid meta page.
-2. Replay normal cached commit logs as today.
-3. Scan value-log, leaf-log, column-file, and collection-root-delta side files
-   needed by collection WAL fences.
-4. Scan collection WAL segments and decode complete transactions.
-5. Load applied watermark metadata from the recovered system root.
-6. Sort unapplied transactions by `TxnID`.
-7. For each unapplied transaction:
+2. Scan value-log and leaf-log side-store segments used by existing commit-log
+   RID fences, and build the `RID -> side ref` maps required for replay.
+3. Replay normal cached commit logs as today, using the side-ref maps created
+   before replay.
+4. Scan any additional collection WAL side-file classes, such as column-file
+   and collection-root-delta side files, needed by collection WAL fences.
+5. Scan collection WAL segments and decode complete transactions.
+6. Load applied watermark metadata from the recovered system root.
+7. Sort unapplied transactions by `TxnID`.
+8. For each unapplied transaction:
    - validate checksum and format version;
    - validate required side refs;
    - validate collection catalog identity and schema epoch;
@@ -483,9 +487,9 @@ Startup recovery should extend the existing recovery order:
    - materialize `OrderedRootDeltaBatchPublishInput` values;
    - publish the root group with a system-root delta that updates collection
      root descriptors and advances the applied watermark.
-8. After successful replay, clean collection WAL segments whose transactions are
+9. After successful replay, clean collection WAL segments whose transactions are
    fully covered by the durable applied watermark.
-9. Quarantine or delete prepared side files that are not referenced by any
+10. Quarantine or delete prepared side files that are not referenced by any
    committed transaction or reachable root.
 
 Recovery must be deterministic. Replaying the same directory twice must produce
