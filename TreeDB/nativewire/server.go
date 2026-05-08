@@ -67,6 +67,7 @@ type Server struct {
 	connMu    sync.Mutex
 	conns     map[net.Conn]struct{}
 	listeners map[net.Listener]struct{}
+	locals    map[*localEndpoint]struct{}
 
 	inFlight       atomic.Int64
 	nextConn       atomic.Int64
@@ -300,14 +301,22 @@ func (s *Server) Close() error {
 	for ln := range s.listeners {
 		listeners = append(listeners, ln)
 	}
+	locals := make([]*localEndpoint, 0, len(s.locals))
+	for local := range s.locals {
+		locals = append(locals, local)
+	}
 	s.conns = nil
 	s.listeners = nil
+	s.locals = nil
 	s.connMu.Unlock()
 	for _, ln := range listeners {
 		_ = ln.Close()
 	}
 	for _, conn := range conns {
 		_ = conn.Close()
+	}
+	for _, local := range locals {
+		_ = local.close()
 	}
 	return nil
 }
@@ -428,6 +437,33 @@ func (s *Server) unregisterListener(ln net.Listener) {
 	s.connMu.Lock()
 	delete(s.listeners, ln)
 	s.connMu.Unlock()
+}
+
+func (s *Server) registerLocalEndpoint(endpoint *localEndpoint) bool {
+	if s == nil || endpoint == nil || s.closed.Load() {
+		return false
+	}
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if s.closed.Load() {
+		return false
+	}
+	if s.locals == nil {
+		s.locals = make(map[*localEndpoint]struct{})
+	}
+	s.locals[endpoint] = struct{}{}
+	s.counters.inc("connections.opened_total")
+	return true
+}
+
+func (s *Server) unregisterLocalEndpoint(endpoint *localEndpoint) {
+	if s == nil || endpoint == nil {
+		return
+	}
+	s.connMu.Lock()
+	delete(s.locals, endpoint)
+	s.connMu.Unlock()
+	s.counters.inc("connections.closed_total")
 }
 
 func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState, header iwire.Header, body []byte) error {

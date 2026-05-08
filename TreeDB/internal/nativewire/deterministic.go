@@ -94,6 +94,9 @@ func AppendDeterministicEntryWithLimits(dst []byte, cmd ValidatedCommand, limits
 	if len(deterministic) > limits.MaxSections {
 		return dst[:start], protocolError(ErrResourceExhausted, "deterministic entry section count %d exceeds limit %d", len(deterministic), limits.MaxSections)
 	}
+	if len(deterministic) > maxDeterministicEntrySections {
+		return dst[:start], protocolError(ErrResourceExhausted, "deterministic entry section count %d exceeds deterministic limit %d", len(deterministic), maxDeterministicEntrySections)
+	}
 	for _, section := range deterministic {
 		if uint64(len(section.Bytes)) > limits.MaxSectionLen {
 			return dst[:start], protocolError(ErrResourceExhausted, "deterministic entry section %d length %d exceeds limit %d", section.ID, len(section.Bytes), limits.MaxSectionLen)
