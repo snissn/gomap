@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -141,6 +142,60 @@ func TestCompactStoragePlanIgnoresZeroByteValueLogFilesWhenCleanupDisabled(t *te
 	}
 	if _, err := os.Stat(emptyPath); err != nil {
 		t.Fatalf("plan mutated empty value-log file: %v", err)
+	}
+}
+
+func TestCompactStorageRIDAllocatorIsSharedAcrossOfflineWriters(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(ValueLogDirPath(dir), 0o755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	if err := os.MkdirAll(LeafLogDirPath(dir), 0o755); err != nil {
+		t.Fatalf("mkdir leaf_vlog: %v", err)
+	}
+
+	origScanner := rewriteRIDStartScanner
+	scanCalls := 0
+	rewriteRIDStartScanner = func([]logSegment) (uint64, error) {
+		scanCalls++
+		return 500, nil
+	}
+	t.Cleanup(func() { rewriteRIDStartScanner = origScanner })
+
+	d := &DB{
+		dir:                        dir,
+		indexOuterLeavesInValueLog: true,
+		valueLogCompression:        ValueLogCompressionOff,
+	}
+	opts := CompactStorageOptions{}
+	if err := d.prepareCompactStorageRIDAllocator(&opts); err != nil {
+		t.Fatalf("prepareCompactStorageRIDAllocator: %v", err)
+	}
+	if opts.ReserveRIDs == nil {
+		t.Fatal("expected shared ReserveRIDs callback")
+	}
+	if scanCalls != 1 {
+		t.Fatalf("rid start scans=%d want 1", scanCalls)
+	}
+
+	cleanup, err := d.installCompactStorageLeafPageLog(opts)
+	if err != nil {
+		t.Fatalf("installCompactStorageLeafPageLog: %v", err)
+	}
+	defer cleanup()
+	if d.leafPageLog == nil {
+		t.Fatal("expected installed leaf page log")
+	}
+	if _, err := d.leafPageLog.AppendLeafPage(bytes.Repeat([]byte("l"), page.PageSize)); err != nil {
+		t.Fatalf("AppendLeafPage: %v", err)
+	}
+
+	start, err := opts.ReserveRIDs(2)
+	if err != nil {
+		t.Fatalf("ReserveRIDs: %v", err)
+	}
+	if start != 501 {
+		t.Fatalf("ReserveRIDs start=%d want 501 after leaf writer consumed rid 500", start)
 	}
 }
 

@@ -434,7 +434,9 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		}
 	}
 
-	db.persistValueLogRefTrackerBestEffort()
+	if !opts.DryRun && !db.readOnly {
+		db.persistValueLogRefTrackerBestEffort()
+	}
 	return stats, nil
 }
 

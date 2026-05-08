@@ -180,6 +180,9 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	}); err != nil {
 		return stats, err
 	}
+	if err := db.prepareCompactStorageRIDAllocator(&opts); err != nil {
+		return stats, err
+	}
 
 	cleanupLeafLog, err := db.installCompactStorageLeafPageLog(opts)
 	if err != nil {
@@ -371,6 +374,23 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 			}
 		}
 	}
+	return nil
+}
+
+func (db *DB) prepareCompactStorageRIDAllocator(opts *CompactStorageOptions) error {
+	if db == nil || opts == nil || opts.ReserveRIDs != nil || !db.indexOuterLeavesInValueLog {
+		return nil
+	}
+	segments, err := rewriteWALSegmentsLister(db.dir)
+	if err != nil {
+		return fmt.Errorf("list value-log segments for compact storage rid selection in %s: %w", db.dir, err)
+	}
+	nextRID, err := rewriteRIDStartScanner(segments)
+	if err != nil {
+		return fmt.Errorf("scan compact storage rid start in %s: %w", db.dir, err)
+	}
+	allocator := newRewriteRIDAllocator(nextRID, nil)
+	opts.ReserveRIDs = allocator.Reserve
 	return nil
 }
 
