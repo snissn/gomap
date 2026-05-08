@@ -435,7 +435,7 @@ func TestDeterministicEntryStableAcrossTransportOnlySections(t *testing.T) {
 		{ID: SectionTraceContext, Bytes: []byte("trace")},
 		{ID: SectionDeadline, Bytes: []byte("deadline")},
 		{ID: 9000, Bytes: []byte("ignored")},
-		{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte("{}"))},
+		{ID: SectionDocuments, Bytes: AppendByteVector(nil, deterministicBSONEmptyDocument())},
 		{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
 		{ID: SectionExpectedCatalogVersion, Bytes: deterministicUvarintPayload(deterministicFixtureCatalogVersion)},
