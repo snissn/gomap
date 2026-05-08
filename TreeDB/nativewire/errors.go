@@ -66,6 +66,11 @@ func errorCodeFor(err error) iwire.ErrorCode {
 	return iwire.ErrInternal
 }
 
+func isMalformedProtocolError(err error) bool {
+	code, ok := iwire.ErrorCodeOf(err)
+	return ok && code == iwire.ErrMalformedFrame
+}
+
 func retryableError(code iwire.ErrorCode) bool {
 	switch code {
 	case iwire.ErrTimeout, iwire.ErrCanceled, iwire.ErrResourceExhausted, iwire.ErrDurabilityUnavailable, iwire.ErrConsistencyUnavailable:

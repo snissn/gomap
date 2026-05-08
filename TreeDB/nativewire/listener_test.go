@@ -36,12 +36,61 @@ func TestServeTCPAndDialContext(t *testing.T) {
 	_ = server.Close()
 	select {
 	case err := <-errCh:
-		if err != nil && !errors.Is(err, context.Canceled) {
+		if err != nil && !isExpectedServeShutdown(err) {
 			t.Fatalf("Serve: %v", err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Serve did not stop")
 	}
+}
+
+func TestServeRejectsNilListener(t *testing.T) {
+	server := NewServer(ServerOptions{})
+	err := server.Serve(context.Background(), nil)
+	if !errors.Is(err, ErrNilListener) {
+		t.Fatalf("Serve nil listener err=%v want ErrNilListener", err)
+	}
+	if !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Serve nil listener err=%v want net.ErrClosed-compatible", err)
+	}
+}
+
+func TestDialContextAcceptsNilContext(t *testing.T) {
+	server := NewServer(ServerOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen tcp: %v", err)
+	}
+	errCh := make(chan error, 1)
+	go func() { errCh <- server.Serve(ctx, ln) }()
+	client, err := DialContext(nil, "tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("DialContext nil context: %v", err)
+	}
+	if err := client.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+	_ = client.Close()
+	cancel()
+	_ = ln.Close()
+	_ = server.Close()
+	select {
+	case err := <-errCh:
+		if err != nil && !isExpectedServeShutdown(err) {
+			t.Fatalf("Serve: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not stop")
+	}
+}
+
+func isExpectedServeShutdown(err error) bool {
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, io.ErrClosedPipe) ||
+		errors.Is(err, ErrServerClosed)
 }
 
 func TestNewInProcessClientLocalEndpoint(t *testing.T) {

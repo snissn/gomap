@@ -558,7 +558,13 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	}
 	if err != nil {
 		s.counters.inc("requests.failed_total")
-		return s.writeError(w, header, err)
+		if writeErr := s.writeError(w, header, err); writeErr != nil {
+			return writeErr
+		}
+		if isMalformedProtocolError(err) {
+			return errGoaway
+		}
+		return nil
 	}
 	if req, ok, err := s.decodeInsertBatchFastRequest(state, sections); ok {
 		s.counters.incCommandRequest(iwire.CommandInsertBatch, "insert_batch")

@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/binary"
 	"slices"
@@ -11,6 +12,8 @@ import (
 const (
 	DeterministicEntryMagic   = "TDC1"
 	DeterministicEntryVersion = uint64(1)
+
+	maxDeterministicDocumentIDs = defaultMaxByteVectorItems
 
 	deterministicSectionScratchCapacity = sectionSeenInlineCapacity
 
@@ -195,25 +198,10 @@ func validateDeterministicSectionPayload(section Section) error {
 		}
 		return validateDeterministicDocumentFormatEnum(format)
 	case SectionDocumentIDs, SectionDocuments, SectionTemplateRecords:
-		if err := validateByteVector(section.Bytes, Limits{}); err != nil {
-			return err
-		}
 		if section.ID == SectionDocumentIDs {
-			count, off, err := readUvarint(section.Bytes)
-			if err != nil {
-				return err
-			}
-			for i := uint64(0); i < count; i++ {
-				length, n, err := readUvarint(section.Bytes[off:])
-				if err != nil {
-					return err
-				}
-				if length == 0 {
-					return protocolError(ErrInvalidCommand, "empty document id at index %d", i)
-				}
-				off += n
-			}
+			return validateDeterministicDocumentIDs(section.Bytes)
 		}
+		return validateByteVector(section.Bytes, Limits{})
 	case SectionAckPolicy:
 		policy, n, err := readUvarint(section.Bytes)
 		if err != nil {
@@ -241,6 +229,72 @@ func validateDeterministicSectionPayload(section Section) error {
 		return validateDeterministicEncodedName(section.Bytes, "index_name")
 	}
 	return nil
+}
+
+func validateDeterministicDocumentIDs(raw []byte) error {
+	if err := validateByteVector(raw, Limits{}); err != nil {
+		return err
+	}
+	count64, off, err := readUvarint(raw)
+	if err != nil {
+		return err
+	}
+	if count64 > uint64(maxInt) {
+		return protocolError(ErrResourceExhausted, "document_ids count exceeds int capacity")
+	}
+	if count64 > maxDeterministicDocumentIDs {
+		return protocolError(ErrResourceExhausted, "document_ids count %d exceeds deterministic limit %d", count64, maxDeterministicDocumentIDs)
+	}
+	count := int(count64)
+	var stackItems [256]deterministicIDItem
+	items := stackItems[:0]
+	if count > cap(items) {
+		items = make([]deterministicIDItem, count)
+	} else {
+		items = items[:count]
+	}
+	payloadLen := 0
+	for i := 0; i < count; i++ {
+		length, n, err := readUvarint(raw[off:])
+		if err != nil {
+			return err
+		}
+		off += n
+		if length == 0 {
+			return protocolError(ErrInvalidCommand, "empty document id at index %d", i)
+		}
+		if length > uint64(maxInt) || payloadLen > maxInt-int(length) {
+			return protocolError(ErrResourceExhausted, "document_ids payload length exceeds int capacity")
+		}
+		items[i] = deterministicIDItem{offset: payloadLen, length: int(length)}
+		payloadLen += int(length)
+	}
+	payload := raw[off:]
+	if payloadLen != len(payload) {
+		return protocolError(ErrMalformedFrame, "document_ids payload length %d does not match declared lengths %d", len(payload), payloadLen)
+	}
+	sortDeterministicIDItems(payload, items)
+	for i := 1; i < count; i++ {
+		left := payload[items[i-1].offset : items[i-1].offset+items[i-1].length]
+		right := payload[items[i].offset : items[i].offset+items[i].length]
+		if bytes.Equal(left, right) {
+			return protocolError(ErrDuplicateDocumentID, "duplicate document id")
+		}
+	}
+	return nil
+}
+
+type deterministicIDItem struct {
+	offset int
+	length int
+}
+
+func sortDeterministicIDItems(payload []byte, items []deterministicIDItem) {
+	slices.SortFunc(items, func(leftItem, rightItem deterministicIDItem) int {
+		left := payload[leftItem.offset : leftItem.offset+leftItem.length]
+		right := payload[rightItem.offset : rightItem.offset+rightItem.length]
+		return bytes.Compare(left, right)
+	})
 }
 
 func validateDeterministicCollectionRef(raw []byte, requireTaggedName bool) (bool, error) {

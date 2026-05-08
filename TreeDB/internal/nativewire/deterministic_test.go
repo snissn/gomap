@@ -482,23 +482,41 @@ func TestDeterministicEntryRejectsBatchVectorArityMismatch(t *testing.T) {
 	}
 }
 
-func TestDeterministicEntryRejectsEmptyDocumentIDs(t *testing.T) {
+func TestDeterministicEntryRejectsInvalidDocumentIDs(t *testing.T) {
 	registry := MustV1Registry()
-	sections := insertBatchDeterministicSections()
-	for i := range sections {
-		if sections[i].ID == SectionDocumentIDs {
-			sections[i].Bytes = AppendByteVector(nil, []byte("a"), nil)
-		}
-		if sections[i].ID == SectionDocuments {
-			sections[i].Bytes = AppendByteVector(nil, []byte("{}"), []byte("{}"))
-		}
+	for _, tc := range []struct {
+		name string
+		ids  [][]byte
+		code ErrorCode
+	}{
+		{name: "empty", ids: [][]byte{[]byte("a"), nil}, code: ErrInvalidCommand},
+		{name: "duplicate", ids: [][]byte{[]byte("a"), []byte("a")}, code: ErrDuplicateDocumentID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sections := insertBatchDeterministicSections()
+			for i := range sections {
+				if sections[i].ID == SectionDocumentIDs {
+					sections[i].Bytes = AppendByteVector(nil, tc.ids...)
+				}
+			}
+			cmd, err := registry.ValidateRequestSections(sections)
+			if err != nil {
+				t.Fatalf("ValidateRequestSections: %v", err)
+			}
+			if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != tc.code {
+				t.Fatalf("AppendDeterministicEntry err=%v code=%d want %d", err, codeOf(err), tc.code)
+			}
+		})
 	}
-	cmd, err := registry.ValidateRequestSections(sections)
-	if err != nil {
-		t.Fatalf("ValidateRequestSections: %v", err)
+}
+
+func TestDeterministicEntryRejectsTooManyDocumentIDs(t *testing.T) {
+	raw := appendUvarint(nil, maxDeterministicDocumentIDs+1)
+	for i := 0; i < maxDeterministicDocumentIDs+1; i++ {
+		raw = append(raw, 0)
 	}
-	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
-		t.Fatalf("empty document id err=%v code=%d", err, codeOf(err))
+	if err := validateDeterministicDocumentIDs(raw); codeOf(err) != ErrResourceExhausted {
+		t.Fatalf("validateDeterministicDocumentIDs err=%v code=%d want resource exhausted", err, codeOf(err))
 	}
 }
 

@@ -31,11 +31,10 @@ type CursorLimits struct {
 }
 
 type CursorMeta struct {
-	CursorID  uint64
-	Items     int
-	Bytes     int
-	HasMore   bool
-	Truncated bool
+	CursorID uint64
+	Items    int
+	Bytes    int
+	HasMore  bool
 }
 
 func encodeScalar(value any) ([]byte, error) {
@@ -437,7 +436,7 @@ func (s *Server) checkCursorSectionLen(name string, length int) error {
 	return nil
 }
 
-func responseForRecords(records []collections.DocumentRecord, meta CursorMeta) ([]iwire.Section, error) {
+func responseForRecords(records []collections.DocumentRecord, meta CursorMeta, truncated bool) ([]iwire.Section, error) {
 	ids := make([][]byte, len(records))
 	docs := make([][]byte, len(records))
 	for i := range records {
@@ -449,7 +448,7 @@ func responseForRecords(records []collections.DocumentRecord, meta CursorMeta) (
 		{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, docs...)},
 		{ID: iwire.SectionCursorMeta, Bytes: encodeCursorMeta(meta)},
 	}
-	if meta.Truncated {
+	if truncated {
 		sections = append(sections, iwire.Section{ID: iwire.SectionTruncated, Bytes: appendBool(nil, true)})
 	}
 	return sections, nil

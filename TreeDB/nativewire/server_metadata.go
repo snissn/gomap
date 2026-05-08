@@ -79,6 +79,11 @@ func (s *Server) handleCreateIndex(state *connState, sections []iwire.Section) (
 	if err != nil {
 		return nil, metadataWrap(err)
 	}
+	for _, existing := range collection.Meta().Indexes {
+		if existing.Name == def.Name {
+			return nil, protocolError(iwire.ErrInvalidCommand, "duplicate index %q", def.Name)
+		}
+	}
 	meta, err := collection.CreateIndex(def)
 	if err != nil {
 		return nil, metadataWrap(err)
