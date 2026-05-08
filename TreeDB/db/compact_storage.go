@@ -196,14 +196,13 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	defer cleanupLeafLog()
 	if err := db.runCompactStoragePhase(&stats, "value-log-rewrite", func() error {
 		protectedPaths := compactStorageValueLogProtectedPaths(opts)
-		rewrite, err := db.ValueLogRewriteOnline(ctx, ValueLogRewriteOnlineOptions{
-			BatchSize:       opts.ValueLogRewriteBatchSize,
-			SyncEachBatch:   opts.SyncEachPhase,
-			MaxSegmentBytes: opts.ValueLogRewriteMaxSegmentBytes,
-			LocalityPolicy:  ValueLogRewriteLocalityGrouped,
-			ReserveRIDs:     opts.ReserveRIDs,
-			ProtectedPaths:  protectedPaths,
-		})
+		rewriteOpts := compactStorageRewritePlanOptions(protectedPaths)
+		rewriteOpts.BatchSize = opts.ValueLogRewriteBatchSize
+		rewriteOpts.SyncEachBatch = opts.SyncEachPhase
+		rewriteOpts.MaxSegmentBytes = opts.ValueLogRewriteMaxSegmentBytes
+		rewriteOpts.LocalityPolicy = ValueLogRewriteLocalityGrouped
+		rewriteOpts.ReserveRIDs = opts.ReserveRIDs
+		rewrite, err := db.ValueLogRewriteOnline(ctx, rewriteOpts)
 		stats.ValueLogRewrite = rewrite
 		return err
 	}); err != nil {

@@ -226,6 +226,85 @@ func TestCompactStorageKeepsPinnedZombieZeroByteValueLogFiles(t *testing.T) {
 	}
 }
 
+func TestCompactStoragePlanMatchesAppliedRewriteScopeForLiveOnlySegments(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	valueLogDir := ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	livePath := filepath.Join(valueLogDir, "value-l0-000001.log")
+	liveID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("live file id: %v", err)
+	}
+	liveWriter, err := valuelog.NewWriter(livePath, liveID)
+	if err != nil {
+		t.Fatalf("live writer: %v", err)
+	}
+	livePtr, err := liveWriter.Append(0, nil, 1, bytes.Repeat([]byte("v"), 256))
+	if err != nil {
+		_ = liveWriter.Close()
+		t.Fatalf("append live value: %v", err)
+	}
+	if err := liveWriter.Close(); err != nil {
+		t.Fatalf("close live writer: %v", err)
+	}
+
+	batch := d.NewBatch()
+	ptrBatch, ok := batch.(interface {
+		SetPointer(key []byte, ptr page.ValuePtr) error
+	})
+	if !ok {
+		t.Fatalf("missing SetPointer on batch %T", batch)
+	}
+	if err := ptrBatch.SetPointer([]byte("k"), livePtr); err != nil {
+		t.Fatalf("SetPointer: %v", err)
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatalf("batch write: %v", err)
+	}
+	if err := batch.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
+	if err := d.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+
+	plan, err := d.CompactStoragePlan(context.Background(), CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan: %v", err)
+	}
+	if got := plan.RemainingDebt.ValueLogRewriteSegments; got != 0 {
+		t.Fatalf("plan rewrite segments=%d want 0, rewrite plan=%+v debt=%+v", got, plan.ValueLogRewritePlan, plan.RemainingDebt)
+	}
+	if plan.ValueLogRewritePlan.SegmentsTotal == 0 {
+		t.Fatalf("expected rewrite plan to see live value-log segment, rewrite plan=%+v", plan.ValueLogRewritePlan)
+	}
+	if !plan.FullyCompacted {
+		t.Fatalf("plan FullyCompacted=false for live-only segment, rewrite plan=%+v debt=%+v", plan.ValueLogRewritePlan, plan.RemainingDebt)
+	}
+
+	stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if got := stats.ValueLogRewrite.SourceSegmentsRequested; got != 0 {
+		t.Fatalf("applied rewrite source segments=%d want 0, stats=%+v", got, stats.ValueLogRewrite)
+	}
+	if got := stats.ValueLogRewrite.ValueRecordsCopied; got != 0 {
+		t.Fatalf("applied rewrite copied value records=%d want 0, stats=%+v", got, stats.ValueLogRewrite)
+	}
+	if !stats.FullyCompacted {
+		t.Fatalf("applied FullyCompacted=false for live-only segment, rewrite plan=%+v debt=%+v", stats.ValueLogRewritePlan, stats.RemainingDebt)
+	}
+}
+
 func TestCompactStorageKeepsProtectedZeroByteValueLogFiles(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir})
