@@ -35,6 +35,8 @@ const (
 	deterministicTemplateV1KindObject   = byte(5)
 	deterministicTemplateV1KindArray    = byte(6)
 	deterministicTemplateV1MaxArray     = 1 << 20
+	deterministicTemplateV1MaxTemplates = 1 << 16
+	deterministicTemplateV1MaxDepth     = 64
 	minDeterministicIndexDefinitionLen  = 6
 	maxDeterministicCollectionIndexes   = 1 << 16
 )
@@ -660,7 +662,13 @@ func validateDeterministicTemplateDocument(raw []byte, templates deterministicTe
 	if err != nil {
 		return err
 	}
+	if templateCount > deterministicTemplateV1MaxTemplates {
+		return protocolError(ErrResourceExhausted, "template-v1 template count %d exceeds limit", templateCount)
+	}
 	if templateCount > uint64(len(raw)) {
+		return protocolError(ErrMalformedFrame, "malformed template-v1 template count")
+	}
+	if templateCount > uint64((len(raw)-pos)/(sha256.Size+1)) {
 		return protocolError(ErrMalformedFrame, "malformed template-v1 template count")
 	}
 	for i := uint64(0); i < templateCount; i++ {
@@ -707,7 +715,7 @@ func validateDeterministicTemplateStoredDocument(raw []byte, pos *int, templates
 		return protocolError(ErrInvalidCommand, "template-v1 template id is not included")
 	}
 	for i := 0; i < fieldCount; i++ {
-		if err := skipDeterministicTemplateValue(raw, pos, templates); err != nil {
+		if err := skipDeterministicTemplateValue(raw, pos, templates, 0); err != nil {
 			return err
 		}
 	}
@@ -765,9 +773,12 @@ func deterministicTemplateRecordFieldCount(raw []byte) (int, error) {
 	return int(fieldCount), nil
 }
 
-func skipDeterministicTemplateValue(raw []byte, pos *int, templates deterministicTemplateSet) error {
+func skipDeterministicTemplateValue(raw []byte, pos *int, templates deterministicTemplateSet, depth int) error {
 	if pos == nil || *pos < 0 || *pos >= len(raw) {
 		return protocolError(ErrMalformedFrame, "malformed template-v1 value")
+	}
+	if depth > deterministicTemplateV1MaxDepth {
+		return protocolError(ErrResourceExhausted, "template-v1 nesting exceeds limit %d", deterministicTemplateV1MaxDepth)
 	}
 	kind := raw[*pos]
 	*pos = *pos + 1
@@ -799,7 +810,7 @@ func skipDeterministicTemplateValue(raw []byte, pos *int, templates deterministi
 			return protocolError(ErrMalformedFrame, "malformed template-v1 array")
 		}
 		for i := uint64(0); i < count; i++ {
-			if err := skipDeterministicTemplateValue(raw, pos, templates); err != nil {
+			if err := skipDeterministicTemplateValue(raw, pos, templates, depth+1); err != nil {
 				return err
 			}
 		}
@@ -816,7 +827,7 @@ func skipDeterministicTemplateValue(raw []byte, pos *int, templates deterministi
 			return protocolError(ErrInvalidCommand, "template-v1 object template id is not included")
 		}
 		for i := 0; i < fieldCount; i++ {
-			if err := skipDeterministicTemplateValue(raw, pos, templates); err != nil {
+			if err := skipDeterministicTemplateValue(raw, pos, templates, depth+1); err != nil {
 				return err
 			}
 		}
@@ -1197,33 +1208,6 @@ func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
 		return protocolError(ErrMalformedFrame, "collection_meta has %d trailing bytes", len(raw)-off)
 	}
 	return nil
-}
-
-func validateDeterministicDocumentFormat(format uint64) error {
-	switch DocumentFormat(format) {
-	case DocumentFormatDefault, DocumentFormatJSON, DocumentFormatBSON, DocumentFormatTemplateV1:
-		return nil
-	default:
-		return protocolError(ErrInvalidCommand, "unsupported document_format %d", format)
-	}
-}
-
-func validateDeterministicRootStorage(field string, policy uint64) error {
-	switch policy {
-	case 0, 1, 2:
-		return nil
-	default:
-		return protocolError(ErrInvalidCommand, "unsupported %s enum %d", field, policy)
-	}
-}
-
-func validateDeterministicIndexValueType(valueType uint64) error {
-	switch valueType {
-	case 1, 2, 3, 4:
-		return nil
-	default:
-		return protocolError(ErrInvalidCommand, "unsupported index_value_type enum %d", valueType)
-	}
 }
 
 func validateDeterministicNonNegativeInt64(field string, value int64) error {
