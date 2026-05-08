@@ -58,9 +58,10 @@ type ValidatedCommand struct {
 
 // CommandScratch carries reusable buffers for command-schema validation.
 type CommandScratch struct {
-	Known        []Section
-	Ignored      []Section
-	seenOverflow map[SectionID]int
+	Known          []Section
+	Ignored        []Section
+	seenOverflow   map[SectionID]sectionSeenEntry
+	seenGeneration uint64
 }
 
 func NewRegistry(commands ...CommandSchema) (*Registry, error) {
@@ -168,7 +169,12 @@ func (c *CommandSchema) validateSections(sections []Section, scratch *CommandScr
 	rules := c.ruleMap()
 	var seen sectionSeenSet
 	if scratch != nil && len(sections) > sectionSeenInlineCapacity {
-		seen.reuseOverflow(scratch.seenOverflow)
+		scratch.seenGeneration++
+		if scratch.seenGeneration == 0 {
+			clear(scratch.seenOverflow)
+			scratch.seenGeneration = 1
+		}
+		seen.reuseOverflow(scratch.seenOverflow, scratch.seenGeneration)
 	}
 	var known []Section
 	var ignored []Section
@@ -263,24 +269,35 @@ func compileCommandRules(c CommandSchema) (map[SectionID]SectionRule, []SectionI
 const sectionSeenInlineCapacity = 64
 
 type sectionSeenSet struct {
-	ids      [sectionSeenInlineCapacity]SectionID
-	counts   [sectionSeenInlineCapacity]int
-	n        int
-	overflow map[SectionID]int
+	ids        [sectionSeenInlineCapacity]SectionID
+	counts     [sectionSeenInlineCapacity]int
+	n          int
+	overflow   map[SectionID]sectionSeenEntry
+	generation uint64
 }
 
-func (s *sectionSeenSet) reuseOverflow(overflow map[SectionID]int) {
+type sectionSeenEntry struct {
+	generation uint64
+	count      int
+}
+
+func (s *sectionSeenSet) reuseOverflow(overflow map[SectionID]sectionSeenEntry, generation uint64) {
 	if overflow == nil {
 		return
 	}
-	clear(overflow)
 	s.overflow = overflow
+	s.generation = generation
 }
 
 func (s *sectionSeenSet) add(id SectionID) int {
 	if s.overflow != nil {
-		s.overflow[id]++
-		return s.overflow[id]
+		entry := s.overflow[id]
+		if entry.generation != s.generation {
+			entry = sectionSeenEntry{generation: s.generation}
+		}
+		entry.count++
+		s.overflow[id] = entry
+		return entry.count
 	}
 	for i := 0; i < s.n; i++ {
 		if s.ids[i] == id {
@@ -294,17 +311,21 @@ func (s *sectionSeenSet) add(id SectionID) int {
 		s.n++
 		return 1
 	}
-	s.overflow = make(map[SectionID]int, s.n+1)
+	s.overflow = make(map[SectionID]sectionSeenEntry, s.n+1)
 	for i := 0; i < s.n; i++ {
-		s.overflow[s.ids[i]] = s.counts[i]
+		s.overflow[s.ids[i]] = sectionSeenEntry{generation: s.generation, count: s.counts[i]}
 	}
-	s.overflow[id] = 1
+	s.overflow[id] = sectionSeenEntry{generation: s.generation, count: 1}
 	return 1
 }
 
 func (s *sectionSeenSet) get(id SectionID) int {
 	if s.overflow != nil {
-		return s.overflow[id]
+		entry := s.overflow[id]
+		if entry.generation == s.generation {
+			return entry.count
+		}
+		return 0
 	}
 	for i := 0; i < s.n; i++ {
 		if s.ids[i] == id {
