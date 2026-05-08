@@ -58,7 +58,7 @@ func TestDeterministicEntryRejectsMissingDistributedGuards(t *testing.T) {
 }
 
 func TestDeterministicEntryRejectsUnsupportedCommandFlags(t *testing.T) {
-	registry := MustV1Registry()
+	registry := registryWithInsertBatchAllowedFlags(1)
 	sections := insertBatchDeterministicSections()
 	sections[0].Bytes = AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: 1, Flags: 1})
 	cmd, err := registry.ValidateRequestSections(sections)
@@ -67,6 +67,18 @@ func TestDeterministicEntryRejectsUnsupportedCommandFlags(t *testing.T) {
 	}
 	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrUnsupportedFeature {
 		t.Fatalf("command flags err=%v code=%d", err, codeOf(err))
+	}
+}
+
+func TestDeterministicEntryRejectsDuplicateIdempotencyInValidatedView(t *testing.T) {
+	registry := MustV1Registry()
+	cmd, err := registry.ValidateRequestSections(insertBatchDeterministicSections())
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	cmd.Known = append(cmd.Known, Section{ID: SectionIdempotencyKey, Bytes: []byte("id2")})
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("duplicate idempotency err=%v code=%d", err, codeOf(err))
 	}
 }
 
@@ -101,6 +113,23 @@ func TestDeterministicEntryRejectsInvalidCollectionNames(t *testing.T) {
 	}
 	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
 		t.Fatalf("invalid collection ref err=%v code=%d", err, codeOf(err))
+	}
+}
+
+func TestDeterministicEntryAcceptsUTF8CollectionNames(t *testing.T) {
+	registry := MustV1Registry()
+	sections := insertBatchDeterministicSections()
+	for i := range sections {
+		if sections[i].ID == SectionCollectionRef {
+			sections[i].Bytes = []byte("用户")
+		}
+	}
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); err != nil {
+		t.Fatalf("AppendDeterministicEntry: %v", err)
 	}
 }
 
@@ -151,6 +180,20 @@ func TestDeterministicEntryRejectsNonCanonicalSectionPayloads(t *testing.T) {
 	sections = insertBatchDeterministicSections()
 	for i := range sections {
 		if sections[i].ID == SectionDocumentFormat {
+			sections[i].Bytes = []byte{byte(DocumentFormatBSON), 0}
+		}
+	}
+	cmd, err = registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections document format trailing: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("trailing document_format err=%v code=%d", err, codeOf(err))
+	}
+
+	sections = insertBatchDeterministicSections()
+	for i := range sections {
+		if sections[i].ID == SectionDocumentFormat {
 			sections[i].Bytes = []byte{99}
 		}
 	}
@@ -178,6 +221,20 @@ func TestDeterministicEntryRejectsBatchVectorArityMismatch(t *testing.T) {
 	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
 		t.Fatalf("arity mismatch err=%v code=%d", err, codeOf(err))
 	}
+}
+
+func registryWithInsertBatchAllowedFlags(flags uint64) *Registry {
+	schemas := v1CommandSchemas()
+	for i := range schemas {
+		if schemas[i].ID == CommandInsertBatch {
+			schemas[i].AllowedCommandFlags = flags
+		}
+	}
+	r, err := NewRegistry(schemas...)
+	if err != nil {
+		panic(err)
+	}
+	return r
 }
 
 func insertBatchDeterministicSections() []Section {

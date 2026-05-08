@@ -19,7 +19,7 @@ func AppendDeterministicEntry(dst []byte, cmd ValidatedCommand) ([]byte, error) 
 		return nil, protocolError(ErrInvalidCommand, "command %s is not replicated", cmd.Schema.Name)
 	}
 	if cmd.Schema.RequiresIdempotency && !cmd.hasSection(SectionIdempotencyKey) {
-		return nil, protocolError(ErrInvalidCommand, "missing idempotency identity")
+		return nil, protocolError(ErrInvalidCommand, "missing idempotency key")
 	}
 	if cmd.Schema.RequiresCatalogGuard && !cmd.hasSection(SectionExpectedCatalogVersion) {
 		return nil, protocolError(ErrInvalidCommand, "missing catalog guard")
@@ -72,14 +72,6 @@ func (cmd ValidatedCommand) deterministicSections() ([]Section, error) {
 	out := make([]Section, 0, len(cmd.Known))
 	seen := make(map[SectionID]struct{}, len(cmd.Known))
 	for _, section := range cmd.Known {
-		if section.ID == SectionIdempotencyKey {
-			if _, exists := seen[section.ID]; exists {
-				return nil, protocolError(ErrInvalidCommand, "duplicate deterministic singleton section %d", section.ID)
-			}
-			seen[section.ID] = struct{}{}
-			out = append(out, Section{ID: section.ID, Bytes: section.Bytes})
-			continue
-		}
 		rule := rules[section.ID]
 		if !rule.Deterministic {
 			continue
@@ -150,7 +142,7 @@ func validateDeterministicSectionPayload(section Section) error {
 			return err
 		}
 		if n != len(section.Bytes) {
-			return protocolError(ErrInvalidCommand, "document_format has %d trailing bytes", len(section.Bytes)-n)
+			return protocolError(ErrMalformedFrame, "document_format has %d trailing bytes", len(section.Bytes)-n)
 		}
 		switch DocumentFormat(format) {
 		case DocumentFormatDefault, DocumentFormatJSON, DocumentFormatBSON, DocumentFormatTemplateV1:
@@ -167,7 +159,7 @@ func validateDeterministicSectionPayload(section Section) error {
 			return err
 		}
 		if n != len(section.Bytes) {
-			return protocolError(ErrInvalidCommand, "section %d has %d trailing bytes", section.ID, len(section.Bytes)-n)
+			return protocolError(ErrMalformedFrame, "section %d has %d trailing bytes", section.ID, len(section.Bytes)-n)
 		}
 	}
 	return nil
@@ -177,11 +169,7 @@ func validateDeterministicCollectionRef(raw []byte) (bool, error) {
 	if len(raw) == 0 {
 		return false, protocolError(ErrInvalidCommand, "empty collection_ref")
 	}
-	tag, _, err := readUvarint(raw)
-	if err != nil {
-		return false, err
-	}
-	if tag == 2 {
+	if raw[0] == 2 {
 		return true, nil
 	}
 	name := string(raw)
