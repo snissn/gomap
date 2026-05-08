@@ -329,9 +329,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		return stats, err
 	}
 	stats.ValueLogRewritePlan = finalAudit.ValueLogRewritePlan
-	stats.ValueLogGC = finalAudit.ValueLogGC
 	stats.LeafGenerationPlan = finalAudit.LeafGenerationPlan
-	stats.LeafGenerationGC = finalAudit.LeafGenerationGC
 	stats.RemainingDebt = finalDebt
 	stats.FullyCompacted = finalDebt.Empty()
 	return stats, nil

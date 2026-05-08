@@ -305,6 +305,94 @@ func TestCompactStoragePlanMatchesAppliedRewriteScopeForLiveOnlySegments(t *test
 	}
 }
 
+func TestCompactStorageReportsAppliedValueLogGCStats(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	valueLogDir := ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+
+	path1 := filepath.Join(valueLogDir, "value-l0-000001.log")
+	id1, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("file id 1: %v", err)
+	}
+	w1, err := valuelog.NewWriter(path1, id1)
+	if err != nil {
+		t.Fatalf("writer 1: %v", err)
+	}
+	ptr1, err := w1.Append(0, nil, 1, bytes.Repeat([]byte("stale-value|"), 64))
+	if err != nil {
+		_ = w1.Close()
+		t.Fatalf("append 1: %v", err)
+	}
+	if err := w1.Close(); err != nil {
+		t.Fatalf("close writer 1: %v", err)
+	}
+
+	path2 := filepath.Join(valueLogDir, "value-l0-000002.log")
+	id2, err := valuelog.EncodeFileID(0, 2)
+	if err != nil {
+		t.Fatalf("file id 2: %v", err)
+	}
+	w2, err := valuelog.NewWriter(path2, id2)
+	if err != nil {
+		t.Fatalf("writer 2: %v", err)
+	}
+	ptr2, err := w2.Append(0, nil, 2, bytes.Repeat([]byte("live-value|"), 64))
+	if err != nil {
+		_ = w2.Close()
+		t.Fatalf("append 2: %v", err)
+	}
+	if err := w2.Close(); err != nil {
+		t.Fatalf("close writer 2: %v", err)
+	}
+
+	b := db.NewBatch()
+	ptrBatch, ok := b.(interface {
+		SetPointer(key []byte, ptr page.ValuePtr) error
+	})
+	if !ok {
+		t.Fatalf("missing SetPointer on batch")
+	}
+	if err := ptrBatch.SetPointer([]byte("stale"), ptr1); err != nil {
+		t.Fatalf("set stale: %v", err)
+	}
+	if err := ptrBatch.SetPointer([]byte("live"), ptr2); err != nil {
+		t.Fatalf("set live: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("batch write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
+	if err := db.Delete([]byte("stale")); err != nil {
+		t.Fatalf("delete stale: %v", err)
+	}
+
+	stats, err := db.CompactStorage(context.Background(), CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if stats.ValueLogGC.SegmentsDeleted == 0 {
+		t.Fatalf("applied ValueLogGC stats were not preserved: %+v", stats.ValueLogGC)
+	}
+	if stats.ValueLogGC.BytesDeleted == 0 {
+		t.Fatalf("applied ValueLogGC bytes deleted were not preserved: %+v", stats.ValueLogGC)
+	}
+	if stats.RemainingDebt.ValueLogGCSegments != 0 || stats.RemainingDebt.ValueLogGCBytes != 0 {
+		t.Fatalf("remaining GC debt=%+v, want none", stats.RemainingDebt)
+	}
+}
+
 func TestCompactStorageKeepsProtectedZeroByteValueLogFiles(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir})
