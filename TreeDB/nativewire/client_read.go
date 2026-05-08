@@ -114,6 +114,7 @@ func (c *Client) OpenScan(ctx context.Context, collection string, limits CursorL
 
 func (c *Client) CursorNext(ctx context.Context, cursorID uint64, limits CursorLimits) (DocumentsResult, error) {
 	sections, err := c.commandSectionsOnStream(ctx, cursorID, iwire.CommandCursorNext,
+		iwire.Section{ID: iwire.SectionCursorRef, Bytes: encodeCursorRef(cursorID)},
 		iwire.Section{ID: iwire.SectionCursorLimits, Bytes: encodeCursorLimits(limits)},
 	)
 	if err != nil {
@@ -123,7 +124,9 @@ func (c *Client) CursorNext(ctx context.Context, cursorID uint64, limits CursorL
 }
 
 func (c *Client) CursorClose(ctx context.Context, cursorID uint64) error {
-	_, err := c.commandSectionsOnStream(ctx, cursorID, iwire.CommandCursorClose)
+	_, err := c.commandSectionsOnStream(ctx, cursorID, iwire.CommandCursorClose,
+		iwire.Section{ID: iwire.SectionCursorRef, Bytes: encodeCursorRef(cursorID)},
+	)
 	return err
 }
 
@@ -147,6 +150,9 @@ func decodeIDsAndTruncated(sections []iwire.Section, limits iwire.Limits) ([][]b
 		truncated, err = readBool(raw, &off)
 		if err != nil {
 			return nil, false, err
+		}
+		if off != len(raw) {
+			return nil, false, protocolError(iwire.ErrMalformedFrame, "truncated section has trailing bytes")
 		}
 	}
 	return ids, truncated, nil
@@ -191,6 +197,9 @@ func decodeDocumentsResult(sections []iwire.Section, limits iwire.Limits) (Docum
 		out.Truncated, err = readBool(raw, &off)
 		if err != nil {
 			return out, err
+		}
+		if off != len(raw) {
+			return out, protocolError(iwire.ErrMalformedFrame, "truncated section has trailing bytes")
 		}
 	}
 	return out, nil

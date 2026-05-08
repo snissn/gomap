@@ -164,9 +164,9 @@ func responseCount(sections []iwire.Section, key string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	value := values[key]
-	if value == "" {
-		return 0, nil
+	value, ok := values[key]
+	if !ok {
+		return 0, protocolError(iwire.ErrMalformedFrame, "response_meta missing %s", key)
 	}
 	n, err := strconv.Atoi(value)
 	if err != nil {
