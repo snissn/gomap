@@ -1,12 +1,24 @@
 # ClickHouse Compression Technology Specification
 
-Source snapshot: `ad347dba`.
+Provenance:
 
-This document specifies the compression technology present in this source
-tree. It covers the ClickHouse-owned internal block format, codecs,
-selection rules, read/write behavior, and adjacent compression mechanisms
-used by table storage, protocols, formats, temporary files, in-memory
-columns, and text indexes.
+- Upstream repository: `https://github.com/ClickHouse/ClickHouse`
+- Upstream commit: `ad347dbafb074ccf13790b5045b25708a975fb77`
+  (`https://github.com/ClickHouse/ClickHouse/commit/ad347dbafb074ccf13790b5045b25708a975fb77`)
+- License file:
+  `https://github.com/ClickHouse/ClickHouse/blob/ad347dbafb074ccf13790b5045b25708a975fb77/LICENSE`
+- License/attribution: ClickHouse source at that snapshot is copyright
+  `2016-2026 ClickHouse, Inc.` and licensed under the Apache License 2.0.
+
+This document is TreeDB-authored reference material derived from reading that
+external ClickHouse source snapshot. It is not a vendored copy of ClickHouse
+source and is non-normative for ClickHouse itself.
+
+This document specifies the compression technology present in that external
+ClickHouse source tree. It covers the ClickHouse-owned internal block format,
+codecs, selection rules, read/write behavior, and adjacent compression
+mechanisms used by table storage, protocols, formats, temporary files,
+in-memory columns, and text indexes.
 
 External libraries such as LZ4, ZSTD, zlib, Brotli, XZ, bzip2, Snappy,
 Arrow, ORC, and Parquet are treated as delegated implementations. For those

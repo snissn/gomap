@@ -1,9 +1,13 @@
 # RFC: Column-Store Collections for gomap TreeDB
 
-Status: proposal  
-Target repository studied: `/Users/michaelseiler/dev/snissn/gomap`  
-Compression reference: `COMPRESSION_TECHNOLOGY_SPEC.md` in this directory  
-ClickHouse source snapshot studied: `ad347dba`
+Metadata:
+
+- Status: proposal
+- Target TreeDB source studied:
+  `https://github.com/snissn/gomap/tree/874737704bd8cdcd1add40c5d2316f03544b1219`
+- Compression reference: `COMPRESSION_TECHNOLOGY_SPEC.md` in this directory
+- ClickHouse source snapshot studied:
+  `https://github.com/ClickHouse/ClickHouse/commit/ad347dbafb074ccf13790b5045b25708a975fb77`
 
 ## 1. Summary
 
@@ -198,8 +202,6 @@ const (
 )
 
 type ColumnUpdatePolicy struct {
-    MaxDeltaPartRows      int
-    MaxDeltaPartBytes     int64
     MicroBatchMaxDelay    time.Duration
     CompactAfterDeltaRows int
 }
@@ -207,7 +209,7 @@ type ColumnUpdatePolicy struct {
 type FastFilterDefinition struct {
     Name        string
     Columns     []string
-    Kind        FastFilterKind // minmax, set, bloom, token_bloom, ngram_bloom, text
+    Kind        FastFilterKind // minmax, set, bloom_filter, tokenbf_v1, ngrambf_v1, text
     GranuleRows int
     Args        map[string]uint64
 }
@@ -230,6 +232,12 @@ typed transform pipeline when benchmarks justify it.
 Flexible schemas are deliberately deferred. If TreeDB later supports lazily
 created columns, that should be a separate schema mode with explicit migration,
 query, and storage-compatibility rules.
+
+`ColumnPartPolicy` is authoritative for update-delta physical sizing, including
+`UpdateDeltaMaxRows`, `UpdateDeltaMaxBytes`, and update-delta granule and codec
+block limits. `ColumnUpdatePolicy` only controls foreground batching and
+compaction triggers; collection opening must reject future options that set
+conflicting physical delta limits in both places.
 
 The collection can still accept row documents through `InsertBatch`, but the
 preferred high-throughput API is direct column ingestion:
@@ -800,8 +808,8 @@ primary ids:
 - sort rows by primary id inside the part;
 - update the primary root so each changed id points directly to the replacement
   row locator;
-- hide old locators with tombstones/delete bitmaps;
-- update secondary indexes in the same root group.
+- hide old locators for changed rows with tombstones/delete bitmaps;
+- update secondary indexes for changed rows in the same root group.
 
 Partial-column deltas can be studied later, but they are out of scope for the
 first format because they complicate row reconstruction, secondary-index
@@ -822,10 +830,10 @@ Update model:
    as normal parts.
 5. The write publishes, in one root group:
    - new update-delta part descriptors;
-   - primary locator changes from old rows to replacement rows;
-   - delete bitmap/tombstone entries that hide old row locators;
-   - secondary index deletes for old indexed values;
-   - secondary index inserts for new indexed values.
+   - primary locator changes from old rows to replacement rows for changed ids;
+   - delete bitmap/tombstone entries that hide old row locators for changed ids;
+   - secondary index deletes for old indexed values from changed rows;
+   - secondary index inserts for new indexed values from changed rows.
 6. Reads see the newest primary locator for each id and treat tombstoned
    locators as invisible.
 7. Maintenance compacts base parts, insert deltas, update deltas, and delete
@@ -847,19 +855,25 @@ update_rows(snapshot, ids, update_fn):
     if changed.empty:
         return
 
-    old_index_values = compute_secondary_values(old_rows, affected_indexes)
-    new_index_values = compute_secondary_values(new_rows, affected_indexes)
+    changed_old_rows = old_rows.only(changed.ids)
+    changed_new_rows = new_rows.only(changed.ids)
+    old_index_values = compute_secondary_values(changed_old_rows, affected_indexes)
+    new_index_values = compute_secondary_values(changed_new_rows, affected_indexes)
 
     delta_parts = build_column_parts(changed.ids, changed.column_batch,
                                     kind=update_delta)
     root_group = new_root_group()
     root_group.add_part_descriptors(delta_parts)
     root_group.add_primary_locator_puts(delta_parts.locators)
-    root_group.add_delete_tombstones(old_rows.locators)
+    root_group.add_delete_tombstones(changed_old_rows.locators)
     root_group.add_secondary_deletes(old_index_values, changed.ids)
     root_group.add_secondary_puts(new_index_values, changed.ids)
     publish(root_group)
 ```
+
+Tombstones, delete bitmaps, and secondary-index deletes must be derived from
+`changed_old_rows`, not from every requested id. A no-op row in a mixed update
+request must keep its original locator and secondary-index entries visible.
 
 Deletes are the same visibility mechanism without replacement rows: publish
 tombstones/delete bitmap updates, remove secondary index entries, and leave
@@ -1166,10 +1180,15 @@ Column scan:
 2. Enumerate visible parts by id range and predicate metadata.
 3. Use min/max, null count, default count, and optional bloom/zone maps to skip
    granules.
-4. Decode only projected columns.
-5. Call the borrowed callback with a vector batch.
-6. Apply delete bitmaps and row-id filters produced by secondary indexes or
-   fast filters.
+4. Build the row-visibility mask for surviving granules from delete bitmaps,
+   update-delta tombstones, primary id bounds, and row-id filters produced by
+   secondary indexes or fast filters.
+5. Decode only projected columns for granules with at least one candidate row.
+6. Apply the row-visibility mask to the decoded batch.
+7. Call the borrowed callback with the filtered vector batch.
+
+The borrowed callback must never observe tombstoned rows or rows outside the
+primary id range, secondary-index result, or fast-filter row set.
 
 Update-delta parts are normal column parts for reads. They may be smaller and
 more numerous than compacted base parts, but they use the same marks,
