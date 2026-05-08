@@ -333,8 +333,10 @@ stats, err := db.CompactStorage(ctx, treedb.CompactStorageOptions{
 
 This is the user-facing contract. It coordinates value-log rewrite, value-log
 GC, leaf-generation packing, leaf-generation GC, index vacuum, and zero-byte
-`value_vlog` cleanup. The lower-level operations below are advanced internals
-for debugging and maintenance schedulers.
+`value_vlog` cleanup. If online index vacuum is unsupported on the current
+platform, that phase is explicitly reported as skipped and the other storage
+domains are still compacted. The lower-level operations below are advanced
+internals for debugging and maintenance schedulers.
 
 ### GC: delete fully-unreferenced segments
 

@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/compression"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
 // CompactStorageMode selects how aggressively CompactStorage should reclaim
@@ -262,12 +264,24 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		return stats, err
 	}
 
+	indexVacuumSkipped := false
 	if err := db.runCompactStoragePhase(&stats, "index-vacuum", func() error {
-		return db.VacuumIndexOnline(ctx)
+		indexVacuumSkipped = false
+		err := db.VacuumIndexOnline(ctx)
+		if errors.Is(err, ErrVacuumUnsupported) {
+			indexVacuumSkipped = true
+			return nil
+		}
+		return err
 	}); err != nil {
 		return stats, err
 	}
-	if err := db.runCompactStoragePhase(&stats, "checkpoint-after-index-vacuum", func() error {
+	if indexVacuumSkipped {
+		if len(stats.Phases) > 0 {
+			stats.Phases[len(stats.Phases)-1].Skipped = true
+			stats.Phases[len(stats.Phases)-1].SkipReason = ErrVacuumUnsupported.Error()
+		}
+	} else if err := db.runCompactStoragePhase(&stats, "checkpoint-after-index-vacuum", func() error {
 		return db.Checkpoint()
 	}); err != nil {
 		return stats, err
@@ -557,6 +571,15 @@ func (db *DB) pruneZeroByteValueLogFiles() (int, error) {
 		if info.Size() != 0 {
 			continue
 		}
+		if db.valueLogManager != nil {
+			if fileID, ok := compactStorageValueLogFileID(name); ok && db.valueLogManager.HasSegment(fileID) {
+				if err := db.valueLogManager.RemoveSegment(fileID); err != nil {
+					return deleted, err
+				}
+				deleted++
+				continue
+			}
+		}
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return deleted, err
 		}
@@ -568,6 +591,21 @@ func (db *DB) pruneZeroByteValueLogFiles() (int, error) {
 		}
 	}
 	return deleted, nil
+}
+
+func compactStorageValueLogFileID(name string) (uint32, bool) {
+	lane, seq, valueLog, ok := parseLogSeq(name)
+	if !ok || !valueLog || lane < 0 {
+		return 0, false
+	}
+	if uint64(lane) > uint64(^uint32(0)) || seq > uint64(^uint32(0)) {
+		return 0, false
+	}
+	fileID, err := valuelog.EncodeFileID(uint32(lane), uint32(seq))
+	if err != nil {
+		return 0, false
+	}
+	return fileID, true
 }
 
 func (db *DB) installCompactStorageLeafPageLog() (func(), error) {

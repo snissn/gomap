@@ -14,6 +14,9 @@ treemap compact <db-dir> -rw
 Use `treemap compact-plan <db-dir>` for a read-only preview. The individual
 `vlog-*` and `leafgen-*` commands below are advanced diagnostics and scheduler
 building blocks, not the recommended path for benchmark storage accounting.
+When online index vacuum is unsupported on a platform, `treemap compact` reports
+that phase as skipped and still performs the value-log, leaf-log, and cleanup
+phases.
 
 ## Recommended Defaults
 - `-treedb-maintenance-mode normal` (default)

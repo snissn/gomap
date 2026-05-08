@@ -336,7 +336,7 @@ without a separate offline tool. These hooks execute inline during shutdown.
 
 - `TREEDB_CLOSE_CHECKPOINT=1`: call `Checkpoint()` before closing
 - `TREEDB_CLOSE_COMPACT_INDEX=1`: call `CompactIndex()` before closing
-- `TREEDB_CLOSE_VACUUM_INDEX_ONLINE=1`: call `VacuumIndexOnline()` (alias to `CompactIndex`) before closing
+- `TREEDB_CLOSE_VACUUM_INDEX_ONLINE=1`: call `VacuumIndexOnline()` before closing; unsupported platforms skip it without failing close
 - `TREEDB_CLOSE_VACUUM_TIMEOUT`: timeout for the online vacuum (duration string or seconds)
 - `TREEDB_CLOSE_LOG=1`: log close-maintenance start/stop messages
 - `TREEDB_CLOSE_SCOPE_CONTAINS`: substring match on `Options.Dir` that scopes which DBs run
@@ -384,6 +384,10 @@ This plans and executes the best-practice sequence across storage domains:
 - `leaf_vlog`: pack sparse live leaf generations, then GC fully unreachable generations.
 - `index.db`: vacuum after leaf packing so rewritten roots/internal pages are reflected in the final file.
 - cleanup: remove zero-byte `value_vlog` segment files before final storage accounting.
+
+If online index vacuum is unsupported on the current platform, `CompactStorage`
+records the `index-vacuum` phase as skipped and still completes the value-log,
+leaf-log, and cleanup phases.
 
 Use `treemap compact-plan <db-dir>` to preview remaining compaction debt without
 mutating storage.
