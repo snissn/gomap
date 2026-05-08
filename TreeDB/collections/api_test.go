@@ -11405,7 +11405,7 @@ func setBSONField(field string, value any) func([]byte) ([]byte, bool, error) {
 	}
 }
 
-func mustBSONRawValue(t *testing.T, value any) bson.RawValue {
+func mustBSONRawValue(t testing.TB, value any) bson.RawValue {
 	t.Helper()
 	typ, raw, err := bson.MarshalValue(value)
 	if err != nil {

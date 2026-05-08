@@ -121,16 +121,26 @@ func (u bsonSetUpdate) fieldIndexBytes(key []byte) int {
 }
 
 func (u bsonSetUpdate) apply(current []byte) ([]byte, bool, error) {
+	_, replacement, changed, err := u.appendReplacement(nil, current)
+	return replacement, changed, err
+}
+
+func (u bsonSetUpdate) appendReplacement(dst, current []byte) ([]byte, []byte, bool, error) {
 	if len(u.fields) == 0 {
-		return current, false, nil
+		return dst, current, false, nil
 	}
 	length, rem, ok := bsoncore.ReadLength(current)
 	if !ok {
-		return nil, false, bsoncore.NewInsufficientBytesError(current, rem)
+		return dst, nil, false, bsoncore.NewInsufficientBytesError(current, rem)
 	}
 	length -= 4
-	out := make([]byte, 0, len(current)+64)
-	idx, out := bsoncore.AppendDocumentStart(out)
+	start := len(dst)
+	if cap(dst)-len(dst) < len(current)+64 {
+		grown := make([]byte, len(dst), len(dst)+len(current)+64)
+		copy(grown, dst)
+		dst = grown
+	}
+	idx, out := bsoncore.AppendDocumentStart(dst)
 	var usedInline [8]bool
 	used := usedInline[:]
 	if len(u.fields) > len(usedInline) {
@@ -145,7 +155,7 @@ func (u bsonSetUpdate) apply(current []byte) ([]byte, bool, error) {
 		elem, rem, elemOK = bsoncore.ReadElement(rem)
 		length -= int32(len(elem))
 		if !elemOK {
-			return nil, false, bsoncore.NewInsufficientBytesError(current, rem)
+			return dst[:start], nil, false, bsoncore.NewInsufficientBytesError(current, rem)
 		}
 		replacement := u.fieldIndexBytes(elem.KeyBytes())
 		if replacement < 0 {
@@ -178,13 +188,13 @@ func (u bsonSetUpdate) apply(current []byte) ([]byte, bool, error) {
 		changed = true
 	}
 	if !changed {
-		return current, false, nil
+		return dst[:start], current, false, nil
 	}
 	raw, err := bsoncore.AppendDocumentEnd(out, idx)
 	if err != nil {
-		return nil, false, err
+		return dst[:start], nil, false, err
 	}
-	return bson.Raw(raw), true, nil
+	return raw, bson.Raw(raw[start:len(raw):len(raw)]), true, nil
 }
 
 func bsonCoreValueEqualRawValue(left bsoncore.Value, right bson.RawValue) bool {
