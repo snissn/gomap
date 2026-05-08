@@ -171,7 +171,7 @@ func (e *ProtocolError) Error() string {
 	if e.Reason == "" {
 		return fmt.Sprintf("nativewire: error code %d", e.Code)
 	}
-	return fmt.Sprintf("nativewire: %s", e.Reason)
+	return fmt.Sprintf("nativewire: error code %d: %s", e.Code, e.Reason)
 }
 
 func protocolError(code ErrorCode, format string, args ...any) error {

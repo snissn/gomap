@@ -25,6 +25,7 @@ const (
 	defaultCursorIdleTimeout      = 10 * time.Minute
 )
 
+// ServerOptions configures a native-wire server.
 type ServerOptions struct {
 	Limits                 iwire.Limits
 	MaxInFlight            int
@@ -39,6 +40,7 @@ type ServerOptions struct {
 	Backend                *backenddb.DB
 }
 
+// Server serves native-wire control and command frames for TreeDB.
 type Server struct {
 	limits                 iwire.Limits
 	maxInFlight            int
@@ -186,6 +188,7 @@ func (s *connState) cacheCollection(name string, collection *collections.Collect
 	s.collections[name] = collection
 }
 
+// NewServer creates a native-wire server with defaulted limits and policies.
 func NewServer(opts ServerOptions) *Server {
 	limits := opts.Limits
 	defaultLimits := iwire.DefaultLimits()
@@ -258,6 +261,7 @@ func NewServer(opts ServerOptions) *Server {
 	}
 }
 
+// Close closes all active server connections and rejects new ones.
 func (s *Server) Close() error {
 	if s == nil {
 		return nil
@@ -284,6 +288,7 @@ func (s *Server) Close() error {
 	return nil
 }
 
+// ServeConn serves native-wire frames on conn until shutdown, goaway, or error.
 func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 	if s == nil || conn == nil {
 		return ErrServerClosed
@@ -643,6 +648,7 @@ func (s *Server) writeSimpleFrameBuffered(w io.Writer, state *connState, header 
 	return nil
 }
 
+// Stats returns the server's native-wire counters and backend stats.
 func (s *Server) Stats() map[string]string {
 	out := make(map[string]string)
 	for _, key := range []string{

@@ -185,6 +185,33 @@ func TestIndexRangeByteOnlyLimitTruncatesIDs(t *testing.T) {
 	}
 }
 
+func TestIndexRangeByteOnlyLimitDoesNotBecomeQueryLimit(t *testing.T) {
+	_, opts, limits, err := indexRangeRequest([]iwire.Section{
+		{ID: iwire.SectionIndexName, Bytes: encodeIndexName("city")},
+		{ID: iwire.SectionCursorLimits, Bytes: encodeCursorLimits(CursorLimits{MaxBytes: 1 << 20})},
+	})
+	if err != nil {
+		t.Fatalf("indexRangeRequest: %v", err)
+	}
+	if opts.Limit != 0 {
+		t.Fatalf("opts.Limit=%d want 0 for byte-only limits", opts.Limit)
+	}
+	if limits.MaxBytes != 1<<20 {
+		t.Fatalf("limits.MaxBytes=%d want byte limit preserved", limits.MaxBytes)
+	}
+
+	_, opts, _, err = indexRangeRequest([]iwire.Section{
+		{ID: iwire.SectionIndexName, Bytes: encodeIndexName("city")},
+		{ID: iwire.SectionCursorLimits, Bytes: encodeCursorLimits(CursorLimits{MaxItems: 7, MaxBytes: 1 << 20})},
+	})
+	if err != nil {
+		t.Fatalf("indexRangeRequest with item limit: %v", err)
+	}
+	if opts.Limit != 7 {
+		t.Fatalf("opts.Limit=%d want explicit item limit", opts.Limit)
+	}
+}
+
 func TestIndexRangeOmittedBoundsAreUnbounded(t *testing.T) {
 	client, mgr, _ := serveCollectionPipe(t)
 	seedReadCollection(t, mgr)
@@ -211,6 +238,27 @@ func TestDecodeDocumentsResultRejectsMismatchedVectors(t *testing.T) {
 	_, err := decodeDocumentsResult([]iwire.Section{
 		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("a"))},
 		{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, []byte("{}"), []byte("{}"))},
+	}, iwire.DefaultLimits())
+	if nativeCodeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("decodeDocumentsResult err=%v code=%d want malformed frame", err, nativeCodeOf(err))
+	}
+}
+
+func TestDecodeIDsAndTruncatedRejectsTrailingTruncatedBytes(t *testing.T) {
+	_, _, err := decodeIDsAndTruncated([]iwire.Section{
+		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("a"))},
+		{ID: iwire.SectionTruncated, Bytes: []byte{1, 0}},
+	}, iwire.DefaultLimits())
+	if nativeCodeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("decodeIDsAndTruncated err=%v code=%d want malformed frame", err, nativeCodeOf(err))
+	}
+}
+
+func TestDecodeDocumentsResultRejectsTrailingTruncatedBytes(t *testing.T) {
+	_, err := decodeDocumentsResult([]iwire.Section{
+		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("a"))},
+		{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, []byte("{}"))},
+		{ID: iwire.SectionTruncated, Bytes: []byte{1, 0}},
 	}, iwire.DefaultLimits())
 	if nativeCodeOf(err) != iwire.ErrMalformedFrame {
 		t.Fatalf("decodeDocumentsResult err=%v code=%d want malformed frame", err, nativeCodeOf(err))
@@ -342,7 +390,7 @@ func TestOpenScanCursorLifecycle(t *testing.T) {
 	}
 }
 
-func TestCursorNextRequiresStreamID(t *testing.T) {
+func TestCursorNextRequiresCursorRef(t *testing.T) {
 	client, mgr, _ := serveCollectionPipe(t)
 	seedReadCollection(t, mgr)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -356,7 +404,14 @@ func TestCursorNextRequiresStreamID(t *testing.T) {
 	}
 	_, err = client.commandSections(ctx, iwire.CommandCursorNext, iwire.Section{ID: iwire.SectionCursorLimits, Bytes: encodeCursorLimits(CursorLimits{MaxItems: 1})})
 	if !isRemoteError(err, iwire.ErrInvalidCommand) {
-		t.Fatalf("CursorNext without stream err=%v want invalid command", err)
+		t.Fatalf("CursorNext without cursor_ref err=%v want invalid command", err)
+	}
+	_, err = client.commandSectionsOnStream(ctx, first.Cursor.CursorID+1, iwire.CommandCursorNext,
+		iwire.Section{ID: iwire.SectionCursorRef, Bytes: encodeCursorRef(first.Cursor.CursorID)},
+		iwire.Section{ID: iwire.SectionCursorLimits, Bytes: encodeCursorLimits(CursorLimits{MaxItems: 1})},
+	)
+	if !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("CursorNext stream/cursor_ref mismatch err=%v want invalid command", err)
 	}
 	if err := client.CursorClose(ctx, first.Cursor.CursorID); err != nil {
 		t.Fatalf("CursorClose cleanup: %v", err)
