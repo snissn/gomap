@@ -1,0 +1,1558 @@
+# RFC: Column-Store Collections for gomap TreeDB
+
+Status: proposal  
+Target repository studied: `/Users/michaelseiler/dev/snissn/gomap`  
+Compression reference: `COMPRESSION_TECHNOLOGY_SPEC.md` in this directory  
+ClickHouse source snapshot studied: `ad347dba`
+
+## 1. Summary
+
+Add an optional column-store storage layout for TreeDB collections. The new
+layout keeps TreeDB's existing B+Tree, catalog roots, snapshots, value log,
+dictionary store, and collection manager, but changes the durable document-data
+root for selected collections from row-document values to immutable,
+column-oriented parts. Each part stores row-aligned column granules in the
+persistent value log and stores small B-tree descriptors for discovery,
+visibility, and point lookup.
+
+The desired end state is a TreeDB collection type that can:
+
+- ingest rows from JSON, BSON, template-v1, or direct column vectors;
+- store each declared field as typed, nullable column streams;
+- apply ClickHouse-style codec pipelines per column and substream;
+- scan projected columns without materializing full documents;
+- support direct borrowed vector APIs for tight loops;
+- preserve existing primary-key and secondary-index semantics, including
+  unique/nonunique secondary indexes for column-store collections;
+- write updates as replacement column-store data, not as a permanent row-store
+  overlay;
+- expose ClickHouse-style fast filters and haystack search algorithms through
+  reusable collection-level interfaces, so row-store, template-v1, BSON, and
+  column-store collections can all use them where their data layout can supply
+  typed vectors or byte haystacks;
+- use TreeDB's copy-on-write root publish, snapshots, value-log GC, rewrite,
+  and benchmark discipline;
+- use test-driven milestones with explicit throughput and compression gates.
+
+This should be built as an additive collection storage mode, not as a rewrite
+of the base B-tree.
+
+## 2. Current TreeDB Facts This Proposal Relies On
+
+The gomap repository already has most of the low-level pieces needed for this
+design:
+
+- TreeDB is a persistent ordered key/value store with B+Tree pages in
+  `Dir/maindb/index.db`.
+- The public TreeDB wrapper opens `maindb/`, `dictdb/`, and optional template
+  side stores.
+- Values larger than a threshold can live in a persistent append-only value
+  log and be referenced by `page.ValuePtr`.
+- The value log is durable storage, not an ephemeral WAL. Pointers are valid
+  across reopen and are reclaimed only by reachability GC or rewrite.
+- Cached mode writes through memtables plus journal and later publishes B-tree
+  roots.
+- Collections already have multiple ordered roots per logical collection:
+  primary, templates, optional index-state, and secondary indexes.
+- Collection writes already publish root groups with one system-root descriptor
+  update.
+- Collection storage policies already distinguish fast pager leaves from
+  compressed value-log leaves:
+  `RootStorageFast` and `RootStorageCompressed`.
+- TreeDB already stores B-tree outer leaves in the value log as `TOL2` blocks
+  with restart points, checksums, optional snappy/lz4, and typed blob-ref
+  entries.
+- B-tree leaf pages already have columnar metadata encodings for keys and
+  values inside a 4 KiB page.
+- Value-log grouped frames already support raw, block compression, dictionary
+  zstd compression, K selection, read integrity options, dictionary
+  persistence, and autotune.
+- Existing benchmarks report docs/sec, ns/doc, bytes/doc, allocation counts,
+  phase timings, maintenance size, value-log rewrite/GC, and SQLite baselines.
+
+The column-store collection should reuse these contracts instead of inventing a
+separate storage engine.
+
+## 3. Goals
+
+1. Preserve TreeDB's single-writer/multi-reader snapshot model.
+2. Keep the B-tree as the transactional root catalog, locator, secondary-index,
+   filter-index, and visibility mechanism.
+3. Store immutable column parts in the persistent value log.
+4. Make projected scans much faster and lower-allocation than materializing
+   JSON/BSON/template documents.
+5. Improve compacted bytes/doc for typed collection shapes, especially
+   repeated fields, low-cardinality strings, booleans, nullable columns,
+   counters, timestamps, and monotonic ids.
+6. Apply ClickHouse compression practices where they fit TreeDB:
+   granules, marks, substreams, per-column codecs, codec-pipeline validation,
+   generic-only structural streams, min/max compressed-block sizing,
+   recompression during maintenance, and sparse/default-value encoding.
+7. Provide a direct API for row loops, vector loops, and codec development.
+8. Make secondary indexes first-class for column-store collections. Direct
+   vector ingestion, row ingestion, updates, deletes, compaction, and snapshot
+   reads must preserve the same index semantics as existing row collections.
+9. Make updates rewrite changed data into column-store delta parts immediately,
+   then merge those delta parts into normal parts during maintenance.
+10. Make fast filters and byte-haystack search algorithms reusable across
+   collection types through small adapters, not hard-coded to the column-store
+   scan path.
+11. Provide a roadmap where every PR has correctness tests and explicit
+   performance gates.
+
+## 4. Non-Goals
+
+- Do not replace the B-tree.
+- Do not make all TreeDB collections columnar by default.
+- Do not attempt SQL query planning in the first implementation.
+- Do not require old DB directories to migrate. TreeDB is pre-alpha, and this
+  proposal may add new on-disk formats.
+- Do not rewrite an entire collection or large base part for a point update.
+  A point update may write a small replacement column-store delta part plus
+  tombstones for old row locators, then maintenance rewrites compacted base
+  parts later.
+- Do not keep a permanent row-document overlay for column-store collections.
+  A transient row object may exist while computing an update, but the durable
+  representation of changed rows must be column-store data.
+- Do not require every ClickHouse codec in PR1. The format should allow them,
+  but implementation should be staged.
+
+## 5. Desired End State
+
+### 5.1 User-Facing Collection Model
+
+Add an opt-in column-store mode to collection metadata:
+
+```go
+type CollectionStorageLayout string
+
+const (
+    CollectionStorageRow      CollectionStorageLayout = ""
+    CollectionStorageColumnar CollectionStorageLayout = "columnar-v1"
+)
+
+type CollectionOptions struct {
+    // existing fields...
+    StorageLayout CollectionStorageLayout `json:"storage_layout,omitempty"`
+    ColumnStore   ColumnStoreOptions      `json:"column_store,omitempty"`
+}
+```
+
+Column-store collections require an explicit schema, even if documents are
+ingested from JSON/BSON/template-v1:
+
+```go
+type ColumnStoreOptions struct {
+    SchemaVersion uint32
+    Columns       []ColumnDefinition
+    PrimaryOrder  []string
+    PartPolicy    ColumnPartPolicy
+    Compression   ColumnCompressionPolicy
+    UpdatePolicy  ColumnUpdatePolicy
+    FastFilters   []FastFilterDefinition
+}
+
+type ColumnDefinition struct {
+    Name         string
+    Path         string
+    Type         ColumnType
+    Nullable     bool
+    Default      ColumnDefault
+    Codec        []ColumnCodecSpec
+    IndexHints   ColumnIndexHints
+}
+
+type ColumnUpdatePolicy struct {
+    MaxDeltaPartRows      int
+    MaxDeltaPartBytes     int64
+    MicroBatchMaxDelay    time.Duration
+    CompactAfterDeltaRows int
+}
+
+type FastFilterDefinition struct {
+    Name        string
+    Columns     []string
+    Kind        FastFilterKind // minmax, set, bloom, token_bloom, ngram_bloom, text
+    GranuleRows int
+    Args        map[string]uint64
+}
+```
+
+The collection can still accept row documents through `InsertBatch`, but the
+preferred high-throughput API is direct column ingestion:
+
+```go
+type ColumnBatch struct {
+    RowCount int
+    Columns  []ColumnVector
+}
+
+func (c *Collection) InsertColumnBatch(ids [][]byte, batch ColumnBatch) error
+```
+
+The row APIs remain available:
+
+- `Get`
+- `ScanDocuments`
+- `FindByIndexRange`
+- existing JSON materialization helpers
+
+The new APIs expose columnar access:
+
+```go
+type ColumnProjection struct {
+    Columns []string
+}
+
+type ColumnScanOptions struct {
+    Projection ColumnProjection
+    LowerID    []byte
+    UpperID    []byte
+    Limit      int
+    Predicate  ColumnPredicate
+    BatchRows  int
+}
+
+type BorrowedColumnBatch struct {
+    RowIDs   [][]byte
+    Columns []BorrowedColumnVector
+}
+
+func (c *Collection) ScanColumnBatches(
+    opts ColumnScanOptions,
+    fn func(BorrowedColumnBatch) (bool, error),
+) error
+```
+
+The borrowed batch contract should mirror existing borrowed collection APIs:
+slices are valid only until the callback returns and must not be retained or
+modified.
+
+### 5.2 Developer-Facing Codec API
+
+Expose a low-level codec surface under an internal package first:
+
+```go
+type CodecKind uint8
+
+type CodecSpec struct {
+    Kind CodecKind
+    Args []uint64
+}
+
+type ColumnCodec interface {
+    Kind() CodecKind
+    Flags() CodecFlags
+    MaxEncodedLen(rawLen int) int
+    Encode(dst []byte, col ColumnVector) ([]byte, CodecBlockMeta, error)
+    Decode(dst ColumnVectorBuilder, encoded []byte, meta CodecBlockMeta) error
+}
+```
+
+Column codecs should be testable without a DB. Every owned format must have:
+
+- exact-byte golden tests;
+- round-trip tests;
+- fuzz tests for corrupt input;
+- benchmark fixtures that report raw bytes, encoded bytes, decode rows/sec,
+  encode rows/sec, and allocations.
+
+## 6. Storage Design
+
+### 6.1 Roots
+
+A column-store collection uses the same root-group machinery as current
+collections, with additional roots:
+
+```text
+<collection>/primary          existing primary root semantics
+<collection>/columns/parts    immutable part descriptors
+<collection>/columns/locator  optional primary-id to row-locator map
+<collection>/columns/deletes  tombstones and delete bitmaps
+<collection>/columns/schema   schema evolution descriptors
+<collection>/templates        existing template-v1 root when needed
+<collection>/index-state      existing row-index-state root when needed
+<collection>/secondary/<name> existing secondary roots, column-store aware
+<collection>/filters/<name>   optional reusable fast-filter roots
+```
+
+The first implementation should keep the existing primary root as
+`id -> row-locator`. A row locator is small and B-tree-friendly:
+
+```text
+row_locator :=
+    format_version u8
+    part_id        u64
+    row_ordinal    u32 or u64
+    flags          u8
+```
+
+The primary root preserves point lookup, uniqueness checks, and ordered id
+range scans without scanning part manifests. Later, if primary ids are dense
+and append-ordered, the locator root can be made optional by deriving ranges
+from part descriptors.
+
+### 6.1.1 Secondary Index Contract
+
+Secondary indexes must work for column-store collections from the first indexed
+milestone. The implementation should keep the existing secondary B-tree root
+format and semantics first, then optimize payloads after parity is proven.
+
+Contract:
+
+- secondary index definitions remain collection metadata, independent of the
+  physical row/column storage layout;
+- row ingestion extracts indexed fields while building the `ColumnBatch`;
+- direct vector ingestion builds index runs from the input vectors when an
+  index expression references declared columns;
+- unsupported index expressions may materialize only the fields needed to
+  compute the index expression, not the full document;
+- index keys keep current ordering and uniqueness semantics, typically
+  `<encoded index value>|<primary id>` for nonunique indexes and
+  `<encoded index value>` with conflict checks for unique indexes;
+- index values should remain document ids in PR1, with an optional
+  `row_locator` payload later as a point-read accelerator;
+- index scans return primary ids, then the primary locator root maps ids to
+  visible column rows for projected column reads;
+- direct column scans may use a secondary index result as a row-id filter and
+  decode only matching projected granules;
+- updates publish old-index-entry deletes and new-index-entry inserts in the
+  same root group as primary locator changes, column delta-part descriptors,
+  delete bitmaps, and system-root metadata;
+- compaction rewrites column parts but must not change logical secondary index
+  contents unless primary ids or indexed values change.
+
+This gives column-store collections the same correctness surface as existing
+collections while allowing better physical plans later. After parity, low
+cardinality secondary indexes can grow compressed posting-list or bitmap
+payloads, but that is an optimization of the secondary root value, not a new
+logical index model.
+
+### 6.2 Part Descriptors
+
+Column data is immutable. A write publishes one or more parts and installs
+descriptors in a B-tree root.
+
+Part descriptor key:
+
+```text
+collection_part_key :=
+    collection name prefix
+    part_id u64 big-endian
+```
+
+Part descriptor value:
+
+```text
+ColumnPartDescriptor {
+    Version          uint8
+    PartID           uint64
+    PartKind         uint8 // base, insert delta, update delta, compacted
+    SchemaVersion    uint32
+    RowCount         uint32
+    IDLower          []byte
+    IDUpperExclusive []byte
+    CreatedCommitSeq uint64
+    Supersedes       []RowLocatorRange optional
+    Granules         []GranuleDescriptor
+    Columns          []ColumnPartColumnDescriptor
+    DeleteBitmapPtr  optional ValuePtr
+    Stats            PartStats
+}
+```
+
+Granules are row ranges within a part:
+
+```text
+GranuleDescriptor {
+    FirstRow      uint32
+    RowCount      uint32
+    IDLower       []byte
+    IDUpper       []byte
+    MarkOrdinal   uint32
+}
+```
+
+Column descriptors contain value-log pointers to compressed streams:
+
+```text
+ColumnPartColumnDescriptor {
+    ColumnID      uint32
+    Type          ColumnType
+    Substreams    []ColumnSubstreamDescriptor
+    MinMax        optional typed min/max per granule
+    NullCount     []uint32
+    DefaultCount  []uint32
+    CompressedBytes   uint64
+    UncompressedBytes uint64
+}
+```
+
+### 6.3 Value-Log Layout
+
+Each column part writes one or more value-log records. The preferred first
+format is a single `TCS1` record per column substream per part. Large columns
+may split into multiple records by granule range.
+
+Envelope:
+
+```text
+TCS1 record payload :=
+    magic              byte[4] = "TCS1"
+    version            u8 = 1
+    flags              u8
+    column_id          u32 little-endian
+    logical_type       u16 little-endian
+    row_count          u32 little-endian
+    granule_count      u32 little-endian
+    substream_kind     u8
+    pipeline_count     u16 little-endian
+    pipeline_table     repeated CodecPipelineDescriptor
+    block_count        u32 little-endian
+    block_directory    repeated ColumnBlockDirectoryEntry
+    block_payloads     bytes
+```
+
+Pipeline table:
+
+```text
+CodecPipelineDescriptor {
+    PipelineID   uint16
+    CodecCount   uint8
+    Codecs       repeated CodecSpec
+}
+```
+
+The stream must always include a raw pipeline:
+
+```text
+PipelineID=0, Codecs=[NONE]
+```
+
+Additional pipelines represent the column-selected default and any adaptive
+alternatives. A block chooses one pipeline by id. This is required because
+compression admission can reject one block as incompressible while keeping
+compression for neighboring blocks in the same column stream.
+
+Block directory:
+
+```text
+ColumnBlockDirectoryEntry {
+    FirstRow          uint32
+    RowCount          uint32
+    PipelineID        uint16
+    Reserved          uint16
+    CodecOffset       uint64
+    CodecSize         uint32
+    RawSize           uint32
+    ChecksumCRC32C    uint32
+    MinMaxOffset      uint32 optional by flags
+}
+```
+
+The value-log record already has a CRC32C over record header and payload.
+`ChecksumCRC32C` in each block is still useful because a reader may decode one
+block after slicing a larger value-log payload. This avoids requiring a full
+column stream scan to validate one projected block. A later format can use
+xxhash128 or CityHash128 if evidence shows CRC32C is too weak for the block
+slice use case.
+
+`TCS1` payload records should bypass value-log frame compression or be written
+through a value-log class that is known to contain already-compressed column
+blocks. Double compression must be treated as a bug unless an explicit test
+demonstrates a workload where an outer dictionary layer improves wall time.
+
+### 6.4 Granules, Blocks, and Marks
+
+Borrow these ClickHouse defaults unless benchmark evidence changes them:
+
+- default granule: 8192 rows;
+- minimum compression block target: 64 KiB raw;
+- maximum compression block target: 1 MiB raw;
+- compact/write-small parts may group several columns into one value-log
+  record, but mature parts should favor independent column records;
+- marks record row range plus compressed offset and decoded offset.
+
+A granule is the smallest unit for skipping. A codec block is the smallest unit
+for decompression. They should usually align, but the format must allow one
+granule to contain multiple codec blocks for very wide strings and one codec
+block to contain several tiny granules for narrow booleans.
+
+### 6.5 Substreams
+
+Each logical column can have multiple physical substreams:
+
+| Logical type | Substreams |
+|---|---|
+| nullable scalar | `nullmap`, `values` |
+| bool | `nullmap`, `bits` or `values` |
+| integer/date/time | `nullmap`, `values` |
+| float | `nullmap`, `values` |
+| string bytes | `nullmap`, `offsets`, `chars`, optional `dictionary` |
+| low-cardinality string | `nullmap`, `keys`, `dictionary` |
+| array | `nullmap`, `offsets`, element substreams |
+| object/map later | `paths`, `offsets`, typed value substreams |
+
+Specialized numeric codecs must never be applied to structural substreams such
+as null maps, offsets, lengths, dictionary keys, or sparse-default positions
+unless the codec is explicitly defined for that structural stream. This follows
+ClickHouse's `only_generic` rule for `NullMap`, `ArraySizes`, `StringSizes`,
+`DictionaryIndexes`, and `SparseOffsets`.
+
+### 6.6 Physical Vector Encoding
+
+All integer values in `TCS1` are little-endian unless a substream explicitly
+states otherwise. Column vectors use these canonical raw layouts before codecs
+run:
+
+```text
+fixed_width_values :=
+    value[0] value[1] ... value[n-1]
+
+nullmap :=
+    bitset, one bit per row, 1 means null
+
+bool_values :=
+    bitset, one bit per row, 1 means true
+
+string_offsets :=
+    uint32_le offsets[n+1], offsets[0] = 0
+
+string_chars :=
+    byte[offsets[n]]
+
+dictionary_keys :=
+    uint8/uint16/uint32 keys[n], width selected by cardinality
+
+dictionary_values :=
+    string_offsets + string_chars for distinct values in key order
+
+sparse_default :=
+    default_value
+    non_default_count uint32
+    positions_delta_varint[non_default_count]
+    non_default_values substream
+```
+
+The default fixed-width alignment is byte-packed with no padding between
+values. Codecs that need a wider interpretation, such as `Delta(8)` or
+`T64`, receive the logical width from the column type and must reject
+misaligned raw byte counts.
+
+String values are never stored as per-row length-prefixed blobs in the column
+format. They must use offsets plus chars, or dictionary keys plus dictionary
+values, so projected scans can skip char bytes when evaluating null/default or
+dictionary predicates.
+
+### 6.7 Mutable Writes, Updates, and Deletes
+
+Column parts are immutable: do not patch compressed blocks in place. But an
+update must still rewrite the changed rows into column-store format immediately.
+The durable update representation is a replacement column delta part plus
+visibility changes, not a permanent row-oriented overlay.
+
+Update model:
+
+1. Insert batches build immutable base or insert-delta parts.
+2. An update resolves current `id -> row_locator` entries and reads only the
+   columns needed by the update expression plus indexed columns whose values
+   may change.
+3. The updater builds a replacement `ColumnBatch` for changed rows.
+4. The part builder writes that batch as one or more update-delta column parts
+   using the same `TCS1` substreams, codecs, checksums, marks, and statistics
+   as normal parts.
+5. The write publishes, in one root group:
+   - new update-delta part descriptors;
+   - primary locator changes from old rows to replacement rows;
+   - delete bitmap/tombstone entries that hide old row locators;
+   - secondary index deletes for old indexed values;
+   - secondary index inserts for new indexed values.
+6. Reads see the newest primary locator for each id and treat tombstoned
+   locators as invisible.
+7. Maintenance compacts base parts, insert deltas, update deltas, and delete
+   bitmaps into new base parts.
+8. Old parts become unreachable and are reclaimed by existing value-log GC or
+   rewrite after snapshots release them.
+
+Small foreground updates can batch in memory briefly to amortize part-builder
+overhead, but the crash-recoverable representation must be columnar. A row
+object may exist only as a transient planning/update-evaluation value.
+
+Update pseudocode:
+
+```text
+update_rows(snapshot, ids, update_fn):
+    old_rows = read_projected_columns(snapshot, ids, update_fn.required_columns)
+    new_rows = apply_update_fn(old_rows)
+    changed = filter_rows_where_new_row_differs(old_rows, new_rows)
+    if changed.empty:
+        return
+
+    old_index_values = compute_secondary_values(old_rows, affected_indexes)
+    new_index_values = compute_secondary_values(new_rows, affected_indexes)
+
+    delta_parts = build_column_parts(changed.ids, changed.column_batch,
+                                    kind=update_delta)
+    root_group = new_root_group()
+    root_group.add_part_descriptors(delta_parts)
+    root_group.add_primary_locator_puts(delta_parts.locators)
+    root_group.add_delete_tombstones(old_rows.locators)
+    root_group.add_secondary_deletes(old_index_values, changed.ids)
+    root_group.add_secondary_puts(new_index_values, changed.ids)
+    publish(root_group)
+```
+
+Deletes are the same visibility mechanism without replacement rows: publish
+tombstones/delete bitmap updates, remove secondary index entries, and leave
+the old column bytes to snapshot-safe GC/rewrite after compaction.
+
+### 6.8 Schema Evolution
+
+Schema changes create new schema versions. A part is always written with one
+schema version. Readers resolve missing columns by column defaults and
+materialize old parts through a versioned schema adapter.
+
+Rules:
+
+- adding nullable or defaulted columns is metadata-only for old parts;
+- dropping a column hides it from projections but does not rewrite old parts
+  until maintenance;
+- changing type creates a new column id and an adapter if safe;
+- codec changes affect only new parts until recompression maintenance.
+
+## 7. Compression Design
+
+### 7.1 Codec Pipeline Model
+
+Use ClickHouse's separation between transforms and generic compressors:
+
+```text
+typed transform(s) -> generic compression -> optional encryption later
+```
+
+Initial pipeline validation:
+
+- `NONE` cannot be combined with other codecs.
+- Generic compression must be the last non-encryption stage.
+- Encryption, if added later, must be last.
+- Type-specific transforms require compatible logical types.
+- Structural substreams are generic-only unless explicitly whitelisted.
+- Experimental codecs require an explicit option.
+
+Persist the complete codec spec in the column part descriptor. Do not rely only
+on method bytes because parameters such as zstd level, T64 mode, or inferred
+width must survive reopen and maintenance.
+
+Encoding pseudocode:
+
+```text
+encode_column_block(raw_vector, candidate_pipelines):
+    best = raw_pipeline
+    best_bytes = raw_vector.bytes
+
+    for pipeline in candidate_pipelines excluding raw:
+        if !pipeline.compatible(raw_vector.type, raw_vector.substream):
+            continue
+        tmp = raw_vector.bytes
+        for codec in pipeline.codecs:
+            tmp = codec.encode(tmp, raw_vector.logical_meta)
+        if admission_accepts(raw_len=len(raw_vector.bytes),
+                             encoded_len=len(tmp),
+                             header_len=pipeline_header_cost):
+            if len(tmp) < len(best_bytes):
+                best = pipeline
+                best_bytes = tmp
+
+    return best.pipeline_id, best_bytes
+```
+
+Decoding pseudocode:
+
+```text
+decode_column_block(encoded, pipeline_id, dst_vector):
+    pipeline = stream.pipeline_table[pipeline_id]
+    tmp = encoded
+    for codec in reverse(pipeline.codecs):
+        tmp = codec.decode(tmp, dst_vector.logical_meta)
+    append tmp into dst_vector
+```
+
+Transform codecs operate on raw substream bytes and typed metadata. They do
+not allocate Go objects per row. Generic codecs operate on byte slices.
+
+### 7.2 Proposed Codec IDs
+
+Use a TreeDB-specific method byte space for `TCS1`; do not reuse ClickHouse
+method bytes as persistent identifiers unless the payload is byte-compatible.
+
+| ID | Codec | Stage | PR target |
+|---:|---|---|---|
+| `0x00` | `NONE` | generic/raw | PR1 |
+| `0x01` | `LZ4` | generic | PR2 |
+| `0x02` | `ZSTD` | generic | PR2 |
+| `0x10` | `BITPACK` | typed/structural | PR3 |
+| `0x11` | `RLE` | typed/structural | PR3 |
+| `0x12` | `DELTA` | numeric transform | PR3 |
+| `0x13` | `DOUBLE_DELTA` | numeric transform | PR4 |
+| `0x14` | `GCD` | numeric transform | PR4 |
+| `0x15` | `T64` | integer transform | PR4 |
+| `0x20` | `GORILLA` | float transform | PR5 |
+| `0x21` | `FPC` | float transform | PR5 |
+| `0x22` | `ALP` | experimental float transform | PR6 |
+| `0x30` | `DICT_STRING` | string transform | PR3 |
+| `0x31` | `SPARSE_DEFAULT` | sparse/default transform | PR3 |
+
+### 7.3 ClickHouse Codec Application
+
+Apply these ClickHouse techniques directly:
+
+- `Delta`: for integer/date/time columns where adjacent values are smooth.
+- `DoubleDelta`: for timestamp-like or monotonically increasing series.
+- `GCD`: for integer/decimal values with common scaling factors.
+- `T64`: for integer ranges whose high bits are stable within a block.
+- `Gorilla`/`FPC`: for slowly changing float metrics.
+- `ALP`: experimental for decimal-like floats after the codec framework is
+  proven.
+- `Sparse`: when default/null ratio exceeds a threshold. Start with
+  ClickHouse's `0.9375` default ratio as a candidate, then tune.
+- `ZSTD`: for cold/compacted parts or columns with high ratio wins.
+- `LZ4`: default low-CPU generic codec for hot parts.
+
+TreeDB should not blindly port every algorithm before the storage format is
+stable. The staged path should first prove the codec pipeline and block
+directory with `NONE`, `LZ4`, `ZSTD`, bool bitpacking, integer delta, strings,
+and sparse/default encoding.
+
+### 7.4 Compression Selection
+
+Selection priority:
+
+1. Column-level codec in `ColumnDefinition`.
+2. Collection-level `ColumnCompressionPolicy`.
+3. Profile default (`fast`, `wal_on_fast`, `durable`, `bench`).
+4. Engine default.
+
+Suggested defaults:
+
+- Hot ingest: `LZ4` or `NONE` if sampled data is incompressible.
+- Compacted parts: `ZSTD(1..3)` plus typed transforms where profitable.
+- Marks/descriptors: `ZSTD(3)` equivalent or TreeDB's existing zstd fastest
+  dictionary path if a dictionary wins.
+- Structural substreams: `LZ4`/`ZSTD`, bitpack/RLE for null maps and booleans.
+
+Selection should be block-local but policy-driven:
+
+- the collection chooses candidate pipelines;
+- the part builder samples early blocks to seed a selector;
+- every block can still fall back to raw through `PipelineID=0`;
+- maintenance can rewrite old parts with stronger candidate pipelines;
+- a high-entropy block can bypass compression without changing the column's
+  configured default.
+
+Maintenance should support recompression:
+
+```go
+type ColumnRecompressionPolicy struct {
+    MinPartAge        time.Duration
+    MinPartBytes      int64
+    TargetProfile     string // "hot", "warm", "cold"
+    CodecOverrides    map[string][]CodecSpec
+}
+```
+
+This is the TreeDB equivalent of ClickHouse TTL recompression and server-level
+compression selectors.
+
+### 7.5 Compression Admission
+
+Never keep compressed bytes when they expand data. Also require a minimum
+savings margin to avoid storing barely-smaller blocks that cost CPU:
+
+```text
+keep = encoded_size + header_size + min_savings < raw_size
+```
+
+Start with existing TreeDB practices:
+
+- minimum payload bytes before generic compression;
+- minimum savings bytes;
+- high-entropy probes for LZ4-like paths;
+- PAUSED/probe state for repeated incompressible blocks;
+- wall-time autotune for hot value-log compression.
+
+For column parts, add per-column block statistics:
+
+- attempted blocks;
+- kept blocks;
+- raw bytes;
+- compressed bytes;
+- encode ns;
+- decode ns;
+- selected codec;
+- rejected reason.
+
+## 8. Read Path
+
+### 8.1 Point Lookup
+
+Point lookup by id:
+
+1. Read `id -> row_locator` from the primary B-tree.
+2. Check delete bitmap/tombstone visibility for the locator.
+3. Read the part descriptor from descriptor cache or B-tree.
+4. Decode only projected columns for the row's granule.
+5. Materialize a row document only if the caller used row APIs.
+
+The first implementation may decode a whole column block to return one row.
+That is acceptable if point lookup remains guarded by benchmarks. Later
+optimizations:
+
+- decoded block cache keyed by `(part_id, column_id, block_ordinal)`;
+- single-row fast paths for uncompressed fixed-width blocks;
+- row materialization cache for hot point reads;
+- optional small-row inline cache in primary locator value.
+
+### 8.2 Column Scan
+
+Column scan:
+
+1. Snapshot collection catalog.
+2. Enumerate visible parts by id range and predicate metadata.
+3. Use min/max, null count, default count, and optional bloom/zone maps to skip
+   granules.
+4. Decode only projected columns.
+5. Call the borrowed callback with a vector batch.
+6. Apply delete bitmaps and row-id filters produced by secondary indexes or
+   fast filters.
+
+Update-delta parts are normal column parts for reads. They may be smaller and
+more numerous than compacted base parts, but they use the same marks,
+substreams, codecs, and visibility rules.
+
+A vector batch should expose:
+
+- typed value slices for fixed-width types;
+- string offsets and char bytes for string columns;
+- null bitmap;
+- row id vector;
+- release callback for pooled decode buffers.
+
+### 8.3 Predicate Pushdown
+
+Initial pushdown:
+
+- primary id range;
+- equality/range on secondary index through existing index roots;
+- min/max per granule for typed columns;
+- null-only/non-null checks;
+- default-only checks for sparse columns.
+
+Later pushdown:
+
+- dictionary membership for low-cardinality strings;
+- set indexes for low-cardinality granules;
+- bloom filters for high-cardinality exact membership;
+- token bloom filters for tokenized text, tags, and arrays;
+- ngram bloom filters for substring and LIKE-style predicates;
+- text/posting-list filters for workloads that need fewer false positives than
+  bloom filters;
+- vectorized predicate evaluation on decoded batches;
+- conjunctive predicate planning across secondary indexes and column stats.
+
+### 8.4 Fast Filters and Reusable Haystack Search
+
+ClickHouse has several fast pruning/search families worth importing as
+algorithms, not as SQL-only features:
+
+- `minmax`: store comparable min/max per granule and reject impossible ranges;
+- `set`: store the distinct values for a granule until a configured maximum,
+  then mark the granule unknown;
+- `bloom_filter`: probabilistic exact-membership filter for scalar or byte
+  values;
+- `tokenbf_v1`: tokenize text-like inputs and bloom-filter the tokens;
+- `ngrambf_v1` and `sparse_grams`: bloom-filter byte ngrams for substring and
+  LIKE-style predicates;
+- `text`: dictionary plus posting-list style index for workloads that need
+  stronger text filtering than bloom filters;
+- byte-haystack searchers: compiled single-needle and multi-needle substring
+  search, following ClickHouse's `StringSearcher`, `Volnitsky`, and
+  `MultiVolnitsky` style of precomputing search state and scanning many
+  haystacks with low per-row overhead.
+
+TreeDB should expose these through a reusable internal filter/search package
+that can serve every collection layout:
+
+```go
+type ValueSource interface {
+    RowCount() int
+    TypedVector(column string) (ColumnVector, bool)
+    ByteHaystack(column string, row int, dst []byte) ([]byte, bool)
+}
+
+type FastFilter interface {
+    BuildGranule(src ValueSource, rows RowRange) (FastFilterGranule, error)
+    MayMatch(granule FastFilterGranule, pred Predicate) TriState
+    ApplyBatch(src ValueSource, pred Predicate, dst *Bitset) error
+}
+
+type ByteSearcher interface {
+    Match(haystack []byte) bool
+    MatchBatch(src ValueSource, column string, dst *Bitset) error
+}
+```
+
+Column-store collections can build filters directly from column vectors and
+store filter granules beside part descriptors or in `TCS1` side streams.
+Row-store, BSON, and template-v1 collections can build the same filter granules
+from row iteration, extracted fields, or whole-document byte haystacks. The
+algorithm package should not know which layout produced the values.
+
+Haystack search must be generic over "bytes to search", not limited to string
+columns:
+
+- string and `[]byte` columns expose their raw bytes;
+- arrays/tags expose each element as a token stream for token bloom and
+  multi-search;
+- template-v1 or BSON rows can expose one field, a projected subdocument, or
+  the whole encoded document as the haystack;
+- scalar values may expose a canonical byte encoding only for explicit
+  "encoded contains" predicates. Numeric range/equality predicates should use
+  typed filters, not accidental decimal-string substring semantics.
+
+Recommended implementation sequence:
+
+1. Add shared `Bitset`, `TriState`, `ValueSource`, and predicate interfaces.
+2. Implement min/max and set filters for typed vectors.
+3. Implement exact bloom filters for scalar and byte values.
+4. Implement token and ngram extractors that accept any byte haystack source.
+5. Add compiled byte searchers for single-needle and multi-needle predicates.
+6. Wire column-store part pruning first, then reuse the same package for
+   row/template/BSON collection scan acceleration.
+
+The important design point is that filter building and batch evaluation should
+consume typed vectors when available, but fall back to row extraction or byte
+haystack adapters without changing the algorithm implementation.
+
+## 9. Write Path
+
+### 9.1 Row Ingestion
+
+For `InsertBatch(ids, documents)`:
+
+1. Parse/validate documents through the existing format path.
+2. Extract typed schema columns into a `ColumnBatch`.
+3. Build secondary index runs using existing planner logic.
+4. Build one or more column parts.
+5. Build primary locator run.
+6. Publish roots as one ordered root group.
+
+For `InsertColumnBatch`:
+
+1. Validate ids and vector lengths.
+2. Validate types and null/default bitmaps.
+3. Build secondary index state from direct vectors when the index field is
+   projected; fall back to row materialization only for unsupported expressions.
+4. Publish the same roots.
+
+### 9.2 Update Write Path
+
+For `Update` or callback-based mutation APIs:
+
+1. Resolve target ids through the primary root under a snapshot.
+2. Decode only columns required by the update expression and affected secondary
+   indexes.
+3. Apply the mutation and build a replacement `ColumnBatch` for rows that
+   actually changed.
+4. Write the replacement rows as update-delta column parts.
+5. Publish primary locator updates, delete tombstones for old locators,
+   secondary index deletes, secondary index puts, and part descriptors in one
+   root group.
+
+For bulk updates that touch many adjacent ids, the writer may build larger
+delta parts directly. For scattered point updates, the writer may buffer a
+bounded micro-batch before the durable publish. In both cases, once the update
+is durable, the changed row bytes live in the column-store format.
+
+### 9.3 Part Builder
+
+Part builder steps:
+
+1. Sort rows by primary id unless input is declared sorted and verified.
+2. Choose part row count from `ColumnPartPolicy`.
+3. Split into granules.
+4. Build per-column substreams.
+5. Choose codec pipeline per substream.
+6. Encode blocks, applying compression admission.
+7. Write value-log records.
+8. Build part descriptor and primary locator run.
+9. Return ordered root publish inputs.
+
+### 9.4 Parallelism
+
+Borrow ClickHouse's ordered parallel compression pattern:
+
+- column blocks are encoded independently in a worker pool;
+- each block has a sequence number;
+- value-log writes preserve deterministic descriptor order;
+- bounded memory prevents compression workers from outrunning the writer;
+- a direct encode-into-destination path is allowed when there is no pending
+  earlier block.
+
+Use TreeDB's existing benchmark and backpressure style. Do not start with
+unbounded goroutine-per-column behavior.
+
+## 10. Caches and Metadata
+
+Add small bounded caches:
+
+- part descriptor cache by `part_id`;
+- mark cache by `(part_id, column_id)`;
+- decoded block cache by `(part_id, column_id, block_ordinal)`;
+- dictionary cache by dictionary id;
+- schema adapter cache by `(from_version, to_version)`.
+
+ClickHouse practice to copy:
+
+- marks are small and worth compressing on disk but caching decoded in memory;
+- uncompressed block cache should be optional and bounded;
+- seekable readers need compressed offset plus offset inside decoded block;
+- raw/NONE blocks can alias payload bytes and avoid copies when safe.
+
+## 11. Maintenance
+
+Column-store maintenance has three jobs:
+
+1. Compact small parts, update-delta parts, and delete bitmaps into larger
+   base parts.
+2. Recompress hot parts into warm/cold codecs.
+3. Reclaim old value-log records through existing GC/rewrite.
+
+Part compaction algorithm:
+
+```text
+compact_column_parts(snapshot, source_parts, target_policy):
+    acquire snapshot pins for source value-log files
+    build merge iterator over base parts, delta parts, and delete bitmaps
+    emit new row-aligned ColumnBatch chunks
+    encode chunks into new parts using target codec policy
+    publish new descriptors, primary locators, deletes, and system root
+    leave old parts reachable until no snapshots reference old roots
+    let value-log GC/rewrite reclaim old records
+```
+
+A part descriptor must record enough source stats to make maintenance
+observable:
+
+- rows copied;
+- rows deleted;
+- raw bytes read;
+- compressed bytes read;
+- raw bytes written;
+- compressed bytes written;
+- codec transitions;
+- elapsed encode/decode/write time.
+
+## 12. Test Strategy
+
+### 12.1 Format and Codec Tests
+
+Required tests for every format PR:
+
+- exact-byte golden files for block headers and descriptors;
+- round-trip encode/decode for every type;
+- corrupt block fuzzing;
+- unknown codec rejection;
+- checksum mismatch rejection;
+- endian stability;
+- max length and overflow checks;
+- old schema/new schema adapter tests.
+
+### 12.2 Collection Correctness Tests
+
+Required collection tests:
+
+- create/open/reopen column-store collection;
+- `InsertBatch` row ingestion parity with row-store collection;
+- `InsertColumnBatch` direct ingestion;
+- point `Get` parity;
+- `ScanDocuments` parity;
+- `ScanColumnBatches` projection parity;
+- secondary unique and nonunique index parity;
+- delete bitmap and update-delta-part correctness;
+- secondary index correctness after column-store updates and deletes;
+- compaction while snapshots are open;
+- value-log GC does not remove reachable column parts;
+- offline rewrite preserves column locators;
+- schema add/drop/default behavior.
+
+### 12.3 Fuzz and Property Tests
+
+Property tests:
+
+- random schemas, random batches, random nulls/defaults;
+- compare column-store results with an in-memory row map;
+- random updates/deletes and compaction checkpoints;
+- random codec pipelines constrained by validation rules;
+- projection/predicate equivalence with full materialization.
+
+### 12.4 Benchmark Harness
+
+Add a deterministic suite:
+
+```bash
+go run ./cmd/columnstore_bench -suite columnstore -validate
+```
+
+Required output:
+
+- docs/sec;
+- ns/doc;
+- scan rows/sec by projection;
+- encoded bytes/doc;
+- raw bytes/doc;
+- compression ratio;
+- encode MB/sec;
+- decode MB/sec;
+- allocations/op;
+- part count and granule count;
+- maintenance rewrite stats.
+
+Extend canonical collections:
+
+```bash
+make bench-collections-canonical
+```
+
+with new rows:
+
+- `treedb_columnstore_collection_0_indexes`
+- `treedb_columnstore_collection_1_indexes`
+- `treedb_columnstore_collection_2_indexes`
+- `treedb_columnstore_collection_3_indexes`
+- `treedb_columnstore_direct_vectors`
+
+## 13. Roadmap and Gates
+
+All gates are relative to the same host and same run unless explicitly marked
+deterministic. Use `benchstat` with `-count=5` for Go microbenchmarks and
+machine-readable validation for deterministic suites.
+
+### Milestone 0: Baseline and Fixtures
+
+Deliverables:
+
+- freeze representative datasets:
+  - collection benchmark document shape from existing tests;
+  - monotonic timestamp/int shape;
+  - low-cardinality strings;
+  - sparse nullable fields;
+  - high-entropy strings;
+  - update/delete churn shape;
+- add `cmd/columnstore_bench` skeleton with row-store/template-v1 baselines;
+- add machine-readable result schema and guardrail checks.
+
+Tests:
+
+- runner config parsing;
+- result schema validation;
+- guardrail failures for missing baseline rows.
+
+Performance gates:
+
+- no product gate yet;
+- benchmark runner overhead under 1 percent on a no-op fixture;
+- results include bytes/doc and docs/sec for every configured row.
+
+### Milestone 1: On-Disk Descriptor and Raw Column Parts
+
+Deliverables:
+
+- `TCS1` envelope and part descriptor structs;
+- raw `NONE` fixed-width scalar columns;
+- primary `id -> row_locator` root;
+- part descriptor root;
+- reopen support.
+
+Tests:
+
+- exact-byte descriptor golden tests;
+- scalar round trips for bool/int64/float64/string-id placeholders;
+- reopen parity;
+- value-log GC reachable-part protection.
+
+Gates:
+
+- raw column-store insert throughput at least 70 percent of row-store
+  template-v1 zero-index insert throughput on the same fixture;
+- raw fixed-width projected scan at least 2.0x faster than `ScanDocuments`
+  materializing template-v1 documents;
+- raw column bytes/doc no more than 1.25x template-v1 zero-index bytes/doc
+  before compression.
+
+### Milestone 2: Generic Compression Blocks
+
+Deliverables:
+
+- codec pipeline registry;
+- `NONE`, `LZ4`, and `ZSTD`;
+- block directory, per-block checksums, min/max raw/compressed accounting;
+- direct decode into caller-owned vector buffers;
+- no-expansion admission.
+
+Tests:
+
+- codec golden tests;
+- corrupt input tests;
+- unknown codec tests;
+- generic-only structural stream validation;
+- direct decode buffer reuse tests.
+
+Gates:
+
+- high-entropy fixture stores raw or near-raw with compression attempt rate
+  bounded under 10 percent after warmup;
+- compressible fixed-width fixture achieves compressed/raw ratio <= 0.55 with
+  LZ4 and <= 0.40 with ZSTD;
+- decode projected fixed-width scan remains at least 1.5x faster than
+  row-document scan;
+- compression-off ceiling loses no more than 10 percent insert throughput from
+  Milestone 1.
+
+### Milestone 3: Strings, Nulls, Booleans, and Sparse Defaults
+
+Deliverables:
+
+- null map substream;
+- bool bitpack/RLE;
+- string offsets/chars substreams;
+- low-cardinality string dictionary blocks;
+- sparse/default encoding with a threshold starting at 0.9375;
+- JSON/BSON/template-v1 row ingestion into typed vectors.
+
+Tests:
+
+- null/default parity;
+- string offset corruption fuzzing;
+- low-cardinality dictionary round trip;
+- sparse threshold selection;
+- row ingestion parity against current collection APIs.
+
+Gates:
+
+- boolean columns encode to <= 0.08 bytes/value before generic compression;
+- sparse default fixture stores <= 0.20x raw bytes when defaults >= 95 percent;
+- low-cardinality string fixture stores <= 0.35x raw bytes after dictionary
+  plus generic compression;
+- row-ingest indexed insert throughput at least 60 percent of template-v1
+  indexed insert throughput, while direct-vector insert reaches at least 90
+  percent of template-v1 zero-index throughput.
+
+### Milestone 4: Integer Time-Series Codecs
+
+Deliverables:
+
+- Delta;
+- DoubleDelta;
+- GCD;
+- T64 byte mode;
+- codec selection heuristics by column stats;
+- maintenance recompression from hot defaults to cold codecs.
+
+Tests:
+
+- exact-byte tests for each owned transform;
+- width inference tests;
+- overflow/wrap tests;
+- structural-stream rejection tests;
+- recompression preserves query results.
+
+Gates:
+
+- monotonic timestamp fixture ratio <= 0.10 with DoubleDelta + generic
+  compression;
+- scaled decimal/integer fixture ratio <= 0.25 with GCD + generic compression;
+- narrow-range integer fixture ratio <= 0.20 with T64 + generic compression;
+- encode throughput for these transforms at least 250 MB/sec per core on the
+  deterministic microbench fixture or no worse than 25 percent below generic
+  compression for the same ratio class.
+
+### Milestone 5: Projection and Predicate Pushdown
+
+Deliverables:
+
+- `ScanColumnBatches`;
+- min/max granule pruning;
+- null/default pruning;
+- secondary-index-to-column-batch scan path;
+- shared fast-filter interfaces for typed vectors and byte haystacks;
+- set and exact bloom filters;
+- token and ngram bloom filters for byte-haystack predicates;
+- compiled single-needle and multi-needle byte searchers;
+- decoded block cache;
+- mark cache.
+
+Tests:
+
+- projected scan parity;
+- range predicate parity;
+- secondary index scan parity for row ingestion and direct vector ingestion;
+- secondary-index-to-column projection parity;
+- fast-filter false-negative tests;
+- filter adapter parity across column-store, row-store, template-v1, and BSON
+  fixtures where the same logical fields exist;
+- byte-haystack search parity for string fields, byte fields, arrays/tags, and
+  whole-document adapters;
+- limit behavior;
+- borrowed-slice lifetime tests;
+- cache hit/miss accounting tests.
+
+Gates:
+
+- one-column full scan >= 3.0x row-document scan rows/sec;
+- three-column full scan >= 2.0x row-document scan rows/sec;
+- range predicate with 90 percent granule pruning >= 5.0x unpruned scan
+  rows/sec;
+- negative exact-membership bloom probes prune >= 90 percent of eligible
+  granules at the configured false-positive target on the deterministic
+  fixture;
+- multi-needle byte search over a batch is at least 2.0x faster than compiling
+  per row for the same haystacks and needles;
+- projected scan allocations <= 0.25 allocations per 1000 rows in borrowed API
+  steady state.
+
+### Milestone 6: Updates, Deletes, and Delta-Part Compaction
+
+Deliverables:
+
+- update-delta column parts;
+- delete bitmap handling;
+- compaction from base parts, delta parts, and delete bitmaps into new base
+  parts;
+- snapshot-safe publish and GC integration;
+- online and offline maintenance hooks.
+
+Tests:
+
+- randomized update/delete parity;
+- updated rows are durably stored in column parts after reopen, with no
+  permanent row-overlay dependency;
+- compaction with active snapshots;
+- crash/reopen around compaction publish;
+- value-log GC/rewrite after compaction;
+- unique secondary correctness after updates.
+
+Gates:
+
+- foreground random update throughput with update-delta column parts at least
+  70 percent of current row-store update path for the same indexed shape;
+- update-delta part count is bounded by the configured micro-batch policy and
+  does not grow one durable part per row under the default bulk-update path;
+- compacted bytes/doc after 30 percent churn no more than 1.20x compacted
+  insert-only bytes/doc;
+- compaction reclaims at least 80 percent of bytes made unreachable in a
+  deterministic churn fixture.
+
+### Milestone 7: Float Codecs and Experimental ALP
+
+Deliverables:
+
+- Gorilla;
+- FPC;
+- optional ALP behind `AllowExperimentalColumnCodecs`;
+- float codec selector.
+
+Tests:
+
+- NaN/Inf/negative-zero behavior;
+- exact round trips for Float32/Float64;
+- ALP fallback-to-raw cases;
+- codec selector avoids bad float codecs.
+
+Gates:
+
+- slowly changing float fixture ratio <= 0.35 with Gorilla or FPC;
+- decimal-like float fixture ratio <= 0.25 with ALP where exact
+  integerization applies;
+- random float fixture stores raw/generic and does not waste more than 10
+  percent insert CPU after warmup.
+
+### Milestone 8: Production Profiles and Canonical Comparison
+
+Deliverables:
+
+- profile defaults for durable/fast/wal_on_fast/bench;
+- persisted `format.json` extension for column-store format knobs;
+- canonical benchmark integration;
+- operational docs.
+
+Tests:
+
+- profile normalization;
+- env override conflict checks;
+- format config load/apply;
+- canonical report guardrails.
+
+Gates:
+
+- two-index direct-vector column-store insert >= 80 percent of template-v1
+  two-index insert docs/sec;
+- two-index row-ingest column-store insert >= 65 percent of template-v1
+  two-index insert docs/sec;
+- compacted bytes/doc <= 75 percent of template-v1 compacted bytes/doc on the
+  typed benchmark fixture;
+- projected analytical scans >= 3x row-store scans;
+- high-entropy fixture compacted bytes/doc <= 1.10x row-store bytes/doc.
+
+## 14. Best Practices to Import from ClickHouse
+
+1. Use granules and marks as first-class storage objects.
+2. Store enough mark metadata to seek without scanning prior compressed blocks.
+3. Separate logical columns into physical substreams.
+4. Strip specialized codecs from structural substreams.
+5. Persist codec descriptions, not just method bytes.
+6. Validate codec pipelines before writing data.
+7. Use fast defaults for hot data and stronger compression during maintenance.
+8. Keep block sizes bounded: small enough for selective reads, large enough for
+   compression ratio.
+9. Cache marks and optionally cache decoded blocks.
+10. Decode directly into caller buffers when the caller consumes a whole block.
+11. Avoid copies for raw/NONE blocks when lifetime makes aliasing safe.
+12. Parallelize compression but preserve deterministic write order.
+13. Treat sparse/default-heavy columns as a storage kind, not merely a codec.
+14. Recompress through maintenance instead of making foreground writes choose
+    cold-storage codecs.
+15. Keep operational stats for raw bytes, compressed bytes, codec choices,
+    skipped granules, and cache hit rates.
+16. Keep skip indexes and byte-haystack searchers as reusable algorithms with
+    storage-layout adapters.
+17. Use set, bloom, token bloom, ngram bloom, and text/posting-list filters as
+    staged pruning layers before decoding full column blocks.
+
+## 15. Risks and Mitigations
+
+| Risk | Mitigation |
+|---|---|
+| Point lookup becomes slower because a whole block is decoded for one row. | Primary locator root, decoded block cache, optional inline hot-row cache, and explicit point-read gates. |
+| Random updates cause write amplification. | Write changed rows into bounded update-delta column parts, batch scattered point updates where allowed, and compact asynchronously. |
+| Compression burns CPU on incompressible data. | No-expansion admission, high-entropy probes, PAUSED/probe autotune, and per-column stats. |
+| Schema evolution makes old parts hard to read. | Version every part and use schema adapters with golden tests. |
+| Secondary indexes duplicate too much data. | Keep current secondary root format first; later consider optional row-locator payloads, compressed posting-list values, or bitmap payloads for low-cardinality shapes. |
+| Secondary indexes drift from column-store visibility after updates. | Publish secondary deletes/inserts, primary locator changes, part descriptors, and delete bitmaps in the same root group; test crash/reopen and active snapshots. |
+| Fast filters produce wrong answers. | Treat filters as pruning only, use tri-state `MayMatch`, forbid false negatives in property tests, and always verify matches on decoded rows or exact secondary entries. |
+| Haystack search semantics become confusing for non-string types. | Require explicit byte-haystack adapters; use typed filters for numeric equality/range and reserve encoded-byte substring search for explicit predicates. |
+| Value-log GC deletes live column parts. | Descriptors and locators are normal roots; GC reachability must scan their ValuePtrs, with tests. |
+| Borrowed vector API is unsafe for general users. | Provide safe materializing APIs and document borrowed lifetime like existing borrowed APIs. |
+| ClickHouse codecs are overfit for analytical time series. | Stage codecs and keep generic compression as the baseline; require dataset-specific gates before enabling selectors. |
+| Format churn blocks development. | TreeDB is pre-alpha; isolate format in `TCS1` and exact-byte tests. |
+
+## 16. Open Questions
+
+1. Should the primary root map id to row locator only, or should it also keep a
+   small inline materialized row for hot point reads?
+2. Should part descriptors live entirely in a B-tree value, or should large
+   mark arrays be stored in the value log with descriptor pointers?
+3. Should column parts be sorted by primary id only, or allow alternate sort
+   keys per collection?
+4. Should secondary index values stay id-only forever, or should a later format
+   add optional row-locator payloads as a point-read cache?
+5. Should compaction preserve part-level physical clustering by primary id,
+   insertion order, or a configured sort key?
+6. Which ZSTD implementation should be used for generic column blocks:
+   existing `snissn/compress/zstd`, `klauspost/compress/zstd`, or both behind
+   a small interface?
+7. Should `TCS1` use CRC32C only, or add a 128-bit checksum for compressed
+   block payloads after the format proves useful?
+8. Which fast-filter metadata belongs inside `TCS1` side streams versus shared
+   `filters/<name>` roots used by non-column collection layouts?
+9. Which byte-haystack adapters should be enabled by default for BSON and
+   template-v1: field-only, whole-document, or both behind explicit options?
+
+## 17. Adversarial Review and Applied Fixes
+
+This section records the review pass performed before finalizing this draft.
+
+Finding: The first naive design would store compressed column blocks directly
+behind primary ids, which would make updates rewrite blocks and break snapshot
+efficiency.  
+Fix: The proposal uses immutable base parts, update-delta column parts,
+delete bitmaps, and maintenance compaction. Changed rows are rewritten into
+column-store format immediately, while old compressed blocks remain immutable
+until compaction and GC.
+
+Finding: A pure column part directory would make point lookup require part
+searches.  
+Fix: The proposal keeps an explicit primary `id -> row_locator` B-tree root.
+
+Finding: Reusing ClickHouse method bytes would imply byte compatibility the Go
+implementation may not provide.  
+Fix: The proposal uses TreeDB-specific codec ids while importing algorithms and
+validation rules.
+
+Finding: Applying `Delta`, `T64`, or float codecs to null maps and offsets
+would corrupt structural streams.  
+Fix: The proposal imports ClickHouse's generic-only structural substream rule.
+
+Finding: A column scan API could accidentally make borrowed slices escape or be
+used after callback return.  
+Fix: The proposal defines both safe materialized APIs and borrowed callback
+APIs with explicit lifetime rules.
+
+Finding: Compression-only gates could reward small output even when throughput
+collapses.  
+Fix: Every milestone combines compression gates with throughput and allocation
+gates.
+
+Finding: The existing template-v1 layout is already very compact on benchmark
+fixtures, so absolute size claims could be misleading.  
+Fix: Gates are relative to same-run baselines and include high-entropy fallback
+requirements.
+
+Finding: Existing value-log CRC might be enough, making block checksums look
+duplicative.  
+Fix: The proposal keeps per-block CRC32C because projected reads may slice a
+larger value-log record, but leaves a stronger checksum as an open question.
+
+Finding: A direct column-store path could bypass secondary index correctness.  
+Fix: Direct vector insertion still builds existing secondary root runs and
+preserves current unique/nonunique index semantics.
+
+Finding: Existing value-log compression and column-store compression could
+double-compress the same bytes.  
+Fix: `TCS1` column block compression should write its encoded bytes as payloads
+and mark those value-log records/classes as already-compressed for outer value
+log compression, or use raw value-log records for column-part payloads. This
+must be enforced in Milestone 2 tests.
+
+Finding: Secondary indexes could work for inserts but become stale after
+column-store updates.  
+Fix: Updates now publish old secondary-entry deletes, new secondary-entry
+puts, primary locator changes, delta-part descriptors, and tombstones in one
+root group.
+
+Finding: Adding ClickHouse-style fast filters only to column parts would leave
+row-store, BSON, and template-v1 collections unable to benefit.  
+Fix: The RFC adds shared filter/search interfaces with typed-vector and
+byte-haystack adapters so the same minmax, set, bloom, token, ngram, text, and
+searcher algorithms can serve multiple layouts.
+
+Finding: Generalizing string haystack algorithms to other types can create
+bad semantics if numeric values are searched as decimal strings by accident.  
+Fix: Haystack adapters are explicit. String/bytes/document/token predicates
+use byte searchers; numeric equality and range use typed filters.
+
+## 18. Completion Criteria for the Proposal
+
+This RFC is complete when a reviewer can answer:
+
+- what the end-state API looks like;
+- how the B-tree remains central;
+- where column bytes are stored;
+- how compression is represented and selected;
+- how ClickHouse practices are mapped into TreeDB;
+- how secondary indexes work with column-store inserts, scans, updates,
+  deletes, and compaction;
+- how reusable fast filters and byte-haystack searchers apply to column-store
+  and other collection layouts;
+- how reads, writes, updates, deletes, compaction, and GC work;
+- what tests are required;
+- what performance and compression gates apply to every milestone.
