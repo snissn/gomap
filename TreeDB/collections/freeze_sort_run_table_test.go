@@ -136,6 +136,71 @@ func TestFreezeSortRunTableApplyStealEntryFunc(t *testing.T) {
 	}
 }
 
+func TestFreezeSortRunTableReleaseReusesClearedEntryScratch(t *testing.T) {
+	resetFreezeSortRunTablePoolForTest(t)
+
+	table := newFreezeSortRunTable().(*freezeSortRunTable)
+	for i := 0; i < 16; i++ {
+		table.SetEntrySteal([]byte{byte('a' + i)}, []byte("old"), page.ValuePtr{}, node.FlagInline)
+	}
+	table.Freeze()
+	if table.Len() != 16 {
+		t.Fatalf("table Len=%d want 16 before release", table.Len())
+	}
+	capBefore := cap(table.entries)
+
+	table.Release()
+	table.Release()
+	freezeSortRunTablePool.mu.Lock()
+	pooledTables := len(freezeSortRunTablePool.tables)
+	freezeSortRunTablePool.mu.Unlock()
+	if pooledTables != 1 {
+		t.Fatalf("pooled tables after double release=%d want 1", pooledTables)
+	}
+	table.Reset()
+	table.Release()
+	freezeSortRunTablePool.mu.Lock()
+	pooledTables = len(freezeSortRunTablePool.tables)
+	freezeSortRunTablePool.mu.Unlock()
+	if pooledTables != 1 {
+		t.Fatalf("pooled tables after reset/release=%d want 1", pooledTables)
+	}
+
+	reused := newFreezeSortRunTable().(*freezeSortRunTable)
+	if reused != table {
+		t.Fatal("freeze-sort table was not reused from pool")
+	}
+	if reused.Len() != 0 {
+		t.Fatalf("reused table Len=%d want 0", reused.Len())
+	}
+	if reused.Size() != 0 {
+		t.Fatalf("reused table Size=%d want 0", reused.Size())
+	}
+	if reused.frozen {
+		t.Fatal("reused table is still frozen")
+	}
+	if cap(reused.entries) != capBefore {
+		t.Fatalf("reused entry capacity=%d want %d", cap(reused.entries), capBefore)
+	}
+
+	reused.SetEntrySteal([]byte("z"), []byte("new"), page.ValuePtr{}, node.FlagInline)
+	reused.Freeze()
+	requireFreezeSortRunIterator(t, reused.NewIterator(nil, nil), []string{"z"})
+}
+
+func resetFreezeSortRunTablePoolForTest(t *testing.T) {
+	t.Helper()
+	reset := func() {
+		freezeSortRunTablePool.mu.Lock()
+		clear(freezeSortRunTablePool.tables)
+		freezeSortRunTablePool.tables = nil
+		freezeSortRunTablePool.entryCapacity = 0
+		freezeSortRunTablePool.mu.Unlock()
+	}
+	reset()
+	t.Cleanup(reset)
+}
+
 func requireFreezeSortRunIterator(t *testing.T, it interface {
 	Valid() bool
 	Next()

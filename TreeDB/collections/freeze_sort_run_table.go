@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"sort"
 	"sync"
 	"unsafe"
@@ -27,14 +28,39 @@ type freezeSortRunTable struct {
 	latest      map[string]int
 	latestDirty bool
 	frozen      bool
+	released    bool
 	sizeBytes   int64
 	nextSeq     uint64
+}
+
+const (
+	freezeSortRunTableMaxPooledEntryCapacity      = 512 << 10
+	freezeSortRunTableMaxPooledTotalEntryCapacity = 1 << 20
+	freezeSortRunTableMaxPooledTables             = 32
+)
+
+var freezeSortRunTablePool struct {
+	mu            sync.Mutex
+	tables        []*freezeSortRunTable
+	entryCapacity int
 }
 
 // freezeSortRunTable is a collection-write-domain run table optimized for
 // root-local accumulation: writes append cheaply while mutable, and rotation to
 // an immutable flush unit pays the sort/coalesce cost once.
 func newFreezeSortRunTable() memtable.Table {
+	freezeSortRunTablePool.mu.Lock()
+	n := len(freezeSortRunTablePool.tables)
+	if n > 0 {
+		t := freezeSortRunTablePool.tables[n-1]
+		freezeSortRunTablePool.tables[n-1] = nil
+		freezeSortRunTablePool.tables = freezeSortRunTablePool.tables[:n-1]
+		freezeSortRunTablePool.entryCapacity -= cap(t.entries)
+		freezeSortRunTablePool.mu.Unlock()
+		t.released = false
+		return t
+	}
+	freezeSortRunTablePool.mu.Unlock()
 	return &freezeSortRunTable{}
 }
 
@@ -101,6 +127,7 @@ func (t *freezeSortRunTable) ApplyStealEntryFunc(count int, emit func(i int) (ke
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.entries = slices.Grow(t.entries, count)
 	for i := 0; i < count; i++ {
 		key, value, ptr, flags, err := emit(i)
 		if err != nil {
@@ -255,14 +282,53 @@ func (t *freezeSortRunTable) Reset() {
 		return
 	}
 	t.mu.Lock()
-	clear(t.entries)
-	t.entries = t.entries[:0]
+	t.resetLocked(false)
+	t.mu.Unlock()
+}
+
+func (t *freezeSortRunTable) Release() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.released {
+		t.mu.Unlock()
+		return
+	}
+	t.resetLocked(true)
+	t.released = true
+	entryCapacity := cap(t.entries)
+	t.mu.Unlock()
+
+	if entryCapacity == 0 || entryCapacity > freezeSortRunTableMaxPooledEntryCapacity {
+		return
+	}
+	freezeSortRunTablePool.mu.Lock()
+	if len(freezeSortRunTablePool.tables) >= freezeSortRunTableMaxPooledTables ||
+		freezeSortRunTablePool.entryCapacity+entryCapacity > freezeSortRunTableMaxPooledTotalEntryCapacity {
+		freezeSortRunTablePool.mu.Unlock()
+		t.mu.Lock()
+		t.entries = nil
+		t.mu.Unlock()
+		return
+	}
+	freezeSortRunTablePool.tables = append(freezeSortRunTablePool.tables, t)
+	freezeSortRunTablePool.entryCapacity += entryCapacity
+	freezeSortRunTablePool.mu.Unlock()
+}
+
+func (t *freezeSortRunTable) resetLocked(dropOversizedEntries bool) {
+	if dropOversizedEntries && cap(t.entries) > freezeSortRunTableMaxPooledEntryCapacity {
+		t.entries = nil
+	} else {
+		clear(t.entries)
+		t.entries = t.entries[:0]
+	}
 	t.latest = nil
 	t.latestDirty = false
 	t.frozen = false
 	t.sizeBytes = 0
 	t.nextSeq = 0
-	t.mu.Unlock()
 }
 
 func (t *freezeSortRunTable) NewIterator(start, end []byte) iterator.UnsafeIterator {
