@@ -44,7 +44,9 @@ func (db *DB) CompactStoragePlan(ctx context.Context, opts CompactStorageOptions
 	if db.backend == nil {
 		return out, ErrClosed
 	}
-	db.applyCachedCompactStorageOptions(&opts, false)
+	if err := db.applyCachedCompactStorageOptions(&opts, false); err != nil {
+		return out, err
+	}
 	return db.backend.CompactStoragePlan(ctx, treedbdb.CompactStorageOptions(opts))
 }
 

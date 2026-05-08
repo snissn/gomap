@@ -80,7 +80,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 		if len(backendOpts.ProtectedPaths) == 0 {
 			// Cached-mode callers may have concurrent writers even when there are
-			// no retained paths yet; pass a non-empty slice to activate the
+			// no protected paths yet; pass a non-empty slice to activate the
 			// backend rewrite's active-segment protection.
 			backendOpts.ProtectedPaths = []string{""}
 		}

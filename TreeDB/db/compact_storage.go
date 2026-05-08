@@ -600,10 +600,16 @@ func zeroByteValueLogFilesFromUsage(usage []CompactStorageUsage, protectedPaths 
 
 func compactStorageValueLogProtectedPaths(opts CompactStorageOptions) []string {
 	if opts.ValueLogProtectedPathsFunc == nil {
+		if len(opts.ValueLogProtectedPaths) == 0 {
+			return []string{""}
+		}
 		return opts.ValueLogProtectedPaths
 	}
 	dynamic := opts.ValueLogProtectedPathsFunc()
 	if len(opts.ValueLogProtectedPaths) == 0 {
+		if len(dynamic) == 0 {
+			return []string{""}
+		}
 		return dynamic
 	}
 	if len(dynamic) == 0 {

@@ -206,6 +206,13 @@ func TestCompactStorageKeepsProtectedZeroByteValueLogFiles(t *testing.T) {
 	}
 }
 
+func TestCompactStorageDefaultProtectedPathsActivatesActiveProtection(t *testing.T) {
+	paths := compactStorageValueLogProtectedPaths(CompactStorageOptions{})
+	if len(paths) != 1 || paths[0] != "" {
+		t.Fatalf("default protected paths=%q want sentinel", paths)
+	}
+}
+
 func TestCompactStoragePlanReadOnlyDoesNotDeleteZeroByteValueLogFiles(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir})
