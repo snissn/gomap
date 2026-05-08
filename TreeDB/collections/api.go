@@ -7197,7 +7197,7 @@ func (c *Collection) updateSingleInlineWithoutCombiner(domain *collectionWriteDo
 	results, batched, err := c.updateBatchOwnedItems(items, updateBatchModeNoSecondaryUniqueIndexChanges)
 	if !batched && err == nil {
 		if items[0].hasBSONSet {
-			return c.updateBSONSetDirect(items[0].DocumentID, items[0].bsonSet)
+			return c.updateDirect(items[0].DocumentID, items[0].bsonSet.apply)
 		}
 		return c.updateDirect(items[0].DocumentID, items[0].Update)
 	}

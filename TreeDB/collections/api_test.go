@@ -9252,6 +9252,33 @@ func TestCollectionUpdateBSONSetReusesUnchangedIndexState(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBSONSetRejectsInvalidFieldNames(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  string
+		want string
+	}{
+		{name: "empty", key: "", want: "empty"},
+		{name: "id", key: "_id", want: "_id"},
+		{name: "dotted", key: "profile.city", want: "top-level"},
+		{name: "dollar", key: "$city", want: "$"},
+		{name: "nul", key: "city\x00name", want: "NUL"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := newBSONSetUpdate([]BSONSetField{{
+				Key:   tc.key,
+				Value: mustBSONRawValue(t, "sea"),
+			}})
+			if err == nil {
+				t.Fatal("newBSONSetUpdate err=nil want error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err=%q want containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestCollectionUpdateBatchDirectBufferedBSONDoesNotReserveUnchangedUnique(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
