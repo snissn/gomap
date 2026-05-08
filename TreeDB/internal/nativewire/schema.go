@@ -174,7 +174,7 @@ func (c *CommandSchema) ruleMap() map[SectionID]SectionRule {
 		SectionTraceContext:      {ID: SectionTraceContext, Name: "trace_context"},
 		SectionAckPolicy:         {ID: SectionAckPolicy, Name: "ack_policy"},
 		SectionConsistencyPolicy: {ID: SectionConsistencyPolicy, Name: "consistency_policy"},
-		SectionIdempotencyKey:    {ID: SectionIdempotencyKey, Name: "idempotency_key"},
+		SectionIdempotencyKey:    {ID: SectionIdempotencyKey, Name: "idempotency_key", Deterministic: true},
 		SectionChecksum:          {ID: SectionChecksum, Name: "checksum"},
 		SectionCompression:       {ID: SectionCompression, Name: "compression"},
 	}
