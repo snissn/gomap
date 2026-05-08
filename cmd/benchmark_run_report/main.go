@@ -1405,7 +1405,7 @@ func renderMongoLoadModes(b *strings.Builder, rows []loadModeRow) {
 	b.WriteString("<section id=\"mongo-load\"><h2>Load-Only Client-Mode Matrix</h2>")
 	b.WriteString("<p class=\"subtle\">Insert-only matrix. This section uses raw JSON directly so every MongoDB and TreeDB client mode has its own throughput and physical-disk row.</p>")
 	b.WriteString("<p class=\"subtle\">Use this section for pure ingest client-path comparisons. It is intentionally separate from the full-sweep load chart, which inherits the broader read/range/update sweep setup.</p>")
-	b.WriteString("<p class=\"subtle\">Driver, driver-command, driver-command-raw, and driver-unack modes are comparable Mongo-compatible client paths and render as paired TreeDB/MongoDB bars. Client modes marked with <strong>*</strong> are TreeDB-only raw-wire ceiling probes explained below.</p>")
+	b.WriteString("<p class=\"subtle\">Driver, driver-command, driver-command-raw, and driver-unack modes are comparable Mongo-compatible client paths and render as paired TreeDB/MongoDB bars. Client modes marked with <strong>*</strong> are TreeDB-only ceiling probes explained below.</p>")
 	b.WriteString("<div class=\"chart-grid\">")
 	for _, idx := range sortedLoadModeIndexes(rows) {
 		cats, tree, mongo := loadModeChartRows(rows, idx)
@@ -1415,7 +1415,7 @@ func renderMongoLoadModes(b *strings.Builder, rows []loadModeRow) {
 		b.WriteString(loadModeBarChart(fmt.Sprintf("Load throughput by client mode, %d indexes", idx), cats, tree, mongo))
 	}
 	b.WriteString("</div>")
-	b.WriteString("<p class=\"subtle\"><strong>* Raw-wire modes:</strong> <code>raw-wire-tcp</code> still sends Mongo OP_MSG bytes over loopback TCP to the TreeDB gateway while bypassing the MongoDB Go driver. <code>raw-wire</code> removes the socket too and drives the same raw command/gateway path in process. These modes are TreeDB-only ingest ceiling probes, so each renders as one centered TreeDB bar instead of a paired MongoDB bar.</p>")
+	b.WriteString("<p class=\"subtle\"><strong>* TreeDB-only modes:</strong> <code>direct</code> calls the collection API directly in the selected TreeDB document format. <code>raw-wire-tcp</code> still sends Mongo OP_MSG bytes over loopback TCP to the TreeDB gateway while bypassing the MongoDB Go driver. <code>raw-wire</code> removes the socket too and drives the same raw command/gateway path in process. These modes are TreeDB-only ceiling probes, so each renders as one centered TreeDB bar instead of a paired MongoDB bar.</p>")
 	var body [][]string
 	for _, row := range rows {
 		body = append(body, []string{strconv.Itoa(row.Indexes), row.Target, row.Config, fmtOps(row.OpsPerSec), fmtBytes(float64(row.PhysicalBytes)), row.RawJSON})
@@ -1757,12 +1757,12 @@ func loadModeChartRows(rows []loadModeRow, idx int) ([]string, []float64, []floa
 	return labels, tree, mongo
 }
 
-func isRawWireLoadMode(mode string) bool {
-	return mode == "BSON raw_wire_tcp" || mode == "BSON raw_wire"
+func isTreeDBOnlyLoadMode(mode string) bool {
+	return loadModeKind(mode) != ""
 }
 
 func loadModeDisplayLabel(mode string) string {
-	if isRawWireLoadMode(mode) {
+	if isTreeDBOnlyLoadMode(mode) {
 		return mode + " *"
 	}
 	return mode
@@ -1784,13 +1784,37 @@ func loadModeOrder(mode string) string {
 		"BSON driver_command":     1,
 		"BSON driver_command_raw": 2,
 		"BSON driver_unack":       3,
-		"BSON raw_wire_tcp":       4,
-		"BSON raw_wire":           5,
+		"BSON direct":             4,
+		"BSON raw_wire_tcp":       5,
+		"BSON raw_wire":           6,
 	}
 	if idx, ok := order[mode]; ok {
 		return fmt.Sprintf("%02d_%s", idx, mode)
 	}
+	switch loadModeKind(mode) {
+	case "direct":
+		return "04_" + mode
+	case "raw_wire_tcp":
+		return "05_" + mode
+	case "raw_wire":
+		return "06_" + mode
+	}
 	return "99_" + mode
+}
+
+func loadModeKind(mode string) string {
+	normalized := strings.ToLower(strings.TrimSpace(mode))
+	normalized = strings.TrimPrefix(normalized, "bson ")
+	switch {
+	case normalized == "direct" || strings.HasSuffix(normalized, "_direct"):
+		return "direct"
+	case normalized == "raw_wire_tcp" || strings.HasSuffix(normalized, "_raw_wire_tcp"):
+		return "raw_wire_tcp"
+	case normalized == "raw_wire" || strings.HasSuffix(normalized, "_raw_wire"):
+		return "raw_wire"
+	default:
+		return ""
+	}
 }
 
 func indexCountLabel(indexes int) string {
@@ -2021,14 +2045,14 @@ func loadModeBarChart(title string, categories []string, tree, mongo []float64) 
 	b.WriteString(fmt.Sprintf("<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#748399\" stroke-width=\"2\"/>", left, top, left, axisY))
 	for i, cat := range categories {
 		groupX := left + float64(i)*groupW
-		rawMode := isRawWireLoadMode(cat)
-		if rawMode {
+		treeDBOnlyMode := isTreeDBOnlyLoadMode(cat)
+		if treeDBOnlyMode {
 			if i < len(tree) && tree[i] > 0 {
 				v := tree[i]
 				barH := (v / maxV) * plotH
 				x := groupX + (groupW-soloBarW)/2
 				yy := axisY - barH
-				b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"#2867c7\"><title>%s TreeDB-only raw-wire ceiling: %s docs/sec</title></rect>", x, yy, soloBarW, barH, esc(cat), esc(formatChartValue(v, "docs/sec"))))
+				b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"#2867c7\"><title>%s TreeDB-only ceiling: %s docs/sec</title></rect>", x, yy, soloBarW, barH, esc(cat), esc(formatChartValue(v, "docs/sec"))))
 				if soloBarW >= 10 {
 					b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"#344256\">%s</text>", x+soloBarW/2, math.Max(top+10, yy-5), esc(formatChartValue(v, "docs/sec"))))
 				}

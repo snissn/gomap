@@ -86,13 +86,13 @@ func (s *Server) insertBatch(state *connState, sections []iwire.Section) ([][]by
 	if err != nil {
 		return nil, 0, err
 	}
+	if err := s.admitMutationAck(ack); err != nil {
+		return nil, 0, err
+	}
 	return s.insertBatchDecoded(collection, format, ids, docs, ack)
 }
 
 func (s *Server) insertBatchDecoded(collection *collections.Collection, format collections.DocumentFormat, ids, docs [][]byte, ack AckPolicy) ([][]byte, iwire.AckPolicy, error) {
-	if err := s.admitMutationAck(ack); err != nil {
-		return nil, 0, err
-	}
 	var err error
 	var resultIDs [][]byte
 	if format == collections.DocumentFormatBSON {
@@ -214,18 +214,15 @@ func (s *Server) decodeInsertBatchFastRequest(state *connState, sections []iwire
 	if len(ids) != len(docs) {
 		return insertBatchFastRequest{}, true, protocolError(iwire.ErrInvalidCommand, "document_ids length %d does not match documents length %d", len(ids), len(docs))
 	}
-	if err := rejectDuplicateIDs(ids); err != nil {
-		return insertBatchFastRequest{}, true, err
-	}
 	ack := s.defaultAckPolicy
 	if seen[iwire.SectionAckPolicy] {
-		decodedAck, err := ackPolicyFromPayload(rawAck)
+		ack, err = ackPolicyFromPayload(rawAck, s.defaultAckPolicy)
 		if err != nil {
 			return insertBatchFastRequest{}, true, err
 		}
-		if decodedAck != 0 {
-			ack = decodedAck
-		}
+	}
+	if err := s.admitMutationAck(ack); err != nil {
+		return insertBatchFastRequest{}, true, err
 	}
 	return insertBatchFastRequest{
 		collection:       collection,

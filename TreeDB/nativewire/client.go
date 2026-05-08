@@ -84,17 +84,11 @@ func (c *Client) commandSectionsOnStream(ctx context.Context, streamID uint64, c
 	if err != nil {
 		return nil, err
 	}
-	if c == nil {
-		return nil, io.ErrClosedPipe
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	_, response, err := c.roundTripLockedStream(ctx, streamID, iwire.FrameRequest, body, iwire.FrameResponse)
+	_, response, err := c.roundTripStream(ctx, streamID, iwire.FrameRequest, body, iwire.FrameResponse)
 	if err != nil {
 		return nil, err
 	}
-	stable := append([]byte(nil), response...)
-	return iwire.DecodeSections(stable, c.limits)
+	return iwire.DecodeSections(response, c.limits)
 }
 
 func (c *Client) roundTrip(ctx context.Context, typ iwire.FrameType, body []byte, want iwire.FrameType) (iwire.Header, []byte, error) {
@@ -119,7 +113,7 @@ func (c *Client) roundTripLockedStream(ctx context.Context, streamID uint64, typ
 		return iwire.Header{}, nil, io.ErrClosedPipe
 	}
 	if c.local != nil {
-		header, response, err := c.local.roundTrip(ctx, typ, streamID, c.nextReq.Add(1), body, want, c.limits, c.readBody, true)
+		header, response, err := c.local.roundTrip(ctx, streamID, typ, c.nextReq.Add(1), body, want, c.limits, c.readBody, true)
 		c.readBody = response[:0]
 		return header, response, err
 	}
@@ -166,7 +160,7 @@ func (c *Client) roundTripLockedDiscardResponse(ctx context.Context, typ iwire.F
 		return io.ErrClosedPipe
 	}
 	if c.local != nil {
-		_, _, err := c.local.roundTrip(ctx, typ, 0, c.nextReq.Add(1), body, want, c.limits, nil, false)
+		_, _, err := c.local.roundTrip(ctx, 0, typ, c.nextReq.Add(1), body, want, c.limits, nil, false)
 		return err
 	}
 	if c.conn == nil {

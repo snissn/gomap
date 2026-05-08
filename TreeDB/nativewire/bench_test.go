@@ -84,10 +84,7 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 		defer cleanup()
 		server := NewServer(ServerOptions{Collections: mgr})
 		state := &connState{id: 1}
-		handle, err := state.addCollectionHandle("bench", col, server.maxCollectionHandles)
-		if err != nil {
-			b.Fatalf("add collection handle: %v", err)
-		}
+		handle := benchmarkAddCollectionHandle(b, state, server, "bench", col)
 		var sink benchmarkFrameSink
 		var sectionBuf [4]iwire.Section
 		requestBody := make([]byte, 0, 4096)
@@ -125,10 +122,7 @@ func BenchmarkNativewireCollectionInsertBatch(b *testing.B) {
 		defer cleanup()
 		server := NewServer(ServerOptions{Collections: mgr})
 		state := &connState{id: 1}
-		handle, err := state.addCollectionHandle("bench", col, server.maxCollectionHandles)
-		if err != nil {
-			b.Fatalf("add collection handle: %v", err)
-		}
+		handle := benchmarkAddCollectionHandle(b, state, server, "bench", col)
 		var sink benchmarkFrameSink
 		requestBody := make([]byte, 0, 4096)
 		b.ReportAllocs()
@@ -200,10 +194,7 @@ func BenchmarkNativewireCollectionGetMany(b *testing.B) {
 		seedBenchmarkCollection(b, col, docs)
 		server := NewServer(ServerOptions{Collections: mgr})
 		state := &connState{id: 1}
-		handle, err := state.addCollectionHandle("bench", col, server.maxCollectionHandles)
-		if err != nil {
-			b.Fatalf("add collection handle: %v", err)
-		}
+		handle := benchmarkAddCollectionHandle(b, state, server, "bench", col)
 		ids, _ := benchmarkStoredBatch(0, batchSize)
 		var sink benchmarkFrameSink
 		var sectionBuf [4]iwire.Section
@@ -285,6 +276,15 @@ func benchmarkDispatchRequest(tb testing.TB, server *Server, state *connState, s
 		tb.Fatalf("response body len=%d want %d", len(response), responseHeader.BodyLen)
 	}
 	return response
+}
+
+func benchmarkAddCollectionHandle(tb testing.TB, state *connState, server *Server, name string, col *collections.Collection) CollectionHandle {
+	tb.Helper()
+	handle, err := state.addCollectionHandle(name, col, server.maxCollectionHandles)
+	if err != nil {
+		tb.Fatalf("add collection handle: %v", err)
+	}
+	return handle
 }
 
 func benchmarkCollection(tb testing.TB) (*collections.CollectionManager, *collections.Collection, func()) {
