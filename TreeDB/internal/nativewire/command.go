@@ -6,6 +6,9 @@ type CommandHeader struct {
 	Flags   uint64
 }
 
+// Deterministic entries intentionally include no command flags in R0c. Response
+// shaping flags are transport-only until a future replicated command version
+// explicitly defines deterministic flag semantics.
 const deterministicCommandFlagsMask uint64 = 0
 
 func DeterministicCommandFlags(flags uint64) uint64 {
