@@ -60,6 +60,17 @@ func TestFrameHeaderRejectsMalformedAndUnsupported(t *testing.T) {
 	}
 }
 
+func TestAppendHeaderPreservesDstOnValidationError(t *testing.T) {
+	prefix := []byte("prefix")
+	got, err := AppendHeader(prefix, Header{Type: FrameRequest, Flags: 1})
+	if codeOf(err) != ErrUnsupportedFeature {
+		t.Fatalf("AppendHeader err=%v code=%d want unsupported feature", err, codeOf(err))
+	}
+	if string(got) != string(prefix) {
+		t.Fatalf("AppendHeader returned %q want original prefix %q", got, prefix)
+	}
+}
+
 func TestSectionAndByteVectorRoundTrip(t *testing.T) {
 	var body []byte
 	var err error
@@ -104,6 +115,17 @@ func TestSectionAndByteVectorRoundTrip(t *testing.T) {
 	}
 }
 
+func TestAppendSectionPreservesDstOnValidationError(t *testing.T) {
+	prefix := []byte("prefix")
+	got, err := AppendSection(prefix, Section{ID: SectionCollectionRef, Flags: 1 << 63})
+	if codeOf(err) != ErrUnsupportedFeature {
+		t.Fatalf("AppendSection err=%v code=%d want unsupported feature", err, codeOf(err))
+	}
+	if string(got) != string(prefix) {
+		t.Fatalf("AppendSection returned %q want original prefix %q", got, prefix)
+	}
+}
+
 func TestByteVectorRejectsLengthMismatch(t *testing.T) {
 	for _, tc := range [][]byte{
 		{2, 1, 2, 'a', 'b'},       // truncated payload.
@@ -114,6 +136,26 @@ func TestByteVectorRejectsLengthMismatch(t *testing.T) {
 		if _, err := DecodeByteVector(tc, Limits{}); codeOf(err) != ErrMalformedFrame {
 			t.Fatalf("DecodeByteVector(%x) err=%v code=%d", tc, err, codeOf(err))
 		}
+	}
+}
+
+func TestNegativeIntegerLimitsUseDefaults(t *testing.T) {
+	var body []byte
+	var err error
+	body, err = AppendSection(body, Section{ID: SectionCollectionRef})
+	if err != nil {
+		t.Fatalf("AppendSection 1: %v", err)
+	}
+	body, err = AppendSection(body, Section{ID: SectionDocumentIDs})
+	if err != nil {
+		t.Fatalf("AppendSection 2: %v", err)
+	}
+	if _, err := DecodeSections(body, Limits{MaxSections: -1}); err != nil {
+		t.Fatalf("DecodeSections with negative MaxSections should use default: %v", err)
+	}
+	vecBytes := AppendByteVector(nil, []byte("a"))
+	if _, err := DecodeByteVector(vecBytes, Limits{MaxByteVectorItems: -1}); err != nil {
+		t.Fatalf("DecodeByteVector with negative MaxByteVectorItems should use default: %v", err)
 	}
 }
 
