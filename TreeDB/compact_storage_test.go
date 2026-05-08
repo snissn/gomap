@@ -3,9 +3,12 @@ package treedb_test
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func TestCompactStorageFullPacksLeafGenerationDebtOffline(t *testing.T) {
@@ -127,5 +130,45 @@ func TestCompactStorageCachedRefreshesProtectedPathsAcrossPhases(t *testing.T) {
 	}
 	if calls < 3 {
 		t.Fatalf("protected path callback calls=%d want at least 3", calls)
+	}
+}
+
+func TestCompactStorageCachedPlanReportsZeroByteValueLogDebt(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.MaxWALBytes = -1
+	opts.DisableSideStores = true
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.SetSync([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+
+	valueLogDir := backenddb.ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	emptyPath := filepath.Join(valueLogDir, "value-l42-000001.log")
+	if err := os.WriteFile(emptyPath, nil, 0o644); err != nil {
+		t.Fatalf("write empty value log: %v", err)
+	}
+
+	stats, err := db.CompactStoragePlan(context.Background(), treedb.CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan: %v", err)
+	}
+	if got := stats.RemainingDebt.ZeroByteValueLogFiles; got != 1 {
+		t.Fatalf("zero-byte debt=%d want 1", got)
+	}
+	if _, err := os.Stat(emptyPath); err != nil {
+		t.Fatalf("plan mutated empty value-log file: %v", err)
 	}
 }
