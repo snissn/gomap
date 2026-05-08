@@ -99,6 +99,9 @@ func validateBSONSetFieldKey(key string) error {
 	if strings.HasPrefix(key, "$") {
 		return errors.New("collections: BSON $set field names cannot start with $")
 	}
+	if strings.Contains(key, "\x00") {
+		return errors.New("collections: BSON $set field names cannot contain NUL")
+	}
 	return nil
 }
 
