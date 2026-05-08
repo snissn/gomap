@@ -310,7 +310,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		})
 	} else {
 		if err := db.runCompactStoragePhase(&stats, "prune-empty-value-log-files", func() error {
-			deleted, err := db.pruneZeroByteValueLogFiles()
+			deleted, err := db.pruneZeroByteValueLogFiles(compactStorageValueLogProtectedPaths(opts))
 			stats.ZeroByteValueLogFilesDeleted = deleted
 			return err
 		}); err != nil {
@@ -497,7 +497,11 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 		return debt, err
 	}
 	if !opts.DisableZeroByteValueLogCleanup {
-		debt.ZeroByteValueLogFiles = zeroByteValueLogFilesFromUsage(usage)
+		zeroBytes, err := zeroByteValueLogFilesFromUsage(usage, protectedPaths)
+		if err != nil {
+			return debt, err
+		}
+		debt.ZeroByteValueLogFiles = zeroBytes
 	}
 	return debt, nil
 }
@@ -585,13 +589,13 @@ func compactStoragePathUsage(name, path string) (CompactStorageUsage, error) {
 	return usage, err
 }
 
-func zeroByteValueLogFilesFromUsage(usage []CompactStorageUsage) int {
+func zeroByteValueLogFilesFromUsage(usage []CompactStorageUsage, protectedPaths []string) (int, error) {
 	for _, domain := range usage {
 		if domain.Name == "value_vlog" {
-			return domain.ZeroByteFiles
+			return zeroByteValueLogSegmentFiles(domain.Path, protectedPaths)
 		}
 	}
-	return 0
+	return 0, nil
 }
 
 func compactStorageValueLogProtectedPaths(opts CompactStorageOptions) []string {
@@ -624,7 +628,7 @@ func compactStorageValueLogProtectedPaths(opts CompactStorageOptions) []string {
 	return out
 }
 
-func (db *DB) pruneZeroByteValueLogFiles() (int, error) {
+func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 	layout := resolveStorageLayout(db.dir)
 	entries, err := os.ReadDir(layout.valueVLogDir)
 	if err != nil {
@@ -633,16 +637,20 @@ func (db *DB) pruneZeroByteValueLogFiles() (int, error) {
 		}
 		return 0, err
 	}
+	protected := compactStorageProtectedPathSet(protectedPaths)
 	deleted := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 		name := entry.Name()
-		if !strings.HasPrefix(name, "value-l") || !strings.HasSuffix(name, ".log") {
+		if !compactStorageIsValueLogSegmentName(name) {
 			continue
 		}
 		path := filepath.Join(layout.valueVLogDir, name)
+		if _, ok := protected[filepath.Clean(path)]; ok {
+			continue
+		}
 		info, err := entry.Info()
 		if err != nil {
 			return deleted, err
@@ -685,6 +693,54 @@ func (db *DB) pruneZeroByteValueLogFiles() (int, error) {
 		}
 	}
 	return deleted, nil
+}
+
+func zeroByteValueLogSegmentFiles(dir string, protectedPaths []string) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	protected := compactStorageProtectedPathSet(protectedPaths)
+	count := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !compactStorageIsValueLogSegmentName(entry.Name()) {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		if _, ok := protected[filepath.Clean(path)]; ok {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return 0, err
+		}
+		if info.Size() == 0 {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func compactStorageProtectedPathSet(paths []string) map[string]struct{} {
+	protected := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		protected[filepath.Clean(path)] = struct{}{}
+	}
+	return protected
+}
+
+func compactStorageIsValueLogSegmentName(name string) bool {
+	if !strings.HasPrefix(name, "value-l") || !strings.HasSuffix(name, ".log") {
+		return false
+	}
+	_, ok := compactStorageValueLogFileID(name)
+	return ok
 }
 
 func compactStorageValueLogFileID(name string) (uint32, bool) {
