@@ -515,6 +515,14 @@ type DocumentRecord struct {
 	Document []byte
 }
 
+// BorrowedDocumentRecord is one primary collection record borrowed during a
+// callback scan. This is an unsafe performance type: ID and Document are valid
+// only until the callback returns and must not be retained or modified.
+type BorrowedDocumentRecord struct {
+	ID       []byte
+	Document []byte
+}
+
 type RootStoragePolicy string
 
 const (
@@ -710,14 +718,18 @@ type bufferedUniqueValueIndex struct {
 }
 
 type bufferedPrimaryRunIndex struct {
-	values     map[uint64]bufferedPrimaryRunRef
-	collisions map[uint64][]bufferedPrimaryRunRef
-	arenas     [][]byte
+	values        map[uint64]bufferedPrimaryRunRef
+	collisions    map[uint64][]bufferedPrimaryRunRef
+	arenas        [][]byte
+	directEntries bool
 }
 
 type bufferedPrimaryRunRef struct {
-	key   []byte
-	table memtable.Table
+	key        []byte
+	table      memtable.Table
+	value      []byte
+	flags      byte
+	entryValid bool
 }
 
 type collectionWriteDomain struct {
@@ -2145,7 +2157,9 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 	collection := &Collection{
 		db:          m.db,
 		writeDomain: m.writeDomainForCollection(catalog.meta.Name),
-		meta:        copyCollectionMeta(catalog.meta),
+		// Collection catalogs are immutable once loaded; public Meta returns a
+		// defensive copy, so handles can keep the catalog meta value directly.
+		meta: catalog.meta,
 	}
 	if collection.writeDomain == nil {
 		return nil, backenddb.ErrClosed
@@ -2180,7 +2194,9 @@ func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Co
 	collection := &Collection{
 		db:          m.db,
 		writeDomain: domain,
-		meta:        copyCollectionMeta(catalog.meta),
+		// Collection catalogs are immutable once loaded; public Meta returns a
+		// defensive copy, so handles can keep the catalog meta value directly.
+		meta: catalog.meta,
 	}
 	collection.rememberCatalogAtSystemRoot(state.SystemRootPageID, catalog)
 	return collection, true
@@ -4217,10 +4233,17 @@ func addBufferedPrimaryIDs(index *bufferedUniqueValueIndex, batchPrimary memtabl
 }
 
 func newBufferedPrimaryRunIndex(capacity int) *bufferedPrimaryRunIndex {
+	return newBufferedPrimaryRunIndexWithDirectEntries(capacity, false)
+}
+
+func newBufferedPrimaryRunIndexWithDirectEntries(capacity int, directEntries bool) *bufferedPrimaryRunIndex {
 	if capacity < 0 {
 		capacity = 0
 	}
-	return &bufferedPrimaryRunIndex{values: make(map[uint64]bufferedPrimaryRunRef, capacity)}
+	return &bufferedPrimaryRunIndex{
+		values:        make(map[uint64]bufferedPrimaryRunRef, capacity),
+		directEntries: directEntries,
+	}
 }
 
 func (index *bufferedPrimaryRunIndex) addRef(hash uint64, ref bufferedPrimaryRunRef) {
@@ -4250,20 +4273,28 @@ func (index *bufferedPrimaryRunIndex) addRef(hash uint64, ref bufferedPrimaryRun
 	collisions[hash] = append(bucket, ref)
 }
 
-func (index *bufferedPrimaryRunIndex) lookup(key []byte) (memtable.Table, bool) {
+func (index *bufferedPrimaryRunIndex) lookupRef(key []byte) (bufferedPrimaryRunRef, bool) {
 	if index == nil {
-		return nil, false
+		return bufferedPrimaryRunRef{}, false
 	}
 	hash := xxhash.Sum64(key)
 	if ref, ok := index.values[hash]; ok && bytes.Equal(ref.key, key) {
-		return ref.table, true
+		return ref, true
 	}
 	for _, ref := range index.collisions[hash] {
 		if bytes.Equal(ref.key, key) {
-			return ref.table, true
+			return ref, true
 		}
 	}
-	return nil, false
+	return bufferedPrimaryRunRef{}, false
+}
+
+func (index *bufferedPrimaryRunIndex) lookup(key []byte) (memtable.Table, bool) {
+	ref, ok := index.lookupRef(key)
+	if !ok {
+		return nil, false
+	}
+	return ref.table, true
 }
 
 func addBufferedPrimaryRunIndexEntries(index *bufferedPrimaryRunIndex, batchPrimary memtable.Table) error {
@@ -4279,7 +4310,14 @@ func addBufferedPrimaryRunIndexEntries(index *bufferedPrimaryRunIndex, batchPrim
 	if stableKeys {
 		for it.Valid() {
 			key := it.UnsafeKey()
-			index.addRef(xxhash.Sum64(key), bufferedPrimaryRunRef{key: key, table: batchPrimary})
+			ref := bufferedPrimaryRunRef{key: key, table: batchPrimary}
+			if index.directEntries {
+				value, _, flags := it.UnsafeEntry()
+				ref.value = value
+				ref.flags = flags
+				ref.entryValid = true
+			}
+			index.addRef(xxhash.Sum64(key), ref)
 			it.Next()
 		}
 		return it.Error()
@@ -4347,7 +4385,7 @@ func rebuildBufferedPrimaryRunIndex(collectionName string, runs map[string][]mem
 	if len(tables) == 0 {
 		return nil, nil
 	}
-	index := newBufferedPrimaryRunIndex(bufferedRunLenHint(tables))
+	index := newBufferedPrimaryRunIndexWithDirectEntries(bufferedRunLenHint(tables), true)
 	for _, table := range tables {
 		if err := addBufferedPrimaryRunIndexEntries(index, table); err != nil {
 			return nil, err
@@ -8877,11 +8915,17 @@ func snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(index *bufferedPrimaryRu
 		return entries, buffer, nil
 	}
 	for i, item := range items {
-		table, ok := index.lookup(item.DocumentID)
-		if !ok || table == nil {
+		ref, ok := index.lookupRef(item.DocumentID)
+		if !ok {
 			continue
 		}
-		value, _, flags, found := table.GetEntry(item.DocumentID)
+		value, flags, found := ref.value, ref.flags, ref.entryValid
+		if !found {
+			if ref.table == nil {
+				continue
+			}
+			value, _, flags, found = ref.table.GetEntry(item.DocumentID)
+		}
 		if !found {
 			continue
 		}
@@ -11509,8 +11553,11 @@ func (c *Collection) getBufferedDocumentIntoLocked(domain *collectionWriteDomain
 		var value []byte
 		var flags byte
 		found := false
-		if table, ok := domain.primaryRunIndex.lookup(documentID); ok {
-			value, _, flags, found = table.GetEntry(documentID)
+		if ref, ok := domain.primaryRunIndex.lookupRef(documentID); ok {
+			value, flags, found = ref.value, ref.flags, ref.entryValid
+			if !found && ref.table != nil {
+				value, _, flags, found = ref.table.GetEntry(documentID)
+			}
 		} else if domain.primaryRunIndex == nil {
 			value, _, flags, found = getBufferedRunEntry(pendingIndexedRootRunsLocked(domain, name), documentID)
 		}
@@ -11551,6 +11598,8 @@ type IndexRangeOptions struct {
 	Desc  bool
 }
 
+const defaultIndexRangeResultCap = 16
+
 // FindByIndexValue returns document IDs whose named secondary index equals
 // value. Query values must match the index value type. If indexName does not
 // exist, it returns nil, nil.
@@ -11573,7 +11622,7 @@ func (c *Collection) FindByIndexRange(indexName string, opts IndexRangeOptions) 
 	if opts.Limit < 0 {
 		return nil, false, errors.New("collections: index range limit cannot be negative")
 	}
-	capHint := 16
+	capHint := defaultIndexRangeResultCap
 	if opts.Limit > 0 && opts.Limit < capHint {
 		capHint = opts.Limit
 	}
@@ -11595,6 +11644,233 @@ func (c *Collection) FindByIndexRange(indexName string, opts IndexRangeOptions) 
 		out = make([][]byte, 0)
 	}
 	return out, truncated, nil
+}
+
+// FindDocumentsByIndexRange returns primary documents whose named secondary
+// index falls inside opts, preserving index order. Persisted index and primary
+// reads share one snapshot/catalog; same-manager buffered documents are still
+// consulted before the persisted primary root so pending indexed writes remain
+// visible. Descending scans are not supported. Because this API holds a
+// write-domain read lock while pairing secondary IDs with buffered primary
+// documents, callers must provide a positive Limit.
+func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRangeOptions) ([]DocumentRecord, bool, error) {
+	capHint := defaultIndexRangeResultCap
+	if opts.Limit > 0 && opts.Limit < capHint {
+		capHint = opts.Limit
+	}
+	var out []DocumentRecord
+	truncated, indexFound, err := c.scanDocumentsByIndexRange(indexName, opts, func(record BorrowedDocumentRecord) (bool, error) {
+		if out == nil {
+			out = make([]DocumentRecord, 0, capHint)
+		}
+		out = append(out, DocumentRecord{
+			ID:       bytes.Clone(record.ID),
+			Document: bytes.Clone(record.Document),
+		})
+		return true, nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if !indexFound {
+		return nil, false, nil
+	}
+	if out == nil {
+		out = make([]DocumentRecord, 0)
+	}
+	return out, truncated, nil
+}
+
+// ScanBorrowedDocumentsByIndexRange calls fn with primary documents whose named
+// secondary index falls inside opts, preserving index order. This is a borrowed
+// performance API for gateway integrations: record slices are valid only during
+// the callback, and fn may run while the collection write-domain read lock is
+// held. The callback must not retain or modify slices, call back into Collection,
+// or perform blocking work. Missing indexes are treated as empty scans.
+// Descending scans are not supported, and opts.Limit must be positive. General
+// callers should use FindDocumentsByIndexRange.
+func (c *Collection) ScanBorrowedDocumentsByIndexRange(indexName string, opts IndexRangeOptions, fn func(BorrowedDocumentRecord) (bool, error)) (bool, error) {
+	if fn == nil {
+		return false, errors.New("collections: nil borrowed index document range callback")
+	}
+	truncated, _, err := c.scanDocumentsByIndexRange(indexName, opts, fn)
+	return truncated, err
+}
+
+func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRangeOptions, fn func(BorrowedDocumentRecord) (bool, error)) (truncated bool, indexFound bool, err error) {
+	if c == nil {
+		return false, false, errCollectionNil
+	}
+	if c.db == nil {
+		return false, false, errCollectionDBNil
+	}
+	if err := ValidateIndexName(indexName); err != nil {
+		return false, false, err
+	}
+	if opts.Limit < 0 {
+		return false, false, errors.New("collections: index range limit cannot be negative")
+	}
+	if opts.Limit == 0 {
+		return false, false, errors.New("collections: document index range reads require a positive limit")
+	}
+	if opts.Desc {
+		return false, false, errors.New("collections: descending index range scans are not supported")
+	}
+	if err := c.flushBufferedNoIndex(); err != nil {
+		return false, false, err
+	}
+	domain := c.writeDomain
+	domainLocked := false
+	if domain != nil {
+		domain.mu.RLock()
+		domainLocked = true
+		// Keep the read lock through the scan so buffered secondary IDs and
+		// buffered primary documents come from one write-domain view. Releasing
+		// here would require copying the pending primary view up front, which is
+		// too much work for the common small-limit range probe.
+	}
+	var snap *backenddb.Snapshot
+	var bufferedTable memtable.Table
+	var bufferedIt iterator.UnsafeIterator
+	var persistedIt iterator.UnsafeIterator
+	defer func() {
+		if domainLocked {
+			domain.mu.RUnlock()
+		}
+		if persistedIt != nil {
+			_ = persistedIt.Close()
+		}
+		if bufferedIt != nil {
+			_ = bufferedIt.Close()
+		}
+		if bufferedTable != nil {
+			resetCollectionRunTable(bufferedTable)
+		}
+		if snap != nil {
+			_ = snap.Close()
+		}
+	}()
+	snap = c.db.AcquireSnapshot()
+	if snap == nil {
+		return false, false, backenddb.ErrClosed
+	}
+	catalog, err := c.catalogForSnapshotWithWriteDomainLocked(snap)
+	if err != nil {
+		return false, false, err
+	}
+	if catalog == nil {
+		return false, false, errCollectionNotFound
+	}
+	idx, ok := findIndex(catalog.meta.Indexes, indexName)
+	if !ok {
+		return false, false, nil
+	}
+	start, end, empty, err := indexRangeScanBounds(idx.ValueType, opts)
+	if err != nil {
+		return false, false, err
+	}
+	if empty {
+		return false, true, nil
+	}
+	exactPrefix, exactPrefixScan, err := exactIndexRangePrefix(idx.ValueType, opts)
+	if err != nil {
+		return false, false, err
+	}
+	if exactPrefixScan {
+		// Exact document scans still need buffered tombstones for unique indexes.
+		// The unique reservation fast path only proves pending live values, so use
+		// the uncapped run-table path; tombstones can sort after the live entries
+		// that satisfy opts.Limit and still need to hide persisted index rows.
+		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, false, exactPrefix, 0)
+	} else {
+		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
+	}
+	if err != nil {
+		return false, false, err
+	}
+	if bufferedTable != nil {
+		bufferedIt = bufferedTable.NewIterator(start, end)
+	}
+	persistedIt, err = collectionIteratorAtCatalogRoot(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true)
+	if err != nil {
+		return false, false, err
+	}
+	primaryRootName := collectionPrimaryRootName(catalog.meta.Name)
+	var primaryReader backenddb.SnapshotRootReader
+	primaryReaderOK := false
+	primaryRootMissing := false
+	if len(catalog.overlayRootIDs(primaryRootName)) == 0 {
+		primaryRootID := catalog.rootID(primaryRootName)
+		if primaryRootID == 0 {
+			primaryRootMissing = true
+		} else {
+			primaryReader, err = snap.ReaderAtRoot(primaryRootID)
+			if err != nil {
+				return false, true, err
+			} else {
+				primaryReaderOK = true
+			}
+		}
+	}
+	var scratch []byte
+	dedupeDocumentIDs := shouldDedupeIndexDocumentIDs(idx, catalog.meta.Options)
+	documentCount := 0
+	documentTruncated := false
+	truncated, err = scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt, idx.ValueType, 0, dedupeDocumentIDs, func(id []byte) (bool, error) {
+		var value []byte
+		var buffered, found bool
+		if domainLocked {
+			value, buffered, found = c.getBufferedDocumentIntoLocked(domain, id, scratch[:0])
+		}
+		if !buffered {
+			if primaryReaderOK {
+				var err error
+				value, err = primaryReader.GetAppend(id, scratch[:0])
+				if errors.Is(err, tree.ErrKeyNotFound) {
+					found = false
+				} else if err != nil {
+					return false, err
+				} else {
+					found = true
+				}
+			} else if primaryRootMissing {
+				found = false
+			} else {
+				var err error
+				value, found, err = collectionGetAppendAtCatalogRoot(snap, catalog, primaryRootName, id, scratch[:0])
+				if err != nil {
+					return false, err
+				}
+			}
+		}
+		if !found {
+			return true, nil
+		}
+		if opts.Limit > 0 && documentCount >= opts.Limit {
+			documentTruncated = true
+			return false, nil
+		}
+		scratch = value
+		cont, err := fn(BorrowedDocumentRecord{
+			ID:       id,
+			Document: value,
+		})
+		if err != nil {
+			return false, err
+		}
+		if !cont {
+			return false, nil
+		}
+		documentCount++
+		return true, nil
+	})
+	if err != nil {
+		return false, false, err
+	}
+	if documentTruncated {
+		return true, true, nil
+	}
+	return truncated, true, nil
 }
 
 func (c *Collection) ScanIndexRange(indexName string, opts IndexRangeOptions, fn func(id []byte) (bool, error)) (bool, error) {
@@ -11672,7 +11948,11 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 	}
 	var bufferedTable memtable.Table
 	if exactPrefixScan {
-		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, idx.Unique, exactPrefix, opts.Limit)
+		// Exact scans still need buffered tombstones for unique indexes. The unique
+		// reservation fast path only proves pending live values, so use the
+		// uncapped run-table path; tombstones can sort after the live entries that
+		// satisfy opts.Limit and still need to hide persisted index rows.
+		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, false, exactPrefix, 0)
 	} else {
 		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
 	}
@@ -11699,8 +11979,13 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 	if persistedIt != nil {
 		defer func() { _ = persistedIt.Close() }()
 	}
-	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, opts.Limit, fn)
+	dedupeDocumentIDs := shouldDedupeIndexDocumentIDs(idx, catalog.meta.Options)
+	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, opts.Limit, dedupeDocumentIDs, fn)
 	return truncated, true, err
+}
+
+func shouldDedupeIndexDocumentIDs(idx IndexDefinition, opts CollectionOptions) bool {
+	return idx.MultiKey || opts.AllowArrayValuesInIndex
 }
 
 func exactIndexRangePrefix(valueType IndexValueType, opts IndexRangeOptions) ([]byte, bool, error) {
@@ -11882,26 +12167,90 @@ func encodedDoubleComponentIsNaN(encoded []byte) bool {
 	return len(encoded) == 1 && encoded[0] == 0x00
 }
 
-func scanMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, fn func([]byte) (bool, error)) (bool, error) {
+func scanMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, dedupeDocumentIDs bool, fn func([]byte) (bool, error)) (bool, error) {
+	return scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt, valueType, maxResults, scanMergedCollectionIndexIDOptions{
+		CloneDocumentID:  true,
+		DedupeDocumentID: dedupeDocumentIDs,
+	}, fn)
+}
+
+// scanMergedCollectionIndexIDsBorrowed calls fn with document IDs that may alias
+// iterator key memory. fn must not retain or mutate id after returning; clone it
+// first if the ID needs to outlive the callback.
+func scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, dedupeDocumentIDs bool, fn func([]byte) (bool, error)) (bool, error) {
+	return scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt, valueType, maxResults, scanMergedCollectionIndexIDOptions{
+		CloneDocumentID:  false,
+		DedupeDocumentID: dedupeDocumentIDs,
+	}, fn)
+}
+
+type scanMergedCollectionIndexIDOptions struct {
+	CloneDocumentID  bool
+	DedupeDocumentID bool
+}
+
+func scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, opts scanMergedCollectionIndexIDOptions, fn func([]byte) (bool, error)) (bool, error) {
 	if maxResults < 0 {
 		return false, errors.New("collections: max index results cannot be negative")
 	}
-	seen := make(map[string]struct{})
+	if bufferedIt == nil && !opts.DedupeDocumentID {
+		emitted := 0
+		for {
+			persistedKey, persistedOK := collectionIndexIteratorKey(persistedIt)
+			if !persistedOK {
+				break
+			}
+			if persistedIt.IsDeleted() {
+				persistedIt.Next()
+				continue
+			}
+			if maxResults > 0 && emitted >= maxResults {
+				return true, collectionIndexIteratorError(persistedIt)
+			}
+			id, err := indexKeyDocumentID(valueType, persistedKey)
+			if err != nil {
+				return false, err
+			}
+			if opts.CloneDocumentID {
+				id = bytes.Clone(id)
+			}
+			cont, err := fn(id)
+			if err != nil || !cont {
+				return false, err
+			}
+			emitted++
+			persistedIt.Next()
+		}
+		return false, collectionIndexIteratorError(persistedIt)
+	}
+	var seen map[string]struct{}
+	if opts.DedupeDocumentID {
+		if maxResults > 0 {
+			seen = make(map[string]struct{}, maxResults)
+		} else {
+			seen = make(map[string]struct{})
+		}
+	}
 	emitted := 0
 	emit := func(key []byte) (bool, bool, error) {
 		id, err := indexKeyDocumentID(valueType, key)
 		if err != nil {
 			return false, false, err
 		}
-		idKey := string(id)
-		if _, ok := seen[idKey]; ok {
-			return true, false, nil
+		if opts.DedupeDocumentID {
+			idKey := string(id)
+			if _, ok := seen[idKey]; ok {
+				return true, false, nil
+			}
+			seen[idKey] = struct{}{}
 		}
-		seen[idKey] = struct{}{}
 		if maxResults > 0 && emitted >= maxResults {
 			return false, true, nil
 		}
-		cont, err := fn(bytes.Clone(id))
+		if opts.CloneDocumentID {
+			id = bytes.Clone(id)
+		}
+		cont, err := fn(id)
 		if err != nil {
 			return false, false, err
 		}

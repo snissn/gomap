@@ -19,7 +19,7 @@ func TestBuildAndValidateDict_DefaultOffsetsAvoidInvalidOffset(t *testing.T) {
 	sample := append([]byte("prefix:"), bytes.Repeat([]byte("abcd"), (1024-7)/4)...)
 	sample = sample[:1024]
 
-	dict, err := buildAndValidateDict(1, [][]byte{sample}, hist, zstd.SpeedFastest)
+	dict, err := buildAndValidateDict(1, [][]byte{sample}, hist, zstd.SpeedFastest, nil, nil)
 	if err != nil {
 		t.Fatalf("buildAndValidateDict failed: %v", err)
 	}

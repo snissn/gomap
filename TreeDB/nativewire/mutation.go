@@ -56,14 +56,10 @@ func ackPolicyFromSections(sections []iwire.Section, fallback AckPolicy) (AckPol
 	if !ok {
 		return fallback, nil
 	}
-	ack, err := ackPolicyFromPayload(raw)
-	if err != nil || ack != 0 {
-		return ack, err
-	}
-	return fallback, nil
+	return ackPolicyFromPayload(raw, fallback)
 }
 
-func ackPolicyFromPayload(raw []byte) (AckPolicy, error) {
+func ackPolicyFromPayload(raw []byte, fallback AckPolicy) (AckPolicy, error) {
 	value, n, err := readUvarint(raw)
 	if err != nil {
 		return 0, err
@@ -73,7 +69,7 @@ func ackPolicyFromPayload(raw []byte) (AckPolicy, error) {
 	}
 	switch AckPolicy(value) {
 	case 0:
-		return 0, nil
+		return fallback, nil
 	case iwire.AckVisible, iwire.AckFlushed, iwire.AckSynced, iwire.AckRaftCommitted:
 		return AckPolicy(value), nil
 	default:
