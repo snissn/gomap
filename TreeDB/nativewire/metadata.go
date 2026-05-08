@@ -348,6 +348,9 @@ func readEnum(src []byte, off *int) (uint64, error) {
 }
 
 func readVarint(src []byte, off *int) (int64, error) {
+	if off == nil || *off < 0 || *off > len(src) {
+		return 0, protocolError(iwire.ErrMalformedFrame, "invalid varint offset")
+	}
 	value, n := binary.Varint(src[*off:])
 	if n <= 0 {
 		return 0, protocolError(iwire.ErrMalformedFrame, "invalid varint")

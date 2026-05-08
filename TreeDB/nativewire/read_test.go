@@ -129,6 +129,26 @@ func TestIndexLookupByteOnlyLimitTruncatesIDs(t *testing.T) {
 	}
 }
 
+func TestIndexLookupDefaultResultBoundUsesWireLimit(t *testing.T) {
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{
+		Limits: iwire.Limits{MaxByteVectorItems: 1},
+	})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	ids, truncated, err := client.IndexLookup(ctx, "users", "city", "hnl", CursorLimits{})
+	if err != nil {
+		t.Fatalf("IndexLookup: %v", err)
+	}
+	if !truncated || len(ids) != 1 {
+		t.Fatalf("ids=%q truncated=%v want one bounded match with truncation", ids, truncated)
+	}
+}
+
 func TestIndexRangeByteOnlyLimitTruncatesIDs(t *testing.T) {
 	client, mgr, _ := serveCollectionPipe(t)
 	seedReadCollection(t, mgr)
@@ -170,6 +190,16 @@ func TestIndexRangeOmittedBoundsAreUnbounded(t *testing.T) {
 	}
 	if truncated || len(ids) != 2 {
 		t.Fatalf("ids=%q truncated=%v want full unbounded range", ids, truncated)
+	}
+}
+
+func TestDecodeDocumentsResultRejectsMismatchedVectors(t *testing.T) {
+	_, err := decodeDocumentsResult([]iwire.Section{
+		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("a"))},
+		{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, []byte("{}"), []byte("{}"))},
+	}, iwire.DefaultLimits())
+	if nativeCodeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("decodeDocumentsResult err=%v code=%d want malformed frame", err, nativeCodeOf(err))
 	}
 }
 
