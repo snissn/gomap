@@ -119,6 +119,9 @@ func (r *Registry) ValidateRequestSections(sections []Section) (ValidatedCommand
 // The returned command borrows section slices from sections and scratch. Callers
 // may reuse scratch after they are done with the validated command view.
 func (r *Registry) ValidateRequestSectionsInto(sections []Section, scratch *CommandScratch) (ValidatedCommand, error) {
+	if r == nil {
+		return ValidatedCommand{}, protocolError(ErrUnsupportedVersion, "nil command registry")
+	}
 	header, err := findCommandHeader(sections)
 	if err != nil {
 		return ValidatedCommand{}, err
@@ -200,21 +203,22 @@ func (c *CommandSchema) validateSections(sections []Section, scratch *CommandScr
 		}
 		count := seen.add(section.ID)
 		if !rule.Repeatable && count > 1 {
-			return nil, nil, protocolError(ErrInvalidCommand, "duplicate singleton section %d", section.ID)
+			return nil, nil, protocolError(ErrInvalidCommand, "command %s duplicate singleton section %s (%d)", c.Name, rule.Name, section.ID)
 		}
 		known = append(known, section)
 	}
 
 	for _, id := range c.requiredSections() {
 		if seen.get(id) == 0 {
-			return nil, nil, protocolError(ErrInvalidCommand, "missing required section %d", id)
+			rule := rules[id]
+			return nil, nil, protocolError(ErrInvalidCommand, "command %s missing required section %s (%d)", c.Name, rule.Name, id)
 		}
 	}
 	if c.RequiresIdempotency && seen.get(SectionIdempotencyKey) == 0 {
-		return nil, nil, protocolError(ErrInvalidCommand, "missing idempotency key")
+		return nil, nil, protocolError(ErrInvalidCommand, "command %s missing idempotency key", c.Name)
 	}
 	if c.RequiresCatalogGuard && seen.get(SectionExpectedCatalogVersion) == 0 {
-		return nil, nil, protocolError(ErrInvalidCommand, "missing catalog guard")
+		return nil, nil, protocolError(ErrInvalidCommand, "command %s missing catalog guard", c.Name)
 	}
 	if scratch != nil {
 		scratch.Known = known
@@ -524,6 +528,7 @@ func v1CommandSchemas() []CommandSchema {
 			Name:    "cursor_next",
 			Kind:    CommandKindRead,
 			Sections: []SectionRule{
+				{ID: SectionCursorRef, Name: "cursor_ref", Required: true},
 				{ID: SectionCursorLimits, Name: "cursor_limits", Required: true},
 			},
 		},
@@ -532,6 +537,9 @@ func v1CommandSchemas() []CommandSchema {
 			Version: 1,
 			Name:    "cursor_close",
 			Kind:    CommandKindRead,
+			Sections: []SectionRule{
+				{ID: SectionCursorRef, Name: "cursor_ref", Required: true},
+			},
 		},
 		{
 			ID:      CommandStats,

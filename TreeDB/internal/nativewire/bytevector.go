@@ -1,7 +1,5 @@
 package nativewire
 
-const maxInt = int(^uint(0) >> 1)
-
 type ByteVector struct {
 	count   int
 	offsets []int
