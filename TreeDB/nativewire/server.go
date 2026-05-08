@@ -240,6 +240,9 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		case <-done:
 		}
 	}()
+	if s.cursorIdleTimeout > 0 {
+		go s.reapExpiredCursorsUntilDone(done)
+	}
 
 	for {
 		if s.closed.Load() {

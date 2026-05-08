@@ -101,6 +101,20 @@ func (s *Server) indexLookupResultLimit(limits CursorLimits) int {
 	return limit
 }
 
+func (s *Server) indexRangeResultLimit(limits CursorLimits) int {
+	limit := s.limits.MaxByteVectorItems
+	if limit <= 0 {
+		limit = iwire.DefaultLimits().MaxByteVectorItems
+	}
+	if limits.MaxItems > 0 && limits.MaxItems < limit {
+		limit = limits.MaxItems
+	}
+	if limit <= 0 {
+		return 1
+	}
+	return limit
+}
+
 func applyIDByteLimit(ids [][]byte, maxBytes int, truncated bool) ([][]byte, bool) {
 	if maxBytes <= 0 || len(ids) == 0 {
 		return ids, truncated
@@ -109,7 +123,7 @@ func applyIDByteLimit(ids [][]byte, maxBytes int, truncated bool) ([][]byte, boo
 	bytes := 0
 	for end < len(ids) {
 		nextBytes := len(ids[end])
-		if end > 0 && bytes+nextBytes > maxBytes {
+		if bytes+nextBytes > maxBytes {
 			break
 		}
 		bytes += nextBytes
@@ -140,6 +154,7 @@ func (s *Server) handleIndexRange(state *connState, sections []iwire.Section) ([
 	if err != nil {
 		return nil, metadataWrap(err)
 	}
+	opts.Limit = s.indexRangeResultLimit(limits)
 	ids, truncated, err := collection.FindByIndexRange(indexName, opts)
 	if err != nil {
 		return nil, metadataWrap(err)
@@ -178,12 +193,13 @@ func (s *Server) handleOpenScan(state *connState, sections []iwire.Section) ([]i
 	if end < len(records) && documentRecordsBytes(records[end:]) > s.maxCursorRetainedBytes {
 		return responseForRecords(records[:end], CursorMeta{Items: end, Bytes: bytes, Truncated: true})
 	}
+	batch := append([]collections.DocumentRecord(nil), records[:end]...)
 	cursorID, err := s.storeCursor(state.id, records, end, truncated)
 	if err != nil {
 		return nil, err
 	}
 	hasMore := cursorID != 0
-	return responseForRecords(records[:end], CursorMeta{CursorID: cursorID, Items: end, Bytes: bytes, HasMore: hasMore, Truncated: truncated})
+	return responseForRecords(batch, CursorMeta{CursorID: cursorID, Items: end, Bytes: bytes, HasMore: hasMore, Truncated: truncated})
 }
 
 func (s *Server) handleCursorNext(state *connState, cursorID uint64, sections []iwire.Section) ([]iwire.Section, error) {
