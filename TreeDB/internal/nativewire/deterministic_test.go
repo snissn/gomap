@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"strings"
 	"testing"
 )
 
@@ -419,6 +420,125 @@ func TestDecodeDeterministicEntryPreservesPayloadLimits(t *testing.T) {
 	}
 }
 
+func TestDeterministicEntryStableAcrossTransportOnlySections(t *testing.T) {
+	registry := MustV1Registry()
+	cmd0, err := registry.ValidateRequestSections(insertBatchDeterministicSections())
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	entry0, err := AppendDeterministicEntry(nil, cmd0)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry: %v", err)
+	}
+	variant := []Section{
+		{ID: SectionCompression, Bytes: []byte{1}},
+		{ID: SectionTraceContext, Bytes: []byte("trace")},
+		{ID: SectionDeadline, Bytes: []byte("deadline")},
+		{ID: 9000, Bytes: []byte("ignored")},
+		{ID: SectionDocuments, Bytes: AppendByteVector(nil, deterministicBSONEmptyDocument())},
+		{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
+		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
+		{ID: SectionExpectedCatalogVersion, Bytes: deterministicUvarintPayload(deterministicFixtureCatalogVersion)},
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandInsertBatch, Version: deterministicFixtureCommandVersion, Flags: CommandFlagOmitResultIDs | CommandFlagOmitResponseMeta})},
+		{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
+		{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("c")},
+	}
+	cmd1, err := registry.ValidateRequestSections(variant)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections variant: %v", err)
+	}
+	entry1, err := AppendDeterministicEntry(nil, cmd1)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry variant: %v", err)
+	}
+	if !bytes.Equal(entry0, entry1) {
+		t.Fatalf("transport-only sections changed entry\ngot  %s\nwant %s", hex.EncodeToString(entry1), hex.EncodeToString(entry0))
+	}
+	if DeterministicEntryDigest(entry0) != DeterministicEntryDigest(entry1) {
+		t.Fatal("same deterministic entry produced different digest")
+	}
+}
+
+func TestDeterministicEntryDigestChangesWithLogicalMutation(t *testing.T) {
+	registry := MustV1Registry()
+	base := insertBatchDeterministicSections()
+	cmd0, err := registry.ValidateRequestSections(base)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections base: %v", err)
+	}
+	entry0, err := AppendDeterministicEntry(nil, cmd0)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry base: %v", err)
+	}
+	changed := replaceSection(insertBatchDeterministicSections(), SectionDocuments, AppendByteVector(nil, []byte(`{"changed":true}`)))
+	cmd1, err := registry.ValidateRequestSections(changed)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections changed: %v", err)
+	}
+	entry1, err := AppendDeterministicEntry(nil, cmd1)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry changed: %v", err)
+	}
+	if bytes.Equal(entry0, entry1) {
+		t.Fatal("logical mutation change did not change deterministic entry")
+	}
+	if DeterministicEntryDigest(entry0) == DeterministicEntryDigest(entry1) {
+		t.Fatal("logical mutation change did not change deterministic entry digest")
+	}
+}
+
+func TestDeterministicEntryRejectsAmbiguousCommandPayloads(t *testing.T) {
+	registry := MustV1Registry()
+	for _, tc := range []struct {
+		name     string
+		sections []Section
+		code     ErrorCode
+	}{
+		{
+			name:     "empty_idempotency",
+			sections: replaceSection(insertBatchDeterministicSections(), SectionIdempotencyKey, nil),
+			code:     ErrInvalidCommand,
+		},
+		{
+			name: "empty_collection_meta",
+			sections: []Section{
+				{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateCollection, Version: deterministicFixtureCommandVersion})},
+				{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
+				{ID: SectionCollectionMeta, Bytes: nil},
+				{ID: SectionExpectedCatalogVersion, Bytes: deterministicUvarintPayload(deterministicFixtureCatalogVersion)},
+			},
+			code: ErrInvalidCommand,
+		},
+		{
+			name:     "invalid_index_name",
+			sections: replaceSection(deterministicEntryFixtureCases()[2].sections, SectionIndexName, appendDeterministicString(nil, "bad/name")),
+			code:     ErrInvalidCommand,
+		},
+		{
+			name:     "insert_ids_docs_mismatch",
+			sections: replaceSection(insertBatchDeterministicSections(), SectionDocuments, AppendByteVector(nil, []byte("{}"), []byte("{}"))),
+			code:     ErrInvalidCommand,
+		},
+		{
+			name:     "replace_ids_docs_mismatch",
+			sections: replaceSection(deterministicEntryFixtureCases()[4].sections, SectionDocuments, AppendByteVector(nil, []byte("{}"), []byte("{}"))),
+			code:     ErrInvalidCommand,
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, err := registry.ValidateRequestSections(tc.sections)
+			if err != nil {
+				t.Fatalf("ValidateRequestSections: %v", err)
+			}
+			_, err = AppendDeterministicEntry(nil, cmd)
+			if codeOf(err) != tc.code {
+				t.Fatalf("AppendDeterministicEntry err=%v code=%d want %d", err, codeOf(err), tc.code)
+			}
+		})
+	}
+}
+
 func TestDecodeDeterministicEntryClearsScratchTail(t *testing.T) {
 	scratch := &DeterministicEntryScratch{
 		Sections: []Section{
@@ -446,6 +566,144 @@ func TestDecodeDeterministicEntryClearsScratchTail(t *testing.T) {
 		if backing[i].ID != 0 || backing[i].Bytes != nil {
 			t.Fatalf("scratch tail[%d]=%+v want zero", i, backing[i])
 		}
+	}
+}
+
+func TestDeterministicEntryAcceptsMaxLengthEncodedIndexName(t *testing.T) {
+	registry := MustV1Registry()
+	limit := int(DefaultLimits().MaxDeterministicNameBytes)
+	sections := deterministicEntryFixtureCases()[2].sections
+	sections = replaceSection(sections, SectionIndexName, appendDeterministicString(nil, strings.Repeat("x", limit)))
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); err != nil {
+		t.Fatalf("AppendDeterministicEntry: %v", err)
+	}
+}
+
+func TestAppendDeterministicEntryWithLimitsHonorsNameLimit(t *testing.T) {
+	registry := MustV1Registry()
+	sections := deterministicEntryFixtureCases()[2].sections
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	_, err = AppendDeterministicEntryWithLimits(nil, cmd, Limits{MaxDeterministicNameBytes: 3})
+	if codeOf(err) != ErrResourceExhausted {
+		t.Fatalf("AppendDeterministicEntryWithLimits err=%v code=%d want resource exhausted", err, codeOf(err))
+	}
+	if _, err := AppendDeterministicEntryWithLimits(nil, cmd, DefaultLimits()); err != nil {
+		t.Fatalf("AppendDeterministicEntryWithLimits default limits: %v", err)
+	}
+}
+
+func TestAppendDeterministicEntryWithLimitsHonorsEnvelopeLimits(t *testing.T) {
+	registry := MustV1Registry()
+	cmd, err := registry.ValidateRequestSections(insertBatchDeterministicSections())
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	entry, err := AppendDeterministicEntryWithLimits(nil, cmd, DefaultLimits())
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntryWithLimits default limits: %v", err)
+	}
+	_, err = AppendDeterministicEntryWithLimits(nil, cmd, Limits{MaxSectionLen: 1})
+	if codeOf(err) != ErrResourceExhausted {
+		t.Fatalf("AppendDeterministicEntryWithLimits section err=%v code=%d want resource exhausted", err, codeOf(err))
+	}
+	_, err = AppendDeterministicEntryWithLimits(nil, cmd, Limits{MaxSections: 5})
+	if codeOf(err) != ErrResourceExhausted {
+		t.Fatalf("AppendDeterministicEntryWithLimits sections err=%v code=%d want resource exhausted", err, codeOf(err))
+	}
+	prefix := []byte("prefix")
+	got, err := AppendDeterministicEntryWithLimits(append([]byte(nil), prefix...), cmd, Limits{MaxSections: 5})
+	if codeOf(err) != ErrResourceExhausted {
+		t.Fatalf("AppendDeterministicEntryWithLimits prefixed sections err=%v code=%d want resource exhausted", err, codeOf(err))
+	}
+	if !bytes.Equal(got, prefix) {
+		t.Fatalf("AppendDeterministicEntryWithLimits returned %q after error, want %q", got, prefix)
+	}
+	_, err = AppendDeterministicEntryWithLimits(nil, cmd, Limits{MaxFrameSize: uint64(len(entry) - 1)})
+	if codeOf(err) != ErrResourceExhausted {
+		t.Fatalf("AppendDeterministicEntryWithLimits frame err=%v code=%d want resource exhausted", err, codeOf(err))
+	}
+	backing := make([]byte, len(prefix), len(prefix)+len(entry)+8)
+	copy(backing, prefix)
+	sentinel := bytes.Repeat([]byte{0xa5}, cap(backing)-len(prefix))
+	backing = backing[:cap(backing)]
+	copy(backing[len(prefix):], sentinel)
+	got, err = AppendDeterministicEntryWithLimits(backing[:len(prefix)], cmd, Limits{MaxFrameSize: uint64(len(entry) - 1)})
+	if codeOf(err) != ErrResourceExhausted {
+		t.Fatalf("AppendDeterministicEntryWithLimits prefixed frame err=%v code=%d want resource exhausted", err, codeOf(err))
+	}
+	if !bytes.Equal(got, prefix) {
+		t.Fatalf("AppendDeterministicEntryWithLimits returned %q after frame error, want %q", got, prefix)
+	}
+	if !bytes.Equal(backing[len(prefix):], sentinel) {
+		t.Fatal("AppendDeterministicEntryWithLimits modified spare backing on frame-size failure")
+	}
+}
+
+func TestAppendDeterministicEntryEnforcesHardSectionCap(t *testing.T) {
+	const (
+		commandID    = CommandID(9200)
+		sectionStart = SectionID(1300)
+	)
+	rules := make([]SectionRule, 0, maxDeterministicEntrySections+1)
+	sections := []Section{{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: commandID, Version: 1})}}
+	for i := 0; i < maxDeterministicEntrySections+1; i++ {
+		id := sectionStart + SectionID(i)
+		rules = append(rules, SectionRule{ID: id, Name: "deterministic", Required: true, Deterministic: true})
+		sections = append(sections, Section{ID: id, Bytes: []byte{byte(i)}})
+	}
+	registry, err := NewRegistry(CommandSchema{
+		ID:         commandID,
+		Version:    1,
+		Name:       "too_many_deterministic_sections",
+		Kind:       CommandKindMutation,
+		Replicated: true,
+		Sections:   rules,
+	})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	_, err = AppendDeterministicEntryWithLimits(nil, cmd, Limits{MaxSections: maxDeterministicEntrySections + 1})
+	if codeOf(err) != ErrResourceExhausted {
+		t.Fatalf("AppendDeterministicEntryWithLimits err=%v code=%d want resource exhausted", err, codeOf(err))
+	}
+}
+
+func TestDeterministicEntryRejectsInvalidEncodedIndexName(t *testing.T) {
+	registry := MustV1Registry()
+	limit := int(DefaultLimits().MaxDeterministicNameBytes)
+	for _, tc := range []struct {
+		name string
+		raw  []byte
+		code ErrorCode
+	}{
+		{name: "too_long", raw: appendDeterministicString(nil, strings.Repeat("x", limit+1)), code: ErrResourceExhausted},
+		{name: "trailing", raw: append(appendDeterministicString(nil, "email_1"), 0), code: ErrMalformedFrame},
+		{name: "empty_payload", raw: nil, code: ErrInvalidCommand},
+		{name: "empty_name", raw: appendDeterministicString(nil, ""), code: ErrInvalidCommand},
+		{name: "raw_string", raw: []byte("email_1"), code: ErrMalformedFrame},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			sections := replaceSection(deterministicEntryFixtureCases()[2].sections, SectionIndexName, tc.raw)
+			cmd, err := registry.ValidateRequestSections(sections)
+			if err != nil {
+				t.Fatalf("ValidateRequestSections: %v", err)
+			}
+			if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != tc.code {
+				t.Fatalf("AppendDeterministicEntry err=%v code=%d want %d", err, codeOf(err), tc.code)
+			}
+		})
 	}
 }
 
@@ -715,7 +973,7 @@ func TestDeterministicEntryRejectsMalformedMetadataPayloads(t *testing.T) {
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateCollection, Version: 1})},
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
 		{ID: SectionExpectedCatalogVersion, Bytes: deterministicUvarintPayload(deterministicFixtureCatalogVersion)},
-		{ID: SectionCollectionMeta, Bytes: nil},
+		{ID: SectionCollectionMeta, Bytes: []byte{1}},
 	}
 	cmd, err := registry.ValidateRequestSections(sections)
 	if err != nil {
@@ -1399,6 +1657,17 @@ func insertBatchDeterministicSections() []Section {
 		Section{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
 		Section{ID: SectionDocuments, Bytes: AppendByteVector(nil, deterministicBSONEmptyDocument())},
 	)
+}
+
+func replaceSection(sections []Section, id SectionID, raw []byte) []Section {
+	out := append([]Section(nil), sections...)
+	for i := range out {
+		if out[i].ID == id {
+			out[i].Bytes = raw
+			return out
+		}
+	}
+	return append(out, Section{ID: id, Bytes: raw})
 }
 
 func replaceBatchDeterministicSections() []Section {
