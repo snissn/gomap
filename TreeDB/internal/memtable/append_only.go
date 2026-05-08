@@ -20,27 +20,32 @@ const (
 	// appendOnlyEntry struct footprint. A lower estimate reduces growth/copy
 	// churn for pointer-heavy write paths.
 	appendOnlyEstimatedBytesPerEntryPointer = 24
-	appendOnlyMinInitialEntries             = 128
-	appendOnlyMaxInitialEntries             = 1 << 20
 	appendOnlyInlineKeyLen                  = 8
-	appendOnlyEntryPoolMaxCap               = 1 << 20
-	appendOnlyIteratorPoolMaxCap            = 1 << 20
-	appendOnlyIteratorPtrPoolMaxCap         = 1 << 20
-	appendOnlyReusableKeyMaxCap             = 1 << 10
-	appendOnlyKeyArenaDefaultChunk          = 2 << 10
-	appendOnlyValueArenaMinShift            = 12
-	appendOnlyValueArenaMaxShift            = 20
-	appendOnlyValueArenaClassCount          = appendOnlyValueArenaMaxShift - appendOnlyValueArenaMinShift + 1
-	appendOnlyValueArenaDefaultChunk        = 32 << 10
-	appendOnlyValueArenaPoolMaxCap          = 1 << appendOnlyValueArenaMaxShift
-	appendOnlyValueArenaRetainMaxCap        = 4 << 20
-	appendOnlyValueArenaRetainChunks        = 128
-	appendOnlyReuseOversizeFactor           = 4
-	appendOnlyResetDropThresholdEntries     = 1 << 15
-	appendOnlyAggressiveGrowCutoff          = appendOnlyResetDropThresholdEntries * 2
+	// Pool size-class boundaries. Min/Max initial entries are derived from
+	// these shifts so the three constants can't drift out of sync.
+	appendOnlyEntryPoolMinShift         = 7
+	appendOnlyEntryPoolMaxShift         = 20
+	appendOnlyEntryPoolClassCount       = appendOnlyEntryPoolMaxShift - appendOnlyEntryPoolMinShift + 1
+	appendOnlyEntryPoolMaxCap           = 1 << appendOnlyEntryPoolMaxShift // 1 << 20
+	appendOnlyMinInitialEntries         = 1 << appendOnlyEntryPoolMinShift // 128
+	appendOnlyMaxInitialEntries         = 1 << appendOnlyEntryPoolMaxShift // 1 << 20
+	appendOnlyIteratorPoolMaxCap        = 1 << 20
+	appendOnlyIteratorPtrPoolMaxCap     = 1 << 20
+	appendOnlyReusableKeyMaxCap         = 1 << 10
+	appendOnlyKeyArenaDefaultChunk      = 2 << 10
+	appendOnlyValueArenaMinShift        = 12
+	appendOnlyValueArenaMaxShift        = 20
+	appendOnlyValueArenaClassCount      = appendOnlyValueArenaMaxShift - appendOnlyValueArenaMinShift + 1
+	appendOnlyValueArenaDefaultChunk    = 32 << 10
+	appendOnlyValueArenaPoolMaxCap      = 1 << appendOnlyValueArenaMaxShift
+	appendOnlyValueArenaRetainMaxCap    = 4 << 20
+	appendOnlyValueArenaRetainChunks    = 128
+	appendOnlyReuseOversizeFactor       = 4
+	appendOnlyResetDropThresholdEntries = 1 << 15
+	appendOnlyAggressiveGrowCutoff      = appendOnlyResetDropThresholdEntries * 2
 )
 
-var appendOnlyEntryPool sync.Pool
+var appendOnlyEntryPools [appendOnlyEntryPoolClassCount]sync.Pool
 var appendOnlyIteratorPool sync.Pool
 var appendOnlyIteratorPtrPool sync.Pool
 var appendOnlyValueArenaPools [appendOnlyValueArenaClassCount]sync.Pool
@@ -114,6 +119,38 @@ func appendOnlyMaxReuseEntries(length int) int {
 	return maxReuse
 }
 
+func appendOnlyEntryPoolClassForLength(length int) (int, int, bool) {
+	if length < 0 {
+		length = 0
+	}
+	if length > appendOnlyEntryPoolMaxCap {
+		return 0, 0, false
+	}
+	capacity := appendOnlyMinInitialEntries
+	if length > appendOnlyMinInitialEntries {
+		capacity = 1 << bits.Len(uint(length-1))
+	}
+	if capacity > appendOnlyEntryPoolMaxCap {
+		return 0, 0, false
+	}
+	class := bits.Len(uint(capacity)) - 1 - appendOnlyEntryPoolMinShift
+	if class < 0 || class >= appendOnlyEntryPoolClassCount {
+		return 0, 0, false
+	}
+	return class, capacity, true
+}
+
+func appendOnlyEntryPoolClassForReusableCapacity(capacity int) (int, bool) {
+	if capacity < appendOnlyMinInitialEntries || capacity > appendOnlyEntryPoolMaxCap {
+		return 0, false
+	}
+	class, _, ok := appendOnlyEntryPoolClassForLength(capacity)
+	if !ok {
+		return 0, false
+	}
+	return class, true
+}
+
 func getAppendOnlyEntriesFromPool(length int, pool *sync.Pool) []appendOnlyEntry {
 	if length < 0 {
 		length = 0
@@ -138,7 +175,21 @@ func getAppendOnlyEntriesFromPool(length int, pool *sync.Pool) []appendOnlyEntry
 }
 
 func getAppendOnlyEntries(length int) []appendOnlyEntry {
-	return getAppendOnlyEntriesFromPool(length, &appendOnlyEntryPool)
+	if length < 0 {
+		length = 0
+	}
+	class, _, ok := appendOnlyEntryPoolClassForLength(length)
+	if !ok {
+		return make([]appendOnlyEntry, length)
+	}
+	if v := appendOnlyEntryPools[class].Get(); v != nil {
+		if entries, ok := v.([]appendOnlyEntry); ok && cap(entries) >= length {
+			if cap(entries) <= appendOnlyMaxReuseEntries(length) {
+				return entries[:length]
+			}
+		}
+	}
+	return make([]appendOnlyEntry, length)
 }
 
 func putAppendOnlyEntries(entries []appendOnlyEntry) {
@@ -147,7 +198,11 @@ func putAppendOnlyEntries(entries []appendOnlyEntry) {
 	}
 	full := entries[:cap(entries)]
 	clear(full)
-	appendOnlyEntryPool.Put(full[:0])
+	class, ok := appendOnlyEntryPoolClassForReusableCapacity(cap(entries))
+	if !ok {
+		return
+	}
+	appendOnlyEntryPools[class].Put(full[:0])
 }
 
 func getAppendOnlyIteratorEntries(length int) []appendOnlyEntry {

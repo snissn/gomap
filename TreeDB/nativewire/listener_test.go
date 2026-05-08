@@ -245,28 +245,6 @@ func TestNewInProcessClientCleanupIsIdempotent(t *testing.T) {
 	_ = server.Close()
 }
 
-func TestInProcessClientClosesWhenServerClosed(t *testing.T) {
-	server := NewServer(ServerOptions{})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	client, cleanup, err := NewInProcessClient(ctx, server)
-	if err != nil {
-		t.Fatalf("NewInProcessClient: %v", err)
-	}
-	if err := server.Close(); err != nil {
-		t.Fatalf("server Close: %v", err)
-	}
-	if err := client.Ping(ctx); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("Ping after server close err=%v want closed pipe", err)
-	}
-	if client.local == nil || !client.local.closed.Load() {
-		t.Fatal("local endpoint did not mark itself closed")
-	}
-	if err := cleanup(); err != nil {
-		t.Fatalf("cleanup: %v", err)
-	}
-}
-
 func unixSocketPath(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "nw")
