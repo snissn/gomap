@@ -11371,6 +11371,8 @@ type IndexRangeOptions struct {
 	Desc  bool
 }
 
+const defaultIndexRangeResultCap = 16
+
 // FindByIndexValue returns document IDs whose named secondary index equals
 // value. Query values must match the index value type. If indexName does not
 // exist, it returns nil, nil.
@@ -11393,7 +11395,7 @@ func (c *Collection) FindByIndexRange(indexName string, opts IndexRangeOptions) 
 	if opts.Limit < 0 {
 		return nil, false, errors.New("collections: index range limit cannot be negative")
 	}
-	capHint := 16
+	capHint := defaultIndexRangeResultCap
 	if opts.Limit > 0 && opts.Limit < capHint {
 		capHint = opts.Limit
 	}
@@ -11413,6 +11415,155 @@ func (c *Collection) FindByIndexRange(indexName string, opts IndexRangeOptions) 
 	}
 	if out == nil {
 		out = make([][]byte, 0)
+	}
+	return out, truncated, nil
+}
+
+// FindDocumentsByIndexRange returns primary documents whose named secondary
+// index falls inside opts, preserving index order. Persisted index and primary
+// reads share one snapshot/catalog; same-manager buffered documents are still
+// consulted before the persisted primary root so pending indexed writes remain
+// visible. Descending scans are not supported. Because this API holds a
+// write-domain read lock while pairing secondary IDs with buffered primary
+// documents, callers must provide a positive Limit.
+func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRangeOptions) ([]DocumentRecord, bool, error) {
+	if c == nil {
+		return nil, false, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, false, errCollectionDBNil
+	}
+	if err := ValidateIndexName(indexName); err != nil {
+		return nil, false, err
+	}
+	if opts.Limit < 0 {
+		return nil, false, errors.New("collections: index range limit cannot be negative")
+	}
+	if opts.Limit == 0 {
+		return nil, false, errors.New("collections: document index range reads require a positive limit")
+	}
+	if opts.Desc {
+		return nil, false, errors.New("collections: descending index range scans are not supported")
+	}
+	if err := c.flushBufferedNoIndex(); err != nil {
+		return nil, false, err
+	}
+	domain := c.writeDomain
+	domainLocked := false
+	if domain != nil {
+		domain.mu.RLock()
+		domainLocked = true
+		// Keep the read lock through the scan so buffered secondary IDs and
+		// buffered primary documents come from one write-domain view. Releasing
+		// here would require copying the pending primary view up front, which is
+		// too much work for the common small-limit range probe.
+	}
+	var snap *backenddb.Snapshot
+	var bufferedTable memtable.Table
+	var bufferedIt iterator.UnsafeIterator
+	var persistedIt iterator.UnsafeIterator
+	defer func() {
+		if domainLocked {
+			domain.mu.RUnlock()
+		}
+		if persistedIt != nil {
+			_ = persistedIt.Close()
+		}
+		if bufferedIt != nil {
+			_ = bufferedIt.Close()
+		}
+		if bufferedTable != nil {
+			resetCollectionRunTable(bufferedTable)
+		}
+		if snap != nil {
+			_ = snap.Close()
+		}
+	}()
+	snap = c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, false, backenddb.ErrClosed
+	}
+	catalog, err := c.catalogForSnapshotWithWriteDomainLocked(snap)
+	if err != nil {
+		return nil, false, err
+	}
+	if catalog == nil {
+		return nil, false, errCollectionNotFound
+	}
+	idx, ok := findIndex(catalog.meta.Indexes, indexName)
+	if !ok {
+		return nil, false, nil
+	}
+	start, end, empty, err := indexRangeScanBounds(idx.ValueType, opts)
+	if err != nil {
+		return nil, false, err
+	}
+	if empty {
+		return make([]DocumentRecord, 0), false, nil
+	}
+	exactPrefix, exactPrefixScan, err := exactIndexRangePrefix(idx.ValueType, opts)
+	if err != nil {
+		return nil, false, err
+	}
+	if exactPrefixScan {
+		// Exact document scans still need buffered tombstones for unique indexes.
+		// The unique reservation fast path only proves pending live values, so use
+		// the uncapped run-table path; tombstones can sort after the live entries
+		// that satisfy opts.Limit and still need to hide persisted index rows.
+		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, false, exactPrefix, 0)
+	} else {
+		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if bufferedTable != nil {
+		bufferedIt = bufferedTable.NewIterator(start, end)
+	}
+	persistedIt, err = collectionIteratorAtCatalogRoot(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true)
+	if err != nil {
+		return nil, false, err
+	}
+	capHint := defaultIndexRangeResultCap
+	if opts.Limit > 0 && opts.Limit < capHint {
+		capHint = opts.Limit
+	}
+	out := make([]DocumentRecord, 0, capHint)
+	primaryRootName := collectionPrimaryRootName(catalog.meta.Name)
+	var scratch []byte
+	documentTruncated := false
+	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, 0, func(id []byte) (bool, error) {
+		var value []byte
+		var buffered, found bool
+		if domainLocked {
+			value, buffered, found = c.getBufferedDocumentIntoLocked(domain, id, scratch[:0])
+		}
+		if !buffered {
+			var err error
+			value, found, err = collectionGetAppendAtCatalogRoot(snap, catalog, primaryRootName, id, scratch[:0])
+			if err != nil {
+				return false, err
+			}
+		}
+		if !found {
+			return true, nil
+		}
+		if opts.Limit > 0 && len(out) >= opts.Limit {
+			documentTruncated = true
+			return false, nil
+		}
+		scratch = value
+		out = append(out, DocumentRecord{
+			ID:       id,
+			Document: bytes.Clone(value),
+		})
+		return true, nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if documentTruncated {
+		return out, true, nil
 	}
 	return out, truncated, nil
 }
@@ -11492,7 +11643,11 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 	}
 	var bufferedTable memtable.Table
 	if exactPrefixScan {
-		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, idx.Unique, exactPrefix, opts.Limit)
+		// Exact scans still need buffered tombstones for unique indexes. The unique
+		// reservation fast path only proves pending live values, so use the
+		// uncapped run-table path; tombstones can sort after the live entries that
+		// satisfy opts.Limit and still need to hide persisted index rows.
+		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, false, exactPrefix, 0)
 	} else {
 		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end)
 	}

@@ -2105,7 +2105,7 @@ func runDirectTreeDBConcurrentRangePhase(ctx context.Context, cfg config, collec
 
 func runDirectTreeDBRangeQuery(cfg config, collection *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, minAge int64) error {
 	if cfg.RangeIndex {
-		ids, _, err := collection.FindByIndexRange("age_1", collections.IndexRangeOptions{
+		records, _, err := collection.FindDocumentsByIndexRange("age_1", collections.IndexRangeOptions{
 			Lower: collections.IndexRangeBound{Value: minAge, Inclusive: true},
 			Upper: collections.IndexRangeBound{Unbounded: true},
 			Limit: 10,
@@ -2113,15 +2113,11 @@ func runDirectTreeDBRangeQuery(cfg config, collection *collections.Collection, m
 		if err != nil {
 			return err
 		}
-		if len(ids) == 0 {
-			return fmt.Errorf("direct indexed range returned no ids for minAge=%d", minAge)
+		if len(records) == 0 {
+			return fmt.Errorf("direct indexed range returned no documents for minAge=%d", minAge)
 		}
-		for _, id := range ids {
-			stored, err := collection.Get(id)
-			if err != nil {
-				return err
-			}
-			raw, err := directStoredDocumentToBSON(collection, materializer, stored)
+		for _, record := range records {
+			raw, err := directStoredDocumentToBSON(collection, materializer, record.Document)
 			if err != nil {
 				return err
 			}
