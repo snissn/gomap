@@ -1428,13 +1428,6 @@ func TestDecodeDeterministicEntryRejectsUnappliableTemplateRecords(t *testing.T)
 			code:   ErrMalformedFrame,
 		},
 		{
-			name:   "td1i_requires_embedded_template",
-			format: DocumentFormatTemplateV1,
-			record: record,
-			doc:    append(deterministicTemplateInputWithCount(0), deterministicTemplateStoredDocumentForRecord(record, []byte{deterministicTemplateV1KindNull})...),
-			code:   ErrInvalidCommand,
-		},
-		{
 			name:   "template_count_exceeds_limit",
 			format: DocumentFormatTemplateV1,
 			record: record,
@@ -1483,13 +1476,18 @@ func TestDecodeDeterministicEntryAllowsStoredTemplateReferencesOutsideSidecar(t 
 		doc  []byte
 	}{
 		{
-			name: "root",
+			name: "td1d_root",
 			doc:  deterministicTemplateStoredDocumentForRecord(persistedRecord, []byte{deterministicTemplateV1KindNull}),
 		},
 		{
-			name: "nested_object",
+			name: "td1d_nested_object",
 			doc: deterministicTemplateStoredDocumentForRecord(sidecarRecord,
 				deterministicTemplateObjectPayload(persistedRecord, []byte{deterministicTemplateV1KindNull})),
+		},
+		{
+			name: "td1i_root_without_embedded_record",
+			doc: append(deterministicTemplateInputWithCount(0),
+				deterministicTemplateStoredDocumentForRecord(persistedRecord, []byte{deterministicTemplateV1KindNull})...),
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
