@@ -36,7 +36,7 @@ func TestServeTCPAndDialContext(t *testing.T) {
 	_ = server.Close()
 	select {
 	case err := <-errCh:
-		if err != nil && !errors.Is(err, context.Canceled) {
+		if err != nil && !isExpectedServeShutdown(err) {
 			t.Fatalf("Serve: %v", err)
 		}
 	case <-time.After(time.Second):
@@ -78,12 +78,19 @@ func TestDialContextAcceptsNilContext(t *testing.T) {
 	_ = server.Close()
 	select {
 	case err := <-errCh:
-		if err != nil && !errors.Is(err, context.Canceled) {
+		if err != nil && !isExpectedServeShutdown(err) {
 			t.Fatalf("Serve: %v", err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Serve did not stop")
 	}
+}
+
+func isExpectedServeShutdown(err error) bool {
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, io.ErrClosedPipe) ||
+		errors.Is(err, ErrServerClosed)
 }
 
 func TestNewInProcessClientLocalEndpoint(t *testing.T) {

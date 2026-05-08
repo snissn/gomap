@@ -267,7 +267,7 @@ func TestDecodeReadResultsRejectsTrailingTruncatedBytes(t *testing.T) {
 }
 
 func TestIndexRangeByteOnlyLimitDoesNotBecomeQueryLimit(t *testing.T) {
-	server := &Server{}
+	server := NewServer(ServerOptions{})
 	_, opts, limits, err := server.indexRangeRequest([]iwire.Section{
 		{ID: iwire.SectionIndexName, Bytes: encodeIndexName("city")},
 		{ID: iwire.SectionCursorLimits, Bytes: encodeCursorLimits(CursorLimits{MaxBytes: 1 << 20})},
