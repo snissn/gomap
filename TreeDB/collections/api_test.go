@@ -6276,6 +6276,88 @@ func TestShouldFlushBufferedIndexedWritesAfterAddingBoundaries(t *testing.T) {
 	}
 }
 
+func TestDetachMutableIndexedRunTablesKeepsRunsVisible(t *testing.T) {
+	domain := &collectionWriteDomain{}
+	primaryName := collectionPrimaryRootName("users")
+	secondaryName := collectionSecondaryRootName("users", "city")
+
+	primary, created := mutableRootRunLocked(domain, primaryName)
+	if !created || primary == nil {
+		t.Fatal("primary mutable root run was not created")
+	}
+	city, created := mutableRootRunLocked(domain, secondaryName)
+	if !created || city == nil {
+		t.Fatal("city mutable root run was not created")
+	}
+	if err := applyCollectionRunEntriesWithFlags(primary, 2, func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
+		if i == 0 {
+			return []byte("u2"), []byte("old-u2"), page.ValuePtr{}, node.FlagInline, nil
+		}
+		return []byte("u1"), []byte("value-u1"), page.ValuePtr{}, node.FlagInline, nil
+	}); err != nil {
+		t.Fatalf("append primary entries: %v", err)
+	}
+	if err := applyCollectionRunEntriesWithFlags(city, 1, func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
+		return []byte("city\x00u1"), nil, page.ValuePtr{}, node.FlagInline, nil
+	}); err != nil {
+		t.Fatalf("append city entries: %v", err)
+	}
+
+	detached := detachMutableIndexedRunTablesLocked(domain)
+	if got := len(detached); got != 2 {
+		t.Fatalf("detached tables=%d want 2", got)
+	}
+	if domain.rootMutableRuns != nil {
+		t.Fatal("rootMutableRuns still has append targets after detach")
+	}
+	if got := pendingIndexedRootRunsLocked(domain, primaryName); len(got) != 1 || got[0] != primary {
+		t.Fatalf("pending primary runs=%v want original primary table", got)
+	}
+	if got := pendingIndexedRootRunsLocked(domain, secondaryName); len(got) != 1 || got[0] != city {
+		t.Fatalf("pending city runs=%v want original city table", got)
+	}
+
+	requireFreezeSortRunIterator(t, primary.NewIterator(nil, nil), []string{"u1", "u2"})
+	freezeIndexedRunTables(detached)
+	requireFreezeSortRunIterator(t, primary.NewIterator(nil, nil), []string{"u1", "u2"})
+
+	resetCollectionTables(detached)
+}
+
+func TestIndexedPrepareFreezeWaitsUntilFinished(t *testing.T) {
+	domain := &collectionWriteDomain{}
+	domain.mu.Lock()
+	domain.beginIndexedPrepareFreezeLocked()
+	domain.mu.Unlock()
+
+	done := make(chan time.Duration, 1)
+	go func() {
+		domain.mu.Lock()
+		waited := domain.waitIndexedPrepareFreezeLocked()
+		domain.mu.Unlock()
+		done <- waited
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("prepare freeze wait returned before finish")
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	domain.mu.Lock()
+	domain.finishIndexedPrepareFreezeLocked()
+	domain.mu.Unlock()
+
+	select {
+	case waited := <-done:
+		if waited <= 0 {
+			t.Fatalf("prepare freeze wait duration=%s want positive", waited)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("prepare freeze wait did not unblock after finish")
+	}
+}
+
 func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
 	catalog := &collectionCatalog{
 		meta:  CollectionMeta{Name: "users"},
