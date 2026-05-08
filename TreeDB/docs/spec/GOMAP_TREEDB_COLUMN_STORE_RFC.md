@@ -1,13 +1,14 @@
 # RFC: Column-Store Collections for gomap TreeDB
 
-Metadata:
+Status: proposal, non-normative.
 
-- Status: proposal
-- Target TreeDB source studied:
-  `https://github.com/snissn/gomap/tree/874737704bd8cdcd1add40c5d2316f03544b1219`
-- Compression reference: `COMPRESSION_TECHNOLOGY_SPEC.md` in this directory
-- ClickHouse source snapshot studied:
-  `https://github.com/ClickHouse/ClickHouse/commit/ad347dbafb074ccf13790b5045b25708a975fb77`
+Target TreeDB source studied:
+`https://github.com/snissn/gomap/tree/874737704bd8cdcd1add40c5d2316f03544b1219`
+
+Compression reference: `COMPRESSION_TECHNOLOGY_SPEC.md` in this directory
+
+ClickHouse source snapshot studied:
+`https://github.com/ClickHouse/ClickHouse/commit/ad347dbafb074ccf13790b5045b25708a975fb77`
 
 ## 1. Summary
 
@@ -512,7 +513,7 @@ Dir/maindb/columns/
     <collection-id>/
         schema-<schema-version>/
             part-<part-id>/
-                manifest.tcp1
+                manifest.tcs1
                 col-<column-id>-values.tcs1
                 col-<column-id>-nullmap.tcs1
                 col-<column-id>-offsets.tcs1
@@ -1367,12 +1368,14 @@ For `InsertColumnBatch`:
 For `Update` or callback-based mutation APIs:
 
 1. Resolve target ids through the primary root under a snapshot.
-2. Decode only columns required by the update expression and affected secondary
-   indexes.
-3. Apply the mutation and build a replacement `ColumnBatch` for rows that
-   actually changed.
-4. Write the complete replacement rows as update-delta column parts.
-5. Publish primary locator updates, delete tombstones for old locators,
+2. Decode predicate/update columns and affected secondary-index columns to
+   identify rows whose stored values actually change.
+3. Fetch every declared column for each changed row, including untouched
+   columns, from the current row locators.
+4. Apply the mutation and build a complete replacement `ColumnBatch` for only
+   the rows that actually changed.
+5. Write the complete replacement rows as update-delta column parts.
+6. Publish primary locator updates, delete tombstones for old locators,
    secondary index deletes, secondary index puts, and part descriptors in one
    root group.
 
