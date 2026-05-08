@@ -62,6 +62,7 @@ const (
 	defaultCollectionUpdateCombineMaxBatch              = 256
 	defaultCollectionUpdateCombineDrainYields           = 1
 	collectionUpdateCombineIdleTTL                      = 30 * time.Second
+	collectionUpdateCombineInlineQuietPeriod            = time.Millisecond
 	collectionPprofComponentKey                         = "gomap_component"
 	collectionPprofOperationKey                         = "gomap_operation"
 	collectionPprofIndexedAsyncFlush                    = "collections_indexed_async_flush"
@@ -464,6 +465,7 @@ type CollectionManagerStats struct {
 	UpdateCombineBatchedRequests    uint64
 	UpdateCombineFallbackRequests   uint64
 	UpdateCombineQueueDepthMax      uint64
+	UpdateCombineInlineRequests     uint64
 	UpdateCombineEnqueue            time.Duration
 	UpdateCombineWait               time.Duration
 	UpdateCombineDrain              time.Duration
@@ -841,6 +843,12 @@ type collectionWriteDomain struct {
 	updateCombineBatchedRequests       atomic.Uint64
 	updateCombineFallbackRequests      atomic.Uint64
 	updateCombineQueueDepthMax         atomic.Uint64
+	updateCombineInlineRequests        atomic.Uint64
+	updateInlineInFlight               atomic.Uint64
+	updateCombineLastRequestUnixNano   atomic.Uint64
+	updateInlineDocumentID             [collectionUpdateCombineInlineDocumentIDMax]byte
+	updateInlineDocumentIDHeap         []byte
+	updateInlineItems                  [1]UpdateBatchItem
 	updateCombineEnqueueNs             atomic.Uint64
 	updateCombineWaitNs                atomic.Uint64
 	updateCombineDrainNs               atomic.Uint64
@@ -1122,6 +1130,7 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.update_combine.batched_requests_total"] = fmt.Sprintf("%d", stats.UpdateCombineBatchedRequests)
 	out["treedb.collections.write_domain.update_combine.fallback_requests_total"] = fmt.Sprintf("%d", stats.UpdateCombineFallbackRequests)
 	out["treedb.collections.write_domain.update_combine.queue_depth_max"] = fmt.Sprintf("%d", stats.UpdateCombineQueueDepthMax)
+	out["treedb.collections.write_domain.update_combine.inline_requests_total"] = fmt.Sprintf("%d", stats.UpdateCombineInlineRequests)
 	out["treedb.collections.write_domain.update_combine.enqueue_ns_total"] = fmt.Sprintf("%d", stats.UpdateCombineEnqueue.Nanoseconds())
 	out["treedb.collections.write_domain.update_combine.wait_ns_total"] = fmt.Sprintf("%d", stats.UpdateCombineWait.Nanoseconds())
 	out["treedb.collections.write_domain.update_combine.drain_ns_total"] = fmt.Sprintf("%d", stats.UpdateCombineDrain.Nanoseconds())
@@ -1355,6 +1364,7 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	if other.UpdateCombineQueueDepthMax > s.UpdateCombineQueueDepthMax {
 		s.UpdateCombineQueueDepthMax = other.UpdateCombineQueueDepthMax
 	}
+	s.UpdateCombineInlineRequests += other.UpdateCombineInlineRequests
 	s.UpdateCombineEnqueue += other.UpdateCombineEnqueue
 	s.UpdateCombineWait += other.UpdateCombineWait
 	s.UpdateCombineDrain += other.UpdateCombineDrain
@@ -1484,6 +1494,7 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.UpdateCombineBatchedRequests = domain.updateCombineBatchedRequests.Load()
 	stats.UpdateCombineFallbackRequests = domain.updateCombineFallbackRequests.Load()
 	stats.UpdateCombineQueueDepthMax = domain.updateCombineQueueDepthMax.Load()
+	stats.UpdateCombineInlineRequests = domain.updateCombineInlineRequests.Load()
 	stats.UpdateCombineEnqueue = durationFromAtomicNs(domain.updateCombineEnqueueNs.Load())
 	stats.UpdateCombineWait = durationFromAtomicNs(domain.updateCombineWaitNs.Load())
 	stats.UpdateCombineDrain = durationFromAtomicNs(domain.updateCombineDrainNs.Load())
@@ -1974,9 +1985,17 @@ func (domain *collectionWriteDomain) observeUpdateCombineRequest(queueDepth int)
 		return
 	}
 	domain.updateCombineRequests.Add(1)
+	domain.updateCombineLastRequestUnixNano.Store(uint64(time.Now().UnixNano()))
 	if queueDepth > 0 {
 		atomicMaxUint64(&domain.updateCombineQueueDepthMax, uint64(queueDepth))
 	}
+}
+
+func (domain *collectionWriteDomain) observeUpdateCombineInline() {
+	if domain == nil {
+		return
+	}
+	domain.updateCombineInlineRequests.Add(1)
 }
 
 func (domain *collectionWriteDomain) observeUpdateCombineEnqueue(d time.Duration) {
@@ -6794,6 +6813,13 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
 		return false, false, err
 	}
+	if combiner, domain := c.updateFastPathWithoutCreatingCombiner(); combiner != nil {
+		return combiner.update(c, documentID, update)
+	} else if domain != nil {
+		defer domain.finishInlineUpdateWithoutCombiner()
+		domain.observeUpdateCombineInline()
+		return c.updateSingleInlineWithoutCombiner(domain, documentID, update)
+	}
 	if combiner := c.updateCombiner(); combiner != nil {
 		return combiner.update(c, documentID, update)
 	}
@@ -6983,6 +7009,114 @@ type collectionUpdateCombineResult struct {
 
 type collectionUpdateCombineWaiter struct {
 	ch chan collectionUpdateCombineResult
+}
+
+func (c *Collection) updateFastPathWithoutCreatingCombiner() (*collectionUpdateCombiner, *collectionWriteDomain) {
+	if c == nil || c.db == nil || c.db.IsClosing() || c.writeDomain == nil {
+		return nil, nil
+	}
+	domain := c.writeDomain
+	if domain.closingWrites.Load() {
+		return nil, nil
+	}
+	domain.updateCombineMu.Lock()
+	defer domain.updateCombineMu.Unlock()
+	if domain.updateCombineDone || domain.updateDraining != nil {
+		return nil, nil
+	}
+	combiner := domain.updateCombiner
+	if combiner != nil {
+		if combiner.isStopped() {
+			if domain.updateCombiner == combiner {
+				domain.updateCombiner = nil
+			}
+		} else if combiner.running.Load() || len(combiner.requests) > 0 {
+			return combiner, nil
+		}
+	}
+	if !domain.updateInlineQuietAfterCombinerActivity() {
+		return nil, nil
+	}
+	if domain.updateInlineInFlight.CompareAndSwap(0, 1) {
+		return nil, domain
+	}
+	return nil, nil
+}
+
+func (domain *collectionWriteDomain) updateInlineQuietAfterCombinerActivity() bool {
+	if domain == nil {
+		return false
+	}
+	last := domain.updateCombineLastRequestUnixNano.Load()
+	if last == 0 {
+		return true
+	}
+	return time.Now().UnixNano()-int64(last) >= int64(collectionUpdateCombineInlineQuietPeriod)
+}
+
+func (domain *collectionWriteDomain) finishInlineUpdateWithoutCombiner() {
+	if domain == nil {
+		return
+	}
+	domain.updateInlineInFlight.Store(0)
+}
+
+func (c *Collection) updateSingleInlineWithoutCombiner(domain *collectionWriteDomain, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (matched bool, modified bool, err error) {
+	items := domain.prepareInlineUpdateItems(documentID, update)
+	defer domain.clearInlineUpdateItems()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			matched = false
+			modified = false
+			err = collectionUpdatePanicError("inline", recovered)
+		}
+	}()
+	results, batched, err := c.updateBatchOwnedItems(items, updateBatchModeNoSecondaryUniqueIndexChanges)
+	if !batched && err == nil {
+		return c.updateDirect(items[0].DocumentID, items[0].Update)
+	}
+	if err != nil {
+		var itemErr *UpdateBatchItemError
+		if errors.As(err, &itemErr) && itemErr.Index == 0 && itemErr.Err != nil {
+			return false, false, itemErr.Err
+		}
+		return false, false, err
+	}
+	if len(results) != 1 {
+		return false, false, fmt.Errorf("collections: inline update result count %d for single update", len(results))
+	}
+	return results[0].Matched, results[0].Modified, nil
+}
+
+func (domain *collectionWriteDomain) prepareInlineUpdateItems(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) []UpdateBatchItem {
+	if domain == nil {
+		return []UpdateBatchItem{{DocumentID: documentID, Update: update}}
+	}
+	var ownedDocumentID []byte
+	if len(documentID) <= len(domain.updateInlineDocumentID) {
+		copy(domain.updateInlineDocumentID[:], documentID)
+		ownedDocumentID = domain.updateInlineDocumentID[:len(documentID):len(documentID)]
+	} else {
+		if cap(domain.updateInlineDocumentIDHeap) < len(documentID) {
+			domain.updateInlineDocumentIDHeap = make([]byte, len(documentID))
+		} else {
+			domain.updateInlineDocumentIDHeap = domain.updateInlineDocumentIDHeap[:len(documentID)]
+		}
+		copy(domain.updateInlineDocumentIDHeap, documentID)
+		ownedDocumentID = domain.updateInlineDocumentIDHeap[:len(documentID):len(documentID)]
+	}
+	domain.updateInlineItems[0] = UpdateBatchItem{
+		DocumentID: ownedDocumentID,
+		Update:     update,
+	}
+	return domain.updateInlineItems[:]
+}
+
+func (domain *collectionWriteDomain) clearInlineUpdateItems() {
+	if domain == nil {
+		return
+	}
+	domain.updateInlineItems[0] = UpdateBatchItem{}
 }
 
 func (c *Collection) updateCombiner() *collectionUpdateCombiner {

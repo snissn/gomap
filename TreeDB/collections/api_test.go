@@ -964,6 +964,7 @@ func TestCollectionUpdateIndexStateBreakdownStatsSnapshotAndAdd(t *testing.T) {
 
 func TestCollectionUpdateCombineTimingStatsSnapshotAndAdd(t *testing.T) {
 	domain := &collectionWriteDomain{}
+	domain.observeUpdateCombineInline()
 	domain.observeUpdateCombineEnqueue(3 * time.Nanosecond)
 	domain.observeUpdateCombineWait(5 * time.Nanosecond)
 	domain.observeUpdateCombineDrain(7 * time.Nanosecond)
@@ -972,6 +973,15 @@ func TestCollectionUpdateCombineTimingStatsSnapshotAndAdd(t *testing.T) {
 	var merged CollectionManagerStats
 	merged.add(snapshot)
 	exported := (&CollectionManager{domains: map[string]*collectionWriteDomain{"test": domain}}).Stats()
+	if snapshot.UpdateCombineInlineRequests != 1 {
+		t.Fatalf("snapshot inline requests=%d want 1", snapshot.UpdateCombineInlineRequests)
+	}
+	if merged.UpdateCombineInlineRequests != 1 {
+		t.Fatalf("merged inline requests=%d want 1", merged.UpdateCombineInlineRequests)
+	}
+	if got, want := exported["treedb.collections.write_domain.update_combine.inline_requests_total"], "1"; got != want {
+		t.Fatalf("exported inline requests=%q want %q", got, want)
+	}
 	cases := []struct {
 		name string
 		key  string
@@ -1555,22 +1565,17 @@ func TestCollectionManagerResetUpdateCombinersForProfiling(t *testing.T) {
 	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"ada"}`)}); err != nil {
 		t.Fatalf("insert batch: %v", err)
 	}
-	if _, _, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
-		return []byte(`{"name":"ada","n":1}`), true, nil
-	}); err != nil {
-		t.Fatalf("first update: %v", err)
-	}
 	domain := col.writeDomain
 	if domain == nil {
 		t.Fatal("collection write domain is nil")
 	}
-	domain.updateCombineMu.Lock()
-	first := domain.updateCombiner
-	draining := domain.updateDraining
-	domain.updateCombineMu.Unlock()
+	first := col.updateCombiner()
 	if first == nil {
 		t.Fatal("first update combiner is nil")
 	}
+	domain.updateCombineMu.Lock()
+	draining := domain.updateDraining
+	domain.updateCombineMu.Unlock()
 	if draining != nil {
 		t.Fatal("unexpected draining combiner before reset")
 	}
@@ -1584,14 +1589,7 @@ func TestCollectionManagerResetUpdateCombinersForProfiling(t *testing.T) {
 		t.Fatalf("combiner after reset=%p draining=%p want nil/nil", afterReset, afterResetDraining)
 	}
 
-	if _, _, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
-		return []byte(`{"name":"ada","n":2}`), true, nil
-	}); err != nil {
-		t.Fatalf("second update after reset: %v", err)
-	}
-	domain.updateCombineMu.Lock()
-	second := domain.updateCombiner
-	domain.updateCombineMu.Unlock()
+	second := col.updateCombiner()
 	if second == nil {
 		t.Fatal("second update combiner is nil")
 	}
@@ -7975,6 +7973,198 @@ func TestCollectionUpdateCombinerDocumentIDLongStorageClonesCallerBytes(t *testi
 	id[0] = 'y'
 	if got := req.documentIDBytes(); got[0] != 'x' {
 		t.Fatalf("long document id changed after caller mutation: first byte %q", got[0])
+	}
+}
+
+func TestCollectionUpdateBypassesIdleCombinerWhenNoBatchPressure(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"city":"hnl","score":0}`)}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	idle := col.updateCombiner()
+	if idle == nil {
+		t.Fatal("expected idle combiner")
+	}
+
+	before := mgr.StatsSnapshot()
+	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"city":"sea","score":1}`), true, nil
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("update matched=%v modified=%v want true,true", matched, modified)
+	}
+	after := mgr.StatsSnapshot()
+	if got := after.UpdateCombineInlineRequests - before.UpdateCombineInlineRequests; got != 1 {
+		t.Fatalf("inline requests delta=%d want 1", got)
+	}
+	if got := after.UpdateCombineRequests - before.UpdateCombineRequests; got != 0 {
+		t.Fatalf("combine requests delta=%d want 0", got)
+	}
+	ids, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find updated city: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u1"))
+}
+
+func TestCollectionUpdateUsesCombinerWhenInlineUpdateInFlight(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"city":"hnl","score":0}`),
+			[]byte(`{"city":"hnl","score":0}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	before := mgr.StatsSnapshot()
+	enteredFirstUpdate := make(chan struct{})
+	releaseFirstUpdate := make(chan struct{})
+	var enterOnce sync.Once
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(releaseFirstUpdate) })
+
+	firstDone := make(chan error, 1)
+	go func() {
+		matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+			enterOnce.Do(func() { close(enteredFirstUpdate) })
+			<-releaseFirstUpdate
+			return []byte(`{"city":"bos","score":1}`), true, nil
+		})
+		if err == nil && (!matched || !modified) {
+			err = fmt.Errorf("first update matched=%v modified=%v", matched, modified)
+		}
+		firstDone <- err
+	}()
+
+	select {
+	case <-enteredFirstUpdate:
+	case <-time.After(collectionTestTimeout(t, time.Second)):
+		t.Fatal("first update callback did not start")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		matched, modified, err := col.Update([]byte("u2"), func([]byte) ([]byte, bool, error) {
+			return []byte(`{"city":"sea","score":1}`), true, nil
+		})
+		if err == nil && (!matched || !modified) {
+			err = fmt.Errorf("second update matched=%v modified=%v", matched, modified)
+		}
+		secondDone <- err
+	}()
+
+	deadline := time.After(collectionTestTimeout(t, time.Second))
+	for {
+		stats := mgr.StatsSnapshot()
+		if stats.UpdateCombineRequests-before.UpdateCombineRequests > 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("second update did not enqueue through combiner")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	releaseOnce.Do(func() { close(releaseFirstUpdate) })
+	for name, done := range map[string]chan error{
+		"first":  firstDone,
+		"second": secondDone,
+	} {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("%s update: %v", name, err)
+			}
+		case <-time.After(collectionTestTimeout(t, time.Second)):
+			t.Fatalf("%s update did not complete", name)
+		}
+	}
+
+	after := mgr.StatsSnapshot()
+	if got := after.UpdateCombineInlineRequests - before.UpdateCombineInlineRequests; got != 1 {
+		t.Fatalf("inline requests delta=%d want 1", got)
+	}
+	if got := after.UpdateCombineRequests - before.UpdateCombineRequests; got == 0 {
+		t.Fatal("combine requests delta=0 want positive")
+	}
+	if got := after.UpdateCombineQueueDepthMax; got == 0 {
+		t.Fatal("combine queue depth max=0 want positive")
+	}
+	ids, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find updated city: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u2"))
+
+	col.writeDomain.updateCombineLastRequestUnixNano.Store(uint64(time.Now().Add(time.Hour).UnixNano()))
+	combineBeforeCooldownCheck := after.UpdateCombineRequests
+	inlineBeforeCooldownCheck := after.UpdateCombineInlineRequests
+	matched, modified, err := col.Update([]byte("u2"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"city":"iad","score":2}`), true, nil
+	})
+	if err != nil {
+		t.Fatalf("cooldown update: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("cooldown update matched=%v modified=%v want true,true", matched, modified)
+	}
+	afterCooldownCheck := mgr.StatsSnapshot()
+	if got := afterCooldownCheck.UpdateCombineInlineRequests - inlineBeforeCooldownCheck; got != 0 {
+		t.Fatalf("cooldown inline requests delta=%d want 0", got)
+	}
+	if got := afterCooldownCheck.UpdateCombineRequests - combineBeforeCooldownCheck; got == 0 {
+		t.Fatal("cooldown combine requests delta=0 want positive")
 	}
 }
 
