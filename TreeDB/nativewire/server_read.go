@@ -219,7 +219,10 @@ func (s *Server) handleOpenScan(state *connState, sections []iwire.Section) ([]i
 	if err != nil {
 		return nil, metadataWrap(err)
 	}
-	end, bytes := splitCursorBatch(records, 0, limits, s.defaultCursorBatchSize)
+	end, bytes, err := s.splitCursorBatchForWire(records, 0, limits)
+	if err != nil {
+		return nil, err
+	}
 	if end < len(records) && documentRecordsBytes(records[end:]) > s.maxCursorRetainedBytes {
 		return responseForRecords(records[:end], CursorMeta{Items: end, Bytes: bytes, Truncated: true})
 	}
@@ -232,12 +235,17 @@ func (s *Server) handleOpenScan(state *connState, sections []iwire.Section) ([]i
 }
 
 func (s *Server) handleCursorNext(state *connState, cursorID uint64, sections []iwire.Section) ([]iwire.Section, error) {
-	if cursorID == 0 {
-		return nil, protocolError(iwire.ErrInvalidCommand, "cursor_next requires stream_id")
-	}
 	if state == nil {
 		return nil, protocolError(iwire.ErrInvalidCommand, "cursor_next requires connection state")
 	}
+	sectionCursorID, err := cursorRefFromSections(sections)
+	if err != nil {
+		return nil, err
+	}
+	if cursorID != 0 && cursorID != sectionCursorID {
+		return nil, protocolError(iwire.ErrInvalidCommand, "cursor_ref %d does not match stream_id %d", sectionCursorID, cursorID)
+	}
+	cursorID = sectionCursorID
 	limits, err := requiredCursorLimits(sections)
 	if err != nil {
 		return nil, err
@@ -249,7 +257,11 @@ func (s *Server) handleCursorNext(state *connState, cursorID uint64, sections []
 		return nil, protocolError(iwire.ErrCursorNotFound, "cursor %d not found", cursorID)
 	}
 	start := cursor.pos
-	end, bytes := splitCursorBatch(cursor.records, start, limits, s.defaultCursorBatchSize)
+	end, bytes, err := s.splitCursorBatchForWire(cursor.records, start, limits)
+	if err != nil {
+		s.cursorMu.Unlock()
+		return nil, err
+	}
 	batch := append([]collections.DocumentRecord(nil), cursor.records[start:end]...)
 	cursor.pos = end
 	cursor.lastUsed = time.Now()
@@ -269,12 +281,17 @@ func (s *Server) handleCursorNext(state *connState, cursorID uint64, sections []
 }
 
 func (s *Server) handleCursorClose(state *connState, cursorID uint64, sections []iwire.Section) ([]iwire.Section, error) {
-	if cursorID == 0 {
-		return nil, protocolError(iwire.ErrInvalidCommand, "cursor_close requires stream_id")
-	}
 	if state == nil {
 		return nil, protocolError(iwire.ErrInvalidCommand, "cursor_close requires connection state")
 	}
+	sectionCursorID, err := cursorRefFromSections(sections)
+	if err != nil {
+		return nil, err
+	}
+	if cursorID != 0 && cursorID != sectionCursorID {
+		return nil, protocolError(iwire.ErrInvalidCommand, "cursor_ref %d does not match stream_id %d", sectionCursorID, cursorID)
+	}
+	cursorID = sectionCursorID
 	s.cursorMu.Lock()
 	cursor := s.cursors[cursorID]
 	if cursor == nil || cursor.owner != state.id {
@@ -286,6 +303,21 @@ func (s *Server) handleCursorClose(state *connState, cursorID uint64, sections [
 	s.cursorCount.Add(-1)
 	s.counters.inc("cursors.closed_total")
 	return nil, nil
+}
+
+func cursorRefFromSections(sections []iwire.Section) (uint64, error) {
+	raw, err := metadataSection(sections, iwire.SectionCursorRef)
+	if err != nil {
+		return 0, err
+	}
+	cursorID, err := decodeCursorRef(raw)
+	if err != nil {
+		return 0, err
+	}
+	if cursorID == 0 {
+		return 0, protocolError(iwire.ErrInvalidCommand, "cursor_ref cannot be zero")
+	}
+	return cursorID, nil
 }
 
 func optionalCursorLimits(sections []iwire.Section) (CursorLimits, error) {

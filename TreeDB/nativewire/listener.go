@@ -148,6 +148,9 @@ func (e *localEndpoint) roundTrip(ctx context.Context, streamID uint64, typ iwir
 	if err != nil {
 		return iwire.Header{}, nil, err
 	}
+	if err := iwire.ValidateHeaderVersion(header, iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0}); err != nil {
+		return header, nil, err
+	}
 	response := e.frame[iwire.FrameHeaderLenV1:]
 	if uint64(len(response)) != header.BodyLen {
 		return header, nil, protocolError(iwire.ErrMalformedFrame, "response body len %d want %d", len(response), header.BodyLen)

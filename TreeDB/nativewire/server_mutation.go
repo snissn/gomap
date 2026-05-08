@@ -251,7 +251,8 @@ func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) 
 	if err != nil {
 		return nil, err
 	}
-	if _, err := decodeDocumentFormatSection(sections); err != nil {
+	format, err := decodeDocumentFormatSection(sections)
+	if err != nil {
 		return nil, err
 	}
 	if err := validateReplacementMode(sections); err != nil {
@@ -267,6 +268,11 @@ func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) 
 	}
 	if err != nil {
 		return nil, err
+	}
+	if format == collections.DocumentFormatBSON {
+		if err := validateBSONDocuments(docs); err != nil {
+			return nil, err
+		}
 	}
 	ack, err := ackPolicyFromSections(sections, s.defaultAckPolicy)
 	if err != nil {
@@ -336,7 +342,7 @@ func (s *Server) handleFlushCollection(state *connState, sections []iwire.Sectio
 	if err != nil {
 		return nil, err
 	}
-	ack, err := ackPolicyFromSections(sections, iwire.AckFlushed)
+	ack, err := ackPolicyFromSections(sections, s.defaultBarrierAck(iwire.AckFlushed))
 	if err != nil {
 		return nil, err
 	}
@@ -353,7 +359,7 @@ func (s *Server) handleFlushAll(sections []iwire.Section) ([]iwire.Section, erro
 	if err := managerRequired(s.collections); err != nil {
 		return nil, err
 	}
-	ack, err := ackPolicyFromSections(sections, iwire.AckFlushed)
+	ack, err := ackPolicyFromSections(sections, s.defaultBarrierAck(iwire.AckFlushed))
 	if err != nil {
 		return nil, err
 	}
@@ -370,7 +376,7 @@ func (s *Server) handleCheckpoint(sections []iwire.Section) ([]iwire.Section, er
 	if s.backend == nil {
 		return nil, protocolError(iwire.ErrDurabilityUnavailable, "checkpoint requires a backend DB")
 	}
-	ack, err := ackPolicyFromSections(sections, iwire.AckSynced)
+	ack, err := ackPolicyFromSections(sections, s.defaultBarrierAck(iwire.AckSynced))
 	if err != nil {
 		return nil, err
 	}
@@ -400,6 +406,13 @@ func (s *Server) admitBarrierAck(actual, requested iwire.AckPolicy) error {
 		return nil
 	}
 	return protocolError(iwire.ErrDurabilityUnavailable, "requested ack policy %d cannot be satisfied by barrier ack policy %d", requested, actual)
+}
+
+func (s *Server) defaultBarrierAck(minimum iwire.AckPolicy) iwire.AckPolicy {
+	if s != nil && s.defaultAckPolicy > minimum {
+		return s.defaultAckPolicy
+	}
+	return minimum
 }
 
 func (s *Server) admitMutationAck(requested iwire.AckPolicy) error {

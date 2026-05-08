@@ -129,7 +129,7 @@ func TestMetadataHandleRefWorksForListIndexes(t *testing.T) {
 	}
 }
 
-func TestMetadataHandleRefsRejectedForNameOnlyCommands(t *testing.T) {
+func TestMetadataHandleRefsWorkForIndexMetadata(t *testing.T) {
 	client, _, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -153,18 +153,72 @@ func TestMetadataHandleRefsRejectedForNameOnlyCommands(t *testing.T) {
 			Field:     "email",
 			ValueType: collections.IndexValueString,
 		})},
-	); !isRemoteError(err, iwire.ErrInvalidCommand) {
-		t.Fatalf("CreateIndex by handle err=%v want invalid command", err)
-	}
-	if _, err := client.CreateIndex(ctx, "users", collections.IndexDefinition{Name: "email", Field: "email", ValueType: collections.IndexValueString}); err != nil {
-		t.Fatalf("CreateIndex by name: %v", err)
+	); err != nil {
+		t.Fatalf("CreateIndex by handle: %v", err)
 	}
 	if _, err := client.commandSections(ctx, iwire.CommandDropIndex,
 		collectionHandleRef(handle),
 		iwire.Section{ID: iwire.SectionIndexName, Bytes: encodeIndexName("email")},
-	); !isRemoteError(err, iwire.ErrInvalidCommand) {
-		t.Fatalf("DropIndex by handle err=%v want invalid command", err)
+	); err != nil {
+		t.Fatalf("DropIndex by handle: %v", err)
 	}
+}
+
+func TestMetadataCatalogGuard(t *testing.T) {
+	client, _, db := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	version := catalogVersion(t, db)
+	if _, err := client.commandSections(ctx, iwire.CommandCreateCollection,
+		iwire.Section{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(collections.CollectionMeta{Name: "users"})},
+		iwire.Section{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, version+1)},
+	); !isRemoteError(err, iwire.ErrCatalogVersionMismatch) {
+		t.Fatalf("CreateCollection stale guard err=%v want catalog mismatch", err)
+	}
+	if _, err := client.commandSections(ctx, iwire.CommandCreateCollection,
+		iwire.Section{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(collections.CollectionMeta{Name: "users"})},
+		iwire.Section{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, version)},
+	); err != nil {
+		t.Fatalf("CreateCollection guarded: %v", err)
+	}
+
+	version = catalogVersion(t, db)
+	if _, err := client.commandSections(ctx, iwire.CommandCreateIndex,
+		collectionNameRef("users"),
+		iwire.Section{ID: iwire.SectionIndexDefinition, Bytes: encodeIndexDefinition(collections.IndexDefinition{
+			Name:      "email",
+			Field:     "email",
+			ValueType: collections.IndexValueString,
+		})},
+		iwire.Section{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, version+1)},
+	); !isRemoteError(err, iwire.ErrCatalogVersionMismatch) {
+		t.Fatalf("CreateIndex stale guard err=%v want catalog mismatch", err)
+	}
+	if _, err := client.commandSections(ctx, iwire.CommandCreateIndex,
+		collectionNameRef("users"),
+		iwire.Section{ID: iwire.SectionIndexDefinition, Bytes: encodeIndexDefinition(collections.IndexDefinition{
+			Name:      "email",
+			Field:     "email",
+			ValueType: collections.IndexValueString,
+		})},
+		iwire.Section{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, version)},
+	); err != nil {
+		t.Fatalf("CreateIndex guarded: %v", err)
+	}
+}
+
+func catalogVersion(t *testing.T, db *backenddb.DB) uint64 {
+	t.Helper()
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.State() == nil {
+		t.Fatal("missing DB snapshot state")
+	}
+	defer func() { _ = snap.Close() }()
+	return snap.State().CommitSeq
 }
 
 func TestMetadataOpenCollectionHandleLimit(t *testing.T) {
@@ -182,6 +236,38 @@ func TestMetadataOpenCollectionHandleLimit(t *testing.T) {
 	}
 	if _, err := client.OpenCollection(ctx, "users"); !isRemoteError(err, iwire.ErrResourceExhausted) {
 		t.Fatalf("OpenCollection second error=%v want resource exhausted", err)
+	}
+}
+
+func TestMetadataCollectionCacheBounded(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	server := NewServer(ServerOptions{Collections: mgr, Backend: db, MaxCollectionHandles: 1})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client, cleanup, err := NewInProcessClient(ctx, server)
+	if err != nil {
+		t.Fatalf("NewInProcessClient: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+	t.Cleanup(func() { _ = db.Close() })
+	for _, name := range []string{"users_a", "users_b", "users_c"} {
+		if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: name}); err != nil {
+			t.Fatalf("CreateCollection %s: %v", name, err)
+		}
+		if _, err := client.ListIndexes(ctx, name); err != nil {
+			t.Fatalf("ListIndexes %s: %v", name, err)
+		}
+	}
+	state := client.local.state
+	state.mu.Lock()
+	cached := len(state.collections)
+	state.mu.Unlock()
+	if cached > 1 {
+		t.Fatalf("cached collections=%d want <= 1", cached)
 	}
 }
 

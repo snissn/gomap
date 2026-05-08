@@ -300,6 +300,143 @@ func splitCursorBatch(records []collections.DocumentRecord, start int, limits Cu
 	return end, bytes
 }
 
+func (s *Server) splitCursorBatchForWire(records []collections.DocumentRecord, start int, limits CursorLimits) (end, bytes int, err error) {
+	end, bytes = splitCursorBatch(records, start, limits, s.defaultCursorBatchSize)
+	if end <= start {
+		return end, bytes, nil
+	}
+	if err := s.checkCursorResponseBounds(records[start:end], true); err == nil {
+		return end, bytes, nil
+	}
+	lo, hi := start, end
+	bestEnd, bestBytes := start, 0
+	for lo < hi {
+		mid := lo + (hi-lo+1)/2
+		midBytes := documentRecordsBytes(records[start:mid])
+		err := s.checkCursorResponseBounds(records[start:mid], true)
+		if err == nil {
+			bestEnd, bestBytes = mid, midBytes
+			lo = mid
+			continue
+		}
+		hi = mid - 1
+	}
+	if bestEnd == start {
+		return start, 0, protocolError(iwire.ErrResourceExhausted, "cursor response record exceeds frame limits")
+	}
+	return bestEnd, bestBytes, nil
+}
+
+func (s *Server) checkCursorResponseBounds(records []collections.DocumentRecord, includeTruncated bool) error {
+	if s == nil {
+		return nil
+	}
+	if s.limits.MaxSections > 0 {
+		sections := 3
+		if includeTruncated {
+			sections++
+		}
+		if sections > s.limits.MaxSections {
+			return protocolError(iwire.ErrResourceExhausted, "cursor response sections %d exceeds limit %d", sections, s.limits.MaxSections)
+		}
+	}
+	idsLen, err := recordByteVectorEncodedLen(records, true)
+	if err != nil {
+		return err
+	}
+	docsLen, err := recordByteVectorEncodedLen(records, false)
+	if err != nil {
+		return err
+	}
+	if err := s.checkCursorSectionLen("document_ids", idsLen); err != nil {
+		return err
+	}
+	if err := s.checkCursorSectionLen("documents", docsLen); err != nil {
+		return err
+	}
+	bodyLen := sectionEnvelopeLen(iwire.SectionDocumentIDs, idsLen)
+	bodyLen, err = addResponseLen(bodyLen, sectionEnvelopeLen(iwire.SectionDocuments, docsLen))
+	if err != nil {
+		return err
+	}
+	bodyLen, err = addResponseLen(bodyLen, sectionEnvelopeLen(iwire.SectionCursorMeta, maxCursorMetaEncodedLen()))
+	if err != nil {
+		return err
+	}
+	if includeTruncated {
+		bodyLen, err = addResponseLen(bodyLen, sectionEnvelopeLen(iwire.SectionTruncated, 1))
+		if err != nil {
+			return err
+		}
+	}
+	frameLen, err := addResponseLen(uint64(iwire.FrameHeaderLenV1), bodyLen)
+	if err != nil {
+		return err
+	}
+	if s.limits.MaxFrameSize > 0 && frameLen > s.limits.MaxFrameSize {
+		return protocolError(iwire.ErrResourceExhausted, "cursor response frame length %d exceeds limit %d", frameLen, s.limits.MaxFrameSize)
+	}
+	return nil
+}
+
+func recordByteVectorEncodedLen(records []collections.DocumentRecord, ids bool) (int, error) {
+	total := uvarintEncodedLen(uint64(len(records)))
+	payload := 0
+	for _, record := range records {
+		itemLen := len(record.Document)
+		if ids {
+			itemLen = len(record.ID)
+		}
+		var err error
+		total, err = addInt(total, uvarintEncodedLen(uint64(itemLen)))
+		if err != nil {
+			return 0, err
+		}
+		payload, err = addInt(payload, itemLen)
+		if err != nil {
+			return 0, err
+		}
+	}
+	return addInt(total, payload)
+}
+
+func sectionEnvelopeLen(id iwire.SectionID, payloadLen int) uint64 {
+	return uint64(uvarintEncodedLen(uint64(id)) + uvarintEncodedLen(0) + uvarintEncodedLen(uint64(payloadLen)) + payloadLen)
+}
+
+func maxCursorMetaEncodedLen() int {
+	return 3*uvarintEncodedLen(uint64(maxInt)) + 1
+}
+
+func uvarintEncodedLen(v uint64) int {
+	var buf [binary.MaxVarintLen64]byte
+	return binary.PutUvarint(buf[:], v)
+}
+
+func addInt(a, b int) (int, error) {
+	if b < 0 || a > maxInt-b {
+		return 0, protocolError(iwire.ErrResourceExhausted, "response length exceeds int capacity")
+	}
+	return a + b, nil
+}
+
+func addResponseLen(a, b uint64) (uint64, error) {
+	if a+b < a {
+		return 0, protocolError(iwire.ErrResourceExhausted, "response length overflow")
+	}
+	return a + b, nil
+}
+
+func (s *Server) checkCursorSectionLen(name string, length int) error {
+	if length < 0 {
+		return protocolError(iwire.ErrMalformedFrame, "%s section length is negative", name)
+	}
+	if s.limits.MaxSectionLen > 0 && uint64(length) > s.limits.MaxSectionLen {
+		return protocolError(iwire.ErrResourceExhausted, "%s section length %d exceeds limit %d", name, length, s.limits.MaxSectionLen)
+	}
+	return nil
+}
+
 func responseForRecords(records []collections.DocumentRecord, meta CursorMeta) ([]iwire.Section, error) {
 	ids := make([][]byte, len(records))
 	docs := make([][]byte, len(records))
@@ -323,6 +460,14 @@ func (s *Server) reapExpiredCursors() {
 		return
 	}
 	now := time.Now()
+	interval := cursorReapInterval(s.cursorIdleTimeout)
+	s.reapMu.Lock()
+	if !s.nextReap.IsZero() && now.Before(s.nextReap) {
+		s.reapMu.Unlock()
+		return
+	}
+	s.nextReap = now.Add(interval)
+	s.reapMu.Unlock()
 	s.cursorMu.Lock()
 	expired := 0
 	for id, cursor := range s.cursors {
@@ -336,6 +481,17 @@ func (s *Server) reapExpiredCursors() {
 	if expired > 0 {
 		s.cursorCount.Add(-int64(expired))
 	}
+}
+
+func cursorReapInterval(idleTimeout time.Duration) time.Duration {
+	if idleTimeout <= time.Second {
+		return idleTimeout
+	}
+	interval := idleTimeout / 4
+	if interval < time.Second {
+		return time.Second
+	}
+	return interval
 }
 
 func (s *Server) openCursorCount() int {
