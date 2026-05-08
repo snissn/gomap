@@ -198,9 +198,11 @@ negotiated maximum in-flight requests and cursors. Servers MUST NOT send
 unbounded unsolicited frames.
 
 `goaway` indicates that the peer will accept no new requests on the connection.
-Its body MUST include `last_accepted_request_id` and an optional error code.
-Clients MAY retry requests with IDs greater than `last_accepted_request_id`
-when the command and idempotency policy allow retry.
+Its body is a `response_meta` section encoded as a string map. The map MUST
+include `last_accepted_request_id` encoded as an unsigned decimal string and MAY
+include `error_code` encoded as an unsigned decimal string plus an optional
+human-readable `message`. Clients MAY retry requests with IDs greater than
+`last_accepted_request_id` when the command and idempotency policy allow retry.
 
 Each request moves through frame decode, schema validation, admission, dispatch,
 engine execution, response encode, and terminal cleanup. A request MUST emit at
@@ -257,6 +259,37 @@ Initial common section IDs:
 ```
 
 Command-specific sections start at `100`.
+
+Initial command-specific section IDs used by v1 commands and responses:
+
+```text
+100 collection_ref
+101 document_format
+102 document_ids              byte_vector
+103 documents                 byte_vector
+104 template_records optional byte_vector
+105 expected_catalog_version
+106 replacement_mode
+107 collection_meta
+108 index_definition
+109 index_name
+110 collection_handle
+111 index_value
+112 index_lower_bound
+113 index_upper_bound
+114 cursor_ref                uvarint cursor_id
+115 cursor_limits             uvarint max_items, uvarint max_bytes
+116 presence_bitmap           bitset, least-significant bit first
+117 truncated                 bool
+118 status_vector             byte_vector of per-item status records, reserved
+```
+
+`cursor_limits` encodes both fields. A zero `max_items` or `max_bytes` means
+"no client-specified limit" for that dimension; servers still enforce
+negotiated and configured limits. `presence_bitmap` has exactly
+`ceil(result_count/8)` bytes, where bit `i` says whether result `i` is present.
+`status_vector` is reserved for a future command version that defines partial
+success records; v1 all-or-nothing commands MUST NOT emit it.
 
 ### 5.5 Byte Vectors
 
@@ -682,14 +715,20 @@ the response.
 
 ## 13. Error Model
 
-Errors use stable numeric codes plus machine-readable fields:
+The v1 `error` section uses stable numeric codes plus a retry hint and a
+human-readable message:
 
 ```text
-code        uvarint
-retryable   bool
-message     string
-detail_kv   repeated string/string or typed values
+code       uvarint
+retryable  bool
+message    string
 ```
+
+The `string` encoding is the base protocol string encoding from section 3.
+Machine-readable request or stream metadata MAY be carried in a sibling
+`response_meta` string map. Typed error detail values are not frozen in v1; a
+future command or negotiated feature must define a separate critical detail
+section before typed details are emitted.
 
 Initial error classes:
 
