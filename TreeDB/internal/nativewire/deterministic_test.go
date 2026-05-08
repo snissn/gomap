@@ -140,6 +140,20 @@ func TestDecodeDeterministicEntryRejectsMalformedEnvelope(t *testing.T) {
 	sectionCountImpossible = appendUvarint(sectionCountImpossible, 1)
 	sectionCountImpossible = appendUvarint(sectionCountImpossible, 0)
 	sectionCountImpossible = appendUvarint(sectionCountImpossible, 128)
+	sectionCountHardLimit := []byte("TDC1")
+	sectionCountHardLimit = appendUvarint(sectionCountHardLimit, DeterministicEntryVersion)
+	sectionCountHardLimit = appendUvarint(sectionCountHardLimit, uint64(CommandInsertBatch))
+	sectionCountHardLimit = appendUvarint(sectionCountHardLimit, 1)
+	sectionCountHardLimit = appendUvarint(sectionCountHardLimit, 0)
+	sectionCountHardLimit = appendUvarint(sectionCountHardLimit, maxDeterministicEntrySections+1)
+	sectionLenIntLimit := []byte("TDC1")
+	sectionLenIntLimit = appendUvarint(sectionLenIntLimit, DeterministicEntryVersion)
+	sectionLenIntLimit = appendUvarint(sectionLenIntLimit, uint64(CommandInsertBatch))
+	sectionLenIntLimit = appendUvarint(sectionLenIntLimit, 1)
+	sectionLenIntLimit = appendUvarint(sectionLenIntLimit, 0)
+	sectionLenIntLimit = appendUvarint(sectionLenIntLimit, 1)
+	sectionLenIntLimit = appendUvarint(sectionLenIntLimit, uint64(SectionDocumentIDs))
+	sectionLenIntLimit = appendUvarint(sectionLenIntLimit, uint64(maxInt)+1)
 	for _, tc := range []struct {
 		name   string
 		raw    []byte
@@ -153,6 +167,8 @@ func TestDecodeDeterministicEntryRejectsMalformedEnvelope(t *testing.T) {
 		{name: "truncated_section", raw: append([]byte(nil), entry[:len(entry)-1]...), code: ErrMalformedFrame},
 		{name: "section_count_limit", raw: sectionCountLimit, limits: Limits{MaxSections: 1}, code: ErrResourceExhausted},
 		{name: "section_count_impossible", raw: sectionCountImpossible, code: ErrMalformedFrame},
+		{name: "section_count_hard_limit", raw: sectionCountHardLimit, limits: Limits{MaxSections: maxDeterministicEntrySections + 2}, code: ErrResourceExhausted},
+		{name: "section_len_int_limit", raw: sectionLenIntLimit, limits: Limits{MaxSectionLen: uint64(maxInt) + 1}, code: ErrResourceExhausted},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := DecodeDeterministicEntry(tc.raw, tc.limits); codeOf(err) != tc.code {
@@ -783,6 +799,28 @@ func TestDeterministicEntryRejectsBatchVectorArityMismatch(t *testing.T) {
 	}
 }
 
+func TestDeterministicEntryRejectsUnsupportedReplacementMode(t *testing.T) {
+	registry := MustV1Registry()
+	sections := replaceBatchDeterministicSections()
+	for i := range sections {
+		if sections[i].ID == SectionReplacementMode {
+			sections[i].Bytes = []byte{2}
+		}
+	}
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("AppendDeterministicEntry replacement_mode err=%v code=%d want invalid command", err, codeOf(err))
+	}
+
+	raw := deterministicEntryTestRaw(CommandReplaceBatch, deterministicEntrySectionsOnly(sections)...)
+	if _, err := DecodeDeterministicEntry(raw, Limits{}); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("DecodeDeterministicEntry replacement_mode err=%v code=%d want invalid command", err, codeOf(err))
+	}
+}
+
 func TestDeterministicEntryRejectsInvalidDocumentIDs(t *testing.T) {
 	registry := MustV1Registry()
 	for _, tc := range []struct {
@@ -821,6 +859,55 @@ func TestDeterministicEntryRejectsTooManyDocumentIDs(t *testing.T) {
 	}
 }
 
+func TestDeterministicDropIndexValidatesEncodedIndexName(t *testing.T) {
+	registry := MustV1Registry()
+	sections := []Section{
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandDropIndex, Version: 1})},
+		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
+		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+		{ID: SectionCollectionRef, Bytes: append([]byte{deterministicCollectionRefTagName}, []byte("users")...)},
+		{ID: SectionIndexName, Bytes: []byte{1, 'e', 'x'}},
+	}
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrMalformedFrame {
+		t.Fatalf("malformed encoded index name err=%v code=%d", err, codeOf(err))
+	}
+
+	for i := range sections {
+		if sections[i].ID == SectionIndexName {
+			sections[i].Bytes = appendDeterministicTestString(nil, "email")
+		}
+	}
+	cmd, err = registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections valid: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); err != nil {
+		t.Fatalf("AppendDeterministicEntry valid: %v", err)
+	}
+}
+
+func TestDeterministicIndexDefinitionRejectsInvalidIndexPaths(t *testing.T) {
+	registry := MustV1Registry()
+	sections := []Section{
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateIndex, Version: 1})},
+		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
+		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+		{ID: SectionCollectionRef, Bytes: append([]byte{deterministicCollectionRefTagName}, []byte("users")...)},
+		{ID: SectionIndexDefinition, Bytes: deterministicIndexDefinitionPayload("email", ".email")},
+	}
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("invalid index path err=%v code=%d", err, codeOf(err))
+	}
+}
+
 func registryWithInsertBatchAllowedFlags(flags uint64) *Registry {
 	schemas := v1CommandSchemas()
 	for i := range schemas {
@@ -842,6 +929,13 @@ func insertBatchDeterministicSections() []Section {
 		Section{ID: SectionDocumentIDs, Bytes: AppendByteVector(nil, []byte("a"))},
 		Section{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte("{}"))},
 	)
+}
+
+func replaceBatchDeterministicSections() []Section {
+	sections := insertBatchDeterministicSections()
+	sections[0].Bytes = AppendCommandHeader(nil, CommandHeader{ID: CommandReplaceBatch, Version: 1})
+	sections = append(sections, Section{ID: SectionReplacementMode, Bytes: []byte{deterministicReplacementExisting}})
+	return sections
 }
 
 func deterministicCollectionNameRef(name string) []byte {

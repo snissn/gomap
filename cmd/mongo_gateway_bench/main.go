@@ -958,11 +958,14 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 	server.MaxFindScanDocuments = cfg.Documents
 	server.DefaultCollectionOptions = treeDBBenchmarkCollectionOptions(cfg)
 	server.DefaultIndexStoragePolicy = cfg.TreeDBIndexRootStorage
-	nativeServer := nativewire.NewServer(nativewire.ServerOptions{
-		Collections:      manager,
-		Backend:          db,
-		MaxScanDocuments: max(1, cfg.Documents),
-	})
+	var nativeServer *nativewire.Server
+	if isNativeWireClientMode(cfg.ClientMode) {
+		nativeServer = nativewire.NewServer(nativewire.ServerOptions{
+			Collections:      manager,
+			Backend:          db,
+			MaxScanDocuments: max(1, cfg.Documents),
+		})
+	}
 
 	serveCtx, cancelServe := context.WithCancel(ctx)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -987,7 +990,9 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 			cancel()
 			cancelServe()
 			_ = ln.Close()
-			_ = nativeServer.Close()
+			if nativeServer != nil {
+				_ = nativeServer.Close()
+			}
 			_ = backendCleanup()
 			if removeDir {
 				_ = os.RemoveAll(dir)
@@ -1010,7 +1015,9 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		if nativeLn != nil {
 			_ = nativeLn.Close()
 		}
-		_ = nativeServer.Close()
+		if nativeServer != nil {
+			_ = nativeServer.Close()
+		}
 		cancelServe()
 		_ = ln.Close()
 		_ = backendCleanup()
@@ -1027,7 +1034,9 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		if nativeLn != nil {
 			_ = nativeLn.Close()
 		}
-		_ = nativeServer.Close()
+		if nativeServer != nil {
+			_ = nativeServer.Close()
+		}
 		cancelServe()
 		_ = ln.Close()
 		_ = backendCleanup()
@@ -1040,28 +1049,28 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 	cleanup := func(cleanupCtx context.Context) error {
 		var errs []error
 		errs = appendCleanupErr(errs, client.Disconnect(cleanupCtx))
-		if nativeLn != nil {
-			errs = appendCleanupErr(errs, nativeLn.Close())
-		}
 		if nativeCancel != nil {
 			nativeCancel()
 		}
-		errs = appendCleanupErr(errs, nativeServer.Close())
+		if nativeLn != nil {
+			errs = appendCleanupErr(errs, ignoreExpectedCloseError(nativeLn.Close()))
+		}
+		if nativeServer != nil {
+			errs = appendCleanupErr(errs, ignoreExpectedCloseError(nativeServer.Close()))
+		}
 		if nativeServeErr != nil {
 			select {
 			case err := <-nativeServeErr:
-				if err != nil && !errors.Is(err, context.Canceled) {
-					errs = appendCleanupErr(errs, err)
-				}
+				errs = appendCleanupErr(errs, ignoreExpectedCloseError(err))
 			case <-cleanupCtx.Done():
 				errs = appendCleanupErr(errs, cleanupCtx.Err())
 			}
 		}
 		cancelServe()
-		errs = appendCleanupErr(errs, ln.Close())
+		errs = appendCleanupErr(errs, ignoreExpectedCloseError(ln.Close()))
 		select {
 		case err := <-serveErr:
-			errs = appendCleanupErr(errs, err)
+			errs = appendCleanupErr(errs, ignoreExpectedCloseError(err))
 		case <-cleanupCtx.Done():
 			errs = appendCleanupErr(errs, cleanupCtx.Err())
 		}
@@ -1086,10 +1095,20 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 }
 
 func appendCleanupErr(errs []error, err error) []error {
-	if err == nil || errors.Is(err, net.ErrClosed) {
+	if err == nil {
 		return errs
 	}
 	return append(errs, err)
+}
+
+func ignoreExpectedCloseError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
+		return nil
+	}
+	return err
 }
 
 func closeBenchTarget(ctx context.Context, target *benchTarget) error {
@@ -3899,6 +3918,10 @@ func runTreeDBNativeWireInprocLoadPhase(ctx context.Context, cfg config, target 
 	if err := ensureNativeWireBenchmarkCollection(cfg, target); err != nil {
 		return phaseResult{}, err
 	}
+	prebuiltNative, err := nativeWirePrebuildStoredDocuments(cfg, prebuilt, prebuiltRaw)
+	if err != nil {
+		return phaseResult{}, err
+	}
 	producers := effectiveLoadProducers(cfg.Documents, cfg.BatchSize, cfg.InsertProducers)
 	clients := make([]*nativewire.Client, producers)
 	cleanups := make([]func() error, producers)
@@ -3923,12 +3946,11 @@ func runTreeDBNativeWireInprocLoadPhase(ctx context.Context, cfg config, target 
 		}
 	}()
 	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
-		ids, docs, err := nativeWireInsertBatch(cfg, start, end, prebuilt, prebuiltRaw)
+		ids, docs, err := nativeWireInsertBatch(cfg, start, end, prebuilt, prebuiltRaw, prebuiltNative)
 		if err != nil {
 			return err
 		}
-		_, err = clients[producer].InsertBatch(batchCtx, cfg.Database+"."+cfg.Collection, cfg.TreeDBDocumentFormat, ids, docs, nativewire.AckVisible)
-		return err
+		return nativeWireInsertBatchWithRetry(batchCtx, clients[producer], cfg.Database+"."+cfg.Collection, cfg.TreeDBDocumentFormat, ids, docs)
 	})
 }
 
@@ -3937,6 +3959,10 @@ func runTreeDBNativeWireTCPLoadPhase(ctx context.Context, cfg config, target *be
 		return phaseResult{}, errors.New("native-wire-tcp client mode requires a nativewire listener")
 	}
 	if err := ensureNativeWireBenchmarkCollection(cfg, target); err != nil {
+		return phaseResult{}, err
+	}
+	prebuiltNative, err := nativeWirePrebuildStoredDocuments(cfg, prebuilt, prebuiltRaw)
+	if err != nil {
 		return phaseResult{}, err
 	}
 	producers := effectiveLoadProducers(cfg.Documents, cfg.BatchSize, cfg.InsertProducers)
@@ -3959,12 +3985,11 @@ func runTreeDBNativeWireTCPLoadPhase(ctx context.Context, cfg config, target *be
 		}
 	}()
 	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
-		ids, docs, err := nativeWireInsertBatch(cfg, start, end, prebuilt, prebuiltRaw)
+		ids, docs, err := nativeWireInsertBatch(cfg, start, end, prebuilt, prebuiltRaw, prebuiltNative)
 		if err != nil {
 			return err
 		}
-		_, err = clients[producer].InsertBatch(batchCtx, cfg.Database+"."+cfg.Collection, cfg.TreeDBDocumentFormat, ids, docs, nativewire.AckVisible)
-		return err
+		return nativeWireInsertBatchWithRetry(batchCtx, clients[producer], cfg.Database+"."+cfg.Collection, cfg.TreeDBDocumentFormat, ids, docs)
 	})
 }
 
@@ -4042,17 +4067,20 @@ func validateNativeWireBenchmarkCollection(actual, expected collections.Collecti
 	if len(actual.Indexes) != len(expected.Indexes) {
 		return fmt.Errorf("native-wire benchmark collection %q index count %d want %d", actual.Name, len(actual.Indexes), len(expected.Indexes))
 	}
-	actualIndexes := append([]collections.IndexDefinition(nil), actual.Indexes...)
-	expectedIndexes := append([]collections.IndexDefinition(nil), expected.Indexes...)
-	sort.Slice(actualIndexes, func(i, j int) bool {
-		return nativeWireBenchmarkIndexLess(actualIndexes[i], actualIndexes[j])
-	})
-	sort.Slice(expectedIndexes, func(i, j int) bool {
-		return nativeWireBenchmarkIndexLess(expectedIndexes[i], expectedIndexes[j])
-	})
-	for i := range expectedIndexes {
-		if actualIndexes[i] != expectedIndexes[i] {
-			return fmt.Errorf("native-wire benchmark collection %q index %d drifted: got %+v want %+v", actual.Name, i, actualIndexes[i], expectedIndexes[i])
+	actualByName := make(map[string]collections.IndexDefinition, len(actual.Indexes))
+	for _, index := range actual.Indexes {
+		if _, exists := actualByName[index.Name]; exists {
+			return fmt.Errorf("native-wire benchmark collection %q has duplicate index %q", actual.Name, index.Name)
+		}
+		actualByName[index.Name] = index
+	}
+	for _, expectedIndex := range expected.Indexes {
+		actualIndex, ok := actualByName[expectedIndex.Name]
+		if !ok {
+			return fmt.Errorf("native-wire benchmark collection %q missing index %q", actual.Name, expectedIndex.Name)
+		}
+		if actualIndex != expectedIndex {
+			return fmt.Errorf("native-wire benchmark collection %q index %q drifted: got %+v want %+v", actual.Name, expectedIndex.Name, actualIndex, expectedIndex)
 		}
 	}
 	return nil
@@ -4119,12 +4147,63 @@ func normalizeNativeWireBenchmarkCollectionMeta(meta collections.CollectionMeta)
 	return meta
 }
 
-func nativeWireInsertBatch(cfg config, start, end int, prebuilt []bson.D, prebuiltRaw []bson.Raw) ([][]byte, [][]byte, error) {
+func sameNativeWireBenchmarkOptions(got, want collections.CollectionOptions) bool {
+	return got.DocumentFormat == want.DocumentFormat &&
+		got.DataRootStoragePolicy == want.DataRootStoragePolicy &&
+		got.IndexStateStoragePolicy == want.IndexStateStoragePolicy &&
+		got.BufferedIndexedWriteMaxDocuments == want.BufferedIndexedWriteMaxDocuments &&
+		got.BufferedIndexedWriteMaxBytes == want.BufferedIndexedWriteMaxBytes &&
+		got.BufferedIndexedWriteMaxRootRuns == want.BufferedIndexedWriteMaxRootRuns &&
+		got.BufferedIndexedAsyncFlush == want.BufferedIndexedAsyncFlush &&
+		got.BufferedIndexedAsyncFlushMaxQueuedUnits == want.BufferedIndexedAsyncFlushMaxQueuedUnits
+}
+
+func nativeWireInsertBatchWithRetry(ctx context.Context, client *nativewire.Client, collection string, format collections.DocumentFormat, ids, docs [][]byte) error {
+	for attempt := 0; ; attempt++ {
+		_, err := client.InsertBatch(ctx, collection, format, ids, docs, nativewire.AckVisible)
+		if err == nil {
+			return nil
+		}
+		if !isNativeWireCatalogMismatch(err) || attempt >= 128 {
+			return err
+		}
+		if delay := time.Duration(attempt+1) * time.Millisecond; delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			}
+		}
+	}
+}
+
+func isNativeWireCatalogMismatch(err error) bool {
+	return nativewire.IsCatalogVersionMismatch(err)
+}
+
+func nativeWirePrebuildStoredDocuments(cfg config, prebuilt []bson.D, prebuiltRaw []bson.Raw) ([][]byte, error) {
+	if !cfg.PrebuildDocuments {
+		return nil, nil
+	}
+	out := make([][]byte, cfg.Documents)
+	for i := range out {
+		doc, err := nativeWireStoredDocument(cfg.TreeDBDocumentFormat, i, prebuilt, prebuiltRaw, nil)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = doc
+	}
+	return out, nil
+}
+
+func nativeWireInsertBatch(cfg config, start, end int, prebuilt []bson.D, prebuiltRaw []bson.Raw, prebuiltNative [][]byte) ([][]byte, [][]byte, error) {
 	ids := make([][]byte, end-start)
 	docs := make([][]byte, end-start)
 	for i := start; i < end; i++ {
 		ids[i-start] = nativeWireMongoPrimaryID(i)
-		doc, err := nativeWireStoredDocument(cfg.TreeDBDocumentFormat, i, prebuilt, prebuiltRaw)
+		doc, err := nativeWireStoredDocument(cfg.TreeDBDocumentFormat, i, prebuilt, prebuiltRaw, prebuiltNative)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -4133,16 +4212,21 @@ func nativeWireInsertBatch(cfg config, start, end int, prebuilt []bson.D, prebui
 	return ids, docs, nil
 }
 
+const nativeWireMongoPrimaryIDPathDepth = 1
+
 func nativeWireMongoPrimaryID(i int) []byte {
 	id := benchmarkID(i)
 	key := make([]byte, 0, 2+4+len(id)+1)
-	// Template-v1 primary keys encode the BSON _id path followed by the raw BSON
-	// string value so native inserts use the same key layout as the Mongo gateway.
-	key = append(key, 1, byte(bson.TypeString))
+	// Match the Mongo gateway primary-key layout: one path component for `_id`,
+	// then the BSON scalar type and BSON string payload for the benchmark ID.
+	key = append(key, nativeWireMongoPrimaryIDPathDepth, byte(bson.TypeString))
 	return bsoncore.AppendString(key, id)
 }
 
-func nativeWireStoredDocument(format collections.DocumentFormat, i int, prebuilt []bson.D, prebuiltRaw []bson.Raw) ([]byte, error) {
+func nativeWireStoredDocument(format collections.DocumentFormat, i int, prebuilt []bson.D, prebuiltRaw []bson.Raw, prebuiltNative [][]byte) ([]byte, error) {
+	if prebuiltNative != nil {
+		return prebuiltNative[i], nil
+	}
 	switch format {
 	case collections.DocumentFormatBSON:
 		raw, err := benchmarkBSONRaw(i, prebuilt, prebuiltRaw)
@@ -4151,19 +4235,16 @@ func nativeWireStoredDocument(format collections.DocumentFormat, i int, prebuilt
 		}
 		return raw, nil
 	case collections.DocumentFormatDefault, collections.DocumentFormatJSON:
-		return nativeWireBenchmarkJSONDocument(i), nil
+		return nativeWireBenchmarkJSONDocument(i, prebuilt)
 	case collections.DocumentFormatTemplateV1:
-		raw, err := benchmarkBSONRaw(i, prebuilt, prebuiltRaw)
+		raw, err := nativeWireBenchmarkJSONDocument(i, prebuilt)
 		if err != nil {
 			return nil, err
 		}
-		stored, err := bson.MarshalExtJSON(raw, false, false)
-		if err != nil {
-			return nil, err
-		}
-		return collections.EncodeTemplateV1DocumentJSON(stored)
+		return collections.EncodeTemplateV1DocumentJSON(raw)
+	default:
+		return nativeWireBenchmarkJSONDocument(i, prebuilt)
 	}
-	return nativeWireBenchmarkJSONDocument(i), nil
 }
 
 func benchmarkBSONRaw(i int, prebuilt []bson.D, prebuiltRaw []bson.Raw) (bson.Raw, error) {
@@ -4183,7 +4264,10 @@ func benchmarkBSONRaw(i int, prebuilt []bson.D, prebuiltRaw []bson.Raw) (bson.Ra
 	return bson.Raw(raw), nil
 }
 
-func nativeWireBenchmarkJSONDocument(i int) []byte {
+func nativeWireBenchmarkJSONDocument(i int, prebuilt []bson.D) ([]byte, error) {
+	if prebuilt != nil {
+		return bson.MarshalExtJSON(prebuilt[i], false, false)
+	}
 	city := benchmarkCity(i)
 	return []byte(fmt.Sprintf(
 		`{"_id":%q,"email":%q,"city":%q,"age":%d,"active":%t,"score":%.1f,"tags":[%q,%q],"profile":{"rank":%d,"bio":%q}}`,
@@ -4197,7 +4281,7 @@ func nativeWireBenchmarkJSONDocument(i int) []byte {
 		fmt.Sprintf("bucket-%02d", i%32),
 		int32(i%1000),
 		strings.Repeat("x", 96),
-	))
+	)), nil
 }
 
 func rawWireDocuments(start, end int, prebuilt []bson.D, prebuiltRaw []bson.Raw) ([]wire.Document, error) {
