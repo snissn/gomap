@@ -29,6 +29,7 @@ type ChooseKOptions struct {
 	// Deterministic timing overrides (ns per raw byte).
 	EncodeNsPerRawByte float64
 	DecodeNsPerRawByte float64
+	EncoderWorkspace   *zstd.DictEncodeWorkspace
 }
 
 type kScore struct {
@@ -79,7 +80,7 @@ func ChooseKForDictOptions(dict []byte, samples [][]byte, opts ChooseKOptions) (
 
 	nsPerByte := opts.DecodeNsPerRawByte
 	if nsPerByte <= 0 {
-		nsPerByte = decodeCostEstimate(dict, eval)
+		nsPerByte = decodeCostEstimate(dict, eval, opts.EncoderWorkspace)
 	}
 	ks := opts.CandidateK
 	if len(ks) == 0 {
@@ -87,16 +88,18 @@ func ChooseKForDictOptions(dict []byte, samples [][]byte, opts ChooseKOptions) (
 	}
 	ks = normalizeCandidateK(ks)
 	var sharedEnc *zstd.Encoder
-	if enc, err := zstd.NewWriter(nil,
-		zstd.WithEncoderDict(dict),
-		zstd.WithEncoderLevel(zstd.SpeedFastest),
-		zstd.WithEncoderConcurrency(1),
-		zstd.WithEncoderCRC(false),
-	); err == nil {
-		sharedEnc = enc
-	}
-	if sharedEnc != nil {
-		defer sharedEnc.Close()
+	if opts.EncoderWorkspace == nil {
+		if enc, err := zstd.NewWriter(nil,
+			zstd.WithEncoderDict(dict),
+			zstd.WithEncoderLevel(zstd.SpeedFastest),
+			zstd.WithEncoderConcurrency(1),
+			zstd.WithEncoderCRC(false),
+		); err == nil {
+			sharedEnc = enc
+		}
+		if sharedEnc != nil {
+			defer sharedEnc.Close()
+		}
 	}
 	var concatScratch []byte
 	var encodedScratch []byte
@@ -111,7 +114,9 @@ func ChooseKForDictOptions(dict []byte, samples [][]byte, opts ChooseKOptions) (
 			continue
 		}
 		payload, meta, raw, encodeNs := 0, 0, 0, int64(0)
-		if sharedEnc != nil {
+		if opts.EncoderWorkspace != nil {
+			payload, meta, raw, encodeNs = batchTotalsWithEncodeWorkspace(opts.EncoderWorkspace, dict, eval[:used], k, opts.EncodeNsPerRawByte, &concatScratch, &encodedScratch)
+		} else if sharedEnc != nil {
 			payload, meta, raw, encodeNs = batchTotalsWithEncoder(sharedEnc, eval[:used], k, opts.EncodeNsPerRawByte, &concatScratch, &encodedScratch)
 		} else {
 			payload, meta, raw, encodeNs = batchTotals(dict, eval[:used], k, opts.EncodeNsPerRawByte)
@@ -305,7 +310,65 @@ func batchTotalsWithEncoder(enc *zstd.Encoder, samples [][]byte, k int, encodeNs
 	return payload, meta, raw, encodeNs
 }
 
-func decodeCostEstimate(dict []byte, samples [][]byte) float64 {
+func batchTotalsWithEncodeWorkspace(ws *zstd.DictEncodeWorkspace, dict []byte, samples [][]byte, k int, encodeNsPerRawByte float64, concatScratch *[]byte, encodedScratch *[]byte) (payload int, meta int, raw int, encodeNs int64) {
+	if ws == nil || k <= 0 {
+		return 0, 0, 0, 0
+	}
+	n := (len(samples) / k) * k
+	if n == 0 {
+		return 0, 0, 0, 0
+	}
+	samples = samples[:n]
+	batches := n / k
+	buf := *concatScratch
+	encoded := *encodedScratch
+	started := time.Now()
+	for b := 0; b < batches; b++ {
+		start := b * k
+		end := start + k
+		total := 0
+		for i := start; i < end; i++ {
+			raw += len(samples[i])
+			total += len(samples[i])
+		}
+		if cap(buf) < total {
+			buf = make([]byte, total)
+		} else {
+			buf = buf[:total]
+		}
+		pos := 0
+		for i := start; i < end; i++ {
+			copy(buf[pos:], samples[i])
+			pos += len(samples[i])
+		}
+		var err error
+		encoded, err = ws.EncodeAllWithDict(buf, encoded[:0], dict, zstd.SpeedFastest)
+		if err != nil {
+			return 0, 0, 0, 0
+		}
+		payload += len(encoded)
+		// Account for the full on-disk framing overhead:
+		// - record header (CRC/version/flags/txn/bodyLen)
+		// - frame header + dict_id + RID table + offsets table
+		//
+		// NOTE: Keep these constants in sync with `TreeDB/internal/valuelog/valuelog.go`.
+		const (
+			valueLogRecordHeaderBytes = 20 // valuelog.HeaderSize
+			valueLogFrameHeaderBytes  = 12 // valuelog.FrameHeaderSize
+		)
+		meta += valueLogRecordHeaderBytes + valueLogFrameHeaderBytes + (k * 8) + ((k + 1) * 4)
+	}
+	if encodeNsPerRawByte > 0 {
+		encodeNs = int64(float64(raw) * encodeNsPerRawByte)
+	} else {
+		encodeNs = time.Since(started).Nanoseconds()
+	}
+	*concatScratch = buf[:0]
+	*encodedScratch = encoded[:0]
+	return payload, meta, raw, encodeNs
+}
+
+func decodeCostEstimate(dict []byte, samples [][]byte, encodeWS *zstd.DictEncodeWorkspace) float64 {
 	eval := samples
 	if len(eval) > maxDecodeCostSamples {
 		eval = evenlySampleRecords(eval, maxDecodeCostSamples)
@@ -314,24 +377,35 @@ func decodeCostEstimate(dict []byte, samples [][]byte) float64 {
 	if n == 0 {
 		return 1.0
 	}
-	enc, err := zstd.NewWriter(nil,
-		zstd.WithEncoderDict(dict),
-		zstd.WithEncoderLevel(zstd.SpeedFastest),
-		zstd.WithEncoderConcurrency(1),
-		zstd.WithEncoderCRC(false),
-	)
-	if err != nil {
-		return 1.0
-	}
-	defer enc.Close()
-
 	totalRaw := 0
 	var encoded []byte
 	encodedFrames := make([][]byte, 0, n)
-	for i := 0; i < n; i++ {
-		totalRaw += len(eval[i])
-		encoded = enc.EncodeAll(eval[i], encoded[:0])
-		encodedFrames = append(encodedFrames, append([]byte(nil), encoded...))
+	if encodeWS != nil {
+		for i := 0; i < n; i++ {
+			totalRaw += len(eval[i])
+			var err error
+			encoded, err = encodeWS.EncodeAllWithDict(eval[i], encoded[:0], dict, zstd.SpeedFastest)
+			if err != nil {
+				return 1.0
+			}
+			encodedFrames = append(encodedFrames, append([]byte(nil), encoded...))
+		}
+	} else {
+		enc, err := zstd.NewWriter(nil,
+			zstd.WithEncoderDict(dict),
+			zstd.WithEncoderLevel(zstd.SpeedFastest),
+			zstd.WithEncoderConcurrency(1),
+			zstd.WithEncoderCRC(false),
+		)
+		if err != nil {
+			return 1.0
+		}
+		defer enc.Close()
+		for i := 0; i < n; i++ {
+			totalRaw += len(eval[i])
+			encoded = enc.EncodeAll(eval[i], encoded[:0])
+			encodedFrames = append(encodedFrames, append([]byte(nil), encoded...))
+		}
 	}
 	dec, err := zstd.NewReader(nil, zstd.WithDecoderDicts(dict))
 	if err != nil {
