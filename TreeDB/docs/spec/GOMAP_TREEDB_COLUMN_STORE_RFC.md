@@ -11,8 +11,8 @@ Add an optional column-store storage layout for TreeDB collections. The new
 layout keeps TreeDB's existing B+Tree, catalog roots, snapshots, value log,
 dictionary store, and collection manager, but changes the durable document-data
 root for selected collections from row-document values to immutable,
-column-oriented parts. Each part stores row-aligned column granules in the
-persistent value log and stores small B-tree descriptors for discovery,
+column-oriented parts. Each part stores row-aligned column granules in a
+dedicated column file class and stores small B-tree descriptors for discovery,
 visibility, and point lookup.
 
 The desired end state is a TreeDB collection type that can:
@@ -31,8 +31,8 @@ The desired end state is a TreeDB collection type that can:
   reusable collection-level interfaces, so row-store, template-v1, BSON, and
   column-store collections can all use them where their data layout can supply
   typed vectors or byte haystacks;
-- use TreeDB's copy-on-write root publish, snapshots, value-log GC, rewrite,
-  and benchmark discipline;
+- use TreeDB's copy-on-write root publish, snapshots, column-file/value-log
+  lifecycle discipline, and benchmark discipline;
 - use test-driven milestones with explicit throughput and compression gates.
 
 This should be built as an additive collection storage mode, not as a rewrite
@@ -79,7 +79,7 @@ separate storage engine.
 1. Preserve TreeDB's single-writer/multi-reader snapshot model.
 2. Keep the B-tree as the transactional root catalog, locator, secondary-index,
    filter-index, and visibility mechanism.
-3. Store immutable column parts in the persistent value log.
+3. Store immutable column parts in a dedicated persistent column file class.
 4. Make projected scans much faster and lower-allocation than materializing
    JSON/BSON/template documents.
 5. Improve compacted bytes/doc for typed collection shapes, especially
@@ -121,9 +121,9 @@ separate storage engine.
   representation of changed rows must be column-store data.
 - Do not lazily create columns for undeclared fields in `TCS1`. Flexible
   schemas may be designed later as a separate format or compatibility layer.
-- Do not require a new physical column-file folder in PR1. The format should
-  make such a folder possible, but the first implementation can use the
-  existing persistent value log with a column-part payload class.
+- Do not force one operating-system file per field for every write shape. PR1
+  should create a dedicated column-store file class, but the manifest may pack
+  small update-delta parts to avoid pathological file counts.
 - Do not require every ClickHouse codec in PR1. The format should allow them,
   but implementation should be staged.
 
@@ -407,7 +407,7 @@ ColumnPartDescriptor {
     Supersedes       []RowLocatorRange optional
     Granules         []GranuleDescriptor
     Columns          []ColumnPartColumnDescriptor
-    DeleteBitmapPtr  optional ValuePtr
+    DeleteBitmapRef  optional ColumnFileRef
     Stats            PartStats
 }
 ```
@@ -426,7 +426,7 @@ GranuleDescriptor {
 }
 ```
 
-Column descriptors contain value-log pointers to compressed streams:
+Column descriptors contain file references to compressed streams:
 
 ```text
 ColumnPartColumnDescriptor {
@@ -439,37 +439,80 @@ ColumnPartColumnDescriptor {
     CompressedBytes   uint64
     UncompressedBytes uint64
 }
+
+ColumnSubstreamDescriptor {
+    SubstreamKind  uint8
+    FileRef        ColumnFileRef
+    BlockDirectory []ColumnBlockDirectoryEntry
+}
+
+ColumnFileRef {
+    FileID         uint64
+    RelativePath   string
+    Offset         uint64
+    Size           uint64
+    ChecksumCRC32C uint32
+}
 ```
 
-### 6.3 Value-Log Layout
+### 6.3 Column File Layout
 
-Each column part writes one or more value-log records. The preferred first
-format is a single `TCS1` record per column substream per part. Large columns
-may split into multiple records by granule range.
+PR1 should create a dedicated column-store file class instead of hiding column
+payloads inside ordinary value-log records. This avoids a migration later,
+improves observability, and makes schema-change cleanup easier.
 
-Columns are logically distinct streams, but they are not required to be
-distinct operating-system files in PR1. For a schema such as
+The recommended physical layout is manifest-driven:
+
+```text
+Dir/maindb/columns/
+    <collection-id>/
+        schema-<schema-version>/
+            part-<part-id>/
+                manifest.tcp1
+                col-<column-id>-values.tcs1
+                col-<column-id>-nullmap.tcs1
+                col-<column-id>-offsets.tcs1
+                col-<column-id>-chars.tcs1
+                filters/
+                deletes.tdbm
+```
+
+For columns with many substreams or very large payloads, the same manifest can
+use a column subfolder form such as `col-<column-id>/values.tcs1`; the stable
+`column_id`, not the user-facing field name, should still be the path key.
+
+Use stable `column_id` values in file names, not field paths. User-facing
+field names may be renamed; stable ids keep old parts readable and let schema
+evolution map old physical columns to new logical names.
+
+Columns are logically distinct streams. For a schema such as
 `{primary key, metric_1, metric_2}`, `metric_1` and `metric_2` should have
-separate column stream descriptors and may have separate value-log records, but
-those records may live in the same value-log segment file. The descriptor and
-marks, not the file name, define the column boundary.
+separate column stream descriptors and, for compacted/base parts, separate
+column or substream files. The manifest, not path conventions alone, remains
+authoritative: it records each column/substream file, byte range, compression
+pipeline, checksums, marks, and row ranges.
 
-This keeps PR1 aligned with TreeDB's existing persistent value-log, pointer,
-GC, rewrite, and recovery machinery. The format should still reserve a
-column-part payload class so TreeDB can later split column parts into a
-dedicated folder or file class, for example `Dir/maindb/columns/col-*.log`,
-without changing logical collection semantics.
+Small update-delta parts may pack multiple columns or substreams into one
+`TCS1` container file to avoid excessive inode and file-descriptor churn. The
+same manifest format should describe both layouts:
 
-Requirements for any later dedicated column file/folder:
+- compacted/base part: prefer separate files per column/substream for
+  observability and selective IO;
+- small update-delta part: allow packed multi-column files;
+- maintenance compaction: rewrite packed deltas into normal separated base
+  part files.
+
+Column files must still use TreeDB's existing durability and lifecycle
+principles:
 
 - use the same reachability model as value-log pointers;
-- integrate with value-log GC/rewrite or provide equivalent segment GC;
+- integrate with TreeDB's lifecycle tooling or provide equivalent segment/file
+  GC and rewrite;
 - expose bytes-by-class stats for column payloads, filters, marks, and
   tombstones;
 - preserve WAL/recovery ordering: no root may publish a pointer to unreadable
   column bytes;
-- keep `TCS1` payload compression independent from outer frame compression
-  unless a benchmark proves a class-specific outer dictionary is beneficial.
+- keep `TCS1` payload compression independent from outer frame compression.
 
 Envelope:
 
@@ -527,17 +570,17 @@ ColumnBlockDirectoryEntry {
 }
 ```
 
-The value-log record already has a CRC32C over record header and payload.
+The column file reference records a checksum for the referenced byte range.
 `ChecksumCRC32C` in each block is still useful because a reader may decode one
-block after slicing a larger value-log payload. This avoids requiring a full
-column stream scan to validate one projected block. A later format can use
-xxhash128 or CityHash128 if evidence shows CRC32C is too weak for the block
-slice use case.
+block after slicing a larger column file. This avoids requiring a full column
+stream scan to validate one projected block. A later format can use xxhash128
+or CityHash128 if evidence shows CRC32C is too weak for the block slice use
+case.
 
-`TCS1` payload records should bypass value-log frame compression or be written
-through a value-log class that is known to contain already-compressed column
-blocks. Double compression must be treated as a bug unless an explicit test
-demonstrates a workload where an outer dictionary layer improves wall time.
+`TCS1` column files should store already-encoded block payloads directly.
+Double compression must be treated as a bug unless an explicit class-level
+dictionary experiment demonstrates a workload where an outer dictionary layer
+improves wall time.
 
 ### 6.4 Granules, Blocks, and Marks
 
@@ -546,8 +589,8 @@ Borrow these ClickHouse defaults unless benchmark evidence changes them:
 - default granule: 8192 rows;
 - minimum compression block target: 64 KiB raw;
 - maximum compression block target: 1 MiB raw;
-- compact/write-small parts may group several columns into one value-log
-  record, but mature parts should favor independent column records;
+- compact/write-small parts may group several columns into one packed `TCS1`
+  file, but mature parts should favor independent column/substream files;
 - marks record row range plus compressed offset and decoded offset.
 
 Chunking has four separate units:
@@ -555,7 +598,7 @@ Chunking has four separate units:
 - part: the immutable maintenance and publication unit;
 - granule: the smallest unit for metadata skipping and row-count accounting;
 - codec block: the smallest unit for decompression;
-- value-log record: the physical IO/pointer unit.
+- column file or file range: the physical IO/reference unit.
 
 Granules and codec blocks should usually align, but the format must allow one
 granule to contain multiple codec blocks for very wide strings and one codec
@@ -683,8 +726,8 @@ Update model:
    locators as invisible.
 7. Maintenance compacts base parts, insert deltas, update deltas, and delete
    bitmaps into new base parts.
-8. Old parts become unreachable and are reclaimed by existing value-log GC or
-   rewrite after snapshots release them.
+8. Old parts become unreachable and are reclaimed by column file GC or rewrite
+   after snapshots release them.
 
 Small foreground updates can batch in memory briefly to amortize part-builder
 overhead, but the crash-recoverable representation must be columnar. A row
@@ -1217,7 +1260,8 @@ Part builder steps:
 4. Build per-column substreams.
 5. Choose codec pipeline per substream.
 6. Encode blocks, applying compression admission.
-7. Write value-log records.
+7. Write column files or packed update-delta containers under
+   `Dir/maindb/columns/`.
 8. Build part descriptor and primary locator run.
 9. Return ordered root publish inputs.
 
@@ -1227,7 +1271,7 @@ Borrow ClickHouse's ordered parallel compression pattern:
 
 - column blocks are encoded independently in a worker pool;
 - each block has a sequence number;
-- value-log writes preserve deterministic descriptor order;
+- column file writes preserve deterministic descriptor order;
 - bounded memory prevents compression workers from outrunning the writer;
 - a direct encode-into-destination path is allowed when there is no pending
   earlier block.
@@ -1238,13 +1282,13 @@ unbounded goroutine-per-column behavior.
 ### 9.5 WAL and Durability Integration
 
 Column-store writes must follow TreeDB's existing durability model: WAL/journal
-and value-log storage are decoupled, and value-log pointers remain persistent
-storage references.
+and payload storage are decoupled. Column file references should follow the
+same durable-pointer rules as value-log pointers.
 
 WAL-on write ordering:
 
 1. Build column parts, filters, marks, and descriptors.
-2. Append `TCS1` payloads to the value log or future column-part file class.
+2. Append `TCS1` payloads to the column file class.
 3. Append the commit-log batch that describes root mutations, primary locator
    changes, secondary index changes, delete/tombstone changes, and part
    descriptor additions.
@@ -1265,7 +1309,7 @@ roadmap must still reserve tests for:
 - crash during update-delta publish with secondary index changes;
 - crash during compaction publish;
 - recovery with WAL enabled and WAL disabled profiles;
-- value-log GC/rewrite while old snapshots still reference old column parts.
+- column file GC/rewrite while old snapshots still reference old column parts.
 
 ## 10. Caches and Metadata
 
@@ -1291,19 +1335,19 @@ Column-store maintenance has three jobs:
 1. Compact small parts, update-delta parts, and delete bitmaps into larger
    base parts.
 2. Recompress hot parts into warm/cold codecs.
-3. Reclaim old value-log records through existing GC/rewrite.
+3. Reclaim old column files or packed delta containers through GC/rewrite.
 
 Part compaction algorithm:
 
 ```text
 compact_column_parts(snapshot, source_parts, target_policy):
-    acquire snapshot pins for source value-log files
+    acquire snapshot pins for source column files
     build merge iterator over base parts, delta parts, and delete bitmaps
     emit new row-aligned ColumnBatch chunks
     encode chunks into new parts using target codec policy
     publish new descriptors, primary locators, deletes, and system root
     leave old parts reachable until no snapshots reference old roots
-    let value-log GC/rewrite reclaim old records
+    let column file GC/rewrite reclaim old files or packed containers
 ```
 
 A part descriptor must record enough source stats to make maintenance
@@ -1350,7 +1394,7 @@ Required collection tests:
 - exact count metadata correctness across insert, update, delete, compaction,
   reopen, and active snapshots;
 - compaction while snapshots are open;
-- value-log GC does not remove reachable column parts;
+- column file GC does not remove reachable column parts;
 - offline rewrite preserves column locators;
 - schema add/drop/default behavior.
 
@@ -1419,7 +1463,7 @@ design text to tests and gates. The checklist should answer:
 - whether secondary indexes, WAL/recovery, compression stats, and count
   metadata are affected;
 - whether the change introduces a new on-disk format byte or only new policy;
-- whether old snapshots, value-log GC/rewrite, and compaction remain safe.
+- whether old snapshots, column file GC/rewrite, and compaction remain safe.
 
 No milestone should be considered complete unless every deliverable has at
 least one correctness test and every risky performance claim has a benchmark
@@ -1479,6 +1523,7 @@ Performance gates:
 Deliverables:
 
 - `TCS1` envelope and part descriptor structs;
+- `Dir/maindb/columns/` file class with manifest-driven part layout;
 - fixed schema metadata with explicit rejection of lazy column creation;
 - raw `NONE` fixed-width scalar columns;
 - primary `id -> row_locator` root;
@@ -1491,7 +1536,7 @@ Tests:
 - fixed-schema validation tests;
 - scalar round trips for bool/int64/float64/string-id placeholders;
 - reopen parity;
-- value-log GC reachable-part protection.
+- column file GC reachable-part protection.
 
 Gates:
 
@@ -1670,7 +1715,7 @@ Tests:
   permanent row-overlay dependency;
 - compaction with active snapshots;
 - crash/reopen around compaction publish;
-- value-log GC/rewrite after compaction;
+- column file GC/rewrite after compaction;
 - unique secondary correctness after updates.
 - crash/reopen around update-delta publish with secondary index changes.
 
@@ -1787,7 +1832,7 @@ Gates:
 | Fast filters produce wrong answers. | Treat filters as pruning only, use tri-state `MayMatch`, forbid false negatives in property tests, and always verify matches on decoded rows or exact secondary entries. |
 | Haystack search semantics become confusing for non-string types. | Require explicit byte-haystack adapters; use typed filters for numeric equality/range and reserve encoded-byte substring search for explicit predicates. |
 | Fast count metadata becomes stale. | Publish count deltas in the same root group as inserts/deletes and verify across update, compaction, reopen, and snapshots. |
-| Value-log GC deletes live column parts. | Descriptors and locators are normal roots; GC reachability must scan their ValuePtrs, with tests. |
+| Column file GC deletes live column parts. | Descriptors and locators are normal roots; GC reachability must scan column file references, with tests. |
 | Borrowed vector API is unsafe for general users. | Provide safe materializing APIs and document borrowed lifetime like existing borrowed APIs. |
 | ClickHouse codecs are overfit for analytical time series. | Stage codecs and keep generic compression as the baseline; require dataset-specific gates before enabling selectors. |
 | Format churn blocks development. | TreeDB is pre-alpha; isolate format in `TCS1` and exact-byte tests. |
@@ -1813,8 +1858,8 @@ Gates:
    `filters/<name>` roots used by non-column collection layouts?
 9. Which byte-haystack adapters should be enabled by default for BSON and
    template-v1: field-only, whole-document, or both behind explicit options?
-10. When should column parts move from ordinary value-log records to a dedicated
-    column file/folder class?
+10. Should compacted/base parts always use one file per column substream, or
+    should very narrow columns be grouped by default?
 11. Should the canonical compression registry live under the existing value-log
     compression packages, the existing internal compression package, or a new
     shared package consumed by both?
@@ -1861,21 +1906,19 @@ fixtures, so absolute size claims could be misleading.
 Fix: Gates are relative to same-run baselines and include high-entropy fallback
 requirements.
 
-Finding: Existing value-log CRC might be enough, making block checksums look
-duplicative.  
+Finding: Column file checksums might make block checksums look duplicative.
 Fix: The proposal keeps per-block CRC32C because projected reads may slice a
-larger value-log record, but leaves a stronger checksum as an open question.
+larger column file, but leaves a stronger checksum as an open question.
 
 Finding: A direct column-store path could bypass secondary index correctness.  
 Fix: Direct vector insertion still builds existing secondary root runs and
 preserves current unique/nonunique index semantics.
 
 Finding: Existing value-log compression and column-store compression could
-double-compress the same bytes.  
-Fix: `TCS1` column block compression should write its encoded bytes as payloads
-and mark those value-log records/classes as already-compressed for outer value
-log compression, or use raw value-log records for column-part payloads. This
-must be enforced in Milestone 2 tests.
+double-compress the same bytes.
+Fix: `TCS1` column files should store their encoded block payloads directly.
+The column file class must not apply an outer compression layer unless an
+explicit class-level dictionary experiment proves a wall-time and bytes win.
 
 Finding: Secondary indexes could work for inserts but become stale after
 column-store updates.  
@@ -1899,10 +1942,11 @@ if row ingestion silently creates columns for new paths.
 Fix: `TCS1` now requires fixed schemas and declares flexible/lazy schemas
 out-of-scope for this format.
 
-Finding: A separate physical column folder could delay the first useful
-implementation and duplicate value-log lifecycle machinery.
-Fix: PR1 stores logical column streams as value-log payload records while
-reserving a column-part payload class for future file/folder separation.
+Finding: Delaying the physical column file/folder could make a later migration
+harder and reduce observability.
+Fix: PR1 now creates a dedicated column file class under `Dir/maindb/columns/`,
+uses stable `column_id` paths, and keeps the manifest flexible enough to pack
+small update-delta parts when file count would dominate.
 
 Finding: Update-delta parts may be correct but too slow for update-heavy
 workloads.
