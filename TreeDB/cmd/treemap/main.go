@@ -38,14 +38,15 @@ Commands:
   verify          Full scan verification (counts items)
   checkpoint       Force a durable checkpoint (requires -rw)
   checkpoint-bench Write workload then checkpoint (requires -rw)
-  compact         Compact/rebuild the index.db in-place (requires -rw)
+  compact-plan    Preview full storage compaction debt without mutating storage
+  compact         Run full storage compaction (requires -rw; use -scope=index for legacy index-only compaction)
   vacuum          Rebuild index.db via swap (shrinks file; requires -rw)
-  vlog-audit      Audit value-log filesystem, GC, and rewrite-plan state (requires -rw)
-  vlog-gc         Delete unreferenced value-log segments (requires -rw)
-  vlog-rewrite    Rewrite value-log segments and shrink via swap (requires -rw)
-  leafgen-plan    Print explicit leaf-generation pack plan
-  leafgen-pack    Pack sealed leaf generations by id (requires -rw)
-  leafgen-gc      Delete fully unreachable sealed leaf generations (requires -rw)
+  vlog-audit      Advanced: audit value-log filesystem, GC, and rewrite-plan state
+  vlog-gc         Advanced: delete unreferenced value-log segments only (requires -rw)
+  vlog-rewrite    Advanced: rewrite value-log segments only (requires -rw)
+  leafgen-plan    Advanced: print explicit leaf-generation pack plan
+  leafgen-pack    Advanced: pack sealed leaf generations only (requires -rw)
+  leafgen-gc      Advanced: delete unreachable sealed leaf generations only (requires -rw)
   get             Get a single key
   keys            List keys in a range/prefix
   scan            Scan keys and values in a range/prefix (requires -allow-values)
@@ -94,6 +95,8 @@ func main() {
 		runCheckpoint(dir, args)
 	case "checkpoint-bench":
 		runCheckpointBench(dir, args)
+	case "compact-plan":
+		runCompactPlan(dir, args)
 	case "compact":
 		runCompact(dir, args)
 	case "vacuum":
@@ -482,19 +485,131 @@ func runVerify(dir string, args []string) {
 func runCompact(dir string, args []string) {
 	fs := flag.NewFlagSet("compact", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
+	jsonOut := fs.Bool("json", false, "Emit JSON report")
+	scope := fs.String("scope", "all", "Compaction scope: all|index")
+	mode := fs.String("mode", "full", "Compaction mode: full|quick")
+	syncEachPhase := fs.Bool("sync-each-phase", false, "Force fsync boundaries for rewrite/pack batches")
+	batchSize := fs.Int("rewrite-batch-size", 0, "Value-log rewrite pointer-swap batch size (0=default)")
+	maxSegmentBytes := fs.Int64("rewrite-max-segment-bytes", 0, "Maximum value-log segment bytes during rewrite (0=default)")
+	leafPackPasses := fs.Int("leaf-pack-max-passes", 0, "Maximum leaf-generation pack passes (0=default)")
 	_ = fs.Parse(args)
 
 	if !*rw {
 		fatalf("compact requires -rw")
 	}
 
-	db := openTreeDB(dir, true)
+	if strings.EqualFold(strings.TrimSpace(*scope), "index") {
+		db := openTreeDB(dir, true)
+		defer closeTreeDB(db)
+
+		if err := db.CompactIndex(); err != nil {
+			fatalf("CompactIndex error: %v", err)
+		}
+		fmt.Println("Index compaction complete.")
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(*scope), "all") && strings.TrimSpace(*scope) != "" {
+		fatalf("compact -scope must be all or index")
+	}
+
+	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir, ReadOnly: false})
+	if err != nil {
+		fatalf("Failed to open DB: %v", err)
+	}
+	defer func() { _ = cleanup() }()
+
+	stats, err := backend.CompactStorage(context.Background(), treedbdb.CompactStorageOptions{
+		Mode:                           treedbdb.CompactStorageMode(strings.TrimSpace(*mode)),
+		SyncEachPhase:                  *syncEachPhase,
+		ValueLogRewriteBatchSize:       *batchSize,
+		ValueLogRewriteMaxSegmentBytes: *maxSegmentBytes,
+		LeafPackMaxPasses:              *leafPackPasses,
+	})
+	if err != nil {
+		fatalf("CompactStorage error: %v", err)
+	}
+	printCompactStorageStats(stats, *jsonOut)
+}
+
+func runCompactPlan(dir string, args []string) {
+	fs := flag.NewFlagSet("compact-plan", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "Emit JSON report")
+	mode := fs.String("mode", "full", "Compaction mode: full|quick")
+	_ = fs.Parse(args)
+
+	opts := treedb.Options{Dir: dir, ReadOnly: true}
+	db := openTreeDBWithOptions(opts)
 	defer closeTreeDB(db)
 
-	if err := db.CompactIndex(); err != nil {
-		fatalf("CompactIndex error: %v", err)
+	stats, err := db.CompactStoragePlan(context.Background(), treedb.CompactStorageOptions{
+		Mode: treedb.CompactStorageMode(strings.TrimSpace(*mode)),
+	})
+	if err != nil {
+		fatalf("CompactStoragePlan error: %v", err)
 	}
-	fmt.Println("Index compaction complete.")
+	printCompactStorageStats(stats, *jsonOut)
+}
+
+func printCompactStorageStats(stats treedb.CompactStorageStats, jsonOut bool) {
+	if jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(stats); err != nil {
+			fatalf("encode compact stats: %v", err)
+		}
+		return
+	}
+	mode := "applied"
+	if stats.DryRun {
+		mode = "plan"
+	}
+	beforeTotal := compactStorageUsageBytes(stats.Before, "total")
+	afterTotal := compactStorageUsageBytes(stats.After, "total")
+	fmt.Printf("compact-storage (%s): fully_compacted=%t before_bytes=%d after_bytes=%d\n",
+		mode,
+		stats.FullyCompacted,
+		beforeTotal,
+		afterTotal,
+	)
+	fmt.Printf("remaining-debt: value_rewrite_segments=%d value_rewrite_bytes=%d value_gc_segments=%d value_gc_bytes=%d leaf_pack_generations=%d leaf_pack_bytes=%d leaf_gc_generations=%d leaf_gc_bytes=%d zero_byte_value_log_files=%d\n",
+		stats.RemainingDebt.ValueLogRewriteSegments,
+		stats.RemainingDebt.ValueLogRewriteBytes,
+		stats.RemainingDebt.ValueLogGCSegments,
+		stats.RemainingDebt.ValueLogGCBytes,
+		stats.RemainingDebt.LeafPackGenerations,
+		stats.RemainingDebt.LeafPackBytes,
+		stats.RemainingDebt.LeafGCSegments,
+		stats.RemainingDebt.LeafGCBytes,
+		stats.RemainingDebt.ZeroByteValueLogFiles,
+	)
+	for _, usage := range stats.After {
+		if usage.Name == "total" {
+			continue
+		}
+		fmt.Printf("storage-domain: name=%s bytes=%d files=%d zero_byte_files=%d path=%s\n",
+			usage.Name,
+			usage.Bytes,
+			usage.Files,
+			usage.ZeroByteFiles,
+			usage.Path,
+		)
+	}
+	if stats.ZeroByteValueLogFilesDeleted > 0 {
+		fmt.Printf("cleanup: zero_byte_value_log_files_deleted=%d\n", stats.ZeroByteValueLogFilesDeleted)
+	}
+}
+
+func compactStorageUsageBytes(usages []treedb.CompactStorageUsage, name string) int64 {
+	for _, usage := range usages {
+		if usage.Name == name {
+			return usage.Bytes
+		}
+	}
+	return 0
+}
+
+func warnAdvancedMaintenance(command, scope string) {
+	fmt.Fprintf(os.Stderr, "warning: %s is an advanced %s operation and does not fully compact TreeDB storage; for final disk footprint use `treemap compact <db-dir> -rw`.\n", command, scope)
 }
 
 func runVacuum(dir string, args []string) {
@@ -522,6 +637,7 @@ func runVlogGC(dir string, args []string) {
 	if !*rw {
 		fatalf("vlog-gc requires -rw")
 	}
+	warnAdvancedMaintenance("vlog-gc", "value_vlog-only GC")
 
 	// Use backend DB directly for GC to avoid cached-layer lane initialization,
 	// which can pre-create empty value-log segments and pollute GC stats.
@@ -677,6 +793,7 @@ func runVlogRewrite(dir string, args []string) {
 	if !*rw {
 		fatalf("vlog-rewrite requires -rw")
 	}
+	warnAdvancedMaintenance("vlog-rewrite", "value_vlog-only rewrite")
 	templateMode, err := parseTemplateModeFlag(*templateModeFlag)
 	if err != nil {
 		fatalf("%v", err)
@@ -1230,10 +1347,15 @@ func registerSignalCloser(fn func()) {
 func openTreeDB(dir string, rw bool) *treedb.DB {
 	rootDir := resolveTreeDBRootDir(dir)
 	opts := treedb.Options{Dir: rootDir}
-	applyPersistedFormatConfig(dir, &opts)
 	if !rw {
 		opts.ReadOnly = true
 	}
+	return openTreeDBWithOptions(opts)
+}
+
+func openTreeDBWithOptions(opts treedb.Options) *treedb.DB {
+	opts.Dir = resolveTreeDBRootDir(opts.Dir)
+	applyPersistedFormatConfig(opts.Dir, &opts)
 	db, err := treedb.Open(opts)
 	if err != nil {
 		fatalf("Failed to open DB: %v", err)

@@ -307,7 +307,7 @@ func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnline
 		}
 	}
 
-	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: rootDir, ReadOnly: false})
+	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: rootDir, ReadOnly: true})
 	if err != nil {
 		return report, err
 	}

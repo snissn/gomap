@@ -98,7 +98,7 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 	if db == nil {
 		return stats, fmt.Errorf("missing db")
 	}
-	if db.readOnly {
+	if db.readOnly && !opts.DryRun {
 		return stats, ErrReadOnly
 	}
 	db.maintenanceMu.Lock()
@@ -379,7 +379,9 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		if set != nil {
 			_ = vm.Release(set)
 		}
-		db.persistValueLogRefTrackerBestEffort()
+		if !db.readOnly {
+			db.persistValueLogRefTrackerBestEffort()
+		}
 		return stats, nil
 	}
 

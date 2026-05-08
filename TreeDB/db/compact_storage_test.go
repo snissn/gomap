@@ -1,0 +1,176 @@
+package db
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/snissn/gomap/TreeDB/page"
+)
+
+func TestCompactStorageDeletesZeroByteValueLogFiles(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{
+		Dir: dir,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := d.SetSync([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	valueLogDir := ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	emptyPath := filepath.Join(valueLogDir, "value-l42-000001.log")
+	if err := os.WriteFile(emptyPath, nil, 0644); err != nil {
+		t.Fatalf("write empty value log: %v", err)
+	}
+
+	reopened, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+
+	plan, err := reopened.CompactStoragePlan(context.Background(), CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan: %v", err)
+	}
+	if got := plan.RemainingDebt.ZeroByteValueLogFiles; got != 1 {
+		t.Fatalf("zero-byte debt=%d want 1", got)
+	}
+
+	stats, err := reopened.CompactStorage(context.Background(), CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if _, err := os.Stat(emptyPath); !os.IsNotExist(err) {
+		t.Fatalf("empty value-log file still exists or stat failed: %v", err)
+	}
+	if !stats.FullyCompacted {
+		t.Fatalf("FullyCompacted=false remaining debt=%+v", stats.RemainingDebt)
+	}
+}
+
+func TestCompactStoragePlanReadOnlyDoesNotDeleteZeroByteValueLogFiles(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := d.SetSync([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	valueLogDir := ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	emptyPath := filepath.Join(valueLogDir, "value-l7-000001.log")
+	if err := os.WriteFile(emptyPath, nil, 0644); err != nil {
+		t.Fatalf("write empty value log: %v", err)
+	}
+
+	readonly, err := Open(Options{Dir: dir, ReadOnly: true})
+	if err != nil {
+		t.Fatalf("read-only open: %v", err)
+	}
+	stats, err := readonly.CompactStoragePlan(context.Background(), CompactStorageOptions{})
+	closeErr := readonly.Close()
+	if err != nil {
+		t.Fatalf("CompactStoragePlan: %v", err)
+	}
+	if closeErr != nil {
+		t.Fatalf("close readonly: %v", closeErr)
+	}
+	if got := stats.RemainingDebt.ZeroByteValueLogFiles; got != 1 {
+		t.Fatalf("zero-byte debt=%d want 1", got)
+	}
+	if _, err := os.Stat(emptyPath); err != nil {
+		t.Fatalf("read-only plan mutated empty value-log file: %v", err)
+	}
+}
+
+func TestCompactStorageSettlesLeafGenerationGCAfterPinnedRetiring(t *testing.T) {
+	d, leafLog, dir := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, d, "k", 64, 'a')
+	path1, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
+	rawFileID1 := page.ValueLogSegmentID(fileID1)
+	pinned := d.AcquireSnapshot()
+	if pinned == nil {
+		t.Fatal("expected pinned snapshot")
+	}
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeys(t, d, "k", 64, 'b')
+
+	closedPinned := false
+	d.compactStorageAfterPhase = func(name string) {
+		if name != "leaf-generation-gc" || closedPinned {
+			return
+		}
+		closedPinned = true
+		if err := pinned.Close(); err != nil {
+			t.Fatalf("close pinned snapshot: %v", err)
+		}
+	}
+	t.Cleanup(func() {
+		d.compactStorageAfterPhase = nil
+		if !closedPinned {
+			_ = pinned.Close()
+		}
+	})
+
+	stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if !closedPinned {
+		t.Fatal("phase hook did not close pinned snapshot")
+	}
+	if !stats.FullyCompacted {
+		t.Fatalf("FullyCompacted=false remaining debt=%+v", stats.RemainingDebt)
+	}
+	if !compactStoragePhaseSeen(stats.Phases, "settle-leaf-generation-gc-1") {
+		t.Fatalf("settle leaf GC phase missing: %+v", stats.Phases)
+	}
+	if err := waitForPathRemoval(path1, 5*time.Second); err != nil {
+		t.Fatalf("waitForPathRemoval(%s): %v", path1, err)
+	}
+	manifest := loadLeafGenerationManifestOrFatal(t, dir)
+	for _, gen := range manifest.Generations {
+		if gen.GenerationID == 0 {
+			t.Fatalf("invalid generation in manifest: %+v", gen)
+		}
+		if gen.State == leafGenerationStateRetiring || gen.State == leafGenerationStateDeleted {
+			t.Fatalf("generation %d state=%q after compact storage; manifest=%+v", gen.GenerationID, gen.State, manifest.Generations)
+		}
+		for _, fileID := range gen.FileIDs {
+			if fileID == rawFileID1 {
+				t.Fatalf("dead generation file %d still present in manifest: %+v", rawFileID1, manifest.Generations)
+			}
+		}
+	}
+}
+
+func compactStoragePhaseSeen(phases []CompactStoragePhaseStats, name string) bool {
+	for _, phase := range phases {
+		if phase.Name == name {
+			return true
+		}
+	}
+	return false
+}

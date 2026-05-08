@@ -32,7 +32,7 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 	if db == nil {
 		return stats, fmt.Errorf("missing db")
 	}
-	if db.readOnly {
+	if db.readOnly && !opts.DryRun {
 		return stats, ErrReadOnly
 	}
 	if !db.indexOuterLeavesInValueLog {
