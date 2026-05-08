@@ -705,7 +705,7 @@ func validateDeterministicTemplateDocument(raw []byte, templates deterministicTe
 	if !consumeDeterministicTemplateMagic(raw, &pos, deterministicTemplateV1StoredMagic) {
 		return protocolError(ErrMalformedFrame, "malformed template-v1 stored document")
 	}
-	return validateDeterministicTemplateStoredDocument(raw, &pos, embeddedTemplates, false)
+	return validateDeterministicTemplateStoredDocument(raw, &pos, embeddedTemplates, true)
 }
 
 func validateDeterministicTemplateStoredDocument(raw []byte, pos *int, templates deterministicTemplateSet, allowUnresolved bool) error {
