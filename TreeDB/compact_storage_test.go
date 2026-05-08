@@ -173,6 +173,49 @@ func TestCompactStorageCachedPlanReportsZeroByteValueLogDebt(t *testing.T) {
 	}
 }
 
+func TestCompactStorageCachedDeletesZeroByteValueLogFiles(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.MaxWALBytes = -1
+	opts.DisableSideStores = true
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.SetSync([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+
+	valueLogDir := backenddb.ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	emptyPath := filepath.Join(valueLogDir, "value-l42-000001.log")
+	if err := os.WriteFile(emptyPath, nil, 0o644); err != nil {
+		t.Fatalf("write empty value log: %v", err)
+	}
+
+	stats, err := db.CompactStorage(context.Background(), treedb.CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if got := stats.ZeroByteValueLogFilesDeleted; got != 1 {
+		t.Fatalf("deleted zero-byte files=%d want 1", got)
+	}
+	if got := stats.RemainingDebt.ZeroByteValueLogFiles; got != 0 {
+		t.Fatalf("remaining zero-byte debt=%d want 0", got)
+	}
+	if _, err := os.Stat(emptyPath); !os.IsNotExist(err) {
+		t.Fatalf("empty value-log file still exists or stat failed: %v", err)
+	}
+}
+
 func TestCachedValueLogWritersAreLazy(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileFast, dir)

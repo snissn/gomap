@@ -106,12 +106,6 @@ func (db *DB) applyCachedCompactStorageOptions(opts *CompactStorageOptions, chec
 	if opts.ReserveRIDs == nil {
 		opts.ReserveRIDs = db.cached.ReserveValueLogRIDs
 	}
-	if checkpoint {
-		// Applied cached compaction can race live writer file creation. Plan
-		// mode is read-only and should still report unprotected empty files as
-		// cleanup debt.
-		opts.DisableZeroByteValueLogCleanup = true
-	}
 	return nil
 }
 
