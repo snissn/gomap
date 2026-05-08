@@ -155,6 +155,22 @@ func TestServerMalformedRequestReturnsWireError(t *testing.T) {
 	}
 }
 
+func TestPayloadDecodersRejectMalformedScalars(t *testing.T) {
+	if _, err := decodeStringMap([]byte{0x80, 0x00}); codeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("decodeStringMap non-minimal count err=%v code=%d", err, codeOf(err))
+	}
+
+	payload := appendErrorPayload(nil, iwire.ErrInvalidCommand, false, "bad")
+	payload[uvarintLen(uint64(iwire.ErrInvalidCommand))] = 2
+	if _, _, _, err := decodeErrorPayload(payload); codeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("decodeErrorPayload retryable err=%v code=%d", err, codeOf(err))
+	}
+
+	if _, _, _, err := decodeErrorPayload([]byte{0x80, 0x00, 0, 0}); codeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("decodeErrorPayload non-minimal code err=%v code=%d", err, codeOf(err))
+	}
+}
+
 func TestServerClosesPostHandshakeUnsupportedVersion(t *testing.T) {
 	server := NewServer(ServerOptions{})
 	left, right := net.Pipe()
@@ -281,12 +297,15 @@ func TestClientRoundTripHonorsCancellationWithoutDeadline(t *testing.T) {
 	defer right.Close()
 	client := NewClient(left)
 	started := make(chan struct{})
-	serverDone := make(chan struct{})
 	serverErr := make(chan error, 1)
 	go func() {
 		_, _, err := readFrame(right, iwire.DefaultLimits())
 		close(started)
-		<-serverDone
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		_, _, err = readFrame(right, iwire.DefaultLimits())
 		serverErr <- err
 	}()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -308,9 +327,13 @@ func TestClientRoundTripHonorsCancellationWithoutDeadline(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Ping did not return after cancel")
 	}
-	close(serverDone)
-	if err := <-serverErr; err != nil {
-		t.Fatalf("server read: %v", err)
+	select {
+	case err := <-serverErr:
+		if err == nil {
+			t.Fatal("server read after cancellation succeeded; client connection was reused")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not observe client close after cancel")
 	}
 }
 
@@ -345,4 +368,9 @@ func TestClientDetectsErrorResponseRequestIDMismatch(t *testing.T) {
 	if err := <-errCh; err != nil {
 		t.Fatalf("server goroutine: %v", err)
 	}
+}
+
+func codeOf(err error) iwire.ErrorCode {
+	code, _ := iwire.ErrorCodeOf(err)
+	return code
 }

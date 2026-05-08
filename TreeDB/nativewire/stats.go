@@ -1,12 +1,10 @@
 package nativewire
 
-import (
-	"sort"
-	"sync"
-)
+import "sync"
 
 const nativeStatsPrefix = "treedb.native_wire."
 
+// Stats is a string-valued snapshot of native-wire and TreeDB counters.
 type Stats map[string]string
 
 type counters struct {
@@ -41,13 +39,4 @@ func (c *counters) snapshot() map[string]uint64 {
 	}
 	c.mu.Unlock()
 	return out
-}
-
-func sortedStatsKeys(stats map[string]string) []string {
-	keys := make([]string, 0, len(stats))
-	for key := range stats {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
 }
