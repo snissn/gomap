@@ -329,6 +329,36 @@ func TestMetadataIdempotencyReplayPrecedesCatalogGuard(t *testing.T) {
 	}
 }
 
+func TestMetadataIdempotencyCacheEvictsOldestEntry(t *testing.T) {
+	server := NewServer(ServerOptions{MaxMetadataIdempotencyEntries: 2})
+	for i := 0; i < 3; i++ {
+		key := string([]byte{'k', byte('0' + i)})
+		sections := []iwire.Section{
+			{ID: iwire.SectionIdempotencyKey, Bytes: []byte(key)},
+			{ID: iwire.SectionCollectionMeta, Bytes: []byte{byte(i)}},
+		}
+		replay, remember, err := server.beginMetadataIdempotency(iwire.CommandCreateCollection, sections)
+		if err != nil {
+			t.Fatalf("beginMetadataIdempotency[%d]: %v", i, err)
+		}
+		if replay != nil {
+			t.Fatalf("beginMetadataIdempotency[%d] replay=%v want nil", i, replay)
+		}
+		remember([]iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: []byte{byte('r'), byte(i)}}})
+	}
+	if got := len(server.metadataIdempotency); got != 2 {
+		t.Fatalf("metadata idempotency cache len=%d want 2", got)
+	}
+	if _, ok := server.metadataIdempotency["k0"]; ok {
+		t.Fatal("oldest idempotency key was not evicted")
+	}
+	for _, key := range []string{"k1", "k2"} {
+		if _, ok := server.metadataIdempotency[key]; !ok {
+			t.Fatalf("idempotency key %q missing after eviction", key)
+		}
+	}
+}
+
 func replicatedTestGuard(id string, version uint64) []iwire.Section {
 	return []iwire.Section{
 		{ID: iwire.SectionIdempotencyKey, Bytes: []byte(id)},

@@ -531,8 +531,12 @@ func TestDeterministicEntryRejectsAmbiguousCommandPayloads(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ValidateRequestSections: %v", err)
 			}
-			if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != tc.code {
+			_, err = AppendDeterministicEntry(nil, cmd)
+			if codeOf(err) != tc.code {
 				t.Fatalf("AppendDeterministicEntry err=%v code=%d want %d", err, codeOf(err), tc.code)
+			}
+			if tc.name == "trailing" && !strings.Contains(err.Error(), "1 trailing bytes") {
+				t.Fatalf("AppendDeterministicEntry trailing err=%v want byte count", err)
 			}
 		})
 	}
