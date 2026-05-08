@@ -115,9 +115,7 @@ func newLocalEndpoint(server *Server) (*localEndpoint, bool) {
 		endpoint.closed.Store(true)
 		return nil, false
 	}
-	if server.cursorIdleTimeout > 0 {
-		go server.reapExpiredCursorsUntilDone(done)
-	}
+	server.startCursorReaper()
 	return endpoint, true
 }
 
@@ -155,6 +153,13 @@ func (e *localEndpoint) roundTrip(ctx context.Context, streamID uint64, typ iwir
 	}
 	if ctx != nil && ctx.Err() != nil {
 		return iwire.Header{}, nil, ctx.Err()
+	}
+	frameLen := uint64(iwire.FrameHeaderLenV1) + uint64(len(body))
+	if frameLen < uint64(len(body)) {
+		return iwire.Header{}, nil, protocolError(iwire.ErrMalformedFrame, "request frame length overflow")
+	}
+	if frameLen > e.server.limits.MaxFrameSize {
+		return iwire.Header{}, nil, protocolError(iwire.ErrResourceExhausted, "request frame length %d exceeds limit %d", frameLen, e.server.limits.MaxFrameSize)
 	}
 	e.frame = e.frame[:0]
 	request := iwire.Header{

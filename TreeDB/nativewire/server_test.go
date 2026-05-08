@@ -504,6 +504,15 @@ func TestClientDetectsErrorResponseRequestIDMismatch(t *testing.T) {
 	}
 }
 
+func TestRequestBodySizingRejectsIntOverflow(t *testing.T) {
+	if _, err := addRequestBodyLen(1, maxInt); codeOf(err) != iwire.ErrResourceExhausted {
+		t.Fatalf("addRequestBodyLen err=%v want %d", err, iwire.ErrResourceExhausted)
+	}
+	if _, err := growRequestBody(make([]byte, 1), maxInt); codeOf(err) != iwire.ErrResourceExhausted {
+		t.Fatalf("growRequestBody err=%v want %d", err, iwire.ErrResourceExhausted)
+	}
+}
+
 func codeOf(err error) iwire.ErrorCode {
 	code, _ := iwire.ErrorCodeOf(err)
 	return code
