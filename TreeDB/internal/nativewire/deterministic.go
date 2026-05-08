@@ -90,17 +90,6 @@ func (cmd ValidatedCommand) deterministicSectionsInto(dst []Section) ([]Section,
 	return out, nil
 }
 
-func sortSectionsByID(sections []Section) {
-	for i := 1; i < len(sections); i++ {
-		section := sections[i]
-		j := i - 1
-		for ; j >= 0 && sections[j].ID > section.ID; j-- {
-			sections[j+1] = sections[j]
-		}
-		sections[j+1] = section
-	}
-}
-
 func validateDeterministicSectionPayload(section Section) error {
 	switch section.ID {
 	case SectionCollectionRef:
@@ -157,4 +146,15 @@ func validateDeterministicCollectionRef(raw []byte) (bool, error) {
 		return false, protocolError(ErrInvalidCommand, "invalid collection name")
 	}
 	return false, nil
+}
+
+func sortSectionsByID(sections []Section) {
+	for i := 1; i < len(sections); i++ {
+		section := sections[i]
+		j := i - 1
+		for ; j >= 0 && sections[j].ID > section.ID; j-- {
+			sections[j+1] = sections[j]
+		}
+		sections[j+1] = section
+	}
 }

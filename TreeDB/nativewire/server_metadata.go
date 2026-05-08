@@ -61,30 +61,20 @@ func (s *Server) handleCreateIndex(state *connState, sections []iwire.Section) (
 	if err != nil {
 		return nil, metadataWrap(err)
 	}
-	if state != nil {
-		state.cacheCollection(name, collection)
-	}
 	meta, err := collection.CreateIndex(def)
 	if err != nil {
 		return nil, metadataWrap(err)
+	}
+	if state != nil {
+		state.cacheCollection(name, collection)
 	}
 	return []iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(*meta)}}, nil
 }
 
 func (s *Server) handleListIndexes(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
-	if err := managerRequired(s.collections); err != nil {
-		return nil, err
-	}
-	name, _, err := collectionRefFromSections(state, sections)
+	_, collection, err := s.openCollectionRef(state, sections)
 	if err != nil {
 		return nil, err
-	}
-	collection, err := s.collections.OpenCollection(name)
-	if err != nil {
-		return nil, metadataWrap(err)
-	}
-	if state != nil {
-		state.cacheCollection(name, collection)
 	}
 	meta := collection.Meta()
 	return []iwire.Section{{ID: iwire.SectionIndexDefinition, Bytes: encodeIndexDefinitionVector(meta.Indexes)}}, nil
@@ -110,12 +100,12 @@ func (s *Server) handleDropIndex(state *connState, sections []iwire.Section) ([]
 	if err != nil {
 		return nil, metadataWrap(err)
 	}
-	if state != nil {
-		state.cacheCollection(name, collection)
-	}
 	meta, err := collection.DropIndex(indexName)
 	if err != nil {
 		return nil, metadataWrap(err)
+	}
+	if state != nil {
+		state.cacheCollection(name, collection)
 	}
 	return []iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(*meta)}}, nil
 }

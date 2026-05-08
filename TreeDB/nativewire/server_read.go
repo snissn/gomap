@@ -8,6 +8,17 @@ import (
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
+func (s *Server) handleGetMany(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
+	_, docs, present, err := s.getManyDocuments(state, sections)
+	if err != nil {
+		return nil, err
+	}
+	return []iwire.Section{
+		{ID: iwire.SectionPresenceBitmap, Bytes: encodePresenceBitmap(present)},
+		{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, docs...)},
+	}, nil
+}
+
 func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, dst []byte) ([]byte, error) {
 	_, collection, err := s.openCollectionRef(state, sections)
 	if err != nil {
@@ -81,6 +92,42 @@ func getManyPayloadCapacityHint(count int, limits iwire.Limits) int {
 		return int(maxBytes)
 	}
 	return hint
+}
+
+func (s *Server) getManyDocuments(state *connState, sections []iwire.Section) ([][]byte, [][]byte, []bool, error) {
+	_, collection, err := s.openCollectionRef(state, sections)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	rawIDs, err := metadataSection(sections, iwire.SectionDocumentIDs)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	var ids [][]byte
+	if state != nil {
+		ids, err = decodeByteVectorBorrowedInto(state.idsScratch, rawIDs, s.limits)
+		state.idsScratch = ids
+	} else {
+		ids, err = decodeByteVectorBorrowed(rawIDs, s.limits)
+	}
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	docs := make([][]byte, len(ids))
+	present := make([]bool, len(ids))
+	for i, id := range ids {
+		doc, err := collection.Get(id)
+		if err != nil {
+			return nil, nil, nil, metadataWrap(err)
+		}
+		if doc != nil {
+			docs[i] = doc
+			present[i] = true
+		} else {
+			docs[i] = []byte{}
+		}
+	}
+	return ids, docs, present, nil
 }
 
 func (s *Server) handleIndexLookup(state *connState, sections []iwire.Section) ([]iwire.Section, error) {

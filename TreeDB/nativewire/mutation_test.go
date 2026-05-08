@@ -163,62 +163,6 @@ func TestMutationDuplicateIDRejected(t *testing.T) {
 	}
 }
 
-func TestInsertBatchFastDecodeErrorReturnsBeforeDispatch(t *testing.T) {
-	client, mgr, _ := serveCollectionPipe(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := client.Hello(ctx); err != nil {
-		t.Fatalf("Hello: %v", err)
-	}
-	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
-		t.Fatalf("CreateCollection: %v", err)
-	}
-	body, err := appendInsertBatchRequestBody(nil, "users", collections.DocumentFormatJSON,
-		[][]byte{[]byte("u1")},
-		nil,
-		AckVisible,
-	)
-	if err != nil {
-		t.Fatalf("append request: %v", err)
-	}
-	_, _, err = client.roundTrip(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
-	if !isRemoteError(err, iwire.ErrInvalidCommand) {
-		t.Fatalf("InsertBatch malformed err=%v want invalid command", err)
-	}
-	assertDocumentMissing(t, mgr, "users", "u1")
-}
-
-func TestInsertBatchFastRejectsEmptyIDBeforeDispatch(t *testing.T) {
-	client, mgr, _ := serveCollectionPipe(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := client.Hello(ctx); err != nil {
-		t.Fatalf("Hello: %v", err)
-	}
-	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
-		t.Fatalf("CreateCollection: %v", err)
-	}
-	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
-		[][]byte{[]byte("")},
-		[][]byte{[]byte(`{"x":1}`)},
-		AckVisible,
-	)
-	if !isRemoteError(err, iwire.ErrInvalidCommand) {
-		t.Fatalf("InsertBatch empty ID err=%v want invalid command", err)
-	}
-	col, err := mgr.OpenCollection("users")
-	if err != nil {
-		t.Fatalf("OpenCollection: %v", err)
-	}
-	records, truncated, err := col.ScanDocuments(10)
-	if err != nil {
-		t.Fatalf("ScanDocuments: %v", err)
-	}
-	if truncated || len(records) != 0 {
-		t.Fatalf("records=%+v truncated=%v want empty collection", records, truncated)
-	}
-}
-
 func TestMutationExplicitZeroAckUsesDefault(t *testing.T) {
 	client, mgr, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

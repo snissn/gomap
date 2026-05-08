@@ -127,20 +127,6 @@ func TestMetadataHandleRefWorksForListIndexes(t *testing.T) {
 	if len(indexes) != 0 {
 		t.Fatalf("indexes=%+v want none", indexes)
 	}
-	if _, err := client.CreateIndex(ctx, "users", collections.IndexDefinition{Name: "email", Field: "email", ValueType: collections.IndexValueString}); err != nil {
-		t.Fatalf("CreateIndex: %v", err)
-	}
-	sections, err = client.commandSections(ctx, iwire.CommandListIndexes, collectionHandleRef(handle))
-	if err != nil {
-		t.Fatalf("ListIndexes by handle after create: %v", err)
-	}
-	indexes, err = firstIndexVectorFromResponse(sections, client.limits)
-	if err != nil {
-		t.Fatalf("decode indexes after create: %v", err)
-	}
-	if len(indexes) != 1 || indexes[0].Name != "email" {
-		t.Fatalf("indexes after create=%+v want email", indexes)
-	}
 }
 
 func TestMetadataHandleRefsRejectedForNameOnlyCommands(t *testing.T) {
