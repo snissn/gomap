@@ -685,6 +685,44 @@ func TestDeterministicEntryRejectsMissingDistributedGuards(t *testing.T) {
 	}
 }
 
+func TestDeterministicEntryPreservesRepeatableSectionOrder(t *testing.T) {
+	const (
+		commandID = CommandID(9000)
+		sectionID = SectionID(1000)
+	)
+	registry, err := NewRegistry(CommandSchema{
+		ID:         commandID,
+		Version:    1,
+		Name:       "repeatable_test",
+		Kind:       CommandKindMutation,
+		Replicated: true,
+		Sections: []SectionRule{
+			{ID: sectionID, Name: "repeatable", Required: true, Repeatable: true, Deterministic: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	sections := []Section{
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: commandID, Version: 1})},
+		{ID: sectionID, Bytes: []byte("first")},
+		{ID: sectionID, Bytes: []byte("second")},
+	}
+	cmd, err := registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	entry, err := AppendDeterministicEntry(nil, cmd)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry: %v", err)
+	}
+	firstAt := bytes.Index(entry, []byte("first"))
+	secondAt := bytes.Index(entry, []byte("second"))
+	if firstAt < 0 || secondAt < 0 || firstAt > secondAt {
+		t.Fatalf("repeatable section order not preserved: first=%d second=%d entry=%x", firstAt, secondAt, entry)
+	}
+}
+
 func deterministicEntryTestRaw(commandID CommandID, sections ...Section) []byte {
 	raw := []byte("TDC1")
 	raw = appendUvarint(raw, DeterministicEntryVersion)
