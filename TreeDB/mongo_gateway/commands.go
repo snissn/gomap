@@ -1507,7 +1507,13 @@ func marshalCursorDocumentsMsgResponseWithIDInto(dst []byte, requestID, response
 	for i, doc := range batch {
 		batchBytes += findBatchDocumentBytes(doc, i)
 	}
-	need := 16 + 5 + len(ns) + batchBytes + 96
+	need := cursorDocumentsMsgResponseLength(ns, batchKey, batchBytes)
+	if int64(need) > maxWireMessageLengthInt32Limit {
+		return nil, fmt.Errorf("%w: length=%d", wire.ErrMessageTooLarge, need)
+	}
+	if need > maxMessageLength {
+		return nil, fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, need, maxMessageLength)
+	}
 	dst = ensureWireAppendCapacity(dst, need)
 	msg := dst
 	base := len(msg)
@@ -1633,9 +1639,15 @@ func marshalIndexedRangeCursorMsgInto(dst []byte, requestID, responseTo int32, s
 	if maxMessageLength <= 0 || maxMessageLength > wire.DefaultMaxMessageLength {
 		maxMessageLength = int(server.maxMessageLength())
 	}
+	if maxBatchLimit := maxMessageLength - findBatchResponseReserveBytes; maxBatchLimit < maxBatchBytes {
+		if maxBatchLimit < 0 {
+			maxBatchLimit = 0
+		}
+		maxBatchBytes = maxBatchLimit
+	}
 	need := wire.HeaderLen + 5 + rawCursorResponseCapacityHint(ns, opts.Limit, maxBatchBytes)
 	if need > maxMessageLength {
-		return dst, fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, need, maxMessageLength)
+		need = maxMessageLength
 	}
 	dst = ensureWireAppendCapacity(dst, need)
 	msg := dst
@@ -1671,6 +1683,14 @@ func marshalIndexedRangeCursorMsgInto(dst []byte, requestID, responseTo int32, s
 	}
 	binary.LittleEndian.PutUint32(msg[base:base+4], uint32(messageLength))
 	return msg, nil
+}
+
+func cursorDocumentsMsgResponseLength(ns, batchKey string, batchBytes int) int {
+	const (
+		messageHeaderAndMsgBodyBytes = wire.HeaderLen + 5
+		responseDocumentFixedBytes   = 53
+	)
+	return messageHeaderAndMsgBodyBytes + responseDocumentFixedBytes + len(ns) + len(batchKey) + batchBytes
 }
 
 func collectIndexedRangeCursorDocs(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, indexName string, opts collections.IndexRangeOptions, builder *rawCursorDocumentBuilder, singleBatch bool) ([]wire.Document, error) {

@@ -3369,6 +3369,65 @@ func TestServerFindIndexedRangeStreamingFirstBatchOverflowOpensCursor(t *testing
 	}
 }
 
+func TestMarshalIndexedRangeCursorMsgDoesNotRejectCapacityHint(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	assertOK(t, serveCommand(t, server, 2525, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "name", Value: "age_1"},
+			{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}},
+			{Key: "treedbValueType", Value: "int64"},
+		}}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 2526, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "a"}, {Key: "age", Value: int64(37)}, {Key: "payload", Value: strings.Repeat("x", 64)}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	col, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush collection: %v", err)
+	}
+	materializer, err := storedDocumentMaterializerForCollection(col)
+	if err != nil {
+		t.Fatalf("open materializer: %v", err)
+	}
+	defer func() { _ = materializer.Close() }()
+
+	opts := collections.IndexRangeOptions{
+		Lower: collections.IndexRangeBound{Value: int64(37), Inclusive: true},
+		Upper: collections.IndexRangeBound{Unbounded: true},
+		Limit: 10_000,
+	}
+	msg, err := marshalIndexedRangeCursorMsgInto(nil, 1, 2526, server, 1, false, col, materializer, "app.users", "age_1", opts, "firstBatch", server.maxFindBatchBytes(), 64*1024)
+	if err != nil {
+		t.Fatalf("marshal indexed range cursor msg: %v", err)
+	}
+	firstBatch := cursorFirstBatch(t, readMsgResponse(t, msg, 2526))
+	if len(firstBatch) != 1 {
+		t.Fatalf("firstBatch len=%d want 1", len(firstBatch))
+	}
+	if got, ok := firstBatch[0].Lookup("_id").StringValueOK(); !ok || got != "a" {
+		t.Fatalf("firstBatch _id=%q ok=%v want a", got, ok)
+	}
+}
+
 func TestServerGetMoreDropsCursorOnOversizedNextDocument(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
