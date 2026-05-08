@@ -63,18 +63,6 @@ func TestDeterministicEntryRejectsMissingDistributedGuards(t *testing.T) {
 	}
 }
 
-func TestDeterministicEntryRejectsDuplicateIdempotencyInValidatedView(t *testing.T) {
-	registry := MustV1Registry()
-	cmd, err := registry.ValidateRequestSections(insertBatchDeterministicSections())
-	if err != nil {
-		t.Fatalf("ValidateRequestSections: %v", err)
-	}
-	cmd.Known = append(cmd.Known, Section{ID: SectionIdempotencyKey, Bytes: []byte("id2")})
-	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
-		t.Fatalf("duplicate idempotency err=%v code=%d", err, codeOf(err))
-	}
-}
-
 func TestDeterministicEntryRejectsUnsupportedCommandFlags(t *testing.T) {
 	registry := MustV1Registry()
 	sections := insertBatchDeterministicSections()
@@ -178,6 +166,18 @@ func TestDeterministicEntryRejectsNonCanonicalSectionPayloads(t *testing.T) {
 	}
 	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
 		t.Fatalf("unsupported document_format err=%v code=%d", err, codeOf(err))
+	}
+}
+
+func TestDeterministicEntryRejectsDuplicateIdempotencyInValidatedView(t *testing.T) {
+	registry := MustV1Registry()
+	cmd, err := registry.ValidateRequestSections(insertBatchDeterministicSections())
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	cmd.Known = append(cmd.Known, Section{ID: SectionIdempotencyKey, Bytes: []byte("id2")})
+	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("duplicate idempotency err=%v code=%d", err, codeOf(err))
 	}
 }
 
