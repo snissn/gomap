@@ -11845,6 +11845,170 @@ func TestCollectionFindDocumentsByIndexRangeUsesBufferedPrimaryView(t *testing.T
 	requireJSONFieldValue(t, records[1].Document, "name", "fresh-primary")
 }
 
+func TestCollectionFindByIndexRangeDedupesPersistedOnlyMultiKeyRange(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		Indexes: []IndexDefinition{
+			{Name: "tag", Field: "tags", ValueType: IndexValueString, MultiKey: true},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("d1"), []byte("d2")},
+		[][]byte{
+			[]byte(`{"tags":["a","b"]}`),
+			[]byte(`{"tags":["c"]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	ids, truncated, err := reopenedCol.FindByIndexRange("tag", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: "a", Inclusive: true},
+		Upper: IndexRangeBound{Value: "d", Inclusive: false},
+		Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("find range: %v", err)
+	}
+	if truncated || len(ids) != 2 || !bytes.Equal(ids[0], []byte("d1")) || !bytes.Equal(ids[1], []byte("d2")) {
+		t.Fatalf("ids=%q truncated=%v want d1,d2 false", ids, truncated)
+	}
+}
+
+func TestCollectionFindByIndexRangeDedupesAllowedArrayScalarIndex(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			AllowArrayValuesInIndex: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "tag", Field: "tags", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("d1"), []byte("d2")},
+		[][]byte{
+			[]byte(`{"tags":["a","b"]}`),
+			[]byte(`{"tags":["c"]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	ids, truncated, err := col.FindByIndexRange("tag", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: "a", Inclusive: true},
+		Upper: IndexRangeBound{Value: "d", Inclusive: false},
+		Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("find range: %v", err)
+	}
+	if truncated || len(ids) != 2 || !bytes.Equal(ids[0], []byte("d1")) || !bytes.Equal(ids[1], []byte("d2")) {
+		t.Fatalf("ids=%q truncated=%v want d1,d2 false", ids, truncated)
+	}
+}
+
+func TestCollectionFindByIndexRangePersistedOnlyFastPathLimitAndClones(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "score", Field: "score", ValueType: IndexValueInt64}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2"), []byte("u3")},
+		[][]byte{
+			[]byte(`{"score":1}`),
+			[]byte(`{"score":2}`),
+			[]byte(`{"score":3}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	ids, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(1), Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+		Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("find range: %v", err)
+	}
+	if !truncated || len(ids) != 2 || !bytes.Equal(ids[0], []byte("u1")) || !bytes.Equal(ids[1], []byte("u2")) {
+		t.Fatalf("ids=%q truncated=%v want u1,u2 true", ids, truncated)
+	}
+	ids[0][0] = 'x'
+	if !bytes.Equal(ids[1], []byte("u2")) {
+		t.Fatalf("ids[1]=%q changed after mutating ids[0]", ids[1])
+	}
+	again, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(1), Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+		Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("find range again: %v", err)
+	}
+	if !truncated || len(again) != 1 || !bytes.Equal(again[0], []byte("u1")) {
+		t.Fatalf("again ids=%q truncated=%v want u1 true", again, truncated)
+	}
+}
+
 func TestCollectionFindDocumentsByIndexRangeUniqueExactBufferedTombstone(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
