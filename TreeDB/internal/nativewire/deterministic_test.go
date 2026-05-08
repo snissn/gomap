@@ -170,6 +170,7 @@ func TestDecodeDeterministicEntryRejectsMalformedEnvelope(t *testing.T) {
 		{name: "section_count_hard_limit", raw: sectionCountHardLimit, limits: Limits{MaxSections: maxDeterministicEntrySections + 2}, code: ErrResourceExhausted},
 		{name: "section_len_int_limit", raw: sectionLenIntLimit, limits: Limits{MaxSectionLen: uint64(maxInt) + 1}, code: ErrResourceExhausted},
 	} {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := DecodeDeterministicEntry(tc.raw, tc.limits); codeOf(err) != tc.code {
 				t.Fatalf("DecodeDeterministicEntry err=%v code=%d want %d", err, codeOf(err), tc.code)
@@ -207,6 +208,7 @@ func TestDecodeDeterministicEntryRejectsDuplicateSingletonSections(t *testing.T)
 func TestDeterministicEntryReplicatedGoldenFixtures(t *testing.T) {
 	registry := MustV1Registry()
 	for _, tc := range deterministicEntryFixtureCases() {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cmd, err := registry.ValidateRequestSections(tc.sections)
 			if err != nil {
@@ -280,6 +282,7 @@ func TestDecodeDeterministicEntryRejectsInvalidCommandSet(t *testing.T) {
 			sections:  deterministicEntrySectionsOnly(removeSection(insertBatchDeterministicSections(), SectionExpectedCatalogVersion)),
 		},
 	} {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			raw := deterministicEntryTestRaw(tc.commandID, tc.sections...)
 			if _, err := DecodeDeterministicEntry(raw, Limits{}); codeOf(err) != ErrInvalidCommand {
@@ -317,6 +320,7 @@ func TestDeterministicEntryRejectsLocalAndReadCommands(t *testing.T) {
 			},
 		},
 	} {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cmd, err := registry.ValidateRequestSections(tc.sections)
 			if err != nil {
@@ -347,6 +351,7 @@ func TestDecodeDeterministicEntryPreservesPayloadLimits(t *testing.T) {
 			section: Section{ID: SectionDocuments, Bytes: AppendByteVector(nil, []byte("{}"), []byte("{}"))},
 		},
 	} {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			raw := deterministicEntryTestRaw(CommandInsertBatch, tc.section)
 			if _, err := DecodeDeterministicEntry(raw, Limits{MaxByteVectorItems: 1}); codeOf(err) != ErrResourceExhausted {
@@ -613,7 +618,7 @@ func TestDeterministicMetadataRequiresTaggedCollectionName(t *testing.T) {
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
 		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
 		{ID: SectionCollectionRef, Bytes: []byte("users")},
-		{ID: SectionIndexDefinition, Bytes: deterministicIndexDefinitionPayload("email", "email", 1, false, false, 0)},
+		{ID: SectionIndexDefinition, Bytes: deterministicIndexDefinitionPayload("email", "email", deterministicIndexValueString, false, false, 0)},
 	}
 	cmd, err := registry.ValidateRequestSections(sections)
 	if err != nil {
@@ -831,6 +836,7 @@ func TestDeterministicEntryRejectsInvalidDocumentIDs(t *testing.T) {
 		{name: "empty", ids: [][]byte{[]byte("a"), nil}, code: ErrInvalidCommand},
 		{name: "duplicate", ids: [][]byte{[]byte("a"), []byte("a")}, code: ErrDuplicateDocumentID},
 	} {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			sections := insertBatchDeterministicSections()
 			for i := range sections {
@@ -878,7 +884,7 @@ func TestDeterministicDropIndexValidatesEncodedIndexName(t *testing.T) {
 
 	for i := range sections {
 		if sections[i].ID == SectionIndexName {
-			sections[i].Bytes = appendDeterministicTestString(nil, "email")
+			sections[i].Bytes = appendDeterministicString(nil, "email")
 		}
 	}
 	cmd, err = registry.ValidateRequestSections(sections)
@@ -897,7 +903,7 @@ func TestDeterministicIndexDefinitionRejectsInvalidIndexPaths(t *testing.T) {
 		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
 		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
 		{ID: SectionCollectionRef, Bytes: append([]byte{deterministicCollectionRefTagName}, []byte("users")...)},
-		{ID: SectionIndexDefinition, Bytes: deterministicIndexDefinitionPayload("email", ".email")},
+		{ID: SectionIndexDefinition, Bytes: deterministicIndexDefinitionPayload("email", ".email", deterministicIndexValueString, false, false, 0)},
 	}
 	cmd, err := registry.ValidateRequestSections(sections)
 	if err != nil {
@@ -965,7 +971,7 @@ func deterministicEntryFixtureCases() []deterministicEntryFixtureCase {
 			fixture:   "create_index_entry.hex",
 			sections: deterministicFixtureSections(CommandCreateIndex, "client-a:create-index:email",
 				Section{ID: SectionCollectionRef, Bytes: deterministicCollectionNameRef("users")},
-				Section{ID: SectionIndexDefinition, Bytes: deterministicIndexDefinitionPayload("email_1", "email", 1, true, false, 0)},
+				Section{ID: SectionIndexDefinition, Bytes: deterministicIndexDefinitionPayload("email_1", "email", deterministicIndexValueString, true, false, 0)},
 			),
 		},
 		{
@@ -1021,6 +1027,7 @@ const (
 	deterministicCollectionDefaultMaxRootRuns = int64(0)
 	deterministicCollectionDefaultMaxQueued   = int64(0)
 	deterministicCollectionDefaultIndexCount  = 0
+	deterministicIndexValueString             = 1
 )
 
 func deterministicFixtureSections(commandID CommandID, idempotency string, sections ...Section) []Section {
