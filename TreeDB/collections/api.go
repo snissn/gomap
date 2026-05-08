@@ -102,6 +102,8 @@ var (
 type UpdateBatchItem struct {
 	DocumentID []byte
 	Update     func(current []byte) (replacement []byte, changed bool, err error)
+	bsonSet    bsonSetUpdate
+	hasBSONSet bool
 }
 
 type updateBatchMode uint8
@@ -6917,19 +6919,29 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 		return false, false, err
 	}
 	if combiner, domain := c.updateFastPathWithoutCreatingCombiner(); combiner != nil {
-		return combiner.update(c, documentID, update)
+		return combiner.update(c, documentID, update, bsonSetUpdate{}, false)
 	} else if domain != nil {
 		defer domain.finishInlineUpdateWithoutCombiner()
 		domain.observeUpdateCombineInline()
-		return c.updateSingleInlineWithoutCombiner(domain, documentID, update)
+		return c.updateSingleInlineWithoutCombiner(domain, documentID, update, bsonSetUpdate{}, false)
 	}
 	if combiner := c.updateCombiner(); combiner != nil {
-		return combiner.update(c, documentID, update)
+		return combiner.update(c, documentID, update, bsonSetUpdate{}, false)
 	}
 	return c.updateDirect(documentID, update)
 }
 
 func validateCollectionUpdateInput(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) error {
+	if err := validateCollectionUpdateDocumentInput(c, documentID); err != nil {
+		return err
+	}
+	if update == nil {
+		return errors.New("collections: update function is nil")
+	}
+	return nil
+}
+
+func validateCollectionUpdateDocumentInput(c *Collection, documentID []byte) error {
 	if c == nil {
 		return errCollectionNil
 	}
@@ -6941,9 +6953,6 @@ func validateCollectionUpdateInput(c *Collection, documentID []byte, update func
 	}
 	if len(documentID) == 0 {
 		return errors.New("collections: document id cannot be empty")
-	}
-	if update == nil {
-		return errors.New("collections: update function is nil")
 	}
 	return nil
 }
@@ -7057,7 +7066,7 @@ func validateUpdateBatchItems(items []UpdateBatchItem) error {
 		if len(item.DocumentID) == 0 {
 			return fmt.Errorf("collections: document id cannot be empty at index %d", i)
 		}
-		if item.Update == nil {
+		if item.Update == nil && !item.hasBSONSet {
 			return fmt.Errorf("collections: update function is nil at index %d", i)
 		}
 		key := string(item.DocumentID)
@@ -7067,6 +7076,15 @@ func validateUpdateBatchItems(items []UpdateBatchItem) error {
 		seen[key] = struct{}{}
 	}
 	return nil
+}
+
+func updateBatchBSONSetItemIndex(items []UpdateBatchItem) int {
+	for i, item := range items {
+		if item.hasBSONSet {
+			return i
+		}
+	}
+	return -1
 }
 
 func updateBatchItemError(index int, err error) error {
@@ -7101,6 +7119,8 @@ type collectionUpdateCombineRequest struct {
 	documentIDInlineLen int
 	documentHash        uint64
 	update              func(current []byte) (replacement []byte, changed bool, err error)
+	bsonSet             bsonSetUpdate
+	hasBSONSet          bool
 	done                chan collectionUpdateCombineResult
 }
 
@@ -7164,8 +7184,8 @@ func (domain *collectionWriteDomain) finishInlineUpdateWithoutCombiner() {
 	domain.updateInlineInFlight.Store(0)
 }
 
-func (c *Collection) updateSingleInlineWithoutCombiner(domain *collectionWriteDomain, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (matched bool, modified bool, err error) {
-	items := domain.prepareInlineUpdateItems(documentID, update)
+func (c *Collection) updateSingleInlineWithoutCombiner(domain *collectionWriteDomain, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error), bsonSet bsonSetUpdate, hasBSONSet bool) (matched bool, modified bool, err error) {
+	items := domain.prepareInlineUpdateItems(documentID, update, bsonSet, hasBSONSet)
 	defer domain.clearInlineUpdateItems()
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -7176,6 +7196,9 @@ func (c *Collection) updateSingleInlineWithoutCombiner(domain *collectionWriteDo
 	}()
 	results, batched, err := c.updateBatchOwnedItems(items, updateBatchModeNoSecondaryUniqueIndexChanges)
 	if !batched && err == nil {
+		if items[0].hasBSONSet {
+			return c.updateBSONSetDirect(items[0].DocumentID, items[0].bsonSet)
+		}
 		return c.updateDirect(items[0].DocumentID, items[0].Update)
 	}
 	if err != nil {
@@ -7191,9 +7214,9 @@ func (c *Collection) updateSingleInlineWithoutCombiner(domain *collectionWriteDo
 	return results[0].Matched, results[0].Modified, nil
 }
 
-func (domain *collectionWriteDomain) prepareInlineUpdateItems(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) []UpdateBatchItem {
+func (domain *collectionWriteDomain) prepareInlineUpdateItems(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error), bsonSet bsonSetUpdate, hasBSONSet bool) []UpdateBatchItem {
 	if domain == nil {
-		return []UpdateBatchItem{{DocumentID: documentID, Update: update}}
+		return []UpdateBatchItem{{DocumentID: documentID, Update: update, bsonSet: bsonSet, hasBSONSet: hasBSONSet}}
 	}
 	var ownedDocumentID []byte
 	if len(documentID) <= len(domain.updateInlineDocumentID) {
@@ -7211,6 +7234,8 @@ func (domain *collectionWriteDomain) prepareInlineUpdateItems(documentID []byte,
 	domain.updateInlineItems[0] = UpdateBatchItem{
 		DocumentID: ownedDocumentID,
 		Update:     update,
+		bsonSet:    bsonSet,
+		hasBSONSet: hasBSONSet,
 	}
 	return domain.updateInlineItems[:]
 }
@@ -7315,15 +7340,18 @@ func (domain *collectionWriteDomain) resetUpdateCombinerForProfiling() {
 	domain.updateCombineMu.Unlock()
 }
 
-func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
+func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error), bsonSet bsonSetUpdate, hasBSONSet bool) (bool, bool, error) {
 	if combiner == nil || combiner.maxBatch <= 1 {
 		if err := c.ensureWriteDomainOpen(); err != nil {
 			return false, false, err
 		}
+		if hasBSONSet {
+			return c.updateBSONSetDirect(documentID, bsonSet)
+		}
 		return c.updateDirect(documentID, update)
 	}
 	waiter := combiner.getWaiter()
-	req := newCollectionUpdateCombineRequest(c, documentID, update, waiter.ch)
+	req := newCollectionUpdateCombineRequest(c, documentID, update, bsonSet, hasBSONSet, waiter.ch)
 	detailedStats := combiner.domain != nil && combiner.domain.updateBatchDetailedStats.Load()
 	var enqueueStart time.Time
 	if detailedStats {
@@ -7341,6 +7369,9 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 		}
 		if err := c.ensureWriteDomainOpen(); err != nil {
 			return false, false, err
+		}
+		if hasBSONSet {
+			return c.updateBSONSetDirect(documentID, bsonSet)
 		}
 		return c.updateDirect(documentID, update)
 	}
@@ -7361,10 +7392,12 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 	return result.matched, result.modified, result.err
 }
 
-func newCollectionUpdateCombineRequest(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error), done chan collectionUpdateCombineResult) collectionUpdateCombineRequest {
+func newCollectionUpdateCombineRequest(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error), bsonSet bsonSetUpdate, hasBSONSet bool, done chan collectionUpdateCombineResult) collectionUpdateCombineRequest {
 	req := collectionUpdateCombineRequest{
 		collection: c,
 		update:     update,
+		bsonSet:    bsonSet,
+		hasBSONSet: hasBSONSet,
 		done:       done,
 	}
 	if len(documentID) <= collectionUpdateCombineInlineDocumentIDMax {
@@ -7669,6 +7702,8 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 		items[i] = UpdateBatchItem{
 			DocumentID: req.documentIDBytes(),
 			Update:     req.update,
+			bsonSet:    req.bsonSet,
+			hasBSONSet: req.hasBSONSet,
 		}
 	}
 	results, batched, err := batch[0].collection.updateBatchOwnedItems(items, updateBatchModeNoSecondaryUniqueIndexChanges)
@@ -7736,6 +7771,10 @@ func runUpdateCombineDirect(req collectionUpdateCombineRequest) collectionUpdate
 	if err := validateCollectionUpdateCombineRequest(req); err != nil {
 		return collectionUpdateCombineResult{err: err}
 	}
+	if req.hasBSONSet {
+		matched, modified, err := req.collection.updateBSONSetDirect((&req).documentIDBytes(), req.bsonSet)
+		return collectionUpdateCombineResult{matched: matched, modified: modified, err: err}
+	}
 	matched, modified, err := req.collection.updateDirect((&req).documentIDBytes(), req.update)
 	return collectionUpdateCombineResult{matched: matched, modified: modified, err: err}
 }
@@ -7750,7 +7789,7 @@ func validateCollectionUpdateCombineRequest(req collectionUpdateCombineRequest) 
 	if len((&req).documentIDBytes()) == 0 {
 		return errors.New("collections: document id cannot be empty")
 	}
-	if req.update == nil {
+	if req.update == nil && !req.hasBSONSet {
 		return errors.New("collections: update function is nil")
 	}
 	return nil
@@ -8295,13 +8334,15 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 }
 
 type preparedBatchUpdate struct {
-	itemIndex         int
-	documentID        []byte
-	document          []byte
-	oldState          orderedDocumentIndexState
-	newState          orderedDocumentIndexState
-	changedIndexes    uint64
-	indexStateChanged bool
+	itemIndex                int
+	documentID               []byte
+	document                 []byte
+	oldState                 orderedDocumentIndexState
+	newState                 orderedDocumentIndexState
+	changedIndexes           uint64
+	indexStateChanged        bool
+	knownAffectedIndexes     bool
+	affectedIndexRuntimeMask uint64
 }
 
 type updateBatchPlan struct {
@@ -9257,6 +9298,10 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		_ = snap.Close()
 		return nil, err
 	}
+	if itemIndex := updateBatchBSONSetItemIndex(items); itemIndex >= 0 && normalizedDocumentFormat(plannerOptions.documentFormat) != DocumentFormatBSON {
+		_ = snap.Close()
+		return nil, updateBatchItemError(itemIndex, errors.New("collections: BSON $set update requires BSON document format"))
+	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 	baseUserRoot := snapshotUserRoot(snap)
 	baseSystemRoot := snapshotSystemRoot(snap)
@@ -9359,18 +9404,20 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			continue
 		}
 		results[i].Matched = true
-		currentID, err := captureBSONIDSnapshot(current.value, plannerOptions)
-		if err != nil {
-			_ = snap.Close()
-			return nil, updateBatchItemError(i, err)
-		}
 		prepared := preparedBatchUpdate{
 			itemIndex:  i,
 			documentID: item.DocumentID,
 		}
 		if len(runtimes) > 0 {
+			if item.hasBSONSet {
+				prepared.affectedIndexRuntimeMask, prepared.knownAffectedIndexes = item.bsonSet.affectedIndexMask(runtimes, plannerOptions)
+			}
 			phaseStart = updateBatchStatsNow(detailedStats)
-			prepared.oldState, err = orderedIndexStateForDocumentWithArena(current.value, runtimes, plannerOptions, stateArena)
+			if prepared.knownAffectedIndexes {
+				prepared.oldState, err = orderedIndexStateForDocumentRuntimeMask(current.value, runtimes, prepared.affectedIndexRuntimeMask, plannerOptions, stateArena)
+			} else {
+				prepared.oldState, err = orderedIndexStateForDocumentWithArena(current.value, runtimes, plannerOptions, stateArena)
+			}
 			phaseDuration := updateBatchStatsSince(detailedStats, phaseStart)
 			stats.IndexStateExtraction += phaseDuration
 			stats.OldIndexStateExtract += phaseDuration
@@ -9379,12 +9426,30 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 				return nil, updateBatchItemError(i, err)
 			}
 		}
-		phaseStart = updateBatchStatsNow(detailedStats)
-		document, changedOne, err := callCollectionUpdateCallback(item.Update, current.value)
-		stats.Callback += updateBatchStatsSince(detailedStats, phaseStart)
-		if err != nil {
-			_ = snap.Close()
-			return nil, updateBatchItemError(i, err)
+		var currentID bsonIDSnapshot
+		var document []byte
+		var changedOne bool
+		if item.hasBSONSet {
+			phaseStart = updateBatchStatsNow(detailedStats)
+			document, changedOne, err = item.bsonSet.apply(current.value)
+			stats.Callback += updateBatchStatsSince(detailedStats, phaseStart)
+			if err != nil {
+				_ = snap.Close()
+				return nil, updateBatchItemError(i, err)
+			}
+		} else {
+			currentID, err = captureBSONIDSnapshot(current.value, plannerOptions)
+			if err != nil {
+				_ = snap.Close()
+				return nil, updateBatchItemError(i, err)
+			}
+			phaseStart = updateBatchStatsNow(detailedStats)
+			document, changedOne, err = callCollectionUpdateCallback(item.Update, current.value)
+			stats.Callback += updateBatchStatsSince(detailedStats, phaseStart)
+			if err != nil {
+				_ = snap.Close()
+				return nil, updateBatchItemError(i, err)
+			}
 		}
 		if !changedOne {
 			if !current.buffered {
@@ -9396,7 +9461,10 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			_ = snap.Close()
 			return nil, updateBatchItemError(i, errors.New("changed replacement document cannot be empty"))
 		}
-		if err := validateBSONReplacementPreservesIDSnapshot(currentID, document, plannerOptions); err != nil {
+		if !item.hasBSONSet {
+			err = validateBSONReplacementPreservesIDSnapshot(currentID, document, plannerOptions)
+		}
+		if err != nil {
 			_ = snap.Close()
 			return nil, updateBatchItemError(i, err)
 		}
@@ -9457,7 +9525,11 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		changed[i].document = preparedDocuments[i]
 		if len(runtimes) > 0 {
 			phaseStart = updateBatchStatsNow(detailedStats)
-			changed[i].newState, err = orderedIndexStateForDocumentWithArena(changed[i].document, runtimes, plannerOptions, stateArena)
+			if changed[i].knownAffectedIndexes {
+				changed[i].newState, err = orderedIndexStateForDocumentRuntimeMask(changed[i].document, runtimes, changed[i].affectedIndexRuntimeMask, plannerOptions, stateArena)
+			} else {
+				changed[i].newState, err = orderedIndexStateForDocumentWithArena(changed[i].document, runtimes, plannerOptions, stateArena)
+			}
 			phaseDuration := updateBatchStatsSince(detailedStats, phaseStart)
 			stats.IndexStateExtraction += phaseDuration
 			stats.NewIndexStateExtract += phaseDuration
@@ -9468,7 +9540,14 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			var changedIndexes uint64
 			indexStateChanged := false
 			for runtimeIdx, runtime := range runtimes {
-				runtimeChanged := orderedDocumentIndexRuntimeChanged(changed[i].oldState, changed[i].newState, runtimeIdx)
+				runtimeAffected := true
+				if changed[i].knownAffectedIndexes {
+					runtimeAffected = changed[i].affectedIndexRuntimeMask&(uint64(1)<<uint(runtimeIdx)) != 0
+				}
+				runtimeChanged := false
+				if runtimeAffected {
+					runtimeChanged = orderedDocumentIndexRuntimeChanged(changed[i].oldState, changed[i].newState, runtimeIdx)
+				}
 				maskBit, maskBitOK := updateIndexChangedMaskBit(runtimeIdx)
 				if !maskBitOK {
 					stats.MaskFallbacks++

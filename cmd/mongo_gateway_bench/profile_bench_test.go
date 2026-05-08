@@ -28,7 +28,6 @@ import (
 )
 
 var (
-	errUpdatedPrimaryKey      = errors.New("profile benchmark update changed _id")
 	errProfileBenchUpdateMiss = errors.New("profile benchmark update missed document")
 )
 
@@ -1887,7 +1886,7 @@ func runProfileBenchDirectCollectionConcurrentUpdates(
 		go func() {
 			defer wg.Done()
 			pprof.SetGoroutineLabels(runCtx)
-			updateScratch := make([]byte, 0, 512)
+			setFields := make([]collections.BSONSetField, 0, 8)
 			for {
 				if err := runCtx.Err(); err != nil {
 					return
@@ -1899,19 +1898,8 @@ func runProfileBenchDirectCollectionConcurrentUpdates(
 				documentOrdinal := (op * idStride) % documentCount
 				id := ids[documentOrdinal]
 				updateDoc := updateDocs[op%len(updateDocs)]
-				matched, _, err := collection.Update(id, func(stored []byte) ([]byte, bool, error) {
-					raw := bson.Raw(stored)
-					originalID := raw.Lookup("_id")
-					updated, nextScratch, shouldWrite, err := profileBenchApplyParsedSetUpdateToOperation(updateScratch[:0], raw, updateDoc, op, documentOrdinal, documentCount)
-					updateScratch = nextScratch
-					if err != nil {
-						return nil, false, err
-					}
-					if !updated.Lookup("_id").Equal(originalID) {
-						return nil, false, errUpdatedPrimaryKey
-					}
-					return []byte(updated), shouldWrite, nil
-				})
+				setFields = profileBenchCollectionSetFieldsForOperation(setFields[:0], updateDoc, op, documentOrdinal, documentCount)
+				matched, _, err := collection.UpdateBSONSet(id, setFields)
 				if err != nil {
 					recordErr(err)
 					return
@@ -1928,6 +1916,16 @@ func runProfileBenchDirectCollectionConcurrentUpdates(
 		return firstErr
 	}
 	return ctx.Err()
+}
+
+func profileBenchCollectionSetFieldsForOperation(dst []collections.BSONSetField, update profileBenchSetUpdate, operation, documentOrdinal, documentCount int) []collections.BSONSetField {
+	for _, field := range update.fields {
+		dst = append(dst, collections.BSONSetField{
+			Key:   field.key,
+			Value: profileBenchSetFieldValueForOperation(field, operation, documentOrdinal, documentCount),
+		})
+	}
+	return dst
 }
 
 type profileBenchSetField struct {

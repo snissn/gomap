@@ -7967,7 +7967,7 @@ func TestCollectionUpdateCombinerMaxBatchOneRecoversCallbackPanic(t *testing.T) 
 	combiner := &collectionUpdateCombiner{maxBatch: 1}
 	matched, modified, err := combiner.update(col, []byte("u1"), func([]byte) ([]byte, bool, error) {
 		panic("bad callback")
-	})
+	}, bsonSetUpdate{}, false)
 	if err == nil || !strings.Contains(err.Error(), "bad callback") {
 		t.Fatalf("Update err=%v want recovered panic", err)
 	}
@@ -8021,7 +8021,7 @@ func TestCollectionUpdateCombinerUpdateReturnsWhenWorkerExits(t *testing.T) {
 	matched, modified, err := combiner.update(col, []byte("u1"), func([]byte) ([]byte, bool, error) {
 		runtime.Goexit()
 		return nil, false, nil
-	})
+	}, bsonSetUpdate{}, false)
 	if !errors.Is(err, errUpdateCombinerStopped) {
 		t.Fatalf("update err=%v want errUpdateCombinerStopped", err)
 	}
@@ -8061,7 +8061,7 @@ func TestCollectionUpdateCombinerDocumentIDInlineStorageDoesNotAllocate(t *testi
 	id := []byte("user-123")
 	req := newCollectionUpdateCombineRequest(&Collection{db: &backenddb.DB{}}, id, func([]byte) ([]byte, bool, error) {
 		return nil, false, nil
-	}, make(chan collectionUpdateCombineResult, 1))
+	}, bsonSetUpdate{}, false, make(chan collectionUpdateCombineResult, 1))
 	if got := req.documentIDBytes(); !bytes.Equal(got, id) {
 		t.Fatalf("inline document id=%q want %q", got, id)
 	}
@@ -8072,7 +8072,7 @@ func TestCollectionUpdateCombinerDocumentIDInlineStorageDoesNotAllocate(t *testi
 
 	allocID := []byte("user-123")
 	if allocs := testing.AllocsPerRun(1000, func() {
-		req := newCollectionUpdateCombineRequest(nil, allocID, nil, nil)
+		req := newCollectionUpdateCombineRequest(nil, allocID, nil, bsonSetUpdate{}, false, nil)
 		if !bytes.Equal((&req).documentIDBytes(), allocID) {
 			t.Fatal("inline document id mismatch")
 		}
@@ -8085,7 +8085,7 @@ func TestCollectionUpdateCombinerDocumentIDLongStorageClonesCallerBytes(t *testi
 	id := bytes.Repeat([]byte("x"), collectionUpdateCombineInlineDocumentIDMax+1)
 	req := newCollectionUpdateCombineRequest(&Collection{db: &backenddb.DB{}}, id, func([]byte) ([]byte, bool, error) {
 		return nil, false, nil
-	}, make(chan collectionUpdateCombineResult, 1))
+	}, bsonSetUpdate{}, false, make(chan collectionUpdateCombineResult, 1))
 	if req.documentIDInlineLen != 0 {
 		t.Fatalf("long document id inline len=%d want 0", req.documentIDInlineLen)
 	}
@@ -9168,6 +9168,87 @@ func TestCollectionUpdateBatchDirectBufferedBSONAccumulatesRootRuns(t *testing.T
 	}
 	if err := col.Flush(); err != nil {
 		t.Fatalf("flush buffered BSON update batches: %v", err)
+	}
+}
+
+func TestCollectionUpdateBSONSetReusesUnchangedIndexState(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatBSON,
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+			{Name: "active", Field: "active", ValueType: IndexValueBool},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "email", Value: "a@example.com"},
+			{Key: "city", Value: "hnl"},
+			{Key: "active", Value: true},
+		})},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSet: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("matched=%v modified=%v want true/true", matched, modified)
+	}
+	stats := col.LastUpdateStats()
+	if stats.IndexValueChanges != 1 || stats.IndexValueUnchanged != 2 || stats.UniqueIndexCheckSkips != 1 {
+		t.Fatalf("index stats changes=%d unchanged=%d unique skips=%d want 1/2/1", stats.IndexValueChanges, stats.IndexValueUnchanged, stats.UniqueIndexCheckSkips)
+	}
+	col.writeDomain.mu.RLock()
+	rootRunCount := col.writeDomain.rootRunCount
+	primaryRuns := len(col.writeDomain.rootRuns[collectionPrimaryRootName("users")])
+	cityRuns := len(col.writeDomain.rootRuns[collectionSecondaryRootName("users", "city")])
+	emailRuns := len(col.writeDomain.rootRuns[collectionSecondaryRootName("users", "email")])
+	activeRuns := len(col.writeDomain.rootRuns[collectionSecondaryRootName("users", "active")])
+	col.writeDomain.mu.RUnlock()
+	if rootRunCount != 2 || primaryRuns != 1 || cityRuns != 1 || emailRuns != 0 || activeRuns != 0 {
+		t.Fatalf("runs root=%d primary=%d city=%d email=%d active=%d want 2/1/1/0/0", rootRunCount, primaryRuns, cityRuns, emailRuns, activeRuns)
+	}
+	ids, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find sea city: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("city ids=%q want [u1]", ids)
+	}
+	ids, err = col.FindByIndex("email", "a@example.com")
+	if err != nil {
+		t.Fatalf("find email: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("email ids=%q want [u1]", ids)
 	}
 }
 
@@ -11322,6 +11403,15 @@ func setBSONField(field string, value any) func([]byte) ([]byte, bool, error) {
 		}
 		return next, true, nil
 	}
+}
+
+func mustBSONRawValue(t *testing.T, value any) bson.RawValue {
+	t.Helper()
+	typ, raw, err := bson.MarshalValue(value)
+	if err != nil {
+		t.Fatalf("marshal BSON value: %v", err)
+	}
+	return bson.RawValue{Type: typ, Value: raw}
 }
 
 func setTemplateV1JSON(t *testing.T, raw string) func([]byte) ([]byte, bool, error) {

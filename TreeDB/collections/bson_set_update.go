@@ -1,0 +1,276 @@
+package collections
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"strings"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
+)
+
+// BSONSetField describes one top-level BSON field assignment for UpdateBSONSet.
+// Nested dotted paths are intentionally not accepted yet; keeping this path
+// top-level lets the planner know exactly which secondary indexes can change.
+type BSONSetField struct {
+	Key   string
+	Value bson.RawValue
+}
+
+type bsonSetUpdate struct {
+	fields []BSONSetField
+}
+
+// UpdateBSONSet applies a structured top-level BSON $set update to one
+// document. The collection must use DocumentFormatBSON. Missing documents
+// return matched=false. If all assigned values already match the stored
+// document, modified=false. Callers must not mutate fields or RawValue byte
+// slices until UpdateBSONSet returns.
+func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bool, bool, error) {
+	spec, err := newBSONSetUpdate(fields)
+	if err != nil {
+		return false, false, err
+	}
+	if err := validateCollectionUpdateDocumentInput(c, documentID); err != nil {
+		return false, false, err
+	}
+	if combiner, domain := c.updateFastPathWithoutCreatingCombiner(); combiner != nil {
+		return combiner.update(c, documentID, nil, spec, true)
+	} else if domain != nil {
+		defer domain.finishInlineUpdateWithoutCombiner()
+		domain.observeUpdateCombineInline()
+		return c.updateSingleInlineWithoutCombiner(domain, documentID, nil, spec, true)
+	}
+	if combiner := c.updateCombiner(); combiner != nil {
+		return combiner.update(c, documentID, nil, spec, true)
+	}
+	return c.updateBSONSetDirect(documentID, spec)
+}
+
+func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) (bool, bool, error) {
+	items := []UpdateBatchItem{{DocumentID: documentID, bsonSet: spec, hasBSONSet: true}}
+	results, batched, err := c.updateBatchOwnedItems(items, updateBatchModeNoSecondaryUniqueIndexChanges)
+	if !batched && err == nil {
+		return c.updateDirect(documentID, spec.apply)
+	}
+	if err != nil {
+		var itemErr *UpdateBatchItemError
+		if errors.As(err, &itemErr) && itemErr.Index == 0 && itemErr.Err != nil {
+			return false, false, itemErr.Err
+		}
+		return false, false, err
+	}
+	if len(results) != 1 {
+		return false, false, fmt.Errorf("collections: BSON $set result count %d for single update", len(results))
+	}
+	return results[0].Matched, results[0].Modified, nil
+}
+
+func newBSONSetUpdate(fields []BSONSetField) (bsonSetUpdate, error) {
+	spec := bsonSetUpdate{}
+	if len(fields) == 0 {
+		return spec, nil
+	}
+	for i, field := range fields {
+		if err := validateBSONSetFieldKey(field.Key); err != nil {
+			return bsonSetUpdate{}, err
+		}
+		for j := 0; j < i; j++ {
+			if fields[j].Key == field.Key {
+				return bsonSetUpdate{}, fmt.Errorf("collections: duplicate BSON $set field %q", field.Key)
+			}
+		}
+	}
+	spec.fields = fields
+	return spec, nil
+}
+
+func validateBSONSetFieldKey(key string) error {
+	if key == "" {
+		return errors.New("collections: BSON $set field name cannot be empty")
+	}
+	if key == "_id" {
+		return errBSONIDMutation
+	}
+	if strings.Contains(key, ".") {
+		return errors.New("collections: BSON $set currently supports top-level fields only")
+	}
+	if strings.HasPrefix(key, "$") {
+		return errors.New("collections: BSON $set field names cannot start with $")
+	}
+	return nil
+}
+
+func (u bsonSetUpdate) fieldIndex(key string) int {
+	for i := range u.fields {
+		if u.fields[i].Key == key {
+			return i
+		}
+	}
+	return -1
+}
+
+func (u bsonSetUpdate) fieldIndexBytes(key []byte) int {
+	for i := range u.fields {
+		if bytesEqualString(key, u.fields[i].Key) {
+			return i
+		}
+	}
+	return -1
+}
+
+func (u bsonSetUpdate) apply(current []byte) ([]byte, bool, error) {
+	if len(u.fields) == 0 {
+		return current, false, nil
+	}
+	length, rem, ok := bsoncore.ReadLength(current)
+	if !ok {
+		return nil, false, bsoncore.NewInsufficientBytesError(current, rem)
+	}
+	length -= 4
+	out := make([]byte, 0, len(current)+64)
+	idx, out := bsoncore.AppendDocumentStart(out)
+	var usedInline [8]bool
+	used := usedInline[:]
+	if len(u.fields) > len(usedInline) {
+		used = make([]bool, len(u.fields))
+	} else {
+		used = used[:len(u.fields)]
+	}
+	changed := false
+	var elem bsoncore.Element
+	for length > 1 {
+		var elemOK bool
+		elem, rem, elemOK = bsoncore.ReadElement(rem)
+		length -= int32(len(elem))
+		if !elemOK {
+			return nil, false, bsoncore.NewInsufficientBytesError(current, rem)
+		}
+		replacement := u.fieldIndexBytes(elem.KeyBytes())
+		if replacement < 0 {
+			out = append(out, elem...)
+			continue
+		}
+		used[replacement] = true
+		field := u.fields[replacement]
+		value := field.Value
+		currentValue := elem.Value()
+		if bsonCoreValueEqualRawValue(currentValue, value) {
+			out = append(out, elem...)
+			continue
+		}
+		out = bsoncore.AppendValueElement(out, field.Key, bsoncore.Value{
+			Type: bsoncore.Type(value.Type),
+			Data: value.Value,
+		})
+		changed = true
+	}
+	for i, field := range u.fields {
+		if used[i] {
+			continue
+		}
+		value := field.Value
+		out = bsoncore.AppendValueElement(out, field.Key, bsoncore.Value{
+			Type: bsoncore.Type(value.Type),
+			Data: value.Value,
+		})
+		changed = true
+	}
+	if !changed {
+		return current, false, nil
+	}
+	raw, err := bsoncore.AppendDocumentEnd(out, idx)
+	if err != nil {
+		return nil, false, err
+	}
+	return bson.Raw(raw), true, nil
+}
+
+func bsonCoreValueEqualRawValue(left bsoncore.Value, right bson.RawValue) bool {
+	return left.Type == bsoncore.Type(right.Type) && bytes.Equal(left.Data, right.Value)
+}
+
+func bytesEqualString(b []byte, s string) bool {
+	if len(b) != len(s) {
+		return false
+	}
+	for i := range b {
+		if b[i] != s[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (u bsonSetUpdate) affectedIndexMask(runtimes []indexRuntime, opts collectionOptions) (uint64, bool) {
+	if normalizedDocumentFormat(opts.documentFormat) != DocumentFormatBSON || len(runtimes) > 64 {
+		return 0, false
+	}
+	var mask uint64
+	for runtimeIdx, runtime := range runtimes {
+		if len(runtime.path) == 0 {
+			continue
+		}
+		if u.fieldIndex(runtime.path[0]) >= 0 {
+			mask |= uint64(1) << uint(runtimeIdx)
+		}
+	}
+	return mask, true
+}
+
+func orderedIndexStateForDocumentRuntimeMask(document []byte, runtimes []indexRuntime, mask uint64, opts collectionOptions, encoder *indexEncodeArena) (orderedDocumentIndexState, error) {
+	if len(runtimes) == 0 {
+		return nil, nil
+	}
+	if encoder == nil {
+		encoder = &indexEncodeArena{
+			buf:       make([]byte, 0, estimateDocumentIndexEncodeArenaBytes(len(runtimes))),
+			valueRefs: make([][]byte, 0, len(runtimes)),
+		}
+	}
+	if mask == 0 {
+		return encoder.appendState(len(runtimes)), nil
+	}
+	allMask := uint64(^uint64(0))
+	if len(runtimes) < 64 {
+		allMask = (uint64(1) << uint(len(runtimes))) - 1
+	}
+	if mask&allMask == allMask {
+		return orderedIndexStateForDocumentWithArena(document, runtimes, opts, encoder)
+	}
+	state := encoder.appendState(len(runtimes))
+	var inline [8]indexRuntime
+	subset := inline[:0]
+	if bitsSet64(mask) > len(inline) {
+		subset = make([]indexRuntime, 0, bitsSet64(mask))
+	}
+	for runtimeIdx, runtime := range runtimes {
+		if mask&(uint64(1)<<uint(runtimeIdx)) == 0 {
+			continue
+		}
+		subset = append(subset, runtime)
+	}
+	subsetState, err := orderedIndexStateForDocumentWithArena(document, subset, opts, encoder)
+	if err != nil {
+		return nil, err
+	}
+	subsetOffset := 0
+	for runtimeIdx := range runtimes {
+		if mask&(uint64(1)<<uint(runtimeIdx)) == 0 {
+			continue
+		}
+		state[runtimeIdx] = subsetState.valuesAt(subsetOffset)
+		subsetOffset++
+	}
+	return state, nil
+}
+
+func bitsSet64(v uint64) int {
+	n := 0
+	for v != 0 {
+		v &= v - 1
+		n++
+	}
+	return n
+}
