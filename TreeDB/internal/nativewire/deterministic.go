@@ -350,17 +350,6 @@ func validateDecodedDeterministicEntry(commandID CommandID, commandVersion uint6
 	return schema, nil
 }
 
-func sortSectionsByID(sections []Section) {
-	for i := 1; i < len(sections); i++ {
-		section := sections[i]
-		j := i - 1
-		for ; j >= 0 && sections[j].ID > section.ID; j-- {
-			sections[j+1] = sections[j]
-		}
-		sections[j+1] = section
-	}
-}
-
 func validateDeterministicSectionPayload(section Section, limits Limits) error {
 	switch section.ID {
 	case SectionIdempotencyKey:
@@ -569,4 +558,15 @@ func validateDeterministicCollectionRef(raw []byte) (bool, error) {
 		return false, protocolError(ErrInvalidCommand, "invalid collection name")
 	}
 	return false, nil
+}
+
+func sortSectionsByID(sections []Section) {
+	for i := 1; i < len(sections); i++ {
+		section := sections[i]
+		j := i - 1
+		for ; j >= 0 && sections[j].ID > section.ID; j-- {
+			sections[j+1] = sections[j]
+		}
+		sections[j+1] = section
+	}
 }

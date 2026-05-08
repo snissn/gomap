@@ -91,6 +91,41 @@ func TestCollectionManagerOpenCollectionCacheRejectsClosedDB(t *testing.T) {
 	}
 }
 
+func TestCollectionMetaReturnsDefensiveIndexCopyAcrossHandles(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	left, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open left collection: %v", err)
+	}
+	right, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open right collection: %v", err)
+	}
+
+	meta := left.Meta()
+	meta.Indexes[0].Name = "mutated"
+	if got := left.Meta().Indexes[0].Name; got != "email" {
+		t.Fatalf("left Meta leaked mutation: got index %q want email", got)
+	}
+	if got := right.Meta().Indexes[0].Name; got != "email" {
+		t.Fatalf("right Meta leaked mutation: got index %q want email", got)
+	}
+}
+
 func TestCollectionInsertBatchBridge_RoundTripWithSecondaryIndexes(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -5960,7 +5995,7 @@ func TestBufferedPrimaryRunIndexFindsNewestTable(t *testing.T) {
 	defer resetCollectionRunTable(older)
 	defer resetCollectionRunTable(newer)
 
-	index := newBufferedPrimaryRunIndex(0)
+	index := newBufferedPrimaryRunIndexWithDirectEntries(0, true)
 	if err := addBufferedPrimaryRunIndexEntries(index, older); err != nil {
 		t.Fatalf("add older table: %v", err)
 	}
@@ -5977,6 +6012,13 @@ func TestBufferedPrimaryRunIndexFindsNewestTable(t *testing.T) {
 	value, _, flags, found := table.GetEntry([]byte("u1"))
 	if !found || flags&node.FlagTombstone != 0 || !bytes.Equal(value, []byte("newer")) {
 		t.Fatalf("lookup found=%v flags=%d value=%q want newer live value", found, flags, value)
+	}
+	ref, ok := index.lookupRef([]byte("u1"))
+	if !ok {
+		t.Fatal("lookupRef u1 missing")
+	}
+	if !ref.entryValid || ref.table != newer || ref.flags&node.FlagTombstone != 0 || !bytes.Equal(ref.value, []byte("newer")) {
+		t.Fatalf("lookupRef entryValid=%v table=%p flags=%d value=%q want newer direct entry", ref.entryValid, ref.table, ref.flags, ref.value)
 	}
 }
 
@@ -11467,6 +11509,17 @@ func TestCollectionFindByMissingIndexReturnsNil(t *testing.T) {
 	if ids != nil || truncated {
 		t.Fatalf("missing index range ids=%q truncated=%v want nil/false", ids, truncated)
 	}
+	records, truncated, err := col.FindDocumentsByIndexRange("missing", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: "hnl", Inclusive: true},
+		Upper: IndexRangeBound{Value: "hnl", Inclusive: true},
+		Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("find documents missing index range: %v", err)
+	}
+	if records != nil || truncated {
+		t.Fatalf("missing index document range records=%v truncated=%v want nil/false", records, truncated)
+	}
 }
 
 func TestCollectionFindByIndexValueMatchesLargeJSONInteger(t *testing.T) {
@@ -11669,6 +11722,572 @@ func TestCollectionFindByIndexRangeTypedInt64(t *testing.T) {
 	}); err == nil || !strings.Contains(err.Error(), "int64-compatible") {
 		t.Fatalf("wrong-type range err=%v want int64-compatible", err)
 	}
+}
+
+func requireJSONFieldValue(t *testing.T, document []byte, field string, want any) {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(document))
+	decoder.UseNumber()
+	var decoded map[string]any
+	if err := decoder.Decode(&decoded); err != nil {
+		t.Fatalf("decode document %s: %v", document, err)
+	}
+	got, ok := decoded[field]
+	if !ok {
+		t.Fatalf("document %s missing field %q", document, field)
+	}
+	switch want := want.(type) {
+	case string:
+		gotString, ok := got.(string)
+		if !ok || gotString != want {
+			t.Fatalf("document %s field %q=%v want %q", document, field, got, want)
+		}
+	case int64:
+		gotNumber, ok := got.(json.Number)
+		if !ok {
+			t.Fatalf("document %s field %q=%v want JSON number %d", document, field, got, want)
+		}
+		gotInt, err := gotNumber.Int64()
+		if err != nil || gotInt != want {
+			t.Fatalf("document %s field %q=%v want %d", document, field, got, want)
+		}
+	default:
+		t.Fatalf("unsupported expected JSON field type %T", want)
+	}
+}
+
+func TestCollectionFindDocumentsByIndexRangeTypedInt64(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "score", Field: "score", ValueType: IndexValueInt64}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2"), []byte("u3")},
+		[][]byte{
+			[]byte(`{"score":-10,"name":"low"}`),
+			[]byte(`{"score":0,"name":"zero"}`),
+			[]byte(`{"score":2,"name":"two"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	records, truncated, err := col.FindDocumentsByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(0), Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+		Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("find documents range: %v", err)
+	}
+	if !truncated || len(records) != 1 {
+		t.Fatalf("records len=%d truncated=%v want 1,true", len(records), truncated)
+	}
+	if !bytes.Equal(records[0].ID, []byte("u2")) {
+		t.Fatalf("record id=%q want u2", records[0].ID)
+	}
+	requireJSONFieldValue(t, records[0].Document, "name", "zero")
+
+	records, truncated, err = col.FindDocumentsByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(100), Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("find empty documents range: %v", err)
+	}
+	if truncated || len(records) != 0 {
+		t.Fatalf("empty records len=%d truncated=%v want 0,false", len(records), truncated)
+	}
+
+	if _, truncated, err = col.FindDocumentsByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: "not-an-int", Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+		Limit: 1,
+	}); err == nil || truncated {
+		t.Fatalf("bad bound err=%v truncated=%v want error,false", err, truncated)
+	}
+	if _, _, err := col.FindDocumentsByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(0), Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+	}); err == nil || !strings.Contains(err.Error(), "positive limit") {
+		t.Fatalf("unlimited document range err=%v want positive limit", err)
+	}
+}
+
+func TestCollectionScanBorrowedDocumentsByIndexRangeContracts(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "score", Field: "score", ValueType: IndexValueInt64}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"score":1,"name":"one"}`),
+			[]byte(`{"score":2,"name":"two"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush rows: %v", err)
+	}
+	opts := IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(1), Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+		Limit: 2,
+	}
+	if _, err := col.ScanBorrowedDocumentsByIndexRange("score", opts, nil); err == nil || !strings.Contains(err.Error(), "nil borrowed") {
+		t.Fatalf("nil borrowed callback err=%v want nil-callback error", err)
+	}
+	called := false
+	truncated, err := col.ScanBorrowedDocumentsByIndexRange("missing", opts, func(BorrowedDocumentRecord) (bool, error) {
+		called = true
+		return true, nil
+	})
+	if err != nil || truncated || called {
+		t.Fatalf("missing index truncated=%v called=%v err=%v want false,false,nil", truncated, called, err)
+	}
+	if _, err := col.ScanBorrowedDocumentsByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(1), Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+	}, func(BorrowedDocumentRecord) (bool, error) { return true, nil }); err == nil || !strings.Contains(err.Error(), "positive limit") {
+		t.Fatalf("zero limit borrowed err=%v want positive limit", err)
+	}
+	if _, err := col.ScanBorrowedDocumentsByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(1), Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+		Limit: 1,
+		Desc:  true,
+	}, func(BorrowedDocumentRecord) (bool, error) { return true, nil }); err == nil || !strings.Contains(err.Error(), "descending") {
+		t.Fatalf("descending borrowed err=%v want descending error", err)
+	}
+	var ids [][]byte
+	truncated, err = col.ScanBorrowedDocumentsByIndexRange("score", opts, func(record BorrowedDocumentRecord) (bool, error) {
+		ids = append(ids, bytes.Clone(record.ID))
+		return false, nil
+	})
+	if err != nil || truncated || len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("early stop ids=%q truncated=%v err=%v want u1,false,nil", ids, truncated, err)
+	}
+}
+
+func TestCollectionFindDocumentsByIndexRangeUsesBufferedPrimaryView(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "score", Field: "score", ValueType: IndexValueInt64}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"score":5,"name":"old-indexed"}`),
+			[]byte(`{"score":8,"name":"old-primary"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush persisted rows: %v", err)
+	}
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONField("score", int64(7))},
+		{DocumentID: []byte("u2"), Update: setJSONField("name", "fresh-primary")},
+	}); err != nil {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("batched=%v want buffered update batch", batched)
+	}
+
+	records, truncated, err := col.FindDocumentsByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(7), Inclusive: true},
+		Upper: IndexRangeBound{Value: int64(9), Inclusive: false},
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("find documents range: %v", err)
+	}
+	if truncated || len(records) != 2 {
+		t.Fatalf("records len=%d truncated=%v want 2,false", len(records), truncated)
+	}
+	if !bytes.Equal(records[0].ID, []byte("u1")) {
+		t.Fatalf("first record id=%q want u1", records[0].ID)
+	}
+	requireJSONFieldValue(t, records[0].Document, "score", int64(7))
+	if !bytes.Equal(records[1].ID, []byte("u2")) {
+		t.Fatalf("second record id=%q want u2", records[1].ID)
+	}
+	requireJSONFieldValue(t, records[1].Document, "name", "fresh-primary")
+}
+
+func TestCollectionFindByIndexRangeDedupesPersistedOnlyMultiKeyRange(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		Indexes: []IndexDefinition{
+			{Name: "tag", Field: "tags", ValueType: IndexValueString, MultiKey: true},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("d1"), []byte("d2")},
+		[][]byte{
+			[]byte(`{"tags":["a","b"]}`),
+			[]byte(`{"tags":["c"]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	ids, truncated, err := reopenedCol.FindByIndexRange("tag", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: "a", Inclusive: true},
+		Upper: IndexRangeBound{Value: "d", Inclusive: false},
+		Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("find range: %v", err)
+	}
+	if truncated || len(ids) != 2 || !bytes.Equal(ids[0], []byte("d1")) || !bytes.Equal(ids[1], []byte("d2")) {
+		t.Fatalf("ids=%q truncated=%v want d1,d2 false", ids, truncated)
+	}
+}
+
+func TestCollectionFindByIndexRangeDedupesAllowedArrayScalarIndex(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			AllowArrayValuesInIndex: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "tag", Field: "tags", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("d1"), []byte("d2")},
+		[][]byte{
+			[]byte(`{"tags":["a","b"]}`),
+			[]byte(`{"tags":["c"]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	ids, truncated, err := col.FindByIndexRange("tag", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: "a", Inclusive: true},
+		Upper: IndexRangeBound{Value: "d", Inclusive: false},
+		Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("find range: %v", err)
+	}
+	if truncated || len(ids) != 2 || !bytes.Equal(ids[0], []byte("d1")) || !bytes.Equal(ids[1], []byte("d2")) {
+		t.Fatalf("ids=%q truncated=%v want d1,d2 false", ids, truncated)
+	}
+}
+
+func TestCollectionFindByIndexRangePersistedOnlyFastPathLimitAndClones(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "score", Field: "score", ValueType: IndexValueInt64}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2"), []byte("u3")},
+		[][]byte{
+			[]byte(`{"score":1}`),
+			[]byte(`{"score":2}`),
+			[]byte(`{"score":3}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	ids, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(1), Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+		Limit: 2,
+	})
+	if err != nil {
+		t.Fatalf("find range: %v", err)
+	}
+	if !truncated || len(ids) != 2 || !bytes.Equal(ids[0], []byte("u1")) || !bytes.Equal(ids[1], []byte("u2")) {
+		t.Fatalf("ids=%q truncated=%v want u1,u2 true", ids, truncated)
+	}
+	ids[0][0] = 'x'
+	if !bytes.Equal(ids[1], []byte("u2")) {
+		t.Fatalf("ids[1]=%q changed after mutating ids[0]", ids[1])
+	}
+	again, truncated, err := col.FindByIndexRange("score", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: int64(1), Inclusive: true},
+		Upper: IndexRangeBound{Unbounded: true},
+		Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("find range again: %v", err)
+	}
+	if !truncated || len(again) != 1 || !bytes.Equal(again[0], []byte("u1")) {
+		t.Fatalf("again ids=%q truncated=%v want u1 true", again, truncated)
+	}
+}
+
+func TestCollectionFindDocumentsByIndexRangeUniqueExactBufferedTombstone(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com","name":"ada"}`)},
+	); err != nil {
+		t.Fatalf("insert persisted row: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush persisted row: %v", err)
+	}
+	primaryTable := newCollectionRunTable(1)
+	setCollectionRunValue(primaryTable, []byte("u1"), []byte(`{"email":"grace@example.com","name":"ada"}`))
+	primaryTable.Freeze()
+	defer resetCollectionRunTable(primaryTable)
+
+	oldEmail, err := encodeIndexScalar(IndexValueString, "ada@example.com")
+	if err != nil {
+		t.Fatalf("encode old email: %v", err)
+	}
+	newEmail, err := encodeIndexScalar(IndexValueString, "grace@example.com")
+	if err != nil {
+		t.Fatalf("encode new email: %v", err)
+	}
+	emailTable := newCollectionRunTable(2)
+	if _, err := deleteCollectionSecondaryIndexEntry(emailTable, oldEmail, []byte("u1")); err != nil {
+		t.Fatalf("delete old email index entry: %v", err)
+	}
+	if _, err := setCollectionSecondaryIndexEntry(emailTable, newEmail, []byte("u1")); err != nil {
+		t.Fatalf("set new email index entry: %v", err)
+	}
+	emailTable.Freeze()
+	defer resetCollectionRunTable(emailTable)
+
+	domain := col.writeDomain
+	domain.mu.Lock()
+	domain.count = 1
+	domain.meta = col.Meta()
+	domain.rootRuns = map[string][]memtable.Table{
+		collectionPrimaryRootName("users"):            {primaryTable},
+		collectionSecondaryRootName("users", "email"): {emailTable},
+	}
+	domain.rootRunCount = 2
+	domain.mu.Unlock()
+
+	records, truncated, err := col.FindDocumentsByIndexRange("email", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: "ada@example.com", Inclusive: true},
+		Upper: IndexRangeBound{Value: "ada@example.com", Inclusive: true},
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("find old email exact range: %v", err)
+	}
+	if truncated || len(records) != 0 {
+		t.Fatalf("old email records=%+v truncated=%v want none false", records, truncated)
+	}
+
+	records, truncated, err = col.FindDocumentsByIndexRange("email", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: "grace@example.com", Inclusive: true},
+		Upper: IndexRangeBound{Value: "grace@example.com", Inclusive: true},
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("find new email exact range: %v", err)
+	}
+	if truncated || len(records) != 1 || !bytes.Equal(records[0].ID, []byte("u1")) {
+		t.Fatalf("new email records=%+v truncated=%v want u1 false", records, truncated)
+	}
+	requireJSONFieldValue(t, records[0].Document, "email", "grace@example.com")
+}
+
+func TestCollectionFindDocumentsByIndexRangeExactBufferedTombstoneAfterLimit(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{[]byte(`{"email":"ada@example.com","name":"stale"}`)},
+	); err != nil {
+		t.Fatalf("insert persisted row: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush persisted row: %v", err)
+	}
+
+	email, err := encodeIndexScalar(IndexValueString, "ada@example.com")
+	if err != nil {
+		t.Fatalf("encode email: %v", err)
+	}
+	primaryTable := newCollectionRunTable(1)
+	setCollectionRunValue(primaryTable, []byte("u0"), []byte(`{"email":"ada@example.com","name":"live"}`))
+	primaryTable.Freeze()
+	defer resetCollectionRunTable(primaryTable)
+
+	emailTable := newCollectionRunTable(2)
+	if _, err := setCollectionSecondaryIndexEntry(emailTable, email, []byte("u0")); err != nil {
+		t.Fatalf("set live email index entry: %v", err)
+	}
+	if _, err := deleteCollectionSecondaryIndexEntry(emailTable, email, []byte("u2")); err != nil {
+		t.Fatalf("delete stale email index entry: %v", err)
+	}
+	emailTable.Freeze()
+	defer resetCollectionRunTable(emailTable)
+
+	domain := col.writeDomain
+	domain.mu.Lock()
+	domain.count = 1
+	domain.meta = col.Meta()
+	domain.rootRuns = map[string][]memtable.Table{
+		collectionPrimaryRootName("users"):            {primaryTable},
+		collectionSecondaryRootName("users", "email"): {emailTable},
+	}
+	domain.rootRunCount = 2
+	domain.mu.Unlock()
+
+	records, truncated, err := col.FindDocumentsByIndexRange("email", IndexRangeOptions{
+		Lower: IndexRangeBound{Value: "ada@example.com", Inclusive: true},
+		Upper: IndexRangeBound{Value: "ada@example.com", Inclusive: true},
+		Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("find exact email range: %v", err)
+	}
+	if truncated || len(records) != 1 || !bytes.Equal(records[0].ID, []byte("u0")) {
+		t.Fatalf("records=%+v truncated=%v want u0 false", records, truncated)
+	}
+	requireJSONFieldValue(t, records[0].Document, "name", "live")
 }
 
 func TestCollectionFindByIndexRangeMergesBufferedUpdates(t *testing.T) {

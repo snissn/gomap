@@ -453,12 +453,13 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 		return nil
 	}
 	if req, ok, err := s.decodeInsertBatchFastRequest(state, sections); ok {
+		s.counters.incCommandRequest(iwire.CommandInsertBatch, "insert_batch")
 		if err != nil {
+			s.counters.add("dispatch_nanos_total", uint64(time.Since(start).Nanoseconds()))
 			s.counters.inc("requests.failed_total")
 			s.counters.incCommandError(iwire.CommandInsertBatch, "insert_batch")
 			return s.writeError(w, header, err)
 		}
-		s.counters.incCommandRequest(iwire.CommandInsertBatch, "insert_batch")
 		responseBody, err := s.handleInsertBatchFastBody(req, body[:0])
 		s.counters.add("dispatch_nanos_total", uint64(time.Since(start).Nanoseconds()))
 		if err != nil {
