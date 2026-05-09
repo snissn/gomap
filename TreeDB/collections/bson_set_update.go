@@ -154,12 +154,6 @@ func (u bsonSetUpdate) appendReplacement(dst, current []byte) ([]byte, []byte, b
 	}
 	length -= 4
 	start := len(dst)
-	if cap(dst)-len(dst) < len(current)+64 {
-		grown := make([]byte, len(dst), len(dst)+len(current)+64)
-		copy(grown, dst)
-		dst = grown
-	}
-	idx, out := bsoncore.AppendDocumentStart(dst)
 	var usedInline [8]bool
 	used := usedInline[:]
 	if len(u.fields) > len(usedInline) {
@@ -168,9 +162,24 @@ func (u bsonSetUpdate) appendReplacement(dst, current []byte) ([]byte, []byte, b
 		used = used[:len(u.fields)]
 	}
 	changed := false
+	var idx int32
+	var out []byte
+	initOut := func(elemStart int) {
+		changed = true
+		if cap(dst)-len(dst) < len(current)+64 {
+			grown := make([]byte, len(dst), len(dst)+len(current)+64)
+			copy(grown, dst)
+			out = grown
+		} else {
+			out = dst
+		}
+		idx, out = bsoncore.AppendDocumentStart(out)
+		out = append(out, current[4:elemStart]...)
+	}
 	var elem bsoncore.Element
 	for length > 1 {
 		var elemOK bool
+		elemStart := len(current) - len(rem)
 		elem, rem, elemOK = bsoncore.ReadElement(rem)
 		length -= int32(len(elem))
 		if !elemOK {
@@ -178,7 +187,9 @@ func (u bsonSetUpdate) appendReplacement(dst, current []byte) ([]byte, []byte, b
 		}
 		replacement := u.fieldIndexBytes(elem.KeyBytes())
 		if replacement < 0 {
-			out = append(out, elem...)
+			if changed {
+				out = append(out, elem...)
+			}
 			continue
 		}
 		used[replacement] = true
@@ -186,25 +197,31 @@ func (u bsonSetUpdate) appendReplacement(dst, current []byte) ([]byte, []byte, b
 		value := field.Value
 		currentValue := elem.Value()
 		if bsonCoreValueEqualRawValue(currentValue, value) {
-			out = append(out, elem...)
+			if changed {
+				out = append(out, elem...)
+			}
 			continue
+		}
+		if !changed {
+			initOut(elemStart)
 		}
 		out = bsoncore.AppendValueElement(out, field.Key, bsoncore.Value{
 			Type: bsoncore.Type(value.Type),
 			Data: value.Value,
 		})
-		changed = true
 	}
 	for i, field := range u.fields {
 		if used[i] {
 			continue
 		}
 		value := field.Value
+		if !changed {
+			initOut(len(current) - len(rem))
+		}
 		out = bsoncore.AppendValueElement(out, field.Key, bsoncore.Value{
 			Type: bsoncore.Type(value.Type),
 			Data: value.Value,
 		})
-		changed = true
 	}
 	if !changed {
 		return dst[:start], current, false, nil

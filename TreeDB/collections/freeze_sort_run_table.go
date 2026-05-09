@@ -246,6 +246,7 @@ func (t *freezeSortRunTable) setEntryStealOwned(ownerGeneration uint64, key, val
 		ptr = page.ValuePtr{}
 	}
 	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.mustOwnedLocked(ownerGeneration)
 	idx := len(t.entries)
 	t.entries = append(t.entries, freezeSortRunEntry{
@@ -260,7 +261,6 @@ func (t *freezeSortRunTable) setEntryStealOwned(ownerGeneration uint64, key, val
 	if t.latest != nil && !t.latestDirty {
 		t.latest[unsafe.String(&key[0], len(key))] = idx
 	}
-	t.mu.Unlock()
 }
 
 func (t *freezeSortRunTable) ApplyStealEntryFunc(count int, emit func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error)) error {
@@ -364,7 +364,10 @@ func (t *freezeSortRunTable) getEntryOwned(ownerGeneration uint64, key []byte) (
 		return nil, page.ValuePtr{}, 0, false
 	}
 	t.mu.RLock()
-	t.mustOwnedLocked(ownerGeneration)
+	if !t.ownedLocked(ownerGeneration) {
+		t.mu.RUnlock()
+		panicFreezeSortRunTableNotOwned()
+	}
 	if t.frozen {
 		entry, found := t.getFrozenEntryLocked(key)
 		t.mu.RUnlock()
@@ -464,9 +467,9 @@ func (t *freezeSortRunTable) resetOwned(ownerGeneration uint64) {
 		return
 	}
 	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.mustOwnedLocked(ownerGeneration)
 	t.resetLocked(false)
-	t.mu.Unlock()
 }
 
 func (t *freezeSortRunTable) Release() {
@@ -527,9 +530,17 @@ func (t *freezeSortRunTable) mustNotReleasedLocked() {
 }
 
 func (t *freezeSortRunTable) mustOwnedLocked(ownerGeneration uint64) {
-	if t.released || (ownerGeneration != 0 && ownerGeneration != t.ownerGeneration) {
-		panic("collections: freeze-sort run table used after Release")
+	if !t.ownedLocked(ownerGeneration) {
+		panicFreezeSortRunTableNotOwned()
 	}
+}
+
+func (t *freezeSortRunTable) ownedLocked(ownerGeneration uint64) bool {
+	return !t.released && (ownerGeneration == 0 || ownerGeneration == t.ownerGeneration)
+}
+
+func panicFreezeSortRunTableNotOwned() {
+	panic("collections: freeze-sort run table used after Release or after reuse by a new owner")
 }
 
 func (t *freezeSortRunTable) NewIterator(start, end []byte) iterator.UnsafeIterator {
@@ -549,7 +560,10 @@ func (t *freezeSortRunTable) newIteratorOwned(ownerGeneration uint64, start, end
 		return &freezeSortRunIterator{reverse: reverse, idx: -1}
 	}
 	t.mu.RLock()
-	t.mustOwnedLocked(ownerGeneration)
+	if !t.ownedLocked(ownerGeneration) {
+		t.mu.RUnlock()
+		panicFreezeSortRunTableNotOwned()
+	}
 	if t.frozen {
 		entries := t.entries
 		it := &freezeSortRunIterator{entries: entries, start: start, end: end, reverse: reverse, table: t}
@@ -558,9 +572,9 @@ func (t *freezeSortRunTable) newIteratorOwned(ownerGeneration uint64, start, end
 	}
 	t.mu.RUnlock()
 	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.mustOwnedLocked(ownerGeneration)
 	entries := t.sortedLatestCopyLocked()
-	t.mu.Unlock()
 	it := &freezeSortRunIterator{entries: entries, start: start, end: end, reverse: reverse}
 	it.seekInitial()
 	return it
