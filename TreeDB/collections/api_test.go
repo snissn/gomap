@@ -644,7 +644,7 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 	if stats.SecondaryKeyBytes == 0 {
 		t.Fatal("stats secondary key bytes=0 want positive")
 	}
-	if stats.CurrentRead != 0 || stats.Callback != 0 ||
+	if stats.CurrentRead != 0 || stats.Callback != 0 || stats.StructuredUpdateApply != 0 ||
 		stats.OldIndexStateExtract != 0 || stats.NewIndexStateExtract != 0 ||
 		stats.BufferStage != 0 ||
 		stats.BufferStagePrecheck != 0 ||
@@ -959,6 +959,37 @@ func TestCollectionUpdateIndexStateBreakdownStatsSnapshotAndAdd(t *testing.T) {
 		if got, want := exported[tc.key], fmt.Sprintf("%d", tc.want.Nanoseconds()); got != want {
 			t.Fatalf("exported %s=%q want %q", tc.key, got, want)
 		}
+	}
+}
+
+func TestCollectionUpdateStructuredApplyStatsSnapshotAndAdd(t *testing.T) {
+	updateStats := CollectionUpdateStats{
+		Callback:              3 * time.Nanosecond,
+		StructuredUpdateApply: 5 * time.Nanosecond,
+	}
+	domain := &collectionWriteDomain{}
+	domain.observeUpdateBatchStats(updateStats)
+	snapshot := domain.statsSnapshot()
+	var merged CollectionManagerStats
+	merged.add(snapshot)
+	exported := (&CollectionManager{domains: map[string]*collectionWriteDomain{"test": domain}}).Stats()
+	if got := snapshot.UpdateBatchCallback; got != updateStats.Callback {
+		t.Fatalf("snapshot callback=%s want %s", got, updateStats.Callback)
+	}
+	if got := snapshot.UpdateBatchStructuredApply; got != updateStats.StructuredUpdateApply {
+		t.Fatalf("snapshot structured apply=%s want %s", got, updateStats.StructuredUpdateApply)
+	}
+	if got := merged.UpdateBatchCallback; got != updateStats.Callback {
+		t.Fatalf("merged callback=%s want %s", got, updateStats.Callback)
+	}
+	if got := merged.UpdateBatchStructuredApply; got != updateStats.StructuredUpdateApply {
+		t.Fatalf("merged structured apply=%s want %s", got, updateStats.StructuredUpdateApply)
+	}
+	if got, want := exported["treedb.collections.write_domain.update_batch.callback_ns_total"], fmt.Sprintf("%d", updateStats.Callback.Nanoseconds()); got != want {
+		t.Fatalf("exported callback=%q want %q", got, want)
+	}
+	if got, want := exported["treedb.collections.write_domain.update_batch.structured_apply_ns_total"], fmt.Sprintf("%d", updateStats.StructuredUpdateApply.Nanoseconds()); got != want {
+		t.Fatalf("exported structured apply=%q want %q", got, want)
 	}
 }
 
@@ -9489,6 +9520,7 @@ func TestBuildUpdateBatchPlanBSONSetRejectsInvalidCurrentBSON(t *testing.T) {
 		Options: CollectionOptions{
 			DocumentFormat: DocumentFormatBSON,
 		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
@@ -9555,6 +9587,42 @@ func TestBuildUpdateBatchPlanBSONSetRejectsInvalidCurrentBSON(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "current BSON document") {
 		t.Fatalf("buildUpdateBatchPlan err=%q want current BSON validation error", err)
+	}
+}
+
+func TestBSONSetUpdateApplyNoopDoesNotAllocateReplacement(t *testing.T) {
+	current := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "city", Value: "hnl"},
+	})
+	spec, err := newBSONSetUpdate([]BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "hnl"),
+	}})
+	if err != nil {
+		t.Fatalf("new BSON set update: %v", err)
+	}
+	got, changed, err := spec.apply(current)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if changed {
+		t.Fatal("apply changed=true want false")
+	}
+	if len(got) == 0 || len(current) == 0 || &got[0] != &current[0] {
+		t.Fatal("no-op BSON set did not return the original document backing")
+	}
+	allocs := testing.AllocsPerRun(1000, func() {
+		got, changed, err := spec.apply(current)
+		if err != nil {
+			t.Fatalf("apply during alloc check: %v", err)
+		}
+		if changed || !bytes.Equal(got, current) {
+			t.Fatalf("alloc check changed=%v got=%x want original", changed, got)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("no-op BSON set allocations=%g want 0", allocs)
 	}
 }
 

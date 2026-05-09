@@ -148,8 +148,6 @@ func (u bsonSetUpdate) apply(current []byte) ([]byte, bool, error) {
 		return nil, false, bsoncore.NewInsufficientBytesError(current, rem)
 	}
 	length -= 4
-	out := make([]byte, 0, len(current)+64)
-	idx, out := bsoncore.AppendDocumentStart(out)
 	var usedInline [8]bool
 	used := usedInline[:]
 	if len(u.fields) > len(usedInline) {
@@ -158,9 +156,12 @@ func (u bsonSetUpdate) apply(current []byte) ([]byte, bool, error) {
 		used = used[:len(u.fields)]
 	}
 	changed := false
+	var idx int32
+	var out []byte
 	var elem bsoncore.Element
 	for length > 1 {
 		var elemOK bool
+		elemStart := len(current) - len(rem)
 		elem, rem, elemOK = bsoncore.ReadElement(rem)
 		length -= int32(len(elem))
 		if !elemOK {
@@ -168,7 +169,9 @@ func (u bsonSetUpdate) apply(current []byte) ([]byte, bool, error) {
 		}
 		replacement := u.fieldIndexBytes(elem.KeyBytes())
 		if replacement < 0 {
-			out = append(out, elem...)
+			if changed {
+				out = append(out, elem...)
+			}
 			continue
 		}
 		used[replacement] = true
@@ -176,25 +179,37 @@ func (u bsonSetUpdate) apply(current []byte) ([]byte, bool, error) {
 		value := field.Value
 		currentValue := elem.Value()
 		if bsonCoreValueEqualRawValue(currentValue, value) {
-			out = append(out, elem...)
+			if changed {
+				out = append(out, elem...)
+			}
 			continue
+		}
+		if !changed {
+			changed = true
+			out = make([]byte, 0, len(current)+64)
+			idx, out = bsoncore.AppendDocumentStart(out)
+			out = append(out, current[4:elemStart]...)
 		}
 		out = bsoncore.AppendValueElement(out, field.Key, bsoncore.Value{
 			Type: bsoncore.Type(value.Type),
 			Data: value.Value,
 		})
-		changed = true
 	}
 	for i, field := range u.fields {
 		if used[i] {
 			continue
 		}
 		value := field.Value
+		if !changed {
+			changed = true
+			out = make([]byte, 0, len(current)+64)
+			idx, out = bsoncore.AppendDocumentStart(out)
+			out = append(out, current[4:len(current)-len(rem)]...)
+		}
 		out = bsoncore.AppendValueElement(out, field.Key, bsoncore.Value{
 			Type: bsoncore.Type(value.Type),
 			Data: value.Value,
 		})
-		changed = true
 	}
 	if !changed {
 		return current, false, nil
