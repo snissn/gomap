@@ -10446,10 +10446,12 @@ type bufferedUsersUpdateJSONDoc struct {
 }
 
 const (
-	bufferedIndexedUpdateHighDocumentLimitForTests = 1 << 20
-	bufferedIndexedUpdateHighByteLimitForTests     = int64(1) << 40
-	bufferedIndexedUpdateHighRootRunLimitForTests  = 1 << 20
-	bufferedIndexedUpdateHighQueueLimitForTests    = 1 << 20
+	// These limits are intentionally above this fixture's data size so tests can
+	// exercise explicit Flush or forced-drain paths without a threshold flush.
+	bufferedIndexedUpdateNoThresholdDocumentLimitForTests = 1 << 20
+	bufferedIndexedUpdateNoThresholdByteLimitForTests     = int64(1) << 40
+	bufferedIndexedUpdateNoThresholdRootRunLimitForTests  = 1 << 20
+	bufferedIndexedUpdateNoThresholdQueueLimitForTests    = 1 << 20
 )
 
 type bufferedUsersUpdateFixture struct {
@@ -10461,12 +10463,20 @@ type bufferedUsersUpdateFixture struct {
 func bufferedIndexedUpdateHighThresholdOptionsForTests() CollectionOptions {
 	return CollectionOptions{
 		BufferedIndexedWrites:                   true,
-		BufferedIndexedWriteMaxDocuments:        bufferedIndexedUpdateHighDocumentLimitForTests,
-		BufferedIndexedWriteMaxBytes:            bufferedIndexedUpdateHighByteLimitForTests,
-		BufferedIndexedWriteMaxRootRuns:         bufferedIndexedUpdateHighRootRunLimitForTests,
+		BufferedIndexedWriteMaxDocuments:        bufferedIndexedUpdateNoThresholdDocumentLimitForTests,
+		BufferedIndexedWriteMaxBytes:            bufferedIndexedUpdateNoThresholdByteLimitForTests,
+		BufferedIndexedWriteMaxRootRuns:         bufferedIndexedUpdateNoThresholdRootRunLimitForTests,
 		BufferedIndexedAsyncFlush:               true,
-		BufferedIndexedAsyncFlushMaxQueuedUnits: bufferedIndexedUpdateHighQueueLimitForTests,
+		BufferedIndexedAsyncFlushMaxQueuedUnits: bufferedIndexedUpdateNoThresholdQueueLimitForTests,
 	}
+}
+
+func bufferedIndexedUpdateNoAsyncHighThresholdOptionsForTests() CollectionOptions {
+	opts := bufferedIndexedUpdateHighThresholdOptionsForTests()
+	opts.BufferedIndexedAsyncFlush = false
+	opts.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
+	opts.DisableBufferedIndexedAsyncFlush = true
+	return opts
 }
 
 func newBufferedUsersUpdateFixtureWithDocs(t *testing.T, opts CollectionOptions, docs []bufferedUsersUpdateDoc) bufferedUsersUpdateFixture {
@@ -10634,7 +10644,7 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleZeroDel
 
 func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReplansStaleBufferedPlanWithoutFlush(t *testing.T) {
 	fixture := newBufferedUsersUpdateFixtureWithDocs(t,
-		bufferedIndexedUpdateHighThresholdOptionsForTests(),
+		bufferedIndexedUpdateNoAsyncHighThresholdOptionsForTests(),
 		[]bufferedUsersUpdateDoc{
 			{id: "u1", email: "a@example.com", city: "hnl"},
 			{id: "u2", email: "b@example.com", city: "hnl"},
@@ -10848,7 +10858,7 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesFlushesRootMismatch
 
 func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesBatchOneDoesNotFlushBeforeThreshold(t *testing.T) {
 	fixture := newBufferedUsersUpdateFixtureWithDocs(t,
-		bufferedIndexedUpdateHighThresholdOptionsForTests(),
+		bufferedIndexedUpdateNoAsyncHighThresholdOptionsForTests(),
 		[]bufferedUsersUpdateDoc{
 			{id: "u1", email: "a@example.com", city: "hnl"},
 			{id: "u2", email: "b@example.com", city: "hnl"},
