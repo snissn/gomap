@@ -8765,11 +8765,13 @@ const (
 	updateBatchPlanScratchDocumentBytes           = 256
 	updateBatchPlanScratchMaxInitialDocumentArena = 4 << 20
 	updateBatchPlanScratchMaxDocumentArena        = 8 << 20
-	updateBatchPlanScratchMaxBSONSetDocument      = 2 << 20
-	updateBatchPlanScratchMaxRootNameCap          = 64
-	updateBatchPlanScratchMaxStateArenaCap        = 4 << 20
-	updateBatchPlanScratchMaxStateSliceCap        = 1 << 16
-	updateBatchPlanScratchMaxValueRefCap          = 1 << 16
+	// Keep BSON replacement scratch below the primary document arena so pooled
+	// steady-state memory cannot double while retaining typical multi-MiB docs.
+	updateBatchPlanScratchMaxBSONSetDocument = updateBatchPlanScratchMaxDocumentArena / 2
+	updateBatchPlanScratchMaxRootNameCap     = 64
+	updateBatchPlanScratchMaxStateArenaCap   = 4 << 20
+	updateBatchPlanScratchMaxStateSliceCap   = 1 << 16
+	updateBatchPlanScratchMaxValueRefCap     = 1 << 16
 )
 
 func estimateUpdateBatchPlanDocumentArenaBytes(itemCount int) int {
