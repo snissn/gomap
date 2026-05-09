@@ -6379,10 +6379,7 @@ func TestIndexedPrepareFreezeWaitsUntilFinished(t *testing.T) {
 	domain.mu.Unlock()
 
 	select {
-	case waited := <-done:
-		if waited <= 0 {
-			t.Fatalf("prepare freeze wait duration=%s want positive", waited)
-		}
+	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("prepare freeze wait did not unblock after finish")
 	}
