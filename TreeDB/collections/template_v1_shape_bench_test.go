@@ -45,7 +45,7 @@ func BenchmarkTemplateV1PrepareHeterogeneousShapesLearnedIDs(b *testing.B) {
 
 func benchmarkTemplateV1PrepareDocuments(b *testing.B, docs [][]byte, fieldCount, shapeCount int, resolver templateV1Resolver) {
 	b.Helper()
-	prepared, records, _, preparedResolver, err := prepareTemplateV1InsertDocuments(docs, resolver, false)
+	prepared, records, _, preparedResolver, err := prepareTemplateV1InsertDocuments(docs, resolver, false, true)
 	if err != nil {
 		b.Fatalf("validate template-v1 shape documents: %v", err)
 	}
@@ -64,7 +64,7 @@ func benchmarkTemplateV1PrepareDocuments(b *testing.B, docs [][]byte, fieldCount
 	b.ReportMetric(float64(len(records)), "published_templates")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		prepared, _, _, _, err := prepareTemplateV1InsertDocuments(docs, resolver, false)
+		prepared, _, _, _, err := prepareTemplateV1InsertDocuments(docs, resolver, false, true)
 		if err != nil {
 			b.Fatalf("prepare template-v1 shape documents: %v", err)
 		}
@@ -99,7 +99,7 @@ func templateV1ShapeBenchDocuments(tb testing.TB, count, fieldCount, shapeCount 
 func templateV1ShapeBenchLearnedDocuments(tb testing.TB, count, fieldCount, shapeCount int) ([][]byte, templateV1Resolver) {
 	tb.Helper()
 	seed := templateV1ShapeBenchDocuments(tb, count, fieldCount, shapeCount)
-	_, _, learned, resolver, err := prepareTemplateV1InsertDocuments(seed, nil, true)
+	_, _, learned, resolver, err := prepareTemplateV1InsertDocuments(seed, nil, true, true)
 	if err != nil {
 		tb.Fatalf("prepare seed shape documents: %v", err)
 	}

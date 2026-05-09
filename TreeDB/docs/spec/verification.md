@@ -630,6 +630,8 @@ Coverage:
   - `TestTemplateV1EncoderLearnsIDsAfterInsertBatch`
   - `TestTemplateV1EncoderLearnsExistingTemplateIDFromHashInsert`
   - `TestTemplateV1EncoderRejectsLearnedIDsAcrossCollections`
+  - `TestTemplateV1StoredDocsRequireScopedEncoderInsert`
+  - `TestTemplateV1EncoderAllowsSameCollectionHandleReuse`
   - `TestTemplateV1EncoderResetClearsLearnedIDs`
   - `TestTemplateV1EncoderConvertsNestedRootShapeObjectsWithLearnedIDs`
   - `TestTemplateV1EncoderLearnsBufferedTemplateIDs`

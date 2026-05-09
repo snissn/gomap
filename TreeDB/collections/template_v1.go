@@ -142,7 +142,7 @@ func prepareInsertDocuments(documents [][]byte, opts collectionOptions) ([][]byt
 		}
 		return prepareBSONInsertDocuments(documents)
 	case DocumentFormatTemplateV1:
-		return prepareTemplateV1InsertDocuments(documents, opts.templateResolver, opts.learnTemplateIDs)
+		return prepareTemplateV1InsertDocuments(documents, opts.templateResolver, opts.learnTemplateIDs, opts.allowTemplateV1Stored)
 	default:
 		return nil, nil, nil, nil, fmt.Errorf("collections: unsupported document format %q", opts.documentFormat)
 	}
@@ -181,11 +181,11 @@ type templateV1ParsedInsertDocument struct {
 
 const templateV1StoredDocumentOffset = -1
 
-func prepareTemplateV1InsertDocuments(documents [][]byte, fallback templateV1Resolver, collectLearned bool) ([][]byte, []templateV1Record, []templateV1LearnedTemplate, templateV1Resolver, error) {
+func prepareTemplateV1InsertDocuments(documents [][]byte, fallback templateV1Resolver, collectLearned bool, allowStored bool) ([][]byte, []templateV1Record, []templateV1LearnedTemplate, templateV1Resolver, error) {
 	hashDocumentOffsets := make([]int, len(documents))
 	var pendingRecords []templateV1Record
 	for i, document := range documents {
-		next, err := parseTemplateV1InsertDocument(document)
+		next, err := parseTemplateV1InsertDocument(document, allowStored)
 		if err != nil {
 			return nil, nil, nil, nil, err
 		}
@@ -201,6 +201,13 @@ func prepareTemplateV1InsertDocuments(documents [][]byte, fallback templateV1Res
 	prepared := make([][]byte, len(documents))
 	validatePrepared := make([][]byte, 0)
 	conversionArena := make([]byte, 0, estimateTemplateV1ConversionArenaSize(documents, hashDocumentOffsets))
+	var learnedSet map[templateV1LearnedTemplate]struct{}
+	if collectLearned {
+		learnedSet = make(map[templateV1LearnedTemplate]struct{}, len(learnedTemplates))
+		for _, learned := range learnedTemplates {
+			learnedSet[learned] = struct{}{}
+		}
+	}
 	for i, document := range documents {
 		hashDocumentOffset := hashDocumentOffsets[i]
 		if hashDocumentOffset == templateV1StoredDocumentOffset {
@@ -208,7 +215,7 @@ func prepareTemplateV1InsertDocuments(documents [][]byte, fallback templateV1Res
 			validatePrepared = append(validatePrepared, document)
 			continue
 		}
-		nextArena, stored, nextLearned, err := appendTemplateV1InsertDocumentToStored(conversionArena, document[hashDocumentOffset:], resolver, learnedTemplates, collectLearned)
+		nextArena, stored, nextLearned, err := appendTemplateV1InsertDocumentToStored(conversionArena, document[hashDocumentOffset:], resolver, learnedTemplates, learnedSet, collectLearned)
 		if err != nil {
 			return nil, nil, nil, nil, err
 		}
@@ -226,9 +233,12 @@ func prepareTemplateV1InsertDocuments(documents [][]byte, fallback templateV1Res
 	return prepared, publishRecords, learnedTemplates, resolver, nil
 }
 
-func parseTemplateV1InsertDocument(raw []byte) (templateV1ParsedInsertDocument, error) {
+func parseTemplateV1InsertDocument(raw []byte, allowStored bool) (templateV1ParsedInsertDocument, error) {
 	switch {
 	case hasTemplateV1Magic(raw, templateV1StoredMagic):
+		if !allowStored {
+			return templateV1ParsedInsertDocument{}, errors.New("collections: template-v1 stored documents require InsertBatchWithTemplateV1Encoder")
+		}
 		return templateV1ParsedInsertDocument{hashDocumentOffset: templateV1StoredDocumentOffset}, nil
 	case hasTemplateV1Magic(raw, templateV1InsertDocumentMagic):
 		if len(raw) < len(templateV1InsertDocumentMagic)+32 {
@@ -826,15 +836,22 @@ func EncodeTemplateV1Document(fields []string, values []any) ([]byte, error) {
 }
 
 type TemplateV1Encoder struct {
-	emitted         map[[32]byte]struct{}
-	ids             map[[32]byte]uint64
-	collectionScope *Collection
+	emitted  map[[32]byte]struct{}
+	ids      map[[32]byte]uint64
+	scope    templateV1EncoderScope
+	hasScope bool
+}
+
+type templateV1EncoderScope struct {
+	db         *backenddb.DB
+	collection string
 }
 
 func (e *TemplateV1Encoder) Reset() {
 	e.emitted = nil
 	e.ids = nil
-	e.collectionScope = nil
+	e.scope = templateV1EncoderScope{}
+	e.hasScope = false
 }
 
 func (e *TemplateV1Encoder) EncodeDocument(fields []string, values []any) ([]byte, error) {
@@ -870,18 +887,20 @@ func (e *TemplateV1Encoder) includeTemplateV1Record(record templateV1Record) boo
 }
 
 func (e *TemplateV1Encoder) learnedTemplateV1ScopeMismatch(collection *Collection) bool {
-	return e != nil && len(e.ids) > 0 && e.collectionScope != nil && e.collectionScope != collection
+	return e != nil && len(e.ids) > 0 && e.hasScope && e.scope != templateV1EncoderScopeForCollection(collection)
 }
 
 func (e *TemplateV1Encoder) learnTemplateV1Templates(collection *Collection, templates []templateV1LearnedTemplate) {
 	if e == nil || len(templates) == 0 {
 		return
 	}
-	if e.collectionScope != nil && e.collectionScope != collection {
+	scope := templateV1EncoderScopeForCollection(collection)
+	if e.hasScope && e.scope != scope {
 		e.emitted = nil
 		e.ids = nil
 	}
-	e.collectionScope = collection
+	e.scope = scope
+	e.hasScope = true
 	if e.ids == nil {
 		e.ids = make(map[[32]byte]uint64, len(templates))
 	}
@@ -891,6 +910,13 @@ func (e *TemplateV1Encoder) learnTemplateV1Templates(collection *Collection, tem
 		}
 		e.ids[tpl.hash] = tpl.id
 	}
+}
+
+func templateV1EncoderScopeForCollection(collection *Collection) templateV1EncoderScope {
+	if collection == nil {
+		return templateV1EncoderScope{}
+	}
+	return templateV1EncoderScope{db: collection.db, collection: collection.meta.Name}
 }
 
 func (e *TemplateV1Encoder) encodeStoredDocumentWithLearnedTemplates(root []byte, state *templateV1BuildState) ([]byte, bool, error) {
@@ -1498,11 +1524,11 @@ func parseTemplateV1InsertHashDocument(raw []byte) (templateV1HashObjectRef, err
 }
 
 func convertTemplateV1InsertDocumentToStored(raw []byte, resolver templateV1Resolver) ([]byte, error) {
-	_, stored, _, err := appendTemplateV1InsertDocumentToStored(nil, raw, resolver, nil, false)
+	_, stored, _, err := appendTemplateV1InsertDocumentToStored(nil, raw, resolver, nil, nil, false)
 	return stored, err
 }
 
-func appendTemplateV1InsertDocumentToStored(dst []byte, raw []byte, resolver templateV1Resolver, learned []templateV1LearnedTemplate, collectLearned bool) ([]byte, []byte, []templateV1LearnedTemplate, error) {
+func appendTemplateV1InsertDocumentToStored(dst []byte, raw []byte, resolver templateV1Resolver, learned []templateV1LearnedTemplate, learnedSet map[templateV1LearnedTemplate]struct{}, collectLearned bool) ([]byte, []byte, []templateV1LearnedTemplate, error) {
 	if resolver == nil {
 		return dst, nil, learned, errTemplateV1MissingResolver
 	}
@@ -1515,7 +1541,7 @@ func appendTemplateV1InsertDocumentToStored(dst []byte, raw []byte, resolver tem
 		return dst, nil, learned, err
 	}
 	if collectLearned {
-		learned = appendTemplateV1LearnedTemplate(learned, tpl)
+		learned = appendTemplateV1LearnedTemplate(learned, learnedSet, tpl)
 	}
 	start := len(dst)
 	dst = append(dst, templateV1StoredMagic...)
@@ -1530,7 +1556,7 @@ func appendTemplateV1InsertDocumentToStored(dst []byte, raw []byte, resolver tem
 	}
 	pos := 0
 	for range tpl.fields {
-		dst, learned, err = appendTemplateV1ConvertedValue(dst, root.values, &pos, resolver, learned, collectLearned)
+		dst, learned, err = appendTemplateV1ConvertedValue(dst, root.values, &pos, resolver, learned, learnedSet, collectLearned)
 		if err != nil {
 			return dst, nil, learned, err
 		}
@@ -1541,11 +1567,18 @@ func appendTemplateV1InsertDocumentToStored(dst []byte, raw []byte, resolver tem
 	return dst, dst[start:len(dst):len(dst)], learned, nil
 }
 
-func appendTemplateV1LearnedTemplate(dst []templateV1LearnedTemplate, tpl *templateV1Template) []templateV1LearnedTemplate {
+func appendTemplateV1LearnedTemplate(dst []templateV1LearnedTemplate, seen map[templateV1LearnedTemplate]struct{}, tpl *templateV1Template) []templateV1LearnedTemplate {
 	if tpl == nil || tpl.id == 0 {
 		return dst
 	}
 	next := templateV1LearnedTemplate{hash: tpl.hash, id: tpl.id}
+	if seen != nil {
+		if _, exists := seen[next]; exists {
+			return dst
+		}
+		seen[next] = struct{}{}
+		return append(dst, next)
+	}
 	for _, existing := range dst {
 		if existing == next {
 			return dst
@@ -1615,7 +1648,7 @@ func templateV1ValueNeedsHashConversion(raw []byte, pos *int) (bool, error) {
 	}
 }
 
-func appendTemplateV1ConvertedValue(dst []byte, raw []byte, pos *int, resolver templateV1Resolver, learned []templateV1LearnedTemplate, collectLearned bool) ([]byte, []templateV1LearnedTemplate, error) {
+func appendTemplateV1ConvertedValue(dst []byte, raw []byte, pos *int, resolver templateV1Resolver, learned []templateV1LearnedTemplate, learnedSet map[templateV1LearnedTemplate]struct{}, collectLearned bool) ([]byte, []templateV1LearnedTemplate, error) {
 	if pos == nil || *pos >= len(raw) {
 		return nil, learned, errors.New("collections: malformed template-v1 value")
 	}
@@ -1651,7 +1684,7 @@ func appendTemplateV1ConvertedValue(dst []byte, raw []byte, pos *int, resolver t
 		}
 		dst = append(dst, raw[start:*pos]...)
 		for i := uint64(0); i < count; i++ {
-			dst, learned, err = appendTemplateV1ConvertedValue(dst, raw, pos, resolver, learned, collectLearned)
+			dst, learned, err = appendTemplateV1ConvertedValue(dst, raw, pos, resolver, learned, learnedSet, collectLearned)
 			if err != nil {
 				return nil, learned, err
 			}
@@ -1669,12 +1702,12 @@ func appendTemplateV1ConvertedValue(dst []byte, raw []byte, pos *int, resolver t
 			return nil, learned, err
 		}
 		if collectLearned {
-			learned = appendTemplateV1LearnedTemplate(learned, tpl)
+			learned = appendTemplateV1LearnedTemplate(learned, learnedSet, tpl)
 		}
 		dst = append(dst, kind)
 		dst = appendTemplateV1Uvarint(dst, tpl.id)
 		for range tpl.fields {
-			dst, learned, err = appendTemplateV1ConvertedValue(dst, raw, pos, resolver, learned, collectLearned)
+			dst, learned, err = appendTemplateV1ConvertedValue(dst, raw, pos, resolver, learned, learnedSet, collectLearned)
 			if err != nil {
 				return nil, learned, err
 			}

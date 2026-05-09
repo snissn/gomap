@@ -7110,6 +7110,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		return nil, errors.New("collections: template-v1 encoder is bound to a different collection")
 	}
 	plannerOptions.learnTemplateIDs = templateEncoder != nil
+	plannerOptions.allowTemplateV1Stored = templateEncoder != nil
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 	indexedMemtablesEnabled := c.shouldBufferIndexedInserts(meta)
 	bufferIndexedInserts := c.shouldBufferIndexedInsertBatch(meta, len(documents))
@@ -7156,6 +7157,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 			return nil, errors.New("collections: template-v1 encoder is bound to a different collection")
 		}
 		plannerOptions.learnTemplateIDs = templateEncoder != nil
+		plannerOptions.allowTemplateV1Stored = templateEncoder != nil
 		plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 		indexedMemtablesEnabled = c.shouldBufferIndexedInserts(meta)
 		bufferIndexedInserts = c.shouldBufferIndexedInsertBatch(meta, len(documents))
@@ -7177,6 +7179,8 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 					return nil, err
 				}
 				c.meta = meta
+				plannerOptions.learnTemplateIDs = templateEncoder != nil
+				plannerOptions.allowTemplateV1Stored = templateEncoder != nil
 				indexedMemtablesEnabled = c.shouldBufferIndexedInserts(meta)
 				bufferIndexedInserts = c.shouldBufferIndexedInsertBatch(meta, len(documents))
 			}

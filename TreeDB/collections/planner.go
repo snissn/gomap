@@ -59,6 +59,7 @@ type collectionOptions struct {
 	trustedBSONDocuments    bool
 	templateResolver        templateV1Resolver
 	learnTemplateIDs        bool
+	allowTemplateV1Stored   bool
 	dataStoragePolicy       backenddb.OrderedRootStoragePolicy
 	indexStateStoragePolicy backenddb.OrderedRootStoragePolicy
 }

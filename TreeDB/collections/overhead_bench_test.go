@@ -288,7 +288,7 @@ func BenchmarkCollectionOverheadIndexStateTemplateV1Extraction(b *testing.B) {
 	if err != nil {
 		b.Fatalf("index runtimes: %v", err)
 	}
-	storedDocs, _, _, resolver, err := prepareTemplateV1InsertDocuments(docs, nil, false)
+	storedDocs, _, _, resolver, err := prepareTemplateV1InsertDocuments(docs, nil, false, true)
 	if err != nil {
 		b.Fatalf("prepare template-v1 documents: %v", err)
 	}
