@@ -57,6 +57,14 @@ const (
 	// well-amortized InsertBatch calls on the immediate publish path. Smaller
 	// batches use the indexed write-domain memtable path by default.
 	DefaultIndexedWriteMemtableDirectBatchDocuments = 16000
+	// DefaultIndexedWriteMemtableAccumulatorBatchDocuments keeps small indexed
+	// InsertBatch calls from creating one frozen root run per call. Larger
+	// batches already amortize sorted frozen runs well and keep that path.
+	DefaultIndexedWriteMemtableAccumulatorBatchDocuments = 1024
+	// DefaultIndexedWriteMemtableAccumulatorLockedPlanningDocuments keeps the
+	// single-document accumulator path from reloading collection root metadata
+	// once per insert. Larger calls can release the mutation lock while planning.
+	DefaultIndexedWriteMemtableAccumulatorLockedPlanningDocuments = 1
 	// DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits bounds default
 	// background indexed flush work. When the queue reaches this many immutable
 	// flush units, the triggering writer publishes synchronously to cap memory
@@ -838,6 +846,7 @@ type bufferedIndexedCheckpoint struct {
 	indexedFlushUnits      []indexedFlushUnit
 	primaryRunIndexActive  bool
 	uniqueValueRuns        map[string][]memtable.Table
+	uniqueValueMutableRuns map[string]memtable.Table
 	rootRunCount           int
 	indexedDeletesOnly     bool
 }
@@ -899,16 +908,17 @@ type collectionWriteDomain struct {
 	primaryIDIndex         *bufferedUniqueValueIndex
 	// Built lazily by readers so write-only indexed buffering does not pay for
 	// an auxiliary lookup structure it never uses.
-	primaryRunIndex    *bufferedPrimaryRunIndex
-	uniqueValueRuns    map[string][]memtable.Table
-	uniqueValueIndex   map[string]*bufferedUniqueValueIndex
-	count              int
-	bufferedBytes      int64
-	mutableCount       int
-	mutableBytes       int64
-	rootRunCount       int
-	writeGeneration    uint64
-	indexedDeletesOnly bool
+	primaryRunIndex        *bufferedPrimaryRunIndex
+	uniqueValueRuns        map[string][]memtable.Table
+	uniqueValueMutableRuns map[string]memtable.Table
+	uniqueValueIndex       map[string]*bufferedUniqueValueIndex
+	count                  int
+	bufferedBytes          int64
+	mutableCount           int
+	mutableBytes           int64
+	rootRunCount           int
+	writeGeneration        uint64
+	indexedDeletesOnly     bool
 
 	mutationLockCalls                  atomic.Uint64
 	mutationLockWaitTotalNs            atomic.Uint64
@@ -3434,6 +3444,9 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	if domain.uniqueValueIndex == nil {
 		domain.uniqueValueIndex = make(map[string]*bufferedUniqueValueIndex)
 	}
+	if plan.directBufferedInsert != nil {
+		return c.bufferDirectIndexedInsertPlanLocked(domain, catalog, plan)
+	}
 	autoFlushEnabled := bufferedIndexedAutoFlushEnabled(catalog.meta.Options)
 	freezeMutableIndexedRunMapsLocked(domain)
 	var checkpoint bufferedIndexedCheckpoint
@@ -3534,6 +3547,199 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	return 0, nil
 }
 
+func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWriteDomain, catalog *collectionCatalog, plan *insertBatchPlan) (time.Duration, error) {
+	direct := plan.directBufferedInsert
+	if direct == nil {
+		return 0, nil
+	}
+	if len(direct.rootNames) == 0 || len(direct.rootNames) != len(direct.policies) {
+		return 0, fmt.Errorf("collections: InsertBatch collection %q invalid direct plan lengths roots=%d policies=%d", catalog.meta.Name, len(direct.rootNames), len(direct.policies))
+	}
+	if domain.rootPolicies == nil {
+		domain.rootPolicies = make(map[string]backenddb.OrderedRootStoragePolicy, len(direct.rootNames))
+	}
+	if domain.rootBaseIDs == nil {
+		domain.rootBaseIDs = make(map[string]uint64, len(direct.rootNames))
+	}
+	if domain.rootRuns == nil {
+		domain.rootRuns = make(map[string][]memtable.Table, len(direct.rootNames))
+	}
+	if domain.uniqueValueRuns == nil {
+		domain.uniqueValueRuns = make(map[string][]memtable.Table)
+	}
+	if domain.uniqueValueIndex == nil {
+		domain.uniqueValueIndex = make(map[string]*bufferedUniqueValueIndex)
+	}
+
+	addedRootRuns := estimateAccumulatedRootRunsForNamesLocked(domain, direct.rootNames)
+	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, catalog.meta.Options, len(plan.resultIDs), direct.stagedBytes, addedRootRuns)
+	var preAppendFreezeTables []memtable.Table
+	if shouldAutoFlushAfterAdding {
+		preAppendFreezeTables = detachMutableIndexedRunTablesLocked(domain)
+	}
+	var checkpoint bufferedIndexedCheckpoint
+	collectionMetaCheckpoint := c.meta
+	rollbackOnError := shouldAutoFlushAfterAdding
+	if shouldAutoFlushAfterAdding {
+		checkpoint = checkpointBufferedIndexedDomain(domain)
+	}
+	rollbackGeneration := checkpoint.writeGeneration
+	freezePreAppendTables := func() time.Duration {
+		if len(preAppendFreezeTables) == 0 {
+			return 0
+		}
+		freezeDuration, lockReleased, _ := freezeIndexedRunTablesOutsideLock(domain, preAppendFreezeTables)
+		if lockReleased > 0 && rollbackOnError && domain.writeGeneration != rollbackGeneration {
+			rollbackOnError = false
+		}
+		preAppendFreezeTables = nil
+		return freezeDuration
+	}
+	defer freezePreAppendTables()
+
+	rootTables := make(map[string]memtable.Table, len(direct.rootNames))
+	actualRootRuns := 0
+	for i, rootName := range direct.rootNames {
+		baseRoot := catalog.rootID(rootName)
+		if pendingBaseRoot, ok := pendingIndexedRootBaseIDLocked(domain, rootName); ok && pendingBaseRoot != baseRoot {
+			return 0, errBufferedRootBaseMismatch(catalog.meta.Name, rootName)
+		}
+		if _, ok := domain.rootBaseIDs[rootName]; !ok {
+			domain.rootBaseIDs[rootName] = baseRoot
+		}
+		domain.rootPolicies[rootName] = direct.policies[i]
+		table, created := mutableRootRunLocked(domain, rootName)
+		if table == nil {
+			return 0, fmt.Errorf("collections: InsertBatch collection %q failed to allocate direct root accumulator for %q", catalog.meta.Name, rootName)
+		}
+		rootTables[rootName] = table
+		if created {
+			actualRootRuns = saturatingAddNonNegativeInt(actualRootRuns, 1)
+		}
+	}
+	if len(direct.templateEntries) > 0 {
+		templateTable := rootTables[direct.templateRootName]
+		if templateTable == nil {
+			return 0, fmt.Errorf("collections: InsertBatch collection %q missing direct template root accumulator for %q", catalog.meta.Name, direct.templateRootName)
+		}
+		if err := applyDirectBufferedRootEntries(templateTable, direct.templateEntries); err != nil {
+			if rollbackOnError {
+				rollbackBufferedIndexedDomain(domain, checkpoint)
+				c.meta = collectionMetaCheckpoint
+			}
+			return 0, err
+		}
+	}
+	if len(direct.indexStateEntries) > 0 {
+		indexStateTable := rootTables[direct.indexStateRootName]
+		if indexStateTable == nil {
+			return 0, fmt.Errorf("collections: InsertBatch collection %q missing direct index-state root accumulator for %q", catalog.meta.Name, direct.indexStateRootName)
+		}
+		if err := applyDirectBufferedRootEntries(indexStateTable, direct.indexStateEntries); err != nil {
+			if rollbackOnError {
+				rollbackBufferedIndexedDomain(domain, checkpoint)
+				c.meta = collectionMetaCheckpoint
+			}
+			return 0, err
+		}
+	}
+	primaryTable := rootTables[direct.primaryRootName]
+	if primaryTable == nil {
+		return 0, fmt.Errorf("collections: InsertBatch collection %q missing direct primary root accumulator for %q", catalog.meta.Name, direct.primaryRootName)
+	}
+	if err := applyDirectBufferedRootEntries(primaryTable, direct.primaryEntries); err != nil {
+		if rollbackOnError {
+			rollbackBufferedIndexedDomain(domain, checkpoint)
+			c.meta = collectionMetaCheckpoint
+		}
+		return 0, err
+	}
+	if domain.primaryIDIndex == nil {
+		domain.primaryIDIndex = newBufferedUniqueValueIndex(max(1, len(plan.primaryKeys)))
+	}
+	addBufferedPrimaryIDKeys(domain.primaryIDIndex, plan.primaryKeys)
+	if domain.primaryRunIndex != nil {
+		addBufferedPrimaryRunIndexKeys(domain.primaryRunIndex, plan.primaryKeys, primaryTable)
+	}
+	for _, secondaryPlan := range direct.secondaryRootPlans {
+		table := rootTables[secondaryPlan.rootName]
+		if table == nil {
+			continue
+		}
+		if err := applyCollectionRunEntriesWithFlags(table, len(secondaryPlan.entries), func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
+			entry := secondaryPlan.entries[i]
+			if entry.tombstone {
+				return entry.key, nil, page.ValuePtr{}, node.FlagTombstone, nil
+			}
+			return entry.key, nil, page.ValuePtr{}, node.FlagInline, nil
+		}); err != nil {
+			if rollbackOnError {
+				rollbackBufferedIndexedDomain(domain, checkpoint)
+				c.meta = collectionMetaCheckpoint
+			}
+			return 0, err
+		}
+	}
+	for _, uniquePlan := range direct.uniqueValueRootPlans {
+		table, _ := mutableUniqueValueRunLocked(domain, uniquePlan.indexName)
+		if table == nil {
+			return 0, fmt.Errorf("collections: InsertBatch collection %q failed to allocate direct unique accumulator for %q", catalog.meta.Name, uniquePlan.indexName)
+		}
+		if err := applyDirectBufferedUniqueValuePrefixes(table, uniquePlan.prefixes); err != nil {
+			if rollbackOnError {
+				rollbackBufferedIndexedDomain(domain, checkpoint)
+				c.meta = collectionMetaCheckpoint
+			}
+			return 0, err
+		}
+		index := domain.uniqueValueIndex[uniquePlan.indexName]
+		if index == nil {
+			index = newBufferedUniqueValueIndex(max(1, len(uniquePlan.prefixes)))
+			domain.uniqueValueIndex[uniquePlan.indexName] = index
+		}
+		index.addAll(uniquePlan.prefixes)
+	}
+
+	domain.loaded = true
+	domain.meta = catalog.meta
+	domain.catalog = catalog
+	domain.primaryRoot = catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
+	domain.count += len(plan.resultIDs)
+	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, direct.stagedBytes)
+	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, len(plan.resultIDs))
+	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, direct.stagedBytes)
+	domain.writeGeneration++
+	if rollbackOnError {
+		rollbackGeneration = domain.writeGeneration
+	}
+	domain.observeIndexedStage(len(plan.resultIDs), direct.stagedBytes, actualRootRuns)
+	c.meta = catalog.meta
+
+	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, catalog.meta.Options)
+	if err != nil {
+		if rollbackOnError {
+			rollbackBufferedIndexedDomain(domain, checkpoint)
+			c.meta = collectionMetaCheckpoint
+		}
+		return 0, err
+	}
+	if shouldFlushBufferedIndexedWrites(domain, catalog.meta.Options) {
+		_ = freezePreAppendTables()
+		flushElapsed, _, _, err := c.flushBufferedIndexedAfterThresholdLocked(domain, catalog.meta.Options)
+		if err != nil {
+			if rollbackOnError {
+				rollbackBufferedIndexedDomain(domain, checkpoint)
+				c.meta = collectionMetaCheckpoint
+			}
+			return flushElapsed, err
+		}
+		resetCollectionTables(compactedObsolete)
+		return flushElapsed, nil
+	}
+	resetCollectionTables(compactedObsolete)
+	return 0, nil
+}
+
 func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWriteDomain, catalog *collectionCatalog, baseCommitSeq, baseSystemRoot uint64) {
 	domain.loaded = true
 	domain.meta = catalog.meta
@@ -3555,6 +3761,7 @@ func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWr
 	domain.primaryIDIndex = nil
 	domain.primaryRunIndex = nil
 	domain.uniqueValueRuns = nil
+	domain.uniqueValueMutableRuns = nil
 	domain.uniqueValueIndex = nil
 	domain.bufferedBytes = 0
 	domain.mutableCount = 0
@@ -3652,6 +3859,7 @@ func maybeCompactBufferedIndexedMutableRunsLocked(domain *collectionWriteDomain,
 	domain.rootRuns = compactedRootRuns
 	domain.rootMutableRuns = nil
 	domain.uniqueValueRuns = compactedUniqueRuns
+	domain.uniqueValueMutableRuns = nil
 	domain.rootRunCount = tableRunMapRunCount(domain.rootRuns)
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(subtractNonNegativeInt64(domain.bufferedBytes, beforeBytes), afterBytes)
 	domain.mutableBytes = saturatingAddNonNegativeInt64(subtractNonNegativeInt64(domain.mutableBytes, beforeBytes), afterBytes)
@@ -3968,12 +4176,31 @@ func mutableRootRunLocked(domain *collectionWriteDomain, rootName string) (memta
 	return table, true
 }
 
+func mutableUniqueValueRunLocked(domain *collectionWriteDomain, indexName string) (memtable.Table, bool) {
+	if domain == nil || indexName == "" {
+		return nil, false
+	}
+	if domain.uniqueValueRuns == nil {
+		domain.uniqueValueRuns = make(map[string][]memtable.Table)
+	}
+	if domain.uniqueValueMutableRuns == nil {
+		domain.uniqueValueMutableRuns = make(map[string]memtable.Table)
+	}
+	if table := domain.uniqueValueMutableRuns[indexName]; table != nil {
+		return table, false
+	}
+	table := newCollectionRootAccumulatorRunTable()
+	domain.uniqueValueMutableRuns[indexName] = table
+	domain.uniqueValueRuns[indexName] = append(domain.uniqueValueRuns[indexName], table)
+	return table, true
+}
+
 func newCollectionRootAccumulatorRunTable() memtable.Table {
 	return newFreezeSortRunTable()
 }
 
 func freezeMutableIndexedRunMapsLocked(domain *collectionWriteDomain) {
-	if domain == nil || len(domain.rootMutableRuns) == 0 {
+	if domain == nil || (len(domain.rootMutableRuns) == 0 && len(domain.uniqueValueMutableRuns) == 0) {
 		return
 	}
 	for _, table := range domain.rootMutableRuns {
@@ -3981,20 +4208,32 @@ func freezeMutableIndexedRunMapsLocked(domain *collectionWriteDomain) {
 			table.Freeze()
 		}
 	}
+	for _, table := range domain.uniqueValueMutableRuns {
+		if table != nil {
+			table.Freeze()
+		}
+	}
 	domain.rootMutableRuns = nil
+	domain.uniqueValueMutableRuns = nil
 }
 
 func detachMutableIndexedRunTablesLocked(domain *collectionWriteDomain) []memtable.Table {
-	if domain == nil || len(domain.rootMutableRuns) == 0 {
+	if domain == nil || (len(domain.rootMutableRuns) == 0 && len(domain.uniqueValueMutableRuns) == 0) {
 		return nil
 	}
-	tables := make([]memtable.Table, 0, len(domain.rootMutableRuns))
+	tables := make([]memtable.Table, 0, len(domain.rootMutableRuns)+len(domain.uniqueValueMutableRuns))
 	for _, table := range domain.rootMutableRuns {
 		if table != nil {
 			tables = append(tables, table)
 		}
 	}
+	for _, table := range domain.uniqueValueMutableRuns {
+		if table != nil {
+			tables = append(tables, table)
+		}
+	}
 	domain.rootMutableRuns = nil
+	domain.uniqueValueMutableRuns = nil
 	return tables
 }
 
@@ -4464,6 +4703,7 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		indexedFlushUnits:      cloneIndexedFlushUnits(domain.indexedFlushUnits),
 		primaryRunIndexActive:  domain.primaryRunIndex != nil,
 		uniqueValueRuns:        cloneTableRunMap(domain.uniqueValueRuns),
+		uniqueValueMutableRuns: cloneMutableRunMap(domain.uniqueValueMutableRuns),
 		rootRunCount:           domain.rootRunCount,
 		indexedDeletesOnly:     domain.indexedDeletesOnly,
 	}
@@ -4511,6 +4751,7 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 		domain.primaryRunIndex = nil
 	}
 	domain.uniqueValueRuns = checkpoint.uniqueValueRuns
+	domain.uniqueValueMutableRuns = checkpoint.uniqueValueMutableRuns
 	domain.uniqueValueIndex = rebuildBufferedUniqueValueIndexes(indexedFlushUnitPendingUniqueValueRunMap(indexedFlushUnitsWithPublishing(checkpoint.indexedPublishingUnits, checkpoint.indexedFlushUnits), checkpoint.uniqueValueRuns))
 }
 
@@ -4829,15 +5070,33 @@ func (c *Collection) rejectBufferedIndexedInsertConflictsLocked(domain *collecti
 	}
 	primaryName := collectionPrimaryRootName(meta.Name)
 	if pendingPrimary := pendingIndexedRootRunsLocked(domain, primaryName); len(pendingPrimary) > 0 {
-		for _, run := range plan.runs {
-			if run.name != primaryName {
-				continue
-			}
-			if err := rejectBufferedPrimaryConflicts(domain.primaryIDIndex, pendingPrimary, run.table); err != nil {
+		if direct := plan.directBufferedInsert; direct != nil {
+			if err := rejectBufferedPrimaryConflictKeys(domain.primaryIDIndex, pendingPrimary, plan.primaryKeys); err != nil {
 				return err
 			}
-			break
+		} else {
+			for _, run := range plan.runs {
+				if run.name != primaryName {
+					continue
+				}
+				if err := rejectBufferedPrimaryConflicts(domain.primaryIDIndex, pendingPrimary, run.table); err != nil {
+					return err
+				}
+				break
+			}
 		}
+	}
+	if direct := plan.directBufferedInsert; direct != nil {
+		for _, uniquePlan := range direct.uniqueValueRootPlans {
+			pending := pendingUniqueReservationIndexLocked(domain, uniquePlan.indexName, true)
+			if pending == nil || pending.len() == 0 {
+				continue
+			}
+			if err := rejectBufferedUniqueValuePrefixConflicts(uniquePlan.indexName, pending, uniquePlan.prefixes); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	uniqueIndexes := uniqueCollectionIndexNames(meta)
 	for _, run := range plan.runs {
@@ -4853,6 +5112,20 @@ func (c *Collection) rejectBufferedIndexedInsertConflictsLocked(domain *collecti
 		}
 		if err := rejectBufferedUniqueIndexConflicts(run.indexName, run.indexValueType, pending, run.table); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func rejectBufferedPrimaryConflictKeys(pendingIndex *bufferedUniqueValueIndex, pendingPrimary []memtable.Table, keys [][]byte) error {
+	for _, key := range keys {
+		if pendingIndex != nil && pendingIndex.contains(key) {
+			return ErrDocumentExists
+		}
+		if pendingIndex == nil {
+			if _, _, flags, found := getBufferedRunEntry(pendingPrimary, key); found && flags&node.FlagTombstone == 0 {
+				return ErrDocumentExists
+			}
 		}
 	}
 	return nil
@@ -4878,6 +5151,15 @@ func rejectBufferedPrimaryConflicts(pendingIndex *bufferedUniqueValueIndex, pend
 	return nil
 }
 
+func rejectBufferedUniqueValuePrefixConflicts(indexName string, pending *bufferedUniqueValueIndex, prefixes [][]byte) error {
+	for _, prefix := range prefixes {
+		if pending != nil && pending.contains(prefix) {
+			return fmt.Errorf("%w %q", ErrUniqueIndexConflict, indexName)
+		}
+	}
+	return nil
+}
+
 func addBufferedPrimaryIDs(index *bufferedUniqueValueIndex, batchPrimary memtable.Table) error {
 	if index == nil || batchPrimary == nil {
 		return nil
@@ -4899,6 +5181,33 @@ func addBufferedPrimaryIDs(index *bufferedUniqueValueIndex, batchPrimary memtabl
 		index.arenas = append(index.arenas, arena)
 	}
 	return nil
+}
+
+func addBufferedPrimaryIDKeys(index *bufferedUniqueValueIndex, keys [][]byte) {
+	if index == nil || len(keys) == 0 {
+		return
+	}
+	arena := make([]byte, 0, bufferedPrimaryIDArenaCap(len(keys)))
+	for _, key := range keys {
+		if len(key) == 0 {
+			continue
+		}
+		start := len(arena)
+		arena = append(arena, key...)
+		index.add(arena[start:len(arena)])
+	}
+	if len(arena) > 0 {
+		index.arenas = append(index.arenas, arena)
+	}
+}
+
+func applyDirectBufferedUniqueValuePrefixes(table memtable.Table, prefixes [][]byte) error {
+	if len(prefixes) == 0 {
+		return nil
+	}
+	return applyCollectionRunEntries(table, len(prefixes), func(i int) (key, value []byte, err error) {
+		return prefixes[i], nil, nil
+	})
 }
 
 func newBufferedPrimaryRunIndex(capacity int) *bufferedPrimaryRunIndex {
@@ -6348,6 +6657,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	domain.primaryRunIndex = nil
 	oldUniqueValueRuns := domain.uniqueValueRuns
 	domain.uniqueValueRuns = nil
+	domain.uniqueValueMutableRuns = nil
 	domain.uniqueValueIndex = nil
 	domain.count = 0
 	domain.indexedDeletesOnly = false
@@ -6387,6 +6697,7 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
 	domain.uniqueValueRuns = nil
+	domain.uniqueValueMutableRuns = nil
 	domain.rootValueArenas = nil
 	domain.rootRunCount = 0
 	domain.indexedDeletesOnly = false
@@ -6886,7 +7197,9 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		return c.insertBatchNoIndex(catalog, snap, baseCommitSeq, baseSystemRoot, plannerOptions, ids, documents)
 	}
 
-	unlockForPlanning := shouldUnlockInsertPlanning(plannerOptions, indexedMemtablesEnabled, bufferIndexedInserts)
+	directBufferedInsertAccumulators := bufferIndexedInserts && shouldUseDirectBufferedInsertAccumulators(len(documents))
+	keepDirectBufferedInsertPlanningLocked := directBufferedInsertAccumulators && shouldPlanDirectBufferedInsertAccumulatorsWithMutationLocked(len(documents))
+	unlockForPlanning := shouldUnlockInsertPlanning(plannerOptions, indexedMemtablesEnabled, bufferIndexedInserts, keepDirectBufferedInsertPlanningLocked)
 	if unlockForPlanning {
 		closePlanningSnapshot()
 		unlockIfLocked()
@@ -6903,6 +7216,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 	if bufferIndexedInserts {
 		planner.buildPrimaryVal = clonePrimaryDocument
 		planner.cloneTemplateRunValues = true
+		planner.directBufferedRuns = directBufferedInsertAccumulators
 	}
 	plan, err := planner.planInsertBatch(ids, documents)
 	if err != nil {
@@ -6914,7 +7228,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 	} else if indexedMemtablesEnabled {
 		plan.stats.BufferedIndexedBypassBatches = 1
 	}
-	if len(plan.runs) == 0 {
+	if !insertBatchPlanHasRootWork(plan) {
 		closePlanningSnapshot()
 		c.setLastInsertStats(plan.stats.CollectionInsertStats)
 		return plan.resultIDs, nil
@@ -7002,8 +7316,19 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 	return plan.resultIDs, nil
 }
 
-func shouldUnlockInsertPlanning(opts collectionOptions, indexedMemtablesEnabled, bufferIndexedInserts bool) bool {
+func shouldUseDirectBufferedInsertAccumulators(documentCount int) bool {
+	return documentCount > 0 && documentCount <= DefaultIndexedWriteMemtableAccumulatorBatchDocuments
+}
+
+func shouldPlanDirectBufferedInsertAccumulatorsWithMutationLocked(documentCount int) bool {
+	return documentCount > 0 && documentCount <= DefaultIndexedWriteMemtableAccumulatorLockedPlanningDocuments
+}
+
+func shouldUnlockInsertPlanning(opts collectionOptions, indexedMemtablesEnabled, bufferIndexedInserts, keepDirectBufferedInsertPlanningLocked bool) bool {
 	if opts.documentFormat == DocumentFormatTemplateV1 {
+		return false
+	}
+	if keepDirectBufferedInsertPlanningLocked {
 		return false
 	}
 	if indexedMemtablesEnabled && !bufferIndexedInserts {
@@ -7071,6 +7396,16 @@ func insertBatchPlanRootNamesAndBaseIDs(plan *insertBatchPlan, catalog *collecti
 	if plan == nil {
 		return nil, nil
 	}
+	if direct := plan.directBufferedInsert; direct != nil && len(direct.rootNames) > 0 {
+		rootNames := append([]string(nil), direct.rootNames...)
+		baseRootIDs := make(map[string]uint64, len(rootNames))
+		for _, rootName := range rootNames {
+			if catalog != nil {
+				baseRootIDs[rootName] = catalog.rootID(rootName)
+			}
+		}
+		return rootNames, baseRootIDs
+	}
 	rootNames := make([]string, len(plan.runs))
 	baseRootIDs := make(map[string]uint64, len(plan.runs))
 	for i, run := range plan.runs {
@@ -7080,6 +7415,16 @@ func insertBatchPlanRootNamesAndBaseIDs(plan *insertBatchPlan, catalog *collecti
 		}
 	}
 	return rootNames, baseRootIDs
+}
+
+func insertBatchPlanHasRootWork(plan *insertBatchPlan) bool {
+	if plan == nil {
+		return false
+	}
+	if len(plan.runs) > 0 {
+		return true
+	}
+	return plan.directBufferedInsert != nil && len(plan.directBufferedInsert.rootNames) > 0
 }
 
 type insertBatchValidationContext struct {
@@ -9422,6 +9767,9 @@ type directBufferedSecondaryRootPlan struct {
 	rootName   string
 	entries    []directBufferedSecondaryRootEntry
 	arena      []byte
+	indexName  string
+	valueType  IndexValueType
+	unique     bool
 	deletes    int
 	sets       int
 	keyBytes   int
@@ -9524,6 +9872,9 @@ func buildDirectBufferedSecondaryRootPlans(collectionName string, runtimes []ind
 			rootName:   runtimeSecondaryRootName(collectionName, runtime),
 			entries:    make([]directBufferedSecondaryRootEntry, 0, entryCount),
 			arena:      make([]byte, 0, runStats.KeyBytes),
+			indexName:  runtime.def.name,
+			valueType:  runtime.def.valueType,
+			unique:     runtime.def.unique,
 			deletes:    runStats.Deletes,
 			sets:       runStats.Sets,
 			keyBytes:   runStats.KeyBytes,
@@ -11945,6 +12296,7 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 	domain.storagePolicy = options.dataStoragePolicy
 	domain.indexedFlushUnits = nil
 	domain.rootRuns = nil
+	domain.rootMutableRuns = nil
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
 	domain.rootValueArenas = nil
@@ -11953,6 +12305,7 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 	domain.primaryIDIndex = nil
 	domain.primaryRunIndex = nil
 	domain.uniqueValueRuns = nil
+	domain.uniqueValueMutableRuns = nil
 	domain.uniqueValueIndex = nil
 	if domain.table == nil {
 		domain.table = newCollectionRunTable(0)
