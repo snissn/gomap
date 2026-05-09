@@ -221,9 +221,26 @@ Required coverage:
 - `TestCollectionWALFormatRejectsMalformedLengthBeforeAllocation`
 - `TestCollectionWALFormatRejectsHeaderPayloadReplayAndTrailerCRCMismatch`
 - `TestCollectionWALOnRelaxedNoIndexAckBeforeFlushRecovers`
+- `TestCollectionWALOnRelaxedInsertAckBeforeFlushRecovers`
+- `TestCollectionWALOnRelaxedInsertBatchAckBeforeFlushRecovers`
+- `TestCollectionWALOnRelaxedUpdateBatchAckBeforeFlushRecovers`
+- `TestCollectionWALOnRelaxedDeleteBatchAckBeforeFlushRecovers`
+- `TestCollectionWALOnRelaxedCreateCollectionAckReopens`
+- `TestCollectionWALOnRelaxedCreateIndexBackfillAckReopens`
+- `TestCollectionWALOnRelaxedCreateIndexUniqueConflictNoSchemaAfterReopen`
 - `TestCollectionWALDurableNoIndexAckBeforeFlushRecovers`
 - `TestCollectionWALOffRelaxedNoIndexAckBeforeFlushDoesNotClaimRecovery`
+- `TestCollectionWALOffRelaxedBufferedInsertLostWithoutFlush`
+- `TestCollectionWALOffRelaxedFlushEstablishesReopenBoundary`
+- `TestCollectionWALOffRelaxedCheckpointDrainsKnownDomains`
+- `TestCollectionWALOffRelaxedCloseDrainsSuccessfulWrites`
 - `TestCollectionWALAppendFailureRejectsWriteBeforeVisibility`
+- `TestCollectionWALSideRefFailureRejectsWriteBeforeVisibility`
+- `TestCollectionWALPostCommitVisibleInstallFailureCommitAmbiguous`
+- `TestCollectionWALPublishFailureReportedByFlushCheckpointClose`
+- `TestInsertBatchUniqueConflictBeforeWALLeavesNoPartialItems`
+- `TestUpdateBatchItemErrorBeforeWALLeavesNoPartialItems`
+- `TestDeleteBatchWALAppendFailureLeavesAllDocuments`
 - `TestCollectionWALIndexedInsertRecoverAtomically`
 - `TestCollectionWALIndexedUpdateChangedSecondaryRecoverAtomically`
 - `TestCollectionWALIndexedUpdateUnchangedSecondarySkipsSecondaryRootsAfterRecovery`
@@ -235,6 +252,13 @@ Required coverage:
 - `TestCollectionWALRecoveryCrashAndCleanupAreIdempotent`
 - `TestCollectionWALGCRewriteCompactionSnapshotsProtectPendingSideRefs`
 - `TestCollectionWALCheckpointChosenRule`
+- `TestCollectionWALFlushPublishesAndAdvancesWatermark`
+- `TestCollectionWALFlushAllWaitsForAsyncPublishAndReopens`
+- `TestDBCheckpointPublishesPreCutCollectionWALAndReopens`
+- `TestDBCheckpointDoesNotReturnCleanWithUnpublishedPreCutDebt`
+- `TestDBCheckpointRacingWriteCut`
+- `TestDBCloseRacingInsertUpdateDeleteIndex`
+- `TestDBCloseSafeCleanupLeak`
 - `TestCollectionWALCloseSuccessfulWritesReopenVisible`
 - `TestCollectionWALReadOnlyOpenWithPendingWAL`
 - `TestCollectionWALStatsAppendSuccess`
@@ -277,6 +301,15 @@ Required coverage:
 - `TestCollectionWALSegmentRotationAndCheckpointRotation`
 - `TestCollectionWALDurableSyncBatchCaps`
 - `TestColumnWALSideRefCapacityLimits`
+- `TestNativewireInsertBatchWALAppendFailureNotCommitted`
+- `TestNativewireInsertBatchAckFlushedPublishFailureCommitAmbiguous`
+- `TestNativewireInsertBatchAckSyncedCheckpointFailureCommitAmbiguous`
+- `TestNativewireAckSyncedRejectedInWALOnRelaxed`
+- `TestNativewireResponseMetaActualAckAndCommitState`
+- `TestMongoGatewayInsertDocumentsDurabilityModeDocumented`
+- `TestMongoGatewayUpdateOrderedPartialSemantics`
+- `TestMongoGatewayDeleteOrderedPartialSemantics`
+- `TestMongoGatewayCreateIndexesUniqueConflictNoPartialSchema`
 
 Formal invariant mapping:
 

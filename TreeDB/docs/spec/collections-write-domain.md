@@ -1,11 +1,15 @@
 # Collections Write-Domain Contract
 
-Status: normative for the current implementation.
+Status:
 
-This document specifies the current collection-local write-domain behavior for
-indexed collections. It intentionally does not promise a durable-at-ack
-collection mutation log; that is a future architecture option, not the current
-contract.
+- Current implementation: flush-boundary durable for pending collection-local
+  write-domain state.
+- PR1 collection WAL target: WAL-on collection mutator success is process-crash
+  recoverable before visibility; WAL-off remains flush-boundary.
+
+This document specifies collection-local write-domain behavior for indexed
+collections. It distinguishes the current shipped contract from the PR1
+collection WAL target contract.
 
 ## Indexed Write Memtables
 
@@ -90,21 +94,17 @@ If TreeDB later needs durable-at-ack async collection writes, it MUST add the
 collection WAL root-delta recovery mechanism before advertising that stronger
 contract.
 
-The collection WAL plan strengthens this future contract by making
-acknowledged WAL-on mutations durable as collection-local root-delta
-transactions. Under that plan, mutable/queued/publishing state remains a
-visibility and publish-amortization mechanism, but it must be backed by exact
-physical deltas already committed to collection WAL.
+In WAL-on modes, write-domain mutable/queued/publishing state is a visibility
+and publication-amortization layer over already committed collection WAL
+transactions. It is not the first durable record. No read, unique check,
+update/delete planner, schema/index barrier, queued unit, publishing unit, or
+pending-state merge may observe a mutation until its collection WAL transaction
+is committed and recoverable.
 
-That future contract requires WAL-before-visibility ordering. WAL-on collection
-writers must use private planning, durable commit, and visible install phases.
-The visible install guard is the `CanInstallVisible` predicate in
-`collection-wal-durability-plan.md`: no mutable, queued, publishing, planner, or
-unique-check state may observe a WAL-on mutation until its canonical root delta,
-required side-ref closure, side-ref protection, and complete collection WAL
-frame are recoverable. WAL-off relaxed writes keep the current weaker
-flush-boundary contract and must not create collection WAL frames for unflushed
-visible state.
+In WAL-off relaxed mode, write-domain state is not backed by collection WAL.
+Acknowledged pending writes are process-local until published. `Flush`,
+`FlushAll`, `Checkpoint`, and `Close` are the public persistence boundaries.
+
 During private planning, root deltas, side refs, uniqueness reservations,
 publish inputs, and schema/index barrier state are not reachable from any read,
 scan, uniqueness check, update/delete planner, queued unit, publishing unit, or
@@ -134,6 +134,11 @@ collection-local WAL progress. They either publish and watermark all lower
 collection WAL sequences before becoming visible, or are encoded as their own
 collection WAL transaction that depends on the previous sequence and carries the
 schema/root descriptor changes atomically.
+
+`CreateIndex`, `DropIndex`, `DropIndexes`, `DropAllIndexes`, collection
+creation, and future schema mutations are public barriers. They must state
+whether they drain lower collection sequences, become their own WAL transaction,
+or fail before exposing schema changes.
 
 ## Read Views
 

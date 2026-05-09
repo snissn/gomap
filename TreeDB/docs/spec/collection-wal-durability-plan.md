@@ -405,6 +405,25 @@ blind retry.
   recoverable.
 - The write may still be pending in the collection write domain for read
   performance and publish amortization.
+- Batch mutators are all-or-nothing at the collection WAL commit boundary. A
+  pre-commit item, validation, side-ref, or WAL append error leaves no batch item
+  visible or recoverable. A post-commit failure is commit-ambiguous for the
+  whole batch.
+
+`CollectionManager.CreateCollection`, `Collection.CreateIndex`, `DropIndex`,
+`DropIndexes`, and `DropAllIndexes`:
+
+- Are public collection metadata mutators.
+- They must either publish atomically through backend roots before success or be
+  encoded as ordered collection WAL transactions.
+- Successful return is recoverable after process crash under WAL-on modes.
+- `CreateIndex` must define its admission cut, backfill snapshot,
+  unique-conflict behavior, and success/reopen guarantee.
+- Unique-index backfill conflicts and schema validation failures are pre-commit
+  errors and must not expose partial schema/index state.
+- Mongo gateway collection auto-create and `createIndexes` inherit the
+  underlying TreeDB mode-relative durability only until explicit Mongo
+  writeConcern handling is implemented.
 
 `Collection.Flush`:
 
@@ -475,6 +494,9 @@ state-machine results, and must not affect collection WAL replay.
   advanced in the same backend commit.
 - `synced` means `flushed` plus the backend checkpoint/fsync boundary required
   by the configured local durability mode. It must not be silently downgraded.
+  A server running `DurabilityWALOnRelaxed` or `DurabilityWALOffRelaxed` must
+  reject `synced` with `durability_unavailable` unless a separate
+  mode-relative policy is explicitly named.
 - Collection WAL append and collection root publication must both expose
   explicit flush/sync options so these acknowledgement policies can be
   implemented without relying on implicit backend defaults.
@@ -2177,6 +2199,7 @@ and future column-store delta-part descriptor updates.
 | Crash after commit marker before response | Recovery may expose transaction. This is committed-before-response ambiguity. |
 | Crash after visible staging before API response | WAL-on modes recover the committed transaction. Visible-without-committed-WAL is not permitted. |
 | In-memory visible staging fails after commit marker | Not permitted as an ordinary error. Implementation must make this step non-failing or report commit-ambiguous/fatal. |
+| Post-commit barrier failure | Not rollback. Public APIs must report commit-ambiguous or committed-but-barrier-failed state. Recovery must either publish the transaction or preserve it as protected WAL debt before serving collection APIs. |
 | Checkpoint races with admitted writer | Writer is either before the checkpoint cut and must be drained/published/watermarked by the checkpoint, or after the cut and must remain protected in retained WAL. |
 | Close races with admitted writer | Writer either fails with closed before visible install or is included in the close drain and visible after reopen. |
 | Root publish fails before backend meta commit | WAL transaction remains unapplied and protected. Retry on flush or recovery. |

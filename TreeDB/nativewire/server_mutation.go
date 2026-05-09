@@ -2,6 +2,7 @@ package nativewire
 
 import (
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -456,11 +457,15 @@ func (s *Server) handleCheckpoint(sections []iwire.Section) ([]iwire.Section, er
 	if s.backend == nil {
 		return nil, protocolError(iwire.ErrDurabilityUnavailable, "checkpoint requires a backend DB")
 	}
+	actualAck := iwire.AckSynced
+	if s.backend.DurabilityMode() != backenddb.DurabilityDurable {
+		actualAck = iwire.AckFlushed
+	}
 	ack, err := ackPolicyFromSections(sections, s.defaultBarrierAck(iwire.AckSynced))
 	if err != nil {
 		return nil, err
 	}
-	if err := s.admitBarrierAck(iwire.AckSynced, ack); err != nil {
+	if err := s.admitBarrierAck(actualAck, ack); err != nil {
 		return nil, err
 	}
 	if s.collections != nil {
@@ -471,7 +476,7 @@ func (s *Server) handleCheckpoint(sections []iwire.Section) ([]iwire.Section, er
 	if err := s.backend.Checkpoint(); err != nil {
 		return nil, metadataWrap(err)
 	}
-	return []iwire.Section{s.ackMeta(iwire.AckSynced)}, nil
+	return []iwire.Section{s.ackMeta(actualAck)}, nil
 }
 
 func (s *Server) admitBarrierAck(actual, requested iwire.AckPolicy) error {
@@ -500,10 +505,7 @@ func (s *Server) admitMutationAck(requested iwire.AckPolicy) error {
 	case 0, iwire.AckVisible, iwire.AckFlushed:
 		return nil
 	case iwire.AckSynced:
-		if s.backend == nil {
-			return protocolError(iwire.ErrDurabilityUnavailable, "synced ack requires a backend DB")
-		}
-		return nil
+		return s.admitSyncedAck()
 	case iwire.AckRaftCommitted:
 		return protocolError(iwire.ErrDurabilityUnavailable, "raft_committed ack is unavailable in single-node nativewire R1")
 	default:
@@ -537,8 +539,8 @@ func (s *Server) satisfyAck(collection interface{ Flush() error }, requested iwi
 				return 0, metadataWrap(err)
 			}
 		}
-		if s.backend == nil {
-			return 0, protocolError(iwire.ErrDurabilityUnavailable, "synced ack requires a backend DB")
+		if err := s.admitSyncedAck(); err != nil {
+			return 0, err
 		}
 		if err := s.backend.Checkpoint(); err != nil {
 			return 0, metadataWrap(err)
@@ -549,4 +551,14 @@ func (s *Server) satisfyAck(collection interface{ Flush() error }, requested iwi
 	default:
 		return 0, protocolError(iwire.ErrInvalidCommand, "unsupported ack policy %d", requested)
 	}
+}
+
+func (s *Server) admitSyncedAck() error {
+	if s.backend == nil {
+		return protocolError(iwire.ErrDurabilityUnavailable, "synced ack requires a backend DB")
+	}
+	if s.backend.DurabilityMode() != backenddb.DurabilityDurable {
+		return protocolError(iwire.ErrDurabilityUnavailable, "synced ack requires DurabilityDurable")
+	}
+	return nil
 }

@@ -69,12 +69,15 @@ const (
 )
 
 var (
-	ErrCollectionNotFound  = errors.New("collections: collection not found")
-	ErrDocumentExists      = errors.New("collections: document already exists")
-	ErrDuplicateDocumentID = errors.New("collections: duplicate document id in batch")
-	ErrIndexNotFound       = errors.New("collections: index not found")
-	ErrUniqueIndexConflict = errors.New("collections: unique index conflict")
-	ErrConcurrentMutation  = errors.New("collections: concurrent mutation")
+	ErrCollectionNotFound    = errors.New("collections: collection not found")
+	ErrDocumentExists        = errors.New("collections: document already exists")
+	ErrDuplicateDocumentID   = errors.New("collections: duplicate document id in batch")
+	ErrIndexNotFound         = errors.New("collections: index not found")
+	ErrUniqueIndexConflict   = errors.New("collections: unique index conflict")
+	ErrConcurrentMutation    = errors.New("collections: concurrent mutation")
+	ErrDurabilityUnavailable = errors.New("collections: durability unavailable")
+	ErrCommitAmbiguous       = errors.New("collections: commit ambiguous")
+	ErrRecoveryRequired      = errors.New("collections: recovery required")
 
 	errBSONIDMutation                          = errors.New("collections: update replacement cannot modify _id")
 	errCollectionManagerNil                    = errors.New("collections: collection manager is nil")
@@ -91,6 +94,42 @@ var (
 		collectionPprofOperationKey, collectionPprofIndexedAsyncFlushRun,
 	)
 )
+
+// CommitAmbiguousError reports that a collection mutation reached its logical
+// commit point before a later visibility, flush, checkpoint, response, or
+// bookkeeping step failed. The operation may already be visible or recoverable;
+// callers should not blindly retry non-idempotent mutations.
+type CommitAmbiguousError struct {
+	Operation string
+	Err       error
+}
+
+func (e *CommitAmbiguousError) Error() string {
+	if e == nil {
+		return ErrCommitAmbiguous.Error()
+	}
+	if e.Operation == "" {
+		if e.Err == nil {
+			return ErrCommitAmbiguous.Error()
+		}
+		return ErrCommitAmbiguous.Error() + ": " + e.Err.Error()
+	}
+	if e.Err == nil {
+		return ErrCommitAmbiguous.Error() + ": " + e.Operation
+	}
+	return ErrCommitAmbiguous.Error() + ": " + e.Operation + ": " + e.Err.Error()
+}
+
+func (e *CommitAmbiguousError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func (e *CommitAmbiguousError) Is(target error) bool {
+	return target == ErrCommitAmbiguous
+}
 
 // UpdateBatchItem describes one document update in a batch. DocumentID must be
 // non-empty and unique within the batch. Update receives the current stored
@@ -2080,6 +2119,12 @@ func (unlock collectionMutationUnlock) Unlock() {
 	unlock.domain.observeMutationLock(unlock.wait, hold)
 }
 
+// CreateCollection publishes a collection catalog entry.
+//
+// Current implementations publish metadata through backend roots before
+// success. Under the collection WAL target contract, success remains
+// process-crash recoverable under WAL-on modes and is not an fsync guarantee
+// unless composed with a sync-capable barrier.
 func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionMeta, error) {
 	if m == nil {
 		return nil, errCollectionManagerNil
@@ -2311,6 +2356,12 @@ func (c *Collection) cachedCatalogIdentity() (name string, systemRoot, commitSeq
 	return c.meta.Name, c.catalogSystemRoot, c.catalogCommitSeq
 }
 
+// CreateIndex creates and backfills one secondary index as a schema barrier.
+//
+// Current implementations drain pending writes before planning the backfill.
+// Under the collection WAL target contract, success means the index descriptor
+// and backfilled roots are atomically recoverable; unique conflicts remain
+// pre-commit errors that expose no partial index state.
 func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 	if c == nil {
 		return nil, errCollectionNil
@@ -2525,6 +2576,13 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 	return newMeta.copy(), nil
 }
 
+// Insert adds one document and returns the stored document ID.
+//
+// Current durability is mode/path dependent; see docs/spec/contracts.md. Under
+// the collection WAL target contract, WAL-on success is process-crash
+// recoverable but not necessarily published, checkpointed, or fsynced. WAL-off
+// relaxed success remains process-local until Flush, FlushAll, Checkpoint, or
+// Close covers the write.
 func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if c == nil {
 		return nil, errCollectionNil
@@ -6218,6 +6276,11 @@ func (c *Collection) insertOneViaBatch(id, document []byte) ([]byte, error) {
 	return ids[0], nil
 }
 
+// InsertBatch adds a batch of documents and returns the stored document IDs.
+//
+// Under the collection WAL target contract, WAL-on success makes the whole
+// batch recoverable as one mutation boundary. Ordinary pre-commit errors expose
+// no partial batch. Post-commit failures must be reported as commit-ambiguous.
 func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	return c.insertBatch(ids, documents, false)
 }
@@ -6767,6 +6830,12 @@ func (c *Collection) insertBatchNoIndex(
 	return resultIDs, nil
 }
 
+// Delete removes one document. See DeleteDocument for the matched/deleted
+// result.
+//
+// Under the collection WAL target contract, WAL-on success is process-crash
+// recoverable; WAL-off relaxed success is not durable-at-ack until an explicit
+// persistence boundary covers the write.
 func (c *Collection) Delete(documentID []byte) error {
 	_, err := c.DeleteDocument(documentID)
 	return err
@@ -6810,6 +6879,10 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 // root publish and returns the number of existing documents removed. Missing
 // documents are ignored. Duplicate IDs in the request are rejected so callers do
 // not depend on ordered same-ID semantics.
+//
+// Under the collection WAL target contract, WAL-on success makes the whole
+// delete batch recoverable as one mutation boundary. Pre-commit errors expose no
+// partial batch; post-commit failures must be commit-ambiguous.
 func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 	if c == nil {
 		return 0, errCollectionNil
@@ -7182,6 +7255,11 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 // updates, update may run on an internal combiner goroutine. The callback must
 // not rely on caller goroutine behavior such as recover, runtime.Goexit, or
 // testing.T.Fatal.
+//
+// Under the collection WAL target contract, WAL-on success is process-crash
+// recoverable. Retry after timeout or commit-ambiguous failure is safe only when
+// the update function is idempotent or protected by an application-level guard
+// or durable idempotency key.
 func (c *Collection) Update(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
 	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
 		return false, false, err
@@ -7238,6 +7316,11 @@ func (c *Collection) updateDirect(documentID []byte, update func(current []byte)
 // mutation. Missing documents report Matched=false. Duplicate document IDs are
 // rejected so callers that require same-document ordering can fall back to
 // sequential Update calls.
+//
+// Under the collection WAL target contract, WAL-on success makes the whole
+// batch recoverable as one mutation boundary. Item/callback errors are
+// pre-commit unless explicitly documented otherwise and must expose no partial
+// batch. Post-commit failures must be commit-ambiguous for the whole batch.
 func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, error) {
 	results, _, err := c.updateBatch(items, updateBatchModeAny)
 	return results, err

@@ -330,11 +330,30 @@ Initial response metadata fields:
 ```text
 actual_ack_policy        uvarint optional
 actual_consistency       uvarint optional
+commit_state             uvarint optional
+durability_mode          uvarint optional
 commit_seq              uvarint optional
 catalog_version         uvarint optional
 applied_log_index       uvarint optional
 serving_node_id         bytes optional
 leader_node_id          bytes optional
+```
+
+`commit_state` values:
+
+```text
+0 unknown
+1 not_committed
+2 committed_recoverable
+3 committed_or_unknown_after_commit
+```
+
+`durability_mode` values:
+
+```text
+1 durable
+2 wal_on_relaxed
+3 wal_off_relaxed
 ```
 
 Single-node implementations may omit cluster fields. Cluster implementations
@@ -581,6 +600,13 @@ with the same canonical command digest MUST return the prior outcome. Reuse with
 a different digest MUST fail with `idempotency_conflict`. Transport `request_id`
 MUST NOT participate in this identity.
 
+Single-node mutation retries are not exactly-once unless the server persists a
+durable idempotency record with the logical mutation outcome. If a client times
+out or disconnects after commit but before response, retry may observe duplicate
+document IDs or unique-index conflicts from the prior commit. Non-idempotent
+updates must be guarded by application-level version/compare predicates or a
+durable idempotency key before clients can treat blind retry as safe.
+
 Mutation responses SHOULD include:
 
 ```text
@@ -687,24 +713,22 @@ mutation:
 ```
 
 `visible` means the mutation is visible to reads through the serving process or
-owning write domain. Whether this is crash-durable depends on the configured
-storage durability mode. For collection writes under WAL-on modes after the
-collection WAL contract lands, `visible` still waits for local collection WAL
-recoverability. Under WAL-off relaxed mode, it is process-local visibility only.
+owning write domain. For WAL-on collection modes this also requires local
+collection WAL recoverability. For WAL-off relaxed mode this is process-local
+visibility only.
 
-`flushed` means collection write-domain state has been published to backend
-roots for that collection or all touched roots. For collection WAL-backed
-writes, the collection WAL applied watermark for those transactions must
-advance in the same backend commit.
+`flushed` means all touched collection state for the command has been published
+to backend roots, and WAL-backed transactions have their applied watermark
+advanced in the same backend commit.
 
-`synced` means the operation reached the strongest local durability boundary
-available under the server's configured TreeDB durability mode.
+`synced` means `flushed` plus an fsync-capable local durability boundary. A
+server running a mode that cannot provide fsync for the touched state MUST fail
+with `durability_unavailable`; it must not reinterpret `synced` as a relaxed
+checkpoint.
 
-`raft_committed` is reserved for distributed mode. It means the deterministic
-command entry has been committed by consensus and the responding node has
-satisfied the cluster's defined local apply/recoverability rule. It is not
-satisfied by local collection WAL alone and it is not encoded into the
-deterministic command entry.
+`raft_committed` is reserved for distributed mode. It means consensus commit
+plus the cluster-defined local apply/recoverability rule. It is not local WAL
+append and is not part of deterministic command identity.
 
 If `ack_policy` is absent, the server uses its advertised default. The initial
 single-node native server SHOULD default to `visible`, but clients that need a
@@ -717,6 +741,20 @@ Local policies are ordered only within the local family:
 `visible < flushed < synced`. `raft_committed` is a named cluster policy and
 must not be treated as a numeric extension of local durability ordering unless a
 future cluster spec explicitly defines the implied local durability level.
+
+If validation succeeds but collection WAL append fails before the commit marker,
+the server returns `durability_unavailable`, `retryable=true`,
+`commit_state=not_committed`, and the mutation must not be visible.
+
+If the commit marker reached the required local boundary but visible install,
+flush, publication, checkpoint, or response construction fails, the server
+returns `commit_ambiguous`, `retryable=false` unless a durable idempotency record
+makes replay safe, and `commit_state=committed_or_unknown_after_commit`.
+
+If a command requested `ack_policy=flushed` or `ack_policy=synced` and the
+logical mutation committed but the requested barrier failed, the error must
+still expose the post-commit state. It must not look like an ordinary mutation
+rejection.
 
 Read `consistency_policy` values:
 
@@ -773,6 +811,7 @@ Initial error classes:
 20 cursor_not_found
 21 catalog_changed
 22 idempotency_conflict
+23 commit_ambiguous
 ```
 
 Errors that map to current collection duplicate-key conditions SHOULD preserve a
