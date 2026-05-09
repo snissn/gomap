@@ -31,6 +31,11 @@ durable cleanup metadata before missing collection WAL segments can be treated
 as safely cleaned. `WALLSN` is not a replay skip key; recovery skips only by
 durable per-collection applied sequence watermarks.
 
+The operator restorable file set, live backup barrier, and restore validation
+procedure are defined in `TreeDB/docs/spec/backup-restore.md`. A live
+filesystem-level copy without that barrier is unsupported once collection WAL
+side refs can exist.
+
 ## 2. Index Page Basics
 
 ### 2.1 Fixed page size

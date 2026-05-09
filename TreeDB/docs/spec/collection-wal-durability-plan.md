@@ -2129,6 +2129,50 @@ Crash/recovery rules:
 | After durable cleanup metadata covers range | `S6 Cleaned` | Missing segment is acceptable only for covered range. |
 | Complete WAL with missing/corrupt required side ref | Corrupt or quarantinable | Stop open or explicitly quarantine affected collection; do not skip later same-collection txns. |
 
+Collection WAL side-ref lifecycle:
+
+```text
+S0 Absent
+  No complete committed collection WAL frame exists.
+
+S1 PreparedSideRefs
+  Side bytes may exist. No committed frame references them.
+  Protected by the side-ref prepare guard.
+  Backup: include only if referenced by a backup manifest, otherwise classify.
+  Maintenance: must not delete until classified.
+
+S2 WALCommitted
+  Commit marker and transaction checksum are valid.
+  Required side refs are recovery roots.
+  Backup: include WAL segment/range plus every required side ref.
+  Maintenance: GC/rewrite/cleanup must retain or skip every required side ref.
+
+S3 MaterializedUnpublished
+  Recovery/live publish has built pages/files but has not committed descriptors
+  plus applied watermark.
+  Backup/maintenance: treat as S2 unless the publish commit is observed.
+
+S4 Applied
+  One backend commit atomically published root descriptors and applied
+  collection watermarks.
+  Maintenance: still retain WAL-only side-ref protection until checkpoint and
+  reachability handoff.
+
+S5 Cleanable
+  S4 plus durable backend checkpoint/meta boundary plus root reachability
+  tracker/full scan has incorporated the published roots.
+  Cleanup: may write durable cleanup records and release WAL-only protection.
+
+S6 Cleaned
+  Durable cleanup metadata covers the segment/range and directory fsync
+  completed. Missing covered collection WAL segments are acceptable.
+
+Q Quarantined
+  Prepared/final side file is proven not referenced by any committed WAL,
+  published root, snapshot, read view, or backup manifest. IDs remain reserved
+  until purge is durable.
+```
+
 Cleanup rule:
 
 ```text
@@ -2145,6 +2189,28 @@ for each transaction t in segment:
   and cleanup metadata will be durable before the segment may be missing
 
 Global segment MaxWALLSN may speed scanning, but it is not proof of cleanup.
+
+A collection WAL segment, collection WAL transaction, or WAL-only side-ref
+protection is safe to delete/release only when all are true:
+
+1. every complete transaction in the candidate segment/range is covered by the
+   per-collection applied sequence watermark;
+2. descriptor updates and applied watermark updates were committed atomically;
+3. the backend checkpoint/meta boundary containing those descriptors/watermarks
+   is durable for the selected mode;
+4. value-log, leaf-log, column-file, dictionary, and template reachability
+   tracking has incorporated the published roots, or a full reachability scan
+   completed under the collection WAL maintenance barrier;
+5. no live backend snapshot, collection read view, pending publish unit, or
+   backup manifest token can reference the old or WAL-only side refs;
+6. durable cleanup metadata for the exact segment/range has been written and
+   fsynced;
+7. directory fsync after unlink/rename has completed where the platform
+   requires it.
+
+Segment cleanup must decode each candidate segment and prove coverage for every
+complete transaction. Segment max `WALLSN`, max `CollectionSeq`, or a global
+high watermark alone is not sufficient.
 ```
 
 Root descriptors published without the matching applied watermark are not a

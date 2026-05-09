@@ -463,6 +463,36 @@ Required collection WAL hardening fixtures and tests:
 - `TestCollectionWALMetricsUseUIDAndHashesNotNames`;
 - `TestForensicToolRawOutputRequiresExplicitFlag`.
 
+Required collection WAL maintenance, backup, restore, and offline precondition
+tests:
+
+- `TestCollectionWALValueLogGCSkipsWALOnlySideRef`;
+- `TestCollectionWALValueLogRewriteSkipsProtectedWALOnlySource`;
+- `TestCollectionWALCompactStorageAbortsOnCheckpointDebt`;
+- `TestCollectionWALSideRefPrepareGuardBlocksGCWindow`;
+- `TestCollectionWALLeafGenerationGCKeepsPendingLeafRef`;
+- `TestCollectionWALVacuumOnlinePublishesOrRejectsDirtyWAL`;
+- `TestCollectionWALBackupBarrierCleanCheckpointRestoresWithoutWALDebt`;
+- `TestCollectionWALBackupBarrierWALSnapshotRestoresPendingTxn`;
+- `TestCollectionWALFilesystemBackupWithoutBarrierUnsupported`;
+- `TestCollectionWALBackupIncludesValueLeafDictTemplateAndColumnSideRefs`;
+- `TestCollectionWALRestoreFailsWhenWALTxnMissingSidePayload`;
+- `TestCollectionWALRestoreAcceptsMissingCleanedSegmentOnlyWithCleanupManifest`;
+- `TestReadOnlyOpenRejectsUnappliedCollectionWAL`;
+- `TestReadOnlyOpenAllowsCleanCollectionWAL`;
+- `TestReadOnlyStaleModeReportsDebtAndIsRejectedByMaintenance`;
+- `TestOpenReadOnlyNoLockRejectsDirtyCollectionWALForOfflineRewrite`;
+- `TestValueLogRewriteOfflineRejectsDirtyCollectionWAL`;
+- `TestVacuumIndexOfflineRejectsDirtyCollectionWAL`;
+- `TestOfflineMaintenanceRejectsUnclassifiedPreparedSideRefs`;
+- `TestOfflineMaintenanceAllowsCleanedCollectionWALWithManifest`;
+- `TestCollectionWALCheckpointPublishesBeforeCleanup`;
+- `TestCollectionWALCleanupRequiresDurableCheckpointBoundary`;
+- `TestCollectionWALSegmentCleanupDecodesEveryFrame`;
+- `TestCollectionWALCleanupDoesNotReleaseProtectionBeforeReachabilityHandoff`;
+- `TestCollectionWALPreparedUncommittedSideFilesQuarantinedAfterRestore`;
+- `TestCollectionWALQuarantinePurgeRequiresCheckpoint`.
+
 Required non-mutating collection WAL CLI tooling:
 
 - `treemap collection-wal health --dir <db> --json` reports `db_dir_hash`,

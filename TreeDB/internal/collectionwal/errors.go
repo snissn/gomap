@@ -13,4 +13,5 @@ var (
 	ErrCollectionWALIdentityMismatch   = errors.New("collectionwal: identity mismatch")
 	ErrCollectionWALSequenceGap        = errors.New("collectionwal: sequence gap")
 	ErrCollectionWALRedacted           = errors.New("collectionwal: redacted")
+	ErrCollectionWALRecoveryRequired   = errors.New("collectionwal: recovery required")
 )

@@ -75,6 +75,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - open-time recovery pipeline, replay ordering, truncated tail behavior, failure modes.
 - `TreeDB/docs/spec/value-log-lifecycle.md`
   - retention, GC, rewrite, and operational lifecycle of value-log segments.
+- `TreeDB/docs/spec/backup-restore.md`
+  - restorable file set, live backup barrier, restore validation, and
+    quarantine/purge requirements for collection WAL side refs.
 - `TreeDB/docs/spec/verification.md`
   - invariants mapped to tests and benchmark harnesses.
 

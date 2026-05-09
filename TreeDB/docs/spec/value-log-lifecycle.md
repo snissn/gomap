@@ -59,7 +59,47 @@ value-log record, GC and rewrite must retain that record even if the collection
 WAL transaction has already been applied and WAL-only protection is otherwise
 eligible for release.
 
-### 3.1 Collection WAL Operator Runbook
+### 3.1 Collection WAL Maintenance Barrier
+
+Every physical maintenance operation that can delete, rewrite, move, truncate,
+rename, or stop protecting value-log, leaf-log, side-payload, column,
+dictionary, or template bytes must acquire the backend collection WAL
+maintenance barrier before computing candidates.
+
+The barrier must:
+
+1. wait for active side-ref prepare guards to either commit/protect or
+   abort/classify;
+2. rebuild or refresh the protected side-ref index if recovery has not already
+   done so;
+3. return an immutable protection snapshot containing WAL-only refs, read-view
+   refs, pending publish refs, unclassified prepare groups, and active backup
+   manifest refs;
+4. hold a retention token until the operation has finished all destructive
+   steps.
+
+If the barrier cannot be acquired or recovery/protection state is incomplete,
+maintenance must fail closed. Dry-run may report debt but must not delete.
+
+Operation-specific rules:
+
+| Operation | Collection WAL precondition |
+|---|---|
+| `ValueLogGC` | Merge protected collection WAL value-log file IDs into the referenced set. A protected segment is not eligible even when no published root references it. |
+| `ValueLogRewriteOnline` | Source records protected solely by collection WAL must be skipped in PR1. Rewriting and patching collection WAL refs is forbidden until a separate crash-tested redirect protocol exists. |
+| `LeafGenerationGC` | Leaf-log generations referenced by collection WAL or collection read views are live generations. |
+| online index vacuum | Require collection WAL debt zero for the roots being rewritten, or publish/checkpoint dirty collection WAL first. A future root-remap maintenance WAL transaction may relax this only with crash tests. |
+| offline index vacuum | Reject dirty collection WAL and unclassified prepared side refs before read-only open. |
+| `CompactStorage` | The initial checkpoint must be collection-aware. If it reports collection WAL debt, compaction must abort before value-log rewrite, GC, leaf GC, index vacuum, or zero-byte cleanup. |
+| zero-byte cleanup | Check protected side-ref index and backup manifest pins before unlinking. |
+
+Maintenance lock order is: acquire backend `maintenanceMu`, acquire the
+collection WAL maintenance barrier, take the immutable protection snapshot and
+retention token, compute candidates, perform the destructive phase, then release
+the token. No collection WAL append lock may be held while acquiring backend
+publish locks.
+
+### 3.2 Collection WAL Operator Runbook
 
 Operators must use `treemap collection-wal health --json` before manual cleanup,
 backup triage, compaction triage, or restart triage for a directory that has
@@ -83,7 +123,7 @@ blocked by collection WAL side refs. Required collection WAL blocker fields are
 `protected_side_ref_logical_bytes`, and
 `protected_side_ref_retained_segment_bytes`.
 
-### 3.2 Incremental Accounting Fast Path
+### 3.3 Incremental Accounting Fast Path
 
 TreeDB maintains commit-time reference counters per value-log segment.
 

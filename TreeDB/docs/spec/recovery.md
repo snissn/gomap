@@ -147,11 +147,15 @@ Collection WAL decoder outcomes are distinct from commit-log outcomes:
 
 | Outcome | Recovery behavior |
 |---|---|
-| `CompleteSupported` | validate side refs and replay, or skip only by collection watermark |
-| `IncompleteTerminalTail` | ignore only if terminal active segment and no later non-cleaned segment exists |
-| `UnsupportedRequiredVersion` | fail closed; durable acknowledged writes may be present |
+| `CompleteValid` | validate side refs and replay, or skip only by collection watermark |
+| `CompleteCorrupt` | fail closed; a complete bad checksum/digest/closure is not a tail |
+| `TerminalIncompleteTail` | ignore only if terminal active segment and no later non-cleaned segment exists |
+| `NonTerminalShortRead` | fail closed |
+| `UnsupportedVersion` | fail closed; durable acknowledged writes may be present |
 | `UnsupportedSkippableRecord` | skip only when record feature bits and cleanup metadata permit |
-| `HardCorruption` | fail closed |
+| `MissingSegment` | fail closed unless durable cleanup metadata covers the segment/range |
+| `DuplicateWALLSN` | fail closed |
+| `DuplicateCollectionSeq` | fail closed |
 | `MaliciousLength` | fail closed before allocation |
 | `MixedVersionSegment` | fail closed unless an explicit migration reader supports both versions |
 
@@ -294,7 +298,73 @@ native-wire servers, or user collection handles can observe collection state.
 Read-only open must fail with recovery-required if unapplied committed
 collection WAL exists, unless an explicit stale read-only mode is added.
 
-## 6. Post-Recovery Expectations
+## 6. Restore and Backup-Manifest Validation
+
+Restore/open validation before serving reads:
+
+1. recover index swap artifacts;
+2. load backup manifest if present;
+3. discover collection WAL segments and cleanup metadata;
+4. validate missing collection WAL segments only when covered by durable cleanup
+   metadata or by the backup manifest's cleaned-range proof;
+5. rebuild the protected side-ref index from all committed non-cleaned
+   collection WAL;
+6. for every committed transaction not covered by applied watermark plus
+   cleanup:
+   - validate frame checksum and transaction checksum;
+   - validate `CollectionUID`, generation, schema epoch, catalog digest, and
+     root epochs;
+   - decode embedded root deltas/descriptors and derive the canonical side-ref
+     set;
+   - compare canonical side refs to declared `SideRefs`;
+   - verify every side ref exists, has expected size/checksum/class, and has
+     dictionary/template/column dependency closure;
+7. stop open before serving reads on any missing or corrupt required side ref;
+8. publish descriptors and applied watermarks atomically for unapplied
+   transactions;
+9. classify uncommitted prepared/final side files;
+10. quarantine, but do not immediately purge, files proven orphaned.
+
+Backup/restore validation must fail closed on missing side refs. A restore may
+accept a missing collection WAL segment only when durable cleanup metadata or
+the backup manifest proves the exact segment/range was safely cleaned.
+
+## 7. Read-Only Open
+
+Read-only open must not perform mutating collection WAL replay.
+
+Before exposing state, read-only open must scan collection WAL segment metadata,
+cleanup metadata, and applied watermarks enough to determine whether any
+complete committed collection WAL transaction is not covered by the durable
+applied watermark/cleanup boundary.
+
+Default behavior:
+
+- if dirty committed collection WAL exists, return public
+  `ErrRecoveryRequired` with a collection-WAL recovery reason.
+
+Read-only stale mode:
+
+- a future explicit option may expose only checkpointed roots;
+- the option name must include `Stale`;
+- it must report collection WAL debt;
+- it must be rejected by backup, restore validation, and offline maintenance
+  tools.
+
+## 8. Offline Maintenance Preconditions
+
+Offline value-log rewrite, offline index vacuum, and any offline compaction or
+root rewrite must prove collection WAL cleanliness before opening the DB
+read-only as a maintenance source. Clean means no committed unapplied
+collection WAL, no uncleaned committed collection WAL segment needed for
+recovery, no active/incomplete prepare group whose committed/uncommitted status
+is unclassified, and durable cleanup metadata for any missing segment.
+
+Offline tools may alternatively run full read-write recovery first, then reopen
+the clean directory for maintenance. They must not proceed using stale
+read-only roots.
+
+## 9. Post-Recovery Expectations
 
 After successful open:
 
@@ -303,7 +373,7 @@ After successful open:
 - value-log files used by pointers remain present,
 - future writes proceed on freshly rotated active segments.
 
-## 7. Recovery Invariants
+## 10. Recovery Invariants
 
 1. Replay order for equal keys must honor commit sequence ordering semantics.
 2. RID join (when present) must be exact; no synthetic value reconstruction is permitted.

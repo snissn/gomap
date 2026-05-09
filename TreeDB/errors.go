@@ -14,6 +14,9 @@ var (
 
 	// ErrClosed indicates the DB handle has been closed.
 	ErrClosed = db.ErrClosed
+	// ErrRecoveryRequired indicates the DB must be opened read-write for recovery
+	// before the requested read-only or offline-maintenance operation can run.
+	ErrRecoveryRequired = db.ErrRecoveryRequired
 
 	// ErrKeyNotFound indicates the key does not exist.
 	ErrKeyNotFound = tree.ErrKeyNotFound

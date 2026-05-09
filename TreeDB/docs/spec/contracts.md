@@ -219,6 +219,9 @@ When opened read-only:
 - no background maintenance mutates on-disk state.
 - if committed unapplied collection WAL exists, read-only open must fail with
   `ErrRecoveryRequired` unless an explicit stale read-only mode is selected.
+- stale read-only mode, if added, must be explicitly named stale, must report
+  collection WAL debt, and must be rejected by backup and offline maintenance
+  entry points.
 
 ## 9. Collections Native Fast Path
 
