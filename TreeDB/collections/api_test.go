@@ -993,6 +993,15 @@ func TestCollectionUpdateStructuredApplyStatsSnapshotAndAdd(t *testing.T) {
 	}
 }
 
+func TestUpdateBatchStatsSinceClampsSubResolutionDurations(t *testing.T) {
+	if got := updateBatchStatsSince(false, time.Now().Add(time.Second)); got != 0 {
+		t.Fatalf("disabled stats duration=%s want 0", got)
+	}
+	if got := updateBatchStatsSince(true, time.Now().Add(time.Second)); got != time.Nanosecond {
+		t.Fatalf("sub-resolution stats duration=%s want 1ns", got)
+	}
+}
+
 func TestCollectionUpdateCombineTimingStatsSnapshotAndAdd(t *testing.T) {
 	domain := &collectionWriteDomain{}
 	domain.observeUpdateCombineInline()
