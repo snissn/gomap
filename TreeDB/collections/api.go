@@ -9813,11 +9813,20 @@ func (c *Collection) validateUpdateBatchPlanRootDescriptors(plan *updateBatchPla
 	return c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs)
 }
 
-func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts collectionOptions, canBuffer bool, mode updateBatchMode) bool {
-	if c == nil || c.writeDomain == nil || !canBuffer || mode == updateBatchModeAny {
+func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts collectionOptions, canBuffer bool, mode updateBatchMode, runtimes []indexRuntime, changed []preparedBatchUpdate) bool {
+	if c == nil || c.writeDomain == nil {
 		return false
 	}
 	if !meta.Options.BufferedIndexedWrites || len(meta.Indexes) == 0 {
+		return false
+	}
+	if mode == updateBatchModeAny && collectionMetaHasSecondaryUniqueIndex(meta) {
+		if updateBatchChangesSecondaryUniqueIndex(runtimes, changed) {
+			return false
+		}
+		canBuffer = true
+	}
+	if !canBuffer {
 		return false
 	}
 	return !persistIndexStateForOptions(opts)
@@ -10042,8 +10051,11 @@ func (c *Collection) withMutationLock(fn func() error) error {
 }
 
 func (c *Collection) shouldPlanUpdateBatchWithBufferedWrites(mode updateBatchMode) bool {
-	if c == nil || c.writeDomain == nil || mode == updateBatchModeAny {
+	if c == nil || c.writeDomain == nil {
 		return false
+	}
+	if mode == updateBatchModeAny {
+		return true
 	}
 	domain := c.writeDomain
 	domain.mu.RLock()
@@ -10345,7 +10357,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	var bufferedTemplateRuns []memtable.Table
 	defer func() { resetCollectionTables(bufferedTemplateRuns) }()
 	bufferedReadBlocked := false
-	if domain := c.writeDomain; useBufferedRead && domain != nil && mode != updateBatchModeAny {
+	if domain := c.writeDomain; useBufferedRead && domain != nil {
 		var staleBufferedSnapshot bool
 		bufferedRead, bufferedTemplateRuns, bufferedReadBlocked, staleBufferedSnapshot, err = snapshotUpdateBatchBufferedRead(domain, meta, baseCommitSeq, baseSystemRoot, items, plannerOptions.documentFormat)
 		if err != nil {
@@ -10645,7 +10657,8 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	stats.UniqueIndexPreflight += updateBatchStatsSince(detailedStats, phaseStart)
 
 	success := false
-	if c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode) {
+	canBufferDirectUpdateBatch := c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode, runtimes, changed)
+	if canBufferDirectUpdateBatch {
 		phaseStart = updateBatchStatsNow(detailedStats)
 		var templateEntries []directBufferedRootEntry
 		if len(templateRecords) > 0 {
@@ -10715,7 +10728,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 			rootNames:                   rootNames,
 			baseRootIDs:                 baseRootIDs,
 			uniqueSecondaryIndexByRoot:  uniqueSecondary,
-			canBufferIndexedUpdateBatch: canBufferIndexedUpdateBatch,
+			canBufferIndexedUpdateBatch: canBufferDirectUpdateBatch,
 			bufferedBase:                bufferedRead.enabled,
 			bufferedReadGeneration:      bufferedRead.writeGeneration,
 			bufferedReadBlocked:         bufferedReadBlocked,
