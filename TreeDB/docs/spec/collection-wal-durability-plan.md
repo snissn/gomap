@@ -2404,6 +2404,9 @@ Deliverables:
 - `SystemDeltaTemplate` and descriptor-op encoding;
 - segment metadata and cleanup record encoding;
 - exact byte-format documentation in `storage-format.md`;
+- typed `CollectionWALError` categories and minimal
+  `CollectionWALStats.Snapshot()` counters/gauges for append, pending,
+  protected side refs, recovery, cleanup debt, and value-log GC blockers;
 - stable root-delta encode/decode APIs independent of transient in-memory
   `batch.Batch` layout.
 
@@ -2420,10 +2423,14 @@ Tests:
 - replay digest tests;
 - descriptor-op placeholder instantiation tests;
 - cleanup metadata and missing-segment classification tests.
+- metrics emitted for append success, append failure, recovery skip, recovery
+  hard failure, and cleanup failure.
 
 Gate:
 
 - format package has no dependency on collection planners or backend DB.
+- minimal PR1 metrics and error categories from Section 17 are present before
+  any WAL-on collection write path is merged.
 
 ### Milestone 2: Root Delta and Side-Ref Fences
 
@@ -2661,6 +2668,8 @@ Deliverables:
 - required recovery benchmarks implemented;
 - benchmark runner writes artifacts under `artifacts/collection-wal/`;
 - metrics from Section 12 are emitted for each benchmark row;
+- metric presence tests prove every required Section 17 metric and benchmark
+  artifact field is emitted with stable names;
 - baseline/new `benchstat` output is attached to the acceptance artifact.
 
 Gate:
@@ -2920,33 +2929,171 @@ Column store:
 
 ## 17. Production Observability
 
-Expose metrics and structured logs for:
+Collection WAL observability is part of the durability contract. Operators must
+be able to answer, without parsing raw WAL bytes by hand:
 
-- collection WAL appended transactions, bytes, flush/sync latency, and failed
-  appends;
-- oldest unapplied transaction age and bytes by `CollectionUID`;
-- written `WALLSN`, per-collection applied watermark, and global contiguous
-  cleanup watermark when present;
-- recovery replay count, skipped-tail count, missing side-ref errors, checksum
-  failures, duplicate `WALLSN` failures, and duplicate `(CollectionUID,
-  CollectionSeq)` failures;
-- side refs protected by class, count, bytes, and oldest age;
-- GC bytes blocked by collection WAL side refs;
-- checkpoint blocked time due to pending collection WAL;
-- committed-but-not-staged return count;
-- direct-path writes that used collection WAL versus an equivalent durable
-  fence;
-- recovery accumulator groups, transactions per group, and base-root mismatch
-  failures;
-- read-only opens refused due to pending collection WAL;
-- column side-file prepared, referenced, reachable, quarantined, and deleted
-  counts;
-- overlay and column maintenance WAL transactions and cleanup lag.
+- what is durable;
+- what is pending;
+- what side refs are protected;
+- what blocks GC or cleanup;
+- which transaction failed or was skipped;
+- which files are safe to delete.
 
-Structured log fields should include `wallsn`, `collection_uid`,
-`collection_name`, `collection_generation`, `schema_epoch`, `root_names`,
-`base_root_ids`, `new_root_ids`, `side_ref_class`, `file_id`, `offset`, `size`,
-`checksum`, `durability_mode`, and `watermark_after`.
+All collection WAL metrics must be exposed through:
+
+1. internal `CollectionWALStats.Snapshot()`;
+2. `DB.Stats()`;
+3. caching-layer `Stats()`;
+4. expvar under the existing `treedb` expvar object;
+5. native-wire stats responses;
+6. `treemap collection-wal health --json`;
+7. benchmark artifacts where applicable.
+
+Metric names are stable API. Monotonic process-local counters must end in
+`_total`. Current gauges must end in `_current`, `_age_ms`, `_lag_*_current`, or
+`_last_*`. Counters reset on process restart unless explicitly documented as
+persisted. Gauges may decrease after apply, checkpoint, cleanup, or reopen.
+
+Required aggregate metrics:
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `treedb.collection_wal.append.txns_total` | counter | transactions appended |
+| `treedb.collection_wal.append.docs_total` | counter | logical documents covered by appended transactions |
+| `treedb.collection_wal.append.bytes_total` | counter | encoded WAL bytes appended |
+| `treedb.collection_wal.append.side_refs_total` | counter | required side refs appended |
+| `treedb.collection_wal.append.latency_ns_total` | counter | total append latency |
+| `treedb.collection_wal.append.flush_ns_total` | counter | total side/WAL flush latency |
+| `treedb.collection_wal.append.sync_ns_total` | counter | total sync latency |
+| `treedb.collection_wal.append.failures_total` | counter | append failures |
+| `treedb.collection_wal.append.failures.<category>_total` | counter | append failures by stable category |
+| `treedb.collection_wal.pending.txns_current` | gauge | unapplied transactions required for recovery |
+| `treedb.collection_wal.pending.docs_current` | gauge | documents covered by pending transactions |
+| `treedb.collection_wal.pending.bytes_current` | gauge | pending WAL bytes |
+| `treedb.collection_wal.pending.side_refs_current` | gauge | pending required side refs |
+| `treedb.collection_wal.pending.oldest_age_ms` | gauge | age of oldest pending transaction |
+| `treedb.collection_wal.segment.open_current` | gauge | open collection WAL segments |
+| `treedb.collection_wal.segment.bytes_current` | gauge | bytes retained in collection WAL segments |
+| `treedb.collection_wal.segment.cleanable_current` | gauge | segments proven cleanable |
+| `treedb.collection_wal.segment.blocked_current` | gauge | segments blocked from cleanup |
+| `treedb.collection_wal.side_ref.protected.count_current` | gauge | protected side-ref count |
+| `treedb.collection_wal.side_ref.protected.bytes_current` | gauge | protected side-ref bytes |
+| `treedb.collection_wal.side_ref.protected.oldest_age_ms` | gauge | oldest protected side-ref age |
+| `treedb.collection_wal.side_ref.protected.by_class.<class>.count_current` | gauge | protected side refs by class |
+| `treedb.collection_wal.side_ref.protected.by_class.<class>.bytes_current` | gauge | protected bytes by class |
+| `treedb.collection_wal.applied_watermark.lag_txns_current` | gauge | transaction lag between appended and applied |
+| `treedb.collection_wal.applied_watermark.lag_bytes_current` | gauge | byte lag between appended and applied |
+| `treedb.collection_wal.cleanup.debt.bytes_current` | gauge | retained bytes awaiting safe cleanup |
+| `treedb.collection_wal.cleanup.debt.segments_current` | gauge | retained segments awaiting safe cleanup |
+| `treedb.collection_wal.cleanup.lag_txns_current` | gauge | transactions applied but not cleanup-safe |
+| `treedb.collection_wal.cleanup.lag_bytes_current` | gauge | bytes applied but not cleanup-safe |
+| `treedb.collection_wal.recovery.opens_total` | counter | recovery/open attempts that scanned collection WAL |
+| `treedb.collection_wal.recovery.duration_last_ms` | gauge | last recovery scan/replay duration |
+| `treedb.collection_wal.recovery.duration_ns_total` | counter | total recovery scan/replay duration |
+| `treedb.collection_wal.recovery.replayed_txns_total` | counter | transactions replayed |
+| `treedb.collection_wal.recovery.skipped_tail_txns_total` | counter | incomplete terminal tail skips |
+| `treedb.collection_wal.recovery.skipped_watermark_txns_total` | counter | already-applied watermark skips |
+| `treedb.collection_wal.recovery.blocked_txns_total` | counter | transactions blocked by dependency or guard |
+| `treedb.collection_wal.recovery.failures.<category>_total` | counter | recovery failures by stable category |
+| `treedb.collection_wal.recovery.last_failure_category` | last value | last failure category enum |
+| `treedb.collection_wal.recovery.last_failure_wallsn` | last value | `WALLSN` for last failure |
+| `treedb.collection_wal.recovery.last_failure_collection_seq` | last value | collection sequence for last failure |
+| `treedb.collection_wal.recovery.artifacts_written_total` | counter | recovery artifacts written |
+| `treedb.collection_wal.recovery.artifact_write_failures_total` | counter | recovery artifact write failures |
+| `treedb.collection_wal.value_log_gc.blocked_bytes_current` | gauge | value-log bytes blocked by collection WAL side refs |
+| `treedb.collection_wal.value_log_gc.blocked_segments_current` | gauge | value-log segments blocked by collection WAL side refs |
+| `treedb.collection_wal.value_log_gc.blocked_side_refs_current` | gauge | value-log side refs blocking GC |
+| `treedb.collection_wal.value_log_gc.blocked_by_pending_txns_current` | gauge | transactions blocking value-log GC |
+| `treedb.collection_wal.value_log_gc.blocked_bytes_total` | counter | cumulative bytes observed as GC-blocked |
+| `treedb.collection_wal.quarantine.files_total` | counter | files quarantined |
+| `treedb.collection_wal.quarantine.bytes_total` | counter | bytes quarantined |
+| `treedb.collection_wal.txn_index.entries_current` | gauge | transaction-summary index entries |
+| `treedb.collection_wal.txn_index.bytes_current` | gauge | transaction-summary index bytes |
+| `treedb.collection_wal.txn_index.lookup_failures_total` | counter | transaction lookup failures |
+
+Column side-file classes must appear in the `side_ref.protected.by_class`
+metric family before column-store persistent writes are enabled. Required class
+labels include `ValueLogRecord`, `LeafLogRecord`, `RootDeltaPayload`,
+`ColumnManifest`, `ColumnSubstreamFile`, `ColumnFilterFile`,
+`ColumnDeleteBitmapFile`, `ColumnDictionaryFile`, and `ColumnMetadataFile`.
+
+High-cardinality per-collection metrics may be emitted only by UID hash, never
+by raw collection name:
+
+- `treedb.collection_wal.by_collection.<collection_uid_hash>.pending_txns_current`;
+- `treedb.collection_wal.by_collection.<collection_uid_hash>.pending_bytes_current`;
+- `treedb.collection_wal.by_collection.<collection_uid_hash>.applied_seq_current`;
+- `treedb.collection_wal.by_collection.<collection_uid_hash>.last_wallsn`.
+
+Future Raft-local apply metrics must not overload local collection WAL metrics.
+Reserve separate fields for `local_durable_seq`, `replicated_seq`,
+`locally_applied_seq`, `cluster_committed_seq`, `checkpointed_seq`, and
+`cleanup_eligible_seq`.
+
+Implementations must maintain process-local stats with atomic counters/gauges
+equivalent to:
+
+```text
+CollectionWALStats {
+    append counters: txns_total, docs_total, bytes_total, side_refs_total,
+        latency_ns_total, flush_ns_total, sync_ns_total, failures_total,
+        failures_by_category_total;
+    pending gauges: txns_current, docs_current, bytes_current,
+        side_refs_current, oldest_unix_nano;
+    segment gauges: open_current, bytes_current, cleanable_current,
+        blocked_current;
+    side-ref gauges: protected_count_current, protected_bytes_current,
+        protected_oldest_unix_nano, protected_by_class;
+    watermark gauges: lag_txns_current, lag_bytes_current;
+    cleanup gauges: debt_bytes_current, debt_segments_current,
+        lag_txns_current, lag_bytes_current;
+    recovery stats: opens_total, duration_last_ms, duration_ns_total,
+        replayed_txns_total, skipped_tail_txns_total,
+        skipped_watermark_txns_total, blocked_txns_total,
+        failures_by_category_total, last_failure fields,
+        artifacts_written_total, artifact_write_failures_total;
+    GC blocker stats: blocked_bytes_current, blocked_segments_current,
+        blocked_side_refs_current, blocked_by_pending_txns_current,
+        blocked_bytes_total;
+}
+```
+
+Failure-category maps are initialized from the recovery category enum in
+`recovery.md`; arbitrary error strings must not create metric keys.
+
+Every collection WAL transaction has a stable diagnostic transaction id:
+
+```text
+TxnID = hex(CollectionUID) + ":" + decimal(CollectionSeq)
+```
+
+`TxnID` may be physically stored or derived by tooling, but reports and
+artifacts must include it. `WALLSN` remains the secondary segment-location and
+cleanup-scan diagnostic.
+
+Default logs, metrics, CLI output, and recovery artifacts must not include raw
+document payloads, raw user keys, raw index keys, raw collection names, raw root
+names, absolute host paths, or tenant-sensitive path components. Default output
+may include `CollectionUID`, `collection_uid_hash`, `root_name_hash`, segment
+id, side-ref file id, offset, length, checksum, replay digest, relative path
+hash, and error category. Raw names and paths require an explicit local-only
+flag such as `--show-sensitive`.
+
+Collection WAL stats exported through expvar or native-wire must use
+`db_dir_hash`, `wal_dir_hash`, segment ids, file ids, and relative path hashes.
+Any legacy stats that expose raw local paths remain legacy/local diagnostics and
+must not be used for collection WAL operator reports.
+
+Structured log fields should include `event`, `error_category`, `txn_id`,
+`wallsn`, `collection_uid`, `collection_uid_hash`, `collection_generation`,
+`collection_seq`, `schema_epoch`, `root_name_hashes`, `base_root_ids`,
+`new_root_ids`, `side_ref_class`, `side_ref_file_id`, `side_ref_offset`,
+`side_ref_length`, `checksum_expected`, `checksum_actual`, `durability_mode`,
+`watermark_before`, `watermark_after`, and `redaction`.
+
+Default structured logs must not include `collection_name`, raw `root_names`, or
+absolute paths unless `--show-sensitive` or an equivalent local diagnostic mode
+is enabled.
 
 ## 18. Implementation Notes
 
@@ -2998,6 +3145,24 @@ Module-specific constraints:
   a durable manifest writer with file fsync, rename, parent-directory fsync, and
   WAL-directory fsync after segment unlink. Atomic rename without those fsync
   steps is not enough for missing-segment proof.
+- `TreeDB/internal/collectionwal` owns process-local `CollectionWALStats` and
+  `CollectionWALRecoveryStats` snapshots. Failure-category counters must come
+  from a bounded enum initialized with every category in `recovery.md`, not from
+  arbitrary error strings. `_total` metrics are monotonic within one process;
+  `_current`, `_age_ms`, `_lag_*_current`, and `_last_*` values are reset-safe
+  gauges or diagnostics.
+- `TreeDB/db`, `TreeDB/caching`, expvar, and native-wire stats must expose the
+  same `treedb.collection_wal.*` keys. The expvar whitelist must include the
+  `treedb.collection_wal.` prefix. High-cardinality per-collection values use
+  `collection_uid_hash`, not raw collection names.
+- Collection WAL recovery must write redacted recovery artifacts before
+  deleting, quarantining, rewriting, or marking clean any collection WAL segment
+  or side-ref file. Artifact write failures increment metrics and must not cause
+  cleanup to destroy the only forensic evidence for a hard recovery failure.
+- `treemap collection-wal health`, `safe-delete`, `txn`, and `classify`, plus
+  `verify --read-only --collection-wal --side-refs`, are required
+  non-mutating operator surfaces before WAL-on collection durability can be
+  enabled by default.
 - `TreeDB/collections` owns final physical delta planning before
   acknowledgement. WAL-on collection planners must serialize primary,
   template/index-state, secondary, overlay, delete, schema, and future

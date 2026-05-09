@@ -237,6 +237,25 @@ Required coverage:
 - `TestCollectionWALCheckpointChosenRule`
 - `TestCollectionWALCloseSuccessfulWritesReopenVisible`
 - `TestCollectionWALReadOnlyOpenWithPendingWAL`
+- `TestCollectionWALStatsAppendSuccess`
+- `TestCollectionWALStatsAppendFailureBeforeCommit`
+- `TestCollectionWALStatsExpvarWhitelist`
+- `TestCollectionWALStatsNativeWire`
+- `TestCollectionWALErrorCategoriesStable`
+- `TestCollectionWALRedaction`
+- `TestCollectionWALMetricMonotonicity`
+- `TestRecoveryMissingRequiredSideRefFailsHard`
+- `TestRecoveryCorruptRequiredSideRefFailsHard`
+- `TestRecoveryUnsupportedVersionFailsWithCategory`
+- `TestRecoveryCleanupFailureSafeLeak`
+- `TestCollectionWALHealthCleanGolden`
+- `TestCollectionWALHealthPendingGolden`
+- `TestCollectionWALSafeDeleteDryRunGolden`
+- `TestCollectionWALTxnLookupGolden`
+- `TestVerifyCollectionWALSideRefsGolden`
+- `TestCollectionWALValueLogGCBlockedByPendingSideRef`
+- `TestCollectionWALValueLogGCReleasedAfterWatermarkCheckpoint`
+- `TestCollectionWALArtifactRedaction`
 
 Acceptance artifacts:
 - The collection WAL gate requires exact byte fixtures, not only round-trip
@@ -260,8 +279,81 @@ Acceptance artifacts:
 - Benchmark artifacts must include the storage matrix above, baseline/new
   `benchstat` output, required metric rows from
   `collection-wal-durability-plan.md`, and the pass/fail decision.
+- Benchmark artifacts must include a JSON record with `durability_mode`,
+  `sync_policy`, `segment_size_bytes`, `batch_docs`, `doc_size_bytes`,
+  `side_ref_classes`, `collection_count`, `backend`, `go_version`, and
+  `commit`. Required metric names include `collection_wal_append_ns/doc`,
+  `collection_wal_bytes/doc`, `collection_wal_docs/sec`,
+  `collection_wal_side_refs/doc`, `pending_collection_wal_bytes`,
+  `applied_watermark_lag_txns`, `gc_protected_side_ref_bytes`,
+  `cleanup_ns/segment`, `recovery_docs/sec`,
+  `recovery_root_delta_entries/sec`, `recovery_peak_heap_bytes`, `allocs/doc`,
+  and `bytes_allocated/doc`.
+- Collection WAL observability tests must prove every required metric is emitted
+  on successful append, append failure before commit marker, replay success,
+  incomplete-tail skip, missing side-ref hard failure, and cleanup failure after
+  watermark/checkpoint.
 - Production persistent column-store writes may start only after the M7
   column-store sign-off artifact links to green M1-M6 collection WAL evidence.
+
+Required non-mutating collection WAL CLI tooling:
+
+- `treemap collection-wal health --dir <db> --json` reports `db_dir_hash`,
+  `format_version`, `generated_at_unix_nano`, `overall_state`,
+  `safe_to_restart`, `safe_to_backup`, `safe_to_compact`,
+  `requires_recovery`, `requires_operator_action`, `metrics`, `collections`,
+  `segments`, `pending_transactions`, `protected_side_refs`, `cleanup_debt`,
+  `gc_blockers`, `last_recovery`, and `errors`.
+- `treemap collection-wal safe-delete --dir <db> --json --dry-run` classifies
+  files without mutation. Per-file fields are `file_id`, `relative_path`,
+  `path_hash`, `class`, `bytes`, `status`, `safe_to_delete`, `delete_reason`,
+  `blocking_reason`, `blocking_txn_ids`, `blocking_collection_uid_hashes`,
+  `blocking_side_ref_ids`, `blocking_snapshot_ids`, `requires_checkpoint`,
+  `requires_recovery`, and `requires_quarantine`.
+- `treemap collection-wal txn --dir <db> --txn-id <id> --json` and
+  `treemap collection-wal txn --dir <db> --wallsn <n> --json` map one
+  transaction to `txn_id`, `wallsn`, `segment_id`, `segment_offset`,
+  `collection_uid`, `collection_uid_hash`, `collection_generation`,
+  `collection_seq`, `depends_on_collection_seq`, `schema_epoch`,
+  `catalog_epoch`, `base_root_id`, `base_root_digest`, `root_name_hashes`,
+  `root_delta_count`, `side_refs`, `record_checksum_crc32c`, `replay_digest`,
+  `applied_watermark_seq`, `watermark_state`, `replay_state`, and
+  `cleanup_state`.
+- `verify --dir <db> --read-only --collection-wal --side-refs --json` verifies
+  collection WAL side-ref closure without mutation. JSON fields include
+  `collection_wal_checked`, `roots_checked`, `root_deltas_checked`,
+  `side_refs_declared`, `side_refs_canonical`, `side_refs_present`,
+  `side_refs_missing`, `side_refs_corrupt`, `side_ref_closure_errors`,
+  `watermark_errors`, `cleanup_manifest_errors`, and `result`.
+  It must detect declared/canonical side-ref mismatches, missing side-ref files,
+  checksum/digest mismatches, roots that point past the applied watermark, and
+  cleanup manifests that claim safe deletion while a root or pending WAL
+  transaction still references the side file.
+- `treemap collection-wal classify --dir <db> --json` parses collection WAL
+  segment headers, frames, decoder outcomes, error categories, side-ref
+  summaries, and redacted transaction summaries. The existing `wal_classify`
+  value-log-oriented command must either be renamed to `vlog_classify` or kept
+  explicitly documented as value-log-only to avoid operator confusion.
+
+Required safe-delete statuses are `safe_cleaned_segment`,
+`pending_collection_wal`, `protected_side_ref`, `orphan_prepared_side_ref`,
+`missing_required_side_ref`, `corrupt_required_side_ref`,
+`cleanup_manifest_required`, `snapshot_pinned`, and `unknown_unclassified`.
+
+The collection WAL verification mode is read-only by default. Any repair,
+vacuum, cleanup, or quarantine mutation must require an explicit mutating flag
+such as `--repair`, `--vacuum-index`, or a future `--mutate`.
+
+Docs lint should enforce the observability contract once the collection WAL
+implementation starts. Required lint checks:
+
+- `collection-wal-durability-plan.md` contains the stable
+  `treedb.collection_wal.` metric prefix table;
+- `recovery.md` contains the stable recovery error category table;
+- `verification.md` contains the required `treemap collection-wal health`,
+  `safe-delete`, `txn`, `classify`, and `verify --collection-wal` command names;
+- the operator runbook states include `clean`, `pending`, `recovery_required`,
+  `corrupt`, and `cleanup_debt`.
 
 ## 12. Collections Document Formats
 

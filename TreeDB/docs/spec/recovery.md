@@ -159,6 +159,113 @@ Read-only open must scan collection WAL gates and committed frames. If complete
 unapplied collection WAL exists, read-only open fails with recovery-required
 unless a future read-only replay overlay is explicitly implemented.
 
+Every collection WAL recovery skip, block, or hard failure must be assigned one
+stable category:
+
+| Category | Severity |
+|---|---|
+| `incomplete_tail` | safe skip only for terminal tail without durable commit marker |
+| `already_applied_watermark` | safe skip when covered by durable applied watermark |
+| `record_checksum_mismatch` | hard failure |
+| `unsupported_wal_version` | hard failure unless explicitly skippable |
+| `segment_gap_without_cleanup` | hard failure |
+| `missing_required_side_ref` | hard failure |
+| `corrupt_required_side_ref` | hard failure |
+| `side_ref_closure_mismatch` | hard failure |
+| `collection_identity_mismatch` | hard failure |
+| `collection_generation_mismatch` | hard failure |
+| `schema_epoch_mismatch` | hard failure |
+| `base_root_mismatch` | hard failure unless handled by formal accumulator state |
+| `root_descriptor_epoch_mismatch` | hard failure |
+| `base_system_root_mismatch` | hard failure |
+| `watermark_inconsistency` | hard failure |
+| `duplicate_wallsn` | hard failure |
+| `duplicate_collection_seq` | hard failure |
+| `dependency_gap` | block/fail for later same-collection transactions |
+| `system_delta_precondition_failed` | hard failure |
+| `replay_publish_failure` | retryable recovery failure only before descriptor/watermark commit |
+| `cleanup_manifest_missing` | cleanup blocked; missing segment hard-fails open |
+| `cleanup_manifest_corrupt` | cleanup blocked or hard-fails if needed for missing segment proof |
+| `cleanup_failure` | safe leak/debt after watermark/checkpoint |
+| `orphan_prepared_side_ref` | quarantine candidate when no committed WAL/root references it |
+| `read_only_recovery_required` | read-only open failure |
+
+`missing_required_side_ref`, `corrupt_required_side_ref`,
+`side_ref_closure_mismatch`, schema/root/identity mismatches, and watermark
+inconsistency are hard recovery failures for complete committed collection WAL
+records.
+
+Implementations must expose typed errors equivalent to:
+
+```go
+type CollectionWALErrorCategory string
+
+type CollectionWALError struct {
+    Category          CollectionWALErrorCategory
+    TxnID             string
+    WALLSN            uint64
+    CollectionUID     string
+    CollectionUIDHash string
+    CollectionSeq     uint64
+    SegmentID         string
+    SegmentOffset     uint64
+    SideRef           *SideRefSummary
+    Cause             error
+}
+```
+
+The implementation must provide helpers equivalent to `IsIncompleteTail(err)`,
+`IsRecoveryRequired(err)`, and `IsCollectionWALCorruption(err)`. Error category
+strings are metric suffixes and artifact fields; they must not be built from
+arbitrary error messages.
+
+Before recovery deletes, quarantines, rewrites, or marks clean any collection WAL
+segment or side-ref file, it must write and fsync a forensic artifact.
+
+Artifact directory:
+
+```text
+collection_wal/recovery-artifacts/<unix_nano>-<pid>-<open_uuid>/
+```
+
+Required files:
+
+- `recovery-report.json`;
+- `segments.json`;
+- `transactions.json`;
+- `side-refs.json`;
+- `watermarks.json`;
+- `cleanup-decisions.json`;
+- `quarantine-manifest.json` when quarantine occurs.
+
+The artifact directory, every required file, and the parent directory entry must
+be fsynced before recovery performs the side effect that the artifact explains.
+If artifact creation fails, recovery must leave WAL and side files untouched
+unless the failure is part of an explicit operator-approved destructive repair.
+
+Artifacts must not contain document payloads, raw user keys, raw index keys, raw
+collection names, raw root names, or absolute host paths by default. They must
+include metadata, checksums, digests, redacted names, segment ids, offsets,
+lengths, watermarks, and error categories sufficient to reconstruct:
+
+- which transaction failed or was skipped;
+- which side refs were required;
+- which side refs were missing, corrupt, protected, released, or quarantined;
+- current applied watermark per collection;
+- segment offset and checksum state;
+- cleanup eligibility;
+- `safe_to_restart`, `safe_to_backup`, `safe_to_compact`,
+  `safe_to_delete_files`, and `requires_operator_action`.
+
+Skipped transactions must be auditable through a redacted
+`SkippedTransactionRecord` in the recovery artifact and CLI reports. Required
+skip categories are `incomplete_tail`, `already_applied_watermark`,
+`duplicate_collection_seq`, and `orphan_prepared_side_ref`. Required fields are
+`skip_id`, `skip_category`, `txn_id`, `wallsn`, `collection_uid`,
+`collection_uid_hash`, `collection_seq`, `segment_id`, `segment_offset`,
+`record_length`, `commit_marker_present`, `record_checksum_valid`,
+`side_ref_summaries`, `watermark_before`, and `watermark_after`.
+
 Collection WAL recovery must also validate the canonical embedded side-ref set
 decoded from root deltas and descriptors against the declared side-ref set.
 Declared refs alone are not trusted.

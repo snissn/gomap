@@ -50,7 +50,29 @@ value-log record, GC and rewrite must retain that record even if the collection
 WAL transaction has already been applied and WAL-only protection is otherwise
 eligible for release.
 
-### 3.1 Incremental Accounting Fast Path
+### 3.1 Collection WAL Operator Runbook
+
+Operators must use `treemap collection-wal health --json` before manual cleanup,
+backup triage, compaction triage, or restart triage for a directory that has
+`collection_wal_v1` enabled.
+
+Health states:
+
+| State | Meaning | Operator rule |
+|---|---|---|
+| `clean` | no pending collection WAL, cleanup debt below threshold | restart, backup, compaction, and ordinary maintenance are safe under normal rules |
+| `pending` | committed WAL or protected side refs are required for recovery | restart and backup are safe only when the whole directory, collection WAL, and protected side refs are included; manual deletion is unsafe |
+| `recovery_required` | complete unapplied collection WAL exists | read-only open fails; take a whole-directory copy, then run read-write recovery |
+| `corrupt` | hard collection WAL or required side-ref failure | no manual deletion; preserve WAL, side refs, cleanup manifests, and artifacts; restore missing files or escalate |
+| `cleanup_debt` | data is durable but obsolete files remain | run checkpoint/cleanup; delete files only when `safe-delete` reports `safe_to_delete=true` |
+
+`ValueLogGC` and value-log rewrite reports must include whether bytes are
+blocked by collection WAL side refs. Required collection WAL blocker fields are
+`gc_blocked`, `gc_blocked_bytes`, `gc_blocked_segments`,
+`gc_blocked_side_refs`, `oldest_blocking_age_ms`, `blocking_txn_ids`,
+`blocking_side_refs`, and `blocking_reason`.
+
+### 3.2 Incremental Accounting Fast Path
 
 TreeDB maintains commit-time reference counters per value-log segment.
 
