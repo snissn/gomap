@@ -70,4 +70,6 @@ database, and adds the disk footprints to the report. It records two
 remaining-field shapes: a conservative shape with only top-level `time_us`
 removed, and a ClickHouse-aligned shape with the typed JSON paths removed:
 `time_us`, `kind`, `did`, `commit.operation`, and `commit.collection`. Disable
-this part with `-measure-remaining-treedb=false`.
+this part with `-measure-remaining-treedb=false`. The command also records a raw
+TreeDB key/value shape that stores `documentID(row) -> original JSON line bytes`
+without collection document encoding.

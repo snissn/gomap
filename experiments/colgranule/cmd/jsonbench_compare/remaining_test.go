@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -90,5 +93,24 @@ func TestRemainingJSONDocumentConservativeOnlyRemovesTimeUS(t *testing.T) {
 		if _, ok := commit[key]; !ok {
 			t.Fatalf("commit key %q should remain in %s", key, encoded)
 		}
+	}
+}
+
+func TestMeasureRawJSONTreeDBSample(t *testing.T) {
+	result, err := measureRawJSONTreeDB(context.Background(), []string{filepath.Join("..", "..", "testdata", "jsonbench_sample.jsonl")}, 5, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Rows != 5 {
+		t.Fatalf("rows=%d want 5", result.Rows)
+	}
+	if result.RawDocumentBytes == 0 {
+		t.Fatal("raw document bytes were not recorded")
+	}
+	if result.AfterCompactBytes == 0 {
+		t.Fatal("compacted raw TreeDB footprint was not recorded")
+	}
+	if !strings.Contains(result.StoredShape, "key/value") {
+		t.Fatalf("stored shape %q does not describe raw key/value storage", result.StoredShape)
 	}
 }
