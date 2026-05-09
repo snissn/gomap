@@ -67,6 +67,7 @@ This writes:
 By default, the comparison command also builds temporary TreeDB collections at
 `artifacts/colgranule_remaining_treedb-json` and
 `artifacts/colgranule_remaining_treedb-bson`, stores the original JSON rows with
-only top-level `time_us` removed, flushes and compacts each database, and adds
-both disk footprints to the report. Disable this part with
+the ClickHouse typed JSON paths removed, flushes and compacts each database, and
+adds both disk footprints to the report. Those removed paths are `time_us`,
+`kind`, `did`, `commit.operation`, and `commit.collection`. Disable this part with
 `-measure-remaining-treedb=false`.

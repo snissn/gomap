@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-09T17:36:23Z",
+  "generated_at": "2026-05-09T17:45:48Z",
   "data_path": "/Users/michaelseiler/data/bluesky",
   "limit": 1000000,
   "rows": 1000000,
@@ -8,7 +8,7 @@
   ],
   "input_bytes": 135176827,
   "rows_per_granule": 8192,
-  "load_duration": 6040713291,
+  "load_duration": 5438166709,
   "clickhouse_local": {
     "system": "ClickHouse",
     "version": "26.4.3.1",
@@ -43,22 +43,22 @@
     "storage_policy": "compressed",
     "db_dir": "artifacts/colgranule_remaining_treedb-bson",
     "rows": 1000000,
-    "raw_document_bytes": 474461494,
-    "load_seconds": 7.477013208,
-    "flush_seconds": 0.7018685,
-    "checkpoint_seconds": 0.007382125,
-    "before_compact_bytes": 262293894,
+    "raw_document_bytes": 357429419,
+    "load_seconds": 7.181295375,
+    "flush_seconds": 0.7319845,
+    "checkpoint_seconds": 0.011148959,
+    "before_compact_bytes": 223981743,
     "before_compact_files": 12,
-    "after_compact_bytes": 56942009,
+    "after_compact_bytes": 54685705,
     "after_compact_files": 15,
-    "compaction_seconds": 0.282104125,
+    "compaction_seconds": 0.271324584,
     "fully_compacted": true,
-    "compacted_bytes_per_row": 56.942009,
-    "rewrite_duration_seconds": 2.340905208,
+    "compacted_bytes_per_row": 54.685705,
+    "rewrite_duration_seconds": 2.659462083,
     "rewrite_records_copied": 1000000,
-    "rewrite_value_bytes": 474461494,
-    "rewrite_source_bytes": 247673828,
-    "stored_shape": "original JSON object converted to bson with top-level time_us removed"
+    "rewrite_value_bytes": 357429419,
+    "rewrite_source_bytes": 209421349,
+    "stored_shape": "original JSON object converted to bson with ClickHouse typed JSON paths removed"
   },
   "remaining_treedb_json": {
     "enabled": true,
@@ -66,22 +66,22 @@
     "storage_policy": "compressed",
     "db_dir": "artifacts/colgranule_remaining_treedb-json",
     "rows": 1000000,
-    "raw_document_bytes": 452778277,
-    "load_seconds": 6.924686458,
-    "flush_seconds": 0.000003083,
-    "checkpoint_seconds": 0.007518583,
-    "before_compact_bytes": 242385212,
+    "raw_document_bytes": 339735546,
+    "load_seconds": 10.492777833,
+    "flush_seconds": 0.000002583,
+    "checkpoint_seconds": 0.009332875,
+    "before_compact_bytes": 204202382,
     "before_compact_files": 12,
-    "after_compact_bytes": 54953858,
+    "after_compact_bytes": 52099928,
     "after_compact_files": 15,
-    "compaction_seconds": 0.278854459,
+    "compaction_seconds": 0.271767875,
     "fully_compacted": true,
-    "compacted_bytes_per_row": 54.953858,
-    "rewrite_duration_seconds": 2.277610125,
+    "compacted_bytes_per_row": 52.099928,
+    "rewrite_duration_seconds": 2.206572208,
     "rewrite_records_copied": 1000000,
-    "rewrite_value_bytes": 452778277,
-    "rewrite_source_bytes": 227738686,
-    "stored_shape": "original JSON object converted to json with top-level time_us removed"
+    "rewrite_value_bytes": 339735546,
+    "rewrite_source_bytes": 189685621,
+    "stored_shape": "original JSON object converted to json with ClickHouse typed JSON paths removed"
   },
   "remaining_treedb_template_v1": {
     "enabled": true,
@@ -89,35 +89,35 @@
     "storage_policy": "compressed",
     "db_dir": "artifacts/colgranule_remaining_treedb-template-v1",
     "rows": 1000000,
-    "raw_document_bytes": 684158576,
-    "load_seconds": 13.438075916,
-    "flush_seconds": 0.000007041,
-    "checkpoint_seconds": 0.0121525,
-    "before_compact_bytes": 228602932,
+    "raw_document_bytes": 583083877,
+    "load_seconds": 16.570955875,
+    "flush_seconds": 0.000002708,
+    "checkpoint_seconds": 0.006641792,
+    "before_compact_bytes": 211233407,
     "before_compact_files": 12,
-    "after_compact_bytes": 50595763,
+    "after_compact_bytes": 49859640,
     "after_compact_files": 15,
-    "compaction_seconds": 0.272356584,
+    "compaction_seconds": 0.259439083,
     "fully_compacted": true,
-    "compacted_bytes_per_row": 50.595763,
-    "rewrite_duration_seconds": 2.267082208,
+    "compacted_bytes_per_row": 49.85964,
+    "rewrite_duration_seconds": 2.666833958,
     "rewrite_records_copied": 1000471,
-    "rewrite_value_bytes": 329422732,
-    "rewrite_source_bytes": 214041094,
-    "stored_shape": "original JSON object converted to template-v1 with top-level time_us removed"
+    "rewrite_value_bytes": 259230751,
+    "rewrite_source_bytes": 196900849,
+    "stored_shape": "original JSON object converted to template-v1 with ClickHouse typed JSON paths removed"
   },
   "query_timings": [
     {
       "query": "Q1",
       "description": "Top event types",
       "attempts": [
-        4293917,
-        4283334,
-        4252209,
-        4274834,
-        4293084
+        4329875,
+        4263375,
+        4298292,
+        4290542,
+        4332167
       ],
-      "best": 4252209,
+      "best": 4263375,
       "result_rows": 15,
       "result_digest": 3906528342281810551
     },
@@ -125,27 +125,27 @@
       "query": "Q2",
       "description": "Top event types with unique users",
       "attempts": [
-        39559583,
-        39130000,
-        39607083,
-        39734333,
-        38951167
+        39048666,
+        39877083,
+        38711292,
+        39186041,
+        38934625
       ],
-      "best": 38951167,
+      "best": 38711292,
       "result_rows": 13,
-      "result_digest": 6299778879523111604
+      "result_digest": 18251051592253664616
     },
     {
       "query": "Q3",
       "description": "Event counts by hour",
       "attempts": [
-        6748667,
-        6758209,
-        6672375,
-        6618167,
-        6660625
+        6712542,
+        6720333,
+        6608833,
+        6736250,
+        6676708
       ],
-      "best": 6618167,
+      "best": 6608833,
       "result_rows": 3,
       "result_digest": 168717824705789449
     },
@@ -153,13 +153,13 @@
       "query": "Q4",
       "description": "Top 3 post veterans",
       "attempts": [
-        9749709,
-        9835042,
-        9863250,
-        9824666,
-        9946958
+        9697958,
+        9618417,
+        9807708,
+        9772583,
+        9725542
       ],
-      "best": 9749709,
+      "best": 9618417,
       "result_rows": 3,
       "result_digest": 10448264336791507833
     },
@@ -167,13 +167,13 @@
       "query": "Q5",
       "description": "Top 3 users with longest activity",
       "attempts": [
-        9907875,
-        9933250,
-        10213209,
-        10732584,
-        10908042
+        10025917,
+        10635292,
+        10045208,
+        10118583,
+        10000333
       ],
-      "best": 9907875,
+      "best": 10000333,
       "result_rows": 3,
       "result_digest": 8472777325008135056
     }
@@ -191,9 +191,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 8000000,
-      "EncodeDuration": 1632375,
-      "DecodeDuration": 1696208,
-      "RangeScanDuration": 1089000,
+      "EncodeDuration": 1659709,
+      "DecodeDuration": 1669750,
+      "RangeScanDuration": 1051459,
       "RangeScanMatches": 0
     },
     {
@@ -208,9 +208,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 503178,
-      "EncodeDuration": 2766250,
-      "DecodeDuration": 3644084,
-      "RangeScanDuration": 2182416,
+      "EncodeDuration": 2908542,
+      "DecodeDuration": 3247167,
+      "RangeScanDuration": 2138875,
       "RangeScanMatches": 0
     },
     {
@@ -225,9 +225,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 317971,
-      "EncodeDuration": 3593959,
-      "DecodeDuration": 2571125,
-      "RangeScanDuration": 2054500,
+      "EncodeDuration": 3603250,
+      "DecodeDuration": 2630167,
+      "RangeScanDuration": 2110750,
       "RangeScanMatches": 0
     },
     {
@@ -242,9 +242,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 1000000,
-      "EncodeDuration": 3419792,
-      "DecodeDuration": 3263375,
-      "RangeScanDuration": 2223125,
+      "EncodeDuration": 3419250,
+      "DecodeDuration": 3623959,
+      "RangeScanDuration": 2188000,
       "RangeScanMatches": 0
     },
     {
@@ -259,9 +259,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 127657,
-      "EncodeDuration": 4045708,
-      "DecodeDuration": 4716708,
-      "RangeScanDuration": 2621709,
+      "EncodeDuration": 3986042,
+      "DecodeDuration": 4131250,
+      "RangeScanDuration": 2597708,
       "RangeScanMatches": 0
     },
     {
@@ -276,9 +276,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 144683,
-      "EncodeDuration": 4215625,
-      "DecodeDuration": 3148541,
-      "RangeScanDuration": 2771042,
+      "EncodeDuration": 4209291,
+      "DecodeDuration": 3215959,
+      "RangeScanDuration": 2790792,
       "RangeScanMatches": 0
     },
     {
@@ -293,9 +293,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 8000000,
-      "EncodeDuration": 1627208,
-      "DecodeDuration": 1801750,
-      "RangeScanDuration": 934208,
+      "EncodeDuration": 1701041,
+      "DecodeDuration": 1725291,
+      "RangeScanDuration": 966792,
       "RangeScanMatches": 14040
     },
     {
@@ -310,9 +310,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 1363781,
-      "EncodeDuration": 7519792,
-      "DecodeDuration": 4683583,
-      "RangeScanDuration": 4035709,
+      "EncodeDuration": 7587417,
+      "DecodeDuration": 4839916,
+      "RangeScanDuration": 3825917,
       "RangeScanMatches": 14040
     },
     {
@@ -327,9 +327,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 1769494,
-      "EncodeDuration": 10503417,
-      "DecodeDuration": 4284958,
-      "RangeScanDuration": 3590291,
+      "EncodeDuration": 10465542,
+      "DecodeDuration": 4366208,
+      "RangeScanDuration": 3578666,
       "RangeScanMatches": 14040
     },
     {
@@ -344,9 +344,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 1000000,
-      "EncodeDuration": 3416500,
-      "DecodeDuration": 2690250,
-      "RangeScanDuration": 2065458,
+      "EncodeDuration": 3389792,
+      "DecodeDuration": 2713916,
+      "RangeScanDuration": 2072333,
       "RangeScanMatches": 14040
     },
     {
@@ -361,9 +361,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 537086,
-      "EncodeDuration": 5431500,
-      "DecodeDuration": 3484375,
-      "RangeScanDuration": 2818958,
+      "EncodeDuration": 5435625,
+      "DecodeDuration": 3852458,
+      "RangeScanDuration": 2826542,
       "RangeScanMatches": 14040
     },
     {
@@ -378,9 +378,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 613390,
-      "EncodeDuration": 6119125,
-      "DecodeDuration": 3402416,
-      "RangeScanDuration": 2849709,
+      "EncodeDuration": 5834625,
+      "DecodeDuration": 3409000,
+      "RangeScanDuration": 2827125,
       "RangeScanMatches": 14040
     },
     {
@@ -395,9 +395,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 8000000,
-      "EncodeDuration": 1651708,
-      "DecodeDuration": 1882708,
-      "RangeScanDuration": 1070458,
+      "EncodeDuration": 1641667,
+      "DecodeDuration": 1701334,
+      "RangeScanDuration": 1105958,
       "RangeScanMatches": 5328
     },
     {
@@ -412,9 +412,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 483057,
-      "EncodeDuration": 2953750,
-      "DecodeDuration": 3553792,
-      "RangeScanDuration": 2109041,
+      "EncodeDuration": 2777584,
+      "DecodeDuration": 2811000,
+      "RangeScanDuration": 2245250,
       "RangeScanMatches": 5328
     },
     {
@@ -429,9 +429,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 301424,
-      "EncodeDuration": 3576334,
-      "DecodeDuration": 2663791,
-      "RangeScanDuration": 2034458,
+      "EncodeDuration": 3545750,
+      "DecodeDuration": 2560458,
+      "RangeScanDuration": 2021125,
       "RangeScanMatches": 5328
     },
     {
@@ -446,9 +446,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 1000000,
-      "EncodeDuration": 3374166,
-      "DecodeDuration": 2828750,
-      "RangeScanDuration": 2238750,
+      "EncodeDuration": 3404167,
+      "DecodeDuration": 2680375,
+      "RangeScanDuration": 2276584,
       "RangeScanMatches": 5328
     },
     {
@@ -463,9 +463,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 148297,
-      "EncodeDuration": 4161292,
-      "DecodeDuration": 3915500,
-      "RangeScanDuration": 2801541,
+      "EncodeDuration": 4100167,
+      "DecodeDuration": 3282125,
+      "RangeScanDuration": 2842125,
       "RangeScanMatches": 5328
     },
     {
@@ -480,9 +480,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 168739,
-      "EncodeDuration": 4391875,
-      "DecodeDuration": 3200250,
-      "RangeScanDuration": 2800542,
+      "EncodeDuration": 4449917,
+      "DecodeDuration": 3220417,
+      "RangeScanDuration": 2833708,
       "RangeScanMatches": 5328
     },
     {
@@ -497,9 +497,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 8000000,
-      "EncodeDuration": 1620291,
-      "DecodeDuration": 1709958,
-      "RangeScanDuration": 923375,
+      "EncodeDuration": 1637750,
+      "DecodeDuration": 1708000,
+      "RangeScanDuration": 900625,
       "RangeScanMatches": 0
     },
     {
@@ -514,9 +514,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 393838,
-      "EncodeDuration": 2066166,
-      "DecodeDuration": 2449000,
-      "RangeScanDuration": 1834083,
+      "EncodeDuration": 2516959,
+      "DecodeDuration": 3080958,
+      "RangeScanDuration": 1728208,
       "RangeScanMatches": 0
     },
     {
@@ -531,9 +531,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 75050,
-      "EncodeDuration": 2981208,
-      "DecodeDuration": 2226250,
-      "RangeScanDuration": 1465417,
+      "EncodeDuration": 2554375,
+      "DecodeDuration": 2327167,
+      "RangeScanDuration": 1509334,
       "RangeScanMatches": 0
     },
     {
@@ -548,9 +548,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 1000000,
-      "EncodeDuration": 3386042,
-      "DecodeDuration": 2652959,
-      "RangeScanDuration": 2024792,
+      "EncodeDuration": 3428583,
+      "DecodeDuration": 2694833,
+      "RangeScanDuration": 2054625,
       "RangeScanMatches": 0
     },
     {
@@ -565,9 +565,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 58457,
-      "EncodeDuration": 3566458,
-      "DecodeDuration": 2839959,
-      "RangeScanDuration": 2242583,
+      "EncodeDuration": 3528167,
+      "DecodeDuration": 3557250,
+      "RangeScanDuration": 2321250,
       "RangeScanMatches": 0
     },
     {
@@ -582,9 +582,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 31257,
-      "EncodeDuration": 3649375,
-      "DecodeDuration": 4328583,
-      "RangeScanDuration": 2565791,
+      "EncodeDuration": 3643584,
+      "DecodeDuration": 3058917,
+      "RangeScanDuration": 2507125,
       "RangeScanMatches": 0
     },
     {
@@ -599,9 +599,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 8000000,
-      "EncodeDuration": 1603792,
-      "DecodeDuration": 1704125,
-      "RangeScanDuration": 956291,
+      "EncodeDuration": 1624875,
+      "DecodeDuration": 1704417,
+      "RangeScanDuration": 1011167,
       "RangeScanMatches": 0
     },
     {
@@ -616,9 +616,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 420284,
-      "EncodeDuration": 2358042,
-      "DecodeDuration": 2490291,
-      "RangeScanDuration": 1799666,
+      "EncodeDuration": 2735541,
+      "DecodeDuration": 2737500,
+      "RangeScanDuration": 1946708,
       "RangeScanMatches": 0
     },
     {
@@ -633,9 +633,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 147447,
-      "EncodeDuration": 2916917,
-      "DecodeDuration": 3187500,
-      "RangeScanDuration": 1708500,
+      "EncodeDuration": 2900584,
+      "DecodeDuration": 2438292,
+      "RangeScanDuration": 1719041,
       "RangeScanMatches": 0
     },
     {
@@ -650,9 +650,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 1000000,
-      "EncodeDuration": 3370375,
-      "DecodeDuration": 2592167,
-      "RangeScanDuration": 2088666,
+      "EncodeDuration": 3435583,
+      "DecodeDuration": 2747875,
+      "RangeScanDuration": 2086292,
       "RangeScanMatches": 0
     },
     {
@@ -667,9 +667,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 86947,
-      "EncodeDuration": 3748208,
-      "DecodeDuration": 2994167,
-      "RangeScanDuration": 2377125,
+      "EncodeDuration": 3730000,
+      "DecodeDuration": 3110875,
+      "RangeScanDuration": 2556792,
       "RangeScanMatches": 0
     },
     {
@@ -684,9 +684,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 86179,
-      "EncodeDuration": 3950917,
-      "DecodeDuration": 3194208,
-      "RangeScanDuration": 2597125,
+      "EncodeDuration": 3903375,
+      "DecodeDuration": 3137292,
+      "RangeScanDuration": 2595458,
       "RangeScanMatches": 0
     },
     {
@@ -701,9 +701,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 8000000,
-      "EncodeDuration": 1605583,
-      "DecodeDuration": 2468666,
-      "RangeScanDuration": 24750,
+      "EncodeDuration": 1618834,
+      "DecodeDuration": 1775375,
+      "RangeScanDuration": 24208,
       "RangeScanMatches": 0
     },
     {
@@ -718,9 +718,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 375999,
-      "EncodeDuration": 1902291,
-      "DecodeDuration": 2896083,
-      "RangeScanDuration": 40791,
+      "EncodeDuration": 2513291,
+      "DecodeDuration": 3675334,
+      "RangeScanDuration": 46791,
       "RangeScanMatches": 0
     },
     {
@@ -735,9 +735,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 34582,
-      "EncodeDuration": 2339000,
-      "DecodeDuration": 2582208,
-      "RangeScanDuration": 41500,
+      "EncodeDuration": 2323708,
+      "DecodeDuration": 2550208,
+      "RangeScanDuration": 37458,
       "RangeScanMatches": 0
     },
     {
@@ -752,9 +752,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 1000000,
-      "EncodeDuration": 3458541,
-      "DecodeDuration": 3106833,
-      "RangeScanDuration": 46833,
+      "EncodeDuration": 3385083,
+      "DecodeDuration": 2832167,
+      "RangeScanDuration": 40458,
       "RangeScanMatches": 0
     },
     {
@@ -769,9 +769,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 47502,
-      "EncodeDuration": 3404375,
-      "DecodeDuration": 2900667,
-      "RangeScanDuration": 44125,
+      "EncodeDuration": 3414083,
+      "DecodeDuration": 2995917,
+      "RangeScanDuration": 46542,
       "RangeScanMatches": 0
     },
     {
@@ -786,9 +786,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 6749,
-      "EncodeDuration": 3480333,
-      "DecodeDuration": 3976791,
-      "RangeScanDuration": 54708,
+      "EncodeDuration": 3629458,
+      "DecodeDuration": 3941792,
+      "RangeScanDuration": 53791,
       "RangeScanMatches": 0
     },
     {
@@ -803,9 +803,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 8000000,
-      "EncodeDuration": 1650375,
-      "DecodeDuration": 1723083,
-      "RangeScanDuration": 1639500,
+      "EncodeDuration": 1683041,
+      "DecodeDuration": 1756541,
+      "RangeScanDuration": 1623375,
       "RangeScanMatches": 13681
     },
     {
@@ -820,9 +820,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 3815890,
-      "EncodeDuration": 10753584,
-      "DecodeDuration": 6507125,
-      "RangeScanDuration": 4795042,
+      "EncodeDuration": 16448667,
+      "DecodeDuration": 6851583,
+      "RangeScanDuration": 4821791,
       "RangeScanMatches": 13681
     },
     {
@@ -837,9 +837,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 3505416,
-      "EncodeDuration": 14656375,
-      "DecodeDuration": 5792875,
-      "RangeScanDuration": 4663334,
+      "EncodeDuration": 14878292,
+      "DecodeDuration": 5995750,
+      "RangeScanDuration": 4310250,
       "RangeScanMatches": 13681
     },
     {
@@ -854,9 +854,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 2401719,
       "StoredBytes": 2401719,
-      "EncodeDuration": 5732792,
-      "DecodeDuration": 5063708,
-      "RangeScanDuration": 3817708,
+      "EncodeDuration": 5774584,
+      "DecodeDuration": 5244292,
+      "RangeScanDuration": 3815334,
       "RangeScanMatches": 13681
     },
     {
@@ -871,9 +871,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 2401719,
       "StoredBytes": 2343888,
-      "EncodeDuration": 6331542,
-      "DecodeDuration": 5442750,
-      "RangeScanDuration": 3945333,
+      "EncodeDuration": 6266708,
+      "DecodeDuration": 5575500,
+      "RangeScanDuration": 4006625,
       "RangeScanMatches": 13681
     },
     {
@@ -888,9 +888,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 2401719,
       "StoredBytes": 2321001,
-      "EncodeDuration": 8566125,
-      "DecodeDuration": 5496375,
-      "RangeScanDuration": 4072833,
+      "EncodeDuration": 8511166,
+      "DecodeDuration": 5503708,
+      "RangeScanDuration": 3974209,
       "RangeScanMatches": 13681
     },
     {
@@ -905,9 +905,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 8000000,
-      "EncodeDuration": 1604542,
-      "DecodeDuration": 1647291,
-      "RangeScanDuration": 943333,
+      "EncodeDuration": 1631334,
+      "DecodeDuration": 1716708,
+      "RangeScanDuration": 912458,
       "RangeScanMatches": 994672
     },
     {
@@ -922,9 +922,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 388956,
-      "EncodeDuration": 2111625,
-      "DecodeDuration": 2372750,
-      "RangeScanDuration": 1673625,
+      "EncodeDuration": 2033500,
+      "DecodeDuration": 3450709,
+      "RangeScanDuration": 1701958,
       "RangeScanMatches": 994672
     },
     {
@@ -939,9 +939,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 66507,
-      "EncodeDuration": 2914834,
-      "DecodeDuration": 2166666,
-      "RangeScanDuration": 1460834,
+      "EncodeDuration": 2576708,
+      "DecodeDuration": 2250208,
+      "RangeScanDuration": 1466709,
       "RangeScanMatches": 994672
     },
     {
@@ -956,9 +956,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 1000000,
-      "EncodeDuration": 3426917,
-      "DecodeDuration": 2670333,
-      "RangeScanDuration": 2043250,
+      "EncodeDuration": 3403375,
+      "DecodeDuration": 2675459,
+      "RangeScanDuration": 2089667,
       "RangeScanMatches": 994672
     },
     {
@@ -973,9 +973,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 58567,
-      "EncodeDuration": 3554333,
-      "DecodeDuration": 2826125,
-      "RangeScanDuration": 2239834,
+      "EncodeDuration": 3624250,
+      "DecodeDuration": 2856917,
+      "RangeScanDuration": 2239458,
       "RangeScanMatches": 994672
     },
     {
@@ -990,9 +990,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 31312,
-      "EncodeDuration": 3650334,
-      "DecodeDuration": 4344250,
-      "RangeScanDuration": 2579708,
+      "EncodeDuration": 3688708,
+      "DecodeDuration": 3883625,
+      "RangeScanDuration": 2524292,
       "RangeScanMatches": 994672
     },
     {
@@ -1007,9 +1007,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 8000000,
-      "EncodeDuration": 1601625,
-      "DecodeDuration": 1708000,
-      "RangeScanDuration": 71708,
+      "EncodeDuration": 1652542,
+      "DecodeDuration": 1667084,
+      "RangeScanDuration": 70250,
       "RangeScanMatches": 0
     },
     {
@@ -1024,9 +1024,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 1567568,
-      "EncodeDuration": 8277125,
-      "DecodeDuration": 5056125,
-      "RangeScanDuration": 339083,
+      "EncodeDuration": 8282542,
+      "DecodeDuration": 5136208,
+      "RangeScanDuration": 345708,
       "RangeScanMatches": 0
     },
     {
@@ -1041,9 +1041,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 1918019,
-      "EncodeDuration": 11182917,
-      "DecodeDuration": 5332875,
-      "RangeScanDuration": 308583,
+      "EncodeDuration": 11168542,
+      "DecodeDuration": 4858167,
+      "RangeScanDuration": 306459,
       "RangeScanMatches": 0
     },
     {
@@ -1058,9 +1058,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1495892,
       "StoredBytes": 1495892,
-      "EncodeDuration": 6283791,
-      "DecodeDuration": 5129250,
-      "RangeScanDuration": 363625,
+      "EncodeDuration": 6282167,
+      "DecodeDuration": 5169833,
+      "RangeScanDuration": 362667,
       "RangeScanMatches": 0
     },
     {
@@ -1075,9 +1075,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1495892,
       "StoredBytes": 952538,
-      "EncodeDuration": 9195916,
-      "DecodeDuration": 6387333,
-      "RangeScanDuration": 480000,
+      "EncodeDuration": 9436208,
+      "DecodeDuration": 6479250,
+      "RangeScanDuration": 452541,
       "RangeScanMatches": 0
     },
     {
@@ -1092,9 +1092,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1495892,
       "StoredBytes": 1008386,
-      "EncodeDuration": 9806459,
-      "DecodeDuration": 6187542,
-      "RangeScanDuration": 449916,
+      "EncodeDuration": 9938750,
+      "DecodeDuration": 6225875,
+      "RangeScanDuration": 443250,
       "RangeScanMatches": 0
     },
     {
@@ -1109,9 +1109,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 8000000,
-      "EncodeDuration": 1617792,
-      "DecodeDuration": 2472834,
-      "RangeScanDuration": 1086875,
+      "EncodeDuration": 1723584,
+      "DecodeDuration": 2261875,
+      "RangeScanDuration": 1078000,
       "RangeScanMatches": 0
     },
     {
@@ -1126,9 +1126,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 4078138,
-      "EncodeDuration": 11532333,
-      "DecodeDuration": 6485458,
-      "RangeScanDuration": 5857000,
+      "EncodeDuration": 15163667,
+      "DecodeDuration": 6813458,
+      "RangeScanDuration": 6340416,
       "RangeScanMatches": 0
     },
     {
@@ -1143,9 +1143,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 3850216,
-      "EncodeDuration": 16519166,
-      "DecodeDuration": 6281250,
-      "RangeScanDuration": 5693167,
+      "EncodeDuration": 16721625,
+      "DecodeDuration": 6468459,
+      "RangeScanDuration": 5706834,
       "RangeScanMatches": 0
     },
     {
@@ -1160,9 +1160,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 3007639,
       "StoredBytes": 3007639,
-      "EncodeDuration": 7238875,
-      "DecodeDuration": 8082958,
-      "RangeScanDuration": 5850084,
+      "EncodeDuration": 7020208,
+      "DecodeDuration": 6819875,
+      "RangeScanDuration": 5763875,
       "RangeScanMatches": 0
     },
     {
@@ -1177,9 +1177,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 3007639,
       "StoredBytes": 2968163,
-      "EncodeDuration": 7701125,
-      "DecodeDuration": 6634000,
-      "RangeScanDuration": 6105666,
+      "EncodeDuration": 7748458,
+      "DecodeDuration": 6682375,
+      "RangeScanDuration": 6112083,
       "RangeScanMatches": 0
     },
     {
@@ -1195,9 +1195,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 3007639,
       "StoredBytes": 2973046,
-      "EncodeDuration": 9158083,
-      "DecodeDuration": 6592917,
-      "RangeScanDuration": 5993334,
+      "EncodeDuration": 14961042,
+      "DecodeDuration": 6815958,
+      "RangeScanDuration": 6619834,
       "RangeScanMatches": 0
     },
     {
@@ -1212,9 +1212,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 8000000,
-      "EncodeDuration": 1644750,
-      "DecodeDuration": 1753500,
-      "RangeScanDuration": 1091125,
+      "EncodeDuration": 1629584,
+      "DecodeDuration": 3303000,
+      "RangeScanDuration": 1093208,
       "RangeScanMatches": 954566
     },
     {
@@ -1229,9 +1229,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 462747,
-      "EncodeDuration": 2973709,
-      "DecodeDuration": 2932166,
-      "RangeScanDuration": 2432500,
+      "EncodeDuration": 2642416,
+      "DecodeDuration": 3690042,
+      "RangeScanDuration": 2678208,
       "RangeScanMatches": 954566
     },
     {
@@ -1246,9 +1246,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 261670,
-      "EncodeDuration": 3461334,
-      "DecodeDuration": 5801500,
-      "RangeScanDuration": 4504583,
+      "EncodeDuration": 3461875,
+      "DecodeDuration": 6055292,
+      "RangeScanDuration": 6549750,
       "RangeScanMatches": 954566
     },
     {
@@ -1263,9 +1263,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 1000000,
-      "EncodeDuration": 3394042,
-      "DecodeDuration": 2962709,
-      "RangeScanDuration": 2221250,
+      "EncodeDuration": 3412625,
+      "DecodeDuration": 3005709,
+      "RangeScanDuration": 2225666,
       "RangeScanMatches": 954566
     },
     {
@@ -1280,9 +1280,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 144988,
-      "EncodeDuration": 4016167,
-      "DecodeDuration": 3145166,
-      "RangeScanDuration": 2707084,
+      "EncodeDuration": 4068166,
+      "DecodeDuration": 3372167,
+      "RangeScanDuration": 2801166,
       "RangeScanMatches": 954566
     },
     {
@@ -1297,9 +1297,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 167973,
-      "EncodeDuration": 4342084,
-      "DecodeDuration": 3410125,
-      "RangeScanDuration": 2860541,
+      "EncodeDuration": 4939667,
+      "DecodeDuration": 5091125,
+      "RangeScanDuration": 3508625,
       "RangeScanMatches": 954566
     },
     {
@@ -1314,9 +1314,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 8000000,
-      "EncodeDuration": 1648375,
-      "DecodeDuration": 1931334,
-      "RangeScanDuration": 1685708,
+      "EncodeDuration": 1620083,
+      "DecodeDuration": 1986792,
+      "RangeScanDuration": 1681875,
       "RangeScanMatches": 138240
     },
     {
@@ -1331,9 +1331,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 800289,
-      "EncodeDuration": 4423666,
-      "DecodeDuration": 3641000,
-      "RangeScanDuration": 3608708,
+      "EncodeDuration": 4401458,
+      "DecodeDuration": 3686125,
+      "RangeScanDuration": 4280458,
       "RangeScanMatches": 138240
     },
     {
@@ -1348,9 +1348,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 892686,
-      "EncodeDuration": 6380083,
-      "DecodeDuration": 3669583,
-      "RangeScanDuration": 3742125,
+      "EncodeDuration": 6541709,
+      "DecodeDuration": 3796750,
+      "RangeScanDuration": 3768042,
       "RangeScanMatches": 138240
     },
     {
@@ -1365,9 +1365,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 1000000,
-      "EncodeDuration": 3584583,
-      "DecodeDuration": 2591375,
-      "RangeScanDuration": 2701791,
+      "EncodeDuration": 3507750,
+      "DecodeDuration": 3758792,
+      "RangeScanDuration": 2856459,
       "RangeScanMatches": 138240
     },
     {
@@ -1382,9 +1382,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 261203,
-      "EncodeDuration": 4455750,
-      "DecodeDuration": 3350833,
-      "RangeScanDuration": 3425542,
+      "EncodeDuration": 4448208,
+      "DecodeDuration": 3293166,
+      "RangeScanDuration": 3421333,
       "RangeScanMatches": 138240
     },
     {
@@ -1399,9 +1399,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 300622,
-      "EncodeDuration": 4890500,
-      "DecodeDuration": 3448541,
-      "RangeScanDuration": 3562250,
+      "EncodeDuration": 4951625,
+      "DecodeDuration": 3519208,
+      "RangeScanDuration": 3708042,
       "RangeScanMatches": 138240
     },
     {
@@ -1416,9 +1416,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 8000000,
-      "EncodeDuration": 1615250,
-      "DecodeDuration": 2246417,
-      "RangeScanDuration": 1223542,
+      "EncodeDuration": 1662125,
+      "DecodeDuration": 2130292,
+      "RangeScanDuration": 1305042,
       "RangeScanMatches": 77066
     },
     {
@@ -1433,9 +1433,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 530708,
-      "EncodeDuration": 3029625,
-      "DecodeDuration": 3055209,
-      "RangeScanDuration": 2707333,
+      "EncodeDuration": 3710709,
+      "DecodeDuration": 3546292,
+      "RangeScanDuration": 2839875,
       "RangeScanMatches": 77066
     },
     {
@@ -1450,9 +1450,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 409312,
-      "EncodeDuration": 4150000,
-      "DecodeDuration": 5458333,
-      "RangeScanDuration": 5118375,
+      "EncodeDuration": 4263708,
+      "DecodeDuration": 5511583,
+      "RangeScanDuration": 4884666,
       "RangeScanMatches": 77066
     },
     {
@@ -1467,9 +1467,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 1000000,
-      "EncodeDuration": 3438667,
-      "DecodeDuration": 3845917,
-      "RangeScanDuration": 2373792,
+      "EncodeDuration": 3420334,
+      "DecodeDuration": 2770375,
+      "RangeScanDuration": 2370375,
       "RangeScanMatches": 77066
     },
     {
@@ -1484,9 +1484,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 192851,
-      "EncodeDuration": 4247334,
-      "DecodeDuration": 3267208,
-      "RangeScanDuration": 2965542,
+      "EncodeDuration": 4312208,
+      "DecodeDuration": 3909000,
+      "RangeScanDuration": 2947333,
       "RangeScanMatches": 77066
     },
     {
@@ -1501,9 +1501,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 223469,
-      "EncodeDuration": 4686375,
-      "DecodeDuration": 3466208,
-      "RangeScanDuration": 3015958,
+      "EncodeDuration": 4834917,
+      "DecodeDuration": 3518041,
+      "RangeScanDuration": 3035333,
       "RangeScanMatches": 77066
     },
     {
@@ -1518,9 +1518,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 8000000,
-      "EncodeDuration": 1825959,
-      "DecodeDuration": 2923041,
-      "RangeScanDuration": 766375,
+      "EncodeDuration": 1635459,
+      "DecodeDuration": 1763875,
+      "RangeScanDuration": 746667,
       "RangeScanMatches": 0
     },
     {
@@ -1535,9 +1535,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 916427,
-      "EncodeDuration": 5509584,
-      "DecodeDuration": 4576292,
-      "RangeScanDuration": 3479209,
+      "EncodeDuration": 5422334,
+      "DecodeDuration": 4714541,
+      "RangeScanDuration": 3499625,
       "RangeScanMatches": 0
     },
     {
@@ -1552,9 +1552,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 1105301,
-      "EncodeDuration": 8160834,
-      "DecodeDuration": 5813750,
-      "RangeScanDuration": 4399750,
+      "EncodeDuration": 7906333,
+      "DecodeDuration": 5494542,
+      "RangeScanDuration": 4412042,
       "RangeScanMatches": 0
     },
     {
@@ -1569,9 +1569,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1001231,
       "StoredBytes": 1001231,
-      "EncodeDuration": 3472625,
-      "DecodeDuration": 2721250,
-      "RangeScanDuration": 1887208,
+      "EncodeDuration": 3414875,
+      "DecodeDuration": 2723125,
+      "RangeScanDuration": 1896500,
       "RangeScanMatches": 0
     },
     {
@@ -1586,9 +1586,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1001231,
       "StoredBytes": 347079,
-      "EncodeDuration": 4732833,
-      "DecodeDuration": 3341000,
-      "RangeScanDuration": 2502291,
+      "EncodeDuration": 4776708,
+      "DecodeDuration": 3480583,
+      "RangeScanDuration": 2624125,
       "RangeScanMatches": 0
     },
     {
@@ -1603,9 +1603,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1001231,
       "StoredBytes": 387822,
-      "EncodeDuration": 5103042,
-      "DecodeDuration": 3521500,
-      "RangeScanDuration": 2647042,
+      "EncodeDuration": 5041625,
+      "DecodeDuration": 3531458,
+      "RangeScanDuration": 2685791,
       "RangeScanMatches": 0
     },
     {
@@ -1620,9 +1620,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 8000000,
-      "EncodeDuration": 1799708,
-      "DecodeDuration": 1954375,
-      "RangeScanDuration": 588958,
+      "EncodeDuration": 1626000,
+      "DecodeDuration": 1706292,
+      "RangeScanDuration": 568125,
       "RangeScanMatches": 25
     },
     {
@@ -1637,9 +1637,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 627621,
-      "EncodeDuration": 3612042,
-      "DecodeDuration": 3442666,
-      "RangeScanDuration": 1950292,
+      "EncodeDuration": 3785625,
+      "DecodeDuration": 4068041,
+      "RangeScanDuration": 2243541,
       "RangeScanMatches": 25
     },
     {
@@ -1654,9 +1654,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 492980,
-      "EncodeDuration": 4663667,
-      "DecodeDuration": 6463666,
-      "RangeScanDuration": 3978250,
+      "EncodeDuration": 4665333,
+      "DecodeDuration": 6192417,
+      "RangeScanDuration": 4063000,
       "RangeScanMatches": 25
     },
     {
@@ -1671,9 +1671,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1083152,
       "StoredBytes": 1083152,
-      "EncodeDuration": 3821750,
-      "DecodeDuration": 2935875,
-      "RangeScanDuration": 1763583,
+      "EncodeDuration": 3882333,
+      "DecodeDuration": 3066208,
+      "RangeScanDuration": 1721166,
       "RangeScanMatches": 25
     },
     {
@@ -1688,9 +1688,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1083152,
       "StoredBytes": 372759,
-      "EncodeDuration": 5332625,
-      "DecodeDuration": 3783958,
-      "RangeScanDuration": 2282916,
+      "EncodeDuration": 5259333,
+      "DecodeDuration": 3807083,
+      "RangeScanDuration": 2285000,
       "RangeScanMatches": 25
     },
     {
@@ -1705,9 +1705,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1083152,
       "StoredBytes": 401782,
-      "EncodeDuration": 5827875,
-      "DecodeDuration": 3788792,
-      "RangeScanDuration": 2288167,
+      "EncodeDuration": 5793750,
+      "DecodeDuration": 4124792,
+      "RangeScanDuration": 2338459,
       "RangeScanMatches": 25
     },
     {
@@ -1722,9 +1722,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 8000000,
-      "EncodeDuration": 2002583,
-      "DecodeDuration": 1817500,
-      "RangeScanDuration": 928833,
+      "EncodeDuration": 1630958,
+      "DecodeDuration": 1732584,
+      "RangeScanDuration": 927625,
       "RangeScanMatches": 13838
     },
     {
@@ -1739,9 +1739,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 1389487,
-      "EncodeDuration": 7809125,
-      "DecodeDuration": 4761167,
-      "RangeScanDuration": 3920125,
+      "EncodeDuration": 7576250,
+      "DecodeDuration": 4514708,
+      "RangeScanDuration": 3700166,
       "RangeScanMatches": 13838
     },
     {
@@ -1756,9 +1756,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 1811941,
-      "EncodeDuration": 10812167,
-      "DecodeDuration": 4658041,
-      "RangeScanDuration": 3586500,
+      "EncodeDuration": 10815625,
+      "DecodeDuration": 4216542,
+      "RangeScanDuration": 3525583,
       "RangeScanMatches": 13838
     },
     {
@@ -1773,9 +1773,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 1000000,
-      "EncodeDuration": 3548292,
-      "DecodeDuration": 2812084,
-      "RangeScanDuration": 2153792,
+      "EncodeDuration": 3390584,
+      "DecodeDuration": 2657875,
+      "RangeScanDuration": 2061208,
       "RangeScanMatches": 13838
     },
     {
@@ -1790,9 +1790,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 571548,
-      "EncodeDuration": 5645250,
-      "DecodeDuration": 3635000,
-      "RangeScanDuration": 2953917,
+      "EncodeDuration": 5506209,
+      "DecodeDuration": 3487208,
+      "RangeScanDuration": 2860333,
       "RangeScanMatches": 13838
     },
     {
@@ -1807,9 +1807,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000000,
       "StoredBytes": 658413,
-      "EncodeDuration": 6022791,
-      "DecodeDuration": 3554959,
-      "RangeScanDuration": 2845750,
+      "EncodeDuration": 5841375,
+      "DecodeDuration": 3993375,
+      "RangeScanDuration": 2758375,
       "RangeScanMatches": 13838
     },
     {
@@ -1824,9 +1824,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 8000000,
-      "EncodeDuration": 2277125,
-      "DecodeDuration": 2310208,
-      "RangeScanDuration": 24875,
+      "EncodeDuration": 1600125,
+      "DecodeDuration": 1645750,
+      "RangeScanDuration": 28375,
       "RangeScanMatches": 15625
     },
     {
@@ -1841,9 +1841,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 4002443,
-      "EncodeDuration": 7956208,
-      "DecodeDuration": 4388833,
-      "RangeScanDuration": 74833,
+      "EncodeDuration": 7945667,
+      "DecodeDuration": 4244000,
+      "RangeScanDuration": 74792,
       "RangeScanMatches": 15625
     },
     {
@@ -1858,9 +1858,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 4003725,
-      "EncodeDuration": 12334417,
-      "DecodeDuration": 6056208,
-      "RangeScanDuration": 84041,
+      "EncodeDuration": 12125125,
+      "DecodeDuration": 5762833,
+      "RangeScanDuration": 86459,
       "RangeScanMatches": 15625
     },
     {
@@ -1875,9 +1875,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000244,
       "StoredBytes": 1000244,
-      "EncodeDuration": 3483583,
-      "DecodeDuration": 2772250,
-      "RangeScanDuration": 44083,
+      "EncodeDuration": 3388709,
+      "DecodeDuration": 2602584,
+      "RangeScanDuration": 42584,
       "RangeScanMatches": 15625
     },
     {
@@ -1892,9 +1892,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000244,
       "StoredBytes": 47733,
-      "EncodeDuration": 3612667,
-      "DecodeDuration": 2928333,
-      "RangeScanDuration": 44125,
+      "EncodeDuration": 3463500,
+      "DecodeDuration": 2812209,
+      "RangeScanDuration": 43500,
       "RangeScanMatches": 15625
     },
     {
@@ -1909,9 +1909,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 1000244,
       "StoredBytes": 6738,
-      "EncodeDuration": 3500292,
-      "DecodeDuration": 4021833,
-      "RangeScanDuration": 62750,
+      "EncodeDuration": 3518084,
+      "DecodeDuration": 4053792,
+      "RangeScanDuration": 64125,
       "RangeScanMatches": 15625
     },
     {
@@ -1926,9 +1926,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 8000000,
-      "EncodeDuration": 1673292,
-      "DecodeDuration": 2409709,
-      "RangeScanDuration": 31750,
+      "EncodeDuration": 1620958,
+      "DecodeDuration": 2479625,
+      "RangeScanDuration": 30291,
       "RangeScanMatches": 15022
     },
     {
@@ -1943,9 +1943,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 5005356,
-      "EncodeDuration": 10944792,
-      "DecodeDuration": 4522375,
-      "RangeScanDuration": 104042,
+      "EncodeDuration": 10763833,
+      "DecodeDuration": 4280125,
+      "RangeScanDuration": 101000,
       "RangeScanMatches": 15022
     },
     {
@@ -1960,9 +1960,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 8000000,
       "StoredBytes": 5028110,
-      "EncodeDuration": 15880500,
-      "DecodeDuration": 5038958,
-      "RangeScanDuration": 111917,
+      "EncodeDuration": 15906375,
+      "DecodeDuration": 5156000,
+      "RangeScanDuration": 113333,
       "RangeScanMatches": 15022
     },
     {
@@ -1977,9 +1977,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 2007816,
       "StoredBytes": 2007816,
-      "EncodeDuration": 3559459,
-      "DecodeDuration": 3725459,
-      "RangeScanDuration": 81125,
+      "EncodeDuration": 3577792,
+      "DecodeDuration": 3593000,
+      "RangeScanDuration": 94667,
       "RangeScanMatches": 15022
     },
     {
@@ -1994,9 +1994,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 2007816,
       "StoredBytes": 2008563,
-      "EncodeDuration": 3725042,
-      "DecodeDuration": 3393875,
-      "RangeScanDuration": 73417,
+      "EncodeDuration": 3770792,
+      "DecodeDuration": 3263375,
+      "RangeScanDuration": 78250,
       "RangeScanMatches": 15022
     },
     {
@@ -2011,9 +2011,9 @@
       "ValueBytes": 8000000,
       "EncodedRawBytes": 2007816,
       "StoredBytes": 2007816,
-      "EncodeDuration": 4008083,
-      "DecodeDuration": 3292125,
-      "RangeScanDuration": 73708,
+      "EncodeDuration": 4055000,
+      "DecodeDuration": 3239792,
+      "RangeScanDuration": 71084,
       "RangeScanMatches": 15022
     }
   ],

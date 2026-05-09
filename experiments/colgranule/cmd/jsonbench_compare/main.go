@@ -159,7 +159,7 @@ func measureRemainingTreeDB(ctx context.Context, files []string, rows int, dbDir
 	out.DocumentFormat = string(format)
 	out.StoragePolicy = string(collections.RootStorageCompressed)
 	out.DBDir = dbDir
-	out.StoredShape = fmt.Sprintf("original JSON object converted to %s with top-level time_us removed", format)
+	out.StoredShape = fmt.Sprintf("original JSON object converted to %s with ClickHouse typed JSON paths removed", format)
 	if rows <= 0 {
 		return out, errors.New("remaining TreeDB measurement requires positive row count")
 	}
@@ -405,7 +405,7 @@ func remainingBSONDocument(raw []byte) ([]byte, error) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return nil, fmt.Errorf("decode remaining JSON: %w", err)
 	}
-	delete(doc, "time_us")
+	removeClickHouseTypedPaths(doc)
 	encoded, err := bson.Marshal(doc)
 	if err != nil {
 		return nil, fmt.Errorf("encode remaining BSON: %w", err)
@@ -421,12 +421,48 @@ func remainingJSONDocument(raw []byte) ([]byte, error) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return nil, fmt.Errorf("decode remaining JSON: %w", err)
 	}
-	delete(doc, "time_us")
+	if err := removeClickHouseTypedRawPaths(doc); err != nil {
+		return nil, err
+	}
 	encoded, err := json.Marshal(doc)
 	if err != nil {
 		return nil, fmt.Errorf("encode remaining JSON: %w", err)
 	}
 	return encoded, nil
+}
+
+func removeClickHouseTypedPaths(doc map[string]any) {
+	delete(doc, "time_us")
+	delete(doc, "kind")
+	delete(doc, "did")
+	commit, ok := doc["commit"].(map[string]any)
+	if !ok {
+		return
+	}
+	delete(commit, "operation")
+	delete(commit, "collection")
+}
+
+func removeClickHouseTypedRawPaths(doc map[string]json.RawMessage) error {
+	delete(doc, "time_us")
+	delete(doc, "kind")
+	delete(doc, "did")
+	rawCommit, ok := doc["commit"]
+	if !ok {
+		return nil
+	}
+	var commit map[string]json.RawMessage
+	if err := json.Unmarshal(rawCommit, &commit); err != nil {
+		return fmt.Errorf("decode remaining commit JSON: %w", err)
+	}
+	delete(commit, "operation")
+	delete(commit, "collection")
+	encoded, err := json.Marshal(commit)
+	if err != nil {
+		return fmt.Errorf("encode remaining commit JSON: %w", err)
+	}
+	doc["commit"] = encoded
+	return nil
 }
 
 var errStopScan = errors.New("stop scan")
@@ -527,23 +563,23 @@ func writeMarkdown(path string, raw comparisonRaw) {
 	fmt.Fprintf(&b, "| Granule best-codec all derived columns | %d | %.2f | %.2f%% of ClickHouse local total. |\n", allBest, mib(int64(allBest)), ratio(float64(allBest)*100, float64(raw.ClickHouseLocal.TotalSize)))
 	fmt.Fprintf(&b, "| Granule best-codec query/index paths | %d | %.2f | %.2f%% of ClickHouse local total. |\n", queryBest, mib(int64(queryBest)), ratio(float64(queryBest)*100, float64(raw.ClickHouseLocal.TotalSize)))
 	if raw.RemainingTreeDB.Enabled {
-		fmt.Fprintf(&b, "| TreeDB BSON remaining fields after compaction + value-log rewrite | %d | %.2f | Stores original JSON minus `time_us` as BSON in a compressed no-index collection. |\n", raw.RemainingTreeDB.AfterCompactBytes, mib(raw.RemainingTreeDB.AfterCompactBytes))
+		fmt.Fprintf(&b, "| TreeDB BSON remaining fields after compaction + value-log rewrite | %d | %.2f | Stores original JSON minus ClickHouse typed paths as BSON in a compressed no-index collection. |\n", raw.RemainingTreeDB.AfterCompactBytes, mib(raw.RemainingTreeDB.AfterCompactBytes))
 		fmt.Fprintf(&b, "| Granules all derived columns + TreeDB BSON remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", combinedAllBSON, mib(combinedAllBSON), ratio(float64(combinedAllBSON)*100, float64(raw.ClickHouseLocal.TotalSize)))
 		fmt.Fprintf(&b, "| Granules query/index paths + TreeDB BSON remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", combinedQueryBSON, mib(combinedQueryBSON), ratio(float64(combinedQueryBSON)*100, float64(raw.ClickHouseLocal.TotalSize)))
 	}
 	if raw.RemainingTreeDBJSON.Enabled {
-		fmt.Fprintf(&b, "| TreeDB JSON remaining fields after compaction + value-log rewrite | %d | %.2f | Stores original JSON minus `time_us` as JSON in a compressed no-index collection. |\n", raw.RemainingTreeDBJSON.AfterCompactBytes, mib(raw.RemainingTreeDBJSON.AfterCompactBytes))
+		fmt.Fprintf(&b, "| TreeDB JSON remaining fields after compaction + value-log rewrite | %d | %.2f | Stores original JSON minus ClickHouse typed paths as JSON in a compressed no-index collection. |\n", raw.RemainingTreeDBJSON.AfterCompactBytes, mib(raw.RemainingTreeDBJSON.AfterCompactBytes))
 		fmt.Fprintf(&b, "| Granules all derived columns + TreeDB JSON remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", combinedAllJSON, mib(combinedAllJSON), ratio(float64(combinedAllJSON)*100, float64(raw.ClickHouseLocal.TotalSize)))
 		fmt.Fprintf(&b, "| Granules query/index paths + TreeDB JSON remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", combinedQueryJSON, mib(combinedQueryJSON), ratio(float64(combinedQueryJSON)*100, float64(raw.ClickHouseLocal.TotalSize)))
 	}
 	if raw.RemainingTreeDBTpl.Enabled {
-		fmt.Fprintf(&b, "| TreeDB Template-v1 remaining fields after compaction + value-log rewrite | %d | %.2f | Stores original JSON minus `time_us` as Template-v1 in a compressed no-index collection. |\n", raw.RemainingTreeDBTpl.AfterCompactBytes, mib(raw.RemainingTreeDBTpl.AfterCompactBytes))
+		fmt.Fprintf(&b, "| TreeDB Template-v1 remaining fields after compaction + value-log rewrite | %d | %.2f | Stores original JSON minus ClickHouse typed paths as Template-v1 in a compressed no-index collection. |\n", raw.RemainingTreeDBTpl.AfterCompactBytes, mib(raw.RemainingTreeDBTpl.AfterCompactBytes))
 		fmt.Fprintf(&b, "| Granules all derived columns + TreeDB Template-v1 remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", combinedAllTpl, mib(combinedAllTpl), ratio(float64(combinedAllTpl)*100, float64(raw.ClickHouseLocal.TotalSize)))
 		fmt.Fprintf(&b, "| Granules query/index paths + TreeDB Template-v1 remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", combinedQueryTpl, mib(combinedQueryTpl), ratio(float64(combinedQueryTpl)*100, float64(raw.ClickHouseLocal.TotalSize)))
 	}
 	fmt.Fprintf(&b, "\n")
 	if raw.RemainingTreeDB.Enabled {
-		fmt.Fprintf(&b, "The remaining-fields TreeDB collection stores each original JSON row after deleting only `time_us`, because `time_us` is represented exactly by a granule column. It intentionally keeps raw strings and nested JSON values such as `did`, `kind`, `commit.*`, `commit.record.text`, `langs`, `reply`, and `subject`; this avoids pretending dictionary payloads or nested object payloads are free.\n\n")
+		fmt.Fprintf(&b, "The remaining-fields TreeDB collection stores each original JSON row after deleting the same explicitly typed JSON paths used by the local ClickHouse JSONBench schema: `time_us`, `kind`, `did`, `commit.operation`, and `commit.collection`. The removed paths are represented by granule columns in this experiment. Nested values such as `commit.rev`, `commit.rkey`, `commit.cid`, `commit.record.text`, `langs`, `reply`, and `subject` remain in the TreeDB payload.\n\n")
 		fmt.Fprintf(&b, "BSON remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; BSON payload bytes before TreeDB storage `%d`.\n\n", raw.RemainingTreeDB.BeforeCompactBytes, raw.RemainingTreeDB.BeforeCompactFiles, raw.RemainingTreeDB.AfterCompactBytes, raw.RemainingTreeDB.AfterCompactFiles, raw.RemainingTreeDB.CompactionDuration, raw.RemainingTreeDB.RewriteDuration, raw.RemainingTreeDB.RewriteRecordsCopied, raw.RemainingTreeDB.RewriteValueBytes, raw.RemainingTreeDB.RewriteSourceBytes, raw.RemainingTreeDB.RawDocumentBytes)
 	}
 	if raw.RemainingTreeDBJSON.Enabled {
