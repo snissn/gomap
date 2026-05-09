@@ -9424,6 +9424,139 @@ func TestCollectionUpdateBSONSetReusesUnchangedIndexState(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBSONSetRequiresBSONFormat(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err == nil {
+		t.Fatalf("UpdateBSONSet err=nil matched=%v modified=%v", matched, modified)
+	}
+	if !strings.Contains(err.Error(), "requires BSON document format") {
+		t.Fatalf("UpdateBSONSet err=%q want BSON format error", err)
+	}
+}
+
+func TestValidateUpdateBatchItemsRejectsBSONSetWithCallback(t *testing.T) {
+	spec, err := newBSONSetUpdate([]BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("new BSON set update: %v", err)
+	}
+	err = validateUpdateBatchItems([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			return current, false, nil
+		},
+		bsonSet:    spec,
+		hasBSONSet: true,
+	}})
+	if err == nil {
+		t.Fatal("validateUpdateBatchItems err=nil want error")
+	}
+	if !strings.Contains(err.Error(), "cannot set both") {
+		t.Fatalf("validateUpdateBatchItems err=%q want mixed update error", err)
+	}
+}
+
+func TestBuildUpdateBatchPlanBSONSetRejectsInvalidCurrentBSON(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("acquire snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	baseCommitSeq := snapshotCommitSeq(snap)
+	baseSystemRoot := snapshotSystemRoot(snap)
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	rootName := collectionPrimaryRootName("users")
+	baseRoot := catalog.rootID(rootName)
+	table := newCollectionRunTable(1)
+	setCollectionRunValue(table, []byte("u1"), []byte{0x05, 0x00, 0x00, 0x00})
+	table.Freeze()
+	defer resetCollectionRunTable(table)
+
+	_, rootIDs, err := d.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
+		BaseRoot:      baseRoot,
+		Iter:          table.NewIterator(nil, nil),
+		StoragePolicy: backenddb.OrderedRootStorageDefault,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return col.buildRootDescriptorSystemDeltaIterator(
+			baseCommitSeq,
+			baseSystemRoot,
+			[]string{rootName},
+			map[string]uint64{rootName: baseRoot},
+			rootIDs,
+		)
+	})
+	if err != nil {
+		t.Fatalf("publish invalid BSON primary root: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("published root IDs=%d want 1", len(rootIDs))
+	}
+
+	spec, err := newBSONSetUpdate([]BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("new BSON set update: %v", err)
+	}
+	plan, err := col.buildUpdateBatchPlan([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		bsonSet:    spec,
+		hasBSONSet: true,
+	}}, updateBatchModeNoSecondaryUniqueIndexChanges, false)
+	if plan != nil {
+		plan.close()
+	}
+	if err == nil {
+		t.Fatal("buildUpdateBatchPlan err=nil want invalid current BSON")
+	}
+	if !strings.Contains(err.Error(), "current BSON document") {
+		t.Fatalf("buildUpdateBatchPlan err=%q want current BSON validation error", err)
+	}
+}
+
 func TestCollectionUpdateBSONSetRejectsInvalidFieldNames(t *testing.T) {
 	for _, tc := range []struct {
 		name string
