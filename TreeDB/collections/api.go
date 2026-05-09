@@ -30,7 +30,10 @@ import (
 const (
 	collectionMetaVersion        = 2
 	maxCollectionMutationRetries = 64
-	maxCollectionInt             = int(^uint(0) >> 1)
+	// Bound stale buffered-read replans so a writer under constant buffered
+	// pressure eventually falls back to a publish boundary or outer retry.
+	maxUpdateBatchBufferedReadReplans = 8
+	maxCollectionInt                  = int(^uint(0) >> 1)
 
 	// DefaultIndexedWriteMemtableMaxDocuments bounds the native indexed
 	// collection write-domain before it auto-flushes to persistent roots.
@@ -8955,6 +8958,7 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, error) {
 	if c.shouldPlanUpdateBatchWithBufferedWrites(mode) {
 		useBufferedRead := true
+		bufferedReadReplans := 0
 		for {
 			plan, err := c.buildUpdateBatchPlan(items, mode, useBufferedRead)
 			if err != nil {
@@ -8965,6 +8969,19 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 			}
 			var results []UpdateBatchResult
 			replan := false
+			replanBufferedRead := func() error {
+				if bufferedReadReplans < maxUpdateBatchBufferedReadReplans {
+					bufferedReadReplans++
+					replan = true
+					return nil
+				}
+				if err := c.flushBufferedWrites(); err != nil {
+					return err
+				}
+				useBufferedRead = false
+				replan = true
+				return nil
+			}
 			err = c.withMutationLock(func() error {
 				if len(plan.deltaTables) == 0 && plan.directBufferedUpdate == nil {
 					if plan.bufferedReadBlocked && useBufferedRead {
@@ -8980,8 +8997,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 							// A buffered snapshot can go stale while update callbacks run
 							// before the mutation lock. Replan against the newer buffered
 							// domain instead of turning that race into a publish boundary.
-							replan = true
-							return nil
+							return replanBufferedRead()
 						}
 						return ErrConcurrentMutation
 					}
@@ -8999,8 +9015,7 @@ func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMo
 							// The buffered domain moved between planning and staging. Keep
 							// the update in the buffered layer by replanning with a fresh
 							// buffered snapshot.
-							replan = true
-							return nil
+							return replanBufferedRead()
 						}
 						if err := c.flushBufferedWrites(); err != nil {
 							return err
