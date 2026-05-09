@@ -139,6 +139,22 @@ The current documented contract is flush-boundary durable, not durable-at-ack.
 That contract is understandable for today's row collections, but it is too weak
 as a foundation for column-store collections with external part files.
 
+Current code also has a clear separation between what can be reused and what
+must be added:
+
+- backend ordered root-group publication is the right executor for final
+  publish and recovery replay;
+- current commit-log records are key/value records, not collection
+  transactions;
+- current collection write-domain state contains enough planning information to
+  build root-local deltas, but it does not preserve those deltas as durable
+  transaction bytes before acknowledgement;
+- current `Flush`, `FlushAll`, close hooks, and checkpoint behavior are
+  flush-boundary mechanisms, not collection-WAL transaction cleanup mechanisms;
+- current recovery has a chronological slot for collection WAL replay after
+  normal cached WAL replay and before state exposure, but no collection WAL
+  replayer API.
+
 ### 2.4 Native Wire and Raft Planning
 
 Native-wire R0-R2 work now establishes a separate logical replication layer:
@@ -290,8 +306,9 @@ blind retry.
 `DB.Checkpoint`:
 
 - Must become a full database durability/cleanup boundary for collection WAL.
-- Must call registered collection checkpoint hooks. PR1 checkpoint hooks must
-  publish every replayable collection WAL transaction known to the manager,
+- Must call a backend-owned collection WAL checkpoint service, or registered
+  hooks that are coordinated by such a service. PR1 checkpoint handling must
+  publish every replayable collection WAL transaction known to the backend,
   advance applied watermarks in backend commits, sync the backend boundary
   required by the selected mode, and only then allow collection WAL cleanup.
 - It must not report a clean WAL state while collection WAL transactions remain
@@ -308,6 +325,9 @@ blind retry.
   close.
 - Must not discard a collection WAL transaction before its applied watermark and
   cleanup boundary are safely published.
+- Close must use the same backend-owned collection WAL publish/checkpoint path
+  as `DB.Checkpoint`; manager-local close hooks may drain visibility domains,
+  but they are not sufficient as the sole source of WAL recovery truth.
 
 Read-only open after crash:
 
@@ -848,6 +868,12 @@ They must publish the exact WAL-backed root deltas and advance watermarks; they
 must not re-plan, re-pointerize, or otherwise transform the acknowledged
 transaction.
 
+Direct synchronous publish paths are not exempt from the WAL-on transaction
+model. In WAL-on modes they must either append a collection WAL transaction and
+then publish/watermark it through the same collection-specific publish wrapper,
+or be limited to `DurabilityWALOffRelaxed`/debug paths whose weaker contract is
+explicitly documented. Uniform WAL-on behavior should log first, then publish.
+
 ### 8.1 No-Index Inserts
 
 Current no-index inserts can remain buffered in `domain.table`. After this
@@ -856,6 +882,11 @@ before acknowledgement. If the value is stored as a value-log pointer, the WAL
 transaction records the stable `ValuePtr` bytes and the required
 `ValueLogRecord` side ref; flush must not later pointerize the raw document into
 a different physical value.
+
+No-index buffered writes must enter the same collection mutation serialization
+path as indexed writes before allocating `CollectionSeq` or making pending state
+visible. Bypassing the mutation serialization path makes per-collection ordering
+and committed-before-visible guarantees too hard to verify.
 
 ### 8.2 Indexed Inserts
 
@@ -906,6 +937,19 @@ If async publish fails, in-memory units can be requeued as they are today. The
 collection WAL transaction remains the recovery source until a successful
 publish advances the watermark.
 
+Every queued or publishing flush unit must carry the collection WAL transaction
+identity it covers:
+
+- `GlobalTxnID` range for diagnostics and cleanup;
+- contiguous `CollectionSeq` range for the owning collection;
+- required side-ref ownership or references to the protected side-ref index;
+- root names and root generations covered by the publish.
+
+Async publish completion may advance the applied watermark only for whole
+transactions covered by the successful root publish. Requeue must preserve WAL
+transaction ownership and must not append replacement WAL records for the same
+acknowledged mutation.
+
 ### 8.5 Overlay Roots
 
 Overlay-root mode should use the same transaction model. The WAL transaction
@@ -939,6 +983,12 @@ PublishCollectionWALTransaction(txn, options) {
 The underlying ordered-root publish APIs may remain the root executor, but the
 collection WAL layer owns validation, template instantiation, watermark
 advancement, sync policy, and side-ref protection.
+
+The existing ordered-root APIs are useful executors, not transaction APIs. The
+collection WAL layer must not expose arbitrary runtime system-builder closures
+as the durable recovery contract. Recovery and flush should call a typed wrapper
+that consumes the recorded transaction, validates its guards, and instantiates
+the recorded `SystemDeltaTemplate`.
 
 ### 8.7 WAL-Off Mode
 
@@ -978,6 +1028,42 @@ the collection WAL.
 remain local barriers. Cluster mode must reject `ack_policy=raft_committed` for
 those commands or define a separate deterministic distributed barrier command
 with explicit consensus semantics.
+
+### 8.9 Lock Ordering and Goroutine Lifecycle
+
+PR1 must document and test lock ordering before product code depends on
+collection WAL. Required ordering constraints:
+
+- collection mutation serialization happens before `CollectionSeq` allocation
+  and before pending visibility changes;
+- side-ref prepare guard is acquired before writing side refs and is released
+  only after committed WAL or abort/quarantine;
+- collection WAL append lock must not be held while acquiring backend publish
+  locks;
+- backend write/commit locks must not be held while waiting for collection
+  domain locks or async publisher condition variables;
+- async publishers publish already-logged transactions and never allocate new
+  WAL transaction ids for the covered acknowledged writes;
+- close/checkpoint first stop or fence new writers, then drain async publishers,
+  then publish/replay WAL-backed transactions, then advance durable watermarks,
+  then clean;
+- background goroutines must be owned by the backend collection WAL service or
+  be registered with it so recovery/checkpoint/close can quiesce them.
+
+The safe high-level sequence is:
+
+```text
+prepare final deltas and side refs under collection mutation/domain locks
+-> release planner-only locks that are not needed for append
+-> append/sync collection WAL under collection WAL writer lock
+-> mark pre-reserved pending state visible
+-> later publish logged deltas without holding the WAL append lock
+-> atomically advance root descriptors and watermarks
+-> cleanup only after durable checkpoint/meta boundary
+```
+
+Implementations may use finer-grained locks, but they must preserve the same
+deadlock and visibility invariants.
 
 ## 9. Recovery Algorithm
 
@@ -1059,6 +1145,13 @@ the same collection roots and applied watermark.
 No side-store cleanup, value-log rewrite, column-file cleanup, or collection WAL
 segment cleanup may run until collection WAL recovery and protected side-ref
 index reconstruction are complete.
+
+The recovery implementation must be backend-owned. It must run before collection
+managers or user collection handles can observe collection state, and it must not
+depend on a caller constructing a `CollectionManager`. The intended insertion
+point is after normal cached key/value WAL replay and side-store inventory, but
+before recovered roots are exposed to user-visible state, snapshots, native-wire
+servers, or collection managers.
 
 Read-only open cannot perform steps that mutate backend state. If unapplied
 committed collection WAL exists, read-only open must fail with a clear
@@ -1359,7 +1452,9 @@ Tests:
 
 - current checkpoint boundary test;
 - close drains queued indexed flush unit;
-- `FlushAll` drains queued indexed flush unit.
+- `FlushAll` drains queued indexed flush unit;
+- failpoint hooks compile and can stop execution at side prepare, WAL append,
+  staging, publish, watermark, cleanup, and recovery replay boundaries.
 
 Gate:
 
@@ -1378,7 +1473,9 @@ Deliverables:
   encoding;
 - `SystemDeltaTemplate` and descriptor-op encoding;
 - segment metadata and cleanup record encoding;
-- exact format documentation in this file.
+- exact format documentation in this file;
+- stable root-delta encode/decode APIs independent of transient in-memory
+  `batch.Batch` layout.
 
 Tests:
 
@@ -1430,8 +1527,12 @@ Gate:
 Deliverables:
 
 - WAL-on no-index inserts append collection WAL before acknowledgement;
+- no-index buffered inserts enter collection mutation serialization before
+  `CollectionSeq` allocation and pending visibility;
 - final physical primary-root deltas are materialized before the commit marker;
 - pending write-domain visibility remains unchanged;
+- direct publish paths log first under WAL-on modes or remain explicitly
+  WAL-off/debug-only;
 - `Flush` publishes WAL-backed no-index deltas and advances watermark.
 
 Tests:
@@ -1451,6 +1552,8 @@ Deliverables:
 - indexed insert root-group WAL;
 - update/delete root-group WAL;
 - async flush publish uses existing durable transactions;
+- queued/publishing flush units carry `GlobalTxnID` and contiguous
+  `CollectionSeq` ranges;
 - unique helper rebuild after recovery;
 - replay accumulator for multiple buffered transactions that share one persisted
   root base;
@@ -1488,6 +1591,8 @@ Deliverables:
 - per-collection applied sequence watermark plus optional global-contiguous
   diagnostic watermark;
 - collection WAL replay in open path;
+- backend-owned collection WAL recovery service independent of
+  `CollectionManager` construction;
 - collection-specific publish wrapper around ordered-root publish APIs;
 - segment cleanup after safe checkpoint;
 - prepared side-file quarantine/delete;
@@ -1518,7 +1623,8 @@ Gate:
 Deliverables:
 
 - `DB.Checkpoint` coordinates with collection WAL;
-- checkpoint hook registry analogous to close hooks;
+- backend-owned checkpoint service or checkpoint hook registry coordinated by
+  that service;
 - `CollectionManager.FlushAll` and close hooks use the same publish path;
 - API docs distinguish process-crash recovery from fsync durability.
 
@@ -1682,21 +1788,26 @@ Module-specific constraints:
   markers, `GlobalTxnID`, per-collection sequence allocation, side-ref
   verification, segment metadata, cleanup records, protected side-ref index
   rebuild, missing-segment classification, and segment cleanup after the durable
-  applied watermark/checkpoint boundary.
+  applied watermark/checkpoint boundary. It may reuse or extract generic frame
+  encoding from `internal/commitlog`, but it must not reuse the key/value
+  `commitlog.Record` schema as the collection transaction schema.
 - `TreeDB/collections` owns final physical delta planning before
   acknowledgement. WAL-on collection planners must serialize primary,
   template/index-state, secondary, overlay, delete, schema, and future
   column-store descriptor deltas before the commit marker and must stage the
-  same immutable deltas for visibility.
+  same immutable deltas for visibility. No-index buffered inserts must use the
+  mutation serialization path before pending state becomes visible.
 - `TreeDB/db` owns a collection-specific publish wrapper around ordered-root
   executors. The wrapper validates identity/generation/dependency guards,
   materializes root deltas, instantiates `SystemDeltaTemplate`, publishes
   descriptors and watermark atomically, honors explicit sync options, and makes
   read-only open fail when unapplied committed collection WAL requires mutating
-  recovery.
-- `TreeDB/caching` and checkpoint code must track collection WAL debt. Automatic
-  checkpoint and close paths must not report clean WAL state or prune required
-  bytes while collection WAL transactions remain needed for recovery.
+  recovery. Collection WAL replay and cleanup are backend-owned services, not
+  manager-local behaviors.
+- `TreeDB/caching` and checkpoint code must track collection WAL debt through
+  the backend-owned service. Automatic checkpoint and close paths must not
+  report clean WAL state or prune required bytes while collection WAL
+  transactions remain needed for recovery.
 - `TreeDB/internal/valuelog` and future column-file maintenance must consult the
   protected side-ref index and side-ref prepare guard. PR1 rewrite refuses
   protected refs rather than moving them and patching WAL records.
@@ -1706,3 +1817,23 @@ Module-specific constraints:
   collection WAL transaction. Column files must have temp/final naming, file
   fsync, rename, directory fsync, manifest/checksum validation, and cleanup
   tests before production enablement.
+
+Recommended implementation sequence:
+
+1. Add failpoint/crash harness plumbing around side-ref prepare, WAL append,
+   pending visibility staging, root publish, watermark update, cleanup, and
+   recovery replay. These tests may initially document expected failures before
+   product behavior is implemented.
+2. Add `internal/collectionwal` plus stable root-delta encode/decode golden
+   tests. Keep this package independent from collection planner internals.
+3. Refactor collection write paths into prepare -> WAL append -> stage, starting
+   with no-index buffered inserts and then indexed insert/update/delete.
+4. Add backend-owned collection WAL recovery and per-collection watermarks in
+   the backend open path before collection managers or native-wire servers can
+   observe state.
+5. Integrate async flush ownership, checkpoint, close, cleanup metadata, and
+   protected side-ref GC/rewrite behavior.
+6. Add performance gates and tune side-payload thresholds only after correctness
+   crash tests pass.
+7. Unblock persistent column-store writes only after the row/template collection
+   WAL path proves the shared recovery and side-ref protocol.

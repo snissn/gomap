@@ -96,6 +96,13 @@ transactions. Under that plan, mutable/queued/publishing state remains a
 visibility and publish-amortization mechanism, but it must be backed by exact
 physical deltas already committed to collection WAL.
 
+That future contract requires WAL-before-visibility ordering. WAL-on collection
+writers must validate, prepare final root deltas and side refs, append the
+collection WAL commit marker, and only then make mutable/queued/publishing state
+visible to reads and unique-index helpers. Async flush remains a publication
+optimization over already-logged transactions; it is not the first durable
+record for those writes.
+
 ## Barrier Semantics
 
 Operations that require persisted roots as their planning input MUST first drain
