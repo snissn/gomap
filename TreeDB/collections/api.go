@@ -5059,7 +5059,7 @@ func (c *Collection) rejectBufferedIndexedInsertConflictsLocked(domain *collecti
 			if pending == nil || pending.len() == 0 {
 				continue
 			}
-			if err := rejectBufferedUniqueValuePrefixConflicts(uniquePlan.indexName, uniquePlan.valueType, pending, uniquePlan.prefixes); err != nil {
+			if err := rejectBufferedUniqueValuePrefixConflicts(uniquePlan.indexName, pending, uniquePlan.prefixes); err != nil {
 				return err
 			}
 		}
@@ -5118,8 +5118,7 @@ func rejectBufferedPrimaryConflicts(pendingIndex *bufferedUniqueValueIndex, pend
 	return nil
 }
 
-func rejectBufferedUniqueValuePrefixConflicts(indexName string, valueType IndexValueType, pending *bufferedUniqueValueIndex, prefixes [][]byte) error {
-	_ = valueType
+func rejectBufferedUniqueValuePrefixConflicts(indexName string, pending *bufferedUniqueValueIndex, prefixes [][]byte) error {
 	for _, prefix := range prefixes {
 		if pending != nil && pending.contains(prefix) {
 			return fmt.Errorf("%w %q", ErrUniqueIndexConflict, indexName)
