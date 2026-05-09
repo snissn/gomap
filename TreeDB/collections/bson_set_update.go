@@ -154,7 +154,24 @@ func (u bsonSetUpdate) apply(current []byte) ([]byte, bool, error) {
 // replacement aliases current. When changed, replacement aliases the returned
 // dst. On error, the returned dst is restored to its original length while
 // preserving any grown backing store for caller reuse.
-func (u bsonSetUpdate) appendReplacement(dst, current []byte) ([]byte, []byte, bool, error) {
+func (u bsonSetUpdate) appendReplacement(dst, current []byte) (returned []byte, replacement []byte, changedResult bool, err error) {
+	start := len(dst)
+	changed := false
+	var out []byte
+	resetDst := func() []byte {
+		if changed && out != nil {
+			return out[:start]
+		}
+		return dst[:start]
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			returned = resetDst()
+			replacement = nil
+			changedResult = false
+			err = collectionUpdatePanicError("structured", recovered)
+		}
+	}()
 	if len(u.fields) == 0 {
 		return dst, current, false, nil
 	}
@@ -163,7 +180,6 @@ func (u bsonSetUpdate) appendReplacement(dst, current []byte) ([]byte, []byte, b
 		return dst, nil, false, bsoncore.NewInsufficientBytesError(current, rem)
 	}
 	length -= 4
-	start := len(dst)
 	var usedInline [8]bool
 	used := usedInline[:]
 	if len(u.fields) > len(usedInline) {
@@ -171,15 +187,7 @@ func (u bsonSetUpdate) appendReplacement(dst, current []byte) ([]byte, []byte, b
 	} else {
 		used = used[:len(u.fields)]
 	}
-	changed := false
 	var idx int32
-	var out []byte
-	resetDst := func() []byte {
-		if changed {
-			return out[:start]
-		}
-		return dst[:start]
-	}
 	initOut := func(elemStart int) {
 		changed = true
 		if cap(dst)-len(dst) < len(current)+64 {
@@ -261,14 +269,6 @@ func callBSONSetUpdateApply(update bsonSetUpdate, current []byte) (replacement [
 }
 
 func callBSONSetUpdateAppendReplacement(update bsonSetUpdate, dst, current []byte) (out []byte, replacement []byte, changed bool, err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			out = dst
-			replacement = nil
-			changed = false
-			err = collectionUpdatePanicError("structured", recovered)
-		}
-	}()
 	return update.appendReplacement(dst, current)
 }
 
