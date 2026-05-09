@@ -10,10 +10,19 @@ A TreeDB deployment uses:
 
 - `index.db` (paged B+Tree index and metadata),
 - commit-log segments under `wal/commit-l*.log`,
+- future collection WAL segments under `wal/collection-l*.log`,
 - value-log segments under `value_vlog/value-l*.log`,
 - optional split outer-leaf value-log segments under `leaf_vlog/value-l*.log`
   when `IndexOuterLeavesInValueLog` is enabled,
 - optional side-store DBs (`dictdb`, `templatedb`) using their own `index.db` files.
+
+The collection WAL format is proposed in
+`TreeDB/docs/spec/collection-wal-durability-plan.md`. It is a distinct logical
+record class from the cached key/value commit log. Collection WAL records need
+segment metadata, complete-frame checksums, transaction checksums, commit
+markers, per-collection sequence ordering, side-ref validation, and durable
+cleanup metadata before missing collection WAL segments can be treated as
+safely cleaned.
 
 ## 2. Index Page Basics
 

@@ -13,7 +13,11 @@ High-level order:
 3. expose recovered state,
 4. clean replayed commit-log segments.
 
-Read-only opens do not run mutating recovery.
+Read-only opens do not run mutating recovery. If future collection WAL segments
+contain committed unapplied transactions, read-only open must fail with a
+recovery-required error unless the caller explicitly requests a stale read-only
+mode. Silent stale read-only open is incompatible with collection
+durable-at-ack semantics.
 
 ## 2. Backend Index Recovery
 
@@ -58,6 +62,11 @@ Accepted patterns include:
 - legacy accepted: `commit-<seq>.log`, `value-<seq>.log`, `wal-<seq>.log`, `vlog-<seq>.log`
 
 Discovered segments are sorted by `(lane, seq)`.
+
+Collection WAL segments use their own cleanup metadata. A missing collection WAL
+segment is acceptable only when covered by durable cleanup metadata that proves
+the segment's transaction range was safely cleaned. A missing non-cleaned
+collection WAL segment is recovery corruption.
 
 ## 4. Replay Algorithm
 
@@ -129,6 +138,10 @@ key/value RID fence. A complete WAL-on collection transaction with a missing
 required side ref is a recovery error unless it is an incomplete tail without a
 valid commit marker. Recovery must not skip that complete collection transaction
 and continue applying later transactions for the same collection.
+
+Collection WAL recovery must also validate the canonical embedded side-ref set
+decoded from root deltas and descriptors against the declared side-ref set.
+Declared refs alone are not trusted.
 
 ## 6. Post-Recovery Expectations
 

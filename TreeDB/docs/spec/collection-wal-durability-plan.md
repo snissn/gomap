@@ -52,6 +52,8 @@ PR1 makes these decisions normative:
 
 - use per-write collection WAL transactions with per-collection dependency
   chains and replay-side accumulation;
+- reject true multi-collection collection WAL transactions before writing side
+  refs or WAL records;
 - use a stable persisted `CollectionID`, `SchemaEpoch`, and per-root
   `RootGeneration` as replay guards;
 - include a versioned `SystemDeltaTemplate` in every replayable transaction;
@@ -59,6 +61,10 @@ PR1 makes these decisions normative:
   required side ref in WAL-on modes;
 - maintain a protected side-ref index, rebuilt from WAL during recovery, for
   PR1 GC/rewrite safety;
+- require a side-ref prepare guard that blocks GC/rewrite/cleanup while side
+  refs are being prepared but not yet committed to WAL;
+- require segment metadata and durable cleanup manifests before missing
+  collection WAL segments can be treated as safely cleaned;
 - make `DB.Checkpoint` call registered collection checkpoint hooks and force
   publication of replayable collection WAL before reporting a clean collection
   WAL state;
@@ -296,10 +302,21 @@ blind retry.
 
 `DB.Close`:
 
-- Must drain collection write domains before backend close, as current tests
-  already require.
-- Must not discard a collection WAL transaction before its applied watermark is
-  safely published.
+- Must stop new collection writers, drain in-flight async publishers, publish
+  replayable collection WAL transactions, advance applied watermarks, reach the
+  selected durability boundary, and only then allow cleanup before backend
+  close.
+- Must not discard a collection WAL transaction before its applied watermark and
+  cleanup boundary are safely published.
+
+Read-only open after crash:
+
+- Read-only open cannot run mutating collection WAL replay.
+- If unapplied committed collection WAL is present, read-only open must fail
+  with a clear recovery-required error unless a future explicit stale-read-only
+  mode is added.
+- A stale-read-only mode, if added, must be named as stale and must not claim
+  durable-at-ack visibility for unapplied collection WAL writes.
 
 Native-wire acknowledgement policies map onto these same local boundaries:
 
@@ -569,8 +586,55 @@ Segment rules:
   `CollectionSeq`.
 - Transactions are sorted by `GlobalTxnID` during segment scanning, with file
   order as a deterministic tie breaker only for malformed legacy segments.
-- A truncated tail stops scanning that segment after the last complete record.
-- Hard corruption before the tail fails recovery.
+- A short read or EOF is accepted only for the terminal frame of the active
+  non-cleaned segment in that lane.
+- A complete frame with a bad frame checksum or transaction checksum is hard
+  corruption, even when it is the final frame.
+- A short read before a later complete frame, before a later non-cleaned segment,
+  or in a sealed segment is hard corruption.
+- Hard corruption before the terminal tail fails recovery.
+
+Every sealed collection WAL segment must have durable segment metadata:
+
+```text
+CollectionWALSegmentMeta {
+    Version                       uint16
+    Lane                          uint16
+    SegmentSeq                    uint64
+    MinGlobalTxnID                uint64
+    MaxGlobalTxnID                uint64
+    ParticipantCollectionIDs      []uuid128
+    FirstFrameOffset              uint64
+    LastCompleteFrameEndOffset    uint64
+    Sealed                        bool
+    MetadataChecksumCRC32C        uint32
+}
+```
+
+Cleanup requires durable cleanup metadata before a missing segment can be
+accepted during startup:
+
+```text
+CollectionWALCleanupRecord {
+    Version                       uint16
+    CleanupEpoch                  uint64
+    Lane                          uint16
+    SegmentSeq                    uint64
+    MinGlobalTxnID                uint64
+    MaxGlobalTxnID                uint64
+    ParticipantCollectionIDs      []uuid128
+    State                         planned | unlinked | dirsynced
+    RecordChecksumCRC32C          uint32
+}
+```
+
+Startup treats a missing collection WAL segment as valid only when a durable
+cleanup record proves the segment's whole transaction range was safely cleaned.
+A missing non-cleaned segment is recovery corruption and must stop open. Mixed
+collection segments are cleanable only when every transaction in the segment is
+covered by durable per-collection watermarks, or after a future segment-splitting
+protocol rewrites the remaining live transactions into a new crash-tested
+segment.
 
 ### 7.6 Applied Progress and Skip Rules
 
@@ -610,6 +674,14 @@ present in the active replay accumulator, or explicitly known not to exist for a
 new collection. A missing complete transaction blocks later transactions for the
 same collection.
 
+PR1 does not support true multi-collection collection WAL transactions. Any API
+or internal planner that would need to mutate multiple collections atomically
+must reject the operation before preparing side refs or appending collection WAL.
+A future multi-collection format must declare all participant collections,
+validate every participant dependency, and publish all participant root
+descriptor changes plus all participant watermarks in one backend meta/system
+commit.
+
 ### 7.7 Side-Ref Fences
 
 `CollectionSideRef` names external bytes that must exist before a collection WAL
@@ -619,6 +691,8 @@ transaction, not output files produced by backend root publication.
 Side-ref classes:
 
 - `ValueLogRecord`: value-log bytes embedded in root-delta values.
+- `LeafLogRecord`: pre-existing outer-leaf or child-record bytes embedded in a
+  root-delta value or descriptor.
 - `RootDeltaPayload`: serialized root-delta payload stored outside the WAL
   record.
 - `ColumnPartFile`: immutable column payload file.
@@ -628,11 +702,46 @@ Side-ref classes:
 
 Leaf-log or page-log records produced while replay builds new B-tree roots are
 not `CollectionSideRefs`. They are publish outputs and must be flushed or synced
-by the backend commit path before descriptors are published.
+by the backend commit path before descriptors are published. A pre-existing
+leaf-log child ref embedded in a root delta is a `LeafLogRecord` input side ref
+and must be validated like a value-log ref.
 
 The WAL encoder must derive required side refs from the final root-delta payload
 and from column descriptors. A caller-provided `SideRefs` list is insufficient
 unless the encoder verifies it against the payload.
+
+Declared side refs are not trusted. During WAL append and recovery, TreeDB must
+derive the canonical embedded required side-ref set by decoding root deltas,
+root descriptors, column part descriptors, filter descriptors, delete bitmap
+references, dictionary references, value-log pointer payloads, and leaf-log
+pointer payloads. The declared required side-ref set must match the canonical
+set. Missing embedded refs, undeclared embedded refs, and declared refs that are
+not embedded are invalid unless a future format version defines a precise
+optional-ref class.
+
+Readable and integrity-passing means class-specific validation:
+
+- `ValueLogRecord`: segment exists, offset/length are in bounds, RID or grouped
+  sub-index matches when present, and record checksum passes.
+- `LeafLogRecord`: leaf segment exists, referenced child bytes are in bounds,
+  and checksum or page/record validation passes.
+- `RootDeltaPayload`: payload file or value-log record exists, length and
+  checksum match, and decoding yields the `DeltaDigest` named by the root delta.
+- `ColumnPartFile`: final file path exists, file size/checksum match the
+  descriptor or manifest, and compression/dictionary metadata validates.
+- `ColumnFilterFile`: filter file exists, checksum matches, and the filter
+  header names the expected column/part generation.
+- `DeleteBitmapFile`: bitmap file exists, checksum matches, and row-range and
+  generation metadata match the descriptor.
+- `DictionaryFile`: dictionary bytes exist, checksum matches, and codec/dict id
+  match every dependent payload.
+
+Column-like side files use a temp-to-final protocol in PR1 planning: write temp
+file, fsync file, atomically rename to final path, fsync parent directory, then
+allow the collection WAL commit marker to reference the final path. A future
+manifest format must cover final path, length, checksum, compression metadata,
+row range, and generation. Temp-only files with no committed WAL/root reference
+are orphan-prepared and may be quarantined or deleted after recovery.
 
 A complete transaction with a missing required side ref is a recovery error in
 WAL-on durable/recoverable modes, except for an incomplete tail transaction that
@@ -653,6 +762,15 @@ a value-log segment or column file is referenced only by pending collection WAL,
 maintenance must keep it in place or abort. A future rewrite mode may rewrite
 protected refs only if it publishes replacement side refs and collection WAL
 metadata atomically under an explicit crash-tested protocol.
+
+A writer preparing side refs must hold a side-ref prepare guard from before the
+first side-ref append/write until either the collection WAL frame referencing
+those side refs is durable, or the operation aborts and the prepared refs are
+deleted or recorded as orphan-prepared. GC, value-log rewrite, leaf-log GC,
+column cleanup, checkpoint cleanup, and full storage compaction must acquire the
+conflicting maintenance side of this guard before computing reclaimable refs.
+This prevents in-process maintenance from deleting side refs in the window after
+side-ref creation but before WAL commit.
 
 ### 7.8 Commit Marker and Ack Boundary
 
@@ -863,25 +981,65 @@ with explicit consensus semantics.
 
 ## 9. Recovery Algorithm
 
+### 9.1 Collection WAL Recovery States
+
+A collection WAL transaction is in exactly one durable recovery state:
+
+| State | Meaning | Recovery behavior |
+|---|---|---|
+| `S0 Absent` | No complete collection WAL frame exists. | Do not publish roots. Any side files not referenced by a committed WAL transaction or published root are orphan-prepared and may be quarantined or deleted. |
+| `S1 PreparedSideRefs` | Side bytes may exist, but no complete committed WAL frame references them. | Do not publish roots. Reclaim only after proving no complete WAL transaction and no published root references the bytes. |
+| `S2 CommittedWAL` | A complete collection WAL frame with valid checksums exists and is not covered by the durable applied watermark. | Validate all required side refs, identity, schema, generations, and dependencies; then replay in collection sequence order. Missing or corrupt required side refs stop open. |
+| `S3 MaterializedUnpublished` | Recovery or live publish built root pages or publish-output files, but backend meta/system-root commit did not publish root descriptors. | Not externally visible. After crash, retry from `S2` or skip if `S4` is observed. |
+| `S4 Applied` | One backend meta/system-root commit atomically published root descriptor changes and applied watermark entries covering the transaction. | Skip during replay. Reapplying an `S4` transaction is a bug. |
+| `S5 Cleanable` | Transaction is `S4`, and a durable checkpoint/meta boundary exists such that descriptors, watermarks, and side-ref reachability tracking for published roots are durable. | WAL files and WAL-only side-ref protection may be cleaned idempotently. |
+| `S6 Cleaned` | Durable cleanup metadata says the segment or transaction range is safely cleaned. | Missing segment files are acceptable only for ranges covered by this metadata. Missing uncleaned segments stop open. |
+
+Root descriptors published without the matching applied watermark are not a
+valid state. If an implementation bug or future format can produce that split,
+recovery must stop open unless the format also provides a proven idempotent
+repair protocol. PR1 must make the split unrepresentable by publishing
+descriptor ops and watermark ops in one backend commit.
+
+### 9.2 Startup Recovery
+
 Startup recovery should extend the existing recovery order while preserving
 the current invariant that side-store scans run before cached commit-log replay:
 
-1. Recover backend index metadata and choose the valid meta page.
-2. Scan value-log and leaf-log side-store segments used by existing commit-log
+1. Acquire the exclusive recovery/maintenance lock. No GC, rewrite, column
+   cleanup, collection writer, async publisher, checkpoint, or close cleanup may
+   run concurrently with recovery.
+2. Recover backend index metadata and choose the valid meta page.
+3. Load durable collection WAL cleanup metadata.
+4. Discover collection WAL segment files. For each lane, segments are ordered by
+   segment sequence. A missing segment is valid only if covered by durable
+   cleanup metadata. A missing segment not covered by cleanup metadata is
+   corruption and recovery must stop open.
+5. Scan value-log and leaf-log side-store segments used by existing commit-log
    RID fences, and build the `RID -> side ref` maps required for replay.
-3. Replay normal cached commit logs as today, using the side-ref maps created
+6. Replay normal cached commit logs as today, using the side-ref maps created
    before replay.
-4. Scan any additional collection WAL side-file classes, such as root-delta
+7. Scan any additional collection WAL side-file classes, such as root-delta
    payloads, column files, filters, delete bitmaps, and dictionaries, needed by
    collection WAL fences.
-5. Scan collection WAL segments, decode complete transactions, distinguish
-   incomplete tails from hard corruption, and rebuild the protected side-ref
-   index before any maintenance can run.
-6. Load applied collection-sequence watermark metadata from the recovered system
+8. Scan collection WAL frames in segment order:
+   - EOF or short read is allowed only at the terminal frame of the last
+     non-cleaned segment for that lane;
+   - short read before a later complete frame or later non-cleaned segment is
+     corruption;
+   - a complete frame with checksum mismatch is corruption;
+   - unsupported version is corruption unless explicitly marked skippable by a
+     forward-compatible feature flag.
+9. Decode complete transactions and rebuild the protected side-ref index before
+   any maintenance can run.
+10. Load applied collection-sequence watermark metadata from the recovered system
    root.
-7. Sort unapplied transactions by `CollectionID`, `CollectionSeq`, and
+11. Sort unapplied transactions by `CollectionID`, `CollectionSeq`, and
    `GlobalTxnID` for deterministic diagnostics.
-8. For each unapplied collection in contiguous `CollectionSeq` order:
+12. For each uncovered transaction, validate declared side refs and the
+   canonical embedded required side-ref set extracted from root deltas and
+   descriptors. The sets must match.
+13. For each unapplied collection in contiguous `CollectionSeq` order:
    - validate checksum and format version;
    - validate required side refs;
    - validate collection identity, schema epoch, root generation guards, and
@@ -890,9 +1048,9 @@ the current invariant that side-store scans run before cached commit-log replay:
    - materialize publish inputs from `RootDeltaEncodingV1`;
    - instantiate `SystemDeltaTemplate` with produced root ids;
    - publish descriptor updates and applied watermark in one backend commit.
-9. After successful replay, clean collection WAL segments whose transactions are
+14. After successful replay, clean collection WAL segments whose transactions are
    fully covered by the durable applied watermark.
-10. Quarantine or delete prepared side files that are not referenced by any
+15. Quarantine or delete prepared side files that are not referenced by any
    committed transaction or reachable root.
 
 Recovery must be deterministic. Replaying the same directory twice must produce
@@ -902,7 +1060,11 @@ No side-store cleanup, value-log rewrite, column-file cleanup, or collection WAL
 segment cleanup may run until collection WAL recovery and protected side-ref
 index reconstruction are complete.
 
-### 9.1 Buffered Transaction Replay and Accumulation
+Read-only open cannot perform steps that mutate backend state. If unapplied
+committed collection WAL exists, read-only open must fail with a clear
+recovery-required error unless an explicit stale-read-only mode is requested.
+
+### 9.3 Buffered Transaction Replay and Accumulation
 
 PR1 uses per-collection replay-side accumulation. Merged flush-unit WAL
 transactions are deferred because they are incompatible with durable-at-ack for
@@ -936,20 +1098,23 @@ This rule applies to no-index buffered writes, indexed mutable runs, queued
 flush units, async publishing states, overlay compaction, schema/index changes,
 and future column-store delta-part descriptor updates.
 
-### 9.2 Failure Behavior
+### 9.4 Failure Behavior
 
 | Failure point | Required behavior |
 |---|---|
 | Side-ref preparation fails before WAL commit marker | Return ordinary error. Do not expose mutation. Delete or quarantine prepared side files. |
+| Crash before any side ref or WAL write | `S0 Absent`. No recovery action is required beyond ordinary orphan scan. |
 | WAL append fails before commit marker | Return ordinary error. Do not expose mutation. Side refs remain uncommitted and are deleted or quarantined. |
 | Crash after side refs prepared before commit marker | Recovery ignores transaction. Unreferenced side files are deleted or quarantined. |
 | Crash after commit marker before response | Recovery may expose transaction. This is committed-before-response ambiguity. |
+| Crash after visible staging before API response | WAL-on modes recover the committed transaction. Visible-without-committed-WAL is not permitted. |
 | In-memory visible staging fails after commit marker | Not permitted as an ordinary error. Implementation must make this step non-failing or report commit-ambiguous/fatal. |
 | Root publish fails before backend meta commit | WAL transaction remains unapplied and protected. Retry on flush or recovery. |
 | Root pages are built but backend meta commit fails | Built pages are unreachable. WAL transaction remains source of truth. |
 | Descriptor update succeeds without watermark | Not permitted. Descriptor updates and watermark update are the same system-root commit. |
 | Watermark update succeeds without descriptor update | Not permitted. Descriptor updates and watermark update are the same system-root commit. |
 | Cleanup fails after watermark/checkpoint | Safe leak. Retry cleanup later. |
+| WAL segment unlink/rename fails during cleanup | Cleanup remains retryable. Startup accepts missing segments only with durable cleanup metadata. |
 | GC/rewrite wants a side ref protected by unapplied WAL | Must keep it in place or abort maintenance. Rewrite requires an explicit crash-tested WAL metadata protocol. |
 
 ## 10. Cleanup and Retention
@@ -989,6 +1154,28 @@ PR1 uses a protected side-ref index:
 - Value-log rewrite and column-file rewrite refuse protected refs in PR1 rather
   than trying to patch WAL records in place.
 
+WAL-only side-ref protection may be released only after all are true:
+
+1. the transaction is covered by a durable applied watermark;
+2. the root descriptors containing the refs are durable in the backend
+   meta/system root;
+3. the relevant side-ref reachability tracker has incorporated that published
+   root set, or a full reachability scan has completed;
+4. old snapshots and active iterators that could reference either old or new
+   roots are represented in the normal retention system;
+5. durable cleanup metadata records that WAL protection for the segment/range is
+   no longer required.
+
+Column files, filters, delete bitmaps, and dictionaries follow the same
+lifecycle as value-log refs: WAL protection before publish, root/snapshot
+protection after publish, and quarantine/delete only after neither WAL nor any
+published snapshot/iterator can reference them.
+
+Cleanup is idempotent. A cleanup implementation must be safe across crashes
+after cleanup record write, after unlink/rename, and before/after directory
+fsync. Missing segments are acceptable only for `S6 Cleaned` ranges covered by
+durable cleanup metadata.
+
 `DB.Checkpoint` must call registered collection checkpoint hooks before
 reporting a clean collection WAL state. PR1 checkpoint hooks force publication
 of replayable collection WAL, advance watermarks, and then allow collection WAL
@@ -1023,7 +1210,10 @@ Keep and expand tests that document current behavior:
 - tombstone/cold-build encoding preserves `IncludeDeletedOnColdBuild`;
 - `SystemDeltaTemplate` placeholder instantiation golden tests;
 - descriptor-op precondition failures are reported before any publish is marked
-  applied.
+  applied;
+- segment metadata golden tests for min/max `GlobalTxnID`, participant
+  collections, sealed status, and checksum;
+- cleanup record golden tests for `planned`, `unlinked`, and `dirsynced` states.
 
 ### 11.3 Recovery Tests
 
@@ -1050,8 +1240,12 @@ Crash/fault points:
     transactions are durable but unpublished;
 15. after a drop/recreate under the same collection name;
 16. after a root descriptor generation rewrite attempt with unapplied WAL;
-17. after Raft commit before local collection WAL append once Raft apply exists;
-18. after local collection WAL append before Raft applied-index/idempotency
+17. after collection WAL cleanup record write before unlink;
+18. after collection WAL segment unlink before directory fsync;
+19. after read-only open observes unapplied committed collection WAL;
+20. after a multi-collection operation reaches the collection WAL planner;
+21. after Raft commit before local collection WAL append once Raft apply exists;
+22. after local collection WAL append before Raft applied-index/idempotency
     metadata advancement once Raft apply exists.
 
 Required assertions:
@@ -1075,12 +1269,24 @@ Required assertions:
   transaction from another collection;
 - value-log GC/rewrite cannot remove or move bytes referenced only by pending
   collection WAL side refs;
+- leaf-log GC/rewrite and future column cleanup cannot remove bytes referenced
+  only by pending collection WAL side refs;
+- declared side refs and embedded side refs match the canonical required set;
 - a missing complete transaction `N` blocks `N+1` for the same collection;
+- same-collection independence skips are rejected in PR1;
+- multi-collection transactions are rejected before side refs or WAL are
+  written in PR1;
 - drop/recreate with the same collection name does not replay old WAL into the
   new collection;
 - schema epoch and root generation mismatches block stale transactions;
 - `DB.Checkpoint` either publishes replayable collection WAL or reports debt
   while preserving side refs;
+- read-only open fails with recovery-required when unapplied committed
+  collection WAL exists;
+- missing cleaned segments open only when covered by durable cleanup metadata;
+- missing uncleaned segments stop open;
+- root descriptors published without matching watermarks are unrepresentable or
+  stop open under fault injection;
 - future Raft apply cannot report an applied index whose logical mutation is
   neither locally recoverable nor guaranteed to be replayed from the Raft log.
 
@@ -1129,9 +1335,11 @@ Traceability matrix:
 |---|---|---|---|
 | Current contract | 2, 6 | M0 | existing behavior tests and docs |
 | WAL format | 7.2, 7.4, 7.5 | M1 | golden, fuzz, corrupt-tail tests |
-| Identity and sequencing | 7.3, 7.6, 9.1 | M1, M5 | collection-seq, epoch, generation tests |
+| Recovery state machine | 9.1, 9.2, 9.4 | M1, M5 | crash-state and stop-open tests |
+| Identity and sequencing | 7.3, 7.6, 9.3 | M1, M5 | collection-seq, epoch, generation tests |
 | System-root template | 7.2, 8.6 | M1, M5 | descriptor-op and watermark atomicity tests |
 | Side-file fences | 7.7, 10 | M2 | missing-ref and GC protection tests |
+| Segment cleanup metadata | 7.5, 10 | M1, M5 | missing-segment and cleanup-manifest tests |
 | Write-domain integration | 8 | M3, M4 | insert/update/delete recovery tests |
 | Recovery replay | 9 | M4 | crash matrix, accumulation, and deterministic replay tests |
 | Checkpoint/cleanup | 10 | M5 | watermark and segment cleanup tests |
@@ -1169,6 +1377,7 @@ Deliverables:
 - persisted `CollectionID`, `SchemaEpoch`, and root generation descriptor
   encoding;
 - `SystemDeltaTemplate` and descriptor-op encoding;
+- segment metadata and cleanup record encoding;
 - exact format documentation in this file.
 
 Tests:
@@ -1178,7 +1387,8 @@ Tests:
 - truncated tail;
 - decoder fuzzing;
 - replay digest tests;
-- descriptor-op placeholder instantiation tests.
+- descriptor-op placeholder instantiation tests;
+- cleanup metadata and missing-segment classification tests.
 
 Gate:
 
@@ -1192,8 +1402,10 @@ Deliverables:
 - inline and side-payload modes;
 - side-ref availability checker;
 - value-log side-ref integration;
+- leaf-log side-ref validation for pre-existing embedded leaf refs;
 - protected side-ref index updated by WAL append/cleanup and rebuilt during
   recovery;
+- side-ref prepare guard that excludes GC/rewrite/cleanup during preparation;
 - value-log GC/rewrite protection for unapplied collection WAL side refs;
 - fail-hard recovery behavior for complete transactions with missing required
   side refs.
@@ -1201,6 +1413,7 @@ Deliverables:
 Tests:
 
 - missing side refs fail recovery for complete WAL-on collection transactions;
+- declared and embedded side-ref set mismatch fails recovery;
 - no root can be published with missing side bytes;
 - large delta side-payload round trips;
 - GC/rewrite cannot delete or move bytes referenced only by unapplied
@@ -1241,6 +1454,8 @@ Deliverables:
 - unique helper rebuild after recovery;
 - replay accumulator for multiple buffered transactions that share one persisted
   root base;
+- PR1 rejection of true multi-collection transactions before side refs or WAL
+  are written;
 - schema/index changes ordered by collection sequence;
 - overlay compaction encoded as a collection WAL maintenance transaction when it
   can race with user-visible writes.
@@ -1253,6 +1468,8 @@ Tests:
 - update/delete secondary roots recover atomically;
 - two acknowledged buffered writes against one persisted base both survive
   crash/reopen;
+- per-collection ordering gaps block later same-collection transactions;
+- multi-collection transaction attempts are rejected before side effects;
 - insert/update/delete chains preserve secondary deletes and puts after
   recovery;
 - schema epoch and root generation mismatches block stale transactions.
@@ -1273,7 +1490,9 @@ Deliverables:
 - collection WAL replay in open path;
 - collection-specific publish wrapper around ordered-root publish APIs;
 - segment cleanup after safe checkpoint;
-- prepared side-file quarantine/delete.
+- prepared side-file quarantine/delete;
+- read-only open recovery-required error when unapplied committed collection WAL
+  exists.
 
 Tests:
 
@@ -1284,7 +1503,11 @@ Tests:
 - descriptor update and watermark update cannot split across commits;
 - older segments remain when watermark is not durable;
 - cleanup removes only fully applied segments;
-- prepared side files without committed transactions do not become visible.
+- prepared side files without committed transactions do not become visible;
+- missing cleaned segments are accepted only with durable cleanup records;
+- missing uncleaned segments stop open;
+- read-only open cannot silently serve stale state when committed collection WAL
+  is unapplied.
 
 Gate:
 
@@ -1409,6 +1632,12 @@ PR1 closes the correctness-critical questions that block implementation:
    of replayable collection WAL before reporting a clean collection WAL state.
 7. Overlay compaction that can race with user-visible collection writes is
    encoded as a collection WAL maintenance transaction.
+8. True multi-collection collection WAL transactions are unsupported in PR1 and
+   must be rejected before side refs or WAL are written.
+9. Read-only open with unapplied committed collection WAL fails with a
+   recovery-required error unless a future explicitly stale mode is requested.
+10. Missing collection WAL segments are valid only when covered by durable
+   cleanup metadata.
 
 Future questions that do not weaken PR1 correctness:
 
@@ -1451,8 +1680,9 @@ Module-specific constraints:
 
 - `TreeDB/internal/collectionwal` or equivalent owns versioned framing, commit
   markers, `GlobalTxnID`, per-collection sequence allocation, side-ref
-  verification, protected side-ref index rebuild, and segment cleanup after the
-  durable applied watermark/checkpoint boundary.
+  verification, segment metadata, cleanup records, protected side-ref index
+  rebuild, missing-segment classification, and segment cleanup after the durable
+  applied watermark/checkpoint boundary.
 - `TreeDB/collections` owns final physical delta planning before
   acknowledgement. WAL-on collection planners must serialize primary,
   template/index-state, secondary, overlay, delete, schema, and future
@@ -1461,14 +1691,18 @@ Module-specific constraints:
 - `TreeDB/db` owns a collection-specific publish wrapper around ordered-root
   executors. The wrapper validates identity/generation/dependency guards,
   materializes root deltas, instantiates `SystemDeltaTemplate`, publishes
-  descriptors and watermark atomically, and honors explicit sync options.
+  descriptors and watermark atomically, honors explicit sync options, and makes
+  read-only open fail when unapplied committed collection WAL requires mutating
+  recovery.
 - `TreeDB/caching` and checkpoint code must track collection WAL debt. Automatic
   checkpoint and close paths must not report clean WAL state or prune required
   bytes while collection WAL transactions remain needed for recovery.
 - `TreeDB/internal/valuelog` and future column-file maintenance must consult the
-  protected side-ref index. PR1 rewrite refuses protected refs rather than
-  moving them and patching WAL records.
+  protected side-ref index and side-ref prepare guard. PR1 rewrite refuses
+  protected refs rather than moving them and patching WAL records.
 - Column-store implementation may not publish persistent column parts until
   part files, descriptor deltas, primary locator deltas, delete bitmap roots,
   secondary roots, filter roots, and schema roots can be committed as one
-  collection WAL transaction.
+  collection WAL transaction. Column files must have temp/final naming, file
+  fsync, rename, directory fsync, manifest/checksum validation, and cleanup
+  tests before production enablement.

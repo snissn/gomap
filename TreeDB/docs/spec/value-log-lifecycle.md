@@ -27,9 +27,22 @@ Reachability is defined by pointer references found in index trees.
 - user tree,
 - system tree,
 - collection root trees referenced by system-tree descriptors under
-  `collections/root/...`.
+  `collections/root/...`,
+- committed but unapplied collection WAL side refs, once collection WAL is
+  implemented.
 
 Entries with `node.FlagPointer` and `IsValueLogFileID(ptr.FileID)` mark a segment as referenced.
+
+Collection WAL side refs are retention roots before they are reachable from
+published roots. GC and rewrite must consult the protected collection-WAL
+side-ref index and the side-ref prepare guard before deleting, truncating,
+rewriting, or moving value-log bytes. PR1 rewrite must skip value-log records
+protected only by collection WAL rather than patching WAL records in place.
+
+WAL-only protection may be released only after the transaction is covered by a
+durable applied collection watermark, the root descriptors containing the refs
+are durable, and the value-log reachability tracker has incorporated those
+published roots or a full reachability scan has completed.
 
 ### 3.1 Incremental Accounting Fast Path
 
