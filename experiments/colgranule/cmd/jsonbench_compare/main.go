@@ -31,10 +31,10 @@ type comparisonRaw struct {
 	Limit             int                               `json:"limit"`
 	Rows              int                               `json:"rows"`
 	Files             []string                          `json:"files"`
+	InputBytes        int64                             `json:"input_bytes"`
 	RowsPerGranule    int                               `json:"rows_per_granule"`
 	LoadDuration      time.Duration                     `json:"load_duration"`
 	ClickHouseLocal   clickHouseResult                  `json:"clickhouse_local"`
-	ClickHouseAWS     clickHouseResult                  `json:"clickhouse_aws"`
 	QueryTimings      []colgranule.JSONBenchQueryTiming `json:"query_timings"`
 	ColumnSummaries   []colgranule.ColumnCodecSummary   `json:"column_summaries"`
 	BestColumnStorage []bestColumnStorage               `json:"best_column_storage"`
@@ -56,7 +56,6 @@ func main() {
 	rowsPerGranule := flag.Int("rows-per-granule", colgranule.DefaultRowsPerGranule, "rows per encoded granule")
 	attempts := flag.Int("attempts", 5, "query timing attempts")
 	clickHouseLocalPath := flag.String("clickhouse-local", "/Users/michaelseiler/dev/snissn/JSONBench/clickhouse/local_results/fresh_1m_20260508_121356_clickhouse/result.json", "local ClickHouse JSONBench result")
-	clickHouseAWSPath := flag.String("clickhouse-aws", "/Users/michaelseiler/dev/snissn/JSONBench/clickhouse/results/m6i.8xlarge_bluesky_1m.json", "checked ClickHouse JSONBench result")
 	outJSON := flag.String("out-json", "experiments/colgranule/JSONBENCH_COMPARISON_RAW.json", "raw JSON output")
 	outMarkdown := flag.String("out-md", "experiments/colgranule/JSONBENCH_COMPARISON_REPORT.md", "Markdown report output")
 	flag.Parse()
@@ -77,10 +76,10 @@ func main() {
 		Limit:             *limit,
 		Rows:              ds.Rows,
 		Files:             ds.Files,
+		InputBytes:        inputBytes(ds.Files),
 		RowsPerGranule:    *rowsPerGranule,
 		LoadDuration:      loadDuration,
 		ClickHouseLocal:   readClickHouseResult(*clickHouseLocalPath),
-		ClickHouseAWS:     readClickHouseResult(*clickHouseAWSPath),
 		QueryTimings:      timings,
 		ColumnSummaries:   summaries,
 		BestColumnStorage: bestColumns(summaries),
@@ -108,29 +107,45 @@ func writeMarkdown(path string, raw comparisonRaw) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# JSONBench ClickHouse Comparison\n\n")
 	fmt.Fprintf(&b, "Generated from `%s` with row limit `%d`; this local run read `%d` file(s) and `%d` rows. The comparison is a smoke-level column-kernel comparison, not a full database benchmark: TreeDB roots, collection WAL, query planning, persistence, and SQL execution are intentionally out of scope.\n\n", raw.DataPath, raw.Limit, len(raw.Files), raw.Rows)
+	fmt.Fprintf(&b, "The ClickHouse numbers below use the local JSONBench result `%s` `%s` on `%s`, so query timings and disk bytes are local-machine comparisons.\n\n", raw.ClickHouseLocal.System, raw.ClickHouseLocal.Version, raw.ClickHouseLocal.OS)
 	fmt.Fprintf(&b, "## Query Timing\n\n")
-	fmt.Fprintf(&b, "| Query | Column-kernel best | ClickHouse local | ClickHouse AWS best | Notes |\n")
+	fmt.Fprintf(&b, "| Query | Column-kernel best | ClickHouse local | Kernel / ClickHouse | Notes |\n")
 	fmt.Fprintf(&b, "|---|---:|---:|---:|---|\n")
 	for i, timing := range raw.QueryTimings {
 		local := clickHouseBest(raw.ClickHouseLocal, i)
-		aws := clickHouseBest(raw.ClickHouseAWS, i)
-		fmt.Fprintf(&b, "| %s | %.6fs | %.6fs | %.6fs | %s |\n", timing.Query, timing.Best.Seconds(), local, aws, timing.Description)
+		fmt.Fprintf(&b, "| %s | %.6fs | %.6fs | %.2fx | %s |\n", timing.Query, timing.Best.Seconds(), local, ratio(timing.Best.Seconds(), local), timing.Description)
 	}
 	fmt.Fprintf(&b, "\n## Storage Footprint\n\n")
-	fmt.Fprintf(&b, "ClickHouse local 1m size: total `%d` bytes, data `%d` bytes, index `%d` bytes.\n\n", raw.ClickHouseLocal.TotalSize, raw.ClickHouseLocal.DataSize, raw.ClickHouseLocal.IndexSize)
+	allBest := bestTotal(raw.BestColumnStorage, nil)
+	queryBest := bestTotal(raw.BestColumnStorage, queryPathColumns())
+	fmt.Fprintf(&b, "| Item | Bytes | MiB | Notes |\n")
+	fmt.Fprintf(&b, "|---|---:|---:|---|\n")
+	fmt.Fprintf(&b, "| JSONBench compressed input files | %d | %.2f | Local `.json.gz` source bytes read by this run. |\n", raw.InputBytes, mib(raw.InputBytes))
+	fmt.Fprintf(&b, "| ClickHouse local total | %d | %.2f | `total_size` from local ClickHouse JSONBench result. |\n", raw.ClickHouseLocal.TotalSize, mib(raw.ClickHouseLocal.TotalSize))
+	fmt.Fprintf(&b, "| ClickHouse local data | %d | %.2f | `data_size` from local ClickHouse JSONBench result. |\n", raw.ClickHouseLocal.DataSize, mib(raw.ClickHouseLocal.DataSize))
+	fmt.Fprintf(&b, "| ClickHouse local index | %d | %.2f | `index_size` from local ClickHouse JSONBench result. |\n", raw.ClickHouseLocal.IndexSize, mib(raw.ClickHouseLocal.IndexSize))
+	fmt.Fprintf(&b, "| Granule best-codec all derived columns | %d | %.2f | %.2f%% of ClickHouse local total. |\n", allBest, mib(int64(allBest)), ratio(float64(allBest)*100, float64(raw.ClickHouseLocal.TotalSize)))
+	fmt.Fprintf(&b, "| Granule best-codec query/index paths | %d | %.2f | %.2f%% of ClickHouse local total. |\n", queryBest, mib(int64(queryBest)), ratio(float64(queryBest)*100, float64(raw.ClickHouseLocal.TotalSize)))
+	fmt.Fprintf(&b, "\n")
 	fmt.Fprintf(&b, "The table below is one-column-at-a-time storage for the experimental granule codecs. It picks the smallest stored byte count observed for each derived `int64` column across raw, delta-varint, snappy, and lz4 combinations.\n\n")
-	fmt.Fprintf(&b, "| Column | Best codec | Stored bytes | Ratio vs int64 values |\n")
-	fmt.Fprintf(&b, "|---|---|---:|---:|\n")
+	fmt.Fprintf(&b, "| Column | Best codec | Stored bytes | Ratio vs int64 values | Ratio vs ClickHouse total |\n")
+	fmt.Fprintf(&b, "|---|---|---:|---:|---:|\n")
 	for _, col := range raw.BestColumnStorage {
-		fmt.Fprintf(&b, "| `%s` | `%s` + `%s` | %d | %.6f |\n", col.Column, col.Encoding, col.RequestedCompression, col.StoredBytes, col.RatioVsValues)
+		fmt.Fprintf(&b, "| `%s` | `%s` + `%s` | %d | %.6f | %.4f%% |\n", col.Column, col.Encoding, col.RequestedCompression, col.StoredBytes, col.RatioVsValues, ratio(float64(col.StoredBytes)*100, float64(raw.ClickHouseLocal.TotalSize)))
 	}
-	fmt.Fprintf(&b, "\nBest-codec total for all derived columns: `%d` bytes.\n", bestTotal(raw.BestColumnStorage, nil))
-	fmt.Fprintf(&b, "Best-codec total for ClickHouse indexed/query paths (`kind`, `commit.operation`, `commit.collection`, `did`, `time_us`): `%d` bytes.\n", bestTotal(raw.BestColumnStorage, map[string]bool{
-		"kind_code": true, "commit_operation_code": true, "commit_collection_code": true, "did_code": true, "time_us": true,
-	}))
 	fmt.Fprintf(&b, "\n## Raw Data\n\n")
 	fmt.Fprintf(&b, "Machine-readable raw data is in `experiments/colgranule/JSONBENCH_COMPARISON_RAW.json`.\n")
 	must(os.WriteFile(path, []byte(b.String()), 0o644))
+}
+
+func inputBytes(files []string) int64 {
+	var total int64
+	for _, file := range files {
+		info, err := os.Stat(file)
+		must(err)
+		total += info.Size()
+	}
+	return total
 }
 
 func bestColumns(summaries []colgranule.ColumnCodecSummary) []bestColumnStorage {
@@ -170,6 +185,12 @@ func clickHouseBest(result clickHouseResult, i int) float64 {
 	return best
 }
 
+func queryPathColumns() map[string]bool {
+	return map[string]bool{
+		"kind_code": true, "commit_operation_code": true, "commit_collection_code": true, "did_code": true, "time_us": true,
+	}
+}
+
 func bestTotal(cols []bestColumnStorage, include map[string]bool) int {
 	var total int
 	for _, col := range cols {
@@ -179,6 +200,17 @@ func bestTotal(cols []bestColumnStorage, include map[string]bool) int {
 		total += col.StoredBytes
 	}
 	return total
+}
+
+func ratio(numerator, denominator float64) float64 {
+	if denominator == 0 {
+		return 0
+	}
+	return numerator / denominator
+}
+
+func mib(bytes int64) float64 {
+	return float64(bytes) / 1024 / 1024
 }
 
 func must(err error) {
