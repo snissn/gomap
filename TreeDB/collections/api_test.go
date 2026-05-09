@@ -10342,7 +10342,24 @@ type bufferedUsersUpdateDoc struct {
 	city  string
 }
 
-func newBufferedUsersUpdateCollectionWithDocs(t *testing.T, opts CollectionOptions, docs []bufferedUsersUpdateDoc) (*backenddb.DB, *CollectionManager, *Collection) {
+type bufferedUsersUpdateFixture struct {
+	db         *backenddb.DB
+	manager    *CollectionManager
+	collection *Collection
+}
+
+func bufferedIndexedUpdateHighThresholdOptionsForTests() CollectionOptions {
+	return CollectionOptions{
+		BufferedIndexedWrites:                   true,
+		BufferedIndexedWriteMaxDocuments:        1 << 20,
+		BufferedIndexedWriteMaxBytes:            int64(1) << 40,
+		BufferedIndexedWriteMaxRootRuns:         1 << 20,
+		BufferedIndexedAsyncFlush:               true,
+		BufferedIndexedAsyncFlushMaxQueuedUnits: 1 << 20,
+	}
+}
+
+func newBufferedUsersUpdateFixtureWithDocs(t *testing.T, opts CollectionOptions, docs []bufferedUsersUpdateDoc) bufferedUsersUpdateFixture {
 	t.Helper()
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -10385,15 +10402,19 @@ func newBufferedUsersUpdateCollectionWithDocs(t *testing.T, opts CollectionOptio
 	if err := col.Flush(); err != nil {
 		t.Fatalf("flush insert buffer: %v", err)
 	}
-	return d, mgr, col
+	return bufferedUsersUpdateFixture{
+		db:         d,
+		manager:    mgr,
+		collection: col,
+	}
 }
 
 func newBufferedUsersUpdateCollection(t *testing.T) (*backenddb.DB, *Collection) {
 	t.Helper()
-	d, _, col := newBufferedUsersUpdateCollectionWithDocs(t, CollectionOptions{}, []bufferedUsersUpdateDoc{
+	fixture := newBufferedUsersUpdateFixtureWithDocs(t, CollectionOptions{}, []bufferedUsersUpdateDoc{
 		{id: "u1", email: "a@example.com", city: "hnl"},
 	})
-	return d, col
+	return fixture.db, fixture.collection
 }
 
 func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleBufferedPlan(t *testing.T) {
@@ -10485,20 +10506,15 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleZeroDel
 }
 
 func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReplansStaleBufferedPlanWithoutFlush(t *testing.T) {
-	_, mgr, col := newBufferedUsersUpdateCollectionWithDocs(t,
-		CollectionOptions{
-			BufferedIndexedWrites:                   true,
-			BufferedIndexedWriteMaxDocuments:        1 << 20,
-			BufferedIndexedWriteMaxBytes:            int64(1) << 40,
-			BufferedIndexedWriteMaxRootRuns:         1 << 20,
-			BufferedIndexedAsyncFlush:               true,
-			BufferedIndexedAsyncFlushMaxQueuedUnits: 1 << 20,
-		},
+	fixture := newBufferedUsersUpdateFixtureWithDocs(t,
+		bufferedIndexedUpdateHighThresholdOptionsForTests(),
 		[]bufferedUsersUpdateDoc{
 			{id: "u1", email: "a@example.com", city: "hnl"},
 			{id: "u2", email: "b@example.com", city: "hnl"},
 		},
 	)
+	mgr := fixture.manager
+	col := fixture.collection
 	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
 		{DocumentID: []byte("u1"), Update: setJSONCity("sea")},
 	}); err != nil {
@@ -10562,20 +10578,15 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReplansStaleBuffere
 }
 
 func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesBoundsStaleBufferedReplans(t *testing.T) {
-	_, mgr, col := newBufferedUsersUpdateCollectionWithDocs(t,
-		CollectionOptions{
-			BufferedIndexedWrites:                   true,
-			BufferedIndexedWriteMaxDocuments:        1 << 20,
-			BufferedIndexedWriteMaxBytes:            int64(1) << 40,
-			BufferedIndexedWriteMaxRootRuns:         1 << 20,
-			BufferedIndexedAsyncFlush:               true,
-			BufferedIndexedAsyncFlushMaxQueuedUnits: 1 << 20,
-		},
+	fixture := newBufferedUsersUpdateFixtureWithDocs(t,
+		bufferedIndexedUpdateHighThresholdOptionsForTests(),
 		[]bufferedUsersUpdateDoc{
 			{id: "u1", email: "a@example.com", city: "hnl"},
 			{id: "u2", email: "b@example.com", city: "hnl"},
 		},
 	)
+	mgr := fixture.manager
+	col := fixture.collection
 	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
 		{DocumentID: []byte("u1"), Update: setJSONCity("sea")},
 	}); err != nil {
@@ -10630,20 +10641,16 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesBoundsStaleBuffered
 }
 
 func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesFlushesRootMismatchInsteadOfReplanning(t *testing.T) {
-	d, mgr, col := newBufferedUsersUpdateCollectionWithDocs(t,
-		CollectionOptions{
-			BufferedIndexedWrites:                   true,
-			BufferedIndexedWriteMaxDocuments:        1 << 20,
-			BufferedIndexedWriteMaxBytes:            int64(1) << 40,
-			BufferedIndexedWriteMaxRootRuns:         1 << 20,
-			BufferedIndexedAsyncFlush:               true,
-			BufferedIndexedAsyncFlushMaxQueuedUnits: 1 << 20,
-		},
+	fixture := newBufferedUsersUpdateFixtureWithDocs(t,
+		bufferedIndexedUpdateHighThresholdOptionsForTests(),
 		[]bufferedUsersUpdateDoc{
 			{id: "u1", email: "a@example.com", city: "hnl"},
 			{id: "u2", email: "b@example.com", city: "hnl"},
 		},
 	)
+	d := fixture.db
+	mgr := fixture.manager
+	col := fixture.collection
 	otherMgr := NewCollectionManager(d)
 	otherCol, err := otherMgr.OpenCollection("users")
 	if err != nil {
@@ -10700,21 +10707,16 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesFlushesRootMismatch
 }
 
 func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesBatchOneDoesNotFlushBeforeThreshold(t *testing.T) {
-	_, mgr, col := newBufferedUsersUpdateCollectionWithDocs(t,
-		CollectionOptions{
-			BufferedIndexedWrites:                   true,
-			BufferedIndexedWriteMaxDocuments:        1 << 20,
-			BufferedIndexedWriteMaxBytes:            int64(1) << 40,
-			BufferedIndexedWriteMaxRootRuns:         1 << 20,
-			BufferedIndexedAsyncFlush:               true,
-			BufferedIndexedAsyncFlushMaxQueuedUnits: 1 << 20,
-		},
+	fixture := newBufferedUsersUpdateFixtureWithDocs(t,
+		bufferedIndexedUpdateHighThresholdOptionsForTests(),
 		[]bufferedUsersUpdateDoc{
 			{id: "u1", email: "a@example.com", city: "hnl"},
 			{id: "u2", email: "b@example.com", city: "hnl"},
 			{id: "u3", email: "c@example.com", city: "hnl"},
 		},
 	)
+	mgr := fixture.manager
+	col := fixture.collection
 
 	before := mgr.StatsSnapshot()
 	for _, update := range []struct {
