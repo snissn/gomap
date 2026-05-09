@@ -839,6 +839,7 @@ type bufferedIndexedCheckpoint struct {
 	primaryRunIndexActive  bool
 	uniqueValueRuns        map[string][]memtable.Table
 	rootRunCount           int
+	indexedDeletesOnly     bool
 }
 
 type bufferedUniqueValueIndex struct {
@@ -3343,6 +3344,16 @@ func (c *Collection) shouldBufferIndexedDeletes(meta CollectionMeta) bool {
 		!collectionMetaHasSecondaryUniqueIndex(meta)
 }
 
+func (c *Collection) shouldFlushBeforeIndexedDelete(meta CollectionMeta) bool {
+	if !c.shouldBufferIndexedDeletes(meta) {
+		return true
+	}
+	domain := c.writeDomain
+	domain.mu.RLock()
+	defer domain.mu.RUnlock()
+	return !domain.indexedDeletesOnly
+}
+
 func (c *Collection) shouldBufferIndexedInsertBatch(meta CollectionMeta, documentCount int) bool {
 	if !c.shouldBufferIndexedInserts(meta) {
 		return false
@@ -4446,6 +4457,7 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		primaryRunIndexActive:  domain.primaryRunIndex != nil,
 		uniqueValueRuns:        cloneTableRunMap(domain.uniqueValueRuns),
 		rootRunCount:           domain.rootRunCount,
+		indexedDeletesOnly:     domain.indexedDeletesOnly,
 	}
 }
 
@@ -4476,6 +4488,7 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.rootBaseIDs = checkpoint.rootBaseIDs
 	domain.rootValueArenas = checkpoint.rootValueArenas
 	domain.rootRunCount = checkpoint.rootRunCount
+	domain.indexedDeletesOnly = checkpoint.indexedDeletesOnly
 	pendingRuns := indexedFlushUnitPendingRootRunMap(indexedFlushUnitsWithPublishing(checkpoint.indexedPublishingUnits, checkpoint.indexedFlushUnits), checkpoint.rootRuns)
 	domain.primaryIDIndex = rebuildBufferedPrimaryIDIndex(checkpoint.meta.Name, pendingRuns)
 	if checkpoint.primaryRunIndexActive {
@@ -7347,7 +7360,7 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
-	if !c.shouldBufferIndexedDeletes(c.meta) || !c.writeDomain.indexedDeletesOnly {
+	if c.shouldFlushBeforeIndexedDelete(c.meta) {
 		if err := c.flushBufferedWrites(); err != nil {
 			return false, err
 		}
@@ -7406,7 +7419,7 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
-	if !c.shouldBufferIndexedDeletes(c.meta) || !c.writeDomain.indexedDeletesOnly {
+	if c.shouldFlushBeforeIndexedDelete(c.meta) {
 		if err := c.flushBufferedWrites(); err != nil {
 			return 0, err
 		}
@@ -7473,6 +7486,14 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte) (int, error) {
 	}
 	existing := make([]existingDelete, 0, len(documentIDs))
 	for _, documentID := range documentIDs {
+		if c.writeDomain != nil {
+			c.writeDomain.mu.RLock()
+			alreadyDeleted := c.bufferedIndexedDeleteTombstoneLocked(c.writeDomain, documentID)
+			c.writeDomain.mu.RUnlock()
+			if alreadyDeleted {
+				continue
+			}
+		}
 		entry, _, err := collectionGetEntryAtCatalogRoot(snap, catalog, primaryRootName, documentID)
 		if errors.Is(err, tree.ErrKeyNotFound) {
 			continue
@@ -7620,6 +7641,15 @@ func (c *Collection) deleteDocumentOnce(documentID []byte) (bool, error) {
 	baseCommitSeq := snapshotCommitSeq(snap)
 
 	primaryRootName := collectionPrimaryRootName(c.meta.Name)
+	if c.writeDomain != nil {
+		c.writeDomain.mu.RLock()
+		alreadyDeleted := c.bufferedIndexedDeleteTombstoneLocked(c.writeDomain, documentID)
+		c.writeDomain.mu.RUnlock()
+		if alreadyDeleted {
+			_ = snap.Close()
+			return false, nil
+		}
+	}
 	entry, primaryRoot, err := collectionGetEntryAtCatalogRoot(snap, catalog, primaryRootName, documentID)
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		_ = snap.Close()
@@ -12166,6 +12196,14 @@ func buildDeleteRootDeltaTable(deleteKeys [][]byte) memtable.Table {
 	return table
 }
 
+func (c *Collection) bufferedIndexedDeleteTombstoneLocked(domain *collectionWriteDomain, documentID []byte) bool {
+	if c == nil || domain == nil || domain.count == 0 || !domain.indexedDeletesOnly {
+		return false
+	}
+	_, buffered, found := c.getBufferedDocumentIntoLocked(domain, documentID, nil)
+	return buffered && !found
+}
+
 func (c *Collection) bufferIndexedDeleteTablesLocked(
 	catalog *collectionCatalog,
 	baseCommitSeq uint64,
@@ -12184,7 +12222,7 @@ func (c *Collection) bufferIndexedDeleteTablesLocked(
 		return false, nil
 	}
 	if len(rootNames) != len(deltaTables) || len(rootNames) != len(policies) {
-		return false, fmt.Errorf("collections: DeleteBatch collection %q invalid plan lengths roots=%d deltas=%d policies=%d", meta.Name, len(rootNames), len(deltaTables), len(policies))
+		return false, fmt.Errorf("collections: Delete collection %q invalid plan lengths roots=%d deltas=%d policies=%d", meta.Name, len(rootNames), len(deltaTables), len(policies))
 	}
 	domain := c.writeDomain
 	domain.mu.Lock()
@@ -12194,6 +12232,12 @@ func (c *Collection) bufferIndexedDeleteTablesLocked(
 	}
 	if err := c.validateRootDescriptorSystemDeltaForMeta(meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs); err != nil {
 		return false, err
+	}
+	checkpoint := checkpointBufferedIndexedDomain(domain)
+	collectionMetaCheckpoint := c.meta
+	rollback := func() {
+		rollbackBufferedIndexedDomain(domain, checkpoint)
+		c.meta = collectionMetaCheckpoint
 	}
 	if domain.count == 0 {
 		c.initializeWriteDomainFromCatalogLocked(domain, catalog, baseCommitSeq, baseSystemRoot)
@@ -12217,8 +12261,16 @@ func (c *Collection) bufferIndexedDeleteTablesLocked(
 		}
 		baseRoot := baseRootIDs[rootName]
 		if pendingBaseRoot, ok := pendingIndexedRootBaseIDLocked(domain, rootName); ok && pendingBaseRoot != baseRoot {
+			rollback()
 			return false, errBufferedRootBaseMismatch(meta.Name, rootName)
 		}
+	}
+	for i, rootName := range rootNames {
+		table := deltaTables[i]
+		if table == nil || table.Len() == 0 {
+			continue
+		}
+		baseRoot := baseRootIDs[rootName]
 		if _, ok := domain.rootBaseIDs[rootName]; !ok {
 			domain.rootBaseIDs[rootName] = baseRoot
 		}
@@ -12230,8 +12282,10 @@ func (c *Collection) bufferIndexedDeleteTablesLocked(
 		deltaTables[i] = nil
 	}
 	if stagedRootRuns == 0 {
+		rollback()
 		return false, nil
 	}
+	domain.primaryRunIndex = nil
 	domain.loaded = true
 	domain.meta = meta
 	domain.catalog = catalog
@@ -12248,12 +12302,14 @@ func (c *Collection) bufferIndexedDeleteTablesLocked(
 	c.meta = meta
 	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, meta.Options)
 	if err != nil {
+		rollback()
 		return false, err
 	}
 	if shouldFlushBufferedIndexedWrites(domain, meta.Options) {
 		flushElapsed, _, _, err := c.flushBufferedIndexedAfterThresholdLocked(domain, meta.Options)
 		_ = flushElapsed
 		if err != nil {
+			rollback()
 			resetCollectionTables(compactedObsolete)
 			return false, err
 		}
@@ -14699,11 +14755,8 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		}
 	}
 	if !meta.Options.BufferedIndexedWrites {
-		if meta.Options.DisableIndexedWriteMemtables {
-			meta.Options.DisableBufferedIndexedAsyncFlush = false
-			meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
-		}
 		meta.Options.BufferedIndexedAsyncFlush = false
+		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
 	}
 	return meta, nil
 }

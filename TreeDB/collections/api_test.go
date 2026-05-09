@@ -7450,6 +7450,27 @@ func TestCollectionIndexedDeleteBuffersNonUniqueTombstones(t *testing.T) {
 	if !reflect.DeepEqual(ids, [][]byte{[]byte("u2")}) {
 		t.Fatalf("city ids=%q want [u2]", ids)
 	}
+	deleted, err = writer.DeleteDocument([]byte("u1"))
+	if err != nil {
+		t.Fatalf("delete already buffered u1: %v", err)
+	}
+	if deleted {
+		t.Fatal("second delete of pending tombstone reported deleted")
+	}
+	deleted, err = writer.DeleteDocument([]byte("u2"))
+	if err != nil {
+		t.Fatalf("delete u2 after primary run index exists: %v", err)
+	}
+	if !deleted {
+		t.Fatal("delete u2 reported missing document")
+	}
+	got, err = reader.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("reader get second pending deleted document: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("reader saw second pending deleted document %q", got)
+	}
 	if err := writer.Flush(); err != nil {
 		t.Fatalf("flush delete: %v", err)
 	}

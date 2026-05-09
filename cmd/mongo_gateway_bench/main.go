@@ -4164,10 +4164,14 @@ func normalizeNativeWireBenchmarkCollectionMeta(meta collections.CollectionMeta)
 		meta.Options.BufferedIndexedWrites = false
 		meta.Options.BufferedIndexedAsyncFlush = false
 		meta.Options.BufferedIndexedOverlayRoots = false
+		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
 		return meta
 	}
 	meta.Options.BufferedIndexedWrites = true
-	if !meta.Options.DisableBufferedIndexedAsyncFlush {
+	if meta.Options.DisableBufferedIndexedAsyncFlush {
+		meta.Options.BufferedIndexedAsyncFlush = false
+		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
+	} else {
 		meta.Options.BufferedIndexedAsyncFlush = true
 	}
 	defaultMaxDocuments := collections.DefaultIndexedWriteMemtableMaxDocuments
@@ -4211,10 +4215,14 @@ func normalizeNativeWireBenchmarkOptions(opts collections.CollectionOptions, ind
 		opts.BufferedIndexedWrites = false
 		opts.BufferedIndexedAsyncFlush = false
 		opts.BufferedIndexedOverlayRoots = false
+		opts.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
 		return opts
 	}
 	opts.BufferedIndexedWrites = true
-	if !opts.DisableBufferedIndexedAsyncFlush {
+	if opts.DisableBufferedIndexedAsyncFlush {
+		opts.BufferedIndexedAsyncFlush = false
+		opts.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
+	} else {
 		opts.BufferedIndexedAsyncFlush = true
 	}
 	defaultMaxDocuments := collections.DefaultIndexedWriteMemtableMaxDocuments
