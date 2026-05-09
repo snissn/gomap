@@ -1,10 +1,12 @@
 # SPEC: Collection WAL Durability and Root-Group Recovery
 
-Status: normative implementation gate once Milestones 0-7 are complete.
-Sections marked MUST/SHOULD define the production collection durability
-contract; explicitly marked future-work sections remain non-normative. Open
-questions in Section 15 must be resolved before any milestone that depends on
-them can pass.
+Status: normative target contract and implementation gate; not current behavior
+until the milestone evidence named in Section 13 is accepted. Sections marked
+MUST/SHOULD define the target production collection durability contract.
+Sections explicitly marked current behavior describe the repository before the
+collection WAL lands. Future-work sections remain non-normative. Open questions
+in Section 15 must be resolved before any milestone that depends on them can
+pass.
 
 This document defines the minimum implementation contract for durable-at-ack
 collection writes. Until the requirements and crash tests in this document pass,
@@ -12,9 +14,6 @@ TreeDB must not merge production persistent column-store collection APIs, column
 part descriptor roots, column-file side refs in published roots, or
 crash/reopen safety claims for column-store writes.
 
-Target repository studied: `https://github.com/snissn/gomap/tree/7431ba92f7a1a456c15f70ac019314090e22af31`
-Primary code paths studied: `TreeDB/collections`, `TreeDB/db`,
-`TreeDB/caching`, `TreeDB/internal/commitlog`, `TreeDB/internal/valuelog`  
 Related specs:
 
 - `TreeDB/docs/spec/write-path-and-durability.md`
@@ -33,10 +32,9 @@ they remain only in collection-local mutable, queued, or publishing state. Those
 writes are visible through the owning collection manager, but they are not
 durable-at-ack under the current contract.
 
-This spec proposes a shared collection WAL and root-group recovery protocol.
-The goal is to make acknowledged collection writes recoverable under WAL-on
-profiles without building a separate durability model for future column-store
-collections.
+This document specifies the target shared collection WAL and root-group recovery
+protocol. Until the implementation and verification gates pass, it is a gating
+target rather than a description of current runtime guarantees.
 
 The proposed architecture is a root-delta transaction WAL:
 
@@ -235,6 +233,20 @@ files, dictionaries, and delete bitmap files. Leaf-log/page-log records created
 while publishing replayed B-tree pages are publish outputs, not collection WAL
 side refs.
 
+Side ref:
+
+The typed collection WAL reference naming a side file, offset, size, checksum,
+class, and required/optional status. A side ref is metadata; the side file is
+the referenced storage.
+
+Flush-boundary durable:
+
+Current collection behavior where an acknowledged collection mutation that
+remains only in mutable, queued, or publishing state is visible in-process but
+is not promised after crash until `Collection.Flush`,
+`CollectionManager.FlushAll`, a threshold-triggered synchronous publish,
+checkpoint integration, or close drain publishes it to backend roots.
+
 Applied watermark:
 
 System-root metadata that records the highest contiguous collection sequence
@@ -377,8 +389,9 @@ marked `Required=false` must not be referenced by any published root value.
 - Do not build a separate private WAL only for column-store collections.
 - Do not require old pre-alpha directories to remain cross-version compatible.
 - Do not use collection WAL transactions as Raft log entries. Raft entries are
-  logical deterministic commands; collection WAL transactions are local storage
-  apply artifacts derived from those commands.
+  logical deterministic commands; collection WAL transactions are local physical
+  storage apply artifacts derived from those commands and are not a Raft log
+  entry.
 - Do not make native-wire acknowledgement or response-shaping options part of
   recovered logical collection state.
 
@@ -3260,10 +3273,14 @@ publish roots on invalid bytes, never delete/quarantine files from invalid
 bytes, produce deterministic error classes for the same input, and never skip a
 complete corrupt transaction in favor of a later same-collection transaction.
 
-### 11.7 PR1-Min Required Named Acceptance Tests
+### 11.7 PR1-Min Acceptance Harness Shapes
 
-These tests or equivalent subtests are required before the guarded PR1-min
-capability can merge:
+The canonical list of named acceptance tests lives in
+`TreeDB/docs/spec/verification.md#115-planned-collection-wal-durability-gate`.
+This section lists required harness shapes, fault classes, and design
+invariants. When a test name changes, update `verification.md` and the
+acceptance artifact schema in the same change. The names below mirror the
+current verification matrix but are not a second source of ownership.
 
 | Test | Must prove |
 |---|---|
@@ -3294,11 +3311,12 @@ including checkpoint-not-flushing pending no-index inserts, buffered no-index
 reads before flush, indexed memtable reads/unique checks, queued indexed flush
 close, and `FlushAll` draining queued indexed flush units.
 
-### 11.8 Full-Contract Required Named Acceptance Tests
+### 11.8 Full-Contract Acceptance Harness Shapes
 
 These tests or equivalent subtests must exist before implementation can be
-considered complete for the full collection WAL contract. Names are normative
-so CI, verification docs, and acceptance artifacts can point to stable evidence.
+considered complete for the full collection WAL contract. Canonical test names
+and acceptance status are owned by `verification.md`; this table records the
+required harness shapes and invariants.
 
 | Test | Harness shape | Must prove |
 |---|---|---|

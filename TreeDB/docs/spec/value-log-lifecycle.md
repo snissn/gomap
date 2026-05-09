@@ -1,6 +1,10 @@
 # Value-Log Lifecycle Specification
 
-This document defines the lifecycle of value-log segments and pointers.
+This document owns value-log and split leaf-log lifecycle. Generic
+collection-WAL side-ref preparation, protection, cleanup, and column-file
+side-ref closure are owned by `collection-wal-durability-plan.md`; this
+document specifies how value-log and leaf-log segments participate in that
+lifecycle.
 
 ## 1. Persistent Pointer Model
 

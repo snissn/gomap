@@ -134,6 +134,13 @@ Durability mode controls guarantees for sync calls:
 
 Detailed semantics are in `TreeDB/docs/spec/write-path-and-durability.md`.
 
+Collection APIs currently have a separate write-domain durability boundary:
+acknowledged writes that remain in mutable, queued, or publishing
+collection-local state are visible in-process but not durable-at-ack. That
+current behavior is owned by `collections-write-domain.md`. The target WAL-on
+durable-at-ack collection contract is owned by
+`collection-wal-durability-plan.md` until it lands, then summarized here.
+
 ### 7.1 Collection Write Acknowledgement Contract
 
 Terms:

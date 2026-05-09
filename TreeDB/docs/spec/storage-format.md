@@ -1,6 +1,8 @@
 # TreeDB Storage Format
 
-This document defines the current on-disk and wire formats used by TreeDB.
+This document defines TreeDB's durable on-disk formats and local frame formats.
+The native client/server wire protocol is owned by
+`TreeDB/docs/spec/native-wire-protocol.md`.
 
 TreeDB is pre-alpha; format compatibility between versions is not guaranteed.
 That disclaimer does not permit fail-open handling of acknowledged durable
@@ -21,15 +23,20 @@ A TreeDB deployment uses:
   when `IndexOuterLeavesInValueLog` is enabled,
 - optional side-store DBs (`dictdb`, `templatedb`) using their own `index.db` files.
 
-Collection WAL is a distinct physical file class from the cached key/value
-commit log. Its byte envelope, feature gates, migration states, and cleanup
-metadata are defined in this document. The semantic write/recovery contract is
-defined in `TreeDB/docs/spec/collection-wal-durability-plan.md`. Collection WAL
-records use per-collection `CollectionSeq` dependency ordering, global `WALLSN`
-append positions only for scan/cleanup accounting, side-ref validation, and
-durable cleanup metadata before missing collection WAL segments can be treated
-as safely cleaned. `WALLSN` is not a replay skip key; recovery skips only by
-durable per-collection applied sequence watermarks.
+Collection WAL is a target storage class, not yet a current committed on-disk
+byte format. This document owns the reserved file class name
+`wal/collection-l<lane>-<seq>.log` plus the target local frame format once the
+M1 gate in `collection-wal-durability-plan.md` lands. Until then, the WAL plan
+owns the target logical transaction semantics. When M1 lands, exact frame
+bytes, checksums, commit markers, segment metadata, cleanup records, and golden
+encodings must be maintained here and mapped to tests in
+`TreeDB/docs/spec/verification.md`.
+
+Collection WAL records use per-collection `CollectionSeq` dependency ordering,
+global `WALLSN` append positions only for scan/cleanup accounting, side-ref
+validation, and durable cleanup metadata before missing collection WAL segments
+can be treated as safely cleaned. `WALLSN` is not a replay skip key; recovery
+skips only by durable per-collection applied sequence watermarks.
 
 The operator restorable file set, live backup barrier, and restore validation
 procedure are defined in `TreeDB/docs/spec/backup-restore.md`. A live
@@ -423,6 +430,8 @@ Validation rules:
 
 ## 9. Collection WAL v1 Segment and Frame Format
 
+This is the target local frame format for the M1 collection WAL gate. It is not
+current runtime behavior until `collection_wal_v1` is accepted and advertised.
 Collection WAL is a separate file class from the key/value commit log. It must
 not be decoded with the commit-log `Record` schema, and cached commit-log RID
 skip behavior must not apply to complete collection WAL transactions.

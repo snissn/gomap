@@ -1,11 +1,13 @@
 # TreeDB Native Wire Protocol v1
 
-Status: draft proposal, non-normative.
+Status: normative for code that advertises native-wire v1. Distributed/Raft
+behavior remains target/non-normative until cluster mode lands.
 
 TreeDB is pre-alpha. This document defines the target native network protocol
 shape for TreeDB collections and raw ordered-key operations. It is intended to
 guide implementation, benchmark work, and the future Raft/distributed database
-surface. It does not describe current shipped server behavior.
+surface. Sections marked distributed or Raft target do not describe current
+single-node server behavior.
 
 Normative keywords are conformance requirements for code that advertises
 native-wire v1. Until a phase lands, unmatched requirements are design
@@ -74,6 +76,12 @@ Only layer 3 is eligible for Raft log storage. Layer 1 MUST be excluded from
 Raft entries. Layer 2 MAY contain optional client/server convenience sections
 that are also excluded from deterministic entries unless explicitly marked as
 deterministic command input.
+
+Collection WAL is local physical durability state and is not a Raft log entry.
+Native-wire deterministic command entries describe logical mutations; each node
+that applies such a command must still satisfy the local collection WAL
+recoverability rule before reporting local or Raft-backed success for collection
+mutations.
 
 Protocol compatibility is based on explicit version and feature negotiation, not
 best-effort decoding of unknown required fields. Unknown required frame flags,

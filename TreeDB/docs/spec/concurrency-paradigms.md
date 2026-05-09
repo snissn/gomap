@@ -42,7 +42,7 @@ Details:
 Primary model:
 - concurrent foreground writers,
 - sharded mutable memtables,
-- lane-partitioned WAL/value-log appends,
+- lane-partitioned commit-log and value-log appends,
 - asynchronous flush and maintenance workers.
 
 Details:

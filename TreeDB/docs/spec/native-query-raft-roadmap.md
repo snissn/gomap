@@ -41,6 +41,16 @@ system should replicate boring, deterministic metadata and mutation commands.
 8. Every roadmap round must end with a dedicated performance pass before the
    next round starts.
 
+Collection WAL is local physical durability state and is not a Raft log entry.
+Applying a committed deterministic command to TreeDB must use the local
+collection WAL/root-delta path defined by
+`collection-wal-durability-plan.md` when the command mutates collections. A node
+must not report `locally_recoverable`, advance durable
+applied-index/idempotency metadata, or return `ack_policy=raft_committed`
+success from that node until the local collection WAL transaction and any
+metadata ordering rule are recoverable, unless a later Raft stable-store
+recovery spec explicitly guarantees replay before serving reads.
+
 ## 3. Phase-Close Performance Passes
 
 Each roadmap round, such as R0, R1, R2, and R3, MUST reserve its final sprint

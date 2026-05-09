@@ -1,7 +1,9 @@
 # TreeDB agent notes (current)
 
-TreeDB stores large values in a **persistent value log** under `Options.Dir/maindb/wal/`.
-There is **no legacy alternate value-store path** in TreeDB.
+TreeDB stores large values in a **persistent value log** under
+`Options.Dir/maindb/value_vlog/`. The redo journal/WAL lives under
+`Options.Dir/maindb/wal/`. There is **no legacy alternate value-store path** in
+TreeDB.
 
 ## Project status (pre-alpha)
 
@@ -12,7 +14,7 @@ There is **no legacy alternate value-store path** in TreeDB.
 ## Canonical docs (trust these)
 
 - `TreeDB/docs/spec/README.md` (spec index and scope)
-- `TreeDB/docs/spec/storage-format.md` (on-disk layout + `ValuePtr` + wire formats)
+- `TreeDB/docs/spec/storage-format.md` (on-disk layout + `ValuePtr` + local frame formats)
 - `TreeDB/docs/spec/write-path-and-durability.md` (WAL on/off and sync semantics)
 - `TreeDB/docs/spec/recovery.md` (startup recovery and replay rules)
 - `TreeDB/docs/spec/value-log-lifecycle.md` (GC/rewrite/retention lifecycle)

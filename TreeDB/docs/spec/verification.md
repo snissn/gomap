@@ -194,6 +194,25 @@ matrix:
 
 ## 11.5 Planned Collection WAL Durability Gate
 
+This section owns the canonical names of collection WAL acceptance tests. Design
+documents may list fault classes and invariants, but named tests and acceptance
+evidence are maintained here.
+
+Normative coverage matrix:
+
+| Normative statement | Owner section | Required test/evidence | Status |
+|---|---|---|---|
+| WAL-on visibility implies process-crash recoverability for enabled collection WAL capabilities. | `collection-wal-durability-plan.md` target durability contract | `TestCollectionWALNoIndexInsertAckBeforeFlushRecovers`, `TestCollectionWALNoIndexInsertBatchAckBeforeFlushRecovers`, full-contract indexed recovery tests | planned |
+| WAL append failure before commit marker is not visible. | `collection-wal-durability-plan.md` failure contract | `TestCollectionWALAppendFailureRejectsBeforeVisibility` | planned |
+| Post-commit failure returns commit-ambiguous/fatal, not an ordinary retryable mutation error. | `collection-wal-durability-plan.md` failure contract | `TestCollectionWALPostCommitVisibleInstallFailureCommitAmbiguous`, native-wire post-commit ack-failure tests | planned |
+| Missing required side ref for a complete WAL transaction is a recovery error. | `collection-wal-durability-plan.md` side-ref recovery | `TestCollectionWALPartialFrameAndMissingSideRefNoPhantomRoots`, `TestRecoveryMissingRequiredSideRefFailsHard` | planned |
+| Applied watermark advances only across contiguous applied collection sequence. | `collection-wal-durability-plan.md` watermark contract | `TestCollectionWALWatermarkOutOfOrderTxnDoesNotSkipLowerUnapplied` | planned |
+| Root descriptors and applied watermark publish atomically. | `collection-wal-durability-plan.md` recovery states | `TestCollectionWALDescriptorAndWatermarkPublishAtomically`, `TestCollectionWALModelDescriptorWatermarkSplitRejected` | planned |
+| Drop/recreate with the same collection name does not replay old transactions. | `collection-wal-durability-plan.md` identity guards | `TestCollectionWALCollectionUIDDropRecreateDoesNotReplayByName` | planned |
+| Direct publish, disabled-memtable, and large-batch paths cannot bypass WAL-on guards. | `collection-wal-durability-plan.md` write-path coverage | `TestCollectionWALDirectPublishAndDisabledMemtablePathsCannotBypassWAL` | planned |
+| Read views pin pending value-log, leaf-log, and future column side refs until released. | `collection-wal-durability-plan.md`, `value-log-lifecycle.md` | `TestCollectionWALReadViewPinsLeafAndColumnSideRefs` | planned |
+| Raft/local recoverability is not reported before local collection WAL durability. | `collection-wal-durability-plan.md`, `native-query-raft-roadmap.md` | `TestRaftApplyDoesNotAdvanceLocalRecoverableBeforeCollectionWAL` | future |
+
 Invariant:
 - Current indexed collection writes remain flush-boundary durable until the
   full indexed collection WAL implementation lands.

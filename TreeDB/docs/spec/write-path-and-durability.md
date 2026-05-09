@@ -25,6 +25,14 @@ This document defines write semantics for TreeDB cached mode and backend mode.
 - Sync operations are relaxed.
 - Durable boundary for recent writes is checkpoint/flush based, not per-write journal replay.
 
+This document owns the canonical durability-mode matrix. Other docs may
+summarize these modes but should not maintain independent durability matrices.
+Collection APIs currently have an additional write-domain distinction: before
+collection WAL lands, acknowledged collection writes can remain flush-boundary
+durable rather than durable-at-ack. That current behavior is owned by
+`collections-write-domain.md`; the target WAL-on collection overlay is owned by
+`collection-wal-durability-plan.md` until accepted.
+
 ## 2. Value Placement (Inline vs Pointer)
 
 ### 2.1 Threshold selection
@@ -115,7 +123,10 @@ Commit visibility sequence:
 ### 5.3 Collection API Durability
 
 Collection mutators do not have separate `*Sync` Go methods. Their baseline
-acknowledgement is mode-dependent:
+acknowledgement is mode-dependent. Current shipped collection write-domain
+behavior is flush-boundary durable, as defined in
+`collections-write-domain.md`. The bullets below describe the target collection
+WAL overlay for paths that have passed the collection WAL gate:
 
 - `DurabilityDurable`: non-sync collection mutator success is process-crash
   recoverable through collection WAL. It is not by itself a power-loss fsync
@@ -163,7 +174,8 @@ WAL state merely because backend checkpoint completed. A future
 checkpoint-without-publication mode must report collection WAL debt and retain
 all required WAL segments and side refs.
 
-`DB.Checkpoint()` success must cover collection WAL. A checkpoint that cannot
+Under the full collection WAL target, `DB.Checkpoint()` success must cover
+collection WAL. A checkpoint that cannot
 publish or watermark pre-cut collection WAL transactions must return an error
 or expose explicit collection WAL debt through a new API; it must not return
 `nil` and call the collection WAL state clean.

@@ -6,16 +6,24 @@ This document defines startup recovery behavior.
 
 Recovery is executed during `Open` for read-write handles.
 
-High-level order:
+Current high-level order for non-collection cached WAL:
 
 1. recover index metadata/root state,
-2. scan value-log, leaf-log, and future side-store availability,
-3. replay cached commit logs (if WAL mode permits),
-4. scan collection WAL transactions and cleanup metadata,
-5. load applied collection watermarks,
-6. validate required side refs and replay unapplied collection WAL transactions,
-7. expose recovered state,
-8. clean replayed commit-log and safely watermarked collection WAL segments.
+2. discover value-log and commit-log segments from their canonical directories,
+3. validate reachable value-log and split leaf-log records needed by replay,
+4. replay cached commit logs if WAL mode permits,
+5. expose recovered backend roots and memtables,
+6. clean obsolete commit-log segments only after replay permits it.
+
+Target collection WAL extension:
+
+Collection WAL replay is target behavior owned by
+`collection-wal-durability-plan.md` until the implementation gate lands. In
+that target, recovery also discovers collection WAL segments and cleanup
+metadata, validates required side refs, publishes committed root groups,
+advances per-collection applied watermarks atomically with root descriptors, and
+refuses read-only open when committed unapplied collection WAL would be required
+for a correct view.
 
 Read-only opens do not run mutating recovery. If collection WAL segments
 contain committed unapplied transactions, read-only open must fail with a
@@ -58,12 +66,17 @@ From chosen meta:
 
 ## 3. WAL Segment Discovery
 
-Segments are discovered from `<dir>/wal` by filename parsing.
+Commit-log segments are discovered from `<maindb>/wal` by filename parsing.
+Value-log segments are discovered from `<maindb>/value_vlog`; split leaf-log
+segments are discovered from `<maindb>/leaf_vlog`.
 
 Accepted patterns include:
 
-- canonical: `commit-l<lane>-<seq>.log`, `value-l<lane>-<seq>.log`
-- legacy accepted: `commit-<seq>.log`, `value-<seq>.log`, `wal-<seq>.log`, `vlog-<seq>.log`
+- canonical commit log: `commit-l<lane>-<seq>.log`
+- legacy accepted commit-log aliases: `commit-<seq>.log`, `wal-<seq>.log`
+- legacy value-log aliases accepted only by explicit legacy parsers:
+  `value-<seq>.log`, `vlog-<seq>.log`, and legacy mixed `wal/value-l*.log`
+  names
 
 Discovered segments are sorted by `(lane, seq)`.
 
