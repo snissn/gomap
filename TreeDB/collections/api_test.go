@@ -10049,15 +10049,22 @@ func TestCollectionUpdateBatchPublishesWhenSecondaryUniqueChanges(t *testing.T) 
 	}
 	before := d.State()
 
+	callbackCalls := 0
 	results, err := col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("u1"),
-		Update:     setBSONField("email", "b@example.com"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			callbackCalls++
+			return setBSONField("email", "b@example.com")(current)
+		},
 	}})
 	if err != nil {
 		t.Fatalf("UpdateBatch: %v", err)
 	}
 	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
 		t.Fatalf("results=%+v want one modified row", results)
+	}
+	if callbackCalls != 1 {
+		t.Fatalf("callback calls=%d want 1", callbackCalls)
 	}
 	after := d.State()
 	if after.CommitSeq != before.CommitSeq+1 {

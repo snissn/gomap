@@ -10054,9 +10054,6 @@ func (c *Collection) shouldPlanUpdateBatchWithBufferedWrites(mode updateBatchMod
 	if c == nil || c.writeDomain == nil {
 		return false
 	}
-	if mode == updateBatchModeAny {
-		return true
-	}
 	domain := c.writeDomain
 	domain.mu.RLock()
 	defer domain.mu.RUnlock()
