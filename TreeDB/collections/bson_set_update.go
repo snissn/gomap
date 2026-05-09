@@ -23,20 +23,22 @@ type bsonSetUpdate struct {
 	fields []BSONSetField
 }
 
+var errBSONSetRequiresBSONFormat = errors.New("collections: BSON $set update requires BSON document format")
+
 // UpdateBSONSet applies a structured top-level BSON $set update to one
 // document. The collection must use DocumentFormatBSON. Missing documents
 // return matched=false. If all assigned values already match the stored
 // document, modified=false. Callers must not mutate fields or RawValue byte
 // slices until UpdateBSONSet returns.
 func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bool, bool, error) {
-	spec, err := newBSONSetUpdate(fields)
-	if err != nil {
-		return false, false, err
-	}
 	if err := validateCollectionUpdateDocumentInput(c, documentID); err != nil {
 		return false, false, err
 	}
 	if err := c.validateBSONSetDocumentFormat(); err != nil {
+		return false, false, err
+	}
+	spec, err := newBSONSetUpdate(fields)
+	if err != nil {
 		return false, false, err
 	}
 	if combiner, domain := c.updateFastPathWithoutCreatingCombiner(); combiner != nil {
@@ -57,7 +59,7 @@ func (c *Collection) validateBSONSetDocumentFormat() error {
 		return errCollectionNil
 	}
 	if normalizedDocumentFormat(c.meta.Options.DocumentFormat) != DocumentFormatBSON {
-		return errors.New("collections: BSON $set update requires BSON document format")
+		return errBSONSetRequiresBSONFormat
 	}
 	return nil
 }
@@ -302,7 +304,11 @@ func (u bsonSetUpdate) affectedIndexMask(runtimes []indexRuntime, opts collectio
 	return mask, true
 }
 
-func orderedIndexStateForDocumentRuntimeMask(document []byte, runtimes []indexRuntime, mask uint64, opts collectionOptions, encoder *indexEncodeArena) (orderedDocumentIndexState, error) {
+// orderedIndexStateForKnownValidDocumentRuntimeMask extracts only index states
+// covered by mask. Callers must already have validated BSON documents; the BSON
+// $set update path does that via ID preservation checks before using this
+// helper, which avoids rescanning the whole document when mask is zero.
+func orderedIndexStateForKnownValidDocumentRuntimeMask(document []byte, runtimes []indexRuntime, mask uint64, opts collectionOptions, encoder *indexEncodeArena) (orderedDocumentIndexState, error) {
 	if len(runtimes) == 0 {
 		return nil, nil
 	}
@@ -312,14 +318,15 @@ func orderedIndexStateForDocumentRuntimeMask(document []byte, runtimes []indexRu
 			valueRefs: make([][]byte, 0, len(runtimes)),
 		}
 	}
-	if mask == 0 {
-		return encoder.appendState(len(runtimes)), nil
-	}
 	allMask := uint64(^uint64(0))
 	if len(runtimes) < 64 {
 		allMask = (uint64(1) << uint(len(runtimes))) - 1
 	}
-	if mask&allMask == allMask {
+	mask &= allMask
+	if mask == 0 {
+		return encoder.appendState(len(runtimes)), nil
+	}
+	if mask == allMask {
 		return orderedIndexStateForDocumentWithArena(document, runtimes, opts, encoder)
 	}
 	state := encoder.appendState(len(runtimes))
