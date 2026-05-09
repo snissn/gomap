@@ -7219,25 +7219,22 @@ func (c *Collection) ensureWriteDomainOpen() error {
 }
 
 func validateUpdateBatchItems(items []UpdateBatchItem) error {
-	_, err := prepareUpdateBatchItems(items)
-	return err
+	seen := make(map[string]struct{}, len(items))
+	for i, item := range items {
+		if err := validateUpdateBatchItem(item, i, seen); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func prepareUpdateBatchItems(items []UpdateBatchItem) ([]updateBatchItem, error) {
 	out := make([]updateBatchItem, len(items))
 	seen := make(map[string]struct{}, len(items))
 	for i, item := range items {
-		if len(item.DocumentID) == 0 {
-			return nil, fmt.Errorf("collections: document id cannot be empty at index %d", i)
+		if err := validateUpdateBatchItem(item, i, seen); err != nil {
+			return nil, err
 		}
-		if item.Update == nil {
-			return nil, fmt.Errorf("collections: update function is nil at index %d", i)
-		}
-		key := string(item.DocumentID)
-		if _, ok := seen[key]; ok {
-			return nil, fmt.Errorf("%w at index %d", ErrDuplicateDocumentID, i)
-		}
-		seen[key] = struct{}{}
 		out[i] = updateBatchItem{
 			UpdateBatchItem: UpdateBatchItem{
 				DocumentID: bytes.Clone(item.DocumentID),
@@ -7246,6 +7243,21 @@ func prepareUpdateBatchItems(items []UpdateBatchItem) ([]updateBatchItem, error)
 		}
 	}
 	return out, nil
+}
+
+func validateUpdateBatchItem(item UpdateBatchItem, index int, seen map[string]struct{}) error {
+	if len(item.DocumentID) == 0 {
+		return fmt.Errorf("collections: document id cannot be empty at index %d", index)
+	}
+	if item.Update == nil {
+		return fmt.Errorf("collections: update function is nil at index %d", index)
+	}
+	key := string(item.DocumentID)
+	if _, ok := seen[key]; ok {
+		return fmt.Errorf("%w at index %d", ErrDuplicateDocumentID, index)
+	}
+	seen[key] = struct{}{}
+	return nil
 }
 
 func updateBatchBSONSetItemIndex(items []updateBatchItem) int {
