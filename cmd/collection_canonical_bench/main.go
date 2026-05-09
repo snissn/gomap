@@ -26,7 +26,7 @@ const runDirSentinel = ".collection_canonical_bench_run"
 const (
 	phasePostInsert               = "post_insert"
 	phaseOnlineOnePassMaintenance = "online_one_pass_maintenance"
-	phaseOfflineRewrite           = "offline_rewrite"
+	phaseOfflineCompact           = "offline_compact"
 	phaseFullLeafgenPackGC        = "full_leafgen_pack_gc"
 	phaseSQLiteVacuum             = "sqlite_vacuum"
 )
@@ -371,7 +371,7 @@ func prepareRunDir(cfg config) error {
 	paths := []string{
 		"logs",
 		"timed_matrix",
-		"offline_rewrite",
+		"offline_compact",
 		"full_leafgen_pack_gc",
 		"benchmark_results.json",
 		"benchmark_summary.md",
@@ -455,7 +455,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.FullLeafgenMaxGenerations, "leafgen-pack-max-generations", cfg.FullLeafgenMaxGenerations, "Max generations to pack in full leafgen phase; 0 means no limit")
 	fs.StringVar(&cfg.FullLeafgenIndexVacuum, "index-vacuum", cfg.FullLeafgenIndexVacuum, "Index vacuum mode for full leafgen fixture: offline, online, auto, or none")
 	fs.BoolVar(&cfg.SkipTimedMatrix, "skip-timed-matrix", false, "Skip timed TreeDB/SQLite benchmark matrix")
-	fs.BoolVar(&cfg.SkipOfflineRewrite, "skip-offline-rewrite", false, "Skip PR 1096-style offline rewrite matrix")
+	fs.BoolVar(&cfg.SkipOfflineRewrite, "skip-offline-rewrite", false, "Skip high-level offline compact matrix")
 	fs.BoolVar(&cfg.SkipFullLeafgen, "skip-full-leafgen", false, "Skip full leafgen pack/GC fixture")
 	fs.BoolVar(&cfg.SkipSQLite, "skip-sqlite", false, "Skip SQLite cells in timed matrix")
 	fs.BoolVar(&cfg.AllowIncomplete, "allow-incomplete", false, "Write report even when guardrail checks fail")
@@ -525,7 +525,7 @@ func runTimedMatrix(cfg config, canon *canonicalRun) error {
 }
 
 func runOfflineRewriteMatrix(cfg config, canon *canonicalRun) error {
-	rewriteDir := filepath.Join(cfg.OutDir, "offline_rewrite")
+	rewriteDir := filepath.Join(cfg.OutDir, "offline_compact")
 	env := map[string]string{
 		"RUN_DIR":            rewriteDir,
 		"DOCS":               strconv.Itoa(cfg.Docs),
@@ -533,11 +533,11 @@ func runOfflineRewriteMatrix(cfg config, canon *canonicalRun) error {
 		"PROFILE":            cfg.Profile,
 		"COLLECTION_INDEXES": strings.Join(offlineRewriteIndexArgs(cfg.Indexes), " "),
 	}
-	if err := runLoggedCommand(cfg, canon, "offline_rewrite_matrix", env, "bash", "./scripts/treedb_collection_compression_matrix.sh"); err != nil {
+	if err := runLoggedCommand(cfg, canon, "offline_compact_matrix", env, "bash", "./scripts/treedb_collection_compression_matrix.sh"); err != nil {
 		return err
 	}
-	canon.Artifacts["offline_rewrite_dir"] = rewriteDir
-	canon.Artifacts["offline_rewrite_tsv"] = filepath.Join(rewriteDir, "compression_matrix.tsv")
+	canon.Artifacts["offline_compact_dir"] = rewriteDir
+	canon.Artifacts["offline_compact_tsv"] = filepath.Join(rewriteDir, "compression_matrix.tsv")
 	return parseOfflineRewriteTSV(canon, filepath.Join(rewriteDir, "compression_matrix.tsv"), cfg)
 }
 
@@ -878,17 +878,17 @@ func parseOfflineRewriteTSV(canon *canonicalRun, path string, cfg config) error 
 		docs := cfg.Docs
 		phase := phasePostInsert
 		maintenance := "none"
-		note := "offline rewrite matrix before-rewrite size; not compacted"
+		note := "offline compact matrix before-compact size; not compacted"
 		flags := map[string]string(nil)
-		if row["phase"] == "after_rewrite" {
-			phase = phaseOfflineRewrite
-			maintenance = "treemap_vlog_rewrite_rw"
-			note = "PR 1096-style offline rewrite using treemap vlog-rewrite -rw"
+		if row["phase"] == "after_compact" || row["phase"] == "after_rewrite" {
+			phase = phaseOfflineCompact
+			maintenance = "treemap_compact_rw"
+			note = "High-level CompactStorage path using treemap compact -rw"
 			flags = map[string]string{
-				"treemap":                   "vlog-rewrite -rw",
+				"treemap":                   "compact -rw",
 				"template-mode":             "off",
 				"leaf-segment-target-bytes": "persisted/default",
-				"index-vacuum":              "offline index swap from rewrite",
+				"index-vacuum":              "via CompactStorage/offline vacuum path",
 			}
 		}
 		extra := map[string]string{
@@ -1033,7 +1033,7 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 		if r.Shape != "collection" && r.Shape != "raw" {
 			add("error", "missing_shape_label", fmt.Sprintf("%s/%s has non-canonical shape label %q", r.ConfigName, r.Phase, r.Shape))
 		}
-		if (r.Phase == phaseOfflineRewrite || r.Phase == phaseFullLeafgenPackGC || r.Phase == phaseSQLiteVacuum) && len(r.CompactionFlags) == 0 {
+		if (r.Phase == phaseOfflineCompact || r.Phase == phaseFullLeafgenPackGC || r.Phase == phaseSQLiteVacuum) && len(r.CompactionFlags) == 0 {
 			add("error", "missing_compaction_flags", fmt.Sprintf("%s/%s is missing compaction flags", r.ConfigName, r.Phase))
 		}
 	}
@@ -1054,14 +1054,14 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 		}
 		if findResult(canon.Results, sqliteNativeConfig, phaseSQLiteVacuum) == nil {
 			for _, treeDBConfig := range compactedTreeDBConfigNames(canon) {
-				if findResult(canon.Results, treeDBConfig, phaseOfflineRewrite) != nil {
+				if findResult(canon.Results, treeDBConfig, phaseOfflineCompact) != nil {
 					add("error", "unfair_compacted_comparison", "TreeDB offline/full compaction must be compared against SQLite after VACUUM, not SQLite post-insert")
 					break
 				}
 			}
 		}
 	}
-	if findResult(canon.Results, "treedb_template_v1_raw", phaseOfflineRewrite) != nil {
+	if findResult(canon.Results, "treedb_template_v1_raw", phaseOfflineCompact) != nil {
 		add("info", "raw_shape_labeled", "raw TreeDB rows are labeled shape=raw and should not be mixed with collection rows without that label")
 	}
 	for _, cmp := range comparisonsForReport(canon) {
@@ -1071,7 +1071,7 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 	}
 	if !sqliteSkipped {
 		for _, treeDBConfig := range compactedTreeDBConfigNames(canon) {
-			for _, treedbPhase := range []string{phaseOfflineRewrite, phaseFullLeafgenPackGC} {
+			for _, treedbPhase := range []string{phaseOfflineCompact, phaseFullLeafgenPackGC} {
 				if findResult(canon.Results, treeDBConfig, treedbPhase) == nil {
 					continue
 				}
@@ -1124,7 +1124,7 @@ func buildCompactedComparisons(canon *canonicalRun) []comparisonRow {
 	var comparisons []comparisonRow
 	sqliteConfigs := []string{sqliteNativeConfigName(canon), sqliteJSONConfigName(canon)}
 	for _, treeDBConfig := range compactedTreeDBConfigNames(canon) {
-		for _, treedbPhase := range []string{phaseOfflineRewrite, phaseFullLeafgenPackGC} {
+		for _, treedbPhase := range []string{phaseOfflineCompact, phaseFullLeafgenPackGC} {
 			treeRow := findResult(canon.Results, treeDBConfig, treedbPhase)
 			if !hasPositiveBytesPerDoc(treeRow) {
 				continue
@@ -1174,7 +1174,7 @@ func findComparison(comparisons []comparisonRow, treeConfig, treePhase, sqliteCo
 }
 
 func isTreeDBCompactedPhase(phase string) bool {
-	return phase == phaseOfflineRewrite || phase == phaseFullLeafgenPackGC
+	return phase == phaseOfflineCompact || phase == phaseFullLeafgenPackGC
 }
 
 func writeOutputs(canon *canonicalRun) error {
@@ -1251,7 +1251,7 @@ func renderMarkdownReport(canon *canonicalRun) string {
 	sb.WriteString("\n")
 
 	sb.WriteString("## Fair Compacted-State Comparison\n\n")
-	sb.WriteString("TreeDB fully compacted rows are compared with SQLite after `VACUUM`. Do not compare TreeDB `offline_rewrite` or `full_leafgen_pack_gc` only against SQLite `post_insert` rows.\n\n")
+	sb.WriteString("TreeDB fully compacted rows are compared with SQLite after `VACUUM`. Do not compare TreeDB `offline_compact` or `full_leafgen_pack_gc` only against SQLite `post_insert` rows.\n\n")
 	writeFairComparison(&sb, canon)
 	sb.WriteString("\n")
 
@@ -1260,7 +1260,7 @@ func renderMarkdownReport(canon *canonicalRun) string {
 	sb.WriteString("| --- | --- | --- |\n")
 	sb.WriteString("| `post_insert` | Size after insert benchmark/fixture and correctness flush/checkpoint. | Compare with other post-insert rows only. |\n")
 	sb.WriteString("| `online_one_pass_maintenance` | Partial online maintenance from benchmark harness; currently one online rewrite/GC path and one leafgen-pack pass. | Do not present as full compaction. |\n")
-	sb.WriteString("| `offline_rewrite` | PR 1096-style `treemap vlog-rewrite <dir> -rw`. | Compare with SQLite `sqlite_vacuum`. |\n")
+	sb.WriteString("| `offline_compact` | High-level `treemap compact <dir> -rw` path. | Compare with SQLite `sqlite_vacuum`. |\n")
 	sb.WriteString("| `full_leafgen_pack_gc` | Forced/full leaf generation pack/GC with explicit knobs and configured index vacuum. | Compare with SQLite `sqlite_vacuum`. |\n")
 	sb.WriteString("| `sqlite_vacuum` | SQLite compacted baseline after `VACUUM`. | Required baseline for compacted-state comparison. |\n\n")
 	sb.WriteString("Full leafgen knobs recorded for this run:\n\n")
@@ -1321,7 +1321,7 @@ func renderMarkdownReport(canon *canonicalRun) string {
 
 func renderExecutiveSummary(canon *canonicalRun) string {
 	fastest := fastestThroughput(canon.Results)
-	offline := findResult(canon.Results, compactedTreeDBConfigName(canon), phaseOfflineRewrite)
+	offline := findResult(canon.Results, compactedTreeDBConfigName(canon), phaseOfflineCompact)
 	full := findResult(canon.Results, compactedTreeDBConfigName(canon), phaseFullLeafgenPackGC)
 	sqliteJSON := findResult(canon.Results, sqliteJSONConfigName(canon), phaseSQLiteVacuum)
 	sqliteNative := findResult(canon.Results, sqliteNativeConfigName(canon), phaseSQLiteVacuum)
@@ -1335,10 +1335,10 @@ func renderExecutiveSummary(canon *canonicalRun) string {
 		fullNative := *sqliteNative.BytesPerDoc / *full.BytesPerDoc
 		offlineJSON := *sqliteJSON.BytesPerDoc / *offline.BytesPerDoc
 		fullJSON := *sqliteJSON.BytesPerDoc / *full.BytesPerDoc
-		return fmt.Sprintf("`%s` is the fastest indexed ingest row in this run. TreeDB fully compacted %s %s collection storage is %.1f B/doc via PR 1096-style offline rewrite and %.1f B/doc via full leafgen pack/GC. Compared with SQLite after `VACUUM`, offline rewrite is about %.1fx smaller than SQLite native columns and %.1fx smaller than SQLite JSON; full leafgen pack/GC is about %.1fx and %.1fx smaller, respectively.",
+		return fmt.Sprintf("`%s` is the fastest indexed ingest row in this run. TreeDB fully compacted %s %s collection storage is %.1f B/doc via high-level offline compact and %.1f B/doc via full leafgen pack/GC. Compared with SQLite after `VACUUM`, offline compact is about %.1fx smaller than SQLite native columns and %.1fx smaller than SQLite JSON; full leafgen pack/GC is about %.1fx and %.1fx smaller, respectively.",
 			engine, indexCountLabel(canonicalIndexCount(canon)), primaryFormat(canon), *offline.BytesPerDoc, *full.BytesPerDoc, offlineNative, offlineJSON, fullNative, fullJSON)
 	}
-	return "This report separates post-insert, partial online maintenance, offline rewrite, full leafgen pack/GC, and SQLite VACUUM states. Some compacted-state rows are missing, so the fair compacted-state headline could not be generated."
+	return "This report separates post-insert, partial online maintenance, offline compact, full leafgen pack/GC, and SQLite VACUUM states. Some compacted-state rows are missing, so the fair compacted-state headline could not be generated."
 }
 
 func writeFairComparison(sb *strings.Builder, canon *canonicalRun) {
@@ -1360,7 +1360,7 @@ func writeFairComparison(sb *strings.Builder, canon *canonicalRun) {
 	sb.WriteString("| TreeDB config | Phase | B/doc | vs SQLite native-columns VACUUM | vs SQLite JSON VACUUM |\n")
 	sb.WriteString("| --- | --- | ---: | ---: | ---: |\n")
 	for _, treeDBConfig := range compactedTreeDBConfigNames(canon) {
-		for _, phase := range []string{phaseOfflineRewrite, phaseFullLeafgenPackGC} {
+		for _, phase := range []string{phaseOfflineCompact, phaseFullLeafgenPackGC} {
 			nativeCmp := findComparison(comparisons, treeDBConfig, phase, sqliteNativeConfig, phaseSQLiteVacuum)
 			jsonCmp := findComparison(comparisons, treeDBConfig, phase, sqliteJSONConfig, phaseSQLiteVacuum)
 			if nativeCmp == nil && jsonCmp == nil {
@@ -1558,7 +1558,7 @@ func compactedTreeDBConfigNames(canon *canonicalRun) []string {
 		if row.IndexCount != canonicalIndexCount(canon) {
 			continue
 		}
-		if row.Phase != phaseOfflineRewrite && row.Phase != phaseFullLeafgenPackGC {
+		if row.Phase != phaseOfflineCompact && row.Phase != phaseFullLeafgenPackGC {
 			continue
 		}
 		add(row.ConfigName)
@@ -1728,7 +1728,7 @@ func sortResults(rows []resultRow) {
 	phaseRank := map[string]int{
 		phasePostInsert:               0,
 		phaseOnlineOnePassMaintenance: 1,
-		phaseOfflineRewrite:           2,
+		phaseOfflineCompact:           2,
 		phaseFullLeafgenPackGC:        3,
 		phaseSQLiteVacuum:             4,
 	}

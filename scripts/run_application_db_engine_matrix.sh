@@ -8,7 +8,7 @@ Usage:
 
 Environment:
   OUT_DIR                          Output directory. Default: /home/mikers/.application-db-engine-matrix-<timestamp>
-  TREEDB_REPO                      TreeDB repo to use for rebuild/rewrite. Default: /home/mikers/dev/snissn/gomap-phasehook-active
+  TREEDB_REPO                      TreeDB repo to use for rebuild/compact. Default: /home/mikers/dev/snissn/gomap-phasehook-active
   COSMOS_DB_REPO                   Cosmos DB repo to use. Default: /home/mikers/dev/snissn/cosmos-db
   TREEDB_PROFILE                   TreeDB open profile. Default: wal_on_fast
   TREEDB_FORCE_CHECKPOINT_ON_WRITE Forwarded to cosmos-db TreeDB adapter. Default: 0
@@ -95,6 +95,7 @@ cat > "${HELPER_DIR}/main.go" <<'GOEOF'
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -129,7 +130,7 @@ type stepResult struct {
 	WallSeconds      float64        `json:"wall_seconds"`
 	MaxRSSKBObserved int64          `json:"max_rss_kb_observed,omitempty"`
 	Extra            map[string]any `json:"extra,omitempty"`
-	RewriteStats     map[string]any `json:"rewrite_stats,omitempty"`
+	CompactStats     map[string]any `json:"compact_stats,omitempty"`
 }
 
 type batchWriter interface {
@@ -173,7 +174,7 @@ func (*silentPebbleLogger) Infof(_ string, _ ...interface{}) {}
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	if len(os.Args) < 2 {
-		fatalf("expected subcommand: rebuild | compact-leveldb | compact-pebble | rewrite-treedb")
+		fatalf("expected subcommand: rebuild | compact-leveldb | compact-pebble | compact-treedb")
 	}
 	switch os.Args[1] {
 	case "rebuild":
@@ -182,8 +183,8 @@ func main() {
 		runCompactLevelDB(os.Args[2:])
 	case "compact-pebble":
 		runCompactPebble(os.Args[2:])
-	case "rewrite-treedb":
-		runRewriteTreeDB(os.Args[2:])
+	case "compact-treedb":
+		runCompactTreeDB(os.Args[2:])
 	default:
 		fatalf("unknown subcommand %q", os.Args[1])
 	}
@@ -476,8 +477,8 @@ func keySuccessor(key []byte) []byte {
 	return append(out, 0)
 }
 
-func runRewriteTreeDB(args []string) {
-	fs := flag.NewFlagSet("rewrite-treedb", flag.ExitOnError)
+func runCompactTreeDB(args []string) {
+	fs := flag.NewFlagSet("compact-treedb", flag.ExitOnError)
 	destParent := fs.String("dest-parent", "", "destination parent directory")
 	profileRaw := fs.String("profile", "wal_on_fast", "fast or wal_on_fast")
 	if err := fs.Parse(args); err != nil {
@@ -493,24 +494,44 @@ func runRewriteTreeDB(args []string) {
 
 	start := time.Now()
 	opts := treedb.OptionsFor(profile, filepath.Join(*destParent, "application.db"))
-	stats, err := treedb.ValueLogRewriteOffline(opts)
+	db, err := treedb.Open(opts)
 	if err != nil {
-		fatalErr(fmt.Errorf("treedb offline rewrite: %w", err))
+		fatalErr(fmt.Errorf("open treedb for compaction: %w", err))
+	}
+	stats, compactErr := db.CompactStorage(context.Background(), treedb.CompactStorageOptions{
+		Mode:          treedb.CompactStorageFull,
+		SyncEachPhase: true,
+	})
+	closeErr := db.Close()
+	if compactErr != nil {
+		fatalErr(fmt.Errorf("treedb compact storage: %w", compactErr))
+	}
+	if closeErr != nil {
+		fatalErr(fmt.Errorf("close treedb after compact storage: %w", closeErr))
+	}
+	if err := treedb.VacuumIndexOffline(opts); err != nil {
+		fatalErr(fmt.Errorf("treedb offline index vacuum after compact storage: %w", err))
 	}
 	res := stepResult{
-		Mode:             "rewrite-treedb",
+		Mode:             "compact-treedb",
 		Backend:          string(dbm.TreeDBBackend),
 		Profile:          profileName,
 		DestParent:       *destParent,
 		DestDBPath:       filepath.Join(*destParent, "application.db"),
 		WallSeconds:      time.Since(start).Seconds(),
 		MaxRSSKBObserved: maxRSSKB(),
-		RewriteStats: map[string]any{
-			"segments_before": stats.SegmentsBefore,
-			"segments_after":  stats.SegmentsAfter,
-			"bytes_before":    stats.BytesBefore,
-			"bytes_after":     stats.BytesAfter,
-			"records_copied":  stats.RecordsCopied,
+		CompactStats: map[string]any{
+			"fully_compacted":                      stats.FullyCompacted,
+			"phase_count":                          len(stats.Phases),
+			"value_log_rewrite_records_copied":     stats.ValueLogRewrite.RecordsCopied,
+			"value_log_rewrite_bytes_after":        stats.ValueLogRewrite.BytesAfter,
+			"value_log_gc_segments_deleted":        stats.ValueLogGC.SegmentsDeleted,
+			"leaf_generation_gc_files_deleted":     stats.LeafGenerationGC.FilesDeleted,
+			"zero_byte_value_log_files_deleted":    stats.ZeroByteValueLogFilesDeleted,
+			"remaining_value_log_rewrite_segments": stats.RemainingDebt.ValueLogRewriteSegments,
+			"remaining_value_log_gc_segments":      stats.RemainingDebt.ValueLogGCSegments,
+			"remaining_leaf_pack_generations":      stats.RemainingDebt.LeafPackGenerations,
+			"remaining_leaf_gc_generations":        stats.RemainingDebt.LeafGCGenerations,
 		},
 	}
 	writeJSON(res)
@@ -686,12 +707,12 @@ run_timed_step rebuild_treedb \
 TREEDB_BUILD_BYTES="$(safe_du_bytes "${TREEDB_PARENT}/application.db")"
 TREEDB_BUILD_MAX_RSS_KB="$(extract_max_rss_kb "${OUT_DIR}/logs/rebuild_treedb.time.txt")"
 
-run_timed_step rewrite_treedb \
-  "${HELPER_BIN}" rewrite-treedb \
+run_timed_step compact_treedb \
+  "${HELPER_BIN}" compact-treedb \
   -dest-parent "${TREEDB_PARENT}" \
   -profile "${TREEDB_PROFILE}"
 TREEDB_FINAL_BYTES="$(safe_du_bytes "${TREEDB_PARENT}/application.db")"
-TREEDB_FINAL_MAX_RSS_KB="$(extract_max_rss_kb "${OUT_DIR}/logs/rewrite_treedb.time.txt")"
+TREEDB_FINAL_MAX_RSS_KB="$(extract_max_rss_kb "${OUT_DIR}/logs/compact_treedb.time.txt")"
 
 python3 - <<'PY' \
   "${SOURCE_APP_DB}" \
@@ -779,7 +800,7 @@ compact_leveldb = load_json('compact_leveldb')
 rebuild_pebble = load_json('rebuild_pebble')
 compact_pebble = load_json('compact_pebble')
 rebuild_treedb = load_json('rebuild_treedb')
-rewrite_treedb = load_json('rewrite_treedb')
+compact_treedb = load_json('compact_treedb')
 
 summary = {
     'source': {
@@ -842,14 +863,14 @@ summary = {
             'max_rss_kb': int(treedb_build_max_rss_kb or load_time_maxrss('rebuild_treedb')),
             'max_rss_gib': gib(int(treedb_build_max_rss_kb or load_time_maxrss('rebuild_treedb')) * 1024),
         },
-        'final_rewrite': {
-            **rewrite_treedb,
+        'final_compact': {
+            **compact_treedb,
             'disk_bytes_after': int(treedb_final_bytes),
             'disk_gib_after': gib(int(treedb_final_bytes)),
             'disk_bytes_delta_vs_rebuild': int(treedb_final_bytes) - int(treedb_build_bytes),
             'disk_gib_delta_vs_rebuild': gib(int(treedb_final_bytes) - int(treedb_build_bytes)),
-            'max_rss_kb': int(treedb_final_max_rss_kb or load_time_maxrss('rewrite_treedb')),
-            'max_rss_gib': gib(int(treedb_final_max_rss_kb or load_time_maxrss('rewrite_treedb')) * 1024),
+            'max_rss_kb': int(treedb_final_max_rss_kb or load_time_maxrss('compact_treedb')),
+            'max_rss_gib': gib(int(treedb_final_max_rss_kb or load_time_maxrss('compact_treedb')) * 1024),
         },
     },
 }
@@ -877,7 +898,7 @@ md.append(f'| goleveldb | final compact | {summary["leveldb"]["final_compact"]["
 md.append(f'| pebbledb | rebuild | {summary["pebble"]["rebuild"]["wall_seconds"]:.2f} | {summary["pebble"]["rebuild"]["max_rss_gib"]:.3f} | {summary["pebble"]["rebuild"]["disk_gib_after"]:.3f} | {summary["pebble"]["rebuild"]["disk_gib_after"] - summary["source"]["gib"]:+.3f} |')
 md.append(f'| pebbledb | final compact | {summary["pebble"]["final_compact"]["wall_seconds"]:.2f} | {summary["pebble"]["final_compact"]["max_rss_gib"]:.3f} | {summary["pebble"]["final_compact"]["disk_gib_after"]:.3f} | {summary["pebble"]["final_compact"]["disk_gib_after"] - summary["source"]["gib"]:+.3f} |')
 md.append(f'| treedb | rebuild | {summary["treedb"]["rebuild"]["wall_seconds"]:.2f} | {summary["treedb"]["rebuild"]["max_rss_gib"]:.3f} | {summary["treedb"]["rebuild"]["disk_gib_after"]:.3f} | {summary["treedb"]["rebuild"]["disk_gib_after"] - summary["source"]["gib"]:+.3f} |')
-md.append(f'| treedb | final rewrite | {summary["treedb"]["final_rewrite"]["wall_seconds"]:.2f} | {summary["treedb"]["final_rewrite"]["max_rss_gib"]:.3f} | {summary["treedb"]["final_rewrite"]["disk_gib_after"]:.3f} | {summary["treedb"]["final_rewrite"]["disk_gib_after"] - summary["source"]["gib"]:+.3f} |')
+md.append(f'| treedb | final compact | {summary["treedb"]["final_compact"]["wall_seconds"]:.2f} | {summary["treedb"]["final_compact"]["max_rss_gib"]:.3f} | {summary["treedb"]["final_compact"]["disk_gib_after"]:.3f} | {summary["treedb"]["final_compact"]["disk_gib_after"] - summary["source"]["gib"]:+.3f} |')
 results_md.write_text('\n'.join(md) + '\n')
 shutil.copyfile(results_json, tmp_results_json_path)
 shutil.copyfile(results_md, tmp_results_md_path)

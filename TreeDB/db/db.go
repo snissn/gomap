@@ -1430,6 +1430,30 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		db.Close()
 		return nil, err
 	}
+	recoverySet := vm.CurrentSetNoRefresh()
+	reader := newValueReader(recoverySet)
+	releaseRecoverySet := func() error {
+		if recoverySet == nil {
+			return nil
+		}
+		err := vm.Release(recoverySet)
+		recoverySet = nil
+		return err
+	}
+	recoveredLeafReset, err := recoverLeafGenerationResetAfterOfflineVacuum(opts.Dir, p, reader, db.meta.UserRootPageID, db.meta.SystemRootPageID, db.meta.CommitSeq, releaseRecoverySet, vm.EvictSegment)
+	if releaseErr := releaseRecoverySet(); err == nil && releaseErr != nil {
+		err = releaseErr
+	}
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	if recoveredLeafReset {
+		if err := vm.Refresh(); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
 	if opts.IndexOuterLeavesInValueLog {
 		manifest, err := loadOrCreateLeafGenerationManifest(layout.leafVLogDir, db.meta.CommitSeq, false)
 		if err != nil {

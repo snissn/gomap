@@ -130,12 +130,11 @@ collection benchmark profile:
 The TreeDB target always opens with outer leaves in the leaf value log and the
 cached leaf-log backend, so collection and secondary-index roots exercise the
 same leaf-vlog path as the optimized collection benchmarks. The `full`
-maintenance mode reports each post-load compaction step: value-log rewrite,
-value-log GC, leaf-generation pack, leaf-generation GC, and offline index
-vacuum. The final vacuum closes the benchmark gateway before rewriting
-`index.db`, matching the documented compacted-state maintenance command. Use
-`-treedb-maintenance checkpoint` to reproduce the older checkpoint-only disk
-metric, or `none` to skip final TreeDB disk reporting.
+maintenance mode runs the high-level `CompactStorage` path first, then closes
+the benchmark gateway and runs offline index vacuum to shrink `index.db` for
+final-footprint reporting. Use `-treedb-maintenance checkpoint` to reproduce the
+older checkpoint-only disk metric, or `none` to skip final TreeDB disk
+reporting.
 
 `-treedb-document-format` accepts `json`, `template-v1`/`collections-v1`, and `bson`. BSON mode
 stores Mongo wire documents as native BSON collection records, avoiding the

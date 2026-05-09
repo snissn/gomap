@@ -22,9 +22,9 @@ Default load shape:
   direct publish by default because they already amortize publish overhead well
 - `fast` TreeDB profile
 - final checkpoint and reopen verification
-- automatic offline index vacuum when `-vlog-rewrite` or `-leafgen-pack-gc`
-  is requested, so post-maintenance size comparisons include both value/leaf-log
-  cleanup and index compaction
+- optional low-level `value_vlog` and `leaf_vlog` maintenance probes, with
+  automatic offline index vacuum when `-vlog-rewrite` or `-leafgen-pack-gc` is
+  requested
 
 Example:
 
@@ -106,14 +106,19 @@ Useful variants:
   -cpuprofile /tmp/collection_fixture_cpu.pprof \
   -memprofile /tmp/collection_fixture_heap.pprof
 
-# Compact the persistent value_vlog after loading, then run index vacuum and
-# report before/after disk usage.
+# Low-level value_vlog probe: rewrite the persistent value_vlog after loading,
+# then run index vacuum and report before/after disk usage.
 ./bin/collection-load-fixture -vlog-rewrite -dir /tmp/treedb_fixture_rewritten -reset
 
-# Pack leaf_vlog generations after loading, then run leaf-generation GC and report
-# the before/after disk usage separately from value_vlog rewrite. The default
-# -index-vacuum=auto follows this with offline index vacuum.
+# Low-level leaf_vlog probe: pack leaf_vlog generations after loading, then run
+# leaf-generation GC and report the before/after disk usage separately from
+# value_vlog rewrite. The default -index-vacuum=auto follows this with offline
+# index vacuum.
 ./bin/collection-load-fixture -leafgen-pack-gc -dir /tmp/treedb_fixture_leafgen_packed -reset
+
+# For final storage-footprint measurement, prefer the high-level compaction path
+# after creating the fixture.
+treemap compact /tmp/treedb_two_index_template_v1_index_vlog -rw
 
 # Keep the pre-vacuum index.db shape for debugging.
 ./bin/collection-load-fixture -leafgen-pack-gc -index-vacuum=none -dir /tmp/treedb_fixture_leafgen_no_vacuum -reset

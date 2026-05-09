@@ -248,11 +248,11 @@ measure_tsv_row() {
 		"$leaf" "$(ratio "$leaf" "$leaf_gzip")" "$index_db" "$value_vlog"
 }
 
-run_rewrite() {
-	local case_name="$1"
-	local db_dir="$2"
-	"$treemap" vlog-rewrite "$db_dir" -rw >"$RUN_DIR/logs/${case_name}.rewrite.log" 2>&1
-}
+	run_compact() {
+		local case_name="$1"
+		local db_dir="$2"
+		"$treemap" compact "$db_dir" -rw >"$RUN_DIR/logs/${case_name}.compact.log" 2>&1
+	}
 
 run_raw_case() {
 	local case_name="raw_treedb"
@@ -262,11 +262,11 @@ run_raw_case() {
 		cd "$repo_root"
 		go run "$raw_loader" -dir "$db_dir" -reset -docs "$DOCS" -batch-size "$BATCH" -profile "$PROFILE"
 	) >"$RUN_DIR/logs/${case_name}.load.log" 2>&1
-	measure_tsv_row "raw_treedb" "-" "$db_dir" "before_rewrite" >>"$tsv"
-	echo "Rewriting $case_name..."
-	run_rewrite "$case_name" "$db_dir"
-	measure_tsv_row "raw_treedb" "-" "$db_dir" "after_rewrite" >>"$tsv"
-}
+		measure_tsv_row "raw_treedb" "-" "$db_dir" "before_compact" >>"$tsv"
+		echo "Compacting $case_name..."
+		run_compact "$case_name" "$db_dir"
+		measure_tsv_row "raw_treedb" "-" "$db_dir" "after_compact" >>"$tsv"
+	}
 
 run_collection_case() {
 	local indexes="$1"
@@ -284,11 +284,11 @@ run_collection_case() {
 		-profile "$PROFILE" \
 		-progress=false \
 		>"$RUN_DIR/logs/${case_name}.load.json" 2>"$RUN_DIR/logs/${case_name}.load.stderr"
-	measure_tsv_row "collection" "$indexes" "$db_dir" "before_rewrite" >>"$tsv"
-	echo "Rewriting $case_name..."
-	run_rewrite "$case_name" "$db_dir"
-	measure_tsv_row "collection" "$indexes" "$db_dir" "after_rewrite" >>"$tsv"
-}
+		measure_tsv_row "collection" "$indexes" "$db_dir" "before_compact" >>"$tsv"
+		echo "Compacting $case_name..."
+		run_compact "$case_name" "$db_dir"
+		measure_tsv_row "collection" "$indexes" "$db_dir" "after_compact" >>"$tsv"
+	}
 
 printf 'mode\tindexes\tphase\ttotal_bytes\ttotal_gzip_bytes\ttotal_bytes_per_gzip_byte\tleaf_vlog_bytes\tleaf_vlog_bytes_per_gzip_byte\tindex_db_bytes\tvalue_vlog_bytes\n' >"$tsv"
 
@@ -315,10 +315,10 @@ done
 	printf -- '- Document shape: template-v1 fixture fields `name`, `email`, `city`, `pad`\n'
 	printf -- '- Raw TreeDB case: generated template-v1 payloads stored directly by key\n'
 	printf -- '- Collection cases: generated template-v1 payloads inserted through collection mode with indexes `%s`\n' "$COLLECTION_INDEXES"
-	printf -- '- Offline rewrite: `treemap vlog-rewrite <dir> -rw`\n'
-	printf -- '- Gzip ratio is `bytes/gzip_bytes`; lower is closer to gzip-compressed density already being present on disk.\n\n'
-	printf '| Mode | Indexes | Before bytes | Before gzip | Before bytes/gzip | After rewrite bytes | After rewrite gzip | After bytes/gzip | Disk delta | Gzip delta | After leaf_vlog bytes | After leaf bytes/gzip | After index.db bytes | After value_vlog bytes |\n'
-	printf '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n'
+		printf -- '- Compaction: `treemap compact <dir> -rw`\n'
+		printf -- '- Gzip ratio is `bytes/gzip_bytes`; lower is closer to gzip-compressed density already being present on disk.\n\n'
+		printf '| Mode | Indexes | Before bytes | Before gzip | Before bytes/gzip | After compact bytes | After compact gzip | After bytes/gzip | Disk delta | Gzip delta | After leaf_vlog bytes | After leaf bytes/gzip | After index.db bytes | After value_vlog bytes |\n'
+		printf '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n'
 	for mode in raw_treedb collection; do
 		if [[ "$mode" == "raw_treedb" ]]; then
 			index_values=("-")
@@ -326,8 +326,8 @@ done
 			index_values=("${collection_index_values[@]}")
 		fi
 		for indexes in "${index_values[@]}"; do
-			before_line="$(awk -F '\t' -v mode="$mode" -v idx="$indexes" '$1 == mode && $2 == idx && $3 == "before_rewrite" { print; exit }' "$tsv")"
-			after_line="$(awk -F '\t' -v mode="$mode" -v idx="$indexes" '$1 == mode && $2 == idx && $3 == "after_rewrite" { print; exit }' "$tsv")"
+				before_line="$(awk -F '\t' -v mode="$mode" -v idx="$indexes" '$1 == mode && $2 == idx && $3 == "before_compact" { print; exit }' "$tsv")"
+				after_line="$(awk -F '\t' -v mode="$mode" -v idx="$indexes" '$1 == mode && $2 == idx && $3 == "after_compact" { print; exit }' "$tsv")"
 			IFS=$'\t' read -r _ _ _ before_total before_gzip before_ratio _ _ _ _ <<<"$before_line"
 			IFS=$'\t' read -r _ _ _ after_total after_gzip after_ratio after_leaf after_leaf_ratio after_index_db after_value_vlog <<<"$after_line"
 			printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n' \
