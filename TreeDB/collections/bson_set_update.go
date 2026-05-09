@@ -136,19 +136,19 @@ func newBSONSetUpdate(fields []BSONSetField) (bsonSetUpdate, error) {
 
 func validateBSONSetFieldKey(key string) error {
 	if key == "" {
-		return errors.New("collections: BSON $set field name cannot be empty")
+		return errors.New("field name cannot be empty")
 	}
 	if key == "_id" {
-		return errBSONIDMutation
+		return errors.New("cannot modify _id")
 	}
 	if strings.Contains(key, ".") {
-		return errors.New("collections: BSON $set currently supports top-level fields only")
+		return errors.New("currently supports top-level fields only")
 	}
 	if strings.HasPrefix(key, "$") {
-		return errors.New("collections: BSON $set field names cannot start with $")
+		return errors.New("field names cannot start with $")
 	}
 	if strings.Contains(key, "\x00") {
-		return errors.New("collections: BSON $set field names cannot contain NUL")
+		return errors.New("field names cannot contain NUL")
 	}
 	return nil
 }
