@@ -3054,7 +3054,7 @@ func (c *Collection) bufferNoIndexInsertBatch(
 		return nil, false, nil
 	}
 	if len(ids) != len(documents) {
-		return nil, true, fmt.Errorf("collections: caller-provided batch ids length mismatch")
+		return nil, true, fmt.Errorf("collections: caller-provided batch ids length mismatch ids=%d documents=%d", len(ids), len(documents))
 	}
 	if len(documents) == 0 {
 		c.setLastInsertStats(CollectionInsertStats{
@@ -7205,40 +7205,10 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 	if skipInitialNoIndexFlush && (len(meta.Indexes) != 0 || normalizedDocumentFormat(plannerOptions.documentFormat) != DocumentFormatBSON) {
-		closePlanningSnapshot()
-		if err := c.flushBufferedNoIndex(); err != nil {
-			return nil, err
-		}
-		snap = c.db.AcquireSnapshot()
-		if snap == nil {
-			return nil, backenddb.ErrClosed
-		}
-		catalog, err = c.catalogForSnapshot(snap)
+		catalog, meta, plannerOptions, err = c.reloadInsertBatchPlanningSnapshot(&snap, trustedValidBSON, c.flushBufferedNoIndex)
 		if err != nil {
-			closePlanningSnapshot()
 			return nil, err
 		}
-		if catalog == nil {
-			closePlanningSnapshot()
-			return nil, errCollectionNotFound
-		}
-		if err := rejectCatalogRootOverlaysForIndexedBufferWrite(catalog); err != nil {
-			closePlanningSnapshot()
-			return nil, err
-		}
-		meta = catalog.meta
-		c.meta = meta
-		plannerOptions, err = collectionPlannerOptionsForDB(c.db, meta)
-		if err != nil {
-			closePlanningSnapshot()
-			return nil, err
-		}
-		plannerOptions, err = collectionOptionsWithTrustedBSONDocuments(plannerOptions, trustedValidBSON)
-		if err != nil {
-			closePlanningSnapshot()
-			return nil, err
-		}
-		plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 	}
 	indexedMemtablesEnabled := c.shouldBufferIndexedInserts(meta)
 	bufferIndexedInserts := c.shouldBufferIndexedInsertBatch(meta, len(documents))
@@ -7307,40 +7277,10 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 			closePlanningSnapshot()
 			return resultIDs, err
 		} else if skipInitialNoIndexFlush {
-			closePlanningSnapshot()
-			if err := c.flushBufferedNoIndex(); err != nil {
-				return nil, err
-			}
-			snap = c.db.AcquireSnapshot()
-			if snap == nil {
-				return nil, backenddb.ErrClosed
-			}
-			catalog, err = c.catalogForSnapshot(snap)
+			catalog, meta, plannerOptions, err = c.reloadInsertBatchPlanningSnapshot(&snap, trustedValidBSON, c.flushBufferedNoIndex)
 			if err != nil {
-				closePlanningSnapshot()
 				return nil, err
 			}
-			if catalog == nil {
-				closePlanningSnapshot()
-				return nil, errCollectionNotFound
-			}
-			if err := rejectCatalogRootOverlaysForIndexedBufferWrite(catalog); err != nil {
-				closePlanningSnapshot()
-				return nil, err
-			}
-			meta = catalog.meta
-			c.meta = meta
-			plannerOptions, err = collectionPlannerOptionsForDB(c.db, meta)
-			if err != nil {
-				closePlanningSnapshot()
-				return nil, err
-			}
-			plannerOptions, err = collectionOptionsWithTrustedBSONDocuments(plannerOptions, trustedValidBSON)
-			if err != nil {
-				closePlanningSnapshot()
-				return nil, err
-			}
-			plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 		}
 	}
 	baseSystemRoot := snapshotSystemRoot(snap)
@@ -7468,6 +7408,59 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	c.setLastInsertStats(plan.stats.CollectionInsertStats)
 	return plan.resultIDs, nil
+}
+
+func (c *Collection) reloadInsertBatchPlanningSnapshot(
+	snap **backenddb.Snapshot,
+	trustedValidBSON bool,
+	flush func() error,
+) (*collectionCatalog, CollectionMeta, collectionOptions, error) {
+	if snap == nil {
+		return nil, CollectionMeta{}, collectionOptions{}, errors.New("collections: missing planning snapshot")
+	}
+	if *snap != nil {
+		_ = (*snap).Close()
+		*snap = nil
+	}
+	if flush != nil {
+		if err := flush(); err != nil {
+			return nil, CollectionMeta{}, collectionOptions{}, err
+		}
+	}
+	next := c.db.AcquireSnapshot()
+	if next == nil {
+		return nil, CollectionMeta{}, collectionOptions{}, backenddb.ErrClosed
+	}
+	closeNext := true
+	defer func() {
+		if closeNext {
+			_ = next.Close()
+		}
+	}()
+	catalog, err := c.catalogForSnapshot(next)
+	if err != nil {
+		return nil, CollectionMeta{}, collectionOptions{}, err
+	}
+	if catalog == nil {
+		return nil, CollectionMeta{}, collectionOptions{}, errCollectionNotFound
+	}
+	if err := rejectCatalogRootOverlaysForIndexedBufferWrite(catalog); err != nil {
+		return nil, CollectionMeta{}, collectionOptions{}, err
+	}
+	meta := catalog.meta
+	plannerOptions, err := collectionPlannerOptionsForDB(c.db, meta)
+	if err != nil {
+		return nil, CollectionMeta{}, collectionOptions{}, err
+	}
+	plannerOptions, err = collectionOptionsWithTrustedBSONDocuments(plannerOptions, trustedValidBSON)
+	if err != nil {
+		return nil, CollectionMeta{}, collectionOptions{}, err
+	}
+	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, next, catalog)
+	c.meta = meta
+	*snap = next
+	closeNext = false
+	return catalog, meta, plannerOptions, nil
 }
 
 func shouldUseDirectBufferedInsertAccumulators(documentCount int) bool {

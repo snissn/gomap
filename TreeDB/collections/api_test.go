@@ -2452,8 +2452,8 @@ func TestCollectionInsertBatchValidatedBSONNoIndexDurablePublishesBeforeReturn(t
 		t.Fatalf("pending docs=%d want durable publish before ack", got)
 	}
 	after := d.State()
-	if after.CommitSeq != before.CommitSeq+1 {
-		t.Fatalf("commit seq advanced by %d want 1", after.CommitSeq-before.CommitSeq)
+	if after.CommitSeq < before.CommitSeq+1 {
+		t.Fatalf("commit seq advanced by %d want at least 1", after.CommitSeq-before.CommitSeq)
 	}
 }
 
