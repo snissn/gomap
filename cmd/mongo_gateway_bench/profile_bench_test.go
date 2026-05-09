@@ -28,7 +28,6 @@ import (
 )
 
 var (
-	errUpdatedPrimaryKey      = errors.New("profile benchmark update changed _id")
 	errProfileBenchUpdateMiss = errors.New("profile benchmark update missed document")
 )
 
@@ -93,6 +92,7 @@ func TestProfileBenchUpdateIDStrideCoversDocumentSet(t *testing.T) {
 
 func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH", "")
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_DISABLE_BUFFERED_INDEXED_ASYNC_FLUSH", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_DOCUMENTS", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_BYTES", "")
@@ -101,6 +101,9 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_COMPACT_OVERLAY_ROOTS_AFTER_FLUSH", "")
 	if profileBenchBufferedIndexedAsyncFlush(t) {
 		t.Fatal("async flush default=true want false")
+	}
+	if profileBenchDisableBufferedIndexedAsyncFlush(t) {
+		t.Fatal("disable async flush default=true want false")
 	}
 	if profileBenchBufferedIndexedOverlayRoots(t) {
 		t.Fatal("overlay roots default=true want false")
@@ -123,6 +126,11 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH", "true")
 	if !profileBenchBufferedIndexedAsyncFlush(t) {
 		t.Fatal("async flush env=true want true")
+	}
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH", "")
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_DISABLE_BUFFERED_INDEXED_ASYNC_FLUSH", "true")
+	if !profileBenchDisableBufferedIndexedAsyncFlush(t) {
+		t.Fatal("disable async flush env=true want true")
 	}
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS", "6")
 	if got := profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(t); got != 6 {
@@ -186,6 +194,19 @@ func TestProfileBenchParsedUpdateDocsUsesDistinctCityPhases(t *testing.T) {
 	}
 }
 
+func TestProfileBenchParsedUpdateDocsUsesDistinctSequencePhases(t *testing.T) {
+	warmup := profileBenchParsedUpdateDocs(t, false, "warmup")
+	timed := profileBenchParsedUpdateDocs(t, false, "timed")
+	if len(warmup) == 0 || len(timed) == 0 {
+		t.Fatal("expected parsed update docs")
+	}
+	warmupSeq := profileBenchSetUpdateFieldInt64(t, warmup[0], "concurrent_update_seq")
+	timedSeq := profileBenchSetUpdateFieldInt64(t, timed[0], "concurrent_update_seq")
+	if warmupSeq == timedSeq {
+		t.Fatalf("sequence update phases both produced %d; timed sequence updates must differ from warmup", warmupSeq)
+	}
+}
+
 func TestProfileBenchParsedUpdateDocsChangesCityAcrossFullSweep(t *testing.T) {
 	updateDocs := profileBenchParsedUpdateDocs(t, true, "timed")
 	if len(updateDocs) == 0 {
@@ -227,6 +248,23 @@ func profileBenchSetUpdateFieldStringAt(t *testing.T, update profileBenchSetUpda
 	}
 	t.Fatalf("missing update field %q in %+v", key, update.fields)
 	return ""
+}
+
+func profileBenchSetUpdateFieldInt64(t *testing.T, update profileBenchSetUpdate, key string) int64 {
+	t.Helper()
+	for _, field := range update.fields {
+		if field.key != key {
+			continue
+		}
+		value := profileBenchSetFieldValueForOperation(field, -1, 0, 0)
+		got, ok := value.Int64OK()
+		if !ok {
+			t.Fatalf("field %q raw value=%v is not an int64", key, value.Type)
+		}
+		return got
+	}
+	t.Fatalf("missing update field %q in %+v", key, update.fields)
+	return 0
 }
 
 func TestProfileBenchDeltaUintStat(t *testing.T) {
@@ -710,6 +748,7 @@ func benchmarkDirectCollectionConcurrentUpdateBSON(b *testing.B, indexes []colle
 
 	b.ReportAllocs()
 	manager.SetUpdateBatchDetailedStatsEnabled(true)
+	manager.ResetUpdateCombinersForProfiling()
 	manager.ResetUpdateCombineQueueDepthMax()
 	statsBefore := manager.StatsSnapshot()
 	backendStatsBefore := backend.Stats()
@@ -771,20 +810,21 @@ func compactProfileBenchOverlayRootsAfterFlush(tb testing.TB, collection *collec
 	return stats
 }
 
-func profileBenchParsedUpdateDocs(tb testing.TB, updateCity bool, cityPhase string) []profileBenchSetUpdate {
+func profileBenchParsedUpdateDocs(tb testing.TB, updateCity bool, updatePhase string) []profileBenchSetUpdate {
 	tb.Helper()
 	updateDocs := make([]profileBenchSetUpdate, profileBenchUpdateDocPoolSize)
+	dynamicSequenceValues := profileBenchUpdatedSequenceRawValues(updatePhase)
 	var dynamicCityValues []bson.RawValue
 	if updateCity {
-		dynamicCityValues = profileBenchUpdatedCityRawValues(tb, cityPhase)
+		dynamicCityValues = profileBenchUpdatedCityRawValues(tb, updatePhase)
 	}
 	for i := range updateDocs {
 		set := bson.D{
 			{Key: "concurrent_updated", Value: true},
-			{Key: "concurrent_update_seq", Value: int64(i)},
+			{Key: "concurrent_update_seq", Value: profileBenchUpdatedSequenceValue(updatePhase, i)},
 		}
 		if updateCity {
-			set = append(set, bson.E{Key: "city", Value: cityPhase + "-" + benchmarkUpdatedCity(i, i, profileBenchUpdateDocPoolSize)})
+			set = append(set, bson.E{Key: "city", Value: updatePhase + "-" + benchmarkUpdatedCity(i, i, profileBenchUpdateDocPoolSize)})
 		}
 		updateRaw, err := bson.Marshal(bson.D{{Key: "$set", Value: set}})
 		if err != nil {
@@ -794,12 +834,14 @@ func profileBenchParsedUpdateDocs(tb testing.TB, updateCity bool, cityPhase stri
 		if err != nil {
 			tb.Fatalf("parse update document: %v", err)
 		}
-		if len(dynamicCityValues) > 0 {
-			for fieldIdx := range parsed.fields {
-				if parsed.fields[fieldIdx].key == "city" {
-					parsed.fields[fieldIdx].dynamicCityValues = dynamicCityValues
-					break
+		for fieldIdx := range parsed.fields {
+			switch parsed.fields[fieldIdx].key {
+			case "city":
+				if len(dynamicCityValues) > 0 {
+					parsed.fields[fieldIdx].dynamicValues = dynamicCityValues
 				}
+			case "concurrent_update_seq":
+				parsed.fields[fieldIdx].dynamicValues = dynamicSequenceValues
 			}
 		}
 		updateDocs[i] = parsed
@@ -817,6 +859,32 @@ func profileBenchUpdatedCityRawValues(tb testing.TB, cityPhase string) []bson.Ra
 		}
 	}
 	return values
+}
+
+func profileBenchUpdatedSequenceRawValues(updatePhase string) []bson.RawValue {
+	values := make([]bson.RawValue, profileBenchUpdatedSequenceValueCount)
+	for i := range values {
+		values[i] = bson.RawValue{
+			Type:  bson.TypeInt64,
+			Value: bsoncore.AppendInt64(nil, profileBenchUpdatedSequenceValue(updatePhase, i)),
+		}
+	}
+	return values
+}
+
+// Keep the sequence cardinality large enough to avoid revisiting replacement
+// values during the profile sweep without coupling it to city value generation.
+const profileBenchUpdatedSequenceValueCount = 65521
+
+func profileBenchUpdatedSequenceValue(updatePhase string, i int) int64 {
+	switch updatePhase {
+	case "warmup":
+		return int64(i)
+	case "timed":
+		return int64(i) + 1_000_000_000
+	default:
+		return int64(i) + 2_000_000_000
+	}
 }
 
 func profileBenchDeltaUintStat(after, before map[string]string, key string) uint64 {
@@ -1075,74 +1143,86 @@ func reportProfileBenchOrderedRootPublishStats(b *testing.B, after, before map[s
 
 func deltaCollectionManagerUpdateStats(after, before collections.CollectionManagerStats) collections.CollectionManagerStats {
 	delta := collections.CollectionManagerStats{
-		UpdateBatchCalls:               after.UpdateBatchCalls - before.UpdateBatchCalls,
-		UpdateBatchItems:               after.UpdateBatchItems - before.UpdateBatchItems,
-		UpdateBatchMatched:             after.UpdateBatchMatched - before.UpdateBatchMatched,
-		UpdateBatchModified:            after.UpdateBatchModified - before.UpdateBatchModified,
-		UpdateBatchRuns:                after.UpdateBatchRuns - before.UpdateBatchRuns,
-		UpdateBatchBufferedBatches:     after.UpdateBatchBufferedBatches - before.UpdateBatchBufferedBatches,
-		UpdateBatchCurrentRead:         after.UpdateBatchCurrentRead - before.UpdateBatchCurrentRead,
-		UpdateBatchCallback:            after.UpdateBatchCallback - before.UpdateBatchCallback,
-		UpdateBatchPrepareDocuments:    after.UpdateBatchPrepareDocuments - before.UpdateBatchPrepareDocuments,
-		UpdateBatchIndexStateExtract:   after.UpdateBatchIndexStateExtract - before.UpdateBatchIndexStateExtract,
-		UpdateBatchUniquePreflight:     after.UpdateBatchUniquePreflight - before.UpdateBatchUniquePreflight,
-		UpdateBatchTemplateRunBuild:    after.UpdateBatchTemplateRunBuild - before.UpdateBatchTemplateRunBuild,
-		UpdateBatchPrimaryRunBuild:     after.UpdateBatchPrimaryRunBuild - before.UpdateBatchPrimaryRunBuild,
-		UpdateBatchIndexStateRunBuild:  after.UpdateBatchIndexStateRunBuild - before.UpdateBatchIndexStateRunBuild,
-		UpdateBatchSecondaryRunBuild:   after.UpdateBatchSecondaryRunBuild - before.UpdateBatchSecondaryRunBuild,
-		UpdateBatchBufferStage:         after.UpdateBatchBufferStage - before.UpdateBatchBufferStage,
-		UpdateBatchBufferPrecheck:      after.UpdateBatchBufferPrecheck - before.UpdateBatchBufferPrecheck,
-		UpdateBatchBufferLockWait:      after.UpdateBatchBufferLockWait - before.UpdateBatchBufferLockWait,
-		UpdateBatchBufferLockHold:      after.UpdateBatchBufferLockHold - before.UpdateBatchBufferLockHold,
-		UpdateBatchBufferValidation:    after.UpdateBatchBufferValidation - before.UpdateBatchBufferValidation,
-		UpdateBatchBufferRootScan:      after.UpdateBatchBufferRootScan - before.UpdateBatchBufferRootScan,
-		UpdateBatchBufferDomainPrepare: after.UpdateBatchBufferDomainPrepare - before.UpdateBatchBufferDomainPrepare,
-		UpdateBatchBufferPrimaryIdx:    after.UpdateBatchBufferPrimaryIdx - before.UpdateBatchBufferPrimaryIdx,
-		UpdateBatchBufferUniqueIdx:     after.UpdateBatchBufferUniqueIdx - before.UpdateBatchBufferUniqueIdx,
-		UpdateBatchBufferRootAppend:    after.UpdateBatchBufferRootAppend - before.UpdateBatchBufferRootAppend,
-		UpdateBatchBufferFlush:         after.UpdateBatchBufferFlush - before.UpdateBatchBufferFlush,
-		UpdateBatchPublish:             after.UpdateBatchPublish - before.UpdateBatchPublish,
-		UpdateBatchSecondaryDeletes:    after.UpdateBatchSecondaryDeletes - before.UpdateBatchSecondaryDeletes,
-		UpdateBatchSecondarySets:       after.UpdateBatchSecondarySets - before.UpdateBatchSecondarySets,
-		UpdateBatchSecondaryKeyBytes:   after.UpdateBatchSecondaryKeyBytes - before.UpdateBatchSecondaryKeyBytes,
-		UpdateBatchIndexValueChanges:   after.UpdateBatchIndexValueChanges - before.UpdateBatchIndexValueChanges,
-		UpdateBatchIndexValueUnchanged: after.UpdateBatchIndexValueUnchanged - before.UpdateBatchIndexValueUnchanged,
-		UpdateBatchMaskFallbacks:       after.UpdateBatchMaskFallbacks - before.UpdateBatchMaskFallbacks,
-		UpdateBatchUniqueChecks:        after.UpdateBatchUniqueChecks - before.UpdateBatchUniqueChecks,
-		UpdateBatchUniqueCheckSkips:    after.UpdateBatchUniqueCheckSkips - before.UpdateBatchUniqueCheckSkips,
-		UpdateCombineRequests:          after.UpdateCombineRequests - before.UpdateCombineRequests,
-		UpdateCombineBatches:           after.UpdateCombineBatches - before.UpdateCombineBatches,
-		UpdateCombineBatchedRequests:   after.UpdateCombineBatchedRequests - before.UpdateCombineBatchedRequests,
-		UpdateCombineFallbackRequests:  after.UpdateCombineFallbackRequests - before.UpdateCombineFallbackRequests,
-		IndexedFlushCalls:              after.IndexedFlushCalls - before.IndexedFlushCalls,
-		IndexedFlushErrors:             after.IndexedFlushErrors - before.IndexedFlushErrors,
-		IndexedFlushForcedDrains:       after.IndexedFlushForcedDrains - before.IndexedFlushForcedDrains,
-		IndexedFlushUnits:              after.IndexedFlushUnits - before.IndexedFlushUnits,
-		IndexedFlushDocs:               after.IndexedFlushDocs - before.IndexedFlushDocs,
-		IndexedFlushBytes:              after.IndexedFlushBytes - before.IndexedFlushBytes,
-		IndexedFlushRootRuns:           after.IndexedFlushRootRuns - before.IndexedFlushRootRuns,
-		IndexedFlushRoots:              after.IndexedFlushRoots - before.IndexedFlushRoots,
-		IndexedFlushDuration:           after.IndexedFlushDuration - before.IndexedFlushDuration,
-		IndexedFlushMaterialize:        after.IndexedFlushMaterialize - before.IndexedFlushMaterialize,
-		IndexedFlushPublish:            after.IndexedFlushPublish - before.IndexedFlushPublish,
-		IndexedAsyncFlushWait:          after.IndexedAsyncFlushWait - before.IndexedAsyncFlushWait,
-		RootDeltaPlanPrimaryRoots:      after.RootDeltaPlanPrimaryRoots - before.RootDeltaPlanPrimaryRoots,
-		RootDeltaPlanTemplateRoots:     after.RootDeltaPlanTemplateRoots - before.RootDeltaPlanTemplateRoots,
-		RootDeltaPlanIndexStateRoots:   after.RootDeltaPlanIndexStateRoots - before.RootDeltaPlanIndexStateRoots,
-		RootDeltaPlanSecondaryRoots:    after.RootDeltaPlanSecondaryRoots - before.RootDeltaPlanSecondaryRoots,
-		RootDeltaPlanEntries:           after.RootDeltaPlanEntries - before.RootDeltaPlanEntries,
-		RootDeltaPlanKeyBytes:          after.RootDeltaPlanKeyBytes - before.RootDeltaPlanKeyBytes,
-		RootDeltaPlanValueBytes:        after.RootDeltaPlanValueBytes - before.RootDeltaPlanValueBytes,
-		RootDeltaPlanTombstones:        after.RootDeltaPlanTombstones - before.RootDeltaPlanTombstones,
-		PrimaryOnlyUpdateCalls:         after.PrimaryOnlyUpdateCalls - before.PrimaryOnlyUpdateCalls,
-		PrimaryOnlyMatched:             after.PrimaryOnlyMatched - before.PrimaryOnlyMatched,
-		PrimaryOnlyModified:            after.PrimaryOnlyModified - before.PrimaryOnlyModified,
-		PrimaryOnlyBufferedCalls:       after.PrimaryOnlyBufferedCalls - before.PrimaryOnlyBufferedCalls,
-		PrimaryOnlyRootPublishes:       after.PrimaryOnlyRootPublishes - before.PrimaryOnlyRootPublishes,
-		PrimaryOnlyRootDeltaEntries:    after.PrimaryOnlyRootDeltaEntries - before.PrimaryOnlyRootDeltaEntries,
-		PrimaryOnlyRootDeltaKeyBytes:   after.PrimaryOnlyRootDeltaKeyBytes - before.PrimaryOnlyRootDeltaKeyBytes,
-		PrimaryOnlyRootDeltaValueBytes: after.PrimaryOnlyRootDeltaValueBytes - before.PrimaryOnlyRootDeltaValueBytes,
-		PrimaryOnlyCoalescedDocs:       after.PrimaryOnlyCoalescedDocs - before.PrimaryOnlyCoalescedDocs,
+		UpdateBatchCalls:                 after.UpdateBatchCalls - before.UpdateBatchCalls,
+		UpdateBatchItems:                 after.UpdateBatchItems - before.UpdateBatchItems,
+		UpdateBatchMatched:               after.UpdateBatchMatched - before.UpdateBatchMatched,
+		UpdateBatchModified:              after.UpdateBatchModified - before.UpdateBatchModified,
+		UpdateBatchRuns:                  after.UpdateBatchRuns - before.UpdateBatchRuns,
+		UpdateBatchBufferedBatches:       after.UpdateBatchBufferedBatches - before.UpdateBatchBufferedBatches,
+		UpdateBatchCurrentRead:           after.UpdateBatchCurrentRead - before.UpdateBatchCurrentRead,
+		UpdateBatchCallback:              after.UpdateBatchCallback - before.UpdateBatchCallback,
+		UpdateBatchStructuredApply:       after.UpdateBatchStructuredApply - before.UpdateBatchStructuredApply,
+		UpdateBatchPrepareDocuments:      after.UpdateBatchPrepareDocuments - before.UpdateBatchPrepareDocuments,
+		UpdateBatchIndexStateExtract:     after.UpdateBatchIndexStateExtract - before.UpdateBatchIndexStateExtract,
+		UpdateBatchOldIndexStateExtract:  after.UpdateBatchOldIndexStateExtract - before.UpdateBatchOldIndexStateExtract,
+		UpdateBatchNewIndexStateExtract:  after.UpdateBatchNewIndexStateExtract - before.UpdateBatchNewIndexStateExtract,
+		UpdateBatchUniquePreflight:       after.UpdateBatchUniquePreflight - before.UpdateBatchUniquePreflight,
+		UpdateBatchTemplateRunBuild:      after.UpdateBatchTemplateRunBuild - before.UpdateBatchTemplateRunBuild,
+		UpdateBatchPrimaryRunBuild:       after.UpdateBatchPrimaryRunBuild - before.UpdateBatchPrimaryRunBuild,
+		UpdateBatchIndexStateRunBuild:    after.UpdateBatchIndexStateRunBuild - before.UpdateBatchIndexStateRunBuild,
+		UpdateBatchSecondaryRunBuild:     after.UpdateBatchSecondaryRunBuild - before.UpdateBatchSecondaryRunBuild,
+		UpdateBatchBufferStage:           after.UpdateBatchBufferStage - before.UpdateBatchBufferStage,
+		UpdateBatchBufferPrecheck:        after.UpdateBatchBufferPrecheck - before.UpdateBatchBufferPrecheck,
+		UpdateBatchBufferLockWait:        after.UpdateBatchBufferLockWait - before.UpdateBatchBufferLockWait,
+		UpdateBatchBufferLockHold:        after.UpdateBatchBufferLockHold - before.UpdateBatchBufferLockHold,
+		UpdateBatchBufferValidation:      after.UpdateBatchBufferValidation - before.UpdateBatchBufferValidation,
+		UpdateBatchBufferRootScan:        after.UpdateBatchBufferRootScan - before.UpdateBatchBufferRootScan,
+		UpdateBatchBufferDomainPrepare:   after.UpdateBatchBufferDomainPrepare - before.UpdateBatchBufferDomainPrepare,
+		UpdateBatchBufferFreeze:          after.UpdateBatchBufferFreeze - before.UpdateBatchBufferFreeze,
+		UpdateBatchBufferRootTable:       after.UpdateBatchBufferRootTable - before.UpdateBatchBufferRootTable,
+		UpdateBatchBufferPrimaryIdx:      after.UpdateBatchBufferPrimaryIdx - before.UpdateBatchBufferPrimaryIdx,
+		UpdateBatchBufferUniqueIdx:       after.UpdateBatchBufferUniqueIdx - before.UpdateBatchBufferUniqueIdx,
+		UpdateBatchBufferPrimaryAppend:   after.UpdateBatchBufferPrimaryAppend - before.UpdateBatchBufferPrimaryAppend,
+		UpdateBatchBufferSecondaryAppend: after.UpdateBatchBufferSecondaryAppend - before.UpdateBatchBufferSecondaryAppend,
+		UpdateBatchBufferRootAppend:      after.UpdateBatchBufferRootAppend - before.UpdateBatchBufferRootAppend,
+		UpdateBatchBufferFlush:           after.UpdateBatchBufferFlush - before.UpdateBatchBufferFlush,
+		UpdateBatchPublish:               after.UpdateBatchPublish - before.UpdateBatchPublish,
+		UpdateBatchSecondaryDeletes:      after.UpdateBatchSecondaryDeletes - before.UpdateBatchSecondaryDeletes,
+		UpdateBatchSecondarySets:         after.UpdateBatchSecondarySets - before.UpdateBatchSecondarySets,
+		UpdateBatchSecondaryKeyBytes:     after.UpdateBatchSecondaryKeyBytes - before.UpdateBatchSecondaryKeyBytes,
+		UpdateBatchIndexValueChanges:     after.UpdateBatchIndexValueChanges - before.UpdateBatchIndexValueChanges,
+		UpdateBatchIndexValueUnchanged:   after.UpdateBatchIndexValueUnchanged - before.UpdateBatchIndexValueUnchanged,
+		UpdateBatchMaskFallbacks:         after.UpdateBatchMaskFallbacks - before.UpdateBatchMaskFallbacks,
+		UpdateBatchUniqueChecks:          after.UpdateBatchUniqueChecks - before.UpdateBatchUniqueChecks,
+		UpdateBatchUniqueCheckSkips:      after.UpdateBatchUniqueCheckSkips - before.UpdateBatchUniqueCheckSkips,
+		UpdateCombineRequests:            after.UpdateCombineRequests - before.UpdateCombineRequests,
+		UpdateCombineBatches:             after.UpdateCombineBatches - before.UpdateCombineBatches,
+		UpdateCombineBatchedRequests:     after.UpdateCombineBatchedRequests - before.UpdateCombineBatchedRequests,
+		UpdateCombineFallbackRequests:    after.UpdateCombineFallbackRequests - before.UpdateCombineFallbackRequests,
+		UpdateCombineInlineRequests:      after.UpdateCombineInlineRequests - before.UpdateCombineInlineRequests,
+		UpdateCombineEnqueue:             after.UpdateCombineEnqueue - before.UpdateCombineEnqueue,
+		UpdateCombineWait:                after.UpdateCombineWait - before.UpdateCombineWait,
+		UpdateCombineDrain:               after.UpdateCombineDrain - before.UpdateCombineDrain,
+		UpdateCombineRun:                 after.UpdateCombineRun - before.UpdateCombineRun,
+		IndexedFlushCalls:                after.IndexedFlushCalls - before.IndexedFlushCalls,
+		IndexedFlushErrors:               after.IndexedFlushErrors - before.IndexedFlushErrors,
+		IndexedFlushForcedDrains:         after.IndexedFlushForcedDrains - before.IndexedFlushForcedDrains,
+		IndexedFlushUnits:                after.IndexedFlushUnits - before.IndexedFlushUnits,
+		IndexedFlushDocs:                 after.IndexedFlushDocs - before.IndexedFlushDocs,
+		IndexedFlushBytes:                after.IndexedFlushBytes - before.IndexedFlushBytes,
+		IndexedFlushRootRuns:             after.IndexedFlushRootRuns - before.IndexedFlushRootRuns,
+		IndexedFlushRoots:                after.IndexedFlushRoots - before.IndexedFlushRoots,
+		IndexedFlushDuration:             after.IndexedFlushDuration - before.IndexedFlushDuration,
+		IndexedFlushMaterialize:          after.IndexedFlushMaterialize - before.IndexedFlushMaterialize,
+		IndexedFlushPublish:              after.IndexedFlushPublish - before.IndexedFlushPublish,
+		IndexedAsyncFlushWait:            after.IndexedAsyncFlushWait - before.IndexedAsyncFlushWait,
+		RootDeltaPlanPrimaryRoots:        after.RootDeltaPlanPrimaryRoots - before.RootDeltaPlanPrimaryRoots,
+		RootDeltaPlanTemplateRoots:       after.RootDeltaPlanTemplateRoots - before.RootDeltaPlanTemplateRoots,
+		RootDeltaPlanIndexStateRoots:     after.RootDeltaPlanIndexStateRoots - before.RootDeltaPlanIndexStateRoots,
+		RootDeltaPlanSecondaryRoots:      after.RootDeltaPlanSecondaryRoots - before.RootDeltaPlanSecondaryRoots,
+		RootDeltaPlanEntries:             after.RootDeltaPlanEntries - before.RootDeltaPlanEntries,
+		RootDeltaPlanKeyBytes:            after.RootDeltaPlanKeyBytes - before.RootDeltaPlanKeyBytes,
+		RootDeltaPlanValueBytes:          after.RootDeltaPlanValueBytes - before.RootDeltaPlanValueBytes,
+		RootDeltaPlanTombstones:          after.RootDeltaPlanTombstones - before.RootDeltaPlanTombstones,
+		PrimaryOnlyUpdateCalls:           after.PrimaryOnlyUpdateCalls - before.PrimaryOnlyUpdateCalls,
+		PrimaryOnlyMatched:               after.PrimaryOnlyMatched - before.PrimaryOnlyMatched,
+		PrimaryOnlyModified:              after.PrimaryOnlyModified - before.PrimaryOnlyModified,
+		PrimaryOnlyBufferedCalls:         after.PrimaryOnlyBufferedCalls - before.PrimaryOnlyBufferedCalls,
+		PrimaryOnlyRootPublishes:         after.PrimaryOnlyRootPublishes - before.PrimaryOnlyRootPublishes,
+		PrimaryOnlyRootDeltaEntries:      after.PrimaryOnlyRootDeltaEntries - before.PrimaryOnlyRootDeltaEntries,
+		PrimaryOnlyRootDeltaKeyBytes:     after.PrimaryOnlyRootDeltaKeyBytes - before.PrimaryOnlyRootDeltaKeyBytes,
+		PrimaryOnlyRootDeltaValueBytes:   after.PrimaryOnlyRootDeltaValueBytes - before.PrimaryOnlyRootDeltaValueBytes,
+		PrimaryOnlyCoalescedDocs:         after.PrimaryOnlyCoalescedDocs - before.PrimaryOnlyCoalescedDocs,
 	}
 	delta.OverlayMutableDocuments = after.OverlayMutableDocuments
 	delta.OverlayQueuedIndexedFlushUnits = after.OverlayQueuedIndexedFlushUnits
@@ -1197,92 +1277,118 @@ func collectionManagerUpdateIndexStat(stats collections.CollectionManagerStats, 
 
 func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 	before := collections.CollectionManagerStats{
-		UpdateCombineRequests:          10,
-		UpdateCombineBatches:           3,
-		UpdateCombineBatchedRequests:   8,
-		UpdateCombineFallbackRequests:  1,
-		UpdateCombineQueueDepthMax:     12,
-		UpdateBatchIndexValueChanges:   20,
-		UpdateBatchIndexValueUnchanged: 30,
-		UpdateBatchMaskFallbacks:       5,
-		UpdateBatchUniqueChecks:        4,
-		UpdateBatchUniqueCheckSkips:    10,
-		IndexedFlushCalls:              3,
-		IndexedFlushErrors:             1,
-		IndexedFlushForcedDrains:       2,
-		IndexedFlushUnits:              6,
-		IndexedFlushDocs:               300,
-		IndexedFlushBytes:              9000,
-		IndexedFlushRootRuns:           90,
-		IndexedFlushRoots:              9,
-		IndexedFlushDuration:           30 * time.Millisecond,
-		IndexedFlushMaterialize:        12 * time.Millisecond,
-		IndexedFlushPublish:            18 * time.Millisecond,
-		IndexedAsyncFlushWait:          2 * time.Millisecond,
-		RootDeltaPlanPrimaryRoots:      3,
-		RootDeltaPlanTemplateRoots:     2,
-		RootDeltaPlanIndexStateRoots:   1,
-		RootDeltaPlanSecondaryRoots:    6,
-		RootDeltaPlanEntries:           300,
-		RootDeltaPlanKeyBytes:          1200,
-		RootDeltaPlanValueBytes:        2400,
-		RootDeltaPlanTombstones:        30,
-		PrimaryOnlyUpdateCalls:         10,
-		PrimaryOnlyMatched:             9,
-		PrimaryOnlyModified:            8,
-		PrimaryOnlyBufferedCalls:       1,
-		PrimaryOnlyRootPublishes:       8,
-		PrimaryOnlyRootDeltaEntries:    8,
-		PrimaryOnlyRootDeltaKeyBytes:   16,
-		PrimaryOnlyRootDeltaValueBytes: 160,
-		PrimaryOnlyCoalescedDocs:       8,
-		UpdateBatchIndexStatsCount:     2,
+		UpdateCombineRequests:            10,
+		UpdateCombineBatches:             3,
+		UpdateCombineBatchedRequests:     8,
+		UpdateCombineFallbackRequests:    1,
+		UpdateCombineQueueDepthMax:       12,
+		UpdateCombineInlineRequests:      4,
+		UpdateCombineEnqueue:             100 * time.Nanosecond,
+		UpdateCombineWait:                200 * time.Nanosecond,
+		UpdateCombineDrain:               300 * time.Nanosecond,
+		UpdateCombineRun:                 400 * time.Nanosecond,
+		UpdateBatchStructuredApply:       50 * time.Nanosecond,
+		UpdateBatchIndexStateExtract:     70 * time.Nanosecond,
+		UpdateBatchOldIndexStateExtract:  30 * time.Nanosecond,
+		UpdateBatchNewIndexStateExtract:  40 * time.Nanosecond,
+		UpdateBatchBufferFreeze:          11 * time.Nanosecond,
+		UpdateBatchBufferRootTable:       13 * time.Nanosecond,
+		UpdateBatchBufferPrimaryAppend:   17 * time.Nanosecond,
+		UpdateBatchBufferSecondaryAppend: 19 * time.Nanosecond,
+		UpdateBatchIndexValueChanges:     20,
+		UpdateBatchIndexValueUnchanged:   30,
+		UpdateBatchMaskFallbacks:         5,
+		UpdateBatchUniqueChecks:          4,
+		UpdateBatchUniqueCheckSkips:      10,
+		IndexedFlushCalls:                3,
+		IndexedFlushErrors:               1,
+		IndexedFlushForcedDrains:         2,
+		IndexedFlushUnits:                6,
+		IndexedFlushDocs:                 300,
+		IndexedFlushBytes:                9000,
+		IndexedFlushRootRuns:             90,
+		IndexedFlushRoots:                9,
+		IndexedFlushDuration:             30 * time.Millisecond,
+		IndexedFlushMaterialize:          12 * time.Millisecond,
+		IndexedFlushPublish:              18 * time.Millisecond,
+		IndexedAsyncFlushWait:            2 * time.Millisecond,
+		RootDeltaPlanPrimaryRoots:        3,
+		RootDeltaPlanTemplateRoots:       2,
+		RootDeltaPlanIndexStateRoots:     1,
+		RootDeltaPlanSecondaryRoots:      6,
+		RootDeltaPlanEntries:             300,
+		RootDeltaPlanKeyBytes:            1200,
+		RootDeltaPlanValueBytes:          2400,
+		RootDeltaPlanTombstones:          30,
+		PrimaryOnlyUpdateCalls:           10,
+		PrimaryOnlyMatched:               9,
+		PrimaryOnlyModified:              8,
+		PrimaryOnlyBufferedCalls:         1,
+		PrimaryOnlyRootPublishes:         8,
+		PrimaryOnlyRootDeltaEntries:      8,
+		PrimaryOnlyRootDeltaKeyBytes:     16,
+		PrimaryOnlyRootDeltaValueBytes:   160,
+		PrimaryOnlyCoalescedDocs:         8,
+		UpdateBatchIndexStatsCount:       2,
 		UpdateBatchIndexStats: [8]collections.CollectionUpdateIndexStats{
 			{CollectionName: "users", IndexName: "email", IndexOrdinal: 0, Unique: true, Changed: 1, Unchanged: 9, UniqueChecks: 1, UniqueCheckSkips: 8},
 			{CollectionName: "users", IndexName: "city", IndexOrdinal: 1, Changed: 10, SecondaryRuns: 10, SecondaryDeletes: 10, SecondarySets: 10, SecondaryKeyBytes: 1000},
 		},
 	}
 	after := collections.CollectionManagerStats{
-		UpdateCombineRequests:          17,
-		UpdateCombineBatches:           5,
-		UpdateCombineBatchedRequests:   14,
-		UpdateCombineFallbackRequests:  2,
-		UpdateCombineQueueDepthMax:     31,
-		UpdateBatchIndexValueChanges:   27,
-		UpdateBatchIndexValueUnchanged: 43,
-		UpdateBatchMaskFallbacks:       12,
-		UpdateBatchUniqueChecks:        6,
-		UpdateBatchUniqueCheckSkips:    19,
-		IndexedFlushCalls:              8,
-		IndexedFlushErrors:             2,
-		IndexedFlushForcedDrains:       5,
-		IndexedFlushUnits:              16,
-		IndexedFlushDocs:               900,
-		IndexedFlushBytes:              27000,
-		IndexedFlushRootRuns:           270,
-		IndexedFlushRoots:              24,
-		IndexedFlushDuration:           90 * time.Millisecond,
-		IndexedFlushMaterialize:        30 * time.Millisecond,
-		IndexedFlushPublish:            60 * time.Millisecond,
-		IndexedAsyncFlushWait:          11 * time.Millisecond,
-		RootDeltaPlanPrimaryRoots:      8,
-		RootDeltaPlanTemplateRoots:     5,
-		RootDeltaPlanIndexStateRoots:   4,
-		RootDeltaPlanSecondaryRoots:    16,
-		RootDeltaPlanEntries:           900,
-		RootDeltaPlanKeyBytes:          3600,
-		RootDeltaPlanValueBytes:        7200,
-		RootDeltaPlanTombstones:        90,
-		PrimaryOnlyUpdateCalls:         17,
-		PrimaryOnlyMatched:             16,
-		PrimaryOnlyModified:            15,
-		PrimaryOnlyBufferedCalls:       3,
-		PrimaryOnlyRootPublishes:       15,
-		PrimaryOnlyRootDeltaEntries:    15,
-		PrimaryOnlyRootDeltaKeyBytes:   30,
-		PrimaryOnlyRootDeltaValueBytes: 300,
-		PrimaryOnlyCoalescedDocs:       15,
-		UpdateBatchIndexStatsCount:     2,
+		UpdateCombineRequests:            17,
+		UpdateCombineBatches:             5,
+		UpdateCombineBatchedRequests:     14,
+		UpdateCombineFallbackRequests:    2,
+		UpdateCombineQueueDepthMax:       31,
+		UpdateCombineInlineRequests:      15,
+		UpdateCombineEnqueue:             700 * time.Nanosecond,
+		UpdateCombineWait:                1400 * time.Nanosecond,
+		UpdateCombineDrain:               2100 * time.Nanosecond,
+		UpdateCombineRun:                 2800 * time.Nanosecond,
+		UpdateBatchStructuredApply:       500 * time.Nanosecond,
+		UpdateBatchIndexStateExtract:     700 * time.Nanosecond,
+		UpdateBatchOldIndexStateExtract:  300 * time.Nanosecond,
+		UpdateBatchNewIndexStateExtract:  400 * time.Nanosecond,
+		UpdateBatchBufferFreeze:          110 * time.Nanosecond,
+		UpdateBatchBufferRootTable:       130 * time.Nanosecond,
+		UpdateBatchBufferPrimaryAppend:   170 * time.Nanosecond,
+		UpdateBatchBufferSecondaryAppend: 190 * time.Nanosecond,
+		UpdateBatchIndexValueChanges:     27,
+		UpdateBatchIndexValueUnchanged:   43,
+		UpdateBatchMaskFallbacks:         12,
+		UpdateBatchUniqueChecks:          6,
+		UpdateBatchUniqueCheckSkips:      19,
+		IndexedFlushCalls:                8,
+		IndexedFlushErrors:               2,
+		IndexedFlushForcedDrains:         5,
+		IndexedFlushUnits:                16,
+		IndexedFlushDocs:                 900,
+		IndexedFlushBytes:                27000,
+		IndexedFlushRootRuns:             270,
+		IndexedFlushRoots:                24,
+		IndexedFlushDuration:             90 * time.Millisecond,
+		IndexedFlushMaterialize:          30 * time.Millisecond,
+		IndexedFlushPublish:              60 * time.Millisecond,
+		IndexedAsyncFlushWait:            11 * time.Millisecond,
+		RootDeltaPlanPrimaryRoots:        8,
+		RootDeltaPlanTemplateRoots:       5,
+		RootDeltaPlanIndexStateRoots:     4,
+		RootDeltaPlanSecondaryRoots:      16,
+		RootDeltaPlanEntries:             900,
+		RootDeltaPlanKeyBytes:            3600,
+		RootDeltaPlanValueBytes:          7200,
+		RootDeltaPlanTombstones:          90,
+		PrimaryOnlyUpdateCalls:           17,
+		PrimaryOnlyMatched:               16,
+		PrimaryOnlyModified:              15,
+		PrimaryOnlyBufferedCalls:         3,
+		PrimaryOnlyRootPublishes:         15,
+		PrimaryOnlyRootDeltaEntries:      15,
+		PrimaryOnlyRootDeltaKeyBytes:     30,
+		PrimaryOnlyRootDeltaValueBytes:   300,
+		PrimaryOnlyCoalescedDocs:         15,
+		UpdateBatchIndexStatsCount:       2,
 		UpdateBatchIndexStats: [8]collections.CollectionUpdateIndexStats{
 			{CollectionName: "users", IndexName: "email", IndexOrdinal: 0, Unique: true, Changed: 1, Unchanged: 22, UniqueChecks: 1, UniqueCheckSkips: 17},
 			{CollectionName: "users", IndexName: "city", IndexOrdinal: 1, Changed: 17, SecondaryRuns: 17, SecondaryDeletes: 17, SecondarySets: 17, SecondaryKeyBytes: 1700},
@@ -1303,6 +1409,35 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 	}
 	if got.UpdateCombineQueueDepthMax != 31 {
 		t.Fatalf("UpdateCombineQueueDepthMax=%d want 31", got.UpdateCombineQueueDepthMax)
+	}
+	if got.UpdateCombineInlineRequests != 11 {
+		t.Fatalf("UpdateCombineInlineRequests=%d want 11", got.UpdateCombineInlineRequests)
+	}
+	if got.UpdateCombineEnqueue != 600*time.Nanosecond || got.UpdateCombineWait != 1200*time.Nanosecond || got.UpdateCombineDrain != 1800*time.Nanosecond || got.UpdateCombineRun != 2400*time.Nanosecond {
+		t.Fatalf("update combine timing delta enqueue/wait/drain/run=%s/%s/%s/%s want 600ns/1200ns/1800ns/2400ns",
+			got.UpdateCombineEnqueue,
+			got.UpdateCombineWait,
+			got.UpdateCombineDrain,
+			got.UpdateCombineRun,
+		)
+	}
+	if got.UpdateBatchStructuredApply != 450*time.Nanosecond {
+		t.Fatalf("UpdateBatchStructuredApply=%s want 450ns", got.UpdateBatchStructuredApply)
+	}
+	if got.UpdateBatchIndexStateExtract != 630*time.Nanosecond || got.UpdateBatchOldIndexStateExtract != 270*time.Nanosecond || got.UpdateBatchNewIndexStateExtract != 360*time.Nanosecond {
+		t.Fatalf("index state timing delta total/old/new=%s/%s/%s want 630ns/270ns/360ns",
+			got.UpdateBatchIndexStateExtract,
+			got.UpdateBatchOldIndexStateExtract,
+			got.UpdateBatchNewIndexStateExtract,
+		)
+	}
+	if got.UpdateBatchBufferFreeze != 99*time.Nanosecond || got.UpdateBatchBufferRootTable != 117*time.Nanosecond || got.UpdateBatchBufferPrimaryAppend != 153*time.Nanosecond || got.UpdateBatchBufferSecondaryAppend != 171*time.Nanosecond {
+		t.Fatalf("buffer detail timing delta freeze/root-table/primary/secondary=%s/%s/%s/%s want 99ns/117ns/153ns/171ns",
+			got.UpdateBatchBufferFreeze,
+			got.UpdateBatchBufferRootTable,
+			got.UpdateBatchBufferPrimaryAppend,
+			got.UpdateBatchBufferSecondaryAppend,
+		)
 	}
 	staleMax := deltaCollectionManagerUpdateStats(
 		collections.CollectionManagerStats{UpdateCombineQueueDepthMax: 31},
@@ -1417,6 +1552,7 @@ func TestReportCollectionManagerUpdateStatsIncludesIndexedFlushMetrics(t *testin
 		PrimaryOnlyRootDeltaKeyBytes:   1200,
 		PrimaryOnlyRootDeltaValueBytes: 12000,
 		PrimaryOnlyCoalescedDocs:       600,
+		UpdateBatchStructuredApply:     1800 * time.Nanosecond,
 		UpdateBatchIndexValueChanges:   300,
 		UpdateBatchIndexValueUnchanged: 900,
 		UpdateBatchMaskFallbacks:       60,
@@ -1467,6 +1603,7 @@ func TestReportCollectionManagerUpdateStatsIncludesIndexedFlushMetrics(t *testin
 		"primary_root_delta_entries/doc":        1,
 		"primary_root_delta_bytes/doc":          22,
 		"primary_only_coalesced_docs/publish":   1,
+		"update_structured_apply_ns/doc":        3,
 		"update_index_value_changes/doc":        0.5,
 		"update_index_value_unchanged/doc":      1.5,
 		"changed_index_fast_mask_fallbacks/doc": 0.1,
@@ -1489,6 +1626,11 @@ func TestReportCollectionManagerUpdateStatsIncludesCombinerQueueDepth(t *testing
 		UpdateCombineBatchedRequests:  600,
 		UpdateCombineFallbackRequests: 6,
 		UpdateCombineQueueDepthMax:    31,
+		UpdateCombineInlineRequests:   300,
+		UpdateCombineEnqueue:          600 * time.Nanosecond,
+		UpdateCombineWait:             1200 * time.Nanosecond,
+		UpdateCombineDrain:            1800 * time.Nanosecond,
+		UpdateCombineRun:              2400 * time.Nanosecond,
 	}
 	result := testing.Benchmark(func(b *testing.B) {
 		reportCollectionManagerUpdateStats(b, stats, 600)
@@ -1503,6 +1645,12 @@ func TestReportCollectionManagerUpdateStatsIncludesCombinerQueueDepth(t *testing
 		"update_combine_fallback_requests":     6,
 		"update_combine_fallback_requests/doc": 0.01,
 		"update_combine_queue_depth_max":       31,
+		"update_combine_inline_requests":       300,
+		"update_combine_inline_requests/doc":   0.5,
+		"update_combine_enqueue_ns/doc":        1,
+		"update_combine_wait_ns/doc":           2,
+		"update_combine_drain_ns/doc":          3,
+		"update_combine_run_ns/doc":            4,
 	}
 	for metric, wantValue := range want {
 		gotValue, ok := result.Extra[metric]
@@ -1673,6 +1821,19 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 	if stats.UpdateCombineQueueDepthMax > 0 {
 		b.ReportMetric(float64(stats.UpdateCombineQueueDepthMax), "update_combine_queue_depth_max")
 	}
+	if stats.UpdateCombineInlineRequests > 0 {
+		b.ReportMetric(float64(stats.UpdateCombineInlineRequests), "update_combine_inline_requests")
+		b.ReportMetric(float64(stats.UpdateCombineInlineRequests)/float64(docs), "update_combine_inline_requests/doc")
+	}
+	reportDuration := func(name string, d time.Duration) {
+		if d > 0 {
+			b.ReportMetric(float64(d.Nanoseconds())/float64(docs), name)
+		}
+	}
+	reportDuration("update_combine_enqueue_ns/doc", stats.UpdateCombineEnqueue)
+	reportDuration("update_combine_wait_ns/doc", stats.UpdateCombineWait)
+	reportDuration("update_combine_drain_ns/doc", stats.UpdateCombineDrain)
+	reportDuration("update_combine_run_ns/doc", stats.UpdateCombineRun)
 	if stats.UpdateBatchSecondaryDeletes > 0 {
 		b.ReportMetric(float64(stats.UpdateBatchSecondaryDeletes)/float64(docs), "update_secondary_deletes/doc")
 	}
@@ -1729,15 +1890,13 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 			b.ReportMetric(float64(indexStats.SecondaryKeyBytes)/float64(docs), prefix+"secondary_key_bytes/doc")
 		}
 	}
-	reportDuration := func(name string, d time.Duration) {
-		if d > 0 {
-			b.ReportMetric(float64(d.Nanoseconds())/float64(docs), name)
-		}
-	}
 	reportDuration("update_current_read_ns/doc", stats.UpdateBatchCurrentRead)
 	reportDuration("update_callback_ns/doc", stats.UpdateBatchCallback)
+	reportDuration("update_structured_apply_ns/doc", stats.UpdateBatchStructuredApply)
 	reportDuration("update_prepare_ns/doc", stats.UpdateBatchPrepareDocuments)
 	reportDuration("update_index_state_extract_ns/doc", stats.UpdateBatchIndexStateExtract)
+	reportDuration("update_old_index_state_extract_ns/doc", stats.UpdateBatchOldIndexStateExtract)
+	reportDuration("update_new_index_state_extract_ns/doc", stats.UpdateBatchNewIndexStateExtract)
 	reportDuration("update_unique_preflight_ns/doc", stats.UpdateBatchUniquePreflight)
 	reportDuration("update_template_run_ns/doc", stats.UpdateBatchTemplateRunBuild)
 	reportDuration("update_primary_run_ns/doc", stats.UpdateBatchPrimaryRunBuild)
@@ -1750,8 +1909,12 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 	reportDuration("update_buffer_validation_ns/doc", stats.UpdateBatchBufferValidation)
 	reportDuration("update_buffer_root_scan_ns/doc", stats.UpdateBatchBufferRootScan)
 	reportDuration("update_buffer_domain_prepare_ns/doc", stats.UpdateBatchBufferDomainPrepare)
+	reportDuration("update_buffer_freeze_ns/doc", stats.UpdateBatchBufferFreeze)
+	reportDuration("update_buffer_root_table_ns/doc", stats.UpdateBatchBufferRootTable)
 	reportDuration("update_buffer_primary_index_ns/doc", stats.UpdateBatchBufferPrimaryIdx)
 	reportDuration("update_buffer_unique_index_ns/doc", stats.UpdateBatchBufferUniqueIdx)
+	reportDuration("update_buffer_primary_append_ns/doc", stats.UpdateBatchBufferPrimaryAppend)
+	reportDuration("update_buffer_secondary_append_ns/doc", stats.UpdateBatchBufferSecondaryAppend)
 	reportDuration("update_buffer_root_append_ns/doc", stats.UpdateBatchBufferRootAppend)
 	reportDuration("update_buffer_flush_ns/doc", stats.UpdateBatchBufferFlush)
 	reportDuration("update_publish_ns/doc", stats.UpdateBatchPublish)
@@ -1792,7 +1955,7 @@ func runProfileBenchDirectCollectionConcurrentUpdates(
 		go func() {
 			defer wg.Done()
 			pprof.SetGoroutineLabels(runCtx)
-			updateScratch := make([]byte, 0, 512)
+			setFields := make([]collections.BSONSetField, 0, 8)
 			for {
 				if err := runCtx.Err(); err != nil {
 					return
@@ -1804,19 +1967,8 @@ func runProfileBenchDirectCollectionConcurrentUpdates(
 				documentOrdinal := (op * idStride) % documentCount
 				id := ids[documentOrdinal]
 				updateDoc := updateDocs[op%len(updateDocs)]
-				matched, _, err := collection.Update(id, func(stored []byte) ([]byte, bool, error) {
-					raw := bson.Raw(stored)
-					originalID := raw.Lookup("_id")
-					updated, nextScratch, shouldWrite, err := profileBenchApplyParsedSetUpdateToOperation(updateScratch[:0], raw, updateDoc, op, documentOrdinal, documentCount)
-					updateScratch = nextScratch
-					if err != nil {
-						return nil, false, err
-					}
-					if !updated.Lookup("_id").Equal(originalID) {
-						return nil, false, errUpdatedPrimaryKey
-					}
-					return []byte(updated), shouldWrite, nil
-				})
+				setFields = profileBenchCollectionSetFieldsForOperation(setFields[:0], updateDoc, op, documentOrdinal, documentCount)
+				matched, _, err := collection.UpdateBSONSet(id, setFields)
 				if err != nil {
 					recordErr(err)
 					return
@@ -1835,11 +1987,21 @@ func runProfileBenchDirectCollectionConcurrentUpdates(
 	return ctx.Err()
 }
 
+func profileBenchCollectionSetFieldsForOperation(dst []collections.BSONSetField, update profileBenchSetUpdate, operation, documentOrdinal, documentCount int) []collections.BSONSetField {
+	for _, field := range update.fields {
+		dst = append(dst, collections.BSONSetField{
+			Key:   field.key,
+			Value: profileBenchSetFieldValueForOperation(field, operation, documentOrdinal, documentCount),
+		})
+	}
+	return dst
+}
+
 type profileBenchSetField struct {
-	key               string
-	keyBytes          []byte
-	value             bson.RawValue
-	dynamicCityValues []bson.RawValue
+	key           string
+	keyBytes      []byte
+	value         bson.RawValue
+	dynamicValues []bson.RawValue
 }
 
 type profileBenchSetUpdate struct {
@@ -2048,15 +2210,15 @@ func profileBenchApplyParsedSetUpdateToOperation(dst []byte, doc bson.Raw, updat
 }
 
 func profileBenchSetFieldValueForOperation(field profileBenchSetField, operation, documentOrdinal, documentCount int) bson.RawValue {
-	if len(field.dynamicCityValues) == 0 || operation < 0 {
+	if len(field.dynamicValues) == 0 || operation < 0 {
 		return field.value
 	}
-	index := benchmarkUpdatedCityIndex(operation, documentOrdinal, documentCount, len(field.dynamicCityValues))
+	index := benchmarkUpdatedCityIndex(operation, documentOrdinal, documentCount, len(field.dynamicValues))
 	if documentCount > 0 && operation >= documentCount {
-		previousIndex := benchmarkUpdatedCityIndex(operation-documentCount, documentOrdinal, documentCount, len(field.dynamicCityValues))
-		index = avoidBenchmarkUpdatedCityRepeat(index, previousIndex, len(field.dynamicCityValues))
+		previousIndex := benchmarkUpdatedCityIndex(operation-documentCount, documentOrdinal, documentCount, len(field.dynamicValues))
+		index = avoidBenchmarkUpdatedCityRepeat(index, previousIndex, len(field.dynamicValues))
 	}
-	return field.dynamicCityValues[index]
+	return field.dynamicValues[index]
 }
 
 func TestProfileBenchApplySetUpdateHappyPath(t *testing.T) {
@@ -2408,6 +2570,10 @@ func profileBenchBufferedIndexedAsyncFlush(tb testing.TB) bool {
 	return profileBenchBoolEnv(tb, "MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH", false)
 }
 
+func profileBenchDisableBufferedIndexedAsyncFlush(tb testing.TB) bool {
+	return profileBenchBoolEnv(tb, "MONGO_GATEWAY_PROFILE_BENCH_DISABLE_BUFFERED_INDEXED_ASYNC_FLUSH", false)
+}
+
 func profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(tb testing.TB) int {
 	return profileBenchNonNegativeEnvInt(tb, "MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS", 0)
 }
@@ -2434,6 +2600,15 @@ func profileBenchCompactOverlayRootsAfterFlush(tb testing.TB) bool {
 
 func profileBenchCollectionOptions(tb testing.TB, format collections.DocumentFormat) collections.CollectionOptions {
 	tb.Helper()
+	disableAsyncFlush := profileBenchDisableBufferedIndexedAsyncFlush(tb)
+	asyncFlush := profileBenchBufferedIndexedAsyncFlush(tb)
+	asyncFlushMaxQueuedUnits := profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(tb)
+	if disableAsyncFlush && asyncFlush {
+		tb.Fatalf("cannot set both MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH and MONGO_GATEWAY_PROFILE_BENCH_DISABLE_BUFFERED_INDEXED_ASYNC_FLUSH")
+	}
+	if disableAsyncFlush && asyncFlushMaxQueuedUnits != 0 {
+		tb.Fatalf("cannot set MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS when MONGO_GATEWAY_PROFILE_BENCH_DISABLE_BUFFERED_INDEXED_ASYNC_FLUSH is set")
+	}
 	return collections.CollectionOptions{
 		DocumentFormat:                          format,
 		DataRootStoragePolicy:                   collections.RootStorageCompressed,
@@ -2441,9 +2616,10 @@ func profileBenchCollectionOptions(tb testing.TB, format collections.DocumentFor
 		BufferedIndexedWriteMaxDocuments:        profileBenchBufferedIndexedWriteMaxDocuments(tb),
 		BufferedIndexedWriteMaxBytes:            profileBenchBufferedIndexedWriteMaxBytes(tb),
 		BufferedIndexedWriteMaxRootRuns:         profileBenchBufferedIndexedWriteMaxRootRuns(tb),
-		BufferedIndexedAsyncFlush:               profileBenchBufferedIndexedAsyncFlush(tb),
+		DisableBufferedIndexedAsyncFlush:        disableAsyncFlush,
+		BufferedIndexedAsyncFlush:               asyncFlush,
 		BufferedIndexedOverlayRoots:             profileBenchBufferedIndexedOverlayRoots(tb),
-		BufferedIndexedAsyncFlushMaxQueuedUnits: profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(tb),
+		BufferedIndexedAsyncFlushMaxQueuedUnits: asyncFlushMaxQueuedUnits,
 	}
 }
 

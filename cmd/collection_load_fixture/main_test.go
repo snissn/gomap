@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -65,16 +66,16 @@ func TestParseConfigPartialBufferedIndexedThresholdKeepsRootRunDefault(t *testin
 	if cfg.BufferedIndexedWriteMaxDocs != 1234 {
 		t.Fatalf("buffered indexed max docs=%d want 1234", cfg.BufferedIndexedWriteMaxDocs)
 	}
-	if cfg.BufferedIndexedWriteMaxRuns != collections.DefaultIndexedWriteMemtableMaxRootRuns {
-		t.Fatalf("buffered indexed max root runs=%d want %d", cfg.BufferedIndexedWriteMaxRuns, collections.DefaultIndexedWriteMemtableMaxRootRuns)
+	if cfg.BufferedIndexedWriteMaxRuns != collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns {
+		t.Fatalf("buffered indexed max root runs=%d want %d", cfg.BufferedIndexedWriteMaxRuns, collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns)
 	}
 
-	asyncCfg, err := parseConfig([]string{"-buffered-indexed-async-flush", "-buffered-indexed-write-max-docs", "1234"}, io.Discard)
+	syncCfg, err := parseConfig([]string{"-disable-buffered-indexed-async-flush", "-buffered-indexed-write-max-docs", "1234"}, io.Discard)
 	if err != nil {
-		t.Fatalf("parse async docs threshold: %v", err)
+		t.Fatalf("parse foreground docs threshold: %v", err)
 	}
-	if asyncCfg.BufferedIndexedWriteMaxRuns != collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns {
-		t.Fatalf("async buffered indexed max root runs=%d want %d", asyncCfg.BufferedIndexedWriteMaxRuns, collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns)
+	if syncCfg.BufferedIndexedWriteMaxRuns != collections.DefaultIndexedWriteMemtableMaxRootRuns {
+		t.Fatalf("foreground buffered indexed max root runs=%d want %d", syncCfg.BufferedIndexedWriteMaxRuns, collections.DefaultIndexedWriteMemtableMaxRootRuns)
 	}
 
 	explicitZeroCfg, err := parseConfig([]string{"-buffered-indexed-write-max-docs", "1234", "-buffered-indexed-write-max-root-runs", "0"}, io.Discard)
@@ -252,6 +253,26 @@ func TestRunFixtureReportsBufferedIndexedWritesOnlyWhenIndexesUseThem(t *testing
 			noIndexSummary.BufferedIndexedAsyncFlush, noIndexSummary.BufferedIndexedAsyncFlushMaxQueuedUnits)
 	}
 
+	noIndexOptOutDir := filepath.Join(t.TempDir(), "no-index-opt-out")
+	noIndexOptOutCfg, err := parseConfig([]string{
+		"-dir", noIndexOptOutDir,
+		"-docs", "1",
+		"-indexes", "0",
+		"-disable-buffered-indexed-async-flush",
+		"-reopen-verify=false",
+		"-progress=false",
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse no-index opt-out config: %v", err)
+	}
+	noIndexOptOutSummary, err := runFixture(noIndexOptOutCfg)
+	if err != nil {
+		t.Fatalf("run no-index opt-out fixture: %v", err)
+	}
+	if !noIndexOptOutSummary.DisableBufferedIndexedAsyncFlush {
+		t.Fatal("no-index summary dropped indexed async flush opt-out")
+	}
+
 	indexedDir := filepath.Join(t.TempDir(), "indexed")
 	indexedCfg, err := parseConfig([]string{
 		"-dir", indexedDir,
@@ -306,6 +327,38 @@ func TestRunFixtureReportsBufferedIndexedWritesOnlyWhenIndexesUseThem(t *testing
 	}
 	if disabledSummary.BufferedIndexedWrites {
 		t.Fatal("disabled summary reported buffered indexed writes enabled")
+	}
+}
+
+func TestParseConfigRejectsConflictingBufferedIndexedAsyncFlags(t *testing.T) {
+	cfg, err := parseConfig([]string{
+		"-buffered-indexed-async-flush",
+		"-disable-buffered-indexed-async-flush",
+	}, io.Discard)
+	if err == nil {
+		t.Fatal("parse conflicting async flags succeeded")
+	}
+	if cfg != (config{}) {
+		t.Fatalf("conflicting async flags returned cfg=%+v want zero config", cfg)
+	}
+	if !strings.Contains(err.Error(), "cannot set both") {
+		t.Fatalf("err=%q want conflicting async flag error", err)
+	}
+}
+
+func TestParseConfigRejectsDisabledBufferedIndexedAsyncQueueLimit(t *testing.T) {
+	cfg, err := parseConfig([]string{
+		"-disable-buffered-indexed-async-flush",
+		"-buffered-indexed-async-flush-max-queued-units", "2",
+	}, io.Discard)
+	if err == nil {
+		t.Fatal("parse disabled async queue limit succeeded")
+	}
+	if cfg != (config{}) {
+		t.Fatalf("disabled async queue limit returned cfg=%+v want zero config", cfg)
+	}
+	if !strings.Contains(err.Error(), "max-queued-units") {
+		t.Fatalf("err=%q want max queued units error", err)
 	}
 }
 

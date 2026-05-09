@@ -12,7 +12,7 @@ Use that folder for architecture, format, durability, recovery, lifecycle, and v
 
 ## Features
 
--   **ACID Transactions:** Atomic commits using Copy-On-Write (COW) and redundant superblocks (Meta Pages).
+-   **Crash-consistent commits:** Atomic batch commits and recovery behavior according to the selected durability mode.
 -   **Snapshot Isolation:** Lock-free concurrent readers using Multi-Version Concurrency Control (MVCC) and Reference Counting.
 -   **Hybrid Storage:**
     -   **Index:** Memory-mapped B+Tree for keys and small values.
@@ -24,11 +24,12 @@ Use that folder for architecture, format, durability, recovery, lifecycle, and v
 ## Architecture
 
 ### Storage Layout
--   **Root dir:** `Options.Dir` is a root directory with two sub-databases: `maindb/` (main data) and `dictdb/` (dictionary store).
+-   **Root dir:** `Options.Dir` is a root directory with `maindb/` (main data) plus optional side stores such as `dictdb/` and `templatedb/`.
 -   **Pages:** 4KB fixed-size blocks in `maindb/index.db`.
 -   **Nodes:** Slotted pages supporting variable-length keys.
--   **Value log:** Append-only segments under `maindb/wal/` storing large values with CRC checksums.
--   **Journal/redo log:** Commit metadata stored alongside the value log under `maindb/wal/`.
+-   **Value log:** Persistent append-only segments under `maindb/value_vlog/` storing large values with CRC checksums.
+-   **Leaf log:** Optional persistent outer-leaf generations under `maindb/leaf_vlog/` when `IndexOuterLeavesInValueLog` is enabled.
+-   **Journal/redo log:** Commit metadata for crash recovery under `maindb/wal/`.
 
 ### Write Path ("The Zipper")
 Writes are batched and applied using a recursive "Zipper" merge algorithm. This creates a new version of the tree path (COW) without modifying existing on-disk pages, ensuring crash safety and snapshot isolation.
@@ -108,7 +109,7 @@ Profiles are intended to make intent explicit:
 
 Note: WAL-off is selected via `opts.Durability = treedb.DurabilityWALOffRelaxed`.
 The value log remains enabled in cached mode, so large values can still go
-through `wal/` even when WAL is off.
+through `value_vlog/` even when the redo journal is off.
 
 Details: `docs/TREEDB_WRITE_PATHS.md`.
 
@@ -134,18 +135,25 @@ existing placement rules.
 - CRC checksums detect accidental corruption, not malicious tampering; use filesystem encryption/HMAC if your threat model includes adversarial disk access.
 - `GetUnsafe` on a `Snapshot` and iterator `Key()`/`Value()` return short-lived views; use `Get`, `KeyCopy`, or `ValueCopy` for stable bytes.
 - TreeDB does not provide encryption-at-rest or secure deletion; deleted data may remain on disk until compacted. Use OS/disk encryption for confidentiality.
-- Value-log segments are persistent; reclaim disk via `DB.ValueLogGC` (deletes fully-unreferenced segments) and `treedb.ValueLogRewriteOffline` (offline rewrite/compaction).
+- For final disk footprint, use `db.CompactStorage(ctx, treedb.CompactStorageOptions{Mode: treedb.CompactStorageFull})` or `treemap compact <db-dir> -rw`. This is the best-practice path across `index.db`, `value_vlog`, `leaf_vlog`, and empty segment cleanup; platforms without online index vacuum report that phase as skipped while still compacting the value-log domains.
+- Low-level APIs such as `ValueLogGC`, `ValueLogRewriteOffline`, `LeafGenerationPack*`, and `VacuumIndex*` are maintenance building blocks. Do not manually chain them for benchmark storage numbers unless you are working on TreeDB internals.
 - Optional guardrail: `Options.ValueLog.MaxRetainedBytes` emits a warning when retained value-log bytes exceed the threshold.
 - Optional hard cap: `Options.ValueLog.MaxRetainedBytesHard` disables value-log pointers for new large values once retained bytes exceed the threshold.
 - TreeDB is pre-alpha; public APIs and on-disk format may change without backward-compatibility guarantees.
 
-### Durability Matrix (Cached Mode)
+### Durability Overview (Cached Mode)
 
-| Mode | Journal | Sync boundary | Power-loss durability | Notes |
-| --- | --- | --- | --- | --- |
-| `DurabilityDurable` (default) | on | fsync | yes | safest default |
-| `DurabilityWALOnRelaxed` | on | flush-only | no | crash-consistent only |
-| `DurabilityWALOffRelaxed` | off | flush-only | no | fastest, least safe; use `Checkpoint()` for durable boundaries |
+The canonical durability-mode matrix is
+`TreeDB/docs/spec/write-path-and-durability.md#1-durability-modes`.
+
+In short: durable mode gives fsync durability at sync/checkpoint boundaries;
+WAL-on relaxed mode is process-crash-oriented and is not a power-loss fsync
+guarantee; WAL-off relaxed mode has no per-write journal replay and relies on
+flush/checkpoint/close boundaries. Collection writes currently remain governed
+by `TreeDB/docs/spec/collections-write-domain.md`; the target durable-at-ack
+collection overlay is gated by
+`TreeDB/docs/spec/collection-wal-durability-plan.md`; it is target behavior
+after the collection WAL gate, not current behavior.
 
 ## Tuning (Cached Mode)
 
@@ -159,7 +167,8 @@ existing placement rules.
 - Optional piggyback compaction toggle: `DisablePiggybackCompaction`
 - Value-log retention guardrails: `ValueLog.MaxRetainedBytes`, `ValueLog.MaxRetainedBytesHard`
 - Value-log compression mode: `ValueLog.Compression` (`off|block|dict|auto`) and `ValueLog.BlockCodec` (`snappy|lz4`)
-- Index rebuild (in-place): `treedb.CompactIndex()` or `treedb.VacuumIndexOffline(opts)` (currently an alias for CompactIndex)
+- Full storage compaction: `db.CompactStorage(ctx, treedb.CompactStorageOptions{Mode: treedb.CompactStorageFull})` or `treemap compact <db-dir> -rw`
+- Index-only rebuild: `treedb.CompactIndex()` or `treedb.VacuumIndexOffline(opts)` when you explicitly want only `index.db` maintenance
 
 `ValueLog.Compression` defaults to `auto` when unset.
 

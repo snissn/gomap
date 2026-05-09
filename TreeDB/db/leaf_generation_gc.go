@@ -28,11 +28,15 @@ type LeafGenerationGCStats struct {
 }
 
 func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions) (LeafGenerationGCStats, error) {
+	return db.leafGenerationGC(ctx, opts, true)
+}
+
+func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions, lockMaintenance bool) (LeafGenerationGCStats, error) {
 	var stats LeafGenerationGCStats
 	if db == nil {
 		return stats, fmt.Errorf("missing db")
 	}
-	if db.readOnly {
+	if db.readOnly && !opts.DryRun {
 		return stats, ErrReadOnly
 	}
 	if !db.indexOuterLeavesInValueLog {
@@ -42,8 +46,10 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		ctx = context.Background()
 	}
 
-	db.maintenanceMu.Lock()
-	defer db.maintenanceMu.Unlock()
+	if lockMaintenance {
+		db.maintenanceMu.Lock()
+		defer db.maintenanceMu.Unlock()
+	}
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
 

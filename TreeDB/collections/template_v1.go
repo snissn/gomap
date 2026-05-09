@@ -155,20 +155,6 @@ func collectionOptionsWithTemplateV1Resolver(opts collectionOptions, snap *backe
 	return opts
 }
 
-func collectionOptionsWithBufferedTemplateV1Resolver(opts collectionOptions, domain *collectionWriteDomain, collectionName string) collectionOptions {
-	if normalizedDocumentFormat(opts.documentFormat) != DocumentFormatTemplateV1 || domain == nil || collectionName == "" {
-		return opts
-	}
-	rootName := collectionTemplateRootName(collectionName)
-	domain.mu.RLock()
-	runs := append([]memtable.Table(nil), pendingIndexedRootRunsLocked(domain, rootName)...)
-	domain.mu.RUnlock()
-	if len(runs) == 0 {
-		return opts
-	}
-	return collectionOptionsWithBufferedTemplateV1RunsResolver(opts, runs)
-}
-
 func collectionOptionsWithBufferedTemplateV1RunsResolver(opts collectionOptions, runs []memtable.Table) collectionOptions {
 	if normalizedDocumentFormat(opts.documentFormat) != DocumentFormatTemplateV1 || len(runs) == 0 {
 		return opts
@@ -238,6 +224,9 @@ func parseTemplateV1InsertDocument(raw []byte) (templateV1ParsedInsertDocument, 
 	case hasTemplateV1Magic(raw, templateV1StoredMagic):
 		return templateV1ParsedInsertDocument{hashDocumentOffset: templateV1StoredDocumentOffset}, nil
 	case hasTemplateV1Magic(raw, templateV1InsertDocumentMagic):
+		if len(raw) < len(templateV1InsertDocumentMagic)+32 {
+			return templateV1ParsedInsertDocument{}, errors.New("collections: malformed template-v1 insert document")
+		}
 		return templateV1ParsedInsertDocument{hashDocumentOffset: 0}, nil
 	default:
 		return parseTemplateV1InsertEnvelope(raw)
@@ -284,6 +273,9 @@ func parseTemplateV1InsertEnvelope(raw []byte) (templateV1ParsedInsertDocument, 
 	}
 	hashDocument := raw[pos:]
 	if !hasTemplateV1Magic(hashDocument, templateV1InsertDocumentMagic) {
+		return templateV1ParsedInsertDocument{}, errors.New("collections: malformed template-v1 insert document")
+	}
+	if len(hashDocument) < len(templateV1InsertDocumentMagic)+32 {
 		return templateV1ParsedInsertDocument{}, errors.New("collections: malformed template-v1 insert document")
 	}
 	return templateV1ParsedInsertDocument{hashDocumentOffset: pos, records: records}, nil

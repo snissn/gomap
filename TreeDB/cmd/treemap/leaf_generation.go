@@ -107,6 +107,7 @@ func runLeafGenerationPack(dir string, args []string) {
 	if !*rw {
 		fatalf("leafgen-pack requires -rw")
 	}
+	warnAdvancedMaintenance("leafgen-pack", "leaf_vlog-only pack")
 	generationIDs, err := parseUint64CSV(*generationIDsCSV)
 	if err != nil {
 		fatalf("invalid -generation-ids: %v", err)
@@ -192,6 +193,7 @@ func runLeafGenerationGC(dir string, args []string) {
 	if !*rw {
 		fatalf("leafgen-gc requires -rw")
 	}
+	warnAdvancedMaintenance("leafgen-gc", "leaf_vlog-only GC")
 
 	db := openTreeDB(dir, true)
 	defer closeTreeDB(db)

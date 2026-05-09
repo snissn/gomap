@@ -139,6 +139,53 @@ func TestLoadValueLogGenerationRewriteState_PreservesPenaltiesWithoutQueue(t *te
 	}
 }
 
+func TestConsumeVlogGenerationRewriteQueueChunkPreservesMismatchedLedger(t *testing.T) {
+	dir := t.TempDir()
+	db := &DB{dir: filepath.Join(dir, "db")}
+
+	// Older states can have a queue prefix that is not represented in the
+	// ledger. Consuming that prefix must remove by file ID, not by count, or the
+	// remaining queued debt loses the ledger quality data used for prioritizing
+	// retries.
+	if err := saveValueLogGenerationRewriteState(
+		db.valueLogGenerationStatePath(),
+		[]uint32{33, 11, 22},
+		[]backenddb.ValueLogRewritePlanSegment{
+			{FileID: 11, BytesTotal: 128, BytesLive: 64, BytesStale: 64, StaleRatio: 0.5},
+			{FileID: 22, BytesTotal: 128, BytesLive: 64, BytesStale: 64, StaleRatio: 0.5},
+		},
+		nil,
+		0,
+		nil,
+		nil,
+		false,
+		0,
+	); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	if err := db.consumeVlogGenerationRewriteQueueChunk([]uint32{33}); err != nil {
+		t.Fatalf("consume queue chunk: %v", err)
+	}
+
+	ids, ledger, chunkLedger, chunkBytes, _, _, stagePending, stageObservedAt, err := loadValueLogGenerationRewriteState(db.valueLogGenerationStatePath())
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if len(ids) != 2 || ids[0] != 11 || ids[1] != 22 {
+		t.Fatalf("ids=%v want [11 22]", ids)
+	}
+	if len(ledger) != 2 || ledger[0].FileID != 11 || ledger[1].FileID != 22 {
+		t.Fatalf("ledger=%v want file IDs [11 22]", ledger)
+	}
+	if len(chunkLedger) != 0 || chunkBytes != 0 {
+		t.Fatalf("chunkLedger=%v chunkBytes=%d want empty/zero", chunkLedger, chunkBytes)
+	}
+	if stagePending || stageObservedAt != 0 {
+		t.Fatalf("stagePending=%t stageObservedAt=%d want zero values", stagePending, stageObservedAt)
+	}
+}
+
 func TestLoadValueLogGenerationRewriteState_LoadsChunkLedger(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "vlog_generation_state.json")

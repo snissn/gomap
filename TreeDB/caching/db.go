@@ -3919,7 +3919,7 @@ func (db *DB) flushValueLogLaneWithSize(l *lane) (int64, error) {
 		w := l.vlog
 		if w == nil {
 			l.vlogMu.Unlock()
-			return -1, errWALUnavailable
+			return -1, nil
 		}
 		// Always take vlogMu first so flush acts as a write barrier for in-flight appends.
 		if !l.vlogDirty.Load() {
@@ -3985,7 +3985,7 @@ func (db *DB) syncValueLogLane(l *lane) error {
 		w := l.vlog
 		if w == nil {
 			l.vlogMu.Unlock()
-			return errWALUnavailable
+			return nil
 		}
 		start := time.Now()
 		err := w.Sync()
@@ -4309,6 +4309,13 @@ func (db *DB) valueLogGCProtectedPathSets() (retained []string, inUse []string, 
 func (db *DB) valueLogProtectedPaths() []string {
 	_, _, merged := db.valueLogGCProtectedPathSets()
 	return merged
+}
+
+// ValueLogProtectedPaths returns value-log segment paths that online backend
+// maintenance must protect while this cached DB is live. The set includes
+// retained pointer-lifecycle paths plus current/queued in-use writer paths.
+func (db *DB) ValueLogProtectedPaths() []string {
+	return db.valueLogProtectedPaths()
 }
 
 func (db *DB) valueLogGCOptions(dryRun bool) backenddb.ValueLogGCOptions {
@@ -5727,6 +5734,13 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 	return reconcileErr
 }
 
+// ReconcileAfterBackendMaintenance refreshes cached-mode value-log readers and
+// advances split value-log writers past segments created directly by backend
+// maintenance.
+func (db *DB) ReconcileAfterBackendMaintenance() error {
+	return db.reconcileSplitValueLogWritersAfterBackendMaintenance()
+}
+
 func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenance() error {
 	if db == nil || db.closing.Load() {
 		return nil
@@ -6340,15 +6354,22 @@ type DB struct {
 	appendOnlyDirectArenaLeaseMu     sync.Mutex
 	appendOnlyDirectArenaLeasesByMem map[memtable.Table]*appendOnlyDirectArenaLease
 	pendingRetiredMems               []memtable.Table
-	memtableViewTelemetry            memtableViewLifecycleTelemetry
-	retainedArenaTrimLastUnixNano    atomic.Int64
-	queueRanges                      []keyRange
-	queueWALPaths                    [][]string
-	queueValueLogPaths               [][]string
-	backendRange                     keyRange
-	backendRangeKnown                bool
-	backendRangeInit                 sync.Once
-	backendRangeErr                  error
+	// closingEmptyMemsMu guards closingEmptyByView. The map holds per-view
+	// lists of mutable memtables that should be released once the last reader
+	// drops the view, registered by releaseClosingEmptyMemtables at DB close.
+	// Keeping this in DB-owned state (rather than inside memtableView) ensures
+	// memtableView itself is never mutated after being published.
+	closingEmptyMemsMu            sync.Mutex
+	closingEmptyByView            map[*memtableView][]memtable.Table
+	memtableViewTelemetry         memtableViewLifecycleTelemetry
+	retainedArenaTrimLastUnixNano atomic.Int64
+	queueRanges                   []keyRange
+	queueWALPaths                 [][]string
+	queueValueLogPaths            [][]string
+	backendRange                  keyRange
+	backendRangeKnown             bool
+	backendRangeInit              sync.Once
+	backendRangeErr               error
 
 	// Durability
 	lanes         []lane
@@ -7450,8 +7471,63 @@ func (db *DB) releaseMemtableViewRef(view *memtableView, leaseRelease bool) {
 	db.noteMemtableViewDeferredExit(view)
 	view.deferredRetiredMemtables.Store(0)
 	view.deferredRetiredBytes.Store(0)
+	db.closingEmptyMemsMu.Lock()
+	closingMems := db.closingEmptyByView[view]
+	delete(db.closingEmptyByView, view)
+	db.closingEmptyMemsMu.Unlock()
+	for _, mt := range closingMems {
+		db.releaseClosingEmptyMemtable(mt)
+	}
 	db.recycleMemtables(view.retiredMems)
 	view.retiredMems = nil
+}
+
+func (db *DB) releaseClosingEmptyMemtables() {
+	if db == nil {
+		return
+	}
+	view := db.memtables.Swap(nil)
+	if view == nil {
+		return
+	}
+	if !view.refs.CompareAndSwap(1, 0) {
+		if view.refs.Load() > 0 {
+			db.closingEmptyMemsMu.Lock()
+			if db.closingEmptyByView == nil {
+				db.closingEmptyByView = make(map[*memtableView][]memtable.Table)
+			}
+			db.closingEmptyByView[view] = append(db.closingEmptyByView[view], view.mutables...)
+			db.closingEmptyMemsMu.Unlock()
+			db.releasePublishedMemtableView(view)
+		} else {
+			db.releaseClosingMemtableViewContents(view)
+		}
+		return
+	}
+	db.releaseClosingMemtableViewContents(view)
+}
+
+func (db *DB) releaseClosingMemtableViewContents(view *memtableView) {
+	if db == nil || view == nil {
+		return
+	}
+	for _, mt := range view.mutables {
+		db.releaseClosingEmptyMemtable(mt)
+	}
+	view.mutables = nil
+	db.recycleMemtables(view.retiredMems)
+	view.retiredMems = nil
+}
+
+func (db *DB) releaseClosingEmptyMemtable(mt memtable.Table) {
+	if db == nil || mt == nil || mt.Len() != 0 {
+		return
+	}
+	db.releaseBatchArenaLeasesForMemtable(mt)
+	db.releaseAppendOnlyDirectArenaLeaseForMemtable(mt)
+	if releaser, ok := mt.(interface{ Release() }); ok {
+		releaser.Release()
+	}
 }
 
 func cachedBatchWriteNeedsBatchArenaRetention(mt memtable.Table) bool {
@@ -9102,36 +9178,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		outerLeafPageLogSetter = setter
 	}
 
-	// Open initial value-log segments (if enabled) and journal/commit log
-	// segments (if enabled). Journal and value log are decoupled.
-	if db.valueLogEnabled() {
-		for i := range db.lanes {
-			if err := db.rotateValueLogLocked(&db.lanes[i]); err != nil {
-				if db.valueLogReader != nil {
-					_ = db.valueLogReader.Close()
-					db.valueLogReader = nil
-				}
-				for j := 0; j <= i && j < len(db.lanes); j++ {
-					db.cleanupLaneWALWriters(&db.lanes[j])
-				}
-				db.cleanupLaneWALWriters(&db.leafLog)
-				return nil, err
-			}
-		}
-		if opts.IndexOuterLeavesInValueLog {
-			if err := db.rotateValueLogLocked(&db.leafLog); err != nil {
-				if db.valueLogReader != nil {
-					_ = db.valueLogReader.Close()
-					db.valueLogReader = nil
-				}
-				for i := range db.lanes {
-					db.cleanupLaneWALWriters(&db.lanes[i])
-				}
-				db.cleanupLaneWALWriters(&db.leafLog)
-				return nil, err
-			}
-		}
-	}
+	// Open journal/commit log segments eagerly, but leave value-log segment
+	// writers lazy. Opening every value-log lane here creates many zero-byte
+	// value_vlog files during read/write maintenance opens even when those lanes
+	// never receive values. Value-log appends allocate the current lane segment
+	// on first write instead.
 	if !db.disableJournal {
 		for i := range db.lanes {
 			if err := db.rotateWALLocked(&db.lanes[i]); err != nil {
@@ -9212,6 +9263,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 
 	if outerLeafPageLogSetter != nil {
 		outerLeafPageLogSetter.SetLeafPageLog(newCachingLeafPageLog(db, &db.leafLog))
+	}
+	if setter, ok := backend.(interface {
+		SetValueLogAppender(backenddb.ValueLogAppender)
+	}); ok && len(db.lanes) > 0 {
+		setter.SetValueLogAppender(newCachingValueLogAppender(db, &db.lanes[0]))
 	}
 	if opts.DisableWAL {
 		// Stage the adaptive gate on the fastest cached profile first. WAL-on
@@ -11991,6 +12047,20 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	)
 
 	l.vlogMu.Lock()
+	if err := db.ensureValueLogWriterMuHeld(l); err != nil {
+		l.vlogMu.Unlock()
+		for i := range requests {
+			ack := requests[i].ack
+			if ack == nil {
+				continue
+			}
+			ack.ptr = page.ValuePtr{}
+			ack.retainPath = ""
+			ack.err = err
+			ack.wg.Done()
+		}
+		return
+	}
 	w := l.vlog
 	if w == nil {
 		l.vlogMu.Unlock()
@@ -13012,6 +13082,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 
 	l.vlogMu.Lock()
+	if err := db.ensureValueLogWriterMuHeld(l); err != nil {
+		l.vlogMu.Unlock()
+		return nil, err
+	}
 	w := l.vlog
 	if w == nil {
 		l.vlogMu.Unlock()
@@ -13596,6 +13670,10 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 
 	if allowQueue && db.shouldQueueValueLogOne(l, dictID, len(value), durability, finalWriteMode, wallStart) {
 		if dictID == 0 && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
+			if err := db.ensureValueLogWriterMuHeld(l); err != nil {
+				l.vlogMu.Unlock()
+				return page.ValuePtr{}, "", err
+			}
 			w := l.vlog
 			if w == nil {
 				l.vlogMu.Unlock()
@@ -13768,6 +13846,10 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	}
 
 	l.vlogMu.Lock()
+	if err := db.ensureValueLogWriterMuHeld(l); err != nil {
+		l.vlogMu.Unlock()
+		return page.ValuePtr{}, "", err
+	}
 	w := l.vlog
 	if w == nil {
 		l.vlogMu.Unlock()
@@ -15637,6 +15719,9 @@ func (db *DB) clearVlogGenerationRewriteStageConfirmation() {
 
 func (db *DB) scheduleVlogGenerationRewriteStageConfirmation(observedAt int64) {
 	if db == nil || observedAt <= 0 || db.closing.Load() {
+		return
+	}
+	if envBool(envDisableVlogGenerationLoop) {
 		return
 	}
 	if db.vlogGenerationRewriteStageWakeObservedNS.Load() == observedAt {
@@ -19271,6 +19356,7 @@ func (db *DB) Close() error {
 	db.writeMu.Unlock()
 	db.flushMu.Unlock()
 	db.wg.Wait()
+	db.releaseClosingEmptyMemtables()
 	// Drain any in-flight dict-profile publish callbacks before teardown.
 	// New callbacks will observe closing=true and return without touching stores.
 	db.valueLogDictApplyMu.Lock()
@@ -20952,6 +21038,19 @@ func (db *DB) rotateValueLogLocked(l *lane) error {
 
 func (db *DB) rotateValueLogMuHeld(l *lane) error {
 	return db.rotateValueLogMuHeldToSeq(l, l.vlogSeq+1)
+}
+
+func (db *DB) ensureValueLogWriterMuHeld(l *lane) error {
+	if !db.splitValueLogEnabled() {
+		return nil
+	}
+	if l == nil {
+		return errWALUnavailable
+	}
+	if l.vlog != nil {
+		return nil
+	}
+	return db.rotateValueLogMuHeld(l)
 }
 
 func (db *DB) rotateValueLogMuHeldToSeq(l *lane, nextSeq int) error {

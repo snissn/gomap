@@ -17,9 +17,9 @@ Default load shape:
 - collection data/index-state outer leaves in the value log
 - secondary-index outer leaves in the value log
 - native indexed write memtables enabled with the collection default auto-flush
-  cadence: 96000 staged documents for synchronous flushing, or 256000 when
-  async flush is enabled; batches at 16000 documents or larger use direct
-  publish by default because they already amortize publish overhead well
+  cadence: 256000 staged documents with default async threshold publish, or
+  96000 when async flush is disabled; batches at 16000 documents or larger use
+  direct publish by default because they already amortize publish overhead well
 - `fast` TreeDB profile
 - final checkpoint and reopen verification
 - automatic offline index vacuum when `-vlog-rewrite` or `-leafgen-pack-gc`

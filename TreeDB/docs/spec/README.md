@@ -17,6 +17,11 @@ TreeDB is pre-alpha.
 
 When behavior or format changes, update this spec and the test matrix in `TreeDB/docs/spec/verification.md` in the same change.
 
+When native-wire protocol IDs, command schemas, feature gates, or deterministic
+entry formats change, update the native-wire spec, implementation guidelines,
+roadmap, schema registry or drift tests, golden fixtures, and verification matrix
+in the same change.
+
 ## Scope
 
 This spec covers the public `treedb` engine and its backend/index implementation:
@@ -70,8 +75,25 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - open-time recovery pipeline, replay ordering, truncated tail behavior, failure modes.
 - `TreeDB/docs/spec/value-log-lifecycle.md`
   - retention, GC, rewrite, and operational lifecycle of value-log segments.
+- `TreeDB/docs/spec/backup-restore.md`
+  - restorable file set, live backup barrier, restore validation, and
+    quarantine/purge requirements for collection WAL side refs.
+- `TreeDB/docs/spec/native-wire-protocol.md`
+  - native binary protocol v1 for code that advertises native-wire support;
+    distributed/Raft behavior remains target behavior until cluster mode lands.
 - `TreeDB/docs/spec/verification.md`
   - invariants mapped to tests and benchmark harnesses.
+
+## Target Gates (Normative Target, Not Current Behavior)
+
+- `TreeDB/docs/spec/collection-wal-durability-plan.md`
+  - normative target contract and implementation gate for collection
+    WAL/root-group durability.
+  - Until its acceptance milestones pass, current collection writes remain
+    governed by `collections-write-domain.md` and are flush-boundary durable,
+    not durable-at-ack.
+  - Downstream specs may cite this document as a blocker or target contract,
+    but must label referenced behavior as target behavior until the gate lands.
 
 ## Design Proposals (Non-Normative)
 
@@ -94,6 +116,76 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 - `TreeDB/docs/spec/collections-native-fastpath-baseline-2026-04-25.md`
   - refreshed pre-`R0` baseline note for issue `#768`, including exact
     main/oracle SHAs, artifact dirs, commands, and benchmark baselines.
+- `TreeDB/docs/spec/native-wire-implementation-guidelines.md`
+  - implementation playbook for keeping codecs, schema IDs, validation,
+    conformance tests, benchmarks, and future Raft entry handling aligned with
+    the native wire protocol.
+- `TreeDB/docs/spec/native-query-raft-roadmap.md`
+  - draft query feature roadmap and distributed/Raft sequencing policy for the
+    native protocol.
+- `TreeDB/docs/spec/native-wire-r1-closeout.md`
+  - R1 single-node native server performance closeout, including direct vs
+    native microbenchmarks, workload profile commands, artifacts, findings, and
+    deferred optimization targets.
+- `TreeDB/docs/spec/native-wire-r2-closeout.md`
+  - R2 deterministic command-entry closeout, including replicated-command
+    fixtures, canonical validation, digest stability, benchmarks, and deferred
+    Raft apply work.
+
+## Canonical Ownership
+
+| Concept | Canonical owner | Supporting docs |
+|---|---|---|
+| Durability mode matrix | `write-path-and-durability.md` | `contracts.md`, public README and supporting docs summarize only. |
+| Current collection flush-boundary durability | `collections-write-domain.md` | `contracts.md`, `verification.md`. |
+| Target collection durable-at-ack WAL contract | `collection-wal-durability-plan.md` | `write-path-and-durability.md`, `recovery.md`, `verification.md`. |
+| Current recovery algorithm | `recovery.md` | `storage-format.md`, `verification.md`. |
+| Durable bytes and file names | `storage-format.md` | `recovery.md`, `architecture.md`, `backup-restore.md`. |
+| Value-log and split leaf-log lifecycle | `value-log-lifecycle.md` | `storage-format.md`, `collection-wal-durability-plan.md`. |
+| Generic collection WAL side refs and side files | `collection-wal-durability-plan.md` | `value-log-lifecycle.md`, future column-store docs. |
+| Public API semantics | `contracts.md` | `write-path-and-durability.md`, `collections-write-domain.md`. |
+| Native-wire ack policies | `native-wire-protocol.md` | `collection-wal-durability-plan.md`, `native-query-raft-roadmap.md`. |
+| Raft/local apply layering | `native-query-raft-roadmap.md` | `native-wire-protocol.md`, `collection-wal-durability-plan.md`. |
+| Verification mapping | `verification.md` | all normative specs. |
+
+## Terminology Ownership
+
+TreeDB-wide storage terms (`value log`, `leaf log`, `commit log`,
+`ValuePtr`) are owned by `storage-format.md` and `value-log-lifecycle.md`.
+Collection WAL lifecycle terms (`durable-at-ack`, `flush-boundary durable`,
+`recoverable`, `published`, `checkpointed`, `cleanable`, `side ref`,
+`side file`, `root group`, `applied watermark`, `CollectionSeq`, `WALLSN`)
+are owned by `collection-wal-durability-plan.md#3-definitions` until the target
+contract lands; supporting docs must link there instead of redefining them.
+
+## Open Questions Index
+
+Open questions remain in their owner documents, but this index records where
+blocking questions live:
+
+- Collection WAL durability/recovery questions:
+  `collection-wal-durability-plan.md`.
+- Native-wire protocol questions: `native-wire-protocol.md`.
+- Raft sequencing and local recoverability questions:
+  `native-query-raft-roadmap.md`.
+- Column-store persistence questions:
+  `GOMAP_TREEDB_COLUMN_STORE_RFC.md`.
+
+A blocking implementation question must be listed in this index and in its
+owner document. Non-blocking future-extension questions must be labeled as
+such.
+
+## Required Spec Files
+
+Docs lint treats this list as a manifest:
+
+- `TreeDB/docs/spec/GOMAP_TREEDB_COLUMN_STORE_RFC.md`
+- `TreeDB/docs/spec/COMPRESSION_TECHNOLOGY_SPEC.md`
+- `TreeDB/docs/spec/collection-wal-durability-plan.md`
+- `TreeDB/docs/spec/storage-format.md`
+- `TreeDB/docs/spec/write-path-and-durability.md`
+- `TreeDB/docs/spec/recovery.md`
+- `TreeDB/docs/spec/verification.md`
 
 ## Relationship to Existing Docs
 

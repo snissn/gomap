@@ -2,6 +2,16 @@
 
 This document specifies externally-observable behavior expected by callers.
 
+Status:
+
+- Current shipped contract: sections that describe existing key/value, cached,
+  read-only, and collection write-domain behavior are normative for current
+  code.
+- PR1-min collection WAL target contract: section 7.1 defines the guarded
+  no-index row insert slice. The full target semantics must be satisfied before
+  broad WAL-on collection durable-at-ack can be advertised or enabled by
+  default.
+
 ## 1. Key Model
 
 - Keys are byte slices.
@@ -93,6 +103,10 @@ When the cached layer is enabled:
 - Snapshots are point-in-time readers and MUST be closed to release retention pressure.
 - In cached mode, snapshots MUST include buffered memtable writes and MUST be snapshot-isolated (writes after snapshot acquisition are not visible through the snapshot).
 - `Snapshot.Get` / `Snapshot.GetAppend` return `ErrKeyNotFound` for missing/tombstoned keys (unlike `DB.Get`, which returns `(nil, nil)` on miss).
+- Under the planned collection WAL contract, collection scans and snapshots that
+  can read pending collection-local state use a `CollectionReadView`. The view
+  pins backend snapshot state, pending mutable/queued/publishing collection
+  units, derived index views, and reachable side refs until the read closes.
 
 ## 6. Concurrency and Locking
 
@@ -120,6 +134,98 @@ Durability mode controls guarantees for sync calls:
 
 Detailed semantics are in `TreeDB/docs/spec/write-path-and-durability.md`.
 
+Collection APIs currently have a separate write-domain durability boundary:
+acknowledged writes that remain in mutable, queued, or publishing
+collection-local state are visible in-process but not durable-at-ack. That
+current behavior is owned by `collections-write-domain.md`. The target WAL-on
+durable-at-ack collection contract is owned by
+`collection-wal-durability-plan.md` until it lands, then summarized here.
+
+### 7.1 Collection Write Acknowledgement Contract
+
+Terms:
+
+- `visible`: observable by collection reads, scans, secondary-index lookups,
+  unique-index checks, update planners, delete planners, schema/index barriers,
+  or pending-state merges in the serving process.
+- `recoverable`: after process crash and read-write reopen, TreeDB can make the
+  write visible without relying on pre-crash memory.
+- `published`: root descriptors for the collection state have been committed to
+  backend roots.
+- `checkpointed`: the backend durability boundary includes the published roots,
+  collection WAL applied watermarks, and required side-ref reachability
+  metadata.
+- `fsynced`: the selected durable-mode fsync boundary has completed. Non-sync
+  collection APIs do not imply fsync.
+
+Collection data mutators:
+
+The full WAL-on target contract below is not the same as the first guarded
+implementation slice. PR1-min may expose durable-at-ack only for no-index row
+`Insert` and `InsertBatch` under an explicit `NoIndexRowInsertOnly` capability.
+With that capability, indexed schemas, update/delete, schema/index changes,
+pointerizing storage policies, root-delta side payloads, column roots, and
+native-wire/Raft exposure must fail before any visible mutation. With the
+feature off, existing flush-boundary behavior remains the public contract.
+
+| Method | Full `DurabilityDurable` and `DurabilityWALOnRelaxed` target contract | `DurabilityWALOffRelaxed` contract |
+|---|---|---|
+| `Collection.Insert` | Successful return means the whole mutation has a committed collection WAL transaction and is recoverable after process crash. It may still be unpublished pending state and is not necessarily checkpointed or fsynced. | Successful return means process-local visibility according to the path that executed it. Crash recovery is promised only after `Flush`, `FlushAll`, `Checkpoint`, or `Close` covers the mutation. |
+| `Collection.InsertBatch` | Successful return means the whole batch is recoverable as one logical mutation boundary. | Successful return is process-local visibility until an explicit persistence boundary covers the batch. |
+| `Collection.Update` / `UpdateBatch` | Successful return means the resulting primary, secondary, template/index-state, and tombstone deltas are recoverable as one mutation boundary. Update callbacks must be safe for retry before commit. | Successful return is process-local visibility until a public persistence boundary. |
+| `Collection.Delete` / `DeleteBatch` | Successful return means the whole delete mutation, including secondary-index deletes and tombstones, is recoverable. | Successful return is process-local visibility until a public persistence boundary. |
+
+Batch mutators are all-or-nothing at the durable/recovery boundary. An ordinary
+pre-commit error means no item from that batch became visible or recoverable. A
+post-commit failure must be reported as commit-ambiguous for the whole batch.
+
+Collection metadata mutators:
+
+| Method | Contract |
+|---|---|
+| `CollectionManager.CreateCollection` | Successful return means the collection catalog entry is published and recoverable under the selected non-sync durability mode. It is not fsynced unless followed by a sync-capable barrier. Retrying creation with identical metadata is idempotent; retrying with incompatible metadata fails without changing the existing collection. |
+| `Collection.CreateIndex` and index-drop methods | These methods establish an index/schema barrier. They drain collection writes admitted before the barrier before taking the backfill/planning snapshot, or are encoded as ordered collection WAL transactions. Successful `CreateIndex` means the index definition, root descriptors, and backfilled index contents for the barrier snapshot are published atomically and recoverable. A unique-index conflict is an ordinary pre-commit error and must not expose partial schema/index state. |
+
+Barrier methods:
+
+| Method | Contract |
+|---|---|
+| `Collection.Flush` | Publishes all pending collection write-domain state for that collection admitted before the flush cut, waits for in-flight async indexed publishing for that collection, and advances the collection WAL applied watermark for the published transactions. It does not imply fsync unless composed with a sync/checkpoint boundary that requires fsync. |
+| `CollectionManager.FlushAll` | Applies the `Flush` contract to every collection write domain known to the manager at the flush cut. Future backend-owned collection WAL services must use a global domain registry when the contract needs to cover all collection handles, not only one manager instance. |
+| `DB.Checkpoint` | Full target: successful return is a database-wide durability/cleanup boundary for all collection writes and collection metadata admitted before the checkpoint cut. With the current `Checkpoint() error` signature, `nil` means no pre-cut committed collection WAL debt remains unpublished or required for recovery. PR1-min does not implement the full cleanup boundary; it must retain collection WAL needed for recovery and must not claim clean collection-WAL state merely because backend checkpoint completed. If publication/watermark/checkpoint coverage cannot be completed, `Checkpoint` must return an error unless a future result type explicitly exposes nonzero collection WAL debt. |
+| `DB.Close` | Establishes a close admission cut. Every collection write racing with the cut either fails before visible install with `ErrClosed` or is included in the close drain. If `Close` returns `nil`, every included successful collection mutation is visible after read-write reopen. Physical cleanup may remain a safe leak, but WAL/side refs needed for recovery must not be removed. |
+
+Public durability errors:
+
+- `ErrDurabilityUnavailable`: a requested durability boundary cannot be
+  satisfied before any logical commit.
+- `CommitAmbiguousError` / `ErrCommitAmbiguous`: the mutation may already be
+  committed or recoverable. Callers must not blindly retry non-idempotent
+  operations.
+- `ErrRecoveryRequired`: read-only open found committed collection WAL that
+  requires mutating recovery before collection APIs can be served.
+
+Retry guidance:
+
+- TreeDB does not provide exactly-once mutation semantics without a durable
+  idempotency key.
+- After timeout, disconnect, or commit-ambiguous error, duplicate document ID or
+  unique-index conflict can mean the prior attempt committed.
+- Updates are safe to retry only when the update function is idempotent, guarded
+  by a version/compare predicate, or protected by a durable idempotency key.
+
+Mongo gateway:
+
+- Until explicit Mongo `writeConcern` support exists, gateway write success is
+  the underlying TreeDB collection API success for the configured durability
+  mode. It must not imply Mongo-compatible writeConcern or fsync semantics.
+- Ordered update/delete commands must document whether earlier items can remain
+  applied after a later item error. If partial ordered semantics are intentional,
+  responses must report the applied prefix; otherwise validation must complete
+  before applying any item.
+- Gateway collection auto-create and `createIndexes` inherit the collection
+  metadata mutator contracts above.
+
 ## 8. Read-only Open Contract
 
 When opened read-only:
@@ -127,6 +233,11 @@ When opened read-only:
 - write operations must fail,
 - no mutating recovery steps run,
 - no background maintenance mutates on-disk state.
+- if committed unapplied collection WAL exists, read-only open must fail with
+  `ErrRecoveryRequired` unless an explicit stale read-only mode is selected.
+- stale read-only mode, if added, must be explicitly named stale, must report
+  collection WAL debt, and must be rejected by backup and offline maintenance
+  entry points.
 
 ## 9. Collections Native Fast Path
 
@@ -162,17 +273,25 @@ unique checks, and update/delete planning must merge write-domain state with
 explicit newest-to-oldest precedence: current mutable runs, queued immutable
 flush units, in-flight async publishing units, then persisted roots.
 
-`BufferedIndexedAsyncFlush` is a throughput feature, not a durable-at-ack
-mutation log. The current contract is flush-boundary durable: callers may treat
-`Collection.Flush`, `CollectionManager.FlushAll`, backend `DB.Close`, or a
-threshold-triggered synchronous publish as durability boundaries when those
-operations return successfully. Background async publish may complete earlier,
-but acknowledged writes that remain only in mutable, queued, or publishing
-write-domain state must not be advertised as crash-durable.
+`BufferedIndexedAsyncFlush` is enabled by default for indexed schemas. It is a
+throughput feature, not a durable-at-ack mutation log. The current contract is
+durability-boundary durable: callers may treat `Collection.Flush`,
+`CollectionManager.FlushAll`, or backend `DB.Close` as collection write-domain
+durability boundaries when those operations return successfully. Foreground or
+background threshold publish may also move a subset of staged writes into
+persisted roots, but completing such a publish must not be described as a
+per-update durability guarantee for earlier acknowledgements. Acknowledged writes
+that remain only in mutable, queued, or publishing write-domain state must not be
+advertised as crash-durable.
 
 Operations that need persisted roots as planning input, including schema/index
 changes, must drain pending indexed write-domain state and wait for in-flight
 async publish units before taking their planning snapshot.
+
+Under the planned collection WAL contract, WAL-on collection visibility implies
+recoverability. No read, uniqueness check, update/delete planner, or pending
+merge may observe a mutation before its collection WAL transaction is
+committed/recoverable.
 
 Detailed indexed collection write-domain semantics are in
 `TreeDB/docs/spec/collections-write-domain.md`.

@@ -71,3 +71,32 @@ Focus on pointer durability and GC correctness:
   - update parsers in `cmd/benchprof/main.go`
   - update tests in `cmd/benchprof/main_test.go` and `cmd/unified_bench/profile_artifact_dir_test.go`
   - update `cmd/unified_bench/README.md` and `cmd/benchprof/README.md`
+
+### Focused collection insert compression profile
+
+Use this when investigating TreeDB collection `InsertBatch` throughput and
+value-log compression allocation costs:
+
+```sh
+RUN_DIR=/tmp/treedb_insert_compression_profile_$(date +%Y%m%d_%H%M%S) \
+  scripts/treedb_insert_compression_profile.sh
+```
+
+The harness runs the short-lived `BenchmarkCollectionShapeInsertBatch` insert
+shape for template-v1 collections on the native fast path. It captures the
+default value-log compression path under `auto/`, optionally captures a
+compression-off ceiling under `off/`, and writes `benchstat_auto_vs_off.txt`
+when `benchstat` is installed.
+
+Primary artifacts:
+
+- `auto/collections_report.md`
+- `auto/collections_cpu.pprof`, `auto/collections_cpu_top.txt`
+- `auto/collections_mem.pprof`, `auto/collections_mem_top.txt`
+- `benchstat_auto_vs_off.txt`
+
+Useful overrides:
+
+- `COUNT=1 BENCHTIME=1000x RUN_COMPRESSION_OFF=false` for a smoke run.
+- `INDEXES_REGEX='0|1|2|3'` to include all current shape insert index counts.
+- `RUN_TIMED_CPU=true` to also run the timed CPU-only insert profile.

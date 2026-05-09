@@ -1,0 +1,87 @@
+package nativewire
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+
+	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+)
+
+// ErrServerClosed reports that the server is closed or refusing connections.
+var ErrServerClosed = errors.New("nativewire: server is closed")
+
+// WireError is an error response decoded from a remote native-wire peer.
+type WireError struct {
+	Code      iwire.ErrorCode
+	Retryable bool
+	Message   string
+}
+
+func (e *WireError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	if e.Message == "" {
+		return fmt.Sprintf("nativewire: remote error code %d", e.Code)
+	}
+	return fmt.Sprintf("nativewire: remote error code %d: %s", e.Code, e.Message)
+}
+
+// IsCatalogVersionMismatch reports whether err is a remote catalog-version
+// guard failure.
+func IsCatalogVersionMismatch(err error) bool {
+	return isRemoteError(err, iwire.ErrCatalogVersionMismatch)
+}
+
+func errorCodeFor(err error) iwire.ErrorCode {
+	if err == nil {
+		return 0
+	}
+	if code, ok := iwire.ErrorCodeOf(err); ok {
+		return code
+	}
+	switch {
+	case errors.Is(err, context.Canceled):
+		return iwire.ErrCanceled
+	case errors.Is(err, context.DeadlineExceeded):
+		return iwire.ErrTimeout
+	case errors.Is(err, collections.ErrCollectionNotFound):
+		return iwire.ErrCollectionNotFound
+	case errors.Is(err, collections.ErrIndexNotFound):
+		return iwire.ErrIndexNotFound
+	case errors.Is(err, collections.ErrDuplicateDocumentID):
+		return iwire.ErrDuplicateDocumentID
+	case errors.Is(err, collections.ErrDocumentExists):
+		return iwire.ErrDocumentExists
+	case errors.Is(err, collections.ErrUniqueIndexConflict):
+		return iwire.ErrUniqueIndexConflict
+	case errors.Is(err, collections.ErrDurabilityUnavailable):
+		return iwire.ErrDurabilityUnavailable
+	case errors.Is(err, collections.ErrCommitAmbiguous):
+		return iwire.ErrCommitAmbiguous
+	case errors.Is(err, collections.ErrRecoveryRequired):
+		return iwire.ErrDurabilityUnavailable
+	case errors.Is(err, backenddb.ErrClosed), errors.Is(err, ErrServerClosed), errors.Is(err, net.ErrClosed), errors.Is(err, io.ErrClosedPipe):
+		return iwire.ErrCanceled
+	}
+	return iwire.ErrInternal
+}
+
+func isMalformedProtocolError(err error) bool {
+	code, ok := iwire.ErrorCodeOf(err)
+	return ok && code == iwire.ErrMalformedFrame
+}
+
+func retryableError(code iwire.ErrorCode) bool {
+	switch code {
+	case iwire.ErrTimeout, iwire.ErrCanceled, iwire.ErrResourceExhausted, iwire.ErrDurabilityUnavailable, iwire.ErrConsistencyUnavailable:
+		return true
+	default:
+		return false
+	}
+}
