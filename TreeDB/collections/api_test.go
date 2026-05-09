@@ -2346,6 +2346,117 @@ func TestCollectionInsertBatchStatsExposeNoIndexFastPath(t *testing.T) {
 	}
 }
 
+func TestCollectionInsertBatchBuffersNoIndexBSONBeforeFlush(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir, Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	closeDB := collectionMaintenanceCloseOnce(d.Close)
+	defer func() { _ = closeDB() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	writer, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	reader, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	docs := [][]byte{
+		mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "ada"}}),
+		mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "grace"}}),
+	}
+	wantU1 := bytes.Clone(docs[0])
+	wantU2 := bytes.Clone(docs[1])
+	if _, err := writer.InsertBatchValidatedBSON([][]byte{[]byte("u1"), []byte("u2")}, docs); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	docs[0][len(docs[0])-1] ^= 0xff
+	if writer.writeDomain == nil {
+		t.Fatal("missing write domain")
+	}
+	if writer.writeDomain.count != 2 || writer.writeDomain.table == nil || writer.writeDomain.table.Len() != 2 {
+		t.Fatalf("write domain count=%d table=%v want two pending rows", writer.writeDomain.count, writer.writeDomain.table)
+	}
+	got, err := reader.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("reader get buffered BSON doc: %v", err)
+	}
+	if !bytes.Equal(got, wantU1) {
+		t.Fatalf("buffered BSON doc=%v want %v", got, wantU1)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if got := writer.writeDomain.count; got != 0 {
+		t.Fatalf("pending docs after flush=%d want 0", got)
+	}
+	if err := closeDB(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir, Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	got, err = reopenedCol.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get after reopen: %v", err)
+	}
+	if !bytes.Equal(got, wantU2) {
+		t.Fatalf("reopened BSON doc=%v want %v", got, wantU2)
+	}
+}
+
+func TestCollectionInsertBatchValidatedBSONNoIndexDurablePublishesBeforeReturn(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	before := d.State()
+	if _, err := col.InsertBatchValidatedBSON(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "ada"}}),
+			mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "grace"}}),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if got := col.writeDomain.count; got != 0 {
+		t.Fatalf("pending docs=%d want durable publish before ack", got)
+	}
+	after := d.State()
+	if after.CommitSeq < before.CommitSeq+1 {
+		t.Fatalf("commit seq advanced by %d want at least 1", after.CommitSeq-before.CommitSeq)
+	}
+}
+
 func TestCollectionInsertBatchBridge_ReturnedIDsAndDocumentsAreOwned(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
