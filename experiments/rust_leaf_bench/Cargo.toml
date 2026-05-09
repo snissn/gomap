@@ -1,0 +1,12 @@
+[package]
+name = "rust_leaf_bench"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+profile-attribution = []
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"
