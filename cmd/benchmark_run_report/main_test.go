@@ -106,10 +106,14 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 	writeFile(t, filepath.Join(root, "mongo_gateway_reader_writer_scaling_1m", "indexes_4", "summary.tsv"), summary4)
 	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "matrix.tsv"), "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
 		"treedb\ttreedb_bson_driver\t100\t0\traw/treedb.json\t5000000000\n"+
+		"treedb\ttreedb_bson_direct\t100\t0\traw/treedb_direct.json\t2800\n"+
+		"treedb\ttreedb_json_direct\t100\t0\traw/treedb_json_direct.json\t2900\n"+
 		"treedb\ttreedb_bson_raw_wire_tcp\t100\t0\traw/treedb_raw_wire_tcp.json\t3000\n"+
 		"treedb\ttreedb_bson_raw_wire\t100\t0\traw/treedb_raw_wire.json\t2500\n"+
 		"mongo\tmongo_driver\t100\t0\traw/mongo.json\t5000\n")
 	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "raw", "treedb.json"), `{"target":"treedb","documents":100,"secondary_indexes":0,"phases":[{"name":"load_insert_many","ops_per_sec":1000}]}`)
+	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "raw", "treedb_direct.json"), `{"target":"treedb","documents":100,"secondary_indexes":0,"client_mode":"direct","phases":[{"name":"load_insert_many","ops_per_sec":1700}]}`)
+	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "raw", "treedb_json_direct.json"), `{"target":"treedb","documents":100,"secondary_indexes":0,"client_mode":"direct","treedb_document_format":"json","phases":[{"name":"load_insert_many","ops_per_sec":1750}]}`)
 	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "raw", "treedb_raw_wire_tcp.json"), `{"target":"treedb","documents":100,"secondary_indexes":0,"phases":[{"name":"load_insert_many","ops_per_sec":1500}]}`)
 	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "raw", "treedb_raw_wire.json"), `{"target":"treedb","documents":100,"secondary_indexes":0,"phases":[{"name":"load_insert_many","ops_per_sec":1800}]}`)
 	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "raw", "mongo.json"), `{"target":"mongo","documents":100,"secondary_indexes":0,"phases":[{"name":"load_insert_many","ops_per_sec":500}]}`)
@@ -150,7 +154,7 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"Raw scaling TSV rows, 4 indexes",
 		"TreeDB BSON",
 		"TreeDB JSON",
-		"SQLite native VACUUM: Native Columns",
+		"SQLite native VACUUM",
 		"Collection summary",
 		"storage lifecycle",
 		"Compacted Size: SQLite Bytes/Doc Divided By TreeDB Bytes/Doc",
@@ -166,10 +170,13 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"load_insert_many.cpu.pprof",
 		"Client modes marked with <strong>*</strong>",
 		"Raw load-mode rows",
+		"BSON Direct</text><text",
+		"BSON JSON</text><text",
 		"BSON Raw</text><text",
 		"Wire TCP *</text>",
 		"Wire *</text>",
-		"* Raw-wire modes:",
+		"* TreeDB-only modes:",
+		"calls the collection API directly",
 		"bypassing the MongoDB Go driver",
 		"same raw command/gateway path in process",
 		"one centered TreeDB bar",
@@ -181,6 +188,8 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 	}
 	for _, unwanted := range []string{
 		"TreeDB Raw Wire Ceiling Modes",
+		"BSON direct MongoDB",
+		"BSON json_direct MongoDB",
 		"BSON raw_wire_tcp MongoDB",
 		"BSON raw_wire MongoDB",
 	} {
@@ -242,16 +251,61 @@ func TestCollectionChartsIncludeAdditionalFormats(t *testing.T) {
 			{ConfigName: "treedb_msgpack_collection_0_indexes", Engine: "treedb_fast", Format: "msgpack", Shape: "collection", IndexCount: 0, Phase: "full_leafgen_pack_gc", BytesPerDoc: 12.3},
 		},
 	})
-	for _, want := range []string{"TreeDB Msgpack", "TreeDB Msgpack Leafgen"} {
+	for _, want := range []string{"TreeDB Msgpack", "TreeDB Msgpack Compacted"} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("collection chart missing additional format label %q\n%s", want, html)
 		}
 	}
 }
 
+func TestCollectionDocsRowsPreferBenchmarkThroughput(t *testing.T) {
+	rows := []collectionRow{
+		{ConfigName: "treedb_template_v1_collection_0_indexes", Engine: "treedb_fast", Format: "template-v1", Shape: "collection", IndexCount: 0, Phase: "post_insert", DocsPerSec: 1000, MeasurementKind: "fixture_wall_timed"},
+		{ConfigName: "treedb_template_v1_collection_0_indexes", Engine: "production_fast", Format: "template-v1", Shape: "collection", IndexCount: 0, Phase: "post_insert", DocsPerSec: 2000, MeasurementKind: "go_benchmark"},
+		{ConfigName: "treedb_template_v1_collection_0_indexes", Engine: "treedb_fast", Format: "template-v1", Shape: "collection", IndexCount: 0, Phase: "post_insert", MeasurementKind: "offline_script"},
+	}
+
+	chartRows := collectionDocsRows(rows)
+	if got, want := len(chartRows.Series), 1; got != want {
+		t.Fatalf("series count = %d, want %d: %#v", got, want, chartRows.Series)
+	}
+	series := chartRows.Series[0]
+	if got, want := series.Name, "TreeDB template-v1"; got != want {
+		t.Fatalf("series name = %q, want %q", got, want)
+	}
+	if got, want := series.Values[0], 2000.0; got != want {
+		t.Fatalf("docs/sec = %v, want %v", got, want)
+	}
+}
+
 func TestLoadModeLabelNormalizesSingleMongoConfig(t *testing.T) {
 	if got, want := loadModeLabel(loadModeRow{Target: "mongo", Config: "mongo"}), "BSON driver"; got != want {
 		t.Fatalf("label = %q, want %q", got, want)
+	}
+}
+
+func TestTreeDBOnlyLoadModeIncludesNonBSONDirectFormats(t *testing.T) {
+	for _, mode := range []string{
+		"BSON direct",
+		"BSON json_direct",
+		"BSON template_v1_direct",
+		"BSON raw_wire_tcp",
+		"BSON json_raw_wire_tcp",
+		"BSON raw_wire",
+		"BSON json_raw_wire",
+	} {
+		if !isTreeDBOnlyLoadMode(mode) {
+			t.Fatalf("%q should be TreeDB-only", mode)
+		}
+	}
+	for _, mode := range []string{
+		"BSON driver",
+		"BSON driver_command_raw",
+		"BSON json_driver",
+	} {
+		if isTreeDBOnlyLoadMode(mode) {
+			t.Fatalf("%q should not be TreeDB-only", mode)
+		}
 	}
 }
 
@@ -271,6 +325,33 @@ func TestRawEngineChartOmitsMissingVariants(t *testing.T) {
 	}
 	if strings.Contains(html, ": 0 ops/sec") {
 		t.Fatalf("chart renders a missing raw-engine cell as zero throughput\n%s", html)
+	}
+}
+
+func TestMongoRowDiskFallsBackToDBStatsTotalSize(t *testing.T) {
+	rows := []mongoSummaryRow{
+		{TreeDBPhysicalBytes: 2048, MongoPhysicalBytes: 0, MongoDBStatsTotalSize: 4096},
+		{TreeDBPhysicalBytes: 3072, MongoPhysicalBytes: 8192, MongoDBStatsTotalSize: 16384},
+	}
+
+	if got, want := mongoRowDisk(rows, "mongo"), []float64{4096, 8192}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("mongoRowDisk fallback = %v, want %v", got, want)
+	}
+}
+
+func TestCollectionDiskRowsUseBestCompactedTreeDBPhase(t *testing.T) {
+	rows := []collectionRow{
+		{Shape: "collection", Engine: "treedb_fast", ConfigName: "treedb_bson_collection_0_indexes", Format: "bson", IndexCount: 0, Phase: "full_leafgen_pack_gc", BytesPerDoc: 30},
+		{Shape: "collection", Engine: "treedb_fast", ConfigName: "treedb_bson_collection_0_indexes", Format: "bson", IndexCount: 0, Phase: "offline_compact", BytesPerDoc: 20},
+		{Shape: "collection", Engine: "treedb_fast", ConfigName: "treedb_bson_collection_0_indexes", Format: "bson", IndexCount: 0, Phase: "post_insert", BytesPerDoc: 80},
+	}
+
+	diskRows := collectionDiskRows(rows)
+	if len(diskRows.Series) != 1 || len(diskRows.Series[0].Values) != 1 {
+		t.Fatalf("unexpected disk rows: %+v", diskRows)
+	}
+	if got, want := diskRows.Series[0].Values[0], 20.0; got != want {
+		t.Fatalf("compacted bytes/doc = %v, want %v", got, want)
 	}
 }
 

@@ -1694,7 +1694,7 @@ func writeCollectionSummary(b *strings.Builder, rows []collectionRow, comps []co
 		return a.DocsPerSec > b.DocsPerSec
 	})
 	small, hasSmall := bestCollectionRow(rows, func(row collectionRow) bool {
-		return collectionEngineFamily(row) == "TreeDB" && row.BytesPerDoc > 0 && (row.Phase == "full_leafgen_pack_gc" || row.Phase == "offline_rewrite")
+		return collectionEngineFamily(row) == "TreeDB" && row.BytesPerDoc > 0 && collectionChartPhaseMatches("TreeDB", "bytes", row.Phase)
 	}, func(a, b collectionRow) bool {
 		return a.BytesPerDoc < b.BytesPerDoc
 	})
@@ -1883,6 +1883,7 @@ func collectionChart(rows []collectionRow, kind string) collectionChartRows {
 		indexPos[idx] = pos
 	}
 	values := make(map[string][]float64)
+	priorities := make(map[string][]int)
 	labels := make(map[string]string)
 	orders := make(map[string]string)
 	for _, row := range rows {
@@ -1893,24 +1894,33 @@ func collectionChart(rows []collectionRow, kind string) collectionChartRows {
 		if family == "" {
 			continue
 		}
-		phase, ok := collectionChartPhase(family, kind)
-		if !ok || row.Phase != phase {
+		if !collectionChartPhaseMatches(family, kind, row.Phase) {
 			continue
 		}
 		pos, ok := indexPos[row.IndexCount]
 		if !ok {
 			continue
 		}
-		key := family + "\x00" + canonicalFormat(row.Format) + "\x00" + row.ConfigName
+		key := family + "\x00" + canonicalFormat(row.Format)
 		if _, ok := values[key]; !ok {
 			values[key] = make([]float64, len(indexes))
-			labels[key] = collectionSeriesLabel(family, row.Format, kind) + ": " + displayConfig(row.ConfigName)
-			orders[key] = collectionSeriesOrder(family, row.Format) + "_" + row.ConfigName
+			priorities[key] = make([]int, len(indexes))
+			labels[key] = collectionSeriesLabel(family, row.Format, kind)
+			orders[key] = collectionSeriesOrder(family, row.Format)
+		}
+		value, priority, ok := collectionChartMetric(row, kind)
+		if !ok {
+			continue
 		}
 		if kind == "bytes" || kind == "post_bytes" {
-			values[key][pos] = row.BytesPerDoc
-		} else {
-			values[key][pos] = row.DocsPerSec
+			if values[key][pos] == 0 || value < values[key][pos] {
+				values[key][pos] = value
+			}
+			continue
+		}
+		if priority >= priorities[key][pos] {
+			values[key][pos] = value
+			priorities[key][pos] = priority
 		}
 	}
 	keys := make([]string, 0, len(values))
@@ -1928,6 +1938,30 @@ func collectionChart(rows []collectionRow, kind string) collectionChartRows {
 		series = append(series, chartSeries{Name: labels[key], Values: values[key], Color: collectionSeriesColor(key)})
 	}
 	return collectionChartRows{Categories: categories, Series: nonZeroSeries(series)}
+}
+
+func collectionChartMetric(row collectionRow, kind string) (float64, int, bool) {
+	if kind == "bytes" || kind == "post_bytes" {
+		if row.BytesPerDoc <= 0 {
+			return 0, 0, false
+		}
+		return row.BytesPerDoc, 1, true
+	}
+	if row.DocsPerSec <= 0 {
+		return 0, 0, false
+	}
+	return row.DocsPerSec, collectionDocsPriority(row), true
+}
+
+func collectionDocsPriority(row collectionRow) int {
+	switch row.MeasurementKind {
+	case "go_benchmark":
+		return 3
+	case "fixture_wall_timed":
+		return 2
+	default:
+		return 1
+	}
 }
 
 func collectionEngineFamily(row collectionRow) string {
@@ -1962,11 +1996,31 @@ func collectionChartPhase(family, kind string) (string, bool) {
 	return "", false
 }
 
+func collectionChartPhaseMatches(family, kind, phase string) bool {
+	if kind == "bytes" {
+		if family == "TreeDB" {
+			return phase == "full_leafgen_pack_gc" ||
+				phase == "offline_compact" ||
+				phase == "offline_rewrite" ||
+				phase == "online_one_pass_maintenance"
+		}
+		if family == "SQLite" {
+			return phase == "sqlite_vacuum"
+		}
+		return false
+	}
+	want, ok := collectionChartPhase(family, kind)
+	if ok {
+		return phase == want
+	}
+	return false
+}
+
 func collectionSeriesLabel(family, format, kind string) string {
 	label := family + " " + displayFormat(format)
 	if kind == "bytes" {
 		if family == "TreeDB" {
-			label += " leafgen"
+			label += " compacted"
 		} else if family == "SQLite" {
 			label += " VACUUM"
 		}
@@ -2152,10 +2206,11 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 			{Name: "TreeDB", Values: mongoRowOps(loadRows, "tree"), Color: "#2867c7"},
 			{Name: "MongoDB", Values: mongoRowOps(loadRows, "mongo"), Color: "#1f8a5b"},
 		}, "docs/sec"))
-		b.WriteString(lineChart("Physical storage vs secondary indexes", indexLabels, "secondary indexes", "physical bytes", []chartSeries{
+		b.WriteString(lineChart("Storage footprint vs secondary indexes", indexLabels, "secondary indexes", "storage bytes", []chartSeries{
 			{Name: "TreeDB", Values: mongoRowDisk(loadRows, "tree"), Color: "#2867c7"},
 			{Name: "MongoDB", Values: mongoRowDisk(loadRows, "mongo"), Color: "#1f8a5b"},
 		}, "bytes"))
+		b.WriteString("<p class=\"subtle\">MongoDB storage uses measured physical bytes when the runner owns an isolated data directory; external MongoDB runs fall back to <code>dbStats.totalSize</code> instead of charting zero.</p>")
 	}
 	b.WriteString("</div></div>")
 	for _, idx := range indexes {
@@ -2208,7 +2263,7 @@ func renderMongoLoadModes(b *strings.Builder, rows []loadModeRow) {
 	b.WriteString("<section id=\"mongo-load\"><h2>Load-Only Client-Mode Matrix</h2>")
 	b.WriteString("<p class=\"subtle\">Insert-only matrix. This section uses raw JSON directly so every MongoDB and TreeDB client mode has its own throughput and physical-disk row.</p>")
 	b.WriteString("<p class=\"subtle\">Use this section for pure ingest client-path comparisons. It is intentionally separate from the full-sweep load chart, which inherits the broader read/range/update sweep setup.</p>")
-	b.WriteString("<p class=\"subtle\">Driver, driver-command, driver-command-raw, and driver-unack modes are comparable Mongo-compatible client paths and render as paired TreeDB/MongoDB bars. Client modes marked with <strong>*</strong> are TreeDB-only raw-wire ceiling probes explained below.</p>")
+	b.WriteString("<p class=\"subtle\">Driver, driver-command, driver-command-raw, and driver-unack modes are comparable Mongo-compatible client paths and render as paired TreeDB/MongoDB bars. Client modes marked with <strong>*</strong> are TreeDB-only ceiling probes explained below.</p>")
 	b.WriteString("<div class=\"chart-grid\">")
 	for _, idx := range sortedLoadModeIndexes(rows) {
 		cats, tree, mongo := loadModeChartRows(rows, idx)
@@ -2222,7 +2277,7 @@ func renderMongoLoadModes(b *strings.Builder, rows []loadModeRow) {
 		}
 	}
 	b.WriteString("</div>")
-	b.WriteString("<p class=\"subtle\"><strong>* Raw-wire modes:</strong> <code>raw-wire-tcp</code> still sends Mongo OP_MSG bytes over loopback TCP to the TreeDB gateway while bypassing the MongoDB Go driver. <code>raw-wire</code> removes the socket too and drives the same raw command/gateway path in process. These modes are TreeDB-only ingest ceiling probes, so each renders as one centered TreeDB bar instead of a paired MongoDB bar.</p>")
+	b.WriteString("<p class=\"subtle\"><strong>* TreeDB-only modes:</strong> <code>direct</code> calls the collection API directly in the selected TreeDB document format. <code>raw-wire-tcp</code> still sends Mongo OP_MSG bytes over loopback TCP to the TreeDB gateway while bypassing the MongoDB Go driver. <code>raw-wire</code> removes the socket too and drives the same raw command/gateway path in process. These modes are TreeDB-only ceiling probes, so each renders as one centered TreeDB bar instead of a paired MongoDB bar.</p>")
 	var body [][]string
 	for _, row := range rows {
 		body = append(body, []string{strconv.Itoa(row.Indexes), row.Target, row.Config, fmtOps(row.OpsPerSec), fmtBytes(float64(row.PhysicalBytes)), row.RawJSON})
@@ -2595,7 +2650,11 @@ func mongoRowDisk(rows []mongoSummaryRow, side string) []float64 {
 	out := make([]float64, 0, len(rows))
 	for _, row := range rows {
 		if side == "mongo" {
-			out = append(out, row.MongoPhysicalBytes)
+			if row.MongoPhysicalBytes > 0 {
+				out = append(out, row.MongoPhysicalBytes)
+			} else {
+				out = append(out, row.MongoDBStatsTotalSize)
+			}
 		} else {
 			out = append(out, row.TreeDBPhysicalBytes)
 		}
@@ -2889,12 +2948,12 @@ func loadModeValueRows(rows []loadModeRow, idx int, value func(loadModeRow) floa
 	return labels, tree, mongo
 }
 
-func isRawWireLoadMode(mode string) bool {
-	return mode == "BSON raw_wire_tcp" || mode == "BSON raw_wire"
+func isTreeDBOnlyLoadMode(mode string) bool {
+	return loadModeKind(mode) != ""
 }
 
 func loadModeDisplayLabel(mode string) string {
-	if isRawWireLoadMode(mode) {
+	if isTreeDBOnlyLoadMode(mode) {
 		return mode + " *"
 	}
 	return mode
@@ -2916,13 +2975,37 @@ func loadModeOrder(mode string) string {
 		"BSON driver_command":     1,
 		"BSON driver_command_raw": 2,
 		"BSON driver_unack":       3,
-		"BSON raw_wire_tcp":       4,
-		"BSON raw_wire":           5,
+		"BSON direct":             4,
+		"BSON raw_wire_tcp":       5,
+		"BSON raw_wire":           6,
 	}
 	if idx, ok := order[mode]; ok {
 		return fmt.Sprintf("%02d_%s", idx, mode)
 	}
+	switch loadModeKind(mode) {
+	case "direct":
+		return "04_" + mode
+	case "raw_wire_tcp":
+		return "05_" + mode
+	case "raw_wire":
+		return "06_" + mode
+	}
 	return "99_" + mode
+}
+
+func loadModeKind(mode string) string {
+	normalized := strings.ToLower(strings.TrimSpace(mode))
+	normalized = strings.TrimPrefix(normalized, "bson ")
+	switch {
+	case normalized == "direct" || strings.HasSuffix(normalized, "_direct"):
+		return "direct"
+	case normalized == "raw_wire_tcp" || strings.HasSuffix(normalized, "_raw_wire_tcp"):
+		return "raw_wire_tcp"
+	case normalized == "raw_wire" || strings.HasSuffix(normalized, "_raw_wire"):
+		return "raw_wire"
+	default:
+		return ""
+	}
 }
 
 func indexCountLabel(indexes int) string {
@@ -3183,14 +3266,14 @@ func loadModeBarChart(title string, categories []string, tree, mongo []float64, 
 	b.WriteString(fmt.Sprintf("<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#748399\" stroke-width=\"2\"/>", left, top, left, axisY))
 	for i, cat := range categories {
 		groupX := left + float64(i)*groupW
-		rawMode := isRawWireLoadMode(cat)
-		if rawMode {
+		treeDBOnlyMode := isTreeDBOnlyLoadMode(cat)
+		if treeDBOnlyMode {
 			if i < len(tree) && tree[i] > 0 {
 				v := tree[i]
 				barH := (v / maxV) * plotH
 				x := groupX + (groupW-soloBarW)/2
 				yy := axisY - barH
-				b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"#2867c7\"><title>%s TreeDB-only raw-wire ceiling: %s</title></rect>", x, yy, soloBarW, barH, esc(cat), esc(formatChartTooltipValue(v, unit))))
+				b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"#2867c7\"><title>%s TreeDB-only ceiling: %s</title></rect>", x, yy, soloBarW, barH, esc(cat), esc(formatChartTooltipValue(v, unit))))
 				if soloBarW >= 10 {
 					b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"#344256\">%s</text>", x+soloBarW/2, math.Max(top+10, yy-5), esc(formatChartValue(v, unit))))
 				}

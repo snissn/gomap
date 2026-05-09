@@ -30,6 +30,10 @@ const (
 	defaultDocs              = 1_000_000
 	defaultBatchSize         = 8_000
 	defaultCollectionName    = "bench_shape_insert_2"
+	documentShapeDefault     = "default"
+	documentShapeWide        = "wide"
+	documentShapeHetero      = "heterogeneous"
+	defaultFixtureFieldCount = 4
 	indexVacuumModeAuto      = "auto"
 	indexVacuumModeNone      = "none"
 	indexVacuumModeOnline    = "online"
@@ -45,12 +49,16 @@ type config struct {
 	Docs                                    int
 	BatchSize                               int
 	Collection                              string
+	DocumentShape                           string
+	FieldCount                              int
+	ShapeCount                              int
 	DocumentFormat                          collections.DocumentFormat
 	IndexCount                              int
 	BufferedIndexedWrites                   bool
 	BufferedIndexedWriteMaxDocs             int
 	BufferedIndexedWriteMaxBytes            int64
 	BufferedIndexedWriteMaxRuns             int
+	DisableBufferedIndexedAsyncFlush        bool
 	BufferedIndexedAsyncFlush               bool
 	BufferedIndexedAsyncFlushMaxQueuedUnits int
 	Profile                                 treedb.Profile
@@ -233,6 +241,9 @@ type loadSummary struct {
 	CreatedTempDir                          bool                   `json:"created_temp_dir,omitempty"`
 	Collection                              string                 `json:"collection"`
 	DocumentFormat                          string                 `json:"document_format"`
+	DocumentShape                           string                 `json:"document_shape,omitempty"`
+	FieldCount                              int                    `json:"field_count,omitempty"`
+	ShapeCount                              int                    `json:"shape_count,omitempty"`
 	Profile                                 string                 `json:"profile"`
 	Docs                                    int                    `json:"docs"`
 	BatchSize                               int                    `json:"batch_size"`
@@ -242,6 +253,7 @@ type loadSummary struct {
 	BufferedIndexedWriteMaxDocs             int                    `json:"buffered_indexed_write_max_docs,omitempty"`
 	BufferedIndexedWriteMaxBytes            int64                  `json:"buffered_indexed_write_max_bytes,omitempty"`
 	BufferedIndexedWriteMaxRuns             int                    `json:"buffered_indexed_write_max_root_runs,omitempty"`
+	DisableBufferedIndexedAsyncFlush        bool                   `json:"disable_buffered_indexed_async_flush,omitempty"`
 	BufferedIndexedAsyncFlush               bool                   `json:"buffered_indexed_async_flush,omitempty"`
 	BufferedIndexedAsyncFlushMaxQueuedUnits int                    `json:"buffered_indexed_async_flush_max_queued_units,omitempty"`
 	DataOuterLeavesInValueLog               bool                   `json:"data_outer_leaves_in_value_log"`
@@ -308,6 +320,9 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 		Docs:                       defaultDocs,
 		BatchSize:                  defaultBatchSize,
 		Collection:                 defaultCollectionName,
+		DocumentShape:              documentShapeDefault,
+		FieldCount:                 defaultFixtureFieldCount,
+		ShapeCount:                 1,
 		DocumentFormat:             collections.DocumentFormatTemplateV1,
 		IndexCount:                 2,
 		BufferedIndexedWrites:      true,
@@ -336,13 +351,17 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	fs.IntVar(&cfg.Docs, "docs", cfg.Docs, "number of documents to insert")
 	fs.IntVar(&cfg.BatchSize, "batch-size", cfg.BatchSize, "documents per InsertBatch call")
 	fs.StringVar(&cfg.Collection, "collection", cfg.Collection, "collection name")
+	fs.StringVar(&cfg.DocumentShape, "document-shape", cfg.DocumentShape, "document shape: default, wide, or heterogeneous")
+	fs.IntVar(&cfg.FieldCount, "field-count", cfg.FieldCount, "number of fields for wide/heterogeneous document shapes")
+	fs.IntVar(&cfg.ShapeCount, "shape-count", cfg.ShapeCount, "number of distinct field-name sets for heterogeneous document shape")
 	fs.StringVar(&documentFormat, "format", string(cfg.DocumentFormat), "document format: json, template-v1, or bson")
 	fs.IntVar(&cfg.IndexCount, "indexes", cfg.IndexCount, "secondary index count for the benchmark shape: 0, 1, 2, or 3")
 	fs.BoolVar(&cfg.BufferedIndexedWrites, "buffered-indexed-writes", cfg.BufferedIndexedWrites, "use native collection-local memtables for indexed InsertBatch writes; set false for immediate-publish baseline comparisons")
 	fs.IntVar(&cfg.BufferedIndexedWriteMaxDocs, "buffered-indexed-write-max-docs", cfg.BufferedIndexedWriteMaxDocs, "flush indexed write buffers after this many staged documents; 0 uses the collection default")
 	fs.Int64Var(&cfg.BufferedIndexedWriteMaxBytes, "buffered-indexed-write-max-bytes", 0, "flush indexed write buffers after this many staged root-run bytes; 0 means Flush/Close only")
 	fs.IntVar(&cfg.BufferedIndexedWriteMaxRuns, "buffered-indexed-write-max-root-runs", cfg.BufferedIndexedWriteMaxRuns, "flush indexed write buffers after this many staged root-local mutation runs; explicit 0 disables this trigger; omitted with docs/bytes override keeps the compatibility default")
-	fs.BoolVar(&cfg.BufferedIndexedAsyncFlush, "buffered-indexed-async-flush", false, "publish threshold-triggered indexed write flushes in the background; Flush/Close still drain before returning")
+	fs.BoolVar(&cfg.BufferedIndexedAsyncFlush, "buffered-indexed-async-flush", false, "force-enable background indexed threshold publish; indexed schemas already enable this by default")
+	fs.BoolVar(&cfg.DisableBufferedIndexedAsyncFlush, "disable-buffered-indexed-async-flush", false, "disable background indexed threshold publish for foreground-publish baseline comparisons")
 	fs.IntVar(&cfg.BufferedIndexedAsyncFlushMaxQueuedUnits, "buffered-indexed-async-flush-max-queued-units", 0, "max immutable indexed flush units queued for background publish; 0 uses the collection default when async flush is enabled")
 	fs.StringVar(&profile, "profile", string(cfg.Profile), "TreeDB profile: fast, wal_on_fast, durable, or bench")
 	fs.BoolVar(&cfg.DataOuterLeavesInValueLog, "data-outer-leaves-in-vlog", cfg.DataOuterLeavesInValueLog, "store collection primary/index-state outer leaves through the value log")
@@ -381,11 +400,18 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	fs.Visit(func(f *flag.Flag) {
 		seenFlags[f.Name] = true
 	})
+	if cfg.DisableBufferedIndexedAsyncFlush && cfg.BufferedIndexedAsyncFlush {
+		return config{}, fmt.Errorf("cannot set both -buffered-indexed-async-flush and -disable-buffered-indexed-async-flush")
+	}
+	if cfg.DisableBufferedIndexedAsyncFlush && cfg.BufferedIndexedAsyncFlushMaxQueuedUnits != 0 {
+		return config{}, fmt.Errorf("cannot set -buffered-indexed-async-flush-max-queued-units when -disable-buffered-indexed-async-flush is set")
+	}
+	effectiveAsyncFlush := !cfg.DisableBufferedIndexedAsyncFlush
 	if !seenFlags["buffered-indexed-write-max-root-runs"] &&
 		(seenFlags["buffered-indexed-write-max-docs"] || seenFlags["buffered-indexed-write-max-bytes"]) &&
 		(cfg.BufferedIndexedWriteMaxDocs != 0 || cfg.BufferedIndexedWriteMaxBytes != 0) {
 		cfg.BufferedIndexedWriteMaxRuns = collections.DefaultIndexedWriteMemtableMaxRootRuns
-		if cfg.BufferedIndexedAsyncFlush {
+		if effectiveAsyncFlush {
 			cfg.BufferedIndexedWriteMaxRuns = collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns
 		}
 	}
@@ -422,6 +448,32 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	}
 	if strings.TrimSpace(cfg.Collection) == "" {
 		return cfg, fmt.Errorf("-collection cannot be empty")
+	}
+	cfg.DocumentShape = strings.ToLower(strings.TrimSpace(cfg.DocumentShape))
+	switch cfg.DocumentShape {
+	case "", documentShapeDefault:
+		cfg.DocumentShape = documentShapeDefault
+	case documentShapeWide, documentShapeHetero:
+	default:
+		return cfg, fmt.Errorf("unsupported -document-shape %q; use default, wide, or heterogeneous", cfg.DocumentShape)
+	}
+	if cfg.FieldCount <= 0 {
+		return cfg, fmt.Errorf("-field-count must be > 0")
+	}
+	if cfg.ShapeCount <= 0 {
+		return cfg, fmt.Errorf("-shape-count must be > 0")
+	}
+	if cfg.DocumentShape == documentShapeDefault && cfg.ShapeCount != 1 {
+		return cfg, fmt.Errorf("-shape-count only applies to -document-shape=heterogeneous")
+	}
+	if cfg.DocumentShape == documentShapeWide {
+		cfg.ShapeCount = 1
+	}
+	if cfg.DocumentShape == documentShapeHetero && cfg.ShapeCount > cfg.Docs {
+		cfg.ShapeCount = cfg.Docs
+	}
+	if cfg.DocumentShape != documentShapeDefault && cfg.IndexCount != 0 {
+		return cfg, fmt.Errorf("-document-shape=%s requires -indexes=0", cfg.DocumentShape)
 	}
 	if cfg.ChunkSize < 0 {
 		return cfg, fmt.Errorf("-chunk-size must be >= 0")
@@ -531,6 +583,7 @@ func runFixture(cfg config) (loadSummary, error) {
 	wallStart := time.Now()
 	batches := 0
 	lastProgress := time.Now()
+	var templateEncoder collections.TemplateV1Encoder
 
 	for inserted := 0; inserted < cfg.Docs; {
 		batchSize := cfg.BatchSize
@@ -538,14 +591,19 @@ func runFixture(cfg config) (loadSummary, error) {
 			batchSize = remaining
 		}
 		genStart := time.Now()
-		ids, docs, err := documentBatch(cfg.DocumentFormat, inserted, batchSize)
+		ids, docs, err := documentBatch(cfg, &templateEncoder, inserted, batchSize)
 		if err != nil {
 			return loadSummary{}, err
 		}
 		generationElapsed += time.Since(genStart)
 
 		insertStart := time.Now()
-		if _, err := collection.InsertBatch(ids, docs); err != nil {
+		if cfg.DocumentFormat == collections.DocumentFormatTemplateV1 {
+			_, err = collection.InsertBatchWithTemplateV1Encoder(ids, docs, &templateEncoder)
+		} else {
+			_, err = collection.InsertBatch(ids, docs)
+		}
+		if err != nil {
 			return loadSummary{}, fmt.Errorf("insert batch starting at document %d: %w", inserted, err)
 		}
 		insertElapsed += time.Since(insertStart)
@@ -657,6 +715,9 @@ func runFixture(cfg config) (loadSummary, error) {
 		CreatedTempDir:                          cfg.createdTempDir,
 		Collection:                              cfg.Collection,
 		DocumentFormat:                          string(cfg.DocumentFormat),
+		DocumentShape:                           cfg.DocumentShape,
+		FieldCount:                              cfg.FieldCount,
+		ShapeCount:                              cfg.ShapeCount,
 		Profile:                                 string(cfg.Profile),
 		Docs:                                    cfg.Docs,
 		BatchSize:                               cfg.BatchSize,
@@ -666,6 +727,7 @@ func runFixture(cfg config) (loadSummary, error) {
 		BufferedIndexedWriteMaxDocs:             collectionMeta.Options.BufferedIndexedWriteMaxDocuments,
 		BufferedIndexedWriteMaxBytes:            collectionMeta.Options.BufferedIndexedWriteMaxBytes,
 		BufferedIndexedWriteMaxRuns:             collectionMeta.Options.BufferedIndexedWriteMaxRootRuns,
+		DisableBufferedIndexedAsyncFlush:        collectionMeta.Options.DisableBufferedIndexedAsyncFlush,
 		BufferedIndexedAsyncFlush:               collectionMeta.Options.BufferedIndexedAsyncFlush && collectionMeta.Options.BufferedIndexedWrites,
 		BufferedIndexedAsyncFlushMaxQueuedUnits: collectionMeta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits,
 		DataOuterLeavesInValueLog:               cfg.DataOuterLeavesInValueLog,
@@ -807,6 +869,7 @@ func createFixtureCollection(backend *backenddb.DB, cfg config) (*collections.Co
 			BufferedIndexedWriteMaxDocuments:        bufferedIndexedWriteMaxDocs,
 			BufferedIndexedWriteMaxBytes:            bufferedIndexedWriteMaxBytes,
 			BufferedIndexedWriteMaxRootRuns:         bufferedIndexedWriteMaxRuns,
+			DisableBufferedIndexedAsyncFlush:        cfg.DisableBufferedIndexedAsyncFlush,
 			BufferedIndexedAsyncFlush:               bufferedIndexedAsyncFlush,
 			BufferedIndexedAsyncFlushMaxQueuedUnits: bufferedIndexedAsyncFlushMaxQueuedUnits,
 		},
@@ -851,14 +914,13 @@ func collectionShapeIndexes(indexCount int) []collections.IndexDefinition {
 	}
 }
 
-func documentBatch(format collections.DocumentFormat, start, count int) ([][]byte, [][]byte, error) {
+func documentBatch(cfg config, templateEncoder *collections.TemplateV1Encoder, start, count int) ([][]byte, [][]byte, error) {
 	ids := make([][]byte, count)
 	docs := make([][]byte, count)
-	var templateEncoder collections.TemplateV1Encoder
 	for i := 0; i < count; i++ {
 		docNum := start + i
 		ids[i] = documentID(docNum)
-		doc, err := document(format, &templateEncoder, docNum)
+		doc, err := document(cfg, templateEncoder, docNum)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -867,34 +929,73 @@ func documentBatch(format collections.DocumentFormat, start, count int) ([][]byt
 	return ids, docs, nil
 }
 
-func document(format collections.DocumentFormat, encoder *collections.TemplateV1Encoder, n int) ([]byte, error) {
-	if format == collections.DocumentFormatTemplateV1 {
+func document(cfg config, encoder *collections.TemplateV1Encoder, n int) ([]byte, error) {
+	if cfg.DocumentFormat == collections.DocumentFormatJSON && cfg.DocumentShape == documentShapeDefault {
+		return indexedJSONDocument(n), nil
+	}
+	fields, values := fixtureDocumentFieldsAndValues(cfg, n)
+	if cfg.DocumentFormat == collections.DocumentFormatTemplateV1 {
 		if encoder == nil {
 			encoder = &collections.TemplateV1Encoder{}
 		}
-		return encoder.EncodeDocument(
-			[]string{"name", "email", "city", "pad"},
-			[]any{
-				fmt.Sprintf("user-%09d", n),
-				fmt.Sprintf("user-%09d@example.com", n),
-				fmt.Sprintf("city-%02d", n%collectionFixtureCities),
-				collectionFixturePad,
-			},
-		)
+		return encoder.EncodeDocument(fields, values)
 	}
-	if format == collections.DocumentFormatBSON {
-		return indexedBSONDocument(n)
+	if cfg.DocumentFormat == collections.DocumentFormatBSON {
+		return fixtureBSONDocument(fields, values)
 	}
-	return indexedJSONDocument(n), nil
+	return fixtureJSONDocument(fields, values)
 }
 
-func indexedBSONDocument(n int) ([]byte, error) {
-	return bson.Marshal(bson.D{
-		{Key: "name", Value: fmt.Sprintf("user-%09d", n)},
-		{Key: "email", Value: fmt.Sprintf("user-%09d@example.com", n)},
-		{Key: "city", Value: fmt.Sprintf("city-%02d", n%collectionFixtureCities)},
-		{Key: "pad", Value: collectionFixturePad},
-	})
+func fixtureDocumentFieldsAndValues(cfg config, n int) ([]string, []any) {
+	switch cfg.DocumentShape {
+	case documentShapeWide, documentShapeHetero:
+		return wideFixtureDocumentFieldsAndValues(cfg, n)
+	default:
+		return defaultFixtureDocumentFieldsAndValues(n)
+	}
+}
+
+func defaultFixtureDocumentFieldsAndValues(n int) ([]string, []any) {
+	return []string{"name", "email", "city", "pad"}, []any{
+		fmt.Sprintf("user-%09d", n),
+		fmt.Sprintf("user-%09d@example.com", n),
+		fmt.Sprintf("city-%02d", n%collectionFixtureCities),
+		collectionFixturePad,
+	}
+}
+
+func wideFixtureDocumentFieldsAndValues(cfg config, n int) ([]string, []any) {
+	shapeOrdinal := 0
+	if cfg.DocumentShape == documentShapeHetero && cfg.ShapeCount > 1 {
+		shapeOrdinal = n % cfg.ShapeCount
+	}
+	fields := make([]string, cfg.FieldCount)
+	values := make([]any, cfg.FieldCount)
+	for i := 0; i < cfg.FieldCount; i++ {
+		if cfg.DocumentShape == documentShapeHetero {
+			fields[i] = fmt.Sprintf("field_%06d_%03d", shapeOrdinal, i)
+		} else {
+			fields[i] = fmt.Sprintf("field_%03d", i)
+		}
+		values[i] = fmt.Sprintf("value_%03d_%09d", i, n)
+	}
+	return fields, values
+}
+
+func fixtureBSONDocument(fields []string, values []any) ([]byte, error) {
+	doc := make(bson.D, len(fields))
+	for i := range fields {
+		doc[i] = bson.E{Key: fields[i], Value: values[i]}
+	}
+	return bson.Marshal(doc)
+}
+
+func fixtureJSONDocument(fields []string, values []any) ([]byte, error) {
+	obj := make(map[string]any, len(fields))
+	for i := range fields {
+		obj[fields[i]] = values[i]
+	}
+	return json.Marshal(obj)
 }
 
 func documentID(n int) []byte {
@@ -1393,12 +1494,26 @@ func verifyReopen(cfg config) (int, error) {
 		if len(got) == 0 {
 			return 0, fmt.Errorf("reopen verify get %s returned an empty document", id)
 		}
-		want, err := expectedStoredDocument(cfg.DocumentFormat, n)
-		if err != nil {
-			return 0, fmt.Errorf("reopen verify expected document %s: %w", id, err)
-		}
-		if !bytes.Equal(got, want) {
-			return 0, fmt.Errorf("reopen verify get %s returned unexpected document content", id)
+		if cfg.DocumentFormat == collections.DocumentFormatTemplateV1 && cfg.DocumentShape == documentShapeHetero {
+			gotJSON, err := collection.StoredDocumentJSON(got)
+			if err != nil {
+				return 0, fmt.Errorf("reopen verify materialize %s: %w", id, err)
+			}
+			wantJSON, err := expectedDocumentJSON(cfg, n)
+			if err != nil {
+				return 0, fmt.Errorf("reopen verify expected JSON %s: %w", id, err)
+			}
+			if !bytes.Equal(gotJSON, wantJSON) {
+				return 0, fmt.Errorf("reopen verify get %s returned unexpected materialized document content", id)
+			}
+		} else {
+			want, err := expectedStoredDocument(cfg, n)
+			if err != nil {
+				return 0, fmt.Errorf("reopen verify expected document %s: %w", id, err)
+			}
+			if !bytes.Equal(got, want) {
+				return 0, fmt.Errorf("reopen verify get %s returned unexpected document content", id)
+			}
 		}
 		if cfg.IndexCount >= 1 {
 			email := fmt.Sprintf("user-%09d@example.com", n)
@@ -1438,56 +1553,68 @@ func reopenVerifyReadOnly(cfg config) bool {
 	return cfg.Checkpoint
 }
 
-func expectedStoredDocument(format collections.DocumentFormat, n int) ([]byte, error) {
-	if format == collections.DocumentFormatJSON {
-		return indexedJSONDocument(n), nil
+func expectedStoredDocument(cfg config, n int) ([]byte, error) {
+	if cfg.DocumentFormat == collections.DocumentFormatJSON || cfg.DocumentFormat == collections.DocumentFormatBSON {
+		return document(cfg, nil, n)
 	}
-	if format == collections.DocumentFormatBSON {
-		return indexedBSONDocument(n)
-	}
-	doc, err := document(format, &collections.TemplateV1Encoder{}, n)
+	doc, err := document(cfg, &collections.TemplateV1Encoder{}, n)
 	if err != nil {
 		return nil, err
 	}
 	return templateV1StoredDocument(doc)
 }
 
+func expectedDocumentJSON(cfg config, n int) ([]byte, error) {
+	fields, values := fixtureDocumentFieldsAndValues(cfg, n)
+	return fixtureJSONDocument(fields, values)
+}
+
 func templateV1StoredDocument(raw []byte) ([]byte, error) {
 	const (
 		inputMagic  = "TD1I"
+		insertMagic = "TD1H"
 		storedMagic = "TD1D"
 	)
 	if bytes.HasPrefix(raw, []byte(storedMagic)) {
 		return raw, nil
 	}
-	if !bytes.HasPrefix(raw, []byte(inputMagic)) {
-		return nil, errors.New("template-v1 document is missing input envelope")
-	}
-	pos := len(inputMagic)
-	templateCount, n := binary.Uvarint(raw[pos:])
-	if n <= 0 {
-		return nil, errors.New("template-v1 document has malformed template count")
-	}
-	pos += n
-	for i := uint64(0); i < templateCount; i++ {
-		if len(raw)-pos < 32 {
-			return nil, errors.New("template-v1 document has malformed template id")
-		}
-		pos += 32
-		recordLen, n := binary.Uvarint(raw[pos:])
+	pos := 0
+	if bytes.HasPrefix(raw, []byte(inputMagic)) {
+		pos = len(inputMagic)
+		templateCount, n := binary.Uvarint(raw[pos:])
 		if n <= 0 {
-			return nil, errors.New("template-v1 document has malformed template length")
+			return nil, errors.New("template-v1 document has malformed template count")
 		}
 		pos += n
-		if recordLen > uint64(len(raw)-pos) {
-			return nil, errors.New("template-v1 document has truncated template record")
+		for i := uint64(0); i < templateCount; i++ {
+			if len(raw)-pos < 32 {
+				return nil, errors.New("template-v1 document has malformed template hash")
+			}
+			pos += 32
+			recordLen, n := binary.Uvarint(raw[pos:])
+			if n <= 0 {
+				return nil, errors.New("template-v1 document has malformed template length")
+			}
+			pos += n
+			if recordLen > uint64(len(raw)-pos) {
+				return nil, errors.New("template-v1 document has truncated template record")
+			}
+			pos += int(recordLen)
 		}
-		pos += int(recordLen)
 	}
-	if !bytes.HasPrefix(raw[pos:], []byte(storedMagic)) {
-		return nil, errors.New("template-v1 document is missing stored payload")
+	if !bytes.HasPrefix(raw[pos:], []byte(insertMagic)) {
+		return nil, errors.New("template-v1 document is missing insert payload")
 	}
-	return raw[pos:], nil
+	pos += len(insertMagic)
+	if len(raw)-pos < 32 {
+		return nil, errors.New("template-v1 document has malformed root template hash")
+	}
+	pos += 32
+	out := make([]byte, 0, len(storedMagic)+binary.MaxVarintLen64+len(raw)-pos)
+	out = append(out, storedMagic...)
+	out = binary.AppendUvarint(out, 1)
+	out = append(out, raw[pos:]...)
+	return out, nil
 }
 
 func containsDocumentID(ids [][]byte, want []byte) bool {
@@ -1636,8 +1763,8 @@ func printHumanSummary(w io.Writer, summary loadSummary) {
 	fmt.Fprintf(w, "TreeDB collection load fixture\n")
 	fmt.Fprintf(w, "dir: %s\n", summary.Dir)
 	fmt.Fprintf(w, "collection: %s\n", summary.Collection)
-	fmt.Fprintf(w, "shape: format=%s indexes=%d data_outer_leaves_in_vlog=%t index_outer_leaves_in_vlog=%t profile=%s\n",
-		summary.DocumentFormat, summary.IndexCount, summary.DataOuterLeavesInValueLog, summary.IndexOuterLeavesInValueLog, summary.Profile)
+	fmt.Fprintf(w, "shape: format=%s document_shape=%s field_count=%d shape_count=%d indexes=%d data_outer_leaves_in_vlog=%t index_outer_leaves_in_vlog=%t profile=%s\n",
+		summary.DocumentFormat, summary.DocumentShape, summary.FieldCount, summary.ShapeCount, summary.IndexCount, summary.DataOuterLeavesInValueLog, summary.IndexOuterLeavesInValueLog, summary.Profile)
 	if summary.BufferedIndexedWrites {
 		fmt.Fprintln(w, "indexed write buffering: enabled")
 		if summary.BufferedIndexedWriteMaxDocs > 0 || summary.BufferedIndexedWriteMaxBytes > 0 || summary.BufferedIndexedWriteMaxRuns > 0 {
@@ -1646,6 +1773,8 @@ func printHumanSummary(w io.Writer, summary loadSummary) {
 		}
 		if summary.BufferedIndexedAsyncFlush {
 			fmt.Fprintf(w, "indexed async flush: enabled max_queued_units=%d\n", summary.BufferedIndexedAsyncFlushMaxQueuedUnits)
+		} else if summary.DisableBufferedIndexedAsyncFlush {
+			fmt.Fprintln(w, "indexed async flush: disabled")
 		}
 	}
 	fmt.Fprintf(w, "index policy: keep_recent=%d prefer_append_alloc=%t background_prune=%t\n",

@@ -2051,6 +2051,446 @@ func TestValueLogRewriteOnline_UsesBlockCompressionWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestValueLogRewriteOnline_GroupsSingleRecordJSONFrames(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			Compression: ValueLogCompressionBlock,
+			BlockCodec:  ValueLogBlockSnappy,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	})
+
+	const rows = 64
+	rawBytes := 0
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 1, rows, func(i int) []byte {
+		doc := []byte(fmt.Sprintf(
+			`{"did":"did:plc:%08d","time_us":1732206349%06d,"kind":"commit","commit":{"rev":"3lbhuvzds%04d","operation":"create","collection":"app.bsky.feed.post","rkey":"rkey%06d","record":{"$type":"app.bsky.feed.post","createdAt":"2024-11-21T16:%02d:%02d.095Z","langs":["en"],"text":"repeatable fixture text for value-log rewrite grouping number %06d"}}}`,
+			i%17, i, i%10000, i, i%60, (i*7)%60, i,
+		))
+		rawBytes += len(doc)
+		return doc
+	})
+	if len(ptrs) != rows {
+		t.Fatalf("expected %d pointers, got %d", rows, len(ptrs))
+	}
+
+	b := db.NewBatch().(*Batch)
+	for i, ptr := range ptrs {
+		key := []byte(fmt.Sprintf("k%04d", i))
+		if err := b.SetPointer(key, ptr); err != nil {
+			t.Fatalf("set pointer %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	segmentsBefore, err := listValueLogSegments(dir)
+	if err != nil {
+		t.Fatalf("list segments before rewrite: %v", err)
+	}
+	before := make(map[string]struct{}, len(segmentsBefore))
+	for _, seg := range segmentsBefore {
+		before[seg.path] = struct{}{}
+	}
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		BatchSize:     rows,
+		SyncEachBatch: true,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied != rows {
+		t.Fatalf("copied records=%d want %d; stats=%+v", stats.RecordsCopied, rows, stats)
+	}
+
+	segmentsAfter, err := listValueLogSegments(dir)
+	if err != nil {
+		t.Fatalf("list segments after rewrite: %v", err)
+	}
+	var newSeg string
+	for _, seg := range segmentsAfter {
+		if !seg.valueLog {
+			continue
+		}
+		if _, ok := before[seg.path]; ok {
+			continue
+		}
+		newSeg = seg.path
+		break
+	}
+	if newSeg == "" {
+		t.Fatalf("expected rewrite to create a new value-log segment")
+	}
+
+	f, err := os.Open(newSeg)
+	if err != nil {
+		t.Fatalf("open new segment: %v", err)
+	}
+	defer f.Close()
+	var header [valuelog.HeaderSize]byte
+	if _, err := io.ReadFull(f, header[:]); err != nil {
+		t.Fatalf("read record header: %v", err)
+	}
+	bodyLen := binary.LittleEndian.Uint32(header[16:20])
+	body := make([]byte, int(bodyLen))
+	if _, err := io.ReadFull(f, body); err != nil {
+		t.Fatalf("read frame body: %v", err)
+	}
+	frameHeader, _, offsets, _, err := valuelog.DecodeFrame(body)
+	if err != nil {
+		t.Fatalf("DecodeFrame: %v", err)
+	}
+	if frameHeader.DictID != 0 {
+		t.Fatalf("expected block frame, got dictID=%d", frameHeader.DictID)
+	}
+	if frameHeader.Flags&valuelog.FrameFlagCompressed == 0 {
+		t.Fatalf("expected rewritten frame to be compressed, header=%+v", frameHeader)
+	}
+	if frameHeader.K <= 1 {
+		t.Fatalf("expected rewrite to group JSON records, got k=%d", frameHeader.K)
+	}
+	if got, want := frameHeader.Reserved, uint8(valuelog.BlockCodecSnappy); got != want {
+		t.Fatalf("unexpected codec id %d, want %d", got, want)
+	}
+	storedPayload := int(bodyLen) - (valuelog.FrameHeaderSize + int(frameHeader.K)*8 + (int(frameHeader.K)+1)*4)
+	groupRaw := int(offsets[frameHeader.K])
+	if groupRaw <= 0 || groupRaw > rawBytes {
+		t.Fatalf("unexpected grouped raw bytes %d, total fixture raw=%d", groupRaw, rawBytes)
+	}
+	if storedPayload*100 >= groupRaw*80 {
+		t.Fatalf("expected grouped rewrite compression below 0.80 stored/raw, stored=%d raw=%d", storedPayload, groupRaw)
+	}
+}
+
+func TestValueLogRewriteOnline_UsesCurrentSingleValueDictInAutoMode(t *testing.T) {
+	dir := t.TempDir()
+
+	const (
+		rows   = 128
+		dictID = uint64(734411)
+	)
+	values := make([][]byte, rows)
+	for i := 0; i < rows; i++ {
+		values[i] = []byte(fmt.Sprintf(
+			`{"did":"did:plc:%08d","time_us":1732206349%06d,"kind":"commit","commit":{"rev":"3lbhuvzds%04d","operation":"create","collection":"app.bsky.feed.post","rkey":"rkey%06d","record":{"$type":"app.bsky.feed.post","createdAt":"2024-11-21T16:%02d:%02d.095Z","langs":["en"],"text":"repeatable fixture text for value-log rewrite dictionary number %06d"}}}`,
+			i%17, i, i%10000, i, i%60, (i*7)%60, i,
+		))
+	}
+	history := append([]byte(nil), values[0]...)
+	for i := 1; i < 8; i++ {
+		history = append(history, values[i]...)
+	}
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: values,
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("BuildDict: %v", err)
+	}
+	if len(dict) == 0 {
+		t.Fatalf("BuildDict returned empty dict")
+	}
+
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			Compression: ValueLogCompressionAuto,
+			BlockCodec:  ValueLogBlockSnappy,
+			DictLookup: func(id uint64) ([]byte, error) {
+				if id != dictID {
+					return nil, valuelog.ErrMissingDict
+				}
+				return dict, nil
+			},
+			DictCurrentForClass: func(_ context.Context, class string) (uint64, error) {
+				if class != "single_value" {
+					t.Fatalf("current dict class=%q want single_value", class)
+				}
+				return dictID, nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	})
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 1, rows, func(i int) []byte {
+		return values[i]
+	})
+	b := db.NewBatch().(*Batch)
+	for i, ptr := range ptrs {
+		if err := b.SetPointer([]byte(fmt.Sprintf("k%04d", i)), ptr); err != nil {
+			t.Fatalf("set pointer %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	segmentsBefore, err := listValueLogSegments(dir)
+	if err != nil {
+		t.Fatalf("list segments before rewrite: %v", err)
+	}
+	before := make(map[string]struct{}, len(segmentsBefore))
+	for _, seg := range segmentsBefore {
+		before[seg.path] = struct{}{}
+	}
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		BatchSize:     rows,
+		SyncEachBatch: true,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied != rows {
+		t.Fatalf("copied records=%d want %d; stats=%+v", stats.RecordsCopied, rows, stats)
+	}
+
+	segmentsAfter, err := listValueLogSegments(dir)
+	if err != nil {
+		t.Fatalf("list segments after rewrite: %v", err)
+	}
+	dictFrames := 0
+	blockFrames := 0
+	maxDictK := 0
+	for _, seg := range segmentsAfter {
+		if !seg.valueLog {
+			continue
+		}
+		if _, ok := before[seg.path]; ok {
+			continue
+		}
+		f, err := os.Open(seg.path)
+		if err != nil {
+			t.Fatalf("open new segment %s: %v", filepath.Base(seg.path), err)
+		}
+		func() {
+			defer f.Close()
+			for {
+				var header [valuelog.HeaderSize]byte
+				if _, err := io.ReadFull(f, header[:]); err != nil {
+					if err == io.EOF || err == io.ErrUnexpectedEOF {
+						return
+					}
+					t.Fatalf("read header %s: %v", filepath.Base(seg.path), err)
+				}
+				bodyLen := binary.LittleEndian.Uint32(header[16:20])
+				body := make([]byte, int(bodyLen))
+				if _, err := io.ReadFull(f, body); err != nil {
+					t.Fatalf("read frame body %s: %v", filepath.Base(seg.path), err)
+				}
+				frameHeader, _, _, _, err := valuelog.DecodeFrame(body)
+				if err != nil {
+					t.Fatalf("DecodeFrame %s: %v", filepath.Base(seg.path), err)
+				}
+				if frameHeader.DictID == dictID {
+					dictFrames++
+					if int(frameHeader.K) > maxDictK {
+						maxDictK = int(frameHeader.K)
+					}
+				}
+				if frameHeader.DictID == 0 && frameHeader.Flags&valuelog.FrameFlagCompressed != 0 {
+					blockFrames++
+				}
+			}
+		}()
+	}
+	if dictFrames == 0 {
+		t.Fatalf("expected online rewrite to use current single_value dict")
+	}
+	if maxDictK < 2 {
+		t.Fatalf("expected online rewrite to batch dict frames, max dict k=%d", maxDictK)
+	}
+	if blockFrames != 0 {
+		t.Fatalf("expected dict rewrite for all test payloads, block frames=%d", blockFrames)
+	}
+}
+
+func TestValueLogRewriteOnline_ReportsActualBytesAfterSegmentGrowth(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			Compression: ValueLogCompressionBlock,
+			BlockCodec:  ValueLogBlockSnappy,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	})
+
+	const rows = 4
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 1, rows, func(i int) []byte {
+		return []byte(fmt.Sprintf(
+			`{"kind":"commit","commit":{"collection":"app.bsky.feed.post","rkey":"%06d"},"payload":"%s"}`,
+			i,
+			strings.Repeat("jsonbench-value-log-rewrite-fixture-", 32),
+		))
+	})
+	b := db.NewBatch().(*Batch)
+	for i, ptr := range ptrs {
+		if err := b.SetPointer([]byte(fmt.Sprintf("k%04d", i)), ptr); err != nil {
+			t.Fatalf("set pointer %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		BatchSize:     1,
+		SyncEachBatch: true,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+
+	postSet := db.valueLogManager.CurrentSetNoRefresh()
+	if postSet == nil {
+		t.Fatalf("missing post-rewrite value-log set")
+	}
+	defer func() { _ = db.valueLogManager.Release(postSet) }()
+
+	var actualBytes int64
+	var actualSegments int
+	for _, f := range db.valueOnlyValueLogFiles(postSet.Files) {
+		info, err := os.Stat(f.Path)
+		if err != nil {
+			t.Fatalf("stat %s: %v", f.Path, err)
+		}
+		actualSegments++
+		actualBytes += info.Size()
+	}
+	if stats.SegmentsAfter != actualSegments || stats.BytesAfter != actualBytes {
+		t.Fatalf("rewrite stats after=(segments=%d bytes=%d) want actual=(segments=%d bytes=%d)",
+			stats.SegmentsAfter, stats.BytesAfter, actualSegments, actualBytes)
+	}
+}
+
+func TestValueLogRewriteOffline_GroupsSingleRecordCompressedJSONFrames(t *testing.T) {
+	dir := t.TempDir()
+
+	opts := Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			Compression: ValueLogCompressionBlock,
+			BlockCodec:  ValueLogBlockSnappy,
+		},
+	}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	})
+
+	const rows = 64
+	ptrs := appendBlockCompressedPointersInNewSegment(t, dir, 0, 1, 1, rows, func(i int) []byte {
+		return []byte(fmt.Sprintf(
+			`{"did":"did:plc:%08d","kind":"commit","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"rkey%06d","record":{"$type":"app.bsky.feed.post","text":"%s"}}}`,
+			i%17,
+			i,
+			strings.Repeat("offline rewrite grouped compression fixture ", 12),
+		))
+	})
+	if len(ptrs) != rows {
+		t.Fatalf("expected %d pointers, got %d", rows, len(ptrs))
+	}
+
+	b := db.NewBatch().(*Batch)
+	for i, ptr := range ptrs {
+		if err := b.SetPointer([]byte(fmt.Sprintf("k%04d", i)), ptr); err != nil {
+			t.Fatalf("set pointer %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	segmentsBefore, err := listValueLogSegments(dir)
+	if err != nil {
+		t.Fatalf("list segments before rewrite: %v", err)
+	}
+	before := make(map[string]struct{}, len(segmentsBefore))
+	for _, seg := range segmentsBefore {
+		before[seg.path] = struct{}{}
+	}
+
+	closeNoErr(t, db)
+	db = nil
+
+	stats, err := ValueLogRewriteOffline(opts)
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	}
+	if stats.RecordsCopied != rows {
+		t.Fatalf("copied records=%d want %d; stats=%+v", stats.RecordsCopied, rows, stats)
+	}
+
+	segmentsAfter, err := listValueLogSegments(dir)
+	if err != nil {
+		t.Fatalf("list segments after rewrite: %v", err)
+	}
+	var newSeg string
+	for _, seg := range segmentsAfter {
+		if !seg.valueLog {
+			continue
+		}
+		if _, ok := before[seg.path]; ok {
+			continue
+		}
+		newSeg = seg.path
+		break
+	}
+	if newSeg == "" {
+		t.Fatalf("expected offline rewrite to create a new value-log segment")
+	}
+	frameHeader := readFirstFrameHeaderFromSegment(t, newSeg)
+	if frameHeader.DictID != 0 {
+		t.Fatalf("expected block frame, got dictID=%d", frameHeader.DictID)
+	}
+	if frameHeader.Flags&valuelog.FrameFlagCompressed == 0 {
+		t.Fatalf("expected rewritten frame to be compressed, header=%+v", frameHeader)
+	}
+	if frameHeader.K <= 1 {
+		t.Fatalf("expected offline rewrite to group compressed JSON records, got k=%d", frameHeader.K)
+	}
+}
+
 func TestValueLogRewriteOffline_ReencodesSingleUncompressedFramesWhenCompressionEnabled(t *testing.T) {
 	dir := t.TempDir()
 
@@ -2982,9 +3422,14 @@ func readFirstRewriteFrameHeader(t *testing.T, walDir string) valuelog.FrameHead
 		t.Fatalf("expected at least one value-log file in %s", walDir)
 	}
 	slices.Sort(paths)
-	f, err := os.Open(paths[0])
+	return readFirstFrameHeaderFromSegment(t, paths[0])
+}
+
+func readFirstFrameHeaderFromSegment(t *testing.T, path string) valuelog.FrameHeader {
+	t.Helper()
+	f, err := os.Open(path)
 	if err != nil {
-		t.Fatalf("open %s: %v", filepath.Base(paths[0]), err)
+		t.Fatalf("open %s: %v", filepath.Base(path), err)
 	}
 	defer f.Close()
 	var header [valuelog.HeaderSize]byte
@@ -3001,6 +3446,36 @@ func readFirstRewriteFrameHeader(t *testing.T, walDir string) valuelog.FrameHead
 		t.Fatalf("DecodeFrame: %v", err)
 	}
 	return frameHeader
+}
+
+func appendBlockCompressedPointersInNewSegment(t *testing.T, dir string, lane, seq uint32, ridBase uint64, n int, valueAt func(i int) []byte) []page.ValuePtr {
+	t.Helper()
+	walDir := filepath.Join(dir, "value_vlog")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(lane, seq)
+	if err != nil {
+		t.Fatalf("encode file id lane=%d seq=%d: %v", lane, seq, err)
+	}
+	path := filepath.Join(walDir, fmt.Sprintf("value-l%d-%06d.log", lane, seq))
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	w.SetBlockCompression(valuelog.BlockCodecSnappy, true)
+	ptrs := make([]page.ValuePtr, 0, n)
+	for i := 0; i < n; i++ {
+		ptr, err := w.Append(0, nil, ridBase+uint64(i), valueAt(i))
+		if err != nil {
+			t.Fatalf("append rid=%d: %v", ridBase+uint64(i), err)
+		}
+		ptrs = append(ptrs, ptr)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	return ptrs
 }
 
 func readFirstRewriteFrameHeaderForLane(t *testing.T, walDir string, lane uint32) valuelog.FrameHeader {

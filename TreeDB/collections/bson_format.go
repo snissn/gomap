@@ -7,13 +7,13 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-func prepareBSONInsertDocuments(documents [][]byte) ([][]byte, []templateV1Record, templateV1Resolver, error) {
+func prepareBSONInsertDocuments(documents [][]byte) ([][]byte, []templateV1Record, []templateV1LearnedTemplate, templateV1Resolver, error) {
 	for i, document := range documents {
 		if err := validateBSONDocument(document); err != nil {
-			return nil, nil, nil, fmt.Errorf("collections: BSON document %d: %w", i, err)
+			return nil, nil, nil, nil, fmt.Errorf("collections: BSON document %d: %w", i, err)
 		}
 	}
-	return documents, nil, nil, nil
+	return documents, nil, nil, nil, nil
 }
 
 func validateBSONDocument(document []byte) error {
@@ -27,53 +27,56 @@ func bsonOrderedIndexStateForDocumentWithArena(document []byte, runtimes []index
 	raw := bson.Raw(document)
 	state := encoder.appendState(len(runtimes))
 	for runtimeIdx, runtime := range runtimes {
-		if len(runtime.path) == 1 {
-			value := raw.Lookup(runtime.path[0])
-			if value.IsZero() {
-				continue
-			}
-			if err := appendBSONIndexValueToState(state, runtimeIdx, runtime, value, opts, encoder); err != nil {
-				return nil, err
-			}
-			continue
-		}
-		values, found, fromArray, err := bsonIndexValuesForPath(raw, runtime.path)
-		if err != nil {
+		if err := appendBSONIndexRuntimeState(raw, state, runtimeIdx, runtime, opts, encoder); err != nil {
 			return nil, err
-		}
-		if !found {
-			continue
-		}
-		if fromArray && !runtime.def.multiKey && !opts.allowArrayValuesInIndex {
-			return nil, fmt.Errorf("collections: array value not allowed for index")
-		}
-		var encodedInline [8][]byte
-		encoded := encodedInline[:0]
-		if len(values) > len(encodedInline) {
-			encoded = make([][]byte, 0, len(values))
-		}
-		for _, value := range values {
-			var next []byte
-			var ok bool
-			encoder.buf, next, ok, err = appendBSONIndexScalar(encoder.buf, runtime.def.valueType, value)
-			if err != nil {
-				return nil, err
-			}
-			if !ok {
-				continue
-			}
-			encoded = append(encoded, next)
-		}
-		switch len(encoded) {
-		case 0:
-			continue
-		case 1:
-			state[runtimeIdx] = encoder.appendSingleValueRef(encoded[0])
-		default:
-			state[runtimeIdx] = normalizeOwnedEncodedIndexValues(encoded)
 		}
 	}
 	return state, nil
+}
+
+func appendBSONIndexRuntimeState(raw bson.Raw, state orderedDocumentIndexState, runtimeIdx int, runtime indexRuntime, opts collectionOptions, encoder *indexEncodeArena) error {
+	if len(runtime.path) == 1 {
+		value := raw.Lookup(runtime.path[0])
+		if value.IsZero() {
+			return nil
+		}
+		return appendBSONIndexValueToState(state, runtimeIdx, runtime, value, opts, encoder)
+	}
+	values, found, fromArray, err := bsonIndexValuesForPath(raw, runtime.path)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	if fromArray && !runtime.def.multiKey && !opts.allowArrayValuesInIndex {
+		return fmt.Errorf("collections: array value not allowed for index")
+	}
+	var encodedInline [8][]byte
+	encoded := encodedInline[:0]
+	if len(values) > len(encodedInline) {
+		encoded = make([][]byte, 0, len(values))
+	}
+	for _, value := range values {
+		var next []byte
+		var ok bool
+		encoder.buf, next, ok, err = appendBSONIndexScalar(encoder.buf, runtime.def.valueType, value)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		encoded = append(encoded, next)
+	}
+	switch len(encoded) {
+	case 0:
+	case 1:
+		state[runtimeIdx] = encoder.appendSingleValueRef(encoded[0])
+	default:
+		state[runtimeIdx] = normalizeOwnedEncodedIndexValues(encoded)
+	}
+	return nil
 }
 
 func appendBSONIndexValueToState(state orderedDocumentIndexState, runtimeIdx int, runtime indexRuntime, value bson.RawValue, opts collectionOptions, encoder *indexEncodeArena) error {

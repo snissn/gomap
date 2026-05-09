@@ -95,7 +95,7 @@ var (
 	settleBeforeScans               = flag.Bool("settle-before-scans", false, "Close+reopen DBs before scan tests to measure settled scan performance (flushes caches/WAL)")
 	treedbCacheStatsBeforeReads     = flag.Bool("treedb-cache-stats-before-reads", false, "Print select treedb.cache.* stats before read/scan tests (treedb only)")
 	treedbCacheStatsAfterTests      = flag.Bool("treedb-cache-stats-after-tests", false, "Print select treedb.cache.* stats after each benchmark test (treedb only)")
-	treedbVlogRewriteAfterRun       = flag.Bool("treedb-vlog-rewrite-after-run", false, "Run a full TreeDB value-log rewrite after the benchmark run and report before/after disk usage (treedb only)")
+	treedbVlogRewriteAfterRun       = flag.Bool("treedb-vlog-rewrite-after-run", false, "Run full TreeDB CompactStorage after the benchmark run and report before/after disk usage (treedb only; flag name kept for compatibility)")
 	treedbVacuumAfterVlogRewriteRun = flag.Bool("treedb-vacuum-after-vlog-rewrite-run", true, "Run offline TreeDB index vacuum after -treedb-vlog-rewrite-after-run before reporting final compacted disk usage")
 )
 
@@ -743,7 +743,7 @@ func main() {
 		}
 		if len(run.TreeDBVlogRewrite) > 0 {
 			fmt.Println()
-			fmt.Println("TreeDB ValueLog Rewrite (After Run)")
+			fmt.Println("TreeDB CompactStorage (After Run)")
 			fmt.Print(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
 		}
 		if run.Config.KeepDir {
@@ -804,7 +804,7 @@ func main() {
 			}
 			if len(run.TreeDBVlogRewrite) > 0 {
 				fmt.Println()
-				fmt.Println("TreeDB ValueLog Rewrite (After Run)")
+				fmt.Println("TreeDB CompactStorage (After Run)")
 				fmt.Print(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
 			}
 			if run.Config.KeepDir {
@@ -4156,9 +4156,20 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if err != nil {
 				return BenchRun{}, err
 			}
-			stats, err := treedb.ValueLogRewriteOffline(opts)
+			db, err := treedb.Open(opts)
 			if err != nil {
-				return BenchRun{}, err
+				return BenchRun{}, fmt.Errorf("open treedb for compact storage: %w", err)
+			}
+			stats, compactErr := db.CompactStorage(context.Background(), treedb.CompactStorageOptions{
+				Mode:          treedb.CompactStorageFull,
+				SyncEachPhase: true,
+			})
+			closeErr := db.Close()
+			if compactErr != nil {
+				return BenchRun{}, fmt.Errorf("treedb compact storage: %w", compactErr)
+			}
+			if closeErr != nil {
+				return BenchRun{}, fmt.Errorf("close treedb after compact storage: %w", closeErr)
 			}
 
 			afterUsage, _ := computeDirDiskUsage(inst.Dir)
@@ -4183,11 +4194,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				BeforeTree:      beforeTree,
 				AfterTree:       afterTree,
 				AfterVacuumTree: afterVacuumTree,
-				SegmentsBefore:  stats.SegmentsBefore,
-				SegmentsAfter:   stats.SegmentsAfter,
-				BytesBefore:     stats.BytesBefore,
-				BytesAfter:      stats.BytesAfter,
-				RecordsCopied:   stats.RecordsCopied,
+				SegmentsBefore:  stats.ValueLogRewrite.SegmentsBefore,
+				SegmentsAfter:   stats.ValueLogRewrite.SegmentsAfter,
+				BytesBefore:     stats.ValueLogRewrite.BytesBefore,
+				BytesAfter:      stats.ValueLogRewrite.BytesAfter,
+				RecordsCopied:   stats.ValueLogRewrite.RecordsCopied,
 			}
 		}
 		if usage, err := computeDirDiskUsage(inst.Dir); err == nil {
@@ -4507,7 +4518,7 @@ func renderTreeDBVlogRewriteString(reports map[string]treeDBVlogRewriteReport) s
 		if rep.BeforeTree.MainLeafLog.TotalBytes > 0 || rep.AfterTree.MainLeafLog.TotalBytes > 0 {
 			sb.WriteString(fmt.Sprintf("  maindb/leaf_vlog: %s -> %s\n", formatBytes(rep.BeforeTree.MainLeafLog.TotalBytes), formatBytes(rep.AfterTree.MainLeafLog.TotalBytes)))
 		}
-		sb.WriteString(fmt.Sprintf("  vlog-rewrite: segments %d -> %d bytes %s -> %s records=%d\n",
+		sb.WriteString(fmt.Sprintf("  compact-storage value-log rewrite: segments %d -> %d bytes %s -> %s records=%d\n",
 			rep.SegmentsBefore, rep.SegmentsAfter,
 			formatBytesSigned(rep.BytesBefore), formatBytesSigned(rep.BytesAfter),
 			rep.RecordsCopied))
@@ -4712,7 +4723,7 @@ func renderMarkdownSingle(run BenchRun) string {
 	}
 	if len(run.TreeDBVlogRewrite) > 0 {
 		sb.WriteString("\n")
-		sb.WriteString("## TreeDB ValueLog Rewrite (After Run)\n\n")
+		sb.WriteString("## TreeDB CompactStorage (After Run)\n\n")
 		sb.WriteString("```text\n")
 		sb.WriteString(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
 		sb.WriteString("```\n")
@@ -4972,7 +4983,7 @@ func renderMarkdownSweep(runs []BenchRun) string {
 		}
 	}
 	if anyRewrite {
-		sb.WriteString("## TreeDB ValueLog Rewrite (After Run)\n\n")
+		sb.WriteString("## TreeDB CompactStorage (After Run)\n\n")
 		for _, run := range runs {
 			if len(run.TreeDBVlogRewrite) == 0 {
 				continue

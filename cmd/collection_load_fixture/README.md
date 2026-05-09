@@ -17,14 +17,14 @@ Default load shape:
 - collection data/index-state outer leaves in the value log
 - secondary-index outer leaves in the value log
 - native indexed write memtables enabled with the collection default auto-flush
-  cadence: 96000 staged documents for synchronous flushing, or 256000 when
-  async flush is enabled; batches at 16000 documents or larger use direct
-  publish by default because they already amortize publish overhead well
+  cadence: 256000 staged documents with default async threshold publish, or
+  96000 when async flush is disabled; batches at 16000 documents or larger use
+  direct publish by default because they already amortize publish overhead well
 - `fast` TreeDB profile
 - final checkpoint and reopen verification
-- automatic offline index vacuum when `-vlog-rewrite` or `-leafgen-pack-gc`
-  is requested, so post-maintenance size comparisons include both value/leaf-log
-  cleanup and index compaction
+- optional low-level `value_vlog` and `leaf_vlog` maintenance probes, with
+  automatic offline index vacuum when `-vlog-rewrite` or `-leafgen-pack-gc` is
+  requested
 
 Example:
 
@@ -48,6 +48,32 @@ Useful variants:
 
 # Native BSON documents with the same two-index shape.
 ./bin/collection-load-fixture -format bson -dir /tmp/treedb_two_index_bson_index_vlog -reset
+
+# Homogeneous wide documents, useful for template-v1/BSON disk comparisons where
+# repeated field-name storage should dominate. Non-default document shapes require
+# -indexes 0 because they do not include the default indexed fields. Template-v1
+# fixture runs keep one encoder across batches and feed successful insert IDs
+# back into it, so repeated shapes can emit compact stored documents directly.
+./bin/collection-load-fixture \
+  -format template-v1 \
+  -document-shape wide \
+  -field-count 32 \
+  -indexes 0 \
+  -dir /tmp/treedb_wide32_template_v1 \
+  -reset
+
+# Heterogeneous template-shape stress. This creates many distinct field-name sets
+# and is useful with -reopen-verify=false for high-cardinality template-map
+# performance checks.
+./bin/collection-load-fixture \
+  -format template-v1 \
+  -document-shape heterogeneous \
+  -field-count 8 \
+  -shape-count 8192 \
+  -indexes 0 \
+  -reopen-verify=false \
+  -dir /tmp/treedb_heterogeneous_template_v1 \
+  -reset
 
 # Disable secondary-index value-log outer leaves.
 ./bin/collection-load-fixture -index-outer-leaves-in-vlog=false -dir /tmp/treedb_two_index_template_v1_fast_index -reset
@@ -80,14 +106,19 @@ Useful variants:
   -cpuprofile /tmp/collection_fixture_cpu.pprof \
   -memprofile /tmp/collection_fixture_heap.pprof
 
-# Compact the persistent value_vlog after loading, then run index vacuum and
-# report before/after disk usage.
+# Low-level value_vlog probe: rewrite the persistent value_vlog after loading,
+# then run index vacuum and report before/after disk usage.
 ./bin/collection-load-fixture -vlog-rewrite -dir /tmp/treedb_fixture_rewritten -reset
 
-# Pack leaf_vlog generations after loading, then run leaf-generation GC and report
-# the before/after disk usage separately from value_vlog rewrite. The default
-# -index-vacuum=auto follows this with offline index vacuum.
+# Low-level leaf_vlog probe: pack leaf_vlog generations after loading, then run
+# leaf-generation GC and report the before/after disk usage separately from
+# value_vlog rewrite. The default -index-vacuum=auto follows this with offline
+# index vacuum.
 ./bin/collection-load-fixture -leafgen-pack-gc -dir /tmp/treedb_fixture_leafgen_packed -reset
+
+# For final storage-footprint measurement, prefer the high-level compaction path
+# after creating the fixture.
+treemap compact /tmp/treedb_two_index_template_v1_index_vlog -rw
 
 # Keep the pre-vacuum index.db shape for debugging.
 ./bin/collection-load-fixture -leafgen-pack-gc -index-vacuum=none -dir /tmp/treedb_fixture_leafgen_no_vacuum -reset

@@ -29,6 +29,10 @@ CONCURRENT_READ_KINDS="${CONCURRENT_READ_KINDS:-id}"
 CONCURRENT_READER_SWEEP="${CONCURRENT_READER_SWEEP:-}"
 CONCURRENT_READS="${CONCURRENT_READS:-}"
 CONCURRENT_READS_DIVISOR="${CONCURRENT_READS_DIVISOR:-10}"
+CONCURRENT_RANGE_READERS="${CONCURRENT_RANGE_READERS:-0}"
+CONCURRENT_RANGE_READER_SWEEP="${CONCURRENT_RANGE_READER_SWEEP:-}"
+CONCURRENT_RANGE_READS="${CONCURRENT_RANGE_READS:-}"
+CONCURRENT_RANGE_READS_DIVISOR="${CONCURRENT_RANGE_READS_DIVISOR:-10}"
 CONCURRENT_WRITERS="${CONCURRENT_WRITERS:-0}"
 CONCURRENT_WRITER_SWEEP="${CONCURRENT_WRITER_SWEEP:-}"
 CONCURRENT_WRITES="${CONCURRENT_WRITES:-}"
@@ -51,6 +55,7 @@ TREEDB_DATA_ROOT_STORAGE="${TREEDB_DATA_ROOT_STORAGE:-compressed}"
 TREEDB_INDEX_STATE_ROOT_STORAGE="${TREEDB_INDEX_STATE_ROOT_STORAGE:-compressed}"
 TREEDB_INDEX_ROOT_STORAGE="${TREEDB_INDEX_ROOT_STORAGE:-compressed}"
 TREEDB_MAINTENANCE="${TREEDB_MAINTENANCE:-full}"
+TREEDB_READ_STATE="${TREEDB_READ_STATE:-settled}"
 
 usage() {
   cat <<'EOF'
@@ -89,7 +94,17 @@ Options:
                         documents / CONCURRENT_READS_DIVISOR. Cannot be
                         combined with --concurrent-readers.
   --concurrent-reads COUNT
-                        Concurrent reads per phase per target/cell.
+                        Concurrent point reads per target/cell.
+  --concurrent-range-readers N
+                        Reader goroutines for the concurrent age range-read phase.
+  --concurrent-range-reader-sweep LIST
+                        Space- or comma-separated reader counts for concurrent
+                        age range-read throughput sweep phases. Uses
+                        --concurrent-range-reads when set, otherwise derives
+                        from documents / CONCURRENT_RANGE_READS_DIVISOR. Cannot
+                        be combined with --concurrent-range-readers.
+  --concurrent-range-reads COUNT
+                        Concurrent age range reads per target/cell.
   --concurrent-writers N
                         Writer goroutines for the concurrent update phase.
   --concurrent-writer-sweep LIST
@@ -104,11 +119,11 @@ Options:
   --mongo-uri URI       MongoDB URI for --mongo-mode external.
   --mongo-image IMAGE   Docker image for --mongo-mode docker. Default: mongo:7.
   --mongo-client-mode MODE
-                        Single MongoDB client mode: driver, driver-command,
-                        driver-command-raw, or driver-unack.
+                        Single MongoDB client mode: driver, driver-find-raw,
+                        driver-command, driver-command-raw, or driver-unack.
   --mongo-client-modes LIST
                         Space-separated MongoDB client modes. Example:
-                        "driver driver-command driver-command-raw driver-unack".
+                        "driver driver-find-raw driver-command driver-command-raw driver-unack".
   --timeout DURATION    Per-run benchmark timeout. Default: 20m.
   --treedb-profile NAME TreeDB profile. Default: wal_on_fast.
   --treedb-document-format FORMAT
@@ -116,11 +131,13 @@ Options:
   --treedb-document-formats LIST
                         Space-separated TreeDB formats. Example: "json template-v1 bson".
   --treedb-client-mode MODE
-                        Single TreeDB client mode: driver, driver-command, driver-command-raw, driver-unack, raw-wire-tcp, or raw-wire.
+                        Single TreeDB client mode: driver, driver-find-raw, driver-command, driver-command-raw, driver-unack, direct, raw-wire-tcp, raw-wire-tcp-pipeline, raw-wire, native-wire-tcp, or native-wire-inproc.
   --treedb-client-modes LIST
-                        Space-separated TreeDB client modes. Example: "driver driver-command driver-command-raw driver-unack raw-wire-tcp raw-wire".
+                        Space-separated TreeDB client modes. Example: "driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire native-wire-tcp native-wire-inproc".
   --treedb-maintenance MODE
                         TreeDB final maintenance: full, checkpoint, or none.
+  --treedb-read-state STATE
+                        TreeDB read state before read phases: settled or unsettled.
   --title TITLE         Markdown report title.
   --help                Show this help.
 
@@ -132,13 +149,15 @@ Environment overrides:
   RANGE_READS, UPDATES, DELETES, RANGE_READS_DIVISOR, UPDATES_DIVISOR,
   CONCURRENT_READERS, CONCURRENT_READ_KINDS, CONCURRENT_READS, CONCURRENT_READS_DIVISOR,
   CONCURRENT_READER_SWEEP,
+  CONCURRENT_RANGE_READERS, CONCURRENT_RANGE_READS, CONCURRENT_RANGE_READS_DIVISOR,
+  CONCURRENT_RANGE_READER_SWEEP,
   CONCURRENT_WRITERS, CONCURRENT_WRITER_SWEEP, CONCURRENT_WRITES, CONCURRENT_WRITES_DIVISOR,
   MONGO_MODE, MONGO_URI, MONGO_IMAGE, DATABASE_PREFIX, COLLECTION, TIMEOUT,
   MONGO_CLIENT_MODE, MONGO_CLIENT_MODES,
   TREEDB_PROFILE, TREEDB_DOCUMENT_FORMAT, TREEDB_DOCUMENT_FORMATS,
   TREEDB_CLIENT_MODE, TREEDB_CLIENT_MODES,
   TREEDB_DATA_ROOT_STORAGE, TREEDB_INDEX_STATE_ROOT_STORAGE, TREEDB_INDEX_ROOT_STORAGE,
-  TREEDB_MAINTENANCE, TITLE.
+  TREEDB_MAINTENANCE, TREEDB_READ_STATE, TITLE.
 EOF
 }
 
@@ -216,6 +235,18 @@ while [[ $# -gt 0 ]]; do
       CONCURRENT_READS="$2"
       shift 2
       ;;
+    --concurrent-range-readers)
+      CONCURRENT_RANGE_READERS="$2"
+      shift 2
+      ;;
+    --concurrent-range-reader-sweep)
+      CONCURRENT_RANGE_READER_SWEEP="$2"
+      shift 2
+      ;;
+    --concurrent-range-reads)
+      CONCURRENT_RANGE_READS="$2"
+      shift 2
+      ;;
     --concurrent-writers)
       CONCURRENT_WRITERS="$2"
       shift 2
@@ -277,6 +308,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --treedb-maintenance)
       TREEDB_MAINTENANCE="$2"
+      shift 2
+      ;;
+    --treedb-read-state)
+      TREEDB_READ_STATE="$2"
       shift 2
       ;;
     --title)
@@ -439,10 +474,10 @@ validate_mongo_client_modes() {
   local mode
   for mode in $1; do
     case "$mode" in
-      driver|driver-command|driver-command-raw|driver-unack)
+      driver|driver-find-raw|driver-command|driver-command-raw|driver-unack)
         ;;
       *)
-        echo "invalid MONGO_CLIENT_MODES value: $mode (want driver, driver-command, driver-command-raw, or driver-unack)" >&2
+        echo "invalid MONGO_CLIENT_MODES value: $mode (want driver, driver-find-raw, driver-command, driver-command-raw, or driver-unack)" >&2
         exit 2
         ;;
     esac
@@ -556,9 +591,11 @@ run_target() {
   local deletes=$9
   local concurrent_readers=${10}
   local concurrent_reads=${11}
-  local concurrent_writers=${12}
-  local concurrent_writes=${13}
-  shift 13
+  local concurrent_range_readers=${12}
+  local concurrent_range_reads=${13}
+  local concurrent_writers=${14}
+  local concurrent_writes=${15}
+  shift 15
 
   local prebuild_args=()
   if [[ "$PREBUILD_DOCUMENTS" == "true" ]]; then
@@ -587,6 +624,9 @@ run_target() {
     -concurrent-readers "$concurrent_readers" \
     -concurrent-reader-sweep "$CONCURRENT_READER_SWEEP" \
     -concurrent-reads "$concurrent_reads" \
+    -concurrent-range-readers "$concurrent_range_readers" \
+    -concurrent-range-reader-sweep "$CONCURRENT_RANGE_READER_SWEEP" \
+    -concurrent-range-reads "$concurrent_range_reads" \
     -concurrent-writers "$concurrent_writers" \
     -concurrent-writer-sweep "$CONCURRENT_WRITER_SWEEP" \
     -concurrent-writes "$concurrent_writes" \
@@ -602,6 +642,13 @@ if [[ "$MONGO_MODE" != "docker" && "$MONGO_MODE" != "external" ]]; then
   echo "unknown MONGO_MODE=$MONGO_MODE (want docker or external)" >&2
   exit 2
 fi
+if [[ "$TREEDB_READ_STATE" == "flushed" ]]; then
+  TREEDB_READ_STATE=settled
+fi
+if [[ "$TREEDB_READ_STATE" != "settled" && "$TREEDB_READ_STATE" != "unsettled" ]]; then
+  echo "unknown TREEDB_READ_STATE=$TREEDB_READ_STATE (want settled or unsettled)" >&2
+  exit 2
+fi
 if [[ "$MONGO_MODE" == "docker" ]] && ! command -v docker >/dev/null 2>&1; then
   echo "MONGO_MODE=docker requires docker; use --mongo-mode external --mongo-uri URI to use an existing server" >&2
   exit 2
@@ -610,7 +657,7 @@ if ! is_positive_int "$INSERT_PRODUCERS"; then
   echo "invalid INSERT_PRODUCERS=$INSERT_PRODUCERS (want positive integer)" >&2
   exit 2
 fi
-for value_name in DELETES CONCURRENT_READERS CONCURRENT_WRITERS MONGO_MAX_POOL_SIZE MONGO_MIN_POOL_SIZE MONGO_MAX_CONNECTING; do
+for value_name in DELETES CONCURRENT_READERS CONCURRENT_RANGE_READERS CONCURRENT_WRITERS MONGO_MAX_POOL_SIZE MONGO_MIN_POOL_SIZE MONGO_MAX_CONNECTING; do
   value=${!value_name}
   if ! is_nonnegative_int "$value"; then
     echo "invalid $value_name=$value (want non-negative integer)" >&2
@@ -695,6 +742,62 @@ elif [[ "$CONCURRENT_READERS" -eq 0 && -n "$CONCURRENT_READS" && "$CONCURRENT_RE
 	echo "CONCURRENT_READERS or CONCURRENT_READER_SWEEP must be set when CONCURRENT_READS is set" >&2
 	exit 2
 fi
+
+raw_concurrent_range_reader_sweep=$CONCURRENT_RANGE_READER_SWEEP
+CONCURRENT_RANGE_READER_SWEEP=$(trim_spaces "$CONCURRENT_RANGE_READER_SWEEP")
+if [[ -n "$raw_concurrent_range_reader_sweep" && -z "$CONCURRENT_RANGE_READER_SWEEP" ]]; then
+	echo "CONCURRENT_RANGE_READER_SWEEP must contain at least one positive integer" >&2
+	exit 2
+fi
+if [[ -n "$CONCURRENT_RANGE_READER_SWEEP" && "$CONCURRENT_RANGE_READERS" -gt 0 ]]; then
+	echo "CONCURRENT_RANGE_READER_SWEEP cannot be combined with CONCURRENT_RANGE_READERS" >&2
+	exit 2
+fi
+if [[ -n "$CONCURRENT_RANGE_READER_SWEEP" ]]; then
+	seen_range_reader_counts=""
+	normalized_range_reader_sweep=""
+	validated_range_reader_counts=0
+	for reader_count in ${CONCURRENT_RANGE_READER_SWEEP//,/ }; do
+		if ! is_positive_decimal_string "$reader_count"; then
+			echo "invalid CONCURRENT_RANGE_READER_SWEEP value: $reader_count" >&2
+			exit 2
+		fi
+		normalized_reader_count=$reader_count
+		while [[ "$normalized_reader_count" == 0* && ${#normalized_reader_count} -gt 1 ]]; do
+			normalized_reader_count=${normalized_reader_count#0}
+		done
+		if [[ " $seen_range_reader_counts " == *" $normalized_reader_count "* ]]; then
+			echo "duplicate CONCURRENT_RANGE_READER_SWEEP value: $reader_count" >&2
+			exit 2
+		fi
+		seen_range_reader_counts="$seen_range_reader_counts $normalized_reader_count"
+		if [[ -z "$normalized_range_reader_sweep" ]]; then
+			normalized_range_reader_sweep=$normalized_reader_count
+		else
+			normalized_range_reader_sweep="$normalized_range_reader_sweep,$normalized_reader_count"
+		fi
+		validated_range_reader_counts=$((validated_range_reader_counts + 1))
+	done
+	if [[ "$validated_range_reader_counts" -eq 0 ]]; then
+		echo "CONCURRENT_RANGE_READER_SWEEP must contain at least one positive integer" >&2
+		exit 2
+	fi
+	if [[ -n "$CONCURRENT_RANGE_READS" && "$CONCURRENT_RANGE_READS" == "0" ]]; then
+		echo "CONCURRENT_RANGE_READER_SWEEP requires CONCURRENT_RANGE_READS > 0 when CONCURRENT_RANGE_READS is set" >&2
+		exit 2
+	fi
+	if [[ -n "$CONCURRENT_RANGE_READS" ]]; then
+		if ! is_nonnegative_int "$CONCURRENT_RANGE_READS"; then
+			echo "invalid CONCURRENT_RANGE_READS=$CONCURRENT_RANGE_READS (want non-negative integer)" >&2
+			exit 2
+		fi
+	fi
+	CONCURRENT_RANGE_READER_SWEEP=$normalized_range_reader_sweep
+elif [[ "$CONCURRENT_RANGE_READERS" -eq 0 && -n "$CONCURRENT_RANGE_READS" && "$CONCURRENT_RANGE_READS" != "0" ]]; then
+	echo "CONCURRENT_RANGE_READERS or CONCURRENT_RANGE_READER_SWEEP must be set when CONCURRENT_RANGE_READS is set" >&2
+	exit 2
+fi
+
 raw_concurrent_writer_sweep=$CONCURRENT_WRITER_SWEEP
 CONCURRENT_WRITER_SWEEP=$(trim_spaces "$CONCURRENT_WRITER_SWEEP")
 if [[ -n "$raw_concurrent_writer_sweep" && -z "$CONCURRENT_WRITER_SWEEP" ]]; then
@@ -768,6 +871,9 @@ fi
   echo "concurrent readers: $CONCURRENT_READERS"
   echo "concurrent reader sweep: ${CONCURRENT_READER_SWEEP:-none}"
   echo "concurrent reads: ${CONCURRENT_READS:-documents / $CONCURRENT_READS_DIVISOR when readers or reader sweep is set}"
+  echo "concurrent range readers: $CONCURRENT_RANGE_READERS"
+  echo "concurrent range reader sweep: ${CONCURRENT_RANGE_READER_SWEEP:-none}"
+  echo "concurrent range reads: ${CONCURRENT_RANGE_READS:-documents / $CONCURRENT_RANGE_READS_DIVISOR when range readers or range reader sweep is set}"
   echo "concurrent writers: $CONCURRENT_WRITERS"
   echo "concurrent writer sweep: ${CONCURRENT_WRITER_SWEEP:-none}"
   echo "concurrent writes: ${CONCURRENT_WRITES:-documents / $CONCURRENT_WRITES_DIVISOR when writers or writer sweep is set}"
@@ -778,6 +884,7 @@ fi
   echo "treedb client modes: $TREEDB_CLIENT_MODES"
   echo "treedb root storage: data=$TREEDB_DATA_ROOT_STORAGE index_state=$TREEDB_INDEX_STATE_ROOT_STORAGE index=$TREEDB_INDEX_ROOT_STORAGE"
   echo "treedb maintenance: $TREEDB_MAINTENANCE"
+  echo "treedb read state: $TREEDB_READ_STATE"
   if [[ "$MONGO_MODE" == "docker" ]]; then
     echo "mongo image: $MONGO_IMAGE"
   else
@@ -804,6 +911,14 @@ for docs in $DOCS_LIST; do
     concurrent_reads=$(derived_count "$docs" "$CONCURRENT_READS" "$CONCURRENT_READS_DIVISOR")
     if [[ "$concurrent_reads" -eq 0 ]]; then
       echo "concurrent reads must be > 0 when concurrent readers or reader sweep is set" >&2
+      exit 2
+    fi
+  fi
+  concurrent_range_reads=0
+  if [[ "$CONCURRENT_RANGE_READERS" -gt 0 || -n "$CONCURRENT_RANGE_READER_SWEEP" ]]; then
+    concurrent_range_reads=$(derived_count "$docs" "$CONCURRENT_RANGE_READS" "$CONCURRENT_RANGE_READS_DIVISOR")
+    if [[ "$concurrent_range_reads" -eq 0 ]]; then
+      echo "concurrent range reads must be > 0 when concurrent range readers or range reader sweep is set" >&2
       exit 2
     fi
   fi
@@ -846,7 +961,7 @@ for docs in $DOCS_LIST; do
         echo
         echo "==> $cell TreeDB ($tree_format, client=$tree_client_mode)"
         run_target treedb "$docs" "$indexes" "$tree_raw" "$database" "$reads" "$range_reads" "$updates" "$DELETES" \
-          "$CONCURRENT_READERS" "$concurrent_reads" "$CONCURRENT_WRITERS" "$concurrent_writes" \
+          "$CONCURRENT_READERS" "$concurrent_reads" "$CONCURRENT_RANGE_READERS" "$concurrent_range_reads" "$CONCURRENT_WRITERS" "$concurrent_writes" \
           -treedb-dir "$tree_data" \
           -keep-treedb-dir \
           -treedb-profile "$TREEDB_PROFILE" \
@@ -856,6 +971,7 @@ for docs in $DOCS_LIST; do
           -treedb-index-state-root-storage "$TREEDB_INDEX_STATE_ROOT_STORAGE" \
           -treedb-index-root-storage "$TREEDB_INDEX_ROOT_STORAGE" \
           -treedb-maintenance "$TREEDB_MAINTENANCE" \
+          -treedb-read-state "$TREEDB_READ_STATE" \
           "${tree_profile_args[@]}"
         tree_physical=$(du_bytes "$tree_data")
         printf "treedb\t%s\t%s\t%s\t%s\t%s\n" "$tree_config" "$docs" "$indexes" "$tree_raw_rel" "$tree_physical" >>"$MATRIX"
@@ -882,7 +998,7 @@ for docs in $DOCS_LIST; do
         fi
       fi
       run_target mongo "$docs" "$indexes" "$mongo_raw" "$database" "$reads" "$range_reads" "$updates" "$DELETES" \
-        "$CONCURRENT_READERS" "$concurrent_reads" "$CONCURRENT_WRITERS" "$concurrent_writes" \
+        "$CONCURRENT_READERS" "$concurrent_reads" "$CONCURRENT_RANGE_READERS" "$concurrent_range_reads" "$CONCURRENT_WRITERS" "$concurrent_writes" \
         -mongo-uri "$mongo_uri" \
         -client-mode "$mongo_client_mode"
       if [[ "$MONGO_MODE" == "docker" ]]; then
@@ -929,6 +1045,9 @@ cat >"$README" <<EOF
 - concurrent readers: \`$CONCURRENT_READERS\`
 - concurrent reader sweep: \`${CONCURRENT_READER_SWEEP:-none}\`
 - concurrent reads: \`${CONCURRENT_READS:-documents / $CONCURRENT_READS_DIVISOR when readers or reader sweep is set}\`
+- concurrent range readers: \`$CONCURRENT_RANGE_READERS\`
+- concurrent range reader sweep: \`${CONCURRENT_RANGE_READER_SWEEP:-none}\`
+- concurrent range reads: \`${CONCURRENT_RANGE_READS:-documents / $CONCURRENT_RANGE_READS_DIVISOR when range readers or range reader sweep is set}\`
 - concurrent writers: \`$CONCURRENT_WRITERS\`
 - concurrent writer sweep: \`${CONCURRENT_WRITER_SWEEP:-none}\`
 - concurrent writes: \`${CONCURRENT_WRITES:-documents / $CONCURRENT_WRITES_DIVISOR when writers or writer sweep is set}\`
@@ -941,6 +1060,7 @@ cat >"$README" <<EOF
 - TreeDB client modes: \`$TREEDB_CLIENT_MODES\`
 - TreeDB root storage: \`data=$TREEDB_DATA_ROOT_STORAGE index_state=$TREEDB_INDEX_STATE_ROOT_STORAGE index=$TREEDB_INDEX_ROOT_STORAGE\`
 - TreeDB maintenance: \`$TREEDB_MAINTENANCE\`
+- TreeDB read state: \`$TREEDB_READ_STATE\`
 
 Regenerate from the raw run index:
 

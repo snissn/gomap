@@ -16,13 +16,13 @@ func OpenBackend(opts Options) (*db.DB, func() error, error) {
 	}
 	opts.DisableSideStores = layout.disableSideStores
 
-	// Apply persisted index encoding knobs so direct backend opens agree with the
-	// on-disk index format.
+	// Apply persisted storage/runtime knobs so direct maintenance opens agree
+	// with the on-disk format and compression policy used by the DB.
 	if !opts.IgnoreFormatConfig {
 		if cfg, ok, err := db.LoadFormatConfig(layout.mainDir); err != nil {
 			return nil, nil, err
 		} else if ok {
-			cfg.ApplyIndexFormatToOptions(&opts)
+			cfg.ApplyToOptions(&opts)
 		}
 	}
 

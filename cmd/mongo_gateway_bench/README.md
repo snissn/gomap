@@ -46,31 +46,56 @@ checkout, the temp directory itself, a home directory, or an immediate child of
 a home directory are rejected.
 
 The default `-client-mode driver` uses the official MongoDB Go driver
-`Collection.InsertMany` path for the load phase and all later phases.
-`-client-mode driver-command` still uses the official driver but sends the load
+`Collection.InsertMany` path for the load phase and app-style decoded read
+phases. `-client-mode driver-find-raw` still uses official-driver
+`Collection.Find` for range reads, but iterates `cursor.Current` as raw BSON
+instead of decoding documents into `bson.M`; use it to isolate official-driver
+find/cursor overhead from application decode overhead. `-client-mode
+driver-command` still uses the official driver but sends the load
 phase as a raw `insert` command through `Database.RunCommand`, avoiding the
 driver's `InsertMany` `_id` discovery and `InsertedIDs` bookkeeping. It is useful
 for isolating driver CRUD-helper overhead and works against both TreeDB and
 MongoDB targets. `-client-mode driver-command-raw` also uses `RunCommand`, but
 passes a prebuilt raw BSON insert command to reduce driver-side command encoding
-when `-prebuild-documents` is enabled. `-client-mode driver-unack` uses official-driver
+when `-prebuild-documents` is enabled; its age range-read phase also uses a raw
+`find` command and parses `cursor.firstBatch` as raw BSON instead of decoding
+documents into `bson.M`. `-client-mode driver-unack` uses official-driver
 `InsertMany` with unacknowledged write concern; its sampled load metric is
 client enqueue cost, while the phase waits for the final inserted `_id` to
 become visible before reporting wall ops/sec. `-client-mode raw-wire` is
 TreeDB-only and calls the in-process gateway directly with raw OP_MSG document
 sequences. `-client-mode raw-wire-tcp` sends the same raw OP_MSG traffic over
 the gateway's loopback listener, isolating TreeDB gateway network/wire-server
-cost from Mongo Go driver cost. Raw-wire modes use raw OP_MSG
-document sequences for the insert load phase while keeping setup and later
-read/update phases on the driver. Use raw-wire mode to estimate the
-gateway/server ceiling without the driver's per-document marshal and `_id`
-discovery overhead; use driver mode for user-visible Mongo compatibility
-throughput.
+cost from Mongo Go driver cost. `-client-mode raw-wire-tcp-pipeline` uses the
+same raw TCP load path and pipelines age range `find` requests on one connection
+up to `-raw-wire-tcp-pipeline-depth` (default `128`), which isolates
+single-connection request/response latency from server execution. The gateway
+coalesces already-buffered pipelined responses before writing, so deeper
+pipelines can keep the socket full across server write cycles without changing
+the server's per-write coalescing cap. Raw-wire modes use raw OP_MSG
+document sequences for the insert load phase and raw OP_MSG `find` requests for
+the age range-read phase while keeping setup and non-range phases on the driver.
+`-client-mode direct` is a TreeDB-only path
+that calls `collections.Collection` directly for the same phase names, using the
+selected `-treedb-document-format` (`json`, `template-v1`/`collections-v1`, or
+`bson`) while bypassing the MongoDB Go driver, loopback sockets, and Mongo gateway
+command/response handling. Use direct mode to answer whether a slow Mongo API
+phase is already slow in the collection engine and selected storage format; use
+raw-wire mode to estimate the gateway/server ceiling without the driver's
+per-document marshal and `_id` discovery overhead; use driver mode for
+user-visible Mongo compatibility throughput.
+
+`-client-mode native-wire-inproc` and `-client-mode native-wire-tcp` are
+TreeDB-only native protocol load paths. They use TreeDB collection IDs and
+stored document bytes over the native-wire server/client instead of Mongo OP_MSG,
+then keep setup and later read/update phases on the Mongo compatibility driver
+so they remain comparable with the existing benchmark sweep.
 
 When `-prebuild-documents` is enabled, the harness builds both structured BSON
 documents and raw BSON bytes before the measured workload. `driver-command` and
 `raw-wire` reuse the raw bytes during the load phase so their insert-call timing
-does not include fixture BSON marshaling.
+does not include fixture BSON marshaling. Direct mode also reuses prebuilt raw
+BSON-derived stored documents for direct collection inserts.
 
 Use `-insert-producers N` to split the insert load phase across producer
 goroutines. The effective producer count is capped at the number of insert
@@ -79,8 +104,9 @@ batches so small runs do not open unused clients. Official-driver modes share on
 `-mongo-max-pool-size`, `-mongo-min-pool-size`, and `-mongo-max-connecting`
 control the driver pool used by those producers. When `-mongo-max-pool-size` is
 left unset, validation treats the driver default max pool size as 100 for
-`-mongo-min-pool-size` checks. `raw-wire-tcp` opens one fastclient connection per
-effective producer, and `raw-wire` uses one in-process wire owner per effective
+`-mongo-min-pool-size` checks. `raw-wire-tcp` and
+`raw-wire-tcp-pipeline` open one fastclient connection per effective producer
+for the load phase, and `raw-wire` uses one in-process wire owner per effective
 producer. JSON output includes `effective_producers` and `producer_results` for
 the load phase plus `mongo_pool_stats_after_load` and `mongo_pool_stats_final`
 when the official driver pool is involved.
@@ -94,7 +120,8 @@ collection benchmark profile:
 - `-treedb-index-state-root-storage compressed`
 - `-treedb-index-root-storage compressed`
 - `-treedb-buffered-indexed-write-max-documents 0` (use the collection default:
-  96000 for synchronous flushing, 256000 when async flush is enabled)
+  256000 for default async threshold publish; 96000 when async flush is
+  disabled)
 - `-treedb-buffered-indexed-write-max-root-runs 0` (explicit `0` disables this
   trigger; when this flag is omitted while document or byte thresholds are
   overridden, the tool keeps the matching root-run compatibility default)
@@ -104,14 +131,13 @@ collection benchmark profile:
 The TreeDB target always opens with outer leaves in the leaf value log and the
 cached leaf-log backend, so collection and secondary-index roots exercise the
 same leaf-vlog path as the optimized collection benchmarks. The `full`
-maintenance mode reports each post-load compaction step: value-log rewrite,
-value-log GC, leaf-generation pack, leaf-generation GC, and offline index
-vacuum. The final vacuum closes the benchmark gateway before rewriting
-`index.db`, matching the documented compacted-state maintenance command. Use
-`-treedb-maintenance checkpoint` to reproduce the older checkpoint-only disk
-metric, or `none` to skip final TreeDB disk reporting.
+maintenance mode runs the high-level `CompactStorage` path first, then closes
+the benchmark gateway and runs offline index vacuum to shrink `index.db` for
+final-footprint reporting. Use `-treedb-maintenance checkpoint` to reproduce the
+older checkpoint-only disk metric, or `none` to skip final TreeDB disk
+reporting.
 
-`-treedb-document-format` accepts `json`, `template-v1`, and `bson`. BSON mode
+`-treedb-document-format` accepts `json`, `template-v1`/`collections-v1`, and `bson`. BSON mode
 stores Mongo wire documents as native BSON collection records, avoiding the
 canonical Extended JSON bridge used by the JSON/template-v1 gateway paths.
 Use `-treedb-buffered-indexed-write-max-documents`,
@@ -127,12 +153,21 @@ tool fills in the matching root-run default; pass
 `-treedb-buffered-indexed-write-max-root-runs 0` explicitly to keep root-run
 flushing disabled in that case.
 
-The Go profile benchmarks in `profile_bench_test.go` keep their defaults stable,
-but can opt into the same indexed async flush mode for focused root-publish
+The Go profile benchmarks in `profile_bench_test.go` use the collection default
+indexed async flush mode. They can force foreground threshold publish for
+baseline comparisons, or override async queue limits for focused root-publish
 experiments:
 
 ```sh
-MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH=true \
+MONGO_GATEWAY_PROFILE_BENCH_DISABLE_BUFFERED_INDEXED_ASYNC_FLUSH=true \
+go test ./cmd/mongo_gateway_bench \
+  -run '^$' \
+  -bench '^BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2$' \
+  -benchtime=100000x \
+  -benchmem
+```
+
+```sh
 MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS=4 \
 go test ./cmd/mongo_gateway_bench \
   -run '^$' \
@@ -193,7 +228,7 @@ beside the normal MongoDB Go driver `InsertMany` path:
 
 ```sh
 TREEDB_DOCUMENT_FORMATS="bson" \
-TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack raw-wire-tcp raw-wire" \
+TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire native-wire-tcp native-wire-inproc" \
 scripts/mongo_gateway_compare.sh
 ```
 
@@ -202,8 +237,8 @@ mode:
 
 ```sh
 TREEDB_DOCUMENT_FORMATS="bson" \
-TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack" \
-MONGO_CLIENT_MODES="driver driver-command driver-command-raw driver-unack" \
+TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack" \
+MONGO_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack" \
 scripts/mongo_gateway_compare.sh
 ```
 
@@ -266,8 +301,8 @@ Useful overrides:
 
 - `DOCS_LIST="1000 10000 100000"`
 - `INDEXES_LIST="0 1 2"`
-- `TREEDB_CLIENT_MODES="driver driver-command driver-command-raw driver-unack raw-wire-tcp raw-wire"`
-- `MONGO_CLIENT_MODES="driver driver-command driver-command-raw driver-unack"`
+- `TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire native-wire-tcp native-wire-inproc"`
+- `MONGO_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack"`
 - `READS=50000`, `RANGE_READS=5000`, `UPDATES=5000`
 - `DELETES=1000`
 - `RANGE_INDEX=true` or `--range-index` to create `age_1` and report
@@ -276,6 +311,8 @@ Useful overrides:
   TreeDB cell and retain per-phase profiles under the bundle's `profiles/`
   directory.
 - `CONCURRENT_READERS=16`, `CONCURRENT_READS=50000`
+- `CONCURRENT_RANGE_READER_SWEEP="1,2,4,8,16"`,
+  `CONCURRENT_RANGE_READS=5000`
 - `CONCURRENT_WRITERS=8`, `CONCURRENT_WRITES=10000`
 - `BATCH_SIZE=1000`
 - `MONGO_IMAGE=mongo:8`
@@ -295,6 +332,8 @@ BATCH_SIZE=5000 scripts/mongo_gateway_compare.sh \
   --concurrent-read-kinds "id,email,range" \
   --concurrent-reader-sweep "1,2,4,8,16" \
   --concurrent-reads 50000 \
+  --concurrent-range-reader-sweep "1,2,4,8,16" \
+  --concurrent-range-reads 5000 \
   --concurrent-writer-sweep "1,2,4,8,16" \
   --concurrent-writes 10000 \
   --timeout 120m
@@ -343,11 +382,14 @@ done
 The initial workload phases are:
 
 - `load_insert_many`: batched document inserts. The exact client call depends
-  on `client_mode`: `InsertMany` for `driver`, `RunCommand({insert,
-  documents})` for `driver-command`, `RunCommand` with a prebuilt raw BSON
-  command for `driver-command-raw`, unacknowledged `InsertMany` plus a post-load
-  visibility wait for `driver-unack`, and raw OP_MSG document sequences for
-  `raw-wire`/`raw-wire-tcp`. When `-insert-producers` is greater than 1, this
+  on `client_mode`: `InsertMany` for `driver` and `driver-find-raw`,
+  `RunCommand({insert, documents})` for `driver-command`, `RunCommand` with a
+  prebuilt raw BSON command for `driver-command-raw`, unacknowledged `InsertMany`
+  plus a post-load visibility wait for `driver-unack`, direct
+  `Collection.InsertBatch` in the selected storage format for `direct`, and raw
+  OP_MSG document sequences for `raw-wire`/`raw-wire-tcp`/
+  `raw-wire-tcp-pipeline`. When
+  `-insert-producers` is greater than 1, this
   phase reports aggregate wall-clock throughput and per-producer call latency in
   `producer_results`.
 - `id_find_one`: point lookup by `_id`.
@@ -356,6 +398,12 @@ The initial workload phases are:
 - `age_range_scan_limit_10` / `age_range_indexed_limit_10`: bounded range query
   with `limit: 10`; operations count range queries, not returned documents. The
   indexed variant is emitted when `-range-index` creates `age_1`.
+- `concurrent_age_range_scan_limit_10_rN` /
+  `concurrent_age_range_indexed_limit_10_rN`: total age range queries split
+  across `N` goroutines. Use `-concurrent-range-reader-sweep 1,2,4,8,16` with
+  `-concurrent-range-reads` to emit multiple range-reader fanout phases from one
+  loaded database. The legacy `-concurrent-range-readers N` flag emits one
+  fanout phase and cannot be combined with `-concurrent-range-reader-sweep`.
 - `id_update_set`: `$set` update by `_id`.
 - `concurrent_id_find_one_rN`, `concurrent_email_find_one_rN`,
   `concurrent_age_range_scan_limit_10_rN`, and
@@ -557,6 +605,8 @@ The benchmark shapes are intentionally different:
   collection-manager detailed update timing for its measured phase and reports
   update attribution metrics such as `update_current_read_ns/doc`,
   `update_callback_ns/doc`, `update_index_state_extract_ns/doc`,
+  `update_old_index_state_extract_ns/doc`,
+  `update_new_index_state_extract_ns/doc`,
   `update_primary_run_ns/doc`, `update_secondary_runs_ns/doc`,
   `update_index_value_changes/doc`, `update_index_value_unchanged/doc`,
   `update_unique_checks/doc`, `update_unique_check_skips/doc`,
@@ -570,12 +620,20 @@ The benchmark shapes are intentionally different:
   `update_buffer_precheck_ns/doc`, `update_buffer_lock_wait_ns/doc`,
   `update_buffer_lock_hold_ns/doc`, `update_buffer_validation_ns/doc`,
   `update_buffer_root_scan_ns/doc`, `update_buffer_domain_prepare_ns/doc`,
+  `update_buffer_freeze_ns/doc`, `update_buffer_root_table_ns/doc`,
   `update_buffer_primary_index_ns/doc`, `update_buffer_unique_index_ns/doc`,
+  `update_buffer_primary_append_ns/doc`,
+  `update_buffer_secondary_append_ns/doc`,
   `update_buffer_root_append_ns/doc`, `update_buffer_flush_ns/doc`,
-  `update_publish_ns/doc`, and `update_items/batch` from the collection
+  combiner timings such as `update_combine_enqueue_ns/doc`,
+  `update_combine_wait_ns/doc`, `update_combine_drain_ns/doc`, and
+  `update_combine_run_ns/doc`, `update_publish_ns/doc`, and
+  `update_items/batch` from the collection
   manager's measured-phase counters. `update_buffer_lock_hold_ns/doc` is the
   enclosing domain mutex hold time for buffered staging, not an additive sibling
-  of the other buffer-stage submetrics; `update_buffer_flush_ns/doc` reports
+  of the other buffer-stage submetrics; the narrower root-table, append, and
+  freeze submetrics are nested attribution inside the broader buffer-stage
+  timers. `update_buffer_flush_ns/doc` reports
   threshold-flush scheduling/publish time separately. The measured phase includes
   the final `FlushAll()` drain so background async publish work is charged to the
   same throughput row that scheduled it. The same row also reports backend
@@ -605,11 +663,15 @@ The benchmark-only helpers accept these optional environment variables:
 `MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS` for
 focused indexed async-flush experiments.
 
-Use the official-driver row for user-visible Mongo compatibility throughput, the
-driver-command rows to quantify the driver's CRUD-helper overhead, the raw-wire
-rows to estimate the gateway/server ceiling, and the direct collection row to
+Use the official-driver row for user-visible Mongo compatibility throughput,
+`driver-find-raw` to remove range-read `bson.M` decode while keeping
+official-driver `Find`/cursor behavior, the driver-command rows to quantify the
+driver's CRUD-helper overhead, the raw-wire rows to estimate the gateway/server
+ceiling, `raw-wire-tcp-pipeline` to measure how much single-connection TCP
+latency can be hidden by request pipelining, and the direct collection row to
 estimate the storage-engine ceiling for the same document shape. For
-acknowledged high-throughput ingest through the public MongoDB Go driver,
+acknowledged high-throughput ingest through the
+public MongoDB Go driver,
 `driver-command-raw` is the fastest current path because it keeps the official
 driver transport while bypassing `InsertMany`'s explicit-`_id` discovery and
 `InsertedIDs` bookkeeping.
@@ -621,6 +683,13 @@ adds `active_1`. The age range phase is a bounded scan unless `-range-index` is
 set; benchmark output names the phase `age_range_scan_limit_10` or
 `age_range_indexed_limit_10` so reports can separate fallback cost from indexed
 range-search cost.
+
+For TreeDB targets, `-treedb-read-state settled` (the default) calls
+`CollectionManager.FlushAll` after load and before read phases, so reads measure
+settled collection roots rather than mutable write-domain state. Use
+`-treedb-read-state unsettled` to leave post-load memtables/write-domain state in
+place for read phases when you want to compare settled and unsettled visibility
+costs.
 
 For TreeDB, prefer `treedb_disk_after_maintenance.total_bytes` when present, and
 use `treedb_disk_after_checkpoint.total_bytes` for checkpoint-only runs. The

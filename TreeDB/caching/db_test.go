@@ -2151,6 +2151,9 @@ func TestPruneRetainedValueLogs_SkipsLiveScanWhenAllRetainedPathsInUse(t *testin
 	}
 	defer cache.Close()
 
+	if err := cache.Set([]byte("seed"), bytes.Repeat([]byte("v"), 64)); err != nil {
+		t.Fatalf("seed value-log writer: %v", err)
+	}
 	retained := cache.currentValueLogPath(&cache.lanes[0])
 	if retained == "" {
 		t.Fatalf("expected current value-log path")

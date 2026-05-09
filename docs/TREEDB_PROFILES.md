@@ -152,6 +152,32 @@ Use when you want:
 
 Not recommended for production.
 
+## Measuring Final Storage
+
+Profiles choose write-path and maintenance policy; they do not by themselves
+produce a fully compacted on-disk footprint. If you are reporting final disk
+usage for a benchmark or handoff, run the high-level storage compaction path
+after loading and before measuring:
+
+```sh
+treemap compact <db-dir> -rw
+treemap compact-plan <db-dir>
+```
+
+or in Go:
+
+```go
+stats, err := db.CompactStorage(ctx, treedb.CompactStorageOptions{
+	Mode: treedb.CompactStorageFull,
+})
+```
+
+This is the recommended path for `ProfileFast`, `ProfileWALOnFast`, and
+`ProfileBench` databases. It coordinates `value_vlog` rewrite/GC, `leaf_vlog`
+generation pack/GC, index vacuum, and zero-byte value-log cleanup. Do not
+manually chain `vlog-gc`, `vlog-rewrite`, `leafgen-pack`, `leafgen-gc`, and
+index vacuum unless you are debugging TreeDB internals.
+
 ## Important Notes
 
 ### Profiles do not prevent overrides

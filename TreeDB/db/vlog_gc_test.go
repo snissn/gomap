@@ -176,6 +176,62 @@ func TestValueLogGC_ProtectedPathsDoNotKeepHistoricalRewriteLanes(t *testing.T) 
 	}
 }
 
+func TestValueLogGC_ObservedSourceReclaimActiveRequiresExplicitOption(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	appendPointersInNewSegment(t, dir, 0, 1, 1_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("lane0-seq1|"), 32)
+	})
+	appendPointersInNewSegment(t, dir, 0, 2, 2_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("lane0-seq2|"), 32)
+	})
+
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+
+	activeID, err := valuelog.EncodeFileID(0, 2)
+	if err != nil {
+		t.Fatalf("active fileid: %v", err)
+	}
+	activePath := filepath.Join(dir, "value_vlog", "value-l0-000002.log")
+
+	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{
+		ObservedSourceFileIDs:            []uint32{activeID},
+		ObservedSourceAssumeUnreferenced: true,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogGC without active reclaim: %v", err)
+	}
+	if stats.ObservedSourceSegmentsActive != 1 || stats.ObservedSourceSegmentsDeleted != 0 {
+		t.Fatalf("observed active source was not protected by default: %+v", stats)
+	}
+	if _, err := os.Stat(activePath); err != nil {
+		t.Fatalf("expected active source to remain without explicit reclaim: %v", err)
+	}
+
+	stats, err = db.ValueLogGC(context.Background(), ValueLogGCOptions{
+		ObservedSourceFileIDs:            []uint32{activeID},
+		ObservedSourceAssumeUnreferenced: true,
+		ObservedSourceReclaimActive:      true,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogGC with active reclaim: %v", err)
+	}
+	if stats.ObservedSourceSegmentsEligible != 1 || stats.ObservedSourceSegmentsDeleted != 1 {
+		t.Fatalf("observed active source was not reclaimed with explicit option: %+v", stats)
+	}
+	if _, err := os.Stat(activePath); !os.IsNotExist(err) {
+		t.Fatalf("expected active source to be removed with explicit reclaim, err=%v", err)
+	}
+}
+
 func TestValueLogGC_ProtectedPathBreakdownStats(t *testing.T) {
 	dir := t.TempDir()
 

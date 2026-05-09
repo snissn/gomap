@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,7 +22,7 @@ func TestCollectValueLogAudit_WiresDictLookupFromRoot(t *testing.T) {
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)
 
-	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
+	report, err := collectValueLogAudit(dir, true, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
 	if err != nil {
 		t.Fatalf("collectValueLogAudit(root): %v", err)
 	}
@@ -49,7 +50,7 @@ func TestCollectValueLogAudit_AcceptsMainDBDir(t *testing.T) {
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)
 
-	report, err := collectValueLogAudit(filepath.Join(dir, "maindb"), treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
+	report, err := collectValueLogAudit(filepath.Join(dir, "maindb"), true, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
 	if err != nil {
 		t.Fatalf("collectValueLogAudit(maindb): %v", err)
 	}
@@ -67,6 +68,22 @@ func TestCollectValueLogAudit_AcceptsMainDBDir(t *testing.T) {
 	}
 	if got := report.Stats["cosmos.db.type"]; got != "treedb" {
 		t.Fatalf("unexpected stats db type from maindb path: %q", got)
+	}
+}
+
+func TestCollectValueLogAuditDoesNotCreateEmptyValueLogLaneFiles(t *testing.T) {
+	dir := t.TempDir()
+	buildDictCompressedDBForAudit(t, dir)
+	valueLogDir := filepath.Join(dir, "maindb", "value_vlog")
+	beforeFiles, beforeZero := countValueLogFilesForTest(t, valueLogDir)
+
+	if _, err := collectValueLogAudit(dir, true, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{}); err != nil {
+		t.Fatalf("collectValueLogAudit: %v", err)
+	}
+
+	afterFiles, afterZero := countValueLogFilesForTest(t, valueLogDir)
+	if afterFiles != beforeFiles || afterZero != beforeZero {
+		t.Fatalf("value-log file counts changed after audit: before files=%d zero=%d after files=%d zero=%d", beforeFiles, beforeZero, afterFiles, afterZero)
 	}
 }
 
@@ -91,7 +108,7 @@ func TestCollectValueLogAudit_IncludesLeafLogSegments(t *testing.T) {
 		t.Fatalf("Close(leaf log): %v", err)
 	}
 
-	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
+	report, err := collectValueLogAudit(dir, true, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
 	if err != nil {
 		t.Fatalf("collectValueLogAudit(with leaf_vlog): %v", err)
 	}
@@ -241,7 +258,7 @@ func TestCollectValueLogAudit_FrameScanIncludesModeAndLengthBreakdown(t *testing
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)
 
-	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{
+	report, err := collectValueLogAudit(dir, true, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{
 		Enabled:    true,
 		TopLengths: 8,
 	})
@@ -471,4 +488,30 @@ func buildDictCompressedDBForAudit(t *testing.T, dir string) {
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+}
+
+func countValueLogFilesForTest(t *testing.T, dir string) (files int, zero int) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s): %v", dir, err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, "value-") || (!strings.HasSuffix(name, ".log") && !strings.HasSuffix(name, ".log.gz")) {
+			continue
+		}
+		files++
+		info, err := entry.Info()
+		if err != nil {
+			t.Fatalf("Info(%s): %v", name, err)
+		}
+		if info.Size() == 0 {
+			zero++
+		}
+	}
+	return files, zero
 }

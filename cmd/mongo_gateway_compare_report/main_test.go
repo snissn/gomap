@@ -259,6 +259,68 @@ func TestReportGroupsConcurrentReadSweepRows(t *testing.T) {
 	}
 }
 
+func TestReportGroupsConcurrentRangeReadSweepRows(t *testing.T) {
+	treedbPhases := []phaseResult{
+		{Name: "age_range_indexed_limit_10", OpsPerSecond: 700, SampledOpsPerSecond: 750, LatencyMicros: latencySummary{P95: 70}},
+		{Name: "concurrent_age_range_indexed_limit_10_r4", OpsPerSecond: 4000, SampledOpsPerSecond: 4200, LatencyMicros: latencySummary{P95: 10}},
+		{Name: "concurrent_age_range_indexed_limit_10_r1", OpsPerSecond: 1000, SampledOpsPerSecond: 1200, LatencyMicros: latencySummary{P95: 15}},
+	}
+	mongoPhases := []phaseResult{
+		{Name: "age_range_indexed_limit_10", OpsPerSecond: 600, SampledOpsPerSecond: 650, LatencyMicros: latencySummary{P95: 80}},
+		{Name: "concurrent_age_range_indexed_limit_10_r4", OpsPerSecond: 2000, SampledOpsPerSecond: 2200, LatencyMicros: latencySummary{P95: 20}},
+		{Name: "concurrent_age_range_indexed_limit_10_r1", OpsPerSecond: 500, SampledOpsPerSecond: 600, LatencyMicros: latencySummary{P95: 30}},
+	}
+	cells := []cellComparison{{
+		Key: cellKey{Documents: 100, SecondaryIndexes: 2, TreeDBConfig: "treedb_bson"},
+		TreeDB: &runRecord{
+			Row:      matrixRow{Target: "treedb", Config: "treedb_bson", Documents: 100, SecondaryIndexes: 2, RawJSON: "treedb.json"},
+			Result:   benchmarkResult{Target: "treedb", Documents: 100, SecondaryIndexes: 2, RangeIndex: true, ConcurrentRangeReaderSweep: []int{1, 4}, Phases: treedbPhases},
+			PhaseMap: phaseMap(treedbPhases),
+		},
+		Mongo: &runRecord{
+			Row:      matrixRow{Target: "mongo", Config: "mongo", Documents: 100, SecondaryIndexes: 2, RawJSON: "mongo.json"},
+			Result:   benchmarkResult{Target: "mongo", Documents: 100, SecondaryIndexes: 2, RangeIndex: true, ConcurrentRangeReaderSweep: []int{1, 4}, Phases: mongoPhases},
+			PhaseMap: phaseMap(mongoPhases),
+		},
+	}}
+
+	report := renderReport(config{Title: "test", MatrixPath: "matrix.tsv"}, cells, time.Unix(0, 0).UTC())
+	for _, want := range []string{
+		"## Concurrent Range Read Sweep",
+		"Serial `age_range_*_limit_10` remains a separate single-in-flight latency phase.",
+		"| 100 | 2 | `indexed` | `treedb_bson` | `mongo` | 1 | 1000 | 1200 | 500 | 600 | 2.00x | 15.0 | 30.0 |",
+		"| 100 | 2 | `indexed` | `treedb_bson` | `mongo` | 4 | 4000 | 4200 | 2000 | 2200 | 2.00x | 10.0 | 20.0 |",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q\n%s", want, report)
+		}
+	}
+	opsSection := strings.Split(strings.Split(report, "## Ops/Sec Summary")[1], "## Raw Inputs")[0]
+	if strings.Contains(opsSection, "`concurrent_age_range_indexed_limit_10_r1`") || strings.Contains(opsSection, "`concurrent_age_range_indexed_limit_10_r4`") {
+		t.Fatalf("range sweep phases should be grouped in the range sweep section, not repeated in ops summary:\n%s", opsSection)
+	}
+	if !strings.Contains(opsSection, "`age_range_indexed_limit_10`") {
+		t.Fatalf("serial range phase should remain in ops summary:\n%s", opsSection)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		readers int
+		ok      bool
+	}{
+		{name: "concurrent_age_range_indexed_limit_10_r8", readers: 8, ok: true},
+		{name: "concurrent_age_range_scan_limit_10_r2", readers: 2, ok: true},
+		{name: "concurrent_age_range_indexed_limit_10_r0", ok: false},
+		{name: "age_range_indexed_limit_10", ok: false},
+		{name: "concurrent_id_find_one_r8", ok: false},
+	} {
+		readers, ok := concurrentRangeReadReaders(tc.name)
+		if readers != tc.readers || ok != tc.ok {
+			t.Fatalf("concurrentRangeReadReaders(%q)=%d,%t want %d,%t", tc.name, readers, ok, tc.readers, tc.ok)
+		}
+	}
+}
+
 func TestReportDoesNotGroupLegacySingleConcurrentReadPhase(t *testing.T) {
 	phase := phaseResult{Name: "concurrent_id_find_one_r8", OpsPerSecond: 8000}
 	cells := []cellComparison{{

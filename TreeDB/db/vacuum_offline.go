@@ -8,6 +8,7 @@ import (
 	"runtime"
 
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
+	"github.com/snissn/gomap/TreeDB/internal/collectionwal"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -58,6 +59,9 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 	if err := recoverIndexSwap(opts.Dir); err != nil {
 		return err
 	}
+	if err := collectionwal.RequireCleanForOfflineMaintenance(opts.Dir); err != nil {
+		return err
+	}
 
 	// Open the DB without acquiring a second lock (we already hold it).
 	d, err := openReadOnlyNoLock(opts)
@@ -70,9 +74,14 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		_ = d.Close()
 		return fmt.Errorf("vacuum: missing db state")
 	}
-	if state.ValueLogSet != nil {
-		d.valueLogManager.Acquire(state.ValueLogSet)
-		defer d.valueLogManager.Release(state.ValueLogSet)
+	acquiredValueLogSet := state.ValueLogSet
+	if acquiredValueLogSet != nil {
+		d.valueLogManager.Acquire(acquiredValueLogSet)
+		defer func() {
+			if acquiredValueLogSet != nil {
+				_ = d.valueLogManager.Release(acquiredValueLogSet)
+			}
+		}()
 	}
 
 	indexPath := filepath.Join(opts.Dir, indexFileName)
@@ -146,6 +155,19 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		_ = d.Close()
 		return err
 	}
+	outputHasLeafLogRefs, err := vacuumOutputHasLeafLogRefs(newPager, reader, userRoot, sysRoot)
+	if err != nil {
+		_ = newPager.Close()
+		_ = d.Close()
+		return err
+	}
+	if !outputHasLeafLogRefs {
+		if err := writeLeafGenerationResetPendingAfterOfflineVacuum(opts.Dir); err != nil {
+			_ = newPager.Close()
+			_ = d.Close()
+			return err
+		}
+	}
 
 	if err := newPager.Sync(); err != nil {
 		_ = newPager.Close()
@@ -179,6 +201,14 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		_ = d.Close()
 		return err
 	}
+	if acquiredValueLogSet != nil {
+		releaseSet := acquiredValueLogSet
+		acquiredValueLogSet = nil
+		if err := d.valueLogManager.Release(releaseSet); err != nil {
+			_ = d.Close()
+			return err
+		}
+	}
 	if err := d.Close(); err != nil {
 		return err
 	}
@@ -208,7 +238,203 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		}
 	}
 
+	if !outputHasLeafLogRefs {
+		if err := resetLeafGenerationAfterOfflineVacuum(opts.Dir, meta.CommitSeq, nil); err != nil {
+			return err
+		}
+		if err := removeLeafGenerationResetPendingAfterOfflineVacuum(opts.Dir); err != nil {
+			return err
+		}
+	}
+
 	return nil
+}
+
+func vacuumOutputHasLeafLogRefs(p *pager.Pager, reader tree.SlabReader, userRoot, systemRoot uint64) (bool, error) {
+	for _, rootID := range []uint64{userRoot, systemRoot} {
+		hasRefs, err := vacuumTreeHasLeafLogRefs(p, rootID)
+		if err != nil || hasRefs {
+			return hasRefs, err
+		}
+	}
+	descriptors, err := vacuumCollectCollectionRootDescriptors(p, reader, systemRoot)
+	if err != nil {
+		return false, err
+	}
+	seen := make(map[uint64]struct{}, len(descriptors))
+	for _, descriptor := range descriptors {
+		if descriptor.rootID == 0 {
+			continue
+		}
+		if _, ok := seen[descriptor.rootID]; ok {
+			continue
+		}
+		seen[descriptor.rootID] = struct{}{}
+		hasRefs, err := vacuumTreeHasLeafLogRefs(p, descriptor.rootID)
+		if err != nil || hasRefs {
+			return hasRefs, err
+		}
+	}
+	return false, nil
+}
+
+func vacuumTreeHasLeafLogRefs(p *pager.Pager, rootID uint64) (bool, error) {
+	if p == nil || rootID == 0 {
+		return false, nil
+	}
+	var walk func(uint64) (bool, error)
+	walk = func(id uint64) (bool, error) {
+		data, err := p.Get(id)
+		if err != nil {
+			return false, err
+		}
+		n := node.NewNode(data)
+		switch n.Type() {
+		case page.PageTypeInternal:
+			count := n.Count()
+			for i := uint16(0); i < count; i++ {
+				_, childRef, err := n.GetInternalEntryRefView(i)
+				if err != nil {
+					return false, err
+				}
+				if childRef.Kind == page.ChildRefLeafLog {
+					return true, nil
+				}
+				if childRef.Kind != page.ChildRefPage {
+					return false, fmt.Errorf("vacuum: unexpected child ref kind %d at page %d", childRef.Kind, id)
+				}
+				hasRefs, err := walk(childRef.Page)
+				if err != nil || hasRefs {
+					return hasRefs, err
+				}
+			}
+			return false, nil
+		case page.PageTypeLeaf:
+			return false, nil
+		default:
+			return false, fmt.Errorf("vacuum: unexpected page type %d at page %d", n.Type(), id)
+		}
+	}
+	return walk(rootID)
+}
+
+func resetLeafGenerationAfterOfflineVacuum(dir string, commitSeq uint64, evictSegment func(uint32) error) error {
+	leafDir := LeafLogDirPath(dir)
+	if leafDir == "" {
+		return nil
+	}
+	if _, err := os.Stat(leafDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("vacuum: stat leaf_vlog dir: %w", err)
+	}
+
+	files, err := listLeafGenerationBootstrapFiles(leafDir)
+	if err != nil {
+		return fmt.Errorf("vacuum: list leaf_vlog files: %w", err)
+	}
+	_, manifestExists, err := loadLeafGenerationManifest(leafDir)
+	if err != nil {
+		return fmt.Errorf("vacuum: load leaf generation manifest: %w", err)
+	}
+	sidecarPaths, err := filepath.Glob(filepath.Join(leafDir, "value-l*.log"+leafGenerationRecordLengthIndexSuffix))
+	if err != nil {
+		return fmt.Errorf("vacuum: list leaf generation record-length indexes: %w", err)
+	}
+	if len(files) == 0 && !manifestExists && len(sidecarPaths) == 0 {
+		return nil
+	}
+	if err := saveLeafGenerationManifest(leafDir, newLeafGenerationManifest(commitSeq)); err != nil {
+		return fmt.Errorf("vacuum: reset leaf generation manifest: %w", err)
+	}
+	if err := syncDirFn(leafDir); err != nil {
+		return fmt.Errorf("vacuum: sync leaf_vlog dir after manifest reset: %w", err)
+	}
+
+	for _, file := range files {
+		if evictSegment != nil {
+			if err := evictSegment(page.ValueLogFileID(file.rawFileID)); err != nil {
+				return fmt.Errorf("vacuum: evict stale leaf generation file %s: %w", leafGenerationFallbackPath(dir, file.rawFileID), err)
+			}
+		}
+		path := leafGenerationFallbackPath(dir, file.rawFileID)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("vacuum: remove stale leaf generation file %s: %w", path, err)
+		}
+		indexPath := leafGenerationRecordLengthIndexPath(dir, file.rawFileID)
+		if err := os.Remove(indexPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("vacuum: remove stale leaf generation record-length index %s: %w", indexPath, err)
+		}
+	}
+	for _, indexPath := range sidecarPaths {
+		if err := os.Remove(indexPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("vacuum: remove stale leaf generation record-length index %s: %w", indexPath, err)
+		}
+	}
+	if err := syncDirFn(leafDir); err != nil {
+		return fmt.Errorf("vacuum: sync leaf_vlog dir after stale file removal: %w", err)
+	}
+	return nil
+}
+
+const leafGenerationOfflineVacuumResetPendingFileName = "offline-vacuum-reset.pending"
+
+func leafGenerationResetPendingAfterOfflineVacuumPath(dir string) string {
+	return filepath.Join(LeafLogDirPath(dir), leafGenerationOfflineVacuumResetPendingFileName)
+}
+
+func writeLeafGenerationResetPendingAfterOfflineVacuum(dir string) error {
+	leafDir := LeafLogDirPath(dir)
+	if err := os.MkdirAll(leafDir, 0o700); err != nil {
+		return fmt.Errorf("vacuum: create leaf_vlog dir for reset marker: %w", err)
+	}
+	path := leafGenerationResetPendingAfterOfflineVacuumPath(dir)
+	if err := os.WriteFile(path, []byte("v1\n"), 0o600); err != nil {
+		return fmt.Errorf("vacuum: write leaf_vlog reset marker: %w", err)
+	}
+	if err := syncDirFn(leafDir); err != nil {
+		return fmt.Errorf("vacuum: sync leaf_vlog dir after reset marker: %w", err)
+	}
+	return nil
+}
+
+func removeLeafGenerationResetPendingAfterOfflineVacuum(dir string) error {
+	leafDir := LeafLogDirPath(dir)
+	path := leafGenerationResetPendingAfterOfflineVacuumPath(dir)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("vacuum: remove leaf_vlog reset marker: %w", err)
+	}
+	if err := syncDirFn(leafDir); err != nil {
+		return fmt.Errorf("vacuum: sync leaf_vlog dir after reset marker removal: %w", err)
+	}
+	return nil
+}
+
+func recoverLeafGenerationResetAfterOfflineVacuum(dir string, p *pager.Pager, reader tree.SlabReader, userRoot, systemRoot, commitSeq uint64, beforeReset func() error, evictSegment func(uint32) error) (bool, error) {
+	markerPath := leafGenerationResetPendingAfterOfflineVacuumPath(dir)
+	if _, err := os.Stat(markerPath); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("vacuum: stat leaf_vlog reset marker: %w", err)
+	}
+	hasLeafLogRefs, err := vacuumOutputHasLeafLogRefs(p, reader, userRoot, systemRoot)
+	if err != nil {
+		return false, err
+	}
+	if !hasLeafLogRefs {
+		if beforeReset != nil {
+			if err := beforeReset(); err != nil {
+				return false, err
+			}
+		}
+		if err := resetLeafGenerationAfterOfflineVacuum(dir, commitSeq, evictSegment); err != nil {
+			return false, err
+		}
+		return true, removeLeafGenerationResetPendingAfterOfflineVacuum(dir)
+	}
+	return false, removeLeafGenerationResetPendingAfterOfflineVacuum(dir)
 }
 
 func writeMetaToPager(p *pager.Pager, pageID uint64, meta page.MetaPageBody) error {

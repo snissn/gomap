@@ -1,6 +1,7 @@
 package valuelog
 
 import (
+	"bytes"
 	"io"
 	"path/filepath"
 	"testing"
@@ -20,6 +21,9 @@ func TestNewWriter_LazyScratchBuffers(t *testing.T) {
 
 	if cap(writer.scratch) != 0 {
 		t.Fatalf("cap(scratch)=%d want 0", cap(writer.scratch))
+	}
+	if cap(writer.appendBuf) != 0 {
+		t.Fatalf("cap(appendBuf)=%d want 0", cap(writer.appendBuf))
 	}
 	if cap(writer.rawScratch) != 0 {
 		t.Fatalf("cap(rawScratch)=%d want 0", cap(writer.rawScratch))
@@ -138,6 +142,119 @@ func TestWriterRotateTo_TrimsOversizedScratchBuffers(t *testing.T) {
 	}
 }
 
+func TestWriterRotateToFromSink_LazyAppendBuffer(t *testing.T) {
+	writer := NewWriterWithSink(io.Discard, page.ValueLogFileID(1))
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000002.log")
+	if err := writer.RotateTo(path, page.ValueLogFileID(2)); err != nil {
+		t.Fatalf("RotateTo: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	if cap(writer.appendBuf) != 0 {
+		t.Fatalf("cap(appendBuf)=%d want 0", cap(writer.appendBuf))
+	}
+}
+
+func TestWriterCloseSinkFlushesAndReleasesBuffers(t *testing.T) {
+	var sink bytes.Buffer
+	writer := NewWriterWithSink(&sink, page.ValueLogFileID(1))
+	if err := writer.writeBytes([]byte("buffered")); err != nil {
+		t.Fatalf("writeBytes: %v", err)
+	}
+	writer.appendBuf = append(make([]byte, 0, defaultBufferSize), "append"...)
+	writer.scratch = make([]byte, 1, 16)
+	writer.rawScratch = make([]byte, 1, 16)
+	writer.encScratch = make([]byte, 1, 16)
+	writer.blockScratch = make([]byte, 1, 16)
+	writer.encLimiter.buf = writer.encScratch
+	writer.encLimiter.limit = 16
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got, want := sink.String(), "bufferedappend"; got != want {
+		t.Fatalf("sink contents=%q want %q", got, want)
+	}
+	if writer.appendBuf != nil {
+		t.Fatalf("appendBuf retained after Close: cap=%d", cap(writer.appendBuf))
+	}
+	if writer.scratch != nil || writer.rawScratch != nil || writer.encScratch != nil || writer.blockScratch != nil {
+		t.Fatalf("scratch buffers retained after Close")
+	}
+	if writer.encLimiter.buf != nil || writer.encLimiter.limit != 0 {
+		t.Fatalf("encLimiter retained after Close: buf=%v limit=%d", writer.encLimiter.buf != nil, writer.encLimiter.limit)
+	}
+}
+
+func drainWriterAppendBufPoolForTest() {
+	for {
+		select {
+		case <-writerAppendBufPool:
+		default:
+			return
+		}
+	}
+}
+
+func TestWriterAppendBufPool_BoundedDefaultBuffers(t *testing.T) {
+	drainWriterAppendBufPoolForTest()
+	t.Cleanup(drainWriterAppendBufPoolForTest)
+
+	for i := 0; i < writerAppendBufPoolEntries+3; i++ {
+		putWriterAppendBuf(make([]byte, 0, defaultBufferSize))
+	}
+	if got := len(writerAppendBufPool); got != writerAppendBufPoolEntries {
+		t.Fatalf("writer append pool entries=%d want=%d", got, writerAppendBufPoolEntries)
+	}
+
+	for i := 0; i < writerAppendBufPoolEntries; i++ {
+		buf := getWriterAppendBuf(defaultBufferSize)
+		if cap(buf) != defaultBufferSize {
+			t.Fatalf("pooled append buffer cap=%d want=%d", cap(buf), defaultBufferSize)
+		}
+	}
+	if got := len(writerAppendBufPool); got != 0 {
+		t.Fatalf("writer append pool entries after get=%d want=0", got)
+	}
+}
+
+func TestWriterEnsureAppendBufCapPreservesPendingBytes(t *testing.T) {
+	writer := &Writer{
+		appendBuf: append(make([]byte, 0, 4), "pending"...),
+	}
+
+	writer.ensureAppendBufCap(64)
+
+	if string(writer.appendBuf) != "pending" {
+		t.Fatalf("appendBuf=%q want pending bytes preserved", string(writer.appendBuf))
+	}
+	if cap(writer.appendBuf) < 64 {
+		t.Fatalf("cap(appendBuf)=%d want at least 64", cap(writer.appendBuf))
+	}
+}
+
+func TestWriterEnsureAppendBufCapReturnsDefaultBufferOnGrowth(t *testing.T) {
+	drainWriterAppendBufPoolForTest()
+	t.Cleanup(drainWriterAppendBufPoolForTest)
+
+	writer := &Writer{
+		appendBuf: append(make([]byte, 0, defaultBufferSize), "pending"...),
+	}
+	writer.ensureAppendBufCap(defaultBufferSize + 1)
+
+	if string(writer.appendBuf) != "pending" {
+		t.Fatalf("appendBuf=%q want pending bytes preserved", string(writer.appendBuf))
+	}
+	if cap(writer.appendBuf) < defaultBufferSize+1 {
+		t.Fatalf("cap(appendBuf)=%d want at least %d", cap(writer.appendBuf), defaultBufferSize+1)
+	}
+	if got := len(writerAppendBufPool); got != 1 {
+		t.Fatalf("writer append pool entries=%d want=1", got)
+	}
+}
+
 func TestWriterClose_ReleasesScratchBuffers(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-000001.log")
@@ -151,6 +268,7 @@ func TestWriterClose_ReleasesScratchBuffers(t *testing.T) {
 	writer.rawScratch = make([]byte, 16, writerScratchTrimCap+1)
 	writer.encScratch = make([]byte, 8, writerScratchTrimCap+1)
 	writer.blockScratch = make([]byte, 4, writerScratchTrimCap+1)
+	writer.appendBuf = make([]byte, 32, defaultBufferSize)
 	writer.encLimiter.buf = writer.encScratch
 	writer.encLimiter.limit = writerScratchTrimCap + 1
 
@@ -169,6 +287,9 @@ func TestWriterClose_ReleasesScratchBuffers(t *testing.T) {
 	}
 	if writer.blockScratch != nil {
 		t.Fatalf("blockScratch not released on Close")
+	}
+	if writer.appendBuf != nil {
+		t.Fatalf("appendBuf not released on Close")
 	}
 	if writer.encLimiter.buf != nil || writer.encLimiter.limit != 0 {
 		t.Fatalf("encLimiter not cleared on Close: buf=%v limit=%d", writer.encLimiter.buf != nil, writer.encLimiter.limit)

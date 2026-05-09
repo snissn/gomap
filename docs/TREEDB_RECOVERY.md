@@ -9,7 +9,10 @@ For the canonical TreeDB recovery spec, see:
 ## TL;DR
 
 - TreeDB takes an **exclusive directory lock** on `Open` (one process at a time).
-- Cached mode persists writes to `Dir/maindb/wal/` (journal + value-log segments) and flushes them into the backend in the background.
+- Cached mode persists redo records to `Dir/maindb/wal/`.
+- Cached mode persists value-log records to `Dir/maindb/value_vlog/` and
+  optional split leaf-log records to
+  `Dir/maindb/leaf_vlog/`, then flushes them into the backend in the background.
 - On open, TreeDB always performs a single coherent recovery path:
   1) backend recovery (meta validation + torn-tail handling)
   2) cached journal discovery + replay into the backend (synced commits)
@@ -22,7 +25,9 @@ This makes “last writer was cached vs backend” unambiguous: the next opener 
 Depending on timing, after an unclean shutdown the DB directory may contain:
 
 - A consistent backend state (index pages), possibly missing the most recent cached writes that hadn’t flushed yet.
-- One or more journal/value-log segments in `Dir/maindb/wal/` representing cached writes that are not yet reflected in the backend.
+- One or more journal segments in `Dir/maindb/wal/`.
+- Referenced value-log segments in `Dir/maindb/value_vlog/` representing cached
+  writes that are not yet reflected in the backend.
 - A torn/partial final journal record (e.g. crash mid-write).
 
 ## Recovery Pipeline

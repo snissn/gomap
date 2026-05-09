@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -24,6 +25,9 @@ func TestParseConfigDefaultsToInspectableTwoIndexTemplateFixture(t *testing.T) {
 	}
 	if cfg.IndexCount != 2 {
 		t.Fatalf("index count=%d want 2", cfg.IndexCount)
+	}
+	if cfg.DocumentShape != documentShapeDefault || cfg.FieldCount != defaultFixtureFieldCount || cfg.ShapeCount != 1 {
+		t.Fatalf("shape=%q fields=%d shapes=%d, want default/%d/1", cfg.DocumentShape, cfg.FieldCount, cfg.ShapeCount, defaultFixtureFieldCount)
 	}
 	if !cfg.BufferedIndexedWrites {
 		t.Fatal("expected indexed write memtables enabled by default")
@@ -62,16 +66,16 @@ func TestParseConfigPartialBufferedIndexedThresholdKeepsRootRunDefault(t *testin
 	if cfg.BufferedIndexedWriteMaxDocs != 1234 {
 		t.Fatalf("buffered indexed max docs=%d want 1234", cfg.BufferedIndexedWriteMaxDocs)
 	}
-	if cfg.BufferedIndexedWriteMaxRuns != collections.DefaultIndexedWriteMemtableMaxRootRuns {
-		t.Fatalf("buffered indexed max root runs=%d want %d", cfg.BufferedIndexedWriteMaxRuns, collections.DefaultIndexedWriteMemtableMaxRootRuns)
+	if cfg.BufferedIndexedWriteMaxRuns != collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns {
+		t.Fatalf("buffered indexed max root runs=%d want %d", cfg.BufferedIndexedWriteMaxRuns, collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns)
 	}
 
-	asyncCfg, err := parseConfig([]string{"-buffered-indexed-async-flush", "-buffered-indexed-write-max-docs", "1234"}, io.Discard)
+	syncCfg, err := parseConfig([]string{"-disable-buffered-indexed-async-flush", "-buffered-indexed-write-max-docs", "1234"}, io.Discard)
 	if err != nil {
-		t.Fatalf("parse async docs threshold: %v", err)
+		t.Fatalf("parse foreground docs threshold: %v", err)
 	}
-	if asyncCfg.BufferedIndexedWriteMaxRuns != collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns {
-		t.Fatalf("async buffered indexed max root runs=%d want %d", asyncCfg.BufferedIndexedWriteMaxRuns, collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns)
+	if syncCfg.BufferedIndexedWriteMaxRuns != collections.DefaultIndexedWriteMemtableMaxRootRuns {
+		t.Fatalf("foreground buffered indexed max root runs=%d want %d", syncCfg.BufferedIndexedWriteMaxRuns, collections.DefaultIndexedWriteMemtableMaxRootRuns)
 	}
 
 	explicitZeroCfg, err := parseConfig([]string{"-buffered-indexed-write-max-docs", "1234", "-buffered-indexed-write-max-root-runs", "0"}, io.Discard)
@@ -96,6 +100,32 @@ func TestParseConfigAcceptsBSONFormat(t *testing.T) {
 	}
 	if cfg.DocumentFormat != collections.DocumentFormatBSON {
 		t.Fatalf("document format=%q want bson", cfg.DocumentFormat)
+	}
+}
+
+func TestParseConfigAcceptsWideDocumentShape(t *testing.T) {
+	cfg, err := parseConfig([]string{"-document-shape", "wide", "-field-count", "32", "-indexes", "0"}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse wide shape: %v", err)
+	}
+	if cfg.DocumentShape != documentShapeWide || cfg.FieldCount != 32 || cfg.ShapeCount != 1 {
+		t.Fatalf("shape=%q fields=%d shapes=%d, want wide/32/1", cfg.DocumentShape, cfg.FieldCount, cfg.ShapeCount)
+	}
+}
+
+func TestParseConfigAcceptsHeterogeneousDocumentShape(t *testing.T) {
+	cfg, err := parseConfig([]string{"-document-shape", "heterogeneous", "-field-count", "8", "-shape-count", "1024", "-docs", "100", "-indexes", "0"}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse heterogeneous shape: %v", err)
+	}
+	if cfg.DocumentShape != documentShapeHetero || cfg.FieldCount != 8 || cfg.ShapeCount != 100 {
+		t.Fatalf("shape=%q fields=%d shapes=%d, want heterogeneous/8/100", cfg.DocumentShape, cfg.FieldCount, cfg.ShapeCount)
+	}
+}
+
+func TestParseConfigRejectsWideShapeWithIndexes(t *testing.T) {
+	if _, err := parseConfig([]string{"-document-shape", "wide"}, io.Discard); err == nil {
+		t.Fatal("expected wide shape with default indexes to fail")
 	}
 }
 
@@ -223,6 +253,26 @@ func TestRunFixtureReportsBufferedIndexedWritesOnlyWhenIndexesUseThem(t *testing
 			noIndexSummary.BufferedIndexedAsyncFlush, noIndexSummary.BufferedIndexedAsyncFlushMaxQueuedUnits)
 	}
 
+	noIndexOptOutDir := filepath.Join(t.TempDir(), "no-index-opt-out")
+	noIndexOptOutCfg, err := parseConfig([]string{
+		"-dir", noIndexOptOutDir,
+		"-docs", "1",
+		"-indexes", "0",
+		"-disable-buffered-indexed-async-flush",
+		"-reopen-verify=false",
+		"-progress=false",
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse no-index opt-out config: %v", err)
+	}
+	noIndexOptOutSummary, err := runFixture(noIndexOptOutCfg)
+	if err != nil {
+		t.Fatalf("run no-index opt-out fixture: %v", err)
+	}
+	if !noIndexOptOutSummary.DisableBufferedIndexedAsyncFlush {
+		t.Fatal("no-index summary dropped indexed async flush opt-out")
+	}
+
 	indexedDir := filepath.Join(t.TempDir(), "indexed")
 	indexedCfg, err := parseConfig([]string{
 		"-dir", indexedDir,
@@ -277,6 +327,38 @@ func TestRunFixtureReportsBufferedIndexedWritesOnlyWhenIndexesUseThem(t *testing
 	}
 	if disabledSummary.BufferedIndexedWrites {
 		t.Fatal("disabled summary reported buffered indexed writes enabled")
+	}
+}
+
+func TestParseConfigRejectsConflictingBufferedIndexedAsyncFlags(t *testing.T) {
+	cfg, err := parseConfig([]string{
+		"-buffered-indexed-async-flush",
+		"-disable-buffered-indexed-async-flush",
+	}, io.Discard)
+	if err == nil {
+		t.Fatal("parse conflicting async flags succeeded")
+	}
+	if cfg != (config{}) {
+		t.Fatalf("conflicting async flags returned cfg=%+v want zero config", cfg)
+	}
+	if !strings.Contains(err.Error(), "cannot set both") {
+		t.Fatalf("err=%q want conflicting async flag error", err)
+	}
+}
+
+func TestParseConfigRejectsDisabledBufferedIndexedAsyncQueueLimit(t *testing.T) {
+	cfg, err := parseConfig([]string{
+		"-disable-buffered-indexed-async-flush",
+		"-buffered-indexed-async-flush-max-queued-units", "2",
+	}, io.Discard)
+	if err == nil {
+		t.Fatal("parse disabled async queue limit succeeded")
+	}
+	if cfg != (config{}) {
+		t.Fatalf("disabled async queue limit returned cfg=%+v want zero config", cfg)
+	}
+	if !strings.Contains(err.Error(), "max-queued-units") {
+		t.Fatalf("err=%q want max queued units error", err)
 	}
 }
 
@@ -453,7 +535,12 @@ func TestContainsDocumentID(t *testing.T) {
 
 func TestTemplateV1StoredDocumentExtractsInputEnvelope(t *testing.T) {
 	var encoder collections.TemplateV1Encoder
-	raw, err := document(collections.DocumentFormatTemplateV1, &encoder, 7)
+	raw, err := document(config{
+		DocumentFormat: collections.DocumentFormatTemplateV1,
+		DocumentShape:  documentShapeDefault,
+		FieldCount:     defaultFixtureFieldCount,
+		ShapeCount:     1,
+	}, &encoder, 7)
 	if err != nil {
 		t.Fatalf("document: %v", err)
 	}
