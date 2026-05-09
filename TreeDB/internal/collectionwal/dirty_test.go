@@ -10,6 +10,7 @@ import (
 func TestIsSegmentName(t *testing.T) {
 	valid := []string{
 		"collection-l0-000000.log",
+		"collection-l0-1.log",
 		"collection-l1-000123.log",
 		"collection-l2-1000000.log",
 		"collection-l4294967295-999999.log",
@@ -24,7 +25,6 @@ func TestIsSegmentName(t *testing.T) {
 		"collection-0-1.log",
 		"collection-l-1.log",
 		"collection-l0-.log",
-		"collection-l0-1.log",
 		"collection-l0-1.tmp",
 		"collection-l4294967296-1.log",
 		"commit-l0-1.log",

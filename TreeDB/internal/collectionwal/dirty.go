@@ -26,9 +26,6 @@ func IsSegmentName(name string) bool {
 	if len(parts) != 2 {
 		return false
 	}
-	if len(parts[1]) < 6 {
-		return false
-	}
 	lane, err := strconv.ParseUint(parts[0], 10, 32)
 	if err != nil || lane > uint64(^uint32(0)) {
 		return false
