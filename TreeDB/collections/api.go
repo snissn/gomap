@@ -7266,7 +7266,9 @@ func (c *Collection) updateSingleInlineWithoutCombiner(domain *collectionWriteDo
 	results, batched, err := c.updateBatchOwnedItems(items, updateBatchModeNoSecondaryUniqueIndexChanges)
 	if !batched && err == nil {
 		if items[0].hasBSONSet {
-			return c.updateDirect(items[0].DocumentID, items[0].bsonSet.apply)
+			return c.updateDirect(items[0].DocumentID, func(current []byte) ([]byte, bool, error) {
+				return callBSONSetUpdateApply(items[0].bsonSet, current)
+			})
 		}
 		return c.updateDirect(items[0].DocumentID, items[0].Update)
 	}
@@ -9522,7 +9524,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		var changedOne bool
 		if item.hasBSONSet {
 			phaseStart = updateBatchStatsNow(detailedStats)
-			scratch.bsonSetDocumentScratch, document, changedOne, err = item.bsonSet.appendReplacement(scratch.bsonSetDocumentScratch[:0], current.value)
+			scratch.bsonSetDocumentScratch, document, changedOne, err = callBSONSetUpdateAppendReplacement(item.bsonSet, scratch.bsonSetDocumentScratch[:0], current.value)
 			stats.StructuredUpdateApply += updateBatchStatsSince(detailedStats, phaseStart)
 			if err != nil {
 				_ = snap.Close()
