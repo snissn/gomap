@@ -10224,7 +10224,13 @@ func newBufferedUsersUpdateCollectionWithDocs(t *testing.T, opts CollectionOptio
 		values := make([][]byte, len(docs))
 		for i, doc := range docs {
 			ids[i] = []byte(doc.id)
-			values[i] = []byte(fmt.Sprintf(`{"email":%q,"city":%q}`, doc.email, doc.city))
+			values[i], err = json.Marshal(map[string]string{
+				"email": doc.email,
+				"city":  doc.city,
+			})
+			if err != nil {
+				t.Fatalf("marshal user fixture doc: %v", err)
+			}
 		}
 		if _, err := col.InsertBatch(ids, values); err != nil {
 			t.Fatalf("insert: %v", err)
@@ -10335,8 +10341,9 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleZeroDel
 func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReplansStaleBufferedPlanWithoutFlush(t *testing.T) {
 	_, mgr, col := newBufferedUsersUpdateCollectionWithDocs(t,
 		CollectionOptions{
+			BufferedIndexedWrites:                   true,
 			BufferedIndexedWriteMaxDocuments:        1 << 20,
-			BufferedIndexedWriteMaxBytes:            1 << 40,
+			BufferedIndexedWriteMaxBytes:            int64(1) << 40,
 			BufferedIndexedWriteMaxRootRuns:         1 << 20,
 			BufferedIndexedAsyncFlush:               true,
 			BufferedIndexedAsyncFlushMaxQueuedUnits: 1 << 20,
@@ -10411,8 +10418,9 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReplansStaleBuffere
 func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesFlushesRootMismatchInsteadOfReplanning(t *testing.T) {
 	d, mgr, col := newBufferedUsersUpdateCollectionWithDocs(t,
 		CollectionOptions{
+			BufferedIndexedWrites:                   true,
 			BufferedIndexedWriteMaxDocuments:        1 << 20,
-			BufferedIndexedWriteMaxBytes:            1 << 40,
+			BufferedIndexedWriteMaxBytes:            int64(1) << 40,
 			BufferedIndexedWriteMaxRootRuns:         1 << 20,
 			BufferedIndexedAsyncFlush:               true,
 			BufferedIndexedAsyncFlushMaxQueuedUnits: 1 << 20,
@@ -10474,8 +10482,9 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesFlushesRootMismatch
 func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesBatchOneDoesNotFlushBeforeThreshold(t *testing.T) {
 	_, mgr, col := newBufferedUsersUpdateCollectionWithDocs(t,
 		CollectionOptions{
+			BufferedIndexedWrites:                   true,
 			BufferedIndexedWriteMaxDocuments:        1 << 20,
-			BufferedIndexedWriteMaxBytes:            1 << 40,
+			BufferedIndexedWriteMaxBytes:            int64(1) << 40,
 			BufferedIndexedWriteMaxRootRuns:         1 << 20,
 			BufferedIndexedAsyncFlush:               true,
 			BufferedIndexedAsyncFlushMaxQueuedUnits: 1 << 20,
