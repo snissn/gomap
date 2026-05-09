@@ -461,7 +461,7 @@ func (s *Server) handleCheckpoint(sections []iwire.Section) ([]iwire.Section, er
 	if s.backend.DurabilityMode() != backenddb.DurabilityDurable {
 		actualAck = iwire.AckFlushed
 	}
-	ack, err := ackPolicyFromSections(sections, s.defaultBarrierAck(iwire.AckSynced))
+	ack, err := ackPolicyFromSections(sections, s.defaultBarrierAck(actualAck))
 	if err != nil {
 		return nil, err
 	}

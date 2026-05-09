@@ -886,8 +886,10 @@ func TestValidateNativeWireBenchmarkCollectionNormalizesExpectedMeta(t *testing.
 	}
 	actual := expected
 	actual.Options.BufferedIndexedWrites = true
-	actual.Options.BufferedIndexedWriteMaxDocuments = collections.DefaultIndexedWriteMemtableMaxDocuments
-	actual.Options.BufferedIndexedWriteMaxRootRuns = collections.DefaultIndexedWriteMemtableMaxRootRuns
+	actual.Options.BufferedIndexedWriteMaxDocuments = collections.DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
+	actual.Options.BufferedIndexedWriteMaxRootRuns = collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns
+	actual.Options.BufferedIndexedAsyncFlush = true
+	actual.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = collections.DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits
 	if err := validateNativeWireBenchmarkCollection(actual, expected); err != nil {
 		t.Fatalf("validateNativeWireBenchmarkCollection normalized expected metadata: %v", err)
 	}
@@ -904,8 +906,10 @@ func TestValidateNativeWireBenchmarkCollectionNormalizesJSONDocumentFormat(t *te
 	actual := expected
 	actual.Options.DocumentFormat = collections.DocumentFormatDefault
 	actual.Options.BufferedIndexedWrites = true
-	actual.Options.BufferedIndexedWriteMaxDocuments = collections.DefaultIndexedWriteMemtableMaxDocuments
-	actual.Options.BufferedIndexedWriteMaxRootRuns = collections.DefaultIndexedWriteMemtableMaxRootRuns
+	actual.Options.BufferedIndexedWriteMaxDocuments = collections.DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
+	actual.Options.BufferedIndexedWriteMaxRootRuns = collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns
+	actual.Options.BufferedIndexedAsyncFlush = true
+	actual.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = collections.DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits
 	if err := validateNativeWireBenchmarkCollection(actual, expected); err != nil {
 		t.Fatalf("validateNativeWireBenchmarkCollection normalized JSON document format: %v", err)
 	}
@@ -2501,8 +2505,8 @@ func TestEnsureNativeWireBenchmarkCollectionCreatesPrimaryOnlyCollection(t *test
 		meta.Options.BufferedIndexedWriteMaxDocuments != 123 ||
 		meta.Options.BufferedIndexedWriteMaxBytes != 456 ||
 		meta.Options.BufferedIndexedWriteMaxRootRuns != 7 ||
-		!meta.Options.BufferedIndexedAsyncFlush ||
-		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits != 2 {
+		meta.Options.BufferedIndexedAsyncFlush ||
+		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits != 0 {
 		t.Fatalf("meta options=%+v", meta.Options)
 	}
 }

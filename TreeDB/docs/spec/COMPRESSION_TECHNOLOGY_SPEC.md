@@ -1,5 +1,7 @@
 # ClickHouse Compression Technology Specification
 
+Status: reference, non-normative for TreeDB on-disk/API contracts.
+
 Provenance:
 
 - Upstream repository: `https://github.com/ClickHouse/ClickHouse`

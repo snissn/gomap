@@ -14679,11 +14679,8 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		}
 	}
 	if !meta.Options.BufferedIndexedWrites {
-		if meta.Options.DisableIndexedWriteMemtables {
-			meta.Options.DisableBufferedIndexedAsyncFlush = false
-			meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
-		}
 		meta.Options.BufferedIndexedAsyncFlush = false
+		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
 	}
 	return meta, nil
 }
