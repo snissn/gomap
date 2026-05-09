@@ -426,8 +426,16 @@ run_mongo_load_modes() {
     RANGE_READS=0 \
     UPDATES=0 \
     DELETES=0 \
+    CONCURRENT_READ_KINDS=id \
     CONCURRENT_READERS=0 \
+    CONCURRENT_READER_SWEEP= \
+    CONCURRENT_READS=0 \
+    CONCURRENT_RANGE_READERS=0 \
+    CONCURRENT_RANGE_READER_SWEEP= \
+    CONCURRENT_RANGE_READS=0 \
     CONCURRENT_WRITERS=0 \
+    CONCURRENT_WRITER_SWEEP= \
+    CONCURRENT_WRITES=0 \
     PROFILE_TREEDB=true \
     ./scripts/mongo_gateway_compare.sh \
       --out "$root" \

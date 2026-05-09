@@ -1565,7 +1565,7 @@ func renderCollections(b *strings.Builder, rows []collectionRow, comps []collect
 		}
 		ratioRows := collectionComparisonRatioRows(comps)
 		if len(ratioRows.Categories) > 0 {
-			b.WriteString(compactVerticalBarChart("Compacted size: SQLite bytes/doc divided by TreeDB bytes/doc", ratioRows.Categories, "comparison", ratioRows.Series, "ratio"))
+			b.WriteString(compactVerticalBarChart("Compacted size: SQLite bytes/doc divided by TreeDB bytes/doc", ratioRows.Categories, "index count", ratioRows.Series, "ratio"))
 		}
 		b.WriteString("</div></div>")
 		if len(ratioRows.Categories) > 0 {
@@ -1637,9 +1637,16 @@ func collectionComparisonRatioRows(comps []collectionComparison) collectionChart
 		return collectionChartRows{}
 	}
 	values := make(map[string][]float64)
-	labels := make([]string, 0, len(comps))
+	labelSet := make(map[string]bool)
 	for _, comp := range comps {
+		if comp.SmallerRatio <= 0 {
+			continue
+		}
 		label := collectionComparisonLabel(comp)
+		labelSet[label] = true
+	}
+	labels := make([]string, 0, len(labelSet))
+	for label := range labelSet {
 		labels = append(labels, label)
 	}
 	sort.Strings(labels)
@@ -1648,11 +1655,17 @@ func collectionComparisonRatioRows(comps []collectionComparison) collectionChart
 		labelPos[label] = i
 	}
 	for _, comp := range comps {
-		key := displayConfig(comp.TreeDBConfig) + " vs " + displayConfig(comp.SQLiteConfig)
+		if comp.SmallerRatio <= 0 {
+			continue
+		}
+		key := displayConfigWithoutIndex(comp.TreeDBConfig) + " vs " + displayConfigWithoutIndex(comp.SQLiteConfig)
 		if _, ok := values[key]; !ok {
 			values[key] = make([]float64, len(labels))
 		}
-		values[key][labelPos[collectionComparisonLabel(comp)]] = comp.SmallerRatio
+		pos := labelPos[collectionComparisonLabel(comp)]
+		if comp.SmallerRatio > values[key][pos] {
+			values[key][pos] = comp.SmallerRatio
+		}
 	}
 	keys := make([]string, 0, len(values))
 	for key := range values {
@@ -1675,12 +1688,26 @@ func collectionComparisonLabel(comp collectionComparison) string {
 }
 
 func collectionIndexFromConfig(config string) int {
-	marker := "_indexes_"
-	pos := strings.LastIndex(config, marker)
+	if config == "" {
+		return -1
+	}
+	if pos := strings.LastIndex(config, "_indexes_"); pos >= 0 {
+		v, err := strconv.Atoi(config[pos+len("_indexes_"):])
+		if err != nil {
+			return -1
+		}
+		return v
+	}
+	pos := strings.LastIndex(config, "_indexes")
 	if pos < 0 {
 		return -1
 	}
-	v, err := strconv.Atoi(config[pos+len(marker):])
+	prefix := config[:pos]
+	start := strings.LastIndex(prefix, "_")
+	if start < 0 || start+1 >= len(prefix) {
+		return -1
+	}
+	v, err := strconv.Atoi(prefix[start+1:])
 	if err != nil {
 		return -1
 	}
@@ -1771,9 +1798,10 @@ func collectionRowsForIndex(rows []collectionRow, idx int) []collectionRow {
 }
 
 func collectionLifecycleRows(rows []collectionRow) collectionChartRows {
-	phases := []string{"post_insert", "online_one_pass_maintenance", "offline_rewrite", "full_leafgen_pack_gc", "sqlite_vacuum"}
-	phaseLabels := []string{"post insert", "online maint", "offline rewrite", "leafgen GC", "SQLite VACUUM"}
+	phases := []string{"post_insert", "online_one_pass_maintenance", "offline_compact", "offline_rewrite", "full_leafgen_pack_gc", "sqlite_vacuum"}
+	phaseLabels := []string{"post insert", "online maint", "offline compact", "offline rewrite", "leafgen GC", "SQLite VACUUM"}
 	values := make(map[string][]float64)
+	phasePresent := make([]bool, len(phases))
 	for _, row := range rows {
 		if row.BytesPerDoc <= 0 {
 			continue
@@ -1782,6 +1810,7 @@ func collectionLifecycleRows(rows []collectionRow) collectionChartRows {
 		if pos < 0 {
 			continue
 		}
+		phasePresent[pos] = true
 		key := displayConfig(row.ConfigName)
 		if _, ok := values[key]; !ok {
 			values[key] = make([]float64, len(phases))
@@ -1797,7 +1826,35 @@ func collectionLifecycleRows(rows []collectionRow) collectionChartRows {
 	for _, key := range keys {
 		series = append(series, chartSeries{Name: key, Values: values[key], Color: collectionSeriesColor(key)})
 	}
-	return collectionChartRows{Categories: phaseLabels, Series: nonZeroSeries(series)}
+	return compactCollectionChartRows(collectionChartRows{Categories: phaseLabels, Series: nonZeroSeries(series)}, phasePresent)
+}
+
+func compactCollectionChartRows(rows collectionChartRows, present []bool) collectionChartRows {
+	if len(rows.Categories) == 0 || len(present) != len(rows.Categories) {
+		return rows
+	}
+	positions := make([]int, 0, len(rows.Categories))
+	categories := make([]string, 0, len(rows.Categories))
+	for i, ok := range present {
+		if ok {
+			positions = append(positions, i)
+			categories = append(categories, rows.Categories[i])
+		}
+	}
+	if len(positions) == len(rows.Categories) {
+		return rows
+	}
+	series := make([]chartSeries, 0, len(rows.Series))
+	for _, s := range rows.Series {
+		values := make([]float64, len(positions))
+		for i, pos := range positions {
+			if pos < len(s.Values) {
+				values[i] = s.Values[pos]
+			}
+		}
+		series = append(series, chartSeries{Name: s.Name, Values: values, Color: s.Color})
+	}
+	return collectionChartRows{Categories: categories, Series: nonZeroSeries(series)}
 }
 
 func indexOf(values []string, value string) int {
@@ -2036,9 +2093,53 @@ func displayConfig(config string) string {
 	value = strings.TrimPrefix(value, "treedb_")
 	value = strings.TrimPrefix(value, "sqlite_")
 	value = strings.ReplaceAll(value, "_collection", "")
-	value = strings.ReplaceAll(value, "_indexes_", " / i")
+	value = displayConfigIndexSuffix(value)
 	value = strings.ReplaceAll(value, "_", " ")
 	return chartLabel(value)
+}
+
+func displayConfigWithoutIndex(config string) string {
+	value := strings.TrimSpace(config)
+	value = strings.TrimPrefix(value, "treedb_")
+	value = strings.TrimPrefix(value, "sqlite_")
+	value = strings.ReplaceAll(value, "_collection", "")
+	value = strings.TrimSpace(stripConfigIndexSuffix(value))
+	value = strings.TrimSuffix(value, "_")
+	value = strings.ReplaceAll(value, "_", " ")
+	return chartLabel(value)
+}
+
+func displayConfigIndexSuffix(config string) string {
+	idx := collectionIndexFromConfig(config)
+	if idx < 0 {
+		return config
+	}
+	for _, suffix := range configIndexSuffixes(idx) {
+		if strings.HasSuffix(config, suffix) {
+			return strings.TrimSuffix(config, suffix) + fmt.Sprintf(" / i%d", idx)
+		}
+	}
+	return config
+}
+
+func stripConfigIndexSuffix(config string) string {
+	idx := collectionIndexFromConfig(config)
+	if idx < 0 {
+		return config
+	}
+	for _, suffix := range configIndexSuffixes(idx) {
+		if strings.HasSuffix(config, suffix) {
+			return strings.TrimSuffix(config, suffix)
+		}
+	}
+	return config
+}
+
+func configIndexSuffixes(idx int) []string {
+	return []string{
+		fmt.Sprintf("_%d_indexes", idx),
+		fmt.Sprintf("_indexes_%d", idx),
+	}
 }
 
 func displayFormat(format string) string {
@@ -2210,7 +2311,7 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 			{Name: "TreeDB", Values: mongoRowDisk(loadRows, "tree"), Color: "#2867c7"},
 			{Name: "MongoDB", Values: mongoRowDisk(loadRows, "mongo"), Color: "#1f8a5b"},
 		}, "bytes"))
-		b.WriteString("<p class=\"subtle\">MongoDB storage uses measured physical bytes when the runner owns an isolated data directory; external MongoDB runs fall back to <code>dbStats.totalSize</code> instead of charting zero.</p>")
+		b.WriteString("<p class=\"subtle\"><strong>Storage basis:</strong> " + esc(mongoStorageBasisText(loadRows)) + "</p>")
 	}
 	b.WriteString("</div></div>")
 	for _, idx := range indexes {
@@ -2660,6 +2761,46 @@ func mongoRowDisk(rows []mongoSummaryRow, side string) []float64 {
 		}
 	}
 	return out
+}
+
+func mongoStorageBasisText(rows []mongoSummaryRow) string {
+	treeBasis := "TreeDB physical bytes from summary.tsv"
+	if len(rows) > 0 {
+		snapshots := make(map[string]bool)
+		for _, row := range rows {
+			snapshot := strings.TrimSpace(row.TreeDBDiskSnapshot)
+			if snapshot != "" {
+				snapshots[snapshot] = true
+			}
+		}
+		if len(snapshots) == 1 {
+			for snapshot := range snapshots {
+				treeBasis = "TreeDB physical bytes from " + snapshot + " snapshot"
+				if snapshot == "maintenance" {
+					treeBasis = "TreeDB physical bytes after maintenance"
+				}
+			}
+		}
+	}
+	mongoPhysical := 0
+	mongoDBStats := 0
+	for _, row := range rows {
+		if row.MongoPhysicalBytes > 0 {
+			mongoPhysical++
+		} else if row.MongoDBStatsTotalSize > 0 {
+			mongoDBStats++
+		}
+	}
+	mongoBasis := "MongoDB storage bytes from summary.tsv"
+	switch {
+	case mongoPhysical > 0 && mongoDBStats == 0:
+		mongoBasis = "MongoDB measured data-directory bytes"
+	case mongoPhysical == 0 && mongoDBStats > 0:
+		mongoBasis = "MongoDB dbStats.totalSize from this run"
+	case mongoPhysical > 0 && mongoDBStats > 0:
+		mongoBasis = "MongoDB mixed measured data-directory bytes and dbStats.totalSize; see raw rows"
+	}
+	return treeBasis + "; " + mongoBasis + "."
 }
 
 func mongoRow(rows []mongoSummaryRow, idx int, phase string) (mongoSummaryRow, bool) {
@@ -3370,7 +3511,7 @@ func verticalBarChartWithSize(title string, categories []string, xAxisLabel stri
 			x := groupX + innerPad + float64(sidx)*(barW+barGap)
 			yy := axisY - barH
 			b.WriteString(fmt.Sprintf("<rect x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\" rx=\"2\" fill=\"%s\"><title>%s %s: %s</title></rect>", x, yy, barW, barH, esc(s.Color), esc(cat), esc(s.Name), esc(formatChartTooltipValue(v, unit))))
-			if barW >= 10 && v > 0 {
+			if barW >= 18 && v > 0 {
 				b.WriteString(fmt.Sprintf("<text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" font-size=\"10\" font-weight=\"700\" fill=\"#344256\">%s</text>", x+barW/2, math.Max(top+10, yy-5), esc(formatChartValue(v, unit))))
 			}
 		}

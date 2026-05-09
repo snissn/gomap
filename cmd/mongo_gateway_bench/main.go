@@ -1832,7 +1832,7 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 		concurrentReaders = effectiveConcurrentWorkers(concurrentReaders, cfg.ConcurrentRangeReads)
 		phaseName := concurrentRangePhaseName(cfg, concurrentReaders)
 		concurrentRangePhase, err := runTreeDBProfiledPhase(target, profiler, phaseName, func() (phaseResult, error) {
-			return runDirectTreeDBConcurrentRangePhase(ctx, cfg, collection, concurrentReaders, phaseName)
+			return runDirectTreeDBConcurrentRangePhase(ctx, cfg, collection, concurrentReaders, cfg.ConcurrentRangeReads, phaseName)
 		})
 		if err != nil {
 			return nil, err
@@ -1848,15 +1848,17 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 	}
 	result.Phases = append(result.Phases, updatePhase)
 
-	for _, concurrentReaders := range concurrentReaderCounts(cfg) {
-		phaseName := fmt.Sprintf("concurrent_id_find_one_r%d", concurrentReaders)
-		concurrentReadPhase, err := runTreeDBProfiledPhase(target, profiler, phaseName, func() (phaseResult, error) {
-			return runDirectTreeDBConcurrentIDFindPhase(ctx, cfg, collection, directKeys, concurrentReaders, phaseName)
-		})
-		if err != nil {
-			return nil, err
+	for _, readKind := range concurrentReadKindsForConfig(cfg) {
+		for _, concurrentReaders := range concurrentReaderCounts(cfg) {
+			phaseName := concurrentReadPhaseName(cfg, readKind, concurrentReaders)
+			concurrentReadPhase, err := runTreeDBProfiledPhase(target, profiler, phaseName, func() (phaseResult, error) {
+				return runDirectTreeDBConcurrentReadPhase(ctx, cfg, collection, directKeys, readKind, concurrentReaders, phaseName)
+			})
+			if err != nil {
+				return nil, err
+			}
+			result.Phases = append(result.Phases, concurrentReadPhase)
 		}
-		result.Phases = append(result.Phases, concurrentReadPhase)
 	}
 
 	for _, concurrentWriters := range concurrentWriterCounts(cfg) {
@@ -2293,8 +2295,8 @@ func runDirectTreeDBRangePhase(ctx context.Context, cfg config, collection *coll
 	})
 }
 
-func runDirectTreeDBConcurrentRangePhase(ctx context.Context, cfg config, collection *collections.Collection, readers int, phaseName string) (phaseResult, error) {
-	readers = effectiveConcurrentWorkers(readers, cfg.ConcurrentRangeReads)
+func runDirectTreeDBConcurrentRangePhase(ctx context.Context, cfg config, collection *collections.Collection, readers, operations int, phaseName string) (phaseResult, error) {
+	readers = effectiveConcurrentWorkers(readers, operations)
 	materializers := make([]*collections.StoredDocumentJSONMaterializer, readers)
 	for i := range materializers {
 		materializer, err := directNewStoredDocumentMaterializer(collection)
@@ -2313,8 +2315,8 @@ func runDirectTreeDBConcurrentRangePhase(ctx context.Context, cfg config, collec
 			_ = materializer.Close()
 		}
 	}()
-	return measurePhase(phaseName, cfg.ConcurrentRangeReads, func(sample func(time.Duration)) error {
-		return runConcurrentOperationsByWorker(ctx, readers, cfg.ConcurrentRangeReads, func(worker, op int) error {
+	return measurePhase(phaseName, operations, func(sample func(time.Duration)) error {
+		return runConcurrentOperationsByWorker(ctx, readers, operations, func(worker, op int) error {
 			minAge := rangeReadMinAge(op, cfg.Documents)
 			begin := time.Now()
 			err := runDirectTreeDBRangeQuery(cfg, collection, materializers[worker], minAge)
@@ -2427,6 +2429,55 @@ func runDirectTreeDBConcurrentIDFindPhase(ctx context.Context, cfg config, colle
 			return nil
 		})
 	})
+}
+
+func runDirectTreeDBConcurrentEmailFindPhase(ctx context.Context, cfg config, collection *collections.Collection, readers int, phaseName string) (phaseResult, error) {
+	materializers := newDirectTreeDBMaterializerPool(collection)
+	defer func() { _ = materializers.close() }()
+	return measurePhase(phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
+		return runConcurrentOperations(ctx, readers, cfg.ConcurrentReads, func(op int) error {
+			email := benchmarkEmail(benchmarkDocumentOrdinal(op, 17, cfg.Documents))
+			materializer, err := materializers.get()
+			if err != nil {
+				return err
+			}
+			defer materializers.put(materializer)
+			begin := time.Now()
+			ids, truncated, err := collection.FindByIndexValueLimit("email_1", email, 1)
+			var raw bson.Raw
+			if err == nil && len(ids) > 0 {
+				var stored []byte
+				stored, err = collection.Get(ids[0])
+				if err == nil {
+					raw, err = directStoredDocumentToBSON(collection, materializer, stored)
+				}
+			}
+			sample(time.Since(begin))
+			if err != nil {
+				return err
+			}
+			if truncated || len(ids) != 1 {
+				return fmt.Errorf("direct concurrent email lookup ids=%d truncated=%t want one id", len(ids), truncated)
+			}
+			if got, ok := bson.Raw(raw).Lookup("email").StringValueOK(); !ok || got != email {
+				return fmt.Errorf("direct concurrent email lookup returned email=%v ok=%t want %s", got, ok, email)
+			}
+			return nil
+		})
+	})
+}
+
+func runDirectTreeDBConcurrentReadPhase(ctx context.Context, cfg config, collection *collections.Collection, keys directBenchmarkKeySet, kind string, readers int, phaseName string) (phaseResult, error) {
+	switch kind {
+	case concurrentReadKindID:
+		return runDirectTreeDBConcurrentIDFindPhase(ctx, cfg, collection, keys, readers, phaseName)
+	case concurrentReadKindEmail:
+		return runDirectTreeDBConcurrentEmailFindPhase(ctx, cfg, collection, readers, phaseName)
+	case concurrentReadKindRange:
+		return runDirectTreeDBConcurrentRangePhase(ctx, cfg, collection, readers, cfg.ConcurrentReads, phaseName)
+	default:
+		return phaseResult{}, fmt.Errorf("unknown concurrent read kind %q", kind)
+	}
 }
 
 func runDirectTreeDBConcurrentUpdatePhase(ctx context.Context, cfg config, collection *collections.Collection, keys directBenchmarkKeySet, workers int, phaseName string, updatedCityValues []string) (phaseResult, error) {

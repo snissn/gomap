@@ -355,6 +355,73 @@ func TestCollectionDiskRowsUseBestCompactedTreeDBPhase(t *testing.T) {
 	}
 }
 
+func TestCollectionComparisonRatioRowsDeduplicateIndexLabels(t *testing.T) {
+	rows := collectionComparisonRatioRows([]collectionComparison{
+		{
+			TreeDBConfig:    "treedb_template_v1_collection_2_indexes",
+			TreeDBPhase:     "offline_compact",
+			SQLiteConfig:    "sqlite_native_columns_2_indexes",
+			SQLitePhase:     "sqlite_vacuum",
+			SmallerRatio:    3,
+			ComparisonBasis: "fixture",
+		},
+		{
+			TreeDBConfig:    "treedb_template_v1_collection_2_indexes",
+			TreeDBPhase:     "full_leafgen_pack_gc",
+			SQLiteConfig:    "sqlite_native_columns_2_indexes",
+			SQLitePhase:     "sqlite_vacuum",
+			SmallerRatio:    7,
+			ComparisonBasis: "fixture",
+		},
+	})
+	if got, want := rows.Categories, []string{"2 indexes"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("categories = %v, want %v", got, want)
+	}
+	if len(rows.Series) != 1 || len(rows.Series[0].Values) != 1 {
+		t.Fatalf("unexpected ratio series: %+v", rows.Series)
+	}
+	if got, want := rows.Series[0].Values[0], 7.0; got != want {
+		t.Fatalf("ratio value = %v, want %v", got, want)
+	}
+	if got, want := rows.Series[0].Name, "Template V1 vs Native Columns"; got != want {
+		t.Fatalf("ratio series name = %q, want %q", got, want)
+	}
+}
+
+func TestCollectionLifecycleRowsOmitAbsentPhases(t *testing.T) {
+	rows := []collectionRow{
+		{ConfigName: "treedb_template_v1_collection_2_indexes", Engine: "treedb_fast", Format: "template-v1", IndexCount: 2, Phase: "post_insert", BytesPerDoc: 80},
+		{ConfigName: "treedb_template_v1_collection_2_indexes", Engine: "treedb_fast", Format: "template-v1", IndexCount: 2, Phase: "offline_compact", BytesPerDoc: 40},
+		{ConfigName: "treedb_template_v1_collection_2_indexes", Engine: "treedb_fast", Format: "template-v1", IndexCount: 2, Phase: "full_leafgen_pack_gc", BytesPerDoc: 20},
+		{ConfigName: "sqlite_native_columns_2_indexes", Engine: "sqlite_wal_normal", Format: "native-columns", IndexCount: 2, Phase: "sqlite_vacuum", BytesPerDoc: 120},
+	}
+	lifecycle := collectionLifecycleRows(rows)
+	if !reflect.DeepEqual(lifecycle.Categories, []string{"post insert", "offline compact", "leafgen GC", "SQLite VACUUM"}) {
+		t.Fatalf("lifecycle categories = %v", lifecycle.Categories)
+	}
+	for _, series := range lifecycle.Series {
+		if len(series.Values) != len(lifecycle.Categories) {
+			t.Fatalf("series %q values = %v for categories %v", series.Name, series.Values, lifecycle.Categories)
+		}
+	}
+}
+
+func TestMongoStorageBasisTextUsesRunSpecificMetric(t *testing.T) {
+	rows := []mongoSummaryRow{
+		{TreeDBDiskSnapshot: "maintenance", MongoDBStatsTotalSize: 4096},
+		{TreeDBDiskSnapshot: "maintenance", MongoDBStatsTotalSize: 8192},
+	}
+	got := mongoStorageBasisText(rows)
+	for _, want := range []string{"TreeDB physical bytes after maintenance", "MongoDB dbStats.totalSize from this run"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("storage basis %q missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "fall back") || strings.Contains(got, "when ") {
+		t.Fatalf("storage basis should describe this run without fallback prose: %q", got)
+	}
+}
+
 func TestReadMatrixPreservesLargePhysicalBytes(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "matrix.tsv")

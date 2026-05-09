@@ -739,118 +739,118 @@ if [[ -n "$CONCURRENT_READER_SWEEP" ]]; then
   fi
   CONCURRENT_READER_SWEEP=$normalized_reader_sweep
 elif [[ "$CONCURRENT_READERS" -eq 0 && -n "$CONCURRENT_READS" && "$CONCURRENT_READS" != "0" ]]; then
-	echo "CONCURRENT_READERS or CONCURRENT_READER_SWEEP must be set when CONCURRENT_READS is set" >&2
-	exit 2
+  echo "CONCURRENT_READERS or CONCURRENT_READER_SWEEP must be set when CONCURRENT_READS is set" >&2
+  exit 2
 fi
 
 raw_concurrent_range_reader_sweep=$CONCURRENT_RANGE_READER_SWEEP
 CONCURRENT_RANGE_READER_SWEEP=$(trim_spaces "$CONCURRENT_RANGE_READER_SWEEP")
 if [[ -n "$raw_concurrent_range_reader_sweep" && -z "$CONCURRENT_RANGE_READER_SWEEP" ]]; then
-	echo "CONCURRENT_RANGE_READER_SWEEP must contain at least one positive integer" >&2
-	exit 2
+  echo "CONCURRENT_RANGE_READER_SWEEP must contain at least one positive integer" >&2
+  exit 2
 fi
 if [[ -n "$CONCURRENT_RANGE_READER_SWEEP" && "$CONCURRENT_RANGE_READERS" -gt 0 ]]; then
-	echo "CONCURRENT_RANGE_READER_SWEEP cannot be combined with CONCURRENT_RANGE_READERS" >&2
-	exit 2
+  echo "CONCURRENT_RANGE_READER_SWEEP cannot be combined with CONCURRENT_RANGE_READERS" >&2
+  exit 2
 fi
 if [[ -n "$CONCURRENT_RANGE_READER_SWEEP" ]]; then
-	seen_range_reader_counts=""
-	normalized_range_reader_sweep=""
-	validated_range_reader_counts=0
-	for reader_count in ${CONCURRENT_RANGE_READER_SWEEP//,/ }; do
-		if ! is_positive_decimal_string "$reader_count"; then
-			echo "invalid CONCURRENT_RANGE_READER_SWEEP value: $reader_count" >&2
-			exit 2
-		fi
-		normalized_reader_count=$reader_count
-		while [[ "$normalized_reader_count" == 0* && ${#normalized_reader_count} -gt 1 ]]; do
-			normalized_reader_count=${normalized_reader_count#0}
-		done
-		if [[ " $seen_range_reader_counts " == *" $normalized_reader_count "* ]]; then
-			echo "duplicate CONCURRENT_RANGE_READER_SWEEP value: $reader_count" >&2
-			exit 2
-		fi
-		seen_range_reader_counts="$seen_range_reader_counts $normalized_reader_count"
-		if [[ -z "$normalized_range_reader_sweep" ]]; then
-			normalized_range_reader_sweep=$normalized_reader_count
-		else
-			normalized_range_reader_sweep="$normalized_range_reader_sweep,$normalized_reader_count"
-		fi
-		validated_range_reader_counts=$((validated_range_reader_counts + 1))
-	done
-	if [[ "$validated_range_reader_counts" -eq 0 ]]; then
-		echo "CONCURRENT_RANGE_READER_SWEEP must contain at least one positive integer" >&2
-		exit 2
-	fi
-	if [[ -n "$CONCURRENT_RANGE_READS" && "$CONCURRENT_RANGE_READS" == "0" ]]; then
-		echo "CONCURRENT_RANGE_READER_SWEEP requires CONCURRENT_RANGE_READS > 0 when CONCURRENT_RANGE_READS is set" >&2
-		exit 2
-	fi
-	if [[ -n "$CONCURRENT_RANGE_READS" ]]; then
-		if ! is_nonnegative_int "$CONCURRENT_RANGE_READS"; then
-			echo "invalid CONCURRENT_RANGE_READS=$CONCURRENT_RANGE_READS (want non-negative integer)" >&2
-			exit 2
-		fi
-	fi
-	CONCURRENT_RANGE_READER_SWEEP=$normalized_range_reader_sweep
+  seen_range_reader_counts=""
+  normalized_range_reader_sweep=""
+  validated_range_reader_counts=0
+  for reader_count in ${CONCURRENT_RANGE_READER_SWEEP//,/ }; do
+    if ! is_positive_decimal_string "$reader_count"; then
+      echo "invalid CONCURRENT_RANGE_READER_SWEEP value: $reader_count" >&2
+      exit 2
+    fi
+    normalized_reader_count=$reader_count
+    while [[ "$normalized_reader_count" == 0* && ${#normalized_reader_count} -gt 1 ]]; do
+      normalized_reader_count=${normalized_reader_count#0}
+    done
+    if [[ " $seen_range_reader_counts " == *" $normalized_reader_count "* ]]; then
+      echo "duplicate CONCURRENT_RANGE_READER_SWEEP value: $reader_count" >&2
+      exit 2
+    fi
+    seen_range_reader_counts="$seen_range_reader_counts $normalized_reader_count"
+    if [[ -z "$normalized_range_reader_sweep" ]]; then
+      normalized_range_reader_sweep=$normalized_reader_count
+    else
+      normalized_range_reader_sweep="$normalized_range_reader_sweep,$normalized_reader_count"
+    fi
+    validated_range_reader_counts=$((validated_range_reader_counts + 1))
+  done
+  if [[ "$validated_range_reader_counts" -eq 0 ]]; then
+    echo "CONCURRENT_RANGE_READER_SWEEP must contain at least one positive integer" >&2
+    exit 2
+  fi
+  if [[ -n "$CONCURRENT_RANGE_READS" && "$CONCURRENT_RANGE_READS" == "0" ]]; then
+    echo "CONCURRENT_RANGE_READER_SWEEP requires CONCURRENT_RANGE_READS > 0 when CONCURRENT_RANGE_READS is set" >&2
+    exit 2
+  fi
+  if [[ -n "$CONCURRENT_RANGE_READS" ]]; then
+    if ! is_nonnegative_int "$CONCURRENT_RANGE_READS"; then
+      echo "invalid CONCURRENT_RANGE_READS=$CONCURRENT_RANGE_READS (want non-negative integer)" >&2
+      exit 2
+    fi
+  fi
+  CONCURRENT_RANGE_READER_SWEEP=$normalized_range_reader_sweep
 elif [[ "$CONCURRENT_RANGE_READERS" -eq 0 && -n "$CONCURRENT_RANGE_READS" && "$CONCURRENT_RANGE_READS" != "0" ]]; then
-	echo "CONCURRENT_RANGE_READERS or CONCURRENT_RANGE_READER_SWEEP must be set when CONCURRENT_RANGE_READS is set" >&2
-	exit 2
+  echo "CONCURRENT_RANGE_READERS or CONCURRENT_RANGE_READER_SWEEP must be set when CONCURRENT_RANGE_READS is set" >&2
+  exit 2
 fi
 
 raw_concurrent_writer_sweep=$CONCURRENT_WRITER_SWEEP
 CONCURRENT_WRITER_SWEEP=$(trim_spaces "$CONCURRENT_WRITER_SWEEP")
 if [[ -n "$raw_concurrent_writer_sweep" && -z "$CONCURRENT_WRITER_SWEEP" ]]; then
-	echo "CONCURRENT_WRITER_SWEEP must contain at least one positive integer" >&2
-	exit 2
+  echo "CONCURRENT_WRITER_SWEEP must contain at least one positive integer" >&2
+  exit 2
 fi
 if [[ -n "$CONCURRENT_WRITER_SWEEP" && "$CONCURRENT_WRITERS" -gt 0 ]]; then
-	echo "CONCURRENT_WRITER_SWEEP cannot be combined with CONCURRENT_WRITERS" >&2
-	exit 2
+  echo "CONCURRENT_WRITER_SWEEP cannot be combined with CONCURRENT_WRITERS" >&2
+  exit 2
 fi
 if [[ -n "$CONCURRENT_WRITER_SWEEP" ]]; then
-	seen_writer_counts=""
-	normalized_writer_sweep=""
-	validated_writer_counts=0
-	for writer_count in ${CONCURRENT_WRITER_SWEEP//,/ }; do
-		if ! is_positive_decimal_string "$writer_count"; then
-			echo "invalid CONCURRENT_WRITER_SWEEP value: $writer_count" >&2
-			exit 2
-		fi
-		normalized_writer_count=$writer_count
-		while [[ "$normalized_writer_count" == 0* && ${#normalized_writer_count} -gt 1 ]]; do
-			normalized_writer_count=${normalized_writer_count#0}
-		done
-		if [[ " $seen_writer_counts " == *" $normalized_writer_count "* ]]; then
-			echo "duplicate CONCURRENT_WRITER_SWEEP value: $writer_count" >&2
-			exit 2
-		fi
-		seen_writer_counts="$seen_writer_counts $normalized_writer_count"
-		if [[ -z "$normalized_writer_sweep" ]]; then
-			normalized_writer_sweep=$normalized_writer_count
-		else
-			normalized_writer_sweep="$normalized_writer_sweep,$normalized_writer_count"
-		fi
-		validated_writer_counts=$((validated_writer_counts + 1))
-	done
-	if [[ "$validated_writer_counts" -eq 0 ]]; then
-		echo "CONCURRENT_WRITER_SWEEP must contain at least one positive integer" >&2
-		exit 2
-	fi
-	if [[ -n "$CONCURRENT_WRITES" && "$CONCURRENT_WRITES" == "0" ]]; then
-		echo "CONCURRENT_WRITER_SWEEP requires CONCURRENT_WRITES > 0 when CONCURRENT_WRITES is set" >&2
-		exit 2
-	fi
-	if [[ -n "$CONCURRENT_WRITES" ]]; then
-		if ! is_nonnegative_int "$CONCURRENT_WRITES"; then
-			echo "invalid CONCURRENT_WRITES=$CONCURRENT_WRITES (want non-negative integer)" >&2
-			exit 2
-		fi
-	fi
-	CONCURRENT_WRITER_SWEEP=$normalized_writer_sweep
+  seen_writer_counts=""
+  normalized_writer_sweep=""
+  validated_writer_counts=0
+  for writer_count in ${CONCURRENT_WRITER_SWEEP//,/ }; do
+    if ! is_positive_decimal_string "$writer_count"; then
+      echo "invalid CONCURRENT_WRITER_SWEEP value: $writer_count" >&2
+      exit 2
+    fi
+    normalized_writer_count=$writer_count
+    while [[ "$normalized_writer_count" == 0* && ${#normalized_writer_count} -gt 1 ]]; do
+      normalized_writer_count=${normalized_writer_count#0}
+    done
+    if [[ " $seen_writer_counts " == *" $normalized_writer_count "* ]]; then
+      echo "duplicate CONCURRENT_WRITER_SWEEP value: $writer_count" >&2
+      exit 2
+    fi
+    seen_writer_counts="$seen_writer_counts $normalized_writer_count"
+    if [[ -z "$normalized_writer_sweep" ]]; then
+      normalized_writer_sweep=$normalized_writer_count
+    else
+      normalized_writer_sweep="$normalized_writer_sweep,$normalized_writer_count"
+    fi
+    validated_writer_counts=$((validated_writer_counts + 1))
+  done
+  if [[ "$validated_writer_counts" -eq 0 ]]; then
+    echo "CONCURRENT_WRITER_SWEEP must contain at least one positive integer" >&2
+    exit 2
+  fi
+  if [[ -n "$CONCURRENT_WRITES" && "$CONCURRENT_WRITES" == "0" ]]; then
+    echo "CONCURRENT_WRITER_SWEEP requires CONCURRENT_WRITES > 0 when CONCURRENT_WRITES is set" >&2
+    exit 2
+  fi
+  if [[ -n "$CONCURRENT_WRITES" ]]; then
+    if ! is_nonnegative_int "$CONCURRENT_WRITES"; then
+      echo "invalid CONCURRENT_WRITES=$CONCURRENT_WRITES (want non-negative integer)" >&2
+      exit 2
+    fi
+  fi
+  CONCURRENT_WRITER_SWEEP=$normalized_writer_sweep
 elif [[ "$CONCURRENT_WRITERS" -eq 0 && -n "$CONCURRENT_WRITES" && "$CONCURRENT_WRITES" != "0" ]]; then
-	echo "CONCURRENT_WRITERS or CONCURRENT_WRITER_SWEEP must be set when CONCURRENT_WRITES is set" >&2
-	exit 2
+  echo "CONCURRENT_WRITERS or CONCURRENT_WRITER_SWEEP must be set when CONCURRENT_WRITES is set" >&2
+  exit 2
 fi
 
 {

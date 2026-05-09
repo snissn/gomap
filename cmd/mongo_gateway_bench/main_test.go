@@ -1628,6 +1628,7 @@ func TestTreeDBDirectBenchmarkSmoke(t *testing.T) {
 				"-deletes", "2",
 				"-secondary-indexes", "2",
 				"-range-index",
+				"-concurrent-read-kinds", "id,email",
 				"-concurrent-reader-sweep", "1,2",
 				"-concurrent-reads", "12",
 				"-concurrent-range-reader-sweep", "1,2",
@@ -1678,6 +1679,8 @@ func TestTreeDBDirectBenchmarkSmoke(t *testing.T) {
 				"id_update_set",
 				"concurrent_id_find_one_r1",
 				"concurrent_id_find_one_r2",
+				"concurrent_email_find_one_r1",
+				"concurrent_email_find_one_r2",
 				"concurrent_id_update_set_w2",
 				"id_delete_one",
 			} {
