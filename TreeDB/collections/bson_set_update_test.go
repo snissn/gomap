@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"testing"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -118,7 +119,7 @@ func TestBSONSetUpdateAppendReplacementErrorPreservesGrownDestination(t *testing
 	if len(out) != len(arena) {
 		t.Fatalf("out len=%d want restored len %d", len(out), len(arena))
 	}
-	if string(out) != string(arena) {
+	if !bytes.Equal(out, arena) {
 		t.Fatalf("out prefix=%q want %q", out, arena)
 	}
 	if cap(out) <= cap(arena) {
@@ -172,7 +173,7 @@ func BenchmarkBSONSetUpdateAppendReplacementCity(b *testing.B) {
 	if err != nil {
 		b.Fatalf("new BSON set update: %v", err)
 	}
-	arena := make([]byte, 0, len(doc)+64)
+	arena := make([]byte, 0, len(doc)+bsonSetReplacementSlackBytes)
 	b.ReportAllocs()
 	b.SetBytes(int64(len(doc)))
 	b.ResetTimer()

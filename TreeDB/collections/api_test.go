@@ -9662,7 +9662,7 @@ func TestBuildUpdateBatchPlanBSONSetRejectsInvalidCurrentBSON(t *testing.T) {
 	}
 }
 
-func TestBSONSetAppendReplacementGrowsSmallDestination(t *testing.T) {
+func TestBSONSetUpdateAppendReplacementGrowsSmallDestination(t *testing.T) {
 	spec, err := newBSONSetUpdate([]BSONSetField{{
 		Key:   "city",
 		Value: mustBSONRawValue(t, "sea"),
