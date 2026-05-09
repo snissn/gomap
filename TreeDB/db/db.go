@@ -1430,7 +1430,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		db.Close()
 		return nil, err
 	}
-	recoverySet := vm.CurrentSet()
+	recoverySet := vm.CurrentSetNoRefresh()
 	reader := newValueReader(recoverySet)
 	releaseRecoverySet := func() error {
 		if recoverySet == nil {

@@ -202,11 +202,12 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		return err
 	}
 	if acquiredValueLogSet != nil {
-		if err := d.valueLogManager.Release(acquiredValueLogSet); err != nil {
+		releaseSet := acquiredValueLogSet
+		acquiredValueLogSet = nil
+		if err := d.valueLogManager.Release(releaseSet); err != nil {
 			_ = d.Close()
 			return err
 		}
-		acquiredValueLogSet = nil
 	}
 	if err := d.Close(); err != nil {
 		return err
