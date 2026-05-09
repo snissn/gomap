@@ -496,6 +496,9 @@ func TestTemplateV1BufferedResolverRefreshesFallbackAfterAsyncPublishRace(t *tes
 	if !errors.Is(err, errTemplateV1MissingTemplateRoot) && !errors.Is(err, errTemplateV1TemplateNotFound) {
 		t.Fatalf("stale resolver err=%v want missing template", err)
 	}
+	if !templateV1PlanningSnapshotNeedsRefresh(col.writeDomain, stale, clonedRuns) {
+		t.Fatal("empty clone after async publish did not request template-v1 snapshot refresh")
+	}
 
 	_, meta, refreshedOptions, err := col.refreshTemplateV1PlanningSnapshot(&stale, false, clonedRuns, false)
 	if err != nil {
