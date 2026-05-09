@@ -3069,7 +3069,7 @@ func (c *Collection) bufferNoIndexInsertBatch(
 	if err != nil {
 		return nil, true, err
 	}
-	preparedDocuments, _, _, err := prepareInsertDocuments(documents, plannerOptions)
+	preparedDocuments, _, _, _, err := prepareInsertDocuments(documents, plannerOptions)
 	if err != nil {
 		return nil, true, err
 	}
