@@ -385,7 +385,10 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 		seenFlags[f.Name] = true
 	})
 	if cfg.DisableBufferedIndexedAsyncFlush && cfg.BufferedIndexedAsyncFlush {
-		return cfg, fmt.Errorf("cannot set both -buffered-indexed-async-flush and -disable-buffered-indexed-async-flush")
+		return config{}, fmt.Errorf("cannot set both -buffered-indexed-async-flush and -disable-buffered-indexed-async-flush")
+	}
+	if cfg.DisableBufferedIndexedAsyncFlush && cfg.BufferedIndexedAsyncFlushMaxQueuedUnits != 0 {
+		return config{}, fmt.Errorf("cannot set -buffered-indexed-async-flush-max-queued-units when -disable-buffered-indexed-async-flush is set")
 	}
 	effectiveAsyncFlush := !cfg.DisableBufferedIndexedAsyncFlush || cfg.BufferedIndexedAsyncFlush
 	if !seenFlags["buffered-indexed-write-max-root-runs"] &&

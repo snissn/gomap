@@ -1886,8 +1886,11 @@ func (domain *collectionWriteDomain) beginIndexedPrepareFreezeLocked() {
 }
 
 func (domain *collectionWriteDomain) finishIndexedPrepareFreezeLocked() {
-	if domain == nil || domain.indexedPrepareFreezes <= 0 {
+	if domain == nil {
 		return
+	}
+	if domain.indexedPrepareFreezes <= 0 {
+		panic("collections: indexed prepare freeze finish without matching begin")
 	}
 	domain.indexedPrepareFreezes--
 	if domain.indexedPrepareFreezes == 0 && domain.indexedPrepareCond != nil {
@@ -3663,11 +3666,11 @@ func freezeIndexedRunTablesOutsideLock(domain *collectionWriteDomain, tables []m
 	freezeDuration = collectionObservedElapsedSince(freezeStart)
 	relockStart := time.Now()
 	domain.mu.Lock()
+	lockReleased = time.Since(unlockStart)
 	lockHeld = true
 	relockWait = time.Since(relockStart)
 	domain.finishIndexedPrepareFreezeLocked()
 	prepareFinished = true
-	lockReleased = time.Since(unlockStart)
 	return freezeDuration, lockReleased, relockWait
 }
 
@@ -13500,6 +13503,9 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 	if meta.Options.DisableBufferedIndexedAsyncFlush && meta.Options.BufferedIndexedAsyncFlush {
 		return CollectionMeta{}, errors.New("collections: buffered indexed async flush cannot be both enabled and disabled")
 	}
+	if meta.Options.DisableBufferedIndexedAsyncFlush && meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits != 0 {
+		return CollectionMeta{}, errors.New("collections: buffered indexed async flush max queued units require async flush to be enabled")
+	}
 	documentFormat, err := normalizeDocumentFormat(meta.Options.DocumentFormat)
 	if err != nil {
 		return CollectionMeta{}, err
@@ -13569,9 +13575,11 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		}
 	}
 	if !meta.Options.BufferedIndexedWrites {
-		meta.Options.DisableBufferedIndexedAsyncFlush = false
+		if meta.Options.DisableIndexedWriteMemtables {
+			meta.Options.DisableBufferedIndexedAsyncFlush = false
+			meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
+		}
 		meta.Options.BufferedIndexedAsyncFlush = false
-		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
 	}
 	return meta, nil
 }
