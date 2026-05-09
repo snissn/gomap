@@ -353,7 +353,7 @@ func resetLeafGenerationAfterOfflineVacuum(dir string, commitSeq uint64, evictSe
 
 	for _, file := range files {
 		if evictSegment != nil {
-			if err := evictSegment(file.rawFileID); err != nil {
+			if err := evictSegment(page.ValueLogFileID(file.rawFileID)); err != nil {
 				return fmt.Errorf("vacuum: evict stale leaf generation file %s: %w", leafGenerationFallbackPath(dir, file.rawFileID), err)
 			}
 		}
