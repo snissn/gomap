@@ -1868,8 +1868,11 @@ func (domain *collectionWriteDomain) beginIndexedPrepareFreezeLocked() {
 }
 
 func (domain *collectionWriteDomain) finishIndexedPrepareFreezeLocked() {
-	if domain == nil || domain.indexedPrepareFreezes <= 0 {
+	if domain == nil {
 		return
+	}
+	if domain.indexedPrepareFreezes <= 0 {
+		panic("collections: indexed prepare freeze finish without matching begin")
 	}
 	domain.indexedPrepareFreezes--
 	if domain.indexedPrepareFreezes == 0 && domain.indexedPrepareCond != nil {
@@ -3645,11 +3648,11 @@ func freezeIndexedRunTablesOutsideLock(domain *collectionWriteDomain, tables []m
 	freezeDuration = collectionObservedElapsedSince(freezeStart)
 	relockStart := time.Now()
 	domain.mu.Lock()
+	lockReleased = time.Since(unlockStart)
 	lockHeld = true
 	relockWait = time.Since(relockStart)
 	domain.finishIndexedPrepareFreezeLocked()
 	prepareFinished = true
-	lockReleased = time.Since(unlockStart)
 	return freezeDuration, lockReleased, relockWait
 }
 
