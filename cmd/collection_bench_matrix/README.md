@@ -39,6 +39,20 @@ Useful focused variants:
 ./bin/collection-bench-matrix -out-dir "$OUT" -formats json -storage-cells mainline
 ```
 
+For a narrower insert-throughput profile aimed at value-log compression
+allocation costs, use the committed shell harness:
+
+```sh
+RUN_DIR=/tmp/treedb_insert_compression_profile_$(date +%Y%m%d_%H%M%S) \
+  scripts/treedb_insert_compression_profile.sh
+```
+
+It runs the short-lived `BenchmarkCollectionShapeInsertBatch` template-v1 insert
+shape, captures CPU/allocation profiles for the default compression path, and
+optionally compares against `TREEDB_VLOG_COMPRESSION=off` with `benchstat`.
+Use `COUNT=1 BENCHTIME=1000x RUN_COMPRESSION_OFF=false` for a fast harness
+smoke test.
+
 Primary outputs:
 
 - `README.md`: run metadata and cell inventory.

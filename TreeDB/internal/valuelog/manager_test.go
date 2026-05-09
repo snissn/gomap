@@ -50,6 +50,17 @@ func withMappedLeafSealedBytesBudget(t *testing.T, maxMappedBytes int64) {
 	})
 }
 
+func TestManagerRemoveSegmentIfUnpinnedNil(t *testing.T) {
+	var mgr *Manager
+	removed, err := mgr.RemoveSegmentIfUnpinned(1)
+	if err != nil {
+		t.Fatalf("RemoveSegmentIfUnpinned nil manager err=%v", err)
+	}
+	if removed {
+		t.Fatal("RemoveSegmentIfUnpinned nil manager removed=true")
+	}
+}
+
 func waitForRemapIdle(t *testing.T, files ...*File) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

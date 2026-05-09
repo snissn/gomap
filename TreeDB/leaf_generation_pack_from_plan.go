@@ -36,7 +36,7 @@ func (db *DB) LeafGenerationPackFromPlan(ctx context.Context, opts LeafGeneratio
 		}
 	}
 	stats, err := db.backend.LeafGenerationPackFromPlan(ctx, treedbdb.LeafGenerationPackFromPlanOptions(opts))
-	if err != nil {
+	if err = db.reconcileCachedBackendMaintenance(err); err != nil {
 		return out, err
 	}
 	success = true

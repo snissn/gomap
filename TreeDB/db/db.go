@@ -63,6 +63,7 @@ type DB struct {
 	snapshotViewRO                 atomic.Pointer[snapshotView]
 	snapshotAcquireRO              [snapshotAcquireShardCount]atomic.Int32
 	valueLogRefTracker             *valueLogRefTracker
+	valueLogAppender               atomic.Pointer[valueLogAppenderHolder]
 	leafPageLog                    LeafPageLog
 	leafPageReadCache              *leafPageReadCache
 	leafGenerationManifest         *leafGenerationManifest
@@ -74,6 +75,9 @@ type DB struct {
 	adaptive                       *adaptive.Controller
 	pruner                         pruneWorker
 	leafGenerationPins             leafGenerationPinTracker
+	// Test hook used to release synthetic snapshot pins at exact compaction
+	// phase boundaries.
+	compactStorageAfterPhase func(string)
 
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	idx atomic.Pointer[indexGen]
@@ -91,7 +95,8 @@ type DB struct {
 	freelistRegionPages  uint64
 	freelistRegionRadius int
 
-	readOnly bool
+	readOnly   bool
+	durability DurabilityMode
 
 	keepRecent                     uint64
 	policy                         WritePolicy
@@ -627,7 +632,9 @@ type Options struct {
 	IgnoreFormatConfig bool
 	// ReadOnly opens the database without acquiring an exclusive lock and without
 	// modifying on-disk state (no recovery truncation, no WAL replay, no background
-	// maintenance). Only read operations are supported.
+	// maintenance). Only read operations are supported. Under the collection WAL
+	// target contract, read-only open must fail with a recovery-required error if
+	// committed unapplied collection WAL needs mutating recovery.
 	ReadOnly  bool
 	ChunkSize int64 // Default 256KiB
 	// DictDBChunkSize controls the mmap chunk size used for the `dictdb/` side
@@ -1368,6 +1375,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		preferAppendAlloc:              opts.PreferAppendAlloc,
 		freelistRegionPages:            opts.FreelistRegionPages,
 		freelistRegionRadius:           opts.FreelistRegionRadius,
+		durability:                     opts.Durability,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
@@ -1858,6 +1866,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	if idx == nil {
 		return post, errors.New("missing index")
 	}
+	valueLogAppender := db.currentValueLogAppender()
 
 	// Ensure value-log-backed leaf pages are flushed before we publish an index
 	// commit that references them. Per-root storage policies can use the leaf
@@ -1869,6 +1878,17 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 			}
 		} else {
 			if err := db.leafPageLog.Flush(); err != nil {
+				return post, prePublishErr(err)
+			}
+		}
+	}
+	if valueLogAppender != nil {
+		if sync {
+			if err := valueLogAppender.Sync(); err != nil {
+				return post, prePublishErr(err)
+			}
+		} else {
+			if err := valueLogAppender.Flush(); err != nil {
 				return post, prePublishErr(err)
 			}
 		}
@@ -1917,6 +1937,8 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 
 	leafPageSegmentRegistered := false
 	leafPageSegmentFileID := uint32(0)
+	valueLogSegmentRegistered := false
+	valueLogSegmentRegistrationAttempted := false
 	if db.testFailFinalizeCommit.Load() {
 		return post, prePublishErr(errTestFinalizeCommitFailpoint)
 	}
@@ -1930,6 +1952,17 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 			return post, prePublishErr(err)
 		}
 		leafPageSegmentRegistered = registered
+		if valueLogAppender != nil {
+			path, fileID, ok := valueLogAppender.CurrentValueLogSegment()
+			if ok && path != "" && fileID != 0 {
+				valueLogSegmentRegistrationAttempted = true
+				registered, err := db.ensureValueLogSegmentRegisteredAt(path, fileID)
+				if err != nil {
+					return post, prePublishErr(err)
+				}
+				valueLogSegmentRegistered = registered
+			}
+		}
 	}
 
 	// 3. Write Meta - No DB Lock
@@ -1972,7 +2005,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 				}
 			}
 		}
-		if forceValueLogRefresh && !leafPageSegmentRegistered {
+		if forceValueLogRefresh && (!leafPageSegmentRegistered || (valueLogSegmentRegistrationAttempted && !valueLogSegmentRegistered)) {
 			// If no registration path is available, force one refresh as a
 			// safety fallback before publishing the new state.
 			needRefresh = true

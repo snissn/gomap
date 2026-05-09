@@ -13,7 +13,7 @@ This doc describes the knobs exposed via `treedb.Options` and the cached write-b
 - Cached-mode auto checkpointing:
   - `BackgroundCheckpointInterval`: defaults to 30s
   - `BackgroundCheckpointIdleDuration`: defaults to 2s
-  - `MaxWALBytes`: defaults to 2 GiB (legacy name; journal/value-log bytes)
+  - `MaxWALBytes`: defaults to 2 GiB (legacy name; journal and side-log bytes)
 
 ## Options
 
@@ -22,7 +22,9 @@ This doc describes the knobs exposed via `treedb.Options` and the cached write-b
 DB directory containing:
 
 - `index.db` (B+Tree index)
-- `wal/` directory (journal + value-log segments)
+- `wal/` directory (redo journal segments)
+- `value_vlog/` directory (persistent large-value segments)
+- optional `leaf_vlog/` directory (outer leaf generations)
 - `LOCK` file (exclusive open)
 
 ### `Options.ChunkSize`
@@ -158,8 +160,8 @@ Mitigations:
 TreeDB cached mode uses a journal for crash recovery, but (like many engines) the default
 `Set`/`Batch.Write` path does not force an `fsync` per operation.
 
-To keep `wal/` (journal + value log) from growing without bound in long-running workloads, TreeDB enables a
-periodic cached-mode checkpoint by default:
+To keep the redo journal and side logs bounded in long-running workloads,
+TreeDB enables a periodic cached-mode checkpoint by default:
 
 - `Options.BackgroundCheckpointInterval` (default 30s): periodic checkpoint cadence
 - `Options.BackgroundCheckpointIdleDuration` (default 2s): opportunistic checkpoint after write-idle
@@ -334,7 +336,7 @@ without a separate offline tool. These hooks execute inline during shutdown.
 
 - `TREEDB_CLOSE_CHECKPOINT=1`: call `Checkpoint()` before closing
 - `TREEDB_CLOSE_COMPACT_INDEX=1`: call `CompactIndex()` before closing
-- `TREEDB_CLOSE_VACUUM_INDEX_ONLINE=1`: call `VacuumIndexOnline()` (alias to `CompactIndex`) before closing
+- `TREEDB_CLOSE_VACUUM_INDEX_ONLINE=1`: call `VacuumIndexOnline()` before closing; unsupported platforms skip it without failing close
 - `TREEDB_CLOSE_VACUUM_TIMEOUT`: timeout for the online vacuum (duration string or seconds)
 - `TREEDB_CLOSE_LOG=1`: log close-maintenance start/stop messages
 - `TREEDB_CLOSE_SCOPE_CONTAINS`: substring match on `Options.Dir` that scopes which DBs run
@@ -360,26 +362,49 @@ fragmentation under churn:
 Use `db.FragmentationReport()` to observe index span ratio and fill percentiles,
 and let background index vacuum handle high-fragmentation recovery.
 
-### Offline index vacuum (index.db)
+### Full storage compaction
 
-TreeDB’s `index.db` grows in chunks and does not shrink in-place. Reclaiming
-index disk space requires rewriting the index into a fresh file and swapping it
-in.
+For final disk footprint, use the high-level compaction path:
 
-TreeDB provides an **offline** rewrite operation (DB closed) that rebuilds
-`index.db` into a fresh file and swaps it in using a crash-safe protocol:
+```go
+stats, err := db.CompactStorage(ctx, treedb.CompactStorageOptions{
+    Mode: treedb.CompactStorageFull,
+})
+```
 
-- Call: `treedb.VacuumIndexOffline(treedb.Options{Dir: ..., ChunkSize: ...})`
-- Requires the database to be **closed** (it acquires the exclusive `LOCK` under `Dir/maindb/LOCK`)
-- Crash safety: `treedb.Open` will automatically recover from a partial swap
-  (e.g. if the process crashed mid-vacuum).
+or:
 
-### Value-log maintenance (GC / rewrite)
+```sh
+treemap compact <db-dir> -rw
+```
 
-TreeDB’s value log is persistent storage. Disk space is reclaimed via:
+This plans and executes the best-practice sequence across storage domains:
 
-- **GC**: `db.ValueLogGC(...)` deletes fully-unreferenced value-log segments (after a checkpoint in cached mode).
-- **Rewrite**: `treedb.ValueLogRewriteOffline(treedb.Options{Dir: ...})` rewrites live pointers into fresh segments and swaps `Dir/maindb/index.db` to reference the new log (offline; requires a clean commitlog).
+- `value_vlog`: rewrite live pointer-backed values, then GC fully unreachable segments.
+- `leaf_vlog`: pack sparse live leaf generations, then GC fully unreachable generations.
+- `index.db`: vacuum after leaf packing so rewritten roots/internal pages are reflected in the final file.
+- cleanup: remove zero-byte `value_vlog` segment files before final storage accounting.
+
+If online index vacuum is unsupported on the current platform, `CompactStorage`
+records the `index-vacuum` phase as skipped and still completes the value-log,
+leaf-log, and cleanup phases.
+
+Use `treemap compact-plan <db-dir>` to preview remaining compaction debt without
+mutating storage.
+
+### Advanced low-level maintenance
+
+The individual maintenance APIs remain available, but they are domain-specific
+building blocks:
+
+- `db.ValueLogGC(...)` deletes fully-unreferenced `value_vlog` segments only.
+- `treedb.ValueLogRewriteOffline(...)` rewrites value-log pointers only.
+- `db.LeafGenerationPack*` packs sparse `leaf_vlog` generations only.
+- `db.LeafGenerationGC(...)` deletes fully unreachable `leaf_vlog` generations only.
+- `treedb.VacuumIndexOffline(...)` or `treemap compact -scope=index -rw` only rebuilds `index.db`.
+
+Do not manually chain these for benchmark storage numbers unless you are
+debugging TreeDB internals; use full storage compaction instead.
 
 Details: `docs/TREEDB_STORAGE_FORMAT.md`.
 

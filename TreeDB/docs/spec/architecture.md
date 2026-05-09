@@ -7,8 +7,12 @@ TreeDB exposes one primary public engine (`treedb.Open`) with a cached write-bac
 The runtime consists of:
 
 - B+Tree index in `index.db` (mmap pager, copy-on-write commits).
-- Value log (`wal/value-l*.log`) for out-of-line large values.
-- Commit log / journal (`wal/commit-l*.log`) for cached-mode replay.
+- Value log (`maindb/value_vlog/value-l*.log`) for out-of-line large values.
+- Optional split leaf log (`maindb/leaf_vlog/value-l*.log`) for outer leaf
+  generations.
+- Commit log / journal (`maindb/wal/commit-l*.log`) for cached-mode replay.
+- Target collection WAL segments (`maindb/wal/collection-l*.log`) once the
+  collection WAL gate lands.
 - Optional side stores:
   - `dictdb/` for persistent dictionary bytes,
   - `templatedb/` for template compression definitions.
@@ -61,6 +65,10 @@ Default root layout:
   - `LOCK`
   - `wal/`
     - `commit-l<lane>-<seq>.log`
+    - `collection-l<lane>-<seq>.log` (target collection WAL)
+  - `value_vlog/`
+    - `value-l<lane>-<seq>.log`
+  - `leaf_vlog/`
     - `value-l<lane>-<seq>.log`
 - `<root>/dictdb/`
   - `index.db`

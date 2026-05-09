@@ -104,7 +104,7 @@ func templateV1ShapeBenchLearnedDocuments(tb testing.TB, count, fieldCount, shap
 		tb.Fatalf("prepare seed shape documents: %v", err)
 	}
 	var encoder TemplateV1Encoder
-	encoder.learnTemplateV1Templates(learned)
+	encoder.learnTemplateV1Templates(nil, learned)
 	docs := make([][]byte, count)
 	for i := 0; i < count; i++ {
 		fields, values := templateV1ShapeBenchFieldsAndValues(fieldCount, i, i%shapeCount)

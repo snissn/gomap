@@ -62,6 +62,10 @@ const (
 	//   - you are exploring performance limits, and crashes/corruption detection
 	//     are acceptable trade-offs.
 	//
+	// Collection writes under this profile use DurabilityWALOffRelaxed. A
+	// successful collection write is not a durable-at-ack promise; use Flush,
+	// FlushAll, Checkpoint, or Close for a persistence boundary.
+	//
 	// It also pins the current run_celestia-style value-log compression policy:
 	// auto compression, balanced auto policy, snappy block fallback, and medium
 	// autotune.
@@ -74,6 +78,10 @@ const (
 	// write-heavy benchmarks and ingest workloads.
 	//
 	// It keeps WAL enabled but disables fsync and value-log read checksums.
+	// After collection WAL lands, successful collection writes in this profile
+	// are process-crash recoverable but still do not have a power-loss fsync
+	// guarantee.
+	//
 	// It also pins the same value-log compression policy as ProfileFast.
 	ProfileWALOnFast Profile = "wal_on_fast"
 

@@ -161,20 +161,6 @@ func collectionOptionsWithTemplateV1Resolver(opts collectionOptions, snap *backe
 	return opts
 }
 
-func collectionOptionsWithBufferedTemplateV1Resolver(opts collectionOptions, domain *collectionWriteDomain, collectionName string) collectionOptions {
-	if normalizedDocumentFormat(opts.documentFormat) != DocumentFormatTemplateV1 || domain == nil || collectionName == "" {
-		return opts
-	}
-	rootName := collectionTemplateRootName(collectionName)
-	domain.mu.RLock()
-	runs := append([]memtable.Table(nil), pendingIndexedRootRunsLocked(domain, rootName)...)
-	domain.mu.RUnlock()
-	if len(runs) == 0 {
-		return opts
-	}
-	return collectionOptionsWithBufferedTemplateV1RunsResolver(opts, runs)
-}
-
 func collectionOptionsWithBufferedTemplateV1RunsResolver(opts collectionOptions, runs []memtable.Table) collectionOptions {
 	if normalizedDocumentFormat(opts.documentFormat) != DocumentFormatTemplateV1 || len(runs) == 0 {
 		return opts
@@ -245,6 +231,9 @@ func parseTemplateV1InsertDocument(raw []byte) (templateV1ParsedInsertDocument, 
 	case hasTemplateV1Magic(raw, templateV1StoredMagic):
 		return templateV1ParsedInsertDocument{hashDocumentOffset: templateV1StoredDocumentOffset}, nil
 	case hasTemplateV1Magic(raw, templateV1InsertDocumentMagic):
+		if len(raw) < len(templateV1InsertDocumentMagic)+32 {
+			return templateV1ParsedInsertDocument{}, errors.New("collections: malformed template-v1 insert document")
+		}
 		return templateV1ParsedInsertDocument{hashDocumentOffset: 0}, nil
 	default:
 		return parseTemplateV1InsertEnvelope(raw)
@@ -291,6 +280,9 @@ func parseTemplateV1InsertEnvelope(raw []byte) (templateV1ParsedInsertDocument, 
 	}
 	hashDocument := raw[pos:]
 	if !hasTemplateV1Magic(hashDocument, templateV1InsertDocumentMagic) {
+		return templateV1ParsedInsertDocument{}, errors.New("collections: malformed template-v1 insert document")
+	}
+	if len(hashDocument) < len(templateV1InsertDocumentMagic)+32 {
 		return templateV1ParsedInsertDocument{}, errors.New("collections: malformed template-v1 insert document")
 	}
 	return templateV1ParsedInsertDocument{hashDocumentOffset: pos, records: records}, nil
@@ -834,12 +826,15 @@ func EncodeTemplateV1Document(fields []string, values []any) ([]byte, error) {
 }
 
 type TemplateV1Encoder struct {
-	emitted map[[32]byte]struct{}
-	ids     map[[32]byte]uint64
+	emitted         map[[32]byte]struct{}
+	ids             map[[32]byte]uint64
+	collectionScope *Collection
 }
 
 func (e *TemplateV1Encoder) Reset() {
 	e.emitted = nil
+	e.ids = nil
+	e.collectionScope = nil
 }
 
 func (e *TemplateV1Encoder) EncodeDocument(fields []string, values []any) ([]byte, error) {
@@ -874,10 +869,19 @@ func (e *TemplateV1Encoder) includeTemplateV1Record(record templateV1Record) boo
 	return true
 }
 
-func (e *TemplateV1Encoder) learnTemplateV1Templates(templates []templateV1LearnedTemplate) {
+func (e *TemplateV1Encoder) learnedTemplateV1ScopeMismatch(collection *Collection) bool {
+	return e != nil && len(e.ids) > 0 && e.collectionScope != nil && e.collectionScope != collection
+}
+
+func (e *TemplateV1Encoder) learnTemplateV1Templates(collection *Collection, templates []templateV1LearnedTemplate) {
 	if e == nil || len(templates) == 0 {
 		return
 	}
+	if e.collectionScope != nil && e.collectionScope != collection {
+		e.emitted = nil
+		e.ids = nil
+	}
+	e.collectionScope = collection
 	if e.ids == nil {
 		e.ids = make(map[[32]byte]uint64, len(templates))
 	}
@@ -904,12 +908,15 @@ func (e *TemplateV1Encoder) encodeStoredDocumentWithLearnedTemplates(root []byte
 	out := make([]byte, 0, len(root)-32+binary.MaxVarintLen64)
 	out = append(out, templateV1StoredMagic...)
 	out = appendTemplateV1Uvarint(out, rootID)
-	if len(state.records) == 0 {
+	needsConversion, err := templateV1ValuesNeedHashConversion(values, state.firstRecord.fieldCount)
+	if err != nil {
+		return nil, false, err
+	}
+	if !needsConversion {
 		out = append(out, values...)
 		return out, true, nil
 	}
 	pos := 0
-	var err error
 	for i := 0; i < state.firstRecord.fieldCount; i++ {
 		out, err = state.appendKnownIDValue(out, values, &pos, e.ids)
 		if err != nil {
@@ -1539,8 +1546,10 @@ func appendTemplateV1LearnedTemplate(dst []templateV1LearnedTemplate, tpl *templ
 		return dst
 	}
 	next := templateV1LearnedTemplate{hash: tpl.hash, id: tpl.id}
-	if len(dst) > 0 && dst[len(dst)-1] == next {
-		return dst
+	for _, existing := range dst {
+		if existing == next {
+			return dst
+		}
 	}
 	return append(dst, next)
 }

@@ -420,8 +420,8 @@ func TestReopenVerify_ValueLogGC_LeafPagesInValueLog_ReopenParity(t *testing.T) 
 		_ = db.Close()
 		t.Fatalf("ValueLogGC: %v", err)
 	}
-	if stats.SegmentsEligible == 0 {
-		t.Fatalf("expected GC to find eligible segments, stats=%+v", stats)
+	if stats.SegmentsDeleted != 0 {
+		t.Fatalf("value-log GC deleted segments in leaf-only split-log workload, stats=%+v", stats)
 	}
 
 	if err := db.Close(); err != nil {

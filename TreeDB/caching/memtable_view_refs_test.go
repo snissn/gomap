@@ -7,6 +7,16 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
+type releaseTrackingMemtable struct {
+	*memtable.AppendOnly
+	released bool
+}
+
+func (m *releaseTrackingMemtable) Release() {
+	m.released = true
+	m.AppendOnly.Release()
+}
+
 func TestRetainMemtableViewSelfHealsZeroRefPublishedView(t *testing.T) {
 	db := &DB{}
 	view := &memtableView{}
@@ -105,6 +115,107 @@ func TestPublishMemtablesDefersRetiredMemtableRecycleUntilFinalRelease(t *testin
 	}
 	if leased != retired {
 		t.Fatalf("leased memtable=%p want retired=%p", leased, retired)
+	}
+}
+
+func TestReleaseClosingEmptyMemtablesDefersCleanupForRetainedView(t *testing.T) {
+	db := &DB{}
+	mutable := &releaseTrackingMemtable{AppendOnly: memtable.NewAppendOnlyWithCapacity(0)}
+	retired := memtable.NewAppendOnlyWithCapacity(0)
+	retired.Set([]byte("retired"), []byte("value"))
+	retired.Freeze()
+
+	view := &memtableView{
+		mutables:    []memtable.Table{mutable},
+		retiredMems: []memtable.Table{retired},
+	}
+	view.refs.Store(1)
+	db.memtables.Store(view)
+
+	held := db.retainMemtableView()
+	if held != view {
+		t.Fatalf("retainMemtableView returned %p want %p", held, view)
+	}
+	if refs := view.refs.Load(); refs != 2 {
+		t.Fatalf("view refs after retain=%d want=2", refs)
+	}
+
+	db.releaseClosingEmptyMemtables()
+
+	if got := db.memtables.Load(); got != nil {
+		t.Fatalf("published view after close cleanup=%p want nil", got)
+	}
+	if refs := view.refs.Load(); refs != 1 {
+		t.Fatalf("view refs after closing cleanup=%d want=1", refs)
+	}
+	if mutable.released {
+		t.Fatalf("mutable released before retained reader dropped view")
+	}
+	if got := len(view.retiredMems); got != 1 {
+		t.Fatalf("retired memtables after closing cleanup=%d want=1", got)
+	}
+	// Closing-empty mems should be registered in the DB map (not on the view).
+	db.closingEmptyMemsMu.Lock()
+	pendingCount := len(db.closingEmptyByView[view])
+	db.closingEmptyMemsMu.Unlock()
+	if pendingCount != 1 {
+		t.Fatalf("pending closing-empty mems in DB map=%d want=1", pendingCount)
+	}
+
+	db.releaseMemtableView(held)
+
+	if refs := view.refs.Load(); refs != 0 {
+		t.Fatalf("view refs after final release=%d want=0", refs)
+	}
+	if !mutable.released {
+		t.Fatalf("mutable was not released after final view release")
+	}
+	if got := retired.Len(); got != 0 {
+		t.Fatalf("retired memtable len after final release=%d want=0", got)
+	}
+	if got := len(view.retiredMems); got != 0 {
+		t.Fatalf("retired memtables not cleared len=%d", got)
+	}
+	db.closingEmptyMemsMu.Lock()
+	remainingCount := len(db.closingEmptyByView[view])
+	db.closingEmptyMemsMu.Unlock()
+	if remainingCount != 0 {
+		t.Fatalf("DB closing-empty map not cleared after final release: len=%d", remainingCount)
+	}
+}
+
+func TestReleaseClosingEmptyMemtablesCleansZeroRefPublishedView(t *testing.T) {
+	db := &DB{}
+	mutable := &releaseTrackingMemtable{AppendOnly: memtable.NewAppendOnlyWithCapacity(0)}
+	retired := memtable.NewAppendOnlyWithCapacity(0)
+	retired.Set([]byte("retired"), []byte("value"))
+	retired.Freeze()
+
+	view := &memtableView{
+		mutables:    []memtable.Table{mutable},
+		retiredMems: []memtable.Table{retired},
+	}
+	db.memtables.Store(view)
+
+	db.releaseClosingEmptyMemtables()
+
+	if got := db.memtables.Load(); got != nil {
+		t.Fatalf("published view after close cleanup=%p want nil", got)
+	}
+	if refs := view.refs.Load(); refs != 0 {
+		t.Fatalf("view refs after closing cleanup=%d want=0", refs)
+	}
+	if !mutable.released {
+		t.Fatalf("mutable was not released")
+	}
+	if got := retired.Len(); got != 0 {
+		t.Fatalf("retired memtable len after cleanup=%d want=0", got)
+	}
+	if got := len(view.mutables); got != 0 {
+		t.Fatalf("mutable memtables not cleared len=%d", got)
+	}
+	if got := len(view.retiredMems); got != 0 {
+		t.Fatalf("retired memtables not cleared len=%d", got)
 	}
 }
 

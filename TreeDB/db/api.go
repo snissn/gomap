@@ -171,6 +171,14 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	return val, err
 }
 
+// DurabilityMode reports the backend durability mode configured at open.
+func (db *DB) DurabilityMode() DurabilityMode {
+	if db == nil {
+		return DurabilityDurable
+	}
+	return db.durability
+}
+
 // GetMany returns values for keys.
 //
 // Semantics: Returns safe copies of values. Missing keys are returned as nil

@@ -76,11 +76,11 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			return ValueLogRewriteStats{}, err
 		}
 		if len(backendOpts.ProtectedPaths) == 0 {
-			backendOpts.ProtectedPaths = db.cached.ValueLogRetainedPaths()
+			backendOpts.ProtectedPaths = db.cached.ValueLogProtectedPaths()
 		}
 		if len(backendOpts.ProtectedPaths) == 0 {
 			// Cached-mode callers may have concurrent writers even when there are
-			// no retained paths yet; pass a non-empty slice to activate the
+			// no protected paths yet; pass a non-empty slice to activate the
 			// backend rewrite's active-segment protection.
 			backendOpts.ProtectedPaths = []string{""}
 		}
@@ -89,7 +89,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 	}
 	stats, err := db.backend.ValueLogRewriteOnline(ctx, backendOpts)
-	if err != nil {
+	if err = db.reconcileCachedBackendMaintenance(err); err != nil {
 		return ValueLogRewriteStats{}, err
 	}
 	success = true

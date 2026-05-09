@@ -58,6 +58,7 @@ type config struct {
 	BufferedIndexedWriteMaxDocs             int
 	BufferedIndexedWriteMaxBytes            int64
 	BufferedIndexedWriteMaxRuns             int
+	DisableBufferedIndexedAsyncFlush        bool
 	BufferedIndexedAsyncFlush               bool
 	BufferedIndexedAsyncFlushMaxQueuedUnits int
 	Profile                                 treedb.Profile
@@ -252,6 +253,7 @@ type loadSummary struct {
 	BufferedIndexedWriteMaxDocs             int                    `json:"buffered_indexed_write_max_docs,omitempty"`
 	BufferedIndexedWriteMaxBytes            int64                  `json:"buffered_indexed_write_max_bytes,omitempty"`
 	BufferedIndexedWriteMaxRuns             int                    `json:"buffered_indexed_write_max_root_runs,omitempty"`
+	DisableBufferedIndexedAsyncFlush        bool                   `json:"disable_buffered_indexed_async_flush,omitempty"`
 	BufferedIndexedAsyncFlush               bool                   `json:"buffered_indexed_async_flush,omitempty"`
 	BufferedIndexedAsyncFlushMaxQueuedUnits int                    `json:"buffered_indexed_async_flush_max_queued_units,omitempty"`
 	DataOuterLeavesInValueLog               bool                   `json:"data_outer_leaves_in_value_log"`
@@ -358,7 +360,8 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	fs.IntVar(&cfg.BufferedIndexedWriteMaxDocs, "buffered-indexed-write-max-docs", cfg.BufferedIndexedWriteMaxDocs, "flush indexed write buffers after this many staged documents; 0 uses the collection default")
 	fs.Int64Var(&cfg.BufferedIndexedWriteMaxBytes, "buffered-indexed-write-max-bytes", 0, "flush indexed write buffers after this many staged root-run bytes; 0 means Flush/Close only")
 	fs.IntVar(&cfg.BufferedIndexedWriteMaxRuns, "buffered-indexed-write-max-root-runs", cfg.BufferedIndexedWriteMaxRuns, "flush indexed write buffers after this many staged root-local mutation runs; explicit 0 disables this trigger; omitted with docs/bytes override keeps the compatibility default")
-	fs.BoolVar(&cfg.BufferedIndexedAsyncFlush, "buffered-indexed-async-flush", false, "publish threshold-triggered indexed write flushes in the background; Flush/Close still drain before returning")
+	fs.BoolVar(&cfg.BufferedIndexedAsyncFlush, "buffered-indexed-async-flush", false, "force-enable background indexed threshold publish; indexed schemas already enable this by default")
+	fs.BoolVar(&cfg.DisableBufferedIndexedAsyncFlush, "disable-buffered-indexed-async-flush", false, "disable background indexed threshold publish for foreground-publish baseline comparisons")
 	fs.IntVar(&cfg.BufferedIndexedAsyncFlushMaxQueuedUnits, "buffered-indexed-async-flush-max-queued-units", 0, "max immutable indexed flush units queued for background publish; 0 uses the collection default when async flush is enabled")
 	fs.StringVar(&profile, "profile", string(cfg.Profile), "TreeDB profile: fast, wal_on_fast, durable, or bench")
 	fs.BoolVar(&cfg.DataOuterLeavesInValueLog, "data-outer-leaves-in-vlog", cfg.DataOuterLeavesInValueLog, "store collection primary/index-state outer leaves through the value log")
@@ -397,11 +400,18 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	fs.Visit(func(f *flag.Flag) {
 		seenFlags[f.Name] = true
 	})
+	if cfg.DisableBufferedIndexedAsyncFlush && cfg.BufferedIndexedAsyncFlush {
+		return config{}, fmt.Errorf("cannot set both -buffered-indexed-async-flush and -disable-buffered-indexed-async-flush")
+	}
+	if cfg.DisableBufferedIndexedAsyncFlush && cfg.BufferedIndexedAsyncFlushMaxQueuedUnits != 0 {
+		return config{}, fmt.Errorf("cannot set -buffered-indexed-async-flush-max-queued-units when -disable-buffered-indexed-async-flush is set")
+	}
+	effectiveAsyncFlush := !cfg.DisableBufferedIndexedAsyncFlush
 	if !seenFlags["buffered-indexed-write-max-root-runs"] &&
 		(seenFlags["buffered-indexed-write-max-docs"] || seenFlags["buffered-indexed-write-max-bytes"]) &&
 		(cfg.BufferedIndexedWriteMaxDocs != 0 || cfg.BufferedIndexedWriteMaxBytes != 0) {
 		cfg.BufferedIndexedWriteMaxRuns = collections.DefaultIndexedWriteMemtableMaxRootRuns
-		if cfg.BufferedIndexedAsyncFlush {
+		if effectiveAsyncFlush {
 			cfg.BufferedIndexedWriteMaxRuns = collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns
 		}
 	}
@@ -717,6 +727,7 @@ func runFixture(cfg config) (loadSummary, error) {
 		BufferedIndexedWriteMaxDocs:             collectionMeta.Options.BufferedIndexedWriteMaxDocuments,
 		BufferedIndexedWriteMaxBytes:            collectionMeta.Options.BufferedIndexedWriteMaxBytes,
 		BufferedIndexedWriteMaxRuns:             collectionMeta.Options.BufferedIndexedWriteMaxRootRuns,
+		DisableBufferedIndexedAsyncFlush:        collectionMeta.Options.DisableBufferedIndexedAsyncFlush,
 		BufferedIndexedAsyncFlush:               collectionMeta.Options.BufferedIndexedAsyncFlush && collectionMeta.Options.BufferedIndexedWrites,
 		BufferedIndexedAsyncFlushMaxQueuedUnits: collectionMeta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits,
 		DataOuterLeavesInValueLog:               cfg.DataOuterLeavesInValueLog,
@@ -858,6 +869,7 @@ func createFixtureCollection(backend *backenddb.DB, cfg config) (*collections.Co
 			BufferedIndexedWriteMaxDocuments:        bufferedIndexedWriteMaxDocs,
 			BufferedIndexedWriteMaxBytes:            bufferedIndexedWriteMaxBytes,
 			BufferedIndexedWriteMaxRootRuns:         bufferedIndexedWriteMaxRuns,
+			DisableBufferedIndexedAsyncFlush:        cfg.DisableBufferedIndexedAsyncFlush,
 			BufferedIndexedAsyncFlush:               bufferedIndexedAsyncFlush,
 			BufferedIndexedAsyncFlushMaxQueuedUnits: bufferedIndexedAsyncFlushMaxQueuedUnits,
 		},
@@ -1761,6 +1773,8 @@ func printHumanSummary(w io.Writer, summary loadSummary) {
 		}
 		if summary.BufferedIndexedAsyncFlush {
 			fmt.Fprintf(w, "indexed async flush: enabled max_queued_units=%d\n", summary.BufferedIndexedAsyncFlushMaxQueuedUnits)
+		} else if summary.DisableBufferedIndexedAsyncFlush {
+			fmt.Fprintln(w, "indexed async flush: disabled")
 		}
 	}
 	fmt.Fprintf(w, "index policy: keep_recent=%d prefer_append_alloc=%t background_prune=%t\n",

@@ -18,9 +18,9 @@ Operator-facing behavior is covered by:
 ## TL;DR
 
 - `Options.Dir` is a *root* directory containing:
-  - `Dir/maindb/`: main database (index + journal + value log)
+  - `Dir/maindb/`: main database (`index.db`, `wal`, `value_vlog`, and optional `leaf_vlog`)
   - `Dir/dictdb/`: dictionary store (for value-log compression)
-- Large values can be stored out-of-line in `Dir/maindb/wal/` and referenced by `page.ValuePtr` pointers stored in the B+Tree.
+- Large values can be stored out-of-line in `Dir/maindb/value_vlog/` and referenced by `page.ValuePtr` pointers stored in the B+Tree.
 - The value log is **persistent storage**: pointers are valid long-term; segments are deleted only when unreachable (GC) or after rewrite/compaction.
 
 ## Directory layout
@@ -30,9 +30,9 @@ TreeDB creates/manages two sub-databases under the root directory:
 ### Main DB (`Dir/maindb/`)
 
 - `Dir/maindb/index.db`: memory-mapped pager file containing B+Tree pages + metadata.
-- `Dir/maindb/wal/`: journal (redo) + value-log segments.
-  - journal segments: `commit-l<lane>-<seq>.log`
-  - value-log segments: `value-l<lane>-<seq>.log`
+- `Dir/maindb/wal/`: redo journal segments named `commit-l<lane>-<seq>.log`.
+- `Dir/maindb/value_vlog/`: persistent large-value segments named `value-l<lane>-<seq>.log`.
+- `Dir/maindb/leaf_vlog/`: optional persistent outer-leaf generation segments named `value-l<lane>-<seq>.log`.
 - `Dir/maindb/LOCK`: cross-process exclusive-open lock for the main DB.
 
 ### Dictionary store (`Dir/dictdb/`)
@@ -315,6 +315,29 @@ The value log is **not** an ephemeral write-ahead log:
 - pointers stored in the index are expected to remain valid across restarts,
 - old segments are not truncated “because they’re old”.
 
+### Recommended full compaction
+
+For a fully compacted storage footprint, use:
+
+```sh
+treemap compact <db-dir> -rw
+```
+
+or:
+
+```go
+stats, err := db.CompactStorage(ctx, treedb.CompactStorageOptions{
+    Mode: treedb.CompactStorageFull,
+})
+```
+
+This is the user-facing contract. It coordinates value-log rewrite, value-log
+GC, leaf-generation packing, leaf-generation GC, index vacuum, and zero-byte
+`value_vlog` cleanup. If online index vacuum is unsupported on the current
+platform, that phase is explicitly reported as skipped and the other storage
+domains are still compacted. The lower-level operations below are advanced
+internals for debugging and maintenance schedulers.
+
 ### GC: delete fully-unreferenced segments
 
 TreeDB can delete value-log segments that are completely unreachable:
@@ -333,7 +356,7 @@ Behavior:
 In cached mode, `ValueLogGC` checkpoints first to ensure memtables/journal state
 is reflected in the backend before pointer scanning.
 
-### Rewrite: compact partially-dead segments (offline)
+### Rewrite: compact partially-dead value segments
 
 GC only removes segments that are *fully* unreferenced. To reclaim space from
 segments that contain a mix of live and dead records, TreeDB provides an offline
