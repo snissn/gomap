@@ -3349,9 +3349,17 @@ func (c *Collection) shouldFlushBeforeIndexedDelete(meta CollectionMeta) bool {
 		return true
 	}
 	domain := c.writeDomain
-	domain.mu.RLock()
-	defer domain.mu.RUnlock()
-	return !domain.indexedDeletesOnly
+	domain.mu.Lock()
+	defer domain.mu.Unlock()
+	if !domain.indexedDeletesOnly {
+		return true
+	}
+	currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
+	catalog, err := c.revalidateBufferedWriteDomainLocked(domain, currentCommitSeq, currentSystemRoot)
+	if err != nil {
+		return true
+	}
+	return !c.shouldBufferIndexedDeletes(catalog.meta)
 }
 
 func (c *Collection) shouldBufferIndexedInsertBatch(meta CollectionMeta, documentCount int) bool {
@@ -12252,6 +12260,7 @@ func (c *Collection) bufferIndexedDeleteTablesLocked(
 		domain.rootRuns = make(map[string][]memtable.Table, len(rootNames))
 	}
 	freezeMutableIndexedRunMapsLocked(domain)
+	domain.primaryRunIndex = nil
 	var stagedBytes int64
 	stagedRootRuns := 0
 	for i, rootName := range rootNames {
@@ -12285,7 +12294,6 @@ func (c *Collection) bufferIndexedDeleteTablesLocked(
 		rollback()
 		return false, nil
 	}
-	domain.primaryRunIndex = nil
 	domain.loaded = true
 	domain.meta = meta
 	domain.catalog = catalog
@@ -12310,7 +12318,6 @@ func (c *Collection) bufferIndexedDeleteTablesLocked(
 		_ = flushElapsed
 		if err != nil {
 			rollback()
-			resetCollectionTables(compactedObsolete)
 			return false, err
 		}
 	}

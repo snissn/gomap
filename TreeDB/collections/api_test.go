@@ -7483,6 +7483,63 @@ func TestCollectionIndexedDeleteBuffersNonUniqueTombstones(t *testing.T) {
 	}
 }
 
+func TestCollectionIndexedDeleteRevalidatesBeforeSkippingFlush(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	writerMgr := NewCollectionManager(d)
+	if _, err := writerMgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	writer, err := writerMgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	if _, err := writer.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"email":"a@example.com","city":"hnl"}`),
+			[]byte(`{"email":"b@example.com","city":"hnl"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush inserts: %v", err)
+	}
+	if deleted, err := writer.DeleteDocument([]byte("u1")); err != nil || !deleted {
+		t.Fatalf("buffer delete deleted=%v err=%v", deleted, err)
+	}
+
+	indexMgr := NewCollectionManager(d)
+	indexer, err := indexMgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open indexer: %v", err)
+	}
+	if _, err := indexer.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}); err != nil {
+		t.Fatalf("create unique index: %v", err)
+	}
+
+	if _, err := writer.DeleteDocument([]byte("u2")); err == nil || !strings.Contains(err.Error(), "concurrent schema modification") {
+		t.Fatalf("delete after schema change err=%v want concurrent schema modification", err)
+	}
+	writer.writeDomain.mu.RLock()
+	count := writer.writeDomain.count
+	deleteOnly := writer.writeDomain.indexedDeletesOnly
+	writer.writeDomain.mu.RUnlock()
+	if count != 1 || !deleteOnly {
+		t.Fatalf("write domain count=%d deleteOnly=%v want pending original delete", count, deleteOnly)
+	}
+}
+
 func TestCollectionSingleInsertBufferedNoIndexRejectsConcurrentSchemaChange(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
