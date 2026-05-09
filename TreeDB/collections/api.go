@@ -4878,21 +4878,72 @@ func cloneCollectionRunTableFromIterator(table memtable.Table, it iterator.Unsaf
 	return table, nil
 }
 
-func collectionOptionsWithClonedBufferedTemplateV1Resolver(opts collectionOptions, domain *collectionWriteDomain, collectionName string) (collectionOptions, []memtable.Table, error) {
-	if normalizedDocumentFormat(opts.documentFormat) != DocumentFormatTemplateV1 || domain == nil || collectionName == "" {
-		return opts, nil, nil
+type collectionRunTableSnapshot struct {
+	iter iterator.UnsafeIterator
+	len  int
+}
+
+func closeCollectionRunTableSnapshots(snapshots []collectionRunTableSnapshot) {
+	for _, snapshot := range snapshots {
+		if snapshot.iter != nil {
+			_ = snapshot.iter.Close()
+		}
 	}
+}
+
+func cloneCollectionRunTableSnapshots(snapshots []collectionRunTableSnapshot) ([]memtable.Table, error) {
+	if len(snapshots) == 0 {
+		return nil, nil
+	}
+	defer closeCollectionRunTableSnapshots(snapshots)
+	out := make([]memtable.Table, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		if snapshot.iter == nil {
+			out = append(out, nil)
+			continue
+		}
+		table := newCollectionRunTable(max(0, snapshot.len))
+		cloned, err := cloneCollectionRunTableFromIterator(table, snapshot.iter)
+		if err != nil {
+			resetCollectionTables(out)
+			return nil, err
+		}
+		out = append(out, cloned)
+	}
+	return out, nil
+}
+
+func bufferedTemplateRunSnapshotsLocked(domain *collectionWriteDomain, collectionName string) []collectionRunTableSnapshot {
 	rootName := collectionTemplateRootName(collectionName)
+	pendingRuns := pendingIndexedRootRunsLocked(domain, rootName)
+	if len(pendingRuns) == 0 {
+		return nil
+	}
+	snapshots := make([]collectionRunTableSnapshot, 0, len(pendingRuns))
+	for _, run := range pendingRuns {
+		if run == nil {
+			continue
+		}
+		// Create the iterator while domain.mu is held so async publish completion
+		// cannot remove and reset the run before the iterator pins or snapshots it.
+		// The actual entry clone happens after domain.mu is released.
+		length := run.Len()
+		snapshots = append(snapshots, collectionRunTableSnapshot{
+			iter: run.NewIterator(nil, nil),
+			len:  length,
+		})
+	}
+	return snapshots
+}
+
+func cloneBufferedTemplateV1Runs(domain *collectionWriteDomain, collectionName string) ([]memtable.Table, error) {
+	if domain == nil || collectionName == "" {
+		return nil, nil
+	}
 	domain.mu.RLock()
-	cloned, err := cloneCollectionRunTables(pendingIndexedRootRunsLocked(domain, rootName))
+	snapshots := bufferedTemplateRunSnapshotsLocked(domain, collectionName)
 	domain.mu.RUnlock()
-	if err != nil {
-		return opts, nil, err
-	}
-	if len(cloned) == 0 {
-		return opts, nil, nil
-	}
-	return collectionOptionsWithBufferedTemplateV1RunsResolver(opts, cloned), cloned, nil
+	return cloneCollectionRunTableSnapshots(snapshots)
 }
 
 type bufferedRootRunHeapItem struct {
@@ -6417,23 +6468,25 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		bufferIndexedInserts = c.shouldBufferIndexedInsertBatch(meta, len(documents))
 	}
 	if bufferIndexedInserts {
-		plannerOptions, bufferedTemplateRuns, err = collectionOptionsWithClonedBufferedTemplateV1Resolver(plannerOptions, c.writeDomain, meta.Name)
-		if err != nil {
-			closePlanningSnapshot()
-			return nil, err
-		}
 		if normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatTemplateV1 {
-			// Clone buffered template runs first, then refresh the fallback snapshot.
-			// This closes the race where async publish removes a template run from the
-			// buffered overlay after the original snapshot but before the clone.
-			catalog, meta, plannerOptions, err = c.refreshTemplateV1PlanningSnapshot(&snap, trustedValidBSON, bufferedTemplateRuns, true)
+			bufferedTemplateRuns, err = cloneBufferedTemplateV1Runs(c.writeDomain, meta.Name)
 			if err != nil {
 				closePlanningSnapshot()
 				return nil, err
 			}
-			c.meta = meta
-			indexedMemtablesEnabled = c.shouldBufferIndexedInserts(meta)
-			bufferIndexedInserts = c.shouldBufferIndexedInsertBatch(meta, len(documents))
+			if len(bufferedTemplateRuns) > 0 {
+				// Clone buffered template runs first, then refresh the fallback snapshot.
+				// This closes the race where async publish removes a template run from the
+				// buffered overlay after the original snapshot but before the clone.
+				catalog, meta, plannerOptions, err = c.refreshTemplateV1PlanningSnapshot(&snap, trustedValidBSON, bufferedTemplateRuns, true)
+				if err != nil {
+					closePlanningSnapshot()
+					return nil, err
+				}
+				c.meta = meta
+				indexedMemtablesEnabled = c.shouldBufferIndexedInserts(meta)
+				bufferIndexedInserts = c.shouldBufferIndexedInsertBatch(meta, len(documents))
+			}
 		}
 	}
 	baseSystemRoot := snapshotSystemRoot(snap)
@@ -12073,13 +12126,15 @@ func (c *Collection) NewStoredDocumentJSONMaterializer() (*StoredDocumentJSONMat
 			return nil, err
 		}
 		plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
-		plannerOptions, bufferedTemplateRuns, err = collectionOptionsWithClonedBufferedTemplateV1Resolver(plannerOptions, c.writeDomain, c.meta.Name)
+		bufferedTemplateRuns, err = cloneBufferedTemplateV1Runs(c.writeDomain, c.meta.Name)
 		if err != nil {
 			return nil, err
 		}
-		_, _, plannerOptions, err = c.refreshTemplateV1PlanningSnapshot(&snap, false, bufferedTemplateRuns, false)
-		if err != nil {
-			return nil, err
+		if len(bufferedTemplateRuns) > 0 {
+			_, _, plannerOptions, err = c.refreshTemplateV1PlanningSnapshot(&snap, false, bufferedTemplateRuns, false)
+			if err != nil {
+				return nil, err
+			}
 		}
 		closeOnErr = false
 		return &StoredDocumentJSONMaterializer{
