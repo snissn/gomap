@@ -1518,14 +1518,14 @@ WAL-on write ordering:
    files through the collection WAL side-ref prepare protocol.
 3. Fsync files, atomically rename temp files to final paths, and fsync parent
    directories before the collection WAL commit marker may reference them.
-4. Append the collection WAL transaction that describes root mutations, primary
-   locator changes, granule/mark changes, secondary index changes,
-   delete/tombstone changes, count/visibility metadata, part descriptor
-   additions, and every required external side ref.
-5. Validate that the declared side-ref set matches the complete canonical
+4. Validate that the declared side-ref set matches the complete canonical
    transitive closure embedded in part descriptors, manifests, filter
    descriptors, delete bitmap refs, dictionary refs, compression metadata refs,
    granule roots, and root-delta values.
+5. Append the collection WAL transaction that describes root mutations, primary
+   locator changes, granule/mark changes, secondary index changes,
+   delete/tombstone changes, count/visibility metadata, part descriptor
+   additions, and every required external side ref.
 6. Publish the root group only after the column bytes are readable at the
    required durability boundary.
 7. On recovery, replay either the complete root group or none of it.
@@ -1769,9 +1769,10 @@ with new rows:
 ### 12.5 JSONBench Integration
 
 Add a TreeDB column-store lane to the external JSONBench TreeDB harness
-(`~/dev/snissn/JSONBench/treedb`) once the column-store scan API can express the
-five Bluesky analytics queries. This is a comparison benchmark, not the first
-correctness gate, and it must follow JSONBench rules.
+(`https://github.com/snissn/JSONBench`, TreeDB harness under `treedb/`) once
+the column-store scan API can express the five Bluesky analytics queries. This
+is a comparison benchmark, not the first correctness gate, and it must follow
+JSONBench rules.
 
 The comparison target is benchmark-shape compatibility with the ClickHouse JSON
 store setup in `clickhouse/ddl.sql` and `clickhouse/queries.sql`, not
@@ -1898,7 +1899,7 @@ Deliverables:
   - update-followed-by-read shape;
   - count-star shape;
 - add `cmd/columnstore_bench` skeleton with row-store/template-v1 baselines;
-- inventory the existing `~/dev/snissn/JSONBench/treedb` harness and define the
+- inventory the external JSONBench `treedb/` harness and define the
   column-store result fields needed to compare with local ClickHouse/DuckDB
   JSONBench runs;
 - add machine-readable result schema and guardrail checks.
@@ -2234,7 +2235,8 @@ Deliverables:
 - profile defaults for durable/fast/wal_on_fast/bench;
 - persisted `format.json` extension for column-store format knobs;
 - canonical benchmark integration;
-- JSONBench TreeDB column-store lane in `~/dev/snissn/JSONBench/treedb`;
+- JSONBench TreeDB column-store lane in the external JSONBench `treedb/`
+  harness;
 - operational docs.
 
 Tests:

@@ -2346,6 +2346,117 @@ func TestCollectionInsertBatchStatsExposeNoIndexFastPath(t *testing.T) {
 	}
 }
 
+func TestCollectionInsertBatchBuffersNoIndexBSONBeforeFlush(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir, Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	closeDB := collectionMaintenanceCloseOnce(d.Close)
+	defer func() { _ = closeDB() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	writer, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	reader, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	docs := [][]byte{
+		mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "ada"}}),
+		mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "grace"}}),
+	}
+	wantU1 := bytes.Clone(docs[0])
+	wantU2 := bytes.Clone(docs[1])
+	if _, err := writer.InsertBatchValidatedBSON([][]byte{[]byte("u1"), []byte("u2")}, docs); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	docs[0][len(docs[0])-1] ^= 0xff
+	if writer.writeDomain == nil {
+		t.Fatal("missing write domain")
+	}
+	if writer.writeDomain.count != 2 || writer.writeDomain.table == nil || writer.writeDomain.table.Len() != 2 {
+		t.Fatalf("write domain count=%d table=%v want two pending rows", writer.writeDomain.count, writer.writeDomain.table)
+	}
+	got, err := reader.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("reader get buffered BSON doc: %v", err)
+	}
+	if !bytes.Equal(got, wantU1) {
+		t.Fatalf("buffered BSON doc=%v want %v", got, wantU1)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if got := writer.writeDomain.count; got != 0 {
+		t.Fatalf("pending docs after flush=%d want 0", got)
+	}
+	if err := closeDB(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir, Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	got, err = reopenedCol.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get after reopen: %v", err)
+	}
+	if !bytes.Equal(got, wantU2) {
+		t.Fatalf("reopened BSON doc=%v want %v", got, wantU2)
+	}
+}
+
+func TestCollectionInsertBatchValidatedBSONNoIndexDurablePublishesBeforeReturn(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	before := d.State()
+	if _, err := col.InsertBatchValidatedBSON(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "ada"}}),
+			mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "grace"}}),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if got := col.writeDomain.count; got != 0 {
+		t.Fatalf("pending docs=%d want durable publish before ack", got)
+	}
+	after := d.State()
+	if after.CommitSeq < before.CommitSeq+1 {
+		t.Fatalf("commit seq advanced by %d want at least 1", after.CommitSeq-before.CommitSeq)
+	}
+}
+
 func TestCollectionInsertBatchBridge_ReturnedIDsAndDocumentsAreOwned(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -4433,6 +4544,7 @@ func TestCollectionInsertPlanningKeepsLockForIndexedMemtableBypass(t *testing.T)
 		documentFormat          DocumentFormat
 		indexedMemtablesEnabled bool
 		bufferIndexedInserts    bool
+		keepDirectPlanningLock  bool
 		wantUnlock              bool
 	}{
 		{
@@ -4441,11 +4553,19 @@ func TestCollectionInsertPlanningKeepsLockForIndexedMemtableBypass(t *testing.T)
 			wantUnlock:     true,
 		},
 		{
-			name:                    "json-buffered-indexed-memtables",
+			name:                    "json-buffered-indexed-memtables-large-batch",
 			documentFormat:          DocumentFormatJSON,
 			indexedMemtablesEnabled: true,
 			bufferIndexedInserts:    true,
 			wantUnlock:              true,
+		},
+		{
+			name:                    "json-buffered-indexed-memtables-direct-accumulator",
+			documentFormat:          DocumentFormatJSON,
+			indexedMemtablesEnabled: true,
+			bufferIndexedInserts:    true,
+			keepDirectPlanningLock:  true,
+			wantUnlock:              false,
 		},
 		{
 			name:                    "json-direct-indexed-memtable-bypass",
@@ -4478,11 +4598,30 @@ func TestCollectionInsertPlanningKeepsLockForIndexedMemtableBypass(t *testing.T)
 				collectionOptions{documentFormat: tt.documentFormat},
 				tt.indexedMemtablesEnabled,
 				tt.bufferIndexedInserts,
+				tt.keepDirectPlanningLock,
 			)
 			if got != tt.wantUnlock {
 				t.Fatalf("shouldUnlockInsertPlanning()=%v want %v", got, tt.wantUnlock)
 			}
 		})
+	}
+}
+
+func TestCollectionIndexedInsertAccumulatorThresholds(t *testing.T) {
+	if !shouldUseDirectBufferedInsertAccumulators(1) {
+		t.Fatal("single-document insert should use direct buffered accumulators")
+	}
+	if !shouldUseDirectBufferedInsertAccumulators(DefaultIndexedWriteMemtableAccumulatorBatchDocuments) {
+		t.Fatal("accumulator threshold should be inclusive")
+	}
+	if shouldUseDirectBufferedInsertAccumulators(DefaultIndexedWriteMemtableAccumulatorBatchDocuments + 1) {
+		t.Fatal("large insert should keep frozen-run path")
+	}
+	if !shouldPlanDirectBufferedInsertAccumulatorsWithMutationLocked(1) {
+		t.Fatal("single-document accumulator insert should keep planning lock")
+	}
+	if shouldPlanDirectBufferedInsertAccumulatorsWithMutationLocked(2) {
+		t.Fatal("multi-document accumulator insert should release planning lock")
 	}
 }
 
@@ -6689,6 +6828,170 @@ func TestCollectionIndexedWriteMemtablesCompactRootRunsBeforeDocumentFlush(t *te
 	}
 	if got := catalog.rootID(collectionPrimaryRootName("users")); got == 0 {
 		t.Fatal("primary root was not persisted after document threshold")
+	}
+}
+
+func TestCollectionIndexedInsertBatchUsesMutableBufferedRootAccumulators(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 100,
+			BufferedIndexedWriteMaxRootRuns:  100,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	for i, id := range []string{"u1", "u2", "u3"} {
+		doc := fmt.Sprintf(`{"email":"user%d@example.com","city":"hnl"}`, i+1)
+		if _, err := col.InsertBatch([][]byte{[]byte(id)}, [][]byte{[]byte(doc)}); err != nil {
+			t.Fatalf("insert %s: %v", id, err)
+		}
+	}
+
+	primaryRoot := collectionPrimaryRootName("users")
+	indexStateRoot := collectionIndexStateRootName("users")
+	emailRoot := collectionSecondaryRootName("users", "email")
+	cityRoot := collectionSecondaryRootName("users", "city")
+
+	col.writeDomain.mu.RLock()
+	rootRunCount := col.writeDomain.rootRunCount
+	rootRuns := map[string]int{
+		primaryRoot:    len(col.writeDomain.rootRuns[primaryRoot]),
+		indexStateRoot: len(col.writeDomain.rootRuns[indexStateRoot]),
+		emailRoot:      len(col.writeDomain.rootRuns[emailRoot]),
+		cityRoot:       len(col.writeDomain.rootRuns[cityRoot]),
+	}
+	mutableRuns := len(col.writeDomain.rootMutableRuns)
+	uniqueRuns := len(col.writeDomain.uniqueValueRuns["email"])
+	uniqueMutableRuns := len(col.writeDomain.uniqueValueMutableRuns)
+	col.writeDomain.mu.RUnlock()
+
+	if rootRunCount != 4 {
+		t.Fatalf("rootRunCount=%d want 4 mutable root accumulators", rootRunCount)
+	}
+	for rootName, count := range rootRuns {
+		if count != 1 {
+			t.Fatalf("root %q runs=%d want 1 mutable accumulator", rootName, count)
+		}
+	}
+	if mutableRuns != 4 {
+		t.Fatalf("mutable root accumulators=%d want 4", mutableRuns)
+	}
+	if uniqueRuns != 1 || uniqueMutableRuns != 1 {
+		t.Fatalf("unique value runs=%d mutable=%d want 1/1", uniqueRuns, uniqueMutableRuns)
+	}
+	stats := mgr.StatsSnapshot()
+	if got := stats.IndexedStageRootRuns; got != 4 {
+		t.Fatalf("indexed staged root runs=%d want 4 newly-created accumulators", got)
+	}
+	if got := stats.IndexedStageBatches; got != 3 {
+		t.Fatalf("indexed staged batches=%d want 3", got)
+	}
+
+	got, err := col.Get([]byte("u3"))
+	if err != nil {
+		t.Fatalf("get pending buffered doc: %v", err)
+	}
+	if got == nil {
+		t.Fatal("pending buffered doc not visible")
+	}
+	ids, err := col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find pending city: %v", err)
+	}
+	if !reflect.DeepEqual(ids, [][]byte{[]byte("u1"), []byte("u2"), []byte("u3")}) {
+		t.Fatalf("pending city ids=%q want [u1 u2 u3]", ids)
+	}
+	_, err = col.InsertBatch([][]byte{[]byte("u4")}, [][]byte{[]byte(`{"email":"user2@example.com","city":"hnl"}`)})
+	if !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("duplicate pending unique insert err=%v want ErrUniqueIndexConflict", err)
+	}
+}
+
+func TestCollectionIndexedInsertBatchKeepsLargeBatchesAsFrozenRuns(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: DefaultIndexedWriteMemtableAccumulatorBatchDocuments * 4,
+			BufferedIndexedWriteMaxRootRuns:  DefaultIndexedWriteMemtableAccumulatorBatchDocuments * 4,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	count := DefaultIndexedWriteMemtableAccumulatorBatchDocuments + 1
+	ids := make([][]byte, count)
+	docs := make([][]byte, count)
+	for i := range ids {
+		ids[i] = []byte(fmt.Sprintf("u%04d", i))
+		docs[i] = []byte(fmt.Sprintf(`{"email":"user%04d@example.com"}`, i))
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("insert large batch: %v", err)
+	}
+
+	primaryRoot := collectionPrimaryRootName("users")
+	indexStateRoot := collectionIndexStateRootName("users")
+	emailRoot := collectionSecondaryRootName("users", "email")
+
+	col.writeDomain.mu.RLock()
+	rootRunCount := col.writeDomain.rootRunCount
+	rootRuns := map[string]int{
+		primaryRoot:    len(col.writeDomain.rootRuns[primaryRoot]),
+		indexStateRoot: len(col.writeDomain.rootRuns[indexStateRoot]),
+		emailRoot:      len(col.writeDomain.rootRuns[emailRoot]),
+	}
+	mutableRuns := len(col.writeDomain.rootMutableRuns)
+	uniqueRuns := len(col.writeDomain.uniqueValueRuns["email"])
+	uniqueMutableRuns := len(col.writeDomain.uniqueValueMutableRuns)
+	col.writeDomain.mu.RUnlock()
+
+	if rootRunCount != 3 {
+		t.Fatalf("rootRunCount=%d want 3 frozen runs", rootRunCount)
+	}
+	for rootName, count := range rootRuns {
+		if count != 1 {
+			t.Fatalf("root %q runs=%d want 1 frozen run", rootName, count)
+		}
+	}
+	if mutableRuns != 0 {
+		t.Fatalf("mutable root accumulators=%d want 0 for large batch", mutableRuns)
+	}
+	if uniqueRuns != 1 || uniqueMutableRuns != 0 {
+		t.Fatalf("unique value runs=%d mutable=%d want 1/0", uniqueRuns, uniqueMutableRuns)
 	}
 }
 
@@ -9941,6 +10244,230 @@ func TestCollectionUpdateBatchDirectBufferedBSONAccumulatesRootRuns(t *testing.T
 	}
 }
 
+func TestCollectionUpdateBatchBuffersWhenSecondaryUniqueUnchanged(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatBSON,
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "email", Value: "a@example.com"},
+			{Key: "city", Value: "hnl"},
+		})},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+	before := d.State()
+
+	results, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update:     setBSONField("city", "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("results=%+v want one modified row", results)
+	}
+	after := d.State()
+	if after.CommitSeq != before.CommitSeq {
+		t.Fatalf("buffered ordinary UpdateBatch advanced commit seq by %d, want 0", after.CommitSeq-before.CommitSeq)
+	}
+	col.writeDomain.mu.RLock()
+	primaryRuns := len(col.writeDomain.rootRuns[collectionPrimaryRootName("users")])
+	cityRuns := len(col.writeDomain.rootRuns[collectionSecondaryRootName("users", "city")])
+	emailRuns := len(col.writeDomain.rootRuns[collectionSecondaryRootName("users", "email")])
+	col.writeDomain.mu.RUnlock()
+	if primaryRuns == 0 || cityRuns == 0 {
+		t.Fatalf("primary/city runs=%d/%d want buffered primary and changed non-unique index", primaryRuns, cityRuns)
+	}
+	if emailRuns != 0 {
+		t.Fatalf("email runs=%d want unchanged unique index not buffered", emailRuns)
+	}
+	ids, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find sea city: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("city ids=%q want [u1]", ids)
+	}
+}
+
+func TestCollectionUpdateBatchPublishesWhenSecondaryUniqueChanges(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatBSON,
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "email", Value: "a@example.com"},
+		})},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+	before := d.State()
+
+	callbackCalls := 0
+	results, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			callbackCalls++
+			return setBSONField("email", "b@example.com")(current)
+		},
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("results=%+v want one modified row", results)
+	}
+	if callbackCalls != 1 {
+		t.Fatalf("callback calls=%d want 1", callbackCalls)
+	}
+	after := d.State()
+	if after.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("unique UpdateBatch advanced commit seq by %d, want 1", after.CommitSeq-before.CommitSeq)
+	}
+	col.writeDomain.mu.RLock()
+	rootRunCount := col.writeDomain.rootRunCount
+	col.writeDomain.mu.RUnlock()
+	if rootRunCount != 0 {
+		t.Fatalf("rootRunCount=%d want no buffered runs after unique-key publish", rootRunCount)
+	}
+	ids, err := col.FindByIndex("email", "b@example.com")
+	if err != nil {
+		t.Fatalf("find email: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("email ids=%q want [u1]", ids)
+	}
+}
+
+func TestCollectionUpdateBatchWithPendingIndexedRunsCallsCallbackOnce(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatBSON,
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			mustBSONCollectionDocument(t, bson.D{
+				{Key: "_id", Value: "u1"},
+				{Key: "email", Value: "a@example.com"},
+				{Key: "city", Value: "hnl"},
+			}),
+			mustBSONCollectionDocument(t, bson.D{
+				{Key: "_id", Value: "u2"},
+				{Key: "email", Value: "b@example.com"},
+				{Key: "city", Value: "hnl"},
+			}),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+	if _, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u2"),
+		Update:     setBSONField("city", "sea"),
+	}}); err != nil {
+		t.Fatalf("buffered setup UpdateBatch: %v", err)
+	}
+
+	callbackCalls := 0
+	results, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			callbackCalls++
+			return setBSONField("email", "c@example.com")(current)
+		},
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBatch with pending indexed runs: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("results=%+v want one modified row", results)
+	}
+	if callbackCalls != 1 {
+		t.Fatalf("callback calls=%d want 1", callbackCalls)
+	}
+	ids, err := col.FindByIndex("email", "c@example.com")
+	if err != nil {
+		t.Fatalf("find updated email: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("updated email ids=%q want [u1]", ids)
+	}
+}
+
 func TestCollectionUpdateBSONSetReusesUnchangedIndexState(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -10905,17 +11432,18 @@ func TestDirectBufferedRootEntriesOwnKeysAndRetainDocumentArena(t *testing.T) {
 	}
 
 	templateRecords := []templateV1Record{{
-		id:  [32]byte{1, 2, 3},
-		raw: []byte("template-record"),
+		hash: [32]byte{1, 2, 3},
+		id:   7,
+		raw:  []byte("template-record"),
 	}}
 	templateEntries := buildDirectBufferedTemplateRootEntries(templateRecords)
-	if len(templateEntries) != 1 {
-		t.Fatalf("template entries=%d want 1", len(templateEntries))
+	if len(templateEntries) != 3 {
+		t.Fatalf("template entries=%d want 3", len(templateEntries))
 	}
-	templateRecords[0].id[0] = 9
+	templateRecords[0].hash[0] = 9
 	templateRecords[0].raw[0] = 'X'
-	if templateEntries[0].key[0] != 1 || !bytes.Equal(templateEntries[0].value, []byte("template-record")) {
-		t.Fatalf("template entry key[0]=%d value=%q, want owned original bytes", templateEntries[0].key[0], templateEntries[0].value)
+	if templateEntries[1].key[1] != 1 || !bytes.Equal(templateEntries[2].value, []byte("template-record")) {
+		t.Fatalf("template hash key[1]=%d record value=%q, want owned original bytes", templateEntries[1].key[1], templateEntries[2].value)
 	}
 }
 

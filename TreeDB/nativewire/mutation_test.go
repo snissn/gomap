@@ -470,8 +470,8 @@ func TestMutationTemplateRecordsSectionFeedsTemplateV1Insert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode doc2: %v", err)
 	}
-	if !bytes.HasPrefix(doc2, []byte(templateV1StoredMagic)) {
-		t.Fatalf("doc2 should be compact TD1D, got %q", doc2[:4])
+	if !bytes.HasPrefix(doc2, []byte(templateV1HashMagic)) {
+		t.Fatalf("doc2 should be hash-addressed TD1H, got %q", doc2[:4])
 	}
 
 	guard, err := client.replicatedMutationGuard(ctx, "insert_batch_template_records")
@@ -767,6 +767,9 @@ func TestNativewireAckSyncedRejectedInWALOnRelaxed(t *testing.T) {
 		t.Fatalf("InsertBatch synced relaxed err=%v want durability unavailable", err)
 	}
 	assertDocumentMissing(t, mgr, "users", "u1")
+	if err := client.Checkpoint(ctx); err != nil {
+		t.Fatalf("Checkpoint default relaxed: %v", err)
+	}
 	if err := client.CheckpointWithAck(ctx, AckSynced); !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
 		t.Fatalf("CheckpointWithAck synced relaxed err=%v want durability unavailable", err)
 	}

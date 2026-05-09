@@ -80,12 +80,14 @@ type insertBatchPlanner struct {
 	options                collectionOptions
 	buildPrimaryVal        func(documentID, document []byte) ([]byte, error)
 	cloneTemplateRunValues bool
+	directBufferedRuns     bool
 }
 
 type insertBatchPlan struct {
 	resultIDs                  [][]byte
 	primaryKeys                [][]byte
 	runs                       []collectionRootRun
+	directBufferedInsert       *directBufferedInsertPlan
 	uniqueProbeCandidates      []uniqueProbeCandidate
 	uniqueProbeCandidatesBuilt bool
 	uniqueProbeRuns            []collectionUniqueProbeRun
@@ -107,6 +109,27 @@ type collectionRootRun struct {
 	indexValueType IndexValueType
 	table          memtable.Table
 	storagePolicy  backenddb.OrderedRootStoragePolicy
+}
+
+type directBufferedInsertPlan struct {
+	templateEntries      []directBufferedRootEntry
+	primaryEntries       []directBufferedRootEntry
+	indexStateEntries    []directBufferedRootEntry
+	secondaryRootPlans   []directBufferedSecondaryRootPlan
+	uniqueValueRootPlans []directBufferedUniqueValueRootPlan
+	rootNames            []string
+	policies             []backenddb.OrderedRootStoragePolicy
+	templateRootName     string
+	primaryRootName      string
+	indexStateRootName   string
+	stagedBytes          int64
+}
+
+type directBufferedUniqueValueRootPlan struct {
+	indexName string
+	valueType IndexValueType
+	prefixes  [][]byte
+	keyBytes  int
 }
 
 type collectionUniqueProbeRun struct {
@@ -265,6 +288,15 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 		allUniqueProbeRunsBuilt:    allUniqueProbeRunsBuilt,
 		templateRecords:            templateRecords,
 		stats:                      insertBatchPlanStats{CollectionInsertStats: stats},
+	}
+	if p.directBufferedRuns {
+		if err := p.buildDirectBufferedInsertPlan(plan, items, primaryOrder, runtimes, persistIndexState, templateRecords); err != nil {
+			return nil, err
+		}
+		if plan.directBufferedInsert != nil {
+			plan.stats.Runs = len(plan.directBufferedInsert.rootNames)
+		}
+		return plan, nil
 	}
 	if len(templateRecords) > 0 {
 		phaseStart = time.Now()
@@ -701,13 +733,28 @@ func (p insertBatchPlanner) emitTemplateRun(plan *insertBatchPlan, records []tem
 	if err != nil {
 		return err
 	}
-	table := newCollectionRunTable(len(records))
-	if err := applyCollectionRunEntries(table, len(records), func(i int) (key, value []byte, err error) {
-		raw := records[i].raw
+	entryCount := len(records)*2 + 1
+	var maxID uint64
+	for _, record := range records {
+		if record.id > maxID {
+			maxID = record.id
+		}
+	}
+	nextID := maxID + 1
+	table := newCollectionRunTable(entryCount)
+	if err := applyCollectionRunEntries(table, entryCount, func(i int) (key, value []byte, err error) {
+		if i == 0 {
+			return templateV1NextIDKey(), encodeTemplateV1ID(nextID), nil
+		}
+		record := records[(i-1)/2]
+		if (i-1)%2 == 0 {
+			return templateV1HashKey(record.hash), encodeTemplateV1ID(record.id), nil
+		}
+		raw := record.raw
 		if p.cloneTemplateRunValues {
 			raw = bytes.Clone(raw)
 		}
-		return records[i].id[:], raw, nil
+		return templateV1RecordKey(record.id), raw, nil
 	}); err != nil {
 		return err
 	}
@@ -719,6 +766,288 @@ func (p insertBatchPlanner) emitTemplateRun(plan *insertBatchPlan, records []tem
 		storagePolicy: p.options.dataStoragePolicy,
 	})
 	return nil
+}
+
+func (p insertBatchPlanner) buildDirectBufferedInsertPlan(plan *insertBatchPlan, items []insertBatchItem, primaryOrder []int, runtimes []indexRuntime, persistIndexState bool, templateRecords []templateV1Record) error {
+	direct := &directBufferedInsertPlan{
+		templateRootName:   p.templateRoot,
+		primaryRootName:    p.primaryRoot,
+		indexStateRootName: p.indexStateRoot,
+	}
+	if len(templateRecords) > 0 {
+		phaseStart := time.Now()
+		entries, err := p.directBufferedTemplateRootEntries(templateRecords)
+		if err != nil {
+			return err
+		}
+		direct.templateEntries = entries
+		direct.addRoot(p.templateRoot, p.options.dataStoragePolicy)
+		direct.stagedBytes = saturatingAddNonNegativeInt64(direct.stagedBytes, directBufferedRootEntriesSize(entries))
+		plan.stats.TemplateRunBuild = time.Since(phaseStart)
+	}
+
+	phaseStart := time.Now()
+	primaryEntries, err := p.directBufferedPrimaryRootEntries(plan, items, primaryOrder)
+	if err != nil {
+		return err
+	}
+	direct.primaryEntries = primaryEntries
+	direct.addRoot(p.primaryRoot, p.options.dataStoragePolicy)
+	direct.stagedBytes = saturatingAddNonNegativeInt64(direct.stagedBytes, directBufferedRootEntriesSize(primaryEntries))
+	plan.stats.PrimaryRunBuild = time.Since(phaseStart)
+
+	if len(runtimes) > 0 {
+		if persistIndexState {
+			phaseStart = time.Now()
+			entries, err := p.directBufferedIndexStateRootEntries(items, runtimes)
+			if err != nil {
+				return err
+			}
+			direct.indexStateEntries = entries
+			direct.addRoot(p.indexStateRoot, p.options.indexStateStoragePolicy)
+			direct.stagedBytes = saturatingAddNonNegativeInt64(direct.stagedBytes, directBufferedRootEntriesSize(entries))
+			plan.stats.IndexStateRunBuild = time.Since(phaseStart)
+		}
+		phaseStart = time.Now()
+		secondaryPlans, secondaryBytes, err := p.directBufferedSecondaryRootPlans(items, runtimes, &plan.stats.CollectionInsertStats)
+		if err != nil {
+			return err
+		}
+		direct.secondaryRootPlans = secondaryPlans
+		direct.stagedBytes = saturatingAddNonNegativeInt64(direct.stagedBytes, secondaryBytes)
+		for _, secondaryPlan := range secondaryPlans {
+			runtimeIdx := secondaryPlan.runtimeIdx
+			if runtimeIdx < 0 || runtimeIdx >= len(runtimes) {
+				return fmt.Errorf("collections: invalid direct buffered secondary runtime index %d", runtimeIdx)
+			}
+			direct.addRoot(secondaryPlan.rootName, runtimes[runtimeIdx].def.storagePolicy)
+		}
+		direct.uniqueValueRootPlans = directBufferedUniqueValueRootPlans(plan.allUniqueProbeRuns, runtimes)
+		for _, uniquePlan := range direct.uniqueValueRootPlans {
+			direct.stagedBytes = saturatingAddNonNegativeInt64(direct.stagedBytes, int64(uniquePlan.keyBytes))
+		}
+		plan.stats.SecondaryRunBuild = time.Since(phaseStart)
+	}
+	plan.directBufferedInsert = direct
+	return nil
+}
+
+func (p insertBatchPlanner) directBufferedTemplateRootEntries(records []templateV1Record) ([]directBufferedRootEntry, error) {
+	if len(records) == 0 {
+		return nil, nil
+	}
+	sortTemplateV1Records(records)
+	records, err := dedupeTemplateV1Records(records)
+	if err != nil {
+		return nil, err
+	}
+	entryCount := len(records)*2 + 1
+	entries := make([]directBufferedRootEntry, entryCount)
+	var maxID uint64
+	for _, record := range records {
+		if record.id > maxID {
+			maxID = record.id
+		}
+	}
+	entries[0] = directBufferedRootEntry{
+		key:   templateV1NextIDKey(),
+		value: encodeTemplateV1ID(maxID + 1),
+		flags: node.FlagInline,
+	}
+	for i, record := range records {
+		raw := record.raw
+		if p.cloneTemplateRunValues {
+			raw = bytes.Clone(raw)
+		}
+		entryOffset := i*2 + 1
+		entries[entryOffset] = directBufferedRootEntry{
+			key:   templateV1HashKey(record.hash),
+			value: encodeTemplateV1ID(record.id),
+			flags: node.FlagInline,
+		}
+		entries[entryOffset+1] = directBufferedRootEntry{
+			key:   templateV1RecordKey(record.id),
+			value: raw,
+			flags: node.FlagInline,
+		}
+	}
+	return entries, nil
+}
+
+func (p insertBatchPlanner) directBufferedPrimaryRootEntries(plan *insertBatchPlan, items []insertBatchItem, order []int) ([]directBufferedRootEntry, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+	entries := make([]directBufferedRootEntry, len(items))
+	for i := range items {
+		idx := orderedItemIndex(order, i)
+		value, err := p.buildPrimaryVal(items[idx].id, items[idx].document)
+		if err != nil {
+			return nil, err
+		}
+		if plan != nil {
+			plan.stats.payloadBuilds++
+		}
+		entries[i] = directBufferedRootEntry{
+			key:   items[idx].id,
+			value: value,
+			flags: node.FlagInline,
+		}
+	}
+	return entries, nil
+}
+
+func (p insertBatchPlanner) directBufferedIndexStateRootEntries(items []insertBatchItem, runtimes []indexRuntime) ([]directBufferedRootEntry, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+	order := sortedItemOrderByKey(items, func(item *insertBatchItem) []byte { return item.id })
+	counts := make([]int, len(items))
+	valueBytes := 0
+	for i := range items {
+		idx := orderedItemIndex(order, i)
+		count, size, err := runtimeOrderedDocumentIndexStateStats(items[idx].state, runtimes)
+		if err != nil {
+			return nil, err
+		}
+		counts[i] = count
+		valueBytes += size
+	}
+	entries := make([]directBufferedRootEntry, len(items))
+	valueArena := make([]byte, 0, valueBytes)
+	for i := range items {
+		idx := orderedItemIndex(order, i)
+		var value []byte
+		valueArena, value = appendRuntimeOrderedDocumentIndexState(valueArena, items[idx].state, runtimes, counts[i])
+		entries[i] = directBufferedRootEntry{
+			key:   items[idx].id,
+			value: value,
+			flags: node.FlagInline,
+		}
+	}
+	return entries, nil
+}
+
+func (p insertBatchPlanner) directBufferedSecondaryRootPlans(items []insertBatchItem, runtimes []indexRuntime, stats *CollectionInsertStats) ([]directBufferedSecondaryRootPlan, int64, error) {
+	if len(items) == 0 || len(runtimes) == 0 {
+		return nil, 0, nil
+	}
+	plans := make([]directBufferedSecondaryRootPlan, 0, len(runtimes))
+	var stagedBytes int64
+	for runtimeIdx, runtime := range runtimes {
+		runStart := time.Now()
+		entryCount, keyBytes, alreadySorted, err := secondaryEntryOrderStats(items, runtimeIdx, nil)
+		if err != nil {
+			return nil, 0, err
+		}
+		runStats := CollectionSecondaryRunStats{
+			IndexName:     runtime.def.name,
+			Entries:       entryCount,
+			KeyBytes:      keyBytes,
+			AlreadySorted: alreadySorted,
+		}
+		if entryCount == 0 {
+			runStats.Build = time.Since(runStart)
+			if stats != nil {
+				stats.SecondaryRuns = append(stats.SecondaryRuns, runStats)
+			}
+			continue
+		}
+		rootName := runtime.secondaryRootName
+		if rootName == "" {
+			rootName = collectionSecondaryRootName(p.collection, runtime.def.name)
+		}
+		secondaryPlan := directBufferedSecondaryRootPlan{
+			rootName:   rootName,
+			entries:    make([]directBufferedSecondaryRootEntry, 0, entryCount),
+			arena:      make([]byte, 0, keyBytes),
+			indexName:  runtime.def.name,
+			valueType:  runtime.def.valueType,
+			unique:     runtime.def.unique,
+			sets:       entryCount,
+			keyBytes:   keyBytes,
+			runtimeIdx: runtimeIdx,
+		}
+		for i := range items {
+			for _, encoded := range items[i].state.valuesAt(runtimeIdx) {
+				var key []byte
+				secondaryPlan.arena, key, err = appendIndexEntryKey(secondaryPlan.arena, encoded, items[i].id)
+				if err != nil {
+					return nil, 0, err
+				}
+				secondaryPlan.entries = append(secondaryPlan.entries, directBufferedSecondaryRootEntry{key: key})
+			}
+		}
+		runStats.Build = time.Since(runStart)
+		if stats != nil {
+			stats.SecondaryRuns = append(stats.SecondaryRuns, runStats)
+			stats.SecondaryEntries += entryCount
+			stats.SecondaryKeyBytes += keyBytes
+			if alreadySorted {
+				stats.SecondarySortedRuns++
+			} else {
+				stats.SecondaryUnsortedRuns++
+			}
+		}
+		stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, int64(keyBytes))
+		plans = append(plans, secondaryPlan)
+	}
+	return plans, stagedBytes, nil
+}
+
+func directBufferedUniqueValueRootPlans(runs []collectionUniqueProbeRun, runtimes []indexRuntime) []directBufferedUniqueValueRootPlan {
+	if len(runs) == 0 || len(runtimes) == 0 {
+		return nil
+	}
+	valueTypes := make(map[string]IndexValueType, len(runtimes))
+	for _, runtime := range runtimes {
+		if runtime.def.unique {
+			valueTypes[runtime.def.name] = runtime.def.valueType
+		}
+	}
+	if len(valueTypes) == 0 {
+		return nil
+	}
+	plans := make([]directBufferedUniqueValueRootPlan, 0, len(runs))
+	for _, run := range runs {
+		valueType, ok := valueTypes[run.indexName]
+		if !ok || len(run.prefixes) == 0 {
+			continue
+		}
+		keyBytes := 0
+		for _, prefix := range run.prefixes {
+			keyBytes += len(prefix)
+		}
+		plans = append(plans, directBufferedUniqueValueRootPlan{
+			indexName: run.indexName,
+			valueType: valueType,
+			prefixes:  run.prefixes,
+			keyBytes:  keyBytes,
+		})
+	}
+	return plans
+}
+
+func (plan *directBufferedInsertPlan) addRoot(rootName string, policy backenddb.OrderedRootStoragePolicy) {
+	if plan == nil || rootName == "" {
+		return
+	}
+	for i, existing := range plan.rootNames {
+		if existing == rootName {
+			plan.policies[i] = policy
+			return
+		}
+	}
+	plan.rootNames = append(plan.rootNames, rootName)
+	plan.policies = append(plan.policies, policy)
+}
+
+func directBufferedRootEntriesSize(entries []directBufferedRootEntry) int64 {
+	var total int64
+	for _, entry := range entries {
+		total = saturatingAddNonNegativeInt64(total, int64(len(entry.key)+len(entry.value)))
+	}
+	return total
 }
 
 func setCollectionRunValue(table memtable.Table, key, value []byte) {

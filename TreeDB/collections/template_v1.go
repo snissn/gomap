@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,9 +20,10 @@ import (
 )
 
 const (
-	templateV1InputMagic  = "TD1I"
-	templateV1StoredMagic = "TD1D"
-	templateV1RecordMagic = "TD1T"
+	templateV1InputMagic          = "TD1I"
+	templateV1InsertDocumentMagic = "TD1H"
+	templateV1StoredMagic         = "TD1D"
+	templateV1RecordMagic         = "TD1T"
 
 	templateV1KindNull byte = iota
 	templateV1KindFalse
@@ -42,22 +44,27 @@ var (
 )
 
 type templateV1Record struct {
-	id  [32]byte
-	raw []byte
-	tpl *templateV1Template
+	hash [32]byte
+	id   uint64
+	raw  []byte
+	tpl  *templateV1Template
 }
 
 type templateV1Template struct {
-	id     [32]byte
+	hash   [32]byte
+	id     uint64
 	fields []string
 }
 
 type templateV1Resolver interface {
-	lookupTemplateV1(id [32]byte) (*templateV1Template, error)
+	lookupTemplateV1(id uint64) (*templateV1Template, error)
+	lookupTemplateV1ByHash(hash [32]byte) (*templateV1Template, error)
+	nextTemplateV1ID() (uint64, error)
 }
 
 type templateV1MemoryResolver struct {
-	templates map[string]*templateV1Template
+	templatesByID   map[uint64]*templateV1Template
+	templatesByHash map[[32]byte]*templateV1Template
 }
 
 type templateV1CompositeResolver struct {
@@ -68,18 +75,25 @@ type templateV1CompositeResolver struct {
 type templateV1SnapshotResolver struct {
 	snap   *backenddb.Snapshot
 	rootID uint64
-	cache  map[string]*templateV1Template
+	byID   map[uint64]*templateV1Template
+	byHash map[[32]byte]*templateV1Template
 }
 
 type templateV1BufferedRunsResolver struct {
 	runs     []memtable.Table
 	fallback templateV1Resolver
-	cache    map[string]*templateV1Template
+	byID     map[uint64]*templateV1Template
+	byHash   map[[32]byte]*templateV1Template
 }
 
 type templateV1ObjectRef struct {
-	templateID [32]byte
+	templateID uint64
 	values     []byte
+}
+
+type templateV1HashObjectRef struct {
+	templateHash [32]byte
+	values       []byte
 }
 
 func normalizedDocumentFormat(format DocumentFormat) DocumentFormat {
@@ -135,7 +149,8 @@ func collectionOptionsWithTemplateV1Resolver(opts collectionOptions, snap *backe
 	opts.templateResolver = &templateV1SnapshotResolver{
 		snap:   snap,
 		rootID: catalog.rootID(collectionTemplateRootName(catalog.meta.Name)),
-		cache:  make(map[string]*templateV1Template),
+		byID:   make(map[uint64]*templateV1Template),
+		byHash: make(map[[32]byte]*templateV1Template),
 	}
 	return opts
 }
@@ -147,126 +162,230 @@ func collectionOptionsWithBufferedTemplateV1RunsResolver(opts collectionOptions,
 	opts.templateResolver = &templateV1BufferedRunsResolver{
 		runs:     runs,
 		fallback: opts.templateResolver,
-		cache:    make(map[string]*templateV1Template),
+		byID:     make(map[uint64]*templateV1Template),
+		byHash:   make(map[[32]byte]*templateV1Template),
 	}
 	return opts
 }
 
+type templateV1ParsedInsertDocument struct {
+	hashDocumentOffset int
+	records            []templateV1Record
+}
+
+const templateV1StoredDocumentOffset = -1
+
 func prepareTemplateV1InsertDocuments(documents [][]byte, fallback templateV1Resolver) ([][]byte, []templateV1Record, templateV1Resolver, error) {
-	prepared := make([][]byte, len(documents))
-	records := make([]templateV1Record, 0)
-	resolver := &templateV1MemoryResolver{}
+	hashDocumentOffsets := make([]int, len(documents))
+	var pendingRecords []templateV1Record
 	for i, document := range documents {
-		stored, docRecords, err := parseTemplateV1InsertDocument(document)
+		next, err := parseTemplateV1InsertDocument(document)
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		// Keep compact stored bytes borrowed like JSON documents; publish consumes
-		// the prepared batch synchronously before InsertBatch returns.
-		prepared[i] = stored
-		for _, record := range docRecords {
-			added, err := resolver.addRecord(record)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			if !added {
-				continue
-			}
-			publish, err := shouldPublishTemplateV1Record(record, fallback)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			if publish {
-				records = append(records, record)
-			}
-		}
+		pendingRecords = append(pendingRecords, next.records...)
+		hashDocumentOffsets[i] = next.hashDocumentOffset
 	}
-	if fallback == nil {
-		if err := validateTemplateV1PreparedDocuments(prepared, resolver); err != nil {
-			return nil, nil, nil, err
-		}
-		return prepared, records, resolver, nil
-	}
-	if len(resolver.templates) == 0 {
-		if err := validateTemplateV1PreparedDocuments(prepared, fallback); err != nil {
-			return nil, nil, nil, err
-		}
-		return prepared, records, fallback, nil
-	}
-	composite := &templateV1CompositeResolver{memory: resolver, fallback: fallback}
-	if err := validateTemplateV1PreparedDocuments(prepared, composite); err != nil {
+
+	memory, publishRecords, err := assignTemplateV1RecordIDs(pendingRecords, fallback)
+	if err != nil {
 		return nil, nil, nil, err
 	}
-	return prepared, records, composite, nil
-}
-
-func shouldPublishTemplateV1Record(record templateV1Record, fallback templateV1Resolver) (bool, error) {
-	if fallback == nil {
-		return true, nil
-	}
-	existing, err := fallback.lookupTemplateV1(record.id)
-	if err == nil {
-		if !equalStringSlices(existing.fields, record.tpl.fields) {
-			return false, errors.New("collections: template-v1 template id collision")
+	resolver := templateV1PreparedResolver(memory, fallback)
+	prepared := make([][]byte, len(documents))
+	validatePrepared := make([][]byte, 0)
+	conversionArena := make([]byte, 0, estimateTemplateV1ConversionArenaSize(documents, hashDocumentOffsets))
+	for i, document := range documents {
+		hashDocumentOffset := hashDocumentOffsets[i]
+		if hashDocumentOffset == templateV1StoredDocumentOffset {
+			prepared[i] = document
+			validatePrepared = append(validatePrepared, document)
+			continue
 		}
-		return false, nil
+		nextArena, stored, err := appendTemplateV1InsertDocumentToStored(conversionArena, document[hashDocumentOffset:], resolver)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		// Keep compact stored bytes borrowed or freshly prepared like JSON
+		// documents; publish consumes the prepared batch synchronously.
+		conversionArena = nextArena
+		prepared[i] = stored
 	}
-	if errors.Is(err, errTemplateV1TemplateNotFound) || errors.Is(err, errTemplateV1MissingTemplateRoot) {
-		return true, nil
+	if len(validatePrepared) > 0 {
+		if err := validateTemplateV1PreparedDocuments(validatePrepared, resolver); err != nil {
+			return nil, nil, nil, err
+		}
 	}
-	return false, err
+	return prepared, publishRecords, resolver, nil
 }
 
-func parseTemplateV1InsertDocument(raw []byte) ([]byte, []templateV1Record, error) {
-	if bytes.HasPrefix(raw, []byte(templateV1StoredMagic)) {
-		return raw, nil, nil
+func parseTemplateV1InsertDocument(raw []byte) (templateV1ParsedInsertDocument, error) {
+	switch {
+	case hasTemplateV1Magic(raw, templateV1StoredMagic):
+		return templateV1ParsedInsertDocument{hashDocumentOffset: templateV1StoredDocumentOffset}, nil
+	case hasTemplateV1Magic(raw, templateV1InsertDocumentMagic):
+		if len(raw) < len(templateV1InsertDocumentMagic)+32 {
+			return templateV1ParsedInsertDocument{}, errors.New("collections: malformed template-v1 insert document")
+		}
+		return templateV1ParsedInsertDocument{hashDocumentOffset: 0}, nil
+	default:
+		return parseTemplateV1InsertEnvelope(raw)
 	}
-	return parseTemplateV1InsertEnvelope(raw)
 }
 
-func parseTemplateV1InsertEnvelope(raw []byte) ([]byte, []templateV1Record, error) {
+func parseTemplateV1InsertEnvelope(raw []byte) (templateV1ParsedInsertDocument, error) {
 	pos := 0
 	if !consumeMagic(raw, &pos, templateV1InputMagic) {
-		return nil, nil, errors.New("collections: template-v1 insert requires template input envelope")
+		return templateV1ParsedInsertDocument{}, errors.New("collections: template-v1 insert requires template input envelope")
 	}
 	templateCount, err := readTemplateV1Uvarint(raw, &pos)
 	if err != nil {
-		return nil, nil, err
+		return templateV1ParsedInsertDocument{}, err
 	}
 	if templateCount > uint64(len(raw)) {
-		return nil, nil, errors.New("collections: malformed template-v1 template count")
+		return templateV1ParsedInsertDocument{}, errors.New("collections: malformed template-v1 template count")
 	}
 	records := make([]templateV1Record, 0, int(templateCount))
 	for i := uint64(0); i < templateCount; i++ {
-		var id [32]byte
-		if len(raw)-pos < len(id) {
-			return nil, nil, errors.New("collections: malformed template-v1 template id")
+		var hash [32]byte
+		if len(raw)-pos < len(hash) {
+			return templateV1ParsedInsertDocument{}, errors.New("collections: malformed template-v1 template hash")
 		}
-		copy(id[:], raw[pos:pos+len(id)])
-		pos += len(id)
+		copy(hash[:], raw[pos:pos+len(hash)])
+		pos += len(hash)
 		recordLen, err := readTemplateV1Uvarint(raw, &pos)
 		if err != nil {
-			return nil, nil, err
+			return templateV1ParsedInsertDocument{}, err
 		}
 		if recordLen > uint64(len(raw)-pos) {
-			return nil, nil, errors.New("collections: malformed template-v1 template record length")
+			return templateV1ParsedInsertDocument{}, errors.New("collections: malformed template-v1 template record length")
 		}
 		recordRaw := raw[pos : pos+int(recordLen)]
 		pos += int(recordLen)
 		record, err := parseTemplateV1Record(recordRaw)
 		if err != nil {
-			return nil, nil, err
+			return templateV1ParsedInsertDocument{}, err
 		}
-		if record.id != id {
-			return nil, nil, errors.New("collections: template-v1 template id does not match record")
+		if record.hash != hash {
+			return templateV1ParsedInsertDocument{}, errors.New("collections: template-v1 template hash does not match record")
 		}
 		records = append(records, record)
 	}
-	stored := raw[pos:]
-	if !bytes.HasPrefix(stored, []byte(templateV1StoredMagic)) {
-		return nil, nil, errors.New("collections: malformed template-v1 stored document")
+	hashDocument := raw[pos:]
+	if !hasTemplateV1Magic(hashDocument, templateV1InsertDocumentMagic) {
+		return templateV1ParsedInsertDocument{}, errors.New("collections: malformed template-v1 insert document")
 	}
-	return stored, records, nil
+	if len(hashDocument) < len(templateV1InsertDocumentMagic)+32 {
+		return templateV1ParsedInsertDocument{}, errors.New("collections: malformed template-v1 insert document")
+	}
+	return templateV1ParsedInsertDocument{hashDocumentOffset: pos, records: records}, nil
+}
+
+func estimateTemplateV1ConversionArenaSize(documents [][]byte, hashDocumentOffsets []int) int {
+	total := 0
+	for i, document := range documents {
+		if i >= len(hashDocumentOffsets) {
+			break
+		}
+		offset := hashDocumentOffsets[i]
+		if offset == templateV1StoredDocumentOffset || offset > len(document) {
+			continue
+		}
+		// Root hash references shrink from 32 bytes to a uvarint ID. Nested
+		// object references shrink too, so root replacement with max varint is
+		// a conservative upper bound for each converted document.
+		total += len(document[offset:]) - 32 + binary.MaxVarintLen64
+	}
+	return total
+}
+
+func assignTemplateV1RecordIDs(records []templateV1Record, fallback templateV1Resolver) (*templateV1MemoryResolver, []templateV1Record, error) {
+	memory := &templateV1MemoryResolver{}
+	if len(records) == 0 {
+		return memory, nil, nil
+	}
+	sortTemplateV1Records(records)
+	var err error
+	records, err = dedupeTemplateV1Records(records)
+	if err != nil {
+		return nil, nil, err
+	}
+	memory = &templateV1MemoryResolver{
+		templatesByID:   make(map[uint64]*templateV1Template, len(records)),
+		templatesByHash: make(map[[32]byte]*templateV1Template, len(records)),
+	}
+
+	var nextID uint64
+	nextIDReady := false
+	publish := make([]templateV1Record, 0, len(records))
+	for _, record := range records {
+		if fallback != nil {
+			existing, err := fallback.lookupTemplateV1ByHash(record.hash)
+			if err == nil {
+				if !equalStringSlices(existing.fields, record.tpl.fields) {
+					return nil, nil, errors.New("collections: template-v1 template hash collision")
+				}
+				if err := memory.addTemplate(existing); err != nil {
+					return nil, nil, err
+				}
+				continue
+			}
+			if !isMissingTemplateV1Lookup(err) {
+				return nil, nil, err
+			}
+		}
+		if !nextIDReady {
+			var err error
+			nextID, err = nextAssignableTemplateV1ID(fallback)
+			if err != nil {
+				return nil, nil, err
+			}
+			nextIDReady = true
+		}
+		record.id = nextID
+		nextID++
+		record.tpl = &templateV1Template{
+			hash:   record.hash,
+			id:     record.id,
+			fields: record.tpl.fields,
+		}
+		if err := memory.addRecord(record); err != nil {
+			return nil, nil, err
+		}
+		publish = append(publish, record)
+	}
+	return memory, publish, nil
+}
+
+func nextAssignableTemplateV1ID(fallback templateV1Resolver) (uint64, error) {
+	if fallback == nil {
+		return 1, nil
+	}
+	nextID, err := fallback.nextTemplateV1ID()
+	if err == nil {
+		if nextID == 0 {
+			return 1, nil
+		}
+		return nextID, nil
+	}
+	if isMissingTemplateV1Lookup(err) {
+		return 1, nil
+	}
+	return 0, err
+}
+
+func templateV1PreparedResolver(memory *templateV1MemoryResolver, fallback templateV1Resolver) templateV1Resolver {
+	if memory == nil || memory.empty() {
+		return fallback
+	}
+	if fallback == nil {
+		return memory
+	}
+	return &templateV1CompositeResolver{memory: memory, fallback: fallback}
+}
+
+func isMissingTemplateV1Lookup(err error) bool {
+	return errors.Is(err, errTemplateV1TemplateNotFound) || errors.Is(err, errTemplateV1MissingTemplateRoot)
 }
 
 func validateTemplateV1PreparedDocuments(documents [][]byte, resolver templateV1Resolver) error {
@@ -302,39 +421,140 @@ func validateTemplateV1StoredDocumentTemplates(document []byte, resolver templat
 	return nil
 }
 
-func (r *templateV1MemoryResolver) addRecord(record templateV1Record) (bool, error) {
-	if r.templates == nil {
-		r.templates = make(map[string]*templateV1Template)
-	}
-	key := string(record.id[:])
-	if existing := r.templates[key]; existing != nil {
-		if !equalStringSlices(existing.fields, record.tpl.fields) {
-			return false, errors.New("collections: template-v1 template id collision")
-		}
-		return false, nil
-	}
-	r.templates[key] = record.tpl
-	return true, nil
+func templateV1NextIDKey() []byte {
+	return []byte{0x00, 'n'}
 }
 
-func (r *templateV1MemoryResolver) lookupTemplateV1(id [32]byte) (*templateV1Template, error) {
+func templateV1HashKey(hash [32]byte) []byte {
+	out := make([]byte, 1+len(hash))
+	out[0] = 0x01
+	copy(out[1:], hash[:])
+	return out
+}
+
+func templateV1RecordKey(id uint64) []byte {
+	out := []byte{0x02}
+	return binary.AppendUvarint(out, id)
+}
+
+func encodeTemplateV1ID(id uint64) []byte {
+	return appendTemplateV1Uvarint(nil, id)
+}
+
+func decodeTemplateV1ID(raw []byte) (uint64, error) {
+	id, n := binary.Uvarint(raw)
+	if n <= 0 {
+		return 0, errors.New("collections: malformed template-v1 template id")
+	}
+	if n != len(raw) {
+		return 0, errors.New("collections: trailing template-v1 template id bytes")
+	}
+	if id == 0 {
+		return 0, errors.New("collections: template-v1 template id must be non-zero")
+	}
+	return id, nil
+}
+
+func readTemplateV1TemplateID(raw []byte, pos *int) (uint64, error) {
+	id, err := readTemplateV1Uvarint(raw, pos)
+	if err != nil {
+		return 0, err
+	}
+	if id == 0 {
+		return 0, errors.New("collections: template-v1 template id must be non-zero")
+	}
+	return id, nil
+}
+
+func (r *templateV1MemoryResolver) empty() bool {
+	return r == nil || (len(r.templatesByID) == 0 && len(r.templatesByHash) == 0)
+}
+
+func (r *templateV1MemoryResolver) addRecord(record templateV1Record) error {
+	if record.tpl == nil {
+		return errors.New("collections: template-v1 record missing template")
+	}
+	if record.id == 0 {
+		return errors.New("collections: template-v1 record missing numeric template id")
+	}
+	return r.addTemplate(record.tpl)
+}
+
+func (r *templateV1MemoryResolver) addTemplate(tpl *templateV1Template) error {
+	if r == nil {
+		return errTemplateV1MissingResolver
+	}
+	if tpl == nil {
+		return errors.New("collections: template-v1 template is nil")
+	}
+	if tpl.id == 0 {
+		return errors.New("collections: template-v1 template id must be non-zero")
+	}
+	if r.templatesByID == nil {
+		r.templatesByID = make(map[uint64]*templateV1Template)
+	}
+	if r.templatesByHash == nil {
+		r.templatesByHash = make(map[[32]byte]*templateV1Template)
+	}
+	if existing := r.templatesByID[tpl.id]; existing != nil {
+		if existing.hash != tpl.hash || !equalStringSlices(existing.fields, tpl.fields) {
+			return errors.New("collections: template-v1 template id collision")
+		}
+	}
+	if existing := r.templatesByHash[tpl.hash]; existing != nil {
+		if existing.id != tpl.id || !equalStringSlices(existing.fields, tpl.fields) {
+			return errors.New("collections: template-v1 template hash collision")
+		}
+	}
+	r.templatesByID[tpl.id] = tpl
+	r.templatesByHash[tpl.hash] = tpl
+	return nil
+}
+
+func (r *templateV1MemoryResolver) lookupTemplateV1(id uint64) (*templateV1Template, error) {
 	if r == nil {
 		return nil, errTemplateV1MissingResolver
 	}
-	tpl := r.templates[string(id[:])]
+	tpl := r.templatesByID[id]
 	if tpl == nil {
 		return nil, errTemplateV1TemplateNotFound
 	}
 	return tpl, nil
 }
 
-func (r *templateV1CompositeResolver) lookupTemplateV1(id [32]byte) (*templateV1Template, error) {
+func (r *templateV1MemoryResolver) lookupTemplateV1ByHash(hash [32]byte) (*templateV1Template, error) {
 	if r == nil {
 		return nil, errTemplateV1MissingResolver
 	}
-	if r.memory != nil && r.memory.templates != nil {
-		if tpl := r.memory.templates[string(id[:])]; tpl != nil {
+	tpl := r.templatesByHash[hash]
+	if tpl == nil {
+		return nil, errTemplateV1TemplateNotFound
+	}
+	return tpl, nil
+}
+
+func (r *templateV1MemoryResolver) nextTemplateV1ID() (uint64, error) {
+	if r == nil {
+		return 0, errTemplateV1MissingResolver
+	}
+	var maxID uint64
+	for id := range r.templatesByID {
+		if id > maxID {
+			maxID = id
+		}
+	}
+	return maxID + 1, nil
+}
+
+func (r *templateV1CompositeResolver) lookupTemplateV1(id uint64) (*templateV1Template, error) {
+	if r == nil {
+		return nil, errTemplateV1MissingResolver
+	}
+	if r.memory != nil {
+		if tpl, err := r.memory.lookupTemplateV1(id); err == nil {
 			return tpl, nil
+		} else if !errors.Is(err, errTemplateV1TemplateNotFound) {
+			return nil, err
 		}
 	}
 	if r.fallback != nil {
@@ -343,63 +563,146 @@ func (r *templateV1CompositeResolver) lookupTemplateV1(id [32]byte) (*templateV1
 	return nil, errTemplateV1TemplateNotFound
 }
 
-func (r *templateV1SnapshotResolver) lookupTemplateV1(id [32]byte) (*templateV1Template, error) {
+func (r *templateV1CompositeResolver) lookupTemplateV1ByHash(hash [32]byte) (*templateV1Template, error) {
+	if r == nil {
+		return nil, errTemplateV1MissingResolver
+	}
+	if r.memory != nil {
+		if tpl, err := r.memory.lookupTemplateV1ByHash(hash); err == nil {
+			return tpl, nil
+		} else if !errors.Is(err, errTemplateV1TemplateNotFound) {
+			return nil, err
+		}
+	}
+	if r.fallback != nil {
+		return r.fallback.lookupTemplateV1ByHash(hash)
+	}
+	return nil, errTemplateV1TemplateNotFound
+}
+
+func (r *templateV1CompositeResolver) nextTemplateV1ID() (uint64, error) {
+	if r == nil {
+		return 0, errTemplateV1MissingResolver
+	}
+	nextID := uint64(1)
+	if r.fallback != nil {
+		fallbackNext, err := r.fallback.nextTemplateV1ID()
+		if err != nil && !isMissingTemplateV1Lookup(err) {
+			return 0, err
+		}
+		if err == nil && fallbackNext > nextID {
+			nextID = fallbackNext
+		}
+	}
+	if r.memory != nil && !r.memory.empty() {
+		memoryNext, err := r.memory.nextTemplateV1ID()
+		if err != nil {
+			return 0, err
+		}
+		if memoryNext > nextID {
+			nextID = memoryNext
+		}
+	}
+	return nextID, nil
+}
+
+func (r *templateV1SnapshotResolver) lookupTemplateV1(id uint64) (*templateV1Template, error) {
 	if r == nil || r.snap == nil || r.rootID == 0 {
 		return nil, errTemplateV1MissingTemplateRoot
 	}
-	key := string(id[:])
-	if tpl := r.cache[key]; tpl != nil {
+	if tpl := r.byID[id]; tpl != nil {
 		return tpl, nil
 	}
-	entry, err := r.snap.GetEntryAtRoot(r.rootID, id[:])
+	entry, err := r.snap.GetEntryAtRoot(r.rootID, templateV1RecordKey(id))
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return nil, errTemplateV1TemplateNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	record, err := parseTemplateV1Record(entry.Value)
+	record, err := parseTemplateV1RecordWithID(id, entry.Value)
 	if err != nil {
 		return nil, err
 	}
-	if record.id != id {
-		return nil, errors.New("collections: template-v1 template id mismatch")
-	}
-	if r.cache == nil {
-		r.cache = make(map[string]*templateV1Template)
-	}
-	r.cache[key] = record.tpl
+	r.cacheTemplate(record.tpl)
 	return record.tpl, nil
 }
 
-func (r *templateV1BufferedRunsResolver) lookupTemplateV1(id [32]byte) (*templateV1Template, error) {
+func (r *templateV1SnapshotResolver) lookupTemplateV1ByHash(hash [32]byte) (*templateV1Template, error) {
+	if r == nil || r.snap == nil || r.rootID == 0 {
+		return nil, errTemplateV1MissingTemplateRoot
+	}
+	if tpl := r.byHash[hash]; tpl != nil {
+		return tpl, nil
+	}
+	entry, err := r.snap.GetEntryAtRoot(r.rootID, templateV1HashKey(hash))
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return nil, errTemplateV1TemplateNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	id, err := decodeTemplateV1ID(entry.Value)
+	if err != nil {
+		return nil, err
+	}
+	tpl, err := r.lookupTemplateV1(id)
+	if err != nil {
+		return nil, err
+	}
+	if tpl.hash != hash {
+		return nil, errors.New("collections: template-v1 template hash mismatch")
+	}
+	return tpl, nil
+}
+
+func (r *templateV1SnapshotResolver) nextTemplateV1ID() (uint64, error) {
+	if r == nil || r.snap == nil || r.rootID == 0 {
+		return 0, errTemplateV1MissingTemplateRoot
+	}
+	entry, err := r.snap.GetEntryAtRoot(r.rootID, templateV1NextIDKey())
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return 1, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return decodeTemplateV1ID(entry.Value)
+}
+
+func (r *templateV1SnapshotResolver) cacheTemplate(tpl *templateV1Template) {
+	if r.byID == nil {
+		r.byID = make(map[uint64]*templateV1Template)
+	}
+	if r.byHash == nil {
+		r.byHash = make(map[[32]byte]*templateV1Template)
+	}
+	r.byID[tpl.id] = tpl
+	r.byHash[tpl.hash] = tpl
+}
+
+func (r *templateV1BufferedRunsResolver) lookupTemplateV1(id uint64) (*templateV1Template, error) {
 	if r == nil {
 		return nil, errTemplateV1MissingResolver
 	}
-	key := string(id[:])
-	if tpl := r.cache[key]; tpl != nil {
+	if tpl := r.byID[id]; tpl != nil {
 		return tpl, nil
 	}
+	key := templateV1RecordKey(id)
 	for i := len(r.runs) - 1; i >= 0; i-- {
 		run := r.runs[i]
 		if run == nil {
 			continue
 		}
-		value, _, flags, found := run.GetEntry(id[:])
+		value, _, flags, found := run.GetEntry(key)
 		if !found || flags&node.FlagTombstone != 0 {
 			continue
 		}
-		record, err := parseTemplateV1Record(value)
+		record, err := parseTemplateV1RecordWithID(id, value)
 		if err != nil {
 			return nil, err
 		}
-		if record.id != id {
-			return nil, errors.New("collections: template-v1 template id mismatch")
-		}
-		if r.cache == nil {
-			r.cache = make(map[string]*templateV1Template)
-		}
-		r.cache[key] = record.tpl
+		r.cacheTemplate(record.tpl)
 		return record.tpl, nil
 	}
 	if r.fallback != nil {
@@ -408,9 +711,78 @@ func (r *templateV1BufferedRunsResolver) lookupTemplateV1(id [32]byte) (*templat
 	return nil, errTemplateV1TemplateNotFound
 }
 
+func (r *templateV1BufferedRunsResolver) lookupTemplateV1ByHash(hash [32]byte) (*templateV1Template, error) {
+	if r == nil {
+		return nil, errTemplateV1MissingResolver
+	}
+	if tpl := r.byHash[hash]; tpl != nil {
+		return tpl, nil
+	}
+	key := templateV1HashKey(hash)
+	for i := len(r.runs) - 1; i >= 0; i-- {
+		run := r.runs[i]
+		if run == nil {
+			continue
+		}
+		value, _, flags, found := run.GetEntry(key)
+		if !found || flags&node.FlagTombstone != 0 {
+			continue
+		}
+		id, err := decodeTemplateV1ID(value)
+		if err != nil {
+			return nil, err
+		}
+		tpl, err := r.lookupTemplateV1(id)
+		if err != nil {
+			return nil, err
+		}
+		if tpl.hash != hash {
+			return nil, errors.New("collections: template-v1 template hash mismatch")
+		}
+		return tpl, nil
+	}
+	if r.fallback != nil {
+		return r.fallback.lookupTemplateV1ByHash(hash)
+	}
+	return nil, errTemplateV1TemplateNotFound
+}
+
+func (r *templateV1BufferedRunsResolver) nextTemplateV1ID() (uint64, error) {
+	if r == nil {
+		return 0, errTemplateV1MissingResolver
+	}
+	key := templateV1NextIDKey()
+	for i := len(r.runs) - 1; i >= 0; i-- {
+		run := r.runs[i]
+		if run == nil {
+			continue
+		}
+		value, _, flags, found := run.GetEntry(key)
+		if !found || flags&node.FlagTombstone != 0 {
+			continue
+		}
+		return decodeTemplateV1ID(value)
+	}
+	if r.fallback != nil {
+		return r.fallback.nextTemplateV1ID()
+	}
+	return 1, nil
+}
+
+func (r *templateV1BufferedRunsResolver) cacheTemplate(tpl *templateV1Template) {
+	if r.byID == nil {
+		r.byID = make(map[uint64]*templateV1Template)
+	}
+	if r.byHash == nil {
+		r.byHash = make(map[[32]byte]*templateV1Template)
+	}
+	r.byID[tpl.id] = tpl
+	r.byHash[tpl.hash] = tpl
+}
+
 func sortTemplateV1Records(records []templateV1Record) {
-	sort.Slice(records, func(i, j int) bool {
-		return bytes.Compare(records[i].id[:], records[j].id[:]) < 0
+	slices.SortFunc(records, func(a, b templateV1Record) int {
+		return bytes.Compare(a.hash[:], b.hash[:])
 	})
 }
 
@@ -421,12 +793,12 @@ func dedupeTemplateV1Records(records []templateV1Record) ([]templateV1Record, er
 	out := records[:1]
 	for _, record := range records[1:] {
 		last := &out[len(out)-1]
-		if record.id != last.id {
+		if record.hash != last.hash {
 			out = append(out, record)
 			continue
 		}
-		if !bytes.Equal(record.raw, last.raw) {
-			return nil, errors.New("collections: template-v1 template id collision")
+		if record.id != last.id || !bytes.Equal(record.raw, last.raw) {
+			return nil, errors.New("collections: template-v1 template hash collision")
 		}
 	}
 	return out, nil
@@ -437,7 +809,7 @@ func EncodeTemplateV1Document(fields []string, values []any) ([]byte, error) {
 }
 
 type TemplateV1Encoder struct {
-	emitted map[string]struct{}
+	emitted map[[32]byte]struct{}
 }
 
 func (e *TemplateV1Encoder) Reset() {
@@ -447,13 +819,12 @@ func (e *TemplateV1Encoder) Reset() {
 func (e *TemplateV1Encoder) EncodeDocument(fields []string, values []any) ([]byte, error) {
 	return encodeTemplateV1FieldsWithRecordFilter(fields, values, func(record templateV1Record) bool {
 		if e.emitted == nil {
-			e.emitted = make(map[string]struct{})
+			e.emitted = make(map[[32]byte]struct{})
 		}
-		key := string(record.id[:])
-		if _, exists := e.emitted[key]; exists {
+		if _, exists := e.emitted[record.hash]; exists {
 			return false
 		}
-		e.emitted[key] = struct{}{}
+		e.emitted[record.hash] = struct{}{}
 		return true
 	})
 }
@@ -490,7 +861,7 @@ func templateV1StoredDocumentJSON(raw []byte, resolver templateV1Resolver) ([]by
 	return out, nil
 }
 
-func decodeTemplateV1ObjectFields(id [32]byte, raw []byte, pos *int, resolver templateV1Resolver) (map[string]any, error) {
+func decodeTemplateV1ObjectFields(id uint64, raw []byte, pos *int, resolver templateV1Resolver) (map[string]any, error) {
 	if resolver == nil {
 		return nil, errTemplateV1MissingResolver
 	}
@@ -559,12 +930,10 @@ func decodeTemplateV1Value(raw []byte, pos *int, resolver templateV1Resolver) (a
 		}
 		return values, nil
 	case templateV1KindObject:
-		var id [32]byte
-		if len(raw)-*pos < len(id) {
-			return nil, errors.New("collections: malformed template-v1 object")
+		id, err := readTemplateV1TemplateID(raw, pos)
+		if err != nil {
+			return nil, fmt.Errorf("collections: malformed template-v1 object: %w", err)
 		}
-		copy(id[:], raw[*pos:*pos+len(id)])
-		*pos += len(id)
 		return decodeTemplateV1ObjectFields(id, raw, pos, resolver)
 	default:
 		return nil, fmt.Errorf("collections: unknown template-v1 value kind %d", kind)
@@ -631,9 +1000,9 @@ func encodeTemplateV1RootWithRecords(root []byte, state *templateV1BuildState, i
 func encodeTemplateV1RootWithSingleRecord(root []byte, record templateV1Record) []byte {
 	out := make([]byte, 0, len(templateV1InputMagic)+binary.MaxVarintLen64+32+binary.MaxVarintLen64+len(record.raw)+len(root))
 	out = append(out, templateV1InputMagic...)
-	out = binary.AppendUvarint(out, 1)
-	out = append(out, record.id[:]...)
-	out = binary.AppendUvarint(out, uint64(len(record.raw)))
+	out = appendTemplateV1Uvarint(out, 1)
+	out = append(out, record.hash[:]...)
+	out = appendTemplateV1Uvarint(out, uint64(len(record.raw)))
 	out = append(out, record.raw...)
 	out = append(out, root...)
 	return out
@@ -642,10 +1011,10 @@ func encodeTemplateV1RootWithSingleRecord(root []byte, record templateV1Record) 
 func encodeTemplateV1RootWithRecordSlice(root []byte, records []templateV1Record) []byte {
 	out := make([]byte, 0, len(templateV1InputMagic)+len(root)+len(records)*48)
 	out = append(out, templateV1InputMagic...)
-	out = binary.AppendUvarint(out, uint64(len(records)))
+	out = appendTemplateV1Uvarint(out, uint64(len(records)))
 	for _, record := range records {
-		out = append(out, record.id[:]...)
-		out = binary.AppendUvarint(out, uint64(len(record.raw)))
+		out = append(out, record.hash[:]...)
+		out = appendTemplateV1Uvarint(out, uint64(len(record.raw)))
 		out = append(out, record.raw...)
 	}
 	out = append(out, root...)
@@ -664,11 +1033,11 @@ func (s *templateV1BuildState) addRecord(record templateV1Record) {
 		s.hasRecord = true
 		return
 	}
-	if s.firstRecord.id == record.id {
+	if s.firstRecord.hash == record.hash {
 		return
 	}
 	for _, existing := range s.records {
-		if existing.id == record.id {
+		if existing.hash == record.hash {
 			return
 		}
 	}
@@ -713,9 +1082,9 @@ func (s *templateV1BuildState) encodeFields(fields []string, values []any) ([]by
 		return nil, err
 	}
 	s.addRecord(record)
-	out := make([]byte, 0, len(templateV1StoredMagic)+32+len(fields)*8)
-	out = append(out, templateV1StoredMagic...)
-	out = append(out, record.id[:]...)
+	out := make([]byte, 0, len(templateV1InsertDocumentMagic)+32+len(fields)*8)
+	out = append(out, templateV1InsertDocumentMagic...)
+	out = append(out, record.hash[:]...)
 	for _, sourcePos := range order {
 		field := fields[sourcePos]
 		out, err = s.appendValue(out, values[sourcePos])
@@ -740,9 +1109,9 @@ func (s *templateV1BuildState) encodeObject(obj map[string]any) ([]byte, error) 
 		return nil, err
 	}
 	s.addRecord(record)
-	out := make([]byte, 0, len(templateV1StoredMagic)+32+len(fields)*8)
-	out = append(out, templateV1StoredMagic...)
-	out = append(out, record.id[:]...)
+	out := make([]byte, 0, len(templateV1InsertDocumentMagic)+32+len(fields)*8)
+	out = append(out, templateV1InsertDocumentMagic...)
+	out = append(out, record.hash[:]...)
 	for _, field := range fields {
 		out, err = s.appendValue(out, obj[field])
 		if err != nil {
@@ -767,7 +1136,7 @@ func (s *templateV1BuildState) appendObjectValue(dst []byte, obj map[string]any)
 	}
 	s.addRecord(record)
 	dst = append(dst, templateV1KindObject)
-	dst = append(dst, record.id[:]...)
+	dst = append(dst, record.hash[:]...)
 	for _, field := range fields {
 		dst, err = s.appendValue(dst, obj[field])
 		if err != nil {
@@ -783,7 +1152,7 @@ func (s *templateV1BuildState) appendValue(dst []byte, value any) ([]byte, error
 		return append(dst, templateV1KindNull), nil
 	case string:
 		dst = append(dst, templateV1KindString)
-		dst = binary.AppendUvarint(dst, uint64(len(v)))
+		dst = appendTemplateV1Uvarint(dst, uint64(len(v)))
 		return append(dst, v...), nil
 	case bool:
 		if v {
@@ -809,7 +1178,7 @@ func (s *templateV1BuildState) appendValue(dst []byte, value any) ([]byte, error
 		return s.appendValue(dst, f)
 	case []any:
 		dst = append(dst, templateV1KindArray)
-		dst = binary.AppendUvarint(dst, uint64(len(v)))
+		dst = appendTemplateV1Uvarint(dst, uint64(len(v)))
 		var err error
 		for _, item := range v {
 			dst, err = s.appendValue(dst, item)
@@ -820,7 +1189,7 @@ func (s *templateV1BuildState) appendValue(dst []byte, value any) ([]byte, error
 		return dst, nil
 	case []string:
 		dst = append(dst, templateV1KindArray)
-		dst = binary.AppendUvarint(dst, uint64(len(v)))
+		dst = appendTemplateV1Uvarint(dst, uint64(len(v)))
 		var err error
 		for _, item := range v {
 			dst, err = s.appendValue(dst, item)
@@ -839,18 +1208,18 @@ func (s *templateV1BuildState) appendValue(dst []byte, value any) ([]byte, error
 func buildTemplateV1Record(fields []string) (templateV1Record, error) {
 	raw := make([]byte, 0, len(templateV1RecordMagic)+len(fields)*8)
 	raw = append(raw, templateV1RecordMagic...)
-	raw = binary.AppendUvarint(raw, uint64(len(fields)))
+	raw = appendTemplateV1Uvarint(raw, uint64(len(fields)))
 	for _, field := range fields {
 		if err := validateTemplateV1FieldName(field); err != nil {
 			return templateV1Record{}, err
 		}
-		raw = binary.AppendUvarint(raw, uint64(len(field)))
+		raw = appendTemplateV1Uvarint(raw, uint64(len(field)))
 		raw = append(raw, field...)
 	}
-	id := sha256.Sum256(raw)
+	hash := sha256.Sum256(raw)
 	return templateV1Record{
-		id:  id,
-		raw: raw,
+		hash: hash,
+		raw:  raw,
 	}, nil
 }
 
@@ -888,12 +1257,212 @@ func parseTemplateV1Record(raw []byte) (templateV1Record, error) {
 	if pos != len(raw) {
 		return templateV1Record{}, errors.New("collections: trailing template-v1 template bytes")
 	}
-	id := sha256.Sum256(raw)
+	hash := sha256.Sum256(raw)
 	return templateV1Record{
-		id:  id,
-		raw: bytes.Clone(raw),
-		tpl: &templateV1Template{id: id, fields: fields},
+		hash: hash,
+		raw:  bytes.Clone(raw),
+		tpl:  &templateV1Template{hash: hash, fields: fields},
 	}, nil
+}
+
+func parseTemplateV1RecordWithID(id uint64, raw []byte) (templateV1Record, error) {
+	record, err := parseTemplateV1Record(raw)
+	if err != nil {
+		return templateV1Record{}, err
+	}
+	if id == 0 {
+		return templateV1Record{}, errors.New("collections: template-v1 template id must be non-zero")
+	}
+	record.id = id
+	record.tpl = &templateV1Template{
+		hash:   record.hash,
+		id:     id,
+		fields: record.tpl.fields,
+	}
+	return record, nil
+}
+
+func parseTemplateV1InsertHashDocument(raw []byte) (templateV1HashObjectRef, error) {
+	pos := 0
+	if !consumeMagic(raw, &pos, templateV1InsertDocumentMagic) {
+		return templateV1HashObjectRef{}, errors.New("collections: malformed template-v1 insert document")
+	}
+	var hash [32]byte
+	if len(raw)-pos < len(hash) {
+		return templateV1HashObjectRef{}, errors.New("collections: malformed template-v1 root template hash")
+	}
+	copy(hash[:], raw[pos:pos+len(hash)])
+	pos += len(hash)
+	return templateV1HashObjectRef{templateHash: hash, values: raw[pos:]}, nil
+}
+
+func convertTemplateV1InsertDocumentToStored(raw []byte, resolver templateV1Resolver) ([]byte, error) {
+	_, stored, err := appendTemplateV1InsertDocumentToStored(nil, raw, resolver)
+	return stored, err
+}
+
+func appendTemplateV1InsertDocumentToStored(dst []byte, raw []byte, resolver templateV1Resolver) ([]byte, []byte, error) {
+	if resolver == nil {
+		return dst, nil, errTemplateV1MissingResolver
+	}
+	root, err := parseTemplateV1InsertHashDocument(raw)
+	if err != nil {
+		return dst, nil, err
+	}
+	tpl, err := resolver.lookupTemplateV1ByHash(root.templateHash)
+	if err != nil {
+		return dst, nil, err
+	}
+	start := len(dst)
+	dst = append(dst, templateV1StoredMagic...)
+	dst = appendTemplateV1Uvarint(dst, tpl.id)
+	needsConversion, err := templateV1ValuesNeedHashConversion(root.values, len(tpl.fields))
+	if err != nil {
+		return dst, nil, err
+	}
+	if !needsConversion {
+		dst = append(dst, root.values...)
+		return dst, dst[start:len(dst):len(dst)], nil
+	}
+	pos := 0
+	for range tpl.fields {
+		dst, err = appendTemplateV1ConvertedValue(dst, root.values, &pos, resolver)
+		if err != nil {
+			return dst, nil, err
+		}
+	}
+	if pos != len(root.values) {
+		return dst, nil, errors.New("collections: trailing template-v1 object values")
+	}
+	return dst, dst[start:len(dst):len(dst)], nil
+}
+
+func templateV1ValuesNeedHashConversion(raw []byte, fieldCount int) (bool, error) {
+	pos := 0
+	for i := 0; i < fieldCount; i++ {
+		needsConversion, err := templateV1ValueNeedsHashConversion(raw, &pos)
+		if err != nil || needsConversion {
+			return needsConversion, err
+		}
+	}
+	if pos != len(raw) {
+		return false, errors.New("collections: trailing template-v1 object values")
+	}
+	return false, nil
+}
+
+func templateV1ValueNeedsHashConversion(raw []byte, pos *int) (bool, error) {
+	if pos == nil || *pos >= len(raw) {
+		return false, errors.New("collections: malformed template-v1 value")
+	}
+	kind := raw[*pos]
+	*pos = *pos + 1
+	switch kind {
+	case templateV1KindNull, templateV1KindFalse, templateV1KindTrue:
+		return false, nil
+	case templateV1KindFloat64:
+		if len(raw)-*pos < 8 {
+			return false, errors.New("collections: malformed template-v1 number")
+		}
+		*pos += 8
+		return false, nil
+	case templateV1KindString:
+		n, err := readTemplateV1Uvarint(raw, pos)
+		if err != nil {
+			return false, err
+		}
+		if n > uint64(len(raw)-*pos) {
+			return false, errors.New("collections: malformed template-v1 string")
+		}
+		*pos += int(n)
+		return false, nil
+	case templateV1KindArray:
+		count, err := readTemplateV1Uvarint(raw, pos)
+		if err != nil {
+			return false, err
+		}
+		if err := validateTemplateV1ArrayCount(raw, pos, count); err != nil {
+			return false, err
+		}
+		for i := uint64(0); i < count; i++ {
+			needsConversion, err := templateV1ValueNeedsHashConversion(raw, pos)
+			if err != nil || needsConversion {
+				return needsConversion, err
+			}
+		}
+		return false, nil
+	case templateV1KindObject:
+		return true, nil
+	default:
+		return false, fmt.Errorf("collections: unknown template-v1 value kind %d", kind)
+	}
+}
+
+func appendTemplateV1ConvertedValue(dst []byte, raw []byte, pos *int, resolver templateV1Resolver) ([]byte, error) {
+	if pos == nil || *pos >= len(raw) {
+		return nil, errors.New("collections: malformed template-v1 value")
+	}
+	start := *pos
+	kind := raw[*pos]
+	*pos = *pos + 1
+	switch kind {
+	case templateV1KindNull, templateV1KindFalse, templateV1KindTrue:
+		return append(dst, raw[start:*pos]...), nil
+	case templateV1KindFloat64:
+		if len(raw)-*pos < 8 {
+			return nil, errors.New("collections: malformed template-v1 number")
+		}
+		*pos += 8
+		return append(dst, raw[start:*pos]...), nil
+	case templateV1KindString:
+		n, err := readTemplateV1Uvarint(raw, pos)
+		if err != nil {
+			return nil, err
+		}
+		if n > uint64(len(raw)-*pos) {
+			return nil, errors.New("collections: malformed template-v1 string")
+		}
+		*pos += int(n)
+		return append(dst, raw[start:*pos]...), nil
+	case templateV1KindArray:
+		count, err := readTemplateV1Uvarint(raw, pos)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateTemplateV1ArrayCount(raw, pos, count); err != nil {
+			return nil, err
+		}
+		dst = append(dst, raw[start:*pos]...)
+		for i := uint64(0); i < count; i++ {
+			dst, err = appendTemplateV1ConvertedValue(dst, raw, pos, resolver)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return dst, nil
+	case templateV1KindObject:
+		var hash [32]byte
+		if len(raw)-*pos < len(hash) {
+			return nil, errors.New("collections: malformed template-v1 object")
+		}
+		copy(hash[:], raw[*pos:*pos+len(hash)])
+		*pos += len(hash)
+		tpl, err := resolver.lookupTemplateV1ByHash(hash)
+		if err != nil {
+			return nil, err
+		}
+		dst = append(dst, kind)
+		dst = appendTemplateV1Uvarint(dst, tpl.id)
+		for range tpl.fields {
+			dst, err = appendTemplateV1ConvertedValue(dst, raw, pos, resolver)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return dst, nil
+	default:
+		return nil, fmt.Errorf("collections: unknown template-v1 value kind %d", kind)
+	}
 }
 
 func parseTemplateV1StoredDocument(raw []byte) (templateV1ObjectRef, error) {
@@ -901,12 +1470,10 @@ func parseTemplateV1StoredDocument(raw []byte) (templateV1ObjectRef, error) {
 	if !consumeMagic(raw, &pos, templateV1StoredMagic) {
 		return templateV1ObjectRef{}, errors.New("collections: malformed template-v1 stored document")
 	}
-	var id [32]byte
-	if len(raw)-pos < len(id) {
-		return templateV1ObjectRef{}, errors.New("collections: malformed template-v1 root template id")
+	id, err := readTemplateV1TemplateID(raw, &pos)
+	if err != nil {
+		return templateV1ObjectRef{}, fmt.Errorf("collections: malformed template-v1 root template id: %w", err)
 	}
-	copy(id[:], raw[pos:pos+len(id)])
-	pos += len(id)
 	return templateV1ObjectRef{templateID: id, values: raw[pos:]}, nil
 }
 
@@ -1127,12 +1694,10 @@ func templateV1ObjectValue(raw []byte) (templateV1ObjectRef, error) {
 		return templateV1ObjectRef{}, errors.New("collections: template-v1 value is not an object")
 	}
 	pos := 1
-	var id [32]byte
-	if len(raw)-pos < len(id) {
-		return templateV1ObjectRef{}, errors.New("collections: malformed template-v1 object value")
+	id, err := readTemplateV1TemplateID(raw, &pos)
+	if err != nil {
+		return templateV1ObjectRef{}, fmt.Errorf("collections: malformed template-v1 object value: %w", err)
 	}
-	copy(id[:], raw[pos:pos+len(id)])
-	pos += len(id)
 	return templateV1ObjectRef{templateID: id, values: raw[pos:]}, nil
 }
 
@@ -1340,12 +1905,10 @@ func skipTemplateV1Value(raw []byte, pos *int, resolver templateV1Resolver) erro
 		}
 		return nil
 	case templateV1KindObject:
-		var id [32]byte
-		if len(raw)-*pos < len(id) {
-			return errors.New("collections: malformed template-v1 object")
+		id, err := readTemplateV1TemplateID(raw, pos)
+		if err != nil {
+			return fmt.Errorf("collections: malformed template-v1 object: %w", err)
 		}
-		copy(id[:], raw[*pos:*pos+len(id)])
-		*pos += len(id)
 		if resolver == nil {
 			return errors.New("collections: cannot skip template-v1 object without resolver")
 		}
@@ -1365,19 +1928,45 @@ func skipTemplateV1Value(raw []byte, pos *int, resolver templateV1Resolver) erro
 }
 
 func consumeMagic(raw []byte, pos *int, magic string) bool {
-	if pos == nil || len(raw)-*pos < len(magic) {
-		return false
-	}
-	if string(raw[*pos:*pos+len(magic)]) != magic {
+	if pos == nil || !hasTemplateV1MagicAt(raw, *pos, magic) {
 		return false
 	}
 	*pos += len(magic)
 	return true
 }
 
+func hasTemplateV1Magic(raw []byte, magic string) bool {
+	return hasTemplateV1MagicAt(raw, 0, magic)
+}
+
+func hasTemplateV1MagicAt(raw []byte, pos int, magic string) bool {
+	if pos < 0 || len(raw)-pos < len(magic) {
+		return false
+	}
+	for i := 0; i < len(magic); i++ {
+		if raw[pos+i] != magic[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func appendTemplateV1Uvarint(dst []byte, v uint64) []byte {
+	if v < 0x80 {
+		return append(dst, byte(v))
+	}
+	return binary.AppendUvarint(dst, v)
+}
+
 func readTemplateV1Uvarint(raw []byte, pos *int) (uint64, error) {
 	if pos == nil || *pos > len(raw) {
 		return 0, errors.New("collections: malformed template-v1 varint")
+	}
+	if *pos < len(raw) {
+		if b := raw[*pos]; b < 0x80 {
+			*pos = *pos + 1
+			return uint64(b), nil
+		}
 	}
 	v, n := binary.Uvarint(raw[*pos:])
 	if n <= 0 {
@@ -1411,8 +2000,11 @@ func validateTemplateV1FieldName(field string) error {
 	if field == "" {
 		return errors.New("collections: template-v1 field name cannot be empty")
 	}
-	if strings.ContainsAny(field, "\x00.") {
-		return fmt.Errorf("collections: template-v1 field %q contains reserved punctuation", field)
+	for i := 0; i < len(field); i++ {
+		switch field[i] {
+		case 0, '.':
+			return fmt.Errorf("collections: template-v1 field %q contains reserved punctuation", field)
+		}
 	}
 	return nil
 }

@@ -1121,6 +1121,13 @@ func TestServerUpdateCoalescesConcurrentDistinctIDs(t *testing.T) {
 		}},
 		{Key: "$db", Value: "app"},
 	}))
+	col, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush setup insert: %v", err)
+	}
 
 	before := db.State()
 	start := make(chan struct{})

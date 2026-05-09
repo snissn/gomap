@@ -32,7 +32,7 @@ Each template-v1 collection owns a collection-local TreeDB ordered root:
 <collection>/templates
 ```
 
-This root is the template ID map. It is dictionary-like storage, but it is not a
+This root is the template map. It is dictionary-like storage, but it is not a
 process-local cache and it is not the global value-log `dictdb` side store. It
 is a normal TreeDB root so template records, primary documents, index state, and
 secondary-index postings can be published from the same collection batch and
@@ -41,7 +41,13 @@ read from one snapshot.
 Template root entries are:
 
 ```text
-key   = 32-byte SHA-256 template ID
+key   = 0x00 "n"
+value = uvarint next_numeric_template_id
+
+key   = 0x01 || SHA-256(template_record_bytes)
+value = uvarint numeric_template_id
+
+key   = 0x02 || uvarint numeric_template_id
 value = template record bytes
 ```
 
@@ -66,11 +72,15 @@ Field names are sorted lexicographically and must be unique. Empty field names,
 NUL bytes, and `.` are rejected. The `.` byte is reserved because collection
 index paths use dot-separated segments.
 
-The template ID is:
+The template hash is:
 
 ```text
 SHA-256(template_record_bytes)
 ```
+
+The collection template root maps this stable hash to a compact numeric
+template ID. Stored documents use the numeric ID so repeated documents do not
+carry a 32-byte hash in the hot path.
 
 Nested objects get their own template records.
 
@@ -81,7 +91,7 @@ with `TD1D`:
 
 ```text
 bytes  "TD1D"
-bytes  root_template_id[32]
+uvarint root_numeric_template_id
 repeat fields in root template order:
   value
 ```
@@ -96,8 +106,8 @@ Values are encoded with a one-byte kind followed by kind-specific payload:
 - object
 - array
 
-Object values store a nested template ID followed by values in that nested
-template's field order.
+Object values store a nested numeric template ID followed by values in that
+nested template's field order.
 
 `Collection.Get` currently returns these stored `TD1D` bytes for template-v1
 collections. It does not reconstruct caller JSON.
@@ -110,30 +120,40 @@ Inserts may provide a self-contained input envelope beginning with `TD1I`:
 bytes  "TD1I"
 uvarint template_count
 repeat template_count:
-  bytes  template_id[32]
+  bytes  template_hash[32]
   uvarint template_record_len
   bytes  template_record
-bytes stored_document
+bytes insert_document
+```
+
+The insert document embedded after the records is hash-addressed:
+
+```text
+bytes "TD1H"
+bytes root_template_hash[32]
+repeat fields in root template order:
+  value
 ```
 
 The collection planner persists any template records from the envelope into the
-`<collection>/templates` root and stores only the compact `TD1D` document in the
-primary root.
+`<collection>/templates` root, assigns or reuses numeric template IDs, rewrites
+the hash-addressed insert document to compact `TD1D`, and stores only that
+compact document in the primary root.
 
 Inserts may also provide compact `TD1D` bytes directly when the referenced
-template IDs already exist either in the same batch's template records or in the
-persisted template root visible to the operation's snapshot.
+numeric template IDs already exist in the persisted template root visible to the
+operation's snapshot.
 
 `TemplateV1Encoder` is a stateful helper for repeated shapes. It emits template
-records the first time a shape is seen and then emits compact stored documents
-for the same shape. Call `Reset` before reusing an encoder after a failed or
-abandoned publish attempt if the next batch cannot rely on the earlier template
-records having been persisted.
+records the first time a shape is seen and then emits hash-addressed `TD1H`
+insert documents for the same shape. Call `Reset` before reusing an encoder
+after a failed or abandoned publish attempt if the next batch cannot rely on the
+earlier template records having been persisted.
 
 ### 2.5 Index extraction
 
-Template-v1 secondary index extraction resolves template IDs through the same
-collection-local template root used for writes.
+Template-v1 secondary index extraction resolves numeric template IDs through
+the same collection-local template root used for writes.
 
 - Insert batches resolve templates from the batch-local records first and then
   from the persisted template root.
