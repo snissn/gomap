@@ -90,6 +90,12 @@ If TreeDB later needs durable-at-ack async collection writes, it MUST add a
 replayable collection mutation log or equivalent recovery mechanism before
 advertising that stronger contract.
 
+The draft collection WAL plan strengthens this future contract by making
+acknowledged WAL-on mutations durable as collection-local root-delta
+transactions. Under that plan, mutable/queued/publishing state remains a
+visibility and publish-amortization mechanism, but it must be backed by exact
+physical deltas already committed to collection WAL.
+
 ## Barrier Semantics
 
 Operations that require persisted roots as their planning input MUST first drain
@@ -99,6 +105,12 @@ This includes schema/index changes and other operations that take a fresh
 snapshot after calling the flush barrier. Those barriers MUST wait for in-flight
 async publishing units; silently skipping publishing units can make a new index
 backfill miss documents that were already acknowledged in the write domain.
+
+Under the collection WAL plan, schema/index changes must also respect
+collection-local WAL progress. They either publish and watermark all lower
+collection WAL sequences before becoming visible, or are encoded as their own
+collection WAL transaction that depends on the previous sequence and carries the
+schema/root descriptor changes atomically.
 
 ## Close And Reopen
 

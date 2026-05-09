@@ -113,13 +113,22 @@ Recovery must fail on:
 
 1. both meta pages invalid,
 2. no structurally valid root candidate,
-3. missing RID for a commit-log RID record,
+3. missing RID for a commit-log RID record that is not covered by an allowed
+   sequence-fence skip rule,
 4. missing required dictionary bytes for compressed frame decode/validation,
 5. hard corruption in non-tail portions.
 
 Recovery may continue past:
 
 - truncated tail records in final value/commit segments.
+- current cached key/value commit-log batches whose sequence-numbered RID fence
+  is unsatisfied and whose replay rules explicitly skip the whole fenced batch.
+
+Collection WAL recovery is intentionally stricter than the current cached
+key/value RID fence. A complete WAL-on collection transaction with a missing
+required side ref is a recovery error unless it is an incomplete tail without a
+valid commit marker. Recovery must not skip that complete collection transaction
+and continue applying later transactions for the same collection.
 
 ## 6. Post-Recovery Expectations
 

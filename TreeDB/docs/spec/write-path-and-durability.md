@@ -66,6 +66,12 @@ sequence acts as a durable commit fence:
 This prevents replaying partial pointer commits and avoids phantom pointer
 visibility after crash recovery.
 
+This skip behavior is specific to the existing cached key/value commit log and
+its RID fence. Collection WAL transactions use stricter side-ref semantics:
+a complete WAL-on collection transaction with a missing required side ref is a
+recovery error, not a skipped batch, because later same-collection transactions
+depend on collection-local sequencing and root-group atomicity.
+
 ## 4. Backend Commit Model
 
 Backend applies flushed operations through copy-on-write zipper merge.
