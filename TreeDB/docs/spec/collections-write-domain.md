@@ -145,6 +145,25 @@ creation, and future schema mutations are public barriers. They must state
 whether they drain lower collection sequences, become their own WAL transaction,
 or fail before exposing schema changes.
 
+Under collection WAL, catalog changes that affect replay identity are durable
+barriers. Until schema-change WAL transactions are implemented, `CreateIndex`,
+`DropIndex`, collection drop/recreate, rename, document-format changes,
+template root descriptor resets/evolution, and future column descriptor changes
+must publish and watermark all lower `CollectionSeq` transactions before
+becoming visible. A later schema-change WAL transaction must depend on the
+previous sequence and carry descriptor ops plus the applied watermark in the
+same root-group commit.
+
+Every collection has stable replay identity independent of its display name:
+`CollectionUID`, `CollectionGeneration`, `CatalogEpoch`, `SchemaEpoch`,
+`LogicalCatalogDigest`, and `LocalReplayCatalogDigest`. `CollectionName` is
+lookup/display text only. Every index has `IndexUID`, `IndexGeneration`, and a
+definition digest; unique and multikey helper state is keyed by `IndexUID`, not
+index name. Every root has a stable `RootUID`, `RootKind`, generation,
+descriptor epoch, and descriptor digest. Pending write-domain units and future
+WAL-backed flush units must carry these guards so a drop/recreate or
+same-name index recreate cannot replay into the wrong catalog incarnation.
+
 ## Read Views
 
 The current implementation often protects pending state by copying point values

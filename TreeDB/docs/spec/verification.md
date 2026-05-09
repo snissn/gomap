@@ -209,8 +209,10 @@ Normative coverage matrix:
 | Applied watermark advances only across contiguous applied collection sequence. | `collection-wal-durability-plan.md` watermark contract | `TestCollectionWALWatermarkOutOfOrderTxnDoesNotSkipLowerUnapplied` | planned |
 | Root descriptors and applied watermark publish atomically. | `collection-wal-durability-plan.md` recovery states | `TestCollectionWALDescriptorAndWatermarkPublishAtomically`, `TestCollectionWALModelDescriptorWatermarkSplitRejected` | planned |
 | Drop/recreate with the same collection name does not replay old transactions. | `collection-wal-durability-plan.md` identity guards | `TestCollectionWALCollectionUIDDropRecreateDoesNotReplayByName` | planned |
+| Root, index, and catalog replay identity use stable UIDs/generations/digests, not names. | `collection-wal-durability-plan.md` identity guards, `storage-format.md` descriptor records | `TestCollectionWALCatalogDescriptorPersistsUIDGenerationEpochDigests`, `TestCollectionWALRootRefRejectsNameOnlyIdentity`, `TestCollectionWALIndexSameNameRecreateUsesNewUID` | planned |
 | Direct publish, disabled-memtable, and large-batch paths cannot bypass WAL-on guards. | `collection-wal-durability-plan.md` write-path coverage | `TestCollectionWALDirectPublishAndDisabledMemtablePathsCannotBypassWAL` | planned |
 | Read views pin pending value-log, leaf-log, and future column side refs until released. | `collection-wal-durability-plan.md`, `value-log-lifecycle.md` | `TestCollectionWALReadViewPinsLeafAndColumnSideRefs` | planned |
+| Native-wire replicated mutations carry `CatalogGuardV1` with resolved stable identities. | `native-wire-protocol.md` catalog guard section | `TestNativeWireCatalogGuardV1CanonicalizesStableIDs`, `TestNativeWireNameDropRecreateRaceDeterministicGuardFailure` | future |
 | Raft/local recoverability is not reported before local collection WAL durability. | `collection-wal-durability-plan.md`, `native-query-raft-roadmap.md` | `TestRaftApplyDoesNotAdvanceLocalRecoverableBeforeCollectionWAL` | future |
 
 Invariant:
@@ -246,6 +248,8 @@ PR1-min required coverage:
 - `TestCollectionWALCrashAfterCommitBeforePublishRecovers`
 - `TestCollectionWALCrashAfterPublishBeforeResponseIsIdempotent`
 - `TestCollectionWALDescriptorAndWatermarkPublishAtomically`
+- `TestCollectionWALCatalogDescriptorPersistsUIDGenerationEpochDigests`
+- `TestCollectionWALRootRefRejectsNameOnlyIdentity`
 - `TestCollectionWALCollectionUIDDropRecreateDoesNotReplayByName`
 - `TestCollectionWALReadOnlyOpenWithPendingWALFails`
 - `TestCollectionWALInlineCapRejectsBeforeVisibility`
@@ -289,6 +293,13 @@ Full-contract required coverage:
 - `TestCollectionWALIndexedUpdateUnchangedSecondarySkipsSecondaryRootsAfterRecovery`
 - `TestCollectionWALIndexedDeleteRecoverAtomically`
 - `TestCollectionWALUniqueReuseAfterDeleteRecovery`
+- `TestCollectionWALIndexSameNameRecreateUsesNewUID`
+- `TestCollectionWALSchemaChangeDrainsLowerSeqBeforeVisible`
+- `TestCollectionWALDropIndexWithPendingOldIndexUIDCannotResurrectRoot`
+- `TestCollectionWALTemplateRootGuardRequired`
+- `TestCollectionWALTemplatePrimaryAndTemplateRootRecoverAtomically`
+- `TestColumnPartDescriptorGenerationDigestGuards`
+- `TestColumnCompactionPublishesSupersessionAndTargetDescriptorsAtomically`
 - `TestCollectionWALBufferedSameBaseRootTransactionsReplayByAccumulator`
 - `TestCollectionWALPartialFrameAndMissingSideRefNoPhantomRoots`
 - `TestCollectionWALWatermarkOutOfOrderTxnDoesNotSkipLowerUnapplied`
@@ -470,7 +481,10 @@ Required collection WAL hardening fixtures and tests:
 - `TestCollectionWALMiddleCorruptionBlocksLaterSeq`;
 - `TestCollectionWALMissingSeqNBlocksSeqNPlusOne`;
 - `TestCollectionWALDropRecreateSameNameDifferentUIDRejectsOldTxn`;
-- `TestCollectionWALRootNameOutsideCatalogSetRejects`;
+- `TestCollectionWALRootRefOutsideCatalogSetRejects`;
+- `TestCollectionWALRootUIDKindGenerationMismatchRejects`;
+- `TestCollectionWALSchemaEpochMismatchRejects`;
+- `TestCollectionWALIndexDefinitionDigestMismatchRejects`;
 - `TestCollectionWALPublishRequiresAllChecks`;
 - `TestCollectionWALSideRefRelativePathDotDotRejects`;
 - `TestCollectionWALSideRefRelativePathAbsoluteRejects`;
@@ -481,6 +495,9 @@ Required collection WAL hardening fixtures and tests:
 - `TestCollectionWALSideRefRelativePathEmptyComponentRejects`;
 - `TestCollectionWALSideRefPathFileIDMismatchRejects`;
 - `TestCollectionWALCollectionNameNeverUsedAsPath`;
+- `TestNativeWireCatalogGuardV1CanonicalizesStableIDs`;
+- `TestNativeWireNameDropRecreateRaceDeterministicGuardFailure`;
+- `TestRaftMetadataIDsDeterministicAcrossReplicas`;
 - `TestCollectionWALOpenRejectsSymlinkDBRoot`;
 - `TestCollectionWALOpenRejectsSymlinkWALDir`;
 - `TestCollectionWALOpenRejectsWorldWritableWALDir`;

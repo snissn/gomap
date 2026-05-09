@@ -16,3 +16,35 @@ This file exists so the spec index and docs-lint manifest have a stable owner
 for column-store persistence questions. When a full RFC lands, it must keep the
 blocker paragraph above unchanged or explicitly update the WAL gate, verification
 matrix, and spec README in the same change.
+
+## Persistent Descriptor Identity
+
+Persistent column-store roots remain blocked, but any future descriptor format
+must use stable identity and generation guards:
+
+```text
+ColumnPartDescriptorV1 {
+    PartID                         uuid128 or uint128
+    PartGeneration                 uint64
+    OwnerCollectionUID             uuid128
+    CollectionGeneration           uint64
+    SchemaEpoch                    uint64
+    ColumnSchemaDigest             bytes32
+    CompressionDescriptorDigest    bytes32
+    CodecRegistryVersion           uint64
+    DictionaryUIDs                 repeated uuid128
+    DictionaryGenerations          repeated uint64
+    CreatedByCollectionSeq         uint64
+    SupersededByCollectionSeq      uint64 optional
+    CompactionEpoch                uint64 optional
+    RowCount                       uint64
+    PrimaryKeyRange                optional
+    MinMaxStatsDigest              bytes32 optional
+    SideRefDigest                  bytes32
+}
+```
+
+Delete, filter, locator, count, and visibility roots must reference
+`PartID + PartGeneration`, not bare `PartID`. Compaction/recompression must
+create new part IDs or increment part generation and publish source supersession
+plus target descriptors in one collection WAL maintenance transaction.

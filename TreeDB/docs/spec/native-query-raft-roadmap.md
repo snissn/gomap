@@ -526,8 +526,9 @@ affect routing, snapshots, or catch-up behavior.
 - Choose Raft library or implementation boundary.
 - Define `CommandEntryV1` bytes.
 - Define idempotency record storage.
-- Define applied-index and idempotency metadata ordering relative to local
-  collection WAL append and backend root publish.
+- Finalize the stable-store byte format for the required applied-index and
+  idempotency ordering rule: those metadata records must not advance past local
+  collection WAL recoverability for collection mutations.
 - Define stable store and log store mappings.
 - Define snapshot/export/restore format.
 - Define read-index or equivalent linearizable-read mechanism.

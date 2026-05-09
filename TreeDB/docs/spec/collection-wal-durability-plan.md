@@ -66,11 +66,12 @@ PR1-min makes these decisions normative:
   collection WAL commit marker is recoverable;
 - the minimal durable transaction still records stable replay identity:
   `Version`, `WALLSN`, `CollectionUID`, `CollectionGeneration`,
-  `CollectionSeq`, `DependsOnCollectionSeq`, `SchemaEpoch`, `BaseCommitSeq`,
-  `BaseSystemRootID`, `BaseCatalogDigest`, `CatalogDigest`, mutated primary
-  root base id and descriptor epoch, `MutationClass`, inline `RootDeltas`,
-  `SystemDeltaTemplate`, empty canonical `SideRefs`, `ReplayDigest`, and frame
-  checksum;
+  `CollectionSeq`, `DependsOnCollectionSeq`, `CatalogEpoch`, `SchemaEpoch`,
+  `BaseCommitSeq`, `BaseSystemRootID`, `BaseCatalogDigest`,
+  `CatalogDigest`, `LogicalCatalogDigest`, `LocalReplayCatalogDigest`, stable
+  primary `RootRef` including root UID/kind/generation/descriptor epoch,
+  `MutationClass`, inline `RootDeltas`, `SystemDeltaTemplate`, empty canonical
+  `SideRefs`, `ReplayDigest`, and frame checksum;
 - `CollectionName`, created timestamps, and stats are diagnostic only and are
   not replay identity;
 - root descriptor publication and applied-watermark advancement are one backend
@@ -646,6 +647,35 @@ Blocked pre-gate work:
 - column-file side refs in published roots;
 - any crash/reopen safety claim for column-store writes.
 
+Column descriptor future-proofing:
+
+```text
+ColumnPartDescriptorV1 {
+    PartID                         uuid128 or uint128
+    PartGeneration                 uint64
+    OwnerCollectionUID             uuid128
+    CollectionGeneration           uint64
+    SchemaEpoch                    uint64
+    ColumnSchemaDigest             bytes32
+    CompressionDescriptorDigest    bytes32
+    CodecRegistryVersion           uint64
+    DictionaryUIDs                 repeated uuid128
+    DictionaryGenerations          repeated uint64
+    CreatedByCollectionSeq         uint64
+    SupersededByCollectionSeq      uint64 optional
+    CompactionEpoch                uint64 optional
+    RowCount                       uint64
+    PrimaryKeyRange                optional
+    MinMaxStatsDigest              bytes32 optional
+    SideRefDigest                  bytes32
+}
+```
+
+Delete, filter, locator, count, and visibility roots must reference
+`PartID + PartGeneration`, not bare `PartID`. Compaction/recompression must
+create new part IDs or increment part generation and publish source supersession
+plus target descriptors in one collection WAL maintenance transaction.
+
 ## 7. Architecture
 
 ### 7.1 Chosen Model: Root-Delta Transaction WAL
@@ -692,13 +722,16 @@ CollectionWALTransaction {
     DependsOnCollectionSeq   uint64
 
     // Catalog guard.
+    CatalogEpoch             uint64
     SchemaEpoch              uint64
     SchemaVersion            uint32 optional for row-store, required for column-store
     BaseCommitSeq            uint64
     BaseSystemRootID         uint64
-    BaseCatalogDigest        bytes
-    CatalogDigest            bytes
-    RootDescriptorEpochs     map[root-name]uint64
+    BaseCatalogDigest        bytes32
+    CatalogDigest            bytes32
+    LogicalCatalogDigest     bytes32
+    LocalReplayCatalogDigest bytes32
+    RootDescriptorEpochs     map[RootUID]uint64
     MutationClass            uint8
 
     // Physical mutation.
@@ -716,14 +749,22 @@ CollectionWALTransaction {
     RecordChecksumCRC32C     uint32
 }
 
-CollectionRootDelta {
-    RootName                 string
-    RootKind                 uint16
-    RootDeltaOrdinal         uint32
+RootRef {
+    CollectionUID             uuid128
+    RootUID                   uuid128
+    RootKind                  uint16
+    IndexUID                  uuid128 optional
+    ColumnDescriptorUID       uuid128 optional
+    BaseRootID                uint64
+    BaseRootGeneration        uint64
+    BaseRootDescriptorEpoch   uint64
+    BaseRootDescriptorDigest  bytes32
+}
 
-    BaseRootID               uint64
-    BaseRootGeneration       uint64
-    BaseRootDescriptorEpoch  uint64
+CollectionRootDelta {
+    Root                    RootRef
+    RootName                string diagnostic
+    RootDeltaOrdinal         uint32
     BaseCollectionSeq        uint64
 
     StoragePolicy            uint8
@@ -794,19 +835,22 @@ This record is not portable across replicas. `CollectionUID` is the durable
 collection identity; `CollectionID` is reserved for transient in-memory handles
 or legacy text and must not name a separate durable identity. `CollectionName`
 is diagnostic only and must not be used as the replay identity. `WALLSN`,
-`CollectionSeq`, `BaseSystemRootID`,
-`BaseRootID`, root names as resolved by local storage, side-ref paths/RIDs,
-timestamps, stats, and other local observability metadata are meaningful only in
-the database directory that wrote the record. A follower applying the same
-deterministic command entry may produce different local root ids, side refs,
-file names, and collection WAL bytes.
+`CollectionSeq`, `BaseSystemRootID`, `BaseRootID`, diagnostic root names,
+side-ref paths/RIDs, timestamps, stats, and other local observability metadata
+are meaningful only in the database directory that wrote the record. A follower
+applying the same deterministic command entry may produce different local root
+ids, side refs, file names, and collection WAL bytes.
 
 All collection WAL transactions must carry enough catalog identity to make
 replay schema-stable. `CollectionGeneration` guards collection incarnation and
-drop/recreate. `SchemaEpoch` guards catalog-level schema/index evolution.
-`SchemaVersion` guards physical column decode for column-store roots.
-`BaseCatalogDigest`, `CatalogDigest`, and `RootDescriptorEpochs` are mandatory
-replay guards. The
+drop/recreate. `CatalogEpoch` guards collection catalog metadata changes.
+`SchemaEpoch` guards catalog-level schema/index evolution. `SchemaVersion`
+guards physical column decode for column-store roots. `BaseCatalogDigest`,
+`CatalogDigest`, `LogicalCatalogDigest`, `LocalReplayCatalogDigest`, and
+`RootDescriptorEpochs` keyed by stable `RootUID` are mandatory replay guards.
+`LogicalCatalogDigest` is the deterministic logical digest suitable for
+native-wire/Raft catalog guards. `LocalReplayCatalogDigest` may include local
+physical root ids and is used only for same-directory collection WAL replay. The
 `MutationClass` values are versioned and include at least `row_insert`,
 `row_update`, `row_delete`, `column_insert`, `column_update_delta`,
 `column_delete`, `column_compaction`, `column_recompression`, and
@@ -816,9 +860,11 @@ A transaction is replayable only when:
 
 1. the record checksum is valid;
 2. every required side ref is present and passes integrity checks;
-3. `CollectionUID`, `CollectionGeneration`, `SchemaEpoch`, `CatalogDigest`,
-   base root ids, base root generations, and root descriptor epochs match the
-   current replay state or an explicit replay accumulator state;
+3. `CollectionUID`, `CollectionGeneration`, `CatalogEpoch`, `SchemaEpoch`,
+   catalog digests, root UIDs, root kinds, base root ids, base root
+   generations, root descriptor epochs, descriptor digests, index UIDs, index
+   definition digests, and column descriptor generations match the current
+   replay state or an explicit replay accumulator state;
 4. `DependsOnCollectionSeq` is covered by the collection applied watermark or by
    the active accumulator;
 5. the `SystemDeltaTemplate` can be instantiated with the produced root ids and
@@ -848,41 +894,155 @@ Two digests are required:
 - `ReplayDigest`: covers replay-critical fields only: identity, dependencies,
   root deltas, side refs, system delta template, and preconditions.
 
-### 7.3 Collection Identity and Root Generations
+### 7.3 Collection, Index, and Root Identity
 
-Every collection must have a stable `CollectionUID` persisted in collection
-metadata. `CollectionID` may be used only for transient in-memory handles or
-legacy explanatory text; it must not introduce a second durable identifier.
-`CollectionName` is diagnostic and must not be the replay identity. Dropping and
-recreating a collection with the same name creates a new `CollectionUID` and a
-new `CollectionGeneration`. Renaming a collection, if supported, preserves
-`CollectionUID` and increments only the catalog metadata required by the rename.
+`CollectionName` is not replay identity.
 
-Every schema or index metadata change increments `SchemaEpoch`. Every root
-descriptor change increments that root's `RootGeneration` and descriptor epoch.
-Overlay descriptor changes and overlay compaction also increment the affected
-root generation and descriptor epoch.
+Every collection descriptor must persist:
+
+```text
+CollectionUID              uuid128
+CollectionGeneration       uint64
+CatalogEpoch               uint64
+SchemaEpoch                uint64
+LogicalCatalogDigest       bytes32
+LocalReplayCatalogDigest   bytes32
+CollectionName             string diagnostic
+```
+
+`CollectionUID` is assigned at collection creation and is never reused.
+`CollectionGeneration` changes on drop/recreate and is recorded in tombstones.
+`CollectionName` is a lookup/display field. Rename preserves `CollectionUID` and
+`CollectionGeneration`, increments `CatalogEpoch`, and updates
+`LogicalCatalogDigest`. If root paths remain name-derived, rename is also a
+root descriptor change. A `uint64 CollectionID` is acceptable only as an
+internal catalog object id if it is durable, never reused, included in a
+database/cluster namespace to form a unique `CollectionUID`, and
+deterministically assigned for Raft. A stable collection name is never
+sufficient.
+
+Dropping a collection records a tombstone for `CollectionUID` with the previous
+name, `CollectionGeneration`, drop `CatalogEpoch`, drop `CollectionSeq` or
+metadata log position, and the highest applied collection WAL sequence known at
+drop time. Recreate with the same name creates a new `CollectionUID` and new
+`CollectionGeneration`. Recovery must never apply a transaction for an absent
+`CollectionUID` into a same-name collection. It must stop open or quarantine the
+old collection/WAL according to an explicit admin recovery path.
+
+Root identity is a tuple, not a string:
+
+```text
+RootDescriptorV1 {
+    RootUID                 uuid128
+    OwnerCollectionUID      uuid128
+    RootKind                enum
+    LogicalName             string diagnostic
+    IndexUID                uuid128 optional
+    ColumnDescriptorUID     uuid128 optional
+    RootGeneration          uint64
+    RootDescriptorEpoch     uint64
+    RootID                  uint64 local physical root id
+    StoragePolicy           uint8
+    DescriptorDigest        bytes32
+}
+```
+
+`CollectionRootDelta.RootRef` carries `CollectionUID`, `RootUID`, `RootKind`,
+optional `IndexUID`/`ColumnDescriptorUID`, `BaseRootID`,
+`BaseRootGeneration`, `BaseRootDescriptorEpoch`, and
+`BaseRootDescriptorDigest`. `RootName` may remain as diagnostic text, but
+recovery must validate `RootUID`, `RootKind`, owner UID, generation, epoch, and
+descriptor digest. `RootDescriptorEpochs map[root-name]uint64` is invalid for
+new WAL formats; the guard map is keyed by `RootUID`.
+
+Schema and index identity rules:
+
+```text
+IndexDescriptorV1 {
+    IndexUID                uuid128
+    OwnerCollectionUID      uuid128
+    Name                    string
+    IndexGeneration         uint64
+    CreatedAtSchemaEpoch    uint64
+    DroppedAtSchemaEpoch    uint64 optional
+    DefinitionDigest        bytes32
+    FieldPath               canonical path
+    ValueType               enum
+    Unique                  bool
+    MultiKey                bool
+    StoragePolicy           uint8
+    SecondaryRootUID        uuid128
+}
+```
+
+`SchemaEpoch` increments for every change that affects mutation planning,
+document decode, index extraction, uniqueness, multikey behavior, root set, or
+column physical schema. This includes `CreateIndex`, `DropIndex`, index
+definition changes, document format changes, template root descriptor
+reset/format evolution, column schema changes, and column
+compression/dictionary descriptor changes when they affect decode or planning.
+Dropping an index tombstones the `IndexUID`. Recreating an index with the same
+name creates a new `IndexUID`, new generation, new root UID, and new definition
+digest. Unique and multikey helper state is keyed by `IndexUID`; index names are
+API lookup and diagnostic text only.
 
 A collection WAL transaction records `CollectionUID`, `CollectionGeneration`,
-`SchemaEpoch`, `CatalogDigest`, `RootDescriptorEpochs`, `BaseRootID`, and
-`BaseRootGeneration` for every root it mutates. Recovery must reject or block a
-transaction whose identity or generation guard does not match the replay state,
-unless the mismatch is explicitly explained by the active replay accumulator. An
-unapplied transaction whose `CollectionUID` is absent from the recovered catalog
-must not be replayed into a collection with the same name; PR1-min must stop open or
-quarantine according to a documented recovery-admin procedure rather than
-silently applying the transaction to a later incarnation.
+`CatalogEpoch`, `SchemaEpoch`, catalog digests, root refs, index UID/digest
+guards where relevant, and column part/dictionary/compression generations where
+relevant. Recovery must reject or block a transaction whose identity,
+generation, epoch, digest, root, index, or column guard does not match the
+replay state unless the mismatch is explicitly explained by the active replay
+accumulator.
 
-On decode/replay, the allowed root-name and root-kind set is derived only from
-the recovered catalog entry for `CollectionUID`, `CollectionGeneration`,
-`SchemaEpoch`, catalog digest, and root descriptor epochs. Recovery must reject
+On decode/replay, the allowed root set is derived only from the recovered
+catalog entry for `CollectionUID`, `CollectionGeneration`, `SchemaEpoch`,
+catalog digest, root UID/kind, and root descriptor epochs. Recovery must reject
 any `RootDelta`, descriptor op, system-delta placeholder, side-ref manifest, or
-root name that is not in that derived set before side-ref validation or root
+root reference not in that derived set before side-ref validation or root
 publication. `CollectionName` and WAL-provided root-name strings must never be
 used for replay lookup, filesystem path construction, side-file path
 construction, tenant authorization, or deciding which roots may be published.
 Any future tenant namespace must be stable catalog identity, not text parsed
 from a collection name.
+
+Catalog changes that affect replay identity are durable barriers. Before the
+catalog change becomes visible, either:
+
+1. all lower `CollectionSeq` transactions for the collection are published and
+   watermarked; or
+2. the catalog change is encoded as a collection WAL transaction with
+   `MutationClass=schema_change`, `DependsOnCollectionSeq=previous sequence`,
+   and descriptor ops plus watermark in the same root-group commit.
+
+Required durable barriers include create/drop/rename collection,
+create/drop/recreate index, unique/multikey/index definition changes, document
+format/schema changes, template root descriptor creation/reset/evolution, root
+descriptor replacement not tied to an ordinary WAL-covered mutation, overlay
+descriptor changes and overlay compaction, column schema/compression/dictionary,
+part descriptor, delete bitmap, filter, locator, and count/visibility descriptor
+changes, and WAL cleanup metadata that allows segment deletion.
+
+Recovery validates in this order:
+
+1. WAL checksum and `ReplayDigest`;
+2. required side-ref closure and checksums;
+3. `CollectionUID` exists or is recoverable through an explicit tombstone path;
+4. `CollectionGeneration` matches;
+5. `CollectionSeq` is exactly the next sequence after durable watermark or
+   active accumulator state;
+6. `SchemaEpoch` and catalog digest match base replay state;
+7. every `RootRef` matches `RootUID`, `RootKind`, `RootGeneration`,
+   `RootDescriptorEpoch`, `DescriptorDigest`, and `BaseRootID`;
+8. every touched `IndexUID`/`DefinitionDigest` matches the guarded schema
+   epoch;
+9. column part/dictionary/compression descriptor generations match;
+10. `SystemDeltaTemplate` preconditions hold;
+11. descriptor updates and applied watermark publish in one backend commit.
+
+A transaction created before a schema/index change may replay only before that
+schema/index change in contiguous `CollectionSeq` order. It must not be applied
+after the current catalog has advanced past its guarded schema epoch unless the
+active replay accumulator contains the intervening schema-change transaction.
 
 Maintenance that rewrites root ids or descriptor values must not run for a
 collection with unapplied WAL transactions unless the maintenance operation is
@@ -1614,7 +1774,8 @@ covers:
 - `WALLSN` range for diagnostics and cleanup;
 - contiguous `CollectionSeq` range for the owning collection;
 - required side-ref ownership or references to the protected side-ref index;
-- root names and root generations covered by the publish.
+- root UIDs, root kinds, root descriptor epochs, descriptor digests, and root
+  generations covered by the publish.
 
 Async publish completion may advance the applied watermark only for whole
 transactions covered by the successful root publish. Requeue must preserve WAL
@@ -1670,9 +1831,11 @@ reconstructing ad hoc runtime system-builder closures.
 
 ```text
 PublishCollectionWALTransaction(txn, options) {
-    validate txn.CollectionUID, CollectionGeneration, SchemaEpoch,
-             CatalogDigest, RootDescriptorEpochs, BaseRootGeneration,
-             dependencies
+    validate txn.CollectionUID, CollectionGeneration, CatalogEpoch,
+             SchemaEpoch, catalog digests, RootUID/RootKind,
+             RootDescriptorEpochs, BaseRootGeneration,
+             RootDescriptorDigest, IndexUID/DefinitionDigest,
+             column descriptor generations, dependencies
     materialize root deltas from txn
     apply root deltas
     instantiate txn.SystemDeltaTemplate with produced root ids
@@ -1827,7 +1990,8 @@ Mode in {DurabilityDurable, DurabilityWALOnRelaxed,
 
 Txn identity:
   CollectionUID, CollectionSeq, WALLSN, CollectionGeneration,
-  SchemaEpoch, CatalogDigest
+  CatalogEpoch, SchemaEpoch, CatalogDigest, RootUID, RootKind,
+  RootDescriptorEpoch, RootDescriptorDigest
 
 Transaction existence:
   PlannedHidden(t)
@@ -3391,6 +3555,7 @@ Advisory PR1-min benchmark rows:
 - WAL bytes per inserted document;
 - recovery time for 1K, 10K, and 100K retained PR1-min transactions;
 - inline cap rejection overhead;
+- catalog/root descriptor guard construction overhead;
 - global publisher contention smoke benchmark.
 
 The pass/fail benchmark gates below apply to the full contract and to default
@@ -3600,7 +3765,11 @@ Required workload-specific benchmark gates:
 | `BenchmarkCollectionWALRecoveryReplayPendingDocs` | Recovery with 1K, 100K, and 1M pending no-index, indexed, update, delete, and template-v1 WAL transactions. | Meets Section 10.1 replay throughput/time gates and peak heap <= 512 MiB for 1M pending documents. |
 | `BenchmarkCollectionWALCleanupLag` | Publish succeeds but cleanup is blocked, then released. | Cleanable debt triggers cleanup; debt drops below stop limit after release; protected refs are not deleted early. |
 | `BenchmarkCollectionWALDurableSyncBatch` | Concurrent durable-sync writers. | Sync batches respect 1 ms, 4 MiB, and 4096 transaction caps; p95/p99 ack latency below selected absolute gates. |
+| `BenchmarkCollectionWALCatalogDigest` | Canonical digest computation for collections with 0, 1, 10, 100, and 1,000 indexes. | Digesting remains bounded and amortized by schema changes; hot-row mutation paths use cached fixed-size guard comparisons. |
+| `BenchmarkCollectionWALGuardConstruction` | WAL append guard construction for insert/update/delete with primary, template, index-state, and multiple secondary roots. | Fixed-size guard comparison overhead is reported separately from root-delta encoding. |
+| `BenchmarkCollectionWALRecoveryGuardValidation` | Recovery validation over many small transactions with UID/generation/schema/root/index guards. | Validation throughput is reported separately from side-ref checksum and root-delta materialization. |
 | `BenchmarkColumnStoreWALSideRefClosure` | 1K, 100K, and 1M column side refs with manifests, dictionaries, bloom files, compression metadata, and delete bitmaps. | Memory <= configured cap; file count <= 1024 per part; metadata bytes/row <= formula plus 10 percent. |
+| `BenchmarkColumnPartDescriptorDigest` | Column part descriptor digesting with many columns, dictionaries, filters, and side refs. | Descriptor digest cost is reported separately from file checksum/manifest validation. |
 
 Gate thresholds:
 
@@ -4248,7 +4417,7 @@ Gate:
 | Value-log GC/rewrite removes bytes referenced only by pending collection WAL. | Treat required collection WAL side refs as GC/rewrite roots through a protected side-ref index until safe applied watermark and checkpoint cleanup. |
 | A global `WALLSN` marker skips lower unapplied transactions. | Use per-collection `CollectionSeq` watermarks as the replay key; keep any global `WALLSN` marker cleanup-only and segment-verified. |
 | Buffered transactions share an old persisted `BaseRootID`. | PR1-min permits at most one unwatermarked transaction globally; the full contract adds per-collection dependency chains plus replay-side accumulation. |
-| A drop/recreate or schema change makes an old WAL transaction look applicable. | Persist `CollectionUID`, `CollectionGeneration`, `SchemaEpoch`, `CatalogDigest`, root descriptor epochs, and per-root `RootGeneration` guards and block mismatches. |
+| A drop/recreate, same-name index recreate, or schema change makes an old WAL transaction look applicable. | Persist `CollectionUID`, `CollectionGeneration`, `CatalogEpoch`, `SchemaEpoch`, catalog digests, `IndexUID`/definition digests, root UIDs/kinds, root descriptor epochs, descriptor digests, and per-root `RootGeneration` guards and block mismatches. |
 | API returns a normal error after the WAL commit marker. | Reserve fallible state before commit; after commit marker, allow only success, process death, or commit-ambiguous/fatal reporting. |
 | Async flush races with WAL cleanup. | Treat async flush as publish-only; cleanup requires applied watermark and checkpoint boundary. |
 | Unique index helpers are lost on crash. | Rebuild helpers from durable root deltas or persisted roots during recovery. |
@@ -4300,8 +4469,10 @@ no-index row insert slice:
 15. Column compaction, delete-bitmap compaction, and recompression that create
     external files are future collection WAL transactions, not optional
     backend-only maintenance commits.
-16. `CollectionUID`, `CollectionGeneration`, `SchemaEpoch`, `CatalogDigest`,
-    and root descriptor epochs are mandatory replay guards.
+16. `CollectionUID`, `CollectionGeneration`, `CatalogEpoch`, `SchemaEpoch`,
+    catalog digests, `IndexUID`/definition digests, root UIDs/kinds,
+    root generations, descriptor epochs, and descriptor digests are mandatory
+    replay guards.
 17. Side-ref cleanup resolves files through a class registry by ref class and
     file id; relative paths are confined validation data and cannot authorize
     cleanup outside the class root.
@@ -4361,9 +4532,10 @@ always-on validation paths where practical.
 Write path:
 
 - Before acknowledging a WAL-on collection write: `CollectionSeq != 0`,
-  `WALLSN != 0`, `CollectionUID != 0`, `CollectionGeneration` and `SchemaEpoch`
-  are present, `CatalogDigest` is present, root delta count is nonzero, and all
-  root names are valid for the catalog epoch.
+  `WALLSN != 0`, `CollectionUID != 0`, `CollectionGeneration`,
+  `CatalogEpoch`, and `SchemaEpoch` are present, catalog digests are present,
+  root delta count is nonzero, and all root refs are valid for the catalog
+  epoch.
 - Before appending a collection WAL transaction: every required side ref has
   reached the fresh-process-readable boundary and checksum verification has
   succeeded in debug/fault-injection builds.
@@ -4671,9 +4843,10 @@ Module-specific constraints:
   versions, malicious lengths, mixed-version segments, and unknown critical
   sections or side-ref classes fail closed.
 - The collection WAL transaction builder must require `CollectionUID`,
-  `CollectionGeneration`, `SchemaEpoch`, `CatalogDigest`,
-  `RootDescriptorEpochs`, `CollectionSeq`, `WALLSN`, root-delta ordinals, and
-  canonical side refs before it can encode a replayable record.
+  `CollectionGeneration`, `CatalogEpoch`, `SchemaEpoch`, catalog digests,
+  `RootUID`, `RootKind`, `RootDescriptorEpochs`, descriptor digests,
+  `CollectionSeq`, `WALLSN`, root-delta ordinals, and canonical side refs
+  before it can encode a replayable record.
 - `TreeDB/internal/collectionwal` owns the encoder-backed cost estimator,
   inline/side-payload threshold checks, segment rotation policy, compression
   threshold, durable-sync group-fsync caps, and capacity error classification
@@ -4766,8 +4939,8 @@ Runtime assertions required in WAL-on modes:
 - Assert every collection root descriptor commit carries a typed coverage range
   and matching watermark op.
 - Assert async flush units carry immutable WAL coverage: `CollectionUID`,
-  contiguous sequence range, root names, root generations, required refs, and
-  `WALLSN` range.
+  contiguous sequence range, root UIDs/kinds, root generations, descriptor
+  epochs/digests, required refs, and `WALLSN` range.
 - Assert cleanup decodes every complete transaction in candidate segments and
   proves same-collection watermark/checkpoint coverage.
 - Assert recovery skip never uses global `WALLSN`.

@@ -296,6 +296,8 @@ Initial command-specific section IDs used by v1 commands and responses:
 116 presence_bitmap           bitset, least-significant bit first
 117 truncated                 bool
 118 status_vector             byte_vector of per-item status records, reserved
+119 catalog_guard             CatalogGuardV1
+120 existence_guard           ExistenceGuardV1
 ```
 
 `cursor_limits` encodes both fields. A zero `max_items` or `max_bytes` means
@@ -492,10 +494,12 @@ representation.
 2 connection_local_handle
 ```
 
-Collection names are stable command input. Connection-local handles are a
+Collection names are request input and API/display text. They are not replay
+identity for replicated mutating commands. Connection-local handles are a
 transport optimization returned by `open_collection`; they are never valid
 outside the connection that received them and MUST NOT appear in deterministic
-command entries.
+command entries. Before a mutating command is appended as a deterministic entry,
+names and handles must be resolved to `CatalogGuardV1` stable IDs.
 
 Collection metadata commands SHOULD use the same logical fields as the current
 `CollectionMeta` and `IndexDefinition` model:
@@ -516,15 +520,45 @@ index_storage_policy
 ```
 
 Metadata mutation responses SHOULD include the resulting catalog version or
-equivalent schema guard. Later mutation requests MAY use
+equivalent schema guard. Later single-node mutation requests MAY use
 `expected_catalog_version` to fail fast when a client planned against stale
-metadata.
+metadata. Replicated deterministic mutation entries MUST use `CatalogGuardV1`.
 
 For distributed mode, collection and index mutation entries MUST include a
-deterministic catalog guard: either `expected_catalog_version` or an equivalent
-catalog epoch plus stable collection/index IDs resolved from committed metadata.
+deterministic catalog guard with stable IDs resolved from committed metadata.
 Connection-local handles and unguarded client names MUST be resolved before
 append and MUST NOT be stored in the deterministic entry.
+
+Canonical guard sections:
+
+```text
+CatalogGuardV1 {
+    CollectionUID           uuid128
+    CollectionGeneration    uint64
+    SchemaEpoch             uint64
+    LogicalCatalogDigest    bytes32
+    ExpectedName            string optional diagnostic/existence guard
+    IndexGuards             repeated {
+        IndexUID            uuid128
+        IndexGeneration     uint64
+        DefinitionDigest    bytes32
+    }
+}
+
+ExistenceGuardV1 {
+    TargetKind              collection | index
+    ExpectedState           absent | present
+    StableName              string
+    ExistingUID             uuid128 optional
+    AssignedUID             uuid128 optional for create
+    CatalogEpoch            uint64
+}
+```
+
+Metadata commands must include deterministic existence guards and stable
+assigned IDs when they are encoded as replicated commands. Guard mismatch is a
+deterministic state-machine result and must update idempotency state with the
+failure outcome.
 
 ## 10. Initial Command Set
 
@@ -576,6 +610,7 @@ request/response policy only and is not part of deterministic command identity.
 103 documents byte_vector
 104 template_records optional byte_vector
 105 expected_catalog_version optional
+119 catalog_guard required for distributed mode
 ```
 
 `replace_batch` sections:
@@ -588,6 +623,7 @@ request/response policy only and is not part of deterministic command identity.
 104 template_records optional byte_vector
 105 expected_catalog_version optional
 106 replacement_mode
+119 catalog_guard required for distributed mode
 ```
 
 `delete_batch` sections:
@@ -596,6 +632,7 @@ request/response policy only and is not part of deterministic command identity.
 100 collection_ref
 102 document_ids byte_vector
 105 expected_catalog_version optional
+119 catalog_guard required for distributed mode
 ```
 
 Duplicate IDs in one mutation batch MUST be rejected unless a future command
@@ -909,7 +946,7 @@ The following SHOULD be included when present:
 
 - collection metadata mutation input,
 - collection mutation IDs and document bytes,
-- expected catalog version or equivalent conflict guard,
+- `CatalogGuardV1` or legacy `expected_catalog_version` conflict guard,
 - idempotency key or `client_id + client_sequence`,
 - deterministic command flags.
 

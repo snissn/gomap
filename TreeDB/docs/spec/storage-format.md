@@ -515,25 +515,28 @@ The first root-delta byte is not before the fixed header and section table.
 |---:|---:|---|
 | 0 | 8 | `PayloadMagic` `54 44 42 43 57 50 31 01` (`TDBCWP1\x01`) |
 | 8 | 2 | `TransactionVersion`, currently `1` |
-| 10 | 2 | `FixedHeaderLen`, currently `192` |
+| 10 | 2 | `FixedHeaderLen`, currently `288` |
 | 12 | 4 | `TransactionFlags` |
 | 16 | 16 | `CollectionUID` |
 | 32 | 8 | `CollectionGeneration` |
 | 40 | 8 | `CollectionSeq` |
 | 48 | 8 | `DependsOnCollectionSeq` |
-| 56 | 8 | `SchemaEpoch` |
-| 64 | 8 | `SchemaVersion` |
-| 72 | 8 | `BaseCommitSeq` |
-| 80 | 8 | `BaseSystemRootID` |
-| 88 | 32 | `BaseCatalogDigest` |
-| 120 | 32 | `CatalogDigest` |
-| 152 | 4 | `MutationClass` |
-| 156 | 4 | `RootDeltaCount` |
-| 160 | 4 | `SideRefCount` |
-| 164 | 4 | `DescriptorOpCount` |
-| 168 | 4 | `SectionCount` |
-| 172 | 4 | `FixedHeaderCRC32C` over `[0,192)`, with this field zeroed |
-| 176 | 16 | reserved zero |
+| 56 | 8 | `CatalogEpoch` |
+| 64 | 8 | `SchemaEpoch` |
+| 72 | 8 | `SchemaVersion` |
+| 80 | 8 | `BaseCommitSeq` |
+| 88 | 8 | `BaseSystemRootID` |
+| 96 | 32 | `BaseCatalogDigest` |
+| 128 | 32 | `CatalogDigest` |
+| 160 | 32 | `LogicalCatalogDigest` |
+| 192 | 32 | `LocalReplayCatalogDigest` |
+| 224 | 4 | `MutationClass` |
+| 228 | 4 | `RootDeltaCount` |
+| 232 | 4 | `SideRefCount` |
+| 236 | 4 | `DescriptorOpCount` |
+| 240 | 4 | `SectionCount` |
+| 244 | 4 | `FixedHeaderCRC32C` over `[0,288)`, with this field zeroed |
+| 248 | 40 | reserved zero |
 
 V1 readers must validate in this order: segment magic, segment header
 length/version/min-reader, segment header CRC, frame magic, frame header
@@ -598,13 +601,16 @@ first root delta is the byte at `SectionOffset` for that section.
 ### 9.4 Root Delta and Side-Ref Section Constraints
 
 Root-delta sections are deterministic byte sequences. A root-delta table must
-carry root kind, root name, root descriptor epoch, storage policy,
+carry stable `RootRef` identity before any root-local entry payload:
+`CollectionUID`, `RootUID`, `RootKind`, optional `IndexUID`, optional
+`ColumnDescriptorUID`, `BaseRootID`, `BaseRootGeneration`,
+`BaseRootDescriptorEpoch`, `BaseRootDescriptorDigest`, storage policy,
 `RootDeltaOrdinal`, key comparator identity, delta encoding version,
-`IncludeDeletedOnColdBuild`, entry count, encoded byte length, and delta digest
-before the entry payload. Entries must encode operation kind, `EntryOrdinal`,
-key length, value length, and either inline value bytes, stable `ValuePtr`
-bytes, or a `RootDeltaPayload` side-ref index. Tombstones are first-class
-operations.
+`IncludeDeletedOnColdBuild`, entry count, encoded byte length, and delta digest.
+`RootName` may be present only as diagnostic text. Entries must encode
+operation kind, `EntryOrdinal`, key length, value length, and either inline
+value bytes, stable `ValuePtr` bytes, or a `RootDeltaPayload` side-ref index.
+Tombstones are first-class operations.
 
 Side refs encode `RefClass`, `ClassVersion`, `Critical`, `FileID`, `Offset`,
 `Length`, `ChecksumKind`, `Checksum`, and optional advisory `RelativePath`.
@@ -691,18 +697,60 @@ Every persisted collection descriptor must include:
 |---|---|
 | `CollectionUID uuid128` | durable identity; never derived from name |
 | `CollectionGeneration uint64` | increments on drop/recreate; rename preserves UID |
-| `SchemaEpoch uint64` | increments on schema/index descriptor changes |
+| `CatalogEpoch uint64` | increments on catalog metadata changes such as rename |
+| `SchemaEpoch uint64` | increments on mutation-planning, schema, index, template, or column descriptor changes |
 | `SchemaVersion uint64` | logical schema version if distinct from epoch |
-| `CatalogDigest bytes32` | digest of replay-relevant catalog descriptor |
-| `RootDescriptorEpochs` | per-root descriptor generation map |
-| `RootGeneration` | per-root physical generation guard |
+| `LogicalCatalogDigest bytes32` | deterministic digest of logical catalog descriptor for native/Raft guards |
+| `LocalReplayCatalogDigest bytes32` | digest of local replay descriptor; may include physical root IDs |
+| `RootDescriptors []RootDescriptorV1` | stable root descriptors keyed by `RootUID`, not root name |
+| `IndexDescriptors []IndexDescriptorV1` | stable index descriptors keyed by `IndexUID`, not index name |
 | `CollectionName` | diagnostic only; not replay identity |
 | `DroppedAtEpoch optional uint64` | tombstone for deleted collections |
+| `DropCollectionSeq optional uint64` | sequence/log position for drop tombstone |
+| `HighestAppliedSeqAtDrop optional uint64` | applied sequence known at drop time |
 
 Recovery must reject an unapplied collection WAL transaction when the recovered
 descriptor for its `CollectionUID` is absent, tombstoned, or has mismatching
-generation, schema epoch, catalog digest, or root descriptor epoch, unless an
-explicit migration record maps the old descriptor to a new one.
+generation, catalog epoch, schema epoch, catalog digest, root descriptor epoch,
+root descriptor digest, index UID/digest, or column descriptor generation,
+unless an explicit migration record maps the old descriptor to a new one.
+
+`RootDescriptorV1` fields:
+
+| Field | Meaning |
+|---|---|
+| `RootUID uuid128` | stable root identity |
+| `OwnerCollectionUID uuid128` | owning collection |
+| `RootKind enum` | primary, template, index-state, secondary, delete, locator, filter, column descriptor, etc. |
+| `LogicalName string` | diagnostic/API display only |
+| `IndexUID uuid128 optional` | secondary/index-owned root owner |
+| `ColumnDescriptorUID uuid128 optional` | column-owned root owner |
+| `RootGeneration uint64` | increments when the root descriptor is replaced |
+| `RootDescriptorEpoch uint64` | monotonic descriptor version |
+| `RootID uint64` | local physical root id |
+| `StoragePolicy uint8` | root storage policy |
+| `DescriptorDigest bytes32` | digest over canonical descriptor bytes |
+
+`IndexDescriptorV1` fields:
+
+| Field | Meaning |
+|---|---|
+| `IndexUID uuid128` | stable index identity |
+| `OwnerCollectionUID uuid128` | owning collection |
+| `Name string` | API/display name |
+| `IndexGeneration uint64` | increments on same-name recreate |
+| `CreatedAtSchemaEpoch uint64` | schema epoch at creation |
+| `DroppedAtSchemaEpoch optional uint64` | tombstone epoch |
+| `DefinitionDigest bytes32` | digest over name, field path, type, uniqueness, multikey, storage policy, collation/normalization, and owning schema epoch |
+| `FieldPath canonical` | canonical field path |
+| `ValueType enum` | indexed value type |
+| `Unique bool` | uniqueness flag |
+| `MultiKey bool` | multikey flag |
+| `StoragePolicy uint8` | secondary root storage policy |
+| `SecondaryRootUID uuid128` | root identity for the secondary index |
+
+Dropping an index tombstones the `IndexUID`. Recreating the same display name
+creates a new `IndexUID`, generation, root UID, and definition digest.
 
 ### 9.8 Durable Manifest Writes and Cleanup Metadata
 
