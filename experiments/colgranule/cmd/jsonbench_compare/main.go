@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -71,6 +72,10 @@ type remainingTreeDBResult struct {
 	CompactionDuration   float64 `json:"compaction_seconds"`
 	FullyCompacted       bool    `json:"fully_compacted"`
 	CompactedBytesPerRow float64 `json:"compacted_bytes_per_row"`
+	RewriteDuration      float64 `json:"rewrite_duration_seconds"`
+	RewriteRecordsCopied int     `json:"rewrite_records_copied"`
+	RewriteValueBytes    int64   `json:"rewrite_value_bytes"`
+	RewriteSourceBytes   int64   `json:"rewrite_source_bytes"`
 	StoredShape          string  `json:"stored_shape"`
 }
 
@@ -237,6 +242,34 @@ func measureRemainingTreeDB(ctx context.Context, files []string, rows int, dbDir
 	}
 	out.CompactionDuration = time.Since(compactStart).Seconds()
 	out.FullyCompacted = stats.FullyCompacted
+
+	sourceFileIDs, err := valueLogFileIDs(dbDir)
+	if err != nil {
+		return out, err
+	}
+	if len(sourceFileIDs) > 0 {
+		rewriteStart := time.Now()
+		rewriteDB, rewriteCleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+		if err != nil {
+			return out, fmt.Errorf("open remaining TreeDB for value-log rewrite: %w", err)
+		}
+		rewriteStats, rewriteErr := rewriteDB.ValueLogRewriteOnline(ctx, backenddb.ValueLogRewriteOnlineOptions{
+			SourceFileIDs: sourceFileIDs,
+			BatchSize:     16_000,
+			SyncEachBatch: true,
+		})
+		rewriteCleanupErr := rewriteCleanup()
+		if rewriteErr != nil {
+			return out, fmt.Errorf("rewrite remaining TreeDB value log: %w", rewriteErr)
+		}
+		if rewriteCleanupErr != nil {
+			return out, fmt.Errorf("close remaining TreeDB rewrite handle: %w", rewriteCleanupErr)
+		}
+		out.RewriteDuration = time.Since(rewriteStart).Seconds()
+		out.RewriteRecordsCopied = rewriteStats.ValueRecordsCopied
+		out.RewriteValueBytes = rewriteStats.ValueBytesCopied
+		out.RewriteSourceBytes = rewriteStats.SourceBytesRequested
+	}
 	after, afterFiles, err := directoryUsage(dbDir)
 	if err != nil {
 		return out, err
@@ -245,6 +278,46 @@ func measureRemainingTreeDB(ctx context.Context, files []string, rows int, dbDir
 	out.AfterCompactFiles = afterFiles
 	out.CompactedBytesPerRow = float64(after) / float64(out.Rows)
 	return out, nil
+}
+
+func valueLogFileIDs(dbDir string) ([]uint32, error) {
+	valueDir := filepath.Join(dbDir, "maindb", "value_vlog")
+	entries, err := os.ReadDir(valueDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var ids []uint32
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, "value-l") || !strings.HasSuffix(name, ".log") {
+			continue
+		}
+		parts := strings.Split(strings.TrimSuffix(strings.TrimPrefix(name, "value-l"), ".log"), "-")
+		if len(parts) != 2 {
+			continue
+		}
+		lane, err := strconv.ParseUint(parts[0], 10, 8)
+		if err != nil {
+			continue
+		}
+		seq, err := strconv.ParseUint(parts[1], 10, 23)
+		if err != nil {
+			continue
+		}
+		if lane >= 254 {
+			continue
+		}
+		segmentID := uint32(lane)<<23 | uint32(seq)
+		ids = append(ids, segmentID|0x80000000)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids, nil
 }
 
 func insertRemainingDocuments(files []string, rows int, col *collections.Collection, format collections.DocumentFormat, out *remainingTreeDBResult) error {
@@ -434,22 +507,22 @@ func writeMarkdown(path string, raw comparisonRaw) {
 	fmt.Fprintf(&b, "| Granule best-codec all derived columns | %d | %.2f | %.2f%% of ClickHouse local total. |\n", allBest, mib(int64(allBest)), ratio(float64(allBest)*100, float64(raw.ClickHouseLocal.TotalSize)))
 	fmt.Fprintf(&b, "| Granule best-codec query/index paths | %d | %.2f | %.2f%% of ClickHouse local total. |\n", queryBest, mib(int64(queryBest)), ratio(float64(queryBest)*100, float64(raw.ClickHouseLocal.TotalSize)))
 	if raw.RemainingTreeDB.Enabled {
-		fmt.Fprintf(&b, "| TreeDB BSON remaining fields after compaction | %d | %.2f | Stores original JSON minus `time_us` as BSON in a compressed no-index collection. |\n", raw.RemainingTreeDB.AfterCompactBytes, mib(raw.RemainingTreeDB.AfterCompactBytes))
+		fmt.Fprintf(&b, "| TreeDB BSON remaining fields after compaction + value-log rewrite | %d | %.2f | Stores original JSON minus `time_us` as BSON in a compressed no-index collection. |\n", raw.RemainingTreeDB.AfterCompactBytes, mib(raw.RemainingTreeDB.AfterCompactBytes))
 		fmt.Fprintf(&b, "| Granules all derived columns + TreeDB BSON remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", combinedAllBSON, mib(combinedAllBSON), ratio(float64(combinedAllBSON)*100, float64(raw.ClickHouseLocal.TotalSize)))
 		fmt.Fprintf(&b, "| Granules query/index paths + TreeDB BSON remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", combinedQueryBSON, mib(combinedQueryBSON), ratio(float64(combinedQueryBSON)*100, float64(raw.ClickHouseLocal.TotalSize)))
 	}
 	if raw.RemainingTreeDBJSON.Enabled {
-		fmt.Fprintf(&b, "| TreeDB JSON remaining fields after compaction | %d | %.2f | Stores original JSON minus `time_us` as JSON in a compressed no-index collection. |\n", raw.RemainingTreeDBJSON.AfterCompactBytes, mib(raw.RemainingTreeDBJSON.AfterCompactBytes))
+		fmt.Fprintf(&b, "| TreeDB JSON remaining fields after compaction + value-log rewrite | %d | %.2f | Stores original JSON minus `time_us` as JSON in a compressed no-index collection. |\n", raw.RemainingTreeDBJSON.AfterCompactBytes, mib(raw.RemainingTreeDBJSON.AfterCompactBytes))
 		fmt.Fprintf(&b, "| Granules all derived columns + TreeDB JSON remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", combinedAllJSON, mib(combinedAllJSON), ratio(float64(combinedAllJSON)*100, float64(raw.ClickHouseLocal.TotalSize)))
 		fmt.Fprintf(&b, "| Granules query/index paths + TreeDB JSON remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", combinedQueryJSON, mib(combinedQueryJSON), ratio(float64(combinedQueryJSON)*100, float64(raw.ClickHouseLocal.TotalSize)))
 	}
 	fmt.Fprintf(&b, "\n")
 	if raw.RemainingTreeDB.Enabled {
 		fmt.Fprintf(&b, "The remaining-fields TreeDB collection stores each original JSON row after deleting only `time_us`, because `time_us` is represented exactly by a granule column. It intentionally keeps raw strings and nested JSON values such as `did`, `kind`, `commit.*`, `commit.record.text`, `langs`, `reply`, and `subject`; this avoids pretending dictionary payloads or nested object payloads are free.\n\n")
-		fmt.Fprintf(&b, "BSON remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact `%d` bytes across `%d` files; compaction wall time `%.3fs`; BSON payload bytes before TreeDB storage `%d`.\n\n", raw.RemainingTreeDB.BeforeCompactBytes, raw.RemainingTreeDB.BeforeCompactFiles, raw.RemainingTreeDB.AfterCompactBytes, raw.RemainingTreeDB.AfterCompactFiles, raw.RemainingTreeDB.CompactionDuration, raw.RemainingTreeDB.RawDocumentBytes)
+		fmt.Fprintf(&b, "BSON remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; BSON payload bytes before TreeDB storage `%d`.\n\n", raw.RemainingTreeDB.BeforeCompactBytes, raw.RemainingTreeDB.BeforeCompactFiles, raw.RemainingTreeDB.AfterCompactBytes, raw.RemainingTreeDB.AfterCompactFiles, raw.RemainingTreeDB.CompactionDuration, raw.RemainingTreeDB.RewriteDuration, raw.RemainingTreeDB.RewriteRecordsCopied, raw.RemainingTreeDB.RewriteValueBytes, raw.RemainingTreeDB.RewriteSourceBytes, raw.RemainingTreeDB.RawDocumentBytes)
 	}
 	if raw.RemainingTreeDBJSON.Enabled {
-		fmt.Fprintf(&b, "JSON remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact `%d` bytes across `%d` files; compaction wall time `%.3fs`; JSON payload bytes before TreeDB storage `%d`.\n\n", raw.RemainingTreeDBJSON.BeforeCompactBytes, raw.RemainingTreeDBJSON.BeforeCompactFiles, raw.RemainingTreeDBJSON.AfterCompactBytes, raw.RemainingTreeDBJSON.AfterCompactFiles, raw.RemainingTreeDBJSON.CompactionDuration, raw.RemainingTreeDBJSON.RawDocumentBytes)
+		fmt.Fprintf(&b, "JSON remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; JSON payload bytes before TreeDB storage `%d`.\n\n", raw.RemainingTreeDBJSON.BeforeCompactBytes, raw.RemainingTreeDBJSON.BeforeCompactFiles, raw.RemainingTreeDBJSON.AfterCompactBytes, raw.RemainingTreeDBJSON.AfterCompactFiles, raw.RemainingTreeDBJSON.CompactionDuration, raw.RemainingTreeDBJSON.RewriteDuration, raw.RemainingTreeDBJSON.RewriteRecordsCopied, raw.RemainingTreeDBJSON.RewriteValueBytes, raw.RemainingTreeDBJSON.RewriteSourceBytes, raw.RemainingTreeDBJSON.RawDocumentBytes)
 	}
 	fmt.Fprintf(&b, "The table below is one-column-at-a-time storage for the experimental granule codecs. It picks the smallest stored byte count observed for each derived `int64` column across raw, delta-varint, snappy, and lz4 combinations.\n\n")
 	fmt.Fprintf(&b, "| Column | Best codec | Stored bytes | Ratio vs int64 values | Ratio vs ClickHouse total |\n")

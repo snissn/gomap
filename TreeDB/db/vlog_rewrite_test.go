@@ -2175,6 +2175,160 @@ func TestValueLogRewriteOnline_GroupsSingleRecordJSONFrames(t *testing.T) {
 	}
 }
 
+func TestValueLogRewriteOnline_UsesCurrentSingleValueDictInAutoMode(t *testing.T) {
+	dir := t.TempDir()
+
+	const (
+		rows   = 128
+		dictID = uint64(734411)
+	)
+	values := make([][]byte, rows)
+	for i := 0; i < rows; i++ {
+		values[i] = []byte(fmt.Sprintf(
+			`{"did":"did:plc:%08d","time_us":1732206349%06d,"kind":"commit","commit":{"rev":"3lbhuvzds%04d","operation":"create","collection":"app.bsky.feed.post","rkey":"rkey%06d","record":{"$type":"app.bsky.feed.post","createdAt":"2024-11-21T16:%02d:%02d.095Z","langs":["en"],"text":"repeatable fixture text for value-log rewrite dictionary number %06d"}}}`,
+			i%17, i, i%10000, i, i%60, (i*7)%60, i,
+		))
+	}
+	history := append([]byte(nil), values[0]...)
+	for i := 1; i < 8; i++ {
+		history = append(history, values[i]...)
+	}
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: values,
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("BuildDict: %v", err)
+	}
+	if len(dict) == 0 {
+		t.Fatalf("BuildDict returned empty dict")
+	}
+
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			Compression: ValueLogCompressionAuto,
+			BlockCodec:  ValueLogBlockSnappy,
+			DictLookup: func(id uint64) ([]byte, error) {
+				if id != dictID {
+					return nil, valuelog.ErrMissingDict
+				}
+				return dict, nil
+			},
+			DictCurrentForClass: func(_ context.Context, class string) (uint64, error) {
+				if class != "single_value" {
+					t.Fatalf("current dict class=%q want single_value", class)
+				}
+				return dictID, nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	})
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 1, rows, func(i int) []byte {
+		return values[i]
+	})
+	b := db.NewBatch().(*Batch)
+	for i, ptr := range ptrs {
+		if err := b.SetPointer([]byte(fmt.Sprintf("k%04d", i)), ptr); err != nil {
+			t.Fatalf("set pointer %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	segmentsBefore, err := listValueLogSegments(dir)
+	if err != nil {
+		t.Fatalf("list segments before rewrite: %v", err)
+	}
+	before := make(map[string]struct{}, len(segmentsBefore))
+	for _, seg := range segmentsBefore {
+		before[seg.path] = struct{}{}
+	}
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		BatchSize:     rows,
+		SyncEachBatch: true,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied != rows {
+		t.Fatalf("copied records=%d want %d; stats=%+v", stats.RecordsCopied, rows, stats)
+	}
+
+	segmentsAfter, err := listValueLogSegments(dir)
+	if err != nil {
+		t.Fatalf("list segments after rewrite: %v", err)
+	}
+	dictFrames := 0
+	blockFrames := 0
+	maxDictK := 0
+	for _, seg := range segmentsAfter {
+		if !seg.valueLog {
+			continue
+		}
+		if _, ok := before[seg.path]; ok {
+			continue
+		}
+		f, err := os.Open(seg.path)
+		if err != nil {
+			t.Fatalf("open new segment %s: %v", filepath.Base(seg.path), err)
+		}
+		func() {
+			defer f.Close()
+			for {
+				var header [valuelog.HeaderSize]byte
+				if _, err := io.ReadFull(f, header[:]); err != nil {
+					if err == io.EOF || err == io.ErrUnexpectedEOF {
+						return
+					}
+					t.Fatalf("read header %s: %v", filepath.Base(seg.path), err)
+				}
+				bodyLen := binary.LittleEndian.Uint32(header[16:20])
+				body := make([]byte, int(bodyLen))
+				if _, err := io.ReadFull(f, body); err != nil {
+					t.Fatalf("read frame body %s: %v", filepath.Base(seg.path), err)
+				}
+				frameHeader, _, _, _, err := valuelog.DecodeFrame(body)
+				if err != nil {
+					t.Fatalf("DecodeFrame %s: %v", filepath.Base(seg.path), err)
+				}
+				if frameHeader.DictID == dictID {
+					dictFrames++
+					if int(frameHeader.K) > maxDictK {
+						maxDictK = int(frameHeader.K)
+					}
+				}
+				if frameHeader.DictID == 0 && frameHeader.Flags&valuelog.FrameFlagCompressed != 0 {
+					blockFrames++
+				}
+			}
+		}()
+	}
+	if dictFrames == 0 {
+		t.Fatalf("expected online rewrite to use current single_value dict")
+	}
+	if maxDictK < 2 {
+		t.Fatalf("expected online rewrite to batch dict frames, max dict k=%d", maxDictK)
+	}
+	if blockFrames != 0 {
+		t.Fatalf("expected dict rewrite for all test payloads, block frames=%d", blockFrames)
+	}
+}
+
 func TestValueLogRewriteOnline_ReportsActualBytesAfterSegmentGrowth(t *testing.T) {
 	dir := t.TempDir()
 

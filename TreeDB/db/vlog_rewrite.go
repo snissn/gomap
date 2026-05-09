@@ -1739,6 +1739,25 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
 	writer.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
+	if writer.blockCompression &&
+		db.valueLogCompression != ValueLogCompressionOff &&
+		db.valueLogCompression != ValueLogCompressionBlock &&
+		db.valueLogDictCurrentForClass != nil &&
+		db.valueLogDictLookup != nil {
+		dictID, err := db.valueLogDictCurrentForClass(context.Background(), "single_value")
+		if err != nil {
+			return stats, err
+		}
+		if dictID != 0 {
+			dictBytes, err := db.valueLogDictLookup(dictID)
+			if err != nil {
+				return stats, err
+			}
+			if len(dictBytes) > 0 {
+				writer.SetValueDictMode(dictID, dictBytes)
+			}
+		}
+	}
 	if db.indexOuterLeavesInValueLog {
 		if state := db.State(); state != nil {
 			leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(db, state, db.valueLogDictCurrentForClass, db.valueLogDictLeafPayloadMode, db.valueLogDictLookup, db.valueLogDictPut, db.valueLogDictSetCurrentForClass, db.valueLogDictSetLeafPayloadMode, compression.TrainConfig{})
@@ -3300,6 +3319,8 @@ type rewriteWriter struct {
 	leafDictID              uint64
 	leafDict                []byte
 	leafDictUseRawPages     bool
+	valueDictID             uint64
+	valueDict               []byte
 	templateMode            template.Mode
 	templateEngineValue     *template.Engine
 	templateEngineOuterLeaf *template.Engine
@@ -3973,6 +3994,19 @@ func (w *rewriteWriter) SetLeafDictMode(dictID uint64, dict []byte, useRawPages 
 	w.leafDictUseRawPages = useRawPages
 }
 
+func (w *rewriteWriter) SetValueDictMode(dictID uint64, dict []byte) {
+	if w == nil {
+		return
+	}
+	if dictID == 0 || len(dict) == 0 {
+		w.valueDictID = 0
+		w.valueDict = nil
+		return
+	}
+	w.valueDictID = dictID
+	w.valueDict = append(w.valueDict[:0], dict...)
+}
+
 func (w *rewriteWriter) SetTemplateCompression(mode template.Mode, cfg template.Config, store template.Store) {
 	if w == nil {
 		return
@@ -4141,6 +4175,9 @@ func (w *rewriteWriter) appendRaw(raw []byte, length uint32) (page.ValuePtr, err
 }
 
 func (w *rewriteWriter) appendValue(rid uint64, value []byte) (page.ValuePtr, error) {
+	if w.blockCompression && w.valueDictID != 0 && len(w.valueDict) > 0 {
+		return w.appendValueWithDictClass(rewriteTemplateClassPointerValue, w.valueDictID, w.valueDict, rid, value)
+	}
 	return w.appendValueWithDictClass(rewriteTemplateClassPointerValue, 0, nil, rid, value)
 }
 
