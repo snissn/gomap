@@ -142,6 +142,84 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 	}
 }
 
+func TestDeepReportComparesRunRoots(t *testing.T) {
+	baseline := t.TempDir()
+	current := t.TempDir()
+	writeComparableRun(t, baseline, comparableRunValues{
+		Head:            "base123",
+		RawOps:          1000,
+		RawReadOps:      1000,
+		MongoLoadOps:    1000,
+		MongoReaderOps:  2000,
+		LoadModeOps:     1500,
+		CollectionDocs:  10000,
+		CollectionBytes: 10,
+	})
+	writeComparableRun(t, current, comparableRunValues{
+		Head:            "cur456",
+		RawOps:          1100,
+		RawReadOps:      900,
+		MongoLoadOps:    1100,
+		MongoReaderOps:  2200,
+		LoadModeOps:     1800,
+		CollectionDocs:  12000,
+		CollectionBytes: 8,
+	})
+
+	out := filepath.Join(current, "deep_report.html")
+	if err := run([]string{
+		"-run-root", current,
+		"-compare-run-root", baseline,
+		"-out", out,
+		"-title", "compare report",
+		"-current-label", "candidate",
+		"-baseline-label", "control",
+	}); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	html := readFile(t, out)
+	for _, want := range []string{
+		"compare report",
+		"href=\"#compare\"",
+		"Run Comparison",
+		"Overall",
+		"Baseline git identity:",
+		"HEAD=base123",
+		"Mongo full-sweep deltas",
+		"Load-mode deltas",
+		"Dedicated scaling deltas",
+		"Collection deltas",
+		"Raw engine deltas",
+		"control TreeDB ops/s",
+		"candidate TreeDB ops/s",
+		"+10.0%",
+		"+20.0%",
+		"-10.0%",
+		"-20.0%",
+		"delta-good",
+		"delta-bad",
+		"matched rows",
+		"measured deltas",
+		"avg better",
+		"avg worse",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("comparison report missing %q\n%s", want, html)
+		}
+	}
+	for _, collapsed := range []string{
+		"<details open><summary>Mongo full-sweep deltas",
+		"<details open><summary>Load-mode deltas",
+		"<details open><summary>Dedicated scaling deltas",
+		"<details open><summary>Collection deltas",
+		"<details open><summary>Raw engine deltas",
+	} {
+		if strings.Contains(html, collapsed) {
+			t.Fatalf("comparison report should hide %q by default\n%s", collapsed, html)
+		}
+	}
+}
+
 func TestRenderHTMLNavOmitsMissingSections(t *testing.T) {
 	html := renderHTML(reportData{
 		Config: config{Title: "partial", RunRoot: t.TempDir()},
@@ -484,6 +562,11 @@ func TestParseConfigRejectsInvalidRunRoot(t *testing.T) {
 	if _, err := parseConfig([]string{"-run-root", file}); err == nil {
 		t.Fatal("parseConfig accepted a file as run root")
 	}
+
+	valid := t.TempDir()
+	if _, err := parseConfig([]string{"-run-root", valid, "-compare-run-root", missing}); err == nil {
+		t.Fatal("parseConfig accepted a missing compare run root")
+	}
 }
 
 const mongoSummaryHeader = "documents\tsecondary_indexes\trange_index\trange_mode\ttreedb_config\tmongo_config\tphase\ttreedb_ops_sec\ttreedb_sampled_ops_sec\ttreedb_sampled_ns_per_op\tmongo_ops_sec\tmongo_sampled_ops_sec\tmongo_sampled_ns_per_op\ttreedb_to_mongo_ops_ratio\ttreedb_to_mongo_sampled_ops_ratio\ttreedb_p50_us\tmongo_p50_us\ttreedb_p95_us\tmongo_p95_us\ttreedb_p99_us\tmongo_p99_us\ttreedb_disk_snapshot\ttreedb_disk_bytes\ttreedb_physical_bytes\tmongo_dbstats_data_size_bytes\tmongo_dbstats_total_size_bytes\tmongo_physical_bytes\ttreedb_to_mongo_dbstats_total_ratio\ttreedb_to_mongo_physical_ratio\n"
@@ -492,6 +575,44 @@ func mongoSummaryFixture(indexes int) string {
 	return mongoSummaryHeader +
 		fmt.Sprintf("100\t%d\tfalse\t\ttreedb_bson\tmongo\tload_insert_many\t1000\t1000\t1000\t500\t500\t2000\t2\t2\t1\t2\t3\t4\t5\t6\tmaintenance\t1000\t2000\t3000\t4000\t5000\t0.25\t0.4\n", indexes) +
 		fmt.Sprintf("100\t%d\tfalse\t\ttreedb_bson\tmongo\tconcurrent_id_find_one_r1\t2000\t2000\t500\t1000\t1000\t1000\t2\t2\t1\t2\t3\t4\t5\t6\tmaintenance\t1000\t2000\t3000\t4000\t5000\t0.25\t0.4\n", indexes)
+}
+
+type comparableRunValues struct {
+	Head            string
+	RawOps          float64
+	RawReadOps      float64
+	MongoLoadOps    float64
+	MongoReaderOps  float64
+	LoadModeOps     float64
+	CollectionDocs  float64
+	CollectionBytes float64
+}
+
+func writeComparableRun(t *testing.T, root string, values comparableRunValues) {
+	t.Helper()
+	writeFile(t, filepath.Join(root, "HEAD.txt"), "HEAD="+values.Head+"\n")
+	writeFile(t, filepath.Join(root, "raw_engine_full_matrix", "wal_on_fast_checkpoint_between_tests", "benchprof_results.json"), fmt.Sprintf(`{
+  "runs": [{
+    "profile": "wal_on_fast",
+    "results": {
+      "sequential_write": {"TreeDB": %.0f},
+      "random_read": {"TreeDB": %.0f}
+    }
+  }]
+}`, values.RawOps, values.RawReadOps))
+	writeFile(t, filepath.Join(root, "collections_sqlite_canonical_1m", "indexes_0", "benchmark_results.json"), fmt.Sprintf(`{
+  "results": [
+    {"config_name":"treedb_bson_collection_0_indexes","engine":"treedb_fast","format":"bson","shape":"collection","index_count":0,"document_count":100,"phase":"post_insert","maintenance_mode":"none","total_bytes":800,"bytes_per_doc":%.1f,"docs_per_sec":%.0f,"measurement_kind":"go_benchmark"}
+  ]
+}`, values.CollectionBytes, values.CollectionDocs))
+	summary := mongoSummaryHeader +
+		fmt.Sprintf("100\t0\tfalse\t\ttreedb_bson\tmongo\tload_insert_many\t%.0f\t%.0f\t1000\t500\t500\t2000\t2\t2\t1\t2\t3\t4\t5\t6\tmaintenance\t1000\t2000\t3000\t4000\t5000\t0.25\t0.4\n", values.MongoLoadOps, values.MongoLoadOps) +
+		fmt.Sprintf("100\t0\tfalse\t\ttreedb_bson\tmongo\tconcurrent_id_find_one_r1\t%.0f\t%.0f\t500\t1000\t1000\t1000\t2\t2\t1\t2\t3\t4\t5\t6\tmaintenance\t1000\t2000\t3000\t4000\t5000\t0.25\t0.4\n", values.MongoReaderOps, values.MongoReaderOps)
+	writeFile(t, filepath.Join(root, "mongo_gateway_full_sweep_1m_expanded", "summary.tsv"), summary)
+	writeFile(t, filepath.Join(root, "mongo_gateway_reader_writer_scaling_1m", "indexes_0", "summary.tsv"), summary)
+	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "matrix.tsv"), "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_driver\t100\t0\traw/treedb.json\t2000\n")
+	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "raw", "treedb.json"), fmt.Sprintf(`{"target":"treedb","documents":100,"secondary_indexes":0,"phases":[{"name":"load_insert_many","ops_per_sec":%.0f}]}`, values.LoadModeOps))
 }
 
 func writeFile(t *testing.T, path, content string) {
