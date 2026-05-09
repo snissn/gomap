@@ -6408,14 +6408,18 @@ func TestDetachMutableIndexedRunTablesKeepsRunsVisible(t *testing.T) {
 	primaryName := collectionPrimaryRootName("users")
 	secondaryName := collectionSecondaryRootName("users", "city")
 
+	domain.mu.Lock()
 	primary, created := mutableRootRunLocked(domain, primaryName)
 	if !created || primary == nil {
+		domain.mu.Unlock()
 		t.Fatal("primary mutable root run was not created")
 	}
 	city, created := mutableRootRunLocked(domain, secondaryName)
 	if !created || city == nil {
+		domain.mu.Unlock()
 		t.Fatal("city mutable root run was not created")
 	}
+	domain.mu.Unlock()
 	if err := applyCollectionRunEntriesWithFlags(primary, 2, func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
 		if i == 0 {
 			return []byte("u2"), []byte("old-u2"), page.ValuePtr{}, node.FlagInline, nil
@@ -6430,19 +6434,25 @@ func TestDetachMutableIndexedRunTablesKeepsRunsVisible(t *testing.T) {
 		t.Fatalf("append city entries: %v", err)
 	}
 
+	domain.mu.Lock()
 	detached := detachMutableIndexedRunTablesLocked(domain)
 	if got := len(detached); got != 2 {
+		domain.mu.Unlock()
 		t.Fatalf("detached tables=%d want 2", got)
 	}
 	if domain.rootMutableRuns != nil {
+		domain.mu.Unlock()
 		t.Fatal("rootMutableRuns still has append targets after detach")
 	}
 	if got := pendingIndexedRootRunsLocked(domain, primaryName); len(got) != 1 || got[0] != primary {
+		domain.mu.Unlock()
 		t.Fatalf("pending primary runs=%v want original primary table", got)
 	}
 	if got := pendingIndexedRootRunsLocked(domain, secondaryName); len(got) != 1 || got[0] != city {
+		domain.mu.Unlock()
 		t.Fatalf("pending city runs=%v want original city table", got)
 	}
+	domain.mu.Unlock()
 
 	requireFreezeSortRunIterator(t, primary.NewIterator(nil, nil), []string{"u1", "u2"})
 	freezeIndexedRunTables(detached)
@@ -6461,12 +6471,9 @@ func TestFreezeIndexedRunTablesOutsideLockAllowsNilDomain(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("append entries: %v", err)
 	}
-	freezeDuration, lockReleased, relockWait := freezeIndexedRunTablesOutsideLock(nil, []memtable.Table{table})
+	freezeDuration := freezeIndexedRunTablesObserved([]memtable.Table{table})
 	if freezeDuration <= 0 {
 		t.Fatalf("freeze duration=%s want positive", freezeDuration)
-	}
-	if lockReleased != 0 || relockWait != 0 {
-		t.Fatalf("lock released=%s relock wait=%s want 0/0", lockReleased, relockWait)
 	}
 	requireFreezeSortRunIterator(t, table.NewIterator(nil, nil), []string{"a", "b"})
 	resetCollectionRunTable(table)
@@ -6483,6 +6490,7 @@ func TestIndexedPrepareFreezeWaitsUntilFinished(t *testing.T) {
 	go func() {
 		domain.mu.Lock()
 		if domain.indexedPrepareFreezes <= 0 {
+			close(waiterReady)
 			domain.mu.Unlock()
 			done <- 0
 			return

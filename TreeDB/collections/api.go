@@ -3622,6 +3622,15 @@ func freezeIndexedRunTables(tables []memtable.Table) {
 	}
 }
 
+func freezeIndexedRunTablesObserved(tables []memtable.Table) time.Duration {
+	if len(tables) == 0 {
+		return 0
+	}
+	freezeStart := time.Now()
+	freezeIndexedRunTables(tables)
+	return collectionObservedElapsedSince(freezeStart)
+}
+
 // freezeIndexedRunTablesOutsideLock requires domain.mu to be held by the caller.
 // It releases domain.mu for expensive table-local sort/coalesce work, then
 // reacquires domain.mu before returning.
@@ -3630,9 +3639,7 @@ func freezeIndexedRunTablesOutsideLock(domain *collectionWriteDomain, tables []m
 		return 0, 0, 0
 	}
 	if domain == nil {
-		freezeStart := time.Now()
-		freezeIndexedRunTables(tables)
-		return collectionObservedElapsedSince(freezeStart), 0, 0
+		return freezeIndexedRunTablesObserved(tables), 0, 0
 	}
 	domain.beginIndexedPrepareFreezeLocked()
 	prepareFinished := false
