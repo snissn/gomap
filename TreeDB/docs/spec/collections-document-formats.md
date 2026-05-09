@@ -140,15 +140,23 @@ The collection planner persists any template records from the envelope into the
 the hash-addressed insert document to compact `TD1D`, and stores only that
 compact document in the primary root.
 
-Inserts may also provide compact `TD1D` bytes directly when the referenced
-numeric template IDs already exist in the persisted template root visible to the
-operation's snapshot.
+Scoped encoder inserts may also provide compact `TD1D` bytes directly after the
+same encoder has learned numeric template IDs for the logical collection.
+Ordinary `InsertBatch` rejects bare `TD1D` input because numeric template IDs
+are collection-local; use `InsertBatchWithTemplateV1Encoder` for learned-ID
+bytes.
 
 `TemplateV1Encoder` is a stateful helper for repeated shapes. It emits template
 records the first time a shape is seen and then emits hash-addressed `TD1H`
-insert documents for the same shape. Call `Reset` before reusing an encoder
-after a failed or abandoned publish attempt if the next batch cannot rely on the
-earlier template records having been persisted.
+insert documents for the same shape. `Collection.InsertBatchWithTemplateV1Encoder`
+teaches the encoder the numeric template IDs resolved by a successful insert, so
+later `EncodeDocument` calls can emit compact `TD1D` bytes directly when all
+templates in the document are already known. Learned numeric IDs are scoped to
+one logical collection because template IDs are collection-local. Do not reuse
+an encoder with learned IDs across collections; `InsertBatchWithTemplateV1Encoder`
+rejects a learned encoder bound to a different collection. Call `Reset` before
+switching collections or after a failed or abandoned publish attempt if the next
+batch cannot rely on the earlier template records having been persisted.
 
 ### 2.5 Index extraction
 

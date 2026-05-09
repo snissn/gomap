@@ -58,6 +58,8 @@ type collectionOptions struct {
 	documentFormat          DocumentFormat
 	trustedBSONDocuments    bool
 	templateResolver        templateV1Resolver
+	learnTemplateIDs        bool
+	allowTemplateV1Stored   bool
 	dataStoragePolicy       backenddb.OrderedRootStoragePolicy
 	indexStateStoragePolicy backenddb.OrderedRootStoragePolicy
 }
@@ -94,6 +96,7 @@ type insertBatchPlan struct {
 	allUniqueProbeRuns         []collectionUniqueProbeRun
 	allUniqueProbeRunsBuilt    bool
 	templateRecords            []templateV1Record
+	templateLearned            []templateV1LearnedTemplate
 	stats                      insertBatchPlanStats
 }
 
@@ -212,7 +215,7 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 		Indexes:   len(p.indexes),
 	}
 	phaseStart := time.Now()
-	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments(documents, p.options)
+	preparedDocuments, templateRecords, templateLearned, templateResolver, err := prepareInsertDocuments(documents, p.options)
 	stats.PrepareDocuments = time.Since(phaseStart)
 	if err != nil {
 		return nil, err
@@ -287,6 +290,7 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 		allUniqueProbeRuns:         allUniqueProbeRuns,
 		allUniqueProbeRunsBuilt:    allUniqueProbeRunsBuilt,
 		templateRecords:            templateRecords,
+		templateLearned:            templateLearned,
 		stats:                      insertBatchPlanStats{CollectionInsertStats: stats},
 	}
 	if p.directBufferedRuns {

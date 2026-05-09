@@ -51,7 +51,9 @@ Useful variants:
 
 # Homogeneous wide documents, useful for template-v1/BSON disk comparisons where
 # repeated field-name storage should dominate. Non-default document shapes require
-# -indexes 0 because they do not include the default indexed fields.
+# -indexes 0 because they do not include the default indexed fields. Template-v1
+# fixture runs keep one encoder across batches and feed successful insert IDs
+# back into it, so repeated shapes can emit compact stored documents directly.
 ./bin/collection-load-fixture \
   -format template-v1 \
   -document-shape wide \

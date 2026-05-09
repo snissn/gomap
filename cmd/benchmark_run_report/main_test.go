@@ -198,6 +198,26 @@ func TestCollectionChartsIncludeAdditionalFormats(t *testing.T) {
 	}
 }
 
+func TestCollectionDocsRowsPreferBenchmarkThroughput(t *testing.T) {
+	rows := []collectionRow{
+		{ConfigName: "treedb_template_v1_collection_0_indexes", Engine: "treedb_fast", Format: "template-v1", Shape: "collection", IndexCount: 0, Phase: "post_insert", DocsPerSec: 1000, MeasurementKind: "fixture_wall_timed"},
+		{ConfigName: "treedb_template_v1_collection_0_indexes", Engine: "production_fast", Format: "template-v1", Shape: "collection", IndexCount: 0, Phase: "post_insert", DocsPerSec: 2000, MeasurementKind: "go_benchmark"},
+		{ConfigName: "treedb_template_v1_collection_0_indexes", Engine: "treedb_fast", Format: "template-v1", Shape: "collection", IndexCount: 0, Phase: "post_insert", MeasurementKind: "offline_script"},
+	}
+
+	chartRows := collectionDocsRows(rows)
+	if got, want := len(chartRows.Series), 1; got != want {
+		t.Fatalf("series count = %d, want %d: %#v", got, want, chartRows.Series)
+	}
+	series := chartRows.Series[0]
+	if got, want := series.Name, "TreeDB template-v1"; got != want {
+		t.Fatalf("series name = %q, want %q", got, want)
+	}
+	if got, want := series.Values[0], 2000.0; got != want {
+		t.Fatalf("docs/sec = %v, want %v", got, want)
+	}
+}
+
 func TestLoadModeLabelNormalizesSingleMongoConfig(t *testing.T) {
 	if got, want := loadModeLabel(loadModeRow{Target: "mongo", Config: "mongo"}), "BSON driver"; got != want {
 		t.Fatalf("label = %q, want %q", got, want)
