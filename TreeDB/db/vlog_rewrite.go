@@ -1744,7 +1744,7 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		db.valueLogCompression != ValueLogCompressionBlock &&
 		db.valueLogDictCurrentForClass != nil &&
 		db.valueLogDictLookup != nil {
-		dictID, err := db.valueLogDictCurrentForClass(context.Background(), "single_value")
+		dictID, err := db.valueLogDictCurrentForClass(ctx, "single_value")
 		if err != nil {
 			return stats, err
 		}
@@ -4313,7 +4313,8 @@ func (w *rewriteWriter) appendValueWithDictClass(class rewriteTemplateClass, dic
 	if maxK > valuelog.MaxFrameK {
 		maxK = valuelog.MaxFrameK
 	}
-	if w.hasPendingDictBatch() && len(w.pendingDictRecords) >= maxK {
+	if w.hasPendingDictBatch() &&
+		(len(w.pendingDictRecords) >= maxK || w.pendingDictRaw+len(value) > rewriteBlockBatchMaxRawBytes) {
 		if err := w.flushPendingDictBatch(); err != nil {
 			return page.ValuePtr{}, err
 		}
@@ -4350,11 +4351,12 @@ func (w *rewriteWriter) appendValueWithDictClass(class rewriteTemplateClass, dic
 		w.pendingDictRaw = 0
 	}
 
+	ownedValue := append([]byte(nil), value...)
 	w.pendingDictRecords = append(w.pendingDictRecords, valuelog.Record{
 		RID:   rid,
-		Value: value,
+		Value: ownedValue,
 	})
-	w.pendingDictRaw += len(value)
+	w.pendingDictRaw += len(ownedValue)
 	subIndex := len(w.pendingDictRecords) - 1
 	ptr := page.ValuePtr{
 		Offset: uint64(w.pendingDictStart + 4),

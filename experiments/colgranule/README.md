@@ -18,10 +18,10 @@ It currently covers:
 The JSONBench data directory is expected at:
 
 ```text
-/Users/michaelseiler/data/bluesky
+$JSONBENCH_DATA
 ```
 
-That path matches the default output from `/Users/michaelseiler/dev/snissn/JSONBench/download_data.sh`
+That path matches the default output from `$JSONBENCH_REPO/download_data.sh`
 for the Bluesky data set. The upstream downloader writes larger scales into the
 same directory: 1m is `file_0001.json.gz`, 10m is `file_0001.json.gz` through
 `file_0010.json.gz`, 100m through `file_0100.json.gz`, and 1000m through
@@ -34,7 +34,7 @@ Run the full local 1M-row column summary:
 
 ```sh
 go run ./experiments/colgranule/cmd/jsonbench_colgranule \
-  -data /Users/michaelseiler/data/bluesky \
+  -data $JSONBENCH_DATA \
   -limit 1000000 \
   -rows-per-granule 8192
 ```
@@ -51,7 +51,7 @@ Build the raw ClickHouse comparison data and Markdown summary:
 
 ```sh
 go run ./experiments/colgranule/cmd/jsonbench_compare \
-  -data /Users/michaelseiler/data/bluesky \
+  -data $JSONBENCH_DATA \
   -limit 1000000 \
   -rows-per-granule 8192 \
   -attempts 5

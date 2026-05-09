@@ -125,7 +125,13 @@ func runJSONBenchQ2(ds JSONBenchDataset, codes queryCodeSet) (int, uint64) {
 		unique[event][did[i]] = struct{}{}
 	}
 	digest := digestCounts(counts)
-	for event, users := range unique {
+	events := make([]int64, 0, len(unique))
+	for event := range unique {
+		events = append(events, event)
+	}
+	sort.Slice(events, func(i, j int) bool { return events[i] < events[j] })
+	for _, event := range events {
+		users := unique[event]
 		digest = digestMix(digest, uint64(event), uint64(len(users)))
 	}
 	return len(counts), digest

@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 
 	"github.com/golang/snappy"
@@ -216,6 +215,9 @@ func compressPayload(raw []byte, compression Compression) ([]byte, Compression, 
 }
 
 func decompressPayload(g EncodedGranule) ([]byte, error) {
+	if g.RawBytes < 0 {
+		return nil, fmt.Errorf("colgranule: negative raw payload length %d", g.RawBytes)
+	}
 	switch g.Compression {
 	case CompressionNone:
 		if len(g.Payload) != g.RawBytes {
@@ -234,7 +236,7 @@ func decompressPayload(g EncodedGranule) ([]byte, error) {
 	case CompressionLZ4:
 		out := make([]byte, g.RawBytes)
 		n, err := lz4.UncompressBlock(g.Payload, out)
-		if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+		if err != nil {
 			return nil, err
 		}
 		if n != g.RawBytes {

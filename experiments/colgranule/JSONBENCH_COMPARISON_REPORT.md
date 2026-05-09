@@ -1,6 +1,6 @@
 # JSONBench ClickHouse Comparison
 
-Generated from `/Users/michaelseiler/data/bluesky` with row limit `1000000`; this local run read `1` file(s) and `1000000` rows. The comparison is a smoke-level column-kernel comparison, not a full database benchmark: TreeDB roots, collection WAL, query planning, persistence, and SQL execution are intentionally out of scope.
+Generated from `$JSONBENCH_DATA` with row limit `1000000`; this local run read `1` file(s) and `1000000` rows. The comparison is a smoke-level column-kernel comparison, not a full database benchmark: TreeDB roots, collection WAL, query planning, persistence, and SQL execution are intentionally out of scope.
 
 The ClickHouse numbers below use the local JSONBench result `ClickHouse` `26.4.3.1` on `Darwin 25.2.0 arm64`, so query timings and disk bytes are local-machine comparisons.
 
@@ -53,7 +53,7 @@ JSON remaining-fields compaction detail: before compact `204388645` bytes across
 
 Template-v1 remaining-fields compaction detail: before compact `211077380` bytes across `12` files; after compact plus value-log rewrite `49830135` bytes across `15` files; compaction wall time `0.262s`; rewrite wall time `2.725s`; rewritten records `1000471`; rewritten value bytes `259230751`; rewritten source bytes `196774129`; Template-v1 payload bytes before TreeDB storage `583083877`.
 
-Template-v1 is loaded as one large insert batch in this experiment so template records and compact stored documents are learned together. The rewritten record count includes template-root records as well as primary documents.
+Template-v1 reuses one encoder across bounded insert batches, so template records and compact stored documents are learned across the whole measurement without retaining every row in memory. The rewritten record count includes template-root records as well as primary documents.
 
 Conservative BSON remaining-fields compaction detail: before compact `251114357` bytes across `12` files; after compact plus value-log rewrite `56830020` bytes across `15` files; compaction wall time `0.279s`; rewrite wall time `2.676s`; rewritten records `1000000`; rewritten value bytes `474461494`; rewritten source bytes `236599318`; BSON payload bytes before TreeDB storage `474461494`.
 

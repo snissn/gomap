@@ -1,10 +1,10 @@
 {
   "generated_at": "2026-05-09T17:59:47Z",
-  "data_path": "/Users/michaelseiler/data/bluesky",
+  "data_path": "$JSONBENCH_DATA",
   "limit": 1000000,
   "rows": 1000000,
   "files": [
-    "/Users/michaelseiler/data/bluesky/file_0001.json.gz"
+    "$JSONBENCH_DATA/file_0001.json.gz"
   ],
   "input_bytes": 135176827,
   "rows_per_granule": 8192,
@@ -13,7 +13,7 @@
     "system": "ClickHouse",
     "version": "26.4.3.1",
     "os": "Darwin 25.2.0 arm64",
-    "machine": "Michaels-Laptop.local",
+    "machine": "local-machine",
     "dataset_size": 1000000,
     "num_loaded_documents": 1000000,
     "total_size": 101786238,

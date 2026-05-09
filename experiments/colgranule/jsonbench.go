@@ -2,6 +2,7 @@ package colgranule
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -12,8 +13,8 @@ import (
 	"time"
 )
 
-const DefaultJSONBenchPath = "/Users/michaelseiler/data/bluesky/file_0001.json.gz"
-const DefaultJSONBenchDir = "/Users/michaelseiler/data/bluesky"
+const DefaultJSONBenchPath = "experiments/colgranule/testdata/jsonbench_sample.jsonl"
+const DefaultJSONBenchDir = "experiments/colgranule/testdata"
 
 type JSONBenchDataset struct {
 	Rows         int
@@ -51,11 +52,11 @@ func LoadJSONBenchColumns(path string, limit int) (JSONBenchDataset, error) {
 		"record_subject_string_bytes": nil,
 	}}
 	dicts := map[string]*stringDictionary{
-		"did_code":               {},
-		"kind_code":              {},
-		"commit_operation_code":  {},
-		"commit_collection_code": {},
-		"record_type_code":       {},
+		"did_code":               &stringDictionary{},
+		"kind_code":              &stringDictionary{},
+		"commit_operation_code":  &stringDictionary{},
+		"commit_collection_code": &stringDictionary{},
+		"record_type_code":       &stringDictionary{},
 	}
 
 	for _, file := range files {
@@ -120,7 +121,9 @@ func loadJSONBenchFile(path string, limit int, ds *JSONBenchDataset, dicts map[s
 		if err := json.Unmarshal(line, &ev); err != nil {
 			return fmt.Errorf("decode jsonbench row %d in %s: %w", ds.Rows, path, err)
 		}
-		appendJSONBenchRow(ds, dicts, line, &ev)
+		if err := appendJSONBenchRow(ds, dicts, line, &ev); err != nil {
+			return fmt.Errorf("load jsonbench row %d in %s: %w", ds.Rows, path, err)
+		}
 		ds.Rows++
 		if limit > 0 && ds.Rows >= limit {
 			break
@@ -194,10 +197,14 @@ func freezeStringDictionaries(dicts map[string]*stringDictionary) map[string]map
 	return out
 }
 
-func appendJSONBenchRow(ds *JSONBenchDataset, dicts map[string]*stringDictionary, line []byte, ev *jsonBenchEvent) {
+func appendJSONBenchRow(ds *JSONBenchDataset, dicts map[string]*stringDictionary, line []byte, ev *jsonBenchEvent) error {
 	row := int64(ds.Rows)
 	commit := ev.Commit
 	record := commit.Record
+	createdAtMillis, err := parseRFC3339Millis(record.CreatedAt)
+	if err != nil {
+		return err
+	}
 	ds.Columns["row_index"] = append(ds.Columns["row_index"], row)
 	ds.Columns["time_us"] = append(ds.Columns["time_us"], ev.TimeUS)
 	ds.Columns["line_bytes"] = append(ds.Columns["line_bytes"], int64(len(line)))
@@ -210,27 +217,28 @@ func appendJSONBenchRow(ds *JSONBenchDataset, dicts map[string]*stringDictionary
 	ds.Columns["commit_rkey_bytes"] = append(ds.Columns["commit_rkey_bytes"], int64(len(commit.RKey)))
 	ds.Columns["cid_bytes"] = append(ds.Columns["cid_bytes"], int64(len(commit.CID)))
 	ds.Columns["record_type_code"] = append(ds.Columns["record_type_code"], dicts["record_type_code"].code(record.Type))
-	ds.Columns["record_created_at_unix_ms"] = append(ds.Columns["record_created_at_unix_ms"], parseRFC3339Millis(record.CreatedAt))
+	ds.Columns["record_created_at_unix_ms"] = append(ds.Columns["record_created_at_unix_ms"], createdAtMillis)
 	ds.Columns["record_text_bytes"] = append(ds.Columns["record_text_bytes"], int64(len(record.Text)))
 	ds.Columns["record_langs_count"] = append(ds.Columns["record_langs_count"], int64(len(record.Langs)))
 	ds.Columns["record_has_reply"] = append(ds.Columns["record_has_reply"], boolInt(record.Reply != nil))
-	ds.Columns["record_has_subject"] = append(ds.Columns["record_has_subject"], boolInt(len(record.Subject) > 0 && string(record.Subject) != "null"))
+	ds.Columns["record_has_subject"] = append(ds.Columns["record_has_subject"], boolInt(len(record.Subject) > 0 && !jsonRawNull(record.Subject)))
 	ds.Columns["record_subject_string_bytes"] = append(ds.Columns["record_subject_string_bytes"], subjectStringBytes(record.Subject))
+	return nil
 }
 
-func parseRFC3339Millis(s string) int64 {
+func parseRFC3339Millis(s string) (int64, error) {
 	if s == "" {
-		return 0
+		return 0, nil
 	}
 	t, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
-		return 0
+		return 0, err
 	}
-	return t.UnixMilli()
+	return t.UnixMilli(), nil
 }
 
 func subjectStringBytes(raw json.RawMessage) int64 {
-	if len(raw) == 0 || string(raw) == "null" {
+	if len(raw) == 0 || jsonRawNull(raw) {
 		return 0
 	}
 	var s string
@@ -238,6 +246,10 @@ func subjectStringBytes(raw json.RawMessage) int64 {
 		return int64(len(s))
 	}
 	return 0
+}
+
+func jsonRawNull(raw json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }
 
 func boolInt(v bool) int64 {

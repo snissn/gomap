@@ -362,13 +362,13 @@ This section was generated from the local JSONBench Bluesky data directory. The 
 
 ```sh
 go run ./experiments/colgranule/cmd/jsonbench_colgranule \
-  -data /Users/michaelseiler/data/bluesky \
+  -data $JSONBENCH_DATA \
   -limit 1000000 \
   -rows-per-granule 8192
 ```
 
 ```text
-jsonbench_colgranule data=/Users/michaelseiler/data/bluesky files=1 rows=1000000 columns=17 rows_per_granule=8192 load_duration=5.656413291s
+jsonbench_colgranule data=$JSONBENCH_DATA files=1 rows=1000000 columns=17 rows_per_granule=8192 load_duration=5.656413291s
 column=cid_bytes rows=1000000 min=0 max=59
 column=commit_collection_code rows=1000000 min=1 max=15
 column=commit_operation_code rows=1000000 min=1 max=4

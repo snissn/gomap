@@ -96,6 +96,14 @@ func DefaultJSONBenchConfigs() []Config {
 }
 
 func FormatColumnCodecSummary(s ColumnCodecSummary) string {
+	ratioValues := 0.0
+	if s.ValueBytes > 0 {
+		ratioValues = float64(s.StoredBytes) / float64(s.ValueBytes)
+	}
+	ratioEncoded := 0.0
+	if s.EncodedRawBytes > 0 {
+		ratioEncoded = float64(s.StoredBytes) / float64(s.EncodedRawBytes)
+	}
 	return fmt.Sprintf("%s\trows=%d\tgranules=%d\tencoding=%s\trequested=%s\tactual=%s\tvalue_bytes=%d\tencoded_raw_bytes=%d\tstored_bytes=%d\tratio_vs_values=%.6f\tratio_vs_encoded=%.6f\tencode=%s\tdecode=%s\trange_scan=%s\trange_matches=%d",
 		s.Column,
 		s.Rows,
@@ -106,8 +114,8 @@ func FormatColumnCodecSummary(s ColumnCodecSummary) string {
 		s.ValueBytes,
 		s.EncodedRawBytes,
 		s.StoredBytes,
-		float64(s.StoredBytes)/float64(s.ValueBytes),
-		float64(s.StoredBytes)/float64(s.EncodedRawBytes),
+		ratioValues,
+		ratioEncoded,
 		s.EncodeDuration,
 		s.DecodeDuration,
 		s.RangeScanDuration,

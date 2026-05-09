@@ -106,9 +106,9 @@ func main() {
 	limit := flag.Int("limit", 1_000_000, "maximum rows to load; <=0 means all rows")
 	rowsPerGranule := flag.Int("rows-per-granule", colgranule.DefaultRowsPerGranule, "rows per encoded granule")
 	attempts := flag.Int("attempts", 5, "query timing attempts")
-	clickHouseLocalPath := flag.String("clickhouse-local", "/Users/michaelseiler/dev/snissn/JSONBench/clickhouse/local_results/fresh_1m_20260508_121356_clickhouse/result.json", "local ClickHouse JSONBench result")
+	clickHouseLocalPath := flag.String("clickhouse-local", "", "optional local ClickHouse JSONBench result")
 	remainingDBDir := flag.String("remaining-db-dir", "artifacts/colgranule_remaining_treedb", "temporary TreeDB directory prefix for remaining payload measurement")
-	measureRemaining := flag.Bool("measure-remaining-treedb", true, "load original JSON minus time_us into JSON, BSON, and Template-v1 TreeDB collections, compact them, and include disk usage")
+	measureRemaining := flag.Bool("measure-remaining-treedb", true, "load remaining JSON shapes into JSON, BSON, and Template-v1 TreeDB collections, compact them, and include disk usage")
 	outJSON := flag.String("out-json", "experiments/colgranule/JSONBENCH_COMPARISON_RAW.json", "raw JSON output")
 	outMarkdown := flag.String("out-md", "experiments/colgranule/JSONBENCH_COMPARISON_REPORT.md", "Markdown report output")
 	flag.Parse()
@@ -173,6 +173,9 @@ func main() {
 }
 
 func readClickHouseResult(path string) clickHouseResult {
+	if path == "" {
+		return clickHouseResult{System: "not provided"}
+	}
 	data, err := os.ReadFile(path)
 	must(err)
 	var result clickHouseResult
@@ -502,7 +505,7 @@ func valueLogFileIDs(dbDir string) ([]uint32, error) {
 		if err != nil {
 			continue
 		}
-		if lane >= 254 {
+		if lane == 255 {
 			continue
 		}
 		segmentID := uint32(lane)<<23 | uint32(seq)
@@ -515,9 +518,6 @@ func valueLogFileIDs(dbDir string) ([]uint32, error) {
 func insertRemainingDocuments(files []string, rows int, col *collections.Collection, format collections.DocumentFormat, shape remainingShape, out *remainingTreeDBResult) error {
 	const batchSize = 16_000
 	batchLimit := batchSize
-	if format == collections.DocumentFormatTemplateV1 {
-		batchLimit = rows
-	}
 	var ids [][]byte
 	var docs [][]byte
 	var templateEncoder collections.TemplateV1Encoder
@@ -677,7 +677,7 @@ func scanJSONBenchFile(path string, fn func(raw []byte) error) error {
 		reader = gz
 	}
 	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024*1024)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
 	for scanner.Scan() {
 		raw := bytes.TrimSpace(scanner.Bytes())
 		if len(raw) == 0 {
@@ -806,7 +806,7 @@ func writeMarkdown(path string, raw comparisonRaw) {
 	}
 	if raw.RemainingTreeDBTpl.Enabled {
 		fmt.Fprintf(&b, "Template-v1 remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; Template-v1 payload bytes before TreeDB storage `%d`.\n\n", raw.RemainingTreeDBTpl.BeforeCompactBytes, raw.RemainingTreeDBTpl.BeforeCompactFiles, raw.RemainingTreeDBTpl.AfterCompactBytes, raw.RemainingTreeDBTpl.AfterCompactFiles, raw.RemainingTreeDBTpl.CompactionDuration, raw.RemainingTreeDBTpl.RewriteDuration, raw.RemainingTreeDBTpl.RewriteRecordsCopied, raw.RemainingTreeDBTpl.RewriteValueBytes, raw.RemainingTreeDBTpl.RewriteSourceBytes, raw.RemainingTreeDBTpl.RawDocumentBytes)
-		fmt.Fprintf(&b, "Template-v1 is loaded as one large insert batch in this experiment so template records and compact stored documents are learned together. The rewritten record count includes template-root records as well as primary documents.\n\n")
+		fmt.Fprintf(&b, "Template-v1 reuses one encoder across bounded insert batches, so template records and compact stored documents are learned across the whole measurement without retaining every row in memory. The rewritten record count includes template-root records as well as primary documents.\n\n")
 	}
 	if raw.ConservativeBSON.Enabled {
 		fmt.Fprintf(&b, "Conservative BSON remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; BSON payload bytes before TreeDB storage `%d`.\n\n", raw.ConservativeBSON.BeforeCompactBytes, raw.ConservativeBSON.BeforeCompactFiles, raw.ConservativeBSON.AfterCompactBytes, raw.ConservativeBSON.AfterCompactFiles, raw.ConservativeBSON.CompactionDuration, raw.ConservativeBSON.RewriteDuration, raw.ConservativeBSON.RewriteRecordsCopied, raw.ConservativeBSON.RewriteValueBytes, raw.ConservativeBSON.RewriteSourceBytes, raw.ConservativeBSON.RawDocumentBytes)
@@ -845,6 +845,10 @@ func inputBytes(files []string) int64 {
 func bestColumns(summaries []colgranule.ColumnCodecSummary) []bestColumnStorage {
 	byColumn := make(map[string]bestColumnStorage)
 	for _, s := range summaries {
+		ratioVsValues := 0.0
+		if s.ValueBytes > 0 {
+			ratioVsValues = float64(s.StoredBytes) / float64(s.ValueBytes)
+		}
 		cur, ok := byColumn[s.Column]
 		if !ok || s.StoredBytes < cur.StoredBytes {
 			byColumn[s.Column] = bestColumnStorage{
@@ -853,7 +857,7 @@ func bestColumns(summaries []colgranule.ColumnCodecSummary) []bestColumnStorage 
 				RequestedCompression: s.RequestedCompression,
 				StoredBytes:          s.StoredBytes,
 				ValueBytes:           s.ValueBytes,
-				RatioVsValues:        float64(s.StoredBytes) / float64(s.ValueBytes),
+				RatioVsValues:        ratioVsValues,
 				ActualCompressionMix: s.ActualCompressionMix,
 			}
 		}
