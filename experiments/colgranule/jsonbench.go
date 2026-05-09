@@ -16,9 +16,10 @@ const DefaultJSONBenchPath = "/Users/michaelseiler/data/bluesky/file_0001.json.g
 const DefaultJSONBenchDir = "/Users/michaelseiler/data/bluesky"
 
 type JSONBenchDataset struct {
-	Rows    int
-	Files   []string
-	Columns map[string][]int64
+	Rows         int
+	Files        []string
+	Columns      map[string][]int64
+	Dictionaries map[string]map[string]int64
 }
 
 func LoadJSONBenchColumns(path string, limit int) (JSONBenchDataset, error) {
@@ -33,6 +34,7 @@ func LoadJSONBenchColumns(path string, limit int) (JSONBenchDataset, error) {
 		"row_index":                   nil,
 		"time_us":                     nil,
 		"line_bytes":                  nil,
+		"did_code":                    nil,
 		"did_bytes":                   nil,
 		"kind_code":                   nil,
 		"commit_operation_code":       nil,
@@ -49,6 +51,7 @@ func LoadJSONBenchColumns(path string, limit int) (JSONBenchDataset, error) {
 		"record_subject_string_bytes": nil,
 	}}
 	dicts := map[string]*stringDictionary{
+		"did_code":               {},
 		"kind_code":              {},
 		"commit_operation_code":  {},
 		"commit_collection_code": {},
@@ -64,6 +67,7 @@ func LoadJSONBenchColumns(path string, limit int) (JSONBenchDataset, error) {
 		}
 		ds.Files = append(ds.Files, file)
 	}
+	ds.Dictionaries = freezeStringDictionaries(dicts)
 	return ds, nil
 }
 
@@ -178,6 +182,18 @@ func (d *stringDictionary) code(s string) int64 {
 	return code
 }
 
+func freezeStringDictionaries(dicts map[string]*stringDictionary) map[string]map[string]int64 {
+	out := make(map[string]map[string]int64, len(dicts))
+	for name, dict := range dicts {
+		values := make(map[string]int64, len(dict.values))
+		for value, code := range dict.values {
+			values[value] = code
+		}
+		out[name] = values
+	}
+	return out
+}
+
 func appendJSONBenchRow(ds *JSONBenchDataset, dicts map[string]*stringDictionary, line []byte, ev *jsonBenchEvent) {
 	row := int64(ds.Rows)
 	commit := ev.Commit
@@ -185,6 +201,7 @@ func appendJSONBenchRow(ds *JSONBenchDataset, dicts map[string]*stringDictionary
 	ds.Columns["row_index"] = append(ds.Columns["row_index"], row)
 	ds.Columns["time_us"] = append(ds.Columns["time_us"], ev.TimeUS)
 	ds.Columns["line_bytes"] = append(ds.Columns["line_bytes"], int64(len(line)))
+	ds.Columns["did_code"] = append(ds.Columns["did_code"], dicts["did_code"].code(ev.Did))
 	ds.Columns["did_bytes"] = append(ds.Columns["did_bytes"], int64(len(ev.Did)))
 	ds.Columns["kind_code"] = append(ds.Columns["kind_code"], dicts["kind_code"].code(ev.Kind))
 	ds.Columns["commit_operation_code"] = append(ds.Columns["commit_operation_code"], dicts["commit_operation_code"].code(commit.Operation))

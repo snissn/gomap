@@ -46,3 +46,19 @@ presence flags, `createdAt` milliseconds, and language counts.
 The query-oriented derived columns include the JSONBench paths used by the
 ClickHouse setup and queries: `kind`, `commit.operation`, `commit.collection`,
 `did`, and `time_us`.
+
+Build the raw ClickHouse comparison data and Markdown summary:
+
+```sh
+go run ./experiments/colgranule/cmd/jsonbench_compare \
+  -data /Users/michaelseiler/data/bluesky \
+  -limit 1000000 \
+  -rows-per-granule 8192 \
+  -attempts 5
+```
+
+This writes:
+
+- `JSONBENCH_COMPARISON_RAW.json`: raw ClickHouse result imports, column codec
+  summaries, and query-kernel timing attempts;
+- `JSONBENCH_COMPARISON_REPORT.md`: human-readable timing and storage summary.

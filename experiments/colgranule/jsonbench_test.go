@@ -13,7 +13,7 @@ func TestLoadJSONBenchColumnsSample(t *testing.T) {
 	if ds.Rows != 5 {
 		t.Fatalf("rows=%d want 5", ds.Rows)
 	}
-	for _, name := range []string{"time_us", "line_bytes", "commit_collection_code", "record_created_at_unix_ms", "record_text_bytes"} {
+	for _, name := range []string{"time_us", "line_bytes", "did_code", "commit_collection_code", "record_created_at_unix_ms", "record_text_bytes"} {
 		if got := len(ds.Columns[name]); got != ds.Rows {
 			t.Fatalf("column %s len=%d want %d", name, got, ds.Rows)
 		}
@@ -26,6 +26,9 @@ func TestLoadJSONBenchColumnsSample(t *testing.T) {
 	}
 	if got := ds.Columns["record_subject_string_bytes"][2]; got == 0 {
 		t.Fatalf("record_subject_string_bytes[2]=0 want nonzero")
+	}
+	if got := ds.Dictionaries["kind_code"]["commit"]; got == 0 {
+		t.Fatalf("missing kind_code dictionary entry for commit")
 	}
 }
 
@@ -44,6 +47,25 @@ func TestSummarizeJSONBenchDatasetSample(t *testing.T) {
 	}
 	if summaries[0].Rows != ds.Rows {
 		t.Fatalf("summary rows=%d want %d", summaries[0].Rows, ds.Rows)
+	}
+}
+
+func TestRunJSONBenchQueriesSample(t *testing.T) {
+	ds, err := LoadJSONBenchColumns("testdata/jsonbench_sample.jsonl", 0)
+	if err != nil {
+		t.Fatalf("LoadJSONBenchColumns(sample): %v", err)
+	}
+	timings, err := RunJSONBenchQueries(ds, 1)
+	if err != nil {
+		t.Fatalf("RunJSONBenchQueries: %v", err)
+	}
+	if len(timings) != 5 {
+		t.Fatalf("timings=%d want 5", len(timings))
+	}
+	for _, timing := range timings {
+		if timing.Best <= 0 {
+			t.Fatalf("%s best=%s want positive", timing.Query, timing.Best)
+		}
 	}
 }
 
