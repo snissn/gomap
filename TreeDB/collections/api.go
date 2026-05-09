@@ -3621,8 +3621,9 @@ func freezeIndexedRunTables(tables []memtable.Table) {
 	}
 }
 
-// freezeIndexedRunTablesOutsideLock releases domain.mu for expensive table-local
-// sort/coalesce work, then reacquires domain.mu before returning.
+// freezeIndexedRunTablesOutsideLock requires domain.mu to be held by the caller.
+// It releases domain.mu for expensive table-local sort/coalesce work, then
+// reacquires domain.mu before returning.
 func freezeIndexedRunTablesOutsideLock(domain *collectionWriteDomain, tables []memtable.Table) (freezeDuration, lockReleased, relockWait time.Duration) {
 	if len(tables) == 0 {
 		return 0, 0, 0
@@ -10122,7 +10123,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		freezeDuration, lockReleased, relockWait := freezeIndexedRunTablesOutsideLock(domain, preAppendFreezeTables)
 		if lockReleased > 0 {
 			lockReleasedDuringHold += lockReleased
-			if domain.writeGeneration != checkpoint.writeGeneration+1 {
+			if domain.writeGeneration != checkpoint.writeGeneration {
 				rollbackOnError = false
 			}
 		}

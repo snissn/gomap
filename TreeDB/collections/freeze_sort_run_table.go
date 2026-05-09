@@ -101,7 +101,7 @@ func (t *freezeSortRunTable) SetEntrySteal(key, value []byte, ptr page.ValuePtr,
 		ptr = page.ValuePtr{}
 	}
 	t.mu.Lock()
-	t.mustMutableLocked()
+	t.mustNotReleasedLocked()
 	idx := len(t.entries)
 	t.entries = append(t.entries, freezeSortRunEntry{
 		key:   key,
@@ -130,7 +130,7 @@ func (t *freezeSortRunTable) ApplyStealEntryFunc(count int, emit func(i int) (ke
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.mustMutableLocked()
+	t.mustNotReleasedLocked()
 	t.entries = slices.Grow(t.entries, count)
 	for i := 0; i < count; i++ {
 		key, value, ptr, flags, err := emit(i)
@@ -272,7 +272,7 @@ func (t *freezeSortRunTable) Freeze() {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.mustMutableLocked()
+	t.mustNotReleasedLocked()
 	if t.frozen {
 		return
 	}
@@ -287,7 +287,7 @@ func (t *freezeSortRunTable) Reset() {
 		return
 	}
 	t.mu.Lock()
-	t.mustMutableLocked()
+	t.mustNotReleasedLocked()
 	t.resetLocked(false)
 	t.mu.Unlock()
 }
@@ -337,7 +337,7 @@ func (t *freezeSortRunTable) resetLocked(dropOversizedEntries bool) {
 	t.nextSeq = 0
 }
 
-func (t *freezeSortRunTable) mustMutableLocked() {
+func (t *freezeSortRunTable) mustNotReleasedLocked() {
 	if t.released {
 		panic("collections: freeze-sort run table used after Release")
 	}
