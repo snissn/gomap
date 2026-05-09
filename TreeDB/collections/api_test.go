@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"sort"
@@ -1022,12 +1023,16 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 	if stats.SecondaryKeyBytes == 0 {
 		t.Fatal("stats secondary key bytes=0 want positive")
 	}
-	if stats.CurrentRead != 0 || stats.Callback != 0 || stats.BufferStage != 0 ||
+	if stats.CurrentRead != 0 || stats.Callback != 0 || stats.StructuredUpdateApply != 0 ||
+		stats.OldIndexStateExtract != 0 || stats.NewIndexStateExtract != 0 ||
+		stats.BufferStage != 0 ||
 		stats.BufferStagePrecheck != 0 ||
 		stats.BufferStageLockWait != 0 || stats.BufferStageLockHold != 0 ||
 		stats.BufferStageValidation != 0 || stats.BufferStageRootScan != 0 ||
-		stats.BufferStageDomainPrepare != 0 ||
+		stats.BufferStageDomainPrepare != 0 || stats.BufferStageFreeze != 0 ||
+		stats.BufferStageRootTable != 0 ||
 		stats.BufferStagePrimaryIdx != 0 || stats.BufferStageUniqueIdx != 0 ||
+		stats.BufferStagePrimaryAppend != 0 || stats.BufferStageSecondaryAppend != 0 ||
 		stats.BufferStageRootAppend != 0 || stats.BufferStageFlush != 0 {
 		t.Fatalf("default update timings=%+v want zero unless detailed stats enabled", stats)
 	}
@@ -1090,14 +1095,20 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 		}
 	}
 	for _, key := range []string{
+		"treedb.collections.write_domain.update_batch.old_index_state_extract_ns_total",
+		"treedb.collections.write_domain.update_batch.new_index_state_extract_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_precheck_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_lock_wait_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_lock_hold_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_validation_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_root_scan_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_domain_prepare_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_freeze_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_root_table_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_primary_index_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_unique_index_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_primary_append_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_secondary_append_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_root_append_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_flush_ns_total",
 	} {
@@ -1261,8 +1272,12 @@ func TestCollectionUpdateBufferBreakdownStatsSnapshotAndAdd(t *testing.T) {
 		{"validation", "treedb.collections.write_domain.update_batch.buffer_stage_validation_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageValidation = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferValidation }},
 		{"root_scan", "treedb.collections.write_domain.update_batch.buffer_stage_root_scan_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageRootScan = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferRootScan }},
 		{"domain_prepare", "treedb.collections.write_domain.update_batch.buffer_stage_domain_prepare_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageDomainPrepare = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferDomainPrepare }},
+		{"freeze", "treedb.collections.write_domain.update_batch.buffer_stage_freeze_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageFreeze = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferFreeze }},
+		{"root_table", "treedb.collections.write_domain.update_batch.buffer_stage_root_table_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageRootTable = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferRootTable }},
 		{"primary_index", "treedb.collections.write_domain.update_batch.buffer_stage_primary_index_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStagePrimaryIdx = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferPrimaryIdx }},
 		{"unique_index", "treedb.collections.write_domain.update_batch.buffer_stage_unique_index_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageUniqueIdx = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferUniqueIdx }},
+		{"primary_append", "treedb.collections.write_domain.update_batch.buffer_stage_primary_append_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStagePrimaryAppend = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferPrimaryAppend }},
+		{"secondary_append", "treedb.collections.write_domain.update_batch.buffer_stage_secondary_append_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageSecondaryAppend = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferSecondaryAppend }},
 		{"root_append", "treedb.collections.write_domain.update_batch.buffer_stage_root_append_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageRootAppend = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferRootAppend }},
 		{"flush", "treedb.collections.write_domain.update_batch.buffer_stage_flush_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageFlush = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferFlush }},
 	}
@@ -1286,6 +1301,125 @@ func TestCollectionUpdateBufferBreakdownStatsSnapshotAndAdd(t *testing.T) {
 			t.Fatalf("merged %s=%s want %s", tc.name, got, want)
 		}
 		if got, want := exported[tc.key], fmt.Sprintf("%d", want.Nanoseconds()); got != want {
+			t.Fatalf("exported %s=%q want %q", tc.key, got, want)
+		}
+	}
+}
+
+func TestCollectionUpdateIndexStateBreakdownStatsSnapshotAndAdd(t *testing.T) {
+	updateStats := CollectionUpdateStats{
+		IndexStateExtraction: 11 * time.Nanosecond,
+		OldIndexStateExtract: 5 * time.Nanosecond,
+		NewIndexStateExtract: 6 * time.Nanosecond,
+	}
+	domain := &collectionWriteDomain{}
+	domain.observeUpdateBatchStats(updateStats)
+	snapshot := domain.statsSnapshot()
+	var merged CollectionManagerStats
+	merged.add(snapshot)
+	exported := (&CollectionManager{domains: map[string]*collectionWriteDomain{"test": domain}}).Stats()
+	cases := []struct {
+		name string
+		key  string
+		want time.Duration
+		get  func(CollectionManagerStats) time.Duration
+	}{
+		{"total", "treedb.collections.write_domain.update_batch.index_state_extract_ns_total", 11 * time.Nanosecond, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchIndexStateExtract }},
+		{"old", "treedb.collections.write_domain.update_batch.old_index_state_extract_ns_total", 5 * time.Nanosecond, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchOldIndexStateExtract }},
+		{"new", "treedb.collections.write_domain.update_batch.new_index_state_extract_ns_total", 6 * time.Nanosecond, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchNewIndexStateExtract }},
+	}
+	for _, tc := range cases {
+		if got := tc.get(snapshot); got != tc.want {
+			t.Fatalf("snapshot %s=%s want %s", tc.name, got, tc.want)
+		}
+		if got := tc.get(merged); got != tc.want {
+			t.Fatalf("merged %s=%s want %s", tc.name, got, tc.want)
+		}
+		if got, want := exported[tc.key], fmt.Sprintf("%d", tc.want.Nanoseconds()); got != want {
+			t.Fatalf("exported %s=%q want %q", tc.key, got, want)
+		}
+	}
+}
+
+func TestCollectionUpdateStructuredApplyStatsSnapshotAndAdd(t *testing.T) {
+	updateStats := CollectionUpdateStats{
+		Callback:              3 * time.Nanosecond,
+		StructuredUpdateApply: 5 * time.Nanosecond,
+	}
+	domain := &collectionWriteDomain{}
+	domain.observeUpdateBatchStats(updateStats)
+	snapshot := domain.statsSnapshot()
+	var merged CollectionManagerStats
+	merged.add(snapshot)
+	exported := (&CollectionManager{domains: map[string]*collectionWriteDomain{"test": domain}}).Stats()
+	if got := snapshot.UpdateBatchCallback; got != updateStats.Callback {
+		t.Fatalf("snapshot callback=%s want %s", got, updateStats.Callback)
+	}
+	if got := snapshot.UpdateBatchStructuredApply; got != updateStats.StructuredUpdateApply {
+		t.Fatalf("snapshot structured apply=%s want %s", got, updateStats.StructuredUpdateApply)
+	}
+	if got := merged.UpdateBatchCallback; got != updateStats.Callback {
+		t.Fatalf("merged callback=%s want %s", got, updateStats.Callback)
+	}
+	if got := merged.UpdateBatchStructuredApply; got != updateStats.StructuredUpdateApply {
+		t.Fatalf("merged structured apply=%s want %s", got, updateStats.StructuredUpdateApply)
+	}
+	if got, want := exported["treedb.collections.write_domain.update_batch.callback_ns_total"], fmt.Sprintf("%d", updateStats.Callback.Nanoseconds()); got != want {
+		t.Fatalf("exported callback=%q want %q", got, want)
+	}
+	if got, want := exported["treedb.collections.write_domain.update_batch.structured_apply_ns_total"], fmt.Sprintf("%d", updateStats.StructuredUpdateApply.Nanoseconds()); got != want {
+		t.Fatalf("exported structured apply=%q want %q", got, want)
+	}
+}
+
+func TestUpdateBatchStatsSinceClampsSubResolutionDurations(t *testing.T) {
+	if got := updateBatchStatsSince(false, time.Now().Add(time.Second)); got != 0 {
+		t.Fatalf("disabled stats duration=%s want 0", got)
+	}
+	if got := updateBatchStatsSince(true, time.Now().Add(time.Second)); got != time.Nanosecond {
+		t.Fatalf("sub-resolution stats duration=%s want 1ns", got)
+	}
+}
+
+func TestCollectionUpdateCombineTimingStatsSnapshotAndAdd(t *testing.T) {
+	domain := &collectionWriteDomain{}
+	domain.observeUpdateCombineInline()
+	domain.observeUpdateCombineEnqueue(3 * time.Nanosecond)
+	domain.observeUpdateCombineWait(5 * time.Nanosecond)
+	domain.observeUpdateCombineDrain(7 * time.Nanosecond)
+	domain.observeUpdateCombineRun(11 * time.Nanosecond)
+	snapshot := domain.statsSnapshot()
+	var merged CollectionManagerStats
+	merged.add(snapshot)
+	exported := (&CollectionManager{domains: map[string]*collectionWriteDomain{"test": domain}}).Stats()
+	if snapshot.UpdateCombineInlineRequests != 1 {
+		t.Fatalf("snapshot inline requests=%d want 1", snapshot.UpdateCombineInlineRequests)
+	}
+	if merged.UpdateCombineInlineRequests != 1 {
+		t.Fatalf("merged inline requests=%d want 1", merged.UpdateCombineInlineRequests)
+	}
+	if got, want := exported["treedb.collections.write_domain.update_combine.inline_requests_total"], "1"; got != want {
+		t.Fatalf("exported inline requests=%q want %q", got, want)
+	}
+	cases := []struct {
+		name string
+		key  string
+		want time.Duration
+		get  func(CollectionManagerStats) time.Duration
+	}{
+		{"enqueue", "treedb.collections.write_domain.update_combine.enqueue_ns_total", 3 * time.Nanosecond, func(s CollectionManagerStats) time.Duration { return s.UpdateCombineEnqueue }},
+		{"wait", "treedb.collections.write_domain.update_combine.wait_ns_total", 5 * time.Nanosecond, func(s CollectionManagerStats) time.Duration { return s.UpdateCombineWait }},
+		{"drain", "treedb.collections.write_domain.update_combine.drain_ns_total", 7 * time.Nanosecond, func(s CollectionManagerStats) time.Duration { return s.UpdateCombineDrain }},
+		{"run", "treedb.collections.write_domain.update_combine.run_ns_total", 11 * time.Nanosecond, func(s CollectionManagerStats) time.Duration { return s.UpdateCombineRun }},
+	}
+	for _, tc := range cases {
+		if got := tc.get(snapshot); got != tc.want {
+			t.Fatalf("snapshot %s=%s want %s", tc.name, got, tc.want)
+		}
+		if got := tc.get(merged); got != tc.want {
+			t.Fatalf("merged %s=%s want %s", tc.name, got, tc.want)
+		}
+		if got, want := exported[tc.key], fmt.Sprintf("%d", tc.want.Nanoseconds()); got != want {
 			t.Fatalf("exported %s=%q want %q", tc.key, got, want)
 		}
 	}
@@ -1829,6 +1963,57 @@ func TestCollectionManagerResetUpdateCombineQueueDepthMax(t *testing.T) {
 	domain.observeUpdateCombineRequest(5)
 	if got := mgr.StatsSnapshot().UpdateCombineQueueDepthMax; got != 5 {
 		t.Fatalf("queue depth max after new observation=%d want 5", got)
+	}
+}
+
+func TestCollectionManagerResetUpdateCombinersForProfiling(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"ada"}`)}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	domain := col.writeDomain
+	if domain == nil {
+		t.Fatal("collection write domain is nil")
+	}
+	first := col.updateCombiner()
+	if first == nil {
+		t.Fatal("first update combiner is nil")
+	}
+	domain.updateCombineMu.Lock()
+	draining := domain.updateDraining
+	domain.updateCombineMu.Unlock()
+	if draining != nil {
+		t.Fatal("unexpected draining combiner before reset")
+	}
+
+	mgr.ResetUpdateCombinersForProfiling()
+	domain.updateCombineMu.Lock()
+	afterReset := domain.updateCombiner
+	afterResetDraining := domain.updateDraining
+	domain.updateCombineMu.Unlock()
+	if afterReset != nil || afterResetDraining != nil {
+		t.Fatalf("combiner after reset=%p draining=%p want nil/nil", afterReset, afterResetDraining)
+	}
+
+	second := col.updateCombiner()
+	if second == nil {
+		t.Fatal("second update combiner is nil")
+	}
+	if second == first {
+		t.Fatal("second update reused stopped combiner after profiling reset")
 	}
 }
 
@@ -3032,6 +3217,7 @@ func TestCollectionIndexedOverlayRootFlushSupportsReadsUpdatesAndUniqueChecks(t 
 			BufferedIndexedOverlayRoots:      true,
 			BufferedIndexedWriteMaxDocuments: 1,
 			BufferedIndexedWriteMaxRootRuns:  1,
+			DisableBufferedIndexedAsyncFlush: true,
 		},
 		Indexes: []IndexDefinition{
 			{Name: "city", Field: "city", ValueType: IndexValueString},
@@ -3305,6 +3491,7 @@ func TestCollectionIndexedOverlayRootFilterUnionsDeltaBase(t *testing.T) {
 			BufferedIndexedOverlayRoots:      true,
 			BufferedIndexedWriteMaxDocuments: 1,
 			BufferedIndexedWriteMaxRootRuns:  1,
+			DisableBufferedIndexedAsyncFlush: true,
 		},
 		Indexes: []IndexDefinition{
 			{Name: "city", Field: "city", ValueType: IndexValueString},
@@ -3666,6 +3853,112 @@ func TestCollectionCompactRootOverlaysFoldsIntoBaseRoots(t *testing.T) {
 	}
 }
 
+func TestCollectionCompactStorageFoldsRootsAndCleansStorage(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
+	opts.DisableSideStores = true
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.MaxWALBytes = -1
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+
+	db, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = cleanup() }()
+
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedOverlayRoots:      true,
+			BufferedIndexedWriteMaxDocuments: 1,
+			BufferedIndexedWriteMaxRootRuns:  1,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	doc := []byte(`{"city":"hnl","payload":"` + strings.Repeat("x", 512) + `"}`)
+	if _, err := col.Insert([]byte("u1"), doc); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if _, _, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			return []byte(`{"city":"sea","payload":"` + strings.Repeat("y", 512) + `"}`), true, nil
+		},
+	}}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush overlays: %v", err)
+	}
+
+	valueLogDir := backenddb.ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	emptyPath := filepath.Join(valueLogDir, "value-l42-000001.log")
+	if err := os.WriteFile(emptyPath, nil, 0o644); err != nil {
+		t.Fatalf("write empty value-log file: %v", err)
+	}
+
+	stats, err := col.CompactStorage(context.Background(), CompactStorageOptions{
+		LeafPackMinExpectedReclaimBytes: 1,
+		LeafPackMinReclaimPerCopyPPM:    1,
+	})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if rootStats, ok := stats.RootOverlays["users"]; !ok || rootStats.OverlayRoots == 0 {
+		t.Fatalf("root overlay compaction stats=%+v", stats.RootOverlays)
+	}
+	if !stats.Storage.FullyCompacted {
+		t.Fatalf("storage FullyCompacted=false debt=%+v", stats.Storage.RemainingDebt)
+	}
+	if _, err := os.Stat(emptyPath); !os.IsNotExist(err) {
+		t.Fatalf("empty value-log file remains or stat failed: %v", err)
+	}
+
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get after compact storage: %v", err)
+	}
+	want := []byte(`{"city":"sea","payload":"` + strings.Repeat("y", 512) + `"}`)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("doc after compact storage=%q want %q", got, want)
+	}
+	ids, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find by index after compact storage: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("ids after compact storage=%q want [u1]", ids)
+	}
+
+	again, err := col.CompactStoragePlan(context.Background(), CompactStorageOptions{
+		LeafPackMinExpectedReclaimBytes: 1,
+		LeafPackMinReclaimPerCopyPPM:    1,
+	})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan after: %v", err)
+	}
+	if !again.Storage.FullyCompacted {
+		t.Fatalf("post-compact plan FullyCompacted=false debt=%+v", again.Storage.RemainingDebt)
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesReadFlushedDocumentWithBufferedRuns(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -3734,14 +4027,20 @@ func TestCollectionIndexedWriteMemtablesDefaultForIndexedSchemas(t *testing.T) {
 	if !meta.Options.BufferedIndexedWrites {
 		t.Fatal("indexed collection did not enable native write memtables by default")
 	}
-	if got := meta.Options.BufferedIndexedWriteMaxDocuments; got != DefaultIndexedWriteMemtableMaxDocuments {
-		t.Fatalf("default max docs=%d want %d", got, DefaultIndexedWriteMemtableMaxDocuments)
+	if !meta.Options.BufferedIndexedAsyncFlush {
+		t.Fatal("indexed collection did not enable async threshold publish by default")
+	}
+	if got := meta.Options.BufferedIndexedWriteMaxDocuments; got != DefaultIndexedWriteMemtableAsyncFlushMaxDocuments {
+		t.Fatalf("default max docs=%d want %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxDocuments)
 	}
 	if got := meta.Options.BufferedIndexedWriteMaxBytes; got != 0 {
 		t.Fatalf("default max bytes=%d want 0", got)
 	}
-	if got := meta.Options.BufferedIndexedWriteMaxRootRuns; got != DefaultIndexedWriteMemtableMaxRootRuns {
-		t.Fatalf("default max root runs=%d want %d", got, DefaultIndexedWriteMemtableMaxRootRuns)
+	if got := meta.Options.BufferedIndexedWriteMaxRootRuns; got != DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns {
+		t.Fatalf("default max root runs=%d want %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns)
+	}
+	if got := meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits; got != DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits {
+		t.Fatalf("default async max queued units=%d want %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits)
 	}
 
 	col, err := mgr.OpenCollection("users")
@@ -3808,8 +4107,8 @@ func TestCollectionIndexedWriteMemtablesPreserveDocumentDefaultWithRootRunLimit(
 	if err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
-	if got := meta.Options.BufferedIndexedWriteMaxDocuments; got != DefaultIndexedWriteMemtableMaxDocuments {
-		t.Fatalf("max documents=%d want default %d", got, DefaultIndexedWriteMemtableMaxDocuments)
+	if got := meta.Options.BufferedIndexedWriteMaxDocuments; got != DefaultIndexedWriteMemtableAsyncFlushMaxDocuments {
+		t.Fatalf("max documents=%d want default %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxDocuments)
 	}
 	if got := meta.Options.BufferedIndexedWriteMaxRootRuns; got != 8 {
 		t.Fatalf("max root runs=%d want 8", got)
@@ -3844,6 +4143,60 @@ func TestCollectionIndexedWriteMemtablesAsyncFlushDefaultsQueueLimit(t *testing.
 	}
 	if got := meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits; got != DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits {
 		t.Fatalf("async max queued units=%d want %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesCanDisableDefaultAsyncFlush(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	meta, err := NewCollectionManager(d).CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if meta.Options.BufferedIndexedAsyncFlush {
+		t.Fatal("disabled async indexed flush was enabled")
+	}
+	if got := meta.Options.BufferedIndexedWriteMaxDocuments; got != DefaultIndexedWriteMemtableMaxDocuments {
+		t.Fatalf("foreground max documents=%d want %d", got, DefaultIndexedWriteMemtableMaxDocuments)
+	}
+	if got := meta.Options.BufferedIndexedWriteMaxRootRuns; got != DefaultIndexedWriteMemtableMaxRootRuns {
+		t.Fatalf("foreground max root runs=%d want %d", got, DefaultIndexedWriteMemtableMaxRootRuns)
+	}
+	if got := meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits; got != 0 {
+		t.Fatalf("disabled async max queued units=%d want 0", got)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesRejectConflictingAsyncFlushOptions(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	_, err = NewCollectionManager(d).CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedAsyncFlush:        true,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	})
+	if err == nil {
+		t.Fatal("create collection with conflicting async flush options succeeded")
+	}
+	if !strings.Contains(err.Error(), "both enabled and disabled") {
+		t.Fatalf("err=%q want conflicting async flush options", err)
 	}
 }
 
@@ -3889,6 +4242,67 @@ func TestCollectionIndexedWriteMemtablesDefaultSkipsNoIndexSchemas(t *testing.T)
 	if meta.Options.BufferedIndexedWriteMaxDocuments != 0 || meta.Options.BufferedIndexedWriteMaxBytes != 0 || meta.Options.BufferedIndexedWriteMaxRootRuns != 0 {
 		t.Fatalf("no-index buffered limits docs=%d bytes=%d rootRuns=%d want zero",
 			meta.Options.BufferedIndexedWriteMaxDocuments, meta.Options.BufferedIndexedWriteMaxBytes, meta.Options.BufferedIndexedWriteMaxRootRuns)
+	}
+	if meta.Options.DisableBufferedIndexedAsyncFlush || meta.Options.BufferedIndexedAsyncFlush || meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits != 0 {
+		t.Fatalf("no-index async flush fields disable=%v enabled=%v maxQueued=%d want false/false/0",
+			meta.Options.DisableBufferedIndexedAsyncFlush, meta.Options.BufferedIndexedAsyncFlush, meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesPreserveNoIndexAsyncFlushOptOutForFutureIndexes(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if meta.Options.BufferedIndexedWrites {
+		t.Fatal("no-index collection enabled indexed write memtables")
+	}
+	if !meta.Options.DisableBufferedIndexedAsyncFlush || meta.Options.BufferedIndexedAsyncFlush {
+		t.Fatalf("no-index async flags disable=%v enabled=%v want true/false",
+			meta.Options.DisableBufferedIndexedAsyncFlush, meta.Options.BufferedIndexedAsyncFlush)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	meta, err = col.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString})
+	if err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if !meta.Options.BufferedIndexedWrites {
+		t.Fatal("indexed collection did not enable indexed write memtables")
+	}
+	if !meta.Options.DisableBufferedIndexedAsyncFlush || meta.Options.BufferedIndexedAsyncFlush {
+		t.Fatalf("indexed async flags disable=%v enabled=%v want true/false",
+			meta.Options.DisableBufferedIndexedAsyncFlush, meta.Options.BufferedIndexedAsyncFlush)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesRejectDisabledAsyncFlushQueueLimit(t *testing.T) {
+	_, err := normalizeCollectionMeta(CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DisableBufferedIndexedAsyncFlush:        true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 2,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	})
+	if err == nil {
+		t.Fatal("normalize disabled async flush queue limit err=nil want error")
+	}
+	if !strings.Contains(err.Error(), "max queued units") {
+		t.Fatalf("err=%q want max queued units error", err)
 	}
 }
 
@@ -5082,6 +5496,7 @@ func TestCollectionIndexedWriteMemtablesAutoFlushMaxDocuments(t *testing.T) {
 		Options: CollectionOptions{
 			BufferedIndexedWrites:            true,
 			BufferedIndexedWriteMaxDocuments: 2,
+			DisableBufferedIndexedAsyncFlush: true,
 		},
 		Indexes: []IndexDefinition{
 			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
@@ -6134,8 +6549,9 @@ func TestCollectionIndexedWriteMemtablesAutoFlushMaxBytes(t *testing.T) {
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Options: CollectionOptions{
-			BufferedIndexedWrites:        true,
-			BufferedIndexedWriteMaxBytes: 1,
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxBytes:     1,
+			DisableBufferedIndexedAsyncFlush: true,
 		},
 		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
@@ -6200,6 +6616,7 @@ func TestCollectionIndexedWriteMemtablesCompactRootRunsBeforeDocumentFlush(t *te
 			BufferedIndexedWrites:            true,
 			BufferedIndexedWriteMaxDocuments: 5,
 			BufferedIndexedWriteMaxRootRuns:  6,
+			DisableBufferedIndexedAsyncFlush: true,
 		},
 		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
@@ -6285,8 +6702,9 @@ func TestCollectionIndexedWriteMemtablesAutoFlushMaxRootRuns(t *testing.T) {
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Options: CollectionOptions{
-			BufferedIndexedWrites:           true,
-			BufferedIndexedWriteMaxRootRuns: 2,
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxRootRuns:  2,
+			DisableBufferedIndexedAsyncFlush: true,
 		},
 		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
@@ -6508,6 +6926,130 @@ func TestShouldFlushBufferedIndexedWritesAfterAddingBoundaries(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDetachMutableIndexedRunTablesKeepsRunsVisible(t *testing.T) {
+	domain := &collectionWriteDomain{}
+	primaryName := collectionPrimaryRootName("users")
+	secondaryName := collectionSecondaryRootName("users", "city")
+
+	domain.mu.Lock()
+	primary, created := mutableRootRunLocked(domain, primaryName)
+	if !created || primary == nil {
+		domain.mu.Unlock()
+		t.Fatal("primary mutable root run was not created")
+	}
+	city, created := mutableRootRunLocked(domain, secondaryName)
+	if !created || city == nil {
+		domain.mu.Unlock()
+		t.Fatal("city mutable root run was not created")
+	}
+	domain.mu.Unlock()
+	if err := applyCollectionRunEntriesWithFlags(primary, 2, func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
+		if i == 0 {
+			return []byte("u2"), []byte("old-u2"), page.ValuePtr{}, node.FlagInline, nil
+		}
+		return []byte("u1"), []byte("value-u1"), page.ValuePtr{}, node.FlagInline, nil
+	}); err != nil {
+		t.Fatalf("append primary entries: %v", err)
+	}
+	if err := applyCollectionRunEntriesWithFlags(city, 1, func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
+		return []byte("city\x00u1"), nil, page.ValuePtr{}, node.FlagInline, nil
+	}); err != nil {
+		t.Fatalf("append city entries: %v", err)
+	}
+
+	domain.mu.Lock()
+	detached := detachMutableIndexedRunTablesLocked(domain)
+	if got := len(detached); got != 2 {
+		domain.mu.Unlock()
+		t.Fatalf("detached tables=%d want 2", got)
+	}
+	if domain.rootMutableRuns != nil {
+		domain.mu.Unlock()
+		t.Fatal("rootMutableRuns still has append targets after detach")
+	}
+	if got := pendingIndexedRootRunsLocked(domain, primaryName); len(got) != 1 || got[0] != primary {
+		domain.mu.Unlock()
+		t.Fatalf("pending primary runs=%v want original primary table", got)
+	}
+	if got := pendingIndexedRootRunsLocked(domain, secondaryName); len(got) != 1 || got[0] != city {
+		domain.mu.Unlock()
+		t.Fatalf("pending city runs=%v want original city table", got)
+	}
+	domain.mu.Unlock()
+
+	requireFreezeSortRunIterator(t, primary.NewIterator(nil, nil), []string{"u1", "u2"})
+	freezeIndexedRunTables(detached)
+	requireFreezeSortRunIterator(t, primary.NewIterator(nil, nil), []string{"u1", "u2"})
+
+	resetCollectionTables(detached)
+}
+
+func TestFreezeIndexedRunTablesOutsideLockAllowsNilDomain(t *testing.T) {
+	table := newFreezeSortRunTable()
+	if err := applyCollectionRunEntriesWithFlags(table, 2, func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
+		if i == 0 {
+			return []byte("b"), []byte("value-b"), page.ValuePtr{}, node.FlagInline, nil
+		}
+		return []byte("a"), []byte("value-a"), page.ValuePtr{}, node.FlagInline, nil
+	}); err != nil {
+		t.Fatalf("append entries: %v", err)
+	}
+	freezeDuration := freezeIndexedRunTablesObserved([]memtable.Table{table})
+	if freezeDuration <= 0 {
+		t.Fatalf("freeze duration=%s want positive", freezeDuration)
+	}
+	requireFreezeSortRunIterator(t, table.NewIterator(nil, nil), []string{"a", "b"})
+	resetCollectionRunTable(table)
+}
+
+func TestIndexedPrepareFreezeWaitsUntilFinished(t *testing.T) {
+	domain := &collectionWriteDomain{}
+	domain.mu.Lock()
+	domain.beginIndexedPrepareFreezeLocked()
+	domain.mu.Unlock()
+
+	done := make(chan time.Duration, 1)
+	waiterReady := make(chan struct{})
+	go func() {
+		domain.mu.Lock()
+		if domain.indexedPrepareFreezes <= 0 {
+			close(waiterReady)
+			domain.mu.Unlock()
+			done <- 0
+			return
+		}
+		close(waiterReady)
+		waited := domain.waitIndexedPrepareFreezeLocked()
+		domain.mu.Unlock()
+		done <- waited
+	}()
+
+	<-waiterReady
+	select {
+	case waited := <-done:
+		t.Fatalf("prepare freeze wait returned before finish: %s", waited)
+	default:
+	}
+
+	domain.mu.Lock()
+	domain.finishIndexedPrepareFreezeLocked()
+	domain.mu.Unlock()
+
+	<-done
+}
+
+func TestIndexedPrepareFreezeFinishRequiresBegin(t *testing.T) {
+	domain := &collectionWriteDomain{}
+	domain.mu.Lock()
+	defer domain.mu.Unlock()
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("finish without begin did not panic")
+		}
+	}()
+	domain.finishIndexedPrepareFreezeLocked()
 }
 
 func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
@@ -8076,7 +8618,7 @@ func TestCollectionUpdateCombinerMaxBatchOneRecoversCallbackPanic(t *testing.T) 
 	combiner := &collectionUpdateCombiner{maxBatch: 1}
 	matched, modified, err := combiner.update(col, []byte("u1"), func([]byte) ([]byte, bool, error) {
 		panic("bad callback")
-	})
+	}, bsonSetUpdate{}, false)
 	if err == nil || !strings.Contains(err.Error(), "bad callback") {
 		t.Fatalf("Update err=%v want recovered panic", err)
 	}
@@ -8130,7 +8672,7 @@ func TestCollectionUpdateCombinerUpdateReturnsWhenWorkerExits(t *testing.T) {
 	matched, modified, err := combiner.update(col, []byte("u1"), func([]byte) ([]byte, bool, error) {
 		runtime.Goexit()
 		return nil, false, nil
-	})
+	}, bsonSetUpdate{}, false)
 	if !errors.Is(err, errUpdateCombinerStopped) {
 		t.Fatalf("update err=%v want errUpdateCombinerStopped", err)
 	}
@@ -8170,7 +8712,7 @@ func TestCollectionUpdateCombinerDocumentIDInlineStorageDoesNotAllocate(t *testi
 	id := []byte("user-123")
 	req := newCollectionUpdateCombineRequest(&Collection{db: &backenddb.DB{}}, id, func([]byte) ([]byte, bool, error) {
 		return nil, false, nil
-	}, make(chan collectionUpdateCombineResult, 1))
+	}, bsonSetUpdate{}, false, make(chan collectionUpdateCombineResult, 1))
 	if got := req.documentIDBytes(); !bytes.Equal(got, id) {
 		t.Fatalf("inline document id=%q want %q", got, id)
 	}
@@ -8181,7 +8723,7 @@ func TestCollectionUpdateCombinerDocumentIDInlineStorageDoesNotAllocate(t *testi
 
 	allocID := []byte("user-123")
 	if allocs := testing.AllocsPerRun(1000, func() {
-		req := newCollectionUpdateCombineRequest(nil, allocID, nil, nil)
+		req := newCollectionUpdateCombineRequest(nil, allocID, nil, bsonSetUpdate{}, false, nil)
 		if !bytes.Equal((&req).documentIDBytes(), allocID) {
 			t.Fatal("inline document id mismatch")
 		}
@@ -8194,7 +8736,7 @@ func TestCollectionUpdateCombinerDocumentIDLongStorageClonesCallerBytes(t *testi
 	id := bytes.Repeat([]byte("x"), collectionUpdateCombineInlineDocumentIDMax+1)
 	req := newCollectionUpdateCombineRequest(&Collection{db: &backenddb.DB{}}, id, func([]byte) ([]byte, bool, error) {
 		return nil, false, nil
-	}, make(chan collectionUpdateCombineResult, 1))
+	}, bsonSetUpdate{}, false, make(chan collectionUpdateCombineResult, 1))
 	if req.documentIDInlineLen != 0 {
 		t.Fatalf("long document id inline len=%d want 0", req.documentIDInlineLen)
 	}
@@ -8207,6 +8749,317 @@ func TestCollectionUpdateCombinerDocumentIDLongStorageClonesCallerBytes(t *testi
 	id[0] = 'y'
 	if got := req.documentIDBytes(); got[0] != 'x' {
 		t.Fatalf("long document id changed after caller mutation: first byte %q", got[0])
+	}
+}
+
+func TestCollectionUpdateBypassesIdleCombinerWhenNoBatchPressure(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"city":"hnl","score":0}`)}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	idle := col.updateCombiner()
+	if idle == nil {
+		t.Fatal("expected idle combiner")
+	}
+
+	before := mgr.StatsSnapshot()
+	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"city":"sea","score":1}`), true, nil
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("update matched=%v modified=%v want true,true", matched, modified)
+	}
+	after := mgr.StatsSnapshot()
+	if got := after.UpdateCombineInlineRequests - before.UpdateCombineInlineRequests; got != 1 {
+		t.Fatalf("inline requests delta=%d want 1", got)
+	}
+	if got := after.UpdateCombineRequests - before.UpdateCombineRequests; got != 0 {
+		t.Fatalf("combine requests delta=%d want 0", got)
+	}
+	ids, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find updated city: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u1"))
+}
+
+func TestCollectionCloseWaitsForInlineUpdateWithoutCombiner(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"city":"hnl","score":0}`)}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	enteredUpdate := make(chan struct{})
+	releaseUpdate := make(chan struct{})
+	updateDone := make(chan error, 1)
+	go func() {
+		matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+			close(enteredUpdate)
+			<-releaseUpdate
+			return []byte(`{"city":"sea","score":1}`), true, nil
+		})
+		if err == nil && (!matched || !modified) {
+			err = fmt.Errorf("update matched=%v modified=%v", matched, modified)
+		}
+		updateDone <- err
+	}()
+	select {
+	case <-enteredUpdate:
+	case <-time.After(collectionTestTimeout(t, time.Second)):
+		t.Fatal("inline update callback did not start")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- d.Close()
+	}()
+
+	closingDeadline := time.NewTimer(collectionTestTimeout(t, time.Second))
+	defer closingDeadline.Stop()
+	closingTicker := time.NewTicker(time.Millisecond)
+	defer closingTicker.Stop()
+	for !col.writeDomain.closingWrites.Load() {
+		select {
+		case err := <-closeDone:
+			t.Fatalf("close returned before marking writes closing: %v", err)
+		case <-closingDeadline.C:
+			t.Fatal("close did not reach write-domain drain")
+		case <-closingTicker.C:
+		}
+	}
+
+	closeBlocked := time.NewTimer(20 * time.Millisecond)
+	select {
+	case err := <-closeDone:
+		closeBlocked.Stop()
+		t.Fatalf("close returned while inline update callback was blocked: %v", err)
+	case <-closeBlocked.C:
+	}
+	close(releaseUpdate)
+
+	var updateErr error
+	select {
+	case updateErr = <-updateDone:
+	case <-time.After(collectionTestTimeout(t, time.Second)):
+		t.Fatal("inline update did not finish after release")
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("close after inline update: %v", err)
+		}
+	case <-time.After(collectionTestTimeout(t, time.Second)):
+		t.Fatal("close did not finish after inline update completed")
+	}
+	if updateErr != nil && !errors.Is(updateErr, backenddb.ErrClosed) {
+		t.Fatalf("inline update err=%v want nil or ErrClosed", updateErr)
+	}
+	if updateErr != nil {
+		return
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedMgr := NewCollectionManager(reopened)
+	reopenedCol, err := reopenedMgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	got, err := reopenedCol.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get reopened document: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`"city":"sea"`)) {
+		t.Fatalf("reopened document=%s want city sea", got)
+	}
+}
+
+func TestCollectionUpdateUsesCombinerWhenInlineUpdateInFlight(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"city":"hnl","score":0}`),
+			[]byte(`{"city":"hnl","score":0}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	before := mgr.StatsSnapshot()
+	enteredFirstUpdate := make(chan struct{})
+	releaseFirstUpdate := make(chan struct{})
+	var enterOnce sync.Once
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(releaseFirstUpdate) })
+
+	firstDone := make(chan error, 1)
+	go func() {
+		matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+			enterOnce.Do(func() { close(enteredFirstUpdate) })
+			<-releaseFirstUpdate
+			return []byte(`{"city":"bos","score":1}`), true, nil
+		})
+		if err == nil && (!matched || !modified) {
+			err = fmt.Errorf("first update matched=%v modified=%v", matched, modified)
+		}
+		firstDone <- err
+	}()
+
+	select {
+	case <-enteredFirstUpdate:
+	case <-time.After(collectionTestTimeout(t, time.Second)):
+		t.Fatal("first update callback did not start")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		matched, modified, err := col.Update([]byte("u2"), func([]byte) ([]byte, bool, error) {
+			return []byte(`{"city":"sea","score":1}`), true, nil
+		})
+		if err == nil && (!matched || !modified) {
+			err = fmt.Errorf("second update matched=%v modified=%v", matched, modified)
+		}
+		secondDone <- err
+	}()
+
+	deadline := time.After(collectionTestTimeout(t, time.Second))
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		stats := mgr.StatsSnapshot()
+		if stats.UpdateCombineRequests-before.UpdateCombineRequests > 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("second update did not enqueue through combiner")
+		case <-ticker.C:
+		}
+	}
+
+	releaseOnce.Do(func() { close(releaseFirstUpdate) })
+	for name, done := range map[string]chan error{
+		"first":  firstDone,
+		"second": secondDone,
+	} {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("%s update: %v", name, err)
+			}
+		case <-time.After(collectionTestTimeout(t, time.Second)):
+			t.Fatalf("%s update did not complete", name)
+		}
+	}
+
+	after := mgr.StatsSnapshot()
+	if got := after.UpdateCombineInlineRequests - before.UpdateCombineInlineRequests; got != 1 {
+		t.Fatalf("inline requests delta=%d want 1", got)
+	}
+	if got := after.UpdateCombineRequests - before.UpdateCombineRequests; got == 0 {
+		t.Fatal("combine requests delta=0 want positive")
+	}
+	if got := after.UpdateCombineQueueDepthMax; got == 0 {
+		t.Fatal("combine queue depth max=0 want positive")
+	}
+	ids, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find updated city: %v", err)
+	}
+	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u2"))
+
+	col.writeDomain.updateCombineLastRequestUnixNano.Store(time.Now().Add(time.Hour).UnixNano())
+	combineBeforeCooldownCheck := after.UpdateCombineRequests
+	inlineBeforeCooldownCheck := after.UpdateCombineInlineRequests
+	matched, modified, err := col.Update([]byte("u2"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"city":"iad","score":2}`), true, nil
+	})
+	if err != nil {
+		t.Fatalf("cooldown update: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("cooldown update matched=%v modified=%v want true,true", matched, modified)
+	}
+	afterCooldownCheck := mgr.StatsSnapshot()
+	if got := afterCooldownCheck.UpdateCombineInlineRequests - inlineBeforeCooldownCheck; got != 0 {
+		t.Fatalf("cooldown inline requests delta=%d want 0", got)
+	}
+	if got := afterCooldownCheck.UpdateCombineRequests - combineBeforeCooldownCheck; got == 0 {
+		t.Fatal("cooldown combine requests delta=0 want positive")
 	}
 }
 
@@ -9088,6 +9941,422 @@ func TestCollectionUpdateBatchDirectBufferedBSONAccumulatesRootRuns(t *testing.T
 	}
 }
 
+func TestCollectionUpdateBSONSetReusesUnchangedIndexState(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatBSON,
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+			{Name: "active", Field: "active", ValueType: IndexValueBool},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "email", Value: "a@example.com"},
+			{Key: "city", Value: "hnl"},
+			{Key: "active", Value: true},
+		})},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSet: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("matched=%v modified=%v want true/true", matched, modified)
+	}
+	stats := col.LastUpdateStats()
+	if stats.IndexValueChanges != 1 || stats.IndexValueUnchanged != 2 || stats.UniqueIndexCheckSkips != 1 {
+		t.Fatalf("index stats changes=%d unchanged=%d unique skips=%d want 1/2/1", stats.IndexValueChanges, stats.IndexValueUnchanged, stats.UniqueIndexCheckSkips)
+	}
+	col.writeDomain.mu.RLock()
+	rootRunCount := col.writeDomain.rootRunCount
+	primaryRuns := len(col.writeDomain.rootRuns[collectionPrimaryRootName("users")])
+	cityRuns := len(col.writeDomain.rootRuns[collectionSecondaryRootName("users", "city")])
+	emailRuns := len(col.writeDomain.rootRuns[collectionSecondaryRootName("users", "email")])
+	activeRuns := len(col.writeDomain.rootRuns[collectionSecondaryRootName("users", "active")])
+	col.writeDomain.mu.RUnlock()
+	if rootRunCount != 2 || primaryRuns != 1 || cityRuns != 1 || emailRuns != 0 || activeRuns != 0 {
+		t.Fatalf("runs root=%d primary=%d city=%d email=%d active=%d want 2/1/1/0/0", rootRunCount, primaryRuns, cityRuns, emailRuns, activeRuns)
+	}
+	ids, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find sea city: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("city ids=%q want [u1]", ids)
+	}
+	ids, err = col.FindByIndex("email", "a@example.com")
+	if err != nil {
+		t.Fatalf("find email: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("email ids=%q want [u1]", ids)
+	}
+}
+
+func TestCollectionUpdateBSONSetDirectFallbackReportsStructuredApply(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	mgr.SetUpdateBatchDetailedStatsEnabled(true)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatBSON,
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "email", Value: "a@example.com"},
+			{Key: "city", Value: "hnl"},
+		})},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+
+	var stats CollectionUpdateStats
+	sawStructuredApply := false
+	lastEmail := ""
+	const updateAttempts = 64
+	for i := 0; i < updateAttempts; i++ {
+		email := fmt.Sprintf("b%03d@example.com", i)
+		lastEmail = email
+		matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+			Key:   "email",
+			Value: mustBSONRawValue(t, email),
+		}})
+		if err != nil {
+			t.Fatalf("UpdateBSONSet %d: %v", i, err)
+		}
+		if !matched || !modified {
+			t.Fatalf("update %d matched=%v modified=%v want true/true", i, matched, modified)
+		}
+		stats = col.LastUpdateStats()
+		if stats.StructuredUpdateApply > 0 {
+			sawStructuredApply = true
+			break
+		}
+	}
+	if stats.StructuredUpdateApply <= 0 {
+		t.Fatalf("structured apply duration remained %s after %d direct fallback updates", stats.StructuredUpdateApply, updateAttempts)
+	}
+	if stats.Callback != 0 {
+		t.Fatalf("callback duration=%s want zero for BSON set direct fallback", stats.Callback)
+	}
+	if got, want := stats.UniqueIndexChecks, 1; got != want {
+		t.Fatalf("unique checks=%d want %d", got, want)
+	}
+	if !sawStructuredApply {
+		t.Fatal("structured apply timing was not observed")
+	}
+	ids, err := col.FindByIndex("email", lastEmail)
+	if err != nil {
+		t.Fatalf("find updated email: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("updated email ids=%q want [u1]", ids)
+	}
+}
+
+func TestCollectionUpdateBSONSetRequiresBSONFormat(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err == nil {
+		t.Fatalf("UpdateBSONSet err=nil matched=%v modified=%v", matched, modified)
+	}
+	if !strings.Contains(err.Error(), "requires BSON document format") {
+		t.Fatalf("UpdateBSONSet err=%q want BSON format error", err)
+	}
+}
+
+func TestBuildUpdateBatchPlanBSONSetRejectsInvalidCurrentBSON(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("acquire snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	baseCommitSeq := snapshotCommitSeq(snap)
+	baseSystemRoot := snapshotSystemRoot(snap)
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	rootName := collectionPrimaryRootName("users")
+	baseRoot := catalog.rootID(rootName)
+	table := newCollectionRunTable(1)
+	setCollectionRunValue(table, []byte("u1"), []byte{0x05, 0x00, 0x00, 0x00})
+	table.Freeze()
+	defer resetCollectionRunTable(table)
+
+	_, rootIDs, err := d.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
+		BaseRoot:      baseRoot,
+		Iter:          table.NewIterator(nil, nil),
+		StoragePolicy: backenddb.OrderedRootStorageDefault,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return col.buildRootDescriptorSystemDeltaIterator(
+			baseCommitSeq,
+			baseSystemRoot,
+			[]string{rootName},
+			map[string]uint64{rootName: baseRoot},
+			rootIDs,
+		)
+	})
+	if err != nil {
+		t.Fatalf("publish invalid BSON primary root: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("published root IDs=%d want 1", len(rootIDs))
+	}
+
+	spec, err := newBSONSetUpdate([]BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("new BSON set update: %v", err)
+	}
+	plan, err := col.buildUpdateBatchPlan([]updateBatchItem{
+		newBSONSetUpdateBatchItem([]byte("u1"), spec),
+	}, updateBatchModeNoSecondaryUniqueIndexChanges, false)
+	if plan != nil {
+		plan.close()
+	}
+	if err == nil {
+		t.Fatal("buildUpdateBatchPlan err=nil want invalid current BSON")
+	}
+	if !strings.Contains(err.Error(), "current BSON document") {
+		t.Fatalf("buildUpdateBatchPlan err=%q want current BSON validation error", err)
+	}
+}
+
+func TestBSONSetUpdateAppendReplacementGrowsSmallDestination(t *testing.T) {
+	spec, err := newBSONSetUpdate([]BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("new BSON set update: %v", err)
+	}
+	current := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "email", Value: "a@example.com"},
+		{Key: "city", Value: "hnl"},
+		{Key: "active", Value: true},
+	})
+	dst := []byte("prefix")
+	dst = dst[:len(dst):len(dst)]
+
+	out, replacement, changed, err := spec.appendReplacement(dst, current)
+	if err != nil {
+		t.Fatalf("appendReplacement: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed=false want true")
+	}
+	if len(out) <= len(dst) {
+		t.Fatalf("out len=%d want appended replacement after prefix len=%d", len(out), len(dst))
+	}
+	if cap(out) <= cap(dst) {
+		t.Fatalf("out cap=%d want growth beyond dst cap=%d", cap(out), cap(dst))
+	}
+	if !bytes.Equal(out[:len(dst)], dst) {
+		t.Fatalf("out prefix=%q want %q", out[:len(dst)], dst)
+	}
+	if len(replacement) == 0 || &replacement[0] != &out[len(dst)] {
+		t.Fatal("replacement does not point at appended output region")
+	}
+	if got := bson.Raw(replacement).Lookup("city").StringValue(); got != "sea" {
+		t.Fatalf("city=%q want sea", got)
+	}
+	if got := bson.Raw(replacement).Lookup("_id").StringValue(); got != "u1" {
+		t.Fatalf("_id=%q want u1", got)
+	}
+}
+
+func TestBSONSetUpdateApplyNoopDoesNotAllocateReplacement(t *testing.T) {
+	current := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "city", Value: "hnl"},
+	})
+	spec, err := newBSONSetUpdate([]BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "hnl"),
+	}})
+	if err != nil {
+		t.Fatalf("new BSON set update: %v", err)
+	}
+	got, changed, err := spec.apply(current)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if changed {
+		t.Fatal("apply changed=true want false")
+	}
+	if len(got) == 0 || len(current) == 0 || &got[0] != &current[0] {
+		t.Fatal("no-op BSON set did not return the original document backing")
+	}
+	allocs := testing.AllocsPerRun(1000, func() {
+		got, changed, err := spec.apply(current)
+		if err != nil {
+			t.Fatalf("apply during alloc check: %v", err)
+		}
+		if changed || !bytes.Equal(got, current) {
+			t.Fatalf("alloc check changed=%v got=%#v want original %#v", changed, got, current)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("no-op BSON set allocations=%g want 0", allocs)
+	}
+}
+
+func TestCollectionUpdateBSONSetRejectsInvalidFieldNames(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  string
+		want string
+	}{
+		{name: "empty", key: "", want: "empty"},
+		{name: "id", key: "_id", want: "_id"},
+		{name: "dotted", key: "profile.city", want: "top-level"},
+		{name: "dollar", key: "$city", want: "$"},
+		{name: "nul", key: "city\x00name", want: "NUL"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := newBSONSetUpdate([]BSONSetField{{
+				Key:   tc.key,
+				Value: mustBSONRawValue(t, "sea"),
+			}})
+			if err == nil {
+				t.Fatal("newBSONSetUpdate err=nil want error")
+			}
+			if !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "field") {
+				t.Fatalf("err=%q want field context containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestCollectionUpdateBSONSetRejectsDuplicateFields(t *testing.T) {
+	_, err := newBSONSetUpdate([]BSONSetField{
+		{Key: "city", Value: mustBSONRawValue(t, "sea")},
+		{Key: "city", Value: mustBSONRawValue(t, "sfo")},
+	})
+	if err == nil {
+		t.Fatal("newBSONSetUpdate err=nil want duplicate field error")
+	}
+	if !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("newBSONSetUpdate err=%q want duplicate field error", err)
+	}
+}
+
+func TestCollectionUpdateBSONSetRejectsInvalidRawValue(t *testing.T) {
+	_, err := newBSONSetUpdate([]BSONSetField{{
+		Key:   "city",
+		Value: bson.RawValue{Type: bson.TypeString, Value: []byte{0xff}},
+	}})
+	if err == nil {
+		t.Fatal("newBSONSetUpdate err=nil want invalid value error")
+	}
+	if !strings.Contains(err.Error(), "invalid BSON raw value") {
+		t.Fatalf("newBSONSetUpdate err=%q want invalid BSON raw value", err)
+	}
+}
+
+func TestCollectionUpdateBSONSetValidatesCollectionBeforeFields(t *testing.T) {
+	var col *Collection
+	_, _, err := col.UpdateBSONSet(nil, []BSONSetField{
+		{Key: "", Value: mustBSONRawValue(t, "sea")},
+	})
+	if !errors.Is(err, errCollectionNil) {
+		t.Fatalf("UpdateBSONSet err=%v want %v", err, errCollectionNil)
+	}
+}
+
 func TestCollectionUpdateBatchDirectBufferedBSONDoesNotReserveUnchangedUnique(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -9650,17 +10919,82 @@ func TestDirectBufferedRootEntriesOwnKeysAndRetainDocumentArena(t *testing.T) {
 	}
 }
 
-func newBufferedUsersUpdateCollection(t *testing.T) (*backenddb.DB, *Collection) {
+type bufferedUsersUpdateDoc struct {
+	id    string
+	email string
+	city  string
+}
+
+type bufferedUsersUpdateJSONDoc struct {
+	Email string `json:"email"`
+	City  string `json:"city"`
+}
+
+const (
+	// These limits are intentionally above this fixture's data size so tests can
+	// exercise explicit Flush or forced-drain paths without a threshold flush.
+	bufferedIndexedUpdateNoThresholdDocumentLimitForTests = 1 << 20
+	bufferedIndexedUpdateNoThresholdByteLimitForTests     = int64(1) << 40
+	bufferedIndexedUpdateNoThresholdRootRunLimitForTests  = 1 << 20
+	bufferedIndexedUpdateNoThresholdQueueLimitForTests    = 1 << 20
+)
+
+type bufferedUsersUpdateFixture struct {
+	db         *backenddb.DB
+	manager    *CollectionManager
+	collection *Collection
+}
+
+func bufferedIndexedUpdateHighThresholdOptionsForTests() CollectionOptions {
+	return bufferedIndexedUpdateHighThresholdOptionsForTestsWithAsync(true)
+}
+
+func bufferedIndexedUpdateNoAsyncHighThresholdOptionsForTests() CollectionOptions {
+	return bufferedIndexedUpdateHighThresholdOptionsForTestsWithAsync(false)
+}
+
+func bufferedIndexedUpdateHighThresholdOptionsForTestsWithAsync(async bool) CollectionOptions {
+	queuedUnits := 0
+	if async {
+		queuedUnits = bufferedIndexedUpdateNoThresholdQueueLimitForTests
+	}
+	return CollectionOptions{
+		BufferedIndexedWrites:                   true,
+		BufferedIndexedWriteMaxDocuments:        bufferedIndexedUpdateNoThresholdDocumentLimitForTests,
+		BufferedIndexedWriteMaxBytes:            bufferedIndexedUpdateNoThresholdByteLimitForTests,
+		BufferedIndexedWriteMaxRootRuns:         bufferedIndexedUpdateNoThresholdRootRunLimitForTests,
+		BufferedIndexedAsyncFlush:               async,
+		DisableBufferedIndexedAsyncFlush:        !async,
+		BufferedIndexedAsyncFlushMaxQueuedUnits: queuedUnits,
+	}
+}
+
+func newBufferedUsersUpdateFixtureWithDocs(t *testing.T, opts CollectionOptions, docs []bufferedUsersUpdateDoc) bufferedUsersUpdateFixture {
+	return newBufferedUsersUpdateFixtureWithDocsCleanup(t, opts, docs, false)
+}
+
+func newBufferedUsersUpdateFixtureWithDocsCleanup(t *testing.T, opts CollectionOptions, docs []bufferedUsersUpdateDoc, allowConcurrentMutationCleanup bool) bufferedUsersUpdateFixture {
 	t.Helper()
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	t.Cleanup(func() { _ = d.Close() })
+	var mgr *CollectionManager
+	t.Cleanup(func() {
+		if mgr != nil {
+			if err := mgr.FlushAll(); err != nil && !errors.Is(err, backenddb.ErrClosed) && !(allowConcurrentMutationCleanup && errors.Is(err, ErrConcurrentMutation)) {
+				t.Errorf("flush buffered user fixture: %v", err)
+			}
+		}
+		if err := d.Close(); err != nil && !errors.Is(err, backenddb.ErrClosed) && !(allowConcurrentMutationCleanup && errors.Is(err, ErrConcurrentMutation)) {
+			t.Errorf("close buffered user fixture DB: %v", err)
+		}
+	})
 
-	mgr := NewCollectionManager(d)
+	mgr = NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
-		Name: "users",
+		Name:    "users",
+		Options: opts,
 		Indexes: []IndexDefinition{
 			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
 			{Name: "city", Field: "city", ValueType: IndexValueString},
@@ -9672,16 +11006,38 @@ func newBufferedUsersUpdateCollection(t *testing.T) (*backenddb.DB, *Collection)
 	if err != nil {
 		t.Fatalf("open collection: %v", err)
 	}
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("u1")},
-		[][]byte{[]byte(`{"email":"a@example.com","city":"hnl"}`)},
-	); err != nil {
-		t.Fatalf("insert: %v", err)
+	if len(docs) > 0 {
+		ids := make([][]byte, len(docs))
+		values := make([][]byte, len(docs))
+		for i, doc := range docs {
+			ids[i] = []byte(doc.id)
+			values[i], err = json.Marshal(bufferedUsersUpdateJSONDoc{
+				Email: doc.email,
+				City:  doc.city,
+			})
+			if err != nil {
+				t.Fatalf("marshal user fixture doc: %v", err)
+			}
+		}
+		if _, err := col.InsertBatch(ids, values); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
 	}
 	if err := col.Flush(); err != nil {
 		t.Fatalf("flush insert buffer: %v", err)
 	}
-	return d, col
+	return bufferedUsersUpdateFixture{
+		db:         d,
+		manager:    mgr,
+		collection: col,
+	}
+}
+func newBufferedUsersUpdateCollection(t *testing.T) (*backenddb.DB, *Collection) {
+	t.Helper()
+	fixture := newBufferedUsersUpdateFixtureWithDocs(t, CollectionOptions{}, []bufferedUsersUpdateDoc{
+		{id: "u1", email: "a@example.com", city: "hnl"},
+	})
+	return fixture.db, fixture.collection
 }
 
 func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleBufferedPlan(t *testing.T) {
@@ -9694,9 +11050,13 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleBuffere
 		t.Fatalf("first batch was declined")
 	}
 
-	plan, err := col.buildUpdateBatchPlan([]UpdateBatchItem{
+	items, err := prepareUpdateBatchItems([]UpdateBatchItem{
 		{DocumentID: []byte("u1"), Update: setJSONCity("sfo")},
-	}, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+	})
+	if err != nil {
+		t.Fatalf("prepare stale plan items: %v", err)
+	}
+	plan, err := col.buildUpdateBatchPlan(items, updateBatchModeNoSecondaryUniqueIndexChanges, true)
 	if err != nil {
 		t.Fatalf("build stale plan: %v", err)
 	}
@@ -9738,7 +11098,7 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleZeroDel
 		t.Fatalf("first batch was declined")
 	}
 
-	plan, err := col.buildUpdateBatchPlan([]UpdateBatchItem{
+	items, err := prepareUpdateBatchItems([]UpdateBatchItem{
 		{
 			DocumentID: []byte("u1"),
 			Update: func(current []byte) ([]byte, bool, error) {
@@ -9748,7 +11108,11 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleZeroDel
 				return current, false, nil
 			},
 		},
-	}, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+	})
+	if err != nil {
+		t.Fatalf("prepare stale zero-delta plan items: %v", err)
+	}
+	plan, err := col.buildUpdateBatchPlan(items, updateBatchModeNoSecondaryUniqueIndexChanges, true)
 	if err != nil {
 		t.Fatalf("build stale zero-delta plan: %v", err)
 	}
@@ -9769,6 +11133,278 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleZeroDel
 	}
 	if col.bufferedUpdateBatchPlanStillCurrent(plan) {
 		t.Fatalf("stale zero-delta plan still appeared current")
+	}
+}
+
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReplansStaleBufferedPlanWithoutFlush(t *testing.T) {
+	fixture := newBufferedUsersUpdateFixtureWithDocs(t,
+		bufferedIndexedUpdateNoAsyncHighThresholdOptionsForTests(),
+		[]bufferedUsersUpdateDoc{
+			{id: "u1", email: "a@example.com", city: "hnl"},
+			{id: "u2", email: "b@example.com", city: "hnl"},
+		},
+	)
+	mgr := fixture.manager
+	col := fixture.collection
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sea")},
+	}); err != nil {
+		t.Fatalf("first UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("first batch was declined")
+	}
+
+	before := mgr.StatsSnapshot()
+	var injected atomic.Bool
+	setSFO := setJSONCity("sfo")
+	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			if !injected.Swap(true) {
+				if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+					{DocumentID: []byte("u2"), Update: setJSONCity("oak")},
+				}); err != nil {
+					return nil, false, err
+				} else if !batched {
+					return nil, false, errors.New("nested batch was declined")
+				}
+			}
+			return setSFO(current)
+		},
+	}})
+	if err != nil {
+		t.Fatalf("stale-replan UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	}
+	if !batched {
+		t.Fatalf("stale-replan batch was declined")
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("results=%+v want one modified row", results)
+	}
+	if !injected.Load() {
+		t.Fatalf("nested batch did not run")
+	}
+	after := mgr.StatsSnapshot()
+	if got := after.IndexedFlushCalls - before.IndexedFlushCalls; got != 0 {
+		t.Fatalf("indexed flush calls delta=%d want 0 for stale buffered replan", got)
+	}
+	if got := after.IndexedFlushForcedDrains - before.IndexedFlushForcedDrains; got != 0 {
+		t.Fatalf("indexed forced drain delta=%d want 0 for stale buffered replan", got)
+	}
+
+	sfoIDs, err := col.FindByIndex("city", "sfo")
+	if err != nil {
+		t.Fatalf("find sfo city: %v", err)
+	}
+	if len(sfoIDs) != 1 || !bytes.Equal(sfoIDs[0], []byte("u1")) {
+		t.Fatalf("sfo ids=%q want [u1]", sfoIDs)
+	}
+	oakIDs, err := col.FindByIndex("city", "oak")
+	if err != nil {
+		t.Fatalf("find oak city: %v", err)
+	}
+	if len(oakIDs) != 1 || !bytes.Equal(oakIDs[0], []byte("u2")) {
+		t.Fatalf("oak ids=%q want [u2]", oakIDs)
+	}
+}
+
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesBoundsStaleBufferedReplans(t *testing.T) {
+	fixture := newBufferedUsersUpdateFixtureWithDocs(t,
+		bufferedIndexedUpdateHighThresholdOptionsForTests(),
+		[]bufferedUsersUpdateDoc{
+			{id: "u1", email: "a@example.com", city: "hnl"},
+			{id: "u2", email: "b@example.com", city: "hnl"},
+		},
+	)
+	mgr := fixture.manager
+	col := fixture.collection
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sea")},
+	}); err != nil {
+		t.Fatalf("first UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("first batch was declined")
+	}
+
+	before := mgr.StatsSnapshot()
+	var injections atomic.Int32
+	setSFO := setJSONCity("sfo")
+	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			n := int(injections.Add(1))
+			if n <= maxUpdateBatchBufferedReadReplans+1 {
+				if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+					{DocumentID: []byte("u2"), Update: setJSONCity(fmt.Sprintf("oak-%02d", n))},
+				}); err != nil {
+					return nil, false, err
+				} else if !batched {
+					return nil, false, errors.New("nested batch was declined")
+				}
+			}
+			return setSFO(current)
+		},
+	}})
+	if err != nil {
+		t.Fatalf("bounded-replan UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	}
+	if !batched {
+		t.Fatalf("bounded-replan batch was declined")
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("results=%+v want one modified row", results)
+	}
+	if got, want := int(injections.Load()), maxUpdateBatchBufferedReadReplans+2; got != want {
+		t.Fatalf("injections=%d want %d", got, want)
+	}
+	after := mgr.StatsSnapshot()
+	if got := after.IndexedFlushForcedDrains - before.IndexedFlushForcedDrains; got != 1 {
+		t.Fatalf("indexed forced drain delta=%d want exactly one bounded replan fallback flush", got)
+	}
+
+	sfoIDs, err := col.FindByIndex("city", "sfo")
+	if err != nil {
+		t.Fatalf("find sfo city: %v", err)
+	}
+	if len(sfoIDs) != 1 || !bytes.Equal(sfoIDs[0], []byte("u1")) {
+		t.Fatalf("sfo ids=%q want [u1]", sfoIDs)
+	}
+}
+
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesFlushesRootMismatchInsteadOfReplanning(t *testing.T) {
+	fixture := newBufferedUsersUpdateFixtureWithDocsCleanup(t,
+		bufferedIndexedUpdateHighThresholdOptionsForTests(),
+		[]bufferedUsersUpdateDoc{
+			{id: "u1", email: "a@example.com", city: "hnl"},
+			{id: "u2", email: "b@example.com", city: "hnl"},
+		},
+		true,
+	)
+	d := fixture.db
+	mgr := fixture.manager
+	col := fixture.collection
+	otherMgr := NewCollectionManager(d)
+	t.Cleanup(func() {
+		if err := otherMgr.FlushAll(); err != nil && !errors.Is(err, backenddb.ErrClosed) && !errors.Is(err, ErrConcurrentMutation) {
+			t.Errorf("flush second collection manager: %v", err)
+		}
+	})
+	otherCol, err := otherMgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open users from second manager: %v", err)
+	}
+
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sea")},
+	}); err != nil {
+		t.Fatalf("first UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("first batch was declined")
+	}
+	if _, batched, err := otherCol.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u2"), Update: setJSONCity("oak")},
+	}); err != nil {
+		t.Fatalf("second-manager UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("second-manager batch was declined")
+	}
+	if err := otherCol.Flush(); err != nil {
+		t.Fatalf("flush second-manager buffered update: %v", err)
+	}
+
+	before := mgr.StatsSnapshot()
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+			{DocumentID: []byte("u1"), Update: setJSONCity("sfo")},
+		})
+		done <- err
+	}()
+	timeout := collectionTestTimeout(t, 30*time.Second)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrConcurrentMutation) {
+			t.Fatalf("stale-root UpdateBatchIfNoSecondaryUniqueIndexChanges err=%v want %v", err, ErrConcurrentMutation)
+		}
+		if !isBufferedRootBaseMismatch(err) {
+			t.Fatalf("stale-root UpdateBatchIfNoSecondaryUniqueIndexChanges err=%v want buffered root base mismatch context", err)
+		}
+		if !isConcurrentRootModification(err) {
+			t.Fatalf("stale-root UpdateBatchIfNoSecondaryUniqueIndexChanges err=%v want root modification context", err)
+		}
+	case <-timer.C:
+		_ = d.Close()
+		unblockTimer := time.NewTimer(collectionTestTimeout(t, time.Second))
+		defer unblockTimer.Stop()
+		select {
+		case err := <-done:
+			t.Fatalf("stale-root UpdateBatchIfNoSecondaryUniqueIndexChanges timed out, likely replanning without flushing; unblocked after close with err=%v", err)
+		case <-unblockTimer.C:
+			t.Fatal("stale-root UpdateBatchIfNoSecondaryUniqueIndexChanges timed out and did not unblock after DB close")
+		}
+	}
+	after := mgr.StatsSnapshot()
+	if got := after.IndexedFlushForcedDrains - before.IndexedFlushForcedDrains; got != 1 {
+		t.Fatalf("forced drain delta=%d want 1 for root-base mismatch", got)
+	}
+}
+
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesBatchOneDoesNotFlushBeforeThreshold(t *testing.T) {
+	fixture := newBufferedUsersUpdateFixtureWithDocs(t,
+		bufferedIndexedUpdateNoAsyncHighThresholdOptionsForTests(),
+		[]bufferedUsersUpdateDoc{
+			{id: "u1", email: "a@example.com", city: "hnl"},
+			{id: "u2", email: "b@example.com", city: "hnl"},
+			{id: "u3", email: "c@example.com", city: "hnl"},
+		},
+	)
+	mgr := fixture.manager
+	col := fixture.collection
+
+	before := mgr.StatsSnapshot()
+	for _, update := range []struct {
+		id   string
+		city string
+	}{
+		{id: "u1", city: "sea"},
+		{id: "u2", city: "sfo"},
+		{id: "u3", city: "oak"},
+	} {
+		results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+			{DocumentID: []byte(update.id), Update: setJSONCity(update.city)},
+		})
+		if err != nil {
+			t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges %s: %v", update.id, err)
+		}
+		if !batched {
+			t.Fatalf("batch for %s was declined", update.id)
+		}
+		if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+			t.Fatalf("results for %s=%+v want one modified row", update.id, results)
+		}
+	}
+	after := mgr.StatsSnapshot()
+	if got := after.IndexedFlushCalls - before.IndexedFlushCalls; got != 0 {
+		t.Fatalf("indexed flush calls delta=%d want 0 before explicit Flush", got)
+	}
+	if got := after.IndexedFlushForcedDrains - before.IndexedFlushForcedDrains; got != 0 {
+		t.Fatalf("indexed forced drain delta=%d want 0 before explicit Flush", got)
+	}
+	if got := after.PendingDocuments; got == 0 {
+		t.Fatalf("pending documents=%d want buffered batch-one updates", got)
+	}
+
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered updates: %v", err)
+	}
+	flushed := mgr.StatsSnapshot()
+	if got := flushed.IndexedFlushCalls - before.IndexedFlushCalls; got == 0 {
+		t.Fatalf("indexed flush calls delta=%d want explicit Flush to publish buffered updates", got)
+	}
+	if got := flushed.PendingDocuments; got != 0 {
+		t.Fatalf("pending documents after Flush=%d want 0", got)
 	}
 }
 
@@ -10083,13 +11719,18 @@ func TestSnapshotUpdateBatchBufferedReadCachesEmptyPrimaryRunIndex(t *testing.T)
 		},
 	}
 
-	read, _, blocked, err := snapshotUpdateBatchBufferedRead(domain, meta, 7, []UpdateBatchItem{{DocumentID: []byte("missing")}}, DocumentFormatJSON)
+	read, _, blocked, staleSnapshot, err := snapshotUpdateBatchBufferedRead(domain, meta, 1, 7, []updateBatchItem{{
+		UpdateBatchItem: UpdateBatchItem{DocumentID: []byte("missing")},
+	}}, DocumentFormatJSON)
 	if err != nil {
 		t.Fatalf("snapshotUpdateBatchBufferedRead: %v", err)
 	}
 	defer putUpdateBatchBufferedEntries(read.primaryEntries, read.primaryBuffer)
 	if blocked {
 		t.Fatal("buffered read reported blocked")
+	}
+	if staleSnapshot {
+		t.Fatal("buffered read reported stale snapshot")
 	}
 	if !read.enabled {
 		t.Fatal("buffered read was not enabled")
@@ -10099,6 +11740,34 @@ func TestSnapshotUpdateBatchBufferedReadCachesEmptyPrimaryRunIndex(t *testing.T)
 	domain.mu.RUnlock()
 	if !built {
 		t.Fatal("empty primary run index was not cached")
+	}
+}
+
+func TestSnapshotUpdateBatchBufferedReadDetectsStalePublishedDomain(t *testing.T) {
+	meta := CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}
+	domain := &collectionWriteDomain{
+		loaded:         true,
+		meta:           meta,
+		catalog:        &collectionCatalog{meta: meta},
+		baseCommitSeq:  8,
+		baseSystemRoot: 9,
+	}
+
+	read, _, blocked, staleSnapshot, err := snapshotUpdateBatchBufferedRead(domain, meta, 7, 7, []updateBatchItem{{
+		UpdateBatchItem: UpdateBatchItem{DocumentID: []byte("u1")},
+	}}, DocumentFormatJSON)
+	if err != nil {
+		t.Fatalf("snapshotUpdateBatchBufferedRead: %v", err)
+	}
+	defer putUpdateBatchBufferedEntries(read.primaryEntries, read.primaryBuffer)
+	if read.enabled || blocked || !staleSnapshot {
+		t.Fatalf("enabled=%v blocked=%v stale=%v want false/false/true", read.enabled, blocked, staleSnapshot)
 	}
 }
 
@@ -10139,16 +11808,16 @@ func TestSnapshotUpdateBatchBufferedReadPrimaryRunIndexAvoidsCollectingPendingRu
 			rootRunCount: 8,
 		})
 	}
-	items := []UpdateBatchItem{{DocumentID: []byte("u1")}}
+	items := []updateBatchItem{{UpdateBatchItem: UpdateBatchItem{DocumentID: []byte("u1")}}}
 	assertRead := func() {
 		t.Helper()
-		read, _, blocked, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, 7, items, DocumentFormatJSON, false)
+		read, _, blocked, staleSnapshot, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, 1, 7, items, DocumentFormatJSON, false)
 		if err != nil {
 			t.Fatalf("snapshotUpdateBatchBufferedReadLocked: %v", err)
 		}
 		defer putUpdateBatchBufferedEntries(read.primaryEntries, read.primaryBuffer)
-		if blocked || needPrimaryRunIndex || !read.enabled {
-			t.Fatalf("read enabled=%v blocked=%v needPrimaryRunIndex=%v", read.enabled, blocked, needPrimaryRunIndex)
+		if blocked || staleSnapshot || needPrimaryRunIndex || !read.enabled {
+			t.Fatalf("read enabled=%v blocked=%v stale=%v needPrimaryRunIndex=%v", read.enabled, blocked, staleSnapshot, needPrimaryRunIndex)
 		}
 		if len(read.primaryEntries) != 1 || !read.primaryEntries[0].found || !bytes.Equal(read.primaryEntries[0].value, []byte(`{"city":"paris"}`)) {
 			t.Fatalf("primary entries=%+v want buffered u1 document", read.primaryEntries)
@@ -10173,10 +11842,10 @@ func TestSnapshotUpdateBatchBufferedPrimaryEntriesFromIndexUsesValueArena(t *tes
 	if err := addBufferedPrimaryRunIndexEntries(primaryIndex, primaryTable); err != nil {
 		t.Fatalf("add primary run index entries: %v", err)
 	}
-	items := []UpdateBatchItem{
-		{DocumentID: []byte("u1")},
-		{DocumentID: []byte("u2")},
-		{DocumentID: []byte("u3")},
+	items := []updateBatchItem{
+		{UpdateBatchItem: UpdateBatchItem{DocumentID: []byte("u1")}},
+		{UpdateBatchItem: UpdateBatchItem{DocumentID: []byte("u2")}},
+		{UpdateBatchItem: UpdateBatchItem{DocumentID: []byte("u3")}},
 	}
 	assertRead := func() {
 		t.Helper()
@@ -10227,12 +11896,12 @@ func TestUpdateBatchBufferedEntryBufferCopyValuePreservesEmptySlice(t *testing.T
 func BenchmarkSnapshotUpdateBatchBufferedPrimaryEntriesFromIndexValues(b *testing.B) {
 	const entriesCount = 256
 	primaryTable := newCollectionRunTable(entriesCount)
-	items := make([]UpdateBatchItem, 0, entriesCount)
+	items := make([]updateBatchItem, 0, entriesCount)
 	value := []byte(strings.Repeat("x", 512))
 	for i := 0; i < entriesCount; i++ {
 		id := []byte(fmt.Sprintf("u%05d", i))
 		setCollectionRunValue(primaryTable, id, value)
-		items = append(items, UpdateBatchItem{DocumentID: id})
+		items = append(items, updateBatchItem{UpdateBatchItem: UpdateBatchItem{DocumentID: id}})
 	}
 	primaryTable.Freeze()
 	defer resetCollectionRunTable(primaryTable)
@@ -10445,16 +12114,16 @@ func BenchmarkSnapshotUpdateBatchBufferedReadPrimaryRunIndexPendingUnits(b *test
 			rootRunCount: 8,
 		})
 	}
-	items := []UpdateBatchItem{{DocumentID: []byte("u1")}}
+	items := []updateBatchItem{{UpdateBatchItem: UpdateBatchItem{DocumentID: []byte("u1")}}}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		read, _, blocked, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, 7, items, DocumentFormatJSON, false)
+		read, _, blocked, staleSnapshot, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, 1, 7, items, DocumentFormatJSON, false)
 		if err != nil {
 			b.Fatalf("snapshotUpdateBatchBufferedReadLocked: %v", err)
 		}
-		if blocked || needPrimaryRunIndex || !read.enabled || len(read.primaryEntries) != 1 || !read.primaryEntries[0].found {
-			b.Fatalf("unexpected read enabled=%v entries=%d blocked=%v needPrimaryRunIndex=%v", read.enabled, len(read.primaryEntries), blocked, needPrimaryRunIndex)
+		if blocked || staleSnapshot || needPrimaryRunIndex || !read.enabled || len(read.primaryEntries) != 1 || !read.primaryEntries[0].found {
+			b.Fatalf("unexpected read enabled=%v entries=%d blocked=%v stale=%v needPrimaryRunIndex=%v", read.enabled, len(read.primaryEntries), blocked, staleSnapshot, needPrimaryRunIndex)
 		}
 		putUpdateBatchBufferedEntries(read.primaryEntries, read.primaryBuffer)
 	}
@@ -11239,6 +12908,15 @@ func setBSONField(field string, value any) func([]byte) ([]byte, bool, error) {
 		}
 		return next, true, nil
 	}
+}
+
+func mustBSONRawValue(t testing.TB, value any) bson.RawValue {
+	t.Helper()
+	typ, raw, err := bson.MarshalValue(value)
+	if err != nil {
+		t.Fatalf("marshal BSON value: %v", err)
+	}
+	return bson.RawValue{Type: typ, Value: raw}
 }
 
 func setTemplateV1JSON(t *testing.T, raw string) func([]byte) ([]byte, bool, error) {

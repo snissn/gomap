@@ -1736,6 +1736,23 @@ func (m *Manager) MarkZombie(id uint32) error {
 	return nil
 }
 
+// MarkZombieIfTracked marks id zombie when the manager still tracks it,
+// including files that were already marked zombie by a previous cleanup pass.
+func (m *Manager) MarkZombieIfTracked(id uint32) (tracked bool, newlyMarked bool, err error) {
+	if m == nil {
+		return false, false, nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	f, ok := m.files[id]
+	if !ok {
+		return false, false, nil
+	}
+	wasZombie := f.IsZombie.Load()
+	f.IsZombie.Store(true)
+	return true, !wasZombie, nil
+}
+
 // EvictSegment closes and forgets a segment without deleting it from disk.
 // This is useful when another component owns lifecycle/deletion.
 func (m *Manager) EvictSegment(id uint32) error {
@@ -1747,7 +1764,7 @@ func (m *Manager) EvictSegment(id uint32) error {
 	}
 	if f.RefCount.Load() != 0 {
 		m.mu.Unlock()
-		return fmt.Errorf("cannot evict valuelog file %d: still pinned", id)
+		return &filePinnedError{id: id, op: "evict"}
 	}
 	delete(m.files, id)
 	m.mu.Unlock()
@@ -2080,13 +2097,35 @@ func (m *Manager) RemoveSegment(id uint32) error {
 	}
 	if f.RefCount.Load() != 0 {
 		m.mu.Unlock()
-		return fmt.Errorf("cannot remove valuelog file %d: still pinned", id)
+		return &filePinnedError{id: id, op: "remove"}
 	}
 	delete(m.files, id)
 	m.mu.Unlock()
 
-	_ = f.Close()
-	return removeSegmentFileWithRetry(f.Path)
+	return closeAndRemoveSegmentFile(f)
+}
+
+// RemoveSegmentIfUnpinned removes a tracked segment only when no live snapshot
+// pins it. It returns false with no error when the segment is absent or still
+// pinned.
+func (m *Manager) RemoveSegmentIfUnpinned(id uint32) (bool, error) {
+	if m == nil {
+		return false, nil
+	}
+	m.mu.Lock()
+	f, ok := m.files[id]
+	if !ok {
+		m.mu.Unlock()
+		return false, nil
+	}
+	if f.RefCount.Load() != 0 {
+		m.mu.Unlock()
+		return false, nil
+	}
+	delete(m.files, id)
+	m.mu.Unlock()
+
+	return true, closeAndRemoveSegmentFile(f)
 }
 
 // RemoveSegmentForce removes a segment without refcount checks.
@@ -2101,11 +2140,17 @@ func (m *Manager) RemoveSegmentForce(id uint32) error {
 	delete(m.files, id)
 	m.mu.Unlock()
 
-	_ = f.Close()
-	return removeSegmentFileWithRetry(f.Path)
+	return closeAndRemoveSegmentFile(f)
 }
 
 var removeSegmentPath = os.Remove
+
+func closeAndRemoveSegmentFile(f *File) error {
+	if f == nil {
+		return nil
+	}
+	return errors.Join(f.Close(), removeSegmentFileWithRetry(f.Path))
+}
 
 func removeSegmentFileOnce(path string) error {
 	err := removeSegmentPath(path)

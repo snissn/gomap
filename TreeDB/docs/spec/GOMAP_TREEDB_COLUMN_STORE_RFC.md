@@ -2,6 +2,15 @@
 
 Status: proposal, non-normative.
 
+Production persistent column-store collection writes are blocked until
+`TreeDB/docs/spec/collection-wal-durability-plan.md` M7 sign-off links to green
+M1-M6 collection WAL evidence. Before that gate, column-store work is limited
+to docs, benchmarks, pure codecs, filters/search packages, and isolated
+encode/decode tests that do not publish persistent collection roots. Persistent
+column-store APIs, column part descriptor roots, secondary indexes pointing at
+column-store rows, column-file side refs in published roots, and crash/reopen
+safety claims for column-store writes are blocked.
+
 Target TreeDB source studied:
 `https://github.com/snissn/gomap/tree/874737704bd8cdcd1add40c5d2316f03544b1219`
 
@@ -2342,37 +2351,37 @@ This section records the review pass performed before finalizing this draft.
 
 Finding: The first naive design would store compressed column blocks directly
 behind primary ids, which would make updates rewrite blocks and break snapshot
-efficiency.  
+efficiency.
 Fix: The proposal uses immutable base parts, update-delta column parts,
 delete bitmaps, and maintenance compaction. Changed rows are rewritten into
 column-store format immediately, while old compressed blocks remain immutable
 until compaction and GC.
 
 Finding: A pure column part directory would make point lookup require part
-searches.  
+searches.
 Fix: The proposal keeps an explicit primary `id -> row_locator` B-tree root.
 
 Finding: Reusing ClickHouse method bytes would imply byte compatibility the Go
-implementation may not provide.  
+implementation may not provide.
 Fix: The proposal uses TreeDB-specific codec ids while importing algorithms and
 validation rules.
 
 Finding: Applying `Delta`, `T64`, or float codecs to null maps and offsets
-would corrupt structural streams.  
+would corrupt structural streams.
 Fix: The proposal imports ClickHouse's generic-only structural substream rule.
 
 Finding: A column scan API could accidentally make borrowed slices escape or be
-used after callback return.  
+used after callback return.
 Fix: The proposal defines both safe materialized APIs and borrowed callback
 APIs with explicit lifetime rules.
 
 Finding: Compression-only gates could reward small output even when throughput
-collapses.  
+collapses.
 Fix: Every milestone combines compression gates with throughput and allocation
 gates.
 
 Finding: The existing template-v1 layout is already very compact on benchmark
-fixtures, so absolute size claims could be misleading.  
+fixtures, so absolute size claims could be misleading.
 Fix: Gates are relative to same-run baselines and include high-entropy fallback
 requirements.
 
@@ -2380,7 +2389,7 @@ Finding: Column file checksums might make block checksums look duplicative.
 Fix: The proposal keeps per-block CRC32C because projected reads may slice a
 larger column file, but leaves a stronger checksum as an open question.
 
-Finding: A direct column-store path could bypass secondary index correctness.  
+Finding: A direct column-store path could bypass secondary index correctness.
 Fix: Direct vector insertion still builds existing secondary root runs and
 preserves current unique/nonunique index semantics.
 
@@ -2391,19 +2400,19 @@ The column file class must not apply an outer compression layer unless an
 explicit class-level dictionary experiment proves a wall-time and bytes win.
 
 Finding: Secondary indexes could work for inserts but become stale after
-column-store updates.  
+column-store updates.
 Fix: Updates now publish old secondary-entry deletes, new secondary-entry
 puts, primary locator changes, delta-part descriptors, and tombstones in one
 root group.
 
 Finding: Adding ClickHouse-style fast filters only to column parts would leave
-row-store, BSON, and template-v1 collections unable to benefit.  
+row-store, BSON, and template-v1 collections unable to benefit.
 Fix: The RFC adds shared filter/search interfaces with typed-vector and
 byte-haystack adapters so the same minmax, set, bloom, token, ngram, text, and
 searcher algorithms can serve multiple layouts.
 
 Finding: Generalizing string haystack algorithms to other types can create
-bad semantics if numeric values are searched as decimal strings by accident.  
+bad semantics if numeric values are searched as decimal strings by accident.
 Fix: Haystack adapters are explicit. String/bytes/document/token predicates
 use byte searchers; numeric equality and range use typed filters.
 

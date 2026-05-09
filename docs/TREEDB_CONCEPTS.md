@@ -34,7 +34,9 @@ See: `docs/API_STABILITY.md`.
 At a conceptual level, the backend engine stores:
 
 - A memory-mapped index file (`Dir/maindb/index.db`) containing B+Tree pages and metadata.
-- A value log under `Dir/maindb/wal/` used to store larger values efficiently.
+- A persistent value log under `Dir/maindb/value_vlog/` used to store larger values efficiently.
+- An optional persistent outer-leaf log under `Dir/maindb/leaf_vlog/` when leaf pages are stored outside `index.db`.
+- A redo journal under `Dir/maindb/wal/` for crash recovery.
 - A dictionary store under `Dir/dictdb/` used to persist compression dictionaries (when enabled).
 
 Writes are “commit-like”: a batch updates pages + value-log pointers and then updates the active meta page.
@@ -45,14 +47,36 @@ Writes are “commit-like”: a batch updates pages + value-log pointers and the
   - B+Tree pages (internal + leaf nodes)
   - freelist / lifecycle metadata
   - redundant meta (“superblock”) pages used for recovery
-- `Dir/maindb/wal/`: journal + value-log segments (internal naming may change).
+- `Dir/maindb/wal/`: redo journal segments.
+- `Dir/maindb/value_vlog/`: persistent value-log segments for large values.
+- `Dir/maindb/leaf_vlog/`: persistent outer-leaf generations when enabled.
 - `Dir/maindb/LOCK`: the cross-process exclusive-open lock file.
 - `Dir/dictdb/`: dictionary store DB used by value-log compression.
 
+For final disk footprint, use the high-level compaction path:
+
+```go
+stats, err := db.CompactStorage(ctx, treedb.CompactStorageOptions{
+    Mode: treedb.CompactStorageFull,
+})
+```
+
+or:
+
+```sh
+treemap compact <db-dir> -rw
+```
+
+`vlog-gc`, `vlog-rewrite`, `leafgen-pack`, `leafgen-gc`, and index `vacuum`
+are domain-specific internals. They are useful for diagnostics, but they are
+not the recommended user-facing way to obtain a fully compacted storage number.
+
 ### Inline vs value-log values
 
-TreeDB stores small values inline in leaf pages up to an internal threshold (currently `256` bytes).
-Larger values are stored out-of-line in the value log and referenced by a pointer stored in the tree.
+TreeDB stores small values inline in leaf pages up to the canonical inline
+threshold defined in `TreeDB/docs/spec/write-path-and-durability.md#21-threshold-selection`.
+Larger values are stored out-of-line in the value log and referenced by a
+pointer stored in the tree.
 
 ### Copy-on-write and the “zipper” merge
 

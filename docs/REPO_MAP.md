@@ -36,7 +36,7 @@ The default `treedb.Open()` mode wraps a durable B+Tree backend with a high-thro
 │ TreeDB                                │
 │                                       │
 │  ┌─────────────┐   ┌──────────────┐   │
-│  │  index.db   │   │  wal/value   │   │
+│  │  index.db   │   │ value_vlog   │   │
 │  │ (B+Tree)    │   │ (Large Vals) │   │
 │  └─────────────┘   └──────────────┘   │
 └───────────────────────────────────────┘
@@ -47,7 +47,10 @@ The default `treedb.Open()` mode wraps a durable B+Tree backend with a high-thro
 - **Flush**: Memtables are converted to backend batches and merged into the B+Tree via the "Zipper" (COW merge).
 
 On disk, `Options.Dir` is a root directory containing:
-- `Dir/maindb/index.db` + `Dir/maindb/wal/*.log`
+- `Dir/maindb/index.db`
+- `Dir/maindb/wal/*.log` for commit journal segments and future collection WAL
+- `Dir/maindb/value_vlog/*.log` for value-log segments
+- `Dir/maindb/leaf_vlog/*.log` for optional split leaf-log segments
 - `Dir/dictdb/index.db` (dictionary store for value-log compression)
 
 ### 2. HashDB (Sharded)

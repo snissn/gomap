@@ -278,7 +278,11 @@ func TestVlogGenerationGC_ProtectedPathsSnapshotDoesNotDeleteNewerSegments(t *te
 	defer db.Close()
 
 	// Establish a stable backend boundary and create the initial (protected)
-	// value-log segment.
+	// value-log segment. Cached value-log writers are lazy, so write an actual
+	// pointer-backed value before taking the protected-path snapshot.
+	if err := db.Set([]byte("protected-seed"), bytes.Repeat([]byte("p"), 8<<10)); err != nil {
+		t.Fatalf("Set protected seed: %v", err)
+	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}

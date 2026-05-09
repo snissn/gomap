@@ -84,6 +84,12 @@ raw-wire mode to estimate the gateway/server ceiling without the driver's
 per-document marshal and `_id` discovery overhead; use driver mode for
 user-visible Mongo compatibility throughput.
 
+`-client-mode native-wire-inproc` and `-client-mode native-wire-tcp` are
+TreeDB-only native protocol load paths. They use TreeDB collection IDs and
+stored document bytes over the native-wire server/client instead of Mongo OP_MSG,
+then keep setup and later read/update phases on the Mongo compatibility driver
+so they remain comparable with the existing benchmark sweep.
+
 When `-prebuild-documents` is enabled, the harness builds both structured BSON
 documents and raw BSON bytes before the measured workload. `driver-command` and
 `raw-wire` reuse the raw bytes during the load phase so their insert-call timing
@@ -113,7 +119,8 @@ collection benchmark profile:
 - `-treedb-index-state-root-storage compressed`
 - `-treedb-index-root-storage compressed`
 - `-treedb-buffered-indexed-write-max-documents 0` (use the collection default:
-  96000 for synchronous flushing, 256000 when async flush is enabled)
+  256000 for default async threshold publish; 96000 when async flush is
+  disabled)
 - `-treedb-buffered-indexed-write-max-root-runs 0` (explicit `0` disables this
   trigger; when this flag is omitted while document or byte thresholds are
   overridden, the tool keeps the matching root-run compatibility default)
@@ -146,12 +153,21 @@ tool fills in the matching root-run default; pass
 `-treedb-buffered-indexed-write-max-root-runs 0` explicitly to keep root-run
 flushing disabled in that case.
 
-The Go profile benchmarks in `profile_bench_test.go` keep their defaults stable,
-but can opt into the same indexed async flush mode for focused root-publish
+The Go profile benchmarks in `profile_bench_test.go` use the collection default
+indexed async flush mode. They can force foreground threshold publish for
+baseline comparisons, or override async queue limits for focused root-publish
 experiments:
 
 ```sh
-MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH=true \
+MONGO_GATEWAY_PROFILE_BENCH_DISABLE_BUFFERED_INDEXED_ASYNC_FLUSH=true \
+go test ./cmd/mongo_gateway_bench \
+  -run '^$' \
+  -bench '^BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2$' \
+  -benchtime=100000x \
+  -benchmem
+```
+
+```sh
 MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS=4 \
 go test ./cmd/mongo_gateway_bench \
   -run '^$' \
@@ -211,7 +227,7 @@ beside the normal MongoDB Go driver `InsertMany` path:
 
 ```sh
 TREEDB_DOCUMENT_FORMATS="bson" \
-TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire" \
+TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire native-wire-tcp native-wire-inproc" \
 scripts/mongo_gateway_compare.sh
 ```
 
@@ -283,7 +299,7 @@ Useful overrides:
 
 - `DOCS_LIST="1000 10000 100000"`
 - `INDEXES_LIST="0 1 2"`
-- `TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire"`
+- `TREEDB_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire native-wire-tcp native-wire-inproc"`
 - `MONGO_CLIENT_MODES="driver driver-find-raw driver-command driver-command-raw driver-unack"`
 - `READS=50000`, `RANGE_READS=5000`, `UPDATES=5000`
 - `DELETES=1000`
@@ -579,6 +595,8 @@ The benchmark shapes are intentionally different:
   collection-manager detailed update timing for its measured phase and reports
   update attribution metrics such as `update_current_read_ns/doc`,
   `update_callback_ns/doc`, `update_index_state_extract_ns/doc`,
+  `update_old_index_state_extract_ns/doc`,
+  `update_new_index_state_extract_ns/doc`,
   `update_primary_run_ns/doc`, `update_secondary_runs_ns/doc`,
   `update_index_value_changes/doc`, `update_index_value_unchanged/doc`,
   `update_unique_checks/doc`, `update_unique_check_skips/doc`,
@@ -592,12 +610,20 @@ The benchmark shapes are intentionally different:
   `update_buffer_precheck_ns/doc`, `update_buffer_lock_wait_ns/doc`,
   `update_buffer_lock_hold_ns/doc`, `update_buffer_validation_ns/doc`,
   `update_buffer_root_scan_ns/doc`, `update_buffer_domain_prepare_ns/doc`,
+  `update_buffer_freeze_ns/doc`, `update_buffer_root_table_ns/doc`,
   `update_buffer_primary_index_ns/doc`, `update_buffer_unique_index_ns/doc`,
+  `update_buffer_primary_append_ns/doc`,
+  `update_buffer_secondary_append_ns/doc`,
   `update_buffer_root_append_ns/doc`, `update_buffer_flush_ns/doc`,
-  `update_publish_ns/doc`, and `update_items/batch` from the collection
+  combiner timings such as `update_combine_enqueue_ns/doc`,
+  `update_combine_wait_ns/doc`, `update_combine_drain_ns/doc`, and
+  `update_combine_run_ns/doc`, `update_publish_ns/doc`, and
+  `update_items/batch` from the collection
   manager's measured-phase counters. `update_buffer_lock_hold_ns/doc` is the
   enclosing domain mutex hold time for buffered staging, not an additive sibling
-  of the other buffer-stage submetrics; `update_buffer_flush_ns/doc` reports
+  of the other buffer-stage submetrics; the narrower root-table, append, and
+  freeze submetrics are nested attribution inside the broader buffer-stage
+  timers. `update_buffer_flush_ns/doc` reports
   threshold-flush scheduling/publish time separately. The measured phase includes
   the final `FlushAll()` drain so background async publish work is charged to the
   same throughput row that scheduled it. The same row also reports backend

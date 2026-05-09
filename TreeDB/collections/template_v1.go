@@ -140,20 +140,6 @@ func collectionOptionsWithTemplateV1Resolver(opts collectionOptions, snap *backe
 	return opts
 }
 
-func collectionOptionsWithBufferedTemplateV1Resolver(opts collectionOptions, domain *collectionWriteDomain, collectionName string) collectionOptions {
-	if normalizedDocumentFormat(opts.documentFormat) != DocumentFormatTemplateV1 || domain == nil || collectionName == "" {
-		return opts
-	}
-	rootName := collectionTemplateRootName(collectionName)
-	domain.mu.RLock()
-	runs := append([]memtable.Table(nil), pendingIndexedRootRunsLocked(domain, rootName)...)
-	domain.mu.RUnlock()
-	if len(runs) == 0 {
-		return opts
-	}
-	return collectionOptionsWithBufferedTemplateV1RunsResolver(opts, runs)
-}
-
 func collectionOptionsWithBufferedTemplateV1RunsResolver(opts collectionOptions, runs []memtable.Table) collectionOptions {
 	if normalizedDocumentFormat(opts.documentFormat) != DocumentFormatTemplateV1 || len(runs) == 0 {
 		return opts
