@@ -422,6 +422,24 @@ func TestMongoStorageBasisTextUsesRunSpecificMetric(t *testing.T) {
 	}
 }
 
+func TestMongoLoadModeStorageMarksUnavailableMongoPhysicalBytes(t *testing.T) {
+	html := renderHTML(reportData{
+		Config: config{Title: "load storage", RunRoot: t.TempDir()},
+		MongoLoadModes: []loadModeRow{
+			{Indexes: 0, Target: "treedb", Config: "treedb_bson_driver", OpsPerSec: 1000, PhysicalBytes: 4096},
+			{Indexes: 0, Target: "mongo", Config: "mongo_driver", OpsPerSec: 900, PhysicalBytes: 0},
+		},
+	})
+	for _, want := range []string{
+		"MongoDB physical_bytes unavailable in this matrix",
+		"unavailable",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("load-mode report missing %q\n%s", want, html)
+		}
+	}
+}
+
 func TestReadMatrixPreservesLargePhysicalBytes(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "matrix.tsv")

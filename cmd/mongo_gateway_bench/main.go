@@ -659,6 +659,11 @@ func parseConfig(args []string) (config, error) {
 	} else if (cfg.ConcurrentWriters == 0) != (cfg.ConcurrentWrites == 0) {
 		return config{}, errors.New("concurrent-writers and concurrent-writes must both be > 0 or both be 0")
 	}
+	if concurrentReadKindsIncludeRange(cfg.ConcurrentReadKinds) &&
+		len(concurrentReaderCounts(cfg)) > 0 &&
+		len(concurrentRangeReaderCounts(cfg)) > 0 {
+		return config{}, errors.New("concurrent-read-kinds range cannot be combined with concurrent-range-readers or concurrent-range-reader-sweep")
+	}
 	if cfg.Timeout < 0 {
 		return config{}, errors.New("timeout cannot be negative")
 	}
@@ -2839,6 +2844,15 @@ func concurrentReadKindsForConfig(cfg config) []string {
 		}
 	}
 	return out
+}
+
+func concurrentReadKindsIncludeRange(kinds []string) bool {
+	for _, kind := range kinds {
+		if kind == concurrentReadKindRange {
+			return true
+		}
+	}
+	return false
 }
 
 func skippedConcurrentReadKindsForConfig(cfg config) []string {

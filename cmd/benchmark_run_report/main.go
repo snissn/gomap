@@ -2362,9 +2362,10 @@ func renderMongoLoadModes(b *strings.Builder, rows []loadModeRow) {
 		return
 	}
 	b.WriteString("<section id=\"mongo-load\"><h2>Load-Only Client-Mode Matrix</h2>")
-	b.WriteString("<p class=\"subtle\">Insert-only matrix. This section uses raw JSON directly so every MongoDB and TreeDB client mode has its own throughput and physical-disk row.</p>")
+	b.WriteString("<p class=\"subtle\">Insert-only matrix. This section uses raw JSON directly so every MongoDB and TreeDB client mode has its own throughput row.</p>")
 	b.WriteString("<p class=\"subtle\">Use this section for pure ingest client-path comparisons. It is intentionally separate from the full-sweep load chart, which inherits the broader read/range/update sweep setup.</p>")
 	b.WriteString("<p class=\"subtle\">Driver, driver-command, driver-command-raw, and driver-unack modes are comparable Mongo-compatible client paths and render as paired TreeDB/MongoDB bars. Client modes marked with <strong>*</strong> are TreeDB-only ceiling probes explained below.</p>")
+	b.WriteString("<p class=\"subtle\"><strong>Load-mode storage basis:</strong> " + esc(loadModeStorageBasisText(rows)) + "</p>")
 	b.WriteString("<div class=\"chart-grid\">")
 	for _, idx := range sortedLoadModeIndexes(rows) {
 		cats, tree, mongo := loadModeChartRows(rows, idx)
@@ -2381,7 +2382,7 @@ func renderMongoLoadModes(b *strings.Builder, rows []loadModeRow) {
 	b.WriteString("<p class=\"subtle\"><strong>* TreeDB-only modes:</strong> <code>direct</code> calls the collection API directly in the selected TreeDB document format. <code>raw-wire-tcp</code> still sends Mongo OP_MSG bytes over loopback TCP to the TreeDB gateway while bypassing the MongoDB Go driver. <code>raw-wire</code> removes the socket too and drives the same raw command/gateway path in process. These modes are TreeDB-only ceiling probes, so each renders as one centered TreeDB bar instead of a paired MongoDB bar.</p>")
 	var body [][]string
 	for _, row := range rows {
-		body = append(body, []string{strconv.Itoa(row.Indexes), row.Target, row.Config, fmtOps(row.OpsPerSec), fmtBytes(float64(row.PhysicalBytes)), row.RawJSON})
+		body = append(body, []string{strconv.Itoa(row.Indexes), row.Target, row.Config, fmtOps(row.OpsPerSec), loadModePhysicalBytesCell(row), row.RawJSON})
 	}
 	b.WriteString("<details><summary>Raw load-mode rows</summary>")
 	writeTable(b, []string{"indexes", "target", "config", "load docs/sec", "physical bytes", "raw JSON"}, body, numericColumns(0, 3, 4))
@@ -3050,6 +3051,41 @@ func loadModeChartRows(rows []loadModeRow, idx int) ([]string, []float64, []floa
 
 func loadModeDiskChartRows(rows []loadModeRow, idx int) ([]string, []float64, []float64) {
 	return loadModeValueRows(rows, idx, func(row loadModeRow) float64 { return float64(row.PhysicalBytes) })
+}
+
+func loadModeStorageBasisText(rows []loadModeRow) string {
+	if loadModeHasUnavailableMongoPhysicalBytes(rows) {
+		return "TreeDB physical_bytes from matrix.tsv; MongoDB physical_bytes unavailable in this matrix and omitted from storage bars."
+	}
+	if loadModeHasMongoPhysicalBytes(rows) {
+		return "TreeDB and MongoDB physical_bytes from matrix.tsv."
+	}
+	return "TreeDB physical_bytes from matrix.tsv; no MongoDB physical storage row is available in this matrix."
+}
+
+func loadModeHasMongoPhysicalBytes(rows []loadModeRow) bool {
+	for _, row := range rows {
+		if row.Target == "mongo" && row.PhysicalBytes > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func loadModeHasUnavailableMongoPhysicalBytes(rows []loadModeRow) bool {
+	for _, row := range rows {
+		if row.Target == "mongo" && row.PhysicalBytes == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func loadModePhysicalBytesCell(row loadModeRow) string {
+	if row.Target == "mongo" && row.PhysicalBytes == 0 {
+		return "unavailable"
+	}
+	return fmtBytes(float64(row.PhysicalBytes))
 }
 
 func loadModeValueRows(rows []loadModeRow, idx int, value func(loadModeRow) float64) ([]string, []float64, []float64) {

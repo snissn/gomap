@@ -493,6 +493,18 @@ list_word_count() {
   echo "$count"
 }
 
+concurrent_read_kinds_include_range() {
+  local kind
+  for kind in ${CONCURRENT_READ_KINDS//,/ }; do
+    case "$(lower_word "$kind")" in
+      range|all)
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
 mongo_config_name() {
   local client_mode
   client_mode=$(lower_word "$1")
@@ -795,6 +807,12 @@ if [[ -n "$CONCURRENT_RANGE_READER_SWEEP" ]]; then
   CONCURRENT_RANGE_READER_SWEEP=$normalized_range_reader_sweep
 elif [[ "$CONCURRENT_RANGE_READERS" -eq 0 && -n "$CONCURRENT_RANGE_READS" && "$CONCURRENT_RANGE_READS" != "0" ]]; then
   echo "CONCURRENT_RANGE_READERS or CONCURRENT_RANGE_READER_SWEEP must be set when CONCURRENT_RANGE_READS is set" >&2
+  exit 2
+fi
+if concurrent_read_kinds_include_range &&
+  [[ "$CONCURRENT_READERS" -gt 0 || -n "$CONCURRENT_READER_SWEEP" ]] &&
+  [[ "$CONCURRENT_RANGE_READERS" -gt 0 || -n "$CONCURRENT_RANGE_READER_SWEEP" ]]; then
+  echo "CONCURRENT_READ_KINDS=range/all cannot be combined with CONCURRENT_RANGE_READERS or CONCURRENT_RANGE_READER_SWEEP when concurrent readers are enabled" >&2
   exit 2
 fi
 

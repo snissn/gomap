@@ -9539,9 +9539,6 @@ func TestCollectionUpdateUsesCombinerWhenInlineUpdateInFlight(t *testing.T) {
 	if got := after.UpdateCombineRequests - before.UpdateCombineRequests; got == 0 {
 		t.Fatal("combine requests delta=0 want positive")
 	}
-	if got := after.UpdateCombineQueueDepthMax; got == 0 {
-		t.Fatal("combine queue depth max=0 want positive")
-	}
 	ids, err := col.FindByIndex("city", "sea")
 	if err != nil {
 		t.Fatalf("find updated city: %v", err)

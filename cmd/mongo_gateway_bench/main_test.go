@@ -584,7 +584,7 @@ func TestParseConfigValidation(t *testing.T) {
 		"-mongo-max-connecting", "16",
 		"-secondary-indexes", "2",
 		"-format", "json",
-		"-concurrent-read-kinds", "id,email,range",
+		"-concurrent-read-kinds", "id,email",
 		"-concurrent-readers", "4",
 		"-concurrent-reads", "20",
 		"-concurrent-range-readers", "3",
@@ -602,7 +602,7 @@ func TestParseConfigValidation(t *testing.T) {
 		cfg.ClientMode != clientModeDriver ||
 		cfg.BatchSize != 5 || cfg.InsertProducers != 4 ||
 		cfg.MongoMaxPoolSize != 32 || cfg.MongoMinPoolSize != 8 || cfg.MongoMaxConnecting != 16 ||
-		!reflect.DeepEqual(cfg.ConcurrentReadKinds, []string{concurrentReadKindID, concurrentReadKindEmail, concurrentReadKindRange}) ||
+		!reflect.DeepEqual(cfg.ConcurrentReadKinds, []string{concurrentReadKindID, concurrentReadKindEmail}) ||
 		cfg.ConcurrentReaders != 4 || cfg.ConcurrentReads != 20 ||
 		cfg.ConcurrentRangeReaders != 3 || cfg.ConcurrentRangeReads != 18 ||
 		cfg.ConcurrentWriters != 2 || cfg.ConcurrentWrites != 10 ||
@@ -649,6 +649,15 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(rangeSweepCfg.ConcurrentRangeReaderSweep, []int{1, 2, 4}) || rangeSweepCfg.ConcurrentRangeReads != 30 {
 		t.Fatalf("unexpected concurrent range reader sweep config: %+v", rangeSweepCfg)
+	}
+	if _, err := parseConfig([]string{
+		"-concurrent-read-kinds", "range",
+		"-concurrent-reader-sweep", "1,2",
+		"-concurrent-reads", "30",
+		"-concurrent-range-reader-sweep", "1,2",
+		"-concurrent-range-reads", "30",
+	}); err == nil || !strings.Contains(err.Error(), "concurrent-read-kinds range cannot be combined") {
+		t.Fatalf("duplicate range concurrency config error = %v", err)
 	}
 	rawWireCfg, err := parseConfig([]string{"-target", "treedb", "-client-mode", "raw-wire"})
 	if err != nil {

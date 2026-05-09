@@ -311,8 +311,10 @@ Useful overrides:
   TreeDB cell and retain per-phase profiles under the bundle's `profiles/`
   directory.
 - `CONCURRENT_READERS=16`, `CONCURRENT_READS=50000`
-- `CONCURRENT_RANGE_READER_SWEEP="1,2,4,8,16"`,
-  `CONCURRENT_RANGE_READS=5000`
+- Use either `CONCURRENT_READ_KINDS="id,email,range"` with
+  `CONCURRENT_READER_SWEEP`, or `CONCURRENT_RANGE_READER_SWEEP` with
+  `CONCURRENT_RANGE_READS`; the two range-concurrency paths share phase names
+  and are intentionally not combined.
 - `CONCURRENT_WRITERS=8`, `CONCURRENT_WRITES=10000`
 - `BATCH_SIZE=1000`
 - `MONGO_IMAGE=mongo:8`
@@ -332,8 +334,6 @@ BATCH_SIZE=5000 scripts/mongo_gateway_compare.sh \
   --concurrent-read-kinds "id,email,range" \
   --concurrent-reader-sweep "1,2,4,8,16" \
   --concurrent-reads 50000 \
-  --concurrent-range-reader-sweep "1,2,4,8,16" \
-  --concurrent-range-reads 5000 \
   --concurrent-writer-sweep "1,2,4,8,16" \
   --concurrent-writes 10000 \
   --timeout 120m
@@ -412,10 +412,13 @@ The initial workload phases are:
   `-concurrent-read-kinds all` to select the saturated read shapes. Use
   `-concurrent-reader-sweep 1,2,4,8,16` with `-concurrent-reads` to emit
   multiple reader-count phases from one loaded database. The comparison report
-  groups these rows into a "Concurrent Read Sweep" table so scaling is visible
-  as one throughput sweep rather than unrelated phases. The legacy
-  `-concurrent-readers N` flag still emits one reader-count phase per selected
-  kind and cannot be combined with `-concurrent-reader-sweep`.
+  groups `_id`/email rows into the "Concurrent Read Sweep" table and renders
+  `concurrent_age_range_*_rN` rows in the dedicated range-read section. The
+  generic `range` read kind cannot be combined with
+  `-concurrent-range-readers` or `-concurrent-range-reader-sweep`, because those
+  options emit the same range phase names. The legacy `-concurrent-readers N`
+  flag still emits one reader-count phase per selected kind and cannot be
+  combined with `-concurrent-reader-sweep`.
 - `concurrent_id_update_set_wN`: total `$set` updates split across `N`
   goroutines. Use `-concurrent-writer-sweep 1,2,4,8,16` with
   `-concurrent-writes` to emit multiple writer-count phases from one loaded
