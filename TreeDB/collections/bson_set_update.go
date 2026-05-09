@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unsafe"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
@@ -73,9 +74,7 @@ func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) 
 	items := []updateBatchItem{newBSONSetUpdateBatchItem(documentID, spec)}
 	results, batched, err := c.updateBatchOwnedItems(items, updateBatchModeNoSecondaryUniqueIndexChanges)
 	if !batched && err == nil {
-		return c.updateDirect(documentID, func(current []byte) ([]byte, bool, error) {
-			return callBSONSetUpdateApply(spec, current)
-		})
+		return c.updateDirectBSONSet(documentID, spec)
 	}
 	if err != nil {
 		var itemErr *UpdateBatchItemError
@@ -174,12 +173,26 @@ func (u bsonSetUpdate) fieldIndex(key string) int {
 }
 
 func (u bsonSetUpdate) fieldIndexBytes(key []byte) int {
+	if u.fieldIndexes != nil {
+		idx, ok := u.fieldIndexes[unsafeStringFromBytes(key)]
+		if ok {
+			return idx
+		}
+		return -1
+	}
 	for i := range u.fields {
 		if bytesEqualString(key, u.fields[i].Key) {
 			return i
 		}
 	}
 	return -1
+}
+
+func unsafeStringFromBytes(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
 func (u bsonSetUpdate) apply(current []byte) ([]byte, bool, error) {
@@ -210,15 +223,15 @@ func (u bsonSetUpdate) apply(current []byte) ([]byte, bool, error) {
 		if !elemOK {
 			return nil, false, bsoncore.NewInsufficientBytesError(current, rem)
 		}
-		replacement := u.fieldIndexBytes(elem.KeyBytes())
-		if replacement < 0 {
+		replacementFieldIndex := u.fieldIndexBytes(elem.KeyBytes())
+		if replacementFieldIndex < 0 {
 			if changed {
 				out = append(out, elem...)
 			}
 			continue
 		}
-		used[replacement] = true
-		field := u.fields[replacement]
+		used[replacementFieldIndex] = true
+		field := u.fields[replacementFieldIndex]
 		value := field.Value
 		currentValue := elem.Value()
 		if bsonCoreValueEqualRawValue(currentValue, value) {
