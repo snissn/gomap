@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -23,6 +24,9 @@ func IsSegmentName(name string) bool {
 	rest := strings.TrimSuffix(strings.TrimPrefix(name, segmentPrefix), segmentSuffix)
 	parts := strings.SplitN(rest, "-", 2)
 	if len(parts) != 2 {
+		return false
+	}
+	if len(parts[1]) != 6 {
 		return false
 	}
 	lane, err := strconv.ParseUint(parts[0], 10, 32)
@@ -55,6 +59,7 @@ func DirtySegments(dbDir string) ([]string, error) {
 			dirty = append(dirty, filepath.Join(walDir, name))
 		}
 	}
+	sort.Strings(dirty)
 	return dirty, nil
 }
 

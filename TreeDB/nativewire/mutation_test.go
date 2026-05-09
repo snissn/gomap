@@ -767,6 +767,9 @@ func TestNativewireAckSyncedRejectedInWALOnRelaxed(t *testing.T) {
 		t.Fatalf("InsertBatch synced relaxed err=%v want durability unavailable", err)
 	}
 	assertDocumentMissing(t, mgr, "users", "u1")
+	if err := client.Checkpoint(ctx); err != nil {
+		t.Fatalf("Checkpoint default relaxed: %v", err)
+	}
 	if err := client.CheckpointWithAck(ctx, AckSynced); !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
 		t.Fatalf("CheckpointWithAck synced relaxed err=%v want durability unavailable", err)
 	}

@@ -75,6 +75,7 @@ func openReadOnly(opts Options) (*DB, error) {
 	adaptiveCtrl, inlineThreshold := resolveInlineThresholdAndAdaptive(opts)
 	db := &DB{
 		readOnly:                       true,
+		durability:                     opts.Durability,
 		valueLogManager:                vm,
 		lock:                           lock,
 		adaptive:                       adaptiveCtrl,
@@ -200,6 +201,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	adaptiveCtrl, inlineThreshold := resolveInlineThresholdAndAdaptive(opts)
 	db := &DB{
 		readOnly:                       true,
+		durability:                     opts.Durability,
 		valueLogManager:                vm,
 		adaptive:                       adaptiveCtrl,
 		keepRecent:                     opts.KeepRecent,
