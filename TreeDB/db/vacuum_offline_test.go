@@ -228,7 +228,7 @@ func TestResetLeafGenerationAfterOfflineVacuum_WritesResetManifestBeforeDeletion
 	}
 }
 
-func TestOpen_IndexOuterLeavesInValueLog_ResetsStaleLeafGenerationWithoutLiveRefs(t *testing.T) {
+func TestOpen_IndexOuterLeavesInValueLog_RecoversPendingOfflineVacuumReset(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{Dir: dir, IndexOuterLeavesInValueLog: true}
 	db, err := Open(opts)
@@ -263,6 +263,9 @@ func TestOpen_IndexOuterLeavesInValueLog_ResetsStaleLeafGenerationWithoutLiveRef
 	if err := saveLeafGenerationManifest(leafDir, manifest); err != nil {
 		t.Fatalf("save stale manifest: %v", err)
 	}
+	if err := writeLeafGenerationResetPendingAfterOfflineVacuum(dir); err != nil {
+		t.Fatalf("write reset marker: %v", err)
+	}
 
 	reopen, err := Open(opts)
 	if err != nil {
@@ -286,5 +289,8 @@ func TestOpen_IndexOuterLeavesInValueLog_ResetsStaleLeafGenerationWithoutLiveRef
 	}
 	if len(reset.Generations) != 1 || len(reset.Generations[0].FileIDs) != 0 {
 		t.Fatalf("unexpected reset manifest: %+v", reset)
+	}
+	if _, err := os.Stat(leafGenerationResetPendingAfterOfflineVacuumPath(dir)); !os.IsNotExist(err) {
+		t.Fatalf("reset marker still exists or stat failed: %v", err)
 	}
 }

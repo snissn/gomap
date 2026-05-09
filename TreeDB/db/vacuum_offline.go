@@ -156,6 +156,13 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		_ = d.Close()
 		return err
 	}
+	if !outputHasLeafLogRefs {
+		if err := writeLeafGenerationResetPendingAfterOfflineVacuum(opts.Dir); err != nil {
+			_ = newPager.Close()
+			_ = d.Close()
+			return err
+		}
+	}
 
 	if err := newPager.Sync(); err != nil {
 		_ = newPager.Close()
@@ -220,6 +227,9 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 
 	if !outputHasLeafLogRefs {
 		if err := resetLeafGenerationAfterOfflineVacuum(opts.Dir, meta.CommitSeq); err != nil {
+			return err
+		}
+		if err := removeLeafGenerationResetPendingAfterOfflineVacuum(opts.Dir); err != nil {
 			return err
 		}
 	}
@@ -348,6 +358,59 @@ func resetLeafGenerationAfterOfflineVacuum(dir string, commitSeq uint64) error {
 		return fmt.Errorf("vacuum: sync leaf_vlog dir after stale file removal: %w", err)
 	}
 	return nil
+}
+
+const leafGenerationOfflineVacuumResetPendingFileName = "offline-vacuum-reset.pending"
+
+func leafGenerationResetPendingAfterOfflineVacuumPath(dir string) string {
+	return filepath.Join(LeafLogDirPath(dir), leafGenerationOfflineVacuumResetPendingFileName)
+}
+
+func writeLeafGenerationResetPendingAfterOfflineVacuum(dir string) error {
+	leafDir := LeafLogDirPath(dir)
+	if err := os.MkdirAll(leafDir, 0o700); err != nil {
+		return fmt.Errorf("vacuum: create leaf_vlog dir for reset marker: %w", err)
+	}
+	path := leafGenerationResetPendingAfterOfflineVacuumPath(dir)
+	if err := os.WriteFile(path, []byte("v1\n"), 0o600); err != nil {
+		return fmt.Errorf("vacuum: write leaf_vlog reset marker: %w", err)
+	}
+	if err := syncDirFn(leafDir); err != nil {
+		return fmt.Errorf("vacuum: sync leaf_vlog dir after reset marker: %w", err)
+	}
+	return nil
+}
+
+func removeLeafGenerationResetPendingAfterOfflineVacuum(dir string) error {
+	leafDir := LeafLogDirPath(dir)
+	path := leafGenerationResetPendingAfterOfflineVacuumPath(dir)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("vacuum: remove leaf_vlog reset marker: %w", err)
+	}
+	if err := syncDirFn(leafDir); err != nil {
+		return fmt.Errorf("vacuum: sync leaf_vlog dir after reset marker removal: %w", err)
+	}
+	return nil
+}
+
+func recoverLeafGenerationResetAfterOfflineVacuum(dir string, p *pager.Pager, reader tree.SlabReader, userRoot, systemRoot, commitSeq uint64) (bool, error) {
+	markerPath := leafGenerationResetPendingAfterOfflineVacuumPath(dir)
+	if _, err := os.Stat(markerPath); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("vacuum: stat leaf_vlog reset marker: %w", err)
+	}
+	hasLeafLogRefs, err := vacuumOutputHasLeafLogRefs(p, reader, userRoot, systemRoot)
+	if err != nil {
+		return false, err
+	}
+	if !hasLeafLogRefs {
+		if err := resetLeafGenerationAfterOfflineVacuum(dir, commitSeq); err != nil {
+			return false, err
+		}
+	}
+	return true, removeLeafGenerationResetPendingAfterOfflineVacuum(dir)
 }
 
 func writeMetaToPager(p *pager.Pager, pageID uint64, meta page.MetaPageBody) error {

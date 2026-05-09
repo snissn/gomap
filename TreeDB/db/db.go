@@ -1430,23 +1430,23 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		db.Close()
 		return nil, err
 	}
-	if opts.IndexOuterLeavesInValueLog {
-		reader := newValueReader(vm.CurrentSet())
-		hasLeafLogRefs, err := vacuumOutputHasLeafLogRefs(p, reader, db.meta.UserRootPageID, db.meta.SystemRootPageID)
-		if err != nil {
+	recoverySet := vm.CurrentSet()
+	reader := newValueReader(recoverySet)
+	recoveredLeafReset, err := recoverLeafGenerationResetAfterOfflineVacuum(opts.Dir, p, reader, db.meta.UserRootPageID, db.meta.SystemRootPageID, db.meta.CommitSeq)
+	if recoverySet != nil {
+		vm.Release(recoverySet)
+	}
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	if recoveredLeafReset {
+		if err := vm.Refresh(); err != nil {
 			db.Close()
 			return nil, err
 		}
-		if !hasLeafLogRefs {
-			if err := resetLeafGenerationAfterOfflineVacuum(opts.Dir, db.meta.CommitSeq); err != nil {
-				db.Close()
-				return nil, err
-			}
-			if err := vm.Refresh(); err != nil {
-				db.Close()
-				return nil, err
-			}
-		}
+	}
+	if opts.IndexOuterLeavesInValueLog {
 		manifest, err := loadOrCreateLeafGenerationManifest(layout.leafVLogDir, db.meta.CommitSeq, false)
 		if err != nil {
 			db.Close()
