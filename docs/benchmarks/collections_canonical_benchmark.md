@@ -31,7 +31,7 @@ another location such as `$TMPDIR` on macOS) and writes:
 - `benchmark_summary.md`: human-readable report.
 - `benchmark_matrix.csv`: flat table for spreadsheet/diff tooling.
 - `timed_matrix/`: existing timed TreeDB/SQLite benchmark matrix artifacts.
-- `offline_rewrite/`: PR 1096-style offline rewrite artifacts.
+- `offline_compact/`: high-level TreeDB compaction artifacts.
 - `full_leafgen_pack_gc/`: full leaf-generation pack/GC fixture artifacts.
 
 Use `-out-dir <dir>` to keep a specific run directory:
@@ -58,16 +58,16 @@ The current benchmark harness's online maintenance path. It is useful for
 tracking what a bounded online maintenance pass accomplishes, but it is partial
 maintenance and must not be described as full compaction.
 
-`offline_rewrite`
+`offline_compact`
 
-The PR 1096-style offline path:
+The high-level TreeDB compaction path:
 
 ```bash
-treemap vlog-rewrite <dir> -rw
+treemap compact <dir> -rw
 ```
 
-This is a full/offline rewrite comparison point. Compare it with SQLite after
-`VACUUM`, not SQLite post-insert.
+This is the preferred full/offline compaction comparison point. Compare it with
+SQLite after `VACUUM`, not SQLite post-insert.
 
 `full_leafgen_pack_gc`
 
@@ -87,7 +87,7 @@ after `VACUUM`.
 `sqlite_vacuum`
 
 SQLite compacted baseline after `VACUUM`. This is the required SQLite baseline
-when comparing against TreeDB `offline_rewrite` or `full_leafgen_pack_gc`.
+when comparing against TreeDB `offline_compact` or `full_leafgen_pack_gc`.
 
 ## Fair Comparisons
 
@@ -98,7 +98,7 @@ Fair post-insert comparison:
 
 Fair compacted-state comparison:
 
-- TreeDB `offline_rewrite`
+- TreeDB `offline_compact`
 - TreeDB `full_leafgen_pack_gc`
 - SQLite `sqlite_vacuum`
 

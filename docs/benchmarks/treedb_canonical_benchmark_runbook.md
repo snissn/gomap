@@ -15,7 +15,7 @@ evidence.
 - Report both throughput and disk. For latency-sensitive phases, include p50,
   p95, and p99 when the harness emits them.
 - Keep TreeDB maintenance phases named exactly. Do not call a row "compacted"
-  unless the row is from `offline_rewrite`, `full_leafgen_pack_gc`,
+  unless the row is from `offline_compact`, `full_leafgen_pack_gc`,
   `sqlite_vacuum`, or another explicitly documented full-maintenance phase.
 - Keep raw artifacts. Markdown tables are for review; JSON, TSV, profiles, and
   data directories are the durable evidence.
@@ -147,7 +147,7 @@ The canonical runner emits:
 - `benchmark_summary.md`
 - `benchmark_matrix.csv`
 - `timed_matrix/`
-- `offline_rewrite/`
+- `offline_compact/`
 - `full_leafgen_pack_gc/` with per-format full leafgen/GC fixture summaries
 
 For broader matrix work, build and run:
@@ -192,7 +192,7 @@ The canonical collection maintenance phases are:
 - `post_insert`: after insert plus the flush/checkpoint needed for correctness.
 - `online_one_pass_maintenance`: bounded online maintenance; useful, but not a
   full compaction state.
-- `offline_rewrite`: full/offline TreeDB value-log rewrite comparison point.
+- `offline_compact`: high-level `treemap compact <dir> -rw` comparison point.
 - `full_leafgen_pack_gc`: full leaf-generation pack/GC comparison point.
 - `sqlite_vacuum`: SQLite compacted baseline after `VACUUM`.
 
@@ -203,7 +203,7 @@ Fair post-insert comparison:
 
 Fair compacted-state comparison:
 
-- TreeDB `offline_rewrite`
+- TreeDB `offline_compact`
 - TreeDB `full_leafgen_pack_gc`
 - SQLite `sqlite_vacuum`
 

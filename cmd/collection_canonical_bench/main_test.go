@@ -14,12 +14,12 @@ func TestCanonicalReportKnownCompressionShape(t *testing.T) {
 
 	required := []string{
 		"| `command_line` | `./scripts/bench_collections_canonical.sh -docs 100000` |",
-		"44.3 B/doc via PR 1096-style offline rewrite and 31.7 B/doc via full leafgen pack/GC",
-		"offline rewrite is about 3.5x smaller than SQLite native columns and 5.2x smaller than SQLite JSON",
+		"44.3 B/doc via high-level offline compact and 31.7 B/doc via full leafgen pack/GC",
+		"offline compact is about 3.5x smaller than SQLite native columns and 5.2x smaller than SQLite JSON",
 		"full leafgen pack/GC is about 4.9x and 7.3x smaller, respectively",
 		"`online_one_pass_maintenance`",
-		"Do not compare TreeDB `offline_rewrite` or `full_leafgen_pack_gc` only against SQLite `post_insert` rows.",
-		"`treedb_template_v1_collection_2_indexes` | `offline_rewrite` | 44.3",
+		"Do not compare TreeDB `offline_compact` or `full_leafgen_pack_gc` only against SQLite `post_insert` rows.",
+		"`treedb_template_v1_collection_2_indexes` | `offline_compact` | 44.3",
 		"`treedb_template_v1_collection_2_indexes` | `full_leafgen_pack_gc` | 31.7",
 		"make bench-collections-canonical",
 	}
