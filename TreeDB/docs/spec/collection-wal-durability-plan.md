@@ -508,6 +508,18 @@ state-machine results, and must not affect collection WAL replay.
   simple numeric extension of the local ordering unless a future cluster spec
   explicitly defines the implied local durability level.
 
+Native-wire collection command ingress must apply collection WAL bounds before
+any side effect. After decoding a command and resolving collection/index names
+to stable catalog identity, but before side-ref preparation, write-domain
+mutation, root publication, or WAL append, the server must compute the exact
+collection-WAL plan size, root-delta counts, side-ref counts, decoded entry
+counts, and side-payload spill plan. A valid 64 MiB wire frame is not permission
+to create a 64 MiB inline collection WAL transaction. The command must spill or
+reject before side effects if the plan would exceed v1 WAL bounds. Native-wire
+collection commands must enforce the same document-id, document-byte,
+index-count, catalog-guard, logical-name, and path limits as the collection WAL
+planner.
+
 ### 6.3 PR1 Invariants
 
 These invariants are normative for PR1 and are the acceptance criteria for
@@ -794,6 +806,17 @@ must not be replayed into a collection with the same name; PR1 must stop open or
 quarantine according to a documented recovery-admin procedure rather than
 silently applying the transaction to a later incarnation.
 
+On decode/replay, the allowed root-name and root-kind set is derived only from
+the recovered catalog entry for `CollectionUID`, `CollectionGeneration`,
+`SchemaEpoch`, catalog digest, and root descriptor epochs. Recovery must reject
+any `RootDelta`, descriptor op, system-delta placeholder, side-ref manifest, or
+root name that is not in that derived set before side-ref validation or root
+publication. `CollectionName` and WAL-provided root-name strings must never be
+used for replay lookup, filesystem path construction, side-file path
+construction, tenant authorization, or deciding which roots may be published.
+Any future tenant namespace must be stable catalog identity, not text parsed
+from a collection name.
+
 Maintenance that rewrites root ids or descriptor values must not run for a
 collection with unapplied WAL transactions unless the maintenance operation is
 itself encoded as a collection WAL transaction.
@@ -832,12 +855,46 @@ rules: if two accumulated deltas affect the same key, the later
 `CollectionSeq` wins, and deletes suppress older values according to normal
 collection visibility rules.
 
-A collection WAL transaction has a configured maximum encoded byte size,
-maximum root-delta count, and maximum decoded entry count. Larger root deltas
-must spill to `RootDeltaPayload` side refs with the same side-ref preparation
-and protection rules as value-log or column-file refs. Recovery must be able to
-decode and fold root deltas in bounded memory; a transaction that exceeds the
-configured limits fails before acknowledgement or uses side-payload mode.
+A v1 collection WAL transaction has a fixed, non-disableable maximum encoded
+byte size, root-delta count, side-ref count, decoded entry count, and
+decompression output size. Larger root deltas must spill to
+`RootDeltaPayload` side refs with the same side-ref preparation and protection
+rules as value-log or column-file refs. Recovery must be able to decode and fold
+root deltas in bounded memory; a transaction that exceeds the v1 limits fails
+before acknowledgement or uses side-payload mode.
+
+Normative v1 bounds:
+
+| Field / structure | v1 bound | Rule |
+|---|---:|---|
+| Encoded `CollectionWALTransaction` | **16 MiB** | Includes all encoded transaction fields and `RecordChecksumCRC32C`; excludes only the outer segment frame header. Hard cap; not configurable upward at runtime. |
+| Collection WAL outer frame payload | 16 MiB | Must equal one encoded transaction or commit-marker record. |
+| Collection WAL segment size | 64 MiB default, 1 GiB absolute max | Segment size may be lower by config; never disables per-frame/per-transaction caps. |
+| Root deltas per transaction | 64 | Count is checked before allocation. |
+| Mutated roots per transaction | 64 | Must be derived from catalog root set for `CollectionUID`. |
+| Inline root-delta bytes per transaction | 4 MiB | Larger deltas must spill to `RootDeltaPayload` side refs. |
+| Inline root-delta bytes per root | 1 MiB | Larger per-root delta spills. |
+| Root-delta payload side ref | 64 MiB | Decoded streaming fold only; no full decoded allocation unless under cap. |
+| Decoded root-delta entries per transaction | 262,144 | Larger mutation must split or use side-payload streaming with the same entry cap per transaction. |
+| Delta key / document ID bytes | 16 KiB | Applies to WAL deltas and native-wire mutation IDs. |
+| Inline delta value bytes | 1 MiB | Larger values must be value-log or side-ref backed. |
+| Side refs per transaction | 16,384 | Includes required direct side refs. Larger column/file operations must split transactions. |
+| Descriptor / system delta ops | 1,024 | Includes descriptor ops, watermark ops, placeholder bindings, and preconditions. |
+| Collection name | 128 UTF-8 bytes | Existing public validator already enforces this. |
+| Index/schema/tenant logical name | 128 UTF-8 bytes | Reject NUL, `/`, `\`, `:`, leading/trailing space. Tenant rule applies if tenant namespace is added. |
+| Root name | 256 UTF-8 bytes | Must be derived, not trusted from WAL name fields. |
+| `RelativePath` | 512 bytes | Advisory only; slash-separated; max 16 components; component max 128 bytes. |
+| Resolved absolute path | 4096 bytes and OS component limits | Reject if exceeded after safe resolution. |
+| Digest fields | exact declared length | `CollectionUID=16`, CRC32C `4`, replay/catalog digest exact algorithm length, e.g. 32 bytes. |
+| Varint/uvarint | max 10 bytes, minimal encoding | Overflow and non-minimal encodings are malformed. |
+| Compressed decoded bytes | 64 MiB per payload | Decode only after checksum; output length must exactly match declared raw length. |
+| Recovery heap budget | 128 MiB per DB open worker | On budget exhaustion: stop open/quarantine; never continue with partial roots. |
+
+The maximum legal encoded collection WAL transaction size is 16,777,216 bytes
+including the transaction checksum. Recovery must reject a larger complete frame
+before variable-field parsing, decompression, side-ref validation, or root
+publication. `limits.MaxRecordSize <= 0` and negative max-segment options must
+not disable this cap for collection WAL recovery.
 
 Root kinds are explicit, versioned values. PR1 row-store root kinds include
 `primary`, `template`, `index_state`, `secondary`, `overlay`,
@@ -903,6 +960,38 @@ Semantic segment rules:
 - A short read before a later complete frame, before a later non-cleaned segment,
   or in a sealed segment is hard corruption.
 - Hard corruption before the terminal tail fails recovery.
+
+Decoder order is mandatory:
+
+1. read the fixed segment frame header;
+2. validate magic, frame type, version, header length, payload length
+   `<= 16 MiB`, and `file_offset + frame_len` overflow;
+3. read at most 16 MiB into a bounded buffer or stream checksum into bounded
+   scratch;
+4. verify frame checksum;
+5. verify transaction `RecordChecksumCRC32C`;
+6. parse only the fixed-width transaction prefix;
+7. validate transaction version, feature flags, digest lengths, and scalar
+   fields;
+8. validate all counts against the bounds table before allocating;
+9. validate all string and path byte lengths before converting to strings;
+10. parse side refs, root deltas, and system template;
+11. derive canonical embedded side refs from decoded replay payload;
+12. compare canonical side refs to declared side refs;
+13. verify side-ref existence, range, checksum, class, path/FileID match, owner,
+    and generation;
+14. validate `CollectionUID`, generation, schema epoch, catalog digest, root
+    descriptor epochs, base roots, and sequence dependency;
+15. only then publish root deltas, system metadata, and watermark.
+
+No string, slice, map, side-ref, root-delta, or decompression allocation may be
+made from transaction-controlled counts before checksum verification. Every
+count multiplication and offset/size addition uses checked arithmetic; reject
+`count > max / elemSize`, `offset > max - size`, and `prefixLen > max - rawLen`.
+Never convert a WAL or side-ref `uint64` offset/length to a signed integer until
+it is proven `<= math.MaxInt64`. Decompression is allowed only after checksum
+verification and only if the declared raw length is `<= 64 MiB` and the output
+length exactly matches the declaration.
 
 Every sealed collection WAL segment must have durable segment metadata:
 
@@ -1002,22 +1091,25 @@ commit.
 transaction can be replayed. Side refs are input dependencies of the
 transaction, not output files produced by backend root publication.
 
-Side-ref classes:
+Side-ref classes are numeric in v1:
 
-- `ValueLogRecord`: value-log bytes embedded in root-delta values.
-- `LeafLogRecord`: pre-existing outer-leaf or child-record bytes embedded in a
-  root-delta value or descriptor.
-- `RootDeltaPayload`: serialized root-delta payload stored outside the WAL
-  record.
-- `ColumnManifest`: manifest or prepare record naming a column part's external
-  files.
-- `ColumnSubstreamFile`: immutable column payload or packed update-delta
-  substream file.
-- `ColumnFilterFile`: persistent filter file.
-- `ColumnDeleteBitmapFile`: delete/tombstone bitmap file.
-- `ColumnDictionaryFile`: compression or encoding dictionary file.
-- `ColumnMetadataFile`: external compression metadata, mark metadata, or future
-  side metadata file.
+| Value | Class | Meaning |
+|---:|---|---|
+| 1 | `ValueLogRecord` | value-log bytes embedded in root-delta values |
+| 2 | `LeafLogRecord` | pre-existing outer-leaf or child-record bytes embedded in a root-delta value or descriptor |
+| 3 | `RootDeltaPayload` | serialized root-delta payload stored outside the WAL record |
+| 4 | `ColumnManifest` | manifest or prepare record naming a column part's external files |
+| 5 | `ColumnSubstreamFile` | immutable column payload or packed update-delta substream file |
+| 6 | `ColumnFilterFile` | persistent filter file |
+| 7 | `ColumnDeleteBitmapFile` | delete/tombstone bitmap file |
+| 8 | `ColumnDictionaryFile` | compression or encoding dictionary file |
+| 9 | `ColumnMetadataFile` | external compression metadata, mark metadata, or future side metadata file |
+
+`0` is invalid. In v1, any unknown `RefClass` in a complete transaction is
+fatal. A future unknown optional ref may be ignored only when all of the
+following are true: `Required=false`, the transaction version/feature says the
+class is advisory/skippable, canonical embedded required-ref derivation proves
+it is not root-reachable, and cleanup/quarantine refuses to act on its path.
 
 Leaf-log or page-log records produced while replay builds new B-tree roots are
 not `CollectionSideRefs`. They are publish outputs and must be flushed or synced
@@ -1058,9 +1150,15 @@ Side-ref compatibility rule:
 
 Each side ref encodes `RefClass`, `ClassVersion`, `Critical`, `FileID`,
 `Offset`, `Length`, `ChecksumKind`, `Checksum`, and optional advisory
-`RelativePath`. Unknown critical `RefClass` or `ClassVersion` makes the
-transaction unsupported-required and recovery fails closed. Unknown noncritical
-refs may be ignored only if no replay-critical section references them and the
+`RelativePath`. Unknown `RefClass` is fatal in v1. Unknown critical
+`ClassVersion`, unknown required fields, unknown replay-critical fields,
+unknown `MutationClass`, unknown compression codec, unknown dictionary codec,
+unknown side-file class, or unknown descriptor op makes the transaction
+unsupported-required and recovery fails closed. Unknown observability-only
+fields may be skipped only after checksum verification and only if their encoded
+length is within `MaxEncodedTransactionBytes`. Future unknown noncritical refs
+may be ignored only if no replay-critical section references them, canonical
+embedded required-ref derivation proves they are not root-reachable, and the
 transaction feature bits explicitly allow skipping them. Cleanup, GC, rewrite,
 and quarantine must treat unknown refs from complete unwatermarked transactions
 as protected until the transaction is watermarked and checkpointed or an
@@ -1068,11 +1166,44 @@ operator performs a destructive rebuild.
 
 Side refs are resolved by `RefClass` and `RefID`/`FileID` through a file-class
 registry. `RelativePath`, when encoded, is advisory validation data. It must
-normalize to a relative path with no `..` components, no absolute prefix, no
-empty path elements after cleaning, and no symlink traversal. It must remain
-confined to the owning file-class root and match the `RefID`/`FileID` registry
-entry. Cleanup and quarantine operations must refuse paths outside the owning
-file-class root, symlinks, and path/FileID mismatches.
+use `/` separators and reject NUL, empty path, `.`, `..`, repeated separators,
+absolute POSIX paths, Windows drive paths, UNC paths, backslashes, components
+longer than 128 bytes, more than 16 components, and total bytes over 512.
+`RelativePath` never authorizes opening, deletion, quarantine, or rewrite.
+Cleanup and quarantine operations resolve only registry-derived files and must
+refuse paths outside the owning file-class root, symlinks, hardlinks for mutable
+WAL/side files, path/FileID mismatches, and owner/generation mismatches.
+
+Collection names, index names, schema names, tenant names, and root names are
+logical identifiers only. They must never be used as filesystem path components.
+Replay lookup, side-file path construction, cleanup authorization, tenant
+authorization, and root publication use `CollectionUID`, generation, schema
+epoch, catalog/root descriptor state, root kind, and registry `FileID`, never
+`CollectionName`.
+
+Collection WAL and side-ref file classes must use a safe local-file API rather
+than the generic commit-log/value-log `os.OpenFile`, `os.Open`, or `os.Remove`
+primitives. Before collection WAL open, fail closed if the DB root, `maindb`,
+`wal`, `value_vlog`, `leaf_vlog`, or any collection side-file class root is a
+symlink, not a directory, not owned by the effective DB user or configured DB
+owner, group-writable, world-writable, or on an unsupported filesystem for the
+required no-follow/openat/fstat guarantees. The safe API stores class-root
+directory fds, resolves registry file names under those fds, uses no-follow
+open/create/rename/unlink operations where available, creates new mutable
+segments with exclusive create, `fstat`s every opened file, requires a regular
+file under the expected class root with expected owner and file identity, and
+requires `nlink == 1` for newly created mutable WAL/side files. Prepared-to-final
+rename must be same-directory/same-device and atomic; cross-device rename is a
+configuration or corruption error. File and parent-directory fsyncs are part of
+the selected durability boundary.
+
+CRC32C and replay digests detect accidental corruption and implementation bugs;
+they do not authenticate malicious local rewrites by a user who can modify DB
+files. Collection WAL's local threat model treats hostile local writers as out
+of scope only when the directory/file ownership and permission checks above
+pass. If hostile same-user or privileged local writers are in scope for a
+deployment, collection WAL must add a keyed MAC or signature over WAL records
+and protected side-ref manifests before claiming tamper resistance.
 
 Prepared, readable, and integrity-passing means the file-class writer has made
 the referenced range visible to a fresh file reader, and class-specific
@@ -1097,6 +1228,14 @@ validation passes:
   codec/dict id match every dependent payload.
 - `ColumnMetadataFile`: metadata bytes exist, checksum matches, and the owning
   descriptor names the expected metadata class and generation.
+
+Collection WAL side-ref validation always verifies checksums and required
+codecs/dictionaries/templates, independent of normal read-path integrity modes.
+`IntegritySkipChecksums`, value-log `DisableChecksum`, debug readers, and
+operator fast-read modes must not disable collection WAL recovery side-ref
+validation. If a side-ref class cannot verify its checksum because a codec,
+dictionary, template, or manifest is unavailable, the complete transaction is
+fatal or quarantined; it is not replayable.
 
 Collection WAL append must not start until every required side ref in the
 transaction is prepared under this definition. In-memory append buffers,
@@ -2043,18 +2182,21 @@ the current invariant that side-store scans run before cached commit-log replay:
      corruption;
    - a complete frame with checksum mismatch is corruption;
    - unsupported version is corruption unless explicitly marked skippable by a
-     forward-compatible feature flag.
-9. Decode complete transactions and rebuild the protected side-ref index before
-   any maintenance can run.
+     forward-compatible feature flag; v1 defines no skippable transaction
+     versions.
+9. For each complete frame, enforce the decoder order from section 7.5:
+   validate length caps and overflow, verify frame checksum and transaction
+   checksum, parse only fixed-width headers until checksums pass, validate all
+   counts before allocation, then decode variable fields.
 10. Load applied collection-sequence watermark metadata from the recovered system
    root.
 11. Sort unapplied transactions by `CollectionUID`, `CollectionSeq`, and
    `WALLSN` for deterministic diagnostics.
 12. For each uncovered transaction, validate declared side refs and the
    canonical embedded required side-ref set extracted from root deltas and
-   descriptors. The sets must match.
+   descriptors. The sets must match. Rebuild the protected side-ref index only
+   from checksum-valid complete transactions before any maintenance can run.
 13. For each unapplied collection in contiguous `CollectionSeq` order:
-   - validate checksum and format version;
    - validate required side refs;
    - validate collection identity, schema epoch, root generation guards, and
      sequence dependency;
@@ -2581,20 +2723,22 @@ resume_limit = stop_limit * 0.70
 
 | Limit | Default | Behavior |
 |---|---:|---|
-| `CollectionWAL.MaxInlineRootDeltaBytes` | 64 KiB | Spill this root delta to root-delta side payload. |
-| `CollectionWAL.MaxInlineTxnBytes` | 256 KiB | Spill root deltas until inline payload is below the limit. |
-| `CollectionWAL.MaxEncodedTxnBytes` | 1 MiB | Hard error before ack after spill attempts. |
-| `CollectionWAL.MaxRootDeltaSidePayloadBytes` | 16 MiB | Hard error before ack; caller must split batch. |
-| `CollectionWAL.MaxTxnDecodedEntries` | 100,000 | Hard error before ack; recovery rejects/quarantines corrupt oversize WAL. |
-| `CollectionWAL.MaxRootDeltasPerTxn` | 256 | Hard error before ack; caller must split batch. |
+| `CollectionWAL.MaxInlineRootDeltaBytesPerRoot` | 1 MiB | Spill this root delta to root-delta side payload. |
+| `CollectionWAL.MaxInlineRootDeltaBytesPerTxn` | 4 MiB | Spill root deltas until inline payload is below the limit. |
+| `CollectionWAL.MaxEncodedTxnBytes` | 16 MiB | Hard error before ack after spill attempts; hard non-disableable recovery cap. |
+| `CollectionWAL.MaxRootDeltaSidePayloadBytes` | 64 MiB | Hard error before ack; caller must split batch. |
+| `CollectionWAL.MaxTxnDecodedEntries` | 262,144 | Hard error before ack; recovery rejects/quarantines corrupt oversize WAL. |
+| `CollectionWAL.MaxRootDeltasPerTxn` | 64 | Hard error before ack; caller must split batch. |
+| `CollectionWAL.MaxSideRefsPerTxn` | 16,384 | Hard error before ack; caller must split transaction or column/file operation. |
 
 #### Segment, compression, rotation, and sync batching
 
 | Limit | Default | Behavior |
 |---|---:|---|
 | `CollectionWAL.SegmentBytes` | 64 MiB | Rotate before appending a frame that would exceed the segment size. |
+| `CollectionWAL.SegmentBytesMax` | 1 GiB | Absolute segment-size ceiling; lower config allowed, higher config rejected. |
 | `CollectionWAL.WriterBufferBytes` | 4 MiB | Flush when full; not a durability boundary by itself. |
-| Max WAL frame bytes | 1 MiB inline metadata; side payload external | Hard error before ack when exceeded. |
+| Max WAL frame payload bytes | 16 MiB | Hard error before ack when exceeded. |
 | `CollectionWAL.CompressionMinBytes` | 64 KiB payload | Compression attempted only above threshold. |
 | Compression keep rule | compressed bytes plus metadata < raw bytes | Otherwise store uncompressed. |
 | `DurableSync.MaxBatchDelay` | 1 ms | Group fsync trigger. |
@@ -2643,17 +2787,36 @@ Required capacity errors:
 | `ErrCollectionWALMissingRequiredSideRef` | Required side ref is missing/corrupt during append validation or recovery. |
 | `ErrColumnWALCapacityExceeded` | Column side-ref, file-count, or manifest limits exceeded before persistent root publish. |
 
+Required decode/recovery hardening errors:
+
+| Error | When |
+|---|---|
+| `ErrCollectionWALTerminalTail` | safe terminal incomplete tail classification |
+| `ErrCollectionWALCorruptMiddle` | non-terminal corruption or short read |
+| `ErrCollectionWALBadChecksum` | bad frame, transaction, section, or side-ref checksum |
+| `ErrCollectionWALUnsupportedVersion` | unsupported required segment/frame/transaction/ref version |
+| `ErrCollectionWALResourceLimit` | v1 cap or checked arithmetic limit exceeded |
+| `ErrCollectionWALUnsafePath` | advisory path or resolved file violates safe-file rules |
+| `ErrCollectionWALMissingSideRef` | required side ref missing or unavailable |
+| `ErrCollectionWALIdentityMismatch` | collection/catalog/schema/root-set identity guard mismatch |
+| `ErrCollectionWALSequenceGap` | missing lower same-collection sequence blocks replay |
+| `ErrCollectionWALRedacted` | raw sensitive detail intentionally withheld |
+
 Default configuration:
 
 ```text
-CollectionWAL.MaxInlineRootDeltaBytes              = 64 KiB
-CollectionWAL.MaxInlineTxnBytes                    = 256 KiB
-CollectionWAL.MaxEncodedTxnBytes                   = 1 MiB
-CollectionWAL.MaxRootDeltaSidePayloadBytes         = 16 MiB
-CollectionWAL.MaxTxnDecodedEntries                 = 100_000
-CollectionWAL.MaxRootDeltasPerTxn                  = 256
+CollectionWAL.MaxInlineRootDeltaBytesPerRoot       = 1 MiB
+CollectionWAL.MaxInlineRootDeltaBytesPerTxn        = 4 MiB
+CollectionWAL.MaxEncodedTxnBytes                   = 16 MiB
+CollectionWAL.MaxRootDeltaSidePayloadBytes         = 64 MiB
+CollectionWAL.MaxTxnDecodedEntries                 = 262_144
+CollectionWAL.MaxRootDeltasPerTxn                  = 64
+CollectionWAL.MaxMutatedRootsPerTxn                = 64
+CollectionWAL.MaxSideRefsPerTxn                    = 16_384
+CollectionWAL.MaxDescriptorOpsPerTxn               = 1_024
 
 CollectionWAL.SegmentBytes                         = 64 MiB
+CollectionWAL.SegmentBytesMax                      = 1 GiB
 CollectionWAL.WriterBufferBytes                    = 4 MiB
 CollectionWAL.CompressionMinBytes                  = 64 KiB
 
@@ -2936,14 +3099,28 @@ Required property tests:
 
 ### 11.6 Fuzz Tests
 
-- transaction decoder fuzzing;
-- recovery ordering fuzzing with multiple collections and duplicate keys;
-- side-ref fence fuzzing with missing and truncated payloads;
-- root-delta replay fuzzing against an in-memory oracle;
+Required fuzz targets before any collection WAL reader/recovery code runs in DB
+open:
+
+- `FuzzCollectionWALDecodeTransaction`;
+- `FuzzCollectionWALDecodeTransactionNoPreChecksumAlloc`;
+- `FuzzCollectionWALDecodeSideRefs`;
+- `FuzzCollectionWALDecodeRootDelta`;
+- `FuzzCollectionWALRootDeltaPayloadStreaming`;
+- `FuzzCollectionWALRecoveryOrdering`;
+- `FuzzCollectionWALUnknownFieldsAndRefClasses`;
+- `FuzzCollectionWALPathCanonicalize`;
+- `FuzzCollectionWALValuePtrSideRefs`;
+- `FuzzNativeWireCollectionCommandToWALPlan`;
 - cleanup manifest fuzzing with missing segments, torn records, overlapping
   ranges, and mixed-collection segments;
 - system-delta template fuzzing with descriptor/watermark split attempts and
   malformed coverage ranges.
+
+Fuzz properties: never panic, never allocate above the configured cap, never
+publish roots on invalid bytes, never delete/quarantine files from invalid
+bytes, produce deterministic error classes for the same input, and never skip a
+complete corrupt transaction in favor of a later same-collection transaction.
 
 ### 11.7 Required Named Acceptance Tests
 
@@ -3862,8 +4039,8 @@ Future questions that do not weaken PR1 correctness:
 
 1. Should `Collection.Flush` gain a sync variant, or should callers use
    `DB.Checkpoint` for fsync-style barriers?
-2. How large can inline root deltas be before side-payload mode becomes
-   mandatory beyond the Section 12 stronger-default threshold?
+2. Should `MaxEncodedTransactionBytes` be lowered after benchmarks? It must not
+   be raised above 16 MiB for v1 without a format revision.
 3. For Raft R3, should applied-index/idempotency metadata live in TreeDB system
    roots, in a Raft library stable store, or in both with an explicit ordering
    rule?
@@ -4118,6 +4295,20 @@ id, side-ref file id, offset, length, checksum, replay digest, relative path
 hash, and error category. Raw names and paths require an explicit local-only
 flag such as `--show-sensitive`.
 
+The default redacted name format is:
+
+```text
+name_hash = hex(HMAC-SHA256(redaction_key, name))[0:16]
+```
+
+The redaction key must be process-local or explicitly configured for the
+operator report; it must not be derived from the raw name alone. Duplicate-key
+and unique-index errors expose stable error classes and may include keyed hashes
+of conflicting keys or document ids, never raw bytes. Native-wire error
+messages, panic messages, metrics labels, and forensic artifacts follow the
+same default redaction rule. Forensic tools may expose raw values only behind an
+explicit local admin flag and must print a warning banner before doing so.
+
 Collection WAL stats exported through expvar or native-wire must use
 `db_dir_hash`, `wal_dir_hash`, segment ids, file ids, and relative path hashes.
 Any legacy stats that expose raw local paths remain legacy/local diagnostics and
@@ -4136,13 +4327,18 @@ is enabled.
 
 ## 18. Implementation Notes
 
-- Prefer adding the collection WAL package below `TreeDB/internal` until the
+- Keep v1 constants, ref-class validation, advisory path validation, and the
+  portable class-root safety checks in `TreeDB/internal/collectionwal` until the
   format stabilizes.
 - Keep the transaction encoder independent from collection planner internals.
 - Make root-delta serialization deterministic from the beginning.
 - Add fault-injection hooks before building the full product path; otherwise
   crash coverage will be too shallow.
 - Preserve existing write-domain read precedence while adding durable backing.
+- Treat value-log raw/pre-encoded append APIs as trusted-only internal
+  primitives. Collection WAL side-ref preparation must wrap or follow any raw
+  append with fresh-process readability and checksum validation before the side
+  ref can satisfy `SideRefsReady`.
 - Treat side-file fences as part of the storage format, not as cleanup policy.
 - Keep future deterministic-entry apply code above the collection WAL package:
   it should derive root deltas through a state-machine adapter and then hand the

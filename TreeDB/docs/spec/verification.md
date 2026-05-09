@@ -392,6 +392,77 @@ Acceptance artifacts:
 - Production persistent column-store writes may start only after the M7
   column-store sign-off artifact links to green M1-M6 collection WAL evidence.
 
+Required collection WAL hardening fuzz targets:
+
+- `FuzzCollectionWALDecodeTransaction`;
+- `FuzzCollectionWALDecodeTransactionNoPreChecksumAlloc`;
+- `FuzzCollectionWALDecodeSideRefs`;
+- `FuzzCollectionWALDecodeRootDelta`;
+- `FuzzCollectionWALRootDeltaPayloadStreaming`;
+- `FuzzCollectionWALRecoveryOrdering`;
+- `FuzzCollectionWALUnknownFieldsAndRefClasses`;
+- `FuzzCollectionWALPathCanonicalize`;
+- `FuzzCollectionWALValuePtrSideRefs`;
+- `FuzzNativeWireCollectionCommandToWALPlan`.
+
+Required fuzz properties: no panic, bounded allocation, no root publish on
+invalid bytes, no file deletion/quarantine from invalid bytes, deterministic
+error class for identical input, and no skip of a complete corrupt transaction
+in favor of a later same-collection transaction.
+
+Required collection WAL hardening fixtures and tests:
+
+- `TestCollectionWALMaxEncodedTxnRejectsBeforeAlloc`;
+- `TestCollectionWALFrameLengthOverflowRejects`;
+- `TestCollectionWALVarintOverflowRejects`;
+- `TestCollectionWALRootDeltaCountLimitRejects`;
+- `TestCollectionWALSideRefCountLimitRejects`;
+- `TestCollectionWALDuplicateSideRefConflictingChecksumRejects`;
+- `TestCollectionWALUnknownRequiredRefClassFatal`;
+- `TestCollectionWALUnknownOptionalRefClassCannotCleanup`;
+- `TestCollectionWALBadFrameCRCCompleteRecordFailsOpen`;
+- `TestCollectionWALBadTxnCRCCompleteRecordFailsOpen`;
+- `TestCollectionWALTruncatedActiveTailIgnoredOnlyWithoutCommitMarker`;
+- `TestCollectionWALTruncatedSealedSegmentFailsOpen`;
+- `TestCollectionWALMiddleCorruptionBlocksLaterSeq`;
+- `TestCollectionWALMissingSeqNBlocksSeqNPlusOne`;
+- `TestCollectionWALDropRecreateSameNameDifferentUIDRejectsOldTxn`;
+- `TestCollectionWALRootNameOutsideCatalogSetRejects`;
+- `TestCollectionWALPublishRequiresAllChecks`;
+- `TestCollectionWALSideRefRelativePathDotDotRejects`;
+- `TestCollectionWALSideRefRelativePathAbsoluteRejects`;
+- `TestCollectionWALSideRefRelativePathWindowsDriveRejects`;
+- `TestCollectionWALSideRefRelativePathUNCRejects`;
+- `TestCollectionWALSideRefRelativePathBackslashRejects`;
+- `TestCollectionWALSideRefRelativePathNULRejects`;
+- `TestCollectionWALSideRefRelativePathEmptyComponentRejects`;
+- `TestCollectionWALSideRefPathFileIDMismatchRejects`;
+- `TestCollectionWALCollectionNameNeverUsedAsPath`;
+- `TestCollectionWALOpenRejectsSymlinkDBRoot`;
+- `TestCollectionWALOpenRejectsSymlinkWALDir`;
+- `TestCollectionWALOpenRejectsWorldWritableWALDir`;
+- `TestCollectionWALOpenRejectsGroupWritableClassRoot`;
+- `TestCollectionWALSideRefOpenRejectsSymlinkComponent`;
+- `TestCollectionWALSideRefOpenRejectsSymlinkFinalFile`;
+- `TestCollectionWALSideRefCleanupDoesNotFollowSymlink`;
+- `TestCollectionWALSideRefCleanupRejectsHardlink`;
+- `TestCollectionWALPreparedRenameRejectsCrossDevice`;
+- `TestCollectionWALLockfileRejectsSymlink`;
+- `TestCollectionWALNoAllocBeforeChecksumForHugeRootCount`;
+- `TestCollectionWALNoAllocBeforeChecksumForHugeSideRefCount`;
+- `TestCollectionWALNoAllocBeforeChecksumForHugeStringLength`;
+- `TestCollectionWALCompressedRawLenBombRejectsBeforeDecode`;
+- `TestCollectionWALOffsetSizeOverflowRejects`;
+- `TestCollectionWALUint64ToInt64OffsetOverflowRejects`;
+- `TestCollectionWALLimitsMaxRecordSizeDisabledDoesNotDisableWALCap`;
+- `TestCollectionWALNativeWire64MiBCommandSpillsOrRejectsBeforeSideEffects`;
+- `TestCollectionWALCorruptErrorRedactsCollectionName`;
+- `TestCollectionWALMissingSideRefErrorRedactsRelativePathUnlessAdmin`;
+- `TestCollectionWALDuplicateKeyErrorRedactsDocumentID`;
+- `TestNativeWireErrorRedactsDocuments`;
+- `TestCollectionWALMetricsUseUIDAndHashesNotNames`;
+- `TestForensicToolRawOutputRequiresExplicitFlag`.
+
 Required non-mutating collection WAL CLI tooling:
 
 - `treemap collection-wal health --dir <db> --json` reports `db_dir_hash`,

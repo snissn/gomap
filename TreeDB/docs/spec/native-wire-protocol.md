@@ -786,6 +786,13 @@ Machine-readable request or stream metadata MAY be carried in a sibling
 future command or negotiated feature must define a separate critical detail
 section before typed details are emitted.
 
+Default error messages and metadata must be redacted. They must not include raw
+documents, raw user keys, raw document IDs, raw collection names, raw index
+names, raw root names, tenant-sensitive path components, or absolute host paths.
+Use stable error codes, counts, sizes, collection UIDs, file IDs, offsets,
+checksums, and keyed hashes by default. Raw diagnostic values require an
+explicit local admin/debug mode outside the default wire response.
+
 Initial error classes:
 
 ```text

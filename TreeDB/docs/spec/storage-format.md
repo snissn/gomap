@@ -475,7 +475,9 @@ Compression is not encoded by stealing bits from the length field. A compressed
 frame records both `CompressionCodec` and `RawPayloadLen`. Unknown compression
 codec on a required record fails closed. The frame header must be integrity
 checked before payload allocation, and `StoredPayloadLen`/`RawPayloadLen` must
-respect the configured collection WAL transaction limits.
+respect the fixed collection WAL transaction limits. In v1, both
+`StoredPayloadLen` and the encoded `CollectionWALTransaction` are capped at
+16,777,216 bytes. This cap is hard and non-disableable during recovery.
 
 The frame is committed only if the header, stored payload, and commit trailer
 are present and valid. The commit trailer is:
@@ -518,6 +520,35 @@ The first root-delta byte is not before the fixed header and section table.
 | 168 | 4 | `SectionCount` |
 | 172 | 4 | `FixedHeaderCRC32C` over `[0,192)`, with this field zeroed |
 | 176 | 16 | reserved zero |
+
+V1 readers must validate in this order: segment magic, segment header
+length/version/min-reader, segment header CRC, frame magic, frame header
+length/version/min-reader, length caps and overflow before allocation, frame
+header CRC, payload CRC, commit trailer, transaction fixed-header CRC, section
+CRCs, replay digest, and side-ref closure. No transaction-controlled string,
+slice, map, side-ref, root-delta, or decompression allocation may occur before
+the frame and transaction checksums pass. Unknown required versions, unknown
+critical sections, unknown replay-critical fields, unknown required features,
+unknown v1 `RefClass` values, and unknown compression codecs fail closed.
+
+V1 bounds are:
+
+| Field / structure | Bound |
+|---|---:|
+| Encoded transaction and outer frame payload | 16 MiB |
+| Segment size | 64 MiB default, 1 GiB absolute max |
+| Root deltas / mutated roots | 64 |
+| Inline root-delta bytes per transaction | 4 MiB |
+| Inline root-delta bytes per root | 1 MiB |
+| Root-delta payload side ref | 64 MiB |
+| Decoded root-delta entries per transaction | 262,144 |
+| Delta key / document ID | 16 KiB |
+| Inline delta value | 1 MiB |
+| Side refs per transaction | 16,384 |
+| Descriptor / system delta ops | 1,024 |
+| `RelativePath` | 512 bytes, 16 components, 128 bytes per component |
+| Compressed decoded bytes | 64 MiB |
+| Recovery heap budget | 128 MiB per DB open worker |
 
 The section table immediately follows the fixed header. Each section table entry
 is:
@@ -563,13 +594,24 @@ operations.
 
 Side refs encode `RefClass`, `ClassVersion`, `Critical`, `FileID`, `Offset`,
 `Length`, `ChecksumKind`, `Checksum`, and optional advisory `RelativePath`.
-Unknown critical `RefClass` or `ClassVersion` makes the transaction
-unsupported-required and recovery fails closed. Unknown noncritical refs may be
-ignored only if no replay-critical section references them and the transaction
-feature bits explicitly allow skipping them. Cleanup, GC, rewrite, and
-quarantine must treat unknown refs from complete unwatermarked transactions as
-protected until the transaction is watermarked and checkpointed or an operator
-performs a destructive rebuild.
+Known v1 `RefClass` values are `1=ValueLogRecord`, `2=LeafLogRecord`,
+`3=RootDeltaPayload`, `4=ColumnManifest`, `5=ColumnSubstreamFile`,
+`6=ColumnFilterFile`, `7=ColumnDeleteBitmapFile`,
+`8=ColumnDictionaryFile`, and `9=ColumnMetadataFile`; `0` is invalid. Any
+unknown `RefClass` in a complete v1 transaction is fatal. Future optional refs
+may be ignored only if no replay-critical section references them, canonical
+embedded side-ref derivation proves they are not root-reachable, and the
+transaction feature bits explicitly allow skipping them. Cleanup, GC, rewrite,
+and quarantine must treat unknown refs from complete unwatermarked transactions
+as protected until the transaction is watermarked and checkpointed or an
+operator performs a destructive rebuild.
+
+`RelativePath` is advisory validation data only. It must use `/` separators and
+reject NUL, empty path, `.`, `..`, repeated separators, absolute POSIX paths,
+Windows drive paths, UNC paths, backslashes, components longer than 128 bytes,
+more than 16 components, and total bytes over 512. Cleanup and quarantine must
+resolve deletion targets only through `(RefClass, RefID/FileID)` and the trusted
+file-class registry, never through WAL-provided path strings.
 
 ### 9.5 Required Storage Features and Compatibility Gates
 
@@ -671,17 +713,24 @@ segment boundary:
 
 | Outcome | Meaning |
 |---|---|
-| `CompleteSupported` | complete frame, supported required version, checksums valid |
-| `IncompleteTerminalTail` | incomplete frame in terminal active segment with no later non-cleaned segment |
-| `UnsupportedRequiredVersion` | complete frame or segment requires a newer reader |
+| `CompleteValid` | complete frame, supported required version, checksums valid |
+| `CompleteCorrupt` | complete frame with bad checksum, digest, impossible structure, unknown required field, or side-ref closure failure |
+| `TerminalIncompleteTail` | incomplete frame in terminal active segment with no later non-cleaned segment |
+| `NonTerminalShortRead` | short read before a later frame, in a sealed segment, or before a later non-cleaned segment |
+| `UnsupportedVersion` | complete frame or segment requires a newer reader |
 | `UnsupportedSkippableRecord` | record is explicitly noncritical and skippable |
-| `HardCorruption` | bad magic, CRC, digest, non-tail truncation, or impossible structure |
+| `MissingSegment` | segment is absent and no durable cleanup metadata covers every transaction it contained |
+| `DuplicateWALLSN` | duplicate global append location appears in complete frames |
+| `DuplicateCollectionSeq` | duplicate `(CollectionUID, CollectionSeq)` appears in complete frames |
 | `MaliciousLength` | length exceeds cap or overflows before allocation |
 | `MixedVersionSegment` | segment mixes versions without an explicit migration reader |
 
-Only `IncompleteTerminalTail` in the active terminal segment may be ignored.
-Complete unsupported required records fail closed because they may contain
-durable acknowledged writes.
+Only `TerminalIncompleteTail` in the active terminal segment may be ignored.
+`CompleteCorrupt`, `NonTerminalShortRead`, `UnsupportedVersion`,
+`MissingSegment`, `DuplicateWALLSN`, `DuplicateCollectionSeq`, and
+`MaliciousLength` fail database open or quarantine the affected collection
+before roots can be published. Missing transaction `N` blocks `N+1` for the
+same `CollectionUID`.
 
 ### 9.10 File Classes and Layout
 
@@ -707,6 +756,19 @@ Flat layout:
 and `vlog-*` names are never collection WAL. Unknown `.log` files in a WAL
 directory are unsupported future files and must not be deleted or ignored when a
 required feature gate is present.
+
+Collection WAL and collection side-file classes require safe local-file
+resolution. Open must fail before collection WAL recovery if the DB root,
+`maindb`, WAL directory, value-log directory, leaf-log directory, or collection
+side-file class root is a symlink, not owned by the effective DB user or
+configured DB owner, group-writable, world-writable, or not a directory.
+Collection WAL writers/readers/cleanup must use directory-fd based no-follow
+resolution where available, create new mutable files with exclusive create,
+`fstat` every opened file, require regular files under the expected class root,
+and require `nlink == 1` for new mutable WAL/side files. Cleanup, quarantine,
+and rewrite must unlink or rename only registry-resolved file names under the
+class-root fd; WAL-provided `RelativePath` can only validate, never select, a
+target.
 
 ### 9.11 Allocator Recovery
 
