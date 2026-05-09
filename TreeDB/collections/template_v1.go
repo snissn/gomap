@@ -77,6 +77,13 @@ type templateV1BufferedRunsResolver struct {
 	cache    map[string]*templateV1Template
 }
 
+type templateV1BufferedDomainResolver struct {
+	domain   *collectionWriteDomain
+	rootName string
+	fallback templateV1Resolver
+	cache    map[string]*templateV1Template
+}
+
 type templateV1ObjectRef struct {
 	templateID [32]byte
 	values     []byte
@@ -145,13 +152,13 @@ func collectionOptionsWithBufferedTemplateV1Resolver(opts collectionOptions, dom
 		return opts
 	}
 	rootName := collectionTemplateRootName(collectionName)
-	domain.mu.RLock()
-	runs := append([]memtable.Table(nil), pendingIndexedRootRunsLocked(domain, rootName)...)
-	domain.mu.RUnlock()
-	if len(runs) == 0 {
-		return opts
+	opts.templateResolver = &templateV1BufferedDomainResolver{
+		domain:   domain,
+		rootName: rootName,
+		fallback: opts.templateResolver,
+		cache:    make(map[string]*templateV1Template),
 	}
-	return collectionOptionsWithBufferedTemplateV1RunsResolver(opts, runs)
+	return opts
 }
 
 func collectionOptionsWithBufferedTemplateV1RunsResolver(opts collectionOptions, runs []memtable.Table) collectionOptions {
@@ -407,6 +414,55 @@ func (r *templateV1BufferedRunsResolver) lookupTemplateV1(id [32]byte) (*templat
 		if err != nil {
 			return nil, err
 		}
+		if record.id != id {
+			return nil, errors.New("collections: template-v1 template id mismatch")
+		}
+		if r.cache == nil {
+			r.cache = make(map[string]*templateV1Template)
+		}
+		r.cache[key] = record.tpl
+		return record.tpl, nil
+	}
+	if r.fallback != nil {
+		return r.fallback.lookupTemplateV1(id)
+	}
+	return nil, errTemplateV1TemplateNotFound
+}
+
+func (r *templateV1BufferedDomainResolver) lookupTemplateV1(id [32]byte) (*templateV1Template, error) {
+	if r == nil {
+		return nil, errTemplateV1MissingResolver
+	}
+	key := string(id[:])
+	if tpl := r.cache[key]; tpl != nil {
+		return tpl, nil
+	}
+	var record templateV1Record
+	found := false
+	if r.domain != nil && r.rootName != "" {
+		r.domain.mu.RLock()
+		runs := pendingIndexedRootRunsLocked(r.domain, r.rootName)
+		for i := len(runs) - 1; i >= 0; i-- {
+			run := runs[i]
+			if run == nil {
+				continue
+			}
+			value, _, flags, ok := run.GetEntry(id[:])
+			if !ok || flags&node.FlagTombstone != 0 {
+				continue
+			}
+			var err error
+			record, err = parseTemplateV1Record(value)
+			if err != nil {
+				r.domain.mu.RUnlock()
+				return nil, err
+			}
+			found = true
+			break
+		}
+		r.domain.mu.RUnlock()
+	}
+	if found {
 		if record.id != id {
 			return nil, errors.New("collections: template-v1 template id mismatch")
 		}
