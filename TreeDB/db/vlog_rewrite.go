@@ -2155,7 +2155,7 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		return stats, err
 	}
 	if db.indexOuterLeavesInValueLog && stats.RecordsCopied > 0 {
-		if _, err := db.leafGenerationGC(context.Background(), LeafGenerationGCOptions{}, false); err != nil {
+		if _, err := db.leafGenerationGC(ctx, LeafGenerationGCOptions{}, false); err != nil {
 			return stats, err
 		}
 	}

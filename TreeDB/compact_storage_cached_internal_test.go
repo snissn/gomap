@@ -60,7 +60,7 @@ func TestCompactStorageCachedAdvancesWritersPastBackendSegments(t *testing.T) {
 	}
 }
 
-func TestCachedValueLogRewriteOnlineReclaimsObservedActiveSources(t *testing.T) {
+func TestCachedValueLogRewriteOnlinePreservesRetainedObservedSourcesAndReclaimsLeafDebt(t *testing.T) {
 	dir := t.TempDir()
 	opts := cachedRewriteReclaimTestOptions(dir)
 	db, err := Open(opts)
@@ -104,9 +104,19 @@ func TestCachedValueLogRewriteOnlineReclaimsObservedActiveSources(t *testing.T) 
 		t.Fatalf("rewrite reported no unreferenced source IDs")
 	}
 
+	retained := make(map[string]struct{})
+	for _, path := range db.cached.ValueLogRetainedPaths() {
+		retained[path] = struct{}{}
+	}
 	for _, segment := range source {
+		if _, ok := retained[segment.path]; ok {
+			if _, err := os.Stat(segment.path); err != nil {
+				t.Fatalf("retained observed source %s was not preserved: %v", segment.path, err)
+			}
+			continue
+		}
 		if _, err := os.Stat(segment.path); !os.IsNotExist(err) {
-			t.Fatalf("source segment %s retained after observed-source reclaim: err=%v", segment.path, err)
+			t.Fatalf("unretained source segment %s retained after observed-source reclaim: err=%v", segment.path, err)
 		}
 	}
 	leafGC, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{DryRun: true})

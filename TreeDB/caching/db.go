@@ -4325,6 +4325,11 @@ func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) 
 	if db == nil || len(ids) == 0 {
 		return nil
 	}
+	gcer, hasValueLogGC := db.backend.(backendValueLogGCer)
+	leafGcer, hasLeafGenerationGC := db.backend.(backendLeafGenerationGCRunner)
+	if !hasValueLogGC && !hasLeafGenerationGC {
+		return nil
+	}
 	seen := make(map[uint32]struct{}, len(ids))
 	observed := make([]uint32, 0, len(ids))
 	for _, id := range ids {
@@ -4341,26 +4346,65 @@ func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) 
 		return nil
 	}
 
-	db.vlogGenerationCheckpointKickPending.Store(true)
-	defer db.vlogGenerationCheckpointKickPending.Store(false)
-	if err := db.Checkpoint(); err != nil {
-		return err
-	}
-
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if gcer, ok := db.backend.(backendValueLogGCer); ok {
-		if _, err := gcer.ValueLogGC(ctx, backenddb.ValueLogGCOptions{
-			ObservedSourceFileIDs:            observed,
-			ObservedSourceAssumeUnreferenced: true,
-			ObservedSourceReclaimActive:      true,
-		}); err != nil {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := db.Checkpoint(); err != nil {
+		return err
+	}
+	if err := db.rotateObservedValueLogSources(ctx, seen); err != nil {
+		return err
+	}
+	db.runRetainedValueLogPruneInline(false, seen)
+
+	if hasValueLogGC {
+		opts := db.valueLogGCOptions(false)
+		opts.ObservedSourceFileIDs = observed
+		if _, err := gcer.ValueLogGC(ctx, opts); err != nil {
 			return err
 		}
 	}
-	if gcer, ok := db.backend.(backendLeafGenerationGCRunner); ok {
-		if _, err := gcer.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{}); err != nil {
+	if hasLeafGenerationGC {
+		if _, err := leafGcer.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (db *DB) rotateObservedValueLogSources(ctx context.Context, ids map[uint32]struct{}) error {
+	if db == nil || len(ids) == 0 || !db.splitValueLogEnabled() {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+	for i := range db.lanes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		l := &db.lanes[i]
+		l.vlogMu.Lock()
+		if l.vlogPath == "" || l.vlogSeq <= 0 {
+			l.vlogMu.Unlock()
+			continue
+		}
+		fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(l.vlogSeq))
+		if err == nil {
+			if _, ok := ids[fileID]; ok {
+				err = db.rotateValueLogMuHeld(l)
+			}
+		}
+		l.vlogMu.Unlock()
+		if err != nil {
 			return err
 		}
 	}
