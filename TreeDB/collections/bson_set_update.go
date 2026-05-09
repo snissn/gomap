@@ -97,18 +97,18 @@ func newBSONSetUpdate(fields []BSONSetField) (bsonSetUpdate, error) {
 	if len(fields) == 0 {
 		return spec, nil
 	}
-	seen := make(map[string]struct{}, len(fields))
-	for _, field := range fields {
+	for i, field := range fields {
 		if err := validateBSONSetFieldKey(field.Key); err != nil {
-			return bsonSetUpdate{}, err
+			return bsonSetUpdate{}, fmt.Errorf("collections: BSON $set field %q key: %w", field.Key, err)
 		}
 		if err := validateBSONSetRawValue(field.Value); err != nil {
 			return bsonSetUpdate{}, fmt.Errorf("collections: BSON $set field %q value: %w", field.Key, err)
 		}
-		if _, ok := seen[field.Key]; ok {
-			return bsonSetUpdate{}, fmt.Errorf("collections: duplicate BSON $set field %q", field.Key)
+		for j := 0; j < i; j++ {
+			if fields[j].Key == field.Key {
+				return bsonSetUpdate{}, fmt.Errorf("collections: duplicate BSON $set field %q", field.Key)
+			}
 		}
-		seen[field.Key] = struct{}{}
 	}
 	spec.fields = fields
 	return spec, nil
@@ -320,10 +320,11 @@ func (u bsonSetUpdate) affectedIndexMask(runtimes []indexRuntime, opts collectio
 }
 
 // orderedIndexStateForKnownValidDocumentRuntimeMask extracts only index states
-// covered by mask. Callers must already have validated BSON documents; the BSON
-// $set update path validates current documents before old-state extraction and
-// validates replacements via ID preservation checks before new-state extraction.
-// That avoids rescanning the whole document when mask is zero.
+// covered by mask. Callers must pass syntactically valid BSON documents. In the
+// BSON $set update planner, current documents are validated by ID snapshot
+// capture before old-state extraction, and replacements are validated by ID
+// preservation checks before new-state extraction. That avoids rescanning the
+// whole document when mask is zero.
 func orderedIndexStateForKnownValidDocumentRuntimeMask(document []byte, runtimes []indexRuntime, mask uint64, opts collectionOptions, encoder *indexEncodeArena) (orderedDocumentIndexState, error) {
 	if len(runtimes) == 0 {
 		return nil, nil
