@@ -1,8 +1,8 @@
 # SPEC: Collection WAL Durability and Root-Group Recovery
 
-Status: draft proposal. PR1 sections are normative for the planned collection
-WAL implementation; explicitly marked future-work sections remain
-non-normative.
+Status: normative implementation gate once Milestones 0-7 are complete.
+Sections marked MUST/SHOULD define the production collection durability
+contract; explicitly marked future-work sections remain non-normative.
 Target repository studied: `https://github.com/snissn/gomap/tree/7431ba92f7a1a456c15f70ac019314090e22af31`
 Primary code paths studied: `TreeDB/collections`, `TreeDB/db`,
 `TreeDB/caching`, `TreeDB/internal/commitlog`, `TreeDB/internal/valuelog`  
@@ -292,6 +292,23 @@ Clean WAL state:
 No collection WAL transaction remains required for crash recovery. This is
 stronger than "normal backend WAL has no files".
 
+Column side-ref closure:
+
+For any collection WAL transaction that publishes column-store descriptors,
+locator roots, delete roots, filter roots, granule roots, count/visibility
+metadata, compression metadata, or schema roots, the transaction's required side
+refs are the complete transitive closure of every external file or byte range
+referenced by root values added or modified by the transaction.
+
+A root value must not reference a column file, manifest, delete bitmap, filter
+file, dictionary file, or external compression metadata object unless that
+object is listed as a required side ref in the same transaction or is already
+reachable from a durable root visible to the transaction's base snapshot.
+
+Optional or rebuildable filters may be omitted or rebuilt, but a published root
+entry that names external filter bytes makes those bytes required. A side ref
+marked `Required=false` must not be referenced by any published root value.
+
 ## 4. Goals
 
 1. Make collection durability explicit and testable.
@@ -532,9 +549,13 @@ CollectionWALTransaction {
 
     // Catalog guard.
     SchemaEpoch              uint64
+    CollectionEpoch          uint64 required for column-store collections
+    SchemaVersion            uint32 optional for row-store, required for column-store
     BaseCommitSeq            uint64
     BaseSystemRootID         uint64
     BaseCatalogDigest        bytes optional
+    CatalogDigest            bytes optional, recommended for column-store
+    MutationClass            uint8
 
     // Physical mutation.
     RootDeltas               []CollectionRootDelta
@@ -621,6 +642,15 @@ OrderedRootPublishOptions {
     WatermarkOp              AppliedWatermarkOp
 }
 ```
+
+Column-store transactions must carry enough catalog identity to make replay
+schema-stable. `CollectionEpoch` guards collection incarnation and catalog-level
+schema evolution. `SchemaVersion` guards physical column decode. `CatalogDigest`
+is optional but recommended for debugging and precondition checks. The
+`MutationClass` values are versioned and include at least `row_insert`,
+`row_update`, `row_delete`, `column_insert`, `column_update_delta`,
+`column_delete`, `column_compaction`, `column_recompression`, and
+`schema_change`.
 
 A transaction is replayable only when:
 
@@ -713,11 +743,35 @@ rules: if two accumulated deltas affect the same key, the later
 `CollectionSeq` wins, and deletes suppress older values according to normal
 collection visibility rules.
 
-Root kinds are explicit, versioned values. PR1 root kinds include primary,
-template/index-state, secondary index, overlay, overlay descriptor, delete, and
-metadata roots. Future column-store root kinds include part descriptor, locator,
-column schema, filter descriptor, delete bitmap, and compression/dictionary
-metadata roots.
+Root kinds are explicit, versioned values. PR1 row-store root kinds include
+`primary`, `template`, `index_state`, `secondary`, `overlay`,
+`overlay_descriptor`, `delete`, and `metadata`.
+
+Column-store root kinds are part of the production gate and include at least:
+
+- `primary_locator`: authoritative `id -> row_locator` primary root;
+- `column_parts`: immutable part descriptor root;
+- `column_granules`: optional part/granule mark root;
+- `column_locator`: optional auxiliary primary-id locator root;
+- `column_deletes`: tombstone and delete-bitmap descriptor root;
+- `column_schema`: physical column schema and schema-evolution root;
+- `column_filter`: persistent filter descriptor root;
+- `column_count_visibility`: exact count and visibility aggregate metadata root;
+- `column_compression_metadata`: external compression metadata or dictionary
+  descriptor root when not represented in part descriptors;
+- `secondary`: existing secondary index roots, column-store aware;
+- `template` and `index_state`: existing template/index-state roots when the
+  collection format requires them.
+
+Recommended enum names are `RootKindPrimaryLocator`,
+`RootKindColumnParts`, `RootKindColumnGranules`, `RootKindColumnLocator`,
+`RootKindColumnDeletes`, `RootKindColumnSchema`, `RootKindColumnFilter`,
+`RootKindColumnCountVisibility`, and `RootKindColumnCompressionMetadata`.
+
+Every locator, part descriptor, granule/mark, delete, filter, count/visibility,
+schema, compression metadata, primary, and secondary-index change for one
+column-store mutation must be represented in the same collection WAL transaction
+and the same backend root-group publish.
 
 ### 7.5 File Class
 
@@ -852,10 +906,15 @@ Side-ref classes:
   root-delta value or descriptor.
 - `RootDeltaPayload`: serialized root-delta payload stored outside the WAL
   record.
-- `ColumnPartFile`: immutable column payload file.
-- `ColumnFilterFile`: filter file.
-- `DeleteBitmapFile`: delete/tombstone bitmap file.
-- `DictionaryFile`: compression or encoding dictionary file.
+- `ColumnManifest`: manifest or prepare record naming a column part's external
+  files.
+- `ColumnSubstreamFile`: immutable column payload or packed update-delta
+  substream file.
+- `ColumnFilterFile`: persistent filter file.
+- `ColumnDeleteBitmapFile`: delete/tombstone bitmap file.
+- `ColumnDictionaryFile`: compression or encoding dictionary file.
+- `ColumnMetadataFile`: external compression metadata, mark metadata, or future
+  side metadata file.
 
 Leaf-log or page-log records produced while replay builds new B-tree roots are
 not `CollectionSideRefs`. They are publish outputs and must be flushed or synced
@@ -876,6 +935,22 @@ set. Missing embedded refs, undeclared embedded refs, and declared refs that are
 not embedded are invalid unless a future format version defines a precise
 optional-ref class.
 
+Column-store descriptor validation is transitive. The canonical embedded
+side-ref set must include every external file or byte range reachable from added
+or modified column descriptors, manifests, substream block directories, filter
+descriptors, delete bitmap descriptors, dictionary ids, compression metadata,
+granule/mark roots, locator roots, and count/visibility metadata. Recovery must
+reject a transaction whose root delta publishes any column descriptor graph that
+is not side-ref closed.
+
+Side refs must be sorted and unique by `(RefClass, RefID, RelativePath, Offset,
+Size)`. Recovery must reject duplicate required refs with conflicting checksums
+or metadata. External dictionaries and compression metadata are required side
+refs whenever a published payload cannot decode without them. Codec ids,
+parameters, dictionary ids, dictionary registry/version, and codec registry
+version must be persisted in descriptors or manifests and protected until every
+dependent payload is unreachable.
+
 Readable and integrity-passing means class-specific validation:
 
 - `ValueLogRecord`: segment exists, offset/length are in bounds, RID or grouped
@@ -884,21 +959,51 @@ Readable and integrity-passing means class-specific validation:
   and checksum or page/record validation passes.
 - `RootDeltaPayload`: payload file or value-log record exists, length and
   checksum match, and decoding yields the `DeltaDigest` named by the root delta.
-- `ColumnPartFile`: final file path exists, file size/checksum match the
+- `ColumnManifest`: final manifest exists, checksum matches, and the manifest's
+  collection id, part id, schema version, file list, and side-ref digest match
+  the root descriptor.
+- `ColumnSubstreamFile`: final file path exists, size/checksum match the
   descriptor or manifest, and compression/dictionary metadata validates.
 - `ColumnFilterFile`: filter file exists, checksum matches, and the filter
   header names the expected column/part generation.
-- `DeleteBitmapFile`: bitmap file exists, checksum matches, and row-range and
-  generation metadata match the descriptor.
-- `DictionaryFile`: dictionary bytes exist, checksum matches, and codec/dict id
-  match every dependent payload.
+- `ColumnDeleteBitmapFile`: bitmap file exists, checksum matches, and row-range
+  and generation metadata match the descriptor.
+- `ColumnDictionaryFile`: dictionary bytes exist, checksum matches, and
+  codec/dict id match every dependent payload.
+- `ColumnMetadataFile`: metadata bytes exist, checksum matches, and the owning
+  descriptor names the expected metadata class and generation.
 
-Column-like side files use a temp-to-final protocol in PR1 planning: write temp
-file, fsync file, atomically rename to final path, fsync parent directory, then
-allow the collection WAL commit marker to reference the final path. A future
-manifest format must cover final path, length, checksum, compression metadata,
-row range, and generation. Temp-only files with no committed WAL/root reference
-are orphan-prepared and may be quarantined or deleted after recovery.
+Column part prepare protocol:
+
+A column part builder must write files into a prepare namespace before the WAL
+transaction is appended:
+
+```text
+Dir/maindb/columns/.prepare/txn-<wallsn>/part-<part-id>/
+```
+
+The prepare group must contain a manifest or prepare record that names every
+file/range, final relative path, size, checksum, `PartID`, `FileID`,
+`SchemaVersion`, compression pipeline, dictionary ids, and owning
+`CollectionID`.
+
+Before a WAL-on transaction can be acknowledged:
+
+1. all required column files and ranges have been written;
+2. checksums and lengths have been computed;
+3. the manifest or prepare record has been written and included in the side-ref
+   closure;
+4. durable mode has fsynced required files and containing directories according
+   to the configured durability boundary;
+5. the implementation has atomically renamed or otherwise finalized prepared
+   files to their final paths and fsynced containing directories when final-path
+   descriptors are used;
+6. the WAL transaction containing the matching canonical side-ref set has
+   reached the configured WAL boundary.
+
+A root descriptor must not be published before the referenced final bytes are
+readable. Temp-only files with no committed WAL/root reference are
+orphan-prepared and may be quarantined or deleted after recovery.
 
 A complete transaction with a missing required side ref is a recovery error in
 WAL-on durable/recoverable modes, except for an incomplete tail transaction that
@@ -1093,6 +1198,16 @@ new secondary-index puts in the same transaction as the primary mutation.
 Deletes must include primary tombstones or deletes, secondary deletes, and any
 delete-root or overlay tombstone entries required to suppress older roots.
 
+Column-store update-delta writes are a named mutation class. A
+`column_update_delta` transaction must include new update-delta part descriptor
+puts, all required column side refs for those parts, primary locator puts for
+replacement rows, old-locator tombstones or delete bitmap updates, secondary
+index deletes for old indexed values, secondary index puts for new indexed
+values, count/visibility metadata deltas when present, and the applied
+watermark update in one WAL transaction and one backend publish. The durable
+crash-recovery representation must be the column update-delta part plus
+visibility changes, not a permanent row-oriented overlay.
+
 ### 8.4 Async Indexed Flush
 
 Async flush becomes a publication optimization, not a durability boundary.
@@ -1143,6 +1258,14 @@ can race with user-visible collection writes. It uses `ReplaceRoot` and
 `ClearOverlayRoots` descriptor operations, advances the collection sequence, and
 updates the affected root generation. Root-rewriting overlay maintenance is
 forbidden while unapplied collection WAL exists unless it is encoded this way.
+
+Column-store compaction, delete-bitmap compaction, and recompression are always
+collection WAL maintenance transactions when they create external files or
+change active part descriptors. They must include new side refs, new descriptors,
+descriptor supersession/deletion for source parts, obsolete delete/mark/filter
+metadata removal, count/visibility metadata preservation, and unchanged logical
+secondary-index state in one atomic root group. The optional overlay-compaction
+maintenance shortcut does not apply to physical column parts.
 
 ### 8.6 Collection-Specific Publish Wrapper
 
@@ -1375,6 +1498,42 @@ servers, or collection managers.
 Read-only open cannot perform steps that mutate backend state. If unapplied
 committed collection WAL exists, read-only open must fail with a clear
 recovery-required error unless an explicit stale-read-only mode is requested.
+Read-only open must scan enough collection WAL metadata to detect unapplied
+collection WAL transactions. Production column-store read-only open must not
+silently hide acknowledged WAL-on writes after crash.
+
+### 9.2.1 Column Side-File Recovery
+
+Before collection WAL replay, recovery scans column prepare directories and
+final column file classes and builds a side-file availability map. For each
+complete unapplied column-store transaction, recovery:
+
+1. validates transaction checksum, `CollectionEpoch`, `SchemaVersion`, and
+   catalog identity;
+2. extracts column file refs from descriptor, manifest, filter, delete bitmap,
+   granule/mark, count/visibility, schema, compression metadata, and locator root
+   deltas;
+3. verifies that extracted refs are covered by the transaction's required
+   `SideRefs`;
+4. verifies side-ref existence, size, checksum, manifest consistency, file
+   class, codec registry version, and dictionary identity;
+5. publishes the entire root group and applied watermark in one backend commit;
+6. records every published side ref as reachable from roots after the commit.
+
+Recovery classifies column prepare/final files after replay:
+
+| Column file state | Meaning | Recovery behavior |
+|---|---|---|
+| `building` | Incomplete prepare group or missing manifest/prepare record. | Quarantine or delete after proving no committed WAL/root references it. |
+| `prepared` | Complete prepare group exists, but no committed WAL transaction references it. | Quarantine or delete; allocator ids remain reserved until classification finishes. |
+| `wal_committed` | Complete WAL transaction references the prepare/final group, but applied watermark does not cover it. | Keep, validate side-ref closure, replay, or stop open on missing/corrupt required bytes. |
+| `published` | Reachable from active roots or live snapshots/read views. | Keep and represent in normal column reachability. |
+| `orphan_final` | Final-path file is not referenced by roots, live snapshots, read views, or not-yet-cleanable WAL. | Quarantine or delete after cleanup manifest/checkpoint rules allow it. |
+
+`PartID` and `FileID` allocators must be advanced during open from every
+reachable root, pending WAL transaction, and prepared or orphaned column
+directory. Reusing a `PartID` or `FileID` that appears in an unclassified
+prepare group is forbidden.
 
 ### 9.3 Buffered Transaction Replay and Accumulation
 
@@ -1494,6 +1653,27 @@ lifecycle as value-log refs: WAL protection before publish, root/snapshot
 protection after publish, and quarantine/delete only after neither WAL nor any
 published snapshot/iterator can reference them.
 
+Column file GC/rewrite must treat these as reachability roots:
+
+- active backend roots and all live snapshot roots;
+- live `CollectionReadView` roots and pinned pending units;
+- collection WAL transactions not covered by a safe applied watermark and
+  durable checkpoint/meta boundary;
+- protected prepare groups whose committed/uncommitted status has not been
+  classified;
+- external dictionaries and compression metadata referenced by reachable column
+  files, reachable descriptors, or pending WAL transactions.
+
+Column file rewrite must not rewrite refs that are protected solely by
+collection WAL in PR1. A future rewrite protocol may update column WAL refs only
+with its own crash-tested atomic redirect mechanism.
+
+Column `PartID` and `FileID` allocators are recovery state, not in-memory
+counters. Open must advance allocator high watermarks from active roots, old
+snapshot roots that remain retained, unapplied or not-yet-cleanable WAL
+transactions, and prepared/orphan column directories before accepting new column
+part writes.
+
 Cleanup is idempotent. A cleanup implementation must be safe across crashes
 after cleanup record write, after unlink/rename, and before/after directory
 fsync. Missing segments are acceptable only for `S6 Cleaned` ranges covered by
@@ -1572,6 +1752,17 @@ Crash/fault points:
 21. after Raft commit before local collection WAL append once Raft apply exists;
 22. after local collection WAL append before Raft applied-index/idempotency
     metadata advancement once Raft apply exists.
+23. midway through a column substream file;
+24. after all column files are written but before manifest write;
+25. after manifest write before final rename;
+26. during update-delta publish with secondary unique/nonunique index changes;
+27. during delete bitmap or filter publish;
+28. during column compaction/recompression after output files are prepared but
+    before descriptor supersession;
+29. during column compaction/recompression after descriptor supersession before
+    cleanup;
+30. during column file GC while an old snapshot or `CollectionReadView` still
+    references source parts.
 
 Required assertions:
 
@@ -1614,6 +1805,21 @@ Required assertions:
   stop open under fault injection;
 - future Raft apply cannot report an applied index whose logical mutation is
   neither locally recoverable nor guaranteed to be replayed from the Raft log.
+- descriptor side-ref closure is complete for column manifests, substreams,
+  filters, delete bitmaps, dictionaries, compression metadata, and granule roots;
+- missing or corrupt required column side refs fail recovery for complete
+  transactions;
+- prepared but uncommitted parts and final-path orphan files are quarantined or
+  deleted only after no committed WAL/root/read view references them;
+- `PartID` and `FileID` allocators do not reuse pending, reachable, or
+  unclassified orphan ids;
+- primary locators, part descriptors, delete bitmaps, filters, exact
+  count/visibility metadata, and secondary indexes recover atomically;
+- update-delta rows are stored in column files after reopen, with no permanent
+  row overlay;
+- compaction does not expose duplicate rows from source and compacted parts;
+- GC/rewrite never deletes root-reachable, snapshot-reachable,
+  read-view-reachable, or WAL-pending column side refs.
 
 ### 11.4 Concurrency, Admission, and Snapshot Tests
 
@@ -1709,6 +1915,23 @@ Initial gates:
   fixture before optimization;
 - collection WAL bytes/doc reported for every benchmark;
 - no unbounded memory growth when async publish is stalled.
+
+Column-store gates added before persistent column writes:
+
+- column part prepare plus WAL append overhead reported as ns/row and bytes/row;
+- side-ref closure validation throughput reported on deterministic descriptors
+  with 1K, 100K, and 1M file refs;
+- recovery throughput reported by row count and file count;
+- recovery of many small update-delta parts does not grow memory unbounded;
+- file count per default update micro-batch stays under the configured policy;
+- column WAL bytes/row and side-ref metadata bytes/row are reported;
+- orphan cleanup of prepared files has a bounded benchmark target;
+- GC protected-byte debt is reported by payload, filter, delete bitmap,
+  dictionary, manifest, and compression metadata class;
+- compaction publish crash/recover benchmark reports duplicate-row checks and
+  reclaimed bytes;
+- read-only recovery-required scan has bounded latency and does not parse full
+  column payloads.
 
 These gates are provisional. If the current write path cannot meet them with
 inline root deltas, PR2 should move large deltas to side payloads before
@@ -1972,19 +2195,47 @@ Gate:
 
 Deliverables:
 
-- side refs support future column file classes;
-- root-group WAL accepts column-store roots without a separate WAL path;
-- column-store PR checklist points to this milestone.
+- explicit column root-kind inventory for parts, granules, locators, deletes,
+  schema, filters, count/visibility metadata, compression metadata, primary, and
+  secondary roots;
+- side-ref closure validator for descriptors, manifests, substreams, filters,
+  delete bitmaps, dictionaries, compression metadata, granule roots, and
+  root-delta payloads;
+- column prepare-group scanner and orphan cleanup;
+- `PartID` and `FileID` allocator recovery from roots, WAL, snapshots/read
+  views, and prepare directories;
+- read-only recovery-required behavior for unapplied collection WAL;
+- GC/rewrite protection for WAL-pending and read-view-pinned column side refs;
+- synthetic column-file class or minimal real column-file class exercising
+  manifest, substream, filter, delete bitmap, dictionary, and compression
+  metadata refs;
+- column compaction, delete-bitmap compaction, and recompression modeled as
+  collection WAL transactions.
 
 Tests:
 
-- synthetic external side file fence test;
-- recovery refuses roots with missing external side files;
-- cleanup of prepared but unpublished external files.
+- crash before side-file prepare completes;
+- crash after side-file prepare before WAL append;
+- crash after final rename before WAL append;
+- crash after WAL append before root publish;
+- crash during root publish before watermark;
+- crash after watermark before WAL cleanup;
+- missing/corrupt required manifest, substream, filter, delete bitmap,
+  dictionary, compression metadata, or metadata side ref;
+- descriptor side-ref closure mismatch;
+- orphan prepare/final column directories are quarantined or deleted;
+- read-only open refuses unapplied collection WAL;
+- GC/rewrite cannot delete bytes referenced only by pending collection WAL or
+  live `CollectionReadView`;
+- update-delta publish with primary locator changes, delete bitmaps,
+  count/visibility metadata, and secondary unique/nonunique changes;
+- compaction/recompression publish cannot expose duplicate rows from both source
+  and compacted parts.
 
 Gate:
 
-- production column-store persistent writes may start only after this milestone.
+- persistent column-store writes may start only after these tests pass under
+  WAL-on durable and WAL-on relaxed profiles.
 
 ### Milestone 8: Native-Wire and Raft Apply Coordination
 
@@ -2082,6 +2333,12 @@ PR1 closes the correctness-critical questions that block implementation:
 13. Long-running collection reads use `CollectionReadView` pinning for backend
     snapshots, pending collection units, derived index views, and reachable side
     refs.
+14. Column-store persistent writes are blocked until the column side-ref closure
+    validator, prepare/finalize protocol, allocator recovery, and revised M7
+    crash tests pass.
+15. Column compaction, delete-bitmap compaction, and recompression that create
+    external files are collection WAL transactions, not optional backend-only
+    maintenance commits.
 
 Future questions that do not weaken PR1 correctness:
 
@@ -2152,9 +2409,11 @@ Module-specific constraints:
 - Column-store implementation may not publish persistent column parts until
   part files, descriptor deltas, primary locator deltas, delete bitmap roots,
   secondary roots, filter roots, and schema roots can be committed as one
-  collection WAL transaction. Column files must have temp/final naming, file
-  fsync, rename, directory fsync, manifest/checksum validation, and cleanup
-  tests before production enablement.
+  collection WAL transaction. Column files must have side-ref closure
+  extraction, temp/final naming, file fsync, rename, directory fsync,
+  manifest/checksum validation, `PartID`/`FileID` allocator recovery, dictionary
+  and compression metadata protection, and cleanup tests before production
+  enablement.
 
 Recommended implementation sequence:
 
