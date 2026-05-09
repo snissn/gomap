@@ -384,14 +384,16 @@ func TestTemplateV1IndexedWriteMemtablesResolveBufferedTemplateAcrossBatches(t *
 	if err != nil {
 		t.Fatalf("parse doc2 root: %v", err)
 	}
-	opts, clonedTemplateRuns, err := collectionOptionsWithClonedBufferedTemplateV1Resolver(collectionOptions{
+	opts := collectionOptions{
 		documentFormat:   DocumentFormatTemplateV1,
 		templateResolver: nil,
-	}, col.writeDomain, "users")
+	}
+	clonedTemplateRuns, err := cloneBufferedTemplateV1Runs(col.writeDomain, "users")
 	if err != nil {
 		t.Fatalf("clone buffered template resolver: %v", err)
 	}
 	defer resetCollectionTables(clonedTemplateRuns)
+	opts = collectionOptionsWithBufferedTemplateV1RunsResolver(opts, clonedTemplateRuns)
 	if err := mgr.FlushAll(); err != nil {
 		t.Fatalf("flush source buffered template run: %v", err)
 	}
@@ -478,11 +480,12 @@ func TestTemplateV1BufferedResolverRefreshesFallbackAfterAsyncPublishRace(t *tes
 		t.Fatalf("publish async flush: %v", err)
 	}
 
-	staleOptions, clonedRuns, err := collectionOptionsWithClonedBufferedTemplateV1Resolver(staleOptions, col.writeDomain, "users")
+	clonedRuns, err := cloneBufferedTemplateV1Runs(col.writeDomain, "users")
 	if err != nil {
 		t.Fatalf("clone buffered template resolver: %v", err)
 	}
 	defer resetCollectionTables(clonedRuns)
+	staleOptions = collectionOptionsWithBufferedTemplateV1RunsResolver(staleOptions, clonedRuns)
 	if len(clonedRuns) != 0 {
 		t.Fatalf("cloned template runs=%d want 0 after publish removed buffered overlay", len(clonedRuns))
 	}
