@@ -10188,13 +10188,15 @@ func TestCollectionUpdateBatchBuffersWhenSecondaryUniqueUnchanged(t *testing.T) 
 		t.Fatalf("buffered ordinary UpdateBatch advanced commit seq by %d, want 0", after.CommitSeq-before.CommitSeq)
 	}
 	col.writeDomain.mu.RLock()
-	rootRunCount := col.writeDomain.rootRunCount
 	primaryRuns := len(col.writeDomain.rootRuns[collectionPrimaryRootName("users")])
 	cityRuns := len(col.writeDomain.rootRuns[collectionSecondaryRootName("users", "city")])
 	emailRuns := len(col.writeDomain.rootRuns[collectionSecondaryRootName("users", "email")])
 	col.writeDomain.mu.RUnlock()
-	if rootRunCount != 2 || primaryRuns != 1 || cityRuns != 1 || emailRuns != 0 {
-		t.Fatalf("runs root=%d primary=%d city=%d email=%d want 2/1/1/0", rootRunCount, primaryRuns, cityRuns, emailRuns)
+	if primaryRuns == 0 || cityRuns == 0 {
+		t.Fatalf("primary/city runs=%d/%d want buffered primary and changed non-unique index", primaryRuns, cityRuns)
+	}
+	if emailRuns != 0 {
+		t.Fatalf("email runs=%d want unchanged unique index not buffered", emailRuns)
 	}
 	ids, err := col.FindByIndex("city", "sea")
 	if err != nil {

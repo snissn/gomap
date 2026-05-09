@@ -9669,6 +9669,7 @@ type updateBatchPlan struct {
 	directBufferedUpdate        *directBufferedUpdatePlan
 	uniqueSecondaryIndexByRoot  []int
 	canBufferIndexedUpdateBatch bool
+	canBufferDirectUpdateBatch  bool
 	bufferedBase                bool
 	bufferedReadGeneration      uint64
 	bufferedReadBlocked         bool
@@ -11079,7 +11080,8 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 			rootNames:                   rootNames,
 			baseRootIDs:                 baseRootIDs,
 			uniqueSecondaryIndexByRoot:  uniqueSecondary,
-			canBufferIndexedUpdateBatch: canBufferDirectUpdateBatch,
+			canBufferIndexedUpdateBatch: canBufferIndexedUpdateBatch,
+			canBufferDirectUpdateBatch:  canBufferDirectUpdateBatch,
 			bufferedBase:                bufferedRead.enabled,
 			bufferedReadGeneration:      bufferedRead.writeGeneration,
 			bufferedReadBlocked:         bufferedReadBlocked,
@@ -11372,7 +11374,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	defer func() {
 		plan.stats.BufferStage += updateBatchStatsSince(detailedStats, bufferStart)
 	}()
-	if c.writeDomain == nil || !plan.canBufferIndexedUpdateBatch || !plan.meta.Options.BufferedIndexedWrites || len(plan.meta.Indexes) == 0 {
+	if c.writeDomain == nil || !plan.canBufferDirectUpdateBatch || !plan.meta.Options.BufferedIndexedWrites || len(plan.meta.Indexes) == 0 {
 		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 		return false, nil
 	}
