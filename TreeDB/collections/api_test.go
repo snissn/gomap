@@ -4433,6 +4433,7 @@ func TestCollectionInsertPlanningKeepsLockForIndexedMemtableBypass(t *testing.T)
 		documentFormat          DocumentFormat
 		indexedMemtablesEnabled bool
 		bufferIndexedInserts    bool
+		keepDirectPlanningLock  bool
 		wantUnlock              bool
 	}{
 		{
@@ -4441,11 +4442,19 @@ func TestCollectionInsertPlanningKeepsLockForIndexedMemtableBypass(t *testing.T)
 			wantUnlock:     true,
 		},
 		{
-			name:                    "json-buffered-indexed-memtables",
+			name:                    "json-buffered-indexed-memtables-large-batch",
 			documentFormat:          DocumentFormatJSON,
 			indexedMemtablesEnabled: true,
 			bufferIndexedInserts:    true,
 			wantUnlock:              true,
+		},
+		{
+			name:                    "json-buffered-indexed-memtables-direct-accumulator",
+			documentFormat:          DocumentFormatJSON,
+			indexedMemtablesEnabled: true,
+			bufferIndexedInserts:    true,
+			keepDirectPlanningLock:  true,
+			wantUnlock:              false,
 		},
 		{
 			name:                    "json-direct-indexed-memtable-bypass",
@@ -4478,11 +4487,30 @@ func TestCollectionInsertPlanningKeepsLockForIndexedMemtableBypass(t *testing.T)
 				collectionOptions{documentFormat: tt.documentFormat},
 				tt.indexedMemtablesEnabled,
 				tt.bufferIndexedInserts,
+				tt.keepDirectPlanningLock,
 			)
 			if got != tt.wantUnlock {
 				t.Fatalf("shouldUnlockInsertPlanning()=%v want %v", got, tt.wantUnlock)
 			}
 		})
+	}
+}
+
+func TestCollectionIndexedInsertAccumulatorThresholds(t *testing.T) {
+	if !shouldUseDirectBufferedInsertAccumulators(1) {
+		t.Fatal("single-document insert should use direct buffered accumulators")
+	}
+	if !shouldUseDirectBufferedInsertAccumulators(DefaultIndexedWriteMemtableAccumulatorBatchDocuments) {
+		t.Fatal("accumulator threshold should be inclusive")
+	}
+	if shouldUseDirectBufferedInsertAccumulators(DefaultIndexedWriteMemtableAccumulatorBatchDocuments + 1) {
+		t.Fatal("large insert should keep frozen-run path")
+	}
+	if !shouldPlanDirectBufferedInsertAccumulatorsWithMutationLocked(1) {
+		t.Fatal("single-document accumulator insert should keep planning lock")
+	}
+	if shouldPlanDirectBufferedInsertAccumulatorsWithMutationLocked(2) {
+		t.Fatal("multi-document accumulator insert should release planning lock")
 	}
 }
 
@@ -6689,6 +6717,170 @@ func TestCollectionIndexedWriteMemtablesCompactRootRunsBeforeDocumentFlush(t *te
 	}
 	if got := catalog.rootID(collectionPrimaryRootName("users")); got == 0 {
 		t.Fatal("primary root was not persisted after document threshold")
+	}
+}
+
+func TestCollectionIndexedInsertBatchUsesMutableBufferedRootAccumulators(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 100,
+			BufferedIndexedWriteMaxRootRuns:  100,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	for i, id := range []string{"u1", "u2", "u3"} {
+		doc := fmt.Sprintf(`{"email":"user%d@example.com","city":"hnl"}`, i+1)
+		if _, err := col.InsertBatch([][]byte{[]byte(id)}, [][]byte{[]byte(doc)}); err != nil {
+			t.Fatalf("insert %s: %v", id, err)
+		}
+	}
+
+	primaryRoot := collectionPrimaryRootName("users")
+	indexStateRoot := collectionIndexStateRootName("users")
+	emailRoot := collectionSecondaryRootName("users", "email")
+	cityRoot := collectionSecondaryRootName("users", "city")
+
+	col.writeDomain.mu.RLock()
+	rootRunCount := col.writeDomain.rootRunCount
+	rootRuns := map[string]int{
+		primaryRoot:    len(col.writeDomain.rootRuns[primaryRoot]),
+		indexStateRoot: len(col.writeDomain.rootRuns[indexStateRoot]),
+		emailRoot:      len(col.writeDomain.rootRuns[emailRoot]),
+		cityRoot:       len(col.writeDomain.rootRuns[cityRoot]),
+	}
+	mutableRuns := len(col.writeDomain.rootMutableRuns)
+	uniqueRuns := len(col.writeDomain.uniqueValueRuns["email"])
+	uniqueMutableRuns := len(col.writeDomain.uniqueValueMutableRuns)
+	col.writeDomain.mu.RUnlock()
+
+	if rootRunCount != 4 {
+		t.Fatalf("rootRunCount=%d want 4 mutable root accumulators", rootRunCount)
+	}
+	for rootName, count := range rootRuns {
+		if count != 1 {
+			t.Fatalf("root %q runs=%d want 1 mutable accumulator", rootName, count)
+		}
+	}
+	if mutableRuns != 4 {
+		t.Fatalf("mutable root accumulators=%d want 4", mutableRuns)
+	}
+	if uniqueRuns != 1 || uniqueMutableRuns != 1 {
+		t.Fatalf("unique value runs=%d mutable=%d want 1/1", uniqueRuns, uniqueMutableRuns)
+	}
+	stats := mgr.StatsSnapshot()
+	if got := stats.IndexedStageRootRuns; got != 4 {
+		t.Fatalf("indexed staged root runs=%d want 4 newly-created accumulators", got)
+	}
+	if got := stats.IndexedStageBatches; got != 3 {
+		t.Fatalf("indexed staged batches=%d want 3", got)
+	}
+
+	got, err := col.Get([]byte("u3"))
+	if err != nil {
+		t.Fatalf("get pending buffered doc: %v", err)
+	}
+	if got == nil {
+		t.Fatal("pending buffered doc not visible")
+	}
+	ids, err := col.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find pending city: %v", err)
+	}
+	if !reflect.DeepEqual(ids, [][]byte{[]byte("u1"), []byte("u2"), []byte("u3")}) {
+		t.Fatalf("pending city ids=%q want [u1 u2 u3]", ids)
+	}
+	_, err = col.InsertBatch([][]byte{[]byte("u4")}, [][]byte{[]byte(`{"email":"user2@example.com","city":"hnl"}`)})
+	if !errors.Is(err, ErrUniqueIndexConflict) {
+		t.Fatalf("duplicate pending unique insert err=%v want ErrUniqueIndexConflict", err)
+	}
+}
+
+func TestCollectionIndexedInsertBatchKeepsLargeBatchesAsFrozenRuns(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: DefaultIndexedWriteMemtableAccumulatorBatchDocuments * 4,
+			BufferedIndexedWriteMaxRootRuns:  DefaultIndexedWriteMemtableAccumulatorBatchDocuments * 4,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	count := DefaultIndexedWriteMemtableAccumulatorBatchDocuments + 1
+	ids := make([][]byte, count)
+	docs := make([][]byte, count)
+	for i := range ids {
+		ids[i] = []byte(fmt.Sprintf("u%04d", i))
+		docs[i] = []byte(fmt.Sprintf(`{"email":"user%04d@example.com"}`, i))
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("insert large batch: %v", err)
+	}
+
+	primaryRoot := collectionPrimaryRootName("users")
+	indexStateRoot := collectionIndexStateRootName("users")
+	emailRoot := collectionSecondaryRootName("users", "email")
+
+	col.writeDomain.mu.RLock()
+	rootRunCount := col.writeDomain.rootRunCount
+	rootRuns := map[string]int{
+		primaryRoot:    len(col.writeDomain.rootRuns[primaryRoot]),
+		indexStateRoot: len(col.writeDomain.rootRuns[indexStateRoot]),
+		emailRoot:      len(col.writeDomain.rootRuns[emailRoot]),
+	}
+	mutableRuns := len(col.writeDomain.rootMutableRuns)
+	uniqueRuns := len(col.writeDomain.uniqueValueRuns["email"])
+	uniqueMutableRuns := len(col.writeDomain.uniqueValueMutableRuns)
+	col.writeDomain.mu.RUnlock()
+
+	if rootRunCount != 3 {
+		t.Fatalf("rootRunCount=%d want 3 frozen runs", rootRunCount)
+	}
+	for rootName, count := range rootRuns {
+		if count != 1 {
+			t.Fatalf("root %q runs=%d want 1 frozen run", rootName, count)
+		}
+	}
+	if mutableRuns != 0 {
+		t.Fatalf("mutable root accumulators=%d want 0 for large batch", mutableRuns)
+	}
+	if uniqueRuns != 1 || uniqueMutableRuns != 0 {
+		t.Fatalf("unique value runs=%d mutable=%d want 1/0", uniqueRuns, uniqueMutableRuns)
 	}
 }
 
