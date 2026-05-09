@@ -4925,8 +4925,10 @@ func bufferedTemplateRunSnapshotsLocked(domain *collectionWriteDomain, collectio
 			continue
 		}
 		// Create the iterator while domain.mu is held so async publish completion
-		// cannot remove and reset the run before the iterator pins or snapshots it.
-		// The actual entry clone happens after domain.mu is released.
+		// cannot remove and reset the run before NewIterator pins or snapshots it.
+		// Frozen freeze-sort iterators hold the run table read lock until Close;
+		// mutable iterators copy entries. The actual entry clone happens after
+		// domain.mu is released.
 		length := run.Len()
 		snapshots = append(snapshots, collectionRunTableSnapshot{
 			iter: run.NewIterator(nil, nil),
@@ -6629,7 +6631,12 @@ func (c *Collection) refreshTemplateV1PlanningSnapshot(snap **backenddb.Snapshot
 	if refreshed == nil {
 		return nil, CollectionMeta{}, collectionOptions{}, backenddb.ErrClosed
 	}
-	*snap = refreshed
+	closeRefreshed := true
+	defer func() {
+		if closeRefreshed {
+			_ = refreshed.Close()
+		}
+	}()
 	catalog, err := c.catalogForSnapshot(refreshed)
 	if err != nil {
 		return nil, CollectionMeta{}, collectionOptions{}, err
@@ -6655,6 +6662,8 @@ func (c *Collection) refreshTemplateV1PlanningSnapshot(snap **backenddb.Snapshot
 	if len(bufferedTemplateRuns) > 0 {
 		plannerOptions = collectionOptionsWithBufferedTemplateV1RunsResolver(plannerOptions, bufferedTemplateRuns)
 	}
+	*snap = refreshed
+	closeRefreshed = false
 	return catalog, meta, plannerOptions, nil
 }
 
