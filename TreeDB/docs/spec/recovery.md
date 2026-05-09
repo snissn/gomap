@@ -17,7 +17,7 @@ High-level order:
 7. expose recovered state,
 8. clean replayed commit-log and safely watermarked collection WAL segments.
 
-Read-only opens do not run mutating recovery. If future collection WAL segments
+Read-only opens do not run mutating recovery. If collection WAL segments
 contain committed unapplied transactions, read-only open must fail with a
 recovery-required error unless the caller explicitly requests a stale read-only
 mode. Silent stale read-only open is incompatible with collection
@@ -142,6 +142,22 @@ key/value RID fence. A complete WAL-on collection transaction with a missing
 required side ref is a recovery error unless it is an incomplete tail without a
 valid commit marker. Recovery must not skip that complete collection transaction
 and continue applying later transactions for the same collection.
+
+Collection WAL decoder outcomes are distinct from commit-log outcomes:
+
+| Outcome | Recovery behavior |
+|---|---|
+| `CompleteSupported` | validate side refs and replay, or skip only by collection watermark |
+| `IncompleteTerminalTail` | ignore only if terminal active segment and no later non-cleaned segment exists |
+| `UnsupportedRequiredVersion` | fail closed; durable acknowledged writes may be present |
+| `UnsupportedSkippableRecord` | skip only when record feature bits and cleanup metadata permit |
+| `HardCorruption` | fail closed |
+| `MaliciousLength` | fail closed before allocation |
+| `MixedVersionSegment` | fail closed unless an explicit migration reader supports both versions |
+
+Read-only open must scan collection WAL gates and committed frames. If complete
+unapplied collection WAL exists, read-only open fails with recovery-required
+unless a future read-only replay overlay is explicitly implemented.
 
 Collection WAL recovery must also validate the canonical embedded side-ref set
 decoded from root deltas and descriptors against the declared side-ref set.

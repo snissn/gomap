@@ -3,6 +3,10 @@
 This document defines the current on-disk and wire formats used by TreeDB.
 
 TreeDB is pre-alpha; format compatibility between versions is not guaranteed.
+That disclaimer does not permit fail-open handling of acknowledged durable
+writes. Once a directory advertises a required storage feature such as
+`collection_wal_v1`, unsupported binaries must fail closed instead of serving,
+cleaning, compacting, or rewriting the directory.
 
 ## 1. Top-Level Storage Objects
 
@@ -10,21 +14,22 @@ A TreeDB deployment uses:
 
 - `index.db` (paged B+Tree index and metadata),
 - commit-log segments under `wal/commit-l*.log`,
-- future collection WAL segments under `wal/collection-l*.log`,
+- collection WAL segments under `wal/collection-l*.log` once
+  `collection_wal_v1` is enabled,
 - value-log segments under `value_vlog/value-l*.log`,
 - optional split outer-leaf value-log segments under `leaf_vlog/value-l*.log`
   when `IndexOuterLeavesInValueLog` is enabled,
 - optional side-store DBs (`dictdb`, `templatedb`) using their own `index.db` files.
 
-The collection WAL format is proposed in
-`TreeDB/docs/spec/collection-wal-durability-plan.md`. It is a distinct logical
-record class from the cached key/value commit log. Collection WAL records need
-segment metadata, complete-frame checksums, transaction checksums, commit
-markers, per-collection `CollectionSeq` dependency ordering, global `WALLSN`
-append positions for scan/cleanup accounting, side-ref validation, and durable
-cleanup metadata before missing collection WAL segments can be treated as safely
-cleaned. `WALLSN` is not a replay skip key; recovery skips only by durable
-per-collection applied sequence watermarks.
+Collection WAL is a distinct physical file class from the cached key/value
+commit log. Its byte envelope, feature gates, migration states, and cleanup
+metadata are defined in this document. The semantic write/recovery contract is
+defined in `TreeDB/docs/spec/collection-wal-durability-plan.md`. Collection WAL
+records use per-collection `CollectionSeq` dependency ordering, global `WALLSN`
+append positions only for scan/cleanup accounting, side-ref validation, and
+durable cleanup metadata before missing collection WAL segments can be treated
+as safely cleaned. `WALLSN` is not a replay skip key; recovery skips only by
+durable per-collection applied sequence watermarks.
 
 ## 2. Index Page Basics
 
@@ -411,17 +416,321 @@ Validation rules:
 - `OpSetInline`: `RID == 0`.
 - `OpDelete`: `RID == 0`, `ValueLen == 0`.
 
-## 9. File Naming Conventions
+## 9. Collection WAL v1 Segment and Frame Format
+
+Collection WAL is a separate file class from the key/value commit log. It must
+not be decoded with the commit-log `Record` schema, and cached commit-log RID
+skip behavior must not apply to complete collection WAL transactions.
+
+All multi-byte integers in collection WAL are little-endian. Decoders must
+reject nonzero reserved fields. Length caps are checked before allocation.
+Unknown required versions, critical sections, critical side-ref classes, and
+compression codecs fail closed before replay, cleanup, or serving.
+
+### 9.1 Segment File Header
+
+Every `collection-l<lane>-<seq>.log` file begins with:
+
+| Offset | Size | Field |
+|---:|---:|---|
+| 0 | 8 | Magic bytes `54 44 42 43 57 41 4c 01` (`TDBCWAL\x01`) |
+| 8 | 2 | `SegmentHeaderLen`, currently `64` |
+| 10 | 2 | `SegmentFormatVersion`, currently `1` |
+| 12 | 2 | `MinReaderVersion`, currently `1` |
+| 14 | 2 | `SegmentFlags` |
+| 16 | 4 | `HeaderCRC32C` over bytes `[0,64)`, with this field zeroed |
+| 20 | 4 | `FileClass`, `1 = collection_wal` |
+| 24 | 4 | `Lane` |
+| 28 | 8 | `SegmentSeq` |
+| 36 | 8 | `FirstWALLSN`, or `0` while unsealed |
+| 44 | 8 | `LastWALLSN`, or `0` while unsealed |
+| 52 | 12 | reserved zero |
+
+### 9.2 Transaction Frame
+
+After the segment header, the file contains zero or more frames:
+
+| Offset | Size | Field |
+|---:|---:|---|
+| 0 | 8 | Magic bytes `54 44 42 43 57 54 58 01` (`TDBCWTX\x01`) |
+| 8 | 2 | `FrameHeaderLen`, currently `96` |
+| 10 | 2 | `FrameFormatVersion`, currently `1` |
+| 12 | 2 | `MinReaderVersion` |
+| 14 | 2 | `RecordType`: `1 = transaction`, `2 = segment_metadata`, `3 = cleanup_record` |
+| 16 | 4 | `FrameFlags`: bit 0 compressed, bit 1 commit trailer required |
+| 20 | 2 | `CompressionCodec`: `0 = none`, `1 = zstd` |
+| 22 | 2 | `SectionTableVersion`, currently `1` |
+| 24 | 8 | `WALLSN` |
+| 32 | 16 | `CollectionUID`, zero only for non-transaction record types |
+| 48 | 8 | `CollectionSeq`, zero only for non-transaction record types |
+| 56 | 8 | `StoredPayloadLen` |
+| 64 | 8 | `RawPayloadLen` |
+| 72 | 4 | `HeaderCRC32C` over `[0,96)`, with this field zeroed |
+| 76 | 4 | `StoredPayloadCRC32C` |
+| 80 | 4 | `ReplayDigestCRC32C` for transaction records, zero otherwise |
+| 84 | 4 | `RequiredFeatureBitsLow` |
+| 88 | 8 | reserved zero |
+
+Compression is not encoded by stealing bits from the length field. A compressed
+frame records both `CompressionCodec` and `RawPayloadLen`. Unknown compression
+codec on a required record fails closed. The frame header must be integrity
+checked before payload allocation, and `StoredPayloadLen`/`RawPayloadLen` must
+respect the configured collection WAL transaction limits.
+
+The frame is committed only if the header, stored payload, and commit trailer
+are present and valid. The commit trailer is:
+
+| Offset | Size | Field |
+|---:|---:|---|
+| 0 | 8 | Magic bytes `54 44 42 43 57 43 4d 01` (`TDBCWCM\x01`) |
+| 8 | 4 | `TrailerLen`, currently `16` |
+| 12 | 4 | `WholeFrameCRC32C` over frame header, stored payload, and trailer bytes `[0,12)` with all CRC fields already populated |
+
+A short read of the header, stored payload, or trailer is an incomplete tail only
+when it occurs in the terminal active segment and no later non-cleaned
+collection WAL segment exists. Otherwise it is hard corruption.
+
+### 9.3 Transaction Payload Header
+
+A v1 transaction payload begins with a fixed header followed by a section table.
+The first root-delta byte is not before the fixed header and section table.
+
+| Offset | Size | Field |
+|---:|---:|---|
+| 0 | 8 | `PayloadMagic` `54 44 42 43 57 50 31 01` (`TDBCWP1\x01`) |
+| 8 | 2 | `TransactionVersion`, currently `1` |
+| 10 | 2 | `FixedHeaderLen`, currently `192` |
+| 12 | 4 | `TransactionFlags` |
+| 16 | 16 | `CollectionUID` |
+| 32 | 8 | `CollectionGeneration` |
+| 40 | 8 | `CollectionSeq` |
+| 48 | 8 | `DependsOnCollectionSeq` |
+| 56 | 8 | `SchemaEpoch` |
+| 64 | 8 | `SchemaVersion` |
+| 72 | 8 | `BaseCommitSeq` |
+| 80 | 8 | `BaseSystemRootID` |
+| 88 | 32 | `BaseCatalogDigest` |
+| 120 | 32 | `CatalogDigest` |
+| 152 | 4 | `MutationClass` |
+| 156 | 4 | `RootDeltaCount` |
+| 160 | 4 | `SideRefCount` |
+| 164 | 4 | `DescriptorOpCount` |
+| 168 | 4 | `SectionCount` |
+| 172 | 4 | `FixedHeaderCRC32C` over `[0,192)`, with this field zeroed |
+| 176 | 16 | reserved zero |
+
+The section table immediately follows the fixed header. Each section table entry
+is:
+
+| Size | Field |
+|---:|---|
+| 2 | `SectionType` |
+| 2 | `SectionVersion` |
+| 4 | `SectionFlags`: bit 0 critical, bit 1 replay-critical |
+| 8 | `SectionOffset` from start of payload |
+| 8 | `SectionLength` |
+| 4 | `SectionCRC32C` |
+| 4 | reserved zero |
+
+Known v1 section types are:
+
+- `1 = root_delta_table`
+- `2 = side_ref_table`
+- `3 = system_delta_template`
+- `4 = descriptor_ops`
+- `5 = stats`
+- `6 = unknown_preserved`
+
+Unknown critical sections make recovery fail closed. Unknown noncritical
+sections may be skipped only when not replay-critical and not referenced by any
+known section. Encoders and quarantine/metadata-rewrite tools must preserve
+unknown sections byte-for-byte unless the format explicitly proves they are
+discardable.
+
+Root deltas are encoded only inside `root_delta_table`; the first byte of the
+first root delta is the byte at `SectionOffset` for that section.
+
+### 9.4 Root Delta and Side-Ref Section Constraints
+
+Root-delta sections are deterministic byte sequences. A root-delta table must
+carry root kind, root name, root descriptor epoch, storage policy,
+`RootDeltaOrdinal`, key comparator identity, delta encoding version,
+`IncludeDeletedOnColdBuild`, entry count, encoded byte length, and delta digest
+before the entry payload. Entries must encode operation kind, `EntryOrdinal`,
+key length, value length, and either inline value bytes, stable `ValuePtr`
+bytes, or a `RootDeltaPayload` side-ref index. Tombstones are first-class
+operations.
+
+Side refs encode `RefClass`, `ClassVersion`, `Critical`, `FileID`, `Offset`,
+`Length`, `ChecksumKind`, `Checksum`, and optional advisory `RelativePath`.
+Unknown critical `RefClass` or `ClassVersion` makes the transaction
+unsupported-required and recovery fails closed. Unknown noncritical refs may be
+ignored only if no replay-critical section references them and the transaction
+feature bits explicitly allow skipping them. Cleanup, GC, rewrite, and
+quarantine must treat unknown refs from complete unwatermarked transactions as
+protected until the transaction is watermarked and checkpointed or an operator
+performs a destructive rebuild.
+
+### 9.5 Required Storage Features and Compatibility Gates
+
+Collection WAL is a required storage feature once any WAL-on collection write
+can be acknowledged before its root group is checkpointed.
+
+A directory with collection WAL enabled must contain all of:
+
+1. `format.json` with an incompatible `Version` that older binaries reject and
+   `required_features` containing `collection_wal_v1`;
+2. a recovered system-root feature key
+   `treedb/storage-format/required-features/collection_wal_v1 = true`;
+3. collection WAL segment headers carrying `FileClass = collection_wal` and
+   `MinReaderVersion <= reader_version`.
+
+`format.json` is the early-open/downgrade gate before pager recovery. The
+system root is the authoritative recovered feature state. WAL headers are the
+decoder gate. The current meta page is not a feature gate unless a future
+meta-page format explicitly adds feature bits.
+
+A binary that does not support every required feature must fail before serving,
+checkpointing, compacting, vacuuming, cleaning WAL, or rewriting side files.
+`IgnoreFormatConfig` and similar runtime overrides must not bypass required
+on-disk features; destructive rebuild tooling must be explicit.
+
+Downgrade from a directory with `collection_wal_v1` is unsupported and must be
+detected. Missing or inconsistent gates are recovery errors, except during an
+explicit migration state defined below.
+
+### 9.6 Collection WAL Migration States
+
+The system root and `format.json` must agree on one of these states:
+
+| State | Allowed files | Open behavior |
+|---|---|---|
+| `NoCollectionWAL` | no `collection-l*.log`; no collection WAL cleanup metadata | old behavior |
+| `CollectionWALSupportedButDisabled` | no committed collection WAL required for recovery | open allowed; writes may choose WAL-off behavior |
+| `CollectionWALRequiredPreparing` | feature gate durable; admission closed for upgrade; no acknowledged WAL-on collection writes until finalized | only upgrading binary may open read-write |
+| `CollectionWALRequired` | committed collection WAL may exist and must be recovered | unsupported binaries fail; supported binaries replay or fail closed |
+| `CollectionWALRecoveryRequired` | complete unapplied collection WAL exists | read-write open must recover; read-only open must fail unless an explicit replay overlay exists |
+| `CollectionWALCleanupPending` | segments may be deleted only according to durable cleanup records | cleanup resumes idempotently |
+
+Activation from `NoCollectionWAL` to `CollectionWALRequired` must:
+
+1. close collection write admission;
+2. checkpoint existing roots and current commit WAL;
+3. durably write the new `format.json` gate and fsync its directory;
+4. durably commit the system-root feature state;
+5. fsync the database directory containing the new markers;
+6. continue only with a binary that supports collection WAL;
+7. acknowledge WAL-on collection writes only after the final state is durable.
+
+Crash during activation must reopen into either the old state, a preparing state
+that cannot acknowledge WAL-on collection writes, or the final required state.
+Any other mixture is a recovery error until an admin repair or destructive
+rebuild path is invoked.
+
+### 9.7 Collection Descriptor Record
+
+Every persisted collection descriptor must include:
+
+| Field | Meaning |
+|---|---|
+| `CollectionUID uuid128` | durable identity; never derived from name |
+| `CollectionGeneration uint64` | increments on drop/recreate; rename preserves UID |
+| `SchemaEpoch uint64` | increments on schema/index descriptor changes |
+| `SchemaVersion uint64` | logical schema version if distinct from epoch |
+| `CatalogDigest bytes32` | digest of replay-relevant catalog descriptor |
+| `RootDescriptorEpochs` | per-root descriptor generation map |
+| `RootGeneration` | per-root physical generation guard |
+| `CollectionName` | diagnostic only; not replay identity |
+| `DroppedAtEpoch optional uint64` | tombstone for deleted collections |
+
+Recovery must reject an unapplied collection WAL transaction when the recovered
+descriptor for its `CollectionUID` is absent, tombstoned, or has mismatching
+generation, schema epoch, catalog digest, or root descriptor epoch, unless an
+explicit migration record maps the old descriptor to a new one.
+
+### 9.8 Durable Manifest Writes and Cleanup Metadata
+
+Feature gates, segment metadata, cleanup records, and migration-state manifests
+must be written with a crash-durable manifest protocol:
+
+1. write a temp file in the target directory;
+2. fsync the temp file;
+3. rename to the final path;
+4. fsync the parent directory;
+5. for segment deletion, unlink the segment and fsync the WAL directory;
+6. record cleanup state transitions so crashes during cleanup are idempotent.
+
+The generic atomic-rename helper is not sufficient unless it performs the fsync
+steps above. Startup accepts a missing collection WAL segment only when durable
+cleanup metadata proves the whole segment was safely cleaned.
+
+### 9.9 Collection WAL Decoder Outcomes
+
+A collection WAL reader must report one of these outcomes for each frame or
+segment boundary:
+
+| Outcome | Meaning |
+|---|---|
+| `CompleteSupported` | complete frame, supported required version, checksums valid |
+| `IncompleteTerminalTail` | incomplete frame in terminal active segment with no later non-cleaned segment |
+| `UnsupportedRequiredVersion` | complete frame or segment requires a newer reader |
+| `UnsupportedSkippableRecord` | record is explicitly noncritical and skippable |
+| `HardCorruption` | bad magic, CRC, digest, non-tail truncation, or impossible structure |
+| `MaliciousLength` | length exceeds cap or overflows before allocation |
+| `MixedVersionSegment` | segment mixes versions without an explicit migration reader |
+
+Only `IncompleteTerminalTail` in the active terminal segment may be ignored.
+Complete unsupported required records fail closed because they may contain
+durable acknowledged writes.
+
+### 9.10 File Classes and Layout
+
+Collection WAL files are recognized only by the exact name pattern
+`collection-l<lane>-<seq>.log` and only in the main DB WAL directory.
+
+Root layout:
+
+- main DB: `<root>/maindb`
+- collection WAL: `<root>/maindb/wal/collection-l<lane>-<seq>.log`
+- commit WAL: `<root>/maindb/wal/commit-l<lane>-<seq>.log`
+- value log: `<root>/maindb/value_vlog/value-l<lane>-<seq>.log`
+- leaf log: `<root>/maindb/leaf_vlog/value-l<lane>-<seq>.log`
+- side stores: `<root>/dictdb`, `<root>/templatedb`
+
+Flat layout:
+
+- main DB: `<dir>`
+- collection WAL: `<dir>/wal/collection-l<lane>-<seq>.log`
+- side stores disabled unless explicitly migrated to root layout
+
+`dictdb` and `templatedb` must not contain collection WAL files. Legacy `wal-*`
+and `vlog-*` names are never collection WAL. Unknown `.log` files in a WAL
+directory are unsupported future files and must not be deleted or ignored when a
+required feature gate is present.
+
+### 9.11 Allocator Recovery
+
+The next `WALLSN` must be recovered from durable segment metadata plus every
+complete frame. The next `CollectionSeq` for a collection must be recovered from
+the collection descriptor, applied watermark, and every complete pending WAL
+transaction for that `CollectionUID`. Duplicate `WALLSN` or duplicate
+`(CollectionUID, CollectionSeq)` is fatal unless covered by an explicit legacy
+quarantine path. Gaps in `CollectionSeq` block later transactions for the same
+collection.
+
+## 10. File Naming Conventions
 
 Current canonical names:
 
 - commit log: `wal/commit-l<lane>-<seq>.log`
+- collection WAL: `wal/collection-l<lane>-<seq>.log`
 - value log: `value_vlog/value-l<lane>-<seq>.log`
 - split leaf log: `leaf_vlog/value-l<lane>-<seq>.log`
 
 Recovery parser also accepts legacy names (`commit-`, `value-`, `wal-`, `vlog-`) for backward compatibility during pre-alpha evolution.
+Legacy names are never collection WAL.
 
-## 10. Storage Compaction Lifecycle
+## 11. Storage Compaction Lifecycle
 
 `DB.CompactStorage` is the canonical online storage compaction entry point. It
 does not introduce a new on-disk format; it coordinates the existing storage

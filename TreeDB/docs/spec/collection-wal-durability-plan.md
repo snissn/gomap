@@ -63,7 +63,7 @@ PR1 makes these decisions normative:
   chains and replay-side accumulation;
 - reject true multi-collection collection WAL transactions before writing side
   refs or WAL records;
-- use a stable persisted `CollectionID`/`CollectionUID`, mandatory
+- use a stable persisted `CollectionUID`, mandatory
   `CollectionGeneration`, `SchemaEpoch`, `CatalogDigest`, and per-root
   `RootGeneration`/root descriptor epochs as replay guards;
 - include a versioned `SystemDeltaTemplate` in every replayable transaction;
@@ -570,6 +570,14 @@ It is not a logical insert/update/delete command. Recovery must not rerun user
 callbacks, predicates, JSON extraction, template extraction, secondary-index
 planning, or future column-store planning.
 
+The normative byte encoding for collection WAL segments, frames, transaction
+payloads, side-ref sections, cleanup records, and required feature gates lives
+in `storage-format.md`. The struct below is the semantic payload model used by
+the write-path and recovery contract, not permission to encode fields in ad hoc
+Go-struct order. No implementation PR may write collection WAL bytes until
+`storage-format.md` contains the exact v1 wire format and golden fixture
+expectations.
+
 ```text
 CollectionWALTransaction {
     Version                  uint16
@@ -657,11 +665,14 @@ AppliedWatermarkOp {
 
 CollectionSideRef {
     RefClass                 uint8
+    ClassVersion             uint16
+    Critical                 bool
     RefID                    uint64
     RelativePath             string optional
     Offset                   uint64
     Size                     uint64
-    ChecksumCRC32C           uint32
+    ChecksumKind             uint8
+    Checksum                 bytes
     Required                 bool
 }
 
@@ -679,9 +690,10 @@ OrderedRootPublishOptions {
 ```
 
 This record is not portable across replicas. `CollectionUID` is the durable
-collection identity; existing code or system metadata may call the same value
-`CollectionID`, but `CollectionName` is diagnostic only and must not be used as
-the replay identity. `WALLSN`, `CollectionSeq`, `BaseSystemRootID`,
+collection identity; `CollectionID` is reserved for transient in-memory handles
+or legacy text and must not name a separate durable identity. `CollectionName`
+is diagnostic only and must not be used as the replay identity. `WALLSN`,
+`CollectionSeq`, `BaseSystemRootID`,
 `BaseRootID`, root names as resolved by local storage, side-ref paths/RIDs,
 timestamps, stats, and other local observability metadata are meaningful only in
 the database directory that wrote the record. A follower applying the same
@@ -738,12 +750,12 @@ Two digests are required:
 ### 7.3 Collection Identity and Root Generations
 
 Every collection must have a stable `CollectionUID` persisted in collection
-metadata. The term `CollectionID` in older code/spec text refers to this same
-durable UID, not to the collection name. `CollectionName` is diagnostic and must
-not be the replay identity. Dropping and recreating a collection with the same
-name creates a new `CollectionUID` and a new `CollectionGeneration`. Renaming a
-collection, if supported, preserves `CollectionUID` and increments only the
-catalog metadata required by the rename.
+metadata. `CollectionID` may be used only for transient in-memory handles or
+legacy explanatory text; it must not introduce a second durable identifier.
+`CollectionName` is diagnostic and must not be the replay identity. Dropping and
+recreating a collection with the same name creates a new `CollectionUID` and a
+new `CollectionGeneration`. Renaming a collection, if supported, preserves
+`CollectionUID` and increments only the catalog metadata required by the rename.
 
 Every schema or index metadata change increments `SchemaEpoch`. Every root
 descriptor change increments that root's `RootGeneration` and descriptor epoch.
@@ -841,14 +853,21 @@ Use a dedicated logical collection WAL class. The implementation may reuse
 commit-log framing utilities, but the replay semantics are different from
 normal user-root commit records.
 
-Recommended layout:
+The canonical file layout, segment magic, frame header, transaction payload
+header, section table, commit trailer, compression fields, checksum coverage,
+feature gates, and decoder outcome taxonomy are defined in `storage-format.md`.
+The collection WAL reader must be a dedicated reader with those outcomes; it
+must not inherit cached commit-log RID skip behavior or the commit-log
+length/CRC-only frame semantics.
+
+Canonical main-DB layout:
 
 ```text
 Dir/maindb/wal/
     collection-l<lane>-<seq>.log
 ```
 
-Segment rules:
+Semantic segment rules:
 
 - Each segment contains framed `CollectionWALTransaction` records.
 - Each transaction has exactly one `WALLSN` and one collection-local
@@ -872,7 +891,7 @@ CollectionWALSegmentMeta {
     SegmentSeq                    uint64
     MinWALLSN                     uint64
     MaxWALLSN                     uint64
-    ParticipantCollectionIDs      []uuid128
+    ParticipantCollectionUIDs     []uuid128
     FirstFrameOffset              uint64
     LastCompleteFrameEndOffset    uint64
     Sealed                        bool
@@ -891,7 +910,7 @@ CollectionWALCleanupRecord {
     SegmentSeq                    uint64
     MinWALLSN                     uint64
     MaxWALLSN                     uint64
-    ParticipantCollectionIDs      []uuid128
+    ParticipantCollectionUIDs     []uuid128
     State                         planned | unlinked | dirsynced
     RecordChecksumCRC32C          uint32
 }
@@ -907,8 +926,7 @@ segment.
 
 ### 7.6 Applied Progress and Skip Rules
 
-The system root stores applied progress by `CollectionID`, which is the same
-durable value called `CollectionUID` in the transaction record:
+The system root stores applied progress by `CollectionUID`:
 
 ```text
 treedb/collection-wal/global-contiguous-cleanup-wallsn -> uint64 optional
@@ -1013,6 +1031,18 @@ refs whenever a published payload cannot decode without them. Codec ids,
 parameters, dictionary ids, dictionary registry/version, and codec registry
 version must be persisted in descriptors or manifests and protected until every
 dependent payload is unreachable.
+
+Side-ref compatibility rule:
+
+Each side ref encodes `RefClass`, `ClassVersion`, `Critical`, `FileID`,
+`Offset`, `Length`, `ChecksumKind`, `Checksum`, and optional advisory
+`RelativePath`. Unknown critical `RefClass` or `ClassVersion` makes the
+transaction unsupported-required and recovery fails closed. Unknown noncritical
+refs may be ignored only if no replay-critical section references them and the
+transaction feature bits explicitly allow skipping them. Cleanup, GC, rewrite,
+and quarantine must treat unknown refs from complete unwatermarked transactions
+as protected until the transaction is watermarked and checkpointed or an
+operator performs a destructive rebuild.
 
 Side refs are resolved by `RefClass` and `RefID`/`FileID` through a file-class
 registry. `RelativePath`, when encoded, is advisory validation data. It must
@@ -2176,6 +2206,23 @@ go test ./TreeDB/collections \
   > artifacts/collection-wal/durable-smoke.txt
 ```
 
+Required format and recovery-scan benchmark command:
+
+```bash
+go test ./TreeDB/internal/collectionwal \
+  -run '^$' \
+  -bench '^(BenchmarkCollectionWALEncodeNoIndexInlineRootDelta|BenchmarkCollectionWALDecodeNoIndexInlineRootDelta|BenchmarkCollectionWALEncodeIndexedThreeRoots|BenchmarkCollectionWALDecodeIndexedThreeRoots|BenchmarkCollectionWALReplayDigest|BenchmarkCollectionWALScanEmptySegments|BenchmarkCollectionWALScanWatermarkedTransactions|BenchmarkCollectionWALScanPendingTransactions|BenchmarkCollectionWALRebuildSideRefIndex|BenchmarkCollectionWALLargeInlineRootDelta|BenchmarkCollectionWALLargeSidePayloadRootDelta|BenchmarkCollectionWALZstdLargeRootDelta|BenchmarkCollectionWALSideRefValidation)$' \
+  -benchmem -count=10 \
+  > artifacts/collection-wal/format.txt
+```
+
+Format benchmarks must report bytes/transaction, allocations, encode ns/op,
+decode ns/op, CRC cost, compression cost, segments/sec, frames/sec, bytes/sec,
+time to first recovery error, inline versus side-payload crossover, compression
+ratio, fsync count when applicable, and side-ref verification time. Inline
+thresholds, side-payload thresholds, and compression defaults are not eligible
+for stronger-default status until these artifacts exist.
+
 Every benchmark row must report these metrics when the harness can measure them:
 
 | Metric | Purpose |
@@ -2253,7 +2300,7 @@ Traceability matrix:
 |---|---|---|---|
 | Current contract | 2, 6 | M0 | existing behavior tests and docs |
 | Testability decisions | 15 | M0.5 | closed PR1 choices and acceptance artifact |
-| WAL format | 7.2, 7.4, 7.5 | M1 | golden, fuzz, corrupt-tail tests |
+| WAL format | `storage-format.md` Section 9 plus this doc 7.2, 7.4, 7.5 | M1 | exact-byte golden, fuzz, corrupt-tail, feature-gate, and migration-state tests |
 | Recovery state machine | 9.1, 9.2, 9.4 | M1, M5 | crash-state and stop-open tests |
 | Identity and sequencing | 7.3, 7.6, 9.3 | M1, M5 | collection-seq, epoch, generation tests |
 | System-root template | 7.2, 8.6 | M1, M5 | descriptor-op and watermark atomicity tests |
@@ -2331,6 +2378,7 @@ The PR1 decisions in Section 15 are prerequisites for executable tests. Before
 M1 starts, the implementation owner must confirm the exact testable choices for:
 
 - collection WAL segment format and filename class;
+- storage-format feature gates, migration states, and byte envelope;
 - `CollectionSeq` and `WALLSN` allocation and persistence;
 - missing side-ref behavior by durability mode;
 - checkpoint behavior for PR1;
@@ -2355,13 +2403,17 @@ Deliverables:
   encoding;
 - `SystemDeltaTemplate` and descriptor-op encoding;
 - segment metadata and cleanup record encoding;
-- exact format documentation in this file;
+- exact byte-format documentation in `storage-format.md`;
 - stable root-delta encode/decode APIs independent of transient in-memory
   `batch.Batch` layout.
 
 Tests:
 
 - golden files;
+- unsupported required version and unknown critical section fail-closed tests;
+- malformed length rejection before allocation;
+- feature-gate and migration-state fixtures;
+- downgrade detection fixtures;
 - corrupt checksum;
 - truncated tail;
 - decoder fuzzing;
@@ -2925,10 +2977,27 @@ Module-specific constraints:
   applied watermark/checkpoint boundary. It may reuse or extract generic frame
   encoding from `internal/commitlog`, but it must not reuse the key/value
   `commitlog.Record` schema as the collection transaction schema.
+- `TreeDB/internal/collectionwal` decoders must follow the `storage-format.md`
+  envelope order: segment magic, segment version/min-reader, segment header CRC,
+  frame magic, frame version/min-reader, length caps before allocation, frame
+  header CRC, stored payload CRC, commit trailer, transaction fixed-header CRC,
+  section CRCs, replay digest, and side-ref closure. Unsupported required
+  versions, malicious lengths, mixed-version segments, and unknown critical
+  sections or side-ref classes fail closed.
 - The collection WAL transaction builder must require `CollectionUID`,
   `CollectionGeneration`, `SchemaEpoch`, `CatalogDigest`,
   `RootDescriptorEpochs`, `CollectionSeq`, `WALLSN`, root-delta ordinals, and
   canonical side refs before it can encode a replayable record.
+- Required storage-feature gates for `collection_wal_v1` must be written before
+  any WAL-on collection write can be acknowledged. `format.json` is the
+  early-open gate, the system root is the authoritative recovered gate, and WAL
+  headers are the decoder gate. Runtime overrides such as `IgnoreFormatConfig`
+  must not bypass required features except through explicit destructive rebuild
+  tooling.
+- Feature gates, segment metadata, cleanup records, and migration manifests need
+  a durable manifest writer with file fsync, rename, parent-directory fsync, and
+  WAL-directory fsync after segment unlink. Atomic rename without those fsync
+  steps is not enough for missing-segment proof.
 - `TreeDB/collections` owns final physical delta planning before
   acknowledgement. WAL-on collection planners must serialize primary,
   template/index-state, secondary, overlay, delete, schema, and future

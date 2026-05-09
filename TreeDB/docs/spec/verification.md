@@ -208,6 +208,18 @@ Invariant:
   safe watermark plus checkpoint boundary.
 
 Required coverage:
+- `TestCollectionWALFormatGoldenV1EmptySegment`
+- `TestCollectionWALFormatGoldenV1NoIndexInlineRootDelta`
+- `TestCollectionWALFormatGoldenV1ValueLeafAndRootDeltaSideRefs`
+- `TestCollectionWALFormatGoldenV1DescriptorOpAndWatermark`
+- `TestCollectionWALFormatGoldenV1LargeRootDeltaSidePayload`
+- `TestCollectionWALFormatGoldenV1TombstoneDelete`
+- `TestCollectionWALFormatGoldenV1CleanupRecordAndSegmentMetadata`
+- `TestCollectionWALFormatRejectsUnsupportedRequiredVersion`
+- `TestCollectionWALFormatRejectsUnknownCriticalSection`
+- `TestCollectionWALFormatSkipsUnknownNonCriticalSectionOnlyWhenAllowed`
+- `TestCollectionWALFormatRejectsMalformedLengthBeforeAllocation`
+- `TestCollectionWALFormatRejectsHeaderPayloadReplayAndTrailerCRCMismatch`
 - `TestCollectionWALOnRelaxedNoIndexAckBeforeFlushRecovers`
 - `TestCollectionWALDurableNoIndexAckBeforeFlushRecovers`
 - `TestCollectionWALOffRelaxedNoIndexAckBeforeFlushDoesNotClaimRecovery`
@@ -227,6 +239,22 @@ Required coverage:
 - `TestCollectionWALReadOnlyOpenWithPendingWAL`
 
 Acceptance artifacts:
+- The collection WAL gate requires exact byte fixtures, not only round-trip
+  tests. Each fixture must include raw bytes, decoded JSON or Go struct
+  expectation, replay digest expectation, checksum expectation, and a
+  re-encode-identical assertion.
+- Required fixture families:
+  - segment header v1 empty segment;
+  - minimal no-index transaction with one inline root delta;
+  - transaction with value-log, leaf-log, and root-delta side refs;
+  - transaction with descriptor op and watermark system-delta template;
+  - large root delta using side-payload ref;
+  - transaction with tombstone/delete entry;
+  - cleanup record and segment metadata;
+  - future unknown critical section rejection;
+  - future unknown noncritical section skip;
+  - unsupported version fail-closed;
+  - malformed length, header CRC, payload CRC, replay digest, and trailer CRC.
 - Every completed milestone must write
   `artifacts/collection-wal/<milestone>/acceptance.json`.
 - Benchmark artifacts must include the storage matrix above, baseline/new
