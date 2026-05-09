@@ -872,7 +872,9 @@ func profileBenchUpdatedSequenceRawValues(updatePhase string) []bson.RawValue {
 	return values
 }
 
-const profileBenchUpdatedSequenceValueCount = benchmarkUpdatedCityValueCount
+// Keep the sequence cardinality large enough to avoid revisiting replacement
+// values during the profile sweep without coupling it to city value generation.
+const profileBenchUpdatedSequenceValueCount = 65521
 
 func profileBenchUpdatedSequenceValue(updatePhase string, i int) int64 {
 	switch updatePhase {
