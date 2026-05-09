@@ -83,9 +83,12 @@ that predicate.
 
 The collection WAL is a local storage apply log, not a Raft log and not a
 native-wire deterministic command entry. Non-sync collection APIs under WAL-on
-modes provide process-crash recoverability after local collection WAL commit;
-they do not imply power-loss fsync durability unless a sync/checkpoint boundary
-is requested by the configured durability mode.
+modes provide process-crash recoverability after local collection WAL commit
+only for capabilities explicitly enabled by the collection WAL plan. The
+PR1-min capability is no-index row `Insert`/`InsertBatch` only; unsupported
+paths must retain the old flush-boundary contract or fail before visibility.
+These APIs do not imply power-loss fsync durability unless a sync/checkpoint
+boundary is requested by the configured durability mode.
 
 ## 4. Backend Commit Model
 
@@ -149,12 +152,14 @@ Current behavior:
 
 In backend-only mode, checkpoint is implemented as an empty sync batch write.
 
-Under the planned collection WAL contract, `DB.Checkpoint()` is also a
-collection-aware boundary. PR1 must close admission for the checkpoint cut, wait
-for in-flight collection writes admitted before the cut, drain async publish and
-write domains, publish root groups, advance applied watermarks, create the
-backend durability boundary containing those watermarks, and only then report a
-clean collection WAL state or clean collection WAL segments. A future
+Under the full collection WAL contract, `DB.Checkpoint()` is also a
+collection-aware boundary. That later gate must close admission for the
+checkpoint cut, wait for in-flight collection writes admitted before the cut,
+drain async publish and write domains, publish root groups, advance applied
+watermarks, create the backend durability boundary containing those watermarks,
+and only then report a clean collection WAL state or clean collection WAL
+segments. PR1-min retains collection WAL and must not report clean collection
+WAL state merely because backend checkpoint completed. A future
 checkpoint-without-publication mode must report collection WAL debt and retain
 all required WAL segments and side refs.
 

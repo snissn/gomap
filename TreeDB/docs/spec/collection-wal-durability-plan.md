@@ -57,29 +57,48 @@ Before this milestone passes, column-store work may proceed only for docs,
 benchmarks, pure codecs, filters, and isolated format encode/decode tests that
 do not publish persistent collection roots.
 
-PR1 makes these decisions normative:
+PR1-min is an explicitly guarded correctness slice, not the full collection WAL
+contract. It may expose durable-at-ack only for small no-index row
+`Insert`/`InsertBatch` mutations under an internal feature flag and capability
+named `NoIndexRowInsertOnly`. The feature flag defaults off.
 
-- use per-write collection WAL transactions with per-collection dependency
-  chains and replay-side accumulation;
-- reject true multi-collection collection WAL transactions before writing side
-  refs or WAL records;
-- use a stable persisted `CollectionUID`, mandatory
-  `CollectionGeneration`, `SchemaEpoch`, `CatalogDigest`, and per-root
-  `RootGeneration`/root descriptor epochs as replay guards;
-- include a versioned `SystemDeltaTemplate` in every replayable transaction;
-- fail recovery on any complete collection WAL transaction with a missing
-  required side ref in WAL-on modes;
-- maintain a protected side-ref index, rebuilt from WAL during recovery, for
-  PR1 GC/rewrite safety;
-- require a side-ref prepare guard that blocks GC/rewrite/cleanup while side
-  refs are being prepared but not yet committed to WAL;
-- require segment metadata and durable cleanup manifests before missing
-  collection WAL segments can be treated as safely cleaned;
-- make `DB.Checkpoint` call registered collection checkpoint hooks and force
-  publication of replayable collection WAL before reporting a clean collection
-  WAL state;
-- encode overlay compaction as a collection WAL maintenance transaction when it
-  can race with user-visible collection writes.
+PR1-min makes these decisions normative:
+
+- no durable-at-ack path may install read-visible pending state before the
+  collection WAL commit marker is recoverable;
+- the minimal durable transaction still records stable replay identity:
+  `Version`, `WALLSN`, `CollectionUID`, `CollectionGeneration`,
+  `CollectionSeq`, `DependsOnCollectionSeq`, `SchemaEpoch`, `BaseCommitSeq`,
+  `BaseSystemRootID`, `BaseCatalogDigest`, `CatalogDigest`, mutated primary
+  root base id and descriptor epoch, `MutationClass`, inline `RootDeltas`,
+  `SystemDeltaTemplate`, empty canonical `SideRefs`, `ReplayDigest`, and frame
+  checksum;
+- `CollectionName`, created timestamps, and stats are diagnostic only and are
+  not replay identity;
+- root descriptor publication and applied-watermark advancement are one backend
+  commit;
+- recovery is backend-owned and runs before collection APIs serve; read-only
+  open fails when unapplied committed collection WAL exists;
+- root deltas are inline-only; any value-log pointer, leaf-log pointer,
+  root-delta side payload, column-file ref, or other required side ref is a hard
+  error before visibility unless that side-ref class is explicitly implemented;
+- a single global collection WAL publisher serializes planning, WAL append,
+  backend root publish, watermark publish, and visible install, so PR1-min has
+  at most one unwatermarked transaction globally;
+- normal successful PR1-min writes publish descriptors and watermarks before
+  returning success; crash after WAL commit but before publish is recovered on
+  read-write open;
+- collection WAL segment deletion and side-file release are disabled; missing
+  uncleaned collection WAL is corruption/recovery failure;
+- WAL-off mode creates no collection WAL files and makes no durable-at-ack
+  claim.
+
+The full collection WAL contract is a later gate. It adds indexed
+insert/update/delete durable-at-ack, replay-side accumulation, protected
+side-ref indexes for emitted side-ref classes, root-delta side payloads,
+async-publish integration, checkpoint/close cleanup boundaries, overlay
+compaction WAL transactions, persistent column-store side files, and
+native-wire/Raft exposure.
 
 ## 2. Current Facts
 
@@ -401,10 +420,19 @@ blind retry.
 `Collection.Insert`, `InsertBatch`, `Update`, `UpdateBatch`, `Delete`, and
 `DeleteBatch`:
 
-- In WAL-on modes, successful return means the root-delta transaction is
-  recoverable.
-- The write may still be pending in the collection write domain for read
-  performance and publish amortization.
+- In the full WAL-on contract, successful return means the root-delta
+  transaction is recoverable.
+- PR1-min is narrower: only no-index row `Insert` and `InsertBatch` may expose
+  durable-at-ack, and only when the guarded `NoIndexRowInsertOnly` capability is
+  selected. Indexed schemas, update/delete, schema/index mutations,
+  pointerizing storage policies, root-delta side payloads, and column roots must
+  return an unsupported or capacity error before staging any pending state.
+- With the feature off, existing flush-boundary behavior remains unchanged and
+  must not emit collection WAL files for unflushed writes.
+- The full contract may later allow writes to remain pending in the collection
+  write domain for read performance and publish amortization only after the
+  collection WAL transaction is recoverable. PR1-min publishes/watermarks before
+  returning success and does not create durable pending overlays.
 - Batch mutators are all-or-nothing at the collection WAL commit boundary. A
   pre-commit item, validation, side-ref, or WAL append error leaves no batch item
   visible or recoverable. A post-commit failure is commit-ambiguous for the
@@ -431,6 +459,9 @@ blind retry.
 - Advances the applied watermark for all published collection WAL transactions.
 - Enables collection WAL cleanup after the backend checkpoint boundary that
   contains the watermark is durable.
+- Under PR1-min it may publish already retained WAL-backed no-index row
+  transactions, but cleanup deletion remains disabled and existing
+  flush-boundary semantics remain in force when the feature is off.
 
 `CollectionManager.FlushAll`:
 
@@ -439,15 +470,19 @@ blind retry.
 
 `DB.Checkpoint`:
 
-- Must become a full database durability/cleanup boundary for collection WAL.
+- Must become a full database durability/cleanup boundary for collection WAL
+  before the full contract or default enablement.
 - Must call a backend-owned collection WAL checkpoint service, or registered
   hooks that are coordinated by such a service.
-- PR1 checkpoint handling must close admission for the checkpoint cut, wait for
+- Full checkpoint handling must close admission for the checkpoint cut, wait for
   in-flight collection writes admitted before the cut, wait for in-flight async
   publish, drain all known write domains through `FlushAll`, publish root
   groups, advance applied watermarks in backend commits, sync the backend
   boundary required by the selected mode, and only then allow collection WAL
   cleanup.
+- PR1-min does not require checkpoint cleanup semantics. It must not report
+  collection WAL as clean merely because backend `DB.Checkpoint` completed, and
+  it must retain collection WAL files needed for recovery.
 - Writes admitted after the checkpoint cut may remain in retained collection WAL,
   but they are not part of the checkpoint-covered prefix.
 - It must not report a clean WAL state while collection WAL transactions remain
@@ -520,36 +555,45 @@ collection commands must enforce the same document-id, document-byte,
 index-count, catalog-guard, logical-name, and path limits as the collection WAL
 planner.
 
-### 6.3 PR1 Invariants
+### 6.3 PR1-Min Invariants and Full-Contract Extensions
 
-These invariants are normative for PR1 and are the acceptance criteria for
-turning the design into code:
+These invariants are normative for PR1-min and are the acceptance criteria for
+turning the guarded no-index row slice into code. Full-contract extensions keep
+the same invariants and add the deferred side-ref, indexed, async, cleanup, and
+column-store rules.
 
 1. Visibility implies recoverability. In WAL-on modes, any collection mutation
    visible to a read, scan, uniqueness check, update planner, delete planner, or
    schema/index barrier must be recoverable from backend roots or from a
    committed collection WAL transaction.
-2. Side refs precede WAL commit. A collection WAL transaction may reference a
-   side ref only after the bytes are readable at the selected durability boundary
-   and registered as protected against GC, rewrite, cleanup, and compaction.
+2. Side refs precede WAL commit. PR1-min emits no side refs; any physical value
+   that would require a value-log pointer, leaf-log pointer, root-delta side
+   payload, or column-file ref is rejected before visibility. When a later
+   milestone emits side refs, a collection WAL transaction may reference one
+   only after the bytes are readable at the selected durability boundary and
+   registered as protected against GC, rewrite, cleanup, and compaction.
 3. Visible install follows WAL commit. Write-domain install is a short critical
    section after the WAL commit point. If WAL commit fails, the mutation leaves
    no read-visible pending state, uniqueness reservation, queued unit, publishing
    unit, or schema/index barrier state.
 4. `CollectionSeq` is gap-free per collection. Recovery and publication process
-   transactions for a collection in `CollectionSeq` order. PR1 has no
+   transactions for a collection in `CollectionSeq` order. PR1-min has no
    same-collection independence skip.
 5. Watermark coverage is contiguous and atomic. A backend publish may advance
    `applied_collection_seq[CollectionUID]` only over the next contiguous prefix,
    and descriptor updates plus watermark updates must be one backend commit.
-6. Cleanup requires applied plus checkpointed. A collection WAL segment or side
-   ref is cleanable only after every referencing transaction is covered by a
-   durable applied watermark, the backend checkpoint/meta boundary containing the
-   watermark is durable, and side-ref reachability has incorporated the published
-   roots.
-7. `DB.Checkpoint` is collection-aware. PR1 checkpoint drains and publishes
-   checkpoint-admitted collection writes before reporting a clean collection WAL
-   state. A future non-publishing checkpoint must report collection WAL debt.
+6. Cleanup is conservative in PR1-min. Collection WAL segment deletion and
+   WAL-only side-ref release are disabled. The full contract may clean a segment
+   or side ref only after every referencing transaction is covered by a durable
+   applied watermark, the backend checkpoint/meta boundary containing the
+   watermark is durable, and side-ref reachability has incorporated the
+   published roots.
+7. `DB.Checkpoint` must not imply unsupported collection WAL cleanliness.
+   PR1-min retains collection WAL and must not report clean collection WAL state
+   solely because backend checkpoint completed. The full contract's checkpoint
+   gate drains and publishes checkpoint-admitted collection writes before
+   reporting a clean collection WAL state; a non-publishing checkpoint must
+   report collection WAL debt.
 8. `DB.Close` is an admission barrier. A write racing with close either fails
    before visible install or is included in the close drain and survives reopen.
 9. Snapshot readers pin pending state. A collection read view must pin backend
@@ -559,6 +603,16 @@ turning the design into code:
     publish, checkpoint, WAL I/O, side-ref GC, async publish completion, or
     value-log rewrite while holding a lock that those operations need to make
     progress.
+
+Capability matrix:
+
+| Capability | Mutations | Visibility/durability boundary | Status |
+|---|---|---|---|
+| Current flush-boundary collections | Existing row insert/update/delete and indexed write-domain paths | Visible in process; durable after `Flush`, `FlushAll`, compatible checkpoint/close, or synchronous publish path | Current behavior; remains the default when collection WAL durable ack is off |
+| PR1-min `NoIndexRowInsertOnly` | No-index row `Insert`/`InsertBatch` only, inline primary-root deltas only | WAL commit, immediate root publish plus applied watermark, then visible install/success | Internal/experimental, default off |
+| Future indexed durable-at-ack | Indexed insert/update/delete, schema/index barriers | WAL commit before any pending mutable/queued/publishing visibility; later async publish only amortizes publication | Deferred full-contract gate |
+| Future column persistent writes | Column descriptor roots and column side files | Full collection WAL side-ref closure, allocator recovery, cleanup protection, and M7 sign-off | Blocked |
+| Future Raft acknowledgement | Logical replicated command entries, not physical collection WAL bytes | Consensus commit plus local apply/recoverability state | Blocked; `raft_committed` remains unsupported |
 
 ### 6.4 Column-Store Gate
 
@@ -802,7 +856,7 @@ A collection WAL transaction records `CollectionUID`, `CollectionGeneration`,
 transaction whose identity or generation guard does not match the replay state,
 unless the mismatch is explicitly explained by the active replay accumulator. An
 unapplied transaction whose `CollectionUID` is absent from the recovered catalog
-must not be replayed into a collection with the same name; PR1 must stop open or
+must not be replayed into a collection with the same name; PR1-min must stop open or
 quarantine according to a documented recovery-admin procedure rather than
 silently applying the transaction to a later incarnation.
 
@@ -896,7 +950,7 @@ before variable-field parsing, decompression, side-ref validation, or root
 publication. `limits.MaxRecordSize <= 0` and negative max-segment options must
 not disable this cap for collection WAL recovery.
 
-Root kinds are explicit, versioned values. PR1 row-store root kinds include
+Root kinds are explicit, versioned values. PR1-min row-store root kinds include
 `primary`, `template`, `index_state`, `secondary`, `overlay`,
 `overlay_descriptor`, `delete`, and `metadata`.
 
@@ -1054,16 +1108,17 @@ history covered by that watermark.
 A global contiguous `WALLSN` cleanup marker may be used only as a cleanup-scan
 optimization when every lower `WALLSN` is known applied or intentionally absent.
 It must never cause recovery to skip an unapplied lower `CollectionSeq` for any
-collection, and PR1 cleanup must still verify every transaction in a segment
-against the relevant per-collection applied watermark before deleting the
-segment.
+collection. PR1-min does not delete collection WAL segments; the full cleanup
+contract must verify every transaction in a segment against the relevant
+per-collection applied watermark before deleting the segment.
 
 Watermarks advance only in the same backend commit that updates collection root
 descriptors for the root group. A watermark value means every collection
 transaction up to that `CollectionSeq` is fully represented in persisted roots
 and descriptor metadata.
 
-PR1 uses per-write WAL transactions with per-collection dependency chains:
+PR1-min uses per-write WAL transactions with per-collection dependency chains,
+while serializing publication through one global publisher:
 
 ```text
 WALLSN                   uint64  // global append position for diagnostics/cleanup
@@ -1077,7 +1132,7 @@ present in the active replay accumulator, or explicitly known not to exist for a
 new collection. A missing complete transaction blocks later transactions for the
 same collection.
 
-PR1 does not support true multi-collection collection WAL transactions. Any API
+PR1-min does not support true multi-collection collection WAL transactions. Any API
 or internal planner that would need to mutate multiple collections atomically
 must reject the operation before preparing side refs or appending collection WAL.
 A future multi-collection format must declare all participant collections,
@@ -1288,13 +1343,14 @@ required side ref in an unapplied or not-yet-cleanable collection WAL
 transaction as reachable until the transaction is covered by a safe applied
 watermark and the checkpoint/meta boundary needed for cleanup is durable.
 
-PR1 maintains a protected side-ref index updated atomically with WAL append and
-WAL cleanup. GC/rewrite must consult this index plus persisted roots. Recovery
-rebuilds the index by scanning collection WAL before any maintenance starts. If
-a value-log segment or column file is referenced only by pending collection WAL,
-maintenance must keep it in place or abort. A future rewrite mode may rewrite
-protected refs only if it publishes replacement side refs and collection WAL
-metadata atomically under an explicit crash-tested protocol.
+Any milestone that emits side refs maintains a protected side-ref index updated
+atomically with WAL append and WAL cleanup. GC/rewrite must consult this index
+plus persisted roots. Recovery rebuilds the index by scanning collection WAL
+before any maintenance starts. If a value-log segment or column file is
+referenced only by pending collection WAL, maintenance must keep it in place or
+abort. A future rewrite mode may rewrite protected refs only if it publishes
+replacement side refs and collection WAL metadata atomically under an explicit
+crash-tested protocol.
 
 Collection WAL append and side-ref protection registration are one critical
 section with respect to value-log GC, value-log rewrite, leaf-log GC, column-file
@@ -1556,10 +1612,10 @@ For any collection/root dependency chain, async publish and watermark
 advancement must cover a contiguous `CollectionSeq` prefix. A newer transaction
 may remain visible through pending state while an older publishing unit is
 requeued, but it must not become backend-authoritative, watermarked, or
-cleanable ahead of that older dependent transaction. PR1 may publish independent
-roots out of order only when root independence is machine-checkable and the
-collection watermark still advances over a contiguous transaction prefix; the
-default rule is no out-of-prefix advancement.
+cleanable ahead of that older dependent transaction. The full contract may
+publish independent roots out of order only when root independence is
+machine-checkable and the collection watermark still advances over a contiguous
+transaction prefix; the default rule is no out-of-prefix advancement.
 
 ### 8.5 Overlay Roots
 
@@ -1670,7 +1726,7 @@ with explicit consensus semantics.
 
 ### 8.9 Lock Ordering and Goroutine Lifecycle
 
-PR1 must document and test lock ordering before product code depends on
+PR1-min must document and test lock ordering before product code depends on
 collection WAL. Required ordering constraints:
 
 - close/checkpoint admission gate is acquired before admitting new collection
@@ -2216,7 +2272,7 @@ high watermark alone is not sufficient.
 Root descriptors published without the matching applied watermark are not a
 valid state. If an implementation bug or future format can produce that split,
 recovery must stop open unless the format also provides a proven idempotent
-repair protocol. PR1 must make the split unrepresentable by publishing
+repair protocol. PR1-min must make the split unrepresentable by publishing
 descriptor ops and watermark ops through a typed collection-WAL publish wrapper
 in one backend commit.
 
@@ -2289,10 +2345,11 @@ point is after normal cached key/value WAL replay and side-store inventory, but
 before recovered roots are exposed to user-visible state, snapshots, native-wire
 servers, or collection managers.
 
-PR1 recovery must publish all replayable transactions before collection APIs can
-serve reads or writes. If a future implementation chooses to keep recoverable
-transactions as a durable pending overlay after open, it must rebuild primary
-visibility, secondary visibility, and unique-index helper state from WAL before
+PR1-min recovery must publish all replayable transactions before collection APIs
+can serve reads or writes. If a future implementation chooses to keep
+recoverable transactions as a durable pending overlay after open, it must
+rebuild primary visibility, secondary visibility, and unique-index helper state
+from WAL before
 serving any collection API; otherwise duplicate unique values can be admitted
 before pending durable state is published.
 
@@ -2338,10 +2395,16 @@ prepare group is forbidden.
 
 ### 9.4 Buffered Transaction Replay and Accumulation
 
-PR1 uses per-collection replay-side accumulation. Merged flush-unit WAL
-transactions are deferred because they are incompatible with durable-at-ack for
-independently acknowledged buffered writes unless those writes wait for the
-merged unit to become durable.
+Replay-side accumulation is deferred out of PR1-min. PR1-min uses one global
+collection WAL publisher and normally publishes the single committed
+transaction plus its applied watermark before success. A crash in the fault
+window may leave at most one unwatermarked collection WAL transaction globally,
+so recovery does not need to merge multiple same-base-root transactions.
+
+The full collection WAL contract uses per-collection replay-side accumulation.
+Merged flush-unit WAL transactions are deferred because they are incompatible
+with durable-at-ack for independently acknowledged buffered writes unless those
+writes wait for the merged unit to become durable.
 
 Recovery processes transactions in `CollectionUID`, `CollectionSeq` order. A
 transaction may enter the accumulator only if its `DependsOnCollectionSeq` is
@@ -2364,7 +2427,7 @@ the hard cap, recovery must stop before serving collection APIs with
 `ErrCollectionWALRecoveryCapacityExceeded` unless a chunk/spill path has already
 reduced the projected charge.
 
-The PR1 fold order is `(CollectionSeq, RootDeltaOrdinal, EntryOrdinal)`.
+The full-contract fold order is `(CollectionSeq, RootDeltaOrdinal, EntryOrdinal)`.
 `CollectionSeq` is the transaction order key; if a future record also exposes a
 diagnostic `TxnID`, it must not replace `CollectionSeq` for same-collection
 dependency ordering. `RootDeltaOrdinal` is the order of root deltas within the
@@ -2387,12 +2450,13 @@ The applied watermark may advance from `N` to `M` only when the publish covers
 every transaction with `CollectionSeq` in `(N, M]` for that collection, with no
 gaps. A publish that contains merged root deltas, replay accumulators, or async
 flush units must record the covered contiguous range before cleanup can consider
-any transaction in that range applied. Scalar watermark metadata is valid in PR1
-only because every publish is constrained to this contiguous-prefix rule.
+any transaction in that range applied. Scalar watermark metadata is valid in
+PR1-min and the full contract because every publish is constrained to this
+contiguous-prefix rule.
 
-This rule applies to no-index buffered writes, indexed mutable runs, queued
-flush units, async publishing states, overlay compaction, schema/index changes,
-and future column-store delta-part descriptor updates.
+For the full contract, this rule applies to no-index buffered writes, indexed
+mutable runs, queued flush units, async publishing states, overlay compaction,
+schema/index changes, and future column-store delta-part descriptor updates.
 
 ### 9.5 Failure Behavior
 
@@ -2450,7 +2514,12 @@ bytes. Cleanup may stop protecting a side ref only after the transaction is
 covered by a safe applied watermark and the durable checkpoint/meta boundary
 makes the published roots or the discarded incomplete transaction authoritative.
 
-PR1 uses a protected side-ref index:
+PR1-min emits no side refs and therefore does not require a protected side-ref
+index for correctness. If PR1-min scope expands to emit even one side-ref class,
+that class must have the protected index and maintenance barriers before any
+durable ack can use it.
+
+The full contract uses a protected side-ref index:
 
 - WAL append registers every required side ref before the commit marker becomes
   replayable.
@@ -2458,7 +2527,7 @@ PR1 uses a protected side-ref index:
   starts.
 - Cleanup unregisters side refs only after the applied watermark and durable
   checkpoint/meta boundary make the published roots authoritative.
-- Value-log rewrite and column-file rewrite refuse protected refs in PR1 rather
+- Value-log rewrite and column-file rewrite refuse protected refs rather
   than trying to patch WAL records in place.
 
 WAL-only side-ref protection may be released only after all are true:
@@ -2490,7 +2559,7 @@ Column file GC/rewrite must treat these as reachability roots:
   files, reachable descriptors, or pending WAL transactions.
 
 Column file rewrite must not rewrite refs that are protected solely by
-collection WAL in PR1. A future rewrite protocol may update column WAL refs only
+collection WAL in PR1-min. A future rewrite protocol may update column WAL refs only
 with its own crash-tested atomic redirect mechanism.
 
 Column `PartID` and `FileID` allocators are recovery state, not in-memory
@@ -2505,14 +2574,16 @@ fsync. Missing segments are acceptable only for `S6 Cleaned` ranges covered by
 durable cleanup metadata.
 
 `DB.Checkpoint` must coordinate with collection WAL before reporting a clean
-collection WAL state. PR1 checkpoint hooks freeze collection WAL admission for
-the checkpoint cut, force publication of replayable collection WAL admitted
-before the cut, wait for in-flight async publish, drain known write domains,
-advance watermarks, persist the backend checkpoint/meta durability boundary,
-and include collection WAL side refs in value-log and side-file reachability
-before any prune, rewrite, or deletion. If a future checkpoint mode leaves
-replayable collection WAL unpublished, it must report collection WAL debt and
-preserve all side-ref protections; it is not a clean collection-WAL boundary.
+collection WAL state. PR1-min does not report clean collection WAL state and
+does not delete retained segments. The full checkpoint contract freezes
+collection WAL admission for the checkpoint cut, forces publication of
+replayable collection WAL admitted before the cut, waits for in-flight async
+publish, drains known write domains, advances watermarks, persists the backend
+checkpoint/meta durability boundary, and includes collection WAL side refs in
+value-log and side-file reachability before any prune, rewrite, or deletion. If
+a future checkpoint mode leaves replayable collection WAL unpublished, it must
+report collection WAL debt and preserve all side-ref protections; it is not a
+clean collection-WAL boundary.
 
 ### 10.1 Collection WAL Resource Accounting and Admission
 
@@ -2789,10 +2860,10 @@ resume_limit = stop_limit * 0.70
 
 | Limit | Default | Behavior |
 |---|---:|---|
-| `CollectionWAL.MaxInlineRootDeltaBytesPerRoot` | 1 MiB | Spill this root delta to root-delta side payload. |
-| `CollectionWAL.MaxInlineRootDeltaBytesPerTxn` | 4 MiB | Spill root deltas until inline payload is below the limit. |
+| `CollectionWAL.MaxInlineRootDeltaBytesPerRoot` | 1 MiB | PR1-min: hard error before ack. Full contract: spill this root delta to root-delta side payload. |
+| `CollectionWAL.MaxInlineRootDeltaBytesPerTxn` | 4 MiB | PR1-min: hard error before ack. Full contract: spill root deltas until inline payload is below the limit. |
 | `CollectionWAL.MaxEncodedTxnBytes` | 16 MiB | Hard error before ack after spill attempts; hard non-disableable recovery cap. |
-| `CollectionWAL.MaxRootDeltaSidePayloadBytes` | 64 MiB | Hard error before ack; caller must split batch. |
+| `CollectionWAL.MaxRootDeltaSidePayloadBytes` | 64 MiB | PR1-min rejects `RootDeltaPayload` entirely. Full contract: hard error before ack; caller must split batch. |
 | `CollectionWAL.MaxTxnDecodedEntries` | 262,144 | Hard error before ack; recovery rejects/quarantines corrupt oversize WAL. |
 | `CollectionWAL.MaxRootDeltasPerTxn` | 64 | Hard error before ack; caller must split batch. |
 | `CollectionWAL.MaxSideRefsPerTxn` | 16,384 | Hard error before ack; caller must split transaction or column/file operation. |
@@ -2929,7 +3000,7 @@ ColumnWAL.MaxSideRefMetadataBytesPerRow            = formula + 10 percent
 Keep and expand tests that document current behavior:
 
 - checkpoint does not flush pending collection-local no-index inserts before
-  this spec changes that contract;
+  a guarded collection WAL capability changes that contract;
 - close drains queued indexed flush units;
 - `FlushAll` drains queued indexed flush units;
 - async flush backpressure and requeue behavior remains visible and bounded.
@@ -3032,9 +3103,10 @@ Required assertions:
   only by pending collection WAL side refs;
 - declared side refs and embedded side refs match the canonical required set;
 - a missing complete transaction `N` blocks `N+1` for the same collection;
-- same-collection independence skips are rejected in PR1;
+- same-collection independence skips are rejected in PR1-min and remain rejected
+  unless a later machine-checkable independence proof is added;
 - multi-collection transactions are rejected before side refs or WAL are
-  written in PR1;
+  written in PR1-min;
 - drop/recreate with the same collection name does not replay old WAL into the
   new collection;
 - schema epoch and root generation mismatches block stale transactions;
@@ -3086,10 +3158,10 @@ Visibility and WAL append:
 
 Checkpoint and close:
 
-- no-index insert -> `DB.Checkpoint` -> crash/reopen shows the document under
-  WAL-on PR1 semantics;
-- indexed buffered insert with async publish disabled -> `DB.Checkpoint` ->
-  crash/reopen has primary and secondary roots;
+- PR1-min no-index insert -> `DB.Checkpoint` -> crash/reopen shows the
+  document while retained collection WAL remains present;
+- full-contract indexed buffered insert with async publish disabled ->
+  `DB.Checkpoint` -> crash/reopen has primary and secondary roots;
 - checkpoint racing with new writes covers writes before the admission cut and
   retains protected WAL for writes after the cut;
 - checkpoint with async publishing in flight waits, publishes, or safely retries
@@ -3125,7 +3197,7 @@ Read views and retention:
 
 Read-only open:
 
-- crash after WAL commit before publish, then read-only open, returns the PR1
+- crash after WAL commit before publish, then read-only open, returns the PR1-min
   recovery-required error;
 - after read-write recovery completes, read-only reopen sees the recovered write
   without needing collection WAL replay.
@@ -3188,11 +3260,45 @@ publish roots on invalid bytes, never delete/quarantine files from invalid
 bytes, produce deterministic error classes for the same input, and never skip a
 complete corrupt transaction in favor of a later same-collection transaction.
 
-### 11.7 Required Named Acceptance Tests
+### 11.7 PR1-Min Required Named Acceptance Tests
+
+These tests or equivalent subtests are required before the guarded PR1-min
+capability can merge:
+
+| Test | Must prove |
+|---|---|
+| `TestCollectionWALNoIndexInsertAckBeforeFlushRecovers` | Guarded no-index row `Insert` is recoverable after process crash without `Flush`/`Close`. |
+| `TestCollectionWALNoIndexInsertBatchAckBeforeFlushRecovers` | Guarded no-index row `InsertBatch` is recoverable as one mutation boundary. |
+| `TestCollectionWALAppendFailureRejectsBeforeVisibility` | WAL append/commit failure leaves no visible pending state and no uniqueness/planner-visible reservation. |
+| `TestCollectionWALCrashAfterCommitBeforePublishRecovers` | The single unwatermarked PR1-min transaction fault window is recoverable on read-write open. |
+| `TestCollectionWALCrashAfterPublishBeforeResponseIsIdempotent` | Recovery after descriptor plus watermark publish does not double-apply. |
+| `TestCollectionWALDescriptorAndWatermarkPublishAtomically` | Descriptor updates and applied watermark are one backend commit. |
+| `TestCollectionWALCollectionUIDDropRecreateDoesNotReplayByName` | Recovery validates `CollectionUID`/generation and never replays by collection name. |
+| `TestCollectionWALReadOnlyOpenWithPendingWALFails` | Read-only open returns recovery-required when committed unapplied collection WAL exists. |
+| `TestCollectionWALInlineCapRejectsBeforeVisibility` | Oversized inline row delta fails before visibility and is absent after reopen. |
+| `TestCollectionWALMissingUncleanedSegmentFailsOpen` | Deleting a retained uncleaned PR1-min segment makes open fail closed. |
+| `TestCollectionWALIndexedSchemaUnsupportedBeforeStaging` | Durable-at-ack on an indexed schema fails before any `rootRuns`, pending count, or WAL frame exists. |
+| `TestCollectionWALIndexedAsyncUnsupported` | `BufferedIndexedAsyncFlush` plus durable-at-ack is rejected or normalized only under the old flush-boundary profile. |
+| `TestCollectionWALUpdateUnsupportedBeforeMutation` | Update paths are rejected under PR1-min before visible mutation. |
+| `TestCollectionWALDeleteUnsupportedBeforeMutation` | Delete paths are rejected under PR1-min before visible mutation. |
+| `TestCollectionWALValueLogPointerizationUnsupportedBeforeVisibility` | Storage policy or document size that would pointerize returns an unsupported/capacity error before visibility. |
+| `TestCollectionWALColumnRootKindUnsupported` | Column root kinds fail before WAL append or root publication. |
+| `TestCollectionWALRootDeltaPayloadUnsupported` | Root-delta side payload mode is rejected in PR1-min. |
+| `TestCollectionWALWALOffDoesNotCreateCollectionWAL` | WAL-off relaxed mode keeps old flush-boundary semantics and emits no collection WAL for unflushed writes. |
+| `TestCollectionWALCheckpointRetainsSegments` | Checkpoint does not delete PR1-min collection WAL segments. |
+| `TestCollectionWALCloseRetainsSegments` | Close preserves retained segments required for recovery. |
+| `TestCollectionWALCleanupDisabledInPR1` | Collection WAL cleanup deletion path is not invoked in PR1-min. |
+
+Existing flush-boundary regression tests must remain green with the feature off,
+including checkpoint-not-flushing pending no-index inserts, buffered no-index
+reads before flush, indexed memtable reads/unique checks, queued indexed flush
+close, and `FlushAll` draining queued indexed flush units.
+
+### 11.8 Full-Contract Required Named Acceptance Tests
 
 These tests or equivalent subtests must exist before implementation can be
-considered complete. Names are normative so CI, verification docs, and
-acceptance artifacts can point to stable evidence.
+considered complete for the full collection WAL contract. Names are normative
+so CI, verification docs, and acceptance artifacts can point to stable evidence.
 
 | Test | Harness shape | Must prove |
 |---|---|---|
@@ -3224,7 +3330,7 @@ acceptance artifacts can point to stable evidence.
 | `TestCollectionWALDurableSyncBatchCaps` | Run concurrent durable-sync writers. | Group fsync batches respect max delay, byte, and transaction caps while preserving ack semantics. |
 | `TestColumnWALSideRefCapacityLimits` | Plan column side refs beyond file, manifest, and side-ref-per-transaction limits. | Persistent column roots remain blocked and fail before ack/publish. |
 
-### 11.8 Required Fault Points
+### 11.9 Required Fault Points
 
 The crash harness must expose these named fault points. Each point must support
 both "return injected error" and "process exit" modes when the code path can
@@ -3250,11 +3356,27 @@ during_overlay_compaction_publish
 ```
 
 `after_system_root_commit_before_watermark_visible` should be untriggerable in a
-correct PR1 implementation because descriptor changes and watermark advancement
+correct PR1-min implementation because descriptor changes and watermark advancement
 are one backend commit. The fault point exists to prove the implementation does
 not expose or test a two-phase publish path.
 
 ## 12. Benchmark Plan
+
+PR1-min benchmarks are advisory unless a pathological regression blocks
+correctness testing. The guarded feature remains off by default, so PR1-min
+requires metrics and an artifact, not default-enable pass/fail thresholds.
+
+Advisory PR1-min benchmark rows:
+
+- small no-index `Insert` durable-at-ack overhead;
+- small no-index `InsertBatch` durable-at-ack overhead;
+- WAL bytes per inserted document;
+- recovery time for 1K, 10K, and 100K retained PR1-min transactions;
+- inline cap rejection overhead;
+- global publisher contention smoke benchmark.
+
+The pass/fail benchmark gates below apply to the full contract and to default
+enablement, not to the guarded PR1-min merge.
 
 Benchmarks must compare baseline and new implementation on the same host with
 `benchstat`. Use the current `ProfileWALOnFast` / `wal_on_fast` collection
@@ -3493,9 +3615,10 @@ for each mutation class must be less than or equal to the formula-derived budget
 plus 10 percent.
 
 The stronger-default gate is required before enabling WAL-on collection
-durable-at-ack as a default profile. The initial implementation gate is enough
-to merge guarded/internal code paths when all correctness gates are green and
-all metrics above are emitted.
+durable-at-ack as a default profile. The full-contract implementation gate is
+required before broad WAL-on collection write APIs are exposed. PR1-min may
+merge as guarded/internal code when correctness gates are green and the advisory
+metrics above are emitted.
 
 Column-store gates added before persistent column writes:
 
@@ -3527,7 +3650,7 @@ Traceability matrix:
 | Design area | Sections | Milestones | Required evidence |
 |---|---|---|---|
 | Current contract | 2, 6 | M0 | existing behavior tests and docs |
-| Testability decisions | 15 | M0.5 | closed PR1 choices and acceptance artifact |
+| Testability decisions | 15 | M0.5 | closed PR1-min choices and acceptance artifact |
 | Formal state machine | 9.1, 9.2 | M0.5, M1, M5 | abstract model tests, invariant mapping, and counterexample fixtures |
 | WAL format | `storage-format.md` Section 9 plus this doc 7.2, 7.4, 7.5 | M1 | exact-byte golden, fuzz, corrupt-tail, feature-gate, and migration-state tests |
 | Recovery state machine | 9.1, 9.2, 9.3, 9.5 | M1, M5 | crash-state and stop-open tests |
@@ -3565,15 +3688,15 @@ Acceptance matrix:
 | Gate | Required evidence | Pass criteria |
 |---|---|---|
 | M0 Contract and harness freeze | Existing current-contract tests and crash helper skeleton. | Current flush-boundary behavior remains documented; named fault hooks can stop at side prepare, WAL append, staging, publish, watermark, cleanup, and recovery replay. |
-| M0.5 Testability decisions | Closed PR1 decisions in Section 15. | File class, transaction identity, formal model, checkpoint behavior, missing side-ref policy, buffered replay model, GC protection, and overlay compaction rule are testable. |
-| M1 WAL format | Golden fixtures, checksum/corruption/truncation tests, decoder fuzzing. | Decoder is deterministic; safe terminal truncation is accepted; hard corruption fails. |
-| M2 Side-ref fences | Missing-ref, side-payload, and GC/rewrite protection tests. | No root points at missing bytes; WAL-pending side refs are retained. |
-| M3 No-index WAL integration | WAL-on/WAL-off no-index crash tests and append-failure tests. | WAL-on crash recovers acknowledged writes; WAL-off expectations stay relaxed; append failure has no visibility. |
-| M4 Indexed integration | Indexed insert/update/delete atomic recovery tests. | Primary, template/index-state, unique, and nonunique roots agree after reopen. |
-| M4.5 Buffered/async states | Mutable, queued, publishing, requeue, and accumulator tests. | No acknowledged write is lost in any write-domain state. |
-| M5 Watermark/recovery/cleanup | Repeated reopen, watermark, missing segment, and cleanup-crash tests. | Replay is idempotent; no double-apply; no premature cleanup. |
-| M6 Barriers and modes | Flush, FlushAll, checkpoint, close, and read-only open tests. | Chosen barrier semantics are deterministic and documented. |
-| M6.5 Performance | Required benchmark commands and `benchstat` artifacts. | Correctness is green; metrics are emitted; thresholds pass for the selected gate. |
+| M0.5 Testability decisions | PR1-min decisions in Section 15. | Feature flag, capability scope, transaction identity, inline cap, unsupported-path behavior, read-only recovery-required behavior, and no-cleanup rule are testable. |
+| M1 WAL format | Golden fixtures, checksum/corruption/truncation tests, decoder fuzzing. | Decoder is deterministic; safe terminal truncation is accepted; hard corruption fails; v1 includes every replay-identity field required by PR1-min. |
+| M2 PR1-min root-delta envelope | Inline primary-root delta fixtures, cap rejection, empty side-ref-set validation. | PR1-min rejects pointerization, side payloads, column roots, and any non-empty required side-ref set before visibility. |
+| M3 PR1-min no-index WAL integration | WAL-on/WAL-off no-index insert crash tests, append-failure tests, unsupported-path tests. | Guarded no-index inserts recover after crash; unsupported paths fail before staging; WAL-off expectations stay relaxed. |
+| M4 Full side-ref/indexed integration | Side-ref fences plus indexed insert/update/delete atomic recovery tests. | No root points at missing bytes; WAL-pending side refs are retained; primary, template/index-state, unique, and nonunique roots agree after reopen. |
+| M4.5 Full buffered/async states | Mutable, queued, publishing, requeue, and accumulator tests. | No acknowledged write is lost in any write-domain state. |
+| M5 Watermark/recovery/retention | Repeated reopen, watermark, missing uncleaned segment, and disabled-cleanup tests. | Replay is idempotent; no double-apply; PR1-min retains WAL; missing uncleaned WAL fails open. |
+| M6 Full barriers and cleanup modes | Flush, FlushAll, checkpoint, close, read-only open, cleanup-manifest tests. | Full checkpoint/close cleanup semantics are deterministic and documented. |
+| M6.5 Performance | Advisory PR1-min artifact, then required full-contract benchmark commands and `benchstat` artifacts. | PR1-min metrics are emitted; full/default thresholds pass only for the selected later gate. |
 | M7 Column-store sign-off | M1-M6 artifacts, synthetic side-file tests, benchmark artifacts, and column PR checklist links. | Persistent column roots and side refs stay blocked until the sign-off artifact is green. |
 
 ### Milestone 0: Contract Freeze
@@ -3583,7 +3706,7 @@ Deliverables:
 - document current collection flush-boundary behavior;
 - identify every API that can acknowledge collection writes;
 - freeze benchmark fixtures and crash-test harness shape.
-- document PR1 visibility, checkpoint admission, close admission, read-view, and
+- document PR1-min visibility, checkpoint admission, close admission, read-view, and
   lock-order invariants before product code relies on them.
 
 Tests:
@@ -3602,24 +3725,33 @@ Gate:
 - no production column-store persistent work starts before this milestone is
   complete.
 
-### Milestone 0.5: Testability Decisions
+### Milestone 0.5: PR1-Min Testability Decisions
 
-The PR1 decisions in Section 15 are prerequisites for executable tests. Before
-M1 starts, the implementation owner must confirm the exact testable choices for:
+The PR1-min decisions in Section 15 are prerequisites for executable tests.
+Before M1 starts, the implementation owner must confirm the exact testable
+choices for:
 
 - collection WAL segment format and filename class;
 - storage-format feature gates, migration states, and byte envelope;
-- abstract model variables, state predicates, transition guards, invariant list,
-  and counterexample classes from Section 9.1;
+- exact feature flag/API spelling and `NoIndexRowInsertOnly` guarantee text;
+- exact inline encoded-size cap;
+- whether value-log pointers are fully rejected in PR1-min or
+  `ValueLogRecord` side refs are added to the slice;
+- unsupported-method behavior for update/delete/schema/index/column/native-wire
+  paths under the guarded capability;
+- transaction v1 binary layout and digest scope for the replay-identity fields
+  listed in Section 1;
+- where applied watermarks are stored in the system root;
+- recovery error names for unsupported mode, read-only recovery-required,
+  corruption, capacity, and commit ambiguity;
+- abstract model variables, state predicates, transition guards, invariant
+  list, and counterexample classes from Section 9.1;
 - `CollectionSeq` and `WALLSN` allocation and persistence;
-- missing side-ref behavior by durability mode;
-- checkpoint behavior for PR1;
-- buffered replay model;
-- GC/rewrite side-ref protection mechanism;
-- overlay compaction durability rule;
-- resource accounting defaults for transaction size, inline spill, side-payload
-  limits, replay accumulator caps, debt soft/stop/hard limits, and durable-sync
-  group fsync caps.
+- missing segment behavior for retained PR1-min WAL;
+- checkpoint behavior under PR1-min with cleanup disabled;
+- resource accounting defaults for transaction size, inline cap, pending
+  retained WAL debt, and durable-sync group fsync caps if durable sync is in
+  scope.
 
 Gate:
 
@@ -3637,14 +3769,16 @@ Deliverables:
 - persisted `CollectionUID`, `SchemaEpoch`, and root generation descriptor
   encoding;
 - `SystemDeltaTemplate` and descriptor-op encoding;
-- segment metadata and cleanup record encoding;
+- segment metadata encoding; cleanup record encoding is full-contract work and
+  must not authorize deletion in PR1-min;
 - exact byte-format documentation in `storage-format.md`;
 - typed `CollectionWALError` categories and minimal
   `CollectionWALStats.Snapshot()` counters/gauges for append, pending,
-  protected side refs, recovery, cleanup debt, and value-log GC blockers;
+  recovery, retained WAL debt, and value-log GC blockers; protected side-ref
+  gauges are required before any side-ref class is emitted;
 - stable root-delta encode/decode APIs independent of transient in-memory
   `batch.Batch` layout;
-- encoder-backed byte estimator, inline/side-payload threshold enforcement,
+- encoder-backed byte estimator, inline-cap enforcement,
   segment rotation defaults, and capacity error names from Section 10.1;
 - small model or property-test harness for descriptor/watermark split,
   WAL-before-visible, side-ref protection, per-collection skip, deterministic
@@ -3672,18 +3806,46 @@ Tests:
 Gate:
 
 - format package has no dependency on collection planners or backend DB.
-- minimal PR1 metrics and error categories from Section 17 are present before
+- minimal PR1-min metrics and error categories from Section 17 are present before
   any WAL-on collection write path is merged.
 
-### Milestone 2: Root Delta and Side-Ref Fences
+### Milestone 2: PR1-Min Root Delta Envelope
 
 Deliverables:
 
-- root-delta batch serialization;
-- inline and side-payload modes;
+- root-delta batch serialization for inline primary-root row puts;
+- sorted unique key-entry encoding with stable entry ordinals;
+- empty canonical side-ref set validation;
+- hard rejection of `RootDeltaPayload` side refs;
+- hard rejection before visibility when final physical entries would require
+  value-log pointers, leaf-log pointers, column-file refs, or any other side
+  ref;
+- encoder-backed inline-size and decoded-entry cap checks before WAL append;
+- fail-hard recovery behavior for missing uncleaned PR1-min WAL segments.
+
+Tests:
+
+- inline no-index row root delta golden files;
+- oversized inline transaction rejects before visibility;
+- pointerizing storage policy or document size rejects before visibility;
+- `RootDeltaPayload` section is rejected in PR1-min;
+- declared side refs must be empty;
+- missing uncleaned WAL segment stops open.
+
+Gate:
+
+- PR1-min cannot emit any external side ref. If product scope adds one side-ref
+  class, the full side-ref fence gate below must move before durable ack for
+  that class.
+
+### Milestone 2.5: Full Side-Ref Fences
+
+Deliverables:
+
 - side-ref availability checker;
 - value-log side-ref integration;
 - leaf-log side-ref validation for pre-existing embedded leaf refs;
+- root-delta side-payload mode;
 - protected side-ref index updated by WAL append/cleanup and rebuilt during
   recovery;
 - side-ref prepare guard that excludes GC/rewrite/cleanup during preparation;
@@ -3708,21 +3870,30 @@ Gate:
   WAL skip behavior: complete missing-side-ref transactions fail recovery rather
   than being skipped.
 
-### Milestone 3: No-Index Collection Integration
+### Milestone 3: PR1-Min No-Index Row Insert Integration
 
 Deliverables:
 
-- WAL-on no-index inserts append collection WAL before acknowledgement;
+- guarded WAL-on no-index row inserts append collection WAL before any
+  visibility or acknowledgement;
+- a single global collection WAL publisher serializes private planning, WAL
+  append/commit marker, backend root publish, applied watermark publish, and
+  visible install;
+- normal success publishes descriptor updates and applied watermark before
+  returning;
 - no-index buffered inserts enter collection mutation serialization before
   `CollectionSeq` allocation and pending visibility;
 - private planning, durable commit, and visible install are separate phases;
 - no collection read, planner, uniqueness check, queued unit, or publishing unit
   can observe a no-index write before its WAL commit marker is complete;
 - final physical primary-root deltas are materialized before the commit marker;
-- pending write-domain visibility remains unchanged;
+- feature-off pending write-domain visibility remains unchanged;
 - direct publish paths log first under WAL-on modes or remain explicitly
   WAL-off/debug-only;
-- `Flush` publishes WAL-backed no-index deltas and advances watermark.
+- `Flush` may publish retained WAL-backed no-index deltas but cleanup deletion
+  remains disabled in PR1-min;
+- no-index update/delete remain unsupported under the guarded durable-at-ack
+  capability unless implemented with the same WAL-before-visible contract.
 
 Tests:
 
@@ -3732,20 +3903,26 @@ Tests:
 - `TestCollectionWALAppendFailureRejectsWriteBeforeVisibility`;
 - `TestCollectionWALNoIndexInsertBatchAckBeforeFlushRecovers`;
 - no-index `Update`, `UpdateBatch`, `Delete`, and `DeleteBatch` either publish
-  synchronously under the documented current rule or are WAL-backed before ack;
-  whichever rule is chosen must have crash/reopen tests;
+  synchronously under the documented current rule with the feature off, or
+  return unsupported before mutation under PR1-min;
 - crash before WAL append does not expose document;
 - concurrent reads and planners blocked around WAL append cannot observe the
   private mutation;
-- checkpoint behavior updated to the new contract;
+- checkpoint retains PR1-min WAL segments and does not claim clean collection
+  WAL merely because backend checkpoint completed;
 - WAL-off mode creates no collection WAL files for unflushed writes.
 
 Gate:
 
-- no-index insert benchmark meets the M6 initial implementation gate and emits
-  all required metrics.
+- PR1-min no-index insert advisory benchmark artifact is emitted; benchmark
+  thresholds are not a pass/fail gate until default enablement.
 
-### Milestone 4: Indexed Insert/Update/Delete Integration
+### Milestone 4: Full Indexed Insert/Update/Delete Integration
+
+This milestone is deferred out of PR1-min. PR1-min must reject indexed schemas,
+indexed async flush, and indexed mutation methods under durable-at-ack before
+any root run, uniqueness helper, pending count, queued unit, or publishing unit
+is staged.
 
 Deliverables:
 
@@ -3761,7 +3938,7 @@ Deliverables:
 - unique helper rebuild after recovery;
 - replay accumulator for multiple buffered transactions that share one persisted
   root base;
-- PR1 rejection of true multi-collection transactions before side refs or WAL
+- PR1-min rejection of true multi-collection transactions before side refs or WAL
   are written;
 - schema/index changes ordered by collection sequence;
 - overlay compaction encoded as a collection WAL maintenance transaction when it
@@ -3799,7 +3976,11 @@ Gate:
   gate and emit all required metrics;
 - async flush cannot lose acknowledged documents under process crash.
 
-### Milestone 4.5: Buffered and Async State Recovery
+### Milestone 4.5: Full Buffered and Async State Recovery
+
+This milestone is deferred out of PR1-min. PR1-min avoids replay-side
+accumulation by allowing at most one unwatermarked transaction globally and by
+publishing/watermarking before success in the normal path.
 
 Deliverables:
 
@@ -3832,7 +4013,7 @@ Gate:
 - no acknowledged write is lost from mutable, queued, or publishing state under
   the required crash harness.
 
-### Milestone 5: Recovery, Watermark, and Cleanup
+### Milestone 5: Recovery, Watermark, and Conservative Retention
 
 Deliverables:
 
@@ -3843,8 +4024,8 @@ Deliverables:
 - backend-owned collection WAL recovery service independent of
   `CollectionManager` construction;
 - collection-specific publish wrapper around ordered-root publish APIs;
-- segment cleanup after safe checkpoint;
-- prepared side-file quarantine/delete;
+- PR1-min disables segment cleanup deletion and prepared side-file release;
+  cleanup manifests and quarantine/delete are full-contract work;
 - read-only open recovery-required error when unapplied committed collection WAL
   exists.
 
@@ -3858,16 +4039,19 @@ Tests:
   double-apply;
 - crash during recovery after publishing a subset of unapplied transactions is
   idempotent after repeated reopen;
-- crash after watermark commit before WAL cleanup leaves the transaction
-  skipped by watermark and cleanup retryable;
-- crash during WAL segment cleanup is idempotent;
-- crash during prepared side-file quarantine/delete is idempotent;
+- crash after watermark commit leaves the transaction skipped by watermark while
+  retained WAL remains available;
+- PR1-min cleanup-disabled tests prove WAL segments are retained after
+  checkpoint and close;
+- crash during WAL segment cleanup and prepared side-file quarantine/delete are
+  full-contract tests once those transitions exist;
 - out-of-order async publish cannot advance a watermark that hides a lower
   unapplied collection sequence;
 - accumulated publishes advance only contiguous `CollectionSeq` prefixes;
 - descriptor update and watermark update cannot split across commits;
 - older segments remain when watermark is not durable;
-- cleanup removes only fully applied segments;
+- cleanup removes no collection WAL segments in PR1-min and only fully applied
+  segments in the full contract;
 - prepared side files without committed transactions do not become visible;
 - missing cleaned segments are accepted only with durable cleanup records;
 - missing uncleaned segments stop open;
@@ -3878,7 +4062,11 @@ Gate:
 
 - repeated reopen after crash is idempotent.
 
-### Milestone 6: Checkpoint and Close Semantics
+### Milestone 6: Full Checkpoint, Close, and Cleanup Semantics
+
+This milestone is deferred out of PR1-min except for the negative guarantee
+that checkpoint/close must not delete retained PR1-min collection WAL or report
+a clean collection-WAL state they did not prove.
 
 Deliverables:
 
@@ -3896,8 +4084,8 @@ Deliverables:
 
 Tests:
 
-- checkpoint forces publication of replayable collection WAL in PR1 or reports
-  nonzero collection WAL debt in future modes;
+- checkpoint forces publication of replayable collection WAL in the full
+  contract or reports nonzero collection WAL debt in future modes;
 - checkpoint-cut tests prove writes before the cut are covered and writes after
   the cut remain protected in retained WAL;
 - close-race tests prove every successful racing write survives reopen and every
@@ -3930,7 +4118,10 @@ Deliverables:
 
 Gate:
 
-- correctness gates M1 through M6 are green;
+- PR1-min may merge after correctness gates for the guarded slice are green and
+  advisory metrics are emitted;
+- full-contract correctness gates M1 through M6 are green before broad API
+  exposure;
 - initial implementation thresholds from Section 12 pass for guarded/internal
   enablement;
 - absolute resource ceilings from Section 10.1 pass in addition to relative
@@ -4038,7 +4229,7 @@ Gate:
 | Side-file ordering creates dangling pointers. | Require side refs to be readable before WAL commit is replayable; never publish roots until side refs pass; fail recovery on missing side refs for complete WAL-on transactions. |
 | Value-log GC/rewrite removes bytes referenced only by pending collection WAL. | Treat required collection WAL side refs as GC/rewrite roots through a protected side-ref index until safe applied watermark and checkpoint cleanup. |
 | A global `WALLSN` marker skips lower unapplied transactions. | Use per-collection `CollectionSeq` watermarks as the replay key; keep any global `WALLSN` marker cleanup-only and segment-verified. |
-| Buffered transactions share an old persisted `BaseRootID`. | Use per-collection dependency chains plus replay-side accumulation in PR1. |
+| Buffered transactions share an old persisted `BaseRootID`. | PR1-min permits at most one unwatermarked transaction globally; the full contract adds per-collection dependency chains plus replay-side accumulation. |
 | A drop/recreate or schema change makes an old WAL transaction look applicable. | Persist `CollectionUID`, `CollectionGeneration`, `SchemaEpoch`, `CatalogDigest`, root descriptor epochs, and per-root `RootGeneration` guards and block mismatches. |
 | API returns a normal error after the WAL commit marker. | Reserve fallible state before commit; after commit marker, allow only success, process death, or commit-ambiguous/fatal reporting. |
 | Async flush races with WAL cleanup. | Treat async flush as publish-only; cleanup requires applied watermark and checkpoint boundary. |
@@ -4049,9 +4240,10 @@ Gate:
 | A node reports a Raft entry applied before its local collection mutation is recoverable. | Tie applied-index/idempotency metadata to local collection WAL durability or replay unapplied committed entries from Raft before serving. |
 | Native-wire acknowledgement policy leaks into recovered logical state. | Treat acknowledgement policy as response/local durability control unless a future deterministic command version explicitly makes it logical state. |
 
-## 15. Closed PR1 Decisions and Future Questions
+## 15. PR1-Min Decisions, Deferred Work, and Open Questions
 
-PR1 closes the correctness-critical questions that block implementation:
+PR1-min closes only the correctness-critical questions needed for the guarded
+no-index row insert slice:
 
 1. Collection WAL uses a dedicated logical file class. It may reuse commit-log
    framing utilities, but it has separate record kinds, commit-marker semantics,
@@ -4061,15 +4253,15 @@ PR1 closes the correctness-critical questions that block implementation:
    cleanup accounting; `CollectionSeq` is the dependency, replay, and skip key.
 3. Complete WAL-on collection transactions with missing required side refs fail
    recovery. They are not skipped like current RID-fenced cached WAL batches.
-4. PR1 uses replay-side accumulation for buffered writes that share a persisted
-   base root.
-5. PR1 uses a protected side-ref index, rebuilt from WAL during recovery, for
-   GC/rewrite safety.
-6. PR1 `DB.Checkpoint` calls collection checkpoint hooks and forces publication
-   of replayable collection WAL before reporting a clean collection WAL state.
-7. Overlay compaction that can race with user-visible collection writes is
-   encoded as a collection WAL maintenance transaction.
-8. True multi-collection collection WAL transactions are unsupported in PR1 and
+4. PR1-min uses a single global collection WAL publisher and permits at most one
+   unwatermarked transaction globally. Replay-side accumulation is deferred.
+5. PR1-min emits empty canonical `SideRefs`; protected side-ref indexes are
+   required only for side-ref classes a later milestone actually emits.
+6. PR1-min uses inline-only root deltas. Root-delta side payloads are rejected
+   before visibility.
+7. PR1-min retains all collection WAL segments. Cleanup manifests and segment
+   deletion are deferred.
+8. True multi-collection collection WAL transactions are unsupported in PR1-min and
    must be rejected before side refs or WAL are written.
 9. Read-only open with unapplied committed collection WAL fails with a
    recovery-required error unless a future explicitly stale mode is requested.
@@ -4078,9 +4270,9 @@ PR1 closes the correctness-critical questions that block implementation:
 11. WAL-on visibility implies recoverability: private planning state is never
     reachable by readers, planners, uniqueness checks, or pending-state merges
     before the WAL commit point.
-12. PR1 checkpoint and close establish admission cuts. A racing write is either
-    outside the cut and protected in retained WAL, inside the cut and drained, or
-    rejected before visible install.
+12. PR1-min checkpoint and close must not delete retained collection WAL or
+    claim clean collection-WAL state without proof. Full admission-cut cleanup
+    semantics are deferred.
 13. Long-running collection reads use `CollectionReadView` pinning for backend
     snapshots, pending collection units, derived index views, and reachable side
     refs.
@@ -4088,8 +4280,8 @@ PR1 closes the correctness-critical questions that block implementation:
     validator, prepare/finalize protocol, allocator recovery, and revised M7
     crash tests pass.
 15. Column compaction, delete-bitmap compaction, and recompression that create
-    external files are collection WAL transactions, not optional backend-only
-    maintenance commits.
+    external files are future collection WAL transactions, not optional
+    backend-only maintenance commits.
 16. `CollectionUID`, `CollectionGeneration`, `SchemaEpoch`, `CatalogDigest`,
     and root descriptor epochs are mandatory replay guards.
 17. Side-ref cleanup resolves files through a class registry by ref class and
@@ -4101,7 +4293,34 @@ PR1 closes the correctness-critical questions that block implementation:
 19. Metadata that affects collection replay must share the collection root-group
     commit or have an explicit total order against collection WAL records.
 
-Future questions that do not weaken PR1 correctness:
+Deferred full-contract work that does not weaken PR1-min correctness:
+
+1. Indexed durable-at-ack, including indexed insert/update/delete and unique
+   helper recovery.
+2. Replay-side accumulation, chunking, and spill.
+3. Async indexed durable publish over already logged transactions.
+4. Root-delta side payloads.
+5. Protected side-ref indexes for side-ref classes PR1-min does not emit.
+6. Full checkpoint/close cleanup boundaries and cleanup manifests.
+7. Overlay compaction WAL maintenance transactions.
+8. Persistent column-store writes.
+9. Native-wire/Raft ack exposure.
+10. Benchmark pass/fail thresholds for default enablement.
+
+Open questions that block PR1-min coding:
+
+1. What is the exact feature flag/API spelling and guarantee text?
+2. What is the exact inline encoded-size cap?
+3. Are value-log pointers fully rejected in PR1-min, or is `ValueLogRecord`
+   side-ref support included?
+4. Are no-index update/delete rejected under the durable capability, or is the
+   capability explicitly insert-only?
+5. What is the exact transaction v1 binary layout and digest scope?
+6. What error names distinguish unsupported mode, recovery-required read-only
+   open, corruption, capacity, and commit-ambiguous failure?
+7. Where are applied watermarks stored in the system root?
+
+Future questions that do not weaken PR1-min correctness:
 
 1. Should `Collection.Flush` gain a sync variant, or should callers use
    `DB.Checkpoint` for fsync-style barriers?
@@ -4111,7 +4330,7 @@ Future questions that do not weaken PR1 correctness:
    roots, in a Raft library stable store, or in both with an explicit ordering
    rule?
 
-Resolved PR1 decision: native-wire `ack_policy` remains request/local
+Resolved PR1-min decision: native-wire `ack_policy` remains request/local
 durability control and is stripped before deterministic-entry construction. A
 future cluster-visible barrier must be a separate deterministic command or a
 new deterministic command field with explicit state-machine semantics.
@@ -4134,9 +4353,10 @@ Write path:
   WAL-off mode, the code path is explicitly marked relaxed.
 - After WAL append succeeds: ordinary failure returns are disallowed unless the
   return status is explicitly committed/ambiguous.
-- Direct insert/update/delete paths assert either `collectionWALTxn != nil` or
-  `equivalentDurableRootFence == true`, and the latter must be covered by the
-  same crash matrix.
+- Direct insert/update/delete paths assert either `collectionWALTxn != nil`,
+  `equivalentDurableRootFence == true`, or `unsupportedBeforeMutation == true`.
+  The equivalent durable root fence is full-contract work and must be covered by
+  the same crash matrix before use.
 
 Recovery:
 
@@ -4500,8 +4720,8 @@ Module-specific constraints:
 - `TreeDB/internal/valuelog` and future column-file maintenance must consult the
   protected side-ref index and side-ref prepare guard. They must charge both
   logical protected bytes and incremental retained segment bytes to collection
-  WAL backpressure. PR1 rewrite refuses protected refs rather than moving them
-  and patching WAL records.
+  WAL backpressure. The first side-ref-enabled milestone refuses protected refs
+  rather than moving them and patching WAL records.
 - Column-store implementation may not publish persistent column parts until
   part files, descriptor deltas, primary locator deltas, delete bitmap roots,
   secondary roots, filter roots, and schema roots can be committed as one
@@ -4519,7 +4739,7 @@ Runtime assertions required in WAL-on modes:
 
 - Assert no visible install occurs without `CompleteWALFrame`.
 - Assert `CollectionSeq == previous + 1` at allocation and replay.
-- Assert `DependsOnCollectionSeq == CollectionSeq - 1` for PR1 single-write
+- Assert `DependsOnCollectionSeq == CollectionSeq - 1` for PR1-min single-write
   transactions.
 - Assert canonical embedded side refs equal declared required refs before
   append.

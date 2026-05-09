@@ -19,8 +19,10 @@ Inspect at minimum:
 - `TreeDB/docs/spec/contracts.md`
 - `TreeDB/docs/spec/value-log-lifecycle.md`
 - `TreeDB/docs/spec/verification.md`
-- `TreeDB/docs/spec/GOMAP_TREEDB_COLUMN_STORE_RFC.md`
-- `TreeDB/docs/spec/COMPRESSION_TECHNOLOGY_SPEC.md`
+- column-store specs/RFCs when present; this repository snapshot does not
+  include a dedicated column-store RFC file
+- compression specs/RFCs when present; this repository snapshot does not
+  include a dedicated compression technology spec file
 - `TreeDB/docs/spec/native-wire-protocol.md`
 - `TreeDB/docs/spec/native-query-raft-roadmap.md`
 - `TreeDB/docs/docs_lint_test.go`
@@ -126,4 +128,3 @@ For each edit:
 For every contradiction or stale claim, propose exact replacement wording and
 name the canonical document that should own the concept going forward. Include
 at least one docs-lint or verification-matrix improvement where useful.
-

@@ -4,12 +4,14 @@ Status:
 
 - Current implementation: flush-boundary durable for pending collection-local
   write-domain state.
-- PR1 collection WAL target: WAL-on collection mutator success is process-crash
-  recoverable before visibility; WAL-off remains flush-boundary.
+- PR1-min collection WAL target: only an explicitly guarded no-index row
+  insert/batch capability is process-crash recoverable before visibility.
+  Indexed write-domain durable-at-ack is a later full-contract gate; WAL-off
+  remains flush-boundary.
 
 This document specifies collection-local write-domain behavior for indexed
-collections. It distinguishes the current shipped contract from the PR1
-collection WAL target contract.
+collections. It distinguishes the current shipped contract from PR1-min and the
+later full collection WAL target contract.
 
 ## Indexed Write Memtables
 
@@ -94,12 +96,14 @@ If TreeDB later needs durable-at-ack async collection writes, it MUST add the
 collection WAL root-delta recovery mechanism before advertising that stronger
 contract.
 
-In WAL-on modes, write-domain mutable/queued/publishing state is a visibility
-and publication-amortization layer over already committed collection WAL
-transactions. It is not the first durable record. No read, unique check,
+In the full WAL-on contract, write-domain mutable/queued/publishing state is a
+visibility and publication-amortization layer over already committed collection
+WAL transactions. It is not the first durable record. No read, unique check,
 update/delete planner, schema/index barrier, queued unit, publishing unit, or
 pending-state merge may observe a mutation until its collection WAL transaction
-is committed and recoverable.
+is committed and recoverable. PR1-min does not enable indexed write-domain
+durable-at-ack; durable-at-ack requested for indexed schemas or async indexed
+flush must fail before staging.
 
 In WAL-off relaxed mode, write-domain state is not backed by collection WAL.
 Acknowledged pending writes are process-local until published. `Flush`,
@@ -111,13 +115,14 @@ scan, uniqueness check, update/delete planner, queued unit, publishing unit, or
 pending-state merge. After side refs are prepared and protected, the writer
 appends the collection WAL commit marker. Only then may it make
 mutable/queued/publishing state visible to reads and unique-index helpers. Async
-flush remains a publication optimization over already-logged transactions; it is
-not the first durable record for those writes.
+flush remains a publication optimization over already-logged transactions in the
+full contract; it is not part of PR1-min.
 
-In WAL-on modes, visibility implies recoverability. If collection WAL commit
-fails, the mutation must leave no read-visible pending state and no uniqueness
-reservation. A concurrent reader or planner must never observe a write whose WAL
-transaction is not committed/recoverable.
+In WAL-on modes for enabled collection WAL capabilities, visibility implies
+recoverability. If collection WAL commit fails, the mutation must leave no
+read-visible pending state and no uniqueness reservation. A concurrent reader or
+planner must never observe a write whose WAL transaction is not
+committed/recoverable.
 
 ## Barrier Semantics
 

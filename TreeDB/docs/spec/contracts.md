@@ -7,9 +7,10 @@ Status:
 - Current shipped contract: sections that describe existing key/value, cached,
   read-only, and collection write-domain behavior are normative for current
   code.
-- PR1 collection WAL target contract: section 7.1 defines the public semantics
-  that collection WAL implementation must satisfy before WAL-on collection
-  durable-at-ack can be advertised or enabled by default.
+- PR1-min collection WAL target contract: section 7.1 defines the guarded
+  no-index row insert slice. The full target semantics must be satisfied before
+  broad WAL-on collection durable-at-ack can be advertised or enabled by
+  default.
 
 ## 1. Key Model
 
@@ -152,7 +153,15 @@ Terms:
 
 Collection data mutators:
 
-| Method | `DurabilityDurable` and `DurabilityWALOnRelaxed` target contract | `DurabilityWALOffRelaxed` contract |
+The full WAL-on target contract below is not the same as the first guarded
+implementation slice. PR1-min may expose durable-at-ack only for no-index row
+`Insert` and `InsertBatch` under an explicit `NoIndexRowInsertOnly` capability.
+With that capability, indexed schemas, update/delete, schema/index changes,
+pointerizing storage policies, root-delta side payloads, column roots, and
+native-wire/Raft exposure must fail before any visible mutation. With the
+feature off, existing flush-boundary behavior remains the public contract.
+
+| Method | Full `DurabilityDurable` and `DurabilityWALOnRelaxed` target contract | `DurabilityWALOffRelaxed` contract |
 |---|---|---|
 | `Collection.Insert` | Successful return means the whole mutation has a committed collection WAL transaction and is recoverable after process crash. It may still be unpublished pending state and is not necessarily checkpointed or fsynced. | Successful return means process-local visibility according to the path that executed it. Crash recovery is promised only after `Flush`, `FlushAll`, `Checkpoint`, or `Close` covers the mutation. |
 | `Collection.InsertBatch` | Successful return means the whole batch is recoverable as one logical mutation boundary. | Successful return is process-local visibility until an explicit persistence boundary covers the batch. |
@@ -176,7 +185,7 @@ Barrier methods:
 |---|---|
 | `Collection.Flush` | Publishes all pending collection write-domain state for that collection admitted before the flush cut, waits for in-flight async indexed publishing for that collection, and advances the collection WAL applied watermark for the published transactions. It does not imply fsync unless composed with a sync/checkpoint boundary that requires fsync. |
 | `CollectionManager.FlushAll` | Applies the `Flush` contract to every collection write domain known to the manager at the flush cut. Future backend-owned collection WAL services must use a global domain registry when the contract needs to cover all collection handles, not only one manager instance. |
-| `DB.Checkpoint` | Successful return is a database-wide durability/cleanup boundary for all collection writes and collection metadata admitted before the checkpoint cut. With the current `Checkpoint() error` signature, `nil` means no pre-cut committed collection WAL debt remains unpublished or required for recovery. If publication/watermark/checkpoint coverage cannot be completed, `Checkpoint` must return an error unless a future result type explicitly exposes nonzero collection WAL debt. |
+| `DB.Checkpoint` | Full target: successful return is a database-wide durability/cleanup boundary for all collection writes and collection metadata admitted before the checkpoint cut. With the current `Checkpoint() error` signature, `nil` means no pre-cut committed collection WAL debt remains unpublished or required for recovery. PR1-min does not implement the full cleanup boundary; it must retain collection WAL needed for recovery and must not claim clean collection-WAL state merely because backend checkpoint completed. If publication/watermark/checkpoint coverage cannot be completed, `Checkpoint` must return an error unless a future result type explicitly exposes nonzero collection WAL debt. |
 | `DB.Close` | Establishes a close admission cut. Every collection write racing with the cut either fails before visible install with `ErrClosed` or is included in the close drain. If `Close` returns `nil`, every included successful collection mutation is visible after read-write reopen. Physical cleanup may remain a safe leak, but WAL/side refs needed for recovery must not be removed. |
 
 Public durability errors:

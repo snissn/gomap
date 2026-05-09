@@ -15,7 +15,8 @@ Inspect at minimum:
   Gates`, `15. Open Questions`, and `16. Implementation Notes`
 - `TreeDB/docs/spec/verification.md`
 - `TreeDB/docs/spec/collections-write-domain.md`
-- `TreeDB/docs/spec/GOMAP_TREEDB_COLUMN_STORE_RFC.md`
+- column-store specs/RFCs when present; this repository snapshot does not
+  include a dedicated column-store RFC file
 - `TreeDB/docs/spec/native-query-raft-roadmap.md`
 - `TreeDB/collections/api.go`
 - `TreeDB/db/ordered_root_publish.go`
@@ -133,4 +134,3 @@ Include:
 Produce a concrete minimal-slice plan. For every proposed deferral, state why
 deferral is safe, what guard prevents accidental use, and what test proves the
 guard.
-

@@ -196,10 +196,13 @@ matrix:
 
 Invariant:
 - Current indexed collection writes remain flush-boundary durable until the
-  collection WAL implementation lands.
-- Under the collection WAL PR1 contract, WAL-on collection write visibility
-  implies crash recoverability from either backend roots or a committed
-  collection WAL transaction.
+  full indexed collection WAL implementation lands.
+- Under the PR1-min guarded `NoIndexRowInsertOnly` capability, WAL-on
+  no-index row insert visibility implies crash recoverability from either
+  backend roots or a committed collection WAL transaction.
+- Under the full collection WAL contract, the same visibility-implies-
+  recoverability rule extends to indexed writes, update/delete, schema/index
+  barriers, async publishing, and future column roots.
 - Under `DurabilityWALOffRelaxed`, acknowledged writes before flush are not
   promised after process crash, and collection WAL files must not be created for
   unflushed writes.
@@ -207,34 +210,55 @@ Invariant:
   atomically, validate declared and embedded side refs, and clean only after a
   safe watermark plus checkpoint boundary.
 
-Required coverage:
+PR1-min required coverage:
+
 - `TestCollectionWALFormatGoldenV1EmptySegment`
 - `TestCollectionWALFormatGoldenV1NoIndexInlineRootDelta`
-- `TestCollectionWALFormatGoldenV1ValueLeafAndRootDeltaSideRefs`
 - `TestCollectionWALFormatGoldenV1DescriptorOpAndWatermark`
-- `TestCollectionWALFormatGoldenV1LargeRootDeltaSidePayload`
-- `TestCollectionWALFormatGoldenV1TombstoneDelete`
-- `TestCollectionWALFormatGoldenV1CleanupRecordAndSegmentMetadata`
 - `TestCollectionWALFormatRejectsUnsupportedRequiredVersion`
 - `TestCollectionWALFormatRejectsUnknownCriticalSection`
 - `TestCollectionWALFormatSkipsUnknownNonCriticalSectionOnlyWhenAllowed`
 - `TestCollectionWALFormatRejectsMalformedLengthBeforeAllocation`
 - `TestCollectionWALFormatRejectsHeaderPayloadReplayAndTrailerCRCMismatch`
-- `TestCollectionWALOnRelaxedNoIndexAckBeforeFlushRecovers`
-- `TestCollectionWALOnRelaxedInsertAckBeforeFlushRecovers`
-- `TestCollectionWALOnRelaxedInsertBatchAckBeforeFlushRecovers`
+- `TestCollectionWALNoIndexInsertAckBeforeFlushRecovers`
+- `TestCollectionWALNoIndexInsertBatchAckBeforeFlushRecovers`
+- `TestCollectionWALOffRelaxedNoIndexAckBeforeFlushDoesNotClaimRecovery`
+- `TestCollectionWALAppendFailureRejectsBeforeVisibility`
+- `TestCollectionWALCrashAfterCommitBeforePublishRecovers`
+- `TestCollectionWALCrashAfterPublishBeforeResponseIsIdempotent`
+- `TestCollectionWALDescriptorAndWatermarkPublishAtomically`
+- `TestCollectionWALCollectionUIDDropRecreateDoesNotReplayByName`
+- `TestCollectionWALReadOnlyOpenWithPendingWALFails`
+- `TestCollectionWALInlineCapRejectsBeforeVisibility`
+- `TestCollectionWALMissingUncleanedSegmentFailsOpen`
+- `TestCollectionWALIndexedSchemaUnsupportedBeforeStaging`
+- `TestCollectionWALIndexedAsyncUnsupported`
+- `TestCollectionWALUpdateUnsupportedBeforeMutation`
+- `TestCollectionWALDeleteUnsupportedBeforeMutation`
+- `TestCollectionWALValueLogPointerizationUnsupportedBeforeVisibility`
+- `TestCollectionWALColumnRootKindUnsupported`
+- `TestCollectionWALRootDeltaPayloadUnsupported`
+- `TestCollectionWALWALOffDoesNotCreateCollectionWAL`
+- `TestCollectionWALCheckpointRetainsSegments`
+- `TestCollectionWALCloseRetainsSegments`
+- `TestCollectionWALCleanupDisabledInPR1`
+- current flush-boundary regression tests remain green with the feature off.
+
+Full-contract required coverage:
+
+- `TestCollectionWALFormatGoldenV1ValueLeafAndRootDeltaSideRefs`
+- `TestCollectionWALFormatGoldenV1LargeRootDeltaSidePayload`
+- `TestCollectionWALFormatGoldenV1TombstoneDelete`
+- `TestCollectionWALFormatGoldenV1CleanupRecordAndSegmentMetadata`
 - `TestCollectionWALOnRelaxedUpdateBatchAckBeforeFlushRecovers`
 - `TestCollectionWALOnRelaxedDeleteBatchAckBeforeFlushRecovers`
 - `TestCollectionWALOnRelaxedCreateCollectionAckReopens`
 - `TestCollectionWALOnRelaxedCreateIndexBackfillAckReopens`
 - `TestCollectionWALOnRelaxedCreateIndexUniqueConflictNoSchemaAfterReopen`
-- `TestCollectionWALDurableNoIndexAckBeforeFlushRecovers`
-- `TestCollectionWALOffRelaxedNoIndexAckBeforeFlushDoesNotClaimRecovery`
 - `TestCollectionWALOffRelaxedBufferedInsertLostWithoutFlush`
 - `TestCollectionWALOffRelaxedFlushEstablishesReopenBoundary`
 - `TestCollectionWALOffRelaxedCheckpointDrainsKnownDomains`
 - `TestCollectionWALOffRelaxedCloseDrainsSuccessfulWrites`
-- `TestCollectionWALAppendFailureRejectsWriteBeforeVisibility`
 - `TestCollectionWALSideRefFailureRejectsWriteBeforeVisibility`
 - `TestCollectionWALPostCommitVisibleInstallFailureCommitAmbiguous`
 - `TestCollectionWALPublishFailureReportedByFlushCheckpointClose`

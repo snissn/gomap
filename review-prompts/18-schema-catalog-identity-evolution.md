@@ -14,7 +14,8 @@ Inspect at minimum:
 - `TreeDB/docs/spec/collection-wal-durability-plan.md`
 - `TreeDB/docs/spec/collections-write-domain.md`
 - `TreeDB/docs/spec/collections-document-formats.md`
-- `TreeDB/docs/spec/GOMAP_TREEDB_COLUMN_STORE_RFC.md`
+- column-store specs/RFCs when present; this repository snapshot does not
+  include a dedicated column-store RFC file
 - `TreeDB/docs/spec/native-wire-protocol.md`
 - `TreeDB/docs/spec/native-query-raft-roadmap.md`
 - `TreeDB/collections/api.go`
@@ -138,4 +139,3 @@ Mention any overhead from descriptor digesting or catalog guard validation.
 For every identity ambiguity, propose the exact stable identifier, epoch, or
 descriptor digest rule that should be added. Include tests that prove
 transactions cannot replay against the wrong collection or schema.
-

@@ -14,4 +14,5 @@ var (
 	ErrCollectionWALSequenceGap        = errors.New("collectionwal: sequence gap")
 	ErrCollectionWALRedacted           = errors.New("collectionwal: redacted")
 	ErrCollectionWALRecoveryRequired   = errors.New("collectionwal: recovery required")
+	ErrCollectionWALUnsupportedMode    = errors.New("collectionwal: unsupported mode")
 )
