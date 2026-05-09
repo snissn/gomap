@@ -143,6 +143,17 @@ Collection WAL recovery must also validate the canonical embedded side-ref set
 decoded from root deltas and descriptors against the declared side-ref set.
 Declared refs alone are not trusted.
 
+Collection WAL recovery uses `CollectionSeq` as the dependency and skip key.
+`WALLSN` is only a global append position for deterministic scanning,
+diagnostics, and cleanup accounting. A higher cleaned or published `WALLSN` from
+one collection must never cause recovery to skip a lower unapplied
+`CollectionSeq` from another collection.
+
+Read-write recovery must run collection WAL replay before collection managers,
+native-wire servers, or user collection handles can observe collection state.
+Read-only open must fail with recovery-required if unapplied committed
+collection WAL exists, unless an explicit stale read-only mode is added.
+
 ## 6. Post-Recovery Expectations
 
 After successful open:

@@ -72,6 +72,12 @@ a complete WAL-on collection transaction with a missing required side ref is a
 recovery error, not a skipped batch, because later same-collection transactions
 depend on collection-local sequencing and root-group atomicity.
 
+WAL-on collection writes add a stronger visibility boundary: no collection read,
+scan, uniqueness check, update/delete planner, or pending-state merge may observe
+a mutation before its collection WAL transaction is committed/recoverable. The
+write path is private planning, side-ref preparation/protection, collection WAL
+commit, then visible install.
+
 ## 4. Backend Commit Model
 
 Backend applies flushed operations through copy-on-write zipper merge.
@@ -109,6 +115,15 @@ Current behavior:
 7. run value-log retention checks and pruning.
 
 In backend-only mode, checkpoint is implemented as an empty sync batch write.
+
+Under the planned collection WAL contract, `DB.Checkpoint()` is also a
+collection-aware boundary. PR1 must close admission for the checkpoint cut, wait
+for in-flight collection writes admitted before the cut, drain async publish and
+write domains, publish root groups, advance applied watermarks, create the
+backend durability boundary containing those watermarks, and only then report a
+clean collection WAL state or clean collection WAL segments. A future
+checkpoint-without-publication mode must report collection WAL debt and retain
+all required WAL segments and side refs.
 
 ## 7. Auto-Checkpoint Defaults (Cached Mode)
 

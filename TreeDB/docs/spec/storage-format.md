@@ -20,9 +20,11 @@ The collection WAL format is proposed in
 `TreeDB/docs/spec/collection-wal-durability-plan.md`. It is a distinct logical
 record class from the cached key/value commit log. Collection WAL records need
 segment metadata, complete-frame checksums, transaction checksums, commit
-markers, per-collection sequence ordering, side-ref validation, and durable
-cleanup metadata before missing collection WAL segments can be treated as
-safely cleaned.
+markers, per-collection `CollectionSeq` dependency ordering, global `WALLSN`
+append positions for scan/cleanup accounting, side-ref validation, and durable
+cleanup metadata before missing collection WAL segments can be treated as safely
+cleaned. `WALLSN` is not a replay skip key; recovery skips only by durable
+per-collection applied sequence watermarks.
 
 ## 2. Index Page Basics
 

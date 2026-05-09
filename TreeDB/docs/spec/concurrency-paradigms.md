@@ -243,6 +243,24 @@ Current order constraints:
 
 Any refactor that changes this order MUST preserve deadlock freedom.
 
+Planned collection WAL lock-order constraints add a separate collection layer
+above backend publish locks:
+
+1. DB close/checkpoint admission gate,
+2. collection manager domain registry,
+3. per-collection mutation serialization,
+4. side-ref reservation/protection,
+5. collection WAL lane/segment append lock,
+6. short per-domain state install/completion lock,
+7. backend publish/commit/checkpoint locks.
+
+The collection domain state lock must not be held while performing collection
+WAL I/O, waiting for async publish, registering long-running GC work, calling
+backend publish, or calling backend checkpoint. `DB.Checkpoint` must invoke
+collection drain/checkpoint hooks before taking backend locks that async
+publishers need, or use a nonblocking protocol that cannot wait on those
+publishers while holding the locks they need.
+
 ### 4.3 Backend lock roles
 
 - `writeMu`:

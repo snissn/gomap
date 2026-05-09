@@ -93,6 +93,10 @@ When the cached layer is enabled:
 - Snapshots are point-in-time readers and MUST be closed to release retention pressure.
 - In cached mode, snapshots MUST include buffered memtable writes and MUST be snapshot-isolated (writes after snapshot acquisition are not visible through the snapshot).
 - `Snapshot.Get` / `Snapshot.GetAppend` return `ErrKeyNotFound` for missing/tombstoned keys (unlike `DB.Get`, which returns `(nil, nil)` on miss).
+- Under the planned collection WAL contract, collection scans and snapshots that
+  can read pending collection-local state use a `CollectionReadView`. The view
+  pins backend snapshot state, pending mutable/queued/publishing collection
+  units, derived index views, and reachable side refs until the read closes.
 
 ## 6. Concurrency and Locking
 
@@ -173,6 +177,11 @@ write-domain state must not be advertised as crash-durable.
 Operations that need persisted roots as planning input, including schema/index
 changes, must drain pending indexed write-domain state and wait for in-flight
 async publish units before taking their planning snapshot.
+
+Under the planned collection WAL contract, WAL-on collection visibility implies
+recoverability. No read, uniqueness check, update/delete planner, or pending
+merge may observe a mutation before its collection WAL transaction is
+committed/recoverable.
 
 Detailed indexed collection write-domain semantics are in
 `TreeDB/docs/spec/collections-write-domain.md`.

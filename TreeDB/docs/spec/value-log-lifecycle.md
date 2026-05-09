@@ -44,6 +44,12 @@ durable applied collection watermark, the root descriptors containing the refs
 are durable, and the value-log reachability tracker has incorporated those
 published roots or a full reachability scan has completed.
 
+Collection read views are also retention roots. If a live `CollectionReadView`
+can reach a pending mutable, queued, or publishing unit that references a
+value-log record, GC and rewrite must retain that record even if the collection
+WAL transaction has already been applied and WAL-only protection is otherwise
+eligible for release.
+
 ### 3.1 Incremental Accounting Fast Path
 
 TreeDB maintains commit-time reference counters per value-log segment.

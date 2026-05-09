@@ -97,11 +97,20 @@ visibility and publish-amortization mechanism, but it must be backed by exact
 physical deltas already committed to collection WAL.
 
 That future contract requires WAL-before-visibility ordering. WAL-on collection
-writers must validate, prepare final root deltas and side refs, append the
-collection WAL commit marker, and only then make mutable/queued/publishing state
-visible to reads and unique-index helpers. Async flush remains a publication
-optimization over already-logged transactions; it is not the first durable
-record for those writes.
+writers must use private planning, durable commit, and visible install phases.
+During private planning, root deltas, side refs, uniqueness reservations,
+publish inputs, and schema/index barrier state are not reachable from any read,
+scan, uniqueness check, update/delete planner, queued unit, publishing unit, or
+pending-state merge. After side refs are prepared and protected, the writer
+appends the collection WAL commit marker. Only then may it make
+mutable/queued/publishing state visible to reads and unique-index helpers. Async
+flush remains a publication optimization over already-logged transactions; it is
+not the first durable record for those writes.
+
+In WAL-on modes, visibility implies recoverability. If collection WAL commit
+fails, the mutation must leave no read-visible pending state and no uniqueness
+reservation. A concurrent reader or planner must never observe a write whose WAL
+transaction is not committed/recoverable.
 
 ## Barrier Semantics
 
@@ -119,6 +128,22 @@ collection WAL sequences before becoming visible, or are encoded as their own
 collection WAL transaction that depends on the previous sequence and carries the
 schema/root descriptor changes atomically.
 
+## Read Views
+
+The current implementation often protects pending state by copying point values
+under domain locks or by holding write-domain read locks for scans. The
+collection WAL plan makes this a named retention contract:
+`CollectionReadView`.
+
+A collection read view pins the backend snapshot, collection catalog/root
+descriptor view, immutable or refcounted pending mutable/queued/publishing
+units, derived secondary-index views, and side refs reachable from those units.
+Flush, async publish completion, rollback, overlay compaction, collection WAL
+cleanup, value-log GC/rewrite, leaf-log GC, and future column-file cleanup must
+not reset, reuse, delete, rewrite, or unprotect objects reachable from a live
+read view. A single point read can avoid a read view only when it copies the
+result and retains no pending-state or side-ref handles after dropping locks.
+
 ## Close And Reopen
 
 Backend close runs the collection manager close hook while writes are still
@@ -127,3 +152,8 @@ backend closes.
 
 After successful close and reopen, collection primary and secondary indexes MUST
 reflect all writes that were visible before close returned.
+
+Under the collection WAL plan, close also establishes an admission cut. After
+that cut, every collection mutator either fails before visible install or is
+included in the close drain. No write may return success during a close race and
+then be absent after reopen.
