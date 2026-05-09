@@ -152,7 +152,6 @@ indexed async flush mode. They can still override queue limits for focused
 root-publish experiments:
 
 ```sh
-MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH=true \
 MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS=4 \
 go test ./cmd/mongo_gateway_bench \
   -run '^$' \

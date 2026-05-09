@@ -3652,6 +3652,29 @@ func TestCollectionIndexedWriteMemtablesCanDisableDefaultAsyncFlush(t *testing.T
 	}
 }
 
+func TestCollectionIndexedWriteMemtablesRejectConflictingAsyncFlushOptions(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	_, err = NewCollectionManager(d).CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedAsyncFlush:        true,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	})
+	if err == nil {
+		t.Fatal("create collection with conflicting async flush options succeeded")
+	}
+	if !strings.Contains(err.Error(), "both enabled and disabled") {
+		t.Fatalf("err=%q want conflicting async flush options", err)
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesCanDisableRootRunLimitWithDocumentLimit(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
