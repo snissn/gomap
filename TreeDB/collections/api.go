@@ -54,7 +54,7 @@ const (
 	// well-amortized InsertBatch calls on the immediate publish path. Smaller
 	// batches use the indexed write-domain memtable path by default.
 	DefaultIndexedWriteMemtableDirectBatchDocuments = 16000
-	// DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits bounds opt-in
+	// DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits bounds default
 	// background indexed flush work. When the queue reaches this many immutable
 	// flush units, the triggering writer publishes synchronously to cap memory
 	// and visibility lag.
@@ -619,6 +619,12 @@ type CollectionOptions struct {
 	// write-domain memtable path. It is intended for debugging and baseline
 	// comparisons; indexed collections use memtables by default.
 	DisableIndexedWriteMemtables bool `json:"disable_indexed_write_memtables,omitempty"`
+	// DisableBufferedIndexedAsyncFlush opts an indexed collection out of the
+	// default background threshold-publish path. It is intended for debugging,
+	// baseline comparisons, and workloads that explicitly prefer foreground
+	// threshold publish. This is a publish policy, not a per-update durability
+	// boundary.
+	DisableBufferedIndexedAsyncFlush bool `json:"disable_buffered_indexed_async_flush,omitempty"`
 	// BufferedIndexedWrites is normalized metadata describing whether indexed
 	// inserts and safe update root deltas are staged in the collection write
 	// domain before Flush/Close or auto-flush. Staged writes are visible to
@@ -641,9 +647,10 @@ type CollectionOptions struct {
 	// defaults.
 	BufferedIndexedWriteMaxRootRuns int `json:"buffered_indexed_write_max_root_runs,omitempty"`
 	// BufferedIndexedAsyncFlush lets threshold-triggered indexed memtable flushes
-	// publish from a background goroutine. This is an opt-in performance mode:
-	// Flush, FlushAll, and backend Close still drain pending indexed writes before
-	// returning, but auto-flush thresholds no longer imply immediate durability.
+	// publish from a background goroutine. Indexed schemas enable this by
+	// default unless DisableBufferedIndexedAsyncFlush is set. Flush, FlushAll,
+	// and backend Close still drain pending indexed writes before returning, but
+	// auto-flush thresholds do not imply per-update durability.
 	BufferedIndexedAsyncFlush bool `json:"buffered_indexed_async_flush,omitempty"`
 	// BufferedIndexedOverlayRoots publishes indexed memtable flush units as
 	// durable overlay roots instead of immediately applying them into base roots.
@@ -5089,6 +5096,10 @@ func cloneCollectionRunTable(run memtable.Table) (memtable.Table, error) {
 	table := newCollectionRunTable(max(0, run.Len()))
 	it := run.NewIterator(nil, nil)
 	defer func() { _ = it.Close() }()
+	return cloneCollectionRunTableFromIterator(table, it)
+}
+
+func cloneCollectionRunTableFromIterator(table memtable.Table, it iterator.UnsafeIterator) (memtable.Table, error) {
 	for it.Valid() {
 		value, ptr, flags := it.UnsafeEntry()
 		table.SetEntrySteal(bytes.Clone(it.UnsafeKey()), bytes.Clone(value), ptr, flags)
@@ -5100,6 +5111,76 @@ func cloneCollectionRunTable(run memtable.Table) (memtable.Table, error) {
 	}
 	table.Freeze()
 	return table, nil
+}
+
+type collectionRunTableSnapshot struct {
+	iter iterator.UnsafeIterator
+	len  int
+}
+
+func closeCollectionRunTableSnapshots(snapshots []collectionRunTableSnapshot) {
+	for _, snapshot := range snapshots {
+		if snapshot.iter != nil {
+			_ = snapshot.iter.Close()
+		}
+	}
+}
+
+func cloneCollectionRunTableSnapshots(snapshots []collectionRunTableSnapshot) ([]memtable.Table, error) {
+	if len(snapshots) == 0 {
+		return nil, nil
+	}
+	defer closeCollectionRunTableSnapshots(snapshots)
+	out := make([]memtable.Table, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		if snapshot.iter == nil {
+			out = append(out, nil)
+			continue
+		}
+		table := newCollectionRunTable(max(0, snapshot.len))
+		cloned, err := cloneCollectionRunTableFromIterator(table, snapshot.iter)
+		if err != nil {
+			resetCollectionTables(out)
+			return nil, err
+		}
+		out = append(out, cloned)
+	}
+	return out, nil
+}
+
+func bufferedTemplateRunSnapshotsLocked(domain *collectionWriteDomain, collectionName string) []collectionRunTableSnapshot {
+	rootName := collectionTemplateRootName(collectionName)
+	pendingRuns := pendingIndexedRootRunsLocked(domain, rootName)
+	if len(pendingRuns) == 0 {
+		return nil
+	}
+	snapshots := make([]collectionRunTableSnapshot, 0, len(pendingRuns))
+	for _, run := range pendingRuns {
+		if run == nil {
+			continue
+		}
+		// Create the iterator while domain.mu is held so async publish completion
+		// cannot remove and reset the run before NewIterator pins or snapshots it.
+		// Frozen freeze-sort iterators hold the run table read lock until Close;
+		// mutable iterators copy entries. The actual entry clone happens after
+		// domain.mu is released.
+		length := run.Len()
+		snapshots = append(snapshots, collectionRunTableSnapshot{
+			iter: run.NewIterator(nil, nil),
+			len:  length,
+		})
+	}
+	return snapshots
+}
+
+func cloneBufferedTemplateV1Runs(domain *collectionWriteDomain, collectionName string) ([]memtable.Table, error) {
+	if domain == nil || collectionName == "" {
+		return nil, nil
+	}
+	domain.mu.RLock()
+	snapshots := bufferedTemplateRunSnapshotsLocked(domain, collectionName)
+	domain.mu.RUnlock()
+	return cloneCollectionRunTableSnapshots(snapshots)
 }
 
 type bufferedRootRunHeapItem struct {
@@ -6566,6 +6647,8 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		return nil, err
 	}
 
+	var bufferedTemplateRuns []memtable.Table
+	defer func() { resetCollectionTables(bufferedTemplateRuns) }()
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
@@ -6643,7 +6726,26 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		bufferIndexedInserts = c.shouldBufferIndexedInsertBatch(meta, len(documents))
 	}
 	if bufferIndexedInserts {
-		plannerOptions = collectionOptionsWithBufferedTemplateV1Resolver(plannerOptions, c.writeDomain, meta.Name)
+		if normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatTemplateV1 {
+			bufferedTemplateRuns, err = cloneBufferedTemplateV1Runs(c.writeDomain, meta.Name)
+			if err != nil {
+				closePlanningSnapshot()
+				return nil, err
+			}
+			if templateV1PlanningSnapshotNeedsRefresh(c.writeDomain, snap, bufferedTemplateRuns) {
+				// Clone buffered template runs first, then refresh the fallback snapshot.
+				// This closes the race where async publish removes a template run from the
+				// buffered overlay after the original snapshot but before the clone.
+				catalog, meta, plannerOptions, err = c.refreshTemplateV1PlanningSnapshot(&snap, trustedValidBSON, bufferedTemplateRuns, true)
+				if err != nil {
+					closePlanningSnapshot()
+					return nil, err
+				}
+				c.meta = meta
+				indexedMemtablesEnabled = c.shouldBufferIndexedInserts(meta)
+				bufferIndexedInserts = c.shouldBufferIndexedInsertBatch(meta, len(documents))
+			}
+		}
 	}
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
@@ -6776,6 +6878,61 @@ func shouldUnlockInsertPlanning(opts collectionOptions, indexedMemtablesEnabled,
 		return false
 	}
 	return true
+}
+
+func (c *Collection) refreshTemplateV1PlanningSnapshot(snap **backenddb.Snapshot, trustedValidBSON bool, bufferedTemplateRuns []memtable.Table, rejectBufferedOverlays bool) (*collectionCatalog, CollectionMeta, collectionOptions, error) {
+	if snap == nil {
+		return nil, CollectionMeta{}, collectionOptions{}, errors.New("collections: missing planning snapshot")
+	}
+	if *snap != nil {
+		_ = (*snap).Close()
+		*snap = nil
+	}
+	refreshed := c.db.AcquireSnapshot()
+	if refreshed == nil {
+		return nil, CollectionMeta{}, collectionOptions{}, backenddb.ErrClosed
+	}
+	closeRefreshed := true
+	defer func() {
+		if closeRefreshed {
+			_ = refreshed.Close()
+		}
+	}()
+	catalog, err := c.catalogForSnapshot(refreshed)
+	if err != nil {
+		return nil, CollectionMeta{}, collectionOptions{}, err
+	}
+	if catalog == nil {
+		return nil, CollectionMeta{}, collectionOptions{}, errCollectionNotFound
+	}
+	if rejectBufferedOverlays {
+		if err := rejectCatalogRootOverlaysForIndexedBufferWrite(catalog); err != nil {
+			return nil, CollectionMeta{}, collectionOptions{}, err
+		}
+	}
+	meta := catalog.meta
+	plannerOptions, err := collectionPlannerOptions(meta)
+	if err != nil {
+		return nil, CollectionMeta{}, collectionOptions{}, err
+	}
+	plannerOptions, err = collectionOptionsWithTrustedBSONDocuments(plannerOptions, trustedValidBSON)
+	if err != nil {
+		return nil, CollectionMeta{}, collectionOptions{}, err
+	}
+	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, refreshed, catalog)
+	if len(bufferedTemplateRuns) > 0 {
+		plannerOptions = collectionOptionsWithBufferedTemplateV1RunsResolver(plannerOptions, bufferedTemplateRuns)
+	}
+	*snap = refreshed
+	closeRefreshed = false
+	return catalog, meta, plannerOptions, nil
+}
+
+func templateV1PlanningSnapshotNeedsRefresh(domain *collectionWriteDomain, snap *backenddb.Snapshot, bufferedTemplateRuns []memtable.Table) bool {
+	if len(bufferedTemplateRuns) > 0 {
+		return true
+	}
+	return collectionWriteDomainSnapshotStale(domain, snapshotCommitSeq(snap), snapshotSystemRoot(snap))
 }
 
 func insertBatchPlanRootNamesAndBaseIDs(plan *insertBatchPlan, catalog *collectionCatalog) ([]string, map[string]uint64) {
@@ -9734,15 +9891,15 @@ func snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(index *bufferedPrimaryRu
 	return entries, buffer, nil
 }
 
-func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64, items []UpdateBatchItem, documentFormat DocumentFormat) (updateBatchBufferedRead, []memtable.Table, bool, error) {
+func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta CollectionMeta, baseCommitSeq uint64, baseSystemRoot uint64, items []UpdateBatchItem, documentFormat DocumentFormat) (updateBatchBufferedRead, []memtable.Table, bool, bool, error) {
 	if domain == nil {
-		return updateBatchBufferedRead{}, nil, false, nil
+		return updateBatchBufferedRead{}, nil, false, false, nil
 	}
 	domain.mu.RLock()
-	read, templateRuns, blocked, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, baseSystemRoot, items, documentFormat, true)
+	read, templateRuns, blocked, staleSnapshot, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, baseCommitSeq, baseSystemRoot, items, documentFormat, true)
 	domain.mu.RUnlock()
 	if err != nil || !needPrimaryRunIndex {
-		return read, templateRuns, blocked, err
+		return read, templateRuns, blocked, staleSnapshot, err
 	}
 
 	domain.mu.Lock()
@@ -9751,22 +9908,22 @@ func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta Collect
 	if updateBatchCanReadBufferedDomainLocked(domain, meta, baseSystemRoot) && domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, bufferedCollectionName) {
 		index, err := rebuildBufferedPrimaryRunIndex(bufferedCollectionName, pendingIndexedRootRunMapLocked(domain))
 		if err != nil {
-			return updateBatchBufferedRead{}, nil, false, err
+			return updateBatchBufferedRead{}, nil, false, false, err
 		}
 		if index == nil {
 			index = newBufferedPrimaryRunIndex(0)
 		}
 		domain.primaryRunIndex = index
 	}
-	read, templateRuns, blocked, _, err = snapshotUpdateBatchBufferedReadLocked(domain, meta, baseSystemRoot, items, documentFormat, false)
-	return read, templateRuns, blocked, err
+	read, templateRuns, blocked, staleSnapshot, _, err = snapshotUpdateBatchBufferedReadLocked(domain, meta, baseCommitSeq, baseSystemRoot, items, documentFormat, false)
+	return read, templateRuns, blocked, staleSnapshot, err
 }
 
-func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64, items []UpdateBatchItem, documentFormat DocumentFormat, allowPrimaryRunIndexBuild bool) (updateBatchBufferedRead, []memtable.Table, bool, bool, error) {
+func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta CollectionMeta, baseCommitSeq uint64, baseSystemRoot uint64, items []UpdateBatchItem, documentFormat DocumentFormat, allowPrimaryRunIndexBuild bool) (updateBatchBufferedRead, []memtable.Table, bool, bool, bool, error) {
 	if updateBatchCanReadBufferedDomainLocked(domain, meta, baseSystemRoot) {
 		bufferedCollectionName := bufferedDomainCollectionName(domain, meta.Name)
 		if allowPrimaryRunIndexBuild && domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, bufferedCollectionName) {
-			return updateBatchBufferedRead{}, nil, false, true, nil
+			return updateBatchBufferedRead{}, nil, false, false, true, nil
 		}
 		var primaryEntries []updateBatchBufferedEntry
 		var primaryBuffer *updateBatchBufferedEntryBuffer
@@ -9778,13 +9935,13 @@ func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta C
 			primaryEntries, primaryBuffer, err = snapshotUpdateBatchBufferedPrimaryEntries(primaryRuns, items)
 		}
 		if err != nil {
-			return updateBatchBufferedRead{}, nil, false, false, err
+			return updateBatchBufferedRead{}, nil, false, false, false, err
 		}
 		var templateRuns []memtable.Table
 		if normalizedDocumentFormat(documentFormat) == DocumentFormatTemplateV1 {
 			templateRuns, err = cloneCollectionRunTables(pendingIndexedRootRunsLocked(domain, collectionTemplateRootName(bufferedCollectionName)))
 			if err != nil {
-				return updateBatchBufferedRead{}, nil, false, false, err
+				return updateBatchBufferedRead{}, nil, false, false, false, err
 			}
 		}
 		return updateBatchBufferedRead{
@@ -9792,12 +9949,37 @@ func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta C
 			primaryEntries:  primaryEntries,
 			primaryBuffer:   primaryBuffer,
 			writeGeneration: domain.writeGeneration,
-		}, templateRuns, false, false, nil
+		}, templateRuns, false, false, false, nil
 	}
 	if domain.count > 0 && hasBufferedIndexedRootRuns(domain) {
-		return updateBatchBufferedRead{}, nil, true, false, nil
+		return updateBatchBufferedRead{}, nil, true, false, false, nil
 	}
-	return updateBatchBufferedRead{}, nil, false, false, nil
+	if updateBatchBufferedSnapshotStaleLocked(domain, baseCommitSeq, baseSystemRoot) {
+		return updateBatchBufferedRead{}, nil, false, true, false, nil
+	}
+	return updateBatchBufferedRead{}, nil, false, false, false, nil
+}
+
+func updateBatchBufferedSnapshotStaleLocked(domain *collectionWriteDomain, baseCommitSeq uint64, baseSystemRoot uint64) bool {
+	if domain == nil || !domain.loaded || domain.catalog == nil {
+		return false
+	}
+	if domain.baseSystemRoot == 0 || domain.baseSystemRoot == baseSystemRoot {
+		return false
+	}
+	if domain.baseCommitSeq != 0 && baseCommitSeq != 0 && domain.baseCommitSeq <= baseCommitSeq {
+		return false
+	}
+	return true
+}
+
+func collectionWriteDomainSnapshotStale(domain *collectionWriteDomain, baseCommitSeq uint64, baseSystemRoot uint64) bool {
+	if domain == nil {
+		return false
+	}
+	domain.mu.RLock()
+	defer domain.mu.RUnlock()
+	return updateBatchBufferedSnapshotStaleLocked(domain, baseCommitSeq, baseSystemRoot)
 }
 
 func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBatchMode, useBufferedRead bool) (*updateBatchPlan, error) {
@@ -9847,10 +10029,15 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	defer func() { resetCollectionTables(bufferedTemplateRuns) }()
 	bufferedReadBlocked := false
 	if domain := c.writeDomain; useBufferedRead && domain != nil && mode != updateBatchModeAny {
-		bufferedRead, bufferedTemplateRuns, bufferedReadBlocked, err = snapshotUpdateBatchBufferedRead(domain, meta, baseSystemRoot, items, plannerOptions.documentFormat)
+		var staleBufferedSnapshot bool
+		bufferedRead, bufferedTemplateRuns, bufferedReadBlocked, staleBufferedSnapshot, err = snapshotUpdateBatchBufferedRead(domain, meta, baseCommitSeq, baseSystemRoot, items, plannerOptions.documentFormat)
 		if err != nil {
 			_ = snap.Close()
 			return nil, err
+		}
+		if staleBufferedSnapshot {
+			_ = snap.Close()
+			return nil, ErrConcurrentMutation
 		}
 		defer putUpdateBatchBufferedEntries(bufferedRead.primaryEntries, bufferedRead.primaryBuffer)
 		if len(bufferedTemplateRuns) > 0 {
@@ -12267,8 +12454,10 @@ func (c *Collection) NewStoredDocumentJSONMaterializer() (*StoredDocumentJSONMat
 			return nil, backenddb.ErrClosed
 		}
 		closeOnErr := true
+		var bufferedTemplateRuns []memtable.Table
 		defer func() {
 			if closeOnErr {
+				resetCollectionTables(bufferedTemplateRuns)
 				_ = snap.Close()
 			}
 		}()
@@ -12284,12 +12473,24 @@ func (c *Collection) NewStoredDocumentJSONMaterializer() (*StoredDocumentJSONMat
 			return nil, err
 		}
 		plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
-		plannerOptions = collectionOptionsWithBufferedTemplateV1Resolver(plannerOptions, c.writeDomain, c.meta.Name)
+		bufferedTemplateRuns, err = cloneBufferedTemplateV1Runs(c.writeDomain, c.meta.Name)
+		if err != nil {
+			return nil, err
+		}
+		if templateV1PlanningSnapshotNeedsRefresh(c.writeDomain, snap, bufferedTemplateRuns) {
+			_, _, plannerOptions, err = c.refreshTemplateV1PlanningSnapshot(&snap, false, bufferedTemplateRuns, false)
+			if err != nil {
+				return nil, err
+			}
+		}
 		closeOnErr = false
 		return &StoredDocumentJSONMaterializer{
 			documentFormat:   documentFormat,
 			templateResolver: plannerOptions.templateResolver,
-			closeFn:          snap.Close,
+			closeFn: func() error {
+				resetCollectionTables(bufferedTemplateRuns)
+				return snap.Close()
+			},
 		}, nil
 	default:
 		return nil, fmt.Errorf("collections: unsupported document format %q", c.meta.Options.DocumentFormat)
@@ -13935,6 +14136,12 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 	if meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits < 0 {
 		return CollectionMeta{}, errors.New("collections: buffered indexed async flush max queued units cannot be negative")
 	}
+	if meta.Options.DisableBufferedIndexedAsyncFlush && meta.Options.BufferedIndexedAsyncFlush {
+		return CollectionMeta{}, errors.New("collections: buffered indexed async flush cannot be both enabled and disabled")
+	}
+	if meta.Options.DisableBufferedIndexedAsyncFlush && meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits != 0 {
+		return CollectionMeta{}, errors.New("collections: buffered indexed async flush max queued units cannot be set when async flush is disabled")
+	}
 	documentFormat, err := normalizeDocumentFormat(meta.Options.DocumentFormat)
 	if err != nil {
 		return CollectionMeta{}, err
@@ -13975,13 +14182,20 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		meta.Options.BufferedIndexedWriteMaxDocuments = 0
 		meta.Options.BufferedIndexedWriteMaxBytes = 0
 		meta.Options.BufferedIndexedWriteMaxRootRuns = 0
-		meta.Options.BufferedIndexedAsyncFlush = false
 		meta.Options.BufferedIndexedOverlayRoots = false
-		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
 	} else if len(meta.Indexes) == 0 {
 		meta.Options.BufferedIndexedWrites = false
 	} else {
 		meta.Options.BufferedIndexedWrites = true
+		// Indexed schemas publish threshold flushes asynchronously by default.
+		// Foreground threshold publish is an explicit opt-out so old metadata with
+		// BufferedIndexedAsyncFlush=false still normalizes to the current default.
+		if meta.Options.DisableBufferedIndexedAsyncFlush {
+			meta.Options.BufferedIndexedAsyncFlush = false
+			meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
+		} else {
+			meta.Options.BufferedIndexedAsyncFlush = true
+		}
 		defaultMaxDocuments := DefaultIndexedWriteMemtableMaxDocuments
 		defaultMaxRootRuns := DefaultIndexedWriteMemtableMaxRootRuns
 		if meta.Options.BufferedIndexedAsyncFlush {
@@ -13998,6 +14212,13 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		if meta.Options.BufferedIndexedAsyncFlush && meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits == 0 {
 			meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits
 		}
+	}
+	if !meta.Options.BufferedIndexedWrites {
+		if meta.Options.DisableIndexedWriteMemtables {
+			meta.Options.DisableBufferedIndexedAsyncFlush = false
+			meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
+		}
+		meta.Options.BufferedIndexedAsyncFlush = false
 	}
 	return meta, nil
 }

@@ -3177,6 +3177,7 @@ func TestCollectionIndexedOverlayRootFlushSupportsReadsUpdatesAndUniqueChecks(t 
 			BufferedIndexedOverlayRoots:      true,
 			BufferedIndexedWriteMaxDocuments: 1,
 			BufferedIndexedWriteMaxRootRuns:  1,
+			DisableBufferedIndexedAsyncFlush: true,
 		},
 		Indexes: []IndexDefinition{
 			{Name: "city", Field: "city", ValueType: IndexValueString},
@@ -3450,6 +3451,7 @@ func TestCollectionIndexedOverlayRootFilterUnionsDeltaBase(t *testing.T) {
 			BufferedIndexedOverlayRoots:      true,
 			BufferedIndexedWriteMaxDocuments: 1,
 			BufferedIndexedWriteMaxRootRuns:  1,
+			DisableBufferedIndexedAsyncFlush: true,
 		},
 		Indexes: []IndexDefinition{
 			{Name: "city", Field: "city", ValueType: IndexValueString},
@@ -3985,14 +3987,20 @@ func TestCollectionIndexedWriteMemtablesDefaultForIndexedSchemas(t *testing.T) {
 	if !meta.Options.BufferedIndexedWrites {
 		t.Fatal("indexed collection did not enable native write memtables by default")
 	}
-	if got := meta.Options.BufferedIndexedWriteMaxDocuments; got != DefaultIndexedWriteMemtableMaxDocuments {
-		t.Fatalf("default max docs=%d want %d", got, DefaultIndexedWriteMemtableMaxDocuments)
+	if !meta.Options.BufferedIndexedAsyncFlush {
+		t.Fatal("indexed collection did not enable async threshold publish by default")
+	}
+	if got := meta.Options.BufferedIndexedWriteMaxDocuments; got != DefaultIndexedWriteMemtableAsyncFlushMaxDocuments {
+		t.Fatalf("default max docs=%d want %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxDocuments)
 	}
 	if got := meta.Options.BufferedIndexedWriteMaxBytes; got != 0 {
 		t.Fatalf("default max bytes=%d want 0", got)
 	}
-	if got := meta.Options.BufferedIndexedWriteMaxRootRuns; got != DefaultIndexedWriteMemtableMaxRootRuns {
-		t.Fatalf("default max root runs=%d want %d", got, DefaultIndexedWriteMemtableMaxRootRuns)
+	if got := meta.Options.BufferedIndexedWriteMaxRootRuns; got != DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns {
+		t.Fatalf("default max root runs=%d want %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns)
+	}
+	if got := meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits; got != DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits {
+		t.Fatalf("default async max queued units=%d want %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits)
 	}
 
 	col, err := mgr.OpenCollection("users")
@@ -4059,8 +4067,8 @@ func TestCollectionIndexedWriteMemtablesPreserveDocumentDefaultWithRootRunLimit(
 	if err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
-	if got := meta.Options.BufferedIndexedWriteMaxDocuments; got != DefaultIndexedWriteMemtableMaxDocuments {
-		t.Fatalf("max documents=%d want default %d", got, DefaultIndexedWriteMemtableMaxDocuments)
+	if got := meta.Options.BufferedIndexedWriteMaxDocuments; got != DefaultIndexedWriteMemtableAsyncFlushMaxDocuments {
+		t.Fatalf("max documents=%d want default %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxDocuments)
 	}
 	if got := meta.Options.BufferedIndexedWriteMaxRootRuns; got != 8 {
 		t.Fatalf("max root runs=%d want 8", got)
@@ -4095,6 +4103,60 @@ func TestCollectionIndexedWriteMemtablesAsyncFlushDefaultsQueueLimit(t *testing.
 	}
 	if got := meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits; got != DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits {
 		t.Fatalf("async max queued units=%d want %d", got, DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesCanDisableDefaultAsyncFlush(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	meta, err := NewCollectionManager(d).CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if meta.Options.BufferedIndexedAsyncFlush {
+		t.Fatal("disabled async indexed flush was enabled")
+	}
+	if got := meta.Options.BufferedIndexedWriteMaxDocuments; got != DefaultIndexedWriteMemtableMaxDocuments {
+		t.Fatalf("foreground max documents=%d want %d", got, DefaultIndexedWriteMemtableMaxDocuments)
+	}
+	if got := meta.Options.BufferedIndexedWriteMaxRootRuns; got != DefaultIndexedWriteMemtableMaxRootRuns {
+		t.Fatalf("foreground max root runs=%d want %d", got, DefaultIndexedWriteMemtableMaxRootRuns)
+	}
+	if got := meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits; got != 0 {
+		t.Fatalf("disabled async max queued units=%d want 0", got)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesRejectConflictingAsyncFlushOptions(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	_, err = NewCollectionManager(d).CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedAsyncFlush:        true,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	})
+	if err == nil {
+		t.Fatal("create collection with conflicting async flush options succeeded")
+	}
+	if !strings.Contains(err.Error(), "both enabled and disabled") {
+		t.Fatalf("err=%q want conflicting async flush options", err)
 	}
 }
 
@@ -4140,6 +4202,67 @@ func TestCollectionIndexedWriteMemtablesDefaultSkipsNoIndexSchemas(t *testing.T)
 	if meta.Options.BufferedIndexedWriteMaxDocuments != 0 || meta.Options.BufferedIndexedWriteMaxBytes != 0 || meta.Options.BufferedIndexedWriteMaxRootRuns != 0 {
 		t.Fatalf("no-index buffered limits docs=%d bytes=%d rootRuns=%d want zero",
 			meta.Options.BufferedIndexedWriteMaxDocuments, meta.Options.BufferedIndexedWriteMaxBytes, meta.Options.BufferedIndexedWriteMaxRootRuns)
+	}
+	if meta.Options.DisableBufferedIndexedAsyncFlush || meta.Options.BufferedIndexedAsyncFlush || meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits != 0 {
+		t.Fatalf("no-index async flush fields disable=%v enabled=%v maxQueued=%d want false/false/0",
+			meta.Options.DisableBufferedIndexedAsyncFlush, meta.Options.BufferedIndexedAsyncFlush, meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesPreserveNoIndexAsyncFlushOptOutForFutureIndexes(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if meta.Options.BufferedIndexedWrites {
+		t.Fatal("no-index collection enabled indexed write memtables")
+	}
+	if !meta.Options.DisableBufferedIndexedAsyncFlush || meta.Options.BufferedIndexedAsyncFlush {
+		t.Fatalf("no-index async flags disable=%v enabled=%v want true/false",
+			meta.Options.DisableBufferedIndexedAsyncFlush, meta.Options.BufferedIndexedAsyncFlush)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	meta, err = col.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString})
+	if err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if !meta.Options.BufferedIndexedWrites {
+		t.Fatal("indexed collection did not enable indexed write memtables")
+	}
+	if !meta.Options.DisableBufferedIndexedAsyncFlush || meta.Options.BufferedIndexedAsyncFlush {
+		t.Fatalf("indexed async flags disable=%v enabled=%v want true/false",
+			meta.Options.DisableBufferedIndexedAsyncFlush, meta.Options.BufferedIndexedAsyncFlush)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesRejectDisabledAsyncFlushQueueLimit(t *testing.T) {
+	_, err := normalizeCollectionMeta(CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DisableBufferedIndexedAsyncFlush:        true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 2,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	})
+	if err == nil {
+		t.Fatal("normalize disabled async flush queue limit err=nil want error")
+	}
+	if !strings.Contains(err.Error(), "max queued units") {
+		t.Fatalf("err=%q want max queued units error", err)
 	}
 }
 
@@ -5333,6 +5456,7 @@ func TestCollectionIndexedWriteMemtablesAutoFlushMaxDocuments(t *testing.T) {
 		Options: CollectionOptions{
 			BufferedIndexedWrites:            true,
 			BufferedIndexedWriteMaxDocuments: 2,
+			DisableBufferedIndexedAsyncFlush: true,
 		},
 		Indexes: []IndexDefinition{
 			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
@@ -6385,8 +6509,9 @@ func TestCollectionIndexedWriteMemtablesAutoFlushMaxBytes(t *testing.T) {
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Options: CollectionOptions{
-			BufferedIndexedWrites:        true,
-			BufferedIndexedWriteMaxBytes: 1,
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxBytes:     1,
+			DisableBufferedIndexedAsyncFlush: true,
 		},
 		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
@@ -6451,6 +6576,7 @@ func TestCollectionIndexedWriteMemtablesCompactRootRunsBeforeDocumentFlush(t *te
 			BufferedIndexedWrites:            true,
 			BufferedIndexedWriteMaxDocuments: 5,
 			BufferedIndexedWriteMaxRootRuns:  6,
+			DisableBufferedIndexedAsyncFlush: true,
 		},
 		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
@@ -6536,8 +6662,9 @@ func TestCollectionIndexedWriteMemtablesAutoFlushMaxRootRuns(t *testing.T) {
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
 		Options: CollectionOptions{
-			BufferedIndexedWrites:           true,
-			BufferedIndexedWriteMaxRootRuns: 2,
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxRootRuns:  2,
+			DisableBufferedIndexedAsyncFlush: true,
 		},
 		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}},
 	}); err != nil {
@@ -10769,13 +10896,16 @@ func TestSnapshotUpdateBatchBufferedReadCachesEmptyPrimaryRunIndex(t *testing.T)
 		},
 	}
 
-	read, _, blocked, err := snapshotUpdateBatchBufferedRead(domain, meta, 7, []UpdateBatchItem{{DocumentID: []byte("missing")}}, DocumentFormatJSON)
+	read, _, blocked, staleSnapshot, err := snapshotUpdateBatchBufferedRead(domain, meta, 1, 7, []UpdateBatchItem{{DocumentID: []byte("missing")}}, DocumentFormatJSON)
 	if err != nil {
 		t.Fatalf("snapshotUpdateBatchBufferedRead: %v", err)
 	}
 	defer putUpdateBatchBufferedEntries(read.primaryEntries, read.primaryBuffer)
 	if blocked {
 		t.Fatal("buffered read reported blocked")
+	}
+	if staleSnapshot {
+		t.Fatal("buffered read reported stale snapshot")
 	}
 	if !read.enabled {
 		t.Fatal("buffered read was not enabled")
@@ -10785,6 +10915,32 @@ func TestSnapshotUpdateBatchBufferedReadCachesEmptyPrimaryRunIndex(t *testing.T)
 	domain.mu.RUnlock()
 	if !built {
 		t.Fatal("empty primary run index was not cached")
+	}
+}
+
+func TestSnapshotUpdateBatchBufferedReadDetectsStalePublishedDomain(t *testing.T) {
+	meta := CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}
+	domain := &collectionWriteDomain{
+		loaded:         true,
+		meta:           meta,
+		catalog:        &collectionCatalog{meta: meta},
+		baseCommitSeq:  8,
+		baseSystemRoot: 9,
+	}
+
+	read, _, blocked, staleSnapshot, err := snapshotUpdateBatchBufferedRead(domain, meta, 7, 7, []UpdateBatchItem{{DocumentID: []byte("u1")}}, DocumentFormatJSON)
+	if err != nil {
+		t.Fatalf("snapshotUpdateBatchBufferedRead: %v", err)
+	}
+	defer putUpdateBatchBufferedEntries(read.primaryEntries, read.primaryBuffer)
+	if read.enabled || blocked || !staleSnapshot {
+		t.Fatalf("enabled=%v blocked=%v stale=%v want false/false/true", read.enabled, blocked, staleSnapshot)
 	}
 }
 
@@ -10828,13 +10984,13 @@ func TestSnapshotUpdateBatchBufferedReadPrimaryRunIndexAvoidsCollectingPendingRu
 	items := []UpdateBatchItem{{DocumentID: []byte("u1")}}
 	assertRead := func() {
 		t.Helper()
-		read, _, blocked, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, 7, items, DocumentFormatJSON, false)
+		read, _, blocked, staleSnapshot, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, 1, 7, items, DocumentFormatJSON, false)
 		if err != nil {
 			t.Fatalf("snapshotUpdateBatchBufferedReadLocked: %v", err)
 		}
 		defer putUpdateBatchBufferedEntries(read.primaryEntries, read.primaryBuffer)
-		if blocked || needPrimaryRunIndex || !read.enabled {
-			t.Fatalf("read enabled=%v blocked=%v needPrimaryRunIndex=%v", read.enabled, blocked, needPrimaryRunIndex)
+		if blocked || staleSnapshot || needPrimaryRunIndex || !read.enabled {
+			t.Fatalf("read enabled=%v blocked=%v stale=%v needPrimaryRunIndex=%v", read.enabled, blocked, staleSnapshot, needPrimaryRunIndex)
 		}
 		if len(read.primaryEntries) != 1 || !read.primaryEntries[0].found || !bytes.Equal(read.primaryEntries[0].value, []byte(`{"city":"paris"}`)) {
 			t.Fatalf("primary entries=%+v want buffered u1 document", read.primaryEntries)
@@ -11135,12 +11291,12 @@ func BenchmarkSnapshotUpdateBatchBufferedReadPrimaryRunIndexPendingUnits(b *test
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		read, _, blocked, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, 7, items, DocumentFormatJSON, false)
+		read, _, blocked, staleSnapshot, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, 1, 7, items, DocumentFormatJSON, false)
 		if err != nil {
 			b.Fatalf("snapshotUpdateBatchBufferedReadLocked: %v", err)
 		}
-		if blocked || needPrimaryRunIndex || !read.enabled || len(read.primaryEntries) != 1 || !read.primaryEntries[0].found {
-			b.Fatalf("unexpected read enabled=%v entries=%d blocked=%v needPrimaryRunIndex=%v", read.enabled, len(read.primaryEntries), blocked, needPrimaryRunIndex)
+		if blocked || staleSnapshot || needPrimaryRunIndex || !read.enabled || len(read.primaryEntries) != 1 || !read.primaryEntries[0].found {
+			b.Fatalf("unexpected read enabled=%v entries=%d blocked=%v stale=%v needPrimaryRunIndex=%v", read.enabled, len(read.primaryEntries), blocked, staleSnapshot, needPrimaryRunIndex)
 		}
 		putUpdateBatchBufferedEntries(read.primaryEntries, read.primaryBuffer)
 	}
