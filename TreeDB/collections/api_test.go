@@ -3724,6 +3724,63 @@ func TestCollectionIndexedWriteMemtablesDefaultSkipsNoIndexSchemas(t *testing.T)
 	}
 }
 
+func TestCollectionIndexedWriteMemtablesPreserveNoIndexAsyncFlushOptOutForFutureIndexes(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if meta.Options.BufferedIndexedWrites {
+		t.Fatal("no-index collection enabled indexed write memtables")
+	}
+	if !meta.Options.DisableBufferedIndexedAsyncFlush || meta.Options.BufferedIndexedAsyncFlush {
+		t.Fatalf("no-index async flags disable=%v enabled=%v want true/false",
+			meta.Options.DisableBufferedIndexedAsyncFlush, meta.Options.BufferedIndexedAsyncFlush)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	meta, err = col.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString})
+	if err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if !meta.Options.BufferedIndexedWrites {
+		t.Fatal("indexed collection did not enable indexed write memtables")
+	}
+	if !meta.Options.DisableBufferedIndexedAsyncFlush || meta.Options.BufferedIndexedAsyncFlush {
+		t.Fatalf("indexed async flags disable=%v enabled=%v want true/false",
+			meta.Options.DisableBufferedIndexedAsyncFlush, meta.Options.BufferedIndexedAsyncFlush)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesRejectDisabledAsyncFlushQueueLimit(t *testing.T) {
+	_, err := normalizeCollectionMeta(CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DisableBufferedIndexedAsyncFlush:        true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 2,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	})
+	if err == nil {
+		t.Fatal("normalize disabled async flush queue limit err=nil want error")
+	}
+	if !strings.Contains(err.Error(), "max queued units") {
+		t.Fatalf("err=%q want max queued units error", err)
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesPreserveNoIndexThresholdsForFutureIndexes(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
