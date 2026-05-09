@@ -9738,6 +9738,19 @@ func TestCollectionUpdateBSONSetRejectsDuplicateFields(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBSONSetRejectsInvalidRawValue(t *testing.T) {
+	_, err := newBSONSetUpdate([]BSONSetField{{
+		Key:   "city",
+		Value: bson.RawValue{Type: bson.TypeString, Value: []byte{0xff}},
+	}})
+	if err == nil {
+		t.Fatal("newBSONSetUpdate err=nil want invalid value error")
+	}
+	if !strings.Contains(err.Error(), "invalid BSON raw value") {
+		t.Fatalf("newBSONSetUpdate err=%q want invalid BSON raw value", err)
+	}
+}
+
 func TestCollectionUpdateBSONSetValidatesCollectionBeforeFields(t *testing.T) {
 	var col *Collection
 	_, _, err := col.UpdateBSONSet(nil, []BSONSetField{
