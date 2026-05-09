@@ -8089,7 +8089,7 @@ type concurrentRootModificationError struct {
 }
 
 func (err concurrentRootModificationError) Error() string {
-	return fmt.Sprintf("%s: concurrent root modification detected for collection=%q root=%q", ErrConcurrentMutation, err.collectionName, err.rootName)
+	return fmt.Sprintf("%v: concurrent root modification detected for collection=%q root=%q", ErrConcurrentMutation, err.collectionName, err.rootName)
 }
 
 func (err concurrentRootModificationError) Unwrap() error {
@@ -8105,7 +8105,7 @@ type bufferedRootBaseMismatchError struct {
 }
 
 func (err bufferedRootBaseMismatchError) Error() string {
-	return fmt.Sprintf("%s: buffered root base mismatch for collection=%q root=%q", ErrConcurrentMutation, err.err.collectionName, err.err.rootName)
+	return fmt.Sprintf("%v: buffered root base mismatch for collection=%q root=%q", ErrConcurrentMutation, err.err.collectionName, err.err.rootName)
 }
 
 func (err bufferedRootBaseMismatchError) Unwrap() error {
