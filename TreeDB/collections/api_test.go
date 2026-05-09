@@ -10375,9 +10375,19 @@ func newBufferedUsersUpdateFixtureWithDocs(t *testing.T, opts CollectionOptions,
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	t.Cleanup(func() { _ = d.Close() })
+	var mgr *CollectionManager
+	t.Cleanup(func() {
+		if mgr != nil {
+			if err := mgr.FlushAll(); err != nil && !errors.Is(err, backenddb.ErrClosed) && !errors.Is(err, ErrConcurrentMutation) {
+				t.Errorf("flush buffered user fixture: %v", err)
+			}
+		}
+		if err := d.Close(); err != nil && !errors.Is(err, ErrConcurrentMutation) {
+			t.Errorf("close buffered user fixture DB: %v", err)
+		}
+	})
 
-	mgr := NewCollectionManager(d)
+	mgr = NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "users",
 		Options: opts,
@@ -10418,7 +10428,6 @@ func newBufferedUsersUpdateFixtureWithDocs(t *testing.T, opts CollectionOptions,
 		collection: col,
 	}
 }
-
 func newBufferedUsersUpdateCollection(t *testing.T) (*backenddb.DB, *Collection) {
 	t.Helper()
 	fixture := newBufferedUsersUpdateFixtureWithDocs(t, CollectionOptions{}, []bufferedUsersUpdateDoc{
@@ -10637,8 +10646,8 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesBoundsStaleBuffered
 		t.Fatalf("injections=%d want %d", got, want)
 	}
 	after := mgr.StatsSnapshot()
-	if got := after.IndexedFlushForcedDrains - before.IndexedFlushForcedDrains; got == 0 {
-		t.Fatalf("indexed forced drain delta=%d want bounded replan fallback to flush", got)
+	if got := after.IndexedFlushForcedDrains - before.IndexedFlushForcedDrains; got != 1 {
+		t.Fatalf("indexed forced drain delta=%d want exactly one bounded replan fallback flush", got)
 	}
 
 	sfoIDs, err := col.FindByIndex("city", "sfo")
