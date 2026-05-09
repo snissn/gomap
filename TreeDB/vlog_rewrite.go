@@ -92,6 +92,11 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if err = db.reconcileCachedBackendMaintenance(err); err != nil {
 		return ValueLogRewriteStats{}, err
 	}
+	if db.cached != nil && len(stats.SourceFileIDsUnreferenced) > 0 {
+		if err := db.cached.ReclaimObservedValueLogSources(ctx, stats.SourceFileIDsUnreferenced); err != nil {
+			return ValueLogRewriteStats{}, err
+		}
+	}
 	success = true
 	return ValueLogRewriteStats(stats), nil
 }
