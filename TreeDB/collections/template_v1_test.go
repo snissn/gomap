@@ -383,12 +383,19 @@ func TestTemplateV1IndexedWriteMemtablesResolveBufferedTemplateAcrossBatches(t *
 	if err != nil {
 		t.Fatalf("parse doc2 root: %v", err)
 	}
-	opts := collectionOptionsWithBufferedTemplateV1Resolver(collectionOptions{
+	opts, clonedTemplateRuns, err := collectionOptionsWithClonedBufferedTemplateV1Resolver(collectionOptions{
 		documentFormat:   DocumentFormatTemplateV1,
 		templateResolver: nil,
 	}, col.writeDomain, "users")
+	if err != nil {
+		t.Fatalf("clone buffered template resolver: %v", err)
+	}
+	defer resetCollectionTables(clonedTemplateRuns)
+	if err := mgr.FlushAll(); err != nil {
+		t.Fatalf("flush source buffered template run: %v", err)
+	}
 	if _, err := opts.templateResolver.lookupTemplateV1(rootDoc2.templateID); err != nil {
-		t.Fatalf("lookup buffered template directly: %v", err)
+		t.Fatalf("lookup cloned buffered template after source flush: %v", err)
 	}
 	if _, err := col.InsertBatch([][]byte{[]byte("u2")}, [][]byte{doc2}); err != nil {
 		t.Fatalf("insert second buffered batch: %v", err)
