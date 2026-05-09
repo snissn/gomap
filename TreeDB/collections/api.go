@@ -30,7 +30,10 @@ import (
 const (
 	collectionMetaVersion        = 2
 	maxCollectionMutationRetries = 64
-	maxCollectionInt             = int(^uint(0) >> 1)
+	// Bound stale buffered-read replans so a writer under constant buffered
+	// pressure eventually falls back to a publish boundary or outer retry.
+	maxUpdateBatchBufferedReadReplans = 8
+	maxCollectionInt                  = int(^uint(0) >> 1)
 
 	// DefaultIndexedWriteMemtableMaxDocuments bounds the native indexed
 	// collection write-domain before it auto-flushes to persistent roots.
@@ -3083,10 +3086,10 @@ func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWrite
 	if hasBufferedIndexedRootRuns(domain) {
 		if err := forEachPendingIndexedRootBaseIDLocked(domain, func(rootName string, baseRootID uint64) error {
 			if rootID := catalog.rootID(rootName); rootID != baseRootID {
-				return errConcurrentRootModification(domain.meta.Name, rootName)
+				return errBufferedRootBaseMismatch(domain.meta.Name, rootName)
 			}
 			if !uint64SlicesEqual(catalog.overlayRootIDs(rootName), domain.catalog.overlayRootIDs(rootName)) {
-				return errConcurrentRootModification(domain.meta.Name, rootName)
+				return errBufferedRootBaseMismatch(domain.meta.Name, rootName)
 			}
 			return nil
 		}); err != nil {
@@ -3315,7 +3318,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		}
 		if err := forEachPendingIndexedRootBaseIDLocked(domain, func(rootName string, baseRoot uint64) error {
 			if got := currentCatalog.rootID(rootName); got != baseRoot {
-				return errConcurrentRootModification(catalog.meta.Name, rootName)
+				return errBufferedRootBaseMismatch(catalog.meta.Name, rootName)
 			}
 			return nil
 		}); err != nil {
@@ -3371,7 +3374,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 			if autoFlushEnabled {
 				rollbackBufferedIndexedDomain(domain, checkpoint)
 			}
-			return 0, errConcurrentRootModification(catalog.meta.Name, run.name)
+			return 0, errBufferedRootBaseMismatch(catalog.meta.Name, run.name)
 		}
 		if _, ok := domain.rootBaseIDs[run.name]; !ok {
 			domain.rootBaseIDs[run.name] = baseRoot
@@ -5650,7 +5653,7 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 	}
 	if err = forEachPendingIndexedRootBaseIDLocked(domain, func(rootName string, baseRoot uint64) error {
 		if got := pinnedCatalog.rootID(rootName); got != baseRoot {
-			return errConcurrentRootModification(meta.Name, rootName)
+			return errBufferedRootBaseMismatch(meta.Name, rootName)
 		}
 		return nil
 	}); err != nil {
@@ -6129,7 +6132,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	}
 	if err := forEachPendingIndexedRootBaseIDLocked(domain, func(rootName string, baseRoot uint64) error {
 		if got := pinnedCatalog.rootID(rootName); got != baseRoot {
-			return errConcurrentRootModification(meta.Name, rootName)
+			return errBufferedRootBaseMismatch(meta.Name, rootName)
 		}
 		return nil
 	}); err != nil {
@@ -7795,6 +7798,12 @@ func (c *Collection) updateBatchOwnedItems(items []updateBatchItem, mode updateB
 			errors.Is(err, errUpdateBatchChangesSecondaryUniqueIndex) {
 			return make([]UpdateBatchResult, len(items)), false, nil
 		}
+		// A buffered root-base mismatch means this handle still has staged writes
+		// against an old root. Retrying the same items just rebuilds the same
+		// stale plan; the caller must drain or surface the conflict instead.
+		if isBufferedRootBaseMismatch(err) {
+			return make([]UpdateBatchResult, len(items)), false, err
+		}
 		if errors.Is(err, ErrConcurrentMutation) {
 			lastErr = err
 			waitBeforeCollectionMutationRetry(attempt)
@@ -8805,8 +8814,50 @@ func collectionMutationRetryExhausted(err error) error {
 	return fmt.Errorf("collections: retry budget exceeded after %d attempts: %w", maxCollectionMutationRetries, err)
 }
 
+type concurrentRootModificationError struct {
+	collectionName string
+	rootName       string
+}
+
+func (err concurrentRootModificationError) Error() string {
+	return fmt.Sprintf("%v: concurrent root modification detected for collection=%q root=%q", ErrConcurrentMutation, err.collectionName, err.rootName)
+}
+
+func (err concurrentRootModificationError) Unwrap() error {
+	return ErrConcurrentMutation
+}
+
 func errConcurrentRootModification(collectionName, rootName string) error {
-	return fmt.Errorf("%w: concurrent root modification detected for collection=%q root=%q", ErrConcurrentMutation, collectionName, rootName)
+	return concurrentRootModificationError{collectionName: collectionName, rootName: rootName}
+}
+
+type bufferedRootBaseMismatchError struct {
+	cause concurrentRootModificationError
+}
+
+func (err bufferedRootBaseMismatchError) Error() string {
+	return fmt.Sprintf("%v: buffered root base mismatch for collection=%q root=%q", ErrConcurrentMutation, err.cause.collectionName, err.cause.rootName)
+}
+
+func (err bufferedRootBaseMismatchError) Unwrap() error {
+	return err.cause
+}
+
+func errBufferedRootBaseMismatch(collectionName, rootName string) error {
+	return bufferedRootBaseMismatchError{cause: concurrentRootModificationError{collectionName: collectionName, rootName: rootName}}
+}
+
+// isConcurrentRootModification includes buffered root base mismatches because
+// bufferedRootBaseMismatchError unwraps to concurrentRootModificationError.
+// Use isBufferedRootBaseMismatch when callers need to distinguish that case.
+func isConcurrentRootModification(err error) bool {
+	var rootErr concurrentRootModificationError
+	return errors.As(err, &rootErr)
+}
+
+func isBufferedRootBaseMismatch(err error) bool {
+	var rootErr bufferedRootBaseMismatchError
+	return errors.As(err, &rootErr)
 }
 
 func (c *Collection) updateDocumentOnce(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
@@ -9692,6 +9743,7 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, error) {
 	if c.shouldPlanUpdateBatchWithBufferedWrites(mode) {
 		useBufferedRead := true
+		bufferedReadReplans := 0
 		for {
 			plan, err := c.buildUpdateBatchPlan(items, mode, useBufferedRead)
 			if err != nil {
@@ -9702,6 +9754,22 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 			}
 			var results []UpdateBatchResult
 			replan := false
+			replanWaitAttempt := -1
+			replanBufferedRead := func() error {
+				if bufferedReadReplans < maxUpdateBatchBufferedReadReplans {
+					replanWaitAttempt = bufferedReadReplans
+					bufferedReadReplans++
+					replan = true
+					return nil
+				}
+				if err := c.flushBufferedWrites(); err != nil {
+					return err
+				}
+				replanWaitAttempt = maxUpdateBatchBufferedReadReplans
+				useBufferedRead = false
+				replan = true
+				return nil
+			}
 			err = c.withMutationLock(func() error {
 				if len(plan.deltaTables) == 0 && plan.directBufferedUpdate == nil {
 					if plan.bufferedReadBlocked && useBufferedRead {
@@ -9714,12 +9782,10 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 					}
 					if plan.bufferedBase && !c.bufferedUpdateBatchPlanStillCurrent(plan) {
 						if useBufferedRead {
-							if err := c.flushBufferedWrites(); err != nil {
-								return err
-							}
-							useBufferedRead = false
-							replan = true
-							return nil
+							// A buffered snapshot can go stale while update callbacks run
+							// before the mutation lock. Replan against the newer buffered
+							// domain instead of turning that race into a publish boundary.
+							return replanBufferedRead()
 						}
 						return ErrConcurrentMutation
 					}
@@ -9733,6 +9799,12 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 				buffered, bufferErr := c.bufferUpdateBatchPlanLocked(plan)
 				if bufferErr != nil {
 					if errors.Is(bufferErr, ErrConcurrentMutation) && useBufferedRead {
+						if !isConcurrentRootModification(bufferErr) && plan.bufferedBase && c.bufferedUpdateBatchPlanCanStillRead(plan) {
+							// The buffered domain moved between planning and staging. Keep
+							// the update in the buffered layer by replanning with a fresh
+							// buffered snapshot.
+							return replanBufferedRead()
+						}
 						if err := c.flushBufferedWrites(); err != nil {
 							return err
 						}
@@ -9774,6 +9846,9 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 				return nil, err
 			}
 			if replan {
+				if replanWaitAttempt >= 0 {
+					waitBeforeCollectionMutationRetry(replanWaitAttempt)
+				}
 				continue
 			}
 			if primaryOnlyNoPublish && c.writeDomain != nil {
@@ -9862,6 +9937,19 @@ func (c *Collection) bufferedUpdateBatchPlanStillCurrent(plan *updateBatchPlan) 
 	}
 	return updateBatchCanReadBufferedDomainLocked(domain, plan.meta, plan.baseSystemRoot) &&
 		plan.bufferedReadGeneration == domain.writeGeneration
+}
+
+func (c *Collection) bufferedUpdateBatchPlanCanStillRead(plan *updateBatchPlan) bool {
+	if plan == nil || !plan.bufferedBase {
+		return false
+	}
+	domain := c.writeDomain
+	if domain == nil {
+		return false
+	}
+	domain.mu.RLock()
+	defer domain.mu.RUnlock()
+	return updateBatchCanReadBufferedDomainLocked(domain, plan.meta, plan.baseSystemRoot)
 }
 
 func (c *Collection) withMutationLock(fn func() error) error {
@@ -10898,7 +10986,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		if hasPendingIndexedRootRunsForRootLocked(domain, rootName) {
 			if pendingBaseRoot, ok := pendingIndexedRootBaseIDLocked(domain, rootName); ok && pendingBaseRoot != baseRoot {
 				plan.stats.BufferStageRootScan += updateBatchStatsSince(detailedStats, phaseStart)
-				return false, errConcurrentRootModification(plan.meta.Name, rootName)
+				return false, errBufferedRootBaseMismatch(plan.meta.Name, rootName)
 			}
 		}
 	}
@@ -10970,7 +11058,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	for i, rootName := range plan.rootNames {
 		baseRoot := plan.baseRootIDs[rootName]
 		if pendingBaseRoot, ok := pendingIndexedRootBaseIDLocked(domain, rootName); ok && pendingBaseRoot != baseRoot {
-			return false, errConcurrentRootModification(plan.meta.Name, rootName)
+			return false, errBufferedRootBaseMismatch(plan.meta.Name, rootName)
 		}
 		if _, ok := domain.rootBaseIDs[rootName]; !ok {
 			domain.rootBaseIDs[rootName] = baseRoot
@@ -11187,7 +11275,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		if hasPendingIndexedRootRunsForRootLocked(domain, rootName) {
 			if pendingBaseRoot, ok := pendingIndexedRootBaseIDLocked(domain, rootName); ok && pendingBaseRoot != baseRoot {
 				plan.stats.BufferStageRootScan += updateBatchStatsSince(detailedStats, phaseStart)
-				return false, errConcurrentRootModification(plan.meta.Name, rootName)
+				return false, errBufferedRootBaseMismatch(plan.meta.Name, rootName)
 			}
 		}
 		stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, table.Size())
@@ -11240,7 +11328,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 			continue
 		}
 		if pendingBaseRoot, ok := pendingIndexedRootBaseIDLocked(domain, rootName); ok && pendingBaseRoot != baseRoot {
-			return false, errConcurrentRootModification(plan.meta.Name, rootName)
+			return false, errBufferedRootBaseMismatch(plan.meta.Name, rootName)
 		}
 		if _, ok := domain.rootBaseIDs[rootName]; !ok {
 			domain.rootBaseIDs[rootName] = baseRoot
