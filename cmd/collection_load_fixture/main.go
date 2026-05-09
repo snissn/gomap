@@ -384,16 +384,17 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	fs.Visit(func(f *flag.Flag) {
 		seenFlags[f.Name] = true
 	})
+	if cfg.DisableBufferedIndexedAsyncFlush && cfg.BufferedIndexedAsyncFlush {
+		return cfg, fmt.Errorf("cannot set both -buffered-indexed-async-flush and -disable-buffered-indexed-async-flush")
+	}
+	effectiveAsyncFlush := !cfg.DisableBufferedIndexedAsyncFlush || cfg.BufferedIndexedAsyncFlush
 	if !seenFlags["buffered-indexed-write-max-root-runs"] &&
 		(seenFlags["buffered-indexed-write-max-docs"] || seenFlags["buffered-indexed-write-max-bytes"]) &&
 		(cfg.BufferedIndexedWriteMaxDocs != 0 || cfg.BufferedIndexedWriteMaxBytes != 0) {
 		cfg.BufferedIndexedWriteMaxRuns = collections.DefaultIndexedWriteMemtableMaxRootRuns
-		if !cfg.DisableBufferedIndexedAsyncFlush || cfg.BufferedIndexedAsyncFlush {
+		if effectiveAsyncFlush {
 			cfg.BufferedIndexedWriteMaxRuns = collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns
 		}
-	}
-	if cfg.DisableBufferedIndexedAsyncFlush && cfg.BufferedIndexedAsyncFlush {
-		return cfg, fmt.Errorf("cannot set both -buffered-indexed-async-flush and -disable-buffered-indexed-async-flush")
 	}
 	parsedFormat, err := parseDocumentFormat(documentFormat)
 	if err != nil {

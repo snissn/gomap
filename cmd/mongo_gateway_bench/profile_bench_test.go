@@ -128,6 +128,7 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	if !profileBenchBufferedIndexedAsyncFlush(t) {
 		t.Fatal("async flush env=true want true")
 	}
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_DISABLE_BUFFERED_INDEXED_ASYNC_FLUSH", "true")
 	if !profileBenchDisableBufferedIndexedAsyncFlush(t) {
 		t.Fatal("disable async flush env=true want true")
