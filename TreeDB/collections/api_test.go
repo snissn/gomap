@@ -6423,6 +6423,7 @@ func TestIndexedPrepareFreezeWaitsUntilFinished(t *testing.T) {
 
 	done := make(chan time.Duration, 1)
 	waiterReady := make(chan struct{})
+	releaseWaiter := make(chan struct{})
 	go func() {
 		domain.mu.Lock()
 		if domain.indexedPrepareFreezes <= 0 {
@@ -6431,28 +6432,34 @@ func TestIndexedPrepareFreezeWaitsUntilFinished(t *testing.T) {
 			return
 		}
 		close(waiterReady)
+		<-releaseWaiter
 		waited := domain.waitIndexedPrepareFreezeLocked()
 		domain.mu.Unlock()
 		done <- waited
 	}()
 
-	select {
-	case <-waiterReady:
-	case waited := <-done:
-		t.Fatalf("prepare freeze wait returned before finish duration=%s", waited)
-	case <-time.After(time.Second):
-		t.Fatal("prepare freeze waiter did not start")
-	}
+	<-waiterReady
 
+	close(releaseWaiter)
 	domain.mu.Lock()
 	domain.finishIndexedPrepareFreezeLocked()
 	domain.mu.Unlock()
 
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("prepare freeze wait did not unblock after finish")
+	if waited := <-done; waited <= 0 {
+		t.Fatalf("prepare freeze wait duration=%s want positive", waited)
 	}
+}
+
+func TestIndexedPrepareFreezeFinishRequiresBegin(t *testing.T) {
+	domain := &collectionWriteDomain{}
+	domain.mu.Lock()
+	defer domain.mu.Unlock()
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("finish without begin did not panic")
+		}
+	}()
+	domain.finishIndexedPrepareFreezeLocked()
 }
 
 func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
