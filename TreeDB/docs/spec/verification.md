@@ -89,11 +89,21 @@ Coverage:
 
 Invariant:
 - Index rewrite/vacuum paths preserve data and handle pinned snapshots safely.
+- Full storage compaction preserves value visibility, removes reachable debt only
+  through the documented lifecycle, serializes backend maintenance phases, and
+  keeps cached-mode value-log writers from reusing backend-created segments.
 
 Coverage:
 - `TreeDB/db/compact_index_test.go`
 - `TreeDB/db/compact_index_sequential_alloc_test.go`
 - `TreeDB/db/vacuum_online_swap_test.go`
+- `TreeDB/db/compact_storage_test.go`
+  - `TestCompactStorageHoldsMaintenanceLockAcrossPhases`
+- `TreeDB/compact_storage_test.go`
+  - `TestCompactStorageFullPacksLeafGenerationDebtOffline`
+  - `TestCompactStorageCachedDeletesZeroByteValueLogFiles`
+- `TreeDB/compact_storage_cached_internal_test.go`
+  - `TestCompactStorageCachedAdvancesWritersPastBackendSegments`
 
 ## 8. Required Checks for Format/Behavior Changes
 
@@ -204,3 +214,43 @@ Coverage:
 - `TreeDB/collections/overhead_bench_test.go`:
   - `BenchmarkCollectionOverheadPlanIndexedTemplateV1`
   - `BenchmarkCollectionOverheadIndexStateTemplateV1Extraction`
+
+## 13. Native Wire Protocol
+
+Invariant:
+- Native-wire v1 code that advertises protocol support must enforce frame,
+  section, command-schema, feature-negotiation, and deterministic command-entry
+  rules from `TreeDB/docs/spec/native-wire-protocol.md`.
+- Protocol implementation work must keep schema IDs, codec constants, golden
+  fixtures, fuzz targets, parity tests, deterministic-entry tests, benchmark
+  labels, and observability counters aligned with
+  `TreeDB/docs/spec/native-wire-implementation-guidelines.md`.
+
+Coverage:
+- `TreeDB/internal/nativewire/schema_test.go`:
+  - command-header golden fixture,
+  - command-schema validation for required sections, duplicate singleton
+    sections, unknown critical sections, and unsupported command versions.
+- `TreeDB/internal/nativewire/codec_test.go`:
+  - frame-header golden fixture and malformed/unsupported header rejection,
+  - section and byte-vector round trips,
+  - byte-vector length-mismatch rejection.
+- `TreeDB/internal/nativewire/fuzz_test.go`:
+  - fuzz targets for frame-header, section-envelope, byte-vector decoding, and
+    command-schema validation.
+- `TreeDB/internal/nativewire/deterministic_test.go`:
+  - deterministic-entry golden fixture and transport-field independence,
+  - deterministic-entry rejection for missing distributed guards.
+- `TreeDB/internal/nativewire/bench_test.go`:
+  - nativewire benchmark cases for every command schema marked
+    `BenchmarkRequired`,
+  - reusable section and byte-vector decode scratch tests,
+  - allocation guard tests for warmed frame, command-header, section,
+    byte-vector, schema-validation, and deterministic-entry paths,
+  - `BenchmarkNativewire...` coverage for frame headers, command headers, byte
+    vectors, request body section encoding/decoding, decode+validate, and
+    deterministic-entry encoding.
+
+The native-wire server does not exist yet. R0 follow-up work must add
+broader negative conformance fixtures, drift tests, and direct collection parity
+tests before claiming native-wire v1 server support.

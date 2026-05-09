@@ -9,10 +9,10 @@ TreeDB is pre-alpha; format compatibility between versions is not guaranteed.
 A TreeDB deployment uses:
 
 - `index.db` (paged B+Tree index and metadata),
-- value-log segments (`value-l*.log`),
+- commit-log segments under `wal/commit-l*.log`,
+- value-log segments under `value_vlog/value-l*.log`,
 - optional split outer-leaf value-log segments under `leaf_vlog/value-l*.log`
   when `IndexOuterLeavesInValueLog` is enabled,
-- commit-log segments (`commit-l*.log`),
 - optional side-store DBs (`dictdb`, `templatedb`) using their own `index.db` files.
 
 ## 2. Index Page Basics
@@ -404,8 +404,34 @@ Validation rules:
 
 Current canonical names:
 
-- commit log: `commit-l<lane>-<seq>.log`
-- value log: `value-l<lane>-<seq>.log`
+- commit log: `wal/commit-l<lane>-<seq>.log`
+- value log: `value_vlog/value-l<lane>-<seq>.log`
 - split leaf log: `leaf_vlog/value-l<lane>-<seq>.log`
 
 Recovery parser also accepts legacy names (`commit-`, `value-`, `wal-`, `vlog-`) for backward compatibility during pre-alpha evolution.
+
+## 10. Storage Compaction Lifecycle
+
+`DB.CompactStorage` is the canonical online storage compaction entry point. It
+does not introduce a new on-disk format; it coordinates the existing storage
+objects above into one lifecycle:
+
+1. establish a durable checkpoint boundary,
+2. rewrite live value-log records into new `value_vlog` segments,
+3. run reachability-based value-log GC,
+4. pack live split outer-leaf pages into new `leaf_vlog` generations,
+5. run leaf-generation GC,
+6. vacuum/rewrite `index.db`,
+7. run settle GC passes,
+8. delete untracked zero-byte `value_vlog` segment files,
+9. audit the remaining storage debt.
+
+Applied compaction is serialized with other backend maintenance for the full
+multi-phase sequence. Planning mode reports debt without mutating storage and is
+safe for read-only opens.
+
+In cached mode, public maintenance wrappers checkpoint first, protect cached
+value-log paths, reserve rewrite RIDs from the live cached allocator, and
+reconcile cached split value-log writers after backend maintenance so later
+writes advance past backend-created `value_vlog`/`leaf_vlog` segments instead of
+reusing segment file names.

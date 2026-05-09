@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"sort"
@@ -461,6 +462,384 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 		t.Fatalf("open collection after leaf generation maintenance: %v", err)
 	}
 	requireCollectionMaintenanceTemplateReads(t, reopenedCol)
+}
+
+func TestCollectionFastJSONLargeDocumentsUseValueLogPointers(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileFast, t.TempDir())
+	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	closeDB := collectionMaintenanceCloseOnce(cleanup)
+	t.Cleanup(func() { _ = closeDB() })
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "bluesky",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatJSON,
+			DataRootStoragePolicy: RootStorageFast,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("bluesky")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	const documents = collectionPointerizeBatchMaxValues + 7
+	ids := make([][]byte, documents)
+	docs := make([][]byte, documents)
+	for i := 0; i < documents; i++ {
+		ids[i] = []byte(fmt.Sprintf("at://did:example:%06d", i))
+		docs[i] = collectionLargeJSONDocumentForTest(i, 8<<10)
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("insert large JSON batch: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	got, err := col.Get(ids[documents-1])
+	if err != nil {
+		t.Fatalf("get large JSON doc: %v", err)
+	}
+	if !bytes.Equal(got, docs[documents-1]) {
+		t.Fatalf("large JSON doc mismatch: got %d bytes want %d", len(got), len(docs[documents-1]))
+	}
+	requireCollectionPrimaryEntryPointer(t, d, "bluesky", ids[documents-1])
+
+	if err := closeDB(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	reopened, reopenedCleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopenedCleanup() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("bluesky")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	reopenedDoc, err := reopenedCol.Get(ids[0])
+	if err != nil {
+		t.Fatalf("get reopened large JSON doc: %v", err)
+	}
+	if !bytes.Equal(reopenedDoc, docs[0]) {
+		t.Fatalf("reopened large JSON doc mismatch: got %d bytes want %d", len(reopenedDoc), len(docs[0]))
+	}
+}
+
+func TestCollectionFastJSONBufferedIndexedLargeDocumentsUseValueLogPointers(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileFast, t.TempDir())
+	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	closeDB := collectionMaintenanceCloseOnce(cleanup)
+	t.Cleanup(func() { _ = closeDB() })
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "bluesky",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatJSON,
+			DataRootStoragePolicy: RootStorageFast,
+		},
+		Indexes: []IndexDefinition{{
+			Name:      "event",
+			Field:     "commit.collection",
+			ValueType: IndexValueString,
+		}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("bluesky")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	const documents = 32
+	ids := make([][]byte, documents)
+	docs := make([][]byte, documents)
+	for i := 0; i < documents; i++ {
+		ids[i] = []byte(fmt.Sprintf("at://did:example:%06d", i))
+		docs[i] = collectionLargeJSONDocumentForTest(i, 8<<10)
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("buffered indexed insert large JSON batch: %v", err)
+	}
+	eventIDs, err := col.FindByIndex("event", "app.bsky.feed.post")
+	if err != nil {
+		t.Fatalf("find event before flush: %v", err)
+	}
+	if len(eventIDs) != documents {
+		t.Fatalf("event ids before flush=%d want %d", len(eventIDs), documents)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered indexed writes: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	got, err := col.Get(ids[documents-1])
+	if err != nil {
+		t.Fatalf("get large JSON doc after flush: %v", err)
+	}
+	if !bytes.Equal(got, docs[documents-1]) {
+		t.Fatalf("large JSON doc mismatch after flush: got %d bytes want %d", len(got), len(docs[documents-1]))
+	}
+	requireCollectionPrimaryEntryPointer(t, d, "bluesky", ids[documents-1])
+}
+
+func TestCollectionFastJSONUpdateBatchLargeDocumentsUseValueLogPointers(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileFast, t.TempDir())
+	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	closeDB := collectionMaintenanceCloseOnce(cleanup)
+	t.Cleanup(func() { _ = closeDB() })
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "bluesky",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatJSON,
+			DataRootStoragePolicy: RootStorageFast,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("bluesky")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	const documents = 32
+	ids := make([][]byte, documents)
+	initialDocs := make([][]byte, documents)
+	updatedDocs := make([][]byte, documents)
+	items := make([]UpdateBatchItem, documents)
+	for i := 0; i < documents; i++ {
+		id := []byte(fmt.Sprintf("at://did:example:%06d", i))
+		updated := collectionLargeJSONDocumentForTest(i, 8<<10)
+		ids[i] = id
+		initialDocs[i] = []byte(fmt.Sprintf(`{"id":%d,"commit":{"collection":"app.bsky.feed.post"}}`, i))
+		updatedDocs[i] = updated
+		items[i] = UpdateBatchItem{
+			DocumentID: id,
+			Update: func([]byte) ([]byte, bool, error) {
+				return bytes.Clone(updated), true, nil
+			},
+		}
+	}
+	if _, err := col.InsertBatch(ids, initialDocs); err != nil {
+		t.Fatalf("insert initial JSON batch: %v", err)
+	}
+	results, err := col.UpdateBatch(items)
+	if err != nil {
+		t.Fatalf("UpdateBatch large JSON documents: %v", err)
+	}
+	if len(results) != documents {
+		t.Fatalf("UpdateBatch results=%d want %d", len(results), documents)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	got, err := col.Get(ids[documents-1])
+	if err != nil {
+		t.Fatalf("get updated large JSON doc: %v", err)
+	}
+	if !bytes.Equal(got, updatedDocs[documents-1]) {
+		t.Fatalf("updated large JSON doc mismatch: got %d bytes want %d", len(got), len(updatedDocs[documents-1]))
+	}
+	requireCollectionPrimaryEntryPointer(t, d, "bluesky", ids[documents-1])
+}
+
+func TestCollectionFastJSONMaintenanceVacuumUsesValueLogLeaves(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	opts := treedb.OptionsFor(treedb.ProfileFast, t.TempDir())
+	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = cleanup() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "bluesky",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatJSON,
+			DataRootStoragePolicy: RootStorageFast,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("bluesky")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	const (
+		documents = 20_000
+		batchSize = 1_000
+	)
+	for start := 0; start < documents; start += batchSize {
+		n := min(batchSize, documents-start)
+		ids := make([][]byte, n)
+		docs := make([][]byte, n)
+		for i := 0; i < n; i++ {
+			row := start + i
+			ids[i] = []byte(fmt.Sprintf("did:example:%06d", row))
+			docs[i] = []byte(fmt.Sprintf(`{"event":"app.bsky.feed.post","seq":%d}`, row))
+		}
+		if _, err := col.InsertBatch(ids, docs); err != nil {
+			t.Fatalf("insert batch at %d: %v", start, err)
+		}
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint after load: %v", err)
+	}
+	requireCollectionPrimaryRootLeafLogChildren(t, d, "bluesky")
+
+	ctx := context.Background()
+	if _, err := col.CompactRootOverlays(ctx); err != nil {
+		t.Fatalf("compact root overlays: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint after overlay compaction: %v", err)
+	}
+	if _, err := d.ValueLogRewriteOnline(ctx, backenddb.ValueLogRewriteOnlineOptions{
+		BatchSize:      1024,
+		SyncEachBatch:  true,
+		LocalityPolicy: backenddb.ValueLogRewriteLocalityGrouped,
+	}); err != nil {
+		t.Fatalf("value-log rewrite: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint after value-log rewrite: %v", err)
+	}
+	if _, err := d.ValueLogGC(ctx, backenddb.ValueLogGCOptions{}); err != nil {
+		t.Fatalf("value-log GC: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint after value-log GC: %v", err)
+	}
+	if err := d.VacuumIndexOnline(ctx); err != nil {
+		t.Fatalf("vacuum index online: %v", err)
+	}
+
+	got, err := col.Get([]byte("did:example:019999"))
+	if err != nil {
+		t.Fatalf("get after vacuum: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`"seq":19999`)) {
+		t.Fatalf("post-vacuum doc=%s want seq 19999", got)
+	}
+	requireCollectionPrimaryRootLeafLogChildren(t, d, "bluesky")
+}
+
+func collectionLargeJSONDocumentForTest(i, payloadBytes int) []byte {
+	return []byte(fmt.Sprintf(
+		`{"id":%d,"commit":{"collection":"app.bsky.feed.post"},"payload":"%s"}`,
+		i,
+		strings.Repeat("x", payloadBytes),
+	))
+}
+
+func requireCollectionPrimaryEntryPointer(t *testing.T, d *backenddb.DB, collectionName string, id []byte) {
+	t.Helper()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("acquire snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, collectionName)
+	if err != nil {
+		t.Fatalf("load collection catalog: %v", err)
+	}
+	if catalog == nil {
+		t.Fatalf("collection %q not found", collectionName)
+	}
+	rootID := catalog.rootID(collectionPrimaryRootName(collectionName))
+	entry, err := snap.GetEntryAtRoot(rootID, id)
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(%q): %v", id, err)
+	}
+	if entry.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
+		t.Fatalf("entry %q flags=%#x ptr=%+v, want value-log pointer", id, entry.Flags, entry.ValuePtr)
+	}
+}
+
+func requireCollectionPrimaryRootLeafLogChildren(t *testing.T, d *backenddb.DB, collectionName string) {
+	t.Helper()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("acquire snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, collectionName)
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("load collection catalog: %v", err)
+	}
+	if catalog == nil {
+		_ = snap.Close()
+		t.Fatalf("collection %q not found", collectionName)
+	}
+	rootID := catalog.rootID(collectionPrimaryRootName(collectionName))
+	_ = snap.Close()
+	if rootID == 0 {
+		t.Fatalf("collection %q primary root is empty", collectionName)
+	}
+	if !collectionRootHasLeafLogChild(t, d, rootID, make(map[uint64]bool)) {
+		t.Fatalf("collection %q primary root %d has no leaf-log children", collectionName, rootID)
+	}
+}
+
+func collectionRootHasLeafLogChild(t *testing.T, d *backenddb.DB, rootID uint64, seen map[uint64]bool) bool {
+	t.Helper()
+	if rootID == 0 || seen[rootID] {
+		return false
+	}
+	seen[rootID] = true
+	p := d.Pager()
+	if p == nil {
+		t.Fatal("missing pager")
+	}
+	data, err := p.Get(rootID)
+	if err != nil {
+		t.Fatalf("pager get root %d: %v", rootID, err)
+	}
+	n := node.NewNode(data)
+	switch n.Type() {
+	case page.PageTypeInternal:
+		for i := uint16(0); i < n.Count(); i++ {
+			_, childRef, err := n.GetInternalEntryRefView(i)
+			if err != nil {
+				t.Fatalf("internal child %d at root %d: %v", i, rootID, err)
+			}
+			if childRef.Kind == page.ChildRefLeafLog {
+				return true
+			}
+			if collectionRootHasLeafLogChild(t, d, childRef.Page, seen) {
+				return true
+			}
+		}
+		return false
+	case page.PageTypeLeaf:
+		return false
+	default:
+		t.Fatalf("unexpected page type %d at root %d", n.Type(), rootID)
+		return false
+	}
 }
 
 func TestCollectionManagerListCollections(t *testing.T) {
@@ -3431,6 +3810,112 @@ func TestCollectionCompactRootOverlaysFoldsIntoBaseRoots(t *testing.T) {
 	}
 	if len(reopenedIDs) != 1 || !bytes.Equal(reopenedIDs[0], []byte("u1")) {
 		t.Fatalf("reopened city ids=%q want [u1]", reopenedIDs)
+	}
+}
+
+func TestCollectionCompactStorageFoldsRootsAndCleansStorage(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
+	opts.DisableSideStores = true
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.MaxWALBytes = -1
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+
+	db, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = cleanup() }()
+
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedOverlayRoots:      true,
+			BufferedIndexedWriteMaxDocuments: 1,
+			BufferedIndexedWriteMaxRootRuns:  1,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	doc := []byte(`{"city":"hnl","payload":"` + strings.Repeat("x", 512) + `"}`)
+	if _, err := col.Insert([]byte("u1"), doc); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if _, _, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			return []byte(`{"city":"sea","payload":"` + strings.Repeat("y", 512) + `"}`), true, nil
+		},
+	}}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush overlays: %v", err)
+	}
+
+	valueLogDir := backenddb.ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	emptyPath := filepath.Join(valueLogDir, "value-l42-000001.log")
+	if err := os.WriteFile(emptyPath, nil, 0o644); err != nil {
+		t.Fatalf("write empty value-log file: %v", err)
+	}
+
+	stats, err := col.CompactStorage(context.Background(), CompactStorageOptions{
+		LeafPackMinExpectedReclaimBytes: 1,
+		LeafPackMinReclaimPerCopyPPM:    1,
+	})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if rootStats, ok := stats.RootOverlays["users"]; !ok || rootStats.OverlayRoots == 0 {
+		t.Fatalf("root overlay compaction stats=%+v", stats.RootOverlays)
+	}
+	if !stats.Storage.FullyCompacted {
+		t.Fatalf("storage FullyCompacted=false debt=%+v", stats.Storage.RemainingDebt)
+	}
+	if _, err := os.Stat(emptyPath); !os.IsNotExist(err) {
+		t.Fatalf("empty value-log file remains or stat failed: %v", err)
+	}
+
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get after compact storage: %v", err)
+	}
+	want := []byte(`{"city":"sea","payload":"` + strings.Repeat("y", 512) + `"}`)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("doc after compact storage=%q want %q", got, want)
+	}
+	ids, err := col.FindByIndex("city", "sea")
+	if err != nil {
+		t.Fatalf("find by index after compact storage: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("ids after compact storage=%q want [u1]", ids)
+	}
+
+	again, err := col.CompactStoragePlan(context.Background(), CompactStorageOptions{
+		LeafPackMinExpectedReclaimBytes: 1,
+		LeafPackMinReclaimPerCopyPPM:    1,
+	})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan after: %v", err)
+	}
+	if !again.Storage.FullyCompacted {
+		t.Fatalf("post-compact plan FullyCompacted=false debt=%+v", again.Storage.RemainingDebt)
 	}
 }
 

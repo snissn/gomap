@@ -63,6 +63,7 @@ type DB struct {
 	snapshotViewRO                 atomic.Pointer[snapshotView]
 	snapshotAcquireRO              [snapshotAcquireShardCount]atomic.Int32
 	valueLogRefTracker             *valueLogRefTracker
+	valueLogAppender               atomic.Pointer[valueLogAppenderHolder]
 	leafPageLog                    LeafPageLog
 	leafPageReadCache              *leafPageReadCache
 	leafGenerationManifest         *leafGenerationManifest
@@ -74,6 +75,9 @@ type DB struct {
 	adaptive                       *adaptive.Controller
 	pruner                         pruneWorker
 	leafGenerationPins             leafGenerationPinTracker
+	// Test hook used to release synthetic snapshot pins at exact compaction
+	// phase boundaries.
+	compactStorageAfterPhase func(string)
 
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	idx atomic.Pointer[indexGen]
@@ -1858,6 +1862,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	if idx == nil {
 		return post, errors.New("missing index")
 	}
+	valueLogAppender := db.currentValueLogAppender()
 
 	// Ensure value-log-backed leaf pages are flushed before we publish an index
 	// commit that references them. Per-root storage policies can use the leaf
@@ -1869,6 +1874,17 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 			}
 		} else {
 			if err := db.leafPageLog.Flush(); err != nil {
+				return post, prePublishErr(err)
+			}
+		}
+	}
+	if valueLogAppender != nil {
+		if sync {
+			if err := valueLogAppender.Sync(); err != nil {
+				return post, prePublishErr(err)
+			}
+		} else {
+			if err := valueLogAppender.Flush(); err != nil {
 				return post, prePublishErr(err)
 			}
 		}
@@ -1917,6 +1933,8 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 
 	leafPageSegmentRegistered := false
 	leafPageSegmentFileID := uint32(0)
+	valueLogSegmentRegistered := false
+	valueLogSegmentRegistrationAttempted := false
 	if db.testFailFinalizeCommit.Load() {
 		return post, prePublishErr(errTestFinalizeCommitFailpoint)
 	}
@@ -1930,6 +1948,17 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 			return post, prePublishErr(err)
 		}
 		leafPageSegmentRegistered = registered
+		if valueLogAppender != nil {
+			path, fileID, ok := valueLogAppender.CurrentValueLogSegment()
+			if ok && path != "" && fileID != 0 {
+				valueLogSegmentRegistrationAttempted = true
+				registered, err := db.ensureValueLogSegmentRegisteredAt(path, fileID)
+				if err != nil {
+					return post, prePublishErr(err)
+				}
+				valueLogSegmentRegistered = registered
+			}
+		}
 	}
 
 	// 3. Write Meta - No DB Lock
@@ -1972,7 +2001,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 				}
 			}
 		}
-		if forceValueLogRefresh && !leafPageSegmentRegistered {
+		if forceValueLogRefresh && (!leafPageSegmentRegistered || (valueLogSegmentRegistrationAttempted && !valueLogSegmentRegistered)) {
 			// If no registration path is available, force one refresh as a
 			// safety fallback before publishing the new state.
 			needRefresh = true

@@ -1722,7 +1722,8 @@ func (db *DB) CompactIndex() error {
 			return err
 		}
 	}
-	return db.backend.CompactIndex()
+	err := db.backend.CompactIndex()
+	return db.reconcileCachedBackendMaintenance(err)
 }
 
 // VacuumIndexOnline rebuilds the user index into a new file and swaps it in with
@@ -1749,7 +1750,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		}
 	}
 
-	if err := db.backend.VacuumIndexOnline(ctx); err != nil {
+	if err := db.reconcileCachedBackendMaintenance(db.backend.VacuumIndexOnline(ctx)); err != nil {
 		return err
 	}
 	success = true

@@ -853,6 +853,64 @@ func TestRawInsertCommandBuildsBSONCommand(t *testing.T) {
 	}
 }
 
+func TestValidateNativeWireBenchmarkCollectionAllowsIndexOrderDrift(t *testing.T) {
+	expected := collections.CollectionMeta{
+		Name: "bench",
+		Indexes: []collections.IndexDefinition{
+			{Name: "email", Field: "email", ValueType: collections.IndexValueString, Unique: true},
+			{Name: "active", Field: "active", ValueType: collections.IndexValueBool},
+		},
+	}
+	actual := expected
+	actual.Indexes = []collections.IndexDefinition{expected.Indexes[1], expected.Indexes[0]}
+	if err := validateNativeWireBenchmarkCollection(actual, expected); err != nil {
+		t.Fatalf("validateNativeWireBenchmarkCollection reordered indexes: %v", err)
+	}
+	actual.Indexes[0].MultiKey = true
+	if err := validateNativeWireBenchmarkCollection(actual, expected); err == nil {
+		t.Fatal("validateNativeWireBenchmarkCollection accepted changed index")
+	}
+	actual = expected
+	actual.Name = "other"
+	if err := validateNativeWireBenchmarkCollection(actual, expected); err == nil {
+		t.Fatal("validateNativeWireBenchmarkCollection accepted changed name")
+	}
+}
+
+func TestValidateNativeWireBenchmarkCollectionNormalizesExpectedMeta(t *testing.T) {
+	expected := collections.CollectionMeta{
+		Name: "bench",
+		Indexes: []collections.IndexDefinition{
+			{Name: "email", Field: "email", ValueType: collections.IndexValueString, Unique: true},
+		},
+	}
+	actual := expected
+	actual.Options.BufferedIndexedWrites = true
+	actual.Options.BufferedIndexedWriteMaxDocuments = collections.DefaultIndexedWriteMemtableMaxDocuments
+	actual.Options.BufferedIndexedWriteMaxRootRuns = collections.DefaultIndexedWriteMemtableMaxRootRuns
+	if err := validateNativeWireBenchmarkCollection(actual, expected); err != nil {
+		t.Fatalf("validateNativeWireBenchmarkCollection normalized expected metadata: %v", err)
+	}
+}
+
+func TestValidateNativeWireBenchmarkCollectionNormalizesJSONDocumentFormat(t *testing.T) {
+	expected := collections.CollectionMeta{
+		Name:    "bench",
+		Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON},
+		Indexes: []collections.IndexDefinition{
+			{Name: "email", Field: "email", ValueType: collections.IndexValueString},
+		},
+	}
+	actual := expected
+	actual.Options.DocumentFormat = collections.DocumentFormatDefault
+	actual.Options.BufferedIndexedWrites = true
+	actual.Options.BufferedIndexedWriteMaxDocuments = collections.DefaultIndexedWriteMemtableMaxDocuments
+	actual.Options.BufferedIndexedWriteMaxRootRuns = collections.DefaultIndexedWriteMemtableMaxRootRuns
+	if err := validateNativeWireBenchmarkCollection(actual, expected); err != nil {
+		t.Fatalf("validateNativeWireBenchmarkCollection normalized JSON document format: %v", err)
+	}
+}
+
 func mustTestBSON(t *testing.T, doc bson.D) bson.Raw {
 	t.Helper()
 	raw, err := bson.Marshal(doc)
@@ -2404,6 +2462,296 @@ func TestRecordEffectiveTreeDBCollectionOptionsUsesNormalizedMetadata(t *testing
 			result.TreeDBBufferedIndexedAsyncFlush,
 			result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
 			collections.DefaultIndexedWriteMemtableAsyncFlushMaxDocuments)
+	}
+}
+
+func TestEnsureNativeWireBenchmarkCollectionCreatesPrimaryOnlyCollection(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	cfg := config{
+		Database:                                      "bench",
+		Collection:                                    "docs",
+		TreeDBDocumentFormat:                          collections.DocumentFormatTemplateV1,
+		TreeDBDataRootStorage:                         collections.RootStorageCompressed,
+		TreeDBIndexStateRootStorage:                   collections.RootStorageCompressed,
+		TreeDBBufferedIndexedWriteMaxDocuments:        123,
+		TreeDBBufferedIndexedWriteMaxBytes:            456,
+		TreeDBBufferedIndexedWriteMaxRootRuns:         7,
+		TreeDBBufferedIndexedAsyncFlush:               true,
+		TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits: 2,
+	}
+	if err := ensureNativeWireBenchmarkCollection(cfg, &benchTarget{collections: manager}); err != nil {
+		t.Fatalf("ensureNativeWireBenchmarkCollection: %v", err)
+	}
+	col, err := manager.OpenCollection("bench.docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	meta := col.Meta()
+	if len(meta.Indexes) != 0 {
+		t.Fatalf("indexes=%+v want primary-only collection", meta.Indexes)
+	}
+	if meta.Options.DocumentFormat != collections.DocumentFormatTemplateV1 ||
+		meta.Options.DataRootStoragePolicy != collections.RootStorageCompressed ||
+		meta.Options.IndexStateStoragePolicy != collections.RootStorageCompressed ||
+		meta.Options.BufferedIndexedWriteMaxDocuments != 123 ||
+		meta.Options.BufferedIndexedWriteMaxBytes != 456 ||
+		meta.Options.BufferedIndexedWriteMaxRootRuns != 7 ||
+		!meta.Options.BufferedIndexedAsyncFlush ||
+		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits != 2 {
+		t.Fatalf("meta options=%+v", meta.Options)
+	}
+}
+
+func TestEnsureNativeWireBenchmarkCollectionRejectsMismatchedExistingOptions(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{
+		Name:    "bench.docs",
+		Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	cfg := config{
+		Database:             "bench",
+		Collection:           "docs",
+		TreeDBDocumentFormat: collections.DocumentFormatTemplateV1,
+	}
+	if err := ensureNativeWireBenchmarkCollection(cfg, &benchTarget{collections: manager}); err == nil || !strings.Contains(err.Error(), "options drifted") {
+		t.Fatalf("ensureNativeWireBenchmarkCollection err=%v want option mismatch", err)
+	}
+}
+
+func TestEnsureNativeWireBenchmarkCollectionRejectsExistingIndexDrift(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{
+		Name: "bench.docs",
+		Indexes: []collections.IndexDefinition{{
+			Name:      "wrong_1",
+			Field:     "email",
+			ValueType: collections.IndexValueString,
+			Unique:    true,
+		}},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	cfg := config{
+		Database:             "bench",
+		Collection:           "docs",
+		TreeDBDocumentFormat: collections.DocumentFormatJSON,
+		SecondaryIndexes:     1,
+	}
+	if err := ensureNativeWireBenchmarkCollection(cfg, &benchTarget{collections: manager}); err == nil || !strings.Contains(err.Error(), "missing index") {
+		t.Fatalf("ensureNativeWireBenchmarkCollection err=%v want index drift", err)
+	}
+}
+
+func TestEnsureNativeWireBenchmarkCollectionRejectsMismatchedBehaviorOptions(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{
+		Name: "bench.docs",
+		Options: collections.CollectionOptions{
+			DocumentFormat:          collections.DocumentFormatTemplateV1,
+			AllowArrayValuesInIndex: true,
+		},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	cfg := config{
+		Database:             "bench",
+		Collection:           "docs",
+		TreeDBDocumentFormat: collections.DocumentFormatTemplateV1,
+	}
+	if err := ensureNativeWireBenchmarkCollection(cfg, &benchTarget{collections: manager}); err == nil || !strings.Contains(err.Error(), "options drifted") {
+		t.Fatalf("ensureNativeWireBenchmarkCollection err=%v want option mismatch", err)
+	}
+}
+
+func TestSameNativeWireBenchmarkOptionsNormalizesIndexedDefaults(t *testing.T) {
+	got := collections.CollectionOptions{
+		DocumentFormat:                          collections.DocumentFormatDefault,
+		BufferedIndexedWrites:                   true,
+		BufferedIndexedWriteMaxDocuments:        collections.DefaultIndexedWriteMemtableAsyncFlushMaxDocuments,
+		BufferedIndexedWriteMaxRootRuns:         collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns,
+		BufferedIndexedAsyncFlush:               true,
+		BufferedIndexedAsyncFlushMaxQueuedUnits: collections.DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits,
+	}
+	want := collections.CollectionOptions{
+		DocumentFormat:            collections.DocumentFormatJSON,
+		BufferedIndexedAsyncFlush: true,
+	}
+	if !sameNativeWireBenchmarkOptions(got, want, true) {
+		t.Fatalf("sameNativeWireBenchmarkOptions returned false for normalized options got=%+v want=%+v", got, want)
+	}
+}
+
+func TestEqualNativeWireBenchmarkCollectionOptionsComparesBehaviorFields(t *testing.T) {
+	expected := collections.CollectionOptions{
+		DocumentFormat:               collections.DocumentFormatTemplateV1,
+		DisableIndexedWriteMemtables: true,
+		BufferedIndexedOverlayRoots:  true,
+	}
+	tests := []struct {
+		name   string
+		mutate func(*collections.CollectionOptions)
+	}{
+		{name: "allow arrays", mutate: func(opts *collections.CollectionOptions) { opts.AllowArrayValuesInIndex = true }},
+		{name: "disable memtables", mutate: func(opts *collections.CollectionOptions) { opts.DisableIndexedWriteMemtables = false }},
+		{name: "buffered writes", mutate: func(opts *collections.CollectionOptions) { opts.BufferedIndexedWrites = true }},
+		{name: "overlay roots", mutate: func(opts *collections.CollectionOptions) { opts.BufferedIndexedOverlayRoots = false }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			actual := expected
+			tc.mutate(&actual)
+			if equalNativeWireBenchmarkCollectionOptions(actual, expected) {
+				t.Fatalf("equalNativeWireBenchmarkCollectionOptions ignored %s drift", tc.name)
+			}
+		})
+	}
+}
+
+func TestBenchmarkBSONRawReturnsPrebuiltRawWithoutClone(t *testing.T) {
+	raw := mustTestBSON(t, bson.D{{Key: "_id", Value: "u1"}})
+	got, err := benchmarkBSONRaw(0, nil, []bson.Raw{raw})
+	if err != nil {
+		t.Fatalf("benchmarkBSONRaw: %v", err)
+	}
+	if len(got) == 0 || len(raw) == 0 || &got[0] != &raw[0] {
+		t.Fatalf("benchmarkBSONRaw cloned prebuilt raw")
+	}
+}
+
+func TestNativeWirePrebuildStoredDocumentsFeedsLoadBatch(t *testing.T) {
+	cfg := config{
+		Documents:             1,
+		PrebuildDocuments:     true,
+		TreeDBDocumentFormat:  collections.DocumentFormatJSON,
+		TreeDBDataRootStorage: collections.RootStorageFast,
+	}
+	prebuilt := []bson.D{{
+		{Key: "_id", Value: "custom-id"},
+		{Key: "email", Value: "custom@example.com"},
+		{Key: "city", Value: "hnl"},
+		{Key: "age", Value: int64(42)},
+		{Key: "active", Value: true},
+		{Key: "score", Value: 9.5},
+		{Key: "tags", Value: bson.A{"hnl", "custom"}},
+		{Key: "profile", Value: bson.D{{Key: "rank", Value: int32(7)}, {Key: "bio", Value: "prebuilt"}}},
+	}}
+	raw, err := bson.Marshal(prebuilt[0])
+	if err != nil {
+		t.Fatalf("marshal prebuilt: %v", err)
+	}
+	prebuiltNative, err := nativeWirePrebuildStoredDocuments(cfg, prebuilt, []bson.Raw{raw})
+	if err != nil {
+		t.Fatalf("nativeWirePrebuildStoredDocuments: %v", err)
+	}
+	if !bytes.Contains(prebuiltNative[0], []byte("custom@example.com")) {
+		t.Fatalf("prebuilt native doc=%s want custom prebuilt content", prebuiltNative[0])
+	}
+	_, docs, err := nativeWireInsertBatch(cfg, 0, 1, prebuilt, []bson.Raw{raw}, prebuiltNative)
+	if err != nil {
+		t.Fatalf("nativeWireInsertBatch: %v", err)
+	}
+	if !bytes.Equal(docs[0], prebuiltNative[0]) {
+		t.Fatalf("batch doc did not reuse prebuilt native doc")
+	}
+}
+
+func TestNativeWireStoredDocumentPreservesFullBenchmarkShape(t *testing.T) {
+	rawJSON, err := nativeWireStoredDocument(collections.DocumentFormatJSON, 7, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("nativeWireStoredDocument JSON: %v", err)
+	}
+	assertNativeWireBenchmarkJSONShape(t, rawJSON)
+	if bytes.Contains(rawJSON, []byte(`"$numberLong"`)) || bytes.Contains(rawJSON, []byte(`"$numberDouble"`)) {
+		t.Fatalf("nativeWireStoredDocument JSON used Extended JSON numeric wrappers: %s", rawJSON)
+	}
+	assertNativeWireBenchmarkPlainJSONNumbers(t, rawJSON)
+
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{
+		Name:    "bench.docs",
+		Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatTemplateV1},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := manager.OpenCollection("bench.docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	rawTemplate, err := nativeWireStoredDocument(collections.DocumentFormatTemplateV1, 7, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("nativeWireStoredDocument template-v1: %v", err)
+	}
+	primaryID := nativeWireMongoPrimaryID(7)
+	if _, err := col.InsertBatch([][]byte{primaryID}, [][]byte{rawTemplate}); err != nil {
+		t.Fatalf("InsertBatch template-v1: %v", err)
+	}
+	got, err := col.Get(primaryID)
+	if err != nil {
+		t.Fatalf("Get template-v1: %v", err)
+	}
+	gotJSON, err := col.StoredDocumentJSON(got)
+	if err != nil {
+		t.Fatalf("StoredDocumentJSON: %v", err)
+	}
+	assertNativeWireBenchmarkJSONShape(t, gotJSON)
+}
+
+func assertNativeWireBenchmarkJSONShape(t *testing.T, raw []byte) {
+	t.Helper()
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal benchmark JSON: %v raw=%s", err, raw)
+	}
+	if _, ok := doc["tags"].([]any); !ok {
+		t.Fatalf("document missing tags array: %s", raw)
+	}
+	profile, ok := doc["profile"].(map[string]any)
+	if !ok {
+		t.Fatalf("document missing profile object: %s", raw)
+	}
+	if bio, ok := profile["bio"].(string); !ok || bio == "" {
+		t.Fatalf("profile.bio=%v want non-empty string", profile["bio"])
+	}
+}
+
+func assertNativeWireBenchmarkPlainJSONNumbers(t *testing.T, raw []byte) {
+	t.Helper()
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal benchmark JSON: %v raw=%s", err, raw)
+	}
+	if _, ok := doc["age"].(float64); !ok {
+		t.Fatalf("age=%v want JSON number", doc["age"])
+	}
+	if _, ok := doc["score"].(float64); !ok {
+		t.Fatalf("score=%v want JSON number", doc["score"])
 	}
 }
 

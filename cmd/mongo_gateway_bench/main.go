@@ -30,6 +30,7 @@ import (
 	mongogateway "github.com/snissn/gomap/TreeDB/mongo_gateway"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/fastclient"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
+	nativewire "github.com/snissn/gomap/TreeDB/nativewire"
 	"github.com/snissn/gomap/cmd/internal/treedbstats"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/event"
@@ -226,6 +227,8 @@ type benchTarget struct {
 	db                   *backenddb.DB
 	collections          *collections.CollectionManager
 	server               *mongogateway.Server
+	nativeServer         *nativewire.Server
+	nativeAddr           string
 	mongoAddr            string
 	treedbDir            string
 	removeTreeDBDir      bool
@@ -375,6 +378,8 @@ const (
 	clientModeRawWire            = "raw-wire"
 	clientModeRawWireTCP         = "raw-wire-tcp"
 	clientModeRawWireTCPPipeline = "raw-wire-tcp-pipeline"
+	clientModeNativeWireInproc   = "native-wire-inproc"
+	clientModeNativeWireTCP      = "native-wire-tcp"
 )
 
 func main() {
@@ -496,7 +501,7 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.UpdateIndexedField, "update-indexed-field", false, "include the city field in update phases; requires -secondary-indexes >= 2 so the city index exists")
 	fs.BoolVar(&cfg.RangeIndex, "range-index", false, "create an age_1 secondary index for the age range-read phase")
 	fs.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 2, "secondary indexes to create: 0, 1=email, 2=email+city, 3=email+city+active")
-	fs.StringVar(&cfg.ClientMode, "client-mode", cfg.ClientMode, "benchmark client path: driver, driver-find-raw, driver-command, driver-command-raw, driver-unack, direct, raw-wire, raw-wire-tcp, or raw-wire-tcp-pipeline; direct and raw-wire modes are TreeDB-only")
+	fs.StringVar(&cfg.ClientMode, "client-mode", cfg.ClientMode, "benchmark client path: driver, driver-find-raw, driver-command, driver-command-raw, driver-unack, direct, raw-wire, raw-wire-tcp, raw-wire-tcp-pipeline, native-wire-inproc, or native-wire-tcp; direct/raw/native-wire modes are TreeDB-only")
 	fs.IntVar(&cfg.RawWireTCPPipelineDepth, "raw-wire-tcp-pipeline-depth", cfg.RawWireTCPPipelineDepth, "number of raw-wire TCP find requests to pipeline on one connection when -client-mode raw-wire-tcp-pipeline")
 	fs.StringVar(&treeDBProfile, "treedb-profile", treeDBProfile, "TreeDB profile for -target treedb: fast, wal_on_fast, durable, or bench")
 	fs.StringVar(&treeDBDocumentFormat, "treedb-document-format", treeDBDocumentFormat, "TreeDB collection document format for -target treedb: json, template-v1/collections-v1, or bson")
@@ -552,7 +557,7 @@ func parseConfig(args []string) (config, error) {
 		return config{}, err
 	}
 	cfg.ClientMode = clientMode
-	if cfg.Target != "treedb" && isRawWireClientMode(cfg.ClientMode) {
+	if cfg.Target != "treedb" && (isRawWireClientMode(cfg.ClientMode) || isNativeWireClientMode(cfg.ClientMode)) {
 		return config{}, fmt.Errorf("client-mode %q is only supported with -target treedb", cfg.ClientMode)
 	}
 	if cfg.Target != "treedb" && cfg.ClientMode == clientModeDirect {
@@ -789,6 +794,10 @@ func parseClientMode(raw string) (string, error) {
 		return clientModeRawWireTCP, nil
 	case clientModeRawWireTCPPipeline:
 		return clientModeRawWireTCPPipeline, nil
+	case clientModeNativeWireInproc:
+		return clientModeNativeWireInproc, nil
+	case clientModeNativeWireTCP:
+		return clientModeNativeWireTCP, nil
 	default:
 		return "", fmt.Errorf("unknown client-mode %q", raw)
 	}
@@ -846,6 +855,10 @@ func concurrentRangeReaderCounts(cfg config) []int {
 
 func isRawWireClientMode(mode string) bool {
 	return mode == clientModeRawWire || mode == clientModeRawWireTCP || mode == clientModeRawWireTCPPipeline
+}
+
+func isNativeWireClientMode(mode string) bool {
+	return mode == clientModeNativeWireInproc || mode == clientModeNativeWireTCP
 }
 
 func openTarget(ctx context.Context, cfg config) (*benchTarget, error) {
@@ -952,18 +965,16 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 	server := mongogateway.NewServer()
 	server.Collections = manager
 	server.MaxFindScanDocuments = cfg.Documents
-	server.DefaultCollectionOptions = collections.CollectionOptions{
-		DocumentFormat:                          cfg.TreeDBDocumentFormat,
-		DataRootStoragePolicy:                   cfg.TreeDBDataRootStorage,
-		IndexStateStoragePolicy:                 cfg.TreeDBIndexStateRootStorage,
-		BufferedIndexedWriteMaxDocuments:        cfg.TreeDBBufferedIndexedWriteMaxDocuments,
-		BufferedIndexedWriteMaxBytes:            cfg.TreeDBBufferedIndexedWriteMaxBytes,
-		BufferedIndexedWriteMaxRootRuns:         cfg.TreeDBBufferedIndexedWriteMaxRootRuns,
-		DisableBufferedIndexedAsyncFlush:        cfg.TreeDBDisableBufferedIndexedAsyncFlush,
-		BufferedIndexedAsyncFlush:               cfg.TreeDBBufferedIndexedAsyncFlush,
-		BufferedIndexedAsyncFlushMaxQueuedUnits: cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
-	}
+	server.DefaultCollectionOptions = treeDBBenchmarkCollectionOptions(cfg)
 	server.DefaultIndexStoragePolicy = cfg.TreeDBIndexRootStorage
+	var nativeServer *nativewire.Server
+	if isNativeWireClientMode(cfg.ClientMode) {
+		nativeServer = nativewire.NewServer(nativewire.ServerOptions{
+			Collections:      manager,
+			Backend:          db,
+			MaxScanDocuments: max(1, cfg.Documents),
+		})
+	}
 
 	serveCtx, cancelServe := context.WithCancel(ctx)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -977,11 +988,45 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 	}
 	serveErr := make(chan error, 1)
 	go serveLoop(serveCtx, ln, server, serveErr)
+	var nativeLn net.Listener
+	var nativeServeErr chan error
+	var nativeCancel context.CancelFunc
+	if cfg.ClientMode == clientModeNativeWireTCP {
+		nativeCtx, cancel := context.WithCancel(ctx)
+		nativeCancel = cancel
+		nativeLn, err = net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			cancel()
+			cancelServe()
+			_ = ln.Close()
+			if nativeServer != nil {
+				_ = nativeServer.Close()
+			}
+			_ = backendCleanup()
+			if removeDir {
+				_ = os.RemoveAll(dir)
+			}
+			return nil, err
+		}
+		nativeServeErr = make(chan error, 1)
+		go func() {
+			nativeServeErr <- nativeServer.Serve(nativeCtx, nativeLn)
+		}()
+	}
 
 	poolStats := newMongoPoolStats()
 	clientOpts := mongoClientOptions("mongodb://"+ln.Addr().String(), cfg, poolStats).SetDirect(true)
 	client, err := mongo.Connect(clientOpts)
 	if err != nil {
+		if nativeCancel != nil {
+			nativeCancel()
+		}
+		if nativeLn != nil {
+			_ = nativeLn.Close()
+		}
+		if nativeServer != nil {
+			_ = nativeServer.Close()
+		}
 		cancelServe()
 		_ = ln.Close()
 		_ = backendCleanup()
@@ -992,6 +1037,15 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 	}
 	if err := client.Ping(ctx, nil); err != nil {
 		_ = client.Disconnect(context.Background())
+		if nativeCancel != nil {
+			nativeCancel()
+		}
+		if nativeLn != nil {
+			_ = nativeLn.Close()
+		}
+		if nativeServer != nil {
+			_ = nativeServer.Close()
+		}
 		cancelServe()
 		_ = ln.Close()
 		_ = backendCleanup()
@@ -1003,17 +1057,34 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 
 	cleanup := func(cleanupCtx context.Context) error {
 		var errs []error
-		errs = append(errs, client.Disconnect(cleanupCtx))
+		errs = appendCleanupErr(errs, client.Disconnect(cleanupCtx))
+		if nativeCancel != nil {
+			nativeCancel()
+		}
+		if nativeLn != nil {
+			errs = appendCleanupErr(errs, ignoreExpectedCloseError(nativeLn.Close()))
+		}
+		if nativeServer != nil {
+			errs = appendCleanupErr(errs, ignoreExpectedCloseError(nativeServer.Close()))
+		}
+		if nativeServeErr != nil {
+			select {
+			case err := <-nativeServeErr:
+				errs = appendCleanupErr(errs, ignoreExpectedCloseError(err))
+			case <-cleanupCtx.Done():
+				errs = appendCleanupErr(errs, cleanupCtx.Err())
+			}
+		}
 		cancelServe()
-		errs = append(errs, ln.Close())
+		errs = appendCleanupErr(errs, ignoreExpectedCloseError(ln.Close()))
 		select {
 		case err := <-serveErr:
-			errs = append(errs, err)
+			errs = appendCleanupErr(errs, ignoreExpectedCloseError(err))
 		case <-cleanupCtx.Done():
-			errs = append(errs, cleanupCtx.Err())
+			errs = appendCleanupErr(errs, cleanupCtx.Err())
 		}
-		errs = append(errs, manager.FlushAll())
-		errs = append(errs, backendCleanup())
+		errs = appendCleanupErr(errs, manager.FlushAll())
+		errs = appendCleanupErr(errs, backendCleanup())
 		return errors.Join(errs...)
 	}
 	return &benchTarget{
@@ -1021,6 +1092,8 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		db:                   db,
 		collections:          manager,
 		server:               server,
+		nativeServer:         nativeServer,
+		nativeAddr:           listenerAddrString(nativeLn),
 		mongoAddr:            ln.Addr().String(),
 		treedbDir:            dir,
 		removeTreeDBDir:      removeDir,
@@ -1028,6 +1101,23 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		poolStats:            poolStats,
 		cleanup:              cleanup,
 	}, nil
+}
+
+func appendCleanupErr(errs []error, err error) []error {
+	if err == nil {
+		return errs
+	}
+	return append(errs, err)
+}
+
+func ignoreExpectedCloseError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
+		return nil
+	}
+	return err
 }
 
 func closeBenchTarget(ctx context.Context, target *benchTarget) error {
@@ -1051,7 +1141,15 @@ func closeBenchTargetKeepDir(ctx context.Context, target *benchTarget) error {
 	target.db = nil
 	target.collections = nil
 	target.server = nil
+	target.nativeServer = nil
 	return err
+}
+
+func listenerAddrString(ln net.Listener) string {
+	if ln == nil {
+		return ""
+	}
+	return ln.Addr().String()
 }
 
 func resetTreeDBDir(dir string) error {
@@ -1810,7 +1908,7 @@ func directEncodeStoredDocument(raw bson.Raw, format collections.DocumentFormat)
 	case collections.DocumentFormatDefault, collections.DocumentFormatJSON:
 		return bson.MarshalExtJSON(raw, true, false)
 	case collections.DocumentFormatTemplateV1:
-		stored, err := bson.MarshalExtJSON(raw, true, false)
+		stored, err := bson.MarshalExtJSON(raw, false, false)
 		if err != nil {
 			return nil, err
 		}
@@ -2660,6 +2758,20 @@ func createIndexes(ctx context.Context, db *mongo.Database, coll *mongo.Collecti
 	return nil
 }
 
+func treeDBBenchmarkCollectionOptions(cfg config) collections.CollectionOptions {
+	return collections.CollectionOptions{
+		DocumentFormat:                          cfg.TreeDBDocumentFormat,
+		DataRootStoragePolicy:                   cfg.TreeDBDataRootStorage,
+		IndexStateStoragePolicy:                 cfg.TreeDBIndexStateRootStorage,
+		BufferedIndexedWriteMaxDocuments:        cfg.TreeDBBufferedIndexedWriteMaxDocuments,
+		BufferedIndexedWriteMaxBytes:            cfg.TreeDBBufferedIndexedWriteMaxBytes,
+		BufferedIndexedWriteMaxRootRuns:         cfg.TreeDBBufferedIndexedWriteMaxRootRuns,
+		DisableBufferedIndexedAsyncFlush:        cfg.TreeDBDisableBufferedIndexedAsyncFlush,
+		BufferedIndexedAsyncFlush:               cfg.TreeDBBufferedIndexedAsyncFlush,
+		BufferedIndexedAsyncFlushMaxQueuedUnits: cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
+	}
+}
+
 func treedbCreateIndexDocs(secondaryIndexes int, rangeIndex bool) bson.A {
 	indexDocs := make(bson.A, 0, secondaryIndexes+1)
 	if secondaryIndexes >= 1 {
@@ -2721,6 +2833,12 @@ func runLoadPhase(ctx context.Context, cfg config, target *benchTarget, coll *mo
 	}
 	if cfg.Target == "treedb" && (cfg.ClientMode == clientModeRawWireTCP || cfg.ClientMode == clientModeRawWireTCPPipeline) {
 		return runTreeDBRawWireTCPLoadPhase(ctx, cfg, target, prebuilt, prebuiltRaw)
+	}
+	if cfg.Target == "treedb" && cfg.ClientMode == clientModeNativeWireInproc {
+		return runTreeDBNativeWireInprocLoadPhase(ctx, cfg, target, prebuilt, prebuiltRaw)
+	}
+	if cfg.Target == "treedb" && cfg.ClientMode == clientModeNativeWireTCP {
+		return runTreeDBNativeWireTCPLoadPhase(ctx, cfg, target, prebuilt, prebuiltRaw)
 	}
 	if cfg.ClientMode == clientModeDriverCommand {
 		return runDriverCommandLoadPhase(ctx, cfg, target.client.Database(cfg.Database), prebuilt, prebuiltRaw)
@@ -3802,6 +3920,436 @@ func runTreeDBRawWireTCPLoadPhase(ctx context.Context, cfg config, target *bench
 		_, err = clients[producer].InsertManyRawBSON(batchCtx, cfg.Database, cfg.Collection, docs)
 		return err
 	})
+}
+
+func runTreeDBNativeWireInprocLoadPhase(ctx context.Context, cfg config, target *benchTarget, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
+	if target == nil || target.nativeServer == nil {
+		return phaseResult{}, errors.New("native-wire-inproc client mode requires an in-process nativewire server")
+	}
+	if err := ensureNativeWireBenchmarkCollection(cfg, target); err != nil {
+		return phaseResult{}, err
+	}
+	prebuiltNative, err := nativeWirePrebuildStoredDocuments(cfg, prebuilt, prebuiltRaw)
+	if err != nil {
+		return phaseResult{}, err
+	}
+	producers := effectiveLoadProducers(cfg.Documents, cfg.BatchSize, cfg.InsertProducers)
+	clients := make([]*nativewire.Client, producers)
+	cleanups := make([]func() error, producers)
+	for i := range clients {
+		client, cleanup, err := nativewire.NewInProcessClient(ctx, target.nativeServer)
+		if err != nil {
+			for _, existing := range cleanups {
+				if existing != nil {
+					_ = existing()
+				}
+			}
+			return phaseResult{}, err
+		}
+		clients[i] = client
+		cleanups[i] = cleanup
+	}
+	defer func() {
+		for _, cleanup := range cleanups {
+			if cleanup != nil {
+				_ = cleanup()
+			}
+		}
+	}()
+	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
+		ids, docs, err := nativeWireInsertBatch(cfg, start, end, prebuilt, prebuiltRaw, prebuiltNative)
+		if err != nil {
+			return err
+		}
+		return nativeWireInsertBatchWithRetry(batchCtx, clients[producer], cfg.Database+"."+cfg.Collection, cfg.TreeDBDocumentFormat, ids, docs)
+	})
+}
+
+func runTreeDBNativeWireTCPLoadPhase(ctx context.Context, cfg config, target *benchTarget, prebuilt []bson.D, prebuiltRaw []bson.Raw) (phaseResult, error) {
+	if target == nil || target.nativeAddr == "" {
+		return phaseResult{}, errors.New("native-wire-tcp client mode requires a nativewire listener")
+	}
+	if err := ensureNativeWireBenchmarkCollection(cfg, target); err != nil {
+		return phaseResult{}, err
+	}
+	prebuiltNative, err := nativeWirePrebuildStoredDocuments(cfg, prebuilt, prebuiltRaw)
+	if err != nil {
+		return phaseResult{}, err
+	}
+	producers := effectiveLoadProducers(cfg.Documents, cfg.BatchSize, cfg.InsertProducers)
+	clients := make([]*nativewire.Client, producers)
+	for i := range clients {
+		client, err := nativewire.DialContext(ctx, "tcp", target.nativeAddr)
+		if err != nil {
+			for _, existing := range clients {
+				if existing != nil {
+					_ = existing.Close()
+				}
+			}
+			return phaseResult{}, err
+		}
+		clients[i] = client
+	}
+	defer func() {
+		for _, client := range clients {
+			_ = client.Close()
+		}
+	}()
+	return measureLoadPhase(ctx, cfg, func(batchCtx context.Context, producer, start, end int) error {
+		ids, docs, err := nativeWireInsertBatch(cfg, start, end, prebuilt, prebuiltRaw, prebuiltNative)
+		if err != nil {
+			return err
+		}
+		return nativeWireInsertBatchWithRetry(batchCtx, clients[producer], cfg.Database+"."+cfg.Collection, cfg.TreeDBDocumentFormat, ids, docs)
+	})
+}
+
+func ensureNativeWireBenchmarkCollection(cfg config, target *benchTarget) error {
+	if target == nil || target.collections == nil {
+		return errors.New("native-wire client mode requires a TreeDB collection manager")
+	}
+	name := cfg.Database + "." + cfg.Collection
+	expected := nativeWireBenchmarkCollectionMeta(cfg, name)
+	if existing, err := target.collections.OpenCollection(name); err == nil {
+		return validateNativeWireBenchmarkCollection(existing.Meta(), expected)
+	} else if !errors.Is(err, collections.ErrCollectionNotFound) {
+		return err
+	}
+	_, err := target.collections.CreateCollection(&expected)
+	return err
+}
+
+func nativeWireBenchmarkCollectionMeta(cfg config, name string) collections.CollectionMeta {
+	return collections.CollectionMeta{
+		Name:    name,
+		Options: treeDBBenchmarkCollectionOptions(cfg),
+		Indexes: nativeWireBenchmarkIndexes(cfg),
+	}
+}
+
+func nativeWireBenchmarkIndexes(cfg config) []collections.IndexDefinition {
+	indexes := make([]collections.IndexDefinition, 0, benchmarkIndexCapacity(cfg.SecondaryIndexes, cfg.RangeIndex))
+	storage := cfg.TreeDBIndexRootStorage
+	if cfg.SecondaryIndexes >= 1 {
+		indexes = append(indexes, collections.IndexDefinition{
+			Name:          "email_1",
+			Field:         "email",
+			ValueType:     collections.IndexValueString,
+			Unique:        true,
+			StoragePolicy: storage,
+		})
+	}
+	if cfg.SecondaryIndexes >= 2 {
+		indexes = append(indexes, collections.IndexDefinition{
+			Name:          "city_1",
+			Field:         "city",
+			ValueType:     collections.IndexValueString,
+			StoragePolicy: storage,
+		})
+	}
+	if cfg.SecondaryIndexes >= 3 {
+		indexes = append(indexes, collections.IndexDefinition{
+			Name:          "active_1",
+			Field:         "active",
+			ValueType:     collections.IndexValueBool,
+			StoragePolicy: storage,
+		})
+	}
+	if cfg.RangeIndex {
+		indexes = append(indexes, collections.IndexDefinition{
+			Name:          "age_1",
+			Field:         "age",
+			ValueType:     collections.IndexValueInt64,
+			StoragePolicy: storage,
+		})
+	}
+	return indexes
+}
+
+func benchmarkIndexCapacity(secondaryIndexes int, rangeIndex bool) int {
+	if secondaryIndexes < 0 {
+		secondaryIndexes = 0
+	}
+	capacity := secondaryIndexes
+	if rangeIndex {
+		capacity++
+	}
+	return capacity
+}
+
+func validateNativeWireBenchmarkCollection(actual, expected collections.CollectionMeta) error {
+	actual = normalizeNativeWireBenchmarkCollectionMeta(actual)
+	expected = normalizeNativeWireBenchmarkCollectionMeta(expected)
+	if actual.Name != expected.Name {
+		return fmt.Errorf("native-wire benchmark collection name drifted: got %q want %q", actual.Name, expected.Name)
+	}
+	if !equalNativeWireBenchmarkCollectionOptions(actual.Options, expected.Options) {
+		return fmt.Errorf("native-wire benchmark collection %q options drifted: got %+v want %+v", actual.Name, actual.Options, expected.Options)
+	}
+	if len(actual.Indexes) != len(expected.Indexes) {
+		return fmt.Errorf("native-wire benchmark collection %q index count %d want %d", actual.Name, len(actual.Indexes), len(expected.Indexes))
+	}
+	actualByName := make(map[string]collections.IndexDefinition, len(actual.Indexes))
+	for _, index := range actual.Indexes {
+		if _, exists := actualByName[index.Name]; exists {
+			return fmt.Errorf("native-wire benchmark collection %q has duplicate index %q", actual.Name, index.Name)
+		}
+		actualByName[index.Name] = index
+	}
+	for _, expectedIndex := range expected.Indexes {
+		actualIndex, ok := actualByName[expectedIndex.Name]
+		if !ok {
+			return fmt.Errorf("native-wire benchmark collection %q missing index %q", actual.Name, expectedIndex.Name)
+		}
+		if actualIndex != expectedIndex {
+			return fmt.Errorf("native-wire benchmark collection %q index %q drifted: got %+v want %+v", actual.Name, expectedIndex.Name, actualIndex, expectedIndex)
+		}
+	}
+	return nil
+}
+
+func equalNativeWireBenchmarkCollectionOptions(actual, expected collections.CollectionOptions) bool {
+	return actual.DocumentFormat == expected.DocumentFormat &&
+		actual.AllowArrayValuesInIndex == expected.AllowArrayValuesInIndex &&
+		actual.DataRootStoragePolicy == expected.DataRootStoragePolicy &&
+		actual.IndexStateStoragePolicy == expected.IndexStateStoragePolicy &&
+		actual.DisableIndexedWriteMemtables == expected.DisableIndexedWriteMemtables &&
+		actual.BufferedIndexedWrites == expected.BufferedIndexedWrites &&
+		actual.BufferedIndexedWriteMaxDocuments == expected.BufferedIndexedWriteMaxDocuments &&
+		actual.BufferedIndexedWriteMaxBytes == expected.BufferedIndexedWriteMaxBytes &&
+		actual.BufferedIndexedWriteMaxRootRuns == expected.BufferedIndexedWriteMaxRootRuns &&
+		actual.BufferedIndexedAsyncFlush == expected.BufferedIndexedAsyncFlush &&
+		actual.BufferedIndexedOverlayRoots == expected.BufferedIndexedOverlayRoots &&
+		actual.BufferedIndexedAsyncFlushMaxQueuedUnits == expected.BufferedIndexedAsyncFlushMaxQueuedUnits
+}
+
+func nativeWireBenchmarkIndexLess(left, right collections.IndexDefinition) bool {
+	if left.Name != right.Name {
+		return left.Name < right.Name
+	}
+	if left.Field != right.Field {
+		return left.Field < right.Field
+	}
+	if left.ValueType != right.ValueType {
+		return left.ValueType < right.ValueType
+	}
+	if left.Unique != right.Unique {
+		return !left.Unique && right.Unique
+	}
+	if left.MultiKey != right.MultiKey {
+		return !left.MultiKey && right.MultiKey
+	}
+	return left.StoragePolicy < right.StoragePolicy
+}
+
+func normalizeNativeWireBenchmarkCollectionMeta(meta collections.CollectionMeta) collections.CollectionMeta {
+	if meta.Options.DocumentFormat == collections.DocumentFormatJSON {
+		meta.Options.DocumentFormat = collections.DocumentFormatDefault
+	}
+	meta.Indexes = append([]collections.IndexDefinition(nil), meta.Indexes...)
+	sort.SliceStable(meta.Indexes, func(i, j int) bool {
+		return meta.Indexes[i].Name < meta.Indexes[j].Name
+	})
+	if meta.Options.DisableIndexedWriteMemtables {
+		meta.Options.BufferedIndexedWrites = false
+		meta.Options.BufferedIndexedWriteMaxDocuments = 0
+		meta.Options.BufferedIndexedWriteMaxBytes = 0
+		meta.Options.BufferedIndexedWriteMaxRootRuns = 0
+		meta.Options.BufferedIndexedAsyncFlush = false
+		meta.Options.BufferedIndexedOverlayRoots = false
+		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
+		return meta
+	}
+	if len(meta.Indexes) == 0 {
+		meta.Options.BufferedIndexedWrites = false
+		return meta
+	}
+	meta.Options.BufferedIndexedWrites = true
+	defaultMaxDocuments := collections.DefaultIndexedWriteMemtableMaxDocuments
+	defaultMaxRootRuns := collections.DefaultIndexedWriteMemtableMaxRootRuns
+	if meta.Options.BufferedIndexedAsyncFlush {
+		defaultMaxDocuments = collections.DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
+		defaultMaxRootRuns = collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns
+	}
+	useNativeDocumentDefault := meta.Options.BufferedIndexedWriteMaxDocuments == 0
+	if useNativeDocumentDefault {
+		meta.Options.BufferedIndexedWriteMaxDocuments = defaultMaxDocuments
+	}
+	if useNativeDocumentDefault && meta.Options.BufferedIndexedWriteMaxBytes == 0 && meta.Options.BufferedIndexedWriteMaxRootRuns == 0 {
+		meta.Options.BufferedIndexedWriteMaxRootRuns = defaultMaxRootRuns
+	}
+	if meta.Options.BufferedIndexedAsyncFlush && meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits == 0 {
+		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = collections.DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits
+	}
+	return meta
+}
+
+func sameNativeWireBenchmarkOptions(got, want collections.CollectionOptions, indexed bool) bool {
+	return normalizeNativeWireBenchmarkOptions(got, indexed) == normalizeNativeWireBenchmarkOptions(want, indexed)
+}
+
+func normalizeNativeWireBenchmarkOptions(opts collections.CollectionOptions, indexed bool) collections.CollectionOptions {
+	if opts.DocumentFormat == collections.DocumentFormatJSON {
+		opts.DocumentFormat = collections.DocumentFormatDefault
+	}
+	if opts.DisableIndexedWriteMemtables {
+		opts.BufferedIndexedWrites = false
+		opts.BufferedIndexedWriteMaxDocuments = 0
+		opts.BufferedIndexedWriteMaxBytes = 0
+		opts.BufferedIndexedWriteMaxRootRuns = 0
+		opts.BufferedIndexedAsyncFlush = false
+		opts.BufferedIndexedOverlayRoots = false
+		opts.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
+		return opts
+	}
+	if !indexed {
+		opts.BufferedIndexedWrites = false
+		return opts
+	}
+	opts.BufferedIndexedWrites = true
+	defaultMaxDocuments := collections.DefaultIndexedWriteMemtableMaxDocuments
+	defaultMaxRootRuns := collections.DefaultIndexedWriteMemtableMaxRootRuns
+	if opts.BufferedIndexedAsyncFlush {
+		defaultMaxDocuments = collections.DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
+		defaultMaxRootRuns = collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns
+	}
+	useNativeDocumentDefault := opts.BufferedIndexedWriteMaxDocuments == 0
+	if useNativeDocumentDefault {
+		opts.BufferedIndexedWriteMaxDocuments = defaultMaxDocuments
+	}
+	if useNativeDocumentDefault && opts.BufferedIndexedWriteMaxBytes == 0 && opts.BufferedIndexedWriteMaxRootRuns == 0 {
+		opts.BufferedIndexedWriteMaxRootRuns = defaultMaxRootRuns
+	}
+	if opts.BufferedIndexedAsyncFlush && opts.BufferedIndexedAsyncFlushMaxQueuedUnits == 0 {
+		opts.BufferedIndexedAsyncFlushMaxQueuedUnits = collections.DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits
+	}
+	return opts
+}
+
+func nativeWireInsertBatchWithRetry(ctx context.Context, client *nativewire.Client, collection string, format collections.DocumentFormat, ids, docs [][]byte) error {
+	for attempt := 0; ; attempt++ {
+		_, err := client.InsertBatch(ctx, collection, format, ids, docs, nativewire.AckVisible)
+		if err == nil {
+			return nil
+		}
+		if !isNativeWireCatalogMismatch(err) || attempt >= 128 {
+			return err
+		}
+		if delay := time.Duration(attempt+1) * time.Millisecond; delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			}
+		}
+	}
+}
+
+func isNativeWireCatalogMismatch(err error) bool {
+	return nativewire.IsCatalogVersionMismatch(err)
+}
+
+func nativeWirePrebuildStoredDocuments(cfg config, prebuilt []bson.D, prebuiltRaw []bson.Raw) ([][]byte, error) {
+	if !cfg.PrebuildDocuments {
+		return nil, nil
+	}
+	out := make([][]byte, cfg.Documents)
+	for i := range out {
+		doc, err := nativeWireStoredDocument(cfg.TreeDBDocumentFormat, i, prebuilt, prebuiltRaw, nil)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = doc
+	}
+	return out, nil
+}
+
+func nativeWireInsertBatch(cfg config, start, end int, prebuilt []bson.D, prebuiltRaw []bson.Raw, prebuiltNative [][]byte) ([][]byte, [][]byte, error) {
+	ids := make([][]byte, end-start)
+	docs := make([][]byte, end-start)
+	for i := start; i < end; i++ {
+		ids[i-start] = nativeWireMongoPrimaryID(i)
+		doc, err := nativeWireStoredDocument(cfg.TreeDBDocumentFormat, i, prebuilt, prebuiltRaw, prebuiltNative)
+		if err != nil {
+			return nil, nil, err
+		}
+		docs[i-start] = doc
+	}
+	return ids, docs, nil
+}
+
+const nativeWireMongoPrimaryIDPathDepth = 1
+
+func nativeWireMongoPrimaryID(i int) []byte {
+	id := benchmarkID(i)
+	key := make([]byte, 0, 2+4+len(id)+1)
+	// Match the Mongo gateway primary-key layout: one path component for `_id`,
+	// then the BSON scalar type and BSON string payload for the benchmark ID.
+	key = append(key, nativeWireMongoPrimaryIDPathDepth, byte(bson.TypeString))
+	return bsoncore.AppendString(key, id)
+}
+
+func nativeWireStoredDocument(format collections.DocumentFormat, i int, prebuilt []bson.D, prebuiltRaw []bson.Raw, prebuiltNative [][]byte) ([]byte, error) {
+	if prebuiltNative != nil {
+		return prebuiltNative[i], nil
+	}
+	switch format {
+	case collections.DocumentFormatBSON:
+		raw, err := benchmarkBSONRaw(i, prebuilt, prebuiltRaw)
+		if err != nil {
+			return nil, err
+		}
+		return raw, nil
+	case collections.DocumentFormatDefault, collections.DocumentFormatJSON:
+		return nativeWireBenchmarkJSONDocument(i, prebuilt)
+	case collections.DocumentFormatTemplateV1:
+		raw, err := nativeWireBenchmarkJSONDocument(i, prebuilt)
+		if err != nil {
+			return nil, err
+		}
+		return collections.EncodeTemplateV1DocumentJSON(raw)
+	default:
+		return nativeWireBenchmarkJSONDocument(i, prebuilt)
+	}
+}
+
+func benchmarkBSONRaw(i int, prebuilt []bson.D, prebuiltRaw []bson.Raw) (bson.Raw, error) {
+	if prebuiltRaw != nil {
+		return prebuiltRaw[i], nil
+	}
+	var doc bson.D
+	if prebuilt != nil {
+		doc = prebuilt[i]
+	} else {
+		doc = benchmarkDocument(i)
+	}
+	raw, err := bson.Marshal(doc)
+	if err != nil {
+		return nil, err
+	}
+	return bson.Raw(raw), nil
+}
+
+func nativeWireBenchmarkJSONDocument(i int, prebuilt []bson.D) ([]byte, error) {
+	if prebuilt != nil {
+		return bson.MarshalExtJSON(prebuilt[i], false, false)
+	}
+	city := benchmarkCity(i)
+	return []byte(fmt.Sprintf(
+		`{"_id":%q,"email":%q,"city":%q,"age":%d,"active":%t,"score":%.1f,"tags":[%q,%q],"profile":{"rank":%d,"bio":%q}}`,
+		benchmarkID(i),
+		benchmarkEmail(i),
+		city,
+		int64(18+(i%67)),
+		i%2 == 0,
+		float64(i%1000)/10.0,
+		city,
+		fmt.Sprintf("bucket-%02d", i%32),
+		int32(i%1000),
+		strings.Repeat("x", 96),
+	)), nil
 }
 
 func rawWireDocuments(start, end int, prebuilt []bson.D, prebuiltRaw []bson.Raw) ([]wire.Document, error) {

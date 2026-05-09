@@ -94,15 +94,21 @@ type ValueLogGCStats struct {
 //   - not the currently-active segment per lane,
 //   - and not pinned by active snapshots.
 func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogGCStats, error) {
+	return db.valueLogGC(ctx, opts, true)
+}
+
+func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMaintenance bool) (ValueLogGCStats, error) {
 	var stats ValueLogGCStats
 	if db == nil {
 		return stats, fmt.Errorf("missing db")
 	}
-	if db.readOnly {
+	if db.readOnly && !opts.DryRun {
 		return stats, ErrReadOnly
 	}
-	db.maintenanceMu.Lock()
-	defer db.maintenanceMu.Unlock()
+	if lockMaintenance {
+		db.maintenanceMu.Lock()
+		defer db.maintenanceMu.Unlock()
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -139,7 +145,9 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		if set != nil {
 			_ = vm.Release(set)
 		}
-		db.persistValueLogRefTrackerBestEffort()
+		if !opts.DryRun && !db.readOnly {
+			db.persistValueLogRefTrackerBestEffort()
+		}
 		return stats, nil
 	}
 	valueSet := &valuelog.Set{Files: files}
@@ -379,7 +387,6 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		if set != nil {
 			_ = vm.Release(set)
 		}
-		db.persistValueLogRefTrackerBestEffort()
 		return stats, nil
 	}
 
@@ -433,7 +440,9 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		}
 	}
 
-	db.persistValueLogRefTrackerBestEffort()
+	if !opts.DryRun && !db.readOnly {
+		db.persistValueLogRefTrackerBestEffort()
+	}
 	return stats, nil
 }
 
@@ -564,6 +573,11 @@ func recentValueLogIDsForProtectedPaths(set *valuelog.Set, keepPerLane int, prot
 func fileSize(f *valuelog.File) int64 {
 	if f == nil {
 		return 0
+	}
+	if f.Path != "" {
+		if info, err := os.Stat(f.Path); err == nil {
+			return info.Size()
+		}
 	}
 	return f.SizeBestEffort()
 }

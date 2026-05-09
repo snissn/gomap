@@ -17,6 +17,11 @@ TreeDB is pre-alpha.
 
 When behavior or format changes, update this spec and the test matrix in `TreeDB/docs/spec/verification.md` in the same change.
 
+When native-wire protocol IDs, command schemas, feature gates, or deterministic
+entry formats change, update the native-wire spec, implementation guidelines,
+roadmap, schema registry or drift tests, golden fixtures, and verification matrix
+in the same change.
+
 ## Scope
 
 This spec covers the public `treedb` engine and its backend/index implementation:
@@ -94,6 +99,26 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 - `TreeDB/docs/spec/collections-native-fastpath-baseline-2026-04-25.md`
   - refreshed pre-`R0` baseline note for issue `#768`, including exact
     main/oracle SHAs, artifact dirs, commands, and benchmark baselines.
+- `TreeDB/docs/spec/native-wire-protocol.md`
+  - draft native binary network protocol for TreeDB collections, including
+    framing, command payloads, explicit ack/consistency policies, and the
+    boundary between wire requests and future deterministic Raft command
+    entries.
+- `TreeDB/docs/spec/native-wire-implementation-guidelines.md`
+  - implementation playbook for keeping codecs, schema IDs, validation,
+    conformance tests, benchmarks, and future Raft entry handling aligned with
+    the native wire protocol.
+- `TreeDB/docs/spec/native-query-raft-roadmap.md`
+  - draft query feature roadmap and distributed/Raft sequencing policy for the
+    native protocol.
+- `TreeDB/docs/spec/native-wire-r1-closeout.md`
+  - R1 single-node native server performance closeout, including direct vs
+    native microbenchmarks, workload profile commands, artifacts, findings, and
+    deferred optimization targets.
+- `TreeDB/docs/spec/native-wire-r2-closeout.md`
+  - R2 deterministic command-entry closeout, including replicated-command
+    fixtures, canonical validation, digest stability, benchmarks, and deferred
+    Raft apply work.
 
 ## Relationship to Existing Docs
 
