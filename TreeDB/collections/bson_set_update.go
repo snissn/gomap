@@ -25,6 +25,10 @@ type bsonSetUpdate struct {
 
 var errBSONSetRequiresBSONFormat = errors.New("collections: BSON $set update requires BSON document format")
 
+// bsonSetReplacementSlackBytes covers the BSON document header/trailer and
+// small field growth so most changed documents append without a second grow.
+const bsonSetReplacementSlackBytes = 64
+
 // UpdateBSONSet applies a structured top-level BSON $set update to one
 // document. The collection must use DocumentFormatBSON. Missing documents
 // return matched=false. If all assigned values already match the stored
@@ -201,8 +205,8 @@ func (u bsonSetUpdate) appendReplacement(dst, current []byte) (returned []byte, 
 	var idx int32
 	initOut := func(elemStart int) {
 		changed = true
-		if cap(dst)-len(dst) < len(current)+64 {
-			grown := make([]byte, len(dst), len(dst)+len(current)+64)
+		if cap(dst)-len(dst) < len(current)+bsonSetReplacementSlackBytes {
+			grown := make([]byte, len(dst), len(dst)+len(current)+bsonSetReplacementSlackBytes)
 			copy(grown, dst)
 			out = grown
 		} else {

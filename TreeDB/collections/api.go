@@ -8670,7 +8670,7 @@ const (
 	updateBatchPlanScratchDocumentBytes           = 256
 	updateBatchPlanScratchMaxInitialDocumentArena = 4 << 20
 	updateBatchPlanScratchMaxDocumentArena        = 8 << 20
-	updateBatchPlanScratchMaxBSONSetDocument      = updateBatchPlanScratchMaxDocumentArena
+	updateBatchPlanScratchMaxBSONSetDocument      = 2 << 20
 	updateBatchPlanScratchMaxRootNameCap          = 64
 	updateBatchPlanScratchMaxStateArenaCap        = 4 << 20
 	updateBatchPlanScratchMaxStateSliceCap        = 1 << 16
