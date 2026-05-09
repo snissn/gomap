@@ -10851,7 +10851,7 @@ func TestSnapshotUpdateBatchBufferedReadCachesEmptyPrimaryRunIndex(t *testing.T)
 		},
 	}
 
-	read, _, blocked, err := snapshotUpdateBatchBufferedRead(domain, meta, 7, []updateBatchItem{{
+	read, _, blocked, staleSnapshot, err := snapshotUpdateBatchBufferedRead(domain, meta, 1, 7, []updateBatchItem{{
 		UpdateBatchItem: UpdateBatchItem{DocumentID: []byte("missing")},
 	}}, DocumentFormatJSON)
 	if err != nil {
@@ -10861,6 +10861,9 @@ func TestSnapshotUpdateBatchBufferedReadCachesEmptyPrimaryRunIndex(t *testing.T)
 	if blocked {
 		t.Fatal("buffered read reported blocked")
 	}
+	if staleSnapshot {
+		t.Fatal("buffered read reported stale snapshot")
+	}
 	if !read.enabled {
 		t.Fatal("buffered read was not enabled")
 	}
@@ -10869,6 +10872,34 @@ func TestSnapshotUpdateBatchBufferedReadCachesEmptyPrimaryRunIndex(t *testing.T)
 	domain.mu.RUnlock()
 	if !built {
 		t.Fatal("empty primary run index was not cached")
+	}
+}
+
+func TestSnapshotUpdateBatchBufferedReadDetectsStalePublishedDomain(t *testing.T) {
+	meta := CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}
+	domain := &collectionWriteDomain{
+		loaded:         true,
+		meta:           meta,
+		catalog:        &collectionCatalog{meta: meta},
+		baseCommitSeq:  8,
+		baseSystemRoot: 9,
+	}
+
+	read, _, blocked, staleSnapshot, err := snapshotUpdateBatchBufferedRead(domain, meta, 7, 7, []updateBatchItem{{
+		UpdateBatchItem: UpdateBatchItem{DocumentID: []byte("u1")},
+	}}, DocumentFormatJSON)
+	if err != nil {
+		t.Fatalf("snapshotUpdateBatchBufferedRead: %v", err)
+	}
+	defer putUpdateBatchBufferedEntries(read.primaryEntries, read.primaryBuffer)
+	if read.enabled || blocked || !staleSnapshot {
+		t.Fatalf("enabled=%v blocked=%v stale=%v want false/false/true", read.enabled, blocked, staleSnapshot)
 	}
 }
 
@@ -10912,13 +10943,13 @@ func TestSnapshotUpdateBatchBufferedReadPrimaryRunIndexAvoidsCollectingPendingRu
 	items := []updateBatchItem{{UpdateBatchItem: UpdateBatchItem{DocumentID: []byte("u1")}}}
 	assertRead := func() {
 		t.Helper()
-		read, _, blocked, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, 7, items, DocumentFormatJSON, false)
+		read, _, blocked, staleSnapshot, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, 1, 7, items, DocumentFormatJSON, false)
 		if err != nil {
 			t.Fatalf("snapshotUpdateBatchBufferedReadLocked: %v", err)
 		}
 		defer putUpdateBatchBufferedEntries(read.primaryEntries, read.primaryBuffer)
-		if blocked || needPrimaryRunIndex || !read.enabled {
-			t.Fatalf("read enabled=%v blocked=%v needPrimaryRunIndex=%v", read.enabled, blocked, needPrimaryRunIndex)
+		if blocked || staleSnapshot || needPrimaryRunIndex || !read.enabled {
+			t.Fatalf("read enabled=%v blocked=%v stale=%v needPrimaryRunIndex=%v", read.enabled, blocked, staleSnapshot, needPrimaryRunIndex)
 		}
 		if len(read.primaryEntries) != 1 || !read.primaryEntries[0].found || !bytes.Equal(read.primaryEntries[0].value, []byte(`{"city":"paris"}`)) {
 			t.Fatalf("primary entries=%+v want buffered u1 document", read.primaryEntries)
@@ -11219,12 +11250,12 @@ func BenchmarkSnapshotUpdateBatchBufferedReadPrimaryRunIndexPendingUnits(b *test
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		read, _, blocked, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, 7, items, DocumentFormatJSON, false)
+		read, _, blocked, staleSnapshot, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, 1, 7, items, DocumentFormatJSON, false)
 		if err != nil {
 			b.Fatalf("snapshotUpdateBatchBufferedReadLocked: %v", err)
 		}
-		if blocked || needPrimaryRunIndex || !read.enabled || len(read.primaryEntries) != 1 || !read.primaryEntries[0].found {
-			b.Fatalf("unexpected read enabled=%v entries=%d blocked=%v needPrimaryRunIndex=%v", read.enabled, len(read.primaryEntries), blocked, needPrimaryRunIndex)
+		if blocked || staleSnapshot || needPrimaryRunIndex || !read.enabled || len(read.primaryEntries) != 1 || !read.primaryEntries[0].found {
+			b.Fatalf("unexpected read enabled=%v entries=%d blocked=%v stale=%v needPrimaryRunIndex=%v", read.enabled, len(read.primaryEntries), blocked, staleSnapshot, needPrimaryRunIndex)
 		}
 		putUpdateBatchBufferedEntries(read.primaryEntries, read.primaryBuffer)
 	}
