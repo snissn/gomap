@@ -63,6 +63,8 @@ Conservative Template-v1 remaining-fields compaction detail: before compact `229
 
 Raw TreeDB key/value JSON detail: before compact `226266965` bytes across `13` files; after compact plus value-log rewrite `268058973` bytes across `17` files; compaction wall time `0.362s`; rewrite wall time `2.304s`; rewritten records `1000000`; rewritten value bytes `479778277`; rewritten source bytes `201775473`; raw JSON payload bytes before TreeDB storage `479778277`.
 
+Raw TreeDB key/value JSON uses the public cached key/value write path. In the inspected run, value-log rewrite produced a dictionary-compressed rewrite segment, but the original ingest value-log segments remained classified as active and therefore stayed in the measured directory footprint. Treat this row as a cached raw-key/value retention fixture, not as the lower bound for compressed raw JSON bytes.
+
 The table below is one-column-at-a-time storage for the experimental granule codecs. It picks the smallest stored byte count observed for each derived `int64` column across raw, delta-varint, snappy, and lz4 combinations.
 
 | Column | Best codec | Stored bytes | Ratio vs int64 values | Ratio vs ClickHouse total |
