@@ -10085,6 +10085,84 @@ func TestCollectionUpdateBatchPublishesWhenSecondaryUniqueChanges(t *testing.T) 
 	}
 }
 
+func TestCollectionUpdateBatchWithPendingIndexedRunsCallsCallbackOnce(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatBSON,
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			mustBSONCollectionDocument(t, bson.D{
+				{Key: "_id", Value: "u1"},
+				{Key: "email", Value: "a@example.com"},
+				{Key: "city", Value: "hnl"},
+			}),
+			mustBSONCollectionDocument(t, bson.D{
+				{Key: "_id", Value: "u2"},
+				{Key: "email", Value: "b@example.com"},
+				{Key: "city", Value: "hnl"},
+			}),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+	if _, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u2"),
+		Update:     setBSONField("city", "sea"),
+	}}); err != nil {
+		t.Fatalf("buffered setup UpdateBatch: %v", err)
+	}
+
+	callbackCalls := 0
+	results, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			callbackCalls++
+			return setBSONField("email", "c@example.com")(current)
+		},
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBatch with pending indexed runs: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("results=%+v want one modified row", results)
+	}
+	if callbackCalls != 1 {
+		t.Fatalf("callback calls=%d want 1", callbackCalls)
+	}
+	ids, err := col.FindByIndex("email", "c@example.com")
+	if err != nil {
+		t.Fatalf("find updated email: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("updated email ids=%q want [u1]", ids)
+	}
+}
+
 func TestCollectionUpdateBSONSetReusesUnchangedIndexState(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
