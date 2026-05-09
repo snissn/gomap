@@ -213,6 +213,33 @@ func TestFreezeSortRunTableStaleReleaseDoesNotAffectReusedOwner(t *testing.T) {
 	current.Release()
 }
 
+func TestFreezeSortRunTableFrozenIteratorPinsTableUntilClose(t *testing.T) {
+	resetFreezeSortRunTablePoolForTest(t)
+
+	handle := newFreezeSortRunTable().(freezeSortRunTableHandle)
+	handle.Set([]byte("a"), []byte("value-a"))
+	handle.Freeze()
+
+	it := handle.NewIterator(nil, nil)
+	if handle.table.mu.TryLock() {
+		handle.table.mu.Unlock()
+		_ = it.Close()
+		t.Fatal("frozen iterator did not pin the table read lock")
+	}
+	if !it.Valid() || !bytes.Equal(it.UnsafeKey(), []byte("a")) {
+		_ = it.Close()
+		t.Fatalf("iterator key=%q valid=%v, want a/true", it.UnsafeKey(), it.Valid())
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("close iterator: %v", err)
+	}
+	if !handle.table.mu.TryLock() {
+		t.Fatal("frozen iterator did not release table read lock on Close")
+	}
+	handle.table.mu.Unlock()
+	handle.Release()
+}
+
 func TestFreezeSortRunTablePanicsOnStaleMutationAfterReuse(t *testing.T) {
 	resetFreezeSortRunTablePoolForTest(t)
 
