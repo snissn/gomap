@@ -1043,6 +1043,15 @@ func TestParseConfigRejectsConflictingTreeDBBufferedIndexedAsyncFlags(t *testing
 	}
 }
 
+func TestParseConfigRejectsDisabledTreeDBBufferedIndexedAsyncQueueLimit(t *testing.T) {
+	if _, err := parseConfig([]string{
+		"-treedb-disable-buffered-indexed-async-flush",
+		"-treedb-buffered-indexed-async-flush-max-queued-units", "2",
+	}); err == nil {
+		t.Fatal("parse disabled async queue limit succeeded")
+	}
+}
+
 func TestParseConfigAcceptsTreeDBBSONDocumentFormat(t *testing.T) {
 	cfg, err := parseConfig([]string{"-treedb-document-format", "bson"})
 	if err != nil {

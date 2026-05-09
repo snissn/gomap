@@ -282,15 +282,34 @@ func TestRunFixtureReportsBufferedIndexedWritesOnlyWhenIndexesUseThem(t *testing
 }
 
 func TestParseConfigRejectsConflictingBufferedIndexedAsyncFlags(t *testing.T) {
-	_, err := parseConfig([]string{
+	cfg, err := parseConfig([]string{
 		"-buffered-indexed-async-flush",
 		"-disable-buffered-indexed-async-flush",
 	}, io.Discard)
 	if err == nil {
 		t.Fatal("parse conflicting async flags succeeded")
 	}
+	if cfg != (config{}) {
+		t.Fatalf("conflicting async flags returned cfg=%+v want zero config", cfg)
+	}
 	if !strings.Contains(err.Error(), "cannot set both") {
 		t.Fatalf("err=%q want conflicting async flag error", err)
+	}
+}
+
+func TestParseConfigRejectsDisabledBufferedIndexedAsyncQueueLimit(t *testing.T) {
+	cfg, err := parseConfig([]string{
+		"-disable-buffered-indexed-async-flush",
+		"-buffered-indexed-async-flush-max-queued-units", "2",
+	}, io.Discard)
+	if err == nil {
+		t.Fatal("parse disabled async queue limit succeeded")
+	}
+	if cfg != (config{}) {
+		t.Fatalf("disabled async queue limit returned cfg=%+v want zero config", cfg)
+	}
+	if !strings.Contains(err.Error(), "max-queued-units") {
+		t.Fatalf("err=%q want max queued units error", err)
 	}
 }
 
