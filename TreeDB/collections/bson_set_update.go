@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"math/bits"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -376,29 +375,14 @@ func orderedIndexStateForKnownValidDocumentRuntimeMask(document []byte, runtimes
 		return orderedIndexStateForDocumentWithArena(document, runtimes, opts, encoder)
 	}
 	state := encoder.appendState(len(runtimes))
-	var inline [8]indexRuntime
-	subset := inline[:0]
-	count := bits.OnesCount64(mask)
-	if count > len(inline) {
-		subset = make([]indexRuntime, 0, count)
-	}
+	raw := bson.Raw(document)
 	for runtimeIdx, runtime := range runtimes {
 		if mask&(uint64(1)<<uint(runtimeIdx)) == 0 {
 			continue
 		}
-		subset = append(subset, runtime)
-	}
-	subsetState, err := orderedIndexStateForDocumentWithArena(document, subset, opts, encoder)
-	if err != nil {
-		return nil, err
-	}
-	subsetOffset := 0
-	for runtimeIdx := range runtimes {
-		if mask&(uint64(1)<<uint(runtimeIdx)) == 0 {
-			continue
+		if err := appendBSONIndexRuntimeState(raw, state, runtimeIdx, runtime, opts, encoder); err != nil {
+			return nil, err
 		}
-		state[runtimeIdx] = subsetState.valuesAt(subsetOffset)
-		subsetOffset++
 	}
 	return state, nil
 }
