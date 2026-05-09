@@ -898,15 +898,16 @@ type collectionWriteDomain struct {
 	primaryIDIndex         *bufferedUniqueValueIndex
 	// Built lazily by readers so write-only indexed buffering does not pay for
 	// an auxiliary lookup structure it never uses.
-	primaryRunIndex  *bufferedPrimaryRunIndex
-	uniqueValueRuns  map[string][]memtable.Table
-	uniqueValueIndex map[string]*bufferedUniqueValueIndex
-	count            int
-	bufferedBytes    int64
-	mutableCount     int
-	mutableBytes     int64
-	rootRunCount     int
-	writeGeneration  uint64
+	primaryRunIndex    *bufferedPrimaryRunIndex
+	uniqueValueRuns    map[string][]memtable.Table
+	uniqueValueIndex   map[string]*bufferedUniqueValueIndex
+	count              int
+	bufferedBytes      int64
+	mutableCount       int
+	mutableBytes       int64
+	rootRunCount       int
+	writeGeneration    uint64
+	indexedDeletesOnly bool
 
 	mutationLockCalls                  atomic.Uint64
 	mutationLockWaitTotalNs            atomic.Uint64
@@ -3321,6 +3322,7 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	domain.primaryRoot = rootIDs[0]
 	domain.table = newCollectionRunTable(0)
 	domain.count = 0
+	domain.indexedDeletesOnly = false
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
 	c.meta = meta
@@ -3331,6 +3333,14 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 
 func (c *Collection) shouldBufferIndexedInserts(meta CollectionMeta) bool {
 	return c != nil && c.writeDomain != nil && meta.Options.BufferedIndexedWrites && len(meta.Indexes) > 0
+}
+
+func (c *Collection) shouldBufferIndexedDeletes(meta CollectionMeta) bool {
+	return c != nil &&
+		c.writeDomain != nil &&
+		meta.Options.BufferedIndexedWrites &&
+		len(meta.Indexes) > 0 &&
+		!collectionMetaHasSecondaryUniqueIndex(meta)
 }
 
 func (c *Collection) shouldBufferIndexedInsertBatch(meta CollectionMeta, documentCount int) bool {
@@ -3481,6 +3491,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedBytes)
 	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, len(plan.resultIDs))
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedBytes)
+	domain.indexedDeletesOnly = false
 	domain.writeGeneration++
 	domain.observeIndexedStage(len(plan.resultIDs), stagedBytes, stagedRootRuns)
 	c.meta = catalog.meta
@@ -3519,6 +3530,7 @@ func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWr
 	domain.rootBaseIDs = nil
 	domain.rootValueArenas = nil
 	domain.rootRunCount = 0
+	domain.indexedDeletesOnly = false
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
 	domain.primaryIDIndex = nil
@@ -5735,6 +5747,7 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 		domain.rootMutableRuns = nil
 		domain.rootValueArenas = nil
 		domain.count = 0
+		domain.indexedDeletesOnly = false
 		domain.bufferedBytes = 0
 		domain.mutableCount = 0
 		domain.mutableBytes = 0
@@ -6205,6 +6218,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		domain.rootMutableRuns = nil
 		domain.rootValueArenas = nil
 		domain.count = 0
+		domain.indexedDeletesOnly = false
 		domain.bufferedBytes = 0
 		domain.mutableCount = 0
 		domain.mutableBytes = 0
@@ -6315,6 +6329,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	domain.uniqueValueRuns = nil
 	domain.uniqueValueIndex = nil
 	domain.count = 0
+	domain.indexedDeletesOnly = false
 	domain.bufferedBytes = 0
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
@@ -6353,6 +6368,7 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 	domain.uniqueValueRuns = nil
 	domain.rootValueArenas = nil
 	domain.rootRunCount = 0
+	domain.indexedDeletesOnly = false
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
 	return true
@@ -7331,8 +7347,10 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
-	if err := c.flushBufferedWrites(); err != nil {
-		return false, err
+	if !c.shouldBufferIndexedDeletes(c.meta) || !c.writeDomain.indexedDeletesOnly {
+		if err := c.flushBufferedWrites(); err != nil {
+			return false, err
+		}
 	}
 
 	var lastErr error
@@ -7388,8 +7406,10 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
-	if err := c.flushBufferedWrites(); err != nil {
-		return 0, err
+	if !c.shouldBufferIndexedDeletes(c.meta) || !c.writeDomain.indexedDeletesOnly {
+		if err := c.flushBufferedWrites(); err != nil {
+			return 0, err
+		}
 	}
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
@@ -7534,6 +7554,14 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte) (int, error) {
 		}
 	}
 
+	if buffered, err := c.bufferIndexedDeleteTablesLocked(catalog, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, policies, deltaTables, len(existing)); buffered || err != nil {
+		_ = snap.Close()
+		if err != nil {
+			resetCollectionTables(deltaTables)
+		}
+		return len(existing), err
+	}
+
 	defer func() { _ = snap.Close() }()
 	defer func() { resetCollectionTables(deltaTables) }()
 	ordered, cleanupDeltas, err := buildRootDeltaBatchPublishInputsFromTables(c.meta.Name, rootNames, deltaTables, baseRootIDs, policies)
@@ -7667,6 +7695,13 @@ func (c *Collection) deleteDocumentOnce(documentID []byte) (bool, error) {
 	}
 	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
 	// base roots before stale-root validation rejects concurrent modifications.
+	if buffered, err := c.bufferIndexedDeleteTablesLocked(catalog, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, policies, deltaTables, 1); buffered || err != nil {
+		_ = snap.Close()
+		if err != nil {
+			resetCollectionTables(deltaTables)
+		}
+		return buffered, err
+	}
 	defer func() { _ = snap.Close() }()
 
 	defer func() {
@@ -11222,6 +11257,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, direct.stagedBytes)
 	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, modifiedCount)
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, direct.stagedBytes)
+	domain.indexedDeletesOnly = false
 	domain.writeGeneration++
 	if rollbackOnError {
 		rollbackGeneration = domain.writeGeneration
@@ -11484,6 +11520,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedBytes)
 	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, modifiedCount)
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedBytes)
+	domain.indexedDeletesOnly = false
 	domain.writeGeneration++
 	if rollbackOnError {
 		rollbackGeneration = domain.writeGeneration
@@ -11874,6 +11911,7 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 	domain.rootBaseIDs = nil
 	domain.rootValueArenas = nil
 	domain.rootRunCount = 0
+	domain.indexedDeletesOnly = false
 	domain.primaryIDIndex = nil
 	domain.primaryRunIndex = nil
 	domain.uniqueValueRuns = nil
@@ -12126,6 +12164,102 @@ func buildDeleteRootDeltaTable(deleteKeys [][]byte) memtable.Table {
 	}
 	table.Freeze()
 	return table
+}
+
+func (c *Collection) bufferIndexedDeleteTablesLocked(
+	catalog *collectionCatalog,
+	baseCommitSeq uint64,
+	baseSystemRoot uint64,
+	rootNames []string,
+	baseRootIDs map[string]uint64,
+	policies []backenddb.OrderedRootStoragePolicy,
+	deltaTables []memtable.Table,
+	deleted int,
+) (bool, error) {
+	if c == nil || c.writeDomain == nil || catalog == nil || deleted == 0 || len(deltaTables) == 0 {
+		return false, nil
+	}
+	meta := catalog.meta
+	if !c.shouldBufferIndexedDeletes(meta) {
+		return false, nil
+	}
+	if len(rootNames) != len(deltaTables) || len(rootNames) != len(policies) {
+		return false, fmt.Errorf("collections: DeleteBatch collection %q invalid plan lengths roots=%d deltas=%d policies=%d", meta.Name, len(rootNames), len(deltaTables), len(policies))
+	}
+	domain := c.writeDomain
+	domain.mu.Lock()
+	defer domain.mu.Unlock()
+	if domain.count != 0 && !domain.indexedDeletesOnly {
+		return false, nil
+	}
+	if err := c.validateRootDescriptorSystemDeltaForMeta(meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs); err != nil {
+		return false, err
+	}
+	if domain.count == 0 {
+		c.initializeWriteDomainFromCatalogLocked(domain, catalog, baseCommitSeq, baseSystemRoot)
+	}
+	if domain.rootPolicies == nil {
+		domain.rootPolicies = make(map[string]backenddb.OrderedRootStoragePolicy, len(rootNames))
+	}
+	if domain.rootBaseIDs == nil {
+		domain.rootBaseIDs = make(map[string]uint64, len(rootNames))
+	}
+	if domain.rootRuns == nil {
+		domain.rootRuns = make(map[string][]memtable.Table, len(rootNames))
+	}
+	freezeMutableIndexedRunMapsLocked(domain)
+	var stagedBytes int64
+	stagedRootRuns := 0
+	for i, rootName := range rootNames {
+		table := deltaTables[i]
+		if table == nil || table.Len() == 0 {
+			continue
+		}
+		baseRoot := baseRootIDs[rootName]
+		if pendingBaseRoot, ok := pendingIndexedRootBaseIDLocked(domain, rootName); ok && pendingBaseRoot != baseRoot {
+			return false, errBufferedRootBaseMismatch(meta.Name, rootName)
+		}
+		if _, ok := domain.rootBaseIDs[rootName]; !ok {
+			domain.rootBaseIDs[rootName] = baseRoot
+		}
+		domain.rootPolicies[rootName] = policies[i]
+		domain.rootRuns[rootName] = append(domain.rootRuns[rootName], table)
+		domain.rootRunCount = saturatingAddNonNegativeInt(domain.rootRunCount, 1)
+		stagedRootRuns++
+		stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, table.Size())
+		deltaTables[i] = nil
+	}
+	if stagedRootRuns == 0 {
+		return false, nil
+	}
+	domain.loaded = true
+	domain.meta = meta
+	domain.catalog = catalog
+	domain.baseCommitSeq = baseCommitSeq
+	domain.baseSystemRoot = baseSystemRoot
+	domain.primaryRoot = catalog.rootID(collectionPrimaryRootName(meta.Name))
+	domain.count += deleted
+	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedBytes)
+	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, deleted)
+	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedBytes)
+	domain.indexedDeletesOnly = true
+	domain.writeGeneration++
+	domain.observeIndexedStage(deleted, stagedBytes, stagedRootRuns)
+	c.meta = meta
+	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, meta.Options)
+	if err != nil {
+		return false, err
+	}
+	if shouldFlushBufferedIndexedWrites(domain, meta.Options) {
+		flushElapsed, _, _, err := c.flushBufferedIndexedAfterThresholdLocked(domain, meta.Options)
+		_ = flushElapsed
+		if err != nil {
+			resetCollectionTables(compactedObsolete)
+			return false, err
+		}
+	}
+	resetCollectionTables(compactedObsolete)
+	return true, nil
 }
 
 func buildCreateIndexBackfillPlan(

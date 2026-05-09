@@ -7386,6 +7386,82 @@ func TestCollectionSingleInsertBufferedNoIndexRejectsBufferedDuplicate(t *testin
 	}
 }
 
+func TestCollectionIndexedDeleteBuffersNonUniqueTombstones(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	writer, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	reader, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	if _, err := writer.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"city":"hnl"}`),
+			[]byte(`{"city":"hnl"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush inserts: %v", err)
+	}
+
+	deleted, err := writer.DeleteDocument([]byte("u1"))
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if !deleted {
+		t.Fatal("delete reported missing document")
+	}
+	if writer.writeDomain == nil {
+		t.Fatal("missing write domain")
+	}
+	if writer.writeDomain.count != 1 || !writer.writeDomain.indexedDeletesOnly {
+		t.Fatalf("write domain delete state count=%d deleteOnly=%v", writer.writeDomain.count, writer.writeDomain.indexedDeletesOnly)
+	}
+	got, err := reader.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("reader get pending deleted document: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("reader saw pending deleted document %q", got)
+	}
+	ids, err := reader.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find by city: %v", err)
+	}
+	if !reflect.DeepEqual(ids, [][]byte{[]byte("u2")}) {
+		t.Fatalf("city ids=%q want [u2]", ids)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush delete: %v", err)
+	}
+	got, err = reader.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("reader get flushed deleted document: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("reader saw flushed deleted document %q", got)
+	}
+}
+
 func TestCollectionSingleInsertBufferedNoIndexRejectsConcurrentSchemaChange(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
