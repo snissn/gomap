@@ -686,7 +686,7 @@ func parseConfig(args []string) (config, error) {
 	cfg.TreeDBReadState = readState
 	if cfg.Target == "treedb" && cfg.ClientMode == clientModeDirect &&
 		cfg.TreeDBReadState == treeDBReadStateUnsettled && !cfg.RangeIndex &&
-		(cfg.RangeReads > 0 || cfg.ConcurrentRangeReads > 0) {
+		(cfg.RangeReads > 0 || cfg.ConcurrentRangeReads > 0 || concurrentRangeReadKindEnabled(cfg)) {
 		return config{}, errors.New("direct scan range reads require -treedb-read-state settled; use -range-index for unsettled direct range reads")
 	}
 	if cfg.SecondaryIndexes < 0 || cfg.SecondaryIndexes > 3 {
@@ -2853,6 +2853,10 @@ func concurrentReadKindsIncludeRange(kinds []string) bool {
 		}
 	}
 	return false
+}
+
+func concurrentRangeReadKindEnabled(cfg config) bool {
+	return concurrentReadKindsIncludeRange(cfg.ConcurrentReadKinds) && len(concurrentReaderCounts(cfg)) > 0
 }
 
 func skippedConcurrentReadKindsForConfig(cfg config) []string {

@@ -540,6 +540,34 @@ func TestMongoRowsUsePrimaryScope(t *testing.T) {
 	}
 }
 
+func TestMongoPrimaryScopeKeepsRangeModeRows(t *testing.T) {
+	rows := []mongoSummaryRow{
+		{Documents: 100, SecondaryIndexes: 0, TreeDBConfig: "treedb_a", MongoConfig: "mongo", RangeIndex: true, Phase: "load_insert_many"},
+		{Documents: 100, SecondaryIndexes: 0, TreeDBConfig: "treedb_a", MongoConfig: "mongo", RangeIndex: true, RangeMode: "indexed", Phase: "age_range_indexed_limit_10", TreeDBOpsSec: 100, MongoOpsSec: 50},
+		{Documents: 100, SecondaryIndexes: 0, TreeDBConfig: "treedb_a", MongoConfig: "mongo", RangeIndex: true, RangeMode: "indexed", Phase: "concurrent_age_range_indexed_limit_10_r4", TreeDBOpsSec: 400, MongoOpsSec: 100},
+		{Documents: 1_000, SecondaryIndexes: 0, TreeDBConfig: "treedb_b", MongoConfig: "mongo", RangeIndex: true, Phase: "load_insert_many"},
+		{Documents: 1_000, SecondaryIndexes: 0, TreeDBConfig: "treedb_b", MongoConfig: "mongo", RangeIndex: true, RangeMode: "indexed", Phase: "age_range_indexed_limit_10", TreeDBOpsSec: 1_000, MongoOpsSec: 500},
+		{Documents: 1_000, SecondaryIndexes: 0, TreeDBConfig: "treedb_b", MongoConfig: "mongo", RangeIndex: true, RangeMode: "indexed", Phase: "concurrent_age_range_indexed_limit_10_r16", TreeDBOpsSec: 1_600, MongoOpsSec: 200},
+	}
+	summary := mongoOperationThroughputRows(rows, 0, true)
+	var found bool
+	for _, row := range summary {
+		if row.Label != "range read" {
+			continue
+		}
+		found = true
+		if !row.HasSingle || row.Single.RangeMode != "indexed" {
+			t.Fatalf("range single row = %+v, want indexed range row", row.Single)
+		}
+		if !row.HasTreePeak || row.TreePeakCount != 16 || row.TreePeak.RangeMode != "indexed" {
+			t.Fatalf("range peak row = %+v count=%d, want primary indexed range sweep", row.TreePeak, row.TreePeakCount)
+		}
+	}
+	if !found {
+		t.Fatalf("range read summary missing from %+v", summary)
+	}
+}
+
 func TestMongoScalingCountsAcrossPerCountConfigs(t *testing.T) {
 	rows := []mongoSummaryRow{
 		{Documents: 1000, SecondaryIndexes: 0, TreeDBConfig: "treedb_readers_1", MongoConfig: "mongo_readers_1", Phase: "load_insert_many"},

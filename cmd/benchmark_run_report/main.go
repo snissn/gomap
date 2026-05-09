@@ -2855,11 +2855,13 @@ func mongoPrimaryScope(rows []mongoSummaryRow, idx int) (mongoSummaryRow, bool) 
 }
 
 func mongoSameScope(row, scope mongoSummaryRow) bool {
+	// RangeMode describes the read phase variant; load rows often leave it empty.
+	rangeModeMatches := scope.RangeMode == "" || row.RangeMode == "" || row.RangeMode == scope.RangeMode
 	return row.Documents == scope.Documents &&
 		row.TreeDBConfig == scope.TreeDBConfig &&
 		row.MongoConfig == scope.MongoConfig &&
 		row.RangeIndex == scope.RangeIndex &&
-		row.RangeMode == scope.RangeMode
+		rangeModeMatches
 }
 
 func mongoScopeText(scope mongoSummaryRow) string {

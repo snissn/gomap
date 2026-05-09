@@ -837,6 +837,17 @@ func TestParseConfigValidation(t *testing.T) {
 	if _, err := parseConfig([]string{"-target", "treedb", "-client-mode", "direct", "-treedb-read-state", "unsettled", "-range-reads", "1"}); err == nil {
 		t.Fatal("direct unsettled scan range reads accepted")
 	}
+	if _, err := parseConfig([]string{
+		"-target", "treedb",
+		"-client-mode", "direct",
+		"-treedb-read-state", "unsettled",
+		"-range-reads", "0",
+		"-concurrent-read-kinds", "range",
+		"-concurrent-readers", "1",
+		"-concurrent-reads", "1",
+	}); err == nil {
+		t.Fatal("direct unsettled generic range read-kind accepted")
+	}
 	legacyFlushedCfg, err := parseConfig([]string{"-treedb-read-state", "flushed"})
 	if err != nil {
 		t.Fatalf("legacy flushed treedb-read-state rejected: %v", err)
