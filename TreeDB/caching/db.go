@@ -4318,6 +4318,50 @@ func (db *DB) ValueLogProtectedPaths() []string {
 	return db.valueLogProtectedPaths()
 }
 
+// ReclaimObservedValueLogSources rotates cached writers past rewrite-selected
+// source segments and runs observed-source GC for segments already proven
+// unreferenced by backend rewrite.
+func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) error {
+	if db == nil || len(ids) == 0 {
+		return nil
+	}
+	seen := make(map[uint32]struct{}, len(ids))
+	observed := make([]uint32, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		observed = append(observed, id)
+	}
+	if len(observed) == 0 {
+		return nil
+	}
+
+	db.vlogGenerationCheckpointKickPending.Store(true)
+	defer db.vlogGenerationCheckpointKickPending.Store(false)
+	if err := db.Checkpoint(); err != nil {
+		return err
+	}
+
+	gcer, ok := db.backend.(backendValueLogGCer)
+	if !ok {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	_, err := gcer.ValueLogGC(ctx, backenddb.ValueLogGCOptions{
+		ObservedSourceFileIDs:            observed,
+		ObservedSourceAssumeUnreferenced: true,
+		ObservedSourceReclaimActive:      true,
+	})
+	return err
+}
+
 func (db *DB) valueLogGCOptions(dryRun bool) backenddb.ValueLogGCOptions {
 	retained, inUse, merged := db.valueLogGCProtectedPathSets()
 	return backenddb.ValueLogGCOptions{

@@ -36,6 +36,10 @@ type ValueLogGCOptions struct {
 	// reachability scan and only classifies (and, if !DryRun, zombifies) the
 	// observed IDs; it does not attempt to reclaim other segments.
 	ObservedSourceAssumeUnreferenced bool
+	// ObservedSourceReclaimActive permits observed-only GC to reclaim an
+	// otherwise-active segment. Callers must first prove the source is
+	// unreferenced and fence cached writers past the source.
+	ObservedSourceReclaimActive bool
 }
 
 // ValueLogGCStats summarizes value-log GC work.
@@ -217,7 +221,7 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 			stats.SegmentsTotal++
 			stats.BytesTotal += size
 
-			if _, ok := keptIDs[id]; ok {
+			if _, ok := keptIDs[id]; ok && !opts.ObservedSourceReclaimActive {
 				stats.SegmentsActive++
 				stats.BytesActive += size
 				stats.ObservedSourceSegmentsActive++
