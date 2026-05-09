@@ -1104,7 +1104,11 @@ func updateBatchStatsSince(enabled bool, start time.Time) time.Duration {
 	if !enabled {
 		return 0
 	}
-	return time.Since(start)
+	elapsed := time.Since(start)
+	if elapsed <= 0 {
+		return time.Nanosecond
+	}
+	return elapsed
 }
 
 func updateBatchStatsDuration(enabled bool, duration time.Duration) time.Duration {
