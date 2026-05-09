@@ -35,6 +35,9 @@ func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bo
 	if err := validateCollectionUpdateDocumentInput(c, documentID); err != nil {
 		return false, false, err
 	}
+	if err := c.validateBSONSetDocumentFormat(); err != nil {
+		return false, false, err
+	}
 	if combiner, domain := c.updateFastPathWithoutCreatingCombiner(); combiner != nil {
 		return combiner.update(c, documentID, nil, spec, true)
 	} else if domain != nil {
@@ -48,7 +51,20 @@ func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bo
 	return c.updateBSONSetDirect(documentID, spec)
 }
 
+func (c *Collection) validateBSONSetDocumentFormat() error {
+	if c == nil {
+		return errCollectionNil
+	}
+	if normalizedDocumentFormat(c.meta.Options.DocumentFormat) != DocumentFormatBSON {
+		return errors.New("collections: BSON $set update requires BSON document format")
+	}
+	return nil
+}
+
 func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) (bool, bool, error) {
+	if err := c.validateBSONSetDocumentFormat(); err != nil {
+		return false, false, err
+	}
 	items := []UpdateBatchItem{{DocumentID: documentID, bsonSet: spec, hasBSONSet: true}}
 	results, batched, err := c.updateBatchOwnedItems(items, updateBatchModeNoSecondaryUniqueIndexChanges)
 	if !batched && err == nil {
@@ -255,8 +271,9 @@ func orderedIndexStateForDocumentRuntimeMask(document []byte, runtimes []indexRu
 	state := encoder.appendState(len(runtimes))
 	var inline [8]indexRuntime
 	subset := inline[:0]
-	if bitsSet64(mask) > len(inline) {
-		subset = make([]indexRuntime, 0, bitsSet64(mask))
+	count := bitsSet64(mask)
+	if count > len(inline) {
+		subset = make([]indexRuntime, 0, count)
 	}
 	for runtimeIdx, runtime := range runtimes {
 		if mask&(uint64(1)<<uint(runtimeIdx)) == 0 {

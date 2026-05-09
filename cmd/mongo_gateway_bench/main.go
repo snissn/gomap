@@ -529,16 +529,17 @@ func parseConfig(args []string) (config, error) {
 	fs.Visit(func(f *flag.Flag) {
 		seenFlags[f.Name] = true
 	})
+	if cfg.TreeDBDisableBufferedIndexedAsyncFlush && cfg.TreeDBBufferedIndexedAsyncFlush {
+		return config{}, errors.New("cannot set both -treedb-buffered-indexed-async-flush and -treedb-disable-buffered-indexed-async-flush")
+	}
+	treeDBEffectiveAsyncFlush := !cfg.TreeDBDisableBufferedIndexedAsyncFlush || cfg.TreeDBBufferedIndexedAsyncFlush
 	if !seenFlags["treedb-buffered-indexed-write-max-root-runs"] &&
 		(seenFlags["treedb-buffered-indexed-write-max-documents"] || seenFlags["treedb-buffered-indexed-write-max-bytes"]) &&
 		(cfg.TreeDBBufferedIndexedWriteMaxDocuments != 0 || cfg.TreeDBBufferedIndexedWriteMaxBytes != 0) {
 		cfg.TreeDBBufferedIndexedWriteMaxRootRuns = collections.DefaultIndexedWriteMemtableMaxRootRuns
-		if !cfg.TreeDBDisableBufferedIndexedAsyncFlush || cfg.TreeDBBufferedIndexedAsyncFlush {
+		if treeDBEffectiveAsyncFlush {
 			cfg.TreeDBBufferedIndexedWriteMaxRootRuns = collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns
 		}
-	}
-	if cfg.TreeDBDisableBufferedIndexedAsyncFlush && cfg.TreeDBBufferedIndexedAsyncFlush {
-		return config{}, errors.New("cannot set both -treedb-buffered-indexed-async-flush and -treedb-disable-buffered-indexed-async-flush")
 	}
 	if cfg.Target != "treedb" && cfg.Target != "mongo" {
 		return config{}, fmt.Errorf("unknown target %q", cfg.Target)
