@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -277,6 +278,19 @@ func TestRunFixtureReportsBufferedIndexedWritesOnlyWhenIndexesUseThem(t *testing
 	}
 	if disabledSummary.BufferedIndexedWrites {
 		t.Fatal("disabled summary reported buffered indexed writes enabled")
+	}
+}
+
+func TestParseConfigRejectsConflictingBufferedIndexedAsyncFlags(t *testing.T) {
+	_, err := parseConfig([]string{
+		"-buffered-indexed-async-flush",
+		"-disable-buffered-indexed-async-flush",
+	}, io.Discard)
+	if err == nil {
+		t.Fatal("parse conflicting async flags succeeded")
+	}
+	if !strings.Contains(err.Error(), "cannot set both") {
+		t.Fatalf("err=%q want conflicting async flag error", err)
 	}
 }
 
