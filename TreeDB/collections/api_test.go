@@ -10370,7 +10370,13 @@ func newBufferedUsersUpdateCollectionWithDocs(t *testing.T, opts CollectionOptio
 		values := make([][]byte, len(docs))
 		for i, doc := range docs {
 			ids[i] = []byte(doc.id)
-			values[i] = []byte(fmt.Sprintf(`{"email":%q,"city":%q}`, doc.email, doc.city))
+			values[i], err = json.Marshal(map[string]string{
+				"email": doc.email,
+				"city":  doc.city,
+			})
+			if err != nil {
+				t.Fatalf("marshal user fixture doc: %v", err)
+			}
 		}
 		if _, err := col.InsertBatch(ids, values); err != nil {
 			t.Fatalf("insert: %v", err)
@@ -10481,8 +10487,9 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleZeroDel
 func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReplansStaleBufferedPlanWithoutFlush(t *testing.T) {
 	_, mgr, col := newBufferedUsersUpdateCollectionWithDocs(t,
 		CollectionOptions{
+			BufferedIndexedWrites:                   true,
 			BufferedIndexedWriteMaxDocuments:        1 << 20,
-			BufferedIndexedWriteMaxBytes:            1 << 40,
+			BufferedIndexedWriteMaxBytes:            int64(1) << 40,
 			BufferedIndexedWriteMaxRootRuns:         1 << 20,
 			BufferedIndexedAsyncFlush:               true,
 			BufferedIndexedAsyncFlushMaxQueuedUnits: 1 << 20,
@@ -10554,11 +10561,150 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesReplansStaleBuffere
 	}
 }
 
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesBoundsStaleBufferedReplans(t *testing.T) {
+	_, mgr, col := newBufferedUsersUpdateCollectionWithDocs(t,
+		CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        1 << 20,
+			BufferedIndexedWriteMaxBytes:            int64(1) << 40,
+			BufferedIndexedWriteMaxRootRuns:         1 << 20,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 1 << 20,
+		},
+		[]bufferedUsersUpdateDoc{
+			{id: "u1", email: "a@example.com", city: "hnl"},
+			{id: "u2", email: "b@example.com", city: "hnl"},
+		},
+	)
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sea")},
+	}); err != nil {
+		t.Fatalf("first UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("first batch was declined")
+	}
+
+	before := mgr.StatsSnapshot()
+	var injections atomic.Int32
+	setSFO := setJSONCity("sfo")
+	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			n := int(injections.Add(1))
+			if n <= maxUpdateBatchBufferedReadReplans+1 {
+				if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+					{DocumentID: []byte("u2"), Update: setJSONCity(fmt.Sprintf("oak-%02d", n))},
+				}); err != nil {
+					return nil, false, err
+				} else if !batched {
+					return nil, false, errors.New("nested batch was declined")
+				}
+			}
+			return setSFO(current)
+		},
+	}})
+	if err != nil {
+		t.Fatalf("bounded-replan UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	}
+	if !batched {
+		t.Fatalf("bounded-replan batch was declined")
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("results=%+v want one modified row", results)
+	}
+	if got, want := int(injections.Load()), maxUpdateBatchBufferedReadReplans+2; got != want {
+		t.Fatalf("injections=%d want %d", got, want)
+	}
+	after := mgr.StatsSnapshot()
+	if got := after.IndexedFlushForcedDrains - before.IndexedFlushForcedDrains; got == 0 {
+		t.Fatalf("indexed forced drain delta=%d want bounded replan fallback to flush", got)
+	}
+
+	sfoIDs, err := col.FindByIndex("city", "sfo")
+	if err != nil {
+		t.Fatalf("find sfo city: %v", err)
+	}
+	if len(sfoIDs) != 1 || !bytes.Equal(sfoIDs[0], []byte("u1")) {
+		t.Fatalf("sfo ids=%q want [u1]", sfoIDs)
+	}
+}
+
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesFlushesRootMismatchInsteadOfReplanning(t *testing.T) {
+	d, mgr, col := newBufferedUsersUpdateCollectionWithDocs(t,
+		CollectionOptions{
+			BufferedIndexedWrites:                   true,
+			BufferedIndexedWriteMaxDocuments:        1 << 20,
+			BufferedIndexedWriteMaxBytes:            int64(1) << 40,
+			BufferedIndexedWriteMaxRootRuns:         1 << 20,
+			BufferedIndexedAsyncFlush:               true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 1 << 20,
+		},
+		[]bufferedUsersUpdateDoc{
+			{id: "u1", email: "a@example.com", city: "hnl"},
+			{id: "u2", email: "b@example.com", city: "hnl"},
+		},
+	)
+	otherMgr := NewCollectionManager(d)
+	otherCol, err := otherMgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open users from second manager: %v", err)
+	}
+
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setJSONCity("sea")},
+	}); err != nil {
+		t.Fatalf("first UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("first batch was declined")
+	}
+	if _, batched, err := otherCol.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u2"), Update: setJSONCity("oak")},
+	}); err != nil {
+		t.Fatalf("second-manager UpdateBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched {
+		t.Fatalf("second-manager batch was declined")
+	}
+	if err := otherCol.Flush(); err != nil {
+		t.Fatalf("flush second-manager buffered update: %v", err)
+	}
+
+	before := mgr.StatsSnapshot()
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+			{DocumentID: []byte("u1"), Update: setJSONCity("sfo")},
+		})
+		done <- err
+	}()
+	timeout := collectionTestTimeout(t, 30*time.Second)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrConcurrentMutation) {
+			t.Fatalf("stale-root UpdateBatchIfNoSecondaryUniqueIndexChanges err=%v want %v", err, ErrConcurrentMutation)
+		}
+		if !strings.Contains(err.Error(), "buffered root base mismatch") {
+			t.Fatalf("stale-root UpdateBatchIfNoSecondaryUniqueIndexChanges err=%v want buffered root base mismatch context", err)
+		}
+		if !isConcurrentRootModification(err) {
+			t.Fatalf("stale-root UpdateBatchIfNoSecondaryUniqueIndexChanges err=%v want root modification context", err)
+		}
+	case <-timer.C:
+		t.Fatal("stale-root UpdateBatchIfNoSecondaryUniqueIndexChanges timed out, likely replanning without flushing")
+	}
+	after := mgr.StatsSnapshot()
+	if got := after.IndexedFlushForcedDrains - before.IndexedFlushForcedDrains; got != 1 {
+		t.Fatalf("forced drain delta=%d want 1 for root-base mismatch", got)
+	}
+}
+
 func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesBatchOneDoesNotFlushBeforeThreshold(t *testing.T) {
 	_, mgr, col := newBufferedUsersUpdateCollectionWithDocs(t,
 		CollectionOptions{
+			BufferedIndexedWrites:                   true,
 			BufferedIndexedWriteMaxDocuments:        1 << 20,
-			BufferedIndexedWriteMaxBytes:            1 << 40,
+			BufferedIndexedWriteMaxBytes:            int64(1) << 40,
 			BufferedIndexedWriteMaxRootRuns:         1 << 20,
 			BufferedIndexedAsyncFlush:               true,
 			BufferedIndexedAsyncFlushMaxQueuedUnits: 1 << 20,
