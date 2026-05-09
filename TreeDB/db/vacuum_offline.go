@@ -431,8 +431,9 @@ func recoverLeafGenerationResetAfterOfflineVacuum(dir string, p *pager.Pager, re
 		if err := resetLeafGenerationAfterOfflineVacuum(dir, commitSeq, evictSegment); err != nil {
 			return false, err
 		}
+		return true, removeLeafGenerationResetPendingAfterOfflineVacuum(dir)
 	}
-	return true, removeLeafGenerationResetPendingAfterOfflineVacuum(dir)
+	return false, removeLeafGenerationResetPendingAfterOfflineVacuum(dir)
 }
 
 func writeMetaToPager(p *pager.Pager, pageID uint64, meta page.MetaPageBody) error {
