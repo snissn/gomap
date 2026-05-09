@@ -37,6 +37,9 @@ func TestBSONSetUpdateAppendReplacementUsesDestinationArena(t *testing.T) {
 	if len(replacement) == 0 {
 		t.Fatal("empty replacement")
 	}
+	if len(out) == 0 || &out[0] != &arena[0] {
+		t.Fatal("output does not reuse destination arena backing array")
+	}
 	if &replacement[0] != &out[len(arena)] {
 		t.Fatal("replacement does not reference appended destination arena")
 	}
@@ -96,6 +99,7 @@ func BenchmarkBSONSetUpdateApplyCity(b *testing.B) {
 	}
 	b.ReportAllocs()
 	b.SetBytes(int64(len(doc)))
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		replacement, changed, err := update.apply(doc)
 		if err != nil {
@@ -126,6 +130,7 @@ func BenchmarkBSONSetUpdateAppendReplacementCity(b *testing.B) {
 	arena := make([]byte, 0, len(doc)+64)
 	b.ReportAllocs()
 	b.SetBytes(int64(len(doc)))
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		var replacement []byte
 		var changed bool
