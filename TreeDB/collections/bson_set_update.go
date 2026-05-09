@@ -25,8 +25,8 @@ type bsonSetUpdate struct {
 
 var errBSONSetRequiresBSONFormat = errors.New("collections: BSON $set update requires BSON document format")
 
-// bsonSetReplacementSlackBytes covers the BSON document header/trailer and
-// small field growth so most changed documents append without a second grow.
+// bsonSetReplacementSlackBytes reserves expected growth beyond the current BSON
+// document size so most changed documents append without a second grow.
 const (
 	bsonSetFieldIndexMapThreshold = 8
 	bsonSetReplacementSlackBytes  = 64
