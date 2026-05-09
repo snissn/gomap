@@ -20,14 +20,18 @@ type BSONSetField struct {
 }
 
 type bsonSetUpdate struct {
-	fields []BSONSetField
+	fields       []BSONSetField
+	fieldIndexes map[string]int
 }
 
 var errBSONSetRequiresBSONFormat = errors.New("collections: BSON $set update requires BSON document format")
 
 // bsonSetReplacementSlackBytes covers the BSON document header/trailer and
 // small field growth so most changed documents append without a second grow.
-const bsonSetReplacementSlackBytes = 64
+const (
+	bsonSetFieldIndexMapThreshold = 8
+	bsonSetReplacementSlackBytes  = 64
+)
 
 // UpdateBSONSet applies a structured top-level BSON $set update to one
 // document. The collection must use DocumentFormatBSON. Missing documents
@@ -72,7 +76,7 @@ func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) 
 	if err := c.validateBSONSetDocumentFormat(); err != nil {
 		return false, false, err
 	}
-	items := []UpdateBatchItem{{DocumentID: documentID, bsonSet: spec, hasBSONSet: true}}
+	items := []updateBatchItem{newBSONSetUpdateBatchItem(documentID, spec)}
 	results, batched, err := c.updateBatchOwnedItems(items, updateBatchModeNoSecondaryUniqueIndexChanges)
 	if !batched && err == nil {
 		return c.updateDirect(documentID, func(current []byte) ([]byte, bool, error) {
@@ -95,6 +99,24 @@ func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) 
 func newBSONSetUpdate(fields []BSONSetField) (bsonSetUpdate, error) {
 	spec := bsonSetUpdate{}
 	if len(fields) == 0 {
+		return spec, nil
+	}
+	if len(fields) > bsonSetFieldIndexMapThreshold {
+		fieldIndex := make(map[string]int, len(fields))
+		for i, field := range fields {
+			if err := validateBSONSetFieldKey(field.Key); err != nil {
+				return bsonSetUpdate{}, fmt.Errorf("collections: BSON $set field %q key: %w", field.Key, err)
+			}
+			if err := validateBSONSetRawValue(field.Value); err != nil {
+				return bsonSetUpdate{}, fmt.Errorf("collections: BSON $set field %q value: %w", field.Key, err)
+			}
+			if _, exists := fieldIndex[field.Key]; exists {
+				return bsonSetUpdate{}, fmt.Errorf("collections: duplicate BSON $set field %q", field.Key)
+			}
+			fieldIndex[field.Key] = i
+		}
+		spec.fields = fields
+		spec.fieldIndexes = fieldIndex
 		return spec, nil
 	}
 	for i, field := range fields {
@@ -142,6 +164,13 @@ func validateBSONSetRawValue(value bson.RawValue) error {
 }
 
 func (u bsonSetUpdate) fieldIndex(key string) int {
+	if u.fieldIndexes != nil {
+		idx, ok := u.fieldIndexes[key]
+		if ok {
+			return idx
+		}
+		return -1
+	}
 	for i := range u.fields {
 		if u.fields[i].Key == key {
 			return i
