@@ -74,9 +74,14 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		_ = d.Close()
 		return fmt.Errorf("vacuum: missing db state")
 	}
-	if state.ValueLogSet != nil {
-		d.valueLogManager.Acquire(state.ValueLogSet)
-		defer d.valueLogManager.Release(state.ValueLogSet)
+	acquiredValueLogSet := state.ValueLogSet
+	if acquiredValueLogSet != nil {
+		d.valueLogManager.Acquire(acquiredValueLogSet)
+		defer func() {
+			if acquiredValueLogSet != nil {
+				_ = d.valueLogManager.Release(acquiredValueLogSet)
+			}
+		}()
 	}
 
 	indexPath := filepath.Join(opts.Dir, indexFileName)
@@ -195,6 +200,13 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 	if err := newPager.Close(); err != nil {
 		_ = d.Close()
 		return err
+	}
+	if acquiredValueLogSet != nil {
+		if err := d.valueLogManager.Release(acquiredValueLogSet); err != nil {
+			_ = d.Close()
+			return err
+		}
+		acquiredValueLogSet = nil
 	}
 	if err := d.Close(); err != nil {
 		return err
