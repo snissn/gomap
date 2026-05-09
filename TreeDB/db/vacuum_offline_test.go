@@ -178,3 +178,52 @@ func TestResetLeafGenerationAfterOfflineVacuum_RemovesStaleFilesAfterManifest(t 
 		t.Fatalf("unexpected reset manifest: %+v", reset)
 	}
 }
+
+func TestResetLeafGenerationAfterOfflineVacuum_WritesResetManifestBeforeDeletion(t *testing.T) {
+	dir := t.TempDir()
+	leafDir := LeafLogDirPath(dir)
+	if err := os.MkdirAll(leafDir, 0o700); err != nil {
+		t.Fatalf("mkdir leaf_vlog: %v", err)
+	}
+	rawFileID, err := valuelog.EncodeSegmentID(rewriteLeafLogLaneID, 1)
+	if err != nil {
+		t.Fatalf("encode segment id: %v", err)
+	}
+	segmentPath := leafGenerationFallbackPath(dir, rawFileID)
+	if err := os.WriteFile(segmentPath, []byte("stale leaf segment"), 0o600); err != nil {
+		t.Fatalf("write stale segment: %v", err)
+	}
+	manifest := newLeafGenerationManifest(41)
+	changed, err := manifest.registerCurrentGenerationFileID(rawFileID, 41)
+	if err != nil {
+		t.Fatalf("register stale file id: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected manifest to record stale file id")
+	}
+	if err := saveLeafGenerationManifest(leafDir, manifest); err != nil {
+		t.Fatalf("save stale manifest: %v", err)
+	}
+
+	origSync := syncDirFn
+	defer func() { syncDirFn = origSync }()
+	syncDirFn = func(_ string) error {
+		return errors.New("stop after reset manifest")
+	}
+	if err := resetLeafGenerationAfterOfflineVacuum(dir, 42); err == nil {
+		t.Fatal("expected injected sync error")
+	}
+	if _, err := os.Stat(segmentPath); err != nil {
+		t.Fatalf("expected stale segment to remain after injected sync error: %v", err)
+	}
+	reset, ok, err := loadLeafGenerationManifest(leafDir)
+	if err != nil {
+		t.Fatalf("load reset manifest: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected reset manifest")
+	}
+	if len(reset.Generations) != 1 || len(reset.Generations[0].FileIDs) != 0 || reset.Generations[0].CreatedCommitSeq != 42 {
+		t.Fatalf("unexpected reset manifest after injected sync error: %+v", reset)
+	}
+}
