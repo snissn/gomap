@@ -148,8 +148,18 @@ tool fills in the matching root-run default; pass
 flushing disabled in that case.
 
 The Go profile benchmarks in `profile_bench_test.go` use the collection default
-indexed async flush mode. They can still override queue limits for focused
-root-publish experiments:
+indexed async flush mode. They can force foreground threshold publish for
+baseline comparisons, or override async queue limits for focused root-publish
+experiments:
+
+```sh
+MONGO_GATEWAY_PROFILE_BENCH_DISABLE_BUFFERED_INDEXED_ASYNC_FLUSH=true \
+go test ./cmd/mongo_gateway_bench \
+  -run '^$' \
+  -bench '^BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2$' \
+  -benchtime=100000x \
+  -benchmem
+```
 
 ```sh
 MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS=4 \
