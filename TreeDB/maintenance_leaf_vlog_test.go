@@ -198,14 +198,6 @@ func TestVacuumIndexOffline_LeafPagesInValueLog_ReopenParity(t *testing.T) {
 		t.Fatalf("VacuumIndexOffline: %v", err)
 	}
 
-	leafPathsAfter, err := filepath.Glob(filepath.Join(mainDir, "leaf_vlog", "value-l*.log"))
-	if err != nil {
-		t.Fatalf("glob leaf_vlog after vacuum: %v", err)
-	}
-	if len(leafPathsAfter) == 0 {
-		t.Fatalf("offline vacuum removed live leaf_vlog files for outer-leaf storage")
-	}
-
 	reopen, err := treedb.Open(opts)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)

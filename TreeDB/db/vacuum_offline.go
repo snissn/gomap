@@ -150,6 +150,12 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		_ = d.Close()
 		return err
 	}
+	outputHasLeafLogRefs, err := vacuumOutputHasLeafLogRefs(newPager, reader, userRoot, sysRoot)
+	if err != nil {
+		_ = newPager.Close()
+		_ = d.Close()
+		return err
+	}
 
 	if err := newPager.Sync(); err != nil {
 		_ = newPager.Close()
@@ -212,13 +218,81 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		}
 	}
 
-	if !opts.IndexOuterLeavesInValueLog {
+	if !outputHasLeafLogRefs {
 		if err := resetLeafGenerationAfterOfflineVacuum(opts.Dir, meta.CommitSeq); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func vacuumOutputHasLeafLogRefs(p *pager.Pager, reader tree.SlabReader, userRoot, systemRoot uint64) (bool, error) {
+	for _, rootID := range []uint64{userRoot, systemRoot} {
+		hasRefs, err := vacuumTreeHasLeafLogRefs(p, rootID)
+		if err != nil || hasRefs {
+			return hasRefs, err
+		}
+	}
+	descriptors, err := vacuumCollectCollectionRootDescriptors(p, reader, systemRoot)
+	if err != nil {
+		return false, err
+	}
+	seen := make(map[uint64]struct{}, len(descriptors))
+	for _, descriptor := range descriptors {
+		if descriptor.rootID == 0 {
+			continue
+		}
+		if _, ok := seen[descriptor.rootID]; ok {
+			continue
+		}
+		seen[descriptor.rootID] = struct{}{}
+		hasRefs, err := vacuumTreeHasLeafLogRefs(p, descriptor.rootID)
+		if err != nil || hasRefs {
+			return hasRefs, err
+		}
+	}
+	return false, nil
+}
+
+func vacuumTreeHasLeafLogRefs(p *pager.Pager, rootID uint64) (bool, error) {
+	if p == nil || rootID == 0 {
+		return false, nil
+	}
+	var walk func(uint64) (bool, error)
+	walk = func(id uint64) (bool, error) {
+		data, err := p.Get(id)
+		if err != nil {
+			return false, err
+		}
+		n := node.NewNode(data)
+		switch n.Type() {
+		case page.PageTypeInternal:
+			count := n.Count()
+			for i := uint16(0); i < count; i++ {
+				_, childRef, err := n.GetInternalEntryRefView(i)
+				if err != nil {
+					return false, err
+				}
+				if childRef.Kind == page.ChildRefLeafLog {
+					return true, nil
+				}
+				if childRef.Kind != page.ChildRefPage {
+					return false, fmt.Errorf("vacuum: unexpected child ref kind %d at page %d", childRef.Kind, id)
+				}
+				hasRefs, err := walk(childRef.Page)
+				if err != nil || hasRefs {
+					return hasRefs, err
+				}
+			}
+			return false, nil
+		case page.PageTypeLeaf:
+			return false, nil
+		default:
+			return false, fmt.Errorf("vacuum: unexpected page type %d at page %d", n.Type(), id)
+		}
+	}
+	return walk(rootID)
 }
 
 func resetLeafGenerationAfterOfflineVacuum(dir string, commitSeq uint64) error {
