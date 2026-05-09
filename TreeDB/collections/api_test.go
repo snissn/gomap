@@ -9730,6 +9730,16 @@ func TestCollectionUpdateBSONSetRejectsDuplicateFields(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBSONSetValidatesCollectionBeforeFields(t *testing.T) {
+	var col *Collection
+	_, _, err := col.UpdateBSONSet(nil, []BSONSetField{
+		{Key: "", Value: mustBSONRawValue(t, "sea")},
+	})
+	if !errors.Is(err, errCollectionNil) {
+		t.Fatalf("UpdateBSONSet err=%v want %v", err, errCollectionNil)
+	}
+}
+
 func TestCollectionUpdateBatchDirectBufferedBSONDoesNotReserveUnchangedUnique(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
