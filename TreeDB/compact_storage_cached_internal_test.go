@@ -213,6 +213,117 @@ func TestBackendValueLogRewriteReclaimsLeafGenerationDebt(t *testing.T) {
 	}
 }
 
+func TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters(t *testing.T) {
+	dir := t.TempDir()
+	opts := cachedRewriteReclaimTestOptions(dir)
+	opts.JournalLanes = 2
+
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	const rows = 20_000
+	const batchSize = 16_000
+	batch := db.NewBatchWithSize(batchSize)
+	expected := make(map[string][]byte)
+	for i := 0; i < rows; i++ {
+		key := cachedRewriteReclaimKey(i)
+		value := cachedRewriteReclaimValue(i)
+		expected[string(key)] = value
+		if err := batch.Set(key, value); err != nil {
+			t.Fatalf("batch set %d: %v", i, err)
+		}
+		if (i+1)%batchSize == 0 {
+			if err := batch.Write(); err != nil {
+				t.Fatalf("batch write %d: %v", i, err)
+			}
+			if err := batch.Close(); err != nil {
+				t.Fatalf("batch close %d: %v", i, err)
+			}
+			batch = db.NewBatchWithSize(batchSize)
+		}
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatalf("final batch write: %v", err)
+	}
+	if err := batch.Close(); err != nil {
+		t.Fatalf("final batch close: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	source := listValueLogSegmentFiles(t, backenddb.ValueLogDirPath(dir))
+	if len(source) == 0 {
+		t.Fatalf("expected value-log source segments")
+	}
+	sourceIDs := make([]uint32, 0, len(source))
+	for _, segment := range source {
+		sourceIDs = append(sourceIDs, segment.id)
+	}
+	rewrite, err := db.ValueLogRewriteOnline(context.Background(), backenddb.ValueLogRewriteOnlineOptions{
+		SourceFileIDs: sourceIDs,
+		BatchSize:     batchSize,
+		SyncEachBatch: true,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if rewrite.ValueRecordsCopied == 0 {
+		t.Fatalf("rewrite copied no value records: %+v", rewrite)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close after rewrite: %v", err)
+	}
+
+	compactor, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open compactor: %v", err)
+	}
+	compact, err := compactor.CompactStorage(context.Background(), CompactStorageOptions{
+		ValueLogRewriteBatchSize:        batchSize,
+		LeafPackMinExpectedReclaimBytes: 1,
+		LeafPackMinReclaimPerCopyPPM:    1,
+	})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if !compact.FullyCompacted {
+		t.Fatalf("CompactStorage reported remaining debt before close: %+v", compact.RemainingDebt)
+	}
+	if err := compactor.Close(); err != nil {
+		t.Fatalf("close compactor: %v", err)
+	}
+
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen after compaction: %v", err)
+	}
+	gc, err := reopened.ValueLogGC(context.Background(), ValueLogGCOptions{DryRun: true})
+	if err != nil {
+		_ = reopened.Close()
+		t.Fatalf("ValueLogGC dry-run after compaction: %v", err)
+	}
+	if gc.SegmentsEligible != 0 || gc.BytesEligible != 0 {
+		_ = reopened.Close()
+		t.Fatalf("CompactStorage left post-reopen GC debt: segments=%d bytes=%d stats=%+v", gc.SegmentsEligible, gc.BytesEligible, gc)
+	}
+	for key, want := range expected {
+		got, err := reopened.Get([]byte(key))
+		if err != nil {
+			_ = reopened.Close()
+			t.Fatalf("get %x after CompactStorage: %v", []byte(key), err)
+		}
+		if !bytes.Equal(got, want) {
+			_ = reopened.Close()
+			t.Fatalf("value mismatch for %x: got %dB want %dB", []byte(key), len(got), len(want))
+		}
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("close reopened: %v", err)
+	}
+}
+
 func writeTestValueLogSegment(t *testing.T, path string, lane, seq uint32, value []byte) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

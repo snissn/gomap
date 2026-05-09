@@ -92,6 +92,9 @@ func (db *DB) applyCachedCompactStorageOptions(opts *CompactStorageOptions, chec
 		}
 	}
 	explicitProtectedPaths := append([]string(nil), opts.ValueLogProtectedPaths...)
+	if checkpoint && len(explicitProtectedPaths) == 0 {
+		db.cached.PruneRetainedValueLogsForMaintenance()
+	}
 	userProtectedPathsFunc := opts.ValueLogProtectedPathsFunc
 	opts.ValueLogProtectedPathsFunc = func() []string {
 		var out []string
@@ -110,6 +113,9 @@ func (db *DB) applyCachedCompactStorageOptions(opts *CompactStorageOptions, chec
 	opts.ValueLogProtectedPaths = explicitProtectedPaths
 	if opts.ReserveRIDs == nil {
 		opts.ReserveRIDs = db.cached.ReserveValueLogRIDs
+	}
+	if len(explicitProtectedPaths) == 0 {
+		opts.ValueLogReclaimFencedUnreferenced = true
 	}
 	return nil
 }

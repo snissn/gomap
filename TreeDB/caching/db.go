@@ -4257,6 +4257,12 @@ func (db *DB) ValueLogRetainedPaths() []string {
 	return db.valueLogRetainedPaths()
 }
 
+// PruneRetainedValueLogsForMaintenance runs a synchronous retained value-log
+// prune before full backend maintenance computes reclaim candidates.
+func (db *DB) PruneRetainedValueLogsForMaintenance() {
+	db.runRetainedValueLogPruneInline(true, nil)
+}
+
 func mergeUniqueNonEmptyStrings(pathSets ...[]string) []string {
 	seen := make(map[string]struct{})
 	var out []string
@@ -4358,11 +4364,13 @@ func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) 
 	if err := db.rotateObservedValueLogSources(ctx, seen); err != nil {
 		return err
 	}
-	db.runRetainedValueLogPruneInline(false, seen)
+	db.runRetainedValueLogPruneInline(true, seen)
 
 	if hasValueLogGC {
 		opts := db.valueLogGCOptions(false)
 		opts.ObservedSourceFileIDs = observed
+		opts.ObservedSourceAssumeUnreferenced = true
+		opts.ObservedSourceReclaimActive = true
 		if _, err := gcer.ValueLogGC(ctx, opts); err != nil {
 			return err
 		}

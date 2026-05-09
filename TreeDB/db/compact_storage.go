@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -58,6 +59,12 @@ type CompactStorageOptions struct {
 	// ReserveRIDs lets cached-mode callers share the live RID allocator with
 	// foreground writers.
 	ReserveRIDs func(count int) (start uint64, err error)
+
+	// ValueLogReclaimFencedUnreferenced permits CompactStorage to reclaim
+	// unreferenced value-log segments that cached retained/current-writer
+	// protection would otherwise hide. Cached-mode callers set this only after
+	// checkpointing and fencing writers; backend-only callers leave it disabled.
+	ValueLogReclaimFencedUnreferenced bool
 
 	// DisableZeroByteValueLogCleanup leaves zero-byte value_vlog segment files in
 	// place. This is intended for specialty diagnostics that need to inspect
@@ -352,13 +359,36 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 		if err != nil {
 			return err
 		}
-		if debt.ValueLogGCSegments == 0 && debt.LeafGCGenerations == 0 {
+		fencedIDs, _, err := db.compactStorageFencedUnreferencedValueLogIDs(ctx, opts)
+		if err != nil {
+			return err
+		}
+		if debt.ValueLogGCSegments == 0 && debt.LeafGCGenerations == 0 && len(fencedIDs) == 0 {
 			return nil
 		}
 		if debt.ValueLogGCSegments > 0 {
 			phaseName := fmt.Sprintf("settle-value-log-gc-%d", pass+1)
 			if err := db.runCompactStoragePhase(stats, phaseName, func() error {
 				gc, err := db.valueLogGC(ctx, ValueLogGCOptions{ProtectedPaths: compactStorageValueLogProtectedPaths(opts)}, lockMaintenance)
+				stats.ValueLogGC = gc
+				return err
+			}); err != nil {
+				return err
+			}
+			if err := db.runCompactStoragePhase(stats, fmt.Sprintf("checkpoint-after-%s", phaseName), func() error {
+				return db.Checkpoint()
+			}); err != nil {
+				return err
+			}
+		}
+		if len(fencedIDs) > 0 {
+			phaseName := fmt.Sprintf("settle-fenced-value-log-gc-%d", pass+1)
+			if err := db.runCompactStoragePhase(stats, phaseName, func() error {
+				gc, err := db.valueLogGC(ctx, ValueLogGCOptions{
+					ObservedSourceFileIDs:            fencedIDs,
+					ObservedSourceAssumeUnreferenced: true,
+					ObservedSourceReclaimActive:      true,
+				}, lockMaintenance)
 				stats.ValueLogGC = gc
 				return err
 			}); err != nil {
@@ -475,6 +505,12 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 	stats.ValueLogGC = valueGC
 	debt.ValueLogGCSegments = valueGC.SegmentsEligible
 	debt.ValueLogGCBytes = valueGC.BytesEligible
+	fencedValueLogIDs, fencedValueLogBytes, err := db.compactStorageFencedUnreferencedValueLogIDs(ctx, opts)
+	if err != nil {
+		return debt, err
+	}
+	debt.ValueLogGCSegments += len(fencedValueLogIDs)
+	debt.ValueLogGCBytes += fencedValueLogBytes
 
 	leafPlan, err := db.LeafGenerationPlan(ctx, LeafGenerationPlanOptions{
 		MinExpectedReclaimBytes:    opts.LeafPackMinExpectedReclaimBytes,
@@ -510,6 +546,52 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 		debt.ZeroByteValueLogFiles = zeroBytes
 	}
 	return debt, nil
+}
+
+func (db *DB) compactStorageFencedUnreferencedValueLogIDs(ctx context.Context, opts CompactStorageOptions) ([]uint32, int64, error) {
+	if db == nil || !opts.ValueLogReclaimFencedUnreferenced || db.valueLogManager == nil {
+		return nil, 0, nil
+	}
+	referenced, err := db.referencedValueLogSegments(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	if set == nil || len(set.Files) == 0 {
+		if set != nil {
+			_ = db.valueLogManager.Release(set)
+		}
+		if err := db.valueLogManager.Refresh(); err != nil {
+			return nil, 0, err
+		}
+		set = db.valueLogManager.CurrentSetNoRefresh()
+	}
+	if set == nil || len(set.Files) == 0 {
+		return nil, 0, nil
+	}
+	defer func() { _ = db.valueLogManager.Release(set) }()
+
+	files := db.valueOnlyValueLogFiles(set.Files)
+	ids := make([]uint32, 0, len(files))
+	var bytes int64
+	for id, f := range files {
+		if _, ok := referenced[id]; ok {
+			continue
+		}
+		if f == nil {
+			continue
+		}
+		size := fileSize(f)
+		if size <= 0 {
+			continue
+		}
+		ids = append(ids, id)
+		bytes += size
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		return ids[i] < ids[j]
+	})
+	return ids, bytes, nil
 }
 
 func (db *DB) runCompactStoragePhase(stats *CompactStorageStats, name string, fn func() error) error {
