@@ -3042,6 +3042,10 @@ func TestCollectionCatalogOverlayRootsAreVisibleAfterReopen(t *testing.T) {
 	mgr := NewCollectionManager(db)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedAsyncFlush:        true,
+			BufferedIndexedWriteMaxDocuments: 1,
+		},
 		Indexes: []IndexDefinition{
 			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},

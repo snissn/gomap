@@ -6710,7 +6710,6 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 	domain.uniqueValueMutableRuns = nil
 	domain.rootValueArenas = nil
 	domain.rootRunCount = 0
-	domain.indexedDeletesOnly = false
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
 	return true
