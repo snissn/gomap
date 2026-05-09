@@ -194,6 +194,19 @@ func TestProfileBenchParsedUpdateDocsUsesDistinctCityPhases(t *testing.T) {
 	}
 }
 
+func TestProfileBenchParsedUpdateDocsUsesDistinctSequencePhases(t *testing.T) {
+	warmup := profileBenchParsedUpdateDocs(t, false, "warmup")
+	timed := profileBenchParsedUpdateDocs(t, false, "timed")
+	if len(warmup) == 0 || len(timed) == 0 {
+		t.Fatal("expected parsed update docs")
+	}
+	warmupSeq := profileBenchSetUpdateFieldInt64(t, warmup[0], "concurrent_update_seq")
+	timedSeq := profileBenchSetUpdateFieldInt64(t, timed[0], "concurrent_update_seq")
+	if warmupSeq == timedSeq {
+		t.Fatalf("sequence update phases both produced %d; timed sequence updates must differ from warmup", warmupSeq)
+	}
+}
+
 func TestProfileBenchParsedUpdateDocsChangesCityAcrossFullSweep(t *testing.T) {
 	updateDocs := profileBenchParsedUpdateDocs(t, true, "timed")
 	if len(updateDocs) == 0 {
@@ -235,6 +248,23 @@ func profileBenchSetUpdateFieldStringAt(t *testing.T, update profileBenchSetUpda
 	}
 	t.Fatalf("missing update field %q in %+v", key, update.fields)
 	return ""
+}
+
+func profileBenchSetUpdateFieldInt64(t *testing.T, update profileBenchSetUpdate, key string) int64 {
+	t.Helper()
+	for _, field := range update.fields {
+		if field.key != key {
+			continue
+		}
+		value := profileBenchSetFieldValueForOperation(field, -1, 0, 0)
+		got, ok := value.Int64OK()
+		if !ok {
+			t.Fatalf("field %q raw value=%v is not an int64", key, value.Type)
+		}
+		return got
+	}
+	t.Fatalf("missing update field %q in %+v", key, update.fields)
+	return 0
 }
 
 func TestProfileBenchDeltaUintStat(t *testing.T) {
@@ -783,7 +813,7 @@ func compactProfileBenchOverlayRootsAfterFlush(tb testing.TB, collection *collec
 func profileBenchParsedUpdateDocs(tb testing.TB, updateCity bool, cityPhase string) []profileBenchSetUpdate {
 	tb.Helper()
 	updateDocs := make([]profileBenchSetUpdate, profileBenchUpdateDocPoolSize)
-	dynamicSequenceValues := profileBenchUpdatedSequenceRawValues()
+	dynamicSequenceValues := profileBenchUpdatedSequenceRawValues(cityPhase)
 	var dynamicCityValues []bson.RawValue
 	if updateCity {
 		dynamicCityValues = profileBenchUpdatedCityRawValues(tb, cityPhase)
@@ -791,7 +821,7 @@ func profileBenchParsedUpdateDocs(tb testing.TB, updateCity bool, cityPhase stri
 	for i := range updateDocs {
 		set := bson.D{
 			{Key: "concurrent_updated", Value: true},
-			{Key: "concurrent_update_seq", Value: int64(i)},
+			{Key: "concurrent_update_seq", Value: profileBenchUpdatedSequenceValue(cityPhase, i)},
 		}
 		if updateCity {
 			set = append(set, bson.E{Key: "city", Value: cityPhase + "-" + benchmarkUpdatedCity(i, i, profileBenchUpdateDocPoolSize)})
@@ -831,15 +861,26 @@ func profileBenchUpdatedCityRawValues(tb testing.TB, cityPhase string) []bson.Ra
 	return values
 }
 
-func profileBenchUpdatedSequenceRawValues() []bson.RawValue {
+func profileBenchUpdatedSequenceRawValues(cityPhase string) []bson.RawValue {
 	values := make([]bson.RawValue, benchmarkUpdatedCityValueCount)
 	for i := range values {
 		values[i] = bson.RawValue{
 			Type:  bson.TypeInt64,
-			Value: bsoncore.AppendInt64(nil, int64(i)),
+			Value: bsoncore.AppendInt64(nil, profileBenchUpdatedSequenceValue(cityPhase, i)),
 		}
 	}
 	return values
+}
+
+func profileBenchUpdatedSequenceValue(cityPhase string, i int) int64 {
+	switch cityPhase {
+	case "warmup":
+		return int64(i)
+	case "timed":
+		return int64(i) + 1_000_000_000
+	default:
+		return int64(i) + 2_000_000_000
+	}
 }
 
 func profileBenchDeltaUintStat(after, before map[string]string, key string) uint64 {
