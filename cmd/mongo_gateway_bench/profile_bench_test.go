@@ -810,21 +810,21 @@ func compactProfileBenchOverlayRootsAfterFlush(tb testing.TB, collection *collec
 	return stats
 }
 
-func profileBenchParsedUpdateDocs(tb testing.TB, updateCity bool, cityPhase string) []profileBenchSetUpdate {
+func profileBenchParsedUpdateDocs(tb testing.TB, updateCity bool, updatePhase string) []profileBenchSetUpdate {
 	tb.Helper()
 	updateDocs := make([]profileBenchSetUpdate, profileBenchUpdateDocPoolSize)
-	dynamicSequenceValues := profileBenchUpdatedSequenceRawValues(cityPhase)
+	dynamicSequenceValues := profileBenchUpdatedSequenceRawValues(updatePhase)
 	var dynamicCityValues []bson.RawValue
 	if updateCity {
-		dynamicCityValues = profileBenchUpdatedCityRawValues(tb, cityPhase)
+		dynamicCityValues = profileBenchUpdatedCityRawValues(tb, updatePhase)
 	}
 	for i := range updateDocs {
 		set := bson.D{
 			{Key: "concurrent_updated", Value: true},
-			{Key: "concurrent_update_seq", Value: profileBenchUpdatedSequenceValue(cityPhase, i)},
+			{Key: "concurrent_update_seq", Value: profileBenchUpdatedSequenceValue(updatePhase, i)},
 		}
 		if updateCity {
-			set = append(set, bson.E{Key: "city", Value: cityPhase + "-" + benchmarkUpdatedCity(i, i, profileBenchUpdateDocPoolSize)})
+			set = append(set, bson.E{Key: "city", Value: updatePhase + "-" + benchmarkUpdatedCity(i, i, profileBenchUpdateDocPoolSize)})
 		}
 		updateRaw, err := bson.Marshal(bson.D{{Key: "$set", Value: set}})
 		if err != nil {
@@ -861,19 +861,21 @@ func profileBenchUpdatedCityRawValues(tb testing.TB, cityPhase string) []bson.Ra
 	return values
 }
 
-func profileBenchUpdatedSequenceRawValues(cityPhase string) []bson.RawValue {
-	values := make([]bson.RawValue, benchmarkUpdatedCityValueCount)
+func profileBenchUpdatedSequenceRawValues(updatePhase string) []bson.RawValue {
+	values := make([]bson.RawValue, profileBenchUpdatedSequenceValueCount)
 	for i := range values {
 		values[i] = bson.RawValue{
 			Type:  bson.TypeInt64,
-			Value: bsoncore.AppendInt64(nil, profileBenchUpdatedSequenceValue(cityPhase, i)),
+			Value: bsoncore.AppendInt64(nil, profileBenchUpdatedSequenceValue(updatePhase, i)),
 		}
 	}
 	return values
 }
 
-func profileBenchUpdatedSequenceValue(cityPhase string, i int) int64 {
-	switch cityPhase {
+const profileBenchUpdatedSequenceValueCount = benchmarkUpdatedCityValueCount
+
+func profileBenchUpdatedSequenceValue(updatePhase string, i int) int64 {
+	switch updatePhase {
 	case "warmup":
 		return int64(i)
 	case "timed":
