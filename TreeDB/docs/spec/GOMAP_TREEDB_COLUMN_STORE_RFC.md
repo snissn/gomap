@@ -327,17 +327,25 @@ A column-store collection uses the same root-group machinery as current
 collections, with additional roots:
 
 ```text
-<collection>/primary          existing primary root semantics
-<collection>/columns/parts    immutable part descriptors
-<collection>/columns/granules optional part/granule range marks
-<collection>/columns/locator  optional primary-id to row-locator map
-<collection>/columns/deletes  tombstones and delete bitmaps
-<collection>/columns/schema   schema evolution descriptors
-<collection>/templates        existing template-v1 root when needed
-<collection>/index-state      existing row-index-state root when needed
-<collection>/secondary/<name> existing secondary roots, column-store aware
-<collection>/filters/<name>   optional reusable fast-filter roots
+<collection>/primary            existing primary root, id -> row_locator
+<collection>/columns/parts      immutable part descriptors
+<collection>/columns/granules   optional part/granule range marks
+<collection>/columns/locator    optional auxiliary primary-id locator map
+<collection>/columns/deletes    tombstones and delete bitmap descriptors
+<collection>/columns/schema     schema evolution descriptors
+<collection>/columns/counts     exact count and visibility metadata
+<collection>/columns/filters/<name> optional persistent fast-filter roots
+<collection>/templates          existing template-v1 root when needed
+<collection>/index-state        existing row-index-state root when needed
+<collection>/index/<name>       existing secondary roots, column-store aware
 ```
+
+The column-store root-kind inventory is part of the collection WAL contract.
+Every root above is either published in the same collection WAL transaction as
+the corresponding mutation or is absent from the first implementation. PR1 uses
+the existing secondary-root naming convention, `<collection>/index/<name>`.
+`<collection>/secondary/<name>` is not a second persistent naming scheme unless
+a later migration explicitly introduces it and updates the WAL root-kind mapping.
 
 The first implementation should keep the existing primary root as
 `id -> row-locator`. A row locator is small and B-tree-friendly:
@@ -443,6 +451,11 @@ ColumnPartDescriptor {
     PartID           uint64
     PartKind         uint8 // base, insert delta, update delta, compacted
     SchemaVersion    uint32
+    CreationWALLSN   uint64
+    CreationCollectionSeq uint64
+    ManifestRef      optional ColumnFileRef
+    SideRefDigest    bytes optional
+    CodecRegistryVersion uint32 optional
     RowCount         uint32
     VisibleRowCount  uint32
     DeletedRowCount  uint32
@@ -453,6 +466,7 @@ ColumnPartDescriptor {
     Granules         []GranuleDescriptor
     Columns          []ColumnPartColumnDescriptor
     DeleteBitmapRef  optional ColumnFileRef
+    DictionaryRefs   []ColumnFileRef or []DictionaryID optional
     Stats            PartStats
 }
 ```
@@ -500,11 +514,39 @@ ColumnFileRef {
 }
 ```
 
+A `ColumnPartDescriptor` that references external bytes must be WAL-side-ref
+closed. The descriptor or its manifest must allow recovery to enumerate every
+`ColumnFileRef`, delete bitmap ref, filter ref, dictionary ref, and external
+compression metadata ref without executing user code. `SideRefDigest`, when
+present, is a digest of the canonical sorted required side-ref set for the
+descriptor graph and must match the collection WAL transaction's side-ref
+closure.
+
 ### 6.3 Column File Layout
 
 PR1 should create a dedicated column-store file class instead of hiding column
 payloads inside ordinary value-log records. This avoids a migration later,
 improves observability, and makes schema-change cleanup easier.
+
+Column files use a staged prepare namespace before publication:
+
+```text
+Dir/maindb/columns/
+    .prepare/
+        txn-<wallsn>/
+            part-<part-id>/
+                manifest.tcs1
+                ...
+```
+
+The prepare manifest names the final relative path, size, checksum, `PartID`,
+`FileID`, schema version, compression pipeline, dictionary ids, and owning
+collection id for every file/range. Recovery owns both prepare and final
+namespaces. Files in either namespace that are not reachable from active roots,
+pending collection WAL, snapshots, or live collection read views are reclaimed or
+quarantined by the column file GC policy. `PartID` and `FileID` values observed
+in unclassified prepare/final directories remain reserved until recovery
+classifies them.
 
 The recommended physical layout is manifest-driven:
 
@@ -829,12 +871,15 @@ Update model:
 4. The part builder writes that batch as one or more update-delta column parts
    using the same `TCS1` substreams, codecs, checksums, marks, and statistics
    as normal parts.
-5. The write publishes, in one root group:
+5. The write publishes, in one collection WAL transaction and one root group:
    - new update-delta part descriptors;
+   - all required column side refs for those parts;
    - primary locator changes from old rows to replacement rows for changed ids;
    - delete bitmap/tombstone entries that hide old row locators for changed ids;
    - secondary index deletes for old indexed values from changed rows;
-   - secondary index inserts for new indexed values from changed rows.
+   - secondary index inserts for new indexed values from changed rows;
+   - count/visibility metadata deltas when present;
+   - the applied collection watermark update in the backend publish commit.
 6. Reads see the newest primary locator for each id and treat tombstoned
    locators as invisible.
 7. Maintenance compacts base parts, insert deltas, update deltas, and delete
@@ -1027,6 +1072,13 @@ dictionary bytes should live in the existing dictionary store or a compatible
 successor, and dictionary selection should support payload classes such as
 `column/<collection>/<column_id>/<substream>` rather than only one global
 value-log class.
+
+Decode stability is part of the WAL side-ref contract. Codec ids, codec
+parameters, codec registry version, dictionary ids, dictionary registry version,
+and external compression metadata refs must be persisted in the descriptor or
+manifest. Any external dictionary or compression metadata object required to
+decode a published column payload is a required collection WAL side ref and must
+remain protected until every dependent payload is unreachable.
 
 ### 7.3 ClickHouse Codec Application
 
@@ -1343,6 +1395,12 @@ predicates, min/max, set, bloom, and secondary indexes may prune work, but
 approximate filters must not return an exact count without verifying rows or
 using an exact posting/bitmap index.
 
+Persisted count and visibility aggregates are root/system deltas. Inserts,
+deletes, update-delta publishes, compaction, and recompression must publish
+count/visibility changes in the same collection WAL transaction and backend root
+group as primary locators, part descriptors, delete bitmaps, filters, and
+secondary-index changes.
+
 This is analogous to ClickHouse's ability to answer trivial counts from part
 metadata, but it must respect TreeDB snapshots and delete bitmaps.
 
@@ -1452,11 +1510,13 @@ WAL-on write ordering:
 3. Fsync files, atomically rename temp files to final paths, and fsync parent
    directories before the collection WAL commit marker may reference them.
 4. Append the collection WAL transaction that describes root mutations, primary
-   locator changes, secondary index changes, delete/tombstone changes, part
-   descriptor additions, and every required external side ref.
-5. Validate that the declared side-ref set matches the canonical embedded refs
-   in part descriptors, filter descriptors, delete bitmap refs, dictionary refs,
-   and root-delta values.
+   locator changes, granule/mark changes, secondary index changes,
+   delete/tombstone changes, count/visibility metadata, part descriptor
+   additions, and every required external side ref.
+5. Validate that the declared side-ref set matches the complete canonical
+   transitive closure embedded in part descriptors, manifests, filter
+   descriptors, delete bitmap refs, dictionary refs, compression metadata refs,
+   granule roots, and root-delta values.
 6. Publish the root group only after the column bytes are readable at the
    required durability boundary.
 7. On recovery, replay either the complete root group or none of it.
@@ -1468,6 +1528,10 @@ Column-store side refs use the same lifecycle as collection WAL side refs:
 - a complete WAL-on transaction that references a missing or corrupt column
   file, filter file, delete bitmap, or dictionary is a recovery error, not a
   skipped column-store write;
+- optional/rebuildable filters may be absent, but a published filter root entry
+  that names external bytes makes those bytes required side refs. Missing
+  optional filters degrade to "filter absent"; they must never produce
+  false-negative reads;
 - before root publication, required column side refs are retained by the
   collection WAL protected side-ref index;
 - after root publication, WAL-only protection may be released only after the
@@ -1497,7 +1561,10 @@ Minimum shared collection durability deliverables:
   referenced by WAL, roots, snapshots, or active iterators;
 - row-store indexed insert/update/delete recovery tests with secondary indexes;
 - column-store insert/update/delete recovery tests with secondary indexes and
-  column files.
+  column files;
+- read-only open with unapplied collection WAL must fail with a recovery-required
+  error in production mode, rather than silently hiding acknowledged column-store
+  writes.
 
 The recommended sequencing is option c from the planning discussion: make WAL
 semantics work for both column-store and non-column-store collections as part of
@@ -1565,6 +1632,13 @@ compact_column_parts(snapshot, source_parts, target_policy):
     keep source parts reachable through old snapshot roots only
     let column file GC/rewrite reclaim old files or packed containers
 ```
+
+Column compaction, delete-bitmap compaction, and recompression that create new
+external column files must publish through collection WAL. The transaction must
+include new side refs, new descriptors, active descriptor supersession or
+deletion of source descriptors, obsolete delete/mark/filter metadata removal,
+count/visibility metadata preservation, and unchanged logical secondary-index
+state in one atomic root group.
 
 The compaction publish must make the active descriptor roots a replacement
 manifest for the affected key ranges, not an append-only list of all historical
@@ -1658,6 +1732,13 @@ Required output:
 - allocations/op;
 - part count and granule count;
 - update-delta part count and maximum visible fan-in;
+- column WAL bytes/row and side-ref metadata bytes/row;
+- side-ref closure validation refs/sec;
+- recovery rows/sec and file refs/sec for 1K, 100K, and 1M row fixtures;
+- orphan prepare/final cleanup time and files/sec;
+- GC protected-byte debt by payload, filter, delete bitmap, dictionary,
+  manifest, and compression metadata class;
+- read-only recovery-required scan latency without full column payload parsing;
 - maintenance rewrite stats.
 
 Extend canonical collections:
@@ -1845,6 +1926,15 @@ Deliverables:
 - commit metadata that can include primary roots, secondary roots,
   template/index-state roots, delete roots, part descriptors, and external file
   references;
+- explicit column root-kind inventory aligned with the collection WAL spec;
+- side-ref closure validator for descriptors, manifests, filters, delete
+  bitmaps, dictionaries, compression metadata, and root-delta payloads;
+- `.prepare/txn-<wallsn>/part-<part-id>/` column file prepare/finalize
+  protocol;
+- `PartID` and `FileID` allocator recovery from roots, pending WAL, and prepare
+  directories;
+- production read-only open behavior that fails recovery-required when unapplied
+  collection WAL exists;
 - recovery path that replays complete committed collection root groups and
   ignores incomplete ones;
 - cleanup path for prepared but unpublished column files.
@@ -1860,6 +1950,12 @@ Tests:
 - crash/reopen never exposes a root that references a missing external file;
 - prepared but unpublished column files are reclaimed or quarantined after
   recovery.
+- descriptor side-ref closure mismatch fails before publish/replay;
+- missing or corrupt manifest, substream, filter, delete bitmap, dictionary, or
+  compression metadata side refs fail recovery for complete transactions;
+- read-only open with unapplied collection WAL returns recovery-required;
+- `PartID` and `FileID` allocators do not reuse ids from pending or unclassified
+  prepared/orphan parts.
 
 Gates:
 
@@ -2061,6 +2157,8 @@ Deliverables:
 - delete bitmap handling;
 - compaction from base parts, delta parts, and delete bitmaps into new base
   parts;
+- collection WAL transaction classes for update-delta, delete, compaction,
+  delete-bitmap compaction, and recompression publishes;
 - active descriptor-root deletion/supersession of compacted source parts and
   obsolete delete/mark metadata;
 - snapshot-safe publish and GC integration;
@@ -2075,8 +2173,10 @@ Tests:
 - post-compaction scans do not return duplicate rows from both compacted parts
   and source parts;
 - crash/reopen around compaction publish;
+- crash/reopen around recompression publish;
+- missing/corrupt side-ref closure member fails recovery before publishing roots;
 - column file GC/rewrite after compaction;
-- unique secondary correctness after updates.
+- unique secondary correctness after updates;
 - crash/reopen around update-delta publish with secondary index changes.
 
 Gates:
@@ -2193,12 +2293,12 @@ Gates:
 | Random updates cause write amplification or read amplification. | Write changed rows into bounded update-delta column parts, batch scattered point updates where allowed, benchmark against granule rewrite/hybrid strategies, and compact asynchronously. |
 | Compression burns CPU on incompressible data. | No-expansion admission, high-entropy probes, PAUSED/probe autotune, and per-column stats. |
 | Column-store compression diverges from existing TreeDB compression. | Start with wrappers around TreeDB's snappy/lz4/zstd/zstd-dict routines and migrate toward one canonical compression registry. |
-| WAL integration is underspecified. | Require root-group publish ordering, recovery tests, and pointer-safety tests before update/delete milestones are complete. |
+| WAL integration is underspecified. | Block persistent column writes on side-ref closure, prepare/finalize, allocator recovery, read-only recovery-required behavior, root-group publish ordering, and recovery tests. |
 | Schema evolution makes old parts hard to read. | Version every part and use schema adapters with golden tests. |
 | Flexible schemas create unpredictable columns and compression choices. | Keep `TCS1` fixed-schema only; defer lazy/flexible schema mode to a separate design. |
 | Secondary indexes duplicate too much data. | Keep current secondary root format first; later consider optional row-locator payloads, compressed posting-list values, or bitmap payloads for low-cardinality shapes. |
 | Secondary indexes drift from column-store visibility after updates. | Publish secondary deletes/inserts, primary locator changes, part descriptors, and delete bitmaps in the same root group; test crash/reopen and active snapshots. |
-| Compaction leaves source parts active. | Publish compacted descriptors and descriptor-root deletes/supersession for all source parts in one root group; test post-compaction scans for duplicate/stale rows and delayed GC with active snapshots. |
+| Compaction leaves source parts active. | Publish compacted descriptors and descriptor-root deletes/supersession for all source parts through collection WAL in one root group; test post-compaction scans for duplicate/stale rows and delayed GC with active snapshots. |
 | Fast filters produce wrong answers. | Treat filters as pruning only, use tri-state `MayMatch`, forbid false negatives in property tests, and always verify matches on decoded rows or exact secondary entries. |
 | Haystack search semantics become confusing for non-string types. | Require explicit byte-haystack adapters; use typed filters for numeric equality/range and reserve encoded-byte substring search for explicit predicates. |
 | Fast count metadata becomes stale. | Publish count deltas in the same root group as inserts/deletes and verify across update, compaction, reopen, and snapshots. |
