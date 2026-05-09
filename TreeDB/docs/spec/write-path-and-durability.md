@@ -78,6 +78,12 @@ a mutation before its collection WAL transaction is committed/recoverable. The
 write path is private planning, side-ref preparation/protection, collection WAL
 commit, then visible install.
 
+The collection WAL is a local storage apply log, not a Raft log and not a
+native-wire deterministic command entry. Non-sync collection APIs under WAL-on
+modes provide process-crash recoverability after local collection WAL commit;
+they do not imply power-loss fsync durability unless a sync/checkpoint boundary
+is requested by the configured durability mode.
+
 ## 4. Backend Commit Model
 
 Backend applies flushed operations through copy-on-write zipper merge.

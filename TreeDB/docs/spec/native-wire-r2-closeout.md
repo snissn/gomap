@@ -17,8 +17,8 @@ R2 adds and hardens:
   names,
 - SHA-256 digest helper over exact canonical entry bytes,
 - stability tests proving transport-only sections, response-shaping flags,
-  deadlines, trace metadata, compression choices, and shuffled sections do not
-  alter canonical bytes,
+  deadlines, trace metadata, compression choices, acknowledgement policy
+  changes, and shuffled sections do not alter canonical bytes,
 - replicated-command append/decode/digest benchmarks.
 
 The replicated v1 command fixture set is:
@@ -32,6 +32,10 @@ The replicated v1 command fixture set is:
 
 `drop_collection`, flush, checkpoint, reads, cursors, stats, and collection
 handle commands remain local-only in v1.
+
+`ack_policy` is a request-local durability/response policy in R2. It is excluded
+from deterministic-entry fixtures; changing only acknowledgement policy must not
+change canonical command-entry bytes or digest.
 
 ## Validation
 
@@ -137,3 +141,5 @@ allocates 128 times/op.
 - Metadata payloads remain opaque at the internal codec layer. R3 should either
   move canonical metadata/index payload decoding into the deterministic-entry
   layer or define a separate state-machine decoder with the same fixture gate.
+- Raft apply must define consensus commit, local apply, and local recoverability
+  ordering before exposing `ack_policy=raft_committed`.

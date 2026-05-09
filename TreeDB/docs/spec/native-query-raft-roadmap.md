@@ -182,8 +182,9 @@ Acceptance:
 - cross-process/cross-map-order stability tests,
 - idempotency-key tests,
 - same logical mutation encoded from shuffled sections, different request IDs,
-  deadlines, compression choices, and trace metadata produces the same canonical
-  entry digest,
+  acknowledgement policies, consistency policies, deadlines, compression
+  choices, response-shaping flags, and trace metadata produces the same
+  canonical entry digest,
 - rejection tests for non-deterministic sections, duplicate singleton sections,
   unsupported command versions, local handles, and missing guards.
 
@@ -219,6 +220,9 @@ Acceptance:
   guard-failure results on every replica,
 - failed leadership changes do not double-apply mutations,
 - restart tests preserve Raft log, stable metadata, and applied collection state,
+- a node distinguishes `consensus_committed`, `locally_applied`, and
+  `locally_recoverable`; client `raft_committed` success is not returned until
+  the responding node satisfies the selected local apply durability rule,
 - the same committed entry sequence applied to fresh DBs in separate processes
   produces the same logical state digest,
 - snapshot restore plus log-tail replay produces the same logical state digest
@@ -508,6 +512,8 @@ affect routing, snapshots, or catch-up behavior.
 - Choose Raft library or implementation boundary.
 - Define `CommandEntryV1` bytes.
 - Define idempotency record storage.
+- Define applied-index and idempotency metadata ordering relative to local
+  collection WAL append and backend root publish.
 - Define stable store and log store mappings.
 - Define snapshot/export/restore format.
 - Define read-index or equivalent linearizable-read mechanism.

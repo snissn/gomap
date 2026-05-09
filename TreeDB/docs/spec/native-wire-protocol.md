@@ -258,6 +258,12 @@ Initial common section IDs:
 12 cursor_meta
 ```
 
+`ack_policy`, `consistency_policy`, deadlines, tracing, compression, and
+response-shaping sections are common request/transport policy. They are not
+deterministic command input. Schema registries must mark `ack_policy`
+non-deterministic for every command version, and deterministic-entry encoders
+must strip it before canonical entry construction.
+
 Command-specific sections start at `100`.
 
 Initial command-specific section IDs used by v1 commands and responses:
@@ -531,6 +537,8 @@ handles.
 commands. `flush_collection`, `flush_all`, and `checkpoint` are local durability
 barriers in v1 and MUST NOT be replicated as Raft state-machine commands unless
 a future distributed barrier command gives them explicit consensus semantics.
+An `ack_policy` common section may be present on mutation requests, but it is
+request/response policy only and is not part of deterministic command identity.
 
 `insert_batch` sections:
 
@@ -679,26 +687,36 @@ mutation:
 ```
 
 `visible` means the mutation is visible to reads through the serving process or
-owning write domain. It is not necessarily crash-durable.
+owning write domain. Whether this is crash-durable depends on the configured
+storage durability mode. For collection writes under WAL-on modes after the
+collection WAL contract lands, `visible` still waits for local collection WAL
+recoverability. Under WAL-off relaxed mode, it is process-local visibility only.
 
 `flushed` means collection write-domain state has been published to backend
-roots for that collection or all touched roots.
+roots for that collection or all touched roots. For collection WAL-backed
+writes, the collection WAL applied watermark for those transactions must
+advance in the same backend commit.
 
 `synced` means the operation reached the strongest local durability boundary
 available under the server's configured TreeDB durability mode.
 
-`raft_committed` is reserved for distributed mode. It means the command has been
-committed by consensus and applied according to the cluster's state-machine
-policy.
+`raft_committed` is reserved for distributed mode. It means the deterministic
+command entry has been committed by consensus and the responding node has
+satisfied the cluster's defined local apply/recoverability rule. It is not
+satisfied by local collection WAL alone and it is not encoded into the
+deterministic command entry.
 
 If `ack_policy` is absent, the server uses its advertised default. The initial
-single-node native server SHOULD default to `visible` to match current
-collection API behavior, but clients that need a durability boundary SHOULD ask
-for `flushed` or `synced` explicitly.
+single-node native server SHOULD default to `visible`, but clients that need a
+publication or sync boundary SHOULD ask for `flushed` or `synced` explicitly.
 
 A server MUST either satisfy the requested minimum policy or fail the request.
 It MUST NOT silently downgrade `synced` to a relaxed or checkpoint-only
 guarantee. Successful responses SHOULD report `actual_ack_policy`.
+Local policies are ordered only within the local family:
+`visible < flushed < synced`. `raft_committed` is a named cluster policy and
+must not be treated as a numeric extension of local durability ordering unless a
+future cluster spec explicitly defines the implied local durability level.
 
 Read `consistency_policy` values:
 
@@ -811,6 +829,9 @@ be copied into the deterministic entry. Optional fields MUST either be omitted
 or encoded with explicit defaults according to the command schema; both forms
 MUST NOT be accepted for the same `command_version`.
 
+`ack_policy` is a common request section, but it is never deterministic command
+input. Encoders must strip it before deterministic-entry construction.
+
 The deterministic Raft command set is an allowlist. Logical metadata mutations
 and logical collection mutations MAY be replicated. Reads, cursors, explain,
 stats, open/close handles, `ack_policy`, `consistency_policy`, deadlines,
@@ -825,6 +846,7 @@ The following MUST NOT be included in deterministic command entries:
 - stream IDs,
 - transport deadlines,
 - trace context,
+- `ack_policy` and `consistency_policy`,
 - negotiated compression choices,
 - non-deterministic server timestamps,
 - response-shaping hints that do not change state.

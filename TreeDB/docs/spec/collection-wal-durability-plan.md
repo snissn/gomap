@@ -354,9 +354,9 @@ marked `Required=false` must not be referenced by any published root value.
 
 | Mode | Collection write acknowledgement after this spec |
 |---|---|
-| `DurabilityDurable` | Write returns only after the collection WAL transaction reaches the configured durable boundary. Sync barriers fsync according to durable mode. |
-| `DurabilityWALOnRelaxed` | Write returns after the collection WAL transaction is appended/flushed enough for process-crash recovery. It does not claim power-loss durability. |
-| `DurabilityWALOffRelaxed` | No durable-at-ack promise. Collection writes remain flush/checkpoint/close-boundary durable, and docs must say so directly. |
+| `DurabilityDurable` | For non-sync collection APIs, write success means the collection WAL transaction has reached the configured local WAL append/flush boundary needed for process-crash recovery. Non-sync APIs do not imply power-loss durability. Sync barriers additionally fsync according to durable mode. |
+| `DurabilityWALOnRelaxed` | Write success means the collection WAL transaction has left process-local memory and is recoverable under the same process-crash assumptions as the existing WAL-on relaxed commit log. It does not claim power-loss durability. |
+| `DurabilityWALOffRelaxed` | No durable-at-ack promise. Collection writes remain flush/checkpoint/close-boundary durable, and docs must say so directly. In this mode, `visible` acknowledgements are process-local visibility only. |
 
 If the engine cannot append the collection WAL transaction in a WAL-on mode, the
 collection write must fail before becoming visible to any reader, planner, or
@@ -438,21 +438,30 @@ Read-only open after crash:
 - A stale-read-only mode, if added, must be named as stale and must not claim
   durable-at-ack visibility for unapplied collection WAL writes.
 
-Native-wire acknowledgement policies map onto these same local boundaries:
+Native-wire `ack_policy` is request/response policy only. It must not be
+encoded into deterministic command entries, must not affect logical
+state-machine results, and must not affect collection WAL replay.
 
-- `visible` may return after the write is visible through the serving process.
-  In WAL-on collection modes after this spec, it still cannot return before the
-  collection WAL transaction is recoverable.
-- `flushed` must publish affected collection state into backend roots and
-  advance the collection WAL applied watermark for those transactions.
-- `synced` must also reach the backend checkpoint/sync boundary required by the
-  configured local durability mode.
-- Collection WAL append and collection root publication must both expose explicit
-  flush/sync options so these acknowledgement policies can be implemented
-  without relying on implicit backend defaults.
-- `raft_committed` is a cluster-mode policy. It cannot be satisfied by local
-  collection WAL alone; it requires consensus commit plus the cluster's defined
-  local apply durability rule.
+- `visible` means the mutation is visible through the serving process or owning
+  write domain. In WAL-on collection modes after this spec, `visible` still
+  waits for the local collection WAL transaction to be recoverable because the
+  underlying collection API is durable-at-ack. In WAL-off mode, `visible` is not
+  crash-durable.
+- `flushed` means affected collection state has been published into backend
+  roots and the collection WAL applied watermark for those transactions has
+  advanced in the same backend commit.
+- `synced` means `flushed` plus the backend checkpoint/fsync boundary required
+  by the configured local durability mode. It must not be silently downgraded.
+- Collection WAL append and collection root publication must both expose
+  explicit flush/sync options so these acknowledgement policies can be
+  implemented without relying on implicit backend defaults.
+- `raft_committed` is a cluster-mode policy, not a local WAL policy. It requires
+  consensus commit plus the cluster's defined local apply durability rule. Local
+  collection WAL alone cannot satisfy it.
+- Local policies are ordered as `visible < flushed < synced`.
+  `raft_committed` is a separate cluster policy and must not be implemented as a
+  simple numeric extension of the local ordering unless a future cluster spec
+  explicitly defines the implied local durability level.
 
 ### 6.3 PR1 Invariants
 
@@ -531,6 +540,8 @@ Reasons:
 
 ### 7.2 Transaction Shape
 
+Local physical collection WAL record:
+
 A collection WAL transaction is a replayable physical root-group transaction.
 It is not a logical insert/update/delete command. Recovery must not rerun user
 callbacks, predicates, JSON extraction, template extraction, secondary-index
@@ -565,7 +576,6 @@ CollectionWALTransaction {
     SideRefs                 []CollectionSideRef
 
     // Local observability only; excluded from replay identity.
-    AckMode                  uint8
     CreatedUnixNanos         int64
     Stats                    CollectionWALStats
 
@@ -643,6 +653,13 @@ OrderedRootPublishOptions {
 }
 ```
 
+This record is not portable across replicas. `WALLSN`, `CollectionSeq`,
+`BaseSystemRootID`, `BaseRootID`, root names as resolved by local storage,
+side-ref paths/RIDs, timestamps, stats, and other local observability metadata
+are meaningful only in the database directory that wrote the record. A follower
+applying the same deterministic command entry may produce different local root
+ids, side refs, file names, and collection WAL bytes.
+
 Column-store transactions must carry enough catalog identity to make replay
 schema-stable. `CollectionEpoch` guards collection incarnation and catalog-level
 schema evolution. `SchemaVersion` guards physical column decode. `CatalogDigest`
@@ -674,9 +691,11 @@ dependency domain. Recovery may use `WALLSN` to scan and diagnose records, but
 it must not use a higher `WALLSN` from another collection to skip a lower
 unapplied `CollectionSeq`.
 
-`AckMode`, `CreatedUnixNanos`, and `Stats` are local observability and policy
-metadata. They must not change root-delta replay output, idempotency outcomes,
-catalog guard outcomes, or future Raft state-machine results.
+`CreatedUnixNanos` and `Stats` are local observability metadata. If an
+implementation retains an acknowledgement-related field, it must be encoded as
+an ignored observability field, not as replay input. Replay, idempotency,
+catalog guards, Raft command digests, and logical state digests must not depend
+on it.
 
 Two digests are required:
 
@@ -1098,11 +1117,26 @@ The boundary is strict:
   not by local value-log offsets, column-file names, root ids, flush timing, or
   WAL transaction bytes.
 
+Collection WAL golden files test the local storage format only. They are not
+cross-replica fixtures and must not require byte-identical apply output across
+nodes.
+
 On a future follower, applying a committed deterministic entry should derive the
 same logical mutation outcome but may produce different local physical files and
 root ids. That is acceptable only if the local collection WAL makes the derived
 root group recoverable before the node advertises the Raft entry as durably
 applied under the cluster policy.
+
+A committed Raft entry has three distinct states:
+
+- `consensus_committed`: the Raft algorithm has committed the deterministic
+  command-entry bytes.
+- `locally_applied`: this node has evaluated the command against local TreeDB
+  state.
+- `locally_recoverable`: after restart, this node can reconstruct the applied
+  logical outcome before serving reads or advertising the applied index.
+
+Raft commit alone is insufficient for `locally_recoverable`.
 
 ## 8. Write Path
 
@@ -1258,6 +1292,12 @@ can race with user-visible collection writes. It uses `ReplaceRoot` and
 `ClearOverlayRoots` descriptor operations, advances the collection sequence, and
 updates the affected root generation. Root-rewriting overlay maintenance is
 forbidden while unapplied collection WAL exists unless it is encoded this way.
+Overlay compaction and other layout-only root rewrites are local physical
+maintenance transactions. They must not be appended as deterministic Raft
+command entries and must not change the logical collection digest except by
+preserving equivalent contents. A future distributed compaction/checkpoint
+barrier must be specified as a separate deterministic barrier command if
+cluster-visible semantics are required.
 
 Column-store compaction, delete-bitmap compaction, and recompression are always
 collection WAL maintenance transactions when they create external files or
@@ -1312,21 +1352,28 @@ bytes, validate the command version and catalog guard against applied state, and
 derive local collection root deltas through the same planner/state-machine logic
 used by the single-node path.
 
-A committed Raft entry must not be marked locally durable/applied under a
-cluster durability policy until one of these is true:
+A node must not advance persistent applied-index metadata, return a
+`raft_committed` client success from that node, or advertise the command as
+locally recoverable until one of these is true:
 
-1. the derived collection WAL transaction is recoverable locally; or
-2. the Raft recovery design explicitly guarantees that unapplied committed log
-   entries are replayed after every restart before the node serves reads or
-   advertises the corresponding applied index.
+1. the local collection WAL transaction and any required idempotency/catalog
+   result metadata are recoverable locally; or
+2. the Raft stable-store recovery design explicitly guarantees that
+   committed-but-not-locally-applied entries are replayed after every restart
+   before the node serves reads or advertises the corresponding applied index.
 
-The first implementation should prefer the first rule: committed entry, local
-root-delta WAL append, write-domain visibility/publish, then applied-index and
-idempotency metadata advancement. Any persistent idempotency record or catalog
-guard outcome that affects retry/replay behavior must be advanced atomically
-with the logical mutation outcome, either in the same backend root group or in
-an explicitly ordered metadata transaction whose crash behavior is tested with
-the collection WAL.
+The first implementation should use rule 1: committed entry, local root-delta
+WAL append, write-domain visibility/publish, then applied-index and idempotency
+metadata advancement. Any persistent idempotency record or catalog guard outcome
+that affects retry/replay behavior must be advanced atomically with the logical
+mutation outcome, either in the same backend root group or in an explicitly
+ordered metadata transaction whose crash behavior is tested with the collection
+WAL.
+
+If local collection WAL append fails after Raft commit, the command must remain
+committed-but-not-locally-applied on that node. The node must retry local apply
+or fail/step down according to the future Raft recovery policy; it must not
+report local recoverability.
 
 `flush_collection`, `flush_all`, `checkpoint`, and physical maintenance commands
 remain local barriers. Cluster mode must reject `ack_policy=raft_committed` for
@@ -2249,6 +2296,8 @@ Deliverables:
   reconstructing native-wire transport requests;
 - local collection WAL append is integrated into follower/leader apply before
   the node advertises the Raft index as locally durable;
+- apply state distinguishes `consensus_committed`, `locally_applied`, and
+  `locally_recoverable`;
 - applied-index, catalog guard outcome, and idempotency metadata are advanced
   atomically with the logical mutation outcome or are replayed from Raft after
   restart by a documented rule;
@@ -2261,6 +2310,10 @@ Tests:
 
 - same committed deterministic entry sequence applied in separate fresh
   databases produces the same logical catalog/content/index/idempotency digest;
+- deterministic-entry fixtures prove that changing `ack_policy`,
+  `consistency_policy`, deadlines, trace context, compression choices, request
+  ids, and response-shaping flags does not change canonical command bytes or
+  command digest;
 - crash after Raft commit before local WAL append recovers by replaying the
   committed entry or never advertises it as applied;
 - crash after local WAL append before applied-index metadata advancement does
@@ -2352,10 +2405,11 @@ Future questions that do not weaken PR1 correctness:
 4. For Raft R3, should applied-index/idempotency metadata live in TreeDB system
    roots, in a Raft library stable store, or in both with an explicit ordering
    rule?
-5. Should native-wire `ack_policy` remain purely transport/local durability
-   control for deterministic entries, or should a future command version define
-   an explicit logical barrier flag? This must be resolved before
-   `raft_committed` writes are exposed.
+
+Resolved PR1 decision: native-wire `ack_policy` remains request/local
+durability control and is stripped before deterministic-entry construction. A
+future cluster-visible barrier must be a separate deterministic command or a
+new deterministic command field with explicit state-machine semantics.
 
 ## 16. Implementation Notes
 

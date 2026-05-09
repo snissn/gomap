@@ -9,9 +9,13 @@ Recovery is executed during `Open` for read-write handles.
 High-level order:
 
 1. recover index metadata/root state,
-2. replay cached commit logs (if WAL mode permits),
-3. expose recovered state,
-4. clean replayed commit-log segments.
+2. scan value-log, leaf-log, and future side-store availability,
+3. replay cached commit logs (if WAL mode permits),
+4. scan collection WAL transactions and cleanup metadata,
+5. load applied collection watermarks,
+6. validate required side refs and replay unapplied collection WAL transactions,
+7. expose recovered state,
+8. clean replayed commit-log and safely watermarked collection WAL segments.
 
 Read-only opens do not run mutating recovery. If future collection WAL segments
 contain committed unapplied transactions, read-only open must fail with a
