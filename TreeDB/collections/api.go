@@ -7120,6 +7120,9 @@ func (c *Collection) updateBatchOwnedItems(items []UpdateBatchItem, mode updateB
 			errors.Is(err, errUpdateBatchChangesSecondaryUniqueIndex) {
 			return make([]UpdateBatchResult, len(items)), false, nil
 		}
+		// A buffered root-base mismatch means this handle still has staged writes
+		// against an old root. Retrying the same items just rebuilds the same
+		// stale plan; the caller must drain or surface the conflict instead.
 		if isBufferedRootBaseMismatch(err) {
 			return make([]UpdateBatchResult, len(items)), false, err
 		}
@@ -8130,19 +8133,19 @@ func errConcurrentRootModification(collectionName, rootName string) error {
 }
 
 type bufferedRootBaseMismatchError struct {
-	err concurrentRootModificationError
+	cause concurrentRootModificationError
 }
 
 func (err bufferedRootBaseMismatchError) Error() string {
-	return fmt.Sprintf("%v: buffered root base mismatch for collection=%q root=%q", ErrConcurrentMutation, err.err.collectionName, err.err.rootName)
+	return fmt.Sprintf("%v: buffered root base mismatch for collection=%q root=%q", ErrConcurrentMutation, err.cause.collectionName, err.cause.rootName)
 }
 
 func (err bufferedRootBaseMismatchError) Unwrap() error {
-	return err.err
+	return err.cause
 }
 
 func errBufferedRootBaseMismatch(collectionName, rootName string) error {
-	return bufferedRootBaseMismatchError{err: concurrentRootModificationError{collectionName: collectionName, rootName: rootName}}
+	return bufferedRootBaseMismatchError{cause: concurrentRootModificationError{collectionName: collectionName, rootName: rootName}}
 }
 
 func isConcurrentRootModification(err error) bool {

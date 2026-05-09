@@ -10692,6 +10692,11 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesFlushesRootMismatch
 	mgr := fixture.manager
 	col := fixture.collection
 	otherMgr := NewCollectionManager(d)
+	t.Cleanup(func() {
+		if err := otherMgr.FlushAll(); err != nil {
+			t.Errorf("flush second collection manager: %v", err)
+		}
+	})
 	otherCol, err := otherMgr.OpenCollection("users")
 	if err != nil {
 		t.Fatalf("open users from second manager: %v", err)
